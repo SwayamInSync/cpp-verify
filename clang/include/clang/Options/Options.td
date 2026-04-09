@@ -2366,6 +2366,13 @@ defm fixed_point : BoolFOption<"fixed-point",
   PosFlag<SetTrue, [], [ClangOption, CC1Option], "Enable">,
   NegFlag<SetFalse, [], [ClangOption], "Disable">,
   BothFlags<[], [ClangOption], " fixed point types">>;
+
+// CppVerify: deductive contract verification
+defm verify_contracts : BoolFOption<"verify-contracts",
+  LangOpts<"VerifyContracts">, DefaultFalse,
+  PosFlag<SetTrue, [], [ClangOption, CC1Option],
+          "Enable CppVerify contract syntax (pre/post/invariant/decreases/ghost/spec/proof)">,
+  NegFlag<SetFalse, [], [ClangOption], "Disable CppVerify contract syntax">>;
 def cxx_static_destructors_EQ : Joined<["-"], "fc++-static-destructors=">, Group<f_Group>,
   HelpText<"Controls which variables C++ static destructors are registered for">,
   Values<"all,thread-local,none">,
