@@ -16,7 +16,9 @@
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/DeclTemplate.h"
+#include "clang/AST/ExprContract.h"
 #include "clang/AST/ExprOpenMP.h"
+#include "clang/AST/StmtContract.h"
 #include "clang/AST/StmtVisitor.h"
 #include "clang/Serialization/ASTReader.h"
 #include "clang/Serialization/ASTRecordWriter.h"
@@ -3086,6 +3088,65 @@ void ASTStmtWriter::VisitHLSLOutArgExpr(HLSLOutArgExpr *S) {
   Record.AddStmt(S->getWritebackCast());
   Record.writeBool(S->isInOut());
   Code = serialization::EXPR_HLSL_OUT_ARG;
+}
+
+//===----------------------------------------------------------------------===//
+// CppVerify Contract Node Serialization
+//===----------------------------------------------------------------------===//
+
+void ASTStmtWriter::VisitContractAssertStmt(ContractAssertStmt *S) {
+  VisitStmt(S);
+  Record.AddStmt(S->getCond());
+  Record.AddSourceLocation(S->getContractAssertLoc());
+  Record.AddSourceLocation(S->getLParenLoc());
+  Record.AddSourceLocation(S->getRParenLoc());
+  Code = serialization::STMT_CONTRACT_ASSERT;
+}
+
+void ASTStmtWriter::VisitGhostBlockStmt(GhostBlockStmt *S) {
+  VisitStmt(S);
+  Record.AddStmt(S->getBody());
+  Record.AddSourceLocation(S->getGhostLoc());
+  Code = serialization::STMT_GHOST_BLOCK;
+}
+
+void ASTStmtWriter::VisitForallExpr(ForallExpr *E) {
+  VisitExpr(E);
+  Record.AddDeclRef(E->getBoundVar());
+  Record.AddStmt(E->getLo());
+  Record.AddStmt(E->getHi());
+  Record.AddStmt(E->getBody());
+  Record.AddSourceLocation(E->getForallLoc());
+  Record.AddSourceLocation(E->getLParenLoc());
+  Record.AddSourceLocation(E->getRParenLoc());
+  Code = serialization::EXPR_FORALL;
+}
+
+void ASTStmtWriter::VisitExistsExpr(ExistsExpr *E) {
+  VisitExpr(E);
+  Record.AddDeclRef(E->getBoundVar());
+  Record.AddStmt(E->getLo());
+  Record.AddStmt(E->getHi());
+  Record.AddStmt(E->getBody());
+  Record.AddSourceLocation(E->getExistsLoc());
+  Record.AddSourceLocation(E->getLParenLoc());
+  Record.AddSourceLocation(E->getRParenLoc());
+  Code = serialization::EXPR_EXISTS;
+}
+
+void ASTStmtWriter::VisitOldExpr(OldExpr *E) {
+  VisitExpr(E);
+  Record.AddStmt(E->getInner());
+  Record.AddSourceLocation(E->getOldLoc());
+  Record.AddSourceLocation(E->getLParenLoc());
+  Record.AddSourceLocation(E->getRParenLoc());
+  Code = serialization::EXPR_OLD;
+}
+
+void ASTStmtWriter::VisitResultExpr(ResultExpr *E) {
+  VisitExpr(E);
+  Record.AddSourceLocation(E->getResultLoc());
+  Code = serialization::EXPR_RESULT;
 }
 
 //===----------------------------------------------------------------------===//

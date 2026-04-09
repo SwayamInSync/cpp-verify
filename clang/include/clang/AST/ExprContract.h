@@ -20,10 +20,14 @@
 
 namespace clang {
 
+// Forward declaration for serialization friend access.
+class ASTStmtReader;
+
 /// ForallExpr - Represents a bounded universal quantifier:
 ///   forall(binder, lo, hi, body)
 /// means: for all binder in [lo, hi), body holds.
 class ForallExpr : public Expr {
+  friend class ASTStmtReader;
   SourceLocation ForallLoc;
   SourceLocation LParenLoc;
   SourceLocation RParenLoc;
@@ -52,6 +56,8 @@ public:
   Expr *getBody() const { return cast<Expr>(SubExprs[BODY]); }
 
   SourceLocation getForallLoc() const { return ForallLoc; }
+  SourceLocation getLParenLoc() const { return LParenLoc; }
+  SourceLocation getRParenLoc() const { return RParenLoc; }
   SourceLocation getBeginLoc() const LLVM_READONLY { return ForallLoc; }
   SourceLocation getEndLoc() const LLVM_READONLY { return RParenLoc; }
 
@@ -71,6 +77,7 @@ public:
 ///   exists(binder, lo, hi, body)
 /// means: there exists binder in [lo, hi) such that body holds.
 class ExistsExpr : public Expr {
+  friend class ASTStmtReader;
   SourceLocation ExistsLoc;
   SourceLocation LParenLoc;
   SourceLocation RParenLoc;
@@ -99,6 +106,8 @@ public:
   Expr *getBody() const { return cast<Expr>(SubExprs[BODY]); }
 
   SourceLocation getExistsLoc() const { return ExistsLoc; }
+  SourceLocation getLParenLoc() const { return LParenLoc; }
+  SourceLocation getRParenLoc() const { return RParenLoc; }
   SourceLocation getBeginLoc() const LLVM_READONLY { return ExistsLoc; }
   SourceLocation getEndLoc() const LLVM_READONLY { return RParenLoc; }
 
@@ -117,6 +126,7 @@ public:
 /// OldExpr - Represents old(expr), referring to the value of expr at
 /// function entry. Only valid in postconditions and proof function bodies.
 class OldExpr : public Expr {
+  friend class ASTStmtReader;
   SourceLocation OldLoc;
   SourceLocation LParenLoc;
   SourceLocation RParenLoc;
@@ -136,6 +146,8 @@ public:
   Expr *getInner() const { return cast<Expr>(Inner); }
 
   SourceLocation getOldLoc() const { return OldLoc; }
+  SourceLocation getLParenLoc() const { return LParenLoc; }
+  SourceLocation getRParenLoc() const { return RParenLoc; }
   SourceLocation getBeginLoc() const LLVM_READONLY { return OldLoc; }
   SourceLocation getEndLoc() const LLVM_READONLY { return RParenLoc; }
 
@@ -152,6 +164,7 @@ public:
 /// ResultExpr - Represents 'result' in postconditions, referring to the
 /// return value of the enclosing function.
 class ResultExpr : public Expr {
+  friend class ASTStmtReader;
   SourceLocation ResultLoc;
 
 public:

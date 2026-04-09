@@ -20,8 +20,16 @@
 
 using namespace clang;
 
-// Contract-specific semantic analysis will be added here as the verifier
-// matures. For now, contract expressions are type-checked by Clang's
-// standard expression Sema (since they are parsed as normal expressions),
-// and the new AST nodes (ForallExpr, etc.) are constructed directly
-// by the parser with ASTContext allocation.
+/// ActOnContractCondition - Semantic action called by the parser after
+/// parsing a contract condition expression (pre/post/invariant/contract_assert).
+///
+/// Verifies that the expression is contextually convertible to bool, consistent
+/// with the contract syntax specification in docs/DESIGN.md.
+///
+/// ForallExpr and ExistsExpr already carry type BoolTy so the conversion is
+/// a no-op; plain integer/pointer expressions receive the standard bool cast.
+ExprResult Sema::ActOnContractCondition(ExprResult E) {
+  if (E.isInvalid())
+    return E;
+  return PerformContextuallyConvertToBool(E.get());
+}

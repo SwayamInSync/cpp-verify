@@ -24,6 +24,7 @@
 #include "clang/AST/DependenceFlags.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
+#include "clang/AST/ExprContract.h"
 #include "clang/AST/ExprObjC.h"
 #include "clang/AST/ExprOpenMP.h"
 #include "clang/AST/NestedNameSpecifier.h"
@@ -31,6 +32,7 @@
 #include "clang/AST/OperationKinds.h"
 #include "clang/AST/Stmt.h"
 #include "clang/AST/StmtCXX.h"
+#include "clang/AST/StmtContract.h"
 #include "clang/AST/StmtObjC.h"
 #include "clang/AST/StmtOpenMP.h"
 #include "clang/AST/StmtSYCL.h"
@@ -2989,6 +2991,59 @@ void ASTStmtReader::VisitHLSLOutArgExpr(HLSLOutArgExpr *S) {
 }
 
 //===----------------------------------------------------------------------===//
+// CppVerify Contract Node Deserialization
+//===----------------------------------------------------------------------===//
+
+void ASTStmtReader::VisitContractAssertStmt(ContractAssertStmt *S) {
+  VisitStmt(S);
+  S->Cond = Record.readSubExpr();
+  S->ContractAssertLoc = readSourceLocation();
+  S->LParenLoc = readSourceLocation();
+  S->RParenLoc = readSourceLocation();
+}
+
+void ASTStmtReader::VisitGhostBlockStmt(GhostBlockStmt *S) {
+  VisitStmt(S);
+  S->Body = Record.readSubStmt();
+  S->GhostLoc = readSourceLocation();
+}
+
+void ASTStmtReader::VisitForallExpr(ForallExpr *E) {
+  VisitExpr(E);
+  E->BoundVar = readDeclAs<VarDecl>();
+  E->SubExprs[ForallExpr::LO] = Record.readSubExpr();
+  E->SubExprs[ForallExpr::HI] = Record.readSubExpr();
+  E->SubExprs[ForallExpr::BODY] = Record.readSubExpr();
+  E->ForallLoc = readSourceLocation();
+  E->LParenLoc = readSourceLocation();
+  E->RParenLoc = readSourceLocation();
+}
+
+void ASTStmtReader::VisitExistsExpr(ExistsExpr *E) {
+  VisitExpr(E);
+  E->BoundVar = readDeclAs<VarDecl>();
+  E->SubExprs[ExistsExpr::LO] = Record.readSubExpr();
+  E->SubExprs[ExistsExpr::HI] = Record.readSubExpr();
+  E->SubExprs[ExistsExpr::BODY] = Record.readSubExpr();
+  E->ExistsLoc = readSourceLocation();
+  E->LParenLoc = readSourceLocation();
+  E->RParenLoc = readSourceLocation();
+}
+
+void ASTStmtReader::VisitOldExpr(OldExpr *E) {
+  VisitExpr(E);
+  E->Inner = Record.readSubExpr();
+  E->OldLoc = readSourceLocation();
+  E->LParenLoc = readSourceLocation();
+  E->RParenLoc = readSourceLocation();
+}
+
+void ASTStmtReader::VisitResultExpr(ResultExpr *E) {
+  VisitExpr(E);
+  E->ResultLoc = readSourceLocation();
+}
+
+//===----------------------------------------------------------------------===//
 // ASTReader Implementation
 //===----------------------------------------------------------------------===//
 
@@ -4541,6 +4596,26 @@ Stmt *ASTReader::ReadStmtFromStream(ModuleFile &F) {
     }
     case EXPR_HLSL_OUT_ARG:
       S = HLSLOutArgExpr::CreateEmpty(Context);
+      break;
+
+    // CppVerify contract nodes
+    case STMT_CONTRACT_ASSERT:
+      S = new (Context) ContractAssertStmt(Empty);
+      break;
+    case STMT_GHOST_BLOCK:
+      S = new (Context) GhostBlockStmt(Empty);
+      break;
+    case EXPR_FORALL:
+      S = new (Context) ForallExpr(Empty);
+      break;
+    case EXPR_EXISTS:
+      S = new (Context) ExistsExpr(Empty);
+      break;
+    case EXPR_OLD:
+      S = new (Context) OldExpr(Empty);
+      break;
+    case EXPR_RESULT:
+      S = new (Context) ResultExpr(Empty);
       break;
     }
 

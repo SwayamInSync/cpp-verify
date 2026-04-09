@@ -2772,6 +2772,15 @@ void Parser::ParseLoopContractClauses(SmallVectorImpl<Expr *> &Invariants,
       return;
     }
 
+    // Invariants must be bool; decreases is an integer measure.
+    if (IsInvariant) {
+      E = Actions.ActOnContractCondition(E);
+      if (E.isInvalid()) {
+        SkipUntil(tok::r_paren, StopAtSemi);
+        return;
+      }
+    }
+
     if (Tok.isNot(tok::r_paren)) {
       Diag(Tok, diag::err_contract_expected_rparen)
           << (IsInvariant ? "invariant" : "decreases");
@@ -2816,6 +2825,12 @@ StmtResult Parser::ParseContractAssert() {
   SourceLocation LParenLoc = ConsumeParen();
 
   ExprResult Cond = ParseExpression();
+  if (Cond.isInvalid()) {
+    SkipUntil(tok::r_paren, StopAtSemi);
+    return StmtError();
+  }
+
+  Cond = Actions.ActOnContractCondition(Cond);
   if (Cond.isInvalid()) {
     SkipUntil(tok::r_paren, StopAtSemi);
     return StmtError();

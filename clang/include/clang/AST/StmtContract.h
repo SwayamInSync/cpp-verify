@@ -19,9 +19,13 @@
 
 namespace clang {
 
+// Forward declaration for serialization friend access.
+class ASTStmtReader;
+
 /// ContractAssertStmt - Represents contract_assert(expr);
 /// Generates a verification condition, not a runtime check.
 class ContractAssertStmt : public Stmt {
+  friend class ASTStmtReader;
   SourceLocation ContractAssertLoc;
   SourceLocation LParenLoc;
   SourceLocation RParenLoc;
@@ -41,6 +45,8 @@ public:
   Expr *getCond() const { return cast<Expr>(Cond); }
 
   SourceLocation getContractAssertLoc() const { return ContractAssertLoc; }
+  SourceLocation getLParenLoc() const { return LParenLoc; }
+  SourceLocation getRParenLoc() const { return RParenLoc; }
   SourceLocation getBeginLoc() const LLVM_READONLY { return ContractAssertLoc; }
   SourceLocation getEndLoc() const LLVM_READONLY { return RParenLoc; }
 
@@ -58,6 +64,7 @@ public:
 /// Code inside a ghost block exists only for verification purposes.
 /// CodeGen skips it entirely.
 class GhostBlockStmt : public Stmt {
+  friend class ASTStmtReader;
   SourceLocation GhostLoc;
   Stmt *Body;
 

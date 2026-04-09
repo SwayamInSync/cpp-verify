@@ -4155,17 +4155,20 @@ void Parser::ParseDeclarationSpecifiers(
 
     // CppVerify: spec/proof function qualifiers.
     case tok::kw_spec:
-      // Mark the inline bit (spec functions get inlined away by verifier).
-      // Reuses inline storage — actual spec semantics stored via side table.
+      // Also mark inline so Clang's normal function machinery works.
+      // The dedicated FS_spec_specified bit preserves the original intent.
       isInvalid = DS.setFunctionSpecInline(Loc, PrevSpec, DiagID);
-      if (!isInvalid)
+      if (!isInvalid) {
         DS.SetRangeStart(Loc);
+        DS.setSpecFunctionSpec();
+      }
       break;
     case tok::kw_proof:
-      // Mark the inline bit (proof functions are ghost).
       isInvalid = DS.setFunctionSpecInline(Loc, PrevSpec, DiagID);
-      if (!isInvalid)
+      if (!isInvalid) {
         DS.SetRangeStart(Loc);
+        DS.setProofFunctionSpec();
+      }
       break;
     case tok::kw_virtual:
       // C++ for OpenCL does not allow virtual function qualifier, to avoid

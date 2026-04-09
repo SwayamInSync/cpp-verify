@@ -10275,6 +10275,12 @@ public:
   /// of the expression From to bool (C++0x [conv]p3).
   ExprResult PerformContextuallyConvertToBool(Expr *From);
 
+  /// ActOnContractCondition - Semantic action for a contract condition
+  /// (pre/post/invariant/contract_assert). Verifies the expression is
+  /// contextually convertible to bool. Called from the parser after parsing
+  /// each contract condition expression. (SemaContract.cpp)
+  ExprResult ActOnContractCondition(ExprResult E);
+
   /// PerformContextuallyConvertToObjCPointer - Perform a contextual
   /// conversion of the expression From to an Objective-C pointer type.
   /// Returns a valid but null ExprResult if no conversion sequence exists.

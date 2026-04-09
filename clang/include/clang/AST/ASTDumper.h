@@ -23,9 +23,12 @@ class ASTDumper : public ASTNodeTraverser<ASTDumper, TextNodeDumper> {
 
   const bool ShowColors;
 
+  const ASTContext *Ctx = nullptr;
+
 public:
   ASTDumper(raw_ostream &OS, const ASTContext &Context, bool ShowColors)
-      : NodeDumper(OS, Context, ShowColors), OS(OS), ShowColors(ShowColors) {}
+      : NodeDumper(OS, Context, ShowColors), OS(OS), ShowColors(ShowColors),
+        Ctx(&Context) {}
 
   ASTDumper(raw_ostream &OS, bool ShowColors)
       : NodeDumper(OS, ShowColors), OS(OS), ShowColors(ShowColors) {}
@@ -44,6 +47,10 @@ public:
   void VisitFunctionTemplateDecl(const FunctionTemplateDecl *D);
   void VisitClassTemplateDecl(const ClassTemplateDecl *D);
   void VisitVarTemplateDecl(const VarTemplateDecl *D);
+
+  // CppVerify: dump contract side-table entries as child nodes.
+  void VisitFunctionDecl(const FunctionDecl *D);
+  void VisitWhileStmt(const WhileStmt *S);
 };
 
 } // namespace clang

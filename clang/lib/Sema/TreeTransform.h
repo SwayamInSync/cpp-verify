@@ -21,11 +21,13 @@
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprConcepts.h"
+#include "clang/AST/ExprContract.h"
 #include "clang/AST/ExprObjC.h"
 #include "clang/AST/ExprOpenMP.h"
 #include "clang/AST/OpenMPClause.h"
 #include "clang/AST/Stmt.h"
 #include "clang/AST/StmtCXX.h"
+#include "clang/AST/StmtContract.h"
 #include "clang/AST/StmtObjC.h"
 #include "clang/AST/StmtOpenACC.h"
 #include "clang/AST/StmtOpenMP.h"
@@ -17898,6 +17900,87 @@ ExprResult TreeTransform<Derived>::TransformHLSLOutArgExpr(HLSLOutArgExpr *E) {
   // We can transform the base expression and allow argument resolution to fill
   // in the rest.
   return getDerived().TransformExpr(E->getArgLValue());
+}
+
+//===----------------------------------------------------------------------===//
+// CppVerify contract node transforms
+//===----------------------------------------------------------------------===//
+
+// Contract nodes are ghost/spec constructs that are stripped before codegen.
+// Template instantiation just rebuilds them unchanged by transforming children.
+
+template <typename Derived>
+StmtResult
+TreeTransform<Derived>::TransformContractAssertStmt(ContractAssertStmt *S) {
+  ExprResult Cond = getDerived().TransformExpr(S->getCond());
+  if (Cond.isInvalid())
+    return StmtError();
+  if (!getDerived().AlwaysRebuild() && Cond.get() == S->getCond())
+    return S;
+  return new (SemaRef.Context) ContractAssertStmt(
+      S->getContractAssertLoc(), S->getLParenLoc(), S->getRParenLoc(),
+      Cond.getAs<Expr>());
+}
+
+template <typename Derived>
+StmtResult TreeTransform<Derived>::TransformGhostBlockStmt(GhostBlockStmt *S) {
+  StmtResult Body = getDerived().TransformStmt(S->getBody());
+  if (Body.isInvalid())
+    return StmtError();
+  if (!getDerived().AlwaysRebuild() && Body.get() == S->getBody())
+    return S;
+  return new (SemaRef.Context) GhostBlockStmt(S->getGhostLoc(), Body.get());
+}
+
+template <typename Derived>
+ExprResult TreeTransform<Derived>::TransformForallExpr(ForallExpr *E) {
+  ExprResult Lo = getDerived().TransformExpr(E->getLo());
+  if (Lo.isInvalid()) return ExprError();
+  ExprResult Hi = getDerived().TransformExpr(E->getHi());
+  if (Hi.isInvalid()) return ExprError();
+  ExprResult Body = getDerived().TransformExpr(E->getBody());
+  if (Body.isInvalid()) return ExprError();
+  if (!getDerived().AlwaysRebuild() && Lo.get() == E->getLo() &&
+      Hi.get() == E->getHi() && Body.get() == E->getBody())
+    return E;
+  return new (SemaRef.Context)
+      ForallExpr(E->getForallLoc(), E->getLParenLoc(), E->getRParenLoc(),
+                 E->getBoundVar(), Lo.getAs<Expr>(), Hi.getAs<Expr>(),
+                 Body.getAs<Expr>(), SemaRef.Context.BoolTy);
+}
+
+template <typename Derived>
+ExprResult TreeTransform<Derived>::TransformExistsExpr(ExistsExpr *E) {
+  ExprResult Lo = getDerived().TransformExpr(E->getLo());
+  if (Lo.isInvalid()) return ExprError();
+  ExprResult Hi = getDerived().TransformExpr(E->getHi());
+  if (Hi.isInvalid()) return ExprError();
+  ExprResult Body = getDerived().TransformExpr(E->getBody());
+  if (Body.isInvalid()) return ExprError();
+  if (!getDerived().AlwaysRebuild() && Lo.get() == E->getLo() &&
+      Hi.get() == E->getHi() && Body.get() == E->getBody())
+    return E;
+  return new (SemaRef.Context)
+      ExistsExpr(E->getExistsLoc(), E->getLParenLoc(), E->getRParenLoc(),
+                 E->getBoundVar(), Lo.getAs<Expr>(), Hi.getAs<Expr>(),
+                 Body.getAs<Expr>(), SemaRef.Context.BoolTy);
+}
+
+template <typename Derived>
+ExprResult TreeTransform<Derived>::TransformOldExpr(OldExpr *E) {
+  ExprResult Inner = getDerived().TransformExpr(E->getInner());
+  if (Inner.isInvalid()) return ExprError();
+  if (!getDerived().AlwaysRebuild() && Inner.get() == E->getInner())
+    return E;
+  return new (SemaRef.Context)
+      OldExpr(E->getOldLoc(), E->getLParenLoc(), E->getRParenLoc(),
+              Inner.getAs<Expr>());
+}
+
+template <typename Derived>
+ExprResult TreeTransform<Derived>::TransformResultExpr(ResultExpr *E) {
+  // ResultExpr has no children to transform.
+  return E;
 }
 
 } // end namespace clang

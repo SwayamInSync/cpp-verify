@@ -1068,6 +1068,12 @@ bool Parser::isStartOfFunctionDefinition(const ParsingDeclarator &Declarator) {
     return KW.is(tok::kw_default) || KW.is(tok::kw_delete);
   }
 
+  // CppVerify: contract clauses (pre/post/decreases) precede the function body.
+  if (getLangOpts().VerifyContracts &&
+      (Tok.is(tok::kw_pre) || Tok.is(tok::kw_post) ||
+       Tok.is(tok::kw_decreases)))
+    return true;
+
   return Tok.is(tok::colon) ||         // X() : Base() {} (used for ctors)
          Tok.is(tok::kw_try);          // X() try { ... }
 }
@@ -1242,14 +1248,25 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
   SmallVector<Expr *, 2> ContractPreconditions;
   SmallVector<Expr *, 2> ContractPostconditions;
   Expr *ContractDecreases = nullptr;
-  bool IsSpecFn = false;
-  bool IsProofFn = false;
+  // Detect spec/proof from DeclSpec bits set during declaration parsing.
+  bool IsSpecFn = getLangOpts().VerifyContracts &&
+                  D.getDeclSpec().isSpecFunctionSpecified();
+  bool IsProofFn = getLangOpts().VerifyContracts &&
+                   D.getDeclSpec().isProofFunctionSpecified();
 
   if (getLangOpts().VerifyContracts) {
-    // Check for spec/proof function qualifiers stored in DeclSpec.
-    // These are parsed during declaration specifier parsing.
-    // For now, we detect them from the raw token stream during
-    // ParseDeclarationSpecifiers.
+    // Re-enter function parameters into scope so contract conditions can
+    // reference them. This mirrors ParseTrailingRequiresClause in
+    // ParseDeclCXX.cpp: create a FunctionPrototypeScope and push params.
+    std::optional<ParseScope> ContractParamScope;
+    if (D.isFunctionDeclarator() &&
+        (Tok.is(tok::kw_pre) || Tok.is(tok::kw_post) ||
+         Tok.is(tok::kw_decreases))) {
+      ContractParamScope.emplace(this, Scope::DeclScope |
+                                           Scope::FunctionDeclarationScope |
+                                           Scope::FunctionPrototypeScope);
+      Actions.ActOnStartTrailingRequiresClause(getCurScope(), D);
+    }
 
     while (Tok.is(tok::kw_pre) || Tok.is(tok::kw_post) ||
            Tok.is(tok::kw_decreases)) {
@@ -1258,7 +1275,7 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
       ConsumeToken();
 
       if (Tok.isNot(tok::l_paren)) {
-        Diag(Tok, diag::err_expected_lparen_after)
+        Diag(Tok, diag::err_contract_expected_lparen)
             << (IsPre ? "pre" : IsPost ? "post" : "decreases");
         break;
       }
@@ -1278,8 +1295,18 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
         continue;
       }
 
+      // Pre/post conditions must be bool; decreases is an integer measure.
+      if (IsPre || IsPost) {
+        E = Actions.ActOnContractCondition(E);
+        if (E.isInvalid()) {
+          SkipUntil(tok::r_paren, StopAtSemi);
+          continue;
+        }
+      }
+
       if (Tok.isNot(tok::r_paren)) {
-        Diag(Tok, diag::err_expected) << tok::r_paren;
+        Diag(Tok, diag::err_contract_expected_rparen)
+            << (IsPre ? "pre" : IsPost ? "post" : "decreases");
         SkipUntil(tok::r_paren, StopAtSemi);
         continue;
       }

@@ -19,6 +19,9 @@
 #include "clang/Basic/SourceManager.h"
 #include "llvm/Support/raw_ostream.h"
 
+// CppVerify: contract side-table dumping support.
+// FunctionContractInfo/LoopContractInfo are defined in ASTContext.h.
+
 using namespace clang;
 using namespace clang::comments;
 
@@ -170,6 +173,41 @@ void ASTDumper::VisitClassTemplateDecl(const ClassTemplateDecl *D) {
 
 void ASTDumper::VisitVarTemplateDecl(const VarTemplateDecl *D) {
   dumpTemplateDecl(D, false);
+}
+
+//===----------------------------------------------------------------------===//
+// CppVerify: contract side-table dump methods
+//===----------------------------------------------------------------------===//
+
+void ASTDumper::VisitFunctionDecl(const FunctionDecl *D) {
+  // Delegate standard traversal (params, body, etc.) to the base.
+  ASTNodeTraverser<ASTDumper, TextNodeDumper>::VisitFunctionDecl(D);
+
+  // Then add contract clauses from the side table as extra children.
+  if (!Ctx)
+    return;
+  const FunctionContractInfo *FCI = Ctx->getFunctionContract(D);
+  if (!FCI)
+    return;
+  for (const Expr *E : FCI->Preconditions)
+    Visit(E, "pre");
+  for (const Expr *E : FCI->Postconditions)
+    Visit(E, "post");
+  if (FCI->Decreases)
+    Visit(FCI->Decreases, "decreases");
+}
+
+void ASTDumper::VisitWhileStmt(const WhileStmt *S) {
+  // Contract clauses are in the side table, not in S->children(), so add them.
+  if (!Ctx)
+    return;
+  const LoopContractInfo *LCI = Ctx->getLoopContract(S);
+  if (!LCI)
+    return;
+  for (const Expr *E : LCI->Invariants)
+    Visit(E, "invariant");
+  if (LCI->Decreases)
+    Visit(LCI->Decreases, "decreases");
 }
 
 //===----------------------------------------------------------------------===//
