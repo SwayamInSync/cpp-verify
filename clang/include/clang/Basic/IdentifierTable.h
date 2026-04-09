@@ -78,7 +78,8 @@ enum TokenKey : unsigned {
   KEYHLSL = 0x8000000,
   KEYFIXEDPOINT = 0x10000000,
   KEYDEFERTS = 0x20000000,
-  KEYMAX = KEYDEFERTS, // The maximum key
+  KEYCONTRACT = 0x40000000, // Keywords enabled by -fverify-contracts
+  KEYMAX = KEYCONTRACT, // The maximum key
   KEYALLCXX = KEYCXX | KEYCXX11 | KEYCXX20,
   KEYALL = (KEYMAX | (KEYMAX - 1)) & ~KEYNOMS18 & ~KEYNOOPENCL &
            ~KEYNOZOS // KEYNOMS18, KEYNOOPENCL, KEYNOZOS are excluded.

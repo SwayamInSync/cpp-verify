@@ -427,6 +427,8 @@ VALUE_LANGOPT(FunctionAlignment, 5, 0, Compatible, "Default alignment for functi
 VALUE_LANGOPT(LoopAlignment, 32, 0, Compatible, "Default alignment for loops")
 
 LANGOPT(FixedPoint, 1, 0, NotCompatible, "fixed point types")
+
+LANGOPT(VerifyContracts, 1, 0, NotCompatible, "CppVerify contract verification")
 LANGOPT(PaddingOnUnsignedFixedPoint, 1, 0, NotCompatible,
         "unsigned fixed point types having one extra padding bit")
 

@@ -295,6 +295,7 @@ PUNCTUATOR(greatergreatergreater, ">>>")
 //                   extension.
 //   KEYDEFERTS - This is a keyword if the C '_Defer' TS is enabled
 //   KEYZOS - This is a keyword in C/C++ on z/OS
+//   KEYCONTRACT - This is a keyword if -fverify-contracts is enabled
 //
 KEYWORD(auto                        , KEYALL)
 KEYWORD(break                       , KEYALL)
@@ -444,6 +445,20 @@ C23_KEYWORD(typeof_unqual           , 0)
 
 // '_Defer' TS
 KEYWORD(_Defer                      , KEYDEFERTS)
+
+// CppVerify contract keywords (enabled by -fverify-contracts)
+KEYWORD(pre                         , KEYCONTRACT)
+KEYWORD(post                        , KEYCONTRACT)
+KEYWORD(invariant                   , KEYCONTRACT)
+KEYWORD(decreases                   , KEYCONTRACT)
+KEYWORD(ghost                       , KEYCONTRACT)
+KEYWORD(spec                        , KEYCONTRACT)
+KEYWORD(proof                       , KEYCONTRACT)
+KEYWORD(contract_assert             , KEYCONTRACT)
+KEYWORD(forall                      , KEYCONTRACT)
+KEYWORD(exists                      , KEYCONTRACT)
+KEYWORD(old                         , KEYCONTRACT)
+KEYWORD(result                      , KEYCONTRACT)
 
 // ISO/IEC JTC1 SC22 WG14 N1169 Extension
 KEYWORD(_Accum                      , KEYFIXEDPOINT)
