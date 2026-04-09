@@ -104,6 +104,12 @@ void CodeGenFunction::EmitStmt(const Stmt *S, ArrayRef<const Attr *> Attrs) {
   case Stmt::SEHFinallyStmtClass:
   case Stmt::MSDependentExistsStmtClass:
     llvm_unreachable("invalid statement class to emit generically");
+
+  // CppVerify: ghost/contract nodes emit nothing during codegen.
+  case Stmt::GhostBlockStmtClass:
+  case Stmt::ContractAssertStmtClass:
+    break;
+
   case Stmt::NullStmtClass:
   case Stmt::CompoundStmtClass:
   case Stmt::DeclStmtClass:

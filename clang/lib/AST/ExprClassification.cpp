@@ -16,7 +16,9 @@
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/ExprCXX.h"
+#include "clang/AST/ExprContract.h"
 #include "clang/AST/ExprObjC.h"
+#include "clang/AST/StmtContract.h"
 #include "llvm/Support/ErrorHandling.h"
 
 using namespace clang;

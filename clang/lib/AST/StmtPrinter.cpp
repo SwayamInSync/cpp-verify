@@ -22,6 +22,7 @@
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
+#include "clang/AST/ExprContract.h"
 #include "clang/AST/ExprObjC.h"
 #include "clang/AST/ExprOpenMP.h"
 #include "clang/AST/NestedNameSpecifier.h"
@@ -29,6 +30,7 @@
 #include "clang/AST/PrettyPrinter.h"
 #include "clang/AST/Stmt.h"
 #include "clang/AST/StmtCXX.h"
+#include "clang/AST/StmtContract.h"
 #include "clang/AST/StmtObjC.h"
 #include "clang/AST/StmtOpenMP.h"
 #include "clang/AST/StmtSYCL.h"
@@ -597,6 +599,48 @@ void StmtPrinter::VisitMSAsmStmt(MSAsmStmt *Node) {
 
 void StmtPrinter::VisitCapturedStmt(CapturedStmt *Node) {
   PrintStmt(Node->getCapturedDecl()->getBody());
+}
+
+// CppVerify contract nodes
+void StmtPrinter::VisitContractAssertStmt(ContractAssertStmt *Node) {
+  Indent() << "contract_assert(";
+  PrintExpr(Node->getCond());
+  OS << ");\n";
+}
+
+void StmtPrinter::VisitGhostBlockStmt(GhostBlockStmt *Node) {
+  Indent() << "ghost ";
+  PrintStmt(Node->getBody());
+}
+
+void StmtPrinter::VisitForallExpr(ForallExpr *Node) {
+  OS << "forall(" << Node->getBoundVar()->getName() << ", ";
+  PrintExpr(Node->getLo());
+  OS << ", ";
+  PrintExpr(Node->getHi());
+  OS << ", ";
+  PrintExpr(Node->getBody());
+  OS << ")";
+}
+
+void StmtPrinter::VisitExistsExpr(ExistsExpr *Node) {
+  OS << "exists(" << Node->getBoundVar()->getName() << ", ";
+  PrintExpr(Node->getLo());
+  OS << ", ";
+  PrintExpr(Node->getHi());
+  OS << ", ";
+  PrintExpr(Node->getBody());
+  OS << ")";
+}
+
+void StmtPrinter::VisitOldExpr(OldExpr *Node) {
+  OS << "old(";
+  PrintExpr(Node->getInner());
+  OS << ")";
+}
+
+void StmtPrinter::VisitResultExpr(ResultExpr *) {
+  OS << "result";
 }
 
 void StmtPrinter::VisitSYCLKernelCallStmt(SYCLKernelCallStmt *Node) {

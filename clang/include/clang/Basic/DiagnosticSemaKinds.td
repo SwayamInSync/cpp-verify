@@ -13862,4 +13862,18 @@ def err_cuda_device_kernel_launch_not_supported
 def err_cuda_device_kernel_launch_require_rdc
     : Error<"kernel launch from __device__ or __global__ function requires "
             "relocatable device code (i.e. requires -fgpu-rdc)">;
+// CppVerify contract semantic diagnostics
+def err_contract_expr_not_bool : Error<
+  "contract expression must be convertible to bool">;
+def err_contract_result_not_in_post : Error<
+  "'result' can only appear in a postcondition">;
+def err_contract_old_not_in_post : Error<
+  "'old' can only appear in a postcondition or proof function body">;
+def err_contract_quantifier_bound_not_int : Error<
+  "quantifier bound must have integer type">;
+def err_contract_quantifier_body_not_bool : Error<
+  "quantifier body must have boolean type">;
+def err_proof_fn_must_return_void : Error<
+  "proof function must return void">;
+
 } // end of sema component.

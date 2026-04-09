@@ -4152,6 +4152,21 @@ void Parser::ParseDeclarationSpecifiers(
     case tok::kw_inline:
       isInvalid = DS.setFunctionSpecInline(Loc, PrevSpec, DiagID);
       break;
+
+    // CppVerify: spec/proof function qualifiers.
+    case tok::kw_spec:
+      // Mark the inline bit (spec functions get inlined away by verifier).
+      // Reuses inline storage — actual spec semantics stored via side table.
+      isInvalid = DS.setFunctionSpecInline(Loc, PrevSpec, DiagID);
+      if (!isInvalid)
+        DS.SetRangeStart(Loc);
+      break;
+    case tok::kw_proof:
+      // Mark the inline bit (proof functions are ghost).
+      isInvalid = DS.setFunctionSpecInline(Loc, PrevSpec, DiagID);
+      if (!isInvalid)
+        DS.SetRangeStart(Loc);
+      break;
     case tok::kw_virtual:
       // C++ for OpenCL does not allow virtual function qualifier, to avoid
       // function pointers restricted in OpenCL v2.0 s6.9.a.
@@ -5859,6 +5874,10 @@ bool Parser::isDeclarationSpecifier(
   case tok::kw_virtual:
   case tok::kw_explicit:
   case tok::kw__Noreturn:
+
+    // CppVerify function qualifiers
+  case tok::kw_spec:
+  case tok::kw_proof:
 
     // alignment-specifier
   case tok::kw__Alignas:

@@ -3092,6 +3092,33 @@ void ASTContext::setBlockVarCopyInit(const VarDecl*VD, Expr *CopyExpr,
   BlockVarCopyInits[VD].setExprAndFlag(CopyExpr, CanThrow);
 }
 
+// CppVerify contract side table accessors.
+FunctionContractInfo &
+ASTContext::getOrCreateFunctionContract(const FunctionDecl *FD) {
+  auto &Info = FunctionContracts[FD];
+  if (!Info)
+    Info = new (*this) FunctionContractInfo();
+  return *Info;
+}
+
+const FunctionContractInfo *
+ASTContext::getFunctionContract(const FunctionDecl *FD) const {
+  auto I = FunctionContracts.find(FD);
+  return I != FunctionContracts.end() ? I->second : nullptr;
+}
+
+LoopContractInfo &ASTContext::getOrCreateLoopContract(const Stmt *S) {
+  auto &Info = LoopContracts[S];
+  if (!Info)
+    Info = new (*this) LoopContractInfo();
+  return *Info;
+}
+
+const LoopContractInfo *ASTContext::getLoopContract(const Stmt *S) const {
+  auto I = LoopContracts.find(S);
+  return I != LoopContracts.end() ? I->second : nullptr;
+}
+
 TypeSourceInfo *ASTContext::CreateTypeSourceInfo(QualType T,
                                                  unsigned DataSize) const {
   if (!DataSize)

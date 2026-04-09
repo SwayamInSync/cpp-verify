@@ -14,6 +14,7 @@
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ASTLambda.h"
+#include "clang/AST/Decl.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/Basic/DiagnosticParse.h"
 #include "clang/Basic/StackExhaustionHandler.h"
@@ -1237,7 +1238,63 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
   if (FTI.isKNRPrototype())
     ParseKNRParamDeclarations(D);
 
-  // We should have either an opening brace or, in a C++ constructor,
+  // CppVerify: parse contract clauses (pre/post/decreases) before the body.
+  SmallVector<Expr *, 2> ContractPreconditions;
+  SmallVector<Expr *, 2> ContractPostconditions;
+  Expr *ContractDecreases = nullptr;
+  bool IsSpecFn = false;
+  bool IsProofFn = false;
+
+  if (getLangOpts().VerifyContracts) {
+    // Check for spec/proof function qualifiers stored in DeclSpec.
+    // These are parsed during declaration specifier parsing.
+    // For now, we detect them from the raw token stream during
+    // ParseDeclarationSpecifiers.
+
+    while (Tok.is(tok::kw_pre) || Tok.is(tok::kw_post) ||
+           Tok.is(tok::kw_decreases)) {
+      bool IsPre = Tok.is(tok::kw_pre);
+      bool IsPost = Tok.is(tok::kw_post);
+      ConsumeToken();
+
+      if (Tok.isNot(tok::l_paren)) {
+        Diag(Tok, diag::err_expected_lparen_after)
+            << (IsPre ? "pre" : IsPost ? "post" : "decreases");
+        break;
+      }
+      ConsumeParen();
+
+      // For postconditions, enable 'result' and 'old' parsing.
+      if (IsPost)
+        InContractPostcondition = true;
+
+      ExprResult E = ParseExpression();
+
+      if (IsPost)
+        InContractPostcondition = false;
+
+      if (E.isInvalid()) {
+        SkipUntil(tok::r_paren, StopAtSemi);
+        continue;
+      }
+
+      if (Tok.isNot(tok::r_paren)) {
+        Diag(Tok, diag::err_expected) << tok::r_paren;
+        SkipUntil(tok::r_paren, StopAtSemi);
+        continue;
+      }
+      ConsumeParen();
+
+      if (IsPre)
+        ContractPreconditions.push_back(E.get());
+      else if (IsPost)
+        ContractPostconditions.push_back(E.get());
+      else
+        ContractDecreases = E.get();
+    }
+  }
+
+  // We should have either an opening brace, or in a C++ constructor,
   // we may have a colon.
   if (Tok.isNot(tok::l_brace) &&
       (!getLangOpts().CPlusPlus ||
@@ -1388,6 +1445,22 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
 
   // Break out of the ParsingDeclarator context before we parse the body.
   D.complete(Res);
+
+  // CppVerify: store contract clauses on the FunctionDecl.
+  if (Res && (!ContractPreconditions.empty() ||
+              !ContractPostconditions.empty() || ContractDecreases ||
+              IsSpecFn || IsProofFn)) {
+    if (auto *FD = dyn_cast<FunctionDecl>(Res)) {
+      FunctionContractInfo &FCI =
+          Actions.getASTContext().getOrCreateFunctionContract(FD);
+      FCI.Preconditions = std::move(ContractPreconditions);
+      FCI.Postconditions = std::move(ContractPostconditions);
+      FCI.Decreases = ContractDecreases;
+      FCI.IsSpec = IsSpecFn;
+      FCI.IsProof = IsProofFn;
+      CurrentContractFunction = Res;
+    }
+  }
 
   // Break out of the ParsingDeclSpec context, too.  This const_cast is
   // safe because we're always the sole owner.

@@ -1883,4 +1883,20 @@ def err_hlsl_number_literal_underflow : Error<
   "float literal has a magnitude that is too small to be represented as a float type">;
 def err_hlsl_rootsig_non_zero_flag : Error<"flag value is neither a literal 0 nor a named value">;
 
+// CppVerify contract parsing diagnostics
+def err_contract_expected_lparen : Error<
+  "expected '(' after '%0'">;
+def err_contract_expected_comma : Error<
+  "expected ',' in %0 expression">;
+def err_contract_expected_rparen : Error<
+  "expected ')' after %0 expression">;
+def err_contract_expected_semi : Error<
+  "expected ';' after contract_assert">;
+def err_contract_expected_body : Error<
+  "expected '{' after ghost">;
+def err_result_outside_postcondition : Error<
+  "'result' can only be used in postconditions">;
+def err_old_outside_postcondition : Error<
+  "'old' can only be used in postconditions">;
+
 } // end of Parser diagnostics

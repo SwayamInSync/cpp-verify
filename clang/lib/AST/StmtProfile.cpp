@@ -16,8 +16,10 @@
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
+#include "clang/AST/ExprContract.h"
 #include "clang/AST/ExprObjC.h"
 #include "clang/AST/ExprOpenMP.h"
+#include "clang/AST/StmtContract.h"
 #include "clang/AST/ODRHash.h"
 #include "clang/AST/OpenMPClause.h"
 #include "clang/AST/StmtVisitor.h"
@@ -391,6 +393,31 @@ void StmtProfiler::VisitSEHLeaveStmt(const SEHLeaveStmt *S) {
 
 void StmtProfiler::VisitCapturedStmt(const CapturedStmt *S) {
   VisitStmt(S);
+}
+
+// CppVerify contract nodes
+void StmtProfiler::VisitContractAssertStmt(const ContractAssertStmt *S) {
+  VisitStmt(S);
+}
+
+void StmtProfiler::VisitGhostBlockStmt(const GhostBlockStmt *S) {
+  VisitStmt(S);
+}
+
+void StmtProfiler::VisitForallExpr(const ForallExpr *E) {
+  VisitExpr(E);
+}
+
+void StmtProfiler::VisitExistsExpr(const ExistsExpr *E) {
+  VisitExpr(E);
+}
+
+void StmtProfiler::VisitOldExpr(const OldExpr *E) {
+  VisitExpr(E);
+}
+
+void StmtProfiler::VisitResultExpr(const ResultExpr *E) {
+  VisitExpr(E);
 }
 
 void StmtProfiler::VisitSYCLKernelCallStmt(const SYCLKernelCallStmt *S) {

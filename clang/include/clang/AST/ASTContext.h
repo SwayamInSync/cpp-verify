@@ -94,6 +94,21 @@ class AtomicExpr;
 class BlockExpr;
 struct BlockVarCopyInit;
 class BuiltinTemplateDecl;
+
+/// Contract information attached to a FunctionDecl via side table.
+struct FunctionContractInfo {
+  SmallVector<Expr *, 2> Preconditions;
+  SmallVector<Expr *, 2> Postconditions;
+  Expr *Decreases = nullptr;
+  bool IsSpec = false;
+  bool IsProof = false;
+};
+
+/// Contract information attached to a WhileStmt/ForStmt via side table.
+struct LoopContractInfo {
+  SmallVector<Expr *, 2> Invariants;
+  Expr *Decreases = nullptr;
+};
 class CharUnits;
 class ConceptDecl;
 class CXXABI;
@@ -350,6 +365,13 @@ class ASTContext : public RefCountedBase<ASTContext> {
 
   /// Mapping from __block VarDecls to BlockVarCopyInit.
   llvm::DenseMap<const VarDecl *, BlockVarCopyInit> BlockVarCopyInits;
+
+  /// CppVerify: contract info for functions (pre/post/decreases/spec/proof).
+  llvm::DenseMap<const FunctionDecl *, FunctionContractInfo *>
+      FunctionContracts;
+
+  /// CppVerify: contract info for loops (invariant/decreases).
+  llvm::DenseMap<const Stmt *, LoopContractInfo *> LoopContracts;
 
   /// Mapping from GUIDs to the corresponding MSGuidDecl.
   mutable llvm::FoldingSet<MSGuidDecl> MSGuidDecls;
@@ -3421,6 +3443,16 @@ public:
   /// Get the copy initialization expression of the VarDecl \p VD, or
   /// nullptr if none exists.
   BlockVarCopyInit getBlockVarCopyInit(const VarDecl* VD) const;
+
+  /// CppVerify: get or create contract info for a function.
+  FunctionContractInfo &getOrCreateFunctionContract(const FunctionDecl *FD);
+  /// CppVerify: get contract info for a function, or nullptr if none.
+  const FunctionContractInfo *getFunctionContract(const FunctionDecl *FD) const;
+
+  /// CppVerify: get or create contract info for a loop statement.
+  LoopContractInfo &getOrCreateLoopContract(const Stmt *S);
+  /// CppVerify: get contract info for a loop, or nullptr if none.
+  const LoopContractInfo *getLoopContract(const Stmt *S) const;
 
   /// Allocate an uninitialized TypeSourceInfo.
   ///
