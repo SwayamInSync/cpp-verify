@@ -1,44 +1,102 @@
-# The LLVM Compiler Infrastructure
+# CppVerify - Extending C++ to support Program Verification using SMT solvers
 
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/llvm/llvm-project/badge)](https://securityscorecards.dev/viewer/?uri=github.com/llvm/llvm-project)
-[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/8273/badge)](https://www.bestpractices.dev/projects/8273)
-[![libc++](https://github.com/llvm/llvm-project/actions/workflows/libcxx-build-and-test.yaml/badge.svg?branch=main&event=schedule)](https://github.com/llvm/llvm-project/actions/workflows/libcxx-build-and-test.yaml?query=event%3Aschedule)
+> [!CAUTION]
+> **Work in progress** — only lexer support is implemented so far. The verifier is not yet functional.
 
-Welcome to the LLVM project!
+> This is a fork of [LLVM/Clang](https://github.com/llvm/llvm-project) (pinned to
+> `llvmorg-22.1.3`) extended with **CppVerify**: a deductive verification system
+> for C++ built directly into the Clang frontend.
 
-This repository contains the source code for LLVM, a toolkit for the
-construction of highly optimized compilers, optimizers, and run-time
-environments.
+CppVerify adds first-class contract syntax (`pre`, `post`, `invariant`,
+`decreases`, `ghost`, `spec`, `proof`) to C++, type-checked by Clang Sema and
+discharged by Z3 via a weakest-precondition calculus backend. It occupies an
+entirely uncontested niche: the only deductive verifier for modern C++ built on
+Clang, with native contract syntax rather than comments or macros.
 
-The LLVM project has multiple components. The core of the project is
-itself called "LLVM". This contains all of the tools, libraries, and header
-files needed to process intermediate representations and convert them into
-object files. Tools include an assembler, disassembler, bitcode analyzer, and
-bitcode optimizer.
+## What it looks like
 
-C-like languages use the [Clang](https://clang.llvm.org/) frontend. This
-component compiles C, C++, Objective-C, and Objective-C++ code into LLVM bitcode
--- and from there into object files, using LLVM.
+```cpp
+spec int fibo(int n) decreases(n) {
+    if (n <= 1) return n;
+    return fibo(n - 1) + fibo(n - 2);
+}
 
-Other components include:
-the [libc++ C++ standard library](https://libcxx.llvm.org),
-the [LLD linker](https://lld.llvm.org), and more.
+int safe_fib(int n)
+  pre(n >= 0)
+  pre(n <= 45)
+  post(result == fibo(n))
+{
+    if (n <= 1) return n;
+    int a = 0, b = 1, i = 2;
+    while (i <= n)
+      invariant(2 <= i && i <= n + 1)
+      invariant(b == fibo(i - 1))
+      decreases(n - i + 1)
+    {
+        int tmp = a + b;
+        a = b;
+        b = tmp;
+        i++;
+    }
+    return b;
+}
+```
 
-## Getting the Source Code and Building LLVM
+## Contract syntax reference
 
-Consult the
-[Getting Started with LLVM](https://llvm.org/docs/GettingStarted.html#getting-the-source-code-and-building-llvm)
-page for information on building and running LLVM.
+| Syntax                    | Where                             | Meaning                                                              |
+| ------------------------- | --------------------------------- | -------------------------------------------------------------------- |
+| `pre(expr)`               | After function `)`                | Precondition — caller must satisfy                                   |
+| `post(expr)`              | After function `)`                | Postcondition — callee must establish; may use `result` and `old(x)` |
+| `invariant(expr)`         | After `while`/`for` condition `)` | Loop invariant                                                       |
+| `decreases(expr)`         | After `while`/`for` condition `)` | Termination measure                                                  |
+| `ghost { ... }`           | Statement                         | Ghost block — proof steps, stripped by CodeGen                       |
+| `contract_assert(expr)`   | Statement                         | Verification condition (not a runtime check)                         |
+| `spec T f(...)`           | Declaration                       | Pure spec function — interpreted by verifier only                    |
+| `proof void f(...)`       | Declaration                       | Ghost proof function — establishes lemmas                            |
+| `forall(i, lo, hi, expr)` | Expression                        | Bounded universal quantifier                                         |
+| `exists(i, lo, hi, expr)` | Expression                        | Bounded existential quantifier                                       |
+| `old(expr)`               | Inside `post`                     | Value of `expr` at function entry                                    |
+| `result`                  | Inside `post`                     | Return value of the enclosing function                               |
 
-For information on how to contribute to the LLVM project, please take a look at
-the [Contributing to LLVM](https://llvm.org/docs/Contributing.html) guide.
+All contract syntax is gated behind `-fverify-contracts`. Without the flag,
+none of these names are reserved — existing C++ that uses `pre`, `post`, etc.
+as identifiers compiles unchanged.
 
-## Getting in touch
+## Architecture
 
-Join the [LLVM Discourse forums](https://discourse.llvm.org/), [Discord
-chat](https://discord.gg/xS7Z362),
-[LLVM Office Hours](https://llvm.org/docs/GettingInvolved.html#office-hours) or
-[Regular sync-ups](https://llvm.org/docs/GettingInvolved.html#online-sync-ups).
+```
+C++ source with contracts
+    │
+    ▼
+Clang Frontend  (modified Parser + Sema + AST)
+    │  Annotated AST with contract nodes
+    ▼
+ASTConverter    (Clang AST → Layer 1 VCR IR)
+    │  Typed, control-flow-preserving IR
+    ▼
+Passivize       (Layer 1 → Layer 2 SSA)
+    │  Havoc / assume / assert, no loops
+    ▼
+WP Calculus     (weakest precondition, backward pass)
+    │  Verification conditions
+    ▼
+Z3 Encoding     (VCs → Z3 formulas, check UNSAT)
+    │  sat / unsat / unknown
+    ▼
+Diagnostics     (Clang-style errors + counterexamples)
+```
 
-The LLVM project has adopted a [code of conduct](https://llvm.org/docs/CodeOfConduct.html) for
-participants to all modes of communication within the project.
+Normal compilation skips everything after the frontend: CodeGen simply ignores
+all ghost/contract AST nodes.
+
+## Competitive landscape
+
+| Tool          | Frontend              | C++ support    | Contract syntax |
+| ------------- | --------------------- | -------------- | --------------- |
+| Frama-C       | Custom OCaml          | Prototype only | ACSL comments   |
+| VCC           | Custom                | C only (dead)  | Macros          |
+| VeriFast      | Custom                | No             | Comments        |
+| CBMC          | Custom goto-cc        | Partial        | Assertions only |
+| Verus         | Rust compiler         | No (Rust only) | First-class     |
+| **CppVerify** | **Clang (this fork)** | **Native**     | **First-class** |
