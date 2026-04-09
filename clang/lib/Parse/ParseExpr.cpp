@@ -3610,14 +3610,18 @@ ExprResult Parser::ParseResultExpr() {
   assert(Tok.is(tok::kw_result) && "Expected 'result'");
   SourceLocation ResultLoc = ConsumeToken();
 
-  // Determine the return type from the function being parsed.
-  QualType RetTy;
-  if (CurrentContractFunction) {
-    if (auto *FD = dyn_cast<FunctionDecl>(CurrentContractFunction))
-      RetTy = FD->getReturnType();
+  // Use the return type computed from the DeclSpec before contract parsing.
+  // CurrentContractReturnType is set in ParseFunctionDefinition before the
+  // contract clause loop, so it reflects the current function's return type.
+  QualType RetTy = CurrentContractReturnType;
+  if (RetTy.isNull()) {
+    // Fallback: try the FunctionDecl if available (e.g. from a previous pass).
+    if (CurrentContractFunction)
+      if (auto *FD = dyn_cast<FunctionDecl>(CurrentContractFunction))
+        RetTy = FD->getReturnType();
   }
   if (RetTy.isNull())
-    RetTy = Actions.getASTContext().IntTy; // fallback
+    RetTy = Actions.getASTContext().IntTy; // last-resort fallback
 
   ASTContext &Ctx = Actions.getASTContext();
   return new (Ctx) ResultExpr(ResultLoc, RetTy);

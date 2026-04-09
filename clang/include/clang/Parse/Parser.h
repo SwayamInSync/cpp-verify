@@ -7475,6 +7475,10 @@ public:
   /// True when we are currently parsing a postcondition expression.
   bool InContractPostcondition = false;
 
+  /// The return type of the function whose contracts we are currently
+  /// parsing, extracted from the DeclSpec before the FunctionDecl exists.
+  QualType CurrentContractReturnType;
+
   /// The FunctionDecl whose contracts we are currently parsing (if any).
   Decl *CurrentContractFunction = nullptr;
 

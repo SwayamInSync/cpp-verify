@@ -1266,6 +1266,58 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
                                            Scope::FunctionDeclarationScope |
                                            Scope::FunctionPrototypeScope);
       Actions.ActOnStartTrailingRequiresClause(getCurScope(), D);
+
+      // Compute the return type from the DeclSpec so that 'result' in
+      // postconditions gets the correct type. The FunctionDecl doesn't
+      // exist yet at this point.
+      const DeclSpec &DS = D.getDeclSpec();
+      ASTContext &Ctx = Actions.getASTContext();
+      switch (DS.getTypeSpecType()) {
+      case DeclSpec::TST_void:
+        CurrentContractReturnType = Ctx.VoidTy;
+        break;
+      case DeclSpec::TST_bool:
+        CurrentContractReturnType = Ctx.BoolTy;
+        break;
+      case DeclSpec::TST_char: {
+        auto Sign = DS.getTypeSpecSign();
+        CurrentContractReturnType =
+            Sign == TypeSpecifierSign::Unsigned   ? Ctx.UnsignedCharTy
+            : Sign == TypeSpecifierSign::Signed   ? Ctx.SignedCharTy
+                                                  : Ctx.CharTy;
+        break;
+      }
+      case DeclSpec::TST_int: {
+        bool IsUnsigned =
+            DS.getTypeSpecSign() == TypeSpecifierSign::Unsigned;
+        switch (DS.getTypeSpecWidth()) {
+        case TypeSpecifierWidth::Short:
+          CurrentContractReturnType =
+              IsUnsigned ? Ctx.UnsignedShortTy : Ctx.ShortTy;
+          break;
+        case TypeSpecifierWidth::Long:
+          CurrentContractReturnType =
+              IsUnsigned ? Ctx.UnsignedLongTy : Ctx.LongTy;
+          break;
+        case TypeSpecifierWidth::LongLong:
+          CurrentContractReturnType =
+              IsUnsigned ? Ctx.UnsignedLongLongTy : Ctx.LongLongTy;
+          break;
+        default:
+          CurrentContractReturnType =
+              IsUnsigned ? Ctx.UnsignedIntTy : Ctx.IntTy;
+          break;
+        }
+        break;
+      }
+      case DeclSpec::TST_typename:
+        CurrentContractReturnType =
+            Sema::GetTypeFromParser(DS.getRepAsType());
+        break;
+      default:
+        CurrentContractReturnType = Ctx.IntTy;
+        break;
+      }
     }
 
     while (Tok.is(tok::kw_pre) || Tok.is(tok::kw_post) ||
