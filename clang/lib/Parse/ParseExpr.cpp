@@ -3561,6 +3561,25 @@ ExprResult Parser::ParseQuantifierExpr() {
 
   QuantifierScope.Exit();
 
+  // Validate bound types: lo and hi must be integer.
+  if (!Lo.get()->getType()->isIntegerType()) {
+    Diag(Lo.get()->getExprLoc(), diag::err_contract_quantifier_bound_not_int);
+    SkipUntil(tok::r_paren, StopAtSemi);
+    return ExprError();
+  }
+  if (!Hi.get()->getType()->isIntegerType()) {
+    Diag(Hi.get()->getExprLoc(), diag::err_contract_quantifier_bound_not_int);
+    SkipUntil(tok::r_paren, StopAtSemi);
+    return ExprError();
+  }
+
+  // Validate body: must be contextually convertible to bool.
+  ExprResult BodyBool = Actions.ActOnContractCondition(Body);
+  if (BodyBool.isInvalid()) {
+    SkipUntil(tok::r_paren, StopAtSemi);
+    return ExprError();
+  }
+
   if (Tok.isNot(tok::r_paren)) {
     Diag(Tok, diag::err_contract_expected_rparen)
         << (IsForall ? "forall" : "exists");
@@ -3572,15 +3591,21 @@ ExprResult Parser::ParseQuantifierExpr() {
   QualType BoolTy = Ctx.BoolTy;
   if (IsForall)
     return new (Ctx) ForallExpr(KwLoc, LParenLoc, RParenLoc, BoundVar,
-                                Lo.get(), Hi.get(), Body.get(), BoolTy);
+                                Lo.get(), Hi.get(), BodyBool.get(), BoolTy);
   return new (Ctx) ExistsExpr(KwLoc, LParenLoc, RParenLoc, BoundVar,
-                              Lo.get(), Hi.get(), Body.get(), BoolTy);
+                              Lo.get(), Hi.get(), BodyBool.get(), BoolTy);
 }
 
 /// Parse old(expr)
 ExprResult Parser::ParseOldExpr() {
   assert(Tok.is(tok::kw_old) && "Expected 'old'");
   SourceLocation OldLoc = ConsumeToken();
+
+  // 'old' is only valid in postconditions (and proof function bodies).
+  if (!InContractPostcondition) {
+    Diag(OldLoc, diag::err_old_outside_postcondition);
+    return ExprError();
+  }
 
   if (Tok.isNot(tok::l_paren)) {
     Diag(Tok, diag::err_contract_expected_lparen) << "old";
@@ -3609,6 +3634,12 @@ ExprResult Parser::ParseOldExpr() {
 ExprResult Parser::ParseResultExpr() {
   assert(Tok.is(tok::kw_result) && "Expected 'result'");
   SourceLocation ResultLoc = ConsumeToken();
+
+  // 'result' is only valid in postconditions.
+  if (!InContractPostcondition) {
+    Diag(ResultLoc, diag::err_result_outside_postcondition);
+    return ExprError();
+  }
 
   // Use the return type computed from the DeclSpec before contract parsing.
   // CurrentContractReturnType is set in ParseFunctionDefinition before the

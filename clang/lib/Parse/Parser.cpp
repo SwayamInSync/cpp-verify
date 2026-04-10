@@ -1541,6 +1541,12 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
     }
   }
 
+  // Reset contract parsing state so it doesn't leak into subsequent functions.
+  CurrentContractReturnType = QualType();
+  // Note: CurrentContractFunction is intentionally kept alive — it can be
+  // used by the VCGen backend later. InContractPostcondition was already
+  // reset after each post(...) clause above.
+
   // Break out of the ParsingDeclSpec context, too.  This const_cast is
   // safe because we're always the sole owner.
   D.getMutableDeclSpec().abort();

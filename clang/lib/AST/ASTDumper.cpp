@@ -210,6 +210,19 @@ void ASTDumper::VisitWhileStmt(const WhileStmt *S) {
     Visit(LCI->Decreases, "decreases");
 }
 
+void ASTDumper::VisitForStmt(const ForStmt *S) {
+  // Contract clauses are in the side table, not in S->children(), so add them.
+  if (!Ctx)
+    return;
+  const LoopContractInfo *LCI = Ctx->getLoopContract(S);
+  if (!LCI)
+    return;
+  for (const Expr *E : LCI->Invariants)
+    Visit(E, "invariant");
+  if (LCI->Decreases)
+    Visit(LCI->Decreases, "decreases");
+}
+
 //===----------------------------------------------------------------------===//
 // Type method implementations
 //===----------------------------------------------------------------------===//

@@ -2757,7 +2757,7 @@ void Parser::ParseLoopContractClauses(SmallVectorImpl<Expr *> &Invariants,
                                       Expr *&Decreases) {
   while (Tok.is(tok::kw_invariant) || Tok.is(tok::kw_decreases)) {
     bool IsInvariant = Tok.is(tok::kw_invariant);
-    SourceLocation KwLoc = ConsumeToken();
+    ConsumeToken();
 
     if (Tok.isNot(tok::l_paren)) {
       Diag(Tok, diag::err_contract_expected_lparen)

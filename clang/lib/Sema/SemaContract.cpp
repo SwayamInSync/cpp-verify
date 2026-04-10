@@ -23,8 +23,7 @@ using namespace clang;
 /// ActOnContractCondition - Semantic action called by the parser after
 /// parsing a contract condition expression (pre/post/invariant/contract_assert).
 ///
-/// Verifies that the expression is contextually convertible to bool, consistent
-/// with the contract syntax specification in docs/DESIGN.md.
+/// Verifies that the expression is contextually convertible to bool.
 ///
 /// ForallExpr and ExistsExpr already carry type BoolTy so the conversion is
 /// a no-op; plain integer/pointer expressions receive the standard bool cast.

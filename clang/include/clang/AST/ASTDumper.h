@@ -51,6 +51,7 @@ public:
   // CppVerify: dump contract side-table entries as child nodes.
   void VisitFunctionDecl(const FunctionDecl *D);
   void VisitWhileStmt(const WhileStmt *S);
+  void VisitForStmt(const ForStmt *S);
 };
 
 } // namespace clang
