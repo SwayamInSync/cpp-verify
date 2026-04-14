@@ -5,6 +5,9 @@
 > - `10/04/2026` only lexer support is implemented so far. The verifier is not yet functional.
 > - `14/04/2026` AST parsing with contracts is implemented. The verifier is still not functional yet.
 
+> [!NOTE]
+> Workflows are turned off since building LLVM is too expensive to run on every push. To test changes, build the `clang` target locally and run the tests as `./build/bin/llvm-lit clang/test/Verify`.
+
 > This is a fork of [LLVM/Clang](https://github.com/llvm/llvm-project) (pinned to
 > `llvmorg-22.1.3`) extended to **CppVerify**: a deductive verification system
 > for C++ built directly into the Clang.
