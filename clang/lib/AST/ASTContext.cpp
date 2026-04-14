@@ -3095,7 +3095,9 @@ void ASTContext::setBlockVarCopyInit(const VarDecl*VD, Expr *CopyExpr,
 // CppVerify contract side table accessors.
 FunctionContractInfo &
 ASTContext::getOrCreateFunctionContract(const FunctionDecl *FD) {
-  auto &Info = FunctionContracts[FD];
+  assert(FD && "Passed null params");
+  const FunctionDecl *Key = FD->getCanonicalDecl();
+  auto &Info = FunctionContracts[Key];
   if (!Info)
     Info = new (*this) FunctionContractInfo();
   return *Info;
@@ -3103,7 +3105,7 @@ ASTContext::getOrCreateFunctionContract(const FunctionDecl *FD) {
 
 const FunctionContractInfo *
 ASTContext::getFunctionContract(const FunctionDecl *FD) const {
-  auto I = FunctionContracts.find(FD);
+  auto I = FunctionContracts.find(FD->getCanonicalDecl());
   return I != FunctionContracts.end() ? I->second : nullptr;
 }
 
