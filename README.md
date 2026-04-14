@@ -1,11 +1,13 @@
 # CppVerify - Extending C++ to support Program Verification using SMT solvers
 
 > [!CAUTION]
-> **Work in progress** — only lexer support is implemented so far. The verifier is not yet functional.
+> 
+> - `10/04/2026` only lexer support is implemented so far. The verifier is not yet functional.
+> - `14/04/2026` AST parsing with contracts is implemented. The verifier is still not functional yet.
 
 > This is a fork of [LLVM/Clang](https://github.com/llvm/llvm-project) (pinned to
-> `llvmorg-22.1.3`) extended with **CppVerify**: a deductive verification system
-> for C++ built directly into the Clang frontend.
+> `llvmorg-22.1.3`) extended to **CppVerify**: a deductive verification system
+> for C++ built directly into the Clang.
 
 CppVerify adds first-class contract syntax (`pre`, `post`, `invariant`,
 `decreases`, `ghost`, `spec`, `proof`) to C++, type-checked by Clang Sema and
