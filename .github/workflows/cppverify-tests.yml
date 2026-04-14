@@ -1,0 +1,53 @@
+name: CppVerify Build & Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build clang lld
+
+      - name: Cache build directory
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: cppverify-build-${{ runner.os }}-${{ hashFiles('clang/lib/**', 'clang/include/**', 'llvm/lib/**', 'llvm/include/**') }}
+          restore-keys: |
+            cppverify-build-${{ runner.os }}-
+
+      - name: Configure
+        run: |
+          cmake -S llvm -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DLLVM_USE_LINKER=lld \
+            -DLLVM_ENABLE_PROJECTS=clang \
+            -DLLVM_TARGETS_TO_BUILD=X86 \
+            -DLLVM_PARALLEL_LINK_JOBS=2
+
+      - name: Build clang
+        run: ninja -C build clang
+
+      - name: Build test dependencies
+        run: ninja -C build llvm-lit FileCheck count not
+
+      - name: Run CppVerify contract tests
+        run: build/bin/llvm-lit -v clang/test/Verify/
