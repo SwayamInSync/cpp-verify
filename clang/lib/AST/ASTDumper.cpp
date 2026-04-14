@@ -210,6 +210,13 @@ void ASTDumper::VisitWhileStmt(const WhileStmt *S) {
     Visit(LCI->Decreases, "decreases");
 }
 
+// Note: VisitWhileStmt/VisitForStmt only append extra children (contract
+// side-table entries). The base ASTNodeTraverser does NOT define VisitWhileStmt
+// or VisitForStmt — it relies on the generic Stmt children() iterator for
+// those. Our overrides add contract info *after* the base traversal has already
+// enumerated the WhileStmt/ForStmt children. When no contract info exists, there
+// is nothing extra to add, so we return early; the base traversal still runs.
+
 void ASTDumper::VisitForStmt(const ForStmt *S) {
   // Contract clauses are in the side table, not in S->children(), so add them.
   if (!Ctx)

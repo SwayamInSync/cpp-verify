@@ -2779,6 +2779,14 @@ void Parser::ParseLoopContractClauses(SmallVectorImpl<Expr *> &Invariants,
         SkipUntil(tok::r_paren, StopAtSemi);
         return;
       }
+    } else {
+      // decreases: validate integer type.
+      if (!E.get()->getType()->isIntegerType()) {
+        Diag(E.get()->getExprLoc(),
+             diag::err_contract_decreases_not_int);
+        SkipUntil(tok::r_paren, StopAtSemi);
+        return;
+      }
     }
 
     if (Tok.isNot(tok::r_paren)) {

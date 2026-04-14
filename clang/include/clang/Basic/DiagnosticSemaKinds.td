@@ -13868,12 +13868,14 @@ def err_contract_expr_not_bool : Error<
 def err_contract_result_not_in_post : Error<
   "'result' can only appear in a postcondition">;
 def err_contract_old_not_in_post : Error<
-  "'old' can only appear in a postcondition or proof function body">;
+  "'old' can only appear in a postcondition">;
 def err_contract_quantifier_bound_not_int : Error<
   "quantifier bound must have integer type">;
 def err_contract_quantifier_body_not_bool : Error<
   "quantifier body must have boolean type">;
 def err_proof_fn_must_return_void : Error<
   "proof function must return void">;
+def err_contract_decreases_not_int : Error<
+  "decreases expression must have integer type">;
 
 } // end of sema component.

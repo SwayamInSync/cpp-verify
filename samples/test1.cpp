@@ -285,3 +285,81 @@ void zero_fill(int arr[], int n)
         arr[i] = 0;
     }
 }
+
+// ---------------------------------------------------------------------------
+// 16. Pointer return types — exercises full-Declarator return type resolution.
+//     The 'result' keyword must be typed as 'int *', not just 'int'.
+// ---------------------------------------------------------------------------
+int *find_ptr(int arr[], int n, int val)
+  pre(n > 0)
+{
+    for (int i = 0; i < n; i = i + 1)
+    {
+        if (arr[i] == val) return &arr[i];
+    }
+    return (int *)0;
+}
+
+// ---------------------------------------------------------------------------
+// 17. Const pointer return — exercises pointer + const qualifier on return.
+// ---------------------------------------------------------------------------
+const int *find_const(const int arr[], int n, int val)
+  pre(n > 0)
+{
+    for (int i = 0; i < n; i = i + 1)
+    {
+        if (arr[i] == val) return &arr[i];
+    }
+    return (const int *)0;
+}
+
+// ---------------------------------------------------------------------------
+// 18. Struct return type — exercises struct return with contracts.
+// ---------------------------------------------------------------------------
+struct Point {
+    int x;
+    int y;
+};
+
+Point make_origin()
+  post(result.x == 0)
+  post(result.y == 0)
+{
+    Point p;
+    p.x = 0;
+    p.y = 0;
+    return p;
+}
+
+Point translate(Point p, int dx, int dy)
+  post(result.x == old(p.x) + old(dx))
+  post(result.y == old(p.y) + old(dy))
+{
+    Point r;
+    r.x = p.x + dx;
+    r.y = p.y + dy;
+    return r;
+}
+
+// ---------------------------------------------------------------------------
+// 19. Typedef return type — exercises TST_typename path through Declarator.
+// ---------------------------------------------------------------------------
+typedef unsigned long usize;
+
+usize safe_len(int arr[], int n)
+  pre(n >= 0)
+  post(result >= 0)
+{
+    return (usize)n;
+}
+
+// ---------------------------------------------------------------------------
+// 20. Pointer return with postcondition — 'result' must be typed 'int *'
+//     (this is the key regression test for the DeclSpec-only bug).
+// ---------------------------------------------------------------------------
+int *max_ptr(int *a, int *b)
+  post(result == old(a) || result == old(b))
+{
+    if (*a >= *b) return a;
+    return b;
+}

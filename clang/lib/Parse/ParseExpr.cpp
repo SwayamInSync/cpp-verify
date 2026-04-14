@@ -1095,7 +1095,10 @@ Parser::ParseCastExpression(CastParseKind ParseKind, bool isAddressOfOperand,
   case tok::kw_old:
     return ParseOldExpr();
   case tok::kw_result:
-    return ParseResultExpr();
+    // Use break (not return) so ParsePostfixExpressionSuffix handles
+    // member access, e.g. result.x for struct return types.
+    Res = ParseResultExpr();
+    break;
 
   case tok::plusplus:      // unary-expression: '++' unary-expression [C99]
   case tok::minusminus: {  // unary-expression: '--' unary-expression [C99]
@@ -3601,7 +3604,8 @@ ExprResult Parser::ParseOldExpr() {
   assert(Tok.is(tok::kw_old) && "Expected 'old'");
   SourceLocation OldLoc = ConsumeToken();
 
-  // 'old' is only valid in postconditions (and proof function bodies).
+  // 'old' is only valid in postconditions.
+  // TODO: also allow in proof function bodies once InProofFunctionBody is tracked.
   if (!InContractPostcondition) {
     Diag(OldLoc, diag::err_old_outside_postcondition);
     return ExprError();
@@ -3641,9 +3645,10 @@ ExprResult Parser::ParseResultExpr() {
     return ExprError();
   }
 
-  // Use the return type computed from the DeclSpec before contract parsing.
-  // CurrentContractReturnType is set in ParseFunctionDefinition before the
-  // contract clause loop, so it reflects the current function's return type.
+  // Use the return type computed from the full Declarator before contract
+  // parsing. CurrentContractReturnType is set via GetTypeForDeclarator in
+  // ParseFunctionDefinition, so it reflects the true return type including
+  // pointers, references, typedefs, etc.
   QualType RetTy = CurrentContractReturnType;
   if (RetTy.isNull()) {
     // Fallback: try the FunctionDecl if available (e.g. from a previous pass).

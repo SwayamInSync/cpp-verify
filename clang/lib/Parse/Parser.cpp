@@ -1267,56 +1267,19 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
                                            Scope::FunctionPrototypeScope);
       Actions.ActOnStartTrailingRequiresClause(getCurScope(), D);
 
-      // Compute the return type from the DeclSpec so that 'result' in
-      // postconditions gets the correct type. The FunctionDecl doesn't
-      // exist yet at this point.
-      const DeclSpec &DS = D.getDeclSpec();
-      ASTContext &Ctx = Actions.getASTContext();
-      switch (DS.getTypeSpecType()) {
-      case DeclSpec::TST_void:
-        CurrentContractReturnType = Ctx.VoidTy;
-        break;
-      case DeclSpec::TST_bool:
-        CurrentContractReturnType = Ctx.BoolTy;
-        break;
-      case DeclSpec::TST_char: {
-        auto Sign = DS.getTypeSpecSign();
-        CurrentContractReturnType =
-            Sign == TypeSpecifierSign::Unsigned   ? Ctx.UnsignedCharTy
-            : Sign == TypeSpecifierSign::Signed   ? Ctx.SignedCharTy
-                                                  : Ctx.CharTy;
-        break;
-      }
-      case DeclSpec::TST_int: {
-        bool IsUnsigned =
-            DS.getTypeSpecSign() == TypeSpecifierSign::Unsigned;
-        switch (DS.getTypeSpecWidth()) {
-        case TypeSpecifierWidth::Short:
-          CurrentContractReturnType =
-              IsUnsigned ? Ctx.UnsignedShortTy : Ctx.ShortTy;
-          break;
-        case TypeSpecifierWidth::Long:
-          CurrentContractReturnType =
-              IsUnsigned ? Ctx.UnsignedLongTy : Ctx.LongTy;
-          break;
-        case TypeSpecifierWidth::LongLong:
-          CurrentContractReturnType =
-              IsUnsigned ? Ctx.UnsignedLongLongTy : Ctx.LongLongTy;
-          break;
-        default:
-          CurrentContractReturnType =
-              IsUnsigned ? Ctx.UnsignedIntTy : Ctx.IntTy;
-          break;
-        }
-        break;
-      }
-      case DeclSpec::TST_typename:
-        CurrentContractReturnType =
-            Sema::GetTypeFromParser(DS.getRepAsType());
-        break;
-      default:
-        CurrentContractReturnType = Ctx.IntTy;
-        break;
+      // Compute the return type from the full Declarator (not just the
+      // DeclSpec) so that 'result' in postconditions gets the correct type.
+      // This handles pointers, references, typedefs, trailing return types,
+      // struct returns, etc. — all declarator modifiers are accounted for.
+      // The FunctionDecl doesn't exist yet, so we ask Sema to compute the
+      // full function type from the Declarator and extract the return type.
+      {
+        TypeSourceInfo *TSI = Actions.GetTypeForDeclarator(D);
+        QualType FullType = TSI->getType();
+        if (const auto *FT = FullType->getAs<FunctionType>())
+          CurrentContractReturnType = FT->getReturnType();
+        else
+          CurrentContractReturnType = Actions.getASTContext().IntTy;
       }
     }
 
@@ -1351,6 +1314,14 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
       if (IsPre || IsPost) {
         E = Actions.ActOnContractCondition(E);
         if (E.isInvalid()) {
+          SkipUntil(tok::r_paren, StopAtSemi);
+          continue;
+        }
+      } else {
+        // decreases: validate integer type.
+        if (!E.get()->getType()->isIntegerType()) {
+          Diag(E.get()->getExprLoc(),
+               diag::err_contract_decreases_not_int);
           SkipUntil(tok::r_paren, StopAtSemi);
           continue;
         }
