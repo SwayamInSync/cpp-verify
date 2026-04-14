@@ -26,6 +26,7 @@
 #include "clang/AST/Attr.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/Expr.h"
+#include "clang/AST/ExprContract.h"
 #include "clang/AST/ParentMapContext.h"
 #include "clang/AST/RecordLayout.h"
 #include "clang/AST/StmtVisitor.h"
@@ -530,6 +531,23 @@ public:
   Value *VisitGNUNullExpr(const GNUNullExpr *E) {
     return EmitNullValue(E->getType());
   }
+
+  // CppVerify: contract expressions are never emitted — they only exist
+  // in contract clauses and ghost blocks which CodeGen skips entirely.
+  // Return a poison value as a safety net.
+  Value *VisitForallExpr(const ForallExpr *) {
+    return llvm::PoisonValue::get(CGF.ConvertType(CGF.getContext().BoolTy));
+  }
+  Value *VisitExistsExpr(const ExistsExpr *) {
+    return llvm::PoisonValue::get(CGF.ConvertType(CGF.getContext().BoolTy));
+  }
+  Value *VisitOldExpr(const OldExpr *E) {
+    return llvm::PoisonValue::get(CGF.ConvertType(E->getType()));
+  }
+  Value *VisitResultExpr(const ResultExpr *E) {
+    return llvm::PoisonValue::get(CGF.ConvertType(E->getType()));
+  }
+
   Value *VisitOffsetOfExpr(OffsetOfExpr *E);
   Value *VisitUnaryExprOrTypeTraitExpr(const UnaryExprOrTypeTraitExpr *E);
   Value *VisitAddrLabelExpr(const AddrLabelExpr *E) {

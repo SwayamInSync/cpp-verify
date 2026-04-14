@@ -7449,6 +7449,39 @@ public:
   StmtResult ParseForStatement(SourceLocation *TrailingElseLoc,
                                LabelDecl *PrecedingLabel);
 
+  //===--------------------------------------------------------------------===//
+  // CppVerify Contract Parsing
+
+  /// Parse invariant/decreases clauses after a while/for condition.
+  /// Called from ParseWhileStatement/ParseForStatement.
+  void ParseLoopContractClauses(SmallVectorImpl<Expr *> &Invariants,
+                                Expr *&Decreases);
+
+  /// Parse ghost { ... } block.
+  StmtResult ParseGhostBlock();
+
+  /// Parse contract_assert(expr);
+  StmtResult ParseContractAssert();
+
+  /// Parse forall(binder, lo, hi, body) or exists(binder, lo, hi, body).
+  ExprResult ParseQuantifierExpr();
+
+  /// Parse old(expr).
+  ExprResult ParseOldExpr();
+
+  /// Parse 'result' keyword in postconditions.
+  ExprResult ParseResultExpr();
+
+  /// True when we are currently parsing a postcondition expression.
+  bool InContractPostcondition = false;
+
+  /// The return type of the function whose contracts we are currently
+  /// parsing, extracted from the DeclSpec before the FunctionDecl exists.
+  QualType CurrentContractReturnType;
+
+  /// The FunctionDecl whose contracts we are currently parsing (if any).
+  Decl *CurrentContractFunction = nullptr;
+
   /// ParseGotoStatement
   /// \verbatim
   ///       jump-statement:

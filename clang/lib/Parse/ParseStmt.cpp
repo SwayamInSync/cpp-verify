@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/AST/PrettyDeclStackTrace.h"
+#include "clang/AST/StmtContract.h"
 #include "clang/Basic/Attributes.h"
 #include "clang/Basic/PrettyStackTrace.h"
 #include "clang/Basic/TargetInfo.h"
@@ -283,6 +284,14 @@ Retry:
     return ParseIfStatement(TrailingElseLoc);
   case tok::kw_switch:              // C99 6.8.4.2: switch-statement
     return ParseSwitchStatement(TrailingElseLoc, PrecedingLabel);
+
+  // CppVerify contract statements
+  case tok::kw_ghost:
+    return ParseGhostBlock();
+  case tok::kw_contract_assert:
+    Res = ParseContractAssert();
+    SemiError = "contract_assert";
+    break;
 
   case tok::kw_while:               // C99 6.8.5.1: while-statement
     return ParseWhileStatement(TrailingElseLoc, PrecedingLabel);
@@ -1750,6 +1759,12 @@ StmtResult Parser::ParseWhileStatement(SourceLocation *TrailingElseLoc,
                                 Sema::ConditionKind::Boolean, LParen, RParen))
     return StmtError();
 
+  // CppVerify: parse loop contract clauses (invariant/decreases) if present.
+  SmallVector<Expr *, 2> Invariants;
+  Expr *LoopDecreases = nullptr;
+  if (getLangOpts().VerifyContracts)
+    ParseLoopContractClauses(Invariants, LoopDecreases);
+
   // OpenACC Restricts a while-loop inside of certain construct/clause
   // combinations, so diagnose that here in OpenACC mode.
   SemaOpenACC::LoopInConstructRAII LCR{getActions().OpenACC()};
@@ -1783,7 +1798,17 @@ StmtResult Parser::ParseWhileStatement(SourceLocation *TrailingElseLoc,
   if (Cond.isInvalid() || Body.isInvalid())
     return StmtError();
 
-  return Actions.ActOnWhileStmt(WhileLoc, LParen, Cond, RParen, Body.get());
+  StmtResult Result =
+      Actions.ActOnWhileStmt(WhileLoc, LParen, Cond, RParen, Body.get());
+
+  // Store loop contracts in ASTContext side table.
+  if (Result.isUsable() && (!Invariants.empty() || LoopDecreases)) {
+    LoopContractInfo &LCI =
+        Actions.getASTContext().getOrCreateLoopContract(Result.get());
+    LCI.Invariants = std::move(Invariants);
+    LCI.Decreases = LoopDecreases;
+  }
+  return Result;
 }
 
 StmtResult Parser::ParseDoStatement(LabelDecl *PrecedingLabel) {
@@ -2176,6 +2201,12 @@ StmtResult Parser::ParseForStatement(SourceLocation *TrailingElseLoc,
   // Match the ')'.
   T.consumeClose();
 
+  // CppVerify: parse loop contract clauses (invariant/decreases) if present.
+  SmallVector<Expr *, 2> ForInvariants;
+  Expr *ForDecreases = nullptr;
+  if (getLangOpts().VerifyContracts)
+    ParseLoopContractClauses(ForInvariants, ForDecreases);
+
   // C++ Coroutines [stmt.iter]:
   //   'co_await' can only be used for a range-based for statement.
   if (CoawaitLoc.isValid() && !ForRangeInfo.ParsedForRangeDecl()) {
@@ -2271,9 +2302,18 @@ StmtResult Parser::ParseForStatement(SourceLocation *TrailingElseLoc,
   if (ForRangeInfo.ParsedForRangeDecl())
     return Actions.FinishCXXForRangeStmt(ForRangeStmt.get(), Body.get());
 
-  return Actions.ActOnForStmt(ForLoc, T.getOpenLocation(), FirstPart.get(),
-                              SecondPart, ThirdPart, T.getCloseLocation(),
-                              Body.get());
+  StmtResult ForResult = Actions.ActOnForStmt(
+      ForLoc, T.getOpenLocation(), FirstPart.get(), SecondPart, ThirdPart,
+      T.getCloseLocation(), Body.get());
+
+  // Store loop contracts in ASTContext side table.
+  if (ForResult.isUsable() && (!ForInvariants.empty() || ForDecreases)) {
+    LoopContractInfo &LCI =
+        Actions.getASTContext().getOrCreateLoopContract(ForResult.get());
+    LCI.Invariants = std::move(ForInvariants);
+    LCI.Decreases = ForDecreases;
+  }
+  return ForResult;
 }
 
 StmtResult Parser::ParseGotoStatement() {
@@ -2705,4 +2745,112 @@ void Parser::ParseMicrosoftIfExistsStatement(StmtVector &Stmts) {
       Stmts.push_back(R.get());
   }
   Braces.consumeClose();
+}
+
+//===----------------------------------------------------------------------===//
+// CppVerify Contract Statement Parsing
+//===----------------------------------------------------------------------===//
+
+/// Parse loop contract clauses: invariant(expr) and decreases(expr)
+/// These appear after the while/for condition ')' and before the body '{'.
+void Parser::ParseLoopContractClauses(SmallVectorImpl<Expr *> &Invariants,
+                                      Expr *&Decreases) {
+  while (Tok.is(tok::kw_invariant) || Tok.is(tok::kw_decreases)) {
+    bool IsInvariant = Tok.is(tok::kw_invariant);
+    ConsumeToken();
+
+    if (Tok.isNot(tok::l_paren)) {
+      Diag(Tok, diag::err_contract_expected_lparen)
+          << (IsInvariant ? "invariant" : "decreases");
+      return;
+    }
+    ConsumeParen();
+
+    ExprResult E = ParseExpression();
+    if (E.isInvalid()) {
+      SkipUntil(tok::r_paren, StopAtSemi);
+      return;
+    }
+
+    // Invariants must be bool; decreases is an integer measure.
+    if (IsInvariant) {
+      E = Actions.ActOnContractCondition(E);
+      if (E.isInvalid()) {
+        SkipUntil(tok::r_paren, StopAtSemi);
+        return;
+      }
+    } else {
+      // decreases: validate integer type.
+      if (!E.get()->getType()->isIntegerType()) {
+        Diag(E.get()->getExprLoc(),
+             diag::err_contract_decreases_not_int);
+        SkipUntil(tok::r_paren, StopAtSemi);
+        return;
+      }
+    }
+
+    if (Tok.isNot(tok::r_paren)) {
+      Diag(Tok, diag::err_contract_expected_rparen)
+          << (IsInvariant ? "invariant" : "decreases");
+      SkipUntil(tok::r_paren, StopAtSemi);
+      return;
+    }
+    ConsumeParen();
+
+    if (IsInvariant)
+      Invariants.push_back(E.get());
+    else
+      Decreases = E.get();
+  }
+}
+
+/// Parse ghost { ... }
+StmtResult Parser::ParseGhostBlock() {
+  assert(Tok.is(tok::kw_ghost) && "Expected 'ghost'");
+  SourceLocation GhostLoc = ConsumeToken();
+
+  if (Tok.isNot(tok::l_brace)) {
+    Diag(Tok, diag::err_contract_expected_body);
+    return StmtError();
+  }
+
+  StmtResult Body = ParseCompoundStatement();
+  if (Body.isInvalid())
+    return StmtError();
+
+  return new (Actions.getASTContext()) GhostBlockStmt(GhostLoc, Body.get());
+}
+
+/// Parse contract_assert(expr);
+StmtResult Parser::ParseContractAssert() {
+  assert(Tok.is(tok::kw_contract_assert) && "Expected 'contract_assert'");
+  SourceLocation CALoc = ConsumeToken();
+
+  if (Tok.isNot(tok::l_paren)) {
+    Diag(Tok, diag::err_contract_expected_lparen) << "contract_assert";
+    return StmtError();
+  }
+  SourceLocation LParenLoc = ConsumeParen();
+
+  ExprResult Cond = ParseExpression();
+  if (Cond.isInvalid()) {
+    SkipUntil(tok::r_paren, StopAtSemi);
+    return StmtError();
+  }
+
+  Cond = Actions.ActOnContractCondition(Cond);
+  if (Cond.isInvalid()) {
+    SkipUntil(tok::r_paren, StopAtSemi);
+    return StmtError();
+  }
+
+  if (Tok.isNot(tok::r_paren)) {
+    Diag(Tok, diag::err_contract_expected_rparen) << "contract_assert";
+    SkipUntil(tok::r_paren, StopAtSemi);
+    return StmtError();
+  }
+  SourceLocation RParenLoc = ConsumeParen();
+
+  return new (Actions.getASTContext())
+      ContractAssertStmt(CALoc, LParenLoc, RParenLoc, Cond.get());
 }

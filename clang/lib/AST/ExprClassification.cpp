@@ -16,7 +16,9 @@
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/ExprCXX.h"
+#include "clang/AST/ExprContract.h"
 #include "clang/AST/ExprObjC.h"
+#include "clang/AST/StmtContract.h"
 #include "llvm/Support/ErrorHandling.h"
 
 using namespace clang;
@@ -481,6 +483,13 @@ static Cl::Kinds ClassifyInternal(ASTContext &Ctx, const Expr *E) {
     if (isa<ArrayType>(E->getType()))
       return Cl::CL_ArrayTemporary;
     return Cl::CL_ClassTemporary;
+
+  // CppVerify contract expressions — always pure rvalues.
+  case Expr::ForallExprClass:
+  case Expr::ExistsExprClass:
+  case Expr::OldExprClass:
+  case Expr::ResultExprClass:
+    return Cl::CL_PRValue;
   }
 
   llvm_unreachable("unhandled expression kind in classification");

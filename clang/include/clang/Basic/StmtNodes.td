@@ -337,3 +337,11 @@ def OpenACCAsteriskSizeExpr : StmtNode<Expr>;
 
 // HLSL Constructs.
 def HLSLOutArgExpr : StmtNode<Expr>;
+
+// CppVerify Contract Nodes.
+def ContractAssertStmt : StmtNode<Stmt>;
+def GhostBlockStmt : StmtNode<Stmt>;
+def ForallExpr : StmtNode<Expr>;
+def ExistsExpr : StmtNode<Expr>;
+def OldExpr : StmtNode<Expr>;
+def ResultExpr : StmtNode<Expr>;

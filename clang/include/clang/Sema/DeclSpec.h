@@ -368,6 +368,11 @@ private:
   unsigned FS_virtual_specified : 1;
   LLVM_PREFERRED_TYPE(bool)
   unsigned FS_noreturn_specified : 1;
+  // CppVerify: spec/proof function qualifiers.
+  LLVM_PREFERRED_TYPE(bool)
+  unsigned FS_spec_specified : 1;
+  LLVM_PREFERRED_TYPE(bool)
+  unsigned FS_proof_specified : 1;
 
   // friend-specifier
   LLVM_PREFERRED_TYPE(bool)
@@ -462,7 +467,8 @@ public:
         TypeSpecPipe(false), TypeSpecSat(false), ConstrainedAuto(false),
         TypeQualifiers(TQ_unspecified), FS_inline_specified(false),
         FS_forceinline_specified(false), FS_virtual_specified(false),
-        FS_noreturn_specified(false), FriendSpecifiedFirst(false),
+        FS_noreturn_specified(false), FS_spec_specified(false),
+        FS_proof_specified(false), FriendSpecifiedFirst(false),
         ConstexprSpecifier(
             static_cast<unsigned>(ConstexprSpecKind::Unspecified)),
         Attrs(attrFactory), writtenBS(), ObjCQualifiers(nullptr) {}
@@ -630,6 +636,12 @@ public:
 
   bool isNoreturnSpecified() const { return FS_noreturn_specified; }
   SourceLocation getNoreturnSpecLoc() const { return FS_noreturnLoc; }
+
+  // CppVerify: spec/proof function qualifiers.
+  bool isSpecFunctionSpecified() const { return FS_spec_specified; }
+  bool isProofFunctionSpecified() const { return FS_proof_specified; }
+  void setSpecFunctionSpec() { FS_spec_specified = true; }
+  void setProofFunctionSpec() { FS_proof_specified = true; }
 
   void ClearFunctionSpecs() {
     FS_inline_specified = false;

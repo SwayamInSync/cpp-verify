@@ -11,7 +11,9 @@
 //
 //===----------------------------------------------------------------------===//
 #include "clang/AST/DynamicRecursiveASTVisitor.h"
+#include "clang/AST/ExprContract.h"
 #include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/AST/StmtContract.h"
 
 using namespace clang;
 

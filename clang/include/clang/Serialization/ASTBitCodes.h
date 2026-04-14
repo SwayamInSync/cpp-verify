@@ -2065,6 +2065,14 @@ enum StmtCode {
   EXPR_HLSL_OUT_ARG,
 
   STMT_DEFER,
+
+  // CppVerify contract constructs
+  STMT_CONTRACT_ASSERT,
+  STMT_GHOST_BLOCK,
+  EXPR_FORALL,
+  EXPR_EXISTS,
+  EXPR_OLD,
+  EXPR_RESULT,
 };
 
 /// The kinds of designators that can occur in a

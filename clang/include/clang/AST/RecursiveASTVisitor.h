@@ -27,6 +27,7 @@
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprConcepts.h"
+#include "clang/AST/ExprContract.h"
 #include "clang/AST/ExprObjC.h"
 #include "clang/AST/ExprOpenMP.h"
 #include "clang/AST/LambdaCapture.h"
@@ -35,6 +36,7 @@
 #include "clang/AST/OpenMPClause.h"
 #include "clang/AST/Stmt.h"
 #include "clang/AST/StmtCXX.h"
+#include "clang/AST/StmtContract.h"
 #include "clang/AST/StmtObjC.h"
 #include "clang/AST/StmtOpenACC.h"
 #include "clang/AST/StmtOpenMP.h"
@@ -2595,6 +2597,14 @@ DEF_TRAVERSE_STMT(MSDependentExistsStmt, {
 DEF_TRAVERSE_STMT(ReturnStmt, {})
 DEF_TRAVERSE_STMT(SwitchStmt, {})
 DEF_TRAVERSE_STMT(WhileStmt, {})
+
+// CppVerify contract nodes.
+DEF_TRAVERSE_STMT(ContractAssertStmt, {})
+DEF_TRAVERSE_STMT(ExistsExpr, { TRY_TO(TraverseDecl(S->getBoundVar())); })
+DEF_TRAVERSE_STMT(ForallExpr, { TRY_TO(TraverseDecl(S->getBoundVar())); })
+DEF_TRAVERSE_STMT(GhostBlockStmt, {})
+DEF_TRAVERSE_STMT(OldExpr, {})
+DEF_TRAVERSE_STMT(ResultExpr, {})
 
 DEF_TRAVERSE_STMT(ConstantExpr, {})
 

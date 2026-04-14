@@ -14,6 +14,7 @@
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ASTLambda.h"
+#include "clang/AST/Decl.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/Basic/DiagnosticParse.h"
 #include "clang/Basic/StackExhaustionHandler.h"
@@ -1067,6 +1068,12 @@ bool Parser::isStartOfFunctionDefinition(const ParsingDeclarator &Declarator) {
     return KW.is(tok::kw_default) || KW.is(tok::kw_delete);
   }
 
+  // CppVerify: contract clauses (pre/post/decreases) precede the function body.
+  if (getLangOpts().VerifyContracts &&
+      (Tok.is(tok::kw_pre) || Tok.is(tok::kw_post) ||
+       Tok.is(tok::kw_decreases)))
+    return true;
+
   return Tok.is(tok::colon) ||         // X() : Base() {} (used for ctors)
          Tok.is(tok::kw_try);          // X() try { ... }
 }
@@ -1237,7 +1244,107 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
   if (FTI.isKNRPrototype())
     ParseKNRParamDeclarations(D);
 
-  // We should have either an opening brace or, in a C++ constructor,
+  // CppVerify: parse contract clauses (pre/post/decreases) before the body.
+  SmallVector<Expr *, 2> ContractPreconditions;
+  SmallVector<Expr *, 2> ContractPostconditions;
+  Expr *ContractDecreases = nullptr;
+  // Detect spec/proof from DeclSpec bits set during declaration parsing.
+  bool IsSpecFn = getLangOpts().VerifyContracts &&
+                  D.getDeclSpec().isSpecFunctionSpecified();
+  bool IsProofFn = getLangOpts().VerifyContracts &&
+                   D.getDeclSpec().isProofFunctionSpecified();
+
+  if (getLangOpts().VerifyContracts) {
+    // Re-enter function parameters into scope so contract conditions can
+    // reference them. This mirrors ParseTrailingRequiresClause in
+    // ParseDeclCXX.cpp: create a FunctionPrototypeScope and push params.
+    std::optional<ParseScope> ContractParamScope;
+    if (D.isFunctionDeclarator() &&
+        (Tok.is(tok::kw_pre) || Tok.is(tok::kw_post) ||
+         Tok.is(tok::kw_decreases))) {
+      ContractParamScope.emplace(this, Scope::DeclScope |
+                                           Scope::FunctionDeclarationScope |
+                                           Scope::FunctionPrototypeScope);
+      Actions.ActOnStartTrailingRequiresClause(getCurScope(), D);
+
+      // Compute the return type from the full Declarator (not just the
+      // DeclSpec) so that 'result' in postconditions gets the correct type.
+      // This handles pointers, references, typedefs, trailing return types,
+      // struct returns, etc. — all declarator modifiers are accounted for.
+      // The FunctionDecl doesn't exist yet, so we ask Sema to compute the
+      // full function type from the Declarator and extract the return type.
+      {
+        TypeSourceInfo *TSI = Actions.GetTypeForDeclarator(D);
+        QualType FullType = TSI->getType();
+        if (const auto *FT = FullType->getAs<FunctionType>())
+          CurrentContractReturnType = FT->getReturnType();
+        else
+          CurrentContractReturnType = Actions.getASTContext().IntTy;
+      }
+    }
+
+    while (Tok.is(tok::kw_pre) || Tok.is(tok::kw_post) ||
+           Tok.is(tok::kw_decreases)) {
+      bool IsPre = Tok.is(tok::kw_pre);
+      bool IsPost = Tok.is(tok::kw_post);
+      ConsumeToken();
+
+      if (Tok.isNot(tok::l_paren)) {
+        Diag(Tok, diag::err_contract_expected_lparen)
+            << (IsPre ? "pre" : IsPost ? "post" : "decreases");
+        break;
+      }
+      ConsumeParen();
+
+      // For postconditions, enable 'result' and 'old' parsing.
+      if (IsPost)
+        InContractPostcondition = true;
+
+      ExprResult E = ParseExpression();
+
+      if (IsPost)
+        InContractPostcondition = false;
+
+      if (E.isInvalid()) {
+        SkipUntil(tok::r_paren, StopAtSemi);
+        continue;
+      }
+
+      // Pre/post conditions must be bool; decreases is an integer measure.
+      if (IsPre || IsPost) {
+        E = Actions.ActOnContractCondition(E);
+        if (E.isInvalid()) {
+          SkipUntil(tok::r_paren, StopAtSemi);
+          continue;
+        }
+      } else {
+        // decreases: validate integer type.
+        if (!E.get()->getType()->isIntegerType()) {
+          Diag(E.get()->getExprLoc(),
+               diag::err_contract_decreases_not_int);
+          SkipUntil(tok::r_paren, StopAtSemi);
+          continue;
+        }
+      }
+
+      if (Tok.isNot(tok::r_paren)) {
+        Diag(Tok, diag::err_contract_expected_rparen)
+            << (IsPre ? "pre" : IsPost ? "post" : "decreases");
+        SkipUntil(tok::r_paren, StopAtSemi);
+        continue;
+      }
+      ConsumeParen();
+
+      if (IsPre)
+        ContractPreconditions.push_back(E.get());
+      else if (IsPost)
+        ContractPostconditions.push_back(E.get());
+      else
+        ContractDecreases = E.get();
+    }
+  }
+
+  // We should have either an opening brace, or in a C++ constructor,
   // we may have a colon.
   if (Tok.isNot(tok::l_brace) &&
       (!getLangOpts().CPlusPlus ||
@@ -1388,6 +1495,28 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
 
   // Break out of the ParsingDeclarator context before we parse the body.
   D.complete(Res);
+
+  // CppVerify: store contract clauses on the FunctionDecl.
+  if (Res && (!ContractPreconditions.empty() ||
+              !ContractPostconditions.empty() || ContractDecreases ||
+              IsSpecFn || IsProofFn)) {
+    if (auto *FD = dyn_cast<FunctionDecl>(Res)) {
+      FunctionContractInfo &FCI =
+          Actions.getASTContext().getOrCreateFunctionContract(FD);
+      FCI.Preconditions = std::move(ContractPreconditions);
+      FCI.Postconditions = std::move(ContractPostconditions);
+      FCI.Decreases = ContractDecreases;
+      FCI.IsSpec = IsSpecFn;
+      FCI.IsProof = IsProofFn;
+      CurrentContractFunction = Res;
+    }
+  }
+
+  // Reset contract parsing state so it doesn't leak into subsequent functions.
+  CurrentContractReturnType = QualType();
+  // Note: CurrentContractFunction is intentionally kept alive — it can be
+  // used by the VCGen backend later. InContractPostcondition was already
+  // reset after each post(...) clause above.
 
   // Break out of the ParsingDeclSpec context, too.  This const_cast is
   // safe because we're always the sole owner.

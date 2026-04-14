@@ -63,6 +63,31 @@ All contract syntax is gated behind `-fverify-contracts`. Without the flag,
 none of these names are reserved — existing C++ that uses `pre`, `post`, etc.
 as identifiers compiles unchanged.
 
+## Build the cpp-verify clang compiler
+
+```bash
+cmake -S llvm -B build -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DLLVM_ENABLE_PROJECTS="clang" \
+    -DLLVM_TARGETS_TO_BUILD="X86,AArch64" \
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+# Symlink compile_commands.json for clangd / IDE integration
+ln -sf build/compile_commands.json compile_commands.json
+
+ninja -C build clang -j$(nproc)
+```
+
+## Usage
+
+```bash
+# Identifying tokens and dumping the output
+./build/bin/clang++ -cc1 -fverify-contracts -dump-tokens samples/test1.cpp
+
+# Parsing AST with contracts and dumping the output
+./build/bin/clang++ -cc1 -fverify-contracts -ast-dump samples/test1.cpp
+```
+
 ## Architecture
 
 ```

@@ -12,6 +12,7 @@
 
 #include "clang/AST/TextNodeDumper.h"
 #include "clang/AST/APValue.h"
+#include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclFriend.h"
 #include "clang/AST/DeclOpenMP.h"
 #include "clang/AST/DeclTemplate.h"
@@ -2385,6 +2386,16 @@ void TextNodeDumper::VisitFunctionDecl(const FunctionDecl *D) {
   if (const auto *Instance = D->getTemplateInstantiationPattern()) {
     OS << " instantiated_from";
     dumpPointer(Instance);
+  }
+
+  // CppVerify: annotate spec/proof functions from the contract side table.
+  if (Context) {
+    if (const FunctionContractInfo *FCI = Context->getFunctionContract(D)) {
+      if (FCI->IsSpec)
+        OS << " contract_spec";
+      if (FCI->IsProof)
+        OS << " contract_proof";
+    }
   }
 }
 
