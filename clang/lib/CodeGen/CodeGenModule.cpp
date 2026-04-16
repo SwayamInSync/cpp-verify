@@ -4235,6 +4235,12 @@ void CodeGenModule::EmitGlobal(GlobalDecl GD) {
 
   // Ignore declarations, they will be emitted on their first use.
   if (const auto *FD = dyn_cast<FunctionDecl>(Global)) {
+    // CppVerify: spec and proof functions are ghost — never emit IR for them.
+    if (const FunctionContractInfo *CI = getContext().getFunctionContract(FD)) {
+      if (CI->IsSpec || CI->IsProof)
+        return;
+    }
+
     if (DeviceKernelAttr::isOpenCLSpelling(FD->getAttr<DeviceKernelAttr>()) &&
         FD->doesThisDeclarationHaveABody())
       addDeferredDeclToEmit(GlobalDecl(FD, KernelReferenceKind::Stub));
