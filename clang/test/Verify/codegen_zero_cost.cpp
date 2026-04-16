@@ -29,15 +29,16 @@ int regular_no_contracts(int x) {
   return x + 1;
 }
 
+// Spec and proof functions should NOT appear as definitions anywhere in the IR.
+// Place CHECK-NOT before positive checks so they scan the entire output.
+// CHECK-NOT: define {{.*}}spec_double
+// CHECK-NOT: define {{.*}}proof_trivial
+
 // Regular functions should be present in IR:
 // CHECK: define {{.*}} @_Z18regular_with_ghosti(
 // CHECK: ret i32
 // CHECK: define {{.*}} @_Z20regular_no_contractsi(
 // CHECK: ret i32
-
-// Spec and proof functions should NOT appear as definitions:
-// CHECK-NOT: define {{.*}}spec_double
-// CHECK-NOT: define {{.*}}proof_trivial
 
 // Ghost block content should NOT be in regular function IR:
 // (The function is defined, but ghost content is absent from its body)
