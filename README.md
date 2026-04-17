@@ -6,7 +6,8 @@
 > - `14/04/2026` AST parsing with contracts is implemented. The verifier is still not functional yet.
 
 > [!NOTE]
-> Workflows are turned off since building LLVM is too expensive to run on every push. To test changes, build the `clang` target locally and run the tests as `./build/bin/llvm-lit clang/test/Verify`.
+> - Workflows are turned off since building LLVM is too expensive to run on every push. To test changes, build the `clang` target locally and run the tests as `./build/bin/llvm-lit clang/test/Verify`.
+> - [Private Roadmap](https://github.com/SwayamInSync/cpp-verify-roadmap)
 
 > This is a fork of [LLVM/Clang](https://github.com/llvm/llvm-project) (pinned to
 > `llvmorg-22.1.3`) extended to **CppVerify**: a deductive verification system
