@@ -2,7 +2,7 @@
 
 > [!CAUTION]
 > 
-> - `10/04/2026` only lexer support is implemented so far. The verifier is not yet functional.
+> - `10/04/2026` Lexer support is implemented. The verifier is not yet functional.
 > - `14/04/2026` AST parsing with contracts is implemented. The verifier is still not functional yet.
 
 > [!NOTE]
