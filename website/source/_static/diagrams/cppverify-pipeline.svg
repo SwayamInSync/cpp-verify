@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 140" width="100%" preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="cp-title">
+  <title id="cp-title">CppVerify pipeline from AST to Z3 result</title>
+  <defs>
+    <marker id="cp-arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+  <style>
+    text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 13px; fill: #334155; }
+    .sub { font-size: 11px; fill: #64748b; }
+    .box { font-weight: 600; }
+  </style>
+  <g transform="translate(24,40)">
+    <rect x="0" y="0" width="88" height="56" rx="6" fill="#f1f5f9" stroke="#64748b"/>
+    <text class="box" x="44" y="34" text-anchor="middle">AST</text>
+    <rect x="108" y="0" width="88" height="56" rx="6" fill="#dbeafe" stroke="#3b6fd9"/>
+    <text class="box" x="152" y="28" text-anchor="middle">VCR</text>
+    <text class="sub" x="152" y="44" text-anchor="middle">L1</text>
+    <rect x="216" y="0" width="88" height="56" rx="6" fill="#dbeafe" stroke="#3b6fd9"/>
+    <text class="box" x="260" y="28" text-anchor="middle">Passive</text>
+    <text class="sub" x="260" y="44" text-anchor="middle">L2</text>
+    <rect x="324" y="0" width="72" height="56" rx="6" fill="#e0e7ff" stroke="#4f46e5"/>
+    <text class="box" x="360" y="34" text-anchor="middle">WP</text>
+    <rect x="416" y="0" width="72" height="56" rx="6" fill="#e0e7ff" stroke="#4f46e5"/>
+    <text class="box" x="452" y="34" text-anchor="middle">Z3</text>
+    <rect x="508" y="0" width="96" height="56" rx="6" fill="#dcfce7" stroke="#16a34a"/>
+    <text class="box" x="556" y="34" text-anchor="middle">Result</text>
+    <path d="M88 28 H108 M196 28 H216 M304 28 H324 M396 28 H416 M488 28 H508" stroke="#94a3b8" stroke-width="2" marker-end="url(#cp-arrow)"/>
+  </g>
+  <text x="360" y="120" text-anchor="middle" font-size="12" fill="#64748b">--dump-ir selects layers 1–4</text>
+</svg>

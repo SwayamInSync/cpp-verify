@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 220" width="100%" preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="tv-title">
+  <title id="tv-title">Testing samples finitely many inputs; verification covers the modeled domain</title>
+  <style>
+    text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .panel-title { font-size: 14px; font-weight: 700; fill: #0f172a; }
+    .caption { font-size: 12px; fill: #64748b; }
+  </style>
+  <line x1="360" y1="40" x2="360" y2="180" stroke="#cbd5e1" stroke-width="2" stroke-dasharray="6 4"/>
+  <text class="panel-title" x="180" y="36" text-anchor="middle">Testing</text>
+  <line x1="48" y1="168" x2="312" y2="168" stroke="#94a3b8" stroke-width="1.5"/>
+  <circle cx="80" cy="148" r="8" fill="#3b6fd9"/>
+  <circle cx="140" cy="128" r="8" fill="#3b6fd9"/>
+  <circle cx="220" cy="158" r="8" fill="#3b6fd9"/>
+  <circle cx="268" cy="98" r="8" fill="#3b6fd9"/>
+  <text class="caption" x="180" y="198" text-anchor="middle">Finitely many sample inputs</text>
+  <text class="panel-title" x="540" y="36" text-anchor="middle">Verification</text>
+  <text class="caption" x="540" y="56" text-anchor="middle">(within SMT theory)</text>
+  <rect x="400" y="72" width="280" height="96" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
+  <text x="540" y="118" text-anchor="middle" font-size="14" fill="#14532d">All inputs satisfying</text>
+  <text x="540" y="140" text-anchor="middle" font-size="14" fill="#14532d">the precondition</text>
+  <text class="caption" x="540" y="198" text-anchor="middle">Proof obligation, not sampling</text>
+</svg>

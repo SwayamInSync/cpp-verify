@@ -3,7 +3,7 @@
 > [!NOTE]
 > **Documentation:** [https://swayaminsync.github.io/cpp-verify/](https://swayaminsync.github.io/cpp-verify/) (guide + language reference)
 >
-> **Repository root:** see [`../README.md`](../README.md) for layout and quick start.
+> **Quick start:** `./setup.sh` from the repository root (this tree).
 
 > [!NOTE]
 > LLVM CI workflows are limited (full builds are expensive). Build `clang` and `cpp-verify` locally and run `./build/bin/llvm-lit clang/test/Verify`.

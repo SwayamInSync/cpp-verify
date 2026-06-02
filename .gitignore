@@ -29,6 +29,10 @@
 # Nested build directory
 /build*
 
+# CppVerify Sphinx site output
+/website/build/
+/website/source/_build/
+
 #==============================================================================#
 # Explicit files to ignore (only matches one).
 #==============================================================================#

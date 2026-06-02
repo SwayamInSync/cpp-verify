@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 200" width="100%" preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="ht-title">
+  <title id="ht-title">Hoare triple: precondition, statement, postcondition</title>
+  <style>
+    text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .caption { font-size: 13px; fill: #475569; }
+    .label { font-size: 15px; font-weight: 600; }
+    .mono { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 16px; }
+  </style>
+  <text class="caption" x="360" y="28" text-anchor="middle">If P holds before S runs, then Q holds after S (when S terminates)</text>
+  <rect x="40" y="56" width="130" height="72" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="2"/>
+  <text class="mono" x="72" y="102" fill="#92400e">{ P }</text>
+  <text x="200" y="98" text-anchor="middle" font-size="20" fill="#64748b">→</text>
+  <rect x="230" y="48" width="200" height="88" rx="8" fill="#e0e7ff" stroke="#4f46e5" stroke-width="2"/>
+  <text class="label" x="260" y="88" fill="#312e81">Statement S</text>
+  <text class="caption" x="260" y="110" fill="#64748b">your code</text>
+  <text x="450" y="98" text-anchor="middle" font-size="20" fill="#64748b">→</text>
+  <rect x="480" y="56" width="130" height="72" rx="8" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
+  <text class="mono" x="512" y="102" fill="#14532d">{ Q }</text>
+  <text class="caption" x="360" y="178" text-anchor="middle">Hoare triple: { P } S { Q }</text>
+</svg>

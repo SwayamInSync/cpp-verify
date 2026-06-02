@@ -1,0 +1,64 @@
+# Doxyfile for CppVerify (clang/lib/Verify)
+
+PROJECT_NAME           = "CppVerify API"
+PROJECT_BRIEF          = "Verification engine IR and driver"
+OUTPUT_DIRECTORY       = ../build/doxygen
+CREATE_SUBDIRS         = NO
+OUTPUT_LANGUAGE        = English
+
+INPUT                  = ../../clang/lib/Verify \
+                         mainpage.dox
+FILE_PATTERNS          = *.h *.dox
+RECURSIVE              = YES
+
+USE_MDFILE_AS_MAINPAGE = mainpage.dox
+
+OPTIMIZE_OUTPUT_FOR_C  = NO
+MARKDOWN_SUPPORT       = YES
+JAVADOC_AUTOBRIEF      = YES
+QT_AUTOBRIEF           = YES
+MULTILINE_CPP_IS_BRIEF = NO
+
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = YES
+EXTRACT_LOCAL_CLASSES  = YES
+HIDE_UNDOC_MEMBERS     = NO
+HIDE_UNDOC_CLASSES     = NO
+
+SOURCE_BROWSER         = YES
+INLINE_SOURCES         = NO
+REFERENCED_BY_RELATION = YES
+REFERENCES_RELATION    = YES
+
+HAVE_DOT               = NO
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+HTML_OUTPUT            = .
+GENERATE_TREEVIEW      = YES
+DISABLE_INDEX          = NO
+
+# Stub external includes so headers parse without full LLVM tree
+MACRO_EXPANSION        = YES
+EXPAND_ONLY_PREDEF     = YES
+SKIP_FUNCTION_MACROS   = YES
+PREDEFINED             = "clang=namespace clang {}" \
+                         "verify=namespace verify {}" \
+                         "llvm=namespace llvm {}" \
+                         "std=namespace std {}" \
+                         "LLVM_CLANG_VERIFY_IR_VEXPR_H=" \
+                         "LLVM_CLANG_VERIFY_IR_VSTMT_H=" \
+                         "LLVM_CLANG_VERIFY_IR_VTYPE_H=" \
+                         "LLVM_CLANG_VERIFY_TRANSFORM_PASSIVIZE_H=" \
+                         "LLVM_CLANG_VERIFY_BACKEND_WPCALC_H=" \
+                         "LLVM_CLANG_VERIFY_BACKEND_Z3ENCODE_H=" \
+                         "LLVM_CLANG_VERIFY_DRIVER_VERIFIER_H=" \
+                         "LLVM_CLANG_VERIFY_DRIVER_DUMPIR_H=" \
+                         "LLVM_CLANG_VERIFY_DRIVER_CPPVERIFY_INTEGRATION_H=" \
+                         "LLVM_CLANG_VERIFY_FRONTEND_ASTCONVERTER_H=" \
+                         "INT64_MAX=0" \
+                         "INT64_MIN=0"
+
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_DOC_ERROR      = YES
+WARN_NO_PARAMDOC       = NO

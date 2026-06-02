@@ -22,9 +22,9 @@ option(CPPVERIFY_PREFER_SYSTEM_Z3
 set(CPPVERIFY_Z3_GIT_TAG "z3-4.13.4" CACHE STRING "Z3 git tag when fetching")
 set(CPPVERIFY_Z3_SOURCE_DIR "" CACHE PATH "Path to a Z3 source tree (overrides third_party/z3)")
 
-# Repo root = parent of llvm-project/
+# Repo root = this repository (LLVM monorepo + CppVerify product files)
 get_filename_component(CPPVERIFY_REPO_ROOT
-  "${CMAKE_CURRENT_LIST_DIR}/../../../.." ABSOLUTE)
+  "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
 
 function(cppverify_z3_apply_build_options)
   set(Z3_BUILD_LIBZ3_SHARED OFF CACHE BOOL "" FORCE)

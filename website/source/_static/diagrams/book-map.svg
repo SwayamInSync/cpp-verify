@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 200" width="100%" preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="bm-title">
+  <title id="bm-title">CppVerify book: Part I foundations then Part II practice</title>
+  <defs>
+    <marker id="bm-arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#64748b"/>
+    </marker>
+  </defs>
+  <style>
+    text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .box-title { font-size: 15px; font-weight: 700; }
+    .box-line { font-size: 13px; fill: #334155; }
+    .box-meta { font-size: 12px; fill: #64748b; }
+  </style>
+  <rect x="24" y="36" width="300" height="128" rx="10" fill="#eff6ff" stroke="#3b6fd9" stroke-width="2"/>
+  <text class="box-title" x="44" y="64" fill="#1e3a8a">Part I — Foundations</text>
+  <text class="box-line" x="44" y="88">Logic, Hoare triples, invariants</text>
+  <text class="box-line" x="44" y="108">Memory, frames, SMT</text>
+  <text class="box-meta" x="44" y="132">No CppVerify syntax required</text>
+  <text class="box-meta" x="44" y="152">Chapters 1–8</text>
+  <line x1="324" y1="100" x2="384" y2="100" stroke="#64748b" stroke-width="2" marker-end="url(#bm-arrow)"/>
+  <rect x="384" y="36" width="312" height="128" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
+  <text class="box-title" x="404" y="64" fill="#14532d">Part II — CppVerify</text>
+  <text class="box-line" x="404" y="88">Flags, contracts in C++</text>
+  <text class="box-line" x="404" y="108">Toolchain, counterexamples</text>
+  <text class="box-meta" x="404" y="132">Builds on Part I</text>
+  <text class="box-meta" x="404" y="152">Chapters 9–16</text>
+</svg>

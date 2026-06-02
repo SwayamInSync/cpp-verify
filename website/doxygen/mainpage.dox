@@ -1,0 +1,14 @@
+/**
+ * @mainpage CppVerify verification engine API
+ *
+ * @brief Headers under @c clang/lib/Verify — IR, transforms, WP/Z3 backend, driver.
+ *
+ * @section modules Modules
+ * - @ref dir_llvm_project_clang_lib_Verify_IR "IR" — VCR expressions, statements, types
+ * - @ref dir_llvm_project_clang_lib_Verify_Frontend "Frontend" — Clang AST → VCR
+ * - @ref dir_llvm_project_clang_lib_Verify_Transform "Transform" — passivization
+ * - @ref dir_llvm_project_clang_lib_Verify_Backend "Backend" — weakest precondition, Z3
+ * - @ref dir_llvm_project_clang_lib_Verify_Driver "Driver" — verifyTranslationUnit, dump IR
+ *
+ * User-facing docs: https://swayaminsync.github.io/cpp-verify/
+ */
