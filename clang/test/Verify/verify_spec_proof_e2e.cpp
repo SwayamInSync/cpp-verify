@@ -41,5 +41,5 @@ int compute_factorial(int n)
 }
 
 // VERIFY: spec decreases: factorial
-// VERIFY: verified: lemma_factorial_positive
-// VERIFY-DAG: verified: compute_factorial
+// VERIFY: Verified: lemma_factorial_positive
+// VERIFY-DAG: Verified: compute_factorial

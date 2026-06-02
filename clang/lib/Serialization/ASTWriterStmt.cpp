@@ -3120,6 +3120,24 @@ void ASTStmtWriter::VisitRevealWithFuelStmt(RevealWithFuelStmt *S) {
   Code = serialization::STMT_REVEAL_WITH_FUEL;
 }
 
+void ASTStmtWriter::VisitHideSpecStmt(HideSpecStmt *S) {
+  VisitStmt(S);
+  Record.AddStmt(S->getFunction());
+  Record.AddSourceLocation(S->getBeginLoc());
+  Record.AddSourceLocation(S->getLParenLoc());
+  Record.AddSourceLocation(S->getEndLoc());
+  Code = serialization::STMT_HIDE_SPEC;
+}
+
+void ASTStmtWriter::VisitRevealSpecStmt(RevealSpecStmt *S) {
+  VisitStmt(S);
+  Record.AddStmt(S->getFunction());
+  Record.AddSourceLocation(S->getBeginLoc());
+  Record.AddSourceLocation(S->getLParenLoc());
+  Record.AddSourceLocation(S->getEndLoc());
+  Code = serialization::STMT_REVEAL_SPEC;
+}
+
 void ASTStmtWriter::VisitForallExpr(ForallExpr *E) {
   VisitExpr(E);
   Record.AddDeclRef(E->getBoundVar());

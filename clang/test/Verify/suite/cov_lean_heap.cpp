@@ -11,5 +11,5 @@ int swap_val(int *a, int *b)
   return 0;
 }
 
-// VERIFY: verified: swap_val
+// VERIFY: Verified: swap_val
 // VERIFY: theorem cppverify_goal

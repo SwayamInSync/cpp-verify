@@ -17,4 +17,4 @@ int sum_small(int n)
   return s;
 }
 
-// VERIFY: verified: sum_small
+// VERIFY: Verified: sum_small

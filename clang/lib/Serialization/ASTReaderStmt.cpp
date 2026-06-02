@@ -3017,6 +3017,22 @@ void ASTStmtReader::VisitRevealWithFuelStmt(RevealWithFuelStmt *S) {
   S->RParenLoc = readSourceLocation();
 }
 
+void ASTStmtReader::VisitHideSpecStmt(HideSpecStmt *S) {
+  VisitStmt(S);
+  S->Function = Record.readSubStmt();
+  S->Loc = readSourceLocation();
+  S->LParenLoc = readSourceLocation();
+  S->RParenLoc = readSourceLocation();
+}
+
+void ASTStmtReader::VisitRevealSpecStmt(RevealSpecStmt *S) {
+  VisitStmt(S);
+  S->Function = Record.readSubStmt();
+  S->Loc = readSourceLocation();
+  S->LParenLoc = readSourceLocation();
+  S->RParenLoc = readSourceLocation();
+}
+
 void ASTStmtReader::VisitForallExpr(ForallExpr *E) {
   VisitExpr(E);
   E->BoundVar = readDeclAs<VarDecl>();
@@ -4616,6 +4632,12 @@ Stmt *ASTReader::ReadStmtFromStream(ModuleFile &F) {
       break;
     case STMT_REVEAL_WITH_FUEL:
       S = new (Context) RevealWithFuelStmt(Empty);
+      break;
+    case STMT_HIDE_SPEC:
+      S = new (Context) HideSpecStmt(Empty);
+      break;
+    case STMT_REVEAL_SPEC:
+      S = new (Context) RevealSpecStmt(Empty);
       break;
     case EXPR_FORALL:
       S = new (Context) ForallExpr(Empty);

@@ -463,6 +463,8 @@ KEYWORD(modifies                      , KEYCONTRACT)
 KEYWORD(aliases                       , KEYCONTRACT)
 KEYWORD(recommends                    , KEYCONTRACT)
 KEYWORD(reveal_with_fuel              , KEYCONTRACT)
+KEYWORD(hide                          , KEYCONTRACT)
+KEYWORD(reveal                        , KEYCONTRACT)
 
 // ISO/IEC JTC1 SC22 WG14 N1169 Extension
 KEYWORD(_Accum                      , KEYFIXEDPOINT)

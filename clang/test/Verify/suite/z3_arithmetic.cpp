@@ -31,7 +31,7 @@ int cmp_chain(int x)
   return 2;
 }
 
-// VERIFY-DAG: verified: add
-// VERIFY-DAG: verified: sub_nonneg
-// VERIFY-DAG: verified: mul_small
-// VERIFY-DAG: verified: cmp_chain
+// VERIFY-DAG: Verified: add
+// VERIFY-DAG: Verified: sub_nonneg
+// VERIFY-DAG: Verified: mul_small
+// VERIFY-DAG: Verified: cmp_chain

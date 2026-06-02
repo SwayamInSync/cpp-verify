@@ -10,4 +10,4 @@ int use_spec(int x)
   return inc_spec(x);
 }
 
-// VERIFY: verified: use_spec
+// VERIFY: Verified: use_spec

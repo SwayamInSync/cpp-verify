@@ -6,23 +6,23 @@ Published at [swayaminsync.github.io/cpp-verify](https://swayaminsync.github.io/
 
 | Output | Tool | Location |
 |--------|------|----------|
-| Book + language reference | Sphinx (Furo) | `llvm-project/website/build/` |
-| C++ verifier API | Doxygen | `llvm-project/website/build/doxygen/` |
+| Book + language reference | Sphinx (Furo) | `website/build/` |
+| C++ verifier API | Doxygen | `website/build/doxygen/` |
 
 ## Build (from repository root)
 
 Doxygen is required for the C++ API (`brew install doxygen` or `apt install doxygen`).
 
 ```bash
-./llvm-project/website/scripts/build-docs.sh
-open llvm-project/website/build/index.html
-open llvm-project/website/build/doxygen/index.html
+./website/scripts/build-docs.sh
+open website/build/index.html
+open website/build/doxygen/index.html
 ```
 
 Auto-install Doxygen when possible:
 
 ```bash
-AUTO_INSTALL_DOXYGEN=1 ./llvm-project/website/scripts/build-docs.sh
+AUTO_INSTALL_DOXYGEN=1 ./website/scripts/build-docs.sh
 ```
 
 ## Structure

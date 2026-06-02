@@ -13,4 +13,4 @@ int one_step(int n)
   return i;
 }
 
-// VERIFY: verified: one_step
+// VERIFY: Verified: one_step

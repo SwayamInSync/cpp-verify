@@ -8,4 +8,4 @@ int guarded(int x)
   return x < 0 ? -x : x;
 }
 
-// VERIFY: verified: guarded
+// VERIFY: Verified: guarded

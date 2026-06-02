@@ -16,11 +16,13 @@ class ASTConverter {
   std::string ResultName = "result";
   VFunction *CurrentFn = nullptr;
   unsigned NestedCallId = 0;
+  std::vector<std::string> Errors;
 
 public:
   explicit ASTConverter(ASTContext &Ctx) : Ctx(Ctx) {}
 
   std::vector<std::unique_ptr<VFunction>> convertTranslationUnit();
+  const std::vector<std::string> &getErrors() const { return Errors; }
 
 private:
   std::unique_ptr<VFunction> convertFunction(const FunctionDecl *FD);

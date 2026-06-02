@@ -10,4 +10,4 @@ void copy(int *dst, int *src, int n)
     *dst = *src;
 }
 
-// VERIFY: verified: copy
+// VERIFY: Verified: copy

@@ -13,4 +13,4 @@ int use_constexpr_spec(int x)
 }
 
 // VERIFY: constexpr spec axiom: double_it
-// VERIFY: verified: use_constexpr_spec
+// VERIFY: Verified: use_constexpr_spec

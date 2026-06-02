@@ -24,4 +24,4 @@ int loop_mix(int n, int *p)
   return s;
 }
 
-// VERIFY: verified: loop_mix
+// VERIFY: Verified: loop_mix

@@ -25,4 +25,4 @@ int run(int *p, int n)
 // DUMP: spec_call
 // DUMP: passive run
 // DUMP: vc run
-// VERIFY: verified: run
+// VERIFY: Verified: run

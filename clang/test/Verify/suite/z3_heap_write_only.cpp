@@ -8,4 +8,4 @@ void write_ptr(int *p, int v)
   *p = v;
 }
 
-// VERIFY: verified: write_ptr
+// VERIFY: Verified: write_ptr

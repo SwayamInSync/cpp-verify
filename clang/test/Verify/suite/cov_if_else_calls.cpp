@@ -16,5 +16,5 @@ int bump(int x)
   return inc(inc(x));
 }
 
-// VERIFY-DAG: verified: inc
-// VERIFY-DAG: verified: bump
+// VERIFY-DAG: Verified: inc
+// VERIFY-DAG: Verified: bump

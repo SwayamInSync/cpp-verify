@@ -12,4 +12,4 @@ int chain(int x)
 
 // VERIFY-DAG: spec axiom: inc_s
 // VERIFY-DAG: spec axiom: add_s
-// VERIFY-DAG: verified: chain
+// VERIFY-DAG: Verified: chain

@@ -179,15 +179,18 @@ public:
       if (!Cond)
         return nullptr;
       if (I.Else.empty()) {
-        auto ThenVal = evalBody(I.Then, Env);
+        auto ThenEnv = cloneEnv(Env);
+        auto ThenVal = evalBody(I.Then, ThenEnv);
         auto Rest = evalBodySeq(Body, Env, Idx + 1);
         if (!ThenVal || !Rest)
           return nullptr;
         return std::make_unique<VConditionalExpr>(std::move(Cond), std::move(ThenVal),
                                                   std::move(Rest), ThenVal->Ty, I.Loc);
       }
-      auto ThenVal = evalBody(I.Then, Env);
-      auto ElseVal = evalBody(I.Else, Env);
+      auto ThenEnv = cloneEnv(Env);
+      auto ElseEnv = cloneEnv(Env);
+      auto ThenVal = evalBody(I.Then, ThenEnv);
+      auto ElseVal = evalBody(I.Else, ElseEnv);
       if (!ThenVal || !ElseVal)
         return nullptr;
       return std::make_unique<VConditionalExpr>(std::move(Cond), std::move(ThenVal),
@@ -202,6 +205,14 @@ public:
     default:
       return evalBodySeq(Body, Env, Idx + 1);
     }
+  }
+
+  static std::map<std::string, std::unique_ptr<VExpr>>
+  cloneEnv(const std::map<std::string, std::unique_ptr<VExpr>> &Env) {
+    std::map<std::string, std::unique_ptr<VExpr>> Out;
+    for (const auto &[K, V] : Env)
+      Out[K] = cloneVExpr(V.get());
+    return Out;
   }
 
   std::unique_ptr<VExpr> evalBody(const std::vector<std::unique_ptr<VStmt>> &Body,

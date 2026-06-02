@@ -12,4 +12,4 @@ int sum_point(Point p)
   return p.x + p.y;
 }
 
-// VERIFY: verified: sum_point
+// VERIFY: Verified: sum_point

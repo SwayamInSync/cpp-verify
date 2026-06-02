@@ -41,8 +41,8 @@ proof void lemma_fact_base(int n)
 }
 
 // VERIFY-DAG: spec axiom: triple
-// VERIFY-DAG: verified: lemma_triple
-// VERIFY-DAG: verified: client_reveal
-// VERIFY-DAG: verified: client_hide
+// VERIFY-DAG: Verified: lemma_triple
+// VERIFY-DAG: Verified: client_reveal
+// VERIFY-DAG: Verified: client_hide
 // VERIFY-DAG: spec decreases: fact
-// VERIFY-DAG: verified: lemma_fact_base
+// VERIFY-DAG: Verified: lemma_fact_base

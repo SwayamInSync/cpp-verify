@@ -12,4 +12,4 @@ int use_with_reveal(int x)
 }
 
 // VERIFY-DAG: spec axiom: double_spec
-// VERIFY-DAG: verified: use_with_reveal
+// VERIFY-DAG: Verified: use_with_reveal

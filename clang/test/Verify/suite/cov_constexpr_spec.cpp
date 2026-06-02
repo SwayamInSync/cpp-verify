@@ -9,4 +9,4 @@ int use_constexpr(int x)
   return twice(x);
 }
 
-// VERIFY: verified: use_constexpr
+// VERIFY: Verified: use_constexpr

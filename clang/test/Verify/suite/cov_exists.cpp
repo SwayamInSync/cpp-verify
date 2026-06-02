@@ -8,4 +8,4 @@ int bounded(int n)
   return n - 1;
 }
 
-// VERIFY: verified: bounded
+// VERIFY: Verified: bounded

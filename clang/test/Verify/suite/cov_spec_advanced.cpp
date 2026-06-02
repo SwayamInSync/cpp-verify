@@ -32,5 +32,5 @@ int use_rec(int n)
   return rec(n);
 }
 
-// VERIFY-DAG: verified: use_branch
-// VERIFY-DAG: verified: use_rec
+// VERIFY-DAG: Verified: use_branch
+// VERIFY-DAG: Verified: use_rec

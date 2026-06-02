@@ -11,4 +11,4 @@ int use_sq(int x)
 }
 
 // VERIFY-DAG: constexpr spec axiom: sq
-// VERIFY-DAG: verified: use_sq
+// VERIFY-DAG: Verified: use_sq

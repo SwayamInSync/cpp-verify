@@ -19,5 +19,5 @@ void write_ptr(int *p, int v)
   *p = v;
 }
 
-// VERIFY-DAG: verified: swap_ptr
-// VERIFY-DAG: verified: write_ptr
+// VERIFY-DAG: Verified: swap_ptr
+// VERIFY-DAG: Verified: write_ptr

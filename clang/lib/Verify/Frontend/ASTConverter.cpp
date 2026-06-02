@@ -254,23 +254,47 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
       MutablePtrParams.push_back(P);
   }
 
+  auto recordContractExpr = [&](const char *Clause, const Expr *E,
+                                std::unique_ptr<VExpr> &Out) {
+    if (!E)
+      return;
+    Out = convertExpr(E);
+    if (!Out)
+      Errors.push_back(Fn->Name + ": unsupported expression in " + Clause);
+  };
+
   InPost = false;
-  for (const Expr *E : FCI->Preconditions)
-    if (auto PE = convertExpr(E))
+  for (const Expr *E : FCI->Preconditions) {
+    std::unique_ptr<VExpr> PE;
+    recordContractExpr("pre", E, PE);
+    if (PE)
       Fn->Preconditions.push_back(std::move(PE));
+  }
   InPost = true;
-  for (const Expr *E : FCI->Postconditions)
-    if (auto PE = convertExpr(E))
+  for (const Expr *E : FCI->Postconditions) {
+    std::unique_ptr<VExpr> PE;
+    recordContractExpr("post", E, PE);
+    if (PE)
       Fn->Postconditions.push_back(std::move(PE));
+  }
   InPost = false;
-  for (const Expr *E : FCI->Recommends)
-    if (auto RE = convertExpr(E))
+  for (const Expr *E : FCI->Recommends) {
+    std::unique_ptr<VExpr> RE;
+    recordContractExpr("recommends", E, RE);
+    if (RE)
       Fn->Recommends.push_back(std::move(RE));
-  for (const Expr *E : FCI->Modifies)
-    Fn->Modifies.push_back(convertExpr(E));
+  }
+  for (const Expr *E : FCI->Modifies) {
+    std::unique_ptr<VExpr> ME;
+    recordContractExpr("modifies", E, ME);
+    if (ME)
+      Fn->Modifies.push_back(std::move(ME));
+  }
   for (const auto &Pair : FCI->Aliases) {
-    auto L = convertExpr(Pair.first);
-    auto R = convertExpr(Pair.second);
+    std::unique_ptr<VExpr> L;
+    std::unique_ptr<VExpr> R;
+    recordContractExpr("aliases", Pair.first, L);
+    recordContractExpr("aliases", Pair.second, R);
     if (L && R)
       Fn->Aliases.emplace_back(std::move(L), std::move(R));
   }
@@ -660,6 +684,11 @@ ASTConverter::convertStmt(const Stmt *S) {
     return Out;
   }
   if (const auto *FS = dyn_cast<ForStmt>(S)) {
+    if (FS->getInit()) {
+      auto Init = convertStmt(FS->getInit());
+      Out.insert(Out.end(), std::make_move_iterator(Init.begin()),
+                 std::make_move_iterator(Init.end()));
+    }
     auto Cond = convertExpr(FS->getCond());
     if (!Cond)
       return Out;
@@ -673,6 +702,13 @@ ASTConverter::convertStmt(const Stmt *S) {
         Decreases = convertExpr(LCI->Decreases);
     }
     auto Body = convertStmt(FS->getBody());
+    if (const Expr *Inc = FS->getInc()) {
+      if (const auto *IncStmt = dyn_cast<Stmt>(Inc)) {
+        auto IncPart = convertStmt(IncStmt);
+        Body.insert(Body.end(), std::make_move_iterator(IncPart.begin()),
+                    std::make_move_iterator(IncPart.end()));
+      }
+    }
     Out.push_back(std::make_unique<VWhileStmt>(std::move(Cond), std::move(Invariants),
                                                std::move(Decreases), std::move(Body),
                                                FS->getBeginLoc()));

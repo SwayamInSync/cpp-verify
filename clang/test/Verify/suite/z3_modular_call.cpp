@@ -16,5 +16,5 @@ int use_abs(int x)
   return y;
 }
 
-// VERIFY-DAG: verified: abs_val
-// VERIFY-DAG: verified: use_abs
+// VERIFY-DAG: Verified: abs_val
+// VERIFY-DAG: Verified: use_abs

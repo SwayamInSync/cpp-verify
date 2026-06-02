@@ -17,4 +17,4 @@ int sum_loop(int n)
   return s;
 }
 
-// VERIFY: verified: sum_loop
+// VERIFY: Verified: sum_loop

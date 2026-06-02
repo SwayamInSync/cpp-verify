@@ -25,4 +25,4 @@ int rich(int n, int *p)
   return pr.a + pr.b + t;
 }
 
-// VERIFY: verified: rich
+// VERIFY: Verified: rich

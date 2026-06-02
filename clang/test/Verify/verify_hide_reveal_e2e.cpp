@@ -27,6 +27,6 @@ int client_hide(int x)
 }
 
 // VERIFY: spec axiom: triple
-// VERIFY: verified: lemma_triple
-// VERIFY: verified: client_reveal
-// VERIFY: verified: client_hide
+// VERIFY: Verified: lemma_triple
+// VERIFY: Verified: client_reveal
+// VERIFY: Verified: client_hide

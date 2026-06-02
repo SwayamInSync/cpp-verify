@@ -19,6 +19,6 @@ int use_specs(int x)
 }
 
 // VERIFY-DAG: spec axiom: double_it
-// VERIFY-DAG: verified: lemma_double
+// VERIFY-DAG: Verified: lemma_double
 // VERIFY-DAG: spec axiom: add_three
-// VERIFY-DAG: verified: use_specs
+// VERIFY-DAG: Verified: use_specs

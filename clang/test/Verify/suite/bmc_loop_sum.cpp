@@ -17,4 +17,4 @@ int sum_first_n(int n)
   return s;
 }
 
-// VERIFY: verified: sum_first_n
+// VERIFY: Verified: sum_first_n

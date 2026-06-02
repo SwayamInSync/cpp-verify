@@ -15,5 +15,5 @@ int inc_twice(int x)
   return inc(inc(x));
 }
 
-// VERIFY-DAG: verified: inc
-// VERIFY-DAG: verified: inc_twice
+// VERIFY-DAG: Verified: inc
+// VERIFY-DAG: Verified: inc_twice

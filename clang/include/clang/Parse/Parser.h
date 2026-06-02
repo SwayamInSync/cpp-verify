@@ -7465,6 +7465,8 @@ public:
 
   /// Parse reveal_with_fuel(fn, depth);
   StmtResult ParseRevealWithFuel();
+  StmtResult ParseHideSpec();
+  StmtResult ParseRevealSpec();
 
   /// Parse forall(binder, lo, hi, body) or exists(binder, lo, hi, body).
   ExprResult ParseQuantifierExpr();

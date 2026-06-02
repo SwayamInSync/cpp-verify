@@ -49,7 +49,7 @@ int loop_client(int n, int *p)
   return s;
 }
 
-// VERIFY-DAG: verified: exec_client
-// VERIFY-DAG: verified: loop_client
+// VERIFY-DAG: Verified: exec_client
+// VERIFY-DAG: Verified: loop_client
 
 // LEAN: lean export: exec_client

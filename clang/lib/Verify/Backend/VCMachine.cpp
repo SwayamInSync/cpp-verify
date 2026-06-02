@@ -135,22 +135,15 @@ class VCMachineBuilder {
       return std::make_unique<VCExpr>(IsForall ? VCExpr::True : VCExpr::False);
     std::unique_ptr<VCExpr> Acc =
         std::make_unique<VCExpr>(IsForall ? VCExpr::True : VCExpr::False);
+    VIntMode Mode = intModeOfVType(Q->Body->Ty);
     for (int64_t I = Lo; I < Hi; ++I) {
-      auto Body = fromVExpr(Q->Body.get());
-      auto Binder = std::make_unique<VCExpr>(VCExpr::IntLit);
-      Binder->IntVal = I;
-      auto Eq = std::make_unique<VCExpr>(VCExpr::Eq);
-      auto Var = std::make_unique<VCExpr>(VCExpr::Var);
-      Var->Name = Q->Binder;
-      Eq->Children.push_back(std::move(Var));
-      Eq->Children.push_back(std::move(Binder));
-      auto Inst = std::make_unique<VCExpr>(VCExpr::And);
-      Inst->Children.push_back(std::move(Eq));
-      Inst->Children.push_back(std::move(Body));
+      auto InstBody =
+          substituteBinderInVExpr(Q->Body.get(), Q->Binder, I, Mode);
+      auto Body = fromVExpr(InstBody.get());
       if (IsForall)
-        Acc = vcAnd(std::move(Acc), std::move(Inst));
+        Acc = vcAnd(std::move(Acc), std::move(Body));
       else
-        Acc = vcOr(std::move(Acc), std::move(Inst));
+        Acc = vcOr(std::move(Acc), std::move(Body));
     }
     return Acc;
   }

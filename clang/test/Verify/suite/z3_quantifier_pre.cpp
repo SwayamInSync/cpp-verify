@@ -9,4 +9,4 @@ int pick_first(int n)
   return 0;
 }
 
-// VERIFY: verified: pick_first
+// VERIFY: Verified: pick_first

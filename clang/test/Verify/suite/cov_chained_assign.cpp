@@ -16,5 +16,5 @@ int two_steps(int x)
   return t;
 }
 
-// VERIFY-DAG: verified: step
-// VERIFY-DAG: verified: two_steps
+// VERIFY-DAG: Verified: step
+// VERIFY-DAG: Verified: two_steps

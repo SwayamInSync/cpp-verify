@@ -21,4 +21,4 @@ int nested_sum(int n)
   return s;
 }
 
-// VERIFY: verified: nested_sum
+// VERIFY: Verified: nested_sum

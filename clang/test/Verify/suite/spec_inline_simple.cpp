@@ -11,4 +11,4 @@ int use_double(int x)
 }
 
 // VERIFY-DAG: spec axiom: double_spec
-// VERIFY-DAG: verified: use_double
+// VERIFY-DAG: Verified: use_double

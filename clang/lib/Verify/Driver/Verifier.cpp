@@ -92,6 +92,10 @@ public:
   bool run() {
     ASTConverter Converter(Ctx);
     auto Functions = Converter.convertTranslationUnit();
+    for (const std::string &Err : Converter.getErrors())
+      Diags.push_back({VerifyDiagnostic::Error, Err});
+    if (!Converter.getErrors().empty())
+      return false;
     if (Functions.empty()) {
       Diags.push_back({VerifyDiagnostic::Warning, "no verifiable functions found"});
       return true;
@@ -238,7 +242,7 @@ public:
 
       VerifyResult R = Backend->verifyPassive(PP);
       if (R.Status == VerifyStatus::Verified) {
-        Diags.push_back({VerifyDiagnostic::Verified, "verified: " + Fn->Name});
+        Diags.push_back({VerifyDiagnostic::Verified, Fn->Name});
       } else if (R.Status == VerifyStatus::Failed) {
         AllOk = false;
         AnyFailed = true;

@@ -64,7 +64,7 @@ Manual build (from repository root; same flags as ``setup.sh``)
 
       .. code-block:: bash
 
-         cmake -S llvm-project/llvm -B build -G Ninja \
+         cmake -S llvm -B build -G Ninja \
            -DCMAKE_BUILD_TYPE=Release \
            -DLLVM_ENABLE_PROJECTS=clang \
            -DLLVM_TARGETS_TO_BUILD=Native \
@@ -76,7 +76,7 @@ Manual build (from repository root; same flags as ``setup.sh``)
 
       .. code-block:: powershell
 
-         cmake -S llvm-project/llvm -B build -G Ninja `
+         cmake -S llvm -B build -G Ninja `
            -DCMAKE_BUILD_TYPE=Release `
            -DLLVM_ENABLE_PROJECTS=clang `
            -DLLVM_TARGETS_TO_BUILD=Native `
@@ -88,7 +88,7 @@ Manual build (from repository root; same flags as ``setup.sh``)
 
       .. code-block:: powershell
 
-         cmake -S llvm-project/llvm -B build `
+         cmake -S llvm -B build `
            -G "Visual Studio 17 2022" -A x64 `
            -DLLVM_ENABLE_PROJECTS=clang `
            -DLLVM_TARGETS_TO_BUILD=Native `

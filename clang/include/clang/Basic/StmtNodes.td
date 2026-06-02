@@ -342,6 +342,8 @@ def HLSLOutArgExpr : StmtNode<Expr>;
 def ContractAssertStmt : StmtNode<Stmt>;
 def GhostBlockStmt : StmtNode<Stmt>;
 def RevealWithFuelStmt : StmtNode<Stmt>;
+def HideSpecStmt : StmtNode<Stmt>;
+def RevealSpecStmt : StmtNode<Stmt>;
 def ForallExpr : StmtNode<Expr>;
 def ExistsExpr : StmtNode<Expr>;
 def OldExpr : StmtNode<Expr>;

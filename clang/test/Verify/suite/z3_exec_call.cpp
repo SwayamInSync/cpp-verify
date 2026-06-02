@@ -14,5 +14,5 @@ int use_inc(int x)
   return inc(x);
 }
 
-// VERIFY-DAG: verified: inc
-// VERIFY-DAG: verified: use_inc
+// VERIFY-DAG: Verified: inc
+// VERIFY-DAG: Verified: use_inc

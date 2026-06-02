@@ -34,7 +34,7 @@ int while_countdown(int n)
   return n;
 }
 
-// VERIFY-DAG: verified: max2
-// VERIFY-DAG: verified: abs_safe
-// VERIFY-DAG: verified: sum_to_n
-// VERIFY-DAG: verified: while_countdown
+// VERIFY-DAG: Verified: max2
+// VERIFY-DAG: Verified: abs_safe
+// VERIFY-DAG: Verified: sum_to_n
+// VERIFY-DAG: Verified: while_countdown

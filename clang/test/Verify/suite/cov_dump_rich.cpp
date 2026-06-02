@@ -26,5 +26,5 @@ int check_pair(Pair p)
 
 // DUMP: vc swap_post
 // DUMP: forall
-// VERIFY-DAG: verified: swap_post
-// VERIFY-DAG: verified: check_pair
+// VERIFY-DAG: Verified: swap_post
+// VERIFY-DAG: Verified: check_pair

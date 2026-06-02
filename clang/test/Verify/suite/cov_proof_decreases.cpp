@@ -25,5 +25,5 @@ int walk(int n)
   return i;
 }
 
-// VERIFY-DAG: verified: lemma_id
-// VERIFY-DAG: verified: walk
+// VERIFY-DAG: Verified: lemma_id
+// VERIFY-DAG: Verified: walk

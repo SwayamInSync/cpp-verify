@@ -472,6 +472,7 @@ public:
     }
     case VStmt::While: {
       const auto &W = static_cast<const VWhileStmt &>(S);
+      auto EntryRenames = Renames;
       CloneCtx Ctx{Renames, OldState, false};
       for (const auto &Inv : W.Invariants) {
         auto PS = std::make_unique<PassiveStmt>();
@@ -493,18 +494,25 @@ public:
         PS->Cond = cloneExpr(Inv.get(), ACtx);
         P.Stmts.push_back(std::move(PS));
       }
+      std::set<std::string> Changed;
+      for (const auto &[Name, Ver] : BodyRenames) {
+        if (EntryRenames.count(Name) && EntryRenames[Name] != Ver)
+          Changed.insert(Name);
+      }
+      for (const std::string &Name : Changed)
+        Renames[Name] = bump(Name);
+      CloneCtx ExitCtx{Renames, OldState, false};
       auto NotC = std::make_unique<VUnaryOpExpr>(
-          VUnaryOp::Not, cloneExpr(W.Cond.get(), Ctx), VType::makeBool(), W.Loc);
+          VUnaryOp::Not, cloneExpr(W.Cond.get(), ExitCtx), VType::makeBool(), W.Loc);
       auto PSExit = std::make_unique<PassiveStmt>();
       PSExit->K = PassiveStmt::Assume;
       std::unique_ptr<VExpr> ExitAss = std::move(NotC);
       for (const auto &Inv : W.Invariants)
         ExitAss = std::make_unique<VBinOpExpr>(
-            VBinOp::And, std::move(ExitAss), cloneExpr(Inv.get(), Ctx),
+            VBinOp::And, std::move(ExitAss), cloneExpr(Inv.get(), ExitCtx),
             VType::makeBool(), W.Loc);
       PSExit->Cond = std::move(ExitAss);
       P.Stmts.push_back(std::move(PSExit));
-      Renames = BodyRenames;
       break;
     }
     case VStmt::GhostBlock: {

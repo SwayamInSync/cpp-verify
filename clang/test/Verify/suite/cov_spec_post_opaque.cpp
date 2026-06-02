@@ -10,4 +10,4 @@ int client(int x)
   return x;
 }
 
-// VERIFY: verified: client
+// VERIFY: Verified: client

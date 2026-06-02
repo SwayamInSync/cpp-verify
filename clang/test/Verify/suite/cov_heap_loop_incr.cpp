@@ -15,4 +15,4 @@ int loop_incr(int n, int *p)
   return i;
 }
 
-// VERIFY: verified: loop_incr
+// VERIFY: Verified: loop_incr

@@ -15,5 +15,5 @@ int id(int x)
   return x;
 }
 
-// VERIFY-DAG: verified: inc
-// VERIFY-DAG: verified: id
+// VERIFY-DAG: Verified: inc
+// VERIFY-DAG: Verified: id

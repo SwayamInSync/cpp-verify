@@ -9,4 +9,4 @@ proof void lemma_add(int x)
 {
 }
 
-// VERIFY: verified: lemma_add
+// VERIFY: Verified: lemma_add

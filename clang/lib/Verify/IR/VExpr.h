@@ -176,6 +176,11 @@ public:
 
 std::unique_ptr<VExpr> cloneVExpr(const VExpr *E);
 
+/// Replace references to a quantifier binder with a concrete integer literal.
+std::unique_ptr<VExpr> substituteBinderInVExpr(const VExpr *E,
+                                               const std::string &Binder,
+                                               int64_t Value, VIntMode Mode);
+
 } // namespace verify
 } // namespace clang
 

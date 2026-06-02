@@ -15,4 +15,4 @@ int sum_for(int n)
   return s;
 }
 
-// VERIFY: verified: sum_for
+// VERIFY: Verified: sum_for

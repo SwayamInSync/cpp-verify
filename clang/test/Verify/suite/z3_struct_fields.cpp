@@ -23,5 +23,5 @@ int point_sum(Point p)
   return p.x + p.y;
 }
 
-// VERIFY-DAG: verified: make_origin
-// VERIFY-DAG: verified: point_sum
+// VERIFY-DAG: Verified: make_origin
+// VERIFY-DAG: Verified: point_sum
