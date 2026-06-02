@@ -1,6 +1,8 @@
 //===--- Z3Encode.cpp -----------------------------------------------------===//
 #include "Z3Encode.h"
+#include "SpecAxioms.h"
 #include "llvm/Support/raw_ostream.h"
+#include <cassert>
 
 using namespace clang;
 using namespace verify;
@@ -8,8 +10,65 @@ using namespace verify;
 Z3Encoder::Z3Encoder() : Ctx(), Solver(Ctx) {}
 
 z3::sort Z3Encoder::intSort() { return Ctx.int_sort(); }
+z3::sort Z3Encoder::bvSort() { return Ctx.bv_sort(32); }
 z3::sort Z3Encoder::boolSort() { return Ctx.bool_sort(); }
 z3::sort Z3Encoder::heapSort() { return Ctx.array_sort(intSort(), intSort()); }
+
+z3::sort Z3Encoder::valueSort(const VType &Ty, VIntMode Mode) {
+  if (Ty.Kind == VTypeKind::Bool)
+    return boolSort();
+  if (Mode == VIntMode::Machine)
+    return bvSort();
+  return intSort();
+}
+
+static std::string specZ3Name(const std::string &Fn, VIntMode Mode) {
+  return "spec$" + Fn + (Mode == VIntMode::Machine ? "$bv" : "$int");
+}
+
+static std::string specDeclKey(const std::string &Fn, VIntMode Mode) {
+  return Fn + (Mode == VIntMode::Machine ? "$bv" : "$int");
+}
+
+z3::func_decl Z3Encoder::specFuncDecl(const VFunction *Spec) {
+  assert(Spec && "specFuncDecl requires a spec function");
+  std::string Key = specDeclKey(Spec->Name, CallerIntMode);
+  auto It = SpecFuncDecls.find(Key);
+  if (It != SpecFuncDecls.end())
+    return It->second;
+  std::vector<z3::sort> Domain;
+  for (const auto &P : Spec->Params)
+    Domain.push_back(valueSort(P.second, CallerIntMode));
+  z3::sort Ret = valueSort(Spec->ReturnType, CallerIntMode);
+  z3::func_decl F =
+      Ctx.function(specZ3Name(Spec->Name, CallerIntMode).c_str(), Domain.size(),
+                   Domain.data(), Ret);
+  SpecFuncDecls.emplace(Key, F);
+  return F;
+}
+
+z3::expr Z3Encoder::encodeVExprForAxiom(const VExpr *E, const VType &RetTy) {
+  VCMachine M = VCMachine::fromVExpr(E, "", std::string(VHeapName) + "_0",
+                                    CallerIntMode);
+  if (!M.Goal)
+    return RetTy.Kind == VTypeKind::Bool
+               ? Ctx.bool_val(true)
+               : (CallerIntMode == VIntMode::Machine ? Ctx.bv_val(0, 32)
+                                                     : Ctx.int_val(0));
+  return encodeVC(M.Goal.get());
+}
+
+z3::expr Z3Encoder::coerceTo(z3::expr E, VIntMode Target) {
+  if (E.is_int() && Target == VIntMode::Math)
+    return E;
+  if (E.is_bv() && Target == VIntMode::Machine)
+    return E;
+  if (E.is_int() && Target == VIntMode::Machine)
+    return z3::int2bv(32, E);
+  if (E.is_bv() && Target == VIntMode::Math)
+    return z3::bv2int(E, true);
+  return E;
+}
 
 z3::expr Z3Encoder::heapVar(const std::string &Name) {
   auto It = Vars.find(Name);
@@ -20,214 +79,309 @@ z3::expr Z3Encoder::heapVar(const std::string &Name) {
   return H;
 }
 
-static int64_t evalIntLiteral(const VExpr *E) {
-  if (!E || E->K != VExpr::Literal)
-    return 0;
-  return static_cast<const VLiteralExpr *>(E)->Value;
-}
-
-z3::expr Z3Encoder::expandQuantifier(const VQuantifiedExpr *Q, bool IsForall) {
-  int64_t Lo = evalIntLiteral(Q->Lo.get());
-  int64_t Hi = evalIntLiteral(Q->Hi.get());
-  if (Hi <= Lo)
-    return Ctx.bool_val(IsForall);
-  z3::expr Acc = Ctx.bool_val(IsForall);
-  for (int64_t I = Lo; I < Hi; ++I) {
-    Vars.emplace(Q->Binder, Ctx.int_val(static_cast<int>(I)));
-    z3::expr Body = encodeExpr(Q->Body.get(), std::string(VHeapName) + "_0");
-    Acc = IsForall ? (Acc && Body) : (Acc || Body);
-    Vars.erase(Q->Binder);
-  }
-  return Acc;
-}
-
-z3::expr Z3Encoder::encodeHeapStore(const VHeapStoreExpr *H) {
-  z3::expr Before = heapVar(H->HeapBefore);
-  z3::expr After = heapVar(H->HeapAfter);
-  z3::expr Ptr = encodeExpr(H->Ptr.get(), H->HeapBefore);
-  z3::expr Val = encodeExpr(H->Val.get(), H->HeapBefore);
-  return After == z3::store(Before, Ptr, Val);
-}
-
-z3::expr Z3Encoder::encodeExpr(const VExpr *E, const std::string &CurHeap) {
-  if (!E)
+static z3::expr asBool(z3::context &Ctx, z3::expr E) {
+  if (E.is_bool())
+    return E;
+  if (E.get_sort().is_array())
     return Ctx.bool_val(true);
-  switch (E->K) {
-  case VExpr::Literal: {
-    const auto *L = static_cast<const VLiteralExpr *>(E);
-    if (L->Ty.Kind == VTypeKind::Bool)
-      return Ctx.bool_val(L->Value != 0);
-    return Ctx.int_val(static_cast<int>(L->Value));
+  if (E.is_int())
+    return E != 0;
+  if (E.is_bv())
+    return E != 0;
+  return Ctx.bool_val(true);
+}
+
+/// Heap model is Array Int Int; pointer/index args may be bit-vectors.
+static z3::expr heapIndex(z3::expr Ptr) {
+  if (Ptr.is_bv())
+    return z3::bv2int(Ptr, true);
+  return Ptr;
+}
+
+static z3::expr heapCellValue(z3::expr Val) {
+  if (Val.is_int())
+    return Val;
+  if (Val.is_bv())
+    return z3::bv2int(Val, true);
+  return Val;
+}
+
+static z3::expr arithOp(z3::context &Ctx, VCExpr::Kind K, z3::expr L, z3::expr R) {
+  if (L.get_sort().is_array() || R.get_sort().is_array())
+    return Ctx.bool_val(true);
+  if (L.is_bv() && R.is_int())
+    R = z3::int2bv(32, R);
+  if (L.is_int() && R.is_bv())
+    L = z3::int2bv(32, L);
+  switch (K) {
+  case VCExpr::Add:
+    return L + R;
+  case VCExpr::Sub:
+    return L - R;
+  case VCExpr::Mul:
+    return L * R;
+  case VCExpr::Lt:
+    return L < R;
+  case VCExpr::Le:
+    return L <= R;
+  case VCExpr::Gt:
+    return L > R;
+  case VCExpr::Ge:
+    return L >= R;
+  case VCExpr::Eq:
+    return L == R;
+  case VCExpr::Ne:
+    return L != R;
+  default:
+    return L == R;
   }
-  case VExpr::Var: {
-    const auto *V = static_cast<const VVarExpr *>(E);
-    auto It = Vars.find(V->Name);
+}
+
+z3::expr Z3Encoder::encodeVCNode(
+    const VCExpr *E, const std::map<const VCExpr *, z3::expr> &Done) {
+  auto child = [&](unsigned I) -> z3::expr {
+    return Done.at(E->Children[I].get());
+  };
+  switch (E->K) {
+  case VCExpr::True:
+    return Ctx.bool_val(true);
+  case VCExpr::False:
+    return Ctx.bool_val(false);
+  case VCExpr::BoolLit:
+    return Ctx.bool_val(E->BoolVal);
+  case VCExpr::IntLit: {
+    if (E->IntMode == VIntMode::Machine)
+      return Ctx.bv_val(static_cast<unsigned>(E->IntVal), 32);
+    return Ctx.int_val(static_cast<int>(E->IntVal));
+  }
+  case VCExpr::Var: {
+    auto It = Vars.find(E->Name);
     if (It != Vars.end())
       return It->second;
-    z3::expr Z = (V->Ty.Kind == VTypeKind::Bool)
-                     ? Ctx.bool_const(V->Name.c_str())
-                     : Ctx.int_const(V->Name.c_str());
-    Vars.emplace(V->Name, Z);
+    z3::expr Z = Ctx.int_const("_unused");
+    if (E->Name.find("__heap") != std::string::npos ||
+        E->Name.rfind(VHeapName, 0) == 0) {
+      Z = Ctx.constant(E->Name.c_str(), heapSort());
+    } else if (E->IntMode == VIntMode::Machine) {
+      Z = Ctx.bv_const(E->Name.c_str(), 32);
+    } else {
+      Z = Ctx.int_const(E->Name.c_str());
+    }
+    Vars.emplace(E->Name, Z);
     return Z;
   }
-  case VExpr::BinOp: {
-    const auto *B = static_cast<const VBinOpExpr *>(E);
-    z3::expr L = encodeExpr(B->Lhs.get(), CurHeap);
-    z3::expr R = encodeExpr(B->Rhs.get(), CurHeap);
-    switch (B->Op) {
-    case VBinOp::Add:
-      return L + R;
-    case VBinOp::Sub:
-      return L - R;
-    case VBinOp::Mul:
-      return L * R;
-    case VBinOp::Lt:
-      return L < R;
-    case VBinOp::Le:
-      return L <= R;
-    case VBinOp::Gt:
-      return L > R;
-    case VBinOp::Ge:
-      return L >= R;
-    case VBinOp::Eq:
-      return L == R;
-    case VBinOp::Ne:
-      return L != R;
-    case VBinOp::And:
-      return L && R;
-    case VBinOp::Or:
-      return L || R;
-    default:
-      return L == R;
+  case VCExpr::IntToBv: {
+    z3::expr Inner = child(0);
+    if (Inner.is_int())
+      return z3::int2bv(32, Inner);
+    return Inner;
+  }
+  case VCExpr::BvToInt: {
+    z3::expr Inner = child(0);
+    if (Inner.is_bv())
+      return z3::bv2int(Inner, true);
+    return Inner;
+  }
+  case VCExpr::Not:
+    return !asBool(Ctx, child(0));
+  case VCExpr::And: {
+    z3::expr_vector Ch(Ctx);
+    for (const auto &C : E->Children) {
+      if (!C)
+        continue;
+      z3::expr Elt = Done.at(C.get());
+      if (Elt.is_bool())
+        Ch.push_back(Elt);
+      else if (!Elt.get_sort().is_array())
+        Ch.push_back(asBool(Ctx, Elt));
     }
+    if (Ch.empty())
+      return Ctx.bool_val(true);
+    if (Ch.size() == 1)
+      return Ch[0];
+    return z3::mk_and(Ch);
   }
-  case VExpr::UnaryOp: {
-    const auto *U = static_cast<const VUnaryOpExpr *>(E);
-    z3::expr O = encodeExpr(U->Operand.get(), CurHeap);
-    if (U->Op == VUnaryOp::Neg)
-      return -O;
-    return !O;
+  case VCExpr::Or: {
+    z3::expr_vector Ch(Ctx);
+    for (const auto &C : E->Children) {
+      if (!C)
+        continue;
+      z3::expr Elt = Done.at(C.get());
+      if (Elt.is_bool())
+        Ch.push_back(Elt);
+      else if (!Elt.get_sort().is_array())
+        Ch.push_back(asBool(Ctx, Elt));
+    }
+    if (Ch.empty())
+      return Ctx.bool_val(false);
+    if (Ch.size() == 1)
+      return Ch[0];
+    return z3::mk_or(Ch);
   }
-  case VExpr::Conditional: {
-    const auto *C = static_cast<const VConditionalExpr *>(E);
-    return z3::ite(encodeExpr(C->Cond.get(), CurHeap),
-                   encodeExpr(C->Then.get(), CurHeap),
-                   encodeExpr(C->Else.get(), CurHeap));
+  case VCExpr::Ite: {
+    z3::expr C = asBool(Ctx, child(0));
+    z3::expr T = coerceTo(child(1), E->IntMode);
+    z3::expr F = coerceTo(child(2), E->IntMode);
+    return z3::ite(C, T, F);
   }
-  case VExpr::Result: {
-    const char *Name = ResultVarName.empty() ? "__result_0" : ResultVarName.c_str();
-    auto It = Vars.find(Name);
-    if (It != Vars.end())
-      return It->second;
-    z3::expr R = Ctx.int_const(Name);
-    Vars.emplace(std::string(Name), R);
-    return R;
+  case VCExpr::Eq:
+  case VCExpr::Ne:
+  case VCExpr::Lt:
+  case VCExpr::Le:
+  case VCExpr::Gt:
+  case VCExpr::Ge:
+  case VCExpr::Add:
+  case VCExpr::Sub:
+  case VCExpr::Mul: {
+    z3::expr L = coerceTo(child(0), E->IntMode);
+    z3::expr R = coerceTo(child(1), E->IntMode);
+    return arithOp(Ctx, E->K, L, R);
   }
-  case VExpr::Old:
-    return encodeExpr(static_cast<const VOldExpr *>(E)->Inner.get(), CurHeap);
-  case VExpr::Cast:
-    return encodeExpr(static_cast<const VCastExpr *>(E)->Inner.get(), CurHeap);
-  case VExpr::Load: {
-    const auto *L = static_cast<const VLoadExpr *>(E);
-    std::string Heap = L->HeapVar.empty() ? CurHeap : L->HeapVar;
-    z3::expr H = heapVar(Heap);
-    z3::expr Ptr = encodeExpr(L->Ptr.get(), Heap);
-    return z3::select(H, Ptr);
+  case VCExpr::Neg:
+    return -coerceTo(child(0), E->IntMode);
+  case VCExpr::Select: {
+    z3::expr Val = z3::select(child(0), heapIndex(child(1)));
+    return coerceTo(Val, E->IntMode);
   }
-  case VExpr::Forall:
-    return expandQuantifier(static_cast<const VQuantifiedExpr *>(E), true);
-  case VExpr::Exists:
-    return expandQuantifier(static_cast<const VQuantifiedExpr *>(E), false);
-  case VExpr::HeapStore:
-    return encodeHeapStore(static_cast<const VHeapStoreExpr *>(E));
+  case VCExpr::Store: {
+    z3::expr Before = child(0);
+    z3::expr Ptr = heapIndex(child(1));
+    z3::expr Val = heapCellValue(child(2));
+    z3::expr After = child(3);
+    return (After == z3::store(Before, Ptr, Val));
+  }
+  case VCExpr::Forall:
+    return Ctx.bool_val(true);
+  case VCExpr::SpecCall: {
+    auto It = SpecFunctions.find(E->SpecCallee);
+    if (It == SpecFunctions.end() || !It->second)
+      return Ctx.int_val(0);
+    z3::func_decl F = specFuncDecl(It->second);
+    std::vector<z3::expr> Args;
+    for (unsigned i = 0; i < E->Children.size(); ++i)
+      Args.push_back(coerceTo(child(i), CallerIntMode));
+    z3::expr A = F(static_cast<unsigned>(Args.size()), Args.data());
+    return coerceTo(A, CallerIntMode);
+  }
   }
   return Ctx.bool_val(true);
 }
 
-Z3CheckResult Z3Encoder::verifyPassive(const PassiveProgram &P) {
-  Vars.clear();
-  Solver = z3::solver(Ctx);
-  Z3CheckResult Out;
-  ResultVarName = P.ResultVarName;
-
-  std::string CurHeap = P.OldHeapName.empty() ? std::string(VHeapName) + "_0" : P.OldHeapName;
-  z3::expr Hyp = Ctx.bool_val(true);
-  z3::expr Post = Ctx.bool_val(true);
-
-  for (const auto &A : P.EntryAssumes)
-    Hyp = Hyp && encodeExpr(A.get(), CurHeap);
-
-  for (const auto &S : P.Stmts) {
-    if (S->K == PassiveStmt::Assume && S->Cond) {
-      if (S->Cond->K == VExpr::HeapStore) {
-        auto *H = static_cast<const VHeapStoreExpr *>(S->Cond.get());
-        Hyp = Hyp && encodeHeapStore(H);
-        CurHeap = H->HeapAfter;
-      } else {
-        Hyp = Hyp && encodeExpr(S->Cond.get(), CurHeap);
+z3::expr Z3Encoder::encodeVC(const VCExpr *Root) {
+  if (!Root)
+    return Ctx.bool_val(true);
+  std::map<const VCExpr *, z3::expr> Done;
+  std::vector<const VCExpr *> Stack = {Root};
+  while (!Stack.empty()) {
+    const VCExpr *E = Stack.back();
+    if (Done.count(E)) {
+      Stack.pop_back();
+      continue;
+    }
+    bool Pending = false;
+    for (const auto &C : E->Children) {
+      if (C && !Done.count(C.get())) {
+        Stack.push_back(C.get());
+        Pending = true;
+        break;
       }
-    } else if (S->K == PassiveStmt::Assert && S->Cond) {
-      Post = Post && encodeExpr(S->Cond.get(), CurHeap);
     }
+    if (Pending)
+      continue;
+    Stack.pop_back();
+    z3::expr Enc = encodeVCNode(E, Done);
+    Done.insert({E, std::move(Enc)});
   }
-
-  for (const auto &A : P.ExitAsserts)
-    Post = Post && encodeExpr(A.get(), CurHeap);
-
-  Solver.add(Hyp && !Post);
-  switch (Solver.check()) {
-  case z3::unsat:
-    Out.S = Z3CheckResult::Verified;
-    return Out;
-  case z3::sat: {
-    Out.S = Z3CheckResult::Failed;
-    z3::model M = Solver.get_model();
-    std::string Msg;
-    for (auto &KV : Vars) {
-      z3::expr Val = M.eval(KV.second, true);
-      if (!Msg.empty())
-        Msg += ", ";
-      Msg += KV.first + " = " + Val.to_string();
-    }
-    Out.Counterexample = Msg;
-    return Out;
-  }
-  default:
-    Out.S = Z3CheckResult::Unknown;
-    return Out;
-  }
+  return Done.at(Root);
 }
 
-void Z3Encoder::dumpVC(const VExpr *VC, llvm::raw_ostream &OS) {
-  Z3Encoder Tmp;
-  OS << Tmp.encodeExpr(VC, std::string(VHeapName) + "_0").to_string() << "\n";
+void Z3Encoder::emitSpecDefiningAxiom(const std::string &Name,
+                                      const SpecAxiomContext &ACtx) {
+  auto It = ACtx.Functions.find(Name);
+  if (It == ACtx.Functions.end() || !It->second)
+    return;
+  const VFunction &Spec = *It->second;
+  unsigned Fuel = 0;
+  if (ACtx.HiddenSpecs.count(Spec.Name))
+    Fuel = 0;
+  else if (auto F = ACtx.SpecFuel.find(Spec.Name); F != ACtx.SpecFuel.end())
+    Fuel = F->second;
+  else if (ACtx.RevealedSpecs.count(Spec.Name))
+    Fuel = 1;
+  else if (!Spec.NeedsDecreasesCheck)
+    Fuel = 64;
+  std::unique_ptr<VExpr> Body = unfoldSpecDefinition(Spec, ACtx, Fuel);
+  if (!Body)
+    return;
+  z3::func_decl Fdecl = specFuncDecl(&Spec);
+  z3::expr_vector ParamVars(Ctx);
+  std::vector<z3::expr> AppArgs;
+  for (const auto &P : Spec.Params) {
+    z3::expr V = CallerIntMode == VIntMode::Machine
+                     ? Ctx.bv_const(P.first.c_str(), 32)
+                     : Ctx.int_const(P.first.c_str());
+    Vars.emplace(P.first, V);
+    ParamVars.push_back(V);
+    AppArgs.push_back(V);
+  }
+  z3::expr LHS = Fdecl(static_cast<unsigned>(AppArgs.size()), AppArgs.data());
+  z3::expr RHS = encodeVExprForAxiom(Body.get(), Spec.ReturnType);
+  z3::expr Eq = (LHS == RHS);
+  Solver.add(z3::forall(ParamVars, Eq));
+  for (const auto &P : Spec.Params)
+    Vars.erase(P.first);
 }
 
-Z3CheckResult Z3Encoder::checkVC(const VExpr *VC) {
+VerifyResult Z3Encoder::verifyMachine(const VCMachine &M) {
   Vars.clear();
   Solver = z3::solver(Ctx);
-  Z3CheckResult Out;
-  z3::expr F = encodeExpr(VC, std::string(VHeapName) + "_0");
-  Solver.add(F);
+  SpecFunctions = M.SpecFunctions;
+  CallerIntMode = M.CallerIntMode;
+  VerifyResult Out;
+  if (!M.Goal) {
+    Out.Status = VerifyStatus::Verified;
+    return Out;
+  }
+  SpecAxiomContext AxiomCtx{M.SpecFunctions, M.SpecFuel, M.HiddenSpecs,
+                            M.RevealedSpecs, M.CallerIntMode};
+  emitSpecAxioms(*this, M.Goal.get(), AxiomCtx);
+  Vars.clear();
+  Solver.add(encodeVC(M.Goal.get()));
   switch (Solver.check()) {
   case z3::unsat:
-    Out.S = Z3CheckResult::Verified;
+    Out.Status = VerifyStatus::Verified;
     return Out;
   case z3::sat: {
-    Out.S = Z3CheckResult::Failed;
-    z3::model M = Solver.get_model();
-    std::string Msg;
-    for (auto &KV : Vars) {
-      z3::expr Val = M.eval(KV.second, true);
-      if (!Msg.empty())
-        Msg += ", ";
-      Msg += KV.first + " = " + Val.to_string();
+    Out.Status = VerifyStatus::Failed;
+    z3::model Mod = Solver.get_model();
+    for (const auto &KV : Vars) {
+      z3::expr Val = Mod.eval(KV.second, true);
+      Out.Model[KV.first] = Val.to_string();
     }
-    Out.Counterexample = Msg;
     return Out;
   }
   default:
-    Out.S = Z3CheckResult::Unknown;
+    Out.Status = VerifyStatus::Unknown;
     return Out;
   }
+}
+
+void Z3Encoder::dumpVC(const VCExpr *E, llvm::raw_ostream &OS) {
+  Z3Encoder Tmp;
+  OS << Tmp.encodeVC(E).to_string() << "\n";
+}
+
+VerifyResult Z3VerifyBackend::verifyPassive(const PassiveProgram &P) {
+  VCMachine M = VCMachine::fromPassive(P);
+  VerifyResult R = Enc.verifyMachine(M);
+  if (R.Status == VerifyStatus::Failed) {
+    std::string Msg;
+    for (const auto &KV : R.Model) {
+      if (!Msg.empty())
+        Msg += ", ";
+      Msg += KV.first + " = " + KV.second;
+    }
+    R.Message = Msg;
+  }
+  return R;
 }

@@ -1,7 +1,9 @@
 Language reference
 ==================
 
-Compact lookup for contract syntax and semantics. For learning, use :doc:`../book/index`.
+Compact lookup for contract syntax and semantics. For a guided introduction, start with
+:doc:`../book/index`; for backends and ``cpp-verify`` flags, see :doc:`../book/part-ii/ch17-backends-modular-calls`
+and :doc:`tooling`.
 
 .. toctree::
    :maxdepth: 1

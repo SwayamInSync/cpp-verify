@@ -2,7 +2,7 @@ Part II — CppVerify
 ===================
 
 These chapters cover verified C++ in practice: the toolchain, contract syntax, common proof
-patterns, and how to respond when the verifier reports a failure.
+patterns, backends (Z3, BMC, Lean export), modular calls, and how to respond when verification fails.
 
 .. figure:: /_static/diagrams/cppverify-workflow.svg
    :align: center
@@ -20,3 +20,4 @@ patterns, and how to respond when the verifier reports a failure.
    ch14-pointers-frames-modifies
    ch15-toolchain-and-flags
    ch16-when-verification-fails
+   ch17-backends-modular-calls

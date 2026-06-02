@@ -36,6 +36,15 @@ Use in contracts:
 
 Call from ``ghost { ... }`` blocks in executable functions.
 
+**Fuel** and **hide/reveal** control how much recursive spec body is inlined:
+
+.. code-block:: cpp
+
+   ghost { reveal_with_fuel(fact, 2); }   // bounded unfolding
+   ghost { hide(triple); }               // opaque spec application
+
+See also :doc:`ch17-backends-modular-calls`.
+
 ``constexpr`` in contracts
 --------------------------
 

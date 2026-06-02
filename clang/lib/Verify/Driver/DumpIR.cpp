@@ -138,6 +138,19 @@ void verify::dumpVExpr(const VExpr *E, llvm::raw_ostream &OS, unsigned Depth) {
   case VExpr::HeapStore:
     OS << "heap_store\n";
     break;
+  case VExpr::FieldAccess: {
+    const auto *F = static_cast<const VFieldAccessExpr *>(E);
+    OS << "field " << F->Field << "\n";
+    dumpVExpr(F->Base.get(), OS, Depth + 1);
+    break;
+  }
+  case VExpr::SpecCall: {
+    const auto *C = static_cast<const VSpecCallExpr *>(E);
+    OS << "spec_call " << C->Callee << "\n";
+    for (const auto &A : C->Args)
+      dumpVExpr(A.get(), OS, Depth + 1);
+    break;
+  }
   }
 }
 
@@ -169,6 +182,26 @@ static void dumpVStmt(const VStmt &S, llvm::raw_ostream &OS, unsigned Depth) {
     dumpVExpr(R.Value.get(), OS, Depth + 1);
     break;
   }
+  case VStmt::While: {
+    const auto &W = static_cast<const VWhileStmt &>(S);
+    OS << "while\n";
+    dumpVExpr(W.Cond.get(), OS, Depth + 1);
+    for (const auto &Inv : W.Invariants)
+      dumpVExpr(Inv.get(), OS, Depth + 1);
+    if (W.Decreases)
+      dumpVExpr(W.Decreases.get(), OS, Depth + 1);
+    for (const auto &B : W.Body)
+      dumpVStmt(*B, OS, Depth + 1);
+    break;
+  }
+  case VStmt::Call: {
+    const auto &C = static_cast<const VCallStmt &>(S);
+    OS << "call " << C.Callee;
+    if (!C.ResultTarget.empty())
+      OS << " -> " << C.ResultTarget;
+    OS << "\n";
+    break;
+  }
   case VStmt::Assert:
     OS << "assert\n";
     dumpVExpr(static_cast<const VAssertStmt &>(S).Cond.get(), OS, Depth + 1);
@@ -183,6 +216,27 @@ static void dumpVStmt(const VStmt &S, llvm::raw_ostream &OS, unsigned Depth) {
   case VStmt::Seq:
     for (const auto &C : static_cast<const VSeqStmt &>(S).Stmts)
       dumpVStmt(*C, OS, Depth);
+    break;
+  case VStmt::GhostBlock: {
+    OS << "ghost\n";
+    for (const auto &B : static_cast<const VGhostBlockStmt &>(S).Body)
+      dumpVStmt(*B, OS, Depth + 1);
+    break;
+  }
+  case VStmt::ContractAssert:
+    OS << "contract_assert\n";
+    dumpVExpr(static_cast<const VContractAssertStmt &>(S).Cond.get(), OS, Depth + 1);
+    break;
+  case VStmt::RevealWithFuel:
+    OS << "reveal_with_fuel\n";
+    break;
+  case VStmt::HideSpec:
+    OS << "hide_spec\n";
+    break;
+  case VStmt::RevealSpec:
+    OS << "reveal_spec\n";
+    break;
+  default:
     break;
   }
 }
@@ -229,6 +283,8 @@ void verify::dumpVC(llvm::StringRef FnName, const VExpr *VC,
 }
 
 void verify::dumpZ3(const VExpr *VC, llvm::raw_ostream &OS) {
+  VCMachine M = VCMachine::fromVExpr(VC, "__result_0", std::string(VHeapName) + "_0");
   Z3Encoder Enc;
-  Enc.dumpVC(VC, OS);
+  if (M.Goal)
+    Enc.dumpVC(M.Goal.get(), OS);
 }

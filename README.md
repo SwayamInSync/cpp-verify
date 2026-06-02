@@ -70,17 +70,28 @@ int abs(int x)
 
 Use `-fverify-contracts` on `clang++` so `pre` / `post` are keywords. `cpp-verify` enables that flag automatically.
 
+## Verification backends
+
+| Backend | CLI | Role |
+|---------|-----|------|
+| **Z3** (default) | `cpp-verify file.cpp` | Weakest-precondition VCs + Z3 |
+| **BMC** | `cpp-verify --backend=bmc --unroll=N file.cpp` | Bounded loop unrolling, then Z3 |
+| **Lean export** | `cpp-verify --backend=lean --lean-out=out.lean file.cpp` | Emit goals for manual proof |
+
 ## Commands
 
 | Command | Role |
-| -------- | ----- |
+|---------|------|
 | `cpp-verify file.cpp` | Verify only (Z3) |
 | `clang++ -fverify-contracts -c file.cpp` | Verify (parallel) + compile |
 | `clang++ -fverify-contracts -fno-verify -c file.cpp` | Contracts on; skip SMT |
 
 ```bash
-./build/bin/cpp-verify --dump-ir=1,2 file.cpp   # layers: 1=VCR 2=passive 3=VC 4=Z3
+./build/bin/cpp-verify --dump-ir=1,2,3,4 file.cpp   # VCR, passive, VC, Z3
 ```
+
+Chained modular calls (e.g. `return inc(inc(x))`) are lowered to temporaries automatically.
+See [Chapter 17](https://swayaminsync.github.io/cpp-verify/book/part-ii/ch17-backends-modular-calls.html).
 
 Contract syntax, flags, and limitations: **[language reference](https://swayaminsync.github.io/cpp-verify/language/index.html)**.
 
@@ -105,7 +116,15 @@ Design notes: `docs/DESIGN.md`, `docs/ARCHITECTURE.md`.
 ## Tests
 
 ```bash
+./scripts/run-verify-tests.sh
 ./build/bin/llvm-lit clang/test/Verify
+```
+
+Contributor coverage (instrument ``clangVerify`` only):
+
+```bash
+./scripts/coverage-sweep.sh       # after a normal build
+./scripts/coverage-verify.sh      # full instrumented rebuild (slow)
 ```
 
 ## License

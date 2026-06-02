@@ -80,6 +80,18 @@ std::unique_ptr<VExpr> verify::cloneVExpr(const VExpr *E) {
         H->HeapBefore, H->HeapAfter, cloneVExpr(H->Ptr.get()),
         cloneVExpr(H->Val.get()), H->Loc);
   }
+  case VExpr::FieldAccess: {
+    const auto *F = static_cast<const VFieldAccessExpr *>(E);
+    return std::make_unique<VFieldAccessExpr>(cloneVExpr(F->Base.get()), F->Field,
+                                              F->Ty, F->Loc);
+  }
+  case VExpr::SpecCall: {
+    const auto *C = static_cast<const VSpecCallExpr *>(E);
+    std::vector<std::unique_ptr<VExpr>> Args;
+    for (const auto &A : C->Args)
+      Args.push_back(cloneVExpr(A.get()));
+    return std::make_unique<VSpecCallExpr>(C->Callee, std::move(Args), C->Ty, C->Loc);
+  }
   }
   return nullptr;
 }

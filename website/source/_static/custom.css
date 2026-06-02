@@ -65,3 +65,44 @@ div.highlight-cpp pre {
 main h1 {
   margin-top: 0.5rem;
 }
+
+/* Tables — scroll on small screens; consistent spacing */
+.table-wrapper {
+  overflow-x: auto;
+  margin: 1rem 0 1.5rem;
+}
+
+.table-wrapper table.docutils {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table-wrapper th,
+.table-wrapper td {
+  vertical-align: top;
+  padding: 0.55rem 0.75rem;
+}
+
+.table-wrapper thead th {
+  border-bottom: 2px solid var(--color-table-header-border, rgba(128, 128, 128, 0.35));
+}
+
+.table-wrapper tbody tr {
+  border-bottom: 1px solid var(--color-table-row-border, rgba(128, 128, 128, 0.2));
+}
+
+/* API index button (api/index.rst raw HTML) */
+a.btn {
+  display: inline-block;
+  margin: 1rem 0;
+  padding: 0.6rem 1.2rem;
+  background: var(--color-brand-primary, #3b6fd9);
+  color: #fff !important;
+  border-radius: 6px;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+a.btn:hover {
+  filter: brightness(1.08);
+}

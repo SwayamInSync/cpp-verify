@@ -44,3 +44,6 @@ Compile the same file
 
 Verification runs in parallel; ghost code is stripped — no runtime contract overhead.
 
+Larger programs compose **modularly**: callee contracts are assumed at call sites, including nested
+calls such as ``return f(g(x))`` (see :doc:`ch17-backends-modular-calls`).
+

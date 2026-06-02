@@ -27,6 +27,25 @@ static cl::opt<std::string> DumpIR(
     cl::ValueOptional,
     cl::cat(CppVerifyCategory));
 
+static cl::opt<std::string> BackendOpt(
+    "backend",
+    cl::desc("Verification backend: z3 (default), lean, bmc"),
+    cl::value_desc("name"),
+    cl::init("z3"),
+    cl::cat(CppVerifyCategory));
+
+static cl::opt<std::string> LeanOut(
+    "lean-out",
+    cl::desc("Output path for --backend=lean scratch-pad export"),
+    cl::value_desc("file"),
+    cl::cat(CppVerifyCategory));
+
+static cl::opt<unsigned> BMCUnroll(
+    "unroll",
+    cl::desc("Loop unroll bound for --backend=bmc"),
+    cl::init(10),
+    cl::cat(CppVerifyCategory));
+
 namespace {
 
 static int gVerifyFailures = 0;
@@ -38,6 +57,15 @@ public:
       verify::VerifyOptions VOpts;
       if (DumpIR.getNumOccurrences() > 0)
         VOpts.DumpIRLayers = verify::parseDumpIRLayers(DumpIR.getValue());
+      llvm::StringRef B = BackendOpt.getValue();
+      if (B == "lean")
+        VOpts.Backend = verify::BackendKind::Lean;
+      else if (B == "bmc")
+        VOpts.Backend = verify::BackendKind::BMC;
+      else
+        VOpts.Backend = verify::BackendKind::Z3;
+      VOpts.LeanOutPath = LeanOut.getValue();
+      VOpts.BMCUnroll = BMCUnroll.getValue();
       if (!verify::verifyTranslationUnit(Ctx, llvm::outs(), VOpts))
         ++gVerifyFailures;
     }

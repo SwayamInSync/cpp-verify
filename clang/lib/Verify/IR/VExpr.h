@@ -25,7 +25,7 @@ class VExpr {
 public:
   enum Kind {
     Literal, Var, BinOp, UnaryOp, Cast, Load, Result, Old, Conditional,
-    Forall, Exists, HeapStore
+    Forall, Exists, HeapStore, FieldAccess, SpecCall
   };
 
   Kind K;
@@ -152,6 +152,26 @@ public:
                  std::unique_ptr<VExpr> V, SourceLocation Loc)
       : VExpr(HeapStore, VType::makeBool(), Loc), HeapBefore(std::move(Before)),
         HeapAfter(std::move(After)), Ptr(std::move(P)), Val(std::move(V)) {}
+};
+
+/// Struct field access: base.field (flattened to base.field in passivization).
+class VFieldAccessExpr : public VExpr {
+public:
+  std::unique_ptr<VExpr> Base;
+  std::string Field;
+  VFieldAccessExpr(std::unique_ptr<VExpr> B, std::string Field, VType Ty,
+                   SourceLocation Loc)
+      : VExpr(FieldAccess, Ty, Loc), Base(std::move(B)), Field(std::move(Field)) {}
+};
+
+/// Call to a spec function (inlined or axiomatized during verification).
+class VSpecCallExpr : public VExpr {
+public:
+  std::string Callee;
+  std::vector<std::unique_ptr<VExpr>> Args;
+  VSpecCallExpr(std::string Callee, std::vector<std::unique_ptr<VExpr>> Args,
+                VType Ty, SourceLocation Loc)
+      : VExpr(SpecCall, Ty, Loc), Callee(std::move(Callee)), Args(std::move(Args)) {}
 };
 
 std::unique_ptr<VExpr> cloneVExpr(const VExpr *E);

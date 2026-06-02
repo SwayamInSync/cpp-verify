@@ -55,8 +55,8 @@ Install
 
       → ``build\bin\cpp-verify.exe``, ``build\bin\clang++.exe``
 
-Manual build (same CMake flags)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Manual build (from repository root; same flags as ``setup.sh``)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. tabs::
 
@@ -64,7 +64,7 @@ Manual build (same CMake flags)
 
       .. code-block:: bash
 
-         cmake -S llvm -B build -G Ninja \
+         cmake -S llvm-project/llvm -B build -G Ninja \
            -DCMAKE_BUILD_TYPE=Release \
            -DLLVM_ENABLE_PROJECTS=clang \
            -DLLVM_TARGETS_TO_BUILD=Native \
@@ -76,7 +76,7 @@ Manual build (same CMake flags)
 
       .. code-block:: powershell
 
-         cmake -S llvm -B build -G Ninja `
+         cmake -S llvm-project/llvm -B build -G Ninja `
            -DCMAKE_BUILD_TYPE=Release `
            -DLLVM_ENABLE_PROJECTS=clang `
            -DLLVM_TARGETS_TO_BUILD=Native `
@@ -88,7 +88,7 @@ Manual build (same CMake flags)
 
       .. code-block:: powershell
 
-         cmake -S llvm -B build `
+         cmake -S llvm-project/llvm -B build `
            -G "Visual Studio 17 2022" -A x64 `
            -DLLVM_ENABLE_PROJECTS=clang `
            -DLLVM_TARGETS_TO_BUILD=Native `
@@ -124,6 +124,16 @@ Quick start
 
 Use ``-fverify-contracts`` on ``clang++`` so ``pre`` / ``post`` are keywords.
 ``cpp-verify`` adds that flag automatically.
+
+Backends and modular calls
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: bash
+
+   cpp-verify --backend=bmc --unroll=3 loops.cpp
+   cpp-verify --dump-ir=3,4 debug.cpp
+
+See :doc:`book/part-ii/ch17-backends-modular-calls` for Z3 vs BMC vs Lean export and chained calls like ``f(g(x))``.
 
 Learn more
 ----------

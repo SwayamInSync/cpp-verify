@@ -3,6 +3,8 @@
 #define LLVM_CLANG_VERIFY_IR_VSTMT_H
 
 #include "VExpr.h"
+#include <map>
+#include <set>
 #include <memory>
 #include <string>
 #include <utility>
@@ -14,7 +16,8 @@ namespace verify {
 class VStmt {
 public:
   enum Kind {
-    Assign, Store, If, Assert, Assume, Return, Seq, Havoc
+    Assign, Store, If, While, Call, Assert, Assume, Return, Seq, Havoc,
+    GhostBlock, RevealWithFuel, HideSpec, RevealSpec, ContractAssert
   };
 
   Kind K;
@@ -78,18 +81,85 @@ struct VHavocStmt : VStmt {
       : VStmt(Havoc, Loc), Target(std::move(T)) {}
 };
 
+struct VWhileStmt : VStmt {
+  std::unique_ptr<VExpr> Cond;
+  std::vector<std::unique_ptr<VExpr>> Invariants;
+  std::unique_ptr<VExpr> Decreases;
+  std::vector<std::unique_ptr<VStmt>> Body;
+  VWhileStmt(std::unique_ptr<VExpr> C,
+             std::vector<std::unique_ptr<VExpr>> Inv,
+             std::unique_ptr<VExpr> Dec,
+             std::vector<std::unique_ptr<VStmt>> B, SourceLocation Loc)
+      : VStmt(While, Loc), Cond(std::move(C)), Invariants(std::move(Inv)),
+        Decreases(std::move(Dec)), Body(std::move(B)) {}
+};
+
+struct VCallStmt : VStmt {
+  std::string Callee;
+  std::vector<std::unique_ptr<VExpr>> Args;
+  std::string ResultTarget;
+  bool IsProofCall = false;
+  VCallStmt(std::string Callee, std::vector<std::unique_ptr<VExpr>> Args,
+            std::string ResultTarget, SourceLocation Loc, bool IsProofCall = false)
+      : VStmt(Call, Loc), Callee(std::move(Callee)), Args(std::move(Args)),
+        ResultTarget(std::move(ResultTarget)), IsProofCall(IsProofCall) {}
+};
+
+struct VGhostBlockStmt : VStmt {
+  std::vector<std::unique_ptr<VStmt>> Body;
+  VGhostBlockStmt(std::vector<std::unique_ptr<VStmt>> B, SourceLocation Loc)
+      : VStmt(GhostBlock, Loc), Body(std::move(B)) {}
+};
+
+struct VRevealWithFuelStmt : VStmt {
+  std::string SpecFunction;
+  unsigned Fuel = 1;
+  VRevealWithFuelStmt(std::string Fn, unsigned Fuel, SourceLocation Loc)
+      : VStmt(RevealWithFuel, Loc), SpecFunction(std::move(Fn)), Fuel(Fuel) {}
+};
+
+struct VHideSpecStmt : VStmt {
+  std::string SpecFunction;
+  VHideSpecStmt(std::string Fn, SourceLocation Loc)
+      : VStmt(HideSpec, Loc), SpecFunction(std::move(Fn)) {}
+};
+
+struct VRevealSpecStmt : VStmt {
+  std::string SpecFunction;
+  VRevealSpecStmt(std::string Fn, SourceLocation Loc)
+      : VStmt(RevealSpec, Loc), SpecFunction(std::move(Fn)) {}
+};
+
+struct VContractAssertStmt : VStmt {
+  std::unique_ptr<VExpr> Cond;
+  VContractAssertStmt(std::unique_ptr<VExpr> C, SourceLocation Loc)
+      : VStmt(ContractAssert, Loc), Cond(std::move(C)) {}
+};
+
+std::unique_ptr<VStmt> cloneVStmt(const VStmt *S);
+
 struct VFunction {
   std::string Name;
   VType ReturnType;
   VIntMode IntMode = VIntMode::Machine;
+  bool IsSpec = false;
+  bool IsProof = false;
+  bool IsConstexprSpec = false;
+  bool NeedsDecreasesCheck = false;
+  std::map<std::string, unsigned> SpecFuel;
+  std::set<std::string> HiddenSpecs;
+  std::set<std::string> RevealedSpecs;
   std::vector<std::pair<std::string, VType>> Params;
   std::vector<std::unique_ptr<VExpr>> Preconditions;
   std::vector<std::unique_ptr<VExpr>> Postconditions;
   std::vector<std::unique_ptr<VExpr>> Recommends;
   std::vector<std::unique_ptr<VExpr>> Modifies;
   std::vector<std::pair<std::unique_ptr<VExpr>, std::unique_ptr<VExpr>>> Aliases;
+  std::unique_ptr<VExpr> Decreases;
   std::vector<std::unique_ptr<VStmt>> Body;
 };
+
+VFunction cloneVFunction(const VFunction &Fn);
 
 } // namespace verify
 } // namespace clang
