@@ -25,7 +25,7 @@ Install
       .. code-block:: bash
 
          brew install cmake ninja git
-         git clone https://github.com/SwayamInSync/cpp-verify.git
+         git clone --recurse-submodules https://github.com/SwayamInSync/cpp-verify.git
          cd cpp-verify
          ./setup.sh
 
@@ -36,7 +36,7 @@ Install
       .. code-block:: bash
 
          sudo apt install cmake ninja-build build-essential git
-         git clone https://github.com/SwayamInSync/cpp-verify.git
+         git clone --recurse-submodules https://github.com/SwayamInSync/cpp-verify.git
          cd cpp-verify
          ./setup.sh
 
@@ -49,7 +49,7 @@ Install
 
       .. code-block:: powershell
 
-         git clone https://github.com/SwayamInSync/cpp-verify.git
+         git clone --recurse-submodules https://github.com/SwayamInSync/cpp-verify.git
          cd cpp-verify
          .\setup.ps1
 
@@ -64,7 +64,7 @@ Manual build (same CMake flags)
 
       .. code-block:: bash
 
-         cmake -S llvm-project/llvm -B build -G Ninja \
+         cmake -S llvm -B build -G Ninja \
            -DCMAKE_BUILD_TYPE=Release \
            -DLLVM_ENABLE_PROJECTS=clang \
            -DLLVM_TARGETS_TO_BUILD=Native \
@@ -76,7 +76,7 @@ Manual build (same CMake flags)
 
       .. code-block:: powershell
 
-         cmake -S llvm-project/llvm -B build -G Ninja `
+         cmake -S llvm -B build -G Ninja `
            -DCMAKE_BUILD_TYPE=Release `
            -DLLVM_ENABLE_PROJECTS=clang `
            -DLLVM_TARGETS_TO_BUILD=Native `
@@ -88,7 +88,7 @@ Manual build (same CMake flags)
 
       .. code-block:: powershell
 
-         cmake -S llvm-project/llvm -B build `
+         cmake -S llvm -B build `
            -G "Visual Studio 17 2022" -A x64 `
            -DLLVM_ENABLE_PROJECTS=clang `
            -DLLVM_TARGETS_TO_BUILD=Native `
