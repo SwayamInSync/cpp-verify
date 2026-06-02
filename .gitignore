@@ -56,9 +56,10 @@ autoconf/autom4te.cache
 # CLion project configuration
 /.idea
 /cmake-build*
-# Coding assistants' stuff
+# Coding assistants' stuff + internal roadmap (see cpp-verify-roadmap repo)
 /CLAUDE.md
 .claude/
+/notes/
 /GEMINI.md
 .gemini/
 AGENTS.md
