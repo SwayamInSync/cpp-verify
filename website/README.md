@@ -1,38 +1,46 @@
 # CppVerify documentation site
 
-Dual build:
+Published at [swayaminsync.github.io/cpp-verify](https://swayaminsync.github.io/cpp-verify/).
 
-| Output | Tool | Path |
-|--------|------|------|
-| Book + language reference | **Sphinx** (Furo) | `website/build/` |
-| C++ verifier API | **Doxygen** | `website/build/doxygen/` |
+## Outputs
 
-## Build
+| Output | Tool | Location |
+|--------|------|----------|
+| Book + language reference | Sphinx (Furo) | `website/build/` |
+| C++ verifier API | Doxygen | `website/build/doxygen/` |
 
-**Doxygen is required** for the C++ API (install once: `brew install doxygen` or `apt install doxygen`).
+## Build (from repository root)
+
+Doxygen is required for the C++ API (`brew install doxygen` or `apt install doxygen`).
 
 ```bash
 ./website/scripts/build-docs.sh
-open website/build/index.html          # book home
-open website/build/doxygen/index.html  # C++ API
+open website/build/index.html
+open website/build/doxygen/index.html
 ```
 
-Auto-install Doxygen when possible: `AUTO_INSTALL_DOXYGEN=1 ./website/scripts/build-docs.sh`
+Auto-install Doxygen when possible:
+
+```bash
+AUTO_INSTALL_DOXYGEN=1 ./website/scripts/build-docs.sh
+```
 
 ## Structure
 
-- `source/book/part-i/` — Foundations (Ch 1–8), no CppVerify syntax required first
-- `source/book/part-ii/` — CppVerify practice (Ch 9–16)
-- `source/language/` — Desk reference (syntax lookup)
-- `source/api/` — Link page into Doxygen
-- `doxygen/Doxyfile` — Scans `llvm-project/clang/lib/Verify/*.h`
-- `source/_static/logo-todo.svg` — Replace with your logo when ready
+| Path | Content |
+|------|---------|
+| `source/index.rst` | Home — install, quick start, links |
+| `source/book/part-i/` | Foundations (Ch 1–8) |
+| `source/book/part-ii/` | CppVerify practice (Ch 9–17) |
+| `source/language/` | Contract syntax reference |
+| `source/api/` | Link into Doxygen |
+| `source/_static/` | Logos, diagrams, `custom.css` |
+| `doxygen/Doxyfile` | Scans `clang/lib/Verify` headers |
 
-## Replace logo
+## Branding
 
-Drop your asset as `source/_static/logo.svg` and set in `conf.py`:
+Logos live in `source/_static/` (`logo.svg`, `logo-dark.svg`, `favicon.svg`). The product repo also ships PNGs under top-level `logos/` for the GitHub README.
 
-```python
-"light_logo": "logo.svg",
-"dark_logo": "logo.svg",
-```
+## RST tables
+
+Use ``.. list-table::`` with ``:header-rows: 1`` and ``:widths:``. Avoid grid tables (``+---+``) — they break easily when column widths do not match exactly.

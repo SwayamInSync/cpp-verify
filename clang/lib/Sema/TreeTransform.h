@@ -17950,6 +17950,28 @@ StmtResult TreeTransform<Derived>::TransformRevealWithFuelStmt(
 }
 
 template <typename Derived>
+StmtResult TreeTransform<Derived>::TransformHideSpecStmt(HideSpecStmt *S) {
+  ExprResult Fn = getDerived().TransformExpr(S->getFunction());
+  if (Fn.isInvalid())
+    return StmtError();
+  if (!getDerived().AlwaysRebuild() && Fn.get() == S->getFunction())
+    return S;
+  return new (SemaRef.Context)
+      HideSpecStmt(S->getBeginLoc(), S->getLParenLoc(), S->getEndLoc(), Fn.get());
+}
+
+template <typename Derived>
+StmtResult TreeTransform<Derived>::TransformRevealSpecStmt(RevealSpecStmt *S) {
+  ExprResult Fn = getDerived().TransformExpr(S->getFunction());
+  if (Fn.isInvalid())
+    return StmtError();
+  if (!getDerived().AlwaysRebuild() && Fn.get() == S->getFunction())
+    return S;
+  return new (SemaRef.Context)
+      RevealSpecStmt(S->getBeginLoc(), S->getLParenLoc(), S->getEndLoc(), Fn.get());
+}
+
+template <typename Derived>
 ExprResult TreeTransform<Derived>::TransformForallExpr(ForallExpr *E) {
   ExprResult Lo = getDerived().TransformExpr(E->getLo());
   if (Lo.isInvalid()) return ExprError();

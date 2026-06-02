@@ -67,6 +67,10 @@ clang_target_link_libraries(clang
   clangSerialization
   )
 
+if(CPPVERIFY_ENABLE_COVERAGE)
+  target_link_options(clang PRIVATE -fprofile-instr-generate)
+endif()
+
 if(WIN32 AND NOT CYGWIN)
   # Prevent versioning if the buildhost is targeting for Win32.
 else()

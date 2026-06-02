@@ -55,8 +55,8 @@ Install
 
       → ``build\bin\cpp-verify.exe``, ``build\bin\clang++.exe``
 
-Manual build (same CMake flags)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Manual build (from repository root; same flags as ``setup.sh``)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. tabs::
 
@@ -124,6 +124,16 @@ Quick start
 
 Use ``-fverify-contracts`` on ``clang++`` so ``pre`` / ``post`` are keywords.
 ``cpp-verify`` adds that flag automatically.
+
+Backends and modular calls
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: bash
+
+   cpp-verify --backend=bmc --unroll=3 loops.cpp
+   cpp-verify --dump-ir=3,4 debug.cpp
+
+See :doc:`book/part-ii/ch17-backends-modular-calls` for Z3 vs BMC vs Lean export and chained calls like ``f(g(x))``.
 
 Learn more
 ----------

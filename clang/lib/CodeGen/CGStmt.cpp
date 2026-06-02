@@ -109,6 +109,8 @@ void CodeGenFunction::EmitStmt(const Stmt *S, ArrayRef<const Attr *> Attrs) {
   case Stmt::GhostBlockStmtClass:
   case Stmt::ContractAssertStmtClass:
   case Stmt::RevealWithFuelStmtClass:
+  case Stmt::HideSpecStmtClass:
+  case Stmt::RevealSpecStmtClass:
     break;
 
   case Stmt::NullStmtClass:

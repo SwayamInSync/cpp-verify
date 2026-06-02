@@ -4,7 +4,7 @@
 // RUN: %cpp-verify --dump-ir %s 2>&1 | FileCheck %s --check-prefix=ALL
 
 int abs(int x)
-  pre(true)
+  pre(x != (-2147483647 - 1))
   post(result >= 0)
 {
   return x < 0 ? -x : x;

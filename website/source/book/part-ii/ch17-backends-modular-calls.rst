@@ -1,0 +1,104 @@
+Chapter 17 — Backends, modular calls, and debugging
+===================================================
+
+CppVerify is not only a Z3-backed WP checker. The same front end and IR feed multiple
+backends and modular call lowering. This chapter ties those pieces to how you work day to day.
+
+Verification backends
+---------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 18 22 60
+
+   * - Backend
+     - CLI
+     - When to use it
+   * - **Z3** (default)
+     - ``cpp-verify file.cpp``
+     - General proofs: functions, pointers, spec/proof, loops via invariant/decreases (WP path).
+   * - **BMC**
+     - ``cpp-verify --backend=bmc --unroll=N file.cpp``
+     - Small bounded loops: body unrolled ``N`` times, then Z3. Good when loop structure is simple and bounds are tiny.
+   * - **Lean export**
+     - ``cpp-verify --backend=lean --lean-out=out.lean file.cpp``
+     - Export a scratch-pad ``theorem cppverify_goal`` for manual proof in Lean 4 — not automated discharge.
+
+BMC does not replace loop contracts on the default path; it is an alternate pipeline stage that
+**expands** loops before passivization. You still write ``invariant`` / ``decreases`` for documentation
+and for the Z3 backend.
+
+Modular function calls
+----------------------
+
+Functions with ``pre`` / ``post`` are verified **modularly**: the caller assumes the callee’s
+precondition and inherits its postcondition (and frame conditions) without re-analyzing the callee body.
+
+Simple call:
+
+.. code-block:: cpp
+
+   int y = abs_val(x);
+
+Chained calls in one expression are supported by lowering inner calls to temporaries first:
+
+.. code-block:: cpp
+
+   int inc(int x) pre(x >= 0 && x < 100) post(result == x + 1) { return x + 1; }
+
+   int twice(int x)
+     pre(x >= 0 && x < 98)
+     post(result == x + 2)
+   {
+     return inc(inc(x));   // inner inc, then outer inc
+   }
+
+The converter emits ``VCallStmt`` for each exec call site; passivization substitutes callee contracts
+in order. Spec and proof functions are not emitted at runtime and are handled by inlining or axioms.
+
+Parallel verify + compile
+-------------------------
+
+.. code-block:: bash
+
+   clang++ -std=c++17 -fverify-contracts -c module.cpp -o module.o
+
+With ``-fverify-contracts``, contract keywords parse as part of the language. Unless you pass
+``-fno-verify``, the compiler runs **cpp-verify in parallel** with code generation. Ghost blocks,
+spec functions, and proof functions are stripped from the object file — no runtime cost.
+
+Dumping IR layers
+-----------------
+
+When a proof fails or looks wrong, dump intermediate representations:
+
+.. code-block:: bash
+
+   cpp-verify --dump-ir=1 file.cpp      # Layer 1: VCR (typed CFG)
+   cpp-verify --dump-ir=2 file.cpp      # Layer 2: passive (SSA assume/assert)
+   cpp-verify --dump-ir=3,4 file.cpp   # VC formula and Z3 translation
+
+Layer aliases: ``layer-1`` … ``layer-4``, or ``all``. Multiple layers are separated by ``======``.
+
+``recommends`` and soft checks
+------------------------------
+
+``recommends`` on spec functions is optional advice. If verification **fails**, the tool may
+report that a ``recommends`` clause at a call site was not implied by the caller’s precondition —
+a warning, not a hard error.
+
+Regression tests
+----------------
+
+The repository ships executable examples under ``clang/test/Verify/`` and ``clang/test/Verify/suite/``.
+From the repo root:
+
+.. code-block:: bash
+
+   ./scripts/run-verify-tests.sh
+
+Contributors can measure ``clang/lib/Verify`` region coverage with
+``./scripts/coverage-sweep.sh`` (after a normal build) or ``./scripts/coverage-verify.sh``
+(full instrumented rebuild). Use ``-DCPPVERIFY_ENABLE_COVERAGE=ON`` on ``clangVerify`` only.
+
+Next: :doc:`ch16-when-verification-fails` for counterexamples and fixing failed proofs.

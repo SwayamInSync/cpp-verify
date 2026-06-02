@@ -7,7 +7,8 @@
 //===----------------------------------------------------------------------===//
 //
 // This file defines AST nodes for CppVerify contract statements:
-//   ContractAssertStmt, GhostBlockStmt, RevealWithFuelStmt
+//   ContractAssertStmt, GhostBlockStmt, RevealWithFuelStmt,
+//   HideSpecStmt, RevealSpecStmt
 //
 //===----------------------------------------------------------------------===//
 
@@ -136,6 +137,70 @@ public:
   }
   const_child_range children() const {
     return const_child_range(&SubExprs[0], &SubExprs[NUM_SUBEXPRS]);
+  }
+};
+
+/// HideSpecStmt - ghost { hide(fn); } — keep spec body opaque in this VC.
+class HideSpecStmt : public Stmt {
+  friend class ASTStmtReader;
+  SourceLocation Loc;
+  SourceLocation LParenLoc;
+  SourceLocation RParenLoc;
+  Stmt *Function;
+
+public:
+  HideSpecStmt(SourceLocation Loc, SourceLocation LParenLoc,
+               SourceLocation RParenLoc, Expr *Function)
+      : Stmt(HideSpecStmtClass), Loc(Loc), LParenLoc(LParenLoc),
+        RParenLoc(RParenLoc), Function(Function) {}
+
+  explicit HideSpecStmt(EmptyShell Empty)
+      : Stmt(HideSpecStmtClass), Function(nullptr) {}
+
+  Expr *getFunction() const { return cast<Expr>(Function); }
+  SourceLocation getLParenLoc() const { return LParenLoc; }
+  SourceLocation getBeginLoc() const LLVM_READONLY { return Loc; }
+  SourceLocation getEndLoc() const LLVM_READONLY { return RParenLoc; }
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == HideSpecStmtClass;
+  }
+
+  child_range children() { return child_range(&Function, &Function + 1); }
+  const_child_range children() const {
+    return const_child_range(&Function, &Function + 1);
+  }
+};
+
+/// RevealSpecStmt - ghost { reveal(fn); } — inline spec body with default fuel.
+class RevealSpecStmt : public Stmt {
+  friend class ASTStmtReader;
+  SourceLocation Loc;
+  SourceLocation LParenLoc;
+  SourceLocation RParenLoc;
+  Stmt *Function;
+
+public:
+  RevealSpecStmt(SourceLocation Loc, SourceLocation LParenLoc,
+                 SourceLocation RParenLoc, Expr *Function)
+      : Stmt(RevealSpecStmtClass), Loc(Loc), LParenLoc(LParenLoc),
+        RParenLoc(RParenLoc), Function(Function) {}
+
+  explicit RevealSpecStmt(EmptyShell Empty)
+      : Stmt(RevealSpecStmtClass), Function(nullptr) {}
+
+  Expr *getFunction() const { return cast<Expr>(Function); }
+  SourceLocation getLParenLoc() const { return LParenLoc; }
+  SourceLocation getBeginLoc() const LLVM_READONLY { return Loc; }
+  SourceLocation getEndLoc() const LLVM_READONLY { return RParenLoc; }
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == RevealSpecStmtClass;
+  }
+
+  child_range children() { return child_range(&Function, &Function + 1); }
+  const_child_range children() const {
+    return const_child_range(&Function, &Function + 1);
   }
 };
 

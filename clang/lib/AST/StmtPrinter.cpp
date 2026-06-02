@@ -621,6 +621,18 @@ void StmtPrinter::VisitRevealWithFuelStmt(RevealWithFuelStmt *Node) {
   OS << ");\n";
 }
 
+void StmtPrinter::VisitHideSpecStmt(HideSpecStmt *Node) {
+  Indent() << "hide(";
+  PrintExpr(Node->getFunction());
+  OS << ");\n";
+}
+
+void StmtPrinter::VisitRevealSpecStmt(RevealSpecStmt *Node) {
+  Indent() << "reveal(";
+  PrintExpr(Node->getFunction());
+  OS << ");\n";
+}
+
 void StmtPrinter::VisitForallExpr(ForallExpr *Node) {
   OS << "forall(" << Node->getBoundVar()->getName() << ", ";
   PrintExpr(Node->getLo());

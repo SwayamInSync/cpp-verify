@@ -11,5 +11,7 @@ Currently outside the supported core:
 - Virtual dispatch and multiple inheritance
 - Heap allocation with ``new`` and ``delete``
 
-Pointer and heap reasoning are available in the language surface; depth of automation continues
-to expand. See the project design notes for the current roadmap.
+Pointer and heap reasoning are available in the language surface (see :doc:`pointers` and
+:doc:`../book/part-ii/ch14-pointers-frames-modifies`). Depth of automation continues to expand;
+see the project :doc:`../book/part-ii/ch17-backends-modular-calls` and design notes in the repo
+``extras/docs/`` tree.

@@ -296,6 +296,14 @@ Retry:
     Res = ParseRevealWithFuel();
     SemiError = "reveal_with_fuel";
     break;
+  case tok::kw_hide:
+    Res = ParseHideSpec();
+    SemiError = "hide";
+    break;
+  case tok::kw_reveal:
+    Res = ParseRevealSpec();
+    SemiError = "reveal";
+    break;
 
   case tok::kw_while:               // C99 6.8.5.1: while-statement
     return ParseWhileStatement(TrailingElseLoc, PrecedingLabel);
@@ -2895,4 +2903,52 @@ StmtResult Parser::ParseRevealWithFuel() {
 
   return new (Actions.getASTContext())
       RevealWithFuelStmt(Loc, LParenLoc, RParenLoc, Fn.get(), Fuel.get());
+}
+
+/// Parse hide(fn);
+StmtResult Parser::ParseHideSpec() {
+  assert(Tok.is(tok::kw_hide) && "Expected 'hide'");
+  SourceLocation Loc = ConsumeToken();
+  if (Tok.isNot(tok::l_paren)) {
+    Diag(Tok, diag::err_contract_expected_lparen) << "hide";
+    return StmtError();
+  }
+  SourceLocation LParenLoc = ConsumeParen();
+  ExprResult Fn = ParseAssignmentExpression();
+  if (Fn.isInvalid()) {
+    SkipUntil(tok::r_paren, StopAtSemi);
+    return StmtError();
+  }
+  if (Tok.isNot(tok::r_paren)) {
+    Diag(Tok, diag::err_contract_expected_rparen) << "hide";
+    SkipUntil(tok::r_paren, StopAtSemi);
+    return StmtError();
+  }
+  SourceLocation RParenLoc = ConsumeParen();
+  return new (Actions.getASTContext())
+      HideSpecStmt(Loc, LParenLoc, RParenLoc, Fn.get());
+}
+
+/// Parse reveal(fn);
+StmtResult Parser::ParseRevealSpec() {
+  assert(Tok.is(tok::kw_reveal) && "Expected 'reveal'");
+  SourceLocation Loc = ConsumeToken();
+  if (Tok.isNot(tok::l_paren)) {
+    Diag(Tok, diag::err_contract_expected_lparen) << "reveal";
+    return StmtError();
+  }
+  SourceLocation LParenLoc = ConsumeParen();
+  ExprResult Fn = ParseAssignmentExpression();
+  if (Fn.isInvalid()) {
+    SkipUntil(tok::r_paren, StopAtSemi);
+    return StmtError();
+  }
+  if (Tok.isNot(tok::r_paren)) {
+    Diag(Tok, diag::err_contract_expected_rparen) << "reveal";
+    SkipUntil(tok::r_paren, StopAtSemi);
+    return StmtError();
+  }
+  SourceLocation RParenLoc = ConsumeParen();
+  return new (Actions.getASTContext())
+      RevealSpecStmt(Loc, LParenLoc, RParenLoc, Fn.get());
 }

@@ -12,13 +12,24 @@ if(NOT CPPVERIFY_Z3_TARGET)
 endif()
 message(STATUS "cpp-verify: Z3 backend = ${CPPVERIFY_Z3_TARGET}")
 
+option(CPPVERIFY_ENABLE_COVERAGE "Instrument clangVerify for LLVM coverage" OFF)
+if(CPPVERIFY_ENABLE_COVERAGE)
+  message(STATUS "cpp-verify: coverage instrumentation enabled")
+endif()
+
 add_clang_library(clangVerify
   IR/VExpr.cpp
   IR/VStmt.cpp
   Frontend/ASTConverter.cpp
   Transform/Passivize.cpp
+  Transform/LoopUnroll.cpp
+  Transform/SpecInline.cpp
+  Backend/VCMachine.cpp
   Backend/WPCalc.cpp
   Backend/Z3Encode.cpp
+  Backend/SpecAxioms.cpp
+  Backend/VerifyBackend.cpp
+  Backend/LeanBackend.cpp
   Driver/Verifier.cpp
   Driver/DumpIR.cpp
   Driver/CppVerifyIntegration.cpp
@@ -35,6 +46,14 @@ add_clang_library(clangVerify
 )
 
 target_link_libraries(clangVerify PRIVATE ${CPPVERIFY_Z3_TARGET})
+if(CPPVERIFY_ENABLE_COVERAGE)
+  target_compile_options(clangVerify PRIVATE
+    -fprofile-instr-generate -fcoverage-mapping)
+  if(TARGET obj.clangVerify)
+    target_compile_options(obj.clangVerify PRIVATE
+      -fprofile-instr-generate -fcoverage-mapping)
+  endif()
+endif()
 target_include_directories(clangVerify PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/Driver

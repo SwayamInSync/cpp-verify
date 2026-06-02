@@ -17,3 +17,7 @@ target_link_libraries(cpp-verify
   clangTooling
   clangDriver
   )
+
+if(CPPVERIFY_ENABLE_COVERAGE)
+  target_link_options(cpp-verify PRIVATE -fprofile-instr-generate)
+endif()

@@ -40,8 +40,8 @@ html_js_files = ["book-sidebar.js"]
 html_favicon = "_static/favicon.svg"
 
 html_theme_options = {
-    "light_logo": "logo-todo.svg",
-    "dark_logo": "logo-todo.svg",
+    "light_logo": "logo.svg",
+    "dark_logo": "logo-dark.svg",
     "source_repository": "https://github.com/SwayamInSync/cpp-verify",
     "source_branch": "main",
     "source_directory": "website/source/",
