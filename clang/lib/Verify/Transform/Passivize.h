@@ -18,6 +18,7 @@ struct PassiveProgram {
   std::vector<std::unique_ptr<VExpr>> EntryAssumes;
   std::vector<std::unique_ptr<VExpr>> ExitAsserts;
   std::string ResultVarName;
+  std::string OldHeapName;
 };
 
 class Passivizer {

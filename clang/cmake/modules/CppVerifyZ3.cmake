@@ -132,6 +132,7 @@ function(cppverify_ensure_z3)
     cppverify_z3_try_system(_target)
   endif()
 
+  # Prefer third_party/z3 when present (offline). FetchContent is fallback.
   if(NOT _target AND CPPVERIFY_VENDOR_Z3)
     cppverify_z3_try_local(_target)
   endif()

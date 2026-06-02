@@ -29,6 +29,8 @@ static cl::opt<std::string> DumpIR(
 
 namespace {
 
+static int gVerifyFailures = 0;
+
 class VerifyConsumer : public ASTConsumer {
 public:
   void HandleTranslationUnit(ASTContext &Ctx) override {
@@ -36,7 +38,8 @@ public:
       verify::VerifyOptions VOpts;
       if (DumpIR.getNumOccurrences() > 0)
         VOpts.DumpIRLayers = verify::parseDumpIRLayers(DumpIR.getValue());
-      verify::verifyTranslationUnit(Ctx, llvm::outs(), VOpts);
+      if (!verify::verifyTranslationUnit(Ctx, llvm::outs(), VOpts))
+        ++gVerifyFailures;
     }
   }
 };
@@ -74,5 +77,8 @@ int main(int argc, const char **argv) {
         {"-isysroot", SDK}, ArgumentInsertPosition::BEGIN));
 #endif
 
-  return Tool.run(newFrontendActionFactory<VerifyAction>().get());
+  int RC = Tool.run(newFrontendActionFactory<VerifyAction>().get());
+  if (RC != 0)
+    return RC;
+  return gVerifyFailures > 0 ? 1 : 0;
 }

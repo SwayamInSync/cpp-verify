@@ -123,6 +123,21 @@ void verify::dumpVExpr(const VExpr *E, llvm::raw_ostream &OS, unsigned Depth) {
     dumpVExpr(static_cast<const VConditionalExpr *>(E)->Then.get(), OS, Depth + 1);
     dumpVExpr(static_cast<const VConditionalExpr *>(E)->Else.get(), OS, Depth + 1);
     break;
+  case VExpr::Forall:
+    OS << "forall " << static_cast<const VQuantifiedExpr *>(E)->Binder << "\n";
+    dumpVExpr(static_cast<const VQuantifiedExpr *>(E)->Lo.get(), OS, Depth + 1);
+    dumpVExpr(static_cast<const VQuantifiedExpr *>(E)->Hi.get(), OS, Depth + 1);
+    dumpVExpr(static_cast<const VQuantifiedExpr *>(E)->Body.get(), OS, Depth + 1);
+    break;
+  case VExpr::Exists:
+    OS << "exists " << static_cast<const VQuantifiedExpr *>(E)->Binder << "\n";
+    dumpVExpr(static_cast<const VQuantifiedExpr *>(E)->Lo.get(), OS, Depth + 1);
+    dumpVExpr(static_cast<const VQuantifiedExpr *>(E)->Hi.get(), OS, Depth + 1);
+    dumpVExpr(static_cast<const VQuantifiedExpr *>(E)->Body.get(), OS, Depth + 1);
+    break;
+  case VExpr::HeapStore:
+    OS << "heap_store\n";
+    break;
   }
 }
 

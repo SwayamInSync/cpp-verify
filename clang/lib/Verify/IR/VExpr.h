@@ -10,6 +10,9 @@
 namespace clang {
 namespace verify {
 
+/// SSA name of the global heap array (versioned: __heap_0, __heap_1, ...).
+inline constexpr const char *VHeapName = "__heap";
+
 enum class VBinOp {
   Add, Sub, Mul, Div, Rem,
   Lt, Le, Gt, Ge, Eq, Ne,
@@ -21,7 +24,8 @@ enum class VUnaryOp { Neg, Not };
 class VExpr {
 public:
   enum Kind {
-    Literal, Var, BinOp, UnaryOp, Cast, Load, Result, Old, Conditional
+    Literal, Var, BinOp, UnaryOp, Cast, Load, Result, Old, Conditional,
+    Forall, Exists, HeapStore
   };
 
   Kind K;
@@ -76,9 +80,11 @@ public:
 
 class VLoadExpr : public VExpr {
 public:
+  std::string HeapVar;
   std::unique_ptr<VExpr> Ptr;
-  VLoadExpr(std::unique_ptr<VExpr> P, VType Ty, SourceLocation Loc)
-      : VExpr(Load, Ty, Loc), Ptr(std::move(P)) {}
+  VLoadExpr(std::unique_ptr<VExpr> P, VType Ty, SourceLocation Loc,
+            std::string HeapVar = "")
+      : VExpr(Load, Ty, Loc), HeapVar(std::move(HeapVar)), Ptr(std::move(P)) {}
 };
 
 class VResultExpr : public VExpr {
@@ -103,6 +109,52 @@ public:
       : VExpr(Conditional, Ty, Loc), Cond(std::move(C)), Then(std::move(T)),
         Else(std::move(E)) {}
 };
+
+class VQuantifiedExpr : public VExpr {
+public:
+  std::string Binder;
+  std::unique_ptr<VExpr> Lo;
+  std::unique_ptr<VExpr> Hi;
+  std::unique_ptr<VExpr> Body;
+  VQuantifiedExpr(Kind K, std::string Binder, std::unique_ptr<VExpr> Lo,
+                  std::unique_ptr<VExpr> Hi, std::unique_ptr<VExpr> Body,
+                  SourceLocation Loc)
+      : VExpr(K, VType::makeBool(), Loc), Binder(std::move(Binder)),
+        Lo(std::move(Lo)), Hi(std::move(Hi)), Body(std::move(Body)) {}
+};
+
+class VForallExpr : public VQuantifiedExpr {
+public:
+  VForallExpr(std::string Binder, std::unique_ptr<VExpr> Lo,
+              std::unique_ptr<VExpr> Hi, std::unique_ptr<VExpr> Body,
+              SourceLocation Loc)
+      : VQuantifiedExpr(Forall, std::move(Binder), std::move(Lo), std::move(Hi),
+                        std::move(Body), Loc) {}
+};
+
+class VExistsExpr : public VQuantifiedExpr {
+public:
+  VExistsExpr(std::string Binder, std::unique_ptr<VExpr> Lo,
+              std::unique_ptr<VExpr> Hi, std::unique_ptr<VExpr> Body,
+              SourceLocation Loc)
+      : VQuantifiedExpr(Exists, std::move(Binder), std::move(Lo), std::move(Hi),
+                        std::move(Body), Loc) {}
+};
+
+/// Passive heap update: HeapAfter == store(HeapBefore, Ptr, Val).
+class VHeapStoreExpr : public VExpr {
+public:
+  std::string HeapBefore;
+  std::string HeapAfter;
+  std::unique_ptr<VExpr> Ptr;
+  std::unique_ptr<VExpr> Val;
+  VHeapStoreExpr(std::string Before, std::string After, std::unique_ptr<VExpr> P,
+                 std::unique_ptr<VExpr> V, SourceLocation Loc)
+      : VExpr(HeapStore, VType::makeBool(), Loc), HeapBefore(std::move(Before)),
+        HeapAfter(std::move(After)), Ptr(std::move(P)), Val(std::move(V)) {}
+};
+
+std::unique_ptr<VExpr> cloneVExpr(const VExpr *E);
 
 } // namespace verify
 } // namespace clang

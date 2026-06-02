@@ -27,6 +27,26 @@ class Verifier {
   llvm::raw_ostream *DumpOS = nullptr;
   std::vector<VerifyDiagnostic> Diags;
 
+  void checkRecommendsImplied(const std::vector<std::unique_ptr<VFunction>> &Fns,
+                              Z3Encoder &Z3) {
+    for (const auto &Fn : Fns) {
+      if (Fn->Recommends.empty())
+        continue;
+      PassiveProgram PP;
+      for (const auto &Pre : Fn->Preconditions)
+        PP.EntryAssumes.push_back(cloneVExpr(Pre.get()));
+      for (const auto &Rec : Fn->Recommends)
+        PP.ExitAsserts.push_back(cloneVExpr(Rec.get()));
+      if (PP.ExitAsserts.empty())
+        continue;
+      Z3CheckResult R = Z3.verifyPassive(PP);
+      if (R.S == Z3CheckResult::Failed)
+        Diags.push_back({VerifyDiagnostic::Warning,
+                         "recommends not implied by preconditions in " + Fn->Name,
+                         SourceLocation()});
+    }
+  }
+
 public:
   Verifier(ASTContext &Ctx, const VerifyOptions &Opts, llvm::raw_ostream &DumpOS)
       : Ctx(Ctx), Opts(Opts), DumpOS(&DumpOS) {}
@@ -47,6 +67,8 @@ public:
     const unsigned DumpLayers = Opts.DumpIRLayers;
     const bool MultiLayerDump = llvm::popcount(DumpLayers) > 1;
     bool AllOk = true;
+    bool AnyFailed = false;
+
     for (const auto &Fn : Functions) {
       bool DumpedAny = false;
       auto dumpSep = [&]() {
@@ -72,33 +94,33 @@ public:
         dumpVC(Fn->Name, VC.get(), *DumpOS);
       }
 
-      if (!VC) {
-        AllOk = false;
-        Diags.push_back(
-            {VerifyDiagnostic::Error, "failed to build VC for " + Fn->Name,
-             SourceLocation()});
-        continue;
-      }
-      if (DumpLayers & LayerZ3) {
+      if (DumpLayers & LayerZ3 && VC) {
         dumpSep();
         dumpZ3(VC.get(), *DumpOS);
       }
-      Z3CheckResult R = Z3.checkVC(VC.get());
+
+      Z3CheckResult R = Z3.verifyPassive(PP);
       if (R.S == Z3CheckResult::Verified) {
         Diags.push_back({VerifyDiagnostic::Verified,
                          "verified: " + Fn->Name, SourceLocation()});
       } else if (R.S == Z3CheckResult::Failed) {
         AllOk = false;
+        AnyFailed = true;
         std::string Msg = "verification failed: " + Fn->Name;
         if (!R.Counterexample.empty())
           Msg += " (counterexample: " + R.Counterexample + ")";
         Diags.push_back({VerifyDiagnostic::Error, Msg, SourceLocation()});
       } else {
         AllOk = false;
+        AnyFailed = true;
         Diags.push_back({VerifyDiagnostic::Unknown,
                          "unknown: " + Fn->Name, SourceLocation()});
       }
     }
+
+    if (AnyFailed)
+      checkRecommendsImplied(Functions, Z3);
+
     return AllOk;
   }
 

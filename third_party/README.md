@@ -10,10 +10,13 @@
 To avoid `FetchContent` downloading at configure time:
 
 ```bash
-git submodule add -b z3-4.13.4 https://github.com/Z3Prover/z3.git third_party/z3
+git clone --recurse-submodules https://github.com/SwayamInSync/cpp-verify.git
+cd cpp-verify
 git submodule update --init third_party/z3
 ./setup.sh
 ```
+
+This fork renames Z3’s internal `opt` CMake component to `z3opt` so it does not clash with LLVM’s `opt` tool target.
 
 ### Use system Z3 instead (optional)
 

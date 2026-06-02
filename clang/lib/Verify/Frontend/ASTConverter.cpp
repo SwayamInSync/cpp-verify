@@ -4,12 +4,39 @@
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/Expr.h"
+#include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprContract.h"
 #include "clang/AST/Stmt.h"
 #include "clang/AST/StmtCXX.h"
 
 using namespace clang;
 using namespace verify;
+
+static bool isMutablePointerParam(const ParmVarDecl *P) {
+  QualType T = P->getType();
+  if (!T->isPointerType() && !T->isReferenceType())
+    return false;
+  if (T->isReferenceType())
+    T = T.getNonReferenceType();
+  return !T->getPointeeType().isConstQualified();
+}
+
+static bool aliasesListed(const FunctionContractInfo &FCI, const ParmVarDecl *A,
+                          const ParmVarDecl *B) {
+  for (const auto &Pair : FCI.Aliases) {
+    const auto *L = dyn_cast<DeclRefExpr>(Pair.first->IgnoreParenImpCasts());
+    const auto *R = dyn_cast<DeclRefExpr>(Pair.second->IgnoreParenImpCasts());
+    if (!L || !R)
+      continue;
+    const auto *LD = dyn_cast<ParmVarDecl>(L->getDecl());
+    const auto *RD = dyn_cast<ParmVarDecl>(R->getDecl());
+    if (!LD || !RD)
+      continue;
+    if ((LD == A && RD == B) || (LD == B && RD == A))
+      return true;
+  }
+  return false;
+}
 
 std::vector<std::unique_ptr<VFunction>>
 ASTConverter::convertTranslationUnit() {
@@ -32,6 +59,8 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   const FunctionContractInfo *FCI = Ctx.getFunctionContract(FD);
   if (!FCI)
     return nullptr;
+  if (FCI->IsSpec || FCI->IsProof)
+    return nullptr;
 
   auto Fn = std::make_unique<VFunction>();
   Fn->Name = FD->getNameAsString();
@@ -39,21 +68,51 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   Fn->IntMode = IntMode;
   Fn->ReturnType = VType::fromQualType(FD->getReturnType(), IntMode);
 
+  SmallVector<const ParmVarDecl *, 8> MutablePtrParams;
   for (const ParmVarDecl *P : FD->parameters()) {
     Fn->Params.emplace_back(P->getNameAsString(),
                             VType::fromQualType(P->getType(), IntMode));
+    if (isMutablePointerParam(P))
+      MutablePtrParams.push_back(P);
   }
 
-  InPost = true;
+  InPost = false;
   for (const Expr *E : FCI->Preconditions)
     Fn->Preconditions.push_back(convertExpr(E));
   for (const Expr *E : FCI->Postconditions)
     Fn->Postconditions.push_back(convertExpr(E));
+  for (const Expr *E : FCI->Recommends)
+    Fn->Recommends.push_back(convertExpr(E));
+  for (const Expr *E : FCI->Modifies)
+    Fn->Modifies.push_back(convertExpr(E));
+  for (const auto &Pair : FCI->Aliases) {
+    auto L = convertExpr(Pair.first);
+    auto R = convertExpr(Pair.second);
+    if (L && R)
+      Fn->Aliases.emplace_back(std::move(L), std::move(R));
+  }
   InPost = false;
+
+  // Implicit non-aliasing between distinct mutable pointer parameters.
+  for (unsigned I = 0; I < MutablePtrParams.size(); ++I) {
+    for (unsigned J = I + 1; J < MutablePtrParams.size(); ++J) {
+      if (aliasesListed(*FCI, MutablePtrParams[I], MutablePtrParams[J]))
+        continue;
+      auto A = std::make_unique<VVarExpr>(MutablePtrParams[I]->getNameAsString(),
+                                          VType::makePtr(), SourceLocation());
+      auto B = std::make_unique<VVarExpr>(MutablePtrParams[J]->getNameAsString(),
+                                          VType::makePtr(), SourceLocation());
+      auto Zero = std::make_unique<VLiteralExpr>(0, VType::makePtr(), SourceLocation());
+      auto Ne = std::make_unique<VBinOpExpr>(
+          VBinOp::Ne, std::move(A), std::move(B), VType::makeBool(), SourceLocation());
+      Fn->Preconditions.push_back(std::move(Ne));
+      (void)Zero;
+    }
+  }
 
   if (const Stmt *Body = FD->getBody()) {
     Fn->Body = convertStmt(Body);
-    if (Fn->Body.empty())
+    if (Fn->Body.empty() && Fn->Postconditions.empty())
       return nullptr;
   }
   return Fn;
@@ -88,14 +147,29 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
     return std::make_unique<VLiteralExpr>(IL->getValue().getSExtValue(), Ty,
                                           E->getExprLoc());
   }
+  if (isa<CXXNullPtrLiteralExpr>(E)) {
+    return std::make_unique<VLiteralExpr>(0, VType::makePtr(), E->getExprLoc());
+  }
   if (const auto *DRE = dyn_cast<DeclRefExpr>(E)) {
     if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
       VType Ty = VType::fromQualType(E->getType(), IntMode);
       return std::make_unique<VVarExpr>(VD->getNameAsString(), Ty,
                                         E->getExprLoc());
     }
+    if (const auto *PD = dyn_cast<ParmVarDecl>(DRE->getDecl())) {
+      VType Ty = VType::fromQualType(E->getType(), IntMode);
+      return std::make_unique<VVarExpr>(PD->getNameAsString(), Ty,
+                                        E->getExprLoc());
+    }
   }
   if (const auto *U = dyn_cast<UnaryOperator>(E)) {
+    if (U->getOpcode() == UO_Deref) {
+      auto Ptr = convertExpr(U->getSubExpr());
+      if (!Ptr)
+        return nullptr;
+      VType Ty = VType::fromQualType(E->getType(), IntMode);
+      return std::make_unique<VLoadExpr>(std::move(Ptr), Ty, E->getExprLoc());
+    }
     auto Op = convertExpr(U->getSubExpr());
     if (!Op)
       return nullptr;
@@ -134,7 +208,10 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
                                        E->getExprLoc());
   }
   if (const auto *O = dyn_cast<OldExpr>(E)) {
+    bool Saved = InPost;
+    InPost = true;
     auto Inner = convertExpr(O->getInner());
+    InPost = Saved;
     if (!Inner)
       return nullptr;
     return std::make_unique<VOldExpr>(std::move(Inner), Inner->Ty,
@@ -156,14 +233,19 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
     return std::make_unique<VResultExpr>(
         VType::fromQualType(E->getType(), IntMode), E->getExprLoc());
   }
-  if (const auto *U = dyn_cast<UnaryOperator>(E)) {
-    if (U->getOpcode() == UO_Deref) {
-      auto Ptr = convertExpr(U->getSubExpr());
-      if (!Ptr)
-        return nullptr;
-      VType Ty = VType::fromQualType(E->getType(), IntMode);
-      return std::make_unique<VLoadExpr>(std::move(Ptr), Ty, E->getExprLoc());
-    }
+  if (const auto *F = dyn_cast<ForallExpr>(E)) {
+    std::string Binder = F->getBoundVar() ? F->getBoundVar()->getNameAsString()
+                                          : "i";
+    return std::make_unique<VForallExpr>(
+        Binder, convertExpr(F->getLo()), convertExpr(F->getHi()),
+        convertExpr(F->getBody()), E->getExprLoc());
+  }
+  if (const auto *Ex = dyn_cast<ExistsExpr>(E)) {
+    std::string Binder = Ex->getBoundVar() ? Ex->getBoundVar()->getNameAsString()
+                                           : "i";
+    return std::make_unique<VExistsExpr>(
+        Binder, convertExpr(Ex->getLo()), convertExpr(Ex->getHi()),
+        convertExpr(Ex->getBody()), E->getExprLoc());
   }
   return nullptr;
 }

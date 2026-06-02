@@ -5,6 +5,7 @@
 #include "VExpr.h"
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace clang {
@@ -84,6 +85,9 @@ struct VFunction {
   std::vector<std::pair<std::string, VType>> Params;
   std::vector<std::unique_ptr<VExpr>> Preconditions;
   std::vector<std::unique_ptr<VExpr>> Postconditions;
+  std::vector<std::unique_ptr<VExpr>> Recommends;
+  std::vector<std::unique_ptr<VExpr>> Modifies;
+  std::vector<std::pair<std::unique_ptr<VExpr>, std::unique_ptr<VExpr>>> Aliases;
   std::vector<std::unique_ptr<VStmt>> Body;
 };
 
