@@ -1,13 +1,12 @@
-# CppVerify - Extending C++ to support Program Verification using SMT solvers
-
-> [!CAUTION]
-> 
-> - `10/04/2026` Lexer support is implemented. The verifier is not yet functional.
-> - `14/04/2026` AST parsing with contracts is implemented. The verifier is still not functional yet.
+# CppVerify — Clang fork for deductive C++ verification
 
 > [!NOTE]
-> - Workflows are turned off since building LLVM is too expensive to run on every push. To test changes, build the `clang` target locally and run the tests as `./build/bin/llvm-lit clang/test/Verify`.
-> - [Private Roadmap](https://github.com/SwayamInSync/cpp-verify-roadmap)
+> **Documentation:** [https://swayaminsync.github.io/cpp-verify/](https://swayaminsync.github.io/cpp-verify/) (guide + language reference)
+>
+> **Repository root:** see [`../README.md`](../README.md) for layout and quick start.
+
+> [!NOTE]
+> LLVM CI workflows are limited (full builds are expensive). Build `clang` and `cpp-verify` locally and run `./build/bin/llvm-lit clang/test/Verify`.
 
 > This is a fork of [LLVM/Clang](https://github.com/llvm/llvm-project) (pinned to
 > `llvmorg-22.1.3`) extended to **CppVerify**: a deductive verification system
@@ -87,11 +86,21 @@ ninja -C build clang -j$(nproc)
 ## Usage
 
 ```bash
-# Identifying tokens and dumping the output
-./build/bin/clang++ -cc1 -fverify-contracts -dump-tokens samples/test1.cpp
+# Verify only (Z3 backend)
+./build/bin/cpp-verify -std=c++17 file.cpp
 
-# Parsing AST with contracts and dumping the output
-./build/bin/clang++ -cc1 -fverify-contracts -ast-dump samples/test1.cpp
+# Verify + compile (parallel SMT + stripped codegen)
+./build/bin/clang++ -std=c++17 -fverify-contracts -c file.cpp -o file.o
+
+# Compile with contracts, skip SMT
+./build/bin/clang++ -std=c++17 -fverify-contracts -fno-verify -c file.cpp -o file.o
+
+# Dump IR layers: 1=vcr 2=passive 3=vc 4=z3
+./build/bin/cpp-verify --dump-ir=1,2 file.cpp
+
+# Frontend introspection
+./build/bin/clang++ -cc1 -fverify-contracts -dump-tokens file.cpp
+./build/bin/clang++ -cc1 -fverify-contracts -ast-dump file.cpp
 ```
 
 ## Architecture

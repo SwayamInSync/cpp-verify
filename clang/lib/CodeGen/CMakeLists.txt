@@ -173,3 +173,9 @@ add_clang_library(clangCodeGen
   clangLex
   clangSerialization
   )
+
+if(TARGET clangVerify)
+  target_link_libraries(clangCodeGen PRIVATE clangVerify)
+  target_include_directories(clangCodeGen PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Verify/Driver)
+endif()

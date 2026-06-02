@@ -1,4 +1,4 @@
-// Verify that all 12 KEYCONTRACT keywords are lexed correctly.
+// Verify KEYCONTRACT lexer keywords (old/result are contextual, not listed here).
 //
 // With -fverify-contracts:    each name lexes as a keyword token.
 // Without -fverify-contracts: each name lexes as an identifier (no conflict
@@ -39,8 +39,7 @@
 // KW-DAG: contract_assert 'contract_assert'
 // KW-DAG: forall 'forall'
 // KW-DAG: exists 'exists'
-// KW-DAG: old 'old'
-// KW-DAG: result 'result'
+// old/result are contextual (always lex as identifiers); see Verify/iostream test.
 
 // ID-DAG: identifier 'pre'
 // ID-DAG: identifier 'post'
@@ -62,8 +61,8 @@
 // *before* the C++ parser runs, so the parser never sees the keyword token
 // inside the parens.  The result is a pure integer literal.
 //
-// WITH_FLAG  → -fverify-contracts active → all 12 are keywords  → expect 0
-// !WITH_FLAG → flag absent               → all 12 are identifiers → expect 1
+// WITH_FLAG  → -fverify-contracts active → clause keywords are not identifiers
+// !WITH_FLAG → flag absent               → all names are identifiers
 // ==========================================================================
 
 #ifdef WITH_FLAG
@@ -77,8 +76,8 @@ static_assert(!__is_identifier(proof),           "proof must be a keyword with -
 static_assert(!__is_identifier(contract_assert), "contract_assert must be a keyword with -fverify-contracts");
 static_assert(!__is_identifier(forall),          "forall must be a keyword with -fverify-contracts");
 static_assert(!__is_identifier(exists),          "exists must be a keyword with -fverify-contracts");
-static_assert(!__is_identifier(old),             "old must be a keyword with -fverify-contracts");
-static_assert(!__is_identifier(result),          "result must be a keyword with -fverify-contracts");
+static_assert(__is_identifier(old),    "old must stay an identifier (contextual in post only)");
+static_assert(__is_identifier(result), "result must stay an identifier (contextual in post only)");
 #else
 // ==========================================================================
 // Section 3: identifier-mode checks + token source for dump-tokens runs
@@ -110,5 +109,6 @@ static_assert(__is_identifier(result),          "result must be an identifier wi
 // name lexes as its keyword token; without it, as an identifier token.
 // (dump-tokens is lex-only so no parse error occurs in either case.)
 int pre, post, invariant, decreases, ghost, spec, proof;
-int contract_assert, forall, exists, old, result;
+int contract_assert, forall, exists;
+int old, result; // always identifiers at lex time
 #endif

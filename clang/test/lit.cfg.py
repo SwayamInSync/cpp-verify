@@ -107,6 +107,7 @@ tools = [
     "clang-tblgen",
     "clang-scan-deps",
     "clang-installapi",
+    "cpp-verify",
     "opt",
     "llvm-ifs",
     "yaml2obj",

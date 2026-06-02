@@ -457,8 +457,12 @@ KEYWORD(proof                       , KEYCONTRACT)
 KEYWORD(contract_assert             , KEYCONTRACT)
 KEYWORD(forall                      , KEYCONTRACT)
 KEYWORD(exists                      , KEYCONTRACT)
-KEYWORD(old                         , KEYCONTRACT)
-KEYWORD(result                      , KEYCONTRACT)
+// old/result are contextual identifiers (postconditions only), not lexer
+// keywords — avoids clashes with libc++ (e.g. std::codecvt::result).
+KEYWORD(modifies                      , KEYCONTRACT)
+KEYWORD(aliases                       , KEYCONTRACT)
+KEYWORD(recommends                    , KEYCONTRACT)
+KEYWORD(reveal_with_fuel              , KEYCONTRACT)
 
 // ISO/IEC JTC1 SC22 WG14 N1169 Extension
 KEYWORD(_Accum                      , KEYFIXEDPOINT)

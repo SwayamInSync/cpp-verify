@@ -3008,6 +3008,15 @@ void ASTStmtReader::VisitGhostBlockStmt(GhostBlockStmt *S) {
   S->GhostLoc = readSourceLocation();
 }
 
+void ASTStmtReader::VisitRevealWithFuelStmt(RevealWithFuelStmt *S) {
+  VisitStmt(S);
+  S->SubExprs[RevealWithFuelStmt::FN] = Record.readSubExpr();
+  S->SubExprs[RevealWithFuelStmt::FUEL] = Record.readSubExpr();
+  S->Loc = readSourceLocation();
+  S->LParenLoc = readSourceLocation();
+  S->RParenLoc = readSourceLocation();
+}
+
 void ASTStmtReader::VisitForallExpr(ForallExpr *E) {
   VisitExpr(E);
   E->BoundVar = readDeclAs<VarDecl>();
@@ -4604,6 +4613,9 @@ Stmt *ASTReader::ReadStmtFromStream(ModuleFile &F) {
       break;
     case STMT_GHOST_BLOCK:
       S = new (Context) GhostBlockStmt(Empty);
+      break;
+    case STMT_REVEAL_WITH_FUEL:
+      S = new (Context) RevealWithFuelStmt(Empty);
       break;
     case EXPR_FORALL:
       S = new (Context) ForallExpr(Empty);

@@ -861,7 +861,29 @@ Parser::ParseCastExpression(CastParseKind ParseKind, bool isAddressOfOperand,
                                CorrectionBehavior, isVectorLiteral,
                                NotPrimaryExpression);
 
-  case tok::identifier:
+  case tok::identifier: {
+    if (getLangOpts().VerifyContracts) {
+      const IdentifierInfo *II = Tok.getIdentifierInfo();
+      if (InContractPostcondition) {
+        if (II->isStr("old") && NextToken().is(tok::l_paren))
+          return ParseOldExpr();
+        if (II->isStr("result")) {
+          Res = ParseResultExpr();
+          break;
+        }
+      } else if (InContractedFunction || InParsingContractExpr) {
+        if (II->isStr("result")) {
+          Diag(Tok, diag::err_result_outside_postcondition);
+          return ExprError();
+        }
+        if (II->isStr("old") && NextToken().is(tok::l_paren)) {
+          Diag(Tok, diag::err_old_outside_postcondition);
+          return ExprError();
+        }
+      }
+    }
+    goto ParseIdentifier;
+  }
   ParseIdentifier: {    // primary-expression: identifier
                         // unqualified-id: identifier
                         // constant: enumeration-constant
@@ -1092,13 +1114,6 @@ Parser::ParseCastExpression(CastParseKind ParseKind, bool isAddressOfOperand,
   case tok::kw_forall:
   case tok::kw_exists:
     return ParseQuantifierExpr();
-  case tok::kw_old:
-    return ParseOldExpr();
-  case tok::kw_result:
-    // Use break (not return) so ParsePostfixExpressionSuffix handles
-    // member access, e.g. result.x for struct return types.
-    Res = ParseResultExpr();
-    break;
 
   case tok::plusplus:      // unary-expression: '++' unary-expression [C99]
   case tok::minusminus: {  // unary-expression: '--' unary-expression [C99]
@@ -3601,7 +3616,8 @@ ExprResult Parser::ParseQuantifierExpr() {
 
 /// Parse old(expr)
 ExprResult Parser::ParseOldExpr() {
-  assert(Tok.is(tok::kw_old) && "Expected 'old'");
+  assert(Tok.is(tok::identifier) && Tok.getIdentifierInfo()->isStr("old") &&
+         "Expected 'old'");
   SourceLocation OldLoc = ConsumeToken();
 
   // 'old' is only valid in postconditions.
@@ -3636,7 +3652,8 @@ ExprResult Parser::ParseOldExpr() {
 
 /// Parse 'result' keyword
 ExprResult Parser::ParseResultExpr() {
-  assert(Tok.is(tok::kw_result) && "Expected 'result'");
+  assert(Tok.is(tok::identifier) && Tok.getIdentifierInfo()->isStr("result") &&
+         "Expected 'result'");
   SourceLocation ResultLoc = ConsumeToken();
 
   // 'result' is only valid in postconditions.

@@ -341,6 +341,7 @@ def HLSLOutArgExpr : StmtNode<Expr>;
 // CppVerify Contract Nodes.
 def ContractAssertStmt : StmtNode<Stmt>;
 def GhostBlockStmt : StmtNode<Stmt>;
+def RevealWithFuelStmt : StmtNode<Stmt>;
 def ForallExpr : StmtNode<Expr>;
 def ExistsExpr : StmtNode<Expr>;
 def OldExpr : StmtNode<Expr>;

@@ -103,6 +103,8 @@ def err_fe_dependency_file_requires_MT : Error<
     "-dependency-file requires at least one -MT or -MQ option">;
 def err_fe_invalid_plugin_name : Error<
     "unable to find plugin '%0'">;
+def err_fe_cppverify_failed : Error<
+    "cppverify: %0">;
 def err_fe_expected_compiler_job : Error<
     "unable to handle compilation, expected exactly one compiler job in '%0'">;
 def err_fe_expected_clang_command : Error<

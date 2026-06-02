@@ -1071,7 +1071,8 @@ bool Parser::isStartOfFunctionDefinition(const ParsingDeclarator &Declarator) {
   // CppVerify: contract clauses (pre/post/decreases) precede the function body.
   if (getLangOpts().VerifyContracts &&
       (Tok.is(tok::kw_pre) || Tok.is(tok::kw_post) ||
-       Tok.is(tok::kw_decreases)))
+       Tok.is(tok::kw_decreases) || Tok.is(tok::kw_modifies) ||
+       Tok.is(tok::kw_aliases) || Tok.is(tok::kw_recommends)))
     return true;
 
   return Tok.is(tok::colon) ||         // X() : Base() {} (used for ctors)
@@ -1247,6 +1248,9 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
   // CppVerify: parse contract clauses (pre/post/decreases) before the body.
   SmallVector<Expr *, 2> ContractPreconditions;
   SmallVector<Expr *, 2> ContractPostconditions;
+  SmallVector<Expr *, 4> ContractModifies;
+  SmallVector<std::pair<Expr *, Expr *>, 2> ContractAliases;
+  SmallVector<Expr *, 2> ContractRecommends;
   Expr *ContractDecreases = nullptr;
   // Detect spec/proof from DeclSpec bits set during declaration parsing.
   bool IsSpecFn = getLangOpts().VerifyContracts &&
@@ -1261,7 +1265,8 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
     std::optional<ParseScope> ContractParamScope;
     if (D.isFunctionDeclarator() &&
         (Tok.is(tok::kw_pre) || Tok.is(tok::kw_post) ||
-         Tok.is(tok::kw_decreases))) {
+         Tok.is(tok::kw_decreases) || Tok.is(tok::kw_modifies) ||
+         Tok.is(tok::kw_aliases) || Tok.is(tok::kw_recommends))) {
       ContractParamScope.emplace(this, Scope::DeclScope |
                                            Scope::FunctionDeclarationScope |
                                            Scope::FunctionPrototypeScope);
@@ -1283,64 +1288,96 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
       }
     }
 
+    llvm::SaveAndRestore<bool> ParsingContractExprRAII(InParsingContractExpr,
+                                                       true);
     while (Tok.is(tok::kw_pre) || Tok.is(tok::kw_post) ||
-           Tok.is(tok::kw_decreases)) {
+           Tok.is(tok::kw_decreases) || Tok.is(tok::kw_modifies) ||
+           Tok.is(tok::kw_aliases) || Tok.is(tok::kw_recommends)) {
       bool IsPre = Tok.is(tok::kw_pre);
       bool IsPost = Tok.is(tok::kw_post);
+      bool IsDecreases = Tok.is(tok::kw_decreases);
+      bool IsModifies = Tok.is(tok::kw_modifies);
+      bool IsAliases = Tok.is(tok::kw_aliases);
+      bool IsRecommends = Tok.is(tok::kw_recommends);
+      StringRef ClauseName = IsPre          ? "pre"
+                             : IsPost         ? "post"
+                             : IsDecreases    ? "decreases"
+                             : IsModifies     ? "modifies"
+                             : IsAliases      ? "aliases"
+                                              : "recommends";
       ConsumeToken();
 
       if (Tok.isNot(tok::l_paren)) {
-        Diag(Tok, diag::err_contract_expected_lparen)
-            << (IsPre ? "pre" : IsPost ? "post" : "decreases");
+        Diag(Tok, diag::err_contract_expected_lparen) << ClauseName;
         break;
       }
       ConsumeParen();
 
-      // For postconditions, enable 'result' and 'old' parsing.
       if (IsPost)
         InContractPostcondition = true;
 
-      ExprResult E = ParseExpression();
+      if (IsModifies) {
+        do {
+          ExprResult E = ParseAssignmentExpression();
+          if (E.isInvalid())
+            break;
+          ContractModifies.push_back(E.get());
+          if (Tok.is(tok::comma))
+            ConsumeToken();
+          else
+            break;
+        } while (Tok.isNot(tok::r_paren));
+      } else if (IsAliases) {
+        ExprResult First = ParseAssignmentExpression();
+        if (First.isInvalid() || Tok.isNot(tok::comma)) {
+          if (!First.isInvalid())
+            Diag(Tok, diag::err_contract_expected_comma) << "aliases";
+        } else {
+          ConsumeToken();
+          ExprResult Second = ParseAssignmentExpression();
+          if (!Second.isInvalid()) {
+            ContractAliases.push_back(
+                std::make_pair(First.get(), Second.get()));
+          }
+        }
+      } else {
+        ExprResult E = ParseExpression();
+        if (!E.isInvalid() && (IsPre || IsPost || IsRecommends)) {
+          E = Actions.ActOnContractCondition(E);
+          if (!E.isInvalid() && IsPre)
+            ContractPreconditions.push_back(E.get());
+          else if (IsPost)
+            ContractPostconditions.push_back(E.get());
+          else
+            ContractRecommends.push_back(E.get());
+        } else if (!E.isInvalid() && IsDecreases) {
+          if (!E.get()->getType()->isIntegerType())
+            Diag(E.get()->getExprLoc(), diag::err_contract_decreases_not_int);
+          else
+            ContractDecreases = E.get();
+        }
+      }
 
       if (IsPost)
         InContractPostcondition = false;
 
-      if (E.isInvalid()) {
-        SkipUntil(tok::r_paren, StopAtSemi);
-        continue;
-      }
-
-      // Pre/post conditions must be bool; decreases is an integer measure.
-      if (IsPre || IsPost) {
-        E = Actions.ActOnContractCondition(E);
-        if (E.isInvalid()) {
-          SkipUntil(tok::r_paren, StopAtSemi);
-          continue;
-        }
-      } else {
-        // decreases: validate integer type.
-        if (!E.get()->getType()->isIntegerType()) {
-          Diag(E.get()->getExprLoc(),
-               diag::err_contract_decreases_not_int);
-          SkipUntil(tok::r_paren, StopAtSemi);
-          continue;
+      if (!Tok.is(tok::r_paren)) {
+        unsigned Depth = 0;
+        while (Tok.isNot(tok::eof)) {
+          if (Tok.is(tok::l_paren))
+            ++Depth;
+          else if (Tok.is(tok::r_paren)) {
+            if (Depth == 0)
+              break;
+            --Depth;
+          }
+          ConsumeToken();
         }
       }
-
-      if (Tok.isNot(tok::r_paren)) {
-        Diag(Tok, diag::err_contract_expected_rparen)
-            << (IsPre ? "pre" : IsPost ? "post" : "decreases");
-        SkipUntil(tok::r_paren, StopAtSemi);
-        continue;
-      }
-      ConsumeParen();
-
-      if (IsPre)
-        ContractPreconditions.push_back(E.get());
-      else if (IsPost)
-        ContractPostconditions.push_back(E.get());
+      if (Tok.is(tok::r_paren))
+        ConsumeParen();
       else
-        ContractDecreases = E.get();
+        Diag(Tok, diag::err_contract_expected_rparen) << ClauseName;
     }
   }
 
@@ -1498,13 +1535,17 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
 
   // CppVerify: store contract clauses on the FunctionDecl.
   if (Res && (!ContractPreconditions.empty() ||
-              !ContractPostconditions.empty() || ContractDecreases ||
-              IsSpecFn || IsProofFn)) {
+              !ContractPostconditions.empty() || !ContractModifies.empty() ||
+              !ContractAliases.empty() || !ContractRecommends.empty() ||
+              ContractDecreases || IsSpecFn || IsProofFn)) {
     if (auto *FD = dyn_cast<FunctionDecl>(Res)) {
       FunctionContractInfo &FCI =
           Actions.getASTContext().getOrCreateFunctionContract(FD);
       FCI.Preconditions = std::move(ContractPreconditions);
       FCI.Postconditions = std::move(ContractPostconditions);
+      FCI.Modifies = std::move(ContractModifies);
+      FCI.Aliases = std::move(ContractAliases);
+      FCI.Recommends = std::move(ContractRecommends);
       FCI.Decreases = ContractDecreases;
       FCI.IsSpec = IsSpecFn;
       FCI.IsProof = IsProofFn;
@@ -1567,6 +1608,12 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
   } else
     Actions.ActOnDefaultCtorInitializers(Res);
 
+  const bool HasContractClauses =
+      getLangOpts().VerifyContracts && Res &&
+      Actions.getASTContext().getFunctionContract(
+          cast<FunctionDecl>(Res)) != nullptr;
+  llvm::SaveAndRestore<bool> InContractFnRAII(InContractedFunction,
+                                               HasContractClauses);
   return ParseFunctionStatementBody(Res, BodyScope);
 }
 

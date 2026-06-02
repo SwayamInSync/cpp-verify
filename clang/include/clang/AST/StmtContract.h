@@ -7,7 +7,7 @@
 //===----------------------------------------------------------------------===//
 //
 // This file defines AST nodes for CppVerify contract statements:
-//   ContractAssertStmt, GhostBlockStmt
+//   ContractAssertStmt, GhostBlockStmt, RevealWithFuelStmt
 //
 //===----------------------------------------------------------------------===//
 
@@ -90,6 +90,52 @@ public:
   child_range children() { return child_range(&Body, &Body + 1); }
   const_child_range children() const {
     return const_child_range(&Body, &Body + 1);
+  }
+};
+
+/// RevealWithFuelStmt - ghost { reveal_with_fuel(fn, depth); }
+/// Locally raises Z3 unfolding depth for a recursive spec function.
+class RevealWithFuelStmt : public Stmt {
+  friend class ASTStmtReader;
+  friend class ASTStmtWriter;
+  SourceLocation Loc;
+  SourceLocation LParenLoc;
+  SourceLocation RParenLoc;
+  enum { FN, FUEL, NUM_SUBEXPRS };
+  Stmt *SubExprs[NUM_SUBEXPRS];
+
+public:
+  RevealWithFuelStmt(SourceLocation Loc, SourceLocation LParenLoc,
+                     SourceLocation RParenLoc, Expr *Function, Expr *Fuel)
+      : Stmt(RevealWithFuelStmtClass), Loc(Loc), LParenLoc(LParenLoc),
+        RParenLoc(RParenLoc) {
+    SubExprs[FN] = Function;
+    SubExprs[FUEL] = Fuel;
+  }
+
+  explicit RevealWithFuelStmt(EmptyShell Empty)
+      : Stmt(RevealWithFuelStmtClass) {
+    SubExprs[FN] = nullptr;
+    SubExprs[FUEL] = nullptr;
+  }
+
+  Expr *getFunction() const { return cast<Expr>(SubExprs[FN]); }
+  Expr *getFuel() const { return cast<Expr>(SubExprs[FUEL]); }
+
+  SourceLocation getLParenLoc() const { return LParenLoc; }
+
+  SourceLocation getBeginLoc() const LLVM_READONLY { return Loc; }
+  SourceLocation getEndLoc() const LLVM_READONLY { return RParenLoc; }
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == RevealWithFuelStmtClass;
+  }
+
+  child_range children() {
+    return child_range(&SubExprs[0], &SubExprs[NUM_SUBEXPRS]);
+  }
+  const_child_range children() const {
+    return const_child_range(&SubExprs[0], &SubExprs[NUM_SUBEXPRS]);
   }
 };
 

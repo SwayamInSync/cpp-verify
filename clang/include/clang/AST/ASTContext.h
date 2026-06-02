@@ -99,6 +99,9 @@ class BuiltinTemplateDecl;
 struct FunctionContractInfo {
   SmallVector<Expr *, 2> Preconditions;
   SmallVector<Expr *, 2> Postconditions;
+  SmallVector<Expr *, 4> Modifies;
+  SmallVector<std::pair<Expr *, Expr *>, 2> Aliases;
+  SmallVector<Expr *, 2> Recommends;
   Expr *Decreases = nullptr;
   bool IsSpec = false;
   bool IsProof = false;

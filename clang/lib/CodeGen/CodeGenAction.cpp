@@ -8,6 +8,9 @@
 
 #include "clang/CodeGen/CodeGenAction.h"
 #include "BackendConsumer.h"
+#include "CppVerifyIntegration.h"
+#include <future>
+#include <optional>
 #include "CGCall.h"
 #include "CodeGenModule.h"
 #include "CoverageMappingGen.h"
@@ -229,6 +232,10 @@ bool BackendConsumer::LinkInModules(llvm::Module *M) {
 }
 
 void BackendConsumer::HandleTranslationUnit(ASTContext &C) {
+  std::optional<std::future<verify::CppVerifyAsyncResult>> VerifyFuture;
+  if (verify::shouldRunCppVerify(CI))
+    VerifyFuture = verify::startCppVerifyAsync(C);
+
   {
     llvm::TimeTraceScope TimeScope("Frontend");
     PrettyStackTraceString CrashInfo("Per-file LLVM IR generation");
@@ -240,6 +247,9 @@ void BackendConsumer::HandleTranslationUnit(ASTContext &C) {
     if (TimerIsEnabled && !--LLVMIRGenerationRefCount)
       LLVMIRGeneration.yieldTo(CI.getFrontendTimer());
   }
+
+  if (VerifyFuture)
+    verify::finishCppVerify(CI, std::move(*VerifyFuture));
 
   // Silently ignore if we weren't initialized for some reason.
   if (!getModule())

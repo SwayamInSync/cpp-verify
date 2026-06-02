@@ -108,6 +108,7 @@ void CodeGenFunction::EmitStmt(const Stmt *S, ArrayRef<const Attr *> Attrs) {
   // CppVerify: ghost/contract nodes emit nothing during codegen.
   case Stmt::GhostBlockStmtClass:
   case Stmt::ContractAssertStmtClass:
+  case Stmt::RevealWithFuelStmtClass:
     break;
 
   case Stmt::NullStmtClass:

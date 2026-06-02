@@ -613,6 +613,14 @@ void StmtPrinter::VisitGhostBlockStmt(GhostBlockStmt *Node) {
   PrintStmt(Node->getBody());
 }
 
+void StmtPrinter::VisitRevealWithFuelStmt(RevealWithFuelStmt *Node) {
+  Indent() << "reveal_with_fuel(";
+  PrintExpr(Node->getFunction());
+  OS << ", ";
+  PrintExpr(Node->getFuel());
+  OS << ");\n";
+}
+
 void StmtPrinter::VisitForallExpr(ForallExpr *Node) {
   OS << "forall(" << Node->getBoundVar()->getName() << ", ";
   PrintExpr(Node->getLo());

@@ -404,6 +404,10 @@ void StmtProfiler::VisitGhostBlockStmt(const GhostBlockStmt *S) {
   VisitStmt(S);
 }
 
+void StmtProfiler::VisitRevealWithFuelStmt(const RevealWithFuelStmt *S) {
+  VisitStmt(S);
+}
+
 void StmtProfiler::VisitForallExpr(const ForallExpr *E) {
   VisitExpr(E);
 }

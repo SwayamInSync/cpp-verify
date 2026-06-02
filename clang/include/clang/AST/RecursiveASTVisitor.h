@@ -2603,6 +2603,7 @@ DEF_TRAVERSE_STMT(ContractAssertStmt, {})
 DEF_TRAVERSE_STMT(ExistsExpr, { TRY_TO(TraverseDecl(S->getBoundVar())); })
 DEF_TRAVERSE_STMT(ForallExpr, { TRY_TO(TraverseDecl(S->getBoundVar())); })
 DEF_TRAVERSE_STMT(GhostBlockStmt, {})
+DEF_TRAVERSE_STMT(RevealWithFuelStmt, {})
 DEF_TRAVERSE_STMT(OldExpr, {})
 DEF_TRAVERSE_STMT(ResultExpr, {})
 

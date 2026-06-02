@@ -6367,6 +6367,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
 
   Args.addOptInFlag(CmdArgs, options::OPT_fverify_contracts,
                     options::OPT_fno_verify_contracts);
+  Args.addOptOutFlag(CmdArgs, options::OPT_fverify, options::OPT_fno_verify);
 
   if (Arg *A = Args.getLastArg(options::OPT_fcxx_abi_EQ))
     A->render(Args, CmdArgs);

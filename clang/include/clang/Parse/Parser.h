@@ -7463,6 +7463,9 @@ public:
   /// Parse contract_assert(expr);
   StmtResult ParseContractAssert();
 
+  /// Parse reveal_with_fuel(fn, depth);
+  StmtResult ParseRevealWithFuel();
+
   /// Parse forall(binder, lo, hi, body) or exists(binder, lo, hi, body).
   ExprResult ParseQuantifierExpr();
 
@@ -7474,6 +7477,10 @@ public:
 
   /// True when we are currently parsing a postcondition expression.
   bool InContractPostcondition = false;
+  /// True while parsing the body of a function that has contract clauses.
+  bool InContractedFunction = false;
+  /// True while parsing pre/post/decreases/recommends or loop invariant/decreases.
+  bool InParsingContractExpr = false;
 
   /// The return type of the function whose contracts we are currently
   /// parsing, extracted from the DeclSpec before the FunctionDecl exists.

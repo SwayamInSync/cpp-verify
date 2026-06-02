@@ -2373,6 +2373,14 @@ defm verify_contracts : BoolFOption<"verify-contracts",
   PosFlag<SetTrue, [], [ClangOption, CC1Option],
           "Enable CppVerify contract syntax (pre/post/invariant/decreases/ghost/spec/proof)">,
   NegFlag<SetFalse, [], [ClangOption], "Disable CppVerify contract syntax">>;
+
+// CppVerify SMT backend (on by default when -fverify-contracts is used).
+defm verify : BoolFOption<"verify",
+  FrontendOpts<"RunCppVerify">, DefaultTrue,
+  PosFlag<SetTrue, [], [ClangOption, CC1Option],
+          "Run CppVerify SMT verification alongside compilation">,
+  NegFlag<SetFalse, [], [ClangOption, CC1Option],
+          "Skip CppVerify SMT verification (contract syntax and codegen only)">>;
 def cxx_static_destructors_EQ : Joined<["-"], "fc++-static-destructors=">, Group<f_Group>,
   HelpText<"Controls which variables C++ static destructors are registered for">,
   Values<"all,thread-local,none">,

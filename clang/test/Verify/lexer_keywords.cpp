@@ -1,8 +1,8 @@
 // RUN: %clang_cc1 -std=c++17 -fverify-contracts -dump-tokens %s 2>&1 | FileCheck %s
 // RUN: %clang_cc1 -std=c++17 -dump-tokens %s 2>&1 | FileCheck -check-prefix=NOCONTRACT %s
 //
-// Exhaustive lexer test: verify that all 12 contract keywords are tokenized
-// as keywords when -fverify-contracts is enabled, and as identifiers without it.
+// Lexer test: clause keywords with -fverify-contracts; old/result are always
+// identifiers (contextual in post/body/contract expressions only).
 
 // With -fverify-contracts, each word is a keyword token:
 //   dump-tokens format: <token-kind> '<spelling>' ...
@@ -16,8 +16,8 @@
 // CHECK-NEXT: contract_assert 'contract_assert'
 // CHECK-NEXT: forall 'forall'
 // CHECK-NEXT: exists 'exists'
-// CHECK-NEXT: old 'old'
-// CHECK-NEXT: result 'result'
+// CHECK-NEXT: identifier 'old'
+// CHECK-NEXT: identifier 'result'
 
 // Without -fverify-contracts, all become plain identifiers:
 // NOCONTRACT:      identifier 'pre'

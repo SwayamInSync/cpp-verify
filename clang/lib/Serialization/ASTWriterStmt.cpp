@@ -3110,6 +3110,16 @@ void ASTStmtWriter::VisitGhostBlockStmt(GhostBlockStmt *S) {
   Code = serialization::STMT_GHOST_BLOCK;
 }
 
+void ASTStmtWriter::VisitRevealWithFuelStmt(RevealWithFuelStmt *S) {
+  VisitStmt(S);
+  Record.AddStmt(S->getFunction());
+  Record.AddStmt(S->getFuel());
+  Record.AddSourceLocation(S->getBeginLoc());
+  Record.AddSourceLocation(S->LParenLoc);
+  Record.AddSourceLocation(S->getEndLoc());
+  Code = serialization::STMT_REVEAL_WITH_FUEL;
+}
+
 void ASTStmtWriter::VisitForallExpr(ForallExpr *E) {
   VisitExpr(E);
   Record.AddDeclRef(E->getBoundVar());

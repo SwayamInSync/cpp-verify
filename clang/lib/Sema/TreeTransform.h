@@ -17933,6 +17933,23 @@ StmtResult TreeTransform<Derived>::TransformGhostBlockStmt(GhostBlockStmt *S) {
 }
 
 template <typename Derived>
+StmtResult TreeTransform<Derived>::TransformRevealWithFuelStmt(
+    RevealWithFuelStmt *S) {
+  ExprResult Fn = getDerived().TransformExpr(S->getFunction());
+  if (Fn.isInvalid())
+    return StmtError();
+  ExprResult Fuel = getDerived().TransformExpr(S->getFuel());
+  if (Fuel.isInvalid())
+    return StmtError();
+  if (!getDerived().AlwaysRebuild() && Fn.get() == S->getFunction() &&
+      Fuel.get() == S->getFuel())
+    return S;
+  return new (SemaRef.Context)
+      RevealWithFuelStmt(S->getBeginLoc(), S->getLParenLoc(), S->getEndLoc(),
+                         Fn.getAs<Expr>(), Fuel.getAs<Expr>());
+}
+
+template <typename Derived>
 ExprResult TreeTransform<Derived>::TransformForallExpr(ForallExpr *E) {
   ExprResult Lo = getDerived().TransformExpr(E->getLo());
   if (Lo.isInvalid()) return ExprError();

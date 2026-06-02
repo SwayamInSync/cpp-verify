@@ -292,6 +292,10 @@ Retry:
     Res = ParseContractAssert();
     SemiError = "contract_assert";
     break;
+  case tok::kw_reveal_with_fuel:
+    Res = ParseRevealWithFuel();
+    SemiError = "reveal_with_fuel";
+    break;
 
   case tok::kw_while:               // C99 6.8.5.1: while-statement
     return ParseWhileStatement(TrailingElseLoc, PrecedingLabel);
@@ -2755,6 +2759,7 @@ void Parser::ParseMicrosoftIfExistsStatement(StmtVector &Stmts) {
 /// These appear after the while/for condition ')' and before the body '{'.
 void Parser::ParseLoopContractClauses(SmallVectorImpl<Expr *> &Invariants,
                                       Expr *&Decreases) {
+  llvm::SaveAndRestore<bool> ParsingContractExprRAII(InParsingContractExpr, true);
   while (Tok.is(tok::kw_invariant) || Tok.is(tok::kw_decreases)) {
     bool IsInvariant = Tok.is(tok::kw_invariant);
     ConsumeToken();
@@ -2853,4 +2858,41 @@ StmtResult Parser::ParseContractAssert() {
 
   return new (Actions.getASTContext())
       ContractAssertStmt(CALoc, LParenLoc, RParenLoc, Cond.get());
+}
+
+/// Parse reveal_with_fuel(fn, depth);
+StmtResult Parser::ParseRevealWithFuel() {
+  assert(Tok.is(tok::kw_reveal_with_fuel) && "Expected 'reveal_with_fuel'");
+  SourceLocation Loc = ConsumeToken();
+
+  if (Tok.isNot(tok::l_paren)) {
+    Diag(Tok, diag::err_contract_expected_lparen) << "reveal_with_fuel";
+    return StmtError();
+  }
+  SourceLocation LParenLoc = ConsumeParen();
+
+  ExprResult Fn = ParseAssignmentExpression();
+  if (Fn.isInvalid() || Tok.isNot(tok::comma)) {
+    if (!Fn.isInvalid())
+      Diag(Tok, diag::err_contract_expected_comma) << "reveal_with_fuel";
+    SkipUntil(tok::r_paren, StopAtSemi);
+    return StmtError();
+  }
+  ConsumeToken();
+
+  ExprResult Fuel = ParseExpression();
+  if (Fuel.isInvalid()) {
+    SkipUntil(tok::r_paren, StopAtSemi);
+    return StmtError();
+  }
+
+  if (Tok.isNot(tok::r_paren)) {
+    Diag(Tok, diag::err_contract_expected_rparen) << "reveal_with_fuel";
+    SkipUntil(tok::r_paren, StopAtSemi);
+    return StmtError();
+  }
+  SourceLocation RParenLoc = ConsumeParen();
+
+  return new (Actions.getASTContext())
+      RevealWithFuelStmt(Loc, LParenLoc, RParenLoc, Fn.get(), Fuel.get());
 }

@@ -193,6 +193,14 @@ void ASTDumper::VisitFunctionDecl(const FunctionDecl *D) {
     Visit(E, "pre");
   for (const Expr *E : FCI->Postconditions)
     Visit(E, "post");
+  for (const Expr *E : FCI->Modifies)
+    Visit(E, "modifies");
+  for (const auto &Pair : FCI->Aliases) {
+    Visit(Pair.first, "aliases");
+    Visit(Pair.second, "aliases");
+  }
+  for (const Expr *E : FCI->Recommends)
+    Visit(E, "recommends");
   if (FCI->Decreases)
     Visit(FCI->Decreases, "decreases");
 }

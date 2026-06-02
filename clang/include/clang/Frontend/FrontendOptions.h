@@ -410,6 +410,10 @@ public:
   LLVM_PREFERRED_TYPE(bool)
   unsigned GenReducedBMI : 1;
 
+  /// Run CppVerify SMT verification when -fverify-contracts is enabled.
+  LLVM_PREFERRED_TYPE(bool)
+  unsigned RunCppVerify : 1;
+
   /// Use Clang IR pipeline to emit code
   LLVM_PREFERRED_TYPE(bool)
   unsigned UseClangIRPipeline : 1;
@@ -550,7 +554,7 @@ public:
         ModulesShareFileManager(true), EmitSymbolGraph(false),
         EmitExtensionSymbolGraphs(false),
         EmitSymbolGraphSymbolLabelsForTesting(false),
-        EmitPrettySymbolGraphs(false), GenReducedBMI(false),
+        EmitPrettySymbolGraphs(false), GenReducedBMI(false), RunCppVerify(true),
         UseClangIRPipeline(false), ClangIRDisablePasses(false),
         ClangIRDisableCIRVerifier(false), TimeTraceGranularity(500),
         TimeTraceVerbose(false) {}

@@ -2069,6 +2069,7 @@ enum StmtCode {
   // CppVerify contract constructs
   STMT_CONTRACT_ASSERT,
   STMT_GHOST_BLOCK,
+  STMT_REVEAL_WITH_FUEL,
   EXPR_FORALL,
   EXPR_EXISTS,
   EXPR_OLD,
