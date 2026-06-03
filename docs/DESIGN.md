@@ -319,6 +319,17 @@ This is purely an optimization — correctness is identical to eager injection. 
 - Parser: implemented in Weeks 4.5 (after Weeks 3-4 core IR).
 - New keyword `type_invariant` in `TokenKinds.def` under KEYCONTRACT.
 - `TypeContractInfo` side table on `RecordDecl` in `ASTContext`.
+- The clause must appear **after** the fields it names (it is parsed eagerly;
+  late parsing is future work).
+- Implemented: `assume(invariant)` at the first use of an invariant-named field
+  for by-value and reference (`C`, `C&`, `const C&`) parameters. Because the
+  invariant is injected as a precondition, callers must *establish* it at call
+  sites (the modular precondition check), which is sound.
+- Not yet implemented: the `assert(invariant)` after field assignments and at
+  returns that construct an invariant-bearing value. These require verifying
+  struct construction/mutation/return, which the backend does not model yet
+  (such functions currently report "no verifiable functions"). Pointer-to-record
+  parameters are also not injected (their field access lowers to a heap Load).
 
 ## View Functions (idiomatic spec abstraction)
 
