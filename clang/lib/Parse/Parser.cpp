@@ -1371,7 +1371,9 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
               break;
             --Depth;
           }
-          ConsumeToken();
+          // ConsumeAnyToken: the recovery stream may contain annotation/special
+          // tokens, which ConsumeToken() asserts against.
+          ConsumeAnyToken();
         }
       }
       if (Tok.is(tok::r_paren))
