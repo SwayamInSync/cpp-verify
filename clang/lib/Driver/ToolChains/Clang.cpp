@@ -6365,9 +6365,18 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   Args.addOptInFlag(CmdArgs, options::OPT_ffixed_point,
                     options::OPT_fno_fixed_point);
 
+  // CppVerify contract language (last-wins between -f/-fno-verify-contracts).
   Args.addOptInFlag(CmdArgs, options::OPT_fverify_contracts,
                     options::OPT_fno_verify_contracts);
-  Args.addOptOutFlag(CmdArgs, options::OPT_fverify, options::OPT_fno_verify);
+  // -fno-verify skips the SMT step. It is meaningless without the contract
+  // language, so when neither -f/-fno-verify-contracts was given it implies
+  // -fverify-contracts, yielding a syntax/semantics-only "light check".
+  if (Args.hasArg(options::OPT_fno_verify)) {
+    CmdArgs.push_back("-fno-verify");
+    if (!Args.hasArg(options::OPT_fverify_contracts) &&
+        !Args.hasArg(options::OPT_fno_verify_contracts))
+      CmdArgs.push_back("-fverify-contracts");
+  }
 
   if (Arg *A = Args.getLastArg(options::OPT_fcxx_abi_EQ))
     A->render(Args, CmdArgs);
