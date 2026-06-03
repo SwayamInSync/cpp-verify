@@ -467,6 +467,10 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
     return std::make_unique<VLiteralExpr>(IL->getValue().getSExtValue(), Ty,
                                           E->getExprLoc());
   }
+  if (const auto *BL = dyn_cast<CXXBoolLiteralExpr>(E)) {
+    return std::make_unique<VLiteralExpr>(BL->getValue() ? 1 : 0,
+                                          VType::makeBool(), E->getExprLoc());
+  }
   if (isa<CXXNullPtrLiteralExpr>(E)) {
     return std::make_unique<VLiteralExpr>(0, VType::makePtr(), E->getExprLoc());
   }
