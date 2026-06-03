@@ -2861,7 +2861,6 @@ private:
     /// nested classes that contain pieces whose parsing will be delayed until
     /// the top-level class is fully defined.
     LateParsedDeclarationsContainer LateParsedDeclarations;
-
   };
 
   /// The stack of classes that is currently being

@@ -140,37 +140,6 @@ static bool exprReferencesSpecCall(const VExpr *E, const std::string &Name) {
   return false;
 }
 
-static bool vexprHasSpecCall(const VExpr *E) {
-  if (!E)
-    return false;
-  if (E->K == VExpr::SpecCall)
-    return true;
-  if (E->K == VExpr::BinOp) {
-    const auto *B = static_cast<const VBinOpExpr *>(E);
-    return vexprHasSpecCall(B->Lhs.get()) || vexprHasSpecCall(B->Rhs.get());
-  }
-  if (E->K == VExpr::UnaryOp)
-    return vexprHasSpecCall(static_cast<const VUnaryOpExpr *>(E)->Operand.get());
-  if (E->K == VExpr::Old)
-    return vexprHasSpecCall(static_cast<const VOldExpr *>(E)->Inner.get());
-  if (E->K == VExpr::Conditional) {
-    const auto *C = static_cast<const VConditionalExpr *>(E);
-    return vexprHasSpecCall(C->Cond.get()) || vexprHasSpecCall(C->Then.get()) ||
-           vexprHasSpecCall(C->Else.get());
-  }
-  return false;
-}
-
-static bool fnReferencesSpec(const VFunction &Fn) {
-  for (const auto &P : Fn.Preconditions)
-    if (vexprHasSpecCall(P.get()))
-      return true;
-  for (const auto &P : Fn.Postconditions)
-    if (vexprHasSpecCall(P.get()))
-      return true;
-  return false;
-}
-
 static const RecordDecl *getRecordFromType(QualType T) {
   // See through references: a `C&`/`const C&` parameter's field access lowers to
   // the same "param.field" variable as a by-value `C`, so type_invariant
@@ -614,7 +583,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
       auto Ptr = std::make_unique<VLoadExpr>(std::move(Base),
                                              VType::fromQualType(M->getBase()->getType(), IntMode),
                                              E->getExprLoc());
-      if (const auto *FD = dyn_cast<FieldDecl>(M->getMemberDecl())) {
+      if (isa<FieldDecl>(M->getMemberDecl())) {
         VType Ty = VType::fromQualType(E->getType(), IntMode);
         return std::make_unique<VLoadExpr>(std::move(Ptr), Ty, E->getExprLoc());
       }

@@ -2634,10 +2634,6 @@ Parser::DeclGroupPtrTy Parser::ParseCXXClassMemberDeclaration(
     ParsedTemplateInfo &TemplateInfo, ParsingDeclRAIIObject *TemplateDiags) {
   assert(getLangOpts().CPlusPlus &&
          "ParseCXXClassMemberDeclaration should only be called in C++ mode");
-  if (!ClassStack.empty() && Tok.is(tok::kw_type_invariant)) {
-    ParseTypeInvariant(ClassStack.top()->TagOrTemplate);
-    return nullptr;
-  }
   if (Tok.is(tok::at)) {
     if (getLangOpts().ObjC && NextToken().isObjCAtKeyword(tok::objc_defs))
       Diag(Tok, diag::err_at_defs_cxx);
