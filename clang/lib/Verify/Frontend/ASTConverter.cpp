@@ -91,11 +91,13 @@ bool ASTConverter::calleeIsProof(const FunctionDecl *FD) const {
 
 static bool isMutablePointerParam(const ParmVarDecl *P) {
   QualType T = P->getType();
-  if (!T->isPointerType() && !T->isReferenceType())
-    return false;
+  // A reference's referent is not a pointer, so getPointeeType() would be null;
+  // check the referent's const-ness directly. Only pointers have a pointee.
   if (T->isReferenceType())
-    T = T.getNonReferenceType();
-  return !T->getPointeeType().isConstQualified();
+    return !T.getNonReferenceType().isConstQualified();
+  if (T->isPointerType())
+    return !T->getPointeeType().isConstQualified();
+  return false;
 }
 
 static bool aliasesListed(const FunctionContractInfo &FCI, const ParmVarDecl *A,
@@ -170,7 +172,11 @@ static bool fnReferencesSpec(const VFunction &Fn) {
 }
 
 static const RecordDecl *getRecordFromType(QualType T) {
-  T = T.getUnqualifiedType();
+  // See through references: a `C&`/`const C&` parameter's field access lowers to
+  // the same "param.field" variable as a by-value `C`, so type_invariant
+  // injection applies. Pointers are intentionally excluded: `p->field` lowers to
+  // a heap Load, which the "param.field" substitution does not model.
+  T = T.getNonReferenceType().getUnqualifiedType();
   if (const auto *RT = T->getAs<RecordType>())
     return RT->getDecl();
   return nullptr;
@@ -587,6 +593,20 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
                                               std::move(F), Ty, E->getExprLoc());
   }
   if (const auto *M = dyn_cast<MemberExpr>(E)) {
+    // type_invariant lowering: an unqualified field in an invariant is rewritten
+    // by Sema to this->field, which is an *arrow* MemberExpr (since 'this' is a
+    // pointer). When FieldSubstPrefix is active (invariant injection), map it to
+    // the substituted "param.field" variable before any pointer/Load handling.
+    if (const auto *FD = dyn_cast<FieldDecl>(M->getMemberDecl())) {
+      if (isa<CXXThisExpr>(M->getBase()->IgnoreParenImpCasts())) {
+        auto It = FieldSubstPrefix.find(FD->getNameAsString());
+        if (It != FieldSubstPrefix.end()) {
+          VType Ty = VType::fromQualType(E->getType(), IntMode);
+          return std::make_unique<VVarExpr>(It->second + FD->getNameAsString(),
+                                            Ty, E->getExprLoc());
+        }
+      }
+    }
     if (M->isArrow()) {
       auto Base = convertExpr(M->getBase());
       if (!Base)
@@ -597,17 +617,6 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
       if (const auto *FD = dyn_cast<FieldDecl>(M->getMemberDecl())) {
         VType Ty = VType::fromQualType(E->getType(), IntMode);
         return std::make_unique<VLoadExpr>(std::move(Ptr), Ty, E->getExprLoc());
-      }
-    }
-    if (const auto *FD = dyn_cast<FieldDecl>(M->getMemberDecl())) {
-      const Expr *Base = M->getBase()->IgnoreParenImpCasts();
-      if (isa<CXXThisExpr>(Base)) {
-        auto It = FieldSubstPrefix.find(FD->getNameAsString());
-        if (It != FieldSubstPrefix.end()) {
-          VType Ty = VType::fromQualType(E->getType(), IntMode);
-          return std::make_unique<VVarExpr>(It->second + FD->getNameAsString(), Ty,
-                                            E->getExprLoc());
-        }
       }
     }
     if (const auto *DRE = dyn_cast<DeclRefExpr>(M->getBase()->IgnoreParenImpCasts())) {
