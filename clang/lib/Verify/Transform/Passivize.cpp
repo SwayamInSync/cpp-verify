@@ -253,6 +253,31 @@ class PassivizerImpl {
     return N + "_" + std::to_string(++Versions[N]);
   }
 
+  /// Path condition of the branches currently being passivized.
+  std::vector<std::unique_ptr<VExpr>> GuardStack;
+
+  /// Wrap an assertion condition with the current path condition, so that an
+  /// assert emitted inside conditional branches (e.g. a callee precondition for
+  /// a call under `if (c)`) only needs to hold when that branch is taken:
+  /// returns `(g1 && g2 && ...) ? Cond : true`.
+  std::unique_ptr<VExpr> guardCond(std::unique_ptr<VExpr> Cond,
+                                   SourceLocation Loc) {
+    if (GuardStack.empty())
+      return Cond;
+    std::unique_ptr<VExpr> Conj;
+    for (const auto &G : GuardStack) {
+      auto GC = cloneVExpr(G.get());
+      Conj = Conj ? std::make_unique<VBinOpExpr>(VBinOp::And, std::move(Conj),
+                                                 std::move(GC), VType::makeBool(),
+                                                 Loc)
+                  : std::move(GC);
+    }
+    auto True = std::make_unique<VLiteralExpr>(1, VType::makeBool(), Loc);
+    return std::make_unique<VConditionalExpr>(std::move(Conj), std::move(Cond),
+                                              std::move(True), VType::makeBool(),
+                                              Loc);
+  }
+
 public:
   PassivizerImpl(const VFunction &Fn, FunctionMap FnMap)
       : Fn(Fn), FnMap(std::move(FnMap)) {}
@@ -336,7 +361,7 @@ public:
     for (const auto &Pre : Callee->Preconditions) {
       auto PS = std::make_unique<PassiveStmt>();
       PS->K = PassiveStmt::Assert;
-      PS->Cond = substParams(Pre.get(), ParamMap, Ctx);
+      PS->Cond = guardCond(substParams(Pre.get(), ParamMap, Ctx), C.Loc);
       P.Stmts.push_back(std::move(PS));
     }
     if (!Callee->Modifies.empty())
@@ -395,10 +420,15 @@ public:
       auto Cond = cloneExpr(I.Cond.get(), Ctx);
       auto ThenRenames = Renames;
       auto ElseRenames = Renames;
+      GuardStack.push_back(cloneVExpr(Cond.get()));
       for (const auto &TS : I.Then)
         processStmt(*TS, P, ThenRenames);
+      GuardStack.pop_back();
+      GuardStack.push_back(std::make_unique<VUnaryOpExpr>(
+          VUnaryOp::Not, cloneVExpr(Cond.get()), VType::makeBool(), I.Loc));
       for (const auto &ES : I.Else)
         processStmt(*ES, P, ElseRenames);
+      GuardStack.pop_back();
       std::set<std::string> Changed;
       for (const auto &[Name, Ver] : ThenRenames) {
         if (Renames.count(Name) && Renames[Name] != Ver)
