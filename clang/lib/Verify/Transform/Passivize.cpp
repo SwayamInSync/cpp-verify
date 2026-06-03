@@ -330,9 +330,12 @@ public:
       ParamMap["result"] =
           std::make_unique<VVarExpr>(RetVer, Callee->ReturnType, C.Loc);
     }
+    // Modular protocol: the caller must *establish* the callee's precondition,
+    // so assert it (not assume). Assuming it here would let any call silently
+    // satisfy its own precondition, which is unsound.
     for (const auto &Pre : Callee->Preconditions) {
       auto PS = std::make_unique<PassiveStmt>();
-      PS->K = PassiveStmt::Assume;
+      PS->K = PassiveStmt::Assert;
       PS->Cond = substParams(Pre.get(), ParamMap, Ctx);
       P.Stmts.push_back(std::move(PS));
     }
