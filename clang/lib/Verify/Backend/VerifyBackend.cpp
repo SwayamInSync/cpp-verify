@@ -9,9 +9,11 @@ using namespace verify;
 namespace {
 class LeanVerifyBackend : public VerifyBackend {
   llvm::raw_ostream *Out;
+  unsigned TimeoutMs;
 
 public:
-  explicit LeanVerifyBackend(llvm::raw_ostream *OS) : Out(OS) {}
+  explicit LeanVerifyBackend(llvm::raw_ostream *OS, unsigned TimeoutMs = 0)
+      : Out(OS), TimeoutMs(TimeoutMs) {}
   llvm::StringRef getName() const override { return "lean"; }
   VerifyResult verifyPassive(const PassiveProgram &P) override {
     VerifyResult R;
@@ -20,7 +22,7 @@ public:
       R.Message = "no lean output stream";
       return R;
     }
-    return exportLeanScratchPad(P, *Out);
+    return exportLeanScratchPad(P, *Out, TimeoutMs);
   }
 };
 
@@ -44,7 +46,7 @@ verify::createVerifyBackend(BackendKind K, llvm::raw_ostream *LeanOut,
   case BackendKind::Z3:
     return std::make_unique<Z3VerifyBackend>(SolverTimeoutMs);
   case BackendKind::Lean:
-    return std::make_unique<LeanVerifyBackend>(LeanOut);
+    return std::make_unique<LeanVerifyBackend>(LeanOut, SolverTimeoutMs);
   case BackendKind::BMC:
     return std::make_unique<BMCVerifyBackend>(SolverTimeoutMs);
   }
