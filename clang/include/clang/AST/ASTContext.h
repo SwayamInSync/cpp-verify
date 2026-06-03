@@ -112,6 +112,11 @@ struct LoopContractInfo {
   SmallVector<Expr *, 2> Invariants;
   Expr *Decreases = nullptr;
 };
+
+/// Type invariant clauses on a RecordDecl (CppVerify).
+struct TypeContractInfo {
+  SmallVector<Expr *, 2> Invariants;
+};
 class CharUnits;
 class ConceptDecl;
 class CXXABI;
@@ -375,6 +380,9 @@ class ASTContext : public RefCountedBase<ASTContext> {
 
   /// CppVerify: contract info for loops (invariant/decreases).
   llvm::DenseMap<const Stmt *, LoopContractInfo *> LoopContracts;
+
+  /// CppVerify: type_invariant clauses on record/class types.
+  llvm::DenseMap<const RecordDecl *, TypeContractInfo *> TypeContracts;
 
   /// Mapping from GUIDs to the corresponding MSGuidDecl.
   mutable llvm::FoldingSet<MSGuidDecl> MSGuidDecls;
@@ -3456,6 +3464,11 @@ public:
   LoopContractInfo &getOrCreateLoopContract(const Stmt *S);
   /// CppVerify: get contract info for a loop, or nullptr if none.
   const LoopContractInfo *getLoopContract(const Stmt *S) const;
+
+  /// CppVerify: get or create type_invariant info for a record type.
+  TypeContractInfo &getOrCreateTypeContract(const RecordDecl *RD);
+  /// CppVerify: get type_invariant info, or nullptr if none.
+  const TypeContractInfo *getTypeContract(const RecordDecl *RD) const;
 
   /// Allocate an uninitialized TypeSourceInfo.
   ///

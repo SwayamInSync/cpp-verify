@@ -2861,6 +2861,7 @@ private:
     /// nested classes that contain pieces whose parsing will be delayed until
     /// the top-level class is fully defined.
     LateParsedDeclarationsContainer LateParsedDeclarations;
+
   };
 
   /// The stack of classes that is currently being
@@ -7466,6 +7467,7 @@ public:
   /// Parse reveal_with_fuel(fn, depth);
   StmtResult ParseRevealWithFuel();
   StmtResult ParseHideSpec();
+  void ParseTypeInvariant(Decl *TagDecl);
   StmtResult ParseRevealSpec();
 
   /// Parse forall(binder, lo, hi, body) or exists(binder, lo, hi, body).

@@ -2634,6 +2634,10 @@ Parser::DeclGroupPtrTy Parser::ParseCXXClassMemberDeclaration(
     ParsedTemplateInfo &TemplateInfo, ParsingDeclRAIIObject *TemplateDiags) {
   assert(getLangOpts().CPlusPlus &&
          "ParseCXXClassMemberDeclaration should only be called in C++ mode");
+  if (!ClassStack.empty() && Tok.getName() == "type_invariant") {
+    ParseTypeInvariant(ClassStack.top()->TagOrTemplate);
+    return nullptr;
+  }
   if (Tok.is(tok::at)) {
     if (getLangOpts().ObjC && NextToken().isObjCAtKeyword(tok::objc_defs))
       Diag(Tok, diag::err_at_defs_cxx);
@@ -3666,6 +3670,12 @@ void Parser::ParseCXXMemberSpecification(SourceLocation RecordLoc,
     // While we still have something to read, read the member-declarations.
     while (!tryParseMisplacedModuleImport() && Tok.isNot(tok::r_brace) &&
            Tok.isNot(tok::eof)) {
+      // CppVerify: type_invariant must be handled before member-decl parsing.
+      if (Tok.getName() == "type_invariant") {
+        ParseTypeInvariant(TagDecl);
+        MaybeDestroyTemplateIds();
+        continue;
+      }
       // Each iteration of this loop reads one member-declaration.
       ParseCXXClassMemberDeclarationWithPragmas(
           CurAS, AccessAttrs, static_cast<DeclSpec::TST>(TagType), TagDecl);
@@ -5016,4 +5026,49 @@ void Parser::ParseMicrosoftIfExistsClassDeclaration(
   }
 
   Braces.consumeClose();
+}
+
+/// CppVerify: parse `type_invariant(expr);` inside a class/struct body.
+void Parser::ParseTypeInvariant(Decl *TagDecl) {
+  assert(Tok.getName() == "type_invariant");
+  auto *RD = dyn_cast<CXXRecordDecl>(TagDecl);
+  ConsumeToken();
+  if (!RD) {
+    SkipUntil(tok::semi, StopAtSemi);
+    if (Tok.is(tok::semi))
+      ConsumeToken();
+    return;
+  }
+  if (Tok.isNot(tok::l_paren)) {
+    Diag(Tok, diag::err_contract_expected_lparen) << "type_invariant";
+    SkipUntil(tok::semi, StopAtSemi);
+    if (Tok.is(tok::semi))
+      ConsumeToken();
+    return;
+  }
+  ConsumeParen();
+  llvm::SaveAndRestore<bool> ParsingContractExprRAII(InParsingContractExpr, true);
+  Sema::CXXThisScopeRAII ThisScope(Actions, RD, Qualifiers(), true);
+  Actions.PushExpressionEvaluationContext(
+      Sema::ExpressionEvaluationContext::Unevaluated);
+  ExprResult E = ParseExpression();
+  Actions.PopExpressionEvaluationContext();
+  if (Tok.isNot(tok::r_paren)) {
+    Diag(Tok, diag::err_expected) << tok::r_paren;
+    SkipUntil(tok::semi, StopAtSemi);
+    if (Tok.is(tok::semi))
+      ConsumeToken();
+    return;
+  }
+  ConsumeParen();
+  if (!E.isInvalid()) {
+    E = Actions.ActOnTypeInvariantExpr(E, RD);
+    if (!E.isInvalid())
+      Actions.getASTContext().getOrCreateTypeContract(RD).Invariants.push_back(
+          E.get());
+  }
+  if (Tok.isNot(tok::semi))
+    Diag(Tok, diag::err_expected) << tok::semi;
+  else
+    ConsumeToken();
 }

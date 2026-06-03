@@ -9,6 +9,7 @@
 #include "clang/AST/Stmt.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtContract.h"
+#include "clang/AST/RecursiveASTVisitor.h"
 #include "llvm/ADT/StringSet.h"
 #include <functional>
 
@@ -168,6 +169,97 @@ static bool fnReferencesSpec(const VFunction &Fn) {
   return false;
 }
 
+static const RecordDecl *getRecordFromType(QualType T) {
+  T = T.getUnqualifiedType();
+  if (const auto *RT = T->getAs<RecordType>())
+    return RT->getDecl();
+  return nullptr;
+}
+
+static void collectInvariantFieldNames(const TypeContractInfo &TCI,
+                                       llvm::StringSet<> &Out) {
+  struct Collector : RecursiveASTVisitor<Collector> {
+    llvm::StringSet<> &Out;
+    explicit Collector(llvm::StringSet<> &O) : Out(O) {}
+    bool VisitDeclRefExpr(DeclRefExpr *DRE) {
+      if (const auto *FD = dyn_cast<FieldDecl>(DRE->getDecl()))
+        Out.insert(FD->getNameAsString());
+      return true;
+    }
+    bool VisitMemberExpr(MemberExpr *M) {
+      if (const auto *FD = dyn_cast<FieldDecl>(M->getMemberDecl()))
+        Out.insert(FD->getNameAsString());
+      return true;
+    }
+  } C(Out);
+  for (Expr *E : TCI.Invariants)
+    C.TraverseStmt(E);
+}
+
+static bool bodyReferencesInvariantFieldOnParam(const Stmt *S,
+                                                const ParmVarDecl *P,
+                                                const llvm::StringSet<> &InvFields) {
+  struct Finder : RecursiveASTVisitor<Finder> {
+    const ParmVarDecl *P;
+    const llvm::StringSet<> &InvFields;
+    bool Found = false;
+    Finder(const ParmVarDecl *P, const llvm::StringSet<> &InvFields)
+        : P(P), InvFields(InvFields) {}
+    bool VisitMemberExpr(MemberExpr *M) {
+      if (Found)
+        return false;
+      const auto *DRE =
+          dyn_cast<DeclRefExpr>(M->getBase()->IgnoreParenImpCasts());
+      if (!DRE || DRE->getDecl() != P)
+        return true;
+      if (const auto *FD = dyn_cast<FieldDecl>(M->getMemberDecl()))
+        if (InvFields.contains(FD->getName()))
+          Found = true;
+      return true;
+    }
+  } F(P, InvFields);
+  F.TraverseStmt(const_cast<Stmt *>(S));
+  return F.Found;
+}
+
+void ASTConverter::injectTypeInvariants(const FunctionDecl *FD, VFunction &Fn) {
+  const Stmt *Body = FD->getBody();
+  if (!Body)
+    return;
+  for (const ParmVarDecl *P : FD->parameters()) {
+    const RecordDecl *RD = getRecordFromType(P->getType());
+    if (!RD)
+      continue;
+    const TypeContractInfo *TCI = Ctx.getTypeContract(RD);
+    if (!TCI || TCI->Invariants.empty())
+      continue;
+    llvm::StringSet<> InvFields;
+    collectInvariantFieldNames(*TCI, InvFields);
+    if (InvFields.empty() ||
+        !bodyReferencesInvariantFieldOnParam(Body, P, InvFields))
+      continue;
+    FieldSubstPrefix.clear();
+    const auto *CXXRD = dyn_cast<CXXRecordDecl>(RD);
+    if (!CXXRD)
+      continue;
+    for (const FieldDecl *Field : CXXRD->fields())
+      FieldSubstPrefix[Field->getNameAsString()] = P->getNameAsString() + ".";
+    for (const Expr *Inv : TCI->Invariants) {
+      if (auto VE = convertTypeInvariantExpr(Inv))
+        Fn.Preconditions.push_back(std::move(VE));
+    }
+    FieldSubstPrefix.clear();
+  }
+}
+
+std::unique_ptr<VExpr> ASTConverter::convertTypeInvariantExpr(const Expr *E) {
+  bool SavedPost = InPost;
+  InPost = false;
+  auto Result = convertExpr(E);
+  InPost = SavedPost;
+  return Result;
+}
+
 static bool bodyHasRecursiveSpec(const VFunction &Fn) {
   for (const auto &S : Fn.Body) {
     if (S->K == VStmt::Assign &&
@@ -318,6 +410,7 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   }
 
   if (const Stmt *Body = FD->getBody()) {
+    injectTypeInvariants(FD, *Fn);
     Fn->Body = convertStmt(Body);
     if (!Fn->IsSpec && Fn->Body.empty() && Fn->Postconditions.empty())
       return nullptr;
@@ -403,6 +496,14 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
     return std::make_unique<VLiteralExpr>(0, VType::makePtr(), E->getExprLoc());
   }
   if (const auto *DRE = dyn_cast<DeclRefExpr>(E)) {
+    if (const auto *FD = dyn_cast<FieldDecl>(DRE->getDecl())) {
+      auto It = FieldSubstPrefix.find(FD->getNameAsString());
+      if (It != FieldSubstPrefix.end()) {
+        VType Ty = VType::fromQualType(E->getType(), IntMode);
+        return std::make_unique<VVarExpr>(It->second + FD->getNameAsString(), Ty,
+                                          E->getExprLoc());
+      }
+    }
     if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
       VType Ty = VType::fromQualType(E->getType(), IntMode);
       return std::make_unique<VVarExpr>(VD->getNameAsString(), Ty,
@@ -490,6 +591,17 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
       if (const auto *FD = dyn_cast<FieldDecl>(M->getMemberDecl())) {
         VType Ty = VType::fromQualType(E->getType(), IntMode);
         return std::make_unique<VLoadExpr>(std::move(Ptr), Ty, E->getExprLoc());
+      }
+    }
+    if (const auto *FD = dyn_cast<FieldDecl>(M->getMemberDecl())) {
+      const Expr *Base = M->getBase()->IgnoreParenImpCasts();
+      if (isa<CXXThisExpr>(Base)) {
+        auto It = FieldSubstPrefix.find(FD->getNameAsString());
+        if (It != FieldSubstPrefix.end()) {
+          VType Ty = VType::fromQualType(E->getType(), IntMode);
+          return std::make_unique<VVarExpr>(It->second + FD->getNameAsString(), Ty,
+                                            E->getExprLoc());
+        }
       }
     }
     if (const auto *DRE = dyn_cast<DeclRefExpr>(M->getBase()->IgnoreParenImpCasts())) {
