@@ -16,4 +16,6 @@ Compile with contract checking enabled:
    ./build/bin/clang++ -std=c++17 -fverify-contracts -c myfile.cpp -o myfile.o
 
 Contract keywords require ``-fverify-contracts``. The standalone verifier enables it automatically.
-To compile without running the solver, add ``-fno-verify`` (see :doc:`../../language/tooling`).
+To compile (or just syntax-check) without running the solver, use ``-fno-verify`` — it skips the
+SMT step and implies ``-fverify-contracts``, giving a fast syntax/semantics-only check
+(see :doc:`../../language/tooling`).

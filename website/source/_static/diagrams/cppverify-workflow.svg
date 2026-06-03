@@ -21,7 +21,7 @@
   <text class="title" x="380" y="84" text-anchor="middle" fill="#92400e">Verify path</text>
   <text x="380" y="108" text-anchor="middle">VCR → Passive → WP</text>
   <text x="380" y="128" text-anchor="middle">→ Z3 → diagnostics</text>
-  <text class="sub" x="380" y="152" text-anchor="middle">cpp-verify / -fverify</text>
+  <text class="sub" x="380" y="152" text-anchor="middle">cpp-verify / -fverify-contracts</text>
   <rect x="504" y="48" width="192" height="128" rx="8" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
   <text class="title" x="600" y="84" text-anchor="middle" fill="#14532d">Compile path</text>
   <text x="600" y="108" text-anchor="middle">CodeGen strips ghost</text>

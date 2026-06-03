@@ -101,7 +101,9 @@ compiler — GCC or Clang (`setup.sh` uses `${CXX:-c++}`).
 |---------|------|
 | `cpp-verify file.cpp` | Verify only (Z3) |
 | `clang++ -fverify-contracts -c file.cpp` | Verify (parallel) + compile |
-| `clang++ -fverify-contracts -fno-verify -c file.cpp` | Contracts on; skip SMT |
+| `clang++ -fno-verify -c file.cpp` | Light check — contracts on (implied), skip the solver |
+
+`-fverify-contracts` and `-fno-verify` are two axes: the first enables the contract language (and verifies by default); `-fno-verify` skips the solver and implies `-fverify-contracts`, so a lone `-fno-verify` is a fast syntax/semantics check. There is no `-fverify`.
 
 ```bash
 ./build/bin/cpp-verify --dump-ir=1,2,3,4 file.cpp   # VCR, passive, VC, Z3

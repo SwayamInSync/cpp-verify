@@ -14,16 +14,32 @@ Tools
      - Verify-only driver
    * - ``clang++ -fverify-contracts``
      - Parse contracts + verify (parallel) + compile
-   * - ``clang++ -fverify-contracts -fno-verify``
-     - Contracts on; skip SMT
+   * - ``clang++ -fno-verify``
+     - Light check — contracts on, skip the solver
 
-Key flags
----------
+Two axes
+--------
 
-- ``-fverify-contracts`` — enable contract keywords
-- ``-fno-verify`` — compile path without Z3
+Contract behaviour is two independent switches (full reference and a quick-lookup
+table: :doc:`../../language/tooling`):
+
+- **Contract language** — ``-fverify-contracts`` / ``-fno-verify-contracts`` (default
+  off). The master switch: enables the keywords and the codegen stripping. With it
+  off, the file is plain C++ and the verifier never runs.
+- **Run the prover** — ``-fno-verify`` (the verifier runs by default once contracts
+  are on). There is no ``-fverify`` — it would just be the default.
+
+``-fno-verify`` **implies ``-fverify-contracts``** (unless ``-fno-verify-contracts``
+is given), so a lone ``-fno-verify`` is a fast **light check**: it validates C++ and
+contract syntax *and* contract semantics, but not your logic — handy for editors,
+CI pre-flight, and LLM/agent loops.
+
+Other flags
+-----------
+
 - ``cpp-verify --backend={z3,bmc,lean}`` — verification engine (see :doc:`ch17-backends-modular-calls`)
 - ``cpp-verify --unroll=N`` — loop bound for BMC
+- ``cpp-verify --timeout=N`` — per-query Z3 timeout in ms (default 10000)
 - ``cpp-verify --dump-ir[=1,2,3,4]`` — dump VCR / passive / VC / Z3 layers
 
 IR layers

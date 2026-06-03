@@ -45,27 +45,84 @@ Clang**. Use the shipped ``./build/bin/cpp-verify`` and
 Clang reject the flag and the contract keywords. (Building cpp-verify itself from
 source is independent and works with any standard host compiler.)
 
-Compile with contracts
-----------------------
+Compile with contracts (``clang++``)
+------------------------------------
 
 .. code-block:: bash
 
-   clang++ -std=c++17 -fverify-contracts -c file.cpp -o file.o
-   clang++ -std=c++17 -fverify-contracts -fno-verify -c file.cpp -o file.o
+   clang++ -std=c++17 -fverify-contracts -c file.cpp -o file.o   # compile + verify
+   clang++ -std=c++17 -fno-verify -fsyntax-only file.cpp         # light syntax/semantics check
+
+Two independent axes
+~~~~~~~~~~~~~~~~~~~~~
+
+Contract behaviour is governed by **two** switches, not one. Understanding the
+split is the whole game:
 
 .. list-table::
    :header-rows: 1
-   :widths: 28 72
+   :widths: 30 18 52
 
-   * - Flag
-     - Effect
+   * - Switch (flag)
+     - Default
+     - What it controls
+   * - **Contract language**
+
+       ``-fverify-contracts`` / ``-fno-verify-contracts``
+     - off
+     - Whether the parser recognises ``pre``/``post``/``ghost``/``spec``/… (and
+       therefore whether CodeGen strips them). This is the **master** switch — with
+       it off, the file is byte-identical to stock C++ and the verifier never runs.
+   * - **Run the prover**
+
+       ``-fno-verify``
+     - on (when contracts are on)
+     - Whether the SMT verifier runs (in a thread, parallel to code generation).
+       The verifier runs by default once contracts are enabled; ``-fno-verify``
+       skips it. There is no ``-fverify`` — it would just be the default.
+
+``-fno-verify`` is meaningless without the contract language, so it **implies
+-fverify-contracts** (unless you explicitly pass ``-fno-verify-contracts``). That
+makes a lone ``-fno-verify`` a fast *light check*: it validates C++ syntax,
+contract syntax, **and** contract semantics (the ``old``/``result`` placement and
+bool-convertibility rules), but does **not** check your logic. Ideal for
+editors, CI pre-flight, and LLM/agent loops.
+
+Quick lookup
+~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 14 14 38
+
+   * - Flags (with ``clang++``)
+     - Contracts
+     - Verify
+     - Result
+   * - *(none)*
+     - off
+     - —
+     - Plain C++; ``pre``/``post`` are ordinary identifiers. Zero overhead.
    * - ``-fverify-contracts``
-     - Enable contract keywords (``pre``, ``post``, ``spec``, ``ghost``, …).
+     - on
+     - **yes**
+     - **Full**: compile **and** verify in parallel. A failed contract is a compile error.
    * - ``-fno-verify``
-     - Parse contracts but skip SMT; compile only (no parallel verify).
+     - on *(implied)*
+     - no
+     - **Light**: parse + Sema + compile, skip the solver. Catches syntax/semantic
+       errors, ignores logic.
+   * - ``-fno-verify -fsyntax-only``
+     - on *(implied)*
+     - no
+     - Fastest light check — no code generation either.
+   * - ``-fno-verify-contracts``
+     - off
+     - —
+     - Off entirely. Combined with ``-fno-verify``, the explicit *off* wins.
 
-Without ``-fno-verify``, verification runs **in parallel** with code generation (see
-:doc:`../book/part-ii/ch17-backends-modular-calls`).
+The standalone ``cpp-verify`` tool always runs the **full** path (it adds
+``-fverify-contracts`` for you and does no code generation).
 
 IR dump layers
 --------------
