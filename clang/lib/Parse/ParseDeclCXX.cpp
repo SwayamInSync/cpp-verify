@@ -2634,7 +2634,7 @@ Parser::DeclGroupPtrTy Parser::ParseCXXClassMemberDeclaration(
     ParsedTemplateInfo &TemplateInfo, ParsingDeclRAIIObject *TemplateDiags) {
   assert(getLangOpts().CPlusPlus &&
          "ParseCXXClassMemberDeclaration should only be called in C++ mode");
-  if (!ClassStack.empty() && Tok.getName() == "type_invariant") {
+  if (!ClassStack.empty() && Tok.is(tok::kw_type_invariant)) {
     ParseTypeInvariant(ClassStack.top()->TagOrTemplate);
     return nullptr;
   }
@@ -3671,7 +3671,7 @@ void Parser::ParseCXXMemberSpecification(SourceLocation RecordLoc,
     while (!tryParseMisplacedModuleImport() && Tok.isNot(tok::r_brace) &&
            Tok.isNot(tok::eof)) {
       // CppVerify: type_invariant must be handled before member-decl parsing.
-      if (Tok.getName() == "type_invariant") {
+      if (Tok.is(tok::kw_type_invariant)) {
         ParseTypeInvariant(TagDecl);
         MaybeDestroyTemplateIds();
         continue;
@@ -5030,7 +5030,7 @@ void Parser::ParseMicrosoftIfExistsClassDeclaration(
 
 /// CppVerify: parse `type_invariant(expr);` inside a class/struct body.
 void Parser::ParseTypeInvariant(Decl *TagDecl) {
-  assert(Tok.getName() == "type_invariant");
+  assert(Tok.is(tok::kw_type_invariant));
   auto *RD = dyn_cast<CXXRecordDecl>(TagDecl);
   ConsumeToken();
   if (!RD) {
