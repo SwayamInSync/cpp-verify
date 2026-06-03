@@ -357,7 +357,9 @@ public:
       Renames[A.Target] = NewName;
       auto PS = std::make_unique<PassiveStmt>();
       PS->K = PassiveStmt::Assume;
-      PS->Cond = makeEq(std::make_unique<VVarExpr>(NewName, Val->Ty, A.Loc),
+      // Hoist Val->Ty before the move: argument evaluation order is unspecified.
+      VType ValTy = Val->Ty;
+      PS->Cond = makeEq(std::make_unique<VVarExpr>(NewName, ValTy, A.Loc),
                         std::move(Val), A.Loc);
       P.Stmts.push_back(std::move(PS));
       break;
@@ -465,7 +467,12 @@ public:
       Renames["result"] = RetVer;
       auto PS = std::make_unique<PassiveStmt>();
       PS->K = PassiveStmt::Assume;
-      PS->Cond = makeEq(std::make_unique<VVarExpr>(RetVer, Ret->Ty, R.Loc),
+      // Read Ret->Ty into a local first: passing both `Ret->Ty` and
+      // `std::move(Ret)` as arguments to the same call is unsequenced, so a
+      // compiler that evaluates the move first nulls `Ret` before the
+      // dereference (crashes under GCC's right-to-left argument evaluation).
+      VType RetTy = Ret->Ty;
+      PS->Cond = makeEq(std::make_unique<VVarExpr>(RetVer, RetTy, R.Loc),
                         std::move(Ret), R.Loc);
       P.Stmts.push_back(std::move(PS));
       break;

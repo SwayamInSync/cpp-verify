@@ -549,7 +549,9 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
     if (!Inner)
       return nullptr;
     VType To = VType::fromQualType(E->getType(), IntMode);
-    return std::make_unique<VCastExpr>(std::move(Inner), Inner->Ty, To,
+    // Hoist Inner->Ty before the move (unspecified argument evaluation order).
+    VType From = Inner->Ty;
+    return std::make_unique<VCastExpr>(std::move(Inner), From, To,
                                        E->getExprLoc());
   }
   if (const auto *CE = dyn_cast<CStyleCastExpr>(E)) {
@@ -557,7 +559,9 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
     if (!Inner)
       return nullptr;
     VType To = VType::fromQualType(E->getType(), IntMode);
-    return std::make_unique<VCastExpr>(std::move(Inner), Inner->Ty, To,
+    // Hoist Inner->Ty before the move (unspecified argument evaluation order).
+    VType From = Inner->Ty;
+    return std::make_unique<VCastExpr>(std::move(Inner), From, To,
                                        E->getExprLoc());
   }
   if (const auto *O = dyn_cast<OldExpr>(E)) {
@@ -567,7 +571,9 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
     InPost = Saved;
     if (!Inner)
       return nullptr;
-    return std::make_unique<VOldExpr>(std::move(Inner), Inner->Ty,
+    // Hoist Inner->Ty before the move (unspecified argument evaluation order).
+    VType InnerTy = Inner->Ty;
+    return std::make_unique<VOldExpr>(std::move(Inner), InnerTy,
                                       E->getExprLoc());
   }
   if (const auto *C = dyn_cast<ConditionalOperator>(E)) {
