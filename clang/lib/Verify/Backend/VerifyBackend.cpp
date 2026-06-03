@@ -25,9 +25,11 @@ public:
 };
 
 class BMCVerifyBackend : public VerifyBackend {
-  std::unique_ptr<Z3VerifyBackend> Z3 = std::make_unique<Z3VerifyBackend>();
+  std::unique_ptr<Z3VerifyBackend> Z3;
 
 public:
+  explicit BMCVerifyBackend(unsigned TimeoutMs = 0)
+      : Z3(std::make_unique<Z3VerifyBackend>(TimeoutMs)) {}
   llvm::StringRef getName() const override { return "bmc"; }
   VerifyResult verifyPassive(const PassiveProgram &P) override {
     return Z3->verifyPassive(P);
@@ -37,14 +39,14 @@ public:
 
 std::unique_ptr<VerifyBackend>
 verify::createVerifyBackend(BackendKind K, llvm::raw_ostream *LeanOut,
-                            unsigned /*BMCUnroll*/) {
+                            unsigned /*BMCUnroll*/, unsigned SolverTimeoutMs) {
   switch (K) {
   case BackendKind::Z3:
-    return std::make_unique<Z3VerifyBackend>();
+    return std::make_unique<Z3VerifyBackend>(SolverTimeoutMs);
   case BackendKind::Lean:
     return std::make_unique<LeanVerifyBackend>(LeanOut);
   case BackendKind::BMC:
-    return std::make_unique<BMCVerifyBackend>();
+    return std::make_unique<BMCVerifyBackend>(SolverTimeoutMs);
   }
-  return std::make_unique<Z3VerifyBackend>();
+  return std::make_unique<Z3VerifyBackend>(SolverTimeoutMs);
 }

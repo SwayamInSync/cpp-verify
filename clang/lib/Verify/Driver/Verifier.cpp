@@ -119,7 +119,8 @@ public:
       LeanOut = LeanFile.get();
     }
 
-    auto Backend = createVerifyBackend(Opts.Backend, LeanOut, Opts.BMCUnroll);
+    auto Backend = createVerifyBackend(Opts.Backend, LeanOut, Opts.BMCUnroll,
+                                       Opts.SolverTimeoutMs);
     Passivizer P;
     P.setFunctionMap(FnMap);
     WPCalculator WP;

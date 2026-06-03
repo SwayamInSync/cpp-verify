@@ -335,6 +335,11 @@ void Z3Encoder::emitSpecDefiningAxiom(const std::string &Name,
 VerifyResult Z3Encoder::verifyMachine(const VCMachine &M) {
   Vars.clear();
   Solver = z3::solver(Ctx);
+  if (TimeoutMs > 0) {
+    z3::params P(Ctx);
+    P.set("timeout", TimeoutMs);
+    Solver.set(P);
+  }
   SpecFunctions = M.SpecFunctions;
   CallerIntMode = M.CallerIntMode;
   VerifyResult Out;

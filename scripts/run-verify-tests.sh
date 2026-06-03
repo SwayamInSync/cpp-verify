@@ -56,12 +56,21 @@ run_one() {
     extra_args=(--backend=bmc)
   fi
 
+  # Hard wall-clock cap per test. cpp-verify ignores SIGTERM (LLVM installs
+  # signal handlers), so use SIGKILL. The in-tool --timeout bounds Z3 itself;
+  # this guards against any other runaway.
+  local TIMEOUT="${CPPVERIFY_TEST_TIMEOUT:-60}"
   if ((${#extra_args[@]} > 0)); then
-    out="$("$CPP_VERIFY" "${extra_args[@]}" "$f" 2>&1)" || rc=$?
+    out="$(timeout -s KILL "$TIMEOUT" "$CPP_VERIFY" "${extra_args[@]}" "$f" 2>&1)" || rc=$?
   else
-    out="$("$CPP_VERIFY" "$f" 2>&1)" || rc=$?
+    out="$(timeout -s KILL "$TIMEOUT" "$CPP_VERIFY" "$f" 2>&1)" || rc=$?
   fi
   rc="${rc:-0}"
+  if [[ "$rc" -eq 137 ]]; then
+    echo "FAIL $base (timed out after ${TIMEOUT}s)"
+    fail=$((fail + 1))
+    return 0
+  fi
 
   if [[ "$expect_fail" -eq 1 ]]; then
     if echo "$out" | grep -qE 'verification failed:|error:'; then
