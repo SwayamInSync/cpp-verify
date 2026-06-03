@@ -70,7 +70,7 @@
 - [ ] Two-pass mode: on failure, re-run with `recommends` checks → warnings
 
 **Test targets:**
-- [ ] Verify `int abs(int x) pre(true) post(result >= 0)` end-to-end
+- [ ] Verify `int abs(int x) pre(x >= -2147483647) post(result >= 0)` end-to-end
 - [ ] Verify `void swap(int* a, int* b) pre(a != nullptr && b != nullptr) modifies(*a, *b) post(*a == old(*b) && *b == old(*a))` end-to-end
 - [ ] Verify a function that incorrectly modifies an unlisted location → counterexample with framing failure
 

@@ -102,7 +102,7 @@ Quick start
 .. code-block:: cpp
 
    int abs(int x)
-     pre(true)
+     pre(x >= -2147483647)   // every int except INT_MIN, whose negation overflows
      post(result >= 0)
    {
      return x < 0 ? -x : x;

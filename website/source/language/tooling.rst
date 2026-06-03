@@ -10,6 +10,7 @@ Standalone verifier
    cpp-verify --backend=z3 file.cpp
    cpp-verify --backend=bmc --unroll=3 file.cpp
    cpp-verify --backend=lean --lean-out=goal.lean file.cpp
+   cpp-verify --timeout=20000 file.cpp
    cpp-verify --dump-ir=1,2,3,4 file.cpp
 
 ``cpp-verify`` is a Clang tooling driver: it always adds ``-std=c++17`` and ``-fverify-contracts``.
@@ -31,6 +32,18 @@ Backends
      - Write Lean 4 scratch-pad to ``--lean-out`` (required for useful output).
    * - ``--unroll=N``
      - BMC loop bound only.
+   * - ``--timeout=N``
+     - Per-query Z3 timeout in milliseconds (default 10000; ``0`` disables). A query
+       that exceeds it is reported as ``unknown`` instead of hanging.
+
+Supported compiler
+------------------
+
+Contract syntax and ``-fverify-contracts`` exist **only in this repository's
+Clang**. Use the shipped ``./build/bin/cpp-verify`` and
+``./build/bin/clang++`` for any code that uses contracts — stock GCC or upstream
+Clang reject the flag and the contract keywords. (Building cpp-verify itself from
+source is independent and works with any standard host compiler.)
 
 Compile with contracts
 ----------------------
