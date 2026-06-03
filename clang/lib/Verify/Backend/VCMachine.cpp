@@ -283,30 +283,46 @@ public:
     M.CallerIntMode = P.CallerIntMode;
     CurHeap = M.HeapPrefix;
 
-    std::unique_ptr<VCExpr> Hyp = vcTrue();
-    std::unique_ptr<VCExpr> Post = vcTrue();
+    // Build the verification condition as the negated weakest precondition, so
+    // each assert is checked only against the assumes that *precede* it. A flat
+    // (∧assumes) ∧ ¬(∧asserts) is unsound: a later contradictory assume (e.g. a
+    // loop's inductive hypothesis I ∧ cond that is unsatisfiable given the pre)
+    // makes the whole goal UNSAT, vacuously "verifying" earlier asserts.
+    //
+    // Encode left-to-right (heap-version tracking is forward), recording each
+    // assume/assert; then fold the boolean structure right-to-left:
+    //   ¬wp(assume A; r) = A ∧ ¬wp(r)
+    //   ¬wp(assert P; r) = ¬P ∨ ¬wp(r)
+    //   ¬wp(skip)        = false
+    std::vector<std::pair<bool, std::unique_ptr<VCExpr>>> Items; // (isAssume, e)
 
     for (const auto &A : P.EntryAssumes)
-      Hyp = vcAnd(std::move(Hyp), fromVExpr(A.get()));
+      Items.emplace_back(true, fromVExpr(A.get()));
 
     for (const auto &S : P.Stmts) {
       if (S->K == PassiveStmt::Assume && S->Cond) {
-        if (S->Cond->K == VExpr::HeapStore) {
-          auto *H = static_cast<const VHeapStoreExpr *>(S->Cond.get());
-          Hyp = vcAnd(std::move(Hyp), fromVExpr(S->Cond.get()));
-          CurHeap = H->HeapAfter;
-        } else {
-          Hyp = vcAnd(std::move(Hyp), fromVExpr(S->Cond.get()));
-        }
+        auto Enc = fromVExpr(S->Cond.get());
+        if (S->Cond->K == VExpr::HeapStore)
+          CurHeap =
+              static_cast<const VHeapStoreExpr *>(S->Cond.get())->HeapAfter;
+        Items.emplace_back(true, std::move(Enc));
       } else if (S->K == PassiveStmt::Assert && S->Cond) {
-        Post = vcAnd(std::move(Post), fromVExpr(S->Cond.get()));
+        Items.emplace_back(false, fromVExpr(S->Cond.get()));
       }
     }
 
     for (const auto &A : P.ExitAsserts)
-      Post = vcAnd(std::move(Post), fromVExpr(A.get()));
+      Items.emplace_back(false, fromVExpr(A.get()));
 
-    M.Goal = vcAnd(std::move(Hyp), vcNot(std::move(Post)));
+    std::unique_ptr<VCExpr> G = std::make_unique<VCExpr>(VCExpr::False);
+    for (auto It = Items.rbegin(); It != Items.rend(); ++It) {
+      if (It->first)
+        G = vcAnd(std::move(It->second), std::move(G));
+      else
+        G = vcOr(vcNot(std::move(It->second)), std::move(G));
+    }
+
+    M.Goal = std::move(G);
     return M;
   }
 };

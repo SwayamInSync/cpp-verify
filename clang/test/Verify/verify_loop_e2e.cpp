@@ -8,8 +8,11 @@ int sum_first_n(int n)
   int s = 0;
   int i = 0;
   while (i < n)
-    invariant(s >= 0)
-    invariant(i >= 0)
+    // s accumulates i each step; s <= i * n bounds it (i, n <= 3 so s <= 9),
+    // making s + i overflow-free and the invariant inductive. s >= 0 alone is
+    // not preserved from an arbitrary large s.
+    invariant(s >= 0 && i >= 0 && i <= n && s <= i * n)
+    decreases(n - i)
   {
     s = s + i;
     i = i + 1;
