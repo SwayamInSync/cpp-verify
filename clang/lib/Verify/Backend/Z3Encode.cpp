@@ -12,7 +12,11 @@ Z3Encoder::Z3Encoder() : Ctx(), Solver(Ctx) {}
 z3::sort Z3Encoder::intSort() { return Ctx.int_sort(); }
 z3::sort Z3Encoder::bvSort() { return Ctx.bv_sort(32); }
 z3::sort Z3Encoder::boolSort() { return Ctx.bool_sort(); }
-z3::sort Z3Encoder::heapSort() { return Ctx.array_sort(intSort(), intSort()); }
+// Heap is Array Int BitVec32: integer pointer addresses (exact, so distinct
+// pointers never alias mod 2^32) mapping to machine-integer cell values. Storing
+// values as bit-vectors avoids int2bv/bv2int round-trips on every load/store,
+// which put queries in the arrays+int<->bv fragment Z3 fails to decide.
+z3::sort Z3Encoder::heapSort() { return Ctx.array_sort(intSort(), bvSort()); }
 
 z3::sort Z3Encoder::valueSort(const VType &Ty, VIntMode Mode) {
   if (Ty.Kind == VTypeKind::Bool)
@@ -91,24 +95,35 @@ static z3::expr asBool(z3::context &Ctx, z3::expr E) {
   return Ctx.bool_val(true);
 }
 
-/// Heap model is Array Int Int; pointer/index args may be bit-vectors.
+/// Heap is Array Int BitVec32. Indices are integer addresses; a bit-vector
+/// pointer is widened to an integer key.
 static z3::expr heapIndex(z3::expr Ptr) {
   if (Ptr.is_bv())
     return z3::bv2int(Ptr, true);
   return Ptr;
 }
 
+/// Cell values are stored as 32-bit bit-vectors (machine integers); a
+/// mathematical-integer value is converted on the way in.
 static z3::expr heapCellValue(z3::expr Val) {
-  if (Val.is_int())
-    return Val;
   if (Val.is_bv())
-    return z3::bv2int(Val, true);
+    return Val;
+  if (Val.is_int())
+    return z3::int2bv(32, Val);
   return Val;
 }
 
 static z3::expr arithOp(z3::context &Ctx, VCExpr::Kind K, z3::expr L, z3::expr R) {
-  if (L.get_sort().is_array() || R.get_sort().is_array())
+  if (L.get_sort().is_array() || R.get_sort().is_array()) {
+    // Equality/inequality of heap arrays is meaningful (e.g. the if-merge
+    // assume `mem_k == ite(c, mem_then, mem_else)`); only arithmetic on arrays
+    // is not. Encoding array Eq as `true` left merged heaps unconstrained.
+    if (K == VCExpr::Eq)
+      return L == R;
+    if (K == VCExpr::Ne)
+      return L != R;
     return Ctx.bool_val(true);
+  }
   if (L.is_bv() && R.is_int())
     R = z3::int2bv(32, R);
   if (L.is_int() && R.is_bv())
