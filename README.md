@@ -70,6 +70,23 @@ int abs(int x)
 
 Use `-fverify-contracts` on `clang++` so `pre` / `post` are keywords. `cpp-verify` enables that flag automatically.
 
+### Supported compiler
+
+Contract syntax (`pre` / `post` / `invariant` / `spec` / …) and the
+`-fverify-contracts` flag exist **only in this repository's Clang**. To compile
+or verify code that uses contracts, you must use the shipped tools:
+
+- `./build/bin/cpp-verify file.cpp` — verify.
+- `./build/bin/clang++ -fverify-contracts … file.cpp` — compile (also runs verification).
+
+Stock GCC or upstream Clang will reject `-fverify-contracts` (unknown flag) **and**
+the contract keywords (`expected function body after function declarator` at
+`pre(...)`). There is no contract support outside the shipped Clang.
+
+Note this is a separate matter from *building* cpp-verify itself from source:
+that bootstrap step compiles ordinary C++ and works with **any** standard host
+compiler — GCC or Clang (`setup.sh` uses `${CXX:-c++}`).
+
 ## Verification backends
 
 | Backend | CLI | Role |
