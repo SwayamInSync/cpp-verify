@@ -36,17 +36,64 @@ Use in contracts:
 
 Call from ``ghost { ... }`` blocks in executable functions.
 
-**Fuel** and **hide/reveal** control how much recursive spec body is inlined:
+Soft preconditions (``recommends``)
+-----------------------------------
+
+A ``spec`` function stays **total**, but ``recommends`` flags likely misuse. It generates no
+call-site obligation; the verifier only **warns** when a call may violate it:
 
 .. code-block:: cpp
 
-   ghost { reveal_with_fuel(fact, 2); }   // bounded unfolding
-   ghost { hide(triple); }               // opaque spec application
+   spec int safe_div(int a, int b)
+     recommends(b != 0)
+   { return a / b; }
+
+Opacity: fuel, ``reveal``, ``hide``
+-----------------------------------
+
+A recursive ``spec`` is opaque by default (unfolded with fuel 1) so its axiom does not send Z3 into
+a matching loop; ``reveal_with_fuel(f, n)`` raises the depth when a proof needs more (the ``safe_fib``
+walkthrough uses it). ``reveal`` / ``hide`` toggle a spec's transparency for the rest of a function:
+
+.. code-block:: cpp
+
+   spec int triple(int x) { return 3 * x; }
+
+   int f(int x)
+     pre(x >= 0 && x <= 10)
+     post(result == triple(x))
+   {
+     ghost { reveal(triple); }            // reveal_with_fuel(f, n) for recursive specs
+     return x + x + x;
+   }
+
+   int g(int x)
+     pre(x >= 0 && x <= 10)
+     post(result == x + x + x)
+   {
+     ghost { hide(triple); }              // keep triple opaque; prove without unfolding it
+     return x + x + x;
+   }
 
 See also :doc:`ch17-backends-modular-calls`.
 
-``constexpr`` in contracts
---------------------------
+``constexpr`` as spec
+---------------------
 
-Existing ``constexpr`` helpers work in ``pre``/``post`` with **machine** integer semantics — see :doc:`../../language/integers`.
+Any ``constexpr`` function is usable in ``pre``/``post`` **directly** — no separate ``spec``
+re-declaration:
+
+.. code-block:: cpp
+
+   constexpr int square(int x) { return x * x; }
+
+   int area(int side)
+     pre(side >= 0 && side <= 1000)
+     post(result == square(side))
+   { return side * side; }
+
+One body does double duty: the same ``constexpr`` runs at execution time and defines the spec, so
+the two can never silently diverge (Verus requires a separate ``spec fn``). A lifted ``constexpr``
+keeps **machine** integer semantics — honest overflow — unlike an explicit ``spec`` (mathematical
+``Int``); see :doc:`../../language/integers`.
 

@@ -14,7 +14,7 @@ All contract syntax is enabled with `-fverify-contracts`. Without this flag, the
 | `aliases(p, q)` | After function `)` | Opts out of implicit non-aliasing assumption for the named pointer/reference pair |
 | `recommends(expr)` | After function `)` (spec only) | Soft precondition for spec functions; reported on verification failure |
 | `invariant(expr)` | After `while`/`for` condition `)` | Loop invariant |
-| `decreases(expr [, expr...])` | After loop `)` or function `)` | Termination measure. Tuple form is lex-ordered. |
+| `decreases(expr)` | After loop `)` or function `)` | Termination measure. (Lexicographic tuple form is designed but not yet implemented.) |
 | `type_invariant(expr)` | Inside class/struct body | Per-instance invariant injected at function boundaries |
 | `ghost { ... }` | Statement | Ghost block — proof steps, stripped by CodeGen |
 | `contract_assert(expr)` | Statement | Verification condition (not a runtime check) |
@@ -56,7 +56,7 @@ while (i < n)
 ```
 
 - `invariant(expr)`: must hold on entry and be preserved by each iteration.
-- `decreases(expr [, expr...])`: termination measure. Single expression must be non-negative and strictly decreasing. Tuple form is lex-ordered: `decreases(a, b)` means `(a, b)` strictly decreases lexicographically.
+- `decreases(expr)`: termination measure. The single expression must be non-negative and strictly decreasing. (A lexicographic tuple form `decreases(a, b)` is designed but **not yet implemented** — the parser currently treats the arguments as a comma expression, so pass a single measure.)
 
 ## Assertions: contract_assert
 

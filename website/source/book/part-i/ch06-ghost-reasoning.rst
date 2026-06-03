@@ -47,3 +47,17 @@ Their bodies are **definitions** for the verifier, not instructions the CPU runs
 
 **Proof** functions are ghost programs whose only job is to establish ``pre ==> post``.
 
+Opacity and fuel
+----------------
+
+A recursive spec's defining axiom — ``∀n. fibo(n) = fibo(n-1) + fibo(n-2)`` — is dangerous to hand
+an SMT solver unrestricted: matching the right-hand side reintroduces the symbol and the instantiation
+never stops (a *matching loop*). The remedy is to keep recursive specs **opaque** by default and
+unfold them only as far as a proof needs:
+
+- **fuel** *n* — unfold the definition *n* times along this obligation;
+- **reveal / hide** — turn a spec transparent or opaque for a region of a proof.
+
+This is a knob on *automation*, not on truth: revealing more never changes what is provable, only how
+hard the solver works. Part II maps these to ``reveal_with_fuel``, ``reveal``, and ``hide``.
+
