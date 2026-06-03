@@ -36,7 +36,7 @@ int safe_fib(int n)
   int i = 1;
 
   while (i < n)
-    invariant(1 <= i && i < n)
+    invariant(1 <= i && i <= n)
     invariant(prev == fibo(i - 1))
     invariant(cur == fibo(i))
     decreases(n - i)

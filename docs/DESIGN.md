@@ -285,9 +285,9 @@ int compute() {
 
 ```cpp
 class Coordinate {
-    type_invariant(x >= 0 && y >= 0);
     int x;
     int y;
+    type_invariant(x >= 0 && y >= 0);   // must appear after the fields it names
 };
 
 int dist_sq(Coordinate p, Coordinate q) {
