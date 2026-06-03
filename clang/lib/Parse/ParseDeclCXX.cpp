@@ -2960,6 +2960,27 @@ Parser::DeclGroupPtrTy Parser::ParseCXXClassMemberDeclaration(
     return nullptr;
   }
 
+  // CppVerify: contract clauses (pre/post/...) on in-class member functions are
+  // not yet modeled by the verifier, which handles free functions. Rather than
+  // emit a confusing "expected ';'", diagnose once and skip the clauses so the
+  // rest of the class still parses and the function is treated as uncontracted.
+  if (DeclaratorInfo.isFunctionDeclarator() &&
+      (Tok.is(tok::kw_pre) || Tok.is(tok::kw_post) ||
+       Tok.is(tok::kw_decreases) || Tok.is(tok::kw_modifies) ||
+       Tok.is(tok::kw_aliases) || Tok.is(tok::kw_recommends))) {
+    Diag(Tok, diag::warn_contract_member_function_unsupported);
+    while (Tok.is(tok::kw_pre) || Tok.is(tok::kw_post) ||
+           Tok.is(tok::kw_decreases) || Tok.is(tok::kw_modifies) ||
+           Tok.is(tok::kw_aliases) || Tok.is(tok::kw_recommends)) {
+      ConsumeToken();
+      if (Tok.is(tok::l_paren)) {
+        BalancedDelimiterTracker T(*this, tok::l_paren);
+        if (!T.consumeOpen())
+          T.skipToEnd();
+      }
+    }
+  }
+
   if (IsTemplateSpecOrInst)
     SAC.done();
 
