@@ -9,6 +9,7 @@
 #include "clang/AST/Stmt.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtContract.h"
+#include "clang/AST/RecursiveASTVisitor.h"
 #include "llvm/ADT/StringSet.h"
 #include <functional>
 
@@ -90,11 +91,13 @@ bool ASTConverter::calleeIsProof(const FunctionDecl *FD) const {
 
 static bool isMutablePointerParam(const ParmVarDecl *P) {
   QualType T = P->getType();
-  if (!T->isPointerType() && !T->isReferenceType())
-    return false;
+  // A reference's referent is not a pointer, so getPointeeType() would be null;
+  // check the referent's const-ness directly. Only pointers have a pointee.
   if (T->isReferenceType())
-    T = T.getNonReferenceType();
-  return !T->getPointeeType().isConstQualified();
+    return !T.getNonReferenceType().isConstQualified();
+  if (T->isPointerType())
+    return !T->getPointeeType().isConstQualified();
+  return false;
 }
 
 static bool aliasesListed(const FunctionContractInfo &FCI, const ParmVarDecl *A,
@@ -137,35 +140,99 @@ static bool exprReferencesSpecCall(const VExpr *E, const std::string &Name) {
   return false;
 }
 
-static bool vexprHasSpecCall(const VExpr *E) {
-  if (!E)
-    return false;
-  if (E->K == VExpr::SpecCall)
-    return true;
-  if (E->K == VExpr::BinOp) {
-    const auto *B = static_cast<const VBinOpExpr *>(E);
-    return vexprHasSpecCall(B->Lhs.get()) || vexprHasSpecCall(B->Rhs.get());
-  }
-  if (E->K == VExpr::UnaryOp)
-    return vexprHasSpecCall(static_cast<const VUnaryOpExpr *>(E)->Operand.get());
-  if (E->K == VExpr::Old)
-    return vexprHasSpecCall(static_cast<const VOldExpr *>(E)->Inner.get());
-  if (E->K == VExpr::Conditional) {
-    const auto *C = static_cast<const VConditionalExpr *>(E);
-    return vexprHasSpecCall(C->Cond.get()) || vexprHasSpecCall(C->Then.get()) ||
-           vexprHasSpecCall(C->Else.get());
-  }
-  return false;
+static const RecordDecl *getRecordFromType(QualType T) {
+  // See through references: a `C&`/`const C&` parameter's field access lowers to
+  // the same "param.field" variable as a by-value `C`, so type_invariant
+  // injection applies. Pointers are intentionally excluded: `p->field` lowers to
+  // a heap Load, which the "param.field" substitution does not model.
+  T = T.getNonReferenceType().getUnqualifiedType();
+  if (const auto *RT = T->getAs<RecordType>())
+    return RT->getDecl();
+  return nullptr;
 }
 
-static bool fnReferencesSpec(const VFunction &Fn) {
-  for (const auto &P : Fn.Preconditions)
-    if (vexprHasSpecCall(P.get()))
+static void collectInvariantFieldNames(const TypeContractInfo &TCI,
+                                       llvm::StringSet<> &Out) {
+  struct Collector : RecursiveASTVisitor<Collector> {
+    llvm::StringSet<> &Out;
+    explicit Collector(llvm::StringSet<> &O) : Out(O) {}
+    bool VisitDeclRefExpr(DeclRefExpr *DRE) {
+      if (const auto *FD = dyn_cast<FieldDecl>(DRE->getDecl()))
+        Out.insert(FD->getNameAsString());
       return true;
-  for (const auto &P : Fn.Postconditions)
-    if (vexprHasSpecCall(P.get()))
+    }
+    bool VisitMemberExpr(MemberExpr *M) {
+      if (const auto *FD = dyn_cast<FieldDecl>(M->getMemberDecl()))
+        Out.insert(FD->getNameAsString());
       return true;
-  return false;
+    }
+  } C(Out);
+  for (Expr *E : TCI.Invariants)
+    C.TraverseStmt(E);
+}
+
+static bool bodyReferencesInvariantFieldOnParam(const Stmt *S,
+                                                const ParmVarDecl *P,
+                                                const llvm::StringSet<> &InvFields) {
+  struct Finder : RecursiveASTVisitor<Finder> {
+    const ParmVarDecl *P;
+    const llvm::StringSet<> &InvFields;
+    bool Found = false;
+    Finder(const ParmVarDecl *P, const llvm::StringSet<> &InvFields)
+        : P(P), InvFields(InvFields) {}
+    bool VisitMemberExpr(MemberExpr *M) {
+      if (Found)
+        return false;
+      const auto *DRE =
+          dyn_cast<DeclRefExpr>(M->getBase()->IgnoreParenImpCasts());
+      if (!DRE || DRE->getDecl() != P)
+        return true;
+      if (const auto *FD = dyn_cast<FieldDecl>(M->getMemberDecl()))
+        if (InvFields.contains(FD->getName()))
+          Found = true;
+      return true;
+    }
+  } F(P, InvFields);
+  F.TraverseStmt(const_cast<Stmt *>(S));
+  return F.Found;
+}
+
+void ASTConverter::injectTypeInvariants(const FunctionDecl *FD, VFunction &Fn) {
+  const Stmt *Body = FD->getBody();
+  if (!Body)
+    return;
+  for (const ParmVarDecl *P : FD->parameters()) {
+    const RecordDecl *RD = getRecordFromType(P->getType());
+    if (!RD)
+      continue;
+    const TypeContractInfo *TCI = Ctx.getTypeContract(RD);
+    if (!TCI || TCI->Invariants.empty())
+      continue;
+    llvm::StringSet<> InvFields;
+    collectInvariantFieldNames(*TCI, InvFields);
+    if (InvFields.empty() ||
+        !bodyReferencesInvariantFieldOnParam(Body, P, InvFields))
+      continue;
+    FieldSubstPrefix.clear();
+    const auto *CXXRD = dyn_cast<CXXRecordDecl>(RD);
+    if (!CXXRD)
+      continue;
+    for (const FieldDecl *Field : CXXRD->fields())
+      FieldSubstPrefix[Field->getNameAsString()] = P->getNameAsString() + ".";
+    for (const Expr *Inv : TCI->Invariants) {
+      if (auto VE = convertTypeInvariantExpr(Inv))
+        Fn.Preconditions.push_back(std::move(VE));
+    }
+    FieldSubstPrefix.clear();
+  }
+}
+
+std::unique_ptr<VExpr> ASTConverter::convertTypeInvariantExpr(const Expr *E) {
+  bool SavedPost = InPost;
+  InPost = false;
+  auto Result = convertExpr(E);
+  InPost = SavedPost;
+  return Result;
 }
 
 static bool bodyHasRecursiveSpec(const VFunction &Fn) {
@@ -318,6 +385,7 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   }
 
   if (const Stmt *Body = FD->getBody()) {
+    injectTypeInvariants(FD, *Fn);
     Fn->Body = convertStmt(Body);
     if (!Fn->IsSpec && Fn->Body.empty() && Fn->Postconditions.empty())
       return nullptr;
@@ -399,10 +467,22 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
     return std::make_unique<VLiteralExpr>(IL->getValue().getSExtValue(), Ty,
                                           E->getExprLoc());
   }
+  if (const auto *BL = dyn_cast<CXXBoolLiteralExpr>(E)) {
+    return std::make_unique<VLiteralExpr>(BL->getValue() ? 1 : 0,
+                                          VType::makeBool(), E->getExprLoc());
+  }
   if (isa<CXXNullPtrLiteralExpr>(E)) {
     return std::make_unique<VLiteralExpr>(0, VType::makePtr(), E->getExprLoc());
   }
   if (const auto *DRE = dyn_cast<DeclRefExpr>(E)) {
+    if (const auto *FD = dyn_cast<FieldDecl>(DRE->getDecl())) {
+      auto It = FieldSubstPrefix.find(FD->getNameAsString());
+      if (It != FieldSubstPrefix.end()) {
+        VType Ty = VType::fromQualType(E->getType(), IntMode);
+        return std::make_unique<VVarExpr>(It->second + FD->getNameAsString(), Ty,
+                                          E->getExprLoc());
+      }
+    }
     if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
       VType Ty = VType::fromQualType(E->getType(), IntMode);
       return std::make_unique<VVarExpr>(VD->getNameAsString(), Ty,
@@ -448,7 +528,9 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
     if (!Inner)
       return nullptr;
     VType To = VType::fromQualType(E->getType(), IntMode);
-    return std::make_unique<VCastExpr>(std::move(Inner), Inner->Ty, To,
+    // Hoist Inner->Ty before the move (unspecified argument evaluation order).
+    VType From = Inner->Ty;
+    return std::make_unique<VCastExpr>(std::move(Inner), From, To,
                                        E->getExprLoc());
   }
   if (const auto *CE = dyn_cast<CStyleCastExpr>(E)) {
@@ -456,7 +538,9 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
     if (!Inner)
       return nullptr;
     VType To = VType::fromQualType(E->getType(), IntMode);
-    return std::make_unique<VCastExpr>(std::move(Inner), Inner->Ty, To,
+    // Hoist Inner->Ty before the move (unspecified argument evaluation order).
+    VType From = Inner->Ty;
+    return std::make_unique<VCastExpr>(std::move(Inner), From, To,
                                        E->getExprLoc());
   }
   if (const auto *O = dyn_cast<OldExpr>(E)) {
@@ -466,7 +550,9 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
     InPost = Saved;
     if (!Inner)
       return nullptr;
-    return std::make_unique<VOldExpr>(std::move(Inner), Inner->Ty,
+    // Hoist Inner->Ty before the move (unspecified argument evaluation order).
+    VType InnerTy = Inner->Ty;
+    return std::make_unique<VOldExpr>(std::move(Inner), InnerTy,
                                       E->getExprLoc());
   }
   if (const auto *C = dyn_cast<ConditionalOperator>(E)) {
@@ -480,6 +566,20 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
                                               std::move(F), Ty, E->getExprLoc());
   }
   if (const auto *M = dyn_cast<MemberExpr>(E)) {
+    // type_invariant lowering: an unqualified field in an invariant is rewritten
+    // by Sema to this->field, which is an *arrow* MemberExpr (since 'this' is a
+    // pointer). When FieldSubstPrefix is active (invariant injection), map it to
+    // the substituted "param.field" variable before any pointer/Load handling.
+    if (const auto *FD = dyn_cast<FieldDecl>(M->getMemberDecl())) {
+      if (isa<CXXThisExpr>(M->getBase()->IgnoreParenImpCasts())) {
+        auto It = FieldSubstPrefix.find(FD->getNameAsString());
+        if (It != FieldSubstPrefix.end()) {
+          VType Ty = VType::fromQualType(E->getType(), IntMode);
+          return std::make_unique<VVarExpr>(It->second + FD->getNameAsString(),
+                                            Ty, E->getExprLoc());
+        }
+      }
+    }
     if (M->isArrow()) {
       auto Base = convertExpr(M->getBase());
       if (!Base)
@@ -487,7 +587,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
       auto Ptr = std::make_unique<VLoadExpr>(std::move(Base),
                                              VType::fromQualType(M->getBase()->getType(), IntMode),
                                              E->getExprLoc());
-      if (const auto *FD = dyn_cast<FieldDecl>(M->getMemberDecl())) {
+      if (isa<FieldDecl>(M->getMemberDecl())) {
         VType Ty = VType::fromQualType(E->getType(), IntMode);
         return std::make_unique<VLoadExpr>(std::move(Ptr), Ty, E->getExprLoc());
       }

@@ -1898,5 +1898,9 @@ def err_result_outside_postcondition : Error<
   "'result' can only be used in postconditions">;
 def err_old_outside_postcondition : Error<
   "'old' can only be used in postconditions">;
+def warn_contract_member_function_unsupported : Warning<
+  "contracts on member functions are not yet supported and are ignored; "
+  "move the function out of the class or verify it as a free function">,
+  InGroup<DiagGroup<"contract-unsupported">>;
 
 } // end of Parser diagnostics

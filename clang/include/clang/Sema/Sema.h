@@ -10281,6 +10281,9 @@ public:
   /// each contract condition expression. (SemaContract.cpp)
   ExprResult ActOnContractCondition(ExprResult E);
 
+  /// Rewrite unqualified field names to this->field for type_invariant(expr).
+  ExprResult ActOnTypeInvariantExpr(ExprResult E, CXXRecordDecl *Record);
+
   /// PerformContextuallyConvertToObjCPointer - Perform a contextual
   /// conversion of the expression From to an Objective-C pointer type.
   /// Returns a valid but null ExprResult if no conversion sequence exists.

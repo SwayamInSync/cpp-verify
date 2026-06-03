@@ -46,6 +46,15 @@ add_clang_library(clangVerify
 )
 
 target_link_libraries(clangVerify PRIVATE ${CPPVERIFY_Z3_TARGET})
+
+# When Z3 is built as an ExternalProject (vendored), make clangVerify wait for it.
+# BUILD_BYPRODUCTS already gives Ninja the ordering; this covers the Makefiles
+# generator, which does not order by byproduct.
+get_property(_cppverify_z3_ep GLOBAL PROPERTY CPPVERIFY_Z3_EP_TARGET)
+if(_cppverify_z3_ep)
+  add_dependencies(clangVerify ${_cppverify_z3_ep})
+endif()
+
 if(CPPVERIFY_ENABLE_COVERAGE)
   target_compile_options(clangVerify PRIVATE
     -fprofile-instr-generate -fcoverage-mapping)

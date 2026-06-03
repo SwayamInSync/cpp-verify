@@ -33,7 +33,8 @@ cmake -S "$ROOT/llvm" -B "$BUILD_DIR" -G "$GENERATOR" \
   -DCPPVERIFY_PREFER_SYSTEM_Z3=OFF
 
 echo "==> Building clang and cpp-verify"
-ninja -C "$BUILD_DIR" clang cpp-verify
+JOBS="${JOBS:-$( (nproc 2>/dev/null) || echo 8 )}"
+ninja -C "$BUILD_DIR" -j"$JOBS" clang cpp-verify
 
 echo ""
 echo "Done."

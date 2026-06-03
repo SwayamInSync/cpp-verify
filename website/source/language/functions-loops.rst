@@ -7,7 +7,7 @@ Functions
 .. code-block:: cpp
 
    int f(int x)
-     pre(x > 0)
+     pre(x > 0 && x < 1000)
      post(result > x)
    { return x + 1; }
 

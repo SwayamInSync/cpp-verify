@@ -26,31 +26,70 @@ set(CPPVERIFY_Z3_SOURCE_DIR "" CACHE PATH "Path to a Z3 source tree (overrides t
 get_filename_component(CPPVERIFY_REPO_ROOT
   "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
 
-function(cppverify_z3_apply_build_options)
-  set(Z3_BUILD_LIBZ3_SHARED OFF CACHE BOOL "" FORCE)
-  set(Z3_BUILD_EXECUTABLE OFF CACHE BOOL "" FORCE)
-  set(Z3_BUILD_TEST_EXECUTABLES OFF CACHE BOOL "" FORCE)
-endfunction()
+# Build vendored Z3 as an isolated ExternalProject rather than add_subdirectory.
+#
+# Why ExternalProject and not add_subdirectory: Z3's CMake declares a library
+# component target literally named `opt` (z3_add_component(opt ...)). LLVM's
+# monorepo also declares an `opt` executable (llvm/tools/opt). Pulling Z3 into
+# the same CMake project via add_subdirectory/FetchContent makes both `opt`
+# targets live in one namespace and configure fails with CMP0002 (duplicate
+# target). ExternalProject runs Z3's CMake in a separate build, so its targets
+# never collide with LLVM's. We then consume the installed static lib through an
+# IMPORTED target.
+#
+# Sources for the build (either an on-disk tree or a git clone) are handled by
+# the SOURCE_DIR / GIT_REPOSITORY arguments threaded in by the callers.
+function(cppverify_z3_build_external)
+  cmake_parse_arguments(Z3EP "" "SOURCE_DIR;GIT_REPOSITORY;GIT_TAG" "" ${ARGN})
+  include(ExternalProject)
 
-function(cppverify_z3_register_alias)
-  if(TARGET libz3)
-    if(NOT TARGET cppverify_z3)
-      add_library(cppverify_z3 ALIAS libz3)
-    endif()
-  elseif(TARGET z3)
-    if(NOT TARGET cppverify_z3)
-      add_library(cppverify_z3 ALIAS z3)
-    endif()
+  set(_prefix  "${CMAKE_BINARY_DIR}/cppverify-z3")
+  set(_install "${_prefix}/install")
+  set(_incdir  "${_install}/include")
+  set(_libpath "${_install}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}z3${CMAKE_STATIC_LIBRARY_SUFFIX}")
+
+  if(Z3EP_SOURCE_DIR)
+    set(_src_args SOURCE_DIR "${Z3EP_SOURCE_DIR}")
+    message(STATUS "CppVerify: building vendored Z3 (ExternalProject) from ${Z3EP_SOURCE_DIR}")
   else()
-    message(FATAL_ERROR "Z3 build did not produce libz3 or z3 CMake target")
+    set(_src_args
+      GIT_REPOSITORY "${Z3EP_GIT_REPOSITORY}"
+      GIT_TAG        "${Z3EP_GIT_TAG}"
+      GIT_SHALLOW    TRUE)
+    message(STATUS "CppVerify: building vendored Z3 (ExternalProject) ${Z3EP_GIT_TAG} "
+      "(first build needs network)")
   endif()
-endfunction()
 
-function(cppverify_z3_from_subdirectory z3_src binary_dir)
-  cppverify_z3_apply_build_options()
-  message(STATUS "CppVerify: building vendored Z3 from ${z3_src}")
-  add_subdirectory("${z3_src}" "${binary_dir}" EXCLUDE_FROM_ALL)
-  cppverify_z3_register_alias()
+  ExternalProject_Add(cppverify_z3_ep
+    ${_src_args}
+    PREFIX "${_prefix}"
+    CMAKE_CACHE_ARGS
+      -DCMAKE_BUILD_TYPE:STRING=Release
+      -DCMAKE_INSTALL_PREFIX:PATH=${_install}
+      -DCMAKE_POSITION_INDEPENDENT_CODE:BOOL=ON
+      -DZ3_BUILD_LIBZ3_SHARED:BOOL=OFF
+      -DZ3_BUILD_EXECUTABLE:BOOL=OFF
+      -DZ3_BUILD_TEST_EXECUTABLES:BOOL=OFF
+      -DZ3_BUILD_DOCUMENTATION:BOOL=OFF
+      -DZ3_ENABLE_EXAMPLE_TARGETS:BOOL=OFF
+    BUILD_BYPRODUCTS "${_libpath}"
+    USES_TERMINAL_DOWNLOAD TRUE
+    USES_TERMINAL_BUILD TRUE)
+
+  # INTERFACE_INCLUDE_DIRECTORIES must exist at configure time.
+  file(MAKE_DIRECTORY "${_incdir}")
+
+  find_package(Threads REQUIRED)
+  add_library(cppverify_z3 STATIC IMPORTED GLOBAL)
+  set_target_properties(cppverify_z3 PROPERTIES
+    IMPORTED_LOCATION "${_libpath}"
+    INTERFACE_INCLUDE_DIRECTORIES "${_incdir}"
+    INTERFACE_LINK_LIBRARIES "Threads::Threads;${CMAKE_DL_LIBS}")
+
+  # Ensure the ExternalProject is built before anything links the imported lib.
+  # BUILD_BYPRODUCTS handles Ninja ordering; this property lets consuming targets
+  # add an explicit dependency for the Makefiles generator too.
+  set_property(GLOBAL PROPERTY CPPVERIFY_Z3_EP_TARGET cppverify_z3_ep)
 endfunction()
 
 function(cppverify_z3_try_system out_var)
@@ -101,22 +140,14 @@ function(cppverify_z3_try_local out_var)
     set(${out_var} "" PARENT_SCOPE)
     return()
   endif()
-  cppverify_z3_from_subdirectory("${_src}" "${CMAKE_BINARY_DIR}/cppverify-z3-build")
+  cppverify_z3_build_external(SOURCE_DIR "${_src}")
   set(${out_var} cppverify_z3 PARENT_SCOPE)
 endfunction()
 
 function(cppverify_z3_try_fetch out_var)
-  include(FetchContent)
-  cppverify_z3_apply_build_options()
-  message(STATUS "CppVerify: fetching Z3 ${CPPVERIFY_Z3_GIT_TAG} (first build needs network)")
-  FetchContent_Declare(
-    cppverify_z3_src
+  cppverify_z3_build_external(
     GIT_REPOSITORY https://github.com/Z3Prover/z3.git
-    GIT_TAG        ${CPPVERIFY_Z3_GIT_TAG}
-    GIT_SHALLOW    TRUE
-  )
-  FetchContent_MakeAvailable(cppverify_z3_src)
-  cppverify_z3_register_alias()
+    GIT_TAG        ${CPPVERIFY_Z3_GIT_TAG})
   set(${out_var} cppverify_z3 PARENT_SCOPE)
 endfunction()
 

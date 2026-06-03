@@ -15,6 +15,9 @@ struct VerifyOptions {
   BackendKind Backend = BackendKind::Z3;
   std::string LeanOutPath;
   unsigned BMCUnroll = 10;
+  /// Per-query Z3 timeout in milliseconds; 0 disables it. Non-terminating
+  /// queries return Unknown instead of hanging the tool.
+  unsigned SolverTimeoutMs = 10000;
 };
 
 bool verifyTranslationUnit(ASTContext &Ctx, llvm::raw_ostream &OS,

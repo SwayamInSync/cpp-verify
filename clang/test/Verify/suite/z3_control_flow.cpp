@@ -29,8 +29,13 @@ int while_countdown(int n)
   pre(n >= 0 && n <= 10)
   post(result == 0)
 {
+  // invariant(n >= 0) is what lets the verifier conclude n == 0 on exit:
+  // the loop guard gives !(n > 0) i.e. n <= 0, and the invariant gives n >= 0.
   while (n > 0)
+    invariant(n >= 0)
+  {
     n = n - 1;
+  }
   return n;
 }
 

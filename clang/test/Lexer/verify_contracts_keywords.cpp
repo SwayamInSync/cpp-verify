@@ -32,6 +32,7 @@
 // KW-DAG: pre 'pre'
 // KW-DAG: post 'post'
 // KW-DAG: invariant 'invariant'
+// KW-DAG: type_invariant 'type_invariant'
 // KW-DAG: decreases 'decreases'
 // KW-DAG: ghost 'ghost'
 // KW-DAG: spec 'spec'
@@ -69,6 +70,7 @@
 static_assert(!__is_identifier(pre),             "pre must be a keyword with -fverify-contracts");
 static_assert(!__is_identifier(post),            "post must be a keyword with -fverify-contracts");
 static_assert(!__is_identifier(invariant),       "invariant must be a keyword with -fverify-contracts");
+static_assert(!__is_identifier(type_invariant),  "type_invariant must be a keyword with -fverify-contracts");
 static_assert(!__is_identifier(decreases),       "decreases must be a keyword with -fverify-contracts");
 static_assert(!__is_identifier(ghost),           "ghost must be a keyword with -fverify-contracts");
 static_assert(!__is_identifier(spec),            "spec must be a keyword with -fverify-contracts");
@@ -108,7 +110,7 @@ static_assert(__is_identifier(result),          "result must be an identifier wi
 // dump-tokens FileCheck patterns match against.  With -fverify-contracts each
 // name lexes as its keyword token; without it, as an identifier token.
 // (dump-tokens is lex-only so no parse error occurs in either case.)
-int pre, post, invariant, decreases, ghost, spec, proof;
+int pre, post, invariant, type_invariant, decreases, ghost, spec, proof;
 int contract_assert, forall, exists;
 int old, result; // always identifiers at lex time
 #endif

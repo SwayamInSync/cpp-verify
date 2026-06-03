@@ -46,6 +46,13 @@ static cl::opt<unsigned> BMCUnroll(
     cl::init(10),
     cl::cat(CppVerifyCategory));
 
+static cl::opt<unsigned> SolverTimeout(
+    "timeout",
+    cl::desc("Per-query Z3 timeout in milliseconds (0 = no limit). A query that "
+             "exceeds it is reported as unknown instead of hanging"),
+    cl::init(10000),
+    cl::cat(CppVerifyCategory));
+
 namespace {
 
 static int gVerifyFailures = 0;
@@ -66,6 +73,7 @@ public:
         VOpts.Backend = verify::BackendKind::Z3;
       VOpts.LeanOutPath = LeanOut.getValue();
       VOpts.BMCUnroll = BMCUnroll.getValue();
+      VOpts.SolverTimeoutMs = SolverTimeout.getValue();
       if (!verify::verifyTranslationUnit(Ctx, llvm::outs(), VOpts))
         ++gVerifyFailures;
     }

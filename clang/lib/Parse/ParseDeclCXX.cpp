@@ -2960,6 +2960,27 @@ Parser::DeclGroupPtrTy Parser::ParseCXXClassMemberDeclaration(
     return nullptr;
   }
 
+  // CppVerify: contract clauses (pre/post/...) on in-class member functions are
+  // not yet modeled by the verifier, which handles free functions. Rather than
+  // emit a confusing "expected ';'", diagnose once and skip the clauses so the
+  // rest of the class still parses and the function is treated as uncontracted.
+  if (DeclaratorInfo.isFunctionDeclarator() &&
+      (Tok.is(tok::kw_pre) || Tok.is(tok::kw_post) ||
+       Tok.is(tok::kw_decreases) || Tok.is(tok::kw_modifies) ||
+       Tok.is(tok::kw_aliases) || Tok.is(tok::kw_recommends))) {
+    Diag(Tok, diag::warn_contract_member_function_unsupported);
+    while (Tok.is(tok::kw_pre) || Tok.is(tok::kw_post) ||
+           Tok.is(tok::kw_decreases) || Tok.is(tok::kw_modifies) ||
+           Tok.is(tok::kw_aliases) || Tok.is(tok::kw_recommends)) {
+      ConsumeToken();
+      if (Tok.is(tok::l_paren)) {
+        BalancedDelimiterTracker T(*this, tok::l_paren);
+        if (!T.consumeOpen())
+          T.skipToEnd();
+      }
+    }
+  }
+
   if (IsTemplateSpecOrInst)
     SAC.done();
 
@@ -3666,6 +3687,12 @@ void Parser::ParseCXXMemberSpecification(SourceLocation RecordLoc,
     // While we still have something to read, read the member-declarations.
     while (!tryParseMisplacedModuleImport() && Tok.isNot(tok::r_brace) &&
            Tok.isNot(tok::eof)) {
+      // CppVerify: type_invariant must be handled before member-decl parsing.
+      if (Tok.is(tok::kw_type_invariant)) {
+        ParseTypeInvariant(TagDecl);
+        MaybeDestroyTemplateIds();
+        continue;
+      }
       // Each iteration of this loop reads one member-declaration.
       ParseCXXClassMemberDeclarationWithPragmas(
           CurAS, AccessAttrs, static_cast<DeclSpec::TST>(TagType), TagDecl);
@@ -5016,4 +5043,49 @@ void Parser::ParseMicrosoftIfExistsClassDeclaration(
   }
 
   Braces.consumeClose();
+}
+
+/// CppVerify: parse `type_invariant(expr);` inside a class/struct body.
+void Parser::ParseTypeInvariant(Decl *TagDecl) {
+  assert(Tok.is(tok::kw_type_invariant));
+  auto *RD = dyn_cast<CXXRecordDecl>(TagDecl);
+  ConsumeToken();
+  if (!RD) {
+    SkipUntil(tok::semi, StopAtSemi);
+    if (Tok.is(tok::semi))
+      ConsumeToken();
+    return;
+  }
+  if (Tok.isNot(tok::l_paren)) {
+    Diag(Tok, diag::err_contract_expected_lparen) << "type_invariant";
+    SkipUntil(tok::semi, StopAtSemi);
+    if (Tok.is(tok::semi))
+      ConsumeToken();
+    return;
+  }
+  ConsumeParen();
+  llvm::SaveAndRestore<bool> ParsingContractExprRAII(InParsingContractExpr, true);
+  Sema::CXXThisScopeRAII ThisScope(Actions, RD, Qualifiers(), true);
+  Actions.PushExpressionEvaluationContext(
+      Sema::ExpressionEvaluationContext::Unevaluated);
+  ExprResult E = ParseExpression();
+  Actions.PopExpressionEvaluationContext();
+  if (Tok.isNot(tok::r_paren)) {
+    Diag(Tok, diag::err_expected) << tok::r_paren;
+    SkipUntil(tok::semi, StopAtSemi);
+    if (Tok.is(tok::semi))
+      ConsumeToken();
+    return;
+  }
+  ConsumeParen();
+  if (!E.isInvalid()) {
+    E = Actions.ActOnTypeInvariantExpr(E, RD);
+    if (!E.isInvalid())
+      Actions.getASTContext().getOrCreateTypeContract(RD).Invariants.push_back(
+          E.get());
+  }
+  if (Tok.isNot(tok::semi))
+    Diag(Tok, diag::err_expected) << tok::semi;
+  else
+    ConsumeToken();
 }

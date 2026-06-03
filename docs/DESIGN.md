@@ -14,7 +14,7 @@ All contract syntax is enabled with `-fverify-contracts`. Without this flag, the
 | `aliases(p, q)` | After function `)` | Opts out of implicit non-aliasing assumption for the named pointer/reference pair |
 | `recommends(expr)` | After function `)` (spec only) | Soft precondition for spec functions; reported on verification failure |
 | `invariant(expr)` | After `while`/`for` condition `)` | Loop invariant |
-| `decreases(expr [, expr...])` | After loop `)` or function `)` | Termination measure. Tuple form is lex-ordered. |
+| `decreases(expr)` | After loop `)` or function `)` | Termination measure. (Lexicographic tuple form is designed but not yet implemented.) |
 | `type_invariant(expr)` | Inside class/struct body | Per-instance invariant injected at function boundaries |
 | `ghost { ... }` | Statement | Ghost block — proof steps, stripped by CodeGen |
 | `contract_assert(expr)` | Statement | Verification condition (not a runtime check) |
@@ -56,7 +56,7 @@ while (i < n)
 ```
 
 - `invariant(expr)`: must hold on entry and be preserved by each iteration.
-- `decreases(expr [, expr...])`: termination measure. Single expression must be non-negative and strictly decreasing. Tuple form is lex-ordered: `decreases(a, b)` means `(a, b)` strictly decreases lexicographically.
+- `decreases(expr)`: termination measure. The single expression must be non-negative and strictly decreasing. (A lexicographic tuple form `decreases(a, b)` is designed but **not yet implemented** — the parser currently treats the arguments as a comma expression, so pass a single measure.)
 
 ## Assertions: contract_assert
 
@@ -285,9 +285,9 @@ int compute() {
 
 ```cpp
 class Coordinate {
-    type_invariant(x >= 0 && y >= 0);
     int x;
     int y;
+    type_invariant(x >= 0 && y >= 0);   // must appear after the fields it names
 };
 
 int dist_sq(Coordinate p, Coordinate q) {
@@ -319,6 +319,17 @@ This is purely an optimization — correctness is identical to eager injection. 
 - Parser: implemented in Weeks 4.5 (after Weeks 3-4 core IR).
 - New keyword `type_invariant` in `TokenKinds.def` under KEYCONTRACT.
 - `TypeContractInfo` side table on `RecordDecl` in `ASTContext`.
+- The clause must appear **after** the fields it names (it is parsed eagerly;
+  late parsing is future work).
+- Implemented: `assume(invariant)` at the first use of an invariant-named field
+  for by-value and reference (`C`, `C&`, `const C&`) parameters. Because the
+  invariant is injected as a precondition, callers must *establish* it at call
+  sites (the modular precondition check), which is sound.
+- Not yet implemented: the `assert(invariant)` after field assignments and at
+  returns that construct an invariant-bearing value. These require verifying
+  struct construction/mutation/return, which the backend does not model yet
+  (such functions currently report "no verifiable functions"). Pointer-to-record
+  parameters are also not injected (their field access lowers to a heap Load).
 
 ## View Functions (idiomatic spec abstraction)
 

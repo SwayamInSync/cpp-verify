@@ -29,7 +29,7 @@ enum class BackendKind { Z3, Lean, BMC };
 
 std::unique_ptr<VerifyBackend>
 createVerifyBackend(BackendKind K, llvm::raw_ostream *LeanOut = nullptr,
-                    unsigned BMCUnroll = 10);
+                    unsigned BMCUnroll = 10, unsigned SolverTimeoutMs = 0);
 
 } // namespace verify
 } // namespace clang

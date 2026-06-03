@@ -184,8 +184,10 @@ public:
         auto Rest = evalBodySeq(Body, Env, Idx + 1);
         if (!ThenVal || !Rest)
           return nullptr;
+        // Hoist ThenVal->Ty: it is read in the same call that moves ThenVal.
+        VType Ty = ThenVal->Ty;
         return std::make_unique<VConditionalExpr>(std::move(Cond), std::move(ThenVal),
-                                                  std::move(Rest), ThenVal->Ty, I.Loc);
+                                                  std::move(Rest), Ty, I.Loc);
       }
       auto ThenEnv = cloneEnv(Env);
       auto ElseEnv = cloneEnv(Env);
@@ -193,8 +195,10 @@ public:
       auto ElseVal = evalBody(I.Else, ElseEnv);
       if (!ThenVal || !ElseVal)
         return nullptr;
+      // Hoist ThenVal->Ty: it is read in the same call that moves ThenVal.
+      VType Ty = ThenVal->Ty;
       return std::make_unique<VConditionalExpr>(std::move(Cond), std::move(ThenVal),
-                                                std::move(ElseVal), ThenVal->Ty, I.Loc);
+                                                std::move(ElseVal), Ty, I.Loc);
     }
     case VStmt::GhostBlock: {
       const auto &G = static_cast<const VGhostBlockStmt &>(S);

@@ -9,15 +9,20 @@ The program
 .. code-block:: cpp
 
    int abs(int x)
-     pre(true)
+     pre(x >= -2147483647)
      post(result >= 0)
    {
      return x < 0 ? -x : x;
    }
 
-- ``pre(true)`` — weakest precondition; any caller may call.
+- ``pre(x >= -2147483647)`` — the precondition the caller must satisfy. It admits
+  every ``int`` except ``INT_MIN``: CppVerify uses honest machine integers, and
+  ``-INT_MIN`` overflows (see :doc:`ch16-when-verification-fails`). With ``pre(true)``
+  the verifier correctly *rejects* this function and reports ``x = INT_MIN`` as a
+  counterexample — a real bug it just caught for you.
 - ``post(result >= 0)`` — ``result`` is the return value (Part I: postcondition).
-- The verifier must prove: assuming ``true`` and the implementation, ``result >= 0`` follows.
+- The verifier must prove: assuming the precondition and the implementation,
+  ``result >= 0`` follows.
 
 Run verification
 ----------------
@@ -29,11 +34,11 @@ Run verification
 What the verifier did (conceptually)
 ------------------------------------
 
-1. Built a VC: ``true`` and path facts about ``x`` imply ``result >= 0``.
+1. Built a VC: the precondition and path facts about ``x`` imply ``result >= 0``.
 2. Asked Z3: is ``(facts ∧ ¬(result >= 0))`` unsatisfiable?
 3. **Unsat** ⇒ verified.
 
-If you return ``x`` unchanged, Z3 finds a model with ``x = -1`` — counterexample.
+If you return ``x`` unchanged, Z3 finds a model with a negative ``x`` — counterexample.
 
 Compile the same file
 ---------------------

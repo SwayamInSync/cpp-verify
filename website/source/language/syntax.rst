@@ -40,6 +40,24 @@ Requires ``-fverify-contracts``. Full table:
    * - ``contract_assert(e)``
      - Statement
      - Proof obligation
+   * - ``reveal_with_fuel(f, n)``
+     - In ``ghost { }``
+     - Unfold recursive spec ``f`` up to depth ``n``
+   * - ``reveal(f)`` / ``hide(f)``
+     - In ``ghost { }``
+     - Make spec ``f`` transparent / opaque locally
+   * - ``forall(i, lo, hi, e)``
+     - Expression
+     - Bounded ``∀`` over ``[lo, hi)``
+   * - ``exists(i, lo, hi, e)``
+     - Expression
+     - Bounded ``∃`` over ``[lo, hi)``
+   * - ``old(expr)``
+     - In ``post``
+     - Pre-state value
+   * - ``result``
+     - In ``post``
+     - Return value
    * - ``spec T f(...)``
      - Decl
      - Spec function

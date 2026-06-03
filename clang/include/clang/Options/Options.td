@@ -2367,20 +2367,25 @@ defm fixed_point : BoolFOption<"fixed-point",
   NegFlag<SetFalse, [], [ClangOption], "Disable">,
   BothFlags<[], [ClangOption], " fixed point types">>;
 
-// CppVerify: deductive contract verification
+// CppVerify: deductive contract verification.
+// -fverify-contracts enables the contract language (pre/post/...) and, by
+// default, runs the SMT verifier in parallel with code generation.
 defm verify_contracts : BoolFOption<"verify-contracts",
   LangOpts<"VerifyContracts">, DefaultFalse,
   PosFlag<SetTrue, [], [ClangOption, CC1Option],
-          "Enable CppVerify contract syntax (pre/post/invariant/decreases/ghost/spec/proof)">,
+          "Enable CppVerify contracts (pre/post/invariant/decreases/ghost/spec/proof) "
+          "and verify in parallel with compilation">,
   NegFlag<SetFalse, [], [ClangOption], "Disable CppVerify contract syntax">>;
 
-// CppVerify SMT backend (on by default when -fverify-contracts is used).
-defm verify : BoolFOption<"verify",
-  FrontendOpts<"RunCppVerify">, DefaultTrue,
-  PosFlag<SetTrue, [], [ClangOption, CC1Option],
-          "Run CppVerify SMT verification alongside compilation">,
-  NegFlag<SetFalse, [], [ClangOption, CC1Option],
-          "Skip CppVerify SMT verification (contract syntax and codegen only)">>;
+// Skip the CppVerify SMT step. Only the negative is exposed: the verifier runs by
+// default once contracts are enabled, and -fno-verify turns compilation into a
+// syntax/semantics-only "light check". It implies -fverify-contracts (handled in
+// the driver) because it is meaningless without the contract language.
+def fno_verify : Flag<["-"], "fno-verify">, Group<f_clang_Group>,
+  Visibility<[ClangOption, CC1Option]>,
+  HelpText<"Check contract syntax and semantics but skip CppVerify SMT verification "
+           "(implies -fverify-contracts)">,
+  MarshallingInfoNegativeFlag<FrontendOpts<"RunCppVerify">>;
 def cxx_static_destructors_EQ : Joined<["-"], "fc++-static-destructors=">, Group<f_Group>,
   HelpText<"Controls which variables C++ static destructors are registered for">,
   Values<"all,thread-local,none">,

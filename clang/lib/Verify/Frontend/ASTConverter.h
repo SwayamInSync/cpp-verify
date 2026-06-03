@@ -17,6 +17,8 @@ class ASTConverter {
   VFunction *CurrentFn = nullptr;
   unsigned NestedCallId = 0;
   std::vector<std::string> Errors;
+  /// Maps unqualified field name -> "param." for type_invariant lowering.
+  std::map<std::string, std::string> FieldSubstPrefix;
 
 public:
   explicit ASTConverter(ASTContext &Ctx) : Ctx(Ctx) {}
@@ -41,6 +43,8 @@ private:
   VIntMode specCallIntMode(const FunctionDecl *FD) const;
   bool contractsReferenceSpec(const FunctionContractInfo &FCI) const;
   static std::string specNameFromExpr(const Expr *E);
+  void injectTypeInvariants(const FunctionDecl *FD, VFunction &Fn);
+  std::unique_ptr<VExpr> convertTypeInvariantExpr(const Expr *E);
 };
 
 } // namespace verify

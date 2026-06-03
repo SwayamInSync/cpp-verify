@@ -36,3 +36,21 @@ Common failure modes
 
 ``for`` loops use the same clause placement after the ``for (...)`` part.
 
+Quantified properties
+---------------------
+
+A loop usually establishes a property over a *range*. Express that with the bounded quantifiers
+``forall(i, lo, hi, e)`` and ``exists(i, lo, hi, e)`` — ``i`` ranges over ``[lo, hi)`` and the
+half-open bound is the implicit trigger:
+
+.. code-block:: cpp
+
+   bool nonneg_prefix(int n)
+     pre(n >= 0 && n <= 8)
+     post(result == forall(i, 0, n, i >= 0))
+   { return true; }
+
+Quantifiers are valid anywhere a contract expression is — ``pre``, ``post``, ``invariant`` — which
+is how a loop invariant talks about "everything processed so far". MVP supports **bounded**
+quantifiers only.
+

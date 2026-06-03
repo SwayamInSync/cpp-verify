@@ -3121,6 +3121,22 @@ const LoopContractInfo *ASTContext::getLoopContract(const Stmt *S) const {
   return I != LoopContracts.end() ? I->second : nullptr;
 }
 
+TypeContractInfo &ASTContext::getOrCreateTypeContract(const RecordDecl *RD) {
+  assert(RD && "Passed null record");
+  const RecordDecl *Key = cast<RecordDecl>(RD->getCanonicalDecl());
+  auto &Info = TypeContracts[Key];
+  if (!Info)
+    Info = new (*this) TypeContractInfo();
+  return *Info;
+}
+
+const TypeContractInfo *ASTContext::getTypeContract(const RecordDecl *RD) const {
+  if (!RD)
+    return nullptr;
+  auto I = TypeContracts.find(cast<RecordDecl>(RD->getCanonicalDecl()));
+  return I != TypeContracts.end() ? I->second : nullptr;
+}
+
 TypeSourceInfo *ASTContext::CreateTypeSourceInfo(QualType T,
                                                  unsigned DataSize) const {
   if (!DataSize)

@@ -21,6 +21,9 @@ class Z3Encoder {
   FunctionMap SpecFunctions;
   std::map<std::string, z3::func_decl> SpecFuncDecls;
   VIntMode CallerIntMode = VIntMode::Machine;
+  /// Per-query solver timeout in milliseconds; 0 disables it. Prevents
+  /// non-terminating queries from hanging the tool (they return Unknown).
+  unsigned TimeoutMs = 0;
 
   z3::sort intSort();
   z3::sort bvSort();
@@ -37,6 +40,7 @@ class Z3Encoder {
 
 public:
   Z3Encoder();
+  void setTimeoutMs(unsigned Ms) { TimeoutMs = Ms; }
   VerifyResult verifyMachine(const VCMachine &M);
   void emitSpecDefiningAxiom(const std::string &Name, const SpecAxiomContext &Ctx);
   void dumpVC(const VCExpr *E, llvm::raw_ostream &OS);
@@ -46,6 +50,7 @@ class Z3VerifyBackend : public VerifyBackend {
   Z3Encoder Enc;
 
 public:
+  explicit Z3VerifyBackend(unsigned TimeoutMs = 0) { Enc.setTimeoutMs(TimeoutMs); }
   llvm::StringRef getName() const override { return "z3"; }
   VerifyResult verifyPassive(const PassiveProgram &P) override;
 };

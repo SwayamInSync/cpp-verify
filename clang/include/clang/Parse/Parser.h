@@ -7466,6 +7466,7 @@ public:
   /// Parse reveal_with_fuel(fn, depth);
   StmtResult ParseRevealWithFuel();
   StmtResult ParseHideSpec();
+  void ParseTypeInvariant(Decl *TagDecl);
   StmtResult ParseRevealSpec();
 
   /// Parse forall(binder, lo, hi, body) or exists(binder, lo, hi, body).

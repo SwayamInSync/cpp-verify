@@ -12,6 +12,7 @@ and :doc:`tooling`.
    expressions
    functions-loops
    ghost-proofs
+   structs
    pointers
    integers
    tooling
