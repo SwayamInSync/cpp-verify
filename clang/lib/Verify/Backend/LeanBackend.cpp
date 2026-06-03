@@ -7,9 +7,21 @@
 using namespace clang;
 using namespace verify;
 
+// Emission budget guarding against exponential blow-up: VCExprs are DAGs with
+// shared sub-terms (heap store/select chains in particular), and printing them
+// as a tree re-expands shared nodes. The budget caps total emitted nodes so the
+// Lean scratch-pad export always terminates.
+static unsigned LeanEmitBudget = 0;
+
 static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS, unsigned Prec = 0) {
   if (!E) {
     OS << "True";
+    return;
+  }
+  if (LeanEmitBudget == 0)
+    return;
+  if (--LeanEmitBudget == 0) {
+    OS << "/- … expression elided (too large for the Lean scratch-pad) -/";
     return;
   }
   auto paren = [&](unsigned P, auto Fn) {
@@ -190,6 +202,7 @@ VerifyResult verify::exportLeanScratchPad(const PassiveProgram &P,
   OS << "  h' = h.set! p v\n\n";
 
   OS << "theorem cppverify_goal : ";
+  LeanEmitBudget = 500000;
   printVCExprLean(M.Goal.get(), OS);
   OS << " := by\n  sorry\n";
 
