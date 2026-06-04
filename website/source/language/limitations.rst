@@ -14,11 +14,13 @@ Currently outside the supported core:
 Pointer and heap reasoning are available in the language surface (see :doc:`pointers` and
 :doc:`../book/part-ii/ch14-pointers-frames-modifies`). Pointer arithmetic and array indexing
 (``*(p + i)``, ``p[i]``) verify with disjointness, and quantified loop invariants over a buffer
-range prove whole-array properties (single-buffer fills and ``strlen``-style search loops verify
-end-to-end). Loops relating **two** buffers (copy loops) require an explicit non-overlap
-precondition and may currently report ``unknown`` pending quantifier-trigger tuning. Depth of
-automation continues to expand; see the project :doc:`../book/part-ii/ch17-backends-modular-calls`
-and design notes in the repo ``docs/`` tree.
+range prove whole-array properties: single-buffer fills, ``strlen``-style search loops, and
+two-buffer ``memcpy``-style copies (given an explicit non-overlap precondition) all verify
+end-to-end. Addresses are modeled as mathematical integers, so range conditions are wrap-free;
+disjointness facts should use **bounded** indices — an unbounded pure-disequality disjointness
+(``i != k`` with no range) may report ``unknown``. Depth of automation continues to expand; see
+the project :doc:`../book/part-ii/ch17-backends-modular-calls` and design notes in the repo
+``docs/`` tree.
 
 Undefined-behavior checking
 ---------------------------

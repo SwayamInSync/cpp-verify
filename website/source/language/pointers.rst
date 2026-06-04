@@ -56,9 +56,31 @@ fill/zero loop verifies end-to-end:
      { p[j] = 0; j = j + 1; }
    }
 
-Single-buffer fills and search loops (``strlen``-style scans) verify; loops
-relating *two* buffers (copy loops) may report ``unknown`` pending
-quantifier-trigger improvements, and require an explicit non-overlap precondition
+Two-buffer copy loops (``memcpy``-style) also verify, given an explicit
+**non-overlap** precondition that the source and destination ranges are disjoint
+(``d + n <= s || s + n <= d``). Without it the copy is rejected — storing to the
+destination could clobber a source cell still to be read, exactly the C
+``memcpy`` vs ``memmove`` distinction:
+
+.. code-block:: cpp
+
+   void copy(int* d, int* s, int n)
+     pre(d != nullptr && s != nullptr && n >= 0 && n <= 1000 &&
+         (d + n <= s || s + n <= d))      // ranges disjoint
+     modifies(*d)
+     post(forall(i, 0, n, d[i] == s[i]))
+   {
+     int j = 0;
+     while (j < n)
+       invariant(0 <= j && j <= n && forall(i, 0, j, d[i] == s[i]))
+       decreases(n - j)
+     { d[j] = s[j]; j = j + 1; }
+   }
+
+Addresses are reasoned about as mathematical integers, so range conditions like
+the non-overlap above are exact (no wraparound). Array indices used in
+disjointness facts should be bounded (as in real buffer code); an *unbounded*
+pure-disequality disjointness (``i != k`` with no range) may report ``unknown``
 (see :doc:`limitations`).
 
 See :doc:`../book/part-ii/ch14-pointers-frames-modifies`.
