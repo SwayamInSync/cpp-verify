@@ -257,6 +257,16 @@ public:
         N->Children.push_back(fromVExpr(A.get()));
       return N;
     }
+    case VExpr::OverflowCheck: {
+      const auto *O = static_cast<const VOverflowCheckExpr *>(E);
+      auto N = std::make_unique<VCExpr>(VCExpr::NoOverflow);
+      N->IntMode = VIntMode::Machine; // overflow only meaningful for bit-vectors
+      N->IntVal = static_cast<int64_t>(O->Op);
+      N->Children.push_back(fromVExpr(O->Lhs.get()));
+      if (O->Rhs)
+        N->Children.push_back(fromVExpr(O->Rhs.get()));
+      return N;
+    }
     }
     return vcTrue();
   }

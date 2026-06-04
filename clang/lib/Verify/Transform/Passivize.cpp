@@ -116,6 +116,12 @@ static std::unique_ptr<VExpr> cloneExpr(const VExpr *E, const CloneCtx &Ctx) {
     return std::make_unique<VSpecCallExpr>(C->Callee, std::move(Args), C->Ty,
                                            C->Loc);
   }
+  case VExpr::OverflowCheck: {
+    const auto *O = static_cast<const VOverflowCheckExpr *>(E);
+    return std::make_unique<VOverflowCheckExpr>(
+        O->Op, cloneExpr(O->Lhs.get(), Ctx),
+        O->Rhs ? cloneExpr(O->Rhs.get(), Ctx) : nullptr, O->Loc);
+  }
   case VExpr::Forall:
   case VExpr::Exists: {
     const auto *Q = static_cast<const VQuantifiedExpr *>(E);

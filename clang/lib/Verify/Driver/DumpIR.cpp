@@ -151,6 +151,15 @@ void verify::dumpVExpr(const VExpr *E, llvm::raw_ostream &OS, unsigned Depth) {
       dumpVExpr(A.get(), OS, Depth + 1);
     break;
   }
+  case VExpr::OverflowCheck: {
+    const auto *O = static_cast<const VOverflowCheckExpr *>(E);
+    static const char *Names[] = {"add", "sub", "mul", "neg", "sdiv"};
+    OS << "no-overflow." << Names[static_cast<int>(O->Op)] << "\n";
+    dumpVExpr(O->Lhs.get(), OS, Depth + 1);
+    if (O->Rhs)
+      dumpVExpr(O->Rhs.get(), OS, Depth + 1);
+    break;
+  }
   }
 }
 

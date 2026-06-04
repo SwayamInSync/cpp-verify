@@ -13,8 +13,20 @@ VType VType::fromQualType(QualType QT, VIntMode DefaultMode) {
     return VType::makeVoid();
   if (QT->isPointerType() || QT->isReferenceType())
     return VType::makePtr();
-  if (QT->isIntegerType())
-    return VType::makeInt32(DefaultMode);
+  if (QT->isIntegerType()) {
+    // 64-bit-wide integer kinds keep Int64; everything else is modeled as Int32
+    // (the encoder uses a 32-bit bit-vector either way for now). Signedness is
+    // recorded so UB checking can skip unsigned (defined-wraparound) arithmetic.
+    VTypeKind K = (QT->isSpecificBuiltinType(BuiltinType::Long) ||
+                   QT->isSpecificBuiltinType(BuiltinType::ULong) ||
+                   QT->isSpecificBuiltinType(BuiltinType::LongLong) ||
+                   QT->isSpecificBuiltinType(BuiltinType::ULongLong))
+                      ? VTypeKind::Int64
+                      : VTypeKind::Int32;
+    VType T{K, DefaultMode};
+    T.Unsigned = QT->isUnsignedIntegerType();
+    return T;
+  }
   return VType::makeInt32(DefaultMode);
 }
 
@@ -91,6 +103,11 @@ std::unique_ptr<VExpr> verify::cloneVExpr(const VExpr *E) {
     for (const auto &A : C->Args)
       Args.push_back(cloneVExpr(A.get()));
     return std::make_unique<VSpecCallExpr>(C->Callee, std::move(Args), C->Ty, C->Loc);
+  }
+  case VExpr::OverflowCheck: {
+    const auto *O = static_cast<const VOverflowCheckExpr *>(E);
+    return std::make_unique<VOverflowCheckExpr>(
+        O->Op, cloneVExpr(O->Lhs.get()), cloneVExpr(O->Rhs.get()), O->Loc);
   }
   }
   return nullptr;

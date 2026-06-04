@@ -4,6 +4,7 @@
 #include "../Transform/Passivize.h"
 #include "../Transform/LoopUnroll.h"
 #include "../Transform/SpecInline.h"
+#include "../Transform/UBChecks.h"
 #include "../IR/VStmt.h"
 #include "../Backend/WPCalc.h"
 #include "../Backend/VCMachine.h"
@@ -153,6 +154,11 @@ public:
           Inliner.prepareFunctionAxiomatic(*PreparedFn);
         else
           Inliner.prepareFunction(*PreparedFn);
+        // UB safety obligations: insert before passivization (and before any BMC
+        // unrolling, so the unroller copies them into every unrolled iteration).
+        // Bit-vector overflow predicates are Z3-only for now.
+        if (Opts.CheckUB && Opts.Backend == BackendKind::Z3)
+          instrumentUBChecks(*PreparedFn);
         if (Opts.Backend == BackendKind::BMC) {
           UnrolledFn = LoopUnroller::unroll(*PreparedFn, Opts.BMCUnroll);
           return *UnrolledFn;

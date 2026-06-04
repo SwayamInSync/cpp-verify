@@ -20,7 +20,10 @@ public:
   enum Kind {
     True, False, IntLit, BoolLit, Var, Not, And, Or, Ite,
     Eq, Ne, Lt, Le, Gt, Ge, Add, Sub, Mul, Neg,
-    Select, Store, Forall, IntToBv, BvToInt, SpecCall
+    Select, Store, Forall, IntToBv, BvToInt, SpecCall,
+    // UB safety: "the signed Op of the children does not overflow". The specific
+    // VOverflowOp is stored in IntVal. Encoded via Z3 bv*_no_overflow primitives.
+    NoOverflow
   };
 
   Kind K;

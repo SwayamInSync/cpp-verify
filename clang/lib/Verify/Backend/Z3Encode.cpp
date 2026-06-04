@@ -254,6 +254,32 @@ z3::expr Z3Encoder::encodeVCNode(
   }
   case VCExpr::Neg:
     return -coerceTo(child(0), E->IntMode);
+  case VCExpr::NoOverflow: {
+    // The signed Op of the (bit-vector) operands does not overflow. IntVal
+    // holds the VOverflowOp. Always reasons in bit-vector mode.
+    z3::expr A = coerceTo(child(0), VIntMode::Machine);
+    switch (static_cast<VOverflowOp>(E->IntVal)) {
+    case VOverflowOp::Neg:
+      return z3::bvneg_no_overflow(A);
+    case VOverflowOp::Add: {
+      z3::expr B = coerceTo(child(1), VIntMode::Machine);
+      return z3::bvadd_no_overflow(A, B, true) && z3::bvadd_no_underflow(A, B);
+    }
+    case VOverflowOp::Sub: {
+      z3::expr B = coerceTo(child(1), VIntMode::Machine);
+      return z3::bvsub_no_overflow(A, B) && z3::bvsub_no_underflow(A, B, true);
+    }
+    case VOverflowOp::Mul: {
+      z3::expr B = coerceTo(child(1), VIntMode::Machine);
+      return z3::bvmul_no_overflow(A, B, true) && z3::bvmul_no_underflow(A, B);
+    }
+    case VOverflowOp::SDiv: {
+      z3::expr B = coerceTo(child(1), VIntMode::Machine);
+      return z3::bvsdiv_no_overflow(A, B);
+    }
+    }
+    return Ctx.bool_val(true);
+  }
   case VCExpr::Select: {
     z3::expr Val = z3::select(child(0), heapIndex(child(1)));
     return coerceTo(Val, E->IntMode);
