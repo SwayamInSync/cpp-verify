@@ -1,7 +1,7 @@
 Pointers
 ========
 
-- Heap modeled internally (Z3 arrays)
+- Heap modeled internally (Z3 array, bit-vector addresses → values)
 - ``modifies(*p, ...)`` — frame
 - ``aliases(p, q)`` — allow aliasing
 - Implicit ``p != q`` for distinct mutable parameters
@@ -17,5 +17,48 @@ Example:
    {
      *p = v;
    }
+
+Buffers and array indexing
+--------------------------
+
+Pointer arithmetic and subscripting are supported: ``*(p + i)`` and ``p[i]`` (read
+and write) lower to indexed heap accesses. Distinct indices are distinct
+locations, so storing to ``p[k]`` leaves ``p[i]`` unchanged for ``i != k`` — the
+verifier gets this from array theory:
+
+.. code-block:: cpp
+
+   void set(int* p, int i, int j, int v)
+     pre(p != nullptr && i != j && p[j] == 5)
+     modifies(*p)
+     post(p[i] == v && p[j] == 5)        // p[j] is preserved
+   { p[i] = v; }
+
+``modifies(*p)`` frames the **whole region** reachable through ``p`` — a write to
+any ``p[i]`` is covered. A write through a *different* base pointer that is not in
+``modifies`` is still rejected.
+
+To reason about a whole range, use a bounded quantifier in the loop invariant and
+postcondition (the half-open bound ``[lo, hi)`` is the implicit trigger). A
+fill/zero loop verifies end-to-end:
+
+.. code-block:: cpp
+
+   void zero(int* p, int n)
+     pre(p != nullptr && n >= 0 && n <= 1000)
+     modifies(*p)
+     post(forall(i, 0, n, p[i] == 0))
+   {
+     int j = 0;
+     while (j < n)
+       invariant(0 <= j && j <= n && forall(i, 0, j, p[i] == 0))
+       decreases(n - j)
+     { p[j] = 0; j = j + 1; }
+   }
+
+Single-buffer fills and search loops (``strlen``-style scans) verify; loops
+relating *two* buffers (copy loops) may report ``unknown`` pending
+quantifier-trigger improvements, and require an explicit non-overlap precondition
+(see :doc:`limitations`).
 
 See :doc:`../book/part-ii/ch14-pointers-frames-modifies`.
