@@ -16,7 +16,11 @@ z3::sort Z3Encoder::boolSort() { return Ctx.bool_sort(); }
 // pointers never alias mod 2^32) mapping to machine-integer cell values. Storing
 // values as bit-vectors avoids int2bv/bv2int round-trips on every load/store,
 // which put queries in the arrays+int<->bv fragment Z3 fails to decide.
-z3::sort Z3Encoder::heapSort() { return Ctx.array_sort(intSort(), bvSort()); }
+// Heap indices are bit-vector addresses (the same sort as pointers), so an
+// address `p + i` is used directly — no bv<->int round-trip on the index, which
+// previously put disjointness queries (`p + i != p + k`) in the arrays+int<->bv
+// fragment Z3 cannot decide.
+z3::sort Z3Encoder::heapSort() { return Ctx.array_sort(bvSort(), bvSort()); }
 
 z3::sort Z3Encoder::valueSort(const VType &Ty, VIntMode Mode) {
   if (Ty.Kind == VTypeKind::Bool)
@@ -109,8 +113,10 @@ static z3::expr asBool(z3::context &Ctx, z3::expr E) {
 /// Heap is Array Int BitVec32. Indices are integer addresses; a bit-vector
 /// pointer is widened to an integer key.
 static z3::expr heapIndex(z3::expr Ptr) {
-  if (Ptr.is_bv())
-    return z3::bv2int(Ptr, true);
+  // The heap is indexed by 32-bit bit-vector addresses. Pointers are already
+  // bit-vectors; coerce an int-encoded address up to a bit-vector.
+  if (Ptr.is_int())
+    return z3::int2bv(32, Ptr);
   return Ptr;
 }
 
@@ -324,8 +330,26 @@ z3::expr Z3Encoder::encodeVCNode(
     z3::expr After = child(3);
     return (After == z3::store(Before, Ptr, Val));
   }
-  case VCExpr::Forall:
-    return Ctx.bool_val(true);
+  case VCExpr::Forall: {
+    // Real bounded quantifier: children are [lo, hi, body]; the binder is the
+    // free bit-vector const the body was encoded against (the half-open bound is
+    // the implicit trigger). forall i. lo <= i < hi => body;  exists: &&.
+    z3::expr Lo = coerceTo(child(0), VIntMode::Machine);
+    z3::expr Hi = coerceTo(child(1), VIntMode::Machine);
+    z3::expr Body = asBool(Ctx, child(2));
+    auto It = Vars.find(E->Binder);
+    z3::expr I = It != Vars.end() ? It->second
+                                  : Ctx.bv_const(E->Binder.c_str(), 32);
+    // Match widths (the binder is 32-bit; bounds may be wider).
+    unsigned W = std::max({I.get_sort().bv_size(),
+                           Lo.is_bv() ? Lo.get_sort().bv_size() : 32u,
+                           Hi.is_bv() ? Hi.get_sort().bv_size() : 32u});
+    z3::expr Ib = extendBV(I, W, true);
+    z3::expr Range = (Ib >= extendBV(Lo, W, true)) && (Ib < extendBV(Hi, W, true));
+    if (E->BoolVal)
+      return z3::forall(I, z3::implies(Range, Body));
+    return z3::exists(I, Range && Body);
+  }
   case VCExpr::SpecCall: {
     auto It = SpecFunctions.find(E->SpecCallee);
     if (It == SpecFunctions.end() || !It->second)

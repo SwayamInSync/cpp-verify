@@ -188,13 +188,52 @@ static void collectDottedVars(const VExpr *E, std::set<std::string> &Out) {
   }
 }
 
+/// The base pointer an address/lvalue is rooted at: strips casts, pointer
+/// arithmetic (`p + i` -> `p`), and dereferences (`*p`'s lvalue Load(p) -> `p`).
+/// Returns a Var when the root is a named pointer, else the innermost expr.
+static const VExpr *pointerBase(const VExpr *E) {
+  if (!E)
+    return nullptr;
+  switch (E->K) {
+  case VExpr::Cast:
+    return pointerBase(static_cast<const VCastExpr *>(E)->Inner.get());
+  case VExpr::Load:
+    return pointerBase(static_cast<const VLoadExpr *>(E)->Ptr.get());
+  case VExpr::BinOp: {
+    const auto *B = static_cast<const VBinOpExpr *>(E);
+    if (B->Op == VBinOp::Add || B->Op == VBinOp::Sub) {
+      // Pointer arithmetic: the base is whichever operand reduces to a pointer
+      // Var (conventionally the left in `p + i`).
+      if (const VExpr *L = pointerBase(B->Lhs.get()); L && L->K == VExpr::Var)
+        return L;
+      if (const VExpr *R = pointerBase(B->Rhs.get()); R && R->K == VExpr::Var)
+        return R;
+    }
+    return E;
+  }
+  default:
+    return E;
+  }
+}
+
+/// Two addresses/lvalues are rooted at the same named pointer.
+static bool sameBase(const VExpr *A, const VExpr *B) {
+  const VExpr *PA = pointerBase(A);
+  const VExpr *PB = pointerBase(B);
+  return PA && PB && PA->K == VExpr::Var && PB->K == VExpr::Var &&
+         static_cast<const VVarExpr *>(PA)->Name ==
+             static_cast<const VVarExpr *>(PB)->Name;
+}
+
 static bool storeAllowedByModifies(
     const VStoreStmt &St,
     const std::vector<std::unique_ptr<VExpr>> &Modifies) {
   if (Modifies.empty())
     return true;
   for (const auto &M : Modifies)
-    if (sameLvalue(St.Ptr.get(), M.get()))
+    // Exact lvalue (`*p` matches `*p`), or region: a store through `*(p + i)`
+    // is covered by `modifies(*p)` since `*p` denotes the whole region at `p`.
+    if (sameLvalue(St.Ptr.get(), M.get()) || sameBase(St.Ptr.get(), M.get()))
       return true;
   return false;
 }

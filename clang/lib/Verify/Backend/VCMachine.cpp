@@ -137,24 +137,48 @@ class VCMachineBuilder {
     return N;
   }
 
+  // Maximum concrete range to unroll into a conjunction/disjunction; beyond this
+  // (or for symbolic bounds) emit a real quantifier so reasoning stays sound.
+  static constexpr int64_t QuantUnrollLimit = 64;
+
   std::unique_ptr<VCExpr> expandQuant(const VQuantifiedExpr *Q, bool IsForall) {
-    int64_t Lo = evalIntLiteral(Q->Lo.get());
-    int64_t Hi = evalIntLiteral(Q->Hi.get());
-    if (Hi <= Lo)
-      return std::make_unique<VCExpr>(IsForall ? VCExpr::True : VCExpr::False);
-    std::unique_ptr<VCExpr> Acc =
-        std::make_unique<VCExpr>(IsForall ? VCExpr::True : VCExpr::False);
-    VIntMode Mode = intModeOfVType(Q->Body->Ty);
-    for (int64_t I = Lo; I < Hi; ++I) {
-      auto InstBody =
-          substituteBinderInVExpr(Q->Body.get(), Q->Binder, I, Mode);
-      auto Body = fromVExpr(InstBody.get());
-      if (IsForall)
-        Acc = vcAnd(std::move(Acc), std::move(Body));
-      else
-        Acc = vcOr(std::move(Acc), std::move(Body));
+    int64_t Lo = 0, Hi = 0;
+    bool ConcreteLo = Q->Lo && Q->Lo->K == VExpr::Literal;
+    bool ConcreteHi = Q->Hi && Q->Hi->K == VExpr::Literal;
+    if (ConcreteLo)
+      Lo = static_cast<const VLiteralExpr *>(Q->Lo.get())->Value;
+    if (ConcreteHi)
+      Hi = static_cast<const VLiteralExpr *>(Q->Hi.get())->Value;
+
+    // Small concrete range: unroll (cheap, no quantifier instantiation cost).
+    if (ConcreteLo && ConcreteHi && Hi - Lo <= QuantUnrollLimit) {
+      if (Hi <= Lo)
+        return std::make_unique<VCExpr>(IsForall ? VCExpr::True : VCExpr::False);
+      std::unique_ptr<VCExpr> Acc =
+          std::make_unique<VCExpr>(IsForall ? VCExpr::True : VCExpr::False);
+      VIntMode Mode = intModeOfVType(Q->Body->Ty);
+      for (int64_t I = Lo; I < Hi; ++I) {
+        auto InstBody =
+            substituteBinderInVExpr(Q->Body.get(), Q->Binder, I, Mode);
+        auto Body = fromVExpr(InstBody.get());
+        if (IsForall)
+          Acc = vcAnd(std::move(Acc), std::move(Body));
+        else
+          Acc = vcOr(std::move(Acc), std::move(Body));
+      }
+      return Acc;
     }
-    return Acc;
+
+    // Symbolic (or large) bounds: emit a real bounded quantifier
+    //   forall i. (lo <= i < hi) => body      (exists: && instead of =>)
+    // The body references the binder as a free Var, which Z3Encode binds.
+    auto N = std::make_unique<VCExpr>(VCExpr::Forall);
+    N->BoolVal = IsForall;
+    N->Binder = Q->Binder;
+    N->Children.push_back(fromVExpr(Q->Lo.get()));
+    N->Children.push_back(fromVExpr(Q->Hi.get()));
+    N->Children.push_back(fromVExpr(Q->Body.get()));
+    return N;
   }
 
   VIntMode CallerIntMode = VIntMode::Machine;

@@ -557,6 +557,19 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
       return std::make_unique<VUnaryOpExpr>(VUnaryOp::Not, std::move(Op), Ty,
                                             E->getExprLoc());
   }
+  if (const auto *AS = dyn_cast<ArraySubscriptExpr>(E)) {
+    // p[i] is *(p + i): the address is base + idx (commutative, so i[p] works
+    // too), and the loaded value has the element type.
+    auto Base = convertExpr(AS->getBase());
+    auto Idx = convertExpr(AS->getIdx());
+    if (!Base || !Idx)
+      return nullptr;
+    auto Addr = std::make_unique<VBinOpExpr>(VBinOp::Add, std::move(Base),
+                                             std::move(Idx), VType::makePtr(),
+                                             E->getExprLoc());
+    VType Ty = vtype(E->getType(), IntMode);
+    return std::make_unique<VLoadExpr>(std::move(Addr), Ty, E->getExprLoc());
+  }
   if (const auto *B = dyn_cast<BinaryOperator>(E)) {
     auto L = convertExpr(B->getLHS());
     auto R = convertExpr(B->getRHS());
@@ -954,6 +967,19 @@ ASTConverter::convertStmt(const Stmt *S) {
           if (Ptr && Val)
             Out.push_back(std::make_unique<VStoreStmt>(
                 std::move(Ptr), std::move(Val), BO->getExprLoc()));
+        }
+      } else if (const auto *AS = dyn_cast<ArraySubscriptExpr>(
+                     BO->getLHS()->IgnoreParenImpCasts())) {
+        // p[i] = v  is  *(p + i) = v
+        auto Base = convertExpr(AS->getBase());
+        auto Idx = convertExpr(AS->getIdx());
+        auto Val = convertExpr(BO->getRHS());
+        if (Base && Idx && Val) {
+          auto Addr = std::make_unique<VBinOpExpr>(
+              VBinOp::Add, std::move(Base), std::move(Idx), VType::makePtr(),
+              BO->getExprLoc());
+          Out.push_back(std::make_unique<VStoreStmt>(
+              std::move(Addr), std::move(Val), BO->getExprLoc()));
         }
       }
     }
