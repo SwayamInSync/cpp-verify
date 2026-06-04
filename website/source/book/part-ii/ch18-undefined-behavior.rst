@@ -77,6 +77,33 @@ The classic example — the tool tells you the precondition you forgot:
    { return x < 0 ? -x : x; }
    //   --check-ub  ->  verifies
 
+Array out-of-bounds
+-------------------
+
+Reading or writing past the end of a buffer is the most consequential memory UB
+(it is the buffer-overflow CVE class). To check it, declare the buffer's length
+with ``valid(p, n)`` in a precondition; then every ``p[i]`` / ``*(p+i)`` access
+whose base is ``p`` carries the obligation ``0 <= i < n``:
+
+.. code-block:: cpp
+
+   spec bool valid(int* p, int n) { return true; }   // length marker
+
+   int get(int* p, int n, int i)
+     pre(valid(p, n) && 0 <= i && i < n)              // in bounds -> verifies
+     post(result == p[i])
+   { return p[i]; }
+
+   int last(int* p, int n)
+     pre(valid(p, n) && n >= 1)
+   { return p[n]; }   // --check-ub -> FAILS: p[n] is one past the end
+
+Inside a loop the bound is discharged the same way an invariant is — a fill or
+copy loop is proven memory-safe from its guard and invariant. An access through a
+pointer with **no** ``valid`` declaration is not bounds-checked (you have opted
+out for that pointer). Use-after-lifetime and uninitialized reads are not yet
+checked.
+
 Signed vs. unsigned
 -------------------
 
@@ -120,8 +147,8 @@ the same as for any loop: an invariant that bounds the accumulator. See
 What is not covered yet
 -----------------------
 
-Layer A is integer UB. **Memory-safety UB** — out-of-bounds access,
-use-after-lifetime, uninitialized reads — is the next layer and needs a richer
-heap model; it is not yet checked. Pointer provenance, strict aliasing, and
-alignment are explicitly assumed away. The full design and layering plan live in
-``docs/UB-CHECKING.md``.
+Checked today: integer UB (overflow, division) and **array out-of-bounds**.
+The remaining memory-safety UB — **use-after-lifetime** and **uninitialized
+reads** — is not yet checked (it needs object-lifetime tracking). Pointer
+provenance, strict aliasing, and alignment are explicitly assumed away. The full
+design and layering plan live in ``docs/UB-CHECKING.md``.

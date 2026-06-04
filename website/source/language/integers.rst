@@ -62,9 +62,14 @@ What is checked (Layer A):
      - divisor ``!= 0``
    * - signed ``/`` ``%``
      - not ``INT_MIN / -1`` (which overflows)
+   * - ``p[i]`` / ``*(p+i)`` with ``valid(p, n)``
+     - ``0 <= i < n`` (array bounds)
 
 **Unsigned arithmetic is never flagged** — C++ defines it as modular wraparound,
 so no obligation is emitted.
+
+Array bounds need a declared length: write ``valid(p, n)`` in a precondition (see
+:doc:`pointers`) and every access through ``p`` must land in ``[0, n)``.
 
 .. code-block:: cpp
 
@@ -80,6 +85,7 @@ so no obligation is emitted.
    { return a + b; }               // verifies even with --check-ub (defined wraparound)
 
 ``--check-ub`` is opt-in today (the migration path); it runs on the Z3 backend
-for ``exec``/``proof`` functions. It does **not** yet cover memory-safety UB
-(out-of-bounds, use-after-lifetime) — see :doc:`limitations`. The full design,
-including the layering plan, is in ``docs/UB-CHECKING.md``.
+for ``exec``/``proof`` functions. It covers integer UB and array out-of-bounds;
+use-after-lifetime and uninitialized reads are not yet checked — see
+:doc:`limitations`. The full design, including the layering plan, is in
+``docs/UB-CHECKING.md``.

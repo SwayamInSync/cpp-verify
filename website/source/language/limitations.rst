@@ -25,8 +25,10 @@ the project :doc:`../book/part-ii/ch17-backends-modular-calls` and design notes 
 Undefined-behavior checking
 ---------------------------
 
-With ``--check-ub`` the verifier also proves freedom from a class of undefined behavior. Today this
-covers **integer UB** — signed overflow and division/modulo by zero (see :doc:`integers` and
-:doc:`../book/part-ii/ch18-undefined-behavior`). **Memory-safety UB** (out-of-bounds access,
-use-after-lifetime, uninitialized reads) is not yet checked, and pointer provenance, strict
-aliasing, and alignment are assumed away. The layering plan is in ``docs/UB-CHECKING.md``.
+With ``--check-ub`` the verifier proves freedom from a class of undefined behavior: **integer UB**
+(signed overflow, division/modulo by zero) and **array out-of-bounds access**. A buffer's extent is
+declared with ``valid(p, n)`` in a precondition, and every ``p[i]`` / ``*(p+i)`` access whose base
+has a declared length must then be in ``[0, n)`` (see :doc:`integers` and
+:doc:`../book/part-ii/ch18-undefined-behavior`). Not yet checked: use-after-lifetime and
+uninitialized reads; pointer provenance, strict aliasing, and alignment are assumed away. The
+layering plan is in ``docs/UB-CHECKING.md``.
