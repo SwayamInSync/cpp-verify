@@ -289,7 +289,7 @@ ASTConverter::convertTranslationUnit() {
       if (S->K == VStmt::Call &&
           static_cast<const VCallStmt &>(*S).Callee == Fn->Name)
         Recursive = true;
-    Fn->NeedsDecreasesCheck = Fn->Decreases != nullptr && Recursive;
+    Fn->NeedsDecreasesCheck = !Fn->Decreases.empty() && Recursive;
   }
   return Out;
 }
@@ -310,8 +310,9 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   Fn->IntMode = IntMode;
   Fn->ReturnType = VType::fromQualType(FD->getReturnType(), IntMode);
   CurrentFn = Fn.get();
-  if (FCI->Decreases)
-    Fn->Decreases = convertExpr(FCI->Decreases);
+  for (const Expr *D : FCI->Decreases)
+    if (auto E = convertExpr(D))
+      Fn->Decreases.push_back(std::move(E));
 
   SmallVector<const ParmVarDecl *, 8> MutablePtrParams;
   for (const ParmVarDecl *P : FD->parameters()) {
@@ -390,7 +391,7 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     if (!Fn->IsSpec && Fn->Body.empty() && Fn->Postconditions.empty())
       return nullptr;
   }
-  if (Fn->IsSpec && Fn->Body.empty() && !Fn->Decreases)
+  if (Fn->IsSpec && Fn->Body.empty() && Fn->Decreases.empty())
     return nullptr;
   CurrentFn = nullptr;
   return Fn;
@@ -769,13 +770,14 @@ ASTConverter::convertStmt(const Stmt *S) {
     if (!Cond)
       return Out;
     std::vector<std::unique_ptr<VExpr>> Invariants;
-    std::unique_ptr<VExpr> Decreases;
+    std::vector<std::unique_ptr<VExpr>> Decreases;
     if (const LoopContractInfo *LCI = Ctx.getLoopContract(WS)) {
       for (const Expr *Inv : LCI->Invariants)
         if (auto E = convertExpr(Inv))
           Invariants.push_back(std::move(E));
-      if (LCI->Decreases)
-        Decreases = convertExpr(LCI->Decreases);
+      for (const Expr *D : LCI->Decreases)
+        if (auto E = convertExpr(D))
+          Decreases.push_back(std::move(E));
     }
     auto Body = convertStmt(WS->getBody());
     Out.push_back(std::make_unique<VWhileStmt>(std::move(Cond), std::move(Invariants),
@@ -793,13 +795,14 @@ ASTConverter::convertStmt(const Stmt *S) {
     if (!Cond)
       return Out;
     std::vector<std::unique_ptr<VExpr>> Invariants;
-    std::unique_ptr<VExpr> Decreases;
+    std::vector<std::unique_ptr<VExpr>> Decreases;
     if (const LoopContractInfo *LCI = Ctx.getLoopContract(FS)) {
       for (const Expr *Inv : LCI->Invariants)
         if (auto E = convertExpr(Inv))
           Invariants.push_back(std::move(E));
-      if (LCI->Decreases)
-        Decreases = convertExpr(LCI->Decreases);
+      for (const Expr *D : LCI->Decreases)
+        if (auto E = convertExpr(D))
+          Decreases.push_back(std::move(E));
     }
     auto Body = convertStmt(FS->getBody());
     if (const Expr *Inc = FS->getInc()) {

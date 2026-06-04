@@ -188,8 +188,8 @@ static void dumpVStmt(const VStmt &S, llvm::raw_ostream &OS, unsigned Depth) {
     dumpVExpr(W.Cond.get(), OS, Depth + 1);
     for (const auto &Inv : W.Invariants)
       dumpVExpr(Inv.get(), OS, Depth + 1);
-    if (W.Decreases)
-      dumpVExpr(W.Decreases.get(), OS, Depth + 1);
+    for (const auto &D : W.Decreases)
+      dumpVExpr(D.get(), OS, Depth + 1);
     for (const auto &B : W.Body)
       dumpVStmt(*B, OS, Depth + 1);
     break;

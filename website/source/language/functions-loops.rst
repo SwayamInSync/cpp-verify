@@ -54,5 +54,8 @@ downstream must be captured by the invariant.
    (e.g. ``s == i``). A loop placed after an early ``return`` is checked only on
    the path that reaches it.
 
-The single ``decreases`` expression must be integer-typed. A lexicographic tuple
-``decreases(a, b)`` is designed but **not yet implemented** — pass one measure.
+Each ``decreases`` expression must be integer-typed. A comma-separated tuple
+``decreases(a, b)`` is a **lexicographic** measure: each iteration the tuple must
+strictly decrease in lexicographic order (some component drops while every
+earlier component stays equal), with all components non-negative. This proves
+termination of nested counters and Ackermann-style recursion.

@@ -14,7 +14,7 @@ All contract syntax is enabled with `-fverify-contracts`. Without this flag, the
 | `aliases(p, q)` | After function `)` | Opts out of implicit non-aliasing assumption for the named pointer/reference pair |
 | `recommends(expr)` | After function `)` (spec only) | Soft precondition for spec functions; reported on verification failure |
 | `invariant(expr)` | After `while`/`for` condition `)` | Loop invariant |
-| `decreases(expr)` | After loop `)` or function `)` | Termination measure. (Lexicographic tuple form is designed but not yet implemented.) |
+| `decreases(expr, ...)` | After loop `)` or function `)` | Termination measure. A comma-separated tuple `decreases(a, b)` is a lexicographic measure. |
 | `type_invariant(expr)` | Inside class/struct body | Per-instance invariant injected at function boundaries |
 | `ghost { ... }` | Statement | Ghost block — proof steps, stripped by CodeGen |
 | `contract_assert(expr)` | Statement | Verification condition (not a runtime check) |
@@ -56,7 +56,8 @@ while (i < n)
 ```
 
 - `invariant(expr)`: must hold on entry and be preserved by each iteration.
-- `decreases(expr)`: termination measure. The single expression must be non-negative and strictly decreasing. (A lexicographic tuple form `decreases(a, b)` is designed but **not yet implemented** — the parser currently treats the arguments as a comma expression, so pass a single measure.)
+- `decreases(expr)`: termination measure. The expression must be non-negative and strictly decreasing each iteration.
+- `decreases(a, b, ...)`: a comma-separated **lexicographic** tuple. Each iteration the tuple must strictly decrease in lexicographic order (some component drops while all earlier components are unchanged), and every component must be non-negative. Each component is parsed as its own expression — the commas are tuple separators, not the C comma operator.
 
 ## Assertions: contract_assert
 

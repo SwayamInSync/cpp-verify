@@ -102,7 +102,9 @@ struct FunctionContractInfo {
   SmallVector<Expr *, 4> Modifies;
   SmallVector<std::pair<Expr *, Expr *>, 2> Aliases;
   SmallVector<Expr *, 2> Recommends;
-  Expr *Decreases = nullptr;
+  /// Lexicographic termination measure: decreases(a, b, c) is an ordered tuple.
+  /// Empty means no decreases clause.
+  SmallVector<Expr *, 2> Decreases;
   bool IsSpec = false;
   bool IsProof = false;
 };
@@ -110,7 +112,8 @@ struct FunctionContractInfo {
 /// Contract information attached to a WhileStmt/ForStmt via side table.
 struct LoopContractInfo {
   SmallVector<Expr *, 2> Invariants;
-  Expr *Decreases = nullptr;
+  /// Lexicographic termination measure (ordered tuple); empty means none.
+  SmallVector<Expr *, 2> Decreases;
 };
 
 /// Type invariant clauses on a RecordDecl (CppVerify).

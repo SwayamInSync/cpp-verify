@@ -72,9 +72,29 @@ so it provably cannot overflow:
 
 Omit ``decreases`` and the verifier checks establishment and preservation only —
 **partial correctness**. The loop is allowed to be one that you have not proven
-terminates. Add ``decreases`` to also get a termination proof. (A lexicographic
-tuple form ``decreases(a, b)`` is designed but not yet implemented; pass a single
-measure.)
+terminates. Add ``decreases`` to also get a termination proof.
+
+Lexicographic measures
+----------------------
+
+When no single quantity falls every iteration, pass a comma-separated **tuple** —
+``decreases(a, b)`` is ordered lexicographically. Each iteration the tuple must
+strictly decrease in lex order: some component drops while every earlier
+component is unchanged. Every component must stay non-negative. This is what
+proves nested counters and Ackermann-style recursion terminate:
+
+.. code-block:: cpp
+
+   while (i > 0 || j > 0)
+     invariant(i >= 0 && j >= 0)
+     decreases(i, j)        // j falls while i is fixed; when j resets, i drops
+   {
+     if (j > 0) { j = j - 1; }
+     else       { i = i - 1; j = b; }
+   }
+
+The same tuple syntax works on a function's ``decreases`` clause, for recursive
+``spec``/``proof`` functions whose arguments shrink lexicographically.
 
 Loops after an early return
 ---------------------------

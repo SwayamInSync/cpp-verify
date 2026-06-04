@@ -238,6 +238,50 @@ static void collectLoopMods(const std::vector<std::unique_ptr<VStmt>> &Body,
   }
 }
 
+/// Build the lexicographic termination assertion for a decreases tuple:
+///   lexLess(New, Old) && (New[i] >= 0 for every i)
+/// where lexLess((a..),(b..)) = OR_j ( AND_{i<j} a_i == b_i  &&  a_j < b_j ).
+/// Requiring every component non-negative makes the order well-founded over the
+/// naturals. For a single-element tuple this is exactly `0 <= a < b`.
+static std::unique_ptr<VExpr>
+buildLexDecrease(std::vector<std::unique_ptr<VExpr>> New,
+                 std::vector<std::unique_ptr<VExpr>> Old, VType IntTy,
+                 SourceLocation Loc) {
+  auto Bool = [] { return VType::makeBool(); };
+  auto bin = [&](VBinOp Op, std::unique_ptr<VExpr> L, std::unique_ptr<VExpr> R) {
+    return std::make_unique<VBinOpExpr>(Op, std::move(L), std::move(R), Bool(),
+                                        Loc);
+  };
+  unsigned K = New.size();
+
+  // lexLess as a disjunction over the position j that strictly decreases.
+  std::unique_ptr<VExpr> Lex;
+  for (unsigned j = 0; j < K; ++j) {
+    std::unique_ptr<VExpr> EqPrefix;
+    for (unsigned i = 0; i < j; ++i) {
+      auto Eq = bin(VBinOp::Eq, cloneVExpr(New[i].get()), cloneVExpr(Old[i].get()));
+      EqPrefix = EqPrefix ? bin(VBinOp::And, std::move(EqPrefix), std::move(Eq))
+                          : std::move(Eq);
+    }
+    auto Lt = bin(VBinOp::Lt, cloneVExpr(New[j].get()), cloneVExpr(Old[j].get()));
+    auto Disjunct = EqPrefix ? bin(VBinOp::And, std::move(EqPrefix), std::move(Lt))
+                             : std::move(Lt);
+    Lex = Lex ? bin(VBinOp::Or, std::move(Lex), std::move(Disjunct))
+              : std::move(Disjunct);
+  }
+
+  // Every new component non-negative.
+  std::unique_ptr<VExpr> NonNeg;
+  for (unsigned i = 0; i < K; ++i) {
+    auto Ge = bin(VBinOp::Ge, cloneVExpr(New[i].get()),
+                  std::make_unique<VLiteralExpr>(0, IntTy, Loc));
+    NonNeg = NonNeg ? bin(VBinOp::And, std::move(NonNeg), std::move(Ge))
+                    : std::move(Ge);
+  }
+
+  return bin(VBinOp::And, std::move(Lex), std::move(NonNeg));
+}
+
 static std::unique_ptr<VExpr>
 substParams(const VExpr *E, const std::map<std::string, std::unique_ptr<VExpr>> &Map,
             const CloneCtx &Ctx) {
@@ -651,9 +695,10 @@ public:
         CloneCtx C{Renames, OldState, false};
         for (const auto &Inv : W.Invariants)
           emit(PassiveStmt::Assume, cloneExpr(Inv.get(), C));
-        std::unique_ptr<VExpr> DecOld;
-        if (W.Decreases)
-          DecOld = cloneExpr(W.Decreases.get(), C);
+        // Snapshot the (lexicographic) measure on entry to the iteration.
+        std::vector<std::unique_ptr<VExpr>> DecOld;
+        for (const auto &D : W.Decreases)
+          DecOld.push_back(cloneExpr(D.get(), C));
         emit(PassiveStmt::Assume, cloneExpr(W.Cond.get(), C));
 
         auto BodyRenames = Renames;
@@ -663,21 +708,15 @@ public:
         CloneCtx BC{BodyRenames, OldState, false};
         for (const auto &Inv : W.Invariants)
           emit(PassiveStmt::Assert, cloneExpr(Inv.get(), BC)); // preservation
-        if (W.Decreases) {
-          // 0 <= D_new < D_old  (strictly decreasing, bounded below by 0)
+        if (!W.Decreases.empty()) {
+          // Lexicographic strict decrease, each component bounded below by 0.
           VType IntTy = VType::makeInt32(Fn.IntMode);
-          auto DecNew = cloneExpr(W.Decreases.get(), BC);
-          auto Lt = std::make_unique<VBinOpExpr>(
-              VBinOp::Lt, cloneVExpr(DecNew.get()), std::move(DecOld),
-              VType::makeBool(), W.Loc);
-          auto Ge = std::make_unique<VBinOpExpr>(
-              VBinOp::Ge, std::move(DecNew),
-              std::make_unique<VLiteralExpr>(0, IntTy, W.Loc), VType::makeBool(),
-              W.Loc);
+          std::vector<std::unique_ptr<VExpr>> DecNew;
+          for (const auto &D : W.Decreases)
+            DecNew.push_back(cloneExpr(D.get(), BC));
           emit(PassiveStmt::Assert,
-               std::make_unique<VBinOpExpr>(VBinOp::And, std::move(Lt),
-                                            std::move(Ge), VType::makeBool(),
-                                            W.Loc));
+               buildLexDecrease(std::move(DecNew), std::move(DecOld), IntTy,
+                                W.Loc));
         }
       }
 
