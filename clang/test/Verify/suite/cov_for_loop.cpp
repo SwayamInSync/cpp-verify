@@ -7,7 +7,8 @@ int sum_for(int n)
   int s = 0;
   int i = 0;
   for (; i < n;)
-    invariant(s >= 0 && i >= 0)
+    // s == i (<= n <= 3) keeps s + 1 from overflowing — inductive invariant.
+    invariant(s == i && i >= 0 && i <= n)
   {
     s = s + 1;
     i = i + 1;

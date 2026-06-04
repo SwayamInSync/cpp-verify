@@ -249,8 +249,8 @@ public:
         W.Cond = inlineExpr(std::move(W.Cond));
         for (auto &Inv : W.Invariants)
           Inv = inlineExpr(std::move(Inv));
-        if (W.Decreases)
-          W.Decreases = inlineExpr(std::move(W.Decreases));
+        for (auto &D : W.Decreases)
+          D = inlineExpr(std::move(D));
         inlineStmts(W.Body);
         break;
       }
@@ -527,10 +527,39 @@ static void collectRecursiveSpecCallsInBody(
   }
 }
 
+/// Lexicographic strict-less between two measure tuples (clones both sides):
+///   OR_j ( AND_{i<j} New[i] == Old[i]  &&  New[j] < Old[j] )
+/// For a single-element tuple this is just `New[0] < Old[0]`, matching the
+/// previous scalar `decreases` behavior.
+static std::unique_ptr<VExpr>
+buildLexLess(const std::vector<std::unique_ptr<VExpr>> &New,
+             const std::vector<std::unique_ptr<VExpr>> &Old,
+             SourceLocation Loc) {
+  auto bin = [&](VBinOp Op, std::unique_ptr<VExpr> L, std::unique_ptr<VExpr> R) {
+    return std::make_unique<VBinOpExpr>(Op, std::move(L), std::move(R),
+                                        VType::makeBool(), Loc);
+  };
+  std::unique_ptr<VExpr> Lex;
+  for (unsigned j = 0; j < New.size(); ++j) {
+    std::unique_ptr<VExpr> EqPrefix;
+    for (unsigned i = 0; i < j; ++i) {
+      auto Eq = bin(VBinOp::Eq, cloneVExpr(New[i].get()), cloneVExpr(Old[i].get()));
+      EqPrefix = EqPrefix ? bin(VBinOp::And, std::move(EqPrefix), std::move(Eq))
+                          : std::move(Eq);
+    }
+    auto Lt = bin(VBinOp::Lt, cloneVExpr(New[j].get()), cloneVExpr(Old[j].get()));
+    auto Disjunct = EqPrefix ? bin(VBinOp::And, std::move(EqPrefix), std::move(Lt))
+                             : std::move(Lt);
+    Lex = Lex ? bin(VBinOp::Or, std::move(Lex), std::move(Disjunct))
+              : std::move(Disjunct);
+  }
+  return Lex;
+}
+
 PassiveProgram verify::buildDecreasesChecks(const VFunction &Fn,
                                             const FunctionMap &FnMap) {
   PassiveProgram P;
-  if (!Fn.Decreases)
+  if (Fn.Decreases.empty())
     return P;
 
   std::vector<std::pair<const VCallStmt *,
@@ -549,18 +578,27 @@ PassiveProgram verify::buildDecreasesChecks(const VFunction &Fn,
   std::map<std::string, std::unique_ptr<VExpr>> EntryEnv;
   for (const auto &P : Fn.Params)
     EntryEnv[P.first] = std::make_unique<VVarExpr>(P.first, P.second, SourceLocation());
-  auto CurrentDec = substParamsInExpr(Fn.Decreases.get(), EntryEnv);
+  std::vector<std::unique_ptr<VExpr>> CurrentDec;
+  for (const auto &D : Fn.Decreases)
+    CurrentDec.push_back(substParamsInExpr(D.get(), EntryEnv));
 
   for (const auto &[Call, ArgMap] : Sites) {
-    auto CalleeDec = substParamsInExpr(Fn.Decreases.get(), ArgMap);
-    if (!CalleeDec || !CurrentDec)
+    std::vector<std::unique_ptr<VExpr>> CalleeDec;
+    bool Ok = true;
+    for (const auto &D : Fn.Decreases) {
+      auto S = substParamsInExpr(D.get(), ArgMap);
+      if (!S) {
+        Ok = false;
+        break;
+      }
+      CalleeDec.push_back(std::move(S));
+    }
+    if (!Ok || CalleeDec.size() != CurrentDec.size())
       continue;
-    SourceLocation Loc = Call ? Call->Loc : Fn.Decreases->Loc;
+    SourceLocation Loc = Call ? Call->Loc : Fn.Decreases.front()->Loc;
     auto PS = std::make_unique<PassiveStmt>();
     PS->K = PassiveStmt::Assert;
-    PS->Cond = std::make_unique<VBinOpExpr>(VBinOp::Lt, std::move(CalleeDec),
-                                            cloneVExpr(CurrentDec.get()),
-                                            VType::makeBool(), Loc);
+    PS->Cond = buildLexLess(CalleeDec, CurrentDec, Loc);
     P.Stmts.push_back(std::move(PS));
   }
   return P;

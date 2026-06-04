@@ -201,8 +201,8 @@ void ASTDumper::VisitFunctionDecl(const FunctionDecl *D) {
   }
   for (const Expr *E : FCI->Recommends)
     Visit(E, "recommends");
-  if (FCI->Decreases)
-    Visit(FCI->Decreases, "decreases");
+  for (const Expr *D : FCI->Decreases)
+    Visit(D, "decreases");
 }
 
 void ASTDumper::VisitWhileStmt(const WhileStmt *S) {
@@ -214,8 +214,8 @@ void ASTDumper::VisitWhileStmt(const WhileStmt *S) {
     return;
   for (const Expr *E : LCI->Invariants)
     Visit(E, "invariant");
-  if (LCI->Decreases)
-    Visit(LCI->Decreases, "decreases");
+  for (const Expr *D : LCI->Decreases)
+    Visit(D, "decreases");
 }
 
 // Note: VisitWhileStmt/VisitForStmt only append extra children (contract
@@ -234,8 +234,8 @@ void ASTDumper::VisitForStmt(const ForStmt *S) {
     return;
   for (const Expr *E : LCI->Invariants)
     Visit(E, "invariant");
-  if (LCI->Decreases)
-    Visit(LCI->Decreases, "decreases");
+  for (const Expr *D : LCI->Decreases)
+    Visit(D, "decreases");
 }
 
 //===----------------------------------------------------------------------===//

@@ -84,11 +84,12 @@ struct VHavocStmt : VStmt {
 struct VWhileStmt : VStmt {
   std::unique_ptr<VExpr> Cond;
   std::vector<std::unique_ptr<VExpr>> Invariants;
-  std::unique_ptr<VExpr> Decreases;
+  /// Lexicographic termination measure (ordered tuple); empty means none.
+  std::vector<std::unique_ptr<VExpr>> Decreases;
   std::vector<std::unique_ptr<VStmt>> Body;
   VWhileStmt(std::unique_ptr<VExpr> C,
              std::vector<std::unique_ptr<VExpr>> Inv,
-             std::unique_ptr<VExpr> Dec,
+             std::vector<std::unique_ptr<VExpr>> Dec,
              std::vector<std::unique_ptr<VStmt>> B, SourceLocation Loc)
       : VStmt(While, Loc), Cond(std::move(C)), Invariants(std::move(Inv)),
         Decreases(std::move(Dec)), Body(std::move(B)) {}
@@ -155,7 +156,8 @@ struct VFunction {
   std::vector<std::unique_ptr<VExpr>> Recommends;
   std::vector<std::unique_ptr<VExpr>> Modifies;
   std::vector<std::pair<std::unique_ptr<VExpr>, std::unique_ptr<VExpr>>> Aliases;
-  std::unique_ptr<VExpr> Decreases;
+  /// Lexicographic termination measure (ordered tuple); empty means none.
+  std::vector<std::unique_ptr<VExpr>> Decreases;
   std::vector<std::unique_ptr<VStmt>> Body;
 };
 

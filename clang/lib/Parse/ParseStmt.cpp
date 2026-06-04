@@ -1773,7 +1773,7 @@ StmtResult Parser::ParseWhileStatement(SourceLocation *TrailingElseLoc,
 
   // CppVerify: parse loop contract clauses (invariant/decreases) if present.
   SmallVector<Expr *, 2> Invariants;
-  Expr *LoopDecreases = nullptr;
+  SmallVector<Expr *, 2> LoopDecreases;
   if (getLangOpts().VerifyContracts)
     ParseLoopContractClauses(Invariants, LoopDecreases);
 
@@ -1814,11 +1814,11 @@ StmtResult Parser::ParseWhileStatement(SourceLocation *TrailingElseLoc,
       Actions.ActOnWhileStmt(WhileLoc, LParen, Cond, RParen, Body.get());
 
   // Store loop contracts in ASTContext side table.
-  if (Result.isUsable() && (!Invariants.empty() || LoopDecreases)) {
+  if (Result.isUsable() && (!Invariants.empty() || !LoopDecreases.empty())) {
     LoopContractInfo &LCI =
         Actions.getASTContext().getOrCreateLoopContract(Result.get());
     LCI.Invariants = std::move(Invariants);
-    LCI.Decreases = LoopDecreases;
+    LCI.Decreases = std::move(LoopDecreases);
   }
   return Result;
 }
@@ -2215,7 +2215,7 @@ StmtResult Parser::ParseForStatement(SourceLocation *TrailingElseLoc,
 
   // CppVerify: parse loop contract clauses (invariant/decreases) if present.
   SmallVector<Expr *, 2> ForInvariants;
-  Expr *ForDecreases = nullptr;
+  SmallVector<Expr *, 2> ForDecreases;
   if (getLangOpts().VerifyContracts)
     ParseLoopContractClauses(ForInvariants, ForDecreases);
 
@@ -2319,11 +2319,11 @@ StmtResult Parser::ParseForStatement(SourceLocation *TrailingElseLoc,
       T.getCloseLocation(), Body.get());
 
   // Store loop contracts in ASTContext side table.
-  if (ForResult.isUsable() && (!ForInvariants.empty() || ForDecreases)) {
+  if (ForResult.isUsable() && (!ForInvariants.empty() || !ForDecreases.empty())) {
     LoopContractInfo &LCI =
         Actions.getASTContext().getOrCreateLoopContract(ForResult.get());
     LCI.Invariants = std::move(ForInvariants);
-    LCI.Decreases = ForDecreases;
+    LCI.Decreases = std::move(ForDecreases);
   }
   return ForResult;
 }
@@ -2766,7 +2766,7 @@ void Parser::ParseMicrosoftIfExistsStatement(StmtVector &Stmts) {
 /// Parse loop contract clauses: invariant(expr) and decreases(expr)
 /// These appear after the while/for condition ')' and before the body '{'.
 void Parser::ParseLoopContractClauses(SmallVectorImpl<Expr *> &Invariants,
-                                      Expr *&Decreases) {
+                                      SmallVectorImpl<Expr *> &Decreases) {
   llvm::SaveAndRestore<bool> ParsingContractExprRAII(InParsingContractExpr, true);
   while (Tok.is(tok::kw_invariant) || Tok.is(tok::kw_decreases)) {
     bool IsInvariant = Tok.is(tok::kw_invariant);
@@ -2779,26 +2779,37 @@ void Parser::ParseLoopContractClauses(SmallVectorImpl<Expr *> &Invariants,
     }
     ConsumeParen();
 
-    ExprResult E = ParseExpression();
-    if (E.isInvalid()) {
-      SkipUntil(tok::r_paren, StopAtSemi);
-      return;
-    }
-
-    // Invariants must be bool; decreases is an integer measure.
     if (IsInvariant) {
+      ExprResult E = ParseExpression();
+      if (E.isInvalid()) {
+        SkipUntil(tok::r_paren, StopAtSemi);
+        return;
+      }
       E = Actions.ActOnContractCondition(E);
       if (E.isInvalid()) {
         SkipUntil(tok::r_paren, StopAtSemi);
         return;
       }
+      Invariants.push_back(E.get());
     } else {
-      // decreases: validate integer type.
-      if (!E.get()->getType()->isIntegerType()) {
-        Diag(E.get()->getExprLoc(),
-             diag::err_contract_decreases_not_int);
-        SkipUntil(tok::r_paren, StopAtSemi);
-        return;
+      // decreases: a comma-separated lexicographic tuple of integer measures.
+      // Parse each component with ParseAssignmentExpression so the comma is a
+      // tuple separator, not the C comma operator.
+      while (true) {
+        ExprResult D = ParseAssignmentExpression();
+        if (D.isInvalid()) {
+          SkipUntil(tok::r_paren, StopAtSemi);
+          return;
+        }
+        if (!D.get()->getType()->isIntegerType()) {
+          Diag(D.get()->getExprLoc(), diag::err_contract_decreases_not_int);
+          SkipUntil(tok::r_paren, StopAtSemi);
+          return;
+        }
+        Decreases.push_back(D.get());
+        if (Tok.isNot(tok::comma))
+          break;
+        ConsumeToken(); // eat ','
       }
     }
 
@@ -2809,11 +2820,6 @@ void Parser::ParseLoopContractClauses(SmallVectorImpl<Expr *> &Invariants,
       return;
     }
     ConsumeParen();
-
-    if (IsInvariant)
-      Invariants.push_back(E.get());
-    else
-      Decreases = E.get();
   }
 }
 

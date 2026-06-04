@@ -18,6 +18,9 @@ struct VerifyOptions {
   /// Per-query Z3 timeout in milliseconds; 0 disables it. Non-terminating
   /// queries return Unknown instead of hanging the tool.
   unsigned SolverTimeoutMs = 10000;
+  /// Generate undefined-behavior safety obligations (signed integer overflow,
+  /// division/modulo by zero) for exec/proof functions. See docs/UB-CHECKING.md.
+  bool CheckUB = false;
 };
 
 bool verifyTranslationUnit(ASTContext &Ctx, llvm::raw_ostream &OS,

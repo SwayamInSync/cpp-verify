@@ -32,11 +32,14 @@ std::unique_ptr<VStmt> verify::cloneVStmt(const VStmt *S) {
     std::vector<std::unique_ptr<VExpr>> Inv;
     for (const auto &I : W.Invariants)
       Inv.push_back(cloneVExpr(I.get()));
+    std::vector<std::unique_ptr<VExpr>> Dec;
+    for (const auto &D : W.Decreases)
+      Dec.push_back(cloneVExpr(D.get()));
     std::vector<std::unique_ptr<VStmt>> Body;
     for (const auto &B : W.Body)
       Body.push_back(cloneVStmt(B.get()));
     return std::make_unique<VWhileStmt>(
-        cloneVExpr(W.Cond.get()), std::move(Inv), cloneVExpr(W.Decreases.get()),
+        cloneVExpr(W.Cond.get()), std::move(Inv), std::move(Dec),
         std::move(Body), W.Loc);
   }
   case VStmt::Call: {
@@ -102,8 +105,8 @@ VFunction verify::cloneVFunction(const VFunction &Fn) {
     Out.Modifies.push_back(cloneVExpr(M.get()));
   for (const auto &A : Fn.Aliases)
     Out.Aliases.emplace_back(cloneVExpr(A.first.get()), cloneVExpr(A.second.get()));
-  if (Fn.Decreases)
-    Out.Decreases = cloneVExpr(Fn.Decreases.get());
+  for (const auto &D : Fn.Decreases)
+    Out.Decreases.push_back(cloneVExpr(D.get()));
   for (const auto &S : Fn.Body)
     Out.Body.push_back(cloneVStmt(S.get()));
   return Out;

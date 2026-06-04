@@ -15,3 +15,12 @@ Pointer and heap reasoning are available in the language surface (see :doc:`poin
 :doc:`../book/part-ii/ch14-pointers-frames-modifies`). Depth of automation continues to expand;
 see the project :doc:`../book/part-ii/ch17-backends-modular-calls` and design notes in the repo
 ``docs/`` tree.
+
+Undefined-behavior checking
+---------------------------
+
+With ``--check-ub`` the verifier also proves freedom from a class of undefined behavior. Today this
+covers **integer UB** — signed overflow and division/modulo by zero (see :doc:`integers` and
+:doc:`../book/part-ii/ch18-undefined-behavior`). **Memory-safety UB** (out-of-bounds access,
+use-after-lifetime, uninitialized reads) is not yet checked, and pointer provenance, strict
+aliasing, and alignment are assumed away. The layering plan is in ``docs/UB-CHECKING.md``.

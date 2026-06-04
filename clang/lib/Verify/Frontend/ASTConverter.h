@@ -43,8 +43,19 @@ private:
   VIntMode specCallIntMode(const FunctionDecl *FD) const;
   bool contractsReferenceSpec(const FunctionContractInfo &FCI) const;
   static std::string specNameFromExpr(const Expr *E);
+  /// VType::fromQualType with this converter's ASTContext, so integer widths are
+  /// taken from the target's data model (long = 64-bit on LP64, etc.).
+  VType vtype(QualType QT, VIntMode M) const {
+    return VType::fromQualType(QT, M, &Ctx);
+  }
   void injectTypeInvariants(const FunctionDecl *FD, VFunction &Fn);
   std::unique_ptr<VExpr> convertTypeInvariantExpr(const Expr *E);
+  /// If RetE is a struct variable whose type carries a type_invariant, append a
+  /// contract_assert of that invariant (over the variable's fields) to Out, so a
+  /// returned value is checked to satisfy its invariant.
+  void emitReturnInvariantAssert(const Expr *RetE,
+                                 std::vector<std::unique_ptr<VStmt>> &Out,
+                                 SourceLocation Loc);
 };
 
 } // namespace verify

@@ -8,7 +8,10 @@ int sum_loop(int n)
   int s = 0;
   int i = 0;
   while (i < n)
-    invariant(i >= 0 && i <= n && s >= 0)
+    // s == i bounds s by n (<= 15), so s + 1 cannot overflow: the invariant is
+    // inductive under honest machine integers. (s >= 0 alone is NOT inductive —
+    // from an arbitrary s = INT_MAX it fails to be preserved.)
+    invariant(i >= 0 && i <= n && s == i)
     decreases(n - i)
   {
     s = s + 1;

@@ -1251,7 +1251,7 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
   SmallVector<Expr *, 4> ContractModifies;
   SmallVector<std::pair<Expr *, Expr *>, 2> ContractAliases;
   SmallVector<Expr *, 2> ContractRecommends;
-  Expr *ContractDecreases = nullptr;
+  SmallVector<Expr *, 2> ContractDecreases;
   // Detect spec/proof from DeclSpec bits set during declaration parsing.
   bool IsSpecFn = getLangOpts().VerifyContracts &&
                   D.getDeclSpec().isSpecFunctionSpecified();
@@ -1340,6 +1340,23 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
                 std::make_pair(First.get(), Second.get()));
           }
         }
+      } else if (IsDecreases) {
+        // Lexicographic termination measure: a comma-separated tuple of integer
+        // expressions. Parse each with ParseAssignmentExpression so the comma is
+        // a tuple separator, not the C comma operator.
+        do {
+          ExprResult E = ParseAssignmentExpression();
+          if (E.isInvalid())
+            break;
+          if (!E.get()->getType()->isIntegerType())
+            Diag(E.get()->getExprLoc(), diag::err_contract_decreases_not_int);
+          else
+            ContractDecreases.push_back(E.get());
+          if (Tok.is(tok::comma))
+            ConsumeToken();
+          else
+            break;
+        } while (Tok.isNot(tok::r_paren));
       } else {
         ExprResult E = ParseExpression();
         if (!E.isInvalid() && (IsPre || IsPost || IsRecommends)) {
@@ -1350,11 +1367,6 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
             ContractPostconditions.push_back(E.get());
           else
             ContractRecommends.push_back(E.get());
-        } else if (!E.isInvalid() && IsDecreases) {
-          if (!E.get()->getType()->isIntegerType())
-            Diag(E.get()->getExprLoc(), diag::err_contract_decreases_not_int);
-          else
-            ContractDecreases = E.get();
         }
       }
 
@@ -1539,7 +1551,7 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
   if (Res && (!ContractPreconditions.empty() ||
               !ContractPostconditions.empty() || !ContractModifies.empty() ||
               !ContractAliases.empty() || !ContractRecommends.empty() ||
-              ContractDecreases || IsSpecFn || IsProofFn)) {
+              !ContractDecreases.empty() || IsSpecFn || IsProofFn)) {
     if (auto *FD = dyn_cast<FunctionDecl>(Res)) {
       FunctionContractInfo &FCI =
           Actions.getASTContext().getOrCreateFunctionContract(FD);
@@ -1548,7 +1560,7 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
       FCI.Modifies = std::move(ContractModifies);
       FCI.Aliases = std::move(ContractAliases);
       FCI.Recommends = std::move(ContractRecommends);
-      FCI.Decreases = ContractDecreases;
+      FCI.Decreases = std::move(ContractDecreases);
       FCI.IsSpec = IsSpecFn;
       FCI.IsProof = IsProofFn;
       CurrentContractFunction = Res;

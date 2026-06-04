@@ -151,6 +151,15 @@ void verify::dumpVExpr(const VExpr *E, llvm::raw_ostream &OS, unsigned Depth) {
       dumpVExpr(A.get(), OS, Depth + 1);
     break;
   }
+  case VExpr::OverflowCheck: {
+    const auto *O = static_cast<const VOverflowCheckExpr *>(E);
+    static const char *Names[] = {"add", "sub", "mul", "neg", "sdiv"};
+    OS << "no-overflow." << Names[static_cast<int>(O->Op)] << "\n";
+    dumpVExpr(O->Lhs.get(), OS, Depth + 1);
+    if (O->Rhs)
+      dumpVExpr(O->Rhs.get(), OS, Depth + 1);
+    break;
+  }
   }
 }
 
@@ -188,8 +197,8 @@ static void dumpVStmt(const VStmt &S, llvm::raw_ostream &OS, unsigned Depth) {
     dumpVExpr(W.Cond.get(), OS, Depth + 1);
     for (const auto &Inv : W.Invariants)
       dumpVExpr(Inv.get(), OS, Depth + 1);
-    if (W.Decreases)
-      dumpVExpr(W.Decreases.get(), OS, Depth + 1);
+    for (const auto &D : W.Decreases)
+      dumpVExpr(D.get(), OS, Depth + 1);
     for (const auto &B : W.Body)
       dumpVStmt(*B, OS, Depth + 1);
     break;

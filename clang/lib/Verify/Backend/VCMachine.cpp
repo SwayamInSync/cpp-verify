@@ -80,11 +80,18 @@ class VCMachineBuilder {
   }
 
   std::unique_ptr<VCExpr> fromBin(VBinOp Op, std::unique_ptr<VCExpr> L,
-                                  std::unique_ptr<VCExpr> R) {
+                                  std::unique_ptr<VCExpr> R,
+                                  bool Unsigned = false) {
     VCExpr::Kind K = VCExpr::Eq;
     switch (Op) {
     case VBinOp::Add:
       K = VCExpr::Add;
+      break;
+    case VBinOp::Div:
+      K = VCExpr::Div;
+      break;
+    case VBinOp::Rem:
+      K = VCExpr::Rem;
       break;
     case VBinOp::Sub:
       K = VCExpr::Sub;
@@ -123,6 +130,8 @@ class VCMachineBuilder {
     auto Unified = unifyIntModes(std::move(L), std::move(R));
     auto N = std::make_unique<VCExpr>(K);
     N->IntMode = intModeOf(Unified.first.get());
+    N->Unsigned = Unsigned;
+    N->Width = std::max(Unified.first->Width, Unified.second->Width);
     N->Children.push_back(std::move(Unified.first));
     N->Children.push_back(std::move(Unified.second));
     return N;
@@ -172,19 +181,24 @@ public:
       N->IntVal = L->Value;
       N->IntMode = ForceCallerIntMode ? CallerIntMode
                                       : intModeOfVType(L->Ty);
+      N->Width = L->Ty.bvWidth();
       return N;
     }
     case VExpr::Var: {
+      const auto *V = static_cast<const VVarExpr *>(E);
       auto N = std::make_unique<VCExpr>(VCExpr::Var);
-      N->Name = static_cast<const VVarExpr *>(E)->Name;
-      N->IntMode = ForceCallerIntMode
-                       ? CallerIntMode
-                       : intModeOfVType(static_cast<const VVarExpr *>(E)->Ty);
+      N->Name = V->Name;
+      N->IntMode = ForceCallerIntMode ? CallerIntMode : intModeOfVType(V->Ty);
+      N->Width = V->Ty.bvWidth();
       return N;
     }
     case VExpr::BinOp: {
       const auto *B = static_cast<const VBinOpExpr *>(E);
-      return fromBin(B->Op, fromVExpr(B->Lhs.get()), fromVExpr(B->Rhs.get()));
+      // Operand signedness drives bvudiv/bvurem vs bvsdiv/bvsrem. Use the wider
+      // operand type when available; fall back to the result type.
+      bool Unsigned = B->Lhs->Ty.Unsigned || B->Rhs->Ty.Unsigned || B->Ty.Unsigned;
+      return fromBin(B->Op, fromVExpr(B->Lhs.get()), fromVExpr(B->Rhs.get()),
+                     Unsigned);
     }
     case VExpr::UnaryOp: {
       const auto *U = static_cast<const VUnaryOpExpr *>(E);
@@ -257,6 +271,17 @@ public:
         N->Children.push_back(fromVExpr(A.get()));
       return N;
     }
+    case VExpr::OverflowCheck: {
+      const auto *O = static_cast<const VOverflowCheckExpr *>(E);
+      auto N = std::make_unique<VCExpr>(VCExpr::NoOverflow);
+      N->IntMode = VIntMode::Machine; // overflow only meaningful for bit-vectors
+      N->IntVal = static_cast<int64_t>(O->Op);
+      N->Width = O->Lhs->Ty.bvWidth();
+      N->Children.push_back(fromVExpr(O->Lhs.get()));
+      if (O->Rhs)
+        N->Children.push_back(fromVExpr(O->Rhs.get()));
+      return N;
+    }
     }
     return vcTrue();
   }
@@ -283,30 +308,46 @@ public:
     M.CallerIntMode = P.CallerIntMode;
     CurHeap = M.HeapPrefix;
 
-    std::unique_ptr<VCExpr> Hyp = vcTrue();
-    std::unique_ptr<VCExpr> Post = vcTrue();
+    // Build the verification condition as the negated weakest precondition, so
+    // each assert is checked only against the assumes that *precede* it. A flat
+    // (∧assumes) ∧ ¬(∧asserts) is unsound: a later contradictory assume (e.g. a
+    // loop's inductive hypothesis I ∧ cond that is unsatisfiable given the pre)
+    // makes the whole goal UNSAT, vacuously "verifying" earlier asserts.
+    //
+    // Encode left-to-right (heap-version tracking is forward), recording each
+    // assume/assert; then fold the boolean structure right-to-left:
+    //   ¬wp(assume A; r) = A ∧ ¬wp(r)
+    //   ¬wp(assert P; r) = ¬P ∨ ¬wp(r)
+    //   ¬wp(skip)        = false
+    std::vector<std::pair<bool, std::unique_ptr<VCExpr>>> Items; // (isAssume, e)
 
     for (const auto &A : P.EntryAssumes)
-      Hyp = vcAnd(std::move(Hyp), fromVExpr(A.get()));
+      Items.emplace_back(true, fromVExpr(A.get()));
 
     for (const auto &S : P.Stmts) {
       if (S->K == PassiveStmt::Assume && S->Cond) {
-        if (S->Cond->K == VExpr::HeapStore) {
-          auto *H = static_cast<const VHeapStoreExpr *>(S->Cond.get());
-          Hyp = vcAnd(std::move(Hyp), fromVExpr(S->Cond.get()));
-          CurHeap = H->HeapAfter;
-        } else {
-          Hyp = vcAnd(std::move(Hyp), fromVExpr(S->Cond.get()));
-        }
+        auto Enc = fromVExpr(S->Cond.get());
+        if (S->Cond->K == VExpr::HeapStore)
+          CurHeap =
+              static_cast<const VHeapStoreExpr *>(S->Cond.get())->HeapAfter;
+        Items.emplace_back(true, std::move(Enc));
       } else if (S->K == PassiveStmt::Assert && S->Cond) {
-        Post = vcAnd(std::move(Post), fromVExpr(S->Cond.get()));
+        Items.emplace_back(false, fromVExpr(S->Cond.get()));
       }
     }
 
     for (const auto &A : P.ExitAsserts)
-      Post = vcAnd(std::move(Post), fromVExpr(A.get()));
+      Items.emplace_back(false, fromVExpr(A.get()));
 
-    M.Goal = vcAnd(std::move(Hyp), vcNot(std::move(Post)));
+    std::unique_ptr<VCExpr> G = std::make_unique<VCExpr>(VCExpr::False);
+    for (auto It = Items.rbegin(); It != Items.rend(); ++It) {
+      if (It->first)
+        G = vcAnd(std::move(It->second), std::move(G));
+      else
+        G = vcOr(vcNot(std::move(It->second)), std::move(G));
+    }
+
+    M.Goal = std::move(G);
     return M;
   }
 };

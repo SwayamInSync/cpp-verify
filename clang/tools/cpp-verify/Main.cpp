@@ -53,6 +53,13 @@ static cl::opt<unsigned> SolverTimeout(
     cl::init(10000),
     cl::cat(CppVerifyCategory));
 
+static cl::opt<bool> CheckUB(
+    "check-ub",
+    cl::desc("Also prove freedom from undefined behavior (signed integer "
+             "overflow, division/modulo by zero) for exec/proof functions"),
+    cl::init(false),
+    cl::cat(CppVerifyCategory));
+
 namespace {
 
 static int gVerifyFailures = 0;
@@ -74,6 +81,7 @@ public:
       VOpts.LeanOutPath = LeanOut.getValue();
       VOpts.BMCUnroll = BMCUnroll.getValue();
       VOpts.SolverTimeoutMs = SolverTimeout.getValue();
+      VOpts.CheckUB = CheckUB.getValue();
       if (!verify::verifyTranslationUnit(Ctx, llvm::outs(), VOpts))
         ++gVerifyFailures;
     }

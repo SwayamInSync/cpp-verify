@@ -235,6 +235,49 @@ std::unique_ptr<VExpr> ASTConverter::convertTypeInvariantExpr(const Expr *E) {
   return Result;
 }
 
+void ASTConverter::emitReturnInvariantAssert(
+    const Expr *RetE, std::vector<std::unique_ptr<VStmt>> &Out,
+    SourceLocation Loc) {
+  if (!RetE)
+    return;
+  // Only a plain struct variable is handled (the common `return p;` form). The
+  // invariant is checked over that variable's fields. Returning a struct wraps
+  // the variable in copy-construction / materialization, so peel those (the same
+  // unwrapping convertExpr performs) to reach the DeclRefExpr.
+  const Expr *Cur = RetE->IgnoreParenImpCasts();
+  while (true) {
+    if (const auto *MTE = dyn_cast<MaterializeTemporaryExpr>(Cur))
+      Cur = MTE->getSubExpr()->IgnoreParenImpCasts();
+    else if (const auto *CE = dyn_cast<CXXConstructExpr>(Cur);
+             CE && CE->getNumArgs() == 1)
+      Cur = CE->getArg(0)->IgnoreParenImpCasts();
+    else
+      break;
+  }
+  const auto *DRE = dyn_cast<DeclRefExpr>(Cur);
+  if (!DRE)
+    return;
+  const auto *VD = dyn_cast<VarDecl>(DRE->getDecl());
+  if (!VD)
+    return;
+  const RecordDecl *RD = getRecordFromType(VD->getType());
+  if (!RD)
+    return;
+  const TypeContractInfo *TCI = Ctx.getTypeContract(RD);
+  if (!TCI || TCI->Invariants.empty())
+    return;
+  const auto *CXXRD = dyn_cast<CXXRecordDecl>(RD);
+  if (!CXXRD)
+    return;
+  FieldSubstPrefix.clear();
+  for (const FieldDecl *Field : CXXRD->fields())
+    FieldSubstPrefix[Field->getNameAsString()] = VD->getNameAsString() + ".";
+  for (const Expr *Inv : TCI->Invariants)
+    if (auto VE = convertTypeInvariantExpr(Inv))
+      Out.push_back(std::make_unique<VContractAssertStmt>(std::move(VE), Loc));
+  FieldSubstPrefix.clear();
+}
+
 static bool bodyHasRecursiveSpec(const VFunction &Fn) {
   for (const auto &S : Fn.Body) {
     if (S->K == VStmt::Assign &&
@@ -289,7 +332,7 @@ ASTConverter::convertTranslationUnit() {
       if (S->K == VStmt::Call &&
           static_cast<const VCallStmt &>(*S).Callee == Fn->Name)
         Recursive = true;
-    Fn->NeedsDecreasesCheck = Fn->Decreases != nullptr && Recursive;
+    Fn->NeedsDecreasesCheck = !Fn->Decreases.empty() && Recursive;
   }
   return Out;
 }
@@ -308,15 +351,16 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   if (!FCI->IsSpec && contractsReferenceSpec(*FCI))
     IntMode = VIntMode::Math;
   Fn->IntMode = IntMode;
-  Fn->ReturnType = VType::fromQualType(FD->getReturnType(), IntMode);
+  Fn->ReturnType = vtype(FD->getReturnType(), IntMode);
   CurrentFn = Fn.get();
-  if (FCI->Decreases)
-    Fn->Decreases = convertExpr(FCI->Decreases);
+  for (const Expr *D : FCI->Decreases)
+    if (auto E = convertExpr(D))
+      Fn->Decreases.push_back(std::move(E));
 
   SmallVector<const ParmVarDecl *, 8> MutablePtrParams;
   for (const ParmVarDecl *P : FD->parameters()) {
     Fn->Params.emplace_back(P->getNameAsString(),
-                            VType::fromQualType(P->getType(), IntMode));
+                            vtype(P->getType(), IntMode));
     if (isMutablePointerParam(P))
       MutablePtrParams.push_back(P);
   }
@@ -390,7 +434,7 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     if (!Fn->IsSpec && Fn->Body.empty() && Fn->Postconditions.empty())
       return nullptr;
   }
-  if (Fn->IsSpec && Fn->Body.empty() && !Fn->Decreases)
+  if (Fn->IsSpec && Fn->Body.empty() && Fn->Decreases.empty())
     return nullptr;
   CurrentFn = nullptr;
   return Fn;
@@ -407,12 +451,12 @@ ASTConverter::convertConstexprSpec(const FunctionDecl *FD) {
   Fn->IsConstexprSpec = true;
   IntMode = VIntMode::Machine;
   Fn->IntMode = IntMode;
-  Fn->ReturnType = VType::fromQualType(FD->getReturnType(), IntMode);
+  Fn->ReturnType = vtype(FD->getReturnType(), IntMode);
   CurrentFn = Fn.get();
 
   for (const ParmVarDecl *P : FD->parameters())
     Fn->Params.emplace_back(P->getNameAsString(),
-                            VType::fromQualType(P->getType(), IntMode));
+                            vtype(P->getType(), IntMode));
 
   if (const Stmt *Body = FD->getBody())
     Fn->Body = convertStmt(Body);
@@ -463,7 +507,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
       return nullptr;
   }
   if (const auto *IL = dyn_cast<IntegerLiteral>(E)) {
-    VType Ty = VType::fromQualType(E->getType(), IntMode);
+    VType Ty = vtype(E->getType(), IntMode);
     return std::make_unique<VLiteralExpr>(IL->getValue().getSExtValue(), Ty,
                                           E->getExprLoc());
   }
@@ -478,18 +522,18 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
     if (const auto *FD = dyn_cast<FieldDecl>(DRE->getDecl())) {
       auto It = FieldSubstPrefix.find(FD->getNameAsString());
       if (It != FieldSubstPrefix.end()) {
-        VType Ty = VType::fromQualType(E->getType(), IntMode);
+        VType Ty = vtype(E->getType(), IntMode);
         return std::make_unique<VVarExpr>(It->second + FD->getNameAsString(), Ty,
                                           E->getExprLoc());
       }
     }
     if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
-      VType Ty = VType::fromQualType(E->getType(), IntMode);
+      VType Ty = vtype(E->getType(), IntMode);
       return std::make_unique<VVarExpr>(VD->getNameAsString(), Ty,
                                         E->getExprLoc());
     }
     if (const auto *PD = dyn_cast<ParmVarDecl>(DRE->getDecl())) {
-      VType Ty = VType::fromQualType(E->getType(), IntMode);
+      VType Ty = vtype(E->getType(), IntMode);
       return std::make_unique<VVarExpr>(PD->getNameAsString(), Ty,
                                         E->getExprLoc());
     }
@@ -499,13 +543,13 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
       auto Ptr = convertExpr(U->getSubExpr());
       if (!Ptr)
         return nullptr;
-      VType Ty = VType::fromQualType(E->getType(), IntMode);
+      VType Ty = vtype(E->getType(), IntMode);
       return std::make_unique<VLoadExpr>(std::move(Ptr), Ty, E->getExprLoc());
     }
     auto Op = convertExpr(U->getSubExpr());
     if (!Op)
       return nullptr;
-    VType Ty = VType::fromQualType(E->getType(), IntMode);
+    VType Ty = vtype(E->getType(), IntMode);
     if (U->getOpcode() == UO_Minus)
       return std::make_unique<VUnaryOpExpr>(VUnaryOp::Neg, std::move(Op), Ty,
                                             E->getExprLoc());
@@ -518,7 +562,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
     auto R = convertExpr(B->getRHS());
     if (!L || !R)
       return nullptr;
-    VType Ty = VType::fromQualType(E->getType(), IntMode);
+    VType Ty = vtype(E->getType(), IntMode);
     return std::make_unique<VBinOpExpr>(convertBinOpcode(B->getOpcode()),
                                         std::move(L), std::move(R), Ty,
                                         E->getExprLoc());
@@ -527,7 +571,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
     auto Inner = convertExpr(ICE->getSubExpr());
     if (!Inner)
       return nullptr;
-    VType To = VType::fromQualType(E->getType(), IntMode);
+    VType To = vtype(E->getType(), IntMode);
     // Hoist Inner->Ty before the move (unspecified argument evaluation order).
     VType From = Inner->Ty;
     return std::make_unique<VCastExpr>(std::move(Inner), From, To,
@@ -537,7 +581,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
     auto Inner = convertExpr(CE->getSubExpr());
     if (!Inner)
       return nullptr;
-    VType To = VType::fromQualType(E->getType(), IntMode);
+    VType To = vtype(E->getType(), IntMode);
     // Hoist Inner->Ty before the move (unspecified argument evaluation order).
     VType From = Inner->Ty;
     return std::make_unique<VCastExpr>(std::move(Inner), From, To,
@@ -561,7 +605,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
     auto F = convertExpr(C->getFalseExpr());
     if (!Cond || !T || !F)
       return nullptr;
-    VType Ty = VType::fromQualType(E->getType(), IntMode);
+    VType Ty = vtype(E->getType(), IntMode);
     return std::make_unique<VConditionalExpr>(std::move(Cond), std::move(T),
                                               std::move(F), Ty, E->getExprLoc());
   }
@@ -574,7 +618,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
       if (isa<CXXThisExpr>(M->getBase()->IgnoreParenImpCasts())) {
         auto It = FieldSubstPrefix.find(FD->getNameAsString());
         if (It != FieldSubstPrefix.end()) {
-          VType Ty = VType::fromQualType(E->getType(), IntMode);
+          VType Ty = vtype(E->getType(), IntMode);
           return std::make_unique<VVarExpr>(It->second + FD->getNameAsString(),
                                             Ty, E->getExprLoc());
         }
@@ -585,24 +629,24 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
       if (!Base)
         return nullptr;
       auto Ptr = std::make_unique<VLoadExpr>(std::move(Base),
-                                             VType::fromQualType(M->getBase()->getType(), IntMode),
+                                             vtype(M->getBase()->getType(), IntMode),
                                              E->getExprLoc());
       if (isa<FieldDecl>(M->getMemberDecl())) {
-        VType Ty = VType::fromQualType(E->getType(), IntMode);
+        VType Ty = vtype(E->getType(), IntMode);
         return std::make_unique<VLoadExpr>(std::move(Ptr), Ty, E->getExprLoc());
       }
     }
     if (const auto *DRE = dyn_cast<DeclRefExpr>(M->getBase()->IgnoreParenImpCasts())) {
       if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
         if (const auto *FD = dyn_cast<FieldDecl>(M->getMemberDecl())) {
-          VType Ty = VType::fromQualType(E->getType(), IntMode);
+          VType Ty = vtype(E->getType(), IntMode);
           std::string Name = VD->getNameAsString() + "." + FD->getNameAsString();
           return std::make_unique<VVarExpr>(Name, Ty, E->getExprLoc());
         }
       }
       if (const auto *PD = dyn_cast<ParmVarDecl>(DRE->getDecl())) {
         if (const auto *FD = dyn_cast<FieldDecl>(M->getMemberDecl())) {
-          VType Ty = VType::fromQualType(E->getType(), IntMode);
+          VType Ty = vtype(E->getType(), IntMode);
           std::string Name = PD->getNameAsString() + "." + FD->getNameAsString();
           return std::make_unique<VVarExpr>(Name, Ty, E->getExprLoc());
         }
@@ -610,7 +654,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
     }
     if (InPost && isa<ResultExpr>(M->getBase()->IgnoreParenImpCasts())) {
       if (const auto *FD = dyn_cast<FieldDecl>(M->getMemberDecl())) {
-        VType Ty = VType::fromQualType(E->getType(), IntMode);
+        VType Ty = vtype(E->getType(), IntMode);
         return std::make_unique<VVarExpr>("result." + FD->getNameAsString(), Ty,
                                           E->getExprLoc());
       }
@@ -619,7 +663,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
     if (!Base)
       return nullptr;
     if (const auto *FD = dyn_cast<FieldDecl>(M->getMemberDecl())) {
-      VType Ty = VType::fromQualType(E->getType(), IntMode);
+      VType Ty = vtype(E->getType(), IntMode);
       return std::make_unique<VFieldAccessExpr>(std::move(Base), FD->getNameAsString(), Ty,
                                                 E->getExprLoc());
     }
@@ -628,7 +672,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
     if (!InPost)
       return nullptr;
     return std::make_unique<VResultExpr>(
-        VType::fromQualType(E->getType(), IntMode), E->getExprLoc());
+        vtype(E->getType(), IntMode), E->getExprLoc());
   }
   if (const auto *F = dyn_cast<ForallExpr>(E)) {
     std::string Binder = F->getBoundVar() ? F->getBoundVar()->getNameAsString()
@@ -649,7 +693,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
       if (Callee->isConstexpr() && CE->isEvaluatable(Ctx)) {
         Expr::EvalResult EV;
         if (CE->EvaluateAsInt(EV, Ctx)) {
-          VType Ty = VType::fromQualType(E->getType(), VIntMode::Machine);
+          VType Ty = vtype(E->getType(), VIntMode::Machine);
           return std::make_unique<VLiteralExpr>(EV.Val.getInt().getSExtValue(), Ty,
                                                 E->getExprLoc());
         }
@@ -659,7 +703,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
         for (const Expr *A : CE->arguments())
           if (auto AE = convertExpr(A))
             Args.push_back(std::move(AE));
-        VType Ty = VType::fromQualType(E->getType(), specCallIntMode(Callee));
+        VType Ty = vtype(E->getType(), specCallIntMode(Callee));
         return std::make_unique<VSpecCallExpr>(Callee->getNameAsString(),
                                                std::move(Args), Ty, E->getExprLoc());
       }
@@ -684,7 +728,7 @@ void ASTConverter::convertExecCallArg(
         convertExecCallArgs(CE, Prelude, InnerArgs);
         std::string Tmp = "__nested_" + std::to_string(++NestedCallId);
         Out = std::make_unique<VVarExpr>(
-            Tmp, VType::fromQualType(E->getType(), IntMode), E->getExprLoc());
+            Tmp, vtype(E->getType(), IntMode), E->getExprLoc());
         Prelude.push_back(std::make_unique<VCallStmt>(
             Callee->getNameAsString(), std::move(InnerArgs), Tmp,
             E->getExprLoc(), false));
@@ -737,7 +781,7 @@ ASTConverter::convertStmt(const Stmt *S) {
                 RS->getBeginLoc(), false));
             Out.push_back(std::make_unique<VReturnStmt>(
                 std::make_unique<VVarExpr>(
-                    "result", VType::fromQualType(RS->getRetValue()->getType(), IntMode),
+                    "result", vtype(RS->getRetValue()->getType(), IntMode),
                     RS->getBeginLoc()),
                 RS->getBeginLoc()));
             return Out;
@@ -745,6 +789,9 @@ ASTConverter::convertStmt(const Stmt *S) {
         }
       }
     }
+    // A returned struct value must satisfy its type_invariant: assert it just
+    // before the return, while the fields still hold the returned value.
+    emitReturnInvariantAssert(RS->getRetValue(), Out, RS->getBeginLoc());
     std::unique_ptr<VExpr> Val;
     if (RS->getRetValue())
       Val = convertExpr(RS->getRetValue());
@@ -769,13 +816,14 @@ ASTConverter::convertStmt(const Stmt *S) {
     if (!Cond)
       return Out;
     std::vector<std::unique_ptr<VExpr>> Invariants;
-    std::unique_ptr<VExpr> Decreases;
+    std::vector<std::unique_ptr<VExpr>> Decreases;
     if (const LoopContractInfo *LCI = Ctx.getLoopContract(WS)) {
       for (const Expr *Inv : LCI->Invariants)
         if (auto E = convertExpr(Inv))
           Invariants.push_back(std::move(E));
-      if (LCI->Decreases)
-        Decreases = convertExpr(LCI->Decreases);
+      for (const Expr *D : LCI->Decreases)
+        if (auto E = convertExpr(D))
+          Decreases.push_back(std::move(E));
     }
     auto Body = convertStmt(WS->getBody());
     Out.push_back(std::make_unique<VWhileStmt>(std::move(Cond), std::move(Invariants),
@@ -793,13 +841,14 @@ ASTConverter::convertStmt(const Stmt *S) {
     if (!Cond)
       return Out;
     std::vector<std::unique_ptr<VExpr>> Invariants;
-    std::unique_ptr<VExpr> Decreases;
+    std::vector<std::unique_ptr<VExpr>> Decreases;
     if (const LoopContractInfo *LCI = Ctx.getLoopContract(FS)) {
       for (const Expr *Inv : LCI->Invariants)
         if (auto E = convertExpr(Inv))
           Invariants.push_back(std::move(E));
-      if (LCI->Decreases)
-        Decreases = convertExpr(LCI->Decreases);
+      for (const Expr *D : LCI->Decreases)
+        if (auto E = convertExpr(D))
+          Decreases.push_back(std::move(E));
     }
     auto Body = convertStmt(FS->getBody());
     if (const Expr *Inc = FS->getInc()) {

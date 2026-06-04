@@ -7455,7 +7455,7 @@ public:
   /// Parse invariant/decreases clauses after a while/for condition.
   /// Called from ParseWhileStatement/ParseForStatement.
   void ParseLoopContractClauses(SmallVectorImpl<Expr *> &Invariants,
-                                Expr *&Decreases);
+                                SmallVectorImpl<Expr *> &Decreases);
 
   /// Parse ghost { ... } block.
   StmtResult ParseGhostBlock();

@@ -1,11 +1,13 @@
 //===--- VExpr.cpp --------------------------------------------------------===//
 #include "VExpr.h"
+#include "clang/AST/ASTContext.h"
 #include "clang/AST/Type.h"
 
 using namespace clang;
 using namespace verify;
 
-VType VType::fromQualType(QualType QT, VIntMode DefaultMode) {
+VType VType::fromQualType(QualType QT, VIntMode DefaultMode,
+                          const ASTContext *Ctx) {
   QT = QT.getCanonicalType();
   if (QT->isBooleanType())
     return VType::makeBool();
@@ -13,8 +15,25 @@ VType VType::fromQualType(QualType QT, VIntMode DefaultMode) {
     return VType::makeVoid();
   if (QT->isPointerType() || QT->isReferenceType())
     return VType::makePtr();
-  if (QT->isIntegerType())
-    return VType::makeInt32(DefaultMode);
+  if (QT->isIntegerType()) {
+    // Bit width comes from the target's data model when an ASTContext is
+    // available (so `long` is 64-bit on LP64, 32-bit on LLP64). Without one,
+    // fall back to the builtin kind: long/long long are assumed 64-bit.
+    unsigned Bits = 0;
+    if (Ctx)
+      Bits = static_cast<unsigned>(Ctx->getTypeSize(QT));
+    else
+      Bits = (QT->isSpecificBuiltinType(BuiltinType::Long) ||
+              QT->isSpecificBuiltinType(BuiltinType::ULong) ||
+              QT->isSpecificBuiltinType(BuiltinType::LongLong) ||
+              QT->isSpecificBuiltinType(BuiltinType::ULongLong))
+                 ? 64
+                 : 32;
+    VType T{Bits >= 64 ? VTypeKind::Int64 : VTypeKind::Int32, DefaultMode};
+    T.Unsigned = QT->isUnsignedIntegerType();
+    T.Width = Bits >= 64 ? 64 : 32;
+    return T;
+  }
   return VType::makeInt32(DefaultMode);
 }
 
@@ -91,6 +110,11 @@ std::unique_ptr<VExpr> verify::cloneVExpr(const VExpr *E) {
     for (const auto &A : C->Args)
       Args.push_back(cloneVExpr(A.get()));
     return std::make_unique<VSpecCallExpr>(C->Callee, std::move(Args), C->Ty, C->Loc);
+  }
+  case VExpr::OverflowCheck: {
+    const auto *O = static_cast<const VOverflowCheckExpr *>(E);
+    return std::make_unique<VOverflowCheckExpr>(
+        O->Op, cloneVExpr(O->Lhs.get()), cloneVExpr(O->Rhs.get()), O->Loc);
   }
   }
   return nullptr;
