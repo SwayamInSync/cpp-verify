@@ -22,11 +22,16 @@ public:
   std::unique_ptr<VExpr> inlineExpr(std::unique_ptr<VExpr> E);
 
   /// Unfold spec body for defining axiom (fuel-limited symbolic expansion).
+  /// When KeepLeaves is set, recursive spec calls that are not unfolded further
+  /// are kept as uninterpreted applications of the same spec function (used to
+  /// build a recursive spec's one-level fuel-parameterized defining axiom)
+  /// instead of being replaced by fresh constants.
   std::unique_ptr<VExpr> unfoldDefinition(const VFunction &Spec,
                                           const std::map<std::string, unsigned> &Fuel,
                                           const std::set<std::string> &Hidden,
                                           const std::set<std::string> &Revealed,
-                                          unsigned RootFuel) const;
+                                          unsigned RootFuel,
+                                          bool KeepLeaves = false) const;
 };
 
 /// Build passive obligations: decreases(callee) < decreases(current) at recursive sites.

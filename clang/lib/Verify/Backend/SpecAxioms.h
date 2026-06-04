@@ -26,6 +26,13 @@ std::unique_ptr<VExpr> unfoldSpecDefinition(const VFunction &Spec,
                                             const SpecAxiomContext &Ctx,
                                             unsigned Fuel);
 
+/// Build the one-level body of a recursive spec for its fuel-parameterized
+/// defining axiom: the body is expanded a single step and recursive spec calls
+/// are kept as uninterpreted applications (the encoder re-attaches the lowered
+/// fuel argument to them) rather than fresh constants.
+std::unique_ptr<VExpr> unfoldSpecBodyForAxiom(const VFunction &Spec,
+                                              const SpecAxiomContext &Ctx);
+
 /// Emit defining axioms into Z3 for specs referenced in the VC.
 void emitSpecAxioms(class Z3Encoder &Enc, const VCExpr *Goal,
                     const SpecAxiomContext &Ctx);

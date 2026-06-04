@@ -7,6 +7,7 @@
 #include "VerifyBackend.h"
 #include "../IR/VType.h"
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <z3++.h>
@@ -24,6 +25,29 @@ class Z3Encoder {
   /// Per-query solver timeout in milliseconds; 0 disables it. Prevents
   /// non-terminating queries from hanging the tool (they return Unknown).
   unsigned TimeoutMs = 0;
+
+  /// Reveal fuel per spec function, used to pick the fuel depth of recursive
+  /// spec calls at goal sites. Populated from the VCMachine before encoding.
+  std::map<std::string, unsigned> SpecFuelMap;
+
+  /// Fuel encoding for recursive spec functions (Verus/Dafny style). A
+  /// recursive spec `f` is declared with an extra leading `Fuel` argument; its
+  /// defining axioms (unfold + synonym) are triggered on `f(Succ(g), args)`, so
+  /// unfolding is bounded by the syntactic Succ-depth of the fuel term and the
+  /// recursive leaves remain the same function rather than fresh constants.
+  std::optional<z3::sort> FuelSortOpt;
+  std::optional<z3::func_decl> FuelSuccOpt;
+  std::optional<z3::expr> FuelZeroOpt;
+  z3::sort fuelSort();
+  z3::func_decl fuelSucc();
+  z3::expr fuelZero();
+  z3::expr fuelTerm(unsigned K); // Succ^K(Zero)
+  static bool specIsRecursive(const VFunction *S);
+
+  /// While emitting a recursive spec's defining axiom, self-recursive calls in
+  /// the body are encoded at this (quantified) fuel variable.
+  const VFunction *AxiomSelfSpec = nullptr;
+  std::optional<z3::expr> AxiomSelfFuel;
 
   z3::sort intSort();
   z3::sort bvSort();

@@ -42,6 +42,16 @@ std::unique_ptr<VExpr> verify::unfoldSpecDefinition(const VFunction &Spec,
                                   Ctx.RevealedSpecs, Fuel);
 }
 
+std::unique_ptr<VExpr> verify::unfoldSpecBodyForAxiom(const VFunction &Spec,
+                                                      const SpecAxiomContext &Ctx) {
+  // One step of unfolding (RootFuel = 1) with recursive leaves kept as spec
+  // applications. Hidden/revealed sets are intentionally empty so the body is
+  // expanded one level regardless of the caller's reveal state.
+  SpecInliner Inliner(Ctx.Functions, Ctx.SpecFuel);
+  return Inliner.unfoldDefinition(Spec, {}, {}, {}, /*RootFuel=*/1,
+                                  /*KeepLeaves=*/true);
+}
+
 void verify::emitSpecAxioms(Z3Encoder &Enc, const VCExpr *Goal,
                             const SpecAxiomContext &Ctx) {
   std::set<std::string> Used;

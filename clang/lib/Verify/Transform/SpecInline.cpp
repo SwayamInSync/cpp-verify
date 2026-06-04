@@ -33,6 +33,13 @@ class SpecInlinerImpl {
   unsigned OpaqueId = 0;
   unsigned InlineDepth = 0;
   static constexpr unsigned MaxInlineDepth = 256;
+  /// When set (axiom-body construction), a spec call that is not unfolded
+  /// further is kept as an uninterpreted application of the same spec function
+  /// rather than replaced by a fresh constant. This is what makes a recursive
+  /// spec's fuel-parameterized defining axiom actually pin the function down:
+  /// the recursive leaves remain `f(args)` (which the encoder re-attaches to
+  /// the fuel variable) instead of unconstrained `__spec_f_N` constants.
+  bool KeepRecursiveLeaves = false;
 
   unsigned fuelFor(const std::string &Name) const {
     if (Hidden.count(Name))
@@ -46,11 +53,22 @@ class SpecInlinerImpl {
   }
 
   std::unique_ptr<VExpr> opaqueCall(const VSpecCallExpr &C) {
+    if (KeepRecursiveLeaves) {
+      auto It = FnMap.find(C.Callee);
+      if (It != FnMap.end() && It->second && It->second->IsSpec) {
+        std::vector<std::unique_ptr<VExpr>> Args;
+        for (const auto &A : C.Args)
+          Args.push_back(cloneVExpr(A.get()));
+        return std::make_unique<VSpecCallExpr>(C.Callee, std::move(Args), C.Ty,
+                                               C.Loc);
+      }
+    }
     std::string Name = "__spec_" + C.Callee + "_" + std::to_string(++OpaqueId);
     return std::make_unique<VVarExpr>(Name, C.Ty, C.Loc);
   }
 
 public:
+  void setKeepRecursiveLeaves(bool V) { KeepRecursiveLeaves = V; }
   SpecInlinerImpl(const FunctionMap &FnMap, std::map<std::string, unsigned> Fuel,
                   std::set<std::string> Hidden, std::set<std::string> Revealed)
       : FnMap(FnMap), Fuel(std::move(Fuel)), Hidden(std::move(Hidden)),
@@ -332,7 +350,7 @@ void SpecInliner::prepareFunction(VFunction &Fn) {
 std::unique_ptr<VExpr> SpecInliner::unfoldDefinition(
     const VFunction &Spec, const std::map<std::string, unsigned> &FuelMap,
     const std::set<std::string> &Hidden, const std::set<std::string> &Revealed,
-    unsigned RootFuel) const {
+    unsigned RootFuel, bool KeepLeaves) const {
   std::vector<std::unique_ptr<VExpr>> Args;
   for (const auto &P : Spec.Params)
     Args.push_back(
@@ -342,6 +360,7 @@ std::unique_ptr<VExpr> SpecInliner::unfoldDefinition(
   std::map<std::string, unsigned> Fuel = FuelMap;
   Fuel[Spec.Name] = std::max(Fuel[Spec.Name], RootFuel);
   SpecInlinerImpl Impl(FnMap, Fuel, Hidden, Revealed);
+  Impl.setKeepRecursiveLeaves(KeepLeaves);
   return Impl.inlineSpecCall(*Call);
 }
 

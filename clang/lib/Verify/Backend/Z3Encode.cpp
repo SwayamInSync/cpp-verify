@@ -78,6 +78,39 @@ static std::string specDeclKey(const std::string &Fn, VIntMode Mode) {
   return Fn + (Mode == VIntMode::Machine ? "$bv" : "$int");
 }
 
+// A recursive spec function (proven terminating via `decreases`) is encoded with
+// an explicit fuel argument so its defining axiom unfolds a bounded number of
+// times. Non-recursive specs are fully inlined and need no fuel.
+bool Z3Encoder::specIsRecursive(const VFunction *S) {
+  return S && S->NeedsDecreasesCheck;
+}
+
+// Fuel is an uninterpreted sort with a zero constant and a successor function.
+// Using uninterpreted Succ/Zero (rather than arithmetic) keeps the axiom
+// triggers `f(Succ(g), args)` purely syntactic: a term at `f(Zero, args)` does
+// not match, so unfolding halts exactly at the reveal depth and cannot loop.
+z3::sort Z3Encoder::fuelSort() {
+  if (!FuelSortOpt)
+    FuelSortOpt = Ctx.uninterpreted_sort("Fuel");
+  return *FuelSortOpt;
+}
+z3::func_decl Z3Encoder::fuelSucc() {
+  if (!FuelSuccOpt)
+    FuelSuccOpt = Ctx.function("$fuelS", fuelSort(), fuelSort());
+  return *FuelSuccOpt;
+}
+z3::expr Z3Encoder::fuelZero() {
+  if (!FuelZeroOpt)
+    FuelZeroOpt = Ctx.constant("$fuelZ", fuelSort());
+  return *FuelZeroOpt;
+}
+z3::expr Z3Encoder::fuelTerm(unsigned K) {
+  z3::expr T = fuelZero();
+  for (unsigned I = 0; I < K; ++I)
+    T = fuelSucc()(T);
+  return T;
+}
+
 z3::func_decl Z3Encoder::specFuncDecl(const VFunction *Spec) {
   assert(Spec && "specFuncDecl requires a spec function");
   std::string Key = specDeclKey(Spec->Name, CallerIntMode);
@@ -85,6 +118,9 @@ z3::func_decl Z3Encoder::specFuncDecl(const VFunction *Spec) {
   if (It != SpecFuncDecls.end())
     return It->second;
   std::vector<z3::sort> Domain;
+  // Recursive specs carry a leading Fuel argument (bounds axiom unfolding).
+  if (specIsRecursive(Spec))
+    Domain.push_back(fuelSort());
   for (const auto &P : Spec->Params)
     Domain.push_back(valueSort(P.second, CallerIntMode));
   z3::sort Ret = valueSort(Spec->ReturnType, CallerIntMode);
@@ -429,8 +465,23 @@ z3::expr Z3Encoder::encodeVCNode(
     auto It = SpecFunctions.find(E->SpecCallee);
     if (It == SpecFunctions.end() || !It->second)
       return Ctx.int_val(0);
-    z3::func_decl F = specFuncDecl(It->second);
+    const VFunction *Spec = It->second;
+    z3::func_decl F = specFuncDecl(Spec);
     std::vector<z3::expr> Args;
+    if (specIsRecursive(Spec)) {
+      // Choose the fuel for this application: a self-recursive call inside the
+      // function's own defining axiom uses the (lowered) bound fuel variable;
+      // any other site uses the reveal depth (default 1 for recursive specs).
+      if (AxiomSelfSpec && AxiomSelfFuel &&
+          E->SpecCallee == AxiomSelfSpec->Name)
+        Args.push_back(*AxiomSelfFuel);
+      else {
+        unsigned K = 1;
+        if (auto FI = SpecFuelMap.find(E->SpecCallee); FI != SpecFuelMap.end())
+          K = FI->second ? FI->second : 1;
+        Args.push_back(fuelTerm(K));
+      }
+    }
     for (unsigned i = 0; i < E->Children.size(); ++i)
       Args.push_back(coerceTo(child(i), CallerIntMode));
     z3::expr A = F(static_cast<unsigned>(Args.size()), Args.data());
@@ -474,6 +525,64 @@ void Z3Encoder::emitSpecDefiningAxiom(const std::string &Name,
   if (It == ACtx.Functions.end() || !It->second)
     return;
   const VFunction &Spec = *It->second;
+
+  // Recursive specs: emit a fuel-parameterized definition. With f a fresh fuel
+  // variable and the function declared as F(Fuel, args):
+  //   unfold:  forall f,a. {F(Succ(f),a)} F(Succ(f),a) == body[ rec g(x) := F(f,x) ]
+  //   synonym: forall f,a. {F(Succ(f),a)} F(Succ(f),a) == F(f,a)
+  // The shared trigger F(Succ(f),a) and uninterpreted Succ/Zero bound unfolding
+  // to the reveal depth (a goal call is F(Succ^K(Zero),a)); the synonym lets a
+  // term at higher fuel be lowered so the unfold leaves (at fuel f) meet the
+  // goal's other calls. The recursive leaves stay the *same* function, so the
+  // axiom genuinely pins F down (unlike fresh-constant leaves).
+  if (specIsRecursive(&Spec)) {
+    z3::func_decl Fdecl = specFuncDecl(&Spec);
+    z3::expr FVar = Ctx.constant("$f", fuelSort());
+    std::vector<z3::expr> ParamConsts;
+    for (const auto &P : Spec.Params) {
+      z3::expr V = CallerIntMode == VIntMode::Machine
+                       ? Ctx.bv_const(P.first.c_str(), 32)
+                       : Ctx.int_const(P.first.c_str());
+      Vars.emplace(P.first, V);
+      ParamConsts.push_back(V);
+    }
+    auto applyFuel = [&](z3::expr FuelArg) {
+      std::vector<z3::expr> A;
+      A.push_back(FuelArg);
+      for (auto &C : ParamConsts)
+        A.push_back(C);
+      return Fdecl(static_cast<unsigned>(A.size()), A.data());
+    };
+    z3::expr LHS = applyFuel(fuelSucc()(FVar));
+    z3::expr Lowered = applyFuel(FVar);
+
+    std::unique_ptr<VExpr> Body = unfoldSpecBodyForAxiom(Spec, ACtx);
+    AxiomSelfSpec = &Spec;
+    AxiomSelfFuel = FVar;
+    z3::expr RHS = Body ? encodeVExprForAxiom(Body.get(), Spec.ReturnType)
+                        : Lowered;
+    AxiomSelfSpec = nullptr;
+    AxiomSelfFuel.reset();
+
+    // forall [f, params] {LHS} (LHS == Matrix)
+    auto quantWithTrigger = [&](z3::expr Matrix) {
+      std::vector<Z3_app> Bound;
+      Bound.push_back(reinterpret_cast<Z3_app>(static_cast<Z3_ast>(FVar)));
+      for (auto &C : ParamConsts)
+        Bound.push_back(reinterpret_cast<Z3_app>(static_cast<Z3_ast>(C)));
+      Z3_ast PatTerm = LHS;
+      Z3_pattern Pat = Z3_mk_pattern(Ctx, 1, &PatTerm);
+      Z3_ast Q = Z3_mk_forall_const(Ctx, 0, static_cast<unsigned>(Bound.size()),
+                                    Bound.data(), 1, &Pat, Matrix);
+      return z3::expr(Ctx, Q);
+    };
+    Solver.add(quantWithTrigger(LHS == RHS));
+    Solver.add(quantWithTrigger(LHS == Lowered));
+    for (const auto &P : Spec.Params)
+      Vars.erase(P.first);
+    return;
+  }
+
   unsigned Fuel = 0;
   if (ACtx.HiddenSpecs.count(Spec.Name))
     Fuel = 0;
@@ -519,6 +628,7 @@ VerifyResult Z3Encoder::verifyMachine(const VCMachine &M) {
     Solver.set(P);
   }
   SpecFunctions = M.SpecFunctions;
+  SpecFuelMap = M.SpecFuel;
   CallerIntMode = M.CallerIntMode;
   VerifyResult Out;
   if (!M.Goal) {
