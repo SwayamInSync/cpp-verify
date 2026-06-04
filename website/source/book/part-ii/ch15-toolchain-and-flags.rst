@@ -38,6 +38,7 @@ Other flags
 -----------
 
 - ``cpp-verify --backend={z3,bmc,lean}`` — verification engine (see :doc:`ch17-backends-modular-calls`)
+- ``cpp-verify --check-ub`` — also prove freedom from undefined behavior (see :doc:`ch18-undefined-behavior`)
 - ``cpp-verify --unroll=N`` — loop bound for BMC
 - ``cpp-verify --timeout=N`` — per-query Z3 timeout in ms (default 10000)
 - ``cpp-verify --dump-ir[=1,2,3,4]`` — dump VCR / passive / VC / Z3 layers

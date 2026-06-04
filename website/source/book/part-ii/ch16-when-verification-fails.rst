@@ -32,5 +32,7 @@ Adjusting contracts
      - Use ``reveal_with_fuel`` in a ghost block
    * - Pointer aliasing
      - Prove distinct pointers or declare ``aliases``
+   * - Overflow / divide-by-zero (``--check-ub``)
+     - Add the precondition the counterexample points to (see :doc:`ch18-undefined-behavior`)
 
 Further reference: :doc:`../../language/index`.

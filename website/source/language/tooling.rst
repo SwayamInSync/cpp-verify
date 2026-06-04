@@ -10,6 +10,7 @@ Standalone verifier
    cpp-verify --backend=z3 file.cpp
    cpp-verify --backend=bmc --unroll=3 file.cpp
    cpp-verify --backend=lean --lean-out=goal.lean file.cpp
+   cpp-verify --check-ub file.cpp
    cpp-verify --timeout=20000 file.cpp
    cpp-verify --dump-ir=1,2,3,4 file.cpp
 
@@ -32,6 +33,10 @@ Backends
      - Write Lean 4 scratch-pad to ``--lean-out`` (required for useful output).
    * - ``--unroll=N``
      - BMC loop bound only.
+   * - ``--check-ub``
+     - Also prove freedom from undefined behavior (signed integer overflow,
+       division/modulo by zero) for ``exec``/``proof`` functions. Z3 backend.
+       See :doc:`integers`.
    * - ``--timeout=N``
      - Per-query Z3 timeout in milliseconds (default 10000; ``0`` disables). A query
        that exceeds it is reported as ``unknown`` instead of hanging.
