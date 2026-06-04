@@ -1,6 +1,7 @@
 //===--- UBChecks.cpp - Layer-A undefined-behavior obligations -------------===//
 #include "UBChecks.h"
 #include "../IR/VExpr.h"
+#include <map>
 
 using namespace clang;
 using namespace verify;
@@ -30,160 +31,267 @@ std::unique_ptr<VExpr> mkNonZero(const VExpr *Divisor, SourceLocation Loc) {
                                       std::move(Zero), VType::makeBool(), Loc);
 }
 
-//===----------------------------------------------------------------------===//
-// The checker registry: walk an expression and append safety obligations.
-// Each obligation is a boolean VExpr that is true iff the operation is safe.
-// Children are visited first so nested operations are also covered; all
-// obligations are independent asserts, so their relative order is irrelevant.
-// To add a UB class, add a case here (and, if it needs a solver primitive, a
-// node + encoder case). See docs/UB-CHECKING.md.
-//===----------------------------------------------------------------------===//
-void collectObligations(const VExpr *E,
-                        std::vector<std::unique_ptr<VExpr>> &Out) {
+VType machineInt(SourceLocation) { return VType::makeInt32(VIntMode::Machine); }
+
+// The base pointer an address is rooted at: strips casts and pointer arithmetic
+// (`p + i` -> `p`). Returns a Var when the root is a named pointer.
+const VExpr *pointerBase(const VExpr *E) {
   if (!E)
-    return;
+    return nullptr;
   switch (E->K) {
+  case VExpr::Cast:
+    return pointerBase(static_cast<const VCastExpr *>(E)->Inner.get());
+  case VExpr::Load:
+    return pointerBase(static_cast<const VLoadExpr *>(E)->Ptr.get());
   case VExpr::BinOp: {
     const auto *B = static_cast<const VBinOpExpr *>(E);
-    collectObligations(B->Lhs.get(), Out);
-    collectObligations(B->Rhs.get(), Out);
-    const bool Signed = isSignedMachine(B->Ty);
-    switch (B->Op) {
-    case VBinOp::Add:
-      if (Signed)
-        Out.push_back(mkOvf(VOverflowOp::Add, B->Lhs.get(), B->Rhs.get(), B->Loc));
-      break;
-    case VBinOp::Sub:
-      if (Signed)
-        Out.push_back(mkOvf(VOverflowOp::Sub, B->Lhs.get(), B->Rhs.get(), B->Loc));
-      break;
-    case VBinOp::Mul:
-      if (Signed)
-        Out.push_back(mkOvf(VOverflowOp::Mul, B->Lhs.get(), B->Rhs.get(), B->Loc));
-      break;
-    case VBinOp::Div:
-    case VBinOp::Rem:
-      // Division/modulo by zero is UB for both signed and unsigned.
-      if (isMachineInt(B->Ty))
-        Out.push_back(mkNonZero(B->Rhs.get(), B->Loc));
-      // INT_MIN / -1 (and the modulo equivalent) overflows for signed.
-      if (Signed)
-        Out.push_back(mkOvf(VOverflowOp::SDiv, B->Lhs.get(), B->Rhs.get(), B->Loc));
-      break;
-    default:
-      break;
+    if (B->Op == VBinOp::Add || B->Op == VBinOp::Sub) {
+      if (const VExpr *L = pointerBase(B->Lhs.get()); L && L->K == VExpr::Var)
+        return L;
+      if (const VExpr *R = pointerBase(B->Rhs.get()); R && R->K == VExpr::Var)
+        return R;
     }
-    break;
+    return E;
   }
-  case VExpr::UnaryOp: {
-    const auto *U = static_cast<const VUnaryOpExpr *>(E);
-    collectObligations(U->Operand.get(), Out);
-    if (U->Op == VUnaryOp::Neg && isSignedMachine(U->Ty))
-      Out.push_back(mkOvf(VOverflowOp::Neg, U->Operand.get(), nullptr, U->Loc));
-    break;
-  }
-  case VExpr::Cast:
-    collectObligations(static_cast<const VCastExpr *>(E)->Inner.get(), Out);
-    break;
-  case VExpr::Conditional: {
-    const auto *C = static_cast<const VConditionalExpr *>(E);
-    collectObligations(C->Cond.get(), Out);
-    collectObligations(C->Then.get(), Out);
-    collectObligations(C->Else.get(), Out);
-    break;
-  }
-  case VExpr::Load:
-    collectObligations(static_cast<const VLoadExpr *>(E)->Ptr.get(), Out);
-    break;
-  case VExpr::FieldAccess:
-    collectObligations(static_cast<const VFieldAccessExpr *>(E)->Base.get(), Out);
-    break;
-  case VExpr::Old:
-    collectObligations(static_cast<const VOldExpr *>(E)->Inner.get(), Out);
-    break;
-  case VExpr::SpecCall: {
-    const auto *S = static_cast<const VSpecCallExpr *>(E);
-    for (const auto &A : S->Args)
-      collectObligations(A.get(), Out);
-    break;
-  }
-  // Literal, Var, Result, quantifiers, HeapStore, OverflowCheck: no obligation.
   default:
-    break;
+    return E;
   }
 }
 
-// Append the obligation asserts for expression E into the statement list.
-void emitObsInto(std::vector<std::unique_ptr<VStmt>> &Out, const VExpr *E) {
-  std::vector<std::unique_ptr<VExpr>> Obs;
-  collectObligations(E, Obs);
-  for (auto &O : Obs) {
-    SourceLocation L = O->Loc;
-    Out.push_back(std::make_unique<VContractAssertStmt>(std::move(O), L));
+// The machine-integer offset of an address relative to its base pointer: `p + i`
+// -> `i`, bare `p` -> `0`. Returns null if Addr isn't of base(+/-)offset form
+// rooted at Base.
+std::unique_ptr<VExpr> pointerOffset(const VExpr *Addr, const std::string &Base) {
+  if (!Addr)
+    return nullptr;
+  if (Addr->K == VExpr::Cast)
+    return pointerOffset(static_cast<const VCastExpr *>(Addr)->Inner.get(), Base);
+  if (Addr->K == VExpr::Var) {
+    if (static_cast<const VVarExpr *>(Addr)->Name == Base)
+      return std::make_unique<VLiteralExpr>(0, machineInt(Addr->Loc), Addr->Loc);
+    return nullptr;
   }
+  if (Addr->K == VExpr::BinOp) {
+    const auto *B = static_cast<const VBinOpExpr *>(Addr);
+    if (B->Op == VBinOp::Add || B->Op == VBinOp::Sub) {
+      if (auto LO = pointerOffset(B->Lhs.get(), Base))
+        return std::make_unique<VBinOpExpr>(B->Op, std::move(LO),
+                                            cloneVExpr(B->Rhs.get()),
+                                            machineInt(B->Loc), B->Loc);
+      if (B->Op == VBinOp::Add)
+        if (auto RO = pointerOffset(B->Rhs.get(), Base))
+          return std::make_unique<VBinOpExpr>(VBinOp::Add,
+                                              cloneVExpr(B->Lhs.get()),
+                                              std::move(RO), machineInt(B->Loc),
+                                              B->Loc);
+    }
+  }
+  return nullptr;
 }
 
-// Walk a statement list, inserting obligation asserts before each statement in
-// evaluation order. Recurses into nested control flow. Ghost/spec statements and
-// contract expressions are not executed at runtime and are left untouched.
-void instrumentStmts(std::vector<std::unique_ptr<VStmt>> &Stmts) {
-  std::vector<std::unique_ptr<VStmt>> New;
-  for (auto &S : Stmts) {
-    switch (S->K) {
-    case VStmt::Assign:
-      emitObsInto(New, static_cast<VAssignStmt &>(*S).Value.get());
-      break;
-    case VStmt::Store: {
-      auto &St = static_cast<VStoreStmt &>(*S);
-      emitObsInto(New, St.Ptr.get());
-      emitObsInto(New, St.Value.get());
-      break;
+//===----------------------------------------------------------------------===//
+// The checker. Holds the declared buffer lengths (from `valid(p, n)`
+// preconditions) so array accesses get bounds obligations, and emits the
+// arithmetic obligations (overflow, division). See docs/UB-CHECKING.md.
+//===----------------------------------------------------------------------===//
+struct UBInstrumenter {
+  // base pointer name -> its declared length (from `valid(p, n)`).
+  std::map<std::string, const VExpr *> ValidLen;
+
+  // Scan a precondition for `valid(p, n)` declarations (recursing through `&&`).
+  void scanValid(const VExpr *E) {
+    if (!E)
+      return;
+    if (E->K == VExpr::SpecCall) {
+      const auto *C = static_cast<const VSpecCallExpr *>(E);
+      if (C->Callee == "valid" && C->Args.size() == 2) {
+        const VExpr *B = pointerBase(C->Args[0].get());
+        if (B && B->K == VExpr::Var)
+          ValidLen[static_cast<const VVarExpr *>(B)->Name] = C->Args[1].get();
+      }
+      return;
     }
-    case VStmt::Return:
-      emitObsInto(New, static_cast<VReturnStmt &>(*S).Value.get());
-      break;
-    case VStmt::If: {
-      auto &I = static_cast<VIfStmt &>(*S);
-      emitObsInto(New, I.Cond.get());
-      instrumentStmts(I.Then);
-      instrumentStmts(I.Else);
-      break;
+    if (E->K == VExpr::BinOp) {
+      const auto *B = static_cast<const VBinOpExpr *>(E);
+      scanValid(B->Lhs.get());
+      scanValid(B->Rhs.get());
     }
-    case VStmt::While: {
-      auto &W = static_cast<VWhileStmt &>(*S);
-      // The condition is evaluated once on entry (here, concrete pre-state) ...
-      emitObsInto(New, W.Cond.get());
-      instrumentStmts(W.Body);
-      // ... and again after each iteration: check it at the end of the body, in
-      // the inductive (havocked) context.
-      std::vector<std::unique_ptr<VExpr>> CondObs;
-      collectObligations(W.Cond.get(), CondObs);
-      for (auto &O : CondObs) {
-        SourceLocation L = O->Loc;
-        W.Body.push_back(std::make_unique<VContractAssertStmt>(std::move(O), L));
+  }
+
+  // Bounds obligation `0 <= off && off < len` for an access at Addr, when the
+  // base pointer has a declared length; null otherwise.
+  std::unique_ptr<VExpr> boundsObligation(const VExpr *Addr) {
+    const VExpr *B = pointerBase(Addr);
+    if (!B || B->K != VExpr::Var)
+      return nullptr;
+    auto It = ValidLen.find(static_cast<const VVarExpr *>(B)->Name);
+    if (It == ValidLen.end())
+      return nullptr;
+    auto Off = pointerOffset(Addr, static_cast<const VVarExpr *>(B)->Name);
+    if (!Off)
+      return nullptr;
+    SourceLocation Loc = Addr->Loc;
+    auto Ge = std::make_unique<VBinOpExpr>(
+        VBinOp::Ge, cloneVExpr(Off.get()),
+        std::make_unique<VLiteralExpr>(0, machineInt(Loc), Loc),
+        VType::makeBool(), Loc);
+    auto Lt = std::make_unique<VBinOpExpr>(VBinOp::Lt, std::move(Off),
+                                           cloneVExpr(It->second),
+                                           VType::makeBool(), Loc);
+    return std::make_unique<VBinOpExpr>(VBinOp::And, std::move(Ge), std::move(Lt),
+                                        VType::makeBool(), Loc);
+  }
+
+  // Walk E, append safety obligations. To add a UB class, add a case here.
+  void collectObligations(const VExpr *E,
+                          std::vector<std::unique_ptr<VExpr>> &Out) {
+    if (!E)
+      return;
+    switch (E->K) {
+    case VExpr::BinOp: {
+      const auto *B = static_cast<const VBinOpExpr *>(E);
+      collectObligations(B->Lhs.get(), Out);
+      collectObligations(B->Rhs.get(), Out);
+      const bool Signed = isSignedMachine(B->Ty);
+      switch (B->Op) {
+      case VBinOp::Add:
+        if (Signed)
+          Out.push_back(mkOvf(VOverflowOp::Add, B->Lhs.get(), B->Rhs.get(), B->Loc));
+        break;
+      case VBinOp::Sub:
+        if (Signed)
+          Out.push_back(mkOvf(VOverflowOp::Sub, B->Lhs.get(), B->Rhs.get(), B->Loc));
+        break;
+      case VBinOp::Mul:
+        if (Signed)
+          Out.push_back(mkOvf(VOverflowOp::Mul, B->Lhs.get(), B->Rhs.get(), B->Loc));
+        break;
+      case VBinOp::Div:
+      case VBinOp::Rem:
+        if (isMachineInt(B->Ty))
+          Out.push_back(mkNonZero(B->Rhs.get(), B->Loc));
+        if (Signed)
+          Out.push_back(mkOvf(VOverflowOp::SDiv, B->Lhs.get(), B->Rhs.get(), B->Loc));
+        break;
+      default:
+        break;
       }
       break;
     }
-    case VStmt::Call:
-      for (const auto &A : static_cast<VCallStmt &>(*S).Args)
-        emitObsInto(New, A.get());
+    case VExpr::UnaryOp: {
+      const auto *U = static_cast<const VUnaryOpExpr *>(E);
+      collectObligations(U->Operand.get(), Out);
+      if (U->Op == VUnaryOp::Neg && isSignedMachine(U->Ty))
+        Out.push_back(mkOvf(VOverflowOp::Neg, U->Operand.get(), nullptr, U->Loc));
       break;
-    case VStmt::Seq:
-      instrumentStmts(static_cast<VSeqStmt &>(*S).Stmts);
+    }
+    case VExpr::Cast:
+      collectObligations(static_cast<const VCastExpr *>(E)->Inner.get(), Out);
       break;
-    // Ghost/spec/contract statements are not executed → no runtime UB.
+    case VExpr::Conditional: {
+      const auto *C = static_cast<const VConditionalExpr *>(E);
+      collectObligations(C->Cond.get(), Out);
+      collectObligations(C->Then.get(), Out);
+      collectObligations(C->Else.get(), Out);
+      break;
+    }
+    case VExpr::Load: {
+      // Array-bounds: a read through p[i] / *(p+i) must be in [0, len(p)).
+      const auto *L = static_cast<const VLoadExpr *>(E);
+      collectObligations(L->Ptr.get(), Out);
+      if (auto Bnd = boundsObligation(L->Ptr.get()))
+        Out.push_back(std::move(Bnd));
+      break;
+    }
+    case VExpr::FieldAccess:
+      collectObligations(static_cast<const VFieldAccessExpr *>(E)->Base.get(), Out);
+      break;
+    case VExpr::Old:
+      collectObligations(static_cast<const VOldExpr *>(E)->Inner.get(), Out);
+      break;
+    case VExpr::SpecCall: {
+      const auto *S = static_cast<const VSpecCallExpr *>(E);
+      for (const auto &A : S->Args)
+        collectObligations(A.get(), Out);
+      break;
+    }
     default:
       break;
     }
-    New.push_back(std::move(S));
   }
-  Stmts = std::move(New);
-}
+
+  void emitObsInto(std::vector<std::unique_ptr<VStmt>> &Out, const VExpr *E) {
+    std::vector<std::unique_ptr<VExpr>> Obs;
+    collectObligations(E, Obs);
+    for (auto &O : Obs) {
+      SourceLocation L = O->Loc;
+      Out.push_back(std::make_unique<VContractAssertStmt>(std::move(O), L));
+    }
+  }
+
+  void instrumentStmts(std::vector<std::unique_ptr<VStmt>> &Stmts) {
+    std::vector<std::unique_ptr<VStmt>> New;
+    for (auto &S : Stmts) {
+      switch (S->K) {
+      case VStmt::Assign:
+        emitObsInto(New, static_cast<VAssignStmt &>(*S).Value.get());
+        break;
+      case VStmt::Store: {
+        auto &St = static_cast<VStoreStmt &>(*S);
+        // Array-bounds for the write target p[j] = ...
+        if (auto Bnd = boundsObligation(St.Ptr.get())) {
+          SourceLocation L = Bnd->Loc;
+          New.push_back(std::make_unique<VContractAssertStmt>(std::move(Bnd), L));
+        }
+        emitObsInto(New, St.Ptr.get());
+        emitObsInto(New, St.Value.get());
+        break;
+      }
+      case VStmt::Return:
+        emitObsInto(New, static_cast<VReturnStmt &>(*S).Value.get());
+        break;
+      case VStmt::If: {
+        auto &I = static_cast<VIfStmt &>(*S);
+        emitObsInto(New, I.Cond.get());
+        instrumentStmts(I.Then);
+        instrumentStmts(I.Else);
+        break;
+      }
+      case VStmt::While: {
+        auto &W = static_cast<VWhileStmt &>(*S);
+        emitObsInto(New, W.Cond.get());
+        instrumentStmts(W.Body);
+        std::vector<std::unique_ptr<VExpr>> CondObs;
+        collectObligations(W.Cond.get(), CondObs);
+        for (auto &O : CondObs) {
+          SourceLocation L = O->Loc;
+          W.Body.push_back(std::make_unique<VContractAssertStmt>(std::move(O), L));
+        }
+        break;
+      }
+      case VStmt::Call:
+        for (const auto &A : static_cast<VCallStmt &>(*S).Args)
+          emitObsInto(New, A.get());
+        break;
+      case VStmt::Seq:
+        instrumentStmts(static_cast<VSeqStmt &>(*S).Stmts);
+        break;
+      default:
+        break;
+      }
+      New.push_back(std::move(S));
+    }
+    Stmts = std::move(New);
+  }
+};
 
 } // namespace
 
 void verify::instrumentUBChecks(VFunction &Fn) {
   if (Fn.IsSpec)
     return;
-  instrumentStmts(Fn.Body);
+  UBInstrumenter UB;
+  for (const auto &Pre : Fn.Preconditions)
+    UB.scanValid(Pre.get());
+  UB.instrumentStmts(Fn.Body);
 }

@@ -45,6 +45,26 @@ static int64_t evalIntLiteral(const VExpr *E) {
   return static_cast<const VLiteralExpr *>(E)->Value;
 }
 
+// Rename every free occurrence of a quantifier binder in an already-built VCExpr
+// to a fresh name, pinning it to a 32-bit machine bit-vector so the encoder
+// gives it a single, consistent Z3 const. Stops at a nested quantifier that
+// re-binds the same source name (shadowing).
+static void renameBinder(VCExpr *E, const std::string &Old,
+                         const std::string &New) {
+  if (!E)
+    return;
+  if (E->K == VCExpr::Forall && E->Binder == Old)
+    return;
+  if (E->K == VCExpr::Var && E->Name == Old) {
+    E->Name = New;
+    E->IsPtr = false;
+    E->IntMode = VIntMode::Machine;
+    E->Width = 32;
+  }
+  for (auto &C : E->Children)
+    renameBinder(C.get(), Old, New);
+}
+
 class VCMachineBuilder {
   std::string ResultVarName;
   std::string CurHeap;
@@ -175,13 +195,21 @@ class VCMachineBuilder {
 
     // Symbolic (or large) bounds: emit a real bounded quantifier
     //   forall i. (lo <= i < hi) => body      (exists: && instead of =>)
-    // The body references the binder as a free Var, which Z3Encode binds.
+    // Alpha-rename the binder to a fresh name pinned to a 32-bit bit-vector.
+    // Different quantifiers can reuse a source binder name (e.g. `i` in both a
+    // loop invariant and the postcondition); the encoder caches Z3 consts by
+    // name, so without a unique name they could collide and pick up an
+    // inconsistent sort (int vs bit-vector) depending on encoding order.
+    static unsigned QuantId = 0;
+    std::string Fresh = Q->Binder + "$" + std::to_string(++QuantId);
     auto N = std::make_unique<VCExpr>(VCExpr::Forall);
     N->BoolVal = IsForall;
-    N->Binder = Q->Binder;
+    N->Binder = Fresh;
     N->Children.push_back(fromVExpr(Q->Lo.get()));
     N->Children.push_back(fromVExpr(Q->Hi.get()));
-    N->Children.push_back(fromVExpr(Q->Body.get()));
+    auto Body = fromVExpr(Q->Body.get());
+    renameBinder(Body.get(), Q->Binder, Fresh);
+    N->Children.push_back(std::move(Body));
     return N;
   }
 

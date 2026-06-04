@@ -376,12 +376,26 @@ z3::expr Z3Encoder::encodeVCNode(
     auto It = Vars.find(E->Binder);
     z3::expr I = It != Vars.end() ? It->second
                                   : Ctx.bv_const(E->Binder.c_str(), 32);
-    // Match widths (the binder is 32-bit; bounds may be wider).
-    unsigned W = std::max({I.get_sort().bv_size(),
-                           Lo.is_bv() ? Lo.get_sort().bv_size() : 32u,
-                           Hi.is_bv() ? Hi.get_sort().bv_size() : 32u});
-    z3::expr Ib = extendBV(I, W, true);
-    z3::expr Range = (Ib >= extendBV(Lo, W, true)) && (Ib < extendBV(Hi, W, true));
+    // Build the range guard lo <= i < hi, reconciling the binder and bound
+    // sorts. The binder is normally a 32-bit bit-vector, but address-typed
+    // contexts can make it (or the bounds) integers; coerce everything to the
+    // binder's sort so the comparison is well-typed.
+    z3::expr Range(Ctx);
+    if (I.is_bv()) {
+      unsigned W = std::max({I.get_sort().bv_size(),
+                             Lo.is_bv() ? Lo.get_sort().bv_size() : 32u,
+                             Hi.is_bv() ? Hi.get_sort().bv_size() : 32u});
+      z3::expr Ib = extendBV(I, W, true);
+      auto toBV = [&](z3::expr E) {
+        return E.is_bv() ? extendBV(E, W, true) : z3::int2bv(W, E);
+      };
+      Range = (Ib >= toBV(Lo)) && (Ib < toBV(Hi));
+    } else {
+      auto toInt = [&](z3::expr E) {
+        return E.is_bv() ? z3::bv2int(E, true) : E;
+      };
+      Range = (I >= toInt(Lo)) && (I < toInt(Hi));
+    }
     z3::expr Matrix = E->BoolVal ? z3::implies(Range, Body) : (Range && Body);
 
     // Emit a plain quantifier and let MBQI handle instantiation. Explicit

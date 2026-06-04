@@ -44,8 +44,15 @@ bool ASTConverter::contractsReferenceSpec(const FunctionContractInfo &FCI) const
       return false;
     E = E->IgnoreParenImpCasts();
     if (const auto *CE = dyn_cast<CallExpr>(E)) {
-      if (const FunctionDecl *Callee = CE->getDirectCallee())
+      if (const FunctionDecl *Callee = CE->getDirectCallee()) {
+        // `valid(p, n)` is a buffer-length marker for array-bounds checking, not
+        // a real mathematical spec; it must not flip the function into math-
+        // integer mode (which would make machine stores reason on unbounded
+        // integers and disagree with the bit-vector heap).
+        if (Callee->getName() == "valid")
+          return false;
         return calleeIsSpec(Callee);
+      }
     }
     if (const auto *B = dyn_cast<BinaryOperator>(E)) {
       return check(B->getLHS()) || check(B->getRHS());
