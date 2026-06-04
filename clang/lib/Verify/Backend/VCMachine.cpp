@@ -127,34 +127,62 @@ class VCMachineBuilder {
       K = VCExpr::Eq;
       break;
     }
+    // Pointer arithmetic / comparison: if either operand is an address, the node
+    // is computed in integer (wrap-free) arithmetic.
+    bool PtrOperands = L->IsPtr || R->IsPtr;
     auto Unified = unifyIntModes(std::move(L), std::move(R));
     auto N = std::make_unique<VCExpr>(K);
     N->IntMode = intModeOf(Unified.first.get());
     N->Unsigned = Unsigned;
     N->Width = std::max(Unified.first->Width, Unified.second->Width);
+    N->IsPtr = PtrOperands;
     N->Children.push_back(std::move(Unified.first));
     N->Children.push_back(std::move(Unified.second));
     return N;
   }
 
+  // Maximum concrete range to unroll into a conjunction/disjunction; beyond this
+  // (or for symbolic bounds) emit a real quantifier so reasoning stays sound.
+  static constexpr int64_t QuantUnrollLimit = 64;
+
   std::unique_ptr<VCExpr> expandQuant(const VQuantifiedExpr *Q, bool IsForall) {
-    int64_t Lo = evalIntLiteral(Q->Lo.get());
-    int64_t Hi = evalIntLiteral(Q->Hi.get());
-    if (Hi <= Lo)
-      return std::make_unique<VCExpr>(IsForall ? VCExpr::True : VCExpr::False);
-    std::unique_ptr<VCExpr> Acc =
-        std::make_unique<VCExpr>(IsForall ? VCExpr::True : VCExpr::False);
-    VIntMode Mode = intModeOfVType(Q->Body->Ty);
-    for (int64_t I = Lo; I < Hi; ++I) {
-      auto InstBody =
-          substituteBinderInVExpr(Q->Body.get(), Q->Binder, I, Mode);
-      auto Body = fromVExpr(InstBody.get());
-      if (IsForall)
-        Acc = vcAnd(std::move(Acc), std::move(Body));
-      else
-        Acc = vcOr(std::move(Acc), std::move(Body));
+    int64_t Lo = 0, Hi = 0;
+    bool ConcreteLo = Q->Lo && Q->Lo->K == VExpr::Literal;
+    bool ConcreteHi = Q->Hi && Q->Hi->K == VExpr::Literal;
+    if (ConcreteLo)
+      Lo = static_cast<const VLiteralExpr *>(Q->Lo.get())->Value;
+    if (ConcreteHi)
+      Hi = static_cast<const VLiteralExpr *>(Q->Hi.get())->Value;
+
+    // Small concrete range: unroll (cheap, no quantifier instantiation cost).
+    if (ConcreteLo && ConcreteHi && Hi - Lo <= QuantUnrollLimit) {
+      if (Hi <= Lo)
+        return std::make_unique<VCExpr>(IsForall ? VCExpr::True : VCExpr::False);
+      std::unique_ptr<VCExpr> Acc =
+          std::make_unique<VCExpr>(IsForall ? VCExpr::True : VCExpr::False);
+      VIntMode Mode = intModeOfVType(Q->Body->Ty);
+      for (int64_t I = Lo; I < Hi; ++I) {
+        auto InstBody =
+            substituteBinderInVExpr(Q->Body.get(), Q->Binder, I, Mode);
+        auto Body = fromVExpr(InstBody.get());
+        if (IsForall)
+          Acc = vcAnd(std::move(Acc), std::move(Body));
+        else
+          Acc = vcOr(std::move(Acc), std::move(Body));
+      }
+      return Acc;
     }
-    return Acc;
+
+    // Symbolic (or large) bounds: emit a real bounded quantifier
+    //   forall i. (lo <= i < hi) => body      (exists: && instead of =>)
+    // The body references the binder as a free Var, which Z3Encode binds.
+    auto N = std::make_unique<VCExpr>(VCExpr::Forall);
+    N->BoolVal = IsForall;
+    N->Binder = Q->Binder;
+    N->Children.push_back(fromVExpr(Q->Lo.get()));
+    N->Children.push_back(fromVExpr(Q->Hi.get()));
+    N->Children.push_back(fromVExpr(Q->Body.get()));
+    return N;
   }
 
   VIntMode CallerIntMode = VIntMode::Machine;
@@ -182,6 +210,7 @@ public:
       N->IntMode = ForceCallerIntMode ? CallerIntMode
                                       : intModeOfVType(L->Ty);
       N->Width = L->Ty.bvWidth();
+      N->IsPtr = L->Ty.Kind == VTypeKind::Ptr; // e.g. nullptr literal
       return N;
     }
     case VExpr::Var: {
@@ -190,6 +219,7 @@ public:
       N->Name = V->Name;
       N->IntMode = ForceCallerIntMode ? CallerIntMode : intModeOfVType(V->Ty);
       N->Width = V->Ty.bvWidth();
+      N->IsPtr = V->Ty.Kind == VTypeKind::Ptr;
       return N;
     }
     case VExpr::BinOp: {

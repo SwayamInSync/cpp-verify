@@ -16,6 +16,10 @@ z3::sort Z3Encoder::boolSort() { return Ctx.bool_sort(); }
 // pointers never alias mod 2^32) mapping to machine-integer cell values. Storing
 // values as bit-vectors avoids int2bv/bv2int round-trips on every load/store,
 // which put queries in the arrays+int<->bv fragment Z3 fails to decide.
+// Heap indices are mathematical-integer addresses (pointers are encoded as Int);
+// values are 32-bit machine words. Integer addresses make pointer arithmetic and
+// the buffer non-overlap condition wrap-free linear arithmetic, and `p + i` is
+// the index directly — no bv<->int round-trip, since the address is already Int.
 z3::sort Z3Encoder::heapSort() { return Ctx.array_sort(intSort(), bvSort()); }
 
 z3::sort Z3Encoder::valueSort(const VType &Ty, VIntMode Mode) {
@@ -24,6 +28,35 @@ z3::sort Z3Encoder::valueSort(const VType &Ty, VIntMode Mode) {
   if (Mode == VIntMode::Machine)
     return Ctx.bv_sort(Ty.bvWidth());
   return intSort();
+}
+
+// Does the bound variable appear anywhere in E?
+static bool exprContains(z3::expr E, unsigned BinderId, std::set<unsigned> &Seen) {
+  if (E.id() == BinderId)
+    return true;
+  if (!E.is_app() || !Seen.insert(E.id()).second)
+    return false;
+  for (unsigned I = 0; I < E.num_args(); ++I)
+    if (exprContains(E.arg(I), BinderId, Seen))
+      return true;
+  return false;
+}
+
+// Collect array `select` subterms of E that mention the bound variable. These
+// are the natural triggers for a heap-range quantifier: instantiate the
+// quantifier exactly when such a heap access appears in a query.
+static void collectSelectTriggers(z3::expr E, unsigned BinderId,
+                                   std::vector<z3::expr> &Out,
+                                   std::set<unsigned> &Visited) {
+  if (!E.is_app() || !Visited.insert(E.id()).second)
+    return;
+  if (E.decl().decl_kind() == Z3_OP_SELECT) {
+    std::set<unsigned> S;
+    if (exprContains(E, BinderId, S))
+      Out.push_back(E);
+  }
+  for (unsigned I = 0; I < E.num_args(); ++I)
+    collectSelectTriggers(E.arg(I), BinderId, Out, Visited);
 }
 
 // Widen a bit-vector to W bits (sign- or zero-extending). Used to reconcile
@@ -109,8 +142,10 @@ static z3::expr asBool(z3::context &Ctx, z3::expr E) {
 /// Heap is Array Int BitVec32. Indices are integer addresses; a bit-vector
 /// pointer is widened to an integer key.
 static z3::expr heapIndex(z3::expr Ptr) {
+  // The heap is indexed by integer addresses. Pointer expressions are already
+  // integers; coerce a bit-vector address (defensive) down to an integer.
   if (Ptr.is_bv())
-    return z3::bv2int(Ptr, true);
+    return z3::bv2int(Ptr, false);
   return Ptr;
 }
 
@@ -194,6 +229,8 @@ z3::expr Z3Encoder::encodeVCNode(
   case VCExpr::BoolLit:
     return Ctx.bool_val(E->BoolVal);
   case VCExpr::IntLit: {
+    if (E->IsPtr) // address literal (e.g. nullptr): integer
+      return Ctx.int_val(static_cast<int64_t>(E->IntVal));
     if (E->IntMode == VIntMode::Machine)
       return Ctx.bv_val(static_cast<int64_t>(E->IntVal), E->Width);
     return Ctx.int_val(static_cast<int64_t>(E->IntVal));
@@ -206,6 +243,8 @@ z3::expr Z3Encoder::encodeVCNode(
     if (E->Name.find("__heap") != std::string::npos ||
         E->Name.rfind(VHeapName, 0) == 0) {
       Z = Ctx.constant(E->Name.c_str(), heapSort());
+    } else if (E->IsPtr) {
+      Z = Ctx.int_const(E->Name.c_str()); // addresses are integers
     } else if (E->IntMode == VIntMode::Machine) {
       Z = Ctx.bv_const(E->Name.c_str(), E->Width);
     } else {
@@ -279,8 +318,11 @@ z3::expr Z3Encoder::encodeVCNode(
   case VCExpr::Mul:
   case VCExpr::Div:
   case VCExpr::Rem: {
-    z3::expr L = coerceTo(child(0), E->IntMode);
-    z3::expr R = coerceTo(child(1), E->IntMode);
+    // Pointer arithmetic / comparison is done in (wrap-free) integer arithmetic;
+    // the offset operand is coerced from its bit-vector to an integer.
+    VIntMode Mode = E->IsPtr ? VIntMode::Math : E->IntMode;
+    z3::expr L = coerceTo(child(0), Mode);
+    z3::expr R = coerceTo(child(1), Mode);
     return arithOp(Ctx, E->K, L, R, E->Unsigned);
   }
   case VCExpr::Neg:
@@ -324,8 +366,51 @@ z3::expr Z3Encoder::encodeVCNode(
     z3::expr After = child(3);
     return (After == z3::store(Before, Ptr, Val));
   }
-  case VCExpr::Forall:
-    return Ctx.bool_val(true);
+  case VCExpr::Forall: {
+    // Real bounded quantifier: children are [lo, hi, body]; the binder is the
+    // free bit-vector const the body was encoded against (the half-open bound is
+    // the implicit trigger). forall i. lo <= i < hi => body;  exists: &&.
+    z3::expr Lo = coerceTo(child(0), VIntMode::Machine);
+    z3::expr Hi = coerceTo(child(1), VIntMode::Machine);
+    z3::expr Body = asBool(Ctx, child(2));
+    auto It = Vars.find(E->Binder);
+    z3::expr I = It != Vars.end() ? It->second
+                                  : Ctx.bv_const(E->Binder.c_str(), 32);
+    // Match widths (the binder is 32-bit; bounds may be wider).
+    unsigned W = std::max({I.get_sort().bv_size(),
+                           Lo.is_bv() ? Lo.get_sort().bv_size() : 32u,
+                           Hi.is_bv() ? Hi.get_sort().bv_size() : 32u});
+    z3::expr Ib = extendBV(I, W, true);
+    z3::expr Range = (Ib >= extendBV(Lo, W, true)) && (Ib < extendBV(Hi, W, true));
+    z3::expr Matrix = E->BoolVal ? z3::implies(Range, Body) : (Range && Body);
+
+    // Emit a plain quantifier and let MBQI handle instantiation. Explicit
+    // heap-access triggers were tried, but an over-restrictive pattern on a
+    // goal-position forall makes the negated existential refutation incomplete
+    // and Z3 can wrongly report unsat (unsound). With integer addresses MBQI
+    // closes the cross-buffer goals on its own.
+    std::vector<z3::expr> Trigs;
+    std::set<unsigned> Visited;
+    (void)collectSelectTriggers; // retained for future hypothesis-only triggering
+    if (Trigs.empty())
+      return E->BoolVal ? z3::forall(I, Matrix) : z3::exists(I, Matrix);
+
+    std::vector<Z3_pattern> Pats;
+    Pats.reserve(Trigs.size());
+    for (z3::expr &T : Trigs) {
+      Z3_ast Term = T;
+      Pats.push_back(Z3_mk_pattern(Ctx, 1, &Term));
+    }
+    Z3_app Bound = reinterpret_cast<Z3_app>(static_cast<Z3_ast>(I));
+    Z3_ast Q = E->BoolVal
+                   ? Z3_mk_forall_const(Ctx, 0, 1, &Bound,
+                                        static_cast<unsigned>(Pats.size()),
+                                        Pats.data(), Matrix)
+                   : Z3_mk_exists_const(Ctx, 0, 1, &Bound,
+                                        static_cast<unsigned>(Pats.size()),
+                                        Pats.data(), Matrix);
+    return z3::expr(Ctx, Q);
+  }
   case VCExpr::SpecCall: {
     auto It = SpecFunctions.find(E->SpecCallee);
     if (It == SpecFunctions.end() || !It->second)
@@ -409,9 +494,14 @@ void Z3Encoder::emitSpecDefiningAxiom(const std::string &Name,
 VerifyResult Z3Encoder::verifyMachine(const VCMachine &M) {
   Vars.clear();
   Solver = z3::solver(Ctx);
-  if (TimeoutMs > 0) {
+  {
     z3::params P(Ctx);
-    P.set("timeout", TimeoutMs);
+    if (TimeoutMs > 0)
+      P.set("timeout", TimeoutMs);
+    // Model-based quantifier instantiation: a fallback when pattern-based
+    // (e-matching) instantiation cannot close a goal involving quantifiers over
+    // the heap and address arithmetic (e.g. cross-buffer non-overlap).
+    P.set("mbqi", true);
     Solver.set(P);
   }
   SpecFunctions = M.SpecFunctions;

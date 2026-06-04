@@ -33,6 +33,11 @@ public:
   bool Unsigned = false;
   /// Bit-vector width for machine-int Var/IntLit/arithmetic nodes (32 or 64).
   unsigned Width = 32;
+  /// This node denotes a pointer/address. Addresses are encoded as mathematical
+  /// integers (not bit-vectors), so address arithmetic and the buffer non-overlap
+  /// condition (`d + n <= s`) are wrap-free linear arithmetic Z3 can decide
+  /// without quantifier instantiation.
+  bool IsPtr = false;
   std::vector<std::unique_ptr<VCExpr>> Children;
   int64_t IntVal = 0;
   bool BoolVal = false;
