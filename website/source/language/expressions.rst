@@ -10,8 +10,12 @@ Must be contextually ``bool`` where used as conditions.
 
 The range ``[lo, hi)`` may be **symbolic** (e.g. ``forall(i, 0, n, ...)``): a small
 concrete range is unrolled, otherwise a real quantifier is emitted with the
-half-open bound as the implicit trigger. This is what lets a loop invariant talk
-about a whole array range (see :doc:`pointers`).
+heap-access terms as triggers. This is what lets a loop invariant talk about a
+whole array range (see :doc:`pointers`). Proving a ``forall`` over a symbolic
+range (the common case for loop invariants and postconditions) is well supported;
+*proving* an ``exists`` over a symbolic range is currently incomplete and may
+report ``unknown`` — use a concrete range, or supply the witness, when you need
+one.
 
 ``old`` is only valid in postconditions (and nested expressions there). ``result`` is only valid
 in postconditions. Integer operators follow the function kind: ``spec`` uses mathematical integers;
