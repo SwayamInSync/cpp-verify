@@ -30,6 +30,35 @@ z3::sort Z3Encoder::valueSort(const VType &Ty, VIntMode Mode) {
   return intSort();
 }
 
+// Does the bound variable appear anywhere in E?
+static bool exprContains(z3::expr E, unsigned BinderId, std::set<unsigned> &Seen) {
+  if (E.id() == BinderId)
+    return true;
+  if (!E.is_app() || !Seen.insert(E.id()).second)
+    return false;
+  for (unsigned I = 0; I < E.num_args(); ++I)
+    if (exprContains(E.arg(I), BinderId, Seen))
+      return true;
+  return false;
+}
+
+// Collect array `select` subterms of E that mention the bound variable. These
+// are the natural triggers for a heap-range quantifier: instantiate the
+// quantifier exactly when such a heap access appears in a query.
+static void collectSelectTriggers(z3::expr E, unsigned BinderId,
+                                   std::vector<z3::expr> &Out,
+                                   std::set<unsigned> &Visited) {
+  if (!E.is_app() || !Visited.insert(E.id()).second)
+    return;
+  if (E.decl().decl_kind() == Z3_OP_SELECT) {
+    std::set<unsigned> S;
+    if (exprContains(E, BinderId, S))
+      Out.push_back(E);
+  }
+  for (unsigned I = 0; I < E.num_args(); ++I)
+    collectSelectTriggers(E.arg(I), BinderId, Out, Visited);
+}
+
 // Widen a bit-vector to W bits (sign- or zero-extending). Used to reconcile
 // mixed-width operands (e.g. int + long) before a bit-vector operation.
 static z3::expr extendBV(z3::expr E, unsigned W, bool Signed) {
@@ -346,9 +375,32 @@ z3::expr Z3Encoder::encodeVCNode(
                            Hi.is_bv() ? Hi.get_sort().bv_size() : 32u});
     z3::expr Ib = extendBV(I, W, true);
     z3::expr Range = (Ib >= extendBV(Lo, W, true)) && (Ib < extendBV(Hi, W, true));
-    if (E->BoolVal)
-      return z3::forall(I, z3::implies(Range, Body));
-    return z3::exists(I, Range && Body);
+    z3::expr Matrix = E->BoolVal ? z3::implies(Range, Body) : (Range && Body);
+
+    // Attach heap-access triggers so Z3 instantiates the quantifier on the
+    // select terms that actually appear in a query (the standard trigger for
+    // array-range reasoning), rather than relying on a poor auto-pick.
+    std::vector<z3::expr> Trigs;
+    std::set<unsigned> Visited;
+    collectSelectTriggers(Body, I.id(), Trigs, Visited);
+    if (Trigs.empty())
+      return E->BoolVal ? z3::forall(I, Matrix) : z3::exists(I, Matrix);
+
+    std::vector<Z3_pattern> Pats;
+    Pats.reserve(Trigs.size());
+    for (z3::expr &T : Trigs) {
+      Z3_ast Term = T;
+      Pats.push_back(Z3_mk_pattern(Ctx, 1, &Term));
+    }
+    Z3_app Bound = reinterpret_cast<Z3_app>(static_cast<Z3_ast>(I));
+    Z3_ast Q = E->BoolVal
+                   ? Z3_mk_forall_const(Ctx, 0, 1, &Bound,
+                                        static_cast<unsigned>(Pats.size()),
+                                        Pats.data(), Matrix)
+                   : Z3_mk_exists_const(Ctx, 0, 1, &Bound,
+                                        static_cast<unsigned>(Pats.size()),
+                                        Pats.data(), Matrix);
+    return z3::expr(Ctx, Q);
   }
   case VCExpr::SpecCall: {
     auto It = SpecFunctions.find(E->SpecCallee);
@@ -433,9 +485,14 @@ void Z3Encoder::emitSpecDefiningAxiom(const std::string &Name,
 VerifyResult Z3Encoder::verifyMachine(const VCMachine &M) {
   Vars.clear();
   Solver = z3::solver(Ctx);
-  if (TimeoutMs > 0) {
+  {
     z3::params P(Ctx);
-    P.set("timeout", TimeoutMs);
+    if (TimeoutMs > 0)
+      P.set("timeout", TimeoutMs);
+    // Model-based quantifier instantiation: a fallback when pattern-based
+    // (e-matching) instantiation cannot close a goal involving quantifiers over
+    // the heap and address arithmetic (e.g. cross-buffer non-overlap).
+    P.set("mbqi", true);
     Solver.set(P);
   }
   SpecFunctions = M.SpecFunctions;
