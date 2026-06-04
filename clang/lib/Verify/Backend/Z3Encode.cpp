@@ -16,11 +16,11 @@ z3::sort Z3Encoder::boolSort() { return Ctx.bool_sort(); }
 // pointers never alias mod 2^32) mapping to machine-integer cell values. Storing
 // values as bit-vectors avoids int2bv/bv2int round-trips on every load/store,
 // which put queries in the arrays+int<->bv fragment Z3 fails to decide.
-// Heap indices are bit-vector addresses (the same sort as pointers), so an
-// address `p + i` is used directly — no bv<->int round-trip on the index, which
-// previously put disjointness queries (`p + i != p + k`) in the arrays+int<->bv
-// fragment Z3 cannot decide.
-z3::sort Z3Encoder::heapSort() { return Ctx.array_sort(bvSort(), bvSort()); }
+// Heap indices are mathematical-integer addresses (pointers are encoded as Int);
+// values are 32-bit machine words. Integer addresses make pointer arithmetic and
+// the buffer non-overlap condition wrap-free linear arithmetic, and `p + i` is
+// the index directly — no bv<->int round-trip, since the address is already Int.
+z3::sort Z3Encoder::heapSort() { return Ctx.array_sort(intSort(), bvSort()); }
 
 z3::sort Z3Encoder::valueSort(const VType &Ty, VIntMode Mode) {
   if (Ty.Kind == VTypeKind::Bool)
@@ -142,10 +142,10 @@ static z3::expr asBool(z3::context &Ctx, z3::expr E) {
 /// Heap is Array Int BitVec32. Indices are integer addresses; a bit-vector
 /// pointer is widened to an integer key.
 static z3::expr heapIndex(z3::expr Ptr) {
-  // The heap is indexed by 32-bit bit-vector addresses. Pointers are already
-  // bit-vectors; coerce an int-encoded address up to a bit-vector.
-  if (Ptr.is_int())
-    return z3::int2bv(32, Ptr);
+  // The heap is indexed by integer addresses. Pointer expressions are already
+  // integers; coerce a bit-vector address (defensive) down to an integer.
+  if (Ptr.is_bv())
+    return z3::bv2int(Ptr, false);
   return Ptr;
 }
 
@@ -229,6 +229,8 @@ z3::expr Z3Encoder::encodeVCNode(
   case VCExpr::BoolLit:
     return Ctx.bool_val(E->BoolVal);
   case VCExpr::IntLit: {
+    if (E->IsPtr) // address literal (e.g. nullptr): integer
+      return Ctx.int_val(static_cast<int64_t>(E->IntVal));
     if (E->IntMode == VIntMode::Machine)
       return Ctx.bv_val(static_cast<int64_t>(E->IntVal), E->Width);
     return Ctx.int_val(static_cast<int64_t>(E->IntVal));
@@ -241,6 +243,8 @@ z3::expr Z3Encoder::encodeVCNode(
     if (E->Name.find("__heap") != std::string::npos ||
         E->Name.rfind(VHeapName, 0) == 0) {
       Z = Ctx.constant(E->Name.c_str(), heapSort());
+    } else if (E->IsPtr) {
+      Z = Ctx.int_const(E->Name.c_str()); // addresses are integers
     } else if (E->IntMode == VIntMode::Machine) {
       Z = Ctx.bv_const(E->Name.c_str(), E->Width);
     } else {
@@ -314,8 +318,11 @@ z3::expr Z3Encoder::encodeVCNode(
   case VCExpr::Mul:
   case VCExpr::Div:
   case VCExpr::Rem: {
-    z3::expr L = coerceTo(child(0), E->IntMode);
-    z3::expr R = coerceTo(child(1), E->IntMode);
+    // Pointer arithmetic / comparison is done in (wrap-free) integer arithmetic;
+    // the offset operand is coerced from its bit-vector to an integer.
+    VIntMode Mode = E->IsPtr ? VIntMode::Math : E->IntMode;
+    z3::expr L = coerceTo(child(0), Mode);
+    z3::expr R = coerceTo(child(1), Mode);
     return arithOp(Ctx, E->K, L, R, E->Unsigned);
   }
   case VCExpr::Neg:
@@ -377,12 +384,14 @@ z3::expr Z3Encoder::encodeVCNode(
     z3::expr Range = (Ib >= extendBV(Lo, W, true)) && (Ib < extendBV(Hi, W, true));
     z3::expr Matrix = E->BoolVal ? z3::implies(Range, Body) : (Range && Body);
 
-    // Attach heap-access triggers so Z3 instantiates the quantifier on the
-    // select terms that actually appear in a query (the standard trigger for
-    // array-range reasoning), rather than relying on a poor auto-pick.
+    // Emit a plain quantifier and let MBQI handle instantiation. Explicit
+    // heap-access triggers were tried, but an over-restrictive pattern on a
+    // goal-position forall makes the negated existential refutation incomplete
+    // and Z3 can wrongly report unsat (unsound). With integer addresses MBQI
+    // closes the cross-buffer goals on its own.
     std::vector<z3::expr> Trigs;
     std::set<unsigned> Visited;
-    collectSelectTriggers(Body, I.id(), Trigs, Visited);
+    (void)collectSelectTriggers; // retained for future hypothesis-only triggering
     if (Trigs.empty())
       return E->BoolVal ? z3::forall(I, Matrix) : z3::exists(I, Matrix);
 

@@ -127,11 +127,15 @@ class VCMachineBuilder {
       K = VCExpr::Eq;
       break;
     }
+    // Pointer arithmetic / comparison: if either operand is an address, the node
+    // is computed in integer (wrap-free) arithmetic.
+    bool PtrOperands = L->IsPtr || R->IsPtr;
     auto Unified = unifyIntModes(std::move(L), std::move(R));
     auto N = std::make_unique<VCExpr>(K);
     N->IntMode = intModeOf(Unified.first.get());
     N->Unsigned = Unsigned;
     N->Width = std::max(Unified.first->Width, Unified.second->Width);
+    N->IsPtr = PtrOperands;
     N->Children.push_back(std::move(Unified.first));
     N->Children.push_back(std::move(Unified.second));
     return N;
@@ -206,6 +210,7 @@ public:
       N->IntMode = ForceCallerIntMode ? CallerIntMode
                                       : intModeOfVType(L->Ty);
       N->Width = L->Ty.bvWidth();
+      N->IsPtr = L->Ty.Kind == VTypeKind::Ptr; // e.g. nullptr literal
       return N;
     }
     case VExpr::Var: {
@@ -214,6 +219,7 @@ public:
       N->Name = V->Name;
       N->IntMode = ForceCallerIntMode ? CallerIntMode : intModeOfVType(V->Ty);
       N->Width = V->Ty.bvWidth();
+      N->IsPtr = V->Ty.Kind == VTypeKind::Ptr;
       return N;
     }
     case VExpr::BinOp: {
