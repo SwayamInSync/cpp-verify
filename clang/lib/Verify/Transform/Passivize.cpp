@@ -327,46 +327,148 @@ buildLexDecrease(std::vector<std::unique_ptr<VExpr>> New,
   return bin(VBinOp::And, std::move(Lex), std::move(NonNeg));
 }
 
+/// Instantiate a callee contract clause at a call site: substitute the callee's
+/// formal parameters (and `result`) with the caller's argument expressions,
+/// AND resolve heap versions + `old()` exactly like `cloneExpr` does. This is
+/// the *only* caller of substParams (used for both the asserted precondition
+/// and the assumed postcondition of a call), so heap/old resolution must be
+/// correct here or a caller of a heap-modifying function is reasoned about
+/// unsoundly.
+///
+/// Two heap versions matter (see emitCallStmt): the post-state heap (current
+/// `Ctx.Renames[VHeapName]`, bumped across the call's modifies set) for a plain
+/// `*p` Load, and the pre-call heap (`Ctx.OldState[VHeapName]`) for an `old(*p)`
+/// Load. The callee IR's own `HeapVar` names are meaningless in the caller's SSA
+/// space and must NOT be reused.
 static std::unique_ptr<VExpr>
 substParams(const VExpr *E, const std::map<std::string, std::unique_ptr<VExpr>> &Map,
             const CloneCtx &Ctx) {
   if (!E)
     return nullptr;
-  if (E->K == VExpr::Var) {
+  // old(e): evaluate `e` in the pre-call state (old heap + entry vars).
+  if (Ctx.UseOldState && E->K == VExpr::Old) {
+    const auto *O = static_cast<const VOldExpr *>(E);
+    CloneCtx Inner{Ctx.Renames, Ctx.OldState, true};
+    return substParams(O->Inner.get(), Map, Inner);
+  }
+  switch (E->K) {
+  case VExpr::Var: {
     const auto *V = static_cast<const VVarExpr *>(E);
     if (auto It = Map.find(V->Name); It != Map.end())
       return cloneExpr(It->second.get(), Ctx);
+    // Not a formal parameter (e.g. a quantifier binder or global): defer to
+    // cloneExpr, which honours UseOldState and the caller's SSA renames.
     return cloneExpr(E, Ctx);
   }
-  if (E->K == VExpr::BinOp) {
+  case VExpr::Literal:
+    return cloneExpr(E, Ctx);
+  case VExpr::BinOp: {
     const auto *B = static_cast<const VBinOpExpr *>(E);
     return std::make_unique<VBinOpExpr>(
         B->Op, substParams(B->Lhs.get(), Map, Ctx), substParams(B->Rhs.get(), Map, Ctx),
         B->Ty, B->Loc);
   }
-  if (E->K == VExpr::UnaryOp) {
+  case VExpr::UnaryOp: {
     const auto *U = static_cast<const VUnaryOpExpr *>(E);
     return std::make_unique<VUnaryOpExpr>(
         U->Op, substParams(U->Operand.get(), Map, Ctx), U->Ty, U->Loc);
   }
-  if (E->K == VExpr::Load) {
+  case VExpr::Cast: {
+    const auto *C = static_cast<const VCastExpr *>(E);
+    return std::make_unique<VCastExpr>(substParams(C->Inner.get(), Map, Ctx),
+                                       C->FromTy, C->Ty, C->Loc);
+  }
+  case VExpr::Load: {
     const auto *L = static_cast<const VLoadExpr *>(E);
-    return std::make_unique<VLoadExpr>(substParams(L->Ptr.get(), Map, Ctx), L->Ty, L->Loc,
-                                       L->HeapVar);
+    // Resolve the heap version from the context, never from the callee's stale
+    // HeapVar: post-state -> current (post-call) heap; under old() -> pre-call
+    // heap from OldState.
+    std::string Heap = Ctx.Renames.count(VHeapName)
+                           ? Ctx.Renames.at(VHeapName)
+                           : std::string(VHeapName) + "_0";
+    if (Ctx.UseOldState) {
+      if (auto HIt = Ctx.OldState.find(VHeapName); HIt != Ctx.OldState.end())
+        Heap = static_cast<const VVarExpr *>(HIt->second.get())->Name;
+    }
+    return std::make_unique<VLoadExpr>(substParams(L->Ptr.get(), Map, Ctx),
+                                       L->Ty, L->Loc, Heap);
   }
-  if (E->K == VExpr::Old) {
+  case VExpr::Old: {
+    // UseOldState was false here (else handled above): enter the old state.
     const auto *O = static_cast<const VOldExpr *>(E);
-    return std::make_unique<VOldExpr>(substParams(O->Inner.get(), Map, Ctx), O->Ty, O->Loc);
+    CloneCtx Inner{Ctx.Renames, Ctx.OldState, true};
+    return substParams(O->Inner.get(), Map, Inner);
   }
-  if (E->K == VExpr::Result) {
+  case VExpr::Result: {
     if (auto It = Map.find("result"); It != Map.end())
       return cloneExpr(It->second.get(), Ctx);
     return std::make_unique<VResultExpr>(E->Ty, E->Loc);
   }
-  if (E->K == VExpr::FieldAccess) {
+  case VExpr::Conditional: {
+    const auto *C = static_cast<const VConditionalExpr *>(E);
+    return std::make_unique<VConditionalExpr>(
+        substParams(C->Cond.get(), Map, Ctx), substParams(C->Then.get(), Map, Ctx),
+        substParams(C->Else.get(), Map, Ctx), C->Ty, C->Loc);
+  }
+  case VExpr::FieldAccess: {
     const auto *F = static_cast<const VFieldAccessExpr *>(E);
-    return std::make_unique<VFieldAccessExpr>(substParams(F->Base.get(), Map, Ctx),
-                                              F->Field, F->Ty, F->Loc);
+    // Field access is flattened to a "<base>.<field>" variable name. Compute the
+    // base name after parameter/result substitution, then resolve it against
+    // old-state / renames like cloneExpr.
+    std::string Name = "base";
+    const VExpr *Base = F->Base.get();
+    if (Base->K == VExpr::Var) {
+      const std::string &BN = static_cast<const VVarExpr *>(Base)->Name;
+      auto MIt = Map.find(BN);
+      if (MIt != Map.end() && MIt->second->K == VExpr::Var)
+        Name = static_cast<const VVarExpr *>(MIt->second.get())->Name;
+      else
+        Name = BN;
+    } else if (Base->K == VExpr::Result) {
+      if (auto It = Map.find("result");
+          It != Map.end() && It->second->K == VExpr::Var)
+        Name = static_cast<const VVarExpr *>(It->second.get())->Name;
+      else if (auto It = Ctx.Renames.find("result"); It != Ctx.Renames.end())
+        Name = It->second;
+      else
+        Name = "result";
+    }
+    Name += "." + F->Field;
+    if (Ctx.UseOldState) {
+      if (auto It = Ctx.OldState.find(Name); It != Ctx.OldState.end())
+        return cloneExpr(It->second.get(),
+                         CloneCtx{Ctx.Renames, Ctx.OldState, false});
+    }
+    if (auto It = Ctx.Renames.find(Name); It != Ctx.Renames.end())
+      Name = It->second;
+    return std::make_unique<VVarExpr>(Name, F->Ty, F->Loc);
+  }
+  case VExpr::SpecCall: {
+    const auto *C = static_cast<const VSpecCallExpr *>(E);
+    std::vector<std::unique_ptr<VExpr>> Args;
+    for (const auto &A : C->Args)
+      Args.push_back(substParams(A.get(), Map, Ctx));
+    return std::make_unique<VSpecCallExpr>(C->Callee, std::move(Args), C->Ty,
+                                           C->Loc);
+  }
+  case VExpr::OverflowCheck: {
+    const auto *O = static_cast<const VOverflowCheckExpr *>(E);
+    return std::make_unique<VOverflowCheckExpr>(
+        O->Op, substParams(O->Lhs.get(), Map, Ctx),
+        O->Rhs ? substParams(O->Rhs.get(), Map, Ctx) : nullptr, O->Loc);
+  }
+  case VExpr::Forall:
+  case VExpr::Exists: {
+    const auto *Q = static_cast<const VQuantifiedExpr *>(E);
+    auto Body = substParams(Q->Body.get(), Map, Ctx);
+    return E->K == VExpr::Forall
+               ? std::unique_ptr<VExpr>(std::make_unique<VForallExpr>(
+                     Q->Binder, substParams(Q->Lo.get(), Map, Ctx),
+                     substParams(Q->Hi.get(), Map, Ctx), std::move(Body), Q->Loc))
+               : std::unique_ptr<VExpr>(std::make_unique<VExistsExpr>(
+                     Q->Binder, substParams(Q->Lo.get(), Map, Ctx),
+                     substParams(Q->Hi.get(), Map, Ctx), std::move(Body), Q->Loc));
+  }
   }
   return cloneExpr(E, Ctx);
 }
@@ -514,7 +616,6 @@ public:
     const VFunction *Callee = CalleeIt->second;
     if (Callee->IsSpec)
       return;
-    CloneCtx Ctx{Renames, OldState, false};
     std::map<std::string, std::unique_ptr<VExpr>> ParamMap;
     for (unsigned I = 0; I < Callee->Params.size() && I < C.Args.size(); ++I)
       ParamMap[Callee->Params[I].first] = cloneVExpr(C.Args[I].get());
@@ -525,21 +626,59 @@ public:
       ParamMap["result"] =
           std::make_unique<VVarExpr>(RetVer, Callee->ReturnType, C.Loc);
     }
+    // The pre-call heap version: `old(*p)` inside the callee's postcondition
+    // refers to the heap *at the call site*, not the caller's entry heap and not
+    // the post-call heap. Capture it now (before any bump) and expose it as the
+    // old-state heap when instantiating the postcondition below.
+    std::string PreCallHeap = Renames.count(VHeapName)
+                                  ? Renames.at(VHeapName)
+                                  : std::string(VHeapName) + "_0";
+    std::map<std::string, std::unique_ptr<VExpr>> CallOld;
+    CallOld[VHeapName] =
+        std::make_unique<VVarExpr>(PreCallHeap, VType::makePtr(), C.Loc);
+
     // Modular protocol: the caller must *establish* the callee's precondition,
     // so assert it (not assume). Assuming it here would let any call silently
-    // satisfy its own precondition, which is unsound.
+    // satisfy its own precondition, which is unsound. The precondition is
+    // evaluated in the pre-call state (current heap, no old()).
+    CloneCtx PreCtx{Renames, CallOld, false};
     for (const auto &Pre : Callee->Preconditions) {
       auto PS = std::make_unique<PassiveStmt>();
       PS->K = PassiveStmt::Assert;
-      PS->Cond = guardCond(substParams(Pre.get(), ParamMap, Ctx), C.Loc);
+      PS->Cond = guardCond(substParams(Pre.get(), ParamMap, PreCtx), C.Loc);
       P.Stmts.push_back(std::move(PS));
     }
-    if (!Callee->Modifies.empty())
+    // Havoc the heap across the call's modifies set (bump to a fresh version),
+    // THEN assume the postcondition: a plain `*p` Load now reads the post-call
+    // heap, while `old(*p)` reads PreCallHeap. Without the bump, both would read
+    // the same heap and a post like `*p == old(*p) + 1` would collapse to
+    // `v == v + 1` (false), poisoning the caller with assume(false).
+    //
+    // A callee may write the heap if it has an explicit `modifies` clause OR any
+    // pointer parameter (DESIGN.md: a function with pointer/reference parameters
+    // and no `modifies` conservatively modifies everything reachable through
+    // them). Bumping on *either* is conservative — over-havocking is sound; not
+    // havocking a heap-modifying call is the unsoundness above.
+    bool MayModifyHeap = !Callee->Modifies.empty();
+    for (const auto &Pm : Callee->Params)
+      if (Pm.second.Kind == VTypeKind::Ptr) {
+        MayModifyHeap = true;
+        break;
+      }
+    if (MayModifyHeap)
       Renames[VHeapName] = bump(VHeapName);
+    CloneCtx PostCtx{Renames, CallOld, false};
     for (const auto &Post : Callee->Postconditions) {
       auto PS = std::make_unique<PassiveStmt>();
       PS->K = PassiveStmt::Assume;
-      PS->Cond = substParams(Post.get(), ParamMap, Ctx);
+      // The postcondition is only established on the path that actually performs
+      // the call, so guard the assume with the current path condition. Without
+      // this, a call inside `if (c) { ... }` (e.g. the inductive step of a
+      // recursive proof lemma) leaks its postcondition — including a
+      // contradictory induction hypothesis — onto sibling paths such as the
+      // base case, trivially "proving" a false lemma. This mirrors the guarded
+      // precondition assert above.
+      PS->Cond = guardCond(substParams(Post.get(), ParamMap, PostCtx), C.Loc);
       P.Stmts.push_back(std::move(PS));
     }
   }
