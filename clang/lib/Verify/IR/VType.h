@@ -4,6 +4,7 @@
 
 namespace clang {
 class QualType;
+class ASTContext;
 namespace verify {
 
 enum class VIntMode { Math, Machine };
@@ -22,10 +23,16 @@ struct VType {
   /// For integer kinds: true if the C++ type is unsigned. Unsigned overflow is
   /// defined (modular) in C++, so UB checking only instruments signed arithmetic.
   bool Unsigned = false;
+  /// Bit width for integer kinds (8/16/32/64), as reported by the target's data
+  /// model (ASTContext::getTypeSize). Drives the bit-vector width in the Z3
+  /// encoder, so `long`/`long long` overflow is checked at the right width.
+  unsigned Width = 32;
 
   static VType makeVoid() { return VType{VTypeKind::Void, VIntMode::Machine}; }
   static VType makeBool() { return VType{VTypeKind::Bool, VIntMode::Machine}; }
-  static VType makeInt32(VIntMode M) { return VType{VTypeKind::Int32, M}; }
+  static VType makeInt32(VIntMode M) {
+    return VType{VTypeKind::Int32, M, false, 32};
+  }
   static VType makePtr() { return VType{VTypeKind::Ptr, VIntMode::Machine}; }
 
   /// Is this a signed integer kind (the only thing overflow checks apply to)?
@@ -33,7 +40,11 @@ struct VType {
     return (Kind == VTypeKind::Int32 || Kind == VTypeKind::Int64) && !Unsigned;
   }
 
-  static VType fromQualType(QualType QT, VIntMode DefaultMode);
+  /// Bit width clamped to the supported set, for bit-vector encoding.
+  unsigned bvWidth() const { return Width >= 64 ? 64 : 32; }
+
+  static VType fromQualType(QualType QT, VIntMode DefaultMode,
+                            const ASTContext *Ctx = nullptr);
 };
 
 } // namespace verify

@@ -19,7 +19,7 @@ class VCExpr {
 public:
   enum Kind {
     True, False, IntLit, BoolLit, Var, Not, And, Or, Ite,
-    Eq, Ne, Lt, Le, Gt, Ge, Add, Sub, Mul, Neg,
+    Eq, Ne, Lt, Le, Gt, Ge, Add, Sub, Mul, Neg, Div, Rem,
     Select, Store, Forall, IntToBv, BvToInt, SpecCall,
     // UB safety: "the signed Op of the children does not overflow". The specific
     // VOverflowOp is stored in IntVal. Encoded via Z3 bv*_no_overflow primitives.
@@ -28,6 +28,11 @@ public:
 
   Kind K;
   VIntMode IntMode = VIntMode::Machine;
+  /// For Div/Rem/relational ops: operands are unsigned (selects bvudiv/bvurem
+  /// and unsigned comparisons in bit-vector mode).
+  bool Unsigned = false;
+  /// Bit-vector width for machine-int Var/IntLit/arithmetic nodes (32 or 64).
+  unsigned Width = 32;
   std::vector<std::unique_ptr<VCExpr>> Children;
   int64_t IntVal = 0;
   bool BoolVal = false;

@@ -22,8 +22,19 @@ z3::sort Z3Encoder::valueSort(const VType &Ty, VIntMode Mode) {
   if (Ty.Kind == VTypeKind::Bool)
     return boolSort();
   if (Mode == VIntMode::Machine)
-    return bvSort();
+    return Ctx.bv_sort(Ty.bvWidth());
   return intSort();
+}
+
+// Widen a bit-vector to W bits (sign- or zero-extending). Used to reconcile
+// mixed-width operands (e.g. int + long) before a bit-vector operation.
+static z3::expr extendBV(z3::expr E, unsigned W, bool Signed) {
+  if (!E.is_bv())
+    return E;
+  unsigned Cur = E.get_sort().bv_size();
+  if (Cur >= W)
+    return E;
+  return Signed ? z3::sext(E, W - Cur) : z3::zext(E, W - Cur);
 }
 
 static std::string specZ3Name(const std::string &Fn, VIntMode Mode) {
@@ -113,7 +124,8 @@ static z3::expr heapCellValue(z3::expr Val) {
   return Val;
 }
 
-static z3::expr arithOp(z3::context &Ctx, VCExpr::Kind K, z3::expr L, z3::expr R) {
+static z3::expr arithOp(z3::context &Ctx, VCExpr::Kind K, z3::expr L, z3::expr R,
+                        bool Unsigned = false) {
   if (L.get_sort().is_array() || R.get_sort().is_array()) {
     // Equality/inequality of heap arrays is meaningful (e.g. the if-merge
     // assume `mem_k == ite(c, mem_then, mem_else)`); only arithmetic on arrays
@@ -125,9 +137,16 @@ static z3::expr arithOp(z3::context &Ctx, VCExpr::Kind K, z3::expr L, z3::expr R
     return Ctx.bool_val(true);
   }
   if (L.is_bv() && R.is_int())
-    R = z3::int2bv(32, R);
+    R = z3::int2bv(L.get_sort().bv_size(), R);
   if (L.is_int() && R.is_bv())
-    L = z3::int2bv(32, L);
+    L = z3::int2bv(R.get_sort().bv_size(), L);
+  // Reconcile mixed bit-vector widths (e.g. int32 + long64): extend the
+  // narrower operand to the wider, signed unless the operation is unsigned.
+  if (L.is_bv() && R.is_bv() && L.get_sort().bv_size() != R.get_sort().bv_size()) {
+    unsigned W = std::max(L.get_sort().bv_size(), R.get_sort().bv_size());
+    L = extendBV(L, W, !Unsigned);
+    R = extendBV(R, W, !Unsigned);
+  }
   switch (K) {
   case VCExpr::Add:
     return L + R;
@@ -135,6 +154,16 @@ static z3::expr arithOp(z3::context &Ctx, VCExpr::Kind K, z3::expr L, z3::expr R
     return L - R;
   case VCExpr::Mul:
     return L * R;
+  case VCExpr::Div:
+    // Bit-vector: bvsdiv/bvudiv (operator/ is signed). Int mode: z3 integer div.
+    if (L.is_bv())
+      return Unsigned ? z3::udiv(L, R) : (L / R);
+    return L / R;
+  case VCExpr::Rem:
+    // C++ % is the truncated remainder (sign of dividend) == bvsrem, NOT bvsmod.
+    if (L.is_bv())
+      return Unsigned ? z3::urem(L, R) : z3::srem(L, R);
+    return z3::mod(L, R);
   case VCExpr::Lt:
     return L < R;
   case VCExpr::Le:
@@ -166,8 +195,8 @@ z3::expr Z3Encoder::encodeVCNode(
     return Ctx.bool_val(E->BoolVal);
   case VCExpr::IntLit: {
     if (E->IntMode == VIntMode::Machine)
-      return Ctx.bv_val(static_cast<unsigned>(E->IntVal), 32);
-    return Ctx.int_val(static_cast<int>(E->IntVal));
+      return Ctx.bv_val(static_cast<int64_t>(E->IntVal), E->Width);
+    return Ctx.int_val(static_cast<int64_t>(E->IntVal));
   }
   case VCExpr::Var: {
     auto It = Vars.find(E->Name);
@@ -178,7 +207,7 @@ z3::expr Z3Encoder::encodeVCNode(
         E->Name.rfind(VHeapName, 0) == 0) {
       Z = Ctx.constant(E->Name.c_str(), heapSort());
     } else if (E->IntMode == VIntMode::Machine) {
-      Z = Ctx.bv_const(E->Name.c_str(), 32);
+      Z = Ctx.bv_const(E->Name.c_str(), E->Width);
     } else {
       Z = Ctx.int_const(E->Name.c_str());
     }
@@ -247,36 +276,40 @@ z3::expr Z3Encoder::encodeVCNode(
   case VCExpr::Ge:
   case VCExpr::Add:
   case VCExpr::Sub:
-  case VCExpr::Mul: {
+  case VCExpr::Mul:
+  case VCExpr::Div:
+  case VCExpr::Rem: {
     z3::expr L = coerceTo(child(0), E->IntMode);
     z3::expr R = coerceTo(child(1), E->IntMode);
-    return arithOp(Ctx, E->K, L, R);
+    return arithOp(Ctx, E->K, L, R, E->Unsigned);
   }
   case VCExpr::Neg:
     return -coerceTo(child(0), E->IntMode);
   case VCExpr::NoOverflow: {
-    // The signed Op of the (bit-vector) operands does not overflow. IntVal
-    // holds the VOverflowOp. Always reasons in bit-vector mode.
-    z3::expr A = coerceTo(child(0), VIntMode::Machine);
-    switch (static_cast<VOverflowOp>(E->IntVal)) {
-    case VOverflowOp::Neg:
-      return z3::bvneg_no_overflow(A);
-    case VOverflowOp::Add: {
-      z3::expr B = coerceTo(child(1), VIntMode::Machine);
+    // The signed Op of the (bit-vector) operands does not overflow. IntVal holds
+    // the VOverflowOp. Operands are sign-extended to their common width
+    // (e.g. int + long), computed from the *encoded* operands so a stripped
+    // widening cast does not leave a mismatch.
+    VOverflowOp Op = static_cast<VOverflowOp>(E->IntVal);
+    z3::expr A0 = coerceTo(child(0), VIntMode::Machine);
+    if (Op == VOverflowOp::Neg)
+      return z3::bvneg_no_overflow(A0);
+    z3::expr B0 = coerceTo(child(1), VIntMode::Machine);
+    unsigned W = std::max({E->Width, A0.is_bv() ? A0.get_sort().bv_size() : 32u,
+                           B0.is_bv() ? B0.get_sort().bv_size() : 32u});
+    z3::expr A = extendBV(A0, W, true);
+    z3::expr B = extendBV(B0, W, true);
+    switch (Op) {
+    case VOverflowOp::Add:
       return z3::bvadd_no_overflow(A, B, true) && z3::bvadd_no_underflow(A, B);
-    }
-    case VOverflowOp::Sub: {
-      z3::expr B = coerceTo(child(1), VIntMode::Machine);
+    case VOverflowOp::Sub:
       return z3::bvsub_no_overflow(A, B) && z3::bvsub_no_underflow(A, B, true);
-    }
-    case VOverflowOp::Mul: {
-      z3::expr B = coerceTo(child(1), VIntMode::Machine);
+    case VOverflowOp::Mul:
       return z3::bvmul_no_overflow(A, B, true) && z3::bvmul_no_underflow(A, B);
-    }
-    case VOverflowOp::SDiv: {
-      z3::expr B = coerceTo(child(1), VIntMode::Machine);
+    case VOverflowOp::SDiv:
       return z3::bvsdiv_no_overflow(A, B);
-    }
+    case VOverflowOp::Neg:
+      break;
     }
     return Ctx.bool_val(true);
   }

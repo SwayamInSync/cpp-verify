@@ -80,11 +80,18 @@ class VCMachineBuilder {
   }
 
   std::unique_ptr<VCExpr> fromBin(VBinOp Op, std::unique_ptr<VCExpr> L,
-                                  std::unique_ptr<VCExpr> R) {
+                                  std::unique_ptr<VCExpr> R,
+                                  bool Unsigned = false) {
     VCExpr::Kind K = VCExpr::Eq;
     switch (Op) {
     case VBinOp::Add:
       K = VCExpr::Add;
+      break;
+    case VBinOp::Div:
+      K = VCExpr::Div;
+      break;
+    case VBinOp::Rem:
+      K = VCExpr::Rem;
       break;
     case VBinOp::Sub:
       K = VCExpr::Sub;
@@ -123,6 +130,8 @@ class VCMachineBuilder {
     auto Unified = unifyIntModes(std::move(L), std::move(R));
     auto N = std::make_unique<VCExpr>(K);
     N->IntMode = intModeOf(Unified.first.get());
+    N->Unsigned = Unsigned;
+    N->Width = std::max(Unified.first->Width, Unified.second->Width);
     N->Children.push_back(std::move(Unified.first));
     N->Children.push_back(std::move(Unified.second));
     return N;
@@ -172,19 +181,24 @@ public:
       N->IntVal = L->Value;
       N->IntMode = ForceCallerIntMode ? CallerIntMode
                                       : intModeOfVType(L->Ty);
+      N->Width = L->Ty.bvWidth();
       return N;
     }
     case VExpr::Var: {
+      const auto *V = static_cast<const VVarExpr *>(E);
       auto N = std::make_unique<VCExpr>(VCExpr::Var);
-      N->Name = static_cast<const VVarExpr *>(E)->Name;
-      N->IntMode = ForceCallerIntMode
-                       ? CallerIntMode
-                       : intModeOfVType(static_cast<const VVarExpr *>(E)->Ty);
+      N->Name = V->Name;
+      N->IntMode = ForceCallerIntMode ? CallerIntMode : intModeOfVType(V->Ty);
+      N->Width = V->Ty.bvWidth();
       return N;
     }
     case VExpr::BinOp: {
       const auto *B = static_cast<const VBinOpExpr *>(E);
-      return fromBin(B->Op, fromVExpr(B->Lhs.get()), fromVExpr(B->Rhs.get()));
+      // Operand signedness drives bvudiv/bvurem vs bvsdiv/bvsrem. Use the wider
+      // operand type when available; fall back to the result type.
+      bool Unsigned = B->Lhs->Ty.Unsigned || B->Rhs->Ty.Unsigned || B->Ty.Unsigned;
+      return fromBin(B->Op, fromVExpr(B->Lhs.get()), fromVExpr(B->Rhs.get()),
+                     Unsigned);
     }
     case VExpr::UnaryOp: {
       const auto *U = static_cast<const VUnaryOpExpr *>(E);
@@ -262,6 +276,7 @@ public:
       auto N = std::make_unique<VCExpr>(VCExpr::NoOverflow);
       N->IntMode = VIntMode::Machine; // overflow only meaningful for bit-vectors
       N->IntVal = static_cast<int64_t>(O->Op);
+      N->Width = O->Lhs->Ty.bvWidth();
       N->Children.push_back(fromVExpr(O->Lhs.get()));
       if (O->Rhs)
         N->Children.push_back(fromVExpr(O->Rhs.get()));

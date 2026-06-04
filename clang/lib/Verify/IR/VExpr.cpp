@@ -1,11 +1,13 @@
 //===--- VExpr.cpp --------------------------------------------------------===//
 #include "VExpr.h"
+#include "clang/AST/ASTContext.h"
 #include "clang/AST/Type.h"
 
 using namespace clang;
 using namespace verify;
 
-VType VType::fromQualType(QualType QT, VIntMode DefaultMode) {
+VType VType::fromQualType(QualType QT, VIntMode DefaultMode,
+                          const ASTContext *Ctx) {
   QT = QT.getCanonicalType();
   if (QT->isBooleanType())
     return VType::makeBool();
@@ -14,17 +16,22 @@ VType VType::fromQualType(QualType QT, VIntMode DefaultMode) {
   if (QT->isPointerType() || QT->isReferenceType())
     return VType::makePtr();
   if (QT->isIntegerType()) {
-    // 64-bit-wide integer kinds keep Int64; everything else is modeled as Int32
-    // (the encoder uses a 32-bit bit-vector either way for now). Signedness is
-    // recorded so UB checking can skip unsigned (defined-wraparound) arithmetic.
-    VTypeKind K = (QT->isSpecificBuiltinType(BuiltinType::Long) ||
-                   QT->isSpecificBuiltinType(BuiltinType::ULong) ||
-                   QT->isSpecificBuiltinType(BuiltinType::LongLong) ||
-                   QT->isSpecificBuiltinType(BuiltinType::ULongLong))
-                      ? VTypeKind::Int64
-                      : VTypeKind::Int32;
-    VType T{K, DefaultMode};
+    // Bit width comes from the target's data model when an ASTContext is
+    // available (so `long` is 64-bit on LP64, 32-bit on LLP64). Without one,
+    // fall back to the builtin kind: long/long long are assumed 64-bit.
+    unsigned Bits = 0;
+    if (Ctx)
+      Bits = static_cast<unsigned>(Ctx->getTypeSize(QT));
+    else
+      Bits = (QT->isSpecificBuiltinType(BuiltinType::Long) ||
+              QT->isSpecificBuiltinType(BuiltinType::ULong) ||
+              QT->isSpecificBuiltinType(BuiltinType::LongLong) ||
+              QT->isSpecificBuiltinType(BuiltinType::ULongLong))
+                 ? 64
+                 : 32;
+    VType T{Bits >= 64 ? VTypeKind::Int64 : VTypeKind::Int32, DefaultMode};
     T.Unsigned = QT->isUnsignedIntegerType();
+    T.Width = Bits >= 64 ? 64 : 32;
     return T;
   }
   return VType::makeInt32(DefaultMode);

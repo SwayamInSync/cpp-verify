@@ -117,13 +117,12 @@ Specifics for Layer A:
   C++ (modular wraparound); the existing `bvadd`/… wrapping encoding is already
   correct for unsigned, so no obligation is emitted. (This requires signedness in
   `VType`, added for this feature.)
-- **Width.** Machine integers are currently encoded as 32-bit bit-vectors
-  regardless of declared width, so overflow is checked at 32-bit. For `int` this
-  is exact. Sub-`int` types (`int8/16`) are modeled as `int`, and `long`/`int64`
-  is currently also modeled at 32-bit — so 64-bit overflow is **not yet** caught
-  precisely. Per-width bit-vector sorts are a planned refinement; the obligation
-  node already takes whatever width the encoder assigns, so it tightens for free
-  once widths land.
+- **Width is taken from the target's data model.** `VType` records each integer's
+  bit width from `ASTContext::getTypeSize`, so `int` is checked at 32-bit and
+  `long`/`long long` at 64-bit (on LP64). The Z3 encoder emits bit-vectors of the
+  recorded width, and mixed-width operations (e.g. `int + long`) sign-extend the
+  narrower operand. Sub-`int` types (`int8/16`) are still modeled as 32-bit `int`
+  — a narrower refinement, not a soundness issue at the `int` boundary.
 
 ## Layering
 
