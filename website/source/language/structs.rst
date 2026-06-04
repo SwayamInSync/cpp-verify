@@ -37,8 +37,21 @@ Semantics:
   by-value and reference (``Point``, ``const Point&``) parameters. Because it is a precondition,
   callers must establish it when they pass such a value.
 - It is **not** injected for raw pointer-to-struct parameters (their fields are heap loads).
-- Asserting the invariant after field writes / at returns of invariant-bearing types is not yet
-  implemented; see the design notes in the repo ``docs/`` tree.
+- **Returns are checked**: when a function returns a struct value of an invariant-bearing type,
+  the verifier asserts the invariant holds for the returned value. Building and returning a struct
+  whose fields violate the invariant is a verification error.
+
+.. code-block:: cpp
+
+   struct Box { int w; int h; type_invariant(w >= 0 && h >= 0); };
+
+   Box make(int a, int b)
+     pre(a >= 0 && a <= 50 && b >= 0 && b <= 50)   // drop b >= 0 and this fails
+   { Box x; x.w = a; x.h = b; return x; }          // invariant asserted here
+
+The invariant may be temporarily broken **inside** the function while you assign fields one at a
+time — it is only required to hold at the return (the encapsulation boundary), not after each
+individual field write.
 
 View functions
 --------------

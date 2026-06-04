@@ -235,6 +235,49 @@ std::unique_ptr<VExpr> ASTConverter::convertTypeInvariantExpr(const Expr *E) {
   return Result;
 }
 
+void ASTConverter::emitReturnInvariantAssert(
+    const Expr *RetE, std::vector<std::unique_ptr<VStmt>> &Out,
+    SourceLocation Loc) {
+  if (!RetE)
+    return;
+  // Only a plain struct variable is handled (the common `return p;` form). The
+  // invariant is checked over that variable's fields. Returning a struct wraps
+  // the variable in copy-construction / materialization, so peel those (the same
+  // unwrapping convertExpr performs) to reach the DeclRefExpr.
+  const Expr *Cur = RetE->IgnoreParenImpCasts();
+  while (true) {
+    if (const auto *MTE = dyn_cast<MaterializeTemporaryExpr>(Cur))
+      Cur = MTE->getSubExpr()->IgnoreParenImpCasts();
+    else if (const auto *CE = dyn_cast<CXXConstructExpr>(Cur);
+             CE && CE->getNumArgs() == 1)
+      Cur = CE->getArg(0)->IgnoreParenImpCasts();
+    else
+      break;
+  }
+  const auto *DRE = dyn_cast<DeclRefExpr>(Cur);
+  if (!DRE)
+    return;
+  const auto *VD = dyn_cast<VarDecl>(DRE->getDecl());
+  if (!VD)
+    return;
+  const RecordDecl *RD = getRecordFromType(VD->getType());
+  if (!RD)
+    return;
+  const TypeContractInfo *TCI = Ctx.getTypeContract(RD);
+  if (!TCI || TCI->Invariants.empty())
+    return;
+  const auto *CXXRD = dyn_cast<CXXRecordDecl>(RD);
+  if (!CXXRD)
+    return;
+  FieldSubstPrefix.clear();
+  for (const FieldDecl *Field : CXXRD->fields())
+    FieldSubstPrefix[Field->getNameAsString()] = VD->getNameAsString() + ".";
+  for (const Expr *Inv : TCI->Invariants)
+    if (auto VE = convertTypeInvariantExpr(Inv))
+      Out.push_back(std::make_unique<VContractAssertStmt>(std::move(VE), Loc));
+  FieldSubstPrefix.clear();
+}
+
 static bool bodyHasRecursiveSpec(const VFunction &Fn) {
   for (const auto &S : Fn.Body) {
     if (S->K == VStmt::Assign &&
@@ -746,6 +789,9 @@ ASTConverter::convertStmt(const Stmt *S) {
         }
       }
     }
+    // A returned struct value must satisfy its type_invariant: assert it just
+    // before the return, while the fields still hold the returned value.
+    emitReturnInvariantAssert(RS->getRetValue(), Out, RS->getBeginLoc());
     std::unique_ptr<VExpr> Val;
     if (RS->getRetValue())
       Val = convertExpr(RS->getRetValue());

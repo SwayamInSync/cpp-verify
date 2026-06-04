@@ -326,11 +326,18 @@ This is purely an optimization — correctness is identical to eager injection. 
   for by-value and reference (`C`, `C&`, `const C&`) parameters. Because the
   invariant is injected as a precondition, callers must *establish* it at call
   sites (the modular precondition check), which is sound.
-- Not yet implemented: the `assert(invariant)` after field assignments and at
-  returns that construct an invariant-bearing value. These require verifying
-  struct construction/mutation/return, which the backend does not model yet
-  (such functions currently report "no verifiable functions"). Pointer-to-record
-  parameters are also not injected (their field access lowers to a heap Load).
+- Implemented: `assert(invariant)` at every `return s;` where `s` is a struct
+  variable of an invariant-bearing type. The invariant is checked over `s`'s
+  fields just before the return, so a function that constructs and returns a
+  struct violating its invariant is rejected. Struct construction/mutation/return
+  is modelled by the backend (field stores become `var.field` SSA assignments).
+- By design, the invariant is **not** asserted after each individual field write.
+  Asserting the whole invariant mid-construction would spuriously fail while a
+  multi-field struct is being initialised one field at a time (the other fields
+  are still unconstrained). The return (the encapsulation boundary) is the
+  checkpoint — matching how Dafny/Verus check constructors.
+- Pointer-to-record parameters are not injected (their field access lowers to a
+  heap Load).
 
 ## View Functions (idiomatic spec abstraction)
 

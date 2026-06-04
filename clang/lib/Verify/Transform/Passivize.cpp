@@ -744,7 +744,9 @@ public:
       CloneCtx Ctx{Renames, OldState, false};
       auto PS = std::make_unique<PassiveStmt>();
       PS->K = PassiveStmt::Assert;
-      PS->Cond = cloneExpr(A.Cond.get(), Ctx);
+      // Guard by the live path condition: a contract_assert inside a branch (or
+      // after an early return) only needs to hold on the path that reaches it.
+      PS->Cond = guardCond(cloneExpr(A.Cond.get(), Ctx), A.Loc);
       P.Stmts.push_back(std::move(PS));
       break;
     }
