@@ -21,6 +21,8 @@ int sum_to_n(int n)
 {
   int s = 0;
   for (int i = 0; i < n; ++i)
+    invariant(i >= 0 && i <= n && s == i)
+    decreases(n - i)
     s = s + 1;
   return s;
 }
@@ -33,6 +35,7 @@ int while_countdown(int n)
   // the loop guard gives !(n > 0) i.e. n <= 0, and the invariant gives n >= 0.
   while (n > 0)
     invariant(n >= 0)
+    decreases(n)
   {
     n = n - 1;
   }
