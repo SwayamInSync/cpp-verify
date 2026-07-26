@@ -21,6 +21,17 @@ static std::unique_ptr<VExpr> makeAnd(std::unique_ptr<VExpr> A,
                                       VType::makeBool(), Loc);
 }
 
+static std::unique_ptr<VExpr> makeOr(std::unique_ptr<VExpr> A,
+                                     std::unique_ptr<VExpr> B) {
+  if (!A)
+    return B;
+  if (!B)
+    return A;
+  SourceLocation Loc = A->Loc;
+  return std::make_unique<VBinOpExpr>(VBinOp::Or, std::move(A), std::move(B),
+                                      VType::makeBool(), Loc);
+}
+
 static std::unique_ptr<VExpr> cloneForVC(const VExpr *E) {
   return cloneVExpr(E);
 }
@@ -63,19 +74,25 @@ std::unique_ptr<VExpr> WPCalculator::computeVC(const PassiveProgram &P) {
   std::string ResultName =
       P.ResultVarName.empty() ? "__result_0" : P.ResultVarName;
 
-  std::unique_ptr<VExpr> Hyp = makeTrue(SourceLocation());
-  for (const auto &A : P.EntryAssumes)
-    Hyp = makeAnd(std::move(Hyp), substResult(cloneForVC(A.get()), ResultName));
-  for (const auto &S : P.Stmts) {
-    if (S->K == PassiveStmt::Assume && S->Cond)
-      Hyp = makeAnd(std::move(Hyp),
-                    substResult(cloneForVC(S->Cond.get()), ResultName));
+  std::unique_ptr<VExpr> WP = makeTrue(SourceLocation());
+  for (const auto &Pst : P.ExitAsserts)
+    WP = makeAnd(std::move(WP), substResult(cloneForVC(Pst.get()), ResultName));
+
+  for (auto It = P.Stmts.rbegin(); It != P.Stmts.rend(); ++It) {
+    const PassiveStmt &S = **It;
+    if (!S.Cond)
+      continue;
+    auto Cond = substResult(cloneForVC(S.Cond.get()), ResultName);
+    if (S.K == PassiveStmt::Assume)
+      WP = makeOr(makeNot(std::move(Cond)), std::move(WP));
+    else
+      WP = makeAnd(std::move(Cond), std::move(WP));
   }
 
-  std::unique_ptr<VExpr> Post = makeTrue(SourceLocation());
-  for (const auto &Pst : P.ExitAsserts)
-    Post = makeAnd(std::move(Post),
-                   substResult(cloneForVC(Pst.get()), ResultName));
+  for (auto It = P.EntryAssumes.rbegin(); It != P.EntryAssumes.rend(); ++It) {
+    auto Cond = substResult(cloneForVC(It->get()), ResultName);
+    WP = makeOr(makeNot(std::move(Cond)), std::move(WP));
+  }
 
-  return makeAnd(std::move(Hyp), makeNot(std::move(Post)));
+  return makeNot(std::move(WP));
 }

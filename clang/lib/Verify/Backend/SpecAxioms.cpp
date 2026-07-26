@@ -6,32 +6,22 @@
 using namespace clang;
 using namespace verify;
 
-static void collectReferencedSpecsVC(const VCExpr *E, std::set<std::string> &Out) {
+static void collectSpecCallsVC(const VCExpr *E,
+                               std::vector<const VCExpr *> &Out) {
   if (!E)
     return;
   if (E->K == VCExpr::SpecCall)
-    Out.insert(E->SpecCallee);
+    Out.push_back(E);
   for (const auto &C : E->Children)
-    collectReferencedSpecsVC(C.get(), Out);
+    collectSpecCallsVC(C.get(), Out);
 }
 
-void verify::collectReferencedSpecs(const VExpr *E, std::set<std::string> &Out) {
+void verify::collectReferencedSpecs(const VExpr *E,
+                                    std::set<std::string> &Out) {
   std::vector<const VSpecCallExpr *> Calls;
   collectSpecCalls(E, Calls);
   for (const VSpecCallExpr *C : Calls)
-    Out.insert(C->Callee);
-}
-
-static unsigned axiomFuelFor(const VFunction &Spec, const SpecAxiomContext &Ctx) {
-  if (Ctx.HiddenSpecs.count(Spec.Name))
-    return 0;
-  if (auto It = Ctx.SpecFuel.find(Spec.Name); It != Ctx.SpecFuel.end())
-    return It->second;
-  if (Ctx.RevealedSpecs.count(Spec.Name))
-    return 1;
-  if (!Spec.NeedsDecreasesCheck)
-    return 64;
-  return 0;
+    Out.insert(C->CalleeIdentity);
 }
 
 std::unique_ptr<VExpr> verify::unfoldSpecDefinition(const VFunction &Spec,
@@ -42,8 +32,9 @@ std::unique_ptr<VExpr> verify::unfoldSpecDefinition(const VFunction &Spec,
                                   Ctx.RevealedSpecs, Fuel);
 }
 
-std::unique_ptr<VExpr> verify::unfoldSpecBodyForAxiom(const VFunction &Spec,
-                                                      const SpecAxiomContext &Ctx) {
+std::unique_ptr<VExpr>
+verify::unfoldSpecBodyForAxiom(const VFunction &Spec,
+                               const SpecAxiomContext &Ctx) {
   // One step of unfolding (RootFuel = 1) with recursive leaves kept as spec
   // applications. Hidden/revealed sets are intentionally empty so the body is
   // expanded one level regardless of the caller's reveal state.
@@ -54,8 +45,8 @@ std::unique_ptr<VExpr> verify::unfoldSpecBodyForAxiom(const VFunction &Spec,
 
 void verify::emitSpecAxioms(Z3Encoder &Enc, const VCExpr *Goal,
                             const SpecAxiomContext &Ctx) {
-  std::set<std::string> Used;
-  collectReferencedSpecsVC(Goal, Used);
-  for (const auto &Name : Used)
-    Enc.emitSpecDefiningAxiom(Name, Ctx);
+  std::vector<const VCExpr *> Calls;
+  collectSpecCallsVC(Goal, Calls);
+  for (const VCExpr *Call : Calls)
+    Enc.emitSpecCallAxiom(Call, Ctx);
 }

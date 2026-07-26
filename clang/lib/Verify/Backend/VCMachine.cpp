@@ -1,6 +1,8 @@
 //===--- VCMachine.cpp ----------------------------------------------------===//
 #include "VCMachine.h"
 #include "../IR/VType.h"
+#include "llvm/ADT/APInt.h"
+#include "llvm/ADT/SmallString.h"
 
 using namespace clang;
 using namespace verify;
@@ -39,35 +41,65 @@ static std::unique_ptr<VCExpr> vcOr(std::unique_ptr<VCExpr> A,
   return N;
 }
 
-static int64_t evalIntLiteral(const VExpr *E) {
-  if (!E || E->K != VExpr::Literal)
-    return 0;
-  return static_cast<const VLiteralExpr *>(E)->Value;
+static bool isIntegerKind(VTypeKind Kind) {
+  return Kind == VTypeKind::Int32 || Kind == VTypeKind::Int64;
 }
 
-// Rename every free occurrence of a quantifier binder in an already-built VCExpr
-// to a fresh name, pinning it to a 32-bit machine bit-vector so the encoder
-// gives it a single, consistent Z3 const. Stops at a nested quantifier that
-// re-binds the same source name (shadowing).
-static void renameBinder(VCExpr *E, const std::string &Old,
-                         const std::string &New) {
+static std::unique_ptr<VCExpr> cloneVCExpr(const VCExpr *E) {
   if (!E)
-    return;
-  if (E->K == VCExpr::Forall && E->Binder == Old)
-    return;
-  if (E->K == VCExpr::Var && E->Name == Old) {
-    E->Name = New;
-    E->IsPtr = false;
-    E->IntMode = VIntMode::Machine;
-    E->Width = 32;
-  }
-  for (auto &C : E->Children)
-    renameBinder(C.get(), Old, New);
+    return nullptr;
+  auto Copy = std::make_unique<VCExpr>(E->K);
+  Copy->TypeKind = E->TypeKind;
+  Copy->IntMode = E->IntMode;
+  Copy->IsSigned = E->IsSigned;
+  Copy->BitWidth = E->BitWidth;
+  Copy->IntVal = E->IntVal;
+  Copy->BoolVal = E->BoolVal;
+  Copy->Name = E->Name;
+  Copy->Binder = E->Binder;
+  Copy->OverflowOp = E->OverflowOp;
+  Copy->SpecCallee = E->SpecCallee;
+  for (const auto &Child : E->Children)
+    Copy->Children.push_back(cloneVCExpr(Child.get()));
+  return Copy;
+}
+
+static std::unique_ptr<VCExpr> vcBinary(VCExpr::Kind Kind,
+                                        std::unique_ptr<VCExpr> L,
+                                        std::unique_ptr<VCExpr> R) {
+  auto N = std::make_unique<VCExpr>(Kind);
+  N->TypeKind = VTypeKind::Bool;
+  N->IntMode = L->IntMode;
+  N->IsSigned = L->IsSigned;
+  N->BitWidth = L->BitWidth;
+  N->Children.push_back(std::move(L));
+  N->Children.push_back(std::move(R));
+  return N;
+}
+
+static std::unique_ptr<VCExpr> mathLimit(unsigned BitWidth, bool IsSigned,
+                                         bool Minimum) {
+  llvm::APInt Value = Minimum
+                          ? (IsSigned ? llvm::APInt::getSignedMinValue(BitWidth)
+                                      : llvm::APInt(BitWidth, 0))
+                          : (IsSigned ? llvm::APInt::getSignedMaxValue(BitWidth)
+                                      : llvm::APInt::getMaxValue(BitWidth));
+  llvm::SmallString<64> Buffer;
+  Value.toString(Buffer, 10, IsSigned);
+  auto N = std::make_unique<VCExpr>(VCExpr::IntLit);
+  N->TypeKind = BitWidth > 32 ? VTypeKind::Int64 : VTypeKind::Int32;
+  N->IntMode = VIntMode::Math;
+  N->IsSigned = IsSigned;
+  N->BitWidth = BitWidth;
+  N->IntVal = std::string(Buffer);
+  return N;
 }
 
 class VCMachineBuilder {
   std::string ResultVarName;
   std::string CurHeap;
+  std::map<std::string, std::string> BoundVars;
+  unsigned QuantifierCounter = 0;
 
   static VIntMode intModeOf(const VCExpr *E) {
     if (!E)
@@ -82,11 +114,48 @@ class VCMachineBuilder {
   }
 
   std::unique_ptr<VCExpr> toMode(std::unique_ptr<VCExpr> E, VIntMode Target) {
-    if (!E || intModeOf(E.get()) == Target)
+    if (!E)
       return E;
+    if (E->TypeKind == VTypeKind::Ptr) {
+      E->IntMode = Target;
+      return E;
+    }
+    if (intModeOf(E.get()) == Target)
+      return E;
+    if (Target == VIntMode::Machine) {
+      if (E->K == VCExpr::BvToInt && E->Children.size() == 1 &&
+          E->Children[0] && E->Children[0]->IntMode == VIntMode::Machine)
+        return std::move(E->Children[0]);
+      switch (E->K) {
+      case VCExpr::IntLit:
+        E->IntMode = Target;
+        return E;
+      case VCExpr::Add:
+      case VCExpr::Sub:
+      case VCExpr::Mul:
+        E->Children[0] = toMode(std::move(E->Children[0]), Target);
+        E->Children[1] = toMode(std::move(E->Children[1]), Target);
+        E->IntMode = Target;
+        return E;
+      case VCExpr::Neg:
+        E->Children[0] = toMode(std::move(E->Children[0]), Target);
+        E->IntMode = Target;
+        return E;
+      case VCExpr::Ite:
+        E->Children[1] = toMode(std::move(E->Children[1]), Target);
+        E->Children[2] = toMode(std::move(E->Children[2]), Target);
+        E->IntMode = Target;
+        return E;
+      default:
+        break;
+      }
+    }
     auto N = std::make_unique<VCExpr>(
         Target == VIntMode::Machine ? VCExpr::IntToBv : VCExpr::BvToInt);
     N->IntMode = Target;
+    N->TypeKind = E->TypeKind;
+    N->IsSigned = E->IsSigned;
+    N->BitWidth = E->BitWidth;
     N->Children.push_back(std::move(E));
     return N;
   }
@@ -99,13 +168,47 @@ class VCMachineBuilder {
     return {toMode(std::move(L), M), toMode(std::move(R), M)};
   }
 
+  std::unique_ptr<VCExpr>
+  exactCrossModeEquality(VCExpr::Kind Kind, std::unique_ptr<VCExpr> Machine,
+                         std::unique_ptr<VCExpr> Math) {
+    const unsigned BitWidth = Machine->BitWidth;
+    const bool IsSigned = Machine->IsSigned;
+    auto InRange = vcAnd(vcBinary(VCExpr::Ge, cloneVCExpr(Math.get()),
+                                  mathLimit(BitWidth, IsSigned, true)),
+                         vcBinary(VCExpr::Le, cloneVCExpr(Math.get()),
+                                  mathLimit(BitWidth, IsSigned, false)));
+
+    auto Converted = toMode(std::move(Math), VIntMode::Machine);
+    if (Converted->BitWidth != BitWidth) {
+      auto Resize = std::make_unique<VCExpr>(VCExpr::BvResize);
+      Resize->TypeKind = Machine->TypeKind;
+      Resize->IntMode = VIntMode::Machine;
+      Resize->IsSigned = IsSigned;
+      Resize->BitWidth = BitWidth;
+      Resize->Children.push_back(std::move(Converted));
+      Converted = std::move(Resize);
+    }
+
+    auto Exact =
+        vcAnd(std::move(InRange),
+              vcBinary(VCExpr::Eq, std::move(Machine), std::move(Converted)));
+    if (Kind == VCExpr::Eq)
+      return Exact;
+    return vcNot(std::move(Exact));
+  }
+
   std::unique_ptr<VCExpr> fromBin(VBinOp Op, std::unique_ptr<VCExpr> L,
-                                  std::unique_ptr<VCExpr> R,
-                                  bool Unsigned = false) {
+                                  std::unique_ptr<VCExpr> R) {
     VCExpr::Kind K = VCExpr::Eq;
     switch (Op) {
     case VBinOp::Add:
       K = VCExpr::Add;
+      break;
+    case VBinOp::Sub:
+      K = VCExpr::Sub;
+      break;
+    case VBinOp::Mul:
+      K = VCExpr::Mul;
       break;
     case VBinOp::Div:
       K = VCExpr::Div;
@@ -113,11 +216,20 @@ class VCMachineBuilder {
     case VBinOp::Rem:
       K = VCExpr::Rem;
       break;
-    case VBinOp::Sub:
-      K = VCExpr::Sub;
+    case VBinOp::BitAnd:
+      K = VCExpr::BitAnd;
       break;
-    case VBinOp::Mul:
-      K = VCExpr::Mul;
+    case VBinOp::BitOr:
+      K = VCExpr::BitOr;
+      break;
+    case VBinOp::BitXor:
+      K = VCExpr::BitXor;
+      break;
+    case VBinOp::Shl:
+      K = VCExpr::Shl;
+      break;
+    case VBinOp::Shr:
+      K = VCExpr::Shr;
       break;
     case VBinOp::Lt:
       K = VCExpr::Lt;
@@ -143,73 +255,77 @@ class VCMachineBuilder {
     case VBinOp::Or:
       K = VCExpr::Or;
       break;
-    default:
-      K = VCExpr::Eq;
-      break;
     }
-    // Pointer arithmetic / comparison: if either operand is an address, the node
-    // is computed in integer (wrap-free) arithmetic.
-    bool PtrOperands = L->IsPtr || R->IsPtr;
-    auto Unified = unifyIntModes(std::move(L), std::move(R));
+    bool HasPointer =
+        L->TypeKind == VTypeKind::Ptr || R->TypeKind == VTypeKind::Ptr;
+    bool HasBoolean =
+        L->TypeKind == VTypeKind::Bool || R->TypeKind == VTypeKind::Bool;
+    if ((K == VCExpr::Eq || K == VCExpr::Ne) && !HasPointer && !HasBoolean &&
+        isIntegerKind(L->TypeKind) && isIntegerKind(R->TypeKind) &&
+        L->IntMode != R->IntMode) {
+      if (L->IntMode == VIntMode::Machine)
+        return exactCrossModeEquality(K, std::move(L), std::move(R));
+      return exactCrossModeEquality(K, std::move(R), std::move(L));
+    }
+    std::pair<std::unique_ptr<VCExpr>, std::unique_ptr<VCExpr>> Unified;
+    if (K == VCExpr::Shl || K == VCExpr::Shr) {
+      L = toMode(std::move(L), VIntMode::Machine);
+      R = toMode(std::move(R), VIntMode::Machine);
+      if (R->BitWidth != L->BitWidth) {
+        auto Resize = std::make_unique<VCExpr>(VCExpr::BvResize);
+        Resize->TypeKind = R->TypeKind;
+        Resize->IntMode = VIntMode::Machine;
+        Resize->IsSigned = R->IsSigned;
+        Resize->BitWidth = L->BitWidth;
+        Resize->Children.push_back(std::move(R));
+        R = std::move(Resize);
+      }
+      Unified = std::make_pair(std::move(L), std::move(R));
+    } else {
+      Unified = HasPointer
+                    ? std::make_pair(toMode(std::move(L), VIntMode::Math),
+                                     toMode(std::move(R), VIntMode::Math))
+                : HasBoolean ? std::make_pair(std::move(L), std::move(R))
+                             : unifyIntModes(std::move(L), std::move(R));
+    }
     auto N = std::make_unique<VCExpr>(K);
     N->IntMode = intModeOf(Unified.first.get());
-    N->Unsigned = Unsigned;
-    N->Width = std::max(Unified.first->Width, Unified.second->Width);
-    N->IsPtr = PtrOperands;
+    N->IsSigned = Unified.first->IsSigned;
+    N->BitWidth = Unified.first->BitWidth;
+    if (K == VCExpr::Eq || K == VCExpr::Ne || K == VCExpr::Lt ||
+        K == VCExpr::Le || K == VCExpr::Gt || K == VCExpr::Ge ||
+        K == VCExpr::And || K == VCExpr::Or)
+      N->TypeKind = VTypeKind::Bool;
+    else
+      N->TypeKind = Unified.first->TypeKind;
     N->Children.push_back(std::move(Unified.first));
     N->Children.push_back(std::move(Unified.second));
     return N;
   }
 
-  // Maximum concrete range to unroll into a conjunction/disjunction; beyond this
-  // (or for symbolic bounds) emit a real quantifier so reasoning stays sound.
-  static constexpr int64_t QuantUnrollLimit = 64;
-
-  std::unique_ptr<VCExpr> expandQuant(const VQuantifiedExpr *Q, bool IsForall) {
-    int64_t Lo = 0, Hi = 0;
-    bool ConcreteLo = Q->Lo && Q->Lo->K == VExpr::Literal;
-    bool ConcreteHi = Q->Hi && Q->Hi->K == VExpr::Literal;
-    if (ConcreteLo)
-      Lo = static_cast<const VLiteralExpr *>(Q->Lo.get())->Value;
-    if (ConcreteHi)
-      Hi = static_cast<const VLiteralExpr *>(Q->Hi.get())->Value;
-
-    // Small concrete range: unroll (cheap, no quantifier instantiation cost).
-    if (ConcreteLo && ConcreteHi && Hi - Lo <= QuantUnrollLimit) {
-      if (Hi <= Lo)
-        return std::make_unique<VCExpr>(IsForall ? VCExpr::True : VCExpr::False);
-      std::unique_ptr<VCExpr> Acc =
-          std::make_unique<VCExpr>(IsForall ? VCExpr::True : VCExpr::False);
-      VIntMode Mode = intModeOfVType(Q->Body->Ty);
-      for (int64_t I = Lo; I < Hi; ++I) {
-        auto InstBody =
-            substituteBinderInVExpr(Q->Body.get(), Q->Binder, I, Mode);
-        auto Body = fromVExpr(InstBody.get());
-        if (IsForall)
-          Acc = vcAnd(std::move(Acc), std::move(Body));
-        else
-          Acc = vcOr(std::move(Acc), std::move(Body));
-      }
-      return Acc;
-    }
-
-    // Symbolic (or large) bounds: emit a real bounded quantifier
-    //   forall i. (lo <= i < hi) => body      (exists: && instead of =>)
-    // Alpha-rename the binder to a fresh name pinned to a 32-bit bit-vector.
-    // Different quantifiers can reuse a source binder name (e.g. `i` in both a
-    // loop invariant and the postcondition); the encoder caches Z3 consts by
-    // name, so without a unique name they could collide and pick up an
-    // inconsistent sort (int vs bit-vector) depending on encoding order.
-    static unsigned QuantId = 0;
-    std::string Fresh = Q->Binder + "$" + std::to_string(++QuantId);
-    auto N = std::make_unique<VCExpr>(VCExpr::Forall);
-    N->BoolVal = IsForall;
-    N->Binder = Fresh;
+  std::unique_ptr<VCExpr> fromQuant(const VQuantifiedExpr *Q, bool IsForall) {
+    auto N =
+        std::make_unique<VCExpr>(IsForall ? VCExpr::Forall : VCExpr::Exists);
+    N->Binder =
+        "__quant_" + std::to_string(QuantifierCounter++) + "_" + Q->Binder;
     N->Children.push_back(fromVExpr(Q->Lo.get()));
     N->Children.push_back(fromVExpr(Q->Hi.get()));
-    auto Body = fromVExpr(Q->Body.get());
-    renameBinder(Body.get(), Q->Binder, Fresh);
-    N->Children.push_back(std::move(Body));
+    N->IntMode =
+        ForceCallerIntMode ? CallerIntMode : intModeOfVType(Q->BinderType);
+    N->BitWidth = Q->BinderType.BitWidth;
+    N->IsSigned = Q->BinderType.IsSigned;
+
+    auto Previous = BoundVars.find(Q->Binder);
+    std::string PreviousName;
+    bool HadPrevious = Previous != BoundVars.end();
+    if (HadPrevious)
+      PreviousName = Previous->second;
+    BoundVars[Q->Binder] = N->Binder;
+    N->Children.push_back(fromVExpr(Q->Body.get()));
+    if (HadPrevious)
+      BoundVars[Q->Binder] = std::move(PreviousName);
+    else
+      BoundVars.erase(Q->Binder);
     return N;
   }
 
@@ -230,33 +346,33 @@ public:
       const auto *L = static_cast<const VLiteralExpr *>(E);
       if (L->Ty.Kind == VTypeKind::Bool) {
         auto N = std::make_unique<VCExpr>(VCExpr::BoolLit);
-        N->BoolVal = L->Value != 0;
+        N->BoolVal = L->Value != "0";
         return N;
       }
       auto N = std::make_unique<VCExpr>(VCExpr::IntLit);
       N->IntVal = L->Value;
-      N->IntMode = ForceCallerIntMode ? CallerIntMode
-                                      : intModeOfVType(L->Ty);
-      N->Width = L->Ty.bvWidth();
-      N->IsPtr = L->Ty.Kind == VTypeKind::Ptr; // e.g. nullptr literal
+      N->TypeKind = L->Ty.Kind;
+      N->IsSigned = L->Ty.IsSigned;
+      N->BitWidth = L->Ty.BitWidth;
+      N->IntMode = ForceCallerIntMode ? CallerIntMode : intModeOfVType(L->Ty);
       return N;
     }
     case VExpr::Var: {
-      const auto *V = static_cast<const VVarExpr *>(E);
       auto N = std::make_unique<VCExpr>(VCExpr::Var);
-      N->Name = V->Name;
-      N->IntMode = ForceCallerIntMode ? CallerIntMode : intModeOfVType(V->Ty);
-      N->Width = V->Ty.bvWidth();
-      N->IsPtr = V->Ty.Kind == VTypeKind::Ptr;
+      const std::string &Name = static_cast<const VVarExpr *>(E)->Name;
+      auto Bound = BoundVars.find(Name);
+      N->Name = Bound == BoundVars.end() ? Name : Bound->second;
+      N->TypeKind = static_cast<const VVarExpr *>(E)->Ty.Kind;
+      N->IsSigned = static_cast<const VVarExpr *>(E)->Ty.IsSigned;
+      N->BitWidth = static_cast<const VVarExpr *>(E)->Ty.BitWidth;
+      N->IntMode = ForceCallerIntMode
+                       ? CallerIntMode
+                       : intModeOfVType(static_cast<const VVarExpr *>(E)->Ty);
       return N;
     }
     case VExpr::BinOp: {
       const auto *B = static_cast<const VBinOpExpr *>(E);
-      // Operand signedness drives bvudiv/bvurem vs bvsdiv/bvsrem. Use the wider
-      // operand type when available; fall back to the result type.
-      bool Unsigned = B->Lhs->Ty.Unsigned || B->Rhs->Ty.Unsigned || B->Ty.Unsigned;
-      return fromBin(B->Op, fromVExpr(B->Lhs.get()), fromVExpr(B->Rhs.get()),
-                     Unsigned);
+      return fromBin(B->Op, fromVExpr(B->Lhs.get()), fromVExpr(B->Rhs.get()));
     }
     case VExpr::UnaryOp: {
       const auto *U = static_cast<const VUnaryOpExpr *>(E);
@@ -264,6 +380,24 @@ public:
         auto N = std::make_unique<VCExpr>(VCExpr::Neg);
         N->Children.push_back(fromVExpr(U->Operand.get()));
         N->IntMode = intModeOf(N->Children[0].get());
+        N->TypeKind = U->Ty.Kind;
+        N->IsSigned = U->Ty.IsSigned;
+        N->BitWidth = U->Ty.BitWidth;
+        return N;
+      }
+      if (U->Op == VUnaryOp::BitNot) {
+        auto N = std::make_unique<VCExpr>(VCExpr::BitNot);
+        N->Children.push_back(fromVExpr(U->Operand.get()));
+        N->IntMode = intModeOf(N->Children[0].get());
+        N->TypeKind = U->Ty.Kind;
+        N->IsSigned = U->Ty.IsSigned;
+        N->BitWidth = U->Ty.BitWidth;
+        return N;
+      }
+      if (U->Op == VUnaryOp::ValidPtr) {
+        auto N = std::make_unique<VCExpr>(VCExpr::ValidPtr);
+        N->Children.push_back(fromVExpr(U->Operand.get()));
+        N->TypeKind = VTypeKind::Bool;
         return N;
       }
       return vcNot(fromVExpr(U->Operand.get()));
@@ -274,23 +408,91 @@ public:
       N->Children.push_back(fromVExpr(C->Cond.get()));
       N->Children.push_back(fromVExpr(C->Then.get()));
       N->Children.push_back(fromVExpr(C->Else.get()));
+      N->TypeKind = C->Ty.Kind;
       N->IntMode = intModeOf(N->Children[1].get());
+      N->IsSigned = C->Ty.IsSigned;
+      N->BitWidth = C->Ty.BitWidth;
       return N;
     }
     case VExpr::Result: {
       auto N = std::make_unique<VCExpr>(VCExpr::Var);
       N->Name = ResultVarName.empty() ? "__result_0" : ResultVarName;
+      N->TypeKind = E->Ty.Kind;
+      N->IntMode = intModeOfVType(E->Ty);
+      N->IsSigned = E->Ty.IsSigned;
+      N->BitWidth = E->Ty.BitWidth;
       return N;
     }
     case VExpr::Old:
       return fromVExpr(static_cast<const VOldExpr *>(E)->Inner.get());
-    case VExpr::Cast:
-      return fromVExpr(static_cast<const VCastExpr *>(E)->Inner.get());
+    case VExpr::Cast: {
+      const auto *C = static_cast<const VCastExpr *>(E);
+      auto Inner = fromVExpr(C->Inner.get());
+      if (!Inner)
+        return nullptr;
+      if (C->Ty.Kind == VTypeKind::Bool && C->FromTy.Kind != VTypeKind::Bool) {
+        auto Zero = std::make_unique<VCExpr>(VCExpr::IntLit);
+        Zero->TypeKind = C->FromTy.Kind;
+        Zero->IntMode = intModeOfVType(C->FromTy);
+        Zero->IsSigned = C->FromTy.IsSigned;
+        Zero->BitWidth = C->FromTy.BitWidth;
+        auto N = std::make_unique<VCExpr>(VCExpr::Ne);
+        N->TypeKind = VTypeKind::Bool;
+        N->IntMode =
+            C->FromTy.Kind == VTypeKind::Ptr ? VIntMode::Math : Inner->IntMode;
+        N->IsSigned = Inner->IsSigned;
+        N->BitWidth = Inner->BitWidth;
+        N->Children.push_back(std::move(Inner));
+        N->Children.push_back(std::move(Zero));
+        return N;
+      }
+      if (C->FromTy.Kind == VTypeKind::Bool && C->Ty.Kind != VTypeKind::Bool) {
+        auto One = std::make_unique<VCExpr>(VCExpr::IntLit);
+        One->IntVal = "1";
+        One->TypeKind = C->Ty.Kind;
+        One->IntMode = intModeOfVType(C->Ty);
+        One->IsSigned = C->Ty.IsSigned;
+        One->BitWidth = C->Ty.BitWidth;
+        auto Zero = std::make_unique<VCExpr>(VCExpr::IntLit);
+        Zero->TypeKind = C->Ty.Kind;
+        Zero->IntMode = intModeOfVType(C->Ty);
+        Zero->IsSigned = C->Ty.IsSigned;
+        Zero->BitWidth = C->Ty.BitWidth;
+        auto N = std::make_unique<VCExpr>(VCExpr::Ite);
+        N->TypeKind = C->Ty.Kind;
+        N->IntMode = intModeOfVType(C->Ty);
+        N->IsSigned = C->Ty.IsSigned;
+        N->BitWidth = C->Ty.BitWidth;
+        N->Children.push_back(std::move(Inner));
+        N->Children.push_back(std::move(One));
+        N->Children.push_back(std::move(Zero));
+        return N;
+      }
+      VIntMode TargetMode = intModeOfVType(C->Ty);
+      Inner = toMode(std::move(Inner), TargetMode);
+      if (TargetMode == VIntMode::Machine &&
+          Inner->BitWidth != C->Ty.BitWidth) {
+        auto Resize = std::make_unique<VCExpr>(VCExpr::BvResize);
+        Resize->TypeKind = C->Ty.Kind;
+        Resize->IntMode = TargetMode;
+        Resize->IsSigned = C->Ty.IsSigned;
+        Resize->BitWidth = C->Ty.BitWidth;
+        Resize->Children.push_back(std::move(Inner));
+        Inner = std::move(Resize);
+      }
+      Inner->TypeKind = C->Ty.Kind;
+      Inner->IsSigned = C->Ty.IsSigned;
+      Inner->BitWidth = C->Ty.BitWidth;
+      return Inner;
+    }
     case VExpr::Load: {
       const auto *L = static_cast<const VLoadExpr *>(E);
       std::string Heap = L->HeapVar.empty() ? CurHeap : L->HeapVar;
       auto N = std::make_unique<VCExpr>(VCExpr::Select);
+      N->TypeKind = L->Ty.Kind;
       N->IntMode = CallerIntMode;
+      N->IsSigned = L->Ty.IsSigned;
+      N->BitWidth = L->Ty.BitWidth;
       auto H = std::make_unique<VCExpr>(VCExpr::Var);
       H->Name = Heap;
       N->Children.push_back(std::move(H));
@@ -298,9 +500,9 @@ public:
       return N;
     }
     case VExpr::Forall:
-      return expandQuant(static_cast<const VQuantifiedExpr *>(E), true);
+      return fromQuant(static_cast<const VQuantifiedExpr *>(E), true);
     case VExpr::Exists:
-      return expandQuant(static_cast<const VQuantifiedExpr *>(E), false);
+      return fromQuant(static_cast<const VQuantifiedExpr *>(E), false);
     case VExpr::HeapStore: {
       const auto *H = static_cast<const VHeapStoreExpr *>(E);
       auto N = std::make_unique<VCExpr>(VCExpr::Store);
@@ -318,23 +520,39 @@ public:
       const auto *F = static_cast<const VFieldAccessExpr *>(E);
       auto N = std::make_unique<VCExpr>(VCExpr::Var);
       N->Name = fieldVarName(F);
+      N->TypeKind = F->Base->K == VExpr::Var || F->Base->K == VExpr::Result
+                        ? F->Ty.Kind
+                        : VTypeKind::Unsupported;
+      N->IntMode = intModeOfVType(F->Ty);
+      N->IsSigned = F->Ty.IsSigned;
+      N->BitWidth = F->Ty.BitWidth;
       return N;
     }
     case VExpr::SpecCall: {
       const auto *C = static_cast<const VSpecCallExpr *>(E);
       auto N = std::make_unique<VCExpr>(VCExpr::SpecCall);
-      N->SpecCallee = C->Callee;
-      N->IntMode = CallerIntMode;
-      for (const auto &A : C->Args)
-        N->Children.push_back(fromVExpr(A.get()));
+      N->SpecCallee = C->CalleeIdentity;
+      N->TypeKind = C->Ty.Kind;
+      N->IntMode = C->Ty.IntMode;
+      N->IsSigned = C->Ty.IsSigned;
+      N->BitWidth = C->Ty.BitWidth;
+      for (const auto &A : C->Args) {
+        auto Arg = fromVExpr(A.get());
+        if (Arg && (Arg->TypeKind == VTypeKind::Int32 ||
+                    Arg->TypeKind == VTypeKind::Int64))
+          Arg = toMode(std::move(Arg), C->Ty.IntMode);
+        N->Children.push_back(std::move(Arg));
+      }
       return N;
     }
     case VExpr::OverflowCheck: {
       const auto *O = static_cast<const VOverflowCheckExpr *>(E);
       auto N = std::make_unique<VCExpr>(VCExpr::NoOverflow);
-      N->IntMode = VIntMode::Machine; // overflow only meaningful for bit-vectors
-      N->IntVal = static_cast<int64_t>(O->Op);
-      N->Width = O->Lhs->Ty.bvWidth();
+      N->TypeKind = VTypeKind::Bool;
+      N->IntMode = VIntMode::Machine;
+      N->IsSigned = O->Lhs->Ty.IsSigned;
+      N->BitWidth = O->Lhs->Ty.BitWidth;
+      N->OverflowOp = O->Op;
       N->Children.push_back(fromVExpr(O->Lhs.get()));
       if (O->Rhs)
         N->Children.push_back(fromVExpr(O->Rhs.get()));
@@ -351,14 +569,15 @@ public:
     else if (F->Base->K == VExpr::Result)
       Base = "result";
     else
-      Base = "base";
+      Base = "__cppverify_unsupported_field_base";
     return Base + "." + F->Field;
   }
 
   VCMachine buildPassive(const PassiveProgram &P) {
     VCMachine M;
     M.ResultVarName = P.ResultVarName;
-    M.HeapPrefix = P.OldHeapName.empty() ? std::string(VHeapName) + "_0" : P.OldHeapName;
+    M.HeapPrefix =
+        P.OldHeapName.empty() ? std::string(VHeapName) + "_0" : P.OldHeapName;
     M.SpecFunctions = P.SpecFunctions;
     M.SpecFuel = P.SpecFuel;
     M.HiddenSpecs = P.HiddenSpecs;
@@ -366,46 +585,25 @@ public:
     M.CallerIntMode = P.CallerIntMode;
     CurHeap = M.HeapPrefix;
 
-    // Build the verification condition as the negated weakest precondition, so
-    // each assert is checked only against the assumes that *precede* it. A flat
-    // (∧assumes) ∧ ¬(∧asserts) is unsound: a later contradictory assume (e.g. a
-    // loop's inductive hypothesis I ∧ cond that is unsatisfiable given the pre)
-    // makes the whole goal UNSAT, vacuously "verifying" earlier asserts.
-    //
-    // Encode left-to-right (heap-version tracking is forward), recording each
-    // assume/assert; then fold the boolean structure right-to-left:
-    //   ¬wp(assume A; r) = A ∧ ¬wp(r)
-    //   ¬wp(assert P; r) = ¬P ∨ ¬wp(r)
-    //   ¬wp(skip)        = false
-    std::vector<std::pair<bool, std::unique_ptr<VCExpr>>> Items; // (isAssume, e)
-
-    for (const auto &A : P.EntryAssumes)
-      Items.emplace_back(true, fromVExpr(A.get()));
-
-    for (const auto &S : P.Stmts) {
-      if (S->K == PassiveStmt::Assume && S->Cond) {
-        auto Enc = fromVExpr(S->Cond.get());
-        if (S->Cond->K == VExpr::HeapStore)
-          CurHeap =
-              static_cast<const VHeapStoreExpr *>(S->Cond.get())->HeapAfter;
-        Items.emplace_back(true, std::move(Enc));
-      } else if (S->K == PassiveStmt::Assert && S->Cond) {
-        Items.emplace_back(false, fromVExpr(S->Cond.get()));
-      }
-    }
-
+    std::unique_ptr<VCExpr> WP = vcTrue();
     for (const auto &A : P.ExitAsserts)
-      Items.emplace_back(false, fromVExpr(A.get()));
+      WP = vcAnd(std::move(WP), fromVExpr(A.get()));
 
-    std::unique_ptr<VCExpr> G = std::make_unique<VCExpr>(VCExpr::False);
-    for (auto It = Items.rbegin(); It != Items.rend(); ++It) {
-      if (It->first)
-        G = vcAnd(std::move(It->second), std::move(G));
+    for (auto It = P.Stmts.rbegin(); It != P.Stmts.rend(); ++It) {
+      const PassiveStmt &S = **It;
+      if (!S.Cond)
+        continue;
+      auto Cond = fromVExpr(S.Cond.get());
+      if (S.K == PassiveStmt::Assume)
+        WP = vcOr(vcNot(std::move(Cond)), std::move(WP));
       else
-        G = vcOr(vcNot(std::move(It->second)), std::move(G));
+        WP = vcAnd(std::move(Cond), std::move(WP));
     }
 
-    M.Goal = std::move(G);
+    for (auto It = P.EntryAssumes.rbegin(); It != P.EntryAssumes.rend(); ++It)
+      WP = vcOr(vcNot(fromVExpr(It->get())), std::move(WP));
+
+    M.Goal = vcNot(std::move(WP));
     return M;
   }
 };
@@ -419,8 +617,9 @@ VCMachine VCMachine::fromPassive(const PassiveProgram &P) {
 }
 
 VCMachine VCMachine::fromVExpr(const VExpr *E, const std::string &ResultVar,
-                               const std::string &CurHeap, VIntMode CallerMode) {
-  VCMachineBuilder B(ResultVar, CurHeap, CallerMode, true);
+                               const std::string &CurHeap,
+                               VIntMode CallerMode) {
+  VCMachineBuilder B(ResultVar, CurHeap, CallerMode);
   VCMachine M;
   M.ResultVarName = ResultVar;
   M.HeapPrefix = CurHeap;
