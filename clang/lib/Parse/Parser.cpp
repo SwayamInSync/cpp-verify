@@ -1395,6 +1395,49 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
     }
   }
 
+  auto AttachFunctionContract = [&](Decl *Result) {
+    if (!Result || (ContractPreconditions.empty() &&
+                    ContractPostconditions.empty() && ContractModifies.empty() &&
+                    ContractAliases.empty() && ContractRecommends.empty() &&
+                    ContractDecreases.empty() && !IsSpecFn && !IsProofFn))
+      return;
+    FunctionDecl *FD = Result->getAsFunction();
+    if (!FD)
+      return;
+    FunctionContractInfo &FCI =
+        Actions.getASTContext().getOrCreateFunctionContract(FD);
+    if (FCI.ContractDecl && FCI.ContractDecl != FD) {
+      Diag(FD->getLocation(), diag::err_contract_redeclaration);
+      return;
+    }
+    FCI.ContractDecl = FD;
+    FCI.Preconditions = std::move(ContractPreconditions);
+    FCI.Postconditions = std::move(ContractPostconditions);
+    FCI.Modifies = std::move(ContractModifies);
+    FCI.Aliases = std::move(ContractAliases);
+    FCI.Recommends = std::move(ContractRecommends);
+    FCI.Decreases = std::move(ContractDecreases);
+    FCI.IsSpec = IsSpecFn;
+    FCI.IsProof = IsProofFn;
+    CurrentContractFunction = Result;
+  };
+  auto ResetContractParsingState = [&] {
+    CurrentContractReturnType = QualType();
+  };
+
+  // A semicolon after the clauses makes this a contracted declaration. The
+  // canonical contract side table lets a later definition inherit the clauses.
+  if (Tok.is(tok::semi)) {
+    Decl *Res =
+        ParseDeclarationAfterDeclaratorAndAttributes(D, TemplateInfo);
+    D.complete(Res);
+    AttachFunctionContract(Res);
+    ResetContractParsingState();
+    D.getMutableDeclSpec().abort();
+    ConsumeToken();
+    return Res;
+  }
+
   // We should have either an opening brace, or in a C++ constructor,
   // we may have a colon.
   if (Tok.isNot(tok::l_brace) &&
@@ -1548,27 +1591,10 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
   D.complete(Res);
 
   // CppVerify: store contract clauses on the FunctionDecl.
-  if (Res && (!ContractPreconditions.empty() ||
-              !ContractPostconditions.empty() || !ContractModifies.empty() ||
-              !ContractAliases.empty() || !ContractRecommends.empty() ||
-              !ContractDecreases.empty() || IsSpecFn || IsProofFn)) {
-    if (auto *FD = dyn_cast<FunctionDecl>(Res)) {
-      FunctionContractInfo &FCI =
-          Actions.getASTContext().getOrCreateFunctionContract(FD);
-      FCI.Preconditions = std::move(ContractPreconditions);
-      FCI.Postconditions = std::move(ContractPostconditions);
-      FCI.Modifies = std::move(ContractModifies);
-      FCI.Aliases = std::move(ContractAliases);
-      FCI.Recommends = std::move(ContractRecommends);
-      FCI.Decreases = std::move(ContractDecreases);
-      FCI.IsSpec = IsSpecFn;
-      FCI.IsProof = IsProofFn;
-      CurrentContractFunction = Res;
-    }
-  }
+  AttachFunctionContract(Res);
 
   // Reset contract parsing state so it doesn't leak into subsequent functions.
-  CurrentContractReturnType = QualType();
+  ResetContractParsingState();
   // Note: CurrentContractFunction is intentionally kept alive — it can be
   // used by the VCGen backend later. InContractPostcondition was already
   // reset after each post(...) clause above.

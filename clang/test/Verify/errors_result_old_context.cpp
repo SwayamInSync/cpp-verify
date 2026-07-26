@@ -68,3 +68,12 @@ int f6(int n)
   }
   return i;
 }
+
+// ---------------------------------------------------------------------------
+// 7. result has no function-entry value for old()
+// ---------------------------------------------------------------------------
+int f7(int x)
+  post(old(result) == x) // expected-error {{'result' has no value in the function pre-state}}
+{
+  return x;
+}

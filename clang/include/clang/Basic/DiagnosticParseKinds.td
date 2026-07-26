@@ -1894,8 +1894,12 @@ def err_contract_expected_semi : Error<
   "expected ';' after contract_assert">;
 def err_contract_expected_body : Error<
   "expected '{' after ghost">;
+def err_contract_redeclaration : Error<
+  "contract clauses may only be specified on one declaration of a function">;
 def err_result_outside_postcondition : Error<
   "'result' can only be used in postconditions">;
+def err_result_in_old_expression : Error<
+  "'result' has no value in the function pre-state">;
 def err_old_outside_postcondition : Error<
   "'old' can only be used in postconditions">;
 def warn_contract_member_function_unsupported : Warning<

@@ -3633,7 +3633,10 @@ ExprResult Parser::ParseOldExpr() {
   }
   SourceLocation LParenLoc = ConsumeParen();
 
+  bool WasInOldExpression = InOldExpression;
+  InOldExpression = true;
   ExprResult Inner = ParseExpression();
+  InOldExpression = WasInOldExpression;
   if (Inner.isInvalid()) {
     SkipUntil(tok::r_paren, StopAtSemi);
     return ExprError();
@@ -3659,6 +3662,10 @@ ExprResult Parser::ParseResultExpr() {
   // 'result' is only valid in postconditions.
   if (!InContractPostcondition) {
     Diag(ResultLoc, diag::err_result_outside_postcondition);
+    return ExprError();
+  }
+  if (InOldExpression) {
+    Diag(ResultLoc, diag::err_result_in_old_expression);
     return ExprError();
   }
 

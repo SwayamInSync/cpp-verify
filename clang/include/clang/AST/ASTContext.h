@@ -97,6 +97,7 @@ class BuiltinTemplateDecl;
 
 /// Contract information attached to a FunctionDecl via side table.
 struct FunctionContractInfo {
+  const FunctionDecl *ContractDecl = nullptr;
   SmallVector<Expr *, 2> Preconditions;
   SmallVector<Expr *, 2> Postconditions;
   SmallVector<Expr *, 4> Modifies;
