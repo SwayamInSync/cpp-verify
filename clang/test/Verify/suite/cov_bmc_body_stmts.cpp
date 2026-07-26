@@ -3,7 +3,7 @@
 spec int bump(int x) { return x + 1; }
 
 int loop_mix(int n, int *p)
-  pre(n >= 0 && n <= 1)
+  pre(n >= 0 && n <= 1 && p != 0)
   modifies(*p)
   post(result >= 0)
 {

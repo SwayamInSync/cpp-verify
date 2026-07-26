@@ -29,6 +29,7 @@ int use_rec(int n)
   post(result == rec(n))
   decreases(n)
 {
+  ghost { reveal_with_fuel(rec, 3); }
   return rec(n);
 }
 

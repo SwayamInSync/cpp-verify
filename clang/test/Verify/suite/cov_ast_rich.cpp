@@ -13,7 +13,7 @@ int inc(int x)
 }
 
 int rich(int n, int *p)
-  pre(n >= 0 && n <= 2)
+  pre(n >= 0 && n <= 2 && p != 0)
   modifies(*p)
   post(result >= 0)
 {

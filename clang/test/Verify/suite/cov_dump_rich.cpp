@@ -7,7 +7,7 @@ struct Pair {
 };
 
 int swap_post(int *x, int *y)
-  pre(x != y)
+  pre(x != 0 && y != 0 && x != y)
   modifies(*x, *y)
   post(old(*x) == *y && old(*y) == *x)
 {
@@ -18,7 +18,8 @@ int swap_post(int *x, int *y)
 }
 
 int check_pair(Pair p)
-  pre(p.a >= 0 && p.b >= 0 && forall(i, 0, 1, i >= 0))
+  pre(p.a >= 0 && p.a <= 1000 && p.b >= 0 && p.b <= 1000)
+  pre(forall(i, 0, 1, i >= 0))
   post(result == p.a + p.b)
 {
   return p.a + p.b;

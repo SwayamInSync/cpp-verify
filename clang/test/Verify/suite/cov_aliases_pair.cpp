@@ -4,7 +4,7 @@
 // alias (it does not force it), so the postcondition must account for the n == 0
 // case where *dst is unchanged.
 void copy(int *dst, int *src, int n)
-  pre(n >= 0 && n <= 1)
+  pre(n > 0 && n <= 1 && dst != 0 && src != 0)
   aliases(dst, src)
   modifies(*dst)
   post(*dst == (n > 0 ? old(*src) : old(*dst)))

@@ -1,7 +1,8 @@
 // RUN: %cpp-verify --backend=lean --lean-out=%t.lean %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: grep -q 'theorem cppverify_goal' %t.lean
 
 int swap_val(int *a, int *b)
-  pre(a != b)
+  pre(a != 0 && b != 0 && a != b)
   modifies(*a, *b)
   post(*a == old(*b) && *b == old(*a))
 {
@@ -11,5 +12,4 @@ int swap_val(int *a, int *b)
   return 0;
 }
 
-// VERIFY: Verified: swap_val
-// VERIFY: theorem cppverify_goal
+// VERIFY: Verified: lean export: swap_val

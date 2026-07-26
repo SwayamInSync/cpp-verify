@@ -29,7 +29,7 @@ int exec_client(int x)
 }
 
 int loop_client(int n, int *p)
-  pre(n >= 0 && n <= 1)
+  pre(n >= 0 && n <= 1 && p != 0)
   pre(forall(i, 0, n, i >= 0))
   modifies(*p)
   post(result >= 0)
@@ -38,7 +38,7 @@ int loop_client(int n, int *p)
   int i = 0;
   int s = 0;
   while (i < n)
-    invariant(s >= 0)
+    invariant(i >= 0 && i <= n && s == i)
     decreases(n - i)
   {
     if (i == 0)
