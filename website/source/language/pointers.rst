@@ -1,7 +1,8 @@
 Pointers
 ========
 
-- Heap modeled internally (Z3 array, bit-vector addresses → values)
+- Heap modeled internally as a Z3 array from mathematical addresses to
+  width-neutral integer cells
 - ``modifies(*p, ...)`` — frame
 - ``aliases(p, q)`` — allow aliasing
 - Implicit ``p != q`` for distinct mutable parameters
@@ -34,9 +35,9 @@ verifier gets this from array theory:
      post(p[i] == v && p[j] == 5)        // p[j] is preserved
    { p[i] = v; }
 
-``modifies(*p)`` frames the **whole region** reachable through ``p`` — a write to
-any ``p[i]`` is covered. A write through a *different* base pointer that is not in
-``modifies`` is still rejected.
+Within a verified function body, ``modifies(*p)`` authorizes the **whole
+region** rooted at ``p`` — a write to any ``p[i]`` is covered. A write through
+a *different* base pointer that is not in ``modifies`` is still rejected.
 
 To reason about a whole range, use a bounded quantifier in the loop invariant and
 postcondition (the half-open bound ``[lo, hi)`` is the implicit trigger). A
@@ -82,5 +83,22 @@ the non-overlap above are exact (no wraparound). Array indices used in
 disjointness facts should be bounded (as in real buffer code); an *unbounded*
 pure-disequality disjointness (``i != k`` with no range) may report ``unknown``
 (see :doc:`limitations`).
+
+Frames also preserve unrelated objects across a write:
+
+.. code-block:: cpp
+
+   void write_result(int *out, int *preserved, int value)
+     pre(out != nullptr && preserved != nullptr)
+     modifies(*out)
+     post(*out == value)
+     post(*preserved == old(*preserved))
+   {
+     *out = value;
+   }
+
+Distinct mutable pointer parameters are non-aliasing by default. The
+``modifies(*out)`` clause permits the store and frames ``*preserved`` at its
+entry value.
 
 See :doc:`../book/part-ii/ch14-pointers-frames-modifies`.

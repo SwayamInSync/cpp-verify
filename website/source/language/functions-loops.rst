@@ -11,6 +11,24 @@ Functions
      post(result > x)
    { return x + 1; }
 
+Contracts may instead appear on a forward declaration.  A later definition
+inherits that declaration's contract even when its parameter names differ::
+
+   int f(int value)
+     pre(value > 0)
+     post(result > value);
+
+   int f(int x) { return x + 1; }
+
+A contracted declaration with no definition is an explicit trusted interface.
+Calls are verified against its contract, and ``cpp-verify`` emits a warning that
+the external contract is being assumed rather than reporting it as verified.
+
+An uncontracted ``constexpr`` definition may be lifted for use in contract
+expressions.  Once a ``constexpr`` function has executable ``pre``/``post``
+clauses, it remains a modular executable function: calls must satisfy its
+preconditions and cannot be used as pure contract expressions.
+
 Loops
 -----
 
@@ -59,3 +77,13 @@ Each ``decreases`` expression must be integer-typed. A comma-separated tuple
 strictly decrease in lexicographic order (some component drops while every
 earlier component stays equal), with all components non-negative. This proves
 termination of nested counters and Ackermann-style recursion.
+
+Recursive ``spec``, ``proof``, and executable functions use the same
+well-founded, lexicographic discipline. Each recursive call must occur on a
+path where its ``decreases`` measure is nonnegative and strictly smaller than
+the caller's. Calls hidden after assignment-only or fallthrough branches are
+checked as well.
+
+The end-to-end acceptance programs include recursive and iterative factorial
+and Fibonacci implementations, each proved against a mathematical recursive
+specification at the exact signed-``int`` boundary.

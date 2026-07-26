@@ -17,6 +17,8 @@ range (the common case for loop invariants and postconditions) is well supported
 report ``unknown`` — use a concrete range, or supply the witness, when you need
 one.
 
-``old`` is only valid in postconditions (and nested expressions there). ``result`` is only valid
-in postconditions. Integer operators follow the function kind: ``spec`` uses mathematical integers;
-``proof`` and executable code use machine integers (see :doc:`integers`).
+``old`` is only valid in postconditions (and nested expressions there).
+``result`` is only valid in postconditions and cannot occur inside ``old``
+because a return value has no function-entry state. Integer operators follow
+the function kind: ``spec`` uses mathematical integers; ``proof`` and
+executable code use machine integers (see :doc:`integers`).
