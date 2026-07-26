@@ -14,12 +14,27 @@ namespace verify {
 inline constexpr const char *VHeapName = "__heap";
 
 enum class VBinOp {
-  Add, Sub, Mul, Div, Rem,
-  Lt, Le, Gt, Ge, Eq, Ne,
-  And, Or,
+  Add,
+  Sub,
+  Mul,
+  Div,
+  Rem,
+  BitAnd,
+  BitOr,
+  BitXor,
+  Shl,
+  Shr,
+  Lt,
+  Le,
+  Gt,
+  Ge,
+  Eq,
+  Ne,
+  And,
+  Or,
 };
 
-enum class VUnaryOp { Neg, Not };
+enum class VUnaryOp { Neg, Not, BitNot, ValidPtr };
 
 /// Which signed-overflow predicate a VOverflowCheckExpr asserts the absence of.
 enum class VOverflowOp { Add, Sub, Mul, Neg, SDiv };
@@ -27,8 +42,21 @@ enum class VOverflowOp { Add, Sub, Mul, Neg, SDiv };
 class VExpr {
 public:
   enum Kind {
-    Literal, Var, BinOp, UnaryOp, Cast, Load, Result, Old, Conditional,
-    Forall, Exists, HeapStore, FieldAccess, SpecCall, OverflowCheck
+    Literal,
+    Var,
+    BinOp,
+    UnaryOp,
+    Cast,
+    Load,
+    Result,
+    Old,
+    Conditional,
+    Forall,
+    Exists,
+    HeapStore,
+    FieldAccess,
+    SpecCall,
+    OverflowCheck
   };
 
   Kind K;
@@ -43,9 +71,11 @@ protected:
 
 class VLiteralExpr : public VExpr {
 public:
-  int64_t Value;
+  std::string Value;
   VLiteralExpr(int64_t V, VType Ty, SourceLocation Loc)
-      : VExpr(Literal, Ty, Loc), Value(V) {}
+      : VExpr(Literal, Ty, Loc), Value(std::to_string(V)) {}
+  VLiteralExpr(std::string V, VType Ty, SourceLocation Loc)
+      : VExpr(Literal, Ty, Loc), Value(std::move(V)) {}
 };
 
 class VVarExpr : public VExpr {
@@ -69,7 +99,8 @@ class VUnaryOpExpr : public VExpr {
 public:
   VUnaryOp Op;
   std::unique_ptr<VExpr> Operand;
-  VUnaryOpExpr(VUnaryOp Op, std::unique_ptr<VExpr> O, VType Ty, SourceLocation Loc)
+  VUnaryOpExpr(VUnaryOp Op, std::unique_ptr<VExpr> O, VType Ty,
+               SourceLocation Loc)
       : VExpr(UnaryOp, Ty, Loc), Op(Op), Operand(std::move(O)) {}
 };
 
@@ -116,32 +147,37 @@ public:
 class VQuantifiedExpr : public VExpr {
 public:
   std::string Binder;
+  VType BinderType;
   std::unique_ptr<VExpr> Lo;
   std::unique_ptr<VExpr> Hi;
   std::unique_ptr<VExpr> Body;
   VQuantifiedExpr(Kind K, std::string Binder, std::unique_ptr<VExpr> Lo,
                   std::unique_ptr<VExpr> Hi, std::unique_ptr<VExpr> Body,
-                  SourceLocation Loc)
+                  SourceLocation Loc,
+                  VType BinderType = VType::makeInt32(VIntMode::Machine))
       : VExpr(K, VType::makeBool(), Loc), Binder(std::move(Binder)),
-        Lo(std::move(Lo)), Hi(std::move(Hi)), Body(std::move(Body)) {}
+        BinderType(BinderType), Lo(std::move(Lo)), Hi(std::move(Hi)),
+        Body(std::move(Body)) {}
 };
 
 class VForallExpr : public VQuantifiedExpr {
 public:
   VForallExpr(std::string Binder, std::unique_ptr<VExpr> Lo,
               std::unique_ptr<VExpr> Hi, std::unique_ptr<VExpr> Body,
-              SourceLocation Loc)
+              SourceLocation Loc,
+              VType BinderType = VType::makeInt32(VIntMode::Machine))
       : VQuantifiedExpr(Forall, std::move(Binder), std::move(Lo), std::move(Hi),
-                        std::move(Body), Loc) {}
+                        std::move(Body), Loc, BinderType) {}
 };
 
 class VExistsExpr : public VQuantifiedExpr {
 public:
   VExistsExpr(std::string Binder, std::unique_ptr<VExpr> Lo,
               std::unique_ptr<VExpr> Hi, std::unique_ptr<VExpr> Body,
-              SourceLocation Loc)
+              SourceLocation Loc,
+              VType BinderType = VType::makeInt32(VIntMode::Machine))
       : VQuantifiedExpr(Exists, std::move(Binder), std::move(Lo), std::move(Hi),
-                        std::move(Body), Loc) {}
+                        std::move(Body), Loc, BinderType) {}
 };
 
 /// Passive heap update: HeapAfter == store(HeapBefore, Ptr, Val).
@@ -151,8 +187,9 @@ public:
   std::string HeapAfter;
   std::unique_ptr<VExpr> Ptr;
   std::unique_ptr<VExpr> Val;
-  VHeapStoreExpr(std::string Before, std::string After, std::unique_ptr<VExpr> P,
-                 std::unique_ptr<VExpr> V, SourceLocation Loc)
+  VHeapStoreExpr(std::string Before, std::string After,
+                 std::unique_ptr<VExpr> P, std::unique_ptr<VExpr> V,
+                 SourceLocation Loc)
       : VExpr(HeapStore, VType::makeBool(), Loc), HeapBefore(std::move(Before)),
         HeapAfter(std::move(After)), Ptr(std::move(P)), Val(std::move(V)) {}
 };
@@ -164,17 +201,23 @@ public:
   std::string Field;
   VFieldAccessExpr(std::unique_ptr<VExpr> B, std::string Field, VType Ty,
                    SourceLocation Loc)
-      : VExpr(FieldAccess, Ty, Loc), Base(std::move(B)), Field(std::move(Field)) {}
+      : VExpr(FieldAccess, Ty, Loc), Base(std::move(B)),
+        Field(std::move(Field)) {}
 };
 
 /// Call to a spec function (inlined or axiomatized during verification).
 class VSpecCallExpr : public VExpr {
 public:
+  /// User-facing source name.
   std::string Callee;
+  /// Signature-stable internal identity.
+  std::string CalleeIdentity;
   std::vector<std::unique_ptr<VExpr>> Args;
-  VSpecCallExpr(std::string Callee, std::vector<std::unique_ptr<VExpr>> Args,
-                VType Ty, SourceLocation Loc)
-      : VExpr(SpecCall, Ty, Loc), Callee(std::move(Callee)), Args(std::move(Args)) {}
+  VSpecCallExpr(std::string Callee, std::string CalleeIdentity,
+                std::vector<std::unique_ptr<VExpr>> Args, VType Ty,
+                SourceLocation Loc)
+      : VExpr(SpecCall, Ty, Loc), Callee(std::move(Callee)),
+        CalleeIdentity(std::move(CalleeIdentity)), Args(std::move(Args)) {}
 };
 
 /// UB safety obligation: a boolean that is true iff the signed `Op` of its

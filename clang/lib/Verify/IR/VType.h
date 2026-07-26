@@ -3,8 +3,8 @@
 #define LLVM_CLANG_VERIFY_IR_VTYPE_H
 
 namespace clang {
-class QualType;
 class ASTContext;
+class QualType;
 namespace verify {
 
 enum class VIntMode { Math, Machine };
@@ -15,36 +15,47 @@ enum class VTypeKind {
   Int32,
   Int64,
   Ptr,
+  Struct,
+  Unsupported,
 };
 
 struct VType {
   VTypeKind Kind = VTypeKind::Void;
   VIntMode IntMode = VIntMode::Machine;
-  /// For integer kinds: true if the C++ type is unsigned. Unsigned overflow is
-  /// defined (modular) in C++, so UB checking only instruments signed arithmetic.
-  bool Unsigned = false;
-  /// Bit width for integer kinds (8/16/32/64), as reported by the target's data
-  /// model (ASTContext::getTypeSize). Drives the bit-vector width in the Z3
-  /// encoder, so `long`/`long long` overflow is checked at the right width.
-  unsigned Width = 32;
+  bool IsSigned = true;
+  unsigned BitWidth = 32;
 
-  static VType makeVoid() { return VType{VTypeKind::Void, VIntMode::Machine}; }
-  static VType makeBool() { return VType{VTypeKind::Bool, VIntMode::Machine}; }
-  static VType makeInt32(VIntMode M) {
-    return VType{VTypeKind::Int32, M, false, 32};
+  static VType makeVoid() {
+    return VType{VTypeKind::Void, VIntMode::Machine, true, 0};
   }
-  static VType makePtr() { return VType{VTypeKind::Ptr, VIntMode::Machine}; }
+  static VType makeBool() {
+    return VType{VTypeKind::Bool, VIntMode::Machine, false, 1};
+  }
+  static VType makeInt32(VIntMode M, bool IsSigned = true) {
+    return VType{VTypeKind::Int32, M, IsSigned, 32};
+  }
+  static VType makeInt(VIntMode M, unsigned BitWidth, bool IsSigned = true) {
+    return VType{BitWidth > 32 ? VTypeKind::Int64 : VTypeKind::Int32, M,
+                 IsSigned, BitWidth};
+  }
+  static VType makePtr() {
+    return VType{VTypeKind::Ptr, VIntMode::Machine, false, 0};
+  }
+  static VType makeStruct() {
+    return VType{VTypeKind::Struct, VIntMode::Machine, false, 0};
+  }
+  static VType makeUnsupported() {
+    return VType{VTypeKind::Unsupported, VIntMode::Machine, false, 0};
+  }
 
-  /// Is this a signed integer kind (the only thing overflow checks apply to)?
   bool isSignedInt() const {
-    return (Kind == VTypeKind::Int32 || Kind == VTypeKind::Int64) && !Unsigned;
+    return (Kind == VTypeKind::Int32 || Kind == VTypeKind::Int64) && IsSigned;
   }
 
-  /// Bit width clamped to the supported set, for bit-vector encoding.
-  unsigned bvWidth() const { return Width >= 64 ? 64 : 32; }
+  unsigned bvWidth() const { return BitWidth; }
 
   static VType fromQualType(QualType QT, VIntMode DefaultMode,
-                            const ASTContext *Ctx = nullptr);
+                            const ASTContext &Ctx);
 };
 
 } // namespace verify

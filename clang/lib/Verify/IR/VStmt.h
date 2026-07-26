@@ -4,8 +4,8 @@
 
 #include "VExpr.h"
 #include <map>
-#include <set>
 #include <memory>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -16,8 +16,21 @@ namespace verify {
 class VStmt {
 public:
   enum Kind {
-    Assign, Store, If, While, Call, Assert, Assume, Return, Seq, Havoc,
-    GhostBlock, RevealWithFuel, HideSpec, RevealSpec, ContractAssert
+    Assign,
+    Store,
+    If,
+    While,
+    Call,
+    Assert,
+    Assume,
+    Return,
+    Seq,
+    Havoc,
+    GhostBlock,
+    RevealWithFuel,
+    HideSpec,
+    RevealSpec,
+    ContractAssert
   };
 
   Kind K;
@@ -38,7 +51,8 @@ struct VAssignStmt : VStmt {
 struct VStoreStmt : VStmt {
   std::unique_ptr<VExpr> Ptr;
   std::unique_ptr<VExpr> Value;
-  VStoreStmt(std::unique_ptr<VExpr> P, std::unique_ptr<VExpr> V, SourceLocation Loc)
+  VStoreStmt(std::unique_ptr<VExpr> P, std::unique_ptr<VExpr> V,
+             SourceLocation Loc)
       : VStmt(Store, Loc), Ptr(std::move(P)), Value(std::move(V)) {}
 };
 
@@ -48,7 +62,8 @@ struct VIfStmt : VStmt {
   std::vector<std::unique_ptr<VStmt>> Else;
   VIfStmt(std::unique_ptr<VExpr> C, std::vector<std::unique_ptr<VStmt>> T,
           std::vector<std::unique_ptr<VStmt>> E, SourceLocation Loc)
-      : VStmt(If, Loc), Cond(std::move(C)), Then(std::move(T)), Else(std::move(E)) {}
+      : VStmt(If, Loc), Cond(std::move(C)), Then(std::move(T)),
+        Else(std::move(E)) {}
 };
 
 struct VAssertStmt : VStmt {
@@ -96,13 +111,18 @@ struct VWhileStmt : VStmt {
 };
 
 struct VCallStmt : VStmt {
+  /// User-facing source name.
   std::string Callee;
+  /// Signature-stable internal identity.
+  std::string CalleeIdentity;
   std::vector<std::unique_ptr<VExpr>> Args;
   std::string ResultTarget;
   bool IsProofCall = false;
-  VCallStmt(std::string Callee, std::vector<std::unique_ptr<VExpr>> Args,
-            std::string ResultTarget, SourceLocation Loc, bool IsProofCall = false)
-      : VStmt(Call, Loc), Callee(std::move(Callee)), Args(std::move(Args)),
+  VCallStmt(std::string Callee, std::string CalleeIdentity,
+            std::vector<std::unique_ptr<VExpr>> Args, std::string ResultTarget,
+            SourceLocation Loc, bool IsProofCall = false)
+      : VStmt(Call, Loc), Callee(std::move(Callee)),
+        CalleeIdentity(std::move(CalleeIdentity)), Args(std::move(Args)),
         ResultTarget(std::move(ResultTarget)), IsProofCall(IsProofCall) {}
 };
 
@@ -140,17 +160,23 @@ struct VContractAssertStmt : VStmt {
 std::unique_ptr<VStmt> cloneVStmt(const VStmt *S);
 
 struct VFunction {
+  /// User-facing source name.
   std::string Name;
+  /// Signature-stable internal identity.
+  std::string Identity;
   VType ReturnType;
   VIntMode IntMode = VIntMode::Machine;
   bool IsSpec = false;
   bool IsProof = false;
   bool IsConstexprSpec = false;
+  bool RequiresCallDefinedness = false;
+  bool IsExternalContract = false;
   bool NeedsDecreasesCheck = false;
   std::map<std::string, unsigned> SpecFuel;
   std::set<std::string> HiddenSpecs;
   std::set<std::string> RevealedSpecs;
   std::vector<std::pair<std::string, VType>> Params;
+  std::vector<std::pair<std::string, VType>> ReturnFields;
   std::vector<std::unique_ptr<VExpr>> Preconditions;
   std::vector<std::unique_ptr<VExpr>> Postconditions;
   std::vector<std::unique_ptr<VExpr>> Recommends;

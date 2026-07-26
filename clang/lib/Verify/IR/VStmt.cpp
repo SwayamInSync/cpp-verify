@@ -10,7 +10,8 @@ std::unique_ptr<VStmt> verify::cloneVStmt(const VStmt *S) {
   switch (S->K) {
   case VStmt::Assign: {
     const auto &A = static_cast<const VAssignStmt &>(*S);
-    return std::make_unique<VAssignStmt>(A.Target, cloneVExpr(A.Value.get()), A.Loc);
+    return std::make_unique<VAssignStmt>(A.Target, cloneVExpr(A.Value.get()),
+                                         A.Loc);
   }
   case VStmt::Store: {
     const auto &St = static_cast<const VStoreStmt &>(*S);
@@ -47,12 +48,32 @@ std::unique_ptr<VStmt> verify::cloneVStmt(const VStmt *S) {
     std::vector<std::unique_ptr<VExpr>> Args;
     for (const auto &A : C.Args)
       Args.push_back(cloneVExpr(A.get()));
-    return std::make_unique<VCallStmt>(C.Callee, std::move(Args), C.ResultTarget,
-                                       C.Loc, C.IsProofCall);
+    return std::make_unique<VCallStmt>(C.Callee, C.CalleeIdentity,
+                                       std::move(Args), C.ResultTarget, C.Loc,
+                                       C.IsProofCall);
+  }
+  case VStmt::Assert: {
+    const auto &A = static_cast<const VAssertStmt &>(*S);
+    return std::make_unique<VAssertStmt>(cloneVExpr(A.Cond.get()), A.Loc);
+  }
+  case VStmt::Assume: {
+    const auto &A = static_cast<const VAssumeStmt &>(*S);
+    return std::make_unique<VAssumeStmt>(cloneVExpr(A.Cond.get()), A.Loc);
   }
   case VStmt::Return: {
     const auto &R = static_cast<const VReturnStmt &>(*S);
     return std::make_unique<VReturnStmt>(cloneVExpr(R.Value.get()), R.Loc);
+  }
+  case VStmt::Seq: {
+    const auto &Seq = static_cast<const VSeqStmt &>(*S);
+    std::vector<std::unique_ptr<VStmt>> Stmts;
+    for (const auto &Nested : Seq.Stmts)
+      Stmts.push_back(cloneVStmt(Nested.get()));
+    return std::make_unique<VSeqStmt>(std::move(Stmts), Seq.Loc);
+  }
+  case VStmt::Havoc: {
+    const auto &H = static_cast<const VHavocStmt &>(*S);
+    return std::make_unique<VHavocStmt>(H.Target, H.Loc);
   }
   case VStmt::GhostBlock: {
     const auto &G = static_cast<const VGhostBlockStmt &>(*S);
@@ -75,26 +96,30 @@ std::unique_ptr<VStmt> verify::cloneVStmt(const VStmt *S) {
   }
   case VStmt::ContractAssert: {
     const auto &A = static_cast<const VContractAssertStmt &>(*S);
-    return std::make_unique<VContractAssertStmt>(cloneVExpr(A.Cond.get()), A.Loc);
+    return std::make_unique<VContractAssertStmt>(cloneVExpr(A.Cond.get()),
+                                                 A.Loc);
   }
-  default:
-    return nullptr;
   }
+  return nullptr;
 }
 
 VFunction verify::cloneVFunction(const VFunction &Fn) {
   VFunction Out;
   Out.Name = Fn.Name;
+  Out.Identity = Fn.Identity;
   Out.ReturnType = Fn.ReturnType;
   Out.IntMode = Fn.IntMode;
   Out.IsSpec = Fn.IsSpec;
   Out.IsProof = Fn.IsProof;
   Out.IsConstexprSpec = Fn.IsConstexprSpec;
+  Out.RequiresCallDefinedness = Fn.RequiresCallDefinedness;
+  Out.IsExternalContract = Fn.IsExternalContract;
   Out.NeedsDecreasesCheck = Fn.NeedsDecreasesCheck;
   Out.SpecFuel = Fn.SpecFuel;
   Out.HiddenSpecs = Fn.HiddenSpecs;
   Out.RevealedSpecs = Fn.RevealedSpecs;
   Out.Params = Fn.Params;
+  Out.ReturnFields = Fn.ReturnFields;
   for (const auto &P : Fn.Preconditions)
     Out.Preconditions.push_back(cloneVExpr(P.get()));
   for (const auto &P : Fn.Postconditions)
