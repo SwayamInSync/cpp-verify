@@ -1,21 +1,21 @@
 //===--- Verifier.cpp - CppVerify driver ----------------------------------===//
-#include "clang/AST/ASTContext.h"
+#include "Verifier.h"
+#include "../Backend/LeanBackend.h"
+#include "../Backend/VCMachine.h"
+#include "../Backend/WPCalc.h"
+#include "../Backend/Z3Encode.h"
 #include "../Frontend/ASTConverter.h"
-#include "../Transform/Passivize.h"
+#include "../IR/VStmt.h"
 #include "../Transform/LoopUnroll.h"
+#include "../Transform/Passivize.h"
 #include "../Transform/SpecInline.h"
 #include "../Transform/UBChecks.h"
-#include "../IR/VStmt.h"
-#include "../Backend/WPCalc.h"
-#include "../Backend/VCMachine.h"
-#include "../Backend/Z3Encode.h"
-#include "../Backend/LeanBackend.h"
-#include "Verifier.h"
 #include "DumpIR.h"
+#include "clang/AST/ASTContext.h"
 #include "llvm/Support/FileSystem.h"
-#include <optional>
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
+#include <optional>
 
 using namespace clang;
 using namespace verify;
@@ -34,36 +34,18 @@ class Verifier {
   llvm::raw_ostream *DumpOS = nullptr;
   std::vector<VerifyDiagnostic> Diags;
 
-  void checkRecommendsImplied(const std::vector<std::unique_ptr<VFunction>> &Fns,
-                              VerifyBackend &Backend) {
-    for (const auto &Fn : Fns) {
-      if (Fn->Recommends.empty())
-        continue;
-      PassiveProgram PP;
-      for (const auto &Pre : Fn->Preconditions)
-        PP.EntryAssumes.push_back(cloneVExpr(Pre.get()));
-      for (const auto &Rec : Fn->Recommends)
-        PP.ExitAsserts.push_back(cloneVExpr(Rec.get()));
-      if (PP.ExitAsserts.empty())
-        continue;
-      VerifyResult R = Backend.verifyPassive(PP);
-      if (R.Status == VerifyStatus::Failed)
-        Diags.push_back({VerifyDiagnostic::Warning,
-                         "recommends not implied by preconditions in " + Fn->Name});
-    }
-  }
-
   void checkCalleeRecommendsOnFailure(const VFunction &Caller,
-                                    const FunctionMap &FnMap,
-                                    VerifyBackend &Backend) {
+                                      const FunctionMap &FnMap,
+                                      VerifyBackend &Backend) {
     std::vector<const VSpecCallExpr *> Calls;
     collectSpecCallsInFunction(Caller, Calls);
     for (const VSpecCallExpr *C : Calls) {
-      auto It = FnMap.find(C->Callee);
+      auto It = FnMap.find(C->CalleeIdentity);
       if (It == FnMap.end() || It->second->Recommends.empty())
         continue;
       std::map<std::string, std::unique_ptr<VExpr>> ArgMap;
-      for (unsigned I = 0; I < It->second->Params.size() && I < C->Args.size(); ++I)
+      for (unsigned I = 0; I < It->second->Params.size() && I < C->Args.size();
+           ++I)
         ArgMap[It->second->Params[I].first] = cloneVExpr(C->Args[I].get());
       PassiveProgram PP;
       for (const auto &Pre : Caller.Preconditions)
@@ -72,12 +54,12 @@ class Verifier {
         auto Inst = substParamsInExpr(Rec.get(), ArgMap);
         if (!Inst)
           continue;
-        auto NotRec = std::make_unique<VUnaryOpExpr>(VUnaryOp::Not, std::move(Inst),
-                                                     VType::makeBool(), C->Loc);
-        PP.ExitAsserts.push_back(std::move(NotRec));
+        Inst = SpecInliner(FnMap, Caller.SpecFuel).inlineExpr(std::move(Inst));
+        PP.ExitAsserts.push_back(std::move(Inst));
       }
       if (PP.ExitAsserts.empty())
         continue;
+      PP.CallerIntMode = Caller.IntMode;
       VerifyResult R = Backend.verifyPassive(PP);
       if (R.Status == VerifyStatus::Failed)
         Diags.push_back({VerifyDiagnostic::Warning,
@@ -87,7 +69,8 @@ class Verifier {
   }
 
 public:
-  Verifier(ASTContext &Ctx, const VerifyOptions &Opts, llvm::raw_ostream &DumpOS)
+  Verifier(ASTContext &Ctx, const VerifyOptions &Opts,
+           llvm::raw_ostream &DumpOS)
       : Ctx(Ctx), Opts(Opts), DumpOS(&DumpOS) {}
 
   bool run() {
@@ -98,20 +81,21 @@ public:
     if (!Converter.getErrors().empty())
       return false;
     if (Functions.empty()) {
-      Diags.push_back({VerifyDiagnostic::Warning, "no verifiable functions found"});
+      Diags.push_back(
+          {VerifyDiagnostic::Warning, "no verifiable functions found"});
       return true;
     }
 
     FunctionMap FnMap;
     for (const auto &Fn : Functions)
-      FnMap[Fn->Name] = Fn.get();
+      FnMap[Fn->Identity] = Fn.get();
 
     std::unique_ptr<llvm::raw_fd_ostream> LeanFile;
     llvm::raw_ostream *LeanOut = DumpOS;
     if (Opts.Backend == BackendKind::Lean && !Opts.LeanOutPath.empty()) {
       std::error_code EC;
-      LeanFile = std::make_unique<llvm::raw_fd_ostream>(
-          Opts.LeanOutPath, EC, llvm::sys::fs::OF_Text);
+      LeanFile = std::make_unique<llvm::raw_fd_ostream>(Opts.LeanOutPath, EC,
+                                                        llvm::sys::fs::OF_Text);
       if (EC) {
         Diags.push_back({VerifyDiagnostic::Error,
                          "cannot open lean output: " + Opts.LeanOutPath});
@@ -131,8 +115,14 @@ public:
     const bool MultiLayerDump = llvm::popcount(DumpLayers) > 1;
     bool AllOk = true;
     bool AnyFailed = false;
+    std::set<std::string> FailedCallers;
 
     for (const auto &Fn : Functions) {
+      if (Fn->IsExternalContract) {
+        Diags.push_back({VerifyDiagnostic::Warning,
+                         "assuming external contract: " + Fn->Name});
+        continue;
+      }
       bool DumpedAny = false;
       auto dumpSep = [&]() {
         if (DumpedAny && MultiLayerDump)
@@ -154,9 +144,9 @@ public:
           Inliner.prepareFunctionAxiomatic(*PreparedFn);
         else
           Inliner.prepareFunction(*PreparedFn);
-        // UB safety obligations: insert before passivization (and before any BMC
-        // unrolling, so the unroller copies them into every unrolled iteration).
-        // Bit-vector overflow predicates are Z3-only for now.
+        // UB safety obligations: insert before passivization (and before any
+        // BMC unrolling, so the unroller copies them into every unrolled
+        // iteration). Bit-vector overflow predicates are Z3-only for now.
         if (Opts.CheckUB && Opts.Backend == BackendKind::Z3)
           instrumentUBChecks(*PreparedFn);
         if (Opts.Backend == BackendKind::BMC) {
@@ -168,34 +158,38 @@ public:
 
       if (Fn->IsSpec && !Fn->NeedsDecreasesCheck) {
         if (Fn->IsConstexprSpec)
-          Diags.push_back(
-              {VerifyDiagnostic::Verified, "constexpr spec axiom: " + Fn->Name});
+          Diags.push_back({VerifyDiagnostic::Verified,
+                           "constexpr spec axiom: " + Fn->Name});
         else
-          Diags.push_back({VerifyDiagnostic::Verified, "spec axiom: " + Fn->Name});
+          Diags.push_back(
+              {VerifyDiagnostic::Verified, "spec axiom: " + Fn->Name});
         continue;
       }
 
-      if ((Fn->IsSpec || Fn->IsProof) && Fn->NeedsDecreasesCheck) {
+      if (Fn->NeedsDecreasesCheck) {
         PassiveProgram DecPP = buildDecreasesChecks(*Fn, FnMap);
-        if (!Fn->IsSpec && Opts.Backend != BackendKind::Lean) {
+        if (!Fn->IsSpec) {
           VerifyResult DR = Backend->verifyPassive(DecPP);
-          if (DR.Status == VerifyStatus::Failed) {
+          if (DR.Status != VerifyStatus::Verified) {
             AllOk = false;
             AnyFailed = true;
-            Diags.push_back({VerifyDiagnostic::Error,
-                             "decreases failed: " + Fn->Name});
+            if (!Fn->IsProof)
+              FailedCallers.insert(Fn->Identity);
+            Diags.push_back({DR.Status == VerifyStatus::Unknown
+                                 ? VerifyDiagnostic::Unknown
+                                 : VerifyDiagnostic::Error,
+                             "decreases " +
+                                 std::string(DR.Status == VerifyStatus::Unknown
+                                                 ? "unknown: "
+                                                 : "failed: ") +
+                                 Fn->Name});
             continue;
           }
         } else if (Fn->IsSpec) {
-          if (Opts.Backend == BackendKind::Lean) {
-            Diags.push_back({VerifyDiagnostic::Verified,
-                             "spec decreases: " + Fn->Name});
-            continue;
-          }
           VerifyResult R = Backend->verifyPassive(DecPP);
           if (R.Status == VerifyStatus::Verified)
-            Diags.push_back({VerifyDiagnostic::Verified,
-                             "spec decreases: " + Fn->Name});
+            Diags.push_back(
+                {VerifyDiagnostic::Verified, "spec decreases: " + Fn->Name});
           else if (R.Status == VerifyStatus::Failed) {
             AllOk = false;
             AnyFailed = true;
@@ -234,16 +228,32 @@ public:
         if (M.Goal)
           Z3Dump.dumpVC(M.Goal.get(), *DumpOS);
       }
+      if (DumpLayers)
+        DumpOS->flush();
 
       if (Opts.Backend == BackendKind::Lean) {
+        VerifyResult R;
         if (LeanOut != DumpOS) {
           *LeanOut << "\n/- function: " << Fn->Name << " -/\n";
-          exportLeanScratchPad(PP, *LeanOut);
+          R = exportLeanScratchPad(PP, *LeanOut, Opts.SolverTimeoutMs);
         } else {
-          exportLeanScratchPad(PP, *DumpOS);
+          R = exportLeanScratchPad(PP, *DumpOS, Opts.SolverTimeoutMs);
         }
-        Diags.push_back({VerifyDiagnostic::Verified,
-                         "lean export: " + Fn->Name});
+        if (R.Status == VerifyStatus::Verified) {
+          Diags.push_back(
+              {VerifyDiagnostic::Verified, "lean export: " + Fn->Name});
+        } else if (R.Status == VerifyStatus::Failed) {
+          AllOk = false;
+          AnyFailed = true;
+          Diags.push_back(
+              {VerifyDiagnostic::Error,
+               "verification failed: " + Fn->Name + " (lean export written)"});
+        } else {
+          AllOk = false;
+          AnyFailed = true;
+          Diags.push_back(
+              {VerifyDiagnostic::Unknown, "lean export check: " + Fn->Name});
+        }
         continue;
       }
 
@@ -253,6 +263,8 @@ public:
       } else if (R.Status == VerifyStatus::Failed) {
         AllOk = false;
         AnyFailed = true;
+        if (!Fn->IsProof)
+          FailedCallers.insert(Fn->Identity);
         std::string Msg = "verification failed: " + Fn->Name;
         if (!R.Message.empty())
           Msg += " (counterexample: " + R.Message + ")";
@@ -260,19 +272,23 @@ public:
       } else {
         AllOk = false;
         AnyFailed = true;
-        Diags.push_back({VerifyDiagnostic::Unknown, "unknown: " + Fn->Name});
+        if (!Fn->IsProof)
+          FailedCallers.insert(Fn->Identity);
+        std::string Message = Fn->Name;
+        if (!R.Message.empty())
+          Message += " (" + R.Message + ")";
+        Diags.push_back({VerifyDiagnostic::Unknown, std::move(Message)});
       }
     }
 
     if (AnyFailed && Opts.Backend == BackendKind::Z3) {
-      auto Z3 = createVerifyBackend(BackendKind::Z3, nullptr, 0);
-      checkRecommendsImplied(Functions, *Z3);
+      auto Z3 = createVerifyBackend(BackendKind::Z3, nullptr, 0,
+                                    Opts.SolverTimeoutMs);
       for (const auto &Fn : Functions) {
-        if (Fn->IsSpec || Fn->IsProof)
+        if (!FailedCallers.count(Fn->Identity) || Fn->IsSpec || Fn->IsProof ||
+            Fn->IsExternalContract)
           continue;
-        VFunction Prepared = cloneVFunction(*Fn);
-        SpecInliner(FnMap, Prepared.SpecFuel).prepareFunctionAxiomatic(Prepared);
-        checkCalleeRecommendsOnFailure(Prepared, FnMap, *Z3);
+        checkCalleeRecommendsOnFailure(*Fn, FnMap, *Z3);
       }
     }
 

@@ -50,6 +50,16 @@ static const char *binOpToken(VBinOp Op) {
     return "/";
   case VBinOp::Rem:
     return "%";
+  case VBinOp::BitAnd:
+    return "&";
+  case VBinOp::BitOr:
+    return "|";
+  case VBinOp::BitXor:
+    return "^";
+  case VBinOp::Shl:
+    return "<<";
+  case VBinOp::Shr:
+    return ">>";
   case VBinOp::Lt:
     return "<";
   case VBinOp::Le:
@@ -80,7 +90,7 @@ void verify::dumpVExpr(const VExpr *E, llvm::raw_ostream &OS, unsigned Depth) {
   case VExpr::Literal: {
     const auto *L = static_cast<const VLiteralExpr *>(E);
     if (L->Ty.Kind == VTypeKind::Bool)
-      OS << (L->Value != 0 ? "true" : "false");
+      OS << (L->Value != "0" ? "true" : "false");
     else
       OS << L->Value;
     OS << "\n";
@@ -98,7 +108,11 @@ void verify::dumpVExpr(const VExpr *E, llvm::raw_ostream &OS, unsigned Depth) {
   }
   case VExpr::UnaryOp: {
     const auto *U = static_cast<const VUnaryOpExpr *>(E);
-    OS << (U->Op == VUnaryOp::Neg ? "-" : "!") << "\n";
+    OS << (U->Op == VUnaryOp::Neg      ? "-"
+           : U->Op == VUnaryOp::Not    ? "!"
+           : U->Op == VUnaryOp::BitNot ? "~"
+                                       : "valid_ptr")
+       << "\n";
     dumpVExpr(U->Operand.get(), OS, Depth + 1);
     break;
   }
@@ -119,21 +133,26 @@ void verify::dumpVExpr(const VExpr *E, llvm::raw_ostream &OS, unsigned Depth) {
     break;
   case VExpr::Conditional:
     OS << "ite\n";
-    dumpVExpr(static_cast<const VConditionalExpr *>(E)->Cond.get(), OS, Depth + 1);
-    dumpVExpr(static_cast<const VConditionalExpr *>(E)->Then.get(), OS, Depth + 1);
-    dumpVExpr(static_cast<const VConditionalExpr *>(E)->Else.get(), OS, Depth + 1);
+    dumpVExpr(static_cast<const VConditionalExpr *>(E)->Cond.get(), OS,
+              Depth + 1);
+    dumpVExpr(static_cast<const VConditionalExpr *>(E)->Then.get(), OS,
+              Depth + 1);
+    dumpVExpr(static_cast<const VConditionalExpr *>(E)->Else.get(), OS,
+              Depth + 1);
     break;
   case VExpr::Forall:
     OS << "forall " << static_cast<const VQuantifiedExpr *>(E)->Binder << "\n";
     dumpVExpr(static_cast<const VQuantifiedExpr *>(E)->Lo.get(), OS, Depth + 1);
     dumpVExpr(static_cast<const VQuantifiedExpr *>(E)->Hi.get(), OS, Depth + 1);
-    dumpVExpr(static_cast<const VQuantifiedExpr *>(E)->Body.get(), OS, Depth + 1);
+    dumpVExpr(static_cast<const VQuantifiedExpr *>(E)->Body.get(), OS,
+              Depth + 1);
     break;
   case VExpr::Exists:
     OS << "exists " << static_cast<const VQuantifiedExpr *>(E)->Binder << "\n";
     dumpVExpr(static_cast<const VQuantifiedExpr *>(E)->Lo.get(), OS, Depth + 1);
     dumpVExpr(static_cast<const VQuantifiedExpr *>(E)->Hi.get(), OS, Depth + 1);
-    dumpVExpr(static_cast<const VQuantifiedExpr *>(E)->Body.get(), OS, Depth + 1);
+    dumpVExpr(static_cast<const VQuantifiedExpr *>(E)->Body.get(), OS,
+              Depth + 1);
     break;
   case VExpr::HeapStore:
     OS << "heap_store\n";
@@ -234,7 +253,8 @@ static void dumpVStmt(const VStmt &S, llvm::raw_ostream &OS, unsigned Depth) {
   }
   case VStmt::ContractAssert:
     OS << "contract_assert\n";
-    dumpVExpr(static_cast<const VContractAssertStmt &>(S).Cond.get(), OS, Depth + 1);
+    dumpVExpr(static_cast<const VContractAssertStmt &>(S).Cond.get(), OS,
+              Depth + 1);
     break;
   case VStmt::RevealWithFuel:
     OS << "reveal_with_fuel\n";
@@ -268,7 +288,7 @@ void verify::dumpVFunction(const VFunction &Fn, llvm::raw_ostream &OS) {
 }
 
 void verify::dumpPassiveProgram(llvm::StringRef FnName, const PassiveProgram &P,
-                              llvm::raw_ostream &OS) {
+                                llvm::raw_ostream &OS) {
   ind(OS, 0) << "passive " << FnName << "\n";
   if (!P.ResultVarName.empty())
     ind(OS, 1) << "result " << P.ResultVarName << "\n";
@@ -292,7 +312,8 @@ void verify::dumpVC(llvm::StringRef FnName, const VExpr *VC,
 }
 
 void verify::dumpZ3(const VExpr *VC, llvm::raw_ostream &OS) {
-  VCMachine M = VCMachine::fromVExpr(VC, "__result_0", std::string(VHeapName) + "_0");
+  VCMachine M =
+      VCMachine::fromVExpr(VC, "__result_0", std::string(VHeapName) + "_0");
   Z3Encoder Enc;
   if (M.Goal)
     Enc.dumpVC(M.Goal.get(), OS);
