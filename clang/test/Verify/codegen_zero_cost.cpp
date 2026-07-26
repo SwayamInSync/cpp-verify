@@ -14,7 +14,7 @@ proof void proof_trivial(int x)
 }
 
 int regular_with_ghost(int x)
-  pre(x >= 0)
+  pre(x >= 0 && x < 2147483647)
   post(result >= 0)
 {
   ghost {

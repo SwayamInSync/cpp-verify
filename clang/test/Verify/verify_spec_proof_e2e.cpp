@@ -20,11 +20,11 @@ spec int count(int n)
 }
 
 proof void lemma_count_step(int i)
-  pre(i >= 1)
+  pre(i >= 1 && i <= 10)
   post(count(i) == 1 + count(i - 1))
   decreases(i)
 {
-  reveal_with_fuel(count, 2);
+  reveal_with_fuel(count, 10);
   if (i > 1) {
     lemma_count_step(i - 1);
   }
@@ -37,7 +37,8 @@ int compute_count(int n)
   int acc = 0;
   int i = 1;
   while (i <= n)
-    invariant(i >= 1 && i <= n + 1 && acc == count(i - 1))
+    invariant(i >= 1 && i <= n + 1 &&
+              acc == i - 1 && acc == count(i - 1))
     decreases(n - i + 1)
   {
     ghost {

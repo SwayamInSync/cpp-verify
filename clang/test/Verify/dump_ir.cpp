@@ -21,7 +21,7 @@ int abs(int x)
 // L2-NOT: ======
 
 // L34: vc abs
-// L34: (and true
+// L34: !
 // L34: ======
 // L34-NOT: fn abs
 // L34-NOT: passive abs
@@ -32,5 +32,5 @@ int abs(int x)
 // ALL: ======
 // ALL: vc abs
 // ALL: ======
-// ALL: (and true
+// ALL: !
 // ALL: Verified:

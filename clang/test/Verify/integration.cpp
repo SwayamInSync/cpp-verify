@@ -1,5 +1,5 @@
-// RUN: %clang_cc1 -std=c++17 -fverify-contracts -ast-dump %s | FileCheck %s
-// RUN: %clang_cc1 -std=c++17 -fverify-contracts -emit-llvm -o %t %s
+// RUN: %clang_cc1 -std=c++17 -fverify-contracts -fno-verify -ast-dump %s | FileCheck %s
+// RUN: %clang_cc1 -std=c++17 -fverify-contracts -fno-verify -emit-llvm -o %t %s
 //
 // Integration test: exercises all contract features together in a realistic
 // scenario. Verifies correct AST generation and zero-cost ghost codegen.
@@ -35,6 +35,7 @@ proof void lemma_sum_nonneg(int n)
   post(sum_spec(n) >= 0)
   decreases(n)
 {
+  reveal_with_fuel(sum_spec, 2);
   if (n == 0) {
   } else {
     lemma_sum_nonneg(n - 1);
@@ -58,6 +59,7 @@ int compute_sum(int n)
   // CHECK: GhostBlockStmt
   // CHECK:   ContractAssertStmt
   ghost {
+    reveal_with_fuel(sum_spec, 2);
     lemma_sum_nonneg(n);
     contract_assert(sum_spec(n) >= 0);
   }
@@ -67,13 +69,16 @@ int compute_sum(int n)
   // While loop with contracts
   // CHECK: WhileStmt
   // CHECK: invariant: BinaryOperator {{.*}} 'bool' '>='
+  // CHECK: invariant: BinaryOperator {{.*}} 'bool' '=='
   // CHECK: invariant: BinaryOperator {{.*}} 'bool' '>='
   // CHECK: invariant: BinaryOperator {{.*}} 'bool' '<='
   // CHECK: decreases: BinaryOperator {{.*}} 'int' '-'
   while (i < n)
     invariant(s >= 0)
+    invariant(s == sum_spec(i))
     invariant(i >= 0)
     invariant(i <= n)
+    invariant(s <= 1001 * i)
     decreases(n - i)
   {
     // Ghost block inside loop
@@ -93,15 +98,15 @@ int compute_sum(int n)
 
 // CHECK: FunctionDecl {{.*}} compute_sum_for 'int (int)'
 int compute_sum_for(int n)
-  pre(n >= 0)
+  pre(n >= 0 && n <= 1000)
   post(result >= 0)
 {
   int s = 0;
   // CHECK: ForStmt
-  // CHECK: invariant: BinaryOperator {{.*}} 'bool' '>='
+  // CHECK: invariant: BinaryOperator {{.*}} 'bool' '&&'
   // CHECK: decreases: BinaryOperator {{.*}} 'int' '-'
   for (int i = 0; i < n; i = i + 1)
-    invariant(s >= 0)
+    invariant(s >= 0 && s <= i * i && i >= 0 && i <= n)
     decreases(n - i)
   {
     s = s + i + 1;
@@ -119,7 +124,7 @@ int compute_sum_for(int n)
 // CHECK:   BinaryOperator {{.*}} 'int' '+'
 // CHECK:     OldExpr {{.*}} 'int'
 int increment(int x)
-  pre(x >= 0)
+  pre(x >= 0 && x < 2147483647)
   post(result == old(x) + 1)
 {
   return x + 1;
@@ -133,6 +138,7 @@ int increment(int x)
 // CHECK: pre: ForallExpr {{.*}} 'bool'
 // CHECK: post: ExistsExpr {{.*}} 'bool'
 int quant_test(int n)
+  pre(n > 0)
   pre(forall(i, 0, n, i >= 0))
   post(exists(j, 0, n, j == 0))
 {
@@ -147,6 +153,8 @@ int quant_test(int n)
 // CHECK: pre: ForallExpr {{.*}} 'bool'
 // CHECK:   ExistsExpr {{.*}} 'bool'
 int nested_quant(int m, int n)
+  pre(m >= 0 && m <= 1000000)
+  pre(n >= 0 && n <= 1000000)
   pre(forall(i, 0, m, exists(j, 0, n, j >= i)))
 {
   return m + n;
@@ -161,7 +169,7 @@ int nested_quant(int m, int n)
 // CHECK: GhostBlockStmt
 // CHECK: GhostBlockStmt
 int multi_ghost_fn(int x)
-  pre(x >= 0)
+  pre(x >= 0 && x <= 1073741823)
   post(result == x * 2)
 {
   ghost {

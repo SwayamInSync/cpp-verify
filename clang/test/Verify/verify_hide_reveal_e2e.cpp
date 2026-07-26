@@ -4,7 +4,7 @@
 spec int triple(int x) { return 3 * x; }
 
 proof void lemma_triple(int x)
-  pre(x >= 0)
+  pre(x >= 0 && x <= 715827882)
   post(triple(x) == 3 * x)
 {
   ghost { reveal(triple); }

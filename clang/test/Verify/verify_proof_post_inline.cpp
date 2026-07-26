@@ -4,7 +4,7 @@
 spec int add_one(int x) { return x + 1; }
 
 proof void lemma_add(int x)
-  pre(x >= 0)
+  pre(x >= 0 && x < 2147483647)
   post(add_one(x) == x + 1)
 {
 }

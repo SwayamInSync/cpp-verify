@@ -35,7 +35,7 @@ int basic_ghost(int x)
 // CHECK: GhostBlockStmt
 // CHECK:   ContractAssertStmt
 int multi_ghost(int x)
-  pre(x >= 0)
+  pre(x >= 0 && x <= 1073741823)
   post(result == x + x)
 {
   ghost {
@@ -79,12 +79,12 @@ int multi_assert(int x)
 // CHECK:   GhostBlockStmt
 // CHECK:     ContractAssertStmt
 int ghost_in_loop(int n)
-  pre(n >= 0)
+  pre(n >= 0 && n <= 100)
   post(result >= 0)
 {
   int s = 0, i = 0;
   while (i < n)
-    invariant(s >= 0)
+    invariant(s >= 0 && s <= i * i && i >= 0 && i <= n)
     decreases(n - i)
   {
     ghost {
@@ -126,7 +126,7 @@ int ghost_in_if(int x)
 // CHECK:       VarDecl {{.*}} tmp 'int'
 // CHECK:     ContractAssertStmt
 int ghost_with_vars(int x)
-  pre(x >= 0)
+  pre(x >= 0 && x < 2147483647)
 {
   ghost {
     int tmp = x + 1;
@@ -155,8 +155,8 @@ int empty_ghost(int x) {
 // CHECK:   ContractAssertStmt
 // CHECK:     BinaryOperator {{.*}} 'bool' '&&'
 int ghost_complex(int a, int b)
-  pre(a >= 0)
-  pre(b >= 0)
+  pre(a >= 0 && a <= 1000000)
+  pre(b >= 0 && b <= 1000000)
 {
   ghost {
     contract_assert(a >= 0 && b >= 0);

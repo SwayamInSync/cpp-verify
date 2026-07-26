@@ -107,7 +107,7 @@ tools = [
     "clang-tblgen",
     "clang-scan-deps",
     "clang-installapi",
-    "cpp-verify",
+    ToolSubst("%cpp-verify", command=FindTool("cpp-verify"), unresolved="fatal"),
     "opt",
     "llvm-ifs",
     "yaml2obj",
