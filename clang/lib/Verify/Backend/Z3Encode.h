@@ -55,9 +55,10 @@ public:
 
 class Z3VerifyBackend : public VerifyBackend {
   Z3Encoder Enc;
+  unsigned TimeoutMs;
 
 public:
-  explicit Z3VerifyBackend(unsigned TimeoutMs = 0) {
+  explicit Z3VerifyBackend(unsigned TimeoutMs = 0) : TimeoutMs(TimeoutMs) {
     Enc.setTimeoutMs(TimeoutMs);
   }
   llvm::StringRef getName() const override { return "z3"; }

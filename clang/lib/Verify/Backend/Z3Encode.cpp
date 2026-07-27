@@ -9,6 +9,21 @@
 using namespace clang;
 using namespace verify;
 
+namespace {
+
+bool containsQuantifier(const VCExpr *E) {
+  if (!E)
+    return false;
+  if (E->K == VCExpr::Forall || E->K == VCExpr::Exists)
+    return true;
+  return std::any_of(E->Children.begin(), E->Children.end(),
+                     [](const std::unique_ptr<VCExpr> &Child) {
+                       return containsQuantifier(Child.get());
+                     });
+}
+
+} // namespace
+
 Z3Encoder::Z3Encoder() : Ctx(), Solver(Ctx) {}
 
 z3::sort Z3Encoder::intSort() { return Ctx.int_sort(); }
@@ -692,11 +707,13 @@ void Z3Encoder::emitSpecCallAxiom(const VCExpr *Call,
 
 VerifyResult Z3Encoder::verifyMachine(const VCMachine &M) {
   Vars.clear();
-  Solver = z3::solver(Ctx);
+  Solver = containsQuantifier(M.Goal.get()) ? z3::tactic(Ctx, "smt").mk_solver()
+                                            : z3::solver(Ctx);
   z3::params Params(Ctx);
   if (TimeoutMs > 0)
     Params.set("timeout", TimeoutMs);
   Params.set("mbqi", true);
+  Params.set("qi.eager_threshold", 0.0);
   Solver.set(Params);
   EncodingFailed = false;
   EncodingError.clear();
@@ -758,7 +775,16 @@ VerifyResult Z3VerifyBackend::verifyPassive(const PassiveProgram &P) {
     return R;
   };
 
+  // Spec equations often solve best as one formula. For spec-free programs,
+  // use a short complete-VC probe and preserve the configured budget for the
+  // ordered obligations.
+  const bool WholeUsedFullBudget =
+      !P.SpecFunctions.empty() || (TimeoutMs > 0 && TimeoutMs <= 500);
+  Enc.setTimeoutMs(WholeUsedFullBudget
+                       ? TimeoutMs
+                       : (TimeoutMs == 0 ? 500 : std::min(TimeoutMs, 500U)));
   VerifyResult Whole = Enc.verifyMachine(VCMachine::fromPassive(P));
+  Enc.setTimeoutMs(TimeoutMs);
   if (Whole.Status != VerifyStatus::Unknown)
     return finishResult(std::move(Whole));
 
@@ -785,6 +811,14 @@ VerifyResult Z3VerifyBackend::verifyPassive(const PassiveProgram &P) {
   auto verifyProgram = [&](const PassiveProgram &Program) {
     return Enc.verifyMachine(VCMachine::fromPassive(Program));
   };
+  auto retryWhole = [&](VerifyResult SplitResult) {
+    if (WholeUsedFullBudget)
+      return finishResult(std::move(SplitResult));
+    VerifyResult Retry = Enc.verifyMachine(VCMachine::fromPassive(P));
+    if (Retry.Status != VerifyStatus::Unknown)
+      return finishResult(std::move(Retry));
+    return finishResult(std::move(SplitResult));
+  };
 
   PassiveProgram Context = cloneContext(P);
   unsigned ObligationIndex = 0;
@@ -803,8 +837,11 @@ VerifyResult Z3VerifyBackend::verifyPassive(const PassiveProgram &P) {
     appendStmt(Obligation, PassiveStmt::Assert, Stmt->Cond.get());
     VerifyResult R = verifyProgram(Obligation);
     if (R.Status != VerifyStatus::Verified) {
-      if (R.Status == VerifyStatus::Unknown && R.Message.empty())
-        R.Message = "proof obligation " + std::to_string(ObligationIndex);
+      if (R.Status == VerifyStatus::Unknown)
+        R.Message = "proof obligation " + std::to_string(ObligationIndex) +
+                    (R.Message.empty() ? "" : ": " + R.Message);
+      if (R.Status == VerifyStatus::Unknown)
+        return retryWhole(std::move(R));
       return finishResult(std::move(R));
     }
   }
@@ -817,8 +854,11 @@ VerifyResult Z3VerifyBackend::verifyPassive(const PassiveProgram &P) {
     Obligation.ExitAsserts.push_back(cloneVExpr(Exit.get()));
     VerifyResult R = verifyProgram(Obligation);
     if (R.Status != VerifyStatus::Verified) {
-      if (R.Status == VerifyStatus::Unknown && R.Message.empty())
-        R.Message = "proof obligation " + std::to_string(ObligationIndex);
+      if (R.Status == VerifyStatus::Unknown)
+        R.Message = "proof obligation " + std::to_string(ObligationIndex) +
+                    (R.Message.empty() ? "" : ": " + R.Message);
+      if (R.Status == VerifyStatus::Unknown)
+        return retryWhole(std::move(R));
       return finishResult(std::move(R));
     }
   }
