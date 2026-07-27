@@ -1,6 +1,7 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
 // RUN: %cpp-verify --backend=lean --lean-out=%t.lean %s 2>&1 | FileCheck %s --check-prefix=VERIFY
-// RUN: grep -q 'theorem cppverify_goal' %t.lean
+// RUN: grep -Eq 'theorem cppverify_inc_fn_[0-9a-f]+_correct' %t.lean
+// RUN: grep -Fq ': ¬ (' %t.lean
 // RUN: grep -q 'sorry' %t.lean
 
 int inc(int x)
@@ -10,4 +11,4 @@ int inc(int x)
   return x + 1;
 }
 
-// VERIFY: lean export: inc
+// VERIFY: Exported: lean obligation: inc

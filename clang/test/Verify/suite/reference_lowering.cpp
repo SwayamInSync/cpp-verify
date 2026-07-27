@@ -46,8 +46,8 @@ void lower_reference_call(int *value, int next)
 // CHECK-NEXT: value_0
 // CHECK-LABEL: vc lower_reference
 // CHECK: heap_store
-// CHECK: load
-// CHECK-NEXT: value_0
+// CHECK: heap_select
+// CHECK: value_0 : pointer
 // CHECK: (select __heap_0 value_0)
 // CHECK: (store __heap_0 value_0
 // CHECK-LABEL: fn lower_reference_call
@@ -58,6 +58,6 @@ void lower_reference_call(int *value, int next)
 // CHECK: load
 // CHECK-NEXT: value_0
 // CHECK-LABEL: vc lower_reference_call
-// CHECK: load
-// CHECK-NEXT: value_0
+// CHECK: heap_select
+// CHECK: value_0 : pointer
 // CHECK: (select __heap_1 value_0)

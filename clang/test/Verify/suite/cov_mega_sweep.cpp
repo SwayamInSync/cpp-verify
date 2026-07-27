@@ -1,6 +1,8 @@
 // RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 // RUN: %cpp-verify --backend=bmc --unroll=2 %s 2>&1 | FileCheck %s --check-prefix=VERIFY
-// RUN: %cpp-verify --backend=lean --lean-out=%t.lean %s 2>&1 | FileCheck %s --check-prefix=LEAN
+// RUN: %cpp-verify --backend=lean --lean-out=%t.lean %s > %t.lean.out 2>&1
+// RUN: FileCheck %s --check-prefix=LEAN < %t.lean.out
+// RUN: not grep -q '^Verified:' %t.lean.out
 
 spec int inc(int x) { return x + 1; }
 
@@ -52,4 +54,4 @@ int loop_client(int n, int *p)
 // VERIFY-DAG: Verified: exec_client
 // VERIFY-DAG: Verified: loop_client
 
-// LEAN: lean export: exec_client
+// LEAN: Exported: lean obligation: exec_client

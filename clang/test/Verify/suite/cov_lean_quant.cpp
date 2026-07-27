@@ -14,4 +14,4 @@ int quant_client(int n)
   return n + x - x;
 }
 
-// VERIFY: lean export: quant_client
+// VERIFY: Exported: lean obligation: quant_client

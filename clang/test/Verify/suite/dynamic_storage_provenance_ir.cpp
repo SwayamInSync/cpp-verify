@@ -85,11 +85,11 @@ int provenance_call(int value)
 // PASSIVE: returned_
 
 // VC-LABEL: vc provenance_branch
+// VC: features mathematical-integers, bit-vectors, pointers, heap-arrays
 // VC: !
-// VC: valid_ptr
-// VC-NEXT: alias_3
-// VC: initialized_ptr
-// VC-NEXT: alias_3
+// VC: heap_select
+// VC: alias_3 : pointer
+// VC: obligations
 // VC-LABEL: vc provenance_call
 // VC: __cppverify_pointer_provenance_
 

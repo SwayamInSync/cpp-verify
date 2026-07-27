@@ -22,4 +22,4 @@ int client(int x)
   return mid;
 }
 
-// VERIFY: lean export: client
+// VERIFY: Exported: lean obligation: client

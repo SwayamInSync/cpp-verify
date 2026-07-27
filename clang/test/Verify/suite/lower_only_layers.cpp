@@ -56,10 +56,15 @@ int machine_identity(int x)
 // PASSIVE-NOT: vc machine_identity
 
 // VC-LABEL: vc machine_identity
+// VC: identity fn_
+// VC: features mathematical-integers, bit-vectors, pointers, heap-arrays
+// VC: counterexample
 // VC: !
-// VC: x_0
-// VC: __result_1
-// VC: cast
+// VC: x_0 : bitvector32
+// VC: __result_1 : bitvector32
+// VC: bv_to_int : int
+// VC: obligations
+// VC: obligation fn_
 // VC-NOT: passive machine_identity
 
 // Z3-DAG: (bvsge x_0 #x00000000)

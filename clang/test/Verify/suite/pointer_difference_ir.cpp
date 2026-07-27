@@ -24,8 +24,10 @@ long pointer_difference_ir(int value)
 // CHECK: __cppverify_pointer_provenance_
 // CHECK: ======
 // CHECK-LABEL: vc pointer_difference_ir
-// CHECK: valid_ptr
+// CHECK: features mathematical-integers, bit-vectors, pointers, heap-arrays
+// CHECK: heap_select
 // CHECK: __cppverify_pointer_provenance_
+// CHECK: obligations
 // CHECK: ======
 // CHECK: (let
 // CHECK: __heap_alloc_

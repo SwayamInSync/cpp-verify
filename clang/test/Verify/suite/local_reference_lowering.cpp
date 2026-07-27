@@ -55,9 +55,10 @@ int local_reference_lowering(int value)
 // PASSIVE: result
 
 // VC-LABEL: vc local_reference_lowering
-// VC: valid_ptr
-// VC: initialized_ptr
+// VC: features mathematical-integers, bit-vectors, pointers, heap-arrays
+// VC: heap_select
 // VC: heap_store
+// VC: obligations
 
 // Z3-DAG: (store __heap_alloc_used_0
 // Z3-DAG: (store __heap_alloc_0
