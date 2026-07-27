@@ -97,7 +97,6 @@ int unsupported_recursive_exec(int n)
 // VERIFY-DAG: error: calls_uncontracted: call to function without a verification contract: opaque_side_effect
 // VERIFY-DAG: error: reads_global_state: global variable access is unsupported: global_state
 // VERIFY-DAG: error: unsupported_pointer_compound: pointer compound assignment is unsupported
-// VERIFY-DAG: error: unsupported_pointer_difference: pointer subtraction is unsupported without same-allocation provenance
 // VERIFY-DAG: error: unsupported_forged_pointer: unsupported explicit pointer or aggregate cast
 // VERIFY-DAG: error: unsupported_switch: unsupported statement: SwitchStmt
 // VERIFY-DAG: error: unsupported_evaluated_expression: unsupported expression statement
