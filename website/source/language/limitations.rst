@@ -33,10 +33,11 @@ Meaning of a result
 condition. It does not certify uncontracted functions, linked libraries, the
 operating system, or any explicit external contract.
 
-Distinct pointer parameters are **non-aliasing by default** whenever at least
-one pointee is mutable. CppVerify generates a complete-object disjointness
-precondition. Verified callers must prove it; unverified external callers must
-honor it like a written ``pre``. ``aliases(p, q)`` permits same-object aliasing.
+Distinct pointer/reference address parameters are **non-aliasing by default**
+whenever at least one pointee or referent is mutable. CppVerify generates a
+complete-object disjointness precondition. Verified callers must prove it;
+unverified external callers must honor it like a written ``pre``.
+``aliases(p, q)`` permits same-object aliasing.
 
 ``Lowered`` is emitted by ``--lower-only``. It means Clang AST conversion, VCR,
 passive SSA, VC construction, and backend encoding succeeded **without** a
@@ -57,6 +58,8 @@ The most mature current fragment includes:
 - ``if``, conventional ``while``/``for``, loop invariants, and ``decreases``;
 - direct recursion with a well-founded termination measure;
 - ``pre``, ``post``, ``old``, ``result``, ``modifies``, and ``aliases``;
+- scalar ``T&``/``const T&`` parameters with address-preserving reads, writes,
+  contracts, and direct forwarding;
 - proof functions, ghost code, bounded quantifiers, and controlled recursive
   unfolding;
 - flat trivial standard-layout records with scalar fields;
@@ -83,9 +86,11 @@ C++ feature boundaries
      - Pointer-to-pointer, function pointers, type erasure/recovery, and general
        reinterpretation.
    * - References
-     - Rejected.
-     - Lvalue/rvalue references, lifetime extension, reference members, and
-       forwarding.
+     - Scalar ``T&``/``const T&`` parameters on contracted executable free
+       functions for boolean, integral, and enum referents.
+     - Local reference declarations and ordinary local actuals, reference
+       returns, non-scalar referents, rvalue references, address-taking,
+       temporaries/lifetime extension, reference members, and forwarding.
    * - Arrays
      - Pointer-parameter indexing and quantified abstract buffers.
      - Array-valued locals/fields/parameters, multidimensional arrays,
@@ -96,9 +101,10 @@ C++ feature boundaries
        polymorphic, union, and bit-field records.
    * - Functions
      - Free functions, overloads, namespaces, contracts, direct calls, and
-       direct recursion.
+       scalar-state direct recursion.
      - Member functions, templates, variadics, indirect calls, mutual
-       recursion, and general link-time summaries.
+       recursion, heap-mutating executable recursion, and general link-time
+       summaries.
    * - Storage
      - Supported locals and constrained direct scalar dynamic storage.
      - Globals, static locals, thread-local storage, returned allocations, and
@@ -131,8 +137,9 @@ CppVerify does not yet model:
 - exception cleanup and exactly-once destruction;
 - placement construction, lifetime restart, or ``std::launder``.
 
-Addressable references and pointer-bearing aggregates are the next major memory
-checkpoint because these features are prerequisites for idiomatic C++ classes,
+Scalar parameter references are now addressable aliases. General local and
+subobject binding plus pointer-bearing aggregates remain the next major memory
+checkpoint because those features are prerequisites for idiomatic C++ classes,
 containers, and ownership types.
 
 Pointers, buffers, and provenance
@@ -156,6 +163,28 @@ For pairs involving mutable pointees, CppVerify adds a generated
 complete-object disjointness precondition. ``aliases(p, q)`` opts a pair into
 same-object aliasing; it does not establish arbitrary partial overlap or create
 provenance.
+
+Scalar lvalue-reference parameters
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Contracted executable free functions may accept ``T&`` and ``const T&`` when
+``T`` is ``bool``, integral, or enum. VCR retains the binding as an immutable
+address: reading loads the referent, assignment stores through that address,
+and ``old(ref)`` selects the entry heap. Every reference receives an implicit
+non-null, live, and initialized precondition.
+
+``modifies(ref)`` is an open region rooted at the referent, like
+``modifies(*p)``. Default object-range disjointness and ``aliases`` apply across
+pointer and reference parameters. A call may currently bind a reference only
+from another supported reference parameter or a direct dereference such as
+``set(*p, value)``; checked direct scalar dynamic provenance is preserved.
+
+Ordinary local actuals, local reference declarations, conditional/subscript/
+field bindings, temporaries, reference returns, address-taking, rvalue
+references, and non-scalar referents remain fail-closed. The initialized-entry
+rule also means output-only references to indeterminate storage are not yet
+supported. Reference reads participate in the existing unspecified
+argument-order safety check.
 
 Local scalar dynamic storage
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -245,6 +274,8 @@ Current proof-language limitations include:
 - no automatic termination-measure or lemma discovery;
 - no heap-reading mathematical specs or aggregate-returning specs;
 - no mutual recursion for spec/proof/executable functions.
+- no heap-mutating executable recursion: stores, allocation/deallocation, and
+  separate heap-modifying calls fail the termination check conservatively.
 
 These are mainly automation and usability limits. They do not permit an
 unproved recursive property to become ``Verified``.
@@ -370,10 +401,10 @@ oracles, improve source-attributed obligations, and never convert timeout,
 P1 — general addressable objects
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Add references, pointer-bearing/nested aggregates, array objects and element
-lifetimes, compositional origin/extent/index metadata, modular
-allocation/deallocation/escape effects, returned ownership, and RAII-ready
-lifetime transitions.
+Complete local/subobject and temporary reference binding, then add
+pointer-bearing/nested aggregates, array objects and element lifetimes,
+compositional origin/extent/index metadata, modular allocation/deallocation/
+escape effects, returned ownership, and RAII-ready lifetime transitions.
 
 P2 — core idiomatic C++
 ~~~~~~~~~~~~~~~~~~~~~~~

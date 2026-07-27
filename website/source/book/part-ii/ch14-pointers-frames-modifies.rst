@@ -21,8 +21,39 @@ Swap with contract
 Aliasing
 --------
 
-- Distinct mutable pointer parameters are assumed **non-aliased** by default.
+- Distinct mutable pointer/reference address parameters are assumed
+  **non-aliased** by default.
 - Use ``aliases(dst, src)`` when aliasing is allowed.
+
+Scalar lvalue references
+------------------------
+
+Scalar ``T&`` and ``const T&`` parameters use the same addressable heap model.
+The binding itself is immutable; a value use loads its referent and assignment
+stores through the binding:
+
+.. code-block:: cpp
+
+   void swap_values(int& left, int& right)
+     modifies(left, right)
+     post(left == old(right) && right == old(left))
+   {
+     int temporary = left;
+     left = right;
+     right = temporary;
+   }
+
+The verifier implicitly requires each reference to be non-null, live, and
+initialized. ``old(left)`` reads the entry heap, while the unwrapped ``left`` in
+the postcondition reads the final heap. Distinct mutable references are
+object-range disjoint unless ``aliases(left, right)`` is present.
+
+This first reference slice is intentionally parameter-only. A reference formal
+can be forwarded from another reference or bound to a direct dereference such
+as ``set_value(*p, value)``. Ordinary local actuals, local references,
+temporaries, subscript/field/conditional bindings, reference returns,
+address-taking, rvalue references, and non-scalar referents remain rejected
+until stack/subobject lifetime identity is represented.
 
 Buffers and arrays
 ------------------
@@ -43,12 +74,15 @@ There are two frame granularities:
   parameter-pointer model has no allocation identity or extent with which to
   delimit the region, so the verifier conservatively forgets the whole value
   heap and then assumes the callee's postconditions. Local scalar allocations
-  do carry identity, but cannot yet cross this boundary.
+  can cross checked, non-allocating matching interfaces with their identity,
+  but an open region still receives this whole-heap treatment.
 
 The second rule is deliberately incomplete rather than unsound: a caller may
 lose a true fact about an unrelated object, but it cannot retain a frame fact
 that an unknown offset write might invalidate. A pointer-taking callee with no
-explicit ``modifies`` receives the same whole-heap treatment.
+explicit ``modifies`` receives the same whole-heap treatment. An explicit
+caller frame cannot contain that implicit effect; an unframed caller may pass
+its own address parameters or checked caller-owned scalar allocations.
 
 To state a property of a whole range, put a **bounded quantifier** in the loop
 invariant and the postcondition — the half-open bound ``[lo, hi)`` is the trigger.
@@ -154,8 +188,8 @@ parameters — a frame condition on *values* rather than memory. Declare it afte
    { return p.x + p.y; }            // the invariant on x, y is assumed here
 
 It is injected as a precondition at the first use of an invariant field for
-supported by-value flat records, so callers must establish it. Reference
-parameters are not yet in the verified subset. See
-:doc:`../../language/structs`.
+supported by-value flat records, so callers must establish it. Record
+references are not yet in the verified subset; current references have scalar
+referents only. See :doc:`../../language/structs`.
 
 See :doc:`../../language/limitations` for the supported pointer and heap feature set.

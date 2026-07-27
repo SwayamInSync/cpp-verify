@@ -21,7 +21,7 @@ Requires ``-fverify-contracts``. Full table:
      - Writable lvalues
    * - ``aliases(p,q)``
      - After ``)``
-     - Opt out of non-aliasing
+     - Opt a pointer/reference address pair into aliasing
    * - ``recommends(expr)``
      - Spec functions
      - Soft precondition

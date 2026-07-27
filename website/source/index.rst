@@ -144,6 +144,28 @@ Use-after-delete, double-delete, overlapping live allocations, and reads before
 initialization are proof failures. See :doc:`language/dynamic-storage` for the
 current non-escaping subset.
 
+Address-preserving scalar references
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Contracted executable free functions may use scalar ``T&`` and ``const T&``
+parameters:
+
+.. code-block:: cpp
+
+   void increment(int& value)
+     pre(value < 2147483647)
+     modifies(value)
+     post(value == old(value) + 1)
+   {
+     ++value;
+   }
+
+Reference values lower to heap loads, writes lower to stores, and ``old`` reads
+the entry heap. This first slice supports direct reference forwarding and
+direct ``*p`` actuals; ordinary local scalar binding, temporaries, reference
+returns, and non-scalar referents remain fail-closed. See
+:doc:`language/pointers`.
+
 Backends and modular calls
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 

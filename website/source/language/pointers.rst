@@ -5,7 +5,8 @@ Pointers
   width-neutral integer cells
 - ``modifies(*p, ...)`` — frame
 - ``aliases(p, q)`` — allow aliasing
-- Implicit ``p != q`` for distinct mutable parameters
+- Implicit object-range disjointness for distinct mutable pointer/reference
+  parameters
 
 Example:
 
@@ -18,6 +19,60 @@ Example:
    {
      *p = v;
    }
+
+Scalar lvalue references
+------------------------
+
+Contracted executable free functions support scalar ``T&`` and ``const T&``
+parameters for boolean, integral, and enum referents:
+
+.. code-block:: cpp
+
+   void swap_values(int& left, int& right)
+     modifies(left, right)
+     post(left == old(right) && right == old(left))
+   {
+     int temporary = left;
+     left = right;
+     right = temporary;
+   }
+
+The VCR parameter is an immutable address. Reading ``left`` loads the heap,
+assignment stores through the address, and ``old(left)`` reads the entry heap.
+CppVerify adds a non-null, live, and initialized entry precondition for each
+reference. Mutable pointer/reference parameter pairs are object-range disjoint
+by default; ``aliases(left, right)`` permits same-object aliasing.
+
+``modifies(left)`` is currently an open region rooted at the referent, like
+``modifies(*p)``. Across a modular call this may conservatively forget the
+value heap and recover only facts in the callee postconditions.
+
+A reference argument must currently be another supported reference parameter
+or a direct pointer dereference:
+
+.. code-block:: cpp
+
+   void set_value(int& target, int value)
+     modifies(target)
+     post(target == value)
+   {
+     target = value;
+   }
+
+   void set_pointer(int* target, int value)
+     pre(target != nullptr)
+     modifies(*target)
+     post(*target == value)
+   {
+     set_value(*target, value);
+   }
+
+Ordinary local scalar actuals, local references, subscript/field/conditional
+bindings, temporaries, reference returns, address-taking, rvalue references,
+and non-scalar referents fail closed. Requiring initialized entry storage also
+excludes output-only references to an indeterminate object for now.
+Heap-mutating executable recursion through a reference fails closed until
+termination analysis models heap-state updates.
 
 Buffers and array indexing
 --------------------------
@@ -52,6 +107,9 @@ At a **modular call**, region and exact footprints deliberately differ:
   the callee's postconditions.
 - A pointer-taking callee with no explicit ``modifies`` is treated just as
   conservatively. This prevents a missing frame from becoming a false proof.
+- Such an implicit effect cannot fit inside an explicit caller frame. An
+  unframed caller may pass its own address parameters or checked caller-owned
+  scalar allocations.
 
 The whole-heap fallback can lose a true fact about an unrelated object, but it
 cannot prove a false one. Inside the callee itself, ordinary non-aliasing and
@@ -211,7 +269,7 @@ Frames also preserve unrelated objects across a write:
      *out = value;
    }
 
-Distinct mutable pointer parameters are non-aliasing by default. The
+Distinct mutable pointer/reference parameters are non-aliasing by default. The
 ``modifies(*out)`` clause permits the store and frames ``*preserved`` at its
 entry value.
 
