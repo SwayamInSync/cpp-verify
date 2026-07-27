@@ -1,4 +1,4 @@
-//===--- UBChecks.cpp - Layer-A undefined-behavior obligations -------------===//
+//===--- UBChecks.cpp - Supplemental UB and bounds obligations -------------===//
 #include "UBChecks.h"
 #include "../IR/VExpr.h"
 #include <map>
@@ -20,8 +20,8 @@ bool isMachineInt(const VType &T) {
 
 std::unique_ptr<VExpr> mkOvf(VOverflowOp Op, const VExpr *L, const VExpr *R,
                              SourceLocation Loc) {
-  return std::make_unique<VOverflowCheckExpr>(
-      Op, cloneVExpr(L), R ? cloneVExpr(R) : nullptr, Loc);
+  return std::make_unique<VOverflowCheckExpr>(Op, cloneVExpr(L),
+                                              R ? cloneVExpr(R) : nullptr, Loc);
 }
 
 // divisor != 0
@@ -58,17 +58,21 @@ const VExpr *pointerBase(const VExpr *E) {
   }
 }
 
-// The machine-integer offset of an address relative to its base pointer: `p + i`
+// The machine-integer offset of an address relative to its base pointer: `p +
+// i`
 // -> `i`, bare `p` -> `0`. Returns null if Addr isn't of base(+/-)offset form
 // rooted at Base.
-std::unique_ptr<VExpr> pointerOffset(const VExpr *Addr, const std::string &Base) {
+std::unique_ptr<VExpr> pointerOffset(const VExpr *Addr,
+                                     const std::string &Base) {
   if (!Addr)
     return nullptr;
   if (Addr->K == VExpr::Cast)
-    return pointerOffset(static_cast<const VCastExpr *>(Addr)->Inner.get(), Base);
+    return pointerOffset(static_cast<const VCastExpr *>(Addr)->Inner.get(),
+                         Base);
   if (Addr->K == VExpr::Var) {
     if (static_cast<const VVarExpr *>(Addr)->Name == Base)
-      return std::make_unique<VLiteralExpr>(0, machineInt(Addr->Loc), Addr->Loc);
+      return std::make_unique<VLiteralExpr>(0, machineInt(Addr->Loc),
+                                            Addr->Loc);
     return nullptr;
   }
   if (Addr->K == VExpr::BinOp) {
@@ -80,10 +84,9 @@ std::unique_ptr<VExpr> pointerOffset(const VExpr *Addr, const std::string &Base)
                                             machineInt(B->Loc), B->Loc);
       if (B->Op == VBinOp::Add)
         if (auto RO = pointerOffset(B->Rhs.get(), Base))
-          return std::make_unique<VBinOpExpr>(VBinOp::Add,
-                                              cloneVExpr(B->Lhs.get()),
-                                              std::move(RO), machineInt(B->Loc),
-                                              B->Loc);
+          return std::make_unique<VBinOpExpr>(
+              VBinOp::Add, cloneVExpr(B->Lhs.get()), std::move(RO),
+              machineInt(B->Loc), B->Loc);
     }
   }
   return nullptr;
@@ -98,7 +101,8 @@ struct UBInstrumenter {
   // base pointer name -> its declared length (from `valid(p, n)`).
   std::map<std::string, const VExpr *> ValidLen;
 
-  // Scan a precondition for `valid(p, n)` declarations (recursing through `&&`).
+  // Scan a precondition for `valid(p, n)` declarations (recursing through
+  // `&&`).
   void scanValid(const VExpr *E) {
     if (!E)
       return;
@@ -109,12 +113,43 @@ struct UBInstrumenter {
         if (B && B->K == VExpr::Var)
           ValidLen[static_cast<const VVarExpr *>(B)->Name] = C->Args[1].get();
       }
+
       return;
     }
     if (E->K == VExpr::BinOp) {
       const auto *B = static_cast<const VBinOpExpr *>(E);
       scanValid(B->Lhs.get());
       scanValid(B->Rhs.get());
+    }
+  }
+
+  void appendValidSemantics(VFunction &Fn) const {
+    for (const auto &[Base, Length] : ValidLen) {
+      SourceLocation Loc = Length->Loc;
+      auto Pointer = std::make_unique<VVarExpr>(Base, VType::makePtr(), Loc);
+      auto NonNegative = std::make_unique<VBinOpExpr>(
+          VBinOp::Ge, cloneVExpr(Length),
+          std::make_unique<VLiteralExpr>(0, Length->Ty, Loc), VType::makeBool(),
+          Loc);
+      auto Empty = std::make_unique<VBinOpExpr>(
+          VBinOp::Eq, cloneVExpr(Length),
+          std::make_unique<VLiteralExpr>(0, Length->Ty, Loc), VType::makeBool(),
+          Loc);
+      auto NonNull = std::make_unique<VBinOpExpr>(
+          VBinOp::Ne, cloneVExpr(Pointer.get()),
+          std::make_unique<VLiteralExpr>(0, VType::makePtr(), Loc),
+          VType::makeBool(), Loc);
+      auto IsValid = std::make_unique<VUnaryOpExpr>(
+          VUnaryOp::ValidPtr, std::move(Pointer), VType::makeBool(), Loc);
+      auto NonEmptyValid = std::make_unique<VBinOpExpr>(
+          VBinOp::And, std::move(NonNull), std::move(IsValid),
+          VType::makeBool(), Loc);
+      auto ValidExtent = std::make_unique<VBinOpExpr>(
+          VBinOp::Or, std::move(Empty), std::move(NonEmptyValid),
+          VType::makeBool(), Loc);
+      Fn.Preconditions.push_back(std::make_unique<VBinOpExpr>(
+          VBinOp::And, std::move(NonNegative), std::move(ValidExtent),
+          VType::makeBool(), Loc));
     }
   }
 
@@ -138,8 +173,8 @@ struct UBInstrumenter {
     auto Lt = std::make_unique<VBinOpExpr>(VBinOp::Lt, std::move(Off),
                                            cloneVExpr(It->second),
                                            VType::makeBool(), Loc);
-    return std::make_unique<VBinOpExpr>(VBinOp::And, std::move(Ge), std::move(Lt),
-                                        VType::makeBool(), Loc);
+    return std::make_unique<VBinOpExpr>(VBinOp::And, std::move(Ge),
+                                        std::move(Lt), VType::makeBool(), Loc);
   }
 
   // Walk E, append safety obligations. To add a UB class, add a case here.
@@ -156,22 +191,26 @@ struct UBInstrumenter {
       switch (B->Op) {
       case VBinOp::Add:
         if (Signed)
-          Out.push_back(mkOvf(VOverflowOp::Add, B->Lhs.get(), B->Rhs.get(), B->Loc));
+          Out.push_back(
+              mkOvf(VOverflowOp::Add, B->Lhs.get(), B->Rhs.get(), B->Loc));
         break;
       case VBinOp::Sub:
         if (Signed)
-          Out.push_back(mkOvf(VOverflowOp::Sub, B->Lhs.get(), B->Rhs.get(), B->Loc));
+          Out.push_back(
+              mkOvf(VOverflowOp::Sub, B->Lhs.get(), B->Rhs.get(), B->Loc));
         break;
       case VBinOp::Mul:
         if (Signed)
-          Out.push_back(mkOvf(VOverflowOp::Mul, B->Lhs.get(), B->Rhs.get(), B->Loc));
+          Out.push_back(
+              mkOvf(VOverflowOp::Mul, B->Lhs.get(), B->Rhs.get(), B->Loc));
         break;
       case VBinOp::Div:
       case VBinOp::Rem:
         if (isMachineInt(B->Ty))
           Out.push_back(mkNonZero(B->Rhs.get(), B->Loc));
         if (Signed)
-          Out.push_back(mkOvf(VOverflowOp::SDiv, B->Lhs.get(), B->Rhs.get(), B->Loc));
+          Out.push_back(
+              mkOvf(VOverflowOp::SDiv, B->Lhs.get(), B->Rhs.get(), B->Loc));
         break;
       default:
         break;
@@ -182,7 +221,8 @@ struct UBInstrumenter {
       const auto *U = static_cast<const VUnaryOpExpr *>(E);
       collectObligations(U->Operand.get(), Out);
       if (U->Op == VUnaryOp::Neg && isSignedMachine(U->Ty))
-        Out.push_back(mkOvf(VOverflowOp::Neg, U->Operand.get(), nullptr, U->Loc));
+        Out.push_back(
+            mkOvf(VOverflowOp::Neg, U->Operand.get(), nullptr, U->Loc));
       break;
     }
     case VExpr::Cast:
@@ -204,7 +244,8 @@ struct UBInstrumenter {
       break;
     }
     case VExpr::FieldAccess:
-      collectObligations(static_cast<const VFieldAccessExpr *>(E)->Base.get(), Out);
+      collectObligations(static_cast<const VFieldAccessExpr *>(E)->Base.get(),
+                         Out);
       break;
     case VExpr::Old:
       collectObligations(static_cast<const VOldExpr *>(E)->Inner.get(), Out);
@@ -241,7 +282,8 @@ struct UBInstrumenter {
         // Array-bounds for the write target p[j] = ...
         if (auto Bnd = boundsObligation(St.Ptr.get())) {
           SourceLocation L = Bnd->Loc;
-          New.push_back(std::make_unique<VContractAssertStmt>(std::move(Bnd), L));
+          New.push_back(
+              std::make_unique<VContractAssertStmt>(std::move(Bnd), L));
         }
         emitObsInto(New, St.Ptr.get());
         emitObsInto(New, St.Value.get());
@@ -265,7 +307,8 @@ struct UBInstrumenter {
         collectObligations(W.Cond.get(), CondObs);
         for (auto &O : CondObs) {
           SourceLocation L = O->Loc;
-          W.Body.push_back(std::make_unique<VContractAssertStmt>(std::move(O), L));
+          W.Body.push_back(
+              std::make_unique<VContractAssertStmt>(std::move(O), L));
         }
         break;
       }
@@ -293,5 +336,6 @@ void verify::instrumentUBChecks(VFunction &Fn) {
   UBInstrumenter UB;
   for (const auto &Pre : Fn.Preconditions)
     UB.scanValid(Pre.get());
+  UB.appendValidSemantics(Fn);
   UB.instrumentStmts(Fn.Body);
 }

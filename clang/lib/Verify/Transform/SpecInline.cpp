@@ -1439,6 +1439,10 @@ PassiveProgram verify::buildDecreasesChecks(const VFunction &Fn,
   if (Fn.Decreases.empty())
     return P;
   P.CallerIntMode = Fn.IntMode;
+  P.SpecFunctions = FnMap;
+  P.SpecFuel = Fn.SpecFuel;
+  P.HiddenSpecs = Fn.HiddenSpecs;
+  P.RevealedSpecs = Fn.RevealedSpecs;
   for (const auto &Pre : Fn.Preconditions)
     P.EntryAssumes.push_back(cloneVExpr(Pre.get()));
 

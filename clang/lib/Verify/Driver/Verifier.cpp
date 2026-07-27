@@ -139,16 +139,15 @@ public:
           return *Fn;
         }
         PreparedFn = cloneVFunction(*Fn);
+        // `valid(p, n)` is a recognized UB marker. Discover it before spec
+        // preparation folds its deliberately trivial body to `true`.
+        if (Opts.CheckUB && Opts.Backend == BackendKind::Z3)
+          instrumentUBChecks(*PreparedFn);
         SpecInliner Inliner(FnMap, PreparedFn->SpecFuel);
         if (Opts.Backend == BackendKind::Z3)
           Inliner.prepareFunctionAxiomatic(*PreparedFn);
         else
           Inliner.prepareFunction(*PreparedFn);
-        // UB safety obligations: insert before passivization (and before any
-        // BMC unrolling, so the unroller copies them into every unrolled
-        // iteration). Bit-vector overflow predicates are Z3-only for now.
-        if (Opts.CheckUB && Opts.Backend == BackendKind::Z3)
-          instrumentUBChecks(*PreparedFn);
         if (Opts.Backend == BackendKind::BMC) {
           UnrolledFn = LoopUnroller::unroll(*PreparedFn, Opts.BMCUnroll);
           return *UnrolledFn;
@@ -198,8 +197,10 @@ public:
           } else {
             AllOk = false;
             AnyFailed = true;
-            Diags.push_back({VerifyDiagnostic::Error,
-                             "spec decreases unknown: " + Fn->Name});
+            std::string Message = "spec decreases unknown: " + Fn->Name;
+            if (!R.Message.empty())
+              Message += " (" + R.Message + ")";
+            Diags.push_back({VerifyDiagnostic::Error, std::move(Message)});
           }
           continue;
         }

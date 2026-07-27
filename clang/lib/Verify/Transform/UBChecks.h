@@ -1,8 +1,8 @@
-//===--- UBChecks.h - Layer-A undefined-behavior obligations ----*- C++ -*-===//
+//===--- UBChecks.h - Supplemental UB and bounds obligations ----*- C++ -*-===//
 //
-// Instruments a Layer-1 exec/proof function with UB safety obligations (signed
-// integer overflow, division/modulo by zero). Each obligation becomes a guarded
-// contract_assert that the existing passivize + nested-WP machinery discharges.
+// Discovers valid(p, n) extents before spec preparation and instruments a
+// Layer-1 exec/proof function with bounds and compatibility safety obligations.
+// Core expression definedness is also enforced directly by passivization.
 //
 // See docs/UB-CHECKING.md for the design and the recipe for adding new checks.
 //

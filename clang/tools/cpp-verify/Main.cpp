@@ -55,8 +55,8 @@ static cl::opt<unsigned> SolverTimeout(
 
 static cl::opt<bool> CheckUB(
     "check-ub",
-    cl::desc("Also prove freedom from undefined behavior (signed integer "
-             "overflow, division/modulo by zero) for exec/proof functions"),
+    cl::desc("Enable valid(p, n)-based buffer bounds checks in addition to "
+             "always-on expression definedness checks"),
     cl::init(false),
     cl::cat(CppVerifyCategory));
 
