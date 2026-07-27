@@ -33,9 +33,10 @@ class ASTConverter {
   unsigned BoundValueId = 0;
   std::map<const FunctionDecl *, std::string> FunctionIdentities;
   std::set<const VarDecl *> DynamicPointers;
-  std::map<const VarDecl *, std::string> DynamicPointerIdentities;
+  std::map<const VarDecl *, std::string> DynamicPointerProvenanceVariables;
   std::set<const VarDecl *> GhostLocals;
-  unsigned DynamicAllocationId = 0;
+  unsigned DynamicProvenanceId = 0;
+  unsigned DynamicPointerAssignmentId = 0;
   unsigned LoopDepth = 0;
 
 public:
@@ -95,6 +96,12 @@ private:
   void markInitialized(const ValueDecl *D, const FieldDecl *Field = nullptr);
   bool referencesDynamicPointer(const Expr *E) const;
   const VarDecl *directDynamicPointer(const Expr *E) const;
+  bool dynamicPointerSourceTypesMatch(const VarDecl *Target,
+                                      const Expr *Source) const;
+  std::unique_ptr<VExpr> convertDynamicPointerProvenance(const Expr *E);
+  bool appendDynamicPointerAssignment(const VarDecl *Target, const Expr *Source,
+                                      SourceLocation Loc,
+                                      std::vector<std::unique_ptr<VStmt>> &Out);
   bool ghostAssignmentAllowed(const Expr *E) const;
 };
 

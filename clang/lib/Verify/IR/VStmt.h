@@ -60,20 +60,18 @@ struct VStoreStmt : VStmt {
 
 struct VAllocateStmt : VStmt {
   std::string Target;
+  std::string ProvenanceTarget;
   VType AllocatedType;
-  std::string AllocationIdentity;
   std::unique_ptr<VExpr> Initializer;
   uint64_t SizeBytes;
   uint64_t AlignBytes;
-  VAllocateStmt(std::string Target, VType AllocatedType,
-                std::string AllocationIdentity,
-                std::unique_ptr<VExpr> Initializer, uint64_t SizeBytes,
-                uint64_t AlignBytes, SourceLocation Loc)
+  VAllocateStmt(std::string Target, std::string ProvenanceTarget,
+                VType AllocatedType, std::unique_ptr<VExpr> Initializer,
+                uint64_t SizeBytes, uint64_t AlignBytes, SourceLocation Loc)
       : VStmt(Allocate, Loc), Target(std::move(Target)),
-        AllocatedType(AllocatedType),
-        AllocationIdentity(std::move(AllocationIdentity)),
-        Initializer(std::move(Initializer)), SizeBytes(SizeBytes),
-        AlignBytes(AlignBytes) {}
+        ProvenanceTarget(std::move(ProvenanceTarget)),
+        AllocatedType(AllocatedType), Initializer(std::move(Initializer)),
+        SizeBytes(SizeBytes), AlignBytes(AlignBytes) {}
 };
 
 struct VFreeStmt : VStmt {

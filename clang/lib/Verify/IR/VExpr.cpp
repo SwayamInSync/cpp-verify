@@ -45,7 +45,7 @@ std::unique_ptr<VExpr> verify::cloneVExpr(const VExpr *E) {
   case VExpr::Var: {
     const auto *V = static_cast<const VVarExpr *>(E);
     return std::make_unique<VVarExpr>(V->Name, V->Ty, V->Loc,
-                                      V->AllocationIdentity);
+                                      V->ProvenanceVariable);
   }
   case VExpr::BinOp: {
     const auto *B = static_cast<const VBinOpExpr *>(E);

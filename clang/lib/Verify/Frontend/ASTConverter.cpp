@@ -392,6 +392,122 @@ const VarDecl *ASTConverter::directDynamicPointer(const Expr *E) const {
   return VD && DynamicPointers.count(VD) ? VD : nullptr;
 }
 
+bool ASTConverter::dynamicPointerSourceTypesMatch(const VarDecl *Target,
+                                                  const Expr *Source) const {
+  if (!Target || !Source || !Target->getType()->isPointerType())
+    return false;
+  if (Source->isNullPointerConstant(Ctx, Expr::NPC_ValueDependentIsNotNull) !=
+      Expr::NPCK_NotNull)
+    return true;
+
+  Source = Source->IgnoreParenImpCasts();
+  if (const VarDecl *DirectSource = directDynamicPointer(Source))
+    return Ctx.hasSameUnqualifiedType(
+        Target->getType()->getPointeeType(),
+        DirectSource->getType()->getPointeeType());
+  if (const auto *C = dyn_cast<ConditionalOperator>(Source))
+    return dynamicPointerSourceTypesMatch(Target, C->getTrueExpr()) &&
+           dynamicPointerSourceTypesMatch(Target, C->getFalseExpr());
+  return false;
+}
+
+std::unique_ptr<VExpr>
+ASTConverter::convertDynamicPointerProvenance(const Expr *E) {
+  if (!E)
+    return nullptr;
+  if (E->isNullPointerConstant(Ctx, Expr::NPC_ValueDependentIsNotNull) !=
+      Expr::NPCK_NotNull)
+    return std::make_unique<VLiteralExpr>(0, VType::makePtr(), E->getExprLoc());
+
+  E = E->IgnoreParenImpCasts();
+  if (const auto *DRE = dyn_cast<DeclRefExpr>(E))
+    if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl()))
+      if (auto It = DynamicPointerProvenanceVariables.find(VD);
+          It != DynamicPointerProvenanceVariables.end())
+        return std::make_unique<VVarExpr>(It->second, VType::makePtr(),
+                                          E->getExprLoc());
+
+  if (const auto *C = dyn_cast<ConditionalOperator>(E)) {
+    auto Cond = convertExpr(C->getCond());
+    auto Then = convertDynamicPointerProvenance(C->getTrueExpr());
+    auto Else = convertDynamicPointerProvenance(C->getFalseExpr());
+    if (!Cond || !Then || !Else)
+      return nullptr;
+    return std::make_unique<VConditionalExpr>(std::move(Cond), std::move(Then),
+                                              std::move(Else), VType::makePtr(),
+                                              E->getExprLoc());
+  }
+  return nullptr;
+}
+
+bool ASTConverter::appendDynamicPointerAssignment(
+    const VarDecl *Target, const Expr *Source, SourceLocation Loc,
+    std::vector<std::unique_ptr<VStmt>> &Out) {
+  if (LoopDepth != 0) {
+    Errors.push_back(CurrentFn->Name +
+                     ": dynamic-storage pointer reassignment inside loops is "
+                     "unsupported");
+    return true;
+  }
+  if (!Target || !Source || !Target->getType()->isPointerType() ||
+      !Source->getType()->isPointerType()) {
+    Errors.push_back(CurrentFn->Name +
+                     ": dynamic-storage pointer copies require matching "
+                     "pointee types");
+    return true;
+  }
+
+  auto Provenance = convertDynamicPointerProvenance(Source);
+  if (!Provenance) {
+    Errors.push_back(
+        CurrentFn->Name +
+        ": dynamic-storage pointer copies require direct, conditional, or "
+        "null local sources");
+    return true;
+  }
+  if (!dynamicPointerSourceTypesMatch(Target, Source)) {
+    Errors.push_back(CurrentFn->Name +
+                     ": dynamic-storage pointer copies require matching "
+                     "pointee types");
+    return true;
+  }
+  auto Value = convertExpr(Source);
+  if (!Value)
+    return true;
+
+  auto It = DynamicPointerProvenanceVariables.find(Target);
+  if (It == DynamicPointerProvenanceVariables.end())
+    It = DynamicPointerProvenanceVariables
+             .emplace(Target, "__cppverify_pointer_provenance_" +
+                                  std::to_string(++DynamicProvenanceId))
+             .first;
+  DynamicPointers.insert(Target);
+
+  const unsigned AssignmentId = ++DynamicPointerAssignmentId;
+  const std::string ValueTemporary =
+      "__cppverify_pointer_value_" + std::to_string(AssignmentId);
+  const std::string ProvenanceTemporary =
+      "__cppverify_pointer_provenance_value_" + std::to_string(AssignmentId);
+  const VType PointerType =
+      VType::fromQualType(Target->getType(), IntMode, Ctx);
+
+  Out.push_back(
+      std::make_unique<VAssignStmt>(ValueTemporary, std::move(Value), Loc));
+  Out.push_back(std::make_unique<VAssignStmt>(ProvenanceTemporary,
+                                              std::move(Provenance), Loc));
+  Out.push_back(std::make_unique<VAssignStmt>(
+      valueName(Target),
+      std::make_unique<VVarExpr>(ValueTemporary, PointerType, Loc,
+                                 ProvenanceTemporary),
+      Loc));
+  Out.push_back(std::make_unique<VAssignStmt>(
+      It->second,
+      std::make_unique<VVarExpr>(ProvenanceTemporary, VType::makePtr(), Loc),
+      Loc));
+  markInitialized(Target);
+  return true;
+}
+
 bool ASTConverter::ghostAssignmentAllowed(const Expr *E) const {
   if (!InGhost)
     return true;
@@ -413,11 +529,86 @@ void ASTConverter::beginInitializationTracking(const FunctionDecl *FD) {
   InitializedValues.clear();
   ReportedUninitializedValues.clear();
   DynamicPointers.clear();
-  DynamicPointerIdentities.clear();
+  DynamicPointerProvenanceVariables.clear();
   GhostLocals.clear();
-  DynamicAllocationId = 0;
+  DynamicProvenanceId = 0;
+  DynamicPointerAssignmentId = 0;
   LoopDepth = 0;
   InitializationPathReachable = true;
+
+  struct DynamicPointerDiscovery
+      : RecursiveASTVisitor<DynamicPointerDiscovery> {
+    std::set<const VarDecl *> Roots;
+    std::vector<const VarDecl *> CandidateOrder;
+    std::set<const VarDecl *> Candidates;
+    std::vector<std::pair<const VarDecl *, const Expr *>> Assignments;
+
+    void addCandidate(const VarDecl *Target) {
+      if (Target && Target->isLocalVarDecl() &&
+          Target->getType()->isPointerType() &&
+          Candidates.insert(Target).second)
+        CandidateOrder.push_back(Target);
+    }
+
+    bool VisitVarDecl(VarDecl *D) {
+      if (!D->isLocalVarDecl() || !D->getType()->isPointerType() ||
+          !D->hasInit())
+        return true;
+      addCandidate(D);
+      if (isa<CXXNewExpr>(D->getInit()->IgnoreParenImpCasts()))
+        Roots.insert(D);
+      else
+        Assignments.emplace_back(D, D->getInit());
+      return true;
+    }
+
+    bool VisitBinaryOperator(BinaryOperator *B) {
+      if (B->getOpcode() != BO_Assign)
+        return true;
+      const auto *DRE =
+          dyn_cast<DeclRefExpr>(B->getLHS()->IgnoreParenImpCasts());
+      const auto *Target = DRE ? dyn_cast<VarDecl>(DRE->getDecl()) : nullptr;
+      if (!Target || !Target->isLocalVarDecl() ||
+          !Target->getType()->isPointerType())
+        return true;
+      addCandidate(Target);
+      Assignments.emplace_back(Target, B->getRHS());
+      return true;
+    }
+
+    static bool referencesAny(const Expr *E,
+                              const std::set<const VarDecl *> &Pointers) {
+      if (!E)
+        return false;
+      if (const auto *DRE = dyn_cast<DeclRefExpr>(E->IgnoreParenImpCasts()))
+        if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl()))
+          if (Pointers.count(VD))
+            return true;
+      for (const Stmt *Child : E->children())
+        if (const auto *ChildExpr = dyn_cast_or_null<Expr>(Child))
+          if (referencesAny(ChildExpr, Pointers))
+            return true;
+      return false;
+    }
+  } Discovery;
+
+  if (const Stmt *Body = FD->getBody())
+    Discovery.TraverseStmt(const_cast<Stmt *>(Body));
+  DynamicPointers = Discovery.Roots;
+  bool Changed = true;
+  while (Changed) {
+    Changed = false;
+    for (const auto &[Target, Source] : Discovery.Assignments)
+      if (!DynamicPointers.count(Target) &&
+          DynamicPointerDiscovery::referencesAny(Source, DynamicPointers))
+        Changed |= DynamicPointers.insert(Target).second;
+  }
+  for (const VarDecl *Pointer : Discovery.CandidateOrder)
+    if (DynamicPointers.count(Pointer))
+      DynamicPointerProvenanceVariables.emplace(
+          Pointer, "__cppverify_pointer_provenance_" +
+                       std::to_string(++DynamicProvenanceId));
+
   for (const ParmVarDecl *P : FD->parameters()) {
     DeclaredValueNames.insert(valueName(P));
     for (const std::string &Name : trackedValueNames(P))
@@ -1138,6 +1329,25 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     beginInitializationTracking(FD);
     Fn->Body = convertStmt(Body);
     TrackInitialization = false;
+    if (!DynamicPointerProvenanceVariables.empty()) {
+      std::vector<std::pair<std::string, SourceLocation>> InitialProvenance;
+      InitialProvenance.reserve(DynamicPointerProvenanceVariables.size());
+      for (const auto &[Pointer, Provenance] :
+           DynamicPointerProvenanceVariables)
+        InitialProvenance.emplace_back(Provenance, Pointer->getBeginLoc());
+      std::sort(InitialProvenance.begin(), InitialProvenance.end(),
+                [](const auto &L, const auto &R) { return L.first < R.first; });
+
+      std::vector<std::unique_ptr<VStmt>> InitializedBody;
+      InitializedBody.reserve(InitialProvenance.size() + Fn->Body.size());
+      for (const auto &[Provenance, Loc] : InitialProvenance)
+        InitializedBody.push_back(std::make_unique<VAssignStmt>(
+            Provenance,
+            std::make_unique<VLiteralExpr>(0, VType::makePtr(), Loc), Loc));
+      for (auto &S : Fn->Body)
+        InitializedBody.push_back(std::move(S));
+      Fn->Body = std::move(InitializedBody);
+    }
     if (Fn->IsSpec && !specBodyCanBeAxiomatized(Fn->Body)) {
       Errors.push_back(Fn->Name +
                        ": spec function body is unsupported by axiomatic "
@@ -1468,13 +1678,13 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
       }
       requireInitialized(VD);
       VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
-      std::string AllocationIdentity;
-      if (auto It = DynamicPointerIdentities.find(VD);
-          It != DynamicPointerIdentities.end())
-        AllocationIdentity = It->second;
+      std::string ProvenanceVariable;
+      if (auto It = DynamicPointerProvenanceVariables.find(VD);
+          It != DynamicPointerProvenanceVariables.end())
+        ProvenanceVariable = It->second;
       return std::make_unique<VVarExpr>(
           Bound == BoundValues.end() ? valueName(VD) : Bound->second, Ty,
-          E->getExprLoc(), std::move(AllocationIdentity));
+          E->getExprLoc(), std::move(ProvenanceVariable));
     }
   }
   if (const auto *U = dyn_cast<UnaryOperator>(E)) {
@@ -1657,13 +1867,6 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
     return std::make_unique<VOldExpr>(std::move(Inner), Ty, E->getExprLoc());
   }
   if (const auto *C = dyn_cast<ConditionalOperator>(E)) {
-    if (referencesDynamicPointer(C->getTrueExpr()) ||
-        referencesDynamicPointer(C->getFalseExpr())) {
-      Errors.push_back(
-          CurrentFn->Name +
-          ": conditional dynamic-storage pointers are unsupported");
-      return nullptr;
-    }
     auto Cond = convertExpr(C->getCond());
     auto T = convertExpr(C->getTrueExpr());
     auto F = convertExpr(C->getFalseExpr());
@@ -2689,15 +2892,18 @@ std::vector<std::unique_ptr<VStmt>> ASTConverter::convertStmt(const Stmt *S) {
                          ": ghost code cannot modify executable state");
         return Out;
       }
-      if (const auto *DRE =
-              dyn_cast<DeclRefExpr>(BO->getLHS()->IgnoreParenImpCasts()))
-        if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl()))
-          if (DynamicPointers.count(VD)) {
-            Errors.push_back(
-                CurrentFn->Name +
-                ": reassigning a dynamic-storage pointer is unsupported");
-            return Out;
-          }
+      const auto *DirectLHS =
+          dyn_cast<DeclRefExpr>(BO->getLHS()->IgnoreParenImpCasts());
+      const auto *DirectTarget =
+          DirectLHS ? dyn_cast<VarDecl>(DirectLHS->getDecl()) : nullptr;
+      if (BO->getOpcode() == BO_Assign && DirectTarget &&
+          DirectTarget->getType()->isPointerType() &&
+          (DynamicPointers.count(DirectTarget) ||
+           referencesDynamicPointer(BO->getRHS()))) {
+        appendDynamicPointerAssignment(DirectTarget, BO->getRHS(),
+                                       BO->getExprLoc(), Out);
+        return Out;
+      }
       if (BO->getRHS()->getType()->isPointerType() &&
           referencesDynamicPointer(BO->getRHS())) {
         Errors.push_back(CurrentFn->Name +
@@ -2897,48 +3103,27 @@ std::vector<std::unique_ptr<VStmt>> ASTConverter::convertStmt(const Stmt *S) {
           Initializer = convertExpr(Init);
         if (New->hasInitializer() && !Initializer)
           continue;
-        const std::string AllocationIdentity =
-            std::to_string(++DynamicAllocationId);
+        auto Provenance = DynamicPointerProvenanceVariables.find(VD);
+        if (Provenance == DynamicPointerProvenanceVariables.end())
+          Provenance =
+              DynamicPointerProvenanceVariables
+                  .emplace(VD, "__cppverify_pointer_provenance_" +
+                                   std::to_string(++DynamicProvenanceId))
+                  .first;
+        const std::string &ProvenanceVariable = Provenance->second;
         DynamicPointers.insert(VD);
-        DynamicPointerIdentities.emplace(VD, AllocationIdentity);
         CurrentFn->UsesDynamicStorage = true;
         Out.push_back(std::make_unique<VAllocateStmt>(
-            valueName(VD), VType::fromQualType(Allocated, IntMode, Ctx),
-            AllocationIdentity, std::move(Initializer), Size, Align,
-            VD->getBeginLoc()));
+            valueName(VD), ProvenanceVariable,
+            VType::fromQualType(Allocated, IntMode, Ctx),
+            std::move(Initializer), Size, Align, VD->getBeginLoc()));
         markInitialized(VD);
         continue;
       }
       if (VD->getType()->isPointerType() &&
           referencesDynamicPointer(VD->getInit())) {
-        const VarDecl *Source = directDynamicPointer(VD->getInit());
-        if (!Source) {
-          Errors.push_back(
-              CurrentFn->Name +
-              ": dynamic-storage pointer copies require a direct source");
-          continue;
-        }
-        if (!Ctx.hasSameUnqualifiedType(VD->getType()->getPointeeType(),
-                                        Source->getType()->getPointeeType())) {
-          Errors.push_back(CurrentFn->Name + ": dynamic-storage pointer copies "
-                                             "require matching pointee types");
-          continue;
-        }
-        auto Identity = DynamicPointerIdentities.find(Source);
-        if (Identity == DynamicPointerIdentities.end()) {
-          Errors.push_back(
-              CurrentFn->Name +
-              ": dynamic-storage pointer has no lifetime identity");
-          continue;
-        }
-        auto Value = convertExpr(VD->getInit());
-        if (!Value)
-          continue;
-        Out.push_back(std::make_unique<VAssignStmt>(
-            valueName(VD), std::move(Value), VD->getBeginLoc()));
-        DynamicPointers.insert(VD);
-        DynamicPointerIdentities.emplace(VD, Identity->second);
-        markInitialized(VD);
+        appendDynamicPointerAssignment(VD, VD->getInit(), VD->getBeginLoc(),
+                                       Out);
         continue;
       }
       if (const auto *CE = dyn_cast<CXXConstructExpr>(VD->getInit())) {

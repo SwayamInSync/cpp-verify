@@ -18,6 +18,8 @@ inline constexpr const char *VAllocationHeapName = "__heap_alloc";
 inline constexpr const char *VAllocationBaseHeapName = "__heap_alloc_base";
 /// Allocation identity -> live/dead map.
 inline constexpr const char *VLivenessHeapName = "__heap_live";
+/// Allocation identity -> whether that identity has ever been issued.
+inline constexpr const char *VAllocationUsedHeapName = "__heap_alloc_used";
 /// Address -> initialized/uninitialized map.
 inline constexpr const char *VInitializationHeapName = "__heap_init";
 /// Allocation identity -> allocation size in target bytes.
@@ -93,12 +95,12 @@ public:
 class VVarExpr : public VExpr {
 public:
   std::string Name;
-  /// Static lifetime identity for a direct local allocation pointer.
-  std::string AllocationIdentity;
+  /// SSA companion carrying the lifetime identity of a local pointer value.
+  std::string ProvenanceVariable;
   VVarExpr(std::string Name, VType Ty, SourceLocation Loc,
-           std::string AllocationIdentity = "")
+           std::string ProvenanceVariable = "")
       : VExpr(Var, Ty, Loc), Name(std::move(Name)),
-        AllocationIdentity(std::move(AllocationIdentity)) {}
+        ProvenanceVariable(std::move(ProvenanceVariable)) {}
 };
 
 class VBinOpExpr : public VExpr {

@@ -74,10 +74,10 @@ bindParams(const VFunction &Fn,
 static std::unique_ptr<VExpr>
 envLookup(const std::map<std::string, std::unique_ptr<VExpr>> &Env,
           const std::string &Name, VType Ty, SourceLocation Loc,
-          const std::string &AllocationIdentity) {
+          const std::string &ProvenanceVariable) {
   if (auto It = Env.find(Name); It != Env.end())
     return cloneVExpr(It->second.get());
-  return std::make_unique<VVarExpr>(Name, Ty, Loc, AllocationIdentity);
+  return std::make_unique<VVarExpr>(Name, Ty, Loc, ProvenanceVariable);
 }
 
 class SpecInlinerImpl {
@@ -484,7 +484,7 @@ public:
       return cloneVExpr(E);
     case VExpr::Var: {
       const auto *V = static_cast<const VVarExpr *>(E);
-      return envLookup(Env, V->Name, E->Ty, E->Loc, V->AllocationIdentity);
+      return envLookup(Env, V->Name, E->Ty, E->Loc, V->ProvenanceVariable);
     }
     case VExpr::BinOp: {
       const auto *B = static_cast<const VBinOpExpr *>(E);

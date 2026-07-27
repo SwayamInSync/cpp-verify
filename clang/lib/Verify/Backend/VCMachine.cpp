@@ -7,18 +7,22 @@
 using namespace clang;
 using namespace verify;
 
-static std::string allocationIdentityForPointer(const VExpr *E) {
+static std::unique_ptr<VExpr> pointerProvenance(const VExpr *E) {
   while (E && E->K == VExpr::Cast)
     E = static_cast<const VCastExpr *>(E)->Inner.get();
   if (E && E->K == VExpr::BinOp) {
     const auto *B = static_cast<const VBinOpExpr *>(E);
     if ((B->Op == VBinOp::Add || B->Op == VBinOp::Sub) &&
         B->Lhs->Ty.Kind == VTypeKind::Ptr)
-      return allocationIdentityForPointer(B->Lhs.get());
+      return pointerProvenance(B->Lhs.get());
   }
   if (!E || E->K != VExpr::Var)
-    return "";
-  return static_cast<const VVarExpr *>(E)->AllocationIdentity;
+    return nullptr;
+  const auto *V = static_cast<const VVarExpr *>(E);
+  if (V->ProvenanceVariable.empty())
+    return nullptr;
+  return std::make_unique<VVarExpr>(V->ProvenanceVariable, VType::makePtr(),
+                                    V->Loc);
 }
 
 static std::unique_ptr<VCExpr> vcTrue() {
@@ -445,13 +449,15 @@ public:
                                                    VType::makePtr(), U->Loc,
                                                    U->AllocationHeapVar);
           std::unique_ptr<VExpr> HasOwner;
-          const std::string AllocationIdentity =
-              allocationIdentityForPointer(U->Operand.get());
-          if (!AllocationIdentity.empty()) {
+          auto Provenance = pointerProvenance(U->Operand.get());
+          std::unique_ptr<VExpr> NonzeroProvenance;
+          if (Provenance) {
+            NonzeroProvenance = std::make_unique<VBinOpExpr>(
+                VBinOp::Ne, cloneVExpr(Provenance.get()),
+                std::make_unique<VLiteralExpr>(0, VType::makePtr(), U->Loc),
+                VType::makeBool(), U->Loc);
             HasOwner = std::make_unique<VBinOpExpr>(
-                VBinOp::Eq, cloneVExpr(Owner.get()),
-                std::make_unique<VLiteralExpr>(AllocationIdentity,
-                                               VType::makePtr(), U->Loc),
+                VBinOp::Eq, cloneVExpr(Owner.get()), std::move(Provenance),
                 VType::makeBool(), U->Loc);
           } else {
             HasOwner = std::make_unique<VBinOpExpr>(
@@ -464,6 +470,10 @@ public:
           auto Valid = std::make_unique<VBinOpExpr>(
               VBinOp::And, std::move(HasOwner), std::move(Live),
               VType::makeBool(), U->Loc);
+          if (NonzeroProvenance)
+            Valid = std::make_unique<VBinOpExpr>(
+                VBinOp::And, std::move(NonzeroProvenance), std::move(Valid),
+                VType::makeBool(), U->Loc);
           return fromVExpr(Valid.get());
         }
         auto N = std::make_unique<VCExpr>(VCExpr::ValidPtr);

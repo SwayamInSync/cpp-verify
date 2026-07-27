@@ -21,7 +21,7 @@ std::unique_ptr<VStmt> verify::cloneVStmt(const VStmt *S) {
   case VStmt::Allocate: {
     const auto &A = static_cast<const VAllocateStmt &>(*S);
     return std::make_unique<VAllocateStmt>(
-        A.Target, A.AllocatedType, A.AllocationIdentity,
+        A.Target, A.ProvenanceTarget, A.AllocatedType,
         cloneVExpr(A.Initializer.get()), A.SizeBytes, A.AlignBytes, A.Loc);
   }
   case VStmt::Free: {
