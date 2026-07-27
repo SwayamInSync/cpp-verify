@@ -98,6 +98,27 @@ ByteState enum_roundtrip(ByteState value)
   return observed;
 }
 
+int alias_store_roundtrip(int value)
+  post(result == value)
+{
+  int *owner = new int;
+  int *alias = owner;
+  *alias = value;
+  int observed = *owner;
+  delete alias;
+  return observed;
+}
+
+int const_alias_roundtrip(int value)
+  post(result == value)
+{
+  int *owner = new int(value);
+  const int *alias = owner;
+  int observed = *alias;
+  delete alias;
+  return observed;
+}
+
 // VERIFY-DAG: Verified: initialized_roundtrip
 // VERIFY-DAG: Verified: stored_roundtrip
 // VERIFY-DAG: Verified: distinct_allocations
@@ -107,3 +128,5 @@ ByteState enum_roundtrip(ByteState value)
 // VERIFY-DAG: Verified: allocation_after_incrementless_loop
 // VERIFY-DAG: Verified: bool_roundtrip
 // VERIFY-DAG: Verified: enum_roundtrip
+// VERIFY-DAG: Verified: alias_store_roundtrip
+// VERIFY-DAG: Verified: const_alias_roundtrip

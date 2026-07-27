@@ -8,11 +8,11 @@ int *escape_pointer()
   return p;
 }
 
-int copy_pointer()
+int conditional_copy(bool choose)
   post(result == 1)
 {
   int *p = new int(1);
-  int *q = p;
+  int *q = choose ? p : p;
   return *q;
 }
 
@@ -91,8 +91,17 @@ int spec_call_boundary()
   return nonnull;
 }
 
+int erased_pointer_copy()
+  post(result == 1)
+{
+  int *p = new int(1);
+  void *erased = p;
+  delete p;
+  return erased != nullptr;
+}
+
 // VERIFY-DAG: error: escape_pointer: dynamic-storage pointers cannot escape through a return
-// VERIFY-DAG: error: copy_pointer: copying a dynamic-storage pointer is unsupported
+// VERIFY-DAG: error: conditional_copy: dynamic-storage pointer copies require a direct source
 // VERIFY-DAG: error: pointer_arithmetic: dynamic-storage dereference requires its direct allocation pointer
 // VERIFY-DAG: error: pointer_parameter: dynamic allocation in functions with pointer parameters is not yet supported
 // VERIFY-DAG: error: array_allocation: unsupported C++ type in verification: int[2]
@@ -102,3 +111,4 @@ int spec_call_boundary()
 // VERIFY-DAG: error: subscript_store: subscripting dynamic-storage pointers is unsupported
 // VERIFY-DAG: error: offset_store: dynamic-storage dereference requires its direct allocation pointer
 // VERIFY-DAG: error: spec_call_boundary: dynamic-storage pointers cannot cross a function-call boundary
+// VERIFY-DAG: error: erased_pointer_copy: dynamic-storage pointer copies require matching pointee types

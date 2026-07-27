@@ -69,6 +69,35 @@ int stale_pointer_after_reuse()
   return observed;
 }
 
+int alias_use_after_delete()
+  post(true)
+{
+  int *owner = new int(1);
+  int *alias = owner;
+  delete alias;
+  return *owner;
+}
+
+int alias_double_delete()
+  post(true)
+{
+  int *owner = new int(1);
+  int *alias = owner;
+  delete alias;
+  delete owner;
+  return 0;
+}
+
+bool aliases_are_distinct()
+  post(result)
+{
+  int *owner = new int(1);
+  int *alias = owner;
+  bool distinct = owner != alias;
+  delete owner;
+  return distinct;
+}
+
 // VERIFY-DAG: error: verification failed: use_after_delete
 // VERIFY-DAG: error: verification failed: double_delete
 // VERIFY-DAG: error: verification failed: uninitialized_read
@@ -76,3 +105,6 @@ int stale_pointer_after_reuse()
 // VERIFY-DAG: error: verification failed: path_sensitive_double_delete
 // VERIFY-DAG: error: verification failed: path_sensitive_uninitialized_read
 // VERIFY-DAG: error: verification failed: stale_pointer_after_reuse
+// VERIFY-DAG: error: verification failed: alias_use_after_delete
+// VERIFY-DAG: error: verification failed: alias_double_delete
+// VERIFY-DAG: error: verification failed: aliases_are_distinct
