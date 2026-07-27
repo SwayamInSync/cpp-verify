@@ -1499,17 +1499,25 @@ class PassivizerImpl {
   std::vector<FieldReturnCase> FieldReturnCases;
   std::vector<std::unique_ptr<VExpr>> ReturnGuards;
   std::vector<std::string> OwnedAllocationIdentities;
+  std::set<std::string> HeapBases;
+  std::set<std::string> HeapVariables;
   std::string ResultVar = "__result";
   const VFunction &Fn;
   FunctionMap FnMap;
 
   std::string versionedName(const std::string &N) {
     int &V = Versions[N];
-    return N + "_" + std::to_string(V);
+    std::string Name = N + "_" + std::to_string(V);
+    if (HeapBases.count(N))
+      HeapVariables.insert(Name);
+    return Name;
   }
 
   std::string bump(const std::string &N) {
-    return N + "_" + std::to_string(++Versions[N]);
+    std::string Name = N + "_" + std::to_string(++Versions[N]);
+    if (HeapBases.count(N))
+      HeapVariables.insert(Name);
+    return Name;
   }
 
   static void emitPassive(PassiveProgram &P, PassiveStmt::Kind K,
@@ -1760,6 +1768,8 @@ public:
 
   PassiveProgram run() {
     PassiveProgram P;
+    P.FunctionName = Fn.Name;
+    P.FunctionIdentity = Fn.Identity;
     CloneCtx Ctx{{}, OldState, false};
 
     const char *StateHeaps[] = {VHeapName,
@@ -1771,6 +1781,7 @@ public:
                                 VAllocationSizeHeapName,
                                 VAllocationAlignHeapName};
     for (const char *Heap : StateHeaps) {
+      HeapBases.insert(Heap);
       Versions[Heap] = 0;
       Types[Heap] = VType::makePtr();
     }
@@ -1840,6 +1851,7 @@ public:
       P.ExitAsserts.push_back(std::move(BoundPost));
     }
     P.OldHeapName = Heap0;
+    P.HeapVariables = HeapVariables;
     P.SpecFunctions = FnMap;
     P.SpecFuel = Fn.SpecFuel;
     P.HiddenSpecs = Fn.HiddenSpecs;

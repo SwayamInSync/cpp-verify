@@ -1,6 +1,7 @@
 //===--- Z3Encode.cpp -----------------------------------------------------===//
 #include "Z3Encode.h"
 #include "SpecAxioms.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
@@ -72,17 +73,17 @@ z3::func_decl Z3Encoder::specFuncDecl(const VFunction *Spec) {
 
 z3::expr Z3Encoder::encodeVExprForAxiom(const VExpr *E, const VType &RetTy,
                                         VIntMode SpecMode) {
-  VCMachine M =
-      VCMachine::fromVExpr(E, "", std::string(VHeapName) + "_0", SpecMode);
-  if (!M.Goal) {
-    markEncodingFailure("spec definition produced no verification expression");
+  auto Lowered = lowerLogicExpr(E, "", std::string(VHeapName) + "_0", SpecMode);
+  if (!Lowered) {
+    markEncodingFailure("spec definition lowering failed: " +
+                        llvm::toString(Lowered.takeError()));
     VCExpr Placeholder(VCExpr::False);
     Placeholder.TypeKind = RetTy.Kind;
     Placeholder.IntMode = SpecMode;
     Placeholder.BitWidth = RetTy.BitWidth;
     return fallbackValue(&Placeholder);
   }
-  z3::expr Result = encodeVC(M.Goal.get());
+  z3::expr Result = encodeVC(Lowered->get());
   if (RetTy.Kind != VTypeKind::Ptr)
     Result = coerceTo(Result, SpecMode, RetTy.BitWidth, RetTy.IsSigned);
   return Result;
@@ -263,10 +264,14 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
   case VCExpr::BoolLit:
     return Ctx.bool_val(E->BoolVal);
   case VCExpr::IntLit: {
-    if (E->TypeKind == VTypeKind::Ptr)
+    if (E->Sort.Kind == LogicSortKind::Pointer)
       return Ctx.int_val(E->IntVal.c_str());
-    if (E->IntMode == VIntMode::Machine)
+    if (E->Sort.Kind == LogicSortKind::BitVector)
       return Ctx.bv_val(E->IntVal.c_str(), E->BitWidth);
+    if (E->Sort.Kind != LogicSortKind::MathematicalInteger) {
+      markEncodingFailure("integer literal has non-integer logic sort");
+      return fallbackValue(E);
+    }
     return Ctx.int_val(E->IntVal.c_str());
   }
   case VCExpr::Var: {
@@ -274,20 +279,17 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
     if (It != Vars.end())
       return It->second;
     z3::expr Z = Ctx.int_const("_unused");
-    if (E->Name.find("__heap") != std::string::npos ||
-        E->Name.rfind(VHeapName, 0) == 0) {
+    if (E->Sort.Kind == LogicSortKind::Heap) {
       Z = Ctx.constant(E->Name.c_str(), heapSort());
-    } else if (E->TypeKind == VTypeKind::Bool) {
+    } else if (E->Sort.Kind == LogicSortKind::Bool) {
       Z = Ctx.bool_const(E->Name.c_str());
-    } else if (E->TypeKind == VTypeKind::Ptr) {
+    } else if (E->Sort.Kind == LogicSortKind::Pointer ||
+               E->Sort.Kind == LogicSortKind::MathematicalInteger) {
       Z = Ctx.int_const(E->Name.c_str());
-    } else if (E->TypeKind == VTypeKind::Struct ||
-               E->TypeKind == VTypeKind::Unsupported) {
-      markEncodingFailure("unsupported variable type: " + E->Name);
-      Z = Ctx.int_const(E->Name.c_str());
-    } else if (E->IntMode == VIntMode::Machine) {
+    } else if (E->Sort.Kind == LogicSortKind::BitVector) {
       Z = Ctx.bv_const(E->Name.c_str(), E->BitWidth);
     } else {
+      markEncodingFailure("unsupported variable sort: " + E->Name);
       Z = Ctx.int_const(E->Name.c_str());
     }
     Vars.emplace(E->Name, Z);
@@ -726,11 +728,14 @@ void Z3Encoder::emitSpecCallAxiom(const VCExpr *Call,
   }
 }
 
-std::optional<z3::expr> Z3Encoder::encodeMachine(const VCMachine &M,
-                                                 VerifyResult &Result) {
+std::optional<z3::expr> Z3Encoder::encodeModule(const ObligationModule &Module,
+                                                const LogicExpr *Query,
+                                                VerifyResult &Result) {
+  if (!Query)
+    Query = Module.CounterexampleQuery.get();
   Vars.clear();
-  Solver = containsQuantifier(M.Goal.get()) ? z3::tactic(Ctx, "smt").mk_solver()
-                                            : z3::solver(Ctx);
+  Solver = containsQuantifier(Query) ? z3::tactic(Ctx, "smt").mk_solver()
+                                     : z3::solver(Ctx);
   z3::params Params(Ctx);
   if (TimeoutMs > 0)
     Params.set("timeout", TimeoutMs);
@@ -739,18 +744,19 @@ std::optional<z3::expr> Z3Encoder::encodeMachine(const VCMachine &M,
   Solver.set(Params);
   EncodingFailed = false;
   EncodingError.clear();
-  SpecFunctions = M.SpecFunctions;
-  CallerIntMode = M.CallerIntMode;
-  if (!M.Goal) {
+  SpecFunctions = Module.SpecFunctions;
+  CallerIntMode = Module.CallerIntMode;
+  if (!Query) {
     Result.Status = VerifyStatus::Unknown;
-    Result.Message = "missing verification condition";
+    Result.Message = "missing counterexample query";
     return std::nullopt;
   }
-  SpecAxiomContext AxiomCtx{M.SpecFunctions, M.SpecFuel, M.HiddenSpecs,
-                            M.RevealedSpecs, M.CallerIntMode};
-  emitSpecAxioms(*this, M.Goal.get(), AxiomCtx);
+  SpecAxiomContext AxiomCtx{Module.SpecFunctions, Module.SpecFuel,
+                            Module.HiddenSpecs, Module.RevealedSpecs,
+                            Module.CallerIntMode};
+  emitSpecAxioms(*this, Query, AxiomCtx);
   Vars.clear();
-  z3::expr EncodedGoal = encodeVC(M.Goal.get());
+  z3::expr EncodedGoal = encodeVC(Query);
   if (EncodingFailed) {
     Result.Status = VerifyStatus::Unknown;
     Result.Message = EncodingError;
@@ -759,9 +765,10 @@ std::optional<z3::expr> Z3Encoder::encodeMachine(const VCMachine &M,
   return EncodedGoal;
 }
 
-VerifyResult Z3Encoder::verifyMachine(const VCMachine &M) {
+VerifyResult Z3Encoder::verifyModule(const ObligationModule &Module,
+                                     const LogicExpr *Query) {
   VerifyResult Out;
-  auto EncodedGoal = encodeMachine(M, Out);
+  auto EncodedGoal = encodeModule(Module, Query, Out);
   if (!EncodedGoal)
     return Out;
   Solver.add(*EncodedGoal);
@@ -785,10 +792,11 @@ VerifyResult Z3Encoder::verifyMachine(const VCMachine &M) {
   }
 }
 
-VerifyResult Z3Encoder::lowerMachine(const VCMachine &M,
-                                     llvm::raw_ostream *OS) {
+VerifyResult Z3Encoder::lowerModule(const ObligationModule &Module,
+                                    llvm::raw_ostream *OS) {
   VerifyResult Out;
-  auto EncodedGoal = encodeMachine(M, Out);
+  auto EncodedGoal =
+      encodeModule(Module, Module.CounterexampleQuery.get(), Out);
   if (!EncodedGoal)
     return Out;
   if (OS)
@@ -797,7 +805,7 @@ VerifyResult Z3Encoder::lowerMachine(const VCMachine &M,
   return Out;
 }
 
-VerifyResult Z3VerifyBackend::verifyPassive(const PassiveProgram &P) {
+VerifyResult Z3VerifyBackend::verifyModule(const ObligationModule &Module) {
   auto finishResult = [](VerifyResult R) {
     if (R.Status != VerifyStatus::Failed)
       return R;
@@ -815,83 +823,31 @@ VerifyResult Z3VerifyBackend::verifyPassive(const PassiveProgram &P) {
   // use a short complete-VC probe and preserve the configured budget for the
   // ordered obligations.
   const bool WholeUsedFullBudget =
-      !P.SpecFunctions.empty() || (TimeoutMs > 0 && TimeoutMs <= 500);
+      !Module.SpecFunctions.empty() || (TimeoutMs > 0 && TimeoutMs <= 500);
   Enc.setTimeoutMs(WholeUsedFullBudget
                        ? TimeoutMs
                        : (TimeoutMs == 0 ? 500 : std::min(TimeoutMs, 500U)));
-  VerifyResult Whole = Enc.verifyMachine(VCMachine::fromPassive(P));
+  VerifyResult Whole = Enc.verifyModule(Module);
   Enc.setTimeoutMs(TimeoutMs);
   if (Whole.Status != VerifyStatus::Unknown)
     return finishResult(std::move(Whole));
 
-  auto cloneContext = [](const PassiveProgram &Source) {
-    PassiveProgram Clone;
-    for (const auto &Entry : Source.EntryAssumes)
-      Clone.EntryAssumes.push_back(cloneVExpr(Entry.get()));
-    Clone.ResultVarName = Source.ResultVarName;
-    Clone.OldHeapName = Source.OldHeapName;
-    Clone.SpecFunctions = Source.SpecFunctions;
-    Clone.SpecFuel = Source.SpecFuel;
-    Clone.HiddenSpecs = Source.HiddenSpecs;
-    Clone.RevealedSpecs = Source.RevealedSpecs;
-    Clone.CallerIntMode = Source.CallerIntMode;
-    return Clone;
-  };
-  auto appendStmt = [](PassiveProgram &Program, PassiveStmt::Kind Kind,
-                       const VExpr *Cond) {
-    auto Stmt = std::make_unique<PassiveStmt>();
-    Stmt->K = Kind;
-    Stmt->Cond = cloneVExpr(Cond);
-    Program.Stmts.push_back(std::move(Stmt));
-  };
-  auto verifyProgram = [&](const PassiveProgram &Program) {
-    return Enc.verifyMachine(VCMachine::fromPassive(Program));
-  };
   auto retryWhole = [&](VerifyResult SplitResult) {
     if (WholeUsedFullBudget)
       return finishResult(std::move(SplitResult));
-    VerifyResult Retry = Enc.verifyMachine(VCMachine::fromPassive(P));
+    VerifyResult Retry = Enc.verifyModule(Module);
     if (Retry.Status != VerifyStatus::Unknown)
       return finishResult(std::move(Retry));
     return finishResult(std::move(SplitResult));
   };
 
-  PassiveProgram Context = cloneContext(P);
-  unsigned ObligationIndex = 0;
-  for (const auto &Stmt : P.Stmts) {
-    if (!Stmt->Cond)
-      continue;
-    if (Stmt->K == PassiveStmt::Assume) {
-      appendStmt(Context, PassiveStmt::Assume, Stmt->Cond.get());
-      continue;
-    }
-
-    ++ObligationIndex;
-    PassiveProgram Obligation = cloneContext(P);
-    for (const auto &Known : Context.Stmts)
-      appendStmt(Obligation, Known->K, Known->Cond.get());
-    appendStmt(Obligation, PassiveStmt::Assert, Stmt->Cond.get());
-    VerifyResult R = verifyProgram(Obligation);
+  for (const Obligation &Item : Module.Obligations) {
+    VerifyResult R = Enc.verifyModule(Module, Item.CounterexampleQuery.get());
     if (R.Status != VerifyStatus::Verified) {
+      R.ObligationId = Item.Id;
+      R.Location = Item.Loc;
       if (R.Status == VerifyStatus::Unknown)
-        R.Message = "proof obligation " + std::to_string(ObligationIndex) +
-                    (R.Message.empty() ? "" : ": " + R.Message);
-      if (R.Status == VerifyStatus::Unknown)
-        return retryWhole(std::move(R));
-      return finishResult(std::move(R));
-    }
-  }
-
-  for (const auto &Exit : P.ExitAsserts) {
-    ++ObligationIndex;
-    PassiveProgram Obligation = cloneContext(P);
-    for (const auto &Known : Context.Stmts)
-      appendStmt(Obligation, Known->K, Known->Cond.get());
-    Obligation.ExitAsserts.push_back(cloneVExpr(Exit.get()));
-    VerifyResult R = verifyProgram(Obligation);
-    if (R.Status != VerifyStatus::Verified) {
-      if (R.Status == VerifyStatus::Unknown)
-        R.Message = "proof obligation " + std::to_string(ObligationIndex) +
+        R.Message = "proof obligation " + Item.Id +
                     (R.Message.empty() ? "" : ": " + R.Message);
       if (R.Status == VerifyStatus::Unknown)
         return retryWhole(std::move(R));

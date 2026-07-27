@@ -1,6 +1,5 @@
 //===--- DumpIR.cpp -------------------------------------------------------===//
 #include "DumpIR.h"
-#include "../Backend/Z3Encode.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -330,16 +329,137 @@ void verify::dumpPassiveProgram(llvm::StringRef FnName, const PassiveProgram &P,
     dumpVExpr(A.get(), OS, 2);
 }
 
-void verify::dumpVC(llvm::StringRef FnName, const VExpr *VC,
-                    llvm::raw_ostream &OS) {
-  ind(OS, 0) << "vc " << FnName << "\n";
-  dumpVExpr(VC, OS, 1);
+static const char *logicExprToken(LogicExpr::Kind Kind) {
+  switch (Kind) {
+  case LogicExpr::True:
+    return "true";
+  case LogicExpr::False:
+    return "false";
+  case LogicExpr::IntLit:
+    return "integer";
+  case LogicExpr::BoolLit:
+    return "boolean";
+  case LogicExpr::Var:
+    return "variable";
+  case LogicExpr::Not:
+    return "!";
+  case LogicExpr::And:
+    return "&&";
+  case LogicExpr::Or:
+    return "||";
+  case LogicExpr::Ite:
+    return "ite";
+  case LogicExpr::Eq:
+    return "==";
+  case LogicExpr::Ne:
+    return "!=";
+  case LogicExpr::Lt:
+    return "<";
+  case LogicExpr::Le:
+    return "<=";
+  case LogicExpr::Gt:
+    return ">";
+  case LogicExpr::Ge:
+    return ">=";
+  case LogicExpr::Add:
+    return "+";
+  case LogicExpr::Sub:
+    return "-";
+  case LogicExpr::Mul:
+    return "*";
+  case LogicExpr::Div:
+    return "/";
+  case LogicExpr::Rem:
+    return "%";
+  case LogicExpr::Neg:
+    return "neg";
+  case LogicExpr::BitAnd:
+    return "&";
+  case LogicExpr::BitOr:
+    return "|";
+  case LogicExpr::BitXor:
+    return "^";
+  case LogicExpr::Shl:
+    return "<<";
+  case LogicExpr::Shr:
+    return ">>";
+  case LogicExpr::BitNot:
+    return "~";
+  case LogicExpr::ValidPtr:
+    return "valid_ptr";
+  case LogicExpr::Select:
+    return "heap_select";
+  case LogicExpr::Store:
+    return "heap_store";
+  case LogicExpr::Forall:
+    return "forall";
+  case LogicExpr::Exists:
+    return "exists";
+  case LogicExpr::IntToBv:
+    return "int_to_bv";
+  case LogicExpr::BvToInt:
+    return "bv_to_int";
+  case LogicExpr::BvResize:
+    return "bv_resize";
+  case LogicExpr::NoOverflow:
+    return "no_overflow";
+  case LogicExpr::SpecCall:
+    return "spec_call";
+  }
+  return "unknown";
 }
 
-void verify::dumpZ3(const VExpr *VC, llvm::raw_ostream &OS) {
-  VCMachine M =
-      VCMachine::fromVExpr(VC, "__result_0", std::string(VHeapName) + "_0");
-  Z3Encoder Enc;
-  if (M.Goal)
-    Enc.lowerMachine(M, &OS);
+static void dumpLogicSort(const LogicSort &Sort, llvm::raw_ostream &OS) {
+  OS << logicSortName(Sort.Kind);
+  if (Sort.Kind == LogicSortKind::BitVector)
+    OS << Sort.BitWidth;
+}
+
+static void dumpLogicExpr(const LogicExpr *Expr, llvm::raw_ostream &OS,
+                          unsigned Depth) {
+  if (!Expr) {
+    ind(OS, Depth) << "_ : invalid\n";
+    return;
+  }
+  ind(OS, Depth);
+  if (Expr->K == LogicExpr::IntLit)
+    OS << Expr->IntVal;
+  else if (Expr->K == LogicExpr::BoolLit)
+    OS << (Expr->BoolVal ? "true" : "false");
+  else if (Expr->K == LogicExpr::Var)
+    OS << Expr->Name;
+  else if (Expr->K == LogicExpr::Forall || Expr->K == LogicExpr::Exists)
+    OS << logicExprToken(Expr->K) << " " << Expr->Binder;
+  else if (Expr->K == LogicExpr::SpecCall)
+    OS << logicExprToken(Expr->K) << " " << Expr->SpecCallee;
+  else
+    OS << logicExprToken(Expr->K);
+  OS << " : ";
+  dumpLogicSort(Expr->Sort, OS);
+  OS << "\n";
+  for (const auto &Child : Expr->Children)
+    dumpLogicExpr(Child.get(), OS, Depth + 1);
+}
+
+void verify::dumpVC(const ObligationModule &Module, llvm::raw_ostream &OS) {
+  ind(OS, 0) << "vc " << Module.FunctionName << "\n";
+  ind(OS, 1) << "identity " << Module.FunctionIdentity << "\n";
+  ind(OS, 1) << "features " << formatLogicFeatures(Module.RequiredFeatures)
+             << "\n";
+  ind(OS, 1) << "counterexample\n";
+  dumpLogicExpr(Module.CounterexampleQuery.get(), OS, 2);
+  ind(OS, 1) << "obligations " << Module.Obligations.size() << "\n";
+  for (const Obligation &Item : Module.Obligations) {
+    ind(OS, 2) << "obligation " << Item.Id << " "
+               << (Item.Kind == ObligationKind::Assertion ? "assertion"
+                                                          : "postcondition")
+               << "\n";
+    ind(OS, 3) << "source "
+               << (Item.Loc.isValid()
+                       ? std::to_string(Item.Loc.getRawEncoding())
+                       : "unknown")
+               << "\n";
+    ind(OS, 3) << "counterexample\n";
+    dumpLogicExpr(Item.CounterexampleQuery.get(), OS, 4);
+  }
 }

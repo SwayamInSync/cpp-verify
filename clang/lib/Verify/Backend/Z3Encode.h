@@ -1,10 +1,10 @@
-//===--- Z3Encode.h - VCMachine to Z3 -----------------------------------===//
+//===--- Z3Encode.h - Obligation IR to Z3 -----------------------*- C++ -*-===//
 #ifndef LLVM_CLANG_VERIFY_BACKEND_Z3ENCODE_H
 #define LLVM_CLANG_VERIFY_BACKEND_Z3ENCODE_H
 
 #include "../IR/VType.h"
+#include "Obligation.h"
 #include "SpecAxioms.h"
-#include "VCMachine.h"
 #include "VerifyBackend.h"
 #include <map>
 #include <optional>
@@ -42,17 +42,19 @@ class Z3Encoder {
   z3::expr encodeVCNode(const VCExpr *E,
                         const std::map<const VCExpr *, z3::expr> &Done);
   z3::expr encodeVC(const VCExpr *E);
-  std::optional<z3::expr> encodeMachine(const VCMachine &M,
-                                        VerifyResult &Result);
+  std::optional<z3::expr> encodeModule(const ObligationModule &Module,
+                                       const LogicExpr *Query,
+                                       VerifyResult &Result);
   z3::expr encodeVExprForAxiom(const VExpr *E, const VType &RetTy,
                                VIntMode SpecMode);
 
 public:
   Z3Encoder();
   void setTimeoutMs(unsigned Ms) { TimeoutMs = Ms; }
-  VerifyResult verifyMachine(const VCMachine &M);
-  VerifyResult lowerMachine(const VCMachine &M,
-                            llvm::raw_ostream *OS = nullptr);
+  VerifyResult verifyModule(const ObligationModule &Module,
+                            const LogicExpr *Query = nullptr);
+  VerifyResult lowerModule(const ObligationModule &Module,
+                           llvm::raw_ostream *OS = nullptr);
   void emitSpecCallAxiom(const VCExpr *Call, const SpecAxiomContext &Ctx);
 };
 
@@ -65,7 +67,12 @@ public:
     Enc.setTimeoutMs(TimeoutMs);
   }
   llvm::StringRef getName() const override { return "z3"; }
-  VerifyResult verifyPassive(const PassiveProgram &P) override;
+  BackendCapabilities getCapabilities() const override {
+    return {allLogicFeatures(), true};
+  }
+
+protected:
+  VerifyResult verifyModule(const ObligationModule &Module) override;
 };
 
 } // namespace verify

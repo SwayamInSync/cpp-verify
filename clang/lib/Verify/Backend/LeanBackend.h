@@ -8,9 +8,8 @@
 namespace clang {
 namespace verify {
 
-VerifyResult exportLeanScratchPad(const PassiveProgram &P,
-                                  llvm::raw_ostream &OS,
-                                  unsigned SolverTimeoutMs = 0);
+VerifyResult exportLeanScratchPad(const ObligationModule &Module,
+                                  llvm::raw_ostream &OS, bool EmitPreamble);
 
 } // namespace verify
 } // namespace clang

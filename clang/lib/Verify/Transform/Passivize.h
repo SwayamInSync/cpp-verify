@@ -18,11 +18,16 @@ struct PassiveStmt {
 };
 
 struct PassiveProgram {
+  std::string FunctionName;
+  std::string FunctionIdentity;
   std::vector<std::unique_ptr<PassiveStmt>> Stmts;
   std::vector<std::unique_ptr<VExpr>> EntryAssumes;
   std::vector<std::unique_ptr<VExpr>> ExitAsserts;
   std::string ResultVarName;
   std::string OldHeapName;
+  /// Explicitly declared heap-array SSA variables. Backends must not infer
+  /// array sorts from generated variable spellings.
+  std::set<std::string> HeapVariables;
   /// Spec registry + per-enclosing-function reveal/hide (for Z3 axiom
   /// emission).
   FunctionMap SpecFunctions;

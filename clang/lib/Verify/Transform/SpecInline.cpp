@@ -1484,6 +1484,8 @@ static std::vector<DecreaseState> collectRecursiveSpecCallsInBody(
 PassiveProgram verify::buildDecreasesChecks(const VFunction &Fn,
                                             const FunctionMap &FnMap) {
   PassiveProgram P;
+  P.FunctionName = Fn.Name + ".decreases";
+  P.FunctionIdentity = Fn.Identity + "::decreases";
   if (Fn.Decreases.empty())
     return P;
   P.CallerIntMode = Fn.IntMode;

@@ -1,8 +1,6 @@
 //===--- Verifier.cpp - CppVerify driver ----------------------------------===//
 #include "Verifier.h"
-#include "../Backend/LeanBackend.h"
-#include "../Backend/VCMachine.h"
-#include "../Backend/WPCalc.h"
+#include "../Backend/Obligation.h"
 #include "../Backend/Z3Encode.h"
 #include "../Frontend/ASTConverter.h"
 #include "../IR/VStmt.h"
@@ -12,6 +10,7 @@
 #include "../Transform/UBChecks.h"
 #include "DumpIR.h"
 #include "clang/AST/ASTContext.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
@@ -23,7 +22,7 @@ using namespace verify;
 namespace {
 
 struct VerifyDiagnostic {
-  enum Kind { Verified, Lowered, Error, Warning, Unknown };
+  enum Kind { Verified, Lowered, Exported, Error, Warning, Unknown };
   Kind K;
   std::string Message;
 };
@@ -48,6 +47,9 @@ class Verifier {
            ++I)
         ArgMap[It->second->Params[I].first] = cloneVExpr(C->Args[I].get());
       PassiveProgram PP;
+      PP.FunctionName = Caller.Name + ".recommends";
+      PP.FunctionIdentity =
+          Caller.Identity + "::recommends::" + C->CalleeIdentity;
       for (const auto &Pre : Caller.Preconditions)
         PP.EntryAssumes.push_back(cloneVExpr(Pre.get()));
       for (const auto &Rec : It->second->Recommends) {
@@ -60,7 +62,14 @@ class Verifier {
       if (PP.ExitAsserts.empty())
         continue;
       PP.CallerIntMode = Caller.IntMode;
-      VerifyResult R = Backend.verifyPassive(PP);
+      auto Module = buildObligationModule(PP);
+      if (!Module) {
+        Diags.push_back({VerifyDiagnostic::Unknown,
+                         "recommends lowering failed for " + Caller.Name +
+                             " (" + llvm::toString(Module.takeError()) + ")"});
+        continue;
+      }
+      VerifyResult R = Backend.verify(*Module);
       if (R.Status == VerifyStatus::Failed)
         Diags.push_back({VerifyDiagnostic::Warning,
                          "recommends of spec " + C->Callee +
@@ -116,7 +125,6 @@ public:
                                        Opts.SolverTimeoutMs);
     Passivizer P;
     P.setFunctionMap(FnMap);
-    WPCalculator WP;
     Z3Encoder Z3Lowering;
 
     const unsigned DumpLayers = Opts.DumpIRLayers;
@@ -176,9 +184,11 @@ public:
       }
 
       if (Fn->IsSpec && !Fn->NeedsDecreasesCheck) {
-        const VerifyDiagnostic::Kind Kind = Opts.LowerOnly
-                                                ? VerifyDiagnostic::Lowered
-                                                : VerifyDiagnostic::Verified;
+        const VerifyDiagnostic::Kind Kind =
+            Opts.LowerOnly ? VerifyDiagnostic::Lowered
+                           : (Opts.Backend == BackendKind::Lean
+                                  ? VerifyDiagnostic::Exported
+                                  : VerifyDiagnostic::Verified);
         if (Fn->IsConstexprSpec)
           Diags.push_back({Kind, "constexpr spec axiom: " + Fn->Name});
         else
@@ -188,9 +198,19 @@ public:
 
       if (Fn->NeedsDecreasesCheck) {
         PassiveProgram DecPP = buildDecreasesChecks(*Fn, FnMap);
+        auto DecModuleOrErr = buildObligationModule(DecPP);
+        if (!DecModuleOrErr) {
+          AllOk = false;
+          AnyFailed = true;
+          Diags.push_back(
+              {VerifyDiagnostic::Unknown,
+               "obligation lowering failed for decreases: " + Fn->Name + " (" +
+                   llvm::toString(DecModuleOrErr.takeError()) + ")"});
+          continue;
+        }
+        ObligationModule DecModule = std::move(*DecModuleOrErr);
         if (Opts.LowerOnly) {
-          VCMachine DecMachine = VCMachine::fromPassive(DecPP);
-          VerifyResult DR = Z3Lowering.lowerMachine(DecMachine);
+          VerifyResult DR = Z3Lowering.lowerModule(DecModule);
           if (DR.Status != VerifyStatus::Verified) {
             AllOk = false;
             AnyFailed = true;
@@ -206,42 +226,35 @@ public:
                 {VerifyDiagnostic::Lowered, "spec decreases: " + Fn->Name});
             continue;
           }
-        } else if (!Fn->IsSpec) {
-          VerifyResult DR = Backend->verifyPassive(DecPP);
-          if (DR.Status != VerifyStatus::Verified) {
+        } else {
+          VerifyResult R = Backend->verify(DecModule);
+          if (R.Status == VerifyStatus::Exported) {
+            Diags.push_back(
+                {VerifyDiagnostic::Exported, "decreases: " + Fn->Name});
+            if (Fn->IsSpec)
+              continue;
+          } else if (R.Status == VerifyStatus::Verified) {
+            if (Fn->IsSpec) {
+              Diags.push_back(
+                  {VerifyDiagnostic::Verified, "spec decreases: " + Fn->Name});
+              continue;
+            }
+          } else {
             AllOk = false;
             AnyFailed = true;
             if (!Fn->IsProof)
               FailedCallers.insert(Fn->Identity);
-            Diags.push_back({DR.Status == VerifyStatus::Unknown
-                                 ? VerifyDiagnostic::Unknown
-                                 : VerifyDiagnostic::Error,
-                             "decreases " +
-                                 std::string(DR.Status == VerifyStatus::Unknown
-                                                 ? "unknown: "
-                                                 : "failed: ") +
-                                 Fn->Name});
-            continue;
-          }
-        } else {
-          VerifyResult R = Backend->verifyPassive(DecPP);
-          if (R.Status == VerifyStatus::Verified)
-            Diags.push_back(
-                {VerifyDiagnostic::Verified, "spec decreases: " + Fn->Name});
-          else if (R.Status == VerifyStatus::Failed) {
-            AllOk = false;
-            AnyFailed = true;
-            Diags.push_back({VerifyDiagnostic::Error,
-                             "spec decreases failed: " + Fn->Name});
-          } else {
-            AllOk = false;
-            AnyFailed = true;
-            std::string Message = "spec decreases unknown: " + Fn->Name;
+            const bool IsUnknown = R.Status == VerifyStatus::Unknown;
+            std::string Message =
+                std::string(Fn->IsSpec ? "spec decreases " : "decreases ") +
+                (IsUnknown ? "unknown: " : "failed: ") + Fn->Name;
             if (!R.Message.empty())
               Message += " (" + R.Message + ")";
-            Diags.push_back({VerifyDiagnostic::Error, std::move(Message)});
+            Diags.push_back({IsUnknown ? VerifyDiagnostic::Unknown
+                                       : VerifyDiagnostic::Error,
+                             std::move(Message)});
+            continue;
           }
-          continue;
         }
       }
 
@@ -256,18 +269,27 @@ public:
         dumpPassiveProgram(Fn->Name, PP, *DumpOS);
       }
 
-      auto VC = WP.computeVC(PP);
-      if (DumpLayers & LayerVC && VC) {
+      auto ModuleOrErr = buildObligationModule(PP);
+      if (!ModuleOrErr) {
+        AllOk = false;
+        AnyFailed = true;
+        Diags.push_back({VerifyDiagnostic::Unknown,
+                         "obligation lowering failed: " + Fn->Name + " (" +
+                             llvm::toString(ModuleOrErr.takeError()) + ")"});
+        continue;
+      }
+      ObligationModule Module = std::move(*ModuleOrErr);
+
+      if (DumpLayers & LayerVC) {
         dumpSep();
-        dumpVC(Fn->Name, VC.get(), *DumpOS);
+        dumpVC(Module, *DumpOS);
       }
 
       if (DumpLayers & LayerZ3 || Opts.LowerOnly) {
         if (DumpLayers & LayerZ3)
           dumpSep();
-        VCMachine M = VCMachine::fromPassive(PP);
         llvm::raw_ostream *Z3Out = DumpLayers & LayerZ3 ? DumpOS : nullptr;
-        VerifyResult Lowered = Z3Lowering.lowerMachine(M, Z3Out);
+        VerifyResult Lowered = Z3Lowering.lowerModule(Module, Z3Out);
         if (Lowered.Status != VerifyStatus::Verified) {
           AllOk = false;
           AnyFailed = true;
@@ -286,41 +308,20 @@ public:
         continue;
       }
 
-      if (Opts.Backend == BackendKind::Lean) {
-        VerifyResult R;
-        if (LeanOut != DumpOS) {
-          *LeanOut << "\n/- function: " << Fn->Name << " -/\n";
-          R = exportLeanScratchPad(PP, *LeanOut, Opts.SolverTimeoutMs);
-        } else {
-          R = exportLeanScratchPad(PP, *DumpOS, Opts.SolverTimeoutMs);
-        }
-        if (R.Status == VerifyStatus::Verified) {
-          Diags.push_back(
-              {VerifyDiagnostic::Verified, "lean export: " + Fn->Name});
-        } else if (R.Status == VerifyStatus::Failed) {
-          AllOk = false;
-          AnyFailed = true;
-          Diags.push_back(
-              {VerifyDiagnostic::Error,
-               "verification failed: " + Fn->Name + " (lean export written)"});
-        } else {
-          AllOk = false;
-          AnyFailed = true;
-          Diags.push_back(
-              {VerifyDiagnostic::Unknown, "lean export check: " + Fn->Name});
-        }
-        continue;
-      }
-
-      VerifyResult R = Backend->verifyPassive(PP);
+      VerifyResult R = Backend->verify(Module);
       if (R.Status == VerifyStatus::Verified) {
         Diags.push_back({VerifyDiagnostic::Verified, Fn->Name});
+      } else if (R.Status == VerifyStatus::Exported) {
+        Diags.push_back(
+            {VerifyDiagnostic::Exported, "lean obligation: " + Fn->Name});
       } else if (R.Status == VerifyStatus::Failed) {
         AllOk = false;
         AnyFailed = true;
         if (!Fn->IsProof)
           FailedCallers.insert(Fn->Identity);
         std::string Msg = "verification failed: " + Fn->Name;
+        if (!R.ObligationId.empty())
+          Msg += " [" + R.ObligationId + "]";
         if (!R.Message.empty())
           Msg += " (counterexample: " + R.Message + ")";
         Diags.push_back({VerifyDiagnostic::Error, Msg});
@@ -358,6 +359,9 @@ public:
         break;
       case VerifyDiagnostic::Lowered:
         OS << "Lowered: " << D.Message << "\n";
+        break;
+      case VerifyDiagnostic::Exported:
+        OS << "Exported: " << D.Message << "\n";
         break;
       case VerifyDiagnostic::Error:
         OS << "error: " << D.Message << "\n";

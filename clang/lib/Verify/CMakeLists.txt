@@ -25,8 +25,7 @@ add_clang_library(clangVerify
   Transform/LoopUnroll.cpp
   Transform/SpecInline.cpp
   Transform/UBChecks.cpp
-  Backend/VCMachine.cpp
-  Backend/WPCalc.cpp
+  Backend/Obligation.cpp
   Backend/Z3Encode.cpp
   Backend/SpecAxioms.cpp
   Backend/VerifyBackend.cpp

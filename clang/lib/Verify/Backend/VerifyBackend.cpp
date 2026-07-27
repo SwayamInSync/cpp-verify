@@ -9,20 +9,26 @@ using namespace verify;
 namespace {
 class LeanVerifyBackend : public VerifyBackend {
   llvm::raw_ostream *Out;
-  unsigned TimeoutMs;
+  bool PreambleEmitted = false;
 
 public:
-  explicit LeanVerifyBackend(llvm::raw_ostream *OS, unsigned TimeoutMs = 0)
-      : Out(OS), TimeoutMs(TimeoutMs) {}
+  explicit LeanVerifyBackend(llvm::raw_ostream *OS) : Out(OS) {}
   llvm::StringRef getName() const override { return "lean"; }
-  VerifyResult verifyPassive(const PassiveProgram &P) override {
+  BackendCapabilities getCapabilities() const override {
+    return {allLogicFeatures(), false};
+  }
+
+protected:
+  VerifyResult verifyModule(const ObligationModule &Module) override {
     VerifyResult R;
     if (!Out) {
       R.Status = VerifyStatus::Unknown;
       R.Message = "no lean output stream";
       return R;
     }
-    return exportLeanScratchPad(P, *Out, TimeoutMs);
+    VerifyResult Result = exportLeanScratchPad(Module, *Out, !PreambleEmitted);
+    PreambleEmitted = true;
+    return Result;
   }
 };
 
@@ -33,11 +39,56 @@ public:
   explicit BMCVerifyBackend(unsigned TimeoutMs = 0)
       : Z3(std::make_unique<Z3VerifyBackend>(TimeoutMs)) {}
   llvm::StringRef getName() const override { return "bmc"; }
-  VerifyResult verifyPassive(const PassiveProgram &P) override {
-    return Z3->verifyPassive(P);
+  BackendCapabilities getCapabilities() const override {
+    return {allLogicFeatures(), true};
+  }
+
+protected:
+  VerifyResult verifyModule(const ObligationModule &Module) override {
+    return Z3->verify(Module);
   }
 };
 } // namespace
+
+VerifyResult VerifyBackend::verify(const ObligationModule &Module) {
+  const BackendCapabilities Capabilities = getCapabilities();
+  const LogicFeatureSet Missing =
+      Module.RequiredFeatures & ~Capabilities.SupportedFeatures;
+  if (Missing != 0) {
+    VerifyResult Result;
+    Result.Status = VerifyStatus::Unknown;
+    Result.Message = "backend '" + getName().str() +
+                     "' does not support required logic features: " +
+                     formatLogicFeatures(Missing);
+    return Result;
+  }
+  if (!Module.CounterexampleQuery) {
+    VerifyResult Result;
+    Result.Status = VerifyStatus::Unknown;
+    Result.Message = "obligation module has no counterexample query";
+    return Result;
+  }
+  VerifyResult Result = verifyModule(Module);
+  if (!Capabilities.ProducesVerificationVerdict &&
+      (Result.Status == VerifyStatus::Verified ||
+       Result.Status == VerifyStatus::Failed)) {
+    Result.Status = VerifyStatus::Unknown;
+    Result.Message = "export-only backend '" + getName().str() +
+                     "' returned a verification verdict";
+    Result.Model.clear();
+    Result.ObligationId.clear();
+    Result.Location = SourceLocation();
+  } else if (Capabilities.ProducesVerificationVerdict &&
+             Result.Status == VerifyStatus::Exported) {
+    Result.Status = VerifyStatus::Unknown;
+    Result.Message = "verifying backend '" + getName().str() +
+                     "' returned an export-only result";
+    Result.Model.clear();
+    Result.ObligationId.clear();
+    Result.Location = SourceLocation();
+  }
+  return Result;
+}
 
 std::unique_ptr<VerifyBackend>
 verify::createVerifyBackend(BackendKind K, llvm::raw_ostream *LeanOut,
@@ -46,7 +97,7 @@ verify::createVerifyBackend(BackendKind K, llvm::raw_ostream *LeanOut,
   case BackendKind::Z3:
     return std::make_unique<Z3VerifyBackend>(SolverTimeoutMs);
   case BackendKind::Lean:
-    return std::make_unique<LeanVerifyBackend>(LeanOut, SolverTimeoutMs);
+    return std::make_unique<LeanVerifyBackend>(LeanOut);
   case BackendKind::BMC:
     return std::make_unique<BMCVerifyBackend>(SolverTimeoutMs);
   }

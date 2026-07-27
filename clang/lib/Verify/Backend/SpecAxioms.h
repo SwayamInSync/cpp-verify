@@ -3,7 +3,7 @@
 #define LLVM_CLANG_VERIFY_BACKEND_SPECAXIOMS_H
 
 #include "../Transform/Passivize.h"
-#include "VCMachine.h"
+#include "Obligation.h"
 #include <set>
 #include <vector>
 
@@ -21,7 +21,8 @@ struct SpecAxiomContext {
 /// Collect names of spec functions referenced by VSpecCallExpr in E.
 void collectReferencedSpecs(const VExpr *E, std::set<std::string> &Out);
 
-/// Unfold a spec definition for axiom emission (fuel-limited; no call-site args).
+/// Unfold a spec definition for axiom emission (fuel-limited; no call-site
+/// args).
 std::unique_ptr<VExpr> unfoldSpecDefinition(const VFunction &Spec,
                                             const SpecAxiomContext &Ctx,
                                             unsigned Fuel);
