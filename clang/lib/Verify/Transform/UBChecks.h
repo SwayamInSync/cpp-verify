@@ -11,13 +11,16 @@
 #define LLVM_CLANG_VERIFY_TRANSFORM_UBCHECKS_H
 
 #include "../IR/VStmt.h"
+#include <optional>
+#include <string>
 
 namespace clang {
 namespace verify {
 
 /// Insert UB safety obligations into the body of an exec/proof function. No-op
-/// for spec functions (the spec world uses unbounded math integers).
-void instrumentUBChecks(VFunction &Fn);
+/// for spec functions (the spec world uses unbounded math integers). Returns an
+/// error when a recognized marker cannot be interpreted soundly.
+std::optional<std::string> instrumentUBChecks(VFunction &Fn);
 
 } // namespace verify
 } // namespace clang

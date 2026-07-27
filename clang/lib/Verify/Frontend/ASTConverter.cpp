@@ -36,6 +36,29 @@ static std::string integerValueString(const llvm::APSInt &Value) {
   return std::string(Buffer);
 }
 
+static std::unique_ptr<VExpr> scalePointerOffset(std::unique_ptr<VExpr> Offset,
+                                                 uint64_t PointeeSize,
+                                                 SourceLocation Loc) {
+  if (!Offset || PointeeSize == 0 ||
+      (Offset->Ty.Kind != VTypeKind::Int32 &&
+       Offset->Ty.Kind != VTypeKind::Int64))
+    return nullptr;
+
+  VType SourceTy = Offset->Ty;
+  VType MathTy = SourceTy;
+  MathTy.IntMode = VIntMode::Math;
+  if (SourceTy.IntMode != VIntMode::Math)
+    Offset =
+        std::make_unique<VCastExpr>(std::move(Offset), SourceTy, MathTy, Loc);
+  if (PointeeSize == 1)
+    return Offset;
+
+  auto Stride =
+      std::make_unique<VLiteralExpr>(std::to_string(PointeeSize), MathTy, Loc);
+  return std::make_unique<VBinOpExpr>(VBinOp::Mul, std::move(Offset),
+                                      std::move(Stride), MathTy, Loc);
+}
+
 static bool
 isSupportedVerificationTypeImpl(QualType Ty,
                                 llvm::SmallPtrSetImpl<const Type *> &Visiting) {
@@ -1394,15 +1417,20 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
     return nullptr;
   }
   if (const auto *AS = dyn_cast<ArraySubscriptExpr>(E)) {
-    // p[i] is *(p + i): the address is base + idx (commutative, so i[p] works
-    // too), and the loaded value has the element type.
     auto Base = convertExpr(AS->getBase());
     auto Idx = convertExpr(AS->getIdx());
     if (!Base || !Idx)
       return nullptr;
-    auto Addr = std::make_unique<VBinOpExpr>(VBinOp::Add, std::move(Base),
-                                             std::move(Idx), VType::makePtr(),
-                                             E->getExprLoc());
+    const uint64_t PointeeSize = Base->Ty.PointeeSizeBytes;
+    Idx = scalePointerOffset(std::move(Idx), PointeeSize, E->getExprLoc());
+    if (!Idx) {
+      Errors.push_back(CurrentFn->Name +
+                       ": pointer arithmetic requires a complete pointee type");
+      return nullptr;
+    }
+    auto Addr = std::make_unique<VBinOpExpr>(
+        VBinOp::Add, std::move(Base), std::move(Idx),
+        VType::makePtr(PointeeSize), E->getExprLoc());
     VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
     return std::make_unique<VLoadExpr>(std::move(Addr), Ty, E->getExprLoc());
   }
@@ -1420,11 +1448,34 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
                        "spec functions");
       return nullptr;
     }
+    const bool LeftPointer = B->getLHS()->getType()->isPointerType();
+    const bool RightPointer = B->getRHS()->getType()->isPointerType();
+    if (B->getOpcode() == BO_Sub && LeftPointer && RightPointer) {
+      Errors.push_back(CurrentFn->Name +
+                       ": pointer subtraction is unsupported without "
+                       "same-allocation provenance");
+      return nullptr;
+    }
     auto L = convertExpr(B->getLHS());
     auto R = convertExpr(B->getRHS());
     if (!L || !R)
       return nullptr;
     VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
+    if (Ty.Kind == VTypeKind::Ptr &&
+        (B->getOpcode() == BO_Add || B->getOpcode() == BO_Sub)) {
+      if (!LeftPointer)
+        L = scalePointerOffset(std::move(L), Ty.PointeeSizeBytes,
+                               E->getExprLoc());
+      else if (!RightPointer)
+        R = scalePointerOffset(std::move(R), Ty.PointeeSizeBytes,
+                               E->getExprLoc());
+      if (!L || !R) {
+        Errors.push_back(
+            CurrentFn->Name +
+            ": pointer arithmetic requires a complete pointee type");
+        return nullptr;
+      }
+    }
     return std::make_unique<VBinOpExpr>(*Op, std::move(L), std::move(R), Ty,
                                         E->getExprLoc());
   }
@@ -1799,7 +1850,7 @@ ASTConverter::convertAssignmentValue(const BinaryOperator *Assignment) {
   if (Assignment->getOpcode() != BO_Assign &&
       Assignment->getLHS()->getType()->isPointerType()) {
     Errors.push_back(CurrentFn->Name +
-                     ": pointer arithmetic and ordering are unsupported");
+                     ": pointer compound assignment is unsupported");
     return nullptr;
   }
   auto RHS = convertExpr(Assignment->getRHS());
@@ -1935,9 +1986,17 @@ void ASTConverter::appendAssignment(const Expr *LHS,
     auto Base = convertExpr(AS->getBase());
     auto Index = convertExpr(AS->getIdx());
     if (Base && Index) {
-      auto Address =
-          std::make_unique<VBinOpExpr>(VBinOp::Add, std::move(Base),
-                                       std::move(Index), VType::makePtr(), Loc);
+      const uint64_t PointeeSize = Base->Ty.PointeeSizeBytes;
+      Index = scalePointerOffset(std::move(Index), PointeeSize, Loc);
+      if (!Index) {
+        Errors.push_back(
+            CurrentFn->Name +
+            ": pointer arithmetic requires a complete pointee type");
+        return;
+      }
+      auto Address = std::make_unique<VBinOpExpr>(
+          VBinOp::Add, std::move(Base), std::move(Index),
+          VType::makePtr(PointeeSize), Loc);
       Out.push_back(std::make_unique<VStoreStmt>(std::move(Address),
                                                  std::move(Value), Loc));
       return;

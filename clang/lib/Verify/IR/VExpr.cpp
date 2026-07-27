@@ -13,8 +13,13 @@ VType VType::fromQualType(QualType QT, VIntMode DefaultMode,
     return VType::makeBool();
   if (QT->isVoidType())
     return VType::makeVoid();
-  if (QT->isPointerType() || QT->isReferenceType())
-    return VType::makePtr();
+  if (QT->isPointerType() || QT->isReferenceType()) {
+    QualType Pointee = QT->getPointeeType();
+    if (Pointee->isVoidType() || Pointee->isFunctionType() ||
+        Pointee->isIncompleteType())
+      return VType::makePtr();
+    return VType::makePtr(Ctx.getTypeSizeInChars(Pointee).getQuantity());
+  }
   if (QT->isIntegerType())
     return VType::makeInt(DefaultMode, Ctx.getIntWidth(QT),
                           QT->isSignedIntegerType());

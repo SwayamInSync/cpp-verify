@@ -18,6 +18,15 @@ bool isMachineInt(const VType &T) {
          (T.Kind == VTypeKind::Int32 || T.Kind == VTypeKind::Int64);
 }
 
+bool isInteger(const VType &T) {
+  return T.Kind == VTypeKind::Int32 || T.Kind == VTypeKind::Int64;
+}
+
+bool sameIntegerRepresentation(const VType &L, const VType &R) {
+  return L.Kind == R.Kind && L.IntMode == R.IntMode &&
+         L.IsSigned == R.IsSigned && L.BitWidth == R.BitWidth;
+}
+
 std::unique_ptr<VExpr> mkOvf(VOverflowOp Op, const VExpr *L, const VExpr *R,
                              SourceLocation Loc) {
   return std::make_unique<VOverflowCheckExpr>(Op, cloneVExpr(L),
@@ -31,7 +40,144 @@ std::unique_ptr<VExpr> mkNonZero(const VExpr *Divisor, SourceLocation Loc) {
                                       std::move(Zero), VType::makeBool(), Loc);
 }
 
-VType machineInt(SourceLocation) { return VType::makeInt32(VIntMode::Machine); }
+VType mathOffsetType() { return VType::makeInt(VIntMode::Math, 64, true); }
+
+std::unique_ptr<VExpr> mathValue(const VExpr *E) {
+  if (!E)
+    return nullptr;
+  VType MathTy = E->Ty;
+  MathTy.IntMode = VIntMode::Math;
+  if (E->Ty.IntMode == VIntMode::Math)
+    return cloneVExpr(E);
+  return std::make_unique<VCastExpr>(cloneVExpr(E), E->Ty, MathTy, E->Loc);
+}
+
+const VExpr *machineValueInsideMathCast(const VExpr *E) {
+  if (!E || E->K != VExpr::Cast)
+    return nullptr;
+  const auto *Cast = static_cast<const VCastExpr *>(E);
+  if (Cast->FromTy.IntMode != VIntMode::Machine ||
+      Cast->Ty.IntMode != VIntMode::Math)
+    return nullptr;
+  return Cast->Inner.get();
+}
+
+std::unique_ptr<VExpr> unscalePointerOffset(const VExpr *E,
+                                            uint64_t PointeeSize) {
+  if (!E || PointeeSize == 0)
+    return nullptr;
+  if (PointeeSize == 1) {
+    if (const VExpr *Machine = machineValueInsideMathCast(E))
+      return cloneVExpr(Machine);
+    return cloneVExpr(E);
+  }
+  if (E->K != VExpr::BinOp)
+    return nullptr;
+  const auto *Mul = static_cast<const VBinOpExpr *>(E);
+  if (Mul->Op != VBinOp::Mul)
+    return nullptr;
+  auto IsStride = [PointeeSize](const VExpr *Candidate) {
+    return Candidate && Candidate->K == VExpr::Literal &&
+           static_cast<const VLiteralExpr *>(Candidate)->Value ==
+               std::to_string(PointeeSize);
+  };
+  if (IsStride(Mul->Rhs.get()))
+    if (const VExpr *Machine = machineValueInsideMathCast(Mul->Lhs.get()))
+      return cloneVExpr(Machine);
+  if (IsStride(Mul->Lhs.get()))
+    if (const VExpr *Machine = machineValueInsideMathCast(Mul->Rhs.get()))
+      return cloneVExpr(Machine);
+  return nullptr;
+}
+
+bool isPointerBase(const VExpr *E, const std::string &Base) {
+  while (E && E->K == VExpr::Cast)
+    E = static_cast<const VCastExpr *>(E)->Inner.get();
+  return E && E->K == VExpr::Var &&
+         static_cast<const VVarExpr *>(E)->Name == Base;
+}
+
+const VExpr *directPointerVariable(const VExpr *E) {
+  while (E && E->K == VExpr::Cast)
+    E = static_cast<const VCastExpr *>(E)->Inner.get();
+  return E && E->K == VExpr::Var && E->Ty.Kind == VTypeKind::Ptr ? E : nullptr;
+}
+
+bool containsValidCall(const VExpr *E) {
+  if (!E)
+    return false;
+  switch (E->K) {
+  case VExpr::Literal:
+  case VExpr::Var:
+  case VExpr::Result:
+    return false;
+  case VExpr::BinOp: {
+    const auto *B = static_cast<const VBinOpExpr *>(E);
+    return containsValidCall(B->Lhs.get()) || containsValidCall(B->Rhs.get());
+  }
+  case VExpr::UnaryOp:
+    return containsValidCall(
+        static_cast<const VUnaryOpExpr *>(E)->Operand.get());
+  case VExpr::Cast:
+    return containsValidCall(static_cast<const VCastExpr *>(E)->Inner.get());
+  case VExpr::Load:
+    return containsValidCall(static_cast<const VLoadExpr *>(E)->Ptr.get());
+  case VExpr::Old:
+    return containsValidCall(static_cast<const VOldExpr *>(E)->Inner.get());
+  case VExpr::Conditional: {
+    const auto *C = static_cast<const VConditionalExpr *>(E);
+    return containsValidCall(C->Cond.get()) ||
+           containsValidCall(C->Then.get()) || containsValidCall(C->Else.get());
+  }
+  case VExpr::Forall:
+  case VExpr::Exists: {
+    const auto *Q = static_cast<const VQuantifiedExpr *>(E);
+    return containsValidCall(Q->Lo.get()) || containsValidCall(Q->Hi.get()) ||
+           containsValidCall(Q->Body.get());
+  }
+  case VExpr::HeapStore: {
+    const auto *S = static_cast<const VHeapStoreExpr *>(E);
+    return containsValidCall(S->Ptr.get()) || containsValidCall(S->Val.get());
+  }
+  case VExpr::FieldAccess:
+    return containsValidCall(
+        static_cast<const VFieldAccessExpr *>(E)->Base.get());
+  case VExpr::SpecCall: {
+    const auto *C = static_cast<const VSpecCallExpr *>(E);
+    if (C->Callee == "valid")
+      return true;
+    for (const auto &Arg : C->Args)
+      if (containsValidCall(Arg.get()))
+        return true;
+    return false;
+  }
+  case VExpr::OverflowCheck: {
+    const auto *O = static_cast<const VOverflowCheckExpr *>(E);
+    return containsValidCall(O->Lhs.get()) || containsValidCall(O->Rhs.get());
+  }
+  }
+  return false;
+}
+
+std::unique_ptr<VExpr> directElementOffset(const VExpr *Addr,
+                                           const std::string &Base,
+                                           uint64_t PointeeSize,
+                                           const VType &IndexType) {
+  while (Addr && Addr->K == VExpr::Cast)
+    Addr = static_cast<const VCastExpr *>(Addr)->Inner.get();
+  if (isPointerBase(Addr, Base))
+    return std::make_unique<VLiteralExpr>(0, IndexType, Addr->Loc);
+  if (!Addr || Addr->K != VExpr::BinOp)
+    return nullptr;
+  const auto *Add = static_cast<const VBinOpExpr *>(Addr);
+  if (Add->Op != VBinOp::Add)
+    return nullptr;
+  if (isPointerBase(Add->Lhs.get(), Base))
+    return unscalePointerOffset(Add->Rhs.get(), PointeeSize);
+  if (isPointerBase(Add->Rhs.get(), Base))
+    return unscalePointerOffset(Add->Lhs.get(), PointeeSize);
+  return nullptr;
+}
 
 // The base pointer an address is rooted at: strips casts and pointer arithmetic
 // (`p + i` -> `p`). Returns a Var when the root is a named pointer.
@@ -58,10 +204,9 @@ const VExpr *pointerBase(const VExpr *E) {
   }
 }
 
-// The machine-integer offset of an address relative to its base pointer: `p +
-// i`
-// -> `i`, bare `p` -> `0`. Returns null if Addr isn't of base(+/-)offset form
-// rooted at Base.
+// The target-byte offset of an address relative to its base pointer: bare `p`
+// becomes zero and typed pointer steps are already stride-scaled. Returns null
+// if Addr is not a base(+/-)offset form rooted at Base.
 std::unique_ptr<VExpr> pointerOffset(const VExpr *Addr,
                                      const std::string &Base) {
   if (!Addr)
@@ -71,8 +216,7 @@ std::unique_ptr<VExpr> pointerOffset(const VExpr *Addr,
                          Base);
   if (Addr->K == VExpr::Var) {
     if (static_cast<const VVarExpr *>(Addr)->Name == Base)
-      return std::make_unique<VLiteralExpr>(0, machineInt(Addr->Loc),
-                                            Addr->Loc);
+      return std::make_unique<VLiteralExpr>(0, mathOffsetType(), Addr->Loc);
     return nullptr;
   }
   if (Addr->K == VExpr::BinOp) {
@@ -81,12 +225,12 @@ std::unique_ptr<VExpr> pointerOffset(const VExpr *Addr,
       if (auto LO = pointerOffset(B->Lhs.get(), Base))
         return std::make_unique<VBinOpExpr>(B->Op, std::move(LO),
                                             cloneVExpr(B->Rhs.get()),
-                                            machineInt(B->Loc), B->Loc);
+                                            mathOffsetType(), B->Loc);
       if (B->Op == VBinOp::Add)
         if (auto RO = pointerOffset(B->Rhs.get(), Base))
           return std::make_unique<VBinOpExpr>(
               VBinOp::Add, cloneVExpr(B->Lhs.get()), std::move(RO),
-              machineInt(B->Loc), B->Loc);
+              mathOffsetType(), B->Loc);
     }
   }
   return nullptr;
@@ -100,27 +244,51 @@ std::unique_ptr<VExpr> pointerOffset(const VExpr *Addr,
 struct UBInstrumenter {
   // base pointer name -> its declared length (from `valid(p, n)`).
   std::map<std::string, const VExpr *> ValidLen;
+  std::map<std::string, uint64_t> ValidPointeeSize;
+  std::optional<std::string> Error;
 
-  // Scan a precondition for `valid(p, n)` declarations (recursing through
-  // `&&`).
+  // A marker is meaningful only as a positive top-level conjunction clause.
   void scanValid(const VExpr *E) {
     if (!E)
       return;
-    if (E->K == VExpr::SpecCall) {
-      const auto *C = static_cast<const VSpecCallExpr *>(E);
-      if (C->Callee == "valid" && C->Args.size() == 2) {
-        const VExpr *B = pointerBase(C->Args[0].get());
-        if (B && B->K == VExpr::Var)
-          ValidLen[static_cast<const VVarExpr *>(B)->Name] = C->Args[1].get();
-      }
-
-      return;
-    }
     if (E->K == VExpr::BinOp) {
       const auto *B = static_cast<const VBinOpExpr *>(E);
-      scanValid(B->Lhs.get());
-      scanValid(B->Rhs.get());
+      if (B->Op == VBinOp::And) {
+        scanValid(B->Lhs.get());
+        scanValid(B->Rhs.get());
+        return;
+      }
     }
+    if (E->K == VExpr::SpecCall) {
+      const auto *C = static_cast<const VSpecCallExpr *>(E);
+      if (C->Callee != "valid") {
+        if (containsValidCall(E))
+          Error =
+              "valid marker must be a positive top-level conjunction clause";
+        return;
+      }
+      if (C->Args.size() != 2) {
+        Error = "valid marker must have exactly two arguments";
+        return;
+      }
+      const VExpr *Base = directPointerVariable(C->Args[0].get());
+      const VType &LengthType = C->Args[1]->Ty;
+      if (!Base || !isInteger(LengthType) || Base->Ty.PointeeSizeBytes == 0) {
+        Error = "valid marker requires a bare complete-object pointer and an "
+                "integer element count";
+        return;
+      }
+      const std::string &Name = static_cast<const VVarExpr *>(Base)->Name;
+      if (ValidLen.count(Name)) {
+        Error = "multiple valid markers for the same pointer are unsupported";
+        return;
+      }
+      ValidLen[Name] = C->Args[1].get();
+      ValidPointeeSize[Name] = Base->Ty.PointeeSizeBytes;
+      return;
+    }
+    if (containsValidCall(E))
+      Error = "valid marker must be a positive top-level conjunction clause";
   }
 
   void appendValidSemantics(VFunction &Fn) const {
@@ -153,8 +321,8 @@ struct UBInstrumenter {
     }
   }
 
-  // Bounds obligation `0 <= off && off < len` for an access at Addr, when the
-  // base pointer has a declared length; null otherwise.
+  // Bounds obligation for an access at Addr when the base pointer has a
+  // declared element count; null when no extent applies.
   std::unique_ptr<VExpr> boundsObligation(const VExpr *Addr) {
     const VExpr *B = pointerBase(Addr);
     if (!B || B->K != VExpr::Var)
@@ -162,17 +330,47 @@ struct UBInstrumenter {
     auto It = ValidLen.find(static_cast<const VVarExpr *>(B)->Name);
     if (It == ValidLen.end())
       return nullptr;
+    const std::string &Base = static_cast<const VVarExpr *>(B)->Name;
+    const auto SizeIt = ValidPointeeSize.find(Base);
+    if (SizeIt == ValidPointeeSize.end() || SizeIt->second == 0)
+      return std::make_unique<VLiteralExpr>(false, VType::makeBool(),
+                                            Addr->Loc);
+    const uint64_t PointeeSize = SizeIt->second;
+    if (auto ElementOffset =
+            directElementOffset(Addr, Base, PointeeSize, It->second->Ty)) {
+      if (sameIntegerRepresentation(ElementOffset->Ty, It->second->Ty)) {
+        auto Ge = std::make_unique<VBinOpExpr>(
+            VBinOp::Ge, cloneVExpr(ElementOffset.get()),
+            std::make_unique<VLiteralExpr>(0, ElementOffset->Ty, Addr->Loc),
+            VType::makeBool(), Addr->Loc);
+        auto Lt = std::make_unique<VBinOpExpr>(
+            VBinOp::Lt, std::move(ElementOffset), cloneVExpr(It->second),
+            VType::makeBool(), Addr->Loc);
+        return std::make_unique<VBinOpExpr>(VBinOp::And, std::move(Ge),
+                                            std::move(Lt), VType::makeBool(),
+                                            Addr->Loc);
+      }
+    }
     auto Off = pointerOffset(Addr, static_cast<const VVarExpr *>(B)->Name);
     if (!Off)
       return nullptr;
     SourceLocation Loc = Addr->Loc;
+    auto Limit = mathValue(It->second);
+    if (!Limit)
+      return std::make_unique<VLiteralExpr>(false, VType::makeBool(), Loc);
+    if (PointeeSize > 1) {
+      VType MathTy = Limit->Ty;
+      auto Stride = std::make_unique<VLiteralExpr>(std::to_string(PointeeSize),
+                                                   MathTy, Loc);
+      Limit = std::make_unique<VBinOpExpr>(VBinOp::Mul, std::move(Limit),
+                                           std::move(Stride), MathTy, Loc);
+    }
     auto Ge = std::make_unique<VBinOpExpr>(
         VBinOp::Ge, cloneVExpr(Off.get()),
-        std::make_unique<VLiteralExpr>(0, machineInt(Loc), Loc),
+        std::make_unique<VLiteralExpr>(0, mathOffsetType(), Loc),
         VType::makeBool(), Loc);
-    auto Lt = std::make_unique<VBinOpExpr>(VBinOp::Lt, std::move(Off),
-                                           cloneVExpr(It->second),
-                                           VType::makeBool(), Loc);
+    auto Lt = std::make_unique<VBinOpExpr>(
+        VBinOp::Lt, std::move(Off), std::move(Limit), VType::makeBool(), Loc);
     return std::make_unique<VBinOpExpr>(VBinOp::And, std::move(Ge),
                                         std::move(Lt), VType::makeBool(), Loc);
   }
@@ -330,12 +528,15 @@ struct UBInstrumenter {
 
 } // namespace
 
-void verify::instrumentUBChecks(VFunction &Fn) {
+std::optional<std::string> verify::instrumentUBChecks(VFunction &Fn) {
   if (Fn.IsSpec)
-    return;
+    return std::nullopt;
   UBInstrumenter UB;
   for (const auto &Pre : Fn.Preconditions)
     UB.scanValid(Pre.get());
+  if (UB.Error)
+    return UB.Error;
   UB.appendValidSemantics(Fn);
   UB.instrumentStmts(Fn.Body);
+  return std::nullopt;
 }

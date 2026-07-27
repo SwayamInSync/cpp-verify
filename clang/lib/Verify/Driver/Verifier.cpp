@@ -132,6 +132,7 @@ public:
 
       std::optional<VFunction> PreparedFn;
       std::optional<VFunction> UnrolledFn;
+      std::optional<std::string> UBError;
       const VFunction &WorkFn = [&]() -> const VFunction & {
         if (Fn->IsSpec) {
           if (Fn->NeedsDecreasesCheck)
@@ -142,7 +143,9 @@ public:
         // `valid(p, n)` is a recognized UB marker. Discover it before spec
         // preparation folds its deliberately trivial body to `true`.
         if (Opts.CheckUB && Opts.Backend == BackendKind::Z3)
-          instrumentUBChecks(*PreparedFn);
+          UBError = instrumentUBChecks(*PreparedFn);
+        if (UBError)
+          return *PreparedFn;
         SpecInliner Inliner(FnMap, PreparedFn->SpecFuel);
         if (Opts.Backend == BackendKind::Z3)
           Inliner.prepareFunctionAxiomatic(*PreparedFn);
@@ -154,6 +157,15 @@ public:
         }
         return *PreparedFn;
       }();
+
+      if (UBError) {
+        AllOk = false;
+        AnyFailed = true;
+        if (!Fn->IsProof)
+          FailedCallers.insert(Fn->Identity);
+        Diags.push_back({VerifyDiagnostic::Error, Fn->Name + ": " + *UBError});
+        continue;
+      }
 
       if (Fn->IsSpec && !Fn->NeedsDecreasesCheck) {
         if (Fn->IsConstexprSpec)

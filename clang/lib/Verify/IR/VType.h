@@ -2,6 +2,8 @@
 #ifndef LLVM_CLANG_VERIFY_IR_VTYPE_H
 #define LLVM_CLANG_VERIFY_IR_VTYPE_H
 
+#include <cstdint>
+
 namespace clang {
 class ASTContext;
 class QualType;
@@ -24,6 +26,7 @@ struct VType {
   VIntMode IntMode = VIntMode::Machine;
   bool IsSigned = true;
   unsigned BitWidth = 32;
+  uint64_t PointeeSizeBytes = 0;
 
   static VType makeVoid() {
     return VType{VTypeKind::Void, VIntMode::Machine, true, 0};
@@ -38,8 +41,10 @@ struct VType {
     return VType{BitWidth > 32 ? VTypeKind::Int64 : VTypeKind::Int32, M,
                  IsSigned, BitWidth};
   }
-  static VType makePtr() {
-    return VType{VTypeKind::Ptr, VIntMode::Machine, false, 0};
+  static VType makePtr(uint64_t PointeeSizeBytes = 0) {
+    VType Ty{VTypeKind::Ptr, VIntMode::Machine, false, 0};
+    Ty.PointeeSizeBytes = PointeeSizeBytes;
+    return Ty;
   }
   static VType makeStruct() {
     return VType{VTypeKind::Struct, VIntMode::Machine, false, 0};
