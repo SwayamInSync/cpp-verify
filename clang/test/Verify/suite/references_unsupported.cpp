@@ -138,9 +138,7 @@ void conditional_reference_actual(bool choose, int *value)
   set_value(choose ? *value : *value, 2);
 }
 
-// VERIFY-DAG: error: local_actual: reference arguments require another reference parameter or a direct pointer dereference
-// VERIFY-DAG: error: temporary_actual: reference arguments require another reference parameter or a direct pointer dereference
-// VERIFY-DAG: error: local_reference: unsupported C++ type in verification: int &
+// VERIFY-DAG: error: temporary_actual: reference arguments require a supported reference, addressable local, or direct pointer dereference
 // VERIFY-DAG: error: reference_return: unsupported C++ type in verification: int &
 // VERIFY-DAG: error: record_reference: unsupported C++ type in verification: Pair &
 // VERIFY-DAG: error: rvalue_reference: unsupported C++ type in verification: int &&
@@ -153,4 +151,4 @@ void conditional_reference_actual(bool choose, int *value)
 // VERIFY-DAG: error: order_dependent_reference_read: call arguments have order-dependent heap evaluations
 // VERIFY-DAG: error: order_dependent_subscript_read: call arguments have order-dependent heap evaluations
 // VERIFY-DAG: error: order_dependent_implicit_effect: call arguments have order-dependent heap evaluations
-// VERIFY-DAG: error: conditional_reference_actual: reference arguments require another reference parameter or a direct pointer dereference
+// VERIFY-DAG: error: conditional_reference_actual: reference arguments require a supported reference, addressable local, or direct pointer dereference
