@@ -59,7 +59,7 @@ Core checks include:
      - not ``INT_MIN / -1`` (which overflows)
    * - ``<<`` and ``>>``
      - shift count is in range; signed left shift satisfies the C++17 rule
-   * - pointer/reference loads and stores
+   * - pointer loads and stores
      - base pointer is non-null and abstractly valid
 
 **Unsigned arithmetic is never flagged** — C++ defines it as modular wraparound,
@@ -83,7 +83,10 @@ Optional buffer bounds (``--check-ub``)
 Array bounds require an explicit extent. Write ``valid(p, n)`` in a
 precondition and run the Z3 backend with ``--check-ub``; every recognized
 ``p[i]`` or ``*(p + i)`` access rooted at ``p`` must then prove ``0 <= i < n``.
-A pointer with no ``valid`` declaration is not bounds-checked.
+The marker itself requires ``n >= 0`` and, for a positive extent, a non-null
+abstractly valid pointer; extent zero permits null. A pointer with no ``valid``
+declaration is not bounds-checked, although ordinary dereference definedness
+still applies.
 
 Concrete allocation extents, lifetime mutation, provenance, and alignment are
 not modeled yet; see :doc:`limitations`.

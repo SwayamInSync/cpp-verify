@@ -1,6 +1,26 @@
 # Roadmap
 
-## 2-Month MVP Timeline
+## Current product checkpoint
+
+The end-to-end MVP gate is achieved and permanently exercises:
+
+- recursive and iterative factorial for every signed-`int` input in `0..12`,
+  with `13!` rejected at the first overflow;
+- recursive and iterative Fibonacci through `F(46)`, with `F(47)` rejected;
+- mathematical specs, proof lemmas, executable/spec termination, loop
+  induction, exact machine conversions, framed pointer output, scalar pointer
+  arithmetic, buffer indexing, bounded quantified heap loops, and
+  `valid(p, n)` bounds checks;
+- fail-closed unsupported lowering and encoding, including honest `unknown` for
+  quantified obligations Z3 cannot decide.
+
+The next correctness frontier is an addressable-object model: allocation
+identity, byte-consistent subobjects and array steps, lifetime/liveness,
+provenance, alignment, and initialized heap storage. References,
+pointer-bearing/non-flat records, allocation/deallocation, and wider C++
+features remain outside the verified subset until that foundation exists.
+
+## Historical 2-Month MVP Timeline
 
 ### Weeks 1-2: Clang Frontend + Hello World — **COMPLETE**
 

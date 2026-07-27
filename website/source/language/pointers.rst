@@ -39,6 +39,21 @@ Within a verified function body, ``modifies(*p)`` authorizes the **whole
 region** rooted at ``p`` — a write to any ``p[i]`` is covered. A write through
 a *different* base pointer that is not in ``modifies`` is still rejected.
 
+At a **modular call**, region and exact footprints deliberately differ:
+
+- ``modifies(p[i])`` and ``modifies(p->field)`` identify one exact address, so
+  all other heap cells are preserved.
+- ``modifies(*p)`` has no finite end in today's flat heap model. Until
+  allocation/provenance identities are modeled, a call with that footprint
+  conservatively forgets the whole heap and recovers only facts stated by the
+  callee's postconditions.
+- A pointer-taking callee with no explicit ``modifies`` is treated just as
+  conservatively. This prevents a missing frame from becoming a false proof.
+
+The whole-heap fallback can lose a true fact about an unrelated object, but it
+cannot prove a false one. Inside the callee itself, ordinary non-aliasing and
+store semantics remain precise, as the ``write_result`` example below shows.
+
 To reason about a whole range, use a bounded quantifier in the loop invariant and
 postcondition (the half-open bound ``[lo, hi)`` is the implicit trigger). A
 fill/zero loop verifies end-to-end:
@@ -83,6 +98,29 @@ the non-overlap above are exact (no wraparound). Array indices used in
 disjointness facts should be bounded (as in real buffer code); an *unbounded*
 pure-disequality disjointness (``i != k`` with no range) may report ``unknown``
 (see :doc:`limitations`).
+
+Buffer bounds with ``valid``
+----------------------------
+
+``--check-ub`` recognizes ``valid(p, n)`` in a precondition as an extent marker:
+
+.. code-block:: cpp
+
+   spec bool valid(int* p, int n) { return true; }
+
+   int get(int* p, int n, int i)
+     pre(valid(p, n) && 0 <= i && i < n)
+     post(result == p[i])
+   { return p[i]; }
+
+The marker means ``n >= 0``. A positive extent also means ``p`` is non-null and
+abstractly valid; an extent of zero permits null. Every ``p[i]`` or ``*(p + i)``
+access rooted at that parameter must then prove ``0 <= i < n``. The marker is
+discovered before its intentionally trivial body is inlined.
+
+Without ``--check-ub``, dereferences must still be non-null and abstractly valid,
+but the verifier does not invent a buffer length. Allocation, lifetime,
+provenance, and alignment remain outside the current model.
 
 Frames also preserve unrelated objects across a write:
 

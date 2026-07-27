@@ -4,7 +4,8 @@ Chapter 18 — Undefined behavior
 Proving a function meets its postcondition is only half of what "correct" means
 for runtime C++. The other half is that the function is **well-defined** in the
 first place — that it never executes undefined behavior (UB). This chapter is
-about the second obligation and the ``--check-ub`` flag that turns it on.
+about the second obligation. Core expression definedness is always on;
+``--check-ub`` additionally enables declared buffer-extent checks.
 
 Two obligations, not one
 ------------------------
@@ -24,33 +25,41 @@ write ``pre`` and ``post``; the verifier derives "this operation must not
 overflow / must not divide by zero" from the code. If your precondition is too
 weak to rule the UB out, it reports the exact counterexample.
 
-Why functional verification alone is blind
--------------------------------------------
+Why functional verification alone would be blind
+-------------------------------------------------
 
-By default, machine arithmetic *wraps* in the model. So this verifies:
+Machine values use bit-vectors, whose arithmetic wraps. If the verifier checked
+only the final equality, this would be a tautology even on an overflowing path:
 
 .. code-block:: cpp
 
    int add(int a, int b) post(result == a + b) { return a + b; }
 
-Under wrapping, ``a + b == a + b`` is a tautology — the postcondition holds even
-when ``a + b`` overflows. The bug is invisible to functional verification. Turn
-on UB checking and the same function fails, with a counterexample on ``a + b``.
+CppVerify therefore inserts a signed-overflow assertion before each evaluated
+addition. The function fails without any optional flag when the precondition
+admits overflow. Bit-vectors still model the machine result faithfully, but
+definedness must be established before that result can justify a contract.
 
-Turning it on
--------------
+Core safety and the bounds option
+---------------------------------
 
 .. code-block:: bash
 
-   cpp-verify            file.cpp     # functional only (wraps silently)
-   cpp-verify --check-ub file.cpp     # functional + UB freedom
+   cpp-verify            file.cpp     # contracts + core expression definedness
+   cpp-verify --check-ub file.cpp     # additionally use valid(p,n) extents
 
-``--check-ub`` is opt-in today — the migration path while existing code grows the
-preconditions it always needed. The end state is on-by-default for ``exec``
-functions, because that is what makes the runtime contract mean something.
+Always-on checks cover signed arithmetic and negation overflow, zero divisors,
+the signed-minimum divided by minus one case, invalid shifts, and non-null
+abstract-valid dereferences. They also follow operations executed inside lifted
+``constexpr`` functions.
 
-What is checked (Layer A)
--------------------------
+The historically named ``--check-ub`` option is now specifically the Z3
+buffer-bounds rollout: it discovers ``valid(p, n)`` before that marker's trivial
+spec body is inlined and generates index obligations. It does not control the
+always-on checks above.
+
+What is always checked
+----------------------
 
 .. list-table::
    :header-rows: 1
@@ -64,6 +73,10 @@ What is checked (Layer A)
      - divisor ``!= 0``
    * - signed ``/`` ``%``
      - not ``INT_MIN / -1``
+   * - ``<<`` / ``>>``
+     - valid count; signed left operand/range follows C++17 rules
+   * - ``*p``, ``p[i]``, ``p->field``
+     - base is non-null and satisfies the abstract validity predicate
 
 The classic example — the tool tells you the precondition you forgot:
 
@@ -71,11 +84,11 @@ The classic example — the tool tells you the precondition you forgot:
 
    int abs(int x) post(result >= 0)
    { return x < 0 ? -x : x; }
-   //   --check-ub  ->  FAILS: counterexample x = INT_MIN  (negating INT_MIN overflows)
+   //   FAILS: counterexample x = INT_MIN  (negating INT_MIN overflows)
 
    int abs(int x) pre(x > -2147483648) post(result >= 0)
    { return x < 0 ? -x : x; }
-   //   --check-ub  ->  verifies
+   //   verifies
 
 Array out-of-bounds
 -------------------
@@ -98,11 +111,15 @@ whose base is ``p`` carries the obligation ``0 <= i < n``:
      pre(valid(p, n) && n >= 1)
    { return p[n]; }   // --check-ub -> FAILS: p[n] is one past the end
 
+The marker also entails ``n >= 0``. For ``n > 0``, ``p`` must be non-null and
+abstractly valid; ``n == 0`` permits null. This prevents a contradictory
+negative extent or a nonempty null buffer from becoming a proof assumption.
+
 Inside a loop the bound is discharged the same way an invariant is — a fill or
 copy loop is proven memory-safe from its guard and invariant. An access through a
-pointer with **no** ``valid`` declaration is not bounds-checked (you have opted
-out for that pointer). Use-after-lifetime and uninitialized reads are not yet
-checked.
+pointer with **no** ``valid`` declaration is not bounds-checked because the
+verifier has no length to use. Its non-null/abstract-valid dereference
+obligation still applies.
 
 Signed vs. unsigned
 -------------------
@@ -114,7 +131,7 @@ flagged**:
 .. code-block:: cpp
 
    unsigned mix(unsigned a, unsigned b) post(result == a + b)
-   { return a + b; }            // verifies with --check-ub: unsigned wrapping is legal
+   { return a + b; }            // verifies: unsigned wrapping is legal
 
 Width follows the target
 ------------------------
@@ -147,8 +164,9 @@ the same as for any loop: an invariant that bounds the accumulator. See
 What is not covered yet
 -----------------------
 
-Checked today: integer UB (overflow, division) and **array out-of-bounds**.
-The remaining memory-safety UB — **use-after-lifetime** and **uninitialized
-reads** — is not yet checked (it needs object-lifetime tracking). Pointer
-provenance, strict aliasing, and alignment are explicitly assumed away. The full
-design and layering plan live in ``docs/UB-CHECKING.md``.
+Checked today: core expression definedness, local scalar/flat-record definite
+initialization, and (with ``--check-ub``) declared-buffer bounds. Reads from
+uninitialized **heap storage** and use-after-lifetime are not checked because
+the heap does not yet carry allocation, liveness, or initialization state.
+Pointer provenance, strict aliasing, and alignment are explicitly outside the
+model. The full design and layering plan live in ``docs/UB-CHECKING.md``.

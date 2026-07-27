@@ -34,9 +34,10 @@ Backends
    * - ``--unroll=N``
      - BMC loop bound only.
    * - ``--check-ub``
-     - Also prove freedom from undefined behavior (signed integer overflow,
-       division/modulo by zero) for ``exec``/``proof`` functions. Z3 backend.
-       See :doc:`integers`.
+     - On the Z3 backend, additionally recognize ``valid(p, n)`` preconditions
+       as buffer extents and prove every indexed access is in bounds. Core
+       expression definedness (overflow, division, shifts, and dereferences) is
+       always checked. See :doc:`integers` and :doc:`pointers`.
    * - ``--timeout=N``
      - Per-query Z3 timeout in milliseconds (default 10000; ``0`` disables). A query
        that exceeds it is reported as ``unknown`` instead of hanging.

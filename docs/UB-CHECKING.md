@@ -28,10 +28,17 @@ machine integers, `VIntMode::Machine`). The **spec world** (`spec` functions,
 unbounded `VIntMode::Math`) has no notion of overflow by construction and is
 never instrumented.
 
+Core expression definedness is mandatory; it is not disabled by omitting a
+flag. The current `--check-ub` option is narrower than its historical name: it
+enables `valid(p, n)`-based **buffer extent** checking on the Z3 path. This
+rollout split lets existing pointer code opt into explicit bounds while signed
+arithmetic, division, shifts, dereference validity, and lifted-`constexpr`
+definedness remain checked on every normal proof.
+
 ## How the two obligations combine
 
-They are not two separate solver runs. They interleave in one weakest-precondition
-pass. Conceptually, for `x = a + b`:
+They interleave in one weakest-precondition pass rather than being generated as
+independent safety and functional programs. Conceptually, for `x = a + b`:
 
 ```
 wp(x = a + b, Q)  =  no_overflow_signed(a, b)   ∧   Q[x := a + b]
@@ -42,6 +49,9 @@ The safety obligation sits **inline at each operation**; the functional
 obligation (the postcondition) sits at the end. They compose soundly because of
 order: once `no_overflow(a,b)` holds, the bit-vector result `bvadd(a,b)` equals
 the true mathematical `a + b`, so functional reasoning about `post` is faithful.
+The backend's sound UNKNOWN-recovery path may submit individual ordered
+assertions separately, but it never changes this program order or lets a later
+assumption justify an earlier safety check.
 
 Mechanically, each safety obligation is emitted as a **guarded `assert`** in the
 Layer-1 IR, *before* the statement that consumes the value. From there the
@@ -58,32 +68,50 @@ machinery discharges them.
 
 ## The extensible checker framework
 
-UB is open-ended — there will always be more cases. The design is built so that
-**adding a new check is a localized, additive change**, never a rewrite.
+UB is open-ended — there will always be more cases. The implementation has two
+additive insertion points:
 
 ```
-   Layer-1 VFunction body
+   Layer-1 VFunction
+          │
+          ├─ --check-ub + Z3
+          │    instrumentUBChecks()
+          │    - discover valid(p, n) before spec inlining
+          │    - add extent semantics and indexed-access bounds asserts
           │
           ▼
-   instrumentUBChecks(VFunction&)        ← walks statements, in evaluation order
-          │   for each evaluated VExpr:
+   passivization, in C++ evaluation order
+          safetyForExpr()
+          - arithmetic/division/shift definedness
+          - non-null abstract-valid loads and stores
+          - path-sensitive lifted-constexpr definedness
+          │
           ▼
-   collectObligations(VExpr*, out)       ← the REGISTRY: one case per UB kind
-          │   returns a list of boolean "this op is safe" VExprs
-          ▼
-   insert  contract_assert(obligation)   ← before the consuming statement
-                                            (and at loop-body end for conditions)
+   guarded passive assert → ordered weakest precondition
 ```
 
-`collectObligations` is the single extension point. Each checker:
+Both paths produce ordinary guarded proof obligations. A check fires only when
+applicable: machine integers (`IntMode == Machine`) and, for overflow,
+**signed** operands. Unsigned overflow is defined wraparound in C++ and is
+deliberately not flagged.
 
-1. pattern-matches a `VExpr` shape (e.g. a signed `VBinOpExpr` with `Op == Mul`),
-2. builds a boolean obligation expression (`true` ⇒ the operation is safe), and
-3. appends it to the output list.
+`valid` is a conventional pure spec declaration, not a new keyword:
 
-A check fires only when it is **applicable**: machine integers
-(`IntMode == Machine`) and, for overflow, **signed** operands (unsigned overflow
-is defined wraparound in C++ and is deliberately *not* flagged).
+```cpp
+spec bool valid(int *p, int n) { return true; }
+```
+
+When `valid(p, n)` appears in a precondition under `--check-ub`, the verifier
+adds these semantics before the intentionally trivial body can inline to
+`true`:
+
+- `n >= 0`;
+- `n == 0` permits a null pointer;
+- `n > 0` requires `p != nullptr` and the abstract pointer-validity predicate;
+- every `p[i]` or `*(p + i)` access must prove `0 <= i && i < n`.
+
+An access through a base with no declared extent still receives the mandatory
+non-null/abstract-valid dereference check, but no size claim is invented.
 
 ### Obligation representation
 
@@ -111,18 +139,18 @@ it UB; being conservative (occasional false positives) is sound, missing a real
 UB is not. Precision is a UX dial we can sharpen later without ever becoming
 unsound.
 
-Specifics for Layer A:
+Specifics for machine arithmetic:
 
 - **Only signed integer arithmetic is checked.** Unsigned overflow is defined in
   C++ (modular wraparound); the existing `bvadd`/… wrapping encoding is already
   correct for unsigned, so no obligation is emitted. (This requires signedness in
   `VType`, added for this feature.)
-- **Width is taken from the target's data model.** `VType` records each integer's
-  bit width from `ASTContext::getTypeSize`, so `int` is checked at 32-bit and
-  `long`/`long long` at 64-bit (on LP64). The Z3 encoder emits bit-vectors of the
-  recorded width, and mixed-width operations (e.g. `int + long`) sign-extend the
-  narrower operand. Sub-`int` types (`int8/16`) are still modeled as 32-bit `int`
-  — a narrower refinement, not a soundness issue at the `int` boundary.
+- **Width is taken from the target's data model and Clang's computation type.**
+  `VType` records the relevant width and signedness, integral promotions happen
+  before arithmetic, and assignment converts back to the destination width.
+  The Z3 encoder therefore checks `int` at 32 bits and `long`/`long long` at 64
+  bits on LP64, while narrow increments and compound assignments use promoted
+  arithmetic followed by faithful narrowing.
 
 ## Layering
 
@@ -132,8 +160,9 @@ check, rather than trying to encode the whole abstract machine up front.
 
 | Layer | UB caught | IR / model need | Status |
 |---|---|---|---|
-| **A** | signed `+ - * /` overflow, unary `-` overflow, division/modulo by zero | scalar compute model + **signedness in `VType`** | **implemented** (this doc) |
-| **B** | out-of-bounds access, use-after-end-of-lifetime, uninitialized read | **block-structured heap** (pointer = base+offset, allocation = size+liveness) | planned |
+| **A** | signed arithmetic/negation overflow, division/modulo by zero, invalid shifts, null/abstract-invalid dereference | typed expressions + signedness/width in `VType` | **implemented, always on** |
+| **B1** | out-of-bounds indexed access for a declared buffer extent | `valid(p, n)` marker + base/offset recovery | **implemented with `--check-ub` on Z3** |
+| **B2** | use-after-end-of-lifetime and reads of uninitialized heap storage | block-structured heap (allocation = size+liveness+initialization) | planned |
 | **C** | pointer provenance, strict-aliasing (TBAA), alignment | precise object model | assumed-away (documented) |
 
 ### Assumed-away (Layer C and beyond)
@@ -145,31 +174,30 @@ rely on them are outside the verified subset:
 - strict-aliasing violations (accessing an object through the wrong type),
 - alignment violations,
 - data races / concurrency,
-- shifts and bitwise operators (not yet represented in Layer-1 at all — when they
-  are added, shift-amount-range is a one-checker addition to the registry).
+- allocation/deallocation and heap-object lifetime changes.
 
 ## Scope and the flag
 
-- Enabled with **`--check-ub`** on `cpp-verify` (and intended to become
-  `-fcheck-ub` on the `clang++` driver). It is **flag-gated for migration**: the
-  end state is UB checking *on by default* for exec functions, because that is
-  what makes the runtime contract mean something. The flag is the rollout path,
-  not the design — the two-path structure is intrinsic, not optional.
-- Backend: **Z3** (the overflow predicates are bit-vector primitives). The BMC
-  and Lean backends ignore the obligations for now.
-- Applies to exec and `proof` functions; `spec` functions are never instrumented.
+- Core expression safety applies to exec and `proof` functions; mathematical
+  `spec` functions are total and are never instrumented for machine UB.
+- **`cpp-verify --check-ub`** additionally enables buffer extent discovery and
+  bounds obligations. That extent feature currently runs only on the Z3
+  backend and has no `clang++` driver spelling yet.
+- Omitting `--check-ub` does **not** disable overflow, division, shift, or
+  dereference checks. It only means the verifier has no declared buffer length
+  from which to prove indexed bounds.
 
 ## How to add a new check (the recipe)
 
-1. If the predicate is expressible in surface arithmetic, build it as ordinary
-   `VExpr` in a new case of `collectObligations`. Done.
-2. If it needs a solver primitive (like overflow), add a variant to
+1. If the check is local to one evaluated expression, add it to
+   `safetyForExpr` so it follows short-circuit, branch, loop, and early-return
+   guards automatically.
+2. If the check needs function-wide metadata such as a declared extent, collect
+   that metadata before spec preparation and inject guarded `VExpr` assertions
+   in `instrumentUBChecks`.
+3. If it needs a solver primitive (like overflow), add a variant to
    `VOverflowCheckExpr` (or a sibling node), one case in `VCMachine::fromVExpr`,
    and one case in `Z3Encoder` mapping to the primitive.
-3. Add the applicability guard (type/signedness/mode) in the checker.
-4. Add edge-case and general tests under `clang/test/Verify/suite/` and a runnable
+4. Add the applicability guard (type/signedness/mode) in the checker.
+5. Add edge-case and general tests under `clang/test/Verify/suite/` and a runnable
    example under `examples/`.
-
-No other layer changes. That is the whole point of routing every obligation
-through the single `collectObligations` registry and the guarded-assert
-injection.

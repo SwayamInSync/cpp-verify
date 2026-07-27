@@ -89,7 +89,11 @@ Purpose: clean, typed, control-flow-preserving representation of the verified pr
 
 ### Type Propagation from Clang
 
-Every `VExpr` carries a `VType` populated automatically from Clang's `QualType` during ASTConverter — the user never re-annotates types in contracts. The conversion (`VType::fromQualType`) calls `getDesugaredType()` to peel typedefs, reads `BuiltinType::getKind()` for integer widths and signedness, recurses into `RecordDecl::fields()` for structs, and reads `ConstantArrayType::getSize()` for arrays. This gives the Z3 encoder full sort information (bit-width, signedness, struct layout) with zero user annotation.
+Every `VExpr` carries a `VType` populated automatically from Clang's canonical
+`QualType` during AST conversion; users never re-annotate contract types.
+Integer width and signedness come from `ASTContext`, pointers use the abstract
+address sort, and supported records are flattened separately into typed scalar
+fields. Unsupported type structure is diagnosed before lowering.
 
 ### Types (VType)
 
@@ -98,19 +102,23 @@ VIntMode = Math | Machine
 
 VType =
   | Bool
-  | Int8(IntMode) | Int16(IntMode) | Int32(IntMode) | Int64(IntMode)
-  | UInt8(IntMode) | UInt16(IntMode) | UInt32(IntMode) | UInt64(IntMode)
-  | Struct(name, fields: [(name, VType)])
-  | Array(element: VType, length: VExpr)
-  | Ptr(inner: VType)                        // raw pointer / reference / unique_ptr
+  | Int32(IntMode, bitWidth, signedness)
+  | Int64(IntMode, bitWidth, signedness)
+  | Struct                                   // fields flattened by VFunction
+  | Ptr                                      // untyped mathematical address
   | Void
+  | Unsupported
 ```
 
 - Every `VExpr` carries a `VType`. Populated from Clang's `QualType` during ASTConverter.
 - The `IntMode` tag on integer types is set by ASTConverter:
   - In `spec` function bodies → `Math` (Z3 `Int`)
   - In `proof`/`exec`/lifted-`constexpr` function bodies → `Machine` (Z3 `BitVec`)
-- `Ptr(inner)` covers `T*`, `T&`, `const T&`, and `unique_ptr<T>` — distinctions tracked via metadata on the parameter, not on the type.
+- Raw pointers to supported scalar or flat-record pointees are admitted.
+  References, pointer-to-pointer values, smart pointers, and pointer-bearing
+  records are rejected at the current verifier boundary.
+- `Int32`/`Int64` are storage categories; `bitWidth` carries the exact target
+  width, including narrow integers and `__int128`.
 
 ### Expressions (VExpr)
 
@@ -164,7 +172,8 @@ VStmt =
 ```
 VFunction =
   name: string
-  params: [(name, VType, ParamMode)]
+  identity: string                         // signature-stable internal key
+  params: [(name, VType)]
   returnType: VType
   preconditions: [VExpr]
   postconditions: [VExpr]
@@ -177,15 +186,12 @@ VFunction =
   decreases: [VExpr]                   // tuple → lex-ordered
   intMode: VIntMode                    // Math for explicit spec; Machine otherwise
 
-ParamMode = Owned | BorrowedShared | BorrowedExclusive | RawPointer
 ```
 
-- `ParamMode` is derived from the C++ parameter type:
-  - `T` (by-value), `unique_ptr<T>` → `Owned`
-  - `const T&` → `BorrowedShared`
-  - `T&` → `BorrowedExclusive`
-  - `T*` → `RawPointer`
-- `aliases` empty means the implicit non-aliasing precondition applies to all mutable pointer/reference parameter pairs.
+- `identity` includes the canonical signature, so overloads with the same
+  source spelling remain distinct through modular calls and SMT symbols.
+- `aliases` empty means the implicit non-aliasing/range-exclusivity precondition
+  applies to distinct mutable raw-pointer parameter pairs.
 
 ## Layer 2: Passive IR
 
@@ -245,8 +251,17 @@ havoc(y);
 assume(Q[Result := y, Old(params) := args]);
 ```
 
-- The heap version increments only across the modifies set: `mem_{k+1}(loc) = mem_k(loc)` for `loc ∉ modifies`.
-- If `modifies` is the conservative default (all reachable through mut params), the entire heap is havocked.
+- Exact footprints such as `p->field` and `p[i]` replace only that address with a
+  fresh value. Other addresses retain the preceding heap version.
+- A bare `modifies(*p)` is a **region** footprint: it authorizes any indexed
+  store rooted at `p` in the callee body. The flat heap does not yet carry an
+  allocation/provenance identity with which to bound that region at a modular
+  call, so the caller conservatively receives a fresh whole heap. This loses
+  facts but cannot create a false proof.
+- A callee with pointer parameters and no explicit footprint also receives the
+  conservative whole-heap treatment. Pure scalar calls do not havoc the heap.
+- Footprint containment is checked in the caller's entry state, so reassigning a
+  pointer variable cannot expand the caller's declared frame.
 
 ## WP Calculus Rules
 
@@ -272,9 +287,9 @@ After Layer 2 transformation, there are no loops or function calls left — only
 | Int32(Machine), Int64(Machine), ... | `BitVec(N)` |
 | UInt32(Math), UInt64(Math), ... | `Int` with `≥ 0` invariant |
 | UInt32(Machine), UInt64(Machine), ... | `BitVec(N)` |
-| Struct | Flattened: each field becomes a separate Z3 constant (or a Z3 datatype) |
-| Array | `Array(Int, ElementSort)` (Z3 array theory) |
-| Ptr(T) | `Int` (pointer addresses), with the heap as `Array(Int, EncodingOf(T))` |
+| Struct | Flattened: each supported field becomes a separate typed Z3 constant |
+| Ptr | `Int` (mathematical abstract address) |
+| Heap | `Array(Int, Int)` with typed load/store conversions at the boundary |
 
 | VExpr | Z3 Expr |
 |---|---|
@@ -288,11 +303,23 @@ After Layer 2 transformation, there are no loops or function calls left — only
 | Old(*p) | `(select mem_0 p_entry)` |
 | Result | `result_var` (SSA version of return value) |
 
-**Spec functions → SMT functions:** each `spec` function becomes a `(declare-fun)` with a `(assert (forall ...))` defining axiom. Recursion-depth controlled by per-call-site fuel (see `RevealWithFuel`).
+**Spec functions → finite call-site equations:** each referenced `spec` call
+becomes an SMT function application plus a defining equation specialized to
+that call's actual arguments. Nonrecursive specs are normally inlined before
+this stage. Recursive definitions default to one unfolding step and retain
+residual applications; `reveal_with_fuel` raises the finite depth. CppVerify
+does not install a universal self-triggering recursive axiom.
 
 **`recommends`:** parsed and stored; not emitted into the main VC. On verification failure, a second pass adds `recommends` checks and reports violations as warnings.
 
-**Verification:** for each VC, `solver.add(!vc)`. UNSAT → VC holds (verified). SAT → counterexample. UNKNOWN → reported honestly.
+**Verification:** the primary query submits the complete ordered weakest
+precondition: `solver.add(!vc)`. UNSAT means the VC holds; SAT yields a
+counterexample. If Z3 returns UNKNOWN, the backend retries individual
+assertions in program order, with entry assumptions and only the assumptions
+that precede each assertion. This can recover tractable quantified heap proofs
+without allowing a later fact to justify an earlier obligation. If every
+soundly smaller query cannot be discharged, UNKNOWN is reported and the
+function is not considered verified.
 
 ## Counterexample Extraction
 

@@ -56,6 +56,25 @@ Chained calls in one expression are supported by lowering inner calls to tempora
 The converter emits ``VCallStmt`` for each exec call site; passivization substitutes callee contracts
 in order. Spec and proof functions are not emitted at runtime and are handled by inlining or axioms.
 
+Calls also enforce the caller's frame in its **entry state**. Exact footprints
+(``p[i]``, ``p->field``) freshen only those addresses. A region footprint
+(``*p``), or a pointer-taking declaration with no explicit footprint, freshens
+the complete heap because allocation identity is not modeled yet. The
+postcondition then re-establishes whatever the caller may rely on. This
+conservative boundary prevents offset writes from masquerading as preservation
+of unrelated memory.
+
+Z3 result discipline
+--------------------
+
+The default backend first submits one ordered weakest-precondition formula.
+``unsat`` means verified and ``sat`` produces a counterexample. On ``unknown``,
+CppVerify retries assertions separately in source order, using only entry facts
+and assumptions that precede each obligation. The retry helps quantified heap
+programs without letting a later assumption prove an earlier assertion. If it
+still cannot discharge every obligation, the final result remains ``unknown``
+and the function is not certified.
+
 Parallel verify + compile
 -------------------------
 

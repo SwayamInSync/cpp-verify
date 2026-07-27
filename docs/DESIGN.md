@@ -11,7 +11,7 @@ All contract syntax is enabled with `-fverify-contracts`. Without this flag, the
 | `pre(expr)` | After function `)` | Precondition — caller must satisfy |
 | `post(expr)` | After function `)` | Postcondition — callee must establish; may use `result` and `old(x)` |
 | `modifies(lvalue, ...)` | After function `)` | Frame condition — declares the lvalues this function may write to |
-| `aliases(p, q)` | After function `)` | Opts out of implicit non-aliasing assumption for the named pointer/reference pair |
+| `aliases(p, q)` | After function `)` | Opts out of implicit non-aliasing for a supported same-pointee raw-pointer pair |
 | `recommends(expr)` | After function `)` (spec only) | Soft precondition for spec functions; reported on verification failure |
 | `invariant(expr)` | After `while`/`for` condition `)` | Loop invariant |
 | `decreases(expr, ...)` | After loop `)` or function `)` | Termination measure. A comma-separated tuple `decreases(a, b)` is a lexicographic measure. |
@@ -208,9 +208,32 @@ The verifier represents memory as a Z3 array (the "heap"). Pointer dereferences 
 
 This is internal to the verifier — users never write the heap directly. Aliasing correctness comes for free from Z3's array theory: if `p == q`, then `select(mem, p) == select(mem, q)`.
 
+Pointer addition/subtraction and array subscripting use mathematical address
+offsets, so address arithmetic itself cannot wrap. The supported buffer fragment
+includes `p + i`, `p - i`, `*(p + i)`, and `p[i]`; pointer compound assignment
+and forged pointer/integer casts remain rejected. Allocation identity,
+provenance, lifetime, strict aliasing, and alignment are not represented yet.
+
+With the Z3-only `--check-ub` option, a conventional pure declaration
+
+```cpp
+spec bool valid(int *p, int n) { return true; }
+```
+
+is recognized as a buffer-extent marker when `valid(p, n)` occurs in a
+precondition. It entails `n >= 0`; a positive extent entails non-null abstractly
+valid storage, while extent zero permits null. Every access rooted at `p` then
+gets the generated obligation `0 <= index && index < n`. Without the option,
+core expression definedness (including non-null/abstract-valid dereferences,
+integer arithmetic, division, and shifts) is still mandatory, but no buffer
+extent is inferred.
+
 ### 2. Implicit non-aliasing default
 
-When a function has multiple mutable pointer or reference parameters, the verifier *implicitly* assumes they don't alias at function entry. Effectively, the verifier inserts:
+When a function has multiple mutable raw-pointer parameters, the verifier
+*implicitly* assumes their pointee object ranges do not overlap at function
+entry. Effectively, the verifier inserts a target-layout range separation
+condition (with null handled separately).
 
 ```
 pre(p != q && p != r && q != r && ...)   // for all distinct mut ptr/ref pairs
@@ -249,10 +272,24 @@ void incr_first(int* a, int* b)
 
 - `modifies(X, Y, Z)` lists every lvalue the function may write to. Anything not listed is preserved.
 - Default if absent:
-  - Pure-typed functions (no pointers/references) modify nothing.
-  - Functions with mutable pointer/reference parameters implicitly modify everything reachable through those parameters (conservative).
+  - Pure-typed functions (no pointers) modify nothing.
+  - Functions with mutable pointer parameters are treated as potentially
+    modifying reachable heap state at modular calls (conservative).
 - Users write `modifies(...)` to narrow the default.
-- Lvalue forms supported: `*p`, `p->field`, `a[i]`, `obj.field`, `obj.method(...)` (where the method has its own modifies clause).
+- Heap lvalue forms supported: `*p`, `p->field`, and `p[i]`.
+  References and member-function effects are not yet in the verified subset.
+- `modifies(*p)` is a **region** permission inside the callee: any `p[i]`
+  store is permitted. At a modular call, the current flat heap has no allocation
+  identity with which to delimit that region, so the backend conservatively
+  havocs the whole heap. A caller therefore cannot retain arbitrary unrelated
+  heap facts across such a call unless the callee postcondition re-establishes
+  them.
+- `modifies(p->field)` and `modifies(p[i])` are **exact-address** footprints.
+  Modular calls preserve every other heap address. Even a zero-offset first
+  field remains structurally distinct from the region form `*p`.
+- Frame inclusion is evaluated using entry-state pointer values. Reassigning a
+  pointer and then calling through it cannot escape the enclosing function's
+  declared frame.
 
 ### Worked example
 
@@ -323,7 +360,7 @@ This is purely an optimization — correctness is identical to eager injection. 
 - The clause must appear **after** the fields it names (it is parsed eagerly;
   late parsing is future work).
 - Implemented: `assume(invariant)` at the first use of an invariant-named field
-  for by-value and reference (`C`, `C&`, `const C&`) parameters. Because the
+  for by-value flat-record parameters. Because the
   invariant is injected as a precondition, callers must *establish* it at call
   sites (the modular precondition check), which is sound.
 - Implemented: `assert(invariant)` at every `return s;` where `s` is a struct
@@ -416,12 +453,17 @@ int safe_fib(int n) pre(...) post(result == fibo(n)) {
 - Without this, recursive `spec` axioms cause Z3 matching loops.
 - Inside ghost blocks only.
 
-## hide / reveal (post-MVP, designed in)
+## hide / reveal
 
 - `hide(fn_name)` and `reveal(fn_name)` in ghost blocks selectively control whether the body of a spec function is visible to Z3.
 - Default for non-recursive specs: visible (body inlined into queries).
-- Default for recursive specs: hidden (only revealed via `reveal_with_fuel`).
-- Used as a performance lever for large proofs.
+- Default for recursive specs: one finite unfolding step. Deeper unfolding
+  requires `reveal_with_fuel`.
+- `hide` suppresses defining equations while leaving the function application
+  available to contracts and imported lemma postconditions. This is useful
+  after a finite lemma has established all facts needed by a large arithmetic
+  proof: irrelevant recursive equations can otherwise dominate solver time.
+- Both constructs are implemented and are verification-only no-ops in CodeGen.
 
 ## choose (Hilbert ε — post-MVP)
 
@@ -506,7 +548,9 @@ KEYCONTRACT flag: only active when `-fverify-contracts` is passed. Otherwise the
 6. Proof functions must return void.
 7. Ghost blocks may only contain ghost-safe statements (contract_assert, reveal_with_fuel, spec/proof calls, local ghost variable declarations).
 8. `modifies` lvalues must be ordinary lvalues; the parser computes their alias keys for the encoder.
-9. `aliases(p, q)` arguments must be pointer/reference-typed parameters of the enclosing function.
+9. `aliases(p, q)` arguments must be supported raw-pointer parameters of the
+   enclosing function with the same pointee type; references are rejected by
+   the current verifier subset.
 10. `recommends` is only valid on `spec` functions.
 
 ### CodeGen Rules

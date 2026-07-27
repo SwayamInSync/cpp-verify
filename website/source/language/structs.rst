@@ -1,7 +1,7 @@
 Structs and type invariants
 ===========================
 
-Contracts may read fields of by-value (and reference) struct/class parameters with ordinary
+Contracts may read fields of by-value flat struct/class parameters with ordinary
 member syntax:
 
 .. code-block:: cpp
@@ -33,8 +33,8 @@ fields it names (it is parsed in place):
 
 Semantics:
 
-- The invariant is injected as a **precondition** at the first use of an invariant field, for
-  by-value and reference (``Point``, ``const Point&``) parameters. Because it is a precondition,
+- The invariant is injected as a **precondition** at the first use of an
+  invariant field for by-value parameters. Because it is a precondition,
   callers must establish it when they pass such a value.
 - It is **not** injected for raw pointer-to-struct parameters (their fields are heap loads).
 - **Returns are checked**: when a function returns a struct value of an invariant-bearing type,
@@ -61,6 +61,11 @@ the view rather than the layout:
 
 .. code-block:: cpp
 
-   struct Arr { int data[100]; int len; };
+   struct Pair { int first; int second; };
 
-   spec int size(Arr a) { return a.len; }
+   spec int total(Pair p) { return p.first + p.second; }
+
+The current aggregate model is intentionally narrow: records must be trivial,
+standard-layout, and flat, with scalar fields. References, nested records,
+arrays or pointers as fields, unions, bases, virtual dispatch, and non-trivial
+construction/destruction are rejected rather than approximated.

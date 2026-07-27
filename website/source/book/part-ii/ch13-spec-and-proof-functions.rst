@@ -51,9 +51,11 @@ call-site obligation; the verifier only **warns** when a call may violate it:
 Opacity: fuel, ``reveal``, ``hide``
 -----------------------------------
 
-A recursive ``spec`` is opaque by default (unfolded with fuel 1) so its axiom does not send Z3 into
-a matching loop; ``reveal_with_fuel(f, n)`` raises the depth when a proof needs more (the ``safe_fib``
-walkthrough uses it). ``reveal`` / ``hide`` toggle a spec's transparency for the rest of a function:
+A recursive ``spec`` is finitely transparent by default (fuel 1), so its
+defining equation cannot send Z3 into a matching loop.
+``reveal_with_fuel(f, n)`` raises the depth when a proof needs more (the
+``safe_fib`` walkthrough uses it). ``reveal`` / ``hide`` toggle a spec's
+transparency for the rest of a function:
 
 .. code-block:: cpp
 
@@ -74,6 +76,13 @@ walkthrough uses it). ``reveal`` / ``hide`` toggle a spec's transparency for the
      ghost { hide(triple); }              // keep triple opaque; prove without unfolding it
      return x + x + x;
    }
+
+Use the smallest fuel that exposes the recurrence needed at the current proof
+site. If a proof function has already supplied a finite table or step lemma,
+``hide(f)`` can suppress irrelevant recursive equations while the imported
+postconditions remain available. The full-range factorial and Fibonacci
+acceptance tests use this pattern to retain exact mathematical specifications
+without making solver time depend on unnecessary unfolding.
 
 See also :doc:`ch17-backends-modular-calls`.
 
@@ -96,4 +105,3 @@ One body does double duty: the same ``constexpr`` runs at execution time and def
 the two can never silently diverge (Verus requires a separate ``spec fn``). A lifted ``constexpr``
 keeps **machine** integer semantics — honest overflow — unlike an explicit ``spec`` (mathematical
 ``Int``); see :doc:`../../language/integers`.
-
