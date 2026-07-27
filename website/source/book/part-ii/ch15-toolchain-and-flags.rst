@@ -43,6 +43,8 @@ Other flags
 - ``cpp-verify --unroll=N`` — loop bound for BMC
 - ``cpp-verify --timeout=N`` — per-query Z3 timeout in ms (default 30000)
 - ``cpp-verify --dump-ir[=1,2,3,4]`` — dump VCR / passive / VC / Z3 layers
+- ``cpp-verify --lower-only`` — construct and encode VCs without invoking Z3's
+  satisfiability check
 
 IR layers
 ---------
@@ -53,6 +55,13 @@ IR layers
 4. Z3 (SMT string)
 
 Multiple layers are separated by ``======`` in the dump.
+
+Use ``--lower-only`` with the dump flags when testing a lowering rule. The
+frontend, VCR transforms, passive SSA, weakest-precondition construction, and
+Z3 encoding all run, including spec-axiom encoding, but ``Solver.check()`` does
+not. ``Lowered`` therefore means “well-formed through backend encoding,” not
+“proved.” This is stronger than ``clang++ -fno-verify``, which stops before the
+verification IR pipeline.
 
 Compiler flags table and IR dump details: :doc:`../../language/tooling`.
 

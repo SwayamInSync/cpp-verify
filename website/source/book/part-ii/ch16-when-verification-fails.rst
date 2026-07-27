@@ -23,6 +23,29 @@ For a deliberately invalid program, both outcomes are sound:
 - ``unknown`` means the verifier conservatively refused to certify it;
 - only ``Verified`` is a proof result.
 
+``Lowered`` is not a fourth solver outcome. It is emitted only by
+``cpp-verify --lower-only`` and says that Clang AST conversion, VCR, passive
+SSA, VC generation, and backend encoding succeeded without running
+satisfiability. This is useful when isolating a frontend or lowering bug from a
+slow quantified/heap query, but it never certifies the program.
+
+Trusting a new feature
+----------------------
+
+Do not use one successful Z3 result as the only implementation oracle. A
+feature regression should combine:
+
+- realistic C++ programs that must verify;
+- nearby false programs that must be rejected;
+- exact VCR and passive-SSA checks;
+- critical VC and Z3-encoding checks;
+- boundary cases for mathematical integers and machine bitvectors.
+
+This split answers two independent questions. ``--lower-only`` checks whether
+the program became the intended formula. Ordinary verification checks whether
+that formula is valid. A timeout can block the second answer without hiding a
+malformed first answer.
+
 Adjusting contracts
 -------------------
 

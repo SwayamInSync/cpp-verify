@@ -13,6 +13,7 @@ Standalone verifier
    cpp-verify --check-ub file.cpp
    cpp-verify --timeout=20000 file.cpp
    cpp-verify --dump-ir=1,2,3,4 file.cpp
+   cpp-verify --lower-only --dump-ir=1,2,3,4 file.cpp
 
 ``cpp-verify`` is a Clang tooling driver: it always adds ``-std=c++17`` and ``-fverify-contracts``.
 
@@ -42,6 +43,16 @@ Backends
    * - ``--timeout=N``
      - Per-query Z3 timeout in milliseconds (default 30000; ``0`` disables). A query
        that exceeds it is reported as ``unknown`` instead of hanging.
+   * - ``--lower-only``
+     - Run Clang conversion, backend-specific preparation, passivization, VC
+       construction, spec-axiom encoding, and Z3 translation without calling
+       the solver. Supported for the Z3 and BMC pipelines.
+
+``--lower-only`` is deliberately different from compiler ``-fno-verify``.
+``-fno-verify`` stops after Clang syntax and contract semantic checks;
+``--lower-only`` exercises the complete verification pipeline through backend
+encoding. A successful run prints ``Lowered: function``. That means the formula
+was constructed and encoded, **not** that its obligations are true.
 
 Supported compiler
 ------------------
@@ -128,8 +139,9 @@ Quick lookup
      - —
      - Off entirely. Combined with ``-fno-verify``, the explicit *off* wins.
 
-The standalone ``cpp-verify`` tool always runs the **full** path (it adds
-``-fverify-contracts`` for you and does no code generation).
+The standalone ``cpp-verify`` tool normally runs the **full** path (it adds
+``-fverify-contracts`` for you and does no code generation);
+``--lower-only`` is its explicit solver-free verification-IR mode.
 
 IR dump layers
 --------------
@@ -161,6 +173,20 @@ Examples:
 
 Layers are separated by a line of ``======`` in the output.
 
+For lowering regressions, combine the dump with ``--lower-only``. This makes
+VCR/passive/VC/Z3 ``FileCheck`` expectations independent of solver runtime:
+
+.. code-block:: bash
+
+   cpp-verify --lower-only --dump-ir=1 program.cpp
+   cpp-verify --lower-only --dump-ir=2 program.cpp
+   cpp-verify --lower-only --dump-ir=3 program.cpp
+   cpp-verify --lower-only --dump-ir=4 program.cpp
+
+Layer 4 still performs the complete Z3 encoding, including reachable spec
+axioms, and fails closed on an encoding error. It only omits
+``Solver.check()``.
+
 Testing and coverage
 --------------------
 
@@ -173,12 +199,24 @@ Regression tests live under ``clang/test/Verify/``. From the **repository root**
    * - Script
      - Purpose
    * - ``./scripts/run-verify-tests.sh``
-     - Run executable examples (pass / expected-fail).
+     - Lower every solver-positive executable example first, then run its
+       ordinary pass / expected-fail solver check.
    * - ``./scripts/coverage-sweep.sh``
      - Fast profile merge after a normal build (from repo root).
    * - ``./scripts/coverage-verify.sh``
      - Full instrumented rebuild + sweep (slow; use when changing coverage setup).
 
 Set ``CPPVERIFY_ENABLE_COVERAGE=ON`` on ``clangVerify`` only — not the whole LLVM tree.
+
+New language features should have both semantic and structural oracles:
+
+- real C++ positive and negative programs;
+- exact Layer 1 VCR and Layer 2 passive-SSA expectations;
+- Layer 3 VC and Layer 4 Z3 checks for the critical semantics;
+- ordinary solver checks for valid programs and deliberate false proofs.
+
+Solver ``unknown`` never validates a feature. Structural lowering can still be
+tested with ``--lower-only``, while proof acceptance remains blocked until a
+backend returns a proof result.
 
 Engine headers: :doc:`../api/index`.
