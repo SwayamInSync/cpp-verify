@@ -10,6 +10,8 @@ namespace clang {
 class ASTContext;
 
 namespace verify {
+inline constexpr unsigned DefaultSolverTimeoutMs = 30000;
+
 struct VerifyOptions {
   unsigned DumpIRLayers = 0;
   BackendKind Backend = BackendKind::Z3;
@@ -17,7 +19,7 @@ struct VerifyOptions {
   unsigned BMCUnroll = 10;
   /// Per-query Z3 timeout in milliseconds; 0 disables it. Non-terminating
   /// queries return Unknown instead of hanging the tool.
-  unsigned SolverTimeoutMs = 10000;
+  unsigned SolverTimeoutMs = DefaultSolverTimeoutMs;
   /// Enable valid(p, n)-based buffer bounds obligations. Core expression
   /// definedness checks are always emitted during passivization.
   bool CheckUB = false;

@@ -44,7 +44,7 @@ static cl::opt<unsigned> SolverTimeout(
     cl::desc(
         "Per-query Z3 timeout in milliseconds (0 = no limit). A query that "
         "exceeds it is reported as unknown instead of hanging"),
-    cl::init(10000), cl::cat(CppVerifyCategory));
+    cl::init(verify::DefaultSolverTimeoutMs), cl::cat(CppVerifyCategory));
 
 static cl::opt<bool> CheckUB(
     "check-ub",
