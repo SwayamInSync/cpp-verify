@@ -186,6 +186,159 @@ int modular_loaded_value(int value)
   return observed;
 }
 
+int direct_pointer_reassignment(int value)
+  post(result == value)
+{
+  int *first = new int(1);
+  int *second = new int(value);
+  int *alias = first;
+  alias = second;
+  int observed = *alias;
+  delete first;
+  delete alias;
+  return observed;
+}
+
+int owner_reassignment_preserves_alias(int value)
+  post(result == value)
+{
+  int *owner = new int(value);
+  int *alias = owner;
+  int *replacement = new int(2);
+  owner = replacement;
+  int observed = *alias;
+  delete alias;
+  delete owner;
+  return observed;
+}
+
+int conditional_pointer_copy(bool choose)
+  post(result == 1 || result == 2)
+{
+  int *first = new int(1);
+  int *second = new int(2);
+  int *alias = choose ? first : second;
+  int observed = *alias;
+  delete first;
+  delete second;
+  return observed;
+}
+
+int branch_pointer_reassignment(bool choose)
+  post(result == 1 || result == 2)
+{
+  int *first = new int(1);
+  int *second = new int(2);
+  int *alias = first;
+  if (choose)
+    alias = second;
+  int observed = *alias;
+  delete first;
+  delete second;
+  return observed;
+}
+
+bool null_pointer_reassignment()
+  post(result)
+{
+  int *owner = new int(1);
+  int *alias = owner;
+  alias = nullptr;
+  delete alias;
+  delete owner;
+  return alias == nullptr;
+}
+
+int conditional_null_pointer(bool choose, int value)
+  post(result == 0 || result == value)
+{
+  int *owner = new int(value);
+  int *alias = choose ? owner : nullptr;
+  int observed = 0;
+  if (alias != nullptr)
+    observed = *alias;
+  delete owner;
+  return observed;
+}
+
+int stale_pointer_reassigned_to_fresh_object(int value)
+  post(result == value)
+{
+  int *owner = new int(1);
+  int *alias = owner;
+  delete owner;
+  int *replacement = new int(value);
+  alias = replacement;
+  int observed = *alias;
+  delete alias;
+  return observed;
+}
+
+int modular_write_after_reassignment(int value)
+  post(result == value)
+{
+  int *first = new int(1);
+  int *second = new int(2);
+  int *alias = first;
+  alias = second;
+  write_allocated(alias, value);
+  int observed = *second;
+  delete first;
+  delete second;
+  return observed;
+}
+
+int self_referential_conditional_reassignment(int value)
+  post(result == value)
+{
+  int *owner = new int(value);
+  int *alias = nullptr;
+  alias = alias == nullptr ? owner : nullptr;
+  int observed = *alias;
+  delete alias;
+  return observed;
+}
+
+int branch_assignment_from_null(bool choose, int value)
+  post(result == 0 || result == value)
+{
+  int *owner = new int(value);
+  int *alias = nullptr;
+  if (choose)
+    alias = owner;
+  int observed = 0;
+  if (alias != nullptr)
+    observed = *alias;
+  delete owner;
+  return observed;
+}
+
+int delete_null_preserves_liveness(int value)
+  post(result == value)
+{
+  int *owner = new int(value);
+  int *alias = owner;
+  alias = nullptr;
+  delete alias;
+  int observed = *owner;
+  delete owner;
+  return observed;
+}
+
+int branch_order_independent_provenance(bool choose, int value)
+  post(result == value)
+{
+  int *owner = new int(value);
+  int *alias = nullptr;
+  if (choose)
+    delete alias;
+  else
+    alias = owner;
+  int observed = *owner;
+  delete owner;
+  return observed;
+}
+
 // VERIFY-DAG: Verified: write_allocated
 // VERIFY-DAG: Verified: read_allocated
 // VERIFY-DAG: Verified: observe_aliases
@@ -205,3 +358,15 @@ int modular_loaded_value(int value)
 // VERIFY-DAG: Verified: modular_read
 // VERIFY-DAG: Verified: modular_alias_observation
 // VERIFY-DAG: Verified: modular_loaded_value
+// VERIFY-DAG: Verified: direct_pointer_reassignment
+// VERIFY-DAG: Verified: owner_reassignment_preserves_alias
+// VERIFY-DAG: Verified: conditional_pointer_copy
+// VERIFY-DAG: Verified: branch_pointer_reassignment
+// VERIFY-DAG: Verified: null_pointer_reassignment
+// VERIFY-DAG: Verified: conditional_null_pointer
+// VERIFY-DAG: Verified: stale_pointer_reassigned_to_fresh_object
+// VERIFY-DAG: Verified: modular_write_after_reassignment
+// VERIFY-DAG: Verified: self_referential_conditional_reassignment
+// VERIFY-DAG: Verified: branch_assignment_from_null
+// VERIFY-DAG: Verified: delete_null_preserves_liveness
+// VERIFY-DAG: Verified: branch_order_independent_provenance

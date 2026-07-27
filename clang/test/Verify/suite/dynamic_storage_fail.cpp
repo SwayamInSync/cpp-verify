@@ -287,6 +287,58 @@ int modular_proof_call()
   return 0;
 }
 
+int branch_reassignment_use_after_delete(bool choose)
+  post(true)
+{
+  int *first = new int(1);
+  int *second = new int(2);
+  int *alias = first;
+  if (choose)
+    alias = second;
+  delete first;
+  return *alias;
+}
+
+int reassigned_alias_double_delete()
+  post(true)
+{
+  int *first = new int(1);
+  int *second = new int(2);
+  int *alias = first;
+  alias = second;
+  delete alias;
+  delete second;
+  return 0;
+}
+
+int stale_alias_after_owner_reassignment()
+  post(true)
+{
+  int *owner = new int(1);
+  int *alias = owner;
+  int *replacement = new int(2);
+  owner = replacement;
+  delete alias;
+  return *alias;
+}
+
+int copied_stale_pointer()
+  post(true)
+{
+  int *owner = new int(1);
+  delete owner;
+  int *alias = owner;
+  return *alias;
+}
+
+int null_reassignment_dereference()
+  post(true)
+{
+  int *owner = new int(1);
+  owner = nullptr;
+  return *owner;
+}
+
 // VERIFY-DAG: error: verification failed: use_after_delete
 // VERIFY-DAG: error: verification failed: double_delete
 // VERIFY-DAG: error: verification failed: uninitialized_read
@@ -308,4 +360,9 @@ int modular_proof_call()
 // VERIFY-DAG: error: verification failed: modular_forwarded_temporary
 // VERIFY-DAG: error: verification failed: modular_forwarded_control
 // VERIFY-DAG: error: verification failed: modular_forwarded_spec
+// VERIFY-DAG: error: verification failed: branch_reassignment_use_after_delete
+// VERIFY-DAG: error: verification failed: reassigned_alias_double_delete
+// VERIFY-DAG: error: verification failed: stale_alias_after_owner_reassignment
+// VERIFY-DAG: error: verification failed: copied_stale_pointer
+// VERIFY-DAG: error: verification failed: null_reassignment_dereference
 // VERIFY-DAG: error: verification failed: modular_proof_call

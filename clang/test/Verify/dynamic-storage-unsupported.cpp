@@ -8,14 +8,6 @@ int *escape_pointer()
   return p;
 }
 
-int conditional_copy(bool choose)
-  post(result == 1)
-{
-  int *p = new int(1);
-  int *q = choose ? p : p;
-  return *q;
-}
-
 int pointer_arithmetic()
   post(result == 1)
 {
@@ -118,6 +110,15 @@ int erased_pointer_copy()
   return erased != nullptr;
 }
 
+int conditional_erased_pointer_copy(bool choose)
+  post(result == 1)
+{
+  int *p = new int(1);
+  void *erased = choose ? p : nullptr;
+  delete p;
+  return erased != nullptr;
+}
+
 int pointer_returning_call()
   post(result == 1)
 {
@@ -146,8 +147,19 @@ int pointer_to_bool_call()
   return nonnull;
 }
 
+int reassignment_in_loop()
+  post(result == 1)
+{
+  int *owner = new int(1);
+  int *alias = owner;
+  while (false)
+    alias = owner;
+  int observed = *alias;
+  delete owner;
+  return observed;
+}
+
 // VERIFY-DAG: error: escape_pointer: dynamic-storage pointers cannot escape through a return
-// VERIFY-DAG: error: conditional_copy: dynamic-storage pointer copies require a direct source
 // VERIFY-DAG: error: pointer_arithmetic: dynamic-storage dereference requires its direct allocation pointer
 // VERIFY-DAG: error: pointer_parameter: dynamic allocation in functions with pointer parameters is not yet supported
 // VERIFY-DAG: error: array_allocation: unsupported C++ type in verification: int[2]
@@ -158,6 +170,8 @@ int pointer_to_bool_call()
 // VERIFY-DAG: error: offset_store: dynamic-storage dereference requires its direct allocation pointer
 // VERIFY-DAG: error: spec_call_boundary: dynamic-storage pointers cannot cross a function-call boundary
 // VERIFY-DAG: error: erased_pointer_copy: dynamic-storage pointer copies require matching pointee types
-// VERIFY-DAG: error: pointer_returning_call: dynamic-storage pointer copies require a direct source
+// VERIFY-DAG: error: conditional_erased_pointer_copy: dynamic-storage pointer copies require matching pointee types
+// VERIFY-DAG: error: pointer_returning_call: dynamic-storage pointer copies require direct, conditional, or null local sources
 // VERIFY-DAG: error: erased_pointer_call: dynamic-storage pointer arguments require matching direct pointer parameters
 // VERIFY-DAG: error: pointer_to_bool_call: dynamic-storage pointer arguments require matching direct pointer parameters
+// VERIFY-DAG: error: reassignment_in_loop: dynamic-storage pointer reassignment inside loops is unsupported
