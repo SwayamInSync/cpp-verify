@@ -68,7 +68,8 @@ unrollStmts(const std::vector<std::unique_ptr<VStmt>> &Stmts, unsigned K) {
             return Args;
           }(),
           static_cast<const VCallStmt &>(*S).ResultTarget, S->Loc,
-          static_cast<const VCallStmt &>(*S).IsProofCall));
+          static_cast<const VCallStmt &>(*S).IsProofCall,
+          static_cast<const VCallStmt &>(*S).ResultProvenanceTarget));
       break;
     case VStmt::Return:
       Out.push_back(std::make_unique<VReturnStmt>(

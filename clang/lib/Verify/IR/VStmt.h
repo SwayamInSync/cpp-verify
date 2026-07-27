@@ -140,13 +140,18 @@ struct VCallStmt : VStmt {
   std::string CalleeIdentity;
   std::vector<std::unique_ptr<VExpr>> Args;
   std::string ResultTarget;
+  /// SSA companion receiving the lifetime identity of a pointer result.
+  std::string ResultProvenanceTarget;
   bool IsProofCall = false;
   VCallStmt(std::string Callee, std::string CalleeIdentity,
             std::vector<std::unique_ptr<VExpr>> Args, std::string ResultTarget,
-            SourceLocation Loc, bool IsProofCall = false)
+            SourceLocation Loc, bool IsProofCall = false,
+            std::string ResultProvenanceTarget = "")
       : VStmt(Call, Loc), Callee(std::move(Callee)),
         CalleeIdentity(std::move(CalleeIdentity)), Args(std::move(Args)),
-        ResultTarget(std::move(ResultTarget)), IsProofCall(IsProofCall) {}
+        ResultTarget(std::move(ResultTarget)),
+        ResultProvenanceTarget(std::move(ResultProvenanceTarget)),
+        IsProofCall(IsProofCall) {}
 };
 
 struct VGhostBlockStmt : VStmt {

@@ -2084,14 +2084,15 @@ void ASTConverter::convertExecCallArg(
   Out = convertExpr(E);
 }
 
-std::unique_ptr<VExpr>
-ASTConverter::convertCallResultValue(std::string Name, QualType SourceType,
-                                     const VType &TargetType,
-                                     SourceLocation Loc) {
+std::unique_ptr<VExpr> ASTConverter::convertCallResultValue(
+    std::string Name, QualType SourceType, const VType &TargetType,
+    SourceLocation Loc, std::string Provenance) {
   VType Source = VType::fromQualType(SourceType, IntMode, Ctx);
   if (TargetType.Kind == VTypeKind::Void)
     return nullptr;
-  auto Value = std::make_unique<VVarExpr>(std::move(Name), Source, Loc);
+  auto Value = std::make_unique<VVarExpr>(
+      std::move(Name), Source, Loc,
+      Source.Kind == VTypeKind::Ptr ? std::move(Provenance) : std::string());
   auto SameType = [](const VType &L, const VType &R) {
     return L.Kind == R.Kind && L.IntMode == R.IntMode &&
            L.IsSigned == R.IsSigned && L.BitWidth == R.BitWidth;
@@ -2126,16 +2127,6 @@ void ASTConverter::convertExecCallArgs(
                      ": proof-only code cannot call executable functions");
     return;
   }
-
-  if (Callee && Callee->getReturnType()->isPointerType())
-    for (const Expr *A : CE->arguments())
-      if (A->getType()->isPointerType() && referencesDynamicPointer(A)) {
-        Errors.push_back(
-            CurrentFn->Name +
-            ": dynamic-storage pointer arguments cannot call pointer-returning "
-            "functions");
-        return;
-      }
 
   auto IsModifyingCall = [&](const Expr *E) {
     const auto *Nested = dyn_cast<CallExpr>(E->IgnoreParenImpCasts());
@@ -2896,6 +2887,33 @@ std::vector<std::unique_ptr<VStmt>> ASTConverter::convertStmt(const Stmt *S) {
           dyn_cast<DeclRefExpr>(BO->getLHS()->IgnoreParenImpCasts());
       const auto *DirectTarget =
           DirectLHS ? dyn_cast<VarDecl>(DirectLHS->getDecl()) : nullptr;
+      const auto *PointerCall =
+          BO->getOpcode() == BO_Assign
+              ? dyn_cast<CallExpr>(BO->getRHS()->IgnoreParenImpCasts())
+              : nullptr;
+      const FunctionDecl *PointerCallee =
+          PointerCall ? PointerCall->getDirectCallee() : nullptr;
+      if (LoopDepth == 0 && DirectTarget &&
+          DirectTarget->getType()->isPointerType() &&
+          DynamicPointers.count(DirectTarget) &&
+          referencesDynamicPointer(BO->getRHS()) && PointerCallee &&
+          PointerCallee->getReturnType()->isPointerType() &&
+          Ctx.hasSameUnqualifiedType(
+              DirectTarget->getType()->getPointeeType(),
+              PointerCallee->getReturnType()->getPointeeType()) &&
+          functionContract(PointerCallee) && !calleeIsSpec(PointerCallee) &&
+          !calleeIsProof(PointerCallee)) {
+        std::vector<std::unique_ptr<VExpr>> Args;
+        convertExecCallArgs(PointerCall, Out, Args);
+        const std::string &Provenance =
+            DynamicPointerProvenanceVariables.at(DirectTarget);
+        Out.push_back(std::make_unique<VCallStmt>(
+            PointerCallee->getNameAsString(), functionIdentity(PointerCallee),
+            std::move(Args), valueName(DirectTarget), BO->getExprLoc(), false,
+            Provenance));
+        markInitialized(DirectTarget);
+        return Out;
+      }
       if (BO->getOpcode() == BO_Assign && DirectTarget &&
           DirectTarget->getType()->isPointerType() &&
           (DynamicPointers.count(DirectTarget) ||
@@ -3119,6 +3137,29 @@ std::vector<std::unique_ptr<VStmt>> ASTConverter::convertStmt(const Stmt *S) {
             std::move(Initializer), Size, Align, VD->getBeginLoc()));
         markInitialized(VD);
         continue;
+      }
+      if (LoopDepth == 0 && VD->getType()->isPointerType() &&
+          DynamicPointers.count(VD)) {
+        const auto *Call =
+            dyn_cast<CallExpr>(VD->getInit()->IgnoreParenImpCasts());
+        const FunctionDecl *Callee = Call ? Call->getDirectCallee() : nullptr;
+        if (Callee && Callee->getReturnType()->isPointerType() &&
+            Ctx.hasSameUnqualifiedType(
+                VD->getType()->getPointeeType(),
+                Callee->getReturnType()->getPointeeType()) &&
+            functionContract(Callee) && !calleeIsSpec(Callee) &&
+            !calleeIsProof(Callee)) {
+          std::vector<std::unique_ptr<VExpr>> Args;
+          convertExecCallArgs(Call, Out, Args);
+          const std::string &Provenance =
+              DynamicPointerProvenanceVariables.at(VD);
+          Out.push_back(std::make_unique<VCallStmt>(
+              Callee->getNameAsString(), functionIdentity(Callee),
+              std::move(Args), valueName(VD), VD->getBeginLoc(), false,
+              Provenance));
+          markInitialized(VD);
+          continue;
+        }
       }
       if (VD->getType()->isPointerType() &&
           referencesDynamicPointer(VD->getInit())) {

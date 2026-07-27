@@ -63,7 +63,8 @@ private:
   std::unique_ptr<VExpr> convertCallResultValue(std::string Name,
                                                 QualType SourceType,
                                                 const VType &TargetType,
-                                                SourceLocation Loc);
+                                                SourceLocation Loc,
+                                                std::string Provenance = "");
   bool appendRecordCallArgument(const Expr *E, const ParmVarDecl *Formal,
                                 std::vector<std::unique_ptr<VExpr>> &Args);
   std::unique_ptr<VExpr>

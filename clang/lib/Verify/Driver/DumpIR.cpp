@@ -240,6 +240,8 @@ static void dumpVStmt(const VStmt &S, llvm::raw_ostream &OS, unsigned Depth) {
     OS << "call " << C.Callee;
     if (!C.ResultTarget.empty())
       OS << " -> " << C.ResultTarget;
+    if (!C.ResultProvenanceTarget.empty())
+      OS << " provenance " << C.ResultProvenanceTarget;
     OS << "\n";
     break;
   }

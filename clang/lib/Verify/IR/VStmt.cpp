@@ -60,7 +60,7 @@ std::unique_ptr<VStmt> verify::cloneVStmt(const VStmt *S) {
       Args.push_back(cloneVExpr(A.get()));
     return std::make_unique<VCallStmt>(C.Callee, C.CalleeIdentity,
                                        std::move(Args), C.ResultTarget, C.Loc,
-                                       C.IsProofCall);
+                                       C.IsProofCall, C.ResultProvenanceTarget);
   }
   case VStmt::Assert: {
     const auto &A = static_cast<const VAssertStmt &>(*S);
