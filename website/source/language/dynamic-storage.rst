@@ -108,12 +108,12 @@ Matching-type local copies, assignments, conditional selections, and
 Deleting through either name ends the shared lifetime. Every alias then becomes
 dangling, so dereferencing ``owner`` after ``delete alias`` is rejected.
 
-Contracted scalar callees
--------------------------
+Contracted scalar interfaces
+----------------------------
 
-A live initialized allocation pointer may cross one modular boundary when the
-callee is a verified in-translation-unit executable function with a direct,
-matching-typed pointer parameter. The callee may compare or directly
+A live initialized allocation pointer may cross a checked modular interface
+when the callee is a verified in-translation-unit executable function with a
+direct, matching-typed pointer parameter. The callee may compare or directly
 dereference that parameter, and may write it under ``modifies(*p)``:
 
 .. code-block:: cpp
@@ -136,14 +136,52 @@ dereference that parameter, and may write it under ``modifies(*p)``:
 
 The caller substitutes the allocation's lifetime identity into the callee
 precondition, so stale and uninitialized arguments fail at the call site.
-Owned dynamic storage also satisfies the caller-side frame containment check.
+Owned dynamic storage satisfies the caller-side frame containment check only
+when the current provenance equals an identity actually allocated by that
+caller.
 
-This is deliberately a **scalar** interface. A callee receiving a dynamic
-pointer may not offset, subscript, copy, forward, return, or deallocate it.
-Nested executable/spec calls and ghost use of the pointer are also rejected.
-Pointer-returning callees, proof functions, and body-less external contract
-interfaces are rejected because their provenance/lifetime effects cannot yet
-be represented.
+The checked interface may forward the direct pointer through an acyclic chain
+of verified scalar callees. Scalar values loaded from it may also pass through
+verified executable or pure spec helpers. Every reached body is scanned against
+the same direct-scalar rule; an offset, subscript, pointer copy, recursive scan
+cycle, or pointer-result intermediate makes the outer dynamic call fail closed.
+
+A verified callee may return the direct dynamic formal, ``nullptr``, or a
+conditional selection of direct dynamic formals. ``VCallStmt`` gives the
+pointer result a separate SSA provenance output. Generated result
+validity/initialization clauses bind that output to the current byte owner, and
+a contract such as ``post(result == source)`` preserves the source identity:
+
+.. code-block:: cpp
+
+   int *identity(int *source)
+     pre(source != nullptr)
+     post(result == source)
+     post(*result == old(*source))
+   {
+     return source;
+   }
+
+   int returned_alias(int value) post(result == value) {
+     int *owner = new int(value);
+     int *alias = identity(owner);
+     int observed = *alias;
+     delete alias;
+     return observed;
+   }
+
+The pointee postcondition above is needed because an ordinary pointer-taking
+modular call conservatively forgets the value heap unless its contract restores
+the value. Provenance alone proves which live object the pointer denotes; it
+does not invent a value-preservation promise.
+
+This remains deliberately a **scalar** interface. The callee may not offset,
+subscript, copy, rebind, or deallocate the dynamic formal. Pointer-returning
+calls nested inside the callee, proof functions, body-less external contracts,
+ghost use, allocation inside the callee, type erasure, and a returned local
+pointer copy are rejected. A weak pointer-result contract may be read as an
+arbitrary valid pointer, but cannot gain caller-owned ``modifies`` or
+``delete`` authority without proving equality to an owned result.
 Ordinary modular heap framing still applies: a read helper that must return the
 entry value should state ``post(result == old(*p))``.
 
@@ -176,18 +214,20 @@ verified subset.
 Current boundary
 ----------------
 
-Dynamic pointers are intentionally local and non-escaping in this checkpoint.
+Dynamic allocations remain local and non-escaping in this checkpoint.
 Matching-pointee local pointer values may be copied, reassigned, selected by a
 conditional, or set directly to ``nullptr``. Their provenance follows the value
 through branch SSA merges. They may be dereferenced, stored through when the C++
 type permits, compared for equality, converted to ``bool``, deleted, and passed
-through the restricted verified scalar callee boundary above.
+through the checked verified scalar interfaces above. A matching result may
+return an alias of caller-owned storage; the callee still cannot allocate and
+return a new lifetime.
 
-Type-erasing or indirect copies, returns, pointer-returning/spec/external call
-crossing, forwarding through nested calls, arithmetic, subscripting, aggregate
-storage, and pointer reassignment inside loops remain unsupported. Functions
-that allocate cannot yet also accept pointer parameters, and
-allocation/deallocation inside loop bodies is rejected.
+Type-erasing or indirect copies, returned local copies, nested pointer-result
+calls, proof/external boundaries, arithmetic, subscripting, aggregate storage,
+and pointer reassignment inside loops remain unsupported. Functions that
+allocate cannot yet also accept pointer parameters, and allocation/deallocation
+inside loop bodies is rejected.
 
 Also unsupported are ``new[]``/``delete[]``, nothrow or placement allocation,
 non-scalar objects and destructors, modular allocation-returning functions,

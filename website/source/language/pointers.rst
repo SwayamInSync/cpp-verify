@@ -132,9 +132,12 @@ conditional selection, direct ``nullptr`` assignment, and branch merges.
 Deleting through any alias invalidates all aliases of that lifetime.
 Type-erasing/indirect copies, return, general call forwarding, arithmetic, and
 pointer reassignment or allocation/free in a loop body remain unsupported. A
-restricted exception admits direct scalar access through a matching pointer
-parameter of a verified, non-allocating, non-pointer-returning executable
-callee; provenance and liveness remain owned by the caller. See
+restricted interface admits direct scalar access and acyclic direct-pointer
+forwarding through matching parameters of verified, non-allocating executable
+callees. A direct/conditional/null pointer result may retain caller-owned
+provenance when its contract relates the result to those inputs. Returned local
+copies, nested pointer-result calls, offsets, proof/external boundaries, and
+type erasure still fail closed. See
 :doc:`dynamic-storage` for the complete boundary.
 
 Buffer bounds with ``valid``
@@ -160,11 +163,10 @@ each pointer may have only one marker; ambiguous forms fail closed.
 
 Without ``--check-ub``, dereferences must still be non-null and live, but the
 verifier does not invent a buffer length. Parameter pointers use abstract
-entry-state allocation and initialization assumptions. Concrete identity,
-liveness, alignment, and initialization are available only for the bounded
-local scalar allocation subset. Its provenance is first-class across supported
-local pointer values, but abstract buffers and general call interfaces remain
-unsupported.
+entry-state allocation and initialization assumptions. Concrete identity, liveness, alignment, and initialization are available only
+for the bounded local scalar allocation subset. Its provenance is first-class
+across supported local values and checked scalar call/return interfaces, but
+abstract buffers and general pointer interfaces remain unsupported.
 
 Frames also preserve unrelated objects across a write:
 

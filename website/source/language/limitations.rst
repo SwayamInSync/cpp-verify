@@ -13,10 +13,12 @@ The following are outside the verified subset, in priority order:
    scalar ``new``/``delete`` now has concrete byte ownership, liveness,
    size/alignment, initialization tracking, and first-class SSA provenance
    through matching-type local copies, reassignment, conditionals, and
-   ``nullptr``. A verified modular callee may directly access a matching scalar
-   pointer parameter, but provenance through returns, pointer-returning or
-   forwarding/nested calls, type-erasing/indirect copies, external contracts,
-   and aggregates; pointer arithmetic/difference; arrays; placement/nothrow
+   ``nullptr``. Checked modular interfaces now admit direct scalar access,
+   acyclic direct-pointer forwarding, scalar-value executable/spec forwarding,
+   and direct/conditional/null pointer results tied to caller-owned inputs.
+   Provenance through returned local copies, nested pointer-result calls,
+   recursion cycles, type-erasing/indirect copies, external/proof contracts, and
+   aggregates; pointer arithmetic/difference; arrays; placement/nothrow
    allocation; non-trivial construction/destruction; subobject lifetime
    changes; and strict aliasing are not modeled.
    Parameter-pointer ``valid(p, n)`` remains an abstract caller promise rather
@@ -49,9 +51,10 @@ arithmetic scales every element step by Clang's target ``sizeof(T)``, while
 record fields use Clang's byte layout offset. Scalar, byte-sized, and
 flat-record strides are covered by false-proof regressions. Local dynamic
 scalars also have an SSA-versioned owning-byte map and local
-pointer-provenance companions. Provenance does not yet travel through abstract
-buffer values, pointer-bearing aggregates, or general call boundaries. Pointer
-subtraction is therefore rejected, and code that depends on pointer
+pointer-provenance companions. Provenance crosses only the checked scalar
+interfaces described in :doc:`dynamic-storage`; it does not yet travel through
+abstract buffer values, pointer-bearing aggregates, or general call boundaries.
+Pointer subtraction is therefore rejected, and code that depends on pointer
 reinterpretation or arithmetic across distinct allocations remains outside the
 verified subset.
 
@@ -66,11 +69,10 @@ invalid program may therefore be rejected with either a concrete
 counterexample or conservative ``unknown``. Only ``Verified`` means Z3 proved
 the generated obligation unsatisfiable.
 
-At modular calls, ``modifies(*p)`` is a region footprint. Local dynamic
-allocation identities cross only the restricted direct-scalar boundary
-described in :doc:`dynamic-storage`; there, caller-owned storage authorizes the
-footprint. Other parameter-pointer calls conservatively forget the whole value
-heap. Exact footprints such as ``modifies(p[i])`` and
+At modular calls, ``modifies(*p)`` is a region footprint. Local dynamic allocation identities cross only the checked scalar boundary
+described in :doc:`dynamic-storage`; there, a footprint is authorized only when
+the current provenance equals an identity actually owned by the caller. Other
+parameter-pointer calls conservatively forget the whole value heap. Exact footprints such as ``modifies(p[i])`` and
 ``modifies(p->field)`` preserve all other addresses. This may require stronger
 postconditions, but avoids unsound frame facts.
 

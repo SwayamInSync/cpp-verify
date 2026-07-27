@@ -77,12 +77,16 @@ A caller-owned dynamic scalar may be passed in the other direction to a
 verified, non-allocating executable callee. Its direct matching pointer
 parameter may be compared or dereferenced, including a write authorized by
 ``modifies(*p)``. The call substitutes the caller's lifetime identity into
-validity checks and accepts the footprint as owned storage. Offset/subscript
-access, pointer copying/forwarding/return, nested executable/spec calls, ghost
-use, proof/external contracts, and pointer-returning callees fail closed.
-Within the caller, that identity is an SSA companion of the pointer value, so
-matching-type local copies, reassignment, conditionals, and ``nullptr`` remain
-coherent before the call.
+validity checks and accepts the footprint only after proving that identity is
+one of the caller's live allocations. Acyclic direct-pointer forwarding,
+scalar-value executable/spec helpers, and direct/conditional/null pointer
+results are checked recursively. Pointer results receive a separate SSA
+provenance target and need a result-equality contract to recover owned alias
+authority. Offset/subscript access, pointer copies or rebinding, nested
+pointer-result calls, recursion cycles, ghost use, proof/external contracts,
+and allocation in the callee fail closed. Within the caller, address and
+identity remain a pair through local copies, assignments, branches,
+``nullptr``, and supported call results.
 
 Z3 result discipline
 --------------------

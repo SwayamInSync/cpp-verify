@@ -116,7 +116,7 @@ Calling a scalar helper
 -----------------------
 
 Lifetime identity can be substituted into a verified modular callee when its
-matching pointer parameter is used only for direct scalar access:
+matching pointer parameter stays inside the checked scalar interface:
 
 .. code-block:: cpp
 
@@ -142,12 +142,47 @@ Metadata ownership and liveness stay with the caller. This catches passing an
 uninitialized object to a reader, passing a dangling pointer, and violating a
 callee's implicit non-aliasing precondition.
 
-The callee must have a verified body and a non-pointer return, and cannot
-offset, subscript, copy, forward, return, or delete the dynamic pointer.
-Nested executable/spec calls, ghost access, proof functions, and external
-contract interfaces are excluded from this boundary.
-Without these restrictions, a scalar allocation could be treated as a buffer
-or its identity could be lost at the modular boundary.
+The direct pointer may travel through an acyclic chain of verified scalar
+callees, while values loaded from it may pass through executable or pure spec
+helpers. Every reached body is checked recursively. Offset/subscript access,
+pointer copies or rebinding, recursion cycles, and pointer-returning
+intermediates are rejected.
+
+A checked callee may return its direct pointer formal, ``nullptr``, or a
+conditional selection of direct dynamic formals. The call materializes both a
+fresh pointer result and a fresh provenance result:
+
+.. code-block:: cpp
+
+   int *identity(int *source)
+     pre(source != nullptr)
+     post(result == source)
+     post(*result == old(*source))
+   {
+     return source;
+   }
+
+   int through_return(int value) post(result == value) {
+     int *owner = new int(value);
+     int *alias = identity(owner);
+     int answer = *alias;
+     delete alias;
+     return answer;
+   }
+
+Generated validity ties the result identity to its current byte owner. The
+explicit equality postcondition ties its address to ``owner``; together they
+recover the exact caller-owned lifetime. ``modifies`` authority is never
+granted merely because a variable has a provenance companion—the identity must
+equal one of the caller's issued allocations. The pointee postcondition restores
+the value because pointer-taking modular calls otherwise conservatively forget
+the value heap.
+
+The callee still must have a verified body and may not delete the dynamic
+formal. Returned local copies, nested pointer-returning calls, ghost access,
+proof functions, external contract interfaces, and allocation-returning
+callees are excluded. Without these restrictions, a scalar allocation could be
+treated as a buffer or foreign storage could acquire caller-owned authority.
 
 Failures are path-sensitive
 ---------------------------
@@ -172,11 +207,12 @@ Why the surface is intentionally narrow
 The current checkpoint permits a direct local allocation pointer and
 matching-typed local pointer values to be copied, reassigned, conditionally
 selected, set to ``nullptr``, loaded, stored through, compared for equality,
-converted to ``bool``, and deleted. Type-erasing or indirect copies, return,
-general/spec/external calls, forwarding through nested calls, pointer
-arithmetic, arrays, placement/nothrow allocation, records, and pointer
-reassignment or allocation in a loop body are rejected. The restricted
-verified scalar callee above is the only current call boundary.
+converted to ``bool``, deleted, forwarded through checked scalar calls, and
+recovered from a direct/conditional/null pointer-result contract. Type-erasing
+or indirect copies, returned local copies, nested pointer-result calls,
+proof/external calls, pointer arithmetic, arrays, placement/nothrow allocation,
+records, and pointer reassignment or allocation in a loop body are rejected.
+The checked scalar interface above is the only current call boundary.
 
 Those restrictions are not parser shortcuts. General interfaces must transport
 provenance and lifetime effects in contracts; arrays require element/subobject
