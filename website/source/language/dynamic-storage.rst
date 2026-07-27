@@ -66,6 +66,9 @@ The verifier maintains these logical maps alongside the value heap:
 ``live[identity]``
    Whether that lifetime is active.
 
+``issued[identity]``
+   Whether that lifetime token has ever been allocated, preventing reuse.
+
 ``initialized[address]``
    Whether reading the scalar cell is defined.
 
@@ -74,26 +77,31 @@ The verifier maintains these logical maps alongside the value heap:
 
 On a successful normal ``new`` path, the chosen base is non-null, satisfies the
 target alignment, and does not overlap any currently live allocation byte. The
-allocation map and metadata receive fresh SSA versions. The direct local
-pointer retains the identity of the lifetime that produced it. A load or store
-requires the byte owner to match that identity and the identity to remain live;
-a load additionally requires initialization. ``delete`` requires the matching
-identity and its exact base, then updates a new liveness version to ``false``.
+allocation map and metadata receive fresh SSA versions. A first-class
+provenance companion travels with each supported local pointer value. A load or
+store requires the byte owner to match that companion and its identity to remain
+live; a load additionally requires initialization. ``delete`` requires the
+matching identity and its exact base, then updates a new liveness version to
+``false``.
 
 An allocator may later choose the same numeric address. That replacement gets
 a different identity, so the old pointer does not become valid again even when
 ``old_pointer == replacement`` numerically.
 
-A direct, type-preserving local pointer copy carries the same identity:
+Matching-type local copies, assignments, conditional selections, and
+``nullptr`` assignments update the address and provenance companions together:
 
 .. code-block:: cpp
 
    int alias_write(int value) post(result == value) {
+     int *first = new int(0);
      int *owner = new int;
-     int *alias = owner;
+     int *alias = first;
+     alias = owner;
      *alias = value;
      int observed = *owner;
      delete alias;
+     delete first;
      return observed;
    }
 
@@ -169,14 +177,17 @@ Current boundary
 ----------------
 
 Dynamic pointers are intentionally local and non-escaping in this checkpoint.
-The direct allocation variable and direct local aliases with the same
-unqualified pointee type may be dereferenced, stored through when the C++ type
-permits, compared for equality, converted to ``bool``, and passed to scalar
-``delete``. They may enter the restricted verified scalar callee boundary
-above. Pointer reassignment, conditional or type-erasing copies, return,
-general/spec/external call crossing, arithmetic, subscripting, and aggregate
-storage remain unsupported. Functions that allocate cannot yet also accept
-pointer parameters, and allocation/deallocation inside loop bodies is rejected.
+Matching-pointee local pointer values may be copied, reassigned, selected by a
+conditional, or set directly to ``nullptr``. Their provenance follows the value
+through branch SSA merges. They may be dereferenced, stored through when the C++
+type permits, compared for equality, converted to ``bool``, deleted, and passed
+through the restricted verified scalar callee boundary above.
+
+Type-erasing or indirect copies, returns, pointer-returning/spec/external call
+crossing, forwarding through nested calls, arithmetic, subscripting, aggregate
+storage, and pointer reassignment inside loops remain unsupported. Functions
+that allocate cannot yet also accept pointer parameters, and
+allocation/deallocation inside loop bodies is rejected.
 
 Also unsupported are ``new[]``/``delete[]``, nothrow or placement allocation,
 non-scalar objects and destructors, modular allocation-returning functions,

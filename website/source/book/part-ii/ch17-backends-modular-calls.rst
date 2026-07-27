@@ -80,6 +80,9 @@ parameter may be compared or dereferenced, including a write authorized by
 validity checks and accepts the footprint as owned storage. Offset/subscript
 access, pointer copying/forwarding/return, nested executable/spec calls, ghost
 use, proof/external contracts, and pointer-returning callees fail closed.
+Within the caller, that identity is an SSA companion of the pointer value, so
+matching-type local copies, reassignment, conditionals, and ``nullptr`` remain
+coherent before the call.
 
 Z3 result discipline
 --------------------

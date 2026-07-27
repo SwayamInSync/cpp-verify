@@ -63,10 +63,10 @@ initialization state before applying its initializer.
 Identity, disjointness, and reuse
 ---------------------------------
 
-For each allocation expression, the verifier creates a distinct lifetime
-identity. It records which identity owns each target byte, the identity's
-numeric base, and whether that identity is live. A second allocation must
-choose a byte range whose previous owners are all dead. This proves that
+For each allocation event, the verifier issues a fresh lifetime identity that
+can never be reused. It records which identity owns each target byte, the
+identity's numeric base, and whether that identity is live. A second allocation
+must choose a byte range whose previous owners are all dead. This proves that
 simultaneous scalar allocations are distinct:
 
 .. code-block:: cpp
@@ -86,26 +86,31 @@ without contradiction. Reuse does not revive the old pointer: even if its
 numeric address equals the replacement pointer, its retained lifetime identity
 no longer matches the byte owner's new identity.
 
-Direct local aliases retain identity
-------------------------------------
+Local pointer values retain provenance
+--------------------------------------
 
-A direct local copy with the same unqualified pointee type shares the lifetime
-identity rather than inventing a second allocation:
+The pointer address and its lifetime identity travel as a pair. Matching-type
+local copies, reassignment, conditional selection, and direct ``nullptr``
+assignment update both through ordinary SSA and branch merges:
 
 .. code-block:: cpp
 
-   int alias_write(int value) post(result == value) {
+   int reassigned_alias(int value) post(result == value) {
+     int *first = new int(0);
      int *owner = new int;
-     int *alias = owner;
+     int *alias = first;
+     alias = owner;
      *alias = value;
      int answer = *owner;
      delete alias;
+     delete first;
      return answer;
    }
 
-The store initializes the shared object, and deletion through ``alias`` ends
-the lifetime observed through ``owner`` too. A second deletion or later
-dereference through either name is rejected.
+The assignment changes ``alias`` to the identity of ``owner`` without changing
+``first``. The store initializes the shared object, and deletion through
+``alias`` ends the lifetime observed through ``owner`` too. A second deletion
+or later dereference through either alias is rejected.
 
 Calling a scalar helper
 -----------------------
@@ -165,18 +170,19 @@ Why the surface is intentionally narrow
 ---------------------------------------
 
 The current checkpoint permits a direct local allocation pointer and
-matching-typed direct local aliases to be loaded, stored through, compared for
-equality, converted to ``bool``, and deleted. Reassignment, conditional or
-type-erasing copies, return, general/spec/external calls, pointer arithmetic,
-arrays, placement/nothrow allocation, records, and allocation in a loop body
-are rejected. The restricted verified scalar callee above is the only current
-call boundary.
+matching-typed local pointer values to be copied, reassigned, conditionally
+selected, set to ``nullptr``, loaded, stored through, compared for equality,
+converted to ``bool``, and deleted. Type-erasing or indirect copies, return,
+general/spec/external calls, forwarding through nested calls, pointer
+arithmetic, arrays, placement/nothrow allocation, records, and pointer
+reassignment or allocation in a loop body are rejected. The restricted
+verified scalar callee above is the only current call boundary.
 
-Those restrictions are not parser shortcuts. Copies and modular calls require
-provenance to travel with pointer values; arrays require element/subobject
-lifetime and extent rules; non-trivial objects require constructor,
-destructor, and exceptional-cleanup semantics. CppVerify fails closed until
-each layer can preserve those facts.
+Those restrictions are not parser shortcuts. General interfaces must transport
+provenance and lifetime effects in contracts; arrays require element/subobject
+lifetime and extent rules; non-trivial objects require constructor, destructor,
+and exceptional-cleanup semantics. CppVerify fails closed until each layer can
+preserve those facts.
 
 The normal compilation path is unchanged: ``new`` and ``delete`` remain real
 C++ operations. The logical metadata exists only in verification and adds no

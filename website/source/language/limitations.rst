@@ -11,13 +11,14 @@ The following are outside the verified subset, in priority order:
 
 #. **General object provenance and lifetime.** Direct, non-escaping local
    scalar ``new``/``delete`` now has concrete byte ownership, liveness,
-   size/alignment, initialization tracking, and direct type-preserving local
-   aliases. A verified modular callee may directly access a matching scalar
-   pointer parameter, but provenance through reassignment,
-   conditional/type-erasing copies, returns, forwarding/nested calls, external
-   contracts, and aggregates; arrays; placement/nothrow allocation; non-trivial
-   construction/destruction; subobject lifetime changes; and strict aliasing
-   are not modeled.
+   size/alignment, initialization tracking, and first-class SSA provenance
+   through matching-type local copies, reassignment, conditionals, and
+   ``nullptr``. A verified modular callee may directly access a matching scalar
+   pointer parameter, but provenance through returns, pointer-returning or
+   forwarding/nested calls, type-erasing/indirect copies, external contracts,
+   and aggregates; pointer arithmetic/difference; arrays; placement/nothrow
+   allocation; non-trivial construction/destruction; subobject lifetime
+   changes; and strict aliasing are not modeled.
    Parameter-pointer ``valid(p, n)`` remains an abstract caller promise rather
    than evidence derived from a concrete allocation.
 #. **Addressable references and pointer-bearing aggregates.** References,
@@ -47,10 +48,12 @@ The value heap uses flat mathematical **target-byte addresses**. Typed ``T*``
 arithmetic scales every element step by Clang's target ``sizeof(T)``, while
 record fields use Clang's byte layout offset. Scalar, byte-sized, and
 flat-record strides are covered by false-proof regressions. Local dynamic
-scalars also have an SSA-versioned owning-byte map, but provenance does not yet
-travel through general pointer values or call boundaries. Pointer subtraction
-is therefore rejected, and code that depends on pointer reinterpretation or
-arithmetic across distinct allocations remains outside the verified subset.
+scalars also have an SSA-versioned owning-byte map and local
+pointer-provenance companions. Provenance does not yet travel through abstract
+buffer values, pointer-bearing aggregates, or general call boundaries. Pointer
+subtraction is therefore rejected, and code that depends on pointer
+reinterpretation or arithmetic across distinct allocations remains outside the
+verified subset.
 
 Fail-closed behavior and solver incompleteness
 ----------------------------------------------

@@ -122,10 +122,10 @@ but no length is inferred.
 
 This remains an abstract parameter-buffer promise; it is not inferred from a
 caller's allocation. Direct local scalar ``new``/``delete`` has a separate
-concrete liveness, initialization, size, and alignment model (see
-:doc:`../../language/dynamic-storage`). Pointer difference remains rejected
-until provenance can travel through general pointer values and prove
-same-array membership before returning an element count.
+concrete liveness, initialization, size, alignment, and local
+pointer-provenance model (see :doc:`../../language/dynamic-storage`). Pointer
+difference remains rejected until provenance also covers pointer arithmetic and
+can prove same-array membership before returning an element count.
 
 Type invariants
 ---------------
