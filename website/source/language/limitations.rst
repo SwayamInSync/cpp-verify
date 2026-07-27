@@ -54,9 +54,12 @@ scalars also have an SSA-versioned owning-byte map and local
 pointer-provenance companions. Provenance crosses only the checked scalar
 interfaces described in :doc:`dynamic-storage`; it does not yet travel through
 abstract buffer values, pointer-bearing aggregates, or general call boundaries.
-Pointer subtraction is therefore rejected, and code that depends on pointer
-reinterpretation or arithmetic across distinct allocations remains outside the
-verified subset.
+A bounded executable pointer-difference fragment is available for a single
+complete object: direct operands and inline ``+0``/``+1`` positions must share
+one syntactic abstract base or one concrete local lifetime identity. General
+array distances, two merely equal abstract pointers, spec/``constexpr``
+subtraction, pointer reinterpretation, and arithmetic across distinct
+allocations remain outside the verified subset.
 
 Fail-closed behavior and solver incompleteness
 ----------------------------------------------

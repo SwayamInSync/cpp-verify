@@ -224,15 +224,18 @@ return an alias of caller-owned storage; the callee still cannot allocate and
 return a new lifetime.
 
 Type-erasing or indirect copies, returned local copies, nested pointer-result
-calls, proof/external boundaries, arithmetic, subscripting, aggregate storage,
-and pointer reassignment inside loops remain unsupported. Functions that
+calls, proof/external boundaries, general arithmetic, subscripting, aggregate
+storage, and pointer reassignment inside loops remain unsupported. The bounded
+same-object difference described in :doc:`pointers` may use a direct dynamic
+base or its inline ``+0``/``+1`` position because the lifetime identity proves
+the common origin. Functions that
 allocate cannot yet also accept pointer parameters, and allocation/deallocation
 inside loop bodies is rejected.
 
 Also unsupported are ``new[]``/``delete[]``, nothrow or placement allocation,
 non-scalar objects and destructors, modular allocation-returning functions,
-and general pointer subtraction. These cases fail closed instead of falling
-back to the abstract parameter-pointer model.
+and general array pointer subtraction. These cases fail closed instead of
+falling back to the abstract parameter-pointer model.
 
 Pointer parameters remain abstract interface objects. Their implicit validity
 and initialization assumptions are not derived from a concrete caller

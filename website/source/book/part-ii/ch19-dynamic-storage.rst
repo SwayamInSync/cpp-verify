@@ -210,8 +210,11 @@ selected, set to ``nullptr``, loaded, stored through, compared for equality,
 converted to ``bool``, deleted, forwarded through checked scalar calls, and
 recovered from a direct/conditional/null pointer-result contract. Type-erasing
 or indirect copies, returned local copies, nested pointer-result calls,
-proof/external calls, pointer arithmetic, arrays, placement/nothrow allocation,
-records, and pointer reassignment or allocation in a loop body are rejected.
+proof/external calls, general pointer arithmetic, arrays, placement/nothrow
+allocation, records, and pointer reassignment or allocation in a loop body are
+rejected. The one exception is the checked complete-object difference fragment:
+a direct dynamic base and its inline ``+0``/``+1`` position may be subtracted
+when their provenance companions prove the same live lifetime.
 The checked scalar interface above is the only current call boundary.
 
 Those restrictions are not parser shortcuts. General interfaces must transport

@@ -123,9 +123,17 @@ but no length is inferred.
 This remains an abstract parameter-buffer promise; it is not inferred from a
 caller's allocation. Direct local scalar ``new``/``delete`` has a separate
 concrete liveness, initialization, size, alignment, and local
-pointer-provenance model (see :doc:`../../language/dynamic-storage`). Pointer
-difference remains rejected until provenance also covers pointer arithmetic and
-can prove same-array membership before returning an element count.
+pointer-provenance model (see :doc:`../../language/dynamic-storage`).
+
+Pointer difference is supported only at the complete-object boundary:
+``(p + 1) - p``, ``p - (p + 1)``, and zero differences formed from a direct
+base or inline ``+0``/``+1`` position. The verifier subtracts target-byte
+addresses, divides by ``sizeof(T)``, and proves non-nullness, liveness, and a
+common origin. Abstract pointers must use the same syntactic base; even
+``left == right`` does not establish shared C++ provenance. Local dynamic
+aliases can establish it through their shared lifetime identity. Larger/general
+array offsets and subtraction in explicit specs or lifted ``constexpr``
+functions remain fail-closed.
 
 Type invariants
 ---------------

@@ -46,10 +46,10 @@ At a **modular call**, region and exact footprints deliberately differ:
 - ``modifies(p[i])`` and ``modifies(p->field)`` identify one exact address, so
   all other heap cells are preserved.
 - ``modifies(*p)`` has no finite end in the modular parameter-pointer model.
-  Local scalar allocations carry identity and extent, but those identities do
-  not yet cross call boundaries. A call with a region footprint therefore
-  conservatively forgets the whole value heap and recovers only facts stated
-  by the callee's postconditions.
+  Checked scalar dynamic-storage interfaces can carry caller-owned identity,
+  but the region is still open-ended. A call with a region footprint therefore
+  conservatively forgets the whole value heap and recovers only facts stated by
+  the callee's postconditions.
 - A pointer-taking callee with no explicit ``modifies`` is treated just as
   conservatively. This prevents a missing frame from becoming a false proof.
 
@@ -102,9 +102,37 @@ disjointness facts should be bounded (as in real buffer code); an *unbounded*
 pure-disequality disjointness (``i != k`` with no range) may report ``unknown``
 (see :doc:`limitations`).
 
-``p - q`` is rejected until general pointer provenance can establish that both
-pointers belong to the same array and convert the byte difference back to an
-element count. Pointer compound assignment is also outside the current subset.
+Same-object pointer difference
+------------------------------
+
+A bounded form of pointer-pointer subtraction is supported in executable code:
+
+.. code-block:: cpp
+
+   long one_step(int *p)
+     pre(p != nullptr)
+     post(result == 1)
+   {
+     return (p + 1) - p;
+   }
+
+The operands must have the same complete pointee type and each must be a direct
+pointer or an inline ``+0``/``+1`` position. CppVerify subtracts their
+target-byte addresses, divides by ``sizeof(T)``, and converts the element count
+to the target ``ptrdiff_t`` machine type. It separately proves that both bases
+are non-null and live and that they have one object origin.
+
+For abstract parameters, that origin currently means the same syntactic base:
+``(p + 1) - p`` is accepted, while ``left - right`` remains rejected even under
+``left == right`` or ``aliases(left, right)``. Numeric address equality is not
+C++ provenance. Local dynamic aliases may instead establish the common origin
+through their shared, nonzero lifetime identity.
+
+Larger offsets, stored one-past values, general array distances, distinct
+allocations, null or dangling operands, pointer compound assignment, and
+pointer difference inside explicit ``spec`` or lifted ``constexpr`` functions
+fail closed. The spec restriction avoids composing separately bounded offsets
+through inlining until origin-and-position metadata is first-class.
 
 Local scalar dynamic storage
 ----------------------------
@@ -130,8 +158,10 @@ allocations, and uninitialized reads:
 Its identity propagates through matching-typed local copies, reassignment,
 conditional selection, direct ``nullptr`` assignment, and branch merges.
 Deleting through any alias invalidates all aliases of that lifetime.
-Type-erasing/indirect copies, return, general call forwarding, arithmetic, and
-pointer reassignment or allocation/free in a loop body remain unsupported. A
+Type-erasing/indirect copies, return, general call forwarding, general
+arithmetic, and pointer reassignment or allocation/free in a loop body remain
+unsupported. The same-object difference fragment above is the only dynamic
+pointer arithmetic exception. A
 restricted interface admits direct scalar access and acyclic direct-pointer
 forwarding through matching parameters of verified, non-allocating executable
 callees. A direct/conditional/null pointer result may retain caller-owned
