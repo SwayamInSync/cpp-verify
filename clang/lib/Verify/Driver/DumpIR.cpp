@@ -201,8 +201,9 @@ static void dumpVStmt(const VStmt &S, llvm::raw_ostream &OS, unsigned Depth) {
   }
   case VStmt::Allocate: {
     const auto &A = static_cast<const VAllocateStmt &>(S);
-    OS << "allocate " << A.Target << " size " << A.SizeBytes << " align "
-       << A.AlignBytes << " provenance " << A.ProvenanceTarget << "\n";
+    OS << (A.IsAutomatic ? "stack_allocate " : "allocate ") << A.Target
+       << " size " << A.SizeBytes << " align " << A.AlignBytes << " provenance "
+       << A.ProvenanceTarget << "\n";
     if (A.Initializer)
       dumpVExpr(A.Initializer.get(), OS, Depth + 1);
     break;

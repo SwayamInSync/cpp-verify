@@ -586,61 +586,100 @@ static bool scalarDynamicExprSafe(const VExpr *E, const std::string &Param) {
   return false;
 }
 
+static bool referencesAnyAlias(const VExpr *E,
+                               const std::set<std::string> &Aliases) {
+  return std::any_of(
+      Aliases.begin(), Aliases.end(),
+      [&](const std::string &Alias) { return referencesVar(E, Alias); });
+}
+
+static bool isDirectPointerAlias(const VExpr *E,
+                                 const std::set<std::string> &Aliases) {
+  return std::any_of(
+      Aliases.begin(), Aliases.end(),
+      [&](const std::string &Alias) { return isDirectPointerParam(E, Alias); });
+}
+
+static bool scalarDynamicExprSafe(const VExpr *E,
+                                  const std::set<std::string> &Aliases) {
+  return std::all_of(Aliases.begin(), Aliases.end(),
+                     [&](const std::string &Alias) {
+                       return scalarDynamicExprSafe(E, Alias);
+                     });
+}
+
+static bool pointerUsePreservesAliases(const VExpr *E,
+                                       const std::set<std::string> &Aliases) {
+  return std::all_of(Aliases.begin(), Aliases.end(),
+                     [&](const std::string &Alias) {
+                       return pointerUsePreservesParam(E, Alias);
+                     });
+}
+
 static bool scalarDynamicCalleeSafe(
     const VFunction &Fn, const std::string &Param, const FunctionMap &FnMap,
     std::set<std::pair<std::string, std::string>> &ActiveScans);
 
 static bool scalarDynamicStmtSafe(
     const VStmt &S, const std::string &Param, const FunctionMap &FnMap,
-    std::set<std::pair<std::string, std::string>> &ActiveScans) {
+    std::set<std::pair<std::string, std::string>> &ActiveScans,
+    std::set<std::string> &Aliases) {
   switch (S.K) {
   case VStmt::Assign: {
     const auto &A = static_cast<const VAssignStmt &>(S);
-    return A.Target != Param &&
+    if (A.IsReferenceBinding && A.Value->Ty.Kind == VTypeKind::Ptr &&
+        isDirectPointerAlias(A.Value.get(), Aliases)) {
+      if (Aliases.count(A.Target))
+        return false;
+      Aliases.insert(A.Target);
+      return scalarDynamicExprSafe(A.Value.get(), Aliases);
+    }
+    return !Aliases.count(A.Target) &&
            !(A.Value->Ty.Kind == VTypeKind::Ptr &&
-             referencesVar(A.Value.get(), Param)) &&
-           scalarDynamicExprSafe(A.Value.get(), Param);
+             referencesAnyAlias(A.Value.get(), Aliases)) &&
+           scalarDynamicExprSafe(A.Value.get(), Aliases);
   }
   case VStmt::Store: {
     const auto &St = static_cast<const VStoreStmt &>(S);
-    return (!referencesVar(St.Ptr.get(), Param) ||
-            isDirectPointerParam(St.Ptr.get(), Param)) &&
+    return (!referencesAnyAlias(St.Ptr.get(), Aliases) ||
+            isDirectPointerAlias(St.Ptr.get(), Aliases)) &&
            !(St.Value->Ty.Kind == VTypeKind::Ptr &&
-             referencesVar(St.Value.get(), Param)) &&
-           scalarDynamicExprSafe(St.Ptr.get(), Param) &&
-           scalarDynamicExprSafe(St.Value.get(), Param);
+             referencesAnyAlias(St.Value.get(), Aliases)) &&
+           scalarDynamicExprSafe(St.Ptr.get(), Aliases) &&
+           scalarDynamicExprSafe(St.Value.get(), Aliases);
   }
   case VStmt::Allocate: {
     const auto &A = static_cast<const VAllocateStmt &>(S);
-    return A.Target != Param &&
-           scalarDynamicExprSafe(A.Initializer.get(), Param);
+    return !Aliases.count(A.Target) &&
+           scalarDynamicExprSafe(A.Initializer.get(), Aliases);
   }
   case VStmt::Free:
-    return !referencesVar(static_cast<const VFreeStmt &>(S).Ptr.get(), Param);
+    return !referencesAnyAlias(static_cast<const VFreeStmt &>(S).Ptr.get(),
+                               Aliases);
   case VStmt::If: {
     const auto &I = static_cast<const VIfStmt &>(S);
-    if (!scalarDynamicExprSafe(I.Cond.get(), Param))
+    if (!scalarDynamicExprSafe(I.Cond.get(), Aliases))
       return false;
     for (const auto &Nested : I.Then)
-      if (!scalarDynamicStmtSafe(*Nested, Param, FnMap, ActiveScans))
+      if (!scalarDynamicStmtSafe(*Nested, Param, FnMap, ActiveScans, Aliases))
         return false;
     for (const auto &Nested : I.Else)
-      if (!scalarDynamicStmtSafe(*Nested, Param, FnMap, ActiveScans))
+      if (!scalarDynamicStmtSafe(*Nested, Param, FnMap, ActiveScans, Aliases))
         return false;
     return true;
   }
   case VStmt::While: {
     const auto &W = static_cast<const VWhileStmt &>(S);
-    if (!scalarDynamicExprSafe(W.Cond.get(), Param))
+    if (!scalarDynamicExprSafe(W.Cond.get(), Aliases))
       return false;
     for (const auto &E : W.Invariants)
-      if (!scalarDynamicExprSafe(E.get(), Param))
+      if (!scalarDynamicExprSafe(E.get(), Aliases))
         return false;
     for (const auto &E : W.Decreases)
-      if (!scalarDynamicExprSafe(E.get(), Param))
+      if (!scalarDynamicExprSafe(E.get(), Aliases))
         return false;
     for (const auto &Nested : W.Body)
-      if (!scalarDynamicStmtSafe(*Nested, Param, FnMap, ActiveScans))
+      if (!scalarDynamicStmtSafe(*Nested, Param, FnMap, ActiveScans, Aliases))
         return false;
     return true;
   }
@@ -655,11 +694,11 @@ static bool scalarDynamicStmtSafe(
       return false;
     for (unsigned I = 0; I < C.Args.size(); ++I) {
       const VExpr *Arg = C.Args[I].get();
-      if (!scalarDynamicExprSafe(Arg, Param))
+      if (!scalarDynamicExprSafe(Arg, Aliases))
         return false;
-      if (!referencesVar(Arg, Param) || Arg->Ty.Kind != VTypeKind::Ptr)
+      if (!referencesAnyAlias(Arg, Aliases) || Arg->Ty.Kind != VTypeKind::Ptr)
         continue;
-      if (!isDirectPointerParam(Arg, Param) || I >= Callee.Params.size() ||
+      if (!isDirectPointerAlias(Arg, Aliases) || I >= Callee.Params.size() ||
           Callee.Params[I].second.Kind != VTypeKind::Ptr ||
           !scalarDynamicCalleeSafe(Callee, Callee.Params[I].first, FnMap,
                                    ActiveScans))
@@ -669,28 +708,28 @@ static bool scalarDynamicStmtSafe(
   }
   case VStmt::Assert:
     return scalarDynamicExprSafe(static_cast<const VAssertStmt &>(S).Cond.get(),
-                                 Param);
+                                 Aliases);
   case VStmt::Assume:
     return scalarDynamicExprSafe(static_cast<const VAssumeStmt &>(S).Cond.get(),
-                                 Param);
+                                 Aliases);
   case VStmt::Return: {
     const auto &R = static_cast<const VReturnStmt &>(S);
     return (!R.Value || R.Value->Ty.Kind != VTypeKind::Ptr ||
-            pointerUsePreservesParam(R.Value.get(), Param)) &&
-           scalarDynamicExprSafe(R.Value.get(), Param);
+            pointerUsePreservesAliases(R.Value.get(), Aliases)) &&
+           scalarDynamicExprSafe(R.Value.get(), Aliases);
   }
   case VStmt::Seq:
     for (const auto &Nested : static_cast<const VSeqStmt &>(S).Stmts)
-      if (!scalarDynamicStmtSafe(*Nested, Param, FnMap, ActiveScans))
+      if (!scalarDynamicStmtSafe(*Nested, Param, FnMap, ActiveScans, Aliases))
         return false;
     return true;
   case VStmt::GhostBlock:
     return false;
   case VStmt::ContractAssert:
     return scalarDynamicExprSafe(
-        static_cast<const VContractAssertStmt &>(S).Cond.get(), Param);
+        static_cast<const VContractAssertStmt &>(S).Cond.get(), Aliases);
   case VStmt::Havoc:
-    return static_cast<const VHavocStmt &>(S).Target != Param;
+    return !Aliases.count(static_cast<const VHavocStmt &>(S).Target);
   case VStmt::RevealWithFuel:
   case VStmt::HideSpec:
   case VStmt::RevealSpec:
@@ -706,24 +745,25 @@ static bool scalarDynamicCalleeSafe(
   if (!ActiveScans.insert(Key).second)
     return false;
   bool Safe = true;
+  std::set<std::string> Aliases = {Param};
   for (unsigned I = 0;
        I < Fn.ExplicitPreconditionCount && I < Fn.Preconditions.size(); ++I)
-    if (!scalarDynamicExprSafe(Fn.Preconditions[I].get(), Param))
+    if (!scalarDynamicExprSafe(Fn.Preconditions[I].get(), Aliases))
       Safe = false;
   for (const auto &E : Fn.Postconditions)
-    if (!scalarDynamicExprSafe(E.get(), Param))
+    if (!scalarDynamicExprSafe(E.get(), Aliases))
       Safe = false;
   for (const auto &E : Fn.Modifies)
-    if (!scalarDynamicExprSafe(E.get(), Param))
+    if (!scalarDynamicExprSafe(E.get(), Aliases))
       Safe = false;
   for (const auto &E : Fn.Recommends)
-    if (!scalarDynamicExprSafe(E.get(), Param))
+    if (!scalarDynamicExprSafe(E.get(), Aliases))
       Safe = false;
   for (const auto &E : Fn.Decreases)
-    if (!scalarDynamicExprSafe(E.get(), Param))
+    if (!scalarDynamicExprSafe(E.get(), Aliases))
       Safe = false;
   for (const auto &S : Fn.Body)
-    if (!scalarDynamicStmtSafe(*S, Param, FnMap, ActiveScans))
+    if (!scalarDynamicStmtSafe(*S, Param, FnMap, ActiveScans, Aliases))
       Safe = false;
   ActiveScans.erase(Key);
   return Safe;
@@ -1960,7 +2000,10 @@ public:
     for (size_t I = 0; I < ActualModifies.size(); ++I)
       if (!ActualModifies[I] || ActualModifies[I]->K != VExpr::Load ||
           I >= Callee->Modifies.size() ||
-          isRegionFootprint(Callee->Modifies[I].get()))
+          (isRegionFootprint(Callee->Modifies[I].get()) &&
+           !hasPointerProvenance(
+               static_cast<const VLoadExpr *>(ActualModifies[I].get())
+                   ->Ptr.get())))
         CanFrameExactly = false;
     if ((!ActualModifies.empty() && !CanFrameExactly) ||
         HasImplicitHeapEffect) {
@@ -2125,6 +2168,32 @@ public:
             std::make_unique<VLiteralExpr>(0, VType::makePtr(), A.Loc), A.Loc);
         emitPassive(P, PassiveStmt::Assume, std::move(Aligned), Active.get(),
                     A.Loc);
+      }
+      if (A.IsAutomatic) {
+        CloneCtx EntryCtx{Renames, OldState, true};
+        for (const auto &[Name, Ty] : Fn.Params) {
+          if (Ty.Kind != VTypeKind::Ptr || Ty.PointeeSizeBytes == 0)
+            continue;
+          auto Param = cloneExpr(
+              std::make_unique<VVarExpr>(Name, Ty, A.Loc).get(), EntryCtx);
+          auto ParamIsNull =
+              makeEq(cloneVExpr(Param.get()),
+                     std::make_unique<VLiteralExpr>(0, VType::makePtr(), A.Loc),
+                     A.Loc);
+          auto LocalBeforeParam = std::make_unique<VBinOpExpr>(
+              VBinOp::Le, addressOffset(Pointer.get(), A.SizeBytes, A.Loc),
+              cloneVExpr(Param.get()), VType::makeBool(), A.Loc);
+          auto ParamBeforeLocal = std::make_unique<VBinOpExpr>(
+              VBinOp::Le,
+              addressOffset(Param.get(), Ty.PointeeSizeBytes, A.Loc),
+              cloneVExpr(Pointer.get()), VType::makeBool(), A.Loc);
+          auto Disjoint = makeOr(std::move(LocalBeforeParam),
+                                 std::move(ParamBeforeLocal), A.Loc);
+          emitPassive(
+              P, PassiveStmt::Assume,
+              makeOr(std::move(ParamIsNull), std::move(Disjoint), A.Loc),
+              Active.get(), A.Loc);
+        }
       }
 
       const std::string AllocationBefore = Renames[VAllocationHeapName];

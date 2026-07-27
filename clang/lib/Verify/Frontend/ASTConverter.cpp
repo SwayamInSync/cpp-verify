@@ -60,6 +60,159 @@ static std::unique_ptr<VExpr> scalePointerOffset(std::unique_ptr<VExpr> Offset,
 }
 
 static bool
+usesHeapBackedLocalAsScalar(const VExpr *E,
+                            const llvm::StringSet<> &HeapBackedLocals) {
+  if (!E)
+    return false;
+
+  switch (E->K) {
+  case VExpr::Literal:
+  case VExpr::Result:
+    return false;
+  case VExpr::Var: {
+    const auto *Var = static_cast<const VVarExpr *>(E);
+    return HeapBackedLocals.contains(Var->Name) &&
+           Var->Ty.Kind != VTypeKind::Ptr;
+  }
+  case VExpr::BinOp: {
+    const auto *Op = static_cast<const VBinOpExpr *>(E);
+    return usesHeapBackedLocalAsScalar(Op->Lhs.get(), HeapBackedLocals) ||
+           usesHeapBackedLocalAsScalar(Op->Rhs.get(), HeapBackedLocals);
+  }
+  case VExpr::UnaryOp:
+    return usesHeapBackedLocalAsScalar(
+        static_cast<const VUnaryOpExpr *>(E)->Operand.get(), HeapBackedLocals);
+  case VExpr::Cast:
+    return usesHeapBackedLocalAsScalar(
+        static_cast<const VCastExpr *>(E)->Inner.get(), HeapBackedLocals);
+  case VExpr::Load:
+    return usesHeapBackedLocalAsScalar(
+        static_cast<const VLoadExpr *>(E)->Ptr.get(), HeapBackedLocals);
+  case VExpr::Old:
+    return usesHeapBackedLocalAsScalar(
+        static_cast<const VOldExpr *>(E)->Inner.get(), HeapBackedLocals);
+  case VExpr::Conditional: {
+    const auto *Conditional = static_cast<const VConditionalExpr *>(E);
+    return usesHeapBackedLocalAsScalar(Conditional->Cond.get(),
+                                       HeapBackedLocals) ||
+           usesHeapBackedLocalAsScalar(Conditional->Then.get(),
+                                       HeapBackedLocals) ||
+           usesHeapBackedLocalAsScalar(Conditional->Else.get(),
+                                       HeapBackedLocals);
+  }
+  case VExpr::Forall:
+  case VExpr::Exists: {
+    const auto *Quantified = static_cast<const VQuantifiedExpr *>(E);
+    return usesHeapBackedLocalAsScalar(Quantified->Lo.get(),
+                                       HeapBackedLocals) ||
+           usesHeapBackedLocalAsScalar(Quantified->Hi.get(),
+                                       HeapBackedLocals) ||
+           usesHeapBackedLocalAsScalar(Quantified->Body.get(),
+                                       HeapBackedLocals);
+  }
+  case VExpr::HeapStore: {
+    const auto *Store = static_cast<const VHeapStoreExpr *>(E);
+    return usesHeapBackedLocalAsScalar(Store->Ptr.get(), HeapBackedLocals) ||
+           usesHeapBackedLocalAsScalar(Store->Val.get(), HeapBackedLocals);
+  }
+  case VExpr::FieldAccess:
+    return usesHeapBackedLocalAsScalar(
+        static_cast<const VFieldAccessExpr *>(E)->Base.get(), HeapBackedLocals);
+  case VExpr::SpecCall:
+    for (const auto &Arg : static_cast<const VSpecCallExpr *>(E)->Args)
+      if (usesHeapBackedLocalAsScalar(Arg.get(), HeapBackedLocals))
+        return true;
+    return false;
+  case VExpr::OverflowCheck: {
+    const auto *Check = static_cast<const VOverflowCheckExpr *>(E);
+    return usesHeapBackedLocalAsScalar(Check->Lhs.get(), HeapBackedLocals) ||
+           usesHeapBackedLocalAsScalar(Check->Rhs.get(), HeapBackedLocals);
+  }
+  }
+  llvm_unreachable("unknown VCR expression kind");
+}
+
+static bool
+usesHeapBackedLocalAsScalar(const VStmt *S,
+                            const llvm::StringSet<> &HeapBackedLocals) {
+  if (!S)
+    return false;
+
+  auto CheckStatements = [&](const std::vector<std::unique_ptr<VStmt>> &Stmts) {
+    return std::any_of(Stmts.begin(), Stmts.end(), [&](const auto &Nested) {
+      return usesHeapBackedLocalAsScalar(Nested.get(), HeapBackedLocals);
+    });
+  };
+  auto CheckExpressions =
+      [&](const std::vector<std::unique_ptr<VExpr>> &Exprs) {
+        return std::any_of(Exprs.begin(), Exprs.end(), [&](const auto &Expr) {
+          return usesHeapBackedLocalAsScalar(Expr.get(), HeapBackedLocals);
+        });
+      };
+
+  switch (S->K) {
+  case VStmt::Assign: {
+    const auto *Assign = static_cast<const VAssignStmt *>(S);
+    return HeapBackedLocals.contains(Assign->Target) ||
+           usesHeapBackedLocalAsScalar(Assign->Value.get(), HeapBackedLocals);
+  }
+  case VStmt::Store: {
+    const auto *Store = static_cast<const VStoreStmt *>(S);
+    return usesHeapBackedLocalAsScalar(Store->Ptr.get(), HeapBackedLocals) ||
+           usesHeapBackedLocalAsScalar(Store->Value.get(), HeapBackedLocals);
+  }
+  case VStmt::Allocate:
+    return usesHeapBackedLocalAsScalar(
+        static_cast<const VAllocateStmt *>(S)->Initializer.get(),
+        HeapBackedLocals);
+  case VStmt::Free:
+    return usesHeapBackedLocalAsScalar(
+        static_cast<const VFreeStmt *>(S)->Ptr.get(), HeapBackedLocals);
+  case VStmt::If: {
+    const auto *If = static_cast<const VIfStmt *>(S);
+    return usesHeapBackedLocalAsScalar(If->Cond.get(), HeapBackedLocals) ||
+           CheckStatements(If->Then) || CheckStatements(If->Else);
+  }
+  case VStmt::While: {
+    const auto *While = static_cast<const VWhileStmt *>(S);
+    return usesHeapBackedLocalAsScalar(While->Cond.get(), HeapBackedLocals) ||
+           CheckExpressions(While->Invariants) ||
+           CheckExpressions(While->Decreases) || CheckStatements(While->Body);
+  }
+  case VStmt::Call: {
+    const auto *Call = static_cast<const VCallStmt *>(S);
+    return HeapBackedLocals.contains(Call->ResultTarget) ||
+           CheckExpressions(Call->Args);
+  }
+  case VStmt::Assert:
+    return usesHeapBackedLocalAsScalar(
+        static_cast<const VAssertStmt *>(S)->Cond.get(), HeapBackedLocals);
+  case VStmt::Assume:
+    return usesHeapBackedLocalAsScalar(
+        static_cast<const VAssumeStmt *>(S)->Cond.get(), HeapBackedLocals);
+  case VStmt::Return:
+    return usesHeapBackedLocalAsScalar(
+        static_cast<const VReturnStmt *>(S)->Value.get(), HeapBackedLocals);
+  case VStmt::Seq:
+    return CheckStatements(static_cast<const VSeqStmt *>(S)->Stmts);
+  case VStmt::Havoc:
+    return HeapBackedLocals.contains(
+        static_cast<const VHavocStmt *>(S)->Target);
+  case VStmt::GhostBlock:
+    return CheckStatements(static_cast<const VGhostBlockStmt *>(S)->Body);
+  case VStmt::ContractAssert:
+    return usesHeapBackedLocalAsScalar(
+        static_cast<const VContractAssertStmt *>(S)->Cond.get(),
+        HeapBackedLocals);
+  case VStmt::RevealWithFuel:
+  case VStmt::HideSpec:
+  case VStmt::RevealSpec:
+    return false;
+  }
+  llvm_unreachable("unknown VCR statement kind");
+}
+
+static bool
 isSupportedVerificationTypeImpl(QualType Ty,
                                 llvm::SmallPtrSetImpl<const Type *> &Visiting) {
   if (Ty.isNull())
@@ -110,7 +263,7 @@ static bool isSupportedVerificationType(QualType Ty) {
   return isSupportedVerificationTypeImpl(Ty, Visiting);
 }
 
-static bool isSupportedReferenceParameter(QualType Ty) {
+static bool isSupportedScalarLValueReference(QualType Ty) {
   if (Ty.isNull() || !Ty->isLValueReferenceType())
     return false;
   QualType Referent = Ty.getNonReferenceType();
@@ -122,13 +275,13 @@ static bool isSupportedReferenceParameter(QualType Ty) {
 }
 
 static std::optional<std::string>
-findUnsupportedType(const FunctionDecl *FD, bool AllowReferenceParameters) {
+findUnsupportedType(const FunctionDecl *FD, bool AllowScalarReferences) {
   if (!isSupportedVerificationType(FD->getReturnType()))
     return FD->getReturnType().getAsString();
   for (const ParmVarDecl *Param : FD->parameters()) {
     QualType Ty = Param->getType();
     if (Ty->isReferenceType()) {
-      if (!AllowReferenceParameters || !isSupportedReferenceParameter(Ty))
+      if (!AllowScalarReferences || !isSupportedScalarLValueReference(Ty))
         return Ty.getAsString();
     } else if (!isSupportedVerificationType(Ty)) {
       return Param->getType().getAsString();
@@ -137,10 +290,10 @@ findUnsupportedType(const FunctionDecl *FD, bool AllowReferenceParameters) {
 
   struct Finder : RecursiveASTVisitor<Finder> {
     std::optional<std::string> Found;
-    bool AllowReferenceParameters;
+    bool AllowScalarReferences;
 
-    explicit Finder(bool AllowReferenceParameters)
-        : AllowReferenceParameters(AllowReferenceParameters) {}
+    explicit Finder(bool AllowScalarReferences)
+        : AllowScalarReferences(AllowScalarReferences) {}
 
     bool VisitExpr(Expr *E) {
       if (const auto *ICE = dyn_cast<ImplicitCastExpr>(E))
@@ -156,15 +309,15 @@ findUnsupportedType(const FunctionDecl *FD, bool AllowReferenceParameters) {
       if (Found)
         return false;
       QualType Ty = D->getType();
-      if (const auto *Param = dyn_cast<ParmVarDecl>(D);
-          Param && Ty->isReferenceType() && AllowReferenceParameters &&
-          isSupportedReferenceParameter(Ty))
+      if (Ty->isReferenceType() && AllowScalarReferences &&
+          isSupportedScalarLValueReference(Ty) &&
+          (isa<ParmVarDecl>(D) || D->hasLocalStorage()))
         return true;
       if (!isSupportedVerificationType(Ty))
         Found = Ty.getAsString();
       return !Found.has_value();
     }
-  } F(AllowReferenceParameters);
+  } F(AllowScalarReferences);
   if (FD->getBody())
     F.TraverseStmt(FD->getBody());
   return F.Found;
@@ -619,11 +772,73 @@ void ASTConverter::beginInitializationTracking(const FunctionDecl *FD) {
   ReportedUninitializedValues.clear();
   DynamicPointers.clear();
   DynamicPointerProvenanceVariables.clear();
+  AddressableLocals.clear();
+  AutomaticLocalProvenanceVariables.clear();
+  LocalReferenceProvenanceVariables.clear();
   GhostLocals.clear();
   DynamicProvenanceId = 0;
   DynamicPointerAssignmentId = 0;
+  AutomaticStorageId = 0;
+  LocalReferenceId = 0;
   LoopDepth = 0;
   InitializationPathReachable = true;
+
+  struct AddressableLocalDiscovery
+      : RecursiveASTVisitor<AddressableLocalDiscovery> {
+    std::vector<const VarDecl *> Order;
+    std::set<const VarDecl *> Locals;
+
+    static const Expr *directBindingSource(const Expr *E) {
+      if (!E)
+        return nullptr;
+      E = E->IgnoreParens();
+      while (const auto *Cast = dyn_cast<ImplicitCastExpr>(E)) {
+        if (Cast->getCastKind() != CK_NoOp)
+          break;
+        E = Cast->getSubExpr()->IgnoreParens();
+      }
+      return E;
+    }
+
+    void add(const Expr *E) {
+      E = directBindingSource(E);
+      const auto *DRE = E ? dyn_cast<DeclRefExpr>(E) : nullptr;
+      const auto *VD = DRE ? dyn_cast<VarDecl>(DRE->getDecl()) : nullptr;
+      if (!VD || !VD->isLocalVarDecl() || VD->getType()->isReferenceType() ||
+          VD->getType().isVolatileQualified() ||
+          VD->getType()->isAtomicType() ||
+          (!VD->getType()->isBooleanType() && !VD->getType()->isIntegerType() &&
+           !VD->getType()->isEnumeralType()))
+        return;
+      if (Locals.insert(VD).second)
+        Order.push_back(VD);
+    }
+
+    bool VisitCallExpr(CallExpr *Call) {
+      const FunctionDecl *Callee = Call->getDirectCallee();
+      if (!Callee)
+        return true;
+      for (unsigned I = 0; I < Call->getNumArgs() && I < Callee->getNumParams();
+           ++I)
+        if (Callee->getParamDecl(I)->getType()->isLValueReferenceType())
+          add(Call->getArg(I));
+      return true;
+    }
+
+    bool VisitVarDecl(VarDecl *VD) {
+      if (VD->isLocalVarDecl() && VD->getType()->isLValueReferenceType() &&
+          VD->hasInit())
+        add(VD->getInit());
+      return true;
+    }
+  } AddressDiscovery;
+  if (const Stmt *Body = FD->getBody())
+    AddressDiscovery.TraverseStmt(const_cast<Stmt *>(Body));
+  AddressableLocals = std::move(AddressDiscovery.Locals);
+  for (const VarDecl *Local : AddressDiscovery.Order)
+    AutomaticLocalProvenanceVariables.emplace(
+        Local,
+        "__cppverify_stack_provenance_" + std::to_string(++AutomaticStorageId));
 
   struct DynamicPointerDiscovery
       : RecursiveASTVisitor<DynamicPointerDiscovery> {
@@ -1445,6 +1660,18 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
         InitializedBody.push_back(std::move(S));
       Fn->Body = std::move(InitializedBody);
     }
+    llvm::StringSet<> HeapBackedLocals;
+    for (const VarDecl *VD : AddressableLocals)
+      HeapBackedLocals.insert(valueName(VD));
+    if (!HeapBackedLocals.empty() &&
+        std::any_of(Fn->Body.begin(), Fn->Body.end(), [&](const auto &S) {
+          return usesHeapBackedLocalAsScalar(S.get(), HeapBackedLocals);
+        })) {
+      Errors.push_back(Fn->Name +
+                       ": internal lowering failure for heap-backed local");
+      CurrentFn = nullptr;
+      return nullptr;
+    }
     if (Fn->IsSpec && !specBodyCanBeAxiomatized(Fn->Body)) {
       Errors.push_back(Fn->Name +
                        ": spec function body is unsupported by axiomatic "
@@ -1608,6 +1835,62 @@ ASTConverter::convertArrowFieldAddress(const MemberExpr *M) {
                                       M->getExprLoc());
 }
 
+std::unique_ptr<VExpr> ASTConverter::convertAutomaticLocalAddress(
+    const VarDecl *VD, SourceLocation Loc, bool RequireInitialized) {
+  auto Provenance = AutomaticLocalProvenanceVariables.find(VD);
+  if (!VD || !AddressableLocals.count(VD) ||
+      Provenance == AutomaticLocalProvenanceVariables.end())
+    return nullptr;
+  if (InOld) {
+    Errors.push_back(CurrentFn->Name +
+                     ": automatic local storage has no function-entry value");
+    return nullptr;
+  }
+  if (RequireInitialized)
+    requireInitialized(VD);
+  const uint64_t Size = Ctx.getTypeSizeInChars(VD->getType()).getQuantity();
+  return std::make_unique<VVarExpr>(valueName(VD), VType::makePtr(Size), Loc,
+                                    Provenance->second);
+}
+
+std::unique_ptr<VExpr>
+ASTConverter::convertAddressProvenance(const VExpr *Address) {
+  while (Address && Address->K == VExpr::Cast)
+    Address = static_cast<const VCastExpr *>(Address)->Inner.get();
+  if (Address && Address->K == VExpr::BinOp) {
+    const auto *B = static_cast<const VBinOpExpr *>(Address);
+    if (B->Op == VBinOp::Add || B->Op == VBinOp::Sub)
+      return convertAddressProvenance(B->Lhs.get());
+  }
+  if (!Address || Address->K != VExpr::Var)
+    return nullptr;
+  const auto *V = static_cast<const VVarExpr *>(Address);
+  if (V->ProvenanceVariable.empty())
+    return nullptr;
+  return std::make_unique<VVarExpr>(V->ProvenanceVariable, VType::makePtr(),
+                                    V->Loc);
+}
+
+void ASTConverter::appendReferenceBindingCheck(
+    const VExpr *Address, SourceLocation Loc,
+    std::vector<std::unique_ptr<VStmt>> &Out) {
+  auto NonNull = std::make_unique<VBinOpExpr>(
+      VBinOp::Ne, cloneVExpr(Address),
+      std::make_unique<VLiteralExpr>(0, VType::makePtr(), Loc),
+      VType::makeBool(), Loc);
+  auto Valid = std::make_unique<VUnaryOpExpr>(
+      VUnaryOp::ValidPtr, cloneVExpr(Address), VType::makeBool(), Loc);
+  auto Initialized = std::make_unique<VUnaryOpExpr>(
+      VUnaryOp::InitializedPtr, cloneVExpr(Address), VType::makeBool(), Loc);
+  auto Readable = std::make_unique<VBinOpExpr>(VBinOp::And, std::move(Valid),
+                                               std::move(Initialized),
+                                               VType::makeBool(), Loc);
+  Out.push_back(std::make_unique<VAssertStmt>(
+      std::make_unique<VBinOpExpr>(VBinOp::And, std::move(NonNull),
+                                   std::move(Readable), VType::makeBool(), Loc),
+      Loc));
+}
+
 std::unique_ptr<VExpr> ASTConverter::convertLValueAddress(const Expr *E) {
   if (!E)
     return nullptr;
@@ -1620,12 +1903,26 @@ std::unique_ptr<VExpr> ASTConverter::convertLValueAddress(const Expr *E) {
 
   if (const auto *DRE = dyn_cast<DeclRefExpr>(E)) {
     const auto *VD = dyn_cast<VarDecl>(DRE->getDecl());
-    if (!VD || !isa<ParmVarDecl>(VD) || !VD->getType()->isLValueReferenceType())
+    if (!VD)
       return nullptr;
-    requireInitialized(VD);
-    return std::make_unique<VVarExpr>(
-        valueName(VD), VType::fromQualType(VD->getType(), IntMode, Ctx),
-        E->getExprLoc());
+    if (VD->getType()->isLValueReferenceType() &&
+        (isa<ParmVarDecl>(VD) || VD->isLocalVarDecl())) {
+      if (InOld && VD->isLocalVarDecl()) {
+        Errors.push_back(
+            CurrentFn->Name +
+            ": local reference bindings have no function-entry value");
+        return nullptr;
+      }
+      requireInitialized(VD);
+      std::string Provenance;
+      if (auto It = LocalReferenceProvenanceVariables.find(VD);
+          It != LocalReferenceProvenanceVariables.end())
+        Provenance = It->second;
+      return std::make_unique<VVarExpr>(
+          valueName(VD), VType::fromQualType(VD->getType(), IntMode, Ctx),
+          E->getExprLoc(), std::move(Provenance));
+    }
+    return convertAutomaticLocalAddress(VD, E->getExprLoc());
   }
 
   if (const auto *U = dyn_cast<UnaryOperator>(E);
@@ -1815,6 +2112,14 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
         return nullptr;
       }
       requireInitialized(VD);
+      if (AddressableLocals.count(VD)) {
+        auto Address = convertAutomaticLocalAddress(VD, E->getExprLoc(), false);
+        if (!Address)
+          return nullptr;
+        VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
+        return std::make_unique<VLoadExpr>(std::move(Address), Ty,
+                                           E->getExprLoc());
+      }
       if (VD->getType()->isReferenceType()) {
         auto Address = convertLValueAddress(E);
         if (!Address) {
@@ -2248,8 +2553,8 @@ void ASTConverter::convertExecCallArg(
     if (!Out && Errors.size() == ErrorCount)
       Errors.push_back(
           CurrentFn->Name +
-          ": reference arguments require another reference parameter or a "
-          "direct pointer dereference");
+          ": reference arguments require a supported reference, addressable "
+          "local, or direct pointer dereference");
     return;
   }
   const VarDecl *Source = directDynamicPointer(E);
@@ -2352,7 +2657,7 @@ void ASTConverter::convertExecCallArgs(
       return false;
     if (const auto *DRE = dyn_cast<DeclRefExpr>(S))
       if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl()))
-        if (VD->getType()->isReferenceType())
+        if (VD->getType()->isReferenceType() || AddressableLocals.count(VD))
           return true;
     if (const auto *U = dyn_cast<UnaryOperator>(S))
       if (U->getOpcode() == UO_Deref)
@@ -2545,6 +2850,20 @@ void ASTConverter::appendAssignment(const Expr *LHS,
         }
         Out.push_back(std::make_unique<VStoreStmt>(std::move(Address),
                                                    std::move(Value), Loc));
+        return;
+      }
+      if (AddressableLocals.count(VD)) {
+        if (CurrentFn->IsProof) {
+          Errors.push_back(CurrentFn->Name +
+                           ": proof functions cannot modify executable memory");
+          return;
+        }
+        auto Address = convertAutomaticLocalAddress(VD, Loc, false);
+        if (!Address)
+          return;
+        Out.push_back(std::make_unique<VStoreStmt>(std::move(Address),
+                                                   std::move(Value), Loc));
+        markInitialized(VD);
         return;
       }
       if (VD->getType()->isRecordType()) {
@@ -3295,6 +3614,98 @@ std::vector<std::unique_ptr<VStmt>> ASTConverter::convertStmt(const Stmt *S) {
       }
       if (InGhost)
         GhostLocals.insert(VD);
+      if (AddressableLocals.count(VD)) {
+        if (LoopDepth != 0) {
+          Errors.push_back(
+              CurrentFn->Name +
+              ": addressable local declarations inside loops are unsupported");
+          continue;
+        }
+        if (InGhost || CurrentFn->IsSpec || CurrentFn->IsProof) {
+          Errors.push_back(CurrentFn->Name +
+                           ": addressable locals require executable code");
+          continue;
+        }
+        const uint64_t Size =
+            Ctx.getTypeSizeInChars(VD->getType()).getQuantity();
+        const uint64_t Align =
+            Ctx.getTypeAlignInChars(VD->getType()).getQuantity();
+        if (Size == 0 || Size > 256 || Align == 0) {
+          Errors.push_back(CurrentFn->Name +
+                           ": unsupported automatic object size or alignment");
+          continue;
+        }
+        std::unique_ptr<VExpr> Initializer;
+        if (VD->hasInit()) {
+          const auto *Call =
+              dyn_cast<CallExpr>(VD->getInit()->IgnoreParenImpCasts());
+          const FunctionDecl *Callee = Call ? Call->getDirectCallee() : nullptr;
+          if (Callee && functionContract(Callee) && !calleeIsSpec(Callee)) {
+            std::vector<std::unique_ptr<VExpr>> Args;
+            convertExecCallArgs(Call, Out, Args);
+            const std::string ResultTarget =
+                "__local_call_" + std::to_string(++NestedCallId);
+            Out.push_back(std::make_unique<VCallStmt>(
+                Callee->getNameAsString(), functionIdentity(Callee),
+                std::move(Args), ResultTarget, VD->getBeginLoc(),
+                calleeIsProof(Callee)));
+            Initializer = convertCallResultValue(
+                ResultTarget, Callee->getReturnType(),
+                VType::fromQualType(VD->getType(), IntMode, Ctx),
+                VD->getBeginLoc());
+          } else {
+            Initializer = convertExpr(VD->getInit());
+          }
+        }
+        if (VD->hasInit() && !Initializer)
+          continue;
+        auto Provenance = AutomaticLocalProvenanceVariables.find(VD);
+        if (Provenance == AutomaticLocalProvenanceVariables.end()) {
+          Errors.push_back(CurrentFn->Name +
+                           ": missing automatic-storage provenance");
+          continue;
+        }
+        Out.push_back(std::make_unique<VAllocateStmt>(
+            valueName(VD), Provenance->second,
+            VType::fromQualType(VD->getType(), IntMode, Ctx),
+            std::move(Initializer), Size, Align, VD->getBeginLoc(), true));
+        if (VD->hasInit())
+          markInitialized(VD);
+        continue;
+      }
+      if (VD->getType()->isReferenceType()) {
+        if (InGhost || CurrentFn->IsSpec || CurrentFn->IsProof) {
+          Errors.push_back(CurrentFn->Name +
+                           ": local references require executable code");
+          continue;
+        }
+        if (!VD->getType()->isLValueReferenceType() || !VD->hasInit()) {
+          Errors.push_back(CurrentFn->Name +
+                           ": unsupported local reference binding");
+          continue;
+        }
+        auto Address = convertLValueAddress(VD->getInit());
+        if (!Address) {
+          Errors.push_back(
+              CurrentFn->Name +
+              ": local references require a supported direct lvalue");
+          continue;
+        }
+        appendReferenceBindingCheck(Address.get(), VD->getBeginLoc(), Out);
+        auto Provenance = convertAddressProvenance(Address.get());
+        Out.push_back(std::make_unique<VAssignStmt>(
+            valueName(VD), std::move(Address), VD->getBeginLoc(), true));
+        if (Provenance) {
+          const std::string ProvenanceName =
+              "__cppverify_reference_provenance_" +
+              std::to_string(++LocalReferenceId);
+          LocalReferenceProvenanceVariables[VD] = ProvenanceName;
+          Out.push_back(std::make_unique<VAssignStmt>(
+              ProvenanceName, std::move(Provenance), VD->getBeginLoc()));
+        }
+        markInitialized(VD);
+        continue;
+      }
       if (!VD->hasInit())
         continue;
       if (const auto *New =

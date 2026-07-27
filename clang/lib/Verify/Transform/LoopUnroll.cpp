@@ -46,12 +46,13 @@ unrollStmts(const std::vector<std::unique_ptr<VStmt>> &Stmts, unsigned K) {
       continue;
     }
     switch (S->K) {
-    case VStmt::Assign:
+    case VStmt::Assign: {
+      const auto &Assign = static_cast<const VAssignStmt &>(*S);
       Out.push_back(std::make_unique<VAssignStmt>(
-          static_cast<const VAssignStmt &>(*S).Target,
-          cloneVExpr(static_cast<const VAssignStmt &>(*S).Value.get()),
-          S->Loc));
+          Assign.Target, cloneVExpr(Assign.Value.get()), S->Loc,
+          Assign.IsReferenceBinding));
       break;
+    }
     case VStmt::Store:
       Out.push_back(std::make_unique<VStoreStmt>(
           cloneVExpr(static_cast<const VStoreStmt &>(*S).Ptr.get()),

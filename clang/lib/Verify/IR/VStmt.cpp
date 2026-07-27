@@ -11,7 +11,7 @@ std::unique_ptr<VStmt> verify::cloneVStmt(const VStmt *S) {
   case VStmt::Assign: {
     const auto &A = static_cast<const VAssignStmt &>(*S);
     return std::make_unique<VAssignStmt>(A.Target, cloneVExpr(A.Value.get()),
-                                         A.Loc);
+                                         A.Loc, A.IsReferenceBinding);
   }
   case VStmt::Store: {
     const auto &St = static_cast<const VStoreStmt &>(*S);
@@ -22,7 +22,8 @@ std::unique_ptr<VStmt> verify::cloneVStmt(const VStmt *S) {
     const auto &A = static_cast<const VAllocateStmt &>(*S);
     return std::make_unique<VAllocateStmt>(
         A.Target, A.ProvenanceTarget, A.AllocatedType,
-        cloneVExpr(A.Initializer.get()), A.SizeBytes, A.AlignBytes, A.Loc);
+        cloneVExpr(A.Initializer.get()), A.SizeBytes, A.AlignBytes, A.Loc,
+        A.IsAutomatic);
   }
   case VStmt::Free: {
     const auto &F = static_cast<const VFreeStmt &>(*S);

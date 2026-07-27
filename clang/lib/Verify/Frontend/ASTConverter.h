@@ -34,9 +34,14 @@ class ASTConverter {
   std::map<const FunctionDecl *, std::string> FunctionIdentities;
   std::set<const VarDecl *> DynamicPointers;
   std::map<const VarDecl *, std::string> DynamicPointerProvenanceVariables;
+  std::set<const VarDecl *> AddressableLocals;
+  std::map<const VarDecl *, std::string> AutomaticLocalProvenanceVariables;
+  std::map<const VarDecl *, std::string> LocalReferenceProvenanceVariables;
   std::set<const VarDecl *> GhostLocals;
   unsigned DynamicProvenanceId = 0;
   unsigned DynamicPointerAssignmentId = 0;
+  unsigned AutomaticStorageId = 0;
+  unsigned LocalReferenceId = 0;
   unsigned LoopDepth = 0;
 
 public:
@@ -52,6 +57,12 @@ private:
   std::unique_ptr<VExpr> convertPointerDifferenceOperand(const Expr *E,
                                                          uint64_t PointeeSize);
   std::unique_ptr<VExpr> convertLValueAddress(const Expr *E);
+  std::unique_ptr<VExpr>
+  convertAutomaticLocalAddress(const VarDecl *VD, SourceLocation Loc,
+                               bool RequireInitialized = true);
+  std::unique_ptr<VExpr> convertAddressProvenance(const VExpr *Address);
+  void appendReferenceBindingCheck(const VExpr *Address, SourceLocation Loc,
+                                   std::vector<std::unique_ptr<VStmt>> &Out);
   std::unique_ptr<VExpr> convertRecordField(std::unique_ptr<VExpr> Base,
                                             const FieldDecl *Field,
                                             SourceLocation Loc);

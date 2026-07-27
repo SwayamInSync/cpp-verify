@@ -46,8 +46,11 @@ protected:
 struct VAssignStmt : VStmt {
   std::string Target;
   std::unique_ptr<VExpr> Value;
-  VAssignStmt(std::string T, std::unique_ptr<VExpr> V, SourceLocation Loc)
-      : VStmt(Assign, Loc), Target(std::move(T)), Value(std::move(V)) {}
+  bool IsReferenceBinding;
+  VAssignStmt(std::string T, std::unique_ptr<VExpr> V, SourceLocation Loc,
+              bool IsReferenceBinding = false)
+      : VStmt(Assign, Loc), Target(std::move(T)), Value(std::move(V)),
+        IsReferenceBinding(IsReferenceBinding) {}
 };
 
 struct VStoreStmt : VStmt {
@@ -65,13 +68,16 @@ struct VAllocateStmt : VStmt {
   std::unique_ptr<VExpr> Initializer;
   uint64_t SizeBytes;
   uint64_t AlignBytes;
+  bool IsAutomatic;
   VAllocateStmt(std::string Target, std::string ProvenanceTarget,
                 VType AllocatedType, std::unique_ptr<VExpr> Initializer,
-                uint64_t SizeBytes, uint64_t AlignBytes, SourceLocation Loc)
+                uint64_t SizeBytes, uint64_t AlignBytes, SourceLocation Loc,
+                bool IsAutomatic = false)
       : VStmt(Allocate, Loc), Target(std::move(Target)),
         ProvenanceTarget(std::move(ProvenanceTarget)),
         AllocatedType(AllocatedType), Initializer(std::move(Initializer)),
-        SizeBytes(SizeBytes), AlignBytes(AlignBytes) {}
+        SizeBytes(SizeBytes), AlignBytes(AlignBytes), IsAutomatic(IsAutomatic) {
+  }
 };
 
 struct VFreeStmt : VStmt {
