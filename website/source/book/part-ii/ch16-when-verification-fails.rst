@@ -46,6 +46,27 @@ the program became the intended formula. Ordinary verification checks whether
 that formula is valid. A timeout can block the second answer without hiding a
 malformed first answer.
 
+Proof failure versus unsupported C++
+------------------------------------
+
+A source program can also be outside CppVerify's current semantic subset. That
+is different from a failed proof:
+
+- a **conversion/unsupported error** means the relevant C++ semantics are not
+  modeled and verification stopped fail-closed;
+- **verification failed** means the semantics were lowered and a
+  counterexample violates an obligation;
+- **unknown** means the obligation was lowered but automation did not decide it.
+
+Do not work around an unsupported diagnostic by replacing a C++ operation with
+an unchecked integer or external axiom. Either reformulate the program within
+the documented subset or add the missing semantics through Clang, VCR,
+passivization, backend encoding, and positive/false-proof tests.
+
+The full feature matrix, memory/object-model boundaries, missing induction and
+solver tactics, performance work, library models, and raw-C++ readiness gates
+are maintained in :doc:`../../language/limitations`.
+
 Adjusting contracts
 -------------------
 
