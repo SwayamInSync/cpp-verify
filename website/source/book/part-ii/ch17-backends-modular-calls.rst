@@ -22,7 +22,9 @@ Verification backends
      - Small bounded loops: body unrolled ``N`` times, then Z3. Good when loop structure is simple and bounds are tiny.
    * - **Lean export**
      - ``cpp-verify --backend=lean --lean-out=out.lean file.cpp``
-     - Export a scratch-pad ``theorem cppverify_goal`` for manual proof in Lean 4 — not automated discharge.
+     - Export the canonical correctness obligation as an unchecked theorem
+       with ``sorry``. This does not run Z3 and reports ``Exported``, not a
+       proof result.
 
 BMC does not replace loop contracts on the default path; it is an alternate pipeline stage that
 **expands** loops before passivization. You still write ``invariant`` / ``decreases`` for documentation
@@ -91,13 +93,18 @@ identity remain a pair through local copies, assignments, branches,
 Z3 result discipline
 --------------------
 
-The default backend first submits one ordered weakest-precondition formula.
+Passive SSA is lowered once into a typed, source-attributed
+``ObligationModule``. Layer 3 dumps this exact module and all backends consume
+it. It contains one complete counterexample query plus equivalent ordered
+assertion/postcondition queries with deterministic IDs. The default backend
+first submits the complete query.
 ``unsat`` means verified and ``sat`` produces a counterexample. On ``unknown``,
-CppVerify retries assertions separately in source order, using only entry facts
-and assumptions that precede each obligation. The retry helps quantified heap
-programs without letting a later assumption prove an earlier assertion. If it
-still cannot discharge every obligation, the final result remains ``unknown``
-and the function is not certified.
+CppVerify retries the module-owned assertions separately in source order, using
+only entry facts and assumptions that precede each obligation. It does not
+rebuild a second VC. The retry helps quantified heap programs without letting a
+later assumption prove an earlier assertion. If it still cannot discharge every
+obligation, the final result remains ``unknown`` and the function is not
+certified.
 
 Parallel verify + compile
 -------------------------
@@ -119,7 +126,7 @@ When a proof fails or looks wrong, dump intermediate representations:
 
    cpp-verify --dump-ir=1 file.cpp      # Layer 1: VCR (typed CFG)
    cpp-verify --dump-ir=2 file.cpp      # Layer 2: passive (SSA assume/assert)
-   cpp-verify --dump-ir=3,4 file.cpp   # VC formula and Z3 translation
+   cpp-verify --dump-ir=3,4 file.cpp   # canonical Obligation IR and Z3 translation
 
 Layer aliases: ``layer-1`` … ``layer-4``, or ``all``. Multiple layers are separated by ``======``.
 

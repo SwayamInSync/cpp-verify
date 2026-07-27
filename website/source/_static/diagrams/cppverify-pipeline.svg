@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 140" width="100%" preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="cp-title">
-  <title id="cp-title">CppVerify pipeline from AST to Z3 result</title>
+  <title id="cp-title">CppVerify pipeline from AST through canonical obligations to backend result</title>
   <defs>
     <marker id="cp-arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
       <path d="M0,0 L7,3 L0,6 Z" fill="#94a3b8"/>
@@ -20,7 +20,8 @@
     <text class="box" x="260" y="28" text-anchor="middle">Passive</text>
     <text class="sub" x="260" y="44" text-anchor="middle">L2</text>
     <rect x="324" y="0" width="72" height="56" rx="6" fill="#e0e7ff" stroke="#4f46e5"/>
-    <text class="box" x="360" y="34" text-anchor="middle">WP</text>
+    <text class="box" x="360" y="28" text-anchor="middle">Obligation</text>
+    <text class="sub" x="360" y="44" text-anchor="middle">L3</text>
     <rect x="416" y="0" width="72" height="56" rx="6" fill="#e0e7ff" stroke="#4f46e5"/>
     <text class="box" x="452" y="34" text-anchor="middle">Z3</text>
     <rect x="508" y="0" width="96" height="56" rx="6" fill="#dcfce7" stroke="#16a34a"/>

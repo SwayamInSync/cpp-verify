@@ -50,7 +50,7 @@ Architecture in one picture
 .. figure:: /_static/diagrams/cppverify-pipeline.svg
    :align: center
    :figclass: book-figure
-   :alt: Pipeline from AST through VCR and passive IR, weakest precondition, Z3, to result
+   :alt: Pipeline from AST through VCR, passive IR, canonical obligations, Z3, and result
 
 Two outputs from one frontend:
 
@@ -58,4 +58,3 @@ Two outputs from one frontend:
    :align: center
    :figclass: book-figure
    :alt: Parallel verify path and compile path from one Clang AST
-

@@ -31,7 +31,9 @@ Backends
    * - ``--backend=bmc``
      - Unroll loops up to ``--unroll=N`` (default 10), then Z3.
    * - ``--backend=lean``
-     - Write Lean 4 scratch-pad to ``--lean-out`` (required for useful output).
+     - Write an unchecked Lean 4 scratch-pad to ``--lean-out``. This path does
+       not run Z3 and reports ``Exported``, never ``Verified``. Multi-function
+       output uses one shared preamble and identity-qualified theorem names.
    * - ``--unroll=N``
      - BMC loop bound only.
    * - ``--check-ub``
@@ -44,9 +46,9 @@ Backends
      - Per-query Z3 timeout in milliseconds (default 30000; ``0`` disables). A query
        that exceeds it is reported as ``unknown`` instead of hanging.
    * - ``--lower-only``
-     - Run Clang conversion, backend-specific preparation, passivization, VC
-       construction, spec-axiom encoding, and Z3 translation without calling
-       the solver. Supported for the Z3 and BMC pipelines.
+     - Run Clang conversion, backend-specific preparation, passivization,
+       canonical Obligation IR construction, spec-axiom encoding, and Z3
+       translation without calling the solver. Supported for Z3 and BMC.
 
 ``--lower-only`` is deliberately different from compiler ``-fno-verify``.
 ``-fno-verify`` stops after Clang syntax and contract semantic checks;
@@ -187,6 +189,13 @@ Layer 4 still performs the complete Z3 encoding, including reachable spec
 axioms, and fails closed on an encoding error. It only omits
 ``Solver.check()``.
 
+Layer 3 is the canonical backend-neutral ``ObligationModule``. It prints the
+same in-memory module consumed by Layer 4 and ordinary verification: explicit
+logic sorts and required features, one complete counterexample query,
+deterministic obligation IDs/kinds, source encodings, and equivalent ordered
+queries. A malformed, untyped, or unsupported term fails lowering rather than
+becoming a proof-shaped default.
+
 Testing and coverage
 --------------------
 
@@ -212,7 +221,8 @@ New language features should have both semantic and structural oracles:
 
 - real C++ positive and negative programs;
 - exact Layer 1 VCR and Layer 2 passive-SSA expectations;
-- Layer 3 VC and Layer 4 Z3 checks for the critical semantics;
+- Layer 3 Obligation IR checks for sorts, IDs, origins, and the decisive query,
+  plus Layer 4 Z3 checks for its translation;
 - ordinary solver checks for valid programs and deliberate false proofs.
 
 Solver ``unknown`` never validates a feature. Structural lowering can still be

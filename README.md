@@ -93,7 +93,7 @@ compiler — GCC or Clang (`setup.sh` uses `${CXX:-c++}`).
 |---------|-----|------|
 | **Z3** (default) | `cpp-verify file.cpp` | Weakest-precondition VCs + Z3 |
 | **BMC** | `cpp-verify --backend=bmc --unroll=N file.cpp` | Bounded loop unrolling, then Z3 |
-| **Lean export** | `cpp-verify --backend=lean --lean-out=out.lean file.cpp` | Emit goals for manual proof |
+| **Lean export** | `cpp-verify --backend=lean --lean-out=out.lean file.cpp` | Emit an unchecked `sorry` theorem; reports `Exported`, not `Verified` |
 
 ## Commands
 
@@ -106,7 +106,7 @@ compiler — GCC or Clang (`setup.sh` uses `${CXX:-c++}`).
 `-fverify-contracts` and `-fno-verify` are two axes: the first enables the contract language (and verifies by default); `-fno-verify` skips the solver and implies `-fverify-contracts`, so a lone `-fno-verify` is a fast syntax/semantics check. There is no `-fverify`.
 
 ```bash
-./build/bin/cpp-verify --dump-ir=1,2,3,4 file.cpp   # VCR, passive, VC, Z3
+./build/bin/cpp-verify --dump-ir=1,2,3,4 file.cpp   # VCR, passive, Obligation IR, Z3
 ```
 
 Chained modular calls (e.g. `return inc(inc(x))`) are lowered to temporaries automatically.

@@ -40,8 +40,8 @@ unverified external callers must honor it like a written ``pre``.
 ``aliases(p, q)`` permits same-object aliasing.
 
 ``Lowered`` is emitted by ``--lower-only``. It means Clang AST conversion, VCR,
-passive SSA, VC construction, and backend encoding succeeded **without** a
-solver call. It is a translation check, not a proof.
+passive SSA, canonical obligation construction, and backend encoding succeeded
+**without** a solver call. It is a translation check, not a proof.
 
 ``unknown`` means the solver did not establish the obligation, commonly because
 of a timeout or difficult quantified heap formula. It is never treated as
@@ -312,13 +312,16 @@ Solver and automation limitations
 ---------------------------------
 
 The Z3 backend supports bit-vectors, mathematical integers, arrays,
-quantifiers, models, timeouts, ordered-obligation fallback, and full SMT dumps.
+quantifiers, models, timeouts, module-owned ordered-obligation fallback, and
+full SMT dumps. Layer 3 now provides deterministic obligation IDs and raw
+source encodings from the exact canonical module solved by the backend.
 Hard quantified recursive/heap formulas can still leave decidable fragments and
 return ``unknown``.
 
 Important missing optimizations and tactics are:
 
-#. per-obligation source IDs, VC slicing, and independent resource reports;
+#. richer source-level obligation categories, VC slicing, and independent
+   resource reports beyond the current IDs/raw source encodings;
 #. a verifier-specific simplifier before SMT;
 #. source-level path/heap/provenance counterexamples instead of raw SSA models;
 #. content-addressed proof caching and affected-function invalidation;
@@ -342,10 +345,13 @@ An unwinding assertion prevents an insufficient bound from silently becoming an
 unbounded proof. Path explosion, incremental bound growth, trace reconstruction,
 and broad runtime semantics remain future work.
 
-**Lean export** emits a scratch-pad theorem. It is not yet a complete
-certificate/replay backend for every supported VC. A certifying path needs
-faithful theory encoding, source-attributed goals, no ``sorry``, a pinned Lean
-environment, and CI replay.
+**Lean export** consumes the same typed canonical obligation as Z3 and emits a
+scratch-pad theorem stating that its counterexample query is impossible. It
+does not invoke Z3, returns ``Exported`` rather than ``Verified``, and retains
+``sorry``. It is not yet a complete certificate/replay backend. A certifying
+path needs faithful elaborating definitions for every theory, one replayable
+theorem per ordered obligation, no ``sorry``, a pinned Lean environment, and CI
+replay.
 
 There is currently no solver portfolio, CHC backend, separation-logic backend,
 or independently checked Z3 proof-object pipeline.
