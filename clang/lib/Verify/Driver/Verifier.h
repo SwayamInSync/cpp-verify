@@ -14,6 +14,8 @@ inline constexpr unsigned DefaultSolverTimeoutMs = 30000;
 
 struct VerifyOptions {
   unsigned DumpIRLayers = 0;
+  /// Build and encode verification conditions without invoking a solver.
+  bool LowerOnly = false;
   BackendKind Backend = BackendKind::Z3;
   std::string LeanOutPath;
   unsigned BMCUnroll = 10;

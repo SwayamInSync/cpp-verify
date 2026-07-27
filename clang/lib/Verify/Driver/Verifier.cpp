@@ -23,7 +23,7 @@ using namespace verify;
 namespace {
 
 struct VerifyDiagnostic {
-  enum Kind { Verified, Error, Warning, Unknown };
+  enum Kind { Verified, Lowered, Error, Warning, Unknown };
   Kind K;
   std::string Message;
 };
@@ -74,6 +74,14 @@ public:
       : Ctx(Ctx), Opts(Opts), DumpOS(&DumpOS) {}
 
   bool run() {
+    if (Opts.LowerOnly && Opts.Backend == BackendKind::Lean) {
+      Diags.push_back(
+          {VerifyDiagnostic::Error,
+           "--lower-only supports the Z3 and BMC lowering pipelines; use "
+           "--backend=lean to validate Lean export"});
+      return false;
+    }
+
     ASTConverter Converter(Ctx);
     auto Functions = Converter.convertTranslationUnit();
     for (const std::string &Err : Converter.getErrors())
@@ -109,7 +117,7 @@ public:
     Passivizer P;
     P.setFunctionMap(FnMap);
     WPCalculator WP;
-    Z3Encoder Z3Dump;
+    Z3Encoder Z3Lowering;
 
     const unsigned DumpLayers = Opts.DumpIRLayers;
     const bool MultiLayerDump = llvm::popcount(DumpLayers) > 1;
@@ -168,18 +176,37 @@ public:
       }
 
       if (Fn->IsSpec && !Fn->NeedsDecreasesCheck) {
+        const VerifyDiagnostic::Kind Kind = Opts.LowerOnly
+                                                ? VerifyDiagnostic::Lowered
+                                                : VerifyDiagnostic::Verified;
         if (Fn->IsConstexprSpec)
-          Diags.push_back({VerifyDiagnostic::Verified,
-                           "constexpr spec axiom: " + Fn->Name});
+          Diags.push_back({Kind, "constexpr spec axiom: " + Fn->Name});
         else
-          Diags.push_back(
-              {VerifyDiagnostic::Verified, "spec axiom: " + Fn->Name});
+          Diags.push_back({Kind, "spec axiom: " + Fn->Name});
         continue;
       }
 
       if (Fn->NeedsDecreasesCheck) {
         PassiveProgram DecPP = buildDecreasesChecks(*Fn, FnMap);
-        if (!Fn->IsSpec) {
+        if (Opts.LowerOnly) {
+          VCMachine DecMachine = VCMachine::fromPassive(DecPP);
+          VerifyResult DR = Z3Lowering.lowerMachine(DecMachine);
+          if (DR.Status != VerifyStatus::Verified) {
+            AllOk = false;
+            AnyFailed = true;
+            std::string Message =
+                "Z3 lowering failed for decreases: " + Fn->Name;
+            if (!DR.Message.empty())
+              Message += " (" + DR.Message + ")";
+            Diags.push_back({VerifyDiagnostic::Error, std::move(Message)});
+            continue;
+          }
+          if (Fn->IsSpec) {
+            Diags.push_back(
+                {VerifyDiagnostic::Lowered, "spec decreases: " + Fn->Name});
+            continue;
+          }
+        } else if (!Fn->IsSpec) {
           VerifyResult DR = Backend->verifyPassive(DecPP);
           if (DR.Status != VerifyStatus::Verified) {
             AllOk = false;
@@ -196,7 +223,7 @@ public:
                                  Fn->Name});
             continue;
           }
-        } else if (Fn->IsSpec) {
+        } else {
           VerifyResult R = Backend->verifyPassive(DecPP);
           if (R.Status == VerifyStatus::Verified)
             Diags.push_back(
@@ -235,14 +262,29 @@ public:
         dumpVC(Fn->Name, VC.get(), *DumpOS);
       }
 
-      if (DumpLayers & LayerZ3 && VC) {
-        dumpSep();
+      if (DumpLayers & LayerZ3 || Opts.LowerOnly) {
+        if (DumpLayers & LayerZ3)
+          dumpSep();
         VCMachine M = VCMachine::fromPassive(PP);
-        if (M.Goal)
-          Z3Dump.dumpVC(M.Goal.get(), *DumpOS);
+        llvm::raw_ostream *Z3Out = DumpLayers & LayerZ3 ? DumpOS : nullptr;
+        VerifyResult Lowered = Z3Lowering.lowerMachine(M, Z3Out);
+        if (Lowered.Status != VerifyStatus::Verified) {
+          AllOk = false;
+          AnyFailed = true;
+          std::string Message = "Z3 lowering failed: " + Fn->Name;
+          if (!Lowered.Message.empty())
+            Message += " (" + Lowered.Message + ")";
+          Diags.push_back({VerifyDiagnostic::Error, std::move(Message)});
+          continue;
+        }
       }
       if (DumpLayers)
         DumpOS->flush();
+
+      if (Opts.LowerOnly) {
+        Diags.push_back({VerifyDiagnostic::Lowered, Fn->Name});
+        continue;
+      }
 
       if (Opts.Backend == BackendKind::Lean) {
         VerifyResult R;
@@ -294,7 +336,7 @@ public:
       }
     }
 
-    if (AnyFailed && Opts.Backend == BackendKind::Z3) {
+    if (AnyFailed && !Opts.LowerOnly && Opts.Backend == BackendKind::Z3) {
       auto Z3 = createVerifyBackend(BackendKind::Z3, nullptr, 0,
                                     Opts.SolverTimeoutMs);
       for (const auto &Fn : Functions) {
@@ -313,6 +355,9 @@ public:
       switch (D.K) {
       case VerifyDiagnostic::Verified:
         OS << "Verified: " << D.Message << "\n";
+        break;
+      case VerifyDiagnostic::Lowered:
+        OS << "Lowered: " << D.Message << "\n";
         break;
       case VerifyDiagnostic::Error:
         OS << "error: " << D.Message << "\n";

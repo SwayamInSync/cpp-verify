@@ -42,6 +42,8 @@ class Z3Encoder {
   z3::expr encodeVCNode(const VCExpr *E,
                         const std::map<const VCExpr *, z3::expr> &Done);
   z3::expr encodeVC(const VCExpr *E);
+  std::optional<z3::expr> encodeMachine(const VCMachine &M,
+                                        VerifyResult &Result);
   z3::expr encodeVExprForAxiom(const VExpr *E, const VType &RetTy,
                                VIntMode SpecMode);
 
@@ -49,8 +51,9 @@ public:
   Z3Encoder();
   void setTimeoutMs(unsigned Ms) { TimeoutMs = Ms; }
   VerifyResult verifyMachine(const VCMachine &M);
+  VerifyResult lowerMachine(const VCMachine &M,
+                            llvm::raw_ostream *OS = nullptr);
   void emitSpecCallAxiom(const VCExpr *Call, const SpecAxiomContext &Ctx);
-  void dumpVC(const VCExpr *E, llvm::raw_ostream &OS);
 };
 
 class Z3VerifyBackend : public VerifyBackend {

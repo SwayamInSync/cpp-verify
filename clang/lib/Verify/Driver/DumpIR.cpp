@@ -329,5 +329,5 @@ void verify::dumpZ3(const VExpr *VC, llvm::raw_ostream &OS) {
       VCMachine::fromVExpr(VC, "__result_0", std::string(VHeapName) + "_0");
   Z3Encoder Enc;
   if (M.Goal)
-    Enc.dumpVC(M.Goal.get(), OS);
+    Enc.lowerMachine(M, &OS);
 }

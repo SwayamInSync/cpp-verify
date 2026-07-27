@@ -726,7 +726,8 @@ void Z3Encoder::emitSpecCallAxiom(const VCExpr *Call,
   }
 }
 
-VerifyResult Z3Encoder::verifyMachine(const VCMachine &M) {
+std::optional<z3::expr> Z3Encoder::encodeMachine(const VCMachine &M,
+                                                 VerifyResult &Result) {
   Vars.clear();
   Solver = containsQuantifier(M.Goal.get()) ? z3::tactic(Ctx, "smt").mk_solver()
                                             : z3::solver(Ctx);
@@ -740,11 +741,10 @@ VerifyResult Z3Encoder::verifyMachine(const VCMachine &M) {
   EncodingError.clear();
   SpecFunctions = M.SpecFunctions;
   CallerIntMode = M.CallerIntMode;
-  VerifyResult Out;
   if (!M.Goal) {
-    Out.Status = VerifyStatus::Unknown;
-    Out.Message = "missing verification condition";
-    return Out;
+    Result.Status = VerifyStatus::Unknown;
+    Result.Message = "missing verification condition";
+    return std::nullopt;
   }
   SpecAxiomContext AxiomCtx{M.SpecFunctions, M.SpecFuel, M.HiddenSpecs,
                             M.RevealedSpecs, M.CallerIntMode};
@@ -752,11 +752,19 @@ VerifyResult Z3Encoder::verifyMachine(const VCMachine &M) {
   Vars.clear();
   z3::expr EncodedGoal = encodeVC(M.Goal.get());
   if (EncodingFailed) {
-    Out.Status = VerifyStatus::Unknown;
-    Out.Message = EncodingError;
-    return Out;
+    Result.Status = VerifyStatus::Unknown;
+    Result.Message = EncodingError;
+    return std::nullopt;
   }
-  Solver.add(EncodedGoal);
+  return EncodedGoal;
+}
+
+VerifyResult Z3Encoder::verifyMachine(const VCMachine &M) {
+  VerifyResult Out;
+  auto EncodedGoal = encodeMachine(M, Out);
+  if (!EncodedGoal)
+    return Out;
+  Solver.add(*EncodedGoal);
   switch (Solver.check()) {
   case z3::unsat:
     Out.Status = VerifyStatus::Verified;
@@ -777,9 +785,16 @@ VerifyResult Z3Encoder::verifyMachine(const VCMachine &M) {
   }
 }
 
-void Z3Encoder::dumpVC(const VCExpr *E, llvm::raw_ostream &OS) {
-  Z3Encoder Tmp;
-  OS << Tmp.encodeVC(E).to_string() << "\n";
+VerifyResult Z3Encoder::lowerMachine(const VCMachine &M,
+                                     llvm::raw_ostream *OS) {
+  VerifyResult Out;
+  auto EncodedGoal = encodeMachine(M, Out);
+  if (!EncodedGoal)
+    return Out;
+  if (OS)
+    *OS << EncodedGoal->to_string() << "\n";
+  Out.Status = VerifyStatus::Verified;
+  return Out;
 }
 
 VerifyResult Z3VerifyBackend::verifyPassive(const PassiveProgram &P) {

@@ -26,6 +26,11 @@ static cl::opt<std::string>
            cl::value_desc("layers"), cl::ValueOptional,
            cl::cat(CppVerifyCategory));
 
+static cl::opt<bool> LowerOnly(
+    "lower-only",
+    cl::desc("Run through backend encoding without checking satisfiability"),
+    cl::init(false), cl::cat(CppVerifyCategory));
+
 static cl::opt<std::string> BackendOpt(
     "backend", cl::desc("Verification backend: z3 (default), lean, bmc"),
     cl::value_desc("name"), cl::init("z3"), cl::cat(CppVerifyCategory));
@@ -63,6 +68,7 @@ public:
       verify::VerifyOptions VOpts;
       if (DumpIR.getNumOccurrences() > 0)
         VOpts.DumpIRLayers = verify::parseDumpIRLayers(DumpIR.getValue());
+      VOpts.LowerOnly = LowerOnly.getValue();
       llvm::StringRef B = BackendOpt.getValue();
       if (B == "lean")
         VOpts.Backend = verify::BackendKind::Lean;
