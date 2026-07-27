@@ -40,7 +40,7 @@ Backends
        expression definedness (overflow, division, shifts, and dereferences)
        is always checked. See :doc:`integers` and :doc:`pointers`.
    * - ``--timeout=N``
-     - Per-query Z3 timeout in milliseconds (default 10000; ``0`` disables). A query
+     - Per-query Z3 timeout in milliseconds (default 30000; ``0`` disables). A query
        that exceeds it is reported as ``unknown`` instead of hanging.
 
 Supported compiler

@@ -41,7 +41,7 @@ Other flags
 - ``cpp-verify --check-ub`` — add ``valid(p, n)`` buffer-bounds checks to
   always-on core definedness (see :doc:`ch18-undefined-behavior`)
 - ``cpp-verify --unroll=N`` — loop bound for BMC
-- ``cpp-verify --timeout=N`` — per-query Z3 timeout in ms (default 10000)
+- ``cpp-verify --timeout=N`` — per-query Z3 timeout in ms (default 30000)
 - ``cpp-verify --dump-ir[=1,2,3,4]`` — dump VCR / passive / VC / Z3 layers
 
 IR layers
