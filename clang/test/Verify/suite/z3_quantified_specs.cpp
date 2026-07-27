@@ -1,5 +1,6 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: %cpp-verify --lower-only --timeout=1 %s 2>&1 | FileCheck %s --check-prefix=LOWER
 
 spec int bump(int x) {
   return x + 1;
@@ -77,3 +78,14 @@ int invalid_quantifier_capture(int n)
 // VERIFY-DAG: Verified: valid_quantified_recursive_spec
 // VERIFY-DAG: error: verification failed: invalid_quantified_spec
 // VERIFY-DAG: error: verification failed: invalid_quantifier_capture
+
+// LOWER-DAG: Lowered: spec decreases: countdown
+// LOWER-DAG: Lowered: valid_quantified_nonrecursive_spec
+// LOWER-DAG: Lowered: valid_nested_quantified_bound
+// LOWER-DAG: Lowered: valid_quantified_binder_shadowing
+// LOWER-DAG: Lowered: valid_quantified_recursive_spec
+// LOWER-DAG: Lowered: invalid_quantified_spec
+// LOWER-DAG: Lowered: invalid_quantifier_capture
+// LOWER-NOT: Verified:
+// LOWER-NOT: error:
+// LOWER-NOT: unknown:
