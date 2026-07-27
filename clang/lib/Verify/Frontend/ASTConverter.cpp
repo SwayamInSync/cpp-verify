@@ -2796,8 +2796,34 @@ std::vector<std::unique_ptr<VStmt>> ASTConverter::convertStmt(const Stmt *S) {
       }
       if (VD->getType()->isPointerType() &&
           referencesDynamicPointer(VD->getInit())) {
-        Errors.push_back(CurrentFn->Name +
-                         ": copying a dynamic-storage pointer is unsupported");
+        const VarDecl *Source = directDynamicPointer(VD->getInit());
+        if (!Source) {
+          Errors.push_back(
+              CurrentFn->Name +
+              ": dynamic-storage pointer copies require a direct source");
+          continue;
+        }
+        if (!Ctx.hasSameUnqualifiedType(VD->getType()->getPointeeType(),
+                                        Source->getType()->getPointeeType())) {
+          Errors.push_back(CurrentFn->Name + ": dynamic-storage pointer copies "
+                                             "require matching pointee types");
+          continue;
+        }
+        auto Identity = DynamicPointerIdentities.find(Source);
+        if (Identity == DynamicPointerIdentities.end()) {
+          Errors.push_back(
+              CurrentFn->Name +
+              ": dynamic-storage pointer has no lifetime identity");
+          continue;
+        }
+        auto Value = convertExpr(VD->getInit());
+        if (!Value)
+          continue;
+        Out.push_back(std::make_unique<VAssignStmt>(
+            valueName(VD), std::move(Value), VD->getBeginLoc()));
+        DynamicPointers.insert(VD);
+        DynamicPointerIdentities.emplace(VD, Identity->second);
+        markInitialized(VD);
         continue;
       }
       if (const auto *CE = dyn_cast<CXXConstructExpr>(VD->getInit())) {

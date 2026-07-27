@@ -1518,10 +1518,7 @@ public:
                   std::make_unique<VHeapStoreExpr>(
                       OldHeap, NewHeap, std::move(Ptr), std::move(Val), St.Loc),
                   Active.get(), St.Loc);
-      const VExpr *StoredBase = pointerBase(St.Ptr.get());
-      if (StoredBase && StoredBase->K == VExpr::Var &&
-          OwnedAllocationTargets.count(
-              static_cast<const VVarExpr *>(StoredBase)->Name))
+      if (!allocationIdentityForPointer(St.Ptr.get()).empty())
         updateHeap(P, Renames, VInitializationHeapName,
                    cloneExpr(St.Ptr.get(), Ctx), makeBoolLiteral(true, St.Loc),
                    Active.get(), St.Loc);
