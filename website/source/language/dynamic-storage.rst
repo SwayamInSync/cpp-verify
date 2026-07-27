@@ -100,6 +100,45 @@ A direct, type-preserving local pointer copy carries the same identity:
 Deleting through either name ends the shared lifetime. Every alias then becomes
 dangling, so dereferencing ``owner`` after ``delete alias`` is rejected.
 
+Contracted scalar callees
+-------------------------
+
+A live initialized allocation pointer may cross one modular boundary when the
+callee is a verified in-translation-unit executable function with a direct,
+matching-typed pointer parameter. The callee may compare or directly
+dereference that parameter, and may write it under ``modifies(*p)``:
+
+.. code-block:: cpp
+
+   void write_value(int *target, int value)
+     pre(target != nullptr)
+     modifies(*target)
+     post(*target == value)
+   {
+     *target = value;
+   }
+
+   int modular_write(int value) post(result == value) {
+     int *p = new int(0);
+     write_value(p, value);
+     int observed = *p;
+     delete p;
+     return observed;
+   }
+
+The caller substitutes the allocation's lifetime identity into the callee
+precondition, so stale and uninitialized arguments fail at the call site.
+Owned dynamic storage also satisfies the caller-side frame containment check.
+
+This is deliberately a **scalar** interface. A callee receiving a dynamic
+pointer may not offset, subscript, copy, forward, return, or deallocate it.
+Nested executable/spec calls and ghost use of the pointer are also rejected.
+Pointer-returning callees, proof functions, and body-less external contract
+interfaces are rejected because their provenance/lifetime effects cannot yet
+be represented.
+Ordinary modular heap framing still applies: a read helper that must return the
+entry value should state ``post(result == old(*p))``.
+
 Consequently, all of these are rejected:
 
 .. code-block:: cpp
@@ -133,10 +172,11 @@ Dynamic pointers are intentionally local and non-escaping in this checkpoint.
 The direct allocation variable and direct local aliases with the same
 unqualified pointee type may be dereferenced, stored through when the C++ type
 permits, compared for equality, converted to ``bool``, and passed to scalar
-``delete``. Pointer reassignment, conditional or type-erasing copies, return,
-function-call crossing, arithmetic, subscripting, and aggregate storage remain
-unsupported. Functions that allocate cannot yet also accept pointer parameters,
-and allocation/deallocation inside loop bodies is rejected.
+``delete``. They may enter the restricted verified scalar callee boundary
+above. Pointer reassignment, conditional or type-erasing copies, return,
+general/spec/external call crossing, arithmetic, subscripting, and aggregate
+storage remain unsupported. Functions that allocate cannot yet also accept
+pointer parameters, and allocation/deallocation inside loop bodies is rejected.
 
 Also unsupported are ``new[]``/``delete[]``, nothrow or placement allocation,
 non-scalar objects and destructors, modular allocation-returning functions,

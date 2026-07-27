@@ -36,6 +36,12 @@ Use in contracts:
 
 Call from ``ghost { ... }`` blocks in executable functions.
 
+Proof functions are isolated from runtime state: they may update local proof
+variables, but cannot write pointees/globals or call executable functions.
+Every proof-only loop needs ``decreases``. The same erased-state rules apply to
+inline ``ghost`` blocks, which also cannot return from their executable
+enclosing function.
+
 Soft preconditions (``recommends``)
 -----------------------------------
 

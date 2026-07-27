@@ -39,6 +39,12 @@ that must not appear in compiled binaries.
 **Zero runtime cost** is non-negotiable for production verification: CppVerify strips ghost
 constructs in CodeGen (Part II).
 
+Erasure also imposes an isolation rule: ghost code may update only ghost-local
+variables and their direct fields. It cannot mutate executable locals, global
+state, or pointees; call executable functions; or return from the enclosing
+function. Ghost loops require a termination measure, so an erased infinite
+loop cannot suppress runtime code only in the verifier.
+
 Axioms vs executable definitions
 --------------------------------
 
@@ -46,6 +52,8 @@ Axioms vs executable definitions
 Their bodies are **definitions** for the verifier, not instructions the CPU runs.
 
 **Proof** functions are ghost programs whose only job is to establish ``pre ==> post``.
+They can mutate local proof state and call other proof functions, but cannot
+write executable memory or invoke executable functions.
 
 Opacity and fuel
 ----------------
@@ -60,4 +68,3 @@ unfold them only as far as a proof needs:
 
 This is a knob on *automation*, not on truth: revealing more never changes what is provable, only how
 hard the solver works. Part II maps these to ``reveal_with_fuel``, ``reveal``, and ``hide``.
-

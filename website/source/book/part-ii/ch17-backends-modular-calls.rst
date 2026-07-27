@@ -56,6 +56,13 @@ Chained calls in one expression are supported by lowering inner calls to tempora
 The converter emits ``VCallStmt`` for each exec call site; passivization substitutes callee contracts
 in order. Spec and proof functions are not emitted at runtime and are handled by inlining or axioms.
 
+By-value parameters have separate entry and final meanings when the callee
+reassigns them. Preconditions and ``old(parameter)`` substitute the caller's
+argument. A plain parameter occurrence in the postcondition uses a fresh final
+callee-local value when that formal was modified, so ``post(p == nullptr)``
+after rebinding a local pointer cannot contradict the caller's non-null
+argument.
+
 Calls also enforce the caller's frame in its **entry state**. Exact footprints
 (``p[i]``, ``p->field``) freshen only those addresses. A region footprint
 (``*p``), or a pointer-taking declaration with no explicit footprint, freshens
@@ -65,6 +72,14 @@ caller may rely on. This conservative boundary prevents offset writes from
 masquerading as preservation of unrelated memory. Functions that perform
 dynamic allocation or deallocation are currently verified only as standalone
 bodies; calls to them fail closed until lifetime effects have contract syntax.
+
+A caller-owned dynamic scalar may be passed in the other direction to a
+verified, non-allocating executable callee. Its direct matching pointer
+parameter may be compared or dereferenced, including a write authorized by
+``modifies(*p)``. The call substitutes the caller's lifetime identity into
+validity checks and accepts the footprint as owned storage. Offset/subscript
+access, pointer copying/forwarding/return, nested executable/spec calls, ghost
+use, proof/external contracts, and pointer-returning callees fail closed.
 
 Z3 result discipline
 --------------------

@@ -10,6 +10,14 @@ Ghost statements
 - ``reveal(f)`` / ``hide(f)`` — make spec ``f`` transparent / opaque for the rest of the
   enclosing function (ghost blocks only)
 
+Because a ghost block is erased, it cannot change anything observed by the
+compiled program. Assignments are limited to variables declared inside ghost
+code (including their direct ``.field`` members). Writes through pointers,
+references to global state, calls to executable functions, and ``return`` from
+the enclosing function are rejected. A loop in ghost code must carry a
+``decreases`` clause so nontermination cannot make the executable continuation
+unreachable only in the proof model.
+
 Spec and proof functions
 ------------------------
 
@@ -18,6 +26,10 @@ Spec and proof functions
 - ``spec`` integers are **mathematical** (unbounded ``Int``); ``proof`` integers are machine.
 - ``recommends(expr)`` (``spec`` only) is a **soft** precondition: it does not generate call-site
   obligations, but the verifier warns when a call may not satisfy it.
+
+Proof functions may update their own local values and call other proof
+functions, but cannot write executable memory/global state or call executable
+functions. Their loops require ``decreases`` just like recursive proof calls.
 
 .. code-block:: cpp
 

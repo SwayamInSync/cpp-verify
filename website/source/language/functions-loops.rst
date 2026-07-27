@@ -29,6 +29,12 @@ expressions.  Once a ``constexpr`` function has executable ``pre``/``post``
 clauses, it remains a modular executable function: calls must satisfy its
 preconditions and cannot be used as pure contract expressions.
 
+At a modular call, preconditions and ``old(parameter)`` use the argument's
+entry value. If a by-value parameter is reassigned inside the callee, an
+unwrapped occurrence of that parameter in a postcondition denotes its final
+local value, not the caller's unchanged argument. The call summary therefore
+uses a fresh final value for each syntactically modified parameter.
+
 Loops
 -----
 
@@ -60,6 +66,10 @@ obligations:
    * - Termination
      - ``0 <= D_new < D_old`` each iteration. Only checked when ``decreases`` is
        present; without it the loop is verified for **partial correctness**.
+
+Ghost-block and proof-function loops are erased at runtime and therefore must
+include ``decreases``; partial-correctness nontermination cannot be used as a
+proof step.
 
 After the loop the verifier knows exactly ``I && !c`` — anything needed
 downstream must be captured by the invariant.

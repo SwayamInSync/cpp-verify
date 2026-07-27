@@ -107,6 +107,43 @@ The store initializes the shared object, and deletion through ``alias`` ends
 the lifetime observed through ``owner`` too. A second deletion or later
 dereference through either name is rejected.
 
+Calling a scalar helper
+-----------------------
+
+Lifetime identity can be substituted into a verified modular callee when its
+matching pointer parameter is used only for direct scalar access:
+
+.. code-block:: cpp
+
+   void set_value(int *target, int value)
+     pre(target != nullptr)
+     modifies(*target)
+     post(*target == value)
+   {
+     *target = value;
+   }
+
+   int through_helper(int value) post(result == value) {
+     int *p = new int(0);
+     set_value(p, value);
+     int answer = *p;
+     delete p;
+     return answer;
+   }
+
+The call asserts the callee preconditions against the current allocation and
+uses the usual ``modifies``/postcondition abstraction for the value heap.
+Metadata ownership and liveness stay with the caller. This catches passing an
+uninitialized object to a reader, passing a dangling pointer, and violating a
+callee's implicit non-aliasing precondition.
+
+The callee must have a verified body and a non-pointer return, and cannot
+offset, subscript, copy, forward, return, or delete the dynamic pointer.
+Nested executable/spec calls, ghost access, proof functions, and external
+contract interfaces are excluded from this boundary.
+Without these restrictions, a scalar allocation could be treated as a buffer
+or its identity could be lost at the modular boundary.
+
 Failures are path-sensitive
 ---------------------------
 
@@ -130,9 +167,10 @@ Why the surface is intentionally narrow
 The current checkpoint permits a direct local allocation pointer and
 matching-typed direct local aliases to be loaded, stored through, compared for
 equality, converted to ``bool``, and deleted. Reassignment, conditional or
-type-erasing copies, return, calls, pointer arithmetic, arrays,
-placement/nothrow allocation, records, and allocation in a loop body are
-rejected.
+type-erasing copies, return, general/spec/external calls, pointer arithmetic,
+arrays, placement/nothrow allocation, records, and allocation in a loop body
+are rejected. The restricted verified scalar callee above is the only current
+call boundary.
 
 Those restrictions are not parser shortcuts. Copies and modular calls require
 provenance to travel with pointer values; arrays require element/subobject

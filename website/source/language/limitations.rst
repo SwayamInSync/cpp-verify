@@ -12,10 +12,12 @@ The following are outside the verified subset, in priority order:
 #. **General object provenance and lifetime.** Direct, non-escaping local
    scalar ``new``/``delete`` now has concrete byte ownership, liveness,
    size/alignment, initialization tracking, and direct type-preserving local
-   aliases. Provenance through reassignment, conditional/type-erasing copies,
-   returns, calls, and aggregates; arrays; placement/nothrow allocation;
-   non-trivial construction/destruction; subobject lifetime changes; and strict
-   aliasing are not modeled.
+   aliases. A verified modular callee may directly access a matching scalar
+   pointer parameter, but provenance through reassignment,
+   conditional/type-erasing copies, returns, forwarding/nested calls, external
+   contracts, and aggregates; arrays; placement/nothrow allocation; non-trivial
+   construction/destruction; subobject lifetime changes; and strict aliasing
+   are not modeled.
    Parameter-pointer ``valid(p, n)`` remains an abstract caller promise rather
    than evidence derived from a concrete allocation.
 #. **Addressable references and pointer-bearing aggregates.** References,
@@ -62,10 +64,12 @@ counterexample or conservative ``unknown``. Only ``Verified`` means Z3 proved
 the generated obligation unsatisfiable.
 
 At modular calls, ``modifies(*p)`` is a region footprint. Local dynamic
-allocation identities do not yet cross a modular call, so the caller
-conservatively forgets the whole value heap. Exact footprints such as
-``modifies(p[i])`` and ``modifies(p->field)`` preserve all other addresses.
-This may require stronger postconditions, but avoids unsound frame facts.
+allocation identities cross only the restricted direct-scalar boundary
+described in :doc:`dynamic-storage`; there, caller-owned storage authorizes the
+footprint. Other parameter-pointer calls conservatively forget the whole value
+heap. Exact footprints such as ``modifies(p[i])`` and
+``modifies(p->field)`` preserve all other addresses. This may require stronger
+postconditions, but avoids unsound frame facts.
 
 Undefined-behavior checking
 ---------------------------

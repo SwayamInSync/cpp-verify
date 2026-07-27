@@ -130,8 +130,10 @@ allocations, and uninitialized reads:
 Its identity may be propagated through a direct, matching-typed local pointer
 copy. Deleting through either alias invalidates both. Conditional/type-erasing
 copies, pointer reassignment, return, calls, arithmetic, and allocation/free in
-a loop body remain unsupported. See :doc:`dynamic-storage` for the complete
-boundary.
+a loop body remain unsupported. A restricted exception admits direct scalar
+access through a matching pointer parameter of a verified, non-allocating,
+non-pointer-returning executable callee; provenance and liveness remain owned
+by the caller. See :doc:`dynamic-storage` for the complete boundary.
 
 Buffer bounds with ``valid``
 ----------------------------
