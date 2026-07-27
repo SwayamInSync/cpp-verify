@@ -35,9 +35,10 @@ Backends
      - BMC loop bound only.
    * - ``--check-ub``
      - On the Z3 backend, additionally recognize ``valid(p, n)`` preconditions
-       as buffer extents and prove every indexed access is in bounds. Core
-       expression definedness (overflow, division, shifts, and dereferences) is
-       always checked. See :doc:`integers` and :doc:`pointers`.
+       as buffer extents and prove every indexed access is in bounds. Markers
+       must be positive top-level conjunction clauses on bare pointers. Core
+       expression definedness (overflow, division, shifts, and dereferences)
+       is always checked. See :doc:`integers` and :doc:`pointers`.
    * - ``--timeout=N``
      - Per-query Z3 timeout in milliseconds (default 10000; ``0`` disables). A query
        that exceeds it is reported as ``unknown`` instead of hanging.

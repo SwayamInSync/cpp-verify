@@ -114,6 +114,13 @@ whose base is ``p`` carries the obligation ``0 <= i < n``:
 The marker also entails ``n >= 0``. For ``n > 0``, ``p`` must be non-null and
 abstractly valid; ``n == 0`` permits null. This prevents a contradictory
 negative extent or a nonempty null buffer from becoming a proof assumption.
+Typed pointer offsets are scaled to target bytes using ``sizeof(T)`` while this
+obligation remains the half-open element bound ``0 <= i < n``.
+
+For sound discovery, ``valid(p, n)`` must be a positive top-level conjunction
+clause, ``p`` must be the bare complete-object pointer, and each pointer may
+have only one marker. Shifted, disjunctive, conditional, or duplicate markers
+are rejected instead of being interpreted as unconditional extents.
 
 Inside a loop the bound is discharged the same way an invariant is — a fill or
 copy loop is proven memory-safe from its guard and invariant. An access through a

@@ -37,17 +37,14 @@ disjointness facts should use **bounded** indices — an unbounded pure-disequal
 the project :doc:`../book/part-ii/ch17-backends-modular-calls` and design notes in the repo
 ``docs/`` tree.
 
-The heap currently uses flat mathematical addresses. Scalar buffer arithmetic
-and target-layout record fields are covered by regressions, but there is not yet
-an allocation/provenance object that unifies every cross-object and subobject
-relationship. Code that depends on pointer reinterpretation or on arithmetic
-across distinct objects is therefore outside the verified subset.
-
-In particular, the current VCR uses logical element offsets for scalar
-subscripts while record fields retain target byte-layout offsets. Do not mix
-record-pointer arithmetic with field addressing and treat the result as a
-faithful C++ object-layout proof. Unifying those units behind typed object
-provenance is the next soundness checkpoint.
+The heap uses flat mathematical **target-byte addresses**. Typed ``T*``
+arithmetic scales every element step by Clang's target ``sizeof(T)``, while
+record fields use Clang's byte layout offset. Scalar, byte-sized, and
+flat-record strides are covered by false-proof regressions. There is not yet an
+allocation/provenance object that relates arbitrary cross-object and subobject
+operations, however. Pointer subtraction is therefore rejected, and code that
+depends on pointer reinterpretation or arithmetic across distinct allocations
+remains outside the verified subset.
 
 Fail-closed behavior and solver incompleteness
 ----------------------------------------------
@@ -81,3 +78,8 @@ extent is declared with ``valid(p, n)`` in a precondition, and every ``p[i]`` /
 uninitialized heap storage and use-after-lifetime are not checked because the
 heap does not yet track allocation state. The layering plan is in
 ``docs/UB-CHECKING.md``.
+
+The marker must be a positive top-level conjunction clause, its first argument
+must be the bare complete-object pointer, and only one marker may describe a
+given pointer. Unsupported shifted, conditional, disjunctive, or duplicate
+markers are errors rather than silently strengthened assumptions.

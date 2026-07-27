@@ -28,9 +28,11 @@ Buffers and arrays
 ------------------
 
 Pointer arithmetic (``*(p + i)``) and subscripting (``p[i]``) read and write
-indexed heap locations. The heap maps addresses to values, so distinct indices
-are distinct cells: a store to ``p[k]`` leaves ``p[i]`` alone whenever ``i != k``.
-``modifies(*p)`` frames the whole region reachable through ``p``.
+indexed heap locations. The heap uses target-byte addresses: a ``T*`` element
+step is multiplied by Clang's target ``sizeof(T)``, and a record field adds its
+target-layout byte offset. Distinct indices are distinct cells, so a store to
+``p[k]`` leaves ``p[i]`` alone whenever ``i != k``. ``modifies(*p)`` frames the
+whole region reachable through ``p``.
 
 There are two frame granularities:
 
@@ -112,12 +114,15 @@ extent meaning:
 
 ``valid(p, n)`` entails ``n >= 0``. If ``n > 0``, ``p`` must be non-null and
 abstractly valid; ``n == 0`` permits null. Every access based on ``p`` must prove
-that its index lies in ``[0, n)``. Without the option, dereference definedness is
-still mandatory, but no length is inferred.
+that its index lies in ``[0, n)``. The marker must be a positive top-level
+conjunction clause on the bare complete-object pointer, with at most one marker
+per pointer. Without the option, dereference definedness is still mandatory,
+but no length is inferred.
 
 This is an abstract interface promise. It is not yet connected to
 ``new``/``delete``, object lifetime, provenance, or alignment; those require the
-next-generation addressable-object model.
+next-generation addressable-object model. Pointer difference is rejected until
+that model can prove same-allocation provenance and return an element count.
 
 Type invariants
 ---------------

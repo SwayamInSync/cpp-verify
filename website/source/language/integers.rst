@@ -86,7 +86,9 @@ precondition and run the Z3 backend with ``--check-ub``; every recognized
 The marker itself requires ``n >= 0`` and, for a positive extent, a non-null
 abstractly valid pointer; extent zero permits null. A pointer with no ``valid``
 declaration is not bounds-checked, although ordinary dereference definedness
-still applies.
+still applies. Typed pointer steps are converted to target-byte offsets using
+``sizeof(T)``, but bounds remain half-open element bounds. The marker must be a
+positive top-level conjunction clause on the bare pointer.
 
 Concrete allocation extents, lifetime mutation, provenance, and alignment are
 not modeled yet; see :doc:`limitations`.

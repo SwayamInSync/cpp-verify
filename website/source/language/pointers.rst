@@ -22,10 +22,12 @@ Example:
 Buffers and array indexing
 --------------------------
 
-Pointer arithmetic and subscripting are supported: ``*(p + i)`` and ``p[i]`` (read
-and write) lower to indexed heap accesses. Distinct indices are distinct
-locations, so storing to ``p[k]`` leaves ``p[i]`` unchanged for ``i != k`` — the
-verifier gets this from array theory:
+Pointer arithmetic and subscripting are supported: ``*(p + i)`` and ``p[i]``
+(read and write) lower to indexed heap accesses. Addresses use target bytes, so
+each ``T*`` step is scaled by Clang's target ``sizeof(T)``; field selection adds
+the target record-layout byte offset. Distinct indices are therefore distinct
+locations, so storing to ``p[k]`` leaves ``p[i]`` unchanged for ``i != k`` —
+the verifier gets this from array theory:
 
 .. code-block:: cpp
 
@@ -99,6 +101,10 @@ disjointness facts should be bounded (as in real buffer code); an *unbounded*
 pure-disequality disjointness (``i != k`` with no range) may report ``unknown``
 (see :doc:`limitations`).
 
+``p - q`` is rejected until allocation identity can establish that both
+pointers belong to the same array and convert the byte difference back to an
+element count. Pointer compound assignment is also outside the current subset.
+
 Buffer bounds with ``valid``
 ----------------------------
 
@@ -116,7 +122,9 @@ Buffer bounds with ``valid``
 The marker means ``n >= 0``. A positive extent also means ``p`` is non-null and
 abstractly valid; an extent of zero permits null. Every ``p[i]`` or ``*(p + i)``
 access rooted at that parameter must then prove ``0 <= i < n``. The marker is
-discovered before its intentionally trivial body is inlined.
+discovered before its intentionally trivial body is inlined. It must occur as a
+positive top-level conjunction clause with a bare complete-object pointer, and
+each pointer may have only one marker; ambiguous forms fail closed.
 
 Without ``--check-ub``, dereferences must still be non-null and abstractly valid,
 but the verifier does not invent a buffer length. Allocation, lifetime,
