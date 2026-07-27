@@ -131,6 +131,7 @@ VFunction verify::cloneVFunction(const VFunction &Fn) {
   Out.RevealedSpecs = Fn.RevealedSpecs;
   Out.Params = Fn.Params;
   Out.ReturnFields = Fn.ReturnFields;
+  Out.ExplicitPreconditionCount = Fn.ExplicitPreconditionCount;
   for (const auto &P : Fn.Preconditions)
     Out.Preconditions.push_back(cloneVExpr(P.get()));
   for (const auto &P : Fn.Postconditions)

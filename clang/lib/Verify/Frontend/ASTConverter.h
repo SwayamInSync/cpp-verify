@@ -34,6 +34,7 @@ class ASTConverter {
   std::map<const FunctionDecl *, std::string> FunctionIdentities;
   std::set<const VarDecl *> DynamicPointers;
   std::map<const VarDecl *, std::string> DynamicPointerIdentities;
+  std::set<const VarDecl *> GhostLocals;
   unsigned DynamicAllocationId = 0;
   unsigned LoopDepth = 0;
 
@@ -55,7 +56,7 @@ private:
   void convertExecCallArgs(const CallExpr *CE,
                            std::vector<std::unique_ptr<VStmt>> &Prelude,
                            std::vector<std::unique_ptr<VExpr>> &Args);
-  void convertExecCallArg(const Expr *E,
+  void convertExecCallArg(const Expr *E, const ParmVarDecl *Formal,
                           std::vector<std::unique_ptr<VStmt>> &Prelude,
                           std::unique_ptr<VExpr> &Out);
   std::unique_ptr<VExpr> convertCallResultValue(std::string Name,
@@ -94,6 +95,7 @@ private:
   void markInitialized(const ValueDecl *D, const FieldDecl *Field = nullptr);
   bool referencesDynamicPointer(const Expr *E) const;
   const VarDecl *directDynamicPointer(const Expr *E) const;
+  bool ghostAssignmentAllowed(const Expr *E) const;
 };
 
 } // namespace verify

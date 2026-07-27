@@ -7,6 +7,20 @@
 using namespace clang;
 using namespace verify;
 
+static std::string allocationIdentityForPointer(const VExpr *E) {
+  while (E && E->K == VExpr::Cast)
+    E = static_cast<const VCastExpr *>(E)->Inner.get();
+  if (E && E->K == VExpr::BinOp) {
+    const auto *B = static_cast<const VBinOpExpr *>(E);
+    if ((B->Op == VBinOp::Add || B->Op == VBinOp::Sub) &&
+        B->Lhs->Ty.Kind == VTypeKind::Ptr)
+      return allocationIdentityForPointer(B->Lhs.get());
+  }
+  if (!E || E->K != VExpr::Var)
+    return "";
+  return static_cast<const VVarExpr *>(E)->AllocationIdentity;
+}
+
 static std::unique_ptr<VCExpr> vcTrue() {
   return std::make_unique<VCExpr>(VCExpr::True);
 }
@@ -431,15 +445,13 @@ public:
                                                    VType::makePtr(), U->Loc,
                                                    U->AllocationHeapVar);
           std::unique_ptr<VExpr> HasOwner;
-          if (U->Operand->K == VExpr::Var &&
-              !static_cast<const VVarExpr *>(U->Operand.get())
-                   ->AllocationIdentity.empty()) {
+          const std::string AllocationIdentity =
+              allocationIdentityForPointer(U->Operand.get());
+          if (!AllocationIdentity.empty()) {
             HasOwner = std::make_unique<VBinOpExpr>(
                 VBinOp::Eq, cloneVExpr(Owner.get()),
-                std::make_unique<VLiteralExpr>(
-                    static_cast<const VVarExpr *>(U->Operand.get())
-                        ->AllocationIdentity,
-                    VType::makePtr(), U->Loc),
+                std::make_unique<VLiteralExpr>(AllocationIdentity,
+                                               VType::makePtr(), U->Loc),
                 VType::makeBool(), U->Loc);
           } else {
             HasOwner = std::make_unique<VBinOpExpr>(

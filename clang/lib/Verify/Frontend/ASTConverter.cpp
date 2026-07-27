@@ -392,12 +392,29 @@ const VarDecl *ASTConverter::directDynamicPointer(const Expr *E) const {
   return VD && DynamicPointers.count(VD) ? VD : nullptr;
 }
 
+bool ASTConverter::ghostAssignmentAllowed(const Expr *E) const {
+  if (!InGhost)
+    return true;
+  if (!E)
+    return false;
+  E = E->IgnoreParenImpCasts();
+  while (const auto *M = dyn_cast<MemberExpr>(E)) {
+    if (M->isArrow())
+      return false;
+    E = M->getBase()->IgnoreParenImpCasts();
+  }
+  const auto *DRE = dyn_cast<DeclRefExpr>(E);
+  const auto *VD = DRE ? dyn_cast<VarDecl>(DRE->getDecl()) : nullptr;
+  return VD && GhostLocals.count(VD);
+}
+
 void ASTConverter::beginInitializationTracking(const FunctionDecl *FD) {
   DeclaredValueNames.clear();
   InitializedValues.clear();
   ReportedUninitializedValues.clear();
   DynamicPointers.clear();
   DynamicPointerIdentities.clear();
+  GhostLocals.clear();
   DynamicAllocationId = 0;
   LoopDepth = 0;
   InitializationPathReachable = true;
@@ -969,6 +986,8 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     if (PE)
       Fn->Preconditions.push_back(std::move(PE));
   }
+  Fn->ExplicitPreconditionCount =
+      static_cast<unsigned>(Fn->Preconditions.size());
   InPost = true;
   for (const Expr *E : FCI->Postconditions) {
     std::unique_ptr<VExpr> PE;
@@ -1674,6 +1693,11 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
     if (const auto *DRE =
             dyn_cast<DeclRefExpr>(M->getBase()->IgnoreParenImpCasts())) {
       if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
+        if (!VD->isLocalVarDeclOrParm()) {
+          Errors.push_back(CurrentFn->Name +
+                           ": global aggregate access is unsupported");
+          return nullptr;
+        }
         if (const auto *FD = dyn_cast<FieldDecl>(M->getMemberDecl())) {
           requireInitialized(VD, FD);
           VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
@@ -1816,18 +1840,25 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
 }
 
 void ASTConverter::convertExecCallArg(
-    const Expr *E, std::vector<std::unique_ptr<VStmt>> &Prelude,
-    std::unique_ptr<VExpr> &Out) {
+    const Expr *E, const ParmVarDecl *Formal,
+    std::vector<std::unique_ptr<VStmt>> &Prelude, std::unique_ptr<VExpr> &Out) {
   if (!E) {
     Out = nullptr;
     return;
   }
-  if (referencesDynamicPointer(E)) {
-    Errors.push_back(CurrentFn->Name +
-                     ": dynamic-storage pointers cannot cross a function-call "
-                     "boundary");
-    Out = nullptr;
-    return;
+  const VarDecl *Source = directDynamicPointer(E);
+  if (Source ||
+      (referencesDynamicPointer(E) && E->getType()->isPointerType())) {
+    if (!Source || !Formal || !Formal->getType()->isPointerType() ||
+        !Ctx.hasSameUnqualifiedType(Formal->getType()->getPointeeType(),
+                                    Source->getType()->getPointeeType())) {
+      Errors.push_back(
+          CurrentFn->Name +
+          ": dynamic-storage pointer arguments require matching direct pointer "
+          "parameters");
+      Out = nullptr;
+      return;
+    }
   }
   const Expr *CallExprCandidate = E->IgnoreParenImpCasts();
   if (const auto *CE = dyn_cast<CallExpr>(CallExprCandidate)) {
@@ -1887,6 +1918,22 @@ void ASTConverter::convertExecCallArgs(
     return;
   const FunctionDecl *Callee = CE->getDirectCallee();
 
+  if ((InGhost || CurrentFn->IsProof) && Callee && !calleeIsProof(Callee)) {
+    Errors.push_back(CurrentFn->Name +
+                     ": proof-only code cannot call executable functions");
+    return;
+  }
+
+  if (Callee && Callee->getReturnType()->isPointerType())
+    for (const Expr *A : CE->arguments())
+      if (A->getType()->isPointerType() && referencesDynamicPointer(A)) {
+        Errors.push_back(
+            CurrentFn->Name +
+            ": dynamic-storage pointer arguments cannot call pointer-returning "
+            "functions");
+        return;
+      }
+
   auto IsModifyingCall = [&](const Expr *E) {
     const auto *Nested = dyn_cast<CallExpr>(E->IgnoreParenImpCasts());
     const FunctionDecl *NestedCallee =
@@ -1939,7 +1986,7 @@ void ASTConverter::convertExecCallArgs(
       appendRecordCallArgument(A, Formal, Args);
     } else {
       std::unique_ptr<VExpr> Arg;
-      convertExecCallArg(A, Prelude, Arg);
+      convertExecCallArg(A, Formal, Prelude, Arg);
       if (Arg)
         Args.push_back(std::move(Arg));
     }
@@ -2053,6 +2100,11 @@ void ASTConverter::appendAssignment(const Expr *LHS,
                                     std::vector<std::unique_ptr<VStmt>> &Out) {
   if (!LHS || !Value)
     return;
+  if (!ghostAssignmentAllowed(LHS)) {
+    Errors.push_back(CurrentFn->Name +
+                     ": ghost code cannot modify executable state");
+    return;
+  }
   LHS = LHS->IgnoreParenImpCasts();
 
   if (const auto *DRE = dyn_cast<DeclRefExpr>(LHS)) {
@@ -2077,6 +2129,11 @@ void ASTConverter::appendAssignment(const Expr *LHS,
 
   if (const auto *ME = dyn_cast<MemberExpr>(LHS)) {
     if (auto Address = convertArrowFieldAddress(ME)) {
+      if (CurrentFn->IsProof) {
+        Errors.push_back(CurrentFn->Name +
+                         ": proof functions cannot modify executable memory");
+        return;
+      }
       Out.push_back(std::make_unique<VStoreStmt>(std::move(Address),
                                                  std::move(Value), Loc));
       return;
@@ -2086,6 +2143,11 @@ void ASTConverter::appendAssignment(const Expr *LHS,
         dyn_cast<DeclRefExpr>(ME->getBase()->IgnoreParenImpCasts());
     const auto *VD = DRE ? dyn_cast<VarDecl>(DRE->getDecl()) : nullptr;
     if (FD && VD) {
+      if (!VD->isLocalVarDeclOrParm()) {
+        Errors.push_back(CurrentFn->Name +
+                         ": global aggregate assignment is unsupported");
+        return;
+      }
       Out.push_back(std::make_unique<VAssignStmt>(
           valueName(VD) + "." + FD->getNameAsString(), std::move(Value), Loc));
       markInitialized(VD, FD);
@@ -2095,6 +2157,11 @@ void ASTConverter::appendAssignment(const Expr *LHS,
 
   if (const auto *U = dyn_cast<UnaryOperator>(LHS)) {
     if (U->getOpcode() == UO_Deref) {
+      if (CurrentFn->IsProof) {
+        Errors.push_back(CurrentFn->Name +
+                         ": proof functions cannot modify executable memory");
+        return;
+      }
       if (referencesDynamicPointer(U->getSubExpr()) &&
           !directDynamicPointer(U->getSubExpr())) {
         Errors.push_back(CurrentFn->Name +
@@ -2112,6 +2179,11 @@ void ASTConverter::appendAssignment(const Expr *LHS,
   }
 
   if (const auto *AS = dyn_cast<ArraySubscriptExpr>(LHS)) {
+    if (CurrentFn->IsProof) {
+      Errors.push_back(CurrentFn->Name +
+                       ": proof functions cannot modify executable memory");
+      return;
+    }
     if (referencesDynamicPointer(AS)) {
       Errors.push_back(
           CurrentFn->Name +
@@ -2159,7 +2231,8 @@ bool ASTConverter::appendRecordCopy(const Expr *Source, const VarDecl *Target,
   const RecordDecl *TargetRecord = getRecordFromType(Target->getType());
   const RecordDecl *SourceRecord =
       SourceVar ? getRecordFromType(SourceVar->getType()) : nullptr;
-  if (!SourceVar || !TargetRecord || !SourceRecord ||
+  if (!SourceVar || !Target->isLocalVarDeclOrParm() ||
+      !SourceVar->isLocalVarDeclOrParm() || !TargetRecord || !SourceRecord ||
       !Ctx.hasSameUnqualifiedType(Target->getType(), SourceVar->getType()))
     return false;
   const RecordDecl *Definition = TargetRecord->getDefinition();
@@ -2221,6 +2294,11 @@ std::vector<std::unique_ptr<VStmt>> ASTConverter::convertStmt(const Stmt *S) {
     return Out;
   }
   if (S->getStmtClass() == Stmt::ReturnStmtClass) {
+    if (InGhost) {
+      Errors.push_back(CurrentFn->Name +
+                       ": ghost code cannot alter executable control flow");
+      return Out;
+    }
     const auto *RS = cast<ReturnStmt>(S);
     if (const Expr *RetE = RS->getRetValue()) {
       if (RetE->getType()->isPointerType() && referencesDynamicPointer(RetE)) {
@@ -2365,6 +2443,11 @@ std::vector<std::unique_ptr<VStmt>> ASTConverter::convertStmt(const Stmt *S) {
           Decreases.push_back(std::move(E));
       InContractExpression = SavedContract;
     }
+    if ((InGhost || CurrentFn->IsProof) && Decreases.empty()) {
+      Errors.push_back(CurrentFn->Name +
+                       ": proof-only loops require a decreases clause");
+      return Out;
+    }
     const std::set<std::string> Before = InitializedValues;
     const bool BeforeReachable = InitializationPathReachable;
     ++LoopDepth;
@@ -2409,6 +2492,11 @@ std::vector<std::unique_ptr<VStmt>> ASTConverter::convertStmt(const Stmt *S) {
           Decreases.push_back(std::move(E));
       InContractExpression = SavedContract;
     }
+    if ((InGhost || CurrentFn->IsProof) && Decreases.empty()) {
+      Errors.push_back(CurrentFn->Name +
+                       ": proof-only loops require a decreases clause");
+      return Out;
+    }
     const std::set<std::string> BeforeLoop = InitializedValues;
     const bool BeforeLoopReachable = InitializationPathReachable;
     ++LoopDepth;
@@ -2432,6 +2520,21 @@ std::vector<std::unique_ptr<VStmt>> ASTConverter::convertStmt(const Stmt *S) {
     if (OperatorCall->getOperator() == OO_Equal &&
         OperatorCall->getNumArgs() == 2 &&
         OperatorCall->getArg(0)->getType()->isRecordType()) {
+      const auto *Assignment =
+          dyn_cast_or_null<CXXMethodDecl>(OperatorCall->getDirectCallee());
+      if (!Assignment ||
+          (!Assignment->isCopyAssignmentOperator() &&
+           !Assignment->isMoveAssignmentOperator()) ||
+          !Assignment->isTrivial()) {
+        Errors.push_back(CurrentFn->Name +
+                         ": user-defined aggregate assignment is unsupported");
+        return Out;
+      }
+      if (!ghostAssignmentAllowed(OperatorCall->getArg(0))) {
+        Errors.push_back(CurrentFn->Name +
+                         ": ghost code cannot modify executable state");
+        return Out;
+      }
       const Expr *TargetExpr = OperatorCall->getArg(0)->IgnoreParenImpCasts();
       const auto *DRE = dyn_cast<DeclRefExpr>(TargetExpr);
       const auto *Target = DRE ? dyn_cast<VarDecl>(DRE->getDecl()) : nullptr;
@@ -2444,6 +2547,11 @@ std::vector<std::unique_ptr<VStmt>> ASTConverter::convertStmt(const Stmt *S) {
   }
   if (const auto *CE = dyn_cast<CallExpr>(S)) {
     if (const FunctionDecl *Callee = CE->getDirectCallee()) {
+      if ((InGhost || CurrentFn->IsProof) && !calleeIsProof(Callee)) {
+        Errors.push_back(CurrentFn->Name +
+                         ": proof-only code cannot call executable functions");
+        return Out;
+      }
       if (calleeIsSpec(Callee)) {
         Errors.push_back(CurrentFn->Name +
                          ": bare spec-call statement is unsupported");
@@ -2576,6 +2684,11 @@ std::vector<std::unique_ptr<VStmt>> ASTConverter::convertStmt(const Stmt *S) {
   }
   if (const auto *BO = dyn_cast<BinaryOperator>(S)) {
     if (BO->isAssignmentOp()) {
+      if (!ghostAssignmentAllowed(BO->getLHS())) {
+        Errors.push_back(CurrentFn->Name +
+                         ": ghost code cannot modify executable state");
+        return Out;
+      }
       if (const auto *DRE =
               dyn_cast<DeclRefExpr>(BO->getLHS()->IgnoreParenImpCasts()))
         if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl()))
@@ -2718,6 +2831,8 @@ std::vector<std::unique_ptr<VStmt>> ASTConverter::convertStmt(const Stmt *S) {
                          VD->getNameAsString());
         continue;
       }
+      if (InGhost)
+        GhostLocals.insert(VD);
       if (!VD->hasInit())
         continue;
       if (const auto *New =

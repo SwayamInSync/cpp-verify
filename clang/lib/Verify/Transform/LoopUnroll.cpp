@@ -98,6 +98,7 @@ VFunction LoopUnroller::unroll(const VFunction &Fn, unsigned K) {
   Out.UsesDynamicStorage = Fn.UsesDynamicStorage;
   Out.Params = Fn.Params;
   Out.ReturnFields = Fn.ReturnFields;
+  Out.ExplicitPreconditionCount = Fn.ExplicitPreconditionCount;
   for (const auto &P : Fn.Preconditions)
     Out.Preconditions.push_back(cloneVExpr(P.get()));
   for (const auto &P : Fn.Postconditions)

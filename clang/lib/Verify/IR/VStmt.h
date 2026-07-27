@@ -203,6 +203,8 @@ struct VFunction {
   std::set<std::string> RevealedSpecs;
   std::vector<std::pair<std::string, VType>> Params;
   std::vector<std::pair<std::string, VType>> ReturnFields;
+  /// Number of leading preconditions originating from explicit pre clauses.
+  unsigned ExplicitPreconditionCount = 0;
   std::vector<std::unique_ptr<VExpr>> Preconditions;
   std::vector<std::unique_ptr<VExpr>> Postconditions;
   std::vector<std::unique_ptr<VExpr>> Recommends;

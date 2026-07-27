@@ -377,6 +377,260 @@ static std::string allocationIdentityForPointer(const VExpr *E) {
   return static_cast<const VVarExpr *>(Base)->AllocationIdentity;
 }
 
+static bool referencesVar(const VExpr *E, const std::string &Name) {
+  if (!E)
+    return false;
+  switch (E->K) {
+  case VExpr::Literal:
+  case VExpr::Result:
+    return false;
+  case VExpr::Var:
+    return static_cast<const VVarExpr *>(E)->Name == Name;
+  case VExpr::BinOp: {
+    const auto *B = static_cast<const VBinOpExpr *>(E);
+    return referencesVar(B->Lhs.get(), Name) ||
+           referencesVar(B->Rhs.get(), Name);
+  }
+  case VExpr::UnaryOp:
+    return referencesVar(static_cast<const VUnaryOpExpr *>(E)->Operand.get(),
+                         Name);
+  case VExpr::Cast:
+    return referencesVar(static_cast<const VCastExpr *>(E)->Inner.get(), Name);
+  case VExpr::Load:
+    return referencesVar(static_cast<const VLoadExpr *>(E)->Ptr.get(), Name);
+  case VExpr::Old:
+    return referencesVar(static_cast<const VOldExpr *>(E)->Inner.get(), Name);
+  case VExpr::Conditional: {
+    const auto *C = static_cast<const VConditionalExpr *>(E);
+    return referencesVar(C->Cond.get(), Name) ||
+           referencesVar(C->Then.get(), Name) ||
+           referencesVar(C->Else.get(), Name);
+  }
+  case VExpr::Forall:
+  case VExpr::Exists: {
+    const auto *Q = static_cast<const VQuantifiedExpr *>(E);
+    return referencesVar(Q->Lo.get(), Name) ||
+           referencesVar(Q->Hi.get(), Name) ||
+           referencesVar(Q->Body.get(), Name);
+  }
+  case VExpr::HeapStore: {
+    const auto *H = static_cast<const VHeapStoreExpr *>(E);
+    return referencesVar(H->Ptr.get(), Name) ||
+           referencesVar(H->Val.get(), Name);
+  }
+  case VExpr::FieldAccess:
+    return referencesVar(static_cast<const VFieldAccessExpr *>(E)->Base.get(),
+                         Name);
+  case VExpr::SpecCall:
+    for (const auto &Arg : static_cast<const VSpecCallExpr *>(E)->Args)
+      if (referencesVar(Arg.get(), Name))
+        return true;
+    return false;
+  case VExpr::OverflowCheck: {
+    const auto *O = static_cast<const VOverflowCheckExpr *>(E);
+    return referencesVar(O->Lhs.get(), Name) ||
+           referencesVar(O->Rhs.get(), Name);
+  }
+  }
+  return false;
+}
+
+static bool isDirectPointerParam(const VExpr *E, const std::string &Name) {
+  while (E && E->K == VExpr::Cast)
+    E = static_cast<const VCastExpr *>(E)->Inner.get();
+  return E && E->K == VExpr::Var &&
+         static_cast<const VVarExpr *>(E)->Name == Name;
+}
+
+static bool scalarDynamicExprSafe(const VExpr *E, const std::string &Param) {
+  if (!E)
+    return true;
+  switch (E->K) {
+  case VExpr::Literal:
+  case VExpr::Var:
+  case VExpr::Result:
+    return true;
+  case VExpr::BinOp: {
+    const auto *B = static_cast<const VBinOpExpr *>(E);
+    if ((B->Lhs->Ty.Kind == VTypeKind::Ptr ||
+         B->Rhs->Ty.Kind == VTypeKind::Ptr) &&
+        referencesVar(B, Param) && B->Op != VBinOp::Eq && B->Op != VBinOp::Ne)
+      return false;
+    return scalarDynamicExprSafe(B->Lhs.get(), Param) &&
+           scalarDynamicExprSafe(B->Rhs.get(), Param);
+  }
+  case VExpr::UnaryOp:
+    return scalarDynamicExprSafe(
+        static_cast<const VUnaryOpExpr *>(E)->Operand.get(), Param);
+  case VExpr::Cast: {
+    const auto *C = static_cast<const VCastExpr *>(E);
+    if (C->Inner->Ty.Kind == VTypeKind::Ptr &&
+        referencesVar(C->Inner.get(), Param) && C->Ty.Kind != VTypeKind::Ptr &&
+        C->Ty.Kind != VTypeKind::Bool)
+      return false;
+    return scalarDynamicExprSafe(C->Inner.get(), Param);
+  }
+  case VExpr::Load: {
+    const auto *L = static_cast<const VLoadExpr *>(E);
+    if (referencesVar(L->Ptr.get(), Param) &&
+        !isDirectPointerParam(L->Ptr.get(), Param))
+      return false;
+    return scalarDynamicExprSafe(L->Ptr.get(), Param);
+  }
+  case VExpr::Old:
+    return scalarDynamicExprSafe(static_cast<const VOldExpr *>(E)->Inner.get(),
+                                 Param);
+  case VExpr::Conditional: {
+    const auto *C = static_cast<const VConditionalExpr *>(E);
+    if (C->Ty.Kind == VTypeKind::Ptr && referencesVar(C, Param))
+      return false;
+    return scalarDynamicExprSafe(C->Cond.get(), Param) &&
+           scalarDynamicExprSafe(C->Then.get(), Param) &&
+           scalarDynamicExprSafe(C->Else.get(), Param);
+  }
+  case VExpr::Forall:
+  case VExpr::Exists: {
+    const auto *Q = static_cast<const VQuantifiedExpr *>(E);
+    return scalarDynamicExprSafe(Q->Lo.get(), Param) &&
+           scalarDynamicExprSafe(Q->Hi.get(), Param) &&
+           scalarDynamicExprSafe(Q->Body.get(), Param);
+  }
+  case VExpr::HeapStore: {
+    const auto *H = static_cast<const VHeapStoreExpr *>(E);
+    if (referencesVar(H->Ptr.get(), Param) &&
+        !isDirectPointerParam(H->Ptr.get(), Param))
+      return false;
+    return !(H->Val->Ty.Kind == VTypeKind::Ptr &&
+             referencesVar(H->Val.get(), Param)) &&
+           scalarDynamicExprSafe(H->Ptr.get(), Param) &&
+           scalarDynamicExprSafe(H->Val.get(), Param);
+  }
+  case VExpr::FieldAccess: {
+    const auto *F = static_cast<const VFieldAccessExpr *>(E);
+    return !referencesVar(F->Base.get(), Param) &&
+           scalarDynamicExprSafe(F->Base.get(), Param);
+  }
+  case VExpr::SpecCall:
+    return false;
+  case VExpr::OverflowCheck: {
+    const auto *O = static_cast<const VOverflowCheckExpr *>(E);
+    return scalarDynamicExprSafe(O->Lhs.get(), Param) &&
+           scalarDynamicExprSafe(O->Rhs.get(), Param);
+  }
+  }
+  return false;
+}
+
+static bool scalarDynamicStmtSafe(const VStmt &S, const std::string &Param) {
+  switch (S.K) {
+  case VStmt::Assign: {
+    const auto &A = static_cast<const VAssignStmt &>(S);
+    return A.Target != Param &&
+           !(A.Value->Ty.Kind == VTypeKind::Ptr &&
+             referencesVar(A.Value.get(), Param)) &&
+           scalarDynamicExprSafe(A.Value.get(), Param);
+  }
+  case VStmt::Store: {
+    const auto &St = static_cast<const VStoreStmt &>(S);
+    return (!referencesVar(St.Ptr.get(), Param) ||
+            isDirectPointerParam(St.Ptr.get(), Param)) &&
+           !(St.Value->Ty.Kind == VTypeKind::Ptr &&
+             referencesVar(St.Value.get(), Param)) &&
+           scalarDynamicExprSafe(St.Ptr.get(), Param) &&
+           scalarDynamicExprSafe(St.Value.get(), Param);
+  }
+  case VStmt::Allocate: {
+    const auto &A = static_cast<const VAllocateStmt &>(S);
+    return A.Target != Param &&
+           scalarDynamicExprSafe(A.Initializer.get(), Param);
+  }
+  case VStmt::Free:
+    return !referencesVar(static_cast<const VFreeStmt &>(S).Ptr.get(), Param);
+  case VStmt::If: {
+    const auto &I = static_cast<const VIfStmt &>(S);
+    if (!scalarDynamicExprSafe(I.Cond.get(), Param))
+      return false;
+    for (const auto &Nested : I.Then)
+      if (!scalarDynamicStmtSafe(*Nested, Param))
+        return false;
+    for (const auto &Nested : I.Else)
+      if (!scalarDynamicStmtSafe(*Nested, Param))
+        return false;
+    return true;
+  }
+  case VStmt::While: {
+    const auto &W = static_cast<const VWhileStmt &>(S);
+    if (!scalarDynamicExprSafe(W.Cond.get(), Param))
+      return false;
+    for (const auto &E : W.Invariants)
+      if (!scalarDynamicExprSafe(E.get(), Param))
+        return false;
+    for (const auto &E : W.Decreases)
+      if (!scalarDynamicExprSafe(E.get(), Param))
+        return false;
+    for (const auto &Nested : W.Body)
+      if (!scalarDynamicStmtSafe(*Nested, Param))
+        return false;
+    return true;
+  }
+  case VStmt::Call:
+    return false;
+  case VStmt::Assert:
+    return scalarDynamicExprSafe(static_cast<const VAssertStmt &>(S).Cond.get(),
+                                 Param);
+  case VStmt::Assume:
+    return scalarDynamicExprSafe(static_cast<const VAssumeStmt &>(S).Cond.get(),
+                                 Param);
+  case VStmt::Return: {
+    const auto &R = static_cast<const VReturnStmt &>(S);
+    return !(R.Value && R.Value->Ty.Kind == VTypeKind::Ptr &&
+             referencesVar(R.Value.get(), Param)) &&
+           scalarDynamicExprSafe(R.Value.get(), Param);
+  }
+  case VStmt::Seq:
+    for (const auto &Nested : static_cast<const VSeqStmt &>(S).Stmts)
+      if (!scalarDynamicStmtSafe(*Nested, Param))
+        return false;
+    return true;
+  case VStmt::GhostBlock:
+    return false;
+  case VStmt::ContractAssert:
+    return scalarDynamicExprSafe(
+        static_cast<const VContractAssertStmt &>(S).Cond.get(), Param);
+  case VStmt::Havoc:
+    return static_cast<const VHavocStmt &>(S).Target != Param;
+  case VStmt::RevealWithFuel:
+  case VStmt::HideSpec:
+  case VStmt::RevealSpec:
+    return true;
+  }
+  return false;
+}
+
+static bool scalarDynamicCalleeSafe(const VFunction &Fn,
+                                    const std::string &Param) {
+  for (unsigned I = 0;
+       I < Fn.ExplicitPreconditionCount && I < Fn.Preconditions.size(); ++I)
+    if (!scalarDynamicExprSafe(Fn.Preconditions[I].get(), Param))
+      return false;
+  for (const auto &E : Fn.Postconditions)
+    if (!scalarDynamicExprSafe(E.get(), Param))
+      return false;
+  for (const auto &E : Fn.Modifies)
+    if (!scalarDynamicExprSafe(E.get(), Param))
+      return false;
+  for (const auto &E : Fn.Recommends)
+    if (!scalarDynamicExprSafe(E.get(), Param))
+      return false;
+  for (const auto &E : Fn.Decreases)
+    if (!scalarDynamicExprSafe(E.get(), Param))
+      return false;
+  for (const auto &S : Fn.Body)
+    if (!scalarDynamicStmtSafe(*S, Param))
+      return false;
+  return true;
+}
+
 static std::unique_ptr<VExpr> samePointerRegion(const VExpr *L, const VExpr *R,
                                                 SourceLocation Loc) {
   const VExpr *LBase = pointerBase(L);
@@ -413,12 +667,14 @@ static std::unique_ptr<VExpr> nonNullSafety(const VExpr *Ptr,
   const VExpr *Base = pointerBase(Ptr);
   if (!Base)
     return makeBoolLiteral(false, Loc);
+  const bool HasAllocationIdentity = !allocationIdentityForPointer(Ptr).empty();
+  const VExpr *CheckedPointer = HasAllocationIdentity ? Ptr : Base;
   auto NonNull = std::make_unique<VBinOpExpr>(
-      VBinOp::Ne, cloneVExpr(Base),
+      VBinOp::Ne, cloneVExpr(CheckedPointer),
       std::make_unique<VLiteralExpr>(0, VType::makePtr(), Loc),
       VType::makeBool(), Loc);
   auto Valid = std::make_unique<VUnaryOpExpr>(
-      VUnaryOp::ValidPtr, cloneVExpr(Base), VType::makeBool(), Loc);
+      VUnaryOp::ValidPtr, cloneVExpr(CheckedPointer), VType::makeBool(), Loc);
   return makeAnd(std::move(NonNull), std::move(Valid), Loc);
 }
 
@@ -427,8 +683,11 @@ static std::unique_ptr<VExpr> initializedSafety(const VExpr *Ptr,
   const VExpr *Base = pointerBase(Ptr);
   if (!Base)
     return makeBoolLiteral(false, Loc);
-  return std::make_unique<VUnaryOpExpr>(
-      VUnaryOp::InitializedPtr, cloneVExpr(Base), VType::makeBool(), Loc);
+  const VExpr *CheckedPointer =
+      allocationIdentityForPointer(Ptr).empty() ? Base : Ptr;
+  return std::make_unique<VUnaryOpExpr>(VUnaryOp::InitializedPtr,
+                                        cloneVExpr(CheckedPointer),
+                                        VType::makeBool(), Loc);
 }
 
 static std::unique_ptr<VExpr> safetyForExpr(const VExpr *E,
@@ -839,12 +1098,11 @@ static void collectDottedVars(const VExpr *E, std::set<std::string> &Out) {
   }
 }
 
-static std::unique_ptr<VExpr>
-substParams(const VExpr *E,
-            const std::map<std::string, std::unique_ptr<VExpr>> &Map,
-            const CloneCtx &Ctx, const std::string &EntryHeap,
-            const std::string &HeapOverride = "",
-            std::set<std::string> BoundVars = {}) {
+static std::unique_ptr<VExpr> substParams(
+    const VExpr *E, const std::map<std::string, std::unique_ptr<VExpr>> &Map,
+    const CloneCtx &Ctx, const std::string &EntryHeap,
+    const std::string &HeapOverride = "", std::set<std::string> BoundVars = {},
+    const std::map<std::string, std::unique_ptr<VExpr>> *OldMap = nullptr) {
   if (!E)
     return nullptr;
   switch (E->K) {
@@ -861,8 +1119,10 @@ substParams(const VExpr *E,
     const auto *B = static_cast<const VBinOpExpr *>(E);
     return std::make_unique<VBinOpExpr>(
         B->Op,
-        substParams(B->Lhs.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars),
-        substParams(B->Rhs.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars),
+        substParams(B->Lhs.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars,
+                    OldMap),
+        substParams(B->Rhs.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars,
+                    OldMap),
         B->Ty, B->Loc);
   }
   case VExpr::UnaryOp: {
@@ -870,7 +1130,7 @@ substParams(const VExpr *E,
     return std::make_unique<VUnaryOpExpr>(
         U->Op,
         substParams(U->Operand.get(), Map, Ctx, EntryHeap, HeapOverride,
-                    BoundVars),
+                    BoundVars, OldMap),
         U->Ty, U->Loc,
         stateHeapName(Ctx, VAllocationHeapName, U->AllocationHeapVar),
         stateHeapName(Ctx, VLivenessHeapName, U->LivenessHeapVar),
@@ -880,16 +1140,17 @@ substParams(const VExpr *E,
     const auto *C = static_cast<const VCastExpr *>(E);
     return std::make_unique<VCastExpr>(substParams(C->Inner.get(), Map, Ctx,
                                                    EntryHeap, HeapOverride,
-                                                   BoundVars),
+                                                   BoundVars, OldMap),
                                        C->FromTy, C->Ty, C->Loc);
   }
   case VExpr::Load: {
     const auto *L = static_cast<const VLoadExpr *>(E);
     std::string Heap =
         HeapOverride.empty() ? Ctx.Renames.at(VHeapName) : HeapOverride;
-    return std::make_unique<VLoadExpr>(
-        substParams(L->Ptr.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars),
-        L->Ty, L->Loc, std::move(Heap));
+    return std::make_unique<VLoadExpr>(substParams(L->Ptr.get(), Map, Ctx,
+                                                   EntryHeap, HeapOverride,
+                                                   BoundVars, OldMap),
+                                       L->Ty, L->Loc, std::move(Heap));
   }
   case VExpr::Result: {
     if (auto It = Map.find("result"); It != Map.end())
@@ -898,33 +1159,34 @@ substParams(const VExpr *E,
   }
   case VExpr::Old: {
     const auto *O = static_cast<const VOldExpr *>(E);
-    return substParams(O->Inner.get(), Map, Ctx, EntryHeap, EntryHeap,
-                       std::move(BoundVars));
+    const auto &EntryMap = OldMap ? *OldMap : Map;
+    return substParams(O->Inner.get(), EntryMap, Ctx, EntryHeap, EntryHeap,
+                       std::move(BoundVars), OldMap);
   }
   case VExpr::Conditional: {
     const auto *C = static_cast<const VConditionalExpr *>(E);
     return std::make_unique<VConditionalExpr>(
-        substParams(C->Cond.get(), Map, Ctx, EntryHeap, HeapOverride,
-                    BoundVars),
-        substParams(C->Then.get(), Map, Ctx, EntryHeap, HeapOverride,
-                    BoundVars),
-        substParams(C->Else.get(), Map, Ctx, EntryHeap, HeapOverride,
-                    BoundVars),
+        substParams(C->Cond.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars,
+                    OldMap),
+        substParams(C->Then.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars,
+                    OldMap),
+        substParams(C->Else.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars,
+                    OldMap),
         C->Ty, C->Loc);
   }
   case VExpr::FieldAccess: {
     const auto *F = static_cast<const VFieldAccessExpr *>(E);
     return std::make_unique<VFieldAccessExpr>(
-        substParams(F->Base.get(), Map, Ctx, EntryHeap, HeapOverride,
-                    BoundVars),
+        substParams(F->Base.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars,
+                    OldMap),
         F->Field, F->Ty, F->Loc);
   }
   case VExpr::SpecCall: {
     const auto *C = static_cast<const VSpecCallExpr *>(E);
     std::vector<std::unique_ptr<VExpr>> Args;
     for (const auto &Arg : C->Args)
-      Args.push_back(
-          substParams(Arg.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars));
+      Args.push_back(substParams(Arg.get(), Map, Ctx, EntryHeap, HeapOverride,
+                                 BoundVars, OldMap));
     return std::make_unique<VSpecCallExpr>(C->Callee, C->CalleeIdentity,
                                            std::move(Args), C->Ty, C->Loc);
   }
@@ -932,9 +1194,10 @@ substParams(const VExpr *E,
     const auto *O = static_cast<const VOverflowCheckExpr *>(E);
     return std::make_unique<VOverflowCheckExpr>(
         O->Op,
-        substParams(O->Lhs.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars),
+        substParams(O->Lhs.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars,
+                    OldMap),
         O->Rhs ? substParams(O->Rhs.get(), Map, Ctx, EntryHeap, HeapOverride,
-                             BoundVars)
+                             BoundVars, OldMap)
                : nullptr,
         O->Loc);
   }
@@ -943,12 +1206,12 @@ substParams(const VExpr *E,
     const auto *Q = static_cast<const VQuantifiedExpr *>(E);
     std::set<std::string> BodyBound = BoundVars;
     BodyBound.insert(Q->Binder);
-    auto Lo =
-        substParams(Q->Lo.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars);
-    auto Hi =
-        substParams(Q->Hi.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars);
+    auto Lo = substParams(Q->Lo.get(), Map, Ctx, EntryHeap, HeapOverride,
+                          BoundVars, OldMap);
+    auto Hi = substParams(Q->Hi.get(), Map, Ctx, EntryHeap, HeapOverride,
+                          BoundVars, OldMap);
     auto Body = substParams(Q->Body.get(), Map, Ctx, EntryHeap, HeapOverride,
-                            std::move(BodyBound));
+                            std::move(BodyBound), OldMap);
     if (E->K == VExpr::Forall)
       return std::make_unique<VForallExpr>(Q->Binder, std::move(Lo),
                                            std::move(Hi), std::move(Body),
@@ -961,8 +1224,10 @@ substParams(const VExpr *E,
     const auto *H = static_cast<const VHeapStoreExpr *>(E);
     return std::make_unique<VHeapStoreExpr>(
         H->HeapBefore, H->HeapAfter,
-        substParams(H->Ptr.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars),
-        substParams(H->Val.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars),
+        substParams(H->Ptr.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars,
+                    OldMap),
+        substParams(H->Val.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars,
+                    OldMap),
         H->Loc);
   }
   }
@@ -1350,6 +1615,16 @@ public:
     std::map<std::string, std::unique_ptr<VExpr>> ParamMap;
     for (unsigned I = 0; I < Callee->Params.size() && I < C.Args.size(); ++I)
       ParamMap[Callee->Params[I].first] = cloneExpr(C.Args[I].get(), Ctx);
+    for (const auto &Param : Callee->Params)
+      if (auto It = ParamMap.find(Param.first);
+          It != ParamMap.end() &&
+          !allocationIdentityForPointer(It->second.get()).empty() &&
+          (Callee->IsProof || Callee->IsExternalContract ||
+           Callee->ReturnType.Kind == VTypeKind::Ptr ||
+           !scalarDynamicCalleeSafe(*Callee, Param.first))) {
+        emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, C.Loc));
+        return;
+      }
     for (const auto &Arg : ParamMap)
       emitExprSafety(P, Arg.second.get(), nullptr, C.Loc, Renames, true);
 
@@ -1382,6 +1657,9 @@ public:
         const bool ActualIsRegion =
             I >= Callee->Modifies.size() ||
             isRegionFootprint(Callee->Modifies[I].get());
+        if (!allocationIdentityForPointer(ActualLoad->Ptr.get()).empty())
+          Allowed =
+              makeOr(std::move(Allowed), makeBoolLiteral(true, C.Loc), C.Loc);
         for (size_t J = 0; J < CallerModifies.size(); ++J) {
           const auto &CallerM = CallerModifies[J];
           if (const auto *CallerLoad =
@@ -1451,10 +1729,22 @@ public:
       Renames[VHeapName] = PreviousHeap;
     }
 
+    std::map<std::string, std::unique_ptr<VExpr>> PostParamMap;
+    for (const auto &[Name, Value] : ParamMap)
+      PostParamMap[Name] = cloneVExpr(Value.get());
+    std::set<std::string> ModifiedParams;
+    for (const auto &S : Callee->Body)
+      collectModified(*S, ModifiedParams);
+    for (const auto &[Name, Ty] : Callee->Params)
+      if (ModifiedParams.count(Name))
+        PostParamMap[Name] =
+            std::make_unique<VVarExpr>(bump("__call_final_param"), Ty, C.Loc);
+
     for (const auto &Post : Callee->Postconditions) {
       auto PS = std::make_unique<PassiveStmt>();
       PS->K = PassiveStmt::Assume;
-      PS->Cond = substParams(Post.get(), ParamMap, Ctx, EntryHeap);
+      PS->Cond = substParams(Post.get(), PostParamMap, Ctx, EntryHeap, "", {},
+                             &ParamMap);
       P.Stmts.push_back(std::move(PS));
     }
   }
