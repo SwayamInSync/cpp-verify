@@ -86,6 +86,27 @@ without contradiction. Reuse does not revive the old pointer: even if its
 numeric address equals the replacement pointer, its retained lifetime identity
 no longer matches the byte owner's new identity.
 
+Direct local aliases retain identity
+------------------------------------
+
+A direct local copy with the same unqualified pointee type shares the lifetime
+identity rather than inventing a second allocation:
+
+.. code-block:: cpp
+
+   int alias_write(int value) post(result == value) {
+     int *owner = new int;
+     int *alias = owner;
+     *alias = value;
+     int answer = *owner;
+     delete alias;
+     return answer;
+   }
+
+The store initializes the shared object, and deletion through ``alias`` ends
+the lifetime observed through ``owner`` too. A second deletion or later
+dereference through either name is rejected.
+
 Failures are path-sensitive
 ---------------------------
 
@@ -106,11 +127,12 @@ reach it.
 Why the surface is intentionally narrow
 ---------------------------------------
 
-The current checkpoint permits the direct local allocation pointer to be
-loaded, stored through, compared for equality, converted to ``bool``, and
-deleted. Copying or returning it, passing it to another function, pointer
-arithmetic, arrays, placement/nothrow allocation, records, and allocation in a
-loop body are rejected.
+The current checkpoint permits a direct local allocation pointer and
+matching-typed direct local aliases to be loaded, stored through, compared for
+equality, converted to ``bool``, and deleted. Reassignment, conditional or
+type-erasing copies, return, calls, pointer arithmetic, arrays,
+placement/nothrow allocation, records, and allocation in a loop body are
+rejected.
 
 Those restrictions are not parser shortcuts. Copies and modular calls require
 provenance to travel with pointer values; arrays require element/subobject

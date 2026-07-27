@@ -127,9 +127,11 @@ allocations, and uninitialized reads:
      return observed;
    }
 
-The current dynamic pointer cannot be copied, returned, passed to another
-function, arithmetically adjusted, or allocated/freed in a loop body. See
-:doc:`dynamic-storage` for the complete boundary.
+Its identity may be propagated through a direct, matching-typed local pointer
+copy. Deleting through either alias invalidates both. Conditional/type-erasing
+copies, pointer reassignment, return, calls, arithmetic, and allocation/free in
+a loop body remain unsupported. See :doc:`dynamic-storage` for the complete
+boundary.
 
 Buffer bounds with ``valid``
 ----------------------------

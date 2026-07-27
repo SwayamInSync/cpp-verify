@@ -84,6 +84,22 @@ An allocator may later choose the same numeric address. That replacement gets
 a different identity, so the old pointer does not become valid again even when
 ``old_pointer == replacement`` numerically.
 
+A direct, type-preserving local pointer copy carries the same identity:
+
+.. code-block:: cpp
+
+   int alias_write(int value) post(result == value) {
+     int *owner = new int;
+     int *alias = owner;
+     *alias = value;
+     int observed = *owner;
+     delete alias;
+     return observed;
+   }
+
+Deleting through either name ends the shared lifetime. Every alias then becomes
+dangling, so dereferencing ``owner`` after ``delete alias`` is rejected.
+
 Consequently, all of these are rejected:
 
 .. code-block:: cpp
@@ -114,11 +130,12 @@ Current boundary
 ----------------
 
 Dynamic pointers are intentionally local and non-escaping in this checkpoint.
-The direct allocation variable may be dereferenced, stored through, compared
-for equality, converted to ``bool``, and passed to scalar ``delete``. It may not
-currently be copied, reassigned, returned, passed across a function-call
-boundary, used in pointer arithmetic or subscripting, or stored in an
-aggregate. Functions that allocate cannot yet also accept pointer parameters,
+The direct allocation variable and direct local aliases with the same
+unqualified pointee type may be dereferenced, stored through when the C++ type
+permits, compared for equality, converted to ``bool``, and passed to scalar
+``delete``. Pointer reassignment, conditional or type-erasing copies, return,
+function-call crossing, arithmetic, subscripting, and aggregate storage remain
+unsupported. Functions that allocate cannot yet also accept pointer parameters,
 and allocation/deallocation inside loop bodies is rejected.
 
 Also unsupported are ``new[]``/``delete[]``, nothrow or placement allocation,

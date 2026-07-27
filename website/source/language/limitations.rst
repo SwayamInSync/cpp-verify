@@ -11,9 +11,11 @@ The following are outside the verified subset, in priority order:
 
 #. **General object provenance and lifetime.** Direct, non-escaping local
    scalar ``new``/``delete`` now has concrete byte ownership, liveness,
-   size/alignment, and initialization tracking. General pointer provenance,
-   arrays, placement/nothrow allocation, non-trivial construction/destruction,
-   subobject lifetime changes, and strict aliasing are not modeled.
+   size/alignment, initialization tracking, and direct type-preserving local
+   aliases. Provenance through reassignment, conditional/type-erasing copies,
+   returns, calls, and aggregates; arrays; placement/nothrow allocation;
+   non-trivial construction/destruction; subobject lifetime changes; and strict
+   aliasing are not modeled.
    Parameter-pointer ``valid(p, n)`` remains an abstract caller promise rather
    than evidence derived from a concrete allocation.
 #. **Addressable references and pointer-bearing aggregates.** References,
