@@ -1,6 +1,34 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
 // RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
+void write_allocated(int *target, int value)
+  pre(target != nullptr)
+  modifies(*target)
+  post(*target == value)
+{
+  *target = value;
+}
+
+int read_allocated(const int *source)
+  pre(source != nullptr)
+  post(result == old(*source))
+{
+  return *source;
+}
+
+bool observe_aliases(int *left, int *right)
+  aliases(left, right)
+  post(result == (left == right))
+{
+  return left == right;
+}
+
+int pass_scalar_value(int value)
+  post(result == value)
+{
+  return value;
+}
+
 int initialized_roundtrip(int value)
   post(result == value)
 {
@@ -119,6 +147,49 @@ int const_alias_roundtrip(int value)
   return observed;
 }
 
+int modular_alias_write(int value)
+  post(result == value)
+{
+  int *owner = new int(0);
+  int *alias = owner;
+  write_allocated(alias, value);
+  int observed = *owner;
+  delete owner;
+  return observed;
+}
+
+int modular_read(int value)
+  post(result == value)
+{
+  int *owner = new int(value);
+  int observed = read_allocated(owner);
+  delete owner;
+  return observed;
+}
+
+bool modular_alias_observation()
+  post(result)
+{
+  int *owner = new int(1);
+  int *alias = owner;
+  bool same = observe_aliases(owner, alias);
+  delete owner;
+  return same;
+}
+
+int modular_loaded_value(int value)
+  post(result == value)
+{
+  int *owner = new int(value);
+  int observed = pass_scalar_value(*owner);
+  delete owner;
+  return observed;
+}
+
+// VERIFY-DAG: Verified: write_allocated
+// VERIFY-DAG: Verified: read_allocated
+// VERIFY-DAG: Verified: observe_aliases
+// VERIFY-DAG: Verified: pass_scalar_value
 // VERIFY-DAG: Verified: initialized_roundtrip
 // VERIFY-DAG: Verified: stored_roundtrip
 // VERIFY-DAG: Verified: distinct_allocations
@@ -130,3 +201,7 @@ int const_alias_roundtrip(int value)
 // VERIFY-DAG: Verified: enum_roundtrip
 // VERIFY-DAG: Verified: alias_store_roundtrip
 // VERIFY-DAG: Verified: const_alias_roundtrip
+// VERIFY-DAG: Verified: modular_alias_write
+// VERIFY-DAG: Verified: modular_read
+// VERIFY-DAG: Verified: modular_alias_observation
+// VERIFY-DAG: Verified: modular_loaded_value

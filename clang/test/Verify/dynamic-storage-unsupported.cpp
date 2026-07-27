@@ -91,6 +91,24 @@ int spec_call_boundary()
   return nonnull;
 }
 
+int *return_pointer(int *p)
+  post(result == p)
+{
+  return p;
+}
+
+bool erased_nonnull(void *p)
+  post(result == (p != nullptr))
+{
+  return p != nullptr;
+}
+
+bool bool_identity(bool value)
+  post(result == value)
+{
+  return value;
+}
+
 int erased_pointer_copy()
   post(result == 1)
 {
@@ -98,6 +116,34 @@ int erased_pointer_copy()
   void *erased = p;
   delete p;
   return erased != nullptr;
+}
+
+int pointer_returning_call()
+  post(result == 1)
+{
+  int *p = new int(1);
+  int *returned = return_pointer(p);
+  int observed = *returned;
+  delete p;
+  return observed;
+}
+
+int erased_pointer_call()
+  post(result == 1)
+{
+  int *p = new int(1);
+  bool nonnull = erased_nonnull(p);
+  delete p;
+  return nonnull;
+}
+
+int pointer_to_bool_call()
+  post(result == 1)
+{
+  int *p = new int(1);
+  bool nonnull = bool_identity(p);
+  delete p;
+  return nonnull;
 }
 
 // VERIFY-DAG: error: escape_pointer: dynamic-storage pointers cannot escape through a return
@@ -112,3 +158,6 @@ int erased_pointer_copy()
 // VERIFY-DAG: error: offset_store: dynamic-storage dereference requires its direct allocation pointer
 // VERIFY-DAG: error: spec_call_boundary: dynamic-storage pointers cannot cross a function-call boundary
 // VERIFY-DAG: error: erased_pointer_copy: dynamic-storage pointer copies require matching pointee types
+// VERIFY-DAG: error: pointer_returning_call: dynamic-storage pointer copies require a direct source
+// VERIFY-DAG: error: erased_pointer_call: dynamic-storage pointer arguments require matching direct pointer parameters
+// VERIFY-DAG: error: pointer_to_bool_call: dynamic-storage pointer arguments require matching direct pointer parameters

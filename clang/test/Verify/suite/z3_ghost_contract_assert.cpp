@@ -8,4 +8,17 @@ int guarded(int x)
   return x < 0 ? -x : x;
 }
 
-// VERIFY: Verified: guarded
+int ghost_local_update(int x)
+  pre(x < 2147483647)
+  post(result == x)
+{
+  ghost {
+    int proof_value = x;
+    proof_value = proof_value + 1;
+    contract_assert(proof_value == x + 1);
+  }
+  return x;
+}
+
+// VERIFY-DAG: Verified: guarded
+// VERIFY-DAG: Verified: ghost_local_update
