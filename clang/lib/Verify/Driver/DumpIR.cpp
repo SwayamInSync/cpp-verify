@@ -192,9 +192,13 @@ static void dumpVStmt(const VStmt &S, llvm::raw_ostream &OS, unsigned Depth) {
     dumpVExpr(A.Value.get(), OS, Depth + 1);
     break;
   }
-  case VStmt::Store:
+  case VStmt::Store: {
+    const auto &St = static_cast<const VStoreStmt &>(S);
     OS << "store\n";
+    dumpVExpr(St.Ptr.get(), OS, Depth + 1);
+    dumpVExpr(St.Value.get(), OS, Depth + 1);
     break;
+  }
   case VStmt::Allocate: {
     const auto &A = static_cast<const VAllocateStmt &>(S);
     OS << "allocate " << A.Target << " size " << A.SizeBytes << " align "
@@ -243,6 +247,8 @@ static void dumpVStmt(const VStmt &S, llvm::raw_ostream &OS, unsigned Depth) {
     if (!C.ResultProvenanceTarget.empty())
       OS << " provenance " << C.ResultProvenanceTarget;
     OS << "\n";
+    for (const auto &Arg : C.Args)
+      dumpVExpr(Arg.get(), OS, Depth + 1);
     break;
   }
   case VStmt::Assert:
@@ -297,6 +303,9 @@ void verify::dumpVFunction(const VFunction &Fn, llvm::raw_ostream &OS) {
   ind(OS, 1) << "post\n";
   for (const auto &Post : Fn.Postconditions)
     dumpVExpr(Post.get(), OS, 2);
+  ind(OS, 1) << "modifies\n";
+  for (const auto &Modifies : Fn.Modifies)
+    dumpVExpr(Modifies.get(), OS, 2);
   ind(OS, 1) << "body\n";
   for (const auto &S : Fn.Body)
     dumpVStmt(*S, OS, 2);

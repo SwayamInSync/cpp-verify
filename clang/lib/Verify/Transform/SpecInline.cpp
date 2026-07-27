@@ -1022,7 +1022,8 @@ std::unique_ptr<VExpr> verify::substParamsInExpr(
   case VExpr::UnaryOp: {
     const auto *U = static_cast<const VUnaryOpExpr *>(E);
     return std::make_unique<VUnaryOpExpr>(
-        U->Op, substParamsInExpr(U->Operand.get(), Map), U->Ty, U->Loc);
+        U->Op, substParamsInExpr(U->Operand.get(), Map), U->Ty, U->Loc,
+        U->AllocationHeapVar, U->LivenessHeapVar, U->InitializationHeapVar);
   }
   case VExpr::Cast: {
     const auto *C = static_cast<const VCastExpr *>(E);
@@ -1144,6 +1145,7 @@ collectRecursiveCalls(const std::vector<std::unique_ptr<VStmt>> &Stmts,
         break;
       }
       case VStmt::Store:
+        Unsupported = true;
         NextStates.push_back(std::move(State));
         break;
       case VStmt::Allocate:
@@ -1163,6 +1165,16 @@ collectRecursiveCalls(const std::vector<std::unique_ptr<VStmt>> &Stmts,
                 substParamsInExpr(C.Args[I].get(), State.Env);
           Site.Guard = cloneVExpr(State.Guard.get());
           Sites.push_back(std::move(Site));
+        }
+        if (It != FnMap.end() && C.CalleeIdentity != Self &&
+            !It->second->IsProof) {
+          bool HasImplicitHeapEffect = It->second->Modifies.empty();
+          if (HasImplicitHeapEffect) {
+            HasImplicitHeapEffect = false;
+            for (const auto &Param : It->second->Params)
+              HasImplicitHeapEffect |= Param.second.Kind == VTypeKind::Ptr;
+          }
+          Unsupported |= !It->second->Modifies.empty() || HasImplicitHeapEffect;
         }
         if (!C.ResultTarget.empty() && It != FnMap.end())
           State.Env[C.ResultTarget] = std::make_unique<VVarExpr>(
@@ -1480,7 +1492,7 @@ PassiveProgram verify::buildDecreasesChecks(const VFunction &Fn,
   P.HiddenSpecs = Fn.HiddenSpecs;
   P.RevealedSpecs = Fn.RevealedSpecs;
   for (const auto &Pre : Fn.Preconditions)
-    P.EntryAssumes.push_back(cloneVExpr(Pre.get()));
+    P.EntryAssumes.push_back(cloneAtEntryState(Pre.get()));
 
   std::vector<RecursiveExecSite> Sites;
   DecreaseState Initial;
@@ -1567,6 +1579,7 @@ PassiveProgram verify::buildDecreasesChecks(const VFunction &Fn,
       Obligation = std::make_unique<VBinOpExpr>(
           VBinOp::Or, makeDecreaseNot(cloneVExpr(Guard), Loc),
           std::move(Obligation), VType::makeBool(), Loc);
+    Obligation = cloneAtEntryState(Obligation.get());
     auto PS = std::make_unique<PassiveStmt>();
     PS->K = PassiveStmt::Assert;
     PS->Cond = std::move(Obligation);

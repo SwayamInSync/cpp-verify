@@ -110,15 +110,37 @@ static bool isSupportedVerificationType(QualType Ty) {
   return isSupportedVerificationTypeImpl(Ty, Visiting);
 }
 
-static std::optional<std::string> findUnsupportedType(const FunctionDecl *FD) {
+static bool isSupportedReferenceParameter(QualType Ty) {
+  if (Ty.isNull() || !Ty->isLValueReferenceType())
+    return false;
+  QualType Referent = Ty.getNonReferenceType();
+  if (Referent.isVolatileQualified() || Referent->isAtomicType())
+    return false;
+  Referent = Referent.getCanonicalType().getUnqualifiedType();
+  return Referent->isBooleanType() || Referent->isIntegerType() ||
+         Referent->isEnumeralType();
+}
+
+static std::optional<std::string>
+findUnsupportedType(const FunctionDecl *FD, bool AllowReferenceParameters) {
   if (!isSupportedVerificationType(FD->getReturnType()))
     return FD->getReturnType().getAsString();
-  for (const ParmVarDecl *Param : FD->parameters())
-    if (!isSupportedVerificationType(Param->getType()))
+  for (const ParmVarDecl *Param : FD->parameters()) {
+    QualType Ty = Param->getType();
+    if (Ty->isReferenceType()) {
+      if (!AllowReferenceParameters || !isSupportedReferenceParameter(Ty))
+        return Ty.getAsString();
+    } else if (!isSupportedVerificationType(Ty)) {
       return Param->getType().getAsString();
+    }
+  }
 
   struct Finder : RecursiveASTVisitor<Finder> {
     std::optional<std::string> Found;
+    bool AllowReferenceParameters;
+
+    explicit Finder(bool AllowReferenceParameters)
+        : AllowReferenceParameters(AllowReferenceParameters) {}
 
     bool VisitExpr(Expr *E) {
       if (const auto *ICE = dyn_cast<ImplicitCastExpr>(E))
@@ -131,11 +153,18 @@ static std::optional<std::string> findUnsupportedType(const FunctionDecl *FD) {
     }
 
     bool VisitVarDecl(VarDecl *D) {
-      if (!Found && !isSupportedVerificationType(D->getType()))
-        Found = D->getType().getAsString();
+      if (Found)
+        return false;
+      QualType Ty = D->getType();
+      if (const auto *Param = dyn_cast<ParmVarDecl>(D);
+          Param && Ty->isReferenceType() && AllowReferenceParameters &&
+          isSupportedReferenceParameter(Ty))
+        return true;
+      if (!isSupportedVerificationType(Ty))
+        Found = Ty.getAsString();
       return !Found.has_value();
     }
-  } F;
+  } F(AllowReferenceParameters);
   if (FD->getBody())
     F.TraverseStmt(FD->getBody());
   return F.Found;
@@ -242,10 +271,19 @@ bool ASTConverter::calleeIsProof(const FunctionDecl *FD) const {
   return false;
 }
 
-static bool isMutablePointerParam(const ParmVarDecl *P) {
+static QualType addressedType(const ParmVarDecl *P) {
+  if (!P)
+    return QualType();
   QualType T = P->getType();
-  // A reference's referent is not a pointer, so getPointeeType() would be null;
-  // check the referent's const-ness directly. Only pointers have a pointee.
+  if (T->isReferenceType())
+    return T.getNonReferenceType();
+  if (T->isPointerType())
+    return T->getPointeeType();
+  return QualType();
+}
+
+static bool isMutableAddressParam(const ParmVarDecl *P) {
+  QualType T = P->getType();
   if (T->isReferenceType())
     return !T.getNonReferenceType().isConstQualified();
   if (T->isPointerType())
@@ -1158,7 +1196,8 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
                      ": heap-reading spec functions are unsupported");
     return nullptr;
   }
-  if (auto Unsupported = findUnsupportedType(FD)) {
+  if (auto Unsupported =
+          findUnsupportedType(FD, !FCI->IsSpec && !FCI->IsProof)) {
     Errors.push_back(FD->getNameAsString() +
                      ": unsupported C++ type in verification: " + *Unsupported);
     return nullptr;
@@ -1192,7 +1231,7 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
       Fn->Decreases.push_back(std::move(E));
   InContractExpression = false;
 
-  SmallVector<const ParmVarDecl *, 8> PointerParams;
+  SmallVector<const ParmVarDecl *, 8> AddressParams;
   for (const ParmVarDecl *P : FD->parameters()) {
     if (const RecordDecl *RD = getRecordFromType(P->getType())) {
       if (const RecordDecl *Definition = RD->getDefinition())
@@ -1204,9 +1243,9 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
       Fn->Params.emplace_back(valueName(P),
                               VType::fromQualType(P->getType(), IntMode, Ctx));
     }
-    if (P->getType()->isPointerType() &&
-        !P->getType()->getPointeeType()->isVoidType())
-      PointerParams.push_back(P);
+    QualType Addressed = addressedType(P);
+    if (!Addressed.isNull() && !Addressed->isVoidType())
+      AddressParams.push_back(P);
   }
 
   auto recordContractExpr = [&](const char *Clause, const Expr *E,
@@ -1261,7 +1300,7 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   InPost = false;
 
   if (!Fn->IsSpec) {
-    for (const ParmVarDecl *P : PointerParams) {
+    for (const ParmVarDecl *P : AddressParams) {
       auto Pointer = std::make_unique<VVarExpr>(valueName(P), VType::makePtr(),
                                                 SourceLocation());
       auto IsNull = std::make_unique<VBinOpExpr>(
@@ -1279,9 +1318,18 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
       auto Readable = std::make_unique<VBinOpExpr>(
           VBinOp::And, std::move(IsValid), std::move(IsInitialized),
           VType::makeBool(), SourceLocation());
-      Fn->Preconditions.push_back(std::make_unique<VBinOpExpr>(
-          VBinOp::Or, std::move(IsNull), std::move(Readable), VType::makeBool(),
-          SourceLocation()));
+      if (P->getType()->isReferenceType()) {
+        auto NonNull =
+            std::make_unique<VUnaryOpExpr>(VUnaryOp::Not, std::move(IsNull),
+                                           VType::makeBool(), SourceLocation());
+        Fn->Preconditions.push_back(std::make_unique<VBinOpExpr>(
+            VBinOp::And, std::move(NonNull), std::move(Readable),
+            VType::makeBool(), SourceLocation()));
+      } else {
+        Fn->Preconditions.push_back(std::make_unique<VBinOpExpr>(
+            VBinOp::Or, std::move(IsNull), std::move(Readable),
+            VType::makeBool(), SourceLocation()));
+      }
     }
     QualType ReturnType = FD->getReturnType();
     if (ReturnType->isPointerType() &&
@@ -1308,18 +1356,16 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     }
   }
 
-  // A mutable pointer has exclusive access to its complete pointee object.
-  for (unsigned I = 0; I < PointerParams.size(); ++I) {
-    for (unsigned J = I + 1; J < PointerParams.size(); ++J) {
-      if (!isMutablePointerParam(PointerParams[I]) &&
-          !isMutablePointerParam(PointerParams[J]))
+  // A mutable address parameter has exclusive access to its complete object.
+  for (unsigned I = 0; I < AddressParams.size(); ++I) {
+    for (unsigned J = I + 1; J < AddressParams.size(); ++J) {
+      if (!isMutableAddressParam(AddressParams[I]) &&
+          !isMutableAddressParam(AddressParams[J]))
         continue;
-      const bool MayAlias = aliasesListed(*FCI, valueName(PointerParams[I]),
-                                          valueName(PointerParams[J]));
-      QualType PointeeI =
-          PointerParams[I]->getType()->getPointeeType().getUnqualifiedType();
-      QualType PointeeJ =
-          PointerParams[J]->getType()->getPointeeType().getUnqualifiedType();
+      const bool MayAlias = aliasesListed(*FCI, valueName(AddressParams[I]),
+                                          valueName(AddressParams[J]));
+      QualType PointeeI = addressedType(AddressParams[I]).getUnqualifiedType();
+      QualType PointeeJ = addressedType(AddressParams[J]).getUnqualifiedType();
       if (MayAlias && !Ctx.hasSameType(PointeeI, PointeeJ)) {
         Errors.push_back(
             Fn->Name +
@@ -1335,10 +1381,10 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
                                               SourceLocation());
       };
       auto ANull = std::make_unique<VBinOpExpr>(
-          VBinOp::Eq, Ptr(PointerParams[I]), Null(), VType::makeBool(),
+          VBinOp::Eq, Ptr(AddressParams[I]), Null(), VType::makeBool(),
           SourceLocation());
       auto BNull = std::make_unique<VBinOpExpr>(
-          VBinOp::Eq, Ptr(PointerParams[J]), Null(), VType::makeBool(),
+          VBinOp::Eq, Ptr(AddressParams[J]), Null(), VType::makeBool(),
           SourceLocation());
       auto EitherNull = std::make_unique<VBinOpExpr>(
           VBinOp::Or, std::move(ANull), std::move(BNull), VType::makeBool(),
@@ -1353,17 +1399,17 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
                                             SourceLocation());
       };
       auto IBeforeJ = std::make_unique<VBinOpExpr>(
-          VBinOp::Le, End(PointerParams[I], PointeeI), Ptr(PointerParams[J]),
+          VBinOp::Le, End(AddressParams[I], PointeeI), Ptr(AddressParams[J]),
           VType::makeBool(), SourceLocation());
       auto JBeforeI = std::make_unique<VBinOpExpr>(
-          VBinOp::Le, End(PointerParams[J], PointeeJ), Ptr(PointerParams[I]),
+          VBinOp::Le, End(AddressParams[J], PointeeJ), Ptr(AddressParams[I]),
           VType::makeBool(), SourceLocation());
       std::unique_ptr<VExpr> Relation = std::make_unique<VBinOpExpr>(
           VBinOp::Or, std::move(IBeforeJ), std::move(JBeforeI),
           VType::makeBool(), SourceLocation());
       if (MayAlias) {
         auto Same = std::make_unique<VBinOpExpr>(
-            VBinOp::Eq, Ptr(PointerParams[I]), Ptr(PointerParams[J]),
+            VBinOp::Eq, Ptr(AddressParams[I]), Ptr(AddressParams[J]),
             VType::makeBool(), SourceLocation());
         Relation = std::make_unique<VBinOpExpr>(
             VBinOp::Or, std::move(Same), std::move(Relation), VType::makeBool(),
@@ -1431,7 +1477,7 @@ ASTConverter::convertConstexprSpec(const FunctionDecl *FD) {
                      ": aggregate-returning constexpr specs are unsupported");
     return nullptr;
   }
-  if (auto Unsupported = findUnsupportedType(FD)) {
+  if (auto Unsupported = findUnsupportedType(FD, false)) {
     Errors.push_back(FD->getNameAsString() +
                      ": unsupported C++ type in verification: " + *Unsupported);
     return nullptr;
@@ -1560,6 +1606,47 @@ ASTConverter::convertArrowFieldAddress(const MemberExpr *M) {
   return std::make_unique<VBinOpExpr>(VBinOp::Add, std::move(Base),
                                       std::move(Offset), VType::makePtr(),
                                       M->getExprLoc());
+}
+
+std::unique_ptr<VExpr> ASTConverter::convertLValueAddress(const Expr *E) {
+  if (!E)
+    return nullptr;
+  E = E->IgnoreParens();
+  while (const auto *Cast = dyn_cast<ImplicitCastExpr>(E)) {
+    if (Cast->getCastKind() != CK_NoOp)
+      return nullptr;
+    E = Cast->getSubExpr()->IgnoreParens();
+  }
+
+  if (const auto *DRE = dyn_cast<DeclRefExpr>(E)) {
+    const auto *VD = dyn_cast<VarDecl>(DRE->getDecl());
+    if (!VD || !isa<ParmVarDecl>(VD) || !VD->getType()->isLValueReferenceType())
+      return nullptr;
+    requireInitialized(VD);
+    return std::make_unique<VVarExpr>(
+        valueName(VD), VType::fromQualType(VD->getType(), IntMode, Ctx),
+        E->getExprLoc());
+  }
+
+  if (const auto *U = dyn_cast<UnaryOperator>(E);
+      U && U->getOpcode() == UO_Deref) {
+    const Expr *Pointer = U->getSubExpr()->IgnoreParenImpCasts();
+    const auto *PointerRef = dyn_cast<DeclRefExpr>(Pointer);
+    const auto *PointerVar =
+        PointerRef ? dyn_cast<VarDecl>(PointerRef->getDecl()) : nullptr;
+    if (!PointerVar || !PointerVar->getType()->isPointerType())
+      return nullptr;
+    if (referencesDynamicPointer(U->getSubExpr()) &&
+        !directDynamicPointer(U->getSubExpr())) {
+      Errors.push_back(CurrentFn->Name +
+                       ": dynamic-storage reference binding requires its "
+                       "direct allocation pointer");
+      return nullptr;
+    }
+    return convertExpr(U->getSubExpr());
+  }
+
+  return nullptr;
 }
 
 std::unique_ptr<VExpr>
@@ -1728,6 +1815,17 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
         return nullptr;
       }
       requireInitialized(VD);
+      if (VD->getType()->isReferenceType()) {
+        auto Address = convertLValueAddress(E);
+        if (!Address) {
+          Errors.push_back(CurrentFn->Name +
+                           ": unsupported reference value expression");
+          return nullptr;
+        }
+        VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
+        return std::make_unique<VLoadExpr>(std::move(Address), Ty,
+                                           E->getExprLoc());
+      }
       VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
       std::string ProvenanceVariable;
       if (auto It = DynamicPointerProvenanceVariables.find(VD);
@@ -2138,6 +2236,22 @@ void ASTConverter::convertExecCallArg(
     Out = nullptr;
     return;
   }
+  if (Formal && Formal->getType()->isReferenceType()) {
+    if (!Formal->getType()->isLValueReferenceType()) {
+      Errors.push_back(CurrentFn->Name +
+                       ": rvalue-reference arguments are unsupported");
+      Out = nullptr;
+      return;
+    }
+    const size_t ErrorCount = Errors.size();
+    Out = convertLValueAddress(E);
+    if (!Out && Errors.size() == ErrorCount)
+      Errors.push_back(
+          CurrentFn->Name +
+          ": reference arguments require another reference parameter or a "
+          "direct pointer dereference");
+    return;
+  }
   const VarDecl *Source = directDynamicPointer(E);
   if (Source ||
       (referencesDynamicPointer(E) && E->getType()->isPointerType())) {
@@ -2223,18 +2337,31 @@ void ASTConverter::convertExecCallArgs(
         Nested ? Nested->getDirectCallee() : nullptr;
     const FunctionContractInfo *FCI =
         NestedCallee ? functionContract(NestedCallee) : nullptr;
-    return FCI && !calleeIsSpec(NestedCallee) && !calleeIsProof(NestedCallee) &&
-           !FCI->Modifies.empty();
+    if (!FCI || calleeIsSpec(NestedCallee) || calleeIsProof(NestedCallee))
+      return false;
+    if (!FCI->Modifies.empty())
+      return true;
+    for (const ParmVarDecl *Param : NestedCallee->parameters())
+      if (Param->getType()->isPointerType() ||
+          Param->getType()->isReferenceType())
+        return true;
+    return false;
   };
   std::function<bool(const Stmt *)> IsHeapSensitive = [&](const Stmt *S) {
     if (!S)
       return false;
+    if (const auto *DRE = dyn_cast<DeclRefExpr>(S))
+      if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl()))
+        if (VD->getType()->isReferenceType())
+          return true;
     if (const auto *U = dyn_cast<UnaryOperator>(S))
       if (U->getOpcode() == UO_Deref)
         return true;
     if (const auto *M = dyn_cast<MemberExpr>(S))
       if (M->isArrow())
         return true;
+    if (isa<ArraySubscriptExpr>(S))
+      return true;
     if (const auto *Nested = dyn_cast<CallExpr>(S)) {
       const FunctionDecl *NestedCallee = Nested->getDirectCallee();
       if (NestedCallee && functionContract(NestedCallee) &&
@@ -2396,6 +2523,28 @@ void ASTConverter::appendAssignment(const Expr *LHS,
         Errors.push_back(CurrentFn->Name +
                          ": global variable assignment is unsupported: " +
                          VD->getNameAsString());
+        return;
+      }
+      if (VD->getType()->isReferenceType()) {
+        if (VD->getType().getNonReferenceType().isConstQualified()) {
+          Errors.push_back(CurrentFn->Name +
+                           ": assignment through a const reference is "
+                           "unsupported");
+          return;
+        }
+        if (CurrentFn->IsProof) {
+          Errors.push_back(CurrentFn->Name +
+                           ": proof functions cannot modify executable memory");
+          return;
+        }
+        auto Address = convertLValueAddress(LHS);
+        if (!Address) {
+          Errors.push_back(CurrentFn->Name +
+                           ": unsupported reference assignment target");
+          return;
+        }
+        Out.push_back(std::make_unique<VStoreStmt>(std::move(Address),
+                                                   std::move(Value), Loc));
         return;
       }
       if (VD->getType()->isRecordType()) {

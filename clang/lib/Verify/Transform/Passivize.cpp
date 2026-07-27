@@ -191,6 +191,12 @@ static std::unique_ptr<VExpr> cloneExpr(const VExpr *E, const CloneCtx &Ctx) {
   return nullptr;
 }
 
+std::unique_ptr<VExpr> verify::cloneAtEntryState(const VExpr *E) {
+  static const std::map<std::string, std::string> Renames;
+  static const std::map<std::string, std::unique_ptr<VExpr>> OldState;
+  return cloneExpr(E, CloneCtx{Renames, OldState});
+}
+
 static std::unique_ptr<VExpr>
 makeEq(std::unique_ptr<VExpr> L, std::unique_ptr<VExpr> R, SourceLocation Loc) {
   return std::make_unique<VBinOpExpr>(VBinOp::Eq, std::move(L), std::move(R),
@@ -829,6 +835,15 @@ static bool isRegionFootprint(const VExpr *E) {
   while (Ptr && Ptr->K == VExpr::Cast)
     Ptr = static_cast<const VCastExpr *>(Ptr)->Inner.get();
   return !Ptr || Ptr->K == VExpr::Var;
+}
+
+static bool hasImplicitHeapEffect(const VFunction &Fn) {
+  if (Fn.IsProof || !Fn.Modifies.empty())
+    return false;
+  for (const auto &Param : Fn.Params)
+    if (Param.second.Kind == VTypeKind::Ptr)
+      return true;
+  return false;
 }
 
 static std::unique_ptr<VExpr> footprintContains(const VExpr *OuterPtr,
@@ -1594,7 +1609,8 @@ class PassivizerImpl {
       }
       if (!C.ResultProvenanceTarget.empty())
         Out.insert(C.ResultProvenanceTarget);
-      if (Callee != FnMap.end() && !Callee->second->Modifies.empty())
+      if (Callee != FnMap.end() && (!Callee->second->Modifies.empty() ||
+                                    hasImplicitHeapEffect(*Callee->second)))
         Out.insert(VHeapName);
       break;
     }
@@ -1893,6 +1909,23 @@ public:
       emitPassive(P, PassiveStmt::Assert, std::move(Allowed), nullptr, C.Loc);
     }
 
+    const bool HasImplicitHeapEffect = hasImplicitHeapEffect(*Callee);
+    if (HasImplicitHeapEffect) {
+      bool CallerHasPointerParam = false;
+      for (const auto &Param : Fn.Params)
+        CallerHasPointerParam |= Param.second.Kind == VTypeKind::Ptr;
+      bool AllPointerParamsOwned = true;
+      for (const auto &Param : Callee->Params)
+        if (Param.second.Kind == VTypeKind::Ptr)
+          AllPointerParamsOwned &= DynamicParams.count(Param.first);
+      const bool CallerAllowsImplicitHeapEffect =
+          !Fn.IsProof && Fn.Modifies.empty() &&
+          (CallerHasPointerParam || AllPointerParamsOwned);
+      emitPassive(P, PassiveStmt::Assert,
+                  makeBoolLiteral(CallerAllowsImplicitHeapEffect, C.Loc),
+                  nullptr, C.Loc);
+    }
+
     if (Callee->ReturnType.Kind != VTypeKind::Void) {
       const std::string ResultTarget =
           C.ResultTarget.empty() ? "__discarded_call_result" : C.ResultTarget;
@@ -1923,9 +1956,6 @@ public:
       }
     }
 
-    bool HasPointerParam = false;
-    for (const auto &Param : Callee->Params)
-      HasPointerParam |= Param.second.Kind == VTypeKind::Ptr;
     bool CanFrameExactly = !ActualModifies.empty();
     for (size_t I = 0; I < ActualModifies.size(); ++I)
       if (!ActualModifies[I] || ActualModifies[I]->K != VExpr::Load ||
@@ -1933,7 +1963,7 @@ public:
           isRegionFootprint(Callee->Modifies[I].get()))
         CanFrameExactly = false;
     if ((!ActualModifies.empty() && !CanFrameExactly) ||
-        (ActualModifies.empty() && HasPointerParam)) {
+        HasImplicitHeapEffect) {
       Renames[VHeapName] = bump(VHeapName);
     } else if (CanFrameExactly) {
       std::string PreviousHeap = EntryHeap;

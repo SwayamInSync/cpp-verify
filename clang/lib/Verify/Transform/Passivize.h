@@ -23,13 +23,16 @@ struct PassiveProgram {
   std::vector<std::unique_ptr<VExpr>> ExitAsserts;
   std::string ResultVarName;
   std::string OldHeapName;
-  /// Spec registry + per-enclosing-function reveal/hide (for Z3 axiom emission).
+  /// Spec registry + per-enclosing-function reveal/hide (for Z3 axiom
+  /// emission).
   FunctionMap SpecFunctions;
   std::map<std::string, unsigned> SpecFuel;
   std::set<std::string> HiddenSpecs;
   std::set<std::string> RevealedSpecs;
   VIntMode CallerIntMode = VIntMode::Machine;
 };
+
+std::unique_ptr<VExpr> cloneAtEntryState(const VExpr *E);
 
 class Passivizer {
   FunctionMap FnMap;
