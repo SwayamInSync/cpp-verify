@@ -29,6 +29,49 @@ int pass_scalar_value(int value)
   return value;
 }
 
+int *pointer_identity(int *value)
+  pre(value != nullptr)
+  post(result == value)
+  post(*result == old(*value))
+{
+  return value;
+}
+
+int *choose_pointer(bool choose, int *left, int *right)
+  pre(left != nullptr && right != nullptr)
+  post(result == (choose ? left : right))
+  post(*result == (choose ? old(*left) : old(*right)))
+{
+  return choose ? left : right;
+}
+
+int forward_read(const int *source)
+  pre(source != nullptr)
+  post(result == old(*source))
+{
+  return pass_scalar_value(*source);
+}
+
+void forward_write(int *target, int value)
+  pre(target != nullptr)
+  modifies(*target)
+  post(*target == value)
+{
+  write_allocated(target, value);
+}
+
+spec int scalar_spec_identity(int value)
+{
+  return value;
+}
+
+int forward_spec_read(const int *source)
+  pre(source != nullptr)
+  post(result == old(*source))
+{
+  return scalar_spec_identity(*source);
+}
+
 int initialized_roundtrip(int value)
   post(result == value)
 {
@@ -339,6 +382,83 @@ int branch_order_independent_provenance(bool choose, int value)
   return observed;
 }
 
+int modular_pointer_return(int value)
+  post(result == value)
+{
+  int *owner = new int(value);
+  int *returned = pointer_identity(owner);
+  int observed = *returned;
+  delete returned;
+  return observed;
+}
+
+int modular_pointer_return_assignment(int value)
+  post(result == value)
+{
+  int *owner = new int(value);
+  int *returned = nullptr;
+  returned = pointer_identity(owner);
+  int observed = *returned;
+  delete owner;
+  return observed;
+}
+
+int modular_pointer_return_branches(bool choose)
+  post(result == 1 || result == 2)
+{
+  int *first = new int(1);
+  int *second = new int(2);
+  int *selected = nullptr;
+  if (choose)
+    selected = pointer_identity(first);
+  else
+    selected = pointer_identity(second);
+  int observed = *selected;
+  delete first;
+  delete second;
+  return observed;
+}
+
+int modular_conditional_pointer_return(bool choose)
+  post(result == 1 || result == 2)
+{
+  int *first = new int(1);
+  int *second = new int(2);
+  int *selected = choose_pointer(choose, first, second);
+  int observed = *selected;
+  delete first;
+  delete second;
+  return observed;
+}
+
+int modular_forwarded_read(int value)
+  post(result == value)
+{
+  int *owner = new int(value);
+  int observed = forward_read(owner);
+  delete owner;
+  return observed;
+}
+
+int modular_forwarded_write(int value)
+  post(result == value)
+{
+  int *owner = new int(0);
+  forward_write(owner, value);
+  int observed = *owner;
+  delete owner;
+  return observed;
+}
+
+int modular_forwarded_spec_read(int value)
+  post(result == value)
+{
+  int *owner = new int(value);
+  int observed = forward_spec_read(owner);
+  delete owner;
+  return observed;
+}
+
 // VERIFY-DAG: Verified: write_allocated
 // VERIFY-DAG: Verified: read_allocated
 // VERIFY-DAG: Verified: observe_aliases
@@ -370,3 +490,10 @@ int branch_order_independent_provenance(bool choose, int value)
 // VERIFY-DAG: Verified: branch_assignment_from_null
 // VERIFY-DAG: Verified: delete_null_preserves_liveness
 // VERIFY-DAG: Verified: branch_order_independent_provenance
+// VERIFY-DAG: Verified: modular_pointer_return
+// VERIFY-DAG: Verified: modular_pointer_return_assignment
+// VERIFY-DAG: Verified: modular_pointer_return_branches
+// VERIFY-DAG: Verified: modular_conditional_pointer_return
+// VERIFY-DAG: Verified: modular_forwarded_read
+// VERIFY-DAG: Verified: modular_forwarded_write
+// VERIFY-DAG: Verified: modular_forwarded_spec_read

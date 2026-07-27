@@ -20,9 +20,29 @@ int provenance_branch(bool choose)
   return observed;
 }
 
+int *provenance_identity(int *value)
+  pre(value != nullptr)
+  post(result == value)
+  post(*result == old(*value))
+{
+  return value;
+}
+
+int provenance_call(int value)
+  post(result == value)
+{
+  int *owner = new int(value);
+  int *returned = provenance_identity(owner);
+  int observed = *returned;
+  delete owner;
+  return observed;
+}
+
 // LOWER: Lowered: provenance_branch
+// LOWER: Lowered: provenance_call
 // LOWER-NOT: Verified:
 // VERIFY: Verified: provenance_branch
+// VERIFY: Verified: provenance_call
 
 // VCR-LABEL: fn provenance_branch
 // VCR: assign __cppverify_pointer_provenance_1
@@ -44,6 +64,8 @@ int provenance_branch(bool choose)
 // VCR-NEXT: first
 // VCR: free
 // VCR-NEXT: second
+// VCR-LABEL: fn provenance_call
+// VCR: call provenance_identity -> returned provenance __cppverify_pointer_provenance_
 
 // PASSIVE-LABEL: passive provenance_branch
 // PASSIVE: __cppverify_pointer_provenance_1_1
@@ -57,6 +79,10 @@ int provenance_branch(bool choose)
 // PASSIVE-NEXT: __cppverify_pointer_provenance_3_2
 // PASSIVE: valid_ptr
 // PASSIVE-NEXT: alias_3
+// PASSIVE-LABEL: passive provenance_call
+// PASSIVE: returned_
+// PASSIVE: valid_ptr
+// PASSIVE: returned_
 
 // VC-LABEL: vc provenance_branch
 // VC: !
@@ -64,6 +90,8 @@ int provenance_branch(bool choose)
 // VC-NEXT: alias_3
 // VC: initialized_ptr
 // VC-NEXT: alias_3
+// VC-LABEL: vc provenance_call
+// VC: __cppverify_pointer_provenance_
 
 // Z3-DAG: (select __heap_alloc_used_0
 // Z3-DAG: (store __heap_alloc_used_0

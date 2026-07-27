@@ -8,6 +8,14 @@ int read_allocated(const int *source)
   return *source;
 }
 
+int *pointer_identity(int *value)
+  pre(value != nullptr)
+  post(result == value)
+  post(*result == old(*value))
+{
+  return value;
+}
+
 bool require_distinct(int *left, int *right)
   post(result)
 {
@@ -80,6 +88,28 @@ proof void pointer_lemma(const int *source)
   pre(source != nullptr)
   post(true)
 {
+}
+
+int *copied_pointer(int *source)
+  pre(source != nullptr)
+  post(result == source)
+{
+  int *copy = source;
+  return copy;
+}
+
+int unsafe_forwarded_read(const int *source)
+  pre(source != nullptr)
+  post(result == old(source[1]))
+{
+  return read_next(source);
+}
+
+void discard_pointer_result(int *source)
+  pre(source != nullptr)
+  post(true)
+{
+  pointer_identity(source);
 }
 
 int use_after_delete()
@@ -339,6 +369,43 @@ int null_reassignment_dereference()
   return *owner;
 }
 
+int returned_pointer_use_after_delete()
+  post(true)
+{
+  int *owner = new int(1);
+  int *returned = pointer_identity(owner);
+  delete owner;
+  return *returned;
+}
+
+int modular_copied_pointer_return()
+  post(true)
+{
+  int *owner = new int(1);
+  int *returned = copied_pointer(owner);
+  int observed = *returned;
+  delete owner;
+  return observed;
+}
+
+int modular_unsafe_forwarding()
+  post(true)
+{
+  int *owner = new int(1);
+  int observed = unsafe_forwarded_read(owner);
+  delete owner;
+  return observed;
+}
+
+int modular_discarded_pointer_forwarding()
+  post(true)
+{
+  int *owner = new int(1);
+  discard_pointer_result(owner);
+  delete owner;
+  return 0;
+}
+
 // VERIFY-DAG: error: verification failed: use_after_delete
 // VERIFY-DAG: error: verification failed: double_delete
 // VERIFY-DAG: error: verification failed: uninitialized_read
@@ -356,13 +423,13 @@ int null_reassignment_dereference()
 // VERIFY-DAG: error: verification failed: modular_external_contract
 // VERIFY-DAG: error: verification failed: modular_rebinding_false_proof
 // VERIFY-DAG: error: verification failed: modular_offset_precondition
-// VERIFY-DAG: error: verification failed: modular_forwarded_scalar
-// VERIFY-DAG: error: verification failed: modular_forwarded_temporary
-// VERIFY-DAG: error: verification failed: modular_forwarded_control
-// VERIFY-DAG: error: verification failed: modular_forwarded_spec
 // VERIFY-DAG: error: verification failed: branch_reassignment_use_after_delete
 // VERIFY-DAG: error: verification failed: reassigned_alias_double_delete
 // VERIFY-DAG: error: verification failed: stale_alias_after_owner_reassignment
 // VERIFY-DAG: error: verification failed: copied_stale_pointer
 // VERIFY-DAG: error: verification failed: null_reassignment_dereference
 // VERIFY-DAG: error: verification failed: modular_proof_call
+// VERIFY-DAG: error: verification failed: returned_pointer_use_after_delete
+// VERIFY-DAG: error: verification failed: modular_copied_pointer_return
+// VERIFY-DAG: error: verification failed: modular_unsafe_forwarding
+// VERIFY-DAG: error: verification failed: modular_discarded_pointer_forwarding

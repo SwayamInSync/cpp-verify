@@ -89,6 +89,9 @@ int *return_pointer(int *p)
   return p;
 }
 
+int *external_pointer()
+  post(result != nullptr);
+
 bool erased_nonnull(void *p)
   post(result == (p != nullptr))
 {
@@ -126,6 +129,38 @@ int pointer_returning_call()
   int *returned = return_pointer(p);
   int observed = *returned;
   delete p;
+  return observed;
+}
+
+int pointer_return_reassignment_in_loop()
+  post(result == 1)
+{
+  int *p = new int(1);
+  int *returned = nullptr;
+  while (false)
+    returned = return_pointer(p);
+  int observed = *p;
+  delete p;
+  return observed;
+}
+
+int pointer_return_type_erasure()
+  post(result == 1)
+{
+  int *p = new int(1);
+  void *returned = return_pointer(p);
+  delete p;
+  return returned != nullptr;
+}
+
+int foreign_provenance_reassignment()
+  post(result == 1)
+{
+  int *foreign = external_pointer();
+  int *owner = new int(1);
+  owner = return_pointer(foreign);
+  int observed = *owner;
+  delete owner;
   return observed;
 }
 
@@ -171,7 +206,9 @@ int reassignment_in_loop()
 // VERIFY-DAG: error: spec_call_boundary: dynamic-storage pointers cannot cross a function-call boundary
 // VERIFY-DAG: error: erased_pointer_copy: dynamic-storage pointer copies require matching pointee types
 // VERIFY-DAG: error: conditional_erased_pointer_copy: dynamic-storage pointer copies require matching pointee types
-// VERIFY-DAG: error: pointer_returning_call: dynamic-storage pointer copies require direct, conditional, or null local sources
+// VERIFY-DAG: error: pointer_return_reassignment_in_loop: dynamic-storage pointer reassignment inside loops is unsupported
+// VERIFY-DAG: error: pointer_return_type_erasure: dynamic-storage pointer copies require direct, conditional, or null local sources
+// VERIFY-DAG: error: foreign_provenance_reassignment: dynamic-storage pointer copies require direct, conditional, or null local sources
 // VERIFY-DAG: error: erased_pointer_call: dynamic-storage pointer arguments require matching direct pointer parameters
 // VERIFY-DAG: error: pointer_to_bool_call: dynamic-storage pointer arguments require matching direct pointer parameters
 // VERIFY-DAG: error: reassignment_in_loop: dynamic-storage pointer reassignment inside loops is unsupported
