@@ -18,6 +18,16 @@ std::unique_ptr<VStmt> verify::cloneVStmt(const VStmt *S) {
     return std::make_unique<VStoreStmt>(cloneVExpr(St.Ptr.get()),
                                         cloneVExpr(St.Value.get()), St.Loc);
   }
+  case VStmt::Allocate: {
+    const auto &A = static_cast<const VAllocateStmt &>(*S);
+    return std::make_unique<VAllocateStmt>(
+        A.Target, A.AllocatedType, A.AllocationIdentity,
+        cloneVExpr(A.Initializer.get()), A.SizeBytes, A.AlignBytes, A.Loc);
+  }
+  case VStmt::Free: {
+    const auto &F = static_cast<const VFreeStmt &>(*S);
+    return std::make_unique<VFreeStmt>(cloneVExpr(F.Ptr.get()), F.Loc);
+  }
   case VStmt::If: {
     const auto &I = static_cast<const VIfStmt &>(*S);
     std::vector<std::unique_ptr<VStmt>> Then, Else;
@@ -39,9 +49,9 @@ std::unique_ptr<VStmt> verify::cloneVStmt(const VStmt *S) {
     std::vector<std::unique_ptr<VStmt>> Body;
     for (const auto &B : W.Body)
       Body.push_back(cloneVStmt(B.get()));
-    return std::make_unique<VWhileStmt>(
-        cloneVExpr(W.Cond.get()), std::move(Inv), std::move(Dec),
-        std::move(Body), W.Loc);
+    return std::make_unique<VWhileStmt>(cloneVExpr(W.Cond.get()),
+                                        std::move(Inv), std::move(Dec),
+                                        std::move(Body), W.Loc);
   }
   case VStmt::Call: {
     const auto &C = static_cast<const VCallStmt &>(*S);
@@ -115,6 +125,7 @@ VFunction verify::cloneVFunction(const VFunction &Fn) {
   Out.RequiresCallDefinedness = Fn.RequiresCallDefinedness;
   Out.IsExternalContract = Fn.IsExternalContract;
   Out.NeedsDecreasesCheck = Fn.NeedsDecreasesCheck;
+  Out.UsesDynamicStorage = Fn.UsesDynamicStorage;
   Out.SpecFuel = Fn.SpecFuel;
   Out.HiddenSpecs = Fn.HiddenSpecs;
   Out.RevealedSpecs = Fn.RevealedSpecs;
@@ -129,7 +140,8 @@ VFunction verify::cloneVFunction(const VFunction &Fn) {
   for (const auto &M : Fn.Modifies)
     Out.Modifies.push_back(cloneVExpr(M.get()));
   for (const auto &A : Fn.Aliases)
-    Out.Aliases.emplace_back(cloneVExpr(A.first.get()), cloneVExpr(A.second.get()));
+    Out.Aliases.emplace_back(cloneVExpr(A.first.get()),
+                             cloneVExpr(A.second.get()));
   for (const auto &D : Fn.Decreases)
     Out.Decreases.push_back(cloneVExpr(D.get()));
   for (const auto &S : Fn.Body)

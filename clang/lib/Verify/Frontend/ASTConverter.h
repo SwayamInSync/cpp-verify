@@ -32,6 +32,10 @@ class ASTConverter {
   std::map<const ParmVarDecl *, std::string> ParameterNames;
   unsigned BoundValueId = 0;
   std::map<const FunctionDecl *, std::string> FunctionIdentities;
+  std::set<const VarDecl *> DynamicPointers;
+  std::map<const VarDecl *, std::string> DynamicPointerIdentities;
+  unsigned DynamicAllocationId = 0;
+  unsigned LoopDepth = 0;
 
 public:
   explicit ASTConverter(ASTContext &Ctx) : Ctx(Ctx) {}
@@ -88,6 +92,8 @@ private:
   void beginInitializationTracking(const FunctionDecl *FD);
   bool requireInitialized(const ValueDecl *D, const FieldDecl *Field = nullptr);
   void markInitialized(const ValueDecl *D, const FieldDecl *Field = nullptr);
+  bool referencesDynamicPointer(const Expr *E) const;
+  const VarDecl *directDynamicPointer(const Expr *E) const;
 };
 
 } // namespace verify

@@ -426,10 +426,48 @@ public:
         return N;
       }
       if (U->Op == VUnaryOp::ValidPtr) {
+        if (!U->AllocationHeapVar.empty() && !U->LivenessHeapVar.empty()) {
+          auto Owner = std::make_unique<VLoadExpr>(cloneVExpr(U->Operand.get()),
+                                                   VType::makePtr(), U->Loc,
+                                                   U->AllocationHeapVar);
+          std::unique_ptr<VExpr> HasOwner;
+          if (U->Operand->K == VExpr::Var &&
+              !static_cast<const VVarExpr *>(U->Operand.get())
+                   ->AllocationIdentity.empty()) {
+            HasOwner = std::make_unique<VBinOpExpr>(
+                VBinOp::Eq, cloneVExpr(Owner.get()),
+                std::make_unique<VLiteralExpr>(
+                    static_cast<const VVarExpr *>(U->Operand.get())
+                        ->AllocationIdentity,
+                    VType::makePtr(), U->Loc),
+                VType::makeBool(), U->Loc);
+          } else {
+            HasOwner = std::make_unique<VBinOpExpr>(
+                VBinOp::Ne, cloneVExpr(Owner.get()),
+                std::make_unique<VLiteralExpr>(0, VType::makePtr(), U->Loc),
+                VType::makeBool(), U->Loc);
+          }
+          auto Live = std::make_unique<VLoadExpr>(
+              std::move(Owner), VType::makeBool(), U->Loc, U->LivenessHeapVar);
+          auto Valid = std::make_unique<VBinOpExpr>(
+              VBinOp::And, std::move(HasOwner), std::move(Live),
+              VType::makeBool(), U->Loc);
+          return fromVExpr(Valid.get());
+        }
         auto N = std::make_unique<VCExpr>(VCExpr::ValidPtr);
         N->Children.push_back(fromVExpr(U->Operand.get()));
         N->TypeKind = VTypeKind::Bool;
         return N;
+      }
+      if (U->Op == VUnaryOp::InitializedPtr) {
+        if (U->InitializationHeapVar.empty()) {
+          auto N = std::make_unique<VCExpr>(VCExpr::BoolLit);
+          N->BoolVal = false;
+          return N;
+        }
+        VLoadExpr Initialized(cloneVExpr(U->Operand.get()), VType::makeBool(),
+                              U->Loc, U->InitializationHeapVar);
+        return fromVExpr(&Initialized);
       }
       return vcNot(fromVExpr(U->Operand.get()));
     }

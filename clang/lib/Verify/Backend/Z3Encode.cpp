@@ -464,9 +464,30 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
     return It->second(Ptr);
   }
   case VCExpr::Select: {
-    z3::expr Val = z3::select(child(0), heapIndex(child(1)));
-    if (E->TypeKind == VTypeKind::Bool)
-      return Val != 0;
+    z3::expr Heap = child(0);
+    z3::expr Index = heapIndex(child(1));
+    if (!Heap.is_array()) {
+      markEncodingFailure("heap load requires an array, got " +
+                          Heap.get_sort().to_string());
+      return fallbackValue(E);
+    }
+    if (!Index.is_int()) {
+      markEncodingFailure("heap load requires an integer address, got " +
+                          Index.get_sort().to_string());
+      return fallbackValue(E);
+    }
+    z3::expr Val = z3::select(Heap, Index);
+    if (E->TypeKind == VTypeKind::Bool) {
+      if (Val.is_bool())
+        return Val;
+      if (Val.is_int())
+        return Val != 0;
+      markEncodingFailure("boolean heap load requires an integer cell, got " +
+                          Val.get_sort().to_string());
+      return Ctx.bool_val(false);
+    }
+    if (E->TypeKind == VTypeKind::Ptr)
+      return Val;
     return coerceTo(Val, E->IntMode, E->BitWidth, E->IsSigned);
   }
   case VCExpr::Store: {

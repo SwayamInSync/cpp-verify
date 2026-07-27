@@ -108,10 +108,11 @@ void verify::dumpVExpr(const VExpr *E, llvm::raw_ostream &OS, unsigned Depth) {
   }
   case VExpr::UnaryOp: {
     const auto *U = static_cast<const VUnaryOpExpr *>(E);
-    OS << (U->Op == VUnaryOp::Neg      ? "-"
-           : U->Op == VUnaryOp::Not    ? "!"
-           : U->Op == VUnaryOp::BitNot ? "~"
-                                       : "valid_ptr")
+    OS << (U->Op == VUnaryOp::Neg        ? "-"
+           : U->Op == VUnaryOp::Not      ? "!"
+           : U->Op == VUnaryOp::BitNot   ? "~"
+           : U->Op == VUnaryOp::ValidPtr ? "valid_ptr"
+                                         : "initialized_ptr")
        << "\n";
     dumpVExpr(U->Operand.get(), OS, Depth + 1);
     break;
@@ -193,6 +194,18 @@ static void dumpVStmt(const VStmt &S, llvm::raw_ostream &OS, unsigned Depth) {
   }
   case VStmt::Store:
     OS << "store\n";
+    break;
+  case VStmt::Allocate: {
+    const auto &A = static_cast<const VAllocateStmt &>(S);
+    OS << "allocate " << A.Target << " size " << A.SizeBytes << " align "
+       << A.AlignBytes << " identity " << A.AllocationIdentity << "\n";
+    if (A.Initializer)
+      dumpVExpr(A.Initializer.get(), OS, Depth + 1);
+    break;
+  }
+  case VStmt::Free:
+    OS << "free\n";
+    dumpVExpr(static_cast<const VFreeStmt &>(S).Ptr.get(), OS, Depth + 1);
     break;
   case VStmt::If: {
     const auto &I = static_cast<const VIfStmt &>(S);

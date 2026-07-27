@@ -487,6 +487,13 @@ struct UBInstrumenter {
         emitObsInto(New, St.Value.get());
         break;
       }
+      case VStmt::Allocate:
+        if (const auto &A = static_cast<VAllocateStmt &>(*S); A.Initializer)
+          emitObsInto(New, A.Initializer.get());
+        break;
+      case VStmt::Free:
+        emitObsInto(New, static_cast<VFreeStmt &>(*S).Ptr.get());
+        break;
       case VStmt::Return:
         emitObsInto(New, static_cast<VReturnStmt &>(*S).Value.get());
         break;

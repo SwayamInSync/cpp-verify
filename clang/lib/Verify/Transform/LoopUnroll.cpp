@@ -95,6 +95,7 @@ VFunction LoopUnroller::unroll(const VFunction &Fn, unsigned K) {
   Out.RequiresCallDefinedness = Fn.RequiresCallDefinedness;
   Out.NeedsDecreasesCheck = Fn.NeedsDecreasesCheck;
   Out.IsExternalContract = Fn.IsExternalContract;
+  Out.UsesDynamicStorage = Fn.UsesDynamicStorage;
   Out.Params = Fn.Params;
   Out.ReturnFields = Fn.ReturnFields;
   for (const auto &P : Fn.Preconditions)

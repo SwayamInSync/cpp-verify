@@ -369,10 +369,37 @@ std::string ASTConverter::valueName(const ValueDecl *D) const {
   return D ? D->getNameAsString() : std::string();
 }
 
+bool ASTConverter::referencesDynamicPointer(const Expr *E) const {
+  if (!E)
+    return false;
+  if (const auto *DRE = dyn_cast<DeclRefExpr>(E->IgnoreParenImpCasts()))
+    if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl()))
+      if (DynamicPointers.count(VD))
+        return true;
+  for (const Stmt *Child : E->children())
+    if (const auto *ChildExpr = dyn_cast_or_null<Expr>(Child))
+      if (referencesDynamicPointer(ChildExpr))
+        return true;
+  return false;
+}
+
+const VarDecl *ASTConverter::directDynamicPointer(const Expr *E) const {
+  if (!E)
+    return nullptr;
+  E = E->IgnoreParenImpCasts();
+  const auto *DRE = dyn_cast<DeclRefExpr>(E);
+  const auto *VD = DRE ? dyn_cast<VarDecl>(DRE->getDecl()) : nullptr;
+  return VD && DynamicPointers.count(VD) ? VD : nullptr;
+}
+
 void ASTConverter::beginInitializationTracking(const FunctionDecl *FD) {
   DeclaredValueNames.clear();
   InitializedValues.clear();
   ReportedUninitializedValues.clear();
+  DynamicPointers.clear();
+  DynamicPointerIdentities.clear();
+  DynamicAllocationId = 0;
+  LoopDepth = 0;
   InitializationPathReachable = true;
   for (const ParmVarDecl *P : FD->parameters()) {
     DeclaredValueNames.insert(valueName(P));
@@ -566,6 +593,17 @@ static bool bodyReferencesFunction(const VFunction &Fn,
               return true;
             break;
           }
+          case VStmt::Allocate: {
+            const auto &Allocate = static_cast<const VAllocateStmt &>(*S);
+            if (exprReferencesSpecCall(Allocate.Initializer.get(), Identity))
+              return true;
+            break;
+          }
+          case VStmt::Free:
+            if (exprReferencesSpecCall(
+                    static_cast<const VFreeStmt &>(*S).Ptr.get(), Identity))
+              return true;
+            break;
           case VStmt::If: {
             const auto &I = static_cast<const VIfStmt &>(*S);
             if (exprReferencesSpecCall(I.Cond.get(), Identity) ||
@@ -972,8 +1010,16 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
       auto IsValid =
           std::make_unique<VUnaryOpExpr>(VUnaryOp::ValidPtr, std::move(Pointer),
                                          VType::makeBool(), SourceLocation());
+      auto IsInitialized = std::make_unique<VUnaryOpExpr>(
+          VUnaryOp::InitializedPtr,
+          std::make_unique<VVarExpr>(valueName(P), VType::makePtr(),
+                                     SourceLocation()),
+          VType::makeBool(), SourceLocation());
+      auto Readable = std::make_unique<VBinOpExpr>(
+          VBinOp::And, std::move(IsValid), std::move(IsInitialized),
+          VType::makeBool(), SourceLocation());
       Fn->Preconditions.push_back(std::make_unique<VBinOpExpr>(
-          VBinOp::Or, std::move(IsNull), std::move(IsValid), VType::makeBool(),
+          VBinOp::Or, std::move(IsNull), std::move(Readable), VType::makeBool(),
           SourceLocation()));
     }
     QualType ReturnType = FD->getReturnType();
@@ -988,8 +1034,15 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
       auto IsValid =
           std::make_unique<VUnaryOpExpr>(VUnaryOp::ValidPtr, std::move(Result),
                                          VType::makeBool(), SourceLocation());
+      auto IsInitialized = std::make_unique<VUnaryOpExpr>(
+          VUnaryOp::InitializedPtr,
+          std::make_unique<VResultExpr>(VType::makePtr(), SourceLocation()),
+          VType::makeBool(), SourceLocation());
+      auto Readable = std::make_unique<VBinOpExpr>(
+          VBinOp::And, std::move(IsValid), std::move(IsInitialized),
+          VType::makeBool(), SourceLocation());
       Fn->Postconditions.push_back(std::make_unique<VBinOpExpr>(
-          VBinOp::Or, std::move(IsNull), std::move(IsValid), VType::makeBool(),
+          VBinOp::Or, std::move(IsNull), std::move(Readable), VType::makeBool(),
           SourceLocation()));
     }
   }
@@ -1201,6 +1254,11 @@ ASTConverter::convertArrowFieldAddress(const MemberExpr *M) {
   }
   if (!Pointer)
     return nullptr;
+  if (referencesDynamicPointer(Pointer)) {
+    Errors.push_back(CurrentFn->Name +
+                     ": dynamic-storage pointers cannot select record fields");
+    return nullptr;
+  }
   auto Base = convertExpr(Pointer);
   if (!Base)
     return nullptr;
@@ -1272,6 +1330,17 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
 
   if (const auto *MTE = dyn_cast<MaterializeTemporaryExpr>(E))
     return convertExpr(MTE->getSubExpr());
+  if (isa<CXXNewExpr>(E)) {
+    Errors.push_back(CurrentFn->Name +
+                     ": new-expressions are only supported as direct local "
+                     "pointer initializers");
+    return nullptr;
+  }
+  if (isa<CXXDeleteExpr>(E)) {
+    Errors.push_back(CurrentFn->Name +
+                     ": delete-expressions are only supported as statements");
+    return nullptr;
+  }
   if (const auto *IL = dyn_cast<InitListExpr>(E)) {
     if (E->getType()->isRecordType()) {
       Errors.push_back(CurrentFn->Name +
@@ -1380,13 +1449,24 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
       }
       requireInitialized(VD);
       VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
+      std::string AllocationIdentity;
+      if (auto It = DynamicPointerIdentities.find(VD);
+          It != DynamicPointerIdentities.end())
+        AllocationIdentity = It->second;
       return std::make_unique<VVarExpr>(
           Bound == BoundValues.end() ? valueName(VD) : Bound->second, Ty,
-          E->getExprLoc());
+          E->getExprLoc(), std::move(AllocationIdentity));
     }
   }
   if (const auto *U = dyn_cast<UnaryOperator>(E)) {
     if (U->getOpcode() == UO_Deref) {
+      if (referencesDynamicPointer(U->getSubExpr()) &&
+          !directDynamicPointer(U->getSubExpr())) {
+        Errors.push_back(CurrentFn->Name +
+                         ": dynamic-storage dereference requires its direct "
+                         "allocation pointer");
+        return nullptr;
+      }
       auto Ptr = convertExpr(U->getSubExpr());
       if (!Ptr)
         return nullptr;
@@ -1417,6 +1497,12 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
     return nullptr;
   }
   if (const auto *AS = dyn_cast<ArraySubscriptExpr>(E)) {
+    if (referencesDynamicPointer(AS)) {
+      Errors.push_back(
+          CurrentFn->Name +
+          ": subscripting dynamic-storage pointers is unsupported");
+      return nullptr;
+    }
     auto Base = convertExpr(AS->getBase());
     auto Idx = convertExpr(AS->getIdx());
     if (!Base || !Idx)
@@ -1450,6 +1536,20 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
     }
     const bool LeftPointer = B->getLHS()->getType()->isPointerType();
     const bool RightPointer = B->getRHS()->getType()->isPointerType();
+    if ((B->getOpcode() == BO_Add || B->getOpcode() == BO_Sub) &&
+        referencesDynamicPointer(B)) {
+      Errors.push_back(CurrentFn->Name +
+                       ": arithmetic on dynamic-storage pointers is "
+                       "unsupported");
+      return nullptr;
+    }
+    if ((B->getOpcode() == BO_LT || B->getOpcode() == BO_LE ||
+         B->getOpcode() == BO_GT || B->getOpcode() == BO_GE) &&
+        referencesDynamicPointer(B)) {
+      Errors.push_back(CurrentFn->Name +
+                       ": ordering dynamic-storage pointers is unsupported");
+      return nullptr;
+    }
     if (B->getOpcode() == BO_Sub && LeftPointer && RightPointer) {
       Errors.push_back(CurrentFn->Name +
                        ": pointer subtraction is unsupported without "
@@ -1538,6 +1638,13 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
     return std::make_unique<VOldExpr>(std::move(Inner), Ty, E->getExprLoc());
   }
   if (const auto *C = dyn_cast<ConditionalOperator>(E)) {
+    if (referencesDynamicPointer(C->getTrueExpr()) ||
+        referencesDynamicPointer(C->getFalseExpr())) {
+      Errors.push_back(
+          CurrentFn->Name +
+          ": conditional dynamic-storage pointers are unsupported");
+      return nullptr;
+    }
     auto Cond = convertExpr(C->getCond());
     auto T = convertExpr(C->getTrueExpr());
     auto F = convertExpr(C->getFalseExpr());
@@ -1663,6 +1770,14 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
         }
       }
       if (calleeIsSpec(Callee)) {
+        for (const Expr *A : CE->arguments())
+          if (referencesDynamicPointer(A)) {
+            Errors.push_back(
+                CurrentFn->Name +
+                ": dynamic-storage pointers cannot cross a function-call "
+                "boundary");
+            return nullptr;
+          }
         std::vector<std::unique_ptr<VExpr>> Args;
         unsigned ArgIndex = 0;
         for (const Expr *A : CE->arguments()) {
@@ -1704,6 +1819,13 @@ void ASTConverter::convertExecCallArg(
     const Expr *E, std::vector<std::unique_ptr<VStmt>> &Prelude,
     std::unique_ptr<VExpr> &Out) {
   if (!E) {
+    Out = nullptr;
+    return;
+  }
+  if (referencesDynamicPointer(E)) {
+    Errors.push_back(CurrentFn->Name +
+                     ": dynamic-storage pointers cannot cross a function-call "
+                     "boundary");
     Out = nullptr;
     return;
   }
@@ -1973,6 +2095,13 @@ void ASTConverter::appendAssignment(const Expr *LHS,
 
   if (const auto *U = dyn_cast<UnaryOperator>(LHS)) {
     if (U->getOpcode() == UO_Deref) {
+      if (referencesDynamicPointer(U->getSubExpr()) &&
+          !directDynamicPointer(U->getSubExpr())) {
+        Errors.push_back(CurrentFn->Name +
+                         ": dynamic-storage dereference requires its direct "
+                         "allocation pointer");
+        return;
+      }
       auto Ptr = convertExpr(U->getSubExpr());
       if (Ptr) {
         Out.push_back(std::make_unique<VStoreStmt>(std::move(Ptr),
@@ -1983,6 +2112,12 @@ void ASTConverter::appendAssignment(const Expr *LHS,
   }
 
   if (const auto *AS = dyn_cast<ArraySubscriptExpr>(LHS)) {
+    if (referencesDynamicPointer(AS)) {
+      Errors.push_back(
+          CurrentFn->Name +
+          ": subscripting dynamic-storage pointers is unsupported");
+      return;
+    }
     auto Base = convertExpr(AS->getBase());
     auto Index = convertExpr(AS->getIdx());
     if (Base && Index) {
@@ -2088,6 +2223,12 @@ std::vector<std::unique_ptr<VStmt>> ASTConverter::convertStmt(const Stmt *S) {
   if (S->getStmtClass() == Stmt::ReturnStmtClass) {
     const auto *RS = cast<ReturnStmt>(S);
     if (const Expr *RetE = RS->getRetValue()) {
+      if (RetE->getType()->isPointerType() && referencesDynamicPointer(RetE)) {
+        Errors.push_back(CurrentFn->Name +
+                         ": dynamic-storage pointers cannot escape through a "
+                         "return");
+        return Out;
+      }
       emitReturnInvariantAssert(RetE, Out, RS->getBeginLoc());
       const auto *CE = dyn_cast<CallExpr>(RetE->IgnoreParenImpCasts());
       if (CE) {
@@ -2226,7 +2367,9 @@ std::vector<std::unique_ptr<VStmt>> ASTConverter::convertStmt(const Stmt *S) {
     }
     const std::set<std::string> Before = InitializedValues;
     const bool BeforeReachable = InitializationPathReachable;
+    ++LoopDepth;
     auto Body = convertStmt(WS->getBody());
+    --LoopDepth;
     InitializedValues = Before;
     InitializationPathReachable = BeforeReachable;
     Out.push_back(std::make_unique<VWhileStmt>(
@@ -2268,6 +2411,7 @@ std::vector<std::unique_ptr<VStmt>> ASTConverter::convertStmt(const Stmt *S) {
     }
     const std::set<std::string> BeforeLoop = InitializedValues;
     const bool BeforeLoopReachable = InitializationPathReachable;
+    ++LoopDepth;
     auto Body = convertStmt(FS->getBody());
     if (const Expr *Inc = FS->getInc()) {
       if (const auto *IncStmt = dyn_cast<Stmt>(Inc)) {
@@ -2276,6 +2420,7 @@ std::vector<std::unique_ptr<VStmt>> ASTConverter::convertStmt(const Stmt *S) {
                     std::make_move_iterator(IncPart.end()));
       }
     }
+    --LoopDepth;
     InitializedValues = BeforeLoop;
     InitializationPathReachable = BeforeLoopReachable;
     Out.push_back(std::make_unique<VWhileStmt>(
@@ -2392,8 +2537,60 @@ std::vector<std::unique_ptr<VStmt>> ASTConverter::convertStmt(const Stmt *S) {
     InContractExpression = SavedContract;
     return Out;
   }
+  if (const auto *Delete = dyn_cast<CXXDeleteExpr>(S)) {
+    if (LoopDepth != 0) {
+      Errors.push_back(CurrentFn->Name +
+                       ": dynamic deallocation inside loops is unsupported");
+      return Out;
+    }
+    if (InGhost || CurrentFn->IsSpec || CurrentFn->IsProof) {
+      Errors.push_back(CurrentFn->Name +
+                       ": dynamic deallocation requires executable code");
+      return Out;
+    }
+    if (Delete->isArrayForm()) {
+      Errors.push_back(CurrentFn->Name + ": delete[] is unsupported");
+      return Out;
+    }
+    const FunctionDecl *OperatorDelete = Delete->getOperatorDelete();
+    if (!OperatorDelete ||
+        !OperatorDelete->isReplaceableGlobalAllocationFunction()) {
+      Errors.push_back(CurrentFn->Name +
+                       ": custom or placement deallocation is unsupported");
+      return Out;
+    }
+    const VarDecl *PointerDecl = directDynamicPointer(Delete->getArgument());
+    if (!PointerDecl) {
+      Errors.push_back(CurrentFn->Name +
+                       ": delete requires a direct pointer produced by a "
+                       "supported new-expression");
+      return Out;
+    }
+    auto Pointer = convertExpr(Delete->getArgument());
+    if (Pointer) {
+      CurrentFn->UsesDynamicStorage = true;
+      Out.push_back(std::make_unique<VFreeStmt>(std::move(Pointer),
+                                                Delete->getBeginLoc()));
+    }
+    return Out;
+  }
   if (const auto *BO = dyn_cast<BinaryOperator>(S)) {
     if (BO->isAssignmentOp()) {
+      if (const auto *DRE =
+              dyn_cast<DeclRefExpr>(BO->getLHS()->IgnoreParenImpCasts()))
+        if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl()))
+          if (DynamicPointers.count(VD)) {
+            Errors.push_back(
+                CurrentFn->Name +
+                ": reassigning a dynamic-storage pointer is unsupported");
+            return Out;
+          }
+      if (BO->getRHS()->getType()->isPointerType() &&
+          referencesDynamicPointer(BO->getRHS())) {
+        Errors.push_back(CurrentFn->Name +
+                         ": copying a dynamic-storage pointer is unsupported");
+        return Out;
+      }
       if (BO->getOpcode() == BO_Assign &&
           BO->getLHS()->getType()->isRecordType()) {
         const Expr *LHS = BO->getLHS()->IgnoreParenImpCasts();
@@ -2523,6 +2720,86 @@ std::vector<std::unique_ptr<VStmt>> ASTConverter::convertStmt(const Stmt *S) {
       }
       if (!VD->hasInit())
         continue;
+      if (const auto *New =
+              dyn_cast<CXXNewExpr>(VD->getInit()->IgnoreParenImpCasts())) {
+        if (LoopDepth != 0) {
+          Errors.push_back(CurrentFn->Name +
+                           ": dynamic allocation inside loops is unsupported");
+          continue;
+        }
+        if (InGhost || CurrentFn->IsSpec || CurrentFn->IsProof) {
+          Errors.push_back(CurrentFn->Name +
+                           ": dynamic allocation requires executable code");
+          continue;
+        }
+        bool HasPointerParam = false;
+        for (const auto &Param : CurrentFn->Params)
+          HasPointerParam |= Param.second.Kind == VTypeKind::Ptr;
+        if (HasPointerParam) {
+          Errors.push_back(
+              CurrentFn->Name +
+              ": dynamic allocation in functions with pointer parameters is "
+              "not yet supported");
+          continue;
+        }
+        bool IsNothrow = false;
+        const FunctionDecl *OperatorNew = New->getOperatorNew();
+        if (New->isArray() || New->getNumPlacementArgs() != 0 || !OperatorNew ||
+            !OperatorNew->isReplaceableGlobalAllocationFunction(nullptr,
+                                                                &IsNothrow) ||
+            IsNothrow || New->shouldNullCheckAllocation()) {
+          Errors.push_back(CurrentFn->Name +
+                           ": only ordinary throwing scalar new is supported");
+          continue;
+        }
+        QualType Allocated = New->getAllocatedType();
+        if (!VD->getType()->isPointerType() ||
+            !Ctx.hasSameUnqualifiedType(VD->getType()->getPointeeType(),
+                                        Allocated)) {
+          Errors.push_back(
+              CurrentFn->Name +
+              ": new result must directly initialize a matching typed pointer");
+          continue;
+        }
+        if ((!Allocated->isIntegerType() && !Allocated->isEnumeralType()) ||
+            Allocated.isVolatileQualified() || Allocated->isAtomicType() ||
+            Allocated->isIncompleteType()) {
+          Errors.push_back(
+              CurrentFn->Name +
+              ": new currently supports only complete non-volatile scalar "
+              "integer objects");
+          continue;
+        }
+        const uint64_t Size = Ctx.getTypeSizeInChars(Allocated).getQuantity();
+        const uint64_t Align = Ctx.getTypeAlignInChars(Allocated).getQuantity();
+        if (Size == 0 || Size > 256 || Align == 0) {
+          Errors.push_back(CurrentFn->Name +
+                           ": unsupported dynamic object size or alignment");
+          continue;
+        }
+        std::unique_ptr<VExpr> Initializer;
+        if (const Expr *Init = New->getInitializer())
+          Initializer = convertExpr(Init);
+        if (New->hasInitializer() && !Initializer)
+          continue;
+        const std::string AllocationIdentity =
+            std::to_string(++DynamicAllocationId);
+        DynamicPointers.insert(VD);
+        DynamicPointerIdentities.emplace(VD, AllocationIdentity);
+        CurrentFn->UsesDynamicStorage = true;
+        Out.push_back(std::make_unique<VAllocateStmt>(
+            valueName(VD), VType::fromQualType(Allocated, IntMode, Ctx),
+            AllocationIdentity, std::move(Initializer), Size, Align,
+            VD->getBeginLoc()));
+        markInitialized(VD);
+        continue;
+      }
+      if (VD->getType()->isPointerType() &&
+          referencesDynamicPointer(VD->getInit())) {
+        Errors.push_back(CurrentFn->Name +
+                         ": copying a dynamic-storage pointer is unsupported");
+        continue;
+      }
       if (const auto *CE = dyn_cast<CXXConstructExpr>(VD->getInit())) {
         const CXXConstructorDecl *Ctor = CE->getConstructor();
         if (CE->getNumArgs() == 0 && Ctor->isDefaultConstructor() &&

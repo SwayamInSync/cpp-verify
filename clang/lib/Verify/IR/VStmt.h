@@ -18,6 +18,8 @@ public:
   enum Kind {
     Assign,
     Store,
+    Allocate,
+    Free,
     If,
     While,
     Call,
@@ -54,6 +56,30 @@ struct VStoreStmt : VStmt {
   VStoreStmt(std::unique_ptr<VExpr> P, std::unique_ptr<VExpr> V,
              SourceLocation Loc)
       : VStmt(Store, Loc), Ptr(std::move(P)), Value(std::move(V)) {}
+};
+
+struct VAllocateStmt : VStmt {
+  std::string Target;
+  VType AllocatedType;
+  std::string AllocationIdentity;
+  std::unique_ptr<VExpr> Initializer;
+  uint64_t SizeBytes;
+  uint64_t AlignBytes;
+  VAllocateStmt(std::string Target, VType AllocatedType,
+                std::string AllocationIdentity,
+                std::unique_ptr<VExpr> Initializer, uint64_t SizeBytes,
+                uint64_t AlignBytes, SourceLocation Loc)
+      : VStmt(Allocate, Loc), Target(std::move(Target)),
+        AllocatedType(AllocatedType),
+        AllocationIdentity(std::move(AllocationIdentity)),
+        Initializer(std::move(Initializer)), SizeBytes(SizeBytes),
+        AlignBytes(AlignBytes) {}
+};
+
+struct VFreeStmt : VStmt {
+  std::unique_ptr<VExpr> Ptr;
+  VFreeStmt(std::unique_ptr<VExpr> Ptr, SourceLocation Loc)
+      : VStmt(Free, Loc), Ptr(std::move(Ptr)) {}
 };
 
 struct VIfStmt : VStmt {
@@ -102,8 +128,7 @@ struct VWhileStmt : VStmt {
   /// Lexicographic termination measure (ordered tuple); empty means none.
   std::vector<std::unique_ptr<VExpr>> Decreases;
   std::vector<std::unique_ptr<VStmt>> Body;
-  VWhileStmt(std::unique_ptr<VExpr> C,
-             std::vector<std::unique_ptr<VExpr>> Inv,
+  VWhileStmt(std::unique_ptr<VExpr> C, std::vector<std::unique_ptr<VExpr>> Inv,
              std::vector<std::unique_ptr<VExpr>> Dec,
              std::vector<std::unique_ptr<VStmt>> B, SourceLocation Loc)
       : VStmt(While, Loc), Cond(std::move(C)), Invariants(std::move(Inv)),
@@ -172,6 +197,7 @@ struct VFunction {
   bool RequiresCallDefinedness = false;
   bool IsExternalContract = false;
   bool NeedsDecreasesCheck = false;
+  bool UsesDynamicStorage = false;
   std::map<std::string, unsigned> SpecFuel;
   std::set<std::string> HiddenSpecs;
   std::set<std::string> RevealedSpecs;
@@ -181,7 +207,8 @@ struct VFunction {
   std::vector<std::unique_ptr<VExpr>> Postconditions;
   std::vector<std::unique_ptr<VExpr>> Recommends;
   std::vector<std::unique_ptr<VExpr>> Modifies;
-  std::vector<std::pair<std::unique_ptr<VExpr>, std::unique_ptr<VExpr>>> Aliases;
+  std::vector<std::pair<std::unique_ptr<VExpr>, std::unique_ptr<VExpr>>>
+      Aliases;
   /// Lexicographic termination measure (ordered tuple); empty means none.
   std::vector<std::unique_ptr<VExpr>> Decreases;
   std::vector<std::unique_ptr<VStmt>> Body;

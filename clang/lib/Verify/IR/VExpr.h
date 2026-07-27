@@ -12,6 +12,18 @@ namespace verify {
 
 /// SSA name of the global heap array (versioned: __heap_0, __heap_1, ...).
 inline constexpr const char *VHeapName = "__heap";
+/// Address -> allocation identity map.
+inline constexpr const char *VAllocationHeapName = "__heap_alloc";
+/// Allocation identity -> base address map.
+inline constexpr const char *VAllocationBaseHeapName = "__heap_alloc_base";
+/// Allocation identity -> live/dead map.
+inline constexpr const char *VLivenessHeapName = "__heap_live";
+/// Address -> initialized/uninitialized map.
+inline constexpr const char *VInitializationHeapName = "__heap_init";
+/// Allocation identity -> allocation size in target bytes.
+inline constexpr const char *VAllocationSizeHeapName = "__heap_alloc_size";
+/// Allocation identity -> required alignment in target bytes.
+inline constexpr const char *VAllocationAlignHeapName = "__heap_alloc_align";
 
 enum class VBinOp {
   Add,
@@ -34,7 +46,7 @@ enum class VBinOp {
   Or,
 };
 
-enum class VUnaryOp { Neg, Not, BitNot, ValidPtr };
+enum class VUnaryOp { Neg, Not, BitNot, ValidPtr, InitializedPtr };
 
 /// Which signed-overflow predicate a VOverflowCheckExpr asserts the absence of.
 enum class VOverflowOp { Add, Sub, Mul, Neg, SDiv };
@@ -81,8 +93,12 @@ public:
 class VVarExpr : public VExpr {
 public:
   std::string Name;
-  VVarExpr(std::string Name, VType Ty, SourceLocation Loc)
-      : VExpr(Var, Ty, Loc), Name(std::move(Name)) {}
+  /// Static lifetime identity for a direct local allocation pointer.
+  std::string AllocationIdentity;
+  VVarExpr(std::string Name, VType Ty, SourceLocation Loc,
+           std::string AllocationIdentity = "")
+      : VExpr(Var, Ty, Loc), Name(std::move(Name)),
+        AllocationIdentity(std::move(AllocationIdentity)) {}
 };
 
 class VBinOpExpr : public VExpr {
@@ -99,9 +115,17 @@ class VUnaryOpExpr : public VExpr {
 public:
   VUnaryOp Op;
   std::unique_ptr<VExpr> Operand;
+  std::string AllocationHeapVar;
+  std::string LivenessHeapVar;
+  std::string InitializationHeapVar;
   VUnaryOpExpr(VUnaryOp Op, std::unique_ptr<VExpr> O, VType Ty,
-               SourceLocation Loc)
-      : VExpr(UnaryOp, Ty, Loc), Op(Op), Operand(std::move(O)) {}
+               SourceLocation Loc, std::string AllocationHeapVar = "",
+               std::string LivenessHeapVar = "",
+               std::string InitializationHeapVar = "")
+      : VExpr(UnaryOp, Ty, Loc), Op(Op), Operand(std::move(O)),
+        AllocationHeapVar(std::move(AllocationHeapVar)),
+        LivenessHeapVar(std::move(LivenessHeapVar)),
+        InitializationHeapVar(std::move(InitializationHeapVar)) {}
 };
 
 class VCastExpr : public VExpr {

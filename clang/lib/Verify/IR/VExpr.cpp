@@ -44,7 +44,8 @@ std::unique_ptr<VExpr> verify::cloneVExpr(const VExpr *E) {
   }
   case VExpr::Var: {
     const auto *V = static_cast<const VVarExpr *>(E);
-    return std::make_unique<VVarExpr>(V->Name, V->Ty, V->Loc);
+    return std::make_unique<VVarExpr>(V->Name, V->Ty, V->Loc,
+                                      V->AllocationIdentity);
   }
   case VExpr::BinOp: {
     const auto *B = static_cast<const VBinOpExpr *>(E);
@@ -54,8 +55,9 @@ std::unique_ptr<VExpr> verify::cloneVExpr(const VExpr *E) {
   }
   case VExpr::UnaryOp: {
     const auto *U = static_cast<const VUnaryOpExpr *>(E);
-    return std::make_unique<VUnaryOpExpr>(U->Op, cloneVExpr(U->Operand.get()),
-                                          U->Ty, U->Loc);
+    return std::make_unique<VUnaryOpExpr>(
+        U->Op, cloneVExpr(U->Operand.get()), U->Ty, U->Loc,
+        U->AllocationHeapVar, U->LivenessHeapVar, U->InitializationHeapVar);
   }
   case VExpr::Cast: {
     const auto *C = static_cast<const VCastExpr *>(E);
@@ -144,7 +146,8 @@ verify::substituteBinderInVExpr(const VExpr *E, const std::string &Binder,
     const auto *U = static_cast<const VUnaryOpExpr *>(E);
     return std::make_unique<VUnaryOpExpr>(
         U->Op, substituteBinderInVExpr(U->Operand.get(), Binder, Value, Mode),
-        U->Ty, U->Loc);
+        U->Ty, U->Loc, U->AllocationHeapVar, U->LivenessHeapVar,
+        U->InitializationHeapVar);
   }
   case VExpr::Cast: {
     const auto *C = static_cast<const VCastExpr *>(E);

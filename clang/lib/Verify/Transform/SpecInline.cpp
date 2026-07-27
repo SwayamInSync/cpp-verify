@@ -265,6 +265,12 @@ public:
         inlineQuantifiedCalls(Store.Value);
         break;
       }
+      case VStmt::Allocate:
+        inlineQuantifiedCalls(static_cast<VAllocateStmt &>(*S).Initializer);
+        break;
+      case VStmt::Free:
+        inlineQuantifiedCalls(static_cast<VFreeStmt &>(*S).Ptr);
+        break;
       case VStmt::If: {
         auto &I = static_cast<VIfStmt &>(*S);
         inlineQuantifiedCalls(I.Cond);
@@ -413,6 +419,12 @@ public:
         inlineDefinednessCalls(Store.Value);
         break;
       }
+      case VStmt::Allocate:
+        inlineDefinednessCalls(static_cast<VAllocateStmt &>(*S).Initializer);
+        break;
+      case VStmt::Free:
+        inlineDefinednessCalls(static_cast<VFreeStmt &>(*S).Ptr);
+        break;
       case VStmt::If: {
         auto &I = static_cast<VIfStmt &>(*S);
         inlineDefinednessCalls(I.Cond);
@@ -706,6 +718,16 @@ public:
         Store.Value = inlineExpr(std::move(Store.Value));
         break;
       }
+      case VStmt::Allocate: {
+        auto &A = static_cast<VAllocateStmt &>(*S);
+        A.Initializer = inlineExpr(std::move(A.Initializer));
+        break;
+      }
+      case VStmt::Free: {
+        auto &F = static_cast<VFreeStmt &>(*S);
+        F.Ptr = inlineExpr(std::move(F.Ptr));
+        break;
+      }
       case VStmt::Return: {
         auto &R = static_cast<VReturnStmt &>(*S);
         R.Value = inlineExpr(std::move(R.Value));
@@ -910,6 +932,13 @@ collectSpecCallsInStmts(const std::vector<std::unique_ptr<VStmt>> &Stmts,
       collectSpecCalls(Store.Value.get(), Out);
       break;
     }
+    case VStmt::Allocate:
+      collectSpecCalls(static_cast<const VAllocateStmt &>(*S).Initializer.get(),
+                       Out);
+      break;
+    case VStmt::Free:
+      collectSpecCalls(static_cast<const VFreeStmt &>(*S).Ptr.get(), Out);
+      break;
     case VStmt::If: {
       const auto &I = static_cast<const VIfStmt &>(*S);
       collectSpecCalls(I.Cond.get(), Out);
@@ -1113,6 +1142,11 @@ collectRecursiveCalls(const std::vector<std::unique_ptr<VStmt>> &Stmts,
         break;
       }
       case VStmt::Store:
+        NextStates.push_back(std::move(State));
+        break;
+      case VStmt::Allocate:
+      case VStmt::Free:
+        Unsupported = true;
         NextStates.push_back(std::move(State));
         break;
       case VStmt::Call: {
