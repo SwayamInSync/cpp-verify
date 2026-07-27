@@ -51,6 +51,9 @@ int recursive_factorial(int n)
   post(result == math_factorial(n))
   decreases(n)
 {
+  ghost {
+    hide(math_factorial);
+  }
   int answer = 1;
   if (n > 1) {
     int previous = recursive_factorial(n - 1);
@@ -67,6 +70,9 @@ int iterative_factorial(int n)
   post(machine_factorial_value(n, result))
   post(result == math_factorial(n))
 {
+  ghost {
+    hide(math_factorial);
+  }
   int accumulator = 1;
   int i = 1;
   while (i <= n)

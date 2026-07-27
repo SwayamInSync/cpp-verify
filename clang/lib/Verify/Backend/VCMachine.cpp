@@ -41,6 +41,17 @@ static std::unique_ptr<VCExpr> vcOr(std::unique_ptr<VCExpr> A,
   return N;
 }
 
+static bool containsHeapSelect(const VCExpr *E) {
+  if (!E)
+    return false;
+  if (E->K == VCExpr::Select)
+    return true;
+  for (const auto &Child : E->Children)
+    if (containsHeapSelect(Child.get()))
+      return true;
+  return false;
+}
+
 static bool isIntegerKind(VTypeKind Kind) {
   return Kind == VTypeKind::Int32 || Kind == VTypeKind::Int64;
 }
@@ -99,6 +110,7 @@ class VCMachineBuilder {
   std::string ResultVarName;
   std::string CurHeap;
   std::map<std::string, std::string> BoundVars;
+  std::map<std::string, VIntMode> BoundVarModes;
   unsigned QuantifierCounter = 0;
 
   static VIntMode intModeOf(const VCExpr *E) {
@@ -310,8 +322,12 @@ class VCMachineBuilder {
         "__quant_" + std::to_string(QuantifierCounter++) + "_" + Q->Binder;
     N->Children.push_back(fromVExpr(Q->Lo.get()));
     N->Children.push_back(fromVExpr(Q->Hi.get()));
-    N->IntMode =
-        ForceCallerIntMode ? CallerIntMode : intModeOfVType(Q->BinderType);
+    // Quantified machine integers range over the corresponding mathematical
+    // interval and are converted back to their bit-vector type at machine
+    // operations. This is equivalent within the typed bounds and keeps array
+    // indices in Z3's native integer sort instead of mixing quantified
+    // bit-vectors with integer-addressed heaps.
+    N->IntMode = VIntMode::Math;
     N->BitWidth = Q->BinderType.BitWidth;
     N->IsSigned = Q->BinderType.IsSigned;
 
@@ -320,12 +336,26 @@ class VCMachineBuilder {
     bool HadPrevious = Previous != BoundVars.end();
     if (HadPrevious)
       PreviousName = Previous->second;
+    auto PreviousMode = BoundVarModes.find(Q->Binder);
+    bool HadPreviousMode = PreviousMode != BoundVarModes.end();
+    VIntMode SavedMode =
+        HadPreviousMode ? PreviousMode->second : VIntMode::Machine;
     BoundVars[Q->Binder] = N->Binder;
-    N->Children.push_back(fromVExpr(Q->Body.get()));
+    BoundVarModes[Q->Binder] = VIntMode::Machine;
+    auto Body = fromVExpr(Q->Body.get());
+    if (!containsHeapSelect(Body.get())) {
+      BoundVarModes[Q->Binder] = VIntMode::Math;
+      Body = fromVExpr(Q->Body.get());
+    }
+    N->Children.push_back(std::move(Body));
     if (HadPrevious)
       BoundVars[Q->Binder] = std::move(PreviousName);
     else
       BoundVars.erase(Q->Binder);
+    if (HadPreviousMode)
+      BoundVarModes[Q->Binder] = SavedMode;
+    else
+      BoundVarModes.erase(Q->Binder);
     return N;
   }
 
@@ -365,7 +395,8 @@ public:
       N->TypeKind = static_cast<const VVarExpr *>(E)->Ty.Kind;
       N->IsSigned = static_cast<const VVarExpr *>(E)->Ty.IsSigned;
       N->BitWidth = static_cast<const VVarExpr *>(E)->Ty.BitWidth;
-      N->IntMode = ForceCallerIntMode
+      N->IntMode = Bound != BoundVars.end() ? BoundVarModes.at(Name)
+                   : ForceCallerIntMode
                        ? CallerIntMode
                        : intModeOfVType(static_cast<const VVarExpr *>(E)->Ty);
       return N;

@@ -102,6 +102,9 @@ int recursive_fibonacci(int n)
   post(result == math_fibonacci(n))
   decreases(n)
 {
+  ghost {
+    hide(math_fibonacci);
+  }
   int answer = n;
   if (n <= 1) {
     ghost {
@@ -126,6 +129,9 @@ int iterative_fibonacci(int n)
   post(machine_fibonacci_value(n, result))
   post(result == math_fibonacci(n))
 {
+  ghost {
+    hide(math_fibonacci);
+  }
   if (n <= 1) {
     ghost {
       lemma_fibonacci_base(n);

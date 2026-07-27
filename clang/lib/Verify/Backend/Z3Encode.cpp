@@ -289,6 +289,8 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
   }
   case VCExpr::BvResize: {
     z3::expr Inner = child(0);
+    if (Inner.is_int())
+      Inner = z3::int2bv(E->Children[0]->BitWidth, Inner);
     if (!Inner.is_bv()) {
       markEncodingFailure("cannot resize non-bit-vector expression");
       return fallbackValue(E);
@@ -600,6 +602,13 @@ z3::expr Z3Encoder::encodeVC(const VCExpr *Root) {
       Stack.pop_back();
       continue;
     }
+    if ((E->K == VCExpr::Forall || E->K == VCExpr::Exists) &&
+        !Vars.count(E->Binder)) {
+      z3::expr Bound = E->IntMode == VIntMode::Machine
+                           ? Ctx.bv_const(E->Binder.c_str(), E->BitWidth)
+                           : Ctx.int_const(E->Binder.c_str());
+      Vars.emplace(E->Binder, std::move(Bound));
+    }
     bool Pending = false;
     for (const auto &C : E->Children) {
       if (C && !Done.count(C.get())) {
@@ -632,8 +641,8 @@ void Z3Encoder::emitSpecCallAxiom(const VCExpr *Call,
     Fuel = F->second;
   else if (ACtx.RevealedSpecs.count(Spec.Identity))
     Fuel = 1;
-  else if (!Spec.NeedsDecreasesCheck)
-    Fuel = 64;
+  else
+    Fuel = Spec.NeedsDecreasesCheck ? 1 : 64;
   if (Fuel == 0)
     return;
   if (Call->Children.size() != Spec.Params.size()) {
@@ -725,6 +734,7 @@ VerifyResult Z3Encoder::verifyMachine(const VCMachine &M) {
   }
   default:
     Out.Status = VerifyStatus::Unknown;
+    Out.Message = Solver.reason_unknown();
     return Out;
   }
 }
@@ -735,9 +745,9 @@ void Z3Encoder::dumpVC(const VCExpr *E, llvm::raw_ostream &OS) {
 }
 
 VerifyResult Z3VerifyBackend::verifyPassive(const PassiveProgram &P) {
-  VCMachine M = VCMachine::fromPassive(P);
-  VerifyResult R = Enc.verifyMachine(M);
-  if (R.Status == VerifyStatus::Failed) {
+  auto finishResult = [](VerifyResult R) {
+    if (R.Status != VerifyStatus::Failed)
+      return R;
     std::string Msg;
     for (const auto &KV : R.Model) {
       if (!Msg.empty())
@@ -745,6 +755,75 @@ VerifyResult Z3VerifyBackend::verifyPassive(const PassiveProgram &P) {
       Msg += KV.first + " = " + KV.second;
     }
     R.Message = Msg;
+    return R;
+  };
+
+  VerifyResult Whole = Enc.verifyMachine(VCMachine::fromPassive(P));
+  if (Whole.Status != VerifyStatus::Unknown)
+    return finishResult(std::move(Whole));
+
+  auto cloneContext = [](const PassiveProgram &Source) {
+    PassiveProgram Clone;
+    for (const auto &Entry : Source.EntryAssumes)
+      Clone.EntryAssumes.push_back(cloneVExpr(Entry.get()));
+    Clone.ResultVarName = Source.ResultVarName;
+    Clone.OldHeapName = Source.OldHeapName;
+    Clone.SpecFunctions = Source.SpecFunctions;
+    Clone.SpecFuel = Source.SpecFuel;
+    Clone.HiddenSpecs = Source.HiddenSpecs;
+    Clone.RevealedSpecs = Source.RevealedSpecs;
+    Clone.CallerIntMode = Source.CallerIntMode;
+    return Clone;
+  };
+  auto appendStmt = [](PassiveProgram &Program, PassiveStmt::Kind Kind,
+                       const VExpr *Cond) {
+    auto Stmt = std::make_unique<PassiveStmt>();
+    Stmt->K = Kind;
+    Stmt->Cond = cloneVExpr(Cond);
+    Program.Stmts.push_back(std::move(Stmt));
+  };
+  auto verifyProgram = [&](const PassiveProgram &Program) {
+    return Enc.verifyMachine(VCMachine::fromPassive(Program));
+  };
+
+  PassiveProgram Context = cloneContext(P);
+  unsigned ObligationIndex = 0;
+  for (const auto &Stmt : P.Stmts) {
+    if (!Stmt->Cond)
+      continue;
+    if (Stmt->K == PassiveStmt::Assume) {
+      appendStmt(Context, PassiveStmt::Assume, Stmt->Cond.get());
+      continue;
+    }
+
+    ++ObligationIndex;
+    PassiveProgram Obligation = cloneContext(P);
+    for (const auto &Known : Context.Stmts)
+      appendStmt(Obligation, Known->K, Known->Cond.get());
+    appendStmt(Obligation, PassiveStmt::Assert, Stmt->Cond.get());
+    VerifyResult R = verifyProgram(Obligation);
+    if (R.Status != VerifyStatus::Verified) {
+      if (R.Status == VerifyStatus::Unknown && R.Message.empty())
+        R.Message = "proof obligation " + std::to_string(ObligationIndex);
+      return finishResult(std::move(R));
+    }
   }
+
+  for (const auto &Exit : P.ExitAsserts) {
+    ++ObligationIndex;
+    PassiveProgram Obligation = cloneContext(P);
+    for (const auto &Known : Context.Stmts)
+      appendStmt(Obligation, Known->K, Known->Cond.get());
+    Obligation.ExitAsserts.push_back(cloneVExpr(Exit.get()));
+    VerifyResult R = verifyProgram(Obligation);
+    if (R.Status != VerifyStatus::Verified) {
+      if (R.Status == VerifyStatus::Unknown && R.Message.empty())
+        R.Message = "proof obligation " + std::to_string(ObligationIndex);
+      return finishResult(std::move(R));
+    }
+  }
+
+  VerifyResult R;
+  R.Status = VerifyStatus::Verified;
   return R;
 }
