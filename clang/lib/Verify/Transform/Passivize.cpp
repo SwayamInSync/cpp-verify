@@ -478,6 +478,17 @@ static bool pointerUsePreservesParam(const VExpr *E, const std::string &Param) {
   return false;
 }
 
+static bool isLoweredPointerDifference(const VExpr *E) {
+  if (!E || E->K != VExpr::BinOp)
+    return false;
+  const auto *B = static_cast<const VBinOpExpr *>(E);
+  if (B->Op == VBinOp::Sub && B->Lhs->Ty.Kind == VTypeKind::Ptr &&
+      B->Rhs->Ty.Kind == VTypeKind::Ptr)
+    return true;
+  return B->Op == VBinOp::Div && isLoweredPointerDifference(B->Lhs.get()) &&
+         B->Rhs->K == VExpr::Literal;
+}
+
 static bool scalarDynamicExprSafe(const VExpr *E, const std::string &Param) {
   if (!E)
     return true;
@@ -488,9 +499,12 @@ static bool scalarDynamicExprSafe(const VExpr *E, const std::string &Param) {
     return true;
   case VExpr::BinOp: {
     const auto *B = static_cast<const VBinOpExpr *>(E);
+    if (isLoweredPointerDifference(B))
+      return true;
     if ((B->Lhs->Ty.Kind == VTypeKind::Ptr ||
          B->Rhs->Ty.Kind == VTypeKind::Ptr) &&
-        referencesVar(B, Param) && B->Op != VBinOp::Eq && B->Op != VBinOp::Ne)
+        referencesVar(B, Param) && B->Op != VBinOp::Eq && B->Op != VBinOp::Ne &&
+        !isLoweredPointerDifference(B))
       return false;
     return scalarDynamicExprSafe(B->Lhs.get(), Param) &&
            scalarDynamicExprSafe(B->Rhs.get(), Param);
@@ -502,7 +516,8 @@ static bool scalarDynamicExprSafe(const VExpr *E, const std::string &Param) {
     const auto *C = static_cast<const VCastExpr *>(E);
     if (C->Inner->Ty.Kind == VTypeKind::Ptr &&
         referencesVar(C->Inner.get(), Param) && C->Ty.Kind != VTypeKind::Ptr &&
-        C->Ty.Kind != VTypeKind::Bool)
+        C->Ty.Kind != VTypeKind::Bool &&
+        !isLoweredPointerDifference(C->Inner.get()))
       return false;
     return scalarDynamicExprSafe(C->Inner.get(), Param);
   }
@@ -788,6 +803,25 @@ static std::unique_ptr<VExpr> samePointerRegion(const VExpr *L, const VExpr *R,
   return makeEq(cloneVExpr(LBase), cloneVExpr(RBase), Loc);
 }
 
+static std::unique_ptr<VExpr> samePointerDifferenceOrigin(const VExpr *L,
+                                                          const VExpr *R,
+                                                          SourceLocation Loc) {
+  auto LProvenance = pointerProvenance(L);
+  auto RProvenance = pointerProvenance(R);
+  if (LProvenance && RProvenance)
+    return makeEq(std::move(LProvenance), std::move(RProvenance), Loc);
+  if (LProvenance || RProvenance)
+    return makeBoolLiteral(false, Loc);
+
+  const VExpr *LBase = pointerBase(L);
+  const VExpr *RBase = pointerBase(R);
+  if (!LBase || !RBase || LBase->K != VExpr::Var || RBase->K != VExpr::Var)
+    return makeBoolLiteral(false, Loc);
+  const auto *LVar = static_cast<const VVarExpr *>(LBase);
+  const auto *RVar = static_cast<const VVarExpr *>(RBase);
+  return makeBoolLiteral(LVar->Name == RVar->Name, Loc);
+}
+
 static bool isRegionFootprint(const VExpr *E) {
   if (!E || E->K != VExpr::Load)
     return true;
@@ -860,6 +894,18 @@ static std::unique_ptr<VExpr> safetyForExpr(const VExpr *E,
                       std::move(Right), B->Loc),
           B->Loc);
     auto Safe = combineSafety(std::move(Left), std::move(Right), B->Loc);
+    if (B->Op == VBinOp::Sub && B->Lhs->Ty.Kind == VTypeKind::Ptr &&
+        B->Rhs->Ty.Kind == VTypeKind::Ptr) {
+      const VExpr *LeftBase = pointerBase(B->Lhs.get());
+      const VExpr *RightBase = pointerBase(B->Rhs.get());
+      auto Defined = makeAnd(nonNullSafety(LeftBase, B->Loc),
+                             nonNullSafety(RightBase, B->Loc), B->Loc);
+      Defined = makeAnd(
+          std::move(Defined),
+          samePointerDifferenceOrigin(B->Lhs.get(), B->Rhs.get(), B->Loc),
+          B->Loc);
+      Safe = combineSafety(std::move(Safe), std::move(Defined), B->Loc);
+    }
     if (B->Op == VBinOp::Shl || B->Op == VBinOp::Shr)
       return combineSafety(std::move(Safe), shiftSafety(B), B->Loc);
     if (B->Op == VBinOp::Add || B->Op == VBinOp::Sub || B->Op == VBinOp::Mul)

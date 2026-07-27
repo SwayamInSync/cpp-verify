@@ -49,6 +49,8 @@ private:
   std::unique_ptr<VFunction> convertFunction(const FunctionDecl *FD);
   std::unique_ptr<VFunction> convertConstexprSpec(const FunctionDecl *FD);
   std::unique_ptr<VExpr> convertExpr(const Expr *E);
+  std::unique_ptr<VExpr> convertPointerDifferenceOperand(const Expr *E,
+                                                         uint64_t PointeeSize);
   std::unique_ptr<VExpr> convertRecordField(std::unique_ptr<VExpr> Base,
                                             const FieldDecl *Field,
                                             SourceLocation Loc);

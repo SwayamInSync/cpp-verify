@@ -559,6 +559,23 @@ public:
         N->Children.push_back(std::move(Zero));
         return N;
       }
+      if (C->FromTy.Kind == VTypeKind::Ptr &&
+          (C->Ty.Kind == VTypeKind::Int32 || C->Ty.Kind == VTypeKind::Int64)) {
+        if (C->Ty.IntMode == VIntMode::Machine) {
+          auto N = std::make_unique<VCExpr>(VCExpr::IntToBv);
+          N->TypeKind = C->Ty.Kind;
+          N->IntMode = VIntMode::Machine;
+          N->IsSigned = C->Ty.IsSigned;
+          N->BitWidth = C->Ty.BitWidth;
+          N->Children.push_back(std::move(Inner));
+          return N;
+        }
+        Inner->TypeKind = C->Ty.Kind;
+        Inner->IntMode = VIntMode::Math;
+        Inner->IsSigned = C->Ty.IsSigned;
+        Inner->BitWidth = C->Ty.BitWidth;
+        return Inner;
+      }
       VIntMode TargetMode = intModeOfVType(C->Ty);
       Inner = toMode(std::move(Inner), TargetMode);
       if (TargetMode == VIntMode::Machine &&

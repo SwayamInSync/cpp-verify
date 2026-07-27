@@ -440,6 +440,57 @@ ASTConverter::convertDynamicPointerProvenance(const Expr *E) {
   return nullptr;
 }
 
+std::unique_ptr<VExpr>
+ASTConverter::convertPointerDifferenceOperand(const Expr *E,
+                                              uint64_t PointeeSize) {
+  if (!E || PointeeSize == 0)
+    return nullptr;
+  E = E->IgnoreParenImpCasts();
+  if (const auto *DRE = dyn_cast<DeclRefExpr>(E))
+    if (isa<VarDecl>(DRE->getDecl()) && E->getType()->isPointerType())
+      return convertExpr(E);
+
+  const auto *B = dyn_cast<BinaryOperator>(E);
+  if (!B || (B->getOpcode() != BO_Add && B->getOpcode() != BO_Sub))
+    return nullptr;
+
+  const Expr *Pointer = nullptr;
+  const Expr *Offset = nullptr;
+  bool PointerOnLeft = B->getLHS()->getType()->isPointerType();
+  if (PointerOnLeft) {
+    Pointer = B->getLHS();
+    Offset = B->getRHS();
+  } else if (B->getOpcode() == BO_Add &&
+             B->getRHS()->getType()->isPointerType()) {
+    Pointer = B->getRHS();
+    Offset = B->getLHS();
+  } else {
+    return nullptr;
+  }
+
+  const auto *PointerRef =
+      dyn_cast<DeclRefExpr>(Pointer->IgnoreParenImpCasts());
+  const auto *OffsetLiteral =
+      dyn_cast<IntegerLiteral>(Offset->IgnoreParenImpCasts());
+  if (!PointerRef || !isa<VarDecl>(PointerRef->getDecl()) || !OffsetLiteral ||
+      OffsetLiteral->getValue().ugt(1) ||
+      (B->getOpcode() == BO_Sub && !OffsetLiteral->getValue().isZero()))
+    return nullptr;
+
+  auto PointerValue = convertExpr(Pointer);
+  auto OffsetValue = convertExpr(Offset);
+  if (!PointerValue || !OffsetValue)
+    return nullptr;
+  OffsetValue =
+      scalePointerOffset(std::move(OffsetValue), PointeeSize, E->getExprLoc());
+  if (!OffsetValue)
+    return nullptr;
+  return std::make_unique<VBinOpExpr>(
+      B->getOpcode() == BO_Sub ? VBinOp::Sub : VBinOp::Add,
+      std::move(PointerValue), std::move(OffsetValue),
+      VType::makePtr(PointeeSize), E->getExprLoc());
+}
+
 bool ASTConverter::appendDynamicPointerAssignment(
     const VarDecl *Target, const Expr *Source, SourceLocation Loc,
     std::vector<std::unique_ptr<VStmt>> &Out) {
@@ -1765,6 +1816,50 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
     }
     const bool LeftPointer = B->getLHS()->getType()->isPointerType();
     const bool RightPointer = B->getRHS()->getType()->isPointerType();
+    if (B->getOpcode() == BO_Sub && LeftPointer && RightPointer) {
+      if (CurrentFn->IsSpec) {
+        Errors.push_back(
+            CurrentFn->Name +
+            ": pointer difference in spec or lifted constexpr functions is "
+            "unsupported");
+        return nullptr;
+      }
+      QualType LeftPointee =
+          B->getLHS()->getType()->getPointeeType().getUnqualifiedType();
+      QualType RightPointee =
+          B->getRHS()->getType()->getPointeeType().getUnqualifiedType();
+      if (!Ctx.hasSameType(LeftPointee, RightPointee) ||
+          LeftPointee->isIncompleteType()) {
+        Errors.push_back(CurrentFn->Name +
+                         ": pointer difference requires matching complete "
+                         "pointee types");
+        return nullptr;
+      }
+      const uint64_t PointeeSize =
+          Ctx.getTypeSizeInChars(LeftPointee).getQuantity();
+      auto L = convertPointerDifferenceOperand(B->getLHS(), PointeeSize);
+      auto R = convertPointerDifferenceOperand(B->getRHS(), PointeeSize);
+      if (!L || !R) {
+        Errors.push_back(
+            CurrentFn->Name +
+            ": pointer difference operands must be direct pointers or +0/+1 "
+            "positions within one complete object");
+        return nullptr;
+      }
+      VType AddressType = VType::makePtr(PointeeSize);
+      auto ByteDifference =
+          std::make_unique<VBinOpExpr>(VBinOp::Sub, std::move(L), std::move(R),
+                                       AddressType, E->getExprLoc());
+      auto Stride = std::make_unique<VLiteralExpr>(
+          std::to_string(PointeeSize), AddressType, E->getExprLoc());
+      auto ElementDifference = std::make_unique<VBinOpExpr>(
+          VBinOp::Div, std::move(ByteDifference), std::move(Stride),
+          AddressType, E->getExprLoc());
+      VType ResultType = VType::fromQualType(E->getType(), IntMode, Ctx);
+      return std::make_unique<VCastExpr>(std::move(ElementDifference),
+                                         AddressType, ResultType,
+                                         E->getExprLoc());
+    }
     if ((B->getOpcode() == BO_Add || B->getOpcode() == BO_Sub) &&
         referencesDynamicPointer(B)) {
       Errors.push_back(CurrentFn->Name +
@@ -1777,12 +1872,6 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
         referencesDynamicPointer(B)) {
       Errors.push_back(CurrentFn->Name +
                        ": ordering dynamic-storage pointers is unsupported");
-      return nullptr;
-    }
-    if (B->getOpcode() == BO_Sub && LeftPointer && RightPointer) {
-      Errors.push_back(CurrentFn->Name +
-                       ": pointer subtraction is unsupported without "
-                       "same-allocation provenance");
       return nullptr;
     }
     auto L = convertExpr(B->getLHS());
