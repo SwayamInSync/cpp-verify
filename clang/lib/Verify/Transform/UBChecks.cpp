@@ -1,4 +1,4 @@
-//===--- UBChecks.cpp - Supplemental UB and bounds obligations -------------===//
+//===--- UBChecks.cpp - UB and bounds obligations -------------------------===//
 #include "UBChecks.h"
 #include "../IR/VExpr.h"
 #include <map>

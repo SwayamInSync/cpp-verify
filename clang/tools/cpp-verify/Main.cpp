@@ -1,6 +1,6 @@
 //===--- Main.cpp - cpp-verify standalone tool ----------------------------===//
-#include "Verifier.h"
 #include "DumpIR.h"
+#include "Verifier.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/Frontend/CompilerInstance.h"
@@ -8,8 +8,8 @@
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Tooling.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdlib>
 
@@ -19,46 +19,38 @@ using namespace llvm;
 
 static cl::OptionCategory CppVerifyCategory("cpp-verify options");
 static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
-static cl::opt<std::string> DumpIR(
-    "dump-ir",
-    cl::desc("Dump verification IR (layers: 1=vcr 2=passive 3=vc 4=z3; "
-             "comma-separated, default all)"),
-    cl::value_desc("layers"),
-    cl::ValueOptional,
-    cl::cat(CppVerifyCategory));
+static cl::opt<std::string>
+    DumpIR("dump-ir",
+           cl::desc("Dump verification IR (layers: 1=vcr 2=passive 3=vc 4=z3; "
+                    "comma-separated, default all)"),
+           cl::value_desc("layers"), cl::ValueOptional,
+           cl::cat(CppVerifyCategory));
 
 static cl::opt<std::string> BackendOpt(
-    "backend",
-    cl::desc("Verification backend: z3 (default), lean, bmc"),
-    cl::value_desc("name"),
-    cl::init("z3"),
-    cl::cat(CppVerifyCategory));
+    "backend", cl::desc("Verification backend: z3 (default), lean, bmc"),
+    cl::value_desc("name"), cl::init("z3"), cl::cat(CppVerifyCategory));
 
-static cl::opt<std::string> LeanOut(
-    "lean-out",
-    cl::desc("Output path for --backend=lean scratch-pad export"),
-    cl::value_desc("file"),
-    cl::cat(CppVerifyCategory));
+static cl::opt<std::string>
+    LeanOut("lean-out",
+            cl::desc("Output path for --backend=lean scratch-pad export"),
+            cl::value_desc("file"), cl::cat(CppVerifyCategory));
 
-static cl::opt<unsigned> BMCUnroll(
-    "unroll",
-    cl::desc("Loop unroll bound for --backend=bmc"),
-    cl::init(10),
-    cl::cat(CppVerifyCategory));
+static cl::opt<unsigned>
+    BMCUnroll("unroll", cl::desc("Loop unroll bound for --backend=bmc"),
+              cl::init(10), cl::cat(CppVerifyCategory));
 
 static cl::opt<unsigned> SolverTimeout(
     "timeout",
-    cl::desc("Per-query Z3 timeout in milliseconds (0 = no limit). A query that "
-             "exceeds it is reported as unknown instead of hanging"),
-    cl::init(10000),
-    cl::cat(CppVerifyCategory));
+    cl::desc(
+        "Per-query Z3 timeout in milliseconds (0 = no limit). A query that "
+        "exceeds it is reported as unknown instead of hanging"),
+    cl::init(10000), cl::cat(CppVerifyCategory));
 
 static cl::opt<bool> CheckUB(
     "check-ub",
     cl::desc("Enable valid(p, n)-based buffer bounds checks in addition to "
              "always-on expression definedness checks"),
-    cl::init(false),
-    cl::cat(CppVerifyCategory));
+    cl::init(false), cl::cat(CppVerifyCategory));
 
 namespace {
 
