@@ -40,9 +40,10 @@ There are two frame granularities:
   modular caller preserves every other heap cell.
 - ``modifies(*p)`` names an open-ended region rooted at ``p``. Inside the
   function it authorizes every ``p[i]`` store. Across a modular call, today's
-  flat heap has no allocation identity or extent with which to delimit the
-  region, so the verifier conservatively forgets the whole heap and then
-  assumes the callee's postconditions.
+  parameter-pointer model has no allocation identity or extent with which to
+  delimit the region, so the verifier conservatively forgets the whole value
+  heap and then assumes the callee's postconditions. Local scalar allocations
+  do carry identity, but cannot yet cross this boundary.
 
 The second rule is deliberately incomplete rather than unsound: a caller may
 lose a true fact about an unrelated object, but it cannot retain a frame fact
@@ -119,10 +120,12 @@ conjunction clause on the bare complete-object pointer, with at most one marker
 per pointer. Without the option, dereference definedness is still mandatory,
 but no length is inferred.
 
-This is an abstract interface promise. It is not yet connected to
-``new``/``delete``, object lifetime, provenance, or alignment; those require the
-next-generation addressable-object model. Pointer difference is rejected until
-that model can prove same-allocation provenance and return an element count.
+This remains an abstract parameter-buffer promise; it is not inferred from a
+caller's allocation. Direct local scalar ``new``/``delete`` has a separate
+concrete liveness, initialization, size, and alignment model (see
+:doc:`../../language/dynamic-storage`). Pointer difference remains rejected
+until provenance can travel through general pointer values and prove
+same-array membership before returning an element count.
 
 Type invariants
 ---------------

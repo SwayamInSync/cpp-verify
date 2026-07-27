@@ -23,3 +23,4 @@ and proving freedom from undefined behavior.
    ch16-when-verification-fails
    ch17-backends-modular-calls
    ch18-undefined-behavior
+   ch19-dynamic-storage

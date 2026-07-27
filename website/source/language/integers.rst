@@ -90,8 +90,10 @@ still applies. Typed pointer steps are converted to target-byte offsets using
 ``sizeof(T)``, but bounds remain half-open element bounds. The marker must be a
 positive top-level conjunction clause on the bare pointer.
 
-Concrete allocation extents, lifetime mutation, provenance, and alignment are
-not modeled yet; see :doc:`limitations`.
+Concrete extent, lifetime, alignment, and initialization metadata is tracked
+for the bounded local scalar ``new``/``delete`` subset. General buffer
+provenance and parameter-pointer extents remain abstract; see
+:doc:`dynamic-storage` and :doc:`limitations`.
 
 Lifted ``constexpr`` functions retain target machine widths. At each call the
 verifier unfolds the body for C++ definedness checks, so signed overflow, invalid

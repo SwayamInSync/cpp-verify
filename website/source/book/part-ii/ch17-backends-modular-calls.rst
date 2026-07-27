@@ -59,10 +59,12 @@ in order. Spec and proof functions are not emitted at runtime and are handled by
 Calls also enforce the caller's frame in its **entry state**. Exact footprints
 (``p[i]``, ``p->field``) freshen only those addresses. A region footprint
 (``*p``), or a pointer-taking declaration with no explicit footprint, freshens
-the complete heap because allocation identity is not modeled yet. The
-postcondition then re-establishes whatever the caller may rely on. This
-conservative boundary prevents offset writes from masquerading as preservation
-of unrelated memory.
+the complete value heap because parameter allocation identity does not yet
+cross modular boundaries. The postcondition then re-establishes whatever the
+caller may rely on. This conservative boundary prevents offset writes from
+masquerading as preservation of unrelated memory. Functions that perform
+dynamic allocation or deallocation are currently verified only as standalone
+bodies; calls to them fail closed until lifetime effects have contract syntax.
 
 Z3 result discipline
 --------------------

@@ -45,10 +45,11 @@ At a **modular call**, region and exact footprints deliberately differ:
 
 - ``modifies(p[i])`` and ``modifies(p->field)`` identify one exact address, so
   all other heap cells are preserved.
-- ``modifies(*p)`` has no finite end in today's flat heap model. Until
-  allocation/provenance identities are modeled, a call with that footprint
-  conservatively forgets the whole heap and recovers only facts stated by the
-  callee's postconditions.
+- ``modifies(*p)`` has no finite end in the modular parameter-pointer model.
+  Local scalar allocations carry identity and extent, but those identities do
+  not yet cross call boundaries. A call with a region footprint therefore
+  conservatively forgets the whole value heap and recovers only facts stated
+  by the callee's postconditions.
 - A pointer-taking callee with no explicit ``modifies`` is treated just as
   conservatively. This prevents a missing frame from becoming a false proof.
 
@@ -101,9 +102,34 @@ disjointness facts should be bounded (as in real buffer code); an *unbounded*
 pure-disequality disjointness (``i != k`` with no range) may report ``unknown``
 (see :doc:`limitations`).
 
-``p - q`` is rejected until allocation identity can establish that both
+``p - q`` is rejected until general pointer provenance can establish that both
 pointers belong to the same array and convert the byte difference back to an
 element count. Pointer compound assignment is also outside the current subset.
+
+Local scalar dynamic storage
+----------------------------
+
+Ordinary scalar ``new``/``delete`` is supported for a direct, non-escaping
+local pointer. Allocation state is SSA-versioned: the verifier records the
+owning byte range, liveness, target size/alignment, and initialization. It
+therefore rejects use-after-delete, double-delete, overlap between simultaneous
+allocations, and uninitialized reads:
+
+.. code-block:: cpp
+
+   int roundtrip(int value)
+     post(result == value)
+   {
+     int *p = new int;
+     *p = value;
+     int observed = *p;
+     delete p;
+     return observed;
+   }
+
+The current dynamic pointer cannot be copied, returned, passed to another
+function, arithmetically adjusted, or allocated/freed in a loop body. See
+:doc:`dynamic-storage` for the complete boundary.
 
 Buffer bounds with ``valid``
 ----------------------------
@@ -126,9 +152,11 @@ discovered before its intentionally trivial body is inlined. It must occur as a
 positive top-level conjunction clause with a bare complete-object pointer, and
 each pointer may have only one marker; ambiguous forms fail closed.
 
-Without ``--check-ub``, dereferences must still be non-null and abstractly valid,
-but the verifier does not invent a buffer length. Allocation, lifetime,
-provenance, and alignment remain outside the current model.
+Without ``--check-ub``, dereferences must still be non-null and live, but the
+verifier does not invent a buffer length. Parameter pointers use abstract
+entry-state allocation and initialization assumptions. Concrete identity,
+liveness, alignment, and initialization are available only for the bounded
+local scalar allocation subset; general provenance remains unsupported.
 
 Frames also preserve unrelated objects across a write:
 

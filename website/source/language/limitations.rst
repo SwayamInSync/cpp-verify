@@ -9,11 +9,13 @@ Highest-priority semantic boundaries
 
 The following are outside the verified subset, in priority order:
 
-#. **Concrete object identity and lifetime.** Heap allocation with ``new`` /
-   ``delete``, deallocation, dangling pointers, placement construction,
-   use-after-lifetime, provenance, alignment, strict aliasing, and subobject
-   lifetime changes are not modeled. ``valid(p, n)`` is an abstract caller
-   promise, not evidence derived from an allocation.
+#. **General object provenance and lifetime.** Direct, non-escaping local
+   scalar ``new``/``delete`` now has concrete byte ownership, liveness,
+   size/alignment, and initialization tracking. General pointer provenance,
+   arrays, placement/nothrow allocation, non-trivial construction/destruction,
+   subobject lifetime changes, and strict aliasing are not modeled.
+   Parameter-pointer ``valid(p, n)`` remains an abstract caller promise rather
+   than evidence derived from a concrete allocation.
 #. **Addressable references and pointer-bearing aggregates.** References,
    pointers stored inside records, nested aggregates, unions, non-trivial
    constructors/destructors, inheritance, and virtual dispatch are rejected.
@@ -37,14 +39,14 @@ disjointness facts should use **bounded** indices — an unbounded pure-disequal
 the project :doc:`../book/part-ii/ch17-backends-modular-calls` and design notes in the repo
 ``docs/`` tree.
 
-The heap uses flat mathematical **target-byte addresses**. Typed ``T*``
+The value heap uses flat mathematical **target-byte addresses**. Typed ``T*``
 arithmetic scales every element step by Clang's target ``sizeof(T)``, while
 record fields use Clang's byte layout offset. Scalar, byte-sized, and
-flat-record strides are covered by false-proof regressions. There is not yet an
-allocation/provenance object that relates arbitrary cross-object and subobject
-operations, however. Pointer subtraction is therefore rejected, and code that
-depends on pointer reinterpretation or arithmetic across distinct allocations
-remains outside the verified subset.
+flat-record strides are covered by false-proof regressions. Local dynamic
+scalars also have an SSA-versioned owning-byte map, but provenance does not yet
+travel through general pointer values or call boundaries. Pointer subtraction
+is therefore rejected, and code that depends on pointer reinterpretation or
+arithmetic across distinct allocations remains outside the verified subset.
 
 Fail-closed behavior and solver incompleteness
 ----------------------------------------------
@@ -57,9 +59,9 @@ invalid program may therefore be rejected with either a concrete
 counterexample or conservative ``unknown``. Only ``Verified`` means Z3 proved
 the generated obligation unsatisfiable.
 
-At modular calls, ``modifies(*p)`` is a region footprint. Since the flat heap
-cannot yet delimit that region with allocation identity, the caller
-conservatively forgets the whole heap. Exact footprints such as
+At modular calls, ``modifies(*p)`` is a region footprint. Local dynamic
+allocation identities do not yet cross a modular call, so the caller
+conservatively forgets the whole value heap. Exact footprints such as
 ``modifies(p[i])`` and ``modifies(p->field)`` preserve all other addresses.
 This may require stronger postconditions, but avoids unsound frame facts.
 
@@ -68,16 +70,19 @@ Undefined-behavior checking
 
 Core expression definedness is always checked for executable/proof code:
 signed overflow, zero divisors, the signed-minimum division case, invalid shift
-counts/operands, and non-null abstract-valid dereferences. Definite
-initialization is tracked for supported local scalars and flat-record fields.
+counts/operands, and non-null live dereferences. Definite initialization is
+tracked for supported local scalars and flat-record fields. In the local scalar
+dynamic-storage subset, heap initialization and liveness are also tracked:
+uninitialized reads, use-after-delete, double-delete, and overlapping live
+allocations are rejected.
 
 ``--check-ub`` additionally enables **array bounds** on the Z3 path. A buffer's
 extent is declared with ``valid(p, n)`` in a precondition, and every ``p[i]`` /
 ``*(p+i)`` access rooted at that parameter must then be in ``[0, n)`` (see
-:doc:`integers` and :doc:`../book/part-ii/ch18-undefined-behavior`). Reads from
-uninitialized heap storage and use-after-lifetime are not checked because the
-heap does not yet track allocation state. The layering plan is in
-``docs/UB-CHECKING.md``.
+:doc:`integers` and :doc:`../book/part-ii/ch18-undefined-behavior`). For
+abstract parameter buffers, initialization is an implicit interface assumption;
+the verifier does not derive it from a caller allocation. The layering plan is
+in ``docs/UB-CHECKING.md``.
 
 The marker must be a positive top-level conjunction clause, its first argument
 must be the bare complete-object pointer, and only one marker may describe a

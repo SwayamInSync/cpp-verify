@@ -14,6 +14,7 @@ and :doc:`tooling`.
    ghost-proofs
    structs
    pointers
+   dynamic-storage
    integers
    tooling
    limitations

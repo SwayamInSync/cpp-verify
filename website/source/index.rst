@@ -125,6 +125,25 @@ Quick start
 Use ``-fverify-contracts`` on ``clang++`` so ``pre`` / ``post`` are keywords.
 ``cpp-verify`` adds that flag automatically.
 
+Verified scalar lifetimes
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+CppVerify also tracks initialized local scalar ``new``/``delete`` lifetimes:
+
+.. code-block:: cpp
+
+   int roundtrip(int value) post(result == value) {
+     int *p = new int;
+     *p = value;
+     int observed = *p;
+     delete p;
+     return observed;
+   }
+
+Use-after-delete, double-delete, overlapping live allocations, and reads before
+initialization are proof failures. See :doc:`language/dynamic-storage` for the
+current non-escaping subset.
+
 Backends and modular calls
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 

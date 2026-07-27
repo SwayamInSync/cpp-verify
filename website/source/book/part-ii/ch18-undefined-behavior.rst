@@ -172,8 +172,13 @@ What is not covered yet
 -----------------------
 
 Checked today: core expression definedness, local scalar/flat-record definite
-initialization, and (with ``--check-ub``) declared-buffer bounds. Reads from
-uninitialized **heap storage** and use-after-lifetime are not checked because
-the heap does not yet carry allocation, liveness, or initialization state.
-Pointer provenance, strict aliasing, and alignment are explicitly outside the
-model. The full design and layering plan live in ``docs/UB-CHECKING.md``.
+initialization, and (with ``--check-ub``) declared-buffer bounds. The bounded
+local scalar ``new``/``delete`` subset additionally checks initialized heap
+reads, live dereferences, exact-base deletion, double deletion, target
+alignment, and non-overlap of simultaneous allocations.
+
+General pointer provenance, arrays, strict aliasing, placement construction,
+and subobject lifetime remain outside the model. Parameter buffers use
+abstract validity/initialization assumptions rather than concrete caller
+allocation state. See :doc:`ch19-dynamic-storage` and the full layering plan in
+``docs/UB-CHECKING.md``.
