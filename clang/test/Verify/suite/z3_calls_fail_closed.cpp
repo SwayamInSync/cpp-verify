@@ -36,12 +36,6 @@ int reads_global_state()
   return global_state;
 }
 
-int *unsupported_pointer_arithmetic(int *pointer)
-  post(result == result)
-{
-  return pointer + 1;
-}
-
 int *unsupported_pointer_compound(int *pointer)
   post(result == result)
 {
@@ -96,7 +90,6 @@ int unsupported_recursive_exec(int n)
 
 // VERIFY-DAG: error: calls_uncontracted: call to function without a verification contract: opaque_side_effect
 // VERIFY-DAG: error: reads_global_state: global variable access is unsupported: global_state
-// VERIFY-DAG: error: unsupported_pointer_arithmetic: pointer arithmetic and ordering are unsupported
 // VERIFY-DAG: error: unsupported_pointer_compound: pointer arithmetic and ordering are unsupported
 // VERIFY-DAG: error: unsupported_forged_pointer: unsupported explicit pointer or aggregate cast
 // VERIFY-DAG: error: unsupported_switch: unsupported statement: SwitchStmt

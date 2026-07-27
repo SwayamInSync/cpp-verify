@@ -362,6 +362,27 @@ static std::unique_ptr<VExpr> samePointerRegion(const VExpr *L, const VExpr *R,
   return makeEq(cloneVExpr(LBase), cloneVExpr(RBase), Loc);
 }
 
+static bool isRegionFootprint(const VExpr *E) {
+  if (!E || E->K != VExpr::Load)
+    return true;
+  const VExpr *Ptr = static_cast<const VLoadExpr *>(E)->Ptr.get();
+  while (Ptr && Ptr->K == VExpr::Cast)
+    Ptr = static_cast<const VCastExpr *>(Ptr)->Inner.get();
+  return !Ptr || Ptr->K == VExpr::Var;
+}
+
+static std::unique_ptr<VExpr> footprintContains(const VExpr *OuterPtr,
+                                                bool OuterIsRegion,
+                                                const VExpr *InnerPtr,
+                                                bool InnerIsRegion,
+                                                SourceLocation Loc) {
+  if (OuterIsRegion)
+    return samePointerRegion(OuterPtr, InnerPtr, Loc);
+  if (InnerIsRegion)
+    return makeBoolLiteral(false, Loc);
+  return makeEq(cloneVExpr(OuterPtr), cloneVExpr(InnerPtr), Loc);
+}
+
 static std::unique_ptr<VExpr> nonNullSafety(const VExpr *Ptr,
                                             SourceLocation Loc) {
   const VExpr *Base = pointerBase(Ptr);
@@ -1236,22 +1257,32 @@ public:
       P.Stmts.push_back(std::move(PS));
     }
 
-    for (const auto &M : ActualModifies) {
+    for (size_t I = 0; I < ActualModifies.size(); ++I) {
+      const auto &M = ActualModifies[I];
       emitExprSafety(P, M.get(), nullptr, M->Loc);
       auto Allowed = makeBoolLiteral(false, C.Loc);
       const auto *ActualLoad = M && M->K == VExpr::Load
                                    ? static_cast<const VLoadExpr *>(M.get())
                                    : nullptr;
-      if (ActualLoad)
-        for (const auto &CallerM : CallerModifies)
+      if (ActualLoad) {
+        const bool ActualIsRegion =
+            I >= Callee->Modifies.size() ||
+            isRegionFootprint(Callee->Modifies[I].get());
+        for (size_t J = 0; J < CallerModifies.size(); ++J) {
+          const auto &CallerM = CallerModifies[J];
           if (const auto *CallerLoad =
                   CallerM && CallerM->K == VExpr::Load
                       ? static_cast<const VLoadExpr *>(CallerM.get())
                       : nullptr)
-            Allowed = makeOr(std::move(Allowed),
-                             samePointerRegion(ActualLoad->Ptr.get(),
-                                               CallerLoad->Ptr.get(), C.Loc),
-                             C.Loc);
+            Allowed = makeOr(
+                std::move(Allowed),
+                footprintContains(CallerLoad->Ptr.get(),
+                                  J >= Fn.Modifies.size() ||
+                                      isRegionFootprint(Fn.Modifies[J].get()),
+                                  ActualLoad->Ptr.get(), ActualIsRegion, C.Loc),
+                C.Loc);
+        }
+      }
       emitPassive(P, PassiveStmt::Assert, std::move(Allowed), nullptr, C.Loc);
     }
 
@@ -1278,13 +1309,19 @@ public:
       }
     }
 
-    bool CanFrame = true;
-    for (const auto &M : ActualModifies)
-      if (!M || M->K != VExpr::Load)
-        CanFrame = false;
-    if (!ActualModifies.empty() && !CanFrame) {
+    bool HasPointerParam = false;
+    for (const auto &Param : Callee->Params)
+      HasPointerParam |= Param.second.Kind == VTypeKind::Ptr;
+    bool CanFrameExactly = !ActualModifies.empty();
+    for (size_t I = 0; I < ActualModifies.size(); ++I)
+      if (!ActualModifies[I] || ActualModifies[I]->K != VExpr::Load ||
+          I >= Callee->Modifies.size() ||
+          isRegionFootprint(Callee->Modifies[I].get()))
+        CanFrameExactly = false;
+    if ((!ActualModifies.empty() && !CanFrameExactly) ||
+        (ActualModifies.empty() && HasPointerParam)) {
       Renames[VHeapName] = bump(VHeapName);
-    } else {
+    } else if (CanFrameExactly) {
       std::string PreviousHeap = EntryHeap;
       for (const auto &M : ActualModifies) {
         const auto *L = static_cast<const VLoadExpr *>(M.get());
@@ -1297,8 +1334,7 @@ public:
                                                      std::move(Fresh), C.Loc));
         PreviousHeap = NextHeap;
       }
-      if (!ActualModifies.empty())
-        Renames[VHeapName] = PreviousHeap;
+      Renames[VHeapName] = PreviousHeap;
     }
 
     for (const auto &Post : Callee->Postconditions) {
@@ -1342,13 +1378,14 @@ public:
       for (const auto &M : Fn.Modifies)
         if (const auto *Load = M && M->K == VExpr::Load
                                    ? static_cast<const VLoadExpr *>(M.get())
-                                   : nullptr)
-          Allowed =
-              makeOr(std::move(Allowed),
-                     samePointerRegion(
-                         Ptr.get(), cloneExpr(Load->Ptr.get(), EntryCtx).get(),
-                         St.Loc),
-                     St.Loc);
+                                   : nullptr) {
+          auto DeclaredPtr = cloneExpr(Load->Ptr.get(), EntryCtx);
+          Allowed = makeOr(std::move(Allowed),
+                           footprintContains(DeclaredPtr.get(),
+                                             isRegionFootprint(M.get()),
+                                             Ptr.get(), false, St.Loc),
+                           St.Loc);
+        }
       emitPassive(P, PassiveStmt::Assert, std::move(Allowed), Active.get(),
                   St.Loc);
       std::string OldHeap = Renames[VHeapName];
@@ -1430,19 +1467,15 @@ public:
         RetVal = static_cast<const VCastExpr *>(RetVal)->Inner.get();
       if (RetVal && RetVal->K == VExpr::Var) {
         const std::string &Src = static_cast<const VVarExpr *>(RetVal)->Name;
-        std::set<std::string> PostFields;
-        for (const auto &Post : Fn.Postconditions)
-          collectDottedVars(Post.get(), PostFields);
         FieldReturnCase Case{cloneVExpr(Active.get()), {}, R.Loc};
-        for (const std::string &FV : PostFields) {
-          if (FV.rfind("result.", 0) != 0)
-            continue;
-          std::string SrcField = Src + "." + FV.substr(7);
+        for (const auto &[Field, Ty] : Fn.ReturnFields) {
+          const std::string ResultField = "result." + Field;
+          std::string SrcField = Src + "." + Field;
           std::string SrcVer = SrcField;
           if (auto It = Renames.find(SrcField); It != Renames.end())
             SrcVer = It->second;
-          VType Ty = typeForName(SrcField);
-          Case.Values[FV] = std::make_unique<VVarExpr>(SrcVer, Ty, R.Loc);
+          Case.Values[ResultField] =
+              std::make_unique<VVarExpr>(SrcVer, Ty, R.Loc);
         }
         if (!Case.Values.empty()) {
           FieldReturnCases.push_back(std::move(Case));

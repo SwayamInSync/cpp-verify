@@ -1194,9 +1194,6 @@ ASTConverter::convertArrowFieldAddress(const MemberExpr *M) {
   if (BitOffset % Ctx.getCharWidth() != 0)
     return nullptr;
   uint64_t ByteOffset = BitOffset / Ctx.getCharWidth();
-  if (ByteOffset == 0)
-    return Base;
-
   auto Offset = std::make_unique<VLiteralExpr>(
       static_cast<int64_t>(ByteOffset), VType::makePtr(), M->getExprLoc());
   return std::make_unique<VBinOpExpr>(VBinOp::Add, std::move(Base),
@@ -1934,6 +1931,19 @@ void ASTConverter::appendAssignment(const Expr *LHS,
     }
   }
 
+  if (const auto *AS = dyn_cast<ArraySubscriptExpr>(LHS)) {
+    auto Base = convertExpr(AS->getBase());
+    auto Index = convertExpr(AS->getIdx());
+    if (Base && Index) {
+      auto Address =
+          std::make_unique<VBinOpExpr>(VBinOp::Add, std::move(Base),
+                                       std::move(Index), VType::makePtr(), Loc);
+      Out.push_back(std::make_unique<VStoreStmt>(std::move(Address),
+                                                 std::move(Value), Loc));
+      return;
+    }
+  }
+
   Errors.push_back(CurrentFn->Name + ": unsupported assignment target");
 }
 
@@ -2019,6 +2029,7 @@ std::vector<std::unique_ptr<VStmt>> ASTConverter::convertStmt(const Stmt *S) {
   if (S->getStmtClass() == Stmt::ReturnStmtClass) {
     const auto *RS = cast<ReturnStmt>(S);
     if (const Expr *RetE = RS->getRetValue()) {
+      emitReturnInvariantAssert(RetE, Out, RS->getBeginLoc());
       const auto *CE = dyn_cast<CallExpr>(RetE->IgnoreParenImpCasts());
       if (CE) {
         if (const FunctionDecl *Callee = CE->getDirectCallee()) {
@@ -2080,9 +2091,6 @@ std::vector<std::unique_ptr<VStmt>> ASTConverter::convertStmt(const Stmt *S) {
         return Out;
       }
     }
-    // A returned struct value must satisfy its type_invariant: assert it just
-    // before the return, while the fields still hold the returned value.
-    emitReturnInvariantAssert(RS->getRetValue(), Out, RS->getBeginLoc());
     std::unique_ptr<VExpr> Val;
     if (RS->getRetValue())
       Val = convertExpr(RS->getRetValue());
@@ -2377,19 +2385,6 @@ std::vector<std::unique_ptr<VStmt>> ASTConverter::convertStmt(const Stmt *S) {
           appendAssignment(BO->getLHS(), std::move(Value), BO->getExprLoc(),
                            Out);
           return Out;
-        }
-      } else if (const auto *AS = dyn_cast<ArraySubscriptExpr>(
-                     BO->getLHS()->IgnoreParenImpCasts())) {
-        // p[i] = v  is  *(p + i) = v
-        auto Base = convertExpr(AS->getBase());
-        auto Idx = convertExpr(AS->getIdx());
-        auto Val = convertExpr(BO->getRHS());
-        if (Base && Idx && Val) {
-          auto Addr = std::make_unique<VBinOpExpr>(
-              VBinOp::Add, std::move(Base), std::move(Idx), VType::makePtr(),
-              BO->getExprLoc());
-          Out.push_back(std::make_unique<VStoreStmt>(
-              std::move(Addr), std::move(Val), BO->getExprLoc()));
         }
       }
       auto Value = convertAssignmentValue(BO);

@@ -9,7 +9,7 @@ void set_value(int *p, int value)
   *p = value;
 }
 
-void valid_preserves_unmodified(int *p, int *q)
+void conservative_region_frame(int *p, int *q)
   pre(p != nullptr && q != nullptr && p != q)
   pre(*q == 9)
   modifies(*p)
@@ -57,7 +57,10 @@ void invalid_missing_modifies(int *p)
 }
 
 // VERIFY-DAG: Verified: set_value
-// VERIFY-DAG: Verified: valid_preserves_unmodified
+// A region-style `modifies(*p)` may include offsets from p. The flat-address
+// heap cannot prove that an arbitrary q lies outside that region, so modular
+// calls conservatively havoc the heap rather than preserve *q unsoundly.
+// VERIFY-DAG: error: verification failed: conservative_region_frame
 // VERIFY-DAG: Verified: increment_value
 // VERIFY-DAG: Verified: valid_old_uses_call_entry
 // VERIFY-DAG: error: verification failed: invalid_unframed_claim
