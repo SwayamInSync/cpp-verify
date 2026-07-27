@@ -43,12 +43,12 @@ CppVerify adds a non-null, live, and initialized entry precondition for each
 reference. Mutable pointer/reference parameter pairs are object-range disjoint
 by default; ``aliases(left, right)`` permits same-object aliasing.
 
-``modifies(left)`` is currently an open region rooted at the referent, like
-``modifies(*p)``. Across a modular call this may conservatively forget the
-value heap and recover only facts in the callee postconditions.
+``modifies(left)`` is an open region rooted at the referent, like
+``modifies(*p)``. An abstract parameter call may conservatively forget the
+value heap. A provenance-backed automatic or dynamic scalar actual is framed as
+one exact cell after the callee passes the structural non-escape scan.
 
-A reference argument must currently be another supported reference parameter
-or a direct pointer dereference:
+A reference argument may also be an initialized ordinary scalar local:
 
 .. code-block:: cpp
 
@@ -67,10 +67,27 @@ or a direct pointer dereference:
      set_value(*target, value);
    }
 
-Ordinary local scalar actuals, local references, subscript/field/conditional
-bindings, temporaries, reference returns, address-taking, rvalue references,
-and non-scalar referents fail closed. Requiring initialized entry storage also
-excludes output-only references to an indeterminate object for now.
+   int set_local(int value)
+     post(result == value)
+   {
+     int local = 0;
+     int& alias = local;
+     set_value(alias, value);
+     return local;
+   }
+
+Only address-required scalar locals are spilled from scalar SSA. They use fresh
+automatic lifetime identities, target size/alignment, byte ownership,
+liveness, and initialization. Local bindings snapshot the address, may chain,
+and cannot escape; their conservative function-wide modeled lifetime is
+therefore unobservable.
+
+Subscript/field/conditional bindings, temporaries, reference returns,
+address-taking, rvalue references, and non-scalar referents fail closed.
+Addressable declarations inside loops and ``old`` of an automatic local/local
+binding are rejected, while an outer automatic local and a local reference
+declared inside a loop are supported. Requiring initialized storage excludes
+output-only references to an indeterminate object for now.
 Heap-mutating executable recursion through a reference fails closed until
 termination analysis models heap-state updates.
 

@@ -48,12 +48,33 @@ initialized. ``old(left)`` reads the entry heap, while the unwrapped ``left`` in
 the postcondition reads the final heap. Distinct mutable references are
 object-range disjoint unless ``aliases(left, right)`` is present.
 
-This first reference slice is intentionally parameter-only. A reference formal
-can be forwarded from another reference or bound to a direct dereference such
-as ``set_value(*p, value)``. Ordinary local actuals, local references,
-temporaries, subscript/field/conditional bindings, reference returns,
-address-taking, rvalue references, and non-scalar referents remain rejected
-until stack/subobject lifetime identity is represented.
+Reference formals can be forwarded from another reference, bound to a direct
+dereference such as ``set_value(*p, value)``, or passed an initialized ordinary
+scalar local. Local references may bind those same direct forms and chain:
+
+.. code-block:: cpp
+
+   bool swap_locals()
+     post(result)
+   {
+     int left = 1;
+     int right = 2;
+     int& alias = left;
+     swap_values(alias, right);
+     return left == 2 && right == 1;
+   }
+
+CppVerify spills only address-required scalar locals from scalar SSA. Each
+becomes a fresh automatic object with target size/alignment, byte ownership,
+liveness, initialization, and a non-escaping lifetime identity. A local
+binding snapshots its address, so changing a source pointer later does not
+rebind the reference.
+
+Subscript/field/conditional bindings, temporaries, reference returns,
+address-taking, rvalue references, and non-scalar referents remain rejected.
+Addressable declarations inside loops and ``old`` of automatic locals or local
+bindings are also fail-closed; outer automatic locals and loop-local reference
+aliases are supported.
 
 Buffers and arrays
 ------------------

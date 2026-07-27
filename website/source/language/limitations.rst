@@ -87,10 +87,11 @@ C++ feature boundaries
        reinterpretation.
    * - References
      - Scalar ``T&``/``const T&`` parameters on contracted executable free
-       functions for boolean, integral, and enum referents.
-     - Local reference declarations and ordinary local actuals, reference
-       returns, non-scalar referents, rvalue references, address-taking,
-       temporaries/lifetime extension, reference members, and forwarding.
+       functions, initialized ordinary scalar local actuals, and local aliases
+       for boolean, integral, and enum referents.
+     - Subscript/field/conditional bindings, reference returns, non-scalar
+       referents, rvalue references, address-taking, temporaries/lifetime
+       extension, reference members, and forwarding.
    * - Arrays
      - Pointer-parameter indexing and quantified abstract buffers.
      - Array-valued locals/fields/parameters, multidimensional arrays,
@@ -164,8 +165,8 @@ complete-object disjointness precondition. ``aliases(p, q)`` opts a pair into
 same-object aliasing; it does not establish arbitrary partial overlap or create
 provenance.
 
-Scalar lvalue-reference parameters
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Scalar lvalue references and automatic locals
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Contracted executable free functions may accept ``T&`` and ``const T&`` when
 ``T`` is ``bool``, integral, or enum. VCR retains the binding as an immutable
@@ -175,16 +176,26 @@ non-null, live, and initialized precondition.
 
 ``modifies(ref)`` is an open region rooted at the referent, like
 ``modifies(*p)``. Default object-range disjointness and ``aliases`` apply across
-pointer and reference parameters. A call may currently bind a reference only
-from another supported reference parameter or a direct dereference such as
-``set(*p, value)``; checked direct scalar dynamic provenance is preserved.
+pointer and reference parameters. A call may bind a reference from another
+supported reference, an initialized ordinary scalar local, or a direct
+dereference such as ``set(*p, value)``. Local references may bind those direct
+forms and chain through other local aliases; a pointer-derived binding
+snapshots the address.
 
-Ordinary local actuals, local reference declarations, conditional/subscript/
-field bindings, temporaries, reference returns, address-taking, rvalue
-references, and non-scalar referents remain fail-closed. The initialized-entry
-rule also means output-only references to indeterminate storage are not yet
-supported. Reference reads participate in the existing unspecified
-argument-order safety check.
+Only address-required ``bool``, integral, and enum locals are spilled from
+scalar SSA. They receive fresh automatic lifetime identities, target
+size/alignment, byte ownership, liveness, and initialization. They remain
+modeled until function return and cannot escape. Checked scalar modular calls
+retain their provenance and exact owned-cell frame after a structural
+non-escape scan.
+
+Conditional/subscript/field bindings, temporaries, reference returns,
+address-taking, rvalue references, and non-scalar referents remain fail-closed.
+Addressable declarations inside loops and ``old`` of local objects/bindings are
+also rejected; outer automatic locals and loop-local aliases are supported.
+The initialized-entry rule excludes output-only references to indeterminate
+storage. Reference reads participate in the existing argument-order safety
+check.
 
 Local scalar dynamic storage
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -401,7 +412,7 @@ oracles, improve source-attributed obligations, and never convert timeout,
 P1 — general addressable objects
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Complete local/subobject and temporary reference binding, then add
+Complete subobject and temporary reference binding, then add
 pointer-bearing/nested aggregates, array objects and element lifetimes,
 compositional origin/extent/index metadata, modular allocation/deallocation/
 escape effects, returned ownership, and RAII-ready lifetime transitions.

@@ -161,9 +161,10 @@ parameters:
    }
 
 Reference values lower to heap loads, writes lower to stores, and ``old`` reads
-the entry heap. This first slice supports direct reference forwarding and
-direct ``*p`` actuals; ordinary local scalar binding, temporaries, reference
-returns, and non-scalar referents remain fail-closed. See
+the entry heap. The bounded scalar slice supports direct forwarding, direct
+``*p`` bindings, ordinary initialized scalar local actuals, and chained local
+reference aliases. Subobjects, temporaries, reference returns, and non-scalar
+referents remain fail-closed. See
 :doc:`language/pointers`.
 
 Backends and modular calls
