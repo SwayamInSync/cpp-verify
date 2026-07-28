@@ -15,4 +15,4 @@ void mcpy(int* d, int* s, int n)
     decreases(n - j)
   { d[j] = s[j]; j = j + 1; }
 }
-// VERIFY: {{(error: verification failed|unknown): mcpy}}
+// VERIFY: {{(error: verification failed|Unresolved): mcpy}}

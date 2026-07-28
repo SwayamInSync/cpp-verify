@@ -18,6 +18,9 @@ struct VerifyOptions {
   bool LowerOnly = false;
   BackendKind Backend = BackendKind::Z3;
   std::string LeanOutPath;
+  std::string LeanProjectPath;
+  std::string LeanFallbackProjectPath;
+  bool LeanCertify = false;
   unsigned BMCUnroll = 10;
   /// Per-query Z3 timeout in milliseconds; 0 disables it. Non-terminating
   /// queries return Unknown instead of hanging the tool.

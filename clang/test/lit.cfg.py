@@ -378,6 +378,9 @@ llvm_config.feature_config(
 if lit.util.which("xmllint"):
     config.available_features.add("xmllint")
 
+if lit.util.which("lake", config.environment["PATH"]):
+    config.available_features.add("lean")
+
 if config.enable_backtrace:
     config.available_features.add("backtrace")
 

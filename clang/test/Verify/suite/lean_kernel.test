@@ -1,0 +1,14 @@
+// REQUIRES: lean
+//
+// RUN: rm -rf %t.mega %t.quant %t.recursive %t.names
+// RUN: %cpp-verify --backend=lean --lean-project=%t.mega %S/cov_mega_sweep.cpp
+// RUN: lake --dir=%t.mega build CppVerify.Generated
+// RUN: %cpp-verify --backend=lean --lean-project=%t.quant %S/cov_lean_quant.cpp
+// RUN: lake --dir=%t.quant build CppVerify.Generated
+// RUN: %cpp-verify --backend=lean --lean-project=%t.recursive %S/spec_fuel_recursive_pass.cpp
+// RUN: lake --dir=%t.recursive build CppVerify.Generated
+// RUN: %python -c "import os, sys; sys.exit(os.path.getsize(r'%t.recursive/CppVerify/Generated.lean') >= 100000)"
+// RUN: %cpp-verify --backend=lean --lean-project=%t.names %S/Inputs/lean_name_encoding.cpp
+// RUN: grep -Eq 'cppEncoded_[0-9a-f]+' %t.names/CppVerify/Generated.lean
+// RUN: lake --dir=%t.names build CppVerify.Generated
+// RUN: lake --dir=%t.names build CppVerify.Check

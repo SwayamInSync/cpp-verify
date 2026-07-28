@@ -42,6 +42,10 @@ Other flags
   always-on core definedness (see :doc:`ch18-undefined-behavior`)
 - ``cpp-verify --unroll=N`` — loop bound for BMC
 - ``cpp-verify --timeout=N`` — per-query Z3 timeout in ms (default 30000)
+- ``cpp-verify --lean-project=DIR`` — generate a preserved, pinned Lean project
+- ``cpp-verify --lean-fallback=DIR`` — export only unresolved Z3 functions to Lean
+- ``cpp-verify --lean-certify`` — kernel-check all active project proofs without
+  admissions or undocumented proof axioms
 - ``cpp-verify --dump-ir[=1,2,3,4]`` — dump VCR / passive / Obligation IR / Z3 layers
 - ``cpp-verify --lower-only`` — construct and encode VCs without invoking Z3's
   satisfiability check

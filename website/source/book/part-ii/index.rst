@@ -2,7 +2,7 @@ Part II — CppVerify
 ===================
 
 These chapters cover verified C++ in practice: the toolchain, contract syntax, common proof
-patterns, backends (Z3, BMC, Lean export), modular calls, how to respond when verification fails,
+patterns, backends (Z3, BMC, editable Lean certification), modular calls, how to respond when verification fails,
 and proving freedom from undefined behavior.
 
 .. figure:: /_static/diagrams/cppverify-workflow.svg

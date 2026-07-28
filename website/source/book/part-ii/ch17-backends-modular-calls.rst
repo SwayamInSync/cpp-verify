@@ -20,15 +20,50 @@ Verification backends
    * - **BMC**
      - ``cpp-verify --backend=bmc --unroll=N file.cpp``
      - Small bounded loops: body unrolled ``N`` times, then Z3. Good when loop structure is simple and bounds are tiny.
-   * - **Lean export**
-     - ``cpp-verify --backend=lean --lean-out=out.lean file.cpp``
-     - Export the canonical correctness obligation as an unchecked theorem
-       with ``sorry``. This does not run Z3 and reports ``Exported``, not a
-       proof result.
+   * - **Lean**
+     - ``cpp-verify --backend=lean --lean-project=proof file.cpp``
+     - Generate editable source-attributed goals from the same canonical
+       semantics. Initial generation is ``Exported``; an admission-free pinned
+       kernel build is ``Certified``.
 
 BMC does not replace loop contracts on the default path; it is an alternate pipeline stage that
 **expands** loops before passivization. You still write ``invariant`` / ``decreases`` for documentation
 and for the Z3 backend.
+
+BMC's result is also bounded explicitly. A counterexample inside the explored
+prefix is ``Failed``. If safety holds but an unwinding assertion fails, the
+result is ``BoundedSafe(N)``, never an unbounded proof. It reports ``Verified``
+only when both safety and complete unwinding are proved at the selected bound.
+
+Editable Lean fallback
+----------------------
+
+For an explicit interactive proof:
+
+.. code-block:: bash
+
+   cpp-verify --backend=lean --lean-project=proof file.cpp
+   # complete proof/CppVerify/Proofs/*.lean; put shared lemmas in User.lean
+   cpp-verify --backend=lean --lean-project=proof --lean-certify file.cpp
+
+``Generated.lean`` and ``Check.lean`` are machine-owned.
+``User.lean`` and existing per-obligation proof files are never overwritten.
+The project pins ``leanprover/lean4:v4.32.2``. Certification compiles the user
+module and every active proof with admissions promoted to errors, checks the
+aggregate module, and rejects proof dependencies other than Lean's documented
+foundational axioms.
+
+To keep Z3 as the fast path and export only unresolved functions:
+
+.. code-block:: bash
+
+   cpp-verify --lean-fallback=proof file.cpp
+   cpp-verify --lean-fallback=proof --lean-certify file.cpp
+
+The first run still exits as unresolved. SAT counterexamples are failures, not
+fallback candidates. Regeneration may leave old proof files on disk, but only
+the current source obligations are imported and certified; a stale active proof
+must type-check against the regenerated goal.
 
 Modular function calls
 ----------------------
@@ -113,7 +148,8 @@ only entry facts and assumptions that precede each obligation. It does not
 rebuild a second VC. The retry helps quantified heap programs without letting a
 later assumption prove an earlier assertion. If it still cannot discharge every
 obligation, the final result remains ``unknown`` and the function is not
-certified.
+certified unless the user opted into the Lean fallback and its current project
+passes the admission-free kernel check.
 
 Parallel verify + compile
 -------------------------

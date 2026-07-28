@@ -28,4 +28,4 @@ int invalid_nonterminating_exec(int n)
 // LOWER-DAG: Lowered: invalid_nonterminating_exec
 // LOWER-NOT: Verified:
 // LOWER-NOT: error:
-// LOWER-NOT: unknown:
+// LOWER-NOT: Unresolved:

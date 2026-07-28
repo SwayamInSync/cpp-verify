@@ -173,9 +173,11 @@ Backends and modular calls
 .. code-block:: bash
 
    cpp-verify --backend=bmc --unroll=3 loops.cpp
+   cpp-verify --lean-fallback=proof hard_goal.cpp
    cpp-verify --dump-ir=3,4 debug.cpp
 
-See :doc:`book/part-ii/ch17-backends-modular-calls` for Z3 vs BMC vs Lean export and chained calls like ``f(g(x))``.
+See :doc:`book/part-ii/ch17-backends-modular-calls` for Z3, bounded analysis,
+editable Lean certification, and chained calls like ``f(g(x))``.
 
 Learn more
 ----------

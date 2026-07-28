@@ -1,6 +1,5 @@
 //===--- Z3Encode.cpp -----------------------------------------------------===//
 #include "Z3Encode.h"
-#include "SpecAxioms.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
@@ -23,6 +22,16 @@ bool containsQuantifier(const VCExpr *E) {
                      });
 }
 
+void collectSpecCalls(const VCExpr *Expression,
+                      std::vector<const VCExpr *> &Calls) {
+  if (!Expression)
+    return;
+  if (Expression->K == VCExpr::SpecCall)
+    Calls.push_back(Expression);
+  for (const auto &Child : Expression->Children)
+    collectSpecCalls(Child.get(), Calls);
+}
+
 } // namespace
 
 Z3Encoder::Z3Encoder() : Ctx(), Solver(Ctx) {}
@@ -32,18 +41,17 @@ z3::sort Z3Encoder::bvSort(unsigned BitWidth) { return Ctx.bv_sort(BitWidth); }
 z3::sort Z3Encoder::boolSort() { return Ctx.bool_sort(); }
 z3::sort Z3Encoder::heapSort() { return Ctx.array_sort(intSort(), intSort()); }
 
-z3::sort Z3Encoder::valueSort(const VType &Ty, VIntMode Mode) {
-  if (Ty.Kind == VTypeKind::Bool)
+z3::sort Z3Encoder::valueSort(const LogicSort &Sort) {
+  if (Sort.Kind == LogicSortKind::Bool)
     return boolSort();
-  if (Ty.Kind == VTypeKind::Ptr)
+  if (Sort.Kind == LogicSortKind::Pointer ||
+      Sort.Kind == LogicSortKind::MathematicalInteger)
     return intSort();
-  if (Ty.Kind == VTypeKind::Struct || Ty.Kind == VTypeKind::Array ||
-      Ty.Kind == VTypeKind::Unsupported) {
-    markEncodingFailure("unsupported value type");
-    return intSort();
-  }
-  if (Mode == VIntMode::Machine)
-    return bvSort(Ty.BitWidth);
+  if (Sort.Kind == LogicSortKind::BitVector)
+    return bvSort(Sort.BitWidth);
+  if (Sort.Kind == LogicSortKind::Heap)
+    return heapSort();
+  markEncodingFailure("unsupported logical value sort");
   return intSort();
 }
 
@@ -55,39 +63,20 @@ static std::string specDeclKey(const std::string &Fn, VIntMode Mode) {
   return Fn + (Mode == VIntMode::Machine ? "$bv" : "$int");
 }
 
-z3::func_decl Z3Encoder::specFuncDecl(const VFunction *Spec) {
-  assert(Spec && "specFuncDecl requires a spec function");
-  std::string Key = specDeclKey(Spec->Identity, Spec->IntMode);
+z3::func_decl Z3Encoder::specFuncDecl(const LogicFunctionDecl &Function) {
+  std::string Key = specDeclKey(Function.Identity, Function.IntMode);
   auto It = SpecFuncDecls.find(Key);
   if (It != SpecFuncDecls.end())
     return It->second;
   std::vector<z3::sort> Domain;
-  for (const auto &P : Spec->Params)
-    Domain.push_back(valueSort(P.second, Spec->IntMode));
-  z3::sort Ret = valueSort(Spec->ReturnType, Spec->IntMode);
+  for (const LogicFunctionParameter &Parameter : Function.Parameters)
+    Domain.push_back(valueSort(Parameter.Sort));
+  z3::sort Ret = valueSort(Function.ResultSort);
   z3::func_decl F =
-      Ctx.function(specZ3Name(Spec->Identity, Spec->IntMode).c_str(),
+      Ctx.function(specZ3Name(Function.Identity, Function.IntMode).c_str(),
                    Domain.size(), Domain.data(), Ret);
   SpecFuncDecls.emplace(Key, F);
   return F;
-}
-
-z3::expr Z3Encoder::encodeVExprForAxiom(const VExpr *E, const VType &RetTy,
-                                        VIntMode SpecMode) {
-  auto Lowered = lowerLogicExpr(E, "", std::string(VHeapName) + "_0", SpecMode);
-  if (!Lowered) {
-    markEncodingFailure("spec definition lowering failed: " +
-                        llvm::toString(Lowered.takeError()));
-    VCExpr Placeholder(VCExpr::False);
-    Placeholder.TypeKind = RetTy.Kind;
-    Placeholder.IntMode = SpecMode;
-    Placeholder.BitWidth = RetTy.BitWidth;
-    return fallbackValue(&Placeholder);
-  }
-  z3::expr Result = encodeVC(Lowered->get());
-  if (RetTy.Kind != VTypeKind::Ptr)
-    Result = coerceTo(Result, SpecMode, RetTy.BitWidth, RetTy.IsSigned);
-  return Result;
 }
 
 z3::expr Z3Encoder::coerceTo(z3::expr E, VIntMode Target, unsigned BitWidth,
@@ -100,6 +89,18 @@ z3::expr Z3Encoder::coerceTo(z3::expr E, VIntMode Target, unsigned BitWidth,
     return z3::int2bv(BitWidth, E);
   if (E.is_bv() && Target == VIntMode::Math)
     return z3::bv2int(E, IsSigned);
+  return E;
+}
+
+z3::expr Z3Encoder::coerceToSort(z3::expr E, const LogicSort &Target,
+                                 bool IsSigned) {
+  if (Target.Kind == LogicSortKind::BitVector)
+    return coerceTo(E, VIntMode::Machine, Target.BitWidth, IsSigned);
+  if (Target.Kind == LogicSortKind::MathematicalInteger ||
+      Target.Kind == LogicSortKind::Pointer)
+    return coerceTo(E, VIntMode::Math, 0, IsSigned);
+  if (Target.Kind == LogicSortKind::Bool)
+    return asBool(E);
   return E;
 }
 
@@ -601,28 +602,25 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
     return z3::exists(Binders, Range && Body);
   }
   case VCExpr::SpecCall: {
-    auto It = SpecFunctions.find(E->SpecCallee);
-    if (It == SpecFunctions.end() || !It->second) {
+    auto It = LogicFunctions.find(E->SpecCallee);
+    if (It == LogicFunctions.end() || !It->second) {
       markEncodingFailure("missing spec definition: " + E->SpecCallee);
       return fallbackValue(E);
     }
-    if (E->Children.size() != It->second->Params.size()) {
+    const LogicFunctionDecl &Function = *It->second;
+    if (E->Children.size() != Function.Parameters.size()) {
       markEncodingFailure("spec argument count mismatch: " + E->SpecCallee);
       return fallbackValue(E);
     }
-    z3::func_decl F = specFuncDecl(It->second);
-    VIntMode SpecMode = It->second->IntMode;
+    z3::func_decl F = specFuncDecl(Function);
     std::vector<z3::expr> Args;
     for (unsigned i = 0; i < E->Children.size(); ++i) {
-      z3::expr Arg = child(i);
-      if (E->Children[i]->TypeKind != VTypeKind::Ptr)
-        Arg = coerceTo(Arg, SpecMode, It->second->Params[i].second.BitWidth,
-                       It->second->Params[i].second.IsSigned);
+      z3::expr Arg = coerceToSort(child(i), Function.Parameters[i].Sort,
+                                  Function.Parameters[i].IsSigned);
       Args.push_back(std::move(Arg));
     }
     z3::expr A = F(static_cast<unsigned>(Args.size()), Args.data());
-    return coerceTo(A, E->IntMode, E->BitWidth,
-                    It->second->ReturnType.IsSigned);
+    return coerceToSort(A, E->Sort, Function.ResultIsSigned);
   }
   }
   markEncodingFailure("unsupported verification expression");
@@ -666,42 +664,34 @@ z3::expr Z3Encoder::encodeVC(const VCExpr *Root) {
   return Done.at(Root);
 }
 
-void Z3Encoder::emitSpecCallAxiom(const VCExpr *Call,
-                                  const SpecAxiomContext &ACtx) {
+void Z3Encoder::emitSpecCallAxiom(const VCExpr *Call) {
   if (!Call || Call->K != VCExpr::SpecCall)
     return;
-  auto It = ACtx.Functions.find(Call->SpecCallee);
-  if (It == ACtx.Functions.end() || !It->second)
+  auto It = LogicFunctions.find(Call->SpecCallee);
+  if (It == LogicFunctions.end() || !It->second) {
+    markEncodingFailure("missing spec definition: " + Call->SpecCallee);
     return;
-  const VFunction &Spec = *It->second;
-  unsigned Fuel = 0;
-  if (ACtx.HiddenSpecs.count(Spec.Identity))
-    Fuel = 0;
-  else if (auto F = ACtx.SpecFuel.find(Spec.Identity); F != ACtx.SpecFuel.end())
-    Fuel = F->second;
-  else if (ACtx.RevealedSpecs.count(Spec.Identity))
-    Fuel = 1;
-  else
-    Fuel = Spec.NeedsDecreasesCheck ? 1 : 64;
-  if (Fuel == 0)
+  }
+  const LogicFunctionDecl &Function = *It->second;
+  if (Function.DefinitionLevels.empty())
     return;
-  if (Call->Children.size() != Spec.Params.size()) {
-    markEncodingFailure("spec argument count mismatch: " + Spec.Name);
+  if (Call->Children.size() != Function.Parameters.size()) {
+    markEncodingFailure("spec argument count mismatch: " +
+                        Function.DisplayName);
     return;
   }
 
   std::vector<z3::expr> Args;
   for (unsigned I = 0; I < Call->Children.size(); ++I) {
     z3::expr Arg = encodeVC(Call->Children[I].get());
-    if (I < Spec.Params.size() && Spec.Params[I].second.Kind != VTypeKind::Ptr)
-      Arg = coerceTo(Arg, Spec.IntMode, Spec.Params[I].second.BitWidth,
-                     Spec.Params[I].second.IsSigned);
+    Arg = coerceToSort(Arg, Function.Parameters[I].Sort,
+                       Function.Parameters[I].IsSigned);
     Args.push_back(std::move(Arg));
   }
 
   std::vector<std::pair<std::string, std::optional<z3::expr>>> SavedVars;
-  for (unsigned I = 0; I < Spec.Params.size() && I < Args.size(); ++I) {
-    const std::string &ParamName = Spec.Params[I].first;
+  for (unsigned I = 0; I < Function.Parameters.size() && I < Args.size(); ++I) {
+    const std::string &ParamName = Function.Parameters[I].Name;
     auto Existing = Vars.find(ParamName);
     SavedVars.emplace_back(ParamName,
                            Existing == Vars.end()
@@ -711,15 +701,11 @@ void Z3Encoder::emitSpecCallAxiom(const VCExpr *Call,
     Vars.emplace(ParamName, Args[I]);
   }
 
-  z3::func_decl Fdecl = specFuncDecl(&Spec);
+  z3::func_decl Fdecl = specFuncDecl(Function);
   z3::expr LHS = Fdecl(static_cast<unsigned>(Args.size()), Args.data());
-  unsigned MaxDepth = Spec.NeedsDecreasesCheck ? Fuel : 1;
-  for (unsigned Depth = 1; Depth <= MaxDepth; ++Depth) {
-    std::unique_ptr<VExpr> Body = unfoldSpecDefinition(Spec, ACtx, Depth);
-    if (!Body)
-      continue;
-    z3::expr RHS =
-        encodeVExprForAxiom(Body.get(), Spec.ReturnType, Spec.IntMode);
+  for (const auto &Definition : Function.DefinitionLevels) {
+    z3::expr RHS = encodeVC(Definition.get());
+    RHS = coerceToSort(RHS, Function.ResultSort, Function.ResultIsSigned);
     Solver.add(LHS == RHS);
   }
 
@@ -746,21 +732,22 @@ std::optional<z3::expr> Z3Encoder::encodeModule(const ObligationModule &Module,
   Solver.set(Params);
   EncodingFailed = false;
   EncodingError.clear();
-  SpecFunctions = Module.SpecFunctions;
-  CallerIntMode = Module.CallerIntMode;
+  LogicFunctions.clear();
+  for (const auto &[Identity, Function] : Module.LogicFunctions)
+    LogicFunctions.emplace(Identity, &Function);
   if (!Query) {
-    Result.Status = VerifyStatus::Unknown;
+    Result.Status = VerifyStatus::Unresolved;
     Result.Message = "missing counterexample query";
     return std::nullopt;
   }
-  SpecAxiomContext AxiomCtx{Module.SpecFunctions, Module.SpecFuel,
-                            Module.HiddenSpecs, Module.RevealedSpecs,
-                            Module.CallerIntMode};
-  emitSpecAxioms(*this, Query, AxiomCtx);
+  std::vector<const VCExpr *> SpecCalls;
+  collectSpecCalls(Query, SpecCalls);
+  for (const VCExpr *Call : SpecCalls)
+    emitSpecCallAxiom(Call);
   Vars.clear();
   z3::expr EncodedGoal = encodeVC(Query);
   if (EncodingFailed) {
-    Result.Status = VerifyStatus::Unknown;
+    Result.Status = VerifyStatus::Unresolved;
     Result.Message = EncodingError;
     return std::nullopt;
   }
@@ -788,7 +775,7 @@ VerifyResult Z3Encoder::verifyModule(const ObligationModule &Module,
     return Out;
   }
   default:
-    Out.Status = VerifyStatus::Unknown;
+    Out.Status = VerifyStatus::Unresolved;
     Out.Message = Solver.reason_unknown();
     return Out;
   }
@@ -803,59 +790,102 @@ VerifyResult Z3Encoder::lowerModule(const ObligationModule &Module,
     return Out;
   if (OS)
     *OS << EncodedGoal->to_string() << "\n";
-  Out.Status = VerifyStatus::Verified;
+  Out.Status = VerifyStatus::Lowered;
   return Out;
 }
 
+static VerifyResult finishZ3Result(VerifyResult Result) {
+  if (Result.Status != VerifyStatus::Failed)
+    return Result;
+  std::string Message;
+  for (const auto &KV : Result.Model) {
+    if (!Message.empty())
+      Message += ", ";
+    Message += KV.first + " = " + KV.second;
+  }
+  Result.Message = std::move(Message);
+  return Result;
+}
+
+std::vector<VerifyResult>
+Z3VerifyBackend::verifyObligations(const ObligationModule &Module) {
+  Enc.setTimeoutMs(TimeoutMs);
+  std::vector<VerifyResult> Results;
+  Results.reserve(Module.Obligations.size());
+  for (const Obligation &Item : Module.Obligations) {
+    VerifyResult Result =
+        Enc.verifyModule(Module, Item.CounterexampleQuery.get());
+    Result.ObligationId = Item.Id;
+    Result.ObligationType = Item.Kind;
+    Result.Location = Item.Loc;
+    if (Result.Status == VerifyStatus::Unresolved)
+      Result.Message = "proof obligation " + Item.Id +
+                       (Result.Message.empty() ? "" : ": " + Result.Message);
+    Results.push_back(finishZ3Result(std::move(Result)));
+  }
+  return Results;
+}
+
 VerifyResult Z3VerifyBackend::verifyModule(const ObligationModule &Module) {
-  auto finishResult = [](VerifyResult R) {
-    if (R.Status != VerifyStatus::Failed)
-      return R;
-    std::string Msg;
-    for (const auto &KV : R.Model) {
-      if (!Msg.empty())
-        Msg += ", ";
-      Msg += KV.first + " = " + KV.second;
-    }
-    R.Message = Msg;
-    return R;
-  };
 
   // Spec equations often solve best as one formula. For spec-free programs,
   // use a short complete-VC probe and preserve the configured budget for the
   // ordered obligations.
   const bool WholeUsedFullBudget =
-      !Module.SpecFunctions.empty() || (TimeoutMs > 0 && TimeoutMs <= 500);
+      !Module.LogicFunctions.empty() || (TimeoutMs > 0 && TimeoutMs <= 500);
   Enc.setTimeoutMs(WholeUsedFullBudget
                        ? TimeoutMs
                        : (TimeoutMs == 0 ? 500 : std::min(TimeoutMs, 500U)));
   VerifyResult Whole = Enc.verifyModule(Module);
   Enc.setTimeoutMs(TimeoutMs);
-  if (Whole.Status != VerifyStatus::Unknown)
-    return finishResult(std::move(Whole));
+  if (Whole.Status == VerifyStatus::Verified)
+    return finishZ3Result(std::move(Whole));
+
+  if (Whole.Status == VerifyStatus::Failed) {
+    bool SawUnresolved = false;
+    for (VerifyResult Result : verifyObligations(Module)) {
+      if (Result.Status == VerifyStatus::Verified)
+        continue;
+      if (Result.Status == VerifyStatus::Unresolved) {
+        SawUnresolved = true;
+        continue;
+      }
+      if (Result.Status == VerifyStatus::Failed)
+        return Result;
+    }
+    if (SawUnresolved)
+      return finishZ3Result(std::move(Whole));
+    VerifyResult Inconsistent;
+    Inconsistent.Status = VerifyStatus::Unresolved;
+    Inconsistent.Message =
+        "combined query was satisfiable but every individual obligation was "
+        "proved";
+    return Inconsistent;
+  }
 
   auto retryWhole = [&](VerifyResult SplitResult) {
     if (WholeUsedFullBudget)
-      return finishResult(std::move(SplitResult));
+      return finishZ3Result(std::move(SplitResult));
     VerifyResult Retry = Enc.verifyModule(Module);
-    if (Retry.Status != VerifyStatus::Unknown)
-      return finishResult(std::move(Retry));
-    return finishResult(std::move(SplitResult));
+    if (Retry.Status != VerifyStatus::Unresolved)
+      return finishZ3Result(std::move(Retry));
+    return finishZ3Result(std::move(SplitResult));
   };
 
-  for (const Obligation &Item : Module.Obligations) {
-    VerifyResult R = Enc.verifyModule(Module, Item.CounterexampleQuery.get());
-    if (R.Status != VerifyStatus::Verified) {
-      R.ObligationId = Item.Id;
-      R.Location = Item.Loc;
-      if (R.Status == VerifyStatus::Unknown)
-        R.Message = "proof obligation " + Item.Id +
-                    (R.Message.empty() ? "" : ": " + R.Message);
-      if (R.Status == VerifyStatus::Unknown)
-        return retryWhole(std::move(R));
-      return finishResult(std::move(R));
+  std::optional<VerifyResult> FirstUnresolved;
+  for (VerifyResult Result : verifyObligations(Module)) {
+    if (Result.Status != VerifyStatus::Verified) {
+      if (Result.Status == VerifyStatus::Unresolved) {
+        if (!FirstUnresolved)
+          FirstUnresolved = std::move(Result);
+        continue;
+      }
+      return Result;
     }
   }
+
+  if (FirstUnresolved)
+    return retryWhole(std::move(*FirstUnresolved));
 
   VerifyResult R;
   R.Status = VerifyStatus::Verified;

@@ -1,0 +1,5 @@
+import CppVerify.User
+
+theorem cppverify_fibo_step_fn_5f5a396669626f5f7374657069_obligation_1_goal_proof :
+    cppverify_fibo_step_fn_5f5a396669626f5f7374657069_obligation_1_goal := by
+  simp [cppverify_fibo_step_fn_5f5a396669626f5f7374657069_obligation_1_goal]

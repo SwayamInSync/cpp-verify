@@ -29,8 +29,22 @@ SSA, canonical Obligation IR generation, and backend encoding succeeded without 
 satisfiability. This is useful when isolating a frontend or lowering bug from a
 slow quantified/heap query, but it never certifies the program.
 
-``Exported`` is also not a proof result. The Lean path writes the canonical
-obligation as an unchecked theorem with ``sorry`` and does not invoke Z3.
+``Exported`` is also not a proof result. A standalone Lean scratch-pad contains
+``sorry``. An editable project separates generated semantics from preserved
+user proofs, but its initial proof files are still admitted. Only
+``--lean-certify`` compiling every active proof under the pinned toolchain,
+with no ``sorry`` or undocumented proof axiom, reports ``Certified``.
+
+For automation that remains unresolved, use:
+
+.. code-block:: bash
+
+   cpp-verify --lean-fallback=proof file.cpp
+   # edit proof/CppVerify/User.lean and proof/CppVerify/Proofs/*.lean
+   cpp-verify --lean-fallback=proof --lean-certify file.cpp
+
+The first command remains non-success because export is not proof. A Z3
+counterexample is not routed through this fallback.
 
 Trusting a new feature
 ----------------------

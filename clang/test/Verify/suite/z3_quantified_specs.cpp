@@ -88,4 +88,4 @@ int invalid_quantifier_capture(int n)
 // LOWER-DAG: Lowered: invalid_quantifier_capture
 // LOWER-NOT: Verified:
 // LOWER-NOT: error:
-// LOWER-NOT: unknown:
+// LOWER-NOT: Unresolved:

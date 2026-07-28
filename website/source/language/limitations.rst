@@ -377,13 +377,15 @@ An unwinding assertion prevents an insufficient bound from silently becoming an
 unbounded proof. Path explosion, incremental bound growth, trace reconstruction,
 and broad runtime semantics remain future work.
 
-**Lean export** consumes the same typed canonical obligation as Z3 and emits a
-scratch-pad theorem stating that its counterexample query is impossible. It
-does not invoke Z3, returns ``Exported`` rather than ``Verified``, and retains
-``sorry``. It is not yet a complete certificate/replay backend. A certifying
-path needs faithful elaborating definitions for every theory, one replayable
-theorem per ordered obligation, no ``sorry``, a pinned Lean environment, and CI
-replay.
+**Lean** consumes the same typed canonical obligation as Z3. Standalone export
+is an unchecked scratch-pad and reports ``Exported``. Project mode emits
+faithful definitions for the current integer, bit-vector, pointer, total-heap,
+quantifier, overflow, and finite spec-fuel theories, plus one source-attributed
+goal per ordered obligation. Generated files are separated from preserved user
+lemmas/proofs. The pinned admission-free kernel path reports ``Certified`` only
+after every active proof checks and rejects user axiom/opaque shortcuts.
+Automation, proof ergonomics, semantic simplification, dependency-aware
+caching, and broader future C++ theories remain incomplete.
 
 There is currently no solver portfolio, CHC backend, separation-logic backend,
 or independently checked Z3 proof-object pipeline.

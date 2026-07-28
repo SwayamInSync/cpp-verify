@@ -1,6 +1,7 @@
 //===--- Obligation.cpp ---------------------------------------------------===//
 #include "Obligation.h"
 #include "../IR/VType.h"
+#include "SpecAxioms.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/Error.h"
@@ -20,9 +21,7 @@ LogicSort LogicSort::bitVector(unsigned BitWidth, bool IsSigned) {
   return {LogicSortKind::BitVector, BitWidth};
 }
 
-LogicSort LogicSort::pointer() {
-  return {LogicSortKind::Pointer, 0};
-}
+LogicSort LogicSort::pointer() { return {LogicSortKind::Pointer, 0}; }
 
 LogicSort LogicSort::heap() { return {LogicSortKind::Heap, 0}; }
 
@@ -82,8 +81,8 @@ static LogicSort logicSortFor(VTypeKind Kind, VIntMode Mode, unsigned BitWidth,
 }
 
 static void setLogicSort(VCExpr &Expr) {
-  Expr.Sort = logicSortFor(Expr.TypeKind, Expr.IntMode, Expr.BitWidth,
-                           Expr.IsSigned);
+  Expr.Sort =
+      logicSortFor(Expr.TypeKind, Expr.IntMode, Expr.BitWidth, Expr.IsSigned);
 }
 
 static void setBoolSort(VCExpr &Expr) {
@@ -232,13 +231,16 @@ static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error) {
     Error = "untyped term in obligation IR";
     return false;
   }
+  if (Expr->Sort.Kind == LogicSortKind::BitVector && Expr->Sort.BitWidth == 0) {
+    Error = "zero-width bitvector in obligation IR";
+    return false;
+  }
   for (const auto &Child : Expr->Children)
     if (!validateLogicExpr(Child.get(), Error))
       return false;
 
   auto requireArity = [&](unsigned Minimum, unsigned Maximum) {
-    if (Expr->Children.size() >= Minimum &&
-        Expr->Children.size() <= Maximum)
+    if (Expr->Children.size() >= Minimum && Expr->Children.size() <= Maximum)
       return true;
     Error = "malformed obligation term: unexpected operand count";
     return false;
@@ -259,6 +261,10 @@ static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error) {
       return true;
     Error = Message;
     return false;
+  };
+  auto isArithmeticSort = [](LogicSortKind Kind) {
+    return Kind == LogicSortKind::MathematicalInteger ||
+           Kind == LogicSortKind::BitVector || Kind == LogicSortKind::Pointer;
   };
   switch (Expr->K) {
   case VCExpr::True:
@@ -285,11 +291,23 @@ static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error) {
            requireChildSort(0, LogicSortKind::Bool,
                             "logical negation has a non-boolean operand");
   case VCExpr::Neg:
-  case VCExpr::BitNot:
     if (!requireArity(1, 1))
       return false;
     if (!sameSort(Expr->Sort, Expr->Children[0]->Sort)) {
       Error = "unary arithmetic changes its operand sort";
+      return false;
+    }
+    if (!isArithmeticSort(Expr->Sort.Kind)) {
+      Error = "arithmetic negation has a non-numeric operand";
+      return false;
+    }
+    return true;
+  case VCExpr::BitNot:
+    if (!requireArity(1, 1) ||
+        !requireSort(LogicSortKind::BitVector,
+                     "bitwise complement has a non-bitvector result") ||
+        !sameSort(Expr->Sort, Expr->Children[0]->Sort)) {
+      Error = "bitwise complement changes its operand sort";
       return false;
     }
     return true;
@@ -313,8 +331,9 @@ static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error) {
     return true;
   case VCExpr::BvToInt:
     return requireArity(1, 1) &&
-           requireSort(LogicSortKind::MathematicalInteger,
-                       "bitvector-to-int conversion has a non-integer result") &&
+           requireSort(
+               LogicSortKind::MathematicalInteger,
+               "bitvector-to-int conversion has a non-integer result") &&
            requireChildSort(0, LogicSortKind::BitVector,
                             "bitvector-to-int conversion has a non-bitvector "
                             "operand");
@@ -339,8 +358,7 @@ static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error) {
   case VCExpr::Eq:
   case VCExpr::Ne:
     if (!requireArity(2, 2) ||
-        !requireSort(LogicSortKind::Bool,
-                     "equality has a non-boolean result"))
+        !requireSort(LogicSortKind::Bool, "equality has a non-boolean result"))
       return false;
     if (!sameSort(Expr->Children[0]->Sort, Expr->Children[1]->Sort)) {
       Error = "equality operands have different logic sorts";
@@ -359,39 +377,62 @@ static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error) {
       Error = "comparison operands have different logic sorts";
       return false;
     }
+    if (!isArithmeticSort(Expr->Children[0]->Sort.Kind)) {
+      Error = "ordered comparison has non-numeric operands";
+      return false;
+    }
     return true;
   case VCExpr::Add:
   case VCExpr::Sub:
+    if (!requireArity(2, 2))
+      return false;
+    if (Expr->Sort.Kind == LogicSortKind::Pointer) {
+      const LogicSortKind Left = Expr->Children[0]->Sort.Kind;
+      const LogicSortKind Right = Expr->Children[1]->Sort.Kind;
+      const bool Valid =
+          (Left == LogicSortKind::Pointer ||
+           Left == LogicSortKind::MathematicalInteger) &&
+          (Right == LogicSortKind::Pointer ||
+           Right == LogicSortKind::MathematicalInteger) &&
+          (Left == LogicSortKind::Pointer || Right == LogicSortKind::Pointer);
+      if (!Valid)
+        Error = "pointer arithmetic has invalid operand sorts";
+      return Valid;
+    }
+    if (!isArithmeticSort(Expr->Sort.Kind) ||
+        !sameSort(Expr->Sort, Expr->Children[0]->Sort) ||
+        !sameSort(Expr->Sort, Expr->Children[1]->Sort)) {
+      Error = "arithmetic term " +
+              std::to_string(static_cast<unsigned>(Expr->K)) +
+              " has result sort " + logicSortName(Expr->Sort.Kind) +
+              ", left sort " + logicSortName(Expr->Children[0]->Sort.Kind) +
+              ", and right sort " + logicSortName(Expr->Children[1]->Sort.Kind);
+      return false;
+    }
+    return true;
   case VCExpr::Mul:
   case VCExpr::Div:
   case VCExpr::Rem:
+    if (!requireArity(2, 2) || !isArithmeticSort(Expr->Sort.Kind) ||
+        !sameSort(Expr->Sort, Expr->Children[0]->Sort) ||
+        !sameSort(Expr->Sort, Expr->Children[1]->Sort)) {
+      Error = "arithmetic term " +
+              std::to_string(static_cast<unsigned>(Expr->K)) +
+              " has result sort " + logicSortName(Expr->Sort.Kind) +
+              ", left sort " + logicSortName(Expr->Children[0]->Sort.Kind) +
+              ", and right sort " + logicSortName(Expr->Children[1]->Sort.Kind);
+      return false;
+    }
+    return true;
   case VCExpr::BitAnd:
   case VCExpr::BitOr:
   case VCExpr::BitXor:
   case VCExpr::Shl:
   case VCExpr::Shr:
-    if (!requireArity(2, 2))
-      return false;
-    if ((Expr->K == VCExpr::Add || Expr->K == VCExpr::Sub ||
-         Expr->K == VCExpr::Div) &&
-        Expr->Sort.Kind == LogicSortKind::Pointer) {
-      const LogicSortKind Left = Expr->Children[0]->Sort.Kind;
-      const LogicSortKind Right = Expr->Children[1]->Sort.Kind;
-      if ((Left == LogicSortKind::Pointer ||
-           Left == LogicSortKind::MathematicalInteger) &&
-          (Right == LogicSortKind::Pointer ||
-           Right == LogicSortKind::MathematicalInteger))
-        return true;
-    }
-    if (!sameSort(Expr->Sort, Expr->Children[0]->Sort) ||
+    if (!requireArity(2, 2) || Expr->Sort.Kind != LogicSortKind::BitVector ||
+        !sameSort(Expr->Sort, Expr->Children[0]->Sort) ||
         !sameSort(Expr->Sort, Expr->Children[1]->Sort)) {
-      Error = "arithmetic term " +
-              std::to_string(static_cast<unsigned>(Expr->K)) +
-              " has result sort " + logicSortName(Expr->Sort.Kind) +
-              ", left sort " +
-              logicSortName(Expr->Children[0]->Sort.Kind) +
-              ", and right sort " +
-              logicSortName(Expr->Children[1]->Sort.Kind);
+      Error = "bitwise term has inconsistent bitvector sorts";
       return false;
     }
     return true;
@@ -409,13 +450,19 @@ static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error) {
   case VCExpr::Select:
     return requireArity(2, 2) &&
            requireChildSort(0, LogicSortKind::Heap,
-                            "heap selection has a non-heap operand");
+                            "heap selection has a non-heap operand") &&
+           requireChildSort(1, LogicSortKind::Pointer,
+                            "heap selection has a non-pointer address") &&
+           Expr->Sort.Kind != LogicSortKind::Heap;
   case VCExpr::Store:
     return requireArity(4, 4) &&
            requireSort(LogicSortKind::Bool,
                        "heap store relation has a non-boolean result") &&
            requireChildSort(0, LogicSortKind::Heap,
                             "heap store has a non-heap input") &&
+           requireChildSort(1, LogicSortKind::Pointer,
+                            "heap store has a non-pointer address") &&
+           Expr->Children[2]->Sort.Kind != LogicSortKind::Heap &&
            requireChildSort(3, LogicSortKind::Heap,
                             "heap store has a non-heap output");
   case VCExpr::Forall:
@@ -423,6 +470,10 @@ static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error) {
     return requireArity(3, 3) &&
            requireSort(LogicSortKind::Bool,
                        "quantifier has a non-boolean result") &&
+           requireChildSort(0, LogicSortKind::MathematicalInteger,
+                            "quantifier has a non-integer lower bound") &&
+           requireChildSort(1, LogicSortKind::MathematicalInteger,
+                            "quantifier has a non-integer upper bound") &&
            requireChildSort(2, LogicSortKind::Bool,
                             "quantifier has a non-boolean body");
   case VCExpr::NoOverflow:
@@ -430,6 +481,11 @@ static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error) {
         !requireSort(LogicSortKind::Bool,
                      "overflow predicate has a non-boolean result"))
       return false;
+    if ((Expr->OverflowOp == VOverflowOp::Neg) !=
+        (Expr->Children.size() == 1)) {
+      Error = "overflow predicate has the wrong operand count";
+      return false;
+    }
     for (const auto &Child : Expr->Children)
       if (Child->Sort.Kind != LogicSortKind::BitVector) {
         Error = "overflow predicate has a non-bitvector operand";
@@ -445,6 +501,77 @@ static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error) {
   }
   Error = "unknown obligation term kind";
   return false;
+}
+
+static bool canCoerceLogicSort(const LogicSort &Source,
+                               const LogicSort &Target) {
+  if (Source.Kind == Target.Kind)
+    return Source.Kind != LogicSortKind::BitVector ||
+           Source.BitWidth == Target.BitWidth;
+  return (Source.Kind == LogicSortKind::MathematicalInteger &&
+          Target.Kind == LogicSortKind::BitVector) ||
+         (Source.Kind == LogicSortKind::BitVector &&
+          Target.Kind == LogicSortKind::MathematicalInteger);
+}
+
+static bool
+validateLogicCalls(const LogicExpr *Expr,
+                   const std::map<std::string, LogicFunctionDecl> &Functions,
+                   std::string &Error) {
+  if (!Expr)
+    return false;
+  for (const auto &Child : Expr->Children)
+    if (!validateLogicCalls(Child.get(), Functions, Error))
+      return false;
+  if (Expr->K != LogicExpr::SpecCall)
+    return true;
+  auto It = Functions.find(Expr->SpecCallee);
+  if (It == Functions.end()) {
+    Error = "logical application has no owned declaration: " + Expr->SpecCallee;
+    return false;
+  }
+  const LogicFunctionDecl &Function = It->second;
+  if (Expr->Children.size() != Function.Parameters.size()) {
+    Error = "logical application argument count mismatch: " + Expr->SpecCallee;
+    return false;
+  }
+  for (unsigned I = 0; I < Expr->Children.size(); ++I)
+    if (!canCoerceLogicSort(Expr->Children[I]->Sort,
+                            Function.Parameters[I].Sort)) {
+      Error = "logical application argument sort mismatch: " + Expr->SpecCallee;
+      return false;
+    }
+  if (!canCoerceLogicSort(Function.ResultSort, Expr->Sort)) {
+    Error = "logical application result sort mismatch: " + Expr->SpecCallee;
+    return false;
+  }
+  return true;
+}
+
+static bool
+validateDefinitionVariables(const LogicExpr *Expr,
+                            const std::map<std::string, LogicSort> &Parameters,
+                            std::set<std::string> Bound, std::string &Error) {
+  if (!Expr)
+    return false;
+  if (Expr->K == LogicExpr::Var && !Bound.count(Expr->Name)) {
+    auto It = Parameters.find(Expr->Name);
+    if (It == Parameters.end()) {
+      Error = "logical function definition has a free variable: " + Expr->Name;
+      return false;
+    }
+    if (It->second.Kind != Expr->Sort.Kind ||
+        It->second.BitWidth != Expr->Sort.BitWidth) {
+      Error = "logical function parameter sort mismatch: " + Expr->Name;
+      return false;
+    }
+  }
+  if (Expr->K == LogicExpr::Forall || Expr->K == LogicExpr::Exists)
+    Bound.insert(Expr->Binder);
+  for (const auto &Child : Expr->Children)
+    if (!validateDefinitionVariables(Child.get(), Parameters, Bound, Error))
+      return false;
+  return true;
 }
 
 static void collectRequiredFeatures(const LogicExpr *Expr,
@@ -732,8 +859,8 @@ class ObligationBuilder {
     N->Loc = Q->Loc;
     N->Binder =
         "__quant_" + std::to_string(QuantifierCounter++) + "_" + Q->Binder;
-    N->Children.push_back(fromVExpr(Q->Lo.get()));
-    N->Children.push_back(fromVExpr(Q->Hi.get()));
+    N->Children.push_back(toMode(fromVExpr(Q->Lo.get()), VIntMode::Math));
+    N->Children.push_back(toMode(fromVExpr(Q->Hi.get()), VIntMode::Math));
     // Quantified machine integers range over the corresponding mathematical
     // interval and are converted back to their bit-vector type at machine
     // operations. This is equivalent within the typed bounds and keeps array
@@ -780,8 +907,8 @@ public:
                     std::set<std::string> HeapVariables = {},
                     bool ForceCallerMode = false)
       : ResultVarName(std::move(ResultVar)), CurHeap(std::move(Heap)),
-        HeapVariables(std::move(HeapVariables)),
-        CallerIntMode(CallerMode), ForceCallerIntMode(ForceCallerMode) {}
+        HeapVariables(std::move(HeapVariables)), CallerIntMode(CallerMode),
+        ForceCallerIntMode(ForceCallerMode) {}
 
   std::unique_ptr<VCExpr> fromVExpr(const VExpr *E) {
     if (!E)
@@ -827,8 +954,7 @@ public:
     }
     case VExpr::BinOp: {
       const auto *B = static_cast<const VBinOpExpr *>(E);
-      auto N =
-          fromBin(B->Op, fromVExpr(B->Lhs.get()), fromVExpr(B->Rhs.get()));
+      auto N = fromBin(B->Op, fromVExpr(B->Lhs.get()), fromVExpr(B->Rhs.get()));
       N->Loc = B->Loc;
       return N;
     }
@@ -1158,11 +1284,6 @@ public:
     M.ResultVarName = P.ResultVarName;
     M.HeapPrefix =
         P.OldHeapName.empty() ? std::string(VHeapName) + "_0" : P.OldHeapName;
-    M.SpecFunctions = P.SpecFunctions;
-    M.SpecFuel = P.SpecFuel;
-    M.HiddenSpecs = P.HiddenSpecs;
-    M.RevealedSpecs = P.RevealedSpecs;
-    M.CallerIntMode = P.CallerIntMode;
     CurHeap = M.HeapPrefix;
 
     std::vector<std::unique_ptr<VCExpr>> EntryAssumes;
@@ -1171,6 +1292,7 @@ public:
 
     struct LoweredStmt {
       PassiveStmt::Kind Kind;
+      ProofObligationKind ProofKind;
       std::unique_ptr<VCExpr> Cond;
     };
     std::vector<LoweredStmt> Stmts;
@@ -1179,7 +1301,7 @@ public:
         fail("null passive statement in obligation lowering");
         continue;
       }
-      Stmts.push_back({Stmt->K, fromVExpr(Stmt->Cond.get())});
+      Stmts.push_back({Stmt->K, Stmt->ProofKind, fromVExpr(Stmt->Cond.get())});
     }
 
     std::vector<std::unique_ptr<VCExpr>> ExitAsserts;
@@ -1205,21 +1327,19 @@ public:
     for (auto It = EntryAssumes.rbegin(); It != EntryAssumes.rend(); ++It)
       WP = vcOr(vcNot(cloneVCExpr(It->get())), std::move(WP));
 
+    M.CorrectnessGoal = cloneVCExpr(WP.get());
     M.CounterexampleQuery = vcNot(std::move(WP));
 
     std::vector<const VCExpr *> Assumptions;
     for (const auto &Entry : EntryAssumes)
       Assumptions.push_back(Entry.get());
 
-    auto makeCounterexampleQuery =
-        [&](const VCExpr *Condition) -> std::unique_ptr<VCExpr> {
+    auto makeGoal = [&](const VCExpr *Condition) -> std::unique_ptr<VCExpr> {
       std::unique_ptr<VCExpr> ConditionWP = cloneVCExpr(Condition);
       for (auto It = Assumptions.rbegin(); It != Assumptions.rend(); ++It)
-        ConditionWP =
-            vcOr(vcNot(cloneVCExpr(*It)), std::move(ConditionWP));
-      auto Query = vcNot(std::move(ConditionWP));
-      Query->Loc = Condition->Loc;
-      return Query;
+        ConditionWP = vcOr(vcNot(cloneVCExpr(*It)), std::move(ConditionWP));
+      ConditionWP->Loc = Condition->Loc;
+      return ConditionWP;
     };
 
     const std::string Identity =
@@ -1231,9 +1351,10 @@ public:
       Obligation Item;
       Item.Kind = Kind;
       Item.Loc = Condition->Loc;
-      Item.Id = Identity + "::obligation:" +
-                std::to_string(++ObligationIndex);
-      Item.CounterexampleQuery = makeCounterexampleQuery(Condition);
+      Item.Id = Identity + "::obligation:" + std::to_string(++ObligationIndex);
+      Item.Goal = makeGoal(Condition);
+      Item.CounterexampleQuery = vcNot(cloneVCExpr(Item.Goal.get()));
+      Item.CounterexampleQuery->Loc = Condition->Loc;
       M.Obligations.push_back(std::move(Item));
     };
 
@@ -1242,21 +1363,56 @@ public:
         Assumptions.push_back(Stmt.Cond.get());
         continue;
       }
-      appendObligation(ObligationKind::Assertion, Stmt.Cond.get());
+      appendObligation(Stmt.ProofKind, Stmt.Cond.get());
     }
     for (const auto &Exit : ExitAsserts)
       appendObligation(ObligationKind::Postcondition, Exit.get());
 
+    SpecAxiomContext AxiomContext{P.SpecFunctions, P.SpecFuel, P.HiddenSpecs,
+                                  P.RevealedSpecs};
+    if (llvm::Error Error = materializeLogicFunctions(M, AxiomContext))
+      return std::move(Error);
+
     std::string ValidationError;
+    if (!validateLogicExpr(M.CorrectnessGoal.get(), ValidationError))
+      return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                     ValidationError.c_str());
+    if (!validateLogicCalls(M.CorrectnessGoal.get(), M.LogicFunctions,
+                            ValidationError))
+      return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                     ValidationError.c_str());
+    if (M.CorrectnessGoal->Sort.Kind != LogicSortKind::Bool)
+      return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                     "complete correctness goal is not bool");
     if (!validateLogicExpr(M.CounterexampleQuery.get(), ValidationError))
       return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                      ValidationError.c_str());
+    if (!validateLogicCalls(M.CounterexampleQuery.get(), M.LogicFunctions,
+                            ValidationError))
+      return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                     ValidationError.c_str());
     if (M.CounterexampleQuery->Sort.Kind != LogicSortKind::Bool)
-      return llvm::createStringError(llvm::inconvertibleErrorCode(),
-                                     "complete counterexample query is not bool");
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "complete counterexample query is not bool");
     collectRequiredFeatures(M.CounterexampleQuery.get(), M.RequiredFeatures);
     for (const Obligation &Item : M.Obligations) {
+      if (!validateLogicExpr(Item.Goal.get(), ValidationError))
+        return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                       ValidationError.c_str());
+      if (!validateLogicCalls(Item.Goal.get(), M.LogicFunctions,
+                              ValidationError))
+        return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                       ValidationError.c_str());
+      if (Item.Goal->Sort.Kind != LogicSortKind::Bool)
+        return llvm::createStringError(
+            llvm::inconvertibleErrorCode(),
+            "individual correctness goal is not bool");
       if (!validateLogicExpr(Item.CounterexampleQuery.get(), ValidationError))
+        return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                       ValidationError.c_str());
+      if (!validateLogicCalls(Item.CounterexampleQuery.get(), M.LogicFunctions,
+                              ValidationError))
         return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                        ValidationError.c_str());
       if (Item.CounterexampleQuery->Sort.Kind != LogicSortKind::Bool)
@@ -1265,6 +1421,78 @@ public:
             "individual counterexample query is not bool");
       collectRequiredFeatures(Item.CounterexampleQuery.get(),
                               M.RequiredFeatures);
+    }
+    for (const auto &[Identity, Declaration] : M.LogicFunctions) {
+      if (Identity.empty() || Declaration.Identity != Identity)
+        return llvm::createStringError(
+            llvm::inconvertibleErrorCode(),
+            "logical function declaration identity mismatch");
+      if (Declaration.ResultSort.Kind == LogicSortKind::Invalid ||
+          Declaration.ResultSort.Kind == LogicSortKind::Heap ||
+          (Declaration.ResultSort.Kind == LogicSortKind::BitVector &&
+           Declaration.ResultSort.BitWidth == 0))
+        return llvm::createStringError(
+            llvm::inconvertibleErrorCode(),
+            "logical function has an invalid result sort");
+      if (Declaration.DefinitionLevels.size() != Declaration.DefinitionFuel)
+        return llvm::createStringError(
+            llvm::inconvertibleErrorCode(),
+            "logical function definition count does not match its fuel");
+      if ((Declaration.DefinitionFuel == 0) !=
+          (Declaration.StepDefinition == nullptr))
+        return llvm::createStringError(
+            llvm::inconvertibleErrorCode(),
+            "logical function step definition does not match its fuel");
+      std::map<std::string, LogicSort> Parameters;
+      for (const LogicFunctionParameter &Parameter : Declaration.Parameters) {
+        if (Parameter.Name.empty() ||
+            Parameter.Sort.Kind == LogicSortKind::Invalid ||
+            Parameter.Sort.Kind == LogicSortKind::Heap ||
+            (Parameter.Sort.Kind == LogicSortKind::BitVector &&
+             Parameter.Sort.BitWidth == 0) ||
+            !Parameters.emplace(Parameter.Name, Parameter.Sort).second)
+          return llvm::createStringError(
+              llvm::inconvertibleErrorCode(),
+              "logical function has an invalid or duplicate parameter");
+      }
+      if (Declaration.DefinitionFuel > 0) {
+        if (!validateLogicExpr(Declaration.StepDefinition.get(),
+                               ValidationError))
+          return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                         ValidationError.c_str());
+        if (Declaration.StepDefinition->Sort.Kind !=
+                Declaration.ResultSort.Kind ||
+            Declaration.StepDefinition->Sort.BitWidth !=
+                Declaration.ResultSort.BitWidth)
+          return llvm::createStringError(
+              llvm::inconvertibleErrorCode(),
+              "logical function step result sort mismatch");
+        if (!validateLogicCalls(Declaration.StepDefinition.get(),
+                                M.LogicFunctions, ValidationError) ||
+            !validateDefinitionVariables(Declaration.StepDefinition.get(),
+                                         Parameters, {}, ValidationError))
+          return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                         ValidationError.c_str());
+        collectRequiredFeatures(Declaration.StepDefinition.get(),
+                                M.RequiredFeatures);
+      }
+      for (const auto &Definition : Declaration.DefinitionLevels) {
+        if (!validateLogicExpr(Definition.get(), ValidationError))
+          return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                         ValidationError.c_str());
+        if (Definition->Sort.Kind != Declaration.ResultSort.Kind ||
+            Definition->Sort.BitWidth != Declaration.ResultSort.BitWidth)
+          return llvm::createStringError(
+              llvm::inconvertibleErrorCode(),
+              "logical function definition result sort mismatch");
+        if (!validateLogicCalls(Definition.get(), M.LogicFunctions,
+                                ValidationError) ||
+            !validateDefinitionVariables(Definition.get(), Parameters, {},
+                                         ValidationError))
+          return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                         ValidationError.c_str());
+        collectRequiredFeatures(Definition.get(), M.RequiredFeatures);
+      }
     }
     return std::move(M);
   }

@@ -10,6 +10,9 @@ Standalone verifier
    cpp-verify --backend=z3 file.cpp
    cpp-verify --backend=bmc --unroll=3 file.cpp
    cpp-verify --backend=lean --lean-out=goal.lean file.cpp
+   cpp-verify --backend=lean --lean-project=proof file.cpp
+   cpp-verify --backend=lean --lean-project=proof --lean-certify file.cpp
+   cpp-verify --lean-fallback=proof file.cpp
    cpp-verify --check-ub file.cpp
    cpp-verify --timeout=20000 file.cpp
    cpp-verify --dump-ir=1,2,3,4 file.cpp
@@ -34,6 +37,20 @@ Backends
      - Write an unchecked Lean 4 scratch-pad to ``--lean-out``. This path does
        not run Z3 and reports ``Exported``, never ``Verified``. Multi-function
        output uses one shared preamble and identity-qualified theorem names.
+   * - ``--lean-project=DIR``
+     - With ``--backend=lean``, generate a pinned editable project. Generated
+       semantics live in ``CppVerify/Generated.lean``; reusable lemmas and
+       per-obligation proof files are preserved across regeneration.
+   * - ``--lean-certify``
+     - Build the active project with Lean 4.32.2, reject ``sorry`` and
+       undocumented proof axioms, and report ``Certified`` only after every
+       active proof kernel-checks. Requires ``--lean-project`` or
+       ``--lean-fallback``.
+   * - ``--lean-fallback=DIR``
+     - On the default Z3 path, export only functions that remain
+       ``Unresolved`` to an editable Lean project. Initial export remains a
+       non-success result. Rerun with ``--lean-certify`` after completing the
+       preserved proof files.
    * - ``--unroll=N``
      - BMC loop bound only.
    * - ``--check-ub``
@@ -56,6 +73,13 @@ Backends
 ``--lower-only`` exercises the complete verification pipeline through backend
 encoding. A successful run prints ``Lowered: function``. That means the formula
 was constructed and encoded, **not** that its obligations are true.
+
+Backend results are intentionally distinct. Z3 ``unsat`` reports ``Verified``;
+``sat`` reports a failed source obligation; timeout/``unknown`` reports
+``Unresolved``. BMC reports ``BoundedSafe(N)`` when only its unwinding
+obligation fails, and reports ``Verified`` only when the selected bound itself
+is proved complete. Lean generation reports ``Exported``. Only the pinned,
+admission-free kernel workflow reports ``Certified``.
 
 Supported compiler
 ------------------

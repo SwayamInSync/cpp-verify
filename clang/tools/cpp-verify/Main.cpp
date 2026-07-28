@@ -37,8 +37,23 @@ static cl::opt<std::string> BackendOpt(
 
 static cl::opt<std::string>
     LeanOut("lean-out",
-            cl::desc("Output path for --backend=lean scratch-pad export"),
+            cl::desc("Output path for --backend=lean standalone export"),
             cl::value_desc("file"), cl::cat(CppVerifyCategory));
+
+static cl::opt<std::string> LeanProject(
+    "lean-project",
+    cl::desc("Generate an editable pinned Lean project in this directory"),
+    cl::value_desc("directory"), cl::cat(CppVerifyCategory));
+
+static cl::opt<std::string> LeanFallback(
+    "lean-fallback",
+    cl::desc("Export unresolved Z3 obligations to an editable Lean project"),
+    cl::value_desc("directory"), cl::cat(CppVerifyCategory));
+
+static cl::opt<bool> LeanCertify(
+    "lean-certify",
+    cl::desc("Kernel-check every proof in --lean-project without admissions"),
+    cl::init(false), cl::cat(CppVerifyCategory));
 
 static cl::opt<unsigned>
     BMCUnroll("unroll", cl::desc("Loop unroll bound for --backend=bmc"),
@@ -48,7 +63,7 @@ static cl::opt<unsigned> SolverTimeout(
     "timeout",
     cl::desc(
         "Per-query Z3 timeout in milliseconds (0 = no limit). A query that "
-        "exceeds it is reported as unknown instead of hanging"),
+        "exceeds it is reported as unresolved instead of hanging"),
     cl::init(verify::DefaultSolverTimeoutMs), cl::cat(CppVerifyCategory));
 
 static cl::opt<bool> CheckUB(
@@ -77,6 +92,9 @@ public:
       else
         VOpts.Backend = verify::BackendKind::Z3;
       VOpts.LeanOutPath = LeanOut.getValue();
+      VOpts.LeanProjectPath = LeanProject.getValue();
+      VOpts.LeanFallbackProjectPath = LeanFallback.getValue();
+      VOpts.LeanCertify = LeanCertify.getValue();
       VOpts.BMCUnroll = BMCUnroll.getValue();
       VOpts.SolverTimeoutMs = SolverTimeout.getValue();
       VOpts.CheckUB = CheckUB.getValue();
@@ -107,6 +125,12 @@ int main(int argc, const char **argv) {
     return 1;
   }
   CommonOptionsParser &OptionsParser = ExpectedParser.get();
+  StringRef Backend = BackendOpt.getValue();
+  if (Backend != "z3" && Backend != "lean" && Backend != "bmc") {
+    llvm::errs() << "error: unknown verification backend '" << Backend
+                 << "'; expected z3, lean, or bmc\n";
+    return 1;
+  }
 
   ClangTool Tool(OptionsParser.getCompilations(),
                  OptionsParser.getSourcePathList());

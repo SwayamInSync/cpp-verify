@@ -14,6 +14,8 @@
 namespace clang {
 namespace verify {
 
+enum class ProofObligationKind { Assertion, Postcondition, Unwinding };
+
 class VStmt {
 public:
   enum Kind {
@@ -114,8 +116,10 @@ struct VIfStmt : VStmt {
 
 struct VAssertStmt : VStmt {
   std::unique_ptr<VExpr> Cond;
-  VAssertStmt(std::unique_ptr<VExpr> C, SourceLocation Loc)
-      : VStmt(Assert, Loc), Cond(std::move(C)) {}
+  ProofObligationKind ProofKind;
+  VAssertStmt(std::unique_ptr<VExpr> C, SourceLocation Loc,
+              ProofObligationKind ProofKind = ProofObligationKind::Assertion)
+      : VStmt(Assert, Loc), Cond(std::move(C)), ProofKind(ProofKind) {}
 };
 
 struct VAssumeStmt : VStmt {

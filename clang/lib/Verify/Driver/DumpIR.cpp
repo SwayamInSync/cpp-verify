@@ -521,16 +521,47 @@ void verify::dumpVC(const ObligationModule &Module, llvm::raw_ostream &OS) {
   dumpLogicExpr(Module.CounterexampleQuery.get(), OS, 2);
   ind(OS, 1) << "obligations " << Module.Obligations.size() << "\n";
   for (const Obligation &Item : Module.Obligations) {
-    ind(OS, 2) << "obligation " << Item.Id << " "
-               << (Item.Kind == ObligationKind::Assertion ? "assertion"
-                                                          : "postcondition")
-               << "\n";
+    const char *Kind = Item.Kind == ObligationKind::Assertion ? "assertion"
+                       : Item.Kind == ObligationKind::Unwinding
+                           ? "unwinding"
+                           : "postcondition";
+    ind(OS, 2) << "obligation " << Item.Id << " " << Kind << "\n";
     ind(OS, 3) << "source "
                << (Item.Loc.isValid()
                        ? std::to_string(Item.Loc.getRawEncoding())
                        : "unknown")
                << "\n";
+    if (Item.Source.isValid())
+      ind(OS, 3) << "location " << Item.Source.File << ":" << Item.Source.Line
+                 << ":" << Item.Source.Column << "\n";
     ind(OS, 3) << "counterexample\n";
     dumpLogicExpr(Item.CounterexampleQuery.get(), OS, 4);
+    ind(OS, 3) << "goal\n";
+    dumpLogicExpr(Item.Goal.get(), OS, 4);
+  }
+  ind(OS, 1) << "correctness\n";
+  dumpLogicExpr(Module.CorrectnessGoal.get(), OS, 2);
+  ind(OS, 1) << "logic-functions " << Module.LogicFunctions.size() << "\n";
+  for (const auto &[Identity, Function] : Module.LogicFunctions) {
+    ind(OS, 2) << "function " << Identity << " " << Function.DisplayName << " "
+               << (Function.IntMode == VIntMode::Machine ? "machine" : "math")
+               << "\n";
+    for (const LogicFunctionParameter &Parameter : Function.Parameters) {
+      ind(OS, 3) << "parameter " << Parameter.Name << " ";
+      dumpLogicSort(Parameter.Sort, OS);
+      OS << (Parameter.IsSigned ? " signed\n" : " unsigned\n");
+    }
+    ind(OS, 3) << "result ";
+    dumpLogicSort(Function.ResultSort, OS);
+    OS << (Function.ResultIsSigned ? " signed\n" : " unsigned\n");
+    ind(OS, 3) << "fuel " << Function.DefinitionFuel << "\n";
+    if (Function.StepDefinition) {
+      ind(OS, 3) << "step\n";
+      dumpLogicExpr(Function.StepDefinition.get(), OS, 4);
+    }
+    for (unsigned I = 0; I < Function.DefinitionLevels.size(); ++I) {
+      ind(OS, 3) << "definition " << I + 1 << "\n";
+      dumpLogicExpr(Function.DefinitionLevels[I].get(), OS, 4);
+    }
   }
 }

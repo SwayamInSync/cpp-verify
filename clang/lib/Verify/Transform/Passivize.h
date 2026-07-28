@@ -14,6 +14,7 @@ using FunctionMap = std::map<std::string, const VFunction *>;
 struct PassiveStmt {
   enum Kind { Assume, Assert };
   Kind K = Assume;
+  ProofObligationKind ProofKind = ProofObligationKind::Assertion;
   std::unique_ptr<VExpr> Cond;
 };
 

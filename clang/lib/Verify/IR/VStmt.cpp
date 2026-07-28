@@ -71,7 +71,8 @@ std::unique_ptr<VStmt> verify::cloneVStmt(const VStmt *S) {
   }
   case VStmt::Assert: {
     const auto &A = static_cast<const VAssertStmt &>(*S);
-    return std::make_unique<VAssertStmt>(cloneVExpr(A.Cond.get()), A.Loc);
+    return std::make_unique<VAssertStmt>(cloneVExpr(A.Cond.get()), A.Loc,
+                                         A.ProofKind);
   }
   case VStmt::Assume: {
     const auto &A = static_cast<const VAssumeStmt &>(*S);

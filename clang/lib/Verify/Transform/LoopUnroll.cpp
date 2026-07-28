@@ -11,7 +11,12 @@ static std::unique_ptr<VStmt> unrollWhile(const VWhileStmt &W, unsigned K) {
   if (K == 0) {
     auto NotCond = std::make_unique<VUnaryOpExpr>(
         VUnaryOp::Not, cloneVExpr(W.Cond.get()), VType::makeBool(), W.Loc);
-    return std::make_unique<VAssertStmt>(std::move(NotCond), W.Loc);
+    std::vector<std::unique_ptr<VStmt>> Boundary;
+    Boundary.push_back(std::make_unique<VAssertStmt>(
+        cloneVExpr(NotCond.get()), W.Loc, ProofObligationKind::Unwinding));
+    Boundary.push_back(
+        std::make_unique<VAssumeStmt>(std::move(NotCond), W.Loc));
+    return std::make_unique<VSeqStmt>(std::move(Boundary), W.Loc);
   }
 
   auto Then = unrollStmts(W.Body, K);
@@ -125,11 +130,6 @@ VFunction LoopUnroller::unroll(const VFunction &Fn, unsigned K) {
   Out.HiddenSpecs = Fn.HiddenSpecs;
   Out.RevealedSpecs = Fn.RevealedSpecs;
   Out.Layouts = Fn.Layouts;
-  if (K == 0) {
-    for (const auto &S : Fn.Body)
-      Out.Body.push_back(cloneVStmt(S.get()));
-    return Out;
-  }
   Out.Body = unrollStmts(Fn.Body, K);
   return Out;
 }

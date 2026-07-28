@@ -11,10 +11,18 @@
 #include "../Transform/UBChecks.h"
 #include "DumpIR.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/Basic/SourceManager.h"
+#include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/MD5.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Path.h"
+#include "llvm/Support/Program.h"
 #include "llvm/Support/raw_ostream.h"
+#include <iterator>
 #include <optional>
 
 using namespace clang;
@@ -23,16 +31,304 @@ using namespace verify;
 namespace {
 
 struct VerifyDiagnostic {
-  enum Kind { Verified, Lowered, Exported, Error, Warning, Unknown };
+  enum Kind {
+    Lowered,
+    Verified,
+    Error,
+    Unresolved,
+    BoundedSafe,
+    Exported,
+    Certified,
+    Warning
+  };
   Kind K;
   std::string Message;
+  SourceLocation Loc;
 };
+
+static std::string backendSuffix(const VerifyResult &Result) {
+  if (Result.BackendName.empty())
+    return {};
+  std::string Suffix = " [backend=" + Result.BackendName;
+  if (Result.Bound)
+    Suffix += ", bound=" + std::to_string(*Result.Bound);
+  Suffix += "]";
+  return Suffix;
+}
+
+static std::string leanProjectPath(llvm::StringRef Root,
+                                   llvm::ArrayRef<llvm::StringRef> Components) {
+  llvm::SmallString<256> Path(Root);
+  for (llvm::StringRef Component : Components)
+    llvm::sys::path::append(Path, Component);
+  return std::string(Path);
+}
+
+static llvm::Error writeTextFile(llvm::StringRef Path,
+                                 llvm::StringRef Contents) {
+  std::error_code EC;
+  llvm::raw_fd_ostream OS(Path, EC, llvm::sys::fs::OF_Text);
+  if (EC)
+    return llvm::createStringError(EC, "cannot write %s", Path.str().c_str());
+  OS << Contents;
+  OS.flush();
+  if (OS.has_error())
+    return llvm::createStringError(OS.error(), "cannot write %s",
+                                   Path.str().c_str());
+  return llvm::Error::success();
+}
+
+static llvm::Error writeTextFileIfMissing(llvm::StringRef Path,
+                                          llvm::StringRef Contents) {
+  if (llvm::sys::fs::exists(Path))
+    return llvm::Error::success();
+  return writeTextFile(Path, Contents);
+}
+
+static std::string leanGoalModuleName(llvm::StringRef Goal) {
+  llvm::MD5 Hasher;
+  llvm::MD5::MD5Result Hash;
+  Hasher.update(Goal);
+  Hasher.final(Hash);
+  llvm::SmallString<32> Hex;
+  llvm::MD5::stringifyResult(Hash, Hex);
+  return "Goal_" + llvm::StringRef(Hex).take_front(16).str();
+}
+
+static llvm::Expected<std::string>
+executeWithLogs(llvm::StringRef Program,
+                const std::vector<std::string> &Arguments,
+                llvm::StringRef LogBase) {
+  std::vector<llvm::StringRef> ArgRefs;
+  ArgRefs.reserve(Arguments.size());
+  for (const std::string &Argument : Arguments)
+    ArgRefs.push_back(Argument);
+  const std::string StdoutPath = LogBase.str() + ".out";
+  const std::string StderrPath = LogBase.str() + ".err";
+  std::vector<std::optional<llvm::StringRef>> Redirects = {
+      std::nullopt, StdoutPath, StderrPath};
+  std::string ExecutionError;
+  bool ExecutionFailed = false;
+  const int ExitCode = llvm::sys::ExecuteAndWait(
+      Program, ArgRefs, std::nullopt, Redirects, /*SecondsToWait=*/300,
+      /*MemoryLimit=*/0, &ExecutionError, &ExecutionFailed);
+  auto readLog = [](llvm::StringRef Path) {
+    auto Buffer = llvm::MemoryBuffer::getFile(Path);
+    return Buffer ? Buffer.get()->getBuffer().str() : std::string();
+  };
+  std::string Stdout = readLog(StdoutPath);
+  std::string Stderr = readLog(StderrPath);
+  llvm::sys::fs::remove(StdoutPath);
+  llvm::sys::fs::remove(StderrPath);
+  if (ExecutionFailed || ExitCode != 0) {
+    std::string Message = ExecutionError;
+    if (!Stdout.empty())
+      Message += (Message.empty() ? "" : "\n") + Stdout;
+    if (!Stderr.empty())
+      Message += (Message.empty() ? "" : "\n") + Stderr;
+    if (Message.size() > 4000)
+      Message.resize(4000);
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "command failed with exit code %d: %s",
+                                   ExitCode, Message.c_str());
+  }
+  return Stdout;
+}
 
 class Verifier {
   ASTContext &Ctx;
   VerifyOptions Opts;
   llvm::raw_ostream *DumpOS = nullptr;
   std::vector<VerifyDiagnostic> Diags;
+
+  const std::string &leanProjectRoot() const {
+    return Opts.LeanProjectPath.empty() ? Opts.LeanFallbackProjectPath
+                                        : Opts.LeanProjectPath;
+  }
+
+  void annotateObligationSources(ObligationModule &Module) {
+    const SourceManager &SourceMgr = Ctx.getSourceManager();
+    for (Obligation &Item : Module.Obligations) {
+      if (!Item.Loc.isValid())
+        continue;
+      PresumedLoc Location = SourceMgr.getPresumedLoc(Item.Loc);
+      if (!Location.isValid())
+        continue;
+      Item.Source.File = Location.getFilename();
+      Item.Source.Line = Location.getLine();
+      Item.Source.Column = Location.getColumn();
+    }
+  }
+
+  llvm::Expected<std::string> initializeLeanProject() {
+    const std::string &Root = leanProjectRoot();
+    std::error_code EC = llvm::sys::fs::create_directories(
+        leanProjectPath(Root, {"CppVerify", "Proofs"}));
+    if (EC)
+      return llvm::createStringError(EC, "cannot create Lean project %s",
+                                     Root.c_str());
+
+    const std::string ToolchainPath = leanProjectPath(Root, {"lean-toolchain"});
+    constexpr llvm::StringLiteral Toolchain = "leanprover/lean4:v4.32.2\n";
+    if (llvm::sys::fs::exists(ToolchainPath)) {
+      auto Existing = llvm::MemoryBuffer::getFile(ToolchainPath);
+      if (!Existing)
+        return llvm::createStringError(Existing.getError(),
+                                       "cannot read Lean toolchain pin");
+      if (Existing.get()->getBuffer().trim() !=
+          llvm::StringRef(Toolchain).trim())
+        return llvm::createStringError(
+            llvm::inconvertibleErrorCode(),
+            "Lean project uses toolchain '%s'; expected '%s'",
+            Existing.get()->getBuffer().trim().str().c_str(),
+            llvm::StringRef(Toolchain).trim().str().c_str());
+    } else if (llvm::Error Error = writeTextFile(ToolchainPath, Toolchain)) {
+      return std::move(Error);
+    }
+
+    constexpr llvm::StringLiteral Lakefile =
+        "name = \"cppverify_proof\"\n"
+        "version = \"0.1.0\"\n"
+        "defaultTargets = [\"CppVerify\"]\n\n"
+        "[[lean_lib]]\n"
+        "name = \"CppVerify\"\n";
+    if (llvm::Error Error = writeTextFileIfMissing(
+            leanProjectPath(Root, {"lakefile.toml"}), Lakefile))
+      return std::move(Error);
+
+    constexpr llvm::StringLiteral UserFile =
+        "import CppVerify.Generated\n\n"
+        "/- Add reusable lemmas here. This file is never regenerated. -/\n";
+    if (llvm::Error Error = writeTextFileIfMissing(
+            leanProjectPath(Root, {"CppVerify", "User.lean"}), UserFile))
+      return std::move(Error);
+
+    return leanProjectPath(Root, {"CppVerify", "Generated.lean"});
+  }
+
+  llvm::Error
+  finalizeLeanProject(const std::vector<std::string> &ProjectGoals) {
+    const std::string &Root = leanProjectRoot();
+    std::set<std::string> UniqueGoals(ProjectGoals.begin(), ProjectGoals.end());
+    std::string CheckFile;
+    for (const std::string &Goal : UniqueGoals) {
+      const std::string Module = leanGoalModuleName(Goal);
+      const std::string ProofPath =
+          leanProjectPath(Root, {"CppVerify", "Proofs", Module + ".lean"});
+      std::string Proof =
+          "import CppVerify.User\n\n"
+          "/- Complete this proof; this file is never regenerated. -/\n"
+          "theorem " +
+          Goal + "_proof : " + Goal + " := by\n  sorry\n";
+      if (llvm::Error Error = writeTextFileIfMissing(ProofPath, Proof))
+        return Error;
+      CheckFile += "import CppVerify.Proofs." + Module + "\n";
+    }
+    CheckFile += "\n";
+    for (const std::string &Goal : UniqueGoals) {
+      CheckFile += "example : " + Goal + " := " + Goal + "_proof\n";
+      CheckFile += "#print axioms " + Goal + "_proof\n";
+    }
+    return writeTextFile(leanProjectPath(Root, {"CppVerify", "Check.lean"}),
+                         CheckFile);
+  }
+
+  llvm::Error certifyLeanProject(const std::vector<std::string> &ProjectGoals) {
+    if (ProjectGoals.empty())
+      return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                     "the project has no proof obligations");
+    auto Lake = llvm::sys::findProgramByName("lake");
+    if (!Lake)
+      return llvm::createStringError(Lake.getError(),
+                                     "cannot find the Lean project launcher");
+
+    const std::string &Root = leanProjectRoot();
+    const std::string LogBase =
+        leanProjectPath(Root, {".cppverify-certification"});
+    auto runLake = [&](std::vector<std::string> Arguments,
+                       llvm::StringRef Stage) -> llvm::Expected<std::string> {
+      std::vector<std::string> Command = {"lake", "--dir=" + Root};
+      Command.insert(Command.end(), std::make_move_iterator(Arguments.begin()),
+                     std::make_move_iterator(Arguments.end()));
+      return executeWithLogs(*Lake, Command, LogBase + "-" + Stage.str());
+    };
+
+    if (auto Build = runLake({"build", "CppVerify.Generated", "CppVerify.User"},
+                             "build");
+        !Build)
+      return Build.takeError();
+
+    const std::string UserObject = leanProjectPath(
+        Root, {".lake", "build", "lib", "lean", "CppVerify", "User.olean"});
+    if (auto User =
+            runLake({"env", "lean", "-EhasSorry", "-R", Root, "-o", UserObject,
+                     leanProjectPath(Root, {"CppVerify", "User.lean"})},
+                    "user");
+        !User)
+      return User.takeError();
+
+    const std::string ProofBuildDir = leanProjectPath(
+        Root, {".lake", "build", "lib", "lean", "CppVerify", "Proofs"});
+    if (std::error_code EC = llvm::sys::fs::create_directories(ProofBuildDir))
+      return llvm::createStringError(
+          EC, "cannot create Lean proof build directory");
+
+    std::set<std::string> UniqueGoals(ProjectGoals.begin(), ProjectGoals.end());
+    for (const std::string &Goal : UniqueGoals) {
+      const std::string Module = leanGoalModuleName(Goal);
+      const std::string ProofSource =
+          leanProjectPath(Root, {"CppVerify", "Proofs", Module + ".lean"});
+      const std::string ProofObject =
+          leanProjectPath(ProofBuildDir, {Module + ".olean"});
+      if (auto Proof = runLake({"env", "lean", "-EhasSorry", "-R", Root, "-o",
+                                ProofObject, ProofSource},
+                               Module);
+          !Proof)
+        return Proof.takeError();
+    }
+
+    auto Check = runLake({"env", "lean", "-R", Root,
+                          leanProjectPath(Root, {"CppVerify", "Check.lean"})},
+                         "check");
+    if (!Check)
+      return Check.takeError();
+
+    const std::set<llvm::StringRef> AllowedAxioms = {"propext", "Quot.sound",
+                                                     "Classical.choice"};
+    unsigned Reports = 0;
+    llvm::StringRef Report = *Check;
+    llvm::StringRef NoAxioms = "does not depend on any axioms";
+    for (size_t Pos = Report.find(NoAxioms); Pos != llvm::StringRef::npos;
+         Pos = Report.find(NoAxioms, Pos + NoAxioms.size()))
+      ++Reports;
+    llvm::StringRef HasAxioms = "depends on axioms:";
+    for (size_t Pos = Report.find(HasAxioms); Pos != llvm::StringRef::npos;
+         Pos = Report.find(HasAxioms, Pos + HasAxioms.size())) {
+      ++Reports;
+      const size_t Open = Report.find('[', Pos + HasAxioms.size());
+      const size_t Close = Open == llvm::StringRef::npos
+                               ? llvm::StringRef::npos
+                               : Report.find(']', Open + 1);
+      if (Open == llvm::StringRef::npos || Close == llvm::StringRef::npos)
+        return llvm::createStringError(
+            llvm::inconvertibleErrorCode(),
+            "malformed Lean axiom-dependency report");
+      llvm::SmallVector<llvm::StringRef> Axioms;
+      Report.slice(Open + 1, Close).split(Axioms, ',', -1, false);
+      for (llvm::StringRef Axiom : Axioms) {
+        Axiom = Axiom.trim();
+        if (!Axiom.empty() && !AllowedAxioms.count(Axiom))
+          return llvm::createStringError(
+              llvm::inconvertibleErrorCode(),
+              "proof depends on undocumented axiom %s", Axiom.str().c_str());
+      }
+    }
+    if (Reports != UniqueGoals.size())
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "Lean did not report axiom dependencies for every proof");
+    return llvm::Error::success();
+  }
 
   void checkCalleeRecommendsOnFailure(const VFunction &Caller,
                                       const FunctionMap &FnMap,
@@ -65,11 +361,12 @@ class Verifier {
       PP.CallerIntMode = Caller.IntMode;
       auto Module = buildObligationModule(PP);
       if (!Module) {
-        Diags.push_back({VerifyDiagnostic::Unknown,
+        Diags.push_back({VerifyDiagnostic::Unresolved,
                          "recommends lowering failed for " + Caller.Name +
                              " (" + llvm::toString(Module.takeError()) + ")"});
         continue;
       }
+      annotateObligationSources(*Module);
       VerifyResult R = Backend.verify(*Module);
       if (R.Status == VerifyStatus::Failed)
         Diags.push_back({VerifyDiagnostic::Warning,
@@ -84,6 +381,47 @@ public:
       : Ctx(Ctx), Opts(Opts), DumpOS(&DumpOS) {}
 
   bool run() {
+    if (!Opts.LeanOutPath.empty() && Opts.Backend != BackendKind::Lean) {
+      Diags.push_back(
+          {VerifyDiagnostic::Error, "--lean-out requires --backend=lean"});
+      return false;
+    }
+    if (!Opts.LeanProjectPath.empty() && Opts.Backend != BackendKind::Lean) {
+      Diags.push_back(
+          {VerifyDiagnostic::Error, "--lean-project requires --backend=lean"});
+      return false;
+    }
+    if (!Opts.LeanFallbackProjectPath.empty() &&
+        Opts.Backend != BackendKind::Z3) {
+      Diags.push_back(
+          {VerifyDiagnostic::Error, "--lean-fallback requires --backend=z3"});
+      return false;
+    }
+    if (!Opts.LeanFallbackProjectPath.empty() &&
+        (!Opts.LeanProjectPath.empty() || !Opts.LeanOutPath.empty())) {
+      Diags.push_back(
+          {VerifyDiagnostic::Error,
+           "--lean-fallback is mutually exclusive with --lean-project and "
+           "--lean-out"});
+      return false;
+    }
+    if (!Opts.LeanFallbackProjectPath.empty() && Opts.LowerOnly) {
+      Diags.push_back({VerifyDiagnostic::Error,
+                       "--lean-fallback cannot be combined with --lower-only"});
+      return false;
+    }
+    if (!Opts.LeanProjectPath.empty() && !Opts.LeanOutPath.empty()) {
+      Diags.push_back({VerifyDiagnostic::Error,
+                       "--lean-project and --lean-out are mutually exclusive"});
+      return false;
+    }
+    if (Opts.LeanCertify && Opts.LeanProjectPath.empty() &&
+        Opts.LeanFallbackProjectPath.empty()) {
+      Diags.push_back({VerifyDiagnostic::Error,
+                       "--lean-certify requires --lean-project or "
+                       "--lean-fallback"});
+      return false;
+    }
     if (Opts.LowerOnly && Opts.Backend == BackendKind::Lean) {
       Diags.push_back(
           {VerifyDiagnostic::Error,
@@ -107,6 +445,12 @@ public:
     if (!Converter.getErrors().empty())
       return false;
     if (Functions.empty()) {
+      if (Opts.LeanCertify) {
+        Diags.push_back({VerifyDiagnostic::Unresolved,
+                         "Lean certification requires at least one proof "
+                         "obligation"});
+        return false;
+      }
       Diags.push_back(
           {VerifyDiagnostic::Warning, "no verifiable functions found"});
       return true;
@@ -129,22 +473,44 @@ public:
       InterfaceFunctions.push_back(std::move(Interface));
     }
 
+    std::vector<std::string> LeanProjectGoals;
     std::unique_ptr<llvm::raw_fd_ostream> LeanFile;
     llvm::raw_ostream *LeanOut = DumpOS;
-    if (Opts.Backend == BackendKind::Lean && !Opts.LeanOutPath.empty()) {
+    std::string LeanOutputPath = Opts.LeanOutPath;
+    const bool HasLeanProject =
+        !Opts.LeanProjectPath.empty() || !Opts.LeanFallbackProjectPath.empty();
+    if (HasLeanProject) {
+      auto GeneratedPath = initializeLeanProject();
+      if (!GeneratedPath) {
+        Diags.push_back({VerifyDiagnostic::Error,
+                         "cannot initialize Lean project (" +
+                             llvm::toString(GeneratedPath.takeError()) + ")"});
+        return false;
+      }
+      LeanOutputPath = std::move(*GeneratedPath);
+    }
+    if ((Opts.Backend == BackendKind::Lean ||
+         !Opts.LeanFallbackProjectPath.empty()) &&
+        !LeanOutputPath.empty()) {
       std::error_code EC;
-      LeanFile = std::make_unique<llvm::raw_fd_ostream>(Opts.LeanOutPath, EC,
+      LeanFile = std::make_unique<llvm::raw_fd_ostream>(LeanOutputPath, EC,
                                                         llvm::sys::fs::OF_Text);
       if (EC) {
         Diags.push_back({VerifyDiagnostic::Error,
-                         "cannot open lean output: " + Opts.LeanOutPath});
+                         "cannot open lean output: " + LeanOutputPath});
         return false;
       }
       LeanOut = LeanFile.get();
     }
 
-    auto Backend = createVerifyBackend(Opts.Backend, LeanOut, Opts.BMCUnroll,
-                                       Opts.SolverTimeoutMs);
+    auto Backend = createVerifyBackend(
+        Opts.Backend, LeanOut, Opts.BMCUnroll, Opts.SolverTimeoutMs,
+        Opts.LeanProjectPath.empty() ? nullptr : &LeanProjectGoals);
+    std::unique_ptr<VerifyBackend> LeanFallbackBackend;
+    if (!Opts.LeanFallbackProjectPath.empty())
+      LeanFallbackBackend =
+          createVerifyBackend(BackendKind::Lean, LeanFile.get(), 0,
+                              Opts.SolverTimeoutMs, &LeanProjectGoals);
     Passivizer P;
     P.setFunctionMap(InterfaceMap);
     Z3Encoder Z3Lowering;
@@ -154,6 +520,23 @@ public:
     bool AllOk = true;
     bool AnyFailed = false;
     std::set<std::string> FailedCallers;
+    auto exportLeanFallback = [&](const ObligationModule &Module,
+                                  llvm::StringRef Label) {
+      if (!LeanFallbackBackend)
+        return false;
+      VerifyResult Fallback = LeanFallbackBackend->verify(Module);
+      if (Fallback.Status == VerifyStatus::Exported) {
+        Diags.push_back(
+            {VerifyDiagnostic::Exported, "lean fallback: " + Label.str()});
+        return true;
+      }
+      std::string Message = "lean fallback export failed: " + Label.str();
+      if (!Fallback.Message.empty())
+        Message += " (" + Fallback.Message + ")";
+      Diags.push_back({VerifyDiagnostic::Unresolved, std::move(Message),
+                       Fallback.Location});
+      return false;
+    };
 
     for (const auto &Fn : Functions) {
       if (Fn->IsExternalContract) {
@@ -186,7 +569,8 @@ public:
         if (UBError)
           return *PreparedFn;
         SpecInliner Inliner(FnMap, PreparedFn->SpecFuel);
-        if (Opts.Backend == BackendKind::Z3)
+        if (Opts.Backend == BackendKind::Z3 ||
+            Opts.Backend == BackendKind::Lean)
           Inliner.prepareFunctionAxiomatic(*PreparedFn);
         else
           Inliner.prepareFunction(*PreparedFn);
@@ -226,15 +610,16 @@ public:
           AllOk = false;
           AnyFailed = true;
           Diags.push_back(
-              {VerifyDiagnostic::Unknown,
+              {VerifyDiagnostic::Unresolved,
                "obligation lowering failed for decreases: " + Fn->Name + " (" +
                    llvm::toString(DecModuleOrErr.takeError()) + ")"});
           continue;
         }
         ObligationModule DecModule = std::move(*DecModuleOrErr);
+        annotateObligationSources(DecModule);
         if (Opts.LowerOnly) {
           VerifyResult DR = Z3Lowering.lowerModule(DecModule);
-          if (DR.Status != VerifyStatus::Verified) {
+          if (DR.Status != VerifyStatus::Lowered) {
             AllOk = false;
             AnyFailed = true;
             std::string Message =
@@ -263,20 +648,28 @@ public:
               continue;
             }
           } else {
-            AllOk = false;
-            AnyFailed = true;
-            if (!Fn->IsProof)
-              FailedCallers.insert(Fn->Identity);
-            const bool IsUnknown = R.Status == VerifyStatus::Unknown;
-            std::string Message =
-                std::string(Fn->IsSpec ? "spec decreases " : "decreases ") +
-                (IsUnknown ? "unknown: " : "failed: ") + Fn->Name;
-            if (!R.Message.empty())
-              Message += " (" + R.Message + ")";
-            Diags.push_back({IsUnknown ? VerifyDiagnostic::Unknown
-                                       : VerifyDiagnostic::Error,
-                             std::move(Message)});
-            continue;
+            const bool IsUnresolved = R.Status == VerifyStatus::Unresolved;
+            const bool FallbackExported =
+                IsUnresolved &&
+                exportLeanFallback(DecModule, "decreases: " + Fn->Name);
+            if (Opts.LeanCertify && FallbackExported) {
+              if (Fn->IsSpec)
+                continue;
+            } else {
+              AllOk = false;
+              AnyFailed = true;
+              if (!Fn->IsProof)
+                FailedCallers.insert(Fn->Identity);
+              std::string Message =
+                  std::string(Fn->IsSpec ? "spec decreases " : "decreases ") +
+                  (IsUnresolved ? "unresolved: " : "failed: ") + Fn->Name;
+              if (!R.Message.empty())
+                Message += " (" + R.Message + ")";
+              Diags.push_back({IsUnresolved ? VerifyDiagnostic::Unresolved
+                                            : VerifyDiagnostic::Error,
+                               std::move(Message), R.Location});
+              continue;
+            }
           }
         }
       }
@@ -296,12 +689,13 @@ public:
       if (!ModuleOrErr) {
         AllOk = false;
         AnyFailed = true;
-        Diags.push_back({VerifyDiagnostic::Unknown,
+        Diags.push_back({VerifyDiagnostic::Unresolved,
                          "obligation lowering failed: " + Fn->Name + " (" +
                              llvm::toString(ModuleOrErr.takeError()) + ")"});
         continue;
       }
       ObligationModule Module = std::move(*ModuleOrErr);
+      annotateObligationSources(Module);
 
       if (DumpLayers & LayerVC) {
         dumpSep();
@@ -313,7 +707,7 @@ public:
           dumpSep();
         llvm::raw_ostream *Z3Out = DumpLayers & LayerZ3 ? DumpOS : nullptr;
         VerifyResult Lowered = Z3Lowering.lowerModule(Module, Z3Out);
-        if (Lowered.Status != VerifyStatus::Verified) {
+        if (Lowered.Status != VerifyStatus::Lowered) {
           AllOk = false;
           AnyFailed = true;
           std::string Message = "Z3 lowering failed: " + Fn->Name;
@@ -333,10 +727,21 @@ public:
 
       VerifyResult R = Backend->verify(Module);
       if (R.Status == VerifyStatus::Verified) {
-        Diags.push_back({VerifyDiagnostic::Verified, Fn->Name});
+        Diags.push_back(
+            {VerifyDiagnostic::Verified, Fn->Name + backendSuffix(R)});
+      } else if (R.Status == VerifyStatus::Certified) {
+        Diags.push_back(
+            {VerifyDiagnostic::Certified, Fn->Name + backendSuffix(R)});
       } else if (R.Status == VerifyStatus::Exported) {
         Diags.push_back(
             {VerifyDiagnostic::Exported, "lean obligation: " + Fn->Name});
+      } else if (R.Status == VerifyStatus::BoundedSafe) {
+        AllOk = false;
+        std::string Message = Fn->Name + backendSuffix(R);
+        if (!R.Message.empty())
+          Message += " (" + R.Message + ")";
+        Diags.push_back(
+            {VerifyDiagnostic::BoundedSafe, std::move(Message), R.Location});
       } else if (R.Status == VerifyStatus::Failed) {
         AllOk = false;
         AnyFailed = true;
@@ -347,16 +752,60 @@ public:
           Msg += " [" + R.ObligationId + "]";
         if (!R.Message.empty())
           Msg += " (counterexample: " + R.Message + ")";
-        Diags.push_back({VerifyDiagnostic::Error, Msg});
+        Diags.push_back({VerifyDiagnostic::Error, Msg, R.Location});
       } else {
+        const bool FallbackExported = R.Status == VerifyStatus::Unresolved &&
+                                      exportLeanFallback(Module, Fn->Name);
+        if (!(Opts.LeanCertify && FallbackExported)) {
+          AllOk = false;
+          AnyFailed = true;
+          if (!Fn->IsProof)
+            FailedCallers.insert(Fn->Identity);
+          std::string Message = Fn->Name;
+          if (!R.Message.empty())
+            Message += " (" + R.Message + ")";
+          Diags.push_back(
+              {VerifyDiagnostic::Unresolved, std::move(Message), R.Location});
+        }
+      }
+    }
+
+    if (HasLeanProject) {
+      if (LeanFile) {
+        LeanFile->flush();
+        LeanFile.reset();
+      }
+      if (llvm::Error Error = finalizeLeanProject(LeanProjectGoals)) {
         AllOk = false;
         AnyFailed = true;
-        if (!Fn->IsProof)
-          FailedCallers.insert(Fn->Identity);
-        std::string Message = Fn->Name;
-        if (!R.Message.empty())
-          Message += " (" + R.Message + ")";
-        Diags.push_back({VerifyDiagnostic::Unknown, std::move(Message)});
+        Diags.push_back({VerifyDiagnostic::Error,
+                         "cannot finalize Lean project (" +
+                             llvm::toString(std::move(Error)) + ")"});
+      } else if (Opts.LeanCertify && !AnyFailed &&
+                 (!LeanProjectGoals.empty() ||
+                  Opts.LeanFallbackProjectPath.empty())) {
+        if (llvm::Error Error = certifyLeanProject(LeanProjectGoals)) {
+          AllOk = false;
+          AnyFailed = true;
+          const std::string Reason = llvm::toString(std::move(Error));
+          for (VerifyDiagnostic &Diagnostic : Diags) {
+            if (Diagnostic.K != VerifyDiagnostic::Exported)
+              continue;
+            Diagnostic.K = VerifyDiagnostic::Unresolved;
+            Diagnostic.Message +=
+                " (Lean certification failed: " + Reason + ")";
+          }
+        } else {
+          for (VerifyDiagnostic &Diagnostic : Diags) {
+            if (Diagnostic.K != VerifyDiagnostic::Exported)
+              continue;
+            Diagnostic.K = VerifyDiagnostic::Certified;
+            llvm::StringRef Name = Diagnostic.Message;
+            if (!Name.consume_front("lean obligation: "))
+              Name.consume_front("lean fallback: ");
+            Diagnostic.Message = Name.str() + " [backend=Lean]";
+          }
+        }
       }
     }
 
@@ -376,24 +825,36 @@ public:
 
   void printDiagnostics(llvm::raw_ostream &OS) const {
     for (const auto &D : Diags) {
+      if (D.Loc.isValid()) {
+        PresumedLoc PLoc = Ctx.getSourceManager().getPresumedLoc(D.Loc);
+        if (PLoc.isValid())
+          OS << PLoc.getFilename() << ":" << PLoc.getLine() << ":"
+             << PLoc.getColumn() << ": ";
+      }
       switch (D.K) {
-      case VerifyDiagnostic::Verified:
-        OS << "Verified: " << D.Message << "\n";
-        break;
       case VerifyDiagnostic::Lowered:
         OS << "Lowered: " << D.Message << "\n";
         break;
-      case VerifyDiagnostic::Exported:
-        OS << "Exported: " << D.Message << "\n";
+      case VerifyDiagnostic::Verified:
+        OS << "Verified: " << D.Message << "\n";
         break;
       case VerifyDiagnostic::Error:
         OS << "error: " << D.Message << "\n";
         break;
+      case VerifyDiagnostic::Unresolved:
+        OS << "Unresolved: " << D.Message << "\n";
+        break;
+      case VerifyDiagnostic::BoundedSafe:
+        OS << "BoundedSafe: " << D.Message << "\n";
+        break;
+      case VerifyDiagnostic::Exported:
+        OS << "Exported: " << D.Message << "\n";
+        break;
+      case VerifyDiagnostic::Certified:
+        OS << "Certified: " << D.Message << "\n";
+        break;
       case VerifyDiagnostic::Warning:
         OS << "warning: " << D.Message << "\n";
-        break;
-      case VerifyDiagnostic::Unknown:
-        OS << "unknown: " << D.Message << "\n";
         break;
       }
     }

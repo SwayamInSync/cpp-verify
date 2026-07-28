@@ -2219,12 +2219,14 @@ class PassivizerImpl {
     return cloneVExpr(E);
   }
 
-  static void emitPassive(PassiveProgram &P, PassiveStmt::Kind K,
-                          std::unique_ptr<VExpr> Cond,
-                          const VExpr *Guard = nullptr,
-                          SourceLocation Loc = SourceLocation()) {
+  static void
+  emitPassive(PassiveProgram &P, PassiveStmt::Kind K,
+              std::unique_ptr<VExpr> Cond, const VExpr *Guard = nullptr,
+              SourceLocation Loc = SourceLocation(),
+              ProofObligationKind ProofKind = ProofObligationKind::Assertion) {
     auto PS = std::make_unique<PassiveStmt>();
     PS->K = K;
+    PS->ProofKind = ProofKind;
     if (Guard)
       Cond = makeImplies(cloneVExpr(Guard), std::move(Cond), Loc);
     PS->Cond = std::move(Cond);
@@ -3750,7 +3752,8 @@ public:
       auto Cond = cloneExpr(A.Cond.get(), Ctx);
       emitExprSafety(P, Cond.get(), Active.get(), A.Loc, Renames, false,
                      A.Cond.get());
-      emitPassive(P, PassiveStmt::Assert, std::move(Cond), Active.get(), A.Loc);
+      emitPassive(P, PassiveStmt::Assert, std::move(Cond), Active.get(), A.Loc,
+                  A.ProofKind);
       break;
     }
     case VStmt::Assume: {

@@ -1,4 +1,5 @@
-//===--- Obligation.h - Backend-neutral proof obligations --------*- C++ -*-===//
+//===--- Obligation.h - Backend-neutral proof obligations --------*- C++
+//-*-===//
 #ifndef LLVM_CLANG_VERIFY_BACKEND_OBLIGATION_H
 #define LLVM_CLANG_VERIFY_BACKEND_OBLIGATION_H
 
@@ -132,35 +133,62 @@ public:
 // Compatibility name for the Z3/spec adapters while they migrate internally.
 using VCExpr = LogicExpr;
 
-enum class ObligationKind { Assertion, Postcondition };
+using ObligationKind = ProofObligationKind;
+
+struct ObligationSource {
+  std::string File;
+  unsigned Line = 0;
+  unsigned Column = 0;
+
+  bool isValid() const { return !File.empty() && Line != 0; }
+};
 
 struct Obligation {
   std::string Id;
   ObligationKind Kind = ObligationKind::Assertion;
   SourceLocation Loc;
+  ObligationSource Source;
+  std::unique_ptr<LogicExpr> Goal;
   std::unique_ptr<LogicExpr> CounterexampleQuery;
+};
+
+struct LogicFunctionParameter {
+  std::string Name;
+  LogicSort Sort;
+  bool IsSigned = true;
+};
+
+/// An owned declaration for a pure logical function. DefinitionLevels contain
+/// the finite, caller-visible unfoldings in the function's native result sort.
+struct LogicFunctionDecl {
+  std::string Identity;
+  std::string DisplayName;
+  VIntMode IntMode = VIntMode::Machine;
+  std::vector<LogicFunctionParameter> Parameters;
+  LogicSort ResultSort;
+  bool ResultIsSigned = true;
+  unsigned DefinitionFuel = 0;
+  std::unique_ptr<LogicExpr> StepDefinition;
+  std::vector<std::unique_ptr<LogicExpr>> DefinitionLevels;
 };
 
 /// Canonical output of passive SSA lowering.
 ///
 /// CounterexampleQuery is satisfiable exactly when at least one assertion can
 /// fail. Obligations contain equivalent ordered queries used for diagnostics
-/// and solver fallback. SpecFunctions point into the owning VFunction graph and
-/// therefore have the same lifetime as the PassiveProgram's function registry.
+/// and solver fallback. LogicFunctions own every declaration and finite
+/// definition needed by an adapter; no adapter may reach back into VCR.
 class ObligationModule {
 public:
   std::string FunctionName;
   std::string FunctionIdentity;
+  std::unique_ptr<LogicExpr> CorrectnessGoal;
   std::unique_ptr<LogicExpr> CounterexampleQuery;
   std::vector<Obligation> Obligations;
+  std::map<std::string, LogicFunctionDecl> LogicFunctions;
   LogicFeatureSet RequiredFeatures = 0;
   std::string ResultVarName;
   std::string HeapPrefix;
-  FunctionMap SpecFunctions;
-  std::map<std::string, unsigned> SpecFuel;
-  std::set<std::string> HiddenSpecs;
-  std::set<std::string> RevealedSpecs;
-  VIntMode CallerIntMode = VIntMode::Machine;
 };
 
 llvm::Expected<ObligationModule>

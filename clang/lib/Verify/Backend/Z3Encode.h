@@ -4,12 +4,12 @@
 
 #include "../IR/VType.h"
 #include "Obligation.h"
-#include "SpecAxioms.h"
 #include "VerifyBackend.h"
 #include <map>
 #include <optional>
 #include <set>
 #include <string>
+#include <vector>
 #include <z3++.h>
 
 namespace clang {
@@ -19,9 +19,8 @@ class Z3Encoder {
   z3::context Ctx;
   z3::solver Solver;
   std::map<std::string, z3::expr> Vars;
-  FunctionMap SpecFunctions;
+  std::map<std::string, const LogicFunctionDecl *> LogicFunctions;
   std::map<std::string, z3::func_decl> SpecFuncDecls;
-  VIntMode CallerIntMode = VIntMode::Machine;
   unsigned TimeoutMs = 0;
   bool EncodingFailed = false;
   std::string EncodingError;
@@ -30,7 +29,7 @@ class Z3Encoder {
   z3::sort bvSort(unsigned BitWidth);
   z3::sort boolSort();
   z3::sort heapSort();
-  z3::sort valueSort(const VType &Ty, VIntMode Mode);
+  z3::sort valueSort(const LogicSort &Sort);
   z3::expr heapVar(const std::string &Name);
   z3::expr coerceTo(z3::expr E, VIntMode Target, unsigned BitWidth,
                     bool IsSigned = true);
@@ -38,15 +37,15 @@ class Z3Encoder {
   z3::expr fallbackValue(const VCExpr *E);
   z3::expr arithOp(const VCExpr *E, z3::expr L, z3::expr R);
   void markEncodingFailure(std::string Message);
-  z3::func_decl specFuncDecl(const VFunction *Spec);
+  z3::func_decl specFuncDecl(const LogicFunctionDecl &Function);
   z3::expr encodeVCNode(const VCExpr *E,
                         const std::map<const VCExpr *, z3::expr> &Done);
   z3::expr encodeVC(const VCExpr *E);
   std::optional<z3::expr> encodeModule(const ObligationModule &Module,
                                        const LogicExpr *Query,
                                        VerifyResult &Result);
-  z3::expr encodeVExprForAxiom(const VExpr *E, const VType &RetTy,
-                               VIntMode SpecMode);
+  z3::expr coerceToSort(z3::expr E, const LogicSort &Target, bool IsSigned);
+  void emitSpecCallAxiom(const VCExpr *Call);
 
 public:
   Z3Encoder();
@@ -55,7 +54,6 @@ public:
                             const LogicExpr *Query = nullptr);
   VerifyResult lowerModule(const ObligationModule &Module,
                            llvm::raw_ostream *OS = nullptr);
-  void emitSpecCallAxiom(const VCExpr *Call, const SpecAxiomContext &Ctx);
 };
 
 class Z3VerifyBackend : public VerifyBackend {
@@ -70,6 +68,7 @@ public:
   BackendCapabilities getCapabilities() const override {
     return {allLogicFeatures(), true};
   }
+  std::vector<VerifyResult> verifyObligations(const ObligationModule &Module);
 
 protected:
   VerifyResult verifyModule(const ObligationModule &Module) override;

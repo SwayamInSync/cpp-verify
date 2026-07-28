@@ -4,6 +4,7 @@
 
 #include "../Transform/Passivize.h"
 #include "Obligation.h"
+#include "llvm/Support/Error.h"
 #include <set>
 #include <vector>
 
@@ -15,7 +16,6 @@ struct SpecAxiomContext {
   std::map<std::string, unsigned> SpecFuel;
   std::set<std::string> HiddenSpecs;
   std::set<std::string> RevealedSpecs;
-  VIntMode CallerIntMode = VIntMode::Machine;
 };
 
 /// Collect names of spec functions referenced by VSpecCallExpr in E.
@@ -34,9 +34,10 @@ std::unique_ptr<VExpr> unfoldSpecDefinition(const VFunction &Spec,
 std::unique_ptr<VExpr> unfoldSpecBodyForAxiom(const VFunction &Spec,
                                               const SpecAxiomContext &Ctx);
 
-/// Emit defining axioms into Z3 for specs referenced in the VC.
-void emitSpecAxioms(class Z3Encoder &Enc, const VCExpr *Goal,
-                    const SpecAxiomContext &Ctx);
+/// Materialize all logical function declarations and finite definition levels
+/// reachable from Module into its owned backend-neutral representation.
+llvm::Error materializeLogicFunctions(ObligationModule &Module,
+                                      const SpecAxiomContext &Ctx);
 
 } // namespace verify
 } // namespace clang
