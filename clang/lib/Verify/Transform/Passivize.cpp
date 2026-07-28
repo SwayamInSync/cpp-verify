@@ -1460,7 +1460,8 @@ static bool functionMayWriteHeap(const VFunction &Fn, const FunctionMap &FnMap,
                                  std::set<std::string> &Active) {
   if (Fn.IsProof || Fn.IsSpec)
     return false;
-  if (!Fn.Modifies.empty() || Fn.IsExternalContract || Fn.UsesDynamicStorage)
+  if (!Fn.Modifies.empty() || Fn.IsExternalContract || Fn.UsesDynamicStorage ||
+      Fn.FreshOwnedReturn)
     return true;
   if (!Active.insert(Fn.Identity).second)
     return true;
@@ -2230,6 +2231,28 @@ class PassivizerImpl {
     P.Stmts.push_back(std::move(PS));
   }
 
+  static bool needsInactiveFrame(const VExpr *Guard) {
+    if (!Guard)
+      return false;
+    if (Guard->K != VExpr::Literal)
+      return true;
+    const auto &Literal = static_cast<const VLiteralExpr &>(*Guard);
+    return Literal.Ty.Kind != VTypeKind::Bool || Literal.Value != "1";
+  }
+
+  static void emitInactiveFrame(PassiveProgram &P, llvm::StringRef Before,
+                                llvm::StringRef After, const VType &Ty,
+                                const VExpr *Guard, SourceLocation Loc) {
+    if (Before.empty() || After.empty() || Before == After ||
+        !needsInactiveFrame(Guard))
+      return;
+    auto Inactive = makeNot(cloneVExpr(Guard), Loc);
+    emitPassive(P, PassiveStmt::Assume,
+                makeEq(std::make_unique<VVarExpr>(After.str(), Ty, Loc),
+                       std::make_unique<VVarExpr>(Before.str(), Ty, Loc), Loc),
+                Inactive.get(), Loc);
+  }
+
   static void appendProgram(PassiveProgram &P, PassiveProgram &Branch) {
     for (auto &S : Branch.Stmts)
       P.Stmts.push_back(std::move(S));
@@ -2356,6 +2379,16 @@ class PassivizerImpl {
       }
       if (!C.ResultProvenanceTarget.empty())
         Out.insert(C.ResultProvenanceTarget);
+      if (Callee != FnMap.end() && Callee->second->FreshOwnedReturn) {
+        Out.insert(VHeapName);
+        Out.insert(VAllocationHeapName);
+        Out.insert(VAllocationBaseHeapName);
+        Out.insert(VLivenessHeapName);
+        Out.insert(VAllocationUsedHeapName);
+        Out.insert(VInitializationHeapName);
+        Out.insert(VAllocationSizeHeapName);
+        Out.insert(VAllocationAlignHeapName);
+      }
       if (Callee != FnMap.end() &&
           (!Callee->second->Modifies.empty() ||
            hasImplicitHeapEffect(*Callee->second, FnMap)))
@@ -2453,6 +2486,7 @@ class PassivizerImpl {
                 std::make_unique<VHeapStoreExpr>(Before, After, std::move(Ptr),
                                                  std::move(Value), Loc),
                 Guard, Loc);
+    emitInactiveFrame(P, Before, After, VType::makePtr(), Guard, Loc);
   }
 
   static std::unique_ptr<VExpr>
@@ -2464,6 +2498,225 @@ class PassivizerImpl {
         std::make_unique<VLiteralExpr>(std::to_string(Offset), VType::makePtr(),
                                        Loc),
         VType::makePtr(), Loc);
+  }
+
+  void materializeFreshOwnedResult(
+      PassiveProgram &P, std::map<std::string, std::string> &Renames,
+      const VFreshOwnedReturn &Summary, const VType &PointerType,
+      llvm::StringRef ResultTarget, llvm::StringRef PointerName,
+      llvm::StringRef ProvenanceName, SourceLocation Loc) {
+    auto Pointer = std::make_unique<VVarExpr>(PointerName.str(), PointerType,
+                                              Loc, ProvenanceName.str());
+    auto Provenance =
+        std::make_unique<VVarExpr>(ProvenanceName.str(), VType::makePtr(), Loc);
+    auto IsNull =
+        makeEq(cloneVExpr(Pointer.get()),
+               std::make_unique<VLiteralExpr>(0, VType::makePtr(), Loc), Loc);
+    auto NonNull = makeNot(cloneVExpr(IsNull.get()), Loc);
+
+    OwnedAllocationIdentities.push_back(ProvenanceName.str());
+    RepresentedAllocationPointers.insert(ResultTarget.str());
+    auto NonzeroProvenance = std::make_unique<VBinOpExpr>(
+        VBinOp::Ne, cloneVExpr(Provenance.get()),
+        std::make_unique<VLiteralExpr>(0, VType::makePtr(), Loc),
+        VType::makeBool(), Loc);
+    emitPassive(P, PassiveStmt::Assume, std::move(NonzeroProvenance));
+    auto WasUsed = std::make_unique<VLoadExpr>(
+        cloneVExpr(Provenance.get()), VType::makeBool(), Loc,
+        Renames[VAllocationUsedHeapName]);
+    emitPassive(P, PassiveStmt::Assume, makeNot(std::move(WasUsed), Loc));
+    auto WasLive = std::make_unique<VLoadExpr>(cloneVExpr(Provenance.get()),
+                                               VType::makeBool(), Loc,
+                                               Renames[VLivenessHeapName]);
+    emitPassive(P, PassiveStmt::Assume, makeNot(std::move(WasLive), Loc));
+    updateHeap(P, Renames, VAllocationUsedHeapName,
+               cloneVExpr(Provenance.get()), makeBoolLiteral(true, Loc),
+               nullptr, Loc);
+    if (!Summary.MayReturnNull)
+      emitPassive(P, PassiveStmt::Assume, cloneVExpr(NonNull.get()));
+
+    for (uint64_t Offset = 0; Offset < Summary.SizeBytes; ++Offset) {
+      auto ByteNonNull = std::make_unique<VBinOpExpr>(
+          VBinOp::Ne, addressOffset(Pointer.get(), Offset, Loc),
+          std::make_unique<VLiteralExpr>(0, VType::makePtr(), Loc),
+          VType::makeBool(), Loc);
+      emitPassive(
+          P, PassiveStmt::Assume,
+          makeOr(cloneVExpr(IsNull.get()), std::move(ByteNonNull), Loc));
+    }
+    if (Summary.AlignBytes > 1) {
+      auto Remainder = std::make_unique<VBinOpExpr>(
+          VBinOp::Rem, cloneVExpr(Pointer.get()),
+          std::make_unique<VLiteralExpr>(std::to_string(Summary.AlignBytes),
+                                         VType::makePtr(), Loc),
+          VType::makePtr(), Loc);
+      auto Aligned =
+          makeEq(std::move(Remainder),
+                 std::make_unique<VLiteralExpr>(0, VType::makePtr(), Loc), Loc);
+      emitPassive(P, PassiveStmt::Assume,
+                  makeOr(cloneVExpr(IsNull.get()), std::move(Aligned), Loc));
+    }
+
+    CloneCtx Ctx{Renames, OldState, false};
+    for (const std::string &Name : PointerValueVariables) {
+      if (Name == ResultTarget || RepresentedAllocationPointers.count(Name))
+        continue;
+      auto TypeIt = Types.find(Name);
+      auto RenameIt = Renames.find(Name);
+      if (TypeIt == Types.end() || RenameIt == Renames.end() ||
+          TypeIt->second.Kind != VTypeKind::Ptr ||
+          TypeIt->second.PointeeSizeBytes == 0)
+        continue;
+      const VType &Ty = TypeIt->second;
+      auto RawPointer = std::make_unique<VVarExpr>(Name, Ty, Loc);
+      auto ExistingPointer = cloneExpr(RawPointer.get(), Ctx);
+      auto IsLivePointer =
+          cloneExpr(nonNullSafety(RawPointer.get(), Loc).get(), Ctx);
+      auto NewBeforeExisting = std::make_unique<VBinOpExpr>(
+          VBinOp::Le, addressOffset(Pointer.get(), Summary.SizeBytes, Loc),
+          cloneVExpr(ExistingPointer.get()), VType::makeBool(), Loc);
+      auto ExistingBeforeNew = std::make_unique<VBinOpExpr>(
+          VBinOp::Le,
+          addressOffset(ExistingPointer.get(), Ty.PointeeSizeBytes, Loc),
+          cloneVExpr(Pointer.get()), VType::makeBool(), Loc);
+      auto Disjoint = makeOr(std::move(NewBeforeExisting),
+                             std::move(ExistingBeforeNew), Loc);
+      auto Irrelevant = makeOr(cloneVExpr(IsNull.get()),
+                               makeNot(std::move(IsLivePointer), Loc), Loc);
+      emitPassive(P, PassiveStmt::Assume,
+                  makeOr(std::move(Irrelevant), std::move(Disjoint), Loc));
+    }
+
+    for (const StoredPointerCell &Stored : StoredPointerCells) {
+      if (!Stored.Address || Stored.PointerType.PointeeSizeBytes == 0)
+        continue;
+      auto CellLive =
+          cloneExpr(exactPointerSafety(Stored.Address.get(), Loc).get(), Ctx);
+      auto StoredValue = std::make_unique<VLoadExpr>(
+          cloneVExpr(Stored.Address.get()), Stored.PointerType, Loc,
+          Renames[VHeapName]);
+      auto ValueLive =
+          cloneExpr(exactPointerSafety(StoredValue.get(), Loc).get(), Ctx);
+      auto NewBeforeStored = std::make_unique<VBinOpExpr>(
+          VBinOp::Le, addressOffset(Pointer.get(), Summary.SizeBytes, Loc),
+          cloneVExpr(StoredValue.get()), VType::makeBool(), Loc);
+      auto StoredBeforeNew = std::make_unique<VBinOpExpr>(
+          VBinOp::Le,
+          addressOffset(StoredValue.get(), Stored.PointerType.PointeeSizeBytes,
+                        Loc),
+          cloneVExpr(Pointer.get()), VType::makeBool(), Loc);
+      auto Disjoint =
+          makeOr(std::move(NewBeforeStored), std::move(StoredBeforeNew), Loc);
+      auto Irrelevant =
+          makeOr(cloneVExpr(IsNull.get()),
+                 makeNot(cloneVExpr(Stored.Guard.get()), Loc), Loc);
+      Irrelevant =
+          makeOr(std::move(Irrelevant), makeNot(std::move(CellLive), Loc), Loc);
+      Irrelevant = makeOr(std::move(Irrelevant),
+                          makeNot(std::move(ValueLive), Loc), Loc);
+      emitPassive(P, PassiveStmt::Assume,
+                  makeOr(std::move(Irrelevant), std::move(Disjoint), Loc));
+    }
+
+    CloneCtx EntryCtx{Renames, OldState, true};
+    for (const VValidExtent &Extent : Fn.ValidExtents) {
+      if (!Extent.Length || Extent.PointerType.PointeeSizeBytes == 0)
+        continue;
+      auto Base = cloneExpr(
+          std::make_unique<VVarExpr>(Extent.Base, Extent.PointerType, Loc)
+              .get(),
+          EntryCtx);
+      auto Length = cloneExpr(Extent.Length.get(), EntryCtx);
+      auto Empty =
+          makeEq(cloneVExpr(Length.get()),
+                 std::make_unique<VLiteralExpr>(0, Length->Ty, Loc), Loc);
+      VType MathType = Length->Ty;
+      MathType.IntMode = VIntMode::Math;
+      std::unique_ptr<VExpr> ByteLength;
+      if (Length->Ty.IntMode == VIntMode::Math)
+        ByteLength = cloneVExpr(Length.get());
+      else
+        ByteLength = std::make_unique<VCastExpr>(cloneVExpr(Length.get()),
+                                                 Length->Ty, MathType, Loc);
+      if (Extent.PointerType.PointeeSizeBytes > 1)
+        ByteLength = std::make_unique<VBinOpExpr>(
+            VBinOp::Mul, std::move(ByteLength),
+            std::make_unique<VLiteralExpr>(
+                std::to_string(Extent.PointerType.PointeeSizeBytes), MathType,
+                Loc),
+            MathType, Loc);
+      auto SliceEnd = std::make_unique<VBinOpExpr>(
+          VBinOp::Add, cloneVExpr(Base.get()), std::move(ByteLength),
+          VType::makePtr(), Loc);
+      auto NewBeforeSlice = std::make_unique<VBinOpExpr>(
+          VBinOp::Le, addressOffset(Pointer.get(), Summary.SizeBytes, Loc),
+          cloneVExpr(Base.get()), VType::makeBool(), Loc);
+      auto SliceBeforeNew = std::make_unique<VBinOpExpr>(
+          VBinOp::Le, std::move(SliceEnd), cloneVExpr(Pointer.get()),
+          VType::makeBool(), Loc);
+      auto Disjoint =
+          makeOr(std::move(NewBeforeSlice), std::move(SliceBeforeNew), Loc);
+      auto Irrelevant = makeOr(cloneVExpr(IsNull.get()), std::move(Empty), Loc);
+      emitPassive(P, PassiveStmt::Assume,
+                  makeOr(std::move(Irrelevant), std::move(Disjoint), Loc));
+    }
+
+    for (uint64_t Offset = 0; Offset < Summary.SizeBytes; ++Offset) {
+      auto Address = addressOffset(Pointer.get(), Offset, Loc);
+      auto Owner = std::make_unique<VLoadExpr>(cloneVExpr(Address.get()),
+                                               VType::makePtr(), Loc,
+                                               Renames[VAllocationHeapName]);
+      auto Live = std::make_unique<VLoadExpr>(cloneVExpr(Owner.get()),
+                                              VType::makeBool(), Loc,
+                                              Renames[VLivenessHeapName]);
+      emitPassive(
+          P, PassiveStmt::Assume,
+          makeOr(cloneVExpr(IsNull.get()), makeNot(std::move(Live), Loc), Loc));
+      auto OwnerAfter = std::make_unique<VConditionalExpr>(
+          cloneVExpr(IsNull.get()), std::move(Owner),
+          cloneVExpr(Provenance.get()), VType::makePtr(), Loc);
+      updateHeap(P, Renames, VAllocationHeapName, std::move(Address),
+                 std::move(OwnerAfter), nullptr, Loc);
+    }
+    updateHeap(P, Renames, VAllocationBaseHeapName,
+               cloneVExpr(Provenance.get()), cloneVExpr(Pointer.get()), nullptr,
+               Loc);
+    updateHeap(P, Renames, VAllocationSizeHeapName,
+               cloneVExpr(Provenance.get()),
+               std::make_unique<VLiteralExpr>(std::to_string(Summary.SizeBytes),
+                                              VType::makePtr(), Loc),
+               nullptr, Loc);
+    updateHeap(P, Renames, VAllocationAlignHeapName,
+               cloneVExpr(Provenance.get()),
+               std::make_unique<VLiteralExpr>(
+                   std::to_string(Summary.AlignBytes), VType::makePtr(), Loc),
+               nullptr, Loc);
+    updateHeap(P, Renames, VLivenessHeapName, cloneVExpr(Provenance.get()),
+               std::move(NonNull), nullptr, Loc);
+
+    const std::string HeapBefore = Renames[VHeapName];
+    const std::string HeapAfter = bump(VHeapName);
+    Renames[VHeapName] = HeapAfter;
+    const std::string FreshValueName = bump("__owned_call_value");
+    auto ExistingValue = std::make_unique<VLoadExpr>(
+        cloneVExpr(Pointer.get()), Summary.AllocatedType, Loc, HeapBefore);
+    auto StoredValue = std::make_unique<VConditionalExpr>(
+        cloneVExpr(IsNull.get()), std::move(ExistingValue),
+        std::make_unique<VVarExpr>(FreshValueName, Summary.AllocatedType, Loc),
+        Summary.AllocatedType, Loc);
+    emitPassive(P, PassiveStmt::Assume,
+                std::make_unique<VHeapStoreExpr>(HeapBefore, HeapAfter,
+                                                 cloneVExpr(Pointer.get()),
+                                                 std::move(StoredValue), Loc));
+
+    auto WasInitialized = std::make_unique<VLoadExpr>(
+        cloneVExpr(Pointer.get()), VType::makeBool(), Loc,
+        Renames[VInitializationHeapName]);
+    auto InitializedAfter = std::make_unique<VConditionalExpr>(
+        cloneVExpr(IsNull.get()), std::move(WasInitialized),
+        makeBoolLiteral(true, Loc), VType::makeBool(), Loc);
+    updateHeap(P, Renames, VInitializationHeapName, cloneVExpr(Pointer.get()),
+               std::move(InitializedAfter), nullptr, Loc);
   }
 
 public:
@@ -2587,7 +2840,10 @@ public:
     const VFunction *Callee = CalleeIt->second;
     if (Callee->IsSpec)
       return;
-    if (Callee->UsesDynamicStorage) {
+    const bool ReturnsFreshOwned =
+        Callee->FreshOwnedReturn && Callee->ReturnType.Kind == VTypeKind::Ptr &&
+        !C.ResultTarget.empty() && !C.ResultProvenanceTarget.empty();
+    if (Callee->UsesDynamicStorage && !ReturnsFreshOwned) {
       emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, C.Loc));
       return;
     }
@@ -2609,12 +2865,13 @@ public:
           return;
         }
       }
-    if (!C.ResultProvenanceTarget.empty() && DynamicParams.empty()) {
+    if (!C.ResultProvenanceTarget.empty() && DynamicParams.empty() &&
+        !ReturnsFreshOwned) {
       emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, C.Loc));
       return;
     }
     if (Callee->ReturnType.Kind == VTypeKind::Ptr && !C.ResultTarget.empty() &&
-        !DynamicParams.empty() &&
+        !ReturnsFreshOwned && !DynamicParams.empty() &&
         (C.ResultProvenanceTarget.empty() ||
          !pointerReturnsComeFrom(*Callee, DynamicParams))) {
       emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, C.Loc));
@@ -2623,7 +2880,8 @@ public:
     for (unsigned I = 0; I < Callee->Params.size() && I < C.Args.size(); ++I)
       emitExprSafety(P, ParamMap[Callee->Params[I].first].get(), nullptr, C.Loc,
                      Renames, true, C.Args[I].get());
-    const bool HasImplicitHeapEffect = hasImplicitHeapEffect(*Callee, FnMap);
+    const bool HasImplicitHeapEffect =
+        !ReturnsFreshOwned && hasImplicitHeapEffect(*Callee, FnMap);
     for (const VValidExtent &Extent : Callee->ValidExtents) {
       auto Actual = ParamMap.find(Extent.Base);
       if (Actual == ParamMap.end()) {
@@ -2774,6 +3032,10 @@ public:
           PointerValueVariables.insert(C.ResultTarget);
         ParamMap["result"] = std::make_unique<VVarExpr>(
             RetVer, Callee->ReturnType, C.Loc, std::move(ProvenanceVer));
+        if (ReturnsFreshOwned)
+          materializeFreshOwnedResult(
+              P, Renames, *Callee->FreshOwnedReturn, Callee->ReturnType,
+              C.ResultTarget, RetVer, Renames[C.ResultProvenanceTarget], C.Loc);
       }
     }
 
@@ -2853,6 +3115,7 @@ public:
       emitExprSafety(P, Val.get(), Active.get(), A.Loc, Renames, true,
                      A.Value.get());
       Types[A.Target] = Val->Ty;
+      const std::string PreviousName = Renames[A.Target];
       std::string NewName = bump(A.Target);
       Renames[A.Target] = NewName;
       VType ValueTy = Val->Ty;
@@ -2862,6 +3125,7 @@ public:
                   makeEq(std::make_unique<VVarExpr>(NewName, ValueTy, A.Loc),
                          std::move(Val), A.Loc),
                   Active.get(), A.Loc);
+      emitInactiveFrame(P, PreviousName, NewName, ValueTy, Active.get(), A.Loc);
       break;
     }
     case VStmt::Store: {
@@ -2923,6 +3187,8 @@ public:
                   std::make_unique<VHeapStoreExpr>(
                       OldHeap, NewHeap, std::move(Ptr), std::move(Val), St.Loc),
                   Active.get(), St.Loc);
+      emitInactiveFrame(P, OldHeap, NewHeap, VType::makePtr(), Active.get(),
+                        St.Loc);
       if (PointerCell)
         StoredPointerCells.push_back({std::move(PointerCell), StoredPointerType,
                                       cloneVExpr(Active.get())});
@@ -3193,8 +3459,12 @@ public:
                      F.Ptr.get());
       auto Provenance = pointerProvenance(Pointer.get());
       if (!Provenance) {
-        emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, F.Loc),
-                    Active.get(), F.Loc);
+        emitPassive(
+            P, PassiveStmt::Assert,
+            makeEq(std::move(Pointer),
+                   std::make_unique<VLiteralExpr>(0, VType::makePtr(), F.Loc),
+                   F.Loc),
+            Active.get(), F.Loc);
         break;
       }
       auto IsNull = makeEq(
@@ -3289,6 +3559,9 @@ public:
                     makeEq(std::make_unique<VVarExpr>(Merged, Ty, I.Loc),
                            std::move(MergeExpr), I.Loc),
                     EntryActive.get(), I.Loc);
+        if (auto Entry = EntryRenames.find(Name); Entry != EntryRenames.end())
+          emitInactiveFrame(P, Entry->second, Merged, Ty, EntryActive.get(),
+                            I.Loc);
       }
       Active = makeOr(std::move(ThenActive), std::move(ElseActive), I.Loc);
       break;
@@ -3356,9 +3629,16 @@ public:
       std::set<std::string> Modified;
       for (const auto &Body : W.Body)
         collectModified(*Body, Modified);
-      for (const std::string &Name : Modified)
-        if (Renames.count(Name))
-          Renames[Name] = bump(Name);
+      for (const std::string &Name : Modified) {
+        auto Previous = Renames.find(Name);
+        if (Previous == Renames.end())
+          continue;
+        const std::string PreviousName = Previous->second;
+        const std::string HeadName = bump(Name);
+        Renames[Name] = HeadName;
+        emitInactiveFrame(P, PreviousName, HeadName, typeForName(Name),
+                          Active.get(), W.Loc);
+      }
 
       CloneCtx HeadCtx{Renames, OldState, false};
       for (const auto &Inv : W.Invariants) {
@@ -3446,6 +3726,7 @@ public:
     case VStmt::RevealSpec:
       break;
     case VStmt::Call: {
+      const auto EntryRenames = Renames;
       PassiveProgram CallP;
       emitCallStmt(static_cast<const VCallStmt &>(S), CallP, Renames);
       for (auto &CallStmt : CallP.Stmts) {
@@ -3453,6 +3734,13 @@ public:
           CallStmt->Cond = makeImplies(cloneVExpr(Active.get()),
                                        std::move(CallStmt->Cond), S.Loc);
         P.Stmts.push_back(std::move(CallStmt));
+      }
+      for (const std::string &Heap : HeapBases) {
+        auto Before = EntryRenames.find(Heap);
+        auto After = Renames.find(Heap);
+        if (Before != EntryRenames.end() && After != Renames.end())
+          emitInactiveFrame(P, Before->second, After->second, VType::makePtr(),
+                            Active.get(), S.Loc);
       }
       break;
     }
@@ -3478,10 +3766,15 @@ public:
       for (const auto &Nested : static_cast<const VSeqStmt &>(S).Stmts)
         processStmt(*Nested, P, Renames, Active);
       break;
-    case VStmt::Havoc:
-      Renames[static_cast<const VHavocStmt &>(S).Target] =
-          bump(static_cast<const VHavocStmt &>(S).Target);
+    case VStmt::Havoc: {
+      const auto &H = static_cast<const VHavocStmt &>(S);
+      const std::string PreviousName = Renames[H.Target];
+      const std::string NewName = bump(H.Target);
+      Renames[H.Target] = NewName;
+      emitInactiveFrame(P, PreviousName, NewName, Types[H.Target], Active.get(),
+                        H.Loc);
       break;
+    }
     }
   }
 };

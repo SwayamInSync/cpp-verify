@@ -100,6 +100,7 @@ VFunction LoopUnroller::unroll(const VFunction &Fn, unsigned K) {
   Out.NeedsDecreasesCheck = Fn.NeedsDecreasesCheck;
   Out.IsExternalContract = Fn.IsExternalContract;
   Out.UsesDynamicStorage = Fn.UsesDynamicStorage;
+  Out.FreshOwnedReturn = Fn.FreshOwnedReturn;
   Out.Params = Fn.Params;
   Out.ReferenceParams = Fn.ReferenceParams;
   Out.ReturnFields = Fn.ReturnFields;

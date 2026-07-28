@@ -5,6 +5,7 @@
 #include "../Frontend/ASTConverter.h"
 #include "../IR/VStmt.h"
 #include "../Transform/LoopUnroll.h"
+#include "../Transform/Ownership.h"
 #include "../Transform/Passivize.h"
 #include "../Transform/SpecInline.h"
 #include "../Transform/UBChecks.h"
@@ -91,7 +92,15 @@ public:
       return false;
     }
 
-    ASTConverter Converter(Ctx);
+    ASTConverter DiscoveryConverter(Ctx);
+    auto DiscoveryFunctions = DiscoveryConverter.convertTranslationUnit();
+    inferFreshOwnedReturns(DiscoveryFunctions);
+    std::set<std::string> FreshOwnedCalleeIdentities;
+    for (const auto &Fn : DiscoveryFunctions)
+      if (Fn->FreshOwnedReturn)
+        FreshOwnedCalleeIdentities.insert(Fn->Identity);
+
+    ASTConverter Converter(Ctx, FreshOwnedCalleeIdentities);
     auto Functions = Converter.convertTranslationUnit();
     for (const std::string &Err : Converter.getErrors())
       Diags.push_back({VerifyDiagnostic::Error, Err});
@@ -102,6 +111,7 @@ public:
           {VerifyDiagnostic::Warning, "no verifiable functions found"});
       return true;
     }
+    inferFreshOwnedReturns(Functions);
 
     FunctionMap FnMap;
     for (const auto &Fn : Functions)

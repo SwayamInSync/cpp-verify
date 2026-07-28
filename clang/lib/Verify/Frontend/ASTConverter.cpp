@@ -520,14 +520,19 @@ static bool hasIndirectMemoryAccess(const FunctionDecl *FD) {
   return F.Found;
 }
 
-const FunctionContractInfo *
-ASTConverter::functionContract(const FunctionDecl *FD) const {
+static const FunctionContractInfo *findFunctionContract(const FunctionDecl *FD,
+                                                        const ASTContext &Ctx) {
   if (!FD)
     return nullptr;
   for (const FunctionDecl *Redecl : FD->redecls())
     if (const FunctionContractInfo *FCI = Ctx.getFunctionContract(Redecl))
       return FCI;
   return nullptr;
+}
+
+const FunctionContractInfo *
+ASTConverter::functionContract(const FunctionDecl *FD) const {
+  return findFunctionContract(FD, Ctx);
 }
 
 bool ASTConverter::calleeIsSpec(const FunctionDecl *FD) const {
@@ -593,6 +598,10 @@ bool ASTConverter::calleeIsProof(const FunctionDecl *FD) const {
   if (const FunctionContractInfo *FCI = functionContract(FD))
     return FCI->IsProof;
   return false;
+}
+
+bool ASTConverter::calleeReturnsFreshOwned(const FunctionDecl *FD) {
+  return FD && FreshOwnedCalleeIdentities.count(functionIdentity(FD));
 }
 
 static QualType addressedType(const ParmVarDecl *P) {
@@ -1072,10 +1081,22 @@ void ASTConverter::beginInitializationTracking(const FunctionDecl *FD) {
 
   struct DynamicPointerDiscovery
       : RecursiveASTVisitor<DynamicPointerDiscovery> {
+    llvm::function_ref<bool(const CallExpr *)> IsFreshOwnedCall;
     std::set<const VarDecl *> Roots;
     std::vector<const VarDecl *> CandidateOrder;
     std::set<const VarDecl *> Candidates;
     std::vector<std::pair<const VarDecl *, const Expr *>> Assignments;
+
+    explicit DynamicPointerDiscovery(
+        llvm::function_ref<bool(const CallExpr *)> IsFreshOwnedCall)
+        : IsFreshOwnedCall(IsFreshOwnedCall) {}
+
+    bool TraverseUnaryExprOrTypeTraitExpr(UnaryExprOrTypeTraitExpr *) {
+      return true;
+    }
+
+    bool TraverseType(QualType, bool = true) { return true; }
+    bool TraverseTypeLoc(TypeLoc, bool = true) { return true; }
 
     void addCandidate(const VarDecl *Target) {
       if (Target && Target->isLocalVarDecl() &&
@@ -1089,7 +1110,10 @@ void ASTConverter::beginInitializationTracking(const FunctionDecl *FD) {
           !D->hasInit())
         return true;
       addCandidate(D);
-      if (isa<CXXNewExpr>(D->getInit()->IgnoreParenImpCasts()))
+      const Expr *Init = D->getInit()->IgnoreParenImpCasts();
+      const auto *Call = dyn_cast<CallExpr>(Init);
+      const bool FreshCallCandidate = Call && IsFreshOwnedCall(Call);
+      if (isa<CXXNewExpr>(Init) || FreshCallCandidate)
         Roots.insert(D);
       else
         Assignments.emplace_back(D, D->getInit());
@@ -1106,7 +1130,12 @@ void ASTConverter::beginInitializationTracking(const FunctionDecl *FD) {
           !Target->getType()->isPointerType())
         return true;
       addCandidate(Target);
-      Assignments.emplace_back(Target, B->getRHS());
+      const auto *Call = dyn_cast<CallExpr>(B->getRHS()->IgnoreParenImpCasts());
+      const bool FreshCallCandidate = Call && IsFreshOwnedCall(Call);
+      if (FreshCallCandidate)
+        Roots.insert(Target);
+      else
+        Assignments.emplace_back(Target, B->getRHS());
       return true;
     }
 
@@ -1124,8 +1153,12 @@ void ASTConverter::beginInitializationTracking(const FunctionDecl *FD) {
             return true;
       return false;
     }
-  } Discovery;
+  };
 
+  auto IsFreshOwnedCall = [&](const CallExpr *Call) {
+    return Call && calleeReturnsFreshOwned(Call->getDirectCallee());
+  };
+  DynamicPointerDiscovery Discovery(IsFreshOwnedCall);
   if (const Stmt *Body = FD->getBody())
     Discovery.TraverseStmt(const_cast<Stmt *>(Body));
   DynamicPointers = Discovery.Roots;
@@ -4338,12 +4371,6 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     }
     const auto *RS = cast<ReturnStmt>(S);
     if (const Expr *RetE = RS->getRetValue()) {
-      if (RetE->getType()->isPointerType() && referencesDynamicPointer(RetE)) {
-        Errors.push_back(CurrentFn->Name +
-                         ": dynamic-storage pointers cannot escape through a "
-                         "return");
-        return Out;
-      }
       emitReturnInvariantAssert(RetE, Out, RS->getBeginLoc());
       const auto *CE = dyn_cast<CallExpr>(RetE->IgnoreParenImpCasts());
       if (CE) {
@@ -4352,16 +4379,25 @@ ASTConverter::convertStmtBody(const Stmt *S) {
               !calleeIsProof(Callee)) {
             std::vector<std::unique_ptr<VExpr>> Args;
             convertExecCallArgs(CE, Out, Args);
-            const std::string Tmp =
-                "__return_call_" + std::to_string(++NestedCallId);
+            const unsigned CallId = ++NestedCallId;
+            const std::string Tmp = "__return_call_" + std::to_string(CallId);
             const bool ReturnsVoid = Callee->getReturnType()->isVoidType();
+            const bool TrackOwnedResult =
+                Callee->getReturnType()->isPointerType() &&
+                (referencesDynamicPointer(RetE) ||
+                 calleeReturnsFreshOwned(Callee));
+            const std::string Provenance =
+                TrackOwnedResult
+                    ? "__return_call_provenance_" + std::to_string(CallId)
+                    : "";
+            CurrentFn->UsesDynamicStorage |= TrackOwnedResult;
             Out.push_back(std::make_unique<VCallStmt>(
                 Callee->getNameAsString(), functionIdentity(Callee),
                 std::move(Args), ReturnsVoid ? "" : Tmp, RS->getBeginLoc(),
-                false));
+                false, Provenance));
             auto Result = convertCallResultValue(Tmp, Callee->getReturnType(),
                                                  CurrentFn->ReturnType,
-                                                 RS->getBeginLoc());
+                                                 RS->getBeginLoc(), Provenance);
             appendReturn(std::move(Result), Out, RS->getBeginLoc());
             InitializationPathReachable = false;
             return Out;
@@ -4729,11 +4765,14 @@ ASTConverter::convertStmtBody(const Stmt *S) {
                        ": custom or placement deallocation is unsupported");
       return Out;
     }
-    const VarDecl *PointerDecl = directDynamicPointer(Delete->getArgument());
-    if (!PointerDecl) {
+    const Expr *Argument = Delete->getArgument()->IgnoreParenImpCasts();
+    const auto *PointerRef = dyn_cast<DeclRefExpr>(Argument);
+    const auto *PointerDecl =
+        PointerRef ? dyn_cast<VarDecl>(PointerRef->getDecl()) : nullptr;
+    if (!PointerDecl || !PointerDecl->isLocalVarDecl() ||
+        !PointerDecl->getType()->isPointerType()) {
       Errors.push_back(CurrentFn->Name +
-                       ": delete requires a direct pointer produced by a "
-                       "supported new-expression");
+                       ": delete requires a direct local pointer");
       return Out;
     }
     auto Pointer = convertExpr(Delete->getArgument());
@@ -4763,8 +4802,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           PointerCall ? PointerCall->getDirectCallee() : nullptr;
       if (LoopDepth == 0 && DirectTarget &&
           DirectTarget->getType()->isPointerType() &&
-          DynamicPointers.count(DirectTarget) &&
-          referencesDynamicPointer(BO->getRHS()) && PointerCallee &&
+          DynamicPointers.count(DirectTarget) && PointerCallee &&
           PointerCallee->getReturnType()->isPointerType() &&
           Ctx.hasSameUnqualifiedType(
               DirectTarget->getType()->getPointeeType(),
@@ -4779,6 +4817,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
             PointerCallee->getNameAsString(), functionIdentity(PointerCallee),
             std::move(Args), valueName(DirectTarget), BO->getExprLoc(), false,
             Provenance));
+        CurrentFn->UsesDynamicStorage = true;
         markInitialized(DirectTarget);
         return Out;
       }
@@ -5161,6 +5200,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
               Callee->getNameAsString(), functionIdentity(Callee),
               std::move(Args), valueName(VD), VD->getBeginLoc(), false,
               Provenance));
+          CurrentFn->UsesDynamicStorage = true;
           markInitialized(VD);
           continue;
         }

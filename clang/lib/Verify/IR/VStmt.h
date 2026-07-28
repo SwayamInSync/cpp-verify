@@ -5,6 +5,7 @@
 #include "VExpr.h"
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -219,6 +220,15 @@ struct VValidExtent {
         Length(std::move(Length)) {}
 };
 
+/// Inferred effect for a pointer result that transfers one fresh allocation to
+/// the caller. This is derived from a verified body, never from contract text.
+struct VFreshOwnedReturn {
+  VType AllocatedType;
+  uint64_t SizeBytes = 0;
+  uint64_t AlignBytes = 0;
+  bool MayReturnNull = false;
+};
+
 struct VFunction {
   /// User-facing source name.
   std::string Name;
@@ -233,6 +243,7 @@ struct VFunction {
   bool IsExternalContract = false;
   bool NeedsDecreasesCheck = false;
   bool UsesDynamicStorage = false;
+  std::optional<VFreshOwnedReturn> FreshOwnedReturn;
   std::map<std::string, unsigned> SpecFuel;
   std::set<std::string> HiddenSpecs;
   std::set<std::string> RevealedSpecs;

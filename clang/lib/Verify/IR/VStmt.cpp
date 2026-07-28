@@ -133,6 +133,7 @@ VFunction verify::cloneVFunction(const VFunction &Fn) {
   Out.IsExternalContract = Fn.IsExternalContract;
   Out.NeedsDecreasesCheck = Fn.NeedsDecreasesCheck;
   Out.UsesDynamicStorage = Fn.UsesDynamicStorage;
+  Out.FreshOwnedReturn = Fn.FreshOwnedReturn;
   Out.SpecFuel = Fn.SpecFuel;
   Out.HiddenSpecs = Fn.HiddenSpecs;
   Out.RevealedSpecs = Fn.RevealedSpecs;

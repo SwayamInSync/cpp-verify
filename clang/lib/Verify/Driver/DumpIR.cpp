@@ -160,9 +160,14 @@ void verify::dumpVExpr(const VExpr *E, llvm::raw_ostream &OS, unsigned Depth) {
     dumpVExpr(static_cast<const VQuantifiedExpr *>(E)->Body.get(), OS,
               Depth + 1);
     break;
-  case VExpr::HeapStore:
-    OS << "heap_store\n";
+  case VExpr::HeapStore: {
+    const auto *Store = static_cast<const VHeapStoreExpr *>(E);
+    OS << "heap_store " << Store->HeapBefore << " -> " << Store->HeapAfter
+       << "\n";
+    dumpVExpr(Store->Ptr.get(), OS, Depth + 1);
+    dumpVExpr(Store->Val.get(), OS, Depth + 1);
     break;
+  }
   case VExpr::FieldAccess: {
     const auto *F = static_cast<const VFieldAccessExpr *>(E);
     OS << "field " << F->Field << "\n";
@@ -348,6 +353,11 @@ void verify::dumpVFunction(const VFunction &Fn, llvm::raw_ostream &OS) {
                << Extent.PointerType.PointeeSizeBytes << "\n";
     dumpVExpr(Extent.Length.get(), OS, 2);
   }
+  if (Fn.FreshOwnedReturn)
+    ind(OS, 1) << "fresh_owned_return size " << Fn.FreshOwnedReturn->SizeBytes
+               << " align " << Fn.FreshOwnedReturn->AlignBytes
+               << (Fn.FreshOwnedReturn->MayReturnNull ? " nullable" : "")
+               << "\n";
   ind(OS, 1) << "body\n";
   for (const auto &S : Fn.Body)
     dumpVStmt(*S, OS, 2);

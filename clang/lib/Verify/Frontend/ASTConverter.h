@@ -34,6 +34,7 @@ class ASTConverter {
   std::map<const ParmVarDecl *, std::string> ParameterNames;
   unsigned BoundValueId = 0;
   std::map<const FunctionDecl *, std::string> FunctionIdentities;
+  std::set<std::string> FreshOwnedCalleeIdentities;
   std::set<const VarDecl *> DynamicPointers;
   std::map<const VarDecl *, std::string> DynamicPointerProvenanceVariables;
   std::set<const VarDecl *> AddressableLocals;
@@ -49,7 +50,10 @@ class ASTConverter {
   unsigned LoopDepth = 0;
 
 public:
-  explicit ASTConverter(ASTContext &Ctx) : Ctx(Ctx) {}
+  explicit ASTConverter(
+      ASTContext &Ctx,
+      const std::set<std::string> &FreshOwnedCalleeIdentities = {})
+      : Ctx(Ctx), FreshOwnedCalleeIdentities(FreshOwnedCalleeIdentities) {}
 
   std::vector<std::unique_ptr<VFunction>> convertTranslationUnit();
   const std::vector<std::string> &getErrors() const { return Errors; }
@@ -153,6 +157,7 @@ private:
   const FunctionContractInfo *functionContract(const FunctionDecl *FD) const;
   bool calleeIsSpec(const FunctionDecl *FD) const;
   bool calleeIsProof(const FunctionDecl *FD) const;
+  bool calleeReturnsFreshOwned(const FunctionDecl *FD);
   VIntMode specCallIntMode(const FunctionDecl *FD) const;
   std::string functionIdentity(const FunctionDecl *FD);
   std::string specIdentityFromExpr(const Expr *E);
