@@ -291,6 +291,27 @@ static void dumpVStmt(const VStmt &S, llvm::raw_ostream &OS, unsigned Depth) {
   }
 }
 
+static std::string leafTypeToken(const VType &Ty) {
+  switch (Ty.Kind) {
+  case VTypeKind::Void:
+    return "void";
+  case VTypeKind::Bool:
+    return "bool";
+  case VTypeKind::Int32:
+  case VTypeKind::Int64:
+    return (Ty.IsSigned ? "i" : "u") + std::to_string(Ty.BitWidth);
+  case VTypeKind::Ptr:
+    return "ptr(" + std::to_string(Ty.PointeeSizeBytes) + ")";
+  case VTypeKind::Struct:
+    return "struct";
+  case VTypeKind::Array:
+    return "array";
+  case VTypeKind::Unsupported:
+    return "unsupported";
+  }
+  return "?";
+}
+
 void verify::dumpVFunction(const VFunction &Fn, llvm::raw_ostream &OS) {
   ind(OS, 0) << "fn " << Fn.Name << "\n";
   if (Fn.IntMode == VIntMode::Math)
@@ -309,6 +330,25 @@ void verify::dumpVFunction(const VFunction &Fn, llvm::raw_ostream &OS) {
   ind(OS, 1) << "body\n";
   for (const auto &S : Fn.Body)
     dumpVStmt(*S, OS, 2);
+  // Object layout table for record/constant-array types encountered in this
+  // function. Emitted last so it never disturbs statement dump expectations.
+  for (const auto &Layout : Fn.Layouts) {
+    ind(OS, 1) << "layout " << Layout.DisplayName << " "
+               << (Layout.Kind == VObjectKind::Record ? "record" : "array")
+               << " size " << Layout.SizeBytes << " align "
+               << Layout.AlignBytes;
+    if (Layout.Kind == VObjectKind::ConstantArray)
+      OS << " count " << Layout.ElementCount << " stride "
+         << Layout.StrideBytes;
+    OS << "\n";
+    for (const auto &Leaf : Layout.Leaves) {
+      ind(OS, 2) << "leaf " << Leaf.Path << " offset " << Leaf.OffsetBytes
+                 << " size " << Leaf.SizeBytes << " align " << Leaf.AlignBytes;
+      for (const auto &Repeat : Leaf.Repeats)
+        OS << " repeat " << Repeat.Count << " stride " << Repeat.StrideBytes;
+      OS << " " << leafTypeToken(Leaf.Ty) << "\n";
+    }
+  }
 }
 
 void verify::dumpPassiveProgram(llvm::StringRef FnName, const PassiveProgram &P,

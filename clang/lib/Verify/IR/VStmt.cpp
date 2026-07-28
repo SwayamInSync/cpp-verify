@@ -149,5 +149,6 @@ VFunction verify::cloneVFunction(const VFunction &Fn) {
     Out.Decreases.push_back(cloneVExpr(D.get()));
   for (const auto &S : Fn.Body)
     Out.Body.push_back(cloneVStmt(S.get()));
+  Out.Layouts = Fn.Layouts;
   return Out;
 }

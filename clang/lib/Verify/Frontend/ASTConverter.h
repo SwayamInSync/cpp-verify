@@ -2,6 +2,7 @@
 #ifndef LLVM_CLANG_VERIFY_FRONTEND_ASTCONVERTER_H
 #define LLVM_CLANG_VERIFY_FRONTEND_ASTCONVERTER_H
 
+#include "../IR/VPlace.h"
 #include "../IR/VStmt.h"
 #include "clang/AST/ASTContext.h"
 #include <optional>
@@ -60,6 +61,16 @@ private:
   std::unique_ptr<VExpr>
   convertAutomaticLocalAddress(const VarDecl *VD, SourceLocation Loc,
                                bool RequireInitialized = true);
+  /// Typed VPlace builders. The `convert*Address` helpers above are thin
+  /// wrappers that lower these places to plain VLoad/VStore address
+  /// expressions.
+  std::optional<VPlace> lvaluePlace(const Expr *E);
+  std::optional<VPlace> automaticLocalPlace(const VarDecl *VD,
+                                            SourceLocation Loc,
+                                            bool RequireInitialized = true);
+  std::optional<VPlace> derefPlace(const Expr *PointerExpr, SourceLocation Loc);
+  std::optional<VPlace> arrowFieldPlace(const MemberExpr *M);
+  std::optional<VPlace> subscriptPlace(const ArraySubscriptExpr *AS);
   std::unique_ptr<VExpr> convertAddressProvenance(const VExpr *Address);
   void appendReferenceBindingCheck(const Expr *Source, const VExpr *Address,
                                    SourceLocation Loc,
@@ -120,6 +131,24 @@ private:
                                       SourceLocation Loc,
                                       std::vector<std::unique_ptr<VStmt>> &Out);
   bool ghostAssignmentAllowed(const Expr *E) const;
+  /// Populate `Fn.Layouts` with canonical, deduplicated layouts for the record
+  /// and constant-array types encountered in `FD`'s signature and body.
+  void collectLayouts(const FunctionDecl *FD, VFunction &Fn);
+  void registerLayoutType(QualType QT, VFunction &Fn);
+  void buildRecordLayout(QualType QT, VFunction &Fn);
+  void buildArrayLayout(QualType QT, const ConstantArrayType *CAT,
+                        VFunction &Fn);
+  bool flattenRecordInto(const RecordDecl *RD, const std::string &Prefix,
+                         uint64_t BaseOffset,
+                         const std::vector<VObjectRepeat> &Repeats,
+                         std::vector<VObjectLeaf> &Leaves,
+                         std::vector<QualType> &PendingPointees);
+  bool flattenArrayInto(const ConstantArrayType *CAT, const std::string &Prefix,
+                        uint64_t BaseOffset,
+                        const std::vector<VObjectRepeat> &Repeats,
+                        SourceLocation Loc, std::vector<VObjectLeaf> &Leaves,
+                        std::vector<QualType> &PendingPointees);
+  std::set<std::string> KnownLayoutIdentities;
 };
 
 } // namespace verify

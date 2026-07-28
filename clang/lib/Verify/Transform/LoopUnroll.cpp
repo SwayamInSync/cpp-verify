@@ -118,6 +118,7 @@ VFunction LoopUnroller::unroll(const VFunction &Fn, unsigned K) {
   Out.SpecFuel = Fn.SpecFuel;
   Out.HiddenSpecs = Fn.HiddenSpecs;
   Out.RevealedSpecs = Fn.RevealedSpecs;
+  Out.Layouts = Fn.Layouts;
   if (K == 0) {
     for (const auto &S : Fn.Body)
       Out.Body.push_back(cloneVStmt(S.get()));

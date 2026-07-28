@@ -37,7 +37,8 @@ z3::sort Z3Encoder::valueSort(const VType &Ty, VIntMode Mode) {
     return boolSort();
   if (Ty.Kind == VTypeKind::Ptr)
     return intSort();
-  if (Ty.Kind == VTypeKind::Struct || Ty.Kind == VTypeKind::Unsupported) {
+  if (Ty.Kind == VTypeKind::Struct || Ty.Kind == VTypeKind::Array ||
+      Ty.Kind == VTypeKind::Unsupported) {
     markEncodingFailure("unsupported value type");
     return intSort();
   }
@@ -121,8 +122,9 @@ void Z3Encoder::markEncodingFailure(std::string Message) {
 z3::expr Z3Encoder::fallbackValue(const VCExpr *E) {
   if (E && E->TypeKind == VTypeKind::Bool)
     return Ctx.bool_val(false);
-  if (E && (E->TypeKind == VTypeKind::Struct ||
-            E->TypeKind == VTypeKind::Unsupported))
+  if (E &&
+      (E->TypeKind == VTypeKind::Struct || E->TypeKind == VTypeKind::Array ||
+       E->TypeKind == VTypeKind::Unsupported))
     return Ctx.int_val(0);
   if (E && E->TypeKind != VTypeKind::Ptr && E->IntMode == VIntMode::Machine)
     return Ctx.bv_val(0, E->BitWidth);

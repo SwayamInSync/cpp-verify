@@ -1373,6 +1373,211 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
   return Out;
 }
 
+bool ASTConverter::flattenRecordInto(const RecordDecl *RD,
+                                     const std::string &Prefix,
+                                     uint64_t BaseOffset,
+                                     const std::vector<VObjectRepeat> &Repeats,
+                                     std::vector<VObjectLeaf> &Leaves,
+                                     std::vector<QualType> &PendingPointees) {
+  const RecordDecl *Definition = RD ? RD->getDefinition() : nullptr;
+  if (!Definition || Definition->isUnion())
+    return false;
+  if (const auto *CXX = dyn_cast<CXXRecordDecl>(Definition))
+    if (CXX->getNumBases() != 0 || CXX->isPolymorphic() || !CXX->isTrivial() ||
+        !CXX->isStandardLayout())
+      return false;
+  const ASTRecordLayout &RL = Ctx.getASTRecordLayout(Definition);
+  unsigned Index = 0;
+  for (const FieldDecl *Field : Definition->fields()) {
+    if (Field->isBitField())
+      return false;
+    uint64_t BitOffset = RL.getFieldOffset(Index++);
+    if (BitOffset % Ctx.getCharWidth() != 0)
+      return false;
+    uint64_t FieldOffset = BaseOffset + BitOffset / Ctx.getCharWidth();
+    QualType FieldTy = Field->getType().getCanonicalType();
+    std::string Path = Prefix + "." + Field->getNameAsString();
+    if (const auto *CAT = Ctx.getAsConstantArrayType(FieldTy)) {
+      if (!flattenArrayInto(CAT, Path, FieldOffset, Repeats,
+                            Field->getLocation(), Leaves, PendingPointees))
+        return false;
+      PendingPointees.push_back(FieldTy);
+      continue;
+    }
+    if (FieldTy->isRecordType()) {
+      const auto *FRD = FieldTy->getAs<RecordType>()->getDecl();
+      if (!flattenRecordInto(FRD, Path, FieldOffset, Repeats, Leaves,
+                             PendingPointees))
+        return false;
+      PendingPointees.push_back(FieldTy);
+      continue;
+    }
+    VObjectLeaf Leaf;
+    Leaf.Path = Path;
+    Leaf.Ty = VType::fromQualType(FieldTy, IntMode, Ctx);
+    if (Leaf.Ty.Kind == VTypeKind::Unsupported || Leaf.Ty.isAggregate())
+      return false;
+    Leaf.OffsetBytes = FieldOffset;
+    if (!FieldTy->isIncompleteType()) {
+      Leaf.SizeBytes = Ctx.getTypeSizeInChars(FieldTy).getQuantity();
+      Leaf.AlignBytes = Ctx.getTypeAlignInChars(FieldTy).getQuantity();
+    }
+    Leaf.Repeats = Repeats;
+    Leaf.Loc = Field->getLocation();
+    Leaves.push_back(std::move(Leaf));
+    if (FieldTy->isPointerType())
+      PendingPointees.push_back(FieldTy->getPointeeType());
+  }
+  return true;
+}
+
+bool ASTConverter::flattenArrayInto(const ConstantArrayType *CAT,
+                                    const std::string &Prefix,
+                                    uint64_t BaseOffset,
+                                    const std::vector<VObjectRepeat> &Repeats,
+                                    SourceLocation Loc,
+                                    std::vector<VObjectLeaf> &Leaves,
+                                    std::vector<QualType> &PendingPointees) {
+  if (!CAT)
+    return false;
+  QualType ElemTy = CAT->getElementType().getCanonicalType();
+  if (ElemTy->isIncompleteType())
+    return false;
+  const uint64_t Count = CAT->getSize().getZExtValue();
+  const uint64_t Stride = Ctx.getTypeSizeInChars(ElemTy).getQuantity();
+  std::vector<VObjectRepeat> ElementRepeats = Repeats;
+  ElementRepeats.push_back(VObjectRepeat{Count, Stride});
+  std::string Path = Prefix + "[*]";
+  if (const auto *NestedCAT = Ctx.getAsConstantArrayType(ElemTy)) {
+    if (!flattenArrayInto(NestedCAT, Path, BaseOffset, ElementRepeats, Loc,
+                          Leaves, PendingPointees))
+      return false;
+  } else if (ElemTy->isRecordType()) {
+    const auto *FRD = ElemTy->getAs<RecordType>()->getDecl();
+    if (!flattenRecordInto(FRD, Path, BaseOffset, ElementRepeats, Leaves,
+                           PendingPointees))
+      return false;
+  } else {
+    VObjectLeaf Leaf;
+    Leaf.Path = Path;
+    Leaf.Ty = VType::fromQualType(ElemTy, IntMode, Ctx);
+    if (Leaf.Ty.Kind == VTypeKind::Unsupported || Leaf.Ty.isAggregate())
+      return false;
+    Leaf.OffsetBytes = BaseOffset;
+    Leaf.SizeBytes = Stride;
+    Leaf.AlignBytes = Ctx.getTypeAlignInChars(ElemTy).getQuantity();
+    Leaf.Repeats = std::move(ElementRepeats);
+    Leaf.Loc = Loc;
+    Leaves.push_back(std::move(Leaf));
+    if (ElemTy->isPointerType())
+      PendingPointees.push_back(ElemTy->getPointeeType());
+  }
+  if (ElemTy->isRecordType() || Ctx.getAsConstantArrayType(ElemTy))
+    PendingPointees.push_back(ElemTy);
+  return true;
+}
+
+void ASTConverter::buildRecordLayout(QualType QT, VFunction &Fn) {
+  std::string Identity = canonicalTypeIdentity(QT, Ctx);
+  if (Identity.empty() || !KnownLayoutIdentities.insert(Identity).second)
+    return;
+  const RecordDecl *RD = QT->getAs<RecordType>()->getDecl()->getDefinition();
+  if (!RD) {
+    KnownLayoutIdentities.erase(Identity);
+    return;
+  }
+  VObjectLayout Layout;
+  Layout.Kind = VObjectKind::Record;
+  Layout.TypeIdentity = Identity;
+  Layout.DisplayName = Identity;
+  Layout.SizeBytes = Ctx.getTypeSizeInChars(QT).getQuantity();
+  Layout.AlignBytes = Ctx.getTypeAlignInChars(QT).getQuantity();
+  std::vector<QualType> PendingPointees;
+  if (!flattenRecordInto(RD, "", 0, {}, Layout.Leaves, PendingPointees)) {
+    KnownLayoutIdentities.erase(Identity);
+    return;
+  }
+  Fn.Layouts.push_back(std::move(Layout));
+  for (QualType Pointee : PendingPointees)
+    registerLayoutType(Pointee, Fn);
+}
+
+void ASTConverter::buildArrayLayout(QualType QT, const ConstantArrayType *CAT,
+                                    VFunction &Fn) {
+  std::string Identity = canonicalTypeIdentity(QT, Ctx);
+  if (Identity.empty() || !KnownLayoutIdentities.insert(Identity).second)
+    return;
+  if (QT->isIncompleteType() || CAT->getElementType()->isIncompleteType()) {
+    KnownLayoutIdentities.erase(Identity);
+    return;
+  }
+  VObjectLayout Layout;
+  Layout.Kind = VObjectKind::ConstantArray;
+  Layout.TypeIdentity = Identity;
+  Layout.DisplayName = Identity;
+  Layout.SizeBytes = Ctx.getTypeSizeInChars(QT).getQuantity();
+  Layout.AlignBytes = Ctx.getTypeAlignInChars(QT).getQuantity();
+  Layout.ElementCount = CAT->getSize().getZExtValue();
+  Layout.StrideBytes =
+      Ctx.getTypeSizeInChars(CAT->getElementType()).getQuantity();
+  std::vector<QualType> PendingPointees;
+  if (!flattenArrayInto(CAT, "", 0, {}, SourceLocation(), Layout.Leaves,
+                        PendingPointees)) {
+    KnownLayoutIdentities.erase(Identity);
+    return;
+  }
+  Fn.Layouts.push_back(std::move(Layout));
+  for (QualType Pointee : PendingPointees)
+    registerLayoutType(Pointee, Fn);
+}
+
+void ASTConverter::registerLayoutType(QualType QT, VFunction &Fn) {
+  if (QT.isNull())
+    return;
+  QT = QT.getCanonicalType().getUnqualifiedType();
+  if (QT->isPointerType() || QT->isReferenceType()) {
+    registerLayoutType(QT->getPointeeType(), Fn);
+    return;
+  }
+  if (QT->isIncompleteType())
+    return;
+  if (const auto *CAT = Ctx.getAsConstantArrayType(QT)) {
+    buildArrayLayout(QT, CAT, Fn);
+    return;
+  }
+  if (QT->isRecordType())
+    buildRecordLayout(QT, Fn);
+}
+
+void ASTConverter::collectLayouts(const FunctionDecl *FD, VFunction &Fn) {
+  KnownLayoutIdentities.clear();
+  registerLayoutType(FD->getReturnType(), Fn);
+  for (const ParmVarDecl *P : FD->parameters())
+    registerLayoutType(P->getType(), Fn);
+
+  struct TypeCollector : RecursiveASTVisitor<TypeCollector> {
+    std::vector<QualType> Types;
+    bool VisitVarDecl(VarDecl *D) {
+      Types.push_back(D->getType());
+      return true;
+    }
+    bool VisitExpr(Expr *E) {
+      if (!E->getType().isNull())
+        Types.push_back(E->getType());
+      return true;
+    }
+    bool VisitUnaryExprOrTypeTraitExpr(UnaryExprOrTypeTraitExpr *E) {
+      if (E->isArgumentType())
+        Types.push_back(E->getArgumentType());
+      return true;
+    }
+  } Collector;
+  if (const Stmt *Body = FD->getBody())
+    Collector.TraverseStmt(const_cast<Stmt *>(Body));
+  for (QualType T : Collector.Types)
+    registerLayoutType(T, Fn);
+}
+
 std::unique_ptr<VFunction>
 ASTConverter::convertFunction(const FunctionDecl *FD) {
   const FunctionContractInfo *FCI = functionContract(FD);
@@ -1690,6 +1895,7 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     CurrentFn = nullptr;
     return nullptr;
   }
+  collectLayouts(FD, *Fn);
   CurrentFn = nullptr;
   return Fn;
 }
@@ -1744,6 +1950,7 @@ ASTConverter::convertConstexprSpec(const FunctionDecl *FD) {
     CurrentFn = nullptr;
     return nullptr;
   }
+  collectLayouts(FD, *Fn);
   CurrentFn = nullptr;
   return Fn;
 }
@@ -1791,13 +1998,12 @@ std::optional<VBinOp> ASTConverter::convertBinOpcode(BinaryOperatorKind Op) {
   }
 }
 
-std::unique_ptr<VExpr>
-ASTConverter::convertArrowFieldAddress(const MemberExpr *M) {
+std::optional<VPlace> ASTConverter::arrowFieldPlace(const MemberExpr *M) {
   if (!M)
-    return nullptr;
+    return std::nullopt;
   const auto *FD = dyn_cast<FieldDecl>(M->getMemberDecl());
   if (!FD || FD->isBitField())
-    return nullptr;
+    return std::nullopt;
   const Expr *Pointer = nullptr;
   if (M->isArrow()) {
     Pointer = M->getBase();
@@ -1808,15 +2014,15 @@ ASTConverter::convertArrowFieldAddress(const MemberExpr *M) {
       Pointer = Deref->getSubExpr();
   }
   if (!Pointer)
-    return nullptr;
+    return std::nullopt;
   if (referencesDynamicPointer(Pointer)) {
     Errors.push_back(CurrentFn->Name +
                      ": dynamic-storage pointers cannot select record fields");
-    return nullptr;
+    return std::nullopt;
   }
   auto Base = convertExpr(Pointer);
   if (!Base)
-    return nullptr;
+    return std::nullopt;
 
   const RecordDecl *Parent = FD->getParent();
   unsigned FieldIndex = 0;
@@ -1828,56 +2034,89 @@ ASTConverter::convertArrowFieldAddress(const MemberExpr *M) {
   uint64_t BitOffset =
       Ctx.getASTRecordLayout(Parent).getFieldOffset(FieldIndex);
   if (BitOffset % Ctx.getCharWidth() != 0)
-    return nullptr;
+    return std::nullopt;
   uint64_t ByteOffset = BitOffset / Ctx.getCharWidth();
-  auto Offset = std::make_unique<VLiteralExpr>(
-      static_cast<int64_t>(ByteOffset), VType::makePtr(), M->getExprLoc());
-  return std::make_unique<VBinOpExpr>(VBinOp::Add, std::move(Base),
-                                      std::move(Offset), VType::makePtr(),
-                                      M->getExprLoc());
+  VPlace Place(std::move(Base),
+               VType::fromQualType(FD->getType(), IntMode, Ctx),
+               M->getExprLoc(),
+               canonicalTypeIdentity(Ctx.getCanonicalTagType(Parent), Ctx));
+  Place.applyDeref(M->getExprLoc());
+  Place.applyField(FD->getNameAsString(), ByteOffset, M->getExprLoc());
+  return Place;
 }
 
 std::unique_ptr<VExpr>
-ASTConverter::convertSubscriptAddress(const ArraySubscriptExpr *AS) {
+ASTConverter::convertArrowFieldAddress(const MemberExpr *M) {
+  if (auto Place = arrowFieldPlace(M))
+    return Place->takeAddress();
+  return nullptr;
+}
+
+std::optional<VPlace>
+ASTConverter::subscriptPlace(const ArraySubscriptExpr *AS) {
   if (!AS)
-    return nullptr;
+    return std::nullopt;
   if (referencesDynamicPointer(AS)) {
     Errors.push_back(CurrentFn->Name +
                      ": subscripting dynamic-storage pointers is unsupported");
-    return nullptr;
+    return std::nullopt;
   }
   auto Base = convertExpr(AS->getBase());
   auto Index = convertExpr(AS->getIdx());
   if (!Base || !Index)
-    return nullptr;
+    return std::nullopt;
   const uint64_t PointeeSize = Base->Ty.PointeeSizeBytes;
   Index = scalePointerOffset(std::move(Index), PointeeSize, AS->getExprLoc());
   if (!Index) {
     Errors.push_back(CurrentFn->Name +
                      ": pointer arithmetic requires a complete pointee type");
-    return nullptr;
+    return std::nullopt;
   }
-  return std::make_unique<VBinOpExpr>(
-      VBinOp::Add, std::move(Base), std::move(Index),
-      VType::makePtr(PointeeSize), AS->getExprLoc());
+  VPlace Place(std::move(Base),
+               VType::fromQualType(AS->getType(), IntMode, Ctx),
+               AS->getExprLoc());
+  QualType RootType = AS->getBase()->IgnoreParenImpCasts()->getType();
+  if (RootType->isPointerType())
+    RootType = RootType->getPointeeType();
+  Place.RootTypeIdentity = canonicalTypeIdentity(RootType, Ctx);
+  Place.applyElement(std::move(Index), PointeeSize, AS->getExprLoc());
+  return Place;
 }
 
-std::unique_ptr<VExpr> ASTConverter::convertAutomaticLocalAddress(
-    const VarDecl *VD, SourceLocation Loc, bool RequireInitialized) {
+std::unique_ptr<VExpr>
+ASTConverter::convertSubscriptAddress(const ArraySubscriptExpr *AS) {
+  if (auto Place = subscriptPlace(AS))
+    return Place->takeAddress();
+  return nullptr;
+}
+
+std::optional<VPlace>
+ASTConverter::automaticLocalPlace(const VarDecl *VD, SourceLocation Loc,
+                                  bool RequireInitialized) {
   auto Provenance = AutomaticLocalProvenanceVariables.find(VD);
   if (!VD || !AddressableLocals.count(VD) ||
       Provenance == AutomaticLocalProvenanceVariables.end())
-    return nullptr;
+    return std::nullopt;
   if (InOld) {
     Errors.push_back(CurrentFn->Name +
                      ": automatic local storage has no function-entry value");
-    return nullptr;
+    return std::nullopt;
   }
   if (RequireInitialized)
     requireInitialized(VD);
   const uint64_t Size = Ctx.getTypeSizeInChars(VD->getType()).getQuantity();
-  return std::make_unique<VVarExpr>(valueName(VD), VType::makePtr(Size), Loc,
-                                    Provenance->second);
+  auto Base = std::make_unique<VVarExpr>(valueName(VD), VType::makePtr(Size),
+                                         Loc, Provenance->second);
+  return VPlace(std::move(Base),
+                VType::fromQualType(VD->getType(), IntMode, Ctx), Loc,
+                canonicalTypeIdentity(VD->getType(), Ctx));
+}
+
+std::unique_ptr<VExpr> ASTConverter::convertAutomaticLocalAddress(
+    const VarDecl *VD, SourceLocation Loc, bool RequireInitialized) {
+  if (auto Place = automaticLocalPlace(VD, Loc, RequireInitialized))
+    return Place->takeAddress();
+  return nullptr;
 }
 
 std::unique_ptr<VExpr>
@@ -1963,10 +2202,7 @@ void ASTConverter::appendReferenceBindingCheck(
 
       if (Length) {
         auto Index = convertExpr(Subscript->getIdx());
-        if (Index && Index->Ty.Kind == Length->Ty.Kind &&
-            Index->Ty.IntMode == Length->Ty.IntMode &&
-            Index->Ty.IsSigned == Length->Ty.IsSigned &&
-            Index->Ty.BitWidth == Length->Ty.BitWidth) {
+        if (Index && sameRepresentation(Index->Ty, Length->Ty)) {
           auto NonNegative = std::make_unique<VBinOpExpr>(
               VBinOp::Ge, cloneVExpr(Index.get()),
               std::make_unique<VLiteralExpr>(0, Index->Ty, Loc),
@@ -2002,38 +2238,62 @@ void ASTConverter::appendReferenceBindingCheck(
   Out.push_back(std::make_unique<VAssertStmt>(BindingCondition(Address), Loc));
 }
 
-std::unique_ptr<VExpr> ASTConverter::convertLValueAddress(const Expr *E) {
+std::optional<VPlace> ASTConverter::derefPlace(const Expr *PointerExpr,
+                                               SourceLocation Loc) {
+  auto Base = convertExpr(PointerExpr);
+  if (!Base)
+    return std::nullopt;
+  VType ValueTy = VType::makeUnsupported();
+  std::string RootIdentity;
+  if (PointerExpr) {
+    QualType PtrTy = PointerExpr->getType();
+    if (!PtrTy.isNull() && PtrTy->isPointerType()) {
+      QualType Pointee = PtrTy->getPointeeType();
+      ValueTy = VType::fromQualType(Pointee, IntMode, Ctx);
+      RootIdentity = canonicalTypeIdentity(Pointee, Ctx);
+    }
+  }
+  VPlace Place(std::move(Base), ValueTy, Loc, std::move(RootIdentity));
+  Place.applyDeref(Loc);
+  return Place;
+}
+
+std::optional<VPlace> ASTConverter::lvaluePlace(const Expr *E) {
   if (!E)
-    return nullptr;
+    return std::nullopt;
   E = E->IgnoreParens();
   while (const auto *Cast = dyn_cast<ImplicitCastExpr>(E)) {
     if (Cast->getCastKind() != CK_NoOp)
-      return nullptr;
+      return std::nullopt;
     E = Cast->getSubExpr()->IgnoreParens();
   }
 
   if (const auto *DRE = dyn_cast<DeclRefExpr>(E)) {
     const auto *VD = dyn_cast<VarDecl>(DRE->getDecl());
     if (!VD)
-      return nullptr;
+      return std::nullopt;
     if (VD->getType()->isLValueReferenceType() &&
         (isa<ParmVarDecl>(VD) || VD->isLocalVarDecl())) {
       if (InOld && VD->isLocalVarDecl()) {
         Errors.push_back(
             CurrentFn->Name +
             ": local reference bindings have no function-entry value");
-        return nullptr;
+        return std::nullopt;
       }
       requireInitialized(VD);
       std::string Provenance;
       if (auto It = LocalReferenceProvenanceVariables.find(VD);
           It != LocalReferenceProvenanceVariables.end())
         Provenance = It->second;
-      return std::make_unique<VVarExpr>(
+      auto Base = std::make_unique<VVarExpr>(
           valueName(VD), VType::fromQualType(VD->getType(), IntMode, Ctx),
           E->getExprLoc(), std::move(Provenance));
+      QualType Referent = VD->getType().getNonReferenceType();
+      return VPlace(std::move(Base),
+                    VType::fromQualType(Referent, IntMode, Ctx),
+                    E->getExprLoc(), canonicalTypeIdentity(Referent, Ctx));
     }
-    return convertAutomaticLocalAddress(VD, E->getExprLoc());
+    return automaticLocalPlace(VD, E->getExprLoc());
   }
 
   if (const auto *U = dyn_cast<UnaryOperator>(E);
@@ -2043,15 +2303,15 @@ std::unique_ptr<VExpr> ASTConverter::convertLValueAddress(const Expr *E) {
     const auto *PointerVar =
         PointerRef ? dyn_cast<VarDecl>(PointerRef->getDecl()) : nullptr;
     if (!PointerVar || !PointerVar->getType()->isPointerType())
-      return nullptr;
+      return std::nullopt;
     if (referencesDynamicPointer(U->getSubExpr()) &&
         !directDynamicPointer(U->getSubExpr())) {
       Errors.push_back(CurrentFn->Name +
                        ": dynamic-storage reference binding requires its "
                        "direct allocation pointer");
-      return nullptr;
+      return std::nullopt;
     }
-    return convertExpr(U->getSubExpr());
+    return derefPlace(U->getSubExpr(), E->getExprLoc());
   }
 
   if (const auto *M = dyn_cast<MemberExpr>(E)) {
@@ -2069,8 +2329,8 @@ std::unique_ptr<VExpr> ASTConverter::convertLValueAddress(const Expr *E) {
     const auto *PointerVar =
         PointerRef ? dyn_cast<VarDecl>(PointerRef->getDecl()) : nullptr;
     if (!PointerVar || !PointerVar->getType()->isPointerType())
-      return nullptr;
-    return convertArrowFieldAddress(M);
+      return std::nullopt;
+    return arrowFieldPlace(M);
   }
 
   if (const auto *AS = dyn_cast<ArraySubscriptExpr>(E)) {
@@ -2079,10 +2339,16 @@ std::unique_ptr<VExpr> ASTConverter::convertLValueAddress(const Expr *E) {
     const auto *PointerVar =
         PointerRef ? dyn_cast<VarDecl>(PointerRef->getDecl()) : nullptr;
     if (!PointerVar || !PointerVar->getType()->isPointerType())
-      return nullptr;
-    return convertSubscriptAddress(AS);
+      return std::nullopt;
+    return subscriptPlace(AS);
   }
 
+  return std::nullopt;
+}
+
+std::unique_ptr<VExpr> ASTConverter::convertLValueAddress(const Expr *E) {
+  if (auto Place = lvaluePlace(E))
+    return Place->takeAddress();
   return nullptr;
 }
 
@@ -2290,11 +2556,12 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
                          "allocation pointer");
         return nullptr;
       }
-      auto Ptr = convertExpr(U->getSubExpr());
-      if (!Ptr)
+      auto Place = derefPlace(U->getSubExpr(), E->getExprLoc());
+      if (!Place)
         return nullptr;
       VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
-      return std::make_unique<VLoadExpr>(std::move(Ptr), Ty, E->getExprLoc());
+      return std::make_unique<VLoadExpr>(Place->takeAddress(), Ty,
+                                         E->getExprLoc());
     }
     auto Op = convertExpr(U->getSubExpr());
     if (!Op)
@@ -2727,11 +2994,7 @@ std::unique_ptr<VExpr> ASTConverter::convertCallResultValue(
   auto Value = std::make_unique<VVarExpr>(
       std::move(Name), Source, Loc,
       Source.Kind == VTypeKind::Ptr ? std::move(Provenance) : std::string());
-  auto SameType = [](const VType &L, const VType &R) {
-    return L.Kind == R.Kind && L.IntMode == R.IntMode &&
-           L.IsSigned == R.IsSigned && L.BitWidth == R.BitWidth;
-  };
-  if (SameType(Source, TargetType) ||
+  if (sameRepresentation(Source, TargetType) ||
       (Source.Kind == VTypeKind::Ptr && TargetType.Kind == VTypeKind::Ptr) ||
       (Source.Kind == VTypeKind::Struct &&
        TargetType.Kind == VTypeKind::Struct))
@@ -2917,11 +3180,7 @@ ASTConverter::convertAssignmentValue(const BinaryOperator *Assignment) {
       VType::fromQualType(Compound->getComputationLHSType(), IntMode, Ctx);
   VType ResultTy =
       VType::fromQualType(Compound->getComputationResultType(), IntMode, Ctx);
-  auto SameType = [](const VType &A, const VType &B) {
-    return A.Kind == B.Kind && A.IntMode == B.IntMode &&
-           A.IsSigned == B.IsSigned && A.BitWidth == B.BitWidth;
-  };
-  if (!SameType(LHS->Ty, LHSComputationTy)) {
+  if (!sameRepresentation(LHS->Ty, LHSComputationTy)) {
     VType LHSSourceTy = LHS->Ty;
     LHS =
         std::make_unique<VCastExpr>(std::move(LHS), LHSSourceTy,
@@ -2929,7 +3188,7 @@ ASTConverter::convertAssignmentValue(const BinaryOperator *Assignment) {
   }
   std::unique_ptr<VExpr> Value = std::make_unique<VBinOpExpr>(
       Op, std::move(LHS), std::move(RHS), ResultTy, Assignment->getExprLoc());
-  if (!SameType(ResultTy, TargetTy))
+  if (!sameRepresentation(ResultTy, TargetTy))
     return std::make_unique<VCastExpr>(std::move(Value), ResultTy, TargetTy,
                                        Assignment->getExprLoc());
   return Value;
@@ -3046,9 +3305,9 @@ void ASTConverter::appendAssignment(const Expr *LHS,
                          "allocation pointer");
         return;
       }
-      auto Ptr = convertExpr(U->getSubExpr());
-      if (Ptr) {
-        Out.push_back(std::make_unique<VStoreStmt>(std::move(Ptr),
+      auto Place = derefPlace(U->getSubExpr(), Loc);
+      if (Place) {
+        Out.push_back(std::make_unique<VStoreStmt>(Place->takeAddress(),
                                                    std::move(Value), Loc));
         return;
       }
@@ -3670,11 +3929,7 @@ std::vector<std::unique_ptr<VStmt>> ASTConverter::convertStmt(const Stmt *S) {
       VType TargetTy = VType::fromQualType(TargetQualType, IntMode, Ctx);
       VType ComputationTy =
           VType::fromQualType(ComputationQualType, IntMode, Ctx);
-      auto SameType = [](const VType &A, const VType &B) {
-        return A.Kind == B.Kind && A.IntMode == B.IntMode &&
-               A.IsSigned == B.IsSigned && A.BitWidth == B.BitWidth;
-      };
-      if (!SameType(Current->Ty, ComputationTy)) {
+      if (!sameRepresentation(Current->Ty, ComputationTy)) {
         VType SourceTy = Current->Ty;
         Current = std::make_unique<VCastExpr>(std::move(Current), SourceTy,
                                               ComputationTy, U->getExprLoc());
@@ -3685,7 +3940,7 @@ std::vector<std::unique_ptr<VStmt>> ASTConverter::convertStmt(const Stmt *S) {
       std::unique_ptr<VExpr> Value =
           std::make_unique<VBinOpExpr>(Op, std::move(Current), std::move(One),
                                        ComputationTy, U->getExprLoc());
-      if (!SameType(ComputationTy, TargetTy))
+      if (!sameRepresentation(ComputationTy, TargetTy))
         Value = std::make_unique<VCastExpr>(std::move(Value), ComputationTy,
                                             TargetTy, U->getExprLoc());
       appendAssignment(U->getSubExpr(), std::move(Value), U->getExprLoc(), Out);

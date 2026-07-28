@@ -224,6 +224,10 @@ struct VFunction {
   /// Lexicographic termination measure (ordered tuple); empty means none.
   std::vector<std::unique_ptr<VExpr>> Decreases;
   std::vector<std::unique_ptr<VStmt>> Body;
+  /// Canonical layout table for by-value record and constant-array types
+  /// encountered in this function's signature and body. One entry per canonical
+  /// type identity; non-recursive (pointer fields stop at Ptr leaves).
+  std::vector<VObjectLayout> Layouts;
 };
 
 VFunction cloneVFunction(const VFunction &Fn);

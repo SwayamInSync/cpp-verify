@@ -1,10 +1,25 @@
 //===--- VExpr.cpp --------------------------------------------------------===//
 #include "VExpr.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/AST/PrettyPrinter.h"
 #include "clang/AST/Type.h"
 
 using namespace clang;
 using namespace verify;
+
+std::string verify::canonicalTypeIdentity(QualType QT, const ASTContext &Ctx) {
+  if (QT.isNull())
+    return {};
+  QualType C = QT.getCanonicalType().getUnqualifiedType();
+  if (!C->isRecordType() && !Ctx.getAsConstantArrayType(C))
+    return {};
+  PrintingPolicy Policy = Ctx.getPrintingPolicy();
+  Policy.SuppressTagKeyword = true;
+  Policy.FullyQualifiedName = true;
+  Policy.PrintAsCanonical = true;
+  Policy.AnonymousTagLocations = true;
+  return C.getAsString(Policy);
+}
 
 VType VType::fromQualType(QualType QT, VIntMode DefaultMode,
                           const ASTContext &Ctx) {
@@ -29,8 +44,27 @@ VType VType::fromQualType(QualType QT, VIntMode DefaultMode,
       return VType::makeInt(DefaultMode, Ctx.getIntWidth(Underlying),
                             Underlying->isSignedIntegerType());
   }
-  if (QT->isRecordType())
-    return VType::makeStruct();
+  if (const auto *CAT = Ctx.getAsConstantArrayType(QT)) {
+    VType Ty = VType::makeArray();
+    Ty.TypeIdentity = canonicalTypeIdentity(QT, Ctx);
+    if (QT->isIncompleteType() || CAT->getElementType()->isIncompleteType())
+      return Ty;
+    Ty.ObjectSizeBytes = Ctx.getTypeSizeInChars(QT).getQuantity();
+    Ty.ObjectAlignBytes = Ctx.getTypeAlignInChars(QT).getQuantity();
+    Ty.ArrayCount = CAT->getSize().getZExtValue();
+    Ty.ArrayStrideBytes =
+        Ctx.getTypeSizeInChars(CAT->getElementType()).getQuantity();
+    return Ty;
+  }
+  if (QT->isRecordType()) {
+    VType Ty = VType::makeStruct();
+    if (!QT->isIncompleteType()) {
+      Ty.ObjectSizeBytes = Ctx.getTypeSizeInChars(QT).getQuantity();
+      Ty.ObjectAlignBytes = Ctx.getTypeAlignInChars(QT).getQuantity();
+    }
+    Ty.TypeIdentity = canonicalTypeIdentity(QT, Ctx);
+    return Ty;
+  }
   return VType::makeUnsupported();
 }
 
