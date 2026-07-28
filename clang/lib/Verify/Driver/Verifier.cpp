@@ -158,7 +158,8 @@ public:
         PreparedFn = cloneVFunction(*Fn);
         // `valid(p, n)` is a recognized UB marker. Discover it before spec
         // preparation folds its deliberately trivial body to `true`.
-        if (Opts.CheckUB && Opts.Backend == BackendKind::Z3)
+        if (Opts.CheckUB && (Opts.Backend == BackendKind::Z3 ||
+                             Opts.Backend == BackendKind::BMC))
           UBError = instrumentUBChecks(*PreparedFn);
         if (UBError)
           return *PreparedFn;

@@ -3,19 +3,32 @@
 // RUN: not %cpp-verify --lower-only %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 // RUN: not %cpp-verify --backend=bmc --unroll=2 %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
-// Negative: an array *value* must fail closed. The frontend rejects the
-// unsupported array type rather than silently degrading the Array marker to a
-// scalar, so no such value can reach the passive/Obligation IR. The aggregate
-// backend sorts mirror this: Array (like Struct) has no logic sort.
+// Negative: an array *value* must never degrade into a scalar. Fixed local
+// arrays are modelled as byte-addressed automatic objects (see
+// local_array_lowering.cpp); every remaining array form is rejected by the
+// frontend, so no Array marker can reach the passive/Obligation IR. The
+// aggregate backend sorts mirror this: Array (like Struct) has no logic sort.
 
-int array_value_fail()
+struct WithArray {
+  int values[2];
+};
+
+int unsupported_element_array()
   post(result == 0)
 {
-  int a[4];
+  float a[4];
   a[0] = 0;
-  return a[0];
+  return 0;
 }
 
-// VERIFY: error: array_value_fail: unsupported C++ type in verification: int[4]
-// VERIFY-NOT: Verified: array_value_fail
-// VERIFY-NOT: Lowered: array_value_fail
+int array_value_parameter(WithArray box)
+  post(result == 0)
+{
+  return box.values[0];
+}
+
+// VERIFY-DAG: error: unsupported_element_array: unsupported C++ type in verification: float[4]
+// VERIFY-DAG: error: array_value_parameter: unsupported C++ type in verification: WithArray
+// VERIFY-NOT: Verified: unsupported_element_array
+// VERIFY-NOT: Verified: array_value_parameter
+// VERIFY-NOT: Lowered: unsupported_element_array

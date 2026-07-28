@@ -58,11 +58,11 @@ struct Pair {
   int second;
 };
 
-int field_binding()
+int conditional_field_binding(bool choose)
   post(result == 1)
 {
   Pair value{1, 2};
-  int &alias = value.first;
+  const int &alias = choose ? value.first : value.second;
   return alias;
 }
 
@@ -85,5 +85,8 @@ int loop_local_declaration()
 // VERIFY-DAG: error: order_dependent_local: call arguments have order-dependent heap evaluations
 // VERIFY-DAG: error: temporary_binding: local references require a supported direct lvalue
 // VERIFY-DAG: error: conditional_binding: local references require a supported direct lvalue
-// VERIFY-DAG: error: field_binding: local references require a supported direct lvalue
+// Binding a reference directly to a field of a local record is now supported
+// (see reference_local_object_lowering.cpp); only the temporary and
+// conditional forms remain unsupported.
+// VERIFY-DAG: error: conditional_field_binding: local references require a supported direct lvalue
 // VERIFY-DAG: error: loop_local_declaration: addressable local declarations inside loops are unsupported

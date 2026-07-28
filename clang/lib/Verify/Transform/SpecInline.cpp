@@ -215,9 +215,12 @@ public:
     case VExpr::Cast:
       inlineQuantifiedCalls(static_cast<VCastExpr &>(*E).Inner);
       return;
-    case VExpr::Load:
-      inlineQuantifiedCalls(static_cast<VLoadExpr &>(*E).Ptr);
+    case VExpr::Load: {
+      auto &Load = static_cast<VLoadExpr &>(*E);
+      inlineQuantifiedCalls(Load.Ptr);
+      inlineQuantifiedCalls(Load.AccessCondition);
       return;
+    }
     case VExpr::Old:
       inlineQuantifiedCalls(static_cast<VOldExpr &>(*E).Inner);
       return;
@@ -264,10 +267,13 @@ public:
         auto &Store = static_cast<VStoreStmt &>(*S);
         inlineQuantifiedCalls(Store.Ptr);
         inlineQuantifiedCalls(Store.Value);
+        inlineQuantifiedCalls(Store.AccessCondition);
         break;
       }
       case VStmt::Allocate:
         inlineQuantifiedCalls(static_cast<VAllocateStmt &>(*S).Initializer);
+        break;
+      case VStmt::EndLifetime:
         break;
       case VStmt::Free:
         inlineQuantifiedCalls(static_cast<VFreeStmt &>(*S).Ptr);
@@ -361,10 +367,12 @@ public:
       inlineDefinednessCalls(static_cast<VCastExpr &>(*E).Inner,
                              InsideQuantifier);
       return;
-    case VExpr::Load:
-      inlineDefinednessCalls(static_cast<VLoadExpr &>(*E).Ptr,
-                             InsideQuantifier);
+    case VExpr::Load: {
+      auto &Load = static_cast<VLoadExpr &>(*E);
+      inlineDefinednessCalls(Load.Ptr, InsideQuantifier);
+      inlineDefinednessCalls(Load.AccessCondition, InsideQuantifier);
       return;
+    }
     case VExpr::Old:
       inlineDefinednessCalls(static_cast<VOldExpr &>(*E).Inner,
                              InsideQuantifier);
@@ -418,10 +426,13 @@ public:
         auto &Store = static_cast<VStoreStmt &>(*S);
         inlineDefinednessCalls(Store.Ptr);
         inlineDefinednessCalls(Store.Value);
+        inlineDefinednessCalls(Store.AccessCondition);
         break;
       }
       case VStmt::Allocate:
         inlineDefinednessCalls(static_cast<VAllocateStmt &>(*S).Initializer);
+        break;
+      case VStmt::EndLifetime:
         break;
       case VStmt::Free:
         inlineDefinednessCalls(static_cast<VFreeStmt &>(*S).Ptr);
@@ -718,6 +729,7 @@ public:
         auto &Store = static_cast<VStoreStmt &>(*S);
         Store.Ptr = inlineExpr(std::move(Store.Ptr));
         Store.Value = inlineExpr(std::move(Store.Value));
+        Store.AccessCondition = inlineExpr(std::move(Store.AccessCondition));
         break;
       }
       case VStmt::Allocate: {
@@ -725,6 +737,8 @@ public:
         A.Initializer = inlineExpr(std::move(A.Initializer));
         break;
       }
+      case VStmt::EndLifetime:
+        break;
       case VStmt::Free: {
         auto &F = static_cast<VFreeStmt &>(*S);
         F.Ptr = inlineExpr(std::move(F.Ptr));
@@ -806,6 +820,8 @@ void SpecInliner::prepareFunctionAxiomatic(VFunction &Fn) {
     Impl.inlineQuantifiedCalls(Post);
   for (auto &Rec : Fn.Recommends)
     Impl.inlineQuantifiedCalls(Rec);
+  for (auto &Extent : Fn.ValidExtents)
+    Impl.inlineQuantifiedCalls(Extent.Length);
   Impl.inlineQuantifiedCalls(Fn.Body);
   for (auto &Pre : Fn.Preconditions)
     Impl.inlineDefinednessCalls(Pre);
@@ -813,6 +829,8 @@ void SpecInliner::prepareFunctionAxiomatic(VFunction &Fn) {
     Impl.inlineDefinednessCalls(Post);
   for (auto &Rec : Fn.Recommends)
     Impl.inlineDefinednessCalls(Rec);
+  for (auto &Extent : Fn.ValidExtents)
+    Impl.inlineDefinednessCalls(Extent.Length);
   Impl.inlineDefinednessCalls(Fn.Body);
 }
 
@@ -827,6 +845,8 @@ void SpecInliner::prepareFunction(VFunction &Fn) {
     Post = Impl.inlineExpr(std::move(Post));
   for (auto &Rec : Fn.Recommends)
     Rec = Impl.inlineExpr(std::move(Rec));
+  for (auto &Extent : Fn.ValidExtents)
+    Extent.Length = Impl.inlineExpr(std::move(Extent.Length));
   Impl.inlineStmts(Fn.Body);
 }
 
@@ -877,9 +897,12 @@ void verify::collectSpecCalls(const VExpr *E,
   case VExpr::Cast:
     collectSpecCalls(static_cast<const VCastExpr *>(E)->Inner.get(), Out);
     return;
-  case VExpr::Load:
-    collectSpecCalls(static_cast<const VLoadExpr *>(E)->Ptr.get(), Out);
+  case VExpr::Load: {
+    const auto *Load = static_cast<const VLoadExpr *>(E);
+    collectSpecCalls(Load->Ptr.get(), Out);
+    collectSpecCalls(Load->AccessCondition.get(), Out);
     return;
+  }
   case VExpr::Old:
     collectSpecCalls(static_cast<const VOldExpr *>(E)->Inner.get(), Out);
     return;
@@ -932,11 +955,14 @@ collectSpecCallsInStmts(const std::vector<std::unique_ptr<VStmt>> &Stmts,
       const auto &Store = static_cast<const VStoreStmt &>(*S);
       collectSpecCalls(Store.Ptr.get(), Out);
       collectSpecCalls(Store.Value.get(), Out);
+      collectSpecCalls(Store.AccessCondition.get(), Out);
       break;
     }
     case VStmt::Allocate:
       collectSpecCalls(static_cast<const VAllocateStmt &>(*S).Initializer.get(),
                        Out);
+      break;
+    case VStmt::EndLifetime:
       break;
     case VStmt::Free:
       collectSpecCalls(static_cast<const VFreeStmt &>(*S).Ptr.get(), Out);
@@ -999,6 +1025,8 @@ void verify::collectSpecCallsInFunction(
     collectSpecCalls(P.get(), Out);
   for (const auto &Decrease : Fn.Decreases)
     collectSpecCalls(Decrease.get(), Out);
+  for (const auto &Extent : Fn.ValidExtents)
+    collectSpecCalls(Extent.Length.get(), Out);
   collectSpecCallsInStmts(Fn.Body, Out);
 }
 
@@ -1032,8 +1060,9 @@ std::unique_ptr<VExpr> verify::substParamsInExpr(
   }
   case VExpr::Load: {
     const auto *L = static_cast<const VLoadExpr *>(E);
-    return std::make_unique<VLoadExpr>(substParamsInExpr(L->Ptr.get(), Map),
-                                       L->Ty, L->Loc, L->HeapVar);
+    return std::make_unique<VLoadExpr>(
+        substParamsInExpr(L->Ptr.get(), Map), L->Ty, L->Loc, L->HeapVar,
+        substParamsInExpr(L->AccessCondition.get(), Map));
   }
   case VExpr::Old: {
     const auto *O = static_cast<const VOldExpr *>(E);
@@ -1151,6 +1180,9 @@ collectRecursiveCalls(const std::vector<std::unique_ptr<VStmt>> &Stmts,
       case VStmt::Allocate:
       case VStmt::Free:
         Unsupported = true;
+        NextStates.push_back(std::move(State));
+        break;
+      case VStmt::EndLifetime:
         NextStates.push_back(std::move(State));
         break;
       case VStmt::Call: {
@@ -1352,11 +1384,14 @@ static void collectRecursiveSpecCallsInExpr(
         static_cast<const VCastExpr *>(E)->Inner.get(), Fn, Env, Guard, Sites,
         InsideQuantifier, Unsupported);
     return;
-  case VExpr::Load:
-    collectRecursiveSpecCallsInExpr(
-        static_cast<const VLoadExpr *>(E)->Ptr.get(), Fn, Env, Guard, Sites,
-        InsideQuantifier, Unsupported);
+  case VExpr::Load: {
+    const auto *Load = static_cast<const VLoadExpr *>(E);
+    collectRecursiveSpecCallsInExpr(Load->Ptr.get(), Fn, Env, Guard, Sites,
+                                    InsideQuantifier, Unsupported);
+    collectRecursiveSpecCallsInExpr(Load->AccessCondition.get(), Fn, Env, Guard,
+                                    Sites, InsideQuantifier, Unsupported);
     return;
+  }
   case VExpr::Old:
     collectRecursiveSpecCallsInExpr(
         static_cast<const VOldExpr *>(E)->Inner.get(), Fn, Env, Guard, Sites,

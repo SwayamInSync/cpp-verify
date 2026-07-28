@@ -5,6 +5,7 @@
 #include "../IR/VPlace.h"
 #include "../IR/VStmt.h"
 #include "clang/AST/ASTContext.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include <optional>
 #include <set>
 
@@ -37,6 +38,8 @@ class ASTConverter {
   std::map<const VarDecl *, std::string> DynamicPointerProvenanceVariables;
   std::set<const VarDecl *> AddressableLocals;
   std::map<const VarDecl *, std::string> AutomaticLocalProvenanceVariables;
+  std::vector<std::vector<const VarDecl *>> AutomaticScopeStack;
+  std::vector<const VarDecl *> ActiveAutomaticLocals;
   std::map<const VarDecl *, std::string> LocalReferenceProvenanceVariables;
   std::set<const VarDecl *> GhostLocals;
   unsigned DynamicProvenanceId = 0;
@@ -57,7 +60,9 @@ private:
   std::unique_ptr<VExpr> convertExpr(const Expr *E);
   std::unique_ptr<VExpr> convertPointerDifferenceOperand(const Expr *E,
                                                          uint64_t PointeeSize);
-  std::unique_ptr<VExpr> convertLValueAddress(const Expr *E);
+  std::unique_ptr<VExpr>
+  convertLValueAddress(const Expr *E,
+                       std::unique_ptr<VExpr> *AccessCondition = nullptr);
   std::unique_ptr<VExpr>
   convertAutomaticLocalAddress(const VarDecl *VD, SourceLocation Loc,
                                bool RequireInitialized = true);
@@ -71,6 +76,34 @@ private:
   std::optional<VPlace> derefPlace(const Expr *PointerExpr, SourceLocation Loc);
   std::optional<VPlace> arrowFieldPlace(const MemberExpr *M);
   std::optional<VPlace> subscriptPlace(const ArraySubscriptExpr *AS);
+  /// Root-object discovery: peel no-op casts, array-to-pointer decays, dot
+  /// member chains and fixed-array subscripts down to the enclosing local
+  /// object. Returns the root only when it was promoted to one automatic
+  /// byte-addressed object.
+  const VarDecl *promotedRootLocal(const Expr *E) const;
+  /// Build the exact byte-offset place of a subobject of a promoted local.
+  std::optional<VPlace> promotedObjectPlace(const Expr *E,
+                                            bool RequireInitialized = true);
+  std::optional<uint64_t> recordFieldOffset(const FieldDecl *FD) const;
+  /// Visit every scalar/pointer leaf of a promoted object type in offset order.
+  bool forEachObjectLeaf(QualType Ty, uint64_t Offset,
+                         llvm::function_ref<bool(QualType, uint64_t)> Fn) const;
+  std::unique_ptr<VExpr> objectLeafAddress(const VExpr *Base, uint64_t Offset,
+                                           SourceLocation Loc) const;
+  bool appendObjectInitialization(const Expr *Init, QualType Ty,
+                                  const VExpr *Base, uint64_t Offset,
+                                  SourceLocation Loc,
+                                  std::vector<std::unique_ptr<VStmt>> &Out);
+  bool appendObjectZeroInitialization(QualType Ty, const VExpr *Base,
+                                      uint64_t Offset, SourceLocation Loc,
+                                      std::vector<std::unique_ptr<VStmt>> &Out);
+  bool appendObjectCopy(const Expr *Source, QualType Ty, const VExpr *Base,
+                        uint64_t Offset, SourceLocation Loc,
+                        std::vector<std::unique_ptr<VStmt>> &Out);
+  std::unique_ptr<VExpr> recordFixedArrayBoundsCheck(const Expr *Index,
+                                                     const VExpr *IndexValue,
+                                                     uint64_t Count,
+                                                     SourceLocation Loc);
   std::unique_ptr<VExpr> convertAddressProvenance(const VExpr *Address);
   void appendReferenceBindingCheck(const Expr *Source, const VExpr *Address,
                                    SourceLocation Loc,
@@ -81,6 +114,17 @@ private:
   std::unique_ptr<VExpr> convertArrowFieldAddress(const MemberExpr *M);
   std::unique_ptr<VExpr> convertSubscriptAddress(const ArraySubscriptExpr *AS);
   std::vector<std::unique_ptr<VStmt>> convertStmt(const Stmt *S);
+  std::vector<std::unique_ptr<VStmt>> convertStmtBody(const Stmt *S);
+  std::vector<std::unique_ptr<VStmt>> convertScopedSubstatement(const Stmt *S);
+  void enterAutomaticScope();
+  void registerAutomaticLocal(const VarDecl *VD);
+  void appendActiveLifetimeEnds(std::vector<std::unique_ptr<VStmt>> &Out,
+                                SourceLocation Loc);
+  void leaveAutomaticScope(std::vector<std::unique_ptr<VStmt>> &Out,
+                           SourceLocation Loc);
+  void appendReturn(std::unique_ptr<VExpr> Value,
+                    std::vector<std::unique_ptr<VStmt>> &Out,
+                    SourceLocation Loc);
   void convertExecCallArgs(const CallExpr *CE,
                            std::vector<std::unique_ptr<VStmt>> &Prelude,
                            std::vector<std::unique_ptr<VExpr>> &Args);

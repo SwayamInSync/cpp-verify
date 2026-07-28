@@ -147,7 +147,7 @@ void conditional_reference_actual(bool choose, int *value)
 // VERIFY-DAG: error: reference_member: unsupported C++ type in verification: WithReference
 // VERIFY-DAG: error: spec_reference: unsupported C++ type in verification: const int &
 // VERIFY-DAG: error: proof_reference: unsupported C++ type in verification: const int &
-// VERIFY-DAG: error: address_of_reference: unsupported unary operator
+// VERIFY-DAG: error: address_of_reference: raw address-of is unsupported until lexical lifetime and escape effects are modeled
 // VERIFY-DAG: error: order_dependent_reference_read: call arguments have order-dependent heap evaluations
 // VERIFY-DAG: error: order_dependent_subscript_read: call arguments have order-dependent heap evaluations
 // VERIFY-DAG: error: order_dependent_implicit_effect: call arguments have order-dependent heap evaluations

@@ -120,10 +120,16 @@ void verify::dumpVExpr(const VExpr *E, llvm::raw_ostream &OS, unsigned Depth) {
     OS << "cast\n";
     dumpVExpr(static_cast<const VCastExpr *>(E)->Inner.get(), OS, Depth + 1);
     break;
-  case VExpr::Load:
+  case VExpr::Load: {
+    const auto *Load = static_cast<const VLoadExpr *>(E);
     OS << "load\n";
-    dumpVExpr(static_cast<const VLoadExpr *>(E)->Ptr.get(), OS, Depth + 1);
+    dumpVExpr(Load->Ptr.get(), OS, Depth + 1);
+    if (Load->AccessCondition) {
+      ind(OS, Depth + 1) << "access_condition\n";
+      dumpVExpr(Load->AccessCondition.get(), OS, Depth + 2);
+    }
     break;
+  }
   case VExpr::Result:
     OS << "result\n";
     break;
@@ -196,6 +202,10 @@ static void dumpVStmt(const VStmt &S, llvm::raw_ostream &OS, unsigned Depth) {
     OS << "store\n";
     dumpVExpr(St.Ptr.get(), OS, Depth + 1);
     dumpVExpr(St.Value.get(), OS, Depth + 1);
+    if (St.AccessCondition) {
+      ind(OS, Depth + 1) << "access_condition\n";
+      dumpVExpr(St.AccessCondition.get(), OS, Depth + 2);
+    }
     break;
   }
   case VStmt::Allocate: {
@@ -205,6 +215,12 @@ static void dumpVStmt(const VStmt &S, llvm::raw_ostream &OS, unsigned Depth) {
        << A.ProvenanceTarget << "\n";
     if (A.Initializer)
       dumpVExpr(A.Initializer.get(), OS, Depth + 1);
+    break;
+  }
+  case VStmt::EndLifetime: {
+    const auto &E = static_cast<const VEndLifetimeStmt &>(S);
+    OS << "end_lifetime " << E.Target << " provenance " << E.ProvenanceTarget
+       << (E.IsFunctionExit ? " function_exit" : "") << "\n";
     break;
   }
   case VStmt::Free:

@@ -294,7 +294,10 @@ struct UBInstrumenter {
   void appendValidSemantics(VFunction &Fn) const {
     for (const auto &[Base, Length] : ValidLen) {
       SourceLocation Loc = Length->Loc;
-      auto Pointer = std::make_unique<VVarExpr>(Base, VType::makePtr(), Loc);
+      const uint64_t PointeeSize = ValidPointeeSize.at(Base);
+      VType PointerType = VType::makePtr(PointeeSize);
+      Fn.ValidExtents.emplace_back(Base, PointerType, cloneVExpr(Length));
+      auto Pointer = std::make_unique<VVarExpr>(Base, PointerType, Loc);
       auto NonNegative = std::make_unique<VBinOpExpr>(
           VBinOp::Ge, cloneVExpr(Length),
           std::make_unique<VLiteralExpr>(0, Length->Ty, Loc), VType::makeBool(),
@@ -375,40 +378,79 @@ struct UBInstrumenter {
                                         std::move(Lt), VType::makeBool(), Loc);
   }
 
-  // Walk E, append safety obligations. To add a UB class, add a case here.
+  static std::unique_ptr<VExpr> evaluationGuard(const VExpr *Parent,
+                                                std::unique_ptr<VExpr> Local,
+                                                SourceLocation Loc) {
+    if (!Parent)
+      return Local;
+    return std::make_unique<VBinOpExpr>(VBinOp::And, cloneVExpr(Parent),
+                                        std::move(Local), VType::makeBool(),
+                                        Loc);
+  }
+
+  static void appendObligation(std::unique_ptr<VExpr> Obligation,
+                               const VExpr *Guard,
+                               std::vector<std::unique_ptr<VExpr>> &Out) {
+    if (Guard) {
+      SourceLocation Loc = Obligation->Loc;
+      auto NotGuard = std::make_unique<VUnaryOpExpr>(
+          VUnaryOp::Not, cloneVExpr(Guard), VType::makeBool(), Loc);
+      Obligation = std::make_unique<VBinOpExpr>(VBinOp::Or, std::move(NotGuard),
+                                                std::move(Obligation),
+                                                VType::makeBool(), Loc);
+    }
+    Out.push_back(std::move(Obligation));
+  }
+
+  // Walk E and append safety obligations under the exact C++ evaluation path.
   void collectObligations(const VExpr *E,
-                          std::vector<std::unique_ptr<VExpr>> &Out) {
+                          std::vector<std::unique_ptr<VExpr>> &Out,
+                          const VExpr *Guard = nullptr) {
     if (!E)
       return;
     switch (E->K) {
     case VExpr::BinOp: {
       const auto *B = static_cast<const VBinOpExpr *>(E);
-      collectObligations(B->Lhs.get(), Out);
-      collectObligations(B->Rhs.get(), Out);
+      collectObligations(B->Lhs.get(), Out, Guard);
+      if (B->Op == VBinOp::And || B->Op == VBinOp::Or) {
+        std::unique_ptr<VExpr> RhsCondition = cloneVExpr(B->Lhs.get());
+        if (B->Op == VBinOp::Or)
+          RhsCondition = std::make_unique<VUnaryOpExpr>(
+              VUnaryOp::Not, std::move(RhsCondition), VType::makeBool(),
+              B->Loc);
+        auto RhsGuard = evaluationGuard(Guard, std::move(RhsCondition), B->Loc);
+        collectObligations(B->Rhs.get(), Out, RhsGuard.get());
+      } else {
+        collectObligations(B->Rhs.get(), Out, Guard);
+      }
       const bool Signed = isSignedMachine(B->Ty);
       switch (B->Op) {
       case VBinOp::Add:
         if (Signed)
-          Out.push_back(
-              mkOvf(VOverflowOp::Add, B->Lhs.get(), B->Rhs.get(), B->Loc));
+          appendObligation(
+              mkOvf(VOverflowOp::Add, B->Lhs.get(), B->Rhs.get(), B->Loc),
+              Guard, Out);
         break;
       case VBinOp::Sub:
         if (Signed)
-          Out.push_back(
-              mkOvf(VOverflowOp::Sub, B->Lhs.get(), B->Rhs.get(), B->Loc));
+          appendObligation(
+              mkOvf(VOverflowOp::Sub, B->Lhs.get(), B->Rhs.get(), B->Loc),
+              Guard, Out);
         break;
       case VBinOp::Mul:
         if (Signed)
-          Out.push_back(
-              mkOvf(VOverflowOp::Mul, B->Lhs.get(), B->Rhs.get(), B->Loc));
+          appendObligation(
+              mkOvf(VOverflowOp::Mul, B->Lhs.get(), B->Rhs.get(), B->Loc),
+              Guard, Out);
         break;
       case VBinOp::Div:
       case VBinOp::Rem:
         if (isMachineInt(B->Ty))
-          Out.push_back(mkNonZero(B->Rhs.get(), B->Loc));
+          appendObligation(mkNonZero(B->Rhs.get(), B->Loc), Guard, Out);
         if (Signed)
-          Out.push_back(
-              mkOvf(VOverflowOp::SDiv, B->Lhs.get(), B->Rhs.get(), B->Loc));
+          appendObligation(
+              mkOvf(VOverflowOp::SDiv, B->Lhs.get(), B->Rhs.get(), B->Loc),
+              Guard, Out);
         break;
       default:
         break;
@@ -417,41 +459,50 @@ struct UBInstrumenter {
     }
     case VExpr::UnaryOp: {
       const auto *U = static_cast<const VUnaryOpExpr *>(E);
-      collectObligations(U->Operand.get(), Out);
+      collectObligations(U->Operand.get(), Out, Guard);
       if (U->Op == VUnaryOp::Neg && isSignedMachine(U->Ty))
-        Out.push_back(
-            mkOvf(VOverflowOp::Neg, U->Operand.get(), nullptr, U->Loc));
+        appendObligation(
+            mkOvf(VOverflowOp::Neg, U->Operand.get(), nullptr, U->Loc), Guard,
+            Out);
       break;
     }
     case VExpr::Cast:
-      collectObligations(static_cast<const VCastExpr *>(E)->Inner.get(), Out);
+      collectObligations(static_cast<const VCastExpr *>(E)->Inner.get(), Out,
+                         Guard);
       break;
     case VExpr::Conditional: {
       const auto *C = static_cast<const VConditionalExpr *>(E);
-      collectObligations(C->Cond.get(), Out);
-      collectObligations(C->Then.get(), Out);
-      collectObligations(C->Else.get(), Out);
+      collectObligations(C->Cond.get(), Out, Guard);
+      auto ThenGuard =
+          evaluationGuard(Guard, cloneVExpr(C->Cond.get()), C->Loc);
+      auto NotCondition = std::make_unique<VUnaryOpExpr>(
+          VUnaryOp::Not, cloneVExpr(C->Cond.get()), VType::makeBool(), C->Loc);
+      auto ElseGuard = evaluationGuard(Guard, std::move(NotCondition), C->Loc);
+      collectObligations(C->Then.get(), Out, ThenGuard.get());
+      collectObligations(C->Else.get(), Out, ElseGuard.get());
       break;
     }
     case VExpr::Load: {
       // Array-bounds: a read through p[i] / *(p+i) must be in [0, len(p)).
       const auto *L = static_cast<const VLoadExpr *>(E);
-      collectObligations(L->Ptr.get(), Out);
+      collectObligations(L->Ptr.get(), Out, Guard);
+      collectObligations(L->AccessCondition.get(), Out, Guard);
       if (auto Bnd = boundsObligation(L->Ptr.get()))
-        Out.push_back(std::move(Bnd));
+        appendObligation(std::move(Bnd), Guard, Out);
       break;
     }
     case VExpr::FieldAccess:
       collectObligations(static_cast<const VFieldAccessExpr *>(E)->Base.get(),
-                         Out);
+                         Out, Guard);
       break;
     case VExpr::Old:
-      collectObligations(static_cast<const VOldExpr *>(E)->Inner.get(), Out);
+      collectObligations(static_cast<const VOldExpr *>(E)->Inner.get(), Out,
+                         Guard);
       break;
     case VExpr::SpecCall: {
       const auto *S = static_cast<const VSpecCallExpr *>(E);
       for (const auto &A : S->Args)
-        collectObligations(A.get(), Out);
+        collectObligations(A.get(), Out, Guard);
       break;
     }
     default:
@@ -485,11 +536,14 @@ struct UBInstrumenter {
         }
         emitObsInto(New, St.Ptr.get());
         emitObsInto(New, St.Value.get());
+        emitObsInto(New, St.AccessCondition.get());
         break;
       }
       case VStmt::Allocate:
         if (const auto &A = static_cast<VAllocateStmt &>(*S); A.Initializer)
           emitObsInto(New, A.Initializer.get());
+        break;
+      case VStmt::EndLifetime:
         break;
       case VStmt::Free:
         emitObsInto(New, static_cast<VFreeStmt &>(*S).Ptr.get());

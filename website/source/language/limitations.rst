@@ -63,6 +63,8 @@ The most mature current fragment includes:
 - proof functions, ghost code, bounded quantifiers, and controlled recursive
   unfolding;
 - flat trivial standard-layout records with scalar fields;
+- fixed local arrays and promoted trivial local records with nested record,
+  pointer, and fixed-array members;
 - one-level typed pointers, abstract indexed buffers, and heap framing;
 - constrained direct scalar ``new``/``delete`` with liveness, initialization,
   and provenance.
@@ -87,19 +89,25 @@ C++ feature boundaries
        reinterpretation.
    * - References
      - Scalar ``T&``/``const T&`` parameters on contracted executable free
-       functions, initialized ordinary scalar local actuals, and local aliases
-       for boolean, integral, and enum referents.
-     - Subscript/field/conditional bindings, reference returns, non-scalar
-       referents, rvalue references, address-taking, temporaries/lifetime
-       extension, reference members, and forwarding.
+       functions, initialized ordinary scalar local actuals, local aliases for
+       boolean, integral, and enum referents, and bindings to a field or fixed
+       array element of a promoted local object.
+     - Conditional bindings, reference returns, non-scalar referents, rvalue
+       references, temporaries/lifetime extension, reference members, and
+       forwarding.
    * - Arrays
-     - Pointer-parameter indexing and quantified abstract buffers.
-     - Array-valued locals/fields/parameters, multidimensional arrays,
-       ``new[]``/``delete[]``, and element lifetimes.
+     - Pointer-parameter indexing, quantified abstract buffers, and fixed
+       local arrays (including arrays of records and multidimensional arrays)
+       modelled as byte-addressed automatic objects up to 256 bytes.
+     - Array parameters/fields carried by value, array references,
+       ``new[]``/``delete[]``, loop-local arrays, and raw pointers derived from
+       a local array.
    * - Records
-     - Flat trivial standard-layout values with scalar fields.
-     - Nested, pointer/reference/array-bearing, non-trivial, inherited,
-       polymorphic, union, and bit-field records.
+     - Flat trivial standard-layout values with scalar fields; trivial
+       standard-layout records with nested record, pointer, and fixed-array
+       members as promoted local objects.
+     - Non-trivial, inherited, polymorphic, union, and bit-field records, and
+       nested/pointer/array-bearing records used by value.
    * - Functions
      - Free functions, overloads, namespaces, contracts, direct calls, and
        scalar-state direct recursion.
@@ -138,10 +146,11 @@ CppVerify does not yet model:
 - exception cleanup and exactly-once destruction;
 - placement construction, lifetime restart, or ``std::launder``.
 
-Scalar parameter references are now addressable aliases. General local and
-subobject binding plus pointer-bearing aggregates remain the next major memory
-checkpoint because those features are prerequisites for idiomatic C++ classes,
-containers, and ownership types.
+Scalar parameter references, local scalar aliases, and scalar field/element
+bindings into promoted local objects are addressable aliases. General aggregate
+references, raw automatic pointers, temporary binding, and pointer-bearing
+aggregates across modular interfaces remain prerequisites for idiomatic C++
+classes, containers, and ownership types.
 
 Pointers, buffers, and provenance
 ---------------------------------
@@ -158,7 +167,9 @@ footprints such as ``modifies(*p)``.
 With ``--check-ub``, a syntactically restricted ``valid(p, n)`` precondition
 declares an abstract extent. It remains a caller promise rather than evidence
 derived from a concrete caller allocation; it does not supply general lifetime,
-alignment, provenance, or initialization.
+alignment, provenance, or initialization. Bounds follow exact conditional and
+short-circuit evaluation, and fresh represented storage is kept disjoint from
+the complete declared incoming extent.
 
 For pairs involving mutable pointees, CppVerify adds a generated
 complete-object disjointness precondition. ``aliases(p, q)`` opts a pair into
@@ -182,17 +193,22 @@ dereference such as ``set(*p, value)``. Local references may bind those direct
 forms and chain through other local aliases; a pointer-derived binding
 snapshots the address.
 
-Only address-required ``bool``, integral, and enum locals are spilled from
-scalar SSA. They receive fresh automatic lifetime identities, target
-size/alignment, byte ownership, liveness, and initialization. They remain
-modeled until function return and cannot escape. Checked scalar modular calls
-retain their provenance and exact owned-cell frame after a structural
-non-escape scan.
+Address-required scalar locals, fixed local arrays, and supported enclosing
+records are promoted to one heap representation. They receive fresh automatic
+lifetime identities, target size/alignment, byte ownership, liveness, and
+per-leaf initialization. Fixed-array loads, stores, copies, and reference
+bindings carry every nested bound at the access site. Automatic lifetimes end at
+the lexical closing brace or on each early return, in reverse construction
+order; heap-reading return values are materialized before teardown.
 
-Conditional/subscript/field bindings, temporaries, reference returns,
-address-taking, rvalue references, and non-scalar referents remain fail-closed.
-Addressable declarations inside loops and ``old`` of local objects/bindings are
-also rejected; outer automatic locals and loop-local aliases are supported.
+Scalar references may bind supported fields and fixed-array elements of these
+promoted objects. Conditional bindings, temporaries, reference returns, general
+raw address-taking/array decay, rvalue references, and non-scalar referents
+remain fail-closed. Addressable declarations inside loops and ``old`` of local
+objects/bindings are also rejected; outer automatic locals and loop-local aliases
+are supported. Pointer leaves may retain abstract pointer values, but storing a
+provenance-bearing local dynamic pointer fails closed until pointer provenance is
+represented in a parallel heap.
 The initialized-entry rule excludes output-only references to indeterminate
 storage. Reference reads participate in the existing argument-order safety
 check.

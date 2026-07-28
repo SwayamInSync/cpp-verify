@@ -101,7 +101,8 @@ std::unique_ptr<VExpr> verify::cloneVExpr(const VExpr *E) {
   case VExpr::Load: {
     const auto *L = static_cast<const VLoadExpr *>(E);
     return std::make_unique<VLoadExpr>(cloneVExpr(L->Ptr.get()), L->Ty, L->Loc,
-                                       L->HeapVar);
+                                       L->HeapVar,
+                                       cloneVExpr(L->AccessCondition.get()));
   }
   case VExpr::Result:
     return std::make_unique<VResultExpr>(E->Ty, E->Loc);

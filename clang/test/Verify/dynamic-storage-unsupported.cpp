@@ -207,7 +207,9 @@ int reassignment_in_loop()
 // VERIFY-DAG: error: escape_pointer: dynamic-storage pointers cannot escape through a return
 // VERIFY-DAG: error: pointer_arithmetic: dynamic-storage dereference requires its direct allocation pointer
 // VERIFY-DAG: error: pointer_parameter: dynamic allocation in functions with pointer parameters is not yet supported
-// VERIFY-DAG: error: array_allocation: unsupported C++ type in verification: int[2]
+// Dynamic new[] stays out of scope: fixed *automatic* arrays are modelled,
+// but array allocation is still rejected by the new-expression rules.
+// VERIFY-DAG: error: array_allocation: only ordinary throwing scalar new is supported
 // VERIFY-DAG: error: allocation_in_loop: dynamic allocation inside loops is unsupported
 // VERIFY-DAG: error: allocation_in_loop: dynamic deallocation inside loops is unsupported
 // VERIFY-DAG: error: void_pointer_target: new result must directly initialize a matching typed pointer

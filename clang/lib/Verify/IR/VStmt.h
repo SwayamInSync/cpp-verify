@@ -19,6 +19,7 @@ public:
     Assign,
     Store,
     Allocate,
+    EndLifetime,
     Free,
     If,
     While,
@@ -56,9 +57,12 @@ struct VAssignStmt : VStmt {
 struct VStoreStmt : VStmt {
   std::unique_ptr<VExpr> Ptr;
   std::unique_ptr<VExpr> Value;
+  std::unique_ptr<VExpr> AccessCondition;
   VStoreStmt(std::unique_ptr<VExpr> P, std::unique_ptr<VExpr> V,
-             SourceLocation Loc)
-      : VStmt(Store, Loc), Ptr(std::move(P)), Value(std::move(V)) {}
+             SourceLocation Loc,
+             std::unique_ptr<VExpr> AccessCondition = nullptr)
+      : VStmt(Store, Loc), Ptr(std::move(P)), Value(std::move(V)),
+        AccessCondition(std::move(AccessCondition)) {}
 };
 
 struct VAllocateStmt : VStmt {
@@ -78,6 +82,17 @@ struct VAllocateStmt : VStmt {
         AllocatedType(AllocatedType), Initializer(std::move(Initializer)),
         SizeBytes(SizeBytes), AlignBytes(AlignBytes), IsAutomatic(IsAutomatic) {
   }
+};
+
+struct VEndLifetimeStmt : VStmt {
+  std::string Target;
+  std::string ProvenanceTarget;
+  bool IsFunctionExit;
+  VEndLifetimeStmt(std::string Target, std::string ProvenanceTarget,
+                   SourceLocation Loc, bool IsFunctionExit = false)
+      : VStmt(EndLifetime, Loc), Target(std::move(Target)),
+        ProvenanceTarget(std::move(ProvenanceTarget)),
+        IsFunctionExit(IsFunctionExit) {}
 };
 
 struct VFreeStmt : VStmt {
@@ -193,6 +208,17 @@ struct VContractAssertStmt : VStmt {
 
 std::unique_ptr<VStmt> cloneVStmt(const VStmt *S);
 
+struct VValidExtent {
+  std::string Base;
+  VType PointerType;
+  std::unique_ptr<VExpr> Length;
+
+  VValidExtent(std::string Base, VType PointerType,
+               std::unique_ptr<VExpr> Length)
+      : Base(std::move(Base)), PointerType(PointerType),
+        Length(std::move(Length)) {}
+};
+
 struct VFunction {
   /// User-facing source name.
   std::string Name;
@@ -221,6 +247,9 @@ struct VFunction {
   std::vector<std::unique_ptr<VExpr>> Modifies;
   std::vector<std::pair<std::unique_ptr<VExpr>, std::unique_ptr<VExpr>>>
       Aliases;
+  /// Positive top-level valid(base, length) interface extents discovered by
+  /// UB instrumentation before the marker's spec body is prepared away.
+  std::vector<VValidExtent> ValidExtents;
   /// Lexicographic termination measure (ordered tuple); empty means none.
   std::vector<std::unique_ptr<VExpr>> Decreases;
   std::vector<std::unique_ptr<VStmt>> Body;

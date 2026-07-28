@@ -14,6 +14,7 @@
 #include "VExpr.h"
 #include "VType.h"
 #include "clang/Basic/SourceLocation.h"
+#include "llvm/ADT/StringRef.h"
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -48,6 +49,9 @@ public:
   /// Type of the value stored at this place.
   VType ValueTy;
   SourceLocation Loc;
+  /// Safety local to evaluating this place, such as every fixed-array bound in
+  /// a nested element projection.
+  std::unique_ptr<VExpr> AccessCondition;
   /// Canonical identity of the root object type (empty for scalar roots).
   std::string RootTypeIdentity;
   /// Ordered projections from the root object to this place.
@@ -68,8 +72,25 @@ public:
         VPlaceProjection{VProjectionKind::Deref, {}, 0, 0, L});
   }
 
-  /// Select a record field: address becomes `address + OffsetBytes`.
+  /// Select a record field: address becomes `address + OffsetBytes`. Chained
+  /// field offsets on the same object fold into a single constant offset so a
+  /// promoted subobject address stays a plain `base + offset` term.
   void applyField(std::string Name, uint64_t OffsetBytes, SourceLocation L) {
+    if (OffsetBytes != 0 && !Projections.empty() &&
+        Projections.back().Kind == VProjectionKind::Field &&
+        Address->K == VExpr::BinOp) {
+      auto *Add = static_cast<VBinOpExpr *>(Address.get());
+      if (Add->Op == VBinOp::Add && Add->Rhs->K == VExpr::Literal) {
+        auto *Offset = static_cast<VLiteralExpr *>(Add->Rhs.get());
+        uint64_t Folded = 0;
+        if (!llvm::StringRef(Offset->Value).getAsInteger(10, Folded)) {
+          Offset->Value = std::to_string(Folded + OffsetBytes);
+          Projections.push_back(VPlaceProjection{
+              VProjectionKind::Field, std::move(Name), OffsetBytes, 0, L});
+          return;
+        }
+      }
+    }
     auto Offset = std::make_unique<VLiteralExpr>(
         static_cast<int64_t>(OffsetBytes), VType::makePtr(), L);
     Address =
@@ -93,8 +114,24 @@ public:
 
   const VExpr *address() const { return Address.get(); }
 
+  void addAccessCondition(std::unique_ptr<VExpr> Condition) {
+    if (!Condition)
+      return;
+    if (!AccessCondition) {
+      AccessCondition = std::move(Condition);
+      return;
+    }
+    AccessCondition = std::make_unique<VBinOpExpr>(
+        VBinOp::And, std::move(AccessCondition), std::move(Condition),
+        VType::makeBool(), Loc);
+  }
+
   /// Consume the place, yielding the lowered VLoad/VStore address expression.
   std::unique_ptr<VExpr> takeAddress() { return std::move(Address); }
+
+  std::unique_ptr<VExpr> takeAccessCondition() {
+    return std::move(AccessCondition);
+  }
 };
 
 } // namespace verify

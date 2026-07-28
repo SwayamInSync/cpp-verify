@@ -16,7 +16,8 @@ std::unique_ptr<VStmt> verify::cloneVStmt(const VStmt *S) {
   case VStmt::Store: {
     const auto &St = static_cast<const VStoreStmt &>(*S);
     return std::make_unique<VStoreStmt>(cloneVExpr(St.Ptr.get()),
-                                        cloneVExpr(St.Value.get()), St.Loc);
+                                        cloneVExpr(St.Value.get()), St.Loc,
+                                        cloneVExpr(St.AccessCondition.get()));
   }
   case VStmt::Allocate: {
     const auto &A = static_cast<const VAllocateStmt &>(*S);
@@ -24,6 +25,11 @@ std::unique_ptr<VStmt> verify::cloneVStmt(const VStmt *S) {
         A.Target, A.ProvenanceTarget, A.AllocatedType,
         cloneVExpr(A.Initializer.get()), A.SizeBytes, A.AlignBytes, A.Loc,
         A.IsAutomatic);
+  }
+  case VStmt::EndLifetime: {
+    const auto &E = static_cast<const VEndLifetimeStmt &>(*S);
+    return std::make_unique<VEndLifetimeStmt>(E.Target, E.ProvenanceTarget,
+                                              E.Loc, E.IsFunctionExit);
   }
   case VStmt::Free: {
     const auto &F = static_cast<const VFreeStmt &>(*S);
@@ -145,6 +151,9 @@ VFunction verify::cloneVFunction(const VFunction &Fn) {
   for (const auto &A : Fn.Aliases)
     Out.Aliases.emplace_back(cloneVExpr(A.first.get()),
                              cloneVExpr(A.second.get()));
+  for (const auto &Extent : Fn.ValidExtents)
+    Out.ValidExtents.emplace_back(Extent.Base, Extent.PointerType,
+                                  cloneVExpr(Extent.Length.get()));
   for (const auto &D : Fn.Decreases)
     Out.Decreases.push_back(cloneVExpr(D.get()));
   for (const auto &S : Fn.Body)

@@ -142,9 +142,15 @@ class VLoadExpr : public VExpr {
 public:
   std::string HeapVar;
   std::unique_ptr<VExpr> Ptr;
+  /// Optional access-local safety condition. Frontend object-place lowering
+  /// uses this for fixed-array bounds so short-circuit and conditional
+  /// evaluation guard the bound together with the load.
+  std::unique_ptr<VExpr> AccessCondition;
   VLoadExpr(std::unique_ptr<VExpr> P, VType Ty, SourceLocation Loc,
-            std::string HeapVar = "")
-      : VExpr(Load, Ty, Loc), HeapVar(std::move(HeapVar)), Ptr(std::move(P)) {}
+            std::string HeapVar = "",
+            std::unique_ptr<VExpr> AccessCondition = nullptr)
+      : VExpr(Load, Ty, Loc), HeapVar(std::move(HeapVar)), Ptr(std::move(P)),
+        AccessCondition(std::move(AccessCondition)) {}
 };
 
 class VResultExpr : public VExpr {

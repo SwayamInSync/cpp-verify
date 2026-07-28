@@ -56,7 +56,9 @@ unrollStmts(const std::vector<std::unique_ptr<VStmt>> &Stmts, unsigned K) {
     case VStmt::Store:
       Out.push_back(std::make_unique<VStoreStmt>(
           cloneVExpr(static_cast<const VStoreStmt &>(*S).Ptr.get()),
-          cloneVExpr(static_cast<const VStoreStmt &>(*S).Value.get()), S->Loc));
+          cloneVExpr(static_cast<const VStoreStmt &>(*S).Value.get()), S->Loc,
+          cloneVExpr(
+              static_cast<const VStoreStmt &>(*S).AccessCondition.get())));
       break;
     case VStmt::Call:
       Out.push_back(std::make_unique<VCallStmt>(
@@ -113,6 +115,9 @@ VFunction LoopUnroller::unroll(const VFunction &Fn, unsigned K) {
   for (const auto &A : Fn.Aliases)
     Out.Aliases.emplace_back(cloneVExpr(A.first.get()),
                              cloneVExpr(A.second.get()));
+  for (const auto &Extent : Fn.ValidExtents)
+    Out.ValidExtents.emplace_back(Extent.Base, Extent.PointerType,
+                                  cloneVExpr(Extent.Length.get()));
   for (const auto &Decrease : Fn.Decreases)
     Out.Decreases.push_back(cloneVExpr(Decrease.get()));
   Out.SpecFuel = Fn.SpecFuel;
