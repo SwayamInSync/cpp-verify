@@ -1,13 +1,6 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
-int *escape_pointer()
-  post(true)
-{
-  int *p = new int(1);
-  return p;
-}
-
 int pointer_arithmetic()
   post(result == 1)
 {
@@ -57,6 +50,13 @@ int subscript_store()
   int observed = *p;
   delete p;
   return observed;
+}
+
+int *arithmetic_derived_return()
+  post(result != nullptr)
+{
+  int *owner = new int(1);
+  return owner + 0;
 }
 
 int subscript_reference_binding()
@@ -204,8 +204,8 @@ int reassignment_in_loop()
   return observed;
 }
 
-// VERIFY-DAG: error: escape_pointer: dynamic-storage pointers cannot escape through a return
 // VERIFY-DAG: error: pointer_arithmetic: dynamic-storage dereference requires its direct allocation pointer
+// VERIFY-DAG: error: arithmetic_derived_return: arithmetic on dynamic-storage pointers is unsupported
 // VERIFY-DAG: error: pointer_parameter: dynamic allocation in functions with pointer parameters is not yet supported
 // Dynamic new[] stays out of scope: fixed *automatic* arrays are modelled,
 // but array allocation is still rejected by the new-expression rules.
@@ -221,7 +221,6 @@ int reassignment_in_loop()
 // VERIFY-DAG: error: conditional_erased_pointer_copy: dynamic-storage pointer copies require matching pointee types
 // VERIFY-DAG: error: pointer_return_reassignment_in_loop: dynamic-storage pointer reassignment inside loops is unsupported
 // VERIFY-DAG: error: pointer_return_type_erasure: dynamic-storage pointer copies require direct, conditional, or null local sources
-// VERIFY-DAG: error: foreign_provenance_reassignment: dynamic-storage pointer copies require direct, conditional, or null local sources
 // VERIFY-DAG: error: erased_pointer_call: dynamic-storage pointer arguments require matching direct pointer parameters
 // VERIFY-DAG: error: pointer_to_bool_call: dynamic-storage pointer arguments require matching direct pointer parameters
 // VERIFY-DAG: error: reassignment_in_loop: dynamic-storage pointer reassignment inside loops is unsupported

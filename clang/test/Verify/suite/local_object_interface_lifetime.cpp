@@ -23,6 +23,91 @@ int preserve_incoming_slice(int *pointer)
 int *external_pointer()
   post(result != nullptr);
 
+int *unevaluated_factory(int value)
+  post(result != nullptr)
+  post(*result == value)
+{
+  int *owner = new int(value);
+  return owner;
+}
+
+int *forward_external_pointer()
+  post(result != nullptr)
+{
+  return external_pointer();
+}
+
+int *forward_external_pointer_again()
+  post(result != nullptr)
+{
+  return forward_external_pointer();
+}
+
+int *forward_external_pointer_with_unevaluated_new()
+  post(result != nullptr)
+{
+  int ignored = sizeof(new int);
+  return external_pointer();
+}
+
+int consume_unevaluated_new_wrapper()
+  post(true)
+{
+  int *pointer = forward_external_pointer_with_unevaluated_new();
+  return *pointer;
+}
+
+int *ignore_unevaluated_factory_assignment()
+  post(result != nullptr)
+{
+  int *pointer = external_pointer();
+  unsigned long ignored = sizeof(pointer = unevaluated_factory(1));
+  return pointer;
+}
+
+int consume_unevaluated_factory_assignment()
+  post(true)
+{
+  int *pointer = ignore_unevaluated_factory_assignment();
+  return *pointer;
+}
+
+int *ignore_unevaluated_factory_type()
+  post(result != nullptr)
+{
+  int *pointer = external_pointer();
+  decltype((pointer = unevaluated_factory(1), 0)) ignored = 0;
+  return pointer;
+}
+
+int consume_unevaluated_factory_type()
+  post(true)
+{
+  int *pointer = ignore_unevaluated_factory_type();
+  return *pointer;
+}
+
+int *null_pointer_wrapper()
+  post(result == nullptr)
+{
+  return nullptr;
+}
+
+bool consume_null_pointer_wrapper()
+  post(result)
+{
+  int *pointer = null_pointer_wrapper();
+  return pointer == nullptr;
+}
+
+int delete_null_pointer_wrapper()
+  post(true)
+{
+  int *pointer = null_pointer_wrapper();
+  delete pointer;
+  return 0;
+}
+
 int preserve_prior_call_result()
   post(true)
 {
@@ -79,6 +164,18 @@ int skipped_local_conditional(bool take, int divisor)
 }
 
 // VERIFY-DAG: Verified: preserve_incoming_slice
+// VERIFY-DAG: Verified: unevaluated_factory
+// VERIFY-DAG: Verified: forward_external_pointer
+// VERIFY-DAG: Verified: forward_external_pointer_again
+// VERIFY-DAG: Verified: forward_external_pointer_with_unevaluated_new
+// VERIFY-DAG: Verified: consume_unevaluated_new_wrapper
+// VERIFY-DAG: Verified: ignore_unevaluated_factory_assignment
+// VERIFY-DAG: Verified: consume_unevaluated_factory_assignment
+// VERIFY-DAG: Verified: ignore_unevaluated_factory_type
+// VERIFY-DAG: Verified: consume_unevaluated_factory_type
+// VERIFY-DAG: Verified: null_pointer_wrapper
+// VERIFY-DAG: Verified: consume_null_pointer_wrapper
+// VERIFY-DAG: Verified: delete_null_pointer_wrapper
 // VERIFY-DAG: Verified: preserve_prior_call_result
 // VERIFY-DAG: Verified: preserve_stored_abstract_pointer
 // VERIFY-DAG: Verified: skipped_parameter_conditional
@@ -87,6 +184,18 @@ int skipped_local_conditional(bool take, int divisor)
 // VERIFY-DAG: Verified: skipped_local_conditional
 
 // BMC-DAG: Verified: preserve_incoming_slice
+// BMC-DAG: Verified: unevaluated_factory
+// BMC-DAG: Verified: forward_external_pointer
+// BMC-DAG: Verified: forward_external_pointer_again
+// BMC-DAG: Verified: forward_external_pointer_with_unevaluated_new
+// BMC-DAG: Verified: consume_unevaluated_new_wrapper
+// BMC-DAG: Verified: ignore_unevaluated_factory_assignment
+// BMC-DAG: Verified: consume_unevaluated_factory_assignment
+// BMC-DAG: Verified: ignore_unevaluated_factory_type
+// BMC-DAG: Verified: consume_unevaluated_factory_type
+// BMC-DAG: Verified: null_pointer_wrapper
+// BMC-DAG: Verified: consume_null_pointer_wrapper
+// BMC-DAG: Verified: delete_null_pointer_wrapper
 // BMC-DAG: Verified: preserve_prior_call_result
 // BMC-DAG: Verified: preserve_stored_abstract_pointer
 // BMC-DAG: Verified: skipped_parameter_conditional
