@@ -177,37 +177,42 @@ disjointness facts should be bounded (as in real buffer code); an *unbounded*
 pure-disequality disjointness (``i != k`` with no range) may report ``unknown``
 (see :doc:`limitations`).
 
-Same-object pointer difference
-------------------------------
+Same-array pointer difference
+-----------------------------
 
-A bounded form of pointer-pointer subtraction is supported in executable code:
+Pointer-pointer subtraction is supported in executable code when both
+positions are proved to belong to one array object:
 
 .. code-block:: cpp
 
-   long one_step(int *p)
-     pre(p != nullptr)
-     post(result == 1)
+   long distance(int *p, int n, int i, int j)
+     pre(valid(p, n) && p != nullptr && n >= 0 &&
+         0 <= i && i <= n && 0 <= j && j <= n)
+     post(result == i - j)
    {
-     return (p + 1) - p;
+     return (p + i) - (p + j);
    }
 
-The operands must have the same complete pointee type and each must be a direct
-pointer or an inline ``+0``/``+1`` position. CppVerify subtracts their
-target-byte addresses, divides by ``sizeof(T)``, and converts the element count
-to the target ``ptrdiff_t`` machine type. It separately proves that both bases
-are non-null and live and that they have one object origin.
+The operands must have the same complete pointee type and be compositional
+pointer-arithmetic positions rooted at one base. With ``--check-ub``, a
+``valid(p, n)`` marker supplies the extent and each position must lie in the
+closed interval ``[0, n]``; the inclusive endpoint is the legal one-past
+position. CppVerify subtracts target-byte addresses, divides by ``sizeof(T)``,
+proves that the mathematical element distance is representable by the target
+``ptrdiff_t``, and only then materializes the machine result. Signed, unsigned,
+and target-width indices follow their C++ machine representations.
 
-For abstract parameters, that origin currently means the same syntactic base:
-``(p + 1) - p`` is accepted, while ``left - right`` remains rejected even under
-``left == right`` or ``aliases(left, right)``. Numeric address equality is not
-C++ provenance. Local dynamic aliases may instead establish the common origin
-through their shared, nonzero lifetime identity.
+Without a declared extent, a direct abstract parameter or represented scalar
+dynamic allocation has only its complete-object positions ``0`` and ``1``.
+Abstract array operands must use the same syntactic SSA base. Merely proving
+``left == right`` or writing ``aliases(left, right)`` does not establish shared
+C++ provenance. Local dynamic aliases may instead establish one origin through
+their shared, nonzero lifetime identity.
 
-Larger offsets, stored one-past values, general array distances, distinct
-allocations, null or dangling operands, pointer compound assignment, and
-pointer difference inside explicit ``spec`` or lifted ``constexpr`` functions
-fail closed. The spec restriction avoids composing separately bounded offsets
-through inlining until origin-and-position metadata is first-class.
+Stored/indirect pointer positions whose root cannot be recovered, distinct
+origins, null or dangling operands, out-of-range positions, unrepresentable
+distances, pointer compound assignment, and pointer difference inside explicit
+``spec`` or lifted ``constexpr`` functions fail closed.
 
 Local scalar dynamic storage
 ----------------------------
@@ -265,6 +270,15 @@ access rooted at that parameter must then prove ``0 <= i < n``. The marker is
 discovered before its intentionally trivial body is inlined. It must occur as a
 positive top-level conjunction clause with a bare complete-object pointer, and
 each pointer may have only one marker; ambiguous forms fail closed.
+
+The same marker composes across modular calls. Passing ``p + offset`` to a
+callee with ``valid(q, length)`` requires a same-root proof of
+``0 <= offset``, ``0 <= length``, and ``offset + length <= n``. An empty slice
+may start at ``p + n``. Read-only slice calls preserve the heap, including
+acyclic chains of read-only callees; exact-cell effects such as
+``modifies(q[0])`` are also supported. An unbounded region effect
+``modifies(*q)`` through a proper sub-slice remains fail-closed because the
+current frame IR cannot express a symbolic finite write range.
 
 Without ``--check-ub``, dereferences must still be non-null and live, but the
 verifier does not invent a buffer length. Parameter pointers use abstract

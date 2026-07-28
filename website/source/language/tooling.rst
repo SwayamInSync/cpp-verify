@@ -37,9 +37,10 @@ Backends
    * - ``--unroll=N``
      - BMC loop bound only.
    * - ``--check-ub``
-     - On the Z3 backend, additionally recognize ``valid(p, n)`` preconditions
-       as buffer extents and prove every indexed access is in bounds. Markers
-       must be positive top-level conjunction clauses on bare pointers. Core
+     - On the Z3 and BMC backends, additionally recognize ``valid(p, n)``
+       preconditions as buffer extents and prove indexed accesses, modular
+       sub-slices, and same-array pointer positions are in bounds. Markers must
+       be positive top-level conjunction clauses on bare pointers. Core
        expression definedness (overflow, division, shifts, and dereferences)
        is always checked. See :doc:`integers` and :doc:`pointers`.
    * - ``--timeout=N``

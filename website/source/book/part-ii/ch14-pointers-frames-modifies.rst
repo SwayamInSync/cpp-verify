@@ -156,8 +156,8 @@ integers rather than wrapping machine words.
 Declaring a checked extent
 --------------------------
 
-On the Z3 path, ``--check-ub`` gives a conventional ``valid`` spec call special
-extent meaning:
+On the Z3 and BMC paths, ``--check-ub`` gives a conventional ``valid`` spec
+call special extent meaning:
 
 .. code-block:: cpp
 
@@ -180,15 +180,26 @@ caller's allocation. Direct local scalar ``new``/``delete`` has a separate
 concrete liveness, initialization, size, alignment, and local
 pointer-provenance model (see :doc:`../../language/dynamic-storage`).
 
-Pointer difference is supported only at the complete-object boundary:
-``(p + 1) - p``, ``p - (p + 1)``, and zero differences formed from a direct
-base or inline ``+0``/``+1`` position. The verifier subtracts target-byte
-addresses, divides by ``sizeof(T)``, and proves non-nullness, liveness, and a
-common origin. Abstract pointers must use the same syntactic base; even
-``left == right`` does not establish shared C++ provenance. Local dynamic
-aliases can establish it through their shared lifetime identity. Larger/general
-array offsets and subtraction in explicit specs or lifted ``constexpr``
-functions remain fail-closed.
+Pointer difference supports general same-array positions under a declared
+extent. For ``(p + i) - (p + j)``, both indices must be proved in ``[0, n]``
+for the same ``valid(p, n)`` origin; the inclusive endpoint is the legal
+one-past position. The verifier subtracts target-byte addresses, divides by
+``sizeof(T)``, proves non-nullness, liveness, common origin, bounds, and
+``ptrdiff_t`` representability, and then materializes the machine result.
+Without an extent, abstract and scalar-dynamic pointers retain only base and
+one-past complete-object positions. Merely proving ``left == right`` does not
+establish shared C++ provenance. Stored/indirect positions, distinct origins,
+and subtraction in explicit specs or lifted ``constexpr`` functions remain
+fail-closed.
+
+Extents also compose at modular calls. If a callee requires
+``valid(q, length)`` and receives ``p + offset``, the caller must prove one
+origin and ``0 <= offset``, ``0 <= length``, and
+``offset + length <= n``. Empty one-past slices are legal. Read-only slice
+chains preserve the heap, while exact-cell effects such as
+``modifies(q[0])`` update only the corresponding caller cell. Symbolic
+writable ranges and unbounded ``modifies(*q)`` through a proper sub-slice still
+fail closed.
 
 Type invariants
 ---------------

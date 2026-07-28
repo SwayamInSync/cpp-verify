@@ -53,10 +53,10 @@ the signed-minimum divided by minus one case, invalid shifts, and non-null
 abstract-valid dereferences. They also follow operations executed inside lifted
 ``constexpr`` functions.
 
-The historically named ``--check-ub`` option is now specifically the Z3
-buffer-bounds rollout: it discovers ``valid(p, n)`` before that marker's trivial
-spec body is inlined and generates index obligations. It does not control the
-always-on checks above.
+The historically named ``--check-ub`` option is now specifically the Z3/BMC
+extent rollout: it discovers ``valid(p, n)`` before that marker's trivial spec
+body is inlined and generates access, modular-slice, and same-array-position
+obligations. It does not control the always-on checks above.
 
 What is always checked
 ----------------------
@@ -121,6 +121,13 @@ For sound discovery, ``valid(p, n)`` must be a positive top-level conjunction
 clause, ``p`` must be the bare complete-object pointer, and each pointer may
 have only one marker. Shifted, disjunctive, conditional, or duplicate markers
 are rejected instead of being interpreted as unconditional extents.
+
+At a modular call, a callee extent ``valid(q, length)`` may be instantiated by
+``q = p + offset`` only after proving the subrange is nonnegative and contained
+in the caller's extent. The same inclusive ``[0, n]`` position proof governs
+same-array pointer subtraction, while dereferences keep the half-open
+``[0, n)`` access rule. Pointer differences additionally prove that the element
+distance is representable by target ``ptrdiff_t``.
 
 Inside a loop the bound is discharged the same way an invariant is — a fill or
 copy loop is proven memory-safe from its guard and invariant. An access through a

@@ -233,9 +233,11 @@ allocate cannot yet also accept pointer parameters, and allocation/deallocation
 inside loop bodies is rejected.
 
 Also unsupported are ``new[]``/``delete[]``, nothrow or placement allocation,
-non-scalar objects and destructors, modular allocation-returning functions,
-and general array pointer subtraction. These cases fail closed instead of
-falling back to the abstract parameter-pointer model.
+non-scalar objects and destructors, and modular allocation-returning functions.
+General same-array subtraction is available for abstract ``valid(p, n)``
+interfaces, but scalar dynamic allocations retain only their base and one-past
+positions. Unsupported cases fail closed instead of falling back to the
+abstract parameter-pointer model.
 
 Pointer parameters remain abstract interface objects. Their implicit validity
 and initialization assumptions are not derived from a concrete caller

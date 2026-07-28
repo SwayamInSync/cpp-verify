@@ -67,13 +67,22 @@ argument.
 
 Calls also enforce the caller's frame in its **entry state**. Exact footprints
 (``p[i]``, ``p->field``) freshen only those addresses. A region footprint
-(``*p``), or a pointer-taking declaration with no explicit footprint, freshens
-the complete value heap because parameter allocation identity does not yet
-cross modular boundaries. The postcondition then re-establishes whatever the
-caller may rely on. This conservative boundary prevents offset writes from
-masquerading as preservation of unrelated memory. Functions that perform
-dynamic allocation or deallocation are currently verified only as standalone
-bodies; calls to them fail closed until lifetime effects have contract syntax.
+(``*p``) may freshen the complete value heap because its finite extent is not
+part of the frame IR. A conservative body scan preserves the heap for verified,
+acyclic read-only callees and read-only call chains; unknown, external,
+recursive, allocating, freeing, or writing callees remain effectful. The
+postcondition then re-establishes whatever the caller may rely on. This boundary
+prevents offset writes from masquerading as preservation of unrelated memory.
+Functions that perform dynamic allocation or deallocation are currently
+verified only as standalone bodies; calls to them fail closed until lifetime
+effects have contract syntax.
+
+With ``--check-ub``, ``valid(p, n)`` extents also cross calls as checked
+sub-slices. Passing ``p + offset`` to a ``valid(q, length)`` formal asserts one
+root, nonnegative offset and length, and
+``offset + length <= n``. Empty one-past slices and exact-cell writes are
+supported. A symbolic writable range or unbounded ``modifies(*q)`` through a
+proper sub-slice fails closed rather than silently widening the effect.
 
 A caller-owned dynamic scalar may be passed in the other direction to a
 verified, non-allocating executable callee. Its direct matching pointer

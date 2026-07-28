@@ -237,20 +237,23 @@ that also accept pointer parameters.
 Pointer difference
 ~~~~~~~~~~~~~~~~~~
 
-A bounded executable pointer-difference fragment is supported:
+A bounded executable same-array pointer-difference fragment is supported:
 
 - both operands have one matching complete pointee type;
-- each operand is a direct pointer or inline ``+0``/``+1`` position;
+- operands may contain compositional arithmetic rooted at one pointer;
+- a ``valid(p, n)`` extent admits element positions in ``[0, n]``, including
+  the one-past endpoint; without an extent, direct abstract and represented
+  scalar-dynamic pointers retain only complete-object positions ``0`` and ``1``;
 - abstract operands use one syntactic SSA base, or dynamic aliases carry one
   shared live lifetime identity;
 - target-byte difference is divided by ``sizeof(T)`` and converted to target
-  machine ``ptrdiff_t``.
+  machine ``ptrdiff_t`` only after proving representability.
 
-General array distances, stored offsets, merely equal abstract addresses,
-distinct allocations, null/dangling operands, explicit ``spec`` bodies, and
-lifted ``constexpr`` specs fail closed. Specs need first-class
-``(object origin, extent, element position)`` metadata that survives
-substitution, quantifiers, and recursion before this can be relaxed soundly.
+Stored or indirect positions whose root cannot be recovered, merely equal
+abstract addresses, distinct allocations, null/dangling operands, out-of-range
+positions, explicit ``spec`` bodies, and lifted ``constexpr`` specs fail closed.
+Specs still need first-class ``(object origin, extent, element position)``
+metadata that survives substitution, quantifiers, and recursion.
 
 Missing low-level memory semantics
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -269,6 +272,13 @@ postconditions. Exact footprints such as ``modifies(p[i])`` and
 ``modifies(p->field)`` preserve other addresses. An open region
 ``modifies(*p)`` may conservatively forget the whole value heap at an abstract
 call because its finite extent is unknown.
+
+With ``--check-ub``, a callee ``valid(q, length)`` extent can be instantiated
+from a caller ``valid(p, n)`` extent only after proving a same-root,
+nonnegative subrange contained in ``[0, n]``. Empty one-past slices, transitive
+read-only forwarding, and exact-cell slice writes are supported. Symbolic
+writable-range summaries and unbounded region writes through a sub-slice remain
+fail-closed.
 
 Checked local dynamic identities can cross a narrow scalar call/return boundary
 only when the caller actually owns the identity. Missing effect concepts
@@ -315,8 +325,9 @@ division/remainder, invalid shifts, non-null/live represented dereferences,
 supported local definite initialization, and local scalar dynamic lifetime
 errors.
 
-``--check-ub`` additionally adds the restricted ``valid(p, n)`` buffer-bound
-layer. It is not yet comprehensive C++ undefined-behavior checking.
+``--check-ub`` additionally adds the restricted ``valid(p, n)`` extent layer
+for buffer accesses, modular sub-slices, and same-array pointer positions. It
+is not yet comprehensive C++ undefined-behavior checking.
 
 Missing general UB semantics include object provenance outside the represented
 fragment, strict aliasing, arbitrary alignment, unsequenced side effects and
