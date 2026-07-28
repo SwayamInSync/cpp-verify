@@ -13,6 +13,7 @@ namespace verify {
 VerifyResult exportLeanScratchPad(const ObligationModule &Module,
                                   llvm::raw_ostream &OS, bool EmitPreamble,
                                   std::set<std::string> &EmittedFunctions,
+                                  std::set<std::string> &EmittedTheorems,
                                   unsigned ModuleIndex,
                                   std::vector<std::string> *ProjectGoals);
 

@@ -1,29 +1,36 @@
 //===--- Obligation.cpp ---------------------------------------------------===//
-#include "Obligation.h"
-#include "../IR/VType.h"
+#include "ObligationLowering.h"
 #include "SpecAxioms.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
 #include <algorithm>
 
 using namespace clang;
 using namespace verify;
 
-LogicSort LogicSort::boolSort() { return {LogicSortKind::Bool, 0}; }
+LogicSort LogicSort::boolSort() {
+  return {LogicSortKind::Bool, 0, LogicSignedness::None};
+}
 
-LogicSort LogicSort::mathematicalInteger() {
-  return {LogicSortKind::MathematicalInteger, 0};
+LogicSort LogicSort::mathematicalInteger(unsigned BitWidth, bool IsSigned) {
+  return {LogicSortKind::MathematicalInteger, BitWidth,
+          IsSigned ? LogicSignedness::Signed : LogicSignedness::Unsigned};
 }
 
 LogicSort LogicSort::bitVector(unsigned BitWidth, bool IsSigned) {
-  (void)IsSigned;
-  return {LogicSortKind::BitVector, BitWidth};
+  return {LogicSortKind::BitVector, BitWidth,
+          IsSigned ? LogicSignedness::Signed : LogicSignedness::Unsigned};
 }
 
-LogicSort LogicSort::pointer() { return {LogicSortKind::Pointer, 0}; }
+LogicSort LogicSort::pointer() {
+  return {LogicSortKind::Pointer, 0, LogicSignedness::Unsigned};
+}
 
-LogicSort LogicSort::heap() { return {LogicSortKind::Heap, 0}; }
+LogicSort LogicSort::heap() {
+  return {LogicSortKind::Heap, 0, LogicSignedness::None};
+}
 
 const char *verify::logicSortName(LogicSortKind Kind) {
   switch (Kind) {
@@ -76,19 +83,39 @@ static LogicSort logicSortFor(VTypeKind Kind, VIntMode Mode, unsigned BitWidth,
   if (Kind != VTypeKind::Int32 && Kind != VTypeKind::Int64)
     return {};
   if (Mode == VIntMode::Math)
-    return LogicSort::mathematicalInteger();
+    return LogicSort::mathematicalInteger(BitWidth, IsSigned);
   return LogicSort::bitVector(BitWidth, IsSigned);
 }
 
-static void setLogicSort(VCExpr &Expr) {
-  Expr.Sort =
-      logicSortFor(Expr.TypeKind, Expr.IntMode, Expr.BitWidth, Expr.IsSigned);
+static LogicOverflowOp logicOverflowOp(VOverflowOp Op) {
+  switch (Op) {
+  case VOverflowOp::Add:
+    return LogicOverflowOp::Add;
+  case VOverflowOp::Sub:
+    return LogicOverflowOp::Sub;
+  case VOverflowOp::Mul:
+    return LogicOverflowOp::Mul;
+  case VOverflowOp::Neg:
+    return LogicOverflowOp::Neg;
+  case VOverflowOp::SDiv:
+    return LogicOverflowOp::SignedDiv;
+  }
+  llvm_unreachable("unknown VCR overflow operation");
 }
 
-static void setBoolSort(VCExpr &Expr) {
-  Expr.TypeKind = VTypeKind::Bool;
-  Expr.Sort = LogicSort::boolSort();
+static ObligationKind obligationKind(ProofObligationKind Kind) {
+  switch (Kind) {
+  case ProofObligationKind::Assertion:
+    return ObligationKind::Assertion;
+  case ProofObligationKind::Postcondition:
+    return ObligationKind::Postcondition;
+  case ProofObligationKind::Unwinding:
+    return ObligationKind::Unwinding;
+  }
+  llvm_unreachable("unknown VCR proof-obligation kind");
 }
+
+static void setBoolSort(VCExpr &Expr) { Expr.Sort = LogicSort::boolSort(); }
 
 static void setHeapSort(VCExpr &Expr) { Expr.Sort = LogicSort::heap(); }
 
@@ -164,20 +191,13 @@ static bool containsHeapSelect(const VCExpr *E) {
   return false;
 }
 
-static bool isIntegerKind(VTypeKind Kind) {
-  return Kind == VTypeKind::Int32 || Kind == VTypeKind::Int64;
-}
-
 static std::unique_ptr<VCExpr> cloneVCExpr(const VCExpr *E) {
   if (!E)
     return nullptr;
   auto Copy = std::make_unique<VCExpr>(E->K);
-  Copy->TypeKind = E->TypeKind;
   Copy->Sort = E->Sort;
   Copy->Loc = E->Loc;
-  Copy->IntMode = E->IntMode;
-  Copy->IsSigned = E->IsSigned;
-  Copy->BitWidth = E->BitWidth;
+  Copy->Source = E->Source;
   Copy->IntVal = E->IntVal;
   Copy->BoolVal = E->BoolVal;
   Copy->Name = E->Name;
@@ -189,14 +209,68 @@ static std::unique_ptr<VCExpr> cloneVCExpr(const VCExpr *E) {
   return Copy;
 }
 
+static bool equalLogicExpr(const LogicExpr *Left, const LogicExpr *Right) {
+  if (!Left || !Right)
+    return Left == Right;
+  if (Left->K != Right->K || Left->Sort.Kind != Right->Sort.Kind ||
+      Left->Sort.BitWidth != Right->Sort.BitWidth ||
+      Left->Sort.Signedness != Right->Sort.Signedness ||
+      Left->IntVal != Right->IntVal || Left->BoolVal != Right->BoolVal ||
+      Left->Name != Right->Name || Left->Binder != Right->Binder ||
+      Left->OverflowOp != Right->OverflowOp ||
+      Left->SpecCallee != Right->SpecCallee ||
+      Left->Children.size() != Right->Children.size())
+    return false;
+  for (unsigned I = 0; I != Left->Children.size(); ++I)
+    if (!equalLogicExpr(Left->Children[I].get(), Right->Children[I].get()))
+      return false;
+  return true;
+}
+
+static std::unique_ptr<VCExpr>
+buildCompleteGoal(const std::vector<Obligation> &Obligations) {
+  if (Obligations.empty())
+    return vcTrue();
+  auto Complete = cloneVCExpr(Obligations.front().Goal.get());
+  for (unsigned I = 1; I != Obligations.size(); ++I)
+    Complete =
+        vcAnd(std::move(Complete), cloneVCExpr(Obligations[I].Goal.get()));
+  return Complete;
+}
+
+static bool isExactNegation(const LogicExpr *Query, const LogicExpr *Goal) {
+  return Query && Query->K == LogicExpr::Not &&
+         Query->Sort.Kind == LogicSortKind::Bool &&
+         Query->Children.size() == 1 &&
+         equalLogicExpr(Query->Children.front().get(), Goal);
+}
+
+static bool containsEmbeddedNul(llvm::StringRef Value) {
+  return Value.contains('\0');
+}
+
+static bool isCanonicalIntegerLiteral(llvm::StringRef Value) {
+  constexpr size_t MaxIntegerDigits = 4096;
+  if (Value.empty() || Value.size() > MaxIntegerDigits)
+    return false;
+  size_t I = Value.front() == '-' ? 1 : 0;
+  if (I == Value.size())
+    return false;
+  if (Value[I] == '0')
+    return I == 0 && Value.size() == 1;
+  if (Value[I] < '1' || Value[I] > '9')
+    return false;
+  for (++I; I != Value.size(); ++I)
+    if (Value[I] < '0' || Value[I] > '9')
+      return false;
+  return true;
+}
+
 static std::unique_ptr<VCExpr> vcBinary(VCExpr::Kind Kind,
                                         std::unique_ptr<VCExpr> L,
                                         std::unique_ptr<VCExpr> R) {
   auto N = std::make_unique<VCExpr>(Kind);
   setBoolSort(*N);
-  N->IntMode = L->IntMode;
-  N->IsSigned = L->IsSigned;
-  N->BitWidth = L->BitWidth;
   N->Loc = L->Loc;
   N->Children.push_back(std::move(L));
   N->Children.push_back(std::move(R));
@@ -213,13 +287,45 @@ static std::unique_ptr<VCExpr> mathLimit(unsigned BitWidth, bool IsSigned,
   llvm::SmallString<64> Buffer;
   Value.toString(Buffer, 10, IsSigned);
   auto N = std::make_unique<VCExpr>(VCExpr::IntLit);
-  N->TypeKind = BitWidth > 32 ? VTypeKind::Int64 : VTypeKind::Int32;
-  N->IntMode = VIntMode::Math;
-  N->IsSigned = IsSigned;
-  N->BitWidth = BitWidth;
   N->IntVal = std::string(Buffer);
-  setLogicSort(*N);
+  N->Sort = LogicSort::mathematicalInteger(BitWidth, IsSigned);
   return N;
+}
+
+static bool validateLogicSort(const LogicSort &Sort, std::string &Error) {
+  if (Sort.Kind == LogicSortKind::Invalid) {
+    Error = "invalid sort in obligation IR";
+    return false;
+  }
+  if (Sort.Kind == LogicSortKind::BitVector ||
+      Sort.Kind == LogicSortKind::MathematicalInteger) {
+    if (Sort.BitWidth == 0) {
+      Error = "zero-width bitvector in obligation IR";
+      return false;
+    }
+    if (Sort.BitWidth > MaxLogicIntegerBitWidth) {
+      Error = "integer width exceeds the obligation IR limit";
+      return false;
+    }
+  } else if (Sort.BitWidth != 0) {
+    Error = "non-integer sort has a bit width in obligation IR";
+    return false;
+  }
+  if (Sort.Kind == LogicSortKind::Bool || Sort.Kind == LogicSortKind::Heap) {
+    if (Sort.Signedness != LogicSignedness::None) {
+      Error = "non-numeric sort has signedness in obligation IR";
+      return false;
+    }
+  } else if (Sort.Kind == LogicSortKind::Pointer) {
+    if (Sort.Signedness != LogicSignedness::Unsigned) {
+      Error = "pointer sort is not unsigned in obligation IR";
+      return false;
+    }
+  } else if (Sort.Signedness == LogicSignedness::None) {
+    Error = "integer sort lacks signedness in obligation IR";
+    return false;
+  }
+  return true;
 }
 
 static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error) {
@@ -227,12 +333,24 @@ static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error) {
     Error = "null term in obligation IR";
     return false;
   }
-  if (Expr->Sort.Kind == LogicSortKind::Invalid) {
-    Error = "untyped term in obligation IR";
+  if (!validateLogicSort(Expr->Sort, Error))
+    return false;
+  if (containsEmbeddedNul(Expr->IntVal) || containsEmbeddedNul(Expr->Name) ||
+      containsEmbeddedNul(Expr->Binder) ||
+      containsEmbeddedNul(Expr->SpecCallee) ||
+      containsEmbeddedNul(Expr->Source.File)) {
+    Error = "embedded NUL in obligation term";
     return false;
   }
-  if (Expr->Sort.Kind == LogicSortKind::BitVector && Expr->Sort.BitWidth == 0) {
-    Error = "zero-width bitvector in obligation IR";
+  if ((Expr->K != LogicExpr::IntLit && Expr->IntVal != "0") ||
+      (Expr->K != LogicExpr::BoolLit && Expr->BoolVal) ||
+      (Expr->K != LogicExpr::Var && !Expr->Name.empty()) ||
+      (Expr->K != LogicExpr::Forall && Expr->K != LogicExpr::Exists &&
+       !Expr->Binder.empty()) ||
+      (Expr->K != LogicExpr::NoOverflow &&
+       Expr->OverflowOp != LogicOverflowOp::Add) ||
+      (Expr->K != LogicExpr::SpecCall && !Expr->SpecCallee.empty())) {
+    Error = "inactive payload is set in obligation term";
     return false;
   }
   for (const auto &Child : Expr->Children)
@@ -246,7 +364,12 @@ static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error) {
     return false;
   };
   auto sameSort = [](const LogicSort &Left, const LogicSort &Right) {
-    return Left.Kind == Right.Kind && Left.BitWidth == Right.BitWidth;
+    if (Left.Kind != Right.Kind)
+      return false;
+    if (Left.Kind == LogicSortKind::MathematicalInteger)
+      return true;
+    return Left.BitWidth == Right.BitWidth &&
+           Left.Signedness == Right.Signedness;
   };
   auto requireSort = [&](LogicSortKind Kind, const char *Message) {
     if (Expr->Sort.Kind == Kind)
@@ -276,6 +399,10 @@ static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error) {
   case VCExpr::IntLit:
     if (!requireArity(0, 0))
       return false;
+    if (!isCanonicalIntegerLiteral(Expr->IntVal)) {
+      Error = "integer literal is not canonical signed decimal";
+      return false;
+    }
     if (Expr->Sort.Kind == LogicSortKind::MathematicalInteger ||
         Expr->Sort.Kind == LogicSortKind::BitVector ||
         Expr->Sort.Kind == LogicSortKind::Pointer)
@@ -283,6 +410,10 @@ static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error) {
     Error = "integer literal has a non-numeric sort";
     return false;
   case VCExpr::Var:
+    if (Expr->Name.empty()) {
+      Error = "logical variable has no identity";
+      return false;
+    }
     return requireArity(0, 0);
   case VCExpr::Not:
     return requireArity(1, 1) &&
@@ -381,6 +512,12 @@ static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error) {
       Error = "ordered comparison has non-numeric operands";
       return false;
     }
+    if (Expr->Children[0]->Sort.Kind == LogicSortKind::BitVector &&
+        Expr->Children[0]->Sort.Signedness !=
+            Expr->Children[1]->Sort.Signedness) {
+      Error = "bitvector comparison operands have different signedness";
+      return false;
+    }
     return true;
   case VCExpr::Add:
   case VCExpr::Sub:
@@ -427,12 +564,20 @@ static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error) {
   case VCExpr::BitAnd:
   case VCExpr::BitOr:
   case VCExpr::BitXor:
-  case VCExpr::Shl:
-  case VCExpr::Shr:
     if (!requireArity(2, 2) || Expr->Sort.Kind != LogicSortKind::BitVector ||
         !sameSort(Expr->Sort, Expr->Children[0]->Sort) ||
         !sameSort(Expr->Sort, Expr->Children[1]->Sort)) {
       Error = "bitwise term has inconsistent bitvector sorts";
+      return false;
+    }
+    return true;
+  case VCExpr::Shl:
+  case VCExpr::Shr:
+    if (!requireArity(2, 2) || Expr->Sort.Kind != LogicSortKind::BitVector ||
+        !sameSort(Expr->Sort, Expr->Children[0]->Sort) ||
+        Expr->Children[1]->Sort.Kind != LogicSortKind::BitVector ||
+        Expr->Children[1]->Sort.BitWidth != Expr->Sort.BitWidth) {
+      Error = "shift term has inconsistent bitvector sorts";
       return false;
     }
     return true;
@@ -467,6 +612,10 @@ static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error) {
                             "heap store has a non-heap output");
   case VCExpr::Forall:
   case VCExpr::Exists:
+    if (Expr->Binder.empty()) {
+      Error = "quantifier has no binder identity";
+      return false;
+    }
     return requireArity(3, 3) &&
            requireSort(LogicSortKind::Bool,
                        "quantifier has a non-boolean result") &&
@@ -481,7 +630,7 @@ static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error) {
         !requireSort(LogicSortKind::Bool,
                      "overflow predicate has a non-boolean result"))
       return false;
-    if ((Expr->OverflowOp == VOverflowOp::Neg) !=
+    if ((Expr->OverflowOp == LogicOverflowOp::Neg) !=
         (Expr->Children.size() == 1)) {
       Error = "overflow predicate has the wrong operand count";
       return false;
@@ -503,11 +652,71 @@ static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error) {
   return false;
 }
 
+static void collectQuantifierBinders(const LogicExpr *Expr,
+                                     std::set<std::string> &Binders) {
+  if (!Expr)
+    return;
+  if (Expr->K == LogicExpr::Forall || Expr->K == LogicExpr::Exists)
+    Binders.insert(Expr->Binder);
+  for (const auto &Child : Expr->Children)
+    collectQuantifierBinders(Child.get(), Binders);
+}
+
+static bool equivalentVariableSort(const LogicSort &Left,
+                                   const LogicSort &Right) {
+  if (Left.Kind != Right.Kind)
+    return false;
+  if (Left.Kind == LogicSortKind::MathematicalInteger)
+    return true;
+  return Left.BitWidth == Right.BitWidth && Left.Signedness == Right.Signedness;
+}
+
+static bool validateVariableScopes(
+    const LogicExpr *Expr, const std::set<std::string> &AllBinders,
+    std::set<std::string> Bound,
+    std::map<std::string, LogicSort> &FreeVariables, std::string &Error) {
+  if (!Expr)
+    return false;
+  if ((Expr->K == LogicExpr::Forall || Expr->K == LogicExpr::Exists))
+    Bound.insert(Expr->Binder);
+  if (Expr->K == LogicExpr::Var) {
+    if (Bound.count(Expr->Name)) {
+      if (Expr->Sort.Kind != LogicSortKind::MathematicalInteger) {
+        Error = "quantifier binder occurrence is not a mathematical integer";
+        return false;
+      }
+    } else {
+      if (AllBinders.count(Expr->Name)) {
+        Error = "quantifier binder collides with a free variable";
+        return false;
+      }
+      auto [It, Inserted] = FreeVariables.emplace(Expr->Name, Expr->Sort);
+      if (!Inserted && !equivalentVariableSort(It->second, Expr->Sort)) {
+        Error = "logical variable has inconsistent sorts: " + Expr->Name;
+        return false;
+      }
+    }
+  }
+  for (const auto &Child : Expr->Children)
+    if (!validateVariableScopes(Child.get(), AllBinders, Bound, FreeVariables,
+                                Error))
+      return false;
+  return true;
+}
+
+static bool validateVariableScopes(const LogicExpr *Expr, std::string &Error) {
+  std::set<std::string> Binders;
+  collectQuantifierBinders(Expr, Binders);
+  std::map<std::string, LogicSort> FreeVariables;
+  return validateVariableScopes(Expr, Binders, {}, FreeVariables, Error);
+}
+
 static bool canCoerceLogicSort(const LogicSort &Source,
                                const LogicSort &Target) {
   if (Source.Kind == Target.Kind)
     return Source.Kind != LogicSortKind::BitVector ||
-           Source.BitWidth == Target.BitWidth;
+           (Source.BitWidth == Target.BitWidth &&
+            Source.Signedness == Target.Signedness);
   return (Source.Kind == LogicSortKind::MathematicalInteger &&
           Target.Kind == LogicSortKind::BitVector) ||
          (Source.Kind == LogicSortKind::BitVector &&
@@ -561,7 +770,9 @@ validateDefinitionVariables(const LogicExpr *Expr,
       return false;
     }
     if (It->second.Kind != Expr->Sort.Kind ||
-        It->second.BitWidth != Expr->Sort.BitWidth) {
+        (It->second.Kind != LogicSortKind::MathematicalInteger &&
+         (It->second.BitWidth != Expr->Sort.BitWidth ||
+          It->second.Signedness != Expr->Sort.Signedness))) {
       Error = "logical function parameter sort mismatch: " + Expr->Name;
       return false;
     }
@@ -625,7 +836,8 @@ class ObligationBuilder {
   static VIntMode intModeOf(const VCExpr *E) {
     if (!E)
       return VIntMode::Machine;
-    return E->IntMode;
+    return E->Sort.Kind == LogicSortKind::BitVector ? VIntMode::Machine
+                                                    : VIntMode::Math;
   }
 
   static VIntMode intModeOfVType(const VType &Ty) {
@@ -634,43 +846,50 @@ class ObligationBuilder {
     return VIntMode::Machine;
   }
 
+  bool isActiveBoundVariable(const VCExpr *Expr) const {
+    if (!Expr || Expr->K != VCExpr::Var)
+      return false;
+    return std::any_of(
+        BoundVars.begin(), BoundVars.end(),
+        [&](const auto &Entry) { return Entry.second == Expr->Name; });
+  }
+
   std::unique_ptr<VCExpr> toMode(std::unique_ptr<VCExpr> E, VIntMode Target) {
     if (!E)
       return E;
-    if (E->TypeKind == VTypeKind::Ptr) {
-      E->IntMode = Target;
-      setLogicSort(*E);
+    if (E->Sort.Kind == LogicSortKind::Pointer)
       return E;
-    }
     if (intModeOf(E.get()) == Target)
       return E;
+    if (Target == VIntMode::Math && E->K == VCExpr::IntToBv &&
+        E->Children.size() == 1 && isActiveBoundVariable(E->Children[0].get()))
+      return std::move(E->Children[0]);
     if (Target == VIntMode::Machine) {
       if (E->K == VCExpr::BvToInt && E->Children.size() == 1 &&
-          E->Children[0] && E->Children[0]->IntMode == VIntMode::Machine)
+          E->Children[0] &&
+          E->Children[0]->Sort.Kind == LogicSortKind::BitVector)
         return std::move(E->Children[0]);
       switch (E->K) {
       case VCExpr::IntLit:
-        E->IntMode = Target;
-        setLogicSort(*E);
+        E->Sort = LogicSort::bitVector(E->Sort.BitWidth ? E->Sort.BitWidth : 32,
+                                       E->Sort.Signedness !=
+                                           LogicSignedness::Unsigned);
         return E;
       case VCExpr::Add:
       case VCExpr::Sub:
       case VCExpr::Mul:
         E->Children[0] = toMode(std::move(E->Children[0]), Target);
         E->Children[1] = toMode(std::move(E->Children[1]), Target);
-        E->IntMode = Target;
-        setLogicSort(*E);
+        E->Sort = E->Children[0]->Sort;
         return E;
       case VCExpr::Neg:
         E->Children[0] = toMode(std::move(E->Children[0]), Target);
-        E->IntMode = Target;
-        setLogicSort(*E);
+        E->Sort = E->Children[0]->Sort;
         return E;
       case VCExpr::Ite:
         E->Children[1] = toMode(std::move(E->Children[1]), Target);
         E->Children[2] = toMode(std::move(E->Children[2]), Target);
-        E->IntMode = Target;
-        setLogicSort(*E);
+        E->Sort = E->Children[1]->Sort;
         return E;
       default:
         break;
@@ -678,12 +897,14 @@ class ObligationBuilder {
     }
     auto N = std::make_unique<VCExpr>(
         Target == VIntMode::Machine ? VCExpr::IntToBv : VCExpr::BvToInt);
-    N->IntMode = Target;
-    N->TypeKind = E->TypeKind;
-    N->IsSigned = E->IsSigned;
-    N->BitWidth = E->BitWidth;
     N->Loc = E->Loc;
-    setLogicSort(*N);
+    N->Sort = Target == VIntMode::Machine
+                  ? LogicSort::bitVector(
+                        E->Sort.BitWidth ? E->Sort.BitWidth : 32,
+                        E->Sort.Signedness != LogicSignedness::Unsigned)
+                  : LogicSort::mathematicalInteger(
+                        E->Sort.BitWidth ? E->Sort.BitWidth : 32,
+                        E->Sort.Signedness != LogicSignedness::Unsigned);
     N->Children.push_back(std::move(E));
     return N;
   }
@@ -699,22 +920,18 @@ class ObligationBuilder {
   std::unique_ptr<VCExpr>
   exactCrossModeEquality(VCExpr::Kind Kind, std::unique_ptr<VCExpr> Machine,
                          std::unique_ptr<VCExpr> Math) {
-    const unsigned BitWidth = Machine->BitWidth;
-    const bool IsSigned = Machine->IsSigned;
+    const unsigned BitWidth = Machine->Sort.BitWidth;
+    const bool IsSigned = Machine->Sort.Signedness == LogicSignedness::Signed;
     auto InRange = vcAnd(vcBinary(VCExpr::Ge, cloneVCExpr(Math.get()),
                                   mathLimit(BitWidth, IsSigned, true)),
                          vcBinary(VCExpr::Le, cloneVCExpr(Math.get()),
                                   mathLimit(BitWidth, IsSigned, false)));
 
     auto Converted = toMode(std::move(Math), VIntMode::Machine);
-    if (Converted->BitWidth != BitWidth) {
+    if (Converted->Sort.BitWidth != BitWidth) {
       auto Resize = std::make_unique<VCExpr>(VCExpr::BvResize);
-      Resize->TypeKind = Machine->TypeKind;
-      Resize->IntMode = VIntMode::Machine;
-      Resize->IsSigned = IsSigned;
-      Resize->BitWidth = BitWidth;
+      Resize->Sort = LogicSort::bitVector(BitWidth, IsSigned);
       Resize->Loc = Converted->Loc;
-      setLogicSort(*Resize);
       Resize->Children.push_back(std::move(Converted));
       Converted = std::move(Resize);
     }
@@ -801,14 +1018,13 @@ class ObligationBuilder {
       return N;
     }
 
-    bool HasPointer =
-        L->TypeKind == VTypeKind::Ptr || R->TypeKind == VTypeKind::Ptr;
-    bool HasBoolean =
-        L->TypeKind == VTypeKind::Bool || R->TypeKind == VTypeKind::Bool;
+    bool HasPointer = L->Sort.Kind == LogicSortKind::Pointer ||
+                      R->Sort.Kind == LogicSortKind::Pointer;
+    bool HasBoolean = L->Sort.Kind == LogicSortKind::Bool ||
+                      R->Sort.Kind == LogicSortKind::Bool;
     if ((K == VCExpr::Eq || K == VCExpr::Ne) && !HasPointer && !HasBoolean &&
-        isIntegerKind(L->TypeKind) && isIntegerKind(R->TypeKind) &&
-        L->IntMode != R->IntMode) {
-      if (L->IntMode == VIntMode::Machine)
+        L->Sort.Kind != R->Sort.Kind) {
+      if (L->Sort.Kind == LogicSortKind::BitVector)
         return exactCrossModeEquality(K, std::move(L), std::move(R));
       return exactCrossModeEquality(K, std::move(R), std::move(L));
     }
@@ -816,14 +1032,11 @@ class ObligationBuilder {
     if (K == VCExpr::Shl || K == VCExpr::Shr) {
       L = toMode(std::move(L), VIntMode::Machine);
       R = toMode(std::move(R), VIntMode::Machine);
-      if (R->BitWidth != L->BitWidth) {
+      if (R->Sort.BitWidth != L->Sort.BitWidth) {
         auto Resize = std::make_unique<VCExpr>(VCExpr::BvResize);
-        Resize->TypeKind = R->TypeKind;
-        Resize->IntMode = VIntMode::Machine;
-        Resize->IsSigned = R->IsSigned;
-        Resize->BitWidth = L->BitWidth;
+        Resize->Sort = LogicSort::bitVector(
+            L->Sort.BitWidth, R->Sort.Signedness == LogicSignedness::Signed);
         Resize->Loc = R->Loc;
-        setLogicSort(*Resize);
         Resize->Children.push_back(std::move(R));
         R = std::move(Resize);
       }
@@ -836,17 +1049,13 @@ class ObligationBuilder {
                              : unifyIntModes(std::move(L), std::move(R));
     }
     auto N = std::make_unique<VCExpr>(K);
-    N->IntMode = intModeOf(Unified.first.get());
-    N->IsSigned = Unified.first->IsSigned;
-    N->BitWidth = Unified.first->BitWidth;
     if (K == VCExpr::Eq || K == VCExpr::Ne || K == VCExpr::Lt ||
         K == VCExpr::Le || K == VCExpr::Gt || K == VCExpr::Ge ||
         K == VCExpr::And || K == VCExpr::Or)
-      N->TypeKind = VTypeKind::Bool;
+      N->Sort = LogicSort::boolSort();
     else
-      N->TypeKind = Unified.first->TypeKind;
+      N->Sort = Unified.first->Sort;
     N->Loc = Unified.first->Loc;
-    setLogicSort(*N);
     N->Children.push_back(std::move(Unified.first));
     N->Children.push_back(std::move(Unified.second));
     return N;
@@ -866,9 +1075,6 @@ class ObligationBuilder {
     // operations. This is equivalent within the typed bounds and keeps array
     // indices in Z3's native integer sort instead of mixing quantified
     // bit-vectors with integer-addressed heaps.
-    N->IntMode = VIntMode::Math;
-    N->BitWidth = Q->BinderType.BitWidth;
-    N->IsSigned = Q->BinderType.IsSigned;
 
     auto Previous = BoundVars.find(Q->Binder);
     std::string PreviousName;
@@ -925,31 +1131,33 @@ public:
       }
       auto N = std::make_unique<VCExpr>(VCExpr::IntLit);
       N->IntVal = L->Value;
-      N->TypeKind = L->Ty.Kind;
-      N->IsSigned = L->Ty.IsSigned;
-      N->BitWidth = L->Ty.BitWidth;
-      N->IntMode = ForceCallerIntMode ? CallerIntMode : intModeOfVType(L->Ty);
       N->Loc = L->Loc;
-      setLogicSort(*N);
+      N->Sort = logicSortFor(L->Ty.Kind,
+                             ForceCallerIntMode ? CallerIntMode
+                                                : intModeOfVType(L->Ty),
+                             L->Ty.BitWidth, L->Ty.IsSigned);
       return N;
     }
     case VExpr::Var: {
       auto N = std::make_unique<VCExpr>(VCExpr::Var);
-      const std::string &Name = static_cast<const VVarExpr *>(E)->Name;
+      const auto *Variable = static_cast<const VVarExpr *>(E);
+      const std::string &Name = Variable->Name;
       auto Bound = BoundVars.find(Name);
       N->Name = Bound == BoundVars.end() ? Name : Bound->second;
-      N->TypeKind = static_cast<const VVarExpr *>(E)->Ty.Kind;
-      N->IsSigned = static_cast<const VVarExpr *>(E)->Ty.IsSigned;
-      N->BitWidth = static_cast<const VVarExpr *>(E)->Ty.BitWidth;
-      N->IntMode = Bound != BoundVars.end() ? BoundVarModes.at(Name)
-                   : ForceCallerIntMode
-                       ? CallerIntMode
-                       : intModeOfVType(static_cast<const VVarExpr *>(E)->Ty);
       N->Loc = E->Loc;
-      if (HeapVariables.count(N->Name))
+      if (Bound != BoundVars.end()) {
+        N->Sort = LogicSort::mathematicalInteger(Variable->Ty.BitWidth,
+                                                 Variable->Ty.IsSigned);
+        if (BoundVarModes.at(Name) == VIntMode::Machine)
+          return toMode(std::move(N), VIntMode::Machine);
+      } else if (HeapVariables.count(N->Name)) {
         setHeapSort(*N);
-      else
-        setLogicSort(*N);
+      } else {
+        N->Sort = logicSortFor(
+            Variable->Ty.Kind,
+            ForceCallerIntMode ? CallerIntMode : intModeOfVType(Variable->Ty),
+            Variable->Ty.BitWidth, Variable->Ty.IsSigned);
+      }
       return N;
     }
     case VExpr::BinOp: {
@@ -963,23 +1171,15 @@ public:
       if (U->Op == VUnaryOp::Neg) {
         auto N = std::make_unique<VCExpr>(VCExpr::Neg);
         N->Children.push_back(fromVExpr(U->Operand.get()));
-        N->IntMode = intModeOf(N->Children[0].get());
-        N->TypeKind = U->Ty.Kind;
-        N->IsSigned = U->Ty.IsSigned;
-        N->BitWidth = U->Ty.BitWidth;
+        N->Sort = N->Children[0]->Sort;
         N->Loc = U->Loc;
-        setLogicSort(*N);
         return N;
       }
       if (U->Op == VUnaryOp::BitNot) {
         auto N = std::make_unique<VCExpr>(VCExpr::BitNot);
         N->Children.push_back(fromVExpr(U->Operand.get()));
-        N->IntMode = intModeOf(N->Children[0].get());
-        N->TypeKind = U->Ty.Kind;
-        N->IsSigned = U->Ty.IsSigned;
-        N->BitWidth = U->Ty.BitWidth;
+        N->Sort = N->Children[0]->Sort;
         N->Loc = U->Loc;
-        setLogicSort(*N);
         return N;
       }
       if (U->Op == VUnaryOp::ValidPtr) {
@@ -1041,27 +1241,20 @@ public:
       N->Children.push_back(fromVExpr(C->Cond.get()));
       N->Children.push_back(fromVExpr(C->Then.get()));
       N->Children.push_back(fromVExpr(C->Else.get()));
-      N->TypeKind = C->Ty.Kind;
-      N->IntMode = intModeOf(N->Children[1].get());
-      N->IsSigned = C->Ty.IsSigned;
-      N->BitWidth = C->Ty.BitWidth;
       N->Loc = C->Loc;
       if (N->Children[1]->Sort.Kind == LogicSortKind::Heap &&
           N->Children[2]->Sort.Kind == LogicSortKind::Heap)
         setHeapSort(*N);
       else
-        setLogicSort(*N);
+        N->Sort = N->Children[1]->Sort;
       return N;
     }
     case VExpr::Result: {
       auto N = std::make_unique<VCExpr>(VCExpr::Var);
       N->Name = ResultVarName.empty() ? "__result_0" : ResultVarName;
-      N->TypeKind = E->Ty.Kind;
-      N->IntMode = intModeOfVType(E->Ty);
-      N->IsSigned = E->Ty.IsSigned;
-      N->BitWidth = E->Ty.BitWidth;
       N->Loc = E->Loc;
-      setLogicSort(*N);
+      N->Sort = logicSortFor(E->Ty.Kind, intModeOfVType(E->Ty), E->Ty.BitWidth,
+                             E->Ty.IsSigned);
       return N;
     }
     case VExpr::Old:
@@ -1073,18 +1266,11 @@ public:
         return nullptr;
       if (C->Ty.Kind == VTypeKind::Bool && C->FromTy.Kind != VTypeKind::Bool) {
         auto Zero = std::make_unique<VCExpr>(VCExpr::IntLit);
-        Zero->TypeKind = C->FromTy.Kind;
-        Zero->IntMode = intModeOfVType(C->FromTy);
-        Zero->IsSigned = C->FromTy.IsSigned;
-        Zero->BitWidth = C->FromTy.BitWidth;
+        Zero->Sort = logicSortFor(C->FromTy.Kind, intModeOfVType(C->FromTy),
+                                  C->FromTy.BitWidth, C->FromTy.IsSigned);
         Zero->Loc = C->Loc;
-        setLogicSort(*Zero);
         auto N = std::make_unique<VCExpr>(VCExpr::Ne);
         setBoolSort(*N);
-        N->IntMode =
-            C->FromTy.Kind == VTypeKind::Ptr ? VIntMode::Math : Inner->IntMode;
-        N->IsSigned = Inner->IsSigned;
-        N->BitWidth = Inner->BitWidth;
         N->Loc = C->Loc;
         N->Children.push_back(std::move(Inner));
         N->Children.push_back(std::move(Zero));
@@ -1093,26 +1279,15 @@ public:
       if (C->FromTy.Kind == VTypeKind::Bool && C->Ty.Kind != VTypeKind::Bool) {
         auto One = std::make_unique<VCExpr>(VCExpr::IntLit);
         One->IntVal = "1";
-        One->TypeKind = C->Ty.Kind;
-        One->IntMode = intModeOfVType(C->Ty);
-        One->IsSigned = C->Ty.IsSigned;
-        One->BitWidth = C->Ty.BitWidth;
+        One->Sort = logicSortFor(C->Ty.Kind, intModeOfVType(C->Ty),
+                                 C->Ty.BitWidth, C->Ty.IsSigned);
         One->Loc = C->Loc;
-        setLogicSort(*One);
         auto Zero = std::make_unique<VCExpr>(VCExpr::IntLit);
-        Zero->TypeKind = C->Ty.Kind;
-        Zero->IntMode = intModeOfVType(C->Ty);
-        Zero->IsSigned = C->Ty.IsSigned;
-        Zero->BitWidth = C->Ty.BitWidth;
+        Zero->Sort = One->Sort;
         Zero->Loc = C->Loc;
-        setLogicSort(*Zero);
         auto N = std::make_unique<VCExpr>(VCExpr::Ite);
-        N->TypeKind = C->Ty.Kind;
-        N->IntMode = intModeOfVType(C->Ty);
-        N->IsSigned = C->Ty.IsSigned;
-        N->BitWidth = C->Ty.BitWidth;
+        N->Sort = One->Sort;
         N->Loc = C->Loc;
-        setLogicSort(*N);
         N->Children.push_back(std::move(Inner));
         N->Children.push_back(std::move(One));
         N->Children.push_back(std::move(Zero));
@@ -1122,54 +1297,40 @@ public:
           (C->Ty.Kind == VTypeKind::Int32 || C->Ty.Kind == VTypeKind::Int64)) {
         if (C->Ty.IntMode == VIntMode::Machine) {
           auto N = std::make_unique<VCExpr>(VCExpr::IntToBv);
-          N->TypeKind = C->Ty.Kind;
-          N->IntMode = VIntMode::Machine;
-          N->IsSigned = C->Ty.IsSigned;
-          N->BitWidth = C->Ty.BitWidth;
+          N->Sort = LogicSort::bitVector(C->Ty.BitWidth, C->Ty.IsSigned);
           N->Loc = C->Loc;
-          setLogicSort(*N);
           N->Children.push_back(std::move(Inner));
           return N;
         }
-        Inner->TypeKind = C->Ty.Kind;
-        Inner->IntMode = VIntMode::Math;
-        Inner->IsSigned = C->Ty.IsSigned;
-        Inner->BitWidth = C->Ty.BitWidth;
+        Inner->Sort =
+            LogicSort::mathematicalInteger(C->Ty.BitWidth, C->Ty.IsSigned);
         Inner->Loc = C->Loc;
-        setLogicSort(*Inner);
         return Inner;
       }
       VIntMode TargetMode = intModeOfVType(C->Ty);
       Inner = toMode(std::move(Inner), TargetMode);
+      const LogicSort TargetSort =
+          logicSortFor(C->Ty.Kind, TargetMode, C->Ty.BitWidth, C->Ty.IsSigned);
       if (TargetMode == VIntMode::Machine &&
-          Inner->BitWidth != C->Ty.BitWidth) {
+          (Inner->Sort.BitWidth != C->Ty.BitWidth ||
+           Inner->Sort.Signedness != TargetSort.Signedness)) {
         auto Resize = std::make_unique<VCExpr>(VCExpr::BvResize);
-        Resize->TypeKind = C->Ty.Kind;
-        Resize->IntMode = TargetMode;
-        Resize->IsSigned = C->Ty.IsSigned;
-        Resize->BitWidth = C->Ty.BitWidth;
+        Resize->Sort = TargetSort;
         Resize->Loc = C->Loc;
-        setLogicSort(*Resize);
         Resize->Children.push_back(std::move(Inner));
         Inner = std::move(Resize);
       }
-      Inner->TypeKind = C->Ty.Kind;
-      Inner->IsSigned = C->Ty.IsSigned;
-      Inner->BitWidth = C->Ty.BitWidth;
+      Inner->Sort = TargetSort;
       Inner->Loc = C->Loc;
-      setLogicSort(*Inner);
       return Inner;
     }
     case VExpr::Load: {
       const auto *L = static_cast<const VLoadExpr *>(E);
       std::string Heap = L->HeapVar.empty() ? CurHeap : L->HeapVar;
       auto N = std::make_unique<VCExpr>(VCExpr::Select);
-      N->TypeKind = L->Ty.Kind;
-      N->IntMode = CallerIntMode;
-      N->IsSigned = L->Ty.IsSigned;
-      N->BitWidth = L->Ty.BitWidth;
+      N->Sort = logicSortFor(L->Ty.Kind, CallerIntMode, L->Ty.BitWidth,
+                             L->Ty.IsSigned);
       N->Loc = L->Loc;
-      setLogicSort(*N);
       auto H = std::make_unique<VCExpr>(VCExpr::Var);
       H->Name = Heap;
       H->Loc = L->Loc;
@@ -1205,30 +1366,24 @@ public:
       const auto *F = static_cast<const VFieldAccessExpr *>(E);
       auto N = std::make_unique<VCExpr>(VCExpr::Var);
       N->Name = fieldVarName(F);
-      N->TypeKind = F->Base->K == VExpr::Var || F->Base->K == VExpr::Result
-                        ? F->Ty.Kind
-                        : VTypeKind::Unsupported;
-      N->IntMode = intModeOfVType(F->Ty);
-      N->IsSigned = F->Ty.IsSigned;
-      N->BitWidth = F->Ty.BitWidth;
+      N->Sort = F->Base->K == VExpr::Var || F->Base->K == VExpr::Result
+                    ? logicSortFor(F->Ty.Kind, intModeOfVType(F->Ty),
+                                   F->Ty.BitWidth, F->Ty.IsSigned)
+                    : LogicSort();
       N->Loc = F->Loc;
-      setLogicSort(*N);
       return N;
     }
     case VExpr::SpecCall: {
       const auto *C = static_cast<const VSpecCallExpr *>(E);
       auto N = std::make_unique<VCExpr>(VCExpr::SpecCall);
       N->SpecCallee = C->CalleeIdentity;
-      N->TypeKind = C->Ty.Kind;
-      N->IntMode = C->Ty.IntMode;
-      N->IsSigned = C->Ty.IsSigned;
-      N->BitWidth = C->Ty.BitWidth;
+      N->Sort = logicSortFor(C->Ty.Kind, C->Ty.IntMode, C->Ty.BitWidth,
+                             C->Ty.IsSigned);
       N->Loc = C->Loc;
-      setLogicSort(*N);
       for (const auto &A : C->Args) {
         auto Arg = fromVExpr(A.get());
-        if (Arg && (Arg->TypeKind == VTypeKind::Int32 ||
-                    Arg->TypeKind == VTypeKind::Int64))
+        if (Arg && (Arg->Sort.Kind == LogicSortKind::BitVector ||
+                    Arg->Sort.Kind == LogicSortKind::MathematicalInteger))
           Arg = toMode(std::move(Arg), C->Ty.IntMode);
         N->Children.push_back(std::move(Arg));
       }
@@ -1238,11 +1393,8 @@ public:
       const auto *O = static_cast<const VOverflowCheckExpr *>(E);
       auto N = std::make_unique<VCExpr>(VCExpr::NoOverflow);
       setBoolSort(*N);
-      N->IntMode = VIntMode::Machine;
-      N->IsSigned = O->Lhs->Ty.IsSigned;
-      N->BitWidth = O->Lhs->Ty.BitWidth;
       N->Loc = O->Loc;
-      N->OverflowOp = O->Op;
+      N->OverflowOp = logicOverflowOp(O->Op);
       N->Children.push_back(fromVExpr(O->Lhs.get()));
       if (O->Rhs)
         N->Children.push_back(fromVExpr(O->Rhs.get()));
@@ -1292,7 +1444,7 @@ public:
 
     struct LoweredStmt {
       PassiveStmt::Kind Kind;
-      ProofObligationKind ProofKind;
+      ObligationKind ProofKind;
       std::unique_ptr<VCExpr> Cond;
     };
     std::vector<LoweredStmt> Stmts;
@@ -1301,7 +1453,8 @@ public:
         fail("null passive statement in obligation lowering");
         continue;
       }
-      Stmts.push_back({Stmt->K, Stmt->ProofKind, fromVExpr(Stmt->Cond.get())});
+      Stmts.push_back({Stmt->K, obligationKind(Stmt->ProofKind),
+                       fromVExpr(Stmt->Cond.get())});
     }
 
     std::vector<std::unique_ptr<VCExpr>> ExitAsserts;
@@ -1311,24 +1464,6 @@ public:
     if (!ConstructionError.empty())
       return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                      ConstructionError.c_str());
-
-    std::unique_ptr<VCExpr> WP = vcTrue();
-    for (const auto &Exit : ExitAsserts)
-      WP = vcAnd(std::move(WP), cloneVCExpr(Exit.get()));
-
-    for (auto It = Stmts.rbegin(); It != Stmts.rend(); ++It) {
-      auto Cond = cloneVCExpr(It->Cond.get());
-      if (It->Kind == PassiveStmt::Assume)
-        WP = vcOr(vcNot(std::move(Cond)), std::move(WP));
-      else
-        WP = vcAnd(std::move(Cond), std::move(WP));
-    }
-
-    for (auto It = EntryAssumes.rbegin(); It != EntryAssumes.rend(); ++It)
-      WP = vcOr(vcNot(cloneVCExpr(It->get())), std::move(WP));
-
-    M.CorrectnessGoal = cloneVCExpr(WP.get());
-    M.CounterexampleQuery = vcNot(std::move(WP));
 
     std::vector<const VCExpr *> Assumptions;
     for (const auto &Entry : EntryAssumes)
@@ -1368,135 +1503,197 @@ public:
     for (const auto &Exit : ExitAsserts)
       appendObligation(ObligationKind::Postcondition, Exit.get());
 
+    M.CorrectnessGoal = buildCompleteGoal(M.Obligations);
+    M.CounterexampleQuery = vcNot(cloneVCExpr(M.CorrectnessGoal.get()));
+
     SpecAxiomContext AxiomContext{P.SpecFunctions, P.SpecFuel, P.HiddenSpecs,
                                   P.RevealedSpecs};
     if (llvm::Error Error = materializeLogicFunctions(M, AxiomContext))
       return std::move(Error);
 
-    std::string ValidationError;
-    if (!validateLogicExpr(M.CorrectnessGoal.get(), ValidationError))
-      return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
-                                     ValidationError.c_str());
-    if (!validateLogicCalls(M.CorrectnessGoal.get(), M.LogicFunctions,
-                            ValidationError))
-      return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
-                                     ValidationError.c_str());
-    if (M.CorrectnessGoal->Sort.Kind != LogicSortKind::Bool)
-      return llvm::createStringError(llvm::inconvertibleErrorCode(),
-                                     "complete correctness goal is not bool");
-    if (!validateLogicExpr(M.CounterexampleQuery.get(), ValidationError))
-      return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
-                                     ValidationError.c_str());
-    if (!validateLogicCalls(M.CounterexampleQuery.get(), M.LogicFunctions,
-                            ValidationError))
-      return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
-                                     ValidationError.c_str());
-    if (M.CounterexampleQuery->Sort.Kind != LogicSortKind::Bool)
-      return llvm::createStringError(
-          llvm::inconvertibleErrorCode(),
-          "complete counterexample query is not bool");
-    collectRequiredFeatures(M.CounterexampleQuery.get(), M.RequiredFeatures);
-    for (const Obligation &Item : M.Obligations) {
-      if (!validateLogicExpr(Item.Goal.get(), ValidationError))
-        return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
-                                       ValidationError.c_str());
-      if (!validateLogicCalls(Item.Goal.get(), M.LogicFunctions,
-                              ValidationError))
-        return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
-                                       ValidationError.c_str());
-      if (Item.Goal->Sort.Kind != LogicSortKind::Bool)
-        return llvm::createStringError(
-            llvm::inconvertibleErrorCode(),
-            "individual correctness goal is not bool");
-      if (!validateLogicExpr(Item.CounterexampleQuery.get(), ValidationError))
-        return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
-                                       ValidationError.c_str());
-      if (!validateLogicCalls(Item.CounterexampleQuery.get(), M.LogicFunctions,
-                              ValidationError))
-        return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
-                                       ValidationError.c_str());
-      if (Item.CounterexampleQuery->Sort.Kind != LogicSortKind::Bool)
-        return llvm::createStringError(
-            llvm::inconvertibleErrorCode(),
-            "individual counterexample query is not bool");
-      collectRequiredFeatures(Item.CounterexampleQuery.get(),
-                              M.RequiredFeatures);
-    }
-    for (const auto &[Identity, Declaration] : M.LogicFunctions) {
-      if (Identity.empty() || Declaration.Identity != Identity)
-        return llvm::createStringError(
-            llvm::inconvertibleErrorCode(),
-            "logical function declaration identity mismatch");
-      if (Declaration.ResultSort.Kind == LogicSortKind::Invalid ||
-          Declaration.ResultSort.Kind == LogicSortKind::Heap ||
-          (Declaration.ResultSort.Kind == LogicSortKind::BitVector &&
-           Declaration.ResultSort.BitWidth == 0))
-        return llvm::createStringError(
-            llvm::inconvertibleErrorCode(),
-            "logical function has an invalid result sort");
-      if (Declaration.DefinitionLevels.size() != Declaration.DefinitionFuel)
-        return llvm::createStringError(
-            llvm::inconvertibleErrorCode(),
-            "logical function definition count does not match its fuel");
-      if ((Declaration.DefinitionFuel == 0) !=
-          (Declaration.StepDefinition == nullptr))
-        return llvm::createStringError(
-            llvm::inconvertibleErrorCode(),
-            "logical function step definition does not match its fuel");
-      std::map<std::string, LogicSort> Parameters;
-      for (const LogicFunctionParameter &Parameter : Declaration.Parameters) {
-        if (Parameter.Name.empty() ||
-            Parameter.Sort.Kind == LogicSortKind::Invalid ||
-            Parameter.Sort.Kind == LogicSortKind::Heap ||
-            (Parameter.Sort.Kind == LogicSortKind::BitVector &&
-             Parameter.Sort.BitWidth == 0) ||
-            !Parameters.emplace(Parameter.Name, Parameter.Sort).second)
-          return llvm::createStringError(
-              llvm::inconvertibleErrorCode(),
-              "logical function has an invalid or duplicate parameter");
-      }
-      if (Declaration.DefinitionFuel > 0) {
-        if (!validateLogicExpr(Declaration.StepDefinition.get(),
-                               ValidationError))
-          return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
-                                         ValidationError.c_str());
-        if (Declaration.StepDefinition->Sort.Kind !=
-                Declaration.ResultSort.Kind ||
-            Declaration.StepDefinition->Sort.BitWidth !=
-                Declaration.ResultSort.BitWidth)
-          return llvm::createStringError(
-              llvm::inconvertibleErrorCode(),
-              "logical function step result sort mismatch");
-        if (!validateLogicCalls(Declaration.StepDefinition.get(),
-                                M.LogicFunctions, ValidationError) ||
-            !validateDefinitionVariables(Declaration.StepDefinition.get(),
-                                         Parameters, {}, ValidationError))
-          return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
-                                         ValidationError.c_str());
-        collectRequiredFeatures(Declaration.StepDefinition.get(),
-                                M.RequiredFeatures);
-      }
-      for (const auto &Definition : Declaration.DefinitionLevels) {
-        if (!validateLogicExpr(Definition.get(), ValidationError))
-          return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
-                                         ValidationError.c_str());
-        if (Definition->Sort.Kind != Declaration.ResultSort.Kind ||
-            Definition->Sort.BitWidth != Declaration.ResultSort.BitWidth)
-          return llvm::createStringError(
-              llvm::inconvertibleErrorCode(),
-              "logical function definition result sort mismatch");
-        if (!validateLogicCalls(Definition.get(), M.LogicFunctions,
-                                ValidationError) ||
-            !validateDefinitionVariables(Definition.get(), Parameters, {},
-                                         ValidationError))
-          return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
-                                         ValidationError.c_str());
-        collectRequiredFeatures(Definition.get(), M.RequiredFeatures);
-      }
-    }
+    auto RequiredFeatures = validateObligationModule(M);
+    if (!RequiredFeatures)
+      return RequiredFeatures.takeError();
+    M.RequiredFeatures = *RequiredFeatures;
     return std::move(M);
   }
 };
+
+llvm::Expected<LogicFeatureSet>
+verify::validateObligationModule(const ObligationModule &M) {
+  if (M.FunctionIdentity.empty() || containsEmbeddedNul(M.FunctionIdentity))
+    return llvm::createStringError(
+        llvm::inconvertibleErrorCode(),
+        "obligation module has an invalid function identity");
+  if (containsEmbeddedNul(M.FunctionName) ||
+      containsEmbeddedNul(M.ResultVarName) || containsEmbeddedNul(M.HeapPrefix))
+    return llvm::createStringError(
+        llvm::inconvertibleErrorCode(),
+        "embedded NUL in obligation module metadata");
+
+  std::string ValidationError;
+  if (!validateLogicExpr(M.CorrectnessGoal.get(), ValidationError))
+    return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                   ValidationError.c_str());
+  if (!validateLogicCalls(M.CorrectnessGoal.get(), M.LogicFunctions,
+                          ValidationError))
+    return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                   ValidationError.c_str());
+  if (!validateVariableScopes(M.CorrectnessGoal.get(), ValidationError))
+    return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                   ValidationError.c_str());
+  if (M.CorrectnessGoal->Sort.Kind != LogicSortKind::Bool)
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "complete correctness goal is not bool");
+  if (!validateLogicExpr(M.CounterexampleQuery.get(), ValidationError))
+    return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                   ValidationError.c_str());
+  if (!validateLogicCalls(M.CounterexampleQuery.get(), M.LogicFunctions,
+                          ValidationError))
+    return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                   ValidationError.c_str());
+  if (!validateVariableScopes(M.CounterexampleQuery.get(), ValidationError))
+    return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                   ValidationError.c_str());
+  if (M.CounterexampleQuery->Sort.Kind != LogicSortKind::Bool)
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "complete counterexample query is not bool");
+  if (!isExactNegation(M.CounterexampleQuery.get(), M.CorrectnessGoal.get()))
+    return llvm::createStringError(
+        llvm::inconvertibleErrorCode(),
+        "complete counterexample query is not the exact negation of its goal");
+
+  LogicFeatureSet RequiredFeatures = 0;
+  collectRequiredFeatures(M.CorrectnessGoal.get(), RequiredFeatures);
+  collectRequiredFeatures(M.CounterexampleQuery.get(), RequiredFeatures);
+
+  std::set<std::string> ObligationIds;
+  for (const Obligation &Item : M.Obligations) {
+    if (Item.Id.empty() || containsEmbeddedNul(Item.Id) ||
+        containsEmbeddedNul(Item.Source.File) ||
+        !ObligationIds.insert(Item.Id).second)
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "obligation module has an empty or duplicate obligation identity");
+    if (!validateLogicExpr(Item.Goal.get(), ValidationError))
+      return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                     ValidationError.c_str());
+    if (!validateLogicCalls(Item.Goal.get(), M.LogicFunctions, ValidationError))
+      return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                     ValidationError.c_str());
+    if (!validateVariableScopes(Item.Goal.get(), ValidationError))
+      return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                     ValidationError.c_str());
+    if (Item.Goal->Sort.Kind != LogicSortKind::Bool)
+      return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                     "individual correctness goal is not bool");
+    if (!validateLogicExpr(Item.CounterexampleQuery.get(), ValidationError))
+      return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                     ValidationError.c_str());
+    if (!validateLogicCalls(Item.CounterexampleQuery.get(), M.LogicFunctions,
+                            ValidationError))
+      return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                     ValidationError.c_str());
+    if (!validateVariableScopes(Item.CounterexampleQuery.get(),
+                                ValidationError))
+      return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                     ValidationError.c_str());
+    if (Item.CounterexampleQuery->Sort.Kind != LogicSortKind::Bool)
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "individual counterexample query is not bool");
+    if (!isExactNegation(Item.CounterexampleQuery.get(), Item.Goal.get()))
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "individual counterexample query is not the exact negation of its "
+          "goal");
+    collectRequiredFeatures(Item.Goal.get(), RequiredFeatures);
+    collectRequiredFeatures(Item.CounterexampleQuery.get(), RequiredFeatures);
+  }
+
+  std::unique_ptr<LogicExpr> CanonicalGoal = buildCompleteGoal(M.Obligations);
+  if (!equalLogicExpr(M.CorrectnessGoal.get(), CanonicalGoal.get()))
+    return llvm::createStringError(
+        llvm::inconvertibleErrorCode(),
+        "complete correctness goal does not match the ordered obligations");
+
+  for (const auto &[Identity, Declaration] : M.LogicFunctions) {
+    if (Identity.empty() || containsEmbeddedNul(Identity) ||
+        Declaration.Identity != Identity ||
+        containsEmbeddedNul(Declaration.DisplayName))
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "logical function declaration identity mismatch");
+    if (!validateLogicSort(Declaration.ResultSort, ValidationError) ||
+        Declaration.ResultSort.Kind == LogicSortKind::Heap)
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "logical function has an invalid result sort");
+    if (Declaration.DefinitionLevels.size() != Declaration.DefinitionFuel)
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "logical function definition count does not match its fuel");
+    if ((Declaration.DefinitionFuel == 0) !=
+        (Declaration.StepDefinition == nullptr))
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "logical function step definition does not match its fuel");
+    std::map<std::string, LogicSort> Parameters;
+    for (const LogicFunctionParameter &Parameter : Declaration.Parameters) {
+      if (Parameter.Name.empty() || containsEmbeddedNul(Parameter.Name) ||
+          !validateLogicSort(Parameter.Sort, ValidationError) ||
+          Parameter.Sort.Kind == LogicSortKind::Heap ||
+          !Parameters.emplace(Parameter.Name, Parameter.Sort).second)
+        return llvm::createStringError(
+            llvm::inconvertibleErrorCode(),
+            "logical function has an invalid or duplicate parameter");
+    }
+    if (Declaration.DefinitionFuel > 0) {
+      if (!validateLogicExpr(Declaration.StepDefinition.get(), ValidationError))
+        return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                       ValidationError.c_str());
+      if (Declaration.StepDefinition->Sort.Kind !=
+              Declaration.ResultSort.Kind ||
+          Declaration.StepDefinition->Sort.BitWidth !=
+              Declaration.ResultSort.BitWidth ||
+          Declaration.StepDefinition->Sort.Signedness !=
+              Declaration.ResultSort.Signedness)
+        return llvm::createStringError(
+            llvm::inconvertibleErrorCode(),
+            "logical function step result sort mismatch");
+      if (!validateLogicCalls(Declaration.StepDefinition.get(),
+                              M.LogicFunctions, ValidationError) ||
+          !validateVariableScopes(Declaration.StepDefinition.get(),
+                                  ValidationError) ||
+          !validateDefinitionVariables(Declaration.StepDefinition.get(),
+                                       Parameters, {}, ValidationError))
+        return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                       ValidationError.c_str());
+      collectRequiredFeatures(Declaration.StepDefinition.get(),
+                              RequiredFeatures);
+    }
+    for (const auto &Definition : Declaration.DefinitionLevels) {
+      if (!validateLogicExpr(Definition.get(), ValidationError))
+        return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                       ValidationError.c_str());
+      if (Definition->Sort.Kind != Declaration.ResultSort.Kind ||
+          Definition->Sort.BitWidth != Declaration.ResultSort.BitWidth ||
+          Definition->Sort.Signedness != Declaration.ResultSort.Signedness)
+        return llvm::createStringError(
+            llvm::inconvertibleErrorCode(),
+            "logical function definition result sort mismatch");
+      if (!validateLogicCalls(Definition.get(), M.LogicFunctions,
+                              ValidationError) ||
+          !validateVariableScopes(Definition.get(), ValidationError) ||
+          !validateDefinitionVariables(Definition.get(), Parameters, {},
+                                       ValidationError))
+        return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                       ValidationError.c_str());
+      collectRequiredFeatures(Definition.get(), RequiredFeatures);
+    }
+  }
+  return RequiredFeatures;
+}
 
 llvm::Expected<ObligationModule>
 verify::buildObligationModule(const PassiveProgram &P) {

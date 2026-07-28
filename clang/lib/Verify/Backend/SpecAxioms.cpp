@@ -1,6 +1,7 @@
 //===--- SpecAxioms.cpp - Verus-style spec defining axioms ----------------===//
 #include "SpecAxioms.h"
 #include "../Transform/SpecInline.h"
+#include "ObligationLowering.h"
 #include "llvm/Support/Error.h"
 
 using namespace clang;
@@ -41,12 +42,16 @@ static LogicSort specLogicSort(const VType &Type, VIntMode Mode) {
   if (Type.Kind != VTypeKind::Int32 && Type.Kind != VTypeKind::Int64)
     return {};
   if (Mode == VIntMode::Math)
-    return LogicSort::mathematicalInteger();
+    return LogicSort::mathematicalInteger(Type.BitWidth, Type.IsSigned);
   return LogicSort::bitVector(Type.BitWidth, Type.IsSigned);
 }
 
 static bool sameLogicSort(const LogicSort &Left, const LogicSort &Right) {
-  return Left.Kind == Right.Kind && Left.BitWidth == Right.BitWidth;
+  if (Left.Kind != Right.Kind)
+    return false;
+  if (Left.Kind == LogicSortKind::MathematicalInteger)
+    return true;
+  return Left.BitWidth == Right.BitWidth && Left.Signedness == Right.Signedness;
 }
 
 static std::unique_ptr<LogicExpr>
@@ -74,10 +79,6 @@ coerceDefinition(std::unique_ptr<LogicExpr> Expression, const VType &ResultType,
 
   auto Converted = std::make_unique<LogicExpr>(Kind);
   Converted->Sort = Target;
-  Converted->TypeKind = ResultType.Kind;
-  Converted->IntMode = ResultMode;
-  Converted->IsSigned = ResultType.IsSigned;
-  Converted->BitWidth = ResultType.BitWidth;
   Converted->Loc = Expression->Loc;
   Converted->Children.push_back(std::move(Expression));
   return Converted;
@@ -124,9 +125,7 @@ llvm::Error verify::materializeLogicFunctions(ObligationModule &Module,
     LogicFunctionDecl Declaration;
     Declaration.Identity = Spec->Identity;
     Declaration.DisplayName = Spec->Name;
-    Declaration.IntMode = Spec->IntMode;
     Declaration.ResultSort = specLogicSort(Spec->ReturnType, Spec->IntMode);
-    Declaration.ResultIsSigned = Spec->ReturnType.IsSigned;
     if (Declaration.ResultSort.Kind == LogicSortKind::Invalid)
       return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                      "unsupported spec result type: %s",
@@ -135,7 +134,6 @@ llvm::Error verify::materializeLogicFunctions(ObligationModule &Module,
       LogicFunctionParameter Parameter;
       Parameter.Name = Name;
       Parameter.Sort = specLogicSort(Type, Spec->IntMode);
-      Parameter.IsSigned = Type.IsSigned;
       if (Parameter.Sort.Kind == LogicSortKind::Invalid)
         return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                        "unsupported spec parameter type: %s",

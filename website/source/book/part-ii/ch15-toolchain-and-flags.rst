@@ -49,6 +49,10 @@ Other flags
 - ``cpp-verify --dump-ir[=1,2,3,4]`` — dump VCR / passive / Obligation IR / Z3 layers
 - ``cpp-verify --lower-only`` — construct and encode VCs without invoking Z3's
   satisfiability check
+- ``cpp-verify --obligation-out=FILE`` — write validated, versioned canonical
+  obligation records with semantic hashes
+- ``cpp-verify --obligation-in=FILE`` — validate and replay records through Z3,
+  lower-only dumps, or Lean scratch export without reparsing C++
 
 IR layers
 ---------

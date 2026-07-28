@@ -3,9 +3,6 @@
 #ifndef LLVM_CLANG_VERIFY_BACKEND_OBLIGATION_H
 #define LLVM_CLANG_VERIFY_BACKEND_OBLIGATION_H
 
-#include "../IR/VExpr.h"
-#include "../IR/VType.h"
-#include "../Transform/Passivize.h"
 #include "clang/Basic/SourceLocation.h"
 #include "llvm/Support/Error.h"
 #include <cstdint>
@@ -27,12 +24,21 @@ enum class LogicSortKind {
   Heap
 };
 
+enum class LogicSignedness { None, Signed, Unsigned };
+
+inline constexpr unsigned MaxLogicIntegerBitWidth = 4096;
+
 struct LogicSort {
   LogicSortKind Kind = LogicSortKind::Invalid;
+  /// Machine width for bitvectors and the originating C++ integer width for
+  /// mathematical integers. Backends ignore the latter when choosing the
+  /// solver sort but use it for explicit machine/mathematical conversions.
   unsigned BitWidth = 0;
+  LogicSignedness Signedness = LogicSignedness::None;
 
   static LogicSort boolSort();
-  static LogicSort mathematicalInteger();
+  static LogicSort mathematicalInteger(unsigned BitWidth = 32,
+                                       bool IsSigned = true);
   static LogicSort bitVector(unsigned BitWidth, bool IsSigned);
   static LogicSort pointer();
   static LogicSort heap();
@@ -46,6 +52,8 @@ enum class LogicFeature : uint32_t {
   Quantifiers = 1U << 4,
   SpecFunctions = 1U << 5,
 };
+
+enum class LogicOverflowOp { Add, Sub, Mul, Neg, SignedDiv };
 
 using LogicFeatureSet = uint32_t;
 
@@ -64,6 +72,14 @@ constexpr LogicFeatureSet allLogicFeatures() {
 
 std::string formatLogicFeatures(LogicFeatureSet Features);
 const char *logicSortName(LogicSortKind Kind);
+
+struct ObligationSource {
+  std::string File;
+  unsigned Line = 0;
+  unsigned Column = 0;
+
+  bool isValid() const { return !File.empty() && Line != 0; }
+};
 
 /// A typed logical term shared by every proof backend and IR dump.
 class LogicExpr {
@@ -111,19 +127,14 @@ public:
   Kind K;
   LogicSort Sort;
   SourceLocation Loc;
+  ObligationSource Source;
 
-  // Transitional lowering metadata used by the existing Z3 adapter. Sort is
-  // the canonical backend-facing type and is validated before publication.
-  VTypeKind TypeKind = VTypeKind::Void;
-  VIntMode IntMode = VIntMode::Machine;
-  bool IsSigned = true;
-  unsigned BitWidth = 32;
   std::vector<std::unique_ptr<LogicExpr>> Children;
   std::string IntVal = "0";
   bool BoolVal = false;
   std::string Name;
   std::string Binder;
-  VOverflowOp OverflowOp = VOverflowOp::Add;
+  LogicOverflowOp OverflowOp = LogicOverflowOp::Add;
   /// For SpecCall: function name (Args in Children).
   std::string SpecCallee;
 
@@ -133,15 +144,7 @@ public:
 // Compatibility name for the Z3/spec adapters while they migrate internally.
 using VCExpr = LogicExpr;
 
-using ObligationKind = ProofObligationKind;
-
-struct ObligationSource {
-  std::string File;
-  unsigned Line = 0;
-  unsigned Column = 0;
-
-  bool isValid() const { return !File.empty() && Line != 0; }
-};
+enum class ObligationKind { Assertion, Postcondition, Unwinding };
 
 struct Obligation {
   std::string Id;
@@ -155,7 +158,6 @@ struct Obligation {
 struct LogicFunctionParameter {
   std::string Name;
   LogicSort Sort;
-  bool IsSigned = true;
 };
 
 /// An owned declaration for a pure logical function. DefinitionLevels contain
@@ -163,10 +165,8 @@ struct LogicFunctionParameter {
 struct LogicFunctionDecl {
   std::string Identity;
   std::string DisplayName;
-  VIntMode IntMode = VIntMode::Machine;
   std::vector<LogicFunctionParameter> Parameters;
   LogicSort ResultSort;
-  bool ResultIsSigned = true;
   unsigned DefinitionFuel = 0;
   std::unique_ptr<LogicExpr> StepDefinition;
   std::vector<std::unique_ptr<LogicExpr>> DefinitionLevels;
@@ -191,13 +191,11 @@ public:
   std::string HeapPrefix;
 };
 
-llvm::Expected<ObligationModule>
-buildObligationModule(const PassiveProgram &Program);
-
-llvm::Expected<std::unique_ptr<LogicExpr>>
-lowerLogicExpr(const VExpr *Expr, const std::string &ResultVar,
-               const std::string &CurrentHeap,
-               VIntMode CallerMode = VIntMode::Math);
+/// Validate every declaration, sort, call signature, obligation identity, and
+/// expression in a published module. Returns the exact feature set required by
+/// the validated contents.
+llvm::Expected<LogicFeatureSet>
+validateObligationModule(const ObligationModule &Module);
 
 } // namespace verify
 } // namespace clang

@@ -390,6 +390,11 @@ caching, and broader future C++ theories remain incomplete.
 There is currently no solver portfolio, CHC backend, separation-logic backend,
 or independently checked Z3 proof-object pipeline.
 
+Portable obligation schema v1 bounds imported integer sorts to 4096 bits and
+uses explicit parser depth/node/collection budgets. Supporting wider backend
+sorts requires a deliberate schema/capability revision, not unbounded resource
+allocation from an archive.
+
 Libraries and real programs
 ---------------------------
 

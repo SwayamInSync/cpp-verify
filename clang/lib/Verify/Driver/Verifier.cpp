@@ -1,6 +1,8 @@
 //===--- Verifier.cpp - CppVerify driver ----------------------------------===//
 #include "Verifier.h"
 #include "../Backend/Obligation.h"
+#include "../Backend/ObligationLowering.h"
+#include "../Backend/ObligationSerialization.h"
 #include "../Backend/Z3Encode.h"
 #include "../Frontend/ASTConverter.h"
 #include "../IR/VStmt.h"
@@ -146,17 +148,63 @@ class Verifier {
                                         : Opts.LeanProjectPath;
   }
 
+  llvm::Error emitObligationArchive(const ObligationModule &Module) {
+    if (!Opts.ObligationOut)
+      return llvm::Error::success();
+
+    std::string Serialized = serializeObligationModule(Module);
+    auto RoundTrip = deserializeObligationModules(Serialized);
+    if (!RoundTrip)
+      return RoundTrip.takeError();
+    if (RoundTrip->size() != 1 ||
+        serializeObligationModule(RoundTrip->front()) != Serialized ||
+        obligationSemanticHash(RoundTrip->front()) !=
+            obligationSemanticHash(Module))
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "canonical obligation serialization did not round-trip");
+    *Opts.ObligationOut << Serialized;
+    return llvm::Error::success();
+  }
+
   void annotateObligationSources(ObligationModule &Module) {
     const SourceManager &SourceMgr = Ctx.getSourceManager();
-    for (Obligation &Item : Module.Obligations) {
-      if (!Item.Loc.isValid())
-        continue;
-      PresumedLoc Location = SourceMgr.getPresumedLoc(Item.Loc);
+    auto annotateSource = [&](SourceLocation Loc, ObligationSource &Source) {
+      if (!Loc.isValid())
+        return;
+      PresumedLoc Location = SourceMgr.getPresumedLoc(Loc);
       if (!Location.isValid())
-        continue;
-      Item.Source.File = Location.getFilename();
-      Item.Source.Line = Location.getLine();
-      Item.Source.Column = Location.getColumn();
+        return;
+      Source.File = Location.getFilename();
+      Source.Line = Location.getLine();
+      Source.Column = Location.getColumn();
+    };
+    auto annotateExpr = [&](LogicExpr *Root) {
+      if (!Root)
+        return;
+      std::vector<LogicExpr *> Pending = {Root};
+      while (!Pending.empty()) {
+        LogicExpr *Expr = Pending.back();
+        Pending.pop_back();
+        annotateSource(Expr->Loc, Expr->Source);
+        for (auto &Child : Expr->Children)
+          if (Child)
+            Pending.push_back(Child.get());
+      }
+    };
+
+    annotateExpr(Module.CorrectnessGoal.get());
+    annotateExpr(Module.CounterexampleQuery.get());
+    for (Obligation &Item : Module.Obligations) {
+      annotateSource(Item.Loc, Item.Source);
+      annotateExpr(Item.Goal.get());
+      annotateExpr(Item.CounterexampleQuery.get());
+    }
+    for (auto &[Identity, Function] : Module.LogicFunctions) {
+      (void)Identity;
+      annotateExpr(Function.StepDefinition.get());
+      for (auto &Definition : Function.DefinitionLevels)
+        annotateExpr(Definition.get());
     }
   }
 
@@ -617,6 +665,15 @@ public:
         }
         ObligationModule DecModule = std::move(*DecModuleOrErr);
         annotateObligationSources(DecModule);
+        if (llvm::Error Error = emitObligationArchive(DecModule)) {
+          AllOk = false;
+          AnyFailed = true;
+          Diags.push_back(
+              {VerifyDiagnostic::Error,
+               "cannot serialize decreases obligation: " + Fn->Name + " (" +
+                   llvm::toString(std::move(Error)) + ")"});
+          continue;
+        }
         if (Opts.LowerOnly) {
           VerifyResult DR = Z3Lowering.lowerModule(DecModule);
           if (DR.Status != VerifyStatus::Lowered) {
@@ -696,6 +753,14 @@ public:
       }
       ObligationModule Module = std::move(*ModuleOrErr);
       annotateObligationSources(Module);
+      if (llvm::Error Error = emitObligationArchive(Module)) {
+        AllOk = false;
+        AnyFailed = true;
+        Diags.push_back({VerifyDiagnostic::Error,
+                         "cannot serialize obligation: " + Fn->Name + " (" +
+                             llvm::toString(std::move(Error)) + ")"});
+        continue;
+      }
 
       if (DumpLayers & LayerVC) {
         dumpSep();

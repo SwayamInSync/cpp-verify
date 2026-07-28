@@ -2,7 +2,6 @@
 #ifndef LLVM_CLANG_VERIFY_BACKEND_Z3ENCODE_H
 #define LLVM_CLANG_VERIFY_BACKEND_Z3ENCODE_H
 
-#include "../IR/VType.h"
 #include "Obligation.h"
 #include "VerifyBackend.h"
 #include <map>
@@ -31,8 +30,6 @@ class Z3Encoder {
   z3::sort heapSort();
   z3::sort valueSort(const LogicSort &Sort);
   z3::expr heapVar(const std::string &Name);
-  z3::expr coerceTo(z3::expr E, VIntMode Target, unsigned BitWidth,
-                    bool IsSigned = true);
   z3::expr asBool(z3::expr E);
   z3::expr fallbackValue(const VCExpr *E);
   z3::expr arithOp(const VCExpr *E, z3::expr L, z3::expr R);

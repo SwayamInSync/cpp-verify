@@ -28,6 +28,8 @@ struct VerifyOptions {
   /// Enable valid(p, n)-based buffer bounds obligations. Core expression
   /// definedness checks are always emitted during passivization.
   bool CheckUB = false;
+  /// Optional versioned binary archive for backend-neutral obligation modules.
+  llvm::raw_ostream *ObligationOut = nullptr;
 };
 
 bool verifyTranslationUnit(ASTContext &Ctx, llvm::raw_ostream &OS,

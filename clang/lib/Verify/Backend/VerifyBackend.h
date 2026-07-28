@@ -55,6 +55,10 @@ createVerifyBackend(BackendKind K, llvm::raw_ostream *LeanOut = nullptr,
                     unsigned BMCUnroll = 10, unsigned SolverTimeoutMs = 0,
                     std::vector<std::string> *LeanProjectGoals = nullptr);
 
+VerifyResult lowerObligationModule(const ObligationModule &Module,
+                                   llvm::raw_ostream *Z3Out = nullptr,
+                                   unsigned SolverTimeoutMs = 0);
+
 } // namespace verify
 } // namespace clang
 

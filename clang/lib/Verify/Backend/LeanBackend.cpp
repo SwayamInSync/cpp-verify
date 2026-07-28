@@ -68,8 +68,9 @@ static void printLeanCommentText(llvm::StringRef Text, llvm::raw_ostream &OS) {
       OS << " ";
       continue;
     }
-    if (Text[I] == '-' && I + 1 < Text.size() && Text[I + 1] == '/') {
-      OS << "- /";
+    if (I + 1 < Text.size() && ((Text[I] == '-' && Text[I + 1] == '/') ||
+                                (Text[I] == '/' && Text[I + 1] == '-'))) {
+      OS << Text[I] << " " << Text[I + 1];
       ++I;
       continue;
     }
@@ -109,7 +110,8 @@ static void collectLeanVariables(const LogicExpr *E,
   if (E->K == VCExpr::Var && !Bound.count(E->Name)) {
     auto [It, Inserted] = Variables.emplace(E->Name, E->Sort);
     if (!Inserted && (It->second.Kind != E->Sort.Kind ||
-                      It->second.BitWidth != E->Sort.BitWidth))
+                      It->second.BitWidth != E->Sort.BitWidth ||
+                      It->second.Signedness != E->Sort.Signedness))
       LeanEmissionFailed = true;
   }
   if (E->K == VCExpr::Forall || E->K == VCExpr::Exists)
@@ -119,7 +121,11 @@ static void collectLeanVariables(const LogicExpr *E,
 }
 
 static bool sameLeanSort(const LogicSort &Left, const LogicSort &Right) {
-  return Left.Kind == Right.Kind && Left.BitWidth == Right.BitWidth;
+  if (Left.Kind != Right.Kind)
+    return false;
+  if (Left.Kind == LogicSortKind::MathematicalInteger)
+    return true;
+  return Left.BitWidth == Right.BitWidth && Left.Signedness == Right.Signedness;
 }
 
 static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
@@ -187,8 +193,9 @@ static void printLeanNativeSpecCall(const LogicExpr *Call,
     printLeanSpecName(Function.Identity, OS);
   for (unsigned I = 0; I < Call->Children.size(); ++I) {
     OS << " ";
-    printLeanCoerced(Call->Children[I].get(), Function.Parameters[I].Sort,
-                     Function.Parameters[I].IsSigned, OS);
+    printLeanCoerced(
+        Call->Children[I].get(), Function.Parameters[I].Sort,
+        Function.Parameters[I].Sort.Signedness == LogicSignedness::Signed, OS);
   }
   OS << ")";
 }
@@ -234,7 +241,7 @@ static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
     break;
   case VCExpr::IntLit:
     if (E->Sort.Kind == LogicSortKind::BitVector)
-      OS << "(BitVec.ofInt " << E->BitWidth << " (" << E->IntVal << "))";
+      OS << "(BitVec.ofInt " << E->Sort.BitWidth << " (" << E->IntVal << "))";
     else
       OS << "(" << E->IntVal << ")";
     break;
@@ -294,7 +301,10 @@ static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
     if (E->Children[0]->Sort.Kind == LogicSortKind::BitVector) {
       const bool Reverse = E->K == VCExpr::Gt || E->K == VCExpr::Ge;
       const bool Inclusive = E->K == VCExpr::Le || E->K == VCExpr::Ge;
-      OS << "(" << (E->IsSigned ? "cppBvS" : "cppBvU")
+      OS << "("
+         << (E->Children[0]->Sort.Signedness == LogicSignedness::Signed
+                 ? "cppBvS"
+                 : "cppBvU")
          << (Inclusive ? "le " : "lt ");
       printVCExprLean(E->Children[Reverse ? 1 : 0].get(), OS, 10);
       OS << " ";
@@ -335,7 +345,9 @@ static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
   case VCExpr::Div:
     OS << "("
        << (E->Sort.Kind == LogicSortKind::BitVector
-               ? (E->IsSigned ? "BitVec.sdiv " : "BitVec.udiv ")
+               ? (E->Sort.Signedness == LogicSignedness::Signed
+                      ? "BitVec.sdiv "
+                      : "BitVec.udiv ")
                : "cppIntDiv ");
     printVCExprLean(E->Children[0].get(), OS, 9);
     OS << " ";
@@ -345,7 +357,9 @@ static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
   case VCExpr::Rem:
     OS << "("
        << (E->Sort.Kind == LogicSortKind::BitVector
-               ? (E->IsSigned ? "BitVec.srem " : "BitVec.umod ")
+               ? (E->Sort.Signedness == LogicSignedness::Signed
+                      ? "BitVec.srem "
+                      : "BitVec.umod ")
                : "cppIntRem ");
     printVCExprLean(E->Children[0].get(), OS, 9);
     OS << " ";
@@ -372,7 +386,7 @@ static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
     });
     break;
   case VCExpr::Shr:
-    if (E->IsSigned) {
+    if (E->Sort.Signedness == LogicSignedness::Signed) {
       OS << "BitVec.sshiftRight ";
       printVCExprLean(E->Children[0].get(), OS, 9);
       OS << " (";
@@ -404,7 +418,7 @@ static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
     if (E->Sort.Kind == LogicSortKind::Bool)
       OS << "heapSelectBool ";
     else if (E->Sort.Kind == LogicSortKind::BitVector)
-      OS << "heapSelectBv " << E->BitWidth << " ";
+      OS << "heapSelectBv " << E->Sort.BitWidth << " ";
     else
       OS << "heapSelectInt ";
     printVCExprLean(E->Children[0].get(), OS, 10);
@@ -445,12 +459,12 @@ static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
     printVCExprLean(E->Children[2].get(), OS, 2);
     break;
   case VCExpr::IntToBv:
-    OS << "(BitVec.ofInt " << E->BitWidth << " (";
+    OS << "(BitVec.ofInt " << E->Sort.BitWidth << " (";
     printVCExprLean(E->Children[0].get(), OS, 0);
     OS << "))";
     break;
   case VCExpr::BvToInt:
-    if (E->IsSigned) {
+    if (E->Children[0]->Sort.Signedness == LogicSignedness::Signed) {
       OS << "(";
       printVCExprLean(E->Children[0].get(), OS, 0);
       OS << ").toInt";
@@ -462,26 +476,30 @@ static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
     break;
   case VCExpr::BvResize:
     OS << "("
-       << (E->Children[0]->IsSigned ? "BitVec.signExtend "
-                                    : "BitVec.zeroExtend ")
-       << E->BitWidth << " ";
+       << (E->Children[0]->Sort.Signedness == LogicSignedness::Signed
+               ? "BitVec.signExtend "
+               : "BitVec.zeroExtend ")
+       << E->Sort.BitWidth << " ";
     printVCExprLean(E->Children[0].get(), OS, 10);
     OS << ")";
     break;
   case VCExpr::NoOverflow: {
-    const char *Check = E->OverflowOp == VOverflowOp::Add   ? "saddOverflow"
-                        : E->OverflowOp == VOverflowOp::Sub ? "ssubOverflow"
-                        : E->OverflowOp == VOverflowOp::Mul ? "smulOverflow"
-                        : E->OverflowOp == VOverflowOp::Neg ? "negOverflow"
-                                                            : "sdivOverflow";
+    const unsigned BitWidth = E->Children[0]->Sort.BitWidth;
+    const char *Check = E->OverflowOp == LogicOverflowOp::Add   ? "saddOverflow"
+                        : E->OverflowOp == LogicOverflowOp::Sub ? "ssubOverflow"
+                        : E->OverflowOp == LogicOverflowOp::Mul ? "smulOverflow"
+                        : E->OverflowOp == LogicOverflowOp::Neg
+                            ? "negOverflow"
+                            : "sdivOverflow";
     OS << "(BitVec." << Check << " ";
     for (unsigned I = 0; I < E->Children.size(); ++I) {
       if (I)
         OS << " ";
       OS << "("
-         << (E->Children[I]->IsSigned ? "BitVec.signExtend "
-                                      : "BitVec.zeroExtend ")
-         << E->BitWidth << " ";
+         << (E->Children[I]->Sort.Signedness == LogicSignedness::Signed
+                 ? "BitVec.signExtend "
+                 : "BitVec.zeroExtend ")
+         << BitWidth << " ";
       printVCExprLean(E->Children[I].get(), OS, 10);
       OS << ")";
     }
@@ -500,7 +518,7 @@ static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
           (E->Sort.Kind == LogicSortKind::MathematicalInteger ||
            E->Sort.Kind == LogicSortKind::Pointer) &&
           Function->ResultSort.Kind == LogicSortKind::BitVector) {
-        if (Function->ResultIsSigned) {
+        if (Function->ResultSort.Signedness == LogicSignedness::Signed) {
           OS << "(";
           printLeanNativeSpecCall(E, *Function, OS);
           OS << ").toInt";
@@ -625,7 +643,9 @@ static unsigned emitLeanSpecAxiomBinders(const LogicExpr *Goal,
           printLeanBodyName(*Function, Level, OS);
         OS << " ";
         printLeanCoerced(Call->Children[I].get(), Function->Parameters[I].Sort,
-                         Function->Parameters[I].IsSigned, OS);
+                         Function->Parameters[I].Sort.Signedness ==
+                             LogicSignedness::Signed,
+                         OS);
       }
       if (Function->Parameters.empty())
         printLeanBodyName(*Function, Level, OS);
@@ -696,7 +716,9 @@ emitLeanFunctionDeclarations(const ObligationModule &Module,
   for (const auto &[Identity, Function] : Module.LogicFunctions) {
     if (!EmittedFunctions.insert(Identity).second)
       continue;
-    OS << "/- spec function: " << Function.DisplayName << " -/\n";
+    OS << "/- spec function: ";
+    printLeanCommentText(Function.DisplayName, OS);
+    OS << " -/\n";
     OS << "opaque ";
     printLeanSpecName(Identity, OS);
     OS << " : ";
@@ -743,7 +765,8 @@ static void emitLeanFunctionBodies(const ObligationModule &Module,
 
 VerifyResult verify::exportLeanScratchPad(
     const ObligationModule &Module, llvm::raw_ostream &OS, bool EmitPreamble,
-    std::set<std::string> &EmittedFunctions, unsigned ModuleIndex,
+    std::set<std::string> &EmittedFunctions,
+    std::set<std::string> &EmittedTheorems, unsigned ModuleIndex,
     std::vector<std::string> *ProjectGoals) {
   VerifyResult Result;
   if (!Module.CorrectnessGoal || !Module.CounterexampleQuery) {
@@ -802,7 +825,9 @@ VerifyResult verify::exportLeanScratchPad(
 
   emitLeanFunctionDeclarations(Module, OS, EmittedFunctions);
   emitLeanFunctionBodies(Module, OS);
-  OS << "/- function: " << Module.FunctionName << " -/\n";
+  OS << "/- function: ";
+  printLeanCommentText(Module.FunctionName, OS);
+  OS << " -/\n";
   OS << "/- required logic: " << formatLogicFeatures(Module.RequiredFeatures)
      << " -/\n\n";
 
@@ -811,6 +836,13 @@ VerifyResult verify::exportLeanScratchPad(
       (Module.FunctionName.empty() ? std::string("goal") : Module.FunctionName);
   if (!Module.FunctionIdentity.empty()) {
     TheoremName += "_" + Module.FunctionIdentity;
+  }
+  if (!EmittedTheorems.insert(TheoremName).second) {
+    const std::string BaseName = TheoremName;
+    unsigned Suffix = ModuleIndex;
+    do {
+      TheoremName = BaseName + "_module_" + std::to_string(Suffix++);
+    } while (!EmittedTheorems.insert(TheoremName).second);
   }
   if (!ProjectGoals)
     emitLeanTheorem(TheoremName + "_correct", Module.CorrectnessGoal.get(), OS);

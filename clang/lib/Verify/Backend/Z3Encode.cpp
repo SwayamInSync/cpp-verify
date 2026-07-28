@@ -55,50 +55,34 @@ z3::sort Z3Encoder::valueSort(const LogicSort &Sort) {
   return intSort();
 }
 
-static std::string specZ3Name(const std::string &Fn, VIntMode Mode) {
-  return "spec$" + Fn + (Mode == VIntMode::Machine ? "$bv" : "$int");
-}
-
-static std::string specDeclKey(const std::string &Fn, VIntMode Mode) {
-  return Fn + (Mode == VIntMode::Machine ? "$bv" : "$int");
-}
-
 z3::func_decl Z3Encoder::specFuncDecl(const LogicFunctionDecl &Function) {
-  std::string Key = specDeclKey(Function.Identity, Function.IntMode);
-  auto It = SpecFuncDecls.find(Key);
+  auto It = SpecFuncDecls.find(Function.Identity);
   if (It != SpecFuncDecls.end())
     return It->second;
   std::vector<z3::sort> Domain;
   for (const LogicFunctionParameter &Parameter : Function.Parameters)
     Domain.push_back(valueSort(Parameter.Sort));
   z3::sort Ret = valueSort(Function.ResultSort);
+  const std::string Name = "spec$" + Function.Identity;
   z3::func_decl F =
-      Ctx.function(specZ3Name(Function.Identity, Function.IntMode).c_str(),
-                   Domain.size(), Domain.data(), Ret);
-  SpecFuncDecls.emplace(Key, F);
+      Ctx.function(Name.c_str(), Domain.size(), Domain.data(), Ret);
+  SpecFuncDecls.emplace(Function.Identity, F);
   return F;
-}
-
-z3::expr Z3Encoder::coerceTo(z3::expr E, VIntMode Target, unsigned BitWidth,
-                             bool IsSigned) {
-  if (E.is_int() && Target == VIntMode::Math)
-    return E;
-  if (E.is_bv() && Target == VIntMode::Machine)
-    return E;
-  if (E.is_int() && Target == VIntMode::Machine)
-    return z3::int2bv(BitWidth, E);
-  if (E.is_bv() && Target == VIntMode::Math)
-    return z3::bv2int(E, IsSigned);
-  return E;
 }
 
 z3::expr Z3Encoder::coerceToSort(z3::expr E, const LogicSort &Target,
                                  bool IsSigned) {
-  if (Target.Kind == LogicSortKind::BitVector)
-    return coerceTo(E, VIntMode::Machine, Target.BitWidth, IsSigned);
+  if (Target.Kind == LogicSortKind::BitVector) {
+    if (E.is_int())
+      return z3::int2bv(Target.BitWidth, E);
+    return E;
+  }
   if (Target.Kind == LogicSortKind::MathematicalInteger ||
-      Target.Kind == LogicSortKind::Pointer)
-    return coerceTo(E, VIntMode::Math, 0, IsSigned);
+      Target.Kind == LogicSortKind::Pointer) {
+    if (E.is_bv())
+      return z3::bv2int(E, IsSigned);
+    return E;
+  }
   if (Target.Kind == LogicSortKind::Bool)
     return asBool(E);
   return E;
@@ -121,14 +105,12 @@ void Z3Encoder::markEncodingFailure(std::string Message) {
 }
 
 z3::expr Z3Encoder::fallbackValue(const VCExpr *E) {
-  if (E && E->TypeKind == VTypeKind::Bool)
+  if (E && E->Sort.Kind == LogicSortKind::Bool)
     return Ctx.bool_val(false);
-  if (E &&
-      (E->TypeKind == VTypeKind::Struct || E->TypeKind == VTypeKind::Array ||
-       E->TypeKind == VTypeKind::Unsupported))
-    return Ctx.int_val(0);
-  if (E && E->TypeKind != VTypeKind::Ptr && E->IntMode == VIntMode::Machine)
-    return Ctx.bv_val(0, E->BitWidth);
+  if (E && E->Sort.Kind == LogicSortKind::BitVector)
+    return Ctx.bv_val(0, E->Sort.BitWidth);
+  if (E && E->Sort.Kind == LogicSortKind::Heap)
+    return Ctx.constant("__cppverify_invalid_heap", heapSort());
   return Ctx.int_val(0);
 }
 
@@ -168,10 +150,6 @@ z3::expr Z3Encoder::arithOp(const VCExpr *E, z3::expr L, z3::expr R) {
     markEncodingFailure("unsupported arithmetic on heap arrays");
     return fallbackValue(E);
   }
-  if (L.is_bv() && R.is_int())
-    R = z3::int2bv(E->BitWidth, R);
-  if (L.is_int() && R.is_bv())
-    L = z3::int2bv(E->BitWidth, L);
   if (L.is_bv() && R.is_bv() &&
       L.get_sort().bv_size() != R.get_sort().bv_size()) {
     markEncodingFailure("bit-vector width mismatch");
@@ -186,7 +164,9 @@ z3::expr Z3Encoder::arithOp(const VCExpr *E, z3::expr L, z3::expr R) {
     markEncodingFailure("arithmetic operands are not integers");
     return fallbackValue(E);
   }
-  bool IsSigned = E->IsSigned;
+  bool IsSigned = E->Sort.Signedness == LogicSignedness::Signed;
+  if (E->Sort.Kind == LogicSortKind::Bool && !E->Children.empty())
+    IsSigned = E->Children[0]->Sort.Signedness == LogicSignedness::Signed;
   auto TruncatingIntDiv = [&] {
     z3::expr Zero = Ctx.int_val(0);
     z3::expr AbsL = z3::ite(L < Zero, -L, L);
@@ -270,7 +250,7 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
     if (E->Sort.Kind == LogicSortKind::Pointer)
       return Ctx.int_val(E->IntVal.c_str());
     if (E->Sort.Kind == LogicSortKind::BitVector)
-      return Ctx.bv_val(E->IntVal.c_str(), E->BitWidth);
+      return Ctx.bv_val(E->IntVal.c_str(), E->Sort.BitWidth);
     if (E->Sort.Kind != LogicSortKind::MathematicalInteger) {
       markEncodingFailure("integer literal has non-integer logic sort");
       return fallbackValue(E);
@@ -290,7 +270,7 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
                E->Sort.Kind == LogicSortKind::MathematicalInteger) {
       Z = Ctx.int_const(E->Name.c_str());
     } else if (E->Sort.Kind == LogicSortKind::BitVector) {
-      Z = Ctx.bv_const(E->Name.c_str(), E->BitWidth);
+      Z = Ctx.bv_const(E->Name.c_str(), E->Sort.BitWidth);
     } else {
       markEncodingFailure("unsupported variable sort: " + E->Name);
       Z = Ctx.int_const(E->Name.c_str());
@@ -301,7 +281,7 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
   case VCExpr::IntToBv: {
     z3::expr Inner = child(0);
     if (Inner.is_int())
-      return z3::int2bv(E->BitWidth, Inner);
+      return z3::int2bv(E->Sort.BitWidth, Inner);
     if (Inner.is_bv())
       return Inner;
     markEncodingFailure("cannot convert non-integer expression to bit-vector");
@@ -310,25 +290,27 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
   case VCExpr::BvResize: {
     z3::expr Inner = child(0);
     if (Inner.is_int())
-      Inner = z3::int2bv(E->Children[0]->BitWidth, Inner);
+      Inner = z3::int2bv(E->Children[0]->Sort.BitWidth, Inner);
     if (!Inner.is_bv()) {
       markEncodingFailure("cannot resize non-bit-vector expression");
       return fallbackValue(E);
     }
     unsigned SourceWidth = Inner.get_sort().bv_size();
-    if (SourceWidth == E->BitWidth)
+    if (SourceWidth == E->Sort.BitWidth)
       return Inner;
-    if (SourceWidth < E->BitWidth) {
-      unsigned Extra = E->BitWidth - SourceWidth;
-      return E->Children[0]->IsSigned ? z3::sext(Inner, Extra)
-                                      : z3::zext(Inner, Extra);
+    if (SourceWidth < E->Sort.BitWidth) {
+      unsigned Extra = E->Sort.BitWidth - SourceWidth;
+      return E->Children[0]->Sort.Signedness == LogicSignedness::Signed
+                 ? z3::sext(Inner, Extra)
+                 : z3::zext(Inner, Extra);
     }
-    return Inner.extract(E->BitWidth - 1, 0);
+    return Inner.extract(E->Sort.BitWidth - 1, 0);
   }
   case VCExpr::BvToInt: {
     z3::expr Inner = child(0);
     if (Inner.is_bv())
-      return z3::bv2int(Inner, E->IsSigned);
+      return z3::bv2int(Inner, E->Children[0]->Sort.Signedness ==
+                                   LogicSignedness::Signed);
     if (Inner.is_int())
       return Inner;
     markEncodingFailure("cannot convert " + Inner.get_sort().to_string() +
@@ -367,12 +349,9 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
   }
   case VCExpr::Ite: {
     z3::expr C = asBool(child(0));
-    z3::expr T = child(1);
-    z3::expr F = child(2);
-    if (E->TypeKind != VTypeKind::Ptr) {
-      T = coerceTo(T, E->IntMode, E->BitWidth, E->IsSigned);
-      F = coerceTo(F, E->IntMode, E->BitWidth, E->IsSigned);
-    }
+    const bool IsSigned = E->Sort.Signedness == LogicSignedness::Signed;
+    z3::expr T = coerceToSort(child(1), E->Sort, IsSigned);
+    z3::expr F = coerceToSort(child(2), E->Sort, IsSigned);
     return z3::ite(C, T, F);
   }
   case VCExpr::Eq:
@@ -391,14 +370,12 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
   case VCExpr::BitXor:
   case VCExpr::Shl:
   case VCExpr::Shr: {
-    z3::expr L = coerceTo(child(0), E->IntMode, E->BitWidth, E->IsSigned);
-    z3::expr R = coerceTo(child(1), E->IntMode, E->BitWidth, E->IsSigned);
-    return arithOp(E, L, R);
+    return arithOp(E, child(0), child(1));
   }
   case VCExpr::Neg:
-    return -coerceTo(child(0), E->IntMode, E->BitWidth, E->IsSigned);
+    return -child(0);
   case VCExpr::BitNot: {
-    z3::expr Value = coerceTo(child(0), E->IntMode, E->BitWidth, E->IsSigned);
+    z3::expr Value = child(0);
     if (!Value.is_bv()) {
       markEncodingFailure("bitwise complement operand is not a bit-vector");
       return fallbackValue(E);
@@ -406,30 +383,32 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
     return ~Value;
   }
   case VCExpr::NoOverflow: {
-    if (E->BitWidth == 0 || E->Children.empty()) {
+    if (E->Children.empty() ||
+        E->Children[0]->Sort.Kind != LogicSortKind::BitVector) {
       markEncodingFailure("malformed overflow check");
       return Ctx.bool_val(false);
     }
+    const unsigned BitWidth = E->Children[0]->Sort.BitWidth;
     auto Operand = [&](unsigned Index) {
       z3::expr Value = child(Index);
       if (Value.is_int())
-        Value = z3::int2bv(E->BitWidth, Value);
+        Value = z3::int2bv(BitWidth, Value);
       if (!Value.is_bv()) {
         markEncodingFailure("overflow-check operand is not an integer");
-        return Ctx.bv_val(0, E->BitWidth);
+        return Ctx.bv_val(0, BitWidth);
       }
       const unsigned Width = Value.get_sort().bv_size();
-      if (Width < E->BitWidth)
-        return E->Children[Index]->IsSigned
-                   ? z3::sext(Value, E->BitWidth - Width)
-                   : z3::zext(Value, E->BitWidth - Width);
-      if (Width > E->BitWidth)
-        return Value.extract(E->BitWidth - 1, 0);
+      if (Width < BitWidth)
+        return E->Children[Index]->Sort.Signedness == LogicSignedness::Signed
+                   ? z3::sext(Value, BitWidth - Width)
+                   : z3::zext(Value, BitWidth - Width);
+      if (Width > BitWidth)
+        return Value.extract(BitWidth - 1, 0);
       return Value;
     };
 
     z3::expr Lhs = Operand(0);
-    if (E->OverflowOp == VOverflowOp::Neg)
+    if (E->OverflowOp == LogicOverflowOp::Neg)
       return z3::bvneg_no_overflow(Lhs);
     if (E->Children.size() != 2) {
       markEncodingFailure("binary overflow check is missing an operand");
@@ -437,18 +416,18 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
     }
     z3::expr Rhs = Operand(1);
     switch (E->OverflowOp) {
-    case VOverflowOp::Add:
+    case LogicOverflowOp::Add:
       return z3::bvadd_no_overflow(Lhs, Rhs, true) &&
              z3::bvadd_no_underflow(Lhs, Rhs);
-    case VOverflowOp::Sub:
+    case LogicOverflowOp::Sub:
       return z3::bvsub_no_overflow(Lhs, Rhs) &&
              z3::bvsub_no_underflow(Lhs, Rhs, true);
-    case VOverflowOp::Mul:
+    case LogicOverflowOp::Mul:
       return z3::bvmul_no_overflow(Lhs, Rhs, true) &&
              z3::bvmul_no_underflow(Lhs, Rhs);
-    case VOverflowOp::SDiv:
+    case LogicOverflowOp::SignedDiv:
       return z3::bvsdiv_no_overflow(Lhs, Rhs);
-    case VOverflowOp::Neg:
+    case LogicOverflowOp::Neg:
       llvm_unreachable("handled above");
     }
     llvm_unreachable("unknown overflow operation");
@@ -482,7 +461,7 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
       return fallbackValue(E);
     }
     z3::expr Val = z3::select(Heap, Index);
-    if (E->TypeKind == VTypeKind::Bool) {
+    if (E->Sort.Kind == LogicSortKind::Bool) {
       if (Val.is_bool())
         return Val;
       if (Val.is_int())
@@ -491,9 +470,10 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
                           Val.get_sort().to_string());
       return Ctx.bool_val(false);
     }
-    if (E->TypeKind == VTypeKind::Ptr)
+    if (E->Sort.Kind == LogicSortKind::Pointer)
       return Val;
-    return coerceTo(Val, E->IntMode, E->BitWidth, E->IsSigned);
+    return coerceToSort(Val, E->Sort,
+                        E->Sort.Signedness == LogicSignedness::Signed);
   }
   case VCExpr::Store: {
     z3::expr Before = child(0);
@@ -504,9 +484,7 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
   }
   case VCExpr::Forall:
   case VCExpr::Exists: {
-    z3::expr ExpectedBound = E->IntMode == VIntMode::Machine
-                                 ? Ctx.bv_const(E->Binder.c_str(), E->BitWidth)
-                                 : Ctx.int_const(E->Binder.c_str());
+    z3::expr ExpectedBound = Ctx.int_const(E->Binder.c_str());
     z3::expr Bound = ExpectedBound;
     if (auto It = Vars.find(E->Binder); It != Vars.end()) {
       if (!Z3_is_eq_sort(Ctx, It->second.get_sort(),
@@ -518,81 +496,21 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
     }
     z3::expr Lo = child(0);
     z3::expr Hi = child(1);
-    z3::expr Range = Ctx.bool_val(false);
-    z3::expr NonEmpty = Ctx.bool_val(false);
-    bool HasExactNonEmpty = false;
-    if (Bound.is_bv()) {
-      if (!Lo.is_bv() || !Hi.is_bv()) {
-        markEncodingFailure(
-            "machine quantifier bounds must have machine integer type");
-        return Ctx.bool_val(false);
-      }
-      auto Resize = [](z3::expr Value, unsigned SourceWidth, bool SourceSigned,
-                       unsigned TargetWidth) {
-        if (SourceWidth == TargetWidth)
-          return Value;
-        if (SourceWidth < TargetWidth)
-          return SourceSigned ? z3::sext(Value, TargetWidth - SourceWidth)
-                              : z3::zext(Value, TargetWidth - SourceWidth);
-        return Value.extract(TargetWidth - 1, 0);
-      };
-      auto Compare = [&](z3::expr L, unsigned LWidth, bool LSigned, z3::expr R,
-                         unsigned RWidth, bool RSigned, bool Strict) {
-        const unsigned Width = std::max(LWidth, RWidth);
-        bool Signed = LSigned;
-        if (LSigned != RSigned) {
-          const unsigned SignedWidth = LSigned ? LWidth : RWidth;
-          const unsigned UnsignedWidth = LSigned ? RWidth : LWidth;
-          Signed = SignedWidth > UnsignedWidth;
-        }
-        L = Resize(L, LWidth, LSigned, Width);
-        R = Resize(R, RWidth, RSigned, Width);
-        if (Signed)
-          return Strict ? L < R : L <= R;
-        return Strict ? z3::ult(L, R) : z3::ule(L, R);
-      };
-      z3::expr Lower =
-          Compare(Lo, E->Children[0]->BitWidth, E->Children[0]->IsSigned, Bound,
-                  E->BitWidth, E->IsSigned, false);
-      z3::expr Upper =
-          Compare(Bound, E->BitWidth, E->IsSigned, Hi, E->Children[1]->BitWidth,
-                  E->Children[1]->IsSigned, true);
-      Range = Lower && Upper;
-      if (E->Children[0]->BitWidth == E->BitWidth &&
-          E->Children[1]->BitWidth == E->BitWidth &&
-          E->Children[0]->IsSigned == E->IsSigned &&
-          E->Children[1]->IsSigned == E->IsSigned) {
-        NonEmpty = E->IsSigned ? Lo < Hi : z3::ult(Lo, Hi);
-        HasExactNonEmpty = true;
-      }
-    } else {
-      auto RangeInt = [&](z3::expr Value, const VCExpr *Node) {
-        if (Value.is_int())
-          return Value;
-        if (Value.is_bv())
-          return z3::bv2int(Value, Node->IsSigned);
-        markEncodingFailure("non-integer quantifier bound");
-        return Ctx.int_val(0);
-      };
-      Lo = RangeInt(Lo, E->Children[0].get());
-      Hi = RangeInt(Hi, E->Children[1].get());
-      Range = (Lo <= Bound) && (Bound < Hi);
-      NonEmpty = Lo < Hi;
-      HasExactNonEmpty = true;
+    if (!Lo.is_int() || !Hi.is_int()) {
+      markEncodingFailure("quantifier bounds must be mathematical integers");
+      return Ctx.bool_val(false);
     }
+    z3::expr Range = (Lo <= Bound) && (Bound < Hi);
+    z3::expr NonEmpty = Lo < Hi;
     z3::expr Body = asBool(child(2));
     z3::expr SimplifiedBody = Body.simplify();
     if (SimplifiedBody.is_true()) {
       Vars.erase(E->Binder);
-      return E->K == VCExpr::Forall ? Ctx.bool_val(true)
-             : HasExactNonEmpty     ? NonEmpty
-                                    : z3::exists(Bound, Range);
+      return E->K == VCExpr::Forall ? Ctx.bool_val(true) : NonEmpty;
     }
     if (SimplifiedBody.is_false()) {
       Vars.erase(E->Binder);
-      return E->K == VCExpr::Exists ? Ctx.bool_val(false)
-             : HasExactNonEmpty     ? !NonEmpty
-                                    : !z3::exists(Bound, Range);
+      return E->K == VCExpr::Exists ? Ctx.bool_val(false) : !NonEmpty;
     }
     z3::expr_vector Binders(Ctx);
     Binders.push_back(Bound);
@@ -616,11 +534,13 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
     std::vector<z3::expr> Args;
     for (unsigned i = 0; i < E->Children.size(); ++i) {
       z3::expr Arg = coerceToSort(child(i), Function.Parameters[i].Sort,
-                                  Function.Parameters[i].IsSigned);
+                                  Function.Parameters[i].Sort.Signedness ==
+                                      LogicSignedness::Signed);
       Args.push_back(std::move(Arg));
     }
     z3::expr A = F(static_cast<unsigned>(Args.size()), Args.data());
-    return coerceToSort(A, E->Sort, Function.ResultIsSigned);
+    return coerceToSort(
+        A, E->Sort, Function.ResultSort.Signedness == LogicSignedness::Signed);
   }
   }
   markEncodingFailure("unsupported verification expression");
@@ -642,9 +562,7 @@ z3::expr Z3Encoder::encodeVC(const VCExpr *Root) {
     }
     if ((E->K == VCExpr::Forall || E->K == VCExpr::Exists) &&
         !Vars.count(E->Binder)) {
-      z3::expr Bound = E->IntMode == VIntMode::Machine
-                           ? Ctx.bv_const(E->Binder.c_str(), E->BitWidth)
-                           : Ctx.int_const(E->Binder.c_str());
+      z3::expr Bound = Ctx.int_const(E->Binder.c_str());
       Vars.emplace(E->Binder, std::move(Bound));
     }
     bool Pending = false;
@@ -685,7 +603,8 @@ void Z3Encoder::emitSpecCallAxiom(const VCExpr *Call) {
   for (unsigned I = 0; I < Call->Children.size(); ++I) {
     z3::expr Arg = encodeVC(Call->Children[I].get());
     Arg = coerceToSort(Arg, Function.Parameters[I].Sort,
-                       Function.Parameters[I].IsSigned);
+                       Function.Parameters[I].Sort.Signedness ==
+                           LogicSignedness::Signed);
     Args.push_back(std::move(Arg));
   }
 
@@ -705,7 +624,9 @@ void Z3Encoder::emitSpecCallAxiom(const VCExpr *Call) {
   z3::expr LHS = Fdecl(static_cast<unsigned>(Args.size()), Args.data());
   for (const auto &Definition : Function.DefinitionLevels) {
     z3::expr RHS = encodeVC(Definition.get());
-    RHS = coerceToSort(RHS, Function.ResultSort, Function.ResultIsSigned);
+    RHS =
+        coerceToSort(RHS, Function.ResultSort,
+                     Function.ResultSort.Signedness == LogicSignedness::Signed);
     Solver.add(LHS == RHS);
   }
 
@@ -733,6 +654,7 @@ std::optional<z3::expr> Z3Encoder::encodeModule(const ObligationModule &Module,
   EncodingFailed = false;
   EncodingError.clear();
   LogicFunctions.clear();
+  SpecFuncDecls.clear();
   for (const auto &[Identity, Function] : Module.LogicFunctions)
     LogicFunctions.emplace(Identity, &Function);
   if (!Query) {

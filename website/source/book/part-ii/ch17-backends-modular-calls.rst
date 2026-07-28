@@ -65,6 +65,33 @@ fallback candidates. Regeneration may leave old proof files on disk, but only
 the current source obligations are imported and certified; a stale active proof
 must type-check against the regenerated goal.
 
+Portable obligation archives
+----------------------------
+
+The canonical backend boundary can be persisted and replayed:
+
+.. code-block:: bash
+
+   cpp-verify --lower-only --obligation-out=goals.cpv file.cpp
+   cpp-verify --obligation-in=goals.cpv --backend=z3
+   cpp-verify --obligation-in=goals.cpv --lower-only --dump-ir=3,4
+   cpp-verify --obligation-in=goals.cpv --backend=lean --lean-out=goals.lean
+
+Each ``cppverify.obligation/1`` record uses stable wire tags, defensive bounds,
+portable source points, and path-independent SHA-256 semantic hashes. Replay
+revalidates every sort, expression, logical declaration, call signature,
+feature declaration, and identity before backend dispatch. Multiple records may
+be concatenated. Parsing has explicit depth/node/collection budgets and a
+4096-bit integer-width ceiling; malformed terms, non-canonical payloads,
+ill-scoped variables, and contradictory complete/ordered goals fail closed.
+Different records may request different reveal fuel for one logical function,
+but its shared parameter/result signature must remain compatible.
+
+BMC cannot be selected for archive replay: bounded loop unrolling is a VCR
+transformation that occurs before canonical obligation construction.
+Failure-only ``recommends`` checks are not archived, so bytes do not depend on
+whether a prior solver run succeeded or failed.
+
 Modular function calls
 ----------------------
 

@@ -1,4 +1,6 @@
 //===--- Main.cpp - cpp-verify standalone tool ----------------------------===//
+#include "../../lib/Verify/Backend/ObligationSerialization.h"
+#include "../../lib/Verify/Backend/VerifyBackend.h"
 #include "DumpIR.h"
 #include "Verifier.h"
 #include "clang/AST/ASTConsumer.h"
@@ -7,9 +9,11 @@
 #include "clang/Frontend/FrontendAction.h"
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Tooling.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdlib>
 
@@ -72,9 +76,20 @@ static cl::opt<bool> CheckUB(
              "always-on expression definedness checks"),
     cl::init(false), cl::cat(CppVerifyCategory));
 
+static cl::opt<std::string> ObligationOut(
+    "obligation-out",
+    cl::desc("Write versioned backend-neutral obligation modules to this file"),
+    cl::value_desc("file"), cl::cat(CppVerifyCategory));
+
+static cl::opt<std::string> ObligationIn(
+    "obligation-in",
+    cl::desc("Validate and replay a backend-neutral obligation archive"),
+    cl::value_desc("file"), cl::cat(CppVerifyCategory));
+
 namespace {
 
 static int gVerifyFailures = 0;
+static llvm::raw_ostream *gObligationOut = nullptr;
 
 class VerifyConsumer : public ASTConsumer {
 public:
@@ -98,6 +113,7 @@ public:
       VOpts.BMCUnroll = BMCUnroll.getValue();
       VOpts.SolverTimeoutMs = SolverTimeout.getValue();
       VOpts.CheckUB = CheckUB.getValue();
+      VOpts.ObligationOut = gObligationOut;
       if (!verify::verifyTranslationUnit(Ctx, llvm::outs(), VOpts))
         ++gVerifyFailures;
     }
@@ -113,10 +129,165 @@ public:
   }
 };
 
+static int replayObligationArchive() {
+  if (!ObligationOut.empty()) {
+    llvm::errs() << "error: --obligation-in and --obligation-out are mutually "
+                    "exclusive\n";
+    return 1;
+  }
+  if (BackendOpt == "bmc") {
+    llvm::errs() << "error: BMC cannot replay a backend-neutral archive; "
+                    "bounded unrolling must run before obligation lowering\n";
+    return 1;
+  }
+  if (!LeanProject.empty() || !LeanFallback.empty() || LeanCertify) {
+    llvm::errs() << "error: archive replay supports Lean scratch-pad export "
+                    "with --lean-out, not Lean project generation or "
+                    "certification\n";
+    return 1;
+  }
+
+  auto Buffer = llvm::MemoryBuffer::getFile(ObligationIn);
+  if (!Buffer) {
+    llvm::errs() << "error: cannot read obligation archive: "
+                 << Buffer.getError().message() << "\n";
+    return 1;
+  }
+  auto Modules = verify::deserializeObligationModules((*Buffer)->getBuffer());
+  if (!Modules) {
+    llvm::errs() << "error: invalid obligation archive: "
+                 << llvm::toString(Modules.takeError()) << "\n";
+    return 1;
+  }
+  if (Modules->empty()) {
+    llvm::errs() << "error: obligation archive contains no modules\n";
+    return 1;
+  }
+
+  std::unique_ptr<llvm::raw_fd_ostream> LeanFile;
+  llvm::raw_ostream *LeanStream = nullptr;
+  if (BackendOpt == "lean") {
+    if (LeanOut.empty()) {
+      llvm::errs()
+          << "error: --backend=lean archive replay requires --lean-out\n";
+      return 1;
+    }
+    std::error_code EC;
+    LeanFile = std::make_unique<llvm::raw_fd_ostream>(LeanOut, EC,
+                                                      llvm::sys::fs::OF_Text);
+    if (EC) {
+      llvm::errs() << "error: cannot open Lean output: " << EC.message()
+                   << "\n";
+      return 1;
+    }
+    LeanStream = LeanFile.get();
+  } else if (!LeanOut.empty()) {
+    llvm::errs() << "error: --lean-out requires --backend=lean\n";
+    return 1;
+  }
+
+  verify::BackendKind Kind = BackendOpt == "lean" ? verify::BackendKind::Lean
+                                                  : verify::BackendKind::Z3;
+  std::unique_ptr<verify::VerifyBackend> Backend =
+      verify::createVerifyBackend(Kind, LeanStream, BMCUnroll, SolverTimeout);
+  const unsigned DumpLayers = DumpIR.getNumOccurrences() > 0
+                                  ? verify::parseDumpIRLayers(DumpIR.getValue())
+                                  : 0;
+  bool AllOk = true;
+  for (const verify::ObligationModule &Module : *Modules) {
+    if (DumpLayers & verify::LayerVC)
+      verify::dumpVC(Module, llvm::outs());
+
+    verify::VerifyResult Result;
+    if (LowerOnly) {
+      Result = verify::lowerObligationModule(
+          Module, DumpLayers & verify::LayerZ3 ? &llvm::outs() : nullptr,
+          SolverTimeout);
+      if (Result.BackendName.empty())
+        Result.BackendName = "z3";
+    } else {
+      Result = Backend->verify(Module);
+    }
+
+    const std::string Hash = verify::obligationSemanticHash(Module);
+    const std::string Suffix = " [backend=" + Result.BackendName +
+                               "] [semantic-hash=sha256:" + Hash + "]";
+    switch (Result.Status) {
+    case verify::VerifyStatus::Lowered:
+      llvm::outs() << "Lowered: " << Module.FunctionName << Suffix << "\n";
+      break;
+    case verify::VerifyStatus::Verified:
+      llvm::outs() << "Verified: " << Module.FunctionName << Suffix << "\n";
+      break;
+    case verify::VerifyStatus::Exported:
+      llvm::outs() << "Exported: lean obligation: " << Module.FunctionName
+                   << Suffix << "\n";
+      break;
+    case verify::VerifyStatus::Failed:
+      AllOk = false;
+      if (!Result.ObligationId.empty()) {
+        auto It = llvm::find_if(Module.Obligations,
+                                [&](const verify::Obligation &Item) {
+                                  return Item.Id == Result.ObligationId;
+                                });
+        if (It != Module.Obligations.end() && It->Source.isValid())
+          llvm::outs() << It->Source.File << ":" << It->Source.Line << ":"
+                       << It->Source.Column << ": ";
+      }
+      llvm::outs() << "error: verification failed: " << Module.FunctionName;
+      if (!Result.ObligationId.empty())
+        llvm::outs() << " [" << Result.ObligationId << "]";
+      if (!Result.Message.empty())
+        llvm::outs() << " (counterexample: " << Result.Message << ")";
+      llvm::outs() << Suffix << "\n";
+      break;
+    case verify::VerifyStatus::Unresolved:
+      AllOk = false;
+      llvm::outs() << "Unresolved: " << Module.FunctionName;
+      if (!Result.Message.empty())
+        llvm::outs() << " (" << Result.Message << ")";
+      llvm::outs() << Suffix << "\n";
+      break;
+    case verify::VerifyStatus::BoundedSafe:
+    case verify::VerifyStatus::Certified:
+      AllOk = false;
+      llvm::outs() << "Unresolved: " << Module.FunctionName
+                   << " (archive backend returned an invalid replay status)"
+                   << Suffix << "\n";
+      break;
+    }
+  }
+  if (LeanFile) {
+    LeanFile->flush();
+    if (LeanFile->has_error()) {
+      llvm::errs() << "error: cannot write Lean output\n";
+      return 1;
+    }
+  }
+  return AllOk ? 0 : 1;
+}
+
 } // namespace
 
 int main(int argc, const char **argv) {
   llvm::InitLLVM X(argc, argv);
+
+  static const char ReplayPlaceholder[] = "cppverify-obligation-replay.cpp";
+  bool HasObligationInput = false;
+  for (int I = 1; I < argc; ++I) {
+    llvm::StringRef Arg(argv[I]);
+    if (Arg == "--obligation-in" || Arg.starts_with("--obligation-in=")) {
+      HasObligationInput = true;
+      break;
+    }
+  }
+  std::vector<const char *> AdjustedArgv;
+  if (HasObligationInput) {
+    AdjustedArgv.assign(argv, argv + argc);
+    AdjustedArgv.push_back(ReplayPlaceholder);
+    argv = AdjustedArgv.data();
+    argc = static_cast<int>(AdjustedArgv.size());
+  }
 
   auto ExpectedParser =
       CommonOptionsParser::create(argc, argv, CppVerifyCategory);
@@ -130,6 +301,28 @@ int main(int argc, const char **argv) {
     llvm::errs() << "error: unknown verification backend '" << Backend
                  << "'; expected z3, lean, or bmc\n";
     return 1;
+  }
+  if (!ObligationIn.empty()) {
+    const std::vector<std::string> &Sources = OptionsParser.getSourcePathList();
+    if (Sources.size() != 1 || Sources.front() != ReplayPlaceholder) {
+      llvm::errs() << "error: --obligation-in cannot be combined with C++ "
+                      "source files\n";
+      return 1;
+    }
+    return replayObligationArchive();
+  }
+
+  std::unique_ptr<llvm::raw_fd_ostream> ObligationFile;
+  if (!ObligationOut.empty()) {
+    std::error_code EC;
+    ObligationFile = std::make_unique<llvm::raw_fd_ostream>(
+        ObligationOut, EC, llvm::sys::fs::OF_None);
+    if (EC) {
+      llvm::errs() << "error: cannot open obligation archive: " << EC.message()
+                   << "\n";
+      return 1;
+    }
+    gObligationOut = ObligationFile.get();
   }
 
   ClangTool Tool(OptionsParser.getCompilations(),
@@ -146,5 +339,12 @@ int main(int argc, const char **argv) {
   int RC = Tool.run(newFrontendActionFactory<VerifyAction>().get());
   if (RC != 0)
     return RC;
+  if (ObligationFile) {
+    ObligationFile->flush();
+    if (ObligationFile->has_error()) {
+      llvm::errs() << "error: cannot write obligation archive\n";
+      return 1;
+    }
+  }
   return gVerifyFailures > 0 ? 1 : 0;
 }

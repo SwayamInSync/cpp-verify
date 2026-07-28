@@ -11,6 +11,7 @@ class LeanVerifyBackend : public VerifyBackend {
   llvm::raw_ostream *Out;
   bool PreambleEmitted = false;
   std::set<std::string> EmittedFunctions;
+  std::set<std::string> EmittedTheorems;
   unsigned ModuleIndex = 0;
   std::vector<std::string> *ProjectGoals;
 
@@ -33,7 +34,7 @@ protected:
     }
     VerifyResult Result =
         exportLeanScratchPad(Module, *Out, !PreambleEmitted, EmittedFunctions,
-                             ++ModuleIndex, ProjectGoals);
+                             EmittedTheorems, ++ModuleIndex, ProjectGoals);
     PreambleEmitted = true;
     return Result;
   }
@@ -106,12 +107,30 @@ protected:
 } // namespace
 
 VerifyResult VerifyBackend::verify(const ObligationModule &Module) {
+  auto ValidatedFeatures = validateObligationModule(Module);
+  if (!ValidatedFeatures) {
+    VerifyResult Result;
+    Result.Status = VerifyStatus::Unresolved;
+    Result.BackendName = getName().str();
+    Result.Message = "invalid obligation module: " +
+                     llvm::toString(ValidatedFeatures.takeError());
+    return Result;
+  }
+  if (*ValidatedFeatures != Module.RequiredFeatures) {
+    VerifyResult Result;
+    Result.Status = VerifyStatus::Unresolved;
+    Result.BackendName = getName().str();
+    Result.Message =
+        "obligation feature declaration does not match validated contents";
+    return Result;
+  }
   const BackendCapabilities Capabilities = getCapabilities();
   const LogicFeatureSet Missing =
       Module.RequiredFeatures & ~Capabilities.SupportedFeatures;
   if (Missing != 0) {
     VerifyResult Result;
     Result.Status = VerifyStatus::Unresolved;
+    Result.BackendName = getName().str();
     Result.Message = "backend '" + getName().str() +
                      "' does not support required logic features: " +
                      formatLogicFeatures(Missing);
@@ -120,6 +139,7 @@ VerifyResult VerifyBackend::verify(const ObligationModule &Module) {
   if (!Module.CounterexampleQuery) {
     VerifyResult Result;
     Result.Status = VerifyStatus::Unresolved;
+    Result.BackendName = getName().str();
     Result.Message = "obligation module has no counterexample query";
     return Result;
   }
@@ -163,4 +183,12 @@ verify::createVerifyBackend(BackendKind K, llvm::raw_ostream *LeanOut,
     return std::make_unique<BMCVerifyBackend>(BMCUnroll, SolverTimeoutMs);
   }
   return std::make_unique<Z3VerifyBackend>(SolverTimeoutMs);
+}
+
+VerifyResult verify::lowerObligationModule(const ObligationModule &Module,
+                                           llvm::raw_ostream *Z3Out,
+                                           unsigned SolverTimeoutMs) {
+  Z3Encoder Encoder;
+  Encoder.setTimeoutMs(SolverTimeoutMs);
+  return Encoder.lowerModule(Module, Z3Out);
 }

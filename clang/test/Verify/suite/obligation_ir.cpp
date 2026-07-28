@@ -6,6 +6,14 @@
 // RUN: %cpp-verify --lower-only --dump-ir=3,4 %s 2>&1 | FileCheck %s --check-prefix=LAYERS
 // RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=Z3
 // RUN: %cpp-verify --backend=bmc --unroll=1 %s 2>&1 | FileCheck %s --check-prefix=BMC
+// RUN: rm -f %t.first.obligations %t.second.obligations
+// RUN: %cpp-verify --lower-only --obligation-out=%t.first.obligations %s
+// RUN: %cpp-verify --lower-only --obligation-out=%t.second.obligations %s
+// RUN: cmp %t.first.obligations %t.second.obligations
+// RUN: cp %s %t.relocated.cpp
+// RUN: %cpp-verify --lower-only --dump-ir=3 %t.relocated.cpp 2>&1 | grep 'semantic-hash' > %t.relocated.hashes
+// RUN: grep 'semantic-hash' %t.first > %t.original.hashes
+// RUN: diff %t.original.hashes %t.relocated.hashes
 
 int canonical_obligations(int x)
   pre(x >= 0 && x < 10)
@@ -18,14 +26,18 @@ int canonical_obligations(int x)
 }
 
 // OBLIGATION-LABEL: vc canonical_obligations
+// OBLIGATION-NEXT: schema cppverify.obligation/1
+// OBLIGATION-NEXT: semantic-hash sha256:{{[0-9a-f]+}}
 // OBLIGATION-NEXT: identity [[IDENTITY:fn_[0-9a-f]+]]
 // OBLIGATION-NEXT: features mathematical-integers, bit-vectors, pointers, heap-arrays
 // OBLIGATION-NEXT: counterexample
 // OBLIGATION: x_0 : bitvector32
 // OBLIGATION: obligations [[COUNT:[1-9][0-9]*]]
 // OBLIGATION: obligation [[IDENTITY]]::obligation:1 assertion
+// OBLIGATION-NEXT: semantic-hash sha256:{{[0-9a-f]+}}
 // OBLIGATION-NEXT: source {{[1-9][0-9]*}}
 // OBLIGATION: obligation [[IDENTITY]]::obligation:{{[1-9][0-9]*}} postcondition
+// OBLIGATION-NEXT: semantic-hash sha256:{{[0-9a-f]+}}
 // OBLIGATION-NEXT: source {{[1-9][0-9]*}}
 // OBLIGATION: Lowered: canonical_obligations
 

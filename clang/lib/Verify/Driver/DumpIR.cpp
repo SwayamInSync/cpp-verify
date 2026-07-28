@@ -1,5 +1,7 @@
 //===--- DumpIR.cpp -------------------------------------------------------===//
 #include "DumpIR.h"
+#include "../Backend/ObligationSerialization.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -514,6 +516,10 @@ static void dumpLogicExpr(const LogicExpr *Expr, llvm::raw_ostream &OS,
 
 void verify::dumpVC(const ObligationModule &Module, llvm::raw_ostream &OS) {
   ind(OS, 0) << "vc " << Module.FunctionName << "\n";
+  ind(OS, 1) << "schema cppverify.obligation/" << ObligationSerializationVersion
+             << "\n";
+  ind(OS, 1) << "semantic-hash sha256:" << obligationSemanticHash(Module)
+             << "\n";
   ind(OS, 1) << "identity " << Module.FunctionIdentity << "\n";
   ind(OS, 1) << "features " << formatLogicFeatures(Module.RequiredFeatures)
              << "\n";
@@ -526,6 +532,8 @@ void verify::dumpVC(const ObligationModule &Module, llvm::raw_ostream &OS) {
                            ? "unwinding"
                            : "postcondition";
     ind(OS, 2) << "obligation " << Item.Id << " " << Kind << "\n";
+    ind(OS, 3) << "semantic-hash sha256:"
+               << obligationSemanticHash(Module, Item) << "\n";
     ind(OS, 3) << "source "
                << (Item.Loc.isValid()
                        ? std::to_string(Item.Loc.getRawEncoding())
@@ -543,17 +551,25 @@ void verify::dumpVC(const ObligationModule &Module, llvm::raw_ostream &OS) {
   dumpLogicExpr(Module.CorrectnessGoal.get(), OS, 2);
   ind(OS, 1) << "logic-functions " << Module.LogicFunctions.size() << "\n";
   for (const auto &[Identity, Function] : Module.LogicFunctions) {
+    const bool UsesBitVectors =
+        Function.ResultSort.Kind == LogicSortKind::BitVector ||
+        llvm::any_of(Function.Parameters, [](const LogicFunctionParameter &P) {
+          return P.Sort.Kind == LogicSortKind::BitVector;
+        });
     ind(OS, 2) << "function " << Identity << " " << Function.DisplayName << " "
-               << (Function.IntMode == VIntMode::Machine ? "machine" : "math")
-               << "\n";
+               << (UsesBitVectors ? "machine" : "math") << "\n";
     for (const LogicFunctionParameter &Parameter : Function.Parameters) {
       ind(OS, 3) << "parameter " << Parameter.Name << " ";
       dumpLogicSort(Parameter.Sort, OS);
-      OS << (Parameter.IsSigned ? " signed\n" : " unsigned\n");
+      OS << (Parameter.Sort.Signedness == LogicSignedness::Unsigned
+                 ? " unsigned\n"
+                 : " signed\n");
     }
     ind(OS, 3) << "result ";
     dumpLogicSort(Function.ResultSort, OS);
-    OS << (Function.ResultIsSigned ? " signed\n" : " unsigned\n");
+    OS << (Function.ResultSort.Signedness == LogicSignedness::Unsigned
+               ? " unsigned\n"
+               : " signed\n");
     ind(OS, 3) << "fuel " << Function.DefinitionFuel << "\n";
     if (Function.StepDefinition) {
       ind(OS, 3) << "step\n";

@@ -1,0 +1,88 @@
+# RUN: %cpp-verify --lower-only --obligation-out=%t.one %S/obligation_ir.cpp
+# RUN: %cpp-verify --obligation-in=%t.one --backend=z3 | FileCheck %s --check-prefix=REPLAY
+# RUN: %cpp-verify --obligation-in=%t.one --lower-only --dump-ir=3,4 | FileCheck %s --check-prefix=LOWER
+# RUN: %cpp-verify --obligation-in=%t.one --backend=lean --lean-out=%t.lean | FileCheck %s --check-prefix=LEAN
+# RUN: FileCheck %s --input-file=%t.lean --check-prefix=LEAN-FILE
+# RUN: /bin/cat %t.one %t.one > %t.multi
+# RUN: %cpp-verify --obligation-in=%t.multi --backend=z3 | FileCheck %s --check-prefix=MULTI
+# RUN: %cpp-verify --obligation-in=%t.multi --backend=lean --lean-out=%t.multi.lean
+# RUN: sed -n 's/^theorem \([^ ]*\).*/\1/p' %t.multi.lean | sort | uniq -d > %t.duplicate-theorems
+# RUN: test ! -s %t.duplicate-theorems
+# RUN: grep -q '_module_2_correct' %t.multi.lean
+#
+# RUN: printf 'bad archive' > %t.bad-magic
+# RUN: not %cpp-verify --obligation-in=%t.bad-magic 2>&1 | FileCheck %s --check-prefix=BAD-MAGIC
+# RUN: head -c -1 %t.one > %t.truncated
+# RUN: not %cpp-verify --obligation-in=%t.truncated 2>&1 | FileCheck %s --check-prefix=TRUNCATED
+# RUN: cp %t.one %t.version
+# RUN: printf '\002\000\000\000' | dd of=%t.version bs=1 seek=8 conv=notrunc 2>/dev/null
+# RUN: not %cpp-verify --obligation-in=%t.version 2>&1 | FileCheck %s --check-prefix=VERSION
+# RUN: %python %S/Inputs/mutate_obligation_archive.py invalid-kind %t.one %t.invalid-kind
+# RUN: not %cpp-verify --obligation-in=%t.invalid-kind 2>&1 | FileCheck %s --check-prefix=KIND
+# RUN: %python %S/Inputs/mutate_obligation_archive.py feature-mismatch %t.one %t.features
+# RUN: not %cpp-verify --obligation-in=%t.features 2>&1 | FileCheck %s --check-prefix=FEATURES
+# RUN: %python %S/Inputs/mutate_obligation_archive.py duplicate-id %t.one %t.duplicate-id
+# RUN: not %cpp-verify --obligation-in=%t.duplicate-id 2>&1 | FileCheck %s --check-prefix=DUPLICATE-ID
+# RUN: %python %S/Inputs/mutate_obligation_archive.py embedded-nul %t.one %t.embedded-nul
+# RUN: not %cpp-verify --obligation-in=%t.embedded-nul 2>&1 | FileCheck %s --check-prefix=EMBEDDED-NUL
+# RUN: %python %S/Inputs/mutate_obligation_archive.py invalid-integer %t.one %t.invalid-integer
+# RUN: not %cpp-verify --obligation-in=%t.invalid-integer 2>&1 | FileCheck %s --check-prefix=INVALID-INTEGER
+# RUN: %python %S/Inputs/mutate_obligation_archive.py complete-mismatch %t.one %t.complete-mismatch
+# RUN: not %cpp-verify --obligation-in=%t.complete-mismatch 2>&1 | FileCheck %s --check-prefix=COMPLETE-MISMATCH
+# RUN: %python %S/Inputs/mutate_obligation_archive.py inactive-payload %t.one %t.inactive-payload
+# RUN: not %cpp-verify --obligation-in=%t.inactive-payload 2>&1 | FileCheck %s --check-prefix=INACTIVE-PAYLOAD
+# RUN: %python %S/Inputs/mutate_obligation_archive.py oversized-width %t.one %t.oversized-width
+# RUN: not %cpp-verify --obligation-in=%t.oversized-width 2>&1 | FileCheck %s --check-prefix=OVERSIZED-WIDTH
+# RUN: %python %S/Inputs/mutate_obligation_archive.py edge-limit %t.one %t.edge-limit
+# RUN: not %cpp-verify --obligation-in=%t.edge-limit 2>&1 | FileCheck %s --check-prefix=EDGE-LIMIT
+# RUN: %python %S/Inputs/mutate_obligation_archive.py lean-comment %t.one %t.lean-comment
+# RUN: %cpp-verify --obligation-in=%t.lean-comment --backend=lean --lean-out=%t.lean-comment.lean
+# RUN: grep -Fq '/- function: - /' %t.lean-comment.lean
+# RUN: %cpp-verify --lower-only --obligation-out=%t.functions %S/Inputs/obligation_archive_functions.cpp
+# RUN: %python %S/Inputs/mutate_obligation_archive.py duplicate-function %t.functions %t.duplicate-function
+# RUN: not %cpp-verify --obligation-in=%t.duplicate-function 2>&1 | FileCheck %s --check-prefix=DUPLICATE-FUNCTION
+# RUN: /bin/cat %t.functions %t.functions > %t.function-records
+# RUN: %python %S/Inputs/mutate_obligation_archive.py different-function-definition %t.function-records %t.different-function-definition
+# RUN: %cpp-verify --obligation-in=%t.different-function-definition --lower-only
+# RUN: not %cpp-verify --obligation-in=%t.one --backend=bmc 2>&1 | FileCheck %s --check-prefix=BMC
+# RUN: %cpp-verify --lower-only --obligation-out=%t.fail %S/Inputs/obligation_archive_fail.cpp
+# RUN: not %cpp-verify --obligation-in=%t.fail --backend=z3 2>&1 | FileCheck %s --check-prefix=FAIL
+# RUN: %cpp-verify --lower-only --obligation-out=%t.recommends-lower %S/z3_recommends_warning.cpp
+# RUN: not %cpp-verify --obligation-out=%t.recommends-solve %S/z3_recommends_warning.cpp
+# RUN: cmp %t.recommends-lower %t.recommends-solve
+# RUN: %cpp-verify --lower-only --dump-ir=3 %S/Inputs/obligation_hash_scope.cpp > %t.hash-base
+# RUN: %cpp-verify --lower-only --dump-ir=3 %S/Inputs/obligation_hash_scope_quantifier.cpp > %t.hash-quantifier
+# RUN: grep 'semantic-hash' %t.hash-base | sed -n '2p' > %t.hash-base.first
+# RUN: grep 'semantic-hash' %t.hash-quantifier | sed -n '2p' > %t.hash-quantifier.first
+# RUN: cmp %t.hash-base.first %t.hash-quantifier.first
+# RUN: %cpp-verify --lower-only --obligation-out=%t.quantifier %S/Inputs/obligation_hash_scope_quantifier.cpp
+# RUN: %python %S/Inputs/mutate_obligation_archive.py bad-binder-sort %t.quantifier %t.bad-binder-sort
+# RUN: not %cpp-verify --obligation-in=%t.bad-binder-sort 2>&1 | FileCheck %s --check-prefix=BAD-BINDER-SORT
+# RUN: %cpp-verify --lower-only --dump-ir=3 %S/heap_memcpy_pass.cpp 2>&1 | grep -B1 '__quant_.* : int' | FileCheck %s --check-prefix=QUANTIFIED-INDEX
+
+# REPLAY: Verified: canonical_obligations [backend=z3] [semantic-hash=sha256:{{[0-9a-f]+}}]
+# LOWER: vc canonical_obligations
+# LOWER: schema cppverify.obligation/1
+# LOWER: (let
+# LOWER: Lowered: canonical_obligations [backend=z3] [semantic-hash=sha256:{{[0-9a-f]+}}]
+# LEAN: Exported: lean obligation: canonical_obligations [backend=lean]
+# LEAN-FILE: theorem cppverify_canonical_obligations_
+# MULTI-COUNT-2: Verified: canonical_obligations
+# BAD-MAGIC: error: invalid obligation archive: invalid obligation archive magic
+# TRUNCATED: error: invalid obligation archive: truncated obligation archive
+# VERSION: error: invalid obligation archive: unsupported obligation archive version
+# KIND: error: invalid obligation archive: invalid expression kind in obligation archive
+# FEATURES: error: invalid obligation archive: obligation archive feature declaration does not match contents
+# DUPLICATE-ID: error: invalid obligation archive: obligation module has an empty or duplicate obligation identity
+# EMBEDDED-NUL: error: invalid obligation archive: embedded NUL in obligation archive string
+# INVALID-INTEGER: error: invalid obligation archive: integer literal is not canonical signed decimal
+# COMPLETE-MISMATCH: error: invalid obligation archive: complete correctness goal does not match the ordered obligations
+# INACTIVE-PAYLOAD: error: invalid obligation archive: inactive payload is set in obligation term
+# OVERSIZED-WIDTH: error: invalid obligation archive: integer width exceeds the obligation IR limit
+# EDGE-LIMIT: error: invalid obligation archive: expression edge limit exceeded in obligation archive
+# DUPLICATE-FUNCTION: error: invalid obligation archive: duplicate logical function in obligation archive
+# BAD-BINDER-SORT: error: invalid obligation archive: quantifier binder occurrence is not a mathematical integer
+# QUANTIFIED-INDEX: * : int
+# QUANTIFIED-INDEX-NEXT: __quant_{{[0-9]+}}_{{.*}} : int
+# BMC: error: BMC cannot replay a backend-neutral archive
+# FAIL: obligation_archive_fail.cpp:2:15: error: verification failed: archived_failure

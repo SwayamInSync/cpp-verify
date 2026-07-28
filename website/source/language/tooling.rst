@@ -17,6 +17,8 @@ Standalone verifier
    cpp-verify --timeout=20000 file.cpp
    cpp-verify --dump-ir=1,2,3,4 file.cpp
    cpp-verify --lower-only --dump-ir=1,2,3,4 file.cpp
+   cpp-verify --lower-only --obligation-out=goals.cpv file.cpp
+   cpp-verify --obligation-in=goals.cpv --backend=z3
 
 ``cpp-verify`` is a Clang tooling driver: it always adds ``-std=c++17`` and ``-fverify-contracts``.
 
@@ -67,6 +69,14 @@ Backends
      - Run Clang conversion, backend-specific preparation, passivization,
        canonical Obligation IR construction, spec-axiom encoding, and Z3
        translation without calling the solver. Supported for Z3 and BMC.
+   * - ``--obligation-out=FILE``
+     - Write deterministic, versioned backend-neutral modules with portable
+       source attribution and SHA-256 semantic identities. Multiple modules are
+       concatenated in one archive.
+   * - ``--obligation-in=FILE``
+     - Validate and replay an archive without reparsing C++. Supports Z3,
+       ``--lower-only``/Layer 3-4 dumps, and Lean scratch export. BMC replay is
+       rejected because loop unrolling must run before obligation lowering.
 
 ``--lower-only`` is deliberately different from compiler ``-fno-verify``.
 ``-fno-verify`` stops after Clang syntax and contract semantic checks;
@@ -80,6 +90,25 @@ Backend results are intentionally distinct. Z3 ``unsat`` reports ``Verified``;
 obligation fails, and reports ``Verified`` only when the selected bound itself
 is proved complete. Lean generation reports ``Exported``. Only the pinned,
 admission-free kernel workflow reports ``Certified``.
+
+Portable obligation archives
+----------------------------
+
+``--obligation-out`` writes ``cppverify.obligation/1`` records only after exact
+serialize/deserialize/validate/reserialize checks. Stable wire tags make the
+format independent of C++ enum ordinals. The reader rejects malformed magic,
+unsupported versions, truncation, invalid tags, inconsistent feature
+declarations, duplicate identities, and oversized/deep expressions.
+Schema v1 caps integer widths at 4096 bits, expression depth at 4096, and
+collections plus expression nodes/edges at 100,000 per record. It also rejects
+embedded NULs, non-canonical numerals, inactive payload fields, ill-scoped
+variables, and contradictory complete/ordered queries before backend dispatch.
+
+Module and per-obligation SHA-256 hashes omit source paths and display-only
+names, so moving unchanged source preserves semantic identity. Archives still
+retain file/line/column points for replay diagnostics. Failure-triggered
+``recommends`` warnings are diagnostic-only and do not make archive bytes depend
+on a solver result.
 
 Supported compiler
 ------------------

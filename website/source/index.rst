@@ -175,6 +175,8 @@ Backends and modular calls
    cpp-verify --backend=bmc --unroll=3 loops.cpp
    cpp-verify --lean-fallback=proof hard_goal.cpp
    cpp-verify --dump-ir=3,4 debug.cpp
+   cpp-verify --lower-only --obligation-out=goals.cpv debug.cpp
+   cpp-verify --obligation-in=goals.cpv --backend=z3
 
 See :doc:`book/part-ii/ch17-backends-modular-calls` for Z3, bounded analysis,
 editable Lean certification, and chained calls like ``f(g(x))``.
