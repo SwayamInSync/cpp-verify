@@ -66,14 +66,6 @@ int field_binding()
   return alias;
 }
 
-int subscript_binding(int *pointer)
-  pre(pointer != nullptr)
-  post(result == pointer[0])
-{
-  int &alias = pointer[0];
-  return alias;
-}
-
 int loop_local_declaration()
   post(result == 1)
 {
@@ -94,5 +86,4 @@ int loop_local_declaration()
 // VERIFY-DAG: error: temporary_binding: local references require a supported direct lvalue
 // VERIFY-DAG: error: conditional_binding: local references require a supported direct lvalue
 // VERIFY-DAG: error: field_binding: local references require a supported direct lvalue
-// VERIFY-DAG: error: subscript_binding: local references require a supported direct lvalue
 // VERIFY-DAG: error: loop_local_declaration: addressable local declarations inside loops are unsupported

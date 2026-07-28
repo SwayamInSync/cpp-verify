@@ -211,6 +211,7 @@ struct VFunction {
   std::set<std::string> HiddenSpecs;
   std::set<std::string> RevealedSpecs;
   std::vector<std::pair<std::string, VType>> Params;
+  std::set<std::string> ReferenceParams;
   std::vector<std::pair<std::string, VType>> ReturnFields;
   /// Number of leading preconditions originating from explicit pre clauses.
   unsigned ExplicitPreconditionCount = 0;

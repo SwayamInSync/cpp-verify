@@ -868,12 +868,16 @@ static std::unique_ptr<VExpr> samePointerDifferenceOrigin(const VExpr *L,
   return makeBoolLiteral(LVar->Name == RVar->Name, Loc);
 }
 
-static bool isRegionFootprint(const VExpr *E) {
+static bool isRegionFootprint(const VExpr *E,
+                              const std::set<std::string> &ReferenceParams) {
   if (!E || E->K != VExpr::Load)
     return true;
   const VExpr *Ptr = static_cast<const VLoadExpr *>(E)->Ptr.get();
   while (Ptr && Ptr->K == VExpr::Cast)
     Ptr = static_cast<const VCastExpr *>(Ptr)->Inner.get();
+  if (Ptr && Ptr->K == VExpr::Var &&
+      ReferenceParams.count(static_cast<const VVarExpr *>(Ptr)->Name))
+    return false;
   return !Ptr || Ptr->K == VExpr::Var;
 }
 
@@ -1499,6 +1503,7 @@ class PassivizerImpl {
   std::vector<FieldReturnCase> FieldReturnCases;
   std::vector<std::unique_ptr<VExpr>> ReturnGuards;
   std::vector<std::string> OwnedAllocationIdentities;
+  std::map<std::string, std::unique_ptr<VExpr>> ReferenceBindings;
   std::set<std::string> HeapBases;
   std::set<std::string> HeapVariables;
   std::string ResultVar = "__result";
@@ -1518,6 +1523,24 @@ class PassivizerImpl {
     if (HeapBases.count(N))
       HeapVariables.insert(Name);
     return Name;
+  }
+
+  std::unique_ptr<VExpr>
+  resolveReferenceAddress(const VExpr *E,
+                          std::set<std::string> Seen = {}) const {
+    if (!E)
+      return nullptr;
+    const VExpr *Stripped = E;
+    while (Stripped->K == VExpr::Cast)
+      Stripped = static_cast<const VCastExpr *>(Stripped)->Inner.get();
+    if (Stripped->K == VExpr::Var) {
+      const std::string &Name = static_cast<const VVarExpr *>(Stripped)->Name;
+      if (Seen.insert(Name).second)
+        if (auto It = ReferenceBindings.find(Name);
+            It != ReferenceBindings.end())
+          return resolveReferenceAddress(It->second.get(), std::move(Seen));
+    }
+    return cloneVExpr(E);
   }
 
   static void emitPassive(PassiveProgram &P, PassiveStmt::Kind K,
@@ -1932,9 +1955,9 @@ public:
                                    ? static_cast<const VLoadExpr *>(M.get())
                                    : nullptr;
       if (ActualLoad) {
-        const bool ActualIsRegion =
-            I >= Callee->Modifies.size() ||
-            isRegionFootprint(Callee->Modifies[I].get());
+        const bool ActualIsRegion = I >= Callee->Modifies.size() ||
+                                    isRegionFootprint(Callee->Modifies[I].get(),
+                                                      Callee->ReferenceParams);
         if (auto Provenance = pointerProvenance(ActualLoad->Ptr.get()))
           for (const std::string &Identity : OwnedAllocationIdentities)
             Allowed = makeOr(std::move(Allowed),
@@ -1953,7 +1976,8 @@ public:
                 std::move(Allowed),
                 footprintContains(CallerLoad->Ptr.get(),
                                   J >= Fn.Modifies.size() ||
-                                      isRegionFootprint(Fn.Modifies[J].get()),
+                                      isRegionFootprint(Fn.Modifies[J].get(),
+                                                        Fn.ReferenceParams),
                                   ActualLoad->Ptr.get(), ActualIsRegion, C.Loc),
                 C.Loc);
         }
@@ -2012,7 +2036,8 @@ public:
     for (size_t I = 0; I < ActualModifies.size(); ++I)
       if (!ActualModifies[I] || ActualModifies[I]->K != VExpr::Load ||
           I >= Callee->Modifies.size() ||
-          (isRegionFootprint(Callee->Modifies[I].get()) &&
+          (isRegionFootprint(Callee->Modifies[I].get(),
+                             Callee->ReferenceParams) &&
            !hasPointerProvenance(
                static_cast<const VLoadExpr *>(ActualModifies[I].get())
                    ->Ptr.get())))
@@ -2069,6 +2094,8 @@ public:
       std::string NewName = bump(A.Target);
       Renames[A.Target] = NewName;
       VType ValueTy = Val->Ty;
+      if (A.IsReferenceBinding)
+        ReferenceBindings[NewName] = cloneVExpr(Val.get());
       emitPassive(P, PassiveStmt::Assume,
                   makeEq(std::make_unique<VVarExpr>(NewName, ValueTy, A.Loc),
                          std::move(Val), A.Loc),
@@ -2092,11 +2119,13 @@ public:
                                    ? static_cast<const VLoadExpr *>(M.get())
                                    : nullptr) {
           auto DeclaredPtr = cloneExpr(Load->Ptr.get(), EntryCtx);
-          Allowed = makeOr(std::move(Allowed),
-                           footprintContains(DeclaredPtr.get(),
-                                             isRegionFootprint(M.get()),
-                                             Ptr.get(), false, St.Loc),
-                           St.Loc);
+          auto EffectivePtr = resolveReferenceAddress(Ptr.get());
+          Allowed = makeOr(
+              std::move(Allowed),
+              footprintContains(DeclaredPtr.get(),
+                                isRegionFootprint(M.get(), Fn.ReferenceParams),
+                                EffectivePtr.get(), false, St.Loc),
+              St.Loc);
         }
       if (auto Provenance = pointerProvenance(Ptr.get()))
         for (const std::string &Identity : OwnedAllocationIdentities)

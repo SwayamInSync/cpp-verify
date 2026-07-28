@@ -1448,6 +1448,8 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
 
   SmallVector<const ParmVarDecl *, 8> AddressParams;
   for (const ParmVarDecl *P : FD->parameters()) {
+    if (P->getType()->isReferenceType())
+      Fn->ReferenceParams.insert(valueName(P));
     if (const RecordDecl *RD = getRecordFromType(P->getType())) {
       if (const RecordDecl *Definition = RD->getDefinition())
         for (const FieldDecl *Field : Definition->fields())
@@ -1835,6 +1837,31 @@ ASTConverter::convertArrowFieldAddress(const MemberExpr *M) {
                                       M->getExprLoc());
 }
 
+std::unique_ptr<VExpr>
+ASTConverter::convertSubscriptAddress(const ArraySubscriptExpr *AS) {
+  if (!AS)
+    return nullptr;
+  if (referencesDynamicPointer(AS)) {
+    Errors.push_back(CurrentFn->Name +
+                     ": subscripting dynamic-storage pointers is unsupported");
+    return nullptr;
+  }
+  auto Base = convertExpr(AS->getBase());
+  auto Index = convertExpr(AS->getIdx());
+  if (!Base || !Index)
+    return nullptr;
+  const uint64_t PointeeSize = Base->Ty.PointeeSizeBytes;
+  Index = scalePointerOffset(std::move(Index), PointeeSize, AS->getExprLoc());
+  if (!Index) {
+    Errors.push_back(CurrentFn->Name +
+                     ": pointer arithmetic requires a complete pointee type");
+    return nullptr;
+  }
+  return std::make_unique<VBinOpExpr>(
+      VBinOp::Add, std::move(Base), std::move(Index),
+      VType::makePtr(PointeeSize), AS->getExprLoc());
+}
+
 std::unique_ptr<VExpr> ASTConverter::convertAutomaticLocalAddress(
     const VarDecl *VD, SourceLocation Loc, bool RequireInitialized) {
   auto Provenance = AutomaticLocalProvenanceVariables.find(VD);
@@ -1872,23 +1899,107 @@ ASTConverter::convertAddressProvenance(const VExpr *Address) {
 }
 
 void ASTConverter::appendReferenceBindingCheck(
-    const VExpr *Address, SourceLocation Loc,
+    const Expr *Source, const VExpr *Address, SourceLocation Loc,
     std::vector<std::unique_ptr<VStmt>> &Out) {
-  auto NonNull = std::make_unique<VBinOpExpr>(
-      VBinOp::Ne, cloneVExpr(Address),
-      std::make_unique<VLiteralExpr>(0, VType::makePtr(), Loc),
-      VType::makeBool(), Loc);
-  auto Valid = std::make_unique<VUnaryOpExpr>(
-      VUnaryOp::ValidPtr, cloneVExpr(Address), VType::makeBool(), Loc);
-  auto Initialized = std::make_unique<VUnaryOpExpr>(
-      VUnaryOp::InitializedPtr, cloneVExpr(Address), VType::makeBool(), Loc);
-  auto Readable = std::make_unique<VBinOpExpr>(VBinOp::And, std::move(Valid),
-                                               std::move(Initialized),
-                                               VType::makeBool(), Loc);
-  Out.push_back(std::make_unique<VAssertStmt>(
-      std::make_unique<VBinOpExpr>(VBinOp::And, std::move(NonNull),
-                                   std::move(Readable), VType::makeBool(), Loc),
-      Loc));
+  auto BindingCondition = [&](const VExpr *CheckedAddress) {
+    auto NonNull = std::make_unique<VBinOpExpr>(
+        VBinOp::Ne, cloneVExpr(CheckedAddress),
+        std::make_unique<VLiteralExpr>(0, VType::makePtr(), Loc),
+        VType::makeBool(), Loc);
+    auto Valid = std::make_unique<VUnaryOpExpr>(
+        VUnaryOp::ValidPtr, cloneVExpr(CheckedAddress), VType::makeBool(), Loc);
+    auto Initialized = std::make_unique<VUnaryOpExpr>(
+        VUnaryOp::InitializedPtr, cloneVExpr(CheckedAddress), VType::makeBool(),
+        Loc);
+    auto Readable = std::make_unique<VBinOpExpr>(VBinOp::And, std::move(Valid),
+                                                 std::move(Initialized),
+                                                 VType::makeBool(), Loc);
+    return std::make_unique<VBinOpExpr>(VBinOp::And, std::move(NonNull),
+                                        std::move(Readable), VType::makeBool(),
+                                        Loc);
+  };
+
+  Source = Source ? Source->IgnoreParenImpCasts() : nullptr;
+  const VExpr *EnclosingAddress = nullptr;
+  bool DerivesSubobjectReadability = false;
+  if (!convertAddressProvenance(Address) && Source) {
+    if (isa<MemberExpr>(Source)) {
+      if (Address->K == VExpr::BinOp) {
+        const auto *B = static_cast<const VBinOpExpr *>(Address);
+        if (B->Op == VBinOp::Add) {
+          EnclosingAddress = B->Lhs.get();
+          DerivesSubobjectReadability = true;
+        }
+      }
+    } else if (const auto *Subscript = dyn_cast<ArraySubscriptExpr>(Source)) {
+      const auto *BaseRef =
+          dyn_cast<DeclRefExpr>(Subscript->getBase()->IgnoreParenImpCasts());
+      const auto *BaseVar =
+          BaseRef ? dyn_cast<VarDecl>(BaseRef->getDecl()) : nullptr;
+      const VExpr *Length = nullptr;
+      std::function<void(const VExpr *)> FindValidLength = [&](const VExpr *E) {
+        if (!E || Length)
+          return;
+        if (E->K == VExpr::BinOp) {
+          const auto *B = static_cast<const VBinOpExpr *>(E);
+          if (B->Op == VBinOp::And) {
+            FindValidLength(B->Lhs.get());
+            FindValidLength(B->Rhs.get());
+          }
+          return;
+        }
+        if (E->K != VExpr::SpecCall)
+          return;
+        const auto *Call = static_cast<const VSpecCallExpr *>(E);
+        if (Call->Callee != "valid" || Call->Args.size() != 2 ||
+            Call->Args[0]->K != VExpr::Var || !BaseVar)
+          return;
+        if (static_cast<const VVarExpr *>(Call->Args[0].get())->Name ==
+            valueName(BaseVar))
+          Length = Call->Args[1].get();
+      };
+      for (const auto &Precondition : CurrentFn->Preconditions)
+        FindValidLength(Precondition.get());
+
+      if (Length) {
+        auto Index = convertExpr(Subscript->getIdx());
+        if (Index && Index->Ty.Kind == Length->Ty.Kind &&
+            Index->Ty.IntMode == Length->Ty.IntMode &&
+            Index->Ty.IsSigned == Length->Ty.IsSigned &&
+            Index->Ty.BitWidth == Length->Ty.BitWidth) {
+          auto NonNegative = std::make_unique<VBinOpExpr>(
+              VBinOp::Ge, cloneVExpr(Index.get()),
+              std::make_unique<VLiteralExpr>(0, Index->Ty, Loc),
+              VType::makeBool(), Loc);
+          auto BelowExtent = std::make_unique<VBinOpExpr>(
+              VBinOp::Lt, std::move(Index), cloneVExpr(Length),
+              VType::makeBool(), Loc);
+          Out.push_back(std::make_unique<VAssertStmt>(
+              std::make_unique<VBinOpExpr>(VBinOp::And, std::move(NonNegative),
+                                           std::move(BelowExtent),
+                                           VType::makeBool(), Loc),
+              Loc));
+          if (Address->K == VExpr::BinOp) {
+            const auto *B = static_cast<const VBinOpExpr *>(Address);
+            if (B->Op == VBinOp::Add) {
+              EnclosingAddress = B->Lhs.get();
+              DerivesSubobjectReadability = true;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (DerivesSubobjectReadability) {
+    Out.push_back(
+        std::make_unique<VAssertStmt>(BindingCondition(EnclosingAddress), Loc));
+    // A complete record object, or an element proven inside a declared valid
+    // range, makes its selected scalar subobject readable.
+    Out.push_back(
+        std::make_unique<VAssumeStmt>(BindingCondition(Address), Loc));
+  }
+  Out.push_back(std::make_unique<VAssertStmt>(BindingCondition(Address), Loc));
 }
 
 std::unique_ptr<VExpr> ASTConverter::convertLValueAddress(const Expr *E) {
@@ -1941,6 +2052,35 @@ std::unique_ptr<VExpr> ASTConverter::convertLValueAddress(const Expr *E) {
       return nullptr;
     }
     return convertExpr(U->getSubExpr());
+  }
+
+  if (const auto *M = dyn_cast<MemberExpr>(E)) {
+    const Expr *Pointer = nullptr;
+    if (M->isArrow()) {
+      Pointer = M->getBase();
+    } else if (const auto *Deref =
+                   dyn_cast<UnaryOperator>(M->getBase()->IgnoreParenImpCasts());
+               Deref && Deref->getOpcode() == UO_Deref) {
+      Pointer = Deref->getSubExpr();
+    }
+    const auto *PointerRef =
+        Pointer ? dyn_cast<DeclRefExpr>(Pointer->IgnoreParenImpCasts())
+                : nullptr;
+    const auto *PointerVar =
+        PointerRef ? dyn_cast<VarDecl>(PointerRef->getDecl()) : nullptr;
+    if (!PointerVar || !PointerVar->getType()->isPointerType())
+      return nullptr;
+    return convertArrowFieldAddress(M);
+  }
+
+  if (const auto *AS = dyn_cast<ArraySubscriptExpr>(E)) {
+    const auto *PointerRef =
+        dyn_cast<DeclRefExpr>(AS->getBase()->IgnoreParenImpCasts());
+    const auto *PointerVar =
+        PointerRef ? dyn_cast<VarDecl>(PointerRef->getDecl()) : nullptr;
+    if (!PointerVar || !PointerVar->getType()->isPointerType())
+      return nullptr;
+    return convertSubscriptAddress(AS);
   }
 
   return nullptr;
@@ -2180,28 +2320,11 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
     return nullptr;
   }
   if (const auto *AS = dyn_cast<ArraySubscriptExpr>(E)) {
-    if (referencesDynamicPointer(AS)) {
-      Errors.push_back(
-          CurrentFn->Name +
-          ": subscripting dynamic-storage pointers is unsupported");
+    auto Address = convertSubscriptAddress(AS);
+    if (!Address)
       return nullptr;
-    }
-    auto Base = convertExpr(AS->getBase());
-    auto Idx = convertExpr(AS->getIdx());
-    if (!Base || !Idx)
-      return nullptr;
-    const uint64_t PointeeSize = Base->Ty.PointeeSizeBytes;
-    Idx = scalePointerOffset(std::move(Idx), PointeeSize, E->getExprLoc());
-    if (!Idx) {
-      Errors.push_back(CurrentFn->Name +
-                       ": pointer arithmetic requires a complete pointee type");
-      return nullptr;
-    }
-    auto Addr = std::make_unique<VBinOpExpr>(
-        VBinOp::Add, std::move(Base), std::move(Idx),
-        VType::makePtr(PointeeSize), E->getExprLoc());
     VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
-    return std::make_unique<VLoadExpr>(std::move(Addr), Ty, E->getExprLoc());
+    return std::make_unique<VLoadExpr>(std::move(Address), Ty, E->getExprLoc());
   }
   if (const auto *B = dyn_cast<BinaryOperator>(E)) {
     std::optional<VBinOp> Op = convertBinOpcode(B->getOpcode());
@@ -2550,6 +2673,9 @@ void ASTConverter::convertExecCallArg(
     }
     const size_t ErrorCount = Errors.size();
     Out = convertLValueAddress(E);
+    const Expr *Binding = E->IgnoreParenImpCasts();
+    if (Out && (isa<MemberExpr>(Binding) || isa<ArraySubscriptExpr>(Binding)))
+      appendReferenceBindingCheck(E, Out.get(), E->getExprLoc(), Prelude);
     if (!Out && Errors.size() == ErrorCount)
       Errors.push_back(
           CurrentFn->Name +
@@ -2935,30 +3061,14 @@ void ASTConverter::appendAssignment(const Expr *LHS,
                        ": proof functions cannot modify executable memory");
       return;
     }
-    if (referencesDynamicPointer(AS)) {
-      Errors.push_back(
-          CurrentFn->Name +
-          ": subscripting dynamic-storage pointers is unsupported");
-      return;
-    }
-    auto Base = convertExpr(AS->getBase());
-    auto Index = convertExpr(AS->getIdx());
-    if (Base && Index) {
-      const uint64_t PointeeSize = Base->Ty.PointeeSizeBytes;
-      Index = scalePointerOffset(std::move(Index), PointeeSize, Loc);
-      if (!Index) {
-        Errors.push_back(
-            CurrentFn->Name +
-            ": pointer arithmetic requires a complete pointee type");
-        return;
-      }
-      auto Address = std::make_unique<VBinOpExpr>(
-          VBinOp::Add, std::move(Base), std::move(Index),
-          VType::makePtr(PointeeSize), Loc);
+    const size_t ErrorCount = Errors.size();
+    if (auto Address = convertSubscriptAddress(AS)) {
       Out.push_back(std::make_unique<VStoreStmt>(std::move(Address),
                                                  std::move(Value), Loc));
       return;
     }
+    if (Errors.size() != ErrorCount)
+      return;
   }
 
   Errors.push_back(CurrentFn->Name + ": unsupported assignment target");
@@ -3684,14 +3794,17 @@ std::vector<std::unique_ptr<VStmt>> ASTConverter::convertStmt(const Stmt *S) {
                            ": unsupported local reference binding");
           continue;
         }
+        const size_t ErrorCount = Errors.size();
         auto Address = convertLValueAddress(VD->getInit());
         if (!Address) {
-          Errors.push_back(
-              CurrentFn->Name +
-              ": local references require a supported direct lvalue");
+          if (Errors.size() == ErrorCount)
+            Errors.push_back(
+                CurrentFn->Name +
+                ": local references require a supported direct lvalue");
           continue;
         }
-        appendReferenceBindingCheck(Address.get(), VD->getBeginLoc(), Out);
+        appendReferenceBindingCheck(VD->getInit(), Address.get(),
+                                    VD->getBeginLoc(), Out);
         auto Provenance = convertAddressProvenance(Address.get());
         Out.push_back(std::make_unique<VAssignStmt>(
             valueName(VD), std::move(Address), VD->getBeginLoc(), true));

@@ -61,12 +61,14 @@ private:
   convertAutomaticLocalAddress(const VarDecl *VD, SourceLocation Loc,
                                bool RequireInitialized = true);
   std::unique_ptr<VExpr> convertAddressProvenance(const VExpr *Address);
-  void appendReferenceBindingCheck(const VExpr *Address, SourceLocation Loc,
+  void appendReferenceBindingCheck(const Expr *Source, const VExpr *Address,
+                                   SourceLocation Loc,
                                    std::vector<std::unique_ptr<VStmt>> &Out);
   std::unique_ptr<VExpr> convertRecordField(std::unique_ptr<VExpr> Base,
                                             const FieldDecl *Field,
                                             SourceLocation Loc);
   std::unique_ptr<VExpr> convertArrowFieldAddress(const MemberExpr *M);
+  std::unique_ptr<VExpr> convertSubscriptAddress(const ArraySubscriptExpr *AS);
   std::vector<std::unique_ptr<VStmt>> convertStmt(const Stmt *S);
   void convertExecCallArgs(const CallExpr *CE,
                            std::vector<std::unique_ptr<VStmt>> &Prelude,

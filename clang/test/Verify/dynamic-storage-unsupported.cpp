@@ -59,6 +59,16 @@ int subscript_store()
   return observed;
 }
 
+int subscript_reference_binding()
+  post(result == 1)
+{
+  int *p = new int(1);
+  int &alias = p[0];
+  int observed = alias;
+  delete p;
+  return observed;
+}
+
 int offset_store()
   post(result == 1)
 {
@@ -202,6 +212,7 @@ int reassignment_in_loop()
 // VERIFY-DAG: error: allocation_in_loop: dynamic deallocation inside loops is unsupported
 // VERIFY-DAG: error: void_pointer_target: new result must directly initialize a matching typed pointer
 // VERIFY-DAG: error: subscript_store: subscripting dynamic-storage pointers is unsupported
+// VERIFY-DAG: error: subscript_reference_binding: subscripting dynamic-storage pointers is unsupported
 // VERIFY-DAG: error: offset_store: dynamic-storage dereference requires its direct allocation pointer
 // VERIFY-DAG: error: spec_call_boundary: dynamic-storage pointers cannot cross a function-call boundary
 // VERIFY-DAG: error: erased_pointer_copy: dynamic-storage pointer copies require matching pointee types
