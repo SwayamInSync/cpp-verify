@@ -115,9 +115,10 @@ C++ feature boundaries
        recursion, heap-mutating executable recursion, and general link-time
        summaries.
    * - Storage
-     - Supported locals and constrained direct scalar dynamic storage.
-     - Globals, static locals, thread-local storage, returned allocations, and
-       modular allocation effects.
+     - Supported locals, constrained scalar dynamic storage, and inferred
+       acyclic fresh-owned scalar factory results.
+     - Globals, static locals, thread-local storage, general returned
+       allocations, and user-declared modular allocation effects.
    * - Structured control flow
      - ``if`` (including C++17 initializer), conventional ``while``/``for``,
        blocks, and ``return``.
@@ -216,7 +217,7 @@ check.
 Local scalar dynamic storage
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A direct non-escaping scalar ``new``/``delete`` additionally carries
+A direct scalar ``new``/``delete`` additionally carries
 SSA-versioned metadata for:
 
 - owning lifetime identity;
@@ -225,14 +226,16 @@ SSA-versioned metadata for:
 - a provenance companion for supported local pointer values.
 
 Matching-type copies, reassignment, conditional selection, branch merges,
-``nullptr``, deletion through a valid alias, and constrained non-allocating
-modular calls are supported.
+``nullptr``, deletion through a valid alias, constrained non-allocating modular
+calls, and inferred fresh-owned scalar factory results are supported. A
+body-present acyclic factory may return its sole live initialized allocation or
+null; callers receive fresh metadata and may forward, mutate, or delete it.
 
-Still rejected are returned/escaping local allocations, indirect or type-erased
-copies, nested pointer-result calls, recursion cycles in pointer interfaces,
-general external/proof boundaries, dynamic allocation in loops, placement or
-nothrow allocation, non-scalar objects, ``new[]``, and allocation in functions
-that also accept pointer parameters.
+Still rejected are uninitialized, freed, arithmetic-derived, multiply
+allocated, secondarily escaped, external, recursive, indirect, or type-erased
+ownership results; general ownership parameters; dynamic allocation in loops;
+placement/nothrow allocation; non-scalar objects; ``new[]``; and allocation in
+functions that also accept pointer parameters.
 
 Pointer difference
 ~~~~~~~~~~~~~~~~~~
@@ -281,10 +284,12 @@ writable-range summaries and unbounded region writes through a sub-slice remain
 fail-closed.
 
 Checked local dynamic identities can cross a narrow scalar call/return boundary
-only when the caller actually owns the identity. Missing effect concepts
-include allocation/deallocation, ownership transfer, escape sets, separate read
-footprints, global state, exceptional cleanup, lock state, and concurrency
-interference.
+when the caller owns the identity. Body-derived fresh-owned returns additionally
+transfer one initialized scalar allocation through acyclic in-translation-unit
+factories; external contracts cannot claim this effect. Missing effect concepts
+include general allocation/deallocation contracts, parameter ownership
+transfer, escape sets, separate read footprints, global state, exceptional
+cleanup, lock state, and concurrency interference.
 
 External contracts are trusted interfaces. CppVerify checks callers against
 their preconditions but cannot prove an unavailable implementation satisfies
@@ -445,10 +450,14 @@ oracles, improve source-attributed obligations, and never convert timeout,
 P1 — general addressable objects
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Complete subobject and temporary reference binding, then add
-pointer-bearing/nested aggregates, array objects and element lifetimes,
-compositional origin/extent/index metadata, modular allocation/deallocation/
-escape effects, returned ownership, and RAII-ready lifetime transitions.
+The bounded exit gate is complete: promoted pointer-bearing local objects,
+scalar field/element references, modular slices, same-array difference, and
+inferred fresh-owned scalar factory results retain exact lifetime/provenance
+and reject paired invalid programs. Remaining generalizations are aggregate,
+rvalue, and temporary references; by-value pointer-bearing interfaces; stored
+and spec pointer positions; ownership-taking parameters; general
+allocation/deallocation/escape contracts; non-scalar allocation; and
+RAII-ready lifetime transitions.
 
 P2 — core idiomatic C++
 ~~~~~~~~~~~~~~~~~~~~~~~

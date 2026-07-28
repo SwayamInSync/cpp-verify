@@ -201,6 +201,43 @@ chains preserve the heap, while exact-cell effects such as
 writable ranges and unbounded ``modifies(*q)`` through a proper sub-slice still
 fail closed.
 
+Fresh-owned factory results
+---------------------------
+
+CppVerify can transfer one scalar allocation out of a narrowly structured
+factory:
+
+.. code-block:: cpp
+
+   int *make(int value)
+     post(*result == value)
+   {
+     return new int(value);
+   }
+
+   int consume(int value)
+     post(result == value)
+   {
+     int *p = make(value);
+     int observed = *p;
+     delete p;
+     return observed;
+   }
+
+Freshness is inferred from the executable body, never trusted from contract
+syntax. Every path must return null or the exact live, fully initialized base
+of the function's sole scalar allocation, with no pointer parameters, extra
+escape, arithmetic derivation, or recursive/external ownership source. Direct
+and local-alias forwarding through already inferred acyclic factories is
+supported.
+
+The call creates a fresh lifetime identity and exact size, alignment, owner,
+liveness, and initialization metadata while preserving all existing heap
+cells. The ordinary postcondition describes the pointee value. The caller may
+mutate or delete the result; all aliases become stale together after deletion.
+Uninitialized, freed, multiply allocated, weakly specified, or cyclic factory
+results fail closed.
+
 Type invariants
 ---------------
 

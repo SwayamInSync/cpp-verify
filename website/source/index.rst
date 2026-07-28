@@ -142,7 +142,7 @@ CppVerify also tracks initialized local scalar ``new``/``delete`` lifetimes:
 
 Use-after-delete, double-delete, overlapping live allocations, and reads before
 initialization are proof failures. See :doc:`language/dynamic-storage` for the
-current non-escaping subset.
+bounded local and inferred fresh-owned factory subset.
 
 Address-preserving scalar references
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

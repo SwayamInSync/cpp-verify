@@ -178,11 +178,63 @@ equal one of the caller's issued allocations. The pointee postcondition restores
 the value because pointer-taking modular calls otherwise conservatively forget
 the value heap.
 
-The callee still must have a verified body and may not delete the dynamic
-formal. Returned local copies, nested pointer-returning calls, ghost access,
-proof functions, external contract interfaces, and allocation-returning
-callees are excluded. Without these restrictions, a scalar allocation could be
-treated as a buffer or foreign storage could acquire caller-owned authority.
+The callee still must have a verified body and may not delete the borrowed
+dynamic formal. Returned local copies, pointer-returning intermediates without
+an owned summary, ghost access, proof functions, and external contract
+interfaces are excluded from this borrowed interface. Without these
+restrictions, a scalar allocation could be treated as a buffer or foreign
+storage could acquire caller-owned authority.
+
+Returning fresh ownership
+-------------------------
+
+A separate inferred effect handles a factory's own scalar allocation:
+
+.. code-block:: cpp
+
+   int *make_value(int value)
+     post(*result == value)
+   {
+     return new int(value);
+   }
+
+   int use_factory(int value)
+     post(result == value)
+   {
+     int *p = make_value(value);
+     int answer = *p;
+     delete p;
+     return answer;
+   }
+
+The contract states the value relationship, but it does not claim ownership.
+CppVerify derives a ``FreshOwnedReturn`` summary from the executable VCR body
+only when:
+
+#. the function is body-present, non-external, non-proof, and has no pointer
+   parameters or explicit frame;
+#. every path returns null or the exact base of its sole fresh scalar
+   allocation;
+#. the allocation is live and fully initialized, including by a direct store;
+#. no secondary pointer escape, extra allocation, arithmetic derivation,
+   deallocation, unsupported call, or recursive ownership cycle occurs.
+
+An already inferred factory can be returned directly or through matching local
+aliases and conditionals. The fixed-point analysis therefore admits acyclic
+nested factories without trusting a declaration.
+
+The caller creates a never-issued lifetime identity and installs the result's
+base, size, alignment, byte ownership, liveness, initialization, and arbitrary
+typed value. The new range is disjoint from live represented objects, live
+pointer values, stored pointer cells, and declared ``valid`` extents. Existing
+heap cells are preserved exactly. A nullable summary guards these updates on
+the result being non-null, and the ordinary postcondition constrains the
+arbitrary value.
+
+The result joins the caller's owned identities, so supported copies,
+forwarding, stores, and exact-base ``delete`` work normally. Deleting one alias
+invalidates all aliases; use-after-delete and double-delete remain failures.
+An external contract, however strong, cannot manufacture this authority.
 
 Failures are path-sensitive
 ---------------------------
@@ -208,14 +260,17 @@ The current checkpoint permits a direct local allocation pointer and
 matching-typed local pointer values to be copied, reassigned, conditionally
 selected, set to ``nullptr``, loaded, stored through, compared for equality,
 converted to ``bool``, deleted, forwarded through checked scalar calls, and
-recovered from a direct/conditional/null pointer-result contract. Type-erasing
-or indirect copies, returned local copies, nested pointer-result calls,
-proof/external calls, general pointer arithmetic, arrays, placement/nothrow
-allocation, records, and pointer reassignment or allocation in a loop body are
-rejected. The one exception is the checked complete-object difference fragment:
+recovered from a direct/conditional/null borrowed result or inferred
+fresh-owned factory. Type-erasing or indirect copies, ownership-taking pointer
+parameters, recursive ownership cycles, uninitialized/freed/multiply allocated
+factory results, proof/external ownership sources, general pointer arithmetic,
+arrays, placement/nothrow allocation, records, and pointer reassignment or
+allocation in a loop body are rejected. One arithmetic exception is the
+checked complete-object difference fragment:
 a direct dynamic base and its inline ``+0``/``+1`` position may be subtracted
 when their provenance companions prove the same live lifetime.
-The checked scalar interface above is the only current call boundary.
+The checked borrowed interface and inferred fresh-owned result are the current
+scalar call boundaries.
 
 Those restrictions are not parser shortcuts. General interfaces must transport
 provenance and lifetime effects in contracts; arrays require element/subobject

@@ -217,8 +217,8 @@ distances, pointer compound assignment, and pointer difference inside explicit
 Local scalar dynamic storage
 ----------------------------
 
-Ordinary scalar ``new``/``delete`` is supported for a direct, non-escaping
-local pointer. Allocation state is SSA-versioned: the verifier records the
+Ordinary scalar ``new``/``delete`` is supported for a direct local pointer.
+Allocation state is SSA-versioned: the verifier records the
 owning byte range, liveness, target size/alignment, and initialization. It
 therefore rejects use-after-delete, double-delete, overlap between simultaneous
 allocations, and uninitialized reads:
@@ -238,16 +238,21 @@ allocations, and uninitialized reads:
 Its identity propagates through matching-typed local copies, reassignment,
 conditional selection, direct ``nullptr`` assignment, and branch merges.
 Deleting through any alias invalidates all aliases of that lifetime.
-Type-erasing/indirect copies, return, general call forwarding, general
-arithmetic, and pointer reassignment or allocation/free in a loop body remain
-unsupported. The same-object difference fragment above is the only dynamic
-pointer arithmetic exception. A
+Type-erasing/indirect copies, general arithmetic, and pointer reassignment or
+allocation/free in a loop body remain unsupported. The same-object difference
+fragment above is the only dynamic pointer arithmetic exception. A
 restricted interface admits direct scalar access and acyclic direct-pointer
 forwarding through matching parameters of verified, non-allocating executable
 callees. A direct/conditional/null pointer result may retain caller-owned
-provenance when its contract relates the result to those inputs. Returned local
-copies, nested pointer-result calls, offsets, proof/external boundaries, and
-type erasure still fail closed. See
+provenance when its contract relates the result to those inputs.
+
+A separate inferred factory effect admits the exact live initialized base of
+one fresh scalar allocation (or null) from a body-present acyclic function.
+Direct and local-alias forwarding compose, and the caller may mutate or delete
+the result. Contracts still state null correlation and pointee values. No
+contract or external declaration can claim freshness: uninitialized, freed,
+arithmetic-derived, multiply allocated, secondarily escaped, recursive, and
+type-erased results fail closed. See
 :doc:`dynamic-storage` for the complete boundary.
 
 Buffer bounds with ``valid``
@@ -283,9 +288,10 @@ current frame IR cannot express a symbolic finite write range.
 Without ``--check-ub``, dereferences must still be non-null and live, but the
 verifier does not invent a buffer length. Parameter pointers use abstract
 entry-state allocation and initialization assumptions. Concrete identity, liveness, alignment, and initialization are available only
-for the bounded local scalar allocation subset. Its provenance is first-class
-across supported local values and checked scalar call/return interfaces, but
-abstract buffers and general pointer interfaces remain unsupported.
+for the bounded scalar allocation and inferred fresh-owned return subset. Its
+provenance is first-class across supported local values and checked scalar
+call/return interfaces, but abstract buffers and general pointer interfaces
+remain unsupported.
 
 Frames also preserve unrelated objects across a write:
 
