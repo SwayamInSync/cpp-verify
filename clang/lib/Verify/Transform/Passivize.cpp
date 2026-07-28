@@ -3,6 +3,7 @@
 #include "SpecInline.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/StringRef.h"
 #include <limits>
 #include <map>
 #include <set>
@@ -19,6 +20,123 @@ struct CloneCtx {
 };
 
 static std::unique_ptr<VExpr> cloneExpr(const VExpr *E, const CloneCtx &Ctx);
+
+static const VVarExpr *directPointerRoot(const VExpr *E) {
+  while (E && E->K == VExpr::Cast)
+    E = static_cast<const VCastExpr *>(E)->Inner.get();
+  if (E && E->K == VExpr::Var && E->Ty.Kind == VTypeKind::Ptr)
+    return static_cast<const VVarExpr *>(E);
+  if (!E || E->K != VExpr::BinOp)
+    return nullptr;
+  const auto *B = static_cast<const VBinOpExpr *>(E);
+  if (B->Op != VBinOp::Add || B->Lhs->K != VExpr::Var ||
+      B->Lhs->Ty.Kind != VTypeKind::Ptr || B->Rhs->Ty.Kind == VTypeKind::Ptr)
+    return nullptr;
+  return static_cast<const VVarExpr *>(B->Lhs.get());
+}
+
+static const VExpr *directPointerIndex(const VExpr *E, uint64_t Stride,
+                                       bool &IsBase) {
+  IsBase = false;
+  while (E && E->K == VExpr::Cast)
+    E = static_cast<const VCastExpr *>(E)->Inner.get();
+  if (E && E->K == VExpr::Var) {
+    IsBase = true;
+    return nullptr;
+  }
+  if (!E || E->K != VExpr::BinOp)
+    return nullptr;
+  const auto *Add = static_cast<const VBinOpExpr *>(E);
+  if (Add->Op != VBinOp::Add || Add->Lhs->K != VExpr::Var)
+    return nullptr;
+  const VExpr *Scaled = Add->Rhs.get();
+  if (Stride != 1) {
+    if (!Scaled || Scaled->K != VExpr::BinOp)
+      return nullptr;
+    const auto *Mul = static_cast<const VBinOpExpr *>(Scaled);
+    if (Mul->Op != VBinOp::Mul || Mul->Rhs->K != VExpr::Literal ||
+        static_cast<const VLiteralExpr *>(Mul->Rhs.get())->Value !=
+            std::to_string(Stride))
+      return nullptr;
+    Scaled = Mul->Lhs.get();
+  }
+  if (!Scaled || Scaled->K != VExpr::Cast)
+    return nullptr;
+  const auto *Cast = static_cast<const VCastExpr *>(Scaled);
+  if (Cast->FromTy.IntMode != VIntMode::Machine ||
+      Cast->Ty.IntMode != VIntMode::Math)
+    return nullptr;
+  return Cast->Inner.get();
+}
+
+static const VBinOpExpr *loweredPointerDifferenceQuotient(const VCastExpr *C) {
+  if (!C || C->Ty.IntMode != VIntMode::Machine || !C->Ty.isSignedInt() ||
+      C->Ty.BitWidth == 0 || C->Inner->K != VExpr::BinOp)
+    return nullptr;
+  const auto *Quotient = static_cast<const VBinOpExpr *>(C->Inner.get());
+  if (Quotient->Op != VBinOp::Div || Quotient->Lhs->K != VExpr::BinOp ||
+      Quotient->Rhs->K != VExpr::Literal)
+    return nullptr;
+  const auto *Difference = static_cast<const VBinOpExpr *>(Quotient->Lhs.get());
+  if (Difference->Op != VBinOp::Sub ||
+      Difference->Lhs->Ty.Kind != VTypeKind::Ptr ||
+      Difference->Rhs->Ty.Kind != VTypeKind::Ptr)
+    return nullptr;
+  return Quotient;
+}
+
+static bool directPointerDifferenceIndices(
+    const VCastExpr *C, const VBinOpExpr *&Quotient, const VExpr *&LeftIndex,
+    const VExpr *&RightIndex, bool &LeftIsBase, bool &RightIsBase) {
+  Quotient = loweredPointerDifferenceQuotient(C);
+  if (!Quotient)
+    return false;
+  const auto *Difference = static_cast<const VBinOpExpr *>(Quotient->Lhs.get());
+  const auto *LeftRoot = directPointerRoot(Difference->Lhs.get());
+  const auto *RightRoot = directPointerRoot(Difference->Rhs.get());
+  if (!LeftRoot || !RightRoot || LeftRoot->Name != RightRoot->Name)
+    return false;
+
+  uint64_t Stride = 0;
+  if (llvm::StringRef(
+          static_cast<const VLiteralExpr *>(Quotient->Rhs.get())->Value)
+          .getAsInteger(10, Stride) ||
+      Stride == 0)
+    return false;
+  LeftIndex = directPointerIndex(Difference->Lhs.get(), Stride, LeftIsBase);
+  RightIndex = directPointerIndex(Difference->Rhs.get(), Stride, RightIsBase);
+  return (LeftIsBase || LeftIndex) && (RightIsBase || RightIndex);
+}
+
+static std::unique_ptr<VExpr>
+normalizeDirectPointerDifference(const VCastExpr *C, const CloneCtx &Ctx) {
+  const VBinOpExpr *B = nullptr;
+  const VExpr *LeftIndex = nullptr;
+  const VExpr *RightIndex = nullptr;
+  bool LeftIsBase = false;
+  bool RightIsBase = false;
+  if (!directPointerDifferenceIndices(C, B, LeftIndex, RightIndex, LeftIsBase,
+                                      RightIsBase))
+    return nullptr;
+  auto IsMachineIndex = [](const VExpr *Index) {
+    return !Index || (Index->Ty.IntMode == VIntMode::Machine &&
+                      (Index->Ty.Kind == VTypeKind::Int32 ||
+                       Index->Ty.Kind == VTypeKind::Int64) &&
+                      Index->Ty.BitWidth != 0);
+  };
+  if (!IsMachineIndex(LeftIndex) || !IsMachineIndex(RightIndex))
+    return nullptr;
+
+  auto ConvertIndex = [&](const VExpr *Index) -> std::unique_ptr<VExpr> {
+    if (!Index)
+      return std::make_unique<VLiteralExpr>(0, C->Ty, B->Loc);
+    auto Value = cloneExpr(Index, Ctx);
+    return std::make_unique<VCastExpr>(std::move(Value), Index->Ty, C->Ty,
+                                       Index->Loc);
+  };
+  return std::make_unique<VBinOpExpr>(VBinOp::Sub, ConvertIndex(LeftIndex),
+                                      ConvertIndex(RightIndex), C->Ty, B->Loc);
+}
 
 static std::string stateHeapName(const CloneCtx &Ctx, const char *Base,
                                  const std::string &Explicit) {
@@ -92,6 +210,8 @@ static std::unique_ptr<VExpr> cloneExpr(const VExpr *E, const CloneCtx &Ctx) {
   }
   case VExpr::Cast: {
     const auto *C = static_cast<const VCastExpr *>(E);
+    if (auto Normalized = normalizeDirectPointerDifference(C, Ctx))
+      return Normalized;
     return std::make_unique<VCastExpr>(cloneExpr(C->Inner.get(), Ctx),
                                        C->FromTy, C->Ty, C->Loc);
   }
@@ -274,8 +394,10 @@ static std::unique_ptr<VExpr> makeImplies(std::unique_ptr<VExpr> L,
                                       std::move(R), VType::makeBool(), Loc);
 }
 
-static std::unique_ptr<VExpr> safetyForExpr(const VExpr *E,
-                                            const FunctionMap *FnMap);
+static std::unique_ptr<VExpr>
+safetyForExpr(const VExpr *E, const FunctionMap *FnMap,
+              const std::vector<VValidExtent> *ValidExtents = nullptr,
+              const std::set<std::string> *PointerParams = nullptr);
 
 static std::unique_ptr<VExpr> combineSafety(std::unique_ptr<VExpr> L,
                                             std::unique_ptr<VExpr> R,
@@ -297,6 +419,98 @@ static std::string signedLimit(unsigned BitWidth, bool Minimum) {
   llvm::SmallString<64> Buffer;
   Value.toString(Buffer, 10, true);
   return std::string(Buffer);
+}
+
+static std::unique_ptr<VExpr> signedArithmeticSafety(const VBinOpExpr *B);
+
+static std::unique_ptr<VExpr>
+pointerDifferenceRepresentability(const VCastExpr *C) {
+  const VBinOpExpr *Quotient = nullptr;
+  const VExpr *LeftIndex = nullptr;
+  const VExpr *RightIndex = nullptr;
+  bool LeftIsBase = false;
+  bool RightIsBase = false;
+  if (directPointerDifferenceIndices(C, Quotient, LeftIndex, RightIndex,
+                                     LeftIsBase, RightIsBase)) {
+    if (!LeftIndex && !RightIndex)
+      return makeBoolLiteral(true, C->Loc);
+    const VType &IndexType = LeftIndex ? LeftIndex->Ty : RightIndex->Ty;
+    const bool SameRepresentation =
+        (!LeftIndex || (LeftIndex->Ty.Kind == IndexType.Kind &&
+                        LeftIndex->Ty.IntMode == IndexType.IntMode &&
+                        LeftIndex->Ty.IsSigned == IndexType.IsSigned &&
+                        LeftIndex->Ty.BitWidth == IndexType.BitWidth)) &&
+        (!RightIndex || (RightIndex->Ty.Kind == IndexType.Kind &&
+                         RightIndex->Ty.IntMode == IndexType.IntMode &&
+                         RightIndex->Ty.IsSigned == IndexType.IsSigned &&
+                         RightIndex->Ty.BitWidth == IndexType.BitWidth));
+    if (SameRepresentation && IndexType.IntMode == VIntMode::Machine &&
+        isIntegerType(IndexType) && IndexType.BitWidth != 0) {
+      if (IndexType.BitWidth < C->Ty.BitWidth)
+        return makeBoolLiteral(true, C->Loc);
+      if (IndexType.BitWidth == C->Ty.BitWidth) {
+        auto IndexValue = [&](const VExpr *Index) -> std::unique_ptr<VExpr> {
+          if (Index)
+            return cloneVExpr(Index);
+          return std::make_unique<VLiteralExpr>(0, IndexType, C->Loc);
+        };
+        if (IndexType.IsSigned) {
+          auto Difference = std::make_unique<VBinOpExpr>(
+              VBinOp::Sub, IndexValue(LeftIndex), IndexValue(RightIndex),
+              IndexType, C->Loc);
+          return signedArithmeticSafety(Difference.get());
+        }
+
+        auto Left = IndexValue(LeftIndex);
+        auto Right = IndexValue(RightIndex);
+        auto LeftAtLeastRight = std::make_unique<VBinOpExpr>(
+            VBinOp::Ge, cloneVExpr(Left.get()), cloneVExpr(Right.get()),
+            VType::makeBool(), C->Loc);
+        auto ForwardDistance = std::make_unique<VBinOpExpr>(
+            VBinOp::Sub, cloneVExpr(Left.get()), cloneVExpr(Right.get()),
+            IndexType, C->Loc);
+        auto ForwardFits = std::make_unique<VBinOpExpr>(
+            VBinOp::Le, std::move(ForwardDistance),
+            std::make_unique<VLiteralExpr>(signedLimit(C->Ty.BitWidth, false),
+                                           IndexType, C->Loc),
+            VType::makeBool(), C->Loc);
+
+        llvm::APInt MinMagnitude =
+            llvm::APInt::getOneBitSet(C->Ty.BitWidth, C->Ty.BitWidth - 1);
+        llvm::SmallString<64> MinMagnitudeBuffer;
+        MinMagnitude.toString(MinMagnitudeBuffer, 10, false);
+        auto BackwardDistance = std::make_unique<VBinOpExpr>(
+            VBinOp::Sub, std::move(Right), std::move(Left), IndexType, C->Loc);
+        auto BackwardFits = std::make_unique<VBinOpExpr>(
+            VBinOp::Le, std::move(BackwardDistance),
+            std::make_unique<VLiteralExpr>(std::string(MinMagnitudeBuffer),
+                                           IndexType, C->Loc),
+            VType::makeBool(), C->Loc);
+        auto ForwardOrder = cloneVExpr(LeftAtLeastRight.get());
+        auto BackwardOrder = makeNot(std::move(LeftAtLeastRight), C->Loc);
+        auto ForwardCase =
+            makeAnd(std::move(ForwardOrder), std::move(ForwardFits), C->Loc);
+        auto BackwardCase =
+            makeAnd(std::move(BackwardOrder), std::move(BackwardFits), C->Loc);
+        return makeOr(std::move(ForwardCase), std::move(BackwardCase), C->Loc);
+      }
+    }
+  } else {
+    Quotient = loweredPointerDifferenceQuotient(C);
+  }
+  if (!Quotient)
+    return makeBoolLiteral(true, C ? C->Loc : SourceLocation());
+  auto AtLeastMinimum = std::make_unique<VBinOpExpr>(
+      VBinOp::Ge, cloneVExpr(Quotient),
+      std::make_unique<VLiteralExpr>(signedLimit(C->Ty.BitWidth, true),
+                                     Quotient->Ty, C->Loc),
+      VType::makeBool(), C->Loc);
+  auto AtMostMaximum = std::make_unique<VBinOpExpr>(
+      VBinOp::Le, cloneVExpr(Quotient),
+      std::make_unique<VLiteralExpr>(signedLimit(C->Ty.BitWidth, false),
+                                     Quotient->Ty, C->Loc),
+      VType::makeBool(), C->Loc);
+  return makeAnd(std::move(AtLeastMinimum), std::move(AtMostMaximum), C->Loc);
 }
 
 static std::string unsignedMaximum(unsigned BitWidth) {
@@ -403,6 +617,290 @@ static std::unique_ptr<VExpr> pointerProvenance(const VExpr *E) {
 
 static bool hasPointerProvenance(const VExpr *E) {
   return pointerProvenance(E) != nullptr;
+}
+
+static VType pointerOffsetType() {
+  return VType::makeInt(VIntMode::Math, 64, true);
+}
+
+static bool sameIntegerRepresentation(const VType &L, const VType &R) {
+  return (L.Kind == VTypeKind::Int32 || L.Kind == VTypeKind::Int64) &&
+         L.Kind == R.Kind && L.IntMode == R.IntMode &&
+         L.IsSigned == R.IsSigned && L.BitWidth == R.BitWidth;
+}
+
+static const VExpr *machineValueInsideMathCast(const VExpr *E) {
+  if (!E || E->K != VExpr::Cast)
+    return nullptr;
+  const auto *Cast = static_cast<const VCastExpr *>(E);
+  if (Cast->FromTy.IntMode != VIntMode::Machine ||
+      Cast->Ty.IntMode != VIntMode::Math)
+    return nullptr;
+  return Cast->Inner.get();
+}
+
+static std::unique_ptr<VExpr> unscalePointerOffset(const VExpr *E,
+                                                   uint64_t PointeeSize) {
+  if (!E || PointeeSize == 0)
+    return nullptr;
+  if (PointeeSize == 1) {
+    if (const VExpr *Machine = machineValueInsideMathCast(E))
+      return cloneVExpr(Machine);
+    return cloneVExpr(E);
+  }
+  if (E->K != VExpr::BinOp)
+    return nullptr;
+  const auto *Mul = static_cast<const VBinOpExpr *>(E);
+  if (Mul->Op != VBinOp::Mul)
+    return nullptr;
+  auto IsStride = [PointeeSize](const VExpr *Candidate) {
+    return Candidate && Candidate->K == VExpr::Literal &&
+           static_cast<const VLiteralExpr *>(Candidate)->Value ==
+               std::to_string(PointeeSize);
+  };
+  if (IsStride(Mul->Rhs.get()))
+    if (const VExpr *Machine = machineValueInsideMathCast(Mul->Lhs.get()))
+      return cloneVExpr(Machine);
+  if (IsStride(Mul->Lhs.get()))
+    if (const VExpr *Machine = machineValueInsideMathCast(Mul->Rhs.get()))
+      return cloneVExpr(Machine);
+  return nullptr;
+}
+
+static std::unique_ptr<VExpr>
+directPointerElementOffset(const VExpr *E, const std::string &Base,
+                           uint64_t PointeeSize, const VType &IndexType) {
+  while (E && E->K == VExpr::Cast)
+    E = static_cast<const VCastExpr *>(E)->Inner.get();
+  if (E && E->K == VExpr::Var && static_cast<const VVarExpr *>(E)->Name == Base)
+    return std::make_unique<VLiteralExpr>(0, IndexType, E->Loc);
+  if (!E || E->K != VExpr::BinOp)
+    return nullptr;
+  const auto *Add = static_cast<const VBinOpExpr *>(E);
+  if (Add->Op != VBinOp::Add || Add->Lhs->Ty.Kind != VTypeKind::Ptr ||
+      Add->Rhs->Ty.Kind == VTypeKind::Ptr)
+    return nullptr;
+  const VExpr *PointerBase = pointerBase(Add->Lhs.get());
+  if (!PointerBase || PointerBase->K != VExpr::Var ||
+      static_cast<const VVarExpr *>(PointerBase)->Name != Base ||
+      Add->Lhs->K != VExpr::Var)
+    return nullptr;
+  auto Offset = unscalePointerOffset(Add->Rhs.get(), PointeeSize);
+  if (!Offset || !sameIntegerRepresentation(Offset->Ty, IndexType))
+    return nullptr;
+  return Offset;
+}
+
+static std::unique_ptr<VExpr> asPointerOffset(const VExpr *E) {
+  if (!E)
+    return nullptr;
+  VType OffsetTy = pointerOffsetType();
+  if (E->Ty.Kind != VTypeKind::Int32 && E->Ty.Kind != VTypeKind::Int64)
+    return nullptr;
+  return std::make_unique<VCastExpr>(cloneVExpr(E), E->Ty, OffsetTy, E->Loc);
+}
+
+static std::unique_ptr<VExpr> pointerByteOffset(const VExpr *E,
+                                                const std::string &Base) {
+  if (!E)
+    return nullptr;
+  while (E && E->K == VExpr::Cast)
+    E = static_cast<const VCastExpr *>(E)->Inner.get();
+  if (E->K == VExpr::Var) {
+    if (static_cast<const VVarExpr *>(E)->Name != Base)
+      return nullptr;
+    return std::make_unique<VLiteralExpr>(0, pointerOffsetType(), E->Loc);
+  }
+  if (E->K != VExpr::BinOp)
+    return nullptr;
+  const auto *B = static_cast<const VBinOpExpr *>(E);
+  if ((B->Op != VBinOp::Add && B->Op != VBinOp::Sub) ||
+      B->Lhs->Ty.Kind != VTypeKind::Ptr || B->Rhs->Ty.Kind == VTypeKind::Ptr)
+    return nullptr;
+  auto BaseOffset = pointerByteOffset(B->Lhs.get(), Base);
+  auto Delta = asPointerOffset(B->Rhs.get());
+  if (!BaseOffset || !Delta)
+    return nullptr;
+  return std::make_unique<VBinOpExpr>(B->Op, std::move(BaseOffset),
+                                      std::move(Delta), pointerOffsetType(),
+                                      B->Loc);
+}
+
+static std::unique_ptr<VExpr>
+scaledExtent(const VExpr *Length, uint64_t PointeeSize, SourceLocation Loc) {
+  auto Count = asPointerOffset(Length);
+  if (!Count || PointeeSize == 0)
+    return nullptr;
+  if (PointeeSize == 1)
+    return Count;
+  return std::make_unique<VBinOpExpr>(
+      VBinOp::Mul, std::move(Count),
+      std::make_unique<VLiteralExpr>(std::to_string(PointeeSize),
+                                     pointerOffsetType(), Loc),
+      pointerOffsetType(), Loc);
+}
+
+static std::unique_ptr<VExpr> pointerPositionSafety(
+    const VExpr *Pointer, const std::vector<VValidExtent> *ValidExtents,
+    const std::set<std::string> *PointerParams, SourceLocation Loc) {
+  const VExpr *Base = pointerBase(Pointer);
+  if (!Base || Base->K != VExpr::Var || Pointer->Ty.PointeeSizeBytes == 0)
+    return makeBoolLiteral(false, Loc);
+  const auto *BaseVar = static_cast<const VVarExpr *>(Base);
+
+  const VValidExtent *MatchingExtent = nullptr;
+  if (ValidExtents)
+    for (const VValidExtent &Extent : *ValidExtents)
+      if (Extent.Base == BaseVar->Name &&
+          Extent.PointerType.PointeeSizeBytes == Pointer->Ty.PointeeSizeBytes) {
+        MatchingExtent = &Extent;
+        break;
+      }
+  if (MatchingExtent) {
+    auto ElementOffset = directPointerElementOffset(
+        Pointer, BaseVar->Name, Pointer->Ty.PointeeSizeBytes,
+        MatchingExtent->Length->Ty);
+    if (ElementOffset) {
+      auto NonNegative = std::make_unique<VBinOpExpr>(
+          VBinOp::Ge, cloneVExpr(ElementOffset.get()),
+          std::make_unique<VLiteralExpr>(0, ElementOffset->Ty, Loc),
+          VType::makeBool(), Loc);
+      auto WithinExtent = std::make_unique<VBinOpExpr>(
+          VBinOp::Le, std::move(ElementOffset),
+          cloneVExpr(MatchingExtent->Length.get()), VType::makeBool(), Loc);
+      return makeAnd(std::move(NonNegative), std::move(WithinExtent), Loc);
+    }
+  }
+
+  const bool IsDynamic = hasPointerProvenance(Pointer);
+  const bool IsDirectParameter =
+      PointerParams && PointerParams->count(BaseVar->Name);
+  if (!MatchingExtent && (IsDynamic || IsDirectParameter)) {
+    const VExpr *Unwrapped = Pointer;
+    while (Unwrapped && Unwrapped->K == VExpr::Cast)
+      Unwrapped = static_cast<const VCastExpr *>(Unwrapped)->Inner.get();
+    if (Unwrapped && Unwrapped->K == VExpr::Var)
+      return makeBoolLiteral(true, Loc);
+    if (Unwrapped && Unwrapped->K == VExpr::BinOp) {
+      const auto *Add = static_cast<const VBinOpExpr *>(Unwrapped);
+      if (Add->Op == VBinOp::Add && Add->Lhs->K == VExpr::Var &&
+          static_cast<const VVarExpr *>(Add->Lhs.get())->Name ==
+              BaseVar->Name) {
+        auto ElementOffset =
+            unscalePointerOffset(Add->Rhs.get(), Pointer->Ty.PointeeSizeBytes);
+        if (ElementOffset) {
+          VType ElementOffsetType = ElementOffset->Ty;
+          auto NonNegative = std::make_unique<VBinOpExpr>(
+              VBinOp::Ge, cloneVExpr(ElementOffset.get()),
+              std::make_unique<VLiteralExpr>(0, ElementOffsetType, Loc),
+              VType::makeBool(), Loc);
+          auto OnePast = std::make_unique<VBinOpExpr>(
+              VBinOp::Le, std::move(ElementOffset),
+              std::make_unique<VLiteralExpr>(1, ElementOffsetType, Loc),
+              VType::makeBool(), Loc);
+          return makeAnd(std::move(NonNegative), std::move(OnePast), Loc);
+        }
+      }
+    }
+  }
+
+  auto Offset = pointerByteOffset(Pointer, BaseVar->Name);
+  if (!Offset)
+    return makeBoolLiteral(false, Loc);
+
+  std::unique_ptr<VExpr> Limit;
+  if (MatchingExtent)
+    Limit = scaledExtent(MatchingExtent->Length.get(),
+                         MatchingExtent->PointerType.PointeeSizeBytes, Loc);
+  if (!Limit && (IsDynamic || IsDirectParameter))
+    Limit = std::make_unique<VLiteralExpr>(
+        std::to_string(Pointer->Ty.PointeeSizeBytes), pointerOffsetType(), Loc);
+  if (!Limit)
+    return makeBoolLiteral(false, Loc);
+
+  auto NonNegative = std::make_unique<VBinOpExpr>(
+      VBinOp::Ge, cloneVExpr(Offset.get()),
+      std::make_unique<VLiteralExpr>(0, pointerOffsetType(), Loc),
+      VType::makeBool(), Loc);
+  auto WithinExtent = std::make_unique<VBinOpExpr>(
+      VBinOp::Le, std::move(Offset), std::move(Limit), VType::makeBool(), Loc);
+  return makeAnd(std::move(NonNegative), std::move(WithinExtent), Loc);
+}
+
+static std::unique_ptr<VExpr> sliceContainment(
+    const VExpr *Pointer, const VExpr *Length, uint64_t PointeeSize,
+    const std::vector<VValidExtent> &CallerExtents, SourceLocation Loc) {
+  const VExpr *Base = pointerBase(Pointer);
+  if (!Base || Base->K != VExpr::Var || PointeeSize == 0)
+    return makeBoolLiteral(false, Loc);
+  const std::string &BaseName = static_cast<const VVarExpr *>(Base)->Name;
+  auto Offset = pointerByteOffset(Pointer, BaseName);
+  auto SliceBytes = scaledExtent(Length, PointeeSize, Loc);
+  if (!Offset || !SliceBytes)
+    return makeBoolLiteral(false, Loc);
+
+  std::unique_ptr<VExpr> Contained = makeBoolLiteral(false, Loc);
+  for (const VValidExtent &Outer : CallerExtents) {
+    if (Outer.Base != BaseName ||
+        Outer.PointerType.PointeeSizeBytes != PointeeSize)
+      continue;
+    if (sameIntegerRepresentation(Length->Ty, Outer.Length->Ty)) {
+      auto ElementOffset = directPointerElementOffset(
+          Pointer, BaseName, PointeeSize, Outer.Length->Ty);
+      if (ElementOffset) {
+        auto OffsetNonNegative = std::make_unique<VBinOpExpr>(
+            VBinOp::Ge, cloneVExpr(ElementOffset.get()),
+            std::make_unique<VLiteralExpr>(0, ElementOffset->Ty, Loc),
+            VType::makeBool(), Loc);
+        auto OffsetWithin = std::make_unique<VBinOpExpr>(
+            VBinOp::Le, cloneVExpr(ElementOffset.get()),
+            cloneVExpr(Outer.Length.get()), VType::makeBool(), Loc);
+        auto LengthNonNegative = std::make_unique<VBinOpExpr>(
+            VBinOp::Ge, cloneVExpr(Length),
+            std::make_unique<VLiteralExpr>(0, Length->Ty, Loc),
+            VType::makeBool(), Loc);
+        auto Remaining = std::make_unique<VBinOpExpr>(
+            VBinOp::Sub, cloneVExpr(Outer.Length.get()),
+            std::move(ElementOffset), Outer.Length->Ty, Loc);
+        auto LengthWithin = std::make_unique<VBinOpExpr>(
+            VBinOp::Le, cloneVExpr(Length), std::move(Remaining),
+            VType::makeBool(), Loc);
+        auto ThisExtent =
+            makeAnd(std::move(OffsetNonNegative), std::move(OffsetWithin), Loc);
+        ThisExtent =
+            makeAnd(std::move(ThisExtent), std::move(LengthNonNegative), Loc);
+        ThisExtent =
+            makeAnd(std::move(ThisExtent), std::move(LengthWithin), Loc);
+        Contained = makeOr(std::move(Contained), std::move(ThisExtent), Loc);
+        continue;
+      }
+    }
+    auto OuterBytes = scaledExtent(Outer.Length.get(), PointeeSize, Loc);
+    if (!OuterBytes)
+      continue;
+    auto OffsetNonNegative = std::make_unique<VBinOpExpr>(
+        VBinOp::Ge, cloneVExpr(Offset.get()),
+        std::make_unique<VLiteralExpr>(0, pointerOffsetType(), Loc),
+        VType::makeBool(), Loc);
+    auto LengthValue = asPointerOffset(Length);
+    if (!LengthValue)
+      continue;
+    auto LengthNonNegative = std::make_unique<VBinOpExpr>(
+        VBinOp::Ge, std::move(LengthValue),
+        std::make_unique<VLiteralExpr>(0, pointerOffsetType(), Loc),
+        VType::makeBool(), Loc);
+    auto End = std::make_unique<VBinOpExpr>(
+        VBinOp::Add, cloneVExpr(Offset.get()), cloneVExpr(SliceBytes.get()),
+        pointerOffsetType(), Loc);
+    auto EndsWithin = std::make_unique<VBinOpExpr>(VBinOp::Le, std::move(End),
+                                                   std::move(OuterBytes),
+                                                   VType::makeBool(), Loc);
+    auto ThisExtent = makeAnd(std::move(OffsetNonNegative),
+                              std::move(LengthNonNegative), Loc);
+    ThisExtent = makeAnd(std::move(ThisExtent), std::move(EndsWithin), Loc);
+    Contained = makeOr(std::move(Contained), std::move(ThisExtent), Loc);
+  }
+  return Contained;
 }
 
 static bool referencesVar(const VExpr *E, const std::string &Name) {
@@ -886,13 +1384,107 @@ static bool isRegionFootprint(const VExpr *E,
   return !Ptr || Ptr->K == VExpr::Var;
 }
 
-static bool hasImplicitHeapEffect(const VFunction &Fn) {
+static bool hasUnboundedExtentWrite(const VFunction &Fn,
+                                    const std::string &Base) {
+  for (const auto &Modify : Fn.Modifies) {
+    if (!Modify || Modify->K != VExpr::Load ||
+        !isRegionFootprint(Modify.get(), Fn.ReferenceParams))
+      continue;
+    const VExpr *Ptr =
+        pointerBase(static_cast<const VLoadExpr *>(Modify.get())->Ptr.get());
+    if (Ptr && Ptr->K == VExpr::Var &&
+        static_cast<const VVarExpr *>(Ptr)->Name == Base)
+      return true;
+  }
+  return false;
+}
+
+static bool functionMayWriteHeap(const VFunction &Fn, const FunctionMap &FnMap,
+                                 std::set<std::string> &Active);
+
+static bool stmtMayWriteHeap(const VStmt &S, const FunctionMap &FnMap,
+                             std::set<std::string> &Active) {
+  switch (S.K) {
+  case VStmt::Store:
+  case VStmt::Allocate:
+  case VStmt::Free:
+    return true;
+  case VStmt::Call: {
+    const auto &Call = static_cast<const VCallStmt &>(S);
+    auto It = FnMap.find(Call.CalleeIdentity);
+    if (It == FnMap.end())
+      return true;
+    return functionMayWriteHeap(*It->second, FnMap, Active);
+  }
+  case VStmt::If: {
+    const auto &If = static_cast<const VIfStmt &>(S);
+    for (const auto &Nested : If.Then)
+      if (stmtMayWriteHeap(*Nested, FnMap, Active))
+        return true;
+    for (const auto &Nested : If.Else)
+      if (stmtMayWriteHeap(*Nested, FnMap, Active))
+        return true;
+    return false;
+  }
+  case VStmt::While:
+    for (const auto &Nested : static_cast<const VWhileStmt &>(S).Body)
+      if (stmtMayWriteHeap(*Nested, FnMap, Active))
+        return true;
+    return false;
+  case VStmt::Seq:
+    for (const auto &Nested : static_cast<const VSeqStmt &>(S).Stmts)
+      if (stmtMayWriteHeap(*Nested, FnMap, Active))
+        return true;
+    return false;
+  case VStmt::GhostBlock:
+    for (const auto &Nested : static_cast<const VGhostBlockStmt &>(S).Body)
+      if (stmtMayWriteHeap(*Nested, FnMap, Active))
+        return true;
+    return false;
+  case VStmt::Assign:
+  case VStmt::EndLifetime:
+  case VStmt::Assert:
+  case VStmt::Assume:
+  case VStmt::Return:
+  case VStmt::Havoc:
+  case VStmt::RevealWithFuel:
+  case VStmt::HideSpec:
+  case VStmt::RevealSpec:
+  case VStmt::ContractAssert:
+    return false;
+  }
+  return true;
+}
+
+static bool functionMayWriteHeap(const VFunction &Fn, const FunctionMap &FnMap,
+                                 std::set<std::string> &Active) {
+  if (Fn.IsProof || Fn.IsSpec)
+    return false;
+  if (!Fn.Modifies.empty() || Fn.IsExternalContract || Fn.UsesDynamicStorage)
+    return true;
+  if (!Active.insert(Fn.Identity).second)
+    return true;
+  bool Writes = false;
+  for (const auto &S : Fn.Body)
+    if (stmtMayWriteHeap(*S, FnMap, Active)) {
+      Writes = true;
+      break;
+    }
+  Active.erase(Fn.Identity);
+  return Writes;
+}
+
+static bool hasImplicitHeapEffect(const VFunction &Fn,
+                                  const FunctionMap &FnMap) {
   if (Fn.IsProof || !Fn.Modifies.empty())
     return false;
+  bool HasPointerParam = false;
   for (const auto &Param : Fn.Params)
-    if (Param.second.Kind == VTypeKind::Ptr)
-      return true;
-  return false;
+    HasPointerParam |= Param.second.Kind == VTypeKind::Ptr;
+  if (!HasPointerParam)
+    return false;
+  std::set<std::string> Active;
+  return functionMayWriteHeap(Fn, FnMap, Active);
 }
 
 static std::unique_ptr<VExpr> footprintContains(const VExpr *OuterPtr,
@@ -944,8 +1536,10 @@ static std::unique_ptr<VExpr> initializedSafety(const VExpr *Ptr,
                                         VType::makeBool(), Loc);
 }
 
-static std::unique_ptr<VExpr> safetyForExpr(const VExpr *E,
-                                            const FunctionMap *FnMap) {
+static std::unique_ptr<VExpr>
+safetyForExpr(const VExpr *E, const FunctionMap *FnMap,
+              const std::vector<VValidExtent> *ValidExtents,
+              const std::set<std::string> *PointerParams) {
   if (!E)
     return makeBoolLiteral(false, SourceLocation());
   switch (E->K) {
@@ -955,8 +1549,9 @@ static std::unique_ptr<VExpr> safetyForExpr(const VExpr *E,
     return makeBoolLiteral(true, E->Loc);
   case VExpr::BinOp: {
     const auto *B = static_cast<const VBinOpExpr *>(E);
-    auto Left = safetyForExpr(B->Lhs.get(), FnMap);
-    auto Right = safetyForExpr(B->Rhs.get(), FnMap);
+    auto Left = safetyForExpr(B->Lhs.get(), FnMap, ValidExtents, PointerParams);
+    auto Right =
+        safetyForExpr(B->Rhs.get(), FnMap, ValidExtents, PointerParams);
     if (B->Op == VBinOp::And)
       return combineSafety(
           std::move(Left),
@@ -979,6 +1574,14 @@ static std::unique_ptr<VExpr> safetyForExpr(const VExpr *E,
           std::move(Defined),
           samePointerDifferenceOrigin(B->Lhs.get(), B->Rhs.get(), B->Loc),
           B->Loc);
+      Defined = makeAnd(std::move(Defined),
+                        pointerPositionSafety(B->Lhs.get(), ValidExtents,
+                                              PointerParams, B->Loc),
+                        B->Loc);
+      Defined = makeAnd(std::move(Defined),
+                        pointerPositionSafety(B->Rhs.get(), ValidExtents,
+                                              PointerParams, B->Loc),
+                        B->Loc);
       Safe = combineSafety(std::move(Safe), std::move(Defined), B->Loc);
     }
     if (B->Op == VBinOp::Shl || B->Op == VBinOp::Shr)
@@ -1014,7 +1617,8 @@ static std::unique_ptr<VExpr> safetyForExpr(const VExpr *E,
   }
   case VExpr::UnaryOp: {
     const auto *U = static_cast<const VUnaryOpExpr *>(E);
-    auto Safe = safetyForExpr(U->Operand.get(), FnMap);
+    auto Safe =
+        safetyForExpr(U->Operand.get(), FnMap, ValidExtents, PointerParams);
     if (U->Op != VUnaryOp::Neg || !isSignedMachineInteger(U->Operand->Ty) ||
         U->Operand->Ty.BitWidth == 0)
       return Safe;
@@ -1025,12 +1629,20 @@ static std::unique_ptr<VExpr> safetyForExpr(const VExpr *E,
         VType::makeBool(), U->Loc);
     return combineSafety(std::move(Safe), std::move(NotMin), U->Loc);
   }
-  case VExpr::Cast:
-    return safetyForExpr(static_cast<const VCastExpr *>(E)->Inner.get(), FnMap);
+  case VExpr::Cast: {
+    const auto *C = static_cast<const VCastExpr *>(E);
+    auto Safe =
+        safetyForExpr(C->Inner.get(), FnMap, ValidExtents, PointerParams);
+    if (loweredPointerDifferenceQuotient(C))
+      Safe = combineSafety(std::move(Safe),
+                           pointerDifferenceRepresentability(C), C->Loc);
+    return Safe;
+  }
   case VExpr::Load: {
     const auto *L = static_cast<const VLoadExpr *>(E);
-    auto Safe = combineSafety(safetyForExpr(L->Ptr.get(), FnMap),
-                              nonNullSafety(L->Ptr.get(), L->Loc), L->Loc);
+    auto Safe = combineSafety(
+        safetyForExpr(L->Ptr.get(), FnMap, ValidExtents, PointerParams),
+        nonNullSafety(L->Ptr.get(), L->Loc), L->Loc);
     Safe = combineSafety(std::move(Safe),
                          initializedSafety(L->Ptr.get(), L->Loc), L->Loc);
     if (L->AccessCondition)
@@ -1039,35 +1651,43 @@ static std::unique_ptr<VExpr> safetyForExpr(const VExpr *E,
     return Safe;
   }
   case VExpr::Old:
-    return safetyForExpr(static_cast<const VOldExpr *>(E)->Inner.get(), FnMap);
+    return safetyForExpr(static_cast<const VOldExpr *>(E)->Inner.get(), FnMap,
+                         ValidExtents, PointerParams);
   case VExpr::Conditional: {
     const auto *C = static_cast<const VConditionalExpr *>(E);
-    auto Safe = safetyForExpr(C->Cond.get(), FnMap);
-    Safe =
-        combineSafety(std::move(Safe),
-                      makeImplies(cloneVExpr(C->Cond.get()),
-                                  safetyForExpr(C->Then.get(), FnMap), C->Loc),
-                      C->Loc);
+    auto Safe =
+        safetyForExpr(C->Cond.get(), FnMap, ValidExtents, PointerParams);
+    Safe = combineSafety(std::move(Safe),
+                         makeImplies(cloneVExpr(C->Cond.get()),
+                                     safetyForExpr(C->Then.get(), FnMap,
+                                                   ValidExtents, PointerParams),
+                                     C->Loc),
+                         C->Loc);
     return combineSafety(std::move(Safe),
                          makeImplies(makeNot(cloneVExpr(C->Cond.get()), C->Loc),
-                                     safetyForExpr(C->Else.get(), FnMap),
+                                     safetyForExpr(C->Else.get(), FnMap,
+                                                   ValidExtents, PointerParams),
                                      C->Loc),
                          C->Loc);
   }
   case VExpr::OverflowCheck: {
     const auto *O = static_cast<const VOverflowCheckExpr *>(E);
-    auto Safe = safetyForExpr(O->Lhs.get(), FnMap);
+    auto Safe = safetyForExpr(O->Lhs.get(), FnMap, ValidExtents, PointerParams);
     if (O->Rhs)
-      Safe = combineSafety(std::move(Safe), safetyForExpr(O->Rhs.get(), FnMap),
-                           O->Loc);
+      Safe = combineSafety(
+          std::move(Safe),
+          safetyForExpr(O->Rhs.get(), FnMap, ValidExtents, PointerParams),
+          O->Loc);
     return Safe;
   }
   case VExpr::Forall:
   case VExpr::Exists: {
     const auto *Q = static_cast<const VQuantifiedExpr *>(E);
-    auto Safe = combineSafety(safetyForExpr(Q->Lo.get(), FnMap),
-                              safetyForExpr(Q->Hi.get(), FnMap), Q->Loc);
-    auto BodySafe = safetyForExpr(Q->Body.get(), FnMap);
+    auto Safe = combineSafety(
+        safetyForExpr(Q->Lo.get(), FnMap, ValidExtents, PointerParams),
+        safetyForExpr(Q->Hi.get(), FnMap, ValidExtents, PointerParams), Q->Loc);
+    auto BodySafe =
+        safetyForExpr(Q->Body.get(), FnMap, ValidExtents, PointerParams);
     auto Quantified = std::make_unique<VForallExpr>(
         Q->Binder, cloneVExpr(Q->Lo.get()), cloneVExpr(Q->Hi.get()),
         std::move(BodySafe), Q->Loc, Q->BinderType);
@@ -1075,20 +1695,23 @@ static std::unique_ptr<VExpr> safetyForExpr(const VExpr *E,
   }
   case VExpr::HeapStore: {
     const auto *H = static_cast<const VHeapStoreExpr *>(E);
-    auto Safe = combineSafety(safetyForExpr(H->Ptr.get(), FnMap),
-                              safetyForExpr(H->Val.get(), FnMap), H->Loc);
+    auto Safe = combineSafety(
+        safetyForExpr(H->Ptr.get(), FnMap, ValidExtents, PointerParams),
+        safetyForExpr(H->Val.get(), FnMap, ValidExtents, PointerParams),
+        H->Loc);
     return combineSafety(std::move(Safe), nonNullSafety(H->Ptr.get(), H->Loc),
                          H->Loc);
   }
   case VExpr::FieldAccess:
     return safetyForExpr(static_cast<const VFieldAccessExpr *>(E)->Base.get(),
-                         FnMap);
+                         FnMap, ValidExtents, PointerParams);
   case VExpr::SpecCall: {
     const auto *C = static_cast<const VSpecCallExpr *>(E);
     auto Safe = makeBoolLiteral(true, C->Loc);
     for (const auto &Arg : C->Args)
-      Safe = combineSafety(std::move(Safe), safetyForExpr(Arg.get(), FnMap),
-                           C->Loc);
+      Safe = combineSafety(
+          std::move(Safe),
+          safetyForExpr(Arg.get(), FnMap, ValidExtents, PointerParams), C->Loc);
     if (FnMap) {
       auto It = FnMap->find(C->CalleeIdentity);
       if (It != FnMap->end() && It->second->RequiresCallDefinedness) {
@@ -1099,8 +1722,10 @@ static std::unique_ptr<VExpr> safetyForExpr(const VExpr *E,
         if (!Expanded || Expanded->K == VExpr::SpecCall)
           return combineSafety(std::move(Safe), makeBoolLiteral(false, C->Loc),
                                C->Loc);
-        Safe = combineSafety(std::move(Safe),
-                             safetyForExpr(Expanded.get(), FnMap), C->Loc);
+        Safe = combineSafety(
+            std::move(Safe),
+            safetyForExpr(Expanded.get(), FnMap, ValidExtents, PointerParams),
+            C->Loc);
       }
     }
     return Safe;
@@ -1376,7 +2001,8 @@ static std::unique_ptr<VExpr> substParams(
     const VExpr *E, const std::map<std::string, std::unique_ptr<VExpr>> &Map,
     const CloneCtx &Ctx, const std::string &EntryHeap,
     const std::string &HeapOverride = "", std::set<std::string> BoundVars = {},
-    const std::map<std::string, std::unique_ptr<VExpr>> *OldMap = nullptr) {
+    const std::map<std::string, std::unique_ptr<VExpr>> *OldMap = nullptr,
+    const std::set<std::string> *NormalizedPointerChecks = nullptr) {
   if (!E)
     return nullptr;
   switch (E->K) {
@@ -1394,28 +2020,38 @@ static std::unique_ptr<VExpr> substParams(
     return std::make_unique<VBinOpExpr>(
         B->Op,
         substParams(B->Lhs.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars,
-                    OldMap),
+                    OldMap, NormalizedPointerChecks),
         substParams(B->Rhs.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars,
-                    OldMap),
+                    OldMap, NormalizedPointerChecks),
         B->Ty, B->Loc);
   }
   case VExpr::UnaryOp: {
     const auto *U = static_cast<const VUnaryOpExpr *>(E);
-    return std::make_unique<VUnaryOpExpr>(
-        U->Op,
+    auto Operand =
         substParams(U->Operand.get(), Map, Ctx, EntryHeap, HeapOverride,
-                    BoundVars, OldMap),
-        U->Ty, U->Loc,
+                    BoundVars, OldMap, NormalizedPointerChecks);
+    const auto *OperandVar =
+        U->Operand->K == VExpr::Var
+            ? static_cast<const VVarExpr *>(U->Operand.get())
+            : nullptr;
+    if ((U->Op == VUnaryOp::ValidPtr || U->Op == VUnaryOp::InitializedPtr) &&
+        OperandVar && NormalizedPointerChecks &&
+        NormalizedPointerChecks->count(OperandVar->Name) &&
+        !hasPointerProvenance(Operand.get()))
+      if (const VExpr *Base = pointerBase(Operand.get()))
+        Operand = cloneVExpr(Base);
+    return std::make_unique<VUnaryOpExpr>(
+        U->Op, std::move(Operand), U->Ty, U->Loc,
         stateHeapName(Ctx, VAllocationHeapName, U->AllocationHeapVar),
         stateHeapName(Ctx, VLivenessHeapName, U->LivenessHeapVar),
         stateHeapName(Ctx, VInitializationHeapName, U->InitializationHeapVar));
   }
   case VExpr::Cast: {
     const auto *C = static_cast<const VCastExpr *>(E);
-    return std::make_unique<VCastExpr>(substParams(C->Inner.get(), Map, Ctx,
-                                                   EntryHeap, HeapOverride,
-                                                   BoundVars, OldMap),
-                                       C->FromTy, C->Ty, C->Loc);
+    return std::make_unique<VCastExpr>(
+        substParams(C->Inner.get(), Map, Ctx, EntryHeap, HeapOverride,
+                    BoundVars, OldMap, NormalizedPointerChecks),
+        C->FromTy, C->Ty, C->Loc);
   }
   case VExpr::Load: {
     const auto *L = static_cast<const VLoadExpr *>(E);
@@ -1423,10 +2059,10 @@ static std::unique_ptr<VExpr> substParams(
         HeapOverride.empty() ? Ctx.Renames.at(VHeapName) : HeapOverride;
     return std::make_unique<VLoadExpr>(
         substParams(L->Ptr.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars,
-                    OldMap),
+                    OldMap, NormalizedPointerChecks),
         L->Ty, L->Loc, std::move(Heap),
         substParams(L->AccessCondition.get(), Map, Ctx, EntryHeap, HeapOverride,
-                    BoundVars, OldMap));
+                    BoundVars, OldMap, NormalizedPointerChecks));
   }
   case VExpr::Result: {
     if (auto It = Map.find("result"); It != Map.end())
@@ -1437,24 +2073,24 @@ static std::unique_ptr<VExpr> substParams(
     const auto *O = static_cast<const VOldExpr *>(E);
     const auto &EntryMap = OldMap ? *OldMap : Map;
     return substParams(O->Inner.get(), EntryMap, Ctx, EntryHeap, EntryHeap,
-                       std::move(BoundVars), OldMap);
+                       std::move(BoundVars), OldMap, NormalizedPointerChecks);
   }
   case VExpr::Conditional: {
     const auto *C = static_cast<const VConditionalExpr *>(E);
     return std::make_unique<VConditionalExpr>(
         substParams(C->Cond.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars,
-                    OldMap),
+                    OldMap, NormalizedPointerChecks),
         substParams(C->Then.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars,
-                    OldMap),
+                    OldMap, NormalizedPointerChecks),
         substParams(C->Else.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars,
-                    OldMap),
+                    OldMap, NormalizedPointerChecks),
         C->Ty, C->Loc);
   }
   case VExpr::FieldAccess: {
     const auto *F = static_cast<const VFieldAccessExpr *>(E);
     return std::make_unique<VFieldAccessExpr>(
         substParams(F->Base.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars,
-                    OldMap),
+                    OldMap, NormalizedPointerChecks),
         F->Field, F->Ty, F->Loc);
   }
   case VExpr::SpecCall: {
@@ -1462,7 +2098,7 @@ static std::unique_ptr<VExpr> substParams(
     std::vector<std::unique_ptr<VExpr>> Args;
     for (const auto &Arg : C->Args)
       Args.push_back(substParams(Arg.get(), Map, Ctx, EntryHeap, HeapOverride,
-                                 BoundVars, OldMap));
+                                 BoundVars, OldMap, NormalizedPointerChecks));
     return std::make_unique<VSpecCallExpr>(C->Callee, C->CalleeIdentity,
                                            std::move(Args), C->Ty, C->Loc);
   }
@@ -1471,9 +2107,9 @@ static std::unique_ptr<VExpr> substParams(
     return std::make_unique<VOverflowCheckExpr>(
         O->Op,
         substParams(O->Lhs.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars,
-                    OldMap),
+                    OldMap, NormalizedPointerChecks),
         O->Rhs ? substParams(O->Rhs.get(), Map, Ctx, EntryHeap, HeapOverride,
-                             BoundVars, OldMap)
+                             BoundVars, OldMap, NormalizedPointerChecks)
                : nullptr,
         O->Loc);
   }
@@ -1483,11 +2119,12 @@ static std::unique_ptr<VExpr> substParams(
     std::set<std::string> BodyBound = BoundVars;
     BodyBound.insert(Q->Binder);
     auto Lo = substParams(Q->Lo.get(), Map, Ctx, EntryHeap, HeapOverride,
-                          BoundVars, OldMap);
+                          BoundVars, OldMap, NormalizedPointerChecks);
     auto Hi = substParams(Q->Hi.get(), Map, Ctx, EntryHeap, HeapOverride,
-                          BoundVars, OldMap);
-    auto Body = substParams(Q->Body.get(), Map, Ctx, EntryHeap, HeapOverride,
-                            std::move(BodyBound), OldMap);
+                          BoundVars, OldMap, NormalizedPointerChecks);
+    auto Body =
+        substParams(Q->Body.get(), Map, Ctx, EntryHeap, HeapOverride,
+                    std::move(BodyBound), OldMap, NormalizedPointerChecks);
     if (E->K == VExpr::Forall)
       return std::make_unique<VForallExpr>(Q->Binder, std::move(Lo),
                                            std::move(Hi), std::move(Body),
@@ -1501,9 +2138,9 @@ static std::unique_ptr<VExpr> substParams(
     return std::make_unique<VHeapStoreExpr>(
         H->HeapBefore, H->HeapAfter,
         substParams(H->Ptr.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars,
-                    OldMap),
+                    OldMap, NormalizedPointerChecks),
         substParams(H->Val.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars,
-                    OldMap),
+                    OldMap, NormalizedPointerChecks),
         H->Loc);
   }
   }
@@ -1537,6 +2174,9 @@ class PassivizerImpl {
   std::map<std::string, std::unique_ptr<VExpr>> ReferenceBindings;
   std::set<std::string> PointerValueVariables;
   std::set<std::string> ProvenanceVariables;
+  std::vector<VValidExtent> ActiveValidExtents;
+  std::set<std::string> PointerParameterNames;
+  std::set<std::string> SourcePointerParameterNames;
   std::set<std::string> RepresentedAllocationPointers;
   std::vector<StoredPointerCell> StoredPointerCells;
   std::set<std::string> HeapBases;
@@ -1716,8 +2356,9 @@ class PassivizerImpl {
       }
       if (!C.ResultProvenanceTarget.empty())
         Out.insert(C.ResultProvenanceTarget);
-      if (Callee != FnMap.end() && (!Callee->second->Modifies.empty() ||
-                                    hasImplicitHeapEffect(*Callee->second)))
+      if (Callee != FnMap.end() &&
+          (!Callee->second->Modifies.empty() ||
+           hasImplicitHeapEffect(*Callee->second, FnMap)))
         Out.insert(VHeapName);
       break;
     }
@@ -1779,8 +2420,12 @@ class PassivizerImpl {
   void emitExprSafety(PassiveProgram &P, const VExpr *E, const VExpr *Guard,
                       SourceLocation Loc,
                       const std::map<std::string, std::string> &Renames,
-                      bool BridgeMachineValue = false) {
-    auto Safety = safetyForExpr(E, &FnMap);
+                      bool BridgeMachineValue = false,
+                      const VExpr *SafetySource = nullptr) {
+    auto Safety = safetyForExpr(
+        SafetySource ? SafetySource : E, &FnMap,
+        SafetySource ? &Fn.ValidExtents : &ActiveValidExtents,
+        SafetySource ? &SourcePointerParameterNames : &PointerParameterNames);
     CloneCtx Ctx{Renames, OldState, false};
     emitPassive(P, PassiveStmt::Assert, cloneExpr(Safety.get(), Ctx), Guard,
                 Loc);
@@ -1865,7 +2510,16 @@ public:
       OldState[Param.first] =
           std::make_unique<VVarExpr>(V0, Param.second, SourceLocation());
       Renames[Param.first] = V0;
+      if (Param.second.Kind == VTypeKind::Ptr) {
+        PointerParameterNames.insert(V0);
+        SourcePointerParameterNames.insert(Param.first);
+      }
     }
+    CloneCtx EntryCtx{Renames, OldState, true};
+    for (const VValidExtent &Extent : Fn.ValidExtents)
+      ActiveValidExtents.emplace_back(stateVariableName(EntryCtx, Extent.Base),
+                                      Extent.PointerType,
+                                      cloneExpr(Extent.Length.get(), EntryCtx));
 
     std::set<std::string> FieldVars;
     for (const auto &Pre : Fn.Preconditions)
@@ -1908,7 +2562,8 @@ public:
       CloneCtx PCtx{Renames, OldState, false};
       auto BoundPost = cloneExpr(Post.get(), PCtx);
       emitMathBridge(P, BoundPost.get(), nullptr, BoundPost->Loc);
-      auto Safety = safetyForExpr(BoundPost.get(), &FnMap);
+      auto Safety = safetyForExpr(Post.get(), &FnMap, &Fn.ValidExtents,
+                                  &SourcePointerParameterNames);
       P.ExitAsserts.push_back(cloneExpr(Safety.get(), PCtx));
       P.ExitAsserts.push_back(std::move(BoundPost));
     }
@@ -1965,8 +2620,42 @@ public:
       emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, C.Loc));
       return;
     }
-    for (const auto &Arg : ParamMap)
-      emitExprSafety(P, Arg.second.get(), nullptr, C.Loc, Renames, true);
+    for (unsigned I = 0; I < Callee->Params.size() && I < C.Args.size(); ++I)
+      emitExprSafety(P, ParamMap[Callee->Params[I].first].get(), nullptr, C.Loc,
+                     Renames, true, C.Args[I].get());
+    const bool HasImplicitHeapEffect = hasImplicitHeapEffect(*Callee, FnMap);
+    for (const VValidExtent &Extent : Callee->ValidExtents) {
+      auto Actual = ParamMap.find(Extent.Base);
+      if (Actual == ParamMap.end()) {
+        emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, C.Loc));
+        continue;
+      }
+      auto Length = substParams(Extent.Length.get(), ParamMap, Ctx, EntryHeap);
+      auto Contained = sliceContainment(Actual->second.get(), Length.get(),
+                                        Extent.PointerType.PointeeSizeBytes,
+                                        ActiveValidExtents, C.Loc);
+      if (HasImplicitHeapEffect ||
+          hasUnboundedExtentWrite(*Callee, Extent.Base))
+        Contained =
+            makeAnd(std::move(Contained), makeBoolLiteral(false, C.Loc), C.Loc);
+      emitPassive(P, PassiveStmt::Assert, std::move(Contained), nullptr, C.Loc);
+      auto LengthValue = asPointerOffset(Length.get());
+      if (!LengthValue) {
+        emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, C.Loc));
+        continue;
+      }
+      auto Empty = std::make_unique<VBinOpExpr>(
+          VBinOp::Eq, std::move(LengthValue),
+          std::make_unique<VLiteralExpr>(0, pointerOffsetType(), C.Loc),
+          VType::makeBool(), C.Loc);
+      auto NonNull = std::make_unique<VBinOpExpr>(
+          VBinOp::Ne, cloneVExpr(Actual->second.get()),
+          std::make_unique<VLiteralExpr>(0, VType::makePtr(), C.Loc),
+          VType::makeBool(), C.Loc);
+      emitPassive(P, PassiveStmt::Assume,
+                  makeOr(std::move(Empty), std::move(NonNull), C.Loc), nullptr,
+                  C.Loc);
+    }
 
     std::vector<std::unique_ptr<VExpr>> ActualModifies;
     for (const auto &M : Callee->Modifies)
@@ -1977,9 +2666,22 @@ public:
     for (const auto &M : Fn.Modifies)
       CallerModifies.push_back(cloneExpr(M.get(), CallerEntryCtx));
 
+    std::set<std::string> CalleePointerParams;
+    for (const auto &[Name, Ty] : Callee->Params)
+      if (Ty.Kind == VTypeKind::Ptr)
+        CalleePointerParams.insert(Name);
+    std::set<std::string> ContainedPointerParams;
+    for (const VValidExtent &Extent : Callee->ValidExtents)
+      ContainedPointerParams.insert(Extent.Base);
     for (const auto &Pre : Callee->Preconditions) {
-      auto BoundPre = substParams(Pre.get(), ParamMap, Ctx, EntryHeap);
-      emitExprSafety(P, BoundPre.get(), nullptr, C.Loc, Renames);
+      auto BoundPre = substParams(Pre.get(), ParamMap, Ctx, EntryHeap, "", {},
+                                  nullptr, &ContainedPointerParams);
+      auto PreSafety = safetyForExpr(Pre.get(), &FnMap, &Callee->ValidExtents,
+                                     &CalleePointerParams);
+      emitPassive(P, PassiveStmt::Assert,
+                  substParams(PreSafety.get(), ParamMap, Ctx, EntryHeap),
+                  nullptr, C.Loc);
+      emitMathBridge(P, BoundPre.get(), nullptr, C.Loc);
       auto PS = std::make_unique<PassiveStmt>();
       PS->K = PassiveStmt::Assert;
       PS->Cond = std::move(BoundPre);
@@ -2024,7 +2726,6 @@ public:
       emitPassive(P, PassiveStmt::Assert, std::move(Allowed), nullptr, C.Loc);
     }
 
-    const bool HasImplicitHeapEffect = hasImplicitHeapEffect(*Callee);
     if (HasImplicitHeapEffect) {
       bool CallerHasPointerParam = false;
       for (const auto &Param : Fn.Params)
@@ -2149,7 +2850,8 @@ public:
       }
       CloneCtx Ctx{Renames, OldState, false};
       auto Val = cloneExpr(A.Value.get(), Ctx);
-      emitExprSafety(P, Val.get(), Active.get(), A.Loc, Renames, true);
+      emitExprSafety(P, Val.get(), Active.get(), A.Loc, Renames, true,
+                     A.Value.get());
       Types[A.Target] = Val->Ty;
       std::string NewName = bump(A.Target);
       Renames[A.Target] = NewName;
@@ -2168,8 +2870,10 @@ public:
       auto Ptr = cloneExpr(St.Ptr.get(), Ctx);
       auto Val = cloneExpr(St.Value.get(), Ctx);
       auto AccessCondition = cloneExpr(St.AccessCondition.get(), Ctx);
-      emitExprSafety(P, Ptr.get(), Active.get(), St.Loc, Renames);
-      emitExprSafety(P, Val.get(), Active.get(), St.Loc, Renames, true);
+      emitExprSafety(P, Ptr.get(), Active.get(), St.Loc, Renames, false,
+                     St.Ptr.get());
+      emitExprSafety(P, Val.get(), Active.get(), St.Loc, Renames, true,
+                     St.Value.get());
       if (Val->Ty.Kind == VTypeKind::Ptr && hasPointerProvenance(Val.get())) {
         emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, St.Loc),
                     Active.get(), St.Loc);
@@ -2179,7 +2883,8 @@ public:
           Val->Ty.Kind == VTypeKind::Ptr ? cloneVExpr(Ptr.get()) : nullptr;
       const VType StoredPointerType = Val->Ty;
       if (AccessCondition) {
-        emitExprSafety(P, AccessCondition.get(), Active.get(), St.Loc, Renames);
+        emitExprSafety(P, AccessCondition.get(), Active.get(), St.Loc, Renames,
+                       false, St.AccessCondition.get());
         emitPassive(P, PassiveStmt::Assert, std::move(AccessCondition),
                     Active.get(), St.Loc);
       }
@@ -2238,8 +2943,8 @@ public:
       std::unique_ptr<VExpr> Initializer;
       if (A.Initializer) {
         Initializer = cloneExpr(A.Initializer.get(), Ctx);
-        emitExprSafety(P, Initializer.get(), Active.get(), A.Loc, Renames,
-                       true);
+        emitExprSafety(P, Initializer.get(), Active.get(), A.Loc, Renames, true,
+                       A.Initializer.get());
       }
 
       Types[A.Target] = VType::makePtr(A.SizeBytes);
@@ -2484,7 +3189,8 @@ public:
       const auto &F = static_cast<const VFreeStmt &>(S);
       CloneCtx Ctx{Renames, OldState, false};
       auto Pointer = cloneExpr(F.Ptr.get(), Ctx);
-      emitExprSafety(P, Pointer.get(), Active.get(), F.Loc, Renames);
+      emitExprSafety(P, Pointer.get(), Active.get(), F.Loc, Renames, false,
+                     F.Ptr.get());
       auto Provenance = pointerProvenance(Pointer.get());
       if (!Provenance) {
         emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, F.Loc),
@@ -2535,7 +3241,8 @@ public:
       const auto &I = static_cast<const VIfStmt &>(S);
       CloneCtx Ctx{Renames, OldState, false};
       auto Cond = cloneExpr(I.Cond.get(), Ctx);
-      emitExprSafety(P, Cond.get(), Active.get(), I.Loc, Renames);
+      emitExprSafety(P, Cond.get(), Active.get(), I.Loc, Renames, false,
+                     I.Cond.get());
       auto EntryActive = cloneVExpr(Active.get());
       const auto EntryRenames = Renames;
       auto ThenRenames = Renames;
@@ -2595,7 +3302,8 @@ public:
         break;
       }
       auto BoundReturn = cloneExpr(R.Value.get(), Ctx);
-      emitExprSafety(P, BoundReturn.get(), Active.get(), R.Loc, Renames, true);
+      emitExprSafety(P, BoundReturn.get(), Active.get(), R.Loc, Renames, true,
+                     R.Value.get());
       const VExpr *RetVal = R.Value.get();
       while (RetVal && RetVal->K == VExpr::Cast)
         RetVal = static_cast<const VCastExpr *>(RetVal)->Inner.get();
@@ -2639,7 +3347,8 @@ public:
       CloneCtx EntryCtx{Renames, OldState, false};
       for (const auto &Inv : W.Invariants) {
         auto BoundInv = cloneExpr(Inv.get(), EntryCtx);
-        emitExprSafety(P, BoundInv.get(), Active.get(), W.Loc, Renames);
+        emitExprSafety(P, BoundInv.get(), Active.get(), W.Loc, Renames, false,
+                       Inv.get());
         emitPassive(P, PassiveStmt::Assert, std::move(BoundInv), Active.get(),
                     W.Loc);
       }
@@ -2664,14 +3373,16 @@ public:
       auto IterationActive =
           makeAnd(cloneVExpr(Active.get()), cloneVExpr(Choice.get()), W.Loc);
       auto HeadCond = cloneExpr(W.Cond.get(), HeadCtx);
-      emitExprSafety(P, HeadCond.get(), Active.get(), W.Loc, Renames);
+      emitExprSafety(P, HeadCond.get(), Active.get(), W.Loc, Renames, false,
+                     W.Cond.get());
       emitPassive(P, PassiveStmt::Assume, cloneVExpr(HeadCond.get()),
                   IterationActive.get(), W.Loc);
 
       std::vector<std::unique_ptr<VExpr>> OldDecreases;
       for (const auto &Decrease : W.Decreases) {
         auto Bound = cloneExpr(Decrease.get(), HeadCtx);
-        emitExprSafety(P, Bound.get(), IterationActive.get(), W.Loc, Renames);
+        emitExprSafety(P, Bound.get(), IterationActive.get(), W.Loc, Renames,
+                       false, Decrease.get());
         OldDecreases.push_back(std::move(Bound));
       }
       if (!OldDecreases.empty())
@@ -2689,7 +3400,8 @@ public:
       for (const auto &Inv : W.Invariants) {
         CloneCtx ACtx{BodyRenames, OldState, false};
         auto BoundInv = cloneExpr(Inv.get(), ACtx);
-        emitExprSafety(P, BoundInv.get(), BodyActive.get(), W.Loc, BodyRenames);
+        emitExprSafety(P, BoundInv.get(), BodyActive.get(), W.Loc, BodyRenames,
+                       false, Inv.get());
         emitPassive(P, PassiveStmt::Assert, std::move(BoundInv),
                     BodyActive.get(), W.Loc);
       }
@@ -2699,7 +3411,8 @@ public:
         std::vector<std::unique_ptr<VExpr>> NewDecreases;
         for (const auto &Decrease : W.Decreases) {
           auto Bound = cloneExpr(Decrease.get(), AfterCtx);
-          emitExprSafety(P, Bound.get(), BodyActive.get(), W.Loc, BodyRenames);
+          emitExprSafety(P, Bound.get(), BodyActive.get(), W.Loc, BodyRenames,
+                         false, Decrease.get());
           NewDecreases.push_back(std::move(Bound));
         }
         emitPassive(P, PassiveStmt::Assert,
@@ -2723,7 +3436,8 @@ public:
       const auto &A = static_cast<const VContractAssertStmt &>(S);
       CloneCtx Ctx{Renames, OldState, false};
       auto Cond = cloneExpr(A.Cond.get(), Ctx);
-      emitExprSafety(P, Cond.get(), Active.get(), A.Loc, Renames);
+      emitExprSafety(P, Cond.get(), Active.get(), A.Loc, Renames, false,
+                     A.Cond.get());
       emitPassive(P, PassiveStmt::Assert, std::move(Cond), Active.get(), A.Loc);
       break;
     }
@@ -2746,7 +3460,8 @@ public:
       const auto &A = static_cast<const VAssertStmt &>(S);
       CloneCtx Ctx{Renames, OldState, false};
       auto Cond = cloneExpr(A.Cond.get(), Ctx);
-      emitExprSafety(P, Cond.get(), Active.get(), A.Loc, Renames);
+      emitExprSafety(P, Cond.get(), Active.get(), A.Loc, Renames, false,
+                     A.Cond.get());
       emitPassive(P, PassiveStmt::Assert, std::move(Cond), Active.get(), A.Loc);
       break;
     }
@@ -2754,7 +3469,8 @@ public:
       const auto &A = static_cast<const VAssumeStmt &>(S);
       CloneCtx Ctx{Renames, OldState, false};
       auto Cond = cloneExpr(A.Cond.get(), Ctx);
-      emitExprSafety(P, Cond.get(), Active.get(), A.Loc, Renames);
+      emitExprSafety(P, Cond.get(), Active.get(), A.Loc, Renames, false,
+                     A.Cond.get());
       emitPassive(P, PassiveStmt::Assume, std::move(Cond), Active.get(), A.Loc);
       break;
     }

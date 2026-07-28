@@ -32,5 +32,5 @@ long pointer_difference_ir(int value)
 // CHECK: (let
 // CHECK: __heap_alloc_
 // CHECK: div
-// CHECK: int2bv
+// CHECK: bvsub
 // CHECK: Lowered: pointer_difference_ir

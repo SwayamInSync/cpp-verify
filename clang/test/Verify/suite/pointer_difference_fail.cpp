@@ -1,5 +1,6 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: not %cpp-verify --backend=bmc --unroll=1 %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 long unrelated_pointer_difference(int *left, int *right)
   pre(left != nullptr && right != nullptr)
@@ -57,6 +58,20 @@ long copied_offset_difference(int *pointer)
   return next - pointer;
 }
 
+long offset_beyond_complete_object(int *pointer)
+  pre(pointer != nullptr)
+  post(true)
+{
+  return (pointer + 2) - pointer;
+}
+
+long negative_offset_without_extent(int *pointer)
+  pre(pointer != nullptr)
+  post(true)
+{
+  return (pointer - 1) - pointer;
+}
+
 // VERIFY-DAG: error: verification failed: unrelated_pointer_difference
 // VERIFY-DAG: error: verification failed: equal_address_without_provenance
 // VERIFY-DAG: error: verification failed: null_pointer_difference
@@ -64,3 +79,5 @@ long copied_offset_difference(int *pointer)
 // VERIFY-DAG: error: verification failed: dynamic_distinct_difference
 // VERIFY-DAG: error: verification failed: dangling_pointer_difference
 // VERIFY-DAG: error: verification failed: copied_offset_difference
+// VERIFY-DAG: error: verification failed: offset_beyond_complete_object
+// VERIFY-DAG: error: verification failed: negative_offset_without_extent

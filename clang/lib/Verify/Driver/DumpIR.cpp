@@ -343,6 +343,11 @@ void verify::dumpVFunction(const VFunction &Fn, llvm::raw_ostream &OS) {
   ind(OS, 1) << "modifies\n";
   for (const auto &Modifies : Fn.Modifies)
     dumpVExpr(Modifies.get(), OS, 2);
+  for (const VValidExtent &Extent : Fn.ValidExtents) {
+    ind(OS, 1) << "valid_extent " << Extent.Base << " stride "
+               << Extent.PointerType.PointeeSizeBytes << "\n";
+    dumpVExpr(Extent.Length.get(), OS, 2);
+  }
   ind(OS, 1) << "body\n";
   for (const auto &S : Fn.Body)
     dumpVStmt(*S, OS, 2);

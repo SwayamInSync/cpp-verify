@@ -832,16 +832,7 @@ ASTConverter::convertPointerDifferenceOperand(const Expr *E,
     return nullptr;
   }
 
-  const auto *PointerRef =
-      dyn_cast<DeclRefExpr>(Pointer->IgnoreParenImpCasts());
-  const auto *OffsetLiteral =
-      dyn_cast<IntegerLiteral>(Offset->IgnoreParenImpCasts());
-  if (!PointerRef || !isa<VarDecl>(PointerRef->getDecl()) || !OffsetLiteral ||
-      OffsetLiteral->getValue().ugt(1) ||
-      (B->getOpcode() == BO_Sub && !OffsetLiteral->getValue().isZero()))
-    return nullptr;
-
-  auto PointerValue = convertExpr(Pointer);
+  auto PointerValue = convertPointerDifferenceOperand(Pointer, PointeeSize);
   auto OffsetValue = convertExpr(Offset);
   if (!PointerValue || !OffsetValue)
     return nullptr;
@@ -3125,8 +3116,8 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
       if (!L || !R) {
         Errors.push_back(
             CurrentFn->Name +
-            ": pointer difference operands must be direct pointers or +0/+1 "
-            "positions within one complete object");
+            ": pointer difference operands must be direct pointers or "
+            "compositional pointer-arithmetic positions");
         return nullptr;
       }
       VType AddressType = VType::makePtr(PointeeSize);

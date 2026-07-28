@@ -107,6 +107,18 @@ public:
     for (const auto &Fn : Functions)
       FnMap[Fn->Identity] = Fn.get();
 
+    std::vector<std::unique_ptr<VFunction>> InterfaceFunctions;
+    FunctionMap InterfaceMap;
+    InterfaceFunctions.reserve(Functions.size());
+    for (const auto &Fn : Functions) {
+      auto Interface = std::make_unique<VFunction>(cloneVFunction(*Fn));
+      if (!Interface->IsSpec && Opts.CheckUB &&
+          (Opts.Backend == BackendKind::Z3 || Opts.Backend == BackendKind::BMC))
+        (void)instrumentUBChecks(*Interface);
+      InterfaceMap[Interface->Identity] = Interface.get();
+      InterfaceFunctions.push_back(std::move(Interface));
+    }
+
     std::unique_ptr<llvm::raw_fd_ostream> LeanFile;
     llvm::raw_ostream *LeanOut = DumpOS;
     if (Opts.Backend == BackendKind::Lean && !Opts.LeanOutPath.empty()) {
@@ -124,7 +136,7 @@ public:
     auto Backend = createVerifyBackend(Opts.Backend, LeanOut, Opts.BMCUnroll,
                                        Opts.SolverTimeoutMs);
     Passivizer P;
-    P.setFunctionMap(FnMap);
+    P.setFunctionMap(InterfaceMap);
     Z3Encoder Z3Lowering;
 
     const unsigned DumpLayers = Opts.DumpIRLayers;
