@@ -110,7 +110,7 @@ struct FunctionContractInfo {
   bool IsProof = false;
 };
 
-/// Contract information attached to a WhileStmt/ForStmt via side table.
+/// Contract information attached to an iteration statement via side table.
 struct LoopContractInfo {
   SmallVector<Expr *, 2> Invariants;
   /// Lexicographic termination measure (ordered tuple); empty means none.

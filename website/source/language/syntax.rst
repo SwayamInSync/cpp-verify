@@ -53,7 +53,7 @@ Requires ``-fverify-contracts``. Full table:
      - Expression
      - Bounded ``∃`` over ``[lo, hi)``
    * - ``old(expr)``
-     - In ``post``
+     - In ``post`` / ``invariant``
      - Pre-state value
    * - ``result``
      - In ``post``

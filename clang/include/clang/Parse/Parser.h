@@ -7452,8 +7452,7 @@ public:
   //===--------------------------------------------------------------------===//
   // CppVerify Contract Parsing
 
-  /// Parse invariant/decreases clauses after a while/for condition.
-  /// Called from ParseWhileStatement/ParseForStatement.
+  /// Parse invariant/decreases clauses on an iteration statement.
   void ParseLoopContractClauses(SmallVectorImpl<Expr *> &Invariants,
                                 SmallVectorImpl<Expr *> &Decreases);
 
@@ -7480,6 +7479,8 @@ public:
 
   /// True when we are currently parsing a postcondition expression.
   bool InContractPostcondition = false;
+  /// True when parsing a loop invariant; old(...) denotes function entry.
+  bool InLoopContractInvariant = false;
   /// True while parsing the operand of old(...).
   bool InOldExpression = false;
   /// True while parsing the body of a function that has contract clauses.

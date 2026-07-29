@@ -55,7 +55,8 @@ The most mature current fragment includes:
 
 - free functions over booleans, enums, and target-width integers;
 - mathematical ``spec`` functions connected to machine-integer code;
-- ``if``, conventional ``while``/``for``, loop invariants, and ``decreases``;
+- ``if``, conventional ``while``/``for``, contracted ``do`` loops, loop
+  invariants, and ``decreases``;
 - direct recursion with a well-founded termination measure;
 - ``pre``, ``post``, ``old``, ``result``, ``modifies``, and ``aliases``;
 - scalar ``T&``/``const T&`` parameters with address-preserving reads, writes,
@@ -121,9 +122,10 @@ C++ feature boundaries
        allocations, and user-declared modular allocation effects.
    * - Structured control flow
      - ``if`` (including C++17 initializer), conventional ``while``/``for``,
-       blocks, and ``return``.
-     - ``switch``, ``do``, range-``for``, ``break``, ``continue``, ``goto``,
-       labels, conditionless ``for``, and loop condition declarations.
+       contracted ``do`` loops, blocks, and ``return``.
+     - ``switch``, range-``for``, ``break``, ``continue``, ``goto``,
+       labels, conditionless ``for``, loop condition declarations, and
+       ``return`` inside a loop body.
    * - Advanced C++
      - Not in the verified core.
      - Exceptions, lambdas, coroutines, RTTI, virtual dispatch, multiple

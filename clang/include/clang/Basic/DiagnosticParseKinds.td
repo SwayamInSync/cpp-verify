@@ -1901,7 +1901,7 @@ def err_result_outside_postcondition : Error<
 def err_result_in_old_expression : Error<
   "'result' has no value in the function pre-state">;
 def err_old_outside_postcondition : Error<
-  "'old' can only be used in postconditions">;
+  "'old' can only be used in postconditions and loop invariants">;
 def warn_contract_member_function_unsupported : Warning<
   "contracts on member functions are not yet supported and are ignored; "
   "move the function out of the class or verify it as a free function">,

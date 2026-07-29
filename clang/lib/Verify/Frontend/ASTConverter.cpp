@@ -36,6 +36,49 @@ static std::string integerValueString(const llvm::APSInt &Value) {
   return std::string(Buffer);
 }
 
+static const VarDecl *findOldLocalWithoutEntryState(
+    const Stmt *S, llvm::SmallPtrSetImpl<const VarDecl *> &BoundVars) {
+  if (!S)
+    return nullptr;
+
+  if (const auto *DRE = dyn_cast<DeclRefExpr>(S)) {
+    if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl());
+        VD && VD->isLocalVarDecl() && !BoundVars.count(VD))
+      return VD;
+  }
+
+  const VarDecl *BoundVar = nullptr;
+  if (const auto *Forall = dyn_cast<ForallExpr>(S))
+    BoundVar = Forall->getBoundVar();
+  else if (const auto *Exists = dyn_cast<ExistsExpr>(S))
+    BoundVar = Exists->getBoundVar();
+  bool Inserted = BoundVar && BoundVars.insert(BoundVar).second;
+
+  for (const Stmt *Child : S->children()) {
+    if (const VarDecl *Local =
+            findOldLocalWithoutEntryState(Child, BoundVars)) {
+      if (Inserted)
+        BoundVars.erase(BoundVar);
+      return Local;
+    }
+  }
+
+  if (Inserted)
+    BoundVars.erase(BoundVar);
+  return nullptr;
+}
+
+static bool containsReturnStmt(const Stmt *S) {
+  if (!S)
+    return false;
+  if (isa<ReturnStmt>(S))
+    return true;
+  for (const Stmt *Child : S->children())
+    if (containsReturnStmt(Child))
+      return true;
+  return false;
+}
+
 static std::unique_ptr<VExpr> scalePointerOffset(std::unique_ptr<VExpr> Offset,
                                                  uint64_t PointeeSize,
                                                  SourceLocation Loc) {
@@ -3056,6 +3099,13 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     }
     if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
       auto Bound = BoundValues.find(VD);
+      if (InOld && VD->isLocalVarDecl() && Bound == BoundValues.end()) {
+        Errors.push_back(CurrentFn->Name +
+                         ": old(...) cannot refer to local variable without a "
+                         "function-entry state: " +
+                         VD->getNameAsString());
+        return nullptr;
+      }
       if (!VD->isLocalVarDeclOrParm() && Bound == BoundValues.end()) {
         Errors.push_back(CurrentFn->Name +
                          ": global variable access is unsupported: " +
@@ -3300,6 +3350,15 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
                                        E->getExprLoc());
   }
   if (const auto *O = dyn_cast<OldExpr>(E)) {
+    llvm::SmallPtrSet<const VarDecl *, 4> BoundVars;
+    if (const VarDecl *Local =
+            findOldLocalWithoutEntryState(O->getInner(), BoundVars)) {
+      Errors.push_back(CurrentFn->Name +
+                       ": old(...) cannot refer to local variable without a "
+                       "function-entry state: " +
+                       Local->getNameAsString());
+      return nullptr;
+    }
     bool Saved = InOld;
     InOld = true;
     auto Inner = convertExpr(O->getInner());
@@ -4542,6 +4601,11 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     return Out;
   }
   if (const auto *WS = dyn_cast<WhileStmt>(S)) {
+    if (containsReturnStmt(WS->getBody())) {
+      Errors.push_back(CurrentFn->Name +
+                       ": return statements inside loops are unsupported");
+      return Out;
+    }
     if (WS->getConditionVariable()) {
       Errors.push_back(CurrentFn->Name +
                        ": while condition declarations are unsupported");
@@ -4580,7 +4644,68 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         std::move(Body), WS->getBeginLoc()));
     return Out;
   }
+  if (const auto *DS = dyn_cast<DoStmt>(S)) {
+    if (containsReturnStmt(DS->getBody())) {
+      Errors.push_back(CurrentFn->Name +
+                       ": return statements inside loops are unsupported");
+      return Out;
+    }
+    const std::set<std::string> Before = InitializedValues;
+    const bool BeforeReachable = InitializationPathReachable;
+    ++LoopDepth;
+    auto Body = convertScopedSubstatement(DS->getBody());
+    --LoopDepth;
+
+    // A do-while body executes once before its condition and contracts are
+    // observed. Preserve definite initialization from that mandatory pass.
+    const std::set<std::string> AfterFirst = InitializedValues;
+    const bool AfterFirstReachable = InitializationPathReachable;
+    auto Cond = convertExpr(DS->getCond());
+    if (!Cond) {
+      InitializedValues = Before;
+      InitializationPathReachable = BeforeReachable;
+      return Out;
+    }
+
+    std::vector<std::unique_ptr<VExpr>> Invariants;
+    std::vector<std::unique_ptr<VExpr>> Decreases;
+    if (const LoopContractInfo *LCI = Ctx.getLoopContract(DS)) {
+      bool SavedContract = InContractExpression;
+      InContractExpression = true;
+      for (const Expr *Inv : LCI->Invariants)
+        if (auto E = convertExpr(Inv))
+          Invariants.push_back(std::move(E));
+      for (const Expr *D : LCI->Decreases)
+        if (auto E = convertExpr(D))
+          Decreases.push_back(std::move(E));
+      InContractExpression = SavedContract;
+    }
+    if ((InGhost || CurrentFn->IsProof) && Decreases.empty()) {
+      Errors.push_back(CurrentFn->Name +
+                       ": proof-only loops require a decreases clause");
+      InitializedValues = Before;
+      InitializationPathReachable = BeforeReachable;
+      return Out;
+    }
+
+    // body; while (cond) invariant(...) decreases(...) { body; }
+    // Existing VWhile passivization proves invariant establishment exactly
+    // after the mandatory first iteration.
+    for (const auto &Stmt : Body)
+      Out.push_back(cloneVStmt(Stmt.get()));
+    Out.push_back(std::make_unique<VWhileStmt>(
+        std::move(Cond), std::move(Invariants), std::move(Decreases),
+        std::move(Body), DS->getBeginLoc()));
+    InitializedValues = AfterFirst;
+    InitializationPathReachable = AfterFirstReachable;
+    return Out;
+  }
   if (const auto *FS = dyn_cast<ForStmt>(S)) {
+    if (containsReturnStmt(FS->getBody())) {
+      Errors.push_back(CurrentFn->Name +
+                       ": return statements inside loops are unsupported");
+      return Out;
+    }
     enterAutomaticScope();
     if (FS->getConditionVariable()) {
       Errors.push_back(CurrentFn->Name +

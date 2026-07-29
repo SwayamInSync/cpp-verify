@@ -46,7 +46,28 @@ Loops
    { ... }
 
 Clauses go after the loop header's closing ``)``; ``for`` loops use the same
-placement. Multiple ``invariant`` clauses are conjoined.
+placement. For ``do`` loops, clauses go after the trailing ``while (c)`` and
+before its semicolon:
+
+.. code-block:: cpp
+
+   do {
+     value = value + 1;
+   } while (value <= n)
+     invariant(value >= 1 && value <= n + 1)
+     decreases(n + 1 - value);
+
+The mandatory first body execution is checked from the concrete incoming state.
+It must establish the invariant; subsequent iterations use the ordinary
+modular ``while`` rule. The invariant therefore need not hold before entering
+the first body.
+
+Multiple ``invariant`` clauses are conjoined. ``old(expr)`` is permitted in an
+invariant and always denotes the enclosing function's entry state, not the
+previous iteration. Function locals do not exist at function entry and are
+rejected inside ``old(...)``; use an ordinary snapshot local directly instead.
+Returns inside loop bodies remain unsupported; an early return before a loop
+continues to guard whether that loop is reached.
 
 The verifier checks a loop **modularly** (no unrolling), discharging three
 obligations:

@@ -1896,13 +1896,27 @@ StmtResult Parser::ParseDoStatement(LabelDecl *PrecedingLabel) {
         Actions.getASTContext().BoolTy);
   }
   T.consumeClose();
+
+  SmallVector<Expr *, 2> Invariants;
+  SmallVector<Expr *, 2> LoopDecreases;
+  if (getLangOpts().VerifyContracts)
+    ParseLoopContractClauses(Invariants, LoopDecreases);
+
   DoScope.Exit();
 
   if (Cond.isInvalid() || Body.isInvalid())
     return StmtError();
 
-  return Actions.ActOnDoStmt(DoLoc, Body.get(), WhileLoc, T.getOpenLocation(),
-                             Cond.get(), T.getCloseLocation());
+  StmtResult Result =
+      Actions.ActOnDoStmt(DoLoc, Body.get(), WhileLoc, T.getOpenLocation(),
+                          Cond.get(), T.getCloseLocation());
+  if (Result.isUsable() && (!Invariants.empty() || !LoopDecreases.empty())) {
+    LoopContractInfo &LCI =
+        Actions.getASTContext().getOrCreateLoopContract(Result.get());
+    LCI.Invariants = std::move(Invariants);
+    LCI.Decreases = std::move(LoopDecreases);
+  }
+  return Result;
 }
 
 bool Parser::isForRangeIdentifier() {
@@ -2780,6 +2794,8 @@ void Parser::ParseLoopContractClauses(SmallVectorImpl<Expr *> &Invariants,
     ConsumeParen();
 
     if (IsInvariant) {
+      llvm::SaveAndRestore<bool> LoopInvariantRAII(InLoopContractInvariant,
+                                                   true);
       ExprResult E = ParseExpression();
       if (E.isInvalid()) {
         SkipUntil(tok::r_paren, StopAtSemi);

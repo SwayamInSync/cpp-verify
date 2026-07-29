@@ -1661,9 +1661,12 @@ safetyForExpr(const VExpr *E, const FunctionMap *FnMap,
                            cloneVExpr(L->AccessCondition.get()), L->Loc);
     return Safe;
   }
-  case VExpr::Old:
-    return safetyForExpr(static_cast<const VOldExpr *>(E)->Inner.get(), FnMap,
-                         ValidExtents, PointerParams);
+  case VExpr::Old: {
+    auto Safety = safetyForExpr(static_cast<const VOldExpr *>(E)->Inner.get(),
+                                FnMap, ValidExtents, PointerParams);
+    return std::make_unique<VOldExpr>(std::move(Safety), VType::makeBool(),
+                                      E->Loc);
+  }
   case VExpr::Conditional: {
     const auto *C = static_cast<const VConditionalExpr *>(E);
     auto Safe =

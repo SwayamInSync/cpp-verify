@@ -38,6 +38,29 @@ After the loop, the verifier continues with ``I && !cond`` — that, and nothing
 else, is what it knows about the post-loop state. If you need a fact afterwards,
 it has to be in the invariant.
 
+``do`` loops
+------------
+
+A contracted ``do`` loop places its clauses after the trailing condition and
+before the semicolon:
+
+.. code-block:: cpp
+
+   do {
+     i = i + 1;
+   } while (i < n)
+     invariant(i >= 1 && i <= n)
+     decreases(n - i);
+
+The first body execution is mandatory. CppVerify checks it from the concrete
+incoming state and establishes the invariant **after** that execution. It then
+uses the same modular preservation and termination rule as ``while`` for all
+later iterations. ``old(expr)`` in a loop invariant always reads the enclosing
+function's entry state; it is not a previous-iteration operator. A function
+local has no entry-state value and is rejected inside ``old(...)``.
+Returns inside loop bodies remain fail-closed; place an early return before the
+loop or restructure the loop with an explicit state variable.
+
 Inductive invariants and machine integers
 -----------------------------------------
 
@@ -204,4 +227,3 @@ Two rules of thumb for this pattern:
 - **Keep specs linear.** ``count(n) == n`` and Fibonacci verify; a spec whose
   body multiplies (``n * factorial(n - 1)``) lands in nonlinear arithmetic, which
   SMT cannot decide, so the prover honestly reports ``unknown``.
-

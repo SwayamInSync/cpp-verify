@@ -1,6 +1,6 @@
 // RUN: %clang_cc1 -std=c++17 -fverify-contracts -verify %s
 //
-// Negative tests: result and old used outside postconditions.
+// Negative tests: result and old used outside their supported contexts.
 // These are context errors caught by the parser.
 
 // ---------------------------------------------------------------------------
@@ -13,12 +13,12 @@ int f1(int x)
 }
 
 // ---------------------------------------------------------------------------
-// 2. old() in function body (not in postcondition)
+// 2. old() in function body (not in postcondition or loop invariant)
 // ---------------------------------------------------------------------------
 int f2(int x)
   pre(x > 0)
 {
-  return old(x); // expected-error {{'old' can only be used in postconditions}}
+  return old(x); // expected-error {{'old' can only be used in postconditions and loop invariants}}
 }
 
 // ---------------------------------------------------------------------------
@@ -34,7 +34,7 @@ int f3(int x)
 // 4. old() in precondition
 // ---------------------------------------------------------------------------
 int f4(int x)
-  pre(old(x) > 0) // expected-error {{'old' can only be used in postconditions}}
+  pre(old(x) > 0) // expected-error {{'old' can only be used in postconditions and loop invariants}}
 {
   return x;
 }
@@ -55,14 +55,14 @@ int f5(int n)
 }
 
 // ---------------------------------------------------------------------------
-// 6. old() in loop invariant
+// 6. old() in a loop invariant denotes function entry.
 // ---------------------------------------------------------------------------
 int f6(int n)
   pre(n >= 0)
 {
   int i = 0;
   while (i < n)
-    invariant(old(n) >= 0) // expected-error {{'old' can only be used in postconditions}}
+    invariant(old(n) == n)
   {
     i++;
   }

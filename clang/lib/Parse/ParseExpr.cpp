@@ -864,22 +864,23 @@ Parser::ParseCastExpression(CastParseKind ParseKind, bool isAddressOfOperand,
   case tok::identifier: {
     if (getLangOpts().VerifyContracts) {
       const IdentifierInfo *II = Tok.getIdentifierInfo();
-      if (InContractPostcondition) {
-        if (II->isStr("old") && NextToken().is(tok::l_paren))
-          return ParseOldExpr();
-        if (II->isStr("result")) {
-          Res = ParseResultExpr();
-          break;
-        }
-      } else if (InContractedFunction || InParsingContractExpr) {
-        if (II->isStr("result")) {
-          Diag(Tok, diag::err_result_outside_postcondition);
-          return ExprError();
-        }
-        if (II->isStr("old") && NextToken().is(tok::l_paren)) {
-          Diag(Tok, diag::err_old_outside_postcondition);
-          return ExprError();
-        }
+      if ((InContractPostcondition || InLoopContractInvariant) &&
+          II->isStr("old") && NextToken().is(tok::l_paren))
+        return ParseOldExpr();
+      if (InContractPostcondition && II->isStr("result")) {
+        Res = ParseResultExpr();
+        break;
+      }
+      if ((InContractedFunction || InParsingContractExpr) &&
+          II->isStr("result")) {
+        Diag(Tok, diag::err_result_outside_postcondition);
+        return ExprError();
+      }
+      if (!InContractPostcondition && !InLoopContractInvariant &&
+          (InContractedFunction || InParsingContractExpr) && II->isStr("old") &&
+          NextToken().is(tok::l_paren)) {
+        Diag(Tok, diag::err_old_outside_postcondition);
+        return ExprError();
       }
     }
     goto ParseIdentifier;
@@ -3620,9 +3621,9 @@ ExprResult Parser::ParseOldExpr() {
          "Expected 'old'");
   SourceLocation OldLoc = ConsumeToken();
 
-  // 'old' is only valid in postconditions.
-  // TODO: also allow in proof function bodies once InProofFunctionBody is tracked.
-  if (!InContractPostcondition) {
+  // In a loop invariant, old(...) still denotes the function-entry state.
+  // TODO: also allow it in proof bodies once that parser context is tracked.
+  if (!InContractPostcondition && !InLoopContractInvariant) {
     Diag(OldLoc, diag::err_old_outside_postcondition);
     return ExprError();
   }
