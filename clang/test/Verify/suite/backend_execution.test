@@ -108,7 +108,7 @@
 # CACHE-IO-SAME: [reason=cache.io-failed]
 # CACHE-IO-SAME: proof cache path is not a directory
 
-# LEAN-JOBS: error: --jobs and --proof-cache apply only to Z3-backed verification
+# LEAN-JOBS: error: --jobs and --proof-cache are not supported by the Lean backend
 # LOWER-CACHE: error: --proof-cache cannot be combined with --lower-only
 
 # REPLAY: Verified: cached_identity [backend=z3] [cache=[[RN:[1-9][0-9]*]]/[[RN]]]

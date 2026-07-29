@@ -28,7 +28,7 @@ int machine_identity(int x)
 // VERIFY: Verified: spec axiom: mathematical_successor
 // VERIFY: error: verification failed: machine_identity
 
-// LEAN: error: --lower-only supports the Z3 and BMC lowering pipelines
+// LEAN: error: --lower-only supports Z3, cvc5, portfolio, and BMC
 
 // VCR-LABEL: fn machine_identity
 // VCR: param x

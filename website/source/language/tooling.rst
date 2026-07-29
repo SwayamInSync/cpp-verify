@@ -8,6 +8,8 @@ Standalone verifier
 
    cpp-verify file.cpp
    cpp-verify --backend=z3 file.cpp
+   cpp-verify --backend=cvc5 file.cpp
+   cpp-verify --backend=portfolio file.cpp
    cpp-verify --backend=bmc --unroll=3 file.cpp
    cpp-verify --backend=lean --lean-out=goal.lean file.cpp
    cpp-verify --backend=lean --lean-project=proof file.cpp
@@ -36,6 +38,19 @@ Backends
      - Meaning
    * - ``--backend=z3``
      - Default. Weakest precondition + Z3 (loops via contracts on the WP path).
+   * - ``--backend=cvc5``
+     - Encode each canonical obligation as standalone SMT-LIB2 and run an
+       installed cvc5. ``unsat`` is ``Verified``, ``sat`` is ``Failed``, and
+       unavailable/malformed/unknown execution is ``Unresolved``.
+   * - ``--backend=portfolio``
+     - Strictly run Z3 and cvc5 on each ordered canonical obligation. Only
+       matching ``unsat`` results are ``Verified`` and matching ``sat`` results
+       are ``Failed``. A timeout, missing solver, malformed output, unsupported
+       query, or opposite verdict is ``Unresolved``; decisive disagreement uses
+       reason ``backend.inconsistent-results``.
+   * - ``--cvc5-path=FILE``
+     - Use this cvc5 executable instead of searching ``PATH``. cvc5 is an
+       optional system dependency and is not vendored.
    * - ``--backend=bmc``
      - Incrementally unroll loops from zero through ``--unroll=N`` (default 10),
        stopping at the first counterexample, complete unwinding proof,
@@ -54,7 +69,7 @@ Backends
        active proof kernel-checks. Requires ``--lean-project`` or
        ``--lean-fallback``.
    * - ``--lean-fallback=DIR``
-     - On the default Z3 path, export only functions that remain
+     - On the Z3 or strict-portfolio path, export only functions that remain
        ``Unresolved`` to an editable Lean project. Initial export remains a
        non-success result. Rerun with ``--lean-certify`` after completing the
        preserved proof files.
@@ -62,29 +77,32 @@ Backends
      - Maximum BMC loop bound. Source verification explores ``0..N``;
        lower-only and archive replay retain one exact recorded bound.
    * - ``--check-ub``
-     - On the Z3 and BMC backends, additionally recognize ``valid(p, n)``
+     - On Z3, cvc5, portfolio, BMC, and Lean, additionally recognize ``valid(p, n)``
        preconditions as buffer extents and prove indexed accesses, modular
        sub-slices, and same-array pointer positions are in bounds. Markers must
        be positive top-level conjunction clauses on bare pointers. Core
        expression definedness (overflow, division, shifts, and dereferences)
        is always checked. See :doc:`integers` and :doc:`pointers`.
    * - ``--timeout=N``
-     - Per-query Z3 timeout in milliseconds (default 30000; ``0`` disables). A query
-       that exceeds it is reported as ``unknown`` instead of hanging.
+     - Per-query solver timeout in milliseconds (default 30000; ``0`` disables).
+       A query that exceeds it is reported as unresolved instead of hanging.
    * - ``--solver-rlimit=N``
-     - Deterministic per-query Z3 resource budget (default ``0``, disabled).
-       Exhaustion is ``Unresolved`` with reason ``solver.resource-limit``.
+     - Deterministic per-query Z3/cvc5 resource budget (default ``0``, disabled).
+       Exhaustion is ``Unresolved``. Z3 reports ``solver.resource-limit``;
+       cvc5 may report the conservative ``solver.unknown``.
    * - ``--max-query-nodes=N``
-     - On Z3 and BMC, reject a canonical obligation module larger than ``N``
+     - Reject a solver-backed canonical obligation module larger than ``N``
        expression nodes before verification, lower-only encoding, or a requested
        Z3 dump (default ``0``, disabled). Exhaustion is fail-closed with reason
        ``query.size-limit``.
    * - ``--jobs=N``
-     - Solve ordered obligations in up to ``N`` isolated Z3 contexts while
-       publishing results in source order (default ``1``; ``0`` selects available
-       physical cores). Lean export remains serial.
+     - Solve ordered obligations in up to ``N`` isolated Z3 contexts or cvc5
+       processes while publishing results in source order (default ``1``;
+       ``0`` selects available physical cores). Lean export remains serial.
    * - ``--proof-cache=DIR``
-     - Persist successful dependency-scoped Z3 or BMC proofs. Failed,
+     - Persist successful dependency-scoped Z3 or BMC proofs. In portfolio mode
+       this caches only the Z3 component and cvc5 still runs on every query.
+       Standalone cvc5 does not use this cache. Failed,
        unresolved, and bounded-safe results are never proof-cache entries.
        Corrupt or incompatible entries are rejected rather than treated as hits.
    * - ``--proof-cache-max-mb=N``
@@ -98,15 +116,17 @@ Backends
        results. JSON records use schema ``cppverify.diagnostic/1``.
    * - ``--lower-only``
      - Run Clang conversion, backend-specific preparation, passivization,
-       canonical Obligation IR construction, spec-axiom encoding, and Z3
-       translation without calling the solver. Supported for Z3 and BMC.
+       canonical Obligation IR construction, spec-axiom encoding, and selected
+       Z3/SMT-LIB translation without calling a solver. Supported for Z3, cvc5,
+       portfolio, and BMC.
    * - ``--obligation-out=FILE``
      - Write deterministic, versioned backend-neutral modules with portable
        source attribution and SHA-256 semantic identities. Multiple modules are
        concatenated in one archive.
    * - ``--obligation-in=FILE``
-     - Validate and replay an archive without reparsing C++. Supports Z3,
-       ``--lower-only``/Layer 3-4 dumps, and Lean scratch export. Archives
+     - Validate and replay an archive without reparsing C++. Supports Z3, cvc5,
+       strict portfolio, ``--lower-only``/Layer 3-4 dumps, and Lean scratch
+       export. Archives
        produced after BMC unrolling retain their bound and replay with BMC
        unwinding semantics; applying BMC to an untransformed archive is
        rejected because unrolling must run before obligation lowering.
@@ -119,6 +139,9 @@ was constructed and encoded, **not** that its obligations are true.
 
 Backend results are intentionally distinct. Z3 ``unsat`` reports ``Verified``;
 ``sat`` reports a failed source obligation; timeout/``unknown`` reports
+``Unresolved``. cvc5 follows the same status mapping without model extraction.
+Portfolio mode requires agreement; an agreed ``sat`` result uses Z3's typed
+model and trace, while disagreement or incomplete secondary evidence is
 ``Unresolved``. BMC reports ``BoundedSafe(N)`` when only its unwinding
 obligation fails at the maximum frontier, and reports ``Verified`` only when an
 explored bound proves complete unwinding. Text diagnostics publish the terminal
@@ -133,7 +156,8 @@ Parallel solving and proof caching
 ``--jobs`` parallelizes only backend solving. Clang conversion, VCR transforms,
 canonical obligation construction, dumps, archives, Lean generation, and
 diagnostic publication stay serial and deterministic. Each worker owns a fresh
-Z3 context and solver; no AST, backend, or Z3 state is shared between workers.
+Z3 context/solver or a separate cvc5 process; no AST or solver state is shared
+between workers.
 The first failing source obligation is therefore identical for ``--jobs=1`` and
 ``--jobs=N`` even if worker completion order differs.
 
@@ -163,7 +187,8 @@ kernel checking is required.
 Structured diagnostics
 ----------------------
 
-Failed Z3 and BMC results identify a source-anchored obligation such as
+Failed Z3, cvc5, portfolio, and BMC results identify a source-anchored
+obligation such as
 ``function-identity::postcondition@line:column#2``. The local suffix only
 disambiguates obligations at the same anchor, so inserting or reordering an
 unrelated obligation does not renumber later IDs unless its source anchor
@@ -183,10 +208,12 @@ the same names, ranges, IDs, and trace data during replay.
 
 Each non-success verification result also carries a stable reason code. Current
 codes include ``counterexample``, ``solver.timeout``, ``solver.unknown``,
-``solver.resource-limit``, ``query.size-limit``, ``encoding.failed``,
+``solver.resource-limit``, ``solver.unavailable``,
+``solver.invocation-failed``, ``solver.malformed-output``,
+``query.size-limit``, ``encoding.failed``,
 ``obligation.invalid``, ``logic.unsupported``, ``query.missing``,
 ``backend.invalid-result``,
-``backend.inconsistent-results``, ``bmc.incomplete-bound``, and
+``backend.inconsistent-results``, ``bmc.incomplete-bound``,
 ``lean.export-failed``, ``cache.corrupt``, and ``cache.io-failed``.
 
 ``--diagnostics-format=json`` covers verification-result diagnostics.

@@ -362,7 +362,7 @@ Important missing optimizations and tactics are:
 #. quantifier trigger inference, manual override, and profiling;
 #. candidate invariants with Houdini-style elimination;
 #. solver-resource stability measurement across seeds;
-#. a second solver/portfolio and optional CHC/PDR invariant discovery.
+#. broader portfolio model extraction and optional CHC/PDR invariant discovery.
 
 Candidate invariants, assertion batching, parallel solving, caching, and
 trigger control are production-proven techniques in systems such as
@@ -379,6 +379,14 @@ and numbered source loop events identify the failing iteration. Path explosion,
 concurrency schedules, solver-state push/pop reuse, and broad runtime semantics
 remain future work.
 
+**cvc5 and strict portfolio** consume the same canonical obligations as Z3
+through an independent SMT-LIB2 emitter. cvc5 is optional, system-installed,
+and currently supplies verdicts rather than source-level models. Strict
+portfolio mode requires matching decisive results and preserves Z3's model only
+after both solvers report ``sat``. cvc5 may return ``unknown`` on quantified or
+heap-heavy formulas that Z3 solves; strict mode then remains ``Unresolved``.
+BMC-transformed archive replay still uses the Z3-backed BMC aggregator.
+
 **Lean** consumes the same typed canonical obligation as Z3. Standalone export
 is an unchecked scratch-pad and reports ``Exported``. Project mode emits
 faithful definitions for the current integer, bit-vector, pointer, total-heap,
@@ -386,11 +394,21 @@ quantifier, overflow, and finite spec-fuel theories, plus one source-attributed
 goal per ordered obligation. Generated files are separated from preserved user
 lemmas/proofs. The pinned admission-free kernel path reports ``Certified`` only
 after every active proof checks and rejects user axiom/opaque shortcuts.
+``--check-ub`` buffer extents are lowered on this path as well as on
+Z3/cvc5/portfolio/BMC.
 Automation, proof ergonomics, semantic simplification, dependency-aware
 caching, and broader future C++ theories remain incomplete.
 
-There is currently no solver portfolio, CHC backend, separation-logic backend,
-or independently checked Z3 proof-object pipeline.
+The repository's backend release gate differentially checks all current
+canonical feature families, decisive false goals, source IDs, deterministic
+parallel results, canonical and BMC archive replay, Lean theorem/proof-module
+identity, generated Lean compilation, and fail-closed solver processes. Valid
+quantified or inductive goals may conservatively remain ``solver.unknown`` in
+cvc5, but disagreement and false proof are never accepted.
+
+There is currently no CHC backend, separation-logic backend, or independently
+checked Z3 proof-object pipeline. Portfolio agreement is independent solver
+evidence, not a portable proof certificate.
 
 Portable obligation schema v1 bounds imported integer sorts to 4096 bits and
 uses explicit parser depth/node/collection budgets. Supporting wider backend

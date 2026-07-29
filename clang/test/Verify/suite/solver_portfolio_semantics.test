@@ -1,0 +1,28 @@
+# REQUIRES: cvc5
+# RUN: not %cpp-verify --backend=portfolio --jobs=4 --timeout=10000 \
+# RUN:   %S/z3_integer_128.cpp 2>&1 \
+# RUN:   | FileCheck %S/z3_integer_128.cpp --check-prefix=VERIFY
+# RUN: not %cpp-verify --backend=portfolio --jobs=4 --timeout=10000 \
+# RUN:   %S/z3_bitwise.cpp 2>&1 \
+# RUN:   | FileCheck %S/z3_bitwise.cpp --check-prefix=VERIFY
+# RUN: %cpp-verify --backend=portfolio --jobs=4 --timeout=10000 \
+# RUN:   %S/z3_pointer_validity.cpp 2>&1 \
+# RUN:   | FileCheck %S/z3_pointer_validity.cpp --check-prefix=VERIFY
+# RUN: not %cpp-verify --backend=portfolio --jobs=4 --timeout=10000 \
+# RUN:   %S/z3_quantified_specs.cpp 2>&1 \
+# RUN:   | FileCheck %S/z3_quantified_specs.cpp --check-prefix=VERIFY
+# RUN: %cpp-verify --backend=portfolio --check-ub --timeout=10000 \
+# RUN:   %S/bounds_inbounds_pass.cpp 2>&1 \
+# RUN:   | FileCheck %S/bounds_inbounds_pass.cpp --check-prefix=VERIFY
+# RUN: not %cpp-verify --backend=portfolio --check-ub --timeout=10000 \
+# RUN:   %S/bounds_oob_read_fail.cpp 2>&1 \
+# RUN:   | FileCheck %S/bounds_oob_read_fail.cpp --check-prefix=VERIFY
+# RUN: not %cpp-verify --backend=portfolio --diagnostics-format=json \
+# RUN:   %S/backend_model_truth.cpp 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=MODEL
+
+# MODEL: "backend":"portfolio"
+# MODEL-SAME: "function":"underdetermined_model"
+# MODEL-SAME: "model":[
+# MODEL-SAME: "reason":"counterexample"
+# MODEL-SAME: "status":"failed"

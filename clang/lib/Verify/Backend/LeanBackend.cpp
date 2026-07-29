@@ -499,9 +499,9 @@ static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
          << (E->Children[I]->Sort.Signedness == LogicSignedness::Signed
                  ? "BitVec.signExtend "
                  : "BitVec.zeroExtend ")
-         << BitWidth << " ";
-      printVCExprLean(E->Children[I].get(), OS, 10);
-      OS << ")";
+         << BitWidth << " (";
+      printVCExprLean(E->Children[I].get(), OS, 0);
+      OS << "))";
     }
     OS << " = false)";
     break;

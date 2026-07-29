@@ -35,7 +35,7 @@ int invalid_result()
 // LEAN-DAG: Exported: lean obligation: invalid_result
 // LEAN-NOT: Verified:
 
-// INVALID: error: unknown verification backend 'unknown'; expected z3, lean, or bmc
+// INVALID: error: unknown verification backend 'unknown'; expected z3, cvc5, portfolio, lean, or bmc
 // INVALID-NOT: Verified:
 
 // NO-FALLBACK: error: verification failed: invalid_result

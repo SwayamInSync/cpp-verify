@@ -53,7 +53,8 @@ the signed-minimum divided by minus one case, invalid shifts, and non-null
 abstract-valid dereferences. They also follow operations executed inside lifted
 ``constexpr`` functions.
 
-The historically named ``--check-ub`` option is now specifically the Z3/BMC
+The historically named ``--check-ub`` option is now specifically the
+Z3/cvc5/portfolio/BMC/Lean
 extent rollout: it discovers ``valid(p, n)`` before that marker's trivial spec
 body is inlined and generates access, modular-slice, and same-array-position
 obligations. It does not control the always-on checks above.

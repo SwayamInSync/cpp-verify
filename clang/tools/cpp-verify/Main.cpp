@@ -1,4 +1,5 @@
 //===--- Main.cpp - cpp-verify standalone tool ----------------------------===//
+#include "../../lib/Verify/Backend/CVC5Backend.h"
 #include "../../lib/Verify/Backend/ObligationSerialization.h"
 #include "../../lib/Verify/Backend/ObligationSimplify.h"
 #include "../../lib/Verify/Backend/VerifyBackend.h"
@@ -40,8 +41,14 @@ static cl::opt<bool> LowerOnly(
     cl::init(false), cl::cat(CppVerifyCategory));
 
 static cl::opt<std::string> BackendOpt(
-    "backend", cl::desc("Verification backend: z3 (default), lean, bmc"),
+    "backend",
+    cl::desc("Verification backend: z3 (default), cvc5, portfolio, lean, bmc"),
     cl::value_desc("name"), cl::init("z3"), cl::cat(CppVerifyCategory));
+
+static cl::opt<std::string> CVC5Path(
+    "cvc5-path",
+    cl::desc("cvc5 executable for --backend=cvc5 or --backend=portfolio"),
+    cl::value_desc("file"), cl::cat(CppVerifyCategory));
 
 static cl::opt<std::string>
     LeanOut("lean-out",
@@ -55,7 +62,7 @@ static cl::opt<std::string> LeanProject(
 
 static cl::opt<std::string> LeanFallback(
     "lean-fallback",
-    cl::desc("Export unresolved Z3 obligations to an editable Lean project"),
+    cl::desc("Export unresolved Z3 or portfolio obligations to a Lean project"),
     cl::value_desc("directory"), cl::cat(CppVerifyCategory));
 
 static cl::opt<bool> LeanCertify(
@@ -70,23 +77,23 @@ static cl::opt<unsigned>
 static cl::opt<unsigned> SolverTimeout(
     "timeout",
     cl::desc(
-        "Per-query Z3 timeout in milliseconds (0 = no limit). A query that "
+        "Per-query solver timeout in milliseconds (0 = no limit). A query that "
         "exceeds it is reported as unresolved instead of hanging"),
     cl::init(verify::DefaultSolverTimeoutMs), cl::cat(CppVerifyCategory));
 
 static cl::opt<unsigned> SolverResourceLimit(
     "solver-rlimit",
-    cl::desc("Per-query deterministic Z3 resource limit (0 = no limit)"),
+    cl::desc("Per-query deterministic solver resource limit (0 = no limit)"),
     cl::init(0), cl::cat(CppVerifyCategory));
 
 static cl::opt<unsigned>
     Jobs("jobs",
-         cl::desc("Isolated Z3 solver jobs (0 = available physical cores)"),
+         cl::desc("Isolated solver jobs (0 = available physical cores)"),
          cl::init(1), cl::cat(CppVerifyCategory));
 
 static cl::opt<uint64_t>
     MaxQueryNodes("max-query-nodes",
-                  cl::desc("Maximum canonical expression nodes per Z3-backed "
+                  cl::desc("Maximum canonical expression nodes per solver "
                            "module (0 = no limit)"),
                   cl::init(0), cl::cat(CppVerifyCategory));
 
@@ -147,10 +154,44 @@ static verify::BackendExecutionOptions backendExecutionOptions() {
   Options.SolverResourceLimit = SolverResourceLimit;
   Options.Jobs = Jobs;
   Options.MaxQueryNodes = MaxQueryNodes;
+  Options.CVC5Path = CVC5Path;
   Options.ProofCachePath = ProofCache;
   Options.ProofCacheMaxBytes = proofCacheMaxBytes();
   Options.ProofCacheMaxEntries = ProofCacheMaxEntries;
   return Options;
+}
+
+static verify::VerifyResult
+lowerForBackend(const verify::ObligationModule &Module,
+                verify::BackendKind Kind, llvm::raw_ostream *Z3Out = nullptr) {
+  verify::BackendExecutionOptions Execution = backendExecutionOptions();
+  if (Kind == verify::BackendKind::CVC5)
+    return verify::lowerSMTLibModule(Module, nullptr, Execution);
+  if (Kind == verify::BackendKind::Portfolio) {
+    verify::VerifyResult Z3Result =
+        verify::lowerObligationModule(Module, Z3Out, Execution);
+    if (Z3Result.Status != verify::VerifyStatus::Lowered) {
+      Z3Result.BackendName = "portfolio";
+      Z3Result.Message =
+          "z3 component" +
+          (Z3Result.Message.empty() ? std::string() : ": " + Z3Result.Message);
+      return Z3Result;
+    }
+    verify::VerifyResult CVC5Result =
+        verify::lowerSMTLibModule(Module, nullptr, Execution);
+    if (CVC5Result.Status != verify::VerifyStatus::Lowered) {
+      CVC5Result.BackendName = "portfolio";
+      CVC5Result.Message = "cvc5 component" + (CVC5Result.Message.empty()
+                                                   ? std::string()
+                                                   : ": " + CVC5Result.Message);
+      return CVC5Result;
+    }
+    verify::VerifyResult Result;
+    Result.Status = verify::VerifyStatus::Lowered;
+    Result.BackendName = "portfolio";
+    return Result;
+  }
+  return verify::lowerObligationModule(Module, Z3Out, Execution);
 }
 
 class VerifyConsumer : public ASTConsumer {
@@ -166,6 +207,10 @@ public:
         VOpts.Backend = verify::BackendKind::Lean;
       else if (B == "bmc")
         VOpts.Backend = verify::BackendKind::BMC;
+      else if (B == "cvc5")
+        VOpts.Backend = verify::BackendKind::CVC5;
+      else if (B == "portfolio")
+        VOpts.Backend = verify::BackendKind::Portfolio;
       else
         VOpts.Backend = verify::BackendKind::Z3;
       VOpts.LeanOutPath = LeanOut.getValue();
@@ -177,6 +222,7 @@ public:
       VOpts.SolverResourceLimit = SolverResourceLimit.getValue();
       VOpts.Jobs = Jobs.getValue();
       VOpts.MaxQueryNodes = MaxQueryNodes.getValue();
+      VOpts.CVC5Path = CVC5Path.getValue();
       VOpts.ProofCachePath = ProofCache.getValue();
       VOpts.ProofCacheMaxBytes = proofCacheMaxBytes();
       VOpts.ProofCacheMaxEntries = ProofCacheMaxEntries.getValue();
@@ -360,7 +406,13 @@ static int replayObligationArchive() {
   }
   if (BackendOpt == "lean" && (Jobs != 1 || !ProofCache.empty())) {
     llvm::errs()
-        << "error: --jobs and --proof-cache apply only to Z3-backed replay\n";
+        << "error: --jobs and --proof-cache are not supported by Lean replay\n";
+    return 1;
+  }
+  if (BackendOpt == "cvc5" && !ProofCache.empty()) {
+    llvm::errs()
+        << "error: --proof-cache is not supported by --backend=cvc5; use "
+           "--backend=portfolio to cache its Z3 component\n";
     return 1;
   }
   if (LowerOnly && !ProofCache.empty()) {
@@ -409,6 +461,12 @@ static int replayObligationArchive() {
                       "BMC-transformed obligation archive\n";
       return 1;
     }
+    if ((BackendOpt == "cvc5" || BackendOpt == "portfolio") &&
+        Module.BMCTransform) {
+      llvm::errs() << "error: cvc5 and portfolio replay do not yet aggregate "
+                      "BMC-transformed archives; use --backend=bmc\n";
+      return 1;
+    }
     if (Module.BMCTransform && BMCUnroll.getNumOccurrences() > 0 &&
         BMCUnroll != Module.BMCTransform->UnrollBound) {
       llvm::errs() << "error: requested BMC bound " << BMCUnroll
@@ -440,8 +498,12 @@ static int replayObligationArchive() {
     return 1;
   }
 
-  verify::BackendKind Kind = BackendOpt == "lean" ? verify::BackendKind::Lean
-                                                  : verify::BackendKind::Z3;
+  verify::BackendKind Kind = BackendOpt == "lean"   ? verify::BackendKind::Lean
+                             : BackendOpt == "cvc5" ? verify::BackendKind::CVC5
+                             : BackendOpt == "portfolio"
+                                 ? verify::BackendKind::Portfolio
+                             : BackendOpt == "bmc" ? verify::BackendKind::BMC
+                                                   : verify::BackendKind::Z3;
   std::unique_ptr<verify::VerifyBackend> Backend = verify::createVerifyBackend(
       Kind, LeanStream, BMCUnroll, backendExecutionOptions());
   const unsigned DumpLayers = DumpIR.getNumOccurrences() > 0
@@ -454,11 +516,8 @@ static int replayObligationArchive() {
 
     verify::VerifyResult Result;
     if (LowerOnly) {
-      Result = verify::lowerObligationModule(
-          Module, DumpLayers & verify::LayerZ3 ? &llvm::outs() : nullptr,
-          backendExecutionOptions());
-      if (Result.BackendName.empty())
-        Result.BackendName = "z3";
+      Result = lowerForBackend(
+          Module, Kind, DumpLayers & verify::LayerZ3 ? &llvm::outs() : nullptr);
     } else {
       if (Module.BMCTransform) {
         std::unique_ptr<verify::VerifyBackend> BMCBackend =
@@ -598,9 +657,15 @@ int main(int argc, const char **argv) {
   }
   CommonOptionsParser &OptionsParser = ExpectedParser.get();
   StringRef Backend = BackendOpt.getValue();
-  if (Backend != "z3" && Backend != "lean" && Backend != "bmc") {
+  if (Backend != "z3" && Backend != "cvc5" && Backend != "portfolio" &&
+      Backend != "lean" && Backend != "bmc") {
     llvm::errs() << "error: unknown verification backend '" << Backend
-                 << "'; expected z3, lean, or bmc\n";
+                 << "'; expected z3, cvc5, portfolio, lean, or bmc\n";
+    return 1;
+  }
+  if (!CVC5Path.empty() && Backend != "cvc5" && Backend != "portfolio") {
+    llvm::errs() << "error: --cvc5-path requires --backend=cvc5 or "
+                    "--backend=portfolio\n";
     return 1;
   }
   if (!ObligationIn.empty()) {

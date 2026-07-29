@@ -172,6 +172,7 @@ Backends and modular calls
 
 .. code-block:: bash
 
+   cpp-verify --backend=portfolio --cvc5-path=/usr/bin/cvc5 critical.cpp
    cpp-verify --backend=bmc --unroll=3 loops.cpp
    cpp-verify --lean-fallback=proof hard_goal.cpp
    cpp-verify --dump-ir=3,4 debug.cpp

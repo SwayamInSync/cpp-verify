@@ -381,6 +381,9 @@ if lit.util.which("xmllint"):
 if lit.util.which("lake", config.environment["PATH"]):
     config.available_features.add("lean")
 
+if lit.util.which("cvc5", config.environment["PATH"]):
+    config.available_features.add("cvc5")
+
 if config.enable_backtrace:
     config.available_features.add("backtrace")
 

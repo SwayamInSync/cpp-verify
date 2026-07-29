@@ -6,7 +6,7 @@ Formal verification lets you treat correctness as an engineering artifact: you s
 
 📖 **[Documentation](https://swayaminsync.github.io/cpp-verify/)** — install guide, the book (Part I–II), language reference, and Doxygen API.
 
-This repository is an [LLVM/Clang](https://github.com/llvm/llvm-project) fork (base `llvmorg-22.1.3`) with a verification engine in `clang/lib/Verify`, discharged by Z3.
+This repository is an [LLVM/Clang](https://github.com/llvm/llvm-project) fork (base `llvmorg-22.1.3`) with a verification engine in `clang/lib/Verify`, discharged by Z3, cvc5, or Lean.
 
 ## Install
 
@@ -38,7 +38,7 @@ cd cpp-verify
 
 Binaries: `build/bin/cpp-verify` and `build/bin/clang++` (on Windows, under `build\bin\`).
 
-Z3 is vendored by default (`third_party/z3` submodule, or CMake FetchContent on first configure). See `third_party/README.md`.
+Z3 is vendored by default (`third_party/z3` submodule, or CMake FetchContent on first configure). See `third_party/README.md`. cvc5 is optional and is not vendored; install it (`apt install cvc5` or `brew install cvc5`) for `--backend=cvc5` and `--backend=portfolio`, or pass `--cvc5-path`.
 
 ### Manual build
 
@@ -92,7 +92,9 @@ compiler — GCC or Clang (`setup.sh` uses `${CXX:-c++}`).
 | Backend | CLI | Role |
 |---------|-----|------|
 | **Z3** (default) | `cpp-verify file.cpp` | Weakest-precondition VCs + Z3 |
-| **BMC** | `cpp-verify --backend=bmc --unroll=N file.cpp` | Bounded loop unrolling, then Z3 |
+| **cvc5** | `cpp-verify --backend=cvc5 file.cpp` | Independent SMT-LIB2 solving |
+| **Strict portfolio** | `cpp-verify --backend=portfolio file.cpp` | Matching Z3 + cvc5 verdicts only |
+| **BMC** | `cpp-verify --backend=bmc --unroll=N file.cpp` | Incremental bounds through `N`, then Z3 |
 | **Lean export** | `cpp-verify --backend=lean --lean-out=out.lean file.cpp` | Emit an unchecked `sorry` theorem; reports `Exported`, not `Verified` |
 
 ## Commands
@@ -137,6 +139,8 @@ Design notes: `docs/DESIGN.md`, `docs/ARCHITECTURE.md`.
 ```bash
 ./scripts/run-verify-tests.sh
 ./build/bin/llvm-lit clang/test/Verify
+# From the enclosing integration checkout:
+../scripts/backend-fidelity-gate.sh
 ```
 
 Contributor coverage (instrument ``clangVerify`` only):

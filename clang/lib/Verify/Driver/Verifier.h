@@ -24,15 +24,17 @@ struct VerifyOptions {
   std::string LeanFallbackProjectPath;
   bool LeanCertify = false;
   unsigned BMCUnroll = 10;
-  /// Per-query Z3 timeout in milliseconds; 0 disables it. Non-terminating
+  /// Per-query solver timeout in milliseconds; 0 disables it. Non-terminating
   /// queries return Unknown instead of hanging the tool.
   unsigned SolverTimeoutMs = DefaultSolverTimeoutMs;
-  /// Deterministic per-query Z3 resource limit; 0 disables it.
+  /// Deterministic per-query solver resource limit; 0 disables it.
   unsigned SolverResourceLimit = 0;
   /// Number of isolated solver jobs. 0 selects available physical cores.
   unsigned Jobs = 1;
   /// Maximum canonical expression nodes per backend module; 0 disables it.
   uint64_t MaxQueryNodes = 0;
+  /// Optional cvc5 executable for cvc5 and strict portfolio verification.
+  std::string CVC5Path;
   /// Optional persistent cache of successful dependency-scoped proofs.
   std::string ProofCachePath;
   uint64_t ProofCacheMaxBytes = 1024ULL * 1024ULL * 1024ULL;

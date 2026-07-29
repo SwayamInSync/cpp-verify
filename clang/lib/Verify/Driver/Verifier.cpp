@@ -1,5 +1,6 @@
 //===--- Verifier.cpp - CppVerify driver ----------------------------------===//
 #include "Verifier.h"
+#include "../Backend/CVC5Backend.h"
 #include "../Backend/Obligation.h"
 #include "../Backend/ObligationLowering.h"
 #include "../Backend/ObligationSerialization.h"
@@ -33,6 +34,41 @@ using namespace clang;
 using namespace verify;
 
 namespace {
+
+static bool isDeductiveBackend(BackendKind Kind) {
+  return Kind == BackendKind::Z3 || Kind == BackendKind::CVC5 ||
+         Kind == BackendKind::Portfolio;
+}
+
+static VerifyResult lowerForBackend(const ObligationModule &Module,
+                                    BackendKind Kind,
+                                    const BackendExecutionOptions &Execution) {
+  if (Kind == BackendKind::CVC5)
+    return lowerSMTLibModule(Module, nullptr, Execution);
+  if (Kind == BackendKind::Portfolio) {
+    VerifyResult Z3Result = lowerObligationModule(Module, nullptr, Execution);
+    if (Z3Result.Status != VerifyStatus::Lowered) {
+      Z3Result.BackendName = "portfolio";
+      Z3Result.Message =
+          "z3 component" +
+          (Z3Result.Message.empty() ? std::string() : ": " + Z3Result.Message);
+      return Z3Result;
+    }
+    VerifyResult CVC5Result = lowerSMTLibModule(Module, nullptr, Execution);
+    if (CVC5Result.Status != VerifyStatus::Lowered) {
+      CVC5Result.BackendName = "portfolio";
+      CVC5Result.Message = "cvc5 component" + (CVC5Result.Message.empty()
+                                                   ? std::string()
+                                                   : ": " + CVC5Result.Message);
+      return CVC5Result;
+    }
+    VerifyResult Result;
+    Result.Status = VerifyStatus::Lowered;
+    Result.BackendName = "portfolio";
+    return Result;
+  }
+  return lowerObligationModule(Module, nullptr, Execution);
+}
 
 struct VerifyDiagnostic {
   enum Kind {
@@ -597,9 +633,11 @@ public:
       return false;
     }
     if (!Opts.LeanFallbackProjectPath.empty() &&
-        Opts.Backend != BackendKind::Z3) {
+        Opts.Backend != BackendKind::Z3 &&
+        Opts.Backend != BackendKind::Portfolio) {
       Diags.push_back(
-          {VerifyDiagnostic::Error, "--lean-fallback requires --backend=z3"});
+          {VerifyDiagnostic::Error,
+           "--lean-fallback requires --backend=z3 or --backend=portfolio"});
       return false;
     }
     if (!Opts.LeanFallbackProjectPath.empty() &&
@@ -630,7 +668,7 @@ public:
     if (Opts.LowerOnly && Opts.Backend == BackendKind::Lean) {
       Diags.push_back(
           {VerifyDiagnostic::Error,
-           "--lower-only supports the Z3 and BMC lowering pipelines; use "
+           "--lower-only supports Z3, cvc5, portfolio, and BMC; use "
            "--backend=lean to validate Lean export"});
       return false;
     }
@@ -638,7 +676,20 @@ public:
         (Opts.Jobs != 1 || !Opts.ProofCachePath.empty())) {
       Diags.push_back(
           {VerifyDiagnostic::Error,
-           "--jobs and --proof-cache apply only to Z3-backed verification"});
+           "--jobs and --proof-cache are not supported by the Lean backend"});
+      return false;
+    }
+    if (Opts.Backend == BackendKind::CVC5 && !Opts.ProofCachePath.empty()) {
+      Diags.push_back({VerifyDiagnostic::Error,
+                       "--proof-cache is not supported by --backend=cvc5; use "
+                       "--backend=portfolio to cache its Z3 component"});
+      return false;
+    }
+    if (!Opts.CVC5Path.empty() && Opts.Backend != BackendKind::CVC5 &&
+        Opts.Backend != BackendKind::Portfolio) {
+      Diags.push_back(
+          {VerifyDiagnostic::Error,
+           "--cvc5-path requires --backend=cvc5 or --backend=portfolio"});
       return false;
     }
     if (Opts.LowerOnly && !Opts.ProofCachePath.empty()) {
@@ -684,7 +735,9 @@ public:
     for (const auto &Fn : Functions) {
       auto Interface = std::make_unique<VFunction>(cloneVFunction(*Fn));
       if (!Interface->IsSpec && Opts.CheckUB &&
-          (Opts.Backend == BackendKind::Z3 || Opts.Backend == BackendKind::BMC))
+          (isDeductiveBackend(Opts.Backend) ||
+           Opts.Backend == BackendKind::BMC ||
+           Opts.Backend == BackendKind::Lean))
         (void)instrumentUBChecks(*Interface);
       InterfaceMap[Interface->Identity] = Interface.get();
       InterfaceFunctions.push_back(std::move(Interface));
@@ -725,6 +778,7 @@ public:
     Execution.SolverResourceLimit = Opts.SolverResourceLimit;
     Execution.Jobs = Opts.Jobs;
     Execution.MaxQueryNodes = Opts.MaxQueryNodes;
+    Execution.CVC5Path = Opts.CVC5Path;
     Execution.ProofCachePath = Opts.ProofCachePath;
     Execution.ProofCacheMaxBytes = Opts.ProofCacheMaxBytes;
     Execution.ProofCacheMaxEntries = Opts.ProofCacheMaxEntries;
@@ -783,12 +837,13 @@ public:
         PreparedFn = cloneVFunction(*Fn);
         // `valid(p, n)` is a recognized UB marker. Discover it before spec
         // preparation folds its deliberately trivial body to `true`.
-        if (Opts.CheckUB && (Opts.Backend == BackendKind::Z3 ||
-                             Opts.Backend == BackendKind::BMC))
+        if (Opts.CheckUB && (isDeductiveBackend(Opts.Backend) ||
+                             Opts.Backend == BackendKind::BMC ||
+                             Opts.Backend == BackendKind::Lean))
           UBError = instrumentUBChecks(*PreparedFn);
         if (!UBError) {
           SpecInliner Inliner(FnMap, PreparedFn->SpecFuel);
-          if (Opts.Backend == BackendKind::Z3 ||
+          if (isDeductiveBackend(Opts.Backend) ||
               Opts.Backend == BackendKind::Lean)
             Inliner.prepareFunctionAxiomatic(*PreparedFn);
           else
@@ -862,13 +917,16 @@ public:
           continue;
         }
         if (Opts.LowerOnly) {
-          VerifyResult DR =
-              lowerObligationModule(DecModule, nullptr, Execution);
+          VerifyResult DR = lowerForBackend(DecModule, Opts.Backend, Execution);
           if (DR.Status != VerifyStatus::Lowered) {
             AllOk = false;
             AnyFailed = true;
             std::string Message =
-                "Z3 lowering failed for decreases: " + Fn->Name;
+                std::string(Opts.Backend == BackendKind::Z3 ||
+                                    Opts.Backend == BackendKind::BMC
+                                ? "Z3"
+                                : "backend") +
+                " lowering failed for decreases: " + Fn->Name;
             Message += backendSuffix(DR);
             if (!DR.Message.empty())
               Message += " (" + DR.Message + ")";
@@ -1056,15 +1114,33 @@ public:
         dumpVC(Module, *DumpOS, &Simplification);
       }
 
-      if (DumpLayers & LayerZ3 || Opts.LowerOnly) {
+      if (DumpLayers & LayerZ3) {
         if (DumpLayers & LayerZ3)
           dumpSep();
-        llvm::raw_ostream *Z3Out = DumpLayers & LayerZ3 ? DumpOS : nullptr;
-        VerifyResult Lowered = lowerObligationModule(Module, Z3Out, Execution);
+        VerifyResult Lowered = lowerObligationModule(Module, DumpOS, Execution);
         if (Lowered.Status != VerifyStatus::Lowered) {
           AllOk = false;
           AnyFailed = true;
           std::string Message = "Z3 lowering failed: " + Fn->Name;
+          Message += backendSuffix(Lowered);
+          if (!Lowered.Message.empty())
+            Message += " (" + Lowered.Message + ")";
+          Diags.push_back({VerifyDiagnostic::Error, std::move(Message),
+                           Lowered.Location, Fn->Name, std::move(Lowered)});
+          continue;
+        }
+      }
+      if (Opts.LowerOnly) {
+        VerifyResult Lowered = lowerForBackend(Module, Opts.Backend, Execution);
+        if (Lowered.Status != VerifyStatus::Lowered) {
+          AllOk = false;
+          AnyFailed = true;
+          std::string Message =
+              std::string(Opts.Backend == BackendKind::Z3 ||
+                                  Opts.Backend == BackendKind::BMC
+                              ? "Z3"
+                              : "backend") +
+              " lowering failed: " + Fn->Name;
           Message += backendSuffix(Lowered);
           if (!Lowered.Message.empty())
             Message += " (" + Lowered.Message + ")";
@@ -1079,7 +1155,10 @@ public:
       if (Opts.LowerOnly) {
         VerifyResult Result;
         Result.Status = VerifyStatus::Lowered;
-        Result.BackendName = "z3";
+        Result.BackendName =
+            Opts.Backend == BackendKind::CVC5
+                ? "cvc5"
+                : (Opts.Backend == BackendKind::Portfolio ? "portfolio" : "z3");
         Diags.push_back({VerifyDiagnostic::Lowered, Fn->Name, SourceLocation(),
                          Fn->Name, std::move(Result)});
         continue;
@@ -1183,7 +1262,7 @@ public:
       }
     }
 
-    if (AnyFailed && !Opts.LowerOnly && Opts.Backend == BackendKind::Z3) {
+    if (AnyFailed && !Opts.LowerOnly && isDeductiveBackend(Opts.Backend)) {
       BackendExecutionOptions RecommendsExecution = Execution;
       RecommendsExecution.Jobs = 1;
       RecommendsExecution.ProofCachePath.clear();

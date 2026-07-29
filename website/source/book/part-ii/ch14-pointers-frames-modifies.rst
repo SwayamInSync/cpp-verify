@@ -156,7 +156,7 @@ integers rather than wrapping machine words.
 Declaring a checked extent
 --------------------------
 
-On the Z3 and BMC paths, ``--check-ub`` gives a conventional ``valid`` spec
+On the Z3, cvc5, portfolio, BMC, and Lean paths, ``--check-ub`` gives a conventional ``valid`` spec
 call special extent meaning:
 
 .. code-block:: cpp

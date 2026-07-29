@@ -81,7 +81,7 @@ Optional buffer bounds (``--check-ub``)
 ---------------------------------------
 
 Array bounds require an explicit extent. Write ``valid(p, n)`` in a
-precondition and run the Z3 or BMC backend with ``--check-ub``; every recognized
+precondition and run Z3, cvc5, portfolio, BMC, or Lean with ``--check-ub``; every recognized
 ``p[i]`` or ``*(p + i)`` access rooted at ``p`` must then prove ``0 <= i < n``.
 The marker itself requires ``n >= 0`` and, for a positive extent, a non-null
 abstractly valid pointer; extent zero permits null. A pointer with no ``valid``

@@ -17,6 +17,15 @@ Verification backends
    * - **Z3** (default)
      - ``cpp-verify file.cpp``
      - General proofs: functions, pointers, spec/proof, loops via invariant/decreases (WP path).
+   * - **cvc5**
+     - ``cpp-verify --backend=cvc5 file.cpp``
+     - Independent solving through a standalone SMT-LIB2 encoding. Requires an
+       installed cvc5 or ``--cvc5-path``.
+   * - **Strict portfolio**
+     - ``cpp-verify --backend=portfolio file.cpp``
+     - Run Z3 and cvc5 over the same ordered canonical obligations. Use when a
+       matching independent verdict is more important than accepting either
+       solver alone.
    * - **BMC**
      - ``cpp-verify --backend=bmc --unroll=N file.cpp``
      - Small bounded loops: grow the unrolling from zero through ``N`` and stop
@@ -43,6 +52,31 @@ Text output lists the attempted bounds and reuse count, while JSON publishes
 ``iteration 2`` reconstruct the counterexample depth at the original loop
 source.
 
+Strict portfolio mode never votes or silently trusts the primary solver. Two
+``unsat`` verdicts are ``Verified``; two ``sat`` verdicts are ``Failed`` and use
+Z3's typed model/trace. Opposite verdicts, missing cvc5, unknown/timeout,
+malformed process output, and unsupported encoding are ``Unresolved``. cvc5 is
+not vendored because it is an optional independent implementation; install it
+through the platform package manager or select an executable explicitly.
+
+Backend release fidelity
+------------------------
+
+Contributors can run the repeatable cross-backend release gate from the outer
+checkout:
+
+.. code-block:: bash
+
+   ./scripts/backend-fidelity-gate.sh
+
+It requires cvc5 and Lean 4.32.2. The gate checks every canonical feature
+family through Layer 3 and Z3/cvc5/portfolio/BMC, source-identical failures,
+deterministic parallel execution, canonical and bounded archive replay, Lean
+theorem/proof-module identity and generated-file compilation, and adversarial
+solver process handling. cvc5 may conservatively return ``unknown`` for
+designated valid quantified or inductive goals; every false matrix goal must
+remain decisive, and any solver disagreement fails the gate.
+
 Parallel solving and persistent proofs
 --------------------------------------
 
@@ -53,14 +87,16 @@ For a translation unit with several proof obligations:
    cpp-verify --jobs=4 --proof-cache=.cppverify-cache file.cpp
 
 ``--jobs=0`` selects available physical cores. Each ordered obligation runs in
-its own Z3 context, but results are published in source order. Frontend lowering,
-IR/archive output, Lean generation, and diagnostics remain serial, so changing
-the job count does not change the first reported failure.
+its own Z3 context or cvc5 process, but results are published in source order.
+Frontend lowering, IR/archive output, Lean generation, and diagnostics remain
+serial, so changing the job count does not change the first reported failure.
 
 The cache stores only ``Verified`` individual obligations. Keys include the
 goal's dependency-scoped semantic hash, backend/adapter identity, and exact Z3
-version. A BMC cache entry is separate from an unbounded Z3 entry and retains
-its semantic unroll provenance. Counterexamples, unknown/resource-limited
+version. A portfolio cache entry covers only its namespace-separated Z3
+component; cvc5 always reruns. Standalone cvc5 rejects the proof cache. A BMC
+cache entry is separate from an unbounded Z3 entry and retains its semantic
+unroll provenance. Counterexamples, unknown/resource-limited
 queries, and ``BoundedSafe`` results are never cached. Corrupt or unreadable
 entries produce ``Unresolved`` instead of being trusted or silently replaced.
 Use ``--proof-cache-max-mb`` and ``--proof-cache-max-entries`` to bound storage.
@@ -78,7 +114,7 @@ Solver work can also be bounded explicitly:
    cpp-verify --timeout=30000 --solver-rlimit=500000 \
      --max-query-nodes=50000 file.cpp
 
-Timeout, Z3 resource, and canonical query-size exhaustion remain non-success
+Timeout, solver resource, and canonical query-size exhaustion remain non-success
 results with distinct machine-readable reason codes.
 
 Editable Lean fallback
@@ -120,6 +156,7 @@ The canonical backend boundary can be persisted and replayed:
 
    cpp-verify --lower-only --obligation-out=goals.cpv file.cpp
    cpp-verify --obligation-in=goals.cpv --backend=z3
+   cpp-verify --obligation-in=goals.cpv --backend=portfolio
    cpp-verify --obligation-in=goals.cpv --lower-only --dump-ir=3,4
    cpp-verify --obligation-in=goals.cpv --backend=lean --lean-out=goals.lean
 

@@ -31,6 +31,9 @@ enum class VerifyReason {
   SolverTimeout,
   SolverResourceLimit,
   SolverUnknown,
+  SolverUnavailable,
+  SolverInvocationFailure,
+  SolverMalformedOutput,
   QuerySizeLimit,
   EncodingFailure,
   InvalidObligation,
@@ -110,16 +113,18 @@ protected:
   virtual VerifyResult verifyModule(const ObligationModule &Module) = 0;
 };
 
-enum class BackendKind { Z3, Lean, BMC };
+enum class BackendKind { Z3, Lean, BMC, CVC5, Portfolio };
 
 struct BackendExecutionOptions {
   unsigned SolverTimeoutMs = 0;
-  /// Per-query deterministic Z3 resource limit; 0 disables it.
+  /// Per-query deterministic solver resource limit; 0 disables it.
   unsigned SolverResourceLimit = 0;
   /// Isolated solver jobs. 0 selects the available physical-core count.
   unsigned Jobs = 1;
   /// Maximum canonical expression nodes in a module; 0 disables it.
   uint64_t MaxQueryNodes = 0;
+  /// Optional cvc5 executable. An empty path searches PATH for `cvc5`.
+  std::string CVC5Path;
   std::string ProofCachePath;
   uint64_t ProofCacheMaxBytes = 1024ULL * 1024ULL * 1024ULL;
   uint64_t ProofCacheMaxEntries = 100000;

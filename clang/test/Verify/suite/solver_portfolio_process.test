@@ -1,0 +1,96 @@
+# RUN: cp %S/Inputs/fake_cvc5.py %t.unknown
+# RUN: cp %S/Inputs/fake_cvc5.py %t.comment
+# RUN: cp %S/Inputs/fake_cvc5.py %t.trailing
+# RUN: cp %S/Inputs/fake_cvc5.py %t.large
+# RUN: cp %S/Inputs/fake_cvc5.py %t.stream
+# RUN: cp %S/Inputs/fake_cvc5.py %t.stderr
+# RUN: cp %S/Inputs/fake_cvc5.py %t.exit
+# RUN: cp %S/Inputs/fake_cvc5.py %t.crash
+# RUN: cp %S/Inputs/fake_cvc5.py %t.hang
+# RUN: cp %S/Inputs/fake_cvc5.py %t.sat
+# RUN: cp %S/Inputs/fake_cvc5.py %t.unsat
+# RUN: chmod +x %t.unknown %t.comment %t.trailing %t.large %t.stderr %t.exit \
+# RUN:   %t.stream %t.crash %t.hang %t.sat %t.unsat
+#
+# RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.unknown \
+# RUN:   %S/Inputs/solver_process_valid.cpp 2>&1 | FileCheck %s --check-prefix=UNKNOWN
+# RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.comment \
+# RUN:   %S/Inputs/solver_process_valid.cpp 2>&1 | FileCheck %s --check-prefix=MALFORMED
+# RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.trailing \
+# RUN:   %S/Inputs/solver_process_valid.cpp 2>&1 | FileCheck %s --check-prefix=MALFORMED
+# RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.large \
+# RUN:   %S/Inputs/solver_process_valid.cpp 2>&1 | FileCheck %s --check-prefix=OUTPUT-LIMIT
+# RUN: %python -c "import pathlib, subprocess, time; start = time.monotonic(); p = subprocess.run([r'%cpp-verify', '--backend=cvc5', '--cvc5-path=%t.stream', '--timeout=5', r'%S/Inputs/solver_process_valid.cpp'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True); pathlib.Path(r'%t.stream.out').write_text(p.stdout); assert p.returncode != 0 and time.monotonic() - start < 3"
+# RUN: FileCheck %s --check-prefix=STREAM-LIMIT < %t.stream.out
+# RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.stderr \
+# RUN:   %S/Inputs/solver_process_valid.cpp 2>&1 | FileCheck %s --check-prefix=STDERR
+# RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.exit \
+# RUN:   %S/Inputs/solver_process_valid.cpp 2>&1 | FileCheck %s --check-prefix=EXIT
+# RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.crash --timeout=5 \
+# RUN:   %S/Inputs/solver_process_valid.cpp 2>&1 | FileCheck %s --check-prefix=CRASH
+# RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.hang --timeout=1 --jobs=4 \
+# RUN:   %S/Inputs/backend_cache_base.cpp 2>&1 | FileCheck %s --check-prefix=TIMEOUT
+#
+# RUN: not %cpp-verify --backend=portfolio --cvc5-path=%t.sat \
+# RUN:   %S/Inputs/solver_process_valid.cpp 2>&1 | FileCheck %s --check-prefix=DISAGREE-SAT
+# RUN: not %cpp-verify --backend=portfolio --cvc5-path=%t.unsat \
+# RUN:   %S/Inputs/solver_process_invalid.cpp 2>&1 | FileCheck %s --check-prefix=DISAGREE-UNSAT
+# RUN: not %cpp-verify --backend=portfolio --cvc5-path=%t.sat \
+# RUN:   --diagnostics-format=json %S/Inputs/solver_process_valid.cpp 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=DISAGREE-JSON
+#
+# RUN: rm -rf %t.fallback
+# RUN: not %cpp-verify --backend=portfolio --cvc5-path=%t.unknown \
+# RUN:   --lean-fallback=%t.fallback %S/Inputs/solver_process_valid.cpp 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=FALLBACK
+# RUN: test -f %t.fallback/CppVerify/Generated.lean
+#
+# RUN: rm -rf %t.cache
+# RUN: %cpp-verify --backend=portfolio --cvc5-path=%t.unsat \
+# RUN:   --proof-cache=%t.cache %S/Inputs/solver_process_valid.cpp > /dev/null
+# RUN: not %cpp-verify --backend=portfolio --cvc5-path=%t.sat \
+# RUN:   --proof-cache=%t.cache %S/Inputs/solver_process_valid.cpp 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=CACHE-DISAGREE
+#
+# RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.missing \
+# RUN:   %S/Inputs/solver_process_valid.cpp 2>&1 | FileCheck %s --check-prefix=MISSING
+# RUN: not %cpp-verify --backend=cvc5 --proof-cache=%t.cache \
+# RUN:   %S/Inputs/solver_process_valid.cpp 2>&1 | FileCheck %s --check-prefix=CACHE
+# RUN: not %cpp-verify --backend=z3 --cvc5-path=%t.unsat \
+# RUN:   %S/Inputs/solver_process_valid.cpp 2>&1 | FileCheck %s --check-prefix=PATH
+#
+# RUN: %cpp-verify --obligation-out=%t.bmc --backend=bmc --unroll=0 \
+# RUN:   %S/Inputs/solver_process_valid.cpp > /dev/null
+# RUN: not %cpp-verify --backend=portfolio --obligation-in=%t.bmc 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=BMC
+
+# UNKNOWN: Unresolved: solver_process_valid [backend=cvc5] [reason=solver.unknown]
+# MALFORMED: Unresolved: solver_process_valid [backend=cvc5] [reason=solver.malformed-output]
+# OUTPUT-LIMIT: Unresolved: solver_process_valid [backend=cvc5] [reason=solver.malformed-output]
+# OUTPUT-LIMIT-SAME: solver output exceeds the 64 KiB limit
+# STREAM-LIMIT: Unresolved: solver_process_valid [backend=cvc5] [reason=solver.malformed-output]
+# STREAM-LIMIT-SAME: solver output exceeds the 64 KiB limit
+# STDERR: Unresolved: solver_process_valid [backend=cvc5] [reason=solver.malformed-output]
+# EXIT: Unresolved: solver_process_valid [backend=cvc5] [reason=solver.invocation-failed]
+# CRASH: Unresolved: solver_process_valid [backend=cvc5] [reason=solver.invocation-failed]
+# TIMEOUT: Unresolved: cached_identity [backend=cvc5] [reason=solver.timeout]
+
+# DISAGREE-SAT: Unresolved: solver_process_valid [backend=portfolio]
+# DISAGREE-SAT-SAME: [reason=backend.inconsistent-results]
+# DISAGREE-SAT-SAME: backend disagreement: z3=verified, cvc5=failed
+# DISAGREE-UNSAT: Unresolved: solver_process_invalid [backend=portfolio]
+# DISAGREE-UNSAT-SAME: [reason=backend.inconsistent-results]
+# DISAGREE-UNSAT-SAME: backend disagreement: z3=failed, cvc5=verified
+# DISAGREE-JSON: "backend":"portfolio"
+# DISAGREE-JSON-SAME: "reason":"backend.inconsistent-results"
+# DISAGREE-JSON-SAME: "status":"unresolved"
+# FALLBACK-DAG: Exported: lean fallback: solver_process_valid
+# FALLBACK-DAG: Unresolved: solver_process_valid [backend=portfolio]
+# CACHE-DISAGREE: Unresolved: solver_process_valid [backend=portfolio]
+# CACHE-DISAGREE-SAME: [cache=[[HITS:[1-9][0-9]*]]/[[HITS]]]
+# CACHE-DISAGREE-SAME: [reason=backend.inconsistent-results]
+
+# MISSING: Unresolved: solver_process_valid [backend=cvc5] [reason=solver.unavailable]
+# CACHE: error: --proof-cache is not supported by --backend=cvc5
+# PATH: error: --cvc5-path requires --backend=cvc5 or --backend=portfolio
+# BMC: error: cvc5 and portfolio replay do not yet aggregate BMC-transformed archives
