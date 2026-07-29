@@ -87,8 +87,12 @@ ill-scoped variables, and contradictory complete/ordered goals fail closed.
 Different records may request different reveal fuel for one logical function,
 but its shared parameter/result signature must remain compatible.
 
-BMC cannot be selected for archive replay: bounded loop unrolling is a VCR
-transformation that occurs before canonical obligation construction.
+BMC-produced records retain their exact unroll bound. Replay uses BMC unwinding
+aggregation for those records, so an incomplete frontier remains
+``BoundedSafe(N)``. BMC cannot be applied to an untransformed record because
+loop unrolling is a VCR transformation that occurs before canonical obligation
+construction. Lean scratch replay of bounded records is rejected until the
+generated theorem format carries the same transform provenance.
 Failure-only ``recommends`` checks are not archived, so bytes do not depend on
 whether a prior solver run succeeded or failed.
 

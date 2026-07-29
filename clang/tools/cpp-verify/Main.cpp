@@ -135,11 +135,6 @@ static int replayObligationArchive() {
                     "exclusive\n";
     return 1;
   }
-  if (BackendOpt == "bmc") {
-    llvm::errs() << "error: BMC cannot replay a backend-neutral archive; "
-                    "bounded unrolling must run before obligation lowering\n";
-    return 1;
-  }
   if (!LeanProject.empty() || !LeanFallback.empty() || LeanCertify) {
     llvm::errs() << "error: archive replay supports Lean scratch-pad export "
                     "with --lean-out, not Lean project generation or "
@@ -162,6 +157,26 @@ static int replayObligationArchive() {
   if (Modules->empty()) {
     llvm::errs() << "error: obligation archive contains no modules\n";
     return 1;
+  }
+  for (const verify::ObligationModule &Module : *Modules) {
+    if (BackendOpt == "bmc" && !Module.BMCTransform) {
+      llvm::errs() << "error: BMC cannot replay an untransformed "
+                      "backend-neutral archive; bounded unrolling must run "
+                      "before obligation lowering\n";
+      return 1;
+    }
+    if (BackendOpt == "lean" && Module.BMCTransform) {
+      llvm::errs() << "error: Lean scratch export cannot replay a "
+                      "BMC-transformed obligation archive\n";
+      return 1;
+    }
+    if (Module.BMCTransform && BMCUnroll.getNumOccurrences() > 0 &&
+        BMCUnroll != Module.BMCTransform->UnrollBound) {
+      llvm::errs() << "error: requested BMC bound " << BMCUnroll
+                   << " does not match archived bound "
+                   << Module.BMCTransform->UnrollBound << "\n";
+      return 1;
+    }
   }
 
   std::unique_ptr<llvm::raw_fd_ostream> LeanFile;
@@ -206,12 +221,22 @@ static int replayObligationArchive() {
       if (Result.BackendName.empty())
         Result.BackendName = "z3";
     } else {
-      Result = Backend->verify(Module);
+      if (Module.BMCTransform) {
+        std::unique_ptr<verify::VerifyBackend> BMCBackend =
+            verify::createVerifyBackend(verify::BackendKind::BMC, nullptr,
+                                        Module.BMCTransform->UnrollBound,
+                                        SolverTimeout);
+        Result = BMCBackend->verify(Module);
+      } else {
+        Result = Backend->verify(Module);
+      }
     }
 
     const std::string Hash = verify::obligationSemanticHash(Module);
-    const std::string Suffix = " [backend=" + Result.BackendName +
-                               "] [semantic-hash=sha256:" + Hash + "]";
+    std::string Suffix = " [backend=" + Result.BackendName;
+    if (Result.Bound)
+      Suffix += ", bound=" + std::to_string(*Result.Bound);
+    Suffix += "] [semantic-hash=sha256:" + Hash + "]";
     switch (Result.Status) {
     case verify::VerifyStatus::Lowered:
       llvm::outs() << "Lowered: " << Module.FunctionName << Suffix << "\n";
@@ -249,6 +274,12 @@ static int replayObligationArchive() {
       llvm::outs() << Suffix << "\n";
       break;
     case verify::VerifyStatus::BoundedSafe:
+      AllOk = false;
+      llvm::outs() << "BoundedSafe: " << Module.FunctionName;
+      if (!Result.Message.empty())
+        llvm::outs() << " (" << Result.Message << ")";
+      llvm::outs() << Suffix << "\n";
+      break;
     case verify::VerifyStatus::Certified:
       AllOk = false;
       llvm::outs() << "Unresolved: " << Module.FunctionName

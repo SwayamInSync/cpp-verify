@@ -52,7 +52,8 @@ Other flags
 - ``cpp-verify --obligation-out=FILE`` — write validated, versioned canonical
   obligation records with semantic hashes
 - ``cpp-verify --obligation-in=FILE`` — validate and replay records through Z3,
-  lower-only dumps, or Lean scratch export without reparsing C++
+  lower-only dumps, or Lean scratch export without reparsing C++; records made
+  by BMC retain and enforce their archived unroll bound
 
 IR layers
 ---------

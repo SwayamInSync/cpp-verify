@@ -13,6 +13,7 @@ namespace {
 constexpr std::array<char, 8> ArchiveMagic = {'C', 'P', 'V',  'O',
                                               'B', 'L', '\r', '\n'};
 constexpr uint32_t HasSourceMetadata = 1U << 0;
+constexpr uint32_t HasBMCTransformProvenance = 1U << 1;
 constexpr uint64_t MaxSerializedString = 64U * 1024U * 1024U;
 constexpr uint64_t MaxSerializedCollection = 100000;
 constexpr unsigned MaxExpressionDepth = 4096;
@@ -337,15 +338,21 @@ public:
       writeFunction(Identity, Function, IncludeDisplayNames);
   }
 
-  void writeModule(const ObligationModule &Module) {
+  void writeModule(const ObligationModule &Module,
+                   uint32_t FormatVersion = ObligationSerializationVersion) {
     Data.append(ArchiveMagic.data(), ArchiveMagic.size());
-    writeU32(ObligationSerializationVersion);
-    writeU32(IncludeSource ? HasSourceMetadata : 0);
+    writeU32(FormatVersion);
+    uint32_t Flags = IncludeSource ? HasSourceMetadata : 0;
+    if (Module.BMCTransform)
+      Flags |= HasBMCTransformProvenance;
+    writeU32(Flags);
     writeString(IncludeSource ? Module.FunctionName : "");
     writeString(Module.FunctionIdentity);
     writeU32(Module.RequiredFeatures);
     writeString(Module.ResultVarName);
     writeString(Module.HeapPrefix);
+    if (Module.BMCTransform)
+      writeU32(Module.BMCTransform->UnrollBound);
     writeFunctions(Module.LogicFunctions, IncludeSource);
     writeExpr(Module.CorrectnessGoal.get());
     writeExpr(Module.CounterexampleQuery.get());
@@ -362,10 +369,14 @@ public:
   void writeObligationSemantics(const ObligationModule &Module,
                                 const Obligation &Item) {
     writeString("cppverify-obligation-semantic");
-    writeU32(ObligationSerializationVersion);
+    writeU32(ObligationSemanticHashVersion);
     writeString(Module.FunctionIdentity);
     writeString(Module.ResultVarName);
     writeString(Module.HeapPrefix);
+    if (Module.BMCTransform) {
+      writeString("bmc-unroll");
+      writeU32(Module.BMCTransform->UnrollBound);
+    }
     std::set<std::string> Reachable;
     collectCalledFunctions(Item.Goal.get(), Reachable);
     collectCalledFunctions(Item.CounterexampleQuery.get(), Reachable);
@@ -586,7 +597,7 @@ class ArchiveReader {
     if (Version != ObligationSerializationVersion)
       fail("unsupported obligation archive version");
     uint32_t Flags = readU32();
-    if (Flags & ~HasSourceMetadata)
+    if (Flags & ~(HasSourceMetadata | HasBMCTransformProvenance))
       fail("unsupported obligation archive flags");
     IncludeSource = Flags & HasSourceMetadata;
 
@@ -596,6 +607,8 @@ class ArchiveReader {
     Module.RequiredFeatures = readU32();
     Module.ResultVarName = readString();
     Module.HeapPrefix = readString();
+    if (Flags & HasBMCTransformProvenance)
+      Module.BMCTransform = BMCTransformProvenance{readU32()};
 
     uint64_t Functions = readCount();
     for (uint64_t I = 0; I != Functions && Failure.empty(); ++I) {
@@ -698,7 +711,7 @@ verify::deserializeObligationModules(llvm::StringRef Archive) {
 
 std::string verify::obligationSemanticHash(const ObligationModule &Module) {
   ArchiveWriter Writer(false);
-  Writer.writeModule(Module);
+  Writer.writeModule(Module, ObligationSemanticHashVersion);
   return sha256(Writer.take());
 }
 

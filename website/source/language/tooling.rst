@@ -75,8 +75,10 @@ Backends
        concatenated in one archive.
    * - ``--obligation-in=FILE``
      - Validate and replay an archive without reparsing C++. Supports Z3,
-       ``--lower-only``/Layer 3-4 dumps, and Lean scratch export. BMC replay is
-       rejected because loop unrolling must run before obligation lowering.
+       ``--lower-only``/Layer 3-4 dumps, and Lean scratch export. Archives
+       produced after BMC unrolling retain their bound and replay with BMC
+       unwinding semantics; applying BMC to an untransformed archive is
+       rejected because unrolling must run before obligation lowering.
 
 ``--lower-only`` is deliberately different from compiler ``-fno-verify``.
 ``-fno-verify`` stops after Clang syntax and contract semantic checks;
@@ -108,7 +110,9 @@ Module and per-obligation SHA-256 hashes omit source paths and display-only
 names, so moving unchanged source preserves semantic identity. Archives still
 retain file/line/column points for replay diagnostics. Failure-triggered
 ``recommends`` warnings are diagnostic-only and do not make archive bytes depend
-on a solver result.
+on a solver result. BMC transform provenance is semantic: it is retained in
+archives and hashes so bounded obligations cannot be mistaken for unbounded
+deductive proofs.
 
 Supported compiler
 ------------------

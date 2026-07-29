@@ -45,6 +45,13 @@
 # RUN: %python %S/Inputs/mutate_obligation_archive.py different-function-definition %t.function-records %t.different-function-definition
 # RUN: %cpp-verify --obligation-in=%t.different-function-definition --lower-only
 # RUN: not %cpp-verify --obligation-in=%t.one --backend=bmc 2>&1 | FileCheck %s --check-prefix=BMC
+# RUN: %cpp-verify --lower-only --backend=bmc --unroll=0 --obligation-out=%t.bmc %S/cov_loop_unroll_zero.cpp
+# RUN: not %cpp-verify --obligation-in=%t.bmc --backend=z3 2>&1 | FileCheck %s --check-prefix=BMC-REPLAY
+# RUN: not %cpp-verify --obligation-in=%t.bmc --backend=bmc --unroll=1 2>&1 | FileCheck %s --check-prefix=BMC-BOUND
+# RUN: not %cpp-verify --obligation-in=%t.bmc --backend=z3 --unroll=1 2>&1 | FileCheck %s --check-prefix=BMC-BOUND
+# RUN: %cpp-verify --obligation-in=%t.bmc --lower-only --dump-ir=3 2>&1 | FileCheck %s --check-prefix=BMC-LOWER
+# RUN: %cpp-verify --lower-only --backend=bmc --unroll=2 --obligation-out=%t.bmc-decreases %S/cov_spec_decreases.cpp
+# RUN: %cpp-verify --obligation-in=%t.bmc-decreases --backend=bmc --unroll=2 2>&1 | FileCheck %s --check-prefix=BMC-DECREASES
 # RUN: %cpp-verify --lower-only --obligation-out=%t.fail %S/Inputs/obligation_archive_fail.cpp
 # RUN: not %cpp-verify --obligation-in=%t.fail --backend=z3 2>&1 | FileCheck %s --check-prefix=FAIL
 # RUN: %cpp-verify --lower-only --obligation-out=%t.recommends-lower %S/z3_recommends_warning.cpp
@@ -84,5 +91,10 @@
 # BAD-BINDER-SORT: error: invalid obligation archive: quantifier binder occurrence is not a mathematical integer
 # QUANTIFIED-INDEX: * : int
 # QUANTIFIED-INDEX-NEXT: __quant_{{[0-9]+}}_{{.*}} : int
-# BMC: error: BMC cannot replay a backend-neutral archive
+# BMC: error: BMC cannot replay an untransformed backend-neutral archive
+# BMC-REPLAY-DAG: Verified: zero_iterations [backend=bmc, bound=0]
+# BMC-REPLAY-DAG: BoundedSafe: one_step_may_run (unwinding bound 0 is insufficient for a complete proof) [backend=bmc, bound=0]
+# BMC-BOUND: error: requested BMC bound 1 does not match archived bound 0
+# BMC-LOWER: transform bmc-unroll 0
+# BMC-DECREASES: Verified: dec.decreases [backend=bmc, bound=2]
 # FAIL: obligation_archive_fail.cpp:2:15: error: verification failed: archived_failure

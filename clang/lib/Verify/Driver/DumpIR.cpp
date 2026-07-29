@@ -523,6 +523,9 @@ void verify::dumpVC(const ObligationModule &Module, llvm::raw_ostream &OS) {
   ind(OS, 1) << "identity " << Module.FunctionIdentity << "\n";
   ind(OS, 1) << "features " << formatLogicFeatures(Module.RequiredFeatures)
              << "\n";
+  if (Module.BMCTransform)
+    ind(OS, 1) << "transform bmc-unroll " << Module.BMCTransform->UnrollBound
+               << "\n";
   ind(OS, 1) << "counterexample\n";
   dumpLogicExpr(Module.CounterexampleQuery.get(), OS, 2);
   ind(OS, 1) << "obligations " << Module.Obligations.size() << "\n";

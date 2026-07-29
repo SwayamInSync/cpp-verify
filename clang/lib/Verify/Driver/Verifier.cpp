@@ -664,6 +664,8 @@ public:
           continue;
         }
         ObligationModule DecModule = std::move(*DecModuleOrErr);
+        if (Opts.Backend == BackendKind::BMC)
+          DecModule.BMCTransform = BMCTransformProvenance{Opts.BMCUnroll};
         annotateObligationSources(DecModule);
         if (llvm::Error Error = emitObligationArchive(DecModule)) {
           AllOk = false;
@@ -752,6 +754,8 @@ public:
         continue;
       }
       ObligationModule Module = std::move(*ModuleOrErr);
+      if (Opts.Backend == BackendKind::BMC)
+        Module.BMCTransform = BMCTransformProvenance{Opts.BMCUnroll};
       annotateObligationSources(Module);
       if (llvm::Error Error = emitObligationArchive(Module)) {
         AllOk = false;

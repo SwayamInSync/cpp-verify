@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -172,6 +173,13 @@ struct LogicFunctionDecl {
   std::vector<std::unique_ptr<LogicExpr>> DefinitionLevels;
 };
 
+/// Semantic transform provenance that changes how verification results must be
+/// interpreted. A module carrying this marker contains a finite loop unrolling,
+/// so its obligations must be aggregated with BMC unwinding semantics.
+struct BMCTransformProvenance {
+  unsigned UnrollBound = 0;
+};
+
 /// Canonical output of passive SSA lowering.
 ///
 /// CounterexampleQuery is satisfiable exactly when at least one assertion can
@@ -189,6 +197,7 @@ public:
   LogicFeatureSet RequiredFeatures = 0;
   std::string ResultVarName;
   std::string HeapPrefix;
+  std::optional<BMCTransformProvenance> BMCTransform;
 };
 
 /// Validate every declaration, sort, call signature, obligation identity, and
