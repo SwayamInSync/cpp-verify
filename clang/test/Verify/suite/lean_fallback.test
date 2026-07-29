@@ -9,7 +9,9 @@
 // RUN: not %cpp-verify --timeout=1 --lean-fallback=%t.project --lean-certify %S/spec_fuel_recursive_pass.cpp 2>&1 | FileCheck %s --check-prefix=CERTIFY
 // RUN: cp %S/Inputs/lean_fallback_goal_1.lean %t.project/CppVerify/Proofs/Goal_e255e6a3bdc0555b.lean
 // RUN: cp %S/Inputs/lean_fallback_goal_2.lean %t.project/CppVerify/Proofs/Goal_28110d7c20c54bdc.lean
-// RUN: cp %S/Inputs/lean_fallback_goal_3.lean %t.project/CppVerify/Proofs/Goal_13b6688f6a525d91.lean
+// RUN: sh -c 'if grep -q cppSpecBody_m2_ "$1"; then cp "$2" "$4"; else cp "$3" "$4"; fi' _ %t.project/CppVerify/Generated.lean %S/Inputs/lean_fallback_goal_3_m2.lean %S/Inputs/lean_fallback_goal_3.lean %t.project/CppVerify/Proofs/Goal_13b6688f6a525d91.lean
+// RUN: cp %S/Inputs/lean_fallback_goal_4.lean %t.project/CppVerify/Proofs/Goal_33b05c335010c8a4.lean
+// RUN: cp %S/Inputs/lean_fallback_goal_5.lean %t.project/CppVerify/Proofs/Goal_83db9751642962f4.lean
 // RUN: %cpp-verify --timeout=1 --lean-fallback=%t.project --lean-certify %S/spec_fuel_recursive_pass.cpp 2>&1 | FileCheck %s --check-prefix=CERTIFIED
 // RUN: %cpp-verify --timeout=1 --lean-fallback=%t.project --lean-certify --diagnostics-format=json %S/spec_fuel_recursive_pass.cpp 2>&1 | FileCheck %s --check-prefix=CERTIFIED-JSON
 // RUN: rm -rf %t.json-project
@@ -28,8 +30,7 @@
 // CERTIFIED-JSON: "backend":"lean"
 // CERTIFIED-JSON-SAME: "function":"fibo_step"
 // CERTIFIED-JSON-SAME: "status":"certified"
-// FAILED-JSON: "backend":"lean"
-// FAILED-JSON-SAME: "function":"fibo_step"
+// FAILED-JSON: {"backend":"lean","function":"fibo_step"
 // FAILED-JSON-SAME: "reason":"lean.export-failed"
 // FAILED-JSON-SAME: "status":"unresolved"
 
