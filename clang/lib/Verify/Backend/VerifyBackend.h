@@ -4,6 +4,7 @@
 
 #include "Obligation.h"
 #include "llvm/ADT/StringRef.h"
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
@@ -28,7 +29,9 @@ enum class VerifyReason {
   None,
   Counterexample,
   SolverTimeout,
+  SolverResourceLimit,
   SolverUnknown,
+  QuerySizeLimit,
   EncodingFailure,
   InvalidObligation,
   UnsupportedLogic,
@@ -36,7 +39,9 @@ enum class VerifyReason {
   InvalidBackendResult,
   InconsistentBackendResults,
   IncompleteBound,
-  LeanExportFailure
+  LeanExportFailure,
+  CacheCorrupt,
+  CacheIOFailure
 };
 
 llvm::StringRef verifyReasonCode(VerifyReason Reason);
@@ -79,6 +84,10 @@ struct VerifyResult {
   std::optional<ObligationKind> ObligationType;
   SourceLocation Location;
   ObligationSource Source;
+  uint64_t CacheHits = 0;
+  uint64_t CacheMisses = 0;
+  uint64_t CacheErrors = 0;
+  std::string CacheError;
 };
 
 struct BackendCapabilities {
@@ -99,14 +108,29 @@ protected:
 
 enum class BackendKind { Z3, Lean, BMC };
 
+struct BackendExecutionOptions {
+  unsigned SolverTimeoutMs = 0;
+  /// Per-query deterministic Z3 resource limit; 0 disables it.
+  unsigned SolverResourceLimit = 0;
+  /// Isolated solver jobs. 0 selects the available physical-core count.
+  unsigned Jobs = 1;
+  /// Maximum canonical expression nodes in a module; 0 disables it.
+  uint64_t MaxQueryNodes = 0;
+  std::string ProofCachePath;
+  uint64_t ProofCacheMaxBytes = 1024ULL * 1024ULL * 1024ULL;
+  uint64_t ProofCacheMaxEntries = 100000;
+};
+
 std::unique_ptr<VerifyBackend>
 createVerifyBackend(BackendKind K, llvm::raw_ostream *LeanOut = nullptr,
-                    unsigned BMCUnroll = 10, unsigned SolverTimeoutMs = 0,
+                    unsigned BMCUnroll = 10,
+                    const BackendExecutionOptions &Execution = {},
                     std::vector<std::string> *LeanProjectGoals = nullptr);
 
-VerifyResult lowerObligationModule(const ObligationModule &Module,
-                                   llvm::raw_ostream *Z3Out = nullptr,
-                                   unsigned SolverTimeoutMs = 0);
+VerifyResult
+lowerObligationModule(const ObligationModule &Module,
+                      llvm::raw_ostream *Z3Out = nullptr,
+                      const BackendExecutionOptions &Execution = {});
 
 } // namespace verify
 } // namespace clang

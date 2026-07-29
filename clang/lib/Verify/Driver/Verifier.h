@@ -27,6 +27,16 @@ struct VerifyOptions {
   /// Per-query Z3 timeout in milliseconds; 0 disables it. Non-terminating
   /// queries return Unknown instead of hanging the tool.
   unsigned SolverTimeoutMs = DefaultSolverTimeoutMs;
+  /// Deterministic per-query Z3 resource limit; 0 disables it.
+  unsigned SolverResourceLimit = 0;
+  /// Number of isolated solver jobs. 0 selects available physical cores.
+  unsigned Jobs = 1;
+  /// Maximum canonical expression nodes per backend module; 0 disables it.
+  uint64_t MaxQueryNodes = 0;
+  /// Optional persistent cache of successful dependency-scoped proofs.
+  std::string ProofCachePath;
+  uint64_t ProofCacheMaxBytes = 1024ULL * 1024ULL * 1024ULL;
+  uint64_t ProofCacheMaxEntries = 100000;
   /// Enable valid(p, n)-based buffer bounds obligations. Core expression
   /// definedness checks are always emitted during passivization.
   bool CheckUB = false;

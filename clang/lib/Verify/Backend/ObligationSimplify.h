@@ -15,6 +15,10 @@ struct ObligationSimplificationStats {
   uint64_t FunctionsRemoved = 0;
 };
 
+/// Count canonical expression nodes across goals, queries, and reachable
+/// logical declarations. Diagnostic-only metadata is excluded.
+uint64_t obligationModuleNodeCount(const ObligationModule &Module);
+
 /// Apply conservative, semantics-preserving canonical rewrites and remove
 /// logical declarations unreachable from any proof obligation. The returned
 /// module is fully revalidated with exact goal/query invariants rebuilt.

@@ -4,7 +4,6 @@
 #include "../Backend/ObligationLowering.h"
 #include "../Backend/ObligationSerialization.h"
 #include "../Backend/ObligationSimplify.h"
-#include "../Backend/Z3Encode.h"
 #include "../Frontend/ASTConverter.h"
 #include "../IR/VStmt.h"
 #include "../Transform/LoopUnroll.h"
@@ -61,6 +60,16 @@ static std::string backendSuffix(const VerifyResult &Result) {
       Suffix += ", bound=" + std::to_string(*Result.Bound);
     Suffix += "]";
   }
+  if (Result.CacheHits || Result.CacheMisses || Result.CacheErrors) {
+    Suffix += " [cache=" + std::to_string(Result.CacheHits) + "/" +
+              std::to_string(Result.CacheHits + Result.CacheMisses +
+                             Result.CacheErrors);
+    if (Result.CacheErrors)
+      Suffix += ", errors=" + std::to_string(Result.CacheErrors);
+    Suffix += "]";
+  }
+  if (!Result.CacheError.empty())
+    Suffix += " [cache-error=" + Result.CacheError + "]";
   if (Result.Reason != VerifyReason::None)
     Suffix += " [reason=" + verifyReasonCode(Result.Reason).str() + "]";
   return Suffix;
@@ -614,6 +623,18 @@ public:
            "--backend=lean to validate Lean export"});
       return false;
     }
+    if (Opts.Backend == BackendKind::Lean &&
+        (Opts.Jobs != 1 || !Opts.ProofCachePath.empty())) {
+      Diags.push_back(
+          {VerifyDiagnostic::Error,
+           "--jobs and --proof-cache apply only to Z3-backed verification"});
+      return false;
+    }
+    if (Opts.LowerOnly && !Opts.ProofCachePath.empty()) {
+      Diags.push_back({VerifyDiagnostic::Error,
+                       "--proof-cache cannot be combined with --lower-only"});
+      return false;
+    }
 
     ASTConverter DiscoveryConverter(Ctx);
     auto DiscoveryFunctions = DiscoveryConverter.convertTranslationUnit();
@@ -688,17 +709,23 @@ public:
       LeanOut = LeanFile.get();
     }
 
+    BackendExecutionOptions Execution;
+    Execution.SolverTimeoutMs = Opts.SolverTimeoutMs;
+    Execution.SolverResourceLimit = Opts.SolverResourceLimit;
+    Execution.Jobs = Opts.Jobs;
+    Execution.MaxQueryNodes = Opts.MaxQueryNodes;
+    Execution.ProofCachePath = Opts.ProofCachePath;
+    Execution.ProofCacheMaxBytes = Opts.ProofCacheMaxBytes;
+    Execution.ProofCacheMaxEntries = Opts.ProofCacheMaxEntries;
     auto Backend = createVerifyBackend(
-        Opts.Backend, LeanOut, Opts.BMCUnroll, Opts.SolverTimeoutMs,
+        Opts.Backend, LeanOut, Opts.BMCUnroll, Execution,
         Opts.LeanProjectPath.empty() ? nullptr : &LeanProjectGoals);
     std::unique_ptr<VerifyBackend> LeanFallbackBackend;
     if (!Opts.LeanFallbackProjectPath.empty())
-      LeanFallbackBackend =
-          createVerifyBackend(BackendKind::Lean, LeanFile.get(), 0,
-                              Opts.SolverTimeoutMs, &LeanProjectGoals);
+      LeanFallbackBackend = createVerifyBackend(
+          BackendKind::Lean, LeanFile.get(), 0, {}, &LeanProjectGoals);
     Passivizer P;
     P.setFunctionMap(InterfaceMap);
-    Z3Encoder Z3Lowering;
 
     const unsigned DumpLayers = Opts.DumpIRLayers;
     const bool MultiLayerDump = llvm::popcount(DumpLayers) > 1;
@@ -828,15 +855,18 @@ public:
           continue;
         }
         if (Opts.LowerOnly) {
-          VerifyResult DR = Z3Lowering.lowerModule(DecModule);
+          VerifyResult DR =
+              lowerObligationModule(DecModule, nullptr, Execution);
           if (DR.Status != VerifyStatus::Lowered) {
             AllOk = false;
             AnyFailed = true;
             std::string Message =
                 "Z3 lowering failed for decreases: " + Fn->Name;
+            Message += backendSuffix(DR);
             if (!DR.Message.empty())
               Message += " (" + DR.Message + ")";
-            Diags.push_back({VerifyDiagnostic::Error, std::move(Message)});
+            Diags.push_back({VerifyDiagnostic::Error, std::move(Message),
+                             DR.Location, Fn->Name, std::move(DR)});
             continue;
           }
           if (Fn->IsSpec) {
@@ -942,14 +972,16 @@ public:
         if (DumpLayers & LayerZ3)
           dumpSep();
         llvm::raw_ostream *Z3Out = DumpLayers & LayerZ3 ? DumpOS : nullptr;
-        VerifyResult Lowered = Z3Lowering.lowerModule(Module, Z3Out);
+        VerifyResult Lowered = lowerObligationModule(Module, Z3Out, Execution);
         if (Lowered.Status != VerifyStatus::Lowered) {
           AllOk = false;
           AnyFailed = true;
           std::string Message = "Z3 lowering failed: " + Fn->Name;
+          Message += backendSuffix(Lowered);
           if (!Lowered.Message.empty())
             Message += " (" + Lowered.Message + ")";
-          Diags.push_back({VerifyDiagnostic::Error, std::move(Message)});
+          Diags.push_back({VerifyDiagnostic::Error, std::move(Message),
+                           Lowered.Location, Fn->Name, std::move(Lowered)});
           continue;
         }
       }
@@ -1063,8 +1095,11 @@ public:
     }
 
     if (AnyFailed && !Opts.LowerOnly && Opts.Backend == BackendKind::Z3) {
-      auto Z3 = createVerifyBackend(BackendKind::Z3, nullptr, 0,
-                                    Opts.SolverTimeoutMs);
+      BackendExecutionOptions RecommendsExecution = Execution;
+      RecommendsExecution.Jobs = 1;
+      RecommendsExecution.ProofCachePath.clear();
+      auto Z3 =
+          createVerifyBackend(BackendKind::Z3, nullptr, 0, RecommendsExecution);
       for (const auto &Fn : Functions) {
         if (!FailedCallers.count(Fn->Identity) || Fn->IsSpec || Fn->IsProof ||
             Fn->IsExternalContract)
@@ -1116,6 +1151,15 @@ public:
         Record["reason"] = verifyReasonCode(Result.Reason);
       if (Result.Bound)
         Record["bound"] = static_cast<int64_t>(*Result.Bound);
+      if (Result.CacheHits || Result.CacheMisses || Result.CacheErrors) {
+        llvm::json::Object Cache;
+        Cache["hits"] = static_cast<int64_t>(Result.CacheHits);
+        Cache["misses"] = static_cast<int64_t>(Result.CacheMisses);
+        Cache["errors"] = static_cast<int64_t>(Result.CacheErrors);
+        Record["cache"] = std::move(Cache);
+      }
+      if (!Result.CacheError.empty())
+        Record["cache_error"] = jsonText(Result.CacheError);
       if (!Result.ObligationId.empty()) {
         llvm::json::Object Obligation;
         Obligation["id"] = jsonText(Result.ObligationId);

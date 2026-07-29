@@ -1,0 +1,126 @@
+# RUN: rm -rf %t.cache
+# RUN: %cpp-verify --jobs=4 --proof-cache=%t.cache \
+# RUN:   %S/Inputs/backend_cache_base.cpp 2>&1 | FileCheck %s --check-prefix=MISS
+# RUN: %cpp-verify --jobs=4 --proof-cache=%t.cache \
+# RUN:   %S/Inputs/backend_cache_base.cpp 2>&1 | FileCheck %s --check-prefix=HIT
+# RUN: %cpp-verify --jobs=4 --proof-cache=%t.cache \
+# RUN:   %S/Inputs/backend_cache_changed.cpp 2>&1 | FileCheck %s --check-prefix=PARTIAL
+#
+# RUN: rm -rf %t.limited
+# RUN: %cpp-verify --jobs=4 --proof-cache=%t.limited \
+# RUN:   --proof-cache-max-entries=2 %S/Inputs/backend_cache_base.cpp
+# RUN: %python -c "import pathlib; assert len(list(pathlib.Path(r'%t.limited').glob('llvmcache-cppverify-*'))) <= 2"
+# RUN: %python -c "import os, pathlib; root = pathlib.Path(r'%t.limited'); stale = root / '.cppverify-tmp-stale'; live = root / '.cppverify-tmp-live'; stale.write_text('stale'); live.write_text('live'); os.utime(stale, (1, 1))"
+# RUN: %cpp-verify --jobs=4 --proof-cache=%t.limited \
+# RUN:   --proof-cache-max-entries=2 %S/Inputs/backend_cache_base.cpp
+# RUN: %python -c "import pathlib; root = pathlib.Path(r'%t.limited'); assert not (root / '.cppverify-tmp-stale').exists(); assert (root / '.cppverify-tmp-live').exists(); assert len(list(root.glob('llvmcache-cppverify-*'))) <= 2"
+#
+# RUN: %python -c "import pathlib; [p.write_text('broken') for p in pathlib.Path(r'%t.cache').glob('llvmcache-cppverify-*')]"
+# RUN: not %cpp-verify --jobs=4 --proof-cache=%t.cache \
+# RUN:   %S/Inputs/backend_cache_base.cpp 2>&1 | FileCheck %s --check-prefix=CORRUPT
+#
+# RUN: rm -rf %t.error-prune
+# RUN: %cpp-verify --jobs=4 --proof-cache=%t.error-prune \
+# RUN:   %S/Inputs/backend_cache_base.cpp > /dev/null
+# RUN: %python -c "import pathlib; [p.write_text('broken') for p in pathlib.Path(r'%t.error-prune').glob('llvmcache-cppverify-*')]"
+# RUN: not %cpp-verify --jobs=4 --proof-cache=%t.error-prune \
+# RUN:   --proof-cache-max-entries=1 %S/Inputs/backend_cache_base.cpp 2>&1 | FileCheck %s --check-prefix=CORRUPT
+# RUN: %python -c "import pathlib; assert len(list(pathlib.Path(r'%t.error-prune').glob('llvmcache-cppverify-*'))) <= 1"
+#
+# RUN: not %cpp-verify --jobs=4 --max-query-nodes=1 \
+# RUN:   %S/Inputs/backend_cache_base.cpp 2>&1 | FileCheck %s --check-prefix=NODES
+# RUN: not %cpp-verify --lower-only --max-query-nodes=1 \
+# RUN:   %S/Inputs/backend_cache_base.cpp 2>&1 | FileCheck %s --check-prefix=NODES-LOWER
+# RUN: not %cpp-verify --dump-ir=4 --max-query-nodes=1 \
+# RUN:   %S/Inputs/backend_cache_base.cpp 2>&1 | FileCheck %s --check-prefix=NODES-DUMP
+# RUN: not %cpp-verify --jobs=4 --solver-rlimit=1 \
+# RUN:   %S/Inputs/backend_cache_base.cpp 2>&1 | FileCheck %s --check-prefix=RLIMIT
+# RUN: not %cpp-verify --jobs=4 --solver-rlimit=1 --diagnostics-format=json \
+# RUN:   %S/Inputs/backend_cache_base.cpp 2>&1 | FileCheck %s --check-prefix=RLIMIT-JSON
+# RUN: %cpp-verify --jobs=0 %S/Inputs/backend_cache_base.cpp > /dev/null
+#
+# RUN: %python -c "from pathlib import Path; Path(r'%t.not-directory').write_text('x')"
+# RUN: not %cpp-verify --proof-cache=%t.not-directory \
+# RUN:   %S/Inputs/backend_cache_base.cpp 2>&1 | FileCheck %s --check-prefix=CACHE-IO
+# RUN: not %cpp-verify --backend=lean --jobs=2 \
+# RUN:   %S/Inputs/backend_cache_base.cpp 2>&1 | FileCheck %s --check-prefix=LEAN-JOBS
+# RUN: not %cpp-verify --lower-only --proof-cache=%t.lower-cache \
+# RUN:   %S/Inputs/backend_cache_base.cpp 2>&1 | FileCheck %s --check-prefix=LOWER-CACHE
+#
+# RUN: not %cpp-verify --jobs=1 %S/Inputs/backend_parallel_fail.cpp > %t.serial 2>&1
+# RUN: not %cpp-verify --jobs=4 %S/Inputs/backend_parallel_fail.cpp > %t.parallel 2>&1
+# RUN: diff %t.serial %t.parallel
+#
+# RUN: %cpp-verify --obligation-out=%t.obligations \
+# RUN:   %S/Inputs/backend_cache_base.cpp
+# RUN: not %cpp-verify --obligation-in=%t.obligations --lower-only \
+# RUN:   --max-query-nodes=1 2>&1 | FileCheck %s --check-prefix=NODES-REPLAY
+# RUN: rm -rf %t.replay
+# RUN: %cpp-verify --jobs=4 --proof-cache=%t.replay \
+# RUN:   %S/Inputs/backend_cache_base.cpp > /dev/null
+# RUN: %cpp-verify --jobs=4 --proof-cache=%t.replay \
+# RUN:   --obligation-in=%t.obligations 2>&1 | FileCheck %s --check-prefix=REPLAY
+#
+# RUN: rm -rf %t.failed
+# RUN: not %cpp-verify --jobs=4 --proof-cache=%t.failed \
+# RUN:   %S/Inputs/backend_parallel_fail.cpp 2>&1 | FileCheck %s --check-prefix=FAILED-FIRST
+# RUN: not %cpp-verify --jobs=4 --proof-cache=%t.failed \
+# RUN:   %S/Inputs/backend_parallel_fail.cpp 2>&1 | FileCheck %s --check-prefix=FAILED-SECOND
+#
+# RUN: rm -rf %t.bmc
+# RUN: %cpp-verify --jobs=4 --proof-cache=%t.bmc \
+# RUN:   %S/Inputs/backend_cache_base.cpp > /dev/null
+# RUN: %cpp-verify --backend=bmc --jobs=4 --proof-cache=%t.bmc \
+# RUN:   %S/Inputs/backend_cache_base.cpp 2>&1 | FileCheck %s --check-prefix=BMC-MISS
+# RUN: %cpp-verify --backend=bmc --jobs=4 --proof-cache=%t.bmc \
+# RUN:   %S/Inputs/backend_cache_base.cpp 2>&1 | FileCheck %s --check-prefix=BMC-HIT
+
+# MISS: Verified: cached_identity [backend=z3] [cache=0/
+# MISS: Verified: cached_offset [backend=z3] [cache=
+
+# HIT: Verified: cached_identity [backend=z3] [cache=[[N:[1-9][0-9]*]]/[[N]]]
+# HIT: Verified: cached_offset [backend=z3] [cache=[[M:[1-9][0-9]*]]/[[M]]]
+
+# PARTIAL: Verified: cached_identity [backend=z3] [cache=6/6]
+# PARTIAL: Verified: cached_offset [backend=z3] [cache=1/6]
+
+# CORRUPT: Unresolved: cached_identity
+# CORRUPT-SAME: [reason=cache.corrupt]
+# CORRUPT-SAME: corrupt or incompatible proof cache entry
+
+# NODES: Unresolved: cached_identity [backend=z3] [reason=query.size-limit]
+# NODES-SAME: exceeds query node budget 1
+# NODES-LOWER: error: Z3 lowering failed: cached_identity
+# NODES-LOWER-SAME: [reason=query.size-limit]
+# NODES-LOWER-SAME: exceeds query node budget 1
+# NODES-DUMP: error: Z3 lowering failed: cached_identity
+# NODES-DUMP-SAME: [reason=query.size-limit]
+# NODES-DUMP-SAME: exceeds query node budget 1
+# NODES-REPLAY: Unresolved: cached_identity (canonical obligation module exceeds query node budget 1)
+# NODES-REPLAY-SAME: [reason=query.size-limit]
+
+# RLIMIT: Unresolved: cached_identity
+# RLIMIT-SAME: [reason=solver.resource-limit]
+# RLIMIT-SAME: max. resource limit exceeded
+# RLIMIT-JSON: "reason":"solver.resource-limit"
+
+# CACHE-IO: Unresolved: cached_identity
+# CACHE-IO-SAME: [reason=cache.io-failed]
+# CACHE-IO-SAME: proof cache path is not a directory
+
+# LEAN-JOBS: error: --jobs and --proof-cache apply only to Z3-backed verification
+# LOWER-CACHE: error: --proof-cache cannot be combined with --lower-only
+
+# REPLAY: Verified: cached_identity [backend=z3] [cache=[[RN:[1-9][0-9]*]]/[[RN]]]
+# REPLAY: Verified: cached_offset [backend=z3] [cache=[[RM:[1-9][0-9]*]]/[[RM]]]
+
+# FAILED-FIRST: error: verification failed: parallel_failure
+# FAILED-FIRST-SAME: [cache=0/8]
+# FAILED-SECOND: error: verification failed: parallel_failure
+# FAILED-SECOND-SAME: [cache=6/8]
+
+# BMC-MISS: Verified: cached_identity [backend=bmc
+# BMC-MISS-SAME: [cache=0/6]
+# BMC-HIT: Verified: cached_identity [backend=bmc
+# BMC-HIT-SAME: [cache=[[BN:[1-9][0-9]*]]/[[BN]]]
+# BMC-HIT: Verified: cached_offset [backend=bmc

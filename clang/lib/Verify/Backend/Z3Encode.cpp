@@ -1,17 +1,39 @@
 //===--- Z3Encode.cpp -----------------------------------------------------===//
 #include "Z3Encode.h"
+#include "ObligationSerialization.h"
+#include "ObligationSimplify.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/ThreadPool.h"
+#include "llvm/Support/Threading.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
+#include <z3_api.h>
 
 using namespace clang;
 using namespace verify;
 
 namespace {
+
+// Increment when a Z3 encoding change can invalidate a previously memoized
+// successful verdict without changing the canonical semantic hash format.
+constexpr unsigned Z3ProofCacheAdapterVersion = 1;
+
+std::optional<VerifyResult> querySizeLimitResult(const ObligationModule &Module,
+                                                 uint64_t MaxQueryNodes) {
+  if (MaxQueryNodes == 0 || obligationModuleNodeCount(Module) <= MaxQueryNodes)
+    return std::nullopt;
+  VerifyResult Result;
+  Result.Status = VerifyStatus::Unresolved;
+  Result.Reason = VerifyReason::QuerySizeLimit;
+  Result.Message = "canonical obligation module exceeds query node budget " +
+                   std::to_string(MaxQueryNodes);
+  Result.BackendName = "z3";
+  return Result;
+}
 
 std::optional<std::string> sourceModelValue(const z3::expr &Value,
                                             const LogicSort &Sort) {
@@ -696,6 +718,8 @@ std::optional<z3::expr> Z3Encoder::encodeModule(const ObligationModule &Module,
   z3::params Params(Ctx);
   if (TimeoutMs > 0)
     Params.set("timeout", TimeoutMs);
+  if (ResourceLimit > 0)
+    Params.set("rlimit", ResourceLimit);
   Params.set("mbqi", true);
   Params.set("qi.eager_threshold", 0.0);
   Solver.set(Params);
@@ -832,11 +856,13 @@ VerifyResult Z3Encoder::verifyModule(const ObligationModule &Module,
   default:
     Out.Status = VerifyStatus::Unresolved;
     Out.Message = Solver.reason_unknown();
-    Out.Reason = TimeoutMs > 0 && llvm::StringRef(Out.Message)
-                                      .trim()
-                                      .equals_insensitive("timeout")
-                     ? VerifyReason::SolverTimeout
-                     : VerifyReason::SolverUnknown;
+    llvm::StringRef Reason = llvm::StringRef(Out.Message).trim();
+    if (TimeoutMs > 0 && Reason.equals_insensitive("timeout"))
+      Out.Reason = VerifyReason::SolverTimeout;
+    else if (ResourceLimit > 0 && Reason.contains_insensitive("resource limit"))
+      Out.Reason = VerifyReason::SolverResourceLimit;
+    else
+      Out.Reason = VerifyReason::SolverUnknown;
     return Out;
   }
 }
@@ -852,6 +878,20 @@ VerifyResult Z3Encoder::lowerModule(const ObligationModule &Module,
     *OS << EncodedGoal->to_string() << "\n";
   Out.Status = VerifyStatus::Lowered;
   return Out;
+}
+
+VerifyResult
+verify::lowerObligationModule(const ObligationModule &Module,
+                              llvm::raw_ostream *Z3Out,
+                              const BackendExecutionOptions &Execution) {
+  if (auto Limit = querySizeLimitResult(Module, Execution.MaxQueryNodes))
+    return std::move(*Limit);
+  Z3Encoder Encoder;
+  Encoder.setTimeoutMs(Execution.SolverTimeoutMs);
+  Encoder.setResourceLimit(Execution.SolverResourceLimit);
+  VerifyResult Result = Encoder.lowerModule(Module, Z3Out);
+  Result.BackendName = "z3";
+  return Result;
 }
 
 static VerifyResult finishZ3Result(VerifyResult Result) {
@@ -915,25 +955,197 @@ static VerifyResult finishZ3Result(VerifyResult Result) {
 
 std::vector<VerifyResult>
 Z3VerifyBackend::verifyObligations(const ObligationModule &Module) {
-  Enc.setTimeoutMs(TimeoutMs);
+  if (auto Limit = querySizeLimitResult(Module, MaxQueryNodes))
+    return {std::move(*Limit)};
+
   std::vector<VerifyResult> Results;
   Results.reserve(Module.Obligations.size());
-  for (const Obligation &Item : Module.Obligations) {
-    VerifyResult Result = Enc.verifyModule(
-        Module, Item.CounterexampleQuery.get(), Item.TraceEventCount);
-    Result.ObligationId = Item.StableId.empty() ? Item.Id : Item.StableId;
-    Result.ObligationType = Item.Kind;
-    Result.Location = Item.Loc;
-    Result.Source = Item.Source;
-    if (Result.Status == VerifyStatus::Unresolved)
-      Result.Message = "proof obligation " + Result.ObligationId +
-                       (Result.Message.empty() ? "" : ": " + Result.Message);
-    Results.push_back(finishZ3Result(std::move(Result)));
+  std::vector<std::string> SemanticHashes;
+  std::vector<ProofCacheLookup> CacheLookups;
+  if (Cache) {
+    SemanticHashes.reserve(Module.Obligations.size());
+    CacheLookups.reserve(Module.Obligations.size());
+    for (const Obligation &Item : Module.Obligations) {
+      SemanticHashes.push_back(obligationSemanticHash(Module, Item));
+      CacheLookups.push_back(Cache->lookup(SemanticHashes.back()));
+    }
+  }
+  if (Jobs == 1 || Module.Obligations.size() < 2) {
+    for (size_t I = 0; I != Module.Obligations.size(); ++I)
+      Results.push_back(verifyObligation(
+          Module, Module.Obligations[I],
+          Cache ? llvm::StringRef(SemanticHashes[I]) : llvm::StringRef(),
+          Cache ? &CacheLookups[I] : nullptr));
+  } else {
+    llvm::StdThreadPool Pool(llvm::heavyweight_hardware_concurrency(Jobs));
+    std::vector<std::shared_future<VerifyResult>> Futures;
+    Futures.reserve(Module.Obligations.size());
+    for (size_t I = 0; I != Module.Obligations.size(); ++I) {
+      Futures.push_back(
+          Pool.async([this, &Module, &SemanticHashes, &CacheLookups, I] {
+            return verifyObligation(Module, Module.Obligations[I],
+                                    Cache ? llvm::StringRef(SemanticHashes[I])
+                                          : llvm::StringRef(),
+                                    Cache ? &CacheLookups[I] : nullptr);
+          }));
+    }
+    for (std::shared_future<VerifyResult> &Future : Futures)
+      Results.push_back(Future.get());
+  }
+  if (Cache) {
+    if (llvm::Error Error = Cache->prune()) {
+      std::string Message = llvm::toString(std::move(Error));
+      if (Results.empty()) {
+        VerifyResult Result;
+        Result.Status = VerifyStatus::Unresolved;
+        Result.Reason = VerifyReason::CacheIOFailure;
+        Result.Message = Message;
+        Result.BackendName = "z3";
+        Results.push_back(std::move(Result));
+      } else {
+        ++Results.front().CacheErrors;
+        Results.front().CacheError = std::move(Message);
+      }
+    }
   }
   return Results;
 }
 
+Z3VerifyBackend::Z3VerifyBackend(const BackendExecutionOptions &Execution,
+                                 llvm::StringRef CacheBackendName)
+    : TimeoutMs(Execution.SolverTimeoutMs),
+      ResourceLimit(Execution.SolverResourceLimit), Jobs(Execution.Jobs),
+      MaxQueryNodes(Execution.MaxQueryNodes) {
+  Enc.setTimeoutMs(TimeoutMs);
+  Enc.setResourceLimit(ResourceLimit);
+  if (!Execution.ProofCachePath.empty()) {
+    std::string Identity = CacheBackendName.str() + ";adapter=cppverify-z3-v" +
+                           std::to_string(Z3ProofCacheAdapterVersion) +
+                           ";solver=" + std::string(Z3_get_full_version());
+    Cache = std::make_unique<ProofCache>(
+        Execution.ProofCachePath, std::move(Identity),
+        Execution.ProofCacheMaxBytes, Execution.ProofCacheMaxEntries);
+  }
+}
+
+VerifyResult Z3VerifyBackend::verifyObligation(const ObligationModule &Module,
+                                               const Obligation &Item,
+                                               llvm::StringRef SemanticHash,
+                                               const ProofCacheLookup *Lookup) {
+  VerifyResult Result;
+  if (Cache) {
+    assert(Lookup && !SemanticHash.empty() && "cache lookup was not prepared");
+    if (Lookup->Kind == ProofCacheLookupKind::Hit) {
+      Result.Status = VerifyStatus::Verified;
+      Result.BackendName = "z3";
+      Result.CacheHits = 1;
+    } else if (Lookup->Kind == ProofCacheLookupKind::Corrupt ||
+               Lookup->Kind == ProofCacheLookupKind::IOFailure) {
+      Result.Status = VerifyStatus::Unresolved;
+      Result.Reason = Lookup->Kind == ProofCacheLookupKind::Corrupt
+                          ? VerifyReason::CacheCorrupt
+                          : VerifyReason::CacheIOFailure;
+      Result.Message = Lookup->Message;
+      Result.CacheErrors = 1;
+      Result.CacheError = Lookup->Message;
+    } else {
+      Result.CacheMisses = 1;
+    }
+  }
+
+  if (Result.Status != VerifyStatus::Verified &&
+      Result.Reason != VerifyReason::CacheCorrupt &&
+      Result.Reason != VerifyReason::CacheIOFailure) {
+    Z3Encoder Encoder;
+    Encoder.setTimeoutMs(TimeoutMs);
+    Encoder.setResourceLimit(ResourceLimit);
+    Result = Encoder.verifyModule(Module, Item.CounterexampleQuery.get(),
+                                  Item.TraceEventCount);
+    if (Cache)
+      Result.CacheMisses = 1;
+    if (Cache && Result.Status == VerifyStatus::Verified) {
+      if (llvm::Error Error = Cache->store(SemanticHash)) {
+        Result.CacheErrors = 1;
+        Result.CacheError = llvm::toString(std::move(Error));
+      }
+    }
+  }
+
+  Result.ObligationId = Item.StableId.empty() ? Item.Id : Item.StableId;
+  Result.ObligationType = Item.Kind;
+  Result.Location = Item.Loc;
+  Result.Source = Item.Source;
+  if (Result.Status == VerifyStatus::Unresolved)
+    Result.Message = "proof obligation " + Result.ObligationId +
+                     (Result.Message.empty() ? "" : ": " + Result.Message);
+  return finishZ3Result(std::move(Result));
+}
+
 VerifyResult Z3VerifyBackend::verifyModule(const ObligationModule &Module) {
+  if (auto Limit = querySizeLimitResult(Module, MaxQueryNodes))
+    return std::move(*Limit);
+  if (Jobs != 1 || Cache) {
+    std::vector<VerifyResult> Results = verifyObligations(Module);
+    uint64_t Hits = 0;
+    uint64_t Misses = 0;
+    uint64_t Errors = 0;
+    std::string CacheError;
+    std::optional<VerifyResult> FirstUnresolved;
+    std::optional<VerifyResult> FirstFailure;
+    for (VerifyResult &Result : Results) {
+      Hits += Result.CacheHits;
+      Misses += Result.CacheMisses;
+      Errors += Result.CacheErrors;
+      if (CacheError.empty() && !Result.CacheError.empty())
+        CacheError = Result.CacheError;
+      if (Result.Status == VerifyStatus::Failed && !FirstFailure)
+        FirstFailure = std::move(Result);
+      else if (Result.Status == VerifyStatus::Unresolved && !FirstUnresolved)
+        FirstUnresolved = std::move(Result);
+    }
+    VerifyResult Result;
+    if (FirstFailure)
+      Result = std::move(*FirstFailure);
+    else if (FirstUnresolved) {
+      const bool CacheFailure =
+          FirstUnresolved->Reason == VerifyReason::CacheCorrupt ||
+          FirstUnresolved->Reason == VerifyReason::CacheIOFailure;
+      VerifyResult Whole;
+      if (!CacheFailure)
+        Whole = Enc.verifyModule(Module);
+      if (!CacheFailure && Whole.Status != VerifyStatus::Unresolved) {
+        Result = finishZ3Result(std::move(Whole));
+        if (Cache && Result.Status == VerifyStatus::Verified) {
+          for (const Obligation &Item : Module.Obligations) {
+            if (llvm::Error Error =
+                    Cache->store(obligationSemanticHash(Module, Item))) {
+              ++Errors;
+              if (CacheError.empty())
+                CacheError = llvm::toString(std::move(Error));
+              else
+                llvm::consumeError(std::move(Error));
+            }
+          }
+          if (llvm::Error Error = Cache->prune()) {
+            ++Errors;
+            if (CacheError.empty())
+              CacheError = llvm::toString(std::move(Error));
+            else
+              llvm::consumeError(std::move(Error));
+          }
+        }
+      } else {
+        Result = std::move(*FirstUnresolved);
+      }
+    } else {
+      Result.Status = VerifyStatus::Verified;
+    }
+    Result.CacheHits = Hits;
+    Result.CacheMisses = Misses;
+    Result.CacheErrors = Errors;
+    Result.CacheError = std::move(CacheError);
+    return Result;
+  }
 
   // Spec equations often solve best as one formula. For spec-free programs,
   // use a short complete-VC probe and preserve the configured budget for the

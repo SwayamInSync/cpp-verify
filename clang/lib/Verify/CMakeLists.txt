@@ -29,6 +29,7 @@ add_clang_library(clangVerify
   Backend/Obligation.cpp
   Backend/ObligationSimplify.cpp
   Backend/ObligationSerialization.cpp
+  Backend/ProofCache.cpp
   Backend/Z3Encode.cpp
   Backend/SpecAxioms.cpp
   Backend/VerifyBackend.cpp

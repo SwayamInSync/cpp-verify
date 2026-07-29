@@ -29,11 +29,20 @@ text, and IR dumps intentionally make the stream mixed. Malformed display bytes
 are replaced with the Unicode replacement character, so JSON output remains
 valid UTF-8.
 
-``unknown`` is different from a counterexample. It means Z3 timed out or entered
-a fragment it could not decide, often because the VC combines bounded
+``unknown`` is different from a counterexample. It means Z3 timed out, exhausted
+an explicit resource/query budget, or entered a fragment it could not decide,
+often because the VC combines bounded
 quantifiers with heap arrays. CppVerify may retry smaller ordered obligations,
 but if those also remain unknown it reports the function as **not verified**.
 It never treats solver uncertainty as success.
+
+A requested proof cache is also fail-closed. ``cache.corrupt`` means an entry
+did not exactly match its semantic/backend identity; ``cache.io-failed`` means a
+requested entry could not be read. Neither is treated as a cache miss or a
+proof. A post-proof write or pruning failure is instead explicit cache-error
+telemetry and does not erase the fresh solver proof. Text diagnostics report
+cache hits/queries, while JSON includes ``cache.hits``, ``cache.misses``, and
+``cache.errors``.
 
 For a deliberately invalid program, both outcomes are sound:
 

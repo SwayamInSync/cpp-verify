@@ -35,6 +35,44 @@ prefix is ``Failed``. If safety holds but an unwinding assertion fails, the
 result is ``BoundedSafe(N)``, never an unbounded proof. It reports ``Verified``
 only when both safety and complete unwinding are proved at the selected bound.
 
+Parallel solving and persistent proofs
+--------------------------------------
+
+For a translation unit with several proof obligations:
+
+.. code-block:: bash
+
+   cpp-verify --jobs=4 --proof-cache=.cppverify-cache file.cpp
+
+``--jobs=0`` selects available physical cores. Each ordered obligation runs in
+its own Z3 context, but results are published in source order. Frontend lowering,
+IR/archive output, Lean generation, and diagnostics remain serial, so changing
+the job count does not change the first reported failure.
+
+The cache stores only ``Verified`` individual obligations. Keys include the
+goal's dependency-scoped semantic hash, backend/adapter identity, and exact Z3
+version. A BMC cache entry is separate from an unbounded Z3 entry and retains
+its semantic unroll provenance. Counterexamples, unknown/resource-limited
+queries, and ``BoundedSafe`` results are never cached. Corrupt or unreadable
+entries produce ``Unresolved`` instead of being trusted or silently replaced.
+Use ``--proof-cache-max-mb`` and ``--proof-cache-max-entries`` to bound storage.
+Pruning proceeds even when another cache operation fails; capacity errors evict
+an old record and retry once, and abandoned atomic-write files older than 24
+hours are removed without disturbing newer concurrent writes.
+The opt-in directory is trusted local memoization, not a portable certificate;
+do not make it writable by untrusted users. Lean certification remains the
+independent kernel-checking path.
+
+Solver work can also be bounded explicitly:
+
+.. code-block:: bash
+
+   cpp-verify --timeout=30000 --solver-rlimit=500000 \
+     --max-query-nodes=50000 file.cpp
+
+Timeout, Z3 resource, and canonical query-size exhaustion remain non-success
+results with distinct machine-readable reason codes.
+
 Editable Lean fallback
 ----------------------
 
@@ -104,6 +142,9 @@ construction. Lean scratch replay of bounded records is rejected until the
 generated theorem format carries the same transform provenance.
 Failure-only ``recommends`` checks are not archived, so bytes do not depend on
 whether a prior solver run succeeded or failed.
+The dependency-scoped proof cache is shared by direct verification and replay,
+so identical canonical goals reuse proofs without trusting source paths or
+diagnostic identities.
 
 Modular function calls
 ----------------------
@@ -184,8 +225,9 @@ assertion/postcondition queries with deterministic internal IDs,
 source-anchored public IDs/ranges, original-name typed model metadata, and
 guarded trace events. Display-only diagnostic metadata persists through
 archives but is excluded from semantic hashes, including both positional and
-source-anchored obligation IDs. The default backend first submits the complete
-query.
+source-anchored obligation IDs. The default serial, uncached backend first
+submits the complete query. Parallel or cached execution uses the equivalent
+ordered queries directly.
 ``unsat`` means verified and ``sat`` produces a counterexample. On ``unknown``,
 CppVerify retries the module-owned assertions separately in source order, using
 only entry facts and assumptions that precede each obligation. It does not

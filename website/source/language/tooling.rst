@@ -15,6 +15,8 @@ Standalone verifier
    cpp-verify --lean-fallback=proof file.cpp
    cpp-verify --check-ub file.cpp
    cpp-verify --timeout=20000 file.cpp
+   cpp-verify --jobs=4 --proof-cache=.cppverify-cache file.cpp
+   cpp-verify --solver-rlimit=500000 --max-query-nodes=50000 file.cpp
    cpp-verify --diagnostics-format=json file.cpp
    cpp-verify --dump-ir=1,2,3,4 file.cpp
    cpp-verify --lower-only --dump-ir=1,2,3,4 file.cpp
@@ -66,6 +68,28 @@ Backends
    * - ``--timeout=N``
      - Per-query Z3 timeout in milliseconds (default 30000; ``0`` disables). A query
        that exceeds it is reported as ``unknown`` instead of hanging.
+   * - ``--solver-rlimit=N``
+     - Deterministic per-query Z3 resource budget (default ``0``, disabled).
+       Exhaustion is ``Unresolved`` with reason ``solver.resource-limit``.
+   * - ``--max-query-nodes=N``
+     - On Z3 and BMC, reject a canonical obligation module larger than ``N``
+       expression nodes before verification, lower-only encoding, or a requested
+       Z3 dump (default ``0``, disabled). Exhaustion is fail-closed with reason
+       ``query.size-limit``.
+   * - ``--jobs=N``
+     - Solve ordered obligations in up to ``N`` isolated Z3 contexts while
+       publishing results in source order (default ``1``; ``0`` selects available
+       physical cores). Lean export remains serial.
+   * - ``--proof-cache=DIR``
+     - Persist successful dependency-scoped Z3 or BMC proofs. Failed,
+       unresolved, and bounded-safe results are never proof-cache entries.
+       Corrupt or incompatible entries are rejected rather than treated as hits.
+   * - ``--proof-cache-max-mb=N``
+     - Bound proof-cache storage in MiB (default 1024; ``0`` disables the byte
+       limit).
+   * - ``--proof-cache-max-entries=N``
+     - Bound the number of proof-cache records (default 100000; ``0`` disables
+       the entry limit).
    * - ``--diagnostics-format={text,json}``
      - Select Clang-style text (default) or versioned JSON Lines for verification
        results. JSON records use schema ``cppverify.diagnostic/1``.
@@ -97,6 +121,39 @@ obligation fails, and reports ``Verified`` only when the selected bound itself
 is proved complete. Lean generation reports ``Exported``. Only the pinned,
 admission-free kernel workflow reports ``Certified``.
 
+Parallel solving and proof caching
+----------------------------------
+
+``--jobs`` parallelizes only backend solving. Clang conversion, VCR transforms,
+canonical obligation construction, dumps, archives, Lean generation, and
+diagnostic publication stay serial and deterministic. Each worker owns a fresh
+Z3 context and solver; no AST, backend, or Z3 state is shared between workers.
+The first failing source obligation is therefore identical for ``--jobs=1`` and
+``--jobs=N`` even if worker completion order differs.
+
+With ``--proof-cache``, CppVerify solves and caches individual ordered
+obligations. A cache key combines the dependency-scoped semantic hash, semantic
+hash format, backend namespace, adapter version, and exact Z3 version. BMC uses a
+separate namespace, and its unroll provenance is semantic, so a bounded proof
+cannot satisfy an unbounded Z3 lookup or another bound. Target widths, layout
+constants, UB instrumentation, spec fuel, and other relevant choices are already
+lowered into the canonical goal and its reachable declarations.
+
+Only ``Verified`` obligations are written, using immutable records and atomic
+replacement. Counterexamples, timeouts, resource exhaustion, unknown results,
+and ``BoundedSafe`` frontiers are solved again. A malformed or unreadable lookup
+produces ``cache.corrupt`` or ``cache.io-failed`` rather than proof success.
+Failure to store or prune after a fresh proof is reported as cache-error
+telemetry but does not invalidate that solver verdict. Pruning still runs after
+cache errors, retries capacity-limited writes after eviction, and removes
+abandoned atomic-write files after 24 hours while leaving newer concurrent
+writes alone. Text results show ``[cache=hits/queries]`` and JSON records carry
+``cache.hits``, ``cache.misses``, and ``cache.errors``. The same cache is usable
+during source verification and canonical archive replay. It is a trusted local
+memoization store, not a portable proof certificate: do not share a cache
+directory with untrusted writers. Use Lean certification when independent
+kernel checking is required.
+
 Structured diagnostics
 ----------------------
 
@@ -120,10 +177,11 @@ the same names, ranges, IDs, and trace data during replay.
 
 Each non-success verification result also carries a stable reason code. Current
 codes include ``counterexample``, ``solver.timeout``, ``solver.unknown``,
-``encoding.failed``, ``obligation.invalid``, ``logic.unsupported``,
-``query.missing``, ``backend.invalid-result``,
+``solver.resource-limit``, ``query.size-limit``, ``encoding.failed``,
+``obligation.invalid``, ``logic.unsupported``, ``query.missing``,
+``backend.invalid-result``,
 ``backend.inconsistent-results``, ``bmc.incomplete-bound``, and
-``lean.export-failed``.
+``lean.export-failed``, ``cache.corrupt``, and ``cache.io-failed``.
 
 ``--diagnostics-format=json`` covers verification-result diagnostics.
 Command-line validation and frontend parse errors may still use text. Combining

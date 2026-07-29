@@ -46,8 +46,9 @@ class BMCVerifyBackend : public VerifyBackend {
   unsigned UnrollBound;
 
 public:
-  BMCVerifyBackend(unsigned UnrollBound, unsigned TimeoutMs = 0)
-      : Z3(std::make_unique<Z3VerifyBackend>(TimeoutMs)),
+  BMCVerifyBackend(unsigned UnrollBound,
+                   const BackendExecutionOptions &Execution)
+      : Z3(std::make_unique<Z3VerifyBackend>(Execution, "bmc")),
         UnrollBound(UnrollBound) {}
   llvm::StringRef getName() const override { return "bmc"; }
   BackendCapabilities getCapabilities() const override {
@@ -56,9 +57,30 @@ public:
 
 protected:
   VerifyResult verifyModule(const ObligationModule &Module) override {
+    std::vector<VerifyResult> Results = Z3->verifyObligations(Module);
+    uint64_t CacheHits = 0;
+    uint64_t CacheMisses = 0;
+    uint64_t CacheErrors = 0;
+    std::string CacheError;
+    for (const VerifyResult &Result : Results) {
+      CacheHits += Result.CacheHits;
+      CacheMisses += Result.CacheMisses;
+      CacheErrors += Result.CacheErrors;
+      if (CacheError.empty() && !Result.CacheError.empty())
+        CacheError = Result.CacheError;
+    }
+    auto finish = [&](VerifyResult Result) {
+      Result.CacheHits = CacheHits;
+      Result.CacheMisses = CacheMisses;
+      Result.CacheErrors = CacheErrors;
+      Result.CacheError = CacheError;
+      Result.BackendName = "bmc";
+      Result.Bound = UnrollBound;
+      return Result;
+    };
     std::optional<VerifyResult> FirstUnresolved;
     std::optional<VerifyResult> FailedUnwinding;
-    for (VerifyResult Result : Z3->verifyObligations(Module)) {
+    for (VerifyResult Result : std::move(Results)) {
       if (Result.Status == VerifyStatus::Verified)
         continue;
       if (Result.Status == VerifyStatus::Unresolved) {
@@ -73,23 +95,17 @@ protected:
         continue;
       }
       if (Result.Status == VerifyStatus::Failed) {
-        Result.BackendName = "bmc";
-        Result.Bound = UnrollBound;
-        return Result;
+        return finish(std::move(Result));
       }
       VerifyResult Unexpected;
       Unexpected.Status = VerifyStatus::Unresolved;
       Unexpected.Reason = VerifyReason::InvalidBackendResult;
       Unexpected.Message = "BMC obligation returned an invalid backend status";
-      Unexpected.BackendName = "bmc";
-      Unexpected.Bound = UnrollBound;
-      return Unexpected;
+      return finish(std::move(Unexpected));
     }
 
     if (FirstUnresolved) {
-      FirstUnresolved->BackendName = "bmc";
-      FirstUnresolved->Bound = UnrollBound;
-      return std::move(*FirstUnresolved);
+      return finish(std::move(*FirstUnresolved));
     }
 
     VerifyResult Result;
@@ -102,9 +118,7 @@ protected:
     } else {
       Result.Status = VerifyStatus::Verified;
     }
-    Result.BackendName = "bmc";
-    Result.Bound = UnrollBound;
-    return Result;
+    return finish(std::move(Result));
   }
 };
 } // namespace
@@ -117,8 +131,12 @@ llvm::StringRef verify::verifyReasonCode(VerifyReason Reason) {
     return "counterexample";
   case VerifyReason::SolverTimeout:
     return "solver.timeout";
+  case VerifyReason::SolverResourceLimit:
+    return "solver.resource-limit";
   case VerifyReason::SolverUnknown:
     return "solver.unknown";
+  case VerifyReason::QuerySizeLimit:
+    return "query.size-limit";
   case VerifyReason::EncodingFailure:
     return "encoding.failed";
   case VerifyReason::InvalidObligation:
@@ -135,6 +153,10 @@ llvm::StringRef verify::verifyReasonCode(VerifyReason Reason) {
     return "bmc.incomplete-bound";
   case VerifyReason::LeanExportFailure:
     return "lean.export-failed";
+  case VerifyReason::CacheCorrupt:
+    return "cache.corrupt";
+  case VerifyReason::CacheIOFailure:
+    return "cache.io-failed";
   }
   llvm_unreachable("unknown verification reason");
 }
@@ -223,23 +245,16 @@ VerifyResult VerifyBackend::verify(const ObligationModule &Module) {
 
 std::unique_ptr<VerifyBackend>
 verify::createVerifyBackend(BackendKind K, llvm::raw_ostream *LeanOut,
-                            unsigned BMCUnroll, unsigned SolverTimeoutMs,
+                            unsigned BMCUnroll,
+                            const BackendExecutionOptions &Execution,
                             std::vector<std::string> *LeanProjectGoals) {
   switch (K) {
   case BackendKind::Z3:
-    return std::make_unique<Z3VerifyBackend>(SolverTimeoutMs);
+    return std::make_unique<Z3VerifyBackend>(Execution, "z3");
   case BackendKind::Lean:
     return std::make_unique<LeanVerifyBackend>(LeanOut, LeanProjectGoals);
   case BackendKind::BMC:
-    return std::make_unique<BMCVerifyBackend>(BMCUnroll, SolverTimeoutMs);
+    return std::make_unique<BMCVerifyBackend>(BMCUnroll, Execution);
   }
-  return std::make_unique<Z3VerifyBackend>(SolverTimeoutMs);
-}
-
-VerifyResult verify::lowerObligationModule(const ObligationModule &Module,
-                                           llvm::raw_ostream *Z3Out,
-                                           unsigned SolverTimeoutMs) {
-  Z3Encoder Encoder;
-  Encoder.setTimeoutMs(SolverTimeoutMs);
-  return Encoder.lowerModule(Module, Z3Out);
+  return std::make_unique<Z3VerifyBackend>(Execution, "z3");
 }

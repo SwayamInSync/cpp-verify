@@ -3,6 +3,7 @@
 #define LLVM_CLANG_VERIFY_BACKEND_Z3ENCODE_H
 
 #include "Obligation.h"
+#include "ProofCache.h"
 #include "VerifyBackend.h"
 #include <map>
 #include <optional>
@@ -22,6 +23,7 @@ class Z3Encoder {
   std::map<std::string, const LogicFunctionDecl *> LogicFunctions;
   std::map<std::string, z3::func_decl> SpecFuncDecls;
   unsigned TimeoutMs = 0;
+  unsigned ResourceLimit = 0;
   bool EncodingFailed = false;
   std::string EncodingError;
 
@@ -48,6 +50,7 @@ class Z3Encoder {
 public:
   Z3Encoder();
   void setTimeoutMs(unsigned Ms) { TimeoutMs = Ms; }
+  void setResourceLimit(unsigned Limit) { ResourceLimit = Limit; }
   VerifyResult
   verifyModule(const ObligationModule &Module, const LogicExpr *Query = nullptr,
                std::optional<uint64_t> TraceEventCount = std::nullopt);
@@ -58,11 +61,19 @@ public:
 class Z3VerifyBackend : public VerifyBackend {
   Z3Encoder Enc;
   unsigned TimeoutMs;
+  unsigned ResourceLimit;
+  unsigned Jobs;
+  uint64_t MaxQueryNodes;
+  std::unique_ptr<ProofCache> Cache;
+
+  VerifyResult verifyObligation(const ObligationModule &Module,
+                                const Obligation &Item,
+                                llvm::StringRef SemanticHash = {},
+                                const ProofCacheLookup *Lookup = nullptr);
 
 public:
-  explicit Z3VerifyBackend(unsigned TimeoutMs = 0) : TimeoutMs(TimeoutMs) {
-    Enc.setTimeoutMs(TimeoutMs);
-  }
+  explicit Z3VerifyBackend(const BackendExecutionOptions &Execution = {},
+                           llvm::StringRef CacheBackendName = "z3");
   llvm::StringRef getName() const override { return "z3"; }
   BackendCapabilities getCapabilities() const override {
     return {allLogicFeatures(), true};

@@ -19,6 +19,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdlib>
+#include <limits>
 
 using namespace clang;
 using namespace clang::tooling;
@@ -73,6 +74,37 @@ static cl::opt<unsigned> SolverTimeout(
         "exceeds it is reported as unresolved instead of hanging"),
     cl::init(verify::DefaultSolverTimeoutMs), cl::cat(CppVerifyCategory));
 
+static cl::opt<unsigned> SolverResourceLimit(
+    "solver-rlimit",
+    cl::desc("Per-query deterministic Z3 resource limit (0 = no limit)"),
+    cl::init(0), cl::cat(CppVerifyCategory));
+
+static cl::opt<unsigned>
+    Jobs("jobs",
+         cl::desc("Isolated Z3 solver jobs (0 = available physical cores)"),
+         cl::init(1), cl::cat(CppVerifyCategory));
+
+static cl::opt<uint64_t>
+    MaxQueryNodes("max-query-nodes",
+                  cl::desc("Maximum canonical expression nodes per Z3-backed "
+                           "module (0 = no limit)"),
+                  cl::init(0), cl::cat(CppVerifyCategory));
+
+static cl::opt<std::string> ProofCache(
+    "proof-cache",
+    cl::desc("Cache successful dependency-scoped proofs in this directory"),
+    cl::value_desc("directory"), cl::cat(CppVerifyCategory));
+
+static cl::opt<uint64_t> ProofCacheMaxMB(
+    "proof-cache-max-mb",
+    cl::desc("Maximum proof-cache size in MiB (0 = no byte limit)"),
+    cl::init(1024), cl::cat(CppVerifyCategory));
+
+static cl::opt<uint64_t> ProofCacheMaxEntries(
+    "proof-cache-max-entries",
+    cl::desc("Maximum proof-cache entries (0 = no entry limit)"),
+    cl::init(100000), cl::cat(CppVerifyCategory));
+
 static cl::opt<bool> CheckUB(
     "check-ub",
     cl::desc("Enable valid(p, n)-based buffer bounds checks in addition to "
@@ -102,6 +134,25 @@ namespace {
 static int gVerifyFailures = 0;
 static llvm::raw_ostream *gObligationOut = nullptr;
 
+static uint64_t proofCacheMaxBytes() {
+  constexpr uint64_t MiB = 1024ULL * 1024ULL;
+  return ProofCacheMaxMB > std::numeric_limits<uint64_t>::max() / MiB
+             ? std::numeric_limits<uint64_t>::max()
+             : ProofCacheMaxMB * MiB;
+}
+
+static verify::BackendExecutionOptions backendExecutionOptions() {
+  verify::BackendExecutionOptions Options;
+  Options.SolverTimeoutMs = SolverTimeout;
+  Options.SolverResourceLimit = SolverResourceLimit;
+  Options.Jobs = Jobs;
+  Options.MaxQueryNodes = MaxQueryNodes;
+  Options.ProofCachePath = ProofCache;
+  Options.ProofCacheMaxBytes = proofCacheMaxBytes();
+  Options.ProofCacheMaxEntries = ProofCacheMaxEntries;
+  return Options;
+}
+
 class VerifyConsumer : public ASTConsumer {
 public:
   void HandleTranslationUnit(ASTContext &Ctx) override {
@@ -123,6 +174,12 @@ public:
       VOpts.LeanCertify = LeanCertify.getValue();
       VOpts.BMCUnroll = BMCUnroll.getValue();
       VOpts.SolverTimeoutMs = SolverTimeout.getValue();
+      VOpts.SolverResourceLimit = SolverResourceLimit.getValue();
+      VOpts.Jobs = Jobs.getValue();
+      VOpts.MaxQueryNodes = MaxQueryNodes.getValue();
+      VOpts.ProofCachePath = ProofCache.getValue();
+      VOpts.ProofCacheMaxBytes = proofCacheMaxBytes();
+      VOpts.ProofCacheMaxEntries = ProofCacheMaxEntries.getValue();
       VOpts.CheckUB = CheckUB.getValue();
       VOpts.Diagnostics = DiagnosticsFormat.getValue();
       VOpts.ObligationOut = gObligationOut;
@@ -200,6 +257,15 @@ static void printReplayJSON(const verify::ObligationModule &Module,
     Record["reason"] = verify::verifyReasonCode(Result.Reason);
   if (Result.Bound)
     Record["bound"] = static_cast<int64_t>(*Result.Bound);
+  if (Result.CacheHits || Result.CacheMisses || Result.CacheErrors) {
+    llvm::json::Object Cache;
+    Cache["hits"] = static_cast<int64_t>(Result.CacheHits);
+    Cache["misses"] = static_cast<int64_t>(Result.CacheMisses);
+    Cache["errors"] = static_cast<int64_t>(Result.CacheErrors);
+    Record["cache"] = std::move(Cache);
+  }
+  if (!Result.CacheError.empty())
+    Record["cache_error"] = jsonText(Result.CacheError);
   if (Result.Source.isValid())
     Record["source"] = replaySourceJSON(Result.Source);
   if (!Result.ObligationId.empty()) {
@@ -284,6 +350,16 @@ static int replayObligationArchive() {
                     "certification\n";
     return 1;
   }
+  if (BackendOpt == "lean" && (Jobs != 1 || !ProofCache.empty())) {
+    llvm::errs()
+        << "error: --jobs and --proof-cache apply only to Z3-backed replay\n";
+    return 1;
+  }
+  if (LowerOnly && !ProofCache.empty()) {
+    llvm::errs()
+        << "error: --proof-cache cannot be combined with --lower-only\n";
+    return 1;
+  }
 
   auto Buffer = llvm::MemoryBuffer::getFile(ObligationIn);
   if (!Buffer) {
@@ -358,8 +434,8 @@ static int replayObligationArchive() {
 
   verify::BackendKind Kind = BackendOpt == "lean" ? verify::BackendKind::Lean
                                                   : verify::BackendKind::Z3;
-  std::unique_ptr<verify::VerifyBackend> Backend =
-      verify::createVerifyBackend(Kind, LeanStream, BMCUnroll, SolverTimeout);
+  std::unique_ptr<verify::VerifyBackend> Backend = verify::createVerifyBackend(
+      Kind, LeanStream, BMCUnroll, backendExecutionOptions());
   const unsigned DumpLayers = DumpIR.getNumOccurrences() > 0
                                   ? verify::parseDumpIRLayers(DumpIR.getValue())
                                   : 0;
@@ -372,7 +448,7 @@ static int replayObligationArchive() {
     if (LowerOnly) {
       Result = verify::lowerObligationModule(
           Module, DumpLayers & verify::LayerZ3 ? &llvm::outs() : nullptr,
-          SolverTimeout);
+          backendExecutionOptions());
       if (Result.BackendName.empty())
         Result.BackendName = "z3";
     } else {
@@ -380,7 +456,7 @@ static int replayObligationArchive() {
         std::unique_ptr<verify::VerifyBackend> BMCBackend =
             verify::createVerifyBackend(verify::BackendKind::BMC, nullptr,
                                         Module.BMCTransform->UnrollBound,
-                                        SolverTimeout);
+                                        backendExecutionOptions());
         Result = BMCBackend->verify(Module);
       } else {
         Result = Backend->verify(Module);
@@ -400,6 +476,16 @@ static int replayObligationArchive() {
     if (Result.Bound)
       Suffix += ", bound=" + std::to_string(*Result.Bound);
     Suffix += "]";
+    if (Result.CacheHits || Result.CacheMisses || Result.CacheErrors) {
+      Suffix += " [cache=" + std::to_string(Result.CacheHits) + "/" +
+                std::to_string(Result.CacheHits + Result.CacheMisses +
+                               Result.CacheErrors);
+      if (Result.CacheErrors)
+        Suffix += ", errors=" + std::to_string(Result.CacheErrors);
+      Suffix += "]";
+    }
+    if (!Result.CacheError.empty())
+      Suffix += " [cache-error=" + Result.CacheError + "]";
     if (Result.Reason != verify::VerifyReason::None)
       Suffix +=
           " [reason=" + verify::verifyReasonCode(Result.Reason).str() + "]";

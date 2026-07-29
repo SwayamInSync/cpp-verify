@@ -37,7 +37,7 @@ uint64_t countNodes(const LogicExpr *Expr) {
   return Count;
 }
 
-uint64_t countNodes(const ObligationModule &Module) {
+uint64_t countModuleNodes(const ObligationModule &Module) {
   uint64_t Count = countNodes(Module.CorrectnessGoal.get()) +
                    countNodes(Module.CounterexampleQuery.get());
   for (const Obligation &Item : Module.Obligations)
@@ -254,6 +254,10 @@ void simplifyFunctions(ObligationModule &Module,
 
 } // namespace
 
+uint64_t obligationModuleNodeCount(const ObligationModule &Module) {
+  return countModuleNodes(Module);
+}
+
 llvm::Expected<ObligationModule>
 simplifyObligationModule(ObligationModule Module,
                          ObligationSimplificationStats *OutputStats) {
@@ -266,7 +270,7 @@ simplifyObligationModule(ObligationModule Module,
         "cannot simplify an obligation module with stale feature metadata");
 
   ObligationSimplificationStats Stats;
-  Stats.NodesBefore = countNodes(Module);
+  Stats.NodesBefore = countModuleNodes(Module);
   for (Obligation &Item : Module.Obligations) {
     Item.Goal = simplifyExpr(std::move(Item.Goal), Stats);
     Item.CounterexampleQuery = negate(cloneLogicExpr(Item.Goal.get()));
@@ -288,7 +292,7 @@ simplifyObligationModule(ObligationModule Module,
         llvm::inconvertibleErrorCode(),
         "canonical obligation simplification did not revalidate");
 
-  Stats.NodesAfter = countNodes(Module);
+  Stats.NodesAfter = countModuleNodes(Module);
   if (OutputStats)
     *OutputStats = Stats;
   return std::move(Module);
