@@ -131,4 +131,4 @@ int loop_path()
 // ARCHIVE-SAME: "active":null,"kind":"branch","message":"else"
 
 // BMC: "function":"loop_path"
-// BMC-SAME: "kind":"loop","message":"iteration"
+// BMC-SAME: "kind":"loop","message":"iteration 1"

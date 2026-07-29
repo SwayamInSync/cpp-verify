@@ -34,6 +34,12 @@ std::string obligationSemanticHash(const ObligationModule &Module);
 std::string obligationSemanticHash(const ObligationModule &Module,
                                    const Obligation &Item);
 
+/// SHA-256 for exact dependency-scoped query semantics. Unlike the persistent
+/// proof-cache identity, transformed query contents rather than the enclosing
+/// BMC frontier distinguish bounds, permitting in-process prefix-proof reuse.
+std::string obligationQuerySemanticHash(const ObligationModule &Module,
+                                        const Obligation &Item);
+
 } // namespace verify
 } // namespace clang
 

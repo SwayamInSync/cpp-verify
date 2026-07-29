@@ -37,7 +37,9 @@ Backends
    * - ``--backend=z3``
      - Default. Weakest precondition + Z3 (loops via contracts on the WP path).
    * - ``--backend=bmc``
-     - Unroll loops up to ``--unroll=N`` (default 10), then Z3.
+     - Incrementally unroll loops from zero through ``--unroll=N`` (default 10),
+       stopping at the first counterexample, complete unwinding proof,
+       unresolved query, or maximum frontier.
    * - ``--backend=lean``
      - Write an unchecked Lean 4 scratch-pad to ``--lean-out``. This path does
        not run Z3 and reports ``Exported``, never ``Verified``. Multi-function
@@ -57,7 +59,8 @@ Backends
        non-success result. Rerun with ``--lean-certify`` after completing the
        preserved proof files.
    * - ``--unroll=N``
-     - BMC loop bound only.
+     - Maximum BMC loop bound. Source verification explores ``0..N``;
+       lower-only and archive replay retain one exact recorded bound.
    * - ``--check-ub``
      - On the Z3 and BMC backends, additionally recognize ``valid(p, n)``
        preconditions as buffer extents and prove indexed accesses, modular
@@ -117,8 +120,11 @@ was constructed and encoded, **not** that its obligations are true.
 Backend results are intentionally distinct. Z3 ``unsat`` reports ``Verified``;
 ``sat`` reports a failed source obligation; timeout/``unknown`` reports
 ``Unresolved``. BMC reports ``BoundedSafe(N)`` when only its unwinding
-obligation fails, and reports ``Verified`` only when the selected bound itself
-is proved complete. Lean generation reports ``Exported``. Only the pinned,
+obligation fails at the maximum frontier, and reports ``Verified`` only when an
+explored bound proves complete unwinding. Text diagnostics publish the terminal
+``bound``, all attempted ``bounds``, and the count of successful ordered queries
+reused across prefixes. JSON uses ``bound``, ``explored_bounds``, and
+``reused_queries``. Lean generation reports ``Exported``. Only the pinned,
 admission-free kernel workflow reports ``Certified``.
 
 Parallel solving and proof caching

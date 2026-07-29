@@ -7,7 +7,8 @@ using namespace verify;
 static std::vector<std::unique_ptr<VStmt>>
 unrollStmts(const std::vector<std::unique_ptr<VStmt>> &Stmts, unsigned K);
 
-static std::unique_ptr<VStmt> unrollWhile(const VWhileStmt &W, unsigned K) {
+static std::unique_ptr<VStmt> unrollWhile(const VWhileStmt &W, unsigned K,
+                                          unsigned Iteration = 1) {
   if (K == 0) {
     auto NotCond = std::make_unique<VUnaryOpExpr>(
         VUnaryOp::Not, cloneVExpr(W.Cond.get()), VType::makeBool(), W.Loc);
@@ -20,10 +21,10 @@ static std::unique_ptr<VStmt> unrollWhile(const VWhileStmt &W, unsigned K) {
   }
 
   auto Then = unrollStmts(W.Body, K);
-  Then.push_back(unrollWhile(W, K - 1));
+  Then.push_back(unrollWhile(W, K - 1, Iteration + 1));
   return std::make_unique<VIfStmt>(cloneVExpr(W.Cond.get()), std::move(Then),
                                    std::vector<std::unique_ptr<VStmt>>{}, W.Loc,
-                                   true);
+                                   true, Iteration);
 }
 
 static std::vector<std::unique_ptr<VStmt>>
@@ -39,9 +40,9 @@ unrollStmts(const std::vector<std::unique_ptr<VStmt>> &Stmts, unsigned K) {
       const auto &I = static_cast<const VIfStmt &>(*S);
       auto Then = unrollStmts(I.Then, K);
       auto Else = unrollStmts(I.Else, K);
-      Out.push_back(std::make_unique<VIfStmt>(cloneVExpr(I.Cond.get()),
-                                              std::move(Then), std::move(Else),
-                                              I.Loc, I.IsLoopUnroll));
+      Out.push_back(std::make_unique<VIfStmt>(
+          cloneVExpr(I.Cond.get()), std::move(Then), std::move(Else), I.Loc,
+          I.IsLoopUnroll, I.LoopUnrollIteration));
       continue;
     }
     if (S->K == VStmt::Seq) {

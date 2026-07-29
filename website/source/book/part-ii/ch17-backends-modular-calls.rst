@@ -19,7 +19,9 @@ Verification backends
      - General proofs: functions, pointers, spec/proof, loops via invariant/decreases (WP path).
    * - **BMC**
      - ``cpp-verify --backend=bmc --unroll=N file.cpp``
-     - Small bounded loops: body unrolled ``N`` times, then Z3. Good when loop structure is simple and bounds are tiny.
+     - Small bounded loops: grow the unrolling from zero through ``N`` and stop
+       at the first decisive frontier. Good when loop structure is simple and
+       bounds are tiny.
    * - **Lean**
      - ``cpp-verify --backend=lean --lean-project=proof file.cpp``
      - Generate editable source-attributed goals from the same canonical
@@ -33,7 +35,13 @@ and for the Z3 backend.
 BMC's result is also bounded explicitly. A counterexample inside the explored
 prefix is ``Failed``. If safety holds but an unwinding assertion fails, the
 result is ``BoundedSafe(N)``, never an unbounded proof. It reports ``Verified``
-only when both safety and complete unwinding are proved at the selected bound.
+only when both safety and complete unwinding are proved at an explored bound.
+Successful dependency-scoped prefix queries are reused in-process at later
+bounds; failed, unresolved, and unwinding-frontier queries are always solved.
+Text output lists the attempted bounds and reuse count, while JSON publishes
+``explored_bounds`` and ``reused_queries``. Numbered loop events such as
+``iteration 2`` reconstruct the counterexample depth at the original loop
+source.
 
 Parallel solving and persistent proofs
 --------------------------------------
@@ -134,12 +142,14 @@ pointers, heaps, or assumptions. Canonicalization introduced semantic-hash
 format v2; format v3 removes diagnostic obligation identities from the preimage.
 The compatible archive wire format remains ``cppverify.obligation/1``.
 
-BMC-produced records retain their exact unroll bound. Replay uses BMC unwinding
-aggregation for those records, so an incomplete frontier remains
-``BoundedSafe(N)``. BMC cannot be applied to an untransformed record because
-loop unrolling is a VCR transformation that occurs before canonical obligation
-construction. Lean scratch replay of bounded records is rejected until the
-generated theorem format carries the same transform provenance.
+BMC source verification archives only the terminal module for each function.
+Those records retain their exact explored unroll bound. Replay is fixed-bound
+and uses BMC unwinding aggregation, so an incomplete frontier remains
+``BoundedSafe(N)`` rather than rerunning the incremental source strategy. BMC
+cannot be applied to an untransformed record because loop unrolling is a VCR
+transformation that occurs before canonical obligation construction. Lean
+scratch replay of bounded records is rejected until the generated theorem
+format carries the same transform provenance.
 Failure-only ``recommends`` checks are not archived, so bytes do not depend on
 whether a prior solver run succeeded or failed.
 The dependency-scoped proof cache is shared by direct verification and replay,

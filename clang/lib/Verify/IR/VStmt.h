@@ -109,11 +109,13 @@ struct VIfStmt : VStmt {
   std::vector<std::unique_ptr<VStmt>> Then;
   std::vector<std::unique_ptr<VStmt>> Else;
   bool IsLoopUnroll;
+  unsigned LoopUnrollIteration;
   VIfStmt(std::unique_ptr<VExpr> C, std::vector<std::unique_ptr<VStmt>> T,
           std::vector<std::unique_ptr<VStmt>> E, SourceLocation Loc,
-          bool IsLoopUnroll = false)
+          bool IsLoopUnroll = false, unsigned LoopUnrollIteration = 0)
       : VStmt(If, Loc), Cond(std::move(C)), Then(std::move(T)),
-        Else(std::move(E)), IsLoopUnroll(IsLoopUnroll) {}
+        Else(std::move(E)), IsLoopUnroll(IsLoopUnroll),
+        LoopUnrollIteration(LoopUnrollIteration) {}
 };
 
 struct VAssertStmt : VStmt {

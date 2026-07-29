@@ -43,13 +43,14 @@ protected:
 
 class BMCVerifyBackend : public VerifyBackend {
   std::unique_ptr<Z3VerifyBackend> Z3;
-  unsigned UnrollBound;
+  unsigned MaxUnrollBound;
 
 public:
   BMCVerifyBackend(unsigned UnrollBound,
                    const BackendExecutionOptions &Execution)
-      : Z3(std::make_unique<Z3VerifyBackend>(Execution, "bmc")),
-        UnrollBound(UnrollBound) {}
+      : Z3(std::make_unique<Z3VerifyBackend>(Execution, "bmc",
+                                             /*ReuseVerifiedQueries=*/true)),
+        MaxUnrollBound(UnrollBound) {}
   llvm::StringRef getName() const override { return "bmc"; }
   BackendCapabilities getCapabilities() const override {
     return {allLogicFeatures(), true};
@@ -57,15 +58,33 @@ public:
 
 protected:
   VerifyResult verifyModule(const ObligationModule &Module) override {
+    if (!Module.BMCTransform) {
+      VerifyResult Result;
+      Result.Status = VerifyStatus::Unresolved;
+      Result.Reason = VerifyReason::InvalidBackendResult;
+      Result.Message = "BMC backend requires bounded transform provenance";
+      return Result;
+    }
+    const unsigned UnrollBound = Module.BMCTransform->UnrollBound;
+    if (UnrollBound > MaxUnrollBound) {
+      VerifyResult Result;
+      Result.Status = VerifyStatus::Unresolved;
+      Result.Reason = VerifyReason::InvalidBackendResult;
+      Result.Message = "BMC module bound exceeds the configured maximum";
+      Result.Bound = UnrollBound;
+      return Result;
+    }
     std::vector<VerifyResult> Results = Z3->verifyObligations(Module);
     uint64_t CacheHits = 0;
     uint64_t CacheMisses = 0;
     uint64_t CacheErrors = 0;
+    uint64_t ReusedQueries = 0;
     std::string CacheError;
     for (const VerifyResult &Result : Results) {
       CacheHits += Result.CacheHits;
       CacheMisses += Result.CacheMisses;
       CacheErrors += Result.CacheErrors;
+      ReusedQueries += Result.ReusedQueries;
       if (CacheError.empty() && !Result.CacheError.empty())
         CacheError = Result.CacheError;
     }
@@ -74,6 +93,7 @@ protected:
       Result.CacheMisses = CacheMisses;
       Result.CacheErrors = CacheErrors;
       Result.CacheError = CacheError;
+      Result.ReusedQueries = ReusedQueries;
       Result.BackendName = "bmc";
       Result.Bound = UnrollBound;
       return Result;

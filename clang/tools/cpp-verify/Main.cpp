@@ -64,7 +64,7 @@ static cl::opt<bool> LeanCertify(
     cl::init(false), cl::cat(CppVerifyCategory));
 
 static cl::opt<unsigned>
-    BMCUnroll("unroll", cl::desc("Loop unroll bound for --backend=bmc"),
+    BMCUnroll("unroll", cl::desc("Maximum loop unroll bound for --backend=bmc"),
               cl::init(10), cl::cat(CppVerifyCategory));
 
 static cl::opt<unsigned> SolverTimeout(
@@ -257,6 +257,14 @@ static void printReplayJSON(const verify::ObligationModule &Module,
     Record["reason"] = verify::verifyReasonCode(Result.Reason);
   if (Result.Bound)
     Record["bound"] = static_cast<int64_t>(*Result.Bound);
+  if (!Result.ExploredBounds.empty()) {
+    llvm::json::Array Bounds;
+    for (unsigned Bound : Result.ExploredBounds)
+      Bounds.push_back(static_cast<int64_t>(Bound));
+    Record["explored_bounds"] = std::move(Bounds);
+  }
+  if (Result.ReusedQueries)
+    Record["reused_queries"] = static_cast<int64_t>(Result.ReusedQueries);
   if (Result.CacheHits || Result.CacheMisses || Result.CacheErrors) {
     llvm::json::Object Cache;
     Cache["hits"] = static_cast<int64_t>(Result.CacheHits);

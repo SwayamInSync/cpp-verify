@@ -3614,10 +3614,17 @@ public:
                                 makeNot(cloneVExpr(Cond.get()), I.Loc), I.Loc);
       const PassiveTraceKind TraceKind =
           I.IsLoopUnroll ? PassiveTraceKind::Loop : PassiveTraceKind::Branch;
-      emitTrace(TraceKind, I.IsLoopUnroll ? "iteration" : "then",
-                ThenActive.get(), I.Loc);
-      emitTrace(TraceKind, I.IsLoopUnroll ? "exit" : "else", ElseActive.get(),
-                I.Loc);
+      const std::string ThenMessage =
+          I.IsLoopUnroll ? "iteration " + std::to_string(I.LoopUnrollIteration)
+                         : "then";
+      const std::string ElseMessage =
+          I.IsLoopUnroll
+              ? "exit after " + std::to_string(I.LoopUnrollIteration == 0
+                                                   ? 0
+                                                   : I.LoopUnrollIteration - 1)
+              : "else";
+      emitTrace(TraceKind, ThenMessage, ThenActive.get(), I.Loc);
+      emitTrace(TraceKind, ElseMessage, ElseActive.get(), I.Loc);
       PassiveProgram ThenP;
       PassiveProgram ElseP;
       for (const auto &TS : I.Then)

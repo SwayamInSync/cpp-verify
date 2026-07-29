@@ -236,7 +236,10 @@ static void dumpVStmt(const VStmt &S, llvm::raw_ostream &OS, unsigned Depth) {
     break;
   case VStmt::If: {
     const auto &I = static_cast<const VIfStmt &>(S);
-    OS << "if\n";
+    OS << "if";
+    if (I.IsLoopUnroll)
+      OS << " loop-unroll " << I.LoopUnrollIteration;
+    OS << "\n";
     dumpVExpr(I.Cond.get(), OS, Depth + 1);
     for (const auto &T : I.Then)
       dumpVStmt(*T, OS, Depth + 1);

@@ -960,38 +960,51 @@ Z3VerifyBackend::verifyObligations(const ObligationModule &Module) {
 
   std::vector<VerifyResult> Results;
   Results.reserve(Module.Obligations.size());
-  std::vector<std::string> SemanticHashes;
+  std::vector<std::string> CacheHashes;
+  std::vector<std::string> QueryHashes;
   std::vector<ProofCacheLookup> CacheLookups;
   if (Cache) {
-    SemanticHashes.reserve(Module.Obligations.size());
+    CacheHashes.reserve(Module.Obligations.size());
     CacheLookups.reserve(Module.Obligations.size());
     for (const Obligation &Item : Module.Obligations) {
-      SemanticHashes.push_back(obligationSemanticHash(Module, Item));
-      CacheLookups.push_back(Cache->lookup(SemanticHashes.back()));
+      CacheHashes.push_back(obligationSemanticHash(Module, Item));
+      CacheLookups.push_back(Cache->lookup(CacheHashes.back()));
     }
   }
+  if (ReuseVerifiedQueries) {
+    QueryHashes.reserve(Module.Obligations.size());
+    for (const Obligation &Item : Module.Obligations)
+      QueryHashes.push_back(obligationQuerySemanticHash(Module, Item));
+  }
+  auto IsReused = [&](size_t I) {
+    return ReuseVerifiedQueries && VerifiedQueries.count(QueryHashes[I]) != 0;
+  };
   if (Jobs == 1 || Module.Obligations.size() < 2) {
     for (size_t I = 0; I != Module.Obligations.size(); ++I)
       Results.push_back(verifyObligation(
           Module, Module.Obligations[I],
-          Cache ? llvm::StringRef(SemanticHashes[I]) : llvm::StringRef(),
-          Cache ? &CacheLookups[I] : nullptr));
+          Cache ? llvm::StringRef(CacheHashes[I]) : llvm::StringRef(),
+          Cache ? &CacheLookups[I] : nullptr, IsReused(I)));
   } else {
     llvm::StdThreadPool Pool(llvm::heavyweight_hardware_concurrency(Jobs));
     std::vector<std::shared_future<VerifyResult>> Futures;
     Futures.reserve(Module.Obligations.size());
     for (size_t I = 0; I != Module.Obligations.size(); ++I) {
-      Futures.push_back(
-          Pool.async([this, &Module, &SemanticHashes, &CacheLookups, I] {
-            return verifyObligation(Module, Module.Obligations[I],
-                                    Cache ? llvm::StringRef(SemanticHashes[I])
-                                          : llvm::StringRef(),
-                                    Cache ? &CacheLookups[I] : nullptr);
+      Futures.push_back(Pool.async(
+          [this, &Module, &CacheHashes, &CacheLookups, &IsReused, I] {
+            return verifyObligation(
+                Module, Module.Obligations[I],
+                Cache ? llvm::StringRef(CacheHashes[I]) : llvm::StringRef(),
+                Cache ? &CacheLookups[I] : nullptr, IsReused(I));
           }));
     }
     for (std::shared_future<VerifyResult> &Future : Futures)
       Results.push_back(Future.get());
   }
+  if (ReuseVerifiedQueries)
+    for (size_t I = 0; I != Results.size(); ++I)
+      if (Results[I].Status == VerifyStatus::Verified)
+        VerifiedQueries.insert(QueryHashes[I]);
   if (Cache) {
     if (llvm::Error Error = Cache->prune()) {
       std::string Message = llvm::toString(std::move(Error));
@@ -1012,10 +1025,12 @@ Z3VerifyBackend::verifyObligations(const ObligationModule &Module) {
 }
 
 Z3VerifyBackend::Z3VerifyBackend(const BackendExecutionOptions &Execution,
-                                 llvm::StringRef CacheBackendName)
+                                 llvm::StringRef CacheBackendName,
+                                 bool ReuseVerifiedQueries)
     : TimeoutMs(Execution.SolverTimeoutMs),
       ResourceLimit(Execution.SolverResourceLimit), Jobs(Execution.Jobs),
-      MaxQueryNodes(Execution.MaxQueryNodes) {
+      MaxQueryNodes(Execution.MaxQueryNodes),
+      ReuseVerifiedQueries(ReuseVerifiedQueries) {
   Enc.setTimeoutMs(TimeoutMs);
   Enc.setResourceLimit(ResourceLimit);
   if (!Execution.ProofCachePath.empty()) {
@@ -1031,9 +1046,14 @@ Z3VerifyBackend::Z3VerifyBackend(const BackendExecutionOptions &Execution,
 VerifyResult Z3VerifyBackend::verifyObligation(const ObligationModule &Module,
                                                const Obligation &Item,
                                                llvm::StringRef SemanticHash,
-                                               const ProofCacheLookup *Lookup) {
+                                               const ProofCacheLookup *Lookup,
+                                               bool Reused) {
   VerifyResult Result;
-  if (Cache) {
+  if (Reused) {
+    Result.Status = VerifyStatus::Verified;
+    Result.BackendName = "z3";
+    Result.ReusedQueries = 1;
+  } else if (Cache) {
     assert(Lookup && !SemanticHash.empty() && "cache lookup was not prepared");
     if (Lookup->Kind == ProofCacheLookupKind::Hit) {
       Result.Status = VerifyStatus::Verified;
@@ -1089,6 +1109,7 @@ VerifyResult Z3VerifyBackend::verifyModule(const ObligationModule &Module) {
     uint64_t Hits = 0;
     uint64_t Misses = 0;
     uint64_t Errors = 0;
+    uint64_t Reused = 0;
     std::string CacheError;
     std::optional<VerifyResult> FirstUnresolved;
     std::optional<VerifyResult> FirstFailure;
@@ -1096,6 +1117,7 @@ VerifyResult Z3VerifyBackend::verifyModule(const ObligationModule &Module) {
       Hits += Result.CacheHits;
       Misses += Result.CacheMisses;
       Errors += Result.CacheErrors;
+      Reused += Result.ReusedQueries;
       if (CacheError.empty() && !Result.CacheError.empty())
         CacheError = Result.CacheError;
       if (Result.Status == VerifyStatus::Failed && !FirstFailure)
@@ -1144,6 +1166,7 @@ VerifyResult Z3VerifyBackend::verifyModule(const ObligationModule &Module) {
     Result.CacheMisses = Misses;
     Result.CacheErrors = Errors;
     Result.CacheError = std::move(CacheError);
+    Result.ReusedQueries = Reused;
     return Result;
   }
 

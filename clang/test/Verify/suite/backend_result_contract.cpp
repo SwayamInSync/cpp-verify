@@ -23,9 +23,9 @@ int invalid_result()
 // Z3: backend_result_contract.cpp:{{[0-9]+}}:{{[0-9]+}}: error: verification failed: invalid_result [{{.*}}::postcondition@{{[0-9]+}}:{{[0-9]+}}#2]
 // Z3-SAME: [backend=z3] [reason=counterexample]
 
-// BMC-DAG: Verified: valid_result [backend=bmc, bound=1]
+// BMC-DAG: Verified: valid_result [backend=bmc, bound=0]
 // BMC: backend_result_contract.cpp:{{[0-9]+}}:{{[0-9]+}}: error: verification failed: invalid_result [{{.*}}::postcondition@{{[0-9]+}}:{{[0-9]+}}#2]
-// BMC-SAME: [backend=bmc, bound=1] [reason=counterexample]
+// BMC-SAME: [backend=bmc, bound=0] [reason=counterexample]
 
 // LOWER-DAG: Lowered: valid_result
 // LOWER-DAG: Lowered: invalid_result

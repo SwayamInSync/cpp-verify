@@ -372,10 +372,12 @@ synthesis and heap CEGAR remain research-heavy.
 Backend-specific boundaries
 ---------------------------
 
-**BMC** explores a finite loop bound and is useful for shallow counterexamples.
-An unwinding assertion prevents an insufficient bound from silently becoming an
-unbounded proof. Path explosion, incremental bound growth, trace reconstruction,
-and broad runtime semantics remain future work.
+**BMC** incrementally explores finite loop bounds and is useful for shallow
+counterexamples. An unwinding assertion prevents an insufficient maximum bound
+from silently becoming an unbounded proof. Successful prefix queries are reused,
+and numbered source loop events identify the failing iteration. Path explosion,
+concurrency schedules, solver-state push/pop reuse, and broad runtime semantics
+remain future work.
 
 **Lean** consumes the same typed canonical obligation as Z3. Standalone export
 is an unchecked scratch-pad and reports ``Exported``. Project mode emits

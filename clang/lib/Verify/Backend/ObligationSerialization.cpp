@@ -451,14 +451,17 @@ public:
     }
   }
 
-  void writeObligationSemantics(const ObligationModule &Module,
-                                const Obligation &Item) {
-    writeString("cppverify-obligation-semantic");
-    writeU32(ObligationSemanticHashVersion);
+  void writeObligationSemantics(
+      const ObligationModule &Module, const Obligation &Item,
+      bool IncludeBMCTransform = true,
+      llvm::StringRef Domain = "cppverify-obligation-semantic",
+      uint32_t Version = ObligationSemanticHashVersion) {
+    writeString(Domain);
+    writeU32(Version);
     writeString(Module.FunctionIdentity);
     writeString(Module.ResultVarName);
     writeString(Module.HeapPrefix);
-    if (Module.BMCTransform) {
+    if (IncludeBMCTransform && Module.BMCTransform) {
       writeString("bmc-unroll");
       writeU32(Module.BMCTransform->UnrollBound);
     }
@@ -853,5 +856,14 @@ std::string verify::obligationSemanticHash(const ObligationModule &Module,
                                            const Obligation &Item) {
   ArchiveWriter Writer(false);
   Writer.writeObligationSemantics(Module, Item);
+  return sha256(Writer.take());
+}
+
+std::string verify::obligationQuerySemanticHash(const ObligationModule &Module,
+                                                const Obligation &Item) {
+  ArchiveWriter Writer(false);
+  Writer.writeObligationSemantics(Module, Item,
+                                  /*IncludeBMCTransform=*/false,
+                                  "cppverify-obligation-query", 1);
   return sha256(Writer.take());
 }

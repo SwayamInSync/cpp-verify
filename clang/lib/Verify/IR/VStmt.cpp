@@ -43,7 +43,8 @@ std::unique_ptr<VStmt> verify::cloneVStmt(const VStmt *S) {
     for (const auto &E : I.Else)
       Else.push_back(cloneVStmt(E.get()));
     return std::make_unique<VIfStmt>(cloneVExpr(I.Cond.get()), std::move(Then),
-                                     std::move(Else), I.Loc, I.IsLoopUnroll);
+                                     std::move(Else), I.Loc, I.IsLoopUnroll,
+                                     I.LoopUnrollIteration);
   }
   case VStmt::While: {
     const auto &W = static_cast<const VWhileStmt &>(*S);

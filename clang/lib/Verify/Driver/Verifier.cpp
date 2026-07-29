@@ -72,6 +72,17 @@ static std::string backendSuffix(const VerifyResult &Result) {
     Suffix += " [cache-error=" + Result.CacheError + "]";
   if (Result.Reason != VerifyReason::None)
     Suffix += " [reason=" + verifyReasonCode(Result.Reason).str() + "]";
+  if (Result.ExploredBounds.size() > 1) {
+    Suffix += " [bounds=";
+    for (size_t I = 0; I != Result.ExploredBounds.size(); ++I) {
+      if (I != 0)
+        Suffix += ",";
+      Suffix += std::to_string(Result.ExploredBounds[I]);
+    }
+    Suffix += "]";
+  }
+  if (Result.ReusedQueries)
+    Suffix += " [reused-queries=" + std::to_string(Result.ReusedQueries) + "]";
   return Suffix;
 }
 
@@ -767,32 +778,28 @@ public:
       std::optional<VFunction> PreparedFn;
       std::optional<VFunction> UnrolledFn;
       std::optional<std::string> UBError;
-      const VFunction &WorkFn = [&]() -> const VFunction & {
-        if (Fn->IsSpec) {
-          if (Fn->NeedsDecreasesCheck)
-            return *Fn;
-          return *Fn;
-        }
+      const VFunction *WorkFn = Fn.get();
+      if (!Fn->IsSpec) {
         PreparedFn = cloneVFunction(*Fn);
         // `valid(p, n)` is a recognized UB marker. Discover it before spec
         // preparation folds its deliberately trivial body to `true`.
         if (Opts.CheckUB && (Opts.Backend == BackendKind::Z3 ||
                              Opts.Backend == BackendKind::BMC))
           UBError = instrumentUBChecks(*PreparedFn);
-        if (UBError)
-          return *PreparedFn;
-        SpecInliner Inliner(FnMap, PreparedFn->SpecFuel);
-        if (Opts.Backend == BackendKind::Z3 ||
-            Opts.Backend == BackendKind::Lean)
-          Inliner.prepareFunctionAxiomatic(*PreparedFn);
-        else
-          Inliner.prepareFunction(*PreparedFn);
-        if (Opts.Backend == BackendKind::BMC) {
-          UnrolledFn = LoopUnroller::unroll(*PreparedFn, Opts.BMCUnroll);
-          return *UnrolledFn;
+        if (!UBError) {
+          SpecInliner Inliner(FnMap, PreparedFn->SpecFuel);
+          if (Opts.Backend == BackendKind::Z3 ||
+              Opts.Backend == BackendKind::Lean)
+            Inliner.prepareFunctionAxiomatic(*PreparedFn);
+          else
+            Inliner.prepareFunction(*PreparedFn);
         }
-        return *PreparedFn;
-      }();
+        WorkFn = &*PreparedFn;
+        if (!UBError && Opts.Backend == BackendKind::BMC && Opts.LowerOnly) {
+          UnrolledFn = LoopUnroller::unroll(*PreparedFn, Opts.BMCUnroll);
+          WorkFn = &*UnrolledFn;
+        }
+      }
 
       if (UBError) {
         AllOk = false;
@@ -918,42 +925,123 @@ public:
         }
       }
 
-      if (DumpLayers & LayerVCR) {
-        dumpSep();
-        dumpVFunction(WorkFn, *DumpOS);
+      std::optional<PassiveProgram> BMCProgram;
+      std::optional<ObligationModule> BMCModule;
+      std::optional<VerifyResult> BMCResult;
+      ObligationSimplificationStats BMCSimplification;
+      if (Opts.Backend == BackendKind::BMC && !Opts.LowerOnly) {
+        std::vector<unsigned> ExploredBounds;
+        uint64_t CacheHits = 0;
+        uint64_t CacheMisses = 0;
+        uint64_t CacheErrors = 0;
+        uint64_t ReusedQueries = 0;
+        std::string CacheError;
+        bool PreparationFailed = false;
+        for (unsigned Bound = 0;; ++Bound) {
+          UnrolledFn = LoopUnroller::unroll(*PreparedFn, Bound);
+          Passivizer BoundPassivizer;
+          BoundPassivizer.setFunctionMap(InterfaceMap);
+          PassiveProgram BoundProgram = BoundPassivizer.run(*UnrolledFn);
+          auto BoundModuleOrErr = buildObligationModule(BoundProgram);
+          if (!BoundModuleOrErr) {
+            AllOk = false;
+            AnyFailed = true;
+            Diags.push_back(
+                {VerifyDiagnostic::Unresolved,
+                 "BMC obligation lowering failed at bound " +
+                     std::to_string(Bound) + ": " + Fn->Name + " (" +
+                     llvm::toString(BoundModuleOrErr.takeError()) + ")"});
+            PreparationFailed = true;
+            break;
+          }
+          ObligationSimplificationStats BoundSimplification;
+          auto SimplifiedBoundModule = simplifyObligationModule(
+              std::move(*BoundModuleOrErr), &BoundSimplification);
+          if (!SimplifiedBoundModule) {
+            AllOk = false;
+            AnyFailed = true;
+            Diags.push_back(
+                {VerifyDiagnostic::Unresolved,
+                 "BMC obligation simplification failed at bound " +
+                     std::to_string(Bound) + ": " + Fn->Name + " (" +
+                     llvm::toString(SimplifiedBoundModule.takeError()) + ")"});
+            PreparationFailed = true;
+            break;
+          }
+          ObligationModule BoundModule = std::move(*SimplifiedBoundModule);
+          BoundModule.BMCTransform = BMCTransformProvenance{Bound};
+          annotateObligationSources(BoundModule);
+          VerifyResult Result = Backend->verify(BoundModule);
+          ExploredBounds.push_back(Bound);
+          CacheHits += Result.CacheHits;
+          CacheMisses += Result.CacheMisses;
+          CacheErrors += Result.CacheErrors;
+          ReusedQueries += Result.ReusedQueries;
+          if (CacheError.empty() && !Result.CacheError.empty())
+            CacheError = Result.CacheError;
+
+          if (Result.Status != VerifyStatus::BoundedSafe ||
+              Bound == Opts.BMCUnroll) {
+            Result.CacheHits = CacheHits;
+            Result.CacheMisses = CacheMisses;
+            Result.CacheErrors = CacheErrors;
+            Result.CacheError = std::move(CacheError);
+            Result.ReusedQueries = ReusedQueries;
+            Result.ExploredBounds = std::move(ExploredBounds);
+            WorkFn = &*UnrolledFn;
+            BMCProgram = std::move(BoundProgram);
+            BMCModule = std::move(BoundModule);
+            BMCResult = std::move(Result);
+            BMCSimplification = BoundSimplification;
+            break;
+          }
+        }
+        if (PreparationFailed)
+          continue;
       }
 
-      PassiveProgram PP = P.run(WorkFn);
+      if (DumpLayers & LayerVCR) {
+        dumpSep();
+        dumpVFunction(*WorkFn, *DumpOS);
+      }
+
+      PassiveProgram PP = BMCProgram ? std::move(*BMCProgram) : P.run(*WorkFn);
       if (DumpLayers & LayerPassive) {
         dumpSep();
         dumpPassiveProgram(Fn->Name, PP, *DumpOS);
       }
 
-      auto ModuleOrErr = buildObligationModule(PP);
-      if (!ModuleOrErr) {
-        AllOk = false;
-        AnyFailed = true;
-        Diags.push_back({VerifyDiagnostic::Unresolved,
-                         "obligation lowering failed: " + Fn->Name + " (" +
-                             llvm::toString(ModuleOrErr.takeError()) + ")"});
-        continue;
-      }
       ObligationSimplificationStats Simplification;
-      auto SimplifiedModule =
-          simplifyObligationModule(std::move(*ModuleOrErr), &Simplification);
-      if (!SimplifiedModule) {
-        AllOk = false;
-        AnyFailed = true;
-        Diags.push_back(
-            {VerifyDiagnostic::Unresolved,
-             "obligation simplification failed: " + Fn->Name + " (" +
-                 llvm::toString(SimplifiedModule.takeError()) + ")"});
-        continue;
+      ObligationModule Module;
+      if (BMCModule) {
+        Module = std::move(*BMCModule);
+        Simplification = BMCSimplification;
+      } else {
+        auto ModuleOrErr = buildObligationModule(PP);
+        if (!ModuleOrErr) {
+          AllOk = false;
+          AnyFailed = true;
+          Diags.push_back({VerifyDiagnostic::Unresolved,
+                           "obligation lowering failed: " + Fn->Name + " (" +
+                               llvm::toString(ModuleOrErr.takeError()) + ")"});
+          continue;
+        }
+        auto SimplifiedModule =
+            simplifyObligationModule(std::move(*ModuleOrErr), &Simplification);
+        if (!SimplifiedModule) {
+          AllOk = false;
+          AnyFailed = true;
+          Diags.push_back(
+              {VerifyDiagnostic::Unresolved,
+               "obligation simplification failed: " + Fn->Name + " (" +
+                   llvm::toString(SimplifiedModule.takeError()) + ")"});
+          continue;
+        }
+        Module = std::move(*SimplifiedModule);
+        if (Opts.Backend == BackendKind::BMC)
+          Module.BMCTransform = BMCTransformProvenance{Opts.BMCUnroll};
+        annotateObligationSources(Module);
       }
-      ObligationModule Module = std::move(*SimplifiedModule);
-      if (Opts.Backend == BackendKind::BMC)
-        Module.BMCTransform = BMCTransformProvenance{Opts.BMCUnroll};
-      annotateObligationSources(Module);
       if (llvm::Error Error = emitObligationArchive(Module)) {
         AllOk = false;
         AnyFailed = true;
@@ -997,7 +1085,8 @@ public:
         continue;
       }
 
-      VerifyResult R = Backend->verify(Module);
+      VerifyResult R =
+          BMCResult ? std::move(*BMCResult) : Backend->verify(Module);
       if (R.Status == VerifyStatus::Verified) {
         Diags.push_back({VerifyDiagnostic::Verified,
                          Fn->Name + backendSuffix(R), R.Location, Fn->Name, R});
@@ -1151,6 +1240,14 @@ public:
         Record["reason"] = verifyReasonCode(Result.Reason);
       if (Result.Bound)
         Record["bound"] = static_cast<int64_t>(*Result.Bound);
+      if (!Result.ExploredBounds.empty()) {
+        llvm::json::Array Bounds;
+        for (unsigned Bound : Result.ExploredBounds)
+          Bounds.push_back(static_cast<int64_t>(Bound));
+        Record["explored_bounds"] = std::move(Bounds);
+      }
+      if (Result.ReusedQueries)
+        Record["reused_queries"] = static_cast<int64_t>(Result.ReusedQueries);
       if (Result.CacheHits || Result.CacheMisses || Result.CacheErrors) {
         llvm::json::Object Cache;
         Cache["hits"] = static_cast<int64_t>(Result.CacheHits);

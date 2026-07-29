@@ -65,15 +65,19 @@ class Z3VerifyBackend : public VerifyBackend {
   unsigned Jobs;
   uint64_t MaxQueryNodes;
   std::unique_ptr<ProofCache> Cache;
+  bool ReuseVerifiedQueries;
+  std::set<std::string> VerifiedQueries;
 
   VerifyResult verifyObligation(const ObligationModule &Module,
                                 const Obligation &Item,
                                 llvm::StringRef SemanticHash = {},
-                                const ProofCacheLookup *Lookup = nullptr);
+                                const ProofCacheLookup *Lookup = nullptr,
+                                bool Reused = false);
 
 public:
   explicit Z3VerifyBackend(const BackendExecutionOptions &Execution = {},
-                           llvm::StringRef CacheBackendName = "z3");
+                           llvm::StringRef CacheBackendName = "z3",
+                           bool ReuseVerifiedQueries = false);
   llvm::StringRef getName() const override { return "z3"; }
   BackendCapabilities getCapabilities() const override {
     return {allLogicFeatures(), true};

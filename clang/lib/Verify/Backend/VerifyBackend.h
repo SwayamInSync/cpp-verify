@@ -88,6 +88,10 @@ struct VerifyResult {
   uint64_t CacheMisses = 0;
   uint64_t CacheErrors = 0;
   std::string CacheError;
+  /// Successful ordered queries reused within this process.
+  uint64_t ReusedQueries = 0;
+  /// Bounds actually explored by an incremental BMC source run.
+  std::vector<unsigned> ExploredBounds;
 };
 
 struct BackendCapabilities {
