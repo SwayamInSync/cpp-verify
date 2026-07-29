@@ -3,7 +3,7 @@ import CppVerify.User
 theorem cppverify_fibo_step_fn_5f5a396669626f5f7374657069_obligation_2_goal_proof :
     cppverify_fibo_step_fn_5f5a396669626f5f7374657069_obligation_2_goal := by
   unfold cppverify_fibo_step_fn_5f5a396669626f5f7374657069_obligation_2_goal
-  intro __heap_alloc_0 __heap_live_0 i_0 spec1 spec2 spec3 spec4
+  intro __heap_alloc_0 __heap_live_0 i_0
   by_cases h :
       cppBvSle (BitVec.ofInt 32 1) i_0 ∧
         cppBvSle i_0 (BitVec.ofInt 32 10)

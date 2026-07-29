@@ -114,6 +114,14 @@ on a solver result. BMC transform provenance is semantic: it is retained in
 archives and hashes so bounded obligations cannot be mistaken for unbounded
 deductive proofs.
 
+Before hashing or backend dispatch, source-built and replayed modules use the
+same conservative canonicalizer. It folds Boolean constants, double negation,
+constant conditionals, and reflexive equality/inequality, then removes logical
+declarations unreachable from every ordered goal. Exact goal/query pairs and
+required features are rebuilt and revalidated. Arithmetic, quantifiers,
+pointer/heap terms, and assumptions are left intact. Semantic-hash format v2
+records this canonical boundary while archive schema v1 remains compatible.
+
 Supported compiler
 ------------------
 
@@ -252,7 +260,8 @@ same in-memory module consumed by Layer 4 and ordinary verification: explicit
 logic sorts and required features, one complete counterexample query,
 deterministic obligation IDs/kinds, source encodings, and equivalent ordered
 queries. A malformed, untyped, or unsupported term fails lowering rather than
-becoming a proof-shaped default.
+becoming a proof-shaped default. Source-built dumps also report canonical
+simplification node, rewrite, and dead-declaration counts.
 
 Testing and coverage
 --------------------

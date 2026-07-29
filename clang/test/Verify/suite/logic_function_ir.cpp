@@ -24,7 +24,8 @@ proof void recursive_logic()
 }
 
 proof void opaque_logic()
-  post(hidden(1) == hidden(1))
+  pre(hidden(1) == 2)
+  post(hidden(1) == 2)
 {
   hide(hidden);
 }

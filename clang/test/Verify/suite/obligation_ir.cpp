@@ -27,14 +27,15 @@ int canonical_obligations(int x)
 
 // OBLIGATION-LABEL: vc canonical_obligations
 // OBLIGATION-NEXT: schema cppverify.obligation/1
-// OBLIGATION-NEXT: semantic-hash sha256:056efcca83927d8813a2695e996a985fba0dbf7ac00a85c515f07eb763efac1a
+// OBLIGATION-NEXT: simplification nodes {{[1-9][0-9]*}} -> {{[1-9][0-9]*}}, rewrites {{[1-9][0-9]*}}, functions-removed 0
+// OBLIGATION-NEXT: semantic-hash sha256:078f82f0c785cc0bd2c8a9aff507368fd7377299c9f6103683fb4f2a41875801
 // OBLIGATION-NEXT: identity [[IDENTITY:fn_[0-9a-f]+]]
 // OBLIGATION-NEXT: features mathematical-integers, bit-vectors, pointers, heap-arrays
 // OBLIGATION-NEXT: counterexample
 // OBLIGATION: x_0 : bitvector32
 // OBLIGATION: obligations [[COUNT:[1-9][0-9]*]]
 // OBLIGATION: obligation [[IDENTITY]]::obligation:1 assertion
-// OBLIGATION-NEXT: semantic-hash sha256:39fb2099758d697c777e8a21ce4a4cd2e7f5421630f5886a26976c6b57cff9df
+// OBLIGATION-NEXT: semantic-hash sha256:693a1cc38a52b5d3f7305a387947ec9a2b48542240120d953a8b19c4e23c79e3
 // OBLIGATION-NEXT: source {{[1-9][0-9]*}}
 // OBLIGATION: obligation [[IDENTITY]]::obligation:{{[1-9][0-9]*}} postcondition
 // OBLIGATION-NEXT: semantic-hash sha256:{{[0-9a-f]+}}

@@ -3,6 +3,7 @@
 #define LLVM_CLANG_VERIFY_DRIVER_DUMPIR_H
 
 #include "../Backend/Obligation.h"
+#include "../Backend/ObligationSimplify.h"
 #include "../IR/VExpr.h"
 #include "../IR/VStmt.h"
 #include "../Transform/Passivize.h"
@@ -31,7 +32,8 @@ void dumpVExpr(const VExpr *E, llvm::raw_ostream &OS, unsigned Indent = 0);
 void dumpVFunction(const VFunction &Fn, llvm::raw_ostream &OS);
 void dumpPassiveProgram(llvm::StringRef FnName, const PassiveProgram &P,
                         llvm::raw_ostream &OS);
-void dumpVC(const ObligationModule &Module, llvm::raw_ostream &OS);
+void dumpVC(const ObligationModule &Module, llvm::raw_ostream &OS,
+            const ObligationSimplificationStats *Simplification = nullptr);
 
 } // namespace verify
 } // namespace clang

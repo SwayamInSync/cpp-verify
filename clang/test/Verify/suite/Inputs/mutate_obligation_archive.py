@@ -85,7 +85,7 @@ class Archive:
         }
 
     def function(self):
-        self.string()
+        identity = self.string()
         self.string()
         for _ in range(self.u64()):
             self.string()
@@ -94,7 +94,7 @@ class Archive:
         self.offset += 4
         expressions = [self.expression()]
         expressions.extend(self.expression() for _ in range(self.u64()))
-        return expressions
+        return expressions, identity
 
     def module(self):
         self.offset += 8
@@ -107,12 +107,26 @@ class Archive:
         self.string()
         self.string()
         functions = []
+        function_entries = []
         function_keys = []
-        for _ in range(self.u64()):
+        functions_count_offset = self.offset
+        functions_count = self.u64()
+        for _ in range(functions_count):
+            entry_start = self.offset
             key = self.string()
             self.function_keys.append(key)
             function_keys.append(key)
-            functions.append(self.function())
+            expressions, identity = self.function()
+            functions.append(expressions)
+            function_entries.append(
+                {
+                    "start": entry_start,
+                    "end": self.offset,
+                    "key": key,
+                    "identity": identity,
+                }
+            )
+        functions_end = self.offset
         complete_goal = self.expression()
         complete_query = self.expression()
         obligations = []
@@ -124,7 +138,11 @@ class Archive:
         self.modules.append(
             {
                 "functions": functions,
+                "function_entries": function_entries,
                 "function_keys": function_keys,
+                "functions_count_offset": functions_count_offset,
+                "functions_count": functions_count,
+                "functions_end": functions_end,
                 "function_name": function_name,
                 "complete_goal": complete_goal,
                 "complete_query": complete_query,
@@ -271,6 +289,7 @@ parser.add_argument(
         "oversized-width",
         "edge-limit",
         "bad-binder-sort",
+        "append-unreachable-function",
     ],
 )
 parser.add_argument("input")
@@ -338,6 +357,32 @@ elif args.mode == "different-function-definition":
             break
     if not changed:
         raise ValueError("second module has no logical-function integer literal")
+elif args.mode == "append-unreachable-function":
+    module = next(
+        (item for item in archive.modules if item["function_entries"]), None
+    )
+    if module is None:
+        raise ValueError("archive has no logical function")
+    source = module["function_entries"][0]
+    entry = bytearray(archive.data[source["start"] : source["end"]])
+    key_start, key_size = source["key"]
+    identity_start, identity_size = source["identity"]
+    if key_size == 0 or key_size != identity_size:
+        raise ValueError("logical function key and identity are incompatible")
+    replacement = (
+        ord("0")
+        if archive.data[key_start + key_size - 1] != ord("0")
+        else ord("1")
+    )
+    entry[key_start - source["start"] + key_size - 1] = replacement
+    entry[identity_start - source["start"] + identity_size - 1] = replacement
+    struct.pack_into(
+        "<Q",
+        archive.data,
+        module["functions_count_offset"],
+        module["functions_count"] + 1,
+    )
+    archive.data[module["functions_end"] : module["functions_end"]] = entry
 elif args.mode == "inactive-payload":
     archive.data[archive.modules[0]["complete_query"]["bool_offset"]] = 1
 elif args.mode == "lean-comment":

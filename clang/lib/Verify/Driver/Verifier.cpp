@@ -3,6 +3,7 @@
 #include "../Backend/Obligation.h"
 #include "../Backend/ObligationLowering.h"
 #include "../Backend/ObligationSerialization.h"
+#include "../Backend/ObligationSimplify.h"
 #include "../Backend/Z3Encode.h"
 #include "../Frontend/ASTConverter.h"
 #include "../IR/VStmt.h"
@@ -663,7 +664,20 @@ public:
                    llvm::toString(DecModuleOrErr.takeError()) + ")"});
           continue;
         }
-        ObligationModule DecModule = std::move(*DecModuleOrErr);
+        ObligationSimplificationStats DecSimplification;
+        auto SimplifiedDecModule = simplifyObligationModule(
+            std::move(*DecModuleOrErr), &DecSimplification);
+        if (!SimplifiedDecModule) {
+          AllOk = false;
+          AnyFailed = true;
+          Diags.push_back(
+              {VerifyDiagnostic::Unresolved,
+               "obligation simplification failed for decreases: " + Fn->Name +
+                   " (" + llvm::toString(SimplifiedDecModule.takeError()) +
+                   ")"});
+          continue;
+        }
+        ObligationModule DecModule = std::move(*SimplifiedDecModule);
         if (Opts.Backend == BackendKind::BMC)
           DecModule.BMCTransform = BMCTransformProvenance{Opts.BMCUnroll};
         annotateObligationSources(DecModule);
@@ -753,7 +767,19 @@ public:
                              llvm::toString(ModuleOrErr.takeError()) + ")"});
         continue;
       }
-      ObligationModule Module = std::move(*ModuleOrErr);
+      ObligationSimplificationStats Simplification;
+      auto SimplifiedModule =
+          simplifyObligationModule(std::move(*ModuleOrErr), &Simplification);
+      if (!SimplifiedModule) {
+        AllOk = false;
+        AnyFailed = true;
+        Diags.push_back(
+            {VerifyDiagnostic::Unresolved,
+             "obligation simplification failed: " + Fn->Name + " (" +
+                 llvm::toString(SimplifiedModule.takeError()) + ")"});
+        continue;
+      }
+      ObligationModule Module = std::move(*SimplifiedModule);
       if (Opts.Backend == BackendKind::BMC)
         Module.BMCTransform = BMCTransformProvenance{Opts.BMCUnroll};
       annotateObligationSources(Module);
@@ -768,7 +794,7 @@ public:
 
       if (DumpLayers & LayerVC) {
         dumpSep();
-        dumpVC(Module, *DumpOS);
+        dumpVC(Module, *DumpOS, &Simplification);
       }
 
       if (DumpLayers & LayerZ3 || Opts.LowerOnly) {

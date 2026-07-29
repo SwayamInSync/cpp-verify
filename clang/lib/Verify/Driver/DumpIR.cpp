@@ -514,10 +514,16 @@ static void dumpLogicExpr(const LogicExpr *Expr, llvm::raw_ostream &OS,
     dumpLogicExpr(Child.get(), OS, Depth + 1);
 }
 
-void verify::dumpVC(const ObligationModule &Module, llvm::raw_ostream &OS) {
+void verify::dumpVC(const ObligationModule &Module, llvm::raw_ostream &OS,
+                    const ObligationSimplificationStats *Simplification) {
   ind(OS, 0) << "vc " << Module.FunctionName << "\n";
   ind(OS, 1) << "schema cppverify.obligation/" << ObligationSerializationVersion
              << "\n";
+  if (Simplification)
+    ind(OS, 1) << "simplification nodes " << Simplification->NodesBefore
+               << " -> " << Simplification->NodesAfter << ", rewrites "
+               << Simplification->Rewrites << ", functions-removed "
+               << Simplification->FunctionsRemoved << "\n";
   ind(OS, 1) << "semantic-hash sha256:" << obligationSemanticHash(Module)
              << "\n";
   ind(OS, 1) << "identity " << Module.FunctionIdentity << "\n";

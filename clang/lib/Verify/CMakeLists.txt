@@ -27,6 +27,7 @@ add_clang_library(clangVerify
   Transform/SpecInline.cpp
   Transform/UBChecks.cpp
   Backend/Obligation.cpp
+  Backend/ObligationSimplify.cpp
   Backend/ObligationSerialization.cpp
   Backend/Z3Encode.cpp
   Backend/SpecAxioms.cpp

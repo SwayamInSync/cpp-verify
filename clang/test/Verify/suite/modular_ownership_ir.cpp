@@ -74,14 +74,14 @@ int ownership_consume(int value)
 // VC: obligations
 
 // Z3: (select __heap_alloc_used_0
-// Z3: (store __heap_alloc_used_0
-// Z3: (store __heap_alloc_0
-// Z3: (store __heap_alloc_base_0
-// Z3: (store __heap_alloc_size_0
-// Z3: (store __heap_alloc_align_0
-// Z3: (store __heap_live_0
-// Z3: (store __heap_init_0
-// Z3: __owned_call_value_
+// Z3-DAG: (store __heap_alloc_used_0
+// Z3-DAG: (store __heap_alloc_0
+// Z3-DAG: (store __heap_alloc_base_0
+// Z3-DAG: (store __heap_alloc_size_0
+// Z3-DAG: (store __heap_alloc_align_0
+// Z3-DAG: (store __heap_live_0
+// Z3-DAG: (store __heap_init_0
+// Z3-DAG: __owned_call_value_
 // Z3: Lowered: ownership_factory
 // Z3: Lowered: ownership_forward
 // Z3: Lowered: ownership_consume

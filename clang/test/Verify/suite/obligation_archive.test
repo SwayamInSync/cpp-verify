@@ -39,6 +39,10 @@
 # RUN: %cpp-verify --obligation-in=%t.lean-comment --backend=lean --lean-out=%t.lean-comment.lean
 # RUN: grep -Fq '/- function: - /' %t.lean-comment.lean
 # RUN: %cpp-verify --lower-only --obligation-out=%t.functions %S/Inputs/obligation_archive_functions.cpp
+# RUN: %python %S/Inputs/mutate_obligation_archive.py append-unreachable-function %t.functions %t.unreachable-function
+# RUN: %cpp-verify --obligation-in=%t.functions --lower-only --dump-ir=3 > %t.functions.dump
+# RUN: %cpp-verify --obligation-in=%t.unreachable-function --lower-only --dump-ir=3 > %t.unreachable-function.dump
+# RUN: diff %t.functions.dump %t.unreachable-function.dump
 # RUN: %python %S/Inputs/mutate_obligation_archive.py duplicate-function %t.functions %t.duplicate-function
 # RUN: not %cpp-verify --obligation-in=%t.duplicate-function 2>&1 | FileCheck %s --check-prefix=DUPLICATE-FUNCTION
 # RUN: /bin/cat %t.functions %t.functions > %t.function-records

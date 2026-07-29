@@ -13,7 +13,7 @@ namespace clang {
 namespace verify {
 
 inline constexpr uint32_t ObligationSerializationVersion = 1;
-inline constexpr uint32_t ObligationSemanticHashVersion = 1;
+inline constexpr uint32_t ObligationSemanticHashVersion = 2;
 
 /// Serialize one module as a deterministic, versioned binary record. Records
 /// may be concatenated to form an archive.

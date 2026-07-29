@@ -87,6 +87,14 @@ ill-scoped variables, and contradictory complete/ordered goals fail closed.
 Different records may request different reveal fuel for one logical function,
 but its shared parameter/result signature must remain compatible.
 
+Source-built and replayed records pass through the same conservative
+canonicalizer before hashing and dispatch. It folds only trivial Boolean
+structure and reflexive equality/inequality, removes transitively unreachable
+logical declarations, rebuilds exact ordered and complete queries plus feature
+metadata, and revalidates. It does not rewrite arithmetic, quantifiers,
+pointers, heaps, or assumptions. This is semantic-hash format v2; the compatible
+archive wire format remains ``cppverify.obligation/1``.
+
 BMC-produced records retain their exact unroll bound. Replay uses BMC unwinding
 aggregation for those records, so an incomplete frontier remains
 ``BoundedSafe(N)``. BMC cannot be applied to an untransformed record because

@@ -1,5 +1,6 @@
 //===--- Main.cpp - cpp-verify standalone tool ----------------------------===//
 #include "../../lib/Verify/Backend/ObligationSerialization.h"
+#include "../../lib/Verify/Backend/ObligationSimplify.h"
 #include "../../lib/Verify/Backend/VerifyBackend.h"
 #include "DumpIR.h"
 #include "Verifier.h"
@@ -148,17 +149,29 @@ static int replayObligationArchive() {
                  << Buffer.getError().message() << "\n";
     return 1;
   }
-  auto Modules = verify::deserializeObligationModules((*Buffer)->getBuffer());
-  if (!Modules) {
+  auto DecodedModules =
+      verify::deserializeObligationModules((*Buffer)->getBuffer());
+  if (!DecodedModules) {
     llvm::errs() << "error: invalid obligation archive: "
-                 << llvm::toString(Modules.takeError()) << "\n";
+                 << llvm::toString(DecodedModules.takeError()) << "\n";
     return 1;
   }
-  if (Modules->empty()) {
+  if (DecodedModules->empty()) {
     llvm::errs() << "error: obligation archive contains no modules\n";
     return 1;
   }
-  for (const verify::ObligationModule &Module : *Modules) {
+  std::vector<verify::ObligationModule> Modules;
+  Modules.reserve(DecodedModules->size());
+  for (verify::ObligationModule &Module : *DecodedModules) {
+    auto Simplified = verify::simplifyObligationModule(std::move(Module));
+    if (!Simplified) {
+      llvm::errs() << "error: cannot canonicalize obligation archive: "
+                   << llvm::toString(Simplified.takeError()) << "\n";
+      return 1;
+    }
+    Modules.push_back(std::move(*Simplified));
+  }
+  for (const verify::ObligationModule &Module : Modules) {
     if (BackendOpt == "bmc" && !Module.BMCTransform) {
       llvm::errs() << "error: BMC cannot replay an untransformed "
                       "backend-neutral archive; bounded unrolling must run "
@@ -209,7 +222,7 @@ static int replayObligationArchive() {
                                   ? verify::parseDumpIRLayers(DumpIR.getValue())
                                   : 0;
   bool AllOk = true;
-  for (const verify::ObligationModule &Module : *Modules) {
+  for (const verify::ObligationModule &Module : Modules) {
     if (DumpLayers & verify::LayerVC)
       verify::dumpVC(Module, llvm::outs());
 

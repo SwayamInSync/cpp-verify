@@ -87,8 +87,8 @@ long slice_difference_ir(int *p, int count, int left, int right)
 
 // VC-LABEL: vc slice_call_ir
 // VC: features mathematical-integers, bit-vectors, pointers, heap-arrays
-// VC: false : bool
-// VC: >= : bool
+// VC: 1000 : bitvector32
+// VC-NEXT: >= : bool
 // VC-NEXT: offset_0 : bitvector32
 // VC-NEXT: 0 : bitvector32
 // VC-NEXT: <= : bool
@@ -96,7 +96,7 @@ long slice_difference_ir(int *p, int count, int left, int right)
 // VC-NEXT: count_0 : bitvector32
 // VC-NEXT: >= : bool
 // VC-NEXT: length_0 : bitvector32
-// VC-NEXT: 0 : bitvector32
+// VC-NEXT: 1 : bitvector32
 // VC-NEXT: <= : bool
 // VC-NEXT: length_0 : bitvector32
 // VC-NEXT: - : bitvector32
@@ -108,8 +108,6 @@ long slice_difference_ir(int *p, int count, int left, int right)
 // VC: bitvector64
 // VC: obligations
 // VC: __result_1 : bitvector64
-// VC-NEXT: ite : bitvector64
-// VC-NEXT: true : bool
 // VC-NEXT: - : bitvector64
 // VC-NEXT: bv_resize : bitvector64
 // VC-NEXT: left_0 : bitvector32
