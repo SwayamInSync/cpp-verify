@@ -771,6 +771,7 @@ VerifyResult verify::exportLeanScratchPad(
   VerifyResult Result;
   if (!Module.CorrectnessGoal || !Module.CounterexampleQuery) {
     Result.Status = VerifyStatus::Unresolved;
+    Result.Reason = VerifyReason::MissingQuery;
     Result.Message = "missing correctness goal for Lean export";
     return Result;
   }
@@ -850,7 +851,7 @@ VerifyResult verify::exportLeanScratchPad(
   unsigned Index = 0;
   for (const Obligation &Item : Module.Obligations) {
     OS << "/- obligation: ";
-    printLeanCommentText(Item.Id, OS);
+    printLeanCommentText(Item.StableId.empty() ? Item.Id : Item.StableId, OS);
     OS << "\n";
     OS << "   kind: " << leanObligationKind(Item.Kind) << "\n";
     OS << "   source: ";
@@ -878,6 +879,7 @@ VerifyResult verify::exportLeanScratchPad(
     LeanLogicFunctions = nullptr;
     LeanBodyPrefix.clear();
     Result.Status = VerifyStatus::Unresolved;
+    Result.Reason = VerifyReason::LeanExportFailure;
     Result.Message = "Lean export exceeded its budget or contained an invalid "
                      "logical term";
     return Result;

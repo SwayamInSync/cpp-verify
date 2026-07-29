@@ -16,6 +16,39 @@ struct PassiveStmt {
   Kind K = Assume;
   ProofObligationKind ProofKind = ProofObligationKind::Assertion;
   std::unique_ptr<VExpr> Cond;
+  uint64_t TraceEventCount = 0;
+};
+
+enum class PassiveTraceKind {
+  Branch,
+  Call,
+  Loop,
+  HeapWrite,
+  Allocation,
+  LifetimeEnd,
+  Deallocation,
+  Return
+};
+
+struct PassiveTraceValue {
+  std::string Label;
+  std::unique_ptr<VExpr> Value;
+};
+
+struct PassiveTraceEvent {
+  PassiveTraceKind Kind = PassiveTraceKind::Branch;
+  std::string Message;
+  SourceLocation Loc;
+  SourceLocation EndLoc;
+  std::unique_ptr<VExpr> Guard;
+  std::vector<PassiveTraceValue> Values;
+};
+
+struct PassiveModelVariable {
+  std::string DisplayName;
+  VType Type;
+  SourceLocation Loc;
+  SourceLocation EndLoc;
 };
 
 struct PassiveProgram {
@@ -29,6 +62,10 @@ struct PassiveProgram {
   /// Explicitly declared heap-array SSA variables. Backends must not infer
   /// array sorts from generated variable spellings.
   std::set<std::string> HeapVariables;
+  /// Exact source identity for SSA variables eligible for counterexample
+  /// presentation. Generated temporaries are deliberately absent.
+  std::map<std::string, PassiveModelVariable> ModelVariables;
+  std::vector<PassiveTraceEvent> TraceEvents;
   /// Spec registry + per-enclosing-function reveal/hide (for Z3 axiom
   /// emission).
   FunctionMap SpecFunctions;

@@ -68,7 +68,7 @@ VType VType::fromQualType(QualType QT, VIntMode DefaultMode,
   return VType::makeUnsupported();
 }
 
-std::unique_ptr<VExpr> verify::cloneVExpr(const VExpr *E) {
+static std::unique_ptr<VExpr> cloneVExprImpl(const VExpr *E) {
   if (!E)
     return nullptr;
   switch (E->K) {
@@ -155,6 +155,13 @@ std::unique_ptr<VExpr> verify::cloneVExpr(const VExpr *E) {
   }
   }
   return nullptr;
+}
+
+std::unique_ptr<VExpr> verify::cloneVExpr(const VExpr *E) {
+  auto Copy = cloneVExprImpl(E);
+  if (Copy && E)
+    Copy->EndLoc = E->EndLoc;
+  return Copy;
 }
 
 std::unique_ptr<VExpr>

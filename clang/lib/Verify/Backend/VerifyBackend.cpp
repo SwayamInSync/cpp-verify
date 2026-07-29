@@ -29,6 +29,7 @@ protected:
     VerifyResult R;
     if (!Out) {
       R.Status = VerifyStatus::Unresolved;
+      R.Reason = VerifyReason::LeanExportFailure;
       R.Message = "no lean output stream";
       return R;
     }
@@ -78,6 +79,7 @@ protected:
       }
       VerifyResult Unexpected;
       Unexpected.Status = VerifyStatus::Unresolved;
+      Unexpected.Reason = VerifyReason::InvalidBackendResult;
       Unexpected.Message = "BMC obligation returned an invalid backend status";
       Unexpected.BackendName = "bmc";
       Unexpected.Bound = UnrollBound;
@@ -94,6 +96,7 @@ protected:
     if (FailedUnwinding) {
       Result = std::move(*FailedUnwinding);
       Result.Status = VerifyStatus::BoundedSafe;
+      Result.Reason = VerifyReason::IncompleteBound;
       Result.Message = "unwinding bound " + std::to_string(UnrollBound) +
                        " is insufficient for a complete proof";
     } else {
@@ -106,11 +109,50 @@ protected:
 };
 } // namespace
 
+llvm::StringRef verify::verifyReasonCode(VerifyReason Reason) {
+  switch (Reason) {
+  case VerifyReason::None:
+    return "none";
+  case VerifyReason::Counterexample:
+    return "counterexample";
+  case VerifyReason::SolverTimeout:
+    return "solver.timeout";
+  case VerifyReason::SolverUnknown:
+    return "solver.unknown";
+  case VerifyReason::EncodingFailure:
+    return "encoding.failed";
+  case VerifyReason::InvalidObligation:
+    return "obligation.invalid";
+  case VerifyReason::UnsupportedLogic:
+    return "logic.unsupported";
+  case VerifyReason::MissingQuery:
+    return "query.missing";
+  case VerifyReason::InvalidBackendResult:
+    return "backend.invalid-result";
+  case VerifyReason::InconsistentBackendResults:
+    return "backend.inconsistent-results";
+  case VerifyReason::IncompleteBound:
+    return "bmc.incomplete-bound";
+  case VerifyReason::LeanExportFailure:
+    return "lean.export-failed";
+  }
+  llvm_unreachable("unknown verification reason");
+}
+
 VerifyResult VerifyBackend::verify(const ObligationModule &Module) {
+  if (!Module.CounterexampleQuery) {
+    VerifyResult Result;
+    Result.Status = VerifyStatus::Unresolved;
+    Result.Reason = VerifyReason::MissingQuery;
+    Result.BackendName = getName().str();
+    Result.Message = "obligation module has no counterexample query";
+    return Result;
+  }
   auto ValidatedFeatures = validateObligationModule(Module);
   if (!ValidatedFeatures) {
     VerifyResult Result;
     Result.Status = VerifyStatus::Unresolved;
+    Result.Reason = VerifyReason::InvalidObligation;
     Result.BackendName = getName().str();
     Result.Message = "invalid obligation module: " +
                      llvm::toString(ValidatedFeatures.takeError());
@@ -119,6 +161,7 @@ VerifyResult VerifyBackend::verify(const ObligationModule &Module) {
   if (*ValidatedFeatures != Module.RequiredFeatures) {
     VerifyResult Result;
     Result.Status = VerifyStatus::Unresolved;
+    Result.Reason = VerifyReason::InvalidObligation;
     Result.BackendName = getName().str();
     Result.Message =
         "obligation feature declaration does not match validated contents";
@@ -130,17 +173,11 @@ VerifyResult VerifyBackend::verify(const ObligationModule &Module) {
   if (Missing != 0) {
     VerifyResult Result;
     Result.Status = VerifyStatus::Unresolved;
+    Result.Reason = VerifyReason::UnsupportedLogic;
     Result.BackendName = getName().str();
     Result.Message = "backend '" + getName().str() +
                      "' does not support required logic features: " +
                      formatLogicFeatures(Missing);
-    return Result;
-  }
-  if (!Module.CounterexampleQuery) {
-    VerifyResult Result;
-    Result.Status = VerifyStatus::Unresolved;
-    Result.BackendName = getName().str();
-    Result.Message = "obligation module has no counterexample query";
     return Result;
   }
   VerifyResult Result = verifyModule(Module);
@@ -150,23 +187,37 @@ VerifyResult VerifyBackend::verify(const ObligationModule &Module) {
       Result.Status != VerifyStatus::Exported &&
       Result.Status != VerifyStatus::Unresolved) {
     Result.Status = VerifyStatus::Unresolved;
+    Result.Reason = VerifyReason::InvalidBackendResult;
     Result.Message = "export-only backend '" + getName().str() +
                      "' returned a verification verdict";
     Result.Model.clear();
+    Result.Trace.clear();
     Result.ObligationId.clear();
     Result.ObligationType.reset();
     Result.Location = SourceLocation();
+    Result.Source = {};
   } else if (Capabilities.ProducesVerificationVerdict &&
              (Result.Status == VerifyStatus::Exported ||
               Result.Status == VerifyStatus::Lowered)) {
     Result.Status = VerifyStatus::Unresolved;
+    Result.Reason = VerifyReason::InvalidBackendResult;
     Result.Message = "verifying backend '" + getName().str() +
                      "' returned an export-only result";
     Result.Model.clear();
+    Result.Trace.clear();
     Result.ObligationId.clear();
     Result.ObligationType.reset();
     Result.Location = SourceLocation();
+    Result.Source = {};
   }
+  if (Result.Status == VerifyStatus::Failed &&
+      Result.Reason == VerifyReason::None)
+    Result.Reason = VerifyReason::Counterexample;
+  if (Result.Status == VerifyStatus::Unresolved &&
+      Result.Reason == VerifyReason::None)
+    Result.Reason = VerifyReason::SolverUnknown;
+  if (Result.Status == VerifyStatus::BoundedSafe)
+    Result.Reason = VerifyReason::IncompleteBound;
   return Result;
 }
 

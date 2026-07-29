@@ -101,13 +101,24 @@ class SpecInlinerImpl {
     return 1;
   }
 
+  static std::unique_ptr<VExpr> atCallSite(std::unique_ptr<VExpr> Expr,
+                                           const VSpecCallExpr &Call) {
+    if (Expr) {
+      Expr->Loc = Call.Loc;
+      Expr->EndLoc = Call.EndLoc;
+    }
+    return Expr;
+  }
+
   std::unique_ptr<VExpr> opaqueCall(const VSpecCallExpr &C) {
     std::vector<std::unique_ptr<VExpr>> Args;
     Args.reserve(C.Args.size());
     for (const auto &Arg : C.Args)
       Args.push_back(cloneVExpr(Arg.get()));
-    return std::make_unique<VSpecCallExpr>(C.Callee, C.CalleeIdentity,
-                                           std::move(Args), C.Ty, C.Loc);
+    return atCallSite(
+        std::make_unique<VSpecCallExpr>(C.Callee, C.CalleeIdentity,
+                                        std::move(Args), C.Ty, C.Loc),
+        C);
   }
 
   static void
@@ -178,7 +189,7 @@ public:
       if (!Out)
         return opaqueCall(C);
       Out = attachEvaluationTrace(std::move(Out), std::move(EvaluationTrace));
-      return convertValue(std::move(Out), C.Ty);
+      return atCallSite(convertValue(std::move(Out), C.Ty), C);
     }
     auto Env = bindParams(Spec, C.Args);
     std::vector<std::unique_ptr<VExpr>> EvaluationTrace;
@@ -186,7 +197,7 @@ public:
                             Spec.RequiresCallDefinedness ? &EvaluationTrace
                                                          : nullptr)) {
       Out = attachEvaluationTrace(std::move(Out), std::move(EvaluationTrace));
-      return convertValue(std::move(Out), C.Ty);
+      return atCallSite(convertValue(std::move(Out), C.Ty), C);
     }
     return opaqueCall(C);
   }
@@ -488,6 +499,15 @@ public:
   std::unique_ptr<VExpr>
   evalExpr(const VExpr *E,
            const std::map<std::string, std::unique_ptr<VExpr>> &Env) {
+    auto Result = evalExprImpl(E, Env);
+    if (Result && E)
+      Result->EndLoc = E->EndLoc;
+    return Result;
+  }
+
+  std::unique_ptr<VExpr>
+  evalExprImpl(const VExpr *E,
+               const std::map<std::string, std::unique_ptr<VExpr>> &Env) {
     if (!E)
       return nullptr;
     switch (E->K) {

@@ -29,5 +29,5 @@ int immediate_bug()
   return i;
 }
 
-// CHECK-DAG: BoundedSafe: counter [backend=bmc, bound=3]
+// CHECK-DAG: BoundedSafe: counter [backend=bmc, bound=3] [reason=bmc.incomplete-bound]
 // CHECK-DAG: error: verification failed: immediate_bug

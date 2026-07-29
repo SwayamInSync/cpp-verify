@@ -22,8 +22,8 @@ static std::unique_ptr<VStmt> unrollWhile(const VWhileStmt &W, unsigned K) {
   auto Then = unrollStmts(W.Body, K);
   Then.push_back(unrollWhile(W, K - 1));
   return std::make_unique<VIfStmt>(cloneVExpr(W.Cond.get()), std::move(Then),
-                                   std::vector<std::unique_ptr<VStmt>>{},
-                                   W.Loc);
+                                   std::vector<std::unique_ptr<VStmt>>{}, W.Loc,
+                                   true);
 }
 
 static std::vector<std::unique_ptr<VStmt>>
@@ -39,8 +39,9 @@ unrollStmts(const std::vector<std::unique_ptr<VStmt>> &Stmts, unsigned K) {
       const auto &I = static_cast<const VIfStmt &>(*S);
       auto Then = unrollStmts(I.Then, K);
       auto Else = unrollStmts(I.Else, K);
-      Out.push_back(std::make_unique<VIfStmt>(
-          cloneVExpr(I.Cond.get()), std::move(Then), std::move(Else), I.Loc));
+      Out.push_back(std::make_unique<VIfStmt>(cloneVExpr(I.Cond.get()),
+                                              std::move(Then), std::move(Else),
+                                              I.Loc, I.IsLoopUnroll));
       continue;
     }
     if (S->K == VStmt::Seq) {
@@ -107,6 +108,7 @@ VFunction LoopUnroller::unroll(const VFunction &Fn, unsigned K) {
   Out.UsesDynamicStorage = Fn.UsesDynamicStorage;
   Out.FreshOwnedReturn = Fn.FreshOwnedReturn;
   Out.Params = Fn.Params;
+  Out.SourceVariables = Fn.SourceVariables;
   Out.ReferenceParams = Fn.ReferenceParams;
   Out.ReturnFields = Fn.ReturnFields;
   Out.ExplicitPreconditionCount = Fn.ExplicitPreconditionCount;

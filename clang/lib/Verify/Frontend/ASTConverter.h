@@ -62,6 +62,7 @@ private:
   std::unique_ptr<VFunction> convertFunction(const FunctionDecl *FD);
   std::unique_ptr<VFunction> convertConstexprSpec(const FunctionDecl *FD);
   std::unique_ptr<VExpr> convertExpr(const Expr *E);
+  std::unique_ptr<VExpr> convertExprImpl(const Expr *E);
   std::unique_ptr<VExpr> convertPointerDifferenceOperand(const Expr *E,
                                                          uint64_t PointeeSize);
   std::unique_ptr<VExpr>
@@ -168,6 +169,7 @@ private:
                                  SourceLocation Loc);
   std::vector<std::string> trackedValueNames(const ValueDecl *D) const;
   std::string valueName(const ValueDecl *D) const;
+  void recordSourceVariable(const ValueDecl *D);
   void beginInitializationTracking(const FunctionDecl *FD);
   bool requireInitialized(const ValueDecl *D, const FieldDecl *Field = nullptr);
   void markInitialized(const ValueDecl *D, const FieldDecl *Field = nullptr);

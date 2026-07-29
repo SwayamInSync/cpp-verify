@@ -92,8 +92,9 @@ canonicalizer before hashing and dispatch. It folds only trivial Boolean
 structure and reflexive equality/inequality, removes transitively unreachable
 logical declarations, rebuilds exact ordered and complete queries plus feature
 metadata, and revalidates. It does not rewrite arithmetic, quantifiers,
-pointers, heaps, or assumptions. This is semantic-hash format v2; the compatible
-archive wire format remains ``cppverify.obligation/1``.
+pointers, heaps, or assumptions. Canonicalization introduced semantic-hash
+format v2; format v3 removes diagnostic obligation identities from the preimage.
+The compatible archive wire format remains ``cppverify.obligation/1``.
 
 BMC-produced records retain their exact unroll bound. Replay uses BMC unwinding
 aggregation for those records, so an incomplete frontier remains
@@ -179,8 +180,12 @@ Z3 result discipline
 Passive SSA is lowered once into a typed, source-attributed
 ``ObligationModule``. Layer 3 dumps this exact module and all backends consume
 it. It contains one complete counterexample query plus equivalent ordered
-assertion/postcondition queries with deterministic IDs. The default backend
-first submits the complete query.
+assertion/postcondition queries with deterministic internal IDs,
+source-anchored public IDs/ranges, original-name typed model metadata, and
+guarded trace events. Display-only diagnostic metadata persists through
+archives but is excluded from semantic hashes, including both positional and
+source-anchored obligation IDs. The default backend first submits the complete
+query.
 ``unsat`` means verified and ``sat`` produces a counterexample. On ``unknown``,
 CppVerify retries the module-owned assertions separately in source order, using
 only entry facts and assumptions that precede each obligation. It does not
@@ -189,6 +194,12 @@ later assumption prove an earlier assertion. If it still cannot discharge every
 obligation, the final result remains ``unknown`` and the function is not
 certified unless the user opted into the Lean fallback and its current project
 passes the admission-free kernel check.
+
+Model extraction never uses Z3 model completion. Undetermined values and path
+guards stay explicitly unknown. When a complete-query model makes a particular
+ordered counterexample query true, CppVerify attributes the failure and its
+trace to that narrow obligation rather than reporting an anonymous whole-query
+counterexample.
 
 Parallel verify + compile
 -------------------------

@@ -12,6 +12,8 @@ class ASTContext;
 namespace verify {
 inline constexpr unsigned DefaultSolverTimeoutMs = 30000;
 
+enum class DiagnosticFormat { Text, Json };
+
 struct VerifyOptions {
   unsigned DumpIRLayers = 0;
   /// Build and encode verification conditions without invoking a solver.
@@ -28,6 +30,8 @@ struct VerifyOptions {
   /// Enable valid(p, n)-based buffer bounds obligations. Core expression
   /// definedness checks are always emitted during passivization.
   bool CheckUB = false;
+  /// Human-readable diagnostics or versioned JSON Lines records.
+  DiagnosticFormat Diagnostics = DiagnosticFormat::Text;
   /// Optional versioned binary archive for backend-neutral obligation modules.
   llvm::raw_ostream *ObligationOut = nullptr;
 };

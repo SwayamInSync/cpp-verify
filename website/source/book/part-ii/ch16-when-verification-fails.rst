@@ -7,9 +7,27 @@ that as actionable feedback on the code, the contracts, or both.
 Understanding the report
 ------------------------
 
-Diagnostics name the obligation that failed and often include a **counterexample**: concrete
-values for variables that violate the claim. Use those values to see which assumption or branch
-is wrong.
+Diagnostics name the source-anchored obligation that failed and often include a
+**counterexample**: typed source-name values that violate the claim, followed by
+guarded branch, call, loop, heap/provenance, lifetime, and return events. Use
+those values and events to see which assumption or branch is wrong. Values that
+Z3 does not determine remain ``<unknown>``; CppVerify does not complete the
+model by inventing them.
+
+For editor, CI, and agent integration, run:
+
+.. code-block:: bash
+
+   cpp-verify --diagnostics-format=json file.cpp
+
+Each verification result is one ``cppverify.diagnostic/1`` JSON object with a
+stable reason code, backend and optional BMC bound, inclusive source range,
+obligation ID/kind, typed model values, and trace. An unknown model value is
+JSON ``null``. An undetermined path guard is ``"active": null`` rather than an
+arbitrary branch choice. Command-line and frontend parse errors may still be
+text, and IR dumps intentionally make the stream mixed. Malformed display bytes
+are replaced with the Unicode replacement character, so JSON output remains
+valid UTF-8.
 
 ``unknown`` is different from a counterexample. It means Z3 timed out or entered
 a fragment it could not decide, often because the VC combines bounded

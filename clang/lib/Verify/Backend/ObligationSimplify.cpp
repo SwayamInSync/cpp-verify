@@ -1,6 +1,7 @@
 //===--- ObligationSimplify.cpp
 //--------------------------------------------===//
 #include "ObligationSimplify.h"
+#include <algorithm>
 #include <optional>
 #include <set>
 
@@ -14,6 +15,7 @@ std::unique_ptr<LogicExpr> cloneLogicExpr(const LogicExpr *Expr) {
   auto Copy = std::make_unique<LogicExpr>(Expr->K);
   Copy->Sort = Expr->Sort;
   Copy->Loc = Expr->Loc;
+  Copy->EndLoc = Expr->EndLoc;
   Copy->Source = Expr->Source;
   Copy->IntVal = Expr->IntVal;
   Copy->BoolVal = Expr->BoolVal;
@@ -85,6 +87,7 @@ std::unique_ptr<LogicExpr> boolLiteral(bool Value, const LogicExpr &Source) {
       std::make_unique<LogicExpr>(Value ? LogicExpr::True : LogicExpr::False);
   Result->Sort = LogicSort::boolSort();
   Result->Loc = Source.Loc;
+  Result->EndLoc = Source.EndLoc;
   Result->Source = Source.Source;
   return Result;
 }
@@ -150,6 +153,7 @@ std::unique_ptr<LogicExpr> negate(std::unique_ptr<LogicExpr> Expr) {
   Result->Sort = LogicSort::boolSort();
   if (Expr) {
     Result->Loc = Expr->Loc;
+    Result->EndLoc = Expr->EndLoc;
     Result->Source = Expr->Source;
   }
   Result->Children.push_back(std::move(Expr));
@@ -168,6 +172,7 @@ buildCompleteGoal(const std::vector<Obligation> &Obligations) {
     auto Conjunction = std::make_unique<LogicExpr>(LogicExpr::And);
     Conjunction->Sort = LogicSort::boolSort();
     Conjunction->Loc = Complete->Loc;
+    Conjunction->EndLoc = Complete->EndLoc;
     Conjunction->Source = Complete->Source;
     Conjunction->Children.push_back(std::move(Complete));
     Conjunction->Children.push_back(cloneLogicExpr(Obligations[I].Goal.get()));
@@ -184,6 +189,15 @@ void collectCalledFunctions(const LogicExpr *Expr,
     Called.insert(Expr->SpecCallee);
   for (const auto &Child : Expr->Children)
     collectCalledFunctions(Child.get(), Called);
+}
+
+bool callsOnlyReachableFunctions(const LogicExpr *Expr,
+                                 const std::set<std::string> &Reachable) {
+  std::set<std::string> Called;
+  collectCalledFunctions(Expr, Called);
+  return std::all_of(
+      Called.begin(), Called.end(),
+      [&](const std::string &Name) { return Reachable.count(Name) != 0; });
 }
 
 void simplifyFunctions(ObligationModule &Module,
@@ -211,6 +225,20 @@ void simplifyFunctions(ObligationModule &Module,
     for (const std::string &Dependency : Dependencies)
       if (Reachable.insert(Dependency).second)
         Pending.push_back(Dependency);
+  }
+
+  for (DiagnosticTraceEvent &Event : Module.TraceEvents) {
+    if (!callsOnlyReachableFunctions(Event.Guard.get(), Reachable)) {
+      Event.Guard = boolLiteral(false, *Event.Guard);
+      Event.Values.clear();
+      continue;
+    }
+    Event.Values.erase(std::remove_if(Event.Values.begin(), Event.Values.end(),
+                                      [&](const DiagnosticTraceValue &Value) {
+                                        return !callsOnlyReachableFunctions(
+                                            Value.Value.get(), Reachable);
+                                      }),
+                       Event.Values.end());
   }
 
   for (auto It = Module.LogicFunctions.begin();

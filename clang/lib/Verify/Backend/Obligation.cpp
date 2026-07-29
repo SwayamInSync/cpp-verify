@@ -50,6 +50,27 @@ const char *verify::logicSortName(LogicSortKind Kind) {
   return "invalid";
 }
 
+std::string verify::formatLogicSort(const LogicSort &Sort) {
+  switch (Sort.Kind) {
+  case LogicSortKind::Invalid:
+    return "invalid";
+  case LogicSortKind::Bool:
+    return "bool";
+  case LogicSortKind::MathematicalInteger:
+    return std::string(Sort.Signedness == LogicSignedness::Signed ? "math-i"
+                                                                  : "math-u") +
+           std::to_string(Sort.BitWidth);
+  case LogicSortKind::BitVector:
+    return std::string(Sort.Signedness == LogicSignedness::Signed ? "i" : "u") +
+           std::to_string(Sort.BitWidth);
+  case LogicSortKind::Pointer:
+    return "pointer";
+  case LogicSortKind::Heap:
+    return "heap";
+  }
+  return "invalid";
+}
+
 std::string verify::formatLogicFeatures(LogicFeatureSet Features) {
   struct NamedFeature {
     LogicFeature Feature;
@@ -197,6 +218,7 @@ static std::unique_ptr<VCExpr> cloneVCExpr(const VCExpr *E) {
   auto Copy = std::make_unique<VCExpr>(E->K);
   Copy->Sort = E->Sort;
   Copy->Loc = E->Loc;
+  Copy->EndLoc = E->EndLoc;
   Copy->Source = E->Source;
   Copy->IntVal = E->IntVal;
   Copy->BoolVal = E->BoolVal;
@@ -328,17 +350,50 @@ static bool validateLogicSort(const LogicSort &Sort, std::string &Error) {
   return true;
 }
 
+static bool validateSource(const ObligationSource &Source, std::string &Error) {
+  const bool HasStart =
+      !Source.File.empty() || Source.Line != 0 || Source.Column != 0;
+  const bool HasEnd = Source.EndLine != 0 || Source.EndColumn != 0;
+  if (!HasStart) {
+    if (!HasEnd)
+      return true;
+    Error = "source range has an end without a start";
+    return false;
+  }
+  if (Source.File.empty() || Source.Line == 0 || Source.Column == 0) {
+    Error = "source range has an incomplete start";
+    return false;
+  }
+  if (!HasEnd)
+    return true;
+  if (Source.EndLine == 0 || Source.EndColumn == 0) {
+    Error = "source range has an incomplete end";
+    return false;
+  }
+  if (Source.EndLine < Source.Line ||
+      (Source.EndLine == Source.Line && Source.EndColumn < Source.Column)) {
+    Error = "source range end precedes its start";
+    return false;
+  }
+  return true;
+}
+
 static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error) {
   if (!Expr) {
     Error = "null term in obligation IR";
     return false;
   }
+  if (containsEmbeddedNul(Expr->Source.File)) {
+    Error = "embedded NUL in obligation term source";
+    return false;
+  }
+  if (!validateSource(Expr->Source, Error))
+    return false;
   if (!validateLogicSort(Expr->Sort, Error))
     return false;
   if (containsEmbeddedNul(Expr->IntVal) || containsEmbeddedNul(Expr->Name) ||
       containsEmbeddedNul(Expr->Binder) ||
-      containsEmbeddedNul(Expr->SpecCallee) ||
-      containsEmbeddedNul(Expr->Source.File)) {
+      containsEmbeddedNul(Expr->SpecCallee)) {
     Error = "embedded NUL in obligation term";
     return false;
   }
@@ -708,6 +763,15 @@ static bool validateVariableScopes(const LogicExpr *Expr, std::string &Error) {
   std::set<std::string> Binders;
   collectQuantifierBinders(Expr, Binders);
   std::map<std::string, LogicSort> FreeVariables;
+  return validateVariableScopes(Expr, Binders, {}, FreeVariables, Error);
+}
+
+static bool
+validateVariableScopes(const LogicExpr *Expr,
+                       std::map<std::string, LogicSort> &FreeVariables,
+                       std::string &Error) {
+  std::set<std::string> Binders;
+  collectQuantifierBinders(Expr, Binders);
   return validateVariableScopes(Expr, Binders, {}, FreeVariables, Error);
 }
 
@@ -1117,6 +1181,13 @@ public:
         ForceCallerIntMode(ForceCallerMode) {}
 
   std::unique_ptr<VCExpr> fromVExpr(const VExpr *E) {
+    auto Result = fromVExprImpl(E);
+    if (Result && E)
+      Result->EndLoc = E->EndLoc;
+    return Result;
+  }
+
+  std::unique_ptr<VCExpr> fromVExprImpl(const VExpr *E) {
     if (!E)
       return fail("null VCR expression in obligation lowering");
     switch (E->K) {
@@ -1437,6 +1508,57 @@ public:
     M.HeapPrefix =
         P.OldHeapName.empty() ? std::string(VHeapName) + "_0" : P.OldHeapName;
     CurHeap = M.HeapPrefix;
+    for (const auto &[InternalName, Variable] : P.ModelVariables) {
+      LogicSort Sort =
+          logicSortFor(Variable.Type.Kind, intModeOfVType(Variable.Type),
+                       Variable.Type.BitWidth, Variable.Type.IsSigned);
+      if (Sort.Kind == LogicSortKind::Invalid) {
+        fail("invalid diagnostic variable sort in obligation lowering");
+        continue;
+      }
+      M.DiagnosticVariables[InternalName] = {
+          Variable.DisplayName, Sort, Variable.Loc, Variable.EndLoc, {}};
+    }
+    auto traceKind = [](PassiveTraceKind Kind) {
+      switch (Kind) {
+      case PassiveTraceKind::Branch:
+        return DiagnosticTraceKind::Branch;
+      case PassiveTraceKind::Call:
+        return DiagnosticTraceKind::Call;
+      case PassiveTraceKind::Loop:
+        return DiagnosticTraceKind::Loop;
+      case PassiveTraceKind::HeapWrite:
+        return DiagnosticTraceKind::HeapWrite;
+      case PassiveTraceKind::Allocation:
+        return DiagnosticTraceKind::Allocation;
+      case PassiveTraceKind::LifetimeEnd:
+        return DiagnosticTraceKind::LifetimeEnd;
+      case PassiveTraceKind::Deallocation:
+        return DiagnosticTraceKind::Deallocation;
+      case PassiveTraceKind::Return:
+        return DiagnosticTraceKind::Return;
+      }
+      return DiagnosticTraceKind::Branch;
+    };
+    auto lowerDiagnosticExpr = [&](const VExpr *Expr) {
+      const unsigned SemanticQuantifierCounter = QuantifierCounter;
+      QuantifierCounter = 0;
+      auto Result = fromVExpr(Expr);
+      QuantifierCounter = SemanticQuantifierCounter;
+      return Result;
+    };
+    for (const PassiveTraceEvent &Event : P.TraceEvents) {
+      DiagnosticTraceEvent Lowered;
+      Lowered.Kind = traceKind(Event.Kind);
+      Lowered.Message = Event.Message;
+      Lowered.Loc = Event.Loc;
+      Lowered.EndLoc = Event.EndLoc;
+      Lowered.Guard = lowerDiagnosticExpr(Event.Guard.get());
+      for (const PassiveTraceValue &Value : Event.Values)
+        Lowered.Values.push_back(
+            {Value.Label, lowerDiagnosticExpr(Value.Value.get())});
+      M.TraceEvents.push_back(std::move(Lowered));
+    }
 
     std::vector<std::unique_ptr<VCExpr>> EntryAssumes;
     for (const auto &Entry : P.EntryAssumes)
@@ -1445,6 +1567,7 @@ public:
     struct LoweredStmt {
       PassiveStmt::Kind Kind;
       ObligationKind ProofKind;
+      uint64_t TraceEventCount;
       std::unique_ptr<VCExpr> Cond;
     };
     std::vector<LoweredStmt> Stmts;
@@ -1454,7 +1577,7 @@ public:
         continue;
       }
       Stmts.push_back({Stmt->K, obligationKind(Stmt->ProofKind),
-                       fromVExpr(Stmt->Cond.get())});
+                       Stmt->TraceEventCount, fromVExpr(Stmt->Cond.get())});
     }
 
     std::vector<std::unique_ptr<VCExpr>> ExitAsserts;
@@ -1474,6 +1597,7 @@ public:
       for (auto It = Assumptions.rbegin(); It != Assumptions.rend(); ++It)
         ConditionWP = vcOr(vcNot(cloneVCExpr(*It)), std::move(ConditionWP));
       ConditionWP->Loc = Condition->Loc;
+      ConditionWP->EndLoc = Condition->EndLoc;
       return ConditionWP;
     };
 
@@ -1482,14 +1606,18 @@ public:
             ? P.FunctionIdentity
             : (!P.FunctionName.empty() ? P.FunctionName : "__anonymous");
     unsigned ObligationIndex = 0;
-    auto appendObligation = [&](ObligationKind Kind, const VCExpr *Condition) {
+    auto appendObligation = [&](ObligationKind Kind, const VCExpr *Condition,
+                                uint64_t TraceEventCount) {
       Obligation Item;
       Item.Kind = Kind;
       Item.Loc = Condition->Loc;
+      Item.EndLoc = Condition->EndLoc;
+      Item.TraceEventCount = TraceEventCount;
       Item.Id = Identity + "::obligation:" + std::to_string(++ObligationIndex);
       Item.Goal = makeGoal(Condition);
       Item.CounterexampleQuery = vcNot(cloneVCExpr(Item.Goal.get()));
       Item.CounterexampleQuery->Loc = Condition->Loc;
+      Item.CounterexampleQuery->EndLoc = Condition->EndLoc;
       M.Obligations.push_back(std::move(Item));
     };
 
@@ -1498,10 +1626,11 @@ public:
         Assumptions.push_back(Stmt.Cond.get());
         continue;
       }
-      appendObligation(Stmt.ProofKind, Stmt.Cond.get());
+      appendObligation(Stmt.ProofKind, Stmt.Cond.get(), Stmt.TraceEventCount);
     }
     for (const auto &Exit : ExitAsserts)
-      appendObligation(ObligationKind::Postcondition, Exit.get());
+      appendObligation(ObligationKind::Postcondition, Exit.get(),
+                       M.TraceEvents.size());
 
     M.CorrectnessGoal = buildCompleteGoal(M.Obligations);
     M.CounterexampleQuery = vcNot(cloneVCExpr(M.CorrectnessGoal.get()));
@@ -1532,6 +1661,55 @@ verify::validateObligationModule(const ObligationModule &M) {
         "embedded NUL in obligation module metadata");
 
   std::string ValidationError;
+  std::set<std::string> StableObligationIds;
+  std::map<std::string, LogicSort> ModuleVariables;
+  for (const auto &[InternalName, Variable] : M.DiagnosticVariables) {
+    if (InternalName.empty() || Variable.DisplayName.empty() ||
+        containsEmbeddedNul(InternalName) ||
+        containsEmbeddedNul(Variable.DisplayName) ||
+        containsEmbeddedNul(Variable.Source.File) ||
+        !validateLogicSort(Variable.Sort, ValidationError))
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "obligation module has invalid diagnostic variable metadata");
+    if (!validateSource(Variable.Source, ValidationError))
+      return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                     ValidationError.c_str());
+    auto [It, Inserted] = ModuleVariables.emplace(InternalName, Variable.Sort);
+    if (!Inserted && !equivalentVariableSort(It->second, Variable.Sort))
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "obligation module has inconsistent diagnostic variable sort");
+  }
+  for (const DiagnosticTraceEvent &Event : M.TraceEvents) {
+    if (containsEmbeddedNul(Event.Message) ||
+        containsEmbeddedNul(Event.Source.File))
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "obligation module has invalid diagnostic trace metadata");
+    if (!validateSource(Event.Source, ValidationError))
+      return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                     ValidationError.c_str());
+    if (!validateLogicExpr(Event.Guard.get(), ValidationError) ||
+        !validateLogicCalls(Event.Guard.get(), M.LogicFunctions,
+                            ValidationError) ||
+        !validateVariableScopes(Event.Guard.get(), ModuleVariables,
+                                ValidationError) ||
+        Event.Guard->Sort.Kind != LogicSortKind::Bool)
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "obligation module has invalid diagnostic trace metadata");
+    for (const DiagnosticTraceValue &Value : Event.Values)
+      if (Value.Label.empty() || containsEmbeddedNul(Value.Label) ||
+          !validateLogicExpr(Value.Value.get(), ValidationError) ||
+          !validateLogicCalls(Value.Value.get(), M.LogicFunctions,
+                              ValidationError) ||
+          !validateVariableScopes(Value.Value.get(), ModuleVariables,
+                                  ValidationError))
+        return llvm::createStringError(
+            llvm::inconvertibleErrorCode(),
+            "obligation module has invalid diagnostic trace value");
+  }
   if (!validateLogicExpr(M.CorrectnessGoal.get(), ValidationError))
     return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                    ValidationError.c_str());
@@ -1539,7 +1717,8 @@ verify::validateObligationModule(const ObligationModule &M) {
                           ValidationError))
     return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                    ValidationError.c_str());
-  if (!validateVariableScopes(M.CorrectnessGoal.get(), ValidationError))
+  if (!validateVariableScopes(M.CorrectnessGoal.get(), ModuleVariables,
+                              ValidationError))
     return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                    ValidationError.c_str());
   if (M.CorrectnessGoal->Sort.Kind != LogicSortKind::Bool)
@@ -1552,7 +1731,8 @@ verify::validateObligationModule(const ObligationModule &M) {
                           ValidationError))
     return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                    ValidationError.c_str());
-  if (!validateVariableScopes(M.CounterexampleQuery.get(), ValidationError))
+  if (!validateVariableScopes(M.CounterexampleQuery.get(), ModuleVariables,
+                              ValidationError))
     return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                    ValidationError.c_str());
   if (M.CounterexampleQuery->Sort.Kind != LogicSortKind::Bool)
@@ -1570,18 +1750,33 @@ verify::validateObligationModule(const ObligationModule &M) {
   std::set<std::string> ObligationIds;
   for (const Obligation &Item : M.Obligations) {
     if (Item.Id.empty() || containsEmbeddedNul(Item.Id) ||
+        containsEmbeddedNul(Item.StableId) ||
         containsEmbeddedNul(Item.Source.File) ||
         !ObligationIds.insert(Item.Id).second)
       return llvm::createStringError(
           llvm::inconvertibleErrorCode(),
           "obligation module has an empty or duplicate obligation identity");
+    if ((!Item.StableId.empty() &&
+         !StableObligationIds.insert(Item.StableId).second) ||
+        containsEmbeddedNul(Item.Source.File))
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "obligation module has an invalid stable diagnostic identity");
+    if (!validateSource(Item.Source, ValidationError))
+      return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                     ValidationError.c_str());
+    if (Item.TraceEventCount > M.TraceEvents.size())
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "obligation module has an invalid diagnostic trace prefix");
     if (!validateLogicExpr(Item.Goal.get(), ValidationError))
       return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                      ValidationError.c_str());
     if (!validateLogicCalls(Item.Goal.get(), M.LogicFunctions, ValidationError))
       return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                      ValidationError.c_str());
-    if (!validateVariableScopes(Item.Goal.get(), ValidationError))
+    if (!validateVariableScopes(Item.Goal.get(), ModuleVariables,
+                                ValidationError))
       return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                      ValidationError.c_str());
     if (Item.Goal->Sort.Kind != LogicSortKind::Bool)
@@ -1594,7 +1789,7 @@ verify::validateObligationModule(const ObligationModule &M) {
                             ValidationError))
       return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                      ValidationError.c_str());
-    if (!validateVariableScopes(Item.CounterexampleQuery.get(),
+    if (!validateVariableScopes(Item.CounterexampleQuery.get(), ModuleVariables,
                                 ValidationError))
       return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                      ValidationError.c_str());

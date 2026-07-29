@@ -13,7 +13,9 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdlib>
@@ -87,6 +89,14 @@ static cl::opt<std::string> ObligationIn(
     cl::desc("Validate and replay a backend-neutral obligation archive"),
     cl::value_desc("file"), cl::cat(CppVerifyCategory));
 
+static cl::opt<verify::DiagnosticFormat> DiagnosticsFormat(
+    "diagnostics-format", cl::desc("Verification diagnostics format"),
+    cl::values(clEnumValN(verify::DiagnosticFormat::Text, "text",
+                          "Human-readable text (default)"),
+               clEnumValN(verify::DiagnosticFormat::Json, "json",
+                          "Versioned JSON Lines")),
+    cl::init(verify::DiagnosticFormat::Text), cl::cat(CppVerifyCategory));
+
 namespace {
 
 static int gVerifyFailures = 0;
@@ -114,6 +124,7 @@ public:
       VOpts.BMCUnroll = BMCUnroll.getValue();
       VOpts.SolverTimeoutMs = SolverTimeout.getValue();
       VOpts.CheckUB = CheckUB.getValue();
+      VOpts.Diagnostics = DiagnosticsFormat.getValue();
       VOpts.ObligationOut = gObligationOut;
       if (!verify::verifyTranslationUnit(Ctx, llvm::outs(), VOpts))
         ++gVerifyFailures;
@@ -129,6 +140,137 @@ public:
     return std::make_unique<VerifyConsumer>();
   }
 };
+
+static llvm::StringRef replayStatusCode(verify::VerifyStatus Status) {
+  switch (Status) {
+  case verify::VerifyStatus::Lowered:
+    return "lowered";
+  case verify::VerifyStatus::Verified:
+    return "verified";
+  case verify::VerifyStatus::Failed:
+    return "failed";
+  case verify::VerifyStatus::Unresolved:
+    return "unresolved";
+  case verify::VerifyStatus::BoundedSafe:
+    return "bounded-safe";
+  case verify::VerifyStatus::Exported:
+    return "exported";
+  case verify::VerifyStatus::Certified:
+    return "certified";
+  }
+  return "unresolved";
+}
+
+static std::string jsonText(llvm::StringRef Text) {
+  return llvm::json::isUTF8(Text) ? Text.str() : llvm::json::fixUTF8(Text);
+}
+
+static llvm::json::Object
+replaySourceJSON(const verify::ObligationSource &Source) {
+  llvm::json::Object Result;
+  if (!Source.isValid())
+    return Result;
+  Result["file"] = jsonText(Source.File);
+  Result["line"] = Source.Line;
+  Result["column"] = Source.Column;
+  Result["end_line"] = Source.EndLine != 0 ? Source.EndLine : Source.Line;
+  Result["end_column"] =
+      Source.EndColumn != 0 ? Source.EndColumn : Source.Column;
+  return Result;
+}
+
+static void printReplayJSON(const verify::ObligationModule &Module,
+                            const verify::VerifyResult &Result,
+                            llvm::StringRef SemanticHash) {
+  llvm::json::Object Record;
+  Record["schema"] = "cppverify.diagnostic/1";
+  Record["status"] = replayStatusCode(Result.Status);
+  Record["severity"] = Result.Status == verify::VerifyStatus::BoundedSafe
+                           ? "warning"
+                       : Result.Status == verify::VerifyStatus::Failed ||
+                               Result.Status == verify::VerifyStatus::Unresolved
+                           ? "error"
+                           : "note";
+  Record["function"] = jsonText(Module.FunctionName);
+  Record["message"] = jsonText(Result.Message);
+  Record["semantic_hash"] = ("sha256:" + SemanticHash).str();
+  if (!Result.BackendName.empty())
+    Record["backend"] = Result.BackendName;
+  if (Result.Reason != verify::VerifyReason::None)
+    Record["reason"] = verify::verifyReasonCode(Result.Reason);
+  if (Result.Bound)
+    Record["bound"] = static_cast<int64_t>(*Result.Bound);
+  if (Result.Source.isValid())
+    Record["source"] = replaySourceJSON(Result.Source);
+  if (!Result.ObligationId.empty()) {
+    llvm::json::Object Obligation;
+    Obligation["id"] = jsonText(Result.ObligationId);
+    if (Result.ObligationType) {
+      const char *Kind =
+          *Result.ObligationType == verify::ObligationKind::Postcondition
+              ? "postcondition"
+          : *Result.ObligationType == verify::ObligationKind::Unwinding
+              ? "unwinding"
+              : "assertion";
+      Obligation["kind"] = Kind;
+    }
+    if (Result.Source.isValid())
+      Obligation["source"] = replaySourceJSON(Result.Source);
+    Record["obligation"] = std::move(Obligation);
+  }
+  if (!Result.Model.empty()) {
+    llvm::json::Array Model;
+    for (const verify::VerifyModelValue &Value : Result.Model) {
+      llvm::json::Object Entry;
+      Entry["name"] = jsonText(Value.DisplayName);
+      Entry["ssa_name"] = jsonText(Value.InternalName);
+      Entry["sort"] = verify::formatLogicSort(Value.Sort);
+      Entry["value"] = Value.Value ? llvm::json::Value(jsonText(*Value.Value))
+                                   : llvm::json::Value(nullptr);
+      if (Value.Source.isValid())
+        Entry["source"] = replaySourceJSON(Value.Source);
+      Model.push_back(std::move(Entry));
+    }
+    Record["model"] = std::move(Model);
+  }
+  if (!Result.Trace.empty()) {
+    llvm::json::Array Trace;
+    for (const verify::VerifyTraceEvent &Event : Result.Trace) {
+      llvm::json::Object Entry;
+      const char *Kind =
+          Event.Kind == verify::DiagnosticTraceKind::Call         ? "call"
+          : Event.Kind == verify::DiagnosticTraceKind::Loop       ? "loop"
+          : Event.Kind == verify::DiagnosticTraceKind::HeapWrite  ? "heap-write"
+          : Event.Kind == verify::DiagnosticTraceKind::Allocation ? "allocation"
+          : Event.Kind == verify::DiagnosticTraceKind::LifetimeEnd
+              ? "lifetime-end"
+          : Event.Kind == verify::DiagnosticTraceKind::Deallocation
+              ? "deallocation"
+          : Event.Kind == verify::DiagnosticTraceKind::Return ? "return"
+                                                              : "branch";
+      Entry["kind"] = Kind;
+      Entry["message"] = jsonText(Event.Message);
+      Entry["active"] = Event.Active ? llvm::json::Value(*Event.Active)
+                                     : llvm::json::Value(nullptr);
+      if (Event.Source.isValid())
+        Entry["source"] = replaySourceJSON(Event.Source);
+      llvm::json::Array Values;
+      for (const verify::VerifyTraceValue &Value : Event.Values) {
+        llvm::json::Object Item;
+        Item["label"] = jsonText(Value.Label);
+        Item["sort"] = verify::formatLogicSort(Value.Sort);
+        Item["value"] = Value.Value ? llvm::json::Value(jsonText(*Value.Value))
+                                    : llvm::json::Value(nullptr);
+        Values.push_back(std::move(Item));
+      }
+      if (!Values.empty())
+        Entry["values"] = std::move(Values);
+      Trace.push_back(std::move(Entry));
+    }
+    Record["trace"] = std::move(Trace);
+  }
+  llvm::outs() << llvm::formatv("{0}\n", llvm::json::Value(std::move(Record)));
+}
 
 static int replayObligationArchive() {
   if (!ObligationOut.empty()) {
@@ -246,10 +388,37 @@ static int replayObligationArchive() {
     }
 
     const std::string Hash = verify::obligationSemanticHash(Module);
+    if (DiagnosticsFormat == verify::DiagnosticFormat::Json) {
+      printReplayJSON(Module, Result, Hash);
+      if (Result.Status != verify::VerifyStatus::Lowered &&
+          Result.Status != verify::VerifyStatus::Verified &&
+          Result.Status != verify::VerifyStatus::Exported)
+        AllOk = false;
+      continue;
+    }
     std::string Suffix = " [backend=" + Result.BackendName;
     if (Result.Bound)
       Suffix += ", bound=" + std::to_string(*Result.Bound);
-    Suffix += "] [semantic-hash=sha256:" + Hash + "]";
+    Suffix += "]";
+    if (Result.Reason != verify::VerifyReason::None)
+      Suffix +=
+          " [reason=" + verify::verifyReasonCode(Result.Reason).str() + "]";
+    Suffix += " [semantic-hash=sha256:" + Hash + "]";
+    auto printResultSource = [&]() {
+      verify::ObligationSource Source = Result.Source;
+      if (!Source.isValid() && !Result.ObligationId.empty()) {
+        auto It = llvm::find_if(Module.Obligations,
+                                [&](const verify::Obligation &Item) {
+                                  return Item.Id == Result.ObligationId ||
+                                         Item.StableId == Result.ObligationId;
+                                });
+        if (It != Module.Obligations.end())
+          Source = It->Source;
+      }
+      if (Source.isValid())
+        llvm::outs() << Source.File << ":" << Source.Line << ":"
+                     << Source.Column << ": ";
+    };
     switch (Result.Status) {
     case verify::VerifyStatus::Lowered:
       llvm::outs() << "Lowered: " << Module.FunctionName << Suffix << "\n";
@@ -263,15 +432,7 @@ static int replayObligationArchive() {
       break;
     case verify::VerifyStatus::Failed:
       AllOk = false;
-      if (!Result.ObligationId.empty()) {
-        auto It = llvm::find_if(Module.Obligations,
-                                [&](const verify::Obligation &Item) {
-                                  return Item.Id == Result.ObligationId;
-                                });
-        if (It != Module.Obligations.end() && It->Source.isValid())
-          llvm::outs() << It->Source.File << ":" << It->Source.Line << ":"
-                       << It->Source.Column << ": ";
-      }
+      printResultSource();
       llvm::outs() << "error: verification failed: " << Module.FunctionName;
       if (!Result.ObligationId.empty())
         llvm::outs() << " [" << Result.ObligationId << "]";
@@ -281,6 +442,7 @@ static int replayObligationArchive() {
       break;
     case verify::VerifyStatus::Unresolved:
       AllOk = false;
+      printResultSource();
       llvm::outs() << "Unresolved: " << Module.FunctionName;
       if (!Result.Message.empty())
         llvm::outs() << " (" << Result.Message << ")";
@@ -288,6 +450,7 @@ static int replayObligationArchive() {
       break;
     case verify::VerifyStatus::BoundedSafe:
       AllOk = false;
+      printResultSource();
       llvm::outs() << "BoundedSafe: " << Module.FunctionName;
       if (!Result.Message.empty())
         llvm::outs() << " (" << Result.Message << ")";

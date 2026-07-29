@@ -108,10 +108,12 @@ struct VIfStmt : VStmt {
   std::unique_ptr<VExpr> Cond;
   std::vector<std::unique_ptr<VStmt>> Then;
   std::vector<std::unique_ptr<VStmt>> Else;
+  bool IsLoopUnroll;
   VIfStmt(std::unique_ptr<VExpr> C, std::vector<std::unique_ptr<VStmt>> T,
-          std::vector<std::unique_ptr<VStmt>> E, SourceLocation Loc)
+          std::vector<std::unique_ptr<VStmt>> E, SourceLocation Loc,
+          bool IsLoopUnroll = false)
       : VStmt(If, Loc), Cond(std::move(C)), Then(std::move(T)),
-        Else(std::move(E)) {}
+        Else(std::move(E)), IsLoopUnroll(IsLoopUnroll) {}
 };
 
 struct VAssertStmt : VStmt {
@@ -233,6 +235,14 @@ struct VFreshOwnedReturn {
   bool MayReturnNull = false;
 };
 
+/// Source identity retained independently of later SSA names.
+struct VSourceVariable {
+  std::string DisplayName;
+  VType Type;
+  SourceLocation Loc;
+  SourceLocation EndLoc;
+};
+
 struct VFunction {
   /// User-facing source name.
   std::string Name;
@@ -252,6 +262,7 @@ struct VFunction {
   std::set<std::string> HiddenSpecs;
   std::set<std::string> RevealedSpecs;
   std::vector<std::pair<std::string, VType>> Params;
+  std::map<std::string, VSourceVariable> SourceVariables;
   std::set<std::string> ReferenceParams;
   std::vector<std::pair<std::string, VType>> ReturnFields;
   /// Number of leading preconditions originating from explicit pre clauses.

@@ -1,0 +1,12 @@
+# RUN: not %cpp-verify %S/Inputs/backend_stable_id_base.cpp 2>&1 | FileCheck %s
+# RUN: not %cpp-verify %S/Inputs/backend_stable_id_inserted.cpp 2>&1 | FileCheck %s
+# RUN: not %cpp-verify --dump-ir=3 %S/Inputs/backend_stable_id_base.cpp 2>&1 | grep 'semantic-hash' | tail -1 > %t.base-hash
+# RUN: not %cpp-verify --dump-ir=3 %S/Inputs/backend_stable_id_inserted.cpp 2>&1 | grep 'semantic-hash' | tail -1 > %t.inserted-hash
+# RUN: cmp %t.base-hash %t.inserted-hash
+# RUN: not %cpp-verify --diagnostics-format=json %S/Inputs/backend_inlined_source.cpp 2>&1 | FileCheck %s --check-prefix=INLINED
+
+# CHECK: verification failed: stable_identity [{{.*}}::postcondition@2:15#2]
+# INLINED: "function":"inlined_source"
+# INLINED-SAME: "id":"{{.*}}::postcondition@4:8#2"
+# INLINED-SAME: "end_column":26
+# INLINED-SAME: "line":4

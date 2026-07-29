@@ -742,6 +742,33 @@ std::string ASTConverter::valueName(const ValueDecl *D) const {
   return D ? D->getNameAsString() : std::string();
 }
 
+void ASTConverter::recordSourceVariable(const ValueDecl *D) {
+  if (!CurrentFn || !D)
+    return;
+  const std::string InternalBase = valueName(D);
+  std::string DisplayBase = D->getNameAsString();
+  if (DisplayBase.empty())
+    DisplayBase = InternalBase;
+  auto Record = [&](std::string InternalName, std::string DisplayName,
+                    VType Type) {
+    if (Type.isAggregate() || Type.Kind == VTypeKind::Void ||
+        Type.Kind == VTypeKind::Unsupported)
+      return;
+    CurrentFn->SourceVariables[std::move(InternalName)] = {
+        std::move(DisplayName), Type, D->getLocation(), D->getEndLoc()};
+  };
+  if (const RecordDecl *RD = getRecordFromType(D->getType())) {
+    if (const RecordDecl *Definition = RD->getDefinition())
+      for (const FieldDecl *Field : Definition->fields())
+        Record(InternalBase + "." + Field->getNameAsString(),
+               DisplayBase + "." + Field->getNameAsString(),
+               VType::fromQualType(Field->getType(), IntMode, Ctx));
+    return;
+  }
+  Record(InternalBase, DisplayBase,
+         VType::fromQualType(D->getType(), IntMode, Ctx));
+}
+
 bool ASTConverter::referencesDynamicPointer(const Expr *E) const {
   if (!E)
     return false;
@@ -1934,6 +1961,15 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     QualType Addressed = addressedType(P);
     if (!Addressed.isNull() && !Addressed->isVoidType())
       AddressParams.push_back(P);
+    recordSourceVariable(P);
+  }
+  if (Fn->ReturnType.Kind == VTypeKind::Struct) {
+    for (const auto &[Field, Type] : Fn->ReturnFields)
+      Fn->SourceVariables["result." + Field] = {
+          "result." + Field, Type, FD->getLocation(), FD->getEndLoc()};
+  } else if (Fn->ReturnType.Kind != VTypeKind::Void) {
+    Fn->SourceVariables["__result"] = {"result", Fn->ReturnType,
+                                       FD->getLocation(), FD->getEndLoc()};
   }
 
   auto recordContractExpr = [&](const char *Clause, const Expr *E,
@@ -2205,7 +2241,11 @@ ASTConverter::convertConstexprSpec(const FunctionDecl *FD) {
       Fn->Params.emplace_back(P->getNameAsString(),
                               VType::fromQualType(P->getType(), IntMode, Ctx));
     }
+    recordSourceVariable(P);
   }
+  if (Fn->ReturnType.Kind != VTypeKind::Void)
+    Fn->SourceVariables["__result"] = {"result", Fn->ReturnType,
+                                       FD->getLocation(), FD->getEndLoc()};
 
   if (const Stmt *Body = FD->getBody()) {
     beginInitializationTracking(FD);
@@ -2876,6 +2916,13 @@ ASTConverter::convertRecordField(std::unique_ptr<VExpr> Base,
 }
 
 std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
+  auto Result = convertExprImpl(E);
+  if (Result && E)
+    Result->EndLoc = E->getEndLoc();
+  return Result;
+}
+
+std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
   if (!E)
     return nullptr;
   E = E->IgnoreParens();
@@ -4970,6 +5017,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
             ": unsupported aggregate local variable: " + VD->getNameAsString());
         continue;
       }
+      recordSourceVariable(VD);
       if (AddressableLocals.count(VD)) {
         if (LoopDepth != 0) {
           Errors.push_back(

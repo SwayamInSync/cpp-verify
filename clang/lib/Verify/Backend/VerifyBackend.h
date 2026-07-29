@@ -3,6 +3,7 @@
 #define LLVM_CLANG_VERIFY_BACKEND_VERIFYBACKEND_H
 
 #include "Obligation.h"
+#include "llvm/ADT/StringRef.h"
 #include <map>
 #include <memory>
 #include <optional>
@@ -21,15 +22,63 @@ enum class VerifyStatus {
   Certified
 };
 
+/// Stable, backend-independent explanation for a non-success result. The
+/// textual message remains diagnostic detail and is not a machine interface.
+enum class VerifyReason {
+  None,
+  Counterexample,
+  SolverTimeout,
+  SolverUnknown,
+  EncodingFailure,
+  InvalidObligation,
+  UnsupportedLogic,
+  MissingQuery,
+  InvalidBackendResult,
+  InconsistentBackendResults,
+  IncompleteBound,
+  LeanExportFailure
+};
+
+llvm::StringRef verifyReasonCode(VerifyReason Reason);
+
+struct VerifyModelValue {
+  std::string DisplayName;
+  std::string InternalName;
+  LogicSort Sort;
+  ObligationSource Source;
+  /// Empty when the solver model does not determine this value. Backends must
+  /// not use model completion to manufacture a diagnostic value.
+  std::optional<std::string> Value;
+};
+
+struct VerifyTraceValue {
+  std::string Label;
+  LogicSort Sort;
+  std::optional<std::string> Value;
+};
+
+struct VerifyTraceEvent {
+  DiagnosticTraceKind Kind = DiagnosticTraceKind::Branch;
+  std::string Message;
+  ObligationSource Source;
+  /// Empty when the model does not determine whether this event is on the
+  /// counterexample path.
+  std::optional<bool> Active;
+  std::vector<VerifyTraceValue> Values;
+};
+
 struct VerifyResult {
   VerifyStatus Status = VerifyStatus::Unresolved;
+  VerifyReason Reason = VerifyReason::None;
   std::string BackendName;
   std::optional<unsigned> Bound;
   std::string Message;
-  std::map<std::string, std::string> Model;
+  std::vector<VerifyModelValue> Model;
+  std::vector<VerifyTraceEvent> Trace;
   std::string ObligationId;
   std::optional<ObligationKind> ObligationType;
   SourceLocation Location;
+  ObligationSource Source;
 };
 
 struct BackendCapabilities {

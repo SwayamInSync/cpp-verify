@@ -73,13 +73,17 @@ constexpr LogicFeatureSet allLogicFeatures() {
 
 std::string formatLogicFeatures(LogicFeatureSet Features);
 const char *logicSortName(LogicSortKind Kind);
+std::string formatLogicSort(const LogicSort &Sort);
 
 struct ObligationSource {
   std::string File;
   unsigned Line = 0;
   unsigned Column = 0;
+  unsigned EndLine = 0;
+  unsigned EndColumn = 0;
 
   bool isValid() const { return !File.empty() && Line != 0; }
+  bool hasRange() const { return isValid() && EndLine != 0; }
 };
 
 /// A typed logical term shared by every proof backend and IR dump.
@@ -128,6 +132,7 @@ public:
   Kind K;
   LogicSort Sort;
   SourceLocation Loc;
+  SourceLocation EndLoc;
   ObligationSource Source;
 
   std::vector<std::unique_ptr<LogicExpr>> Children;
@@ -147,13 +152,52 @@ using VCExpr = LogicExpr;
 
 enum class ObligationKind { Assertion, Postcondition, Unwinding };
 
+enum class DiagnosticTraceKind {
+  Branch,
+  Call,
+  Loop,
+  HeapWrite,
+  Allocation,
+  LifetimeEnd,
+  Deallocation,
+  Return
+};
+
+struct DiagnosticTraceValue {
+  std::string Label;
+  std::unique_ptr<LogicExpr> Value;
+};
+
+struct DiagnosticTraceEvent {
+  DiagnosticTraceKind Kind = DiagnosticTraceKind::Branch;
+  std::string Message;
+  SourceLocation Loc;
+  SourceLocation EndLoc;
+  ObligationSource Source;
+  std::unique_ptr<LogicExpr> Guard;
+  std::vector<DiagnosticTraceValue> Values;
+};
+
 struct Obligation {
   std::string Id;
+  /// Source-anchored public identity. Unlike Id, this does not shift when an
+  /// unrelated obligation is inserted earlier in the function.
+  std::string StableId;
   ObligationKind Kind = ObligationKind::Assertion;
   SourceLocation Loc;
+  SourceLocation EndLoc;
   ObligationSource Source;
+  uint64_t TraceEventCount = 0;
   std::unique_ptr<LogicExpr> Goal;
   std::unique_ptr<LogicExpr> CounterexampleQuery;
+};
+
+struct DiagnosticVariable {
+  std::string DisplayName;
+  LogicSort Sort;
+  SourceLocation Loc;
+  SourceLocation EndLoc;
+  ObligationSource Source;
 };
 
 struct LogicFunctionParameter {
@@ -193,6 +237,10 @@ public:
   std::unique_ptr<LogicExpr> CorrectnessGoal;
   std::unique_ptr<LogicExpr> CounterexampleQuery;
   std::vector<Obligation> Obligations;
+  /// Display-only source identities keyed by exact SSA name. This metadata is
+  /// excluded from semantic hashes and never changes solver meaning.
+  std::map<std::string, DiagnosticVariable> DiagnosticVariables;
+  std::vector<DiagnosticTraceEvent> TraceEvents;
   std::map<std::string, LogicFunctionDecl> LogicFunctions;
   LogicFeatureSet RequiredFeatures = 0;
   std::string ResultVarName;

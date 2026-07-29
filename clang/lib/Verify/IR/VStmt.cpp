@@ -43,7 +43,7 @@ std::unique_ptr<VStmt> verify::cloneVStmt(const VStmt *S) {
     for (const auto &E : I.Else)
       Else.push_back(cloneVStmt(E.get()));
     return std::make_unique<VIfStmt>(cloneVExpr(I.Cond.get()), std::move(Then),
-                                     std::move(Else), I.Loc);
+                                     std::move(Else), I.Loc, I.IsLoopUnroll);
   }
   case VStmt::While: {
     const auto &W = static_cast<const VWhileStmt &>(*S);
@@ -139,6 +139,7 @@ VFunction verify::cloneVFunction(const VFunction &Fn) {
   Out.HiddenSpecs = Fn.HiddenSpecs;
   Out.RevealedSpecs = Fn.RevealedSpecs;
   Out.Params = Fn.Params;
+  Out.SourceVariables = Fn.SourceVariables;
   Out.ReferenceParams = Fn.ReferenceParams;
   Out.ReturnFields = Fn.ReturnFields;
   Out.ExplicitPreconditionCount = Fn.ExplicitPreconditionCount;

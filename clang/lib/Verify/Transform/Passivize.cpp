@@ -20,6 +20,8 @@ struct CloneCtx {
 };
 
 static std::unique_ptr<VExpr> cloneExpr(const VExpr *E, const CloneCtx &Ctx);
+static std::unique_ptr<VExpr> cloneExprImpl(const VExpr *E,
+                                            const CloneCtx &Ctx);
 
 static const VVarExpr *directPointerRoot(const VExpr *E) {
   while (E && E->K == VExpr::Cast)
@@ -165,6 +167,14 @@ static std::string stateVariableName(const CloneCtx &Ctx,
 }
 
 static std::unique_ptr<VExpr> cloneExpr(const VExpr *E, const CloneCtx &Ctx) {
+  auto Copy = cloneExprImpl(E, Ctx);
+  if (Copy && E)
+    Copy->EndLoc = E->EndLoc;
+  return Copy;
+}
+
+static std::unique_ptr<VExpr> cloneExprImpl(const VExpr *E,
+                                            const CloneCtx &Ctx) {
   if (!E)
     return nullptr;
   if (Ctx.UseOldState && E->K == VExpr::Old) {
@@ -2182,15 +2192,43 @@ class PassivizerImpl {
   std::vector<StoredPointerCell> StoredPointerCells;
   std::set<std::string> HeapBases;
   std::set<std::string> HeapVariables;
+  std::map<std::string, PassiveModelVariable> ModelVariables;
+  std::map<std::string, std::set<std::string>> SourceVersions;
+  std::set<std::string> SuppressedSourceVariables;
+  std::vector<PassiveTraceEvent> TraceEvents;
   std::string ResultVar = "__result";
   const VFunction &Fn;
   FunctionMap FnMap;
+
+  void recordSourceVersion(const std::string &Base,
+                           const std::string &Versioned) {
+    if (SuppressedSourceVariables.count(Base))
+      return;
+    auto Source = Fn.SourceVariables.find(Base);
+    if (Source == Fn.SourceVariables.end())
+      return;
+    ModelVariables[Versioned] = {Source->second.DisplayName,
+                                 Source->second.Type, Source->second.Loc,
+                                 Source->second.EndLoc};
+    SourceVersions[Base].insert(Versioned);
+  }
+
+  void suppressSourceVariable(const std::string &Base) {
+    SuppressedSourceVariables.insert(Base);
+    auto Versions = SourceVersions.find(Base);
+    if (Versions == SourceVersions.end())
+      return;
+    for (const std::string &Versioned : Versions->second)
+      ModelVariables.erase(Versioned);
+    SourceVersions.erase(Versions);
+  }
 
   std::string versionedName(const std::string &N) {
     int &V = Versions[N];
     std::string Name = N + "_" + std::to_string(V);
     if (HeapBases.count(N))
       HeapVariables.insert(Name);
+    recordSourceVersion(N, Name);
     return Name;
   }
 
@@ -2198,6 +2236,7 @@ class PassivizerImpl {
     std::string Name = N + "_" + std::to_string(++Versions[N]);
     if (HeapBases.count(N))
       HeapVariables.insert(Name);
+    recordSourceVersion(N, Name);
     return Name;
   }
 
@@ -2219,7 +2258,36 @@ class PassivizerImpl {
     return cloneVExpr(E);
   }
 
-  static void
+  void emitTrace(PassiveTraceKind Kind, std::string Message, const VExpr *Guard,
+                 SourceLocation Loc,
+                 std::vector<PassiveTraceValue> Values = {}) {
+    PassiveTraceEvent Event;
+    Event.Kind = Kind;
+    Event.Message = std::move(Message);
+    Event.Loc = Loc;
+    Event.EndLoc = Loc;
+    Event.Guard = Guard ? cloneVExpr(Guard) : makeBoolLiteral(true, Loc);
+    for (PassiveTraceValue &Value : Values) {
+      if (!Value.Value)
+        continue;
+      switch (Value.Value->Ty.Kind) {
+      case VTypeKind::Bool:
+      case VTypeKind::Int32:
+      case VTypeKind::Int64:
+      case VTypeKind::Ptr:
+        Event.Values.push_back(std::move(Value));
+        break;
+      case VTypeKind::Void:
+      case VTypeKind::Struct:
+      case VTypeKind::Array:
+      case VTypeKind::Unsupported:
+        break;
+      }
+    }
+    TraceEvents.push_back(std::move(Event));
+  }
+
+  void
   emitPassive(PassiveProgram &P, PassiveStmt::Kind K,
               std::unique_ptr<VExpr> Cond, const VExpr *Guard = nullptr,
               SourceLocation Loc = SourceLocation(),
@@ -2227,6 +2295,7 @@ class PassivizerImpl {
     auto PS = std::make_unique<PassiveStmt>();
     PS->K = K;
     PS->ProofKind = ProofKind;
+    PS->TraceEventCount = TraceEvents.size();
     if (Guard)
       Cond = makeImplies(cloneVExpr(Guard), std::move(Cond), Loc);
     PS->Cond = std::move(Cond);
@@ -2242,9 +2311,9 @@ class PassivizerImpl {
     return Literal.Ty.Kind != VTypeKind::Bool || Literal.Value != "1";
   }
 
-  static void emitInactiveFrame(PassiveProgram &P, llvm::StringRef Before,
-                                llvm::StringRef After, const VType &Ty,
-                                const VExpr *Guard, SourceLocation Loc) {
+  void emitInactiveFrame(PassiveProgram &P, llvm::StringRef Before,
+                         llvm::StringRef After, const VType &Ty,
+                         const VExpr *Guard, SourceLocation Loc) {
     if (Before.empty() || After.empty() || Before == After ||
         !needsInactiveFrame(Guard))
       return;
@@ -2824,6 +2893,8 @@ public:
     }
     P.OldHeapName = Heap0;
     P.HeapVariables = HeapVariables;
+    P.ModelVariables = std::move(ModelVariables);
+    P.TraceEvents = std::move(TraceEvents);
     P.SpecFunctions = FnMap;
     P.SpecFuel = Fn.SpecFuel;
     P.HiddenSpecs = Fn.HiddenSpecs;
@@ -2942,10 +3013,7 @@ public:
                   substParams(PreSafety.get(), ParamMap, Ctx, EntryHeap),
                   nullptr, C.Loc);
       emitMathBridge(P, BoundPre.get(), nullptr, C.Loc);
-      auto PS = std::make_unique<PassiveStmt>();
-      PS->K = PassiveStmt::Assert;
-      PS->Cond = std::move(BoundPre);
-      P.Stmts.push_back(std::move(PS));
+      emitPassive(P, PassiveStmt::Assert, std::move(BoundPre), nullptr, C.Loc);
     }
 
     for (size_t I = 0; I < ActualModifies.size(); ++I) {
@@ -3136,6 +3204,11 @@ public:
       auto Ptr = cloneExpr(St.Ptr.get(), Ctx);
       auto Val = cloneExpr(St.Value.get(), Ctx);
       auto AccessCondition = cloneExpr(St.AccessCondition.get(), Ctx);
+      std::vector<PassiveTraceValue> TraceValues;
+      TraceValues.push_back({"address", cloneVExpr(Ptr.get())});
+      TraceValues.push_back({"value", cloneVExpr(Val.get())});
+      emitTrace(PassiveTraceKind::HeapWrite, "store", Active.get(), St.Loc,
+                std::move(TraceValues));
       emitExprSafety(P, Ptr.get(), Active.get(), St.Loc, Renames, false,
                      St.Ptr.get());
       emitExprSafety(P, Val.get(), Active.get(), St.Loc, Renames, true,
@@ -3215,6 +3288,8 @@ public:
                        A.Initializer.get());
       }
 
+      if (A.IsAutomatic)
+        suppressSourceVariable(A.Target);
       Types[A.Target] = VType::makePtr(A.SizeBytes);
       Types[A.ProvenanceTarget] = VType::makePtr();
       const std::string PointerName = bump(A.Target);
@@ -3228,6 +3303,12 @@ public:
           PointerName, VType::makePtr(A.SizeBytes), A.Loc, ProvenanceName);
       auto Provenance =
           std::make_unique<VVarExpr>(ProvenanceName, VType::makePtr(), A.Loc);
+      std::vector<PassiveTraceValue> TraceValues;
+      TraceValues.push_back({"address", cloneVExpr(Pointer.get())});
+      TraceValues.push_back({"provenance", cloneVExpr(Provenance.get())});
+      emitTrace(PassiveTraceKind::Allocation,
+                A.IsAutomatic ? "automatic allocation" : "allocation",
+                Active.get(), A.Loc, std::move(TraceValues));
 
       auto NonzeroProvenance = std::make_unique<VBinOpExpr>(
           VBinOp::Ne, cloneVExpr(Provenance.get()),
@@ -3449,6 +3530,10 @@ public:
                                                VType::makePtr(), E.Loc)
                         .get(),
                     Ctx);
+      std::vector<PassiveTraceValue> TraceValues;
+      TraceValues.push_back({"provenance", cloneVExpr(Provenance.get())});
+      emitTrace(PassiveTraceKind::LifetimeEnd, "lifetime end", Active.get(),
+                E.Loc, std::move(TraceValues));
       updateHeap(P, Renames, VLivenessHeapName, std::move(Provenance),
                  makeBoolLiteral(false, E.Loc), Active.get(), E.Loc);
       break;
@@ -3457,6 +3542,10 @@ public:
       const auto &F = static_cast<const VFreeStmt &>(S);
       CloneCtx Ctx{Renames, OldState, false};
       auto Pointer = cloneExpr(F.Ptr.get(), Ctx);
+      std::vector<PassiveTraceValue> TraceValues;
+      TraceValues.push_back({"address", cloneVExpr(Pointer.get())});
+      emitTrace(PassiveTraceKind::Deallocation, "delete", Active.get(), F.Loc,
+                std::move(TraceValues));
       emitExprSafety(P, Pointer.get(), Active.get(), F.Loc, Renames, false,
                      F.Ptr.get());
       auto Provenance = pointerProvenance(Pointer.get());
@@ -3523,6 +3612,12 @@ public:
           makeAnd(cloneVExpr(Active.get()), cloneVExpr(Cond.get()), I.Loc);
       auto ElseActive = makeAnd(cloneVExpr(Active.get()),
                                 makeNot(cloneVExpr(Cond.get()), I.Loc), I.Loc);
+      const PassiveTraceKind TraceKind =
+          I.IsLoopUnroll ? PassiveTraceKind::Loop : PassiveTraceKind::Branch;
+      emitTrace(TraceKind, I.IsLoopUnroll ? "iteration" : "then",
+                ThenActive.get(), I.Loc);
+      emitTrace(TraceKind, I.IsLoopUnroll ? "exit" : "else", ElseActive.get(),
+                I.Loc);
       PassiveProgram ThenP;
       PassiveProgram ElseP;
       for (const auto &TS : I.Then)
@@ -3573,10 +3668,15 @@ public:
       CloneCtx Ctx{Renames, OldState, false};
       ReturnGuards.push_back(cloneVExpr(Active.get()));
       if (!R.Value) {
+        emitTrace(PassiveTraceKind::Return, "return", Active.get(), R.Loc);
         Active = makeBoolLiteral(false, R.Loc);
         break;
       }
       auto BoundReturn = cloneExpr(R.Value.get(), Ctx);
+      std::vector<PassiveTraceValue> TraceValues;
+      TraceValues.push_back({"value", cloneVExpr(BoundReturn.get())});
+      emitTrace(PassiveTraceKind::Return, "return", Active.get(), R.Loc,
+                std::move(TraceValues));
       emitExprSafety(P, BoundReturn.get(), Active.get(), R.Loc, Renames, true,
                      R.Value.get());
       const VExpr *RetVal = R.Value.get();
@@ -3607,6 +3707,7 @@ public:
     }
     case VStmt::While: {
       const auto &W = static_cast<const VWhileStmt &>(S);
+      emitTrace(PassiveTraceKind::Loop, "entry", Active.get(), W.Loc);
       bool HasReturn = false;
       for (const auto &Body : W.Body) {
         if (containsReturn(*Body)) {
@@ -3655,6 +3756,10 @@ public:
       auto IterationActive =
           makeAnd(cloneVExpr(Active.get()), cloneVExpr(Choice.get()), W.Loc);
       auto HeadCond = cloneExpr(W.Cond.get(), HeadCtx);
+      std::vector<PassiveTraceValue> IterationValues;
+      IterationValues.push_back({"condition", cloneVExpr(HeadCond.get())});
+      emitTrace(PassiveTraceKind::Loop, "inductive iteration",
+                IterationActive.get(), W.Loc, std::move(IterationValues));
       emitExprSafety(P, HeadCond.get(), Active.get(), W.Loc, Renames, false,
                      W.Cond.get());
       emitPassive(P, PassiveStmt::Assume, cloneVExpr(HeadCond.get()),
@@ -3702,6 +3807,7 @@ public:
                     BodyActive.get(), W.Loc);
       }
 
+      emitTrace(PassiveTraceKind::Loop, "exit", Active.get(), W.Loc);
       emitPassive(P, PassiveStmt::Assume, makeNot(std::move(Choice), W.Loc),
                   Active.get(), W.Loc);
       emitPassive(P, PassiveStmt::Assume, makeNot(std::move(HeadCond), W.Loc),
@@ -3728,9 +3834,17 @@ public:
     case VStmt::RevealSpec:
       break;
     case VStmt::Call: {
+      const auto &Call = static_cast<const VCallStmt &>(S);
+      CloneCtx TraceCtx{Renames, OldState, false};
+      std::vector<PassiveTraceValue> TraceValues;
+      for (unsigned I = 0; I != Call.Args.size(); ++I)
+        TraceValues.push_back({"arg" + std::to_string(I),
+                               cloneExpr(Call.Args[I].get(), TraceCtx)});
+      emitTrace(PassiveTraceKind::Call, Call.Callee, Active.get(), Call.Loc,
+                std::move(TraceValues));
       const auto EntryRenames = Renames;
       PassiveProgram CallP;
-      emitCallStmt(static_cast<const VCallStmt &>(S), CallP, Renames);
+      emitCallStmt(Call, CallP, Renames);
       for (auto &CallStmt : CallP.Stmts) {
         if (CallStmt->Cond)
           CallStmt->Cond = makeImplies(cloneVExpr(Active.get()),

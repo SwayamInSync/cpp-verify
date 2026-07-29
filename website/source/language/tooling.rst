@@ -15,6 +15,7 @@ Standalone verifier
    cpp-verify --lean-fallback=proof file.cpp
    cpp-verify --check-ub file.cpp
    cpp-verify --timeout=20000 file.cpp
+   cpp-verify --diagnostics-format=json file.cpp
    cpp-verify --dump-ir=1,2,3,4 file.cpp
    cpp-verify --lower-only --dump-ir=1,2,3,4 file.cpp
    cpp-verify --lower-only --obligation-out=goals.cpv file.cpp
@@ -65,6 +66,9 @@ Backends
    * - ``--timeout=N``
      - Per-query Z3 timeout in milliseconds (default 30000; ``0`` disables). A query
        that exceeds it is reported as ``unknown`` instead of hanging.
+   * - ``--diagnostics-format={text,json}``
+     - Select Clang-style text (default) or versioned JSON Lines for verification
+       results. JSON records use schema ``cppverify.diagnostic/1``.
    * - ``--lower-only``
      - Run Clang conversion, backend-specific preparation, passivization,
        canonical Obligation IR construction, spec-axiom encoding, and Z3
@@ -93,6 +97,40 @@ obligation fails, and reports ``Verified`` only when the selected bound itself
 is proved complete. Lean generation reports ``Exported``. Only the pinned,
 admission-free kernel workflow reports ``Certified``.
 
+Structured diagnostics
+----------------------
+
+Failed Z3 and BMC results identify a source-anchored obligation such as
+``function-identity::postcondition@line:column#2``. The local suffix only
+disambiguates obligations at the same anchor, so inserting or reordering an
+unrelated obligation does not renumber later IDs unless its source anchor
+moves. Diagnostics include inclusive source ranges and source display names
+while retaining internal SSA names for unambiguous tooling.
+
+Counterexample values carry exact sorts such as ``bool``, ``i32``, ``u32``,
+``math-i32``, ``pointer``, and ``heap``. Z3 model completion is disabled:
+undetermined values print as ``<unknown>`` and become JSON ``null``. Signed and
+unsigned bit-vectors are decoded to source-level decimal values.
+
+Counterexample traces may contain guarded branch, modular-call, loop,
+heap-write, allocation/provenance, lifetime-end, deletion, and return events.
+False guards are omitted; a guard the model does not determine is retained with
+JSON ``"active": null`` rather than an invented path choice. Archives preserve
+the same names, ranges, IDs, and trace data during replay.
+
+Each non-success verification result also carries a stable reason code. Current
+codes include ``counterexample``, ``solver.timeout``, ``solver.unknown``,
+``encoding.failed``, ``obligation.invalid``, ``logic.unsupported``,
+``query.missing``, ``backend.invalid-result``,
+``backend.inconsistent-results``, ``bmc.incomplete-bound``, and
+``lean.export-failed``.
+
+``--diagnostics-format=json`` covers verification-result diagnostics.
+Command-line validation and frontend parse errors may still use text. Combining
+JSON diagnostics with IR dumps intentionally creates a mixed stream. Malformed
+byte sequences in source or archive display text are rendered with the Unicode
+replacement character, so every emitted JSON record remains valid UTF-8.
+
 Portable obligation archives
 ----------------------------
 
@@ -104,11 +142,16 @@ declarations, duplicate identities, and oversized/deep expressions.
 Schema v1 caps integer widths at 4096 bits, expression depth at 4096, and
 collections plus expression nodes/edges at 100,000 per record. It also rejects
 embedded NULs, non-canonical numerals, inactive payload fields, ill-scoped
-variables, and contradictory complete/ordered queries before backend dispatch.
+variables, conflicting module-wide free-symbol sorts across semantic and
+diagnostic expressions, and contradictory complete/ordered queries before
+backend dispatch.
 
 Module and per-obligation SHA-256 hashes omit source paths and display-only
-names, so moving unchanged source preserves semantic identity. Archives still
-retain file/line/column points for replay diagnostics. Failure-triggered
+names, source ranges, internal positional and public source-anchored IDs, and
+traces, so moving unchanged source, inserting an unrelated earlier obligation,
+or changing display metadata preserves an individual goal's semantic identity.
+Archives still
+retain that metadata for replay diagnostics. Failure-triggered
 ``recommends`` warnings are diagnostic-only and do not make archive bytes depend
 on a solver result. BMC transform provenance is semantic: it is retained in
 archives and hashes so bounded obligations cannot be mistaken for unbounded
@@ -120,7 +163,8 @@ constant conditionals, and reflexive equality/inequality, then removes logical
 declarations unreachable from every ordered goal. Exact goal/query pairs and
 required features are rebuilt and revalidated. Arithmetic, quantifiers,
 pointer/heap terms, and assumptions are left intact. Semantic-hash format v2
-records this canonical boundary while archive schema v1 remains compatible.
+introduced this canonical boundary; format v3 excludes positional and public
+diagnostic identities while archive schema v1 remains compatible.
 
 Supported compiler
 ------------------
@@ -258,8 +302,9 @@ axioms, and fails closed on an encoding error. It only omits
 Layer 3 is the canonical backend-neutral ``ObligationModule``. It prints the
 same in-memory module consumed by Layer 4 and ordinary verification: explicit
 logic sorts and required features, one complete counterexample query,
-deterministic obligation IDs/kinds, source encodings, and equivalent ordered
-queries. A malformed, untyped, or unsupported term fails lowering rather than
+deterministic internal and source-anchored public obligation IDs/kinds, source
+ranges, typed model metadata, guarded trace events, source encodings, and
+equivalent ordered queries. A malformed, untyped, or unsupported term fails lowering rather than
 becoming a proof-shaped default. Source-built dumps also report canonical
 simplification node, rewrite, and dead-declaration counts.
 

@@ -1,5 +1,7 @@
 //===--- Z3Encode.cpp -----------------------------------------------------===//
 #include "Z3Encode.h"
+#include "llvm/ADT/APInt.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
@@ -10,6 +12,29 @@ using namespace clang;
 using namespace verify;
 
 namespace {
+
+std::optional<std::string> sourceModelValue(const z3::expr &Value,
+                                            const LogicSort &Sort) {
+  if (Sort.Kind == LogicSortKind::Bool) {
+    if (Value.is_true())
+      return "true";
+    if (Value.is_false())
+      return "false";
+    return std::nullopt;
+  }
+
+  std::string Numeral;
+  if (!Value.is_numeral(Numeral))
+    return std::nullopt;
+  if (Sort.Kind != LogicSortKind::BitVector)
+    return Numeral;
+  if (Sort.BitWidth == 0)
+    return std::nullopt;
+  llvm::APInt Bits(Sort.BitWidth, Numeral, 10);
+  llvm::SmallString<64> Decimal;
+  Bits.toString(Decimal, 10, Sort.Signedness == LogicSignedness::Signed);
+  return std::string(Decimal);
+}
 
 bool containsQuantifier(const VCExpr *E) {
   if (!E)
@@ -30,6 +55,29 @@ void collectSpecCalls(const VCExpr *Expression,
     Calls.push_back(Expression);
   for (const auto &Child : Expression->Children)
     collectSpecCalls(Child.get(), Calls);
+}
+
+void collectModelVariables(const VCExpr *Expression,
+                           std::set<std::string> Bound,
+                           std::map<std::string, LogicSort> &Variables) {
+  if (!Expression)
+    return;
+  if (Expression->K == VCExpr::Var && !Bound.count(Expression->Name) &&
+      Expression->Sort.Kind != LogicSortKind::Heap) {
+    Variables.emplace(Expression->Name, Expression->Sort);
+    return;
+  }
+  if ((Expression->K == VCExpr::Forall || Expression->K == VCExpr::Exists) &&
+      Expression->Children.size() == 3) {
+    collectModelVariables(Expression->Children[0].get(), Bound, Variables);
+    collectModelVariables(Expression->Children[1].get(), Bound, Variables);
+    Bound.insert(Expression->Binder);
+    collectModelVariables(Expression->Children[2].get(), std::move(Bound),
+                          Variables);
+    return;
+  }
+  for (const auto &Child : Expression->Children)
+    collectModelVariables(Child.get(), Bound, Variables);
 }
 
 } // namespace
@@ -655,13 +703,16 @@ std::optional<z3::expr> Z3Encoder::encodeModule(const ObligationModule &Module,
   EncodingError.clear();
   LogicFunctions.clear();
   SpecFuncDecls.clear();
+  ModelVariables.clear();
   for (const auto &[Identity, Function] : Module.LogicFunctions)
     LogicFunctions.emplace(Identity, &Function);
   if (!Query) {
     Result.Status = VerifyStatus::Unresolved;
+    Result.Reason = VerifyReason::MissingQuery;
     Result.Message = "missing counterexample query";
     return std::nullopt;
   }
+  collectModelVariables(Query, {}, ModelVariables);
   std::vector<const VCExpr *> SpecCalls;
   collectSpecCalls(Query, SpecCalls);
   for (const VCExpr *Call : SpecCalls)
@@ -670,6 +721,7 @@ std::optional<z3::expr> Z3Encoder::encodeModule(const ObligationModule &Module,
   z3::expr EncodedGoal = encodeVC(Query);
   if (EncodingFailed) {
     Result.Status = VerifyStatus::Unresolved;
+    Result.Reason = VerifyReason::EncodingFailure;
     Result.Message = EncodingError;
     return std::nullopt;
   }
@@ -677,8 +729,10 @@ std::optional<z3::expr> Z3Encoder::encodeModule(const ObligationModule &Module,
 }
 
 VerifyResult Z3Encoder::verifyModule(const ObligationModule &Module,
-                                     const LogicExpr *Query) {
+                                     const LogicExpr *Query,
+                                     std::optional<uint64_t> TraceEventCount) {
   VerifyResult Out;
+  const bool IsCompleteQuery = Query == nullptr;
   auto EncodedGoal = encodeModule(Module, Query, Out);
   if (!EncodedGoal)
     return Out;
@@ -689,16 +743,100 @@ VerifyResult Z3Encoder::verifyModule(const ObligationModule &Module,
     return Out;
   case z3::sat: {
     Out.Status = VerifyStatus::Failed;
+    Out.Reason = VerifyReason::Counterexample;
     z3::model Mod = Solver.get_model();
-    for (const auto &KV : Vars) {
-      z3::expr Val = Mod.eval(KV.second, true);
-      Out.Model[KV.first] = Val.to_string();
+    auto evaluate = [&](const LogicExpr *Expr) -> std::optional<std::string> {
+      if (!Expr)
+        return std::nullopt;
+      const bool SavedFailure = EncodingFailed;
+      std::string SavedError = EncodingError;
+      EncodingFailed = false;
+      EncodingError.clear();
+      z3::expr Encoded = encodeVC(Expr);
+      if (EncodingFailed) {
+        EncodingFailed = SavedFailure;
+        EncodingError = std::move(SavedError);
+        return std::nullopt;
+      }
+      z3::expr Evaluated = Mod.eval(Encoded, false);
+      EncodingFailed = SavedFailure;
+      EncodingError = std::move(SavedError);
+      return sourceModelValue(Evaluated, Expr->Sort);
+    };
+    if (IsCompleteQuery && !TraceEventCount) {
+      for (const Obligation &Item : Module.Obligations) {
+        std::optional<std::string> Fails =
+            evaluate(Item.CounterexampleQuery.get());
+        if (!Fails || *Fails != "true")
+          continue;
+        Out.ObligationId = Item.StableId.empty() ? Item.Id : Item.StableId;
+        Out.ObligationType = Item.Kind;
+        Out.Location = Item.Loc;
+        Out.Source = Item.Source;
+        TraceEventCount = Item.TraceEventCount;
+        break;
+      }
+    }
+    for (const auto &[Name, Sort] : ModelVariables) {
+      auto Metadata = Module.DiagnosticVariables.find(Name);
+      if (!Module.DiagnosticVariables.empty() &&
+          Metadata == Module.DiagnosticVariables.end())
+        continue;
+      VerifyModelValue Value;
+      Value.DisplayName = Metadata == Module.DiagnosticVariables.end()
+                              ? Name
+                              : Metadata->second.DisplayName;
+      Value.InternalName = Name;
+      Value.Sort = Sort;
+      if (Metadata != Module.DiagnosticVariables.end()) {
+        const LogicSort &Declared = Metadata->second.Sort;
+        if (Declared.Kind != Sort.Kind || Declared.BitWidth != Sort.BitWidth ||
+            Declared.Signedness != Sort.Signedness) {
+          Out.Status = VerifyStatus::Unresolved;
+          Out.Reason = VerifyReason::InvalidObligation;
+          Out.Message = "diagnostic metadata sort does not match " + Name;
+          Out.Model.clear();
+          return Out;
+        }
+        Value.Source = Metadata->second.Source;
+      }
+      if (auto It = Vars.find(Name); It != Vars.end()) {
+        z3::expr Evaluated = Mod.eval(It->second, false);
+        if (!z3::eq(Evaluated, It->second))
+          Value.Value = sourceModelValue(Evaluated, Sort);
+      }
+      Out.Model.push_back(std::move(Value));
+    }
+    if (TraceEventCount) {
+      const uint64_t Count =
+          std::min<uint64_t>(*TraceEventCount, Module.TraceEvents.size());
+      for (uint64_t I = 0; I != Count; ++I) {
+        const DiagnosticTraceEvent &Event = Module.TraceEvents[I];
+        std::optional<std::string> Guard = evaluate(Event.Guard.get());
+        if (Guard && *Guard == "false")
+          continue;
+        VerifyTraceEvent Trace;
+        Trace.Kind = Event.Kind;
+        Trace.Message = Event.Message;
+        Trace.Source = Event.Source;
+        if (Guard)
+          Trace.Active = *Guard == "true";
+        for (const DiagnosticTraceValue &Value : Event.Values)
+          Trace.Values.push_back(
+              {Value.Label, Value.Value->Sort, evaluate(Value.Value.get())});
+        Out.Trace.push_back(std::move(Trace));
+      }
     }
     return Out;
   }
   default:
     Out.Status = VerifyStatus::Unresolved;
     Out.Message = Solver.reason_unknown();
+    Out.Reason = TimeoutMs > 0 && llvm::StringRef(Out.Message)
+                                      .trim()
+                                      .equals_insensitive("timeout")
+                     ? VerifyReason::SolverTimeout
+                     : VerifyReason::SolverUnknown;
     return Out;
   }
 }
@@ -720,10 +858,56 @@ static VerifyResult finishZ3Result(VerifyResult Result) {
   if (Result.Status != VerifyStatus::Failed)
     return Result;
   std::string Message;
-  for (const auto &KV : Result.Model) {
+  for (const VerifyModelValue &Value : Result.Model) {
     if (!Message.empty())
       Message += ", ";
-    Message += KV.first + " = " + KV.second;
+    Message += Value.DisplayName;
+    if (Value.DisplayName != Value.InternalName)
+      Message += " [ssa=" + Value.InternalName + "]";
+    Message += " [type=" + formatLogicSort(Value.Sort) +
+               "] = " + Value.Value.value_or("<unknown>");
+  }
+  auto traceKind = [](DiagnosticTraceKind Kind) {
+    switch (Kind) {
+    case DiagnosticTraceKind::Branch:
+      return "branch";
+    case DiagnosticTraceKind::Call:
+      return "call";
+    case DiagnosticTraceKind::Loop:
+      return "loop";
+    case DiagnosticTraceKind::HeapWrite:
+      return "heap-write";
+    case DiagnosticTraceKind::Allocation:
+      return "allocation";
+    case DiagnosticTraceKind::LifetimeEnd:
+      return "lifetime-end";
+    case DiagnosticTraceKind::Deallocation:
+      return "deallocation";
+    case DiagnosticTraceKind::Return:
+      return "return";
+    }
+    return "branch";
+  };
+  if (!Result.Trace.empty()) {
+    if (!Message.empty())
+      Message += "; ";
+    Message += "trace: ";
+    bool First = true;
+    for (const VerifyTraceEvent &Event : Result.Trace) {
+      if (!First)
+        Message += " -> ";
+      First = false;
+      Message += traceKind(Event.Kind);
+      if (!Event.Message.empty())
+        Message += "." + Event.Message;
+      if (Event.Source.isValid())
+        Message += "@" + std::to_string(Event.Source.Line) + ":" +
+                   std::to_string(Event.Source.Column);
+      if (!Event.Active)
+        Message += "?";
+      for (const VerifyTraceValue &Value : Event.Values)
+        Message += " " + Value.Label + "=" + Value.Value.value_or("<unknown>");
+    }
   }
   Result.Message = std::move(Message);
   return Result;
@@ -735,13 +919,14 @@ Z3VerifyBackend::verifyObligations(const ObligationModule &Module) {
   std::vector<VerifyResult> Results;
   Results.reserve(Module.Obligations.size());
   for (const Obligation &Item : Module.Obligations) {
-    VerifyResult Result =
-        Enc.verifyModule(Module, Item.CounterexampleQuery.get());
-    Result.ObligationId = Item.Id;
+    VerifyResult Result = Enc.verifyModule(
+        Module, Item.CounterexampleQuery.get(), Item.TraceEventCount);
+    Result.ObligationId = Item.StableId.empty() ? Item.Id : Item.StableId;
     Result.ObligationType = Item.Kind;
     Result.Location = Item.Loc;
+    Result.Source = Item.Source;
     if (Result.Status == VerifyStatus::Unresolved)
-      Result.Message = "proof obligation " + Item.Id +
+      Result.Message = "proof obligation " + Result.ObligationId +
                        (Result.Message.empty() ? "" : ": " + Result.Message);
     Results.push_back(finishZ3Result(std::move(Result)));
   }
@@ -779,6 +964,7 @@ VerifyResult Z3VerifyBackend::verifyModule(const ObligationModule &Module) {
       return finishZ3Result(std::move(Whole));
     VerifyResult Inconsistent;
     Inconsistent.Status = VerifyStatus::Unresolved;
+    Inconsistent.Reason = VerifyReason::InconsistentBackendResults;
     Inconsistent.Message =
         "combined query was satisfiable but every individual obligation was "
         "proved";

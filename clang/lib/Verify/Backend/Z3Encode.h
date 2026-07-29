@@ -18,6 +18,7 @@ class Z3Encoder {
   z3::context Ctx;
   z3::solver Solver;
   std::map<std::string, z3::expr> Vars;
+  std::map<std::string, LogicSort> ModelVariables;
   std::map<std::string, const LogicFunctionDecl *> LogicFunctions;
   std::map<std::string, z3::func_decl> SpecFuncDecls;
   unsigned TimeoutMs = 0;
@@ -47,8 +48,9 @@ class Z3Encoder {
 public:
   Z3Encoder();
   void setTimeoutMs(unsigned Ms) { TimeoutMs = Ms; }
-  VerifyResult verifyModule(const ObligationModule &Module,
-                            const LogicExpr *Query = nullptr);
+  VerifyResult
+  verifyModule(const ObligationModule &Module, const LogicExpr *Query = nullptr,
+               std::optional<uint64_t> TraceEventCount = std::nullopt);
   VerifyResult lowerModule(const ObligationModule &Module,
                            llvm::raw_ostream *OS = nullptr);
 };

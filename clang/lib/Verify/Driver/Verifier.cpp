@@ -19,6 +19,8 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/FormatVariadic.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/MD5.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -47,16 +49,114 @@ struct VerifyDiagnostic {
   Kind K;
   std::string Message;
   SourceLocation Loc;
+  std::string FunctionName;
+  std::optional<VerifyResult> Result;
 };
 
 static std::string backendSuffix(const VerifyResult &Result) {
-  if (Result.BackendName.empty())
-    return {};
-  std::string Suffix = " [backend=" + Result.BackendName;
-  if (Result.Bound)
-    Suffix += ", bound=" + std::to_string(*Result.Bound);
-  Suffix += "]";
+  std::string Suffix;
+  if (!Result.BackendName.empty()) {
+    Suffix = " [backend=" + Result.BackendName;
+    if (Result.Bound)
+      Suffix += ", bound=" + std::to_string(*Result.Bound);
+    Suffix += "]";
+  }
+  if (Result.Reason != VerifyReason::None)
+    Suffix += " [reason=" + verifyReasonCode(Result.Reason).str() + "]";
   return Suffix;
+}
+
+static llvm::StringRef diagnosticKindCode(VerifyDiagnostic::Kind Kind) {
+  switch (Kind) {
+  case VerifyDiagnostic::Lowered:
+    return "lowered";
+  case VerifyDiagnostic::Verified:
+    return "verified";
+  case VerifyDiagnostic::Error:
+    return "error";
+  case VerifyDiagnostic::Unresolved:
+    return "unresolved";
+  case VerifyDiagnostic::BoundedSafe:
+    return "bounded-safe";
+  case VerifyDiagnostic::Exported:
+    return "exported";
+  case VerifyDiagnostic::Certified:
+    return "certified";
+  case VerifyDiagnostic::Warning:
+    return "warning";
+  }
+  return "error";
+}
+
+static llvm::StringRef verifyStatusCode(VerifyStatus Status) {
+  switch (Status) {
+  case VerifyStatus::Lowered:
+    return "lowered";
+  case VerifyStatus::Verified:
+    return "verified";
+  case VerifyStatus::Failed:
+    return "failed";
+  case VerifyStatus::Unresolved:
+    return "unresolved";
+  case VerifyStatus::BoundedSafe:
+    return "bounded-safe";
+  case VerifyStatus::Exported:
+    return "exported";
+  case VerifyStatus::Certified:
+    return "certified";
+  }
+  return "unresolved";
+}
+
+static llvm::StringRef obligationKindCode(ObligationKind Kind) {
+  switch (Kind) {
+  case ObligationKind::Assertion:
+    return "assertion";
+  case ObligationKind::Postcondition:
+    return "postcondition";
+  case ObligationKind::Unwinding:
+    return "unwinding";
+  }
+  return "assertion";
+}
+
+static llvm::StringRef traceKindCode(DiagnosticTraceKind Kind) {
+  switch (Kind) {
+  case DiagnosticTraceKind::Branch:
+    return "branch";
+  case DiagnosticTraceKind::Call:
+    return "call";
+  case DiagnosticTraceKind::Loop:
+    return "loop";
+  case DiagnosticTraceKind::HeapWrite:
+    return "heap-write";
+  case DiagnosticTraceKind::Allocation:
+    return "allocation";
+  case DiagnosticTraceKind::LifetimeEnd:
+    return "lifetime-end";
+  case DiagnosticTraceKind::Deallocation:
+    return "deallocation";
+  case DiagnosticTraceKind::Return:
+    return "return";
+  }
+  return "branch";
+}
+
+static std::string jsonText(llvm::StringRef Text) {
+  return llvm::json::isUTF8(Text) ? Text.str() : llvm::json::fixUTF8(Text);
+}
+
+static llvm::json::Object sourceJSON(const ObligationSource &Source) {
+  llvm::json::Object Result;
+  if (!Source.isValid())
+    return Result;
+  Result["file"] = jsonText(Source.File);
+  Result["line"] = Source.Line;
+  Result["column"] = Source.Column;
+  Result["end_line"] = Source.EndLine != 0 ? Source.EndLine : Source.Line;
+  Result["end_column"] =
+      Source.EndColumn != 0 ? Source.EndColumn : Source.Column;
+  return Result;
 }
 
 static std::string leanProjectPath(llvm::StringRef Root,
@@ -170,7 +270,8 @@ class Verifier {
 
   void annotateObligationSources(ObligationModule &Module) {
     const SourceManager &SourceMgr = Ctx.getSourceManager();
-    auto annotateSource = [&](SourceLocation Loc, ObligationSource &Source) {
+    auto annotateSource = [&](SourceLocation Loc, SourceLocation EndLoc,
+                              ObligationSource &Source) {
       if (!Loc.isValid())
         return;
       PresumedLoc Location = SourceMgr.getPresumedLoc(Loc);
@@ -179,6 +280,17 @@ class Verifier {
       Source.File = Location.getFilename();
       Source.Line = Location.getLine();
       Source.Column = Location.getColumn();
+      PresumedLoc End =
+          SourceMgr.getPresumedLoc(EndLoc.isValid() ? EndLoc : Loc);
+      if (End.isValid() && Source.File == End.getFilename() &&
+          (End.getLine() > Source.Line || (End.getLine() == Source.Line &&
+                                           End.getColumn() >= Source.Column))) {
+        Source.EndLine = End.getLine();
+        Source.EndColumn = End.getColumn();
+      } else {
+        Source.EndLine = Source.Line;
+        Source.EndColumn = Source.Column;
+      }
     };
     auto annotateExpr = [&](LogicExpr *Root) {
       if (!Root)
@@ -187,7 +299,7 @@ class Verifier {
       while (!Pending.empty()) {
         LogicExpr *Expr = Pending.back();
         Pending.pop_back();
-        annotateSource(Expr->Loc, Expr->Source);
+        annotateSource(Expr->Loc, Expr->EndLoc, Expr->Source);
         for (auto &Child : Expr->Children)
           if (Child)
             Pending.push_back(Child.get());
@@ -196,10 +308,34 @@ class Verifier {
 
     annotateExpr(Module.CorrectnessGoal.get());
     annotateExpr(Module.CounterexampleQuery.get());
+    std::map<std::string, unsigned> StableIdCounts;
     for (Obligation &Item : Module.Obligations) {
-      annotateSource(Item.Loc, Item.Source);
+      annotateSource(Item.Loc, Item.EndLoc, Item.Source);
+      const char *Kind = Item.Kind == ObligationKind::Postcondition
+                             ? "postcondition"
+                         : Item.Kind == ObligationKind::Unwinding ? "unwinding"
+                                                                  : "assertion";
+      std::string StableId = Module.FunctionIdentity + "::" + Kind + "@";
+      StableId += Item.Source.isValid()
+                      ? std::to_string(Item.Source.Line) + ":" +
+                            std::to_string(Item.Source.Column)
+                      : "synthetic";
+      unsigned &Count = StableIdCounts[StableId];
+      if (++Count > 1)
+        StableId += "#" + std::to_string(Count);
+      Item.StableId = std::move(StableId);
       annotateExpr(Item.Goal.get());
       annotateExpr(Item.CounterexampleQuery.get());
+    }
+    for (auto &[InternalName, Variable] : Module.DiagnosticVariables) {
+      (void)InternalName;
+      annotateSource(Variable.Loc, Variable.EndLoc, Variable.Source);
+    }
+    for (DiagnosticTraceEvent &Event : Module.TraceEvents) {
+      annotateSource(Event.Loc, Event.EndLoc, Event.Source);
+      annotateExpr(Event.Guard.get());
+      for (DiagnosticTraceValue &Value : Event.Values)
+        annotateExpr(Value.Value.get());
     }
     for (auto &[Identity, Function] : Module.LogicFunctions) {
       (void)Identity;
@@ -575,15 +711,16 @@ public:
         return false;
       VerifyResult Fallback = LeanFallbackBackend->verify(Module);
       if (Fallback.Status == VerifyStatus::Exported) {
-        Diags.push_back(
-            {VerifyDiagnostic::Exported, "lean fallback: " + Label.str()});
+        Diags.push_back({VerifyDiagnostic::Exported,
+                         "lean fallback: " + Label.str(), Fallback.Location,
+                         Label.str(), std::move(Fallback)});
         return true;
       }
       std::string Message = "lean fallback export failed: " + Label.str();
       if (!Fallback.Message.empty())
         Message += " (" + Fallback.Message + ")";
       Diags.push_back({VerifyDiagnostic::Unresolved, std::move(Message),
-                       Fallback.Location});
+                       Fallback.Location, Label.str(), std::move(Fallback)});
       return false;
     };
 
@@ -703,21 +840,24 @@ public:
             continue;
           }
           if (Fn->IsSpec) {
-            Diags.push_back(
-                {VerifyDiagnostic::Lowered, "spec decreases: " + Fn->Name});
+            Diags.push_back({VerifyDiagnostic::Lowered,
+                             "spec decreases: " + Fn->Name, SourceLocation(),
+                             Fn->Name, DR});
             continue;
           }
         } else {
           VerifyResult R = Backend->verify(DecModule);
           if (R.Status == VerifyStatus::Exported) {
-            Diags.push_back(
-                {VerifyDiagnostic::Exported, "decreases: " + Fn->Name});
+            Diags.push_back({VerifyDiagnostic::Exported,
+                             "decreases: " + Fn->Name, R.Location, Fn->Name,
+                             R});
             if (Fn->IsSpec)
               continue;
           } else if (R.Status == VerifyStatus::Verified) {
             if (Fn->IsSpec) {
-              Diags.push_back(
-                  {VerifyDiagnostic::Verified, "spec decreases: " + Fn->Name});
+              Diags.push_back({VerifyDiagnostic::Verified,
+                               "spec decreases: " + Fn->Name, R.Location,
+                               Fn->Name, R});
               continue;
             }
           } else {
@@ -735,12 +875,13 @@ public:
                 FailedCallers.insert(Fn->Identity);
               std::string Message =
                   std::string(Fn->IsSpec ? "spec decreases " : "decreases ") +
-                  (IsUnresolved ? "unresolved: " : "failed: ") + Fn->Name;
+                  (IsUnresolved ? "unresolved: " : "failed: ") + Fn->Name +
+                  backendSuffix(R);
               if (!R.Message.empty())
                 Message += " (" + R.Message + ")";
               Diags.push_back({IsUnresolved ? VerifyDiagnostic::Unresolved
                                             : VerifyDiagnostic::Error,
-                               std::move(Message), R.Location});
+                               std::move(Message), R.Location, Fn->Name, R});
               continue;
             }
           }
@@ -816,27 +957,32 @@ public:
         DumpOS->flush();
 
       if (Opts.LowerOnly) {
-        Diags.push_back({VerifyDiagnostic::Lowered, Fn->Name});
+        VerifyResult Result;
+        Result.Status = VerifyStatus::Lowered;
+        Result.BackendName = "z3";
+        Diags.push_back({VerifyDiagnostic::Lowered, Fn->Name, SourceLocation(),
+                         Fn->Name, std::move(Result)});
         continue;
       }
 
       VerifyResult R = Backend->verify(Module);
       if (R.Status == VerifyStatus::Verified) {
-        Diags.push_back(
-            {VerifyDiagnostic::Verified, Fn->Name + backendSuffix(R)});
+        Diags.push_back({VerifyDiagnostic::Verified,
+                         Fn->Name + backendSuffix(R), R.Location, Fn->Name, R});
       } else if (R.Status == VerifyStatus::Certified) {
-        Diags.push_back(
-            {VerifyDiagnostic::Certified, Fn->Name + backendSuffix(R)});
+        Diags.push_back({VerifyDiagnostic::Certified,
+                         Fn->Name + backendSuffix(R), R.Location, Fn->Name, R});
       } else if (R.Status == VerifyStatus::Exported) {
-        Diags.push_back(
-            {VerifyDiagnostic::Exported, "lean obligation: " + Fn->Name});
+        Diags.push_back({VerifyDiagnostic::Exported,
+                         "lean obligation: " + Fn->Name, R.Location, Fn->Name,
+                         R});
       } else if (R.Status == VerifyStatus::BoundedSafe) {
         AllOk = false;
         std::string Message = Fn->Name + backendSuffix(R);
         if (!R.Message.empty())
           Message += " (" + R.Message + ")";
-        Diags.push_back(
-            {VerifyDiagnostic::BoundedSafe, std::move(Message), R.Location});
+        Diags.push_back({VerifyDiagnostic::BoundedSafe, std::move(Message),
+                         R.Location, Fn->Name, R});
       } else if (R.Status == VerifyStatus::Failed) {
         AllOk = false;
         AnyFailed = true;
@@ -847,7 +993,9 @@ public:
           Msg += " [" + R.ObligationId + "]";
         if (!R.Message.empty())
           Msg += " (counterexample: " + R.Message + ")";
-        Diags.push_back({VerifyDiagnostic::Error, Msg, R.Location});
+        Msg += backendSuffix(R);
+        Diags.push_back(
+            {VerifyDiagnostic::Error, Msg, R.Location, Fn->Name, R});
       } else {
         const bool FallbackExported = R.Status == VerifyStatus::Unresolved &&
                                       exportLeanFallback(Module, Fn->Name);
@@ -856,11 +1004,11 @@ public:
           AnyFailed = true;
           if (!Fn->IsProof)
             FailedCallers.insert(Fn->Identity);
-          std::string Message = Fn->Name;
+          std::string Message = Fn->Name + backendSuffix(R);
           if (!R.Message.empty())
             Message += " (" + R.Message + ")";
-          Diags.push_back(
-              {VerifyDiagnostic::Unresolved, std::move(Message), R.Location});
+          Diags.push_back({VerifyDiagnostic::Unresolved, std::move(Message),
+                           R.Location, Fn->Name, R});
         }
       }
     }
@@ -889,6 +1037,11 @@ public:
             Diagnostic.K = VerifyDiagnostic::Unresolved;
             Diagnostic.Message +=
                 " (Lean certification failed: " + Reason + ")";
+            if (Diagnostic.Result) {
+              Diagnostic.Result->Status = VerifyStatus::Unresolved;
+              Diagnostic.Result->Reason = VerifyReason::LeanExportFailure;
+              Diagnostic.Result->Message = Reason;
+            }
           }
         } else {
           for (VerifyDiagnostic &Diagnostic : Diags) {
@@ -899,6 +1052,11 @@ public:
             if (!Name.consume_front("lean obligation: "))
               Name.consume_front("lean fallback: ");
             Diagnostic.Message = Name.str() + " [backend=Lean]";
+            if (Diagnostic.Result) {
+              Diagnostic.Result->Status = VerifyStatus::Certified;
+              Diagnostic.Result->BackendName = "lean";
+              Diagnostic.Result->Reason = VerifyReason::None;
+            }
           }
         }
       }
@@ -918,8 +1076,107 @@ public:
     return AllOk;
   }
 
+  void printJSONDiagnostic(const VerifyDiagnostic &D,
+                           llvm::raw_ostream &OS) const {
+    llvm::json::Object Record;
+    Record["schema"] = "cppverify.diagnostic/1";
+    Record["status"] =
+        D.Result ? verifyStatusCode(D.Result->Status) : diagnosticKindCode(D.K);
+    Record["severity"] =
+        D.K == VerifyDiagnostic::Warning || D.K == VerifyDiagnostic::BoundedSafe
+            ? "warning"
+        : D.K == VerifyDiagnostic::Error || D.K == VerifyDiagnostic::Unresolved
+            ? "error"
+            : "note";
+    Record["message"] = jsonText(D.Message);
+    if (!D.FunctionName.empty())
+      Record["function"] = jsonText(D.FunctionName);
+
+    ObligationSource Source;
+    if (D.Result)
+      Source = D.Result->Source;
+    if (!Source.isValid() && D.Loc.isValid()) {
+      PresumedLoc Location = Ctx.getSourceManager().getPresumedLoc(D.Loc);
+      if (Location.isValid()) {
+        Source.File = Location.getFilename();
+        Source.Line = Location.getLine();
+        Source.Column = Location.getColumn();
+        Source.EndLine = Source.Line;
+        Source.EndColumn = Source.Column;
+      }
+    }
+    if (Source.isValid())
+      Record["source"] = sourceJSON(Source);
+
+    if (D.Result) {
+      const VerifyResult &Result = *D.Result;
+      if (!Result.BackendName.empty())
+        Record["backend"] = Result.BackendName;
+      if (Result.Reason != VerifyReason::None)
+        Record["reason"] = verifyReasonCode(Result.Reason);
+      if (Result.Bound)
+        Record["bound"] = static_cast<int64_t>(*Result.Bound);
+      if (!Result.ObligationId.empty()) {
+        llvm::json::Object Obligation;
+        Obligation["id"] = jsonText(Result.ObligationId);
+        if (Result.ObligationType)
+          Obligation["kind"] = obligationKindCode(*Result.ObligationType);
+        if (Result.Source.isValid())
+          Obligation["source"] = sourceJSON(Result.Source);
+        Record["obligation"] = std::move(Obligation);
+      }
+      if (!Result.Model.empty()) {
+        llvm::json::Array Model;
+        for (const VerifyModelValue &Value : Result.Model) {
+          llvm::json::Object Entry;
+          Entry["name"] = jsonText(Value.DisplayName);
+          Entry["ssa_name"] = jsonText(Value.InternalName);
+          Entry["sort"] = formatLogicSort(Value.Sort);
+          Entry["value"] = Value.Value
+                               ? llvm::json::Value(jsonText(*Value.Value))
+                               : llvm::json::Value(nullptr);
+          if (Value.Source.isValid())
+            Entry["source"] = sourceJSON(Value.Source);
+          Model.push_back(std::move(Entry));
+        }
+        Record["model"] = std::move(Model);
+      }
+      if (!Result.Trace.empty()) {
+        llvm::json::Array Trace;
+        for (const VerifyTraceEvent &Event : Result.Trace) {
+          llvm::json::Object Entry;
+          Entry["kind"] = traceKindCode(Event.Kind);
+          Entry["message"] = jsonText(Event.Message);
+          Entry["active"] = Event.Active ? llvm::json::Value(*Event.Active)
+                                         : llvm::json::Value(nullptr);
+          if (Event.Source.isValid())
+            Entry["source"] = sourceJSON(Event.Source);
+          llvm::json::Array Values;
+          for (const VerifyTraceValue &Value : Event.Values) {
+            llvm::json::Object Item;
+            Item["label"] = jsonText(Value.Label);
+            Item["sort"] = formatLogicSort(Value.Sort);
+            Item["value"] = Value.Value
+                                ? llvm::json::Value(jsonText(*Value.Value))
+                                : llvm::json::Value(nullptr);
+            Values.push_back(std::move(Item));
+          }
+          if (!Values.empty())
+            Entry["values"] = std::move(Values);
+          Trace.push_back(std::move(Entry));
+        }
+        Record["trace"] = std::move(Trace);
+      }
+    }
+    OS << llvm::formatv("{0}\n", llvm::json::Value(std::move(Record)));
+  }
+
   void printDiagnostics(llvm::raw_ostream &OS) const {
     for (const auto &D : Diags) {
+      if (Opts.Diagnostics == DiagnosticFormat::Json) {
+        printJSONDiagnostic(D, OS);
+        continue;
+      }
       if (D.Loc.isValid()) {
         PresumedLoc PLoc = Ctx.getSourceManager().getPresumedLoc(D.Loc);
         if (PLoc.isValid())

@@ -14,6 +14,8 @@ constexpr std::array<char, 8> ArchiveMagic = {'C', 'P', 'V',  'O',
                                               'B', 'L', '\r', '\n'};
 constexpr uint32_t HasSourceMetadata = 1U << 0;
 constexpr uint32_t HasBMCTransformProvenance = 1U << 1;
+constexpr uint32_t HasSourceRanges = 1U << 2;
+constexpr uint32_t HasDiagnosticMetadata = 1U << 3;
 constexpr uint64_t MaxSerializedString = 64U * 1024U * 1024U;
 constexpr uint64_t MaxSerializedCollection = 100000;
 constexpr unsigned MaxExpressionDepth = 4096;
@@ -244,12 +246,61 @@ std::optional<ObligationKind> obligationFromTag(uint8_t Tag) {
   }
 }
 
+uint8_t traceTag(DiagnosticTraceKind Kind) {
+  switch (Kind) {
+  case DiagnosticTraceKind::Branch:
+    return 1;
+  case DiagnosticTraceKind::Call:
+    return 2;
+  case DiagnosticTraceKind::Loop:
+    return 3;
+  case DiagnosticTraceKind::HeapWrite:
+    return 4;
+  case DiagnosticTraceKind::Allocation:
+    return 5;
+  case DiagnosticTraceKind::LifetimeEnd:
+    return 6;
+  case DiagnosticTraceKind::Deallocation:
+    return 7;
+  case DiagnosticTraceKind::Return:
+    return 8;
+  }
+  llvm_unreachable("unknown diagnostic trace kind");
+}
+
+std::optional<DiagnosticTraceKind> traceFromTag(uint8_t Tag) {
+  switch (Tag) {
+  case 1:
+    return DiagnosticTraceKind::Branch;
+  case 2:
+    return DiagnosticTraceKind::Call;
+  case 3:
+    return DiagnosticTraceKind::Loop;
+  case 4:
+    return DiagnosticTraceKind::HeapWrite;
+  case 5:
+    return DiagnosticTraceKind::Allocation;
+  case 6:
+    return DiagnosticTraceKind::LifetimeEnd;
+  case 7:
+    return DiagnosticTraceKind::Deallocation;
+  case 8:
+    return DiagnosticTraceKind::Return;
+  default:
+    return std::nullopt;
+  }
+}
+
 class ArchiveWriter {
   std::string Data;
   bool IncludeSource;
+  bool IncludeSourceRanges;
+  bool IncludeDiagnostics;
 
 public:
-  explicit ArchiveWriter(bool IncludeSource) : IncludeSource(IncludeSource) {}
+  explicit ArchiveWriter(bool IncludeSource)
+      : IncludeSource(IncludeSource), IncludeSourceRanges(IncludeSource),
+        IncludeDiagnostics(IncludeSource) {}
 
   void writeU8(uint8_t Value) { Data.push_back(static_cast<char>(Value)); }
 
@@ -282,6 +333,10 @@ public:
     writeString(Source.File);
     writeU32(Source.Line);
     writeU32(Source.Column);
+    if (IncludeSourceRanges) {
+      writeU32(Source.EndLine);
+      writeU32(Source.EndColumn);
+    }
   }
 
   void writeExpr(const LogicExpr *Expr) {
@@ -345,6 +400,10 @@ public:
     uint32_t Flags = IncludeSource ? HasSourceMetadata : 0;
     if (Module.BMCTransform)
       Flags |= HasBMCTransformProvenance;
+    if (IncludeSourceRanges)
+      Flags |= HasSourceRanges;
+    if (IncludeDiagnostics)
+      Flags |= HasDiagnosticMetadata;
     writeU32(Flags);
     writeString(IncludeSource ? Module.FunctionName : "");
     writeString(Module.FunctionIdentity);
@@ -353,12 +412,38 @@ public:
     writeString(Module.HeapPrefix);
     if (Module.BMCTransform)
       writeU32(Module.BMCTransform->UnrollBound);
+    if (IncludeDiagnostics) {
+      writeU64(Module.DiagnosticVariables.size());
+      for (const auto &[InternalName, Variable] : Module.DiagnosticVariables) {
+        writeString(InternalName);
+        writeString(Variable.DisplayName);
+        writeSort(Variable.Sort);
+        writeSource(Variable.Source);
+      }
+      writeU64(Module.TraceEvents.size());
+      for (const DiagnosticTraceEvent &Event : Module.TraceEvents) {
+        writeU8(traceTag(Event.Kind));
+        writeString(Event.Message);
+        writeSource(Event.Source);
+        writeExpr(Event.Guard.get());
+        writeU64(Event.Values.size());
+        for (const DiagnosticTraceValue &Value : Event.Values) {
+          writeString(Value.Label);
+          writeExpr(Value.Value.get());
+        }
+      }
+    }
     writeFunctions(Module.LogicFunctions, IncludeSource);
     writeExpr(Module.CorrectnessGoal.get());
     writeExpr(Module.CounterexampleQuery.get());
     writeU64(Module.Obligations.size());
     for (const Obligation &Item : Module.Obligations) {
-      writeString(Item.Id);
+      if (IncludeDiagnostics)
+        writeString(Item.Id);
+      if (IncludeDiagnostics)
+        writeString(Item.StableId);
+      if (IncludeDiagnostics)
+        writeU64(Item.TraceEventCount);
       writeU8(obligationTag(Item.Kind));
       writeSource(Item.Source);
       writeExpr(Item.Goal.get());
@@ -403,7 +488,6 @@ public:
       if (Function != Module.LogicFunctions.end())
         writeFunction(Identity, Function->second, false);
     }
-    writeString(Item.Id);
     writeU8(obligationTag(Item.Kind));
     writeExpr(Item.Goal.get());
     writeExpr(Item.CounterexampleQuery.get());
@@ -418,6 +502,8 @@ class ArchiveReader {
   uint64_t ExpressionNodes = 0;
   uint64_t ExpressionEdges = 0;
   bool IncludeSource = false;
+  bool IncludeSourceRanges = false;
+  bool IncludeDiagnostics = false;
   std::string Failure;
   std::map<std::string, std::string> FunctionSignatures;
 
@@ -521,6 +607,10 @@ class ArchiveReader {
     Source.File = readString();
     Source.Line = readU32();
     Source.Column = readU32();
+    if (IncludeSourceRanges) {
+      Source.EndLine = readU32();
+      Source.EndColumn = readU32();
+    }
     return Source;
   }
 
@@ -597,9 +687,14 @@ class ArchiveReader {
     if (Version != ObligationSerializationVersion)
       fail("unsupported obligation archive version");
     uint32_t Flags = readU32();
-    if (Flags & ~(HasSourceMetadata | HasBMCTransformProvenance))
+    if (Flags & ~(HasSourceMetadata | HasBMCTransformProvenance |
+                  HasSourceRanges | HasDiagnosticMetadata))
       fail("unsupported obligation archive flags");
     IncludeSource = Flags & HasSourceMetadata;
+    IncludeSourceRanges = Flags & HasSourceRanges;
+    IncludeDiagnostics = Flags & HasDiagnosticMetadata;
+    if ((IncludeSourceRanges || IncludeDiagnostics) && !IncludeSource)
+      fail("diagnostic obligation metadata requires source metadata");
 
     ObligationModule Module;
     Module.FunctionName = readString();
@@ -609,6 +704,41 @@ class ArchiveReader {
     Module.HeapPrefix = readString();
     if (Flags & HasBMCTransformProvenance)
       Module.BMCTransform = BMCTransformProvenance{readU32()};
+    if (IncludeDiagnostics) {
+      uint64_t Variables = readCount();
+      for (uint64_t I = 0; I != Variables && Failure.empty(); ++I) {
+        std::string InternalName = readString();
+        DiagnosticVariable Variable;
+        Variable.DisplayName = readString();
+        Variable.Sort = readSort();
+        Variable.Source = readSource(IncludeSource);
+        if (!Module.DiagnosticVariables
+                 .emplace(std::move(InternalName), std::move(Variable))
+                 .second)
+          fail("duplicate diagnostic variable in obligation archive");
+      }
+      uint64_t TraceEvents = readCount();
+      Module.TraceEvents.reserve(TraceEvents);
+      for (uint64_t I = 0; I != TraceEvents && Failure.empty(); ++I) {
+        DiagnosticTraceEvent Event;
+        std::optional<DiagnosticTraceKind> Kind = traceFromTag(readU8());
+        if (!Kind)
+          fail("invalid diagnostic trace kind in obligation archive");
+        Event.Kind = Kind.value_or(DiagnosticTraceKind::Branch);
+        Event.Message = readString();
+        Event.Source = readSource(IncludeSource);
+        Event.Guard = readExpr();
+        uint64_t Values = readCount();
+        Event.Values.reserve(Values);
+        for (uint64_t J = 0; J != Values && Failure.empty(); ++J) {
+          DiagnosticTraceValue Value;
+          Value.Label = readString();
+          Value.Value = readExpr();
+          Event.Values.push_back(std::move(Value));
+        }
+        Module.TraceEvents.push_back(std::move(Event));
+      }
+    }
 
     uint64_t Functions = readCount();
     for (uint64_t I = 0; I != Functions && Failure.empty(); ++I) {
@@ -627,6 +757,10 @@ class ArchiveReader {
     for (uint64_t I = 0; I != Obligations && Failure.empty(); ++I) {
       Obligation Item;
       Item.Id = readString();
+      if (IncludeDiagnostics)
+        Item.StableId = readString();
+      if (IncludeDiagnostics)
+        Item.TraceEventCount = readU64();
       std::optional<ObligationKind> Kind = obligationFromTag(readU8());
       if (!Kind)
         fail("invalid obligation kind in obligation archive");

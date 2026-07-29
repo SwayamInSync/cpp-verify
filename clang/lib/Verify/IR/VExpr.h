@@ -76,11 +76,13 @@ public:
   Kind K;
   VType Ty;
   SourceLocation Loc;
+  SourceLocation EndLoc;
 
   virtual ~VExpr() = default;
 
 protected:
-  VExpr(Kind K, VType Ty, SourceLocation Loc) : K(K), Ty(Ty), Loc(Loc) {}
+  VExpr(Kind K, VType Ty, SourceLocation Loc)
+      : K(K), Ty(Ty), Loc(Loc), EndLoc(Loc) {}
 };
 
 class VLiteralExpr : public VExpr {

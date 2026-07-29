@@ -35,6 +35,22 @@
 # RUN: not %cpp-verify --obligation-in=%t.oversized-width 2>&1 | FileCheck %s --check-prefix=OVERSIZED-WIDTH
 # RUN: %python %S/Inputs/mutate_obligation_archive.py edge-limit %t.one %t.edge-limit
 # RUN: not %cpp-verify --obligation-in=%t.edge-limit 2>&1 | FileCheck %s --check-prefix=EDGE-LIMIT
+# RUN: %python %S/Inputs/mutate_obligation_archive.py invalid-trace-kind %t.one %t.invalid-trace-kind
+# RUN: not %cpp-verify --obligation-in=%t.invalid-trace-kind 2>&1 | FileCheck %s --check-prefix=TRACE-KIND
+# RUN: %python %S/Inputs/mutate_obligation_archive.py invalid-source-range %t.one %t.invalid-source-range
+# RUN: not %cpp-verify --obligation-in=%t.invalid-source-range 2>&1 | FileCheck %s --check-prefix=SOURCE-RANGE
+# RUN: %python %S/Inputs/mutate_obligation_archive.py require-query-ranges %t.one %t.query-ranges
+# RUN: cmp %t.one %t.query-ranges
+# RUN: %python %S/Inputs/mutate_obligation_archive.py rename-id %t.one %t.renamed-id
+# RUN: %cpp-verify --obligation-in=%t.one --lower-only --dump-ir=3 | grep 'semantic-hash' > %t.original-id.hashes
+# RUN: %cpp-verify --obligation-in=%t.renamed-id --lower-only --dump-ir=3 | grep 'semantic-hash' > %t.renamed-id.hashes
+# RUN: cmp %t.original-id.hashes %t.renamed-id.hashes
+# RUN: %python %S/Inputs/mutate_obligation_archive.py diagnostic-sort-mismatch %t.one %t.diagnostic-sort
+# RUN: not %cpp-verify --obligation-in=%t.diagnostic-sort 2>&1 | FileCheck %s --check-prefix=SYMBOL-SORT
+# RUN: %python %S/Inputs/mutate_obligation_archive.py trace-sort-mismatch %t.one %t.trace-sort
+# RUN: not %cpp-verify --obligation-in=%t.trace-sort 2>&1 | FileCheck %s --check-prefix=TRACE-SORT
+# RUN: %python %S/Inputs/mutate_obligation_archive.py invalid-utf8 %t.one %t.invalid-utf8
+# RUN: %cpp-verify --obligation-in=%t.invalid-utf8 --diagnostics-format=json 2>&1 | FileCheck %s --check-prefix=INVALID-UTF8
 # RUN: %python %S/Inputs/mutate_obligation_archive.py lean-comment %t.one %t.lean-comment
 # RUN: %cpp-verify --obligation-in=%t.lean-comment --backend=lean --lean-out=%t.lean-comment.lean
 # RUN: grep -Fq '/- function: - /' %t.lean-comment.lean
@@ -91,13 +107,19 @@
 # INACTIVE-PAYLOAD: error: invalid obligation archive: inactive payload is set in obligation term
 # OVERSIZED-WIDTH: error: invalid obligation archive: integer width exceeds the obligation IR limit
 # EDGE-LIMIT: error: invalid obligation archive: expression edge limit exceeded in obligation archive
+# TRACE-KIND: error: invalid obligation archive: invalid diagnostic trace kind in obligation archive
+# SOURCE-RANGE: error: invalid obligation archive: source range end precedes its start
+# SYMBOL-SORT: error: invalid obligation archive: logical variable has inconsistent sorts:
+# TRACE-SORT: error: invalid obligation archive: obligation module has invalid diagnostic trace value
+# INVALID-UTF8: "function":"{{.*}}anonical_obligations"
+# INVALID-UTF8-SAME: "status":"verified"
 # DUPLICATE-FUNCTION: error: invalid obligation archive: duplicate logical function in obligation archive
 # BAD-BINDER-SORT: error: invalid obligation archive: quantifier binder occurrence is not a mathematical integer
 # QUANTIFIED-INDEX: * : int
 # QUANTIFIED-INDEX-NEXT: __quant_{{[0-9]+}}_{{.*}} : int
 # BMC: error: BMC cannot replay an untransformed backend-neutral archive
 # BMC-REPLAY-DAG: Verified: zero_iterations [backend=bmc, bound=0]
-# BMC-REPLAY-DAG: BoundedSafe: one_step_may_run (unwinding bound 0 is insufficient for a complete proof) [backend=bmc, bound=0]
+# BMC-REPLAY-DAG: cov_loop_unroll_zero.cpp:22:3: BoundedSafe: one_step_may_run (unwinding bound 0 is insufficient for a complete proof) [backend=bmc, bound=0]
 # BMC-BOUND: error: requested BMC bound 1 does not match archived bound 0
 # BMC-LOWER: transform bmc-unroll 0
 # BMC-DECREASES: Verified: dec.decreases [backend=bmc, bound=2]

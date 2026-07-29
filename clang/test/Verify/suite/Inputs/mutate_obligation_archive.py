@@ -10,6 +10,10 @@ class Archive:
         self.feature_offsets = []
         self.expression_kind_offsets = []
         self.sort_width_offsets = []
+        self.source_ranges = []
+        self.trace_kind_offsets = []
+        self.diagnostic_sorts = []
+        self.trace_values = []
         self.function_keys = []
         self.obligation_ids = []
         self.modules = []
@@ -35,13 +39,14 @@ class Archive:
         self.offset += size
         return start, size
 
-    def sort(self):
+    def sort(self, track=True):
         kind = self.u8()
         width_offset = self.offset
         width = self.u32()
         signedness_offset = self.offset
         self.offset += 1
-        self.sort_width_offsets.append((kind, width_offset))
+        if track:
+            self.sort_width_offsets.append((kind, width_offset))
         return {
             "kind": kind,
             "width": width,
@@ -51,17 +56,39 @@ class Archive:
         }
 
     def source(self):
+        result = None
         if self.flags & 1:
             self.string()
-            self.offset += 8
+            line_offset = self.offset
+            line = self.u32()
+            column_offset = self.offset
+            column = self.u32()
+            if self.flags & 4:
+                end_line_offset = self.offset
+                end_line = self.u32()
+                end_column_offset = self.offset
+                end_column = self.u32()
+                result = {
+                    "line": line,
+                    "line_offset": line_offset,
+                    "column": column,
+                    "column_offset": column_offset,
+                    "end_line": end_line,
+                    "end_line_offset": end_line_offset,
+                    "end_column": end_column,
+                    "end_column_offset": end_column_offset,
+                }
+                self.source_ranges.append(result)
+        return result
 
-    def expression(self):
+    def expression(self, track=True):
         if self.u8() == 0:
             return None
-        self.expression_kind_offsets.append(self.offset)
+        if track:
+            self.expression_kind_offsets.append(self.offset)
         kind_offset = self.offset
         kind = self.u8()
-        sort = self.sort()
+        sort = self.sort(track=track)
         int_value = self.string()
         bool_offset = self.offset
         self.offset += 1
@@ -69,9 +96,9 @@ class Archive:
         binder = self.string()
         self.offset += 1
         self.string()
-        self.source()
+        source = self.source()
         children_count_offset = self.offset
-        children = [self.expression() for _ in range(self.u64())]
+        children = [self.expression(track=track) for _ in range(self.u64())]
         return {
             "kind": kind,
             "kind_offset": kind_offset,
@@ -80,6 +107,7 @@ class Archive:
             "bool_offset": bool_offset,
             "name": name,
             "binder": binder,
+            "source": source,
             "children_count_offset": children_count_offset,
             "children": children,
         }
@@ -106,6 +134,23 @@ class Archive:
         self.offset += 4
         self.string()
         self.string()
+        if self.flags & 2:
+            self.offset += 4
+        if self.flags & 8:
+            for _ in range(self.u64()):
+                self.string()
+                self.string()
+                self.diagnostic_sorts.append(self.sort(track=False))
+                self.source()
+            for _ in range(self.u64()):
+                self.trace_kind_offsets.append(self.offset)
+                self.offset += 1
+                self.string()
+                self.source()
+                self.expression(track=False)
+                for _ in range(self.u64()):
+                    self.string()
+                    self.trace_values.append(self.expression(track=False))
         functions = []
         function_entries = []
         function_keys = []
@@ -132,6 +177,9 @@ class Archive:
         obligations = []
         for _ in range(self.u64()):
             self.obligation_ids.append(self.string())
+            if self.flags & 8:
+                self.string()
+                self.offset += 8
             self.offset += 1
             self.source()
             obligations.append((self.expression(), self.expression()))
@@ -290,6 +338,13 @@ parser.add_argument(
         "edge-limit",
         "bad-binder-sort",
         "append-unreachable-function",
+        "invalid-trace-kind",
+        "invalid-source-range",
+        "require-query-ranges",
+        "rename-id",
+        "diagnostic-sort-mismatch",
+        "trace-sort-mismatch",
+        "invalid-utf8",
     ],
 )
 parser.add_argument("input")
@@ -411,6 +466,91 @@ elif args.mode == "bad-binder-sort":
     )
     if not found:
         raise ValueError("archive has no suitable quantified comparison")
+elif args.mode == "invalid-trace-kind":
+    if not archive.trace_kind_offsets:
+        raise ValueError("archive has no diagnostic trace event")
+    archive.data[archive.trace_kind_offsets[0]] = 255
+elif args.mode == "invalid-source-range":
+    source = next(
+        (
+            item
+            for item in archive.source_ranges
+            if item["line"] > 1 and item["end_line"] != 0
+        ),
+        None,
+    )
+    if source is None:
+        raise ValueError("archive has no suitable source range")
+    struct.pack_into(
+        "<I", archive.data, source["end_line_offset"], source["line"] - 1
+    )
+elif args.mode == "require-query-ranges":
+    ranged_queries = 0
+    for module in archive.modules:
+        pairs = [(module["complete_goal"], module["complete_query"])]
+        pairs.extend(module["obligations"])
+        for goal, query in pairs:
+            if (
+                goal is None
+                or query is None
+                or goal["source"] is None
+                or query["source"] is None
+            ):
+                raise ValueError("archive query root has no source range")
+            goal_source = goal["source"]
+            query_source = query["source"]
+            goal_range = (
+                goal_source["line"],
+                goal_source["column"],
+                goal_source["end_line"],
+                goal_source["end_column"],
+            )
+            query_range = (
+                query_source["line"],
+                query_source["column"],
+                query_source["end_line"],
+                query_source["end_column"],
+            )
+            if goal_range != query_range:
+                raise ValueError("archive query range differs from its goal")
+            if goal_range[2:] > goal_range[:2]:
+                ranged_queries += 1
+    if ranged_queries == 0:
+        raise ValueError("archive has no non-point query range")
+elif args.mode == "rename-id":
+    if not archive.obligation_ids:
+        raise ValueError("archive has no obligation identity")
+    start, size = archive.obligation_ids[0]
+    if size == 0:
+        raise ValueError("archive has an empty obligation identity")
+    archive.data[start] = ord("x") if archive.data[start] != ord("x") else ord("y")
+elif args.mode == "diagnostic-sort-mismatch":
+    sort = next(
+        (item for item in archive.diagnostic_sorts if item["kind"] == 3), None
+    )
+    if sort is None:
+        raise ValueError("archive has no bitvector diagnostic variable")
+    struct.pack_into("<I", archive.data, sort["width_offset"], sort["width"] + 1)
+elif args.mode == "trace-sort-mismatch":
+    value = next(
+        (
+            item
+            for item in archive.trace_values
+            if item is not None
+            and item["kind"] == 5
+            and item["sort"]["kind"] == 3
+        ),
+        None,
+    )
+    if value is None:
+        raise ValueError("archive has no bitvector trace variable")
+    sort = value["sort"]
+    struct.pack_into("<I", archive.data, sort["width_offset"], sort["width"] + 1)
+elif args.mode == "invalid-utf8":
+    start, size = archive.modules[0]["function_name"]
+    if size == 0:
+        raise ValueError("archive function display name is empty")
+    archive.data[start] = 0xFF
 
 with open(args.output, "wb") as destination:
     destination.write(archive.data)
