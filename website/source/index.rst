@@ -185,7 +185,7 @@ editable Lean certification, and chained calls like ``f(g(x))``.
 Learn more
 ----------
 
-.. grid:: 1 2 2 3
+.. grid:: 1 2 2 4
    :gutter: 3
 
    .. grid-item-card:: 📘 The Book
@@ -206,6 +206,12 @@ Learn more
 
       C++ headers in ``clang/lib/Verify`` (Doxygen).
 
+   .. grid-item-card:: Case studies
+      :link: case-studies/index
+      :link-type: doc
+
+      Reproducible verification of LLVM ULEB128.
+
 `Source on GitHub <https://github.com/SwayamInSync/cpp-verify>`_
 
 .. toctree::
@@ -222,3 +228,10 @@ Learn more
 
    language/index
    api/index
+
+.. toctree::
+   :hidden:
+   :caption: Case studies
+   :maxdepth: 2
+
+   case-studies/index
