@@ -158,7 +158,14 @@ every continuation and terminator bit, in-bounds writes, an exact ten-cell frame
 [LLVM ULEB128](https://swayaminsync.github.io/cpp-verify/case-studies/llvm-uleb128.html),
 which also states the extraction boundary (where the artifact differs from upstream and why).
 
-A second study takes the **binary-search midpoint** — the `(lo + hi) / 2` overflow
+A second study proves a **UTF-8 decoder cannot be tricked**: every accepted result
+is a Unicode scalar value, never a surrogate, never an overlong encoding. Injecting
+the historical defects gets them rejected with concrete witnesses — lead byte `C0`
+yields `result = 64` (`@` smuggled as two bytes, the IIS / CVE-2008-2938 traversal
+class), and dropping the `ED` ceiling yields `result = 55296`, exactly U+D800. See
+[UTF-8 validation](https://swayaminsync.github.io/cpp-verify/case-studies/utf8-validation.html).
+
+A third takes the **binary-search midpoint** — the `(lo + hi) / 2` overflow
 that stood in *Programming Pearls* for two decades and in `java.util.Arrays` for
 nine years. No contract asks for an overflow check; always-on definedness rejects it
 on its own with the concrete `lo = 1073741825, hi = 1073741826` that breaks it, and
@@ -172,7 +179,7 @@ verifies the `lo + (hi - lo) / 2` form. See
 | The Book — Part I | [Foundations](https://swayaminsync.github.io/cpp-verify/book/part-i/index.html) |
 | The Book — Part II | [Using CppVerify](https://swayaminsync.github.io/cpp-verify/book/part-ii/index.html) |
 | Language reference | [Syntax & flags](https://swayaminsync.github.io/cpp-verify/language/index.html) |
-| Case studies | [LLVM ULEB128](https://swayaminsync.github.io/cpp-verify/case-studies/llvm-uleb128.html) · [Binary search](https://swayaminsync.github.io/cpp-verify/case-studies/binary-search.html) |
+| Case studies | [LLVM ULEB128](https://swayaminsync.github.io/cpp-verify/case-studies/llvm-uleb128.html) · [UTF-8 validation](https://swayaminsync.github.io/cpp-verify/case-studies/utf8-validation.html) · [Binary search](https://swayaminsync.github.io/cpp-verify/case-studies/binary-search.html) |
 | Verifier API | [Doxygen](https://swayaminsync.github.io/cpp-verify/doxygen/index.html) |
 
 Build the site locally:

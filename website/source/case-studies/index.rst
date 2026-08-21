@@ -7,5 +7,6 @@ Measured verification artifacts built from real systems algorithms.
    :maxdepth: 1
 
    llvm-uleb128
+   utf8-validation
    binary-search
 
