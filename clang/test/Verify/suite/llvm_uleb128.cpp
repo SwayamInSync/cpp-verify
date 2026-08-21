@@ -4,12 +4,12 @@
 // Flagship case study derived from llvm/Support/LEB128.h at LLVM commit
 // 007f107aaf5ff2b111fc107ed23e6e88bcc0d9e9.
 //
-// The executable arithmetic and do-while order are preserved. The proof
-// extraction specializes PadTo to zero, replaces the mutable *p++ cursor with
-// buffer[count - 1] so valid(buffer, 10) remains attached to its allocation
-// base, and supplies the canonical decoder with an expected-value witness.
-// Malformed-input handling and the pinned decoder's overlong-shift defect are
-// covered separately in llvm_uleb128_shift_ub.cpp.
+// The executable arithmetic and do-while order are preserved. The encoder is
+// specified independently with mathematical base-128 division and remainder;
+// explicit lemmas connect LLVM's shifts and masks to that model. The proof
+// extraction specializes PadTo to zero and replaces the mutable *p++ cursor
+// with buffer[count - 1] so valid(buffer, 10) remains attached to its
+// allocation base.
 
 namespace cppverify_uleb128 {
 
@@ -46,6 +46,99 @@ spec int uleb_length(uint64_t value) {
   return 10;
 }
 
+spec unsigned uleb_digit_math(uint64_t value, unsigned index) {
+  if (index == 0)
+    return value % 128;
+  if (index == 1)
+    return (value / 128) % 128;
+  if (index == 2)
+    return (value / 16384) % 128;
+  if (index == 3)
+    return (value / 2097152) % 128;
+  if (index == 4)
+    return (value / 268435456) % 128;
+  if (index == 5)
+    return (value / 34359738368ULL) % 128;
+  if (index == 6)
+    return (value / 4398046511104ULL) % 128;
+  if (index == 7)
+    return (value / 562949953421312ULL) % 128;
+  if (index == 8)
+    return (value / 72057594037927936ULL) % 128;
+  if (index == 9)
+    return (value / 9223372036854775808ULL) % 128;
+  return 0;
+}
+
+spec unsigned uleb_byte_math_0(uint64_t value) {
+  return (value % 128) + (value >= 128 ? 128 : 0);
+}
+
+spec unsigned uleb_byte_math_1(uint64_t value) {
+  return ((value / 128) % 128) + (value >= 16384 ? 128 : 0);
+}
+
+spec unsigned uleb_byte_math_2(uint64_t value) {
+  return ((value / 16384) % 128) + (value >= 2097152 ? 128 : 0);
+}
+
+spec unsigned uleb_byte_math_3(uint64_t value) {
+  return ((value / 2097152) % 128) + (value >= 268435456 ? 128 : 0);
+}
+
+spec unsigned uleb_byte_math_4(uint64_t value) {
+  return ((value / 268435456) % 128) +
+         (value >= 34359738368ULL ? 128 : 0);
+}
+
+spec unsigned uleb_byte_math_5(uint64_t value) {
+  return ((value / 34359738368ULL) % 128) +
+         (value >= 4398046511104ULL ? 128 : 0);
+}
+
+spec unsigned uleb_byte_math_6(uint64_t value) {
+  return ((value / 4398046511104ULL) % 128) +
+         (value >= 562949953421312ULL ? 128 : 0);
+}
+
+spec unsigned uleb_byte_math_7(uint64_t value) {
+  return ((value / 562949953421312ULL) % 128) +
+         (value >= 72057594037927936ULL ? 128 : 0);
+}
+
+spec unsigned uleb_byte_math_8(uint64_t value) {
+  return ((value / 72057594037927936ULL) % 128) +
+         (value >= 9223372036854775808ULL ? 128 : 0);
+}
+
+spec unsigned uleb_byte_math_9(uint64_t value) {
+  return (value / 9223372036854775808ULL) % 128;
+}
+
+spec unsigned uleb_byte_math(uint64_t value, unsigned index) {
+  if (index == 0)
+    return uleb_byte_math_0(value);
+  if (index == 1)
+    return uleb_byte_math_1(value);
+  if (index == 2)
+    return uleb_byte_math_2(value);
+  if (index == 3)
+    return uleb_byte_math_3(value);
+  if (index == 4)
+    return uleb_byte_math_4(value);
+  if (index == 5)
+    return uleb_byte_math_5(value);
+  if (index == 6)
+    return uleb_byte_math_6(value);
+  if (index == 7)
+    return uleb_byte_math_7(value);
+  if (index == 8)
+    return uleb_byte_math_8(value);
+  if (index == 9)
+    return uleb_byte_math_9(value);
+  return 0;
+}
+
 constexpr uint8_t uleb_byte_machine(uint64_t value, unsigned index) {
   if (index >= 10)
     return 0;
@@ -55,6 +148,82 @@ constexpr uint8_t uleb_byte_machine(uint64_t value, unsigned index) {
   if (shifted != 0)
     byte |= 0x80;
   return byte;
+}
+
+proof void lemma_machine_byte_0(uint64_t value)
+  post(uleb_byte_machine(value, 0) == uleb_byte_math_0(value))
+{
+}
+
+proof void lemma_machine_byte_1(uint64_t value)
+  post(uleb_byte_machine(value, 1) == uleb_byte_math_1(value))
+{
+}
+
+proof void lemma_machine_byte_2(uint64_t value)
+  post(uleb_byte_machine(value, 2) == uleb_byte_math_2(value))
+{
+}
+
+proof void lemma_machine_byte_3(uint64_t value)
+  post(uleb_byte_machine(value, 3) == uleb_byte_math_3(value))
+{
+}
+
+proof void lemma_machine_byte_4(uint64_t value)
+  post(uleb_byte_machine(value, 4) == uleb_byte_math_4(value))
+{
+}
+
+proof void lemma_machine_byte_5(uint64_t value)
+  post(uleb_byte_machine(value, 5) == uleb_byte_math_5(value))
+{
+}
+
+proof void lemma_machine_byte_6(uint64_t value)
+  post(uleb_byte_machine(value, 6) == uleb_byte_math_6(value))
+{
+}
+
+proof void lemma_machine_byte_7(uint64_t value)
+  post(uleb_byte_machine(value, 7) == uleb_byte_math_7(value))
+{
+}
+
+proof void lemma_machine_byte_8(uint64_t value)
+  post(uleb_byte_machine(value, 8) == uleb_byte_math_8(value))
+{
+}
+
+proof void lemma_machine_byte_9(uint64_t value)
+  post(uleb_byte_machine(value, 9) == uleb_byte_math_9(value))
+{
+}
+
+proof void lemma_machine_byte_matches_math(uint64_t value, unsigned index)
+  pre(index < 10)
+  post(uleb_byte_machine(value, index) == uleb_byte_math(value, index))
+{
+  if (index == 0)
+    lemma_machine_byte_0(value);
+  else if (index == 1)
+    lemma_machine_byte_1(value);
+  else if (index == 2)
+    lemma_machine_byte_2(value);
+  else if (index == 3)
+    lemma_machine_byte_3(value);
+  else if (index == 4)
+    lemma_machine_byte_4(value);
+  else if (index == 5)
+    lemma_machine_byte_5(value);
+  else if (index == 6)
+    lemma_machine_byte_6(value);
+  else if (index == 7)
+    lemma_machine_byte_7(value);
+  else if (index == 8)
+    lemma_machine_byte_8(value);
+  else
+    lemma_machine_byte_9(value);
 }
 
 constexpr uint64_t uleb_prefix_value(uint64_t value, unsigned count) {
@@ -72,16 +241,16 @@ unsigned encode_uleb128(uint64_t value, uint8_t *buffer)
            buffer[5], buffer[6], buffer[7], buffer[8], buffer[9])
   post(result == uleb_length(old(value)))
   post(result >= 1 && result <= 10)
-  post(result <= 0 || buffer[0] == uleb_byte_machine(old(value), 0))
-  post(result <= 1 || buffer[1] == uleb_byte_machine(old(value), 1))
-  post(result <= 2 || buffer[2] == uleb_byte_machine(old(value), 2))
-  post(result <= 3 || buffer[3] == uleb_byte_machine(old(value), 3))
-  post(result <= 4 || buffer[4] == uleb_byte_machine(old(value), 4))
-  post(result <= 5 || buffer[5] == uleb_byte_machine(old(value), 5))
-  post(result <= 6 || buffer[6] == uleb_byte_machine(old(value), 6))
-  post(result <= 7 || buffer[7] == uleb_byte_machine(old(value), 7))
-  post(result <= 8 || buffer[8] == uleb_byte_machine(old(value), 8))
-  post(result <= 9 || buffer[9] == uleb_byte_machine(old(value), 9))
+  post(result <= 0 || buffer[0] == uleb_byte_math(old(value), 0))
+  post(result <= 1 || buffer[1] == uleb_byte_math(old(value), 1))
+  post(result <= 2 || buffer[2] == uleb_byte_math(old(value), 2))
+  post(result <= 3 || buffer[3] == uleb_byte_math(old(value), 3))
+  post(result <= 4 || buffer[4] == uleb_byte_math(old(value), 4))
+  post(result <= 5 || buffer[5] == uleb_byte_math(old(value), 5))
+  post(result <= 6 || buffer[6] == uleb_byte_math(old(value), 6))
+  post(result <= 7 || buffer[7] == uleb_byte_math(old(value), 7))
+  post(result <= 8 || buffer[8] == uleb_byte_math(old(value), 8))
+  post(result <= 9 || buffer[9] == uleb_byte_math(old(value), 9))
   post(result > 0 || buffer[0] == old(buffer[0]))
   post(result > 1 || buffer[1] == old(buffer[1]))
   post(result > 2 || buffer[2] == old(buffer[2]))
@@ -129,6 +298,18 @@ unsigned encode_uleb128(uint64_t value, uint8_t *buffer)
     invariant(count > 8 || buffer[8] == old(buffer[8]))
     invariant(count > 9 || buffer[9] == old(buffer[9]))
     decreases(value);
+  ghost {
+    lemma_machine_byte_0(original);
+    lemma_machine_byte_1(original);
+    lemma_machine_byte_2(original);
+    lemma_machine_byte_3(original);
+    lemma_machine_byte_4(original);
+    lemma_machine_byte_5(original);
+    lemma_machine_byte_6(original);
+    lemma_machine_byte_7(original);
+    lemma_machine_byte_8(original);
+    lemma_machine_byte_9(original);
+  }
   return count;
 }
 
@@ -179,12 +360,24 @@ uint64_t roundtrip_uleb128(uint64_t input, uint8_t *buffer,
   post(*consumed == uleb_length(input))
 {
   unsigned length = encode_uleb128(input, buffer);
+  ghost {
+    lemma_machine_byte_0(input);
+    lemma_machine_byte_1(input);
+    lemma_machine_byte_2(input);
+    lemma_machine_byte_3(input);
+    lemma_machine_byte_4(input);
+    lemma_machine_byte_5(input);
+    lemma_machine_byte_6(input);
+    lemma_machine_byte_7(input);
+    lemma_machine_byte_8(input);
+    lemma_machine_byte_9(input);
+  }
   return decode_uleb128_canonical(buffer, length, input, consumed);
 }
 
 } // namespace cppverify_uleb128
 
 // CHECK-DAG: Verified: encode_uleb128
+// CHECK-DAG: Verified: lemma_machine_byte_matches_math
 // CHECK-DAG: Verified: decode_uleb128_canonical
 // CHECK-DAG: Verified: roundtrip_uleb128
-

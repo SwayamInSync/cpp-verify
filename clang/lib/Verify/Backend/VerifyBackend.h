@@ -123,6 +123,10 @@ struct BackendExecutionOptions {
   unsigned Jobs = 1;
   /// Maximum canonical expression nodes in a module; 0 disables it.
   uint64_t MaxQueryNodes = 0;
+  /// Do not retry a whole-module query after individual obligations are
+  /// unresolved. Interactive fallback backends can consume those unresolved
+  /// obligations without spending a second whole-module timeout budget.
+  bool SkipWholeModuleRetry = false;
   /// Optional cvc5 executable. An empty path searches PATH for `cvc5`.
   std::string CVC5Path;
   std::string ProofCachePath;

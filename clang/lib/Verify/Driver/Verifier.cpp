@@ -778,6 +778,7 @@ public:
     Execution.SolverResourceLimit = Opts.SolverResourceLimit;
     Execution.Jobs = Opts.Jobs;
     Execution.MaxQueryNodes = Opts.MaxQueryNodes;
+    Execution.SkipWholeModuleRetry = !Opts.LeanFallbackProjectPath.empty();
     Execution.CVC5Path = Opts.CVC5Path;
     Execution.ProofCachePath = Opts.ProofCachePath;
     Execution.ProofCacheMaxBytes = Opts.ProofCacheMaxBytes;

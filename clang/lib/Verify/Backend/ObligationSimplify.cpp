@@ -1,6 +1,7 @@
 //===--- ObligationSimplify.cpp
 //--------------------------------------------===//
 #include "ObligationSimplify.h"
+#include "llvm/ADT/APInt.h"
 #include <algorithm>
 #include <optional>
 #include <set>
@@ -92,6 +93,91 @@ std::unique_ptr<LogicExpr> boolLiteral(bool Value, const LogicExpr &Source) {
   return Result;
 }
 
+bool isPositiveDivisor(const LogicExpr *Expr, const LogicSort &SourceSort) {
+  if (!Expr || Expr->K != LogicExpr::IntLit ||
+      Expr->Sort.Kind != LogicSortKind::MathematicalInteger ||
+      Expr->IntVal.empty() || Expr->IntVal.front() == '-' ||
+      llvm::APInt::getBitsNeeded(Expr->IntVal, 10) > SourceSort.BitWidth)
+    return false;
+  return !llvm::APInt(SourceSort.BitWidth, Expr->IntVal, 10).isZero();
+}
+
+std::optional<LogicSort> unsignedMathSourceSort(const LogicExpr *Expr) {
+  if (!Expr)
+    return std::nullopt;
+  if (Expr->K == LogicExpr::BvToInt && Expr->Children.size() == 1 &&
+      Expr->Children[0] &&
+      Expr->Children[0]->Sort.Kind == LogicSortKind::BitVector &&
+      Expr->Children[0]->Sort.Signedness == LogicSignedness::Unsigned)
+    return Expr->Children[0]->Sort;
+  if ((Expr->K != LogicExpr::Div && Expr->K != LogicExpr::Rem) ||
+      Expr->Sort.Kind != LogicSortKind::MathematicalInteger ||
+      Expr->Children.size() != 2)
+    return std::nullopt;
+  std::optional<LogicSort> SourceSort =
+      unsignedMathSourceSort(Expr->Children[0].get());
+  if (!SourceSort || !isPositiveDivisor(Expr->Children[1].get(), *SourceSort))
+    return std::nullopt;
+  return SourceSort;
+}
+
+std::unique_ptr<LogicExpr>
+lowerUnsignedMathArithmetic(std::unique_ptr<LogicExpr> Expr,
+                            const LogicSort &SourceSort) {
+  if (Expr->K == LogicExpr::BvToInt)
+    return std::move(Expr->Children.front());
+
+  auto Divisor = std::make_unique<LogicExpr>(LogicExpr::IntLit);
+  Divisor->Sort = SourceSort;
+  Divisor->Loc = Expr->Children[1]->Loc;
+  Divisor->EndLoc = Expr->Children[1]->EndLoc;
+  Divisor->Source = Expr->Children[1]->Source;
+  Divisor->IntVal = Expr->Children[1]->IntVal;
+
+  auto MachineArithmetic = std::make_unique<LogicExpr>(Expr->K);
+  MachineArithmetic->Sort = SourceSort;
+  MachineArithmetic->Loc = Expr->Loc;
+  MachineArithmetic->EndLoc = Expr->EndLoc;
+  MachineArithmetic->Source = Expr->Source;
+  MachineArithmetic->Children.push_back(
+      lowerUnsignedMathArithmetic(std::move(Expr->Children[0]), SourceSort));
+  MachineArithmetic->Children.push_back(std::move(Divisor));
+  return MachineArithmetic;
+}
+
+std::unique_ptr<LogicExpr>
+simplifyUnsignedMathToBitVector(std::unique_ptr<LogicExpr> Expr,
+                                ObligationSimplificationStats &Stats) {
+  if (!Expr || Expr->K != LogicExpr::IntToBv ||
+      Expr->Sort.Kind != LogicSortKind::BitVector || Expr->Children.size() != 1)
+    return Expr;
+
+  LogicExpr *Arithmetic = Expr->Children.front().get();
+  if (!Arithmetic ||
+      (Arithmetic->K != LogicExpr::Div && Arithmetic->K != LogicExpr::Rem) ||
+      Arithmetic->Sort.Kind != LogicSortKind::MathematicalInteger ||
+      Arithmetic->Children.size() != 2)
+    return Expr;
+
+  std::optional<LogicSort> SourceSort = unsignedMathSourceSort(Arithmetic);
+  if (!SourceSort)
+    return Expr;
+  auto MachineArithmetic = lowerUnsignedMathArithmetic(
+      std::move(Expr->Children.front()), *SourceSort);
+  ++Stats.Rewrites;
+  if (Expr->Sort.BitWidth == SourceSort->BitWidth &&
+      Expr->Sort.Signedness == SourceSort->Signedness)
+    return MachineArithmetic;
+
+  auto Resize = std::make_unique<LogicExpr>(LogicExpr::BvResize);
+  Resize->Sort = Expr->Sort;
+  Resize->Loc = Expr->Loc;
+  Resize->EndLoc = Expr->EndLoc;
+  Resize->Source = Expr->Source;
+  Resize->Children.push_back(std::move(MachineArithmetic));
+  return Resize;
+}
+
 std::unique_ptr<LogicExpr> simplifyExpr(std::unique_ptr<LogicExpr> Expr,
                                         ObligationSimplificationStats &Stats) {
   if (!Expr)
@@ -145,7 +231,7 @@ std::unique_ptr<LogicExpr> simplifyExpr(std::unique_ptr<LogicExpr> Expr,
       return std::move(Expr->Children[*Cond ? 1 : 2]);
     }
 
-  return Expr;
+  return simplifyUnsignedMathToBitVector(std::move(Expr), Stats);
 }
 
 std::unique_ptr<LogicExpr> negate(std::unique_ptr<LogicExpr> Expr) {

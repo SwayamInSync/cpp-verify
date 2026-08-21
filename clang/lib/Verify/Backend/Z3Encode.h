@@ -64,6 +64,7 @@ class Z3VerifyBackend : public VerifyBackend {
   unsigned ResourceLimit;
   unsigned Jobs;
   uint64_t MaxQueryNodes;
+  bool SkipWholeModuleRetry;
   std::unique_ptr<ProofCache> Cache;
   bool ReuseVerifiedQueries;
   std::set<std::string> VerifiedQueries;

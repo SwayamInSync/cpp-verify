@@ -918,6 +918,30 @@ class ObligationBuilder {
         [&](const auto &Entry) { return Entry.second == Expr->Name; });
   }
 
+  std::unique_ptr<VCExpr> toMachineSort(std::unique_ptr<VCExpr> E,
+                                        const LogicSort &TargetSort) {
+    if (!E)
+      return E;
+    if (E->K == VCExpr::BvToInt && E->Children.size() == 1 && E->Children[0] &&
+        E->Children[0]->Sort.Kind == LogicSortKind::BitVector)
+      E = std::move(E->Children[0]);
+    if (E->Sort.Kind == LogicSortKind::BitVector) {
+      if (E->Sort.BitWidth == TargetSort.BitWidth &&
+          E->Sort.Signedness == TargetSort.Signedness)
+        return E;
+      auto Resize = std::make_unique<VCExpr>(VCExpr::BvResize);
+      Resize->Sort = TargetSort;
+      Resize->Loc = E->Loc;
+      Resize->Children.push_back(std::move(E));
+      return Resize;
+    }
+    auto Converted = std::make_unique<VCExpr>(VCExpr::IntToBv);
+    Converted->Sort = TargetSort;
+    Converted->Loc = E->Loc;
+    Converted->Children.push_back(std::move(E));
+    return Converted;
+  }
+
   std::unique_ptr<VCExpr> toMode(std::unique_ptr<VCExpr> E, VIntMode Target) {
     if (!E)
       return E;
@@ -929,34 +953,28 @@ class ObligationBuilder {
         E->Children.size() == 1 && isActiveBoundVariable(E->Children[0].get()))
       return std::move(E->Children[0]);
     if (Target == VIntMode::Machine) {
-      if (E->K == VCExpr::BvToInt && E->Children.size() == 1 &&
-          E->Children[0] &&
-          E->Children[0]->Sort.Kind == LogicSortKind::BitVector)
-        return std::move(E->Children[0]);
+      const LogicSort TargetSort =
+          LogicSort::bitVector(E->Sort.BitWidth ? E->Sort.BitWidth : 32,
+                               E->Sort.Signedness != LogicSignedness::Unsigned);
       switch (E->K) {
-      case VCExpr::IntLit:
-        E->Sort = LogicSort::bitVector(E->Sort.BitWidth ? E->Sort.BitWidth : 32,
-                                       E->Sort.Signedness !=
-                                           LogicSignedness::Unsigned);
-        return E;
       case VCExpr::Add:
       case VCExpr::Sub:
       case VCExpr::Mul:
-        E->Children[0] = toMode(std::move(E->Children[0]), Target);
-        E->Children[1] = toMode(std::move(E->Children[1]), Target);
-        E->Sort = E->Children[0]->Sort;
+        E->Children[0] = toMachineSort(std::move(E->Children[0]), TargetSort);
+        E->Children[1] = toMachineSort(std::move(E->Children[1]), TargetSort);
+        E->Sort = TargetSort;
         return E;
       case VCExpr::Neg:
-        E->Children[0] = toMode(std::move(E->Children[0]), Target);
-        E->Sort = E->Children[0]->Sort;
+        E->Children[0] = toMachineSort(std::move(E->Children[0]), TargetSort);
+        E->Sort = TargetSort;
         return E;
       case VCExpr::Ite:
-        E->Children[1] = toMode(std::move(E->Children[1]), Target);
-        E->Children[2] = toMode(std::move(E->Children[2]), Target);
-        E->Sort = E->Children[1]->Sort;
+        E->Children[1] = toMachineSort(std::move(E->Children[1]), TargetSort);
+        E->Children[2] = toMachineSort(std::move(E->Children[2]), TargetSort);
+        E->Sort = TargetSort;
         return E;
       default:
-        break;
+        return toMachineSort(std::move(E), TargetSort);
       }
     }
     auto N = std::make_unique<VCExpr>(

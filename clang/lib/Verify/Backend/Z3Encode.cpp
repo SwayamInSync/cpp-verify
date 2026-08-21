@@ -1030,6 +1030,7 @@ Z3VerifyBackend::Z3VerifyBackend(const BackendExecutionOptions &Execution,
     : TimeoutMs(Execution.SolverTimeoutMs),
       ResourceLimit(Execution.SolverResourceLimit), Jobs(Execution.Jobs),
       MaxQueryNodes(Execution.MaxQueryNodes),
+      SkipWholeModuleRetry(Execution.SkipWholeModuleRetry),
       ReuseVerifiedQueries(ReuseVerifiedQueries) {
   Enc.setTimeoutMs(TimeoutMs);
   Enc.setResourceLimit(ResourceLimit);
@@ -1132,15 +1133,22 @@ VerifyResult Z3VerifyBackend::verifyModule(const ObligationModule &Module) {
       const bool CacheFailure =
           FirstUnresolved->Reason == VerifyReason::CacheCorrupt ||
           FirstUnresolved->Reason == VerifyReason::CacheIOFailure;
-      VerifyResult Whole;
-      if (!CacheFailure)
-        Whole = Enc.verifyModule(Module);
-      if (!CacheFailure && Whole.Status != VerifyStatus::Unresolved) {
-        Result = finishZ3Result(std::move(Whole));
-        if (Cache && Result.Status == VerifyStatus::Verified) {
-          for (const Obligation &Item : Module.Obligations) {
-            if (llvm::Error Error =
-                    Cache->store(obligationSemanticHash(Module, Item))) {
+      if (!CacheFailure && !SkipWholeModuleRetry) {
+        VerifyResult Whole = Enc.verifyModule(Module);
+        if (Whole.Status != VerifyStatus::Unresolved) {
+          Result = finishZ3Result(std::move(Whole));
+          if (Cache && Result.Status == VerifyStatus::Verified) {
+            for (const Obligation &Item : Module.Obligations) {
+              if (llvm::Error Error =
+                      Cache->store(obligationSemanticHash(Module, Item))) {
+                ++Errors;
+                if (CacheError.empty())
+                  CacheError = llvm::toString(std::move(Error));
+                else
+                  llvm::consumeError(std::move(Error));
+              }
+            }
+            if (llvm::Error Error = Cache->prune()) {
               ++Errors;
               if (CacheError.empty())
                 CacheError = llvm::toString(std::move(Error));
@@ -1148,13 +1156,8 @@ VerifyResult Z3VerifyBackend::verifyModule(const ObligationModule &Module) {
                 llvm::consumeError(std::move(Error));
             }
           }
-          if (llvm::Error Error = Cache->prune()) {
-            ++Errors;
-            if (CacheError.empty())
-              CacheError = llvm::toString(std::move(Error));
-            else
-              llvm::consumeError(std::move(Error));
-          }
+        } else {
+          Result = std::move(*FirstUnresolved);
         }
       } else {
         Result = std::move(*FirstUnresolved);
@@ -1207,7 +1210,7 @@ VerifyResult Z3VerifyBackend::verifyModule(const ObligationModule &Module) {
   }
 
   auto retryWhole = [&](VerifyResult SplitResult) {
-    if (WholeUsedFullBudget)
+    if (WholeUsedFullBudget || SkipWholeModuleRetry)
       return finishZ3Result(std::move(SplitResult));
     VerifyResult Retry = Enc.verifyModule(Module);
     if (Retry.Status != VerifyStatus::Unresolved)
