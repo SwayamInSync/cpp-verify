@@ -72,5 +72,5 @@ int machine_identity(int x)
 // Z3-DAG: (bv2int x_0)
 // Z3-DAG: (- 2147483648)
 // Z3-DAG: 2147483647
-// Z3-DAG: (bvadd x_0 ((_ int2bv 32) 1))
+// Z3-DAG: (bvadd x_0 #x00000001)
 // Z3-NOT: error:

@@ -935,6 +935,13 @@ class ObligationBuilder {
       Resize->Children.push_back(std::move(E));
       return Resize;
     }
+    // A mathematical integer literal has no representation of its own to
+    // preserve, so retype it directly instead of emitting a runtime int2bv
+    // conversion around a constant. Keeps `x + 1` as (bvadd x #x00000001).
+    if (E->K == VCExpr::IntLit) {
+      E->Sort = TargetSort;
+      return E;
+    }
     auto Converted = std::make_unique<VCExpr>(VCExpr::IntToBv);
     Converted->Sort = TargetSort;
     Converted->Loc = E->Loc;
