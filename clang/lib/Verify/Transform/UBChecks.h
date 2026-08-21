@@ -22,6 +22,13 @@ namespace verify {
 /// error when a recognized marker cannot be interpreted soundly.
 std::optional<std::string> instrumentUBChecks(VFunction &Fn);
 
+/// True when the function's contracts mention the `valid(p, n)` extent marker.
+/// Without --check-ub the marker's trivial spec body folds to `true` and the
+/// declared extent never becomes an assumption, so heap facts do not survive
+/// into the postcondition and the solver reports a spurious counterexample.
+/// The driver uses this to warn instead of letting that happen silently.
+bool usesValidMarker(const VFunction &Fn);
+
 } // namespace verify
 } // namespace clang
 

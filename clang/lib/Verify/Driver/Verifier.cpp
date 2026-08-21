@@ -842,6 +842,15 @@ public:
                              Opts.Backend == BackendKind::BMC ||
                              Opts.Backend == BackendKind::Lean))
           UBError = instrumentUBChecks(*PreparedFn);
+        else if (usesValidMarker(*Fn))
+          Diags.push_back(
+              {VerifyDiagnostic::Warning,
+               "contract of " + Fn->Name +
+                   " uses the valid(p, n) extent marker, but --check-ub is "
+                   "not enabled; the marker folds to `true` and declared "
+                   "extents are not assumed, so results about heap contents "
+                   "may be spurious. Re-run with --check-ub.",
+               SourceLocation(), Fn->Name});
         if (!UBError) {
           SpecInliner Inliner(FnMap, PreparedFn->SpecFuel);
           if (isDeductiveBackend(Opts.Backend) ||

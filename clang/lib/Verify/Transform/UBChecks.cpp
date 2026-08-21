@@ -589,6 +589,18 @@ struct UBInstrumenter {
 
 } // namespace
 
+bool verify::usesValidMarker(const VFunction &Fn) {
+  if (Fn.IsSpec)
+    return false;
+  for (const auto &Pre : Fn.Preconditions)
+    if (containsValidCall(Pre.get()))
+      return true;
+  for (const auto &Post : Fn.Postconditions)
+    if (containsValidCall(Post.get()))
+      return true;
+  return false;
+}
+
 std::optional<std::string> verify::instrumentUBChecks(VFunction &Fn) {
   if (Fn.IsSpec)
     return std::nullopt;
