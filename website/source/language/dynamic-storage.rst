@@ -194,17 +194,17 @@ owned scalar allocation:
 .. code-block:: cpp
 
    int *make_value(int value)
+     post(result != nullptr)
      post(*result == value)
    {
-     return new int(value);
+     int *owner = new int(value);
+     return owner;
    }
 
    int use_factory(int value)
-     pre(value < 2147483647)
-     post(result == value + 1)
+     post(result == value)
    {
      int *p = make_value(value);
-     *p = *p + 1;
      int observed = *p;
      delete p;
      return observed;

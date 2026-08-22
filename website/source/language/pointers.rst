@@ -104,10 +104,21 @@ the verifier gets this from array theory:
 .. code-block:: cpp
 
    void set(int* p, int i, int j, int v)
-     pre(p != nullptr && i != j && p[j] == 5)
+     pre(p != nullptr && i != j)
+     pre(0 <= i && i < 1000 && 0 <= j && j < 1000)
+     pre(p[j] == 5)
      modifies(*p)
      post(p[i] == v && p[j] == 5)        // p[j] is preserved
    { p[i] = v; }
+
+.. note::
+
+   The index bounds are load-bearing. Addresses are byte-scaled, so separating
+   ``p[i]`` from ``p[j]`` means separating ``4*i`` from ``4*j``; deriving that
+   from ``i != j`` alone requires range reasoning about the sign extension that
+   bit-vector solvers do not do well, and the query returns ``unknown``. Bound
+   the indices — as any real buffer contract does anyway — and the separation
+   is immediate.
 
 Within a verified function body, ``modifies(*p)`` authorizes the **whole
 region** rooted at ``p`` — a write to any ``p[i]`` is covered. A write through

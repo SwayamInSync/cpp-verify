@@ -15,10 +15,11 @@ A complete scalar lifetime
 .. code-block:: cpp
 
    int compute(int input)
+     pre(input < 2147483647)
      post(result == input + 1)
    {
-     int *p = new int(input);
-     *p = *p + 1;
+     int *p = new int;
+     *p = input + 1;
      int answer = *p;
      delete p;
      return answer;
@@ -26,10 +27,10 @@ A complete scalar lifetime
 
 The proof follows the actual lifetime:
 
-#. ``new int(input)`` chooses a non-null, correctly aligned, non-overlapping
-   scalar object and starts its lifetime.
-#. The initializer stores ``input`` and marks the cell initialized.
-#. The assignment requires a live initialized read, then writes ``input + 1``.
+#. ``new int`` chooses a non-null, correctly aligned, non-overlapping scalar
+   object and starts its lifetime, leaving the value indeterminate.
+#. The assignment stores ``input + 1`` and marks the cell initialized. The
+   precondition rules out the signed overflow in ``input + 1``.
 #. ``delete p`` requires that ``p`` still denotes the live allocation base and
    ends that lifetime.
 #. The returned local ``answer`` no longer depends on accessing the freed
@@ -193,9 +194,11 @@ A separate inferred effect handles a factory's own scalar allocation:
 .. code-block:: cpp
 
    int *make_value(int value)
+     post(result != nullptr)
      post(*result == value)
    {
-     return new int(value);
+     int *owner = new int(value);
+     return owner;
    }
 
    int use_factory(int value)

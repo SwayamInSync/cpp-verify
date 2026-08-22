@@ -210,9 +210,11 @@ factory:
 .. code-block:: cpp
 
    int *make(int value)
+     post(result != nullptr)
      post(*result == value)
    {
-     return new int(value);
+     int *owner = new int(value);
+     return owner;
    }
 
    int consume(int value)

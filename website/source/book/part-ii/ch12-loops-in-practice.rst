@@ -181,6 +181,14 @@ loop *computes* what the spec *defines*. The invariant ``acc == count(i - 1)``
 below says "after processing ``i - 1`` elements, ``acc`` equals the spec's
 value":
 
+.. warning::
+
+   The pattern below is the *intended* shape for relating a loop accumulator to
+   a recursive ``spec`` function, but as written it does **not** verify on the
+   current implementation: the step lemma itself fails. Relating loops to
+   recursive specs at a symbolic index is a known automation gap. It is shown
+   here to document the technique, not as a working example.
+
 .. code-block:: cpp
 
    spec int count(int n)
