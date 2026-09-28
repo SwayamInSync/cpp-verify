@@ -122,10 +122,11 @@ C++ feature boundaries
        allocations, and user-declared modular allocation effects.
    * - Structured control flow
      - ``if`` (including C++17 initializer), conventional ``while``/``for``,
-       contracted ``do`` loops, blocks, and ``return``.
-     - ``switch``, range-``for``, ``break``, ``continue``, ``goto``,
-       labels, conditionless ``for``, loop condition declarations, and
-       ``return`` inside a loop body.
+       contracted ``do`` loops, blocks, ``return`` (also inside loops), and
+       ``break``/``continue`` in ``while``/``for`` loops.
+     - ``switch``, range-``for``, ``goto``, labels, conditionless ``for``,
+       loop condition declarations, and ``break``/``continue`` in ``do``
+       loops.
    * - Advanced C++
      - Not in the verified core.
      - Exceptions, lambdas, coroutines, RTTI, virtual dispatch, multiple
@@ -316,7 +317,8 @@ Current proof-language limitations include:
 - bounded quantifiers only, without user trigger syntax or trigger profiling;
 - user-written loop invariants, with no candidate-invariant/Houdini pass;
 - no automatic termination-measure or lemma discovery;
-- no heap-reading mathematical specs or aggregate-returning specs;
+- no ``reads`` frames for heap-reading specs (preservation across unrelated
+  writes needs unfolding), and no aggregate-returning specs;
 - no mutual recursion for spec/proof/executable functions.
 - no heap-mutating executable recursion: stores, allocation/deallocation, and
   separate heap-modifying calls fail the termination check conservatively.
@@ -350,7 +352,10 @@ quantifiers, models, timeouts, module-owned ordered-obligation fallback, and
 full SMT dumps. Layer 3 now provides deterministic obligation IDs and raw
 source encodings from the exact canonical module solved by the backend.
 Hard quantified recursive/heap formulas can still leave decidable fragments and
-return ``unknown``.
+return ``unknown``. The default ``--int-encoding=auto`` encodes a query that
+needs the bits of a non-constant operand with bit-vectors, so bit-level code
+combined with quantified 64-bit heap reasoning can remain slow under every
+encoding.
 
 Important missing optimizations and tactics are:
 
