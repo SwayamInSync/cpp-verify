@@ -66,8 +66,13 @@ Multiple ``invariant`` clauses are conjoined. ``old(expr)`` is permitted in an
 invariant and always denotes the enclosing function's entry state, not the
 previous iteration. Function locals do not exist at function entry and are
 rejected inside ``old(...)``; use an ordinary snapshot local directly instead.
-Returns inside loop bodies remain unsupported; an early return before a loop
-continues to guard whether that loop is reached.
+``return``, ``break``, and ``continue`` may leave a ``while`` or ``for`` loop
+from any iteration. A ``return`` checks the postcondition in its own state and
+a ``break`` continues after the loop in its own state. A ``continue`` ends the
+iteration: the invariant must hold again and the ``decreases`` measure must
+drop, after a ``for`` increment has run. ``break`` and ``continue`` in a
+``do`` loop are not supported yet, and ``ghost`` code cannot leave an
+executable loop.
 
 The verifier checks a loop **modularly** (no unrolling), discharging three
 obligations:
