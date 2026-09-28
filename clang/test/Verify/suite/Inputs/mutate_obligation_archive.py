@@ -16,6 +16,8 @@ class Archive:
         self.trace_values = []
         self.function_keys = []
         self.obligation_ids = []
+        self.obligation_kind_offsets = []
+        self.version_offsets = []
         self.modules = []
 
     def u8(self):
@@ -126,6 +128,7 @@ class Archive:
 
     def module(self):
         self.offset += 8
+        self.version_offsets.append(self.offset)
         self.offset += 4
         self.flags = self.u32()
         function_name = self.string()
@@ -180,6 +183,7 @@ class Archive:
             if self.flags & 8:
                 self.string()
                 self.offset += 8
+            self.obligation_kind_offsets.append(self.offset)
             self.offset += 1
             self.source()
             obligations.append((self.expression(), self.expression()))
@@ -345,6 +349,8 @@ parser.add_argument(
         "diagnostic-sort-mismatch",
         "trace-sort-mismatch",
         "invalid-utf8",
+        "schema-v1",
+        "schema-v1-kinds",
     ],
 )
 parser.add_argument("input")
@@ -357,6 +363,14 @@ archive.parse()
 
 if args.mode == "invalid-kind":
     archive.data[archive.expression_kind_offsets[0]] = 255
+elif args.mode in ("schema-v1", "schema-v1-kinds"):
+    for offset in archive.version_offsets:
+        struct.pack_into("<I", archive.data, offset, 1)
+    if args.mode == "schema-v1-kinds":
+        # Schema 1 named every non-contract check an assertion.
+        for offset in archive.obligation_kind_offsets:
+            if archive.data[offset] > 3:
+                archive.data[offset] = 1
 elif args.mode == "feature-mismatch":
     struct.pack_into("<I", archive.data, archive.feature_offsets[0], 0)
 elif args.mode == "duplicate-id":

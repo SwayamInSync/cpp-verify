@@ -15,8 +15,12 @@
 # RUN: head -c -1 %t.one > %t.truncated
 # RUN: not %cpp-verify --obligation-in=%t.truncated 2>&1 | FileCheck %s --check-prefix=TRUNCATED
 # RUN: cp %t.one %t.version
-# RUN: printf '\002\000\000\000' | dd of=%t.version bs=1 seek=8 conv=notrunc 2>/dev/null
+# RUN: printf '\003\000\000\000' | dd of=%t.version bs=1 seek=8 conv=notrunc 2>/dev/null
 # RUN: not %cpp-verify --obligation-in=%t.version 2>&1 | FileCheck %s --check-prefix=VERSION
+# RUN: %python %S/Inputs/mutate_obligation_archive.py schema-v1 %t.one %t.schema-v1
+# RUN: not %cpp-verify --obligation-in=%t.schema-v1 2>&1 | FileCheck %s --check-prefix=SCHEMA-V1
+# RUN: %python %S/Inputs/mutate_obligation_archive.py schema-v1-kinds %t.one %t.schema-v1-kinds
+# RUN: %cpp-verify --obligation-in=%t.schema-v1-kinds --backend=z3 | FileCheck %s --check-prefix=SCHEMA-V1-KINDS
 # RUN: %python %S/Inputs/mutate_obligation_archive.py invalid-kind %t.one %t.invalid-kind
 # RUN: not %cpp-verify --obligation-in=%t.invalid-kind 2>&1 | FileCheck %s --check-prefix=KIND
 # RUN: %python %S/Inputs/mutate_obligation_archive.py feature-mismatch %t.one %t.features
@@ -89,7 +93,7 @@
 
 # REPLAY: Verified: canonical_obligations [backend=z3] [semantic-hash=sha256:{{[0-9a-f]+}}]
 # LOWER: vc canonical_obligations
-# LOWER: schema cppverify.obligation/1
+# LOWER: schema cppverify.obligation/2
 # LOWER: (let
 # LOWER: Lowered: canonical_obligations [backend=z3] [semantic-hash=sha256:{{[0-9a-f]+}}]
 # LEAN: Exported: lean obligation: canonical_obligations [backend=lean]
@@ -98,6 +102,8 @@
 # BAD-MAGIC: error: invalid obligation archive: invalid obligation archive magic
 # TRUNCATED: error: invalid obligation archive: truncated obligation archive
 # VERSION: error: invalid obligation archive: unsupported obligation archive version
+# SCHEMA-V1: error: invalid obligation archive: invalid obligation kind in obligation archive
+# SCHEMA-V1-KINDS: Verified: canonical_obligations [backend=z3]
 # KIND: error: invalid obligation archive: invalid expression kind in obligation archive
 # FEATURES: error: invalid obligation archive: obligation archive feature declaration does not match contents
 # DUPLICATE-ID: error: invalid obligation archive: obligation module has an empty or duplicate obligation identity
