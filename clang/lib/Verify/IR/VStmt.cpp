@@ -118,6 +118,10 @@ std::unique_ptr<VStmt> verify::cloneVStmt(const VStmt *S) {
     return std::make_unique<VContractAssertStmt>(cloneVExpr(A.Cond.get()),
                                                  A.Loc);
   }
+  case VStmt::Break:
+    return std::make_unique<VBreakStmt>(S->Loc);
+  case VStmt::Continue:
+    return std::make_unique<VContinueStmt>(S->Loc);
   }
   return nullptr;
 }
@@ -131,6 +135,7 @@ VFunction verify::cloneVFunction(const VFunction &Fn) {
   Out.IsSpec = Fn.IsSpec;
   Out.IsProof = Fn.IsProof;
   Out.IsConstexprSpec = Fn.IsConstexprSpec;
+  Out.ReadsHeap = Fn.ReadsHeap;
   Out.RequiresCallDefinedness = Fn.RequiresCallDefinedness;
   Out.IsExternalContract = Fn.IsExternalContract;
   Out.NeedsDecreasesCheck = Fn.NeedsDecreasesCheck;
@@ -148,6 +153,8 @@ VFunction verify::cloneVFunction(const VFunction &Fn) {
     Out.Preconditions.push_back(cloneVExpr(P.get()));
   for (const auto &P : Fn.Postconditions)
     Out.Postconditions.push_back(cloneVExpr(P.get()));
+  Out.PreconditionKinds = Fn.PreconditionKinds;
+  Out.PostconditionKinds = Fn.PostconditionKinds;
   for (const auto &R : Fn.Recommends)
     Out.Recommends.push_back(cloneVExpr(R.get()));
   for (const auto &M : Fn.Modifies)
@@ -158,10 +165,46 @@ VFunction verify::cloneVFunction(const VFunction &Fn) {
   for (const auto &Extent : Fn.ValidExtents)
     Out.ValidExtents.emplace_back(Extent.Base, Extent.PointerType,
                                   cloneVExpr(Extent.Length.get()));
+  Out.DisjointAddresses = Fn.DisjointAddresses;
   for (const auto &D : Fn.Decreases)
     Out.Decreases.push_back(cloneVExpr(D.get()));
   for (const auto &S : Fn.Body)
     Out.Body.push_back(cloneVStmt(S.get()));
   Out.Layouts = Fn.Layouts;
   return Out;
+}
+
+static void addClause(std::vector<std::unique_ptr<VExpr>> &Clauses,
+                      std::vector<ProofObligationKind> &Kinds,
+                      std::unique_ptr<VExpr> Condition,
+                      ProofObligationKind Default, ProofObligationKind Kind) {
+  Kinds.resize(Clauses.size(), Default);
+  Clauses.push_back(std::move(Condition));
+  Kinds.push_back(Kind);
+}
+
+void verify::addPrecondition(VFunction &Fn, std::unique_ptr<VExpr> Condition,
+                             ProofObligationKind Kind) {
+  addClause(Fn.Preconditions, Fn.PreconditionKinds, std::move(Condition),
+            ProofObligationKind::Precondition, Kind);
+}
+
+void verify::addPostcondition(VFunction &Fn, std::unique_ptr<VExpr> Condition,
+                              ProofObligationKind Kind) {
+  addClause(Fn.Postconditions, Fn.PostconditionKinds, std::move(Condition),
+            ProofObligationKind::Postcondition, Kind);
+}
+
+ProofObligationKind verify::preconditionKind(const VFunction &Fn,
+                                             size_t Index) {
+  return Index < Fn.PreconditionKinds.size()
+             ? Fn.PreconditionKinds[Index]
+             : ProofObligationKind::Precondition;
+}
+
+ProofObligationKind verify::postconditionKind(const VFunction &Fn,
+                                              size_t Index) {
+  return Index < Fn.PostconditionKinds.size()
+             ? Fn.PostconditionKinds[Index]
+             : ProofObligationKind::Postcondition;
 }

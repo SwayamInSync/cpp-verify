@@ -14,7 +14,31 @@
 namespace clang {
 namespace verify {
 
-enum class ProofObligationKind { Assertion, Postcondition, Unwinding };
+/// What a proof obligation establishes. Mirrors ObligationKind.
+enum class ProofObligationKind {
+  Assertion,
+  Postcondition,
+  Unwinding,
+  Precondition,
+  InvariantEntry,
+  InvariantPreserved,
+  Termination,
+  TypeInvariant,
+  Recommends,
+  Overflow,
+  DivisionByZero,
+  Shift,
+  Bounds,
+  Dereference,
+  Initialization,
+  PointerDifference,
+  PointerValidity,
+  Aliasing,
+  Frame,
+  Deallocation,
+  MissingReturn,
+  Unsupported
+};
 
 class VStmt {
 public:
@@ -36,7 +60,9 @@ public:
     RevealWithFuel,
     HideSpec,
     RevealSpec,
-    ContractAssert
+    ContractAssert,
+    Break,
+    Continue
   };
 
   Kind K;
@@ -122,7 +148,7 @@ struct VAssertStmt : VStmt {
   std::unique_ptr<VExpr> Cond;
   ProofObligationKind ProofKind;
   VAssertStmt(std::unique_ptr<VExpr> C, SourceLocation Loc,
-              ProofObligationKind ProofKind = ProofObligationKind::Assertion)
+              ProofObligationKind ProofKind)
       : VStmt(Assert, Loc), Cond(std::move(C)), ProofKind(ProofKind) {}
 };
 
@@ -136,6 +162,16 @@ struct VReturnStmt : VStmt {
   std::unique_ptr<VExpr> Value;
   VReturnStmt(std::unique_ptr<VExpr> V, SourceLocation Loc)
       : VStmt(Return, Loc), Value(std::move(V)) {}
+};
+
+/// Leaves the innermost enclosing loop.
+struct VBreakStmt : VStmt {
+  explicit VBreakStmt(SourceLocation Loc) : VStmt(Break, Loc) {}
+};
+
+/// Ends the iteration; a `for` increment is lowered before it.
+struct VContinueStmt : VStmt {
+  explicit VContinueStmt(SourceLocation Loc) : VStmt(Continue, Loc) {}
 };
 
 struct VSeqStmt : VStmt {
@@ -228,6 +264,14 @@ struct VValidExtent {
         Length(std::move(Length)) {}
 };
 
+/// A parameter pair under the implicit non-aliasing default (not `aliases`).
+struct VDisjointAddresses {
+  std::string First;
+  std::string Second;
+  uint64_t FirstSizeBytes = 0;
+  uint64_t SecondSizeBytes = 0;
+};
+
 /// Inferred effect for a pointer result that transfers one fresh allocation to
 /// the caller. This is derived from a verified body, never from contract text.
 struct VFreshOwnedReturn {
@@ -255,6 +299,8 @@ struct VFunction {
   bool IsSpec = false;
   bool IsProof = false;
   bool IsConstexprSpec = false;
+  /// Reads memory, directly or through another spec.
+  bool ReadsHeap = false;
   bool RequiresCallDefinedness = false;
   bool IsExternalContract = false;
   bool NeedsDecreasesCheck = false;
@@ -271,6 +317,9 @@ struct VFunction {
   unsigned ExplicitPreconditionCount = 0;
   std::vector<std::unique_ptr<VExpr>> Preconditions;
   std::vector<std::unique_ptr<VExpr>> Postconditions;
+  /// Kinds of generated clauses by index; see preconditionKind().
+  std::vector<ProofObligationKind> PreconditionKinds;
+  std::vector<ProofObligationKind> PostconditionKinds;
   std::vector<std::unique_ptr<VExpr>> Recommends;
   std::vector<std::unique_ptr<VExpr>> Modifies;
   std::vector<std::pair<std::unique_ptr<VExpr>, std::unique_ptr<VExpr>>>
@@ -278,6 +327,7 @@ struct VFunction {
   /// Positive top-level valid(base, length) interface extents discovered by
   /// UB instrumentation before the marker's spec body is prepared away.
   std::vector<VValidExtent> ValidExtents;
+  std::vector<VDisjointAddresses> DisjointAddresses;
   /// Lexicographic termination measure (ordered tuple); empty means none.
   std::vector<std::unique_ptr<VExpr>> Decreases;
   std::vector<std::unique_ptr<VStmt>> Body;
@@ -288,6 +338,13 @@ struct VFunction {
 };
 
 VFunction cloneVFunction(const VFunction &Fn);
+
+void addPrecondition(VFunction &Fn, std::unique_ptr<VExpr> Condition,
+                     ProofObligationKind Kind);
+void addPostcondition(VFunction &Fn, std::unique_ptr<VExpr> Condition,
+                      ProofObligationKind Kind);
+ProofObligationKind preconditionKind(const VFunction &Fn, size_t Index);
+ProofObligationKind postconditionKind(const VFunction &Fn, size_t Index);
 
 } // namespace verify
 } // namespace clang
