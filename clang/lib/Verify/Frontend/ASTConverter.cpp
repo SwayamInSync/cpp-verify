@@ -68,17 +68,6 @@ static const VarDecl *findOldLocalWithoutEntryState(
   return nullptr;
 }
 
-static bool containsReturnStmt(const Stmt *S) {
-  if (!S)
-    return false;
-  if (isa<ReturnStmt>(S))
-    return true;
-  for (const Stmt *Child : S->children())
-    if (containsReturnStmt(Child))
-      return true;
-  return false;
-}
-
 static std::unique_ptr<VExpr> scalePointerOffset(std::unique_ptr<VExpr> Offset,
                                                  uint64_t PointeeSize,
                                                  SourceLocation Loc) {
@@ -352,6 +341,8 @@ usesHeapBackedLocalAsScalar(const VStmt *S,
   case VStmt::RevealWithFuel:
   case VStmt::HideSpec:
   case VStmt::RevealSpec:
+  case VStmt::Break:
+  case VStmt::Continue:
     return false;
   }
   llvm_unreachable("unknown VCR statement kind");
@@ -563,6 +554,39 @@ static bool hasIndirectMemoryAccess(const FunctionDecl *FD) {
   return F.Found;
 }
 
+/// Whether a body writes memory through a pointer.
+static bool writesIndirectMemory(const FunctionDecl *FD) {
+  struct Finder : RecursiveASTVisitor<Finder> {
+    bool Found = false;
+
+    static bool isIndirect(const Expr *E) {
+      E = E->IgnoreParenImpCasts();
+      if (const auto *U = dyn_cast<UnaryOperator>(E))
+        return U->getOpcode() == UO_Deref;
+      if (isa<ArraySubscriptExpr>(E))
+        return true;
+      if (const auto *M = dyn_cast<MemberExpr>(E))
+        return M->isArrow() || isIndirect(M->getBase());
+      return false;
+    }
+
+    bool VisitBinaryOperator(BinaryOperator *B) {
+      if (B->isAssignmentOp() && isIndirect(B->getLHS()))
+        Found = true;
+      return !Found;
+    }
+
+    bool VisitUnaryOperator(UnaryOperator *U) {
+      if (U->isIncrementDecrementOp() && isIndirect(U->getSubExpr()))
+        Found = true;
+      return !Found;
+    }
+  } F;
+  if (FD->getBody())
+    F.TraverseStmt(FD->getBody());
+  return F.Found;
+}
+
 static const FunctionContractInfo *findFunctionContract(const FunctionDecl *FD,
                                                         const ASTContext &Ctx) {
   if (!FD)
@@ -584,6 +608,60 @@ bool ASTConverter::calleeIsSpec(const FunctionDecl *FD) const {
   if (const FunctionContractInfo *FCI = functionContract(FD))
     return FCI->IsSpec;
   return FD->isConstexpr() && FD->hasBody();
+}
+
+/// Least fixed point over the reachable explicit-spec call graph.
+bool ASTConverter::specReadsHeap(const FunctionDecl *FD) {
+  auto isExplicitSpec = [&](const FunctionDecl *F) {
+    const FunctionContractInfo *FCI = functionContract(F);
+    return FCI && FCI->IsSpec;
+  };
+  if (!FD || !isExplicitSpec(FD))
+    return false;
+  FD = FD->getCanonicalDecl();
+  if (auto It = SpecHeapReads.find(FD); It != SpecHeapReads.end())
+    return It->second;
+
+  struct CalleeFinder : RecursiveASTVisitor<CalleeFinder> {
+    std::vector<const FunctionDecl *> Callees;
+    bool VisitCallExpr(CallExpr *C) {
+      if (const FunctionDecl *Callee = C->getDirectCallee())
+        Callees.push_back(Callee->getCanonicalDecl());
+      return true;
+    }
+  };
+  std::map<const FunctionDecl *, std::vector<const FunctionDecl *>> Graph;
+  std::map<const FunctionDecl *, bool> Reads;
+  std::vector<const FunctionDecl *> Work{FD};
+  while (!Work.empty()) {
+    const FunctionDecl *F = Work.back();
+    Work.pop_back();
+    if (Graph.count(F))
+      continue;
+    CalleeFinder Finder;
+    if (const Stmt *Body = F->getBody())
+      Finder.TraverseStmt(const_cast<Stmt *>(Body));
+    auto &Edges = Graph[F];
+    for (const FunctionDecl *Callee : Finder.Callees)
+      if (isExplicitSpec(Callee)) {
+        Edges.push_back(Callee);
+        Work.push_back(Callee);
+      }
+    auto Known = SpecHeapReads.find(F);
+    Reads[F] = Known != SpecHeapReads.end() ? Known->second
+                                            : hasIndirectMemoryAccess(F);
+  }
+  for (bool Changed = true; Changed;) {
+    Changed = false;
+    for (const auto &[F, Edges] : Graph)
+      if (!Reads[F] &&
+          std::any_of(Edges.begin(), Edges.end(),
+                      [&](const FunctionDecl *G) { return Reads[G]; }))
+        Reads[F] = Changed = true;
+  }
+  for (const auto &[F, Value] : Reads)
+    SpecHeapReads[F] = Value;
+  return SpecHeapReads[FD];
 }
 
 VIntMode ASTConverter::specCallIntMode(const FunctionDecl *FD) const {
@@ -1026,6 +1104,7 @@ void ASTConverter::beginInitializationTracking(const FunctionDecl *FD) {
   AutomaticStorageId = 0;
   LocalReferenceId = 0;
   LoopDepth = 0;
+  EnclosingLoops.clear();
   InitializationPathReachable = true;
 
   struct AddressableLocalDiscovery
@@ -1360,7 +1439,7 @@ void ASTConverter::injectTypeInvariants(const FunctionDecl *FD, VFunction &Fn) {
       FieldSubstPrefix[Field->getNameAsString()] = valueName(P) + ".";
     for (const Expr *Inv : TCI->Invariants) {
       if (auto VE = convertTypeInvariantExpr(Inv))
-        Fn.Preconditions.push_back(std::move(VE));
+        addPrecondition(Fn, std::move(VE), ProofObligationKind::TypeInvariant);
     }
     FieldSubstPrefix.clear();
   }
@@ -1416,7 +1495,8 @@ void ASTConverter::emitReturnInvariantAssert(
     FieldSubstPrefix[Field->getNameAsString()] = valueName(VD) + ".";
   for (const Expr *Inv : TCI->Invariants)
     if (auto VE = convertTypeInvariantExpr(Inv))
-      Out.push_back(std::make_unique<VContractAssertStmt>(std::move(VE), Loc));
+      Out.push_back(std::make_unique<VAssertStmt>(
+          std::move(VE), Loc, ProofObligationKind::TypeInvariant));
   FieldSubstPrefix.clear();
 }
 
@@ -1514,6 +1594,8 @@ static bool bodyReferencesFunction(const VFunction &Fn,
           case VStmt::RevealWithFuel:
           case VStmt::HideSpec:
           case VStmt::RevealSpec:
+          case VStmt::Break:
+          case VStmt::Continue:
             break;
           }
         }
@@ -1942,14 +2024,14 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
                      ": variadic functions are unsupported");
     return nullptr;
   }
+  if (FCI->IsSpec && writesIndirectMemory(FD)) {
+    Errors.push_back(FD->getNameAsString() +
+                     ": spec functions must not write memory");
+    return nullptr;
+  }
   if (FCI->IsSpec && FD->getReturnType()->isRecordType()) {
     Errors.push_back(FD->getNameAsString() +
                      ": aggregate-returning spec functions are unsupported");
-    return nullptr;
-  }
-  if (FCI->IsSpec && hasIndirectMemoryAccess(FD)) {
-    Errors.push_back(FD->getNameAsString() +
-                     ": heap-reading spec functions are unsupported");
     return nullptr;
   }
   if (auto Unsupported =
@@ -1964,6 +2046,7 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   Fn->Identity = functionIdentity(FD);
   Fn->IsSpec = FCI->IsSpec;
   Fn->IsProof = FCI->IsProof;
+  Fn->ReadsHeap = FCI->IsSpec && specReadsHeap(FD);
   Fn->IsExternalContract = !FD->hasBody();
   if (Fn->IsExternalContract && (Fn->IsSpec || Fn->IsProof)) {
     Errors.push_back(Fn->Name +
@@ -2089,13 +2172,18 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
         auto NonNull =
             std::make_unique<VUnaryOpExpr>(VUnaryOp::Not, std::move(IsNull),
                                            VType::makeBool(), SourceLocation());
-        Fn->Preconditions.push_back(std::make_unique<VBinOpExpr>(
-            VBinOp::And, std::move(NonNull), std::move(Readable),
-            VType::makeBool(), SourceLocation()));
+        addPrecondition(
+            *Fn,
+            std::make_unique<VBinOpExpr>(VBinOp::And, std::move(NonNull),
+                                         std::move(Readable), VType::makeBool(),
+                                         SourceLocation()),
+            ProofObligationKind::PointerValidity);
       } else {
-        Fn->Preconditions.push_back(std::make_unique<VBinOpExpr>(
-            VBinOp::Or, std::move(IsNull), std::move(Readable),
-            VType::makeBool(), SourceLocation()));
+        addPrecondition(*Fn,
+                        std::make_unique<VBinOpExpr>(
+                            VBinOp::Or, std::move(IsNull), std::move(Readable),
+                            VType::makeBool(), SourceLocation()),
+                        ProofObligationKind::PointerValidity);
       }
     }
     QualType ReturnType = FD->getReturnType();
@@ -2117,9 +2205,11 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
       auto Readable = std::make_unique<VBinOpExpr>(
           VBinOp::And, std::move(IsValid), std::move(IsInitialized),
           VType::makeBool(), SourceLocation());
-      Fn->Postconditions.push_back(std::make_unique<VBinOpExpr>(
-          VBinOp::Or, std::move(IsNull), std::move(Readable), VType::makeBool(),
-          SourceLocation()));
+      addPostcondition(*Fn,
+                       std::make_unique<VBinOpExpr>(
+                           VBinOp::Or, std::move(IsNull), std::move(Readable),
+                           VType::makeBool(), SourceLocation()),
+                       ProofObligationKind::PointerValidity);
     }
   }
 
@@ -2182,9 +2272,19 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
             VBinOp::Or, std::move(Same), std::move(Relation), VType::makeBool(),
             SourceLocation());
       }
-      Fn->Preconditions.push_back(std::make_unique<VBinOpExpr>(
-          VBinOp::Or, std::move(EitherNull), std::move(Relation),
-          VType::makeBool(), SourceLocation()));
+      addPrecondition(
+          *Fn,
+          std::make_unique<VBinOpExpr>(VBinOp::Or, std::move(EitherNull),
+                                       std::move(Relation), VType::makeBool(),
+                                       SourceLocation()),
+          ProofObligationKind::Aliasing);
+      if (!MayAlias)
+        Fn->DisjointAddresses.push_back(
+            {valueName(AddressParams[I]), valueName(AddressParams[J]),
+             static_cast<uint64_t>(
+                 Ctx.getTypeSizeInChars(PointeeI).getQuantity()),
+             static_cast<uint64_t>(
+                 Ctx.getTypeSizeInChars(PointeeJ).getQuantity())});
     }
   }
 
@@ -2703,22 +2803,27 @@ ASTConverter::convertAddressProvenance(const VExpr *Address) {
 void ASTConverter::appendReferenceBindingCheck(
     const Expr *Source, const VExpr *Address, SourceLocation Loc,
     std::vector<std::unique_ptr<VStmt>> &Out) {
-  auto BindingCondition = [&](const VExpr *CheckedAddress) {
+  auto Accessible = [&](const VExpr *CheckedAddress) {
     auto NonNull = std::make_unique<VBinOpExpr>(
         VBinOp::Ne, cloneVExpr(CheckedAddress),
         std::make_unique<VLiteralExpr>(0, VType::makePtr(), Loc),
         VType::makeBool(), Loc);
     auto Valid = std::make_unique<VUnaryOpExpr>(
         VUnaryOp::ValidPtr, cloneVExpr(CheckedAddress), VType::makeBool(), Loc);
-    auto Initialized = std::make_unique<VUnaryOpExpr>(
-        VUnaryOp::InitializedPtr, cloneVExpr(CheckedAddress), VType::makeBool(),
-        Loc);
-    auto Readable = std::make_unique<VBinOpExpr>(VBinOp::And, std::move(Valid),
-                                                 std::move(Initialized),
-                                                 VType::makeBool(), Loc);
     return std::make_unique<VBinOpExpr>(VBinOp::And, std::move(NonNull),
-                                        std::move(Readable), VType::makeBool(),
+                                        std::move(Valid), VType::makeBool(),
                                         Loc);
+  };
+  auto Initialized = [&](const VExpr *CheckedAddress) {
+    return std::make_unique<VUnaryOpExpr>(VUnaryOp::InitializedPtr,
+                                          cloneVExpr(CheckedAddress),
+                                          VType::makeBool(), Loc);
+  };
+  auto AssertBinding = [&](const VExpr *CheckedAddress) {
+    Out.push_back(std::make_unique<VAssertStmt>(
+        Accessible(CheckedAddress), Loc, ProofObligationKind::Dereference));
+    Out.push_back(std::make_unique<VAssertStmt>(
+        Initialized(CheckedAddress), Loc, ProofObligationKind::Initialization));
   };
 
   Source = Source ? Source->IgnoreParenImpCasts() : nullptr;
@@ -2777,7 +2882,7 @@ void ASTConverter::appendReferenceBindingCheck(
               std::make_unique<VBinOpExpr>(VBinOp::And, std::move(NonNegative),
                                            std::move(BelowExtent),
                                            VType::makeBool(), Loc),
-              Loc));
+              Loc, ProofObligationKind::Bounds));
           if (Address->K == VExpr::BinOp) {
             const auto *B = static_cast<const VBinOpExpr *>(Address);
             if (B->Op == VBinOp::Add) {
@@ -2791,14 +2896,16 @@ void ASTConverter::appendReferenceBindingCheck(
   }
 
   if (DerivesSubobjectReadability) {
-    Out.push_back(
-        std::make_unique<VAssertStmt>(BindingCondition(EnclosingAddress), Loc));
+    AssertBinding(EnclosingAddress);
     // A complete record object, or an element proven inside a declared valid
     // range, makes its selected scalar subobject readable.
-    Out.push_back(
-        std::make_unique<VAssumeStmt>(BindingCondition(Address), Loc));
+    Out.push_back(std::make_unique<VAssumeStmt>(
+        std::make_unique<VBinOpExpr>(VBinOp::And, Accessible(Address),
+                                     Initialized(Address), VType::makeBool(),
+                                     Loc),
+        Loc));
   }
-  Out.push_back(std::make_unique<VAssertStmt>(BindingCondition(Address), Loc));
+  AssertBinding(Address);
 }
 
 std::optional<VPlace> ASTConverter::derefPlace(const Expr *PointerExpr,
@@ -3552,7 +3659,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
             InContractExpression ? specCallIntMode(Callee) : IntMode, Ctx);
         return std::make_unique<VSpecCallExpr>(
             Callee->getNameAsString(), functionIdentity(Callee),
-            std::move(Args), Ty, E->getExprLoc());
+            std::move(Args), Ty, E->getExprLoc(), specReadsHeap(Callee));
       }
       if (functionContract(Callee))
         Errors.push_back(CurrentFn->Name +
@@ -3590,7 +3697,8 @@ void ASTConverter::convertExecCallArg(
     Out = convertLValueAddress(E, &AccessCondition);
     if (AccessCondition)
       Prelude.push_back(std::make_unique<VAssertStmt>(
-          std::move(AccessCondition), E->getExprLoc()));
+          std::move(AccessCondition), E->getExprLoc(),
+          ProofObligationKind::Bounds));
     const Expr *Binding = E->IgnoreParenImpCasts();
     if (Out && (isa<MemberExpr>(Binding) || isa<ArraySubscriptExpr>(Binding)))
       appendReferenceBindingCheck(E, Out.get(), E->getExprLoc(), Prelude);
@@ -4055,8 +4163,8 @@ bool ASTConverter::appendRecordCopy(const Expr *Source, const VarDecl *Target,
     if (!SourcePlace)
       return true;
     if (auto AccessCondition = SourcePlace->takeAccessCondition())
-      Out.push_back(
-          std::make_unique<VAssertStmt>(std::move(AccessCondition), Loc));
+      Out.push_back(std::make_unique<VAssertStmt>(
+          std::move(AccessCondition), Loc, ProofObligationKind::Bounds));
     std::unique_ptr<VExpr> SourceBase = SourcePlace->takeAddress();
     for (const FieldDecl *Field : TargetRecord->getDefinition()->fields()) {
       auto FieldOffset = recordFieldOffset(Field);
@@ -4171,8 +4279,8 @@ bool ASTConverter::appendObjectCopy(const Expr *Source, QualType Ty,
     if (!SourcePlace)
       return false;
     if (auto AccessCondition = SourcePlace->takeAccessCondition())
-      Out.push_back(
-          std::make_unique<VAssertStmt>(std::move(AccessCondition), Loc));
+      Out.push_back(std::make_unique<VAssertStmt>(
+          std::move(AccessCondition), Loc, ProofObligationKind::Bounds));
     std::unique_ptr<VExpr> SourceBase = SourcePlace->takeAddress();
     bool Ok =
         forEachObjectLeaf(Ty, 0, [&](QualType LeafTy, uint64_t LeafOffset) {
@@ -4600,12 +4708,39 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     leaveAutomaticScope(Out, IS->getEndLoc());
     return Out;
   }
-  if (const auto *WS = dyn_cast<WhileStmt>(S)) {
-    if (containsReturnStmt(WS->getBody())) {
-      Errors.push_back(CurrentFn->Name +
-                       ": return statements inside loops are unsupported");
+  if (isa<BreakStmt>(S) || isa<ContinueStmt>(S)) {
+    const bool IsBreak = isa<BreakStmt>(S);
+    if (EnclosingLoops.empty()) {
+      Errors.push_back(CurrentFn->Name + ": " +
+                       (IsBreak ? "break" : "continue") +
+                       " outside a loop is unsupported");
       return Out;
     }
+    if (EnclosingLoops.back().IsDo) {
+      Errors.push_back(CurrentFn->Name +
+                       ": break and continue in do loops are unsupported");
+      return Out;
+    }
+    // Ghost code is erased, so it cannot change executable control flow.
+    if (InGhost && !EnclosingLoops.back().IsGhost) {
+      Errors.push_back(CurrentFn->Name +
+                       ": ghost code cannot leave an executable loop");
+      return Out;
+    }
+    if (IsBreak) {
+      Out.push_back(std::make_unique<VBreakStmt>(S->getBeginLoc()));
+    } else {
+      if (const Expr *Inc = EnclosingLoops.back().Increment) {
+        auto IncPart = convertStmt(Inc);
+        Out.insert(Out.end(), std::make_move_iterator(IncPart.begin()),
+                   std::make_move_iterator(IncPart.end()));
+      }
+      Out.push_back(std::make_unique<VContinueStmt>(S->getBeginLoc()));
+    }
+    InitializationPathReachable = false;
+    return Out;
+  }
+  if (const auto *WS = dyn_cast<WhileStmt>(S)) {
     if (WS->getConditionVariable()) {
       Errors.push_back(CurrentFn->Name +
                        ": while condition declarations are unsupported");
@@ -4635,7 +4770,9 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     const std::set<std::string> Before = InitializedValues;
     const bool BeforeReachable = InitializationPathReachable;
     ++LoopDepth;
+    EnclosingLoops.push_back({nullptr, false, InGhost});
     auto Body = convertScopedSubstatement(WS->getBody());
+    EnclosingLoops.pop_back();
     --LoopDepth;
     InitializedValues = Before;
     InitializationPathReachable = BeforeReachable;
@@ -4645,15 +4782,12 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     return Out;
   }
   if (const auto *DS = dyn_cast<DoStmt>(S)) {
-    if (containsReturnStmt(DS->getBody())) {
-      Errors.push_back(CurrentFn->Name +
-                       ": return statements inside loops are unsupported");
-      return Out;
-    }
     const std::set<std::string> Before = InitializedValues;
     const bool BeforeReachable = InitializationPathReachable;
     ++LoopDepth;
+    EnclosingLoops.push_back({nullptr, /*IsDo=*/true, InGhost});
     auto Body = convertScopedSubstatement(DS->getBody());
+    EnclosingLoops.pop_back();
     --LoopDepth;
 
     // A do-while body executes once before its condition and contracts are
@@ -4701,11 +4835,6 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     return Out;
   }
   if (const auto *FS = dyn_cast<ForStmt>(S)) {
-    if (containsReturnStmt(FS->getBody())) {
-      Errors.push_back(CurrentFn->Name +
-                       ": return statements inside loops are unsupported");
-      return Out;
-    }
     enterAutomaticScope();
     if (FS->getConditionVariable()) {
       Errors.push_back(CurrentFn->Name +
@@ -4751,7 +4880,9 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     const std::set<std::string> BeforeLoop = InitializedValues;
     const bool BeforeLoopReachable = InitializationPathReachable;
     ++LoopDepth;
+    EnclosingLoops.push_back({FS->getInc(), false, InGhost});
     auto Body = convertScopedSubstatement(FS->getBody());
+    EnclosingLoops.pop_back();
     if (const Expr *Inc = FS->getInc()) {
       if (const auto *IncStmt = dyn_cast<Stmt>(Inc)) {
         auto IncPart = convertStmt(IncStmt);
@@ -4800,7 +4931,8 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           return Out;
         if (auto AccessCondition = Place->takeAccessCondition())
           Out.push_back(std::make_unique<VAssertStmt>(
-              std::move(AccessCondition), OperatorCall->getExprLoc()));
+              std::move(AccessCondition), OperatorCall->getExprLoc(),
+              ProofObligationKind::Bounds));
         auto Base = Place->takeAddress();
         appendObjectCopy(OperatorCall->getArg(1), TargetExpr->getType(),
                          Base.get(), 0, OperatorCall->getExprLoc(), Out);
@@ -5256,7 +5388,8 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         }
         if (AccessCondition)
           Out.push_back(std::make_unique<VAssertStmt>(
-              std::move(AccessCondition), VD->getBeginLoc()));
+              std::move(AccessCondition), VD->getBeginLoc(),
+              ProofObligationKind::Bounds));
         appendReferenceBindingCheck(VD->getInit(), Address.get(),
                                     VD->getBeginLoc(), Out);
         auto Provenance = convertAddressProvenance(Address.get());

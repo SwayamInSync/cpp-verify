@@ -34,6 +34,7 @@ class ASTConverter {
   std::map<const ParmVarDecl *, std::string> ParameterNames;
   unsigned BoundValueId = 0;
   std::map<const FunctionDecl *, std::string> FunctionIdentities;
+  std::map<const FunctionDecl *, bool> SpecHeapReads;
   std::set<std::string> FreshOwnedCalleeIdentities;
   std::set<const VarDecl *> DynamicPointers;
   std::map<const VarDecl *, std::string> DynamicPointerProvenanceVariables;
@@ -48,6 +49,13 @@ class ASTConverter {
   unsigned AutomaticStorageId = 0;
   unsigned LocalReferenceId = 0;
   unsigned LoopDepth = 0;
+  /// Innermost last. A `do` loop's first iteration is lowered outside it.
+  struct EnclosingLoop {
+    const Expr *Increment = nullptr;
+    bool IsDo = false;
+    bool IsGhost = false;
+  };
+  std::vector<EnclosingLoop> EnclosingLoops;
 
 public:
   explicit ASTConverter(
@@ -157,6 +165,7 @@ private:
   std::optional<VBinOp> convertBinOpcode(BinaryOperatorKind Op);
   const FunctionContractInfo *functionContract(const FunctionDecl *FD) const;
   bool calleeIsSpec(const FunctionDecl *FD) const;
+  bool specReadsHeap(const FunctionDecl *FD);
   bool calleeIsProof(const FunctionDecl *FD) const;
   bool calleeReturnsFreshOwned(const FunctionDecl *FD);
   VIntMode specCallIntMode(const FunctionDecl *FD) const;
