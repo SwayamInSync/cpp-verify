@@ -146,7 +146,8 @@ static std::unique_ptr<VExpr> cloneVExprImpl(const VExpr *E) {
     for (const auto &A : C->Args)
       Args.push_back(cloneVExpr(A.get()));
     return std::make_unique<VSpecCallExpr>(C->Callee, C->CalleeIdentity,
-                                           std::move(Args), C->Ty, C->Loc);
+                                           std::move(Args), C->Ty, C->Loc,
+                                           C->ReadsHeap, C->HeapVar);
   }
   case VExpr::OverflowCheck: {
     const auto *O = static_cast<const VOverflowCheckExpr *>(E);

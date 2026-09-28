@@ -12,6 +12,8 @@ namespace verify {
 
 /// SSA name of the global heap array (versioned: __heap_0, __heap_1, ...).
 inline constexpr const char *VHeapName = "__heap";
+/// Heap parameter of a heap-reading spec's logical function.
+inline constexpr const char *VSpecHeapName = "__spec_heap";
 /// Address -> allocation identity map.
 inline constexpr const char *VAllocationHeapName = "__heap_alloc";
 /// Allocation identity -> base address map.
@@ -247,11 +249,16 @@ public:
   /// Signature-stable internal identity.
   std::string CalleeIdentity;
   std::vector<std::unique_ptr<VExpr>> Args;
+  /// Heap state of a heap-reading call, named by passivization like a load's.
+  bool ReadsHeap = false;
+  std::string HeapVar;
   VSpecCallExpr(std::string Callee, std::string CalleeIdentity,
                 std::vector<std::unique_ptr<VExpr>> Args, VType Ty,
-                SourceLocation Loc)
+                SourceLocation Loc, bool ReadsHeap = false,
+                std::string HeapVar = "")
       : VExpr(SpecCall, Ty, Loc), Callee(std::move(Callee)),
-        CalleeIdentity(std::move(CalleeIdentity)), Args(std::move(Args)) {}
+        CalleeIdentity(std::move(CalleeIdentity)), Args(std::move(Args)),
+        ReadsHeap(ReadsHeap), HeapVar(std::move(HeapVar)) {}
 };
 
 /// UB safety obligation: a boolean that is true iff the signed `Op` of its
