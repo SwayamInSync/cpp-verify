@@ -1,0 +1,6 @@
+# REQUIRES: cvc5
+# cvc5 and the strict portfolio receive the same heap-state arguments.
+# RUN: not %cpp-verify --backend=cvc5 --check-ub %S/heap_reading_spec.cpp 2>&1 \
+# RUN:   | FileCheck %S/heap_reading_spec.cpp --check-prefixes=CHECK,CVC5
+# RUN: not %cpp-verify --backend=portfolio --check-ub %S/heap_reading_spec.cpp \
+# RUN:   2>&1 | FileCheck %S/heap_reading_spec.cpp --check-prefixes=CHECK,CVC5
