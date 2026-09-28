@@ -11,25 +11,12 @@ theorem cppverify_fibo_step_fn_5f5a396669626f5f7374657069_obligation_2_goal_proo
     right
     right
     right
-    have bounds := h
-    simp [cppBvSle, BitVec.sle] at bounds
-    have add64 :
-        ((BitVec.signExtend 64 i_0) +
-            (BitVec.signExtend 64 (BitVec.ofInt 32 1))).toInt =
-          i_0.toInt + 1 := by
-      simp only [BitVec.toInt_add]
-      repeat rw [BitVec.toInt_signExtend_of_le (by omega)]
-      apply Int.bmod_eq_of_le <;> simp <;> omega
-    have sub64 :
-        ((BitVec.signExtend 64 i_0) -
-            (BitVec.signExtend 64 (BitVec.ofInt 32 1))).toInt =
-          i_0.toInt - 1 := by
-      simp only [BitVec.toInt_sub]
-      repeat rw [BitVec.toInt_signExtend_of_le (by omega)]
-      apply Int.bmod_eq_of_le <;> simp <;> omega
-    unfold cppBvSle
-    simp only [BitVec.sle, decide_eq_true_eq]
-    rw [add64, sub64]
-    simp
+    obtain ⟨low, high⟩ := h
+    simp only [cppBvSle, BitVec.sle, decide_eq_true_eq] at low high
+    have one : (BitVec.ofInt 32 1).toInt = 1 := rfl
+    have ten : (BitVec.ofInt 32 10).toInt = 10 := rfl
+    simp only [BitVec.signExtend_eq, BitVec.saddOverflow, BitVec.ssubOverflow,
+      one]
+    simp only [Bool.or_eq_false_iff, decide_eq_false_iff_not]
     omega
   · exact Or.inl h
