@@ -130,6 +130,8 @@ llvm::Error verify::materializeLogicFunctions(ObligationModule &Module,
       return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                      "unsupported spec result type: %s",
                                      Spec->Name.c_str());
+    if (Spec->ReadsHeap)
+      Declaration.Parameters.push_back({VSpecHeapName, LogicSort::heap()});
     for (const auto &[Name, Type] : Spec->Params) {
       LogicFunctionParameter Parameter;
       Parameter.Name = Name;
@@ -157,6 +159,9 @@ llvm::Error verify::materializeLogicFunctions(ObligationModule &Module,
     else
       Fuel = Spec->NeedsDecreasesCheck ? 1 : 64;
 
+    const std::string DefinitionHeap = Spec->ReadsHeap
+                                           ? std::string(VSpecHeapName)
+                                           : std::string(VHeapName) + "_0";
     const unsigned MaxDepth =
         Spec->NeedsDecreasesCheck ? Fuel : std::min(Fuel, 1U);
     Owned.DefinitionFuel = MaxDepth;
@@ -164,8 +169,8 @@ llvm::Error verify::materializeLogicFunctions(ObligationModule &Module,
       std::unique_ptr<VExpr> Body = unfoldSpecDefinition(*Spec, Ctx, Depth);
       if (!Body)
         continue;
-      auto Lowered = lowerLogicExpr(
-          Body.get(), "", std::string(VHeapName) + "_0", Spec->IntMode);
+      auto Lowered =
+          lowerLogicExpr(Body.get(), "", DefinitionHeap, Spec->IntMode);
       if (!Lowered)
         return llvm::createStringError(
             llvm::inconvertibleErrorCode(),
@@ -184,8 +189,8 @@ llvm::Error verify::materializeLogicFunctions(ObligationModule &Module,
           return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                          "spec step definition unavailable: %s",
                                          Spec->Name.c_str());
-        auto StepLowered = lowerLogicExpr(
-            StepBody.get(), "", std::string(VHeapName) + "_0", Spec->IntMode);
+        auto StepLowered =
+            lowerLogicExpr(StepBody.get(), "", DefinitionHeap, Spec->IntMode);
         if (!StepLowered)
           return llvm::createStringError(
               llvm::inconvertibleErrorCode(),
