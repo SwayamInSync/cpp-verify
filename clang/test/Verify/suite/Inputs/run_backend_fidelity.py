@@ -20,6 +20,7 @@ VALID_FUNCTIONS = {
     "quantified_valid",
     "heap_read",
     "heap_write",
+    "heap_spec_read",
     "default_nonalias",
     "bounded_read",
     "type_invariant_read",
@@ -31,6 +32,7 @@ INVALID_FUNCTIONS = {
     "boolean_literal_invalid",
     "quantified_invalid",
     "heap_write_invalid",
+    "heap_spec_read_invalid",
     "bounded_read_invalid",
     "overflow_add",
     "overflow_subtract",
@@ -56,6 +58,7 @@ REQUIRED_FEATURES = {
     "heap-arrays",
     "quantifiers",
     "spec-functions",
+    "heap-functions",
 }
 
 REQUIRED_IR_TOKENS = {
@@ -202,7 +205,7 @@ def normalized_results(records):
     return result
 
 
-def backend_command(cpp_verify, backend, source):
+def backend_command(cpp_verify, backend, source, encoding=None):
     command = [
         cpp_verify,
         "--backend={}".format(backend),
@@ -211,6 +214,8 @@ def backend_command(cpp_verify, backend, source):
         "--timeout=10000",
         "--check-ub",
     ]
+    if encoding:
+        command.append("--int-encoding={}".format(encoding))
     if backend == "bmc":
         command.append("--unroll=2")
     command.append(source)
@@ -256,6 +261,26 @@ def check_source_matrix(cpp_verify, source):
                     record.get("bound"), expected_bound, name
                 )
             )
+
+    # Every machine-integer encoding is exact: verdicts and source obligation
+    # identities must not depend on the choice.
+    for encoding in ("integer", "bitvector"):
+        for backend in ("z3", "cvc5", "portfolio", "bmc"):
+            encoded = check_matrix(
+                parse_json_lines(
+                    run(backend_command(cpp_verify, backend, source, encoding),
+                        {1})
+                ),
+                backend,
+            )
+            for name in INVALID_FUNCTIONS:
+                if diagnostic_identity(encoded[name]) != diagnostic_identity(
+                    selected[backend][name]
+                ):
+                    fail(
+                        "{} with {} integers changed source obligation "
+                        "identity for {}".format(backend, encoding, name)
+                    )
 
     repeated = parse_json_lines(
         run(backend_command(cpp_verify, "portfolio", source), {1})
