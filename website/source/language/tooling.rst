@@ -69,10 +69,19 @@ Backends
        active proof kernel-checks. Requires ``--lean-project`` or
        ``--lean-fallback``.
    * - ``--lean-fallback=DIR``
-     - On the Z3 or strict-portfolio path, export only functions that remain
-       ``Unresolved`` to an editable Lean project. Initial export remains a
-       non-success result. Rerun with ``--lean-certify`` after completing the
-       preserved proof files.
+     - On the Z3 or strict-portfolio path, export functions that remain
+       ``Unresolved`` to an editable Lean project, for example
+       ``Exported: lean fallback: f [z3: 18 of 20 proved; lean: 2 exported]``.
+       Initial export remains a non-success result. Rerun with
+       ``--lean-certify`` after completing the preserved proof files: a
+       function whose exported goals all kernel-check reports
+       ``Proved (z3+lean)`` (JSON ``"status":"mixed-proof"`` with an
+       ``evidence`` record), or ``Certified`` when Lean checked every goal.
+   * - ``--lean-fallback-scope=unproved|all``
+     - ``unproved`` (default) exports only the obligations the solver did not
+       prove individually; each keeps the goal name it has in a complete
+       export. ``all`` exports every obligation of the function, so success
+       is ``Certified``.
    * - ``--unroll=N``
      - Maximum BMC loop bound. Source verification explores ``0..N``;
        lower-only and archive replay retain one exact recorded bound.
@@ -95,6 +104,12 @@ Backends
        expression nodes before verification, lower-only encoding, or a requested
        Z3 dump (default ``0``, disabled). Exhaustion is fail-closed with reason
        ``query.size-limit``.
+   * - ``--int-encoding=MODE``
+     - Solver representation of machine integers for Z3, cvc5, portfolio, and
+       BMC: ``auto`` (default; integers reduced modulo ``2^N`` unless a query
+       needs the bits of a non-constant operand, then bit-vectors),
+       ``integer``, or ``bitvector``. Every mode is exact; only solver
+       performance differs. See :doc:`integers`.
    * - ``--jobs=N``
      - Solve ordered obligations in up to ``N`` isolated Z3 contexts or cvc5
        processes while publishing results in source order (default ``1``;
@@ -188,12 +203,27 @@ Structured diagnostics
 ----------------------
 
 Failed Z3, cvc5, portfolio, and BMC results identify a source-anchored
-obligation such as
-``function-identity::postcondition@line:column#2``. The local suffix only
-disambiguates obligations at the same anchor, so inserting or reordering an
-unrelated obligation does not renumber later IDs unless its source anchor
-moves. Diagnostics include inclusive source ranges and source display names
-while retaining internal SSA names for unambiguous tooling.
+obligation such as ``function-identity::overflow@line:column#2``. The kind says
+what the obligation checks:
+
+- contracts: ``assertion``, ``precondition``, ``postcondition``,
+  ``invariant-entry``, ``invariant-preserved``, ``termination``,
+  ``type-invariant``, and ``recommends``;
+- C++ definedness: ``overflow``, ``division-by-zero``, ``shift``, ``bounds``,
+  ``dereference``, ``initialization``, ``pointer-difference``, and
+  ``deallocation``;
+- generated interfaces: ``pointer-validity`` (a pointer parameter, result, or
+  ``valid(p, n)`` extent must denote valid storage), ``aliasing`` (implicit
+  non-aliasing), ``frame`` (writes and callee effects stay within
+  ``modifies``), and ``missing-return``;
+- ``unwinding`` for a BMC bound, and ``unsupported`` for a construct the
+  verifier rejects fail-closed.
+
+The local suffix only disambiguates obligations of one kind at the same anchor,
+so inserting or reordering an unrelated obligation does not renumber later IDs
+unless its source anchor moves. JSON records carry the kind as
+``obligation.kind``. Diagnostics include inclusive source ranges and source
+display names while retaining internal SSA names for unambiguous tooling.
 
 Counterexample values carry exact sorts such as ``bool``, ``i32``, ``u32``,
 ``math-i32``, ``pointer``, and ``heap``. Z3 model completion is disabled:
@@ -225,12 +255,14 @@ replacement character, so every emitted JSON record remains valid UTF-8.
 Portable obligation archives
 ----------------------------
 
-``--obligation-out`` writes ``cppverify.obligation/1`` records only after exact
+``--obligation-out`` writes ``cppverify.obligation/2`` records only after exact
 serialize/deserialize/validate/reserialize checks. Stable wire tags make the
 format independent of C++ enum ordinals. The reader rejects malformed magic,
 unsupported versions, truncation, invalid tags, inconsistent feature
 declarations, duplicate identities, and oversized/deep expressions.
-Schema v1 caps integer widths at 4096 bits, expression depth at 4096, and
+Schema v2 adds the precise obligation kinds; schema v1 records, which name
+only assertions, postconditions, and unwinding checks, are still read.
+Records cap integer widths at 4096 bits, expression depth at 4096, and
 collections plus expression nodes/edges at 100,000 per record. It also rejects
 embedded NULs, non-canonical numerals, inactive payload fields, ill-scoped
 variables, conflicting module-wide free-symbol sorts across semantic and
@@ -238,9 +270,10 @@ diagnostic expressions, and contradictory complete/ordered queries before
 backend dispatch.
 
 Module and per-obligation SHA-256 hashes omit source paths and display-only
-names, source ranges, internal positional and public source-anchored IDs, and
-traces, so moving unchanged source, inserting an unrelated earlier obligation,
-or changing display metadata preserves an individual goal's semantic identity.
+names, source ranges, internal positional and public source-anchored IDs,
+obligation kinds other than ``unwinding``, and traces, so moving unchanged
+source, inserting an unrelated earlier obligation, or changing display metadata
+preserves an individual goal's semantic identity.
 Archives still
 retain that metadata for replay diagnostics. Failure-triggered
 ``recommends`` warnings are diagnostic-only and do not make archive bytes depend
@@ -254,8 +287,9 @@ constant conditionals, and reflexive equality/inequality, then removes logical
 declarations unreachable from every ordered goal. Exact goal/query pairs and
 required features are rebuilt and revalidated. Arithmetic, quantifiers,
 pointer/heap terms, and assumptions are left intact. Semantic-hash format v2
-introduced this canonical boundary; format v3 excludes positional and public
-diagnostic identities while archive schema v1 remains compatible.
+introduced this canonical boundary, format v3 excluded positional and public
+diagnostic identities, and format v4 keeps only whether an obligation is an
+unwinding check.
 
 Supported compiler
 ------------------
