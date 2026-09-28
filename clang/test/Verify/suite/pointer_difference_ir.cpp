@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: %cpp-verify --lower-only --dump-ir=1,2,3,4 %s 2>&1 | FileCheck %s
+// RUN: %cpp-verify --int-encoding=bitvector --lower-only --dump-ir=1,2,3,4 %s 2>&1 | FileCheck %s
 
 long pointer_difference_ir(int value)
   post(result == 1)
