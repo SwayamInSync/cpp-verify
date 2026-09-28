@@ -45,7 +45,9 @@ Other flags
 - ``cpp-verify --diagnostics-format=json`` — emit versioned
   ``cppverify.diagnostic/1`` JSON Lines for verification results
 - ``cpp-verify --lean-project=DIR`` — generate a preserved, pinned Lean project
-- ``cpp-verify --lean-fallback=DIR`` — export only unresolved Z3 functions to Lean
+- ``cpp-verify --lean-fallback=DIR`` — export the obligations Z3 left unproved
+  in unresolved functions to Lean (``--lean-fallback-scope=all`` exports every
+  obligation of those functions)
 - ``cpp-verify --lean-certify`` — kernel-check all active project proofs without
   admissions or undocumented proof axioms
 - ``cpp-verify --dump-ir[=1,2,3,4]`` — dump VCR / passive / Obligation IR / Z3 layers
