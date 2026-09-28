@@ -11,9 +11,9 @@ Integer semantics depend on where the value lives.
    * - ``spec``
      - Mathematical ``Int`` (unbounded, no overflow)
    * - ``constexpr`` in contracts
-     - Machine bit-vector
+     - Machine integer (target width, wraps modulo ``2^N``)
    * - ``proof`` / ``exec``
-     - Machine bit-vector
+     - Machine integer (target width, wraps modulo ``2^N``)
 
 Mathematical integers are unbounded, but ``/`` and ``%`` retain C++'s
 truncate-toward-zero sign rules. Their total logical extension at a zero divisor
@@ -34,6 +34,21 @@ the usual integral promotions are applied before arithmetic.
 behavior in C++, while unsigned overflow is *defined* modular wraparound. The
 verifier treats them differently. Heap payloads are width-neutral mathematical
 integers; typed loads and stores perform the required target-width conversions.
+
+Solver encoding
+---------------
+
+How a machine integer reaches the solver is independent of its meaning.
+``--int-encoding=bitvector`` uses solver bit-vectors. ``--int-encoding=integer``
+uses mathematical integers kept in the type's range: every variable carries its
+range, and every operation is reduced modulo ``2^N``, so wraparound, division by
+zero, conversions, and overflow checks are exactly the bit-vector ones. Integers
+combine far better with quantifiers and the heap, for example a 64-bit
+``forall`` over a buffer. The default ``auto`` uses integers for a query unless
+it needs the bits of a non-constant operand (``a & b``, ``x << s``); masks such as
+``x & 0xff`` and constant shifts are arithmetic and keep integers. Every mode
+gives the same verdicts and counterexamples, so the flag is purely a
+performance choice.
 
 Mandatory C++ definedness
 -------------------------
@@ -63,7 +78,7 @@ Core checks include:
      - base pointer is non-null and abstractly valid
 
 **Unsigned arithmetic is never flagged** — C++ defines it as modular wraparound,
-so the machine bit-vector operation wraps normally.
+so the machine operation wraps modulo ``2^N``.
 
 .. code-block:: cpp
 
@@ -97,7 +112,7 @@ provenance and parameter-pointer extents remain abstract; see
 
 Lifted ``constexpr`` functions retain target machine widths. At each call the
 verifier unfolds the body for C++ definedness checks, so signed overflow, invalid
-shifts, and division undefined behavior cannot be justified by bit-vector
+shifts, and division undefined behavior cannot be justified by machine
 wraparound.
 
 Signed left shift follows the C++17 rule: the left operand must be nonnegative
