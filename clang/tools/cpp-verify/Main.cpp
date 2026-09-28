@@ -65,6 +65,16 @@ static cl::opt<std::string> LeanFallback(
     cl::desc("Export unresolved Z3 or portfolio obligations to a Lean project"),
     cl::value_desc("directory"), cl::cat(CppVerifyCategory));
 
+static cl::opt<verify::LeanFallbackScope> LeanFallbackScope(
+    "lean-fallback-scope",
+    cl::desc("Obligations of an unresolved function that --lean-fallback "
+             "exports"),
+    cl::values(clEnumValN(verify::LeanFallbackScope::Unproved, "unproved",
+                          "Only those the solver did not prove (default)"),
+               clEnumValN(verify::LeanFallbackScope::All, "all",
+                          "Every obligation of the function")),
+    cl::init(verify::LeanFallbackScope::Unproved), cl::cat(CppVerifyCategory));
+
 static cl::opt<bool> LeanCertify(
     "lean-certify",
     cl::desc("Kernel-check every proof in --lean-project without admissions"),
@@ -96,6 +106,18 @@ static cl::opt<uint64_t>
                   cl::desc("Maximum canonical expression nodes per solver "
                            "module (0 = no limit)"),
                   cl::init(0), cl::cat(CppVerifyCategory));
+
+static cl::opt<verify::MachineIntegerEncoding> IntEncoding(
+    "int-encoding",
+    cl::desc("Solver encoding of C++ machine integers (all are exact)"),
+    cl::values(clEnumValN(verify::MachineIntegerEncoding::Auto, "auto",
+                          "Integers, or bit-vectors for a query that needs "
+                          "bit-level operations (default)"),
+               clEnumValN(verify::MachineIntegerEncoding::Integer, "integer",
+                          "Integers reduced modulo 2^w"),
+               clEnumValN(verify::MachineIntegerEncoding::BitVector,
+                          "bitvector", "Solver bit-vectors")),
+    cl::init(verify::MachineIntegerEncoding::Auto), cl::cat(CppVerifyCategory));
 
 static cl::opt<std::string> ProofCache(
     "proof-cache",
@@ -154,6 +176,7 @@ static verify::BackendExecutionOptions backendExecutionOptions() {
   Options.SolverResourceLimit = SolverResourceLimit;
   Options.Jobs = Jobs;
   Options.MaxQueryNodes = MaxQueryNodes;
+  Options.IntegerEncoding = IntEncoding;
   Options.CVC5Path = CVC5Path;
   Options.ProofCachePath = ProofCache;
   Options.ProofCacheMaxBytes = proofCacheMaxBytes();
@@ -216,12 +239,14 @@ public:
       VOpts.LeanOutPath = LeanOut.getValue();
       VOpts.LeanProjectPath = LeanProject.getValue();
       VOpts.LeanFallbackProjectPath = LeanFallback.getValue();
+      VOpts.LeanScope = LeanFallbackScope.getValue();
       VOpts.LeanCertify = LeanCertify.getValue();
       VOpts.BMCUnroll = BMCUnroll.getValue();
       VOpts.SolverTimeoutMs = SolverTimeout.getValue();
       VOpts.SolverResourceLimit = SolverResourceLimit.getValue();
       VOpts.Jobs = Jobs.getValue();
       VOpts.MaxQueryNodes = MaxQueryNodes.getValue();
+      VOpts.IntegerEncoding = IntEncoding.getValue();
       VOpts.CVC5Path = CVC5Path.getValue();
       VOpts.ProofCachePath = ProofCache.getValue();
       VOpts.ProofCacheMaxBytes = proofCacheMaxBytes();
@@ -260,6 +285,8 @@ static llvm::StringRef replayStatusCode(verify::VerifyStatus Status) {
     return "exported";
   case verify::VerifyStatus::Certified:
     return "certified";
+  case verify::VerifyStatus::MixedProof:
+    return "mixed-proof";
   }
   return "unresolved";
 }
@@ -325,15 +352,8 @@ static void printReplayJSON(const verify::ObligationModule &Module,
   if (!Result.ObligationId.empty()) {
     llvm::json::Object Obligation;
     Obligation["id"] = jsonText(Result.ObligationId);
-    if (Result.ObligationType) {
-      const char *Kind =
-          *Result.ObligationType == verify::ObligationKind::Postcondition
-              ? "postcondition"
-          : *Result.ObligationType == verify::ObligationKind::Unwinding
-              ? "unwinding"
-              : "assertion";
-      Obligation["kind"] = Kind;
-    }
+    if (Result.ObligationType)
+      Obligation["kind"] = verify::obligationKindName(*Result.ObligationType);
     if (Result.Source.isValid())
       Obligation["source"] = replaySourceJSON(Result.Source);
     Record["obligation"] = std::move(Obligation);
@@ -610,6 +630,7 @@ static int replayObligationArchive() {
       llvm::outs() << Suffix << "\n";
       break;
     case verify::VerifyStatus::Certified:
+    case verify::VerifyStatus::MixedProof:
       AllOk = false;
       llvm::outs() << "Unresolved: " << Module.FunctionName
                    << " (archive backend returned an invalid replay status)"
