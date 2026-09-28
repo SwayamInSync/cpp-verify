@@ -1,6 +1,6 @@
 // REQUIRES: lean
 //
-// RUN: rm -rf %t.mega %t.quant %t.recursive %t.names
+// RUN: rm -rf %t.mega %t.quant %t.recursive %t.names %t.heapspec
 // RUN: %cpp-verify --backend=lean --lean-project=%t.mega %S/cov_mega_sweep.cpp
 // RUN: lake --dir=%t.mega build CppVerify.Generated
 // RUN: %cpp-verify --backend=lean --lean-project=%t.quant %S/cov_lean_quant.cpp
@@ -12,3 +12,7 @@
 // RUN: grep -Eq 'cppEncoded_[0-9a-f]+' %t.names/CppVerify/Generated.lean
 // RUN: lake --dir=%t.names build CppVerify.Generated
 // RUN: lake --dir=%t.names build CppVerify.Check
+// Heap-reading specs take the heap state as a CppHeap argument.
+// RUN: %cpp-verify --check-ub --backend=lean --lean-project=%t.heapspec %S/heap_reading_spec.cpp
+// RUN: grep -q '(__spec_heap : CppHeap)' %t.heapspec/CppVerify/Generated.lean
+// RUN: lake --dir=%t.heapspec build CppVerify.Generated
