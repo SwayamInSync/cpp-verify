@@ -14,6 +14,13 @@ inline constexpr unsigned DefaultSolverTimeoutMs = 30000;
 
 enum class DiagnosticFormat { Text, Json };
 
+/// Which obligations of an unresolved module --lean-fallback exports.
+enum class LeanFallbackScope {
+  /// Only those the solver backend did not prove individually.
+  Unproved,
+  All
+};
+
 struct VerifyOptions {
   unsigned DumpIRLayers = 0;
   /// Build and encode verification conditions without invoking a solver.
@@ -22,6 +29,7 @@ struct VerifyOptions {
   std::string LeanOutPath;
   std::string LeanProjectPath;
   std::string LeanFallbackProjectPath;
+  LeanFallbackScope LeanScope = LeanFallbackScope::Unproved;
   bool LeanCertify = false;
   unsigned BMCUnroll = 10;
   /// Per-query solver timeout in milliseconds; 0 disables it. Non-terminating
@@ -33,6 +41,8 @@ struct VerifyOptions {
   unsigned Jobs = 1;
   /// Maximum canonical expression nodes per backend module; 0 disables it.
   uint64_t MaxQueryNodes = 0;
+  /// Solver representation of machine integers (Z3, cvc5, portfolio, BMC).
+  MachineIntegerEncoding IntegerEncoding = MachineIntegerEncoding::Auto;
   /// Optional cvc5 executable for cvc5 and strict portfolio verification.
   std::string CVC5Path;
   /// Optional persistent cache of successful dependency-scoped proofs.

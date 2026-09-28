@@ -1,6 +1,7 @@
 //===--- Verifier.cpp - CppVerify driver ----------------------------------===//
 #include "Verifier.h"
 #include "../Backend/CVC5Backend.h"
+#include "../Backend/LeanBackend.h"
 #include "../Backend/Obligation.h"
 #include "../Backend/ObligationLowering.h"
 #include "../Backend/ObligationSerialization.h"
@@ -79,6 +80,7 @@ struct VerifyDiagnostic {
     BoundedSafe,
     Exported,
     Certified,
+    MixedProof,
     Warning
   };
   Kind K;
@@ -138,6 +140,8 @@ static llvm::StringRef diagnosticKindCode(VerifyDiagnostic::Kind Kind) {
     return "exported";
   case VerifyDiagnostic::Certified:
     return "certified";
+  case VerifyDiagnostic::MixedProof:
+    return "mixed-proof";
   case VerifyDiagnostic::Warning:
     return "warning";
   }
@@ -160,20 +164,22 @@ static llvm::StringRef verifyStatusCode(VerifyStatus Status) {
     return "exported";
   case VerifyStatus::Certified:
     return "certified";
+  case VerifyStatus::MixedProof:
+    return "mixed-proof";
   }
   return "unresolved";
 }
 
-static llvm::StringRef obligationKindCode(ObligationKind Kind) {
-  switch (Kind) {
-  case ObligationKind::Assertion:
-    return "assertion";
-  case ObligationKind::Postcondition:
-    return "postcondition";
-  case ObligationKind::Unwinding:
-    return "unwinding";
-  }
-  return "assertion";
+/// "[z3: 18 of 20 proved; lean: 2 exported]" for a Lean fallback.
+static std::string evidenceSuffix(const ProofEvidence &Evidence,
+                                  llvm::StringRef LeanState) {
+  std::string Suffix = " [";
+  if (Evidence.SolverProved)
+    Suffix += Evidence.Solver + ": " + std::to_string(*Evidence.SolverProved) +
+              " of " + std::to_string(Evidence.Total) + " proved; ";
+  Suffix += "lean: " + std::to_string(Evidence.LeanObligations.size()) + " " +
+            LeanState.str() + "]";
+  return Suffix;
 }
 
 static llvm::StringRef traceKindCode(DiagnosticTraceKind Kind) {
@@ -367,11 +373,8 @@ class Verifier {
     std::map<std::string, unsigned> StableIdCounts;
     for (Obligation &Item : Module.Obligations) {
       annotateSource(Item.Loc, Item.EndLoc, Item.Source);
-      const char *Kind = Item.Kind == ObligationKind::Postcondition
-                             ? "postcondition"
-                         : Item.Kind == ObligationKind::Unwinding ? "unwinding"
-                                                                  : "assertion";
-      std::string StableId = Module.FunctionIdentity + "::" + Kind + "@";
+      std::string StableId =
+          Module.FunctionIdentity + "::" + obligationKindName(Item.Kind) + "@";
       StableId += Item.Source.isValid()
                       ? std::to_string(Item.Source.Line) + ":" +
                             std::to_string(Item.Source.Column)
@@ -595,7 +598,8 @@ class Verifier {
         if (!Inst)
           continue;
         Inst = SpecInliner(FnMap, Caller.SpecFuel).inlineExpr(std::move(Inst));
-        PP.ExitAsserts.push_back(std::move(Inst));
+        PP.ExitAsserts.push_back(
+            {ProofObligationKind::Recommends, std::move(Inst)});
       }
       if (PP.ExitAsserts.empty())
         continue;
@@ -778,6 +782,7 @@ public:
     Execution.SolverResourceLimit = Opts.SolverResourceLimit;
     Execution.Jobs = Opts.Jobs;
     Execution.MaxQueryNodes = Opts.MaxQueryNodes;
+    Execution.IntegerEncoding = Opts.IntegerEncoding;
     Execution.SkipWholeModuleRetry = !Opts.LeanFallbackProjectPath.empty();
     Execution.CVC5Path = Opts.CVC5Path;
     Execution.ProofCachePath = Opts.ProofCachePath;
@@ -786,10 +791,10 @@ public:
     auto Backend = createVerifyBackend(
         Opts.Backend, LeanOut, Opts.BMCUnroll, Execution,
         Opts.LeanProjectPath.empty() ? nullptr : &LeanProjectGoals);
-    std::unique_ptr<VerifyBackend> LeanFallbackBackend;
+    std::unique_ptr<LeanVerifyBackend> LeanFallbackBackend;
     if (!Opts.LeanFallbackProjectPath.empty())
-      LeanFallbackBackend = createVerifyBackend(
-          BackendKind::Lean, LeanFile.get(), 0, {}, &LeanProjectGoals);
+      LeanFallbackBackend = std::make_unique<LeanVerifyBackend>(
+          LeanFile.get(), &LeanProjectGoals);
     Passivizer P;
     P.setFunctionMap(InterfaceMap);
 
@@ -799,14 +804,35 @@ public:
     bool AnyFailed = false;
     std::set<std::string> FailedCallers;
     auto exportLeanFallback = [&](const ObligationModule &Module,
-                                  llvm::StringRef Label) {
+                                  llvm::StringRef Label,
+                                  const VerifyResult &SolverResult) {
       if (!LeanFallbackBackend)
         return false;
+      const bool KnowsUnproved = SolverResult.UnprovedObligations &&
+                                 !SolverResult.UnprovedObligations->empty();
+      std::optional<std::set<std::string>> Selection;
+      if (Opts.LeanScope == LeanFallbackScope::Unproved && KnowsUnproved)
+        Selection.emplace(SolverResult.UnprovedObligations->begin(),
+                          SolverResult.UnprovedObligations->end());
+      ProofEvidence Evidence;
+      Evidence.Solver = SolverResult.BackendName;
+      Evidence.Total = Module.Obligations.size();
+      if (KnowsUnproved)
+        Evidence.SolverProved =
+            Evidence.Total - SolverResult.UnprovedObligations->size();
+      for (const Obligation &Item : Module.Obligations)
+        if (!Selection || Selection->count(Item.Id))
+          Evidence.LeanObligations.push_back(
+              Item.StableId.empty() ? Item.Id : Item.StableId);
+      LeanFallbackBackend->selectObligations(std::move(Selection));
       VerifyResult Fallback = LeanFallbackBackend->verify(Module);
+      LeanFallbackBackend->selectObligations(std::nullopt);
       if (Fallback.Status == VerifyStatus::Exported) {
-        Diags.push_back({VerifyDiagnostic::Exported,
-                         "lean fallback: " + Label.str(), Fallback.Location,
-                         Label.str(), std::move(Fallback)});
+        std::string Message = "lean fallback: " + Label.str() +
+                              evidenceSuffix(Evidence, "exported");
+        Fallback.Evidence = std::move(Evidence);
+        Diags.push_back({VerifyDiagnostic::Exported, std::move(Message),
+                         Fallback.Location, Label.str(), std::move(Fallback)});
         return true;
       }
       std::string Message = "lean fallback export failed: " + Label.str();
@@ -969,7 +995,7 @@ public:
             const bool IsUnresolved = R.Status == VerifyStatus::Unresolved;
             const bool FallbackExported =
                 IsUnresolved &&
-                exportLeanFallback(DecModule, "decreases: " + Fn->Name);
+                exportLeanFallback(DecModule, "decreases: " + Fn->Name, R);
             if (Opts.LeanCertify && FallbackExported) {
               if (Fn->IsSpec)
                 continue;
@@ -1208,7 +1234,7 @@ public:
             {VerifyDiagnostic::Error, Msg, R.Location, Fn->Name, R});
       } else {
         const bool FallbackExported = R.Status == VerifyStatus::Unresolved &&
-                                      exportLeanFallback(Module, Fn->Name);
+                                      exportLeanFallback(Module, Fn->Name, R);
         if (!(Opts.LeanCertify && FallbackExported)) {
           AllOk = false;
           AnyFailed = true;
@@ -1257,10 +1283,37 @@ public:
           for (VerifyDiagnostic &Diagnostic : Diags) {
             if (Diagnostic.K != VerifyDiagnostic::Exported)
               continue;
+            const ProofEvidence *Evidence =
+                Diagnostic.Result && Diagnostic.Result->Evidence
+                    ? &*Diagnostic.Result->Evidence
+                    : nullptr;
+            if (Evidence &&
+                Evidence->LeanObligations.size() < Evidence->Total) {
+              // Only a complete split of the obligations is a proof.
+              if (!Evidence->SolverProved ||
+                  *Evidence->SolverProved + Evidence->LeanObligations.size() !=
+                      Evidence->Total) {
+                AllOk = false;
+                Diagnostic.K = VerifyDiagnostic::Unresolved;
+                Diagnostic.Message += " (inconsistent proof evidence)";
+                Diagnostic.Result->Status = VerifyStatus::Unresolved;
+                Diagnostic.Result->Reason = VerifyReason::InvalidBackendResult;
+                continue;
+              }
+              Diagnostic.K = VerifyDiagnostic::MixedProof;
+              Diagnostic.Message = Diagnostic.FunctionName +
+                                   evidenceSuffix(*Evidence, "certified");
+              Diagnostic.Result->Status = VerifyStatus::MixedProof;
+              Diagnostic.Result->BackendName = Evidence->Solver + "+lean";
+              Diagnostic.Result->Reason = VerifyReason::None;
+              continue;
+            }
             Diagnostic.K = VerifyDiagnostic::Certified;
             llvm::StringRef Name = Diagnostic.Message;
-            if (!Name.consume_front("lean obligation: "))
+            if (!Name.consume_front("lean obligation: ")) {
               Name.consume_front("lean fallback: ");
+              Name = Name.substr(0, Name.find(" ["));
+            }
             Diagnostic.Message = Name.str() + " [backend=Lean]";
             if (Diagnostic.Result) {
               Diagnostic.Result->Status = VerifyStatus::Certified;
@@ -1346,11 +1399,26 @@ public:
       }
       if (!Result.CacheError.empty())
         Record["cache_error"] = jsonText(Result.CacheError);
+      if (Result.Evidence) {
+        llvm::json::Object Evidence;
+        Evidence["solver"] = Result.Evidence->Solver;
+        Evidence["total"] = static_cast<int64_t>(Result.Evidence->Total);
+        Evidence["solver_proved"] =
+            Result.Evidence->SolverProved
+                ? llvm::json::Value(
+                      static_cast<int64_t>(*Result.Evidence->SolverProved))
+                : llvm::json::Value(nullptr);
+        llvm::json::Array Lean;
+        for (const std::string &Id : Result.Evidence->LeanObligations)
+          Lean.push_back(jsonText(Id));
+        Evidence["lean"] = std::move(Lean);
+        Record["evidence"] = std::move(Evidence);
+      }
       if (!Result.ObligationId.empty()) {
         llvm::json::Object Obligation;
         Obligation["id"] = jsonText(Result.ObligationId);
         if (Result.ObligationType)
-          Obligation["kind"] = obligationKindCode(*Result.ObligationType);
+          Obligation["kind"] = obligationKindName(*Result.ObligationType);
         if (Result.Source.isValid())
           Obligation["source"] = sourceJSON(Result.Source);
         Record["obligation"] = std::move(Obligation);
@@ -1434,6 +1502,9 @@ public:
         break;
       case VerifyDiagnostic::Certified:
         OS << "Certified: " << D.Message << "\n";
+        break;
+      case VerifyDiagnostic::MixedProof:
+        OS << "Proved (" << D.Result->BackendName << "): " << D.Message << "\n";
         break;
       case VerifyDiagnostic::Warning:
         OS << "warning: " << D.Message << "\n";
