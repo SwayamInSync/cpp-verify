@@ -52,6 +52,8 @@ enum class LogicFeature : uint32_t {
   HeapArrays = 1U << 3,
   Quantifiers = 1U << 4,
   SpecFunctions = 1U << 5,
+  /// Logical functions with a heap-state parameter (heap-reading specs).
+  HeapFunctions = 1U << 6,
 };
 
 enum class LogicOverflowOp { Add, Sub, Mul, Neg, SignedDiv };
@@ -68,7 +70,8 @@ constexpr LogicFeatureSet allLogicFeatures() {
          logicFeature(LogicFeature::Pointers) |
          logicFeature(LogicFeature::HeapArrays) |
          logicFeature(LogicFeature::Quantifiers) |
-         logicFeature(LogicFeature::SpecFunctions);
+         logicFeature(LogicFeature::SpecFunctions) |
+         logicFeature(LogicFeature::HeapFunctions);
 }
 
 std::string formatLogicFeatures(LogicFeatureSet Features);
@@ -150,7 +153,35 @@ public:
 // Compatibility name for the Z3/spec adapters while they migrate internally.
 using VCExpr = LogicExpr;
 
-enum class ObligationKind { Assertion, Postcondition, Unwinding };
+/// What an obligation establishes. Only Unwinding changes result semantics;
+/// every other kind is diagnostic metadata.
+enum class ObligationKind {
+  Assertion,
+  Postcondition,
+  Unwinding,
+  Precondition,
+  InvariantEntry,
+  InvariantPreserved,
+  Termination,
+  TypeInvariant,
+  Recommends,
+  Overflow,
+  DivisionByZero,
+  Shift,
+  Bounds,
+  Dereference,
+  Initialization,
+  PointerDifference,
+  PointerValidity,
+  Aliasing,
+  Frame,
+  Deallocation,
+  MissingReturn,
+  Unsupported
+};
+
+/// Public name used in obligation IDs, dumps, JSON, and Lean comments.
+const char *obligationKindName(ObligationKind Kind);
 
 enum class DiagnosticTraceKind {
   Branch,

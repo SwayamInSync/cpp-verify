@@ -13,6 +13,8 @@ namespace verify {
 llvm::Expected<ObligationModule>
 buildObligationModule(const PassiveProgram &Program);
 
+ObligationKind obligationKind(ProofObligationKind Kind);
+
 llvm::Expected<std::unique_ptr<LogicExpr>>
 lowerLogicExpr(const VExpr *Expr, const std::string &ResultVar,
                const std::string &CurrentHeap,

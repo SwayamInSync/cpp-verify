@@ -83,6 +83,7 @@ std::string verify::formatLogicFeatures(LogicFeatureSet Features) {
       {LogicFeature::HeapArrays, "heap-arrays"},
       {LogicFeature::Quantifiers, "quantifiers"},
       {LogicFeature::SpecFunctions, "spec-functions"},
+      {LogicFeature::HeapFunctions, "heap-functions"},
   };
   std::string Result;
   for (const NamedFeature &Named : Names) {
@@ -124,7 +125,7 @@ static LogicOverflowOp logicOverflowOp(VOverflowOp Op) {
   llvm_unreachable("unknown VCR overflow operation");
 }
 
-static ObligationKind obligationKind(ProofObligationKind Kind) {
+ObligationKind verify::obligationKind(ProofObligationKind Kind) {
   switch (Kind) {
   case ProofObligationKind::Assertion:
     return ObligationKind::Assertion;
@@ -132,8 +133,96 @@ static ObligationKind obligationKind(ProofObligationKind Kind) {
     return ObligationKind::Postcondition;
   case ProofObligationKind::Unwinding:
     return ObligationKind::Unwinding;
+  case ProofObligationKind::Precondition:
+    return ObligationKind::Precondition;
+  case ProofObligationKind::InvariantEntry:
+    return ObligationKind::InvariantEntry;
+  case ProofObligationKind::InvariantPreserved:
+    return ObligationKind::InvariantPreserved;
+  case ProofObligationKind::Termination:
+    return ObligationKind::Termination;
+  case ProofObligationKind::TypeInvariant:
+    return ObligationKind::TypeInvariant;
+  case ProofObligationKind::Recommends:
+    return ObligationKind::Recommends;
+  case ProofObligationKind::Overflow:
+    return ObligationKind::Overflow;
+  case ProofObligationKind::DivisionByZero:
+    return ObligationKind::DivisionByZero;
+  case ProofObligationKind::Shift:
+    return ObligationKind::Shift;
+  case ProofObligationKind::Bounds:
+    return ObligationKind::Bounds;
+  case ProofObligationKind::Dereference:
+    return ObligationKind::Dereference;
+  case ProofObligationKind::Initialization:
+    return ObligationKind::Initialization;
+  case ProofObligationKind::PointerDifference:
+    return ObligationKind::PointerDifference;
+  case ProofObligationKind::PointerValidity:
+    return ObligationKind::PointerValidity;
+  case ProofObligationKind::Aliasing:
+    return ObligationKind::Aliasing;
+  case ProofObligationKind::Frame:
+    return ObligationKind::Frame;
+  case ProofObligationKind::Deallocation:
+    return ObligationKind::Deallocation;
+  case ProofObligationKind::MissingReturn:
+    return ObligationKind::MissingReturn;
+  case ProofObligationKind::Unsupported:
+    return ObligationKind::Unsupported;
   }
   llvm_unreachable("unknown VCR proof-obligation kind");
+}
+
+const char *verify::obligationKindName(ObligationKind Kind) {
+  switch (Kind) {
+  case ObligationKind::Assertion:
+    return "assertion";
+  case ObligationKind::Postcondition:
+    return "postcondition";
+  case ObligationKind::Unwinding:
+    return "unwinding";
+  case ObligationKind::Precondition:
+    return "precondition";
+  case ObligationKind::InvariantEntry:
+    return "invariant-entry";
+  case ObligationKind::InvariantPreserved:
+    return "invariant-preserved";
+  case ObligationKind::Termination:
+    return "termination";
+  case ObligationKind::TypeInvariant:
+    return "type-invariant";
+  case ObligationKind::Recommends:
+    return "recommends";
+  case ObligationKind::Overflow:
+    return "overflow";
+  case ObligationKind::DivisionByZero:
+    return "division-by-zero";
+  case ObligationKind::Shift:
+    return "shift";
+  case ObligationKind::Bounds:
+    return "bounds";
+  case ObligationKind::Dereference:
+    return "dereference";
+  case ObligationKind::Initialization:
+    return "initialization";
+  case ObligationKind::PointerDifference:
+    return "pointer-difference";
+  case ObligationKind::PointerValidity:
+    return "pointer-validity";
+  case ObligationKind::Aliasing:
+    return "aliasing";
+  case ObligationKind::Frame:
+    return "frame";
+  case ObligationKind::Deallocation:
+    return "deallocation";
+  case ObligationKind::MissingReturn:
+    return "missing-return";
+  case ObligationKind::Unsupported:
+    return "unsupported";
+  }
+  llvm_unreachable("unknown obligation kind");
 }
 
 static void setBoolSort(VCExpr &Expr) { Expr.Sort = LogicSort::boolSort(); }
@@ -1150,6 +1239,61 @@ class ObligationBuilder {
     return N;
   }
 
+  /// A mathematical operand (a quantifier binder) has no bit-vector form, so
+  /// state the check directly: the exact result fits the checked type.
+  std::unique_ptr<VCExpr> exactNoOverflow(const VOverflowCheckExpr *O,
+                                          std::unique_ptr<VCExpr> Lhs,
+                                          std::unique_ptr<VCExpr> Rhs) {
+    const unsigned Width = O->Lhs->Ty.BitWidth;
+    if (Width == 0)
+      return fail("overflow check has an unsized operand");
+    Lhs = toMode(std::move(Lhs), VIntMode::Math);
+    if (Rhs)
+      Rhs = toMode(std::move(Rhs), VIntMode::Math);
+    const LogicSort MathSort = LogicSort::mathematicalInteger(Width, true);
+    auto arithmetic = [&](VCExpr::Kind Kind) {
+      auto N = std::make_unique<VCExpr>(Kind);
+      N->Sort = MathSort;
+      N->Loc = O->Loc;
+      N->Children.push_back(std::move(Lhs));
+      if (Rhs)
+        N->Children.push_back(std::move(Rhs));
+      return N;
+    };
+    if (O->Op == VOverflowOp::SDiv) {
+      auto IsMin =
+          vcBinary(VCExpr::Eq, std::move(Lhs), mathLimit(Width, true, true));
+      auto MinusOne = std::make_unique<VCExpr>(VCExpr::IntLit);
+      MinusOne->IntVal = "-1";
+      MinusOne->Sort = MathSort;
+      auto IsMinusOne =
+          vcBinary(VCExpr::Eq, std::move(Rhs), std::move(MinusOne));
+      return vcNot(vcAnd(std::move(IsMin), std::move(IsMinusOne)));
+    }
+    std::unique_ptr<VCExpr> Exact;
+    switch (O->Op) {
+    case VOverflowOp::Add:
+      Exact = arithmetic(VCExpr::Add);
+      break;
+    case VOverflowOp::Sub:
+      Exact = arithmetic(VCExpr::Sub);
+      break;
+    case VOverflowOp::Mul:
+      Exact = arithmetic(VCExpr::Mul);
+      break;
+    case VOverflowOp::Neg:
+      Exact = arithmetic(VCExpr::Neg);
+      break;
+    case VOverflowOp::SDiv:
+      break;
+    }
+    auto AboveMinimum = vcBinary(VCExpr::Ge, cloneVCExpr(Exact.get()),
+                                 mathLimit(Width, true, true));
+    auto BelowMaximum =
+        vcBinary(VCExpr::Le, std::move(Exact), mathLimit(Width, true, false));
+    return vcAnd(std::move(AboveMinimum), std::move(BelowMaximum));
+  }
+
   std::unique_ptr<VCExpr> fromQuant(const VQuantifiedExpr *Q, bool IsForall) {
     auto N =
         std::make_unique<VCExpr>(IsForall ? VCExpr::Forall : VCExpr::Exists);
@@ -1424,7 +1568,8 @@ public:
       const auto *L = static_cast<const VLoadExpr *>(E);
       std::string Heap = L->HeapVar.empty() ? CurHeap : L->HeapVar;
       auto N = std::make_unique<VCExpr>(VCExpr::Select);
-      N->Sort = logicSortFor(L->Ty.Kind, CallerIntMode, L->Ty.BitWidth,
+      // Memory holds machine objects, also when a spec body reads them.
+      N->Sort = logicSortFor(L->Ty.Kind, VIntMode::Machine, L->Ty.BitWidth,
                              L->Ty.IsSigned);
       N->Loc = L->Loc;
       auto H = std::make_unique<VCExpr>(VCExpr::Var);
@@ -1476,6 +1621,13 @@ public:
       N->Sort = logicSortFor(C->Ty.Kind, C->Ty.IntMode, C->Ty.BitWidth,
                              C->Ty.IsSigned);
       N->Loc = C->Loc;
+      if (C->ReadsHeap) {
+        auto H = std::make_unique<VCExpr>(VCExpr::Var);
+        H->Name = C->HeapVar.empty() ? CurHeap : C->HeapVar;
+        H->Loc = C->Loc;
+        setHeapSort(*H);
+        N->Children.push_back(std::move(H));
+      }
       for (const auto &A : C->Args) {
         auto Arg = fromVExpr(A.get());
         if (Arg && (Arg->Sort.Kind == LogicSortKind::BitVector ||
@@ -1487,13 +1639,20 @@ public:
     }
     case VExpr::OverflowCheck: {
       const auto *O = static_cast<const VOverflowCheckExpr *>(E);
+      auto Lhs = fromVExpr(O->Lhs.get());
+      auto Rhs = O->Rhs ? fromVExpr(O->Rhs.get()) : nullptr;
+      if (!Lhs || (O->Rhs && !Rhs))
+        return fail("overflow check operand failed to lower");
+      if (Lhs->Sort.Kind != LogicSortKind::BitVector ||
+          (Rhs && Rhs->Sort.Kind != LogicSortKind::BitVector))
+        return exactNoOverflow(O, std::move(Lhs), std::move(Rhs));
       auto N = std::make_unique<VCExpr>(VCExpr::NoOverflow);
       setBoolSort(*N);
       N->Loc = O->Loc;
       N->OverflowOp = logicOverflowOp(O->Op);
-      N->Children.push_back(fromVExpr(O->Lhs.get()));
-      if (O->Rhs)
-        N->Children.push_back(fromVExpr(O->Rhs.get()));
+      N->Children.push_back(std::move(Lhs));
+      if (Rhs)
+        N->Children.push_back(std::move(Rhs));
       return N;
     }
     }
@@ -1605,9 +1764,10 @@ public:
                        Stmt->TraceEventCount, fromVExpr(Stmt->Cond.get())});
     }
 
-    std::vector<std::unique_ptr<VCExpr>> ExitAsserts;
-    for (const auto &Exit : P.ExitAsserts)
-      ExitAsserts.push_back(fromVExpr(Exit.get()));
+    std::vector<std::pair<ObligationKind, std::unique_ptr<VCExpr>>> ExitAsserts;
+    for (const PassiveExitAssert &Exit : P.ExitAsserts)
+      ExitAsserts.emplace_back(obligationKind(Exit.ProofKind),
+                               fromVExpr(Exit.Cond.get()));
 
     if (!ConstructionError.empty())
       return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
@@ -1653,9 +1813,8 @@ public:
       }
       appendObligation(Stmt.ProofKind, Stmt.Cond.get(), Stmt.TraceEventCount);
     }
-    for (const auto &Exit : ExitAsserts)
-      appendObligation(ObligationKind::Postcondition, Exit.get(),
-                       M.TraceEvents.size());
+    for (const auto &[Kind, Exit] : ExitAsserts)
+      appendObligation(Kind, Exit.get(), M.TraceEvents.size());
 
     M.CorrectnessGoal = buildCompleteGoal(M.Obligations);
     M.CounterexampleQuery = vcNot(cloneVCExpr(M.CorrectnessGoal.get()));
@@ -1862,11 +2021,14 @@ verify::validateObligationModule(const ObligationModule &M) {
     for (const LogicFunctionParameter &Parameter : Declaration.Parameters) {
       if (Parameter.Name.empty() || containsEmbeddedNul(Parameter.Name) ||
           !validateLogicSort(Parameter.Sort, ValidationError) ||
-          Parameter.Sort.Kind == LogicSortKind::Heap ||
           !Parameters.emplace(Parameter.Name, Parameter.Sort).second)
         return llvm::createStringError(
             llvm::inconvertibleErrorCode(),
             "logical function has an invalid or duplicate parameter");
+      if (Parameter.Sort.Kind == LogicSortKind::Heap)
+        RequiredFeatures |= logicFeature(LogicFeature::HeapFunctions) |
+                            logicFeature(LogicFeature::HeapArrays) |
+                            logicFeature(LogicFeature::MathematicalIntegers);
     }
     if (Declaration.DefinitionFuel > 0) {
       if (!validateLogicExpr(Declaration.StepDefinition.get(), ValidationError))
