@@ -41,7 +41,8 @@ The VCR parameter is an immutable address. Reading ``left`` loads the heap,
 assignment stores through the address, and ``old(left)`` reads the entry heap.
 CppVerify adds a non-null, live, and initialized entry precondition for each
 reference. Mutable pointer/reference parameter pairs are object-range disjoint
-by default; ``aliases(left, right)`` permits same-object aliasing.
+by default (over whole ``valid(p, n)`` extents under ``--check-ub``);
+``aliases(left, right)`` permits same-object aliasing.
 
 ``modifies(left)`` is an open region rooted at the referent, like
 ``modifies(*p)``. An abstract parameter call may conservatively forget the
@@ -161,11 +162,15 @@ fill/zero loop verifies end-to-end:
      { p[j] = 0; j = j + 1; }
    }
 
-Two-buffer copy loops (``memcpy``-style) also verify, given an explicit
-**non-overlap** precondition that the source and destination ranges are disjoint
-(``d + n <= s || s + n <= d``). Without it the copy is rejected — storing to the
-destination could clobber a source cell still to be read, exactly the C
-``memcpy`` vs ``memmove`` distinction:
+Two-buffer copy loops (``memcpy``-style) need the source and destination
+ranges to be disjoint; otherwise storing to the destination could clobber a
+source cell still to be read, exactly the C ``memcpy`` vs ``memmove``
+distinction. With ``--check-ub``, ``valid(d, n)`` and ``valid(s, n)`` extents
+provide this automatically: the implicit non-aliasing default treats each
+declared extent as the pointer's complete object, so the two extents are
+disjoint unless a pointer is null or an extent is empty, and every caller must
+prove that. An ``aliases(d, s)`` pair keeps the single-object rule and may
+overlap. Without extents, state the **non-overlap** explicitly:
 
 .. code-block:: cpp
 
