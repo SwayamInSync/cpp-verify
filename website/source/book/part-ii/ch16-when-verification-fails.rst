@@ -70,7 +70,10 @@ For automation that remains unresolved, use:
    # edit proof/CppVerify/User.lean and proof/CppVerify/Proofs/*.lean
    cpp-verify --lean-fallback=proof --lean-certify file.cpp
 
-The first command remains non-success because export is not proof. A Z3
+The first command remains non-success because export is not proof. It exports
+only the obligations Z3 did not prove and reports the split, for example
+``[z3: 18 of 20 proved; lean: 2 exported]``. Once those proofs kernel-check,
+the function is ``Proved (z3+lean)``, never ``Verified`` or ``Certified``. A Z3
 counterexample is not routed through this fallback.
 
 Trusting a new feature
