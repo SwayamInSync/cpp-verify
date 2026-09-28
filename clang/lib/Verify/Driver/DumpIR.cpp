@@ -1,5 +1,6 @@
 //===--- DumpIR.cpp -------------------------------------------------------===//
 #include "DumpIR.h"
+#include "../Backend/ObligationLowering.h"
 #include "../Backend/ObligationSerialization.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
@@ -178,7 +179,10 @@ void verify::dumpVExpr(const VExpr *E, llvm::raw_ostream &OS, unsigned Depth) {
   }
   case VExpr::SpecCall: {
     const auto *C = static_cast<const VSpecCallExpr *>(E);
-    OS << "spec_call " << C->Callee << "\n";
+    OS << "spec_call " << C->Callee;
+    if (C->ReadsHeap)
+      OS << " reads " << (C->HeapVar.empty() ? "heap" : C->HeapVar);
+    OS << "\n";
     for (const auto &A : C->Args)
       dumpVExpr(A.get(), OS, Depth + 1);
     break;
@@ -277,10 +281,12 @@ static void dumpVStmt(const VStmt &S, llvm::raw_ostream &OS, unsigned Depth) {
       dumpVExpr(Arg.get(), OS, Depth + 1);
     break;
   }
-  case VStmt::Assert:
-    OS << "assert\n";
-    dumpVExpr(static_cast<const VAssertStmt &>(S).Cond.get(), OS, Depth + 1);
+  case VStmt::Assert: {
+    const auto &A = static_cast<const VAssertStmt &>(S);
+    OS << "assert " << obligationKindName(obligationKind(A.ProofKind)) << "\n";
+    dumpVExpr(A.Cond.get(), OS, Depth + 1);
     break;
+  }
   case VStmt::Assume:
     OS << "assume\n";
     dumpVExpr(static_cast<const VAssumeStmt &>(S).Cond.get(), OS, Depth + 1);
@@ -311,6 +317,12 @@ static void dumpVStmt(const VStmt &S, llvm::raw_ostream &OS, unsigned Depth) {
     break;
   case VStmt::RevealSpec:
     OS << "reveal_spec\n";
+    break;
+  case VStmt::Break:
+    OS << "break\n";
+    break;
+  case VStmt::Continue:
+    OS << "continue\n";
     break;
   default:
     break;
@@ -397,12 +409,19 @@ void verify::dumpPassiveProgram(llvm::StringRef FnName, const PassiveProgram &P,
     dumpVExpr(A.get(), OS, 2);
   ind(OS, 1) << "stmt\n";
   for (const auto &S : P.Stmts) {
-    ind(OS, 2) << (S->K == PassiveStmt::Assume ? "assume" : "assert") << "\n";
+    if (S->K == PassiveStmt::Assume)
+      ind(OS, 2) << "assume\n";
+    else
+      ind(OS, 2) << "assert "
+                 << obligationKindName(obligationKind(S->ProofKind)) << "\n";
     dumpVExpr(S->Cond.get(), OS, 3);
   }
   ind(OS, 1) << "exit\n";
-  for (const auto &A : P.ExitAsserts)
-    dumpVExpr(A.get(), OS, 2);
+  for (const PassiveExitAssert &A : P.ExitAsserts) {
+    ind(OS, 2) << "assert " << obligationKindName(obligationKind(A.ProofKind))
+               << "\n";
+    dumpVExpr(A.Cond.get(), OS, 3);
+  }
 }
 
 static const char *logicExprToken(LogicExpr::Kind Kind) {
@@ -539,11 +558,8 @@ void verify::dumpVC(const ObligationModule &Module, llvm::raw_ostream &OS,
   dumpLogicExpr(Module.CounterexampleQuery.get(), OS, 2);
   ind(OS, 1) << "obligations " << Module.Obligations.size() << "\n";
   for (const Obligation &Item : Module.Obligations) {
-    const char *Kind = Item.Kind == ObligationKind::Assertion ? "assertion"
-                       : Item.Kind == ObligationKind::Unwinding
-                           ? "unwinding"
-                           : "postcondition";
-    ind(OS, 2) << "obligation " << Item.Id << " " << Kind << "\n";
+    ind(OS, 2) << "obligation " << Item.Id << " "
+               << obligationKindName(Item.Kind) << "\n";
     ind(OS, 3) << "semantic-hash sha256:"
                << obligationSemanticHash(Module, Item) << "\n";
     ind(OS, 3) << "source "
