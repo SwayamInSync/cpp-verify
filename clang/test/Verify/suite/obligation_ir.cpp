@@ -3,7 +3,7 @@
 // RUN: %cpp-verify --lower-only --dump-ir=3 %s > %t.second 2>&1
 // RUN: diff %t.first %t.second
 // RUN: FileCheck %s --check-prefix=OBLIGATION < %t.first
-// RUN: %cpp-verify --lower-only --dump-ir=3,4 %s 2>&1 | FileCheck %s --check-prefix=LAYERS
+// RUN: %cpp-verify --int-encoding=bitvector --lower-only --dump-ir=3,4 %s 2>&1 | FileCheck %s --check-prefix=LAYERS
 // RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=Z3
 // RUN: %cpp-verify --backend=bmc --unroll=1 %s 2>&1 | FileCheck %s --check-prefix=BMC
 // RUN: rm -f %t.first.obligations %t.second.obligations
@@ -26,18 +26,22 @@ int canonical_obligations(int x)
 }
 
 // OBLIGATION-LABEL: vc canonical_obligations
-// OBLIGATION-NEXT: schema cppverify.obligation/1
+// OBLIGATION-NEXT: schema cppverify.obligation/2
 // OBLIGATION-NEXT: simplification nodes {{[1-9][0-9]*}} -> {{[1-9][0-9]*}}, rewrites {{[1-9][0-9]*}}, functions-removed 0
-// OBLIGATION-NEXT: semantic-hash sha256:200ede5ba0ea0c3b390bb1dc8459bae827140995056c8665060818cb76911975
+// OBLIGATION-NEXT: semantic-hash sha256:383223c6d8eef17759eaffb40faf2b1b3960b0532e13681aee2fe199f3c1e58c
 // OBLIGATION-NEXT: identity [[IDENTITY:fn_[0-9a-f]+]]
 // OBLIGATION-NEXT: features mathematical-integers, bit-vectors, pointers, heap-arrays
 // OBLIGATION-NEXT: counterexample
 // OBLIGATION: x_0 : bitvector32
-// OBLIGATION: obligations [[COUNT:[1-9][0-9]*]]
+// OBLIGATION: obligations 6
 // OBLIGATION: obligation [[IDENTITY]]::obligation:1 assertion
-// OBLIGATION-NEXT: semantic-hash sha256:f3a508d9a40d8674d24dd24f2ae6bcae3f2dbf4c01536ae08fe75b3273a31df4
+// OBLIGATION-NEXT: semantic-hash sha256:270b6daed64014bf88357703317678f5559a4b4e9e0aa2b4061a71994bbe6882
 // OBLIGATION-NEXT: source {{[1-9][0-9]*}}
-// OBLIGATION: obligation [[IDENTITY]]::obligation:{{[1-9][0-9]*}} postcondition
+// OBLIGATION: obligation [[IDENTITY]]::obligation:2 overflow
+// OBLIGATION: obligation [[IDENTITY]]::obligation:3 assertion
+// OBLIGATION: obligation [[IDENTITY]]::obligation:4 missing-return
+// OBLIGATION: obligation [[IDENTITY]]::obligation:5 overflow
+// OBLIGATION: obligation [[IDENTITY]]::obligation:6 postcondition
 // OBLIGATION-NEXT: semantic-hash sha256:{{[0-9a-f]+}}
 // OBLIGATION-NEXT: source {{[1-9][0-9]*}}
 // OBLIGATION: Lowered: canonical_obligations
