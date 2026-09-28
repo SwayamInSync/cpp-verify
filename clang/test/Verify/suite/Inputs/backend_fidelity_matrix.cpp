@@ -20,6 +20,12 @@ spec int triangular(int value) decreases(value) {
   return value + triangular(value - 1);
 }
 
+spec int prefix_sum(int *pointer, int count) decreases(count) {
+  if (count <= 0)
+    return 0;
+  return prefix_sum(pointer, count - 1) + pointer[count - 1];
+}
+
 struct BoundedValue {
   int value;
   type_invariant(value >= 0 && value <= 10);
@@ -209,4 +215,27 @@ int complete_loop()
     value = value + 1;
   }
   return value;
+}
+
+void heap_spec_read(int *pointer)
+  pre(valid(pointer, 2))
+  pre(pointer[0] >= -100 && pointer[0] <= 100)
+  pre(pointer[1] >= -100 && pointer[1] <= 100)
+  modifies(*pointer)
+  post(prefix_sum(pointer, 2) ==
+       old(prefix_sum(pointer, 2)) - old(pointer[0]))
+{
+  ghost { reveal_with_fuel(prefix_sum, 3); }
+  pointer[0] = 0;
+}
+
+void heap_spec_read_invalid(int *pointer)
+  pre(valid(pointer, 2))
+  pre(pointer[0] >= -100 && pointer[0] <= 100)
+  pre(pointer[1] >= -100 && pointer[1] <= 100)
+  modifies(*pointer)
+  post(prefix_sum(pointer, 2) == old(prefix_sum(pointer, 2)))
+{
+  ghost { reveal_with_fuel(prefix_sum, 3); }
+  pointer[0] = 0;
 }
