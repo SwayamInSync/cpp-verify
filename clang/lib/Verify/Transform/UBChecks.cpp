@@ -1,4 +1,4 @@
-//===--- UBChecks.cpp - UB and bounds obligations -------------------------===//
+//===--- UBChecks.cpp - valid(p, n) extent obligations --------------------===//
 #include "UBChecks.h"
 #include "../IR/VExpr.h"
 #include <map>
@@ -8,16 +8,6 @@ using namespace verify;
 
 namespace {
 
-// Only signed machine integers can overflow into UB; unsigned is modular and
-// well-defined in C++.
-bool isSignedMachine(const VType &T) {
-  return T.IntMode == VIntMode::Machine && T.isSignedInt();
-}
-bool isMachineInt(const VType &T) {
-  return T.IntMode == VIntMode::Machine &&
-         (T.Kind == VTypeKind::Int32 || T.Kind == VTypeKind::Int64);
-}
-
 bool isInteger(const VType &T) {
   return T.Kind == VTypeKind::Int32 || T.Kind == VTypeKind::Int64;
 }
@@ -25,19 +15,6 @@ bool isInteger(const VType &T) {
 bool sameIntegerRepresentation(const VType &L, const VType &R) {
   return L.Kind == R.Kind && L.IntMode == R.IntMode &&
          L.IsSigned == R.IsSigned && L.BitWidth == R.BitWidth;
-}
-
-std::unique_ptr<VExpr> mkOvf(VOverflowOp Op, const VExpr *L, const VExpr *R,
-                             SourceLocation Loc) {
-  return std::make_unique<VOverflowCheckExpr>(Op, cloneVExpr(L),
-                                              R ? cloneVExpr(R) : nullptr, Loc);
-}
-
-// divisor != 0
-std::unique_ptr<VExpr> mkNonZero(const VExpr *Divisor, SourceLocation Loc) {
-  auto Zero = std::make_unique<VLiteralExpr>(0, Divisor->Ty, Loc);
-  return std::make_unique<VBinOpExpr>(VBinOp::Ne, cloneVExpr(Divisor),
-                                      std::move(Zero), VType::makeBool(), Loc);
 }
 
 VType mathOffsetType() { return VType::makeInt(VIntMode::Math, 64, true); }
@@ -318,9 +295,75 @@ struct UBInstrumenter {
       auto ValidExtent = std::make_unique<VBinOpExpr>(
           VBinOp::Or, std::move(Empty), std::move(NonEmptyValid),
           VType::makeBool(), Loc);
-      Fn.Preconditions.push_back(std::make_unique<VBinOpExpr>(
-          VBinOp::And, std::move(NonNegative), std::move(ValidExtent),
-          VType::makeBool(), Loc));
+      addPrecondition(Fn,
+                      std::make_unique<VBinOpExpr>(
+                          VBinOp::And, std::move(NonNegative),
+                          std::move(ValidExtent), VType::makeBool(), Loc),
+                      ProofObligationKind::PointerValidity);
+    }
+  }
+
+  // An extent is its pointer's complete object for the non-aliasing default.
+  void appendExtentSeparation(VFunction &Fn) const {
+    for (const VDisjointAddresses &Pair : Fn.DisjointAddresses) {
+      const auto First = ValidLen.find(Pair.First);
+      const auto Second = ValidLen.find(Pair.Second);
+      if (First == ValidLen.end() && Second == ValidLen.end())
+        continue;
+      const SourceLocation Loc =
+          (First != ValidLen.end() ? First->second : Second->second)->Loc;
+      auto pointer = [&](const std::string &Name) {
+        return std::make_unique<VVarExpr>(Name, VType::makePtr(), Loc);
+      };
+      auto makeOr = [&](std::unique_ptr<VExpr> L, std::unique_ptr<VExpr> R) {
+        return std::make_unique<VBinOpExpr>(
+            VBinOp::Or, std::move(L), std::move(R), VType::makeBool(), Loc);
+      };
+      std::unique_ptr<VExpr> Separated;
+      auto addCase = [&](std::unique_ptr<VExpr> Case) {
+        Separated = Separated ? makeOr(std::move(Separated), std::move(Case))
+                              : std::move(Case);
+      };
+      for (const std::string *Name : {&Pair.First, &Pair.Second})
+        addCase(std::make_unique<VBinOpExpr>(
+            VBinOp::Eq, pointer(*Name),
+            std::make_unique<VLiteralExpr>(0, VType::makePtr(), Loc),
+            VType::makeBool(), Loc));
+      for (const auto &Extent : {First, Second})
+        if (Extent != ValidLen.end())
+          addCase(std::make_unique<VBinOpExpr>(
+              VBinOp::Eq, cloneVExpr(Extent->second),
+              std::make_unique<VLiteralExpr>(0, Extent->second->Ty, Loc),
+              VType::makeBool(), Loc));
+      auto end = [&](const std::string &Name, uint64_t SizeBytes,
+                     decltype(First) Extent) -> std::unique_ptr<VExpr> {
+        std::unique_ptr<VExpr> Bytes;
+        if (Extent == ValidLen.end()) {
+          Bytes = std::make_unique<VLiteralExpr>(std::to_string(SizeBytes),
+                                                 VType::makePtr(), Loc);
+        } else {
+          Bytes = mathValue(Extent->second);
+          const uint64_t Stride = ValidPointeeSize.at(Name);
+          if (Stride > 1) {
+            VType MathTy = Bytes->Ty;
+            Bytes = std::make_unique<VBinOpExpr>(
+                VBinOp::Mul, std::move(Bytes),
+                std::make_unique<VLiteralExpr>(std::to_string(Stride), MathTy,
+                                               Loc),
+                MathTy, Loc);
+          }
+        }
+        return std::make_unique<VBinOpExpr>(VBinOp::Add, pointer(Name),
+                                            std::move(Bytes), VType::makePtr(),
+                                            Loc);
+      };
+      addCase(std::make_unique<VBinOpExpr>(
+          VBinOp::Le, end(Pair.First, Pair.FirstSizeBytes, First),
+          pointer(Pair.Second), VType::makeBool(), Loc));
+      addCase(std::make_unique<VBinOpExpr>(
+          VBinOp::Le, end(Pair.Second, Pair.SecondSizeBytes, Second),
+          pointer(Pair.First), VType::makeBool(), Loc));
+      addPrecondition(Fn, std::move(Separated), ProofObligationKind::Aliasing);
     }
   }
 
@@ -388,9 +431,15 @@ struct UBInstrumenter {
                                         Loc);
   }
 
-  static void appendObligation(std::unique_ptr<VExpr> Obligation,
+  struct UBObligation {
+    ProofObligationKind Kind;
+    std::unique_ptr<VExpr> Cond;
+  };
+
+  static void appendObligation(ProofObligationKind Kind,
+                               std::unique_ptr<VExpr> Obligation,
                                const VExpr *Guard,
-                               std::vector<std::unique_ptr<VExpr>> &Out) {
+                               std::vector<UBObligation> &Out) {
     if (Guard) {
       SourceLocation Loc = Obligation->Loc;
       auto NotGuard = std::make_unique<VUnaryOpExpr>(
@@ -399,12 +448,11 @@ struct UBInstrumenter {
                                                 std::move(Obligation),
                                                 VType::makeBool(), Loc);
     }
-    Out.push_back(std::move(Obligation));
+    Out.push_back({Kind, std::move(Obligation)});
   }
 
   // Walk E and append safety obligations under the exact C++ evaluation path.
-  void collectObligations(const VExpr *E,
-                          std::vector<std::unique_ptr<VExpr>> &Out,
+  void collectObligations(const VExpr *E, std::vector<UBObligation> &Out,
                           const VExpr *Guard = nullptr) {
     if (!E)
       return;
@@ -423,49 +471,12 @@ struct UBInstrumenter {
       } else {
         collectObligations(B->Rhs.get(), Out, Guard);
       }
-      const bool Signed = isSignedMachine(B->Ty);
-      switch (B->Op) {
-      case VBinOp::Add:
-        if (Signed)
-          appendObligation(
-              mkOvf(VOverflowOp::Add, B->Lhs.get(), B->Rhs.get(), B->Loc),
-              Guard, Out);
-        break;
-      case VBinOp::Sub:
-        if (Signed)
-          appendObligation(
-              mkOvf(VOverflowOp::Sub, B->Lhs.get(), B->Rhs.get(), B->Loc),
-              Guard, Out);
-        break;
-      case VBinOp::Mul:
-        if (Signed)
-          appendObligation(
-              mkOvf(VOverflowOp::Mul, B->Lhs.get(), B->Rhs.get(), B->Loc),
-              Guard, Out);
-        break;
-      case VBinOp::Div:
-      case VBinOp::Rem:
-        if (isMachineInt(B->Ty))
-          appendObligation(mkNonZero(B->Rhs.get(), B->Loc), Guard, Out);
-        if (Signed)
-          appendObligation(
-              mkOvf(VOverflowOp::SDiv, B->Lhs.get(), B->Rhs.get(), B->Loc),
-              Guard, Out);
-        break;
-      default:
-        break;
-      }
       break;
     }
-    case VExpr::UnaryOp: {
-      const auto *U = static_cast<const VUnaryOpExpr *>(E);
-      collectObligations(U->Operand.get(), Out, Guard);
-      if (U->Op == VUnaryOp::Neg && isSignedMachine(U->Ty))
-        appendObligation(
-            mkOvf(VOverflowOp::Neg, U->Operand.get(), nullptr, U->Loc), Guard,
-            Out);
+    case VExpr::UnaryOp:
+      collectObligations(static_cast<const VUnaryOpExpr *>(E)->Operand.get(),
+                         Out, Guard);
       break;
-    }
     case VExpr::Cast:
       collectObligations(static_cast<const VCastExpr *>(E)->Inner.get(), Out,
                          Guard);
@@ -488,7 +499,8 @@ struct UBInstrumenter {
       collectObligations(L->Ptr.get(), Out, Guard);
       collectObligations(L->AccessCondition.get(), Out, Guard);
       if (auto Bnd = boundsObligation(L->Ptr.get()))
-        appendObligation(std::move(Bnd), Guard, Out);
+        appendObligation(ProofObligationKind::Bounds, std::move(Bnd), Guard,
+                         Out);
       break;
     }
     case VExpr::FieldAccess:
@@ -511,11 +523,12 @@ struct UBInstrumenter {
   }
 
   void emitObsInto(std::vector<std::unique_ptr<VStmt>> &Out, const VExpr *E) {
-    std::vector<std::unique_ptr<VExpr>> Obs;
+    std::vector<UBObligation> Obs;
     collectObligations(E, Obs);
     for (auto &O : Obs) {
-      SourceLocation L = O->Loc;
-      Out.push_back(std::make_unique<VContractAssertStmt>(std::move(O), L));
+      SourceLocation L = O.Cond->Loc;
+      Out.push_back(
+          std::make_unique<VAssertStmt>(std::move(O.Cond), L, O.Kind));
     }
   }
 
@@ -531,8 +544,8 @@ struct UBInstrumenter {
         // Array-bounds for the write target p[j] = ...
         if (auto Bnd = boundsObligation(St.Ptr.get())) {
           SourceLocation L = Bnd->Loc;
-          New.push_back(
-              std::make_unique<VContractAssertStmt>(std::move(Bnd), L));
+          New.push_back(std::make_unique<VAssertStmt>(
+              std::move(Bnd), L, ProofObligationKind::Bounds));
         }
         emitObsInto(New, St.Ptr.get());
         emitObsInto(New, St.Value.get());
@@ -562,12 +575,12 @@ struct UBInstrumenter {
         auto &W = static_cast<VWhileStmt &>(*S);
         emitObsInto(New, W.Cond.get());
         instrumentStmts(W.Body);
-        std::vector<std::unique_ptr<VExpr>> CondObs;
+        std::vector<UBObligation> CondObs;
         collectObligations(W.Cond.get(), CondObs);
         for (auto &O : CondObs) {
-          SourceLocation L = O->Loc;
+          SourceLocation L = O.Cond->Loc;
           W.Body.push_back(
-              std::make_unique<VContractAssertStmt>(std::move(O), L));
+              std::make_unique<VAssertStmt>(std::move(O.Cond), L, O.Kind));
         }
         break;
       }
@@ -610,6 +623,7 @@ std::optional<std::string> verify::instrumentUBChecks(VFunction &Fn) {
   if (UB.Error)
     return UB.Error;
   UB.appendValidSemantics(Fn);
+  UB.appendExtentSeparation(Fn);
   UB.instrumentStmts(Fn.Body);
   return std::nullopt;
 }
