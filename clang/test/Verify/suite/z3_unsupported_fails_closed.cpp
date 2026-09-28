@@ -12,8 +12,14 @@ spec int unsupported_math_bitwise(int x) {
   return x & 1;
 }
 
-spec int unsupported_heap_read(int *p) {
-  return *p;
+spec int unsupported_heap_write(int *p) {
+  *p = 1;
+  return 0;
+}
+
+spec int unsupported_indexed_increment(int *p) {
+  p[1]++;
+  return 0;
 }
 
 spec int unsupported_loop_spec(int x) {
@@ -40,7 +46,8 @@ spec int unsupported_mutual_b(int n) {
 
 // VERIFY-DAG: error: unsupported_comma_contract: unsupported expression in post
 // VERIFY-DAG: error: unsupported_math_bitwise: bitwise operators are unsupported in mathematical spec functions
-// VERIFY-DAG: error: unsupported_heap_read: heap-reading spec functions are unsupported
+// VERIFY-DAG: error: unsupported_heap_write: spec functions must not write memory
+// VERIFY-DAG: error: unsupported_indexed_increment: spec functions must not write memory
 // VERIFY-DAG: error: unsupported_loop_spec: spec function body is unsupported by axiomatic lowering
 // VERIFY-DAG: error: unsupported_recursive_spec: recursive spec and proof functions require decreases
 // VERIFY-DAG: error: unsupported_mutual_a: mutually recursive spec and proof functions are unsupported
