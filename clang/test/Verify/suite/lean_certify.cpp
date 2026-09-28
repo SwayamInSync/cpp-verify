@@ -6,7 +6,6 @@
 // RUN: %cpp-verify --backend=lean --lean-project=%t.certified %s
 // RUN: sed -i 's/  sorry/  simp [cppverify_trivial_fn_5f5a377472697669616c76_obligation_1_goal]/' %t.certified/CppVerify/Proofs/Goal_583ed320b83a75f8.lean
 // RUN: sed -i 's/  sorry/  simp [cppverify_trivial_fn_5f5a377472697669616c76_obligation_2_goal]/' %t.certified/CppVerify/Proofs/Goal_279b1b0b28d9b239.lean
-// RUN: sed -i 's/  sorry/  simp [cppverify_trivial_fn_5f5a377472697669616c76_obligation_3_goal]/' %t.certified/CppVerify/Proofs/Goal_61463634fb4df80b.lean
 // RUN: %cpp-verify --backend=lean --lean-project=%t.certified --lean-certify %s 2>&1 | FileCheck %s --check-prefix=CERTIFIED
 // RUN: echo 'theorem unfinished : True := by sorry' >> %t.certified/CppVerify/User.lean
 // RUN: not %cpp-verify --backend=lean --lean-project=%t.certified --lean-certify %s 2>&1 | FileCheck %s --check-prefix=USER-ADMITTED
@@ -19,7 +18,6 @@
 // RUN: %cpp-verify --backend=lean --lean-project=%t.stale %s
 // RUN: sed -i 's/  sorry/  simp [cppverify_trivial_fn_5f5a377472697669616c76_obligation_1_goal]/' %t.stale/CppVerify/Proofs/Goal_583ed320b83a75f8.lean
 // RUN: sed -i 's/  sorry/  simp [cppverify_trivial_fn_5f5a377472697669616c76_obligation_2_goal]/' %t.stale/CppVerify/Proofs/Goal_279b1b0b28d9b239.lean
-// RUN: sed -i 's/  sorry/  simp [cppverify_trivial_fn_5f5a377472697669616c76_obligation_3_goal]/' %t.stale/CppVerify/Proofs/Goal_61463634fb4df80b.lean
 // RUN: not %cpp-verify --backend=lean --lean-project=%t.stale --lean-certify %S/Inputs/lean_certify_stale.cpp 2>&1 | FileCheck %s --check-prefix=STALE
 
 void trivial()
