@@ -142,7 +142,14 @@ To keep Z3 as the fast path and export only unresolved functions:
    cpp-verify --lean-fallback=proof file.cpp
    cpp-verify --lean-fallback=proof --lean-certify file.cpp
 
-The first run still exits as unresolved. SAT counterexamples are failures, not
+The first run still exits as unresolved. By default only the obligations the
+solver did not prove individually are exported, under the goal names they have
+in a complete export; each remaining obligation already has its own solver
+proof. When every exported goal kernel-checks the function is
+``Proved (z3+lean)``, or ``Proved (portfolio+lean)``, and JSON reports
+``"status":"mixed-proof"`` with the per-obligation split. Only
+``--lean-fallback-scope=all``, which exports every obligation, can make a
+fallback function ``Certified``. SAT counterexamples are failures, not
 fallback candidates. Regeneration may leave old proof files on disk, but only
 the current source obligations are imported and certified; a stale active proof
 must type-check against the regenerated goal.
@@ -160,7 +167,7 @@ The canonical backend boundary can be persisted and replayed:
    cpp-verify --obligation-in=goals.cpv --lower-only --dump-ir=3,4
    cpp-verify --obligation-in=goals.cpv --backend=lean --lean-out=goals.lean
 
-Each ``cppverify.obligation/1`` record uses stable wire tags, defensive bounds,
+Each ``cppverify.obligation/2`` record uses stable wire tags, defensive bounds,
 portable source points, and path-independent SHA-256 semantic hashes. Replay
 revalidates every sort, expression, logical declaration, call signature,
 feature declaration, and identity before backend dispatch. Multiple records may
@@ -176,8 +183,9 @@ structure and reflexive equality/inequality, removes transitively unreachable
 logical declarations, rebuilds exact ordered and complete queries plus feature
 metadata, and revalidates. It does not rewrite arithmetic, quantifiers,
 pointers, heaps, or assumptions. Canonicalization introduced semantic-hash
-format v2; format v3 removes diagnostic obligation identities from the preimage.
-The compatible archive wire format remains ``cppverify.obligation/1``.
+format v2; format v3 removed diagnostic obligation identities from the
+preimage, and format v4 removes every obligation kind except ``unwinding``.
+Schema v2 adds precise obligation kinds; schema v1 records remain readable.
 
 BMC source verification archives only the terminal module for each function.
 Those records retain their exact explored unroll bound. Replay is fixed-bound
@@ -268,7 +276,8 @@ Z3 result discipline
 Passive SSA is lowered once into a typed, source-attributed
 ``ObligationModule``. Layer 3 dumps this exact module and all backends consume
 it. It contains one complete counterexample query plus equivalent ordered
-assertion/postcondition queries with deterministic internal IDs,
+queries with deterministic internal IDs, a precise kind per obligation
+(for example ``precondition``, ``overflow``, or ``bounds``),
 source-anchored public IDs/ranges, original-name typed model metadata, and
 guarded trace events. Display-only diagnostic metadata persists through
 archives but is excluded from semantic hashes, including both positional and
