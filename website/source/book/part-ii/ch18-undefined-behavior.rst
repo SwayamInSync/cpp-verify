@@ -28,7 +28,7 @@ weak to rule the UB out, it reports the exact counterexample.
 Why functional verification alone would be blind
 -------------------------------------------------
 
-Machine values use bit-vectors, whose arithmetic wraps. If the verifier checked
+Machine arithmetic wraps modulo ``2^N``. If the verifier checked
 only the final equality, this would be a tautology even on an overflowing path:
 
 .. code-block:: cpp
@@ -37,7 +37,7 @@ only the final equality, this would be a tautology even on an overflowing path:
 
 CppVerify therefore inserts a signed-overflow assertion before each evaluated
 addition. The function fails without any optional flag when the precondition
-admits overflow. Bit-vectors still model the machine result faithfully, but
+admits overflow. The machine result is still modeled faithfully, but
 definedness must be established before that result can justify a contract.
 
 Core safety and the bounds option
