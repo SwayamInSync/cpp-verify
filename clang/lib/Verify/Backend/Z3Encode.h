@@ -9,6 +9,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <tuple>
 #include <vector>
 #include <z3++.h>
 
@@ -24,6 +25,19 @@ class Z3Encoder {
   std::map<std::string, z3::func_decl> SpecFuncDecls;
   unsigned TimeoutMs = 0;
   unsigned ResourceLimit = 0;
+  /// The requested encoding; Auto is resolved per query into ActiveEncoding.
+  MachineIntegerEncoding IntegerEncoding = MachineIntegerEncoding::Auto;
+  MachineIntegerEncoding ActiveEncoding = MachineIntegerEncoding::Integer;
+  /// Integer-encoded variables; each gets a range fact beside the goal.
+  std::map<std::string, LogicSort> MachineVariables;
+  /// Quantifier binder names of the query and its logical definitions.
+  std::set<std::string> BinderNames;
+  /// Bit-vector names of integer terms by term, width, and signedness.
+  std::map<std::tuple<unsigned, unsigned, bool>, z3::expr> BitShadows;
+  std::vector<z3::expr> BitDefinitions;
+  bool DefineBitShadows = false;
+  /// Set when a non-constant operand's bits are needed; Auto then switches.
+  bool UsedBitLevelOperation = false;
   bool EncodingFailed = false;
   std::string EncodingError;
 
@@ -44,13 +58,43 @@ class Z3Encoder {
   std::optional<z3::expr> encodeModule(const ObligationModule &Module,
                                        const LogicExpr *Query,
                                        VerifyResult &Result);
+  std::optional<z3::expr> encodeModuleAs(const ObligationModule &Module,
+                                         const LogicExpr *Query,
+                                         VerifyResult &Result);
+  z3::expr_vector rangeFacts();
   z3::expr coerceToSort(z3::expr E, const LogicSort &Target, bool IsSigned);
   void emitSpecCallAxiom(const VCExpr *Call);
+
+  bool integerMode() const {
+    return ActiveEncoding == MachineIntegerEncoding::Integer;
+  }
+  z3::expr coerce(z3::expr E, const LogicSort &Source, const LogicSort &Target,
+                  bool IsSigned);
+  z3::expr powerOfTwo(unsigned Exponent);
+  z3::expr machineLiteral(llvm::StringRef Decimal, const LogicSort &Sort);
+  z3::expr reduce(z3::expr Value, const LogicSort &Sort);
+  z3::expr inRange(z3::expr Value, const LogicSort &Sort);
+  z3::expr reinterpret(z3::expr Value, unsigned BitWidth, bool FromSigned,
+                       bool ToSigned);
+  z3::expr convertMachine(z3::expr Value, const LogicSort &Source,
+                          const LogicSort &Target);
+  z3::expr heapCell(z3::expr Value, const LogicSort &Sort);
+  z3::expr machineBits(z3::expr Value, const LogicSort &Sort);
+  bool mentionsBinder(const z3::expr &Root);
+  z3::expr integerArithOp(const VCExpr *E, z3::expr L, z3::expr R);
+  z3::expr integerNoOverflow(const VCExpr *E, std::vector<z3::expr> Operands);
 
 public:
   Z3Encoder();
   void setTimeoutMs(unsigned Ms) { TimeoutMs = Ms; }
   void setResourceLimit(unsigned Limit) { ResourceLimit = Limit; }
+  void setIntegerEncoding(MachineIntegerEncoding Encoding) {
+    IntegerEncoding = Encoding;
+  }
+  /// The encoding the most recently encoded query actually used.
+  MachineIntegerEncoding activeIntegerEncoding() const {
+    return ActiveEncoding;
+  }
   VerifyResult
   verifyModule(const ObligationModule &Module, const LogicExpr *Query = nullptr,
                std::optional<uint64_t> TraceEventCount = std::nullopt);
@@ -64,6 +108,7 @@ class Z3VerifyBackend : public VerifyBackend {
   unsigned ResourceLimit;
   unsigned Jobs;
   uint64_t MaxQueryNodes;
+  MachineIntegerEncoding IntegerEncoding;
   bool SkipWholeModuleRetry;
   std::unique_ptr<ProofCache> Cache;
   bool ReuseVerifiedQueries;
@@ -83,7 +128,10 @@ public:
   BackendCapabilities getCapabilities() const override {
     return {allLogicFeatures(), true};
   }
-  std::vector<VerifyResult> verifyObligations(const ObligationModule &Module);
+  /// One result per obligation in order. With StopAtFailure a serial run ends
+  /// after the first failure, since later results cannot change it.
+  std::vector<VerifyResult> verifyObligations(const ObligationModule &Module,
+                                              bool StopAtFailure = false);
 
 protected:
   VerifyResult verifyModule(const ObligationModule &Module) override;

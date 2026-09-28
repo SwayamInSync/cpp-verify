@@ -69,6 +69,16 @@ bool containsQuantifier(const VCExpr *E) {
                      });
 }
 
+void collectBinderNames(const VCExpr *Expression,
+                        std::set<std::string> &Names) {
+  if (!Expression)
+    return;
+  if (Expression->K == VCExpr::Forall || Expression->K == VCExpr::Exists)
+    Names.insert(Expression->Binder);
+  for (const auto &Child : Expression->Children)
+    collectBinderNames(Child.get(), Names);
+}
+
 void collectSpecCalls(const VCExpr *Expression,
                       std::vector<const VCExpr *> &Calls) {
   if (!Expression)
@@ -118,7 +128,7 @@ z3::sort Z3Encoder::valueSort(const LogicSort &Sort) {
       Sort.Kind == LogicSortKind::MathematicalInteger)
     return intSort();
   if (Sort.Kind == LogicSortKind::BitVector)
-    return bvSort(Sort.BitWidth);
+    return integerMode() ? intSort() : bvSort(Sort.BitWidth);
   if (Sort.Kind == LogicSortKind::Heap)
     return heapSort();
   markEncodingFailure("unsupported logical value sort");
@@ -178,7 +188,7 @@ z3::expr Z3Encoder::fallbackValue(const VCExpr *E) {
   if (E && E->Sort.Kind == LogicSortKind::Bool)
     return Ctx.bool_val(false);
   if (E && E->Sort.Kind == LogicSortKind::BitVector)
-    return Ctx.bv_val(0, E->Sort.BitWidth);
+    return integerMode() ? Ctx.int_val(0) : Ctx.bv_val(0, E->Sort.BitWidth);
   if (E && E->Sort.Kind == LogicSortKind::Heap)
     return Ctx.constant("__cppverify_invalid_heap", heapSort());
   return Ctx.int_val(0);
@@ -208,6 +218,340 @@ static z3::expr heapCellValue(z3::expr Val) {
   if (Val.is_bool())
     return z3::ite(Val, Val.ctx().int_val(1), Val.ctx().int_val(0));
   return Val;
+}
+
+static bool isSignedSort(const LogicSort &Sort) {
+  return Sort.Signedness == LogicSignedness::Signed;
+}
+
+static bool isIntegerLogicSort(const LogicSort &Sort) {
+  return Sort.Kind == LogicSortKind::MathematicalInteger ||
+         Sort.Kind == LogicSortKind::Pointer;
+}
+
+z3::expr Z3Encoder::powerOfTwo(unsigned Exponent) {
+  llvm::SmallString<64> Decimal;
+  llvm::APInt::getOneBitSet(Exponent + 1, Exponent)
+      .toString(Decimal, 10, /*Signed=*/false);
+  return Ctx.int_val(std::string(Decimal).c_str());
+}
+
+/// A decimal literal reduced into the sort's range.
+z3::expr Z3Encoder::machineLiteral(llvm::StringRef Decimal,
+                                   const LogicSort &Sort) {
+  const unsigned Width = Sort.BitWidth;
+  const unsigned Parsed =
+      std::max<unsigned>(Width, static_cast<unsigned>(Decimal.size()) * 4 + 2);
+  llvm::APInt Value(Parsed, Decimal, 10);
+  llvm::SmallString<64> Canonical;
+  Value.trunc(Width).toString(Canonical, 10, isSignedSort(Sort));
+  return Ctx.int_val(std::string(Canonical).c_str());
+}
+
+/// Reduce an integer modulo 2^w into the signed or unsigned range of Sort.
+z3::expr Z3Encoder::reduce(z3::expr Value, const LogicSort &Sort) {
+  if (Sort.Kind != LogicSortKind::BitVector)
+    return Value;
+  std::string Numeral;
+  if (Value.is_numeral(Numeral))
+    return machineLiteral(Numeral, Sort);
+  z3::expr Modulus = powerOfTwo(Sort.BitWidth);
+  if (!isSignedSort(Sort))
+    return z3::mod(Value, Modulus);
+  z3::expr Half = powerOfTwo(Sort.BitWidth - 1);
+  return z3::mod(Value + Half, Modulus) - Half;
+}
+
+z3::expr Z3Encoder::inRange(z3::expr Value, const LogicSort &Sort) {
+  if (!isSignedSort(Sort))
+    return Value >= Ctx.int_val(0) && Value < powerOfTwo(Sort.BitWidth);
+  z3::expr Half = powerOfTwo(Sort.BitWidth - 1);
+  return Value >= -Half && Value < Half;
+}
+
+/// Read the same w bits under another signedness.
+z3::expr Z3Encoder::reinterpret(z3::expr Value, unsigned BitWidth,
+                                bool FromSigned, bool ToSigned) {
+  if (FromSigned == ToSigned)
+    return Value;
+  std::string Numeral;
+  if (Value.is_numeral(Numeral))
+    return machineLiteral(Numeral, LogicSort::bitVector(BitWidth, ToSigned));
+  z3::expr Modulus = powerOfTwo(BitWidth);
+  if (FromSigned)
+    return z3::ite(Value < 0, Value + Modulus, Value);
+  return z3::ite(Value >= powerOfTwo(BitWidth - 1), Value - Modulus, Value);
+}
+
+/// The integer counterpart of BvResize.
+z3::expr Z3Encoder::convertMachine(z3::expr Value, const LogicSort &Source,
+                                   const LogicSort &Target) {
+  std::string Numeral;
+  if (Value.is_numeral(Numeral))
+    return machineLiteral(Numeral, Target);
+  const bool FromSigned = isSignedSort(Source);
+  const bool ToSigned = isSignedSort(Target);
+  if (Target.BitWidth == Source.BitWidth)
+    return reinterpret(Value, Target.BitWidth, FromSigned, ToSigned);
+  if (Target.BitWidth < Source.BitWidth)
+    return reduce(Value, Target);
+  if (FromSigned && !ToSigned)
+    return z3::ite(Value < 0, Value + powerOfTwo(Target.BitWidth), Value);
+  return Value;
+}
+
+/// Cells hold the unsigned bit pattern, as in the bit-vector encoding.
+z3::expr Z3Encoder::heapCell(z3::expr Value, const LogicSort &Sort) {
+  if (Sort.Kind == LogicSortKind::Bool)
+    return z3::ite(Value, Ctx.int_val(1), Ctx.int_val(0));
+  if (Sort.Kind == LogicSortKind::BitVector)
+    return reinterpret(Value, Sort.BitWidth, isSignedSort(Sort), false);
+  return Value;
+}
+
+/// Names of the constants inside every non-numeral divisor of Root.
+static std::set<std::string> divisorConstants(const z3::expr &Root) {
+  std::set<std::string> Names;
+  std::vector<std::pair<z3::expr, bool>> Work{{Root, false}};
+  std::set<std::pair<unsigned, bool>> Seen;
+  while (!Work.empty()) {
+    auto [E, InDivisor] = Work.back();
+    Work.pop_back();
+    if (!Seen.insert({E.id(), InDivisor}).second)
+      continue;
+    if (E.is_quantifier()) {
+      Work.push_back({E.body(), InDivisor});
+      continue;
+    }
+    if (!E.is_app())
+      continue;
+    if (E.num_args() == 0) {
+      if (InDivisor && E.decl().decl_kind() == Z3_OP_UNINTERPRETED)
+        Names.insert(E.decl().name().str());
+      continue;
+    }
+    const Z3_decl_kind Kind = E.decl().decl_kind();
+    const bool Division =
+        E.num_args() == 2 && (Kind == Z3_OP_DIV || Kind == Z3_OP_IDIV ||
+                              Kind == Z3_OP_MOD || Kind == Z3_OP_REM);
+    for (unsigned I = 0; I != E.num_args(); ++I)
+      Work.push_back({E.arg(I), InDivisor || (Division && I == 1 &&
+                                              !E.arg(I).is_numeral())});
+  }
+  return Names;
+}
+
+bool Z3Encoder::mentionsBinder(const z3::expr &Root) {
+  if (BinderNames.empty())
+    return false;
+  std::vector<z3::expr> Work{Root};
+  std::set<unsigned> Seen;
+  while (!Work.empty()) {
+    z3::expr E = Work.back();
+    Work.pop_back();
+    if (!Seen.insert(E.id()).second)
+      continue;
+    if (E.is_quantifier()) {
+      Work.push_back(E.body());
+      continue;
+    }
+    if (!E.is_app())
+      continue;
+    if (E.num_args() == 0) {
+      if (E.decl().decl_kind() == Z3_OP_UNINTERPRETED &&
+          BinderNames.count(E.decl().name().str()))
+        return true;
+      continue;
+    }
+    for (unsigned I = 0; I != E.num_args(); ++I)
+      Work.push_back(E.arg(I));
+  }
+  return false;
+}
+
+/// The range guard keeps a mis-sorted term from making the query vacuous.
+/// Binder-dependent terms cannot be named globally, so they keep int2bv.
+z3::expr Z3Encoder::machineBits(z3::expr Value, const LogicSort &Sort) {
+  const unsigned Width = Sort.BitWidth;
+  const bool Signed = isSignedSort(Sort);
+  std::string Numeral;
+  if (Value.is_numeral(Numeral)) {
+    const unsigned Parsed = std::max<unsigned>(
+        Width, static_cast<unsigned>(Numeral.size()) * 4 + 2);
+    llvm::SmallString<64> Pattern;
+    llvm::APInt(Parsed, Numeral, 10).trunc(Width).toString(Pattern, 10, false);
+    return Ctx.bv_val(std::string(Pattern).c_str(), Width);
+  }
+  UsedBitLevelOperation = true;
+  if (!DefineBitShadows || mentionsBinder(Value))
+    return z3::int2bv(Width, Value);
+  const std::tuple<unsigned, unsigned, bool> Key{Value.id(), Width, Signed};
+  if (auto It = BitShadows.find(Key); It != BitShadows.end())
+    return It->second;
+  z3::expr Bits = Ctx.bv_const(
+      ("bits!" + std::to_string(BitShadows.size())).c_str(), Width);
+  BitShadows.emplace(Key, Bits);
+  BitDefinitions.push_back(
+      z3::implies(inRange(Value, Sort), z3::bv2int(Bits, Signed) == Value));
+  return Bits;
+}
+
+/// Integer mode needs the source logic sort to know how a value's bits read.
+z3::expr Z3Encoder::coerce(z3::expr E, const LogicSort &Source,
+                           const LogicSort &Target, bool IsSigned) {
+  if (!integerMode())
+    return coerceToSort(E, Target, IsSigned);
+  if (Target.Kind == LogicSortKind::BitVector) {
+    if (Source.Kind == LogicSortKind::BitVector) {
+      if (Source.BitWidth != Target.BitWidth) {
+        markEncodingFailure("bit-vector coercion changes width");
+        return E;
+      }
+      return reinterpret(E, Target.BitWidth, isSignedSort(Source),
+                         isSignedSort(Target));
+    }
+    if (isIntegerLogicSort(Source))
+      return reduce(E, Target);
+    markEncodingFailure("cannot coerce a non-integer to a bit-vector");
+    return E;
+  }
+  if (isIntegerLogicSort(Target)) {
+    if (Source.Kind == LogicSortKind::BitVector)
+      return reinterpret(E, Source.BitWidth, isSignedSort(Source), IsSigned);
+    return E;
+  }
+  if (Target.Kind == LogicSortKind::Bool)
+    return asBool(E);
+  return E;
+}
+
+/// C++ truncates toward zero; SMT-LIB integer division is Euclidean.
+static z3::expr truncatingDivision(z3::expr L, z3::expr R) {
+  z3::expr Magnitude = z3::abs(L) / z3::abs(R);
+  return z3::ite((L >= 0) == (R >= 0), Magnitude, -Magnitude);
+}
+
+z3::expr Z3Encoder::integerArithOp(const VCExpr *E, z3::expr L, z3::expr R) {
+  const LogicSort &Sort = E->Children[0]->Sort;
+  const unsigned Width = Sort.BitWidth;
+  const bool Signed = isSignedSort(Sort);
+  z3::expr Zero = Ctx.int_val(0);
+  // A shift amount may differ in signedness from the shifted value.
+  const LogicSort &RightSort = E->Children[1]->Sort;
+  auto toBits = [&](z3::expr Value, const LogicSort &OperandSort) {
+    return machineBits(Value, OperandSort);
+  };
+  auto fromBits = [&](z3::expr Bits) { return z3::bv2int(Bits, Signed); };
+  // Shift amounts are read as unsigned w-bit patterns, as in SMT-LIB.
+  auto constantAmount = [&]() -> std::optional<llvm::APInt> {
+    std::string Numeral;
+    if (!R.is_numeral(Numeral))
+      return std::nullopt;
+    const unsigned Parsed = std::max<unsigned>(
+        Width, static_cast<unsigned>(Numeral.size()) * 4 + 2);
+    return llvm::APInt(Parsed, Numeral, 10).trunc(Width);
+  };
+  switch (E->K) {
+  case VCExpr::Eq:
+    return L == R;
+  case VCExpr::Ne:
+    return L != R;
+  case VCExpr::Lt:
+    return L < R;
+  case VCExpr::Le:
+    return L <= R;
+  case VCExpr::Gt:
+    return L > R;
+  case VCExpr::Ge:
+    return L >= R;
+  case VCExpr::Add:
+    return reduce(L + R, Sort);
+  case VCExpr::Sub:
+    return reduce(L - R, Sort);
+  case VCExpr::Mul:
+    return reduce(L * R, Sort);
+  // Zero divisors follow SMT-LIB, matching the bit-vector encoding.
+  case VCExpr::Div:
+    if (Signed)
+      return z3::ite(
+          R == Zero,
+          z3::ite(L >= Zero, Ctx.int_val(-1), machineLiteral("1", Sort)),
+          reduce(truncatingDivision(L, R), Sort));
+    return z3::ite(R == Zero, powerOfTwo(Width) - 1, L / R);
+  case VCExpr::Rem:
+    if (Signed)
+      return z3::ite(R == Zero, L, L - R * truncatingDivision(L, R));
+    return z3::ite(R == Zero, L, z3::mod(L, R));
+  case VCExpr::BitAnd: {
+    // x & (2^k - 1) keeps the low k bits, which is x mod 2^k in either range.
+    for (auto [Value, Mask] : {std::pair{L, R}, std::pair{R, L}}) {
+      std::string Numeral;
+      if (!Mask.is_numeral(Numeral) ||
+          llvm::StringRef(Numeral).starts_with("-"))
+        continue;
+      llvm::APInt Bits(Width + 1, Numeral, 10);
+      if ((Bits + 1).isPowerOf2() || Bits.isZero())
+        return z3::mod(Value, powerOfTwo((Bits + 1).logBase2()));
+    }
+    return fromBits(toBits(L, Sort) & toBits(R, RightSort));
+  }
+  case VCExpr::BitOr:
+    return fromBits(toBits(L, Sort) | toBits(R, RightSort));
+  case VCExpr::BitXor:
+    return fromBits(toBits(L, Sort) ^ toBits(R, RightSort));
+  case VCExpr::Shl:
+  case VCExpr::Shr: {
+    std::optional<llvm::APInt> Amount = constantAmount();
+    if (!Amount) {
+      z3::expr Bits = toBits(L, Sort);
+      z3::expr Count = toBits(R, RightSort);
+      if (E->K == VCExpr::Shl)
+        return fromBits(z3::shl(Bits, Count));
+      return fromBits(Signed ? z3::ashr(Bits, Count) : z3::lshr(Bits, Count));
+    }
+    if (Amount->uge(Width)) {
+      if (E->K == VCExpr::Shl || !Signed)
+        return Zero;
+      return z3::ite(L < Zero, Ctx.int_val(-1), Zero);
+    }
+    const unsigned Count = static_cast<unsigned>(Amount->getZExtValue());
+    if (E->K == VCExpr::Shl)
+      return reduce(L * powerOfTwo(Count), Sort);
+    // Arithmetic and logical right shifts are floor division by 2^k.
+    return L / powerOfTwo(Count);
+  }
+  default:
+    markEncodingFailure("unsupported machine-integer operator");
+    return fallbackValue(E);
+  }
+}
+
+z3::expr Z3Encoder::integerNoOverflow(const VCExpr *E,
+                                      std::vector<z3::expr> Operands) {
+  const LogicSort Checked =
+      LogicSort::bitVector(E->Children[0]->Sort.BitWidth, /*IsSigned=*/true);
+  for (unsigned I = 0; I != Operands.size(); ++I)
+    Operands[I] = convertMachine(Operands[I], E->Children[I]->Sort, Checked);
+  z3::expr Minimum = -powerOfTwo(Checked.BitWidth - 1);
+  if (E->OverflowOp == LogicOverflowOp::Neg)
+    return inRange(-Operands[0], Checked);
+  if (Operands.size() != 2) {
+    markEncodingFailure("binary overflow check is missing an operand");
+    return Ctx.bool_val(false);
+  }
+  switch (E->OverflowOp) {
+  case LogicOverflowOp::Add:
+    return inRange(Operands[0] + Operands[1], Checked);
+  case LogicOverflowOp::Sub:
+    return inRange(Operands[0] - Operands[1], Checked);
+  case LogicOverflowOp::Mul:
+    return inRange(Operands[0] * Operands[1], Checked);
+  case LogicOverflowOp::SignedDiv:
+    return !(Operands[0] == Minimum && Operands[1] == -1);
+  case LogicOverflowOp::Neg:
+    llvm_unreachable("handled above");
+  }
+  llvm_unreachable("unknown overflow operation");
 }
 
 z3::expr Z3Encoder::arithOp(const VCExpr *E, z3::expr L, z3::expr R) {
@@ -320,7 +664,8 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
     if (E->Sort.Kind == LogicSortKind::Pointer)
       return Ctx.int_val(E->IntVal.c_str());
     if (E->Sort.Kind == LogicSortKind::BitVector)
-      return Ctx.bv_val(E->IntVal.c_str(), E->Sort.BitWidth);
+      return integerMode() ? machineLiteral(E->IntVal, E->Sort)
+                           : Ctx.bv_val(E->IntVal.c_str(), E->Sort.BitWidth);
     if (E->Sort.Kind != LogicSortKind::MathematicalInteger) {
       markEncodingFailure("integer literal has non-integer logic sort");
       return fallbackValue(E);
@@ -340,7 +685,12 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
                E->Sort.Kind == LogicSortKind::MathematicalInteger) {
       Z = Ctx.int_const(E->Name.c_str());
     } else if (E->Sort.Kind == LogicSortKind::BitVector) {
-      Z = Ctx.bv_const(E->Name.c_str(), E->Sort.BitWidth);
+      if (integerMode()) {
+        Z = Ctx.int_const(E->Name.c_str());
+        MachineVariables.emplace(E->Name, E->Sort);
+      } else {
+        Z = Ctx.bv_const(E->Name.c_str(), E->Sort.BitWidth);
+      }
     } else {
       markEncodingFailure("unsupported variable sort: " + E->Name);
       Z = Ctx.int_const(E->Name.c_str());
@@ -350,6 +700,8 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
   }
   case VCExpr::IntToBv: {
     z3::expr Inner = child(0);
+    if (integerMode())
+      return reduce(Inner, E->Sort);
     if (Inner.is_int())
       return z3::int2bv(E->Sort.BitWidth, Inner);
     if (Inner.is_bv())
@@ -359,6 +711,8 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
   }
   case VCExpr::BvResize: {
     z3::expr Inner = child(0);
+    if (integerMode())
+      return convertMachine(Inner, E->Children[0]->Sort, E->Sort);
     if (Inner.is_int())
       Inner = z3::int2bv(E->Children[0]->Sort.BitWidth, Inner);
     if (!Inner.is_bv()) {
@@ -378,6 +732,9 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
   }
   case VCExpr::BvToInt: {
     z3::expr Inner = child(0);
+    // The canonical integer already is the value under the source signedness.
+    if (integerMode())
+      return Inner;
     if (Inner.is_bv())
       return z3::bv2int(Inner, E->Children[0]->Sort.Signedness ==
                                    LogicSignedness::Signed);
@@ -420,8 +777,8 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
   case VCExpr::Ite: {
     z3::expr C = asBool(child(0));
     const bool IsSigned = E->Sort.Signedness == LogicSignedness::Signed;
-    z3::expr T = coerceToSort(child(1), E->Sort, IsSigned);
-    z3::expr F = coerceToSort(child(2), E->Sort, IsSigned);
+    z3::expr T = coerce(child(1), E->Children[1]->Sort, E->Sort, IsSigned);
+    z3::expr F = coerce(child(2), E->Children[2]->Sort, E->Sort, IsSigned);
     return z3::ite(C, T, F);
   }
   case VCExpr::Eq:
@@ -440,12 +797,38 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
   case VCExpr::BitXor:
   case VCExpr::Shl:
   case VCExpr::Shr: {
+    if (integerMode() &&
+        E->Children[0]->Sort.Kind == LogicSortKind::BitVector) {
+      z3::expr L = child(0);
+      z3::expr R = child(1);
+      // Folding keeps the mask and constant-shift fast paths available.
+      if (L.is_numeral() && R.is_numeral())
+        return integerArithOp(E, L, R).simplify();
+      return integerArithOp(E, L, R);
+    }
     return arithOp(E, child(0), child(1));
   }
   case VCExpr::Neg:
+    if (integerMode() && E->Sort.Kind == LogicSortKind::BitVector) {
+      z3::expr Value = child(0);
+      if (Value.is_numeral())
+        return reduce((-Value).simplify(), E->Sort);
+      return reduce(-Value, E->Sort);
+    }
     return -child(0);
   case VCExpr::BitNot: {
     z3::expr Value = child(0);
+    // ~x is -x - 1 on two's-complement bits, which stays in either range.
+    if (integerMode()) {
+      if (E->Sort.Kind != LogicSortKind::BitVector) {
+        markEncodingFailure("bitwise complement operand is not a bit-vector");
+        return fallbackValue(E);
+      }
+      z3::expr Complement = isSignedSort(E->Sort)
+                                ? -Value - 1
+                                : powerOfTwo(E->Sort.BitWidth) - 1 - Value;
+      return Value.is_numeral() ? Complement.simplify() : Complement;
+    }
     if (!Value.is_bv()) {
       markEncodingFailure("bitwise complement operand is not a bit-vector");
       return fallbackValue(E);
@@ -457,6 +840,12 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
         E->Children[0]->Sort.Kind != LogicSortKind::BitVector) {
       markEncodingFailure("malformed overflow check");
       return Ctx.bool_val(false);
+    }
+    if (integerMode()) {
+      std::vector<z3::expr> Operands;
+      for (unsigned I = 0; I != E->Children.size(); ++I)
+        Operands.push_back(child(I));
+      return integerNoOverflow(E, std::move(Operands));
     }
     const unsigned BitWidth = E->Children[0]->Sort.BitWidth;
     auto Operand = [&](unsigned Index) {
@@ -542,13 +931,17 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
     }
     if (E->Sort.Kind == LogicSortKind::Pointer)
       return Val;
+    // A cell holds an arbitrary integer; its w low bits are the value.
+    if (integerMode() && E->Sort.Kind == LogicSortKind::BitVector)
+      return reduce(Val, E->Sort);
     return coerceToSort(Val, E->Sort,
                         E->Sort.Signedness == LogicSignedness::Signed);
   }
   case VCExpr::Store: {
     z3::expr Before = child(0);
     z3::expr Ptr = heapIndex(child(1));
-    z3::expr Val = heapCellValue(child(2));
+    z3::expr Val = integerMode() ? heapCell(child(2), E->Children[2]->Sort)
+                                 : heapCellValue(child(2));
     z3::expr After = child(3);
     return (After == z3::store(Before, Ptr, Val));
   }
@@ -603,14 +996,17 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
     z3::func_decl F = specFuncDecl(Function);
     std::vector<z3::expr> Args;
     for (unsigned i = 0; i < E->Children.size(); ++i) {
-      z3::expr Arg = coerceToSort(child(i), Function.Parameters[i].Sort,
-                                  Function.Parameters[i].Sort.Signedness ==
-                                      LogicSignedness::Signed);
+      z3::expr Arg = coerce(
+          child(i), E->Children[i]->Sort, Function.Parameters[i].Sort,
+          Function.Parameters[i].Sort.Signedness == LogicSignedness::Signed);
       Args.push_back(std::move(Arg));
     }
     z3::expr A = F(static_cast<unsigned>(Args.size()), Args.data());
-    return coerceToSort(
-        A, E->Sort, Function.ResultSort.Signedness == LogicSignedness::Signed);
+    // Opaque applications are integer functions; keep them in range.
+    if (integerMode())
+      A = reduce(A, Function.ResultSort);
+    return coerce(A, Function.ResultSort, E->Sort,
+                  Function.ResultSort.Signedness == LogicSignedness::Signed);
   }
   }
   markEncodingFailure("unsupported verification expression");
@@ -672,9 +1068,9 @@ void Z3Encoder::emitSpecCallAxiom(const VCExpr *Call) {
   std::vector<z3::expr> Args;
   for (unsigned I = 0; I < Call->Children.size(); ++I) {
     z3::expr Arg = encodeVC(Call->Children[I].get());
-    Arg = coerceToSort(Arg, Function.Parameters[I].Sort,
-                       Function.Parameters[I].Sort.Signedness ==
-                           LogicSignedness::Signed);
+    Arg = coerce(Arg, Call->Children[I]->Sort, Function.Parameters[I].Sort,
+                 Function.Parameters[I].Sort.Signedness ==
+                     LogicSignedness::Signed);
     Args.push_back(std::move(Arg));
   }
 
@@ -694,9 +1090,8 @@ void Z3Encoder::emitSpecCallAxiom(const VCExpr *Call) {
   z3::expr LHS = Fdecl(static_cast<unsigned>(Args.size()), Args.data());
   for (const auto &Definition : Function.DefinitionLevels) {
     z3::expr RHS = encodeVC(Definition.get());
-    RHS =
-        coerceToSort(RHS, Function.ResultSort,
-                     Function.ResultSort.Signedness == LogicSignedness::Signed);
+    RHS = coerce(RHS, Definition->Sort, Function.ResultSort,
+                 Function.ResultSort.Signedness == LogicSignedness::Signed);
     Solver.add(LHS == RHS);
   }
 
@@ -710,6 +1105,27 @@ void Z3Encoder::emitSpecCallAxiom(const VCExpr *Call) {
 std::optional<z3::expr> Z3Encoder::encodeModule(const ObligationModule &Module,
                                                 const LogicExpr *Query,
                                                 VerifyResult &Result) {
+  ActiveEncoding = IntegerEncoding == MachineIntegerEncoding::BitVector
+                       ? MachineIntegerEncoding::BitVector
+                       : MachineIntegerEncoding::Integer;
+  std::optional<z3::expr> Encoded = encodeModuleAs(Module, Query, Result);
+  if (!Encoded || IntegerEncoding != MachineIntegerEncoding::Auto ||
+      !UsedBitLevelOperation)
+    return Encoded;
+  ActiveEncoding = MachineIntegerEncoding::BitVector;
+  return encodeModuleAs(Module, Query, Result);
+}
+
+z3::expr_vector Z3Encoder::rangeFacts() {
+  z3::expr_vector Facts(Ctx);
+  for (const auto &[Name, Sort] : MachineVariables)
+    Facts.push_back(inRange(Ctx.int_const(Name.c_str()), Sort));
+  return Facts;
+}
+
+std::optional<z3::expr>
+Z3Encoder::encodeModuleAs(const ObligationModule &Module,
+                          const LogicExpr *Query, VerifyResult &Result) {
   if (!Query)
     Query = Module.CounterexampleQuery.get();
   Vars.clear();
@@ -728,6 +1144,11 @@ std::optional<z3::expr> Z3Encoder::encodeModule(const ObligationModule &Module,
   LogicFunctions.clear();
   SpecFuncDecls.clear();
   ModelVariables.clear();
+  MachineVariables.clear();
+  BinderNames.clear();
+  BitShadows.clear();
+  BitDefinitions.clear();
+  UsedBitLevelOperation = false;
   for (const auto &[Identity, Function] : Module.LogicFunctions)
     LogicFunctions.emplace(Identity, &Function);
   if (!Query) {
@@ -737,12 +1158,18 @@ std::optional<z3::expr> Z3Encoder::encodeModule(const ObligationModule &Module,
     return std::nullopt;
   }
   collectModelVariables(Query, {}, ModelVariables);
+  collectBinderNames(Query, BinderNames);
+  for (const auto &[Identity, Function] : Module.LogicFunctions)
+    for (const auto &Definition : Function.DefinitionLevels)
+      collectBinderNames(Definition.get(), BinderNames);
   std::vector<const VCExpr *> SpecCalls;
   collectSpecCalls(Query, SpecCalls);
+  DefineBitShadows = true;
   for (const VCExpr *Call : SpecCalls)
     emitSpecCallAxiom(Call);
   Vars.clear();
   z3::expr EncodedGoal = encodeVC(Query);
+  DefineBitShadows = false;
   if (EncodingFailed) {
     Result.Status = VerifyStatus::Unresolved;
     Result.Reason = VerifyReason::EncodingFailure;
@@ -761,6 +1188,10 @@ VerifyResult Z3Encoder::verifyModule(const ObligationModule &Module,
   if (!EncodedGoal)
     return Out;
   Solver.add(*EncodedGoal);
+  for (const z3::expr &Definition : BitDefinitions)
+    Solver.add(Definition);
+  z3::expr Semantics = z3::mk_and(Solver.assertions());
+  Solver.add(rangeFacts());
   switch (Solver.check()) {
   case z3::unsat:
     Out.Status = VerifyStatus::Verified;
@@ -769,6 +1200,37 @@ VerifyResult Z3Encoder::verifyModule(const ObligationModule &Module,
     Out.Status = VerifyStatus::Failed;
     Out.Reason = VerifyReason::Counterexample;
     z3::model Mod = Solver.get_model();
+    // Range facts assign every machine variable; report those the goal does
+    // not depend on as unknown. Divisor variables stay assigned (slow eval).
+    z3::expr_vector Assigned(Ctx), Unassigned(Ctx);
+    std::set<std::string> Freed;
+    if (integerMode()) {
+      const std::set<std::string> InDivisors = divisorConstants(Semantics);
+      for (const auto &[Name, Sort] : MachineVariables) {
+        if (InDivisors.count(Name))
+          continue;
+        Assigned.push_back(Ctx.int_const(Name.c_str()));
+        Unassigned.push_back(Ctx.int_const(("free!" + Name).c_str()));
+        z3::expr Holds = Mod.eval(Semantics.substitute(Assigned, Unassigned),
+                                  /*model_completion=*/false);
+        if (Holds.is_true()) {
+          Freed.insert(Name);
+          continue;
+        }
+        Assigned.pop_back();
+        Unassigned.pop_back();
+      }
+    }
+    // A diagnostic term dividing by a freed variable is undetermined.
+    auto modelValue = [&](z3::expr Encoded) {
+      if (Freed.empty())
+        return Mod.eval(Encoded, false);
+      z3::expr Substituted = Encoded.substitute(Assigned, Unassigned);
+      for (const std::string &Name : divisorConstants(Encoded))
+        if (Freed.count(Name))
+          return Substituted;
+      return Mod.eval(Substituted, false);
+    };
     auto evaluate = [&](const LogicExpr *Expr) -> std::optional<std::string> {
       if (!Expr)
         return std::nullopt;
@@ -782,7 +1244,7 @@ VerifyResult Z3Encoder::verifyModule(const ObligationModule &Module,
         EncodingError = std::move(SavedError);
         return std::nullopt;
       }
-      z3::expr Evaluated = Mod.eval(Encoded, false);
+      z3::expr Evaluated = modelValue(Encoded);
       EncodingFailed = SavedFailure;
       EncodingError = std::move(SavedError);
       return sourceModelValue(Evaluated, Expr->Sort);
@@ -825,7 +1287,7 @@ VerifyResult Z3Encoder::verifyModule(const ObligationModule &Module,
         Value.Source = Metadata->second.Source;
       }
       if (auto It = Vars.find(Name); It != Vars.end()) {
-        z3::expr Evaluated = Mod.eval(It->second, false);
+        z3::expr Evaluated = modelValue(It->second);
         if (!z3::eq(Evaluated, It->second))
           Value.Value = sourceModelValue(Evaluated, Sort);
       }
@@ -874,8 +1336,14 @@ VerifyResult Z3Encoder::lowerModule(const ObligationModule &Module,
       encodeModule(Module, Module.CounterexampleQuery.get(), Out);
   if (!EncodedGoal)
     return Out;
-  if (OS)
+  if (OS) {
+    z3::expr_vector Facts = rangeFacts();
+    for (unsigned I = 0; I != Facts.size(); ++I)
+      *OS << Facts[I].to_string() << "\n";
+    for (const z3::expr &Definition : BitDefinitions)
+      *OS << Definition.to_string() << "\n";
     *OS << EncodedGoal->to_string() << "\n";
+  }
   Out.Status = VerifyStatus::Lowered;
   return Out;
 }
@@ -889,6 +1357,7 @@ verify::lowerObligationModule(const ObligationModule &Module,
   Z3Encoder Encoder;
   Encoder.setTimeoutMs(Execution.SolverTimeoutMs);
   Encoder.setResourceLimit(Execution.SolverResourceLimit);
+  Encoder.setIntegerEncoding(Execution.IntegerEncoding);
   VerifyResult Result = Encoder.lowerModule(Module, Z3Out);
   Result.BackendName = "z3";
   return Result;
@@ -954,7 +1423,8 @@ static VerifyResult finishZ3Result(VerifyResult Result) {
 }
 
 std::vector<VerifyResult>
-Z3VerifyBackend::verifyObligations(const ObligationModule &Module) {
+Z3VerifyBackend::verifyObligations(const ObligationModule &Module,
+                                   bool StopAtFailure) {
   if (auto Limit = querySizeLimitResult(Module, MaxQueryNodes))
     return {std::move(*Limit)};
 
@@ -980,11 +1450,14 @@ Z3VerifyBackend::verifyObligations(const ObligationModule &Module) {
     return ReuseVerifiedQueries && VerifiedQueries.count(QueryHashes[I]) != 0;
   };
   if (Jobs == 1 || Module.Obligations.size() < 2) {
-    for (size_t I = 0; I != Module.Obligations.size(); ++I)
+    for (size_t I = 0; I != Module.Obligations.size(); ++I) {
       Results.push_back(verifyObligation(
           Module, Module.Obligations[I],
           Cache ? llvm::StringRef(CacheHashes[I]) : llvm::StringRef(),
           Cache ? &CacheLookups[I] : nullptr, IsReused(I)));
+      if (StopAtFailure && Results.back().Status == VerifyStatus::Failed)
+        break;
+    }
   } else {
     llvm::StdThreadPool Pool(llvm::heavyweight_hardware_concurrency(Jobs));
     std::vector<std::shared_future<VerifyResult>> Futures;
@@ -1030,14 +1503,18 @@ Z3VerifyBackend::Z3VerifyBackend(const BackendExecutionOptions &Execution,
     : TimeoutMs(Execution.SolverTimeoutMs),
       ResourceLimit(Execution.SolverResourceLimit), Jobs(Execution.Jobs),
       MaxQueryNodes(Execution.MaxQueryNodes),
+      IntegerEncoding(Execution.IntegerEncoding),
       SkipWholeModuleRetry(Execution.SkipWholeModuleRetry),
       ReuseVerifiedQueries(ReuseVerifiedQueries) {
   Enc.setTimeoutMs(TimeoutMs);
   Enc.setResourceLimit(ResourceLimit);
+  Enc.setIntegerEncoding(IntegerEncoding);
   if (!Execution.ProofCachePath.empty()) {
-    std::string Identity = CacheBackendName.str() + ";adapter=cppverify-z3-v" +
-                           std::to_string(Z3ProofCacheAdapterVersion) +
-                           ";solver=" + std::string(Z3_get_full_version());
+    std::string Identity =
+        CacheBackendName.str() + ";adapter=cppverify-z3-v" +
+        std::to_string(Z3ProofCacheAdapterVersion) +
+        ";ints=" + machineIntegerEncodingName(IntegerEncoding).str() +
+        ";solver=" + std::string(Z3_get_full_version());
     Cache = std::make_unique<ProofCache>(
         Execution.ProofCachePath, std::move(Identity),
         Execution.ProofCacheMaxBytes, Execution.ProofCacheMaxEntries);
@@ -1080,6 +1557,7 @@ VerifyResult Z3VerifyBackend::verifyObligation(const ObligationModule &Module,
     Z3Encoder Encoder;
     Encoder.setTimeoutMs(TimeoutMs);
     Encoder.setResourceLimit(ResourceLimit);
+    Encoder.setIntegerEncoding(IntegerEncoding);
     Result = Encoder.verifyModule(Module, Item.CounterexampleQuery.get(),
                                   Item.TraceEventCount);
     if (Cache)
@@ -1102,11 +1580,26 @@ VerifyResult Z3VerifyBackend::verifyObligation(const ObligationModule &Module,
   return finishZ3Result(std::move(Result));
 }
 
+/// Internal IDs of the obligations that one-to-one Results did not prove.
+static std::optional<std::vector<std::string>>
+unprovedObligations(const ObligationModule &Module,
+                    const std::vector<VerifyResult> &Results) {
+  if (Results.size() != Module.Obligations.size())
+    return std::nullopt;
+  std::vector<std::string> Unproved;
+  for (size_t I = 0; I != Results.size(); ++I)
+    if (Results[I].Status != VerifyStatus::Verified)
+      Unproved.push_back(Module.Obligations[I].Id);
+  return Unproved;
+}
+
 VerifyResult Z3VerifyBackend::verifyModule(const ObligationModule &Module) {
   if (auto Limit = querySizeLimitResult(Module, MaxQueryNodes))
     return std::move(*Limit);
   if (Jobs != 1 || Cache) {
     std::vector<VerifyResult> Results = verifyObligations(Module);
+    std::optional<std::vector<std::string>> Unproved =
+        unprovedObligations(Module, Results);
     uint64_t Hits = 0;
     uint64_t Misses = 0;
     uint64_t Errors = 0;
@@ -1170,6 +1663,8 @@ VerifyResult Z3VerifyBackend::verifyModule(const ObligationModule &Module) {
     Result.CacheErrors = Errors;
     Result.CacheError = std::move(CacheError);
     Result.ReusedQueries = Reused;
+    if (Result.Status == VerifyStatus::Unresolved)
+      Result.UnprovedObligations = std::move(Unproved);
     return Result;
   }
 
@@ -1188,7 +1683,8 @@ VerifyResult Z3VerifyBackend::verifyModule(const ObligationModule &Module) {
 
   if (Whole.Status == VerifyStatus::Failed) {
     bool SawUnresolved = false;
-    for (VerifyResult Result : verifyObligations(Module)) {
+    for (VerifyResult Result :
+         verifyObligations(Module, /*StopAtFailure=*/true)) {
       if (Result.Status == VerifyStatus::Verified)
         continue;
       if (Result.Status == VerifyStatus::Unresolved) {
@@ -1218,20 +1714,28 @@ VerifyResult Z3VerifyBackend::verifyModule(const ObligationModule &Module) {
     return finishZ3Result(std::move(SplitResult));
   };
 
+  std::vector<VerifyResult> Results =
+      verifyObligations(Module, /*StopAtFailure=*/true);
+  std::optional<std::vector<std::string>> Unproved =
+      unprovedObligations(Module, Results);
   std::optional<VerifyResult> FirstUnresolved;
-  for (VerifyResult Result : verifyObligations(Module)) {
+  for (VerifyResult &Result : Results) {
     if (Result.Status != VerifyStatus::Verified) {
       if (Result.Status == VerifyStatus::Unresolved) {
         if (!FirstUnresolved)
           FirstUnresolved = std::move(Result);
         continue;
       }
-      return Result;
+      return std::move(Result);
     }
   }
 
-  if (FirstUnresolved)
-    return retryWhole(std::move(*FirstUnresolved));
+  if (FirstUnresolved) {
+    VerifyResult Result = retryWhole(std::move(*FirstUnresolved));
+    if (Result.Status == VerifyStatus::Unresolved)
+      Result.UnprovedObligations = std::move(Unproved);
+    return Result;
+  }
 
   VerifyResult R;
   R.Status = VerifyStatus::Verified;
