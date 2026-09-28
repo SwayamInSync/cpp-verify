@@ -3,6 +3,7 @@
 #include "ObligationSerialization.h"
 #include "ObligationSimplify.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Error.h"
@@ -53,6 +54,12 @@ static std::string smtInteger(llvm::StringRef Value) {
   return "(- " + Value.str() + ")";
 }
 
+static std::string decimalUnsigned(const llvm::APInt &Value) {
+  llvm::SmallString<128> Buffer;
+  Value.toString(Buffer, 10, false);
+  return std::string(Buffer);
+}
+
 static std::string decimalPowerOfTwo(unsigned Exponent) {
   llvm::APInt Value(Exponent + 1, 1);
   Value <<= Exponent;
@@ -63,6 +70,7 @@ static std::string decimalPowerOfTwo(unsigned Exponent) {
 
 class SMTLibEncoder {
   const ObligationModule &Module;
+  const MachineIntegerEncoding Encoding;
   std::map<std::string, LogicSort> FreeVariables;
   std::map<std::string, const LogicFunctionDecl *> UsedFunctions;
   std::vector<std::map<std::string, std::string>> BoundScopes;
@@ -70,6 +78,7 @@ class SMTLibEncoder {
   std::vector<std::string> Axioms;
   uint64_t LocalIndex = 0;
   bool UsesValidPtr = false;
+  bool UsedBitLevelOperation = false;
   bool Failed = false;
   std::string Error;
 
@@ -92,6 +101,8 @@ class SMTLibEncoder {
     case LogicSortKind::Pointer:
       return "Int";
     case LogicSortKind::BitVector:
+      if (integerMode())
+        return "Int";
       return "(_ BitVec " + std::to_string(Sort.BitWidth) + ")";
     case LogicSortKind::Heap:
       return "(Array Int Int)";
@@ -173,6 +184,30 @@ class SMTLibEncoder {
 
   std::string coerce(llvm::StringRef Value, const LogicSort &Source,
                      const LogicSort &Target, bool IsSigned) {
+    if (integerMode()) {
+      if (Target.Kind == LogicSortKind::BitVector) {
+        if (Source.Kind == LogicSortKind::BitVector) {
+          if (Source.BitWidth != Target.BitWidth) {
+            fail("bit-vector coercion changes width");
+            return "false";
+          }
+          return reinterpret(Value, Target.BitWidth, isSignedSort(Source),
+                             isSignedSort(Target));
+        }
+        if (isIntegerSort(Source))
+          return reduce(Value, Target);
+        fail("unsupported SMT-LIB sort coercion");
+        return "false";
+      }
+      if (isIntegerSort(Target) && Source.Kind == LogicSortKind::BitVector)
+        return reinterpret(Value, Source.BitWidth, isSignedSort(Source),
+                           IsSigned);
+      if (Source.Kind == Target.Kind ||
+          (isIntegerSort(Source) && isIntegerSort(Target)))
+        return Value.str();
+      fail("unsupported SMT-LIB sort coercion");
+      return "false";
+    }
     if (Source.Kind == Target.Kind) {
       if (Source.Kind != LogicSortKind::BitVector ||
           Source.BitWidth == Target.BitWidth)
@@ -211,6 +246,293 @@ class SMTLibEncoder {
            " (- " + L + " (* " + Q + " " + R + ")))))";
   }
 
+  bool integerMode() const {
+    return Encoding == MachineIntegerEncoding::Integer;
+  }
+
+  static bool isSignedSort(const LogicSort &Sort) {
+    return Sort.Signedness == LogicSignedness::Signed;
+  }
+
+  /// Bit pattern of a constant machine-integer term.
+  static std::optional<llvm::APInt> machineConstant(const LogicExpr *Expr) {
+    if (!Expr || Expr->Sort.Kind != LogicSortKind::BitVector ||
+        Expr->Sort.BitWidth == 0)
+      return std::nullopt;
+    const unsigned Width = Expr->Sort.BitWidth;
+    auto parse = [Width](llvm::StringRef Decimal) {
+      const unsigned Parsed = std::max<unsigned>(
+          Width, static_cast<unsigned>(Decimal.size()) * 4 + 2);
+      return llvm::APInt(Parsed, Decimal, 10).trunc(Width);
+    };
+    if (Expr->K == LogicExpr::IntLit)
+      return parse(Expr->IntVal);
+    if (Expr->Children.empty() || Expr->Children.size() > 2)
+      return std::nullopt;
+    const LogicExpr *Inner = Expr->Children[0].get();
+    if (Expr->K == LogicExpr::IntToBv)
+      return Inner->K == LogicExpr::IntLit
+                 ? std::optional<llvm::APInt>(parse(Inner->IntVal))
+                 : std::nullopt;
+    std::optional<llvm::APInt> L = machineConstant(Inner);
+    if (!L)
+      return std::nullopt;
+    if (Expr->K == LogicExpr::BvResize)
+      return isSignedSort(Inner->Sort) ? L->sextOrTrunc(Width)
+                                       : L->zextOrTrunc(Width);
+    if (L->getBitWidth() != Width)
+      return std::nullopt;
+    if (Expr->Children.size() == 1) {
+      if (Expr->K == LogicExpr::Neg)
+        return -*L;
+      if (Expr->K == LogicExpr::BitNot)
+        return ~*L;
+      return std::nullopt;
+    }
+    std::optional<llvm::APInt> R = machineConstant(Expr->Children[1].get());
+    if (!R || R->getBitWidth() != Width)
+      return std::nullopt;
+    switch (Expr->K) {
+    case LogicExpr::Add:
+      return *L + *R;
+    case LogicExpr::Sub:
+      return *L - *R;
+    case LogicExpr::Mul:
+      return *L * *R;
+    case LogicExpr::BitAnd:
+      return *L & *R;
+    case LogicExpr::BitOr:
+      return *L | *R;
+    case LogicExpr::BitXor:
+      return *L ^ *R;
+    case LogicExpr::Shl:
+      return R->uge(Width) ? llvm::APInt(Width, 0)
+                           : L->shl(static_cast<unsigned>(R->getZExtValue()));
+    case LogicExpr::Shr:
+      if (!isSignedSort(Expr->Sort))
+        return R->uge(Width)
+                   ? llvm::APInt(Width, 0)
+                   : L->lshr(static_cast<unsigned>(R->getZExtValue()));
+      return L->ashr(static_cast<unsigned>(
+          std::min<uint64_t>(R->getLimitedValue(), Width - 1)));
+    default:
+      return std::nullopt;
+    }
+  }
+
+  std::string machineLiteral(const llvm::APInt &Bits, const LogicSort &Sort) {
+    llvm::SmallString<64> Canonical;
+    Bits.toString(Canonical, 10, isSignedSort(Sort));
+    return smtInteger(Canonical);
+  }
+
+  std::string letBind(llvm::StringRef Value, llvm::StringRef Prefix,
+                      llvm::function_ref<std::string(llvm::StringRef)> Body) {
+    const std::string Local = freshLocal(Prefix);
+    return "(let ((" + Local + " " + Value.str() + ")) " + Body(Local) + ")";
+  }
+
+  std::string machineLiteral(llvm::StringRef Decimal, const LogicSort &Sort) {
+    const unsigned Parsed = std::max<unsigned>(
+        Sort.BitWidth, static_cast<unsigned>(Decimal.size()) * 4 + 2);
+    return machineLiteral(llvm::APInt(Parsed, Decimal, 10).trunc(Sort.BitWidth),
+                          Sort);
+  }
+
+  std::string reduce(llvm::StringRef Value, const LogicSort &Sort) {
+    const std::string Modulus = decimalPowerOfTwo(Sort.BitWidth);
+    if (!isSignedSort(Sort))
+      return "(mod " + Value.str() + " " + Modulus + ")";
+    const std::string Half = decimalPowerOfTwo(Sort.BitWidth - 1);
+    return "(- (mod (+ " + Value.str() + " " + Half + ") " + Modulus + ") " +
+           Half + ")";
+  }
+
+  std::string inRange(llvm::StringRef Value, const LogicSort &Sort) {
+    return letBind(Value, "rng_", [&](llvm::StringRef V) {
+      if (!isSignedSort(Sort))
+        return "(and (<= 0 " + V.str() + ") (< " + V.str() + " " +
+               decimalPowerOfTwo(Sort.BitWidth) + "))";
+      const std::string Half = decimalPowerOfTwo(Sort.BitWidth - 1);
+      return "(and (<= (- " + Half + ") " + V.str() + ") (< " + V.str() + " " +
+             Half + "))";
+    });
+  }
+
+  std::string reinterpret(llvm::StringRef Value, unsigned Width,
+                          bool FromSigned, bool ToSigned) {
+    if (FromSigned == ToSigned)
+      return Value.str();
+    const std::string Modulus = decimalPowerOfTwo(Width);
+    return letBind(Value, "re_", [&](llvm::StringRef V) {
+      if (FromSigned)
+        return "(ite (< " + V.str() + " 0) (+ " + V.str() + " " + Modulus +
+               ") " + V.str() + ")";
+      return "(ite (>= " + V.str() + " " + decimalPowerOfTwo(Width - 1) +
+             ") (- " + V.str() + " " + Modulus + ") " + V.str() + ")";
+    });
+  }
+
+  std::string convertMachine(llvm::StringRef Value, const LogicSort &Source,
+                             const LogicSort &Target) {
+    const bool FromSigned = isSignedSort(Source);
+    const bool ToSigned = isSignedSort(Target);
+    if (Target.BitWidth == Source.BitWidth)
+      return reinterpret(Value, Target.BitWidth, FromSigned, ToSigned);
+    if (Target.BitWidth < Source.BitWidth)
+      return reduce(Value, Target);
+    if (FromSigned && !ToSigned)
+      return letBind(Value, "ext_", [&](llvm::StringRef V) {
+        return "(ite (< " + V.str() + " 0) (+ " + V.str() + " " +
+               decimalPowerOfTwo(Target.BitWidth) + ") " + V.str() + ")";
+      });
+    return Value.str();
+  }
+
+  std::string truncatingDivision(llvm::StringRef Left, llvm::StringRef Right) {
+    const std::string L = freshLocal("tdiv_l_");
+    const std::string R = freshLocal("tdiv_r_");
+    const std::string Magnitude = "(div (abs " + L + ") (abs " + R + "))";
+    return "(let ((" + L + " " + Left.str() + ") (" + R + " " + Right.str() +
+           ")) (ite (= (>= " + L + " 0) (>= " + R + " 0)) " + Magnitude +
+           " (- " + Magnitude + ")))";
+  }
+
+  std::string integerArithmetic(const LogicExpr *Expr, llvm::StringRef Left,
+                                llvm::StringRef Right) {
+    if (std::optional<llvm::APInt> Bits = machineConstant(Expr))
+      return machineLiteral(*Bits, Expr->Sort);
+    const LogicSort &Sort = Expr->Children[0]->Sort;
+    const unsigned Width = Sort.BitWidth;
+    const bool Signed = isSignedSort(Sort);
+    auto toBits = [&](unsigned Index, llvm::StringRef Value) {
+      if (std::optional<llvm::APInt> Bits =
+              machineConstant(Expr->Children[Index].get()))
+        return "(_ bv" + decimalUnsigned(Bits->zextOrTrunc(Width)) + " " +
+               std::to_string(Width) + ")";
+      UsedBitLevelOperation = true;
+      return intToBV(Value, Width);
+    };
+    auto fromBits = [&](llvm::StringRef Bits) {
+      return Signed ? signedBVToInt(Bits, Width) : unsignedBVToInt(Bits);
+    };
+    auto literal = [&](unsigned Index) -> std::optional<llvm::APInt> {
+      std::optional<llvm::APInt> Bits =
+          machineConstant(Expr->Children[Index].get());
+      if (!Bits)
+        return std::nullopt;
+      return Bits->zextOrTrunc(Width);
+    };
+    switch (Expr->K) {
+    case LogicExpr::Add:
+      return reduce("(+ " + Left.str() + " " + Right.str() + ")", Sort);
+    case LogicExpr::Sub:
+      return reduce("(- " + Left.str() + " " + Right.str() + ")", Sort);
+    case LogicExpr::Mul:
+      return reduce("(* " + Left.str() + " " + Right.str() + ")", Sort);
+    case LogicExpr::Div: {
+      const std::string L = freshLocal("idiv_l_");
+      const std::string R = freshLocal("idiv_r_");
+      const std::string Bind = "(let ((" + L + " " + Left.str() + ") (" + R +
+                               " " + Right.str() + ")) ";
+      if (Signed)
+        return Bind + "(ite (= " + R + " 0) (ite (>= " + L + " 0) (- 1) " +
+               machineLiteral("1", Sort) + ") " +
+               reduce(truncatingDivision(L, R), Sort) + "))";
+      return Bind + "(ite (= " + R + " 0) (- " + decimalPowerOfTwo(Width) +
+             " 1) (div " + L + " " + R + ")))";
+    }
+    case LogicExpr::Rem: {
+      const std::string L = freshLocal("irem_l_");
+      const std::string R = freshLocal("irem_r_");
+      const std::string Bind = "(let ((" + L + " " + Left.str() + ") (" + R +
+                               " " + Right.str() + ")) ";
+      if (Signed)
+        return Bind + "(ite (= " + R + " 0) " + L + " (- " + L + " (* " + R +
+               " " + truncatingDivision(L, R) + "))))";
+      return Bind + "(ite (= " + R + " 0) " + L + " (mod " + L + " " + R +
+             ")))";
+    }
+    case LogicExpr::BitAnd: {
+      // x & (2^k - 1) keeps the low k bits: x mod 2^k in either range.
+      for (auto [MaskIndex, Value] :
+           {std::pair{1u, Left}, std::pair{0u, Right}}) {
+        std::optional<llvm::APInt> Mask = literal(MaskIndex);
+        if (!Mask || (Signed && Mask->isNegative()))
+          continue;
+        llvm::APInt Wide = Mask->zext(Width + 1);
+        if ((Wide + 1).isPowerOf2())
+          return "(mod " + Value.str() + " " +
+                 decimalPowerOfTwo((Wide + 1).logBase2()) + ")";
+      }
+      return fromBits("(bvand " + toBits(0, Left) + " " + toBits(1, Right) +
+                      ")");
+    }
+    case LogicExpr::BitOr:
+      return fromBits("(bvor " + toBits(0, Left) + " " + toBits(1, Right) +
+                      ")");
+    case LogicExpr::BitXor:
+      return fromBits("(bvxor " + toBits(0, Left) + " " + toBits(1, Right) +
+                      ")");
+    case LogicExpr::Shl:
+    case LogicExpr::Shr: {
+      std::optional<llvm::APInt> Amount = literal(1);
+      if (!Amount) {
+        const char *Op = Expr->K == LogicExpr::Shl ? "bvshl"
+                         : Signed                  ? "bvashr"
+                                                   : "bvlshr";
+        return fromBits("(" + std::string(Op) + " " + toBits(0, Left) + " " +
+                        toBits(1, Right) + ")");
+      }
+      if (Amount->uge(Width)) {
+        if (Expr->K == LogicExpr::Shl || !Signed)
+          return "0";
+        return "(ite (< " + Left.str() + " 0) (- 1) 0)";
+      }
+      const std::string Scale =
+          decimalPowerOfTwo(static_cast<unsigned>(Amount->getZExtValue()));
+      if (Expr->K == LogicExpr::Shl)
+        return reduce("(* " + Left.str() + " " + Scale + ")", Sort);
+      return "(div " + Left.str() + " " + Scale + ")";
+    }
+    default:
+      fail("unsupported SMT-LIB machine-integer operator");
+      return "0";
+    }
+  }
+
+  std::string integerOverflowCheck(const LogicExpr *Expr) {
+    const LogicSort Checked =
+        LogicSort::bitVector(Expr->Children[0]->Sort.BitWidth, true);
+    std::vector<std::string> Operands;
+    for (const auto &Child : Expr->Children)
+      Operands.push_back(
+          convertMachine(encode(Child.get()), Child->Sort, Checked));
+    if (Expr->OverflowOp == LogicOverflowOp::Neg)
+      return inRange("(- " + Operands[0] + ")", Checked);
+    if (Operands.size() != 2) {
+      fail("binary SMT-LIB overflow predicate is missing an operand");
+      return "false";
+    }
+    switch (Expr->OverflowOp) {
+    case LogicOverflowOp::Add:
+      return inRange("(+ " + Operands[0] + " " + Operands[1] + ")", Checked);
+    case LogicOverflowOp::Sub:
+      return inRange("(- " + Operands[0] + " " + Operands[1] + ")", Checked);
+    case LogicOverflowOp::Mul:
+      return inRange("(* " + Operands[0] + " " + Operands[1] + ")", Checked);
+    case LogicOverflowOp::SignedDiv:
+      return "(not (and (= " + Operands[0] + " (- " +
+             decimalPowerOfTwo(Checked.BitWidth - 1) + ")) (= " + Operands[1] +
+             " (- 1))))";
+    case LogicOverflowOp::Neg:
+      llvm_unreachable("handled above");
+    }
+    llvm_unreachable("unknown overflow operation");
+  }
+
+  /// Pure bit-vector arithmetic: the exact result of sign-extended operands
+  /// fits the signed range. Mixing in integer conversions leaves cvc5 unknown.
   std::string overflowCheck(const LogicExpr *Expr) {
     if (Expr->Children.empty() ||
         Expr->Children[0]->Sort.Kind != LogicSortKind::BitVector) {
@@ -223,30 +545,43 @@ class SMTLibEncoder {
       std::string Value = encode(Child.get());
       Operands.push_back(resizeBV(Value, Child->Sort, Width));
     }
-    const std::string Left = signedBVToInt(Operands[0], Width);
-    const std::string Minimum = "(- " + decimalPowerOfTwo(Width - 1) + ")";
-    auto inRange = [&](llvm::StringRef Value) {
-      return "(and (<= " + Minimum + " " + Value.str() +
-             ") (<= " + Value.str() + " (- " + decimalPowerOfTwo(Width - 1) +
-             " 1)))";
+    auto constant = [](const llvm::APInt &Value, unsigned ToWidth) {
+      return "(_ bv" + decimalUnsigned(Value.sext(ToWidth)) + " " +
+             std::to_string(ToWidth) + ")";
+    };
+    auto inRange = [&](const std::string &Value, unsigned ToWidth) {
+      return "(and (bvsle " +
+             constant(llvm::APInt::getSignedMinValue(Width), ToWidth) + " " +
+             Value + ") (bvsle " + Value + " " +
+             constant(llvm::APInt::getSignedMaxValue(Width), ToWidth) + "))";
+    };
+    auto extend = [](const std::string &Value, unsigned By) {
+      return "((_ sign_extend " + std::to_string(By) + ") " + Value + ")";
     };
     if (Expr->OverflowOp == LogicOverflowOp::Neg)
-      return inRange("(- " + Left + ")");
+      return inRange("(bvneg " + extend(Operands[0], 1) + ")", Width + 1);
     if (Operands.size() != 2) {
       fail("binary SMT-LIB overflow predicate is missing an operand");
       return "false";
     }
-    const std::string Right = signedBVToInt(Operands[1], Width);
     switch (Expr->OverflowOp) {
     case LogicOverflowOp::Add:
-      return inRange("(+ " + Left + " " + Right + ")");
+      return inRange("(bvadd " + extend(Operands[0], 1) + " " +
+                         extend(Operands[1], 1) + ")",
+                     Width + 1);
     case LogicOverflowOp::Sub:
-      return inRange("(- " + Left + " " + Right + ")");
+      return inRange("(bvsub " + extend(Operands[0], 1) + " " +
+                         extend(Operands[1], 1) + ")",
+                     Width + 1);
     case LogicOverflowOp::Mul:
-      return inRange("(* " + Left + " " + Right + ")");
+      return inRange("(bvmul " + extend(Operands[0], Width) + " " +
+                         extend(Operands[1], Width) + ")",
+                     2 * Width);
     case LogicOverflowOp::SignedDiv:
-      return "(not (and (= " + Left + " " + Minimum + ") (= " + Right +
-             " (- 1))))";
+      return "(not (and (= " + Operands[0] + " " +
+             constant(llvm::APInt::getSignedMinValue(Width), Width) +
+             ") (= " + Operands[1] + " " +
+             constant(llvm::APInt::getAllOnes(Width), Width) + ")))";
     case LogicOverflowOp::Neg:
       llvm_unreachable("handled above");
     }
@@ -274,7 +609,9 @@ class SMTLibEncoder {
       return Expr->BoolVal ? "true" : "false";
     case LogicExpr::IntLit:
       if (Expr->Sort.Kind == LogicSortKind::BitVector)
-        return intToBV(smtInteger(Expr->IntVal), Expr->Sort.BitWidth);
+        return integerMode()
+                   ? machineLiteral(Expr->IntVal, Expr->Sort)
+                   : intToBV(smtInteger(Expr->IntVal), Expr->Sort.BitWidth);
       return smtInteger(Expr->IntVal);
     case LogicExpr::Var: {
       if (std::string Bound = boundVariable(Expr->Name); !Bound.empty())
@@ -305,7 +642,7 @@ class SMTLibEncoder {
       const LogicSort &OperandSort = Expr->Children[0]->Sort;
       const bool Signed = OperandSort.Signedness == LogicSignedness::Signed;
       const char *Op = nullptr;
-      if (OperandSort.Kind == LogicSortKind::BitVector) {
+      if (OperandSort.Kind == LogicSortKind::BitVector && !integerMode()) {
         switch (Expr->K) {
         case LogicExpr::Lt:
           Op = Signed ? "bvslt" : "bvult";
@@ -354,6 +691,8 @@ class SMTLibEncoder {
     case LogicExpr::Shr: {
       std::string Left = Child(0);
       std::string Right = Child(1);
+      if (integerMode() && Expr->Sort.Kind == LogicSortKind::BitVector)
+        return integerArithmetic(Expr, Left, Right);
       if (Expr->Sort.Kind != LogicSortKind::BitVector) {
         if (Expr->K == LogicExpr::Div)
           return mathDivision(Left, Right);
@@ -399,12 +738,26 @@ class SMTLibEncoder {
       return "(" + std::string(Op) + " " + Left + " " + Right + ")";
     }
     case LogicExpr::Neg: {
+      if (integerMode())
+        if (std::optional<llvm::APInt> Bits = machineConstant(Expr))
+          return machineLiteral(*Bits, Expr->Sort);
       std::string Value = Child(0);
+      if (integerMode() && Expr->Sort.Kind == LogicSortKind::BitVector)
+        return reduce("(- " + Value + ")", Expr->Sort);
       return Expr->Sort.Kind == LogicSortKind::BitVector
                  ? "(bvneg " + Value + ")"
                  : "(- " + Value + ")";
     }
     case LogicExpr::BitNot:
+      // ~x is -x - 1 on two's-complement bits, which stays in either range.
+      if (integerMode()) {
+        if (std::optional<llvm::APInt> Bits = machineConstant(Expr))
+          return machineLiteral(*Bits, Expr->Sort);
+        return isSignedSort(Expr->Sort)
+                   ? "(- (- " + Child(0) + ") 1)"
+                   : "(- (- " + decimalPowerOfTwo(Expr->Sort.BitWidth) +
+                         " 1) " + Child(0) + ")";
+      }
       return "(bvnot " + Child(0) + ")";
     case LogicExpr::ValidPtr:
       UsesValidPtr = true;
@@ -414,7 +767,8 @@ class SMTLibEncoder {
       if (Expr->Sort.Kind == LogicSortKind::Bool)
         return "(not (= " + Cell + " 0))";
       if (Expr->Sort.Kind == LogicSortKind::BitVector)
-        return intToBV(Cell, Expr->Sort.BitWidth);
+        return integerMode() ? reduce(Cell, Expr->Sort)
+                             : intToBV(Cell, Expr->Sort.BitWidth);
       return Cell;
     }
     case LogicExpr::Store: {
@@ -423,7 +777,9 @@ class SMTLibEncoder {
       if (ValueSort.Kind == LogicSortKind::Bool)
         Value = "(ite " + Value + " 1 0)";
       else if (ValueSort.Kind == LogicSortKind::BitVector)
-        Value = unsignedBVToInt(Value);
+        Value = integerMode() ? reinterpret(Value, ValueSort.BitWidth,
+                                            isSignedSort(ValueSort), false)
+                              : unsignedBVToInt(Value);
       return "(= " + Child(3) + " (store " + Child(0) + " " + Child(1) + " " +
              Value + "))";
     }
@@ -445,16 +801,37 @@ class SMTLibEncoder {
       return "(exists ((" + Binder + " Int)) (and " + Range + " " + Body + "))";
     }
     case LogicExpr::IntToBv:
+      if (integerMode()) {
+        if (std::optional<llvm::APInt> Bits = machineConstant(Expr))
+          return machineLiteral(*Bits, Expr->Sort);
+        return reduce(Child(0), Expr->Sort);
+      }
       return intToBV(Child(0), Expr->Sort.BitWidth);
     case LogicExpr::BvToInt: {
+      // The canonical integer already is the value under its signedness.
+      if (integerMode())
+        return Child(0);
       const LogicSort &Source = Expr->Children[0]->Sort;
       return Source.Signedness == LogicSignedness::Signed
                  ? signedBVToInt(Child(0), Source.BitWidth)
                  : unsignedBVToInt(Child(0));
     }
     case LogicExpr::BvResize:
+      if (integerMode()) {
+        if (std::optional<llvm::APInt> Bits = machineConstant(Expr))
+          return machineLiteral(*Bits, Expr->Sort);
+        return convertMachine(Child(0), Expr->Children[0]->Sort, Expr->Sort);
+      }
       return resizeBV(Child(0), Expr->Children[0]->Sort, Expr->Sort.BitWidth);
     case LogicExpr::NoOverflow:
+      if (integerMode()) {
+        if (Expr->Children.empty() ||
+            Expr->Children[0]->Sort.Kind != LogicSortKind::BitVector) {
+          fail("malformed SMT-LIB overflow predicate");
+          return "false";
+        }
+        return integerOverflowCheck(Expr);
+      }
       return overflowCheck(Expr);
     case LogicExpr::SpecCall: {
       auto It = Module.LogicFunctions.find(Expr->SpecCallee);
@@ -475,6 +852,9 @@ class SMTLibEncoder {
       }
       if (!Expr->Children.empty())
         Application += ")";
+      // Keep an opaque machine-sorted application in range, as in Z3.
+      if (integerMode() && Function.ResultSort.Kind == LogicSortKind::BitVector)
+        Application = reduce(Application, Function.ResultSort);
       return coerce(Application, Function.ResultSort, Expr->Sort,
                     Function.ResultSort.Signedness == LogicSignedness::Signed);
     }
@@ -542,7 +922,10 @@ class SMTLibEncoder {
   }
 
 public:
-  explicit SMTLibEncoder(const ObligationModule &Module) : Module(Module) {}
+  SMTLibEncoder(const ObligationModule &Module, MachineIntegerEncoding Encoding)
+      : Module(Module), Encoding(Encoding) {}
+
+  bool usedBitLevelOperation() const { return UsedBitLevelOperation; }
 
   llvm::Expected<std::string> run(const LogicExpr *Query) {
     if (!Query)
@@ -564,6 +947,11 @@ public:
     for (const auto &[Name, VariableSort] : FreeVariables)
       Out << "(declare-fun " << smtSymbol("v_", Name) << " () "
           << sort(VariableSort) << ")\n";
+    if (integerMode())
+      for (const auto &[Name, VariableSort] : FreeVariables)
+        if (VariableSort.Kind == LogicSortKind::BitVector)
+          Out << "(assert " << inRange(smtSymbol("v_", Name), VariableSort)
+              << ")\n";
     if (UsesValidPtr)
       Out << "(declare-fun p_valid (Int) Bool)\n";
     for (const auto &[Identity, Function] : UsedFunctions) {
@@ -732,7 +1120,8 @@ static bool solverOutputWithinLimit(llvm::StringRef OutputPath,
 
 llvm::Expected<std::string>
 verify::encodeSMTLibQuery(const ObligationModule &Module,
-                          const LogicExpr *Query) {
+                          const LogicExpr *Query,
+                          MachineIntegerEncoding Encoding) {
   auto Features = validateObligationModule(Module);
   if (!Features)
     return Features.takeError();
@@ -740,7 +1129,13 @@ verify::encodeSMTLibQuery(const ObligationModule &Module,
     return llvm::createStringError(
         llvm::inconvertibleErrorCode(),
         "obligation feature declaration does not match validated contents");
-  return SMTLibEncoder(Module).run(Query);
+  if (Encoding != MachineIntegerEncoding::Auto)
+    return SMTLibEncoder(Module, Encoding).run(Query);
+  SMTLibEncoder Integer(Module, MachineIntegerEncoding::Integer);
+  llvm::Expected<std::string> Script = Integer.run(Query);
+  if (!Script || !Integer.usedBitLevelOperation())
+    return Script;
+  return SMTLibEncoder(Module, MachineIntegerEncoding::BitVector).run(Query);
 }
 
 VerifyResult
@@ -751,7 +1146,8 @@ verify::lowerSMTLibModule(const ObligationModule &Module,
       querySizeLimitResult(Module, Execution.MaxQueryNodes, "cvc5");
   if (Limited.Reason != VerifyReason::None)
     return Limited;
-  auto Script = encodeSMTLibQuery(Module, Module.CounterexampleQuery.get());
+  auto Script = encodeSMTLibQuery(Module, Module.CounterexampleQuery.get(),
+                                  Execution.IntegerEncoding);
   if (!Script) {
     VerifyResult Result;
     Result.Status = VerifyStatus::Unresolved;
@@ -771,7 +1167,8 @@ verify::lowerSMTLibModule(const ObligationModule &Module,
 CVC5VerifyBackend::CVC5VerifyBackend(const BackendExecutionOptions &Execution)
     : TimeoutMs(Execution.SolverTimeoutMs),
       ResourceLimit(Execution.SolverResourceLimit), Jobs(Execution.Jobs),
-      MaxQueryNodes(Execution.MaxQueryNodes) {
+      MaxQueryNodes(Execution.MaxQueryNodes),
+      IntegerEncoding(Execution.IntegerEncoding) {
   llvm::StringRef Requested = Execution.CVC5Path.empty()
                                   ? llvm::StringRef("cvc5")
                                   : llvm::StringRef(Execution.CVC5Path);
@@ -796,7 +1193,7 @@ VerifyResult CVC5VerifyBackend::verifyQuery(const ObligationModule &Module,
     Result.Message = SolverPathError;
     return Result;
   }
-  auto Script = encodeSMTLibQuery(Module, Query);
+  auto Script = encodeSMTLibQuery(Module, Query, IntegerEncoding);
   if (!Script) {
     Result.Status = VerifyStatus::Unresolved;
     Result.Reason = VerifyReason::EncodingFailure;

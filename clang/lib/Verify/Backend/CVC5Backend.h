@@ -12,7 +12,8 @@ namespace verify {
 
 /// Encode one canonical query as a standalone SMT-LIB2 script.
 llvm::Expected<std::string> encodeSMTLibQuery(const ObligationModule &Module,
-                                              const LogicExpr *Query);
+                                              const LogicExpr *Query,
+                                              MachineIntegerEncoding Encoding);
 
 VerifyResult lowerSMTLibModule(const ObligationModule &Module,
                                llvm::raw_ostream *SMTLibOut = nullptr,
@@ -25,6 +26,7 @@ class CVC5VerifyBackend : public VerifyBackend {
   unsigned ResourceLimit;
   unsigned Jobs;
   uint64_t MaxQueryNodes;
+  MachineIntegerEncoding IntegerEncoding;
 
   VerifyResult verifyQuery(const ObligationModule &Module,
                            const LogicExpr *Query) const;
