@@ -272,6 +272,8 @@ class OwnedReturnAnalyzer {
                                single(std::move(Path)));
     case VStmt::While:
     case VStmt::Havoc:
+    case VStmt::Break:
+    case VStmt::Continue:
       Invalid = true;
       return {};
     case VStmt::Assert:
