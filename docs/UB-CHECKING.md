@@ -74,14 +74,14 @@ additive insertion points:
 ```
    Layer-1 VFunction
           │
-          ├─ --check-ub + Z3
+          ├─ --check-ub
           │    instrumentUBChecks()
           │    - discover valid(p, n) before spec inlining
           │    - add extent semantics and indexed-access bounds asserts
           │
           ▼
    passivization, in C++ evaluation order
-          safetyForExpr()
+          collectSafety()
           - arithmetic/division/shift definedness
           - non-null abstract-valid loads and stores
           - path-sensitive lifted-constexpr definedness
@@ -108,7 +108,11 @@ adds these semantics before the intentionally trivial body can inline to
 - `n >= 0`;
 - `n == 0` permits a null pointer;
 - `n > 0` requires `p != nullptr` and the abstract pointer-validity predicate;
-- every `p[i]` or `*(p + i)` access must prove `0 <= i && i < n`.
+- every `p[i]` or `*(p + i)` access must prove `0 <= i && i < n`;
+- the extent is the pointer's complete object for the implicit non-aliasing
+  default: a separated address-parameter pair is disjoint over whole extents
+  unless either pointer is null or either extent is empty, and callers prove
+  it. `aliases` pairs are not widened.
 
 An access through a base with no declared extent still receives the mandatory
 non-null/abstract-valid dereference check, but no size claim is invented.
@@ -181,8 +185,8 @@ rely on them are outside the verified subset:
 - Core expression safety applies to exec and `proof` functions; mathematical
   `spec` functions are total and are never instrumented for machine UB.
 - **`cpp-verify --check-ub`** additionally enables buffer extent discovery and
-  bounds obligations. That extent feature currently runs only on the Z3
-  backend and has no `clang++` driver spelling yet.
+  bounds obligations on every backend. It adds no second copy of the core
+  checks, and it has no `clang++` driver spelling yet.
 - Omitting `--check-ub` does **not** disable overflow, division, shift, or
   dereference checks. It only means the verifier has no declared buffer length
   from which to prove indexed bounds.
@@ -190,8 +194,8 @@ rely on them are outside the verified subset:
 ## How to add a new check (the recipe)
 
 1. If the check is local to one evaluated expression, add it to
-   `safetyForExpr` so it follows short-circuit, branch, loop, and early-return
-   guards automatically.
+   `collectSafety` under its obligation kind so it follows short-circuit,
+   branch, loop, and early-return guards automatically.
 2. If the check needs function-wide metadata such as a declared extent, collect
    that metadata before spec preparation and inject guarded `VExpr` assertions
    in `instrumentUBChecks`.
