@@ -241,6 +241,18 @@ if (cond) {                        // 4. if loop continues:
 }
 ```
 
+**Loop exits.** A `break` or `return` inside the body leaves from the
+inductive iteration: its path guard is recorded and the path ends. After the
+loop the continuation assumes `(¬choice ∧ ¬cond) ∨ break₁ ∨ … ∨ return₁ ∨ …`.
+Because every later state version equals its predecessor on an ended path,
+each variable changed by the body merges as `choice ? v_end : v_head`, which
+is the exit state on break and return paths. Return paths then leave the active
+guard, so the function-end postcondition check sees them in their return
+state. A `continue` asserts the invariant and the measure decrease in its own
+state and ends the path; the frontend emits a `for` increment before it. BMC
+unrolling lowers `break` and `continue` to flag assignments that guard the
+remaining statements and the next iteration.
+
 **Function calls → assert precondition, havoc modifies, assume postcondition:**
 ```
 // y = foo(x)  where foo has pre(P) modifies(M) post(Q)
@@ -284,9 +296,9 @@ After Layer 2 transformation, there are no loops or function calls left — only
 |---|---|
 | Bool | `Bool` |
 | Int32(Math), Int64(Math), ... | `Int` |
-| Int32(Machine), Int64(Machine), ... | `BitVec(N)` |
+| Int32(Machine), Int64(Machine), ... | `BitVec(N)`, or range-checked `Int` (see below) |
 | UInt32(Math), UInt64(Math), ... | `Int` with `≥ 0` invariant |
-| UInt32(Machine), UInt64(Machine), ... | `BitVec(N)` |
+| UInt32(Machine), UInt64(Machine), ... | `BitVec(N)`, or range-checked `Int` (see below) |
 | Struct | Flattened: each supported field becomes a separate typed Z3 constant |
 | Ptr | `Int` (mathematical abstract address) |
 | Heap | `Array(Int, Int)` with typed load/store conversions at the boundary |
@@ -303,12 +315,59 @@ After Layer 2 transformation, there are no loops or function calls left — only
 | Old(*p) | `(select mem_0 p_entry)` |
 | Result | `result_var` (SSA version of return value) |
 
+### Machine-integer encodings
+
+A `BitVector(N)` logic sort fixes the C++ meaning of a machine value; each SMT
+adapter chooses how the solver represents it (`--int-encoding`). Every choice is
+exact, so a decided verdict or counterexample never depends on it.
+
+| Encoding | Representation |
+|---|---|
+| `bitvector` | `BitVec(N)` with SMT-LIB bit-vector operators |
+| `integer` | `Int` holding the canonical value in the sort's signed or unsigned range |
+| `auto` (default) | `integer` for a query unless it needs the bits of a non-constant operand, then `bitvector` |
+
+In the integer encoding each free machine variable has a range fact
+(`-2^(N-1) <= x < 2^(N-1)` or `0 <= x < 2^N`) asserted beside the goal, and
+every operation stays in range by construction:
+
+- `+`, `-`, `*`, unary `-`, truncation, and mathematical-to-machine conversion
+  reduce modulo `2^N` (`mod(x + 2^(N-1), 2^N) - 2^(N-1)` when signed);
+- `/` and `%` truncate toward zero and follow the SMT-LIB zero-divisor extension
+  of the bit-vector encoding (`bvsdiv x 0` is `-1` or `1`, `bvudiv x 0` is all
+  ones, and both remainders are the dividend);
+- same-width signedness changes and extensions are `ite` reinterpretations,
+  `~x` is `-x - 1` (or `2^N - 1 - x`), `x & (2^k - 1)` is `mod(x, 2^k)`, and a
+  constant shift multiplies or floor-divides by `2^k`;
+- other bitwise operators and symbolic shifts need operand bits. Z3 names a
+  ground operand by a fresh bit-vector `b` defined by `bv2int(b) == x`, guarded
+  by the operand sort's range so that it can never make a query vacuous; an
+  operand that mentions a quantifier binder, and every cvc5 operand, uses
+  `int2bv`. A shift amount is read in its own sort;
+- signed-overflow predicates compare the exact mathematical result with the
+  signed range;
+- heap cells hold the unsigned bit pattern, exactly as in the bit-vector
+  encoding, and a typed load reduces the cell into the load's sort;
+- an opaque machine-sorted spec application is reduced into its sort's range.
+
+Range facts make Z3 assign every machine variable. Counterexample extraction
+therefore reports a variable as undetermined (`<unknown>`) when the goal and
+spec equations still evaluate to true with it, and every variable freed before
+it, replaced by an unassigned symbol. Layer 4 dumps print the range facts and
+bit-vector definitions before the goal.
+
 **Spec functions → finite call-site equations:** each referenced `spec` call
 becomes an SMT function application plus a defining equation specialized to
 that call's actual arguments. Nonrecursive specs are normally inlined before
 this stage. Recursive definitions default to one unfolding step and retain
 residual applications; `reveal_with_fuel` raises the finite depth. CppVerify
 does not install a universal self-triggering recursive axiom.
+
+**Heap-reading specs:** a spec that reads memory, directly or through another
+spec, becomes a logical function with a leading `__spec_heap` parameter of sort
+`Heap`; its definitions read through that parameter. Each call site passes the
+heap version passivization resolves for it, exactly as for a load, and
+modules containing such functions require the `heap-functions` logic feature.
 
 **`recommends`:** parsed and stored; not emitted into the main VC. On verification failure, a second pass adds `recommends` checks and reports violations as warnings.
 
@@ -367,6 +426,6 @@ example.cpp:20:9: error: postcondition may not hold
 | Symbolic execution | New backend forking at branches, collecting path constraints |
 | Separation-logic mode | New heap representation with explicit ownership predicates; alternative to the current array model |
 | std::vector | Abstract model: Array + length in Layer 1, Z3 array theory |
-| Overflow checking | Switch Z3 encoder to BitVec mode globally via `--bv`; Cast nodes already carry from/to types |
+| Machine-integer encodings | New `MachineIntegerEncoding` value; each adapter owns its representation (`integer`, `bitvector`, and `auto` exist) |
 | Concurrency | Extend IR with atomic statements, add happens-before encoding |
 | Unbounded quantifiers + manual triggers | Extend Forall/Exists with optional trigger sets; encoder honours them |
