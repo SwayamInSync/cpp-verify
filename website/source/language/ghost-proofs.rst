@@ -37,6 +37,39 @@ functions. Their loops require ``decreases`` just like recursive proof calls.
      recommends(b != 0)
    { return a / b; }
 
+Specs that read memory
+----------------------
+
+A ``spec`` may read memory through its pointer parameters, for example to
+specify a reduction. It must not write memory. The verifier evaluates each call
+in the heap state a load at that point would read: the current state, the
+entry state inside ``old(...)``, and the call-site state when a callee contract
+is instantiated.
+
+.. code-block:: cpp
+
+   spec int sum(const int* p, int n) decreases(n)
+   { if (n <= 0) return 0; return sum(p, n - 1) + p[n - 1]; }
+
+   int total(const int* p, int n)
+     pre(n >= 0 && n <= 1000 && valid(p, n))
+     pre(forall(j, 0, n, -1000 <= p[j] && p[j] <= 1000))
+     post(result == sum(p, n))
+   {
+     int acc = 0, i = 0;
+     while (i < n)
+       invariant(0 <= i && i <= n && acc == sum(p, i))
+       invariant(-1000 * i <= acc && acc <= 1000 * i)
+       decreases(n - i)
+     { acc = acc + p[i]; i = i + 1; }
+     return acc;
+   }
+
+A heap-reading spec has no ``reads`` frame yet: after a write, the verifier
+relates the new value to the old one only by unfolding the definition, so a
+symbolic-length reduction is not automatically preserved across unrelated
+writes.
+
 Opacity and fuel
 ----------------
 
