@@ -20,7 +20,10 @@ enum class VerifyStatus {
   Unresolved,
   BoundedSafe,
   Exported,
-  Certified
+  Certified,
+  /// Every obligation is proved: some by a solver backend, the rest by
+  /// kernel-checked Lean proofs.
+  MixedProof
 };
 
 /// Stable, backend-independent explanation for a non-success result. The
@@ -75,6 +78,17 @@ struct VerifyTraceEvent {
   std::vector<VerifyTraceValue> Values;
 };
 
+/// How a Lean fallback divides a module's obligations.
+struct ProofEvidence {
+  /// The backend whose individual proofs cover the obligations not in Lean.
+  std::string Solver;
+  size_t Total = 0;
+  /// Obligations the solver proved individually, when it checked each one.
+  std::optional<size_t> SolverProved;
+  /// Public IDs of the obligations exported to Lean.
+  std::vector<std::string> LeanObligations;
+};
+
 struct VerifyResult {
   VerifyStatus Status = VerifyStatus::Unresolved;
   VerifyReason Reason = VerifyReason::None;
@@ -95,6 +109,10 @@ struct VerifyResult {
   uint64_t ReusedQueries = 0;
   /// Bounds actually explored by an incremental BMC source run.
   std::vector<unsigned> ExploredBounds;
+  /// For an Unresolved module, the internal IDs of the obligations not proved
+  /// individually; absent when the backend did not check each one.
+  std::optional<std::vector<std::string>> UnprovedObligations;
+  std::optional<ProofEvidence> Evidence;
 };
 
 struct BackendCapabilities {
@@ -115,6 +133,19 @@ protected:
 
 enum class BackendKind { Z3, Lean, BMC, CVC5, Portfolio };
 
+/// Solver representation of C++ machine integers. Every choice is exact.
+enum class MachineIntegerEncoding {
+  /// Integer unless the query needs the bits of a non-constant operand.
+  Auto,
+  /// The value in the sort's range; operations reduce modulo 2^w.
+  Integer,
+  BitVector
+};
+
+llvm::StringRef machineIntegerEncodingName(MachineIntegerEncoding Encoding);
+std::optional<MachineIntegerEncoding>
+parseMachineIntegerEncoding(llvm::StringRef Name);
+
 struct BackendExecutionOptions {
   unsigned SolverTimeoutMs = 0;
   /// Per-query deterministic solver resource limit; 0 disables it.
@@ -123,6 +154,7 @@ struct BackendExecutionOptions {
   unsigned Jobs = 1;
   /// Maximum canonical expression nodes in a module; 0 disables it.
   uint64_t MaxQueryNodes = 0;
+  MachineIntegerEncoding IntegerEncoding = MachineIntegerEncoding::Auto;
   /// Do not retry a whole-module query after individual obligations are
   /// unresolved. Interactive fallback backends can consume those unresolved
   /// obligations without spending a second whole-module timeout budget.

@@ -8,41 +8,22 @@
 using namespace clang;
 using namespace verify;
 
+VerifyResult LeanVerifyBackend::verifyModule(const ObligationModule &Module) {
+  VerifyResult R;
+  if (!Out) {
+    R.Status = VerifyStatus::Unresolved;
+    R.Reason = VerifyReason::LeanExportFailure;
+    R.Message = "no lean output stream";
+    return R;
+  }
+  VerifyResult Result = exportLeanScratchPad(
+      Module, *Out, !PreambleEmitted, EmittedFunctions, EmittedTheorems,
+      ++ModuleIndex, ProjectGoals, Selection ? &*Selection : nullptr);
+  PreambleEmitted = true;
+  return Result;
+}
+
 namespace {
-class LeanVerifyBackend : public VerifyBackend {
-  llvm::raw_ostream *Out;
-  bool PreambleEmitted = false;
-  std::set<std::string> EmittedFunctions;
-  std::set<std::string> EmittedTheorems;
-  unsigned ModuleIndex = 0;
-  std::vector<std::string> *ProjectGoals;
-
-public:
-  LeanVerifyBackend(llvm::raw_ostream *OS,
-                    std::vector<std::string> *ProjectGoals)
-      : Out(OS), ProjectGoals(ProjectGoals) {}
-  llvm::StringRef getName() const override { return "lean"; }
-  BackendCapabilities getCapabilities() const override {
-    return {allLogicFeatures(), false};
-  }
-
-protected:
-  VerifyResult verifyModule(const ObligationModule &Module) override {
-    VerifyResult R;
-    if (!Out) {
-      R.Status = VerifyStatus::Unresolved;
-      R.Reason = VerifyReason::LeanExportFailure;
-      R.Message = "no lean output stream";
-      return R;
-    }
-    VerifyResult Result =
-        exportLeanScratchPad(Module, *Out, !PreambleEmitted, EmittedFunctions,
-                             EmittedTheorems, ++ModuleIndex, ProjectGoals);
-    PreambleEmitted = true;
-    return Result;
-  }
-};
-
 class BMCVerifyBackend : public VerifyBackend {
   std::unique_ptr<Z3VerifyBackend> Z3;
   unsigned MaxUnrollBound;
@@ -165,6 +146,8 @@ class PortfolioVerifyBackend : public VerifyBackend {
       return "exported";
     case VerifyStatus::Certified:
       return "certified";
+    case VerifyStatus::MixedProof:
+      return "mixed-proof";
     }
     return "invalid";
   }
@@ -259,6 +242,19 @@ protected:
     std::optional<VerifyResult> FirstDisagreement;
     std::optional<VerifyResult> FirstFailure;
     std::optional<VerifyResult> FirstUnresolved;
+    std::optional<std::vector<std::string>> Unproved;
+    if (Z3Results.size() == Module.Obligations.size()) {
+      Unproved.emplace();
+      for (size_t I = 0; I != Z3Results.size(); ++I) {
+        if (Z3Results[I].ObligationId != CVC5Results[I].ObligationId) {
+          Unproved.reset();
+          break;
+        }
+        if (Z3Results[I].Status != VerifyStatus::Verified ||
+            CVC5Results[I].Status != VerifyStatus::Verified)
+          Unproved->push_back(Module.Obligations[I].Id);
+      }
+    }
     for (size_t I = 0; I != Z3Results.size(); ++I) {
       VerifyResult &Z3Result = Z3Results[I];
       VerifyResult &CVC5Result = CVC5Results[I];
@@ -333,6 +329,8 @@ protected:
       Result = std::move(*FirstUnresolved);
     else
       Result.Status = VerifyStatus::Verified;
+    if (Result.Status == VerifyStatus::Unresolved)
+      Result.UnprovedObligations = std::move(Unproved);
     Result.BackendName = "portfolio";
     Result.CacheHits = CacheHits;
     Result.CacheMisses = CacheMisses;
@@ -343,6 +341,30 @@ protected:
   }
 };
 } // namespace
+
+llvm::StringRef
+verify::machineIntegerEncodingName(MachineIntegerEncoding Encoding) {
+  switch (Encoding) {
+  case MachineIntegerEncoding::Auto:
+    return "auto";
+  case MachineIntegerEncoding::Integer:
+    return "integer";
+  case MachineIntegerEncoding::BitVector:
+    return "bitvector";
+  }
+  llvm_unreachable("unknown machine-integer encoding");
+}
+
+std::optional<MachineIntegerEncoding>
+verify::parseMachineIntegerEncoding(llvm::StringRef Name) {
+  if (Name == "auto")
+    return MachineIntegerEncoding::Auto;
+  if (Name == "integer")
+    return MachineIntegerEncoding::Integer;
+  if (Name == "bitvector")
+    return MachineIntegerEncoding::BitVector;
+  return std::nullopt;
+}
 
 llvm::StringRef verify::verifyReasonCode(VerifyReason Reason) {
   switch (Reason) {
