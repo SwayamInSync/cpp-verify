@@ -115,10 +115,10 @@ class SpecInlinerImpl {
     Args.reserve(C.Args.size());
     for (const auto &Arg : C.Args)
       Args.push_back(cloneVExpr(Arg.get()));
-    return atCallSite(
-        std::make_unique<VSpecCallExpr>(C.Callee, C.CalleeIdentity,
-                                        std::move(Args), C.Ty, C.Loc),
-        C);
+    return atCallSite(std::make_unique<VSpecCallExpr>(
+                          C.Callee, C.CalleeIdentity, std::move(Args), C.Ty,
+                          C.Loc, C.ReadsHeap, C.HeapVar),
+                      C);
   }
 
   static void
@@ -332,6 +332,8 @@ public:
       case VStmt::RevealWithFuel:
       case VStmt::HideSpec:
       case VStmt::RevealSpec:
+      case VStmt::Break:
+      case VStmt::Continue:
         break;
       }
     }
@@ -491,6 +493,8 @@ public:
       case VStmt::RevealWithFuel:
       case VStmt::HideSpec:
       case VStmt::RevealSpec:
+      case VStmt::Break:
+      case VStmt::Continue:
         break;
       }
     }
@@ -571,7 +575,7 @@ public:
         Args.push_back(std::move(Evaluated));
       }
       VSpecCallExpr EvaluatedCall(C->Callee, C->CalleeIdentity, std::move(Args),
-                                  C->Ty, C->Loc);
+                                  C->Ty, C->Loc, C->ReadsHeap, C->HeapVar);
       return inlineSpecCall(EvaluatedCall);
     }
     case VExpr::Forall:
@@ -592,9 +596,55 @@ public:
           Q->Binder, std::move(Lo), std::move(Hi), std::move(Body), Q->Loc,
           Q->BinderType));
     }
-    default:
-      return cloneVExpr(E);
+    case VExpr::Load: {
+      const auto *L = static_cast<const VLoadExpr *>(E);
+      auto Ptr = evalExpr(L->Ptr.get(), Env);
+      if (!Ptr)
+        return nullptr;
+      std::unique_ptr<VExpr> Condition;
+      if (L->AccessCondition) {
+        Condition = evalExpr(L->AccessCondition.get(), Env);
+        if (!Condition)
+          return nullptr;
+      }
+      return std::make_unique<VLoadExpr>(std::move(Ptr), L->Ty, L->Loc,
+                                         L->HeapVar, std::move(Condition));
     }
+    case VExpr::FieldAccess: {
+      const auto *F = static_cast<const VFieldAccessExpr *>(E);
+      if (F->Base->K == VExpr::Var) {
+        const std::string Flattened =
+            static_cast<const VVarExpr *>(F->Base.get())->Name + "." + F->Field;
+        if (auto It = Env.find(Flattened); It != Env.end())
+          return cloneVExpr(It->second.get());
+      }
+      auto Base = evalExpr(F->Base.get(), Env);
+      if (!Base)
+        return nullptr;
+      return std::make_unique<VFieldAccessExpr>(std::move(Base), F->Field,
+                                                F->Ty, F->Loc);
+    }
+    // Caller-context call arguments contain these.
+    case VExpr::Result:
+      return cloneVExpr(E);
+    case VExpr::Old: {
+      const auto *O = static_cast<const VOldExpr *>(E);
+      auto Inner = evalExpr(O->Inner.get(), Env);
+      if (!Inner)
+        return nullptr;
+      return std::make_unique<VOldExpr>(std::move(Inner), O->Ty, O->Loc);
+    }
+    case VExpr::HeapStore: {
+      const auto *H = static_cast<const VHeapStoreExpr *>(E);
+      auto Ptr = evalExpr(H->Ptr.get(), Env);
+      auto Val = evalExpr(H->Val.get(), Env);
+      if (!Ptr || !Val)
+        return nullptr;
+      return std::make_unique<VHeapStoreExpr>(
+          H->HeapBefore, H->HeapAfter, std::move(Ptr), std::move(Val), H->Loc);
+    }
+    }
+    return nullptr;
   }
 
   std::unique_ptr<VExpr>
@@ -879,9 +929,9 @@ std::unique_ptr<VExpr> SpecInliner::unfoldDefinition(
   for (const auto &P : Spec.Params)
     Args.push_back(
         std::make_unique<VVarExpr>(P.first, P.second, SourceLocation()));
-  auto Call =
-      std::make_unique<VSpecCallExpr>(Spec.Name, Spec.Identity, std::move(Args),
-                                      Spec.ReturnType, SourceLocation());
+  auto Call = std::make_unique<VSpecCallExpr>(Spec.Name, Spec.Identity,
+                                              std::move(Args), Spec.ReturnType,
+                                              SourceLocation(), Spec.ReadsHeap);
   std::map<std::string, unsigned> Fuel = FuelMap;
   Fuel[Spec.Identity] = RootFuel;
   SpecInlinerImpl Impl(FnMap, Fuel, Hidden, Revealed);
@@ -1032,6 +1082,8 @@ collectSpecCallsInStmts(const std::vector<std::unique_ptr<VStmt>> &Stmts,
     case VStmt::RevealWithFuel:
     case VStmt::HideSpec:
     case VStmt::RevealSpec:
+    case VStmt::Break:
+    case VStmt::Continue:
       break;
     }
   }
@@ -1131,7 +1183,8 @@ std::unique_ptr<VExpr> verify::substParamsInExpr(
     for (const auto &Arg : C->Args)
       Args.push_back(substParamsInExpr(Arg.get(), Map));
     return std::make_unique<VSpecCallExpr>(C->Callee, C->CalleeIdentity,
-                                           std::move(Args), C->Ty, C->Loc);
+                                           std::move(Args), C->Ty, C->Loc,
+                                           C->ReadsHeap, C->HeapVar);
   }
   case VExpr::OverflowCheck: {
     const auto *O = static_cast<const VOverflowCheckExpr *>(E);
@@ -1262,6 +1315,8 @@ collectRecursiveCalls(const std::vector<std::unique_ptr<VStmt>> &Stmts,
         break;
       }
       case VStmt::While:
+      case VStmt::Break:
+      case VStmt::Continue:
         Unsupported = true;
         NextStates.push_back(std::move(State));
         break;
@@ -1639,6 +1694,7 @@ PassiveProgram verify::buildDecreasesChecks(const VFunction &Fn,
     Obligation = cloneAtEntryState(Obligation.get());
     auto PS = std::make_unique<PassiveStmt>();
     PS->K = PassiveStmt::Assert;
+    PS->ProofKind = ProofObligationKind::Termination;
     PS->Cond = std::move(Obligation);
     P.Stmts.push_back(std::move(PS));
   };
@@ -1652,6 +1708,7 @@ PassiveProgram verify::buildDecreasesChecks(const VFunction &Fn,
   if (UnsupportedSpecRecursion || UnsupportedExecRecursion) {
     auto PS = std::make_unique<PassiveStmt>();
     PS->K = PassiveStmt::Assert;
+    PS->ProofKind = ProofObligationKind::Unsupported;
     PS->Cond = std::make_unique<VLiteralExpr>(false, VType::makeBool(),
                                               Fn.Decreases.front()->Loc);
     P.Stmts.push_back(std::move(PS));
