@@ -17,7 +17,7 @@ int underdetermined_model(int value, bool take_value)
 // JSON: "model":[
 // JSON-SAME: {"name":"value","sort":"i32"
 // JSON-SAME: "ssa_name":"value_0","value":null}
-// JSON-SAME: "obligation":{"id":"{{.*}}::postcondition@{{[0-9]+}}:{{[0-9]+}}#2"
+// JSON-SAME: "obligation":{"id":"{{.*}}::postcondition@{{[0-9]+}}:{{[0-9]+}}","kind":"postcondition"
 // JSON-SAME: "source":{"column":8,"end_column":39,"end_line":8
 // JSON-SAME: "reason":"counterexample"
 // JSON-SAME: "schema":"cppverify.diagnostic/1"
