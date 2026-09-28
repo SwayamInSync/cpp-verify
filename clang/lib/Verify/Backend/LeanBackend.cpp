@@ -400,13 +400,16 @@ static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
       });
     }
     break;
+  // Parenthesized: `f -x y` would parse as a subtraction.
   case VCExpr::Neg:
-    OS << "-";
+    OS << "(-";
     printVCExprLean(E->Children[0].get(), OS, 9);
+    OS << ")";
     break;
   case VCExpr::BitNot:
-    OS << "~~~";
+    OS << "(~~~";
     printVCExprLean(E->Children[0].get(), OS, 9);
+    OS << ")";
     break;
   case VCExpr::ValidPtr:
     OS << "(validPtr ";
@@ -597,18 +600,6 @@ static void printLeanFlattened(const LogicExpr *Expression,
   LeanTemporaryNames.clear();
 }
 
-static const char *leanObligationKind(ObligationKind Kind) {
-  switch (Kind) {
-  case ObligationKind::Assertion:
-    return "assertion";
-  case ObligationKind::Postcondition:
-    return "postcondition";
-  case ObligationKind::Unwinding:
-    return "unwinding";
-  }
-  return "assertion";
-}
-
 static void collectLeanSpecCalls(const LogicExpr *Expression,
                                  std::vector<const LogicExpr *> &Calls) {
   if (!Expression)
@@ -767,7 +758,8 @@ VerifyResult verify::exportLeanScratchPad(
     const ObligationModule &Module, llvm::raw_ostream &OS, bool EmitPreamble,
     std::set<std::string> &EmittedFunctions,
     std::set<std::string> &EmittedTheorems, unsigned ModuleIndex,
-    std::vector<std::string> *ProjectGoals) {
+    std::vector<std::string> *ProjectGoals,
+    const std::set<std::string> *Selection) {
   VerifyResult Result;
   if (!Module.CorrectnessGoal || !Module.CounterexampleQuery) {
     Result.Status = VerifyStatus::Unresolved;
@@ -850,10 +842,13 @@ VerifyResult verify::exportLeanScratchPad(
 
   unsigned Index = 0;
   for (const Obligation &Item : Module.Obligations) {
+    ++Index;
+    if (Selection && !Selection->count(Item.Id))
+      continue;
     OS << "/- obligation: ";
     printLeanCommentText(Item.StableId.empty() ? Item.Id : Item.StableId, OS);
     OS << "\n";
-    OS << "   kind: " << leanObligationKind(Item.Kind) << "\n";
+    OS << "   kind: " << obligationKindName(Item.Kind) << "\n";
     OS << "   source: ";
     if (Item.Source.isValid()) {
       printLeanCommentText(Item.Source.File, OS);
@@ -865,7 +860,7 @@ VerifyResult verify::exportLeanScratchPad(
     }
     OS << " -/\n";
     std::string ObligationName =
-        TheoremName + "_obligation_" + std::to_string(++Index);
+        TheoremName + "_obligation_" + std::to_string(Index);
     if (ProjectGoals) {
       ObligationName += "_goal";
       emitLeanGoalDefinition(ObligationName, Item.Goal.get(), OS);
