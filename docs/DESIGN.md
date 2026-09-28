@@ -96,7 +96,10 @@ spec int fibo(int n)
 
 - Pure mathematical functions used in contracts.
 - Must be total (all paths return, termination proven via `decreases`).
-- No side effects, no mutation, no I/O.
+- No side effects, no mutation, no I/O. A spec may read memory through its
+  pointer parameters but never write it; each call is evaluated in the heap
+  state a load at that point would read (the current state, the entry state
+  inside `old(...)`, or the call-site state of a callee contract).
 - Can be recursive (with `decreases`).
 - **Integer semantics: mathematical (unbounded `Int` in Z3) by default.** See §Integer Semantics.
 - Body is interpreted by the verifier as an axiom; not compiled.
@@ -135,11 +138,11 @@ Any `constexpr` function is automatically available as a spec function — no `s
 
 **Soundness:** Clang's `constexpr` evaluator already enforces purity (no side effects in constant context) and termination (step limit; non-terminating `constexpr` is a compile error). We inherit both guarantees.
 
-**Integer semantics — machine integers:** A lifted `constexpr` function retains C++ integer semantics — `int` is 32-bit, overflow happens, two's-complement wraparound applies (C++20+). The verifier reasons about it in BitVec mode. This is the *honest* choice: `constexpr int fib(int n)` really does overflow at n=47 and the verifier sees that.
+**Integer semantics — machine integers:** A lifted `constexpr` function retains C++ integer semantics — `int` is 32-bit, overflow happens, two's-complement wraparound applies (C++20+). The verifier reasons about it with machine integers. This is the *honest* choice: `constexpr int fib(int n)` really does overflow at n=47 and the verifier sees that.
 
 **Contrast with explicit `spec`:** `spec int fibo(int n)` uses mathematical integers (Z3 `Int`, unbounded). Users pick:
 - Want fast verification with abstract math semantics → write `spec`.
-- Want code reuse with runtime-honest semantics → write `constexpr` (and accept the BitVec encoding cost).
+- Want code reuse with runtime-honest semantics → write `constexpr` (and accept the machine-integer encoding cost).
 
 This is genuinely a CppVerify advantage over Verus — Verus forces users to maintain two separate bodies; we let one body do double duty *or* let users opt into a clean math-integer spec.
 
@@ -240,6 +243,11 @@ pre(p != q && p != r && q != r && ...)   // for all distinct mut ptr/ref pairs
 ```
 
 - The caller's verification must establish these inequalities. Calling `swap(&x, &x)` produces a precondition failure.
+- With `--check-ub`, a pointer carrying a `valid(p, n)` extent contributes the
+  whole extent (`n * sizeof(T)` bytes) as its complete object, so the pair is
+  disjoint unless either pointer is null or either extent is empty. Callers
+  prove disjointness of the extents they pass. An `aliases` pair keeps the
+  single-object rule and may share storage, as `memmove` does.
 - **This is NOT the C++ `__restrict__` keyword.** `__restrict__` is a compiler optimization hint affecting codegen; the implicit assumption above is a verification-level precondition affecting correctness. The keyword `__restrict__`, if present, is a no-op for verification.
 
 ### 3. `aliases(p, q)` opt-out
@@ -402,15 +410,18 @@ bool contains(SortedArray a, int target)
 
 ## Integer Semantics — summary
 
-| Function kind | Integer semantics | Z3 encoding |
+| Function kind | Integer semantics | Solver encoding |
 |---|---|---|
 | `spec` function (explicit) | Mathematical (unbounded) | `Int` |
-| `constexpr` lifted as spec | Machine (overflow happens) | `BitVec(N)` |
-| `proof` function | Machine | `BitVec(N)` |
-| `exec` (regular) function | Machine | `BitVec(N)` |
+| `constexpr` lifted as spec | Machine (overflow happens) | `BitVec(N)` or range-checked `Int` |
+| `proof` function | Machine | `BitVec(N)` or range-checked `Int` |
+| `exec` (regular) function | Machine | `BitVec(N)` or range-checked `Int` |
 
 - Conversion at boundaries is explicit (`int` ↔ unbounded `Int` requires a cast that may incur a precondition for fits-in-range).
-- Bitvector mode globally forced with `--bv` flag (post-MVP; cast nodes already designed for it).
+- `--int-encoding` selects how machine integers reach the solver: `auto`
+  (default; integers unless a query needs the bits of a non-constant
+  operand), `integer`, or `bitvector`. Every choice is exact, so it changes
+  solver performance, never semantics.
 
 ## old() Expression
 
