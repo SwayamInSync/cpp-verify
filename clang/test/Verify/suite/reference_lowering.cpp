@@ -1,4 +1,4 @@
-// RUN: %cpp-verify --lower-only --dump-ir=1,2,3,4 %s 2>&1 | FileCheck %s
+// RUN: %cpp-verify --int-encoding=bitvector --lower-only --dump-ir=1,2,3,4 %s 2>&1 | FileCheck %s
 
 void lower_reference(int &value, int next)
   pre(value == 4)
