@@ -81,7 +81,7 @@
 # HIT: Verified: cached_identity [backend=z3] [cache=[[N:[1-9][0-9]*]]/[[N]]]
 # HIT: Verified: cached_offset [backend=z3] [cache=[[M:[1-9][0-9]*]]/[[M]]]
 
-# PARTIAL: Verified: cached_identity [backend=z3] [cache=6/6]
+# PARTIAL: Verified: cached_identity [backend=z3] [cache=3/3]
 # PARTIAL: Verified: cached_offset [backend=z3] [cache=1/6]
 
 # CORRUPT: Unresolved: cached_identity
@@ -115,12 +115,12 @@
 # REPLAY: Verified: cached_offset [backend=z3] [cache=[[RM:[1-9][0-9]*]]/[[RM]]]
 
 # FAILED-FIRST: error: verification failed: parallel_failure
-# FAILED-FIRST-SAME: [cache=0/8]
+# FAILED-FIRST-SAME: [cache=0/4]
 # FAILED-SECOND: error: verification failed: parallel_failure
-# FAILED-SECOND-SAME: [cache=6/8]
+# FAILED-SECOND-SAME: [cache=2/4]
 
 # BMC-MISS: Verified: cached_identity [backend=bmc
-# BMC-MISS-SAME: [cache=0/6]
+# BMC-MISS-SAME: [cache=0/3]
 # BMC-HIT: Verified: cached_identity [backend=bmc
 # BMC-HIT-SAME: [cache=[[BN:[1-9][0-9]*]]/[[BN]]]
 # BMC-HIT: Verified: cached_offset [backend=bmc
