@@ -229,11 +229,52 @@ uint8_t obligationTag(ObligationKind Kind) {
     return 2;
   case ObligationKind::Unwinding:
     return 3;
+  case ObligationKind::Precondition:
+    return 4;
+  case ObligationKind::InvariantEntry:
+    return 5;
+  case ObligationKind::InvariantPreserved:
+    return 6;
+  case ObligationKind::Termination:
+    return 7;
+  case ObligationKind::TypeInvariant:
+    return 8;
+  case ObligationKind::Recommends:
+    return 9;
+  case ObligationKind::Overflow:
+    return 10;
+  case ObligationKind::DivisionByZero:
+    return 11;
+  case ObligationKind::Shift:
+    return 12;
+  case ObligationKind::Bounds:
+    return 13;
+  case ObligationKind::Dereference:
+    return 14;
+  case ObligationKind::Initialization:
+    return 15;
+  case ObligationKind::PointerDifference:
+    return 16;
+  case ObligationKind::PointerValidity:
+    return 17;
+  case ObligationKind::Aliasing:
+    return 18;
+  case ObligationKind::Frame:
+    return 19;
+  case ObligationKind::Deallocation:
+    return 20;
+  case ObligationKind::MissingReturn:
+    return 21;
+  case ObligationKind::Unsupported:
+    return 22;
   }
   llvm_unreachable("unknown obligation kind");
 }
 
-std::optional<ObligationKind> obligationFromTag(uint8_t Tag) {
+/// Schema 1 knew only the first three kinds.
+std::optional<ObligationKind> obligationFromTag(uint8_t Tag, uint32_t Version) {
+  if (Version < 2 && Tag > 3)
+    return std::nullopt;
   switch (Tag) {
   case 1:
     return ObligationKind::Assertion;
@@ -241,9 +282,53 @@ std::optional<ObligationKind> obligationFromTag(uint8_t Tag) {
     return ObligationKind::Postcondition;
   case 3:
     return ObligationKind::Unwinding;
+  case 4:
+    return ObligationKind::Precondition;
+  case 5:
+    return ObligationKind::InvariantEntry;
+  case 6:
+    return ObligationKind::InvariantPreserved;
+  case 7:
+    return ObligationKind::Termination;
+  case 8:
+    return ObligationKind::TypeInvariant;
+  case 9:
+    return ObligationKind::Recommends;
+  case 10:
+    return ObligationKind::Overflow;
+  case 11:
+    return ObligationKind::DivisionByZero;
+  case 12:
+    return ObligationKind::Shift;
+  case 13:
+    return ObligationKind::Bounds;
+  case 14:
+    return ObligationKind::Dereference;
+  case 15:
+    return ObligationKind::Initialization;
+  case 16:
+    return ObligationKind::PointerDifference;
+  case 17:
+    return ObligationKind::PointerValidity;
+  case 18:
+    return ObligationKind::Aliasing;
+  case 19:
+    return ObligationKind::Frame;
+  case 20:
+    return ObligationKind::Deallocation;
+  case 21:
+    return ObligationKind::MissingReturn;
+  case 22:
+    return ObligationKind::Unsupported;
   default:
     return std::nullopt;
   }
+}
+
+/// Hashes see only whether a goal is an unwinding check; every other kind is
+/// diagnostic metadata.
+uint8_t obligationSemanticTag(ObligationKind Kind) {
+  return Kind == ObligationKind::Unwinding ? 2 : 1;
 }
 
 uint8_t traceTag(DiagnosticTraceKind Kind) {
@@ -444,7 +529,9 @@ public:
         writeString(Item.StableId);
       if (IncludeDiagnostics)
         writeU64(Item.TraceEventCount);
-      writeU8(obligationTag(Item.Kind));
+      // A hash preimage carries no diagnostics and only the semantic role.
+      writeU8(IncludeDiagnostics ? obligationTag(Item.Kind)
+                                 : obligationSemanticTag(Item.Kind));
       writeSource(Item.Source);
       writeExpr(Item.Goal.get());
       writeExpr(Item.CounterexampleQuery.get());
@@ -491,7 +578,7 @@ public:
       if (Function != Module.LogicFunctions.end())
         writeFunction(Identity, Function->second, false);
     }
-    writeU8(obligationTag(Item.Kind));
+    writeU8(obligationSemanticTag(Item.Kind));
     writeExpr(Item.Goal.get());
     writeExpr(Item.CounterexampleQuery.get());
   }
@@ -507,6 +594,7 @@ class ArchiveReader {
   bool IncludeSource = false;
   bool IncludeSourceRanges = false;
   bool IncludeDiagnostics = false;
+  uint32_t Version = ObligationSerializationVersion;
   std::string Failure;
   std::map<std::string, std::string> FunctionSignatures;
 
@@ -686,8 +774,8 @@ class ArchiveReader {
     for (char Expected : ArchiveMagic)
       if (readU8() != static_cast<uint8_t>(Expected))
         fail("invalid obligation archive magic");
-    uint32_t Version = readU32();
-    if (Version != ObligationSerializationVersion)
+    Version = readU32();
+    if (Version < 1 || Version > ObligationSerializationVersion)
       fail("unsupported obligation archive version");
     uint32_t Flags = readU32();
     if (Flags & ~(HasSourceMetadata | HasBMCTransformProvenance |
@@ -764,7 +852,7 @@ class ArchiveReader {
         Item.StableId = readString();
       if (IncludeDiagnostics)
         Item.TraceEventCount = readU64();
-      std::optional<ObligationKind> Kind = obligationFromTag(readU8());
+      std::optional<ObligationKind> Kind = obligationFromTag(readU8(), Version);
       if (!Kind)
         fail("invalid obligation kind in obligation archive");
       Item.Kind = Kind.value_or(ObligationKind::Assertion);
@@ -864,6 +952,6 @@ std::string verify::obligationQuerySemanticHash(const ObligationModule &Module,
   ArchiveWriter Writer(false);
   Writer.writeObligationSemantics(Module, Item,
                                   /*IncludeBMCTransform=*/false,
-                                  "cppverify-obligation-query", 1);
+                                  "cppverify-obligation-query", 2);
   return sha256(Writer.take());
 }
