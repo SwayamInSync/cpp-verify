@@ -19,6 +19,12 @@ struct PassiveStmt {
   uint64_t TraceEventCount = 0;
 };
 
+/// A goal checked in the final state.
+struct PassiveExitAssert {
+  ProofObligationKind ProofKind = ProofObligationKind::Postcondition;
+  std::unique_ptr<VExpr> Cond;
+};
+
 enum class PassiveTraceKind {
   Branch,
   Call,
@@ -56,7 +62,7 @@ struct PassiveProgram {
   std::string FunctionIdentity;
   std::vector<std::unique_ptr<PassiveStmt>> Stmts;
   std::vector<std::unique_ptr<VExpr>> EntryAssumes;
-  std::vector<std::unique_ptr<VExpr>> ExitAsserts;
+  std::vector<PassiveExitAssert> ExitAsserts;
   std::string ResultVarName;
   std::string OldHeapName;
   /// Explicitly declared heap-array SSA variables. Backends must not infer
