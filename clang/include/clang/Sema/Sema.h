@@ -10284,6 +10284,15 @@ public:
   /// Rewrite unqualified field names to this->field for type_invariant(expr).
   ExprResult ActOnTypeInvariantExpr(ExprResult E, CXXRecordDecl *Record);
 
+  /// Diagnose references to spec functions in executable code of \p FD
+  /// (or in a global initializer when \p FD is null). Spec functions are
+  /// never compiled, so such a reference has no runtime meaning.
+  void CheckSpecFunctionUses(const FunctionDecl *FD, Stmt *Code);
+
+  /// Spec-function references already diagnosed, so that template
+  /// instantiations and repeated default arguments report each once.
+  llvm::DenseSet<SourceLocation> DiagnosedSpecFunctionUses;
+
   /// PerformContextuallyConvertToObjCPointer - Perform a contextual
   /// conversion of the expression From to an Objective-C pointer type.
   /// Returns a valid but null ExprResult if no conversion sequence exists.
