@@ -95,7 +95,11 @@ void clear_first_unchanged(int *p)
 // PASSIVE: heap_store __heap_0 -> __heap_1
 // PASSIVE: spec_call sum reads __heap_1
 // PASSIVE: spec_call sum reads __heap_0
-// CHECK-DAG: verification failed: clear_first_unchanged
+// LOOP-DAG: verification failed: clear_first_unchanged
+// cvc5 cannot check its model against sum's definition; the portfolio accepts
+// its sat together with Z3's checked counterexample.
+// CVC5ONLY-DAG: Unresolved: clear_first_unchanged {{.*}}[reason=spec.fuel]
+// PORTFOLIO-DAG: verification failed: clear_first_unchanged
 // REPLAY-DAG: verification failed: clear_first_unchanged
 
 // A non-recursive heap-reading spec is inlined at each call.
