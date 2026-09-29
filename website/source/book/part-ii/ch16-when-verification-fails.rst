@@ -86,7 +86,7 @@ feature regression should combine:
 - nearby false programs that must be rejected;
 - exact VCR and passive-SSA checks;
 - critical typed Obligation IR and Z3-encoding checks;
-- boundary cases for mathematical integers and machine bitvectors.
+- boundary cases for mathematical integers and machine integers.
 
 This split answers two independent questions. ``--lower-only`` checks whether
 the program became the intended formula. Ordinary verification checks whether
