@@ -67,9 +67,9 @@ spec int scalar_spec_identity(int value)
 
 int forward_spec_read(const int *source)
   pre(source != nullptr)
-  post(result == old(*source))
+  post(result == scalar_spec_identity(old(*source)))
 {
-  return scalar_spec_identity(*source);
+  return *source;
 }
 
 int initialized_roundtrip(int value)

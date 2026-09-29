@@ -79,9 +79,9 @@ spec int spec_identity(int value)
 }
 
 int forward_loaded_spec(const int *source)
-  post(result == old(*source))
+  post(result == spec_identity(old(*source)))
 {
-  return spec_identity(*source);
+  return *source;
 }
 
 proof void pointer_lemma(const int *source)

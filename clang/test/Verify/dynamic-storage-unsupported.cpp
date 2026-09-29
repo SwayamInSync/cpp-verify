@@ -88,9 +88,9 @@ int spec_call_boundary()
   post(result == 1)
 {
   int *p = new int(1);
-  bool nonnull = dynamic_nonnull(p);
+  contract_assert(dynamic_nonnull(p));
   delete p;
-  return nonnull;
+  return 1;
 }
 
 int *return_pointer(int *p)
