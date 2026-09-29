@@ -76,6 +76,8 @@ Core checks include:
      - shift count is in range; signed left shift satisfies the C++17 rule
    * - pointer loads and stores
      - base pointer is non-null and abstractly valid
+   * - mathematical value converted to a machine type
+     - value is in the type's range
 
 **Unsigned arithmetic is never flagged** — C++ defines it as modular wraparound,
 so the machine operation wraps modulo ``2^N``.
@@ -121,15 +123,33 @@ constructing the sign bit (for example, ``1 << 31`` for a 32-bit ``int``) while
 still rejecting values beyond the unsigned range.
 
 Calls crossing between mathematical ``spec`` code and lifted machine
-``constexpr`` code perform an explicit conversion at each parameter and return
-boundary.  In particular, an unsigned machine result wraps at its target width
-before it is converted back to an unbounded mathematical integer.
+``constexpr`` code convert at each parameter and return boundary. A machine
+result converts exactly to an unbounded integer; an unsigned result has already
+wrapped at its target width, as C++ defines. A mathematical argument must fit
+the machine parameter type.
 
-Contract expressions retain the callee's semantics, so a mathematical spec
-result remains unbounded while it is used for specification. If a spec result
-is used as an executable value, it is first converted to the C++ destination
-machine type; subsequent arithmetic therefore receives the usual overflow and
-undefined-behavior checks.
+A mathematical value never wraps into a C++ type:
+
+- In contracts a spec result stays unbounded. Arithmetic, selections, and
+  comparisons involving it are exact, and the implicit conversions of C++'s
+  usual arithmetic conversions do not bound it, so
+  ``post(result == total(x) + n)`` compares exact values.
+- An explicit cast such as ``(int)total(x)``, a bitwise operator applied to a
+  spec result, and a spec result stored in a ``ghost`` or ``proof`` variable
+  convert it to a machine type. The conversion is defined only when the value
+  fits, and it carries an ``overflow`` obligation instead of wrapping:
+
+.. code-block:: cpp
+
+   spec int scaled(int x) { return x * 1000; }
+
+   proof void lemma(int x) pre(x >= 0 && x <= 1000)
+   { int value = scaled(x); }   // verifies: the value fits in int
+
+   proof void too_big(int x) pre(x == 3000000)
+   { int value = scaled(x); }   // FAILS (overflow): 3000000000 is not an int
+
+- Executable code cannot call a spec function at all; see :doc:`ghost-proofs`.
 
 Executable modular calls likewise apply Clang's formal-parameter and destination
 conversions. Signedness, widening, and narrowing therefore occur before a
