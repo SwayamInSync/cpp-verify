@@ -1364,6 +1364,18 @@ VerifyResult CVC5VerifyBackend::verifyQuery(const ObligationModule &Module,
     return Result;
   }
   if (Verdict == "sat") {
+    // Without a model, a satisfying assignment that depends on an application
+    // beyond the unfolding fuel cannot be told from a real counterexample.
+    const std::vector<std::string> Frontier = specFrontier(Module);
+    if (!Frontier.empty()) {
+      Result.Status = VerifyStatus::Unresolved;
+      Result.Reason = VerifyReason::SpecFuel;
+      Result.Message = "cvc5 reported sat for a query that applies " +
+                       Frontier.front() +
+                       " beyond its unfolding fuel; it returns no model to "
+                       "check against the definition";
+      return Result;
+    }
     Result.Status = VerifyStatus::Failed;
     Result.Reason = VerifyReason::Counterexample;
     return Result;
