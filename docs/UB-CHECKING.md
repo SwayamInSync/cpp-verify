@@ -47,8 +47,8 @@ wp(x = a + b, Q)  =  no_overflow_signed(a, b)   ∧   Q[x := a + b]
 
 The safety obligation sits **inline at each operation**; the functional
 obligation (the postcondition) sits at the end. They compose soundly because of
-order: once `no_overflow(a,b)` holds, the bit-vector result `bvadd(a,b)` equals
-the true mathematical `a + b`, so functional reasoning about `post` is faithful.
+order: once `no_overflow(a,b)` holds, the machine result of `a + b` equals the
+true mathematical sum, so functional reasoning about `post` is faithful.
 The backend's sound UNKNOWN-recovery path may submit individual ordered
 assertions separately, but it never changes this program order or lets a later
 assumption justify an earlier safety check.
