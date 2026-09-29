@@ -62,8 +62,8 @@ witness.
      - ``result = 64``
      - ``@`` smuggled as a two-byte overlong sequence
    * - ``ED`` second-byte ceiling removed
-     - ``result = 55296``
-     - exactly U+D800, the first surrogate
+     - ``result = 57343``
+     - exactly U+DFFF, the last surrogate
 
 Neither counterexample was guessed. Both are the solver's own witness to the
 failing postcondition, reported at the source location of the contract clause
