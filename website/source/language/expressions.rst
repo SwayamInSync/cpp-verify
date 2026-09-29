@@ -21,4 +21,5 @@ one.
 ``result`` is only valid in postconditions and cannot occur inside ``old``
 because a return value has no function-entry state. Integer operators follow
 the function kind: ``spec`` uses mathematical integers; ``proof`` and
-executable code use machine integers (see :doc:`integers`).
+executable code use machine integers (see :doc:`integers`). In a contract, an
+operation with a spec result as an operand is exact.
