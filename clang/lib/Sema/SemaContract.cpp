@@ -13,13 +13,15 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "TreeTransform.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/AST/ASTLambda.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprContract.h"
+#include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/StmtContract.h"
 #include "clang/Sema/Sema.h"
-#include "TreeTransform.h"
 
 using namespace clang;
 
@@ -55,7 +57,101 @@ public:
   }
 };
 
+const FunctionContractInfo *contractOf(const ASTContext &Ctx,
+                                       const FunctionDecl *FD) {
+  for (const FunctionDecl *Redecl : FD->redecls())
+    if (const FunctionContractInfo *FCI = Ctx.getFunctionContract(Redecl))
+      return FCI;
+  return nullptr;
+}
+
+/// Finds spec-function references in evaluated executable code.
+class ExecutableSpecUseFinder
+    : public RecursiveASTVisitor<ExecutableSpecUseFinder> {
+  using Base = RecursiveASTVisitor<ExecutableSpecUseFinder>;
+  Sema &S;
+  unsigned GhostDepth = 0;
+
+  template <typename Traverse> bool inGhost(Traverse &&T) {
+    ++GhostDepth;
+    bool Result = T();
+    --GhostDepth;
+    return Result;
+  }
+
+public:
+  explicit ExecutableSpecUseFinder(Sema &S) : S(S) {}
+
+  bool TraverseGhostBlockStmt(GhostBlockStmt *G) {
+    return inGhost([&] { return Base::TraverseGhostBlockStmt(G); });
+  }
+  bool TraverseContractAssertStmt(ContractAssertStmt *C) {
+    return inGhost([&] { return Base::TraverseContractAssertStmt(C); });
+  }
+  bool TraverseRevealWithFuelStmt(RevealWithFuelStmt *R) {
+    return inGhost([&] { return Base::TraverseRevealWithFuelStmt(R); });
+  }
+  bool TraverseHideSpecStmt(HideSpecStmt *H) {
+    return inGhost([&] { return Base::TraverseHideSpecStmt(H); });
+  }
+  bool TraverseRevealSpecStmt(RevealSpecStmt *R) {
+    return inGhost([&] { return Base::TraverseRevealSpecStmt(R); });
+  }
+
+  // Unevaluated operands emit no code.
+  bool TraverseUnaryExprOrTypeTraitExpr(UnaryExprOrTypeTraitExpr *) {
+    return true;
+  }
+  bool TraverseCXXNoexceptExpr(CXXNoexceptExpr *) { return true; }
+  bool TraverseRequiresExpr(RequiresExpr *) { return true; }
+  bool TraverseDecltypeTypeLoc(DecltypeTypeLoc, bool = true) { return true; }
+  bool TraverseTypeOfExprTypeLoc(TypeOfExprTypeLoc, bool = true) {
+    return true;
+  }
+  bool TraverseCXXTypeidExpr(CXXTypeidExpr *E) {
+    return !E->isPotentiallyEvaluated() || Base::TraverseCXXTypeidExpr(E);
+  }
+
+  // A default argument is evaluated where it is used.
+  bool TraverseCXXDefaultArgExpr(CXXDefaultArgExpr *E) {
+    return TraverseStmt(E->getExpr());
+  }
+
+  bool VisitDeclRefExpr(DeclRefExpr *E) {
+    if (GhostDepth)
+      return true;
+    const auto *FD = dyn_cast<FunctionDecl>(E->getDecl());
+    if (!FD)
+      return true;
+    const FunctionContractInfo *FCI = contractOf(S.Context, FD);
+    if (FCI && FCI->IsSpec &&
+        S.DiagnosedSpecFunctionUses.insert(E->getExprLoc()).second)
+      S.Diag(E->getExprLoc(), diag::err_spec_function_in_executable_code) << FD;
+    return true;
+  }
+};
+
 } // namespace
+
+void Sema::CheckSpecFunctionUses(const FunctionDecl *FD, Stmt *Code) {
+  if (!Code)
+    return;
+  ExecutableSpecUseFinder Finder(*this);
+  if (FD) {
+    // The enclosing function's walk covers a lambda body in its context.
+    if (const auto *Method = dyn_cast<CXXMethodDecl>(FD);
+        Method && isLambdaCallOperator(Method))
+      return;
+    if (const FunctionContractInfo *FCI = contractOf(Context, FD);
+        FCI && (FCI->IsSpec || FCI->IsProof))
+      return;
+    if (const auto *Ctor = dyn_cast<CXXConstructorDecl>(FD))
+      for (const CXXCtorInitializer *Init : Ctor->inits())
+        if (Init->isWritten())
+          Finder.TraverseStmt(Init->getInit());
+  }
+  Finder.TraverseStmt(Code);
+}
 
 /// ActOnContractCondition - Semantic action called by the parser after
 /// parsing a contract condition expression (pre/post/invariant/contract_assert).
