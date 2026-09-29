@@ -51,6 +51,11 @@ EXPECTED_STATUS = {
 # cases must remain unresolved, rather than become a false failure or proof.
 CONSERVATIVE_CVC5 = {"quantified_valid", "complete_loop"}
 
+# A false case decided by a recursive spec beyond its unfolding fuel. cvc5 has
+# no model to check against the definition and must say so (never "verified");
+# the portfolio still fails it with Z3's checked counterexample.
+FUEL_LIMITED_CVC5 = {"heap_spec_read_invalid"}
+
 REQUIRED_FEATURES = {
     "mathematical-integers",
     "bit-vectors",
@@ -155,6 +160,11 @@ def check_matrix(records, backend):
                         backend, actual, record.get("reason"), name
                     )
                 )
+            continue
+        if backend == "cvc5" and name in FUEL_LIMITED_CVC5:
+            if actual != "unresolved" or record.get("reason") != "spec.fuel":
+                fail("cvc5 returned {} ({}) for fuel-limited case {}".format(
+                    actual, record.get("reason"), name))
             continue
         if actual != expected:
             fail(
