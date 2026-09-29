@@ -76,6 +76,10 @@ struct VType {
     return VType{VTypeKind::Unsupported, VIntMode::Machine, false, 0};
   }
 
+  bool isInt() const {
+    return Kind == VTypeKind::Int32 || Kind == VTypeKind::Int64;
+  }
+
   bool isSignedInt() const {
     return (Kind == VTypeKind::Int32 || Kind == VTypeKind::Int64) && IsSigned;
   }
