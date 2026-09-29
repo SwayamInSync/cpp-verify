@@ -13877,5 +13877,9 @@ def err_proof_fn_must_return_void : Error<
   "proof function must return void">;
 def err_contract_decreases_not_int : Error<
   "decreases expression must have integer type">;
+def err_spec_function_in_executable_code : Error<
+  "spec function %0 exists only for verification and cannot be used in "
+  "executable code; use it in a contract, ghost block, or spec or proof "
+  "function">;
 
 } // end of sema component.
