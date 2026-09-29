@@ -8,9 +8,13 @@ spec int need_pos(int x)
 
 int caller(int x)
   pre(x == 0)
-  post(result > 0)
+  post(result >= 0)
 {
-  return need_pos(x);
+  ghost {
+    int checked = need_pos(x);
+    contract_assert(checked > 0);
+  }
+  return x;
 }
 
 // CHECK: verification failed: caller

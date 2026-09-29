@@ -10,26 +10,29 @@ spec int id_spec(int a)
 
 int good_call(int a)
   pre(a >= 0 && a <= 100)
-  post(result == a)
+  post(result == id_spec(a))
 {
-  return id_spec(a);
+  return a;
 }
 
 int bad_call(int a)
   pre(true)
-  post(result == a)
+  post(result == id_spec(-1))
 {
-  return id_spec(-1);
+  return a;
 }
 
 int bad_nested_call(int a)
   pre(a == -1)
   post(result == 0)
 {
-  int value = 0;
-  if (a == -1)
-    value = (short)id_spec(a);
-  return value;
+  ghost {
+    int value = 0;
+    if (a == -1)
+      value = (short)id_spec(a);
+    contract_assert(value == 0);
+  }
+  return 0;
 }
 
 // FAIL-DAG: Verified: good_call
