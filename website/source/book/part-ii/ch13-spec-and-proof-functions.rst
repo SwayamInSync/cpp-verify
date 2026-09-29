@@ -22,6 +22,10 @@ Use in contracts:
      post(result == fibo(n));
 
 ``fibo`` is not compiled. Integers are **mathematical** (unbounded) inside ``spec``.
+Because it has no compiled form, a spec can be called only from contracts, ghost
+code, and other spec or proof functions; ``return fibo(n);`` in an executable
+body is a compile error. In ghost or proof code, ``int f = fibo(n);`` converts
+the unbounded value to ``int``, and the verifier checks that it fits.
 
 **Proof** functions (lemmas)
 ----------------------------

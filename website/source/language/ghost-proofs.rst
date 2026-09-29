@@ -23,7 +23,12 @@ Spec and proof functions
 
 - ``spec`` / ``proof`` functions are **not compiled** — their bodies are definitions/lemmas
   for the verifier only.
+- A ``spec`` function may be called only from contracts, ghost code, and other ``spec`` or
+  ``proof`` functions. Clang rejects a reference from executable code (a function body, an
+  initializer, a default argument), which would otherwise fail to link.
 - ``spec`` integers are **mathematical** (unbounded ``Int``); ``proof`` integers are machine.
+  Storing a spec result in a ghost or ``proof`` variable converts it to that machine type, and
+  the value must fit (see :doc:`integers`).
 - ``recommends(expr)`` (``spec`` only) is a **soft** precondition: it does not generate call-site
   obligations, but the verifier warns when a call may not satisfy it.
 
