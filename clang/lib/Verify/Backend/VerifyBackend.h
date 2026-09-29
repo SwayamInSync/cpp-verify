@@ -47,7 +47,8 @@ enum class VerifyReason {
   IncompleteBound,
   LeanExportFailure,
   CacheCorrupt,
-  CacheIOFailure
+  CacheIOFailure,
+  SpecFuel
 };
 
 llvm::StringRef verifyReasonCode(VerifyReason Reason);

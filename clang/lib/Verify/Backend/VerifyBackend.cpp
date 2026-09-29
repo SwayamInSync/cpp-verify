@@ -306,6 +306,15 @@ protected:
           FirstFailure = std::move(Z3Result);
         continue;
       }
+      // cvc5 found the fuel-limited query satisfiable but has no model to
+      // check; Z3's counterexample was checked against the definitions.
+      if (Z3Result.Status == VerifyStatus::Failed &&
+          CVC5Result.Status == VerifyStatus::Unresolved &&
+          CVC5Result.Reason == VerifyReason::SpecFuel) {
+        if (!FirstFailure)
+          FirstFailure = std::move(Z3Result);
+        continue;
+      }
       if (Z3Result.Status == VerifyStatus::Unresolved ||
           CVC5Result.Status == VerifyStatus::Unresolved) {
         if (!FirstUnresolved)
@@ -406,6 +415,8 @@ llvm::StringRef verify::verifyReasonCode(VerifyReason Reason) {
     return "cache.corrupt";
   case VerifyReason::CacheIOFailure:
     return "cache.io-failed";
+  case VerifyReason::SpecFuel:
+    return "spec.fuel";
   }
   llvm_unreachable("unknown verification reason");
 }
