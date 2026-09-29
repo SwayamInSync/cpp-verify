@@ -392,6 +392,9 @@ and currently supplies verdicts rather than source-level models. Strict
 portfolio mode requires matching decisive results and preserves Z3's model only
 after both solvers report ``sat``. cvc5 may return ``unknown`` on quantified or
 heap-heavy formulas that Z3 solves; strict mode then remains ``Unresolved``.
+Without a model, cvc5 cannot check a ``sat`` against a recursive spec applied
+beyond its fuel, so it reports ``spec.fuel``; strict mode accepts that beside a
+Z3 counterexample checked against the definitions.
 BMC-transformed archive replay still uses the Z3-backed BMC aggregator.
 
 **Lean** consumes the same typed canonical obligation as Z3. Standalone export
