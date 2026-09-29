@@ -277,6 +277,10 @@ public:
 
 std::unique_ptr<VExpr> cloneVExpr(const VExpr *E);
 
+/// The integer mode \p E is evaluated in. Arithmetic or a selection with a
+/// mathematical operand is mathematical, whatever its C++ result type.
+VIntMode evaluatedIntMode(const VExpr *E);
+
 /// Replace references to a quantifier binder with a concrete integer literal.
 std::unique_ptr<VExpr> substituteBinderInVExpr(const VExpr *E,
                                                const std::string &Binder,

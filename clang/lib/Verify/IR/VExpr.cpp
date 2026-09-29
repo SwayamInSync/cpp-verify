@@ -158,6 +158,48 @@ static std::unique_ptr<VExpr> cloneVExprImpl(const VExpr *E) {
   return nullptr;
 }
 
+VIntMode verify::evaluatedIntMode(const VExpr *E) {
+  if (!E)
+    return VIntMode::Machine;
+  if (!E->Ty.isInt() || E->Ty.IntMode == VIntMode::Math)
+    return E->Ty.IntMode;
+  switch (E->K) {
+  case VExpr::BinOp: {
+    const auto *B = static_cast<const VBinOpExpr *>(E);
+    switch (B->Op) {
+    case VBinOp::Add:
+    case VBinOp::Sub:
+    case VBinOp::Mul:
+    case VBinOp::Div:
+    case VBinOp::Rem:
+      if (evaluatedIntMode(B->Lhs.get()) == VIntMode::Math ||
+          evaluatedIntMode(B->Rhs.get()) == VIntMode::Math)
+        return VIntMode::Math;
+      break;
+    default:
+      break;
+    }
+    break;
+  }
+  case VExpr::UnaryOp: {
+    const auto *U = static_cast<const VUnaryOpExpr *>(E);
+    if (U->Op == VUnaryOp::Neg)
+      return evaluatedIntMode(U->Operand.get());
+    break;
+  }
+  case VExpr::Conditional: {
+    const auto *C = static_cast<const VConditionalExpr *>(E);
+    if (evaluatedIntMode(C->Then.get()) == VIntMode::Math ||
+        evaluatedIntMode(C->Else.get()) == VIntMode::Math)
+      return VIntMode::Math;
+    break;
+  }
+  default:
+    break;
+  }
+  return E->Ty.IntMode;
+}
+
 std::unique_ptr<VExpr> verify::cloneVExpr(const VExpr *E) {
   auto Copy = cloneVExprImpl(E);
   if (Copy && E)
