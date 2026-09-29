@@ -7,7 +7,7 @@ int client(int x)
   pre(x < 0 || s(x) > 0)
   post(result == s(x))
 {
-  return s(x);
+  return x + 1;
 }
 
 // VERIFY: Verified: client

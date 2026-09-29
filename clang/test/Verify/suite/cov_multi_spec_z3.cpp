@@ -7,7 +7,7 @@ int chain(int x)
   pre(x >= 0 && x < 100)
   post(result == add_s(inc_s(x), x))
 {
-  return add_s(inc_s(x), x);
+  return 2 * x + 1;
 }
 
 // VERIFY-DAG: spec axiom: inc_s

@@ -26,8 +26,13 @@ int exec_client(int x)
   post(result == inc(inc(x)))
   recommends(pick(x) >= 0)
 {
-  ghost { reveal(inc); contract_assert(x >= 0); }
-  return inc(inc(x));
+  ghost {
+    reveal(inc);
+    contract_assert(x >= 0);
+    int twice = inc(inc(x));
+    contract_assert(twice == x + 2);
+  }
+  return x + 2;
 }
 
 int loop_client(int n, int *p)
@@ -44,7 +49,7 @@ int loop_client(int n, int *p)
     decreases(n - i)
   {
     if (i == 0)
-      s = inc(s);
+      s = s + 1;
     *p = s;
     i = i + 1;
   }

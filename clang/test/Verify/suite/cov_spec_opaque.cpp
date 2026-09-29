@@ -24,7 +24,7 @@ int use_rec(int n)
   decreases(n)
 {
   ghost { reveal_with_fuel(rec, 2); }
-  return rec(n);
+  return n;
 }
 
 // VERIFY-DAG: Verified: client

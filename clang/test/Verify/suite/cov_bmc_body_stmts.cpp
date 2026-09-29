@@ -12,10 +12,13 @@ int loop_mix(int n, int *p)
   while (i < n)
     invariant(s >= 0)
   {
-    ghost { reveal(bump); }
+    ghost {
+      reveal(bump);
+      contract_assert(bump(s) == s + 1);
+    }
     contract_assert(i >= 0);
     if (i == 0)
-      s = bump(s);
+      s = s + 1;
     else
       s = s + 0;
     *p = s;

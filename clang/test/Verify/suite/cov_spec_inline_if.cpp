@@ -6,8 +6,12 @@ int use_bump(int x)
   pre(x >= 0 && x < 10)
   post(result == x + 1)
 {
-  ghost { reveal(bump); }
-  return bump(x);
+  ghost {
+    reveal(bump);
+    int bumped = bump(x);
+    contract_assert(bumped == x + 1);
+  }
+  return x + 1;
 }
 
 // VERIFY: Verified: use_bump

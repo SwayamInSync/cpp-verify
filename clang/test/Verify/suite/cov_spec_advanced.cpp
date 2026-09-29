@@ -21,7 +21,13 @@ int use_branch(int x)
   pre(x >= -2 && x <= 2)
   post(result == branch(x))
 {
-  return branch(x);
+  ghost {
+    int clamped = branch(x);
+    contract_assert(clamped >= 0);
+  }
+  if (x < 0)
+    return 0;
+  return x;
 }
 
 int use_rec(int n)
@@ -30,7 +36,7 @@ int use_rec(int n)
   decreases(n)
 {
   ghost { reveal_with_fuel(rec, 3); }
-  return rec(n);
+  return n;
 }
 
 // VERIFY-DAG: Verified: use_branch

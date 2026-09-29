@@ -14,8 +14,9 @@ spec int add_three(int x) { return x + 3; }
 int use_specs(int x)
   pre(x >= 0 && x <= 100)
   post(result == 2 * x + 3)
+  post(result == add_three(double_it(x)))
 {
-  return add_three(double_it(x));
+  return 2 * x + 3;
 }
 
 // VERIFY-DAG: spec axiom: double_it

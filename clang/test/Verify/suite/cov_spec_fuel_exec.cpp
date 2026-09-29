@@ -8,7 +8,7 @@ int use_with_reveal(int x)
   post(result == double_spec(x))
 {
   ghost { reveal_with_fuel(double_spec, 1); }
-  return double_spec(x);
+  return 2 * x;
 }
 
 // VERIFY-DAG: spec axiom: double_spec

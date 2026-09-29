@@ -15,8 +15,13 @@ int client(int x)
   post(result == triple(x))
   recommends(pick(x) >= 0)
 {
-  ghost { reveal(triple); hide(pick); }
-  int mid = triple(x);
+  ghost {
+    reveal(triple);
+    hide(pick);
+    int tripled = triple(x);
+    contract_assert(tripled == 3 * x);
+  }
+  int mid = 3 * x;
   if (x < 5)
     return mid;
   return mid;

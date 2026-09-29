@@ -7,7 +7,11 @@ int use_double(int x)
   pre(x >= 0 && x <= 100)
   post(result == double_spec(x))
 {
-  return double_spec(x);
+  ghost {
+    int doubled = double_spec(x);
+    contract_assert(doubled == 2 * x);
+  }
+  return 2 * x;
 }
 
 // VERIFY-DAG: spec axiom: double_spec

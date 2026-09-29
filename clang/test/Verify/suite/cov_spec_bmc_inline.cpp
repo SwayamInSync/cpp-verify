@@ -7,7 +7,7 @@ int use_spec(int x)
   pre(x >= 0 && x < 20)
   post(result == inc_spec(x))
 {
-  return inc_spec(x);
+  return x + 1;
 }
 
 // VERIFY: Verified: use_spec
