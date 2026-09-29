@@ -28,6 +28,15 @@ machine integers, `VIntMode::Machine`). The **spec world** (`spec` functions,
 unbounded `VIntMode::Math`) has no notion of overflow by construction and is
 never instrumented.
 
+The boundary between the worlds is checked. A mathematical value converted to a
+machine type (a spec result stored in ghost or proof code, passed to a lifted
+`constexpr` parameter, cast explicitly, or used as a bitwise operand) must fit
+that type: the conversion carries an `overflow` obligation rather than wrapping.
+An operation with a mathematical operand is evaluated mathematically, so it
+carries no machine overflow check of its own. Executable code cannot reference
+a spec function at all; Sema rejects it because spec functions are never
+compiled.
+
 Core expression definedness is mandatory; it is not disabled by omitting a
 flag. The current `--check-ub` option is narrower than its historical name: it
 enables `valid(p, n)`-based **buffer extent** checking on the Z3 path. This
@@ -164,7 +173,7 @@ check, rather than trying to encode the whole abstract machine up front.
 
 | Layer | UB caught | IR / model need | Status |
 |---|---|---|---|
-| **A** | signed arithmetic/negation overflow, division/modulo by zero, invalid shifts, null/abstract-invalid dereference | typed expressions + signedness/width in `VType` | **implemented, always on** |
+| **A** | signed arithmetic/negation overflow, out-of-range mathematical-to-machine conversion, division/modulo by zero, invalid shifts, null/abstract-invalid dereference | typed expressions + signedness/width in `VType` | **implemented, always on** |
 | **B1** | out-of-bounds indexed access for a declared buffer extent | `valid(p, n)` marker + base/offset recovery | **implemented with `--check-ub` on Z3** |
 | **B2** | use-after-end-of-lifetime and reads of uninitialized heap storage | block-structured heap (allocation = size+liveness+initialization) | planned |
 | **C** | pointer provenance, strict-aliasing (TBAA), alignment | precise object model | assumed-away (documented) |
