@@ -52,11 +52,11 @@ int mathematical_specs()
   return 0;
 }
 
-int spec_boundary(int value)
+proof void spec_boundary(int value)
   pre(value == 5)
-  post(result == 6)
 {
-  return math_increment(value);
+  int next = math_increment(value);
+  contract_assert(next == 6);
 }
 
 proof void recursive_spec()
