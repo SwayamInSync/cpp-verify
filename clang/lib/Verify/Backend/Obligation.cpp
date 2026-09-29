@@ -50,6 +50,30 @@ const char *verify::logicSortName(LogicSortKind Kind) {
   return "invalid";
 }
 
+static bool containsSpecCall(const LogicExpr *Expr) {
+  if (!Expr)
+    return false;
+  if (Expr->K == LogicExpr::SpecCall)
+    return true;
+  return std::any_of(Expr->Children.begin(), Expr->Children.end(),
+                     [](const std::unique_ptr<LogicExpr> &Child) {
+                       return containsSpecCall(Child.get());
+                     });
+}
+
+std::vector<std::string> verify::specFrontier(const ObligationModule &Module) {
+  std::vector<std::string> Names;
+  for (const auto &[Identity, Function] : Module.LogicFunctions)
+    if (std::any_of(Function.DefinitionLevels.begin(),
+                    Function.DefinitionLevels.end(),
+                    [](const std::unique_ptr<LogicExpr> &Level) {
+                      return containsSpecCall(Level.get());
+                    }))
+      Names.push_back(Function.DisplayName.empty() ? Identity
+                                                   : Function.DisplayName);
+  return Names;
+}
+
 std::string verify::formatLogicSort(const LogicSort &Sort) {
   switch (Sort.Kind) {
   case LogicSortKind::Invalid:
@@ -999,12 +1023,38 @@ class ObligationBuilder {
     return VIntMode::Machine;
   }
 
+  bool mentionsBoundVariable(const VCExpr *Expr) const {
+    if (!Expr)
+      return false;
+    if (isActiveBoundVariable(Expr))
+      return true;
+    return std::any_of(Expr->Children.begin(), Expr->Children.end(),
+                       [&](const std::unique_ptr<VCExpr> &Child) {
+                         return mentionsBoundVariable(Child.get());
+                       });
+  }
+
   bool isActiveBoundVariable(const VCExpr *Expr) const {
     if (!Expr || Expr->K != VCExpr::Var)
       return false;
     return std::any_of(
         BoundVars.begin(), BoundVars.end(),
         [&](const auto &Entry) { return Entry.second == Expr->Name; });
+  }
+
+  /// The canonical numeral of \p Numeral reduced modulo 2^N into \p Sort.
+  static std::string reducedNumeral(const std::string &Numeral,
+                                    const LogicSort &Sort) {
+    if (Numeral.empty())
+      return Numeral;
+    const unsigned Width = Sort.BitWidth ? Sort.BitWidth : 32;
+    const unsigned ParseWidth = std::max<unsigned>(
+        Width, 4 * static_cast<unsigned>(Numeral.size()) + 2);
+    llvm::APInt Value(ParseWidth, Numeral, 10);
+    llvm::SmallString<64> Buffer;
+    Value.trunc(Width).toString(Buffer, 10,
+                                Sort.Signedness == LogicSignedness::Signed);
+    return std::string(Buffer);
   }
 
   std::unique_ptr<VCExpr> toMachineSort(std::unique_ptr<VCExpr> E,
@@ -1028,6 +1078,7 @@ class ObligationBuilder {
     // preserve, so retype it directly instead of emitting a runtime int2bv
     // conversion around a constant. Keeps `x + 1` as (bvadd x #x00000001).
     if (E->K == VCExpr::IntLit) {
+      E->IntVal = reducedNumeral(E->IntVal, TargetSort);
       E->Sort = TargetSort;
       return E;
     }
@@ -1036,6 +1087,41 @@ class ObligationBuilder {
     Converted->Loc = E->Loc;
     Converted->Children.push_back(std::move(E));
     return Converted;
+  }
+
+  /// Reduce a mathematical value modulo 2^N into \p TargetSort.
+  std::unique_ptr<VCExpr> mathToMachine(std::unique_ptr<VCExpr> E,
+                                        const LogicSort &TargetSort) {
+    // Reduction modulo 2^N commutes with +, -, *, negation, and selection.
+    const bool Mathematical =
+        E->Sort.Kind == LogicSortKind::MathematicalInteger;
+    switch (E->K) {
+    case VCExpr::Add:
+    case VCExpr::Sub:
+    case VCExpr::Mul:
+      if (!Mathematical)
+        break;
+      E->Children[0] = mathToMachine(std::move(E->Children[0]), TargetSort);
+      E->Children[1] = mathToMachine(std::move(E->Children[1]), TargetSort);
+      E->Sort = TargetSort;
+      return E;
+    case VCExpr::Neg:
+      if (!Mathematical)
+        break;
+      E->Children[0] = mathToMachine(std::move(E->Children[0]), TargetSort);
+      E->Sort = TargetSort;
+      return E;
+    case VCExpr::Ite:
+      if (!Mathematical)
+        break;
+      E->Children[1] = mathToMachine(std::move(E->Children[1]), TargetSort);
+      E->Children[2] = mathToMachine(std::move(E->Children[2]), TargetSort);
+      E->Sort = TargetSort;
+      return E;
+    default:
+      break;
+    }
+    return toMachineSort(std::move(E), TargetSort);
   }
 
   std::unique_ptr<VCExpr> toMode(std::unique_ptr<VCExpr> E, VIntMode Target) {
@@ -1052,26 +1138,7 @@ class ObligationBuilder {
       const LogicSort TargetSort =
           LogicSort::bitVector(E->Sort.BitWidth ? E->Sort.BitWidth : 32,
                                E->Sort.Signedness != LogicSignedness::Unsigned);
-      switch (E->K) {
-      case VCExpr::Add:
-      case VCExpr::Sub:
-      case VCExpr::Mul:
-        E->Children[0] = toMachineSort(std::move(E->Children[0]), TargetSort);
-        E->Children[1] = toMachineSort(std::move(E->Children[1]), TargetSort);
-        E->Sort = TargetSort;
-        return E;
-      case VCExpr::Neg:
-        E->Children[0] = toMachineSort(std::move(E->Children[0]), TargetSort);
-        E->Sort = TargetSort;
-        return E;
-      case VCExpr::Ite:
-        E->Children[1] = toMachineSort(std::move(E->Children[1]), TargetSort);
-        E->Children[2] = toMachineSort(std::move(E->Children[2]), TargetSort);
-        E->Sort = TargetSort;
-        return E;
-      default:
-        return toMachineSort(std::move(E), TargetSort);
-      }
+      return mathToMachine(std::move(E), TargetSort);
     }
     auto N = std::make_unique<VCExpr>(
         Target == VIntMode::Machine ? VCExpr::IntToBv : VCExpr::BvToInt);
@@ -1105,21 +1172,38 @@ class ObligationBuilder {
                          vcBinary(VCExpr::Le, cloneVCExpr(Math.get()),
                                   mathLimit(BitWidth, IsSigned, false)));
 
-    auto Converted = toMode(std::move(Math), VIntMode::Machine);
-    if (Converted->Sort.BitWidth != BitWidth) {
-      auto Resize = std::make_unique<VCExpr>(VCExpr::BvResize);
-      Resize->Sort = LogicSort::bitVector(BitWidth, IsSigned);
-      Resize->Loc = Converted->Loc;
-      Resize->Children.push_back(std::move(Converted));
-      Converted = std::move(Resize);
-    }
-
+    const LogicSort MachineSort = Machine->Sort;
+    auto Converted = mathToMachine(std::move(Math), MachineSort);
     auto Exact =
         vcAnd(std::move(InRange),
               vcBinary(VCExpr::Eq, std::move(Machine), std::move(Converted)));
     if (Kind == VCExpr::Eq)
       return Exact;
     return vcNot(std::move(Exact));
+  }
+
+  /// `Machine Kind Math` without lifting the machine operand: a mathematical
+  /// value outside the machine range decides the comparison, and one inside
+  /// it is compared as a machine value.
+  std::unique_ptr<VCExpr> exactCrossModeOrder(VCExpr::Kind Kind,
+                                              std::unique_ptr<VCExpr> Machine,
+                                              std::unique_ptr<VCExpr> Math) {
+    const unsigned BitWidth = Machine->Sort.BitWidth;
+    const bool IsSigned = Machine->Sort.Signedness == LogicSignedness::Signed;
+    const bool BelowMax = Kind == VCExpr::Lt || Kind == VCExpr::Le;
+    auto Outside = BelowMax ? vcBinary(VCExpr::Gt, cloneVCExpr(Math.get()),
+                                       mathLimit(BitWidth, IsSigned, false))
+                            : vcBinary(VCExpr::Lt, cloneVCExpr(Math.get()),
+                                       mathLimit(BitWidth, IsSigned, true));
+    auto InRange = vcAnd(vcBinary(VCExpr::Ge, cloneVCExpr(Math.get()),
+                                  mathLimit(BitWidth, IsSigned, true)),
+                         vcBinary(VCExpr::Le, cloneVCExpr(Math.get()),
+                                  mathLimit(BitWidth, IsSigned, false)));
+    const LogicSort MachineSort = Machine->Sort;
+    auto Converted = mathToMachine(std::move(Math), MachineSort);
+    return vcOr(std::move(Outside),
+                vcAnd(std::move(InRange), vcBinary(Kind, std::move(Machine),
+                                                   std::move(Converted))));
   }
 
   std::unique_ptr<VCExpr> fromBin(VBinOp Op, std::unique_ptr<VCExpr> L,
@@ -1205,6 +1289,22 @@ class ObligationBuilder {
       if (L->Sort.Kind == LogicSortKind::BitVector)
         return exactCrossModeEquality(K, std::move(L), std::move(R));
       return exactCrossModeEquality(K, std::move(R), std::move(L));
+    }
+    const bool IsOrder = K == VCExpr::Lt || K == VCExpr::Le ||
+                         K == VCExpr::Gt || K == VCExpr::Ge;
+    // Under a quantifier, lifting keeps the binder out of int2bv.
+    if (IsOrder && L->Sort.Kind == LogicSortKind::BitVector &&
+        R->Sort.Kind == LogicSortKind::MathematicalInteger &&
+        !mentionsBoundVariable(R.get()))
+      return exactCrossModeOrder(K, std::move(L), std::move(R));
+    if (IsOrder && L->Sort.Kind == LogicSortKind::MathematicalInteger &&
+        R->Sort.Kind == LogicSortKind::BitVector &&
+        !mentionsBoundVariable(L.get())) {
+      const VCExpr::Kind Flipped = K == VCExpr::Lt   ? VCExpr::Gt
+                                   : K == VCExpr::Le ? VCExpr::Ge
+                                   : K == VCExpr::Gt ? VCExpr::Lt
+                                                     : VCExpr::Le;
+      return exactCrossModeOrder(Flipped, std::move(R), std::move(L));
     }
     std::pair<std::unique_ptr<VCExpr>, std::unique_ptr<VCExpr>> Unified;
     if (K == VCExpr::Shl || K == VCExpr::Shr) {
@@ -1482,6 +1582,21 @@ public:
       N->Children.push_back(fromVExpr(C->Then.get()));
       N->Children.push_back(fromVExpr(C->Else.get()));
       N->Loc = C->Loc;
+      if (!N->Children[0] || !N->Children[1] || !N->Children[2])
+        return fail("conditional operand failed to lower");
+      // As for binary operators, a mathematical branch makes the result
+      // mathematical.
+      auto IsInteger = [](const LogicSort &Sort) {
+        return Sort.Kind == LogicSortKind::BitVector ||
+               Sort.Kind == LogicSortKind::MathematicalInteger;
+      };
+      if (IsInteger(N->Children[1]->Sort) && IsInteger(N->Children[2]->Sort) &&
+          N->Children[1]->Sort.Kind != N->Children[2]->Sort.Kind) {
+        auto Unified =
+            unifyIntModes(std::move(N->Children[1]), std::move(N->Children[2]));
+        N->Children[1] = std::move(Unified.first);
+        N->Children[2] = std::move(Unified.second);
+      }
       if (N->Children[1]->Sort.Kind == LogicSortKind::Heap &&
           N->Children[2]->Sort.Kind == LogicSortKind::Heap)
         setHeapSort(*N);
@@ -1548,9 +1663,15 @@ public:
         return Inner;
       }
       VIntMode TargetMode = intModeOfVType(C->Ty);
-      Inner = toMode(std::move(Inner), TargetMode);
       const LogicSort TargetSort =
           logicSortFor(C->Ty.Kind, TargetMode, C->Ty.BitWidth, C->Ty.IsSigned);
+      // The source width of a mathematical value is not a representation, so
+      // it is reduced once, directly into the destination type.
+      if (TargetMode == VIntMode::Machine &&
+          Inner->Sort.Kind == LogicSortKind::MathematicalInteger)
+        Inner = mathToMachine(std::move(Inner), TargetSort);
+      else
+        Inner = toMode(std::move(Inner), TargetMode);
       if (TargetMode == VIntMode::Machine &&
           (Inner->Sort.BitWidth != C->Ty.BitWidth ||
            Inner->Sort.Signedness != TargetSort.Signedness)) {
