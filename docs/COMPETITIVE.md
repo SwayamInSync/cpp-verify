@@ -12,40 +12,63 @@
 | Verus | Deductive (SMT) | No (Rust only) | Rust compiler | First-class syntax | Active |
 | **CppVerify** | **Deductive (wp + Z3)** | **Native, first-class** | **Clang (modified)** | **First-class syntax** | **In development** |
 
-## Our Differentiators
+## Current Differentiators and Research Hypotheses
 
-1. **Only deductive verifier built on Clang** — all others use custom parsers that lag behind C++ evolution
-2. **Only tool with native C++ support** — not C, not Rust, not a prototype plugin
-3. **First-class contract syntax** — not comments, not macros. Full type checking via Clang Sema.
-4. **C++26 contracts alignment** — syntax inspired by P2900, positioned for future standards integration
-5. **Verus-like proof language** — spec functions, proof functions, ghost blocks. No other C++ tool has this.
-6. **Type-preserving verification** — contracts carry full QualType from Clang. Signedness, bit-width, struct layout all available for precise VC generation.
-7. **`constexpr` → single source of truth** — any `constexpr` function is automatically usable in contracts with no re-declaration. The key advantage is maintenance integrity: Verus developers maintain two separate bodies (`const fn` for execution, `spec fn` for verification) that can silently diverge when one is updated. We have one body. Purity and termination are already enforced by Clang's evaluator — no `decreases` clause needed for `constexpr`. Note: lifted `constexpr` functions use machine integer semantics (32-bit `int`, overflow-aware) by default — we do not silently switch to unbounded integers. Explicit `spec` functions use mathematical integers.
-8. **Compile-time partial evaluation of contracts** — `constexpr` subexpressions with concrete arguments are evaluated by Clang before Z3 sees them. For concrete callsites, Z3 is never involved. No plugin-based verifier has access to the host compiler's constant evaluator.
-9. **Zero-cost incremental adoption** — without `-fverify-contracts`, the binary is identical to standard C++. Existing codebases add contracts one function at a time with zero disruption. Verus requires wrapping all code in `verus! { }` which changes operator precedence and produces non-standard Rust that regular tooling cannot process.
+1. **Compiler-native architecture** — CppVerify extends Clang rather than
+   maintaining a separate C++ parser and type checker.
+2. **First-class syntax for a documented C++ subset** — contracts are parsed
+   and type-checked by Clang Sema. This is not a claim of general C++ coverage.
+3. **Typed verifier boundary** — contracts retain Clang `QualType`,
+   signedness, bit width, layout, conversions, and source locations when
+   lowering to VCR.
+4. **Verification-only language** — spec functions, proof functions, ghost
+   blocks, and loop/function contracts are explicit AST constructs and emit no
+   runtime code.
+5. **Machine-faithful arithmetic** — executable and proof code retain
+   fixed-width integer semantics and explicit undefined-operation checks;
+   explicit spec functions use mathematical integers.
+6. **Experimental `constexpr` bridge** — concretely evaluatable calls can use
+   Clang constant evaluation, while a supported symbolic body can be lowered
+   with machine integer semantics. Before this becomes a soundness claim,
+   symbolic lifting must enforce a conservative totality criterion or reject
+   the helper. Clang's evaluation step limit is not a termination proof.
+7. **Explicit evidence modes** — unbounded deductive proof, strict
+   solver-portfolio proof, bounded safety, export, certification, timeout, and
+   solver `unknown` remain distinct results.
+8. **Incremental source adoption** — unannotated C++ remains ordinary C++ and
+   individual supported functions can be contracted. First-class annotations
+   themselves require the modified Clang frontend and
+   `-fverify-contracts`; they are not standard C++ accepted unchanged by an
+   upstream compiler.
 
-## Verus Specifically: What We Have That They Can't
+## Comparison with Verus
 
-Verus is the closest architectural peer (deductive, SMT-based, first-class syntax). The gap is not maturity — it is structural:
+Verus is the closest architectural comparator: it integrates deductive
+verification with Rust and separates executable, proof, and specification
+code. The systems make different tradeoffs rather than one strictly subsuming
+the other.
 
-| Capability | Verus | CppVerify |
+| Concern | Verus | CppVerify |
 |---|---|---|
-| Reuse existing helper functions in specs | ❌ must re-declare as `spec fn` | ✅ `constexpr` usable directly |
-| Single body for spec and execution | ❌ two bodies that can diverge silently | ✅ one `constexpr` body, always in sync |
-| Termination proof for constexpr specs | ❌ must write `decreases` always | ✅ Clang's step-limit is the proof |
-| Default integer semantics | Mathematical (`nat`/`int`, unbounded) | Machine (`int` = 32-bit, honest overflow) |
-| Compile-time spec evaluation | ❌ separate evaluation worlds | ✅ Clang evaluates constexpr in contracts |
-| Zero-annotation-change adoption | ❌ requires `verus! { }` wrapper | ✅ `-fverify-contracts` flag only |
-| Target language installed base | Rust (~4M devs) | C++ (~12M devs, safety-critical industries) |
+| Host frontend | Rust compiler integration | Modified Clang frontend |
+| Verification language | Rust-oriented exec/proof/spec modes | C++ contracts plus proof/spec/ghost constructs |
+| Integer modeling | Explicit mathematical and machine-oriented types | Mathematical explicit specs; machine executable/proof and lifted `constexpr` |
+| Recursive specifications | Checked termination measures | Explicit spec recursion requires `decreases`; automatic `constexpr` lifting still needs a closed totality policy |
+| Executable helper reuse | Uses Verus's mode and specification mechanisms | Experiments with selected `constexpr` helpers and Clang constant evaluation |
+| Current maturity | Evaluated research verifier with substantial examples and formal core | Research prototype with one flagship real-code extraction; broader evaluation and formalization remain open |
 
 ## Honest Assessment
 
 - Frama-C has 15+ years of engineering maturity. Our MVP won't match its proof automation.
 - VeriFast's separation logic gives it heap reasoning we won't have initially.
 - CBMC handles full C semantics including pointers, casts, unions — our initial fragment is tiny.
-- Verus has a richer standard library (vstd) and parallel verification. We won't match these at MVP.
-- Our advantage is structural (Clang-native, C++, constexpr bridge) and market (C++ has no competitor).
+- Verus has a richer standard library, broader evaluation, and a published
+  formal core. CppVerify does not currently match that evidence.
+- CppVerify's hypothesis is structural: sharing Clang's typed frontend may
+  reduce semantic duplication for a useful C++ subset. A multi-project corpus
+  and a formal translation result are still needed to establish it.
 
 ## Positioning
 
-"The only deductive verification tool for modern C++ built on Clang — where your existing `constexpr` functions become verification specs for free."
+"A Clang-native deductive verifier that makes its supported C++ boundary,
+machine semantics, and proof status explicit."
