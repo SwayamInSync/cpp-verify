@@ -285,6 +285,12 @@ public:
 llvm::Expected<LogicFeatureSet>
 validateObligationModule(const ObligationModule &Module);
 
+/// Display names of the logical functions whose finite definitions still
+/// contain logical applications. A model may interpret those applications
+/// arbitrarily, so a satisfying assignment is a counterexample only after it
+/// is checked against the true definitions.
+std::vector<std::string> specFrontier(const ObligationModule &Module);
+
 } // namespace verify
 } // namespace clang
 
