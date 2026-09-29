@@ -62,6 +62,21 @@ class Z3Encoder {
                                          const LogicExpr *Query,
                                          VerifyResult &Result);
   z3::expr_vector rangeFacts();
+
+  /// Model values for free symbols and the true definition of every defined
+  /// logical function, for checking a counterexample.
+  struct SpecTruth;
+  std::optional<z3::expr> evalTrue(SpecTruth &Truth, const z3::expr &E);
+  std::optional<z3::expr> evalQuantifier(SpecTruth &Truth, const z3::expr &Q);
+  std::optional<z3::expr> applyTrue(SpecTruth &Truth,
+                                    const LogicFunctionDecl &Function,
+                                    const z3::expr_vector &Args);
+  /// Keep a satisfying model only if it is a counterexample under the true
+  /// definitions; otherwise add the definitions at the disputed points and
+  /// solve again. Sets \p Out to Unresolved when that does not settle it.
+  z3::check_result refineSpecModel(const ObligationModule &Module,
+                                   const z3::expr &Semantics,
+                                   z3::check_result Result, VerifyResult &Out);
   z3::expr coerceToSort(z3::expr E, const LogicSort &Target, bool IsSigned);
   void emitSpecCallAxiom(const VCExpr *Call);
 

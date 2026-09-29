@@ -1179,6 +1179,237 @@ Z3Encoder::encodeModuleAs(const ObligationModule &Module,
   return EncodedGoal;
 }
 
+namespace {
+constexpr uint64_t SpecTruthSteps = 2000000;
+constexpr unsigned SpecTruthDepth = 2000;
+constexpr int64_t SpecTruthInstances = 100000;
+constexpr unsigned SpecRefinementRounds = 64;
+} // namespace
+
+struct Z3Encoder::SpecTruth {
+  explicit SpecTruth(z3::model Model) : Model(std::move(Model)) {}
+  z3::model Model;
+  /// Declaration of each logical function by its Z3 symbol.
+  std::map<std::string, const LogicFunctionDecl *> Functions;
+  std::map<std::string, z3::expr> Values;
+  /// Applications whose model value differs from the true value.
+  std::vector<std::pair<z3::expr, z3::expr>> Disagreements;
+  std::set<std::string> Disputed;
+  uint64_t Steps = SpecTruthSteps;
+  unsigned Depth = 0;
+};
+
+std::optional<z3::expr> Z3Encoder::evalTrue(SpecTruth &Truth,
+                                            const z3::expr &E) {
+  if (Truth.Steps == 0)
+    return std::nullopt;
+  --Truth.Steps;
+  if (E.is_numeral() || E.is_true() || E.is_false())
+    return E;
+  if (E.is_quantifier())
+    return evalQuantifier(Truth, E);
+  if (!E.is_app())
+    return std::nullopt;
+  const z3::func_decl Decl = E.decl();
+  const Z3_decl_kind Kind = Decl.decl_kind();
+  auto isBool = [](const std::optional<z3::expr> &V) {
+    return V && (V->is_true() || V->is_false());
+  };
+  // Connectives evaluate lazily: an untaken branch may apply a function
+  // outside its domain of recursion.
+  if (Kind == Z3_OP_ITE) {
+    std::optional<z3::expr> Cond = evalTrue(Truth, E.arg(0));
+    if (!isBool(Cond))
+      return std::nullopt;
+    return evalTrue(Truth, E.arg(Cond->is_true() ? 1 : 2));
+  }
+  if (Kind == Z3_OP_AND || Kind == Z3_OP_OR) {
+    const bool Deciding = Kind == Z3_OP_OR;
+    bool Undetermined = false;
+    for (unsigned I = 0; I < E.num_args(); ++I) {
+      std::optional<z3::expr> V = evalTrue(Truth, E.arg(I));
+      if (!isBool(V))
+        Undetermined = true;
+      else if (V->is_true() == Deciding)
+        return Ctx.bool_val(Deciding);
+    }
+    if (Undetermined)
+      return std::nullopt;
+    return Ctx.bool_val(!Deciding);
+  }
+  if (Kind == Z3_OP_IMPLIES) {
+    std::optional<z3::expr> Premise = evalTrue(Truth, E.arg(0));
+    if (isBool(Premise) && Premise->is_false())
+      return Ctx.bool_val(true);
+    std::optional<z3::expr> Conclusion = evalTrue(Truth, E.arg(1));
+    if (!isBool(Premise) || !isBool(Conclusion))
+      return std::nullopt;
+    return Ctx.bool_val(Conclusion->is_true());
+  }
+  z3::expr_vector Args(Ctx);
+  for (unsigned I = 0; I < E.num_args(); ++I) {
+    std::optional<z3::expr> V = evalTrue(Truth, E.arg(I));
+    if (!V)
+      return std::nullopt;
+    Args.push_back(*V);
+  }
+  if (Kind == Z3_OP_UNINTERPRETED && E.num_args() > 0) {
+    auto It = Truth.Functions.find(Decl.name().str());
+    if (It != Truth.Functions.end() && It->second->DefinitionFuel > 0) {
+      std::optional<z3::expr> True = applyTrue(Truth, *It->second, Args);
+      if (!True)
+        return std::nullopt;
+      z3::expr Applied = Decl(Args);
+      z3::expr Claimed = Truth.Model.eval(Applied, true).simplify();
+      if (!z3::eq(Claimed, True->simplify())) {
+        Truth.Disagreements.emplace_back(Applied, *True);
+        Truth.Disputed.insert(It->second->DisplayName.empty()
+                                  ? It->second->Identity
+                                  : It->second->DisplayName);
+      }
+      return True;
+    }
+  }
+  return Truth.Model.eval(Decl(Args), true);
+}
+
+std::optional<z3::expr> Z3Encoder::evalQuantifier(SpecTruth &Truth,
+                                                  const z3::expr &Q) {
+  if (!(Q.is_forall() || Q.is_exists()) ||
+      Z3_get_quantifier_num_bound(Ctx, Q) != 1)
+    return std::nullopt;
+  // The shape the encoder emits: forall x. lo <= x < hi => P, and
+  // exists x. (lo <= x < hi) && P, with lo and hi free of x.
+  const bool Forall = Q.is_forall();
+  z3::expr Body = Q.body();
+  if (!Body.is_app() ||
+      Body.decl().decl_kind() != (Forall ? Z3_OP_IMPLIES : Z3_OP_AND) ||
+      Body.num_args() != 2)
+    return std::nullopt;
+  z3::expr Range = Body.arg(0);
+  if (!Range.is_app() || Range.decl().decl_kind() != Z3_OP_AND ||
+      Range.num_args() != 2 || !Range.arg(0).is_app() ||
+      !Range.arg(1).is_app() || Range.arg(0).decl().decl_kind() != Z3_OP_LE ||
+      Range.arg(1).decl().decl_kind() != Z3_OP_LT ||
+      !Range.arg(0).arg(1).is_var() || !Range.arg(1).arg(0).is_var())
+    return std::nullopt;
+  std::optional<z3::expr> Lo = evalTrue(Truth, Range.arg(0).arg(0));
+  std::optional<z3::expr> Hi = evalTrue(Truth, Range.arg(1).arg(1));
+  int64_t Low = 0, High = 0;
+  if (!Lo || !Hi || !Lo->is_numeral_i64(Low) || !Hi->is_numeral_i64(High))
+    return std::nullopt;
+  if (High > Low && High - Low > SpecTruthInstances)
+    return std::nullopt;
+  bool Undetermined = false;
+  for (int64_t I = Low; I < High; ++I) {
+    z3::expr_vector Value(Ctx);
+    Value.push_back(Ctx.int_val(I));
+    std::optional<z3::expr> V = evalTrue(Truth, Body.arg(1).substitute(Value));
+    if (!V || !(V->is_true() || V->is_false()))
+      Undetermined = true;
+    else if (V->is_true() != Forall)
+      return Ctx.bool_val(!Forall);
+  }
+  if (Undetermined)
+    return std::nullopt;
+  return Ctx.bool_val(Forall);
+}
+
+std::optional<z3::expr> Z3Encoder::applyTrue(SpecTruth &Truth,
+                                             const LogicFunctionDecl &Function,
+                                             const z3::expr_vector &Args) {
+  if (!Function.StepDefinition || Args.size() != Function.Parameters.size() ||
+      Truth.Depth >= SpecTruthDepth)
+    return std::nullopt;
+  std::string Key = Function.Identity;
+  for (unsigned I = 0; I < Args.size(); ++I)
+    Key += "\x1f" + Args[I].to_string();
+  if (auto It = Truth.Values.find(Key); It != Truth.Values.end())
+    return It->second;
+
+  // Unfold one step at the argument values, as a call-site axiom does.
+  std::vector<std::pair<std::string, std::optional<z3::expr>>> Saved;
+  for (unsigned I = 0; I < Args.size(); ++I) {
+    const std::string &Name = Function.Parameters[I].Name;
+    auto Existing = Vars.find(Name);
+    Saved.emplace_back(Name, Existing == Vars.end()
+                                 ? std::optional<z3::expr>()
+                                 : std::optional<z3::expr>(Existing->second));
+    Vars.erase(Name);
+    Vars.emplace(Name, Args[I]);
+  }
+  const bool SavedFailure = EncodingFailed;
+  std::string SavedError = EncodingError;
+  EncodingFailed = false;
+  z3::expr Body =
+      coerce(encodeVC(Function.StepDefinition.get()),
+             Function.StepDefinition->Sort, Function.ResultSort,
+             Function.ResultSort.Signedness == LogicSignedness::Signed);
+  const bool Failed = EncodingFailed;
+  EncodingFailed = SavedFailure;
+  EncodingError = std::move(SavedError);
+  for (auto &[Name, Value] : Saved) {
+    Vars.erase(Name);
+    if (Value)
+      Vars.emplace(Name, *Value);
+  }
+  if (Failed)
+    return std::nullopt;
+  ++Truth.Depth;
+  std::optional<z3::expr> Value = evalTrue(Truth, Body);
+  --Truth.Depth;
+  if (Value)
+    Truth.Values.emplace(Key, *Value);
+  return Value;
+}
+
+z3::check_result Z3Encoder::refineSpecModel(const ObligationModule &Module,
+                                            const z3::expr &Semantics,
+                                            z3::check_result Result,
+                                            VerifyResult &Out) {
+  if (Result != z3::sat)
+    return Result;
+  const std::vector<std::string> Frontier = specFrontier(Module);
+  if (Frontier.empty())
+    return Result;
+  for (unsigned Round = 0; Result == z3::sat; ++Round) {
+    SpecTruth Truth(Solver.get_model());
+    for (const auto &[Identity, Function] : LogicFunctions)
+      Truth.Functions.emplace(specFuncDecl(*Function).name().str(), Function);
+    std::optional<z3::expr> Holds = evalTrue(Truth, Semantics);
+    if (Holds && Holds->is_true())
+      return Result;
+    const bool Refutable =
+        Holds && Holds->is_false() && !Truth.Disagreements.empty();
+    if (!Refutable || Round == SpecRefinementRounds) {
+      const std::set<std::string> &Names =
+          Truth.Disputed.empty()
+              ? std::set<std::string>(Frontier.begin(), Frontier.end())
+              : Truth.Disputed;
+      std::string List;
+      for (const std::string &Name : Names)
+        List += (List.empty() ? "" : ", ") + Name;
+      Out.Status = VerifyStatus::Unresolved;
+      Out.Reason = VerifyReason::SpecFuel;
+      Out.Message =
+          (!Refutable ? "the counterexample could not be checked against the "
+                        "definition of " +
+                            List
+                      : "every counterexample found applies " + List +
+                            " beyond its unfolding fuel and is refuted by its "
+                            "definition") +
+          "; raise reveal_with_fuel, bound the argument, or state a lemma";
+      return z3::unknown;
+    }
+    // The definitions are true, so adding them at the disputed points can
+    // only remove spurious models.
+    for (const auto &[Applied, Value] : Truth.Disagreements)
+      Solver.add(Applied == Value);
+    Result = Solver.check();
+  }
+  return Result;
+}
+
 VerifyResult Z3Encoder::verifyModule(const ObligationModule &Module,
                                      const LogicExpr *Query,
                                      std::optional<uint64_t> TraceEventCount) {
@@ -1192,7 +1423,11 @@ VerifyResult Z3Encoder::verifyModule(const ObligationModule &Module,
     Solver.add(Definition);
   z3::expr Semantics = z3::mk_and(Solver.assertions());
   Solver.add(rangeFacts());
-  switch (Solver.check()) {
+  const z3::check_result Checked =
+      refineSpecModel(Module, Semantics, Solver.check(), Out);
+  if (Out.Reason == VerifyReason::SpecFuel)
+    return Out;
+  switch (Checked) {
   case z3::unsat:
     Out.Status = VerifyStatus::Verified;
     return Out;
