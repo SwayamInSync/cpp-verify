@@ -4225,6 +4225,8 @@ void Sema::ActOnFinishCXXInClassMemberInitializer(Decl *D,
   }
 
   FD->setInClassInitializer(InitExpr.get());
+  if (getLangOpts().VerifyContracts)
+    CheckSpecFunctionUses(nullptr, InitExpr.get());
 }
 
 /// Find the direct and/or virtual base specifiers that
