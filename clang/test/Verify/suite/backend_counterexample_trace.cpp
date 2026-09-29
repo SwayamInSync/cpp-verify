@@ -32,7 +32,7 @@ int unreachable_trace_only_spec(int value)
   post(result == 0)
 {
   return 0;
-  return trace_only_identity(value);
+  ghost { int unused = trace_only_identity(value); }
 }
 
 int path_and_call(int value)
