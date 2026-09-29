@@ -97,7 +97,7 @@ compiler — GCC or Clang (`setup.sh` uses `${CXX:-c++}`).
 | **BMC** | `cpp-verify --backend=bmc --unroll=N file.cpp` | Incremental bounds through `N`, then Z3 |
 | **Lean export** | `cpp-verify --backend=lean --lean-out=out.lean file.cpp` | Emit an unchecked `sorry` theorem; reports `Exported`, not `Verified` |
 | **Lean project** | `cpp-verify --lean-project=dir file.cpp` | Generate an editable, pinned Lean 4 project from the obligations |
-| **Lean fallback** | `cpp-verify --lean-fallback=dir file.cpp` | Route obligations Z3/portfolio left *unresolved* into a Lean project |
+| **Lean fallback** | `cpp-verify --lean-fallback=dir file.cpp` | Route obligations Z3/portfolio left *unresolved* into a Lean project; once their proofs check, the function is `Proved (z3+lean)` |
 
 Add `--lean-certify` to kernel-check every proof in a `--lean-project` tree with no
 admissions, so a discharged obligation is machine-checked rather than assumed.
@@ -135,6 +135,7 @@ and `docs/UB-CHECKING.md`.
 ```bash
 ./build/bin/cpp-verify --jobs=4 --proof-cache=.cppverify-cache file.cpp
 ./build/bin/cpp-verify --timeout=10000 --solver-rlimit=2000000 file.cpp
+./build/bin/cpp-verify --int-encoding=bitvector file.cpp         # auto (default) | integer | bitvector
 ./build/bin/cpp-verify --diagnostics-format=json file.cpp        # JSON Lines, for editors/CI
 ./build/bin/cpp-verify --obligation-out=goals.bin file.cpp       # backend-neutral archive
 ./build/bin/cpp-verify --dump-ir=1,2,3,4 file.cpp                # VCR, passive, Obligation IR, Z3
@@ -142,7 +143,10 @@ and `docs/UB-CHECKING.md`.
 
 Z3 runs support deterministic isolated solving (`--jobs`) and positive-proof reuse
 (`--proof-cache`). A query past `--timeout` or `--solver-rlimit` is reported as
-*unresolved* rather than hanging — never as verified.
+*unresolved* rather than hanging — never as verified. `--int-encoding` only chooses
+how machine integers reach the solver; every choice is exact, so it can change speed
+but never a verdict. A failure names what failed, e.g. `f::overflow@12:5` or
+`f::invariant-preserved@8:3`.
 
 Chained modular calls (e.g. `return inc(inc(x))`) are lowered to temporaries automatically.
 See [Chapter 17](https://swayaminsync.github.io/cpp-verify/book/part-ii/ch17-backends-modular-calls.html).
@@ -162,13 +166,13 @@ A second study proves a **UTF-8 decoder cannot be tricked**: every accepted resu
 is a Unicode scalar value, never a surrogate, never an overlong encoding. Injecting
 the historical defects gets them rejected with concrete witnesses — lead byte `C0`
 yields `result = 64` (`@` smuggled as two bytes, the IIS / CVE-2008-2938 traversal
-class), and dropping the `ED` ceiling yields `result = 55296`, exactly U+D800. See
+class), and dropping the `ED` ceiling yields `result = 57343`, exactly U+DFFF. See
 [UTF-8 validation](https://swayaminsync.github.io/cpp-verify/case-studies/utf8-validation.html).
 
 A third takes the **binary-search midpoint** — the `(lo + hi) / 2` overflow
 that stood in *Programming Pearls* for two decades and in `java.util.Arrays` for
 nine years. No contract asks for an overflow check; always-on definedness rejects it
-on its own with the concrete `lo = 1073741825, hi = 1073741826` that breaks it, and
+on its own with a concrete witness such as `lo = hi = 1073741824`, and
 verifies the `lo + (hi - lo) / 2` form. See
 [Binary search](https://swayaminsync.github.io/cpp-verify/case-studies/binary-search.html).
 
