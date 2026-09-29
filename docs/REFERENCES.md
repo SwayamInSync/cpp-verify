@@ -62,6 +62,56 @@
   - Automatic property generation (bounds checks, overflow, null deref)
   - Future BMC backend for our tool
 
+## Verification Automation and Scaling
+
+### Dafny verification optimization guide
+- **URL**: https://dafny.org/latest/VerificationOptimization/VerificationOptimization
+- **Why**: Production guidance for opaque definitions, fuel, calculation
+  statements, assertion batching, quantifier behavior, resource measurement,
+  and proof-stability testing.
+
+### Verus reveal/hide and profiling
+- **Reveal/hide**:
+  https://verus-lang.github.io/verus/guide/reference-reveal-hide.html
+- **Profiling**: https://verus-lang.github.io/verus/guide/profiling.html
+- **Why**: Closest production reference for fuel-controlled recursive specs,
+  quantifier diagnostics, and SMT-focused proof engineering.
+
+### Houdini invariant inference
+- **Paper**: "Houdini, an Annotation Assistant for ESC/Java" — Flanagan and
+  Leino, FME 2001
+- **PDF**: https://users.soe.ucsc.edu/~cormac/papers/fme01.pdf
+- **Why**: Production-proven fixpoint elimination of invalid
+  user/tool-generated invariant candidates without trusting inferred facts.
+
+### Frama-C WP manual
+- **PDF**: https://www.frama-c.com/download/frama-c-wp-manual.pdf
+- **Why**: Mature reference for memory-model selection, VC simplification,
+  modular effects, multiple provers, and industrial deductive verification.
+
+### Why3
+- **Documentation**: https://why3.org/doc/
+- **Why**: Solver-neutral VC dispatch, proof transformations, standard logical
+  libraries, and multi-prover workflows.
+
+### Z3 Spacer / property-directed reachability
+- **Guide**: https://microsoft.github.io/z3guide/docs/fixedpoints/engineforpdr/
+- **Why**: CHC/PDR reference for discovering inductive invariants in supported
+  transition-system fragments.
+
+### Verification caching
+- **Paper**: "Cache-a-lot: Scalable Verification through Aggressive Caching"
+- **URL**: https://arxiv.org/abs/2504.07642
+- **Why**: Dependency-aware, content-addressed reuse of verification results
+  across incremental builds.
+
+### Proof-certificate research
+- **Boogie proof generation**:
+  https://github.com/gauravpartha/boogie_proofgen
+- **Why**: Research reference for independently replaying VC-generation and
+  solver proof steps; not yet a production-complete solution for CppVerify's
+  mixed arrays/bit-vectors/integers.
+
 ### Boogie2 Paper — "Weakest-Precondition of Unstructured Programs" (Barnett, Leino, PASTE 2005)
 - How to compute wp for goto-based control flow (relevant if you encounter unstructured CFGs)
 
