@@ -124,6 +124,9 @@ spec int fibo(int n)
 ```
 
 - Pure mathematical functions used in contracts.
+- Usable only in contracts, ghost code, and other `spec` or `proof`
+  functions. A spec is never compiled, so Sema rejects a reference from
+  executable code (a body, initializer, or default argument).
 - Must be total (all paths return, termination proven via `decreases`).
 - No side effects, no mutation, no I/O. A spec may read memory through its
   pointer parameters but never write it; each call is evaluated in the heap
@@ -185,10 +188,13 @@ shifted mathematical value fits the corresponding unsigned type.
 - Want fast verification with abstract math semantics → write `spec`.
 - Want code reuse with runtime-honest semantics → write `constexpr` (and accept the machine-integer encoding cost).
 
-Calls in contract expressions retain the callee's integer semantics. When an
-explicit mathematical spec result is instead materialized in executable code,
-CppVerify converts it to the C++ destination machine type before applying any
-subsequent arithmetic and undefined-behavior checks.
+Calls in contract expressions retain the callee's integer semantics: a
+mathematical spec result stays unbounded, operations involving it are exact,
+and the implicit usual arithmetic conversions do not bound it. A mathematical
+value never wraps into a machine type. Storing it in a ghost or proof variable,
+passing it to a lifted `constexpr` parameter, casting it explicitly, or using
+it as a bitwise operand converts it, and that conversion carries an `overflow`
+obligation that the value fits.
 
 This is genuinely a CppVerify advantage over Verus — Verus forces users to maintain two separate bodies; we let one body do double duty *or* let users opt into a clean math-integer spec.
 
@@ -600,7 +606,11 @@ bool contains(SortedArray a, int target)
 | `proof` function | Machine | `BitVec(N)` or range-checked `Int` |
 | `exec` (regular) function | Machine | `BitVec(N)` or range-checked `Int` |
 
-- Conversion at boundaries is explicit (`int` ↔ unbounded `Int` requires a cast that may incur a precondition for fits-in-range).
+- Conversion at boundaries is explicit. Machine to mathematical is exact.
+  Mathematical to machine (materialization in ghost or proof code, a machine
+  parameter, an explicit cast, or a bitwise operand) is an `overflow`
+  obligation that the value fits; it never wraps. Implicit C++ conversions in
+  contracts keep a mathematical value unbounded.
 - Mathematical `spec` division and remainder are unbounded but use C++'s
   truncate-toward-zero sign convention. At a zero divisor their total logical
   extension is quotient zero and remainder equal to the dividend; evaluated
@@ -753,6 +763,10 @@ KEYCONTRACT flag: only active when `-fverify-contracts` is passed. Otherwise the
 8. `modifies` lvalues must be ordinary lvalues; the parser computes their alias keys for the encoder.
 9. `aliases(p, q)` arguments must be pointer/reference-typed parameters of the enclosing function.
 10. `recommends` is only valid on `spec` functions.
+11. A `spec` function may be referenced only from contracts, ghost code, and
+    `spec` or `proof` functions; executable code, including initializers and
+    default arguments, may not reference one. Unevaluated operands
+    (`sizeof`, `decltype`) are exempt.
 
 ### CodeGen Rules
 
@@ -843,8 +857,8 @@ their human message: `counterexample`, `solver.timeout`, `solver.unknown`,
 `solver.malformed-output`, `query.size-limit`, `encoding.failed`,
 `obligation.invalid`, `logic.unsupported`, `query.missing`,
 `backend.invalid-result`, `backend.inconsistent-results`,
-`bmc.incomplete-bound`, `lean.export-failed`, `cache.corrupt`, and
-`cache.io-failed`.
+`bmc.incomplete-bound`, `lean.export-failed`, `cache.corrupt`,
+`cache.io-failed`, and `spec.fuel`.
 `--diagnostics-format=json` serializes verification results as versioned JSON
 Lines (`cppverify.diagnostic/1`) for both source verification and archive
 replay.
@@ -885,9 +899,11 @@ seed/resource options and bounded output; missing tools, invocation failures,
 timeouts, `unknown`, extra diagnostics, and malformed tokens are unresolved.
 
 `--backend=portfolio` runs ordered Z3 and cvc5 queries over that same module.
-Only `unsat`/`unsat` is `Verified`; only `sat`/`sat` is `Failed`; a decisive
-split is `backend.inconsistent-results`; and an unresolved side keeps the
-portfolio unresolved. Agreed failures retain Z3's typed source model and trace.
+Only `unsat`/`unsat` is `Verified`; only `sat`/`sat` is `Failed`, where cvc5's
+`spec.fuel` counts as `sat` beside a Z3 counterexample checked against the spec
+definitions; a decisive split is `backend.inconsistent-results`; and an
+unresolved side keeps the portfolio unresolved. Agreed failures retain Z3's
+typed source model and trace.
 The persistent cache, when requested, memoizes only the portfolio's
 namespace-separated Z3 component and never skips cvc5. BMC remains Z3-backed,
 and bounded archives must replay through the BMC aggregator.
