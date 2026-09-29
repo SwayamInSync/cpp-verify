@@ -6,6 +6,8 @@ This repository **is** the CppVerify codebase: an LLVM monorepo fork extended at
 |------|------|
 | `clang/lib/Verify/` | Verification engine |
 | `clang/tools/cpp-verify/` | Standalone verifier |
+| `clang/test/Verify/` | Frontend and end-to-end lit tests (`suite/` for backends) |
+| `clang/unittests/Verify/` | Encoding oracle and parity unit tests (`VerifyTests`) |
 | `llvm/` | CMake entry for LLVM + Clang |
 | `website/` | Published user docs (Sphinx + Doxygen) |
 | `docs/` | Design notes |
