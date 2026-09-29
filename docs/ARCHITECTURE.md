@@ -542,6 +542,16 @@ every operation stays in range by construction:
   encoding, and a typed load reduces the cell into the load's sort;
 - an opaque machine-sorted spec application is reduced into its sort's range.
 
+Mode conversions are stated in Layer 3, not by an adapter. Machine to
+mathematical is exact. Mathematical to machine is reduced directly into the
+destination sort, and the reduction is pushed through `+`, `-`, `*`, negation,
+and `ite`, so a converted polynomial stays bit-vector arithmetic; passivization
+guards every such conversion with an `overflow` obligation that the value fits.
+Equality and ordering between a machine and a mathematical operand do not lift
+the machine side: a mathematical value outside the machine range decides the
+comparison, and one inside it is compared as a machine value. Operands that
+mention a quantifier binder are lifted instead.
+
 Range facts make Z3 assign every machine variable. Counterexample extraction
 therefore reports a variable as undetermined (`<unknown>`) when the goal and
 spec equations still evaluate to true with it, and every variable freed before
@@ -568,7 +578,15 @@ serialized into canonical archives.
 
 **Verification:** each module already contains a counterexample query. Z3
 asserts that query directly. UNSAT means every encoded obligation holds; SAT
-produces a counterexample; UNKNOWN is reported honestly. If the complete query
+produces a counterexample; UNKNOWN is reported honestly. When a finite
+definition still contains a logical application, the model may interpret it
+arbitrarily, so a SAT model counts only if the query also holds with every
+free symbol at its model value and every defined logical function at its true
+definition, evaluated concretely. Otherwise the true values at the disputed
+arguments are added as facts and the query is solved again, up to 64 rounds;
+because the facts are true, a later UNSAT is a proof. A model that cannot be
+confirmed is `Unresolved` with reason `spec.fuel`. cvc5 returns no model, so
+its `sat` for such a module is `spec.fuel` too. If the complete query
 is unresolved, Z3 may solve the module-owned ordered queries. It does not
 reconstruct alternate passive programs.
 
@@ -622,7 +640,7 @@ The driver selects a backend via `VerifyOptions` (`Verifier.h` / `cpp-verify --b
 |---------|----------------|-------|
 | **Z3** | `Z3VerifyBackend` | Default. Consumes `ObligationModule`; counterexamples come from models. |
 | **cvc5** | `CVC5VerifyBackend` + standalone SMT-LIB2 | Encodes the same canonical sorts, C++ truncating math division/remainder, bit-vectors, signed overflow, total heap, bounded quantifiers, and finite ground spec equations. Solver process failures and malformed output are unresolved. |
-| **Strict portfolio** | `PortfolioVerifyBackend` | Runs ordered Z3 and cvc5 queries. Matching UNSAT proves; matching SAT fails and retains the Z3 model; disagreement or an unresolved side is unresolved. |
+| **Strict portfolio** | `PortfolioVerifyBackend` | Runs ordered Z3 and cvc5 queries. Matching UNSAT proves; matching SAT fails and retains the Z3 model (a cvc5 `spec.fuel` counts as SAT beside a checked Z3 counterexample); disagreement or an unresolved side is unresolved. |
 | **BMC** | `LoopUnroll` on VCR, then shared obligation/Z3 path | Source verification grows bounds from zero through `--unroll=N`, stopping on a counterexample, complete unwinding, unresolved query, or the maximum frontier. Safety with failed unwinding is `BoundedSafe(N)`; only proved unwinding is `Verified`. |
 | **Lean** | `exportLeanScratchPad` / project certification | Standalone mode emits unchecked theorem stubs. Project mode emits direct source goals, total functional heaps, typed bit-vector/integer operations, and compact finite-fuel spec bodies into generated files while preserving user proofs. Export is `Exported`; only the pinned admission-free kernel/axiom check is `Certified`. |
 
