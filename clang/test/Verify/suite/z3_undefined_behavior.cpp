@@ -23,17 +23,17 @@ int safe_machine_code_with_spec_contract(int x)
   return x + 1;
 }
 
-int safe_machine_code_after_spec_result(int x)
+proof void safe_machine_code_after_spec_result(int x)
   pre(x >= -100 && x <= 100)
-  post(result == x + 1)
 {
-  return math_identity(x) + 1;
+  int value = math_identity(x) + 1;
+  contract_assert(value == x + 1);
 }
 
-int safe_unbounded_spec_identity(int x)
-  post(result == x)
+proof void safe_unbounded_spec_identity(int x)
 {
-  return math_identity(x);
+  int value = math_identity(x);
+  contract_assert(value == x);
 }
 
 unsigned safe_unsigned_wrap(unsigned x)
@@ -94,35 +94,36 @@ int unsafe_overflow_with_spec_contract(int x)
   return x + 1;
 }
 
-int unsafe_overflow_after_spec_result(int x)
+proof void unsafe_overflow_after_spec_result(int x)
   pre(x == 2147483647)
-  post(result < 0)
 {
-  return math_identity(x) + 1;
+  int value = math_identity(x) + 1;
+  contract_assert(value < 0);
 }
 
-int unsafe_overflow_after_spec_initialization(int x)
+proof void unsafe_overflow_after_spec_initialization(int x)
   pre(x == 2147483647)
-  post(result < 0)
 {
   int value = math_identity(x);
-  return value + 1;
+  int next = value + 1;
+  contract_assert(next < 0);
 }
 
-int unsafe_overflow_after_spec_assignment(int x)
+proof void unsafe_overflow_after_spec_assignment(int x)
   pre(x == 2147483647)
-  post(result < 0)
 {
   int value = 0;
   value = math_identity(x);
-  return value + 1;
+  int next = value + 1;
+  contract_assert(next < 0);
 }
 
-int invalid_out_of_range_spec_result(int x)
+// The mathematical result 2^31 has no int representation; it must not wrap.
+proof void invalid_out_of_range_spec_result(int x)
   pre(x == 2147483647)
-  post(result == math_increment(x))
 {
-  return math_increment(x);
+  int value = math_increment(x);
+  contract_assert(value < 0);
 }
 
 int unsafe_signed_subtract(int x)
@@ -171,7 +172,7 @@ int unsafe_min_remainder(int x)
 // VERIFY-DAG: error: verification failed: unsafe_overflow_after_spec_result
 // VERIFY-DAG: error: verification failed: unsafe_overflow_after_spec_initialization
 // VERIFY-DAG: error: verification failed: unsafe_overflow_after_spec_assignment
-// VERIFY-DAG: error: verification failed: invalid_out_of_range_spec_result
+// VERIFY-DAG: error: verification failed: invalid_out_of_range_spec_result [{{.*}}::overflow@
 // VERIFY-DAG: error: verification failed: unsafe_signed_subtract
 // VERIFY-DAG: error: verification failed: unsafe_signed_multiply
 // VERIFY-DAG: error: verification failed: unsafe_signed_negation
