@@ -14,13 +14,26 @@ The end-to-end MVP gate is achieved and permanently exercises:
 - fail-closed unsupported lowering and encoding, including honest `unknown` for
   quantified obligations Z3 cannot decide.
 
-The next correctness frontier is an addressable-object model: allocation
-identity, byte-consistent subobjects and array steps, lifetime/liveness,
-provenance, alignment, and initialized heap storage. References,
-pointer-bearing/non-flat records, allocation/deallocation, and wider C++
-features remain outside the verified subset until that foundation exists.
+Since the MVP, the verified subset has grown to bounded scalar `new`/`delete`
+with allocation identity, lifetime, provenance, and initialization; scalar
+lvalue references; promoted local objects and fixed arrays; modular slices and
+same-array pointer difference; `return`, `break`, and `continue` in `while` and
+`for` loops; spec functions that read the heap; and whole-extent separation of
+`valid(p, n)` buffers. Machine integers reach the solver through an exact
+`--int-encoding` (integers by default, bit-vectors for bit-level queries), and
+every obligation carries a precise kind in its public ID.
+
+Current boundaries are listed in the
+[limitations reference](https://swayaminsync.github.io/cpp-verify/language/limitations.html).
+The next frontiers are floating-point semantics, `reads` frames for heap-reading
+specs, `break`/`continue` in `do` loops, and general arrays and provenance
+across ownership-taking interfaces.
 
 ## Historical 2-Month MVP Timeline
+
+The original plan, kept for history. Its checkboxes were not maintained; the
+checkpoint above and the list below track current status. The planned `--bv`
+flag was superseded by `--int-encoding`.
 
 ### Weeks 1-2: Clang Frontend + Hello World — **COMPLETE**
 
@@ -148,10 +161,26 @@ features remain outside the verified subset until that foundation exists.
 
 ### Ring 2: Memory Safety Extensions
 
+- [x] Bounded direct local scalar `new`/`delete` with allocation identity,
+  liveness, initialization, alignment, disjointness, and reuse
+- [x] First-class local scalar provenance through matching-typed copies,
+  reassignment, conditional selection, null, branch merges, and restricted
+  verified scalar callees
+- [x] Checked provenance through acyclic direct-pointer forwarding,
+  scalar-value nested/spec helpers, and direct/conditional/null pointer results
+- [x] Body-derived fresh-owned scalar results through direct/local aliases and
+  acyclic nested factory calls, with nullable transfer and caller deletion
+- General provenance through ownership-taking parameters, recursive calls,
+  type-erasing/indirect copies, external summaries, and aggregate interfaces
+- [x] General same-array pointer difference for compositional positions under
+  declared extents, plus complete-object dynamic positions
+- [x] Fixed local arrays and scalar element/subobject lifetimes
+- General arrays, returned/stored pointer positions, and non-trivial destruction
 - `unique_ptr` with stricter ownership tracking (move semantics in IR)
 - `shared_ptr` reference-count tracking (post-MVP design)
-- Array bounds checking (auto-generated VCs)
-- Null-deref auto-checks for dereferences without explicit `p != nullptr` precondition
+- [x] Array bounds checking (auto-generated VCs from `valid(p, n)` extents)
+- [x] Null-deref auto-checks for dereferences without explicit `p != nullptr` precondition
+- [x] Whole-extent separation of `valid(p, n)` buffers
 - Separation-logic mode as alternative heap encoding (heavyweight, opt-in)
 
 ### Ring 3: Container Models
@@ -166,11 +195,16 @@ features remain outside the verified subset until that foundation exists.
 - Unbounded quantifiers `forall(i: T, body)`
 - Manual trigger annotations `trigger(...)`
 - `choose` (Hilbert ε) for spec functions
+- [x] Heap-reading spec functions
+- `reads` frames for heap-reading specs
+- Floating-point semantics (IEEE 754 through SMT floating-point theories)
 - Quantifier-instantiation profiling exposed via verifier flags
 
 ### Ring 5: Advanced Backends
 
-- BMC backend (loop unrolling, no invariants needed)
+- [x] BMC backend (loop unrolling, no invariants needed)
+- [x] cvc5, strict Z3+cvc5 portfolio, and Lean export/certification backends
+- [x] Exact machine-integer encodings (`--int-encoding`)
 - Symbolic execution backend for test generation
 - Compositional verification across translation units
 
