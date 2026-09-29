@@ -36,6 +36,16 @@ quantifiers with heap arrays. CppVerify may retry smaller ordered obligations,
 but if those also remain unknown it reports the function as **not verified**.
 It never treats solver uncertainty as success.
 
+A recursive spec applied beyond its unfolding fuel is an opaque value that a
+solver model may choose freely, so a model is a counterexample only if it still
+fails under the spec's real definition. CppVerify checks every model against
+the definitions; when the check refutes it, CppVerify adds the definition at
+the disputed arguments and solves again, which can also prove the obligation.
+If that does not settle the query, the result is not verified with reason
+``spec.fuel`` rather than a counterexample: raise ``reveal_with_fuel`` or state
+a lemma. cvc5 returns no model to check, so its ``sat`` for such a query is
+``spec.fuel`` as well.
+
 A requested proof cache is also fail-closed. ``cache.corrupt`` means an entry
 did not exactly match its semantic/backend identity; ``cache.io-failed`` means a
 requested entry could not be read. Neither is treated as a cache miss or a
