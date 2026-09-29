@@ -114,12 +114,12 @@ the verifier gets this from array theory:
 
 .. note::
 
-   The index bounds are load-bearing. Addresses are byte-scaled, so separating
-   ``p[i]`` from ``p[j]`` means separating ``4*i`` from ``4*j``; deriving that
-   from ``i != j`` alone requires range reasoning about the sign extension that
-   bit-vector solvers do not do well, and the query returns ``unknown``. Bound
-   the indices — as any real buffer contract does anyway — and the separation
-   is immediate.
+   Addresses are byte-scaled, so separating ``p[i]`` from ``p[j]`` means
+   separating ``4*i`` from ``4*j``. The default integer encoding derives that
+   from ``i != j`` alone. With ``--int-encoding=bitvector`` it needs range
+   reasoning about sign extension that bit-vector solvers do not do well, and
+   the query returns ``unknown`` unless the indices are bounded, as the
+   precondition above does.
 
 Within a verified function body, ``modifies(*p)`` authorizes the **whole
 region** rooted at ``p`` — a write to any ``p[i]`` is covered. A write through
