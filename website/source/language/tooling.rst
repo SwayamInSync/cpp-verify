@@ -209,9 +209,10 @@ what the obligation checks:
 - contracts: ``assertion``, ``precondition``, ``postcondition``,
   ``invariant-entry``, ``invariant-preserved``, ``termination``,
   ``type-invariant``, and ``recommends``;
-- C++ definedness: ``overflow``, ``division-by-zero``, ``shift``, ``bounds``,
-  ``dereference``, ``initialization``, ``pointer-difference``, and
-  ``deallocation``;
+- C++ definedness: ``overflow`` (including a mathematical value converted to
+  a machine type it does not fit), ``division-by-zero``, ``shift``,
+  ``bounds``, ``dereference``, ``initialization``, ``pointer-difference``,
+  and ``deallocation``;
 - generated interfaces: ``pointer-validity`` (a pointer parameter, result, or
   ``valid(p, n)`` extent must denote valid storage), ``aliasing`` (implicit
   non-aliasing), ``frame`` (writes and callee effects stay within
@@ -244,7 +245,8 @@ codes include ``counterexample``, ``solver.timeout``, ``solver.unknown``,
 ``obligation.invalid``, ``logic.unsupported``, ``query.missing``,
 ``backend.invalid-result``,
 ``backend.inconsistent-results``, ``bmc.incomplete-bound``,
-``lean.export-failed``, ``cache.corrupt``, and ``cache.io-failed``.
+``lean.export-failed``, ``cache.corrupt``, ``cache.io-failed``, and
+``spec.fuel``.
 
 ``--diagnostics-format=json`` covers verification-result diagnostics.
 Command-line validation and frontend parse errors may still use text. Combining
