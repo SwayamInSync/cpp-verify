@@ -14772,6 +14772,10 @@ StmtResult Sema::ActOnCXXForRangeIdentifier(Scope *S, SourceLocation IdentLoc,
 void Sema::CheckCompleteVariableDeclaration(VarDecl *var) {
   if (var->isInvalidDecl()) return;
 
+  if (getLangOpts().VerifyContracts && !var->isLocalVarDeclOrParm() &&
+      var->hasInit())
+    CheckSpecFunctionUses(nullptr, var->getInit());
+
   CUDA().MaybeAddConstantAttr(var);
 
   if (getLangOpts().OpenCL) {
@@ -16484,6 +16488,9 @@ Decl *Sema::ActOnFinishFunctionBody(Decl *dcl, Stmt *Body, bool IsInstantiation,
                                     bool RetainFunctionScopeInfo) {
   FunctionScopeInfo *FSI = getCurFunction();
   FunctionDecl *FD = dcl ? dcl->getAsFunction() : nullptr;
+
+  if (getLangOpts().VerifyContracts && FD && Body)
+    CheckSpecFunctionUses(FD, Body);
 
   if (FSI->UsesFPIntrin && FD && !FD->hasAttr<StrictFPAttr>())
     FD->addAttr(StrictFPAttr::CreateImplicit(Context));
