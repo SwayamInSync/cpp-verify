@@ -463,6 +463,30 @@ static std::string signedLimit(unsigned BitWidth, bool Minimum) {
 
 static std::unique_ptr<VExpr> signedArithmeticSafety(const VBinOpExpr *B);
 
+/// A mathematical value converted to a machine type must be representable.
+static std::unique_ptr<VExpr> mathValueFits(const VCastExpr *C) {
+  const VType &To = C->Ty;
+  if (To.BitWidth == 0)
+    return makeBoolLiteral(false, C->Loc);
+  llvm::APInt Min = To.IsSigned ? llvm::APInt::getSignedMinValue(To.BitWidth)
+                                : llvm::APInt::getMinValue(To.BitWidth);
+  llvm::APInt Max = To.IsSigned ? llvm::APInt::getSignedMaxValue(To.BitWidth)
+                                : llvm::APInt::getMaxValue(To.BitWidth);
+  VType LimitTy = VType::makeInt(VIntMode::Math, To.BitWidth + 1, true);
+  auto Limit = [&](const llvm::APInt &Value) {
+    llvm::SmallString<64> Buffer;
+    Value.toString(Buffer, 10, To.IsSigned);
+    return std::make_unique<VLiteralExpr>(std::string(Buffer), LimitTy, C->Loc);
+  };
+  auto AtLeast =
+      std::make_unique<VBinOpExpr>(VBinOp::Ge, cloneVExpr(C->Inner.get()),
+                                   Limit(Min), VType::makeBool(), C->Loc);
+  auto AtMost =
+      std::make_unique<VBinOpExpr>(VBinOp::Le, cloneVExpr(C->Inner.get()),
+                                   Limit(Max), VType::makeBool(), C->Loc);
+  return makeAnd(std::move(AtLeast), std::move(AtMost), C->Loc);
+}
+
 static std::unique_ptr<VExpr>
 pointerDifferenceRepresentability(const VCastExpr *C) {
   const VBinOpExpr *Quotient = nullptr;
@@ -1683,20 +1707,28 @@ static void collectSafety(const VExpr *E, const FunctionMap *FnMap,
       addSafety(Out, ProofObligationKind::Shift, shiftSafety(B), B->Loc);
       return;
     }
+    // A mathematical operand makes the whole operation mathematical.
+    const bool MachineOperation =
+        evaluatedIntMode(B->Lhs.get()) == VIntMode::Machine &&
+        evaluatedIntMode(B->Rhs.get()) == VIntMode::Machine;
     if (B->Op == VBinOp::Add || B->Op == VBinOp::Sub || B->Op == VBinOp::Mul) {
-      addSafety(Out, ProofObligationKind::Overflow, signedArithmeticSafety(B),
-                B->Loc);
+      if (MachineOperation)
+        addSafety(Out, ProofObligationKind::Overflow, signedArithmeticSafety(B),
+                  B->Loc);
       return;
     }
+    // Only a spec body divides totally; evaluated C++ division needs a
+    // nonzero divisor whatever the operands' modes.
     if ((B->Op == VBinOp::Div || B->Op == VBinOp::Rem) &&
-        B->Lhs->Ty.IntMode == VIntMode::Machine) {
+        B->Ty.IntMode == VIntMode::Machine) {
       addSafety(Out, ProofObligationKind::DivisionByZero,
                 std::make_unique<VBinOpExpr>(
                     VBinOp::Ne, cloneVExpr(B->Rhs.get()),
                     std::make_unique<VLiteralExpr>(0, B->Rhs->Ty, B->Loc),
                     VType::makeBool(), B->Loc),
                 B->Loc);
-      if (isSignedMachineInteger(B->Lhs->Ty) && B->Lhs->Ty.BitWidth != 0) {
+      if (MachineOperation && isSignedMachineInteger(B->Lhs->Ty) &&
+          B->Lhs->Ty.BitWidth != 0) {
         auto IsMin = std::make_unique<VBinOpExpr>(
             VBinOp::Eq, cloneVExpr(B->Lhs.get()),
             std::make_unique<VLiteralExpr>(
@@ -1719,6 +1751,7 @@ static void collectSafety(const VExpr *E, const FunctionMap *FnMap,
     const auto *U = static_cast<const VUnaryOpExpr *>(E);
     Collect(U->Operand.get(), Out);
     if (U->Op != VUnaryOp::Neg || !isSignedMachineInteger(U->Operand->Ty) ||
+        evaluatedIntMode(U->Operand.get()) == VIntMode::Math ||
         U->Operand->Ty.BitWidth == 0)
       return;
     addSafety(Out, ProofObligationKind::Overflow,
@@ -1737,6 +1770,10 @@ static void collectSafety(const VExpr *E, const FunctionMap *FnMap,
     if (loweredPointerDifferenceQuotient(C))
       addSafety(Out, ProofObligationKind::Overflow,
                 pointerDifferenceRepresentability(C), C->Loc);
+    if (isIntegerType(C->Inner->Ty) &&
+        evaluatedIntMode(C->Inner.get()) == VIntMode::Math &&
+        isIntegerType(C->Ty) && C->Ty.IntMode == VIntMode::Machine)
+      addSafety(Out, ProofObligationKind::Overflow, mathValueFits(C), C->Loc);
     return;
   }
   case VExpr::Load: {
