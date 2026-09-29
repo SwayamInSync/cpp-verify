@@ -91,6 +91,21 @@ static std::unique_ptr<VExpr> scalePointerOffset(std::unique_ptr<VExpr> Offset,
                                       std::move(Stride), MathTy, Loc);
 }
 
+/// Bits exist only for machine values: a mathematical operand of a bitwise
+/// operator is converted, and must fit, in its C++ operand type.
+static std::unique_ptr<VExpr> machineOperand(std::unique_ptr<VExpr> V,
+                                             QualType OperandType,
+                                             const ASTContext &Ctx) {
+  if (!V->Ty.isInt() || evaluatedIntMode(V.get()) != VIntMode::Math)
+    return V;
+  VType To = VType::fromQualType(OperandType, VIntMode::Machine, Ctx);
+  if (!To.isInt())
+    return V;
+  VType From = V->Ty;
+  SourceLocation Loc = V->Loc;
+  return std::make_unique<VCastExpr>(std::move(V), From, To, Loc);
+}
+
 static bool carriesPointerProvenance(const VExpr *E) {
   if (!E || E->Ty.Kind != VTypeKind::Ptr)
     return false;
@@ -3077,6 +3092,10 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     return nullptr;
   E = E->IgnoreParens();
   while (const auto *CE = dyn_cast<CastExpr>(E)) {
+    // An explicit integer cast may materialize a mathematical value.
+    if (CE->getCastKind() == CK_NoOp && isa<ExplicitCastExpr>(CE) &&
+        CE->getType()->isIntegralOrEnumerationType())
+      break;
     if (CE->getCastKind() == CK_NoOp ||
         CE->getCastKind() == CK_LValueToRValue ||
         CE->getCastKind() == CK_ConstructorConversion)
@@ -3296,8 +3315,10 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
                          "mathematical spec functions");
         return nullptr;
       }
-      return std::make_unique<VUnaryOpExpr>(VUnaryOp::BitNot, std::move(Op), Ty,
-                                            E->getExprLoc());
+      return std::make_unique<VUnaryOpExpr>(
+          VUnaryOp::BitNot,
+          machineOperand(std::move(Op), U->getSubExpr()->getType(), Ctx), Ty,
+          E->getExprLoc());
     }
     Errors.push_back(CurrentFn->Name + ": unsupported unary operator");
     return nullptr;
@@ -3389,6 +3410,11 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     auto R = convertExpr(B->getRHS());
     if (!L || !R)
       return nullptr;
+    if (*Op == VBinOp::BitAnd || *Op == VBinOp::BitOr ||
+        *Op == VBinOp::BitXor || *Op == VBinOp::Shl || *Op == VBinOp::Shr) {
+      L = machineOperand(std::move(L), B->getLHS()->getType(), Ctx);
+      R = machineOperand(std::move(R), B->getRHS()->getType(), Ctx);
+    }
     VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
     if (Ty.Kind == VTypeKind::Ptr &&
         (B->getOpcode() == BO_Add || B->getOpcode() == BO_Sub)) {
@@ -3429,6 +3455,10 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
                        ": unsupported implicit pointer or aggregate cast");
       return nullptr;
     }
+    // Usual arithmetic conversions do not bound a mathematical value.
+    if (From.isInt() && evaluatedIntMode(Inner.get()) == VIntMode::Math &&
+        To.isInt())
+      To.IntMode = VIntMode::Math;
     return std::make_unique<VCastExpr>(std::move(Inner), From, To,
                                        E->getExprLoc());
   }
@@ -3453,6 +3483,9 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
                        ": unsupported explicit pointer or aggregate cast");
       return nullptr;
     }
+    if (sameRepresentation(From, To) &&
+        evaluatedIntMode(Inner.get()) == From.IntMode)
+      return Inner;
     return std::make_unique<VCastExpr>(std::move(Inner), From, To,
                                        E->getExprLoc());
   }
@@ -3633,6 +3666,15 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
         }
       }
       if (calleeIsSpec(Callee)) {
+        const VIntMode CalleeMode = specCallIntMode(Callee);
+        const FunctionContractInfo *CalleeContract = functionContract(Callee);
+        if (CalleeContract && CalleeContract->IsSpec && !InContractExpression &&
+            !InGhost && !CurrentFn->IsSpec && !CurrentFn->IsProof) {
+          Errors.push_back(CurrentFn->Name + ": spec function " +
+                           Callee->getNameAsString() +
+                           " cannot be used in executable code");
+          return nullptr;
+        }
         for (const Expr *A : CE->arguments())
           if (referencesDynamicPointer(A)) {
             Errors.push_back(
@@ -3650,13 +3692,32 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
           if (Formal && Formal->getType()->isRecordType()) {
             appendRecordCallArgument(A, Formal, Args);
           } else if (auto AE = convertExpr(A)) {
+            // A mathematical value bound to a machine parameter is converted
+            // explicitly, so its definedness requires that it fit.
+            if (CalleeMode == VIntMode::Machine && Formal && AE->Ty.isInt() &&
+                evaluatedIntMode(AE.get()) == VIntMode::Math) {
+              VType FormalTy = VType::fromQualType(Formal->getType(),
+                                                   VIntMode::Machine, Ctx);
+              if (FormalTy.isInt())
+                AE = std::make_unique<VCastExpr>(std::move(AE), AE->Ty,
+                                                 FormalTy, AE->Loc);
+            }
             Args.push_back(std::move(AE));
           }
           ++ArgIndex;
         }
         VType Ty = VType::fromQualType(
-            E->getType(),
-            InContractExpression ? specCallIntMode(Callee) : IntMode, Ctx);
+            E->getType(), InContractExpression ? CalleeMode : IntMode, Ctx);
+        // Executable-style code stores a mathematical result in a C++ type.
+        if (!InContractExpression && CalleeMode == VIntMode::Math &&
+            Ty.IntMode == VIntMode::Machine && Ty.isInt()) {
+          VType MathTy = VType::fromQualType(E->getType(), VIntMode::Math, Ctx);
+          auto Call = std::make_unique<VSpecCallExpr>(
+              Callee->getNameAsString(), functionIdentity(Callee),
+              std::move(Args), MathTy, E->getExprLoc(), specReadsHeap(Callee));
+          return std::make_unique<VCastExpr>(std::move(Call), MathTy, Ty,
+                                             E->getExprLoc());
+        }
         return std::make_unique<VSpecCallExpr>(
             Callee->getNameAsString(), functionIdentity(Callee),
             std::move(Args), Ty, E->getExprLoc(), specReadsHeap(Callee));
