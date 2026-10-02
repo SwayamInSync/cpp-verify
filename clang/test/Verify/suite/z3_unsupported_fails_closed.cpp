@@ -50,5 +50,5 @@ spec int unsupported_mutual_b(int n) {
 // VERIFY-DAG: error: unsupported_indexed_increment: spec functions must not write memory
 // VERIFY-DAG: error: unsupported_loop_spec: spec function body is unsupported by axiomatic lowering
 // VERIFY-DAG: error: unsupported_recursive_spec: recursive spec and proof functions require decreases
-// VERIFY-DAG: error: unsupported_mutual_a: mutually recursive spec and proof functions are unsupported
-// VERIFY-DAG: error: unsupported_mutual_b: mutually recursive spec and proof functions are unsupported
+// VERIFY-DAG: error: unsupported_mutual_a: mutually recursive spec functions require decreases clauses, all of the same length
+// VERIFY-DAG: error: unsupported_mutual_b: mutually recursive spec functions require decreases clauses, all of the same length
