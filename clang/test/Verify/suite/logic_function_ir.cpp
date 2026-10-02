@@ -50,7 +50,7 @@ proof void opaque_logic()
 // LOGIC-NEXT: parameter x int signed
 // LOGIC-NEXT: result int signed
 // LOGIC-NEXT: fuel 0
-// LOGIC-NOT: step
+// LOGIC-NEXT: step
 // LOGIC-NOT: definition
 // LOGIC: Lowered: spec axiom: hidden
 
