@@ -83,27 +83,29 @@ Pointer arithmetic (``*(p + i)``) and subscripting (``p[i]``) read and write
 indexed heap locations. The heap uses target-byte addresses: a ``T*`` element
 step is multiplied by Clang's target ``sizeof(T)``, and a record field adds its
 target-layout byte offset. Distinct indices are distinct cells, so a store to
-``p[k]`` leaves ``p[i]`` alone whenever ``i != k``. ``modifies(*p)`` frames the
-whole region reachable through ``p``.
+``p[k]`` leaves ``p[i]`` alone whenever ``i != k``. Every access must stay in
+its object: the ``valid(p, n)`` extent a precondition declares, or else the
+single object ``p`` addresses (see :doc:`ch18-undefined-behavior`).
 
-There are two frame granularities:
+There are three frame granularities:
 
-- ``modifies(p[i])`` or ``modifies(p->field)`` names one exact address. A
-  modular caller preserves every other heap cell.
-- ``modifies(*p)`` names an open-ended region rooted at ``p``. Inside the
-  function it authorizes every ``p[i]`` store. Across a modular call, today's
-  parameter-pointer model has no allocation identity or extent with which to
-  delimit the region, so the verifier conservatively forgets the whole value
-  heap and then assumes the callee's postconditions. Local scalar allocations
-  can cross checked, non-allocating matching interfaces with their identity,
-  but an open region still receives this whole-heap treatment.
+- a **cell**, ``modifies(p[i])`` or ``modifies(p->field)``, names one exact
+  address;
+- a **range**, ``modifies(p[lo : n])``, names the ``n`` elements from
+  ``p[lo]``, half-open ``[lo, lo + n)`` (Clang's array-section syntax);
+- a **region**, ``modifies(*p)``, names the object ``p`` addresses: its
+  ``valid(p, n)`` extent, or one object.
 
-The second rule is deliberately incomplete rather than unsound: a caller may
-lose a true fact about an unrelated object, but it cannot retain a frame fact
-that an unknown offset write might invalidate. A pointer-taking callee with no
-explicit ``modifies`` receives the same whole-heap treatment. An explicit
-caller frame cannot contain that implicit effect; an unframed caller may pass
-its own address parameters or checked caller-owned scalar allocations.
+Inside the function, every store must lie in a footprint read in the entry
+state. At a modular call, the caller's heap changes only inside the callee's
+footprints instantiated with the arguments, and every other cell keeps its
+value. A callee footprint must lie within the caller's own frame.
+
+A pointer-taking callee with no explicit ``modifies`` that may write memory is
+treated as writing the whole heap: a caller may lose a true fact about an
+unrelated object, but it cannot retain a frame fact that an unknown write
+might invalidate. An explicit caller frame cannot contain that implicit
+effect; an unframed caller may still make the call.
 
 To state a property of a whole range, put a **bounded quantifier** in the loop
 invariant and the postcondition — the half-open bound ``[lo, hi)`` is the trigger.
@@ -111,8 +113,11 @@ A buffer-zeroing loop proves its full postcondition this way:
 
 .. code-block:: cpp
 
+   #include <cppverify.h>
+   using cppverify::valid;
+
    void zero(int* p, int n)
-     pre(p != nullptr && n >= 0 && n <= 1000)
+     pre(valid(p, n) && n >= 0 && n <= 1000)
      modifies(*p)
      post(forall(i, 0, n, p[i] == 0))
    {
@@ -127,13 +132,47 @@ The invariant ``forall(i, 0, j, p[i] == 0)`` says "everything written so far is
 zero"; preservation across the store uses the disjointness of ``p[j]`` from each
 earlier ``p[i]``, and at exit (``j == n``) it yields the postcondition.
 
+The loop needs no invariant about memory it does not touch: a loop writes
+only the objects its stores and calls reach, and every other object keeps its
+value. A loop may also name what it writes with ``modifies`` after its
+invariants, ACSL's ``loop assigns``. The footprints are read in each
+iteration's state, so ``modifies(p[0 : j])`` says "only the prefix written so
+far has changed":
+
+.. code-block:: cpp
+
+   void zero_prefix(int* p, int n)
+     pre(valid(p, n + 1) && n >= 1 && n <= 1000)
+     modifies(*p)
+     post(p[n] == old(p[n]))
+   {
+     for (int j = 0; j < n; j = j + 1)
+       invariant(0 <= j && j <= n)
+       modifies(p[0 : n])
+       decreases(n - j)
+     { p[j] = 0; }
+   }
+
+Without the loop's ``modifies``, the whole object ``p`` addresses is written
+as far as the verifier knows, and ``p[n] == old(p[n])`` would need an
+invariant.
+
+The object a store writes is found from its address, not from how the
+pointer is spelled. A pointer that walks through a buffer (``*q = 0; q = q +
+1;``) still writes only that buffer, and a pointer chosen at run time
+(``int *p = first ? a : b;``) writes one of the function's ``modifies``
+objects, which then frame the loop. In both cases every other object keeps
+its value without an invariant; :doc:`../../language/pointers` has the
+complete examples.
+
 A subtle point shows up when a loop relates **two** buffers, as in a ``memcpy``:
 
 .. code-block:: cpp
 
    void copy(int* d, int* s, int n)
-     pre(d != nullptr && s != nullptr && n >= 0 && n <= 1000 &&
+     pre(valid(d, n) && valid(s, n) && n >= 0 && n <= 1000 &&
          (d + n <= s || s + n <= d))             // explicit non-overlap
+     aliases(d, s)
      modifies(*d)
      post(forall(i, 0, n, d[i] == s[i]))
    {
@@ -144,8 +183,10 @@ A subtle point shows up when a loop relates **two** buffers, as in a ``memcpy``:
      { d[j] = s[j]; j = j + 1; }
    }
 
-This verifies. The non-overlap precondition is essential: **without** it the
-verifier is right to reject the copy, because a store to ``d[j]`` could clobber
+This verifies. Two declared extents are disjoint by default, as two
+mutable pointer parameters are; ``aliases(d, s)`` lifts that default here to
+show what the default provides. The non-overlap precondition is then
+essential: **without** it the verifier is right to reject the copy, because a store to ``d[j]`` could clobber
 some ``s[i]`` still to be read — which is exactly why the C standard library has
 both ``memcpy`` (requires non-overlap) and ``memmove`` (handles overlap). The
 preservation step relies on the source and destination ranges being disjoint,
@@ -156,12 +197,15 @@ integers rather than wrapping machine words.
 Declaring a checked extent
 --------------------------
 
-On the Z3, cvc5, portfolio, BMC, and Lean paths, ``--check-ub`` gives a conventional ``valid`` spec
-call special extent meaning:
+Memory checking is on by default (``--no-check-ub`` turns it off). The
+``valid(p, n)`` marker of ``<cppverify.h>`` declares a buffer's extent (a
+user-declared ``spec bool valid(int* p, int n)`` is the same marker; see
+:doc:`ch18-undefined-behavior`):
 
 .. code-block:: cpp
 
-   spec bool valid(int* p, int n) { return true; }
+   #include <cppverify.h>
+   using cppverify::valid;
 
    int get(int* p, int n, int i)
      pre(valid(p, n) && 0 <= i && i < n)
@@ -172,8 +216,9 @@ call special extent meaning:
 abstractly valid; ``n == 0`` permits null. Every access based on ``p`` must prove
 that its index lies in ``[0, n)``. The marker must be a positive top-level
 conjunction clause on the bare complete-object pointer, with at most one marker
-per pointer. Without the option, dereference definedness is still mandatory,
-but no length is inferred.
+per pointer. A pointer without a marker addresses one object. With
+``--no-check-ub``, dereference definedness is still mandatory, but accesses
+are not checked against objects.
 
 This remains an abstract parameter-buffer promise; it is not inferred from a
 caller's allocation. Direct local scalar ``new``/``delete`` has a separate
@@ -197,9 +242,19 @@ Extents also compose at modular calls. If a callee requires
 origin and ``0 <= offset``, ``0 <= length``, and
 ``offset + length <= n``. Empty one-past slices are legal. Read-only slice
 chains preserve the heap, while exact-cell effects such as
-``modifies(q[0])`` update only the corresponding caller cell. Symbolic
-writable ranges and unbounded ``modifies(*q)`` through a proper sub-slice still
-fail closed.
+``modifies(q[0])`` update only the corresponding caller cell, and a range or
+a whole-slice ``modifies(*q)`` updates only the slice:
+
+.. code-block:: cpp
+
+   void zero_tail(int* p, int n, int lo)
+     pre(valid(p, n) && n >= 1 && n <= 1000 && 0 <= lo && lo <= n)
+     modifies(*p)
+     post(forall(k, 0, lo, p[k] == old(p[k])))
+     post(forall(k, lo, n, p[k] == 0))
+   {
+     zero(p + lo, n - lo);
+   }
 
 Fresh-owned factory results
 ---------------------------
