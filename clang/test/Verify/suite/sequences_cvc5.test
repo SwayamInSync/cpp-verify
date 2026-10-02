@@ -1,0 +1,23 @@
+# REQUIRES: cvc5
+# cvc5 and the strict portfolio decide the same sequence obligations; cvc5
+# saturates quantified sequence goals that E-matching leaves open.
+# RUN: not %cpp-verify --backend=cvc5 --timeout=20000 %S/sequences.cpp 2>&1 \
+# RUN:   | FileCheck %s --check-prefixes=BOTH,CVC5
+# RUN: not %cpp-verify --backend=portfolio --timeout=20000 %S/sequences.cpp \
+# RUN:   2>&1 | FileCheck %s --check-prefixes=BOTH,PORTFOLIO
+#
+# BOTH-DAG: Verified: spec decreases: sum
+# CVC5-DAG: Verified: basics [backend=cvc5]
+# CVC5-DAG: Verified: total_operations [backend=cvc5]
+# CVC5-DAG: Verified: sum_push [backend=cvc5]
+# CVC5-DAG: Verified: count_positive [backend=cvc5]
+# CVC5-DAG: error: verification failed: elements_differ [{{.*}}] [backend=cvc5] [reason=counterexample]
+# CVC5-DAG: error: verification failed: sum_push_wrong [{{.*}}] [backend=cvc5] [reason=counterexample]
+# CVC5-DAG: error: verification failed: ghost_loop_wrong [{{.*}}] [backend=cvc5] [reason=counterexample]
+# PORTFOLIO-DAG: Verified: basics [backend=portfolio]
+# PORTFOLIO-DAG: Verified: total_operations [backend=portfolio]
+# PORTFOLIO-DAG: Verified: sum_push [backend=portfolio]
+# PORTFOLIO-DAG: Verified: count_positive [backend=portfolio]
+# PORTFOLIO-DAG: error: verification failed: elements_differ [{{.*}}] (counterexample: s [ssa=s_0] [type=seq] = [{{.*}}]) [backend=portfolio] [reason=counterexample]
+# PORTFOLIO-DAG: error: verification failed: sum_push_wrong [{{.*}}] (counterexample: {{.*}}) [backend=portfolio] [reason=counterexample]
+# PORTFOLIO-DAG: error: verification failed: ghost_loop_wrong [{{.*}}] (counterexample: {{.*}}) [backend=portfolio] [reason=counterexample]
