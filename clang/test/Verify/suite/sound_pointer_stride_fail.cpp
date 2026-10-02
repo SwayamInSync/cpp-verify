@@ -4,6 +4,8 @@
 // Pointer expressions and implicit pointee-object ranges must use the same byte
 // unit. For int*, q == p + 1 places q immediately after p's int object, so the
 // implicit non-overlap condition is satisfiable and the false return is exposed.
+spec bool valid(int *p, int n) { return true; }
+
 bool valid_adjacent_equality(int *p, int *q)
   pre(p != nullptr && q != nullptr && q == p + 1)
   post(result)
@@ -18,8 +20,8 @@ bool invalid_adjacent_inequality(int *p, int *q)
   return q != p + 1;
 }
 
-int valid_reversed_subscript(int *p, int i, int value)
-  pre(p != nullptr)
+int valid_reversed_subscript(int *p, int n, int i, int value)
+  pre(valid(p, n) && 0 <= i && i < n)
   modifies(*p)
   post(result == value && p[i] == value)
 {
@@ -28,14 +30,14 @@ int valid_reversed_subscript(int *p, int i, int value)
 }
 
 bool valid_nested_offsets(int *p, int i, int j)
-  pre(p != nullptr && -100 <= i && i <= 100 && -100 <= j && j <= 100)
+  pre(valid(p, 201) && 0 <= i && i <= 100 && 0 <= j && j <= 100)
   post(result)
 {
   return (p + i) + j == p + (i + j);
 }
 
 bool valid_subtracted_offset(int *p, int i)
-  pre(p != nullptr && -100 <= i && i <= 100)
+  pre(valid(p, 101) && 0 <= i && i <= 100)
   post(result)
 {
   return (p + i) - i == p;
@@ -53,18 +55,28 @@ struct Pair {
   int second;
 };
 
-bool valid_record_stride(Pair *p, Pair *q)
-  pre(p != nullptr && q != nullptr && q == p + 1)
+spec bool valid(const Pair *p, int n) { return true; }
+
+bool valid_record_stride(const Pair *p, const Pair *q)
+  pre(valid(p, 2) && q == p + 1)
   post(result)
 {
   return (p + 1)->second == q->second;
 }
 
-bool invalid_record_stride(Pair *p, Pair *q)
-  pre(p != nullptr && q != nullptr && q == p + 1)
+bool invalid_record_stride(const Pair *p, const Pair *q)
+  pre(valid(p, 2) && q == p + 1)
   post(result)
 {
   return (p + 1)->second != q->second;
+}
+
+// The element after a single object is not part of it, whatever lies there.
+bool past_object_record(const Pair *p, const Pair *q)
+  pre(p != nullptr && q != nullptr && q == p + 1)
+  post(result)
+{
+  return (p + 1)->second == q->second;
 }
 
 // VERIFY-DAG: Verified: valid_adjacent_equality
@@ -75,3 +87,4 @@ bool invalid_record_stride(Pair *p, Pair *q)
 // VERIFY-DAG: error: verification failed: invalid_adjacent_inequality
 // VERIFY-DAG: error: verification failed: invalid_char_adjacent_inequality
 // VERIFY-DAG: error: verification failed: invalid_record_stride
+// VERIFY-DAG: error: verification failed: past_object_record [{{.*}}::bounds@
