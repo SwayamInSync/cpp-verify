@@ -21,27 +21,27 @@ int invalid_early_return(int x)
 }
 
 int valid_assignment_after_early_return(bool stop, int value)
-  post(value == (stop ? old(value) : 1))
+  post(result == (stop ? value : 1))
 {
   if (stop)
-    return 0;
+    return value;
   value = 1;
-  return 0;
+  return value;
 }
 
 int valid_loop_after_early_return(bool stop, int value)
-  post(value == old(value))
+  post(result == value)
 {
   int expected = value;
   if (stop)
-    return 0;
+    return value;
   while (false)
     invariant(value == expected)
     decreases(0)
   {
     value = 1;
   }
-  return 0;
+  return value;
 }
 
 // VERIFY-DAG: Verified: valid_early_return
