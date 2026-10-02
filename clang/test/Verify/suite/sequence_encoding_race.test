@@ -1,0 +1,9 @@
+# Sequence facts help proofs but slow model search: with them, a false claim
+# about a chain of 200 pushes is not refuted within the budget. With workers
+# to spare each query over sequences is also solved without them, and the
+# certified counterexample stands.
+#
+# RUN: %python %S/Inputs/push_chain.py 200 > %t.cpp
+# RUN: not %cpp-verify --jobs=2 --timeout=10000 %t.cpp -- 2>&1 | FileCheck %s
+
+# CHECK: error: verification failed: chain_bad [{{.*}}::assertion@{{.*}}] (counterexample: {{.*}}) [backend=z3] [reason=counterexample]
