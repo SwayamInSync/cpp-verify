@@ -17915,11 +17915,18 @@ TreeTransform<Derived>::TransformContractAssertStmt(ContractAssertStmt *S) {
   ExprResult Cond = getDerived().TransformExpr(S->getCond());
   if (Cond.isInvalid())
     return StmtError();
-  if (!getDerived().AlwaysRebuild() && Cond.get() == S->getCond())
+  StmtResult By = S->getBy();
+  if (S->getBy()) {
+    By = getDerived().TransformStmt(S->getBy());
+    if (By.isInvalid())
+      return StmtError();
+  }
+  if (!getDerived().AlwaysRebuild() && Cond.get() == S->getCond() &&
+      By.get() == S->getBy())
     return S;
   return new (SemaRef.Context) ContractAssertStmt(
       S->getContractAssertLoc(), S->getLParenLoc(), S->getRParenLoc(),
-      Cond.getAs<Expr>());
+      Cond.getAs<Expr>(), By.get());
 }
 
 template <typename Derived>
@@ -17973,9 +17980,11 @@ StmtResult TreeTransform<Derived>::TransformRevealSpecStmt(RevealSpecStmt *S) {
 
 template <typename Derived>
 ExprResult TreeTransform<Derived>::TransformForallExpr(ForallExpr *E) {
-  ExprResult Lo = getDerived().TransformExpr(E->getLo());
+  ExprResult Lo = E->getLo() ? getDerived().TransformExpr(E->getLo())
+                             : ExprResult((Expr *)nullptr);
   if (Lo.isInvalid()) return ExprError();
-  ExprResult Hi = getDerived().TransformExpr(E->getHi());
+  ExprResult Hi = E->getHi() ? getDerived().TransformExpr(E->getHi())
+                             : ExprResult((Expr *)nullptr);
   if (Hi.isInvalid()) return ExprError();
   ExprResult Body = getDerived().TransformExpr(E->getBody());
   if (Body.isInvalid()) return ExprError();
@@ -17989,10 +17998,31 @@ ExprResult TreeTransform<Derived>::TransformForallExpr(ForallExpr *E) {
 }
 
 template <typename Derived>
-ExprResult TreeTransform<Derived>::TransformExistsExpr(ExistsExpr *E) {
-  ExprResult Lo = getDerived().TransformExpr(E->getLo());
+ExprResult TreeTransform<Derived>::TransformContractChooseExpr(ContractChooseExpr *E) {
+  ExprResult Lo = E->getLo() ? getDerived().TransformExpr(E->getLo())
+                             : ExprResult((Expr *)nullptr);
   if (Lo.isInvalid()) return ExprError();
-  ExprResult Hi = getDerived().TransformExpr(E->getHi());
+  ExprResult Hi = E->getHi() ? getDerived().TransformExpr(E->getHi())
+                             : ExprResult((Expr *)nullptr);
+  if (Hi.isInvalid()) return ExprError();
+  ExprResult Body = getDerived().TransformExpr(E->getBody());
+  if (Body.isInvalid()) return ExprError();
+  if (!getDerived().AlwaysRebuild() && Lo.get() == E->getLo() &&
+      Hi.get() == E->getHi() && Body.get() == E->getBody())
+    return E;
+  return new (SemaRef.Context)
+      ContractChooseExpr(E->getChooseLoc(), E->getLParenLoc(), E->getRParenLoc(),
+                 E->getBoundVar(), Lo.getAs<Expr>(), Hi.getAs<Expr>(),
+                 Body.getAs<Expr>(), E->getType());
+}
+
+template <typename Derived>
+ExprResult TreeTransform<Derived>::TransformExistsExpr(ExistsExpr *E) {
+  ExprResult Lo = E->getLo() ? getDerived().TransformExpr(E->getLo())
+                             : ExprResult((Expr *)nullptr);
+  if (Lo.isInvalid()) return ExprError();
+  ExprResult Hi = E->getHi() ? getDerived().TransformExpr(E->getHi())
+                             : ExprResult((Expr *)nullptr);
   if (Hi.isInvalid()) return ExprError();
   ExprResult Body = getDerived().TransformExpr(E->getBody());
   if (Body.isInvalid()) return ExprError();
