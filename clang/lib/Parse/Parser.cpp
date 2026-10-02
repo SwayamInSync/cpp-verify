@@ -1075,7 +1075,7 @@ bool Parser::isStartOfFunctionDefinition(const ParsingDeclarator &Declarator) {
        Tok.is(tok::kw_decreases) || Tok.is(tok::kw_modifies) ||
        Tok.is(tok::kw_aliases) || Tok.is(tok::kw_recommends) ||
        isContractReadsClause() || isContractWhenClause() ||
-       isContractBehaviorClause()))
+       isContractBehaviorClause() || isContractInductiveClause()))
     return true;
 
   return Tok.is(tok::colon) ||         // X() : Base() {} (used for ctors)
@@ -1092,6 +1092,12 @@ bool Parser::isContractReadsClause() {
 bool Parser::isContractWhenClause() {
   return getLangOpts().VerifyContracts && Tok.is(tok::identifier) &&
          Tok.getIdentifierInfo()->isStr("when") && NextToken().is(tok::l_paren);
+}
+
+bool Parser::isContractInductiveClause() {
+  return getLangOpts().VerifyContracts && Tok.is(tok::identifier) &&
+         Tok.getIdentifierInfo()->isStr("inductive") &&
+         NextToken().isNot(tok::l_paren);
 }
 
 bool Parser::isContractBehaviorClause() {
@@ -1279,6 +1285,7 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
   SmallVector<Expr *, 1> ContractWhen;
   SmallVector<Expr *, 2> ContractDecreases;
   SourceLocation ContractMayDiverge;
+  SourceLocation ContractInductive;
   SmallVector<Expr *, 1> ContractBehaviorChecks;
   SmallVector<std::pair<IdentifierInfo *, Expr *>, 2> ContractBehaviors;
   // Detect spec/proof from DeclSpec bits set during declaration parsing.
@@ -1297,7 +1304,7 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
          Tok.is(tok::kw_decreases) || Tok.is(tok::kw_modifies) ||
          Tok.is(tok::kw_aliases) || Tok.is(tok::kw_recommends) ||
          isContractReadsClause() || isContractWhenClause() ||
-         isContractBehaviorClause())) {
+         isContractBehaviorClause() || isContractInductiveClause())) {
       ContractParamScope.emplace(this, Scope::DeclScope |
                                            Scope::FunctionDeclarationScope |
                                            Scope::FunctionPrototypeScope);
@@ -1348,7 +1355,13 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
            Tok.is(tok::kw_decreases) || Tok.is(tok::kw_modifies) ||
            Tok.is(tok::kw_aliases) || Tok.is(tok::kw_recommends) ||
            isContractReadsClause() || isContractWhenClause() ||
-           isContractBehaviorClause()) {
+           isContractBehaviorClause() || isContractInductiveClause()) {
+      if (isContractInductiveClause()) {
+        ContractInductive = ConsumeToken();
+        if (!IsSpecFn)
+          Diag(ContractInductive, diag::err_contract_inductive_not_spec);
+        continue;
+      }
       if (isContractBehaviorClause()) {
         const bool IsBehavior = Tok.getIdentifierInfo()->isStr("behavior");
         const bool IsComplete =
@@ -1583,8 +1596,8 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
          ContractModifies.empty() && ContractAliases.empty() &&
          ContractRecommends.empty() && ContractReads.empty() &&
          ContractWhen.empty() && ContractDecreases.empty() &&
-         ContractMayDiverge.isInvalid() && ContractBehaviorChecks.empty() &&
-         !IsSpecFn && !IsProofFn))
+         ContractMayDiverge.isInvalid() && ContractInductive.isInvalid() &&
+         ContractBehaviorChecks.empty() && !IsSpecFn && !IsProofFn))
       return;
     FunctionDecl *FD = Result->getAsFunction();
     if (!FD)
@@ -1605,6 +1618,7 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
     FCI.When = std::move(ContractWhen);
     FCI.Decreases = std::move(ContractDecreases);
     FCI.MayDiverge = ContractMayDiverge;
+    FCI.Inductive = ContractInductive;
     FCI.BehaviorChecks = std::move(ContractBehaviorChecks);
     FCI.Behaviors = std::move(ContractBehaviors);
     FCI.IsSpec = IsSpecFn;
