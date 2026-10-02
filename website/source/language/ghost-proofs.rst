@@ -5,7 +5,15 @@ Ghost statements
 ----------------
 
 - ``ghost { }`` — proof-only block; stripped at compile time
-- ``contract_assert(e)`` — emit a verification condition at this point
+- ``ghost T x = e;`` — ghost variable in the function's scope; later ghost
+  code, assertions, and loop invariants may name it, executable code may not
+- ``contract_assert(e)`` — emit a verification condition at this point; once
+  proved, ``e`` holds for the rest of the function
+- ``contract_assert(e) by { ... }`` — prove ``e`` from a local proof whose
+  other facts (lemma posts, assertions, locals) do not escape it
+- ``calc { e0; op { ... } e1; ... }`` — a chain of steps, each proved like
+  an assert-by, concluding the combined relation between ``e0`` and the last
+  term
 - ``reveal_with_fuel(f, n)`` — unfold recursive spec ``f`` up to depth ``n`` (ghost blocks only)
 - ``reveal(f)`` / ``hide(f)`` — make spec ``f`` transparent / opaque for the rest of the
   enclosing function (ghost blocks only)
