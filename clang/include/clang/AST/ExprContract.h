@@ -23,9 +23,10 @@ namespace clang {
 // Forward declaration for serialization friend access.
 class ASTStmtReader;
 
-/// ForallExpr - Represents a bounded universal quantifier:
+/// ForallExpr - Represents a universal quantifier:
 ///   forall(binder, lo, hi, body)
-/// means: for all binder in [lo, hi), body holds.
+/// means: for all binder in [lo, hi), body holds; forall(binder, body)
+/// quantifies over all integers.
 class ForallExpr : public Expr {
   friend class ASTStmtReader;
   SourceLocation ForallLoc;
@@ -51,8 +52,10 @@ public:
   explicit ForallExpr(EmptyShell Empty) : Expr(ForallExprClass, Empty) {}
 
   VarDecl *getBoundVar() const { return BoundVar; }
-  Expr *getLo() const { return cast<Expr>(SubExprs[LO]); }
-  Expr *getHi() const { return cast<Expr>(SubExprs[HI]); }
+  /// The bounds, or null when the binder ranges over all integers.
+  Expr *getLo() const { return cast_or_null<Expr>(SubExprs[LO]); }
+  Expr *getHi() const { return cast_or_null<Expr>(SubExprs[HI]); }
+  bool isUnbounded() const { return !SubExprs[LO]; }
   Expr *getBody() const { return cast<Expr>(SubExprs[BODY]); }
 
   SourceLocation getForallLoc() const { return ForallLoc; }
@@ -66,16 +69,19 @@ public:
   }
 
   child_range children() {
-    return child_range(&SubExprs[0], &SubExprs[NUM_SUBEXPRS]);
+    return child_range(&SubExprs[isUnbounded() ? BODY : LO],
+                       &SubExprs[NUM_SUBEXPRS]);
   }
   const_child_range children() const {
-    return const_child_range(&SubExprs[0], &SubExprs[NUM_SUBEXPRS]);
+    return const_child_range(&SubExprs[isUnbounded() ? BODY : LO],
+                             &SubExprs[NUM_SUBEXPRS]);
   }
 };
 
-/// ExistsExpr - Represents a bounded existential quantifier:
+/// ExistsExpr - Represents an existential quantifier:
 ///   exists(binder, lo, hi, body)
-/// means: there exists binder in [lo, hi) such that body holds.
+/// means: there exists binder in [lo, hi) such that body holds;
+/// exists(binder, body) ranges over all integers.
 class ExistsExpr : public Expr {
   friend class ASTStmtReader;
   SourceLocation ExistsLoc;
@@ -101,8 +107,10 @@ public:
   explicit ExistsExpr(EmptyShell Empty) : Expr(ExistsExprClass, Empty) {}
 
   VarDecl *getBoundVar() const { return BoundVar; }
-  Expr *getLo() const { return cast<Expr>(SubExprs[LO]); }
-  Expr *getHi() const { return cast<Expr>(SubExprs[HI]); }
+  /// The bounds, or null when the binder ranges over all integers.
+  Expr *getLo() const { return cast_or_null<Expr>(SubExprs[LO]); }
+  Expr *getHi() const { return cast_or_null<Expr>(SubExprs[HI]); }
+  bool isUnbounded() const { return !SubExprs[LO]; }
   Expr *getBody() const { return cast<Expr>(SubExprs[BODY]); }
 
   SourceLocation getExistsLoc() const { return ExistsLoc; }
@@ -116,10 +124,66 @@ public:
   }
 
   child_range children() {
-    return child_range(&SubExprs[0], &SubExprs[NUM_SUBEXPRS]);
+    return child_range(&SubExprs[isUnbounded() ? BODY : LO],
+                       &SubExprs[NUM_SUBEXPRS]);
   }
   const_child_range children() const {
-    return const_child_range(&SubExprs[0], &SubExprs[NUM_SUBEXPRS]);
+    return const_child_range(&SubExprs[isUnbounded() ? BODY : LO],
+                             &SubExprs[NUM_SUBEXPRS]);
+  }
+};
+
+/// ContractChooseExpr - Represents choose(binder, body) or choose(binder, lo, hi,
+/// body): an integer for which body holds (in [lo, hi)), when one exists, and
+/// otherwise an unspecified integer; the same one for the same values of the
+/// variables body mentions.
+class ContractChooseExpr : public Expr {
+  friend class ASTStmtReader;
+  SourceLocation ChooseLoc;
+  SourceLocation LParenLoc;
+  SourceLocation RParenLoc;
+  VarDecl *BoundVar;
+  enum { LO, HI, BODY, NUM_SUBEXPRS };
+  Stmt *SubExprs[NUM_SUBEXPRS];
+
+public:
+  ContractChooseExpr(SourceLocation ChooseLoc, SourceLocation LParenLoc,
+             SourceLocation RParenLoc, VarDecl *BoundVar, Expr *Lo, Expr *Hi,
+             Expr *Body, QualType Ty)
+      : Expr(ContractChooseExprClass, Ty, VK_PRValue, OK_Ordinary),
+        ChooseLoc(ChooseLoc), LParenLoc(LParenLoc), RParenLoc(RParenLoc),
+        BoundVar(BoundVar) {
+    SubExprs[LO] = Lo;
+    SubExprs[HI] = Hi;
+    SubExprs[BODY] = Body;
+    setDependence(ExprDependence::None);
+  }
+
+  explicit ContractChooseExpr(EmptyShell Empty) : Expr(ContractChooseExprClass, Empty) {}
+
+  VarDecl *getBoundVar() const { return BoundVar; }
+  Expr *getLo() const { return cast_or_null<Expr>(SubExprs[LO]); }
+  Expr *getHi() const { return cast_or_null<Expr>(SubExprs[HI]); }
+  bool isUnbounded() const { return !SubExprs[LO]; }
+  Expr *getBody() const { return cast<Expr>(SubExprs[BODY]); }
+
+  SourceLocation getChooseLoc() const { return ChooseLoc; }
+  SourceLocation getLParenLoc() const { return LParenLoc; }
+  SourceLocation getRParenLoc() const { return RParenLoc; }
+  SourceLocation getBeginLoc() const LLVM_READONLY { return ChooseLoc; }
+  SourceLocation getEndLoc() const LLVM_READONLY { return RParenLoc; }
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == ContractChooseExprClass;
+  }
+
+  child_range children() {
+    return child_range(&SubExprs[isUnbounded() ? BODY : LO],
+                       &SubExprs[NUM_SUBEXPRS]);
+  }
+  const_child_range children() const {
+    return const_child_range(&SubExprs[isUnbounded() ? BODY : LO],
+                             &SubExprs[NUM_SUBEXPRS]);
   }
 };
 
