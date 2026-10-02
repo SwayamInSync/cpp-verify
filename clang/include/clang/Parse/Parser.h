@@ -912,6 +912,12 @@ private:
   /// declarator, indicates the start of a function definition.
   bool isStartOfFunctionDefinition(const ParsingDeclarator &Declarator);
 
+  /// CppVerify: whether the current token starts a reads(...) clause.
+  bool isContractReadsClause();
+  bool isContractWhenClause();
+  /// behavior(name, assumes), complete_behaviors, or disjoint_behaviors.
+  bool isContractBehaviorClause();
+
   DeclGroupPtrTy ParseDeclarationOrFunctionDefinition(
       ParsedAttributes &DeclAttrs, ParsedAttributes &DeclSpecAttrs,
       ParsingDeclSpec *DS = nullptr, AccessSpecifier AS = AS_none);
@@ -7454,10 +7460,18 @@ public:
 
   /// Parse invariant/decreases clauses on an iteration statement.
   void ParseLoopContractClauses(SmallVectorImpl<Expr *> &Invariants,
-                                SmallVectorImpl<Expr *> &Decreases);
+                                SmallVectorImpl<Expr *> &Decreases,
+                                SourceLocation &MayDiverge,
+                                SmallVectorImpl<Expr *> &Modifies);
+
+  /// Parse the footprints of a modifies clause up to its ')'.
+  void ParseContractFootprints(SmallVectorImpl<Expr *> &Footprints);
 
   /// Parse ghost { ... } block.
   StmtResult ParseGhostBlock();
+
+  /// Parse calc { e0; op [{ proof }] e1; ... }, which proves e0 R en.
+  StmtResult ParseCalcStatement();
 
   /// Parse contract_assert(expr);
   StmtResult ParseContractAssert();
@@ -7481,6 +7495,12 @@ public:
   bool InContractPostcondition = false;
   /// True when parsing a loop invariant; old(...) denotes function entry.
   bool InLoopContractInvariant = false;
+  /// True while parsing a modifies footprint, where p[start : length] names
+  /// a range of cells.
+  bool InContractFootprint = false;
+  /// How many quantifier bodies enclose the current expression, where
+  /// trigger(term) marks a pattern.
+  unsigned QuantifierBodyDepth = 0;
   /// True while parsing the operand of old(...).
   bool InOldExpression = false;
   /// True while parsing the body of a function that has contract clauses.
