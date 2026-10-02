@@ -5,6 +5,7 @@ if(NOT CPPVERIFY_Z3_TARGET OR NOT TARGET clangVerify)
 endif()
 
 add_distinct_clang_unittest(VerifyTests
+  CertifyTest.cpp
   EncodingParityTest.cpp
   MachineIntegerEncodingTest.cpp
   CLANG_LIBS
