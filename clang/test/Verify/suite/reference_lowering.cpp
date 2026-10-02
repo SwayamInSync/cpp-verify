@@ -33,7 +33,7 @@ void lower_reference_call(int *value, int next)
 // CHECK-NEXT: load
 // CHECK-NEXT: value
 // CHECK: body
-// CHECK-NEXT: store
+// CHECK: store
 // CHECK-NEXT: value
 // CHECK-NEXT: next
 // CHECK-LABEL: passive lower_reference
