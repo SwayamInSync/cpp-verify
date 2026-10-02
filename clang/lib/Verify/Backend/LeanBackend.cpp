@@ -94,6 +94,10 @@ static void printLeanSort(const LogicSort &Sort, llvm::raw_ostream &OS) {
     OS << "CppHeap";
     return;
   case LogicSortKind::Invalid:
+  case LogicSortKind::Seq:
+  case LogicSortKind::Set:
+  case LogicSortKind::Multiset:
+  case LogicSortKind::Map:
     LeanEmissionFailed = true;
     OS << "False";
     return;
@@ -446,11 +450,44 @@ static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
     printVCExprLean(E->Children[3].get(), OS, 10);
     OS << ")";
     break;
+  case VCExpr::Collection:
+    LeanEmissionFailed = true;
+    OS << "False";
+    break;
+  case VCExpr::HeapFrame:
+    OS << "(∀ (";
+    printLeanName("__frame_address", OS);
+    OS << " : Int), ";
+    for (unsigned I = 2; I + 1 < E->Children.size(); I += 2) {
+      OS << "(";
+      printVCExprLean(E->Children[I].get(), OS, 6);
+      OS << " ≤ ";
+      printLeanName("__frame_address", OS);
+      OS << " ∧ ";
+      printLeanName("__frame_address", OS);
+      OS << " < ";
+      printVCExprLean(E->Children[I + 1].get(), OS, 6);
+      OS << ") ∨ ";
+    }
+    OS << "heapSelectInt ";
+    printVCExprLean(E->Children[1].get(), OS, 10);
+    OS << " ";
+    printLeanName("__frame_address", OS);
+    OS << " = heapSelectInt ";
+    printVCExprLean(E->Children[0].get(), OS, 10);
+    OS << " ";
+    printLeanName("__frame_address", OS);
+    OS << ")";
+    break;
   case VCExpr::Forall:
   case VCExpr::Exists:
     OS << (E->K == VCExpr::Forall ? "∀ (" : "∃ (");
     printLeanName(E->Binder, OS);
     OS << " : Int), ";
+    if (E->Children.size() == 1) {
+      printVCExprLean(E->Children[0].get(), OS, 2);
+      break;
+    }
     printVCExprLean(E->Children[0].get(), OS, 6);
     OS << " ≤ ";
     printLeanName(E->Binder, OS);
