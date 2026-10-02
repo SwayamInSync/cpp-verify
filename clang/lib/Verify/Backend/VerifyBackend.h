@@ -175,6 +175,9 @@ parseMachineIntegerEncoding(llvm::StringRef Name);
 
 struct BackendExecutionOptions {
   unsigned SolverTimeoutMs = 0;
+  /// Per-query timeout for modules over sequences, sets, multisets, or
+  /// maps; unset means SolverTimeoutMs.
+  std::optional<unsigned> CollectionTimeoutMs;
   /// Per-query deterministic solver resource limit; 0 disables it.
   unsigned SolverResourceLimit = 0;
   /// Isolated solver jobs. 0 selects the available physical-core count.
@@ -199,6 +202,18 @@ struct BackendExecutionOptions {
   uint64_t ProofCacheMaxBytes = 1024ULL * 1024ULL * 1024ULL;
   uint64_t ProofCacheMaxEntries = 100000;
 };
+
+/// The per-query timeout for \p Module: the collection timeout when it
+/// reasons about collections, whose theories need more search.
+inline unsigned moduleTimeoutMs(const ObligationModule &Module,
+                                unsigned SolverTimeoutMs,
+                                std::optional<unsigned> CollectionTimeoutMs) {
+  const bool OverCollections =
+      Module.RequiredFeatures & (logicFeature(LogicFeature::Sequences) |
+                                 logicFeature(LogicFeature::Collections));
+  return OverCollections && CollectionTimeoutMs ? *CollectionTimeoutMs
+                                                : SolverTimeoutMs;
+}
 
 std::unique_ptr<VerifyBackend>
 createVerifyBackend(BackendKind K, llvm::raw_ostream *LeanOut = nullptr,
