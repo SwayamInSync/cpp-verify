@@ -473,16 +473,77 @@ by induction on the length of :math:`t`, removing its last element:
 
 .. code-block:: text
 
-   $ cpp-verify --backend=cvc5 concat.cpp
+   $ cpp-verify concat.cpp
    Verified: spec decreases: total
-   Verified: total_concat [backend=cvc5]
+   Verified: total_concat [backend=z3]
 
-The inductive step needs a fact about sequences as much as about
-``total``: dropping the last element of ``s + t`` leaves ``s`` followed by
-``t`` without its last element. cvc5 finds that itself; Z3, the default,
-times out on this lemma even when the step is asserted separately, so prove
-sequence lemmas like this one with ``--backend=cvc5``. A verified lemma is a
-fact whichever solver proved it, and every other function can still use Z3.
+The recursive call is the induction hypothesis for the shorter sequence,
+and ``decreases(t.len())`` is what makes the recursion a proof: the
+verifier checks that every call lowers it, so the argument is well founded.
+The step also needs a fact about sequences: dropping the last element of
+``s + t`` leaves ``s`` followed by ``t`` without its last element. The
+verifier knows how an element is read from a concatenation, a push, or a
+subrange, and how a subrange of a concatenation splits, so it finds that
+itself. No solver finds the induction itself; the recursive call is yours,
+as in Verus and Dafny.
+
+Sometimes the step needs a sequence equality that the solver does not see.
+State it: an equality of sequences that a proof asserts is proved element by
+element when need be (equal lengths and equal elements, Verus's ``=~=``), and
+from then on it is a fact. A count of occurrences, and its invariance under
+``reverse``, show both kinds of step:
+
+.. code-block:: cpp
+
+   spec int count(seq s, int x)
+     decreases(s.len())
+   {
+     return s.len() <= 0
+                ? 0
+                : count(s.subrange(0, s.len() - 1), x) +
+                      (s[s.len() - 1] == x ? 1 : 0);
+   }
+
+   proof void count_concat(seq s, seq t, int x)
+     post(count(s + t, x) == count(s, x) + count(t, x))
+     decreases(t.len())
+   {
+     if (t.len() > 0)
+       count_concat(s, t.subrange(0, t.len() - 1), x);
+   }
+
+   proof void count_reverse(seq s, int x)
+     post(count(s.reverse(), x) == count(s, x))
+     decreases(s.len())
+   {
+     if (s.len() > 0) {
+       seq tail = s.subrange(1, s.len());
+       count_reverse(tail, x);
+       count_concat(cppverify::seq_of(s[0]), tail, x);
+       contract_assert(cppverify::seq_of(s[0]) + tail == s);
+     }
+   }
+
+``s.reverse()`` is defined as ``tail.reverse().push(s[0])``, so its count is
+the count of ``tail`` plus one for ``s[0]`` when it is ``x``. ``count``
+removes the *last* element, so ``count_concat`` relates it to the front, and
+the asserted equality tells the solver that ``s`` is ``s[0]`` followed by
+``tail``; without that line the step stays unresolved with ``spec.fuel``.
+
+``reverse`` states its length (``s.reverse().len() == s.len()``), which its
+definition proves by induction when it is checked. A property of its
+elements is a lemma like any other:
+
+.. code-block:: cpp
+
+   proof void reverse_index(seq s, long long k)
+     pre(0 <= k && k < s.len())
+     post(s.reverse()[k] == s[s.len() - 1 - k])
+     decreases(s.len())
+   {
+     if (k < s.len() - 1)
+       reverse_index(s.subrange(1, s.len()), k);
+   }
 
 When the solver needs help
 --------------------------
@@ -498,10 +559,12 @@ The examples above use a handful of techniques, which cover most proofs:
   definitions out of the way with ``hide`` once lemmas state what matters.
 - **Choose triggers** that the proof mentions and that instances do not
   recreate; check with ``--profile-quantifiers``.
-- **Use the other solver.** Z3 and cvc5 have different strengths. cvc5's
-  sequence reasoning is stronger, and proofs over sequences that time out
-  under Z3 often verify with ``--backend=cvc5``, as ``total_concat`` does.
-  Both are exact, and a strict ``--backend=portfolio`` asks for agreement.
+- **State the sequence equality** a step needs, as ``count_reverse`` does:
+  a stated equality is proved element by element.
+- **Use the other solver.** Z3 and cvc5 have different strengths; a proof
+  that times out under one may verify with the other
+  (``--backend=cvc5``). Both are exact, and a strict
+  ``--backend=portfolio`` asks for agreement.
 - **Run obligations separately.** ``--jobs=N`` solves each obligation on its
   own, in parallel, before trying them together; a function whose combined
   query is hard but whose obligations are each easy then verifies at once.
