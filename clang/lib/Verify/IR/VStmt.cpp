@@ -148,6 +148,9 @@ VFunction verify::cloneVFunction(const VFunction &Fn) {
   Out.IsExternalContract = Fn.IsExternalContract;
   Out.IsTrusted = Fn.IsTrusted;
   Out.IsBuiltin = Fn.IsBuiltin;
+  Out.InductiveLoc = Fn.InductiveLoc;
+  Out.Unfolding = cloneVExpr(Fn.Unfolding.get());
+  Out.InductiveStepOf = Fn.InductiveStepOf;
   for (const auto &[Name, Assumes] : Fn.Behaviors)
     Out.Behaviors.emplace_back(Name, cloneVExpr(Assumes.get()));
   Out.DeclLoc = Fn.DeclLoc;
