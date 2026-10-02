@@ -11,6 +11,9 @@ class ASTContext;
 
 namespace verify {
 inline constexpr unsigned DefaultSolverTimeoutMs = 30000;
+/// Twice the default: collection theories need more search.
+inline constexpr unsigned DefaultCollectionTimeoutMs =
+    2 * DefaultSolverTimeoutMs;
 
 enum class DiagnosticFormat { Text, Json };
 
@@ -35,6 +38,8 @@ struct VerifyOptions {
   /// Per-query solver timeout in milliseconds; 0 disables it. Non-terminating
   /// queries return Unknown instead of hanging the tool.
   unsigned SolverTimeoutMs = DefaultSolverTimeoutMs;
+  /// Per-query timeout for queries over sequences, sets, multisets, or maps.
+  unsigned CollectionTimeoutMs = DefaultCollectionTimeoutMs;
   /// Deterministic per-query solver resource limit; 0 disables it.
   unsigned SolverResourceLimit = 0;
   /// Number of isolated solver jobs. 0 selects available physical cores.
