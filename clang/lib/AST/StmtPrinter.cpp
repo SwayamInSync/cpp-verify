@@ -605,6 +605,12 @@ void StmtPrinter::VisitCapturedStmt(CapturedStmt *Node) {
 void StmtPrinter::VisitContractAssertStmt(ContractAssertStmt *Node) {
   Indent() << "contract_assert(";
   PrintExpr(Node->getCond());
+  if (const auto *By = dyn_cast_or_null<GhostBlockStmt>(Node->getBy())) {
+    OS << ") by ";
+    PrintRawCompoundStmt(cast<CompoundStmt>(By->getBody()));
+    OS << "\n";
+    return;
+  }
   OS << ");\n";
 }
 
@@ -635,20 +641,36 @@ void StmtPrinter::VisitRevealSpecStmt(RevealSpecStmt *Node) {
 
 void StmtPrinter::VisitForallExpr(ForallExpr *Node) {
   OS << "forall(" << Node->getBoundVar()->getName() << ", ";
-  PrintExpr(Node->getLo());
-  OS << ", ";
-  PrintExpr(Node->getHi());
-  OS << ", ";
+  if (!Node->isUnbounded()) {
+    PrintExpr(Node->getLo());
+    OS << ", ";
+    PrintExpr(Node->getHi());
+    OS << ", ";
+  }
   PrintExpr(Node->getBody());
   OS << ")";
 }
 
 void StmtPrinter::VisitExistsExpr(ExistsExpr *Node) {
   OS << "exists(" << Node->getBoundVar()->getName() << ", ";
-  PrintExpr(Node->getLo());
-  OS << ", ";
-  PrintExpr(Node->getHi());
-  OS << ", ";
+  if (!Node->isUnbounded()) {
+    PrintExpr(Node->getLo());
+    OS << ", ";
+    PrintExpr(Node->getHi());
+    OS << ", ";
+  }
+  PrintExpr(Node->getBody());
+  OS << ")";
+}
+
+void StmtPrinter::VisitContractChooseExpr(ContractChooseExpr *Node) {
+  OS << "choose(" << Node->getBoundVar()->getName() << ", ";
+  if (!Node->isUnbounded()) {
+    PrintExpr(Node->getLo());
+    OS << ", ";
+    PrintExpr(Node->getHi());
+    OS << ", ";
+  }
   PrintExpr(Node->getBody());
   OS << ")";
 }
