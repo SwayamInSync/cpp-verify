@@ -1283,11 +1283,17 @@ public:
     const std::string EncodedQuery = encode(Query);
     if (DefineFunctions) {
       NonRecursive = nonRecursiveDefinitions(Module);
-      const std::map<std::string, const LogicFunctionDecl *> Used =
-          UsedFunctions;
-      for (const auto &[Identity, Function] : Used)
-        define(*Function);
+    } else {
+      // A visible non-recursive definition is exact and finite: define it
+      // whole, so an application under a quantifier is interpreted too.
+      for (const std::string &Identity : nonRecursiveDefinitions(Module))
+        if (auto It = Module.LogicFunctions.find(Identity);
+            It != Module.LogicFunctions.end() && It->second.DefinitionFuel > 0)
+          NonRecursive.insert(Identity);
     }
+    const std::map<std::string, const LogicFunctionDecl *> Used = UsedFunctions;
+    for (const auto &[Identity, Function] : Used)
+      define(*Function);
     if (Failed)
       return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                      Error.c_str());
