@@ -2996,7 +2996,9 @@ void ASTStmtReader::VisitHLSLOutArgExpr(HLSLOutArgExpr *S) {
 
 void ASTStmtReader::VisitContractAssertStmt(ContractAssertStmt *S) {
   VisitStmt(S);
-  S->Cond = Record.readSubExpr();
+  S->SubStmts[ContractAssertStmt::COND] = Record.readSubExpr();
+  if (Record.readInt())
+    S->SubStmts[ContractAssertStmt::BY] = Record.readSubStmt();
   S->ContractAssertLoc = readSourceLocation();
   S->LParenLoc = readSourceLocation();
   S->RParenLoc = readSourceLocation();
@@ -3051,6 +3053,17 @@ void ASTStmtReader::VisitExistsExpr(ExistsExpr *E) {
   E->SubExprs[ExistsExpr::HI] = Record.readSubExpr();
   E->SubExprs[ExistsExpr::BODY] = Record.readSubExpr();
   E->ExistsLoc = readSourceLocation();
+  E->LParenLoc = readSourceLocation();
+  E->RParenLoc = readSourceLocation();
+}
+
+void ASTStmtReader::VisitContractChooseExpr(ContractChooseExpr *E) {
+  VisitExpr(E);
+  E->BoundVar = readDeclAs<VarDecl>();
+  E->SubExprs[ContractChooseExpr::LO] = Record.readSubExpr();
+  E->SubExprs[ContractChooseExpr::HI] = Record.readSubExpr();
+  E->SubExprs[ContractChooseExpr::BODY] = Record.readSubExpr();
+  E->ChooseLoc = readSourceLocation();
   E->LParenLoc = readSourceLocation();
   E->RParenLoc = readSourceLocation();
 }
@@ -4644,6 +4657,9 @@ Stmt *ASTReader::ReadStmtFromStream(ModuleFile &F) {
       break;
     case EXPR_EXISTS:
       S = new (Context) ExistsExpr(Empty);
+      break;
+    case EXPR_CONTRACT_CHOOSE:
+      S = new (Context) ContractChooseExpr(Empty);
       break;
     case EXPR_OLD:
       S = new (Context) OldExpr(Empty);

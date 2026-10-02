@@ -3097,6 +3097,9 @@ void ASTStmtWriter::VisitHLSLOutArgExpr(HLSLOutArgExpr *S) {
 void ASTStmtWriter::VisitContractAssertStmt(ContractAssertStmt *S) {
   VisitStmt(S);
   Record.AddStmt(S->getCond());
+  Record.push_back(S->getBy() != nullptr);
+  if (S->getBy())
+    Record.AddStmt(S->getBy());
   Record.AddSourceLocation(S->getContractAssertLoc());
   Record.AddSourceLocation(S->getLParenLoc());
   Record.AddSourceLocation(S->getRParenLoc());
@@ -3160,6 +3163,18 @@ void ASTStmtWriter::VisitExistsExpr(ExistsExpr *E) {
   Record.AddSourceLocation(E->getLParenLoc());
   Record.AddSourceLocation(E->getRParenLoc());
   Code = serialization::EXPR_EXISTS;
+}
+
+void ASTStmtWriter::VisitContractChooseExpr(ContractChooseExpr *E) {
+  VisitExpr(E);
+  Record.AddDeclRef(E->getBoundVar());
+  Record.AddStmt(E->getLo());
+  Record.AddStmt(E->getHi());
+  Record.AddStmt(E->getBody());
+  Record.AddSourceLocation(E->getChooseLoc());
+  Record.AddSourceLocation(E->getLParenLoc());
+  Record.AddSourceLocation(E->getRParenLoc());
+  Code = serialization::EXPR_CONTRACT_CHOOSE;
 }
 
 void ASTStmtWriter::VisitOldExpr(OldExpr *E) {
