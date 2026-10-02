@@ -32,6 +32,83 @@ LogicSort LogicSort::heap() {
   return {LogicSortKind::Heap, 0, LogicSignedness::None};
 }
 
+LogicSort LogicSort::collection(LogicSortKind Kind) {
+  return {Kind, 0, LogicSignedness::None};
+}
+
+bool verify::isCollectionRead(const LogicExpr &E) {
+  if (E.K != LogicExpr::Collection)
+    return false;
+  switch (E.CollectionOp) {
+  case LogicCollectionOp::SeqIndex:
+  case LogicCollectionOp::SetContains:
+  case LogicCollectionOp::MultisetCount:
+  case LogicCollectionOp::MapContains:
+  case LogicCollectionOp::MapGet:
+    return true;
+  default:
+    return false;
+  }
+}
+
+const char *verify::logicCollectionOpName(LogicCollectionOp Op) {
+  switch (Op) {
+  case LogicCollectionOp::SeqEmpty:
+    return "seq.empty";
+  case LogicCollectionOp::SeqUnit:
+    return "seq.unit";
+  case LogicCollectionOp::SeqLength:
+    return "seq.len";
+  case LogicCollectionOp::SeqIndex:
+    return "seq.index";
+  case LogicCollectionOp::SeqPush:
+    return "seq.push";
+  case LogicCollectionOp::SeqUpdate:
+    return "seq.update";
+  case LogicCollectionOp::SeqSubrange:
+    return "seq.subrange";
+  case LogicCollectionOp::SeqConcat:
+    return "seq.concat";
+  case LogicCollectionOp::SeqContains:
+    return "seq.contains";
+  case LogicCollectionOp::SetEmpty:
+    return "set.empty";
+  case LogicCollectionOp::SetInsert:
+    return "set.insert";
+  case LogicCollectionOp::SetRemove:
+    return "set.remove";
+  case LogicCollectionOp::SetContains:
+    return "set.contains";
+  case LogicCollectionOp::SetUnion:
+    return "set.union";
+  case LogicCollectionOp::SetIntersect:
+    return "set.intersect";
+  case LogicCollectionOp::SetDifference:
+    return "set.difference";
+  case LogicCollectionOp::SetSubset:
+    return "set.subset";
+  case LogicCollectionOp::MultisetEmpty:
+    return "multiset.empty";
+  case LogicCollectionOp::MultisetInsert:
+    return "multiset.insert";
+  case LogicCollectionOp::MultisetRemove:
+    return "multiset.remove";
+  case LogicCollectionOp::MultisetCount:
+    return "multiset.count";
+  case LogicCollectionOp::MapEmpty:
+    return "map.empty";
+  case LogicCollectionOp::MapInsert:
+    return "map.insert";
+  case LogicCollectionOp::MapRemove:
+    return "map.remove";
+  case LogicCollectionOp::MapContains:
+    return "map.contains";
+  case LogicCollectionOp::MapGet:
+    return "map.get";
+  }
+  return "collection";
+}
+
 const char *verify::logicSortName(LogicSortKind Kind) {
   switch (Kind) {
   case LogicSortKind::Invalid:
@@ -46,32 +123,16 @@ const char *verify::logicSortName(LogicSortKind Kind) {
     return "pointer";
   case LogicSortKind::Heap:
     return "heap";
+  case LogicSortKind::Seq:
+    return "seq";
+  case LogicSortKind::Set:
+    return "set";
+  case LogicSortKind::Multiset:
+    return "multiset";
+  case LogicSortKind::Map:
+    return "map";
   }
   return "invalid";
-}
-
-static bool containsSpecCall(const LogicExpr *Expr) {
-  if (!Expr)
-    return false;
-  if (Expr->K == LogicExpr::SpecCall)
-    return true;
-  return std::any_of(Expr->Children.begin(), Expr->Children.end(),
-                     [](const std::unique_ptr<LogicExpr> &Child) {
-                       return containsSpecCall(Child.get());
-                     });
-}
-
-std::vector<std::string> verify::specFrontier(const ObligationModule &Module) {
-  std::vector<std::string> Names;
-  for (const auto &[Identity, Function] : Module.LogicFunctions)
-    if (std::any_of(Function.DefinitionLevels.begin(),
-                    Function.DefinitionLevels.end(),
-                    [](const std::unique_ptr<LogicExpr> &Level) {
-                      return containsSpecCall(Level.get());
-                    }))
-      Names.push_back(Function.DisplayName.empty() ? Identity
-                                                   : Function.DisplayName);
-  return Names;
 }
 
 std::string verify::formatLogicSort(const LogicSort &Sort) {
@@ -91,6 +152,11 @@ std::string verify::formatLogicSort(const LogicSort &Sort) {
     return "pointer";
   case LogicSortKind::Heap:
     return "heap";
+  case LogicSortKind::Seq:
+  case LogicSortKind::Set:
+  case LogicSortKind::Multiset:
+  case LogicSortKind::Map:
+    return logicSortName(Sort.Kind);
   }
   return "invalid";
 }
@@ -108,6 +174,8 @@ std::string verify::formatLogicFeatures(LogicFeatureSet Features) {
       {LogicFeature::Quantifiers, "quantifiers"},
       {LogicFeature::SpecFunctions, "spec-functions"},
       {LogicFeature::HeapFunctions, "heap-functions"},
+      {LogicFeature::Sequences, "sequences"},
+      {LogicFeature::Collections, "collections"},
   };
   std::string Result;
   for (const NamedFeature &Named : Names) {
@@ -124,6 +192,14 @@ static LogicSort logicSortFor(VTypeKind Kind, VIntMode Mode, unsigned BitWidth,
                               bool IsSigned) {
   if (Kind == VTypeKind::Bool)
     return LogicSort::boolSort();
+  if (Kind == VTypeKind::Seq)
+    return LogicSort::collection(LogicSortKind::Seq);
+  if (Kind == VTypeKind::Set)
+    return LogicSort::collection(LogicSortKind::Set);
+  if (Kind == VTypeKind::Multiset)
+    return LogicSort::collection(LogicSortKind::Multiset);
+  if (Kind == VTypeKind::Map)
+    return LogicSort::collection(LogicSortKind::Map);
   if (Kind == VTypeKind::Ptr)
     return LogicSort::pointer();
   if (Kind != VTypeKind::Int32 && Kind != VTypeKind::Int64)
@@ -338,9 +414,12 @@ static std::unique_ptr<VCExpr> cloneVCExpr(const VCExpr *E) {
   Copy->Name = E->Name;
   Copy->Binder = E->Binder;
   Copy->OverflowOp = E->OverflowOp;
+  Copy->CollectionOp = E->CollectionOp;
   Copy->SpecCallee = E->SpecCallee;
   for (const auto &Child : E->Children)
     Copy->Children.push_back(cloneVCExpr(Child.get()));
+  for (const auto &Pattern : E->Patterns)
+    Copy->Patterns.push_back(cloneVCExpr(Pattern.get()));
   return Copy;
 }
 
@@ -353,6 +432,7 @@ static bool equalLogicExpr(const LogicExpr *Left, const LogicExpr *Right) {
       Left->IntVal != Right->IntVal || Left->BoolVal != Right->BoolVal ||
       Left->Name != Right->Name || Left->Binder != Right->Binder ||
       Left->OverflowOp != Right->OverflowOp ||
+      Left->CollectionOp != Right->CollectionOp ||
       Left->SpecCallee != Right->SpecCallee ||
       Left->Children.size() != Right->Children.size())
     return false;
@@ -446,7 +526,8 @@ static bool validateLogicSort(const LogicSort &Sort, std::string &Error) {
     Error = "non-integer sort has a bit width in obligation IR";
     return false;
   }
-  if (Sort.Kind == LogicSortKind::Bool || Sort.Kind == LogicSortKind::Heap) {
+  if (Sort.Kind == LogicSortKind::Bool || Sort.Kind == LogicSortKind::Heap ||
+      Sort.isCollection()) {
     if (Sort.Signedness != LogicSignedness::None) {
       Error = "non-numeric sort has signedness in obligation IR";
       return false;
@@ -517,6 +598,8 @@ static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error) {
        !Expr->Binder.empty()) ||
       (Expr->K != LogicExpr::NoOverflow &&
        Expr->OverflowOp != LogicOverflowOp::Add) ||
+      (Expr->K != LogicExpr::Collection &&
+       Expr->CollectionOp != LogicCollectionOp::SeqEmpty) ||
       (Expr->K != LogicExpr::SpecCall && !Expr->SpecCallee.empty())) {
     Error = "inactive payload is set in obligation term";
     return false;
@@ -778,12 +861,122 @@ static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error) {
            Expr->Children[2]->Sort.Kind != LogicSortKind::Heap &&
            requireChildSort(3, LogicSortKind::Heap,
                             "heap store has a non-heap output");
+  case VCExpr::Collection: {
+    // The operand and result sorts of each operation.
+    using K = LogicSortKind;
+    struct Shape {
+      std::vector<K> Operands;
+      K Result;
+    };
+    auto shape = [](LogicCollectionOp Op) -> Shape {
+      switch (Op) {
+      case LogicCollectionOp::SeqEmpty:
+        return {{}, K::Seq};
+      case LogicCollectionOp::SeqUnit:
+        return {{K::MathematicalInteger}, K::Seq};
+      case LogicCollectionOp::SeqLength:
+        return {{K::Seq}, K::MathematicalInteger};
+      case LogicCollectionOp::SeqIndex:
+        return {{K::Seq, K::MathematicalInteger}, K::MathematicalInteger};
+      case LogicCollectionOp::SeqPush:
+        return {{K::Seq, K::MathematicalInteger}, K::Seq};
+      case LogicCollectionOp::SeqUpdate:
+        return {{K::Seq, K::MathematicalInteger, K::MathematicalInteger},
+                K::Seq};
+      case LogicCollectionOp::SeqSubrange:
+        return {{K::Seq, K::MathematicalInteger, K::MathematicalInteger},
+                K::Seq};
+      case LogicCollectionOp::SeqConcat:
+        return {{K::Seq, K::Seq}, K::Seq};
+      case LogicCollectionOp::SeqContains:
+        return {{K::Seq, K::MathematicalInteger}, K::Bool};
+      case LogicCollectionOp::SetEmpty:
+        return {{}, K::Set};
+      case LogicCollectionOp::SetInsert:
+      case LogicCollectionOp::SetRemove:
+        return {{K::Set, K::MathematicalInteger}, K::Set};
+      case LogicCollectionOp::SetContains:
+        return {{K::Set, K::MathematicalInteger}, K::Bool};
+      case LogicCollectionOp::SetUnion:
+      case LogicCollectionOp::SetIntersect:
+      case LogicCollectionOp::SetDifference:
+        return {{K::Set, K::Set}, K::Set};
+      case LogicCollectionOp::SetSubset:
+        return {{K::Set, K::Set}, K::Bool};
+      case LogicCollectionOp::MultisetEmpty:
+        return {{}, K::Multiset};
+      case LogicCollectionOp::MultisetInsert:
+      case LogicCollectionOp::MultisetRemove:
+        return {{K::Multiset, K::MathematicalInteger}, K::Multiset};
+      case LogicCollectionOp::MultisetCount:
+        return {{K::Multiset, K::MathematicalInteger}, K::MathematicalInteger};
+      case LogicCollectionOp::MapEmpty:
+        return {{}, K::Map};
+      case LogicCollectionOp::MapInsert:
+        return {{K::Map, K::MathematicalInteger, K::MathematicalInteger},
+                K::Map};
+      case LogicCollectionOp::MapRemove:
+        return {{K::Map, K::MathematicalInteger}, K::Map};
+      case LogicCollectionOp::MapContains:
+        return {{K::Map, K::MathematicalInteger}, K::Bool};
+      case LogicCollectionOp::MapGet:
+        return {{K::Map, K::MathematicalInteger}, K::MathematicalInteger};
+      }
+      return {{}, K::Invalid};
+    };
+    const Shape Expected = shape(Expr->CollectionOp);
+    if (Expr->Children.size() != Expected.Operands.size()) {
+      Error = std::string("collection operation ") +
+              logicCollectionOpName(Expr->CollectionOp) +
+              " has the wrong operand count";
+      return false;
+    }
+    for (size_t I = 0; I != Expected.Operands.size(); ++I)
+      if (Expr->Children[I]->Sort.Kind != Expected.Operands[I]) {
+        Error = std::string("collection operation ") +
+                logicCollectionOpName(Expr->CollectionOp) +
+                " has an operand of sort " +
+                logicSortName(Expr->Children[I]->Sort.Kind);
+        return false;
+      }
+    if (Expr->Sort.Kind != Expected.Result) {
+      Error = std::string("collection operation ") +
+              logicCollectionOpName(Expr->CollectionOp) +
+              " has result sort " + logicSortName(Expr->Sort.Kind);
+      return false;
+    }
+    return true;
+  }
+  case VCExpr::HeapFrame:
+    if (Expr->Children.size() < 2 || Expr->Children.size() % 2 != 0) {
+      Error = "heap frame has the wrong operand count";
+      return false;
+    }
+    if (!requireSort(LogicSortKind::Bool,
+                     "heap frame relation has a non-boolean result") ||
+        !requireChildSort(0, LogicSortKind::Heap,
+                          "heap frame has a non-heap input") ||
+        !requireChildSort(1, LogicSortKind::Heap,
+                          "heap frame has a non-heap output"))
+      return false;
+    for (size_t I = 2; I < Expr->Children.size(); ++I)
+      if (Expr->Children[I]->Sort.Kind != LogicSortKind::Pointer) {
+        Error = "heap frame has a non-pointer bound";
+        return false;
+      }
+    return true;
   case VCExpr::Forall:
   case VCExpr::Exists:
     if (Expr->Binder.empty()) {
       Error = "quantifier has no binder identity";
       return false;
     }
+    // [Lo, Hi, Body], or [Body] over all integers.
+    if (Expr->Children.size() == 1)
+      return requireSort(LogicSortKind::Bool,
+                         "quantifier has a non-boolean result") &&
+             requireChildSort(0, LogicSortKind::Bool,
+                              "quantifier has a non-boolean body");
     return requireArity(3, 3) &&
            requireSort(LogicSortKind::Bool,
                        "quantifier has a non-boolean result") &&
@@ -981,13 +1174,26 @@ static void collectRequiredFeatures(const LogicExpr *Expr,
     Features |= logicFeature(LogicFeature::MathematicalIntegers) |
                 logicFeature(LogicFeature::HeapArrays);
     break;
+  case LogicSortKind::Seq:
+  case LogicSortKind::Set:
+  case LogicSortKind::Multiset:
+  case LogicSortKind::Map:
+    Features |= logicFeature(LogicFeature::MathematicalIntegers) |
+                logicFeature(collectionFeature(Expr->Sort.Kind));
+    break;
   case LogicSortKind::Invalid:
   case LogicSortKind::Bool:
     break;
   }
-  if (Expr->K == VCExpr::Select || Expr->K == VCExpr::Store)
+  if (Expr->K == VCExpr::Collection)
+    for (const auto &Child : Expr->Children)
+      if (Child->Sort.isCollection())
+        Features |= logicFeature(collectionFeature(Child->Sort.Kind));
+  if (Expr->K == VCExpr::Select || Expr->K == VCExpr::Store ||
+      Expr->K == VCExpr::HeapFrame)
     Features |= logicFeature(LogicFeature::HeapArrays);
-  if (Expr->K == VCExpr::Forall || Expr->K == VCExpr::Exists)
+  if (Expr->K == VCExpr::Forall || Expr->K == VCExpr::Exists ||
+      Expr->K == VCExpr::HeapFrame)
     Features |= logicFeature(LogicFeature::Quantifiers);
   if (Expr->K == VCExpr::SpecCall)
     Features |= logicFeature(LogicFeature::SpecFunctions);
@@ -1023,14 +1229,16 @@ class ObligationBuilder {
     return VIntMode::Machine;
   }
 
-  bool mentionsBoundVariable(const VCExpr *Expr) const {
+  /// A quantifier binder or a collection value has no machine form, so a
+  /// comparison with one is stated over the integers.
+  bool liftsComparison(const VCExpr *Expr) const {
     if (!Expr)
       return false;
-    if (isActiveBoundVariable(Expr))
+    if (isActiveBoundVariable(Expr) || Expr->K == VCExpr::Collection)
       return true;
     return std::any_of(Expr->Children.begin(), Expr->Children.end(),
                        [&](const std::unique_ptr<VCExpr> &Child) {
-                         return mentionsBoundVariable(Child.get());
+                         return liftsComparison(Child.get());
                        });
   }
 
@@ -1266,12 +1474,13 @@ class ObligationBuilder {
       break;
     }
     const bool HasHeap = L->Sort.Kind == LogicSortKind::Heap ||
-                         R->Sort.Kind == LogicSortKind::Heap;
+                         R->Sort.Kind == LogicSortKind::Heap ||
+                         L->Sort.isCollection() || R->Sort.isCollection();
     if (HasHeap) {
       if ((K != VCExpr::Eq && K != VCExpr::Ne) ||
-          L->Sort.Kind != LogicSortKind::Heap ||
-          R->Sort.Kind != LogicSortKind::Heap)
-        return fail("unsupported operation involving a heap value");
+          L->Sort.Kind != R->Sort.Kind)
+        return fail("unsupported operation involving a heap or collection "
+                    "value");
       auto N = std::make_unique<VCExpr>(K);
       setBoolSort(*N);
       N->Loc = L->Loc;
@@ -1284,22 +1493,38 @@ class ObligationBuilder {
                       R->Sort.Kind == LogicSortKind::Pointer;
     bool HasBoolean = L->Sort.Kind == LogicSortKind::Bool ||
                       R->Sort.Kind == LogicSortKind::Bool;
+    // A machine numeral compared with a mathematical value is read as the
+    // value it denotes.
+    if (!HasPointer && !HasBoolean && L->Sort.Kind != R->Sort.Kind)
+      for (std::unique_ptr<VCExpr> *Side : {&L, &R})
+        if ((*Side)->K == VCExpr::IntLit &&
+            (*Side)->Sort.Kind == LogicSortKind::BitVector)
+          (*Side)->Sort = LogicSort::mathematicalInteger(
+              (*Side)->Sort.BitWidth,
+              (*Side)->Sort.Signedness != LogicSignedness::Unsigned);
+    // Under a quantifier, lifting keeps the binder out of int2bv; with a
+    // collection, it keeps out-of-range lengths and elements out of the
+    // search.
     if ((K == VCExpr::Eq || K == VCExpr::Ne) && !HasPointer && !HasBoolean &&
         L->Sort.Kind != R->Sort.Kind) {
-      if (L->Sort.Kind == LogicSortKind::BitVector)
+      if (L->Sort.Kind == LogicSortKind::BitVector &&
+          R->Sort.Kind == LogicSortKind::MathematicalInteger &&
+          !liftsComparison(R.get()))
         return exactCrossModeEquality(K, std::move(L), std::move(R));
-      return exactCrossModeEquality(K, std::move(R), std::move(L));
+      if (R->Sort.Kind == LogicSortKind::BitVector &&
+          L->Sort.Kind == LogicSortKind::MathematicalInteger &&
+          !liftsComparison(L.get()))
+        return exactCrossModeEquality(K, std::move(R), std::move(L));
     }
     const bool IsOrder = K == VCExpr::Lt || K == VCExpr::Le ||
                          K == VCExpr::Gt || K == VCExpr::Ge;
-    // Under a quantifier, lifting keeps the binder out of int2bv.
     if (IsOrder && L->Sort.Kind == LogicSortKind::BitVector &&
         R->Sort.Kind == LogicSortKind::MathematicalInteger &&
-        !mentionsBoundVariable(R.get()))
+        !liftsComparison(R.get()))
       return exactCrossModeOrder(K, std::move(L), std::move(R));
     if (IsOrder && L->Sort.Kind == LogicSortKind::MathematicalInteger &&
         R->Sort.Kind == LogicSortKind::BitVector &&
-        !mentionsBoundVariable(L.get())) {
+        !liftsComparison(L.get())) {
       const VCExpr::Kind Flipped = K == VCExpr::Lt   ? VCExpr::Gt
                                    : K == VCExpr::Le ? VCExpr::Ge
                                    : K == VCExpr::Gt ? VCExpr::Lt
@@ -1394,6 +1619,65 @@ class ObligationBuilder {
     return vcAnd(std::move(AboveMinimum), std::move(BelowMaximum));
   }
 
+  /// An operation of cppverify.h on its lowered operands; integers are read
+  /// mathematically.
+  std::unique_ptr<VCExpr> fromCollection(const VSpecCallExpr *C) {
+    const llvm::StringRef Name =
+        llvm::StringRef(C->CalleeIdentity).drop_front(strlen("__cppverify."));
+    std::optional<LogicCollectionOp> Op;
+    for (unsigned I = 0;
+         I <= static_cast<unsigned>(LogicCollectionOp::MapGet); ++I)
+      if (Name == logicCollectionOpName(static_cast<LogicCollectionOp>(I)))
+        Op = static_cast<LogicCollectionOp>(I);
+    if (!Op)
+      return fail("unknown collection operation " + Name.str());
+    auto N = std::make_unique<VCExpr>(VCExpr::Collection);
+    N->CollectionOp = *Op;
+    N->Loc = C->Loc;
+    N->Sort = logicSortFor(C->Ty.Kind, C->Ty.IntMode, C->Ty.BitWidth,
+                           C->Ty.IsSigned);
+    for (const auto &A : C->Args) {
+      auto Arg = fromVExpr(A.get());
+      if (!Arg)
+        return nullptr;
+      if (Arg->Sort.Kind == LogicSortKind::BitVector)
+        Arg = toMode(std::move(Arg), VIntMode::Math);
+      N->Children.push_back(std::move(Arg));
+    }
+    return N;
+  }
+
+  /// Quantifiers whose bodies are being lowered, innermost last, and the
+  /// trigger terms found for each.
+  struct OpenQuantifier {
+    std::string Binder;
+    std::vector<std::unique_ptr<VCExpr>> Patterns;
+  };
+  std::vector<OpenQuantifier> OpenQuantifiers;
+
+  static bool mentionsName(const VCExpr *E, const std::string &Name) {
+    if (!E)
+      return false;
+    if (E->K == VCExpr::Var && E->Name == Name)
+      return true;
+    for (const auto &Child : E->Children)
+      if (mentionsName(Child.get(), Name))
+        return true;
+    return false;
+  }
+
+  /// A trigger belongs to the innermost quantifier whose binder it mentions.
+  void recordTrigger(const VCExpr &Term) {
+    if (Term.K != VCExpr::Select && Term.K != VCExpr::SpecCall &&
+        !isCollectionRead(Term))
+      return;
+    for (auto It = OpenQuantifiers.rbegin(); It != OpenQuantifiers.rend(); ++It)
+      if (mentionsName(&Term, It->Binder)) {
+        It->Patterns.push_back(cloneVCExpr(&Term));
+        return;
+      }
+  }
+
   std::unique_ptr<VCExpr> fromQuant(const VQuantifiedExpr *Q, bool IsForall) {
     auto N =
         std::make_unique<VCExpr>(IsForall ? VCExpr::Forall : VCExpr::Exists);
@@ -1401,8 +1685,11 @@ class ObligationBuilder {
     N->Loc = Q->Loc;
     N->Binder =
         "__quant_" + std::to_string(QuantifierCounter++) + "_" + Q->Binder;
-    N->Children.push_back(toMode(fromVExpr(Q->Lo.get()), VIntMode::Math));
-    N->Children.push_back(toMode(fromVExpr(Q->Hi.get()), VIntMode::Math));
+    // An unbounded quantifier has its body as its only child.
+    if (Q->Lo) {
+      N->Children.push_back(toMode(fromVExpr(Q->Lo.get()), VIntMode::Math));
+      N->Children.push_back(toMode(fromVExpr(Q->Hi.get()), VIntMode::Math));
+    }
     // Quantified machine integers range over the corresponding mathematical
     // interval and are converted back to their bit-vector type at machine
     // operations. This is equivalent within the typed bounds and keeps array
@@ -1419,12 +1706,17 @@ class ObligationBuilder {
     VIntMode SavedMode =
         HadPreviousMode ? PreviousMode->second : VIntMode::Machine;
     BoundVars[Q->Binder] = N->Binder;
-    BoundVarModes[Q->Binder] = VIntMode::Machine;
+    BoundVarModes[Q->Binder] = Q->BinderType.IntMode;
+    OpenQuantifiers.push_back({N->Binder, {}});
     auto Body = fromVExpr(Q->Body.get());
-    if (!containsHeapSelect(Body.get())) {
+    if (Q->BinderType.IntMode == VIntMode::Machine &&
+        !containsHeapSelect(Body.get())) {
       BoundVarModes[Q->Binder] = VIntMode::Math;
+      OpenQuantifiers.back().Patterns.clear();
       Body = fromVExpr(Q->Body.get());
     }
+    N->Patterns = std::move(OpenQuantifiers.back().Patterns);
+    OpenQuantifiers.pop_back();
     N->Children.push_back(std::move(Body));
     if (HadPrevious)
       BoundVars[Q->Binder] = std::move(PreviousName);
@@ -1619,6 +1911,10 @@ public:
       auto Inner = fromVExpr(C->Inner.get());
       if (!Inner)
         return nullptr;
+      if (C->IsTrigger) {
+        recordTrigger(*Inner);
+        return Inner;
+      }
       if (C->Ty.Kind == VTypeKind::Bool && C->FromTy.Kind != VTypeKind::Bool) {
         auto Zero = std::make_unique<VCExpr>(VCExpr::IntLit);
         Zero->Sort = logicSortFor(C->FromTy.Kind, intModeOfVType(C->FromTy),
@@ -1724,6 +2020,24 @@ public:
       N->Children.push_back(std::move(After));
       return N;
     }
+    case VExpr::HeapFrame: {
+      const auto *H = static_cast<const VHeapFrameExpr *>(E);
+      auto N = std::make_unique<VCExpr>(VCExpr::HeapFrame);
+      N->Loc = H->Loc;
+      setBoolSort(*N);
+      for (const std::string *Name : {&H->HeapBefore, &H->HeapAfter}) {
+        auto Heap = std::make_unique<VCExpr>(VCExpr::Var);
+        Heap->Name = *Name;
+        Heap->Loc = H->Loc;
+        setHeapSort(*Heap);
+        N->Children.push_back(std::move(Heap));
+      }
+      for (const auto &[Lo, Hi] : H->Regions) {
+        N->Children.push_back(fromVExpr(Lo.get()));
+        N->Children.push_back(fromVExpr(Hi.get()));
+      }
+      return N;
+    }
     case VExpr::FieldAccess: {
       const auto *F = static_cast<const VFieldAccessExpr *>(E);
       auto N = std::make_unique<VCExpr>(VCExpr::Var);
@@ -1737,6 +2051,8 @@ public:
     }
     case VExpr::SpecCall: {
       const auto *C = static_cast<const VSpecCallExpr *>(E);
+      if (llvm::StringRef(C->CalleeIdentity).starts_with("__cppverify."))
+        return fromCollection(C);
       auto N = std::make_unique<VCExpr>(VCExpr::SpecCall);
       N->SpecCallee = C->CalleeIdentity;
       N->Sort = logicSortFor(C->Ty.Kind, C->Ty.IntMode, C->Ty.BitWidth,
@@ -2133,8 +2449,9 @@ verify::validateObligationModule(const ObligationModule &M) {
       return llvm::createStringError(
           llvm::inconvertibleErrorCode(),
           "logical function definition count does not match its fuel");
-    if ((Declaration.DefinitionFuel == 0) !=
-        (Declaration.StepDefinition == nullptr))
+    // Fuel 0 without a definition is an archive from before definitions were
+    // kept for hidden functions; its counterexamples cannot be checked.
+    if (Declaration.DefinitionFuel != 0 && !Declaration.StepDefinition)
       return llvm::createStringError(
           llvm::inconvertibleErrorCode(),
           "logical function step definition does not match its fuel");
@@ -2150,8 +2467,12 @@ verify::validateObligationModule(const ObligationModule &M) {
         RequiredFeatures |= logicFeature(LogicFeature::HeapFunctions) |
                             logicFeature(LogicFeature::HeapArrays) |
                             logicFeature(LogicFeature::MathematicalIntegers);
+      if (Parameter.Sort.isCollection())
+        RequiredFeatures |=
+            logicFeature(collectionFeature(Parameter.Sort.Kind)) |
+            logicFeature(LogicFeature::MathematicalIntegers);
     }
-    if (Declaration.DefinitionFuel > 0) {
+    if (Declaration.StepDefinition) {
       if (!validateLogicExpr(Declaration.StepDefinition.get(), ValidationError))
         return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                        ValidationError.c_str());

@@ -22,7 +22,14 @@ enum class LogicSortKind {
   MathematicalInteger,
   BitVector,
   Pointer,
-  Heap
+  Heap,
+  /// Finite collections of mathematical integers: a sequence, a set, a
+  /// multiset (each element's multiplicity), and a map (a key domain and a
+  /// value for each key in it).
+  Seq,
+  Set,
+  Multiset,
+  Map
 };
 
 enum class LogicSignedness { None, Signed, Unsigned };
@@ -43,6 +50,11 @@ struct LogicSort {
   static LogicSort bitVector(unsigned BitWidth, bool IsSigned);
   static LogicSort pointer();
   static LogicSort heap();
+  static LogicSort collection(LogicSortKind Kind);
+  bool isCollection() const {
+    return Kind == LogicSortKind::Seq || Kind == LogicSortKind::Set ||
+           Kind == LogicSortKind::Multiset || Kind == LogicSortKind::Map;
+  }
 };
 
 enum class LogicFeature : uint32_t {
@@ -54,9 +66,55 @@ enum class LogicFeature : uint32_t {
   SpecFunctions = 1U << 5,
   /// Logical functions with a heap-state parameter (heap-reading specs).
   HeapFunctions = 1U << 6,
+  /// Finite sequences of mathematical integers.
+  Sequences = 1U << 7,
+  /// Sets, multisets, and maps over all mathematical integers.
+  Collections = 1U << 8,
 };
 
+/// The capability a collection sort or operation needs.
+constexpr LogicFeature collectionFeature(LogicSortKind Kind) {
+  return Kind == LogicSortKind::Seq ? LogicFeature::Sequences
+                                    : LogicFeature::Collections;
+}
+
 enum class LogicOverflowOp { Add, Sub, Mul, Neg, SignedDiv };
+
+/// An operation on a collection; elements, keys, values, indices, lengths,
+/// and counts are mathematical integers. Each is total: an index outside a
+/// sequence reads 0 and an update there leaves it unchanged; a subrange
+/// clamps its bounds into the sequence; a key outside a map's domain maps
+/// to 0.
+enum class LogicCollectionOp {
+  SeqEmpty,
+  SeqUnit,
+  SeqLength,
+  SeqIndex,
+  SeqPush,
+  SeqUpdate,
+  SeqSubrange,
+  SeqConcat,
+  SeqContains,
+  SetEmpty,
+  SetInsert,
+  SetRemove,
+  SetContains,
+  SetUnion,
+  SetIntersect,
+  SetDifference,
+  SetSubset,
+  MultisetEmpty,
+  MultisetInsert,
+  MultisetRemove,
+  MultisetCount,
+  MapEmpty,
+  MapInsert,
+  MapRemove,
+  MapContains,
+  MapGet,
+};
+
+const char *logicCollectionOpName(LogicCollectionOp Op);
 
 using LogicFeatureSet = uint32_t;
 
@@ -71,7 +129,9 @@ constexpr LogicFeatureSet allLogicFeatures() {
          logicFeature(LogicFeature::HeapArrays) |
          logicFeature(LogicFeature::Quantifiers) |
          logicFeature(LogicFeature::SpecFunctions) |
-         logicFeature(LogicFeature::HeapFunctions);
+         logicFeature(LogicFeature::HeapFunctions) |
+         logicFeature(LogicFeature::Sequences) |
+         logicFeature(LogicFeature::Collections);
 }
 
 std::string formatLogicFeatures(LogicFeatureSet Features);
@@ -129,7 +189,12 @@ public:
     BvToInt,
     BvResize,
     NoOverflow,
-    SpecCall
+    SpecCall,
+    /// Children: Before, After, then Lo, Hi pairs. After equals Before at
+    /// every integer address outside each [Lo, Hi).
+    HeapFrame,
+    /// CollectionOp applied to Children.
+    Collection
   };
 
   Kind K;
@@ -144,14 +209,23 @@ public:
   std::string Name;
   std::string Binder;
   LogicOverflowOp OverflowOp = LogicOverflowOp::Add;
+  LogicCollectionOp CollectionOp = LogicCollectionOp::SeqEmpty;
   /// For SpecCall: function name (Args in Children).
   std::string SpecCallee;
+  /// For Forall and Exists: one multi-pattern for instantiating the
+  /// quantifier, a solver hint outside the term's meaning, its identity, and
+  /// archives.
+  std::vector<std::unique_ptr<LogicExpr>> Patterns;
 
   explicit LogicExpr(Kind K) : K(K) {}
 };
 
 // Compatibility name for the Z3/spec adapters while they migrate internally.
 using VCExpr = LogicExpr;
+
+/// A read of one element, member, count, or entry of a collection, which can
+/// trigger a quantifier.
+bool isCollectionRead(const LogicExpr &E);
 
 /// What an obligation establishes. Only Unwinding changes result semantics;
 /// every other kind is diagnostic metadata.
@@ -246,6 +320,9 @@ struct LogicFunctionDecl {
   unsigned DefinitionFuel = 0;
   std::unique_ptr<LogicExpr> StepDefinition;
   std::vector<std::unique_ptr<LogicExpr>> DefinitionLevels;
+  /// A choice function: any interpretation satisfying its axioms, which the
+  /// module assumes, is its meaning. Not archived.
+  bool Choice = false;
 };
 
 /// Semantic transform provenance that changes how verification results must be
@@ -284,12 +361,6 @@ public:
 /// the validated contents.
 llvm::Expected<LogicFeatureSet>
 validateObligationModule(const ObligationModule &Module);
-
-/// Display names of the logical functions whose finite definitions still
-/// contain logical applications. A model may interpret those applications
-/// arbitrarily, so a satisfying assignment is a counterexample only after it
-/// is checked against the true definitions.
-std::vector<std::string> specFrontier(const ObligationModule &Module);
 
 } // namespace verify
 } // namespace clang
