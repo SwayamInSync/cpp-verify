@@ -129,9 +129,16 @@ Backends
        ``integer``, or ``bitvector``. Every mode is exact; only solver
        performance differs. See :doc:`integers`.
    * - ``--jobs=N``
-     - Solve ordered obligations in up to ``N`` isolated Z3 contexts or cvc5
-       processes while publishing results in source order (default ``1``;
-       ``0`` selects available physical cores). Lean export remains serial.
+     - Solver workers, shared by every function and obligation: functions
+       are verified at once, a function's obligations run on the same
+       workers, and its whole query races them. Results are published in
+       source order (default: every physical core, or ``CPPVERIFY_JOBS``;
+       ``0`` selects every core). Lean export remains serial.
+   * - ``--function-timeout=N``
+     - Milliseconds all queries of one function may take together (default
+       ``0``: no limit). Each query gets at most what is left, and none
+       starts once it is spent; the function is then ``Unresolved`` with
+       reason ``solver.timeout``.
    * - ``--proof-cache=DIR``
      - Persist successful dependency-scoped Z3 or BMC proofs. In portfolio mode
        this caches only the Z3 component and cvc5 still runs on every query.
@@ -189,13 +196,19 @@ admission-free kernel workflow reports ``Certified``.
 Parallel solving and proof caching
 ----------------------------------
 
-``--jobs`` parallelizes only backend solving. Clang conversion, VCR transforms,
-canonical obligation construction, dumps, archives, Lean generation, and
-diagnostic publication stay serial and deterministic. Each worker owns a fresh
-Z3 context/solver or a separate cvc5 process; no AST or solver state is shared
-between workers.
-The first failing source obligation is therefore identical for ``--jobs=1`` and
-``--jobs=N`` even if worker completion order differs.
+``--jobs`` sets one pool of exactly that many workers. Each function is a
+task on it, with its own backends; its obligations are tasks on the same
+pool (a task waiting for them runs them itself, so the pool never grows), and
+with workers to spare its whole query races the obligations solved one by
+one: both are exact, so a proof by either decides the function and
+interrupts the other. Dumps, archives, and diagnostics are buffered per
+function and published in source order, and the cross-function steps (callee
+contracts, spec termination, trust) run after every function. Each worker
+owns a fresh Z3 context/solver or a separate cvc5 process; no solver state is
+shared between workers. The first failing source obligation is therefore
+identical for ``--jobs=1`` and ``--jobs=N`` even if worker completion order
+differs. Lean generation and certification stay serial. The compile-time
+verifier uses one job unless told otherwise.
 
 With ``--proof-cache``, CppVerify solves and caches individual ordered
 obligations. A cache key combines the dependency-scoped semantic hash, semantic
