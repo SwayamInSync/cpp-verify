@@ -48,6 +48,12 @@ std::unique_ptr<VExpr> specPostcondition(
     const VFunction &Spec, const std::vector<std::unique_ptr<VExpr>> &Args,
     const VExpr *Value, SourceLocation Loc, const std::string &Heap = {});
 
+/// What holds at an application of \p Spec: its postconditions and, for an
+/// inductive predicate, its unfolding; null when nothing does.
+std::unique_ptr<VExpr> specApplicationFacts(
+    const VFunction &Spec, const std::vector<std::unique_ptr<VExpr>> &Args,
+    const VExpr *Value, SourceLocation Loc, const std::string &Heap = {});
+
 /// Build passive obligations for a non-recursive spec: its postconditions
 /// hold of its body, assuming those of the specs it calls.
 PassiveProgram buildSpecPostChecks(const VFunction &Fn,
