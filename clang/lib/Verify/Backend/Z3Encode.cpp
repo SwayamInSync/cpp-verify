@@ -6,12 +6,24 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/ThreadPool.h"
 #include "llvm/Support/Threading.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
+#include <chrono>
+#include <cstdio>
+#include <functional>
+#include <iostream>
+#include <map>
+#include <mutex>
+#include <set>
 #include <z3_api.h>
+#ifdef LLVM_ON_UNIX
+#include <unistd.h>
+#endif
 
 using namespace clang;
 using namespace verify;
@@ -20,7 +32,7 @@ namespace {
 
 // Increment when a Z3 encoding change can invalidate a previously memoized
 // successful verdict without changing the canonical semantic hash format.
-constexpr unsigned Z3ProofCacheAdapterVersion = 1;
+constexpr unsigned Z3ProofCacheAdapterVersion = 2;
 
 std::optional<VerifyResult> querySizeLimitResult(const ObligationModule &Module,
                                                  uint64_t MaxQueryNodes) {
@@ -61,7 +73,8 @@ std::optional<std::string> sourceModelValue(const z3::expr &Value,
 bool containsQuantifier(const VCExpr *E) {
   if (!E)
     return false;
-  if (E->K == VCExpr::Forall || E->K == VCExpr::Exists)
+  if (E->K == VCExpr::Forall || E->K == VCExpr::Exists ||
+      E->K == VCExpr::HeapFrame)
     return true;
   return std::any_of(E->Children.begin(), E->Children.end(),
                      [](const std::unique_ptr<VCExpr> &Child) {
@@ -99,12 +112,11 @@ void collectModelVariables(const VCExpr *Expression,
     Variables.emplace(Expression->Name, Expression->Sort);
     return;
   }
-  if ((Expression->K == VCExpr::Forall || Expression->K == VCExpr::Exists) &&
-      Expression->Children.size() == 3) {
-    collectModelVariables(Expression->Children[0].get(), Bound, Variables);
-    collectModelVariables(Expression->Children[1].get(), Bound, Variables);
+  if (Expression->K == VCExpr::Forall || Expression->K == VCExpr::Exists) {
+    for (size_t I = 0; I + 1 < Expression->Children.size(); ++I)
+      collectModelVariables(Expression->Children[I].get(), Bound, Variables);
     Bound.insert(Expression->Binder);
-    collectModelVariables(Expression->Children[2].get(), std::move(Bound),
+    collectModelVariables(Expression->Children.back().get(), std::move(Bound),
                           Variables);
     return;
   }
@@ -121,9 +133,46 @@ z3::sort Z3Encoder::bvSort(unsigned BitWidth) { return Ctx.bv_sort(BitWidth); }
 z3::sort Z3Encoder::boolSort() { return Ctx.bool_sort(); }
 z3::sort Z3Encoder::heapSort() { return Ctx.array_sort(intSort(), intSort()); }
 
+z3::sort Z3Encoder::optionSort() {
+  if (OptionSort)
+    return *OptionSort;
+  Z3_constructor None =
+      Z3_mk_constructor(Ctx, Z3_mk_string_symbol(Ctx, "none"),
+                        Z3_mk_string_symbol(Ctx, "is-none"), 0, nullptr,
+                        nullptr, nullptr);
+  Z3_symbol Field = Z3_mk_string_symbol(Ctx, "value");
+  Z3_sort FieldSort = intSort();
+  unsigned Reference = 0;
+  Z3_constructor Some = Z3_mk_constructor(
+      Ctx, Z3_mk_string_symbol(Ctx, "some"), Z3_mk_string_symbol(Ctx, "is-some"),
+      1, &Field, &FieldSort, &Reference);
+  Z3_constructor Constructors[] = {None, Some};
+  Z3_sort Sort = Z3_mk_datatype(
+      Ctx, Z3_mk_string_symbol(Ctx, "cppverify.option"), 2, Constructors);
+  Z3_del_constructor(Ctx, None);
+  Z3_del_constructor(Ctx, Some);
+  Ctx.check_error();
+  OptionSort = z3::sort(Ctx, Sort);
+  NoneDecl = z3::func_decl(Ctx, Z3_get_datatype_sort_constructor(Ctx, Sort, 0));
+  SomeDecl = z3::func_decl(Ctx, Z3_get_datatype_sort_constructor(Ctx, Sort, 1));
+  IsSomeDecl =
+      z3::func_decl(Ctx, Z3_get_datatype_sort_recognizer(Ctx, Sort, 1));
+  OptionValueDecl = z3::func_decl(
+      Ctx, Z3_get_datatype_sort_constructor_accessor(Ctx, Sort, 1, 0));
+  return *OptionSort;
+}
+
 z3::sort Z3Encoder::valueSort(const LogicSort &Sort) {
   if (Sort.Kind == LogicSortKind::Bool)
     return boolSort();
+  if (Sort.Kind == LogicSortKind::Seq)
+    return z3::sort(Ctx, Z3_mk_seq_sort(Ctx, intSort()));
+  if (Sort.Kind == LogicSortKind::Set)
+    return Ctx.array_sort(intSort(), boolSort());
+  if (Sort.Kind == LogicSortKind::Multiset)
+    return Ctx.array_sort(intSort(), intSort());
+  if (Sort.Kind == LogicSortKind::Map)
+    return Ctx.array_sort(intSort(), optionSort());
   if (Sort.Kind == LogicSortKind::Pointer ||
       Sort.Kind == LogicSortKind::MathematicalInteger)
     return intSort();
@@ -144,9 +193,18 @@ z3::func_decl Z3Encoder::specFuncDecl(const LogicFunctionDecl &Function) {
     Domain.push_back(valueSort(Parameter.Sort));
   z3::sort Ret = valueSort(Function.ResultSort);
   const std::string Name = "spec$" + Function.Identity;
+  const bool Recursive = NativeRecursion && Function.StepDefinition;
+  if (Recursive && Function.DefinitionFuel == 0)
+    NativeHidden.insert(Function.DisplayName.empty() ? Function.Identity
+                                                     : Function.DisplayName);
   z3::func_decl F =
-      Ctx.function(Name.c_str(), Domain.size(), Domain.data(), Ret);
+      Recursive
+          ? Ctx.recfun((Name + "$rec" + std::to_string(EncodingPass)).c_str(),
+                       Domain.size(), Domain.data(), Ret)
+          : Ctx.function(Name.c_str(), Domain.size(), Domain.data(), Ret);
   SpecFuncDecls.emplace(Function.Identity, F);
+  if (Recursive)
+    UndefinedRecursive.push_back(&Function);
   return F;
 }
 
@@ -191,6 +249,8 @@ z3::expr Z3Encoder::fallbackValue(const VCExpr *E) {
     return integerMode() ? Ctx.int_val(0) : Ctx.bv_val(0, E->Sort.BitWidth);
   if (E && E->Sort.Kind == LogicSortKind::Heap)
     return Ctx.constant("__cppverify_invalid_heap", heapSort());
+  if (E && E->Sort.isCollection())
+    return Ctx.constant("__cppverify_invalid_collection", valueSort(E->Sort));
   return Ctx.int_val(0);
 }
 
@@ -255,11 +315,39 @@ z3::expr Z3Encoder::reduce(z3::expr Value, const LogicSort &Sort) {
   std::string Numeral;
   if (Value.is_numeral(Numeral))
     return machineLiteral(Numeral, Sort);
+  // A value already in range is itself; saying so keeps mod out of the
+  // arithmetic whenever the solver knows the operation does not wrap.
   z3::expr Modulus = powerOfTwo(Sort.BitWidth);
   if (!isSignedSort(Sort))
-    return z3::mod(Value, Modulus);
+    return z3::ite(inRange(Value, Sort), Value, z3::mod(Value, Modulus));
   z3::expr Half = powerOfTwo(Sort.BitWidth - 1);
-  return z3::mod(Value + Half, Modulus) - Half;
+  return z3::ite(inRange(Value, Sort), Value,
+                 z3::mod(Value + Half, Modulus) - Half);
+}
+
+z3::expr Z3Encoder::cellValue(const z3::expr &Cell, const LogicSort &Sort) {
+  std::string Numeral;
+  if (Cell.is_numeral(Numeral) || !CellFunctions)
+    return reduce(Cell, Sort);
+  const std::string Name = std::string("cppverify.cell_") +
+                           (isSignedSort(Sort) ? "i" : "u") +
+                           std::to_string(Sort.BitWidth);
+  auto It = CellDecls.find(Name);
+  if (It == CellDecls.end()) {
+    z3::func_decl Decl = Ctx.recfun(Name.c_str(), intSort(), intSort());
+    z3::expr Parameter = Ctx.int_const("x");
+    z3::expr_vector Parameters(Ctx);
+    Parameters.push_back(Parameter);
+    z3::expr Body = reduce(Parameter, Sort);
+    Ctx.recdef(Decl, Parameters, Body);
+    It = CellDecls
+             .emplace(Name, std::make_pair(Decl, "(define-fun-rec " + Name +
+                                                     " ((x Int)) Int " +
+                                                     Body.to_string() + ")"))
+             .first;
+  }
+  UsedCellDecls.insert(Name);
+  return It->second.first(Cell);
 }
 
 z3::expr Z3Encoder::inRange(z3::expr Value, const LogicSort &Sort) {
@@ -679,6 +767,8 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
     z3::expr Z = Ctx.int_const("_unused");
     if (E->Sort.Kind == LogicSortKind::Heap) {
       Z = Ctx.constant(E->Name.c_str(), heapSort());
+    } else if (E->Sort.isCollection()) {
+      Z = Ctx.constant(E->Name.c_str(), valueSort(E->Sort));
     } else if (E->Sort.Kind == LogicSortKind::Bool) {
       Z = Ctx.bool_const(E->Name.c_str());
     } else if (E->Sort.Kind == LogicSortKind::Pointer ||
@@ -806,7 +896,19 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
         return integerArithOp(E, L, R).simplify();
       return integerArithOp(E, L, R);
     }
+    if ((E->K == VCExpr::Eq || E->K == VCExpr::Ne) &&
+        E->Children[0]->Sort.isCollection()) {
+      z3::expr Equal =
+          collectionEquality(E->Children[0]->Sort, child(0), child(1));
+      return E->K == VCExpr::Eq ? Equal : !Equal;
+    }
     return arithOp(E, child(0), child(1));
+  }
+  case VCExpr::Collection: {
+    std::vector<z3::expr> Args;
+    for (unsigned I = 0; I != E->Children.size(); ++I)
+      Args.push_back(child(I));
+    return encodeCollection(E, std::move(Args));
   }
   case VCExpr::Neg:
     if (integerMode() && E->Sort.Kind == LogicSortKind::BitVector) {
@@ -933,7 +1035,7 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
       return Val;
     // A cell holds an arbitrary integer; its w low bits are the value.
     if (integerMode() && E->Sort.Kind == LogicSortKind::BitVector)
-      return reduce(Val, E->Sort);
+      return cellValue(Val, E->Sort);
     return coerceToSort(Val, E->Sort,
                         E->Sort.Signedness == LogicSignedness::Signed);
   }
@@ -944,6 +1046,19 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
                                  : heapCellValue(child(2));
     z3::expr After = child(3);
     return (After == z3::store(Before, Ptr, Val));
+  }
+  case VCExpr::HeapFrame: {
+    // Unbounded, so that Z3's model-based instantiation can make the two
+    // heaps agree by default; a bounded address range defeats it.
+    z3::expr Address = Ctx.int_const("__frame_address");
+    z3::expr Inside = Ctx.bool_val(false);
+    for (unsigned I = 2; I + 1 < E->Children.size(); I += 2)
+      Inside = Inside || (heapIndex(child(I)) <= Address &&
+                          Address < heapIndex(child(I + 1)));
+    z3::expr_vector Binders(Ctx);
+    Binders.push_back(Address);
+    return z3::forall(Binders, Inside || z3::select(child(1), Address) ==
+                                             z3::select(child(0), Address));
   }
   case VCExpr::Forall:
   case VCExpr::Exists: {
@@ -956,6 +1071,15 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
         return Ctx.bool_val(false);
       }
       Bound = It->second;
+    }
+    if (E->Children.size() == 1) {
+      z3::expr_vector Binders(Ctx);
+      Binders.push_back(Bound);
+      z3::expr Body = asBool(child(0));
+      z3::expr Quantified =
+          quantify(E, E->K == VCExpr::Forall, Binders, Body);
+      Vars.erase(E->Binder);
+      return Quantified;
     }
     z3::expr Lo = child(0);
     z3::expr Hi = child(1);
@@ -977,10 +1101,12 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
     }
     z3::expr_vector Binders(Ctx);
     Binders.push_back(Bound);
+    z3::expr Quantified =
+        E->K == VCExpr::Forall
+            ? quantify(E, true, Binders, z3::implies(Range, Body))
+            : quantify(E, false, Binders, Range && Body);
     Vars.erase(E->Binder);
-    if (E->K == VCExpr::Forall)
-      return z3::forall(Binders, z3::implies(Range, Body));
-    return z3::exists(Binders, Range && Body);
+    return Quantified;
   }
   case VCExpr::SpecCall: {
     auto It = LogicFunctions.find(E->SpecCallee);
@@ -993,7 +1119,6 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
       markEncodingFailure("spec argument count mismatch: " + E->SpecCallee);
       return fallbackValue(E);
     }
-    z3::func_decl F = specFuncDecl(Function);
     std::vector<z3::expr> Args;
     for (unsigned i = 0; i < E->Children.size(); ++i) {
       z3::expr Arg = coerce(
@@ -1001,7 +1126,10 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
           Function.Parameters[i].Sort.Signedness == LogicSignedness::Signed);
       Args.push_back(std::move(Arg));
     }
-    z3::expr A = F(static_cast<unsigned>(Args.size()), Args.data());
+    z3::expr A = inlined(Function)
+                     ? inlineDefinition(Function, Args)
+                     : specFuncDecl(Function)(
+                           static_cast<unsigned>(Args.size()), Args.data());
     // Opaque applications are integer functions; keep them in range.
     if (integerMode())
       A = reduce(A, Function.ResultSort);
@@ -1011,6 +1139,412 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
   }
   markEncodingFailure("unsupported verification expression");
   return fallbackValue(E);
+}
+
+z3::expr Z3Encoder::collectionEquality(const LogicSort &Sort,
+                                       const z3::expr &L, const z3::expr &R) {
+  if (Sort.Kind != LogicSortKind::Multiset)
+    return L == R;
+  // A cell below zero counts zero, so multisets agree count by count.
+  z3::expr Element = Ctx.int_const("__multiset_element");
+  auto count = [&](const z3::expr &M) {
+    z3::expr Cell = z3::select(M, Element);
+    return z3::ite(Cell >= 0, Cell, Ctx.int_val(0));
+  };
+  z3::expr_vector Bound(Ctx);
+  Bound.push_back(Element);
+  return z3::forall(Bound, count(L) == count(R));
+}
+
+z3::expr Z3Encoder::encodeCollection(const VCExpr *E,
+                                     std::vector<z3::expr> Args) {
+  auto arg = [&](size_t I) -> z3::expr {
+    if (I < Args.size())
+      return Args[I];
+    markEncodingFailure("collection operation lacks an operand");
+    return Ctx.int_val(0);
+  };
+  auto wrap = [&](Z3_ast Ast) {
+    z3::expr Result(Ctx, Ast);
+    Ctx.check_error();
+    return Result;
+  };
+  const z3::expr Zero = Ctx.int_val(0);
+  auto length = [&](const z3::expr &S) {
+    return wrap(Z3_mk_seq_length(Ctx, S));
+  };
+  auto extract = [&](const z3::expr &S, const z3::expr &From,
+                     const z3::expr &Count) {
+    return seqExtract(S, From, Count);
+  };
+  auto concat = [&](const z3::expr &A, const z3::expr &B) {
+    Z3_ast Parts[] = {A, B};
+    return wrap(Z3_mk_seq_concat(Ctx, 2, Parts));
+  };
+  auto unit = [&](const z3::expr &X) { return wrap(Z3_mk_seq_unit(Ctx, X)); };
+  auto count = [&](const z3::expr &M, const z3::expr &X) {
+    z3::expr Cell = z3::select(M, X);
+    return z3::ite(Cell >= 0, Cell, Zero);
+  };
+  using Op = LogicCollectionOp;
+  switch (E->CollectionOp) {
+  case Op::SeqEmpty:
+    return wrap(Z3_mk_seq_empty(Ctx, valueSort(E->Sort)));
+  case Op::SeqUnit:
+    return unit(arg(0));
+  case Op::SeqLength:
+    return length(arg(0));
+  case Op::SeqIndex:
+    return seqAt(arg(0), arg(1));
+  case Op::SeqPush:
+    return concat(arg(0), unit(arg(1)));
+  case Op::SeqUpdate: {
+    z3::expr S = arg(0), I = arg(1), X = arg(2);
+    z3::expr Len = length(S);
+    return z3::ite(Zero <= I && I < Len,
+                   concat(concat(extract(S, Zero, I), unit(X)),
+                          extract(S, I + 1, Len - I - 1)),
+                   S);
+  }
+  case Op::SeqSubrange: {
+    // seq.extract clamps by itself: from a start in [0, len) it stops at the
+    // end, and it is empty from any other start or for a count below 1.
+    // Only a negative start differs, where subrange starts at 0.
+    z3::expr S = arg(0), Lo = arg(1), Hi = arg(2);
+    z3::expr FromLo = extract(S, Lo, Hi - Lo);
+    const LogicExpr *Start =
+        E->Children.size() > 1 ? E->Children[1].get() : nullptr;
+    if (Start && Start->K == LogicExpr::IntLit &&
+        !llvm::StringRef(Start->IntVal).starts_with("-"))
+      return FromLo;
+    return z3::ite(Lo < Zero, extract(S, Zero, Hi), FromLo);
+  }
+  case Op::SeqConcat:
+    return concat(arg(0), arg(1));
+  case Op::SeqContains: {
+    z3::expr S = arg(0), X = arg(1);
+    z3::expr Contains = wrap(Z3_mk_seq_contains(Ctx, S, unit(X)));
+    bridgeContains(Contains, S, X);
+    return Contains;
+  }
+  case Op::SetEmpty:
+    return wrap(Z3_mk_empty_set(Ctx, intSort()));
+  case Op::SetInsert:
+    return wrap(Z3_mk_set_add(Ctx, arg(0), arg(1)));
+  case Op::SetRemove:
+    return wrap(Z3_mk_set_del(Ctx, arg(0), arg(1)));
+  case Op::SetContains:
+    return wrap(Z3_mk_set_member(Ctx, arg(1), arg(0)));
+  case Op::SetUnion: {
+    Z3_ast Sets[] = {arg(0), arg(1)};
+    return wrap(Z3_mk_set_union(Ctx, 2, Sets));
+  }
+  case Op::SetIntersect: {
+    Z3_ast Sets[] = {arg(0), arg(1)};
+    return wrap(Z3_mk_set_intersect(Ctx, 2, Sets));
+  }
+  case Op::SetDifference:
+    return wrap(Z3_mk_set_difference(Ctx, arg(0), arg(1)));
+  case Op::SetSubset:
+    return wrap(Z3_mk_set_subset(Ctx, arg(0), arg(1)));
+  case Op::MultisetEmpty:
+    return z3::const_array(intSort(), Zero);
+  case Op::MultisetInsert:
+    return z3::store(arg(0), arg(1), count(arg(0), arg(1)) + 1);
+  case Op::MultisetRemove: {
+    z3::expr C = count(arg(0), arg(1));
+    return z3::store(arg(0), arg(1), z3::ite(C > 0, C - 1, Zero));
+  }
+  case Op::MultisetCount:
+    return count(arg(0), arg(1));
+  case Op::MapEmpty:
+    optionSort();
+    return z3::const_array(intSort(), (*NoneDecl)());
+  case Op::MapInsert:
+    optionSort();
+    return z3::store(arg(0), arg(1), (*SomeDecl)(arg(2)));
+  case Op::MapRemove:
+    optionSort();
+    return z3::store(arg(0), arg(1), (*NoneDecl)());
+  case Op::MapContains:
+    optionSort();
+    return (*IsSomeDecl)(z3::select(arg(0), arg(1)));
+  case Op::MapGet: {
+    optionSort();
+    z3::expr Cell = z3::select(arg(0), arg(1));
+    return z3::ite((*IsSomeDecl)(Cell), (*OptionValueDecl)(Cell), Zero);
+  }
+  }
+  markEncodingFailure("unsupported collection operation");
+  return fallbackValue(E);
+}
+
+z3::expr Z3Encoder::seqAt(const z3::expr &S, const z3::expr &K) {
+  LogicSort SeqSort = LogicSort::collection(LogicSortKind::Seq);
+  z3::sort Seq = valueSort(SeqSort);
+  auto wrap = [&](Z3_ast Ast) {
+    z3::expr Result(Ctx, Ast);
+    Ctx.check_error();
+    return Result;
+  };
+  auto length = [&](const z3::expr &X) {
+    return wrap(Z3_mk_seq_length(Ctx, X));
+  };
+  const z3::expr Zero = Ctx.int_val(0);
+  if (!SeqAtDecl) {
+    // A recursive-function definition, so that models interpret it exactly.
+    SeqAtDecl = Ctx.recfun("cppverify.seq_at", Seq, intSort(), intSort());
+    z3::expr Sequence = Ctx.constant("cppverify!s", Seq);
+    z3::expr Index = Ctx.int_const("cppverify!i");
+    z3::expr_vector Parameters(Ctx);
+    Parameters.push_back(Sequence);
+    Parameters.push_back(Index);
+    Ctx.recdef(*SeqAtDecl, Parameters,
+               z3::ite(Zero <= Index && Index < length(Sequence),
+                       wrap(Z3_mk_seq_nth(Ctx, Sequence, Index)), Zero));
+  }
+  if (!SeqAtLemmas) {
+    SeqAtLemmas = true;
+    const z3::func_decl &At = *SeqAtDecl;
+    z3::expr A = Ctx.constant("cppverify!a", Seq);
+    z3::expr B = Ctx.constant("cppverify!b", Seq);
+    z3::expr X = Ctx.int_const("cppverify!x");
+    z3::expr Index = Ctx.int_const("cppverify!k");
+    z3::expr Offset = Ctx.int_const("cppverify!o");
+    z3::expr Count = Ctx.int_const("cppverify!n");
+    auto axiom = [&](z3::expr_vector Binders, const z3::expr &Pattern,
+                     const z3::expr &Body) {
+      Z3_ast Term = Pattern;
+      Z3_pattern P = Z3_mk_pattern(Ctx, 1, &Term);
+      Ctx.check_error();
+      std::vector<Z3_app> Bound;
+      for (unsigned I = 0; I != Binders.size(); ++I)
+        Bound.push_back(Binders[I]);
+      CollectionAxioms.push_back(wrap(Z3_mk_forall_const(
+          Ctx, 0, Bound.size(), Bound.data(), 1, &P, Body)));
+    };
+    auto binders = [&](std::initializer_list<z3::expr> List) {
+      z3::expr_vector Vector(Ctx);
+      for (const z3::expr &E : List)
+        Vector.push_back(E);
+      return Vector;
+    };
+    // Consequences of the definition over the operations that build
+    // sequences.
+    Z3_ast Parts[] = {A, B};
+    z3::expr Joined = wrap(Z3_mk_seq_concat(Ctx, 2, Parts));
+    axiom(binders({A, B, Index}), At(Joined, Index),
+          At(Joined, Index) == z3::ite(Index < length(A), At(A, Index),
+                                       At(B, Index - length(A))));
+    z3::expr Unit = wrap(Z3_mk_seq_unit(Ctx, X));
+    axiom(binders({X, Index}), At(Unit, Index),
+          At(Unit, Index) == z3::ite(Index == 0, X, Zero));
+    z3::expr Extracted = wrap(Z3_mk_seq_extract(Ctx, A, Offset, Count));
+    axiom(binders({A, Offset, Count, Index}), At(Extracted, Index),
+          z3::implies(Zero <= Offset && Zero <= Count &&
+                          Offset + Count <= length(A),
+                      At(Extracted, Index) ==
+                          z3::ite(Zero <= Index && Index < Count,
+                                  At(A, Offset + Index), Zero)));
+  }
+  return (*SeqAtDecl)(S, K);
+}
+
+void Z3Encoder::bridgeContains(const z3::expr &Contains, const z3::expr &S,
+                               const z3::expr &X) {
+  // Only a closed term: an axiom beside the query cannot mention a binder.
+  if (mentionsBinder(Contains) || !BridgedContains.insert(Contains.id()).second)
+    return;
+  const z3::expr Zero = Ctx.int_val(0);
+  z3::expr Length(Ctx, Z3_mk_seq_length(Ctx, S));
+  Ctx.check_error();
+  // contains implies a read of x at some index w: a fresh witness, which
+  // preserves satisfiability.
+  z3::expr Witness = Ctx.int_const(
+      ("cppverify!w" + std::to_string(BridgedContains.size())).c_str());
+  CollectionAxioms.push_back(z3::implies(
+      Contains, Zero <= Witness && Witness < Length && seqAt(S, Witness) == X));
+  // A read of x at any index in range implies contains.
+  z3::expr K = Ctx.int_const("cppverify!k");
+  z3::expr Read = seqAt(S, K);
+  z3::expr Body = z3::implies(Zero <= K && K < Length && Read == X, Contains);
+  // A pattern is not reference counted: make it last, right before use.
+  Z3_ast Term = Read;
+  Z3_pattern Pattern = Z3_mk_pattern(Ctx, 1, &Term);
+  Ctx.check_error();
+  Z3_app Bound = K;
+  z3::expr Forall(Ctx,
+                  Z3_mk_forall_const(Ctx, 0, 1, &Bound, 1, &Pattern, Body));
+  Ctx.check_error();
+  CollectionAxioms.push_back(Forall);
+}
+
+z3::expr Z3Encoder::seqExtract(const z3::expr &S, const z3::expr &From,
+                               const z3::expr &Count) {
+  auto wrap = [&](Z3_ast Ast) {
+    z3::expr Result(Ctx, Ast);
+    Ctx.check_error();
+    return Result;
+  };
+  z3::expr Whole = wrap(Z3_mk_seq_extract(Ctx, S, From, Count));
+  // A theorem of seq.extract, stated at this extract of a concatenation:
+  // from a start i >= 0 it lies in b, in a, or across both. Z3's word
+  // equations rarely find the split themselves. A quantified form would
+  // leave every satisfiable query to model-based instantiation, which
+  // cannot check a quantifier over sequences.
+  if (!S.is_app() || S.decl().decl_kind() != Z3_OP_SEQ_CONCAT ||
+      S.num_args() != 2)
+    return Whole;
+  z3::expr A = S.arg(0);
+  z3::expr B = S.arg(1);
+  const z3::expr Zero = Ctx.int_val(0);
+  z3::expr LengthA = wrap(Z3_mk_seq_length(Ctx, A));
+  z3::expr Head = seqExtract(A, From, LengthA - From);
+  z3::expr Tail = seqExtract(B, Zero, Count - (LengthA - From));
+  Z3_ast Parts[] = {Head, Tail};
+  z3::expr Split = z3::ite(
+      From >= LengthA, seqExtract(B, From - LengthA, Count),
+      z3::ite(From + Count <= LengthA, seqExtract(A, From, Count),
+              wrap(Z3_mk_seq_concat(Ctx, 2, Parts))));
+  CollectionAxioms.push_back(z3::implies(Zero <= From, Whole == Split));
+  return Whole;
+}
+
+std::optional<z3::expr> Z3Encoder::patternTerm(const VCExpr *Term) {
+  if (Term->K == VCExpr::Select && Term->Children.size() == 2)
+    return z3::select(encodeVC(Term->Children[0].get()),
+                      heapIndex(encodeVC(Term->Children[1].get())));
+  // A collection read: the index function, or a select of the array that
+  // represents a set, multiset, or map.
+  if (isCollectionRead(*Term) && Term->Children.size() == 2) {
+    z3::expr Collection = encodeVC(Term->Children[0].get());
+    z3::expr Key = encodeVC(Term->Children[1].get());
+    if (Term->CollectionOp == LogicCollectionOp::SeqIndex)
+      return seqAt(Collection, Key);
+    return z3::select(Collection, Key);
+  }
+  if (Term->K != VCExpr::SpecCall)
+    return std::nullopt;
+  auto It = LogicFunctions.find(Term->SpecCallee);
+  if (It == LogicFunctions.end() || !It->second || inlined(*It->second) ||
+      It->second->Parameters.size() != Term->Children.size())
+    return std::nullopt;
+  const LogicFunctionDecl &Function = *It->second;
+  std::vector<z3::expr> Args;
+  for (unsigned I = 0; I != Term->Children.size(); ++I)
+    Args.push_back(coerce(encodeVC(Term->Children[I].get()),
+                          Term->Children[I]->Sort, Function.Parameters[I].Sort,
+                          Function.Parameters[I].Sort.Signedness ==
+                              LogicSignedness::Signed));
+  return specFuncDecl(Function)(static_cast<unsigned>(Args.size()),
+                                Args.data());
+}
+
+z3::expr Z3Encoder::quantify(const VCExpr *E, bool Forall,
+                             z3::expr_vector &Binders, const z3::expr &Body) {
+  z3::expr_vector Terms(Ctx);
+  for (const auto &Pattern : E->Patterns) {
+    std::optional<z3::expr> Term = patternTerm(Pattern.get());
+    if (!Term) {
+      Terms.resize(0);
+      break;
+    }
+    Terms.push_back(*Term);
+  }
+  std::vector<Z3_app> Bound;
+  for (unsigned I = 0; I != Binders.size(); ++I)
+    Bound.push_back(Binders[I]);
+  std::vector<Z3_ast> TermAsts;
+  for (unsigned I = 0; I != Terms.size(); ++I)
+    TermAsts.push_back(Terms[I]);
+  Z3_pattern Pattern = nullptr;
+  if (!TermAsts.empty())
+    Pattern = Z3_mk_pattern(Ctx, static_cast<unsigned>(TermAsts.size()),
+                            TermAsts.data());
+  const std::string Id =
+      E->Source.isValid() ? "q@" + std::to_string(E->Source.Line) + ":" +
+                                std::to_string(E->Source.Column)
+                          : "q";
+  Z3_ast Quantified = Z3_mk_quantifier_const_ex(
+      Ctx, Forall, 0, Z3_mk_string_symbol(Ctx, Id.c_str()),
+      Z3_mk_string_symbol(Ctx, ""), static_cast<unsigned>(Bound.size()),
+      Bound.data(), Pattern ? 1 : 0, Pattern ? &Pattern : nullptr, 0, nullptr,
+      Body);
+  Ctx.check_error();
+  return z3::expr(Ctx, Quantified);
+}
+
+std::vector<QuantifierProfileEntry>
+Z3Encoder::profileQuantifiers(const z3::expr_vector &Assertions) {
+  std::vector<QuantifierProfileEntry> Profile;
+#ifdef LLVM_ON_UNIX
+  // Z3 reports each quantifier's instantiations on stderr when its solver is
+  // destroyed, so the rerun captures that descriptor; one at a time.
+  static std::mutex Serial;
+  std::lock_guard<std::mutex> Lock(Serial);
+  llvm::SmallString<128> Path;
+  int Fd = -1;
+  if (llvm::sys::fs::createTemporaryFile("cppverify-qi", "txt", Fd, Path))
+    return Profile;
+  std::cerr.flush();
+  std::fflush(stderr);
+  const int Saved = ::dup(2);
+  ::dup2(Fd, 2);
+  {
+    z3::solver Rerun = z3::tactic(Ctx, "smt").mk_solver();
+    z3::params Params(Ctx);
+    Params.set("timeout", TimeoutMs == 0 ? 10000U : std::min(TimeoutMs, 10000U));
+    Params.set("qi.profile", true);
+    Rerun.set(Params);
+    for (unsigned I = 0; I != Assertions.size(); ++I)
+      Rerun.add(Assertions[I]);
+    (void)Rerun.check();
+  }
+  std::cerr.flush();
+  std::fflush(stderr);
+  ::dup2(Saved, 2);
+  ::close(Saved);
+  ::close(Fd);
+  auto Text = llvm::MemoryBuffer::getFile(Path);
+  llvm::sys::fs::remove(Path);
+  if (!Text)
+    return Profile;
+  // [quantifier_instances] q@LINE:COL : instances : ... : generation : cost
+  llvm::SmallVector<llvm::StringRef> Lines;
+  (*Text)->getBuffer().split(Lines, '\n');
+  std::map<std::pair<unsigned, unsigned>, QuantifierProfileEntry> ByPosition;
+  for (llvm::StringRef Line : Lines) {
+    if (!Line.consume_front("[quantifier_instances]"))
+      continue;
+    llvm::SmallVector<llvm::StringRef> Fields;
+    Line.split(Fields, ':');
+    if (Fields.size() < 7)
+      continue;
+    QuantifierProfileEntry Entry;
+    llvm::StringRef Id = Fields[0].trim();
+    if (!Id.consume_front("q@") || Id.getAsInteger(10, Entry.Line) ||
+        Fields[1].trim().getAsInteger(10, Entry.Column) ||
+        Fields[2].trim().getAsInteger(10, Entry.Instances) ||
+        Fields[5].trim().getAsInteger(10, Entry.MaxGeneration))
+      continue;
+    auto [It, Inserted] =
+        ByPosition.emplace(std::make_pair(Entry.Line, Entry.Column), Entry);
+    if (!Inserted) {
+      It->second.Instances += Entry.Instances;
+      It->second.MaxGeneration =
+          std::max(It->second.MaxGeneration, Entry.MaxGeneration);
+    }
+  }
+  for (const auto &[Position, Entry] : ByPosition)
+    Profile.push_back(Entry);
+  llvm::sort(Profile, [](const QuantifierProfileEntry &L,
+                         const QuantifierProfileEntry &R) {
+    return L.Instances > R.Instances;
+  });
+  if (Profile.size() > 5)
+    Profile.resize(5);
+#endif
+  return Profile;
 }
 
 z3::expr Z3Encoder::encodeVC(const VCExpr *Root) {
@@ -1057,7 +1591,7 @@ void Z3Encoder::emitSpecCallAxiom(const VCExpr *Call) {
     return;
   }
   const LogicFunctionDecl &Function = *It->second;
-  if (Function.DefinitionLevels.empty())
+  if (Function.DefinitionLevels.empty() || inlined(Function))
     return;
   if (Call->Children.size() != Function.Parameters.size()) {
     markEncodingFailure("spec argument count mismatch: " +
@@ -1123,14 +1657,9 @@ z3::expr_vector Z3Encoder::rangeFacts() {
   return Facts;
 }
 
-std::optional<z3::expr>
-Z3Encoder::encodeModuleAs(const ObligationModule &Module,
-                          const LogicExpr *Query, VerifyResult &Result) {
-  if (!Query)
-    Query = Module.CounterexampleQuery.get();
-  Vars.clear();
-  Solver = containsQuantifier(Query) ? z3::tactic(Ctx, "smt").mk_solver()
-                                     : z3::solver(Ctx);
+z3::solver Z3Encoder::freshSolver() {
+  z3::solver Fresh =
+      QuantifiedQuery ? z3::tactic(Ctx, "smt").mk_solver() : z3::solver(Ctx);
   z3::params Params(Ctx);
   if (TimeoutMs > 0)
     Params.set("timeout", TimeoutMs);
@@ -1138,16 +1667,41 @@ Z3Encoder::encodeModuleAs(const ObligationModule &Module,
     Params.set("rlimit", ResourceLimit);
   Params.set("mbqi", true);
   Params.set("qi.eager_threshold", 0.0);
-  Solver.set(Params);
+  Fresh.set(Params);
+  return Fresh;
+}
+
+std::optional<z3::expr>
+Z3Encoder::encodeModuleAs(const ObligationModule &Module,
+                          const LogicExpr *Query, VerifyResult &Result) {
+  if (!Query)
+    Query = Module.CounterexampleQuery.get();
+  Vars.clear();
+  QuantifiedQuery = containsQuantifier(Query);
+  Solver = freshSolver();
   EncodingFailed = false;
   EncodingError.clear();
   LogicFunctions.clear();
   SpecFuncDecls.clear();
+  UndefinedRecursive.clear();
+  NativeHidden.clear();
+  Inlined.clear();
+  NonRecursive.clear();
+  if (NativeRecursion)
+    NonRecursive = nonRecursiveDefinitions(Module);
+  ++EncodingPass;
   ModelVariables.clear();
   MachineVariables.clear();
   BinderNames.clear();
   BitShadows.clear();
   BitDefinitions.clear();
+  CollectionAxioms.clear();
+  SeqAtLemmas = false;
+  BridgedContains.clear();
+  UsedCellDecls.clear();
+  CellFunctions =
+      Module.RequiredFeatures & (logicFeature(LogicFeature::Sequences) |
+                                 logicFeature(LogicFeature::Collections));
   UsedBitLevelOperation = false;
   for (const auto &[Identity, Function] : Module.LogicFunctions)
     LogicFunctions.emplace(Identity, &Function);
@@ -1162,14 +1716,18 @@ Z3Encoder::encodeModuleAs(const ObligationModule &Module,
   for (const auto &[Identity, Function] : Module.LogicFunctions)
     for (const auto &Definition : Function.DefinitionLevels)
       collectBinderNames(Definition.get(), BinderNames);
+  std::unique_ptr<LogicExpr> Instantiated = instantiateAtReads(*Query);
+  const LogicExpr *Goal = Instantiated ? Instantiated.get() : Query;
   std::vector<const VCExpr *> SpecCalls;
-  collectSpecCalls(Query, SpecCalls);
+  collectSpecCalls(Goal, SpecCalls);
   DefineBitShadows = true;
   for (const VCExpr *Call : SpecCalls)
     emitSpecCallAxiom(Call);
   Vars.clear();
-  z3::expr EncodedGoal = encodeVC(Query);
+  z3::expr EncodedGoal = encodeVC(Goal);
   DefineBitShadows = false;
+  if (NativeRecursion && !defineRecursiveFunctions())
+    markEncodingFailure("cannot encode a native recursive definition");
   if (EncodingFailed) {
     Result.Status = VerifyStatus::Unresolved;
     Result.Reason = VerifyReason::EncodingFailure;
@@ -1179,175 +1737,539 @@ Z3Encoder::encodeModuleAs(const ObligationModule &Module,
   return EncodedGoal;
 }
 
-namespace {
-constexpr uint64_t SpecTruthSteps = 2000000;
-constexpr unsigned SpecTruthDepth = 2000;
-constexpr int64_t SpecTruthInstances = 100000;
-constexpr unsigned SpecRefinementRounds = 64;
-} // namespace
-
-struct Z3Encoder::SpecTruth {
-  explicit SpecTruth(z3::model Model) : Model(std::move(Model)) {}
-  z3::model Model;
-  /// Declaration of each logical function by its Z3 symbol.
-  std::map<std::string, const LogicFunctionDecl *> Functions;
-  std::map<std::string, z3::expr> Values;
-  /// Applications whose model value differs from the true value.
-  std::vector<std::pair<z3::expr, z3::expr>> Disagreements;
-  std::set<std::string> Disputed;
-  uint64_t Steps = SpecTruthSteps;
-  unsigned Depth = 0;
-};
-
-std::optional<z3::expr> Z3Encoder::evalTrue(SpecTruth &Truth,
-                                            const z3::expr &E) {
-  if (Truth.Steps == 0)
-    return std::nullopt;
-  --Truth.Steps;
-  if (E.is_numeral() || E.is_true() || E.is_false())
-    return E;
-  if (E.is_quantifier())
-    return evalQuantifier(Truth, E);
-  if (!E.is_app())
-    return std::nullopt;
-  const z3::func_decl Decl = E.decl();
-  const Z3_decl_kind Kind = Decl.decl_kind();
-  auto isBool = [](const std::optional<z3::expr> &V) {
-    return V && (V->is_true() || V->is_false());
-  };
-  // Connectives evaluate lazily: an untaken branch may apply a function
-  // outside its domain of recursion.
-  if (Kind == Z3_OP_ITE) {
-    std::optional<z3::expr> Cond = evalTrue(Truth, E.arg(0));
-    if (!isBool(Cond))
-      return std::nullopt;
-    return evalTrue(Truth, E.arg(Cond->is_true() ? 1 : 2));
-  }
-  if (Kind == Z3_OP_AND || Kind == Z3_OP_OR) {
-    const bool Deciding = Kind == Z3_OP_OR;
-    bool Undetermined = false;
-    for (unsigned I = 0; I < E.num_args(); ++I) {
-      std::optional<z3::expr> V = evalTrue(Truth, E.arg(I));
-      if (!isBool(V))
-        Undetermined = true;
-      else if (V->is_true() == Deciding)
-        return Ctx.bool_val(Deciding);
-    }
-    if (Undetermined)
-      return std::nullopt;
-    return Ctx.bool_val(!Deciding);
-  }
-  if (Kind == Z3_OP_IMPLIES) {
-    std::optional<z3::expr> Premise = evalTrue(Truth, E.arg(0));
-    if (isBool(Premise) && Premise->is_false())
-      return Ctx.bool_val(true);
-    std::optional<z3::expr> Conclusion = evalTrue(Truth, E.arg(1));
-    if (!isBool(Premise) || !isBool(Conclusion))
-      return std::nullopt;
-    return Ctx.bool_val(Conclusion->is_true());
-  }
-  z3::expr_vector Args(Ctx);
-  for (unsigned I = 0; I < E.num_args(); ++I) {
-    std::optional<z3::expr> V = evalTrue(Truth, E.arg(I));
-    if (!V)
-      return std::nullopt;
-    Args.push_back(*V);
-  }
-  if (Kind == Z3_OP_UNINTERPRETED && E.num_args() > 0) {
-    auto It = Truth.Functions.find(Decl.name().str());
-    if (It != Truth.Functions.end() && It->second->DefinitionFuel > 0) {
-      std::optional<z3::expr> True = applyTrue(Truth, *It->second, Args);
-      if (!True)
-        return std::nullopt;
-      z3::expr Applied = Decl(Args);
-      z3::expr Claimed = Truth.Model.eval(Applied, true).simplify();
-      if (!z3::eq(Claimed, True->simplify())) {
-        Truth.Disagreements.emplace_back(Applied, *True);
-        Truth.Disputed.insert(It->second->DisplayName.empty()
-                                  ? It->second->Identity
-                                  : It->second->DisplayName);
-      }
-      return True;
-    }
-  }
-  return Truth.Model.eval(Decl(Args), true);
-}
-
-std::optional<z3::expr> Z3Encoder::evalQuantifier(SpecTruth &Truth,
-                                                  const z3::expr &Q) {
-  if (!(Q.is_forall() || Q.is_exists()) ||
-      Z3_get_quantifier_num_bound(Ctx, Q) != 1)
-    return std::nullopt;
-  // The shape the encoder emits: forall x. lo <= x < hi => P, and
-  // exists x. (lo <= x < hi) && P, with lo and hi free of x.
-  const bool Forall = Q.is_forall();
-  z3::expr Body = Q.body();
-  if (!Body.is_app() ||
-      Body.decl().decl_kind() != (Forall ? Z3_OP_IMPLIES : Z3_OP_AND) ||
-      Body.num_args() != 2)
-    return std::nullopt;
-  z3::expr Range = Body.arg(0);
-  if (!Range.is_app() || Range.decl().decl_kind() != Z3_OP_AND ||
-      Range.num_args() != 2 || !Range.arg(0).is_app() ||
-      !Range.arg(1).is_app() || Range.arg(0).decl().decl_kind() != Z3_OP_LE ||
-      Range.arg(1).decl().decl_kind() != Z3_OP_LT ||
-      !Range.arg(0).arg(1).is_var() || !Range.arg(1).arg(0).is_var())
-    return std::nullopt;
-  std::optional<z3::expr> Lo = evalTrue(Truth, Range.arg(0).arg(0));
-  std::optional<z3::expr> Hi = evalTrue(Truth, Range.arg(1).arg(1));
-  int64_t Low = 0, High = 0;
-  if (!Lo || !Hi || !Lo->is_numeral_i64(Low) || !Hi->is_numeral_i64(High))
-    return std::nullopt;
-  if (High > Low && High - Low > SpecTruthInstances)
-    return std::nullopt;
-  bool Undetermined = false;
-  for (int64_t I = Low; I < High; ++I) {
-    z3::expr_vector Value(Ctx);
-    Value.push_back(Ctx.int_val(I));
-    std::optional<z3::expr> V = evalTrue(Truth, Body.arg(1).substitute(Value));
-    if (!V || !(V->is_true() || V->is_false()))
-      Undetermined = true;
-    else if (V->is_true() != Forall)
-      return Ctx.bool_val(!Forall);
-  }
-  if (Undetermined)
-    return std::nullopt;
-  return Ctx.bool_val(Forall);
-}
-
-std::optional<z3::expr> Z3Encoder::applyTrue(SpecTruth &Truth,
-                                             const LogicFunctionDecl &Function,
-                                             const z3::expr_vector &Args) {
-  if (!Function.StepDefinition || Args.size() != Function.Parameters.size() ||
-      Truth.Depth >= SpecTruthDepth)
-    return std::nullopt;
-  std::string Key = Function.Identity;
-  for (unsigned I = 0; I < Args.size(); ++I)
-    Key += "\x1f" + Args[I].to_string();
-  if (auto It = Truth.Values.find(Key); It != Truth.Values.end())
+z3::expr Z3Encoder::symbol(const std::string &Name, const LogicSort &Sort) {
+  if (auto It = Vars.find(Name); It != Vars.end())
     return It->second;
+  if (Sort.Kind == LogicSortKind::Bool)
+    return Ctx.bool_const(Name.c_str());
+  if (Sort.Kind == LogicSortKind::Heap)
+    return Ctx.constant(Name.c_str(), heapSort());
+  if (Sort.isCollection())
+    return Ctx.constant(Name.c_str(), valueSort(Sort));
+  if (Sort.Kind == LogicSortKind::BitVector && !integerMode())
+    return Ctx.bv_const(Name.c_str(), Sort.BitWidth);
+  return Ctx.int_const(Name.c_str());
+}
 
-  // Unfold one step at the argument values, as a call-site axiom does.
+z3::func_decl Z3Encoder::validPointerDecl() {
+  auto It = SpecFuncDecls.find("__cppverify_valid_ptr");
+  if (It == SpecFuncDecls.end()) {
+    z3::sort Domain[] = {intSort()};
+    It = SpecFuncDecls
+             .emplace(
+                 "__cppverify_valid_ptr",
+                 Ctx.function("__cppverify_valid_ptr", 1, Domain, boolSort()))
+             .first;
+  }
+  return It->second;
+}
+
+z3::expr
+Z3Encoder::arrayTerm(const HeapValue &Heap,
+                     const std::function<z3::expr(const CertInt &)> &Cell) {
+  // Single cells over the default are stores; longer runs are a lambda
+  // choosing the greatest break at or below the address.
+  bool PointCells = true;
+  for (auto It = Heap.Breaks.begin(); It != Heap.Breaks.end(); ++It) {
+    auto Next = std::next(It);
+    if (It->second == Heap.Default)
+      continue;
+    if (Next == Heap.Breaks.end() ||
+        !(Next->first == It->first + CertInt(1)) ||
+        !(Next->second == Heap.Default))
+      PointCells = false;
+  }
+  if (PointCells) {
+    z3::expr Array = z3::const_array(intSort(), Cell(Heap.Default));
+    for (const auto &[Address, Value] : Heap.Breaks)
+      if (!(Value == Heap.Default))
+        Array = z3::store(Array, Ctx.int_val(Address.toDecimal().c_str()),
+                          Cell(Value));
+    return Array;
+  }
+  z3::expr Address = Ctx.int_const("cppverify!heap_address");
+  z3::expr Result = Cell(Heap.Default);
+  for (const auto &[Break, Run] : Heap.Breaks)
+    Result = z3::ite(Address >= Ctx.int_val(Break.toDecimal().c_str()),
+                     Cell(Run), Result);
+  return z3::lambda(Address, Result);
+}
+
+z3::expr Z3Encoder::valueTerm(const LogicValue &Value, const LogicSort &Sort) {
+  auto integer = [&](const CertInt &I) {
+    return Ctx.int_val(I.toDecimal().c_str());
+  };
+  switch (Value.K) {
+  case LogicValue::Kind::Bool:
+    return Ctx.bool_val(Value.Truth);
+  case LogicValue::Kind::Heap:
+  case LogicValue::Kind::Multiset:
+    return arrayTerm(*Value.Heap, integer);
+  case LogicValue::Kind::Set:
+    return arrayTerm(*Value.Heap, [&](const CertInt &Member) {
+      return Ctx.bool_val(!(Member == CertInt(0)));
+    });
+  case LogicValue::Kind::Map: {
+    optionSort();
+    z3::expr Domain = arrayTerm(*Value.Heap, integer);
+    z3::expr Values = arrayTerm(*Value.Values, integer);
+    z3::expr Key = Ctx.int_const("cppverify!map_key");
+    return z3::lambda(Key, z3::ite(z3::select(Domain, Key) != 0,
+                                   (*SomeDecl)(z3::select(Values, Key)),
+                                   (*NoneDecl)()));
+  }
+  case LogicValue::Kind::Seq: {
+    const std::vector<CertInt> &Elements = *Value.Elements;
+    if (Elements.empty()) {
+      z3::expr Empty(Ctx, Z3_mk_seq_empty(Ctx, valueSort(Sort)));
+      Ctx.check_error();
+      return Empty;
+    }
+    std::vector<z3::expr> Units;
+    for (const CertInt &Element : Elements) {
+      Units.push_back(z3::expr(Ctx, Z3_mk_seq_unit(Ctx, integer(Element))));
+      Ctx.check_error();
+    }
+    if (Units.size() == 1)
+      return Units[0];
+    std::vector<Z3_ast> Parts(Units.begin(), Units.end());
+    z3::expr Sequence(Ctx, Z3_mk_seq_concat(Ctx, Parts.size(), Parts.data()));
+    Ctx.check_error();
+    return Sequence;
+  }
+  case LogicValue::Kind::Integer:
+    if (Sort.Kind == LogicSortKind::BitVector && !integerMode())
+      return Ctx.bv_val(
+          CertInt::fromBits(Value.Integer.bits(Sort.BitWidth), false)
+              .toDecimal()
+              .c_str(),
+          Sort.BitWidth);
+    return Ctx.int_val(Value.Integer.toDecimal().c_str());
+  }
+  llvm_unreachable("unknown logic value kind");
+}
+
+std::optional<HeapValue> Z3Encoder::heapValue(const z3::model &Model,
+                                              const z3::expr &Value) {
+  auto integer = [](const z3::expr &E) -> std::optional<CertInt> {
+    std::string Numeral;
+    if (!E.is_int() || !E.is_numeral(Numeral))
+      return std::nullopt;
+    return CertInt::fromDecimal(Numeral);
+  };
+  if (!Value.is_app())
+    return piecewiseHeap(Model, Value);
+  switch (Value.decl().decl_kind()) {
+  case Z3_OP_CONST_ARRAY: {
+    std::optional<CertInt> Default = integer(Value.arg(0));
+    if (!Default)
+      return std::nullopt;
+    HeapValue Heap;
+    Heap.Default = *Default;
+    return Heap;
+  }
+  case Z3_OP_STORE: {
+    std::optional<HeapValue> Heap = heapValue(Model, Value.arg(0));
+    std::optional<CertInt> Address = integer(Value.arg(1));
+    std::optional<CertInt> Cell = integer(Value.arg(2));
+    if (!Heap || !Address || !Cell)
+      return std::nullopt;
+    Heap->set(*Address, *Cell);
+    return Heap;
+  }
+  case Z3_OP_AS_ARRAY: {
+    z3::func_decl Function(Ctx, Z3_get_as_array_func_decl(Ctx, Value));
+    if (!Model.has_interp(Function))
+      return std::nullopt;
+    z3::func_interp Interpretation = Model.get_func_interp(Function);
+    Z3_ast Else = Z3_func_interp_get_else(Ctx, Interpretation);
+    if (!Else)
+      return std::nullopt;
+    std::optional<CertInt> Default = integer(z3::expr(Ctx, Else));
+    if (!Default)
+      return piecewiseHeap(Model, Value);
+    HeapValue Heap;
+    Heap.Default = *Default;
+    for (unsigned I = 0; I != Interpretation.num_entries(); ++I) {
+      z3::func_entry Entry = Interpretation.entry(I);
+      if (Entry.num_args() != 1)
+        return std::nullopt;
+      std::optional<CertInt> Address = integer(Entry.arg(0));
+      std::optional<CertInt> Cell = integer(Entry.value());
+      if (!Address || !Cell)
+        return std::nullopt;
+      Heap.set(*Address, *Cell);
+    }
+    return Heap;
+  }
+  default:
+    return piecewiseHeap(Model, Value);
+  }
+}
+
+/// A model array built from comparisons of the address with numerals, as
+/// model-based quantifier instantiation builds them, is constant between
+/// consecutive numerals: read it at each.
+std::optional<HeapValue> Z3Encoder::piecewiseHeap(
+    const z3::model &Model, const z3::expr &Value,
+    const std::function<std::optional<CertInt>(const z3::expr &)> &Decode) {
+  std::set<std::string> Numerals;
+  std::set<unsigned> Seen;
+  bool Supported = true;
+  std::function<void(const z3::expr &)> Scan = [&](const z3::expr &E) {
+    if (!Supported || !Seen.insert(E.id()).second)
+      return;
+    if (E.is_var())
+      return;
+    if (E.is_quantifier()) {
+      if (!E.is_lambda()) {
+        Supported = false;
+        return;
+      }
+      Scan(E.body());
+      return;
+    }
+    if (!E.is_app()) {
+      Supported = false;
+      return;
+    }
+    std::string Numeral;
+    if (E.is_numeral(Numeral)) {
+      Numerals.insert(Numeral);
+      return;
+    }
+    switch (E.decl().decl_kind()) {
+    case Z3_OP_ITE:
+    case Z3_OP_AND:
+    case Z3_OP_OR:
+    case Z3_OP_NOT:
+    case Z3_OP_EQ:
+    case Z3_OP_LE:
+    case Z3_OP_LT:
+    case Z3_OP_GE:
+    case Z3_OP_GT:
+    case Z3_OP_SELECT:
+    case Z3_OP_STORE:
+    case Z3_OP_CONST_ARRAY:
+    case Z3_OP_TRUE:
+    case Z3_OP_FALSE:
+    case Z3_OP_DT_CONSTRUCTOR:
+    case Z3_OP_DT_RECOGNISER:
+    case Z3_OP_DT_IS:
+    case Z3_OP_DT_ACCESSOR:
+      break;
+    case Z3_OP_AS_ARRAY:
+    case Z3_OP_UNINTERPRETED: {
+      z3::func_decl Function =
+          E.decl().decl_kind() == Z3_OP_AS_ARRAY
+              ? z3::func_decl(Ctx, Z3_get_as_array_func_decl(Ctx, E))
+              : E.decl();
+      if (Function.arity() == 0) {
+        if (Model.has_interp(Function))
+          Scan(Model.get_const_interp(Function));
+      } else if (Model.has_interp(Function)) {
+        z3::func_interp Interpretation = Model.get_func_interp(Function);
+        for (unsigned I = 0; I != Interpretation.num_entries(); ++I) {
+          z3::func_entry Entry = Interpretation.entry(I);
+          for (unsigned A = 0; A != Entry.num_args(); ++A)
+            Scan(Entry.arg(A));
+          Scan(Entry.value());
+        }
+        if (Z3_ast Else = Z3_func_interp_get_else(Ctx, Interpretation))
+          Scan(z3::expr(Ctx, Else));
+      } else {
+        Supported = false;
+      }
+      break;
+    }
+    default:
+      Supported = false;
+      return;
+    }
+    for (unsigned I = 0; I != E.num_args(); ++I)
+      Scan(E.arg(I));
+  };
+  Scan(Value);
+  if (!Supported || Numerals.size() > 50000)
+    return std::nullopt;
+  std::set<CertInt> Points;
+  for (const std::string &Numeral : Numerals)
+    if (std::optional<CertInt> N = CertInt::fromDecimal(Numeral)) {
+      Points.insert(*N);
+      Points.insert(*N + CertInt(1));
+    }
+  auto read = [&](const CertInt &Address) -> std::optional<CertInt> {
+    z3::expr Cell = Model.eval(
+        z3::select(Value, Ctx.int_val(Address.toDecimal().c_str())), true);
+    if (Decode)
+      return Decode(Cell);
+    std::string Numeral;
+    if (!Cell.is_int() || !Cell.is_numeral(Numeral))
+      return std::nullopt;
+    return CertInt::fromDecimal(Numeral);
+  };
+  HeapValue Heap;
+  const CertInt Below =
+      Points.empty() ? CertInt(0) : *Points.begin() - CertInt(1);
+  std::optional<CertInt> Default = read(Below);
+  if (!Default)
+    return std::nullopt;
+  Heap.Default = *Default;
+  for (const CertInt &Point : Points) {
+    std::optional<CertInt> Cell = read(Point);
+    if (!Cell)
+      return std::nullopt;
+    Heap.Breaks[Point] = *Cell;
+  }
+  Heap.normalize();
+  return Heap;
+}
+
+std::optional<LogicValue> Z3Encoder::modelValue(const z3::model &Model,
+                                                const z3::expr &Value,
+                                                const LogicSort &Sort) {
+  switch (Sort.Kind) {
+  case LogicSortKind::Bool:
+    if (Value.is_true() || Value.is_false())
+      return LogicValue::boolean(Value.is_true());
+    return std::nullopt;
+  case LogicSortKind::Heap:
+    if (std::optional<HeapValue> Heap = heapValue(Model, Value))
+      return LogicValue::heap(std::move(*Heap));
+    return std::nullopt;
+  case LogicSortKind::Seq: {
+    // seq.empty, seq.unit, and seq.++ of them.
+    std::vector<CertInt> Elements;
+    std::function<bool(const z3::expr &)> collect = [&](const z3::expr &E) {
+      if (!E.is_app())
+        return false;
+      switch (E.decl().decl_kind()) {
+      case Z3_OP_SEQ_EMPTY:
+        return true;
+      case Z3_OP_SEQ_UNIT: {
+        std::string Numeral;
+        if (!E.arg(0).is_numeral(Numeral))
+          return false;
+        std::optional<CertInt> Element = CertInt::fromDecimal(Numeral);
+        if (!Element)
+          return false;
+        Elements.push_back(*Element);
+        return true;
+      }
+      case Z3_OP_SEQ_CONCAT:
+        for (unsigned I = 0; I != E.num_args(); ++I)
+          if (!collect(E.arg(I)))
+            return false;
+        return true;
+      default:
+        return false;
+      }
+    };
+    if (!collect(Model.eval(Value, true)))
+      return std::nullopt;
+    return LogicValue::sequence(std::move(Elements));
+  }
+  case LogicSortKind::Set: {
+    auto Member = [](const z3::expr &Cell) -> std::optional<CertInt> {
+      if (Cell.is_true() || Cell.is_false())
+        return CertInt(Cell.is_true() ? 1 : 0);
+      return std::nullopt;
+    };
+    if (std::optional<HeapValue> Members = piecewiseHeap(Model, Value, Member))
+      return LogicValue::set(std::move(*Members));
+    return std::nullopt;
+  }
+  case LogicSortKind::Multiset:
+    if (std::optional<HeapValue> Counts = piecewiseHeap(Model, Value))
+      return LogicValue::multiset(std::move(*Counts));
+    return std::nullopt;
+  case LogicSortKind::Map: {
+    optionSort();
+    auto Defined = [&](const z3::expr &Cell) -> std::optional<CertInt> {
+      if (!Cell.is_app())
+        return std::nullopt;
+      if (Z3_is_eq_func_decl(Ctx, Cell.decl(), *NoneDecl))
+        return CertInt(0);
+      if (Z3_is_eq_func_decl(Ctx, Cell.decl(), *SomeDecl))
+        return CertInt(1);
+      return std::nullopt;
+    };
+    auto Stored = [&](const z3::expr &Cell) -> std::optional<CertInt> {
+      if (!Cell.is_app())
+        return std::nullopt;
+      if (Z3_is_eq_func_decl(Ctx, Cell.decl(), *NoneDecl))
+        return CertInt(0);
+      std::string Numeral;
+      if (!Z3_is_eq_func_decl(Ctx, Cell.decl(), *SomeDecl) ||
+          !Cell.arg(0).is_numeral(Numeral))
+        return std::nullopt;
+      return CertInt::fromDecimal(Numeral);
+    };
+    std::optional<HeapValue> Domain = piecewiseHeap(Model, Value, Defined);
+    std::optional<HeapValue> Values = piecewiseHeap(Model, Value, Stored);
+    if (!Domain || !Values)
+      return std::nullopt;
+    return LogicValue::map(std::move(*Domain), std::move(*Values));
+  }
+  case LogicSortKind::MathematicalInteger:
+  case LogicSortKind::Pointer:
+  case LogicSortKind::BitVector: {
+    std::string Numeral;
+    if (!Value.is_numeral(Numeral))
+      return std::nullopt;
+    if (Value.is_bv()) {
+      if (Sort.Kind != LogicSortKind::BitVector ||
+          Value.get_sort().bv_size() != Sort.BitWidth)
+        return std::nullopt;
+      const unsigned Parsed = std::max<unsigned>(
+          Sort.BitWidth, static_cast<unsigned>(Numeral.size()) * 4 + 2);
+      return LogicValue::integer(CertInt::fromBits(
+          llvm::APInt(Parsed, Numeral, 10).trunc(Sort.BitWidth),
+          isSignedSort(Sort)));
+    }
+    if (!Value.is_int())
+      return std::nullopt;
+    if (std::optional<CertInt> Integer = CertInt::fromDecimal(Numeral))
+      return LogicValue::integer(std::move(*Integer));
+    return std::nullopt;
+  }
+  case LogicSortKind::Invalid:
+    break;
+  }
+  return std::nullopt;
+}
+
+namespace clang {
+namespace verify {
+/// A Z3 model read through the encoder that produced its query.
+class Z3CandidateModel : public CandidateModel {
+  Z3Encoder &Encoder;
+  z3::model Model;
+
+public:
+  Z3CandidateModel(Z3Encoder &Encoder, z3::model Model)
+      : Encoder(Encoder), Model(std::move(Model)) {}
+
+  std::optional<LogicValue> constant(const std::string &Name,
+                                     const LogicSort &Sort) override {
+    return Encoder.modelValue(
+        Model, Model.eval(Encoder.symbol(Name, Sort), true), Sort);
+  }
+
+  std::optional<bool> validPointer(const CertInt &Address) override {
+    z3::expr Valid = Model.eval(Encoder.validPointerDecl()(Encoder.Ctx.int_val(
+                                    Address.toDecimal().c_str())),
+                                true);
+    if (Valid.is_true() || Valid.is_false())
+      return Valid.is_true();
+    return std::nullopt;
+  }
+
+  bool defined(const LogicFunctionDecl &Function) override {
+    return Encoder.inlined(Function);
+  }
+
+  std::optional<LogicValue>
+  application(const LogicFunctionDecl &Function,
+              const std::vector<LogicValue> &Arguments) override {
+    if (Arguments.size() != Function.Parameters.size() || defined(Function))
+      return std::nullopt;
+    const Table &Interpretation = table(Function);
+    std::string Key;
+    for (const LogicValue &Argument : Arguments)
+      Key += "\x1f" + Argument.key();
+    if (auto It = Interpretation.Entries.find(Key);
+        It != Interpretation.Entries.end())
+      return It->second;
+    if (Interpretation.Else)
+      return Interpretation.Else;
+    z3::expr_vector Terms(Encoder.Ctx);
+    for (unsigned I = 0; I != Arguments.size(); ++I)
+      Terms.push_back(
+          Encoder.valueTerm(Arguments[I], Function.Parameters[I].Sort));
+    return read(Function,
+                Model.eval(Encoder.specFuncDecl(Function)(Terms), true));
+  }
+
+private:
+  /// A function's interpretation, indexed once per model.
+  struct Table {
+    std::map<std::string, LogicValue> Entries;
+    std::optional<LogicValue> Else;
+  };
+  std::map<std::string, Table> Tables;
+
+  /// The query reads an opaque machine-sorted application reduced in range.
+  std::optional<LogicValue> read(const LogicFunctionDecl &Function,
+                                 z3::expr Raw) {
+    if (Encoder.integerMode() && Raw.is_numeral())
+      Raw = Encoder.reduce(Raw, Function.ResultSort);
+    return Encoder.modelValue(Model, Raw, Function.ResultSort);
+  }
+
+  const Table &table(const LogicFunctionDecl &Function) {
+    auto [It, Inserted] = Tables.try_emplace(Function.Identity);
+    if (!Inserted)
+      return It->second;
+    z3::func_decl Declaration = Encoder.specFuncDecl(Function);
+    if (Function.Parameters.empty() || !Model.has_interp(Declaration))
+      return It->second;
+    z3::func_interp Interpretation = Model.get_func_interp(Declaration);
+    for (unsigned I = 0; I != Interpretation.num_entries(); ++I) {
+      z3::func_entry Entry = Interpretation.entry(I);
+      if (Entry.num_args() != Function.Parameters.size())
+        return It->second;
+      std::string Key;
+      for (unsigned A = 0; A != Entry.num_args(); ++A) {
+        std::optional<LogicValue> Argument = Encoder.modelValue(
+            Model, Entry.arg(A), Function.Parameters[A].Sort);
+        if (!Argument)
+          return It->second = Table();
+        Key += "\x1f" + Argument->key();
+      }
+      std::optional<LogicValue> Value = read(Function, Entry.value());
+      if (!Value)
+        return It->second = Table();
+      It->second.Entries.emplace(std::move(Key), std::move(*Value));
+    }
+    if (Z3_ast Else = Z3_func_interp_get_else(Encoder.Ctx, Interpretation);
+        Else && z3::expr(Encoder.Ctx, Else).is_numeral())
+      It->second.Else = read(Function, z3::expr(Encoder.Ctx, Else));
+    return It->second;
+  }
+};
+} // namespace verify
+} // namespace clang
+
+std::optional<z3::expr>
+Z3Encoder::definitionInstance(const DefinitionInstance &Instance) {
+  const LogicFunctionDecl &Function = *Instance.Function;
+  if (!Function.StepDefinition ||
+      Instance.Arguments.size() != Function.Parameters.size())
+    return std::nullopt;
+  z3::expr_vector Terms(Ctx);
   std::vector<std::pair<std::string, std::optional<z3::expr>>> Saved;
-  for (unsigned I = 0; I < Args.size(); ++I) {
-    const std::string &Name = Function.Parameters[I].Name;
-    auto Existing = Vars.find(Name);
-    Saved.emplace_back(Name, Existing == Vars.end()
-                                 ? std::optional<z3::expr>()
-                                 : std::optional<z3::expr>(Existing->second));
-    Vars.erase(Name);
-    Vars.emplace(Name, Args[I]);
+  for (unsigned I = 0; I != Instance.Arguments.size(); ++I) {
+    const LogicFunctionParameter &Parameter = Function.Parameters[I];
+    Terms.push_back(valueTerm(Instance.Arguments[I], Parameter.Sort));
+    auto Existing = Vars.find(Parameter.Name);
+    Saved.emplace_back(Parameter.Name,
+                       Existing == Vars.end()
+                           ? std::optional<z3::expr>()
+                           : std::optional<z3::expr>(Existing->second));
+    Vars.erase(Parameter.Name);
+    Vars.emplace(Parameter.Name, Terms.back());
   }
   const bool SavedFailure = EncodingFailed;
-  std::string SavedError = EncodingError;
+  const bool SavedShadows = DefineBitShadows;
   EncodingFailed = false;
-  z3::expr Body =
-      coerce(encodeVC(Function.StepDefinition.get()),
-             Function.StepDefinition->Sort, Function.ResultSort,
-             Function.ResultSort.Signedness == LogicSignedness::Signed);
+  DefineBitShadows = false;
+  z3::expr Body = coerce(encodeVC(Function.StepDefinition.get()),
+                         Function.StepDefinition->Sort, Function.ResultSort,
+                         isSignedSort(Function.ResultSort));
   const bool Failed = EncodingFailed;
   EncodingFailed = SavedFailure;
-  EncodingError = std::move(SavedError);
+  DefineBitShadows = SavedShadows;
   for (auto &[Name, Value] : Saved) {
     Vars.erase(Name);
     if (Value)
@@ -1355,57 +2277,434 @@ std::optional<z3::expr> Z3Encoder::applyTrue(SpecTruth &Truth,
   }
   if (Failed)
     return std::nullopt;
-  ++Truth.Depth;
-  std::optional<z3::expr> Value = evalTrue(Truth, Body);
-  --Truth.Depth;
-  if (Value)
-    Truth.Values.emplace(Key, *Value);
-  return Value;
+  return (specFuncDecl(Function)(Terms) == Body).simplify();
 }
 
-z3::check_result Z3Encoder::refineSpecModel(const ObligationModule &Module,
-                                            const z3::expr &Semantics,
-                                            z3::check_result Result,
-                                            VerifyResult &Out) {
-  if (Result != z3::sat)
+std::pair<z3::expr_vector, z3::expr>
+Z3Encoder::encodeDefinition(const LogicFunctionDecl &Function) {
+  z3::expr_vector Parameters(Ctx);
+  std::vector<std::pair<std::string, std::optional<z3::expr>>> Saved;
+  for (unsigned I = 0; I != Function.Parameters.size(); ++I) {
+    const LogicFunctionParameter &Parameter = Function.Parameters[I];
+    Parameters.push_back(Ctx.constant(
+        ("def!" + Function.Identity + "!" + std::to_string(I)).c_str(),
+        valueSort(Parameter.Sort)));
+    auto Existing = Vars.find(Parameter.Name);
+    Saved.emplace_back(Parameter.Name,
+                       Existing == Vars.end()
+                           ? std::optional<z3::expr>()
+                           : std::optional<z3::expr>(Existing->second));
+    Vars.erase(Parameter.Name);
+    Vars.emplace(Parameter.Name, Parameters.back());
+  }
+  const bool SavedShadows = DefineBitShadows;
+  DefineBitShadows = false;
+  z3::expr Body = coerce(encodeVC(Function.StepDefinition.get()),
+                         Function.StepDefinition->Sort, Function.ResultSort,
+                         isSignedSort(Function.ResultSort));
+  DefineBitShadows = SavedShadows;
+  for (auto &[Name, Value] : Saved) {
+    Vars.erase(Name);
+    if (Value)
+      Vars.emplace(Name, *Value);
+  }
+  return {Parameters, Body};
+}
+
+z3::expr Z3Encoder::inlineDefinition(const LogicFunctionDecl &Function,
+                                     const std::vector<z3::expr> &Args) {
+  auto It = Inlined.find(Function.Identity);
+  if (It == Inlined.end()) {
+    if (Function.DefinitionFuel == 0)
+      NativeHidden.insert(Function.DisplayName.empty() ? Function.Identity
+                                                       : Function.DisplayName);
+    It = Inlined.emplace(Function.Identity, encodeDefinition(Function)).first;
+  }
+  z3::expr_vector Arguments(Ctx);
+  for (const z3::expr &Arg : Args)
+    Arguments.push_back(Arg);
+  z3::expr Body = It->second.second;
+  return Body.substitute(It->second.first, Arguments);
+}
+
+bool Z3Encoder::defineRecursiveFunctions() {
+  while (!UndefinedRecursive.empty()) {
+    const LogicFunctionDecl &Function = *UndefinedRecursive.back();
+    UndefinedRecursive.pop_back();
+    auto [Parameters, Body] = encodeDefinition(Function);
+    if (EncodingFailed)
+      return false;
+    Ctx.recdef(SpecFuncDecls.at(Function.Identity), Parameters, Body);
+  }
+  return true;
+}
+
+namespace {
+/// Resource budget for native recursive definitions without a timeout.
+constexpr unsigned NativeRecursionResourceLimit = 25000000;
+/// Least time refinement gets before native recursive definitions take over.
+constexpr unsigned RefinementSliceMs = 500;
+/// Least time the search among hidden definitions gets: with non-recursive
+/// ones inlined it is an ordinary query, which must not miss a real
+/// counterexample on a loaded machine.
+constexpr unsigned HiddenSearchSliceMs = 2000;
+constexpr unsigned HiddenRoundsBeforeNative = 8;
+} // namespace
+
+std::optional<VerifyResult> Z3Encoder::verifyNatively(
+    const ObligationModule &Module, const LogicExpr *Query,
+    std::optional<uint64_t> TraceEventCount, VerifyResult &FuelResult) {
+  Z3Encoder Native;
+  Native.NativeRecursion = true;
+  Native.ProofOnly = ProofOnly;
+  Native.setIntegerEncoding(IntegerEncoding);
+  Native.setResourceLimit(ResourceLimit);
+  if (TimeoutMs > 0) {
+    const auto Remaining =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            QueryStart + std::chrono::milliseconds(TimeoutMs) -
+            std::chrono::steady_clock::now())
+            .count();
+    if (Remaining < 100)
+      return std::nullopt;
+    // After a hidden-spec stop the search can only find a counterexample, so
+    // it gets a slice rather than the whole remaining budget.
+    const bool SearchOnly = FuelResult.Reason == VerifyReason::SpecHidden;
+    Native.setTimeoutMs(static_cast<unsigned>(
+        SearchOnly
+            ? std::min<long long>(Remaining,
+                                  std::max(TimeoutMs / 50, HiddenSearchSliceMs))
+            : Remaining));
+  } else if (ResourceLimit == 0) {
+    Native.setResourceLimit(FuelResult.Reason == VerifyReason::SpecHidden
+                                ? NativeRecursionResourceLimit / 10
+                                : NativeRecursionResourceLimit);
+  }
+  VerifyResult Result = Native.verifyModule(Module, Query, TraceEventCount);
+  if (Result.Status == VerifyStatus::Verified ||
+      Result.Status == VerifyStatus::Failed ||
+      (Result.Reason == VerifyReason::SpecHidden &&
+       FuelResult.Reason == VerifyReason::SpecHidden))
     return Result;
-  const std::vector<std::string> Frontier = specFrontier(Module);
-  if (Frontier.empty())
-    return Result;
-  for (unsigned Round = 0; Result == z3::sat; ++Round) {
-    SpecTruth Truth(Solver.get_model());
-    for (const auto &[Identity, Function] : LogicFunctions)
-      Truth.Functions.emplace(specFuncDecl(*Function).name().str(), Function);
-    std::optional<z3::expr> Holds = evalTrue(Truth, Semantics);
-    if (Holds && Holds->is_true())
-      return Result;
-    const bool Refutable =
-        Holds && Holds->is_false() && !Truth.Disagreements.empty();
-    if (!Refutable || Round == SpecRefinementRounds) {
-      const std::set<std::string> &Names =
-          Truth.Disputed.empty()
-              ? std::set<std::string>(Frontier.begin(), Frontier.end())
-              : Truth.Disputed;
-      std::string List;
-      for (const std::string &Name : Names)
-        List += (List.empty() ? "" : ", ") + Name;
-      Out.Status = VerifyStatus::Unresolved;
-      Out.Reason = VerifyReason::SpecFuel;
-      Out.Message =
-          (!Refutable ? "the counterexample could not be checked against the "
-                        "definition of " +
-                            List
-                      : "every counterexample found applies " + List +
-                            " beyond its unfolding fuel and is refuted by its "
-                            "definition") +
-          "; raise reveal_with_fuel, bound the argument, or state a lemma";
-      return z3::unknown;
+  FuelResult.Message += "; native recursive definitions did not settle it (" +
+                        verifyReasonCode(Result.Reason).str() + ")";
+  return std::nullopt;
+}
+
+std::vector<SpecDispute> Z3Encoder::boundedDomainDisputes(
+    const ObligationModule &Module, const LogicExpr &Query,
+    const CertifyResult &Disputed, const z3::model &Model,
+    std::chrono::steady_clock::time_point Until, std::optional<z3::expr> &Pin) {
+  constexpr unsigned MaxArguments = 4;
+  constexpr unsigned MaxProbes = 96;
+  std::set<std::string> Functions;
+  for (const SpecDispute &Dispute : Disputed.Disputes)
+    if (Dispute.Function->DefinitionFuel != 0)
+      Functions.insert(Dispute.Function->Identity);
+
+  // Integer arguments of their applications outside every binder.
+  std::vector<z3::expr> Arguments;
+  std::set<unsigned> Seen;
+  const bool SavedFailure = EncodingFailed;
+  const bool SavedShadows = DefineBitShadows;
+  EncodingFailed = false;
+  DefineBitShadows = false;
+  std::vector<const LogicExpr *> Work{&Query};
+  while (!Work.empty() && Arguments.size() < MaxArguments) {
+    const LogicExpr *E = Work.back();
+    Work.pop_back();
+    if (!E || E->K == LogicExpr::Forall || E->K == LogicExpr::Exists)
+      continue;
+    for (const auto &Child : E->Children)
+      Work.push_back(Child.get());
+    if (E->K != LogicExpr::SpecCall || !Functions.count(E->SpecCallee))
+      continue;
+    for (const auto &Child : E->Children) {
+      z3::expr Argument = encodeVC(Child.get());
+      if (EncodingFailed)
+        break;
+      if (Argument.is_int() && !Argument.is_numeral() &&
+          Seen.insert(Argument.id()).second && Arguments.size() < MaxArguments)
+        Arguments.push_back(Argument);
     }
-    // The definitions are true, so adding them at the disputed points can
-    // only remove spurious models.
-    for (const auto &[Applied, Value] : Truth.Disagreements)
-      Solver.add(Applied == Value);
-    Result = Solver.check();
+  }
+  const bool Encoded = !EncodingFailed;
+  EncodingFailed = SavedFailure;
+  DefineBitShadows = SavedShadows;
+  std::vector<SpecDispute> Found;
+  if (!Encoded)
+    return Found;
+
+  auto check = [&]() {
+    const auto Remaining =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            Until - std::chrono::steady_clock::now())
+            .count();
+    if (Remaining <= 0)
+      return z3::unknown;
+    z3::params Params(Ctx);
+    Params.set("timeout", static_cast<unsigned>(Remaining));
+    Solver.set(Params);
+    return Solver.check();
+  };
+  // The model at the extreme of \p Argument, if the solver proves one.
+  auto extreme = [&](const z3::expr &Argument,
+                     bool Greatest) -> std::optional<z3::model> {
+    std::optional<z3::model> Best;
+    z3::expr Current = Model.eval(Argument, true);
+    if (!Current.is_numeral())
+      return std::nullopt;
+    int64_t Step = 1;
+    for (unsigned Probe = 0; Probe != MaxProbes; ++Probe) {
+      z3::expr Distance = Ctx.int_val(Step);
+      Solver.push();
+      Solver.add(Greatest ? Argument >= Current + Distance
+                          : Argument <= Current - Distance);
+      const z3::check_result Result = check();
+      if (Result == z3::sat) {
+        Best = Solver.get_model();
+        Current = Best->eval(Argument, true);
+        Solver.pop();
+        if (!Current.is_numeral())
+          return std::nullopt;
+        if (Step < (int64_t(1) << 40))
+          Step *= 2;
+        continue;
+      }
+      Solver.pop();
+      if (Result != z3::unsat)
+        return std::nullopt;
+      if (Step == 1)
+        return Best;
+      Step = 1;
+    }
+    return std::nullopt;
+  };
+
+  CertifyLimits Limits;
+  if (TimeoutMs > 0)
+    Limits.Deadline = QueryStart + std::chrono::milliseconds(TimeoutMs);
+  for (const z3::expr &Argument : Arguments)
+    for (bool Greatest : {true, false}) {
+      std::optional<z3::model> Extreme = extreme(Argument, Greatest);
+      if (!Extreme)
+        continue;
+      Z3CandidateModel Candidate(*this, *Extreme);
+      CertifyResult Certified =
+          certifyCounterexample(Module, Query, Candidate, Limits);
+      if (Certified.Outcome == CertifyOutcome::Certified) {
+        Pin = Argument == Extreme->eval(Argument, true);
+        return {};
+      }
+      if (Certified.Outcome != CertifyOutcome::Disputed)
+        continue;
+      if (Found.size() + Certified.Disputes.size() >
+          DefinitionRefinement::MaxInstances / 2)
+        return {};
+      Found.insert(Found.end(), Certified.Disputes.begin(),
+                   Certified.Disputes.end());
+    }
+  return Found;
+}
+
+z3::check_result Z3Encoder::certifyModels(const ObligationModule &Module,
+                                          const LogicExpr &Query,
+                                          z3::check_result Result,
+                                          VerifyResult &Out) {
+  DefinitionRefinement Refinement(Module, NativeRecursion
+                                              ? DefinitionRefinement::MaxRounds
+                                              : HiddenRoundsBeforeNative);
+  // Instances settle a few disputed points cheaply; beyond that the solver's
+  // own unfolding of native recursive definitions does far better, so
+  // refinement gets only a slice of the budget before they take over.
+  std::optional<std::chrono::steady_clock::time_point> QueryDeadline;
+  if (TimeoutMs > 0)
+    QueryDeadline = QueryStart + std::chrono::milliseconds(TimeoutMs);
+  std::optional<std::chrono::steady_clock::time_point> Deadline;
+  if (NativeRecursion) {
+    Deadline = QueryDeadline;
+  } else {
+    Deadline = std::chrono::steady_clock::now() +
+               std::chrono::milliseconds(
+                   TimeoutMs > 0 ? std::max(TimeoutMs / 20, RefinementSliceMs)
+                                 : 4 * RefinementSliceMs);
+  }
+  EscalateToNative = false;
+  auto stop = [&](const RefinementDecision &Decision) {
+    Out.Status = VerifyStatus::Unresolved;
+    Out.Reason = Decision.Reason;
+    Out.Message = Decision.Message;
+    EscalateToNative = !NativeRecursion && !Decision.Unbounded &&
+                       !Decision.NoCounterexample &&
+                       (Decision.Reason == VerifyReason::SpecFuel ||
+                        Decision.Reason == VerifyReason::SpecHidden);
+    return z3::unknown;
+  };
+  // Once a quantifier range is narrowed, the solver only searches among
+  // small counterexamples: failing to find one settles nothing.
+  unsigned Narrowed = 0;
+  RefinementDecision Unchecked;
+  bool OutOfTime = false;
+  // Probing a domain happens once, and the check after it covered a bounded
+  // domain is the proof attempt itself: it gets the whole remaining budget.
+  bool Probed = false;
+  bool Covered = false;
+  auto check = [&]() {
+    const auto Limit = Covered ? QueryDeadline : Deadline;
+    Covered = false;
+    if (Limit) {
+      const auto Remaining =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              *Limit - std::chrono::steady_clock::now())
+              .count();
+      if (Remaining <= 0) {
+        OutOfTime = true;
+        return z3::unknown;
+      }
+      z3::params Params(Ctx);
+      Params.set("timeout", static_cast<unsigned>(Remaining));
+      Solver.set(Params);
+    }
+    return Solver.check();
+  };
+  while (Result == z3::sat) {
+    z3::model Current = Solver.get_model();
+    Z3CandidateModel Candidate(*this, Current);
+    CertifyLimits Limits;
+    Limits.Deadline = QueryDeadline;
+    CertifyResult Certified =
+        certifyCounterexample(Module, Query, Candidate, Limits);
+    bool BoundedDomain = false;
+    if (Certified.Outcome == CertifyOutcome::Disputed && !Probed &&
+        !NativeRecursion && !Narrowed && !ProofOnly) {
+      Probed = true;
+      const auto Now = std::chrono::steady_clock::now();
+      const auto Until = Deadline && *Deadline > Now
+                             ? Now + (*Deadline - Now) / 2
+                             : Now + std::chrono::milliseconds(250);
+      std::optional<z3::expr> Pin;
+      std::vector<SpecDispute> Extremes =
+          boundedDomainDisputes(Module, Query, Certified, Current, Until, Pin);
+      if (Pin) {
+        // The pin only selects a counterexample: it stays only if the model
+        // found under it is certified, so no unsat can ever rely on it.
+        Solver.push();
+        Solver.add(*Pin);
+        if (check() == z3::sat) {
+          Z3CandidateModel Pinned(*this, Solver.get_model());
+          if (certifyCounterexample(Module, Query, Pinned, Limits).Outcome ==
+              CertifyOutcome::Certified)
+            return z3::sat;
+        }
+        Solver.pop();
+      } else if (!Extremes.empty()) {
+        if (!integerMode()) {
+          CoverInIntegers = true;
+          return z3::unknown;
+        }
+        Certified.Disputes.insert(Certified.Disputes.end(), Extremes.begin(),
+                                  Extremes.end());
+        BoundedDomain = true;
+      }
+    }
+    if (Certified.Outcome == CertifyOutcome::Undetermined &&
+        Certified.DefinitionTooDeep && Certified.DeepApplication &&
+        Narrowed < MaxNarrowedQuantifiers) {
+      if (Narrowed++ == 0)
+        Unchecked = Refinement.next(Certified);
+      const bool SavedFailure = EncodingFailed;
+      const bool SavedShadows = DefineBitShadows;
+      EncodingFailed = false;
+      DefineBitShadows = false;
+      z3::expr_vector Bounds(Ctx);
+      for (const auto &Argument : Certified.DeepApplication->Children) {
+        z3::expr Value = encodeVC(Argument.get());
+        if (EncodingFailed)
+          break;
+        const int Bound = static_cast<int>(NarrowedArgumentBound);
+        if (Value.is_int()) {
+          Bounds.push_back(Value <= Ctx.int_val(Bound) &&
+                           Value >= Ctx.int_val(-Bound));
+        } else if (Value.is_bv() && Value.get_sort().bv_size() > 13) {
+          const unsigned Width = Value.get_sort().bv_size();
+          if (Argument->Sort.Signedness == LogicSignedness::Signed)
+            Bounds.push_back(z3::sle(Value, Ctx.bv_val(Bound, Width)) &&
+                             z3::sge(Value, Ctx.bv_val(-Bound, Width)));
+          else
+            Bounds.push_back(z3::ule(Value, Ctx.bv_val(Bound, Width)));
+        }
+      }
+      const bool Encoded = !EncodingFailed && !Bounds.empty();
+      EncodingFailed = SavedFailure;
+      DefineBitShadows = SavedShadows;
+      if (!Encoded)
+        return stop(Unchecked);
+      Solver.add(z3::mk_and(Bounds));
+      Result = check();
+      if (Result != z3::sat)
+        return stop(Unchecked);
+      continue;
+    }
+    if (Certified.Outcome == CertifyOutcome::Undetermined &&
+        Certified.WideQuantifier && Narrowed < MaxNarrowedQuantifiers) {
+      if (Narrowed++ == 0)
+        Unchecked = Refinement.next(Certified);
+      const bool SavedFailure = EncodingFailed;
+      const bool SavedShadows = DefineBitShadows;
+      EncodingFailed = false;
+      DefineBitShadows = false;
+      z3::expr Low = encodeVC(Certified.WideQuantifier->Children[0].get());
+      z3::expr High = encodeVC(Certified.WideQuantifier->Children[1].get());
+      const bool Encoded = !EncodingFailed && Low.is_int() && High.is_int();
+      EncodingFailed = SavedFailure;
+      DefineBitShadows = SavedShadows;
+      if (!Encoded)
+        return stop(Unchecked);
+      Solver.add(High - Low <=
+                 Ctx.int_val(static_cast<int>(NarrowedQuantifierRange)));
+      Result = check();
+      if (Result != z3::sat)
+        return stop(Unchecked);
+      continue;
+    }
+    RefinementDecision Decision = Refinement.next(Certified, BoundedDomain);
+    Covered =
+        BoundedDomain && Decision.Next == RefinementDecision::Action::Refine;
+    if (Decision.Next == RefinementDecision::Action::Report)
+      return Result;
+    if (Decision.Next == RefinementDecision::Action::Stop)
+      return stop(Narrowed && Decision.Reason == VerifyReason::SpecFuel
+                      ? Unchecked
+                      : Decision);
+    for (const DefinitionInstance &Instance : Decision.Instances) {
+      std::optional<z3::expr> Equation = definitionInstance(Instance);
+      if (!Equation) {
+        RefinementDecision Failed;
+        Failed.Reason = VerifyReason::EncodingFailure;
+        Failed.Message = "cannot encode a definition instance of " +
+                         Instance.Function->DisplayName;
+        return stop(Failed);
+      }
+      Solver.add(*Equation);
+    }
+    if (Covered) {
+      // Thousands of ground equations are solved far faster from scratch
+      // than by the incremental core this solver has switched to.
+      z3::solver Fresh = freshSolver();
+      Fresh.add(Solver.assertions());
+      Solver = Fresh;
+    }
+    Result = check();
+    if (Narrowed && Result != z3::sat)
+      return stop(Unchecked);
+    if (Result == z3::unknown)
+      return stop(OutOfTime
+                      ? Refinement.exhausted()
+                      : Refinement.exhausted("then z3 returned unknown: " +
+                                             Solver.reason_unknown()));
+    if (Result == z3::unsat)
+      if (std::optional<RefinementDecision> Hidden = Refinement.unsatisfiable())
+        return stop(*Hidden);
   }
   return Result;
 }
@@ -1414,6 +2713,7 @@ VerifyResult Z3Encoder::verifyModule(const ObligationModule &Module,
                                      const LogicExpr *Query,
                                      std::optional<uint64_t> TraceEventCount) {
   VerifyResult Out;
+  QueryStart = std::chrono::steady_clock::now();
   const bool IsCompleteQuery = Query == nullptr;
   auto EncodedGoal = encodeModule(Module, Query, Out);
   if (!EncodedGoal)
@@ -1421,14 +2721,64 @@ VerifyResult Z3Encoder::verifyModule(const ObligationModule &Module,
   Solver.add(*EncodedGoal);
   for (const z3::expr &Definition : BitDefinitions)
     Solver.add(Definition);
+  const LogicExpr &Asked = Query ? *Query : *Module.CounterexampleQuery;
+  if (!NativeRecursion) {
+    // Applications at closed arguments are computed, not searched for.
+    CertifyLimits Limits;
+    if (TimeoutMs > 0)
+      Limits.Deadline = QueryStart + std::chrono::milliseconds(TimeoutMs);
+    for (const DefinitionInstance &Instance :
+         closedApplicationInstances(Module, Asked, Limits))
+      if (std::optional<z3::expr> Equation = definitionInstance(Instance))
+        Solver.add(*Equation);
+  }
   z3::expr Semantics = z3::mk_and(Solver.assertions());
+  for (const z3::expr &Axiom : CollectionAxioms)
+    Solver.add(Axiom);
   Solver.add(rangeFacts());
+  const z3::expr_vector Asserted = Solver.assertions();
   const z3::check_result Checked =
-      refineSpecModel(Module, Semantics, Solver.check(), Out);
-  if (Out.Reason == VerifyReason::SpecFuel)
+      certifyModels(Module, Asked, Solver.check(), Out);
+  if (ProfileQuantifiers && Checked == z3::unknown && QuantifiedQuery)
+    Out.QuantifierProfile = profileQuantifiers(Asserted);
+  if (CoverInIntegers) {
+    Z3Encoder Integers;
+    Integers.setIntegerEncoding(MachineIntegerEncoding::Integer);
+    Integers.setResourceLimit(ResourceLimit);
+    Integers.setProofOnly(ProofOnly);
+    if (TimeoutMs > 0) {
+      const auto Remaining =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              QueryStart + std::chrono::milliseconds(TimeoutMs) -
+              std::chrono::steady_clock::now())
+              .count();
+      Integers.setTimeoutMs(
+          static_cast<unsigned>(std::max<long long>(Remaining, 1)));
+    }
+    return Integers.verifyModule(Module, Query, TraceEventCount);
+  }
+  if (Out.Reason != VerifyReason::None) {
+    if (EscalateToNative)
+      if (std::optional<VerifyResult> Native =
+              verifyNatively(Module, Query, TraceEventCount, Out))
+        return std::move(*Native);
     return Out;
+  }
   switch (Checked) {
   case z3::unsat:
+    if (!NativeHidden.empty()) {
+      std::string Names;
+      for (const std::string &Name : NativeHidden)
+        Names += (Names.empty() ? "" : ", ") + Name;
+      Out.Status = VerifyStatus::Unresolved;
+      Out.Reason = VerifyReason::SpecHidden;
+      Out.Message = "no counterexample exists, but the proof needs the "
+                    "definition of " +
+                    Names +
+                    ", which is hidden from the solver; reveal it or state a "
+                    "lemma";
+      return Out;
+    }
     Out.Status = VerifyStatus::Verified;
     return Out;
   case z3::sat: {
@@ -1436,10 +2786,12 @@ VerifyResult Z3Encoder::verifyModule(const ObligationModule &Module,
     Out.Reason = VerifyReason::Counterexample;
     z3::model Mod = Solver.get_model();
     // Range facts assign every machine variable; report those the goal does
-    // not depend on as unknown. Divisor variables stay assigned (slow eval).
+    // not depend on as unknown. Divisor variables stay assigned (slow eval),
+    // as does everything under native recursive definitions, which the model
+    // evaluator would unfold without bound at an unassigned argument.
     z3::expr_vector Assigned(Ctx), Unassigned(Ctx);
     std::set<std::string> Freed;
-    if (integerMode()) {
+    if (integerMode() && !NativeRecursion) {
       const std::set<std::string> InDivisors = divisorConstants(Semantics);
       for (const auto &[Name, Sort] : MachineVariables) {
         if (InDivisors.count(Name))
@@ -1456,8 +2808,12 @@ VerifyResult Z3Encoder::verifyModule(const ObligationModule &Module,
         Unassigned.pop_back();
       }
     }
-    // A diagnostic term dividing by a freed variable is undetermined.
+    // A diagnostic term dividing by a freed variable is undetermined. With
+    // native recursive definitions every term is read in the completed model,
+    // the one the certifier checked.
     auto modelValue = [&](z3::expr Encoded) {
+      if (NativeRecursion)
+        return Mod.eval(Encoded, true);
       if (Freed.empty())
         return Mod.eval(Encoded, false);
       z3::expr Substituted = Encoded.substitute(Assigned, Unassigned);
@@ -1465,6 +2821,15 @@ VerifyResult Z3Encoder::verifyModule(const ObligationModule &Module,
         if (Freed.count(Name))
           return Substituted;
       return Mod.eval(Substituted, false);
+    };
+    auto sourceValue = [&](const z3::expr &Evaluated,
+                           const LogicSort &Sort) -> std::optional<std::string> {
+      if (!Sort.isCollection())
+        return sourceModelValue(Evaluated, Sort);
+      if (std::optional<LogicValue> Value =
+              Z3Encoder::modelValue(Mod, Evaluated, Sort))
+        return formatLogicValue(*Value);
+      return std::nullopt;
     };
     auto evaluate = [&](const LogicExpr *Expr) -> std::optional<std::string> {
       if (!Expr)
@@ -1482,13 +2847,27 @@ VerifyResult Z3Encoder::verifyModule(const ObligationModule &Module,
       z3::expr Evaluated = modelValue(Encoded);
       EncodingFailed = SavedFailure;
       EncodingError = std::move(SavedError);
-      return sourceModelValue(Evaluated, Expr->Sort);
+      return sourceValue(Evaluated, Expr->Sort);
     };
     if (IsCompleteQuery && !TraceEventCount) {
-      for (const Obligation &Item : Module.Obligations) {
+      // The certified model is the completed one; the certifier evaluates
+      // what the solver's evaluator leaves open, such as quantifiers.
+      Z3CandidateModel Candidate(*this, Mod);
+      CertifyLimits Limits;
+      Limits.Deadline = std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(
+                            std::max(TimeoutMs / 10, RefinementSliceMs));
+      auto fails = [&](const Obligation &Item) {
         std::optional<std::string> Fails =
             evaluate(Item.CounterexampleQuery.get());
-        if (!Fails || *Fails != "true")
+        if (Fails)
+          return *Fails == "true";
+        std::optional<LogicValue> Value = evaluateTerm(
+            Module, *Item.CounterexampleQuery, Candidate, Limits);
+        return Value && Value->K == LogicValue::Kind::Bool && Value->Truth;
+      };
+      for (const Obligation &Item : Module.Obligations) {
+        if (!fails(Item))
           continue;
         Out.ObligationId = Item.StableId.empty() ? Item.Id : Item.StableId;
         Out.ObligationType = Item.Kind;
@@ -1524,7 +2903,7 @@ VerifyResult Z3Encoder::verifyModule(const ObligationModule &Module,
       if (auto It = Vars.find(Name); It != Vars.end()) {
         z3::expr Evaluated = modelValue(It->second);
         if (!z3::eq(Evaluated, It->second))
-          Value.Value = sourceModelValue(Evaluated, Sort);
+          Value.Value = sourceValue(Evaluated, Sort);
       }
       Out.Model.push_back(std::move(Value));
     }
@@ -1577,6 +2956,13 @@ VerifyResult Z3Encoder::lowerModule(const ObligationModule &Module,
       *OS << Facts[I].to_string() << "\n";
     for (const z3::expr &Definition : BitDefinitions)
       *OS << Definition.to_string() << "\n";
+    for (const std::string &Name : UsedCellDecls)
+      *OS << CellDecls.at(Name).second << "\n";
+    if (!CollectionAxioms.empty())
+      *OS << "(define-fun-rec cppverify.seq_at ((s (Seq Int)) (i Int)) Int "
+             "(ite (and (<= 0 i) (< i (seq.len s))) (seq.nth s i) 0))\n";
+    for (const z3::expr &Axiom : CollectionAxioms)
+      *OS << Axiom.to_string() << "\n";
     *OS << EncodedGoal->to_string() << "\n";
   }
   Out.Status = VerifyStatus::Lowered;
@@ -1740,10 +3126,13 @@ Z3VerifyBackend::Z3VerifyBackend(const BackendExecutionOptions &Execution,
       MaxQueryNodes(Execution.MaxQueryNodes),
       IntegerEncoding(Execution.IntegerEncoding),
       SkipWholeModuleRetry(Execution.SkipWholeModuleRetry),
+      SingleQuery(Execution.SingleQuery),
+      ProfileQuantifiers(Execution.ProfileQuantifiers),
       ReuseVerifiedQueries(ReuseVerifiedQueries) {
   Enc.setTimeoutMs(TimeoutMs);
   Enc.setResourceLimit(ResourceLimit);
   Enc.setIntegerEncoding(IntegerEncoding);
+  Enc.setProfileQuantifiers(ProfileQuantifiers);
   if (!Execution.ProofCachePath.empty()) {
     std::string Identity =
         CacheBackendName.str() + ";adapter=cppverify-z3-v" +
@@ -1793,6 +3182,7 @@ VerifyResult Z3VerifyBackend::verifyObligation(const ObligationModule &Module,
     Encoder.setTimeoutMs(TimeoutMs);
     Encoder.setResourceLimit(ResourceLimit);
     Encoder.setIntegerEncoding(IntegerEncoding);
+    Encoder.setProfileQuantifiers(ProfileQuantifiers);
     Result = Encoder.verifyModule(Module, Item.CounterexampleQuery.get(),
                                   Item.TraceEventCount);
     if (Cache)
@@ -1828,7 +3218,83 @@ unprovedObligations(const ObligationModule &Module,
   return Unproved;
 }
 
+std::optional<VerifyResult>
+Z3VerifyBackend::proveByInduction(const ObligationModule &Module,
+                                  const Obligation *Item,
+                                  std::vector<std::string> *Tried) {
+  // No finite unfolding settles the goal: try strong induction on a variable
+  // that the refuted applications grow with.
+  constexpr unsigned MaxInductionVariables = 2;
+  unsigned Attempts = 0;
+  for (const auto &[Variable, Sort] : inductionVariables(Module, Item)) {
+    if (Attempts++ == MaxInductionVariables)
+      break;
+    auto Inductive = inductionModule(Module, Variable, Sort, Item);
+    if (!Inductive) {
+      llvm::consumeError(Inductive.takeError());
+      continue;
+    }
+    if (Tried)
+      Tried->push_back(Variable);
+    // Both encodings are exact; bit-vector conversions of the binder would
+    // hide the hypothesis from instantiation.
+    Z3Encoder Encoder;
+    Encoder.setTimeoutMs(inductionBudgetMs(TimeoutMs));
+    Encoder.setResourceLimit(ResourceLimit);
+    Encoder.setIntegerEncoding(IntegerEncoding ==
+                                       MachineIntegerEncoding::BitVector
+                                   ? MachineIntegerEncoding::Auto
+                                   : IntegerEncoding);
+    Encoder.setProofOnly(true);
+    VerifyResult Proof = Encoder.verifyModule(*Inductive);
+    if (Proof.Status == VerifyStatus::Verified)
+      return Proof;
+  }
+  return std::nullopt;
+}
+
 VerifyResult Z3VerifyBackend::verifyModule(const ObligationModule &Module) {
+  if (SingleQuery) {
+    if (auto Limit = querySizeLimitResult(Module, MaxQueryNodes))
+      return std::move(*Limit);
+    return finishZ3Result(Enc.verifyModule(Module));
+  }
+  VerifyResult Result = verifyModuleDirect(Module);
+  // The integer encoding is as exact: where bit-blasting gives up, it often
+  // settles the same query.
+  if (IntegerEncoding == MachineIntegerEncoding::BitVector &&
+      Result.Status == VerifyStatus::Unresolved &&
+      (Result.Reason == VerifyReason::SolverTimeout ||
+       Result.Reason == VerifyReason::SolverUnknown ||
+       Result.Reason == VerifyReason::SolverResourceLimit)) {
+    IntegerEncoding = MachineIntegerEncoding::Auto;
+    Enc.setIntegerEncoding(IntegerEncoding);
+    VerifyResult Retry = verifyModuleDirect(Module);
+    IntegerEncoding = MachineIntegerEncoding::BitVector;
+    Enc.setIntegerEncoding(IntegerEncoding);
+    if (Retry.Status != VerifyStatus::Unresolved ||
+        Retry.Reason == VerifyReason::SpecFuel)
+      Result = std::move(Retry);
+  }
+  if (Result.Status != VerifyStatus::Unresolved ||
+      Result.Reason != VerifyReason::SpecFuel)
+    return Result;
+  std::vector<std::string> Tried;
+  std::optional<VerifyResult> Proof = proveByInduction(Module, nullptr, &Tried);
+  if (!Proof) {
+    Result.Message += inductionNote(Module, Tried);
+    return Result;
+  }
+  Proof->CacheHits = Result.CacheHits;
+  Proof->CacheMisses = Result.CacheMisses;
+  Proof->CacheErrors = Result.CacheErrors;
+  Proof->CacheError = Result.CacheError;
+  Proof->ReusedQueries = Result.ReusedQueries;
+  return std::move(*Proof);
+}
+
+VerifyResult
+Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
   if (auto Limit = querySizeLimitResult(Module, MaxQueryNodes))
     return std::move(*Limit);
   if (Jobs != 1 || Cache) {
@@ -1903,14 +3369,25 @@ VerifyResult Z3VerifyBackend::verifyModule(const ObligationModule &Module) {
     return Result;
   }
 
-  // Spec equations often solve best as one formula. For spec-free programs,
-  // use a short complete-VC probe and preserve the configured budget for the
-  // ordered obligations.
+  // Spec equations often solve best as one formula, so with specs the
+  // complete VC gets the full budget. Over collections, one hard obligation
+  // can make it far harder than every ordered one (a ghost-sequence sum loop
+  // timed out whole after 30 s; its obligations take 0.2 s), so there it gets
+  // a sixth (at least 5 s) before them and the rest after. For spec-free
+  // programs, a short probe preserves the budget for the ordered obligations.
+  const bool OverCollections =
+      Module.RequiredFeatures & (logicFeature(LogicFeature::Sequences) |
+                                 logicFeature(LogicFeature::Collections));
+  const unsigned WholeBudget =
+      Module.LogicFunctions.empty()
+          ? 500U
+          : (TimeoutMs == 0 || !OverCollections
+                 ? TimeoutMs
+                 : std::max(TimeoutMs / 6, 5000U));
   const bool WholeUsedFullBudget =
-      !Module.LogicFunctions.empty() || (TimeoutMs > 0 && TimeoutMs <= 500);
-  Enc.setTimeoutMs(WholeUsedFullBudget
-                       ? TimeoutMs
-                       : (TimeoutMs == 0 ? 500 : std::min(TimeoutMs, 500U)));
+      TimeoutMs == 0 ? !Module.LogicFunctions.empty()
+                     : WholeBudget >= TimeoutMs;
+  Enc.setTimeoutMs(WholeUsedFullBudget ? TimeoutMs : WholeBudget);
   VerifyResult Whole = Enc.verifyModule(Module);
   Enc.setTimeoutMs(TimeoutMs);
   if (Whole.Status == VerifyStatus::Verified)

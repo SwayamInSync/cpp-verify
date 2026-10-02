@@ -2,9 +2,12 @@
 #ifndef LLVM_CLANG_VERIFY_BACKEND_Z3ENCODE_H
 #define LLVM_CLANG_VERIFY_BACKEND_Z3ENCODE_H
 
+#include "Certify.h"
 #include "Obligation.h"
 #include "ProofCache.h"
 #include "VerifyBackend.h"
+#include <chrono>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -16,6 +19,8 @@
 namespace clang {
 namespace verify {
 
+class Z3CandidateModel;
+
 class Z3Encoder {
   z3::context Ctx;
   z3::solver Solver;
@@ -24,6 +29,10 @@ class Z3Encoder {
   std::map<std::string, const LogicFunctionDecl *> LogicFunctions;
   std::map<std::string, z3::func_decl> SpecFuncDecls;
   unsigned TimeoutMs = 0;
+  bool ProfileQuantifiers = false;
+  /// Rerun Assertions counting quantifier instantiations.
+  std::vector<QuantifierProfileEntry>
+  profileQuantifiers(const z3::expr_vector &Assertions);
   unsigned ResourceLimit = 0;
   /// The requested encoding; Auto is resolved per query into ActiveEncoding.
   MachineIntegerEncoding IntegerEncoding = MachineIntegerEncoding::Auto;
@@ -40,18 +49,71 @@ class Z3Encoder {
   bool UsedBitLevelOperation = false;
   bool EncodingFailed = false;
   std::string EncodingError;
+  std::chrono::steady_clock::time_point QueryStart;
+  bool QuantifiedQuery = false;
+  z3::solver freshSolver();
+  /// Encode logical functions as native recursive definitions. Hidden ones
+  /// are defined too, but only to find counterexamples: an unsat that may use
+  /// them is not a proof.
+  bool NativeRecursion = false;
+  /// Only an unsat result is wanted: no domain probing or coverage, whose
+  /// thousands of ground instances can stall the solver.
+  bool ProofOnly = false;
+  std::set<std::string> NativeHidden;
+  /// With NativeRecursion, non-recursive functions are replaced by their
+  /// definitions: parameters and body, encoded once.
+  std::set<std::string> NonRecursive;
+  std::map<std::string, std::pair<z3::expr_vector, z3::expr>> Inlined;
+  unsigned EncodingPass = 0;
+  std::vector<const LogicFunctionDecl *> UndefinedRecursive;
+  /// Refinement stopped on a bounded domain; native definitions may settle it.
+  bool EscalateToNative = false;
+  /// A bounded domain was found in the bit-vector encoding: the integer
+  /// encoding, as exact, settles it much faster.
+  bool CoverInIntegers = false;
 
   z3::sort intSort();
   z3::sort bvSort(unsigned BitWidth);
   z3::sort boolSort();
   z3::sort heapSort();
   z3::sort valueSort(const LogicSort &Sort);
+  /// The option datatype of map cells: none, or some(value).
+  z3::sort optionSort();
+  std::optional<z3::sort> OptionSort;
+  std::optional<z3::func_decl> NoneDecl, SomeDecl, IsSomeDecl, OptionValueDecl;
+  z3::expr encodeCollection(const VCExpr *E, std::vector<z3::expr> Args);
+  /// s[k] as the recursive-function definition cppverify.seq_at. Its lemmas
+  /// over concatenation, units, and extraction let quantifiers match index
+  /// terms, which the native sequence theory does not.
+  z3::expr seqAt(const z3::expr &S, const z3::expr &K);
+  std::optional<z3::func_decl> SeqAtDecl;
+  /// Axioms of the collection functions the query uses, asserted beside it.
+  std::vector<z3::expr> CollectionAxioms;
+  bool SeqAtLemmas = false;
+  /// Relates seq.contains(S, unit(X)) to the reads of S, which Z3 does not.
+  void bridgeContains(const z3::expr &Contains, const z3::expr &S,
+                      const z3::expr &X);
+  std::set<unsigned> BridgedContains;
+  /// seq.extract(S, From, Count); an extract of a concatenation also gets
+  /// the instance of the lemma that splits it.
+  z3::expr seqExtract(const z3::expr &S, const z3::expr &From,
+                      const z3::expr &Count);
+  /// Equality of two collections of Sort: a multiset's counts.
+  z3::expr collectionEquality(const LogicSort &Sort, const z3::expr &L,
+                              const z3::expr &R);
   z3::expr heapVar(const std::string &Name);
   z3::expr asBool(z3::expr E);
   z3::expr fallbackValue(const VCExpr *E);
   z3::expr arithOp(const VCExpr *E, z3::expr L, z3::expr R);
   void markEncodingFailure(std::string Message);
   z3::func_decl specFuncDecl(const LogicFunctionDecl &Function);
+  /// A trigger term as Z3 matches it: a raw heap select or an opaque
+  /// function application; nullopt when it cannot be one.
+  std::optional<z3::expr> patternTerm(const VCExpr *Term);
+  /// A quantifier over Binders with E's trigger, named for profiling by its
+  /// source position.
+  z3::expr quantify(const VCExpr *E, bool Forall, z3::expr_vector &Binders,
+                    const z3::expr &Body);
   z3::expr encodeVCNode(const VCExpr *E,
                         const std::map<const VCExpr *, z3::expr> &Done);
   z3::expr encodeVC(const VCExpr *E);
@@ -63,20 +125,68 @@ class Z3Encoder {
                                          VerifyResult &Result);
   z3::expr_vector rangeFacts();
 
-  /// Model values for free symbols and the true definition of every defined
-  /// logical function, for checking a counterexample.
-  struct SpecTruth;
-  std::optional<z3::expr> evalTrue(SpecTruth &Truth, const z3::expr &E);
-  std::optional<z3::expr> evalQuantifier(SpecTruth &Truth, const z3::expr &Q);
-  std::optional<z3::expr> applyTrue(SpecTruth &Truth,
-                                    const LogicFunctionDecl &Function,
-                                    const z3::expr_vector &Args);
-  /// Keep a satisfying model only if it is a counterexample under the true
-  /// definitions; otherwise add the definitions at the disputed points and
-  /// solve again. Sets \p Out to Unresolved when that does not settle it.
-  z3::check_result refineSpecModel(const ObligationModule &Module,
-                                   const z3::expr &Semantics,
-                                   z3::check_result Result, VerifyResult &Out);
+  z3::expr symbol(const std::string &Name, const LogicSort &Sort);
+  z3::func_decl validPointerDecl();
+  /// A literal term for a canonical value of Sort.
+  z3::expr valueTerm(const LogicValue &Value, const LogicSort &Sort);
+  /// A typed load in the integer encoding: the cell reduced into Sort. In a
+  /// query over collections it is a recursive-function definition, so that
+  /// a collection element read from a cell equals a load of that cell by
+  /// congruence, without the reduction's mod under every quantifier
+  /// instance. Elsewhere the reduction is inline: model search over heap
+  /// frames is much faster with it.
+  z3::expr cellValue(const z3::expr &Cell, const LogicSort &Sort);
+  bool CellFunctions = false;
+  /// Per context: each definition with its SMT-LIB text.
+  std::map<std::string, std::pair<z3::func_decl, std::string>> CellDecls;
+  std::set<std::string> UsedCellDecls;
+  z3::expr arrayTerm(const HeapValue &Heap,
+                     const std::function<z3::expr(const CertInt &)> &Cell);
+  std::optional<LogicValue> modelValue(const z3::model &Model,
+                                       const z3::expr &Value,
+                                       const LogicSort &Sort);
+  /// An array model value read cell by cell between the numerals it
+  /// mentions; Decode reads a cell (an integer by default).
+  std::optional<HeapValue> piecewiseHeap(
+      const z3::model &Model, const z3::expr &Value,
+      const std::function<std::optional<CertInt>(const z3::expr &)> &Decode =
+          nullptr);
+  std::optional<HeapValue> heapValue(const z3::model &Model,
+                                     const z3::expr &Value);
+  /// f(args) = definition[args], true of the defined function.
+  std::optional<z3::expr>
+  definitionInstance(const DefinitionInstance &Instance);
+  /// Keep a satisfying model only if the certifier confirms it; otherwise give
+  /// the solver definition instances at the disputed applications and solve
+  /// again. Sets \p Out to Unresolved when that does not settle it.
+  z3::check_result certifyModels(const ObligationModule &Module,
+                                 const LogicExpr &Query,
+                                 z3::check_result Result, VerifyResult &Out);
+  /// The disputes of models at the least and greatest values the solver
+  /// allows for the integer arguments of disputed applications, when it proves
+  /// those values bounded. Covering a bounded domain this way takes a few
+  /// checks instead of one round per value. \p Pin is set instead when such a
+  /// model is a real counterexample.
+  std::vector<SpecDispute>
+  boundedDomainDisputes(const ObligationModule &Module, const LogicExpr &Query,
+                        const CertifyResult &Disputed, const z3::model &Model,
+                        std::chrono::steady_clock::time_point Until,
+                        std::optional<z3::expr> &Pin);
+  friend class Z3CandidateModel;
+  bool defineRecursiveFunctions();
+  bool inlined(const LogicFunctionDecl &Function) const {
+    return NonRecursive.count(Function.Identity);
+  }
+  /// \p Function's definition at \p Args.
+  z3::expr inlineDefinition(const LogicFunctionDecl &Function,
+                            const std::vector<z3::expr> &Args);
+  /// \p Function's definition over fresh parameter constants.
+  std::pair<z3::expr_vector, z3::expr>
+  encodeDefinition(const LogicFunctionDecl &Function);
+  std::optional<VerifyResult>
+  verifyNatively(const ObligationModule &Module, const LogicExpr *Query,
+                 std::optional<uint64_t> TraceEventCount,
+                 VerifyResult &FuelResult);
   z3::expr coerceToSort(z3::expr E, const LogicSort &Target, bool IsSigned);
   void emitSpecCallAxiom(const VCExpr *Call);
 
@@ -102,10 +212,12 @@ class Z3Encoder {
 public:
   Z3Encoder();
   void setTimeoutMs(unsigned Ms) { TimeoutMs = Ms; }
+  void setProofOnly(bool Value) { ProofOnly = Value; }
   void setResourceLimit(unsigned Limit) { ResourceLimit = Limit; }
   void setIntegerEncoding(MachineIntegerEncoding Encoding) {
     IntegerEncoding = Encoding;
   }
+  void setProfileQuantifiers(bool Profile) { ProfileQuantifiers = Profile; }
   /// The encoding the most recently encoded query actually used.
   MachineIntegerEncoding activeIntegerEncoding() const {
     return ActiveEncoding;
@@ -125,10 +237,13 @@ class Z3VerifyBackend : public VerifyBackend {
   uint64_t MaxQueryNodes;
   MachineIntegerEncoding IntegerEncoding;
   bool SkipWholeModuleRetry;
+  bool SingleQuery;
+  bool ProfileQuantifiers;
   std::unique_ptr<ProofCache> Cache;
   bool ReuseVerifiedQueries;
   std::set<std::string> VerifiedQueries;
 
+  VerifyResult verifyModuleDirect(const ObligationModule &Module);
   VerifyResult verifyObligation(const ObligationModule &Module,
                                 const Obligation &Item,
                                 llvm::StringRef SemanticHash = {},
@@ -147,6 +262,12 @@ public:
   /// after the first failure, since later results cannot change it.
   std::vector<VerifyResult> verifyObligations(const ObligationModule &Module,
                                               bool StopAtFailure = false);
+  /// A proof of \p Item, or of the whole module, by strong induction on one
+  /// of its integer variables, if one is found.
+  std::optional<VerifyResult>
+  proveByInduction(const ObligationModule &Module,
+                   const Obligation *Item = nullptr,
+                   std::vector<std::string> *Tried = nullptr);
 
 protected:
   VerifyResult verifyModule(const ObligationModule &Module) override;
