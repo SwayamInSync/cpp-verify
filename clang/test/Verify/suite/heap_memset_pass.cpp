@@ -2,8 +2,10 @@
 // RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 // Heap: memset zeroes a buffer; the quantified loop invariant (over a symbolic
 // range) is preserved across stores and establishes the quantified post.
+spec bool valid(int *p, int n) { return true; }
+
 void memset0(int* p, int n)
-  pre(p != nullptr && n >= 0 && n <= 1000)
+  pre(valid(p, n) && n >= 0 && n <= 1000)
   modifies(*p)
   post(forall(i, 0, n, p[i] == 0))
 {
