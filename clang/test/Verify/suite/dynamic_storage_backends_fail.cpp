@@ -17,5 +17,5 @@ int dynamic_backend_rebinding()
   return 1;
 }
 
-// BMC: error: verification failed: dynamic_backend_rebinding
+// BMC: Unresolved: dynamic_backend_rebinding {{.*}}[reason=construct.unsupported]
 // LEAN: Exported: lean obligation: dynamic_backend_rebinding
