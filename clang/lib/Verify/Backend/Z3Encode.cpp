@@ -1772,8 +1772,19 @@ Z3Encoder::encodeModuleAs(const ObligationModule &Module,
   NativeHidden.clear();
   Inlined.clear();
   NonRecursive.clear();
-  if (NativeRecursion)
+  if (NativeRecursion) {
     NonRecursive = nonRecursiveDefinitions(Module);
+  } else {
+    // A visible non-recursive definition is exact and finite: it replaces
+    // every application, under a quantifier too, as the frontend's inlining
+    // does. Equations at closed applications alone left one applied to a
+    // binder (in a spec's own checks, or in a fact about an application)
+    // uninterpreted.
+    for (const std::string &Identity : nonRecursiveDefinitions(Module))
+      if (auto It = Module.LogicFunctions.find(Identity);
+          It != Module.LogicFunctions.end() && It->second.DefinitionFuel > 0)
+        NonRecursive.insert(Identity);
+  }
   ++EncodingPass;
   ModelVariables.clear();
   MachineVariables.clear();
