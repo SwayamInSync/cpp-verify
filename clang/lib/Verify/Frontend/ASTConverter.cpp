@@ -3738,6 +3738,83 @@ static bool onlyCollectionTemporaries(const ExprWithCleanups *Cleanups) {
   return Cleanups->getNumObjects() == 0 && !Finder.Found;
 }
 
+/// The sequence operations <cppverify.h> defines as specs over the primitive
+/// ones: s.update(i, x) and s.reverse().
+static std::unique_ptr<VFunction> sequenceLibrarySpec(llvm::StringRef Name,
+                                                      SourceLocation Loc) {
+  const VType Seq = VType::makeCollection(VTypeKind::Seq);
+  const VType Int = VType::makeInt(VIntMode::Math, 64, true);
+  auto var = [&](const char *Name, VType Ty) {
+    return std::make_unique<VVarExpr>(Name, Ty, Loc);
+  };
+  auto lit = [&](int64_t Value) {
+    return std::make_unique<VLiteralExpr>(Value, Int, Loc);
+  };
+  auto binary = [&](VBinOp Op, std::unique_ptr<VExpr> L,
+                    std::unique_ptr<VExpr> R, VType Ty) {
+    return std::make_unique<VBinOpExpr>(Op, std::move(L), std::move(R), Ty,
+                                        Loc);
+  };
+  auto operation = [&](const char *Op, VType Ty, auto... Operands) {
+    std::vector<std::unique_ptr<VExpr>> Args;
+    (Args.push_back(std::move(Operands)), ...);
+    return std::make_unique<VSpecCallExpr>(Op, std::string("__cppverify.") + Op,
+                                           std::move(Args), Ty, Loc);
+  };
+  auto length = [&] { return operation("seq.len", Int, var("s", Seq)); };
+
+  auto Fn = std::make_unique<VFunction>();
+  Fn->Name = Name.str();
+  Fn->Identity = ("__cppverify_seq_" + Name).str();
+  Fn->IsSpec = true;
+  Fn->IsBuiltin = true;
+  Fn->IntMode = VIntMode::Math;
+  Fn->ReturnType = Seq;
+  Fn->DeclLoc = Loc;
+  std::unique_ptr<VExpr> Body;
+  if (Name == "update") {
+    // (0 <= i && i < len) ? s[0, i).push(x) + s[i + 1, len) : s
+    Fn->Params = {{"s", Seq}, {"i", Int}, {"x", Int}};
+    auto InRange =
+        binary(VBinOp::And,
+               binary(VBinOp::Le, lit(0), var("i", Int), VType::makeBool()),
+               binary(VBinOp::Lt, var("i", Int), length(), VType::makeBool()),
+               VType::makeBool());
+    auto Replaced = operation(
+        "seq.concat", Seq,
+        operation("seq.push", Seq,
+                  operation("seq.subrange", Seq, var("s", Seq), lit(0),
+                            var("i", Int)),
+                  var("x", Int)),
+        operation("seq.subrange", Seq, var("s", Seq),
+                  binary(VBinOp::Add, var("i", Int), lit(1), Int), length()));
+    Body = std::make_unique<VConditionalExpr>(
+        std::move(InRange), std::move(Replaced), var("s", Seq), Seq, Loc);
+  } else {
+    // len == 0 ? s : reverse(s[1, len)).push(s[0])
+    Fn->Params = {{"s", Seq}};
+    std::vector<std::unique_ptr<VExpr>> Tail;
+    Tail.push_back(
+        operation("seq.subrange", Seq, var("s", Seq), lit(1), length()));
+    auto Reversed =
+        operation("seq.push", Seq,
+                  std::make_unique<VSpecCallExpr>(Fn->Name, Fn->Identity,
+                                                  std::move(Tail), Seq, Loc),
+                  operation("seq.index", Int, var("s", Seq), lit(0)));
+    Body = std::make_unique<VConditionalExpr>(
+        binary(VBinOp::Eq, length(), lit(0), VType::makeBool()), var("s", Seq),
+        std::move(Reversed), Seq, Loc);
+    Fn->Decreases.push_back(length());
+    // Proved with its termination, by induction on the length.
+    Fn->Postconditions.push_back(binary(
+        VBinOp::Eq,
+        operation("seq.len", Int, std::make_unique<VResultExpr>(Seq, Loc)),
+        length(), VType::makeBool()));
+  }
+  Fn->Body.push_back(std::make_unique<VReturnStmt>(std::move(Body), Loc));
+  return Fn;
+}
+
 std::unique_ptr<VExpr> ASTConverter::convertCollection(const Expr *E,
                                                        bool &Handled) {
   Handled = false;
@@ -3822,10 +3899,7 @@ std::unique_ptr<VExpr> ASTConverter::convertCollection(const Expr *E,
     }
   }
   static const std::map<std::string, std::string> Renamed = {
-      {"seq.len", "seq.len"},           {"seq.push", "seq.push"},
-      {"seq.update", "seq.update"},     {"seq.subrange", "seq.subrange"},
-      {"seq.contains", "seq.contains"}, {"set.unite", "set.union"},
-      {"set.subset_of", "set.subset"}};
+      {"set.unite", "set.union"}, {"set.subset_of", "set.subset"}};
   std::string Operation = Kind + "." + Name;
   if (auto It = Renamed.find(Operation); It != Renamed.end())
     Operation = It->second;
@@ -3861,6 +3935,18 @@ std::unique_ptr<VExpr> ASTConverter::convertCollection(const Expr *E,
     }
     return std::make_unique<VSpecCallExpr>("valid", Identity, std::move(Args),
                                            VType::makeBool(), Loc);
+  }
+  if (Operation == "seq.update" || Operation == "seq.reverse") {
+    std::unique_ptr<VFunction> Spec = sequenceLibrarySpec(Name, Loc);
+    if (Args.size() != Spec->Params.size())
+      return nullptr;
+    std::string Identity = Spec->Identity;
+    if (llvm::none_of(BuiltinFunctions,
+                      [&](const auto &Fn) { return Fn->Identity == Identity; }))
+      BuiltinFunctions.push_back(std::move(Spec));
+    return std::make_unique<VSpecCallExpr>(
+        Name, std::move(Identity), std::move(Args),
+        VType::makeCollection(VTypeKind::Seq), Loc);
   }
   if (Name == "==" || Name == "!=") {
     if (Args.size() != 2)
