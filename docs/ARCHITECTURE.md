@@ -478,10 +478,15 @@ Terms added for the R3 language features:
 - `Patterns`: the trigger terms of a quantifier (memory reads, collection
   reads, recursive spec applications). They steer instantiation only and are
   neither serialized nor hashed.
-- `Collection(op, operands)`: one of 26 operations (`seq.push`, `set.union`,
+- `Collection(op, operands)`: one of 25 operations (`seq.push`, `set.union`,
   `multiset.count`, `map.get`, ...), with the total semantics of
   `<cppverify.h>`. Collections of sequences require the `sequences` feature,
-  the others `collections`.
+  the others `collections`. Sequence `update` and `reverse` are not
+  operations: the frontend defines them as specs over the operations
+  (`__cppverify_seq_update`, `__cppverify_seq_reverse`, marked `IsBuiltin`),
+  so they reach every backend as ordinary logical functions, and the
+  driver checks the termination and length postcondition of `reverse` like
+  any recursive spec's, reporting only a failure.
 - A logical function marked `Choice` is a lifted `choose`: uninterpreted,
   with the Hilbert axiom as its postcondition. The certifier reads its
   value from the model, so a claim true only for some choices fails
@@ -507,7 +512,8 @@ expression depth, and total nodes, then revalidates every sort, term, call
 signature, logical declaration, feature bit, and identity. The driver refuses
 to publish a record unless deserialize/validate/reserialize is byte-exact and
 preserves semantic identity. `HeapFrame` has expression tag 38 and
-`Collection` tag 39 (followed by its operation's tag); the collection sorts
+`Collection` tag 39 (followed by its operation's tag, from a fixed table in
+which tag 6, the former sequence update, is reserved); the collection sorts
 `seq`, `set`, `multiset`, and `map` have sort tags 6 to 9. Trigger patterns
 and the `Choice` marker of a logical function are not archived, so a
 replayed module instantiates quantifiers by the solver's own patterns and
@@ -609,7 +615,7 @@ canonical module that lower-only and the selected backend consume.
 | Forall(x, P) | `(forall ((x Int)) P)`; marked triggers become `:pattern`, and the quantifier id is `q@line:col` |
 | HeapFrame(h, h', lo, hi, ...) | `(forall ((a Int)) (or (and (<= lo a) (< a hi)) ... (= (select h' a) (select h a))))` |
 | `s[i]` | `(cppverify.seq_at s i)`, see below |
-| `s.push(x)`, `s + t` | `seq.++`, `seq.unit` |
+| `s.push(x)`, `s + t` | `seq.++`, `seq.unit`, with index facts, see below |
 | `s.subrange(lo, hi)` | `(seq.extract s lo (- hi lo))`, or `(seq.extract s 0 hi)` when `lo < 0`, see below |
 | `a.insert(x)`, `a.unite(b)`, `m.count(x)` | `store`, `set.union`, `(ite (>= c 0) c 0)` over the arrays |
 | Old(x) | `x_entry` (SSA version at function entry) |
@@ -617,16 +623,29 @@ canonical module that lower-only and the selected backend consume.
 | Result | `result_var` (SSA version of return value) |
 
 **Sequence reads.** `s[i]` is `cppverify.seq_at(s, i)`, a recursive-function
-definition `(ite (and (<= 0 i) (< i (seq.len s))) (seq.nth s i) 0)`, plus three
-lemmas that hold by that definition, each with an E-matching pattern:
-`seq_at(a ++ b, k)` reads `a` below `len(a)` and `b` beyond it,
-`seq_at(unit(x), k)` is `x` at 0 and 0 elsewhere, and `seq_at` of an in-range
-`seq.extract` reads the source at the offset. Z3's own `seq.nth` gives
-quantifiers nothing to match (a loop invariant over a pushed sequence stayed
-`unknown` after 30 s, and proves in 3 ms with the lemmas). The definition is a
-recursive-function definition rather than a quantified axiom so that models
-interpret it exactly: model-based instantiation cannot check a quantifier
-over sequences, and every satisfiable query timed out with one.
+definition `(ite (and (<= 0 i) (< i (seq.len s))) (seq.nth s i) 0)`. The
+definition is a recursive-function definition rather than a quantified axiom
+so that models interpret it exactly: model-based instantiation cannot check a
+quantifier over sequences, and every satisfiable query timed out with one.
+
+**Index facts.** Z3's sequence theory decides lengths and word equations, but
+not what an element of a built sequence is: its own `seq.nth` gives
+quantifiers nothing to match. For each closed push, concatenation, and
+subrange term of the query, the adapter asserts beside it the element meaning
+of that term, quantified over the index only and triggered by a read of the
+term: `forall k. seq_at(s.push(x), k) == (k == len(s) ? x : seq_at(s, k))`,
+`seq_at(a ++ b, k)` reads `a` below `len(a)` and `b` beyond, and a subrange
+reads its source at the clamped offset. Each is a theorem of the sequence
+theory, so no verdict can change. The quantifier ranges over an integer, which
+model search can check, and its trigger names a term the program wrote, never
+one Z3 creates while solving word equations. Lemmas quantified over sequences
+(`forall a b k. seq_at(a ++ b, k) == ...`) fired on those internal terms:
+every concatenation proof timed out with them and some counterexamples were
+lost. On a corpus of 102 sequence functions, the index facts verify every
+function the lemmas did and more (78 against 70), keep all 22 certified
+counterexamples, and take 141 s instead of 801 s. A pattern cannot contain
+`ite`, so a term with one (a subrange whose start may be negative, or a term
+built around one) is named by a fresh constant defined as it.
 
 **Subranges.** `seq.extract` already clamps: from a start in `[0, len)` it
 stops at the end, and it is empty from any other start or for a count below
@@ -639,7 +658,12 @@ ground fact beside the query, the theorem that splits it: from a start
 equations rarely find that split themselves (dropping the last element of
 `s + t` took 30 s and now takes 50 ms); a quantified form of the theorem
 would leave satisfiable queries to model-based instantiation, which cannot
-check it.
+check it. The fact is stated once per extract term.
+
+**Membership.** `s.contains(x)` is `seq.contains(s, unit(x))`, and each closed
+membership term receives both directions of its meaning: it implies a read
+of `x` at a fresh witness index in range, and a read of `x` at any index in
+range implies it (triggered by the read).
 
 **Typed loads.** In the integer encoding of a query over collections, a
 typed load is `cppverify.cell_<sort>(select(mem, p))`, a recursive-function
@@ -665,6 +689,20 @@ and the certifier never see them. Instances are taken once (never from other
 instances), at most 16 per quantifier and 50,000 added nodes per query.
 Without them, `forall(k, 0, n, p[k] >= 0)` did not prove `p[2] >= 0` on Z3
 or even `p[0] >= 0` on cvc5.
+
+**Extensionality.** A sequence equality the query refutes (an `a == b` it
+asserts the negation of, or an asserted `a != b`, with no bound variable)
+is joined with its extensionality instance before Z3 encoding
+(`instantiateExtensionality`): `a == b` becomes `a == b || (len(a) ==
+len(b) && forall k in [0, len(a)). a[k] == b[k])`. The two are equivalent,
+and the quantifier occurs negatively, so the solver introduces one witness
+index rather than instantiating it. Z3 then proves an equality from equal
+elements, as Verus's `=~=` and Dafny's sequence equality do, and a stated
+`contract_assert(a == b)` works as a hint. Equalities the query assumes, such
+as ghost assignments, are left alone. cvc5 decides extensionality itself and
+does not receive the instances: in the sequence benchmark, given them
+together with membership witnesses, it returned no model for any false
+claim.
 
 ### Machine-integer encodings
 
@@ -804,7 +842,10 @@ definition and a recursive one becomes a native recursive definition
 (`RecAddDefinition`). Hidden functions are defined there too, so after a
 hidden-spec stop that pass gets only a short slice and its UNSAT is
 `spec.hidden`. cvc5 prints its model after `sat` (`--dump-models`), the same
-certifier checks it, and refinement re-runs cvc5 with the instances within a
+certifier checks it (cvc5 1.1 prints a sequence value last element first,
+`(str.++ (seq.unit 2) (seq.unit 1))` for `[1, 2]`, so the adapter asks each
+cvc5 executable once how it prints a sequence of known order and reads its
+models accordingly), and refinement re-runs cvc5 with the instances within a
 fifth of the budget (at least two seconds). cvc5 does not decide queries over
 recursive definitions, so recursive functions stay declared there; once a
 hidden instance has been given, every non-recursive function is defined whole
@@ -956,7 +997,10 @@ split; `Certified` still means Lean checked every obligation. SAT
 counterexamples are never fallback successes.
 
 Z3-backed execution accepts explicit timeout, deterministic solver-resource,
-canonical query-node, job-count, and proof-cache budgets. Ordered queries run
+canonical query-node, job-count, and proof-cache budgets. A module that
+requires the `sequences` or `collections` feature gets the collection
+timeout (`--collection-timeout`, by default twice `--timeout`) on every
+solver backend. Ordered queries run
 in isolated worker-owned `Z3Encoder` instances and are gathered in source
 order; lowering, archives, dumps, Lean streams, and diagnostics remain serial.
 The compile-time verifier already runs beside CodeGen and keeps the default
@@ -1118,8 +1162,9 @@ metadata, ordered queries, and owned finite-fuel logic declarations.
 Frames print as `heap_frame` with their regions, trigger patterns as
 `trigger` children of their quantifier, and collection operations by name
 (`seq.push : seq`). Layer 4 encodes that same in-memory module, preceded by
-the range facts, bit definitions, and the definitions and lemmas of
-`cppverify.cell_*` and `cppverify.seq_at` that the query uses. The layer mask is parsed by
+the range facts, bit definitions, the definitions of `cppverify.cell_*` and
+`cppverify.seq_at` that the query uses, and the sequence index, split, and
+membership facts. The layer mask is parsed by
 `parseDumpIRLayers` (`1`, `2`,
 `layer-3,4`, `all`, etc.).
 
