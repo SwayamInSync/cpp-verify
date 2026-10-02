@@ -232,6 +232,8 @@ VFunction =
   isExternalContract: bool             // no definition, or trusted: body not verified
   constAddressParams: {name}           // pointers/references to const
   behaviors: [(name, assumes)]         // for the vacuity check
+  inductiveLoc, unfolding: VExpr?      // inductive: the least fixpoint of unfolding
+  inductiveStepOf: string              // the generated step-indexed definition of it
 ```
 
 - Parameter ownership/borrowing is not yet represented by a `ParamMode` field.
@@ -778,10 +780,17 @@ bit-vector definitions before the goal.
 
 **Spec functions → owned logical functions:** while VCR is still available,
 `SpecAxioms` materializes every reachable typed declaration and finite
-definition level into `ObligationModule`. Z3 emits equations only at concrete
-logical call sites. Recursive leaves remain applications of the opaque logical
-function, and `reveal_with_fuel` controls the exact finite depth. Adapters never
-borrow `VFunction` metadata.
+definition level into `ObligationModule`. A visible non-recursive definition
+is exact and finite, so Z3 substitutes it at every application, under a
+quantifier too, and cvc5 receives it as `define-fun`; a recursive one gets
+equations only at concrete logical call sites. Recursive leaves remain
+applications of the opaque logical function, and `reveal_with_fuel` controls
+the exact finite depth. An application's arguments take the integer mode of
+the callee's parameters (mathematical for an explicit spec), not that of its
+result: with the result's mode, a `bool` spec's argument `a + 1` was reduced
+to 32 bits, which proved `!above(a + 1)` for `a == 2147483647` and refuted
+`above(a + 1)` with a false counterexample. Adapters never borrow `VFunction`
+metadata.
 
 **Heap-reading specs:** a spec that reads memory, directly or through another
 spec, becomes a logical function with a leading `__spec_heap` parameter of sort
@@ -805,12 +814,39 @@ each call within the recursion cycle contributes the assumption
 each call of another spec its post, and every return value must satisfy the
 post. Since the facts at lower measures are the induction hypothesis, a
 proof establishes termination and the post together. Passivization then
-assumes `post(t, f(t))` at every application `f(t)` in a function, quantified
-like the application. `when(c)` is desugared in the frontend: the body
+assumes `post(t, f(t))` at every application `f(t)` in a function, the
+preconditions included, quantified like the application. `when(c)` is desugared in the frontend: the body
 becomes `if (c) body else return f.unspecified(params)`, where
 `f.unspecified` is a logical function without a definition (Z3 and cvc5
 declare it; the certifier cannot evaluate it, so a counterexample that needs
 its value is `counterexample.unchecked`), and each post becomes `!c || post`.
+
+**Inductive predicates:** `inductive` on a spec returning `bool` sets
+`VFunction::InductiveLoc`. After conversion the frontend turns the body into
+one condition `F` (returns under `if`/`else`), checks that the predicate
+occurs in it only positively and continuously (conjuncts, disjuncts, `?:`
+branches, `exists`, bounded `forall`; never under negation, in a comparison,
+conversion, condition, argument, quantifier bound, or unbounded `forall`),
+and generates the recursive spec `P.step(h, x)` (`InductiveStepOf`,
+`decreases(h)`, mathematical `h`) with body `h > 0 && F[P(a) := P.step(h -
+1, a)]`. `P`'s body becomes `exists(h, P.step(h, x))`, its true definition,
+and `F` is kept as `VFunction::Unfolding`. `P` is hidden in every function
+that does not `reveal` it, and `specApplicationFacts` assumes `P(t) ==
+F[t]` beside its postconditions at each application, in function bodies
+(`addSpecPostInstances`) and in spec checks (`addSpecPostChecks`); the
+applications inside that instance get none, so each named application
+unfolds once. The equation is a theorem by Kleene's fixpoint theorem, given
+the checked conditions, and is never itself checked. A postcondition `!result
+|| Q` is copied to `P.step`, whose termination check proves it by induction
+on `h` (reported only on failure, as `spec post by induction: P`), and `P`'s
+own post module derives it from `P.step`'s under the existential. A
+predicate reached again through another spec is rejected, since its
+occurrences there escape the positivity check. When neither the
+distinguished values nor Presburger arithmetic decide an unbounded
+quantifier, the certifier tries binder values `0, -1, 1, -2, ...` up to
+`QuantifierProbe` on each side: a value where an `exists` body holds, or a
+`forall` body fails, decides it. This certifies `P(v)` by a derivation
+height; `P(v)` false stays undecided.
 
 **`recommends`:** parsed and stored; not emitted into the main VC. On
 verification failure, a second pass adds `recommends` checks and reports
@@ -912,9 +948,13 @@ below every bound at one residue per period of its divisibility atoms, and
 of `F` at each lower bound plus each such residue (or the same from above,
 whichever side has fewer bounds). A product or quotient of binders, a
 machine operation on a binder, or a spec at a binder is outside the fragment,
-as is a blowup beyond 200,000 nodes; that counterexample stays
-`counterexample.unchecked`. Unit tests cross-check the decisions against Z3
-on random sentences.
+as is a blowup beyond 200,000 nodes. An unbounded quantifier outside the
+fragment is still decided by a witness: binder values `0, -1, 1, -2, ...`
+are tried, up to `QuantifierProbe` on each side, and one where an `exists`
+body holds or a `forall` body fails settles it (with the outer binder fixed,
+an inner quantifier often becomes linear). Otherwise the counterexample
+stays `counterexample.unchecked`. Unit tests cross-check the decisions
+against Z3 on random sentences.
 
 `--profile-quantifiers` reruns a quantified Z3 query that stayed unresolved
 with `qi.profile`, one rerun at a time, capturing what Z3 writes to file
