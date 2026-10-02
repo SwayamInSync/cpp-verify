@@ -208,15 +208,46 @@ std::optional<LogicExpr::Kind> expressionFromTag(uint8_t Tag) {
   }
 }
 
-// One more than the operation's position, so that 0 is never a tag.
+// Tag 6 was the sequence update, now a spec over the other operations.
+constexpr std::pair<LogicCollectionOp, uint8_t> CollectionTags[] = {
+    {LogicCollectionOp::SeqEmpty, 1},
+    {LogicCollectionOp::SeqUnit, 2},
+    {LogicCollectionOp::SeqLength, 3},
+    {LogicCollectionOp::SeqIndex, 4},
+    {LogicCollectionOp::SeqPush, 5},
+    {LogicCollectionOp::SeqSubrange, 7},
+    {LogicCollectionOp::SeqConcat, 8},
+    {LogicCollectionOp::SeqContains, 9},
+    {LogicCollectionOp::SetEmpty, 10},
+    {LogicCollectionOp::SetInsert, 11},
+    {LogicCollectionOp::SetRemove, 12},
+    {LogicCollectionOp::SetContains, 13},
+    {LogicCollectionOp::SetUnion, 14},
+    {LogicCollectionOp::SetIntersect, 15},
+    {LogicCollectionOp::SetDifference, 16},
+    {LogicCollectionOp::SetSubset, 17},
+    {LogicCollectionOp::MultisetEmpty, 18},
+    {LogicCollectionOp::MultisetInsert, 19},
+    {LogicCollectionOp::MultisetRemove, 20},
+    {LogicCollectionOp::MultisetCount, 21},
+    {LogicCollectionOp::MapEmpty, 22},
+    {LogicCollectionOp::MapInsert, 23},
+    {LogicCollectionOp::MapRemove, 24},
+    {LogicCollectionOp::MapContains, 25},
+    {LogicCollectionOp::MapGet, 26}};
+
 uint8_t collectionTag(LogicCollectionOp Op) {
-  return static_cast<uint8_t>(Op) + 1;
+  for (const auto &[Candidate, Tag] : CollectionTags)
+    if (Candidate == Op)
+      return Tag;
+  return 0;
 }
 
 std::optional<LogicCollectionOp> collectionFromTag(uint8_t Tag) {
-  if (Tag == 0 || Tag > static_cast<uint8_t>(LogicCollectionOp::MapGet) + 1)
-    return std::nullopt;
-  return static_cast<LogicCollectionOp>(Tag - 1);
+  for (const auto &[Op, Candidate] : CollectionTags)
+    if (Candidate == Tag)
+      return Op;
+  return std::nullopt;
 }
 
 uint8_t overflowTag(LogicOverflowOp Op) {
