@@ -22,11 +22,13 @@ add_clang_library(clangVerify
   IR/VStmt.cpp
   Frontend/ASTConverter.cpp
   Transform/Passivize.cpp
+  Transform/Origins.cpp
   Transform/Ownership.cpp
   Transform/LoopUnroll.cpp
   Transform/SpecInline.cpp
   Transform/UBChecks.cpp
   Backend/Certify.cpp
+  Backend/Presburger.cpp
   Backend/Obligation.cpp
   Backend/ObligationSimplify.cpp
   Backend/ObligationSerialization.cpp
