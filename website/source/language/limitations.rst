@@ -31,7 +31,14 @@ Meaning of a result
 
 ``Verified`` means the selected backend proved the generated verification
 condition. It does not certify uncontracted functions, linked libraries, the
-operating system, or any explicit external contract.
+operating system, or any contract marked ``[[cppverify::trusted]]``. Proofs
+are of total correctness: every executable loop needs ``decreases``. A proof
+that holds only for terminating executions (after ``decreases(*)``) is marked
+``[partial]``, one that relies on a trusted contract ``[trusts=f]``, and one
+that no execution reaches ``[vacuous]``. A caller whose proof relies on a
+callee contract that is neither established by the callee's own verification
+nor marked trusted (including a contract without a definition) is
+``Unresolved`` with reason ``callee.contract``.
 
 Distinct pointer/reference address parameters are **non-aliasing by default**
 whenever at least one pointee or referent is mutable. CppVerify generates a
@@ -56,13 +63,18 @@ The most mature current fragment includes:
 - free functions over booleans, enums, and target-width integers;
 - mathematical ``spec`` functions connected to machine-integer code;
 - ``if``, conventional ``while``/``for``, contracted ``do`` loops, loop
-  invariants, and ``decreases``;
+  invariants, loop ``modifies``, and ``decreases`` (required on executable
+  loops; ``decreases(*)`` opts out);
 - direct recursion with a well-founded termination measure;
-- ``pre``, ``post``, ``old``, ``result``, ``modifies``, and ``aliases``;
+- ``pre``, ``post``, ``old``, ``result``, ``modifies`` (cells, ranges
+  ``p[lo : n]``, and regions), ``aliases``, and ACSL-style behaviors;
 - scalar ``T&``/``const T&`` parameters with address-preserving reads, writes,
   contracts, and direct forwarding;
-- proof functions, ghost code, bounded quantifiers, and controlled recursive
-  unfolding;
+- proof functions, ghost code and ghost locals, ``contract_assert ... by``
+  and ``calc``, bounded and unbounded quantifiers with triggers, ``choose``,
+  spec collections (``seq``, ``set``, ``multiset``, ``map``), and controlled
+  recursive unfolding;
+- mutable scalar integral globals and integral ``const`` globals;
 - flat trivial standard-layout records with scalar fields;
 - fixed local arrays and promoted trivial local records with nested record,
   pointer, and fixed-array members;
@@ -110,16 +122,17 @@ C++ feature boundaries
      - Non-trivial, inherited, polymorphic, union, and bit-field records, and
        nested/pointer/array-bearing records used by value.
    * - Functions
-     - Free functions, overloads, namespaces, contracts, direct calls, and
-       scalar-state direct recursion.
-     - Member functions, templates, variadics, indirect calls, mutual
-       recursion, heap-mutating executable recursion, and general link-time
-       summaries.
+     - Free functions, overloads, namespaces, contracts, direct calls,
+       scalar-state direct and mutual recursion, with mutual recursion among
+       functions of one kind (spec, proof, or executable).
+     - Member functions, templates, variadics, indirect calls,
+       heap-mutating executable recursion, and general link-time summaries.
    * - Storage
      - Supported locals, constrained scalar dynamic storage, and inferred
        acyclic fresh-owned scalar factory results.
-     - Globals, static locals, thread-local storage, general returned
-       allocations, and user-declared modular allocation effects.
+     - Non-integral or aggregate globals, static locals, thread-local storage,
+       general returned allocations, and user-declared modular allocation
+       effects.
    * - Structured control flow
      - ``if`` (including C++17 initializer), conventional ``while``/``for``,
        contracted ``do`` loops, blocks, ``return`` (also inside loops), and
@@ -165,11 +178,13 @@ Abstract pointer parameters
 Typed pointer arithmetic uses mathematical target-byte addresses: every ``T*``
 step is multiplied by Clang's target ``sizeof(T)``, and fields use the target
 record-layout byte offset. Supported code can reason about ``*p``, ``p[i]``,
-``*(p + i)``, exact footprints such as ``modifies(p[i])``, and region
-footprints such as ``modifies(*p)``.
+``*(p + i)``, exact footprints such as ``modifies(p[i])``, ranges such as
+``modifies(p[lo : n])``, and region footprints such as ``modifies(*p)``.
 
-With ``--check-ub``, a syntactically restricted ``valid(p, n)`` precondition
-declares an abstract extent. It remains a caller promise rather than evidence
+Memory accesses are checked by default (``--no-check-ub`` turns it off). A
+pointer without a declared extent addresses one object; accesses and pointer
+arithmetic must stay in it. A syntactically restricted ``valid(p, n)``
+precondition declares an abstract extent. It remains a caller promise rather than evidence
 derived from a concrete caller allocation; it does not supply general lifetime,
 alignment, provenance, or initialization. Bounds follow exact conditional and
 short-circuit evaluation, and fresh represented storage is kept disjoint from
@@ -179,6 +194,11 @@ For pairs involving mutable pointees, CppVerify adds a generated
 complete-object disjointness precondition. ``aliases(p, q)`` opts a pair into
 same-object aliasing; it does not establish arbitrary partial overlap or create
 provenance.
+
+A returned pointer must be dereferenceable: the implicit postcondition that
+callers rely on rejects a one-past-the-end result. ``valid`` is an ordinary
+user-declared spec, so a program declares one per pointee type it uses
+(``valid(int *, int)``, ``valid(const int *, int)``).
 
 Scalar lvalue references and automatic locals
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -274,17 +294,19 @@ Modular calls and effects
 -------------------------
 
 Calls assert callee preconditions, apply declared effects, and assume
-postconditions. Exact footprints such as ``modifies(p[i])`` and
-``modifies(p->field)`` preserve other addresses. An open region
-``modifies(*p)`` may conservatively forget the whole value heap at an abstract
-call because its finite extent is unknown.
+postconditions. A call changes only the cells of its footprints: exact cells
+such as ``modifies(p[i])`` and ``modifies(p->field)``, ranges
+``p[lo : n]``, and regions ``modifies(*p)``, which are the argument's
+``valid`` extent or one object. A pointer-taking callee without ``modifies``
+that may write memory forgets the whole value heap, as does a region
+footprint under ``--no-check-ub``.
 
-With ``--check-ub``, a callee ``valid(q, length)`` extent can be instantiated
-from a caller ``valid(p, n)`` extent only after proving a same-root,
-nonnegative subrange contained in ``[0, n]``. Empty one-past slices, transitive
-read-only forwarding, and exact-cell slice writes are supported. Symbolic
-writable-range summaries and unbounded region writes through a sub-slice remain
-fail-closed.
+A callee ``valid(q, length)`` extent can be instantiated from a caller
+``valid(p, n)`` extent only after proving a same-root, nonnegative subrange
+contained in ``[0, n]``. Empty one-past slices, transitive read-only
+forwarding, exact-cell and range writes, and region writes through a
+sub-slice are supported; every cell outside the written slice keeps its
+value.
 
 Checked local dynamic identities can cross a narrow scalar call/return boundary
 when the caller owns the identity. Body-derived fresh-owned returns additionally
@@ -294,9 +316,10 @@ include general allocation/deallocation contracts, parameter ownership
 transfer, escape sets, separate read footprints, global state, exceptional
 cleanup, lock state, and concurrency interference.
 
-External contracts are trusted interfaces. CppVerify checks callers against
-their preconditions but cannot prove an unavailable implementation satisfies
-its postconditions or frame.
+Contracts marked ``[[cppverify::trusted]]`` are assumed. CppVerify checks
+callers against their preconditions but cannot prove an unavailable or
+unverified implementation satisfies its postconditions or frame; every proof
+that relies on one names it in ``[trusts=...]``.
 
 Specifications, recursion, and induction
 ----------------------------------------
@@ -313,13 +336,41 @@ have different jobs; increasing fuel is not a proof for all inputs.
 Current proof-language limitations include:
 
 - no first-class ``induction`` syntax generating explicit base/step obligations;
-- no ``calc``-style equational chains or named rewrite sets;
-- bounded quantifiers only, without user trigger syntax or trigger profiling;
+- no named rewrite sets (``calc`` chains and ``contract_assert ... by`` are
+  supported);
+- an unbounded quantifier's counterexample is checked when its body depends
+  on the bound variable through memory and collection reads and comparisons;
+  otherwise it is ``counterexample.unchecked``. ``choose`` is uninterpreted
+  apart from its Hilbert axiom;
+- spec collections hold mathematical integers only (no nested collections or
+  records), cvc5 decides only sequences, and Lean none;
 - user-written loop invariants, with no candidate-invariant/Houdini pass;
-- no automatic termination-measure or lemma discovery;
-- no ``reads`` frames for heap-reading specs (preservation across unrelated
-  writes needs unfolding), and no aggregate-returning specs;
-- no mutual recursion for spec/proof/executable functions.
+- no automatic termination-measure or lemma discovery. Strong induction on one
+  integer variable, everything else fixed and the goal itself as hypothesis,
+  is tried automatically; a property whose recursion changes another argument,
+  or whose step needs a stronger statement, needs an induction lemma (a
+  recursive ``proof`` function);
+- bounded domains are settled by evaluating the definitions across them, which
+  reaches about a thousand values at the default budget; larger ones need a
+  lemma;
+- a spec's termination cannot use the spec's own definition: a nested call
+  such as ``f(f(n - 1))`` whose argument is smaller only because of what ``f``
+  returns needs a ``post`` on ``f`` stating it, which is proved with the
+  termination by induction on the measure;
+- a counterexample whose bounded quantifier ranges over millions of values is
+  checked when the body depends on the bound variable only through loads and
+  comparisons of polynomials (degree up to eight) in it, machine arithmetic
+  included where it provably never wraps over the range; otherwise, as with
+  division, wrapping arithmetic, or a spec applied to the bound variable, it
+  may be reported as ``counterexample.unchecked`` instead of a failure;
+- a heap-reading spec without a ``reads`` clause is not framed: preservation
+  across an unrelated write needs unfolding. A ``reads`` range is a pointer
+  and an element count; ranges that depend on the heap, such as a linked list,
+  are not supported, and frames are not carried across loops or calls that
+  do not name their written cells exactly;
+- no aggregate-returning specs;
+- mutual recursion only among functions of one kind (spec, proof, or
+  executable) sharing a measure of one length.
 - no heap-mutating executable recursion: stores, allocation/deallocation, and
   separate heap-modifying calls fail the termination check conservatively.
 
@@ -334,9 +385,11 @@ division/remainder, invalid shifts, non-null/live represented dereferences,
 supported local definite initialization, and local scalar dynamic lifetime
 errors.
 
-``--check-ub`` additionally adds the restricted ``valid(p, n)`` extent layer
-for buffer accesses, modular sub-slices, and same-array pointer positions. It
-is not yet comprehensive C++ undefined-behavior checking.
+Memory checking (the default, off with ``--no-check-ub``) adds object
+bounds: an access or pointer step stays in the ``valid(p, n)`` extent or the
+single object a pointer addresses, across modular sub-slices and same-array
+pointer positions. Enumeration conversions must land in the enumeration's
+value range. It is not yet comprehensive C++ undefined-behavior checking.
 
 Missing general UB semantics include object provenance outside the represented
 fragment, strict aliasing, arbitrary alignment, unsequenced side effects and
@@ -365,8 +418,9 @@ Important missing optimizations and tactics are:
 #. source-level path/heap/provenance counterexamples instead of raw SSA models;
 #. content-addressed proof caching and affected-function invalidation;
 #. parallel per-function solving in the standalone tool;
-#. induction and ``calc`` proof ergonomics;
-#. quantifier trigger inference, manual override, and profiling;
+#. first-class induction syntax;
+#. trigger inference reported to the user (manual ``trigger`` marks and
+   ``--profile-quantifiers`` exist);
 #. candidate invariants with Houdini-style elimination;
 #. solver-resource stability measurement across seeds;
 #. broader portfolio model extraction and optional CHC/PDR invariant discovery.
@@ -387,14 +441,19 @@ concurrency schedules, solver-state push/pop reuse, and broad runtime semantics
 remain future work.
 
 **cvc5 and strict portfolio** consume the same canonical obligations as Z3
-through an independent SMT-LIB2 emitter. cvc5 is optional, system-installed,
-and currently supplies verdicts rather than source-level models. Strict
-portfolio mode requires matching decisive results and preserves Z3's model only
-after both solvers report ``sat``. cvc5 may return ``unknown`` on quantified or
-heap-heavy formulas that Z3 solves; strict mode then remains ``Unresolved``.
-Without a model, cvc5 cannot check a ``sat`` against a recursive spec applied
-beyond its fuel, so it reports ``spec.fuel``; strict mode accepts that beside a
-Z3 counterexample checked against the definitions.
+through an independent SMT-LIB2 emitter. cvc5 is optional and system-installed;
+its models are checked against the definitions like Z3's but are not yet shown
+as source-level values. Strict portfolio mode requires matching decisive
+results and preserves Z3's model only after both solvers produce checked
+counterexamples. cvc5 may return ``unknown`` on quantified or heap-heavy
+formulas that Z3 solves; strict mode then remains ``Unresolved``. Recursive
+specs are weaker on cvc5: it computes closed applications and checks its
+counterexamples against the definitions, but native recursive definitions and
+bounded-domain coverage are Z3 only, so cvc5 settles fewer such queries. Use Z3
+for recursive specs. cvc5 decides sequences but reports sets, multisets, and
+maps as ``logic.unsupported``: its set theory is finite, which would prove
+facts false of an infinite set. In a forced bit-vector encoding cvc5 does not
+relate exact contract arithmetic to bit-vectors as well as Z3.
 BMC-transformed archive replay still uses the Z3-backed BMC aggregator.
 
 **Lean** consumes the same typed canonical obligation as Z3. Standalone export
@@ -404,8 +463,8 @@ quantifier, overflow, and finite spec-fuel theories, plus one source-attributed
 goal per ordered obligation. Generated files are separated from preserved user
 lemmas/proofs. The pinned admission-free kernel path reports ``Certified`` only
 after every active proof checks and rejects user axiom/opaque shortcuts.
-``--check-ub`` buffer extents are lowered on this path as well as on
-Z3/cvc5/portfolio/BMC.
+Memory checks are lowered on this path as well as on Z3/cvc5/portfolio/BMC.
+Spec collections are not supported on Lean (``logic.unsupported``).
 Automation, proof ergonomics, semantic simplification, dependency-aware
 caching, and broader future C++ theories remain incomplete.
 
@@ -429,12 +488,13 @@ Libraries and real programs
 ---------------------------
 
 CppVerify does not yet ship comprehensive libc or C++ standard-library models.
-An uncontracted call fails closed; an explicit external contract is trusted.
+An uncontracted call fails closed; a contract is assumed only when it is
+marked ``[[cppverify::trusted]]``.
 
 Broader application verification needs:
 
 - memory/string primitives such as ``memcpy``, ``memmove``, and ``memset``;
-- mathematical sequence/set/map views for contracts;
+- views of standard containers as the spec collections of ``<cppverify.h>``;
 - ``std::array``, ``std::span``, smart pointers, optionals, and string views;
 - vectors, strings, associative containers, iterators, invalidation, and
   allocator effects;
