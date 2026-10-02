@@ -22,7 +22,7 @@ int invalid_nonterminating_exec(int n)
 }
 
 // VERIFY-DAG: Verified: valid_countdown
-// VERIFY-DAG: error: decreases failed: invalid_nonterminating_exec
+// VERIFY-DAG: error: verification failed: invalid_nonterminating_exec [{{.*}}::termination@
 
 // LOWER-DAG: Lowered: valid_countdown
 // LOWER-DAG: Lowered: invalid_nonterminating_exec
