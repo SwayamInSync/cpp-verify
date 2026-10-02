@@ -1,5 +1,6 @@
 //===--- Passivize.cpp ----------------------------------------------------===//
 #include "Passivize.h"
+#include "Origins.h"
 #include "SpecInline.h"
 #include "UBChecks.h"
 #include "llvm/ADT/APInt.h"
@@ -194,9 +195,13 @@ static std::unique_ptr<VExpr> cloneExprImpl(const VExpr *E,
   case VExpr::Var: {
     const auto *V = static_cast<const VVarExpr *>(E);
     std::string Name = V->Name;
-    if (Ctx.BoundVars.count(Name))
-      return std::make_unique<VVarExpr>(Name, V->Ty, V->Loc,
-                                        V->ProvenanceVariable);
+    if (Ctx.BoundVars.count(Name)) {
+      auto Copy = std::make_unique<VVarExpr>(Name, V->Ty, V->Loc,
+                                             V->ProvenanceVariable);
+      Copy->Origins = V->Origins;
+      Copy->OriginCompanion = V->OriginCompanion;
+      return Copy;
+    }
     if (Ctx.UseOldState) {
       if (auto It = Ctx.OldState.find(Name); It != Ctx.OldState.end())
         return cloneExpr(It->second.get(), CloneCtx{Ctx.Renames, Ctx.OldState,
@@ -204,8 +209,11 @@ static std::unique_ptr<VExpr> cloneExprImpl(const VExpr *E,
     }
     if (auto It = Ctx.Renames.find(Name); It != Ctx.Renames.end())
       Name = It->second;
-    return std::make_unique<VVarExpr>(
+    auto Copy = std::make_unique<VVarExpr>(
         Name, V->Ty, V->Loc, stateVariableName(Ctx, V->ProvenanceVariable));
+    Copy->Origins = V->Origins;
+    Copy->OriginCompanion = V->OriginCompanion;
+    return Copy;
   }
   case VExpr::BinOp: {
     const auto *B = static_cast<const VBinOpExpr *>(E);
@@ -446,6 +454,7 @@ static std::unique_ptr<VExpr> combineSafety(std::unique_ptr<VExpr> L,
 struct SafetyCheck {
   ProofObligationKind Kind;
   std::unique_ptr<VExpr> Cond;
+  std::string Note = {};
 };
 using SafetyChecks = std::vector<SafetyCheck>;
 
@@ -844,9 +853,78 @@ scaledExtent(const VExpr *Length, uint64_t PointeeSize, SourceLocation Loc) {
       pointerOffsetType(), Loc);
 }
 
+/// Pointer lies in the closed byte range of the object its origin names:
+/// a parameter's entry object (its declared extent, else one element) or a
+/// global. Null when an origin is not such an object.
+static std::unique_ptr<VExpr>
+originPositionSafety(const VExpr *Pointer,
+                     const std::vector<VValidExtent> &Extents,
+                     SourceLocation Loc) {
+  auto Origins = pointerOrigins(Pointer);
+  const uint64_t Stride = Pointer->Ty.PointeeSizeBytes;
+  if (!Origins || Origins->empty() || Stride == 0 ||
+      hasPointerProvenance(Pointer))
+    return nullptr;
+  auto Term = Origins->size() > 1 ? pointerOriginTerm(Pointer) : nullptr;
+  if (Origins->size() > 1 && !Term)
+    return nullptr;
+  std::unique_ptr<VExpr> Any = makeBoolLiteral(false, Loc);
+  for (const std::string &Origin : *Origins) {
+    std::unique_ptr<VExpr> Start;
+    std::unique_ptr<VExpr> Bytes;
+    if (isGlobalOrigin(Origin)) {
+      auto [Address, Size] = globalOriginExtent(Origin);
+      Start = std::make_unique<VLiteralExpr>(Address, Pointer->Ty, Loc);
+      Bytes = std::make_unique<VLiteralExpr>(std::to_string(Size),
+                                             pointerOffsetType(), Loc);
+    } else {
+      VType PointerType = Pointer->Ty;
+      Start = std::make_unique<VOldExpr>(
+          std::make_unique<VVarExpr>(Origin, PointerType, Loc), PointerType,
+          Loc);
+      const VValidExtent *Extent = nullptr;
+      for (const VValidExtent &Candidate : Extents)
+        if (Candidate.Base == Origin)
+          Extent = &Candidate;
+      if (Extent && Extent->PointerType.PointeeSizeBytes != Stride)
+        return nullptr;
+      if (Extent) {
+        VOldExpr Length(cloneVExpr(Extent->Length.get()), Extent->Length->Ty,
+                        Loc);
+        Bytes = scaledExtent(&Length, Stride, Loc);
+      } else {
+        Bytes = std::make_unique<VLiteralExpr>(std::to_string(Stride),
+                                               pointerOffsetType(), Loc);
+      }
+      if (!Bytes)
+        return nullptr;
+    }
+    auto End =
+        std::make_unique<VBinOpExpr>(VBinOp::Add, cloneVExpr(Start.get()),
+                                     std::move(Bytes), Pointer->Ty, Loc);
+    auto In = makeAnd(
+        std::make_unique<VBinOpExpr>(VBinOp::Le, std::move(Start),
+                                     cloneVExpr(Pointer), VType::makeBool(),
+                                     Loc),
+        std::make_unique<VBinOpExpr>(VBinOp::Le, cloneVExpr(Pointer),
+                                     std::move(End), VType::makeBool(), Loc),
+        Loc);
+    if (Term)
+      In = makeAnd(
+          makeEq(cloneVExpr(Term.get()), originIdentity(Origin, Loc), Loc),
+          std::move(In), Loc);
+    Any = makeOr(std::move(Any), std::move(In), Loc);
+  }
+  return Any;
+}
+
 static std::unique_ptr<VExpr> pointerPositionSafety(
     const VExpr *Pointer, const std::vector<VValidExtent> *ValidExtents,
-    const std::set<std::string> *PointerParams, SourceLocation Loc) {
+    const std::set<std::string> *PointerParams,
+    const std::vector<VValidExtent> *OriginExtents, SourceLocation Loc) {
+  if (OriginExtents)
+    if (auto ByOrigin = originPositionSafety(Pointer, *OriginExtents, Loc))
+      return ByOrigin;
   const VExpr *Base = pointerBase(Pointer);
   if (!Base || Base->K != VExpr::Var || Pointer->Ty.PointeeSizeBytes == 0)
     return makeBoolLiteral(false, Loc);
@@ -1473,23 +1551,51 @@ static std::unique_ptr<VExpr> samePointerRegion(const VExpr *L, const VExpr *R,
   return makeEq(cloneVExpr(LBase), cloneVExpr(RBase), Loc);
 }
 
-static std::unique_ptr<VExpr> samePointerDifferenceOrigin(const VExpr *L,
-                                                          const VExpr *R,
-                                                          SourceLocation Loc) {
+/// The obligation that two pointers being subtracted address one object.
+/// Local and dynamic storage carries its lifetime identity, so a mismatch
+/// there is a pointer-difference error. Pointers into the objects of
+/// parameters or globals have the origins annotatePointerOrigins found;
+/// different origins may still lie in one caller array, which the object
+/// model does not describe, so that requirement is unsupported, not an
+/// error.
+static constexpr const char *DifferentObjectsNote =
+    "the operands of this pointer difference may address the objects of "
+    "different parameters or globals, which may be one caller array; "
+    "contracts cannot state that";
+static constexpr const char *UnknownOriginNote =
+    "an operand of this pointer difference was loaded from memory or "
+    "returned by a call, so the object it addresses is not known";
+
+static std::pair<ProofObligationKind, std::unique_ptr<VExpr>>
+samePointerDifferenceOrigin(const VExpr *L, const VExpr *R,
+                            SourceLocation Loc) {
   auto LProvenance = pointerProvenance(L);
   auto RProvenance = pointerProvenance(R);
   if (LProvenance && RProvenance)
-    return makeEq(std::move(LProvenance), std::move(RProvenance), Loc);
+    return {ProofObligationKind::PointerDifference,
+            makeEq(std::move(LProvenance), std::move(RProvenance), Loc)};
   if (LProvenance || RProvenance)
-    return makeBoolLiteral(false, Loc);
+    return {ProofObligationKind::PointerDifference,
+            makeBoolLiteral(false, Loc)};
 
   const VExpr *LBase = pointerBase(L);
   const VExpr *RBase = pointerBase(R);
-  if (!LBase || !RBase || LBase->K != VExpr::Var || RBase->K != VExpr::Var)
-    return makeBoolLiteral(false, Loc);
-  const auto *LVar = static_cast<const VVarExpr *>(LBase);
-  const auto *RVar = static_cast<const VVarExpr *>(RBase);
-  return makeBoolLiteral(LVar->Name == RVar->Name, Loc);
+  if (LBase && RBase && LBase->K == VExpr::Var && RBase->K == VExpr::Var &&
+      static_cast<const VVarExpr *>(LBase)->Name ==
+          static_cast<const VVarExpr *>(RBase)->Name)
+    return {ProofObligationKind::PointerDifference, makeBoolLiteral(true, Loc)};
+  auto LOrigin = pointerOriginTerm(L);
+  auto ROrigin = pointerOriginTerm(R);
+  if (!LOrigin || !ROrigin)
+    return {ProofObligationKind::Unsupported, makeBoolLiteral(false, Loc)};
+  if (LOrigin->K == VExpr::Literal && ROrigin->K == VExpr::Literal)
+    return {
+        ProofObligationKind::Unsupported,
+        makeBoolLiteral(static_cast<const VLiteralExpr &>(*LOrigin).Value ==
+                            static_cast<const VLiteralExpr &>(*ROrigin).Value,
+                        Loc)};
+  return {ProofObligationKind::Unsupported,
+          makeEq(std::move(LOrigin), std::move(ROrigin), Loc)};
 }
 
 /// Whether a footprint is the whole object its pointer addresses, rather
@@ -1697,13 +1803,14 @@ static std::unique_ptr<VExpr> initializedSafety(const VExpr *Ptr,
 }
 
 static void addSafety(SafetyChecks &Out, ProofObligationKind Kind,
-                      std::unique_ptr<VExpr> Cond, SourceLocation Loc) {
+                      std::unique_ptr<VExpr> Cond, SourceLocation Loc,
+                      std::string Note = "") {
   if (!Cond)
     Cond = makeBoolLiteral(false, Loc);
   if (Cond->K == VExpr::Literal && Cond->Ty.Kind == VTypeKind::Bool &&
       static_cast<const VLiteralExpr &>(*Cond).Value == "1")
     return;
-  Out.push_back({Kind, std::move(Cond)});
+  Out.push_back({Kind, std::move(Cond), std::move(Note)});
 }
 
 /// One conjunction per kind, in order of first occurrence, so an expression
@@ -1721,6 +1828,8 @@ static void groupByKind(SafetyChecks &Checks) {
     const SourceLocation Loc = Same->Cond->Loc;
     Same->Cond =
         combineSafety(std::move(Same->Cond), std::move(Check.Cond), Loc);
+    if (Same->Note.empty())
+      Same->Note = std::move(Check.Note);
   }
   Checks = std::move(Grouped);
 }
@@ -1730,18 +1839,23 @@ static void appendGuardedSafety(SafetyChecks &Out, SafetyChecks Checks,
   groupByKind(Checks);
   for (SafetyCheck &Check : Checks)
     Out.push_back({Check.Kind,
-                   makeImplies(cloneVExpr(Guard), std::move(Check.Cond), Loc)});
+                   makeImplies(cloneVExpr(Guard), std::move(Check.Cond), Loc),
+                   std::move(Check.Note)});
 }
 
-static void collectSafety(const VExpr *E, const FunctionMap *FnMap,
-                          const std::vector<VValidExtent> *ValidExtents,
-                          const std::set<std::string> *PointerParams,
-                          SafetyChecks &Out, bool ObjectModel = false) {
+static void
+collectSafety(const VExpr *E, const FunctionMap *FnMap,
+              const std::vector<VValidExtent> *ValidExtents,
+              const std::set<std::string> *PointerParams, SafetyChecks &Out,
+              bool ObjectModel = false,
+              const std::vector<VValidExtent> *OriginExtents = nullptr) {
   auto Collect = [&](const VExpr *Sub, SafetyChecks &Into) {
-    collectSafety(Sub, FnMap, ValidExtents, PointerParams, Into, ObjectModel);
+    collectSafety(Sub, FnMap, ValidExtents, PointerParams, Into, ObjectModel,
+                  OriginExtents);
   };
   if (!E) {
-    addSafety(Out, ProofObligationKind::Unsupported, nullptr, SourceLocation());
+    addSafety(Out, ProofObligationKind::Unsupported, nullptr, SourceLocation(),
+              "an expression the verifier could not lower");
     return;
   }
   switch (E->K) {
@@ -1773,16 +1887,21 @@ static void collectSafety(const VExpr *E, const FunctionMap *FnMap,
                 makeAnd(nonNullSafety(LeftBase, B->Loc, ObjectModel),
                         nonNullSafety(RightBase, B->Loc, ObjectModel), B->Loc),
                 B->Loc);
-      addSafety(Out, ProofObligationKind::PointerDifference,
-                samePointerDifferenceOrigin(B->Lhs.get(), B->Rhs.get(), B->Loc),
-                B->Loc);
+      auto [OriginKind, SameOrigin] =
+          samePointerDifferenceOrigin(B->Lhs.get(), B->Rhs.get(), B->Loc);
+      const bool Known =
+          pointerOriginTerm(B->Lhs.get()) && pointerOriginTerm(B->Rhs.get());
+      addSafety(Out, OriginKind, std::move(SameOrigin), B->Loc,
+                OriginKind != ProofObligationKind::Unsupported ? ""
+                : Known ? DifferentObjectsNote
+                        : UnknownOriginNote);
       addSafety(Out, ProofObligationKind::Bounds,
                 pointerPositionSafety(B->Lhs.get(), ValidExtents, PointerParams,
-                                      B->Loc),
+                                      OriginExtents, B->Loc),
                 B->Loc);
       addSafety(Out, ProofObligationKind::Bounds,
                 pointerPositionSafety(B->Rhs.get(), ValidExtents, PointerParams,
-                                      B->Loc),
+                                      OriginExtents, B->Loc),
                 B->Loc);
     }
     if (B->Op == VBinOp::Shl || B->Op == VBinOp::Shr) {
@@ -1948,19 +2067,25 @@ static void collectSafety(const VExpr *E, const FunctionMap *FnMap,
     if (It == FnMap->end() || !It->second->RequiresCallDefinedness)
       return;
     if (It->second->NeedsDecreasesCheck) {
-      addSafety(Out, ProofObligationKind::Unsupported, nullptr, C->Loc);
+      addSafety(Out, ProofObligationKind::Unsupported, nullptr, C->Loc,
+                "the C++ definedness of a call of the recursive constexpr "
+                "function " +
+                    It->second->Name + " is not checked");
       return;
     }
     auto Expanded = SpecInliner(*FnMap, {}).inlineExpr(cloneVExpr(C));
     if (!Expanded || Expanded->K == VExpr::SpecCall) {
-      addSafety(Out, ProofObligationKind::Unsupported, nullptr, C->Loc);
+      addSafety(Out, ProofObligationKind::Unsupported, nullptr, C->Loc,
+                "the call of the constexpr function " + It->second->Name +
+                    " could not be unfolded to check its C++ definedness");
       return;
     }
     Collect(Expanded.get(), Out);
     return;
   }
   }
-  addSafety(Out, ProofObligationKind::Unsupported, nullptr, E->Loc);
+  addSafety(Out, ProofObligationKind::Unsupported, nullptr, E->Loc,
+            "an expression whose C++ definedness is not modeled");
 }
 
 /// The conjunction of every definedness check of E.
@@ -2949,13 +3074,54 @@ class PassivizerImpl {
                   Loc);
   }
 
-  /// The object a parameter addresses at entry, in passive terms.
+  /// The object a parameter addresses at entry, in passive terms, when the
+  /// parameter still holds its entry value.
   std::optional<Region>
   parameterRegion(const std::string &Name,
                   const std::map<std::string, std::string> &Renames,
                   SourceLocation Loc) {
     if (AssignedNames.count(Name))
       return std::nullopt;
+    return entryObjectRegion(Name, Renames, Loc);
+  }
+
+  /// The regions of the objects a pointer rooted at Root may address, when
+  /// its origins are known: parameters' entry objects and globals.
+  bool originRegions(const VExpr *Root,
+                     const std::map<std::string, std::string> &Renames,
+                     SourceLocation Loc, std::vector<Region> &Out) {
+    auto Origins = pointerOrigins(Root);
+    if (!Root || Root->K != VExpr::Var || !Origins || Origins->empty())
+      return false;
+    std::vector<Region> Found;
+    for (const std::string &Origin : *Origins) {
+      if (isGlobalOrigin(Origin)) {
+        auto [Address, Size] = globalOriginExtent(Origin);
+        auto Start =
+            std::make_unique<VLiteralExpr>(Address, VType::makePtr(), Loc);
+        auto End = addBytes(cloneVExpr(Start.get()),
+                            std::make_unique<VLiteralExpr>(
+                                std::to_string(std::max<uint64_t>(Size, 1)),
+                                pointerOffsetType(), Loc),
+                            Loc);
+        Found.push_back(Region{std::move(Start), std::move(End)});
+        continue;
+      }
+      auto Object = entryObjectRegion(Origin, Renames, Loc);
+      if (!Object)
+        return false;
+      Found.push_back(std::move(*Object));
+    }
+    for (Region &R : Found)
+      Out.push_back(std::move(R));
+    return true;
+  }
+
+  /// The object a parameter addressed at entry.
+  std::optional<Region>
+  entryObjectRegion(const std::string &Name,
+                    const std::map<std::string, std::string> &Renames,
+                    SourceLocation Loc) {
     for (const AbstractObject &Object : abstractObjects(Fn)) {
       if (Object.Name != Name)
         continue;
@@ -3063,7 +3229,9 @@ class PassivizerImpl {
     auto Regions = loopFootprintRegions(W, Ctx, Renames);
     if (!Regions) {
       emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, Loc), Active,
-                  Loc, ProofObligationKind::Unsupported);
+                  Loc, ProofObligationKind::Unsupported,
+                  "a loop modifies footprint names a whole object through a "
+                  "pointer whose object is not known");
       return;
     }
     auto Current = Renames.find(VHeapName);
@@ -3133,6 +3301,9 @@ class PassivizerImpl {
       case VStmt::Store: {
         const auto &St = static_cast<const VStoreStmt &>(*S);
         auto R = parameterCell(St.Ptr.get(), St.Value->Ty, Renames, St.Loc);
+        if (!R &&
+            originRegions(addressRoot(St.Ptr.get()), Renames, St.Loc, Out))
+          break;
         if (!R)
           R = rootRegion(addressRoot(St.Ptr.get()), Renames, St.Loc);
         if (!R)
@@ -3190,6 +3361,8 @@ class PassivizerImpl {
               Out.push_back(std::move(*Cell));
               continue;
             }
+          if (originRegions(addressRoot(Actual), Renames, C.Loc, Out))
+            continue;
           auto R = rootRegion(addressRoot(Actual), Renames, C.Loc);
           if (!R)
             return false;
@@ -3462,13 +3635,16 @@ class PassivizerImpl {
     TraceEvents.push_back(std::move(Event));
   }
 
-  void emitPassive(
-      PassiveProgram &P, PassiveStmt::Kind K, std::unique_ptr<VExpr> Cond,
-      const VExpr *Guard = nullptr, SourceLocation Loc = SourceLocation(),
-      ProofObligationKind ProofKind = ProofObligationKind::Unsupported) {
+  void
+  emitPassive(PassiveProgram &P, PassiveStmt::Kind K,
+              std::unique_ptr<VExpr> Cond, const VExpr *Guard = nullptr,
+              SourceLocation Loc = SourceLocation(),
+              ProofObligationKind ProofKind = ProofObligationKind::Unsupported,
+              std::string Note = "") {
     auto PS = std::make_unique<PassiveStmt>();
     PS->K = K;
     PS->ProofKind = ProofKind;
+    PS->Note = std::move(Note);
     PS->TraceEventCount = TraceEvents.size();
     if (Guard)
       Cond = makeImplies(cloneVExpr(Guard), std::move(Cond), Loc);
@@ -3677,16 +3853,16 @@ class PassivizerImpl {
                       bool BridgeMachineValue = false,
                       const VExpr *SafetySource = nullptr) {
     SafetyChecks Checks;
-    collectSafety(SafetySource ? SafetySource : E, &FnMap,
-                  SafetySource ? &Fn.ValidExtents : &ActiveValidExtents,
-                  SafetySource ? &SourcePointerParameterNames
-                               : &PointerParameterNames,
-                  Checks, Fn.ObjectModel);
+    collectSafety(
+        SafetySource ? SafetySource : E, &FnMap,
+        SafetySource ? &Fn.ValidExtents : &ActiveValidExtents,
+        SafetySource ? &SourcePointerParameterNames : &PointerParameterNames,
+        Checks, Fn.ObjectModel, SafetySource ? &Fn.ValidExtents : nullptr);
     groupByKind(Checks);
     CloneCtx Ctx{Renames, OldState, false};
     for (const SafetyCheck &Check : Checks)
       emitPassive(P, PassiveStmt::Assert, cloneExpr(Check.Cond.get(), Ctx),
-                  Guard, Loc, Check.Kind);
+                  Guard, Loc, Check.Kind, Check.Note);
     emitPassive(P, PassiveStmt::Assume,
                 machineMathBridgeForExpr(E, &FnMap, BridgeMachineValue), Guard,
                 Loc);
@@ -4076,7 +4252,8 @@ public:
       emitMathBridge(P, BoundPost.get(), nullptr, BoundPost->Loc);
       SafetyChecks Checks;
       collectSafety(Post, &FnMap, &Fn.ValidExtents,
-                    &SourcePointerParameterNames, Checks, Fn.ObjectModel);
+                    &SourcePointerParameterNames, Checks, Fn.ObjectModel,
+                    &Fn.ValidExtents);
       groupByKind(Checks);
       for (const SafetyCheck &Check : Checks) {
         // Anchor at the clause; an unfolded helper's operators may lie in
@@ -4150,7 +4327,9 @@ public:
     auto CalleeIt = FnMap.find(C.CalleeIdentity);
     if (CalleeIt == FnMap.end()) {
       emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, C.Loc),
-                  nullptr, C.Loc, ProofObligationKind::Unsupported);
+                  nullptr, C.Loc, ProofObligationKind::Unsupported,
+                  "a call of " + C.Callee +
+                      ", whose contract is not available");
       return;
     }
     const VFunction *Callee = CalleeIt->second;
@@ -4161,7 +4340,9 @@ public:
         !C.ResultTarget.empty() && !C.ResultProvenanceTarget.empty();
     if (Callee->UsesDynamicStorage && !ReturnsFreshOwned) {
       emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, C.Loc),
-                  nullptr, C.Loc, ProofObligationKind::Unsupported);
+                  nullptr, C.Loc, ProofObligationKind::Unsupported,
+                  C.Callee + " allocates or frees storage, and only a fresh "
+                             "allocation it returns is modeled at a call");
       return;
     }
     const std::string EntryHeap = Renames[VHeapName];
@@ -4179,14 +4360,21 @@ public:
             !scalarDynamicCalleeSafe(*Callee, Param.first, FnMap,
                                      ActiveScans)) {
           emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, C.Loc),
-                      nullptr, C.Loc, ProofObligationKind::Unsupported);
+                      nullptr, C.Loc, ProofObligationKind::Unsupported,
+                      "a pointer to local or dynamic storage is passed to " +
+                          C.Callee +
+                          ", which may keep, offset, or free it, or has no "
+                          "verified body");
           return;
         }
       }
     if (!C.ResultProvenanceTarget.empty() && DynamicParams.empty() &&
         !ReturnsFreshOwned) {
       emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, C.Loc),
-                  nullptr, C.Loc, ProofObligationKind::Unsupported);
+                  nullptr, C.Loc, ProofObligationKind::Unsupported,
+                  "the pointer " + C.Callee +
+                      " returns is neither a fresh allocation nor one of its "
+                      "dynamic-storage arguments");
       return;
     }
     if (Callee->ReturnType.Kind == VTypeKind::Ptr && !C.ResultTarget.empty() &&
@@ -4194,7 +4382,9 @@ public:
         (C.ResultProvenanceTarget.empty() ||
          !pointerReturnsComeFrom(*Callee, DynamicParams))) {
       emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, C.Loc),
-                  nullptr, C.Loc, ProofObligationKind::Unsupported);
+                  nullptr, C.Loc, ProofObligationKind::Unsupported,
+                  C.Callee + " may return a pointer other than its "
+                             "dynamic-storage arguments");
       return;
     }
     for (unsigned I = 0; I < Callee->Params.size() && I < C.Args.size(); ++I)
@@ -4206,7 +4396,9 @@ public:
       auto Actual = ParamMap.find(Extent.Base);
       if (Actual == ParamMap.end()) {
         emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, C.Loc),
-                    nullptr, C.Loc, ProofObligationKind::Unsupported);
+                    nullptr, C.Loc, ProofObligationKind::Unsupported,
+                    "the valid extent of " + C.Callee + "'s parameter " +
+                        Extent.Base + " has no argument");
         continue;
       }
       auto Length = substParams(Extent.Length.get(), ParamMap, Ctx, EntryHeap);
@@ -4221,11 +4413,20 @@ public:
           (hasUnboundedExtentWrite(*Callee, Extent.Base) &&
            !(Fn.ObjectModel && Callee->ObjectModel)))
         emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, C.Loc),
-                    nullptr, C.Loc, ProofObligationKind::Unsupported);
+                    nullptr, C.Loc, ProofObligationKind::Unsupported,
+                    HasImplicitHeapEffect
+                        ? C.Callee + " may write anywhere (it has no "
+                                     "modifies), and the slice it receives "
+                                     "does not bound that"
+                        : C.Callee + " writes its whole slice, which needs "
+                                     "memory checking on both sides "
+                                     "(--check-ub)");
       auto LengthValue = asPointerOffset(Length.get());
       if (!LengthValue) {
         emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, C.Loc),
-                    nullptr, C.Loc, ProofObligationKind::Unsupported);
+                    nullptr, C.Loc, ProofObligationKind::Unsupported,
+                    "the valid extent length of " + C.Callee + "'s parameter " +
+                        Extent.Base + " is not an integer");
         continue;
       }
       auto Empty = std::make_unique<VBinOpExpr>(
@@ -4616,7 +4817,9 @@ public:
                      St.Value.get());
       if (Val->Ty.Kind == VTypeKind::Ptr && hasPointerProvenance(Val.get())) {
         emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, St.Loc),
-                    Active.get(), St.Loc, ProofObligationKind::Unsupported);
+                    Active.get(), St.Loc, ProofObligationKind::Unsupported,
+                    "storing a pointer to local or dynamic storage in memory, "
+                    "where its lifetime is not tracked");
         break;
       }
       std::unique_ptr<VExpr> PointerCell =
@@ -4656,6 +4859,25 @@ public:
           // A region is its parameter's object: a store at any address in
           // it, such as through a pointer walking the object, is inside.
           const VExpr *Root = addressRoot(Load->Ptr.get());
+          // So is a store through a pointer whose origin is that object: its
+          // access check keeps it there.
+          if (Fn.ObjectModel && Region && Root && Root->K == VExpr::Var) {
+            const std::string &Param =
+                static_cast<const VVarExpr *>(Root)->Name;
+            const VExpr *StoreRoot = addressRoot(St.Ptr.get());
+            if (auto Origins = pointerOrigins(StoreRoot);
+                Origins && llvm::is_contained(*Origins, Param)) {
+              auto Term =
+                  Origins->size() > 1 ? pointerOriginTerm(StoreRoot) : nullptr;
+              if (Origins->size() == 1)
+                Allowed = makeBoolLiteral(true, St.Loc);
+              else if (Term)
+                Allowed = makeOr(std::move(Allowed),
+                                 makeEq(cloneExpr(Term.get(), Ctx),
+                                        originIdentity(Param, St.Loc), St.Loc),
+                                 St.Loc);
+            }
+          }
           if (Fn.ObjectModel && Region && Root && Root->K == VExpr::Var)
             if (auto Object = parameterRegion(
                     static_cast<const VVarExpr *>(Root)->Name, Renames,
@@ -4705,7 +4927,8 @@ public:
       const auto &A = static_cast<const VAllocateStmt &>(S);
       if (A.ProvenanceTarget.empty()) {
         emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, A.Loc),
-                    Active.get(), A.Loc, ProofObligationKind::Unsupported);
+                    Active.get(), A.Loc, ProofObligationKind::Unsupported,
+                    "an allocation without a lifetime identity");
         break;
       }
       CloneCtx Ctx{Renames, OldState, false};
@@ -5176,7 +5399,11 @@ public:
       bool Framed = Fn.ObjectModel && Modified.count(VHeapName) &&
                     loopWriteRegions(W.Body, Renames, WriteRegions);
       // Every store and call in the loop is checked against the function's
-      // own frame, so that frame bounds what the loop writes.
+      // own frame, so that frame bounds what the loop writes too; with both,
+      // only cells in both may change.
+      std::vector<Region> FunctionRegions;
+      const bool AlsoFunctionFramed =
+          Framed && functionFrameRegions(Renames, W.Loc, FunctionRegions);
       if (!Framed && Fn.ObjectModel && Modified.count(VHeapName)) {
         WriteRegions.clear();
         Framed = functionFrameRegions(Renames, W.Loc, WriteRegions);
@@ -5199,6 +5426,11 @@ public:
               !WriteRegions.empty() &&
               llvm::all_of(WriteRegions,
                            [](const Region &R) { return R.Cell.has_value(); });
+          if (AlsoFunctionFramed)
+            emitPassive(
+                P, PassiveStmt::Assume,
+                heapFrame(PreviousName, HeadName, FunctionRegions, W.Loc),
+                Active.get(), W.Loc);
           if (!OnlyCells) {
             emitPassive(P, PassiveStmt::Assume,
                         heapFrame(PreviousName, HeadName, WriteRegions, W.Loc),
@@ -5348,7 +5580,9 @@ public:
     case VStmt::Break: {
       if (LoopFrames.empty()) {
         emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, S.Loc),
-                    Active.get(), S.Loc, ProofObligationKind::Unsupported);
+                    Active.get(), S.Loc, ProofObligationKind::Unsupported,
+                    "a break outside the loop it would leave, such as in the "
+                    "first iteration of a do loop");
         break;
       }
       emitTrace(PassiveTraceKind::Loop, "break", Active.get(), S.Loc);
@@ -5359,7 +5593,9 @@ public:
     case VStmt::Continue: {
       if (LoopFrames.empty()) {
         emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, S.Loc),
-                    Active.get(), S.Loc, ProofObligationKind::Unsupported);
+                    Active.get(), S.Loc, ProofObligationKind::Unsupported,
+                    "a continue outside the loop it would continue, such as "
+                    "in the first iteration of a do loop");
         break;
       }
       // The iteration ends: check the invariant and measure here.
