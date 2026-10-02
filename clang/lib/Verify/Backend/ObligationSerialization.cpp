@@ -45,6 +45,14 @@ uint8_t sortTag(LogicSortKind Kind) {
     return 4;
   case LogicSortKind::Heap:
     return 5;
+  case LogicSortKind::Seq:
+    return 6;
+  case LogicSortKind::Set:
+    return 7;
+  case LogicSortKind::Multiset:
+    return 8;
+  case LogicSortKind::Map:
+    return 9;
   }
   llvm_unreachable("unknown logic sort");
 }
@@ -63,6 +71,14 @@ std::optional<LogicSortKind> sortFromTag(uint8_t Tag) {
     return LogicSortKind::Pointer;
   case 5:
     return LogicSortKind::Heap;
+  case 6:
+    return LogicSortKind::Seq;
+  case 7:
+    return LogicSortKind::Set;
+  case 8:
+    return LogicSortKind::Multiset;
+  case 9:
+    return LogicSortKind::Map;
   default:
     return std::nullopt;
   }
@@ -135,6 +151,8 @@ uint8_t expressionTag(LogicExpr::Kind Kind) {
     LOGIC_EXPR_TAG(BvResize, 35);
     LOGIC_EXPR_TAG(NoOverflow, 36);
     LOGIC_EXPR_TAG(SpecCall, 37);
+    LOGIC_EXPR_TAG(HeapFrame, 38);
+    LOGIC_EXPR_TAG(Collection, 39);
 #undef LOGIC_EXPR_TAG
   }
   llvm_unreachable("unknown logic expression");
@@ -182,10 +200,23 @@ std::optional<LogicExpr::Kind> expressionFromTag(uint8_t Tag) {
     LOGIC_EXPR_FROM_TAG(BvResize, 35);
     LOGIC_EXPR_FROM_TAG(NoOverflow, 36);
     LOGIC_EXPR_FROM_TAG(SpecCall, 37);
+    LOGIC_EXPR_FROM_TAG(HeapFrame, 38);
+    LOGIC_EXPR_FROM_TAG(Collection, 39);
 #undef LOGIC_EXPR_FROM_TAG
   default:
     return std::nullopt;
   }
+}
+
+// One more than the operation's position, so that 0 is never a tag.
+uint8_t collectionTag(LogicCollectionOp Op) {
+  return static_cast<uint8_t>(Op) + 1;
+}
+
+std::optional<LogicCollectionOp> collectionFromTag(uint8_t Tag) {
+  if (Tag == 0 || Tag > static_cast<uint8_t>(LogicCollectionOp::MapGet) + 1)
+    return std::nullopt;
+  return static_cast<LogicCollectionOp>(Tag - 1);
 }
 
 uint8_t overflowTag(LogicOverflowOp Op) {
@@ -435,6 +466,8 @@ public:
     writeString(Expr->Name);
     writeString(Expr->Binder);
     writeU8(overflowTag(Expr->OverflowOp));
+    if (Expr->K == LogicExpr::Collection)
+      writeU8(collectionTag(Expr->CollectionOp));
     writeString(Expr->SpecCallee);
     writeSource(Expr->Source);
     writeU64(Expr->Children.size());
@@ -730,6 +763,12 @@ class ArchiveReader {
     if (!OverflowOp)
       fail("invalid overflow operation in obligation archive");
     Expr->OverflowOp = OverflowOp.value_or(LogicOverflowOp::Add);
+    if (Expr->K == LogicExpr::Collection) {
+      std::optional<LogicCollectionOp> Op = collectionFromTag(readU8());
+      if (!Op)
+        fail("invalid collection operation in obligation archive");
+      Expr->CollectionOp = Op.value_or(LogicCollectionOp::SeqEmpty);
+    }
     Expr->SpecCallee = readString();
     Expr->Source = readSource(IncludeSource);
 
