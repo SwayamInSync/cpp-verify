@@ -954,6 +954,9 @@ void Sema::getUndefinedButUsed(
     // __attribute__((weakref)) is basically a definition.
     if (ND->hasAttr<WeakRefAttr>()) continue;
 
+    // A trusted contract stands in for a definition the verifier never sees.
+    if (ND->hasAttr<CppVerifyTrustedAttr>()) continue;
+
     if (isa<CXXDeductionGuideDecl>(ND))
       continue;
 
