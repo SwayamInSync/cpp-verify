@@ -513,6 +513,68 @@ over all integers and may be infinite. Counterexamples show their values, such
 as ``s = [4, 3]`` or ``m = {1 -> 7, 4.. -> 2}``. Z3 decides all four; cvc5
 decides sequences only, and Lean none.
 
+Inductive predicates
+--------------------
+
+Some predicates have no measure: whether ``b`` can be reached from ``a`` by
+steps ``x -> x + 1`` and ``x -> 2 * x`` is a question about paths, not about a
+smaller argument. ``inductive`` makes a ``spec`` returning ``bool`` the
+*least* predicate its body defines (Dafny's ``least predicate``): true exactly
+where a finite derivation shows it.
+
+.. code-block:: cpp
+
+   spec bool edge(int a, int b) { return b == a + 1 || b == 2 * a; }
+
+   spec bool reach(int a, int b)
+     inductive
+     post(!result || a < 0 || a <= b)
+   {
+     return a == b || exists(c, edge(a, c) && reach(c, b));
+   }
+
+   proof void three_reaches_twelve()
+     post(reach(3, 12))
+   {
+     contract_assert(reach(12, 12));
+     contract_assert(reach(6, 12));
+   }
+
+   proof void no_way_back(int a, int b)
+     pre(a >= 0 && b < a)
+     post(!reach(a, b))
+   {
+   }
+
+   proof void wrong_way(int a, int b)
+     pre(a >= 0 && reach(a, b))
+     post(a < b)
+   {
+   }
+
+.. code-block:: text
+
+   Verified: spec axiom: edge
+   Verified: spec post: reach
+   Verified: three_reaches_twelve [backend=z3]
+   Verified: no_way_back [backend=z3]
+   book.cpp:27:10: error: verification failed: wrong_way [...::postcondition@27:10]
+     (counterexample: a [ssa=a_0] [type=i32] = 38, b [ssa=b_0] [type=i32] = 38)
+     [backend=z3] [reason=counterexample]
+
+A proof sees ``reach`` through its body, unfolded once at each application it
+names: ``reach(6, 12)`` holds by the edge ``6 -> 12`` and ``reach(12, 12)``,
+and ``reach(3, 12)`` by the edge ``3 -> 6``. The postcondition says what every
+derivation satisfies; the verifier proves it by induction on derivations,
+and ``no_way_back`` follows from it. ``wrong_way`` fails: ``reach(38, 38)``
+holds with no step at all.
+
+The predicate may occur in its body only positively (as a conjunct, a
+disjunct, a branch, or under ``exists`` or a bounded ``forall``), which makes
+the least predicate exist and equal its body. A postcondition that does not
+hold of every derivation fails with ``spec post by induction failed`` and a
+counterexample giving the height of a derivation.
+
 ``constexpr`` as spec
 ---------------------
 
