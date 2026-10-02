@@ -11,6 +11,9 @@ Ghost statements
   proved, ``e`` holds for the rest of the function
 - ``contract_assert(e) by { ... }`` — prove ``e`` from a local proof whose
   other facts (lemma posts, assertions, locals) do not escape it
+- ``contract_assert(forall(k, lo, hi, p)) by { ... }`` — prove ``p`` for one
+  arbitrary ``k`` in ``[lo, hi)``, which the block may read but not assign;
+  the ``forall`` holds afterwards
 - ``calc { e0; op { ... } e1; ... }`` — a chain of steps, each proved like
   an assert-by, concluding the combined relation between ``e0`` and the last
   term
