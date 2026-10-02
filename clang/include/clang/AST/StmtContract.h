@@ -23,41 +23,52 @@ namespace clang {
 // Forward declaration for serialization friend access.
 class ASTStmtReader;
 
-/// ContractAssertStmt - Represents contract_assert(expr);
+/// ContractAssertStmt - Represents contract_assert(expr); or
+/// contract_assert(expr) by { ... }, whose ghost proof's facts stay local.
 /// Generates a verification condition, not a runtime check.
 class ContractAssertStmt : public Stmt {
   friend class ASTStmtReader;
+  enum { COND, BY, END };
   SourceLocation ContractAssertLoc;
   SourceLocation LParenLoc;
   SourceLocation RParenLoc;
-  Stmt *Cond;
+  Stmt *SubStmts[END] = {nullptr, nullptr};
 
 public:
   ContractAssertStmt(SourceLocation ContractAssertLoc,
                      SourceLocation LParenLoc, SourceLocation RParenLoc,
-                     Expr *Cond)
+                     Expr *Cond, Stmt *By = nullptr)
       : Stmt(ContractAssertStmtClass),
         ContractAssertLoc(ContractAssertLoc), LParenLoc(LParenLoc),
-        RParenLoc(RParenLoc), Cond(Cond) {}
+        RParenLoc(RParenLoc) {
+    SubStmts[COND] = Cond;
+    SubStmts[BY] = By;
+  }
 
   explicit ContractAssertStmt(EmptyShell Empty)
-      : Stmt(ContractAssertStmtClass), Cond(nullptr) {}
+      : Stmt(ContractAssertStmtClass) {}
 
-  Expr *getCond() const { return cast<Expr>(Cond); }
+  Expr *getCond() const { return cast<Expr>(SubStmts[COND]); }
+  /// The ghost block proving the condition, or null.
+  Stmt *getBy() const { return SubStmts[BY]; }
 
   SourceLocation getContractAssertLoc() const { return ContractAssertLoc; }
   SourceLocation getLParenLoc() const { return LParenLoc; }
   SourceLocation getRParenLoc() const { return RParenLoc; }
   SourceLocation getBeginLoc() const LLVM_READONLY { return ContractAssertLoc; }
-  SourceLocation getEndLoc() const LLVM_READONLY { return RParenLoc; }
+  SourceLocation getEndLoc() const LLVM_READONLY {
+    return SubStmts[BY] ? SubStmts[BY]->getEndLoc() : RParenLoc;
+  }
 
   static bool classof(const Stmt *T) {
     return T->getStmtClass() == ContractAssertStmtClass;
   }
 
-  child_range children() { return child_range(&Cond, &Cond + 1); }
+  child_range children() {
+    return child_range(SubStmts, SubStmts + (SubStmts[BY] ? END : BY));
+  }
   const_child_range children() const {
-    return const_child_range(&Cond, &Cond + 1);
+    return const_child_range(SubStmts, SubStmts + (SubStmts[BY] ? END : BY));
   }
 };
 
