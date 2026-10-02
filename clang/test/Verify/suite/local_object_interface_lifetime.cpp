@@ -20,7 +20,7 @@ int preserve_incoming_slice(int *pointer)
   return pointer[1];
 }
 
-int *external_pointer()
+[[cppverify::trusted]] int *external_pointer()
   post(result != nullptr);
 
 int *unevaluated_factory(int value)
