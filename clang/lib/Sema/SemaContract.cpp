@@ -65,6 +65,22 @@ const FunctionContractInfo *contractOf(const ASTContext &Ctx,
   return nullptr;
 }
 
+/// Declared by cppverify.h: a function or record of namespace cppverify, or a
+/// member of one of its records.
+bool isCollectionDecl(const Decl *D) {
+  const DeclContext *DC = D->getDeclContext();
+  if (const auto *RD = dyn_cast<CXXRecordDecl>(DC))
+    DC = RD->getDeclContext();
+  const auto *NS = dyn_cast<NamespaceDecl>(DC);
+  return NS && NS->getIdentifier() && NS->getIdentifier()->isStr("cppverify") &&
+         NS->getDeclContext()->getRedeclContext()->isTranslationUnit();
+}
+
+bool isCollectionType(QualType T) {
+  const CXXRecordDecl *RD = T.getNonReferenceType()->getAsCXXRecordDecl();
+  return RD && isCollectionDecl(RD);
+}
+
 /// Finds spec-function references in evaluated executable code.
 class ExecutableSpecUseFinder
     : public RecursiveASTVisitor<ExecutableSpecUseFinder> {
@@ -120,13 +136,51 @@ public:
   bool VisitDeclRefExpr(DeclRefExpr *E) {
     if (GhostDepth)
       return true;
+    if (const auto *VD = dyn_cast<VarDecl>(E->getDecl())) {
+      if (S.Context.isGhostVariable(VD) &&
+          S.DiagnosedSpecFunctionUses.insert(E->getExprLoc()).second)
+        S.Diag(E->getExprLoc(), diag::err_ghost_variable_in_executable_code)
+            << VD;
+      return true;
+    }
     const auto *FD = dyn_cast<FunctionDecl>(E->getDecl());
     if (!FD)
       return true;
+    if (isCollectionDecl(FD)) {
+      diagnoseCollectionOperation(E->getExprLoc(), FD);
+      return true;
+    }
     const FunctionContractInfo *FCI = contractOf(S.Context, FD);
     if (FCI && FCI->IsSpec &&
         S.DiagnosedSpecFunctionUses.insert(E->getExprLoc()).second)
       S.Diag(E->getExprLoc(), diag::err_spec_function_in_executable_code) << FD;
+    return true;
+  }
+
+  bool VisitMemberExpr(MemberExpr *E) {
+    if (!GhostDepth && isCollectionDecl(E->getMemberDecl()))
+      diagnoseCollectionOperation(E->getMemberLoc(), E->getMemberDecl());
+    return true;
+  }
+
+  bool VisitVarDecl(VarDecl *VD) {
+    if (!GhostDepth && isCollectionType(VD->getType()) &&
+        !S.Context.isGhostVariable(VD) &&
+        S.DiagnosedSpecFunctionUses.insert(VD->getLocation()).second)
+      S.Diag(VD->getLocation(), diag::err_collection_in_executable_code)
+          << 1 << VD->getType().getNonReferenceType().getUnqualifiedType();
+    return true;
+  }
+
+  void diagnoseCollectionOperation(SourceLocation Loc, const NamedDecl *D) {
+    if (S.DiagnosedSpecFunctionUses.insert(Loc).second)
+      S.Diag(Loc, diag::err_collection_in_executable_code) << 0 << D;
+  }
+
+  bool VisitContractChooseExpr(ContractChooseExpr *E) {
+    if (!GhostDepth &&
+        S.DiagnosedSpecFunctionUses.insert(E->getExprLoc()).second)
+      S.Diag(E->getExprLoc(), diag::err_choose_in_executable_code);
     return true;
   }
 };
@@ -145,6 +199,16 @@ void Sema::CheckSpecFunctionUses(const FunctionDecl *FD, Stmt *Code) {
     if (const FunctionContractInfo *FCI = contractOf(Context, FD);
         FCI && (FCI->IsSpec || FCI->IsProof))
       return;
+    // A collection has no runtime value to pass or return.
+    for (const ParmVarDecl *Param : FD->parameters())
+      if (isCollectionType(Param->getType()) &&
+          DiagnosedSpecFunctionUses.insert(Param->getLocation()).second)
+        Diag(Param->getLocation(), diag::err_collection_in_executable_code)
+            << 1 << Param->getType().getNonReferenceType().getUnqualifiedType();
+    if (isCollectionType(FD->getReturnType()) &&
+        DiagnosedSpecFunctionUses.insert(FD->getLocation()).second)
+      Diag(FD->getLocation(), diag::err_collection_in_executable_code)
+          << 1 << FD->getReturnType().getUnqualifiedType();
     if (const auto *Ctor = dyn_cast<CXXConstructorDecl>(FD))
       for (const CXXCtorInitializer *Init : Ctor->inits())
         if (Init->isWritten())
@@ -164,6 +228,45 @@ ExprResult Sema::ActOnContractCondition(ExprResult E) {
   if (E.isInvalid())
     return E;
   return PerformContextuallyConvertToBool(E.get());
+}
+
+ExprResult Sema::ActOnContractRange(Expr *Base, Expr *Lower,
+                                    SourceLocation ColonLoc, Expr *Length,
+                                    SourceLocation RBLoc) {
+  ExprResult BaseResult = DefaultFunctionArrayLvalueConversion(Base);
+  if (BaseResult.isInvalid())
+    return ExprError();
+  Base = BaseResult.get();
+  const auto *PT = Base->getType()->getAs<PointerType>();
+  if (!PT || PT->getPointeeType()->isFunctionType() ||
+      RequireCompleteType(Base->getExprLoc(), PT->getPointeeType(),
+                          diag::err_contract_range_base, Base->getType())) {
+    if (!PT || PT->getPointeeType()->isFunctionType())
+      Diag(Base->getExprLoc(), diag::err_contract_range_base)
+          << Base->getType() << Base->getSourceRange();
+    return ExprError();
+  }
+  if (!Length) {
+    Diag(ColonLoc, diag::err_contract_range_no_length);
+    return ExprError();
+  }
+  for (Expr **Bound : {&Lower, &Length}) {
+    if (!*Bound)
+      continue;
+    ExprResult Converted = DefaultLvalueConversion(*Bound);
+    if (Converted.isInvalid())
+      return ExprError();
+    *Bound = Converted.get();
+    if (!(*Bound)->getType()->isIntegerType() ||
+        (*Bound)->getType()->isBooleanType()) {
+      Diag((*Bound)->getExprLoc(), diag::err_contract_range_bound_not_int)
+          << (Bound == &Length) << (*Bound)->getSourceRange();
+      return ExprError();
+    }
+  }
+  return new (Context)
+      ArraySectionExpr(Base, Lower, Length, Context.ArraySectionTy, VK_LValue,
+                       OK_Ordinary, ColonLoc, RBLoc);
 }
 
 ExprResult Sema::ActOnTypeInvariantExpr(ExprResult E, CXXRecordDecl *Record) {
