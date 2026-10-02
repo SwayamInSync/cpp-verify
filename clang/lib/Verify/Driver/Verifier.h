@@ -49,9 +49,13 @@ struct VerifyOptions {
   std::string ProofCachePath;
   uint64_t ProofCacheMaxBytes = 1024ULL * 1024ULL * 1024ULL;
   uint64_t ProofCacheMaxEntries = 100000;
-  /// Enable valid(p, n)-based buffer bounds obligations. Core expression
-  /// definedness checks are always emitted during passivization.
-  bool CheckUB = false;
+  /// Check every memory access and pointer step against the object it may
+  /// address: a parameter's declared valid(p, n) extent or its single
+  /// pointee. Core expression definedness checks are always emitted during
+  /// passivization.
+  bool CheckUB = true;
+  /// Report how often each quantifier of an unresolved query is instantiated.
+  bool ProfileQuantifiers = false;
   /// Human-readable diagnostics or versioned JSON Lines records.
   DiagnosticFormat Diagnostics = DiagnosticFormat::Text;
   /// Optional versioned binary archive for backend-neutral obligation modules.

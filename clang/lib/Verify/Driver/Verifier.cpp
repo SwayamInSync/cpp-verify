@@ -29,12 +29,78 @@
 #include "llvm/Support/Program.h"
 #include "llvm/Support/raw_ostream.h"
 #include <iterator>
+#include <tuple>
 #include <optional>
 
 using namespace clang;
 using namespace verify;
 
 namespace {
+
+/// The functions a body calls, whose contracts its proof assumes.
+static void collectCallees(const std::vector<std::unique_ptr<VStmt>> &Stmts,
+                           std::set<std::string> &Out) {
+  for (const auto &S : Stmts) {
+    switch (S->K) {
+    case VStmt::Call:
+      Out.insert(static_cast<const VCallStmt &>(*S).CalleeIdentity);
+      break;
+    case VStmt::If: {
+      const auto &I = static_cast<const VIfStmt &>(*S);
+      collectCallees(I.Then, Out);
+      collectCallees(I.Else, Out);
+      break;
+    }
+    case VStmt::While:
+      collectCallees(static_cast<const VWhileStmt &>(*S).Body, Out);
+      break;
+    case VStmt::Seq:
+      collectCallees(static_cast<const VSeqStmt &>(*S).Stmts, Out);
+      break;
+    case VStmt::GhostBlock:
+      collectCallees(static_cast<const VGhostBlockStmt &>(*S).Body, Out);
+      break;
+    default:
+      break;
+    }
+  }
+}
+
+/// A passive program asking whether its end is reachable: every assertion
+/// becomes an assumption, and the end asserts false. With \p EntryOnly only
+/// the precondition is kept.
+/// Whether Goal holds after the entry assumptions, Extra, and the first
+/// Count statements, every assertion among them assumed.
+static PassiveProgram smokeProgram(const PassiveProgram &P, size_t Count,
+                                   std::unique_ptr<VExpr> Goal,
+                                   const VExpr *Extra = nullptr) {
+  PassiveProgram Smoke;
+  Smoke.FunctionName = P.FunctionName + ".smoke";
+  Smoke.FunctionIdentity = P.FunctionIdentity + "::smoke";
+  for (const auto &Assume : P.EntryAssumes)
+    Smoke.EntryAssumes.push_back(cloneVExpr(Assume.get()));
+  if (Extra)
+    Smoke.EntryAssumes.push_back(cloneVExpr(Extra));
+  for (size_t I = 0; I < Count && I < P.Stmts.size(); ++I) {
+    auto Copy = std::make_unique<PassiveStmt>();
+    Copy->K = PassiveStmt::Assume;
+    Copy->Cond = cloneVExpr(P.Stmts[I]->Cond.get());
+    Smoke.Stmts.push_back(std::move(Copy));
+  }
+  PassiveExitAssert End;
+  End.ProofKind = ProofObligationKind::Assertion;
+  End.Cond = std::move(Goal);
+  Smoke.ExitAsserts.push_back(std::move(End));
+  Smoke.ResultVarName = P.ResultVarName;
+  Smoke.OldHeapName = P.OldHeapName;
+  Smoke.HeapVariables = P.HeapVariables;
+  Smoke.SpecFunctions = P.SpecFunctions;
+  Smoke.SpecFuel = P.SpecFuel;
+  Smoke.HiddenSpecs = P.HiddenSpecs;
+  Smoke.RevealedSpecs = P.RevealedSpecs;
+  Smoke.CallerIntMode = P.CallerIntMode;
+  return Smoke;
+}
 
 static bool isDeductiveBackend(BackendKind Kind) {
   return Kind == BackendKind::Z3 || Kind == BackendKind::CVC5 ||
@@ -81,6 +147,7 @@ struct VerifyDiagnostic {
     Exported,
     Certified,
     MixedProof,
+    Trusted,
     Warning
   };
   Kind K;
@@ -88,6 +155,12 @@ struct VerifyDiagnostic {
   SourceLocation Loc;
   std::string FunctionName;
   std::optional<VerifyResult> Result;
+  /// No execution reaches the claim, so it holds vacuously.
+  bool Vacuous = false;
+  /// Proved only for executions that terminate.
+  bool Partial = false;
+  /// Trusted contracts the proof relies on.
+  std::vector<std::string> Trusts;
 };
 
 static std::string backendSuffix(const VerifyResult &Result) {
@@ -142,6 +215,8 @@ static llvm::StringRef diagnosticKindCode(VerifyDiagnostic::Kind Kind) {
     return "certified";
   case VerifyDiagnostic::MixedProof:
     return "mixed-proof";
+  case VerifyDiagnostic::Trusted:
+    return "trusted";
   case VerifyDiagnostic::Warning:
     return "warning";
   }
@@ -712,6 +787,8 @@ public:
 
     ASTConverter Converter(Ctx, FreshOwnedCalleeIdentities);
     auto Functions = Converter.convertTranslationUnit();
+    for (const auto &[Loc, Message] : Converter.getWarnings())
+      Diags.push_back({VerifyDiagnostic::Warning, Message, Loc});
     for (const std::string &Err : Converter.getErrors())
       Diags.push_back({VerifyDiagnostic::Error, Err});
     if (!Converter.getErrors().empty())
@@ -785,6 +862,7 @@ public:
     Execution.IntegerEncoding = Opts.IntegerEncoding;
     Execution.SkipWholeModuleRetry = !Opts.LeanFallbackProjectPath.empty();
     Execution.CVC5Path = Opts.CVC5Path;
+    Execution.ProfileQuantifiers = Opts.ProfileQuantifiers;
     Execution.ProofCachePath = Opts.ProofCachePath;
     Execution.ProofCacheMaxBytes = Opts.ProofCacheMaxBytes;
     Execution.ProofCacheMaxEntries = Opts.ProofCacheMaxEntries;
@@ -798,11 +876,77 @@ public:
     Passivizer P;
     P.setFunctionMap(InterfaceMap);
 
+    // Vacuity checks: whether a verified function's end is reachable at all.
+    // A vacuous path is refuted quickly; a satisfiable one is not worth
+    // searching long, since an unsettled check only omits a warning.
+    BackendExecutionOptions SmokeExecution = Execution;
+    SmokeExecution.SolverTimeoutMs =
+        Execution.SolverTimeoutMs == 0
+            ? 1000
+            : std::min<unsigned>(Execution.SolverTimeoutMs, 1000);
+    SmokeExecution.SingleQuery = true;
+    SmokeExecution.Jobs = 1;
+    SmokeExecution.ProofCachePath.clear();
+    auto SmokeBackend = createVerifyBackend(BackendKind::Z3, nullptr, 0,
+                                            SmokeExecution, nullptr);
+    auto falseGoal = [] {
+      return std::make_unique<VLiteralExpr>(false, VType::makeBool(),
+                                            SourceLocation());
+    };
+    auto proves = [&](PassiveProgram Smoke) {
+      auto Lowered = buildObligationModule(Smoke);
+      if (!Lowered) {
+        llvm::consumeError(Lowered.takeError());
+        return false;
+      }
+      auto Simplified = simplifyObligationModule(std::move(*Lowered));
+      if (!Simplified) {
+        llvm::consumeError(Simplified.takeError());
+        return false;
+      }
+      return SmokeBackend->verify(*Simplified).Status ==
+             VerifyStatus::Verified;
+    };
+    auto unreachable = [&](const PassiveProgram &Program, bool EntryOnly) {
+      auto Lowered = buildObligationModule(smokeProgram(
+          Program, EntryOnly ? 0 : Program.Stmts.size(), falseGoal()));
+      if (!Lowered) {
+        llvm::consumeError(Lowered.takeError());
+        return false;
+      }
+      auto Simplified = simplifyObligationModule(std::move(*Lowered));
+      if (!Simplified) {
+        llvm::consumeError(Simplified.takeError());
+        return false;
+      }
+      return SmokeBackend->verify(*Simplified).Status ==
+             VerifyStatus::Verified;
+    };
+
     const unsigned DumpLayers = Opts.DumpIRLayers;
     const bool MultiLayerDump = llvm::popcount(DumpLayers) > 1;
     bool AllOk = true;
     bool AnyFailed = false;
     std::set<std::string> FailedCallers;
+    // A spec whose termination is not established has no definition, so a
+    // proof that used it proves nothing.
+    std::set<std::string> UndefinedSpecs;
+    // Verdicts that assume callee contracts, and the callees they assume.
+    std::vector<std::tuple<size_t, std::string, std::set<std::string>>>
+        CallDependencies;
+    // Frame facts of a spec whose reads clause is not established.
+    std::set<std::string> UnframedSpecs;
+    // Specs whose postcondition is not established.
+    std::set<std::string> UnprovenPosts;
+    std::vector<std::pair<size_t, std::set<std::string>>> ProofDependencies;
+    auto recordDependencies = [&](const VFunction &Verified,
+                                  const ObligationModule &Used) {
+      std::set<std::string> Specs = Verified.SpecDependencies;
+      for (const auto &[Identity, Function] : Used.LogicFunctions)
+        Specs.insert(Identity);
+      Specs.erase(Verified.Identity);
+      ProofDependencies.emplace_back(Diags.size() - 1, std::move(Specs));
+    };
     auto exportLeanFallback = [&](const ObligationModule &Module,
                                   llvm::StringRef Label,
                                   const VerifyResult &SolverResult) {
@@ -844,9 +988,22 @@ public:
     };
 
     for (const auto &Fn : Functions) {
+      // The value of a spec outside its when domain, or a spec of
+      // <cppverify.h>: nothing to verify.
+      if (Fn->Uninterpreted || Fn->IsBuiltin)
+        continue;
       if (Fn->IsExternalContract) {
-        Diags.push_back({VerifyDiagnostic::Warning,
-                         "assuming external contract: " + Fn->Name});
+        if (Fn->IsTrusted)
+          Diags.push_back({VerifyDiagnostic::Trusted,
+                           Fn->Name + " (contract assumed, not verified)",
+                           Fn->DeclLoc, Fn->Name});
+        else
+          Diags.push_back(
+              {VerifyDiagnostic::Warning,
+               Fn->Name + " has a contract but no definition, so its callers "
+                          "are not verified; mark the declaration "
+                          "[[cppverify::trusted]] to assume the contract",
+               Fn->DeclLoc, Fn->Name});
         continue;
       }
       bool DumpedAny = false;
@@ -872,10 +1029,10 @@ public:
           Diags.push_back(
               {VerifyDiagnostic::Warning,
                "contract of " + Fn->Name +
-                   " uses the valid(p, n) extent marker, but --check-ub is "
-                   "not enabled; the marker folds to `true` and declared "
-                   "extents are not assumed, so results about heap contents "
-                   "may be spurious. Re-run with --check-ub.",
+                   " uses the valid(p, n) extent marker, but memory "
+                   "checking is disabled (--no-check-ub); the marker folds "
+                   "to `true` and declared extents are not assumed, so "
+                   "results about heap contents may be spurious.",
                SourceLocation(), Fn->Name});
         if (!UBError) {
           SpecInliner Inliner(FnMap, PreparedFn->SpecFuel);
@@ -901,6 +1058,166 @@ public:
         continue;
       }
 
+      if (Fn->IsSpec && !Fn->Reads.empty()) {
+        std::string Missing;
+        PassiveProgram ReadsPP = buildReadsChecks(*Fn, FnMap, Missing);
+        UnframedSpecs.insert(Fn->Identity);
+        std::optional<ObligationModule> ReadsModule;
+        std::string ReadsError;
+        if (!Missing.empty()) {
+          ReadsError = "calls " + Missing +
+                       ", which reads the heap without a reads clause";
+        } else if (auto Lowered = buildObligationModule(ReadsPP)) {
+          if (auto Simplified = simplifyObligationModule(std::move(*Lowered)))
+            ReadsModule = std::move(*Simplified);
+          else
+            ReadsError = llvm::toString(Simplified.takeError());
+        } else {
+          ReadsError = llvm::toString(Lowered.takeError());
+        }
+        if (!ReadsModule) {
+          AllOk = false;
+          AnyFailed = true;
+          Diags.push_back(
+              {VerifyDiagnostic::Error,
+               "spec reads failed: " + Fn->Name + " (" + ReadsError + ")",
+               SourceLocation(), Fn->Name});
+        } else if (Opts.Backend == BackendKind::BMC) {
+          ReadsModule->BMCTransform = BMCTransformProvenance{Opts.BMCUnroll};
+        }
+        if (ReadsModule) {
+          annotateObligationSources(*ReadsModule);
+          if (llvm::Error Error = emitObligationArchive(*ReadsModule)) {
+            AllOk = false;
+            AnyFailed = true;
+            Diags.push_back({VerifyDiagnostic::Error,
+                             "cannot serialize reads obligation: " + Fn->Name +
+                                 " (" + llvm::toString(std::move(Error)) +
+                                 ")"});
+            continue;
+          }
+          if (Opts.LowerOnly) {
+            VerifyResult R =
+                lowerForBackend(*ReadsModule, Opts.Backend, Execution);
+            if (R.Status == VerifyStatus::Lowered) {
+              UnframedSpecs.erase(Fn->Identity);
+              Diags.push_back({VerifyDiagnostic::Lowered,
+                               "spec reads: " + Fn->Name, R.Location, Fn->Name,
+                               R});
+            } else {
+              AllOk = false;
+              AnyFailed = true;
+              Diags.push_back(
+                  {VerifyDiagnostic::Error,
+                   "lowering failed for reads: " + Fn->Name + backendSuffix(R),
+                   R.Location, Fn->Name, R});
+            }
+          } else {
+            VerifyResult R = Backend->verify(*ReadsModule);
+            if (R.Status == VerifyStatus::Verified ||
+                R.Status == VerifyStatus::Exported) {
+              UnframedSpecs.erase(Fn->Identity);
+              Diags.push_back({R.Status == VerifyStatus::Verified
+                                   ? VerifyDiagnostic::Verified
+                                   : VerifyDiagnostic::Exported,
+                               "spec reads: " + Fn->Name, R.Location, Fn->Name,
+                               R});
+              recordDependencies(*Fn, *ReadsModule);
+            } else {
+              AllOk = false;
+              AnyFailed = true;
+              const bool IsUnresolved = R.Status == VerifyStatus::Unresolved;
+              std::string Message =
+                  std::string("spec reads ") +
+                  (IsUnresolved ? "unresolved: " : "failed: ") + Fn->Name +
+                  backendSuffix(R);
+              if (!R.Message.empty())
+                Message += " (" + R.Message + ")";
+              Diags.push_back({IsUnresolved ? VerifyDiagnostic::Unresolved
+                                            : VerifyDiagnostic::Error,
+                               std::move(Message), R.Location, Fn->Name, R});
+            }
+          }
+        }
+      }
+
+      if (Fn->IsSpec && !Fn->NeedsDecreasesCheck &&
+          !Fn->Postconditions.empty()) {
+        UnprovenPosts.insert(Fn->Identity);
+        std::optional<ObligationModule> PostModule;
+        std::string PostError;
+        if (auto Lowered =
+                buildObligationModule(buildSpecPostChecks(*Fn, FnMap))) {
+          if (auto Simplified = simplifyObligationModule(std::move(*Lowered)))
+            PostModule = std::move(*Simplified);
+          else
+            PostError = llvm::toString(Simplified.takeError());
+        } else {
+          PostError = llvm::toString(Lowered.takeError());
+        }
+        if (!PostModule) {
+          AllOk = false;
+          AnyFailed = true;
+          Diags.push_back({VerifyDiagnostic::Unresolved,
+                           "obligation lowering failed for spec post: " +
+                               Fn->Name + " (" + PostError + ")"});
+          continue;
+        }
+        if (Opts.Backend == BackendKind::BMC)
+          PostModule->BMCTransform = BMCTransformProvenance{Opts.BMCUnroll};
+        annotateObligationSources(*PostModule);
+        if (llvm::Error Error = emitObligationArchive(*PostModule)) {
+          AllOk = false;
+          AnyFailed = true;
+          Diags.push_back({VerifyDiagnostic::Error,
+                           "cannot serialize spec post obligation: " +
+                               Fn->Name + " (" +
+                               llvm::toString(std::move(Error)) + ")"});
+          continue;
+        }
+        if (Opts.LowerOnly) {
+          VerifyResult R =
+              lowerForBackend(*PostModule, Opts.Backend, Execution);
+          if (R.Status == VerifyStatus::Lowered) {
+            UnprovenPosts.erase(Fn->Identity);
+            Diags.push_back({VerifyDiagnostic::Lowered,
+                             "spec post: " + Fn->Name, R.Location, Fn->Name,
+                             R});
+          } else {
+            AllOk = false;
+            AnyFailed = true;
+            Diags.push_back({VerifyDiagnostic::Error,
+                             "lowering failed for spec post: " + Fn->Name +
+                                 backendSuffix(R),
+                             R.Location, Fn->Name, R});
+          }
+          continue;
+        }
+        VerifyResult R = Backend->verify(*PostModule);
+        if (R.Status == VerifyStatus::Verified ||
+            R.Status == VerifyStatus::Exported) {
+          UnprovenPosts.erase(Fn->Identity);
+          Diags.push_back({R.Status == VerifyStatus::Verified
+                               ? VerifyDiagnostic::Verified
+                               : VerifyDiagnostic::Exported,
+                           "spec post: " + Fn->Name, R.Location, Fn->Name, R});
+          recordDependencies(*Fn, *PostModule);
+        } else {
+          AllOk = false;
+          AnyFailed = true;
+          const bool IsUnresolved = R.Status == VerifyStatus::Unresolved;
+          std::string Message = std::string("spec post ") +
+                                (IsUnresolved ? "unresolved: " : "failed: ") +
+                                Fn->Name + backendSuffix(R);
+          if (!R.Message.empty())
+            Message += " (" + R.Message + ")";
+          Diags.push_back({IsUnresolved ? VerifyDiagnostic::Unresolved
+                                        : VerifyDiagnostic::Error,
+                           std::move(Message), R.Location, Fn->Name, R});
+        }
+        continue;
+      }
+
       if (Fn->IsSpec && !Fn->NeedsDecreasesCheck) {
         const VerifyDiagnostic::Kind Kind =
             Opts.LowerOnly ? VerifyDiagnostic::Lowered
@@ -914,9 +1231,20 @@ public:
         continue;
       }
 
-      if (Fn->NeedsDecreasesCheck) {
+      // Executable and proof recursion is checked at each call in the
+      // function's own obligations; a spec's definition cannot help prove its
+      // termination, so it is checked separately.
+      if (Fn->NeedsDecreasesCheck && Fn->IsSpec) {
         PassiveProgram DecPP = buildDecreasesChecks(*Fn, FnMap);
         auto DecModuleOrErr = buildObligationModule(DecPP);
+        // A spec's postcondition is proved with its termination.
+        const std::string DecLabel = Fn->IsSpec && !Fn->Postconditions.empty()
+                                         ? "spec decreases and post: "
+                                         : "spec decreases: ";
+        if (Fn->IsSpec)
+          UndefinedSpecs.insert(Fn->Identity);
+        if (Fn->IsSpec && !Fn->Postconditions.empty())
+          UnprovenPosts.insert(Fn->Identity);
         if (!DecModuleOrErr) {
           AllOk = false;
           AnyFailed = true;
@@ -971,24 +1299,41 @@ public:
             continue;
           }
           if (Fn->IsSpec) {
-            Diags.push_back({VerifyDiagnostic::Lowered,
-                             "spec decreases: " + Fn->Name, SourceLocation(),
-                             Fn->Name, DR});
+            UnprovenPosts.erase(Fn->Identity);
+            Diags.push_back({VerifyDiagnostic::Lowered, DecLabel + Fn->Name,
+                             SourceLocation(), Fn->Name, DR});
             continue;
           }
         } else {
           VerifyResult R = Backend->verify(DecModule);
+          if (Fn->IsSpec && (R.Reason == VerifyReason::SpecHidden ||
+                             R.Reason == VerifyReason::SpecFuel)) {
+            // The function is opaque in its own termination check.
+            std::string Rule =
+                "a definition cannot be used to prove its own termination, "
+                "so every recursive call of " +
+                Fn->Name +
+                " must decrease the measure whatever its other calls return";
+            R.Message = R.Reason == VerifyReason::SpecHidden
+                            ? std::move(Rule)
+                            : Rule + " (" + R.Message + ")";
+          }
           if (R.Status == VerifyStatus::Exported) {
             Diags.push_back({VerifyDiagnostic::Exported,
                              "decreases: " + Fn->Name, R.Location, Fn->Name,
                              R});
-            if (Fn->IsSpec)
+            if (Fn->IsSpec) {
+              UndefinedSpecs.erase(Fn->Identity);
+              UnprovenPosts.erase(Fn->Identity);
               continue;
+            }
           } else if (R.Status == VerifyStatus::Verified) {
             if (Fn->IsSpec) {
-              Diags.push_back({VerifyDiagnostic::Verified,
-                               "spec decreases: " + Fn->Name, R.Location,
-                               Fn->Name, R});
+              UndefinedSpecs.erase(Fn->Identity);
+              UnprovenPosts.erase(Fn->Identity);
+              Diags.push_back({VerifyDiagnostic::Verified, DecLabel + Fn->Name,
+                               R.Location, Fn->Name, R});
+              recordDependencies(*Fn, DecModule);
               continue;
             }
           } else {
@@ -997,15 +1342,20 @@ public:
                 IsUnresolved &&
                 exportLeanFallback(DecModule, "decreases: " + Fn->Name, R);
             if (Opts.LeanCertify && FallbackExported) {
-              if (Fn->IsSpec)
+              if (Fn->IsSpec) {
+                UndefinedSpecs.erase(Fn->Identity);
+                UnprovenPosts.erase(Fn->Identity);
                 continue;
+              }
             } else {
               AllOk = false;
               AnyFailed = true;
               if (!Fn->IsProof)
                 FailedCallers.insert(Fn->Identity);
               std::string Message =
-                  std::string(Fn->IsSpec ? "spec decreases " : "decreases ") +
+                  std::string(
+                      Fn->IsSpec ? DecLabel.substr(0, DecLabel.size() - 2) + " "
+                                 : "decreases ") +
                   (IsUnresolved ? "unresolved: " : "failed: ") + Fn->Name +
                   backendSuffix(R);
               if (!R.Message.empty())
@@ -1202,12 +1552,75 @@ public:
 
       VerifyResult R =
           BMCResult ? std::move(*BMCResult) : Backend->verify(Module);
-      if (R.Status == VerifyStatus::Verified) {
-        Diags.push_back({VerifyDiagnostic::Verified,
+      if (R.Status == VerifyStatus::Verified ||
+          R.Status == VerifyStatus::Certified) {
+        Diags.push_back({R.Status == VerifyStatus::Verified
+                             ? VerifyDiagnostic::Verified
+                             : VerifyDiagnostic::Certified,
                          Fn->Name + backendSuffix(R), R.Location, Fn->Name, R});
-      } else if (R.Status == VerifyStatus::Certified) {
-        Diags.push_back({VerifyDiagnostic::Certified,
-                         Fn->Name + backendSuffix(R), R.Location, Fn->Name, R});
+        recordDependencies(*Fn, BMCModule ? *BMCModule : Module);
+        std::set<std::string> Callees;
+        collectCallees(Fn->Body, Callees);
+        CallDependencies.emplace_back(Diags.size() - 1, Fn->Identity,
+                                      std::move(Callees));
+        // A proof that no execution reaches the end says nothing.
+        const bool Smoke = !BMCResult && Opts.Backend != BackendKind::Lean;
+        bool WhollyVacuous = false;
+        if (Smoke && unreachable(PP, /*EntryOnly=*/false)) {
+          WhollyVacuous = true;
+          const size_t Verdict = Diags.size() - 1;
+          Diags[Verdict].Message += " [vacuous]";
+          Diags[Verdict].Vacuous = true;
+          Diags.push_back(
+              {VerifyDiagnostic::Warning,
+               unreachable(PP, /*EntryOnly=*/true)
+                   ? Fn->Name + ": the precondition is unsatisfiable, so "
+                                "every claim about it holds vacuously"
+                   : Fn->Name + ": no execution reaches the end, so its "
+                                "postcondition holds vacuously; check the "
+                                "contracts it calls and its assumptions",
+               R.Location, Fn->Name});
+        }
+        if (Smoke && !WhollyVacuous) {
+          const size_t Verdict = Diags.size() - 1;
+          // A behavior that never applies has its postconditions unchecked.
+          for (const auto &[Name, Assumes] : PP.BehaviorAssumes)
+            if (proves(smokeProgram(PP, 0, falseGoal(), Assumes.get())))
+              Diags.push_back(
+                  {VerifyDiagnostic::Warning,
+                   Fn->Name + ": behavior " + Name +
+                       " never applies: its assumption contradicts the "
+                       "preconditions, so its postconditions are never "
+                       "checked",
+                   Assumes->Loc, Fn->Name});
+          // A trusted contract that contradicts the state of a call makes
+          // everything after the call hold vacuously.
+          for (size_t I = 0; I < PP.Stmts.size(); ++I) {
+            const PassiveStmt &Post = *PP.Stmts[I];
+            if (Post.TrustedCallee.empty() || !Post.CallGuard)
+              continue;
+            auto unreached = [&](size_t Count) {
+              return proves(smokeProgram(
+                  PP, Count,
+                  std::make_unique<VUnaryOpExpr>(
+                      VUnaryOp::Not, cloneVExpr(Post.CallGuard.get()),
+                      VType::makeBool(), Post.CallLoc)));
+            };
+            if (!unreached(I + Post.PostClauses) || unreached(I))
+              continue;
+            if (!Diags[Verdict].Vacuous) {
+              Diags[Verdict].Message += " [vacuous]";
+              Diags[Verdict].Vacuous = true;
+            }
+            Diags.push_back(
+                {VerifyDiagnostic::Warning,
+                 Fn->Name + ": the trusted contract of " +
+                     Post.TrustedCallee +
+                     " contradicts the state of this call, so everything "
+                     "after it holds vacuously",
+                 Post.CallLoc, Fn->Name});
+          }
+        }
       } else if (R.Status == VerifyStatus::Exported) {
         Diags.push_back({VerifyDiagnostic::Exported,
                          "lean obligation: " + Fn->Name, R.Location, Fn->Name,
@@ -1247,6 +1660,200 @@ public:
                            R.Location, Fn->Name, R});
         }
       }
+    }
+
+    for (const auto &[Index, Specs] : ProofDependencies) {
+      std::string Undefined;
+      std::string Unframed;
+      std::string Unproven;
+      for (const std::string &Identity : Specs) {
+        auto It = FnMap.find(Identity);
+        const std::string &Name =
+            It != FnMap.end() ? It->second->Name : Identity;
+        if (UndefinedSpecs.count(Identity))
+          Undefined += (Undefined.empty() ? "" : ", ") + Name;
+        else if (UnframedSpecs.count(Identity))
+          Unframed += (Unframed.empty() ? "" : ", ") + Name;
+        else if (UnprovenPosts.count(Identity))
+          Unproven += (Unproven.empty() ? "" : ", ") + Name;
+      }
+      if (Undefined.empty() && Unframed.empty() && Unproven.empty())
+        continue;
+      VerifyDiagnostic &Diagnostic = Diags[Index];
+      AllOk = false;
+      Diagnostic.K = VerifyDiagnostic::Unresolved;
+      if (!Undefined.empty())
+        Diagnostic.Message += " [reason=spec.termination] (relies on the "
+                              "definition of " +
+                              Undefined +
+                              ", whose termination is not established)";
+      else if (!Unframed.empty())
+        Diagnostic.Message += " [reason=spec.reads] (relies on the reads "
+                              "clause of " +
+                              Unframed + ", which is not established)";
+      else
+        Diagnostic.Message += " [reason=spec.post] (relies on the "
+                              "postcondition of " +
+                              Unproven + ", which is not established)";
+      if (Diagnostic.Result) {
+        Diagnostic.Result->Status = VerifyStatus::Unresolved;
+        Diagnostic.Result->Reason =
+            !Undefined.empty()  ? VerifyReason::SpecTermination
+            : !Unframed.empty() ? VerifyReason::SpecReads
+                                : VerifyReason::SpecPost;
+      }
+    }
+
+    // Total correctness needs every loop to terminate. A bounded proof
+    // proves its unwinding, so every loop there exits within the bound.
+    for (const auto &[Index, Identity, Callees] : CallDependencies) {
+      VerifyDiagnostic &Diagnostic = Diags[Index];
+      auto It = FnMap.find(Identity);
+      if (It == FnMap.end() || It->second->UnmeasuredLoop.isInvalid() ||
+          (Diagnostic.K != VerifyDiagnostic::Verified &&
+           Diagnostic.K != VerifyDiagnostic::Certified) ||
+          (Diagnostic.Result && Diagnostic.Result->Bound))
+        continue;
+      AllOk = false;
+      const SourceLocation Loop = It->second->UnmeasuredLoop;
+      const PresumedLoc Where = Ctx.getSourceManager().getPresumedLoc(Loop);
+      Diagnostic.K = VerifyDiagnostic::Unresolved;
+      Diagnostic.Loc = Loop;
+      Diagnostic.Message +=
+          " [reason=decreases.missing] (the loop at " +
+          (Where.isValid() ? std::to_string(Where.getLine()) + ":" +
+                                 std::to_string(Where.getColumn())
+                           : std::string("?")) +
+          " has no decreases clause: give it a measure, or decreases(*) to "
+          "allow it to diverge)";
+      if (Diagnostic.Result) {
+        Diagnostic.Result->Status = VerifyStatus::Unresolved;
+        Diagnostic.Result->Reason = VerifyReason::DecreasesMissing;
+      }
+    }
+
+    // A verdict that assumes a callee's contract is a proof only once the
+    // callee establishes it.
+    std::set<std::string> Unestablished;
+    for (const auto &Fn : Functions)
+      if (!Fn->IsSpec && !Fn->Uninterpreted && !Fn->IsTrusted)
+        Unestablished.insert(Fn->Identity);
+    for (const auto &[Index, Identity, Callees] : CallDependencies)
+      if (Diags[Index].K == VerifyDiagnostic::Verified ||
+          Diags[Index].K == VerifyDiagnostic::Certified)
+        Unestablished.erase(Identity);
+    for (bool Changed = true; Changed;) {
+      Changed = false;
+      for (const auto &[Index, Identity, Callees] : CallDependencies) {
+        VerifyDiagnostic &Diagnostic = Diags[Index];
+        if (Diagnostic.K != VerifyDiagnostic::Verified &&
+            Diagnostic.K != VerifyDiagnostic::Certified)
+          continue;
+        std::string Names;
+        for (const std::string &Callee : Callees)
+          if (Callee != Identity && Unestablished.count(Callee)) {
+            auto It = FnMap.find(Callee);
+            Names += (Names.empty() ? "" : ", ") +
+                     (It != FnMap.end() ? It->second->Name : Callee);
+            if (It != FnMap.end() && It->second->IsExternalContract)
+              Names += " (no definition; mark it [[cppverify::trusted]] to "
+                       "assume it)";
+          }
+        if (Names.empty())
+          continue;
+        AllOk = false;
+        Diagnostic.K = VerifyDiagnostic::Unresolved;
+        Diagnostic.Message += " [reason=callee.contract] (relies on the "
+                              "contract of " +
+                              Names + ", which is not established)";
+        if (Diagnostic.Result) {
+          Diagnostic.Result->Status = VerifyStatus::Unresolved;
+          Diagnostic.Result->Reason = VerifyReason::CalleeContract;
+        }
+        Unestablished.insert(Identity);
+        Changed = true;
+      }
+    }
+    // A proof trusts what its callees' proofs trust, too.
+    std::map<std::string, std::set<std::string>> Trusts;
+    for (bool Changed = true; Changed;) {
+      Changed = false;
+      for (const auto &[Index, Identity, Callees] : CallDependencies) {
+        std::set<std::string> &Mine = Trusts[Identity];
+        const size_t Before = Mine.size();
+        for (const std::string &Callee : Callees) {
+          auto It = FnMap.find(Callee);
+          if (It == FnMap.end() || Callee == Identity)
+            continue;
+          if (It->second->IsTrusted)
+            Mine.insert(It->second->Name);
+          if (auto Inherited = Trusts.find(Callee); Inherited != Trusts.end())
+            Mine.insert(Inherited->second.begin(), Inherited->second.end());
+        }
+        Changed |= Mine.size() != Before;
+      }
+    }
+    for (const auto &[Index, Identity, Callees] : CallDependencies) {
+      VerifyDiagnostic &Diagnostic = Diags[Index];
+      if (Diagnostic.K != VerifyDiagnostic::Verified &&
+          Diagnostic.K != VerifyDiagnostic::Certified)
+        continue;
+      std::string Trusted;
+      for (const std::string &Name : Trusts[Identity]) {
+        Trusted += (Trusted.empty() ? "" : ",") + Name;
+        Diagnostic.Trusts.push_back(Name);
+      }
+      if (!Trusted.empty())
+        Diagnostic.Message += " [trusts=" + Trusted + "]";
+    }
+
+    // decreases(*) allows divergence, and so does calling a function that
+    // may diverge: such a proof covers only the executions that terminate.
+    std::map<std::string, std::string> Diverges;
+    for (const auto &Fn : Functions)
+      if (Fn->DivergenceLoc.isValid()) {
+        const PresumedLoc Where =
+            Ctx.getSourceManager().getPresumedLoc(Fn->DivergenceLoc);
+        Diverges[Fn->Identity] =
+            "decreases(*) at " +
+            (Where.isValid() ? std::to_string(Where.getLine()) + ":" +
+                                   std::to_string(Where.getColumn())
+                             : std::string("?")) +
+            " allows it to diverge";
+      }
+    for (bool Changed = true; Changed;) {
+      Changed = false;
+      for (const auto &Fn : Functions) {
+        if (Fn->IsSpec || Fn->IsProof || Diverges.count(Fn->Identity))
+          continue;
+        std::set<std::string> Callees;
+        collectCallees(Fn->Body, Callees);
+        for (const std::string &Callee : Callees)
+          if (auto It = Diverges.find(Callee); It != Diverges.end()) {
+            auto Target = FnMap.find(Callee);
+            Diverges[Fn->Identity] =
+                "it calls " +
+                (Target != FnMap.end() ? Target->second->Name : Callee) +
+                ", which may diverge";
+            Changed = true;
+            break;
+          }
+      }
+    }
+    for (const auto &[Index, Identity, Callees] : CallDependencies) {
+      VerifyDiagnostic &Diagnostic = Diags[Index];
+      auto It = Diverges.find(Identity);
+      if (It == Diverges.end() ||
+          (Diagnostic.K != VerifyDiagnostic::Verified &&
+           Diagnostic.K != VerifyDiagnostic::Certified))
+        continue;
+      Diagnostic.Message += " [partial]";
+      Diagnostic.Partial = true;
+      Diags.push_back({VerifyDiagnostic::Warning,
+                       Diagnostic.FunctionName +
+                           ": proved only for executions that terminate: " +
+                           It->second,
+                       SourceLocation(), Diagnostic.FunctionName});
     }
 
     if (HasLeanProject) {
@@ -1374,6 +1981,16 @@ public:
     if (Source.isValid())
       Record["source"] = sourceJSON(Source);
 
+    if (D.Vacuous)
+      Record["vacuous"] = true;
+    if (D.Partial)
+      Record["partial"] = true;
+    if (!D.Trusts.empty()) {
+      llvm::json::Array Trusted;
+      for (const std::string &Name : D.Trusts)
+        Trusted.push_back(jsonText(Name));
+      Record["trusts"] = std::move(Trusted);
+    }
     if (D.Result) {
       const VerifyResult &Result = *D.Result;
       if (!Result.BackendName.empty())
@@ -1399,6 +2016,18 @@ public:
       }
       if (!Result.CacheError.empty())
         Record["cache_error"] = jsonText(Result.CacheError);
+      if (!Result.QuantifierProfile.empty()) {
+        llvm::json::Array Quantifiers;
+        for (const QuantifierProfileEntry &Entry : Result.QuantifierProfile) {
+          llvm::json::Object Item;
+          Item["line"] = static_cast<int64_t>(Entry.Line);
+          Item["column"] = static_cast<int64_t>(Entry.Column);
+          Item["instances"] = static_cast<int64_t>(Entry.Instances);
+          Item["max_generation"] = static_cast<int64_t>(Entry.MaxGeneration);
+          Quantifiers.push_back(std::move(Item));
+        }
+        Record["quantifier_profile"] = std::move(Quantifiers);
+      }
       if (Result.Evidence) {
         llvm::json::Object Evidence;
         Evidence["solver"] = Result.Evidence->Solver;
@@ -1493,6 +2122,11 @@ public:
         break;
       case VerifyDiagnostic::Unresolved:
         OS << "Unresolved: " << D.Message << "\n";
+        if (D.Result)
+          for (const QuantifierProfileEntry &Entry : D.Result->QuantifierProfile)
+            OS << "note: the quantifier at " << Entry.Line << ":"
+               << Entry.Column << " was instantiated " << Entry.Instances
+               << " times, up to generation " << Entry.MaxGeneration << "\n";
         break;
       case VerifyDiagnostic::BoundedSafe:
         OS << "BoundedSafe: " << D.Message << "\n";
@@ -1505,6 +2139,9 @@ public:
         break;
       case VerifyDiagnostic::MixedProof:
         OS << "Proved (" << D.Result->BackendName << "): " << D.Message << "\n";
+        break;
+      case VerifyDiagnostic::Trusted:
+        OS << "Trusted: " << D.Message << "\n";
         break;
       case VerifyDiagnostic::Warning:
         OS << "warning: " << D.Message << "\n";
