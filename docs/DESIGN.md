@@ -1075,7 +1075,9 @@ proof void sum_concat(seq s, seq t)
 
 - A query over collections gets `--collection-timeout` milliseconds (by
   default twice `--timeout`): their theories need more search than integer
-  arithmetic.
+  arithmetic. With more than one job (the default), a query over sequences
+  is also solved in the plain sequence theory, which refutes false claims
+  much faster than the encoding tuned for proofs.
 - Collections exist only for verification: they may appear in contracts,
   ghost code (`ghost seq s = ...;`, assignment in ghost blocks), and as
   parameters and results of spec and proof functions. Sema rejects every use
@@ -1292,8 +1294,9 @@ replay.
 `CPPVERIFY_JOBS`; the compile-time verifier uses one). Functions are verified
 as tasks on it, each with its own backends; a function's obligations are
 tasks on the same pool, and with workers to spare its whole query races the
-obligations solved one by one, a proof by either interrupting the other.
-Each task constructs a distinct Z3 context/solver, and dumps, archive
+obligations solved one by one, a proof by either interrupting the other; a
+query over sequences is also solved in the plain sequence theory, which
+finds counterexamples faster. Each task constructs a distinct Z3 context/solver, and dumps, archive
 records, and diagnostics are buffered per function and published in
 canonical source order, so concurrency cannot choose which failure is public.
 `--function-timeout` (by default unset) bounds all queries of one function
