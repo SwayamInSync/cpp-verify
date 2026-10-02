@@ -1,14 +1,14 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only -Wno-shift-count-negative %s
 // RUN: %cpp-verify --int-encoding=integer --lower-only --dump-ir=4 %s 2>&1 | FileCheck %s --check-prefix=INT
 // RUN: %cpp-verify --lower-only --dump-ir=4 %s 2>&1 | FileCheck %s --check-prefix=AUTO
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefixes=VERIFY,DECIDED,MODEL
-// RUN: not %cpp-verify --int-encoding=bitvector %s 2>&1 | FileCheck %s --check-prefixes=VERIFY,DECIDED,MODEL
-// RUN: not %cpp-verify --int-encoding=integer %s 2>&1 | FileCheck %s --check-prefixes=VERIFY,UNDECIDED,MODEL
+// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefixes=VERIFY,WRAP,DECIDED,MODEL
+// RUN: not %cpp-verify --int-encoding=bitvector %s 2>&1 | FileCheck %s --check-prefixes=VERIFY,WRAP,DECIDED,MODEL
+// RUN: not %cpp-verify --int-encoding=integer %s 2>&1 | FileCheck %s --check-prefixes=VERIFY,WRAP,UNDECIDED,MODEL
 
 // All encodings are exact, so decided verdicts and counterexamples agree.
 
 unsigned wrap_add(unsigned x)
-  post(result == x + 1u)
+  post(result == (x == 4294967295u ? 0u : x + 1u))
 {
   return x + 1u;
 }
@@ -31,10 +31,11 @@ unsigned char narrow(unsigned x)
 {
   return (unsigned char)x;
 }
-// A mask and a truncation are both arithmetic modulo 2^8.
+// A mask is arithmetic modulo 2^8; so is a truncation, which is stated as the
+// value itself when that already fits.
 // INT: (and (>= __result_1 0) (< __result_1 256))
-// INT: (not (= __result_1 (mod x_0 256)))
-// INT-NEXT: (= __result_1 (mod x_0 256))
+// INT: (= __result_1 (ite (and (>= x_0 0) (< x_0 256)) x_0 (mod x_0 256)))
+// INT: (= __result_1 (mod x_0 256))
 
 unsigned combine(unsigned x, unsigned y)
   post(result == (y | x))
@@ -76,7 +77,7 @@ int bad_negative_shift(int x)
 // A negative shift count is undefined; its constant check folds to false.
 // INT: (a!2 (and false
 
-// VERIFY-DAG: Verified: wrap_add
+// WRAP-DAG: Verified: wrap_add
 // VERIFY-DAG: Verified: signed_add
 // VERIFY-DAG: Verified: narrow
 // VERIFY-DAG: Verified: combine

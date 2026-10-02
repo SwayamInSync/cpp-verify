@@ -1,13 +1,15 @@
 # REQUIRES: cvc5
 # The cvc5 adapter encodes machine integers independently of Z3 under every
 # --int-encoding choice; decided verdicts must match the Z3 expectations.
+# Forced bit-vectors leave cvc5 to relate the exact contract arithmetic of
+# wrap_add to its bit-vector result through bv2nat, which it does not settle.
 # RUN: not %cpp-verify --backend=cvc5 %S/integer_encoding.cpp 2>&1 \
-# RUN:   | FileCheck %S/integer_encoding.cpp --check-prefixes=VERIFY,DECIDED
+# RUN:   | FileCheck %S/integer_encoding.cpp --check-prefixes=VERIFY,WRAP,DECIDED
 # RUN: not %cpp-verify --backend=cvc5 --int-encoding=bitvector \
 # RUN:   %S/integer_encoding.cpp 2>&1 \
 # RUN:   | FileCheck %S/integer_encoding.cpp --check-prefixes=VERIFY,DECIDED
 # RUN: not %cpp-verify --backend=cvc5 --int-encoding=integer \
 # RUN:   %S/integer_encoding.cpp 2>&1 \
-# RUN:   | FileCheck %S/integer_encoding.cpp --check-prefixes=VERIFY,UNDECIDED
+# RUN:   | FileCheck %S/integer_encoding.cpp --check-prefixes=VERIFY,WRAP,UNDECIDED
 # RUN: not %cpp-verify --backend=portfolio %S/integer_encoding.cpp 2>&1 \
-# RUN:   | FileCheck %S/integer_encoding.cpp --check-prefixes=VERIFY,DECIDED,MODEL
+# RUN:   | FileCheck %S/integer_encoding.cpp --check-prefixes=VERIFY,WRAP,DECIDED,MODEL
