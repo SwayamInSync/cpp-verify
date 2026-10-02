@@ -88,6 +88,9 @@ config.substitutions.append(("%src_include_dir", config.clang_src_dir + "/includ
 config.substitutions.append(("%target_triple", config.target_triple))
 
 config.substitutions.append(("%PATH%", config.environment["PATH"]))
+# lit runs many cpp-verify processes at once; each uses one solver job unless
+# a test asks for more.
+config.environment["CPPVERIFY_JOBS"] = "1"
 
 
 # For each occurrence of a clang tool name, replace it with the full path to
