@@ -146,7 +146,7 @@ void slice_region_write(int *p, int count, int offset)
 // VERIFY-DAG: error: verification failed: out_of_bounds_difference
 // VERIFY-DAG: error: verification failed: negative_position_difference
 // VERIFY-DAG: error: verification failed: unrepresentable_pointer_difference
-// VERIFY-DAG: error: verification failed: cross_origin_difference
+// VERIFY-DAG: Unresolved: cross_origin_difference [{{.*}}] [reason=construct.unsupported]
 // VERIFY-DAG: error: verification failed: wrong_slice_difference
 // VERIFY-DAG: error: verification failed: unsafe_difference_argument
 // VERIFY-DAG: error: verification failed: unsafe_difference_postcondition
@@ -160,7 +160,7 @@ void slice_region_write(int *p, int count, int offset)
 // BMC-DAG: error: verification failed: out_of_bounds_difference
 // BMC-DAG: error: verification failed: negative_position_difference
 // BMC-DAG: error: verification failed: unrepresentable_pointer_difference
-// BMC-DAG: error: verification failed: cross_origin_difference
+// BMC-DAG: Unresolved: cross_origin_difference [{{.*}}] [reason=construct.unsupported]
 // BMC-DAG: error: verification failed: wrong_slice_difference
 // BMC-DAG: error: verification failed: unsafe_difference_argument
 // BMC-DAG: error: verification failed: unsafe_difference_postcondition
