@@ -1433,16 +1433,6 @@ class Evaluator {
       S.push_back(*X);
       return LogicValue::sequence(std::move(S));
     }
-    case Op::SeqUpdate: {
-      const CertInt *I = integerAt(1);
-      const CertInt *X = integerAt(2);
-      if (!kindAt(0, VK::Seq) || !I || !X)
-        break;
-      std::vector<CertInt> S = *Operands[0].Elements;
-      if (!I->isNegative() && *I < CertInt(static_cast<int64_t>(S.size())))
-        S[static_cast<size_t>(I->bits(64).getZExtValue())] = *X;
-      return LogicValue::sequence(std::move(S));
-    }
     case Op::SeqSubrange: {
       const CertInt *Lo = integerAt(1);
       const CertInt *Hi = integerAt(2);
