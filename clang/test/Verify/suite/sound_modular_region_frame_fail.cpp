@@ -1,8 +1,10 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
+spec bool valid(int *p, int n) { return true; }
+
 void clobber_offset(int *p)
-  pre(p != nullptr)
+  pre(valid(p, 2))
   modifies(*p)
   post(*p == 0)
 {
@@ -11,7 +13,7 @@ void clobber_offset(int *p)
 }
 
 void invalid_region_frame(int *p)
-  pre(p != nullptr && p[1] == 5)
+  pre(valid(p, 2) && p[1] == 5)
   modifies(*p)
   post(p[1] == 5)
 {
@@ -19,4 +21,4 @@ void invalid_region_frame(int *p)
 }
 
 // VERIFY-DAG: Verified: clobber_offset
-// VERIFY-DAG: error: verification failed: invalid_region_frame
+// VERIFY-DAG: error: verification failed: invalid_region_frame [{{.*}}::postcondition@
