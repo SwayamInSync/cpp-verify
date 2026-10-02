@@ -38,8 +38,12 @@ Other flags
 -----------
 
 - ``cpp-verify --backend={z3,bmc,lean}`` — verification engine (see :doc:`ch17-backends-modular-calls`)
-- ``cpp-verify --check-ub`` — add ``valid(p, n)`` buffer-bounds checks to
-  always-on core definedness (see :doc:`ch18-undefined-behavior`)
+- ``cpp-verify --no-check-ub`` — turn off the default memory checks (object
+  bounds of accesses and pointer arithmetic, enumeration ranges); core
+  definedness stays on (see :doc:`ch18-undefined-behavior`)
+- ``cpp-verify --profile-quantifiers`` — for an unresolved quantified query,
+  report how often each quantifier was instantiated (see
+  :doc:`ch16-when-verification-fails`)
 - ``cpp-verify --unroll=N`` — loop bound for BMC
 - ``cpp-verify --timeout=N`` — per-query Z3 timeout in ms (default 30000)
 - ``cpp-verify --diagnostics-format=json`` — emit versioned
