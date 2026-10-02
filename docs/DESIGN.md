@@ -10,21 +10,31 @@ All contract syntax is enabled with `-fverify-contracts`. Without this flag, the
 |---|---|---|
 | `pre(expr)` | After function `)` | Precondition — caller must satisfy |
 | `post(expr)` | After function `)` | Postcondition — callee must establish; may use `result` and `old(x)` |
-| `modifies(lvalue, ...)` | After function `)` | Frame condition — declares the lvalues this function may write to |
+| `modifies(lvalue, ...)` | After function `)`, or after a loop's invariants | Frame condition — the cells, ranges `p[lo : n]`, or objects this function or loop may write |
 | `aliases(p, q)` | After function `)` | Opts out of implicit non-aliasing for a supported same-pointee pointer/reference address pair |
 | `recommends(expr)` | After function `)` (spec only) | Soft precondition for spec functions; reported on verification failure |
+| `behavior(name, assumes)` | After function `)`, followed by its `pre`/`post` | A case of the contract (ACSL behavior) |
+| `complete_behaviors` / `disjoint_behaviors` | After the behaviors | Some behavior / at most one behavior applies to every admitted input |
 | `invariant(expr)` | After a `while`/`for` condition or a `do` loop's trailing condition | Loop invariant |
-| `decreases(expr [, expr...])` | After loop `)` or function `)` | Termination measure. Tuple form is lex-ordered. |
+| `decreases(expr [, expr...])` | After loop `)` or function `)` | Termination measure. Tuple form is lex-ordered. Required on executable loops. |
+| `decreases(*)` | After an executable loop or function | Allows divergence; proofs then cover terminating executions (`[partial]`) |
 | `type_invariant(expr)` | Inside class/struct body | Per-instance invariant injected at function boundaries |
 | `ghost { ... }` | Statement | Ghost block — proof steps, stripped by CodeGen |
+| `ghost T x = e;` | Statement | Function-scoped ghost variable |
 | `contract_assert(expr)` | Statement | Verification condition (not a runtime check) |
+| `contract_assert(expr) by { ... }` | Statement | Proves `expr` from a local proof whose other facts are discarded |
+| `calc { e0; op { ... } e1; ... }` | Statement | Chain of proved steps concluding `e0 R en` |
 | `reveal_with_fuel(fn, n)` | Inside ghost blocks | Locally raise Z3 unfolding depth for spec function `fn` |
 | `spec T f(...)` | Declaration | Pure spec function — interpreted by verifier only |
 | `proof void f(...)` | Declaration | Ghost proof function — establishes lemmas |
 | `forall(i, lo, hi, expr)` | Expression | Bounded universal quantifier |
 | `exists(i, lo, hi, expr)` | Expression | Bounded existential quantifier |
+| `forall(i, expr)` / `exists(i, expr)` | Expression | Quantifier over all mathematical integers |
+| `trigger(term)` | Inside a quantifier body | Makes `term` the pattern that instantiates the quantifier |
+| `choose(i, [lo, hi,] expr)` | Expression | Some integer satisfying `expr` (Hilbert ε) |
 | `old(expr)` | Inside `post` or `invariant` | Value of `expr` at function entry |
 | `result` | Inside `post` | Return value of the enclosing function |
+| `cppverify::seq`, `set`, `multiset`, `map` | `<cppverify.h>` | Mathematical collections for specifications and ghost code |
 
 ## Function Contracts: pre / post / modifies / aliases / recommends
 
@@ -44,6 +54,68 @@ void swap(int* a, int* b)
 - `aliases(p, q)`: see §Pointers and Memory below.
 - Multiple `pre` / `post` / `modifies` clauses are conjuncted.
 - Parsed after the function declarator's `)` and before `{`.
+- A parameter named in `post` denotes its value at entry, as in ACSL, even
+  when the body assigns the parameter; callers can therefore use the
+  postcondition.
+
+### Behaviors
+
+```cpp
+int abs_value(int x)
+  behavior(nonnegative, x >= 0)
+    post(result == x)
+  behavior(negative, x < 0)
+    pre(x > -2147483647 - 1)
+    post(result == -x)
+  complete_behaviors
+  disjoint_behaviors
+{
+  return x < 0 ? -x : x;
+}
+```
+
+- `behavior(name, assumes)` starts a case, as ACSL behaviors do. The `pre`
+  and `post` clauses after it, up to the next behavior, apply where the
+  assumption holds: `assumes -> pre`, and `old(assumes) -> post`.
+- `complete_behaviors` requires that some behavior applies to every input the
+  preconditions admit; `disjoint_behaviors` that no two do. Either may list
+  the behaviors it relates, e.g. `disjoint_behaviors(low, high)`. Both are
+  checked at function entry.
+
+### Verdicts that rest on other contracts
+
+A caller's proof uses its callees' contracts. When a callee's own
+verification does not establish its contract, a caller whose proof relies on
+it is `Unresolved` with reason `callee.contract`.
+
+```cpp
+[[cppverify::trusted]] int clamp_byte(int v)
+  post(0 <= result && result <= 255);
+```
+
+`[[cppverify::trusted]]` (a standard C++ attribute, like Verus's
+`#[verifier::external_body]`) marks a contract as assumed: on a declaration
+the contract holds at every call (whose preconditions are still checked); on
+a definition the body is compiled but not verified; on a proof function the
+postcondition is an axiom. A spec cannot be trusted, since its definition is
+its meaning. A trusted function reports `Trusted: f (contract assumed, not
+verified)`, and every verdict that relies on it, directly or through verified
+callees, carries `[trusts=f]`. A contract without a definition and without
+the mark is not assumed: a warning names it, and its callers are
+`Unresolved` with reason `callee.contract`. A trusted contract writes only
+its `modifies` footprints; without them it writes nothing through a pointer
+or reference to const, and is taken to write the whole heap through a
+mutable one (see `modifies` below).
+
+A proof that holds only because no execution reaches the claim is reported
+with `[vacuous]` and a warning. Assumptions enter a proof only at the
+preconditions and type invariants, behavior assumptions, and trusted
+contracts (a verified callee always returns), so every `Verified` result is
+checked at each: an unsatisfiable precondition, a function whose end no
+execution reaches, a behavior whose assumption contradicts the preconditions
+(its postconditions are never checked; warning only), and a trusted call
+whose contract contradicts the state of the call. Unreachable code alone
+is not flagged.
 
 ## Loop Contracts: invariant / decreases
 
@@ -56,7 +128,33 @@ while (i < n)
 ```
 
 - `invariant(expr)`: must hold on entry and be preserved by each iteration.
-- `decreases(expr [, expr...])`: termination measure. Single expression must be non-negative and strictly decreasing. Tuple form is lex-ordered: `decreases(a, b)` means `(a, b)` strictly decreases lexicographically.
+- `decreases(expr [, expr...])`: termination measure. Single expression must be non-negative and strictly decreasing. Tuple form is lex-ordered: `decreases(a, b)` means `(a, b)` strictly decreases lexicographically, and only the first component that changes must stay non-negative.
+- Verification is total correctness, as in Verus: every executable loop needs
+  `decreases`. Without one the function is `Unresolved` with reason
+  `decreases.missing`, unless BMC proves the loop's unwinding.
+  `decreases(*)` on a loop or an executable function allows divergence; the
+  proof then covers only executions that terminate, and that function and
+  every caller are reported `Verified ... [partial]` with a warning (JSON
+  `"partial": true`). Ghost and proof loops cannot use `decreases(*)`.
+- `modifies(...)` after a loop's invariants is ACSL's `loop assigns`: the
+  cells, ranges, and objects the loop may write, read in each iteration's
+  state. Each iteration starts with every other cell unchanged since the loop
+  began, and must end (and `continue`) that way, so a range such as
+  `a[0 : i]` can describe progress:
+
+```cpp
+for (int i = 0; i < n; i = i + 1)
+  invariant(0 <= i && i <= n)
+  modifies(a[0 : n])
+  decreases(n - i)
+{
+  a[i] = 0;
+}
+```
+
+  Without `modifies`, a loop writes only the objects its stores and calls
+  reach, inferred from the body: every other object keeps its value without
+  an invariant saying so.
 
 `do` loops place the clauses between the trailing condition and its semicolon:
 
@@ -91,7 +189,38 @@ contract_assert(x > 0);
 ```
 
 - Generates a verification condition (not a runtime check).
-- In ghost blocks, used for proof steps.
+- In ghost blocks, used for proof steps: once proved, the condition is
+  assumed for the rest of the function.
+- A function without contract clauses is still verified when its body has a
+  `contract_assert`, ghost code, or a loop contract.
+
+```cpp
+contract_assert(sq(a) <= sq(b)) by {
+    sq_monotone(a, b);
+}
+```
+
+- `contract_assert(c) by { proof }` proves `c` from a ghost proof, as Verus's
+  `assert ... by` and Dafny's `assert ... by` do: the proof's facts (lemma
+  posts, its own assertions, its locals) stay inside it, and only `c` holds
+  afterwards. It is encoded as `if (*) { proof; assert c; assume false }
+  assume c`, with the choice fresh in every execution, so BMC unrolling stays
+  sound.
+
+```cpp
+calc {
+    sq(a);
+    <= { sq_monotone(a, b); }
+    sq(b);
+    == b * b;
+}
+```
+
+- `calc { e0; op { proof } e1; ...; en; }` proves each step `e(k-1) op ek`
+  as an assert-by (the block is optional) and concludes `e0 R en`: `==` when
+  every step is `==`, `<` or `>` when some step is strict, else `<=` or `>=`.
+  Mixing `<`-like and `>`-like steps is rejected. `calc` is contextual: a
+  type or variable named `calc` keeps its meaning.
 
 ## Ghost Blocks
 
@@ -110,6 +239,10 @@ ghost {
   are rejected.
 - Ghost loops require `decreases`, because the loop is absent at runtime.
 - Stripped entirely by CodeGen — zero runtime cost.
+- `ghost T x = e;` declares a ghost variable in the enclosing function scope,
+  like Verus's `let ghost`: later ghost code, assertions, and loop invariants
+  may name it, so an invariant can refer to a value from before the loop.
+  Sema rejects any use from executable code.
 
 ## Spec Functions
 
@@ -132,13 +265,32 @@ spec int fibo(int n)
   pointer parameters but never write it; each call is evaluated in the heap
   state a load at that point would read (the current state, the entry state
   inside `old(...)`, or the call-site state of a callee contract).
-- Can be recursive (with `decreases`).
+- Can be recursive (with `decreases`). Its termination is proved without its
+  own definition, so every recursive call must lower the measure whatever the
+  spec's other calls return; a call inside `forall` or `exists` must lower it
+  for every bound value. Functions of one kind (spec, proof, or executable)
+  may recurse through each other when they share a measure of one length that
+  every call within the cycle lowers.
+- May declare `reads(p, n)`: the cells `p[0..n)` it depends on, checked
+  against its body (every load, and every range a heap-reading callee reads,
+  lies inside). A write outside them leaves every application unchanged, and
+  callers receive that frame at each store without unfolding the spec.
+- Takes no `pre`, `modifies`, or `aliases`: a spec is defined for every
+  argument, and `recommends` states its intended domain.
+- May declare `post(...)`, proved with its termination by well-founded
+  induction on the measure (a recursive call assumes the post only where its
+  measure is lower) and assumed at every application. A failed post demotes
+  the proofs that relied on it (`spec.post`, or `spec.termination` for a
+  recursive spec).
+- May declare `when(c)`: the body defines the spec only where `c` holds,
+  termination is checked there, and elsewhere its value is an uninterpreted
+  function of its arguments. A post holds within the domain.
 - **Integer semantics: mathematical (unbounded `Int` in Z3) by default.** See §Integer Semantics.
 - Body is interpreted by the verifier as an axiom; not compiled.
 - Can call other spec functions.
 - Type-checked by Clang Sema like normal functions.
 
-**Why termination must be verified:** A non-terminating spec function introduces a logical contradiction — Z3 can derive `bad(0) == bad(0) + 1`, therefore `0 == 1`, and from that prove anything. The `decreases` clause is the only thing about a spec function that needs verification. Its body is the mathematical definition and is axiomatically true by construction. Non-recursive spec functions need no verification at all.
+**Why termination must be verified:** A non-terminating spec function introduces a logical contradiction — Z3 can derive `bad(0) == bad(0) + 1`, therefore `0 == 1`, and from that prove anything. The `decreases` clause is the only thing about a spec function that needs verification. Its body is the mathematical definition and is axiomatically true by construction once the spec terminates, which is why the termination check cannot use it: a diverging spec's equations can be contradictory exactly where it diverges. Non-recursive spec functions need no verification at all.
 
 ### `recommends` — soft preconditions for spec functions
 
@@ -188,13 +340,16 @@ shifted mathematical value fits the corresponding unsigned type.
 - Want fast verification with abstract math semantics → write `spec`.
 - Want code reuse with runtime-honest semantics → write `constexpr` (and accept the machine-integer encoding cost).
 
-Calls in contract expressions retain the callee's integer semantics: a
-mathematical spec result stays unbounded, operations involving it are exact,
-and the implicit usual arithmetic conversions do not bound it. A mathematical
-value never wraps into a machine type. Storing it in a ghost or proof variable,
-passing it to a lifted `constexpr` parameter, casting it explicitly, or using
-it as a bitwise operand converts it, and that conversion carries an `overflow`
-obligation that the value fits.
+Calls retain the callee's integer semantics, in contracts and in ghost and
+proof code alike: a mathematical spec result (or collection length, element,
+or count) stays unbounded, operations involving it are exact, and the
+implicit usual arithmetic conversions do not bound it. A mathematical value
+never wraps into a machine type. Storing it in a ghost or proof variable,
+passing it to a machine parameter (of a proof function or a lifted
+`constexpr`), returning it, casting it explicitly, or using it as a bitwise
+operand converts it, and that conversion carries an `overflow` obligation
+that the value fits. So in a proof function `s.subrange(0, s.len() - 1)` is
+exact, while `int x = s[0];` must show that the element fits in an `int`.
 
 This is genuinely a CppVerify advantage over Verus — Verus forces users to maintain two separate bodies; we let one body do double duty *or* let users opt into a clean math-integer spec.
 
@@ -237,7 +392,7 @@ proof void lemma_fibo_monotonic(int i, int j)
 - Not compiled — exist only for verification.
 - **Integer semantics:** machine integers (matches `exec`).
 
-## Quantifiers: forall / exists (bounded)
+## Quantifiers: forall / exists
 
 ```cpp
 post(forall(i, 2, n, ret[i] == ret[i-1] + ret[i-2]))
@@ -246,12 +401,56 @@ post(forall(i, 2, n, ret[i] == ret[i-1] + ret[i-2]))
 
 pre(exists(j, 0, n, arr[j] == target))
 //   means: ∃j. 0 ≤ j < n ∧ body
+
+post(forall(k, sq(k) >= 0))
+//   forall(binder, body): ∀k ∈ ℤ. body
 ```
 
-- **MVP supports bounded quantifiers only.** The `[lo, hi)` range acts as the implicit Z3 trigger — no manual trigger annotation needed.
-- `binder` is a fresh variable of type `int` (mathematical, unbounded), scoped to `body`.
+- `binder` is a fresh mathematical integer, scoped to `body`.
 - `lo` and `hi` must be integer; `body` must be bool.
-- Post-MVP: unbounded `forall(i: T, body)` with optional explicit trigger syntax.
+- Without bounds the quantifier ranges over all mathematical integers. A
+  counterexample to one is certified exactly when its body depends on the
+  binder through memory reads, collection reads, and comparisons, because the
+  body is then constant beyond finitely many values; otherwise it is
+  `counterexample.unchecked`.
+
+### Triggers
+
+```cpp
+pre(forall(k, 0, n, trigger(a[k]) > 0))
+```
+
+- `trigger(term)` marks `term` as the pattern that instantiates the
+  quantifier, as Verus's `#[trigger]` does. It must be a memory read, a
+  collection read (`s[k]`, `contains`, `count`, map `[]`), or a call of a
+  recursive spec function, and it must mention a quantified variable; other
+  marks are ignored with a warning (a non-recursive spec is replaced by its
+  body, so mark a term of the body). Several marks in one body form one
+  multi-pattern. Without marks the solver chooses patterns itself.
+- `trigger` is contextual: a function or variable named `trigger` keeps its
+  meaning.
+- `--profile-quantifiers` reruns each query the solver left unresolved and
+  reports how often each quantifier was instantiated, and up to which
+  generation (`note: the quantifier at L:C was instantiated N times, up to
+  generation G`; JSON `quantifier_profile`), which exposes matching loops.
+- Patterns steer the solver; they never change meaning. They are not part
+  of archives or semantic hashes.
+
+### choose
+
+```cpp
+spec int half(int n) { return choose(k, 2 * k == n); }
+spec int index_of(const int *a, int n, int x) { return choose(k, 0, n, a[k] == x); }
+```
+
+- `choose(k, body)` is an integer for which `body` holds, when one exists,
+  and otherwise an unspecified integer (Hilbert ε); `choose(k, lo, hi, body)`
+  chooses in `[lo, hi)`. Each `choose` is a function of the values its body
+  mentions, so it is the same for the same values.
+- The verifier knows only that: a claim true for some choices but not all
+  fails with a certified counterexample for another choice.
+- `choose` exists only for verification; Sema rejects it in executable code.
+  It is contextual, like `trigger`.
 
 ## Pointers and Memory
 
@@ -285,8 +484,8 @@ casts remain rejected.
 At modular calls, a callee `valid(q, length)` extent can be instantiated from
 `q = p + offset` only after proving a same-root nonnegative subrange with
 `offset + length <= n`. Empty one-past slices, acyclic read-only forwarding,
-and exact-cell slice writes are supported. Symbolic finite write ranges and
-unbounded region effects through a proper sub-slice remain fail-closed.
+exact-cell slice writes, and writes to a whole sub-slice or a symbolic range
+are supported; the call frames every cell outside the written region.
 
 For direct local scalar `new`/`delete`, the value heap is accompanied by
 SSA-versioned metadata maps:
@@ -360,14 +559,29 @@ pointee value; ownership inference supplies lifetime authority, not an
 unstated functional result. The caller may mutate and delete the result, while
 double delete and every stale alias remain rejected.
 
-On the Z3, cvc5, portfolio, BMC, and Lean paths, `--check-ub` recognizes a conventional
-`valid(p, n)` spec call in a precondition as a buffer extent. It entails
-`n >= 0`; a positive extent entails non-null abstractly valid storage, while
-extent zero permits null. Every access rooted at `p` must then prove its index
-lies in `[0, n)`. Modular sub-slices prove nonnegative containment, and pointer
-difference positions prove the inclusive one-past range `[0, n]`. Core
-arithmetic, division, shift, and dereference definedness remain mandatory
-without the option.
+Memory accesses are checked by default on every backend (`--check-ub`, the
+default; `--no-check-ub` turns it off, leaving only the core expression
+definedness checks). `valid(p, n)` in a precondition declares a buffer
+extent: `p` points to `n` objects. `<cppverify.h>` provides it as
+`cppverify::valid` for every pointee type (verification-only, like the spec
+collections); a user-declared `spec bool valid(T *p, int n)` is the same
+marker. It entails `n >= 0`; a positive extent
+entails non-null abstractly valid storage, while extent zero permits null.
+Every access rooted at `p` must then prove its index lies in `[0, n)`.
+Modular sub-slices prove nonnegative containment, and pointer difference
+positions prove the inclusive one-past range `[0, n]`.
+
+A pointer without a declared extent addresses one object, as Frama-C's RTE
+`\valid` guards and Verus permissions require. An access through it must lie
+in that object: the parameter's entry object when the pointer steps from a
+parameter the body never reassigns, otherwise some parameter's object or the
+single object at a base known to be valid (a callee or external result).
+Pointer arithmetic must stay within the same object's closed range
+`[0, size]`, so forming `p + 10` from `valid(p, 2)` fails even without a
+dereference. Objects lie at positive addresses below `2^64`. A caller
+discharges a callee's single-object validity by showing its argument lies in
+one of its own objects. Abstract storage is initialized; represented local
+and dynamic storage keeps its metadata checks.
 
 The marker must be a positive top-level conjunction clause on a bare pointer to
 a complete object type. At most one marker may describe each pointer. Shifted,
@@ -386,7 +600,7 @@ pre(p != q && p != r && q != r && ...)   // for all distinct mut ptr/ref pairs
 ```
 
 - The caller's verification must establish these inequalities. Calling `swap(&x, &x)` produces a precondition failure.
-- With `--check-ub`, a pointer carrying a `valid(p, n)` extent contributes the
+- A pointer carrying a `valid(p, n)` extent contributes the
   whole extent (`n * sizeof(T)` bytes) as its complete object, so the pair is
   disjoint unless either pointer is null or either extent is empty. Callers
   prove disjointness of the extents they pass. An `aliases` pair keeps the
@@ -465,26 +679,38 @@ void incr_first(int* a, int* b)
 }
 ```
 
-- `modifies(X, Y, Z)` lists every lvalue the function may write to. Anything not listed is preserved.
-- Default if absent:
-  - Pure-typed functions (no pointers) modify nothing.
-  - Functions with mutable pointer/reference address parameters are treated as
-    potentially modifying reachable heap state at modular calls (conservative).
-- Users write `modifies(...)` to narrow the default.
-- Heap lvalue forms supported: scalar `ref`, `*p`, `p->field`, and `p[i]`.
-- `modifies(*p)` is a region permission inside the callee. At a modular call,
-  the restricted direct-scalar dynamic boundary recognizes caller-owned
-  storage. Other parameter-pointer calls conservatively havoc the whole value
-  heap and recover only the callee's postconditions.
-- A no-`modifies` address-parameter callee has the same conservative heap
-  effect. It cannot fit inside an explicit caller frame; an unframed caller can
-  use its own address parameters or checked caller-owned scalar allocations.
-- `modifies(p->field)` and `modifies(p[i])` are exact-address footprints and
-  preserve every other address. Entry-state frame containment prevents pointer
-  reassignment from expanding the declared frame.
-- Preconditions and `old(parameter)` use entry actual arguments. A plain
-  by-value parameter in a postcondition uses a fresh final value when the
-  callee syntactically reassigns that local parameter or flattened field.
+- `modifies(X, Y, Z)` lists every footprint the function may write to.
+  Anything not listed is preserved.
+- Every store to memory the function did not create itself (its own locals
+  and allocations) must lie in a footprint, as Frama-C's WP checks
+  `assigns`; a function without `modifies` stores only to its own storage.
+- A callee whose writes are not stated, because its contract has no
+  `modifies` while it takes a mutable pointer or reference and may write
+  (a trusted contract, or a verified function that calls such a callee), is
+  treated as writing the whole heap at a call: a caller with its own
+  `modifies` cannot call it, and a caller without one forgets every cell.
+  With a `valid` extent on such a callee the call is not supported.
+- Footprints:
+  - a cell: scalar `ref`, `p->field`, or `p[i]`, at its exact address;
+  - a range `p[lo : n]`: the `n` elements from `p[lo]`, half-open
+    `[lo, lo + n)` (Clang's array-section syntax);
+  - a region `*p`: the object `p` addresses, which is its `valid(p, n)`
+    extent when it has one and otherwise one object. A region of a single
+    scalar object is one cell.
+- Inside the callee every store must lie in a footprint, read in the entry
+  state, so reassigning a pointer cannot widen the frame; a footprint of a
+  callee must lie within the caller's own frame (index-based containment of
+  ranges and extents).
+- At a call, the caller's heap changes only inside the callee's footprints
+  instantiated with the arguments: a cell or range is exactly those cells, a
+  region is the argument's extent (or one object). Every other cell keeps its
+  value, and specs with `reads` clauses outside the footprints keep theirs.
+  When every footprint is a cell, the effect is a chain of stores of fresh
+  values; otherwise it is a frame relation over the regions. Region
+  footprints need the object model: under `--no-check-ub` a call with one
+  forgets the whole heap.
+- Preconditions and `old(parameter)` use entry actual arguments, and so does
+  a parameter named in a postcondition.
 - General reference binding and member-function effects are not yet in the
   verified subset.
 
@@ -605,12 +831,25 @@ bool contains(SortedArray a, int target)
 | `constexpr` lifted as spec | Machine (overflow happens) | `BitVec(N)` or range-checked `Int` |
 | `proof` function | Machine | `BitVec(N)` or range-checked `Int` |
 | `exec` (regular) function | Machine | `BitVec(N)` or range-checked `Int` |
+| Contract arithmetic (`pre`, `post`, invariants, assertions) | Mathematical | `Int` |
 
+- Contracts are mathematical, as in ACSL and Verus: `+`, `-`, `*`, `/`, `%`,
+  and unary `-` on the values of C++ expressions are exact, so
+  `post(result + 1 > result)` holds. An implicit conversion whose result C++
+  could change (a narrowing, a sign change) keeps the value; a value-preserving
+  one is a machine extension. Quantifier binders are mathematical. A negative
+  constant converted to an unsigned type draws a warning. An explicit cast
+  still converts and is checked; write wraparound as `% 2^N`.
+- Comparisons between a machine value and a mathematical one are exact. A
+  mathematical operand that mentions a quantifier binder or a collection is
+  compared over the integers; otherwise a value outside the machine range
+  decides the comparison and one inside it is compared as a machine value.
 - Conversion at boundaries is explicit. Machine to mathematical is exact.
-  Mathematical to machine (materialization in ghost or proof code, a machine
-  parameter, an explicit cast, or a bitwise operand) is an `overflow`
-  obligation that the value fits; it never wraps. Implicit C++ conversions in
-  contracts keep a mathematical value unbounded.
+  Mathematical to machine (materialization in a ghost or proof variable, a
+  machine parameter, a return value, an explicit cast, or a bitwise operand)
+  is an `overflow` obligation that the value fits; it never wraps. Until
+  then, in contracts and in ghost and proof code, implicit C++ conversions
+  keep a mathematical value unbounded and arithmetic on it is exact.
 - Mathematical `spec` division and remainder are unbounded but use C++'s
   truncate-toward-zero sign convention. At a zero divisor their total logical
   extension is quotient zero and remainder equal to the dividend; evaluated
@@ -618,7 +857,8 @@ bool contains(SortedArray a, int target)
 - `--int-encoding` selects how machine integers reach the solver: `auto`
   (default; integers unless a query needs the bits of a non-constant
   operand), `integer`, or `bitvector`. Every choice is exact, so it changes
-  solver performance, never semantics.
+  solver performance, never semantics. A query left unresolved under a forced
+  `bitvector` encoding is retried with `auto`.
 
 ## old() Expression
 
@@ -672,11 +912,99 @@ int safe_fib(int n) pre(...) post(result == fibo(n)) {
   available to contracts and imported lemma postconditions. This is useful
   after a finite lemma has established all facts needed by a large arithmetic
   proof: irrelevant recursive equations can otherwise dominate solver time.
+- `hide` withholds the definition from proofs, not from the meaning of the
+  program. A counterexample must still hold under the hidden function's true
+  definition; a query that only its definition would settle is `Unresolved`
+  with reason `spec.hidden`, never `Failed` and never `Verified`.
 - Both constructs are implemented and are verification-only no-ops in CodeGen.
 
-## choose (Hilbert ε — post-MVP)
+## Faithful verdicts
 
-- Documented as future work. Useful for spec functions that need "some witness" semantics.
+- `Verified`: every fact given to a solver is a consequence of the program's
+  semantics: definitions, C++ machine arithmetic, and declared contracts.
+- `Failed`: a counterexample that holds when every logical function is
+  evaluated at its true definition. It is relative to the declared
+  abstractions only: callee contracts, loop invariants, and `modifies`
+  frames.
+- Anything else is `Unresolved` with a reason. `spec.fuel`: every
+  counterexample found relies on a recursive spec beyond what refinement could
+  unfold, and strong induction on the query's integer variables did not
+  prove it; `spec.hidden`: it relies on a hidden spec's value;
+  `counterexample.unchecked`: the counterexample could not be checked within
+  the certifier's budgets; `spec.termination`: the proof relies on a spec
+  whose termination check did not pass, so that spec has no definition;
+  `spec.reads`: the proof relies on a spec whose `reads` check did not pass,
+  so its frames are not facts; `spec.post`: it relies on a spec whose
+  postcondition is not established; `callee.contract`: it relies on a
+  callee contract that nothing establishes: the callee's verification
+  failed, or it has a contract but no definition and no trust mark;
+  `decreases.missing`: a loop has no termination measure;
+  `construct.unsupported`: the obligation that failed stands for a construct
+  the verifier does not model, so its counterexample says nothing about the
+  program.
+- Qualifiers: `[partial]` (proved for terminating executions only, after
+  `decreases(*)`), `[trusts=f]` (relies on the contract of `f`, marked
+  `[[cppverify::trusted]]`), `[vacuous]` (no execution reaches the claim).
+
+## Spec Collections
+
+```cpp
+#include <cppverify.h>
+using cppverify::seq;
+
+spec int sum(seq s)
+  decreases(s.len())
+{
+  return s.len() <= 0 ? 0 : sum(s.subrange(0, s.len() - 1)) + s[s.len() - 1];
+}
+
+int count_positive(const int *a, int n)
+  pre(valid(a, n) && n >= 0 && n <= 1000)
+  post(0 <= result && result <= n)
+{
+  ghost seq seen = cppverify::seq_empty();
+  int c = 0;
+  for (int i = 0; i < n; i = i + 1)
+    invariant(0 <= i && i <= n && 0 <= c && c <= i)
+    invariant(seen.len() == i)
+    invariant(forall(k, 0, i, seen[k] == a[k]))
+    decreases(n - i)
+  {
+    if (a[i] > 0)
+      c = c + 1;
+    ghost { seen = seen.push(a[i]); }
+  }
+  return c;
+}
+```
+
+`<cppverify.h>` declares four collections of mathematical integers, the
+counterparts of Verus's `Seq`, `Set`, `Multiset`, and `Map`:
+
+| Type | Operations |
+|---|---|
+| `seq` | `seq_empty()`, `seq_of(x)`, `len()`, `s[i]`, `push(x)`, `update(i, x)`, `subrange(lo, hi)`, `s + t`, `contains(x)` |
+| `set` | `set_empty()`, `insert(x)`, `remove(x)`, `contains(x)`, `unite(t)`, `intersect(t)`, `difference(t)`, `subset_of(t)` |
+| `multiset` | `multiset_empty()`, `insert(x)`, `remove(x)`, `count(x)` |
+| `map` | `map_empty()`, `insert(k, v)`, `remove(k)`, `contains(k)`, `m[k]` |
+
+- Every operation is total. A sequence index outside `[0, len())` reads 0,
+  an update there changes nothing, and `subrange` clamps both bounds; a key
+  outside a map's domain maps to 0; removing an absent multiset element
+  changes nothing.
+- Sequences are finite. Sets, multisets, and maps range over all integers and
+  may be infinite (a set may hold every integer).
+- `==` and `!=` compare elements in order, members, counts, or domain and
+  values.
+- Collections exist only for verification: they may appear in contracts,
+  ghost code (`ghost seq s = ...;`, assignment in ghost blocks), and as
+  parameters and results of spec and proof functions. Sema rejects every use
+  in executable code (declarations, operations, parameters, results).
+- A collection read can be a trigger, and counterexamples show collection
+  values: `[1, 2]`, `{1, 3..5}` (a run), `{2: 3}` (counts), `{1 -> 7}`, and
+  `{..}` (every integer).
+- Backends: Z3 decides all four. cvc5 decides sequences; sets, multisets,
+  and maps are `logic.unsupported` there, and Lean supports none.
 
 ## Clang Modification Details
 
@@ -704,32 +1032,43 @@ KEYWORD(result,           KEYCONTRACT)
 
 KEYCONTRACT flag: only active when `-fverify-contracts` is passed. Otherwise these are valid identifiers.
 
+`reads`, `when`, `behavior`, `complete_behaviors`, `disjoint_behaviors`,
+`calc`, `trigger`, and `choose` are contextual: they are recognized only in
+their contract positions (and `calc`, `trigger`, `choose` only when no
+declaration of that name is visible), so ordinary code keeps those names.
+
 ### AST Nodes
 
 **Expressions (inherit from Expr):**
 
 | Node | Fields | Type |
 |---|---|---|
-| ForallExpr | BoundVar, Lo, Hi, Body | BoolTy |
-| ExistsExpr | BoundVar, Lo, Hi, Body | BoolTy |
+| ForallExpr | BoundVar, Lo, Hi (both null when unbounded), Body | BoolTy |
+| ExistsExpr | BoundVar, Lo, Hi (both null when unbounded), Body | BoolTy |
+| ContractChooseExpr | BoundVar, Lo, Hi (optional), Body | the binder's type |
 | OldExpr | Inner | Inner->getType() |
 | ResultExpr | — | enclosing function's return type |
+
+A range footprint `p[lo : n]` reuses Clang's `ArraySectionExpr`; Sema accepts
+it only as a whole `modifies` footprint. A `trigger(term)` mark leaves `term`
+in place and records it in an `ASTContext` side table.
 
 **Statements (inherit from Stmt):**
 
 | Node | Fields |
 |---|---|
-| ContractAssertStmt | Expr (the condition) |
-| GhostBlockStmt | CompoundStmt (the body) |
+| ContractAssertStmt | Expr (the condition), optional CompoundStmt (the `by` proof); `calc` builds nested ones |
+| GhostBlockStmt | CompoundStmt (the body); `ghost T x = e;` wraps its declaration |
 | RevealWithFuelStmt | FunctionDecl* fn, int fuel |
 
 **Side-table info on existing nodes:**
 
 | Existing Node | New Data |
 |---|---|
-| FunctionDecl (via ASTContext side table) | preconditions, postconditions, modifies, aliases, recommends, isSpec, isProof, decreases |
-| WhileStmt / ForStmt | invariants, decreases |
+| FunctionDecl (via ASTContext side table) | preconditions, postconditions, modifies, aliases, recommends, isSpec, isProof, decreases, behavior checks |
+| WhileStmt / ForStmt / DoStmt | invariants, decreases, modifies |
 | RecordDecl | type_invariants |
+| VarDecl | ghost marker |
 
 ### Parser Entry Points
 
@@ -767,6 +1106,11 @@ KEYCONTRACT flag: only active when `-fverify-contracts` is passed. Otherwise the
     `spec` or `proof` functions; executable code, including initializers and
     default arguments, may not reference one. Unevaluated operands
     (`sizeof`, `decltype`) are exempt.
+12. The same holds for ghost variables, `choose`, and the `cppverify`
+    collections (their types as executable declarations, parameters, or
+    results, and every operation).
+13. A range `p[lo : n]` needs a pointer to a complete object type and
+    integer bounds, and is valid only as a whole `modifies` footprint.
 
 ### CodeGen Rules
 
@@ -858,7 +1202,8 @@ their human message: `counterexample`, `solver.timeout`, `solver.unknown`,
 `obligation.invalid`, `logic.unsupported`, `query.missing`,
 `backend.invalid-result`, `backend.inconsistent-results`,
 `bmc.incomplete-bound`, `lean.export-failed`, `cache.corrupt`,
-`cache.io-failed`, and `spec.fuel`.
+`cache.io-failed`, `spec.fuel`, `spec.hidden`, `spec.termination`,
+`spec.reads`, `spec.post`, and `counterexample.unchecked`.
 `--diagnostics-format=json` serializes verification results as versioned JSON
 Lines (`cppverify.diagnostic/1`) for both source verification and archive
 replay.
@@ -897,11 +1242,14 @@ signed/unsigned bit-vector operations and conversions, overflow predicates,
 equations owned by the module. It runs an installed executable with deterministic
 seed/resource options and bounded output; missing tools, invocation failures,
 timeouts, `unknown`, extra diagnostics, and malformed tokens are unresolved.
+The model cvc5 prints after `sat` is checked by the same certifier as Z3's, and
+refinement re-runs cvc5 with definition instances. Once a hidden instance has
+been given, non-recursive definitions are given whole; recursive ones never
+are, because cvc5 does not decide queries over them.
 
 `--backend=portfolio` runs ordered Z3 and cvc5 queries over that same module.
-Only `unsat`/`unsat` is `Verified`; only `sat`/`sat` is `Failed`, where cvc5's
-`spec.fuel` counts as `sat` beside a Z3 counterexample checked against the spec
-definitions; a decisive split is `backend.inconsistent-results`; and an
+Only `unsat`/`unsat` is `Verified`; only two certified counterexamples are
+`Failed`; a decisive split is `backend.inconsistent-results`; and an
 unresolved side keeps the portfolio unresolved. Agreed failures retain Z3's
 typed source model and trace.
 The persistent cache, when requested, memoizes only the portfolio's
