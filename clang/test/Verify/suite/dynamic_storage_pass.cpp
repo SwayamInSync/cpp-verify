@@ -138,7 +138,9 @@ int branch_initialized(bool choose)
 int allocation_after_incrementless_loop(int value)
   post(result == value)
 {
-  for (int i = 0; false;) {
+  for (int i = 0; false;)
+    decreases(0)
+  {
   }
   int *p = new int(value);
   int observed = *p;
