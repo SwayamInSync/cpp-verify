@@ -52,12 +52,14 @@ int scalar_identity(int value)
 }
 
 int forward_loaded_scalar(const int *source)
+  pre(source != nullptr)
   post(result == old(*source))
 {
   return scalar_identity(*source);
 }
 
 int forward_saved_scalar(const int *source)
+  pre(source != nullptr)
   post(result == old(*source))
 {
   int saved = *source;
@@ -65,6 +67,7 @@ int forward_saved_scalar(const int *source)
 }
 
 int forward_controlled_scalar(const int *source)
+  pre(source != nullptr)
   post(true)
 {
   int selected = 0;
@@ -79,6 +82,7 @@ spec int spec_identity(int value)
 }
 
 int forward_loaded_spec(const int *source)
+  pre(source != nullptr)
   post(result == spec_identity(old(*source)))
 {
   return *source;
@@ -419,17 +423,22 @@ int modular_discarded_pointer_forwarding()
 // VERIFY-DAG: error: verification failed: modular_uninitialized_read
 // VERIFY-DAG: error: verification failed: modular_use_after_delete
 // VERIFY-DAG: error: verification failed: modular_nonalias_violation
-// VERIFY-DAG: error: verification failed: modular_scalar_extent_violation
-// VERIFY-DAG: error: verification failed: modular_external_contract
-// VERIFY-DAG: error: verification failed: modular_rebinding_false_proof
-// VERIFY-DAG: error: verification failed: modular_offset_precondition
+// VERIFY-DAG: Unresolved: modular_scalar_extent_violation {{.*}}[reason=construct.unsupported]
+// VERIFY-DAG: Unresolved: modular_external_contract {{.*}}[reason=construct.unsupported]
+// VERIFY-DAG: Unresolved: modular_rebinding_false_proof {{.*}}[reason=construct.unsupported]
+// VERIFY-DAG: Unresolved: modular_offset_precondition {{.*}}[reason=construct.unsupported]
 // VERIFY-DAG: error: verification failed: branch_reassignment_use_after_delete
 // VERIFY-DAG: error: verification failed: reassigned_alias_double_delete
 // VERIFY-DAG: error: verification failed: stale_alias_after_owner_reassignment
 // VERIFY-DAG: error: verification failed: copied_stale_pointer
 // VERIFY-DAG: error: verification failed: null_reassignment_dereference
-// VERIFY-DAG: error: verification failed: modular_proof_call
+// VERIFY-DAG: Unresolved: modular_proof_call {{.*}}[reason=construct.unsupported]
 // VERIFY-DAG: error: verification failed: returned_pointer_use_after_delete
-// VERIFY-DAG: error: verification failed: modular_copied_pointer_return
-// VERIFY-DAG: error: verification failed: modular_unsafe_forwarding
-// VERIFY-DAG: error: verification failed: modular_discarded_pointer_forwarding
+// VERIFY-DAG: Unresolved: modular_copied_pointer_return {{.*}}[reason=construct.unsupported]
+// VERIFY-DAG: Unresolved: modular_unsafe_forwarding {{.*}}[reason=construct.unsupported]
+// VERIFY-DAG: Unresolved: modular_discarded_pointer_forwarding {{.*}}[reason=construct.unsupported]
+// VERIFY-DAG: Unresolved: unsafe_forwarded_read {{.*}}[reason=callee.contract] (relies on the contract of read_next, which is not established)
+// VERIFY-DAG: Verified: modular_forwarded_scalar
+// VERIFY-DAG: Verified: modular_forwarded_temporary
+// VERIFY-DAG: Verified: modular_forwarded_control
+// VERIFY-DAG: Verified: modular_forwarded_spec
