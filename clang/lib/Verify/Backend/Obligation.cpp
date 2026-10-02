@@ -63,8 +63,6 @@ const char *verify::logicCollectionOpName(LogicCollectionOp Op) {
     return "seq.index";
   case LogicCollectionOp::SeqPush:
     return "seq.push";
-  case LogicCollectionOp::SeqUpdate:
-    return "seq.update";
   case LogicCollectionOp::SeqSubrange:
     return "seq.subrange";
   case LogicCollectionOp::SeqConcat:
@@ -880,9 +878,6 @@ static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error) {
         return {{K::Seq, K::MathematicalInteger}, K::MathematicalInteger};
       case LogicCollectionOp::SeqPush:
         return {{K::Seq, K::MathematicalInteger}, K::Seq};
-      case LogicCollectionOp::SeqUpdate:
-        return {{K::Seq, K::MathematicalInteger, K::MathematicalInteger},
-                K::Seq};
       case LogicCollectionOp::SeqSubrange:
         return {{K::Seq, K::MathematicalInteger, K::MathematicalInteger},
                 K::Seq};
