@@ -105,8 +105,16 @@ static cl::opt<unsigned> CollectionTimeout(
 static cl::opt<unsigned> FunctionTimeout(
     "function-timeout",
     cl::desc("Milliseconds all queries of one function may take together "
-             "(default 0 = no limit)"),
-    cl::init(0), cl::cat(CppVerifyCategory));
+             "(default: ten times --timeout; 0 = no limit)"),
+    cl::cat(CppVerifyCategory));
+
+static unsigned functionTimeoutMs() {
+  if (FunctionTimeout.getNumOccurrences())
+    return FunctionTimeout;
+  return SolverTimeout > std::numeric_limits<unsigned>::max() / 10
+             ? 0
+             : 10 * SolverTimeout;
+}
 
 static unsigned collectionTimeoutMs() {
   if (CollectionTimeout.getNumOccurrences())
@@ -300,7 +308,7 @@ public:
       VOpts.BMCUnroll = BMCUnroll.getValue();
       VOpts.SolverTimeoutMs = SolverTimeout.getValue();
       VOpts.CollectionTimeoutMs = collectionTimeoutMs();
-      VOpts.FunctionTimeoutMs = FunctionTimeout.getValue();
+      VOpts.FunctionTimeoutMs = functionTimeoutMs();
       VOpts.SolverResourceLimit = SolverResourceLimit.getValue();
       VOpts.Jobs = jobs();
       VOpts.MaxQueryNodes = MaxQueryNodes.getValue();
