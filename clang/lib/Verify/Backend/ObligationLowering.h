@@ -18,7 +18,8 @@ ObligationKind obligationKind(ProofObligationKind Kind);
 llvm::Expected<std::unique_ptr<LogicExpr>>
 lowerLogicExpr(const VExpr *Expr, const std::string &ResultVar,
                const std::string &CurrentHeap,
-               VIntMode CallerMode = VIntMode::Math);
+               VIntMode CallerMode = VIntMode::Math,
+               const FunctionMap *Functions = nullptr);
 
 } // namespace verify
 } // namespace clang
