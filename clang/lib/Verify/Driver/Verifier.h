@@ -14,6 +14,10 @@ inline constexpr unsigned DefaultSolverTimeoutMs = 30000;
 /// Twice the default: collection theories need more search.
 inline constexpr unsigned DefaultCollectionTimeoutMs =
     2 * DefaultSolverTimeoutMs;
+/// Ten times the default: a function runs a whole query, its obligations,
+/// and their retries, so it legitimately takes several query timeouts.
+inline constexpr unsigned DefaultFunctionTimeoutMs =
+    10 * DefaultSolverTimeoutMs;
 
 enum class DiagnosticFormat { Text, Json };
 
@@ -43,7 +47,7 @@ struct VerifyOptions {
   /// The time all queries of one function may take together: a whole query,
   /// its obligations, and their retries and induction attempts; 0 disables
   /// it.
-  unsigned FunctionTimeoutMs = 0;
+  unsigned FunctionTimeoutMs = DefaultFunctionTimeoutMs;
   /// Deterministic per-query solver resource limit; 0 disables it.
   unsigned SolverResourceLimit = 0;
   /// Number of isolated solver jobs. 0 selects available physical cores.
