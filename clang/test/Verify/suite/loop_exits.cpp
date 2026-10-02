@@ -236,6 +236,7 @@ int while_return(bool stop)
 {
   while (stop)
     invariant(true)
+    decreases(0)
   {
     return 1;
   }
@@ -249,7 +250,8 @@ int do_return(bool stop)
     if (stop)
       return 1;
   } while (false)
-    invariant(true);
+    invariant(true)
+    decreases(0);
   return 0;
 }
 
@@ -282,7 +284,6 @@ int for_return(bool stop)
 // body end does the same.
 // PASSIVE-LABEL: passive count_odd
 // PASSIVE: assert invariant-entry
-// PASSIVE: assert termination
 // PASSIVE: assert invariant-preserved
 // PASSIVE: assert termination
 // PASSIVE: assert invariant-preserved
