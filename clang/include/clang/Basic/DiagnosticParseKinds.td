@@ -1896,6 +1896,8 @@ def err_contract_expected_body : Error<
   "expected '{' after ghost">;
 def err_ghost_declaration_not_variable : Error<
   "a ghost declaration must declare variables">;
+def err_contract_inductive_not_spec : Error<
+  "only a spec function can be inductive">;
 def err_contract_behavior_on_spec : Error<
   "a spec function has no behaviors; state its post directly">;
 def err_contract_behavior_name : Error<
