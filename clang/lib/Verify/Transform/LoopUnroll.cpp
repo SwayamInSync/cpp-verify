@@ -219,12 +219,30 @@ VFunction LoopUnroller::unroll(const VFunction &Fn, unsigned K) {
   Out.ReadsHeap = Fn.ReadsHeap;
   Out.RequiresCallDefinedness = Fn.RequiresCallDefinedness;
   Out.NeedsDecreasesCheck = Fn.NeedsDecreasesCheck;
+  Out.DivergenceLoc = Fn.DivergenceLoc;
+  Out.DivergenceDeclared = Fn.DivergenceDeclared;
+  Out.ObjectModel = Fn.ObjectModel;
+  Out.UnmeasuredLoop = Fn.UnmeasuredLoop;
+  Out.RecursionGroup = Fn.RecursionGroup;
+  Out.SpecDependencies = Fn.SpecDependencies;
+  for (const VReadRange &R : Fn.Reads)
+    Out.Reads.push_back(
+        {cloneVExpr(R.Base.get()), cloneVExpr(R.Count.get()), R.ElementSize});
+  Out.Domain = cloneVExpr(Fn.Domain.get());
+  Out.Uninterpreted = Fn.Uninterpreted;
+  Out.IsChoice = Fn.IsChoice;
   Out.IsExternalContract = Fn.IsExternalContract;
+  Out.IsTrusted = Fn.IsTrusted;
+  Out.IsBuiltin = Fn.IsBuiltin;
+  for (const auto &[Name, Assumes] : Fn.Behaviors)
+    Out.Behaviors.emplace_back(Name, cloneVExpr(Assumes.get()));
+  Out.DeclLoc = Fn.DeclLoc;
   Out.UsesDynamicStorage = Fn.UsesDynamicStorage;
   Out.FreshOwnedReturn = Fn.FreshOwnedReturn;
   Out.Params = Fn.Params;
   Out.SourceVariables = Fn.SourceVariables;
   Out.ReferenceParams = Fn.ReferenceParams;
+  Out.ConstAddressParams = Fn.ConstAddressParams;
   Out.ReturnFields = Fn.ReturnFields;
   Out.ExplicitPreconditionCount = Fn.ExplicitPreconditionCount;
   for (const auto &P : Fn.Preconditions)
@@ -235,8 +253,8 @@ VFunction LoopUnroller::unroll(const VFunction &Fn, unsigned K) {
   Out.PostconditionKinds = Fn.PostconditionKinds;
   for (const auto &R : Fn.Recommends)
     Out.Recommends.push_back(cloneVExpr(R.get()));
-  for (const auto &M : Fn.Modifies)
-    Out.Modifies.push_back(cloneVExpr(M.get()));
+  for (const VFootprint &M : Fn.Modifies)
+    Out.Modifies.push_back(cloneFootprint(M));
   for (const auto &A : Fn.Aliases)
     Out.Aliases.emplace_back(cloneVExpr(A.first.get()),
                              cloneVExpr(A.second.get()));
