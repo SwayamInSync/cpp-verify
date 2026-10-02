@@ -15,9 +15,11 @@ int valid_unsigned_div_rem(unsigned x)
   return 0;
 }
 
-int valid_mixed_conversion(int x, unsigned y)
+// Contract arithmetic is mathematical: a signed and an unsigned value compare
+// as values, without C++'s conversion of the signed one to unsigned.
+int valid_mixed_comparison(int x, unsigned y)
   pre(x == -1 && y == 1U)
-  post(x > y)
+  post(x < y)
 {
   return 0;
 }
@@ -28,15 +30,15 @@ int invalid_unsigned_upper_half(unsigned x)
   return 0;
 }
 
-int invalid_mixed_conversion(int x, unsigned y)
+int invalid_mixed_comparison(int x, unsigned y)
   pre(x == -1 && y == 1U)
-  post(x < y)
+  post(x > y)
 {
   return 0;
 }
 
 // VERIFY-DAG: Verified: valid_unsigned_max
 // VERIFY-DAG: Verified: valid_unsigned_div_rem
-// VERIFY-DAG: Verified: valid_mixed_conversion
+// VERIFY-DAG: Verified: valid_mixed_comparison
 // VERIFY-DAG: error: verification failed: invalid_unsigned_upper_half
-// VERIFY-DAG: error: verification failed: invalid_mixed_conversion
+// VERIFY-DAG: error: verification failed: invalid_mixed_comparison
