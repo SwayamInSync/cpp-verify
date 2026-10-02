@@ -1,0 +1,11 @@
+# Z3 forgets a timeout that fires inside one of its nested resource scopes,
+# which a budget of a millisecond or two makes likely: such a check ran
+# without end. A check is interrupted again until it returns, so every query
+# ends and the function gets a verdict (which one depends on timing).
+#
+# RUN: %python -c "import subprocess, sys; sys.exit(subprocess.run(sys.argv[1:], timeout=120).returncode not in (0, 1))" \
+# RUN:   %cpp-verify --jobs=1 --int-encoding=bitvector --timeout=1 \
+# RUN:   %S/Inputs/tiny_timeout.cpp > %t.out 2>&1
+# RUN: FileCheck %s < %t.out
+
+# CHECK: {{Verified|Unresolved}}: copy
