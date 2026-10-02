@@ -14,7 +14,7 @@ long overloaded(long x)
 }
 
 void opaque_side_effect();
-int global_state;
+int *global_state;
 
 template <typename T>
 int unsupported_template(T)
@@ -33,7 +33,7 @@ int calls_uncontracted()
 int reads_global_state()
   post(result == result)
 {
-  return global_state;
+  return *global_state;
 }
 
 int *unsupported_pointer_compound(int *pointer)
@@ -95,7 +95,7 @@ int unsupported_recursive_exec(int n)
 }
 
 // VERIFY-DAG: error: calls_uncontracted: call to function without a verification contract: opaque_side_effect
-// VERIFY-DAG: error: reads_global_state: global variable access is unsupported: global_state
+// VERIFY-DAG: error: reads_global_state: only scalar integral global variables are supported: global_state
 // VERIFY-DAG: error: unsupported_pointer_compound: pointer compound assignment is unsupported
 // VERIFY-DAG: error: unsupported_forged_pointer: unsupported explicit pointer or aggregate cast
 // VERIFY-DAG: error: unsupported_switch: unsupported statement: SwitchStmt
