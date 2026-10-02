@@ -10281,6 +10281,10 @@ public:
   /// each contract condition expression. (SemaContract.cpp)
   ExprResult ActOnContractCondition(ExprResult E);
 
+  /// The cells Base[Lower, Lower + Length) in a modifies clause.
+  ExprResult ActOnContractRange(Expr *Base, Expr *Lower, SourceLocation ColonLoc,
+                                Expr *Length, SourceLocation RBLoc);
+
   /// Rewrite unqualified field names to this->field for type_invariant(expr).
   ExprResult ActOnTypeInvariantExpr(ExprResult E, CXXRecordDecl *Record);
 
