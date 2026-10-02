@@ -103,9 +103,20 @@ struct FunctionContractInfo {
   SmallVector<Expr *, 4> Modifies;
   SmallVector<std::pair<Expr *, Expr *>, 2> Aliases;
   SmallVector<Expr *, 2> Recommends;
+  /// reads(p, n) on a spec: the cells p[0..n) the spec may read.
+  SmallVector<std::pair<Expr *, Expr *>, 1> Reads;
+  /// when(c) on a spec: the domain on which its body defines it.
+  SmallVector<Expr *, 1> When;
   /// Lexicographic termination measure: decreases(a, b, c) is an ordered tuple.
   /// Empty means no decreases clause.
   SmallVector<Expr *, 2> Decreases;
+  /// decreases(*): the function may diverge.
+  SourceLocation MayDiverge;
+  /// complete_behaviors and disjoint_behaviors: conditions that the
+  /// preconditions must imply.
+  SmallVector<Expr *, 1> BehaviorChecks;
+  /// Each behavior's name and assumption.
+  SmallVector<std::pair<IdentifierInfo *, Expr *>, 2> Behaviors;
   bool IsSpec = false;
   bool IsProof = false;
 };
@@ -115,6 +126,10 @@ struct LoopContractInfo {
   SmallVector<Expr *, 2> Invariants;
   /// Lexicographic termination measure (ordered tuple); empty means none.
   SmallVector<Expr *, 2> Decreases;
+  /// decreases(*): the loop may run forever.
+  SourceLocation MayDiverge;
+  /// The heap the loop may write, read in each iteration's state.
+  SmallVector<Expr *, 2> Modifies;
 };
 
 /// Type invariant clauses on a RecordDecl (CppVerify).
@@ -384,6 +399,8 @@ class ASTContext : public RefCountedBase<ASTContext> {
 
   /// CppVerify: contract info for loops (invariant/decreases).
   llvm::DenseMap<const Stmt *, LoopContractInfo *> LoopContracts;
+  /// CppVerify: variables declared with `ghost T x = e;`.
+  llvm::DenseSet<const VarDecl *> GhostVariables;
 
   /// CppVerify: type_invariant clauses on record/class types.
   llvm::DenseMap<const RecordDecl *, TypeContractInfo *> TypeContracts;
@@ -3468,6 +3485,17 @@ public:
   LoopContractInfo &getOrCreateLoopContract(const Stmt *S);
   /// CppVerify: get contract info for a loop, or nullptr if none.
   const LoopContractInfo *getLoopContract(const Stmt *S) const;
+
+  /// CppVerify: a variable declared by a ghost declaration statement exists
+  /// only for verification.
+  void markGhostVariable(const VarDecl *VD) { GhostVariables.insert(VD); }
+  /// CppVerify: terms marked trigger(...) in quantifier bodies.
+  llvm::DenseSet<const Expr *> TriggerTerms;
+  void markTriggerTerm(const Expr *E) { TriggerTerms.insert(E); }
+  bool isTriggerTerm(const Expr *E) const { return TriggerTerms.contains(E); }
+  bool isGhostVariable(const VarDecl *VD) const {
+    return GhostVariables.contains(VD);
+  }
 
   /// CppVerify: get or create type_invariant info for a record type.
   TypeContractInfo &getOrCreateTypeContract(const RecordDecl *RD);
