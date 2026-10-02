@@ -1,5 +1,6 @@
 //===--- Certify.cpp ------------------------------------------------------===//
 #include "Certify.h"
+#include "Presburger.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/thread.h"
 #include <algorithm>
@@ -1187,6 +1188,395 @@ class Evaluator {
     }
   }
 
+  // Quantifiers as Presburger formulas. Once the model fixes everything but
+  // the binders, a body built from comparisons of linear terms, reads at
+  // linear addresses (each read is one of finitely many constant pieces of
+  // its heap or collection), and nested quantifiers is a formula of linear
+  // integer arithmetic, which Cooper's method decides exactly.
+
+  /// Each piece holds where its guard does; the guards partition the
+  /// integers.
+  using Pieces =
+      std::vector<std::pair<presburger::FormulaPtr, presburger::Linear>>;
+
+  /// Binders being decided symbolically, innermost last, with the unique
+  /// variable naming each.
+  std::vector<std::pair<std::string, std::string>> Symbolic;
+  /// Set when a term lies outside the decided fragment.
+  bool OutsideFragment = false;
+
+  static constexpr uint64_t MaxPresburgerNodes = 200000;
+  static constexpr size_t MaxPieces = 4096;
+
+  const std::string *symbolicName(const std::string &Name) const {
+    for (auto It = Symbolic.rbegin(); It != Symbolic.rend(); ++It)
+      if (It->first == Name)
+        return &It->second;
+    return nullptr;
+  }
+
+  bool mentionsSymbolic(const LogicExpr *E) const {
+    if (E->K == LogicExpr::Var && symbolicName(E->Name))
+      return true;
+    return llvm::any_of(E->Children, [&](const std::unique_ptr<LogicExpr> &C) {
+      return mentionsSymbolic(C.get());
+    });
+  }
+
+  std::nullopt_t outside() {
+    OutsideFragment = true;
+    return std::nullopt;
+  }
+
+  std::optional<Pieces> constantPieces(const CertInt &Value) {
+    return Pieces{
+        {presburger::truth(true), presburger::Linear::constant(Value)}};
+  }
+
+  /// The pieces of an integer term.
+  std::optional<Pieces> termOf(const LogicExpr *E) {
+    using namespace presburger;
+    if (!mentionsSymbolic(E)) {
+      std::optional<CertInt> Value = integerOf(E);
+      if (!Value)
+        return std::nullopt;
+      return constantPieces(*Value);
+    }
+    auto combine = [&](const Pieces &L, const Pieces &R,
+                       auto Op) -> std::optional<Pieces> {
+      Pieces Out;
+      for (const auto &[LG, LT] : L)
+        for (const auto &[RG, RT] : R) {
+          std::optional<Linear> T = Op(LT, RT);
+          if (!T)
+            return outside();
+          Out.push_back({conjunction({LG, RG}), std::move(*T)});
+          if (Out.size() > MaxPieces)
+            return outside();
+        }
+      return Out;
+    };
+    const bool Machine = E->Sort.Kind == LogicSortKind::BitVector;
+    switch (E->K) {
+    case LogicExpr::Var:
+      return Pieces{{truth(true), Linear::variable(*symbolicName(E->Name))}};
+    case LogicExpr::Neg: {
+      std::optional<Pieces> Inner = termOf(E->Children[0].get());
+      if (!Inner)
+        return std::nullopt;
+      for (auto &[G, T] : *Inner) {
+        if (Machine) {
+          if (!T.isConstant())
+            return outside();
+          T = Linear::constant(reduce(-T.Constant, E->Sort));
+          continue;
+        }
+        T = T.scaled(CertInt(-1));
+      }
+      return Inner;
+    }
+    case LogicExpr::Add:
+    case LogicExpr::Sub:
+    case LogicExpr::Mul:
+    case LogicExpr::Div:
+    case LogicExpr::Rem: {
+      std::optional<Pieces> L = termOf(E->Children[0].get());
+      if (!L)
+        return std::nullopt;
+      std::optional<Pieces> R = termOf(E->Children[1].get());
+      if (!R)
+        return std::nullopt;
+      return combine(
+          *L, *R,
+          [&](const Linear &A, const Linear &B) -> std::optional<Linear> {
+            if (A.isConstant() && B.isConstant()) {
+              std::optional<LogicValue> V =
+                  Machine ? machineArithmetic(E, A.Constant, B.Constant)
+                          : constantArithmetic(E->K, A.Constant, B.Constant);
+              if (!V || V->K != LogicValue::Kind::Integer)
+                return std::nullopt;
+              return Linear::constant(V->Integer);
+            }
+            // Machine operations may wrap; division is not
+            // linear.
+            if (Machine || E->K == LogicExpr::Div || E->K == LogicExpr::Rem)
+              return std::nullopt;
+            if (E->K == LogicExpr::Add)
+              return A + B;
+            if (E->K == LogicExpr::Sub)
+              return A - B;
+            if (A.isConstant())
+              return B.scaled(A.Constant);
+            if (B.isConstant())
+              return A.scaled(B.Constant);
+            return std::nullopt;
+          });
+    }
+    case LogicExpr::Ite: {
+      FormulaPtr Condition = formulaOf(E->Children[0].get());
+      if (!Condition)
+        return std::nullopt;
+      std::optional<Pieces> Then = termOf(E->Children[1].get());
+      if (!Then)
+        return std::nullopt;
+      std::optional<Pieces> Else = termOf(E->Children[2].get());
+      if (!Else)
+        return std::nullopt;
+      Pieces Out;
+      for (auto &[G, T] : *Then)
+        Out.push_back({conjunction({Condition, G}), T});
+      for (auto &[G, T] : *Else)
+        Out.push_back({conjunction({negation(Condition), G}), T});
+      return Out;
+    }
+    case LogicExpr::BvToInt:
+      return termOf(E->Children[0].get());
+    case LogicExpr::IntToBv:
+    case LogicExpr::BvResize: {
+      std::optional<Pieces> Inner = termOf(E->Children[0].get());
+      if (!Inner)
+        return std::nullopt;
+      for (auto &[G, T] : *Inner) {
+        if (!T.isConstant())
+          return outside();
+        T = Linear::constant(
+            E->K == LogicExpr::IntToBv
+                ? reduce(T.Constant, E->Sort)
+                : convertMachine(T.Constant, E->Children[0]->Sort, E->Sort));
+      }
+      return Inner;
+    }
+    case LogicExpr::Select:
+    case LogicExpr::Collection: {
+      if (E->K == LogicExpr::Collection &&
+          E->CollectionOp != LogicCollectionOp::SeqIndex &&
+          E->CollectionOp != LogicCollectionOp::MultisetCount &&
+          E->CollectionOp != LogicCollectionOp::MapGet)
+        return outside();
+      return readPieces(*E);
+    }
+    default:
+      return outside();
+    }
+  }
+
+  std::optional<LogicValue>
+  constantArithmetic(LogicExpr::Kind K, const CertInt &L, const CertInt &R) {
+    switch (K) {
+    case LogicExpr::Add:
+      return integer(L + R);
+    case LogicExpr::Sub:
+      return integer(L - R);
+    case LogicExpr::Mul:
+      return integer(L * R);
+    case LogicExpr::Div:
+      return integer(R.isZero() ? CertInt() : L.truncDiv(R));
+    case LogicExpr::Rem:
+      return integer(R.isZero() ? L : L - R * L.truncDiv(R));
+    default:
+      return std::nullopt;
+    }
+  }
+
+  /// The pieces of a read at a symbolic address or key: the value of each
+  /// run of its cells, where the address falls in that run.
+  std::optional<Pieces> readPieces(const LogicExpr &Read) {
+    using namespace presburger;
+    if (mentionsSymbolic(Read.Children[0].get()))
+      return outside();
+    std::optional<Pieces> Keys = termOf(Read.Children[1].get());
+    if (!Keys)
+      return std::nullopt;
+    std::shared_ptr<const HeapValue> Cells = readCells(Read);
+    if (!Cells)
+      return Failure.empty() ? outside() : std::nullopt;
+    Pieces Out;
+    for (const auto &[G, Key] : *Keys) {
+      std::optional<CertInt> Start;
+      CertInt Value = Cells->Default;
+      auto run = [&](const std::optional<CertInt> &From,
+                     const std::optional<CertInt> &To, const CertInt &V) {
+        std::vector<FormulaPtr> Guard{G};
+        if (From)
+          Guard.push_back(lessEqual(Linear::constant(*From), Key));
+        if (To)
+          Guard.push_back(less(Key, Linear::constant(*To)));
+        Out.push_back({conjunction(std::move(Guard)), Linear::constant(V)});
+      };
+      for (const auto &[Break, Cell] : Cells->Breaks) {
+        run(Start, Break, Value);
+        Start = Break;
+        Value = Cell;
+      }
+      run(Start, std::nullopt, Value);
+      if (Out.size() > MaxPieces)
+        return outside();
+    }
+    return Out;
+  }
+
+  /// The formula of a Boolean term.
+  presburger::FormulaPtr formulaOf(const LogicExpr *E) {
+    using namespace presburger;
+    if (!mentionsSymbolic(E) && E->K != LogicExpr::Forall &&
+        E->K != LogicExpr::Exists) {
+      std::optional<bool> Holds = truthOf(E);
+      return Holds ? truth(*Holds) : nullptr;
+    }
+    auto children = [&](std::vector<FormulaPtr> &Out) {
+      for (const auto &Child : E->Children) {
+        FormulaPtr F = formulaOf(Child.get());
+        if (!F)
+          return false;
+        Out.push_back(std::move(F));
+      }
+      return true;
+    };
+    switch (E->K) {
+    case LogicExpr::True:
+      return truth(true);
+    case LogicExpr::False:
+      return truth(false);
+    case LogicExpr::Not: {
+      FormulaPtr Inner = formulaOf(E->Children[0].get());
+      return Inner ? negation(Inner) : nullptr;
+    }
+    case LogicExpr::And:
+    case LogicExpr::Or: {
+      std::vector<FormulaPtr> Children;
+      if (!children(Children))
+        return nullptr;
+      return E->K == LogicExpr::And ? conjunction(std::move(Children))
+                                    : disjunction(std::move(Children));
+    }
+    case LogicExpr::Ite: {
+      std::vector<FormulaPtr> Parts;
+      if (!children(Parts))
+        return nullptr;
+      return disjunction({conjunction({Parts[0], Parts[1]}),
+                          conjunction({negation(Parts[0]), Parts[2]})});
+    }
+    case LogicExpr::Eq:
+    case LogicExpr::Ne:
+    case LogicExpr::Lt:
+    case LogicExpr::Le:
+    case LogicExpr::Gt:
+    case LogicExpr::Ge: {
+      if (E->Children[0]->Sort.Kind == LogicSortKind::Bool) {
+        std::vector<FormulaPtr> Sides;
+        if (!children(Sides))
+          return nullptr;
+        FormulaPtr Same = disjunction(
+            {conjunction({Sides[0], Sides[1]}),
+             conjunction({negation(Sides[0]), negation(Sides[1])})});
+        return E->K == LogicExpr::Ne ? negation(Same) : Same;
+      }
+      if (!isInteger(E->Children[0]->Sort) &&
+          E->Children[0]->Sort.Kind != LogicSortKind::BitVector) {
+        OutsideFragment = true;
+        return nullptr;
+      }
+      std::optional<Pieces> L = termOf(E->Children[0].get());
+      if (!L)
+        return nullptr;
+      std::optional<Pieces> R = termOf(E->Children[1].get());
+      if (!R)
+        return nullptr;
+      std::vector<FormulaPtr> Cases;
+      for (const auto &[LG, LT] : *L)
+        for (const auto &[RG, RT] : *R) {
+          FormulaPtr Atom;
+          switch (E->K) {
+          case LogicExpr::Eq:
+          case LogicExpr::Ne:
+            Atom = equal(LT, RT);
+            break;
+          case LogicExpr::Lt:
+            Atom = less(LT, RT);
+            break;
+          case LogicExpr::Le:
+            Atom = lessEqual(LT, RT);
+            break;
+          case LogicExpr::Gt:
+            Atom = less(RT, LT);
+            break;
+          default:
+            Atom = lessEqual(RT, LT);
+            break;
+          }
+          Cases.push_back(conjunction({LG, RG, Atom}));
+        }
+      FormulaPtr Holds = disjunction(std::move(Cases));
+      return E->K == LogicExpr::Ne ? negation(Holds) : Holds;
+    }
+    case LogicExpr::Collection: {
+      if (E->CollectionOp != LogicCollectionOp::SetContains &&
+          E->CollectionOp != LogicCollectionOp::MapContains) {
+        OutsideFragment = true;
+        return nullptr;
+      }
+      std::optional<Pieces> Members = readPieces(*E);
+      if (!Members)
+        return nullptr;
+      std::vector<FormulaPtr> Cases;
+      for (const auto &[G, T] : *Members)
+        if (!T.Constant.isZero())
+          Cases.push_back(G);
+      return disjunction(std::move(Cases));
+    }
+    case LogicExpr::Forall:
+    case LogicExpr::Exists: {
+      const bool Forall = E->K == LogicExpr::Forall;
+      const std::string Variable =
+          E->Binder + "#" + std::to_string(Symbolic.size());
+      std::vector<FormulaPtr> Range;
+      if (E->Children.size() == 3) {
+        std::optional<Pieces> Low = termOf(E->Children[0].get());
+        if (!Low)
+          return nullptr;
+        std::optional<Pieces> High = termOf(E->Children[1].get());
+        if (!High)
+          return nullptr;
+        const Linear V = Linear::variable(Variable);
+        std::vector<FormulaPtr> Above, Below;
+        for (const auto &[G, T] : *Low)
+          Above.push_back(conjunction({G, lessEqual(T, V)}));
+        for (const auto &[G, T] : *High)
+          Below.push_back(conjunction({G, less(V, T)}));
+        Range.push_back(disjunction(std::move(Above)));
+        Range.push_back(disjunction(std::move(Below)));
+      }
+      Symbolic.emplace_back(E->Binder, Variable);
+      FormulaPtr Body = formulaOf(E->Children.back().get());
+      Symbolic.pop_back();
+      if (!Body)
+        return nullptr;
+      FormulaPtr InRange = conjunction(std::move(Range));
+      if (Forall)
+        return forall(Variable, disjunction({negation(InRange), Body}));
+      return exists(Variable, conjunction({InRange, Body}));
+    }
+    default:
+      OutsideFragment = true;
+      return nullptr;
+    }
+  }
+
+  /// The truth of quantifier E by Presburger arithmetic; nullopt with
+  /// OutsideFragment set when E is outside it, or with Failure set.
+  std::optional<bool> presburgerTruth(const LogicExpr *E) {
+    OutsideFragment = false;
+    const size_t SavedSymbolic = Symbolic.size();
+    presburger::FormulaPtr F = formulaOf(E);
+    Symbolic.resize(SavedSymbolic);
+    if (!F)
+      return std::nullopt;
+    std::optional<bool> Holds = presburger::decide(F, MaxPresburgerNodes);
+    if (!Holds)
+      OutsideFragment = true;
+    return Holds;
+  }
+
   /// Over all integers: the distinguished values, one value between each
   /// two, and one beyond each end, where the body is constant.
   std::optional<LogicValue> unboundedQuantifier(const LogicExpr *E) {
@@ -1196,8 +1586,13 @@ class Evaluator {
     if (!Distinguished) {
       if (!Failure.empty())
         return std::nullopt;
+      if (std::optional<bool> Holds = presburgerTruth(E))
+        return LogicValue::boolean(*Holds);
+      if (!Failure.empty())
+        return std::nullopt;
       return limit("an unbounded quantifier whose body depends on its binder "
-                   "other than through loads and comparisons");
+                   "other than through linear arithmetic, reads, and "
+                   "quantifiers");
     }
     std::set<CertInt> Checked = *Distinguished;
     if (Distinguished->empty()) {
@@ -1269,6 +1664,10 @@ class Evaluator {
         }
         return LogicValue::boolean(Forall);
       }
+      if (!Failure.empty())
+        return std::nullopt;
+      if (std::optional<bool> Holds = presburgerTruth(E))
+        return LogicValue::boolean(*Holds);
       if (!Failure.empty())
         return std::nullopt;
     }
