@@ -17,6 +17,13 @@ struct PassiveStmt {
   ProofObligationKind ProofKind = ProofObligationKind::Assertion;
   std::unique_ptr<VExpr> Cond;
   uint64_t TraceEventCount = 0;
+  /// The first assumption of a trusted callee's postcondition: the callee,
+  /// how many clauses its postcondition has, the call, and the path
+  /// condition under which it runs.
+  std::string TrustedCallee;
+  unsigned PostClauses = 0;
+  SourceLocation CallLoc;
+  std::unique_ptr<VExpr> CallGuard;
 };
 
 /// A goal checked in the final state.
@@ -62,6 +69,8 @@ struct PassiveProgram {
   std::string FunctionIdentity;
   std::vector<std::unique_ptr<PassiveStmt>> Stmts;
   std::vector<std::unique_ptr<VExpr>> EntryAssumes;
+  /// Each behavior's assumption in the entry state.
+  std::vector<std::pair<std::string, std::unique_ptr<VExpr>>> BehaviorAssumes;
   std::vector<PassiveExitAssert> ExitAsserts;
   std::string ResultVarName;
   std::string OldHeapName;
