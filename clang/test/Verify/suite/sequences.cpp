@@ -41,6 +41,49 @@ proof void total_operations(seq s)
 }
 // CHECK-DAG: Verified: total_operations
 
+// update and reverse are specs of <cppverify.h> over the other operations.
+// A stated equality of sequences is proved element by element.
+proof void update_twice(seq s)
+  pre(s.len() == 3)
+{
+  contract_assert(s.update(1, 9).len() == 3);
+  contract_assert(s.update(1, 9).update(1, s[1]) == s);
+}
+// CHECK-DAG: Verified: update_twice
+
+proof void update_wrong(seq s)
+  pre(s.len() == 3)
+{
+  contract_assert(s.update(1, 9)[2] == 9);
+}
+// CHECK-DAG: error: verification failed: update_wrong [{{.*}}::assertion@[[@LINE-2]]:3] (counterexample: s [ssa=s_0] [type=seq] = [{{-?[0-9]+}}, {{-?[0-9]+}}, {{-?[0-9]+}}]) [backend=z3] [reason=counterexample]
+
+proof void reverse_small()
+{
+  ghost seq s = cppverify::seq_of(1).push(2).push(3);
+  contract_assert(s.reverse() == cppverify::seq_of(3).push(2).push(1));
+}
+// CHECK-DAG: Verified: reverse_small
+
+// The model lists the elements in order.
+proof void reverse_wrong()
+{
+  ghost seq s = cppverify::seq_of(1).push(2);
+  contract_assert(s.reverse()[0] == 1);
+}
+// CHECK-DAG: error: verification failed: reverse_wrong [{{.*}}::assertion@[[@LINE-2]]:3] (counterexample: s [ssa=s_1] [type=seq] = [1, 2]) [backend=z3] [reason=counterexample]
+
+// reverse states its length; its elements need induction.
+proof void reverse_index(seq s, long long k)
+  pre(0 <= k && k < s.len())
+  post(s.reverse()[k] == s[s.len() - 1 - k])
+  decreases(s.len())
+{
+  if (k < s.len() - 1)
+    reverse_index(s.subrange(1, s.len()), k);
+}
+// CHECK-DAG: Verified: reverse_index
+
 // An extract of a concatenation splits at the boundary.
 proof void drop_last_of_concat(seq s, seq t)
   pre(t.len() > 0)
@@ -136,6 +179,7 @@ void ghost_loop_wrong(int n)
 // CHECK-DAG: error: verification failed: ghost_loop_wrong [{{.*}}::assertion@[[@LINE-2]]:3] (counterexample: {{.*}}s [ssa=s_2] [type=seq] = [{{-?[0-9]+}}]{{.*}}) [backend=z3] [reason=counterexample]
 
 // REPLAY-DAG: Verified: basics
+// REPLAY-DAG: Verified: reverse_index
 // REPLAY-DAG: Verified: count_positive
 // REPLAY-DAG: error: verification failed: elements_differ
 // REPLAY-DAG: error: verification failed: ghost_loop_wrong
@@ -143,6 +187,11 @@ void ghost_loop_wrong(int n)
 // VC-LABEL: vc basics
 // VC: features {{.*}}sequences
 // VC: seq.push : seq
+// VC-LABEL: vc update_twice
+// VC: :pattern (((_ cppverify.seq_at 0) (seq.extract s_0 0 (- 1 0)) cppverify!k))
+// VC: (= cppverify!t1 (seq.++ (seq.extract s_0 0 (- 1 0)) (seq.unit 9) a!1))
+// VC: :pattern (((_ cppverify.seq_at 0) cppverify!t1 cppverify!k))
+// VC: (forall ((__cppverify_ext0 Int))
 // VC-LABEL: vc count_positive
 // VC: seq.index : int
 // VC: (define-fun-rec cppverify.cell_i32 ((x Int)) Int
