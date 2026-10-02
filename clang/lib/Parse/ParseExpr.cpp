@@ -867,6 +867,33 @@ Parser::ParseCastExpression(CastParseKind ParseKind, bool isAddressOfOperand,
       if ((InContractPostcondition || InLoopContractInvariant) &&
           II->isStr("old") && NextToken().is(tok::l_paren))
         return ParseOldExpr();
+      // choose(k, body): unless the program declares its own choose.
+      if (II->isStr("choose") && NextToken().is(tok::l_paren) &&
+          !Actions.LookupSingleName(getCurScope(),
+                                    const_cast<IdentifierInfo *>(II),
+                                    Tok.getLocation(),
+                                    Sema::LookupOrdinaryName)) {
+        Res = ParseQuantifierExpr();
+        break;
+      }
+      // trigger(term) in a quantifier body marks term as an instantiation
+      // pattern, unless the program declares its own trigger.
+      if (QuantifierBodyDepth != 0 && II->isStr("trigger") &&
+          NextToken().is(tok::l_paren) &&
+          !Actions.LookupSingleName(getCurScope(),
+                                    const_cast<IdentifierInfo *>(II),
+                                    Tok.getLocation(),
+                                    Sema::LookupOrdinaryName)) {
+        ConsumeToken();
+        BalancedDelimiterTracker T(*this, tok::l_paren);
+        T.consumeOpen();
+        ExprResult Term = ParseExpression();
+        if (Term.isInvalid() || T.consumeClose())
+          return ExprError();
+        Actions.getASTContext().markTriggerTerm(Term.get());
+        Res = Term;
+        break;
+      }
       if (InContractPostcondition && II->isStr("result")) {
         Res = ParseResultExpr();
         break;
@@ -1727,7 +1754,8 @@ Parser::ParsePostfixExpressionSuffix(ExprResult LHS) {
       // and, in we find 0 or one index, we try to parse an OpenMP/OpenACC array
       // section. This allow us to support C++23 multi dimensional subscript and
       // OpenMP/OpenACC sections in the same language mode.
-      if ((!getLangOpts().OpenMP && !AllowOpenACCArraySections) ||
+      if ((!getLangOpts().OpenMP && !AllowOpenACCArraySections &&
+           !InContractFootprint) ||
           Tok.isNot(tok::colon)) {
         if (!getLangOpts().CPlusPlus23) {
           ExprResult Idx;
@@ -1753,7 +1781,8 @@ Parser::ParsePostfixExpressionSuffix(ExprResult LHS) {
       // when actively parsing a 'var' in a 'var-list' during clause/'cache'
       // parsing, so it is the most specific, and best allows us to handle
       // OpenACC and OpenMP at the same time.
-      if (ArgExprs.size() <= 1 && AllowOpenACCArraySections) {
+      if (ArgExprs.size() <= 1 &&
+          (AllowOpenACCArraySections || InContractFootprint)) {
         ColonProtectionRAIIObject RAII(*this);
         if (Tok.is(tok::colon)) {
           // Consume ':'
@@ -1792,7 +1821,11 @@ Parser::ParsePostfixExpressionSuffix(ExprResult LHS) {
           // enabled when actively parsing a 'var' in a 'var-list' during
           // clause/'cache' construct parsing, so it is more specific. So we
           // should do it first, so that the correct node gets created.
-          if (AllowOpenACCArraySections) {
+          if (InContractFootprint && !AllowOpenACCArraySections) {
+            LHS = Actions.ActOnContractRange(
+                LHS.get(), ArgExprs.empty() ? nullptr : ArgExprs[0],
+                ColonLocFirst, Length.get(), RLoc);
+          } else if (AllowOpenACCArraySections) {
             assert(!Stride.isUsable() && !ColonLocSecond.isValid() &&
                    "Stride/second colon not allowed for OpenACC");
             LHS = Actions.OpenACC().ActOnArraySectionExpr(
@@ -3511,14 +3544,16 @@ ExprResult Parser::ParseAvailabilityCheckExpr(SourceLocation BeginLoc) {
 
 /// Parse forall(binder, lo, hi, body) or exists(binder, lo, hi, body)
 ExprResult Parser::ParseQuantifierExpr() {
-  assert((Tok.is(tok::kw_forall) || Tok.is(tok::kw_exists)) &&
-         "Expected forall or exists");
+  // choose(...) is contextual: the caller checked the identifier.
+  const bool IsChoose = Tok.is(tok::identifier);
+  assert((Tok.is(tok::kw_forall) || Tok.is(tok::kw_exists) || IsChoose) &&
+         "Expected forall, exists, or choose");
   bool IsForall = Tok.is(tok::kw_forall);
+  const char *Keyword = IsChoose ? "choose" : IsForall ? "forall" : "exists";
   SourceLocation KwLoc = ConsumeToken();
 
   if (Tok.isNot(tok::l_paren)) {
-    Diag(Tok, diag::err_contract_expected_lparen)
-        << (IsForall ? "forall" : "exists");
+    Diag(Tok, diag::err_contract_expected_lparen) << Keyword;
     return ExprError();
   }
   SourceLocation LParenLoc = ConsumeParen();
@@ -3535,6 +3570,63 @@ ExprResult Parser::ParseQuantifierExpr() {
   if (ExpectAndConsume(tok::comma)) {
     SkipUntil(tok::r_paren, StopAtSemi);
     return ExprError();
+  }
+
+  // forall(k, body) ranges over all integers: one more top-level comma
+  // before the closing parenthesis, where the bounded form has three.
+  bool Unbounded = false;
+  {
+    TentativeParsingAction Scan(*this);
+    unsigned Depth = 0, Commas = 0;
+    while (Tok.isNot(tok::eof) && Tok.isNot(tok::semi)) {
+      if (Tok.isOneOf(tok::l_paren, tok::l_square, tok::l_brace))
+        ++Depth;
+      else if (Tok.isOneOf(tok::r_paren, tok::r_square, tok::r_brace)) {
+        if (Depth == 0)
+          break;
+        --Depth;
+      } else if (Tok.is(tok::comma) && Depth == 0)
+        ++Commas;
+      ConsumeAnyToken();
+    }
+    Unbounded = Commas == 0;
+    Scan.Revert();
+  }
+
+  ASTContext &Ctx = Actions.getASTContext();
+  if (Unbounded) {
+    VarDecl *BoundVar = VarDecl::Create(
+        Ctx, Actions.CurContext, BinderLoc, BinderLoc, BinderII, Ctx.IntTy,
+        Ctx.getTrivialTypeSourceInfo(Ctx.IntTy, BinderLoc), SC_None);
+    ParseScope QuantifierScope(this, Scope::DeclScope);
+    Actions.PushOnScopeChains(BoundVar, getCurScope(), /*AddToContext=*/false);
+    ++QuantifierBodyDepth;
+    ExprResult Body = ParseAssignmentExpression();
+    --QuantifierBodyDepth;
+    QuantifierScope.Exit();
+    if (Body.isInvalid()) {
+      SkipUntil(tok::r_paren, StopAtSemi);
+      return ExprError();
+    }
+    ExprResult BodyBool = Actions.ActOnContractCondition(Body);
+    if (BodyBool.isInvalid()) {
+      SkipUntil(tok::r_paren, StopAtSemi);
+      return ExprError();
+    }
+    if (Tok.isNot(tok::r_paren)) {
+      Diag(Tok, diag::err_contract_expected_rparen) << Keyword;
+      SkipUntil(tok::r_paren, StopAtSemi);
+      return ExprError();
+    }
+    SourceLocation RParenLoc = ConsumeParen();
+    if (IsChoose)
+      return new (Ctx) ContractChooseExpr(KwLoc, LParenLoc, RParenLoc, BoundVar,
+                                  nullptr, nullptr, BodyBool.get(), Ctx.IntTy);
+    if (IsForall)
+      return new (Ctx) ForallExpr(KwLoc, LParenLoc, RParenLoc, BoundVar,
+                                  nullptr, nullptr, BodyBool.get(), Ctx.BoolTy);
+    return new (Ctx) ExistsExpr(KwLoc, LParenLoc, RParenLoc, BoundVar, nullptr,
+                                nullptr, BodyBool.get(), Ctx.BoolTy);
   }
 
   // Parse lo expression
@@ -3562,7 +3654,6 @@ ExprResult Parser::ParseQuantifierExpr() {
   }
 
   // Create the bound variable and push it into scope.
-  ASTContext &Ctx = Actions.getASTContext();
   VarDecl *BoundVar = VarDecl::Create(
       Ctx, Actions.CurContext, BinderLoc, BinderLoc, BinderII, Ctx.IntTy,
       Ctx.getTrivialTypeSourceInfo(Ctx.IntTy, BinderLoc), SC_None);
@@ -3572,7 +3663,9 @@ ExprResult Parser::ParseQuantifierExpr() {
   Actions.PushOnScopeChains(BoundVar, getCurScope(), /*AddToContext=*/false);
 
   // Parse body expression
+  ++QuantifierBodyDepth;
   ExprResult Body = ParseAssignmentExpression();
+  --QuantifierBodyDepth;
   if (Body.isInvalid()) {
     SkipUntil(tok::r_paren, StopAtSemi);
     return ExprError();
@@ -3600,14 +3693,16 @@ ExprResult Parser::ParseQuantifierExpr() {
   }
 
   if (Tok.isNot(tok::r_paren)) {
-    Diag(Tok, diag::err_contract_expected_rparen)
-        << (IsForall ? "forall" : "exists");
+    Diag(Tok, diag::err_contract_expected_rparen) << Keyword;
     SkipUntil(tok::r_paren, StopAtSemi);
     return ExprError();
   }
   SourceLocation RParenLoc = ConsumeParen();
 
   QualType BoolTy = Ctx.BoolTy;
+  if (IsChoose)
+    return new (Ctx) ContractChooseExpr(KwLoc, LParenLoc, RParenLoc, BoundVar,
+                                Lo.get(), Hi.get(), BodyBool.get(), Ctx.IntTy);
   if (IsForall)
     return new (Ctx) ForallExpr(KwLoc, LParenLoc, RParenLoc, BoundVar,
                                 Lo.get(), Hi.get(), BodyBool.get(), BoolTy);
