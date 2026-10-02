@@ -32,6 +32,9 @@ class ASTConverter {
   std::set<std::string> InitializedValues;
   std::set<std::string> ReportedUninitializedValues;
   std::map<const ValueDecl *, std::string> BoundValues;
+  /// Binders of a forall being introduced by contract_assert(...) by.
+  std::set<const ValueDecl *> ArbitraryValues;
+  std::map<std::string, std::set<std::string>> UnverifiedCallers;
   std::map<const ParmVarDecl *, std::string> ParameterNames;
   unsigned BoundValueId = 0;
   std::map<const FunctionDecl *, std::string> FunctionIdentities;
@@ -69,6 +72,12 @@ public:
 
   std::vector<std::unique_ptr<VFunction>> convertTranslationUnit();
   const std::vector<std::string> &getErrors() const { return Errors; }
+  /// For each contracted function, the functions not verified whose bodies
+  /// call it: its precondition is assumed there, not checked.
+  const std::map<std::string, std::set<std::string>> &
+  getUnverifiedCallers() const {
+    return UnverifiedCallers;
+  }
   const std::vector<std::pair<SourceLocation, std::string>> &
   getWarnings() const {
     return Warnings;
