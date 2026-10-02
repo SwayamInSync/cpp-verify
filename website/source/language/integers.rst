@@ -14,6 +14,18 @@ Integer semantics depend on where the value lives.
      - Machine integer (target width, wraps modulo ``2^N``)
    * - ``proof`` / ``exec``
      - Machine integer (target width, wraps modulo ``2^N``)
+   * - Contract arithmetic (``pre``, ``post``, invariants, assertions)
+     - Mathematical ``Int`` on the values of C++ expressions
+
+Contracts are mathematical, as in ACSL and Verus. ``+``, ``-``, ``*``,
+``/``, ``%``, and unary ``-`` in a contract are exact, so
+``post(result + 1 > result)`` holds rather than overflowing. An implicit
+conversion whose result C++ could change (a narrowing or a sign change) keeps
+the value; a value-preserving one is an ordinary extension. Quantifier binders
+are mathematical integers. A negative constant converted to an unsigned type
+draws a warning, since the contract compares its exact value. An explicit
+cast still converts and is checked; write wraparound explicitly as
+``% 4294967296``.
 
 Mathematical integers are unbounded, but ``/`` and ``%`` retain C++'s
 truncate-toward-zero sign rules. Their total logical extension at a zero divisor
@@ -94,18 +106,20 @@ so the machine operation wraps modulo ``2^N``.
    unsigned mix(unsigned a, unsigned b) post(result == a + b)
    { return a + b; }               // verifies: unsigned wraparound is defined
 
-Optional buffer bounds (``--check-ub``)
----------------------------------------
+Memory bounds
+-------------
 
-Array bounds require an explicit extent. Write ``valid(p, n)`` in a
-precondition and run Z3, cvc5, portfolio, BMC, or Lean with ``--check-ub``; every recognized
-``p[i]`` or ``*(p + i)`` access rooted at ``p`` must then prove ``0 <= i < n``.
-The marker itself requires ``n >= 0`` and, for a positive extent, a non-null
-abstractly valid pointer; extent zero permits null. A pointer with no ``valid``
-declaration is not bounds-checked, although ordinary dereference definedness
-still applies. Typed pointer steps are converted to target-byte offsets using
-``sizeof(T)``, but bounds remain half-open element bounds. The marker must be a
-positive top-level conjunction clause on the bare pointer.
+Memory accesses are checked by default (``--check-ub``; ``--no-check-ub``
+turns it off). Write ``valid(p, n)`` in a precondition to declare an extent:
+every ``p[i]`` or ``*(p + i)`` access rooted at ``p`` must then prove
+``0 <= i < n``, and pointer arithmetic must stay in ``[0, n]``. The marker
+itself requires ``n >= 0`` and, for a positive extent, a non-null abstractly
+valid pointer; extent zero permits null. A pointer without a ``valid``
+declaration addresses a single object, so ``p[0]`` is fine and ``p[1]`` must
+be proved inside that object, which fails. Typed pointer steps are converted
+to target-byte offsets using ``sizeof(T)``, but bounds remain half-open
+element bounds. The marker must be a positive top-level conjunction clause on
+the bare pointer. See :doc:`pointers`.
 
 Concrete extent, lifetime, alignment, and initialization metadata is tracked
 for the bounded local scalar ``new``/``delete`` subset. General buffer
@@ -130,14 +144,18 @@ the machine parameter type.
 
 A mathematical value never wraps into a C++ type:
 
-- In contracts a spec result stays unbounded. Arithmetic, selections, and
-  comparisons involving it are exact, and the implicit conversions of C++'s
-  usual arithmetic conversions do not bound it, so
-  ``post(result == total(x) + n)`` compares exact values.
-- An explicit cast such as ``(int)total(x)``, a bitwise operator applied to a
-  spec result, and a spec result stored in a ``ghost`` or ``proof`` variable
-  convert it to a machine type. The conversion is defined only when the value
-  fits, and it carries an ``overflow`` obligation instead of wrapping:
+- A spec result, and a length, element, or count of a spec collection,
+  stays unbounded wherever it is used: in contracts and in ``ghost`` and
+  ``proof`` code alike. Arithmetic, selections, and comparisons involving it
+  are exact, and the implicit conversions of C++'s usual arithmetic
+  conversions do not bound it, so ``post(result == total(x) + n)`` compares
+  exact values and ``s.subrange(0, s.len() - 1)`` in a proof is exact. A
+  comparison between a machine value and a mathematical one is exact.
+- Storing such a value in a ``ghost`` or ``proof`` variable, passing it to a
+  machine parameter, returning it, an explicit cast such as
+  ``(int)total(x)``, and a bitwise operator applied to it convert it to a
+  machine type. The conversion is defined only when the value fits, and it
+  carries an ``overflow`` obligation instead of wrapping:
 
 .. code-block:: cpp
 
@@ -148,6 +166,9 @@ A mathematical value never wraps into a C++ type:
 
    proof void too_big(int x) pre(x == 3000000)
    { int value = scaled(x); }   // FAILS (overflow): 3000000000 is not an int
+
+   proof void element(cppverify::seq s) pre(s.len() > 0)
+   { int x = s[0]; }            // FAILS (overflow): an element need not fit
 
 - Executable code cannot call a spec function at all; see :doc:`ghost-proofs`.
 
