@@ -35,6 +35,10 @@ public:
                                              /*ReuseVerifiedQueries=*/true)),
         MaxUnrollBound(UnrollBound) {}
   llvm::StringRef getName() const override { return "bmc"; }
+  void
+  setDeadline(std::optional<std::chrono::steady_clock::time_point> D) override {
+    Z3->setDeadline(D);
+  }
   BackendCapabilities getCapabilities() const override {
     return {allLogicFeatures(), true};
   }
@@ -217,6 +221,11 @@ public:
         MaxQueryNodes(Execution.MaxQueryNodes) {}
 
   llvm::StringRef getName() const override { return "portfolio"; }
+  void
+  setDeadline(std::optional<std::chrono::steady_clock::time_point> D) override {
+    Z3->setDeadline(D);
+    CVC5->setDeadline(D);
+  }
   BackendCapabilities getCapabilities() const override {
     return {Z3->getCapabilities().SupportedFeatures &
                 CVC5->getCapabilities().SupportedFeatures,
@@ -526,6 +535,11 @@ VerifyResult VerifyBackend::verify(const ObligationModule &Module) {
     Result.Status = VerifyStatus::Unresolved;
     Result.Reason = VerifyReason::UnsupportedConstruct;
     Result.Message = "the verifier cannot model a construct here";
+    for (const Obligation &Item : Module.Obligations)
+      if ((Item.Id == Result.ObligationId ||
+           Item.StableId == Result.ObligationId) &&
+          !Item.Note.empty())
+        Result.Message += ": " + Item.Note;
     Result.Model.clear();
     Result.Trace.clear();
   }
