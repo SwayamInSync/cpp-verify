@@ -4,8 +4,8 @@ Chapter 18 — Undefined behavior
 Proving a function meets its postcondition is only half of what "correct" means
 for runtime C++. The other half is that the function is **well-defined** in the
 first place — that it never executes undefined behavior (UB). This chapter is
-about the second obligation. Core expression definedness is always on;
-``--check-ub`` additionally enables declared buffer-extent checks.
+about the second obligation. Core expression definedness is always on, and
+memory checking is on by default (``--no-check-ub`` turns it off).
 
 Two obligations, not one
 ------------------------
@@ -28,36 +28,38 @@ weak to rule the UB out, it reports the exact counterexample.
 Why functional verification alone would be blind
 -------------------------------------------------
 
-Machine arithmetic wraps modulo ``2^N``. If the verifier checked
-only the final equality, this would be a tautology even on an overflowing path:
+Machine arithmetic wraps modulo ``2^N``. A proof about the wrapped value of
+an overflowing addition would describe an execution C++ does not define:
 
 .. code-block:: cpp
 
    int add(int a, int b) post(result == a + b) { return a + b; }
 
 CppVerify therefore inserts a signed-overflow assertion before each evaluated
-addition. The function fails without any optional flag when the precondition
-admits overflow. The machine result is still modeled faithfully, but
-definedness must be established before that result can justify a contract.
+addition, and this function fails at the addition when the precondition admits
+overflow. (In the contract, ``a + b`` is the exact mathematical sum, as in
+ACSL and Verus, so the postcondition alone would also expose the problem.)
+The machine result is still modeled faithfully, but definedness must be
+established before that result can justify a contract.
 
-Core safety and the bounds option
----------------------------------
+Core safety and memory checking
+-------------------------------
 
 .. code-block:: bash
 
-   cpp-verify            file.cpp     # contracts + core expression definedness
-   cpp-verify --check-ub file.cpp     # additionally use valid(p,n) extents
+   cpp-verify               file.cpp  # contracts, definedness, memory checks
+   cpp-verify --no-check-ub file.cpp  # without the memory checks
 
 Always-on checks cover signed arithmetic and negation overflow, zero divisors,
 the signed-minimum divided by minus one case, invalid shifts, and non-null
 abstract-valid dereferences. They also follow operations executed inside lifted
 ``constexpr`` functions.
 
-The historically named ``--check-ub`` option is now specifically the
-Z3/cvc5/portfolio/BMC/Lean
-extent rollout: it discovers ``valid(p, n)`` before that marker's trivial spec
-body is inlined and generates access, modular-slice, and same-array-position
-obligations. It does not control the always-on checks above.
+Memory checking, the default on every backend (``--check-ub``), proves that
+each access and each pointer step stays in its object, and that a conversion
+to an enumeration lands in its value range. It discovers ``valid(p, n)``
+before that marker's trivial spec body is inlined. ``--no-check-ub`` turns it
+off; it does not control the always-on checks above.
 
 What is always checked
 ----------------------
@@ -95,22 +97,46 @@ Array out-of-bounds
 -------------------
 
 Reading or writing past the end of a buffer is the most consequential memory UB
-(it is the buffer-overflow CVE class). To check it, declare the buffer's length
-with ``valid(p, n)`` in a precondition; then every ``p[i]`` / ``*(p+i)`` access
-whose base is ``p`` carries the obligation ``0 <= i < n``:
+(it is the buffer-overflow CVE class). A C++ function receives a buffer as a
+pointer and a length, and nothing in the type connects them. The contract
+does: ``valid(p, n)`` in a precondition says that ``p`` points to ``n``
+objects, ``p[0]`` to ``p[n - 1]``. Every ``p[i]`` / ``*(p+i)`` access whose
+base is ``p`` then carries the obligation ``0 <= i < n``:
 
 .. code-block:: cpp
 
-   spec bool valid(int* p, int n) { return true; }   // length marker
+   #include <cppverify.h>
+   using cppverify::valid;
 
-   int get(int* p, int n, int i)
+   int get(const int* p, int n, int i)
      pre(valid(p, n) && 0 <= i && i < n)              // in bounds -> verifies
      post(result == p[i])
    { return p[i]; }
 
-   int last(int* p, int n)
+   int last(const int* p, int n)
      pre(valid(p, n) && n >= 1)
-   { return p[n]; }   // --check-ub -> FAILS: p[n] is one past the end
+   { return p[n]; }   // FAILS: p[n] is one past the end
+
+.. code-block:: text
+
+   Verified: get [backend=z3]
+   error: verification failed: last [...::bounds@11:10] (counterexample:
+     n = 1, p = 1)
+
+``<cppverify.h>`` declares ``valid`` for every pointee type, so the same
+marker describes an ``int`` buffer, a ``char`` buffer, or an array of
+structs. Like the header's spec collections it exists only for
+verification: Sema rejects it in executable code. Programs written before
+the header declare the marker themselves, and that still works; a ``spec``
+function named ``valid`` taking a pointer and an integer is the same marker:
+
+.. code-block:: cpp
+
+   spec bool valid(const long* p, int n) { return true; }   // one per type
+
+   long last_long(const long* p, int n)
+     pre(valid(p, n) && n >= 1)
+   { return p[n - 1]; }   // verifies
 
 The marker also entails ``n >= 0``. For ``n > 0``, ``p`` must be non-null and
 abstractly valid; ``n == 0`` permits null. This prevents a contradictory
@@ -131,10 +157,46 @@ same-array pointer subtraction, while dereferences keep the half-open
 distance is representable by target ``ptrdiff_t``.
 
 Inside a loop the bound is discharged the same way an invariant is — a fill or
-copy loop is proven memory-safe from its guard and invariant. An access through a
-pointer with **no** ``valid`` declaration is not bounds-checked because the
-verifier has no length to use. Its non-null/abstract-valid dereference
-obligation still applies.
+copy loop is proven memory-safe from its guard and invariant.
+
+A pointer with **no** ``valid`` declaration addresses a single object, as
+Frama-C's ``\valid`` guards and Verus permissions require:
+
+.. code-block:: cpp
+
+   int second(int* p)
+     pre(p != nullptr)
+   { return p[1]; }   // FAILS: p addresses one int
+
+Pointer arithmetic itself must stay within the object's closed range
+``[0, n]`` (the one-past position included), because forming a pointer
+further out is already undefined:
+
+.. code-block:: cpp
+
+   int far(int* p)
+     pre(valid(p, 2))
+   {
+     int *q = p + 10;   // FAILS: outside [0, 2]
+     return 0;
+   }
+
+The object of a pointer that steps from a parameter the body never reassigns
+is that parameter's entry object; otherwise it may be any parameter's object,
+or the object at a base known to be valid, such as a callee's result.
+
+Enumeration values
+------------------
+
+A conversion to an enumeration without a fixed underlying type must produce a
+value in the enumeration's range (C++17 [dcl.enum]); for ``enum Color { Red,
+Green }`` that is ``0`` or ``1``:
+
+.. code-block:: cpp
+
+   Color pick(int k)
+     pre(k >= 0 && k <= 5)
+   { return (Color)k; }   // FAILS: k = 2 is not a Color
 
 Signed vs. unsigned
 -------------------
@@ -180,7 +242,8 @@ What is not covered yet
 -----------------------
 
 Checked today: core expression definedness, local scalar/flat-record definite
-initialization, and (with ``--check-ub``) declared-buffer bounds. The bounded
+initialization, object bounds of accesses and pointer arithmetic, and
+enumeration ranges. The bounded
 local scalar ``new``/``delete`` subset additionally checks initialized heap
 reads, live dereferences, exact-base deletion, double deletion, target
 alignment, and non-overlap of simultaneous allocations.
