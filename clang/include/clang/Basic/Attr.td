@@ -3748,6 +3748,13 @@ def Unused : InheritableAttr {
   let Documentation = [WarnMaybeUnusedDocs];
 }
 
+def CppVerifyTrusted : InheritableAttr {
+  let Spellings = [CXX11<"cppverify", "trusted">];
+  let Subjects = SubjectList<[Function]>;
+  let Documentation = [Undocumented];
+  let SimpleHandler = 1;
+}
+
 def Used : InheritableAttr {
   let Spellings = [GCC<"used">];
   let Subjects = SubjectList<[NonLocalVar, Function, ObjCMethod]>;
