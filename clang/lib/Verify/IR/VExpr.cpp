@@ -112,8 +112,11 @@ static std::unique_ptr<VExpr> cloneVExprImpl(const VExpr *E) {
   }
   case VExpr::Var: {
     const auto *V = static_cast<const VVarExpr *>(E);
-    return std::make_unique<VVarExpr>(V->Name, V->Ty, V->Loc,
-                                      V->ProvenanceVariable);
+    auto Copy = std::make_unique<VVarExpr>(V->Name, V->Ty, V->Loc,
+                                           V->ProvenanceVariable);
+    Copy->Origins = V->Origins;
+    Copy->OriginCompanion = V->OriginCompanion;
+    return Copy;
   }
   case VExpr::BinOp: {
     const auto *B = static_cast<const VBinOpExpr *>(E);
