@@ -201,7 +201,9 @@ task on it, with its own backends; its obligations are tasks on the same
 pool (a task waiting for them runs them itself, so the pool never grows), and
 with workers to spare its whole query races the obligations solved one by
 one: both are exact, so a proof by either decides the function and
-interrupts the other. Dumps, archives, and diagnostics are buffered per
+interrupts the other. A query over sequences is also solved without the
+sequence index facts, which help proofs but slow the search for
+counterexamples. Dumps, archives, and diagnostics are buffered per
 function and published in source order, and the cross-function steps (callee
 contracts, spec termination, trust) run after every function. Each worker
 owns a fresh Z3 context/solver or a separate cvc5 process; no solver state is
