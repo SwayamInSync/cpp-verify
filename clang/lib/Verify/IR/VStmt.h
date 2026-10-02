@@ -355,6 +355,15 @@ struct VFunction {
   bool IsChoice = false;
   /// Supplied by <cppverify.h> rather than written in the program.
   bool IsBuiltin = false;
+  /// inductive: the least predicate its body defines, a function that is
+  /// true where some finite derivation shows it.
+  SourceLocation InductiveLoc;
+  /// The body of an inductive predicate as one condition over its
+  /// parameters, applying the predicate itself: equal to it at every
+  /// application.
+  std::unique_ptr<VExpr> Unfolding;
+  /// The step-indexed definition of the inductive predicate named here.
+  std::string InductiveStepOf;
   /// Each behavior's name and assumption, to check that it can apply.
   std::vector<std::pair<std::string, std::unique_ptr<VExpr>>> Behaviors;
   bool UsesDynamicStorage = false;
