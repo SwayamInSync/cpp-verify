@@ -565,6 +565,7 @@ The examples above use a handful of techniques, which cover most proofs:
   that times out under one may verify with the other
   (``--backend=cvc5``). Both are exact, and a strict
   ``--backend=portfolio`` asks for agreement.
-- **Run obligations separately.** ``--jobs=N`` solves each obligation on its
-  own, in parallel, before trying them together; a function whose combined
-  query is hard but whose obligations are each easy then verifies at once.
+- **Run obligations separately.** With more than one job (the default uses
+  every core), each obligation is also solved on its own, in parallel with
+  the combined query; a function whose combined query is hard but whose
+  obligations are each easy then verifies at once.
