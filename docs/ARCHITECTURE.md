@@ -655,6 +655,16 @@ counterexamples, and take 141 s instead of 801 s. A pattern cannot contain
 `ite`, so a term with one (a subrange whose start may be negative, or a term
 built around one) is named by a fresh constant defined as it.
 
+**Encoding race.** The facts help proofs but slow model search: a false
+claim about one element of a chain of 200 pushes took 139 s with them and
+0.1 s without. With more than one job, every query over sequences (the
+complete query, each obligation, and the complete-query retry) is therefore
+also solved in the plain sequence theory (`Z3Encoder::setSequenceFacts`,
+which omits the index, membership, and split facts and the extensionality
+instances), on the same pool (`Z3VerifyBackend::solveQuery`). Both encodings
+are exact, so the first proof or certified counterexample stands and
+interrupts the other. With one job only the facts' encoding runs.
+
 **Subranges.** `seq.extract` already clamps: from a start in `[0, len)` it
 stops at the end, and it is empty from any other start or for a count below
 one. `subrange(lo, hi)` is therefore exactly `extract(s, lo, hi - lo)` for
@@ -1050,7 +1060,10 @@ every query at the time the function has left, and no query starts once it
 has passed. Z3 forgets a timeout that fires inside one of its nested
 resource scopes (leaving a scope clears the cancellation; a check given one
 or two milliseconds never returned), so `Z3Encoder::check` interrupts a
-check again, every 50 ms from 100 ms past its time, until it returns. Source-location annotation takes a lock, since
+check again, every 50 ms from 100 ms past its time, until it returns.
+`Z3Encoder::interrupt`, which races use, is sticky the same way: a stopped
+encoder's checks return `unknown` at once, and a running one is interrupted
+until it returns. Source-location annotation takes a lock, since
 the source manager caches its last lookup. Lean stays serial, and the
 compile-time verifier keeps a single job.
 
