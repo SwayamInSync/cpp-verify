@@ -82,7 +82,7 @@
 # HIT: Verified: cached_offset [backend=z3] [cache=[[M:[1-9][0-9]*]]/[[M]]]
 
 # PARTIAL: Verified: cached_identity [backend=z3] [cache=3/3]
-# PARTIAL: Verified: cached_offset [backend=z3] [cache=1/6]
+# PARTIAL: Verified: cached_offset [backend=z3] [cache=1/4]
 
 # CORRUPT: Unresolved: cached_identity
 # CORRUPT-SAME: [reason=cache.corrupt]
