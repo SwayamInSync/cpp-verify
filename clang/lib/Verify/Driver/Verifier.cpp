@@ -856,6 +856,7 @@ public:
 
     BackendExecutionOptions Execution;
     Execution.SolverTimeoutMs = Opts.SolverTimeoutMs;
+    Execution.CollectionTimeoutMs = Opts.CollectionTimeoutMs;
     Execution.SolverResourceLimit = Opts.SolverResourceLimit;
     Execution.Jobs = Opts.Jobs;
     Execution.MaxQueryNodes = Opts.MaxQueryNodes;
@@ -884,6 +885,7 @@ public:
         Execution.SolverTimeoutMs == 0
             ? 1000
             : std::min<unsigned>(Execution.SolverTimeoutMs, 1000);
+    SmokeExecution.CollectionTimeoutMs.reset();
     SmokeExecution.SingleQuery = true;
     SmokeExecution.Jobs = 1;
     SmokeExecution.ProofCachePath.clear();
@@ -989,8 +991,9 @@ public:
 
     for (const auto &Fn : Functions) {
       // The value of a spec outside its when domain, or a spec of
-      // <cppverify.h>: nothing to verify.
-      if (Fn->Uninterpreted || Fn->IsBuiltin)
+      // <cppverify.h>: nothing to verify but a library spec's termination,
+      // which is reported only if it fails.
+      if (Fn->Uninterpreted || (Fn->IsBuiltin && !Fn->NeedsDecreasesCheck))
         continue;
       if (Fn->IsExternalContract) {
         if (Fn->IsTrusted)
@@ -1300,8 +1303,9 @@ public:
           }
           if (Fn->IsSpec) {
             UnprovenPosts.erase(Fn->Identity);
-            Diags.push_back({VerifyDiagnostic::Lowered, DecLabel + Fn->Name,
-                             SourceLocation(), Fn->Name, DR});
+            if (!Fn->IsBuiltin)
+              Diags.push_back({VerifyDiagnostic::Lowered, DecLabel + Fn->Name,
+                               SourceLocation(), Fn->Name, DR});
             continue;
           }
         } else {
@@ -1319,9 +1323,10 @@ public:
                             : Rule + " (" + R.Message + ")";
           }
           if (R.Status == VerifyStatus::Exported) {
-            Diags.push_back({VerifyDiagnostic::Exported,
-                             "decreases: " + Fn->Name, R.Location, Fn->Name,
-                             R});
+            if (!Fn->IsBuiltin)
+              Diags.push_back({VerifyDiagnostic::Exported,
+                               "decreases: " + Fn->Name, R.Location, Fn->Name,
+                               R});
             if (Fn->IsSpec) {
               UndefinedSpecs.erase(Fn->Identity);
               UnprovenPosts.erase(Fn->Identity);
@@ -1331,8 +1336,9 @@ public:
             if (Fn->IsSpec) {
               UndefinedSpecs.erase(Fn->Identity);
               UnprovenPosts.erase(Fn->Identity);
-              Diags.push_back({VerifyDiagnostic::Verified, DecLabel + Fn->Name,
-                               R.Location, Fn->Name, R});
+              if (!Fn->IsBuiltin)
+                Diags.push_back({VerifyDiagnostic::Verified,
+                                 DecLabel + Fn->Name, R.Location, Fn->Name, R});
               recordDependencies(*Fn, DecModule);
               continue;
             }
