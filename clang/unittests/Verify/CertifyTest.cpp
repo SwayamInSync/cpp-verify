@@ -1567,3 +1567,61 @@ TEST(CertifyTest, NestedUnboundedQuantifiersAreDecided) {
                 .Outcome,
             CertifyOutcome::Inconsistent);
 }
+
+/// even.step(h, n) = h > 0 && (n == 0 || even.step(h - 1, n - 2)): the
+/// step-indexed definition of an inductive predicate.
+LogicFunctionDecl evenStep() {
+  LogicFunctionDecl F;
+  F.Identity = "even_step_id";
+  F.DisplayName = "even.step";
+  F.Parameters.push_back({"h", math()});
+  F.Parameters.push_back({"n", math()});
+  F.ResultSort = LogicSort::boolSort();
+  F.DefinitionFuel = 1;
+  auto h = [] { return variable("h", math()); };
+  auto n = [] { return variable("n", math()); };
+  std::vector<Expr> Args;
+  Args.push_back(node(LogicExpr::Sub, math(), h(), mathLiteral(1)));
+  Args.push_back(node(LogicExpr::Sub, math(), n(), mathLiteral(2)));
+  F.StepDefinition = node(LogicExpr::And, LogicSort::boolSort(),
+                          boolean(LogicExpr::Gt, h(), mathLiteral(0)),
+                          node(LogicExpr::Or, LogicSort::boolSort(),
+                               boolean(LogicExpr::Eq, n(), mathLiteral(0)),
+                               call(F, std::move(Args))));
+  F.DefinitionLevels.push_back(clone(*F.StepDefinition));
+  return F;
+}
+
+TEST(CertifyTest, WitnessesDecideUnboundedQuantifiers) {
+  ObligationModule Module = withFunction(evenStep());
+  const LogicFunctionDecl &F = Module.LogicFunctions.at("even_step_id");
+  TableModel Model;
+  auto step = [&](int64_t N) {
+    std::vector<Expr> Args;
+    Args.push_back(variable("h", math()));
+    Args.push_back(mathLiteral(N));
+    return call(F, std::move(Args));
+  };
+  auto derivable = [&](int64_t N) {
+    Expr Exists = node(LogicExpr::Exists, LogicSort::boolSort(), step(N));
+    Exists->Binder = "h";
+    return Exists;
+  };
+  // 4 is derived from 2 and 0: a derivation of height 3.
+  EXPECT_EQ(certifyCounterexample(Module, *derivable(4), Model).Outcome,
+            CertifyOutcome::Certified);
+  EXPECT_NE(
+      certifyCounterexample(Module, *negation(derivable(4)), Model).Outcome,
+      CertifyOutcome::Certified);
+  // No height derives 3, and no height shows that none does.
+  EXPECT_EQ(certifyCounterexample(Module, *derivable(3), Model).Outcome,
+            CertifyOutcome::Undetermined);
+  // A height where the body fails refutes a forall.
+  Expr NoDerivation =
+      node(LogicExpr::Forall, LogicSort::boolSort(), negation(step(4)));
+  NoDerivation->Binder = "h";
+  EXPECT_EQ(
+      certifyCounterexample(Module, *negation(std::move(NoDerivation)), Model)
+          .Outcome,
+      CertifyOutcome::Certified);
+}
