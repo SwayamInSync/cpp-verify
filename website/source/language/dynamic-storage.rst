@@ -170,10 +170,12 @@ a contract such as ``post(result == source)`` preserves the source identity:
      return observed;
    }
 
-The pointee postcondition above is needed because an ordinary pointer-taking
-modular call conservatively forgets the value heap unless its contract restores
-the value. Provenance alone proves which live object the pointer denotes; it
-does not invent a value-preservation promise.
+A callee that writes no memory leaves the heap unchanged, so the pointee
+postcondition above is not needed for ``returned_alias``. A pointer-taking
+callee that may write memory and has no ``modifies`` forgets the value heap at
+the call; such a postcondition then restores the value. Provenance alone proves
+which live object the pointer denotes; it does not invent a value-preservation
+promise.
 
 This remains deliberately a **scalar** interface. The callee may not offset,
 subscript, copy, rebind, or deallocate the dynamic formal. Pointer-returning
