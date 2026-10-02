@@ -112,6 +112,8 @@ struct FunctionContractInfo {
   SmallVector<Expr *, 2> Decreases;
   /// decreases(*): the function may diverge.
   SourceLocation MayDiverge;
+  /// inductive: a spec predicate is the least one its body defines.
+  SourceLocation Inductive;
   /// complete_behaviors and disjoint_behaviors: conditions that the
   /// preconditions must imply.
   SmallVector<Expr *, 1> BehaviorChecks;
