@@ -58,6 +58,27 @@ protected:
       return Result;
     }
     std::vector<VerifyResult> Results = Z3->verifyObligations(Module);
+    for (size_t I = 0; I != Results.size() && I != Module.Obligations.size();
+         ++I) {
+      if (Results[I].Status != VerifyStatus::Unresolved ||
+          Results[I].Reason != VerifyReason::SpecFuel)
+        continue;
+      const Obligation &Item = Module.Obligations[I];
+      std::vector<std::string> Tried;
+      if (std::optional<VerifyResult> Proof =
+              Z3->proveByInduction(Module, &Item, &Tried)) {
+        Proof->CacheHits = Results[I].CacheHits;
+        Proof->CacheMisses = Results[I].CacheMisses;
+        Proof->CacheErrors = Results[I].CacheErrors;
+        Proof->CacheError = Results[I].CacheError;
+        Proof->ReusedQueries = Results[I].ReusedQueries;
+        Proof->ObligationId = Item.StableId.empty() ? Item.Id : Item.StableId;
+        Proof->ObligationType = Item.Kind;
+        Results[I] = std::move(*Proof);
+      } else {
+        Results[I].Message += inductionNote(Module, Tried);
+      }
+    }
     uint64_t CacheHits = 0;
     uint64_t CacheMisses = 0;
     uint64_t CacheErrors = 0;
@@ -306,15 +327,6 @@ protected:
           FirstFailure = std::move(Z3Result);
         continue;
       }
-      // cvc5 found the fuel-limited query satisfiable but has no model to
-      // check; Z3's counterexample was checked against the definitions.
-      if (Z3Result.Status == VerifyStatus::Failed &&
-          CVC5Result.Status == VerifyStatus::Unresolved &&
-          CVC5Result.Reason == VerifyReason::SpecFuel) {
-        if (!FirstFailure)
-          FirstFailure = std::move(Z3Result);
-        continue;
-      }
       if (Z3Result.Status == VerifyStatus::Unresolved ||
           CVC5Result.Status == VerifyStatus::Unresolved) {
         if (!FirstUnresolved)
@@ -417,6 +429,22 @@ llvm::StringRef verify::verifyReasonCode(VerifyReason Reason) {
     return "cache.io-failed";
   case VerifyReason::SpecFuel:
     return "spec.fuel";
+  case VerifyReason::SpecHidden:
+    return "spec.hidden";
+  case VerifyReason::UncheckedCounterexample:
+    return "counterexample.unchecked";
+  case VerifyReason::SpecTermination:
+    return "spec.termination";
+  case VerifyReason::SpecReads:
+    return "spec.reads";
+  case VerifyReason::SpecPost:
+    return "spec.post";
+  case VerifyReason::UnsupportedConstruct:
+    return "construct.unsupported";
+  case VerifyReason::CalleeContract:
+    return "callee.contract";
+  case VerifyReason::DecreasesMissing:
+    return "decreases.missing";
   }
   llvm_unreachable("unknown verification reason");
 }
@@ -491,6 +519,15 @@ VerifyResult VerifyBackend::verify(const ObligationModule &Module) {
     Result.ObligationType.reset();
     Result.Location = SourceLocation();
     Result.Source = {};
+  }
+  // A model of `false` says nothing about the program.
+  if (Result.Status == VerifyStatus::Failed && Result.ObligationType &&
+      *Result.ObligationType == ObligationKind::Unsupported) {
+    Result.Status = VerifyStatus::Unresolved;
+    Result.Reason = VerifyReason::UnsupportedConstruct;
+    Result.Message = "the verifier cannot model a construct here";
+    Result.Model.clear();
+    Result.Trace.clear();
   }
   if (Result.Status == VerifyStatus::Failed &&
       Result.Reason == VerifyReason::None)

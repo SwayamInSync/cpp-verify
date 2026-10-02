@@ -48,7 +48,21 @@ enum class VerifyReason {
   LeanExportFailure,
   CacheCorrupt,
   CacheIOFailure,
-  SpecFuel
+  SpecFuel,
+  SpecHidden,
+  UncheckedCounterexample,
+  /// The proof uses a spec whose termination is not established.
+  SpecTermination,
+  /// The proof uses a spec whose reads clause is not established.
+  SpecReads,
+  /// The proof uses a spec whose postcondition is not established.
+  SpecPost,
+  /// An obligation stands for a construct the verifier cannot model.
+  UnsupportedConstruct,
+  /// The proof assumes a callee contract the callee did not establish.
+  CalleeContract,
+  /// A loop has no termination measure.
+  DecreasesMissing
 };
 
 llvm::StringRef verifyReasonCode(VerifyReason Reason);
@@ -90,6 +104,15 @@ struct ProofEvidence {
   std::vector<std::string> LeanObligations;
 };
 
+/// How often a solver instantiated one quantifier, named by its source
+/// position.
+struct QuantifierProfileEntry {
+  unsigned Line = 0;
+  unsigned Column = 0;
+  uint64_t Instances = 0;
+  unsigned MaxGeneration = 0;
+};
+
 struct VerifyResult {
   VerifyStatus Status = VerifyStatus::Unresolved;
   VerifyReason Reason = VerifyReason::None;
@@ -114,6 +137,9 @@ struct VerifyResult {
   /// individually; absent when the backend did not check each one.
   std::optional<std::vector<std::string>> UnprovedObligations;
   std::optional<ProofEvidence> Evidence;
+  /// With --profile-quantifiers, the busiest quantifiers of an unresolved
+  /// query, most instantiated first.
+  std::vector<QuantifierProfileEntry> QuantifierProfile;
 };
 
 struct BackendCapabilities {
@@ -160,8 +186,15 @@ struct BackendExecutionOptions {
   /// unresolved. Interactive fallback backends can consume those unresolved
   /// obligations without spending a second whole-module timeout budget.
   bool SkipWholeModuleRetry = false;
+  /// Solve the whole-module query once, at the full budget, and report it:
+  /// no per-obligation queries, refinement fallback, or induction. For small
+  /// auxiliary questions such as the vacuity checks.
+  bool SingleQuery = false;
   /// Optional cvc5 executable. An empty path searches PATH for `cvc5`.
   std::string CVC5Path;
+  /// After an unresolved quantified Z3 query, count each quantifier's
+  /// instantiations in a profiling rerun.
+  bool ProfileQuantifiers = false;
   std::string ProofCachePath;
   uint64_t ProofCacheMaxBytes = 1024ULL * 1024ULL * 1024ULL;
   uint64_t ProofCacheMaxEntries = 100000;
