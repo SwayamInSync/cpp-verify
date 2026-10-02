@@ -193,11 +193,11 @@ what it writes with ``modifies`` after its invariants (ACSL's ``loop
 assigns``); the footprints are read in each iteration's state, so
 ``modifies(p[0 : j])`` describes the prefix written so far.
 
-The objects a store reaches are found from its address, not its spelling. A
-pointer that walks through a buffer still writes only that buffer, and a
-pointer chosen among several parameters writes one of their objects. In
-the second case the loop is framed by the function's own ``modifies``, and
-every store is checked against it:
+The objects a store reaches are found from where its pointer came from, not
+its spelling: every pointer variable has origins, the objects it may address
+(see *Pointer origins* below). A pointer that walks through a buffer still
+writes only that buffer, and a pointer chosen among several parameters writes
+one of their objects:
 
 .. code-block:: cpp
 
@@ -279,26 +279,45 @@ positions are proved to belong to one array object:
      return (p + i) - (p + j);
    }
 
-The operands must have the same complete pointee type and be compositional
-pointer-arithmetic positions rooted at one base. A
-``valid(p, n)`` marker supplies the extent and each position must lie in the
-closed interval ``[0, n]``; the inclusive endpoint is the legal one-past
-position. CppVerify subtracts target-byte addresses, divides by ``sizeof(T)``,
-proves that the mathematical element distance is representable by the target
-``ptrdiff_t``, and only then materializes the machine result. Signed, unsigned,
-and target-width indices follow their C++ machine representations.
+The operands must have the same complete pointee type and one origin, and
+each must lie in its origin's object: a ``valid(p, n)`` marker supplies the
+extent and each position must lie in the closed interval ``[0, n]``; the
+inclusive endpoint is the legal one-past position. CppVerify subtracts
+target-byte addresses, divides by ``sizeof(T)``, proves that the mathematical
+element distance is representable by the target ``ptrdiff_t``, and only then
+materializes the machine result. Signed, unsigned, and target-width indices
+follow their C++ machine representations. A position may be stepped or
+copied any number of times, in a loop or not:
+
+.. code-block:: cpp
+
+   int length_of(const char *s, int n)
+     pre(valid(s, n) && n >= 1 && n <= 1000)
+     post(0 <= result && result < n)
+   {
+     const char *p = s;
+     while (p < s + (n - 1) && *p != 0)
+       invariant(s <= p && p <= s + (n - 1))
+       decreases(s + (n - 1) - p)
+     {
+       p = p + 1;
+     }
+     return p - s;
+   }
 
 Without a declared extent, a direct abstract parameter or represented scalar
 dynamic allocation has only its complete-object positions ``0`` and ``1``.
-Abstract array operands must use the same syntactic SSA base. Merely proving
-``left == right`` or writing ``aliases(left, right)`` does not establish shared
-C++ provenance. Local dynamic aliases may instead establish one origin through
-their shared, nonzero lifetime identity.
+Local dynamic aliases establish one origin through their shared, nonzero
+lifetime identity. Two different parameters may point into one caller array,
+which the object model cannot express, so a difference between them (or
+between pointers that may come from either) is ``construct.unsupported``:
+neither proved nor reported as an error. Proving ``left == right`` does not
+change that.
 
-Stored/indirect pointer positions whose root cannot be recovered, distinct
-origins, null or dangling operands, out-of-range positions, unrepresentable
-distances, pointer compound assignment, and pointer difference inside explicit
-``spec`` or lifted ``constexpr`` functions fail closed.
+Pointers loaded from memory, null or dangling operands, out-of-range
+positions, unrepresentable distances, pointer compound assignment, and
+pointer difference inside explicit ``spec`` or lifted ``constexpr`` functions
+fail closed.
 
 Local scalar dynamic storage
 ----------------------------
@@ -397,10 +416,53 @@ pointee type; the header's template covers all of them.
 A pointer without a marker addresses a single object, as Frama-C's ``\valid``
 guards and Verus permissions require: ``p[1]`` through ``int *p`` fails, and
 so does forming ``p + 10`` from ``valid(p, 2)``, since pointer arithmetic must
-stay within the object's closed range ``[0, n]``. The object of a pointer that
-steps from a parameter the body never reassigns is that parameter's entry
-object; otherwise it is some parameter's object, or the object at a base
-known to be valid such as a callee's result.
+stay within the object's closed range ``[0, n]``. The object of a pointer is
+the one its origin names, below; when its origin is unknown it is some
+parameter's object, or the object at a base known to be valid such as a
+callee's result.
+
+Pointer origins
+---------------
+
+Every pointer variable has, at every point, its origins: the objects it may
+address, as CompCert's memory blocks and Frama-C's base addresses. A pointer
+parameter starts with the object it addresses on entry and a global's address
+with the global. Pointer arithmetic keeps the origin, assignment copies it,
+and branches and loops join the possibilities, so ``q = first ? a : b`` has
+the origins ``a`` and ``b``. A pointer loaded from memory or returned by a
+call has no known origin.
+
+An access or a step must stay in its origin's object. A pointer that came
+from ``a`` and moved one past its end is rejected there even when another
+object happens to start at that address, as C++ requires. A pointer
+difference needs one origin, and a loop writes only its stores' origins.
+
+Inside a loop, the verifier proves two facts for you: a pointer the loop
+moves stays a whole number of elements from its origin's start, and a pointer
+that may have either of two origins keeps one of them. An invariant still
+states addresses, and an address alone does not say where a pointer came
+from. When a walker may be in either of two objects, tie it to the condition
+that chose:
+
+.. code-block:: cpp
+
+   void clear_chosen(int *a, int *b, int n, bool s)
+     pre(valid(a, n) && valid(b, n) && n >= 1 && n <= 1000)
+     modifies(*a, *b)
+   {
+     int *q = s ? a : b;
+     for (int i = 0; i < n; i = i + 1)
+       invariant(0 <= i && i <= n && (s ? q == a + i : q == b + i))
+       decreases(n - i)
+     {
+       *q = 0;
+       q = q + 1;
+     }
+   }
+
+With only ``q == a + i || q == b + i``, the invariant would allow ``q`` one
+past the end of ``a`` at the start of ``b`` while it came from ``a``, and the
+store there would be rejected.
 
 The same marker composes across modular calls. Passing ``p + offset`` to a
 callee with ``valid(q, length)`` requires a same-root proof of
