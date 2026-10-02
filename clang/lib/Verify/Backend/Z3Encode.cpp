@@ -1055,10 +1055,10 @@ Z3Encoder::encodeVCNode(const VCExpr *E,
     for (unsigned I = 2; I + 1 < E->Children.size(); I += 2)
       Inside = Inside || (heapIndex(child(I)) <= Address &&
                           Address < heapIndex(child(I + 1)));
-    z3::expr_vector Binders(Ctx);
-    Binders.push_back(Address);
-    return z3::forall(Binders, Inside || z3::select(child(1), Address) ==
-                                             z3::select(child(0), Address));
+    return namedForall(Address,
+                       Inside || z3::select(child(1), Address) ==
+                                     z3::select(child(0), Address),
+                       "q!frame");
   }
   case VCExpr::Forall:
   case VCExpr::Exists: {
@@ -1151,9 +1151,7 @@ z3::expr Z3Encoder::collectionEquality(const LogicSort &Sort,
     z3::expr Cell = z3::select(M, Element);
     return z3::ite(Cell >= 0, Cell, Ctx.int_val(0));
   };
-  z3::expr_vector Bound(Ctx);
-  Bound.push_back(Element);
-  return z3::forall(Bound, count(L) == count(R));
+  return namedForall(Element, count(L) == count(R), "q!multiset");
 }
 
 z3::expr Z3Encoder::encodeCollection(const VCExpr *E,
@@ -1196,31 +1194,41 @@ z3::expr Z3Encoder::encodeCollection(const VCExpr *E,
     return length(arg(0));
   case Op::SeqIndex:
     return seqAt(arg(0), arg(1));
-  case Op::SeqPush:
-    return concat(arg(0), unit(arg(1)));
-  case Op::SeqUpdate: {
-    z3::expr S = arg(0), I = arg(1), X = arg(2);
-    z3::expr Len = length(S);
-    return z3::ite(Zero <= I && I < Len,
-                   concat(concat(extract(S, Zero, I), unit(X)),
-                          extract(S, I + 1, Len - I - 1)),
-                   S);
+  case Op::SeqPush: {
+    z3::expr S = arg(0), X = arg(1);
+    z3::expr Pushed = concat(S, unit(X));
+    indexFacts(Pushed, [&](const z3::expr &K) {
+      return z3::ite(K == length(S), X, seqAt(S, K));
+    });
+    return Pushed;
   }
   case Op::SeqSubrange: {
     // seq.extract clamps by itself: from a start in [0, len) it stops at the
     // end, and it is empty from any other start or for a count below 1.
     // Only a negative start differs, where subrange starts at 0.
     z3::expr S = arg(0), Lo = arg(1), Hi = arg(2);
-    z3::expr FromLo = extract(S, Lo, Hi - Lo);
+    z3::expr Range = extract(S, Lo, Hi - Lo);
     const LogicExpr *Start =
         E->Children.size() > 1 ? E->Children[1].get() : nullptr;
-    if (Start && Start->K == LogicExpr::IntLit &&
-        !llvm::StringRef(Start->IntVal).starts_with("-"))
-      return FromLo;
-    return z3::ite(Lo < Zero, extract(S, Zero, Hi), FromLo);
+    if (!Start || Start->K != LogicExpr::IntLit ||
+        llvm::StringRef(Start->IntVal).starts_with("-"))
+      Range = z3::ite(Lo < Zero, extract(S, Zero, Hi), Range);
+    z3::expr Len = length(S);
+    z3::expr From = z3::ite(Lo < Zero, Zero, z3::ite(Lo > Len, Len, Lo));
+    z3::expr To = z3::ite(Hi < From, From, z3::ite(Hi > Len, Len, Hi));
+    indexFacts(Range, [&](const z3::expr &K) {
+      return z3::ite(Zero <= K && K < To - From, seqAt(S, From + K), Zero);
+    });
+    return Range;
   }
-  case Op::SeqConcat:
-    return concat(arg(0), arg(1));
+  case Op::SeqConcat: {
+    z3::expr A = arg(0), B = arg(1);
+    z3::expr Joined = concat(A, B);
+    indexFacts(Joined, [&](const z3::expr &K) {
+      return z3::ite(K < length(A), seqAt(A, K), seqAt(B, K - length(A)));
+    });
+    return Joined;
+  }
   case Op::SeqContains: {
     z3::expr S = arg(0), X = arg(1);
     z3::expr Contains = wrap(Z3_mk_seq_contains(Ctx, S, unit(X)));
@@ -1303,51 +1311,46 @@ z3::expr Z3Encoder::seqAt(const z3::expr &S, const z3::expr &K) {
                z3::ite(Zero <= Index && Index < length(Sequence),
                        wrap(Z3_mk_seq_nth(Ctx, Sequence, Index)), Zero));
   }
-  if (!SeqAtLemmas) {
-    SeqAtLemmas = true;
-    const z3::func_decl &At = *SeqAtDecl;
-    z3::expr A = Ctx.constant("cppverify!a", Seq);
-    z3::expr B = Ctx.constant("cppverify!b", Seq);
-    z3::expr X = Ctx.int_const("cppverify!x");
-    z3::expr Index = Ctx.int_const("cppverify!k");
-    z3::expr Offset = Ctx.int_const("cppverify!o");
-    z3::expr Count = Ctx.int_const("cppverify!n");
-    auto axiom = [&](z3::expr_vector Binders, const z3::expr &Pattern,
-                     const z3::expr &Body) {
-      Z3_ast Term = Pattern;
-      Z3_pattern P = Z3_mk_pattern(Ctx, 1, &Term);
-      Ctx.check_error();
-      std::vector<Z3_app> Bound;
-      for (unsigned I = 0; I != Binders.size(); ++I)
-        Bound.push_back(Binders[I]);
-      CollectionAxioms.push_back(wrap(Z3_mk_forall_const(
-          Ctx, 0, Bound.size(), Bound.data(), 1, &P, Body)));
-    };
-    auto binders = [&](std::initializer_list<z3::expr> List) {
-      z3::expr_vector Vector(Ctx);
-      for (const z3::expr &E : List)
-        Vector.push_back(E);
-      return Vector;
-    };
-    // Consequences of the definition over the operations that build
-    // sequences.
-    Z3_ast Parts[] = {A, B};
-    z3::expr Joined = wrap(Z3_mk_seq_concat(Ctx, 2, Parts));
-    axiom(binders({A, B, Index}), At(Joined, Index),
-          At(Joined, Index) == z3::ite(Index < length(A), At(A, Index),
-                                       At(B, Index - length(A))));
-    z3::expr Unit = wrap(Z3_mk_seq_unit(Ctx, X));
-    axiom(binders({X, Index}), At(Unit, Index),
-          At(Unit, Index) == z3::ite(Index == 0, X, Zero));
-    z3::expr Extracted = wrap(Z3_mk_seq_extract(Ctx, A, Offset, Count));
-    axiom(binders({A, Offset, Count, Index}), At(Extracted, Index),
-          z3::implies(Zero <= Offset && Zero <= Count &&
-                          Offset + Count <= length(A),
-                      At(Extracted, Index) ==
-                          z3::ite(Zero <= Index && Index < Count,
-                                  At(A, Offset + Index), Zero)));
-  }
   return (*SeqAtDecl)(S, K);
+}
+
+static bool containsIte(const z3::expr &E, std::set<unsigned> &Seen) {
+  if (!E.is_app() || !Seen.insert(E.id()).second)
+    return false;
+  if (E.decl().decl_kind() == Z3_OP_ITE)
+    return true;
+  for (unsigned I = 0; I != E.num_args(); ++I)
+    if (containsIte(E.arg(I), Seen))
+      return true;
+  return false;
+}
+
+z3::expr Z3Encoder::patternable(const z3::expr &Term) {
+  std::set<unsigned> Seen;
+  if (!containsIte(Term, Seen))
+    return Term;
+  auto It = PatternNames.find(Term.id());
+  if (It != PatternNames.end())
+    return It->second;
+  // A pattern cannot contain ite: name the closed term by a fresh constant
+  // defined as it, which preserves every model.
+  z3::expr Name = Ctx.constant(
+      ("cppverify!t" + std::to_string(PatternNames.size())).c_str(),
+      Term.get_sort());
+  CollectionAxioms.push_back(Name == Term);
+  return PatternNames.emplace(Term.id(), Name).first->second;
+}
+
+void Z3Encoder::indexFacts(
+    const z3::expr &Term,
+    llvm::function_ref<z3::expr(const z3::expr &)> Element) {
+  // Only a closed term: an axiom beside the query cannot mention a binder.
+  if (mentionsBinder(Term) || !IndexedTerms.insert(Term.id()).second)
+    return;
+  z3::expr K = Ctx.int_const("cppverify!k");
+  z3::expr Read = seqAt(patternable(Term), K);
+  z3::expr Body = Read == Element(K);
+  CollectionAxioms.push_back(theorem(K, Read, Body, "fact!index"));
 }
 
 void Z3Encoder::bridgeContains(const z3::expr &Contains, const z3::expr &S,
@@ -1366,17 +1369,35 @@ void Z3Encoder::bridgeContains(const z3::expr &Contains, const z3::expr &S,
       Contains, Zero <= Witness && Witness < Length && seqAt(S, Witness) == X));
   // A read of x at any index in range implies contains.
   z3::expr K = Ctx.int_const("cppverify!k");
-  z3::expr Read = seqAt(S, K);
+  z3::expr Read = seqAt(patternable(S), K);
   z3::expr Body = z3::implies(Zero <= K && K < Length && Read == X, Contains);
+  CollectionAxioms.push_back(theorem(K, Read, Body, "fact!contains"));
+}
+
+z3::expr Z3Encoder::theorem(const z3::expr &Bound, const z3::expr &Trigger,
+                            const z3::expr &Body, const char *Id) {
   // A pattern is not reference counted: make it last, right before use.
-  Z3_ast Term = Read;
+  Z3_ast Term = Trigger;
   Z3_pattern Pattern = Z3_mk_pattern(Ctx, 1, &Term);
   Ctx.check_error();
-  Z3_app Bound = K;
-  z3::expr Forall(Ctx,
-                  Z3_mk_forall_const(Ctx, 0, 1, &Bound, 1, &Pattern, Body));
+  Z3_app Binder = Bound;
+  z3::expr Forall(
+      Ctx, Z3_mk_quantifier_const_ex(Ctx, true, 0, Z3_mk_string_symbol(Ctx, Id),
+                                     Z3_mk_string_symbol(Ctx, ""), 1, &Binder,
+                                     1, &Pattern, 0, nullptr, Body));
   Ctx.check_error();
-  CollectionAxioms.push_back(Forall);
+  return Forall;
+}
+
+z3::expr Z3Encoder::namedForall(const z3::expr &Bound, const z3::expr &Body,
+                                const char *Id) {
+  Z3_app Binder = Bound;
+  z3::expr Forall(
+      Ctx, Z3_mk_quantifier_const_ex(Ctx, true, 0, Z3_mk_string_symbol(Ctx, Id),
+                                     Z3_mk_string_symbol(Ctx, ""), 1, &Binder,
+                                     0, nullptr, 0, nullptr, Body));
+  Ctx.check_error();
+  return Forall;
 }
 
 z3::expr Z3Encoder::seqExtract(const z3::expr &S, const z3::expr &From,
@@ -1393,7 +1414,8 @@ z3::expr Z3Encoder::seqExtract(const z3::expr &S, const z3::expr &From,
   // leave every satisfiable query to model-based instantiation, which
   // cannot check a quantifier over sequences.
   if (!S.is_app() || S.decl().decl_kind() != Z3_OP_SEQ_CONCAT ||
-      S.num_args() != 2)
+      S.num_args() != 2 || mentionsBinder(Whole) ||
+      !SplitExtracts.insert(Whole.id()).second)
     return Whole;
   z3::expr A = S.arg(0);
   z3::expr B = S.arg(1);
@@ -1696,7 +1718,9 @@ Z3Encoder::encodeModuleAs(const ObligationModule &Module,
   BitShadows.clear();
   BitDefinitions.clear();
   CollectionAxioms.clear();
-  SeqAtLemmas = false;
+  IndexedTerms.clear();
+  SplitExtracts.clear();
+  PatternNames.clear();
   BridgedContains.clear();
   UsedCellDecls.clear();
   CellFunctions =
@@ -1718,6 +1742,12 @@ Z3Encoder::encodeModuleAs(const ObligationModule &Module,
       collectBinderNames(Definition.get(), BinderNames);
   std::unique_ptr<LogicExpr> Instantiated = instantiateAtReads(*Query);
   const LogicExpr *Goal = Instantiated ? Instantiated.get() : Query;
+  if (std::unique_ptr<LogicExpr> Extensional =
+          instantiateExtensionality(*Goal)) {
+    Instantiated = std::move(Extensional);
+    Goal = Instantiated.get();
+    collectBinderNames(Goal, BinderNames);
+  }
   std::vector<const VCExpr *> SpecCalls;
   collectSpecCalls(Goal, SpecCalls);
   DefineBitShadows = true;
@@ -3046,6 +3076,8 @@ static VerifyResult finishZ3Result(VerifyResult Result) {
 std::vector<VerifyResult>
 Z3VerifyBackend::verifyObligations(const ObligationModule &Module,
                                    bool StopAtFailure) {
+  TimeoutMs = moduleTimeoutMs(Module, SolverTimeoutMs, CollectionTimeoutMs);
+  Enc.setTimeoutMs(TimeoutMs);
   if (auto Limit = querySizeLimitResult(Module, MaxQueryNodes))
     return {std::move(*Limit)};
 
@@ -3122,6 +3154,8 @@ Z3VerifyBackend::Z3VerifyBackend(const BackendExecutionOptions &Execution,
                                  llvm::StringRef CacheBackendName,
                                  bool ReuseVerifiedQueries)
     : TimeoutMs(Execution.SolverTimeoutMs),
+      SolverTimeoutMs(Execution.SolverTimeoutMs),
+      CollectionTimeoutMs(Execution.CollectionTimeoutMs),
       ResourceLimit(Execution.SolverResourceLimit), Jobs(Execution.Jobs),
       MaxQueryNodes(Execution.MaxQueryNodes),
       IntegerEncoding(Execution.IntegerEncoding),
@@ -3254,6 +3288,8 @@ Z3VerifyBackend::proveByInduction(const ObligationModule &Module,
 }
 
 VerifyResult Z3VerifyBackend::verifyModule(const ObligationModule &Module) {
+  TimeoutMs = moduleTimeoutMs(Module, SolverTimeoutMs, CollectionTimeoutMs);
+  Enc.setTimeoutMs(TimeoutMs);
   if (SingleQuery) {
     if (auto Limit = querySizeLimitResult(Module, MaxQueryNodes))
       return std::move(*Limit);
