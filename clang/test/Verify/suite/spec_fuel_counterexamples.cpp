@@ -35,14 +35,23 @@ int closed_form_wrong(int n)
 
 // No bound on n: refinement cannot settle every argument, and a model that
 // only the missing unfolding makes fail is not reported as a counterexample.
+// The property is inductive, so strong induction on n proves it.
 void unbounded(int n)
   pre(n >= 0)
   post(triangle(n) >= 0)
 {
 }
 
+// True, but the property at smaller n says nothing about n.
+void not_inductive(int n)
+  pre(n >= 0)
+  post(triangle(n) != 7)
+{
+}
+
 // CHECK-DAG: Verified: closed_form [
 // CHECK-DAG: error: verification failed: closed_form_wrong [{{.*}}::postcondition@{{.*}}counterexample: {{.*}}n [ssa=n_0] [type=i32] = {{[1-6]}}
-// CHECK-DAG: Unresolved: unbounded [backend=z3] [reason=spec.fuel]
+// CHECK-DAG: Verified: unbounded [backend=z3]
+// CHECK-DAG: Unresolved: not_inductive [backend=z3] [reason=spec.fuel]
 
-// JSON-DAG: "function":"unbounded"{{.*}}"reason":"spec.fuel"
+// JSON-DAG: "function":"not_inductive"{{.*}}"reason":"spec.fuel"
