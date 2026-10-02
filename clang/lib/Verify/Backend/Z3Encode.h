@@ -7,9 +7,11 @@
 #include "ProofCache.h"
 #include "VerifyBackend.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
+#include <atomic>
 #include <chrono>
 #include <functional>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
@@ -53,6 +55,10 @@ class Z3Encoder {
   std::chrono::steady_clock::time_point QueryStart;
   bool QuantifiedQuery = false;
   z3::solver freshSolver();
+  /// \p S.check() within \p Ms milliseconds (0: no limit).
+  z3::check_result check(z3::solver &S, unsigned Ms);
+  /// A check outlived its time and was interrupted.
+  bool Overran = false;
   /// Encode logical functions as native recursive definitions. Hidden ones
   /// are defined too, but only to find counterexamples: an unsat that may use
   /// them is not a proof.
@@ -229,6 +235,8 @@ class Z3Encoder {
 public:
   Z3Encoder();
   void setTimeoutMs(unsigned Ms) { TimeoutMs = Ms; }
+  /// Stops the check running in this encoder, from any thread.
+  void interrupt() { Ctx.interrupt(); }
   void setProofOnly(bool Value) { ProofOnly = Value; }
   void setResourceLimit(unsigned Limit) { ResourceLimit = Limit; }
   void setIntegerEncoding(MachineIntegerEncoding Encoding) {
@@ -254,6 +262,7 @@ class Z3VerifyBackend : public VerifyBackend {
   std::optional<unsigned> CollectionTimeoutMs;
   unsigned ResourceLimit;
   unsigned Jobs;
+  llvm::ThreadPoolInterface *Pool;
   uint64_t MaxQueryNodes;
   MachineIntegerEncoding IntegerEncoding;
   bool SkipWholeModuleRetry;
@@ -263,12 +272,30 @@ class Z3VerifyBackend : public VerifyBackend {
   bool ReuseVerifiedQueries;
   std::set<std::string> VerifiedQueries;
 
+  std::optional<std::chrono::steady_clock::time_point> Deadline;
+  unsigned budget(unsigned Ms) const { return withinDeadline(Ms, Deadline); }
+  /// The function's time is spent, so no further query starts.
+  bool spent() const {
+    return Deadline && std::chrono::steady_clock::now() >= *Deadline;
+  }
+
+  /// Strategies solving one module at once: whichever settles it first
+  /// interrupts the others.
+  struct Race {
+    std::mutex Lock;
+    std::atomic<bool> Cancelled{false};
+    std::set<Z3Encoder *> Running;
+    void enter(Z3Encoder &Encoder);
+    void leave(Z3Encoder &Encoder);
+    void cancel();
+  };
+
   VerifyResult verifyModuleDirect(const ObligationModule &Module);
   VerifyResult verifyObligation(const ObligationModule &Module,
                                 const Obligation &Item,
                                 llvm::StringRef SemanticHash = {},
                                 const ProofCacheLookup *Lookup = nullptr,
-                                bool Reused = false);
+                                bool Reused = false, Race *Racing = nullptr);
 
 public:
   explicit Z3VerifyBackend(const BackendExecutionOptions &Execution = {},
@@ -281,7 +308,12 @@ public:
   /// One result per obligation in order. With StopAtFailure a serial run ends
   /// after the first failure, since later results cannot change it.
   std::vector<VerifyResult> verifyObligations(const ObligationModule &Module,
-                                              bool StopAtFailure = false);
+                                              bool StopAtFailure = false,
+                                              Race *Racing = nullptr);
+  void
+  setDeadline(std::optional<std::chrono::steady_clock::time_point> D) override {
+    Deadline = D;
+  }
   /// A proof of \p Item, or of the whole module, by strong induction on one
   /// of its integer variables, if one is found.
   std::optional<VerifyResult>
