@@ -171,7 +171,7 @@ public:
     if (Hidden.count(C.CalleeIdentity))
       return opaqueCall(C);
     auto It = FnMap.find(C.CalleeIdentity);
-    if (It == FnMap.end() || !It->second->IsSpec)
+    if (It == FnMap.end() || !It->second->IsSpec || It->second->Uninterpreted)
       return opaqueCall(C);
     const VFunction &Spec = *It->second;
     unsigned F = fuelFor(C.CalleeIdentity);
@@ -254,6 +254,12 @@ public:
       inlineQuantifiedCalls(H.Val);
       return;
     }
+    case VExpr::HeapFrame:
+      for (auto &[Lo, Hi] : static_cast<VHeapFrameExpr &>(*E).Regions) {
+        inlineQuantifiedCalls(Lo);
+        inlineQuantifiedCalls(Hi);
+      }
+      return;
     case VExpr::FieldAccess:
       inlineQuantifiedCalls(static_cast<VFieldAccessExpr &>(*E).Base);
       return;
@@ -417,6 +423,12 @@ public:
       inlineDefinednessCalls(H.Val, InsideQuantifier);
       return;
     }
+    case VExpr::HeapFrame:
+      for (auto &[Lo, Hi] : static_cast<VHeapFrameExpr &>(*E).Regions) {
+        inlineDefinednessCalls(Lo, InsideQuantifier);
+        inlineDefinednessCalls(Hi, InsideQuantifier);
+      }
+      return;
     case VExpr::FieldAccess:
       inlineDefinednessCalls(static_cast<VFieldAccessExpr &>(*E).Base,
                              InsideQuantifier);
@@ -543,7 +555,7 @@ public:
       if (!I)
         return nullptr;
       return std::make_unique<VCastExpr>(std::move(I), C->FromTy, C->Ty,
-                                         C->Loc);
+                                         C->Loc, C->IsTrigger);
     }
     case VExpr::Conditional: {
       const auto *C = static_cast<const VConditionalExpr *>(E);
@@ -581,12 +593,12 @@ public:
     case VExpr::Forall:
     case VExpr::Exists: {
       const auto *Q = static_cast<const VQuantifiedExpr *>(E);
-      auto Lo = evalExpr(Q->Lo.get(), Env);
-      auto Hi = evalExpr(Q->Hi.get(), Env);
+      auto Lo = Q->Lo ? evalExpr(Q->Lo.get(), Env) : nullptr;
+      auto Hi = Q->Hi ? evalExpr(Q->Hi.get(), Env) : nullptr;
       auto BodyEnv = cloneEnv(Env);
       BodyEnv.erase(Q->Binder);
       auto Body = evalExpr(Q->Body.get(), BodyEnv);
-      if (!Lo || !Hi || !Body)
+      if ((Q->Lo && (!Lo || !Hi)) || !Body)
         return nullptr;
       if (E->K == VExpr::Forall)
         return std::unique_ptr<VExpr>(std::make_unique<VForallExpr>(
@@ -643,6 +655,8 @@ public:
       return std::make_unique<VHeapStoreExpr>(
           H->HeapBefore, H->HeapAfter, std::move(Ptr), std::move(Val), H->Loc);
     }
+    case VExpr::HeapFrame:
+      return nullptr;
     }
     return nullptr;
   }
@@ -1003,6 +1017,12 @@ void verify::collectSpecCalls(const VExpr *E,
     collectSpecCalls(H->Val.get(), Out);
     return;
   }
+  case VExpr::HeapFrame:
+    for (const auto &[Lo, Hi] : static_cast<const VHeapFrameExpr *>(E)->Regions) {
+      collectSpecCalls(Lo.get(), Out);
+      collectSpecCalls(Hi.get(), Out);
+    }
+    return;
   case VExpr::FieldAccess:
     collectSpecCalls(static_cast<const VFieldAccessExpr *>(E)->Base.get(), Out);
     return;
@@ -1128,7 +1148,7 @@ std::unique_ptr<VExpr> verify::substParamsInExpr(
   case VExpr::Cast: {
     const auto *C = static_cast<const VCastExpr *>(E);
     return std::make_unique<VCastExpr>(substParamsInExpr(C->Inner.get(), Map),
-                                       C->FromTy, C->Ty, C->Loc);
+                                       C->FromTy, C->Ty, C->Loc, C->IsTrigger);
   }
   case VExpr::Load: {
     const auto *L = static_cast<const VLoadExpr *>(E);
@@ -1172,6 +1192,16 @@ std::unique_ptr<VExpr> verify::substParamsInExpr(
         H->HeapBefore, H->HeapAfter, substParamsInExpr(H->Ptr.get(), Map),
         substParamsInExpr(H->Val.get(), Map), H->Loc);
   }
+  case VExpr::HeapFrame: {
+    const auto *H = static_cast<const VHeapFrameExpr *>(E);
+    std::vector<std::pair<std::unique_ptr<VExpr>, std::unique_ptr<VExpr>>>
+        Regions;
+    for (const auto &[Lo, Hi] : H->Regions)
+      Regions.emplace_back(substParamsInExpr(Lo.get(), Map),
+                           substParamsInExpr(Hi.get(), Map));
+    return std::make_unique<VHeapFrameExpr>(H->HeapBefore, H->HeapAfter,
+                                            std::move(Regions), H->Loc);
+  }
   case VExpr::FieldAccess: {
     const auto *F = static_cast<const VFieldAccessExpr *>(E);
     return std::make_unique<VFieldAccessExpr>(
@@ -1192,8 +1222,11 @@ std::unique_ptr<VExpr> verify::substParamsInExpr(
         O->Op, substParamsInExpr(O->Lhs.get(), Map),
         O->Rhs ? substParamsInExpr(O->Rhs.get(), Map) : nullptr, O->Loc);
   }
-  case VExpr::Literal:
   case VExpr::Result:
+    if (auto It = Map.find(ResultKey); It != Map.end())
+      return cloneVExpr(It->second.get());
+    return cloneVExpr(E);
+  case VExpr::Literal:
     return cloneVExpr(E);
   }
   return nullptr;
@@ -1222,6 +1255,8 @@ static std::unique_ptr<VExpr> makeDecreaseAnd(std::unique_ptr<VExpr> L,
 
 struct RecursiveExecSite {
   const VCallStmt *Call = nullptr;
+  /// A function of the caller's recursion cycle, the caller included.
+  const VFunction *Callee = nullptr;
   std::map<std::string, std::unique_ptr<VExpr>> Args;
   std::unique_ptr<VExpr> Guard;
 };
@@ -1233,7 +1268,7 @@ struct DecreaseState {
 
 static std::vector<DecreaseState>
 collectRecursiveCalls(const std::vector<std::unique_ptr<VStmt>> &Stmts,
-                      const std::string &Self, const FunctionMap &FnMap,
+                      const VFunction &Self, const FunctionMap &FnMap,
                       std::vector<RecursiveExecSite> &Sites,
                       std::vector<DecreaseState> States, bool &Unsupported) {
   for (const auto &S : Stmts) {
@@ -1261,9 +1296,12 @@ collectRecursiveCalls(const std::vector<std::unique_ptr<VStmt>> &Stmts,
       case VStmt::Call: {
         const auto &C = static_cast<const VCallStmt &>(*S);
         auto It = FnMap.find(C.CalleeIdentity);
-        if (It != FnMap.end() && C.CalleeIdentity == Self) {
+        if (It != FnMap.end() &&
+            (C.CalleeIdentity == Self.Identity ||
+             Self.RecursionGroup.count(C.CalleeIdentity))) {
           RecursiveExecSite Site;
           Site.Call = &C;
+          Site.Callee = It->second;
           for (unsigned I = 0;
                I < It->second->Params.size() && I < C.Args.size(); ++I)
             Site.Args[It->second->Params[I].first] =
@@ -1271,7 +1309,7 @@ collectRecursiveCalls(const std::vector<std::unique_ptr<VStmt>> &Stmts,
           Site.Guard = cloneVExpr(State.Guard.get());
           Sites.push_back(std::move(Site));
         }
-        if (It != FnMap.end() && C.CalleeIdentity != Self &&
+        if (It != FnMap.end() && C.CalleeIdentity != Self.Identity &&
             !It->second->IsProof) {
           bool HasImplicitHeapEffect = It->second->Modifies.empty();
           if (HasImplicitHeapEffect) {
@@ -1393,49 +1431,64 @@ bool verify::functionHasRecursiveSpecCall(const VFunction &Fn,
   std::vector<DecreaseState> States;
   States.push_back(std::move(Initial));
   bool Unsupported = false;
-  collectRecursiveCalls(Fn.Body, Fn.Identity, FnMap, Sites, std::move(States),
+  collectRecursiveCalls(Fn.Body, Fn, FnMap, Sites, std::move(States),
                         Unsupported);
   return !Sites.empty();
 }
 
+/// A quantifier enclosing a recursive call: the call happens at every binder
+/// value in its range.
+struct EnclosingQuantifier {
+  std::string Binder;
+  VType BinderType;
+  std::unique_ptr<VExpr> Lo;
+  std::unique_ptr<VExpr> Hi;
+};
+
 struct RecursiveSpecSite {
-  std::map<std::string, std::unique_ptr<VExpr>> Args;
+  /// A function of the caller's recursion cycle, the caller included.
+  std::string Callee;
+  std::vector<std::unique_ptr<VExpr>> Args;
   std::unique_ptr<VExpr> Guard;
   SourceLocation Loc;
+  /// Outermost first.
+  std::vector<EnclosingQuantifier> Quantifiers;
 };
 
 static void collectRecursiveSpecCallsInExpr(
     const VExpr *E, const VFunction &Fn,
     const std::map<std::string, std::unique_ptr<VExpr>> &Env,
     const VExpr *Guard, std::vector<RecursiveSpecSite> &Sites,
-    bool InsideQuantifier, bool &Unsupported) {
+    const std::vector<const VQuantifiedExpr *> &Quantifiers,
+    bool &Unsupported) {
   if (!E)
     return;
   switch (E->K) {
   case VExpr::SpecCall: {
     const auto *C = static_cast<const VSpecCallExpr *>(E);
-    if (C->CalleeIdentity == Fn.Identity) {
-      if (InsideQuantifier) {
-        Unsupported = true;
-      } else {
-        RecursiveSpecSite Site;
-        for (unsigned I = 0; I < Fn.Params.size() && I < C->Args.size(); ++I)
-          Site.Args[Fn.Params[I].first] =
-              substParamsInExpr(C->Args[I].get(), Env);
-        Site.Guard = cloneVExpr(Guard);
-        Site.Loc = C->Loc;
-        Sites.push_back(std::move(Site));
-      }
+    if (C->CalleeIdentity == Fn.Identity ||
+        Fn.RecursionGroup.count(C->CalleeIdentity)) {
+      RecursiveSpecSite Site;
+      Site.Callee = C->CalleeIdentity;
+      for (const auto &Arg : C->Args)
+        Site.Args.push_back(substParamsInExpr(Arg.get(), Env));
+      Site.Guard = cloneVExpr(Guard);
+      Site.Loc = C->Loc;
+      for (const VQuantifiedExpr *Q : Quantifiers)
+        Site.Quantifiers.push_back({Q->Binder, Q->BinderType,
+                                    substParamsInExpr(Q->Lo.get(), Env),
+                                    substParamsInExpr(Q->Hi.get(), Env)});
+      Sites.push_back(std::move(Site));
     }
     for (const auto &A : C->Args)
       collectRecursiveSpecCallsInExpr(A.get(), Fn, Env, Guard, Sites,
-                                      InsideQuantifier, Unsupported);
+                                      Quantifiers, Unsupported);
     return;
   }
   case VExpr::BinOp: {
     const auto *B = static_cast<const VBinOpExpr *>(E);
     collectRecursiveSpecCallsInExpr(B->Lhs.get(), Fn, Env, Guard, Sites,
-                                    InsideQuantifier, Unsupported);
+                                    Quantifiers, Unsupported);
     std::unique_ptr<VExpr> RightGuard = cloneVExpr(Guard);
     if (B->Op == VBinOp::And)
       RightGuard = makeDecreaseAnd(
@@ -1446,78 +1499,83 @@ static void collectRecursiveSpecCallsInExpr(
           makeDecreaseNot(substParamsInExpr(B->Lhs.get(), Env), B->Loc),
           B->Loc);
     collectRecursiveSpecCallsInExpr(B->Rhs.get(), Fn, Env, RightGuard.get(),
-                                    Sites, InsideQuantifier, Unsupported);
+                                    Sites, Quantifiers, Unsupported);
     return;
   }
   case VExpr::UnaryOp:
     collectRecursiveSpecCallsInExpr(
         static_cast<const VUnaryOpExpr *>(E)->Operand.get(), Fn, Env, Guard,
-        Sites, InsideQuantifier, Unsupported);
+        Sites, Quantifiers, Unsupported);
     return;
   case VExpr::Cast:
     collectRecursiveSpecCallsInExpr(
         static_cast<const VCastExpr *>(E)->Inner.get(), Fn, Env, Guard, Sites,
-        InsideQuantifier, Unsupported);
+        Quantifiers, Unsupported);
     return;
   case VExpr::Load: {
     const auto *Load = static_cast<const VLoadExpr *>(E);
     collectRecursiveSpecCallsInExpr(Load->Ptr.get(), Fn, Env, Guard, Sites,
-                                    InsideQuantifier, Unsupported);
+                                    Quantifiers, Unsupported);
     collectRecursiveSpecCallsInExpr(Load->AccessCondition.get(), Fn, Env, Guard,
-                                    Sites, InsideQuantifier, Unsupported);
+                                    Sites, Quantifiers, Unsupported);
     return;
   }
   case VExpr::Old:
     collectRecursiveSpecCallsInExpr(
         static_cast<const VOldExpr *>(E)->Inner.get(), Fn, Env, Guard, Sites,
-        InsideQuantifier, Unsupported);
+        Quantifiers, Unsupported);
     return;
   case VExpr::Conditional: {
     const auto *C = static_cast<const VConditionalExpr *>(E);
     collectRecursiveSpecCallsInExpr(C->Cond.get(), Fn, Env, Guard, Sites,
-                                    InsideQuantifier, Unsupported);
+                                    Quantifiers, Unsupported);
     auto Cond = substParamsInExpr(C->Cond.get(), Env);
     auto ThenGuard =
         makeDecreaseAnd(cloneVExpr(Guard), cloneVExpr(Cond.get()), C->Loc);
     auto ElseGuard = makeDecreaseAnd(
         cloneVExpr(Guard), makeDecreaseNot(std::move(Cond), C->Loc), C->Loc);
     collectRecursiveSpecCallsInExpr(C->Then.get(), Fn, Env, ThenGuard.get(),
-                                    Sites, InsideQuantifier, Unsupported);
+                                    Sites, Quantifiers, Unsupported);
     collectRecursiveSpecCallsInExpr(C->Else.get(), Fn, Env, ElseGuard.get(),
-                                    Sites, InsideQuantifier, Unsupported);
+                                    Sites, Quantifiers, Unsupported);
     return;
   }
   case VExpr::OverflowCheck: {
     const auto *O = static_cast<const VOverflowCheckExpr *>(E);
     collectRecursiveSpecCallsInExpr(O->Lhs.get(), Fn, Env, Guard, Sites,
-                                    InsideQuantifier, Unsupported);
+                                    Quantifiers, Unsupported);
     collectRecursiveSpecCallsInExpr(O->Rhs.get(), Fn, Env, Guard, Sites,
-                                    InsideQuantifier, Unsupported);
+                                    Quantifiers, Unsupported);
     return;
   }
   case VExpr::Forall:
   case VExpr::Exists: {
     const auto *Q = static_cast<const VQuantifiedExpr *>(E);
     collectRecursiveSpecCallsInExpr(Q->Lo.get(), Fn, Env, Guard, Sites,
-                                    InsideQuantifier, Unsupported);
+                                    Quantifiers, Unsupported);
     collectRecursiveSpecCallsInExpr(Q->Hi.get(), Fn, Env, Guard, Sites,
-                                    InsideQuantifier, Unsupported);
-    collectRecursiveSpecCallsInExpr(Q->Body.get(), Fn, Env, Guard, Sites, true,
+                                    Quantifiers, Unsupported);
+    std::vector<const VQuantifiedExpr *> Inner = Quantifiers;
+    Inner.push_back(Q);
+    collectRecursiveSpecCallsInExpr(Q->Body.get(), Fn, Env, Guard, Sites, Inner,
                                     Unsupported);
     return;
   }
   case VExpr::HeapStore: {
     const auto *H = static_cast<const VHeapStoreExpr *>(E);
     collectRecursiveSpecCallsInExpr(H->Ptr.get(), Fn, Env, Guard, Sites,
-                                    InsideQuantifier, Unsupported);
+                                    Quantifiers, Unsupported);
     collectRecursiveSpecCallsInExpr(H->Val.get(), Fn, Env, Guard, Sites,
-                                    InsideQuantifier, Unsupported);
+                                    Quantifiers, Unsupported);
     return;
   }
+  case VExpr::HeapFrame:
+    Unsupported = true;
+    return;
   case VExpr::FieldAccess:
     collectRecursiveSpecCallsInExpr(
         static_cast<const VFieldAccessExpr *>(E)->Base.get(), Fn, Env, Guard,
-        Sites, InsideQuantifier, Unsupported);
+        Sites, Quantifiers, Unsupported);
     return;
   case VExpr::Literal:
   case VExpr::Var:
@@ -1537,7 +1595,7 @@ static std::vector<DecreaseState> collectRecursiveSpecCallsInBody(
       case VStmt::Assign: {
         const auto &A = static_cast<const VAssignStmt &>(*S);
         collectRecursiveSpecCallsInExpr(A.Value.get(), Fn, State.Env,
-                                        State.Guard.get(), Sites, false,
+                                        State.Guard.get(), Sites, {},
                                         Unsupported);
         State.Env[A.Target] = substParamsInExpr(A.Value.get(), State.Env);
         NextStates.push_back(std::move(State));
@@ -1546,12 +1604,12 @@ static std::vector<DecreaseState> collectRecursiveSpecCallsInBody(
       case VStmt::Return:
         collectRecursiveSpecCallsInExpr(
             static_cast<const VReturnStmt &>(*S).Value.get(), Fn, State.Env,
-            State.Guard.get(), Sites, false, Unsupported);
+            State.Guard.get(), Sites, {}, Unsupported);
         break;
       case VStmt::If: {
         const auto &I = static_cast<const VIfStmt &>(*S);
         collectRecursiveSpecCallsInExpr(I.Cond.get(), Fn, State.Env,
-                                        State.Guard.get(), Sites, false,
+                                        State.Guard.get(), Sites, {},
                                         Unsupported);
         auto Cond = substParamsInExpr(I.Cond.get(), State.Env);
 
@@ -1591,6 +1649,42 @@ static std::vector<DecreaseState> collectRecursiveSpecCallsInBody(
   return States;
 }
 
+/// The measure at a call is below the caller's. Only the deciding component
+/// has to be bounded below, and only at the caller (ACSL's variant): along an
+/// infinite chain the least index that decides infinitely often would
+/// decrease forever from nonnegative values, so the relation is well founded.
+static std::unique_ptr<VExpr>
+lexicographicDecrease(const std::vector<std::unique_ptr<VExpr>> &CalleeDec,
+                      const std::vector<std::unique_ptr<VExpr>> &CurrentDec,
+                      SourceLocation Loc) {
+  std::unique_ptr<VExpr> LexLess =
+      std::make_unique<VLiteralExpr>(false, VType::makeBool(), Loc);
+  for (size_t J = 0; J < CalleeDec.size(); ++J) {
+    std::unique_ptr<VExpr> Disjunct = makeDecreaseAnd(
+        std::make_unique<VBinOpExpr>(
+            VBinOp::Ge, cloneVExpr(CurrentDec[J].get()),
+            std::make_unique<VLiteralExpr>(0, CurrentDec[J]->Ty, Loc),
+            VType::makeBool(), Loc),
+        std::make_unique<VBinOpExpr>(VBinOp::Lt, cloneVExpr(CalleeDec[J].get()),
+                                     cloneVExpr(CurrentDec[J].get()),
+                                     VType::makeBool(), Loc),
+        Loc);
+    for (size_t I = 0; I < J; ++I)
+      Disjunct = makeDecreaseAnd(std::make_unique<VBinOpExpr>(
+                                     VBinOp::Eq, cloneVExpr(CalleeDec[I].get()),
+                                     cloneVExpr(CurrentDec[I].get()),
+                                     VType::makeBool(), Loc),
+                                 std::move(Disjunct), Loc);
+    LexLess = std::make_unique<VBinOpExpr>(VBinOp::Or, std::move(LexLess),
+                                           std::move(Disjunct),
+                                           VType::makeBool(), Loc);
+  }
+  return LexLess;
+}
+
+static void addSpecPostChecks(PassiveProgram &P, const VFunction &Fn,
+                              const FunctionMap &FnMap);
+
 PassiveProgram verify::buildDecreasesChecks(const VFunction &Fn,
                                             const FunctionMap &FnMap) {
   PassiveProgram P;
@@ -1603,8 +1697,16 @@ PassiveProgram verify::buildDecreasesChecks(const VFunction &Fn,
   P.SpecFuel = Fn.SpecFuel;
   P.HiddenSpecs = Fn.HiddenSpecs;
   P.RevealedSpecs = Fn.RevealedSpecs;
-  for (const auto &Pre : Fn.Preconditions)
-    P.EntryAssumes.push_back(cloneAtEntryState(Pre.get()));
+  if (Fn.IsSpec) {
+    // A definition is a fact only once it terminates, so it cannot help
+    // prove its own termination, nor can those of its recursion cycle, and it
+    // must terminate for every argument.
+    P.HiddenSpecs.insert(Fn.Identity);
+    P.HiddenSpecs.insert(Fn.RecursionGroup.begin(), Fn.RecursionGroup.end());
+  } else {
+    for (const auto &Pre : Fn.Preconditions)
+      P.EntryAssumes.push_back(cloneAtEntryState(Pre.get()));
+  }
 
   std::vector<RecursiveExecSite> Sites;
   DecreaseState Initial;
@@ -1616,7 +1718,7 @@ PassiveProgram verify::buildDecreasesChecks(const VFunction &Fn,
   std::vector<DecreaseState> States;
   States.push_back(std::move(Initial));
   bool UnsupportedExecRecursion = false;
-  collectRecursiveCalls(Fn.Body, Fn.Identity, FnMap, Sites, std::move(States),
+  collectRecursiveCalls(Fn.Body, Fn, FnMap, Sites, std::move(States),
                         UnsupportedExecRecursion);
 
   std::vector<RecursiveSpecSite> SpecSites;
@@ -1644,9 +1746,12 @@ PassiveProgram verify::buildDecreasesChecks(const VFunction &Fn,
     CurrentDec.push_back(substParamsInExpr(Decrease.get(), EntryEnv));
 
   auto AddObligation = [&](const auto &ArgMap, const VExpr *Guard,
-                           SourceLocation Loc) {
+                           SourceLocation Loc,
+                           const std::vector<EnclosingQuantifier> *Around =
+                               nullptr,
+                           const VFunction *Callee = nullptr) {
     std::vector<std::unique_ptr<VExpr>> CalleeDec;
-    for (const auto &Decrease : Fn.Decreases)
+    for (const auto &Decrease : (Callee ? *Callee : Fn).Decreases)
       CalleeDec.push_back(substParamsInExpr(Decrease.get(), ArgMap));
 
     std::unique_ptr<VExpr> Obligation;
@@ -1655,42 +1760,21 @@ PassiveProgram verify::buildDecreasesChecks(const VFunction &Fn,
       Complete = Complete && Value != nullptr;
     for (const auto &Value : CurrentDec)
       Complete = Complete && Value != nullptr;
-    if (!Complete) {
+    if (!Complete)
       Obligation =
           std::make_unique<VLiteralExpr>(false, VType::makeBool(), Loc);
-    } else {
-      std::unique_ptr<VExpr> NonNegative =
-          std::make_unique<VLiteralExpr>(true, VType::makeBool(), Loc);
-      std::unique_ptr<VExpr> LexLess =
-          std::make_unique<VLiteralExpr>(false, VType::makeBool(), Loc);
-      for (size_t J = 0; J < CalleeDec.size(); ++J) {
-        NonNegative = makeDecreaseAnd(
-            std::move(NonNegative),
-            std::make_unique<VBinOpExpr>(
-                VBinOp::Ge, cloneVExpr(CalleeDec[J].get()),
-                std::make_unique<VLiteralExpr>(0, CalleeDec[J]->Ty, Loc),
-                VType::makeBool(), Loc),
-            Loc);
-        std::unique_ptr<VExpr> Disjunct = std::make_unique<VBinOpExpr>(
-            VBinOp::Lt, cloneVExpr(CalleeDec[J].get()),
-            cloneVExpr(CurrentDec[J].get()), VType::makeBool(), Loc);
-        for (size_t I = 0; I < J; ++I)
-          Disjunct = makeDecreaseAnd(
-              std::make_unique<VBinOpExpr>(
-                  VBinOp::Eq, cloneVExpr(CalleeDec[I].get()),
-                  cloneVExpr(CurrentDec[I].get()), VType::makeBool(), Loc),
-              std::move(Disjunct), Loc);
-        LexLess = std::make_unique<VBinOpExpr>(VBinOp::Or, std::move(LexLess),
-                                               std::move(Disjunct),
-                                               VType::makeBool(), Loc);
-      }
-      Obligation =
-          makeDecreaseAnd(std::move(NonNegative), std::move(LexLess), Loc);
-    }
+    else
+      Obligation = lexicographicDecrease(CalleeDec, CurrentDec, Loc);
     if (Guard)
       Obligation = std::make_unique<VBinOpExpr>(
           VBinOp::Or, makeDecreaseNot(cloneVExpr(Guard), Loc),
           std::move(Obligation), VType::makeBool(), Loc);
+    // A call under a quantifier happens at every binder value in its range.
+    if (Around)
+      for (auto It = Around->rbegin(); It != Around->rend(); ++It)
+        Obligation = std::make_unique<VForallExpr>(
+            It->Binder, cloneVExpr(It->Lo.get()), cloneVExpr(It->Hi.get()),
+            std::move(Obligation), Loc, It->BinderType);
     Obligation = cloneAtEntryState(Obligation.get());
     auto PS = std::make_unique<PassiveStmt>();
     PS->K = PassiveStmt::Assert;
@@ -1701,9 +1785,24 @@ PassiveProgram verify::buildDecreasesChecks(const VFunction &Fn,
 
   for (const RecursiveExecSite &Site : Sites)
     AddObligation(Site.Args, Site.Guard.get(),
-                  Site.Call ? Site.Call->Loc : Fn.Decreases.front()->Loc);
-  for (const RecursiveSpecSite &Site : SpecSites)
-    AddObligation(Site.Args, Site.Guard.get(), Site.Loc);
+                  Site.Call ? Site.Call->Loc : Fn.Decreases.front()->Loc,
+                  nullptr, Site.Callee);
+  for (const RecursiveSpecSite &Site : SpecSites) {
+    const VFunction *Callee = &Fn;
+    if (Site.Callee != Fn.Identity) {
+      auto It = FnMap.find(Site.Callee);
+      if (It == FnMap.end()) {
+        UnsupportedSpecRecursion = true;
+        continue;
+      }
+      Callee = It->second;
+    }
+    std::map<std::string, std::unique_ptr<VExpr>> ArgMap;
+    for (unsigned I = 0; I < Callee->Params.size() && I < Site.Args.size(); ++I)
+      ArgMap[Callee->Params[I].first] = cloneVExpr(Site.Args[I].get());
+    AddObligation(ArgMap, Site.Guard.get(), Site.Loc, &Site.Quantifiers,
+                  Callee);
+  }
 
   if (UnsupportedSpecRecursion || UnsupportedExecRecursion) {
     auto PS = std::make_unique<PassiveStmt>();
@@ -1713,5 +1812,603 @@ PassiveProgram verify::buildDecreasesChecks(const VFunction &Fn,
                                               Fn.Decreases.front()->Loc);
     P.Stmts.push_back(std::move(PS));
   }
+  if (Fn.IsSpec)
+    addSpecPostChecks(P, Fn, FnMap);
+  return P;
+}
+namespace {
+
+std::unique_ptr<VExpr> asMathInteger(std::unique_ptr<VExpr> E) {
+  if (!E || !E->Ty.isInt() || E->Ty.IntMode == VIntMode::Math)
+    return E;
+  VType MathTy = E->Ty;
+  MathTy.IntMode = VIntMode::Math;
+  const VType From = E->Ty;
+  const SourceLocation Loc = E->Loc;
+  return std::make_unique<VCastExpr>(std::move(E), From, MathTy, Loc);
+}
+
+/// [Base, End) in target bytes for one reads range at \p Args.
+std::pair<std::unique_ptr<VExpr>, std::unique_ptr<VExpr>>
+readRangeBytes(const VReadRange &Range,
+               const std::map<std::string, std::unique_ptr<VExpr>> &Args,
+               SourceLocation Loc) {
+  auto Base = substParamsInExpr(Range.Base.get(), Args);
+  auto Count = asMathInteger(substParamsInExpr(Range.Count.get(), Args));
+  if (!Base || !Count)
+    return {nullptr, nullptr};
+  const VType MathTy = Count->Ty;
+  std::unique_ptr<VExpr> Bytes = std::move(Count);
+  if (Range.ElementSize != 1)
+    Bytes = std::make_unique<VBinOpExpr>(
+        VBinOp::Mul, std::move(Bytes),
+        std::make_unique<VLiteralExpr>(std::to_string(Range.ElementSize),
+                                       MathTy, Loc),
+        MathTy, Loc);
+  auto End = std::make_unique<VBinOpExpr>(VBinOp::Add, cloneVExpr(Base.get()),
+                                          std::move(Bytes), Base->Ty, Loc);
+  return {std::move(Base), std::move(End)};
+}
+
+std::unique_ptr<VExpr> compare(VBinOp Op, std::unique_ptr<VExpr> L,
+                               std::unique_ptr<VExpr> R, SourceLocation Loc) {
+  return std::make_unique<VBinOpExpr>(Op, std::move(L), std::move(R),
+                                      VType::makeBool(), Loc);
+}
+
+std::unique_ptr<VExpr> anyOf(std::vector<std::unique_ptr<VExpr>> Terms,
+                             SourceLocation Loc) {
+  std::unique_ptr<VExpr> Result =
+      std::make_unique<VLiteralExpr>(false, VType::makeBool(), Loc);
+  for (auto &Term : Terms)
+    Result = std::make_unique<VBinOpExpr>(
+        VBinOp::Or, std::move(Result), std::move(Term), VType::makeBool(), Loc);
+  return Result;
+}
+
+/// A load or a spec call in a spec body, with the condition that reaches it.
+struct BodySite {
+  /// The address of a load.
+  std::unique_ptr<VExpr> Address;
+  const VSpecCallExpr *Call = nullptr;
+  /// The callee of a spec call, if known.
+  const VFunction *Callee = nullptr;
+  std::vector<std::unique_ptr<VExpr>> Args;
+  std::unique_ptr<VExpr> Guard;
+  SourceLocation Loc;
+  /// Outermost first.
+  std::vector<EnclosingQuantifier> Quantifiers;
+};
+
+/// A value a spec body returns, with the condition that reaches it.
+struct BodyReturn {
+  std::unique_ptr<VExpr> Guard;
+  std::unique_ptr<VExpr> Value;
+  SourceLocation Loc;
+};
+
+struct SpecBodyCollector {
+  const FunctionMap &FnMap;
+  std::vector<BodySite> Sites;
+  std::vector<BodyReturn> Returns;
+  bool Unsupported = false;
+
+  void site(BodySite Site,
+            const std::map<std::string, std::unique_ptr<VExpr>> &Env,
+            const VExpr *Guard,
+            const std::vector<const VQuantifiedExpr *> &Quantifiers) {
+    Site.Guard = cloneVExpr(Guard);
+    for (const VQuantifiedExpr *Q : Quantifiers)
+      Site.Quantifiers.push_back({Q->Binder, Q->BinderType,
+                                  substParamsInExpr(Q->Lo.get(), Env),
+                                  substParamsInExpr(Q->Hi.get(), Env)});
+    Sites.push_back(std::move(Site));
+  }
+
+  void expr(const VExpr *E,
+            const std::map<std::string, std::unique_ptr<VExpr>> &Env,
+            const VExpr *Guard,
+            const std::vector<const VQuantifiedExpr *> &Quantifiers) {
+    if (!E)
+      return;
+    switch (E->K) {
+    case VExpr::SpecCall: {
+      const auto *C = static_cast<const VSpecCallExpr *>(E);
+      BodySite Site;
+      Site.Call = C;
+      if (auto It = FnMap.find(C->CalleeIdentity); It != FnMap.end())
+        Site.Callee = It->second;
+      for (const auto &Arg : C->Args)
+        Site.Args.push_back(substParamsInExpr(Arg.get(), Env));
+      Site.Loc = C->Loc;
+      site(std::move(Site), Env, Guard, Quantifiers);
+      for (const auto &A : C->Args)
+        expr(A.get(), Env, Guard, Quantifiers);
+      return;
+    }
+    case VExpr::Load: {
+      const auto *L = static_cast<const VLoadExpr *>(E);
+      BodySite Site;
+      Site.Address = substParamsInExpr(L->Ptr.get(), Env);
+      Site.Loc = L->Loc;
+      site(std::move(Site), Env, Guard, Quantifiers);
+      expr(L->Ptr.get(), Env, Guard, Quantifiers);
+      expr(L->AccessCondition.get(), Env, Guard, Quantifiers);
+      return;
+    }
+    case VExpr::BinOp: {
+      const auto *B = static_cast<const VBinOpExpr *>(E);
+      expr(B->Lhs.get(), Env, Guard, Quantifiers);
+      std::unique_ptr<VExpr> RightGuard = cloneVExpr(Guard);
+      if (B->Op == VBinOp::And)
+        RightGuard =
+            makeDecreaseAnd(std::move(RightGuard),
+                            substParamsInExpr(B->Lhs.get(), Env), B->Loc);
+      else if (B->Op == VBinOp::Or)
+        RightGuard = makeDecreaseAnd(
+            std::move(RightGuard),
+            makeDecreaseNot(substParamsInExpr(B->Lhs.get(), Env), B->Loc),
+            B->Loc);
+      expr(B->Rhs.get(), Env, RightGuard.get(), Quantifiers);
+      return;
+    }
+    case VExpr::UnaryOp:
+      expr(static_cast<const VUnaryOpExpr *>(E)->Operand.get(), Env, Guard,
+           Quantifiers);
+      return;
+    case VExpr::Cast:
+      expr(static_cast<const VCastExpr *>(E)->Inner.get(), Env, Guard,
+           Quantifiers);
+      return;
+    case VExpr::Old:
+      expr(static_cast<const VOldExpr *>(E)->Inner.get(), Env, Guard,
+           Quantifiers);
+      return;
+    case VExpr::Conditional: {
+      const auto *C = static_cast<const VConditionalExpr *>(E);
+      expr(C->Cond.get(), Env, Guard, Quantifiers);
+      auto Cond = substParamsInExpr(C->Cond.get(), Env);
+      auto ThenGuard =
+          makeDecreaseAnd(cloneVExpr(Guard), cloneVExpr(Cond.get()), C->Loc);
+      auto ElseGuard = makeDecreaseAnd(
+          cloneVExpr(Guard), makeDecreaseNot(std::move(Cond), C->Loc), C->Loc);
+      expr(C->Then.get(), Env, ThenGuard.get(), Quantifiers);
+      expr(C->Else.get(), Env, ElseGuard.get(), Quantifiers);
+      return;
+    }
+    case VExpr::OverflowCheck: {
+      const auto *O = static_cast<const VOverflowCheckExpr *>(E);
+      expr(O->Lhs.get(), Env, Guard, Quantifiers);
+      expr(O->Rhs.get(), Env, Guard, Quantifiers);
+      return;
+    }
+    case VExpr::Forall:
+    case VExpr::Exists: {
+      const auto *Q = static_cast<const VQuantifiedExpr *>(E);
+      expr(Q->Lo.get(), Env, Guard, Quantifiers);
+      expr(Q->Hi.get(), Env, Guard, Quantifiers);
+      std::vector<const VQuantifiedExpr *> Inner = Quantifiers;
+      Inner.push_back(Q);
+      expr(Q->Body.get(), Env, Guard, Inner);
+      return;
+    }
+    case VExpr::FieldAccess:
+      expr(static_cast<const VFieldAccessExpr *>(E)->Base.get(), Env, Guard,
+           Quantifiers);
+      return;
+    case VExpr::HeapStore:
+    case VExpr::HeapFrame:
+      Unsupported = true;
+      return;
+    case VExpr::Literal:
+    case VExpr::Var:
+    case VExpr::Result:
+      return;
+    }
+  }
+
+  std::vector<DecreaseState>
+  body(const std::vector<std::unique_ptr<VStmt>> &Stmts,
+       std::vector<DecreaseState> States) {
+    for (const auto &S : Stmts) {
+      std::vector<DecreaseState> NextStates;
+      for (DecreaseState &State : States) {
+        switch (S->K) {
+        case VStmt::Assign: {
+          const auto &A = static_cast<const VAssignStmt &>(*S);
+          expr(A.Value.get(), State.Env, State.Guard.get(), {});
+          State.Env[A.Target] = substParamsInExpr(A.Value.get(), State.Env);
+          NextStates.push_back(std::move(State));
+          break;
+        }
+        case VStmt::Return: {
+          const auto &R = static_cast<const VReturnStmt &>(*S);
+          expr(R.Value.get(), State.Env, State.Guard.get(), {});
+          Returns.push_back({cloneVExpr(State.Guard.get()),
+                             substParamsInExpr(R.Value.get(), State.Env),
+                             R.Loc});
+          break;
+        }
+        case VStmt::If: {
+          const auto &I = static_cast<const VIfStmt &>(*S);
+          expr(I.Cond.get(), State.Env, State.Guard.get(), {});
+          auto Cond = substParamsInExpr(I.Cond.get(), State.Env);
+          std::vector<DecreaseState> ThenStates;
+          ThenStates.push_back(
+              {cloneExprMap(State.Env),
+               makeDecreaseAnd(cloneVExpr(State.Guard.get()),
+                               cloneVExpr(Cond.get()), I.Loc)});
+          ThenStates = body(I.Then, std::move(ThenStates));
+          std::vector<DecreaseState> ElseStates;
+          ElseStates.push_back(
+              {std::move(State.Env),
+               makeDecreaseAnd(std::move(State.Guard),
+                               makeDecreaseNot(std::move(Cond), I.Loc),
+                               I.Loc)});
+          ElseStates = body(I.Else, std::move(ElseStates));
+          for (auto *Part : {&ThenStates, &ElseStates})
+            NextStates.insert(NextStates.end(),
+                              std::make_move_iterator(Part->begin()),
+                              std::make_move_iterator(Part->end()));
+          break;
+        }
+        default:
+          Unsupported = true;
+          break;
+        }
+      }
+      States = std::move(NextStates);
+      if (States.empty())
+        break;
+    }
+    return States;
+  }
+
+  void run(const VFunction &Fn) {
+    DecreaseState Initial;
+    for (const auto &Param : Fn.Params)
+      Initial.Env[Param.first] = std::make_unique<VVarExpr>(
+          Param.first, Param.second, SourceLocation());
+    Initial.Guard =
+        std::make_unique<VLiteralExpr>(1, VType::makeBool(), SourceLocation());
+    std::vector<DecreaseState> States;
+    States.push_back(std::move(Initial));
+    // A path that falls off the end returns nothing to check.
+    if (!body(Fn.Body, std::move(States)).empty())
+      Unsupported = true;
+  }
+};
+
+} // namespace
+
+std::unique_ptr<VExpr>
+verify::addressOutsideReads(const VFunction &Spec,
+                            const std::vector<std::unique_ptr<VExpr>> &Args,
+                            const VExpr *Address, SourceLocation Loc) {
+  auto Map = bindParams(Spec, Args);
+  std::unique_ptr<VExpr> Outside =
+      std::make_unique<VLiteralExpr>(true, VType::makeBool(), Loc);
+  for (const VReadRange &Range : Spec.Reads) {
+    auto [Base, End] = readRangeBytes(Range, Map, Loc);
+    if (!Base)
+      return nullptr;
+    auto Disjoint = std::make_unique<VBinOpExpr>(
+        VBinOp::Or,
+        compare(VBinOp::Lt, cloneVExpr(Address), std::move(Base), Loc),
+        compare(VBinOp::Ge, cloneVExpr(Address), std::move(End), Loc),
+        VType::makeBool(), Loc);
+    Outside = makeDecreaseAnd(std::move(Outside), std::move(Disjoint), Loc);
+  }
+  return Outside;
+}
+
+std::unique_ptr<VExpr>
+verify::regionOutsideReads(const VFunction &Spec,
+                           const std::vector<std::unique_ptr<VExpr>> &Args,
+                           const VExpr *Lo, const VExpr *Hi,
+                           SourceLocation Loc) {
+  auto Map = bindParams(Spec, Args);
+  std::unique_ptr<VExpr> Outside =
+      std::make_unique<VLiteralExpr>(true, VType::makeBool(), Loc);
+  for (const VReadRange &Range : Spec.Reads) {
+    auto [Base, End] = readRangeBytes(Range, Map, Loc);
+    if (!Base)
+      return nullptr;
+    auto Disjoint = std::make_unique<VBinOpExpr>(
+        VBinOp::Or, compare(VBinOp::Le, cloneVExpr(Hi), std::move(Base), Loc),
+        compare(VBinOp::Le, std::move(End), cloneVExpr(Lo), Loc),
+        VType::makeBool(), Loc);
+    Outside = makeDecreaseAnd(std::move(Outside), std::move(Disjoint), Loc);
+  }
+  return Outside;
+}
+
+PassiveProgram verify::buildReadsChecks(const VFunction &Fn,
+                                        const FunctionMap &FnMap,
+                                        std::string &Missing) {
+  PassiveProgram P;
+  P.FunctionName = Fn.Name + ".reads";
+  P.FunctionIdentity = Fn.Identity + "::reads";
+  P.CallerIntMode = Fn.IntMode;
+  P.SpecFunctions = FnMap;
+  P.SpecFuel = Fn.SpecFuel;
+  P.HiddenSpecs = Fn.HiddenSpecs;
+  P.HiddenSpecs.insert(Fn.Identity);
+  P.HiddenSpecs.insert(Fn.RecursionGroup.begin(), Fn.RecursionGroup.end());
+  P.RevealedSpecs = Fn.RevealedSpecs;
+
+  SpecBodyCollector Collector{FnMap};
+  Collector.run(Fn);
+  std::map<std::string, std::unique_ptr<VExpr>> Self;
+  for (const auto &Param : Fn.Params)
+    Self[Param.first] =
+        std::make_unique<VVarExpr>(Param.first, Param.second, SourceLocation());
+
+  auto contained = [&](const VExpr *Start, const VExpr *Stop,
+                       SourceLocation Loc) {
+    std::vector<std::unique_ptr<VExpr>> Within;
+    for (const VReadRange &Range : Fn.Reads) {
+      auto [Base, End] = readRangeBytes(Range, Self, Loc);
+      if (!Base)
+        continue;
+      auto Lower = compare(VBinOp::Ge, cloneVExpr(Start), std::move(Base), Loc);
+      auto Upper =
+          Stop ? compare(VBinOp::Le, cloneVExpr(Stop), std::move(End), Loc)
+               : compare(VBinOp::Lt, cloneVExpr(Start), std::move(End), Loc);
+      Within.push_back(
+          makeDecreaseAnd(std::move(Lower), std::move(Upper), Loc));
+    }
+    return anyOf(std::move(Within), Loc);
+  };
+
+  for (BodySite &Site : Collector.Sites) {
+    if (!Site.Address && !Site.Call->ReadsHeap)
+      continue;
+    if (!Site.Address && (!Site.Callee || Site.Callee->Reads.empty())) {
+      if (Missing.empty())
+        Missing = Site.Call->Callee;
+      continue;
+    }
+    std::unique_ptr<VExpr> Obligation;
+    if (Site.Address) {
+      Obligation = contained(Site.Address.get(), nullptr, Site.Loc);
+    } else {
+      // Each callee range is empty or inside one of ours.
+      Obligation =
+          std::make_unique<VLiteralExpr>(true, VType::makeBool(), Site.Loc);
+      auto CalleeArgs = bindParams(*Site.Callee, Site.Args);
+      for (const VReadRange &Range : Site.Callee->Reads) {
+        auto [Base, End] = readRangeBytes(Range, CalleeArgs, Site.Loc);
+        if (!Base)
+          continue;
+        auto Empty = compare(VBinOp::Le, cloneVExpr(End.get()),
+                             cloneVExpr(Base.get()), Site.Loc);
+        auto Inside = contained(Base.get(), End.get(), Site.Loc);
+        Obligation =
+            makeDecreaseAnd(std::move(Obligation),
+                            std::make_unique<VBinOpExpr>(
+                                VBinOp::Or, std::move(Empty), std::move(Inside),
+                                VType::makeBool(), Site.Loc),
+                            Site.Loc);
+      }
+    }
+    if (Site.Guard)
+      Obligation = std::make_unique<VBinOpExpr>(
+          VBinOp::Or, makeDecreaseNot(cloneVExpr(Site.Guard.get()), Site.Loc),
+          std::move(Obligation), VType::makeBool(), Site.Loc);
+    for (auto It = Site.Quantifiers.rbegin(); It != Site.Quantifiers.rend();
+         ++It)
+      Obligation = std::make_unique<VForallExpr>(
+          It->Binder, cloneVExpr(It->Lo.get()), cloneVExpr(It->Hi.get()),
+          std::move(Obligation), Site.Loc, It->BinderType);
+    auto PS = std::make_unique<PassiveStmt>();
+    PS->K = PassiveStmt::Assert;
+    PS->ProofKind = ProofObligationKind::Frame;
+    PS->Cond = cloneAtEntryState(Obligation.get());
+    P.Stmts.push_back(std::move(PS));
+  }
+  if (Collector.Unsupported) {
+    auto PS = std::make_unique<PassiveStmt>();
+    PS->K = PassiveStmt::Assert;
+    PS->ProofKind = ProofObligationKind::Unsupported;
+    PS->Cond = std::make_unique<VLiteralExpr>(false, VType::makeBool(),
+                                              SourceLocation());
+    P.Stmts.push_back(std::move(PS));
+  }
+  return P;
+}
+
+/// Points the heap reads of a spec's own clause at \p Heap.
+static void readHeapAt(VExpr *E, const std::string &Heap) {
+  if (!E)
+    return;
+  switch (E->K) {
+  case VExpr::Load: {
+    auto *L = static_cast<VLoadExpr *>(E);
+    if (L->HeapVar.empty() || L->HeapVar == VSpecHeapName)
+      L->HeapVar = Heap;
+    readHeapAt(L->Ptr.get(), Heap);
+    readHeapAt(L->AccessCondition.get(), Heap);
+    return;
+  }
+  case VExpr::SpecCall: {
+    auto *C = static_cast<VSpecCallExpr *>(E);
+    if (C->ReadsHeap && (C->HeapVar.empty() || C->HeapVar == VSpecHeapName))
+      C->HeapVar = Heap;
+    for (auto &Arg : C->Args)
+      readHeapAt(Arg.get(), Heap);
+    return;
+  }
+  case VExpr::BinOp: {
+    auto *B = static_cast<VBinOpExpr *>(E);
+    readHeapAt(B->Lhs.get(), Heap);
+    readHeapAt(B->Rhs.get(), Heap);
+    return;
+  }
+  case VExpr::UnaryOp:
+    readHeapAt(static_cast<VUnaryOpExpr *>(E)->Operand.get(), Heap);
+    return;
+  case VExpr::Cast:
+    readHeapAt(static_cast<VCastExpr *>(E)->Inner.get(), Heap);
+    return;
+  case VExpr::Old:
+    readHeapAt(static_cast<VOldExpr *>(E)->Inner.get(), Heap);
+    return;
+  case VExpr::Conditional: {
+    auto *C = static_cast<VConditionalExpr *>(E);
+    readHeapAt(C->Cond.get(), Heap);
+    readHeapAt(C->Then.get(), Heap);
+    readHeapAt(C->Else.get(), Heap);
+    return;
+  }
+  case VExpr::Forall:
+  case VExpr::Exists: {
+    auto *Q = static_cast<VQuantifiedExpr *>(E);
+    readHeapAt(Q->Lo.get(), Heap);
+    readHeapAt(Q->Hi.get(), Heap);
+    readHeapAt(Q->Body.get(), Heap);
+    return;
+  }
+  case VExpr::FieldAccess:
+    readHeapAt(static_cast<VFieldAccessExpr *>(E)->Base.get(), Heap);
+    return;
+  case VExpr::OverflowCheck: {
+    auto *O = static_cast<VOverflowCheckExpr *>(E);
+    readHeapAt(O->Lhs.get(), Heap);
+    readHeapAt(O->Rhs.get(), Heap);
+    return;
+  }
+  case VExpr::HeapStore:
+  case VExpr::HeapFrame:
+  case VExpr::Literal:
+  case VExpr::Var:
+  case VExpr::Result:
+    return;
+  }
+}
+
+std::unique_ptr<VExpr> verify::specPostcondition(
+    const VFunction &Spec, const std::vector<std::unique_ptr<VExpr>> &Args,
+    const VExpr *Value, SourceLocation Loc, const std::string &Heap) {
+  if (Spec.Postconditions.empty())
+    return nullptr;
+  auto Map = bindParams(Spec, Args);
+  Map[ResultKey] = cloneVExpr(Value);
+  std::unique_ptr<VExpr> Holds =
+      std::make_unique<VLiteralExpr>(true, VType::makeBool(), Loc);
+  for (const auto &Post : Spec.Postconditions) {
+    auto Clause = cloneVExpr(Post.get());
+    if (!Heap.empty())
+      readHeapAt(Clause.get(), Heap);
+    Holds = makeDecreaseAnd(std::move(Holds),
+                            substParamsInExpr(Clause.get(), Map), Loc);
+  }
+  return Holds;
+}
+
+/// The postconditions of the specs a spec body calls, and of the spec itself
+/// at each return. A call within the recursion cycle may assume its callee's
+/// postcondition only where the measure is lower: the postconditions and
+/// termination are proved together by well-founded induction on the measure.
+static void addSpecPostChecks(PassiveProgram &P, const VFunction &Fn,
+                              const FunctionMap &FnMap) {
+  SpecBodyCollector Collector{FnMap};
+  Collector.run(Fn);
+  std::map<std::string, std::unique_ptr<VExpr>> Self;
+  for (const auto &Param : Fn.Params)
+    Self[Param.first] =
+        std::make_unique<VVarExpr>(Param.first, Param.second, SourceLocation());
+  std::vector<std::unique_ptr<VExpr>> CurrentDec;
+  for (const auto &Decrease : Fn.Decreases)
+    CurrentDec.push_back(substParamsInExpr(Decrease.get(), Self));
+
+  std::vector<std::unique_ptr<PassiveStmt>> Facts;
+  for (BodySite &Site : Collector.Sites) {
+    if (!Site.Call || !Site.Callee || Site.Callee->Postconditions.empty())
+      continue;
+    const VSpecCallExpr &Call = *Site.Call;
+    std::vector<std::unique_ptr<VExpr>> Args;
+    for (const auto &Arg : Site.Args)
+      Args.push_back(cloneVExpr(Arg.get()));
+    auto Application = std::make_unique<VSpecCallExpr>(
+        Call.Callee, Call.CalleeIdentity, std::move(Args), Call.Ty, Call.Loc,
+        Call.ReadsHeap, Call.HeapVar);
+    std::unique_ptr<VExpr> Fact =
+        specPostcondition(*Site.Callee, Site.Args, Application.get(), Site.Loc);
+    if (!Fact)
+      continue;
+    const bool InCycle = Call.CalleeIdentity == Fn.Identity ||
+                         Fn.RecursionGroup.count(Call.CalleeIdentity);
+    if (InCycle) {
+      auto ArgMap = bindParams(*Site.Callee, Site.Args);
+      std::vector<std::unique_ptr<VExpr>> CalleeDec;
+      bool Complete = Site.Callee->Decreases.size() == CurrentDec.size() &&
+                      !CurrentDec.empty();
+      for (const auto &Decrease : Site.Callee->Decreases) {
+        CalleeDec.push_back(substParamsInExpr(Decrease.get(), ArgMap));
+        Complete = Complete && CalleeDec.back();
+      }
+      if (!Complete)
+        continue;
+      Fact = std::make_unique<VBinOpExpr>(
+          VBinOp::Or,
+          makeDecreaseNot(
+              lexicographicDecrease(CalleeDec, CurrentDec, Site.Loc), Site.Loc),
+          std::move(Fact), VType::makeBool(), Site.Loc);
+    }
+    for (auto It = Site.Quantifiers.rbegin(); It != Site.Quantifiers.rend();
+         ++It)
+      Fact = std::make_unique<VForallExpr>(
+          It->Binder, cloneVExpr(It->Lo.get()), cloneVExpr(It->Hi.get()),
+          std::move(Fact), Site.Loc, It->BinderType);
+    auto PS = std::make_unique<PassiveStmt>();
+    PS->K = PassiveStmt::Assume;
+    PS->Cond = cloneAtEntryState(Fact.get());
+    Facts.push_back(std::move(PS));
+  }
+  P.Stmts.insert(P.Stmts.begin(), std::make_move_iterator(Facts.begin()),
+                 std::make_move_iterator(Facts.end()));
+
+  if (Fn.Postconditions.empty())
+    return;
+  std::vector<std::unique_ptr<VExpr>> Params;
+  for (const auto &Param : Fn.Params)
+    Params.push_back(std::make_unique<VVarExpr>(Param.first, Param.second,
+                                                SourceLocation()));
+  for (BodyReturn &Return : Collector.Returns) {
+    std::unique_ptr<VExpr> Obligation =
+        specPostcondition(Fn, Params, Return.Value.get(), Return.Loc);
+    Obligation = std::make_unique<VBinOpExpr>(
+        VBinOp::Or, makeDecreaseNot(std::move(Return.Guard), Return.Loc),
+        std::move(Obligation), VType::makeBool(), Return.Loc);
+    Obligation->Loc = Fn.Postconditions.front()->Loc;
+    auto PS = std::make_unique<PassiveStmt>();
+    PS->K = PassiveStmt::Assert;
+    PS->ProofKind = ProofObligationKind::Postcondition;
+    PS->Cond = cloneAtEntryState(Obligation.get());
+    P.Stmts.push_back(std::move(PS));
+  }
+  if (Collector.Unsupported) {
+    auto PS = std::make_unique<PassiveStmt>();
+    PS->K = PassiveStmt::Assert;
+    PS->ProofKind = ProofObligationKind::Unsupported;
+    PS->Cond = std::make_unique<VLiteralExpr>(false, VType::makeBool(),
+                                              Fn.Postconditions.front()->Loc);
+    P.Stmts.push_back(std::move(PS));
+  }
+}
+
+PassiveProgram verify::buildSpecPostChecks(const VFunction &Fn,
+                                           const FunctionMap &FnMap) {
+  PassiveProgram P;
+  P.FunctionName = Fn.Name + ".post";
+  P.FunctionIdentity = Fn.Identity + "::post";
+  P.CallerIntMode = Fn.IntMode;
+  P.SpecFunctions = FnMap;
+  P.SpecFuel = Fn.SpecFuel;
+  P.HiddenSpecs = Fn.HiddenSpecs;
+  P.HiddenSpecs.insert(Fn.Identity);
+  P.RevealedSpecs = Fn.RevealedSpecs;
+  addSpecPostChecks(P, Fn, FnMap);
   return P;
 }
