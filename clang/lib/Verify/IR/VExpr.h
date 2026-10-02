@@ -4,6 +4,7 @@
 
 #include "VType.h"
 #include "clang/Basic/SourceLocation.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include <memory>
 #include <string>
 
@@ -70,6 +71,7 @@ public:
     Forall,
     Exists,
     HeapStore,
+    HeapFrame,
     FieldAccess,
     SpecCall,
     OverflowCheck
@@ -138,8 +140,13 @@ class VCastExpr : public VExpr {
 public:
   VType FromTy;
   std::unique_ptr<VExpr> Inner;
-  VCastExpr(std::unique_ptr<VExpr> I, VType From, VType To, SourceLocation Loc)
-      : VExpr(Cast, To, Loc), FromTy(From), Inner(std::move(I)) {}
+  /// An identity cast marking Inner as a quantifier trigger, a solver hint
+  /// that a pass may drop.
+  bool IsTrigger = false;
+  VCastExpr(std::unique_ptr<VExpr> I, VType From, VType To, SourceLocation Loc,
+            bool IsTrigger = false)
+      : VExpr(Cast, To, Loc), FromTy(From), Inner(std::move(I)),
+        IsTrigger(IsTrigger) {}
 };
 
 class VLoadExpr : public VExpr {
@@ -230,6 +237,23 @@ public:
         HeapAfter(std::move(After)), Ptr(std::move(P)), Val(std::move(V)) {}
 };
 
+/// Passive frame: HeapAfter equals HeapBefore at every address outside the
+/// byte ranges [Lo, Hi) of Regions.
+class VHeapFrameExpr : public VExpr {
+public:
+  std::string HeapBefore;
+  std::string HeapAfter;
+  std::vector<std::pair<std::unique_ptr<VExpr>, std::unique_ptr<VExpr>>>
+      Regions;
+  VHeapFrameExpr(
+      std::string Before, std::string After,
+      std::vector<std::pair<std::unique_ptr<VExpr>, std::unique_ptr<VExpr>>>
+          Regions,
+      SourceLocation Loc)
+      : VExpr(HeapFrame, VType::makeBool(), Loc), HeapBefore(std::move(Before)),
+        HeapAfter(std::move(After)), Regions(std::move(Regions)) {}
+};
+
 /// Struct field access: base.field (flattened to base.field in passivization).
 class VFieldAccessExpr : public VExpr {
 public:
@@ -276,6 +300,13 @@ public:
 };
 
 std::unique_ptr<VExpr> cloneVExpr(const VExpr *E);
+
+/// Calls \p Visit on each direct subexpression of \p E.
+void forEachVExprChild(const VExpr *E,
+                       llvm::function_ref<void(const VExpr *)> Visit);
+/// Calls \p Visit on the slot holding each direct subexpression of \p E.
+void forEachVExprChildSlot(
+    VExpr *E, llvm::function_ref<void(std::unique_ptr<VExpr> &)> Visit);
 
 /// The integer mode \p E is evaluated in. Arithmetic or a selection with a
 /// mathematical operand is mathematical, whatever its C++ result type.

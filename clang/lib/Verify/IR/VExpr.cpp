@@ -2,7 +2,9 @@
 #include "VExpr.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/PrettyPrinter.h"
+#include "clang/AST/DeclCXX.h"
 #include "clang/AST/Type.h"
+#include "llvm/ADT/StringSwitch.h"
 
 using namespace clang;
 using namespace verify;
@@ -21,9 +23,27 @@ std::string verify::canonicalTypeIdentity(QualType QT, const ASTContext &Ctx) {
   return C.getAsString(Policy);
 }
 
+std::optional<VTypeKind> VType::collectionKind(QualType QT) {
+  const auto *RD = QT.getCanonicalType()->getAsCXXRecordDecl();
+  if (!RD || !RD->getIdentifier())
+    return std::nullopt;
+  const auto *NS = dyn_cast<NamespaceDecl>(RD->getDeclContext());
+  if (!NS || !NS->getIdentifier() || !NS->getIdentifier()->isStr("cppverify") ||
+      !NS->getDeclContext()->isTranslationUnit())
+    return std::nullopt;
+  return llvm::StringSwitch<std::optional<VTypeKind>>(RD->getName())
+      .Case("seq", VTypeKind::Seq)
+      .Case("set", VTypeKind::Set)
+      .Case("multiset", VTypeKind::Multiset)
+      .Case("map", VTypeKind::Map)
+      .Default(std::nullopt);
+}
+
 VType VType::fromQualType(QualType QT, VIntMode DefaultMode,
                           const ASTContext &Ctx) {
   QT = QT.getCanonicalType();
+  if (std::optional<VTypeKind> Collection = collectionKind(QT))
+    return VType::makeCollection(*Collection);
   if (QT->isBooleanType())
     return VType::makeBool();
   if (QT->isVoidType())
@@ -35,9 +55,23 @@ VType VType::fromQualType(QualType QT, VIntMode DefaultMode,
       return VType::makePtr();
     return VType::makePtr(Ctx.getTypeSizeInChars(Pointee).getQuantity());
   }
-  if (QT->isIntegerType())
-    return VType::makeInt(DefaultMode, Ctx.getIntWidth(QT),
-                          QT->isSignedIntegerType());
+  if (QT->isIntegerType()) {
+    VType Ty = VType::makeInt(DefaultMode, Ctx.getIntWidth(QT),
+                              QT->isSignedIntegerType());
+    if (const auto *ET = QT->getAs<EnumType>()) {
+      const EnumDecl *ED = ET->getDecl()->getDefinition();
+      const unsigned Width = Ctx.getIntWidth(QT);
+      if (ED && !ED->isFixed() &&
+          std::max(ED->getNumNegativeBits(), ED->getNumPositiveBits() + 1) <
+              Width) {
+        llvm::APInt Max, Min;
+        ED->getValueRange(Max, Min);
+        Ty.EnumMin = llvm::toString(Min, 10, /*Signed=*/true);
+        Ty.EnumMax = llvm::toString(Max, 10, /*Signed=*/true);
+      }
+    }
+    return Ty;
+  }
   if (const auto *ET = QT->getAs<EnumType>()) {
     QualType Underlying = ET->getDecl()->getIntegerType();
     if (!Underlying.isNull())
@@ -96,7 +130,7 @@ static std::unique_ptr<VExpr> cloneVExprImpl(const VExpr *E) {
   case VExpr::Cast: {
     const auto *C = static_cast<const VCastExpr *>(E);
     return std::make_unique<VCastExpr>(cloneVExpr(C->Inner.get()), C->FromTy,
-                                       C->Ty, C->Loc);
+                                       C->Ty, C->Loc, C->IsTrigger);
   }
   case VExpr::Load: {
     const auto *L = static_cast<const VLoadExpr *>(E);
@@ -134,6 +168,15 @@ static std::unique_ptr<VExpr> cloneVExprImpl(const VExpr *E) {
     return std::make_unique<VHeapStoreExpr>(H->HeapBefore, H->HeapAfter,
                                             cloneVExpr(H->Ptr.get()),
                                             cloneVExpr(H->Val.get()), H->Loc);
+  }
+  case VExpr::HeapFrame: {
+    const auto *H = static_cast<const VHeapFrameExpr *>(E);
+    std::vector<std::pair<std::unique_ptr<VExpr>, std::unique_ptr<VExpr>>>
+        Regions;
+    for (const auto &[Lo, Hi] : H->Regions)
+      Regions.emplace_back(cloneVExpr(Lo.get()), cloneVExpr(Hi.get()));
+    return std::make_unique<VHeapFrameExpr>(H->HeapBefore, H->HeapAfter,
+                                            std::move(Regions), H->Loc);
   }
   case VExpr::FieldAccess: {
     const auto *F = static_cast<const VFieldAccessExpr *>(E);
@@ -238,7 +281,7 @@ verify::substituteBinderInVExpr(const VExpr *E, const std::string &Binder,
     const auto *C = static_cast<const VCastExpr *>(E);
     return std::make_unique<VCastExpr>(
         substituteBinderInVExpr(C->Inner.get(), Binder, Value, Mode), C->FromTy,
-        C->Ty, C->Loc);
+        C->Ty, C->Loc, C->IsTrigger);
   }
   case VExpr::Conditional: {
     const auto *C = static_cast<const VConditionalExpr *>(E);
@@ -267,5 +310,158 @@ verify::substituteBinderInVExpr(const VExpr *E, const std::string &Binder,
   }
   default:
     return cloneVExpr(E);
+  }
+}
+void verify::forEachVExprChild(const VExpr *E,
+                               llvm::function_ref<void(const VExpr *)> Visit) {
+  if (!E)
+    return;
+  auto visit = [&](const std::unique_ptr<VExpr> &Child) {
+    if (Child)
+      Visit(Child.get());
+  };
+  switch (E->K) {
+  case VExpr::Literal:
+  case VExpr::Var:
+  case VExpr::Result:
+    return;
+  case VExpr::BinOp: {
+    const auto *B = static_cast<const VBinOpExpr *>(E);
+    visit(B->Lhs);
+    visit(B->Rhs);
+    return;
+  }
+  case VExpr::UnaryOp:
+    visit(static_cast<const VUnaryOpExpr *>(E)->Operand);
+    return;
+  case VExpr::Cast:
+    visit(static_cast<const VCastExpr *>(E)->Inner);
+    return;
+  case VExpr::Load: {
+    const auto *L = static_cast<const VLoadExpr *>(E);
+    visit(L->Ptr);
+    visit(L->AccessCondition);
+    return;
+  }
+  case VExpr::Old:
+    visit(static_cast<const VOldExpr *>(E)->Inner);
+    return;
+  case VExpr::Conditional: {
+    const auto *C = static_cast<const VConditionalExpr *>(E);
+    visit(C->Cond);
+    visit(C->Then);
+    visit(C->Else);
+    return;
+  }
+  case VExpr::Forall:
+  case VExpr::Exists: {
+    const auto *Q = static_cast<const VQuantifiedExpr *>(E);
+    visit(Q->Lo);
+    visit(Q->Hi);
+    visit(Q->Body);
+    return;
+  }
+  case VExpr::HeapStore: {
+    const auto *H = static_cast<const VHeapStoreExpr *>(E);
+    visit(H->Ptr);
+    visit(H->Val);
+    return;
+  }
+  case VExpr::HeapFrame:
+    for (const auto &[Lo, Hi] : static_cast<const VHeapFrameExpr *>(E)->Regions) {
+      visit(Lo);
+      visit(Hi);
+    }
+    return;
+  case VExpr::FieldAccess:
+    visit(static_cast<const VFieldAccessExpr *>(E)->Base);
+    return;
+  case VExpr::SpecCall:
+    for (const auto &Arg : static_cast<const VSpecCallExpr *>(E)->Args)
+      visit(Arg);
+    return;
+  case VExpr::OverflowCheck: {
+    const auto *O = static_cast<const VOverflowCheckExpr *>(E);
+    visit(O->Lhs);
+    visit(O->Rhs);
+    return;
+  }
+  }
+}
+
+void verify::forEachVExprChildSlot(
+    VExpr *E, llvm::function_ref<void(std::unique_ptr<VExpr> &)> Visit) {
+  if (!E)
+    return;
+  auto visit = [&](std::unique_ptr<VExpr> &Child) {
+    if (Child)
+      Visit(Child);
+  };
+  switch (E->K) {
+  case VExpr::Literal:
+  case VExpr::Var:
+  case VExpr::Result:
+    return;
+  case VExpr::BinOp: {
+    auto *B = static_cast<VBinOpExpr *>(E);
+    visit(B->Lhs);
+    visit(B->Rhs);
+    return;
+  }
+  case VExpr::UnaryOp:
+    visit(static_cast<VUnaryOpExpr *>(E)->Operand);
+    return;
+  case VExpr::Cast:
+    visit(static_cast<VCastExpr *>(E)->Inner);
+    return;
+  case VExpr::Load: {
+    auto *L = static_cast<VLoadExpr *>(E);
+    visit(L->Ptr);
+    visit(L->AccessCondition);
+    return;
+  }
+  case VExpr::Old:
+    visit(static_cast<VOldExpr *>(E)->Inner);
+    return;
+  case VExpr::Conditional: {
+    auto *C = static_cast<VConditionalExpr *>(E);
+    visit(C->Cond);
+    visit(C->Then);
+    visit(C->Else);
+    return;
+  }
+  case VExpr::Forall:
+  case VExpr::Exists: {
+    auto *Q = static_cast<VQuantifiedExpr *>(E);
+    visit(Q->Lo);
+    visit(Q->Hi);
+    visit(Q->Body);
+    return;
+  }
+  case VExpr::HeapStore: {
+    auto *H = static_cast<VHeapStoreExpr *>(E);
+    visit(H->Ptr);
+    visit(H->Val);
+    return;
+  }
+  case VExpr::HeapFrame:
+    for (auto &[Lo, Hi] : static_cast<VHeapFrameExpr *>(E)->Regions) {
+      visit(Lo);
+      visit(Hi);
+    }
+    return;
+  case VExpr::FieldAccess:
+    visit(static_cast<VFieldAccessExpr *>(E)->Base);
+    return;
+  case VExpr::SpecCall:
+    for (auto &Arg : static_cast<VSpecCallExpr *>(E)->Args)
+      visit(Arg);
+    return;
+  case VExpr::OverflowCheck: {
+    auto *O = static_cast<VOverflowCheckExpr *>(E);
+    visit(O->Lhs);
+    visit(O->Rhs);
+    return;
+  }
   }
 }
