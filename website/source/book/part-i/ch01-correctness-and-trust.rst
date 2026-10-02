@@ -36,8 +36,9 @@ Kinds of correctness
 - **Security** — confidentiality, authorization (often needs richer logics).
 - **Liveness** — something good eventually happens (requires temporal logics beyond the current scope).
 
-CppVerify emphasizes **functional contracts** and **partial correctness**: if a function
-terminates, its postcondition holds.
+CppVerify emphasizes **functional contracts** and **total correctness**: a verified function
+terminates and its postcondition holds. A loop or function marked ``decreases(*)`` opts into
+**partial correctness** (if it terminates, the postcondition holds), and the verdict says so.
 
 Why not “just be careful”?
 --------------------------
