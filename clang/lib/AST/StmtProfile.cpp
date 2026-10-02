@@ -416,6 +416,10 @@ void StmtProfiler::VisitForallExpr(const ForallExpr *E) {
   VisitExpr(E);
 }
 
+void StmtProfiler::VisitContractChooseExpr(const ContractChooseExpr *E) {
+  VisitExpr(E);
+}
+
 void StmtProfiler::VisitExistsExpr(const ExistsExpr *E) {
   VisitExpr(E);
 }
