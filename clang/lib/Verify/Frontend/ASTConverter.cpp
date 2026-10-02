@@ -1820,6 +1820,167 @@ static void collectFunctionCandidates(const DeclContext *DC, ASTContext &Ctx,
   }
 }
 
+/// The statements still to run, innermost block last.
+using StmtCursor =
+    std::vector<std::pair<const std::vector<std::unique_ptr<VStmt>> *, size_t>>;
+
+/// The value a body returns, as one expression, when it consists of returns
+/// under if and else; null otherwise.
+static std::unique_ptr<VExpr> returnedValue(StmtCursor Cursor) {
+  while (!Cursor.empty() && Cursor.back().second == Cursor.back().first->size())
+    Cursor.pop_back();
+  if (Cursor.empty())
+    return nullptr;
+  const VStmt *S = (*Cursor.back().first)[Cursor.back().second++].get();
+  switch (S->K) {
+  case VStmt::Return:
+    return cloneVExpr(static_cast<const VReturnStmt *>(S)->Value.get());
+  case VStmt::Seq:
+    Cursor.push_back({&static_cast<const VSeqStmt *>(S)->Stmts, 0});
+    return returnedValue(std::move(Cursor));
+  case VStmt::If: {
+    const auto *If = static_cast<const VIfStmt *>(S);
+    StmtCursor Else = Cursor;
+    Cursor.push_back({&If->Then, 0});
+    Else.push_back({&If->Else, 0});
+    auto Then = returnedValue(std::move(Cursor));
+    auto Otherwise = returnedValue(std::move(Else));
+    if (!If->Cond || !Then || !Otherwise)
+      return nullptr;
+    const VType Ty = Then->Ty;
+    return std::make_unique<VConditionalExpr>(
+        cloneVExpr(If->Cond.get()), std::move(Then), std::move(Otherwise), Ty,
+        If->Loc);
+  }
+  default:
+    return nullptr;
+  }
+}
+
+/// Where \p Identity occurs in \p E other than positively, or empty: only
+/// as a conjunct, a disjunct, a branch, or the body of exists or of a
+/// bounded forall, so that the body is monotone and continuous in it.
+static std::string nonPositiveOccurrence(const VExpr *E,
+                                         const std::string &Identity) {
+  if (!exprReferencesSpecCall(E, Identity))
+    return "";
+  switch (E->K) {
+  case VExpr::SpecCall: {
+    const auto *Call = static_cast<const VSpecCallExpr *>(E);
+    if (Call->CalleeIdentity != Identity)
+      return "in an argument of " + Call->Callee;
+    return llvm::any_of(Call->Args,
+                        [&](const std::unique_ptr<VExpr> &Arg) {
+                          return exprReferencesSpecCall(Arg.get(), Identity);
+                        })
+               ? "in its own argument"
+               : "";
+  }
+  case VExpr::BinOp: {
+    const auto *B = static_cast<const VBinOpExpr *>(E);
+    if (B->Op != VBinOp::And && B->Op != VBinOp::Or)
+      return "in a comparison or arithmetic";
+    std::string Why = nonPositiveOccurrence(B->Lhs.get(), Identity);
+    return Why.empty() ? nonPositiveOccurrence(B->Rhs.get(), Identity) : Why;
+  }
+  case VExpr::Cast: {
+    const auto *C = static_cast<const VCastExpr *>(E);
+    if (!C->IsTrigger &&
+        !(C->Ty.Kind == VTypeKind::Bool && C->FromTy.Kind == VTypeKind::Bool))
+      return "in a conversion";
+    return nonPositiveOccurrence(C->Inner.get(), Identity);
+  }
+  case VExpr::Conditional: {
+    const auto *C = static_cast<const VConditionalExpr *>(E);
+    if (exprReferencesSpecCall(C->Cond.get(), Identity))
+      return "in a condition";
+    std::string Why = nonPositiveOccurrence(C->Then.get(), Identity);
+    return Why.empty() ? nonPositiveOccurrence(C->Else.get(), Identity) : Why;
+  }
+  case VExpr::Exists:
+  case VExpr::Forall: {
+    const auto *Q = static_cast<const VQuantifiedExpr *>(E);
+    if (exprReferencesSpecCall(Q->Lo.get(), Identity) ||
+        exprReferencesSpecCall(Q->Hi.get(), Identity))
+      return "in the bounds of a quantifier";
+    if (E->K == VExpr::Forall && !Q->Lo)
+      return "under a forall without bounds";
+    return nonPositiveOccurrence(Q->Body.get(), Identity);
+  }
+  case VExpr::UnaryOp:
+    return "under negation";
+  default:
+    return "in this position";
+  }
+}
+
+static const VExpr *withoutCasts(const VExpr *E) {
+  while (E && E->K == VExpr::Cast)
+    E = static_cast<const VCastExpr *>(E)->Inner.get();
+  return E;
+}
+
+static bool mentionsResult(const VExpr *E) {
+  if (!E)
+    return false;
+  if (E->K == VExpr::Result)
+    return true;
+  bool Found = false;
+  forEachVExprChild(
+      E, [&](const VExpr *Child) { Found = Found || mentionsResult(Child); });
+  return Found;
+}
+
+static void disjuncts(const VExpr *E, std::vector<const VExpr *> &Out) {
+  E = withoutCasts(E);
+  if (E && E->K == VExpr::BinOp &&
+      static_cast<const VBinOpExpr *>(E)->Op == VBinOp::Or) {
+    disjuncts(static_cast<const VBinOpExpr *>(E)->Lhs.get(), Out);
+    disjuncts(static_cast<const VBinOpExpr *>(E)->Rhs.get(), Out);
+    return;
+  }
+  Out.push_back(E);
+}
+
+/// The disjuncts other than !result of a postcondition !result || Q, or
+/// empty when it does not have that form.
+static std::vector<const VExpr *> derivationProperty(const VExpr *Post) {
+  std::vector<const VExpr *> Parts;
+  disjuncts(Post, Parts);
+  auto isNotResult = [](const VExpr *E) {
+    return E && E->K == VExpr::UnaryOp &&
+           static_cast<const VUnaryOpExpr *>(E)->Op == VUnaryOp::Not &&
+           withoutCasts(static_cast<const VUnaryOpExpr *>(E)->Operand.get())
+                   ->K == VExpr::Result;
+  };
+  std::vector<const VExpr *> Property;
+  bool Negated = false;
+  for (const VExpr *Part : Parts) {
+    if (!Negated && isNotResult(Part))
+      Negated = true;
+    else if (!Part || mentionsResult(Part))
+      return {};
+    else
+      Property.push_back(Part);
+  }
+  if (!Negated)
+    return {};
+  return Property;
+}
+
+static void replaceApplications(
+    std::unique_ptr<VExpr> &E, const std::string &Identity,
+    llvm::function_ref<std::unique_ptr<VExpr>(VSpecCallExpr &)> Replace) {
+  if (!E)
+    return;
+  forEachVExprChildSlot(E.get(), [&](std::unique_ptr<VExpr> &Child) {
+    replaceApplications(Child, Identity, Replace);
+  });
+  if (E->K == VExpr::SpecCall &&
+      static_cast<VSpecCallExpr *>(E.get())->CalleeIdentity == Identity)
+    E = Replace(*static_cast<VSpecCallExpr *>(E.get()));
+}
+
 std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
   std::vector<std::unique_ptr<VFunction>> Out;
   llvm::StringSet<> Identities;
@@ -1932,6 +2093,138 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
   }
   for (auto &Fn : Unspecified)
     Out.push_back(std::move(Fn));
+  // inductive: the predicate P is the least fixpoint of its body F. With F
+  // monotone and continuous in P (positive, and under forall only with
+  // bounds), that is the union of F applied h times to false (Kleene), so P
+  // is defined as exists(h, P.step(h, x)), where P.step(h, x) is h > 0 && F
+  // with each P(a) read as P.step(h - 1, a), and P(x) == F(x) is a theorem.
+  // Solvers get that equation at every application, not the definition. A
+  // postcondition !result || Q of P is also one of P.step, proved by
+  // induction on h: induction on derivations.
+  std::vector<std::unique_ptr<VFunction>> Steps;
+  std::set<std::string> Rejected;
+  for (auto &Fn : Out) {
+    if (Fn->InductiveLoc.isInvalid())
+      continue;
+    auto reject = [&](const std::string &Why) {
+      Errors.push_back(Fn->Name + ": " + Why);
+      Rejected.insert(Fn->Identity);
+    };
+    if (!Fn->IsSpec || Fn->ReturnType.Kind != VTypeKind::Bool) {
+      reject("only a spec function returning bool can be inductive");
+      continue;
+    }
+    if (!Fn->Decreases.empty()) {
+      reject("an inductive predicate holds by its derivations, so it takes "
+             "no decreases");
+      continue;
+    }
+    if (Fn->Domain) {
+      reject("an inductive predicate is defined everywhere, so it takes no "
+             "when");
+      continue;
+    }
+    if (Fn->ReadsHeap || !Fn->Reads.empty()) {
+      reject("an inductive predicate cannot read memory");
+      continue;
+    }
+    std::unique_ptr<VExpr> Unfolding = returnedValue({{&Fn->Body, 0}});
+    if (!Unfolding) {
+      reject("the body of an inductive predicate returns a condition, under "
+             "if and else at most");
+      continue;
+    }
+    if (std::string Where =
+            nonPositiveOccurrence(Unfolding.get(), Fn->Identity);
+        !Where.empty()) {
+      reject(Fn->Name + " occurs in its body " + Where +
+             "; an inductive predicate occurs in its body only positively "
+             "(not negated, compared, converted, or in a condition), and "
+             "under forall only with bounds");
+      continue;
+    }
+    if (llvm::any_of(Fn->Postconditions, [&](const auto &Post) {
+          std::vector<const VExpr *> Property = derivationProperty(Post.get());
+          return Property.empty() ||
+                 llvm::any_of(Property, [&](const VExpr *Part) {
+                   return exprReferencesSpecCall(Part, Fn->Identity);
+                 });
+        })) {
+      reject("a postcondition of an inductive predicate states what holds "
+             "where it is true, as !result || Q, where Q does not apply it");
+      continue;
+    }
+    const SourceLocation Loc = Fn->InductiveLoc;
+    // A dotted name cannot be a C++ parameter's.
+    const std::string Height = "derivation.height";
+    const VType HeightType = VType::makeInt(VIntMode::Math, 64);
+    auto heightVar = [&] {
+      return std::make_unique<VVarExpr>(Height, HeightType, Loc);
+    };
+    auto Step = std::make_unique<VFunction>();
+    Step->Name = Fn->Name + ".step";
+    Step->Identity = Fn->Identity + "::step";
+    Step->ReturnType = Fn->ReturnType;
+    Step->IntMode = VIntMode::Math;
+    Step->IsSpec = true;
+    Step->DeclLoc = Fn->DeclLoc;
+    Step->InductiveStepOf = Fn->Name;
+    Step->SpecFuel = Fn->SpecFuel;
+    Step->HiddenSpecs = Fn->HiddenSpecs;
+    Step->RevealedSpecs = Fn->RevealedSpecs;
+    Step->SourceVariables = Fn->SourceVariables;
+    Step->Params.push_back({Height, HeightType});
+    Step->Params.insert(Step->Params.end(), Fn->Params.begin(),
+                        Fn->Params.end());
+    Step->Decreases.push_back(heightVar());
+    auto Lowered = cloneVExpr(Unfolding.get());
+    replaceApplications(Lowered, Fn->Identity, [&](VSpecCallExpr &Call) {
+      std::vector<std::unique_ptr<VExpr>> Args;
+      Args.push_back(std::make_unique<VBinOpExpr>(
+          VBinOp::Sub, heightVar(),
+          std::make_unique<VLiteralExpr>(1, HeightType, Call.Loc), HeightType,
+          Call.Loc));
+      for (auto &Arg : Call.Args)
+        Args.push_back(std::move(Arg));
+      return std::make_unique<VSpecCallExpr>(
+          Step->Name, Step->Identity, std::move(Args), Call.Ty, Call.Loc);
+    });
+    Step->Body.push_back(std::make_unique<VReturnStmt>(
+        std::make_unique<VBinOpExpr>(
+            VBinOp::And,
+            std::make_unique<VBinOpExpr>(
+                VBinOp::Gt, heightVar(),
+                std::make_unique<VLiteralExpr>(0, HeightType, Loc),
+                VType::makeBool(), Loc),
+            std::move(Lowered), VType::makeBool(), Loc),
+        Loc));
+    for (size_t I = 0; I != Fn->Postconditions.size(); ++I)
+      addPostcondition(*Step, cloneVExpr(Fn->Postconditions[I].get()),
+                       postconditionKind(*Fn, I));
+    std::vector<std::unique_ptr<VExpr>> Args;
+    Args.push_back(heightVar());
+    for (const auto &[Name, Type] : Fn->Params)
+      Args.push_back(std::make_unique<VVarExpr>(Name, Type, Loc));
+    Fn->Body.clear();
+    Fn->Body.push_back(std::make_unique<VReturnStmt>(
+        std::make_unique<VExistsExpr>(Height, nullptr, nullptr,
+                                      std::make_unique<VSpecCallExpr>(
+                                          Step->Name, Step->Identity,
+                                          std::move(Args), Fn->ReturnType, Loc),
+                                      Loc, HeightType),
+        Loc));
+    Fn->Unfolding = std::move(Unfolding);
+    Steps.push_back(std::move(Step));
+  }
+  for (auto &Step : Steps)
+    Out.push_back(std::move(Step));
+  // A proof sees an inductive predicate through its unfolding, unless it
+  // reveals the definition.
+  for (const auto &Inductive : Out)
+    if (Inductive->Unfolding)
+      for (auto &Fn : Out)
+        if (!Fn->RevealedSpecs.count(Inductive->Identity))
+          Fn->HiddenSpecs.insert(Inductive->Identity);
   for (auto &Fn : ChoiceFunctions)
     Out.push_back(std::move(Fn));
   ChoiceFunctions.clear();
@@ -1986,6 +2279,18 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
     Reach[Fn->Identity] = reachable(Fn->Identity);
     ByIdentity[Fn->Identity] = Fn.get();
   }
+  // Through another spec, an inductive predicate would occur in its body
+  // where its positivity cannot be checked.
+  std::set<std::string> InductiveCycles;
+  for (const auto &Fn : Out)
+    if (Fn->Unfolding && Reach[Fn->Identity].count(Fn->Identity)) {
+      Errors.push_back(Fn->Name + ": an inductive predicate applies itself "
+                                  "only directly in its body, not through "
+                                  "another spec");
+      for (const std::string &Other : Reach[Fn->Identity])
+        if (Reach[Other].count(Fn->Identity))
+          InductiveCycles.insert(Other);
+    }
 
   // The specs a function's verification may rely on: those its contracts or
   // body reach, through specs and through callees' contracts.
@@ -2018,6 +2323,8 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
     }
   }
   for (auto &Fn : Out) {
+    if (InductiveCycles.count(Fn->Identity) || Rejected.count(Fn->Identity))
+      continue;
     std::set<std::string> Group;
     for (const std::string &Other : Reach[Fn->Identity])
       if (Other != Fn->Identity && Reach[Other].count(Fn->Identity))
@@ -2524,6 +2831,7 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     }
     Fn->Domain = std::move(Domain);
   }
+  Fn->InductiveLoc = FCI->Inductive;
   for (const auto &Pair : FCI->Aliases) {
     std::unique_ptr<VExpr> L;
     std::unique_ptr<VExpr> R;
