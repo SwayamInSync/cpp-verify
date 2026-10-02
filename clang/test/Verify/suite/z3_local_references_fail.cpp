@@ -67,5 +67,5 @@ int recursive_local_reference(int value)
 // VERIFY-DAG: error: verification failed: wrong_local_post
 // VERIFY-DAG: error: verification failed: same_local_without_aliases
 // VERIFY-DAG: error: verification failed: nullable_local_reference
-// VERIFY-DAG: error: verification failed: external_local_reference
-// VERIFY-DAG: error: decreases failed: recursive_local_reference
+// VERIFY-DAG: Unresolved: external_local_reference {{.*}}[reason=construct.unsupported]
+// VERIFY-DAG: Verified: recursive_local_reference
