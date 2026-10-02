@@ -1345,8 +1345,9 @@ query over sequences is also solved in the plain sequence theory, which
 finds counterexamples faster. Each task constructs a distinct Z3 context/solver, and dumps, archive
 records, and diagnostics are buffered per function and published in
 canonical source order, so concurrency cannot choose which failure is public.
-`--function-timeout` (by default unset) bounds all queries of one function
-together. AST/VCR lowering and Lean emission remain serial.
+`--function-timeout` (by default ten times `--timeout`) bounds all queries
+of one function together, in wall-clock time; once it is spent no further
+query starts and the function is `Unresolved` (`solver.timeout`). AST/VCR lowering and Lean emission remain serial.
 `--solver-rlimit` adds a deterministic per-query Z3 budget, while
 `--max-query-nodes` rejects an oversized canonical module before
 verification, lower-only encoding, or a requested Z3 dump; neither limit can
