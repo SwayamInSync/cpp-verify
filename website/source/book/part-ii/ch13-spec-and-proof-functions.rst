@@ -471,6 +471,13 @@ Spec functions over collections recurse on their size:
    {
    }
 
+A sequence has ``len()``, ``s[i]``, ``push(x)``, ``update(i, x)``,
+``reverse()``, ``subrange(lo, hi)``, ``s + t``, and ``contains(x)``.
+``update`` and ``reverse`` are themselves spec functions of
+``<cppverify.h>``, defined by the other operations; ``reverse`` comes with
+its length, ``s.reverse().len() == s.len()``, and other facts about it are
+proved by induction (see :doc:`ch20-mathematics-to-code`).
+
 Every operation is total: an index outside ``[0, len())`` reads 0, an update
 there changes nothing, ``subrange`` clamps its bounds, and a key outside a
 map's domain maps to 0. Sequences are finite; sets, multisets, and maps range
