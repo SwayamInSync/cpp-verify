@@ -72,12 +72,15 @@ long negative_offset_without_extent(int *pointer)
   return (pointer - 1) - pointer;
 }
 
-// VERIFY-DAG: error: verification failed: unrelated_pointer_difference
-// VERIFY-DAG: error: verification failed: equal_address_without_provenance
+// Different parameters may address one caller array, which the object model
+// does not describe: the difference is unsupported, not an error.
+// VERIFY-DAG: Unresolved: unrelated_pointer_difference [{{.*}}] [reason=construct.unsupported]
+// VERIFY-DAG: Unresolved: equal_address_without_provenance [{{.*}}] [reason=construct.unsupported]
 // VERIFY-DAG: error: verification failed: null_pointer_difference
 // VERIFY-DAG: error: verification failed: incorrect_unit_difference
 // VERIFY-DAG: error: verification failed: dynamic_distinct_difference
 // VERIFY-DAG: error: verification failed: dangling_pointer_difference
-// VERIFY-DAG: error: verification failed: copied_offset_difference
+// A copied position keeps its origin.
+// VERIFY-DAG: Verified: copied_offset_difference
 // VERIFY-DAG: error: verification failed: offset_beyond_complete_object
 // VERIFY-DAG: error: verification failed: negative_offset_without_extent
