@@ -103,6 +103,38 @@ send Z3 into a matching loop; ``reveal_with_fuel(f, n)`` raises the depth when a
      return x + x + x;
    }
 
+Inductive predicates
+--------------------
+
+``inductive`` makes a ``spec`` returning ``bool`` the *least* predicate its
+body defines, as Dafny's ``least predicate``: it holds exactly where a finite
+derivation shows it, so it needs no ``decreases``.
+
+.. code-block:: cpp
+
+   spec bool even(int n)
+     inductive
+     post(!result || (n >= 0 && n % 2 == 0))
+   {
+     return n == 0 || even(n - 2);
+   }
+
+- ``even(-2)`` is false: it would need ``even(-4)``, and so on forever, which
+  no finite derivation provides.
+- The body returns a condition (under ``if``/``else`` at most) in which the
+  predicate occurs only positively: as a conjunct or disjunct, a branch of
+  ``?:``, under ``exists``, or under a bounded ``forall``. It applies itself
+  only directly, reads no memory, and takes no ``decreases`` or ``when``.
+- Proofs see the predicate through its body, unfolded once at each
+  application, both ways: naming an application, as in
+  ``contract_assert(even(2));``, unfolds it to ``2 == 0 || even(0)``.
+- ``post(!result || Q)`` states what every derivation satisfies. It is proved
+  by induction on derivations (a failure reads ``spec post by induction
+  failed``) and holds wherever the predicate does.
+- A counterexample that needs the predicate true at some argument is checked
+  by finding a derivation; one that needs it false is usually
+  ``counterexample.unchecked``.
+
 ``constexpr`` as spec
 ---------------------
 
