@@ -2967,11 +2967,15 @@ Parser::DeclGroupPtrTy Parser::ParseCXXClassMemberDeclaration(
   if (DeclaratorInfo.isFunctionDeclarator() &&
       (Tok.is(tok::kw_pre) || Tok.is(tok::kw_post) ||
        Tok.is(tok::kw_decreases) || Tok.is(tok::kw_modifies) ||
-       Tok.is(tok::kw_aliases) || Tok.is(tok::kw_recommends))) {
+       Tok.is(tok::kw_aliases) || Tok.is(tok::kw_recommends) ||
+       isContractReadsClause() || isContractWhenClause() ||
+       isContractBehaviorClause())) {
     Diag(Tok, diag::warn_contract_member_function_unsupported);
     while (Tok.is(tok::kw_pre) || Tok.is(tok::kw_post) ||
            Tok.is(tok::kw_decreases) || Tok.is(tok::kw_modifies) ||
-           Tok.is(tok::kw_aliases) || Tok.is(tok::kw_recommends)) {
+           Tok.is(tok::kw_aliases) || Tok.is(tok::kw_recommends) ||
+           isContractReadsClause() || isContractWhenClause() ||
+           isContractBehaviorClause()) {
       ConsumeToken();
       if (Tok.is(tok::l_paren)) {
         BalancedDelimiterTracker T(*this, tok::l_paren);
