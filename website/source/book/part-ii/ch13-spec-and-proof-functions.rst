@@ -326,7 +326,35 @@ holds afterwards, as with Verus's and Dafny's ``assert ... by``:
      return 1;
    }
 
-A lemma's precondition is checked where the proof calls it. ``calc`` chains
+A lemma's precondition is checked where the proof calls it. When the claim
+is a ``forall``, the block proves it for one arbitrary value of the bound
+variable, which it can name (Verus's ``assert forall ... by``):
+
+.. code-block:: cpp
+
+   proof void pair_ordered(const int *a, int n, int i, int j)
+     pre(valid(a, n) && n <= 1000 && 0 <= i && i <= j && j < n)
+     pre(forall(k, 0, n - 1, a[k] <= a[k + 1]))
+     post(a[i] <= a[j])
+     decreases(j - i)
+   {
+     if (i < j)
+       pair_ordered(a, n, i, j - 1);
+   }
+
+   proof void below_last(const int *a, int n)
+     pre(valid(a, n) && n >= 1 && n <= 1000)
+     pre(forall(k, 0, n - 1, a[k] <= a[k + 1]))
+     post(forall(k, 0, n, a[k] <= a[n - 1]))
+   {
+     contract_assert(forall(k, 0, n, a[k] <= a[n - 1])) by {
+       pair_ordered(a, n, k, n - 1);
+     }
+   }
+
+Inside the block ``k`` lies in ``[0, n)`` and cannot be assigned; a lemma
+call there is an instance for that ``k``, and since ``k`` is arbitrary the
+whole ``forall`` follows. ``calc`` chains
 such steps, each with an optional proof block, and concludes the relation
 between its first and last terms: ``==`` when every step is ``==``, ``<`` (or
 ``>``) when some step is strict, otherwise ``<=`` (or ``>=``):
