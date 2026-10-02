@@ -229,6 +229,24 @@ void heap_spec_read(int *pointer)
   pointer[0] = 0;
 }
 
+spec int scaled_value(int value) { return 3 * value; }
+
+int hidden_spec_true(int value)
+  pre(value >= -100 && value <= 100)
+  post(result == scaled_value(value))
+{
+  ghost { hide(scaled_value); }
+  return 3 * value;
+}
+
+int hidden_spec_invalid(int value)
+  pre(value >= -100 && value <= 100)
+  post(result == scaled_value(value))
+{
+  ghost { hide(scaled_value); }
+  return value == 17 ? 0 : 3 * value;
+}
+
 void heap_spec_read_invalid(int *pointer)
   pre(valid(pointer, 2))
   pre(pointer[0] >= -100 && pointer[0] <= 100)

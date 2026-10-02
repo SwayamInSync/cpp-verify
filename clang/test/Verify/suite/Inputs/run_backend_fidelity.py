@@ -33,6 +33,7 @@ INVALID_FUNCTIONS = {
     "quantified_invalid",
     "heap_write_invalid",
     "heap_spec_read_invalid",
+    "hidden_spec_invalid",
     "bounded_read_invalid",
     "overflow_add",
     "overflow_subtract",
@@ -42,19 +43,19 @@ INVALID_FUNCTIONS = {
     "division_overflow",
 }
 
+# True, but only the hidden definition proves it: never a counterexample.
+UNRESOLVED_REASONS = {"hidden_spec_true": "spec.hidden"}
+
 EXPECTED_STATUS = {
     **{name: "verified" for name in VALID_FUNCTIONS},
     **{name: "failed" for name in INVALID_FUNCTIONS},
+    **{name: "unresolved" for name in UNRESOLVED_REASONS},
 }
 
 # cvc5 is allowed to be incomplete on quantified and inductive proofs. These
 # cases must remain unresolved, rather than become a false failure or proof.
 CONSERVATIVE_CVC5 = {"quantified_valid", "complete_loop"}
 
-# A false case decided by a recursive spec beyond its unfolding fuel. cvc5 has
-# no model to check against the definition and must say so (never "verified");
-# the portfolio still fails it with Z3's checked counterexample.
-FUEL_LIMITED_CVC5 = {"heap_spec_read_invalid"}
 
 REQUIRED_FEATURES = {
     "mathematical-integers",
@@ -161,17 +162,16 @@ def check_matrix(records, backend):
                     )
                 )
             continue
-        if backend == "cvc5" and name in FUEL_LIMITED_CVC5:
-            if actual != "unresolved" or record.get("reason") != "spec.fuel":
-                fail("cvc5 returned {} ({}) for fuel-limited case {}".format(
-                    actual, record.get("reason"), name))
-            continue
         if actual != expected:
             fail(
                 "{} returned {} instead of {} for {}".format(
                     backend, actual, expected, name
                 )
             )
+        if (expected == "unresolved" and
+                record.get("reason") != UNRESOLVED_REASONS[name]):
+            fail("{} returned reason {} instead of {} for {}".format(
+                backend, record.get("reason"), UNRESOLVED_REASONS[name], name))
         if expected == "failed" and record.get("reason") != "counterexample":
             fail("{} lost counterexample classification for {}".format(
                 backend, name
