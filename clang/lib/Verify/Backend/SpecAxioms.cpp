@@ -37,6 +37,14 @@ verify::unfoldSpecBodyForAxiom(const VFunction &Spec,
 static LogicSort specLogicSort(const VType &Type, VIntMode Mode) {
   if (Type.Kind == VTypeKind::Bool)
     return LogicSort::boolSort();
+  if (Type.Kind == VTypeKind::Seq)
+    return LogicSort::collection(LogicSortKind::Seq);
+  if (Type.Kind == VTypeKind::Set)
+    return LogicSort::collection(LogicSortKind::Set);
+  if (Type.Kind == VTypeKind::Multiset)
+    return LogicSort::collection(LogicSortKind::Multiset);
+  if (Type.Kind == VTypeKind::Map)
+    return LogicSort::collection(LogicSortKind::Map);
   if (Type.Kind == VTypeKind::Ptr)
     return LogicSort::pointer();
   if (Type.Kind != VTypeKind::Int32 && Type.Kind != VTypeKind::Int64)
@@ -125,6 +133,7 @@ llvm::Error verify::materializeLogicFunctions(ObligationModule &Module,
     LogicFunctionDecl Declaration;
     Declaration.Identity = Spec->Identity;
     Declaration.DisplayName = Spec->Name;
+    Declaration.Choice = Spec->IsChoice;
     Declaration.ResultSort = specLogicSort(Spec->ReturnType, Spec->IntMode);
     if (Declaration.ResultSort.Kind == LogicSortKind::Invalid)
       return llvm::createStringError(llvm::inconvertibleErrorCode(),
@@ -147,6 +156,9 @@ llvm::Error verify::materializeLogicFunctions(ObligationModule &Module,
         Module.LogicFunctions.try_emplace(Identity, std::move(Declaration));
     (void)Inserted;
     LogicFunctionDecl &Owned = It->second;
+    // Its value is any function of its arguments.
+    if (Spec->Uninterpreted)
+      continue;
 
     unsigned Fuel = 0;
     if (Ctx.HiddenSpecs.count(Spec->Identity))
@@ -162,6 +174,31 @@ llvm::Error verify::materializeLogicFunctions(ObligationModule &Module,
     const std::string DefinitionHeap = Spec->ReadsHeap
                                            ? std::string(VSpecHeapName)
                                            : std::string(VHeapName) + "_0";
+    // Fuel and hide decide which unfoldings a solver receives; the definition
+    // itself is kept for every function, so a counterexample can always be
+    // checked against it.
+    SpecAxiomContext StepContext = Ctx;
+    StepContext.HiddenSpecs.erase(Spec->Identity);
+    auto StepBody = unfoldSpecDefinition(*Spec, StepContext, /*Fuel=*/1);
+    if (!StepBody)
+      return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                     "spec step definition unavailable: %s",
+                                     Spec->Name.c_str());
+    auto StepLowered =
+        lowerLogicExpr(StepBody.get(), "", DefinitionHeap, Spec->IntMode);
+    if (!StepLowered)
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "spec step definition lowering failed for %s: %s", Spec->Name.c_str(),
+          llvm::toString(StepLowered.takeError()).c_str());
+    Owned.StepDefinition = coerceDefinition(std::move(*StepLowered),
+                                            Spec->ReturnType, Spec->IntMode);
+    if (!Owned.StepDefinition)
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "spec step definition result sort mismatch: %s", Spec->Name.c_str());
+    collectReferencedLogicFunctions(Owned.StepDefinition.get(), Pending);
+
     const unsigned MaxDepth =
         Spec->NeedsDecreasesCheck ? Fuel : std::min(Fuel, 1U);
     Owned.DefinitionFuel = MaxDepth;
@@ -183,29 +220,6 @@ llvm::Error verify::materializeLogicFunctions(ObligationModule &Module,
             llvm::inconvertibleErrorCode(),
             "spec definition result sort mismatch: %s", Spec->Name.c_str());
       collectReferencedLogicFunctions(Definition.get(), Pending);
-      if (Depth == 1) {
-        auto StepBody = unfoldSpecDefinition(*Spec, Ctx, /*Fuel=*/1);
-        if (!StepBody)
-          return llvm::createStringError(llvm::inconvertibleErrorCode(),
-                                         "spec step definition unavailable: %s",
-                                         Spec->Name.c_str());
-        auto StepLowered =
-            lowerLogicExpr(StepBody.get(), "", DefinitionHeap, Spec->IntMode);
-        if (!StepLowered)
-          return llvm::createStringError(
-              llvm::inconvertibleErrorCode(),
-              "spec step definition lowering failed for %s: %s",
-              Spec->Name.c_str(),
-              llvm::toString(StepLowered.takeError()).c_str());
-        Owned.StepDefinition = coerceDefinition(
-            std::move(*StepLowered), Spec->ReturnType, Spec->IntMode);
-        if (!Owned.StepDefinition)
-          return llvm::createStringError(
-              llvm::inconvertibleErrorCode(),
-              "spec step definition result sort mismatch: %s",
-              Spec->Name.c_str());
-        collectReferencedLogicFunctions(Owned.StepDefinition.get(), Pending);
-      }
       Owned.DefinitionLevels.push_back(std::move(Definition));
     }
   }
