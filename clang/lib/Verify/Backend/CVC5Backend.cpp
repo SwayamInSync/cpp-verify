@@ -2151,7 +2151,7 @@ CVC5VerifyBackend::CVC5VerifyBackend(const BackendExecutionOptions &Execution)
     : TimeoutMs(Execution.SolverTimeoutMs),
       CollectionTimeoutMs(Execution.CollectionTimeoutMs),
       ResourceLimit(Execution.SolverResourceLimit), Jobs(Execution.Jobs),
-      MaxQueryNodes(Execution.MaxQueryNodes),
+      Pool(Execution.Pool), MaxQueryNodes(Execution.MaxQueryNodes),
       IntegerEncoding(Execution.IntegerEncoding) {
   llvm::StringRef Requested = Execution.CVC5Path.empty()
                                   ? llvm::StringRef("cvc5")
@@ -2196,7 +2196,7 @@ static bool printsSequencesReversed(const std::string &SolverPath) {
                           10000, 0);
   if (Run.Output) {
     const auto [Verdict, Rest] = llvm::StringRef(*Run.Output).split('\n');
-    if (Verdict.trim() == "sat")
+    if (Verdict.trim() == "sat") {
       if (auto Definitions = parseModel(Rest)) {
         if (auto It = Definitions->find("x"); It != Definitions->end()) {
           SMTEnvironment Closed;
@@ -2210,6 +2210,7 @@ static bool printsSequencesReversed(const std::string &SolverPath) {
       } else {
         llvm::consumeError(Definitions.takeError());
       }
+    }
   }
   Known.emplace(SolverPath, Reversed);
   return Reversed;
@@ -2412,15 +2413,21 @@ VerifyResult
 CVC5VerifyBackend::verifyQuery(const ObligationModule &Module,
                                const LogicExpr *Query,
                                std::optional<unsigned> BudgetMs) const {
-  const unsigned TimeoutMs =
+  const unsigned TimeoutMs = withinDeadline(
       BudgetMs ? *BudgetMs
-               : moduleTimeoutMs(Module, this->TimeoutMs, CollectionTimeoutMs);
+               : moduleTimeoutMs(Module, this->TimeoutMs, CollectionTimeoutMs),
+      Deadline);
   VerifyResult Result;
   Result.BackendName = "cvc5";
   Result.Status = VerifyStatus::Unresolved;
   if (SolverPath.empty()) {
     Result.Reason = VerifyReason::SolverUnavailable;
     Result.Message = SolverPathError;
+    return Result;
+  }
+  if (Deadline && std::chrono::steady_clock::now() >= *Deadline) {
+    Result.Reason = VerifyReason::SolverTimeout;
+    Result.Message = "the function's time (--function-timeout) is spent";
     return Result;
   }
   auto Features = validateObligationModule(Module);
@@ -2604,13 +2611,17 @@ CVC5VerifyBackend::verifyObligations(const ObligationModule &Module) const {
       Results.push_back(verifyObligation(Module, Item));
     return Results;
   }
-  llvm::StdThreadPool Pool(llvm::heavyweight_hardware_concurrency(Jobs));
+  std::optional<llvm::StdThreadPool> OwnPool;
+  if (!Pool)
+    OwnPool.emplace(llvm::heavyweight_hardware_concurrency(Jobs));
+  llvm::ThreadPoolTaskGroup Group(Pool ? *Pool : *OwnPool);
   std::vector<std::shared_future<VerifyResult>> Futures;
   Futures.reserve(Module.Obligations.size());
   for (size_t I = 0; I != Module.Obligations.size(); ++I)
-    Futures.push_back(Pool.async([this, &Module, I] {
+    Futures.push_back(Group.async([this, &Module, I] {
       return verifyObligation(Module, Module.Obligations[I]);
     }));
+  Group.wait();
   for (std::shared_future<VerifyResult> &Future : Futures)
     Results.push_back(Future.get());
   return Results;
