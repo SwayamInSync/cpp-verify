@@ -4,6 +4,7 @@
 
 #include "VerifyBackend.h"
 #include "llvm/Support/raw_ostream.h"
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -29,7 +30,8 @@ class CVC5VerifyBackend : public VerifyBackend {
   MachineIntegerEncoding IntegerEncoding;
 
   VerifyResult verifyQuery(const ObligationModule &Module,
-                           const LogicExpr *Query) const;
+                           const LogicExpr *Query,
+                           std::optional<unsigned> BudgetMs = {}) const;
   VerifyResult verifyObligation(const ObligationModule &Module,
                                 const Obligation &Item) const;
 
@@ -37,7 +39,10 @@ public:
   explicit CVC5VerifyBackend(const BackendExecutionOptions &Execution = {});
   llvm::StringRef getName() const override { return "cvc5"; }
   BackendCapabilities getCapabilities() const override {
-    return {allLogicFeatures(), true};
+    // Sets, multisets, and maps range over all integers; cvc5's set theory
+    // is finite.
+    return {allLogicFeatures() & ~logicFeature(LogicFeature::Collections),
+            true};
   }
   std::vector<VerifyResult>
   verifyObligations(const ObligationModule &Module) const;

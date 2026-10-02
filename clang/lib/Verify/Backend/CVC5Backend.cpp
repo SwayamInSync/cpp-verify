@@ -1,5 +1,6 @@
 //===--- CVC5Backend.cpp --------------------------------------------------===//
 #include "CVC5Backend.h"
+#include "Certify.h"
 #include "ObligationSerialization.h"
 #include "ObligationSimplify.h"
 #include "llvm/ADT/APInt.h"
@@ -36,6 +37,17 @@ using namespace verify;
 namespace {
 
 constexpr uint64_t MaxSolverOutputBytes = 64 * 1024;
+/// A satisfiable check prints its model after the verdict.
+constexpr uint64_t MaxModelOutputBytes = 16 * 1024 * 1024;
+/// Least time cvc5 gets for refinement rounds, and how many of them may only
+/// search among hidden functions' values.
+constexpr unsigned RefinementShareMs = 2000;
+constexpr unsigned HiddenSearchRounds = 32;
+
+std::string outputLimitText(uint64_t Bytes) {
+  return Bytes >= 1024 * 1024 ? std::to_string(Bytes / (1024 * 1024)) + " MiB"
+                              : std::to_string(Bytes / 1024) + " KiB";
+}
 
 static std::string smtSymbol(llvm::StringRef Prefix, llvm::StringRef Identity) {
   static constexpr char Hex[] = "0123456789abcdef";
@@ -74,10 +86,23 @@ class SMTLibEncoder {
   std::map<std::string, LogicSort> FreeVariables;
   std::map<std::string, const LogicFunctionDecl *> UsedFunctions;
   std::vector<std::map<std::string, std::string>> BoundScopes;
+  /// What a binder's range proves about its values, innermost last.
+  struct BinderBounds {
+    std::string Binder;
+    std::optional<llvm::APInt> Lo;
+    std::optional<llvm::APInt> HiLiteral;
+    std::optional<LogicSort> HiSort;
+  };
+  std::vector<BinderBounds> Bounds;
   std::map<std::string, std::string> Substitutions;
   std::vector<std::string> Axioms;
+  std::string Definitions;
+  std::set<std::string> NonRecursive;
   uint64_t LocalIndex = 0;
   bool UsesValidPtr = false;
+  /// Sequence operations under quantifiers need enumerative instantiation.
+  bool UsesSequences = false;
+  bool UsesQuantifiers = false;
   bool UsedBitLevelOperation = false;
   bool Failed = false;
   std::string Error;
@@ -106,12 +131,58 @@ class SMTLibEncoder {
       return "(_ BitVec " + std::to_string(Sort.BitWidth) + ")";
     case LogicSortKind::Heap:
       return "(Array Int Int)";
+    case LogicSortKind::Seq:
+      return "(Seq Int)";
+    case LogicSortKind::Set:
+    case LogicSortKind::Multiset:
+    case LogicSortKind::Map:
+      fail("sets, multisets, and maps have no SMT-LIB encoding for cvc5");
+      return "Int";
     case LogicSortKind::Invalid:
       fail("cannot encode an invalid logic sort");
       return "Bool";
     }
     fail("cannot encode an unknown logic sort");
     return "Bool";
+  }
+
+  static std::optional<llvm::APInt> integerLiteral(const LogicExpr *Expr) {
+    if (!Expr || Expr->K != LogicExpr::IntLit ||
+        Expr->Sort.Kind != LogicSortKind::MathematicalInteger)
+      return std::nullopt;
+    llvm::StringRef Digits(Expr->IntVal);
+    if (Digits.empty() || Digits.size() > 30)
+      return std::nullopt;
+    return llvm::APInt(130, Digits, 10);
+  }
+
+  /// Whether every value of \p Binder fits \p Sort, so that converting it
+  /// to \p Sort is the identity.
+  bool binderFits(llvm::StringRef Binder, const LogicSort &Sort) const {
+    if (Sort.Kind != LogicSortKind::BitVector || Sort.BitWidth == 0 ||
+        Sort.BitWidth > 128)
+      return false;
+    for (auto It = Bounds.rbegin(); It != Bounds.rend(); ++It) {
+      if (It->Binder != Binder)
+        continue;
+      const bool Signed = isSignedSort(Sort);
+      const llvm::APInt Min =
+          Signed ? -llvm::APInt::getOneBitSet(130, Sort.BitWidth - 1)
+                 : llvm::APInt(130, 0);
+      const llvm::APInt End = llvm::APInt::getOneBitSet(
+          130, Signed ? Sort.BitWidth - 1 : Sort.BitWidth);
+      if (!It->Lo || It->Lo->slt(Min))
+        return false;
+      if (It->HiLiteral)
+        return It->HiLiteral->sle(End);
+      if (!It->HiSort)
+        return false;
+      const LogicSort &From = *It->HiSort;
+      if (isSignedSort(From) == Signed)
+        return From.BitWidth <= Sort.BitWidth;
+      return isSignedSort(From) && From.BitWidth <= Sort.BitWidth;
+    }
+    return false;
   }
 
   std::string boundVariable(llvm::StringRef Name) const {
@@ -348,15 +419,18 @@ class SMTLibEncoder {
            Half + ")";
   }
 
+  std::string inRangeOf(llvm::StringRef V, const LogicSort &Sort) {
+    if (!isSignedSort(Sort))
+      return "(and (<= 0 " + V.str() + ") (< " + V.str() + " " +
+             decimalPowerOfTwo(Sort.BitWidth) + "))";
+    const std::string Half = decimalPowerOfTwo(Sort.BitWidth - 1);
+    return "(and (<= (- " + Half + ") " + V.str() + ") (< " + V.str() + " " +
+           Half + "))";
+  }
+
   std::string inRange(llvm::StringRef Value, const LogicSort &Sort) {
-    return letBind(Value, "rng_", [&](llvm::StringRef V) {
-      if (!isSignedSort(Sort))
-        return "(and (<= 0 " + V.str() + ") (< " + V.str() + " " +
-               decimalPowerOfTwo(Sort.BitWidth) + "))";
-      const std::string Half = decimalPowerOfTwo(Sort.BitWidth - 1);
-      return "(and (<= (- " + Half + ") " + V.str() + ") (< " + V.str() + " " +
-             Half + "))";
-    });
+    return letBind(Value, "rng_",
+                   [&](llvm::StringRef V) { return inRangeOf(V, Sort); });
   }
 
   std::string reinterpret(llvm::StringRef Value, unsigned Width,
@@ -783,27 +857,70 @@ class SMTLibEncoder {
       return "(= " + Child(3) + " (store " + Child(0) + " " + Child(1) + " " +
              Value + "))";
     }
+    case LogicExpr::Collection:
+      return collection(Expr);
+    case LogicExpr::HeapFrame: {
+      UsesQuantifiers = true;
+      const std::string Address = "frame_address";
+      std::string Inside = "false";
+      for (unsigned I = 2; I + 1 < Expr->Children.size(); I += 2)
+        Inside = "(or " + Inside + " (and (<= " + Child(I) + " " + Address +
+                 ") (< " + Address + " " + Child(I + 1) + ")))";
+      return "(forall ((" + Address + " Int)) (or " + Inside + " (= (select " +
+             Child(1) + " " + Address + ") (select " + Child(0) + " " +
+             Address + "))))";
+    }
     case LogicExpr::Forall:
     case LogicExpr::Exists: {
+      UsesQuantifiers = true;
+      if (Expr->Children.size() == 1) {
+        const std::string Binder = smtSymbol(
+            ("q" + std::to_string(BoundScopes.size()) + "_").c_str(),
+            Expr->Binder);
+        BoundScopes.push_back({{Expr->Binder, Binder}});
+        const std::string Body = withPattern(Expr, Child(0));
+        BoundScopes.pop_back();
+        return std::string(Expr->K == LogicExpr::Forall ? "(forall"
+                                                        : "(exists") +
+               " ((" + Binder + " Int)) " + Body + ")";
+      }
       const std::string Lower = Child(0);
       const std::string Upper = Child(1);
       const std::string Binder =
           smtSymbol(("q" + std::to_string(BoundScopes.size()) + "_").c_str(),
                     Expr->Binder);
       BoundScopes.push_back({{Expr->Binder, Binder}});
+      BinderBounds Known;
+      Known.Binder = Expr->Binder;
+      Known.Lo = integerLiteral(Expr->Children[0].get());
+      Known.HiLiteral = integerLiteral(Expr->Children[1].get());
+      if (Expr->Children[1]->K == LogicExpr::BvToInt &&
+          Expr->Children[1]->Children.size() == 1)
+        Known.HiSort = Expr->Children[1]->Children[0]->Sort;
+      Bounds.push_back(std::move(Known));
       const std::string Body = Child(2);
-      BoundScopes.pop_back();
       const std::string Range = "(and (<= " + Lower + " " + Binder + ") (< " +
                                 Binder + " " + Upper + "))";
-      if (Expr->K == LogicExpr::Forall)
-        return "(forall ((" + Binder + " Int)) (=> " + Range + " " + Body +
-               "))";
-      return "(exists ((" + Binder + " Int)) (and " + Range + " " + Body + "))";
+      const std::string Quantified =
+          Expr->K == LogicExpr::Forall
+              ? withPattern(Expr, "(=> " + Range + " " + Body + ")")
+              : withPattern(Expr, "(and " + Range + " " + Body + ")");
+      Bounds.pop_back();
+      BoundScopes.pop_back();
+      return std::string(Expr->K == LogicExpr::Forall ? "(forall"
+                                                      : "(exists") +
+             " ((" + Binder + " Int)) " + Quantified + ")";
     }
     case LogicExpr::IntToBv:
       if (integerMode()) {
         if (std::optional<llvm::APInt> Bits = machineConstant(Expr))
           return machineLiteral(*Bits, Expr->Sort);
+        // A binder whose range fits the sort converts to itself; the reduced
+        // form would hide it from instantiation.
+        if (Expr->Children[0]->K == LogicExpr::Var &&
+            !boundVariable(Expr->Children[0]->Name).empty() &&
+            binderFits(Expr->Children[0]->Name, Expr->Sort))
+          return Child(0);
         return reduce(Child(0), Expr->Sort);
       }
       return intToBV(Child(0), Expr->Sort.BitWidth);
@@ -861,6 +978,81 @@ class SMTLibEncoder {
     }
     fail("unsupported SMT-LIB expression");
     return "false";
+  }
+
+  /// A sequence operation, with cppverify.h's total semantics.
+  std::string collection(const LogicExpr *Expr) {
+    UsesSequences = true;
+    std::vector<std::string> A;
+    for (const auto &Child : Expr->Children)
+      A.push_back(encode(Child.get()));
+    auto arg = [&](size_t I) -> std::string {
+      if (I < A.size())
+        return A[I];
+      fail("collection operation lacks an operand");
+      return "0";
+    };
+    auto len = [](const std::string &S) { return "(seq.len " + S + ")"; };
+    auto unit = [](const std::string &X) { return "(seq.unit " + X + ")"; };
+    auto extract = [](const std::string &S, const std::string &From,
+                      const std::string &Count) {
+      return "(seq.extract " + S + " " + From + " " + Count + ")";
+    };
+    using Op = LogicCollectionOp;
+    switch (Expr->CollectionOp) {
+    case Op::SeqEmpty:
+      return "(as seq.empty (Seq Int))";
+    case Op::SeqUnit:
+      return unit(arg(0));
+    case Op::SeqLength:
+      return len(arg(0));
+    case Op::SeqIndex:
+      return "(ite (and (<= 0 " + arg(1) + ") (< " + arg(1) + " " +
+             len(arg(0)) + ")) (seq.nth " + arg(0) + " " + arg(1) + ") 0)";
+    case Op::SeqPush:
+      return "(seq.++ " + arg(0) + " " + unit(arg(1)) + ")";
+    case Op::SeqUpdate: {
+      const std::string S = arg(0), I = arg(1), X = arg(2);
+      return "(ite (and (<= 0 " + I + ") (< " + I + " " + len(S) +
+             ")) (seq.++ " + extract(S, "0", I) + " " + unit(X) + " " +
+             extract(S, "(+ " + I + " 1)", "(- " + len(S) + " " + I + " 1)") +
+             ") " + S + ")";
+    }
+    case Op::SeqSubrange: {
+      // seq.extract clamps by itself; only a negative start differs.
+      const std::string S = arg(0), Lo = arg(1), Hi = arg(2);
+      const std::string FromLo = extract(S, Lo, "(- " + Hi + " " + Lo + ")");
+      const LogicExpr *Start =
+          Expr->Children.size() > 1 ? Expr->Children[1].get() : nullptr;
+      if (Start && Start->K == LogicExpr::IntLit &&
+          !llvm::StringRef(Start->IntVal).starts_with("-"))
+        return FromLo;
+      return "(ite (< " + Lo + " 0) " + extract(S, "0", Hi) + " " + FromLo +
+             ")";
+    }
+    case Op::SeqConcat:
+      return "(seq.++ " + arg(0) + " " + arg(1) + ")";
+    case Op::SeqContains:
+      return "(seq.contains " + arg(0) + " " + unit(arg(1)) + ")";
+    default:
+      fail("sets, multisets, and maps have no SMT-LIB encoding for cvc5");
+      return "false";
+    }
+  }
+
+  /// Body annotated with the quantifier's trigger when every term is a heap
+  /// select; cvc5 chooses triggers itself otherwise.
+  std::string withPattern(const LogicExpr *Quantifier, std::string Body) {
+    if (Quantifier->Patterns.empty())
+      return Body;
+    std::string Terms;
+    for (const auto &Pattern : Quantifier->Patterns) {
+      if (Pattern->K != LogicExpr::Select || Pattern->Children.size() != 2)
+        return Body;
+      Terms += " (select " + encode(Pattern->Children[0].get()) + " " +
+               encode(Pattern->Children[1].get()) + ")";
+    }
+    return "(! " + Body + " :pattern (" + Terms.substr(1) + "))";
   }
 
   static void collectSpecCalls(const LogicExpr *Expr,
@@ -921,21 +1113,187 @@ class SMTLibEncoder {
     }
   }
 
+  std::string literal(const LogicValue &Value, const LogicSort &Sort) {
+    switch (Value.K) {
+    case LogicValue::Kind::Bool:
+      return Value.Truth ? "true" : "false";
+    case LogicValue::Kind::Heap: {
+      // Runs become stores, cell by cell, up to a bound; a longer run keeps
+      // only its first cell, which still names a true instance argument.
+      std::string Heap = "((as const (Array Int Int)) " +
+                         smtInteger(Value.Heap->Default.toDecimal()) + ")";
+      const auto &Breaks = Value.Heap->Breaks;
+      unsigned Budget = 4096;
+      for (auto It = Breaks.begin(); It != Breaks.end(); ++It) {
+        if (It->second == Value.Heap->Default)
+          continue;
+        auto Next = std::next(It);
+        CertInt Address = It->first;
+        do {
+          Heap = "(store " + Heap + " " + smtInteger(Address.toDecimal()) +
+                 " " + smtInteger(It->second.toDecimal()) + ")";
+          Address = Address + CertInt(1);
+        } while (Budget-- > 0 && Next != Breaks.end() &&
+                 Address < Next->first);
+      }
+      return Heap;
+    }
+    case LogicValue::Kind::Integer:
+      if (Sort.Kind == LogicSortKind::BitVector && !integerMode())
+        return "(_ bv" + decimalUnsigned(Value.Integer.bits(Sort.BitWidth)) +
+               " " + std::to_string(Sort.BitWidth) + ")";
+      return smtInteger(Value.Integer.toDecimal());
+    case LogicValue::Kind::Seq: {
+      const std::vector<CertInt> &Elements = *Value.Elements;
+      if (Elements.empty())
+        return "(as seq.empty (Seq Int))";
+      std::string Units;
+      for (const CertInt &Element : Elements)
+        Units += " (seq.unit " + smtInteger(Element.toDecimal()) + ")";
+      return Elements.size() == 1 ? Units.substr(1) : "(seq.++" + Units + ")";
+    }
+    case LogicValue::Kind::Set:
+    case LogicValue::Kind::Multiset:
+    case LogicValue::Kind::Map:
+      break;
+    }
+    fail("unsupported SMT-LIB literal");
+    return "false";
+  }
+
+  std::vector<const LogicFunctionDecl *>
+  callees(const LogicFunctionDecl &Function) const {
+    std::vector<const LogicExpr *> Calls;
+    collectSpecCalls(Function.StepDefinition.get(), Calls);
+    std::vector<const LogicFunctionDecl *> Callees;
+    for (const LogicExpr *Call : Calls)
+      if (auto It = Module.LogicFunctions.find(Call->SpecCallee);
+          It != Module.LogicFunctions.end())
+        Callees.push_back(&It->second);
+    return Callees;
+  }
+
+  /// define-fun for \p Function, after the functions its definition applies.
+  /// cvc5 does not decide queries over define-fun-rec, so a recursive
+  /// function stays declared.
+  void define(const LogicFunctionDecl &Function) {
+    if (Defined.count(Function.Identity) ||
+        !NonRecursive.count(Function.Identity))
+      return;
+    Defined.insert(Function.Identity);
+    for (const LogicFunctionDecl *Callee : callees(Function))
+      define(*Callee);
+    std::string Text = "(define-fun " + functionName(Function) + " (";
+    std::map<std::string, std::string> Saved = Substitutions;
+    for (unsigned I = 0; I != Function.Parameters.size(); ++I) {
+      const std::string Parameter = "arg_" + std::to_string(I);
+      Text += "(" + Parameter + " " + sort(Function.Parameters[I].Sort) + ")";
+      Substitutions[Function.Parameters[I].Name] = Parameter;
+    }
+    Text += ") " + sort(Function.ResultSort) + " " +
+            coerce(encode(Function.StepDefinition.get()),
+                   Function.StepDefinition->Sort, Function.ResultSort,
+                   Function.ResultSort.Signedness == LogicSignedness::Signed) +
+            ")\n";
+    Substitutions = std::move(Saved);
+    Definitions += Text;
+  }
+
+  /// f(args) = definition[args], true of the defined function.
+  void emitDefinitionInstance(const DefinitionInstance &Instance) {
+    const LogicFunctionDecl &Function = *Instance.Function;
+    if (!Function.StepDefinition ||
+        Instance.Arguments.size() != Function.Parameters.size()) {
+      fail("definition instance of " + Function.DisplayName +
+           " cannot be encoded");
+      return;
+    }
+    std::vector<std::string> Arguments;
+    for (unsigned I = 0; I != Instance.Arguments.size(); ++I)
+      Arguments.push_back(
+          literal(Instance.Arguments[I], Function.Parameters[I].Sort));
+    std::string Left = functionName(Function);
+    if (!Arguments.empty()) {
+      Left = "(" + Left;
+      for (const std::string &Argument : Arguments)
+        Left += " " + Argument;
+      Left += ")";
+    }
+    std::map<std::string, std::string> Saved = Substitutions;
+    for (unsigned I = 0; I != Function.Parameters.size(); ++I)
+      Substitutions[Function.Parameters[I].Name] = Arguments[I];
+    std::string Right =
+        coerce(encode(Function.StepDefinition.get()),
+               Function.StepDefinition->Sort, Function.ResultSort,
+               Function.ResultSort.Signedness == LogicSignedness::Signed);
+    Substitutions = std::move(Saved);
+    Axioms.push_back("(assert (= " + Left + " " + Right + "))");
+  }
+
 public:
   SMTLibEncoder(const ObligationModule &Module, MachineIntegerEncoding Encoding)
       : Module(Module), Encoding(Encoding) {}
 
   bool usedBitLevelOperation() const { return UsedBitLevelOperation; }
+  std::vector<DefinitionInstance> Instances;
+  /// Quantifiers whose range, and applications whose integer arguments, the
+  /// solver is asked to keep small.
+  std::vector<const LogicExpr *> Narrowed;
+  /// Define every non-recursive logical function, hidden ones included,
+  /// instead of declaring it. Only for a search whose unsat proves nothing.
+  bool DefineFunctions = false;
+  std::set<std::string> Defined;
 
   llvm::Expected<std::string> run(const LogicExpr *Query) {
     if (!Query)
       return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                      "missing SMT-LIB counterexample query");
+    std::unique_ptr<LogicExpr> Instantiated = instantiateAtReads(*Query);
+    if (Instantiated)
+      Query = Instantiated.get();
     std::vector<const LogicExpr *> Calls;
     collectSpecCalls(Query, Calls);
     for (const LogicExpr *Call : Calls)
       emitSpecAxiom(Call);
+    for (const DefinitionInstance &Instance : Instances)
+      emitDefinitionInstance(Instance);
+    for (const LogicExpr *Narrow : Narrowed) {
+      if (Narrow->K == LogicExpr::Forall || Narrow->K == LogicExpr::Exists) {
+        Axioms.push_back("(assert (<= (- " +
+                         encode(Narrow->Children[1].get()) + " " +
+                         encode(Narrow->Children[0].get()) + ") " +
+                         std::to_string(NarrowedQuantifierRange) + "))");
+        continue;
+      }
+      const std::string Bound = std::to_string(NarrowedArgumentBound);
+      for (const auto &Argument : Narrow->Children) {
+        const LogicSort &Sort = Argument->Sort;
+        const std::string Value = encode(Argument.get());
+        if (Sort.Kind == LogicSortKind::MathematicalInteger ||
+            (Sort.Kind == LogicSortKind::BitVector && integerMode())) {
+          Axioms.push_back("(assert (and (<= " + Value + " " + Bound +
+                           ") (>= " + Value + " (- " + Bound + "))))");
+        } else if (Sort.Kind == LogicSortKind::BitVector &&
+                   Sort.BitWidth > 13) {
+          const std::string Width = std::to_string(Sort.BitWidth);
+          const std::string Upper = "((_ int2bv " + Width + ") " + Bound + ")";
+          if (Sort.Signedness == LogicSignedness::Signed)
+            Axioms.push_back("(assert (and (bvsle " + Value + " " + Upper +
+                             ") (bvsge " + Value + " ((_ int2bv " + Width +
+                             ") (- " + Bound + ")))))");
+          else
+            Axioms.push_back("(assert (bvule " + Value + " " + Upper + "))");
+        }
+      }
+    }
     const std::string EncodedQuery = encode(Query);
+    if (DefineFunctions) {
+      NonRecursive = nonRecursiveDefinitions(Module);
+      const std::map<std::string, const LogicFunctionDecl *> Used =
+          UsedFunctions;
+      for (const auto &[Identity, Function] : Used)
+        define(*Function);
+    }
     if (Failed)
       return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                      Error.c_str());
@@ -944,6 +1302,10 @@ public:
     llvm::raw_string_ostream Out(Script);
     Out << "(set-logic ALL)\n";
     Out << "(set-option :print-success false)\n";
+    // Without it, cvc5 gives up on quantified sequence goals that E-matching
+    // does not close.
+    if (UsesSequences && UsesQuantifiers)
+      Out << "(set-option :full-saturate-quant true)\n";
     for (const auto &[Name, VariableSort] : FreeVariables)
       Out << "(declare-fun " << smtSymbol("v_", Name) << " () "
           << sort(VariableSort) << ")\n";
@@ -955,7 +1317,8 @@ public:
     if (UsesValidPtr)
       Out << "(declare-fun p_valid (Int) Bool)\n";
     for (const auto &[Identity, Function] : UsedFunctions) {
-      (void)Identity;
+      if (Defined.count(Identity))
+        continue;
       Out << "(declare-fun " << smtSymbol("f_", Function->Identity) << " (";
       for (unsigned I = 0; I != Function->Parameters.size(); ++I) {
         if (I != 0)
@@ -964,6 +1327,7 @@ public:
       }
       Out << ") " << sort(Function->ResultSort) << ")\n";
     }
+    Out << Definitions;
     for (const std::string &Axiom : Axioms)
       Out << Axiom << "\n";
     Out << "(assert " << EncodedQuery << ")\n";
@@ -991,15 +1355,15 @@ static VerifyResult querySizeLimitResult(const ObligationModule &Module,
   return Result;
 }
 
-static std::optional<std::string> readSolverOutput(llvm::StringRef Path,
-                                                   std::string &Error) {
+static std::optional<std::string>
+readSolverOutput(llvm::StringRef Path, std::string &Error, uint64_t Limit) {
   uint64_t Size = 0;
   if (std::error_code EC = llvm::sys::fs::file_size(Path, Size)) {
     Error = "cannot inspect solver output: " + EC.message();
     return std::nullopt;
   }
-  if (Size > MaxSolverOutputBytes) {
-    Error = "solver output exceeds the 64 KiB limit";
+  if (Size > Limit) {
+    Error = "solver output exceeds the " + outputLimitText(Limit) + " limit";
     return std::nullopt;
   }
   auto Buffer = llvm::MemoryBuffer::getFile(Path, false, false);
@@ -1095,9 +1459,14 @@ static bool terminateAndReap(const llvm::sys::ProcessInfo &Process,
 #endif
 }
 
+static bool startsWithSat(llvm::StringRef OutputPath) {
+  auto Buffer = llvm::MemoryBuffer::getFileSlice(OutputPath, 4, 0, false);
+  return Buffer && (*Buffer)->getBuffer() == "sat\n";
+}
+
 static bool solverOutputWithinLimit(llvm::StringRef OutputPath,
                                     llvm::StringRef ErrorPath,
-                                    std::string &Error) {
+                                    std::string &Error, bool &LimitExceeded) {
   uint64_t OutputSize = 0;
   uint64_t ErrorSize = 0;
   if (std::error_code EC = llvm::sys::fs::file_size(OutputPath, OutputSize)) {
@@ -1108,13 +1477,595 @@ static bool solverOutputWithinLimit(llvm::StringRef OutputPath,
     Error = "cannot inspect cvc5 error output: " + EC.message();
     return false;
   }
-  if (OutputSize > MaxSolverOutputBytes ||
-      ErrorSize > MaxSolverOutputBytes - OutputSize) {
-    Error = "solver output exceeds the 64 KiB limit";
+  // Only a model may exceed a line; it follows the verdict.
+  const uint64_t OutputLimit =
+      OutputSize > MaxSolverOutputBytes && !startsWithSat(OutputPath)
+          ? MaxSolverOutputBytes
+          : MaxModelOutputBytes;
+  if (OutputSize > OutputLimit || ErrorSize > MaxSolverOutputBytes) {
+    LimitExceeded = true;
+    Error =
+        "solver output exceeds the " +
+        outputLimitText(ErrorSize > MaxSolverOutputBytes ? MaxSolverOutputBytes
+                                                         : OutputLimit) +
+        " limit";
     return false;
   }
   return true;
 }
+
+/// An s-expression of solver output.
+struct SExpr {
+  bool IsList = false;
+  std::string Atom;
+  std::vector<SExpr> List;
+};
+
+constexpr unsigned MaxModelNesting = 20000;
+
+/// Read one s-expression starting at Pos without recursion.
+std::optional<SExpr> readSExpr(llvm::StringRef Text, size_t &Pos) {
+  auto skip = [&] {
+    while (Pos < Text.size()) {
+      const char C = Text[Pos];
+      if (C == ';') {
+        while (Pos < Text.size() && Text[Pos] != '\n')
+          ++Pos;
+      } else if (C == ' ' || C == '\t' || C == '\n' || C == '\r') {
+        ++Pos;
+      } else {
+        break;
+      }
+    }
+  };
+  std::vector<SExpr> Open;
+  while (true) {
+    skip();
+    if (Pos >= Text.size())
+      return std::nullopt;
+    const char C = Text[Pos];
+    SExpr Done;
+    if (C == '(') {
+      if (Open.size() >= MaxModelNesting)
+        return std::nullopt;
+      ++Pos;
+      Open.emplace_back();
+      Open.back().IsList = true;
+      continue;
+    }
+    if (C == ')') {
+      if (Open.empty())
+        return std::nullopt;
+      ++Pos;
+      Done = std::move(Open.back());
+      Open.pop_back();
+    } else if (C == '|') {
+      const size_t End = Text.find('|', Pos + 1);
+      if (End == llvm::StringRef::npos)
+        return std::nullopt;
+      Done.Atom = Text.substr(Pos + 1, End - Pos - 1).str();
+      Pos = End + 1;
+    } else {
+      const size_t Start = Pos;
+      while (Pos < Text.size() && Text[Pos] != '(' && Text[Pos] != ')' &&
+             Text[Pos] != ' ' && Text[Pos] != '\t' && Text[Pos] != '\n' &&
+             Text[Pos] != '\r')
+        ++Pos;
+      Done.Atom = Text.substr(Start, Pos - Start).str();
+    }
+    if (Open.empty())
+      return Done;
+    Open.back().List.push_back(std::move(Done));
+  }
+}
+
+/// A value of an SMT-LIB sort in a solver model.
+struct SMTValue {
+  enum class Kind { Bool, Int, BitVector, Array, Seq };
+  Kind K = Kind::Bool;
+  bool Truth = false;
+  CertInt Integer;
+  llvm::APInt Bits;
+  HeapValue Heap;
+  std::vector<CertInt> Elements;
+
+  std::string key() const {
+    switch (K) {
+    case Kind::Bool:
+      return Truth ? "true" : "false";
+    case Kind::Int:
+      return Integer.toDecimal();
+    case Kind::BitVector:
+      return "#" + std::to_string(Bits.getBitWidth()) + ":" +
+             decimalUnsigned(Bits);
+    case Kind::Array:
+      return LogicValue::heap(Heap).key();
+    case Kind::Seq:
+      return LogicValue::sequence(Elements).key();
+    }
+    return {};
+  }
+  friend bool operator==(const SMTValue &L, const SMTValue &R) {
+    return L.K == R.K && L.key() == R.key();
+  }
+};
+
+SMTValue smtBool(bool Truth) {
+  SMTValue Value;
+  Value.K = SMTValue::Kind::Bool;
+  Value.Truth = Truth;
+  return Value;
+}
+
+SMTValue smtInt(CertInt Integer) {
+  SMTValue Value;
+  Value.K = SMTValue::Kind::Int;
+  Value.Integer = std::move(Integer);
+  return Value;
+}
+
+SMTValue smtBits(llvm::APInt Bits) {
+  SMTValue Value;
+  Value.K = SMTValue::Kind::BitVector;
+  Value.Bits = std::move(Bits);
+  return Value;
+}
+
+using SMTEnvironment = std::vector<std::pair<std::string, SMTValue>>;
+
+/// Evaluate a closed model term: literals, the core and arithmetic
+/// connectives, arrays, and let. Anything else is unsupported.
+std::optional<SMTValue> evaluateModelTerm(const SExpr &E,
+                                          SMTEnvironment &Environment,
+                                          unsigned Depth = 0) {
+  if (Depth > MaxModelNesting)
+    return std::nullopt;
+  auto eval = [&](const SExpr &Child) {
+    return evaluateModelTerm(Child, Environment, Depth + 1);
+  };
+  if (!E.IsList) {
+    llvm::StringRef Atom = E.Atom;
+    if (Atom == "true" || Atom == "false")
+      return smtBool(Atom == "true");
+    for (auto It = Environment.rbegin(); It != Environment.rend(); ++It)
+      if (It->first == Atom)
+        return It->second;
+    if (Atom.consume_front("#b") && !Atom.empty())
+      return smtBits(llvm::APInt(Atom.size(), Atom, 2));
+    if (Atom.consume_front("#x") && !Atom.empty())
+      return smtBits(llvm::APInt(Atom.size() * 4, Atom, 16));
+    if (std::optional<CertInt> Integer = CertInt::fromDecimal(E.Atom);
+        Integer && !llvm::StringRef(E.Atom).starts_with("-"))
+      return smtInt(*Integer);
+    return std::nullopt;
+  }
+  if (E.List.empty())
+    return std::nullopt;
+  const SExpr &Head = E.List.front();
+  // ((as const (Array Int Int)) v)
+  if (Head.IsList) {
+    if (E.List.size() != 2 || Head.List.size() != 3 || Head.List[0].IsList ||
+        Head.List[0].Atom != "as" || Head.List[1].IsList ||
+        Head.List[1].Atom != "const")
+      return std::nullopt;
+    std::optional<SMTValue> Default = eval(E.List[1]);
+    if (!Default || Default->K != SMTValue::Kind::Int)
+      return std::nullopt;
+    SMTValue Array;
+    Array.K = SMTValue::Kind::Array;
+    Array.Heap.Default = Default->Integer;
+    return Array;
+  }
+  const std::string &Op = Head.Atom;
+  const size_t Arity = E.List.size() - 1;
+  // (as seq.empty (Seq Int))
+  if (Op == "as" && Arity == 2 && !E.List[1].IsList &&
+      E.List[1].Atom == "seq.empty") {
+    SMTValue Empty;
+    Empty.K = SMTValue::Kind::Seq;
+    return Empty;
+  }
+  if (Op == "_") {
+    if (Arity != 2 || E.List[1].IsList || E.List[2].IsList)
+      return std::nullopt;
+    llvm::StringRef Name = E.List[1].Atom;
+    unsigned Width = 0;
+    if (!Name.consume_front("bv") ||
+        llvm::StringRef(E.List[2].Atom).getAsInteger(10, Width) || Width == 0 ||
+        Width > MaxLogicIntegerBitWidth)
+      return std::nullopt;
+    std::optional<CertInt> Value = CertInt::fromDecimal(Name);
+    if (!Value || Value->isNegative())
+      return std::nullopt;
+    return smtBits(Value->bits(Width));
+  }
+  if (Op == "let") {
+    if (Arity != 2 || !E.List[1].IsList)
+      return std::nullopt;
+    SMTEnvironment Bound;
+    for (const SExpr &Binding : E.List[1].List) {
+      if (!Binding.IsList || Binding.List.size() != 2 || Binding.List[0].IsList)
+        return std::nullopt;
+      std::optional<SMTValue> Value = eval(Binding.List[1]);
+      if (!Value)
+        return std::nullopt;
+      Bound.emplace_back(Binding.List[0].Atom, std::move(*Value));
+    }
+    const size_t Saved = Environment.size();
+    Environment.insert(Environment.end(), Bound.begin(), Bound.end());
+    std::optional<SMTValue> Value = eval(E.List[2]);
+    Environment.resize(Saved);
+    return Value;
+  }
+  if (Op == "ite") {
+    if (Arity != 3)
+      return std::nullopt;
+    std::optional<SMTValue> Condition = eval(E.List[1]);
+    if (!Condition || Condition->K != SMTValue::Kind::Bool)
+      return std::nullopt;
+    return eval(E.List[Condition->Truth ? 2 : 3]);
+  }
+  std::vector<SMTValue> Args;
+  for (size_t I = 1; I != E.List.size(); ++I) {
+    std::optional<SMTValue> Value = eval(E.List[I]);
+    if (!Value)
+      return std::nullopt;
+    Args.push_back(std::move(*Value));
+  }
+  auto allOf = [&](SMTValue::Kind Kind) {
+    return llvm::all_of(Args,
+                        [Kind](const SMTValue &Arg) { return Arg.K == Kind; });
+  };
+  if (Op == "seq.unit") {
+    if (Arity != 1 || Args[0].K != SMTValue::Kind::Int)
+      return std::nullopt;
+    SMTValue Unit;
+    Unit.K = SMTValue::Kind::Seq;
+    Unit.Elements.push_back(Args[0].Integer);
+    return Unit;
+  }
+  // cvc5 prints sequence concatenation as str.++.
+  if (Op == "seq.++" || Op == "str.++") {
+    if (Args.empty() || !allOf(SMTValue::Kind::Seq))
+      return std::nullopt;
+    SMTValue Joined;
+    Joined.K = SMTValue::Kind::Seq;
+    for (const SMTValue &Part : Args)
+      Joined.Elements.insert(Joined.Elements.end(), Part.Elements.begin(),
+                             Part.Elements.end());
+    return Joined;
+  }
+  if (Op == "=" || Op == "distinct") {
+    if (Arity < 2)
+      return std::nullopt;
+    for (size_t I = 1; I != Args.size(); ++I)
+      if (Args[I].K != Args[0].K)
+        return std::nullopt;
+    if (Op == "=")
+      return smtBool(llvm::all_of(
+          Args, [&](const SMTValue &Arg) { return Arg == Args[0]; }));
+    std::set<std::string> Keys;
+    for (const SMTValue &Arg : Args)
+      if (!Keys.insert(Arg.key()).second)
+        return smtBool(false);
+    return smtBool(true);
+  }
+  if (Op == "not" || Op == "and" || Op == "or" || Op == "=>" || Op == "xor") {
+    if (!allOf(SMTValue::Kind::Bool) || Args.empty())
+      return std::nullopt;
+    if (Op == "not")
+      return Arity == 1 ? std::optional<SMTValue>(smtBool(!Args[0].Truth))
+                        : std::nullopt;
+    if (Op == "and")
+      return smtBool(
+          llvm::all_of(Args, [](const SMTValue &A) { return A.Truth; }));
+    if (Op == "or")
+      return smtBool(
+          llvm::any_of(Args, [](const SMTValue &A) { return A.Truth; }));
+    if (Arity != 2)
+      return std::nullopt;
+    if (Op == "=>")
+      return smtBool(!Args[0].Truth || Args[1].Truth);
+    return smtBool(Args[0].Truth != Args[1].Truth);
+  }
+  if (Op == "store" || Op == "select") {
+    if ((Op == "store") != (Arity == 3) || Args[0].K != SMTValue::Kind::Array)
+      return std::nullopt;
+    for (size_t I = 1; I != Args.size(); ++I)
+      if (Args[I].K != SMTValue::Kind::Int)
+        return std::nullopt;
+    if (Op == "select")
+      return Arity == 2 ? std::optional<SMTValue>(
+                              smtInt(Args[0].Heap.get(Args[1].Integer)))
+                        : std::nullopt;
+    SMTValue Array = std::move(Args[0]);
+    Array.Heap.set(Args[1].Integer, Args[2].Integer);
+    return Array;
+  }
+  if (!allOf(SMTValue::Kind::Int))
+    return std::nullopt;
+  if (Op == "-") {
+    if (Arity == 1)
+      return smtInt(-Args[0].Integer);
+    CertInt Value = Args[0].Integer;
+    for (size_t I = 1; I != Args.size(); ++I)
+      Value = Value - Args[I].Integer;
+    return smtInt(std::move(Value));
+  }
+  if (Op == "+" || Op == "*") {
+    CertInt Value = Args[0].Integer;
+    for (size_t I = 1; I != Args.size(); ++I)
+      Value = Op == "+" ? Value + Args[I].Integer : Value * Args[I].Integer;
+    return smtInt(std::move(Value));
+  }
+  if (Arity == 2) {
+    const CertInt &L = Args[0].Integer;
+    const CertInt &R = Args[1].Integer;
+    if (Op == "<")
+      return smtBool(L < R);
+    if (Op == "<=")
+      return smtBool(!(R < L));
+    if (Op == ">")
+      return smtBool(R < L);
+    if (Op == ">=")
+      return smtBool(!(L < R));
+  }
+  return std::nullopt;
+}
+
+/// One define-fun of a model. An ite chain on parameter equalities is indexed
+/// by argument values; what remains is evaluated per application.
+struct ModelDefinition {
+  std::vector<std::string> Parameters;
+  SExpr Body;
+  bool Indexed = false;
+  std::map<std::string, SMTValue> Entries;
+  const SExpr *Rest = nullptr;
+
+  static std::string keyOf(const std::vector<SMTValue> &Arguments) {
+    std::string Key;
+    for (const SMTValue &Argument : Arguments)
+      Key += "\x1f" + Argument.key();
+    return Key;
+  }
+
+  /// The parameter values an equality conjunction fixes, one per parameter.
+  bool matchCondition(const SExpr &Condition,
+                      std::vector<std::optional<SMTValue>> &Fixed) const {
+    if (!Condition.IsList || Condition.List.empty() || Condition.List[0].IsList)
+      return false;
+    if (Condition.List[0].Atom == "and") {
+      for (size_t I = 1; I != Condition.List.size(); ++I)
+        if (!matchCondition(Condition.List[I], Fixed))
+          return false;
+      return true;
+    }
+    if (Condition.List[0].Atom != "=" || Condition.List.size() != 3)
+      return false;
+    for (unsigned Side = 1; Side <= 2; ++Side) {
+      const SExpr &Name = Condition.List[Side];
+      if (Name.IsList)
+        continue;
+      auto It = llvm::find(Parameters, Name.Atom);
+      if (It == Parameters.end())
+        continue;
+      SMTEnvironment Closed;
+      std::optional<SMTValue> Value =
+          evaluateModelTerm(Condition.List[3 - Side], Closed);
+      const size_t Index = It - Parameters.begin();
+      if (!Value || Fixed[Index])
+        return false;
+      Fixed[Index] = std::move(*Value);
+      return true;
+    }
+    return false;
+  }
+
+  void index() {
+    Indexed = true;
+    const SExpr *Current = &Body;
+    while (Current->IsList && Current->List.size() == 4 &&
+           !Current->List[0].IsList && Current->List[0].Atom == "ite") {
+      std::vector<std::optional<SMTValue>> Fixed(Parameters.size());
+      if (!matchCondition(Current->List[1], Fixed) ||
+          llvm::any_of(Fixed, [](const std::optional<SMTValue> &Value) {
+            return !Value;
+          }))
+        break;
+      SMTEnvironment Closed;
+      std::optional<SMTValue> Value =
+          evaluateModelTerm(Current->List[2], Closed);
+      if (!Value)
+        break;
+      std::vector<SMTValue> Arguments;
+      for (auto &Argument : Fixed)
+        Arguments.push_back(std::move(*Argument));
+      Entries.emplace(keyOf(Arguments), std::move(*Value));
+      Current = &Current->List[3];
+    }
+    Rest = Current;
+  }
+
+  std::optional<SMTValue> apply(const std::vector<SMTValue> &Arguments) {
+    if (Arguments.size() != Parameters.size())
+      return std::nullopt;
+    if (!Indexed)
+      index();
+    if (auto It = Entries.find(keyOf(Arguments)); It != Entries.end())
+      return It->second;
+    SMTEnvironment Environment;
+    for (size_t I = 0; I != Parameters.size(); ++I)
+      Environment.emplace_back(Parameters[I], Arguments[I]);
+    return evaluateModelTerm(*Rest, Environment);
+  }
+};
+
+/// The define-fun list cvc5 prints after sat.
+llvm::Expected<std::map<std::string, ModelDefinition>>
+parseModel(llvm::StringRef Text) {
+  auto malformed = [](llvm::StringRef Why) {
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "malformed cvc5 model: %s",
+                                   Why.str().c_str());
+  };
+  size_t Pos = 0;
+  std::optional<SExpr> Root = readSExpr(Text, Pos);
+  if (!Root || !Root->IsList)
+    return malformed("no model follows sat");
+  if (!Text.drop_front(Pos).trim().empty())
+    return malformed("unexpected text after the model");
+  std::map<std::string, ModelDefinition> Definitions;
+  for (SExpr &Entry : Root->List) {
+    if (!Entry.IsList || Entry.List.size() != 5 || Entry.List[0].IsList ||
+        Entry.List[0].Atom != "define-fun" || Entry.List[1].IsList ||
+        !Entry.List[2].IsList)
+      return malformed("expected define-fun");
+    ModelDefinition Definition;
+    for (const SExpr &Parameter : Entry.List[2].List) {
+      if (!Parameter.IsList || Parameter.List.size() != 2 ||
+          Parameter.List[0].IsList)
+        return malformed("bad parameter");
+      Definition.Parameters.push_back(Parameter.List[0].Atom);
+    }
+    Definition.Body = std::move(Entry.List[4]);
+    if (!Definitions.emplace(Entry.List[1].Atom, std::move(Definition)).second)
+      return malformed("duplicate definition");
+  }
+  return Definitions;
+}
+
+/// A cvc5 model read through the encoding that produced its query.
+class CVC5CandidateModel : public CandidateModel {
+  std::map<std::string, ModelDefinition> &Definitions;
+  const bool IntegerMode;
+  const std::set<std::string> &Defined;
+
+  std::optional<SMTValue> toSMT(const LogicValue &Value,
+                                const LogicSort &Sort) const {
+    switch (Value.K) {
+    case LogicValue::Kind::Bool:
+      return smtBool(Value.Truth);
+    case LogicValue::Kind::Heap: {
+      SMTValue Array;
+      Array.K = SMTValue::Kind::Array;
+      Array.Heap = *Value.Heap;
+      return Array;
+    }
+    case LogicValue::Kind::Integer:
+      if (Sort.Kind == LogicSortKind::BitVector && !IntegerMode)
+        return smtBits(Value.Integer.bits(Sort.BitWidth));
+      return smtInt(Value.Integer);
+    case LogicValue::Kind::Seq: {
+      SMTValue Sequence;
+      Sequence.K = SMTValue::Kind::Seq;
+      Sequence.Elements = *Value.Elements;
+      return Sequence;
+    }
+    case LogicValue::Kind::Set:
+    case LogicValue::Kind::Multiset:
+    case LogicValue::Kind::Map:
+      break;
+    }
+    return std::nullopt;
+  }
+
+  /// \p Opaque applications of machine-sorted functions are read reduced in
+  /// range in the integer encoding, as the query reads them.
+  std::optional<LogicValue> fromSMT(const std::optional<SMTValue> &Value,
+                                    const LogicSort &Sort, bool Opaque) const {
+    if (!Value)
+      return std::nullopt;
+    switch (Sort.Kind) {
+    case LogicSortKind::Bool:
+      if (Value->K == SMTValue::Kind::Bool)
+        return LogicValue::boolean(Value->Truth);
+      return std::nullopt;
+    case LogicSortKind::Heap:
+      if (Value->K == SMTValue::Kind::Array)
+        return LogicValue::heap(Value->Heap);
+      return std::nullopt;
+    case LogicSortKind::Seq:
+      if (Value->K == SMTValue::Kind::Seq)
+        return LogicValue::sequence(Value->Elements);
+      return std::nullopt;
+    case LogicSortKind::Set:
+    case LogicSortKind::Multiset:
+    case LogicSortKind::Map:
+      return std::nullopt;
+    case LogicSortKind::MathematicalInteger:
+    case LogicSortKind::Pointer:
+      if (Value->K == SMTValue::Kind::Int)
+        return LogicValue::integer(Value->Integer);
+      return std::nullopt;
+    case LogicSortKind::BitVector:
+      if (Value->K == SMTValue::Kind::BitVector &&
+          Value->Bits.getBitWidth() == Sort.BitWidth)
+        return LogicValue::integer(CertInt::fromBits(
+            Value->Bits, Sort.Signedness == LogicSignedness::Signed));
+      if (Value->K == SMTValue::Kind::Int && IntegerMode)
+        return LogicValue::integer(
+            Opaque
+                ? CertInt::fromBits(Value->Integer.bits(Sort.BitWidth),
+                                    Sort.Signedness == LogicSignedness::Signed)
+                : Value->Integer);
+      return std::nullopt;
+    case LogicSortKind::Invalid:
+      break;
+    }
+    return std::nullopt;
+  }
+
+  ModelDefinition *find(const std::string &Name) {
+    auto It = Definitions.find(Name);
+    return It == Definitions.end() ? nullptr : &It->second;
+  }
+
+public:
+  CVC5CandidateModel(std::map<std::string, ModelDefinition> &Definitions,
+                     bool IntegerMode, const std::set<std::string> &Defined)
+      : Definitions(Definitions), IntegerMode(IntegerMode), Defined(Defined) {}
+
+  bool defined(const LogicFunctionDecl &Function) override {
+    return Defined.count(Function.Identity);
+  }
+
+  std::optional<LogicValue> constant(const std::string &Name,
+                                     const LogicSort &Sort) override {
+    ModelDefinition *Definition = find(smtSymbol("v_", Name));
+    if (!Definition || !Definition->Parameters.empty())
+      return std::nullopt;
+    return fromSMT(Definition->apply({}), Sort, /*Opaque=*/false);
+  }
+
+  std::optional<bool> validPointer(const CertInt &Address) override {
+    ModelDefinition *Definition = find("p_valid");
+    if (!Definition)
+      return std::nullopt;
+    std::optional<SMTValue> Valid = Definition->apply({smtInt(Address)});
+    if (!Valid || Valid->K != SMTValue::Kind::Bool)
+      return std::nullopt;
+    return Valid->Truth;
+  }
+
+  std::optional<LogicValue>
+  application(const LogicFunctionDecl &Function,
+              const std::vector<LogicValue> &Arguments) override {
+    ModelDefinition *Definition = find(smtSymbol("f_", Function.Identity));
+    if (!Definition || defined(Function) ||
+        Arguments.size() != Function.Parameters.size())
+      return std::nullopt;
+    std::vector<SMTValue> Values;
+    for (unsigned I = 0; I != Arguments.size(); ++I) {
+      std::optional<SMTValue> Value =
+          toSMT(Arguments[I], Function.Parameters[I].Sort);
+      if (!Value)
+        return std::nullopt;
+      Values.push_back(std::move(*Value));
+    }
+    return fromSMT(Definition->apply(Values), Function.ResultSort,
+                   /*Opaque=*/true);
+  }
+};
 
 } // namespace
 
@@ -1183,67 +2134,60 @@ CVC5VerifyBackend::CVC5VerifyBackend(const BackendExecutionOptions &Execution)
         "cvc5 executable is missing or not executable: " + *Program;
 }
 
-VerifyResult CVC5VerifyBackend::verifyQuery(const ObligationModule &Module,
-                                            const LogicExpr *Query) const {
-  VerifyResult Result;
-  Result.BackendName = "cvc5";
-  if (SolverPath.empty()) {
-    Result.Status = VerifyStatus::Unresolved;
-    Result.Reason = VerifyReason::SolverUnavailable;
-    Result.Message = SolverPathError;
-    return Result;
-  }
-  auto Script = encodeSMTLibQuery(Module, Query, IntegerEncoding);
-  if (!Script) {
-    Result.Status = VerifyStatus::Unresolved;
-    Result.Reason = VerifyReason::EncodingFailure;
-    Result.Message = llvm::toString(Script.takeError());
-    return Result;
-  }
+namespace {
+/// A finished cvc5 process's standard output, or why there is none.
+struct SolverRun {
+  std::optional<std::string> Output;
+  VerifyResult Failure;
+};
+} // namespace
 
+static SolverRun runCVC5(const std::string &SolverPath, llvm::StringRef Script,
+                         unsigned TimeoutMs, unsigned ResourceLimit) {
+  SolverRun Run;
+  VerifyResult &Result = Run.Failure;
+  Result.BackendName = "cvc5";
+  Result.Status = VerifyStatus::Unresolved;
   int InputFD = -1;
   llvm::SmallString<128> InputPath;
   if (std::error_code EC = llvm::sys::fs::createTemporaryFile(
           "cppverify-cvc5", "smt2", InputFD, InputPath)) {
-    Result.Status = VerifyStatus::Unresolved;
     Result.Reason = VerifyReason::SolverInvocationFailure;
     Result.Message = "cannot create cvc5 input: " + EC.message();
-    return Result;
+    return Run;
   }
   llvm::FileRemover RemoveInput(InputPath);
   {
     llvm::raw_fd_ostream Input(InputFD, true);
-    Input << *Script;
+    Input << Script;
     Input.flush();
     if (Input.has_error()) {
-      Result.Status = VerifyStatus::Unresolved;
       Result.Reason = VerifyReason::SolverInvocationFailure;
       Result.Message = "cannot write cvc5 input: " + Input.error().message();
-      return Result;
+      Input.clear_error();
+      return Run;
     }
   }
 
   llvm::SmallString<128> OutputPath;
   if (std::error_code EC = llvm::sys::fs::createTemporaryFile(
           "cppverify-cvc5", "out", OutputPath)) {
-    Result.Status = VerifyStatus::Unresolved;
     Result.Reason = VerifyReason::SolverInvocationFailure;
     Result.Message = "cannot create cvc5 output: " + EC.message();
-    return Result;
+    return Run;
   }
   llvm::FileRemover RemoveOutput(OutputPath);
   llvm::SmallString<128> ErrorPath;
   if (std::error_code EC = llvm::sys::fs::createTemporaryFile(
           "cppverify-cvc5", "err", ErrorPath)) {
-    Result.Status = VerifyStatus::Unresolved;
     Result.Reason = VerifyReason::SolverInvocationFailure;
     Result.Message = "cannot create cvc5 error output: " + EC.message();
-    return Result;
+    return Run;
   }
   llvm::FileRemover RemoveError(ErrorPath);
 
   std::vector<std::string> OwnedArgs = {SolverPath, "--lang=smt2", "--seed=0",
-                                        "--sat-random-seed=0"};
+                                        "--sat-random-seed=0", "--dump-models"};
   if (TimeoutMs != 0)
     OwnedArgs.push_back("--tlimit-per=" + std::to_string(TimeoutMs));
   if (ResourceLimit != 0)
@@ -1260,11 +2204,10 @@ VerifyResult CVC5VerifyBackend::verifyQuery(const ObligationModule &Module,
       llvm::sys::ExecuteNoWait(SolverPath, Args, std::nullopt, Redirects, 0,
                                &InvocationError, &ExecutionFailed);
   if (ExecutionFailed || Process.Pid == llvm::sys::ProcessInfo::InvalidPid) {
-    Result.Status = VerifyStatus::Unresolved;
     Result.Reason = VerifyReason::SolverInvocationFailure;
     Result.Message = InvocationError.empty() ? "cannot start cvc5 process"
                                              : std::move(InvocationError);
-    return Result;
+    return Run;
   }
 
   const auto Deadline = std::chrono::steady_clock::now() +
@@ -1290,9 +2233,8 @@ VerifyResult CVC5VerifyBackend::verifyQuery(const ObligationModule &Module,
     }
 
     std::string OutputError;
-    if (!solverOutputWithinLimit(OutputPath, ErrorPath, OutputError)) {
-      OutputLimitExceeded =
-          OutputError == "solver output exceeds the 64 KiB limit";
+    if (!solverOutputWithinLimit(OutputPath, ErrorPath, OutputError,
+                                 OutputLimitExceeded)) {
       InvocationError = std::move(OutputError);
       std::string TerminationError;
       if (!terminateAndReap(Process, TerminationError) &&
@@ -1312,86 +2254,254 @@ VerifyResult CVC5VerifyBackend::verifyQuery(const ObligationModule &Module,
 
   std::string ReadError;
   std::optional<std::string> StandardError =
-      readSolverOutput(ErrorPath, ReadError);
+      readSolverOutput(ErrorPath, ReadError, MaxSolverOutputBytes);
   if (!StandardError) {
-    Result.Status = VerifyStatus::Unresolved;
     Result.Reason = VerifyReason::SolverMalformedOutput;
     Result.Message = std::move(ReadError);
-    return Result;
+    return Run;
   }
   if (OutputLimitExceeded) {
-    Result.Status = VerifyStatus::Unresolved;
     Result.Reason = VerifyReason::SolverMalformedOutput;
     Result.Message = std::move(InvocationError);
-    return Result;
+    return Run;
   }
   if (TimedOut) {
-    Result.Status = VerifyStatus::Unresolved;
     Result.Reason = VerifyReason::SolverTimeout;
     Result.Message = InvocationError.empty() ? "cvc5 process timed out"
                                              : std::move(InvocationError);
-    return Result;
+    return Run;
   }
   if (ExitCode != 0) {
-    Result.Status = VerifyStatus::Unresolved;
     Result.Reason = VerifyReason::SolverInvocationFailure;
     Result.Message = "cvc5 exited with status " + std::to_string(ExitCode);
     if (!InvocationError.empty())
       Result.Message += ": " + InvocationError;
     if (!StandardError->empty())
       Result.Message += ": " + diagnosticText(*StandardError);
-    return Result;
+    return Run;
   }
-
   std::optional<std::string> StandardOutput =
-      readSolverOutput(OutputPath, ReadError);
+      readSolverOutput(OutputPath, ReadError, MaxModelOutputBytes);
+  if (StandardOutput && StandardOutput->size() > MaxSolverOutputBytes &&
+      !llvm::StringRef(*StandardOutput).starts_with("sat\n")) {
+    StandardOutput.reset();
+    ReadError = "solver output exceeds the " +
+                outputLimitText(MaxSolverOutputBytes) + " limit";
+  }
   if (!StandardOutput) {
-    Result.Status = VerifyStatus::Unresolved;
     Result.Reason = VerifyReason::SolverMalformedOutput;
     Result.Message = std::move(ReadError);
-    return Result;
+    return Run;
   }
-  const llvm::StringRef Verdict = llvm::StringRef(*StandardOutput).trim();
   if (!StandardError->empty()) {
-    Result.Status = VerifyStatus::Unresolved;
     Result.Reason = VerifyReason::SolverMalformedOutput;
     Result.Message =
         "cvc5 wrote unexpected diagnostics: " + diagnosticText(*StandardError);
+    return Run;
+  }
+  Run.Output = std::move(*StandardOutput);
+  return Run;
+}
+
+/// Encode a script; Auto resolves once, into \p Encoding.
+static llvm::Expected<std::string>
+encodeScript(const ObligationModule &Module, const LogicExpr *Query,
+             MachineIntegerEncoding &Encoding,
+             const std::vector<DefinitionInstance> &Instances,
+             const std::vector<const LogicExpr *> &Narrowed,
+             std::set<std::string> *Defined = nullptr) {
+  auto run = [&](MachineIntegerEncoding Selected, bool *UsedBits) {
+    SMTLibEncoder Encoder(Module, Selected);
+    Encoder.Instances = Instances;
+    Encoder.Narrowed = Narrowed;
+    Encoder.DefineFunctions = Defined != nullptr;
+    llvm::Expected<std::string> Script = Encoder.run(Query);
+    if (UsedBits)
+      *UsedBits = Encoder.usedBitLevelOperation();
+    if (Defined)
+      *Defined = std::move(Encoder.Defined);
+    return Script;
+  };
+  if (Encoding != MachineIntegerEncoding::Auto)
+    return run(Encoding, nullptr);
+  bool UsedBits = false;
+  llvm::Expected<std::string> Script =
+      run(MachineIntegerEncoding::Integer, &UsedBits);
+  if (!Script || !UsedBits) {
+    Encoding = MachineIntegerEncoding::Integer;
+    return Script;
+  }
+  Encoding = MachineIntegerEncoding::BitVector;
+  return run(Encoding, nullptr);
+}
+
+VerifyResult
+CVC5VerifyBackend::verifyQuery(const ObligationModule &Module,
+                               const LogicExpr *Query,
+                               std::optional<unsigned> BudgetMs) const {
+  const unsigned TimeoutMs = BudgetMs ? *BudgetMs : this->TimeoutMs;
+  VerifyResult Result;
+  Result.BackendName = "cvc5";
+  Result.Status = VerifyStatus::Unresolved;
+  if (SolverPath.empty()) {
+    Result.Reason = VerifyReason::SolverUnavailable;
+    Result.Message = SolverPathError;
     return Result;
   }
-  if (Verdict == "unsat") {
-    Result.Status = VerifyStatus::Verified;
+  auto Features = validateObligationModule(Module);
+  if (!Features || *Features != Module.RequiredFeatures) {
+    Result.Reason = VerifyReason::EncodingFailure;
+    Result.Message =
+        Features ? "obligation feature declaration does not match validated "
+                   "contents"
+                 : llvm::toString(Features.takeError());
     return Result;
   }
-  if (Verdict == "sat") {
-    // Without a model, a satisfying assignment that depends on an application
-    // beyond the unfolding fuel cannot be told from a real counterexample.
-    const std::vector<std::string> Frontier = specFrontier(Module);
-    if (!Frontier.empty()) {
-      Result.Status = VerifyStatus::Unresolved;
-      Result.Reason = VerifyReason::SpecFuel;
-      Result.Message = "cvc5 reported sat for a query that applies " +
-                       Frontier.front() +
-                       " beyond its unfolding fuel; it returns no model to "
-                       "check against the definition";
+  if (!Query) {
+    Result.Reason = VerifyReason::EncodingFailure;
+    Result.Message = "missing SMT-LIB counterexample query";
+    return Result;
+  }
+
+  MachineIntegerEncoding Encoding = IntegerEncoding;
+  DefinitionRefinement Refinement(Module, HiddenSearchRounds);
+  std::vector<DefinitionInstance> Instances;
+  // Once a quantifier range is narrowed, cvc5 only searches among small
+  // counterexamples: failing to find one settles nothing.
+  std::vector<const LogicExpr *> Narrowed;
+  RefinementDecision Unchecked;
+  auto unchecked = [&] {
+    Result.Reason = Unchecked.Reason;
+    Result.Message = Unchecked.Message;
+    return Result;
+  };
+  const auto Start = std::chrono::steady_clock::now();
+  std::optional<std::chrono::steady_clock::time_point> QueryDeadline;
+  if (TimeoutMs != 0)
+    QueryDeadline = Start + std::chrono::milliseconds(TimeoutMs);
+  {
+    // Applications at closed arguments are computed, not searched for.
+    CertifyLimits Limits;
+    Limits.Deadline = QueryDeadline;
+    Instances = closedApplicationInstances(Module, *Query, Limits);
+  }
+  // cvc5 has only instances to refine with; they get a share of the budget.
+  const auto Deadline =
+      Start + std::chrono::milliseconds(
+                  TimeoutMs != 0 ? std::max(TimeoutMs / 5, RefinementShareMs)
+                                 : 4 * RefinementShareMs);
+  while (true) {
+    // Once a hidden instance is given, only a counterexample can come out,
+    // and the definitions find one sooner than their values point by point.
+    std::set<std::string> Defined;
+    auto Script = encodeScript(Module, Query, Encoding, Instances, Narrowed,
+                               Refinement.searching() ? &Defined : nullptr);
+    if (!Script) {
+      Result.Reason = VerifyReason::EncodingFailure;
+      Result.Message = llvm::toString(Script.takeError());
       return Result;
     }
-    Result.Status = VerifyStatus::Failed;
-    Result.Reason = VerifyReason::Counterexample;
-    return Result;
+    unsigned Budget = TimeoutMs;
+    if (Refinement.refined() || !Narrowed.empty()) {
+      const auto Remaining =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              Deadline - std::chrono::steady_clock::now())
+              .count();
+      if (Remaining <= 0) {
+        if (!Narrowed.empty())
+          return unchecked();
+        RefinementDecision Exhausted = Refinement.exhausted();
+        Result.Reason = Exhausted.Reason;
+        Result.Message = Exhausted.Message;
+        return Result;
+      }
+      Budget = static_cast<unsigned>(Remaining);
+    }
+    SolverRun Run = runCVC5(SolverPath, *Script, Budget, ResourceLimit);
+    auto giveUp = [&](llvm::StringRef Outcome) {
+      RefinementDecision Exhausted = Refinement.exhausted(Outcome);
+      Result.Reason = Exhausted.Reason;
+      Result.Message = Exhausted.Message;
+      return Result;
+    };
+    if (!Run.Output) {
+      if (!Narrowed.empty())
+        return unchecked();
+      if (Refinement.refined() &&
+          Run.Failure.Reason == VerifyReason::SolverTimeout)
+        return giveUp("then cvc5 timed out");
+      return std::move(Run.Failure);
+    }
+    llvm::StringRef Output = *Run.Output;
+    const auto [FirstLine, Rest] = Output.split('\n');
+    const llvm::StringRef Verdict = FirstLine.trim();
+    if (!Narrowed.empty() && (Verdict == "unsat" || Verdict == "unknown"))
+      return unchecked();
+    if (Verdict == "unsat" && Rest.trim().empty()) {
+      if (std::optional<RefinementDecision> Hidden =
+              Refinement.unsatisfiable()) {
+        Result.Reason = Hidden->Reason;
+        Result.Message = Hidden->Message;
+        return Result;
+      }
+      Result.Status = VerifyStatus::Verified;
+      return Result;
+    }
+    if (Verdict == "unknown" && Refinement.refined())
+      return giveUp("then cvc5 returned unknown");
+    if (Verdict == "unknown") {
+      Result.Reason = VerifyReason::SolverUnknown;
+      Result.Message = "cvc5 returned unknown";
+      return Result;
+    }
+    if (Verdict != "sat") {
+      Result.Reason = VerifyReason::SolverMalformedOutput;
+      Result.Message = Output.trim().empty()
+                           ? "cvc5 returned no satisfiability result"
+                           : "malformed cvc5 output: " + diagnosticText(Output);
+      return Result;
+    }
+    auto Definitions = parseModel(Rest);
+    if (!Definitions) {
+      Result.Reason = VerifyReason::SolverMalformedOutput;
+      Result.Message = llvm::toString(Definitions.takeError());
+      return Result;
+    }
+    CVC5CandidateModel Candidate(
+        *Definitions, Encoding == MachineIntegerEncoding::Integer, Defined);
+    CertifyLimits Limits;
+    Limits.Deadline = QueryDeadline;
+    CertifyResult Certified =
+        certifyCounterexample(Module, *Query, Candidate, Limits);
+    if (Certified.Outcome == CertifyOutcome::Undetermined &&
+        Narrowed.size() < MaxNarrowedQuantifiers) {
+      const LogicExpr *Narrow =
+          Certified.DefinitionTooDeep && Certified.DeepApplication
+              ? Certified.DeepApplication
+              : Certified.WideQuantifier;
+      if (Narrow && llvm::find(Narrowed, Narrow) == Narrowed.end()) {
+        if (Narrowed.empty())
+          Unchecked = Refinement.next(Certified);
+        Narrowed.push_back(Narrow);
+        continue;
+      }
+    }
+    RefinementDecision Decision = Refinement.next(Certified);
+    if (Decision.Next == RefinementDecision::Action::Report) {
+      Result.Status = VerifyStatus::Failed;
+      Result.Reason = VerifyReason::Counterexample;
+      return Result;
+    }
+    if (Decision.Next == RefinementDecision::Action::Stop) {
+      if (!Narrowed.empty() && Decision.Reason == VerifyReason::SpecFuel)
+        return unchecked();
+      Result.Reason = Decision.Reason;
+      Result.Message = Decision.Message;
+      return Result;
+    }
+    Instances.insert(Instances.end(), Decision.Instances.begin(),
+                     Decision.Instances.end());
   }
-  if (Verdict == "unknown") {
-    Result.Status = VerifyStatus::Unresolved;
-    Result.Reason = VerifyReason::SolverUnknown;
-    Result.Message = "cvc5 returned unknown";
-    return Result;
-  }
-  Result.Status = VerifyStatus::Unresolved;
-  Result.Reason = VerifyReason::SolverMalformedOutput;
-  Result.Message = Verdict.empty()
-                       ? "cvc5 returned no satisfiability result"
-                       : "malformed cvc5 output: " + diagnosticText(Verdict);
-  return Result;
 }
 
 VerifyResult CVC5VerifyBackend::verifyObligation(const ObligationModule &Module,
@@ -1458,8 +2568,34 @@ VerifyResult CVC5VerifyBackend::verifyModule(const ObligationModule &Module) {
   }
   if (FirstFailure)
     return std::move(*FirstFailure);
-  if (FirstUnresolved)
+  if (FirstUnresolved) {
+    // No finite unfolding settles the goal: try strong induction on a
+    // variable that the refuted applications grow with.
+    if (FirstUnresolved->Reason == VerifyReason::SpecFuel) {
+      constexpr unsigned MaxInductionVariables = 2;
+      unsigned Attempts = 0;
+      std::vector<std::string> Tried;
+      for (const auto &[Variable, Sort] : inductionVariables(Module)) {
+        if (Attempts++ == MaxInductionVariables)
+          break;
+        auto Inductive = inductionModule(Module, Variable, Sort);
+        if (!Inductive) {
+          llvm::consumeError(Inductive.takeError());
+          continue;
+        }
+        Tried.push_back(Variable);
+        VerifyResult Proof =
+            verifyQuery(*Inductive, Inductive->CounterexampleQuery.get(),
+                        inductionBudgetMs(TimeoutMs));
+        if (Proof.Status == VerifyStatus::Verified) {
+          Proof.BackendName = "cvc5";
+          return Proof;
+        }
+      }
+      FirstUnresolved->Message += inductionNote(Module, Tried);
+    }
     return std::move(*FirstUnresolved);
+  }
   VerifyResult Result;
   Result.Status = VerifyStatus::Verified;
   Result.BackendName = "cvc5";
