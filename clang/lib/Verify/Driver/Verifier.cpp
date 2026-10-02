@@ -1328,6 +1328,8 @@ public:
                                     : VerifyDiagnostic::Verified);
           if (Fn->IsConstexprSpec)
             Diags.push_back({Kind, "constexpr spec axiom: " + Fn->Name});
+          else if (Fn->Unfolding)
+            Diags.push_back({Kind, "inductive predicate: " + Fn->Name});
           else
             Diags.push_back({Kind, "spec axiom: " + Fn->Name});
           continue;
@@ -1339,10 +1341,17 @@ public:
         if (Fn->NeedsDecreasesCheck && Fn->IsSpec) {
           PassiveProgram DecPP = buildDecreasesChecks(*Fn, FnMap);
           auto DecModuleOrErr = buildObligationModule(DecPP);
-          // A spec's postcondition is proved with its termination.
-          const std::string DecLabel = Fn->IsSpec && !Fn->Postconditions.empty()
-                                           ? "spec decreases and post: "
-                                           : "spec decreases: ";
+          // A spec's postcondition is proved with its termination; an
+          // inductive predicate's, by induction on its derivations, where
+          // only a failure is reported.
+          const bool Step = !Fn->InductiveStepOf.empty();
+          const std::string &Shown = Step ? Fn->InductiveStepOf : Fn->Name;
+          const bool Quiet = Fn->IsBuiltin || Step;
+          const std::string DecLabel =
+              Step && !Fn->Postconditions.empty() ? "spec post by induction: "
+              : Fn->IsSpec && !Fn->Postconditions.empty()
+                  ? "spec decreases and post: "
+                  : "spec decreases: ";
           if (Fn->IsSpec)
             UndefinedSpecs.insert(Fn->Identity);
           if (Fn->IsSpec && !Fn->Postconditions.empty())
@@ -1352,8 +1361,8 @@ public:
             AnyFailed = true;
             Diags.push_back(
                 {VerifyDiagnostic::Unresolved,
-                 "obligation lowering failed for decreases: " + Fn->Name +
-                     " (" + llvm::toString(DecModuleOrErr.takeError()) + ")"});
+                 "obligation lowering failed for decreases: " + Shown + " (" +
+                     llvm::toString(DecModuleOrErr.takeError()) + ")"});
             continue;
           }
           ObligationSimplificationStats DecSimplification;
@@ -1364,7 +1373,7 @@ public:
             AnyFailed = true;
             Diags.push_back(
                 {VerifyDiagnostic::Unresolved,
-                 "obligation simplification failed for decreases: " + Fn->Name +
+                 "obligation simplification failed for decreases: " + Shown +
                      " (" + llvm::toString(SimplifiedDecModule.takeError()) +
                      ")"});
             continue;
@@ -1376,10 +1385,10 @@ public:
           if (llvm::Error Error = emitObligationArchive(DecModule)) {
             AllOk = false;
             AnyFailed = true;
-            Diags.push_back(
-                {VerifyDiagnostic::Error,
-                 "cannot serialize decreases obligation: " + Fn->Name + " (" +
-                     llvm::toString(std::move(Error)) + ")"});
+            Diags.push_back({VerifyDiagnostic::Error,
+                             "cannot serialize decreases obligation: " + Shown +
+                                 " (" + llvm::toString(std::move(Error)) +
+                                 ")"});
             continue;
           }
           if (Opts.LowerOnly) {
@@ -1393,7 +1402,7 @@ public:
                                       Opts.Backend == BackendKind::BMC
                                   ? "Z3"
                                   : "backend") +
-                  " lowering failed for decreases: " + Fn->Name;
+                  " lowering failed for decreases: " + Shown;
               Message += backendSuffix(DR);
               if (!DR.Message.empty())
                 Message += " (" + DR.Message + ")";
@@ -1403,8 +1412,8 @@ public:
             }
             if (Fn->IsSpec) {
               UnprovenPosts.erase(Fn->Identity);
-              if (!Fn->IsBuiltin)
-                Diags.push_back({VerifyDiagnostic::Lowered, DecLabel + Fn->Name,
+              if (!Quiet)
+                Diags.push_back({VerifyDiagnostic::Lowered, DecLabel + Shown,
                                  SourceLocation(), Fn->Name, DR});
               continue;
             }
@@ -1423,9 +1432,9 @@ public:
                               : Rule + " (" + R.Message + ")";
             }
             if (R.Status == VerifyStatus::Exported) {
-              if (!Fn->IsBuiltin)
+              if (!Quiet)
                 Diags.push_back({VerifyDiagnostic::Exported,
-                                 "decreases: " + Fn->Name, R.Location, Fn->Name,
+                                 "decreases: " + Shown, R.Location, Fn->Name,
                                  R});
               if (Fn->IsSpec) {
                 UndefinedSpecs.erase(Fn->Identity);
@@ -1436,10 +1445,9 @@ public:
               if (Fn->IsSpec) {
                 UndefinedSpecs.erase(Fn->Identity);
                 UnprovenPosts.erase(Fn->Identity);
-                if (!Fn->IsBuiltin)
-                  Diags.push_back({VerifyDiagnostic::Verified,
-                                   DecLabel + Fn->Name, R.Location, Fn->Name,
-                                   R});
+                if (!Quiet)
+                  Diags.push_back({VerifyDiagnostic::Verified, DecLabel + Shown,
+                                   R.Location, Fn->Name, R});
                 recordDependencies(*Fn, DecModule);
                 continue;
               }
@@ -1459,12 +1467,34 @@ public:
                 AnyFailed = true;
                 if (!Fn->IsProof)
                   FailedCallers.insert(Fn->Identity);
+                // When the induction of an inductive predicate fails, its
+                // step may still terminate, and then its definition stands.
+                if (Step && !Fn->Postconditions.empty()) {
+                  VFunction Bare = cloneVFunction(*Fn);
+                  Bare.Postconditions.clear();
+                  Bare.PostconditionKinds.clear();
+                  if (auto Lowered = buildObligationModule(
+                          buildDecreasesChecks(Bare, FnMap)))
+                    if (auto Simplified =
+                            simplifyObligationModule(std::move(*Lowered))) {
+                      if (Opts.Backend == BackendKind::BMC)
+                        Simplified->BMCTransform =
+                            BMCTransformProvenance{Opts.BMCUnroll};
+                      if (Backend->verify(*Simplified).Status ==
+                          VerifyStatus::Verified)
+                        UndefinedSpecs.erase(Fn->Identity);
+                    } else {
+                      llvm::consumeError(Simplified.takeError());
+                    }
+                  else
+                    llvm::consumeError(Lowered.takeError());
+                }
                 std::string Message =
                     std::string(Fn->IsSpec
                                     ? DecLabel.substr(0, DecLabel.size() - 2) +
                                           " "
                                     : "decreases ") +
-                    (IsUnresolved ? "unresolved: " : "failed: ") + Fn->Name +
+                    (IsUnresolved ? "unresolved: " : "failed: ") + Shown +
                     backendSuffix(R);
                 if (!R.Message.empty())
                   Message += " (" + R.Message + ")";
