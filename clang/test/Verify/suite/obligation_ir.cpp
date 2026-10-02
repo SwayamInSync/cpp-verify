@@ -28,20 +28,19 @@ int canonical_obligations(int x)
 // OBLIGATION-LABEL: vc canonical_obligations
 // OBLIGATION-NEXT: schema cppverify.obligation/2
 // OBLIGATION-NEXT: simplification nodes {{[1-9][0-9]*}} -> {{[1-9][0-9]*}}, rewrites {{[1-9][0-9]*}}, functions-removed 0
-// OBLIGATION-NEXT: semantic-hash sha256:383223c6d8eef17759eaffb40faf2b1b3960b0532e13681aee2fe199f3c1e58c
+// OBLIGATION-NEXT: semantic-hash sha256:f6d09cd4e2ac5c541fa8e0e443f4c2981e5763ce9b4d94d69f9856eaa1e95f2e
 // OBLIGATION-NEXT: identity [[IDENTITY:fn_[0-9a-f]+]]
 // OBLIGATION-NEXT: features mathematical-integers, bit-vectors, pointers, heap-arrays
 // OBLIGATION-NEXT: counterexample
 // OBLIGATION: x_0 : bitvector32
-// OBLIGATION: obligations 6
+// OBLIGATION: obligations 5
 // OBLIGATION: obligation [[IDENTITY]]::obligation:1 assertion
 // OBLIGATION-NEXT: semantic-hash sha256:270b6daed64014bf88357703317678f5559a4b4e9e0aa2b4061a71994bbe6882
 // OBLIGATION-NEXT: source {{[1-9][0-9]*}}
 // OBLIGATION: obligation [[IDENTITY]]::obligation:2 overflow
 // OBLIGATION: obligation [[IDENTITY]]::obligation:3 assertion
 // OBLIGATION: obligation [[IDENTITY]]::obligation:4 missing-return
-// OBLIGATION: obligation [[IDENTITY]]::obligation:5 overflow
-// OBLIGATION: obligation [[IDENTITY]]::obligation:6 postcondition
+// OBLIGATION: obligation [[IDENTITY]]::obligation:5 postcondition
 // OBLIGATION-NEXT: semantic-hash sha256:{{[0-9a-f]+}}
 // OBLIGATION-NEXT: source {{[1-9][0-9]*}}
 // OBLIGATION: Lowered: canonical_obligations
