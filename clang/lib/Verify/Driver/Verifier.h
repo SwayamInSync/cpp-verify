@@ -40,6 +40,10 @@ struct VerifyOptions {
   unsigned SolverTimeoutMs = DefaultSolverTimeoutMs;
   /// Per-query timeout for queries over sequences, sets, multisets, or maps.
   unsigned CollectionTimeoutMs = DefaultCollectionTimeoutMs;
+  /// The time all queries of one function may take together: a whole query,
+  /// its obligations, and their retries and induction attempts; 0 disables
+  /// it.
+  unsigned FunctionTimeoutMs = 0;
   /// Deterministic per-query solver resource limit; 0 disables it.
   unsigned SolverResourceLimit = 0;
   /// Number of isolated solver jobs. 0 selects available physical cores.
