@@ -1,7 +1,9 @@
 //===--- UBChecks.cpp - valid(p, n) extent obligations --------------------===//
 #include "UBChecks.h"
 #include "../IR/VExpr.h"
+#include "llvm/ADT/STLExtras.h"
 #include <map>
+#include <set>
 
 using namespace clang;
 using namespace verify;
@@ -116,6 +118,12 @@ bool containsValidCall(const VExpr *E) {
     const auto *S = static_cast<const VHeapStoreExpr *>(E);
     return containsValidCall(S->Ptr.get()) || containsValidCall(S->Val.get());
   }
+  case VExpr::HeapFrame:
+    return llvm::any_of(static_cast<const VHeapFrameExpr *>(E)->Regions,
+                        [](const auto &Region) {
+                          return containsValidCall(Region.first.get()) ||
+                                 containsValidCall(Region.second.get());
+                        });
   case VExpr::FieldAccess:
     return containsValidCall(
         static_cast<const VFieldAccessExpr *>(E)->Base.get());
@@ -199,10 +207,21 @@ std::unique_ptr<VExpr> pointerOffset(const VExpr *Addr,
   if (Addr->K == VExpr::BinOp) {
     const auto *B = static_cast<const VBinOpExpr *>(Addr);
     if (B->Op == VBinOp::Add || B->Op == VBinOp::Sub) {
-      if (auto LO = pointerOffset(B->Lhs.get(), Base))
+      if (auto LO = pointerOffset(B->Lhs.get(), Base)) {
+        // A field's byte offset is a pointer-typed literal.
+        std::unique_ptr<VExpr> RO;
+        if (B->Rhs->Ty.Kind != VTypeKind::Ptr)
+          RO = cloneVExpr(B->Rhs.get());
+        else if (B->Rhs->K == VExpr::Literal)
+          RO = std::make_unique<VLiteralExpr>(
+              static_cast<const VLiteralExpr *>(B->Rhs.get())->Value,
+              mathOffsetType(), B->Rhs->Loc);
+        else
+          return nullptr;
         return std::make_unique<VBinOpExpr>(B->Op, std::move(LO),
-                                            cloneVExpr(B->Rhs.get()),
-                                            mathOffsetType(), B->Loc);
+                                            std::move(RO), mathOffsetType(),
+                                            B->Loc);
+      }
       if (B->Op == VBinOp::Add)
         if (auto RO = pointerOffset(B->Rhs.get(), Base))
           return std::make_unique<VBinOpExpr>(
@@ -223,6 +242,186 @@ struct UBInstrumenter {
   std::map<std::string, const VExpr *> ValidLen;
   std::map<std::string, uint64_t> ValidPointeeSize;
   std::optional<std::string> Error;
+  // The parameters' objects, when an access through a pointer without
+  // provenance must lie in one of them.
+  bool ObjectModel = false;
+  std::vector<AbstractObject> Objects;
+  // The address of the access being instrumented: its own arithmetic is
+  // covered by the access check.
+  const VExpr *AccessAddress = nullptr;
+  // Parameters the body assigns, whose current value may address another
+  // object than their entry value.
+  std::set<std::string> Reassigned;
+
+  // The object of a parameter that keeps its entry value, when Root is one.
+  const AbstractObject *parameterObject(const VExpr *Root) const {
+    if (!Root || Root->K != VExpr::Var)
+      return nullptr;
+    const std::string &Name = static_cast<const VVarExpr *>(Root)->Name;
+    if (Reassigned.count(Name))
+      return nullptr;
+    for (const AbstractObject &Object : Objects)
+      if (Object.Name == Name)
+        return &Object;
+    return nullptr;
+  }
+
+  // A global variable's fixed address: its cell is always accessible.
+  static bool isGlobalCell(const VExpr *Root) {
+    return Root->K == VExpr::Literal && Root->Ty.Kind == VTypeKind::Ptr &&
+           static_cast<const VLiteralExpr *>(Root)->Value != "0";
+  }
+
+  static std::unique_ptr<VExpr> entryValue(const VExpr *E) {
+    return std::make_unique<VOldExpr>(cloneVExpr(E), E->Ty, E->Loc);
+  }
+
+  // Every address lies in [Root, Root + sizeof(*Root)), or its closure, when
+  // Root is a valid object of its own: a callee's result or a foreign object.
+  static std::unique_ptr<VExpr>
+  validSingleObject(const VExpr *Root, const std::vector<const VExpr *> &Within,
+                    bool Closed, SourceLocation Loc) {
+    const uint64_t Size = Root->Ty.PointeeSizeBytes;
+    if (Size == 0)
+      return std::make_unique<VLiteralExpr>(false, VType::makeBool(), Loc);
+    std::unique_ptr<VExpr> Result = std::make_unique<VBinOpExpr>(
+        VBinOp::And,
+        std::make_unique<VBinOpExpr>(
+            VBinOp::Ne, cloneVExpr(Root),
+            std::make_unique<VLiteralExpr>(0, VType::makePtr(), Loc),
+            VType::makeBool(), Loc),
+        std::make_unique<VUnaryOpExpr>(VUnaryOp::ValidPtr, cloneVExpr(Root),
+                                       VType::makeBool(), Loc),
+        VType::makeBool(), Loc);
+    for (const VExpr *Address : Within) {
+      auto End = std::make_unique<VBinOpExpr>(
+          VBinOp::Add, cloneVExpr(Root),
+          std::make_unique<VLiteralExpr>(std::to_string(Size),
+                                         mathOffsetType(), Loc),
+          Root->Ty, Loc);
+      auto Low = std::make_unique<VBinOpExpr>(VBinOp::Le, cloneVExpr(Root),
+                                              cloneVExpr(Address),
+                                              VType::makeBool(), Loc);
+      auto High = std::make_unique<VBinOpExpr>(
+          Closed ? VBinOp::Le : VBinOp::Lt, cloneVExpr(Address), std::move(End),
+          VType::makeBool(), Loc);
+      Result = std::make_unique<VBinOpExpr>(
+          VBinOp::And, std::move(Result),
+          std::make_unique<VBinOpExpr>(VBinOp::And, std::move(Low),
+                                       std::move(High), VType::makeBool(), Loc),
+          VType::makeBool(), Loc);
+    }
+    return Result;
+  }
+
+  // Addresses lie in one object they may address: their parameter's when
+  // they step from one, otherwise any parameter's or their root's own.
+  std::unique_ptr<VExpr> sameObject(const VExpr *Root,
+                                    const std::vector<const VExpr *> &Within,
+                                    bool Closed, SourceLocation Loc) const {
+    auto inObject = [&](const AbstractObject &Object) {
+      std::vector<AbstractObject> One{Object};
+      std::unique_ptr<VExpr> All;
+      for (const VExpr *Address : Within) {
+        auto Member = objectMembership(One, Address, Closed, Loc, entryValue);
+        All = All ? std::make_unique<VBinOpExpr>(VBinOp::And, std::move(All),
+                                                 std::move(Member),
+                                                 VType::makeBool(), Loc)
+                  : std::move(Member);
+      }
+      return All;
+    };
+    if (const AbstractObject *Object = parameterObject(Root))
+      return inObject(*Object);
+    std::unique_ptr<VExpr> Any = validSingleObject(Root, Within, Closed, Loc);
+    for (const AbstractObject &Object : Objects)
+      Any = std::make_unique<VBinOpExpr>(VBinOp::Or, std::move(Any),
+                                         inObject(Object), VType::makeBool(),
+                                         Loc);
+    return Any;
+  }
+
+  // An access at Addr lies in an object it may address. A null base is the
+  // dereference check's to report.
+  std::unique_ptr<VExpr> accessObligation(const VExpr *Addr) const {
+    if (!ObjectModel || !Addr || Addr->Ty.Kind != VTypeKind::Ptr ||
+        hasRepresentedRoot(Addr))
+      return nullptr;
+    const VExpr *Root = addressRoot(Addr);
+    if (!Root || isGlobalCell(Root))
+      return nullptr;
+    auto NullBase = std::make_unique<VBinOpExpr>(
+        VBinOp::Eq, cloneVExpr(Root),
+        std::make_unique<VLiteralExpr>(0, VType::makePtr(), Addr->Loc),
+        VType::makeBool(), Addr->Loc);
+    return std::make_unique<VBinOpExpr>(
+        VBinOp::Or, std::move(NullBase),
+        sameObject(Root, {Addr}, /*Closed=*/false, Addr->Loc),
+        VType::makeBool(), Addr->Loc);
+  }
+
+  // Pointer arithmetic stays within its operand's object, one past its end
+  // included.
+  std::unique_ptr<VExpr> arithmeticObligation(const VBinOpExpr *B) const {
+    if (!ObjectModel || B->Ty.Kind != VTypeKind::Ptr ||
+        (B->Op != VBinOp::Add && B->Op != VBinOp::Sub) ||
+        hasRepresentedRoot(B))
+      return nullptr;
+    // Exactly one pointer operand: a difference of two pointers is not a
+    // step.
+    const bool LeftPointer = B->Lhs->Ty.Kind == VTypeKind::Ptr;
+    const bool RightPointer = B->Rhs->Ty.Kind == VTypeKind::Ptr;
+    if (LeftPointer == RightPointer)
+      return nullptr;
+    const VExpr *Operand = LeftPointer ? B->Lhs.get() : B->Rhs.get();
+    const VExpr *Root = addressRoot(Operand);
+    if (!Root || isGlobalCell(Root))
+      return nullptr;
+    const SourceLocation Loc = B->Loc;
+    auto Unmoved = std::make_unique<VBinOpExpr>(
+        VBinOp::Eq, cloneVExpr(B), cloneVExpr(Operand), VType::makeBool(), Loc);
+    return std::make_unique<VBinOpExpr>(
+        VBinOp::Or, std::move(Unmoved),
+        sameObject(Root, {Operand, B}, /*Closed=*/true, Loc),
+        VType::makeBool(), Loc);
+  }
+
+  // A parameter with a declared extent addresses that extent, not a single
+  // object: its validity is the extent's to state.
+  void dropSingleObjectValidity(VFunction &Fn) const {
+    std::vector<std::unique_ptr<VExpr>> Kept;
+    std::vector<ProofObligationKind> KeptKinds;
+    for (size_t I = 0; I != Fn.Preconditions.size(); ++I) {
+      const VExpr *Pre = Fn.Preconditions[I].get();
+      const bool Drop =
+          preconditionKind(Fn, I) == ProofObligationKind::PointerValidity &&
+          I >= Fn.ExplicitPreconditionCount && Pre->K == VExpr::BinOp &&
+          static_cast<const VBinOpExpr *>(Pre)->Op == VBinOp::Or &&
+          llvm::any_of(ValidLen, [&](const auto &Extent) {
+            const VExpr *Null =
+                static_cast<const VBinOpExpr *>(Pre)->Lhs.get();
+            if (Null->K != VExpr::BinOp)
+              return false;
+            const auto *Eq = static_cast<const VBinOpExpr *>(Null);
+            return Eq->Op == VBinOp::Eq && Eq->Lhs->K == VExpr::Var &&
+                   static_cast<const VVarExpr *>(Eq->Lhs.get())->Name ==
+                       Extent.first;
+          });
+      if (Drop)
+        continue;
+      Kept.push_back(std::move(Fn.Preconditions[I]));
+      KeptKinds.push_back(preconditionKind(Fn, I));
+    }
+    Fn.Preconditions.clear();
+    Fn.PreconditionKinds.clear();
+    const unsigned Explicit = Fn.ExplicitPreconditionCount;
+    for (size_t I = 0; I != Kept.size(); ++I) {
+      if (I < Explicit)
+        Fn.Preconditions.push_back(std::move(Kept[I]));
+      else
+        addPrecondition(Fn, std::move(Kept[I]), KeptKinds[I]);
+    }
+  }
 
   // A marker is meaningful only as a positive top-level conjunction clause.
   void scanValid(const VExpr *E) {
@@ -459,6 +658,10 @@ struct UBInstrumenter {
     switch (E->K) {
     case VExpr::BinOp: {
       const auto *B = static_cast<const VBinOpExpr *>(E);
+      if (E != AccessAddress)
+        if (auto Arithmetic = arithmeticObligation(B))
+          appendObligation(ProofObligationKind::Bounds, std::move(Arithmetic),
+                           Guard, Out);
       collectObligations(B->Lhs.get(), Out, Guard);
       if (B->Op == VBinOp::And || B->Op == VBinOp::Or) {
         std::unique_ptr<VExpr> RhsCondition = cloneVExpr(B->Lhs.get());
@@ -496,10 +699,16 @@ struct UBInstrumenter {
     case VExpr::Load: {
       // Array-bounds: a read through p[i] / *(p+i) must be in [0, len(p)).
       const auto *L = static_cast<const VLoadExpr *>(E);
+      const VExpr *SavedAccess = AccessAddress;
+      AccessAddress = L->Ptr.get();
       collectObligations(L->Ptr.get(), Out, Guard);
+      AccessAddress = SavedAccess;
       collectObligations(L->AccessCondition.get(), Out, Guard);
       if (auto Bnd = boundsObligation(L->Ptr.get()))
         appendObligation(ProofObligationKind::Bounds, std::move(Bnd), Guard,
+                         Out);
+      if (auto Access = accessObligation(L->Ptr.get()))
+        appendObligation(ProofObligationKind::Bounds, std::move(Access), Guard,
                          Out);
       break;
     }
@@ -547,7 +756,15 @@ struct UBInstrumenter {
           New.push_back(std::make_unique<VAssertStmt>(
               std::move(Bnd), L, ProofObligationKind::Bounds));
         }
+        if (auto Access = accessObligation(St.Ptr.get())) {
+          SourceLocation L = Access->Loc;
+          New.push_back(std::make_unique<VAssertStmt>(
+              std::move(Access), L, ProofObligationKind::Bounds));
+        }
+        const VExpr *SavedAccess = AccessAddress;
+        AccessAddress = St.Ptr.get();
         emitObsInto(New, St.Ptr.get());
+        AccessAddress = SavedAccess;
         emitObsInto(New, St.Value.get());
         emitObsInto(New, St.AccessCondition.get());
         break;
@@ -602,6 +819,192 @@ struct UBInstrumenter {
 
 } // namespace
 
+const VExpr *verify::addressRoot(const VExpr *Addr) {
+  const VExpr *Root = Addr;
+  while (Root) {
+    if (Root->K == VExpr::Cast) {
+      Root = static_cast<const VCastExpr *>(Root)->Inner.get();
+      continue;
+    }
+    if (Root->K == VExpr::BinOp) {
+      const auto *B = static_cast<const VBinOpExpr *>(Root);
+      if ((B->Op == VBinOp::Add || B->Op == VBinOp::Sub) &&
+          B->Lhs->Ty.Kind == VTypeKind::Ptr) {
+        Root = B->Lhs.get();
+        continue;
+      }
+      if (B->Op == VBinOp::Add && B->Rhs->Ty.Kind == VTypeKind::Ptr) {
+        Root = B->Rhs.get();
+        continue;
+      }
+    }
+    break;
+  }
+  return Root;
+}
+
+std::set<std::string>
+verify::assignedNames(const std::vector<std::unique_ptr<VStmt>> &Stmts) {
+  std::set<std::string> Names;
+  std::function<void(const std::vector<std::unique_ptr<VStmt>> &)> Walk =
+      [&](const std::vector<std::unique_ptr<VStmt>> &Body) {
+        for (const auto &S : Body) {
+          switch (S->K) {
+          case VStmt::Assign:
+            Names.insert(static_cast<const VAssignStmt &>(*S).Target);
+            break;
+          case VStmt::Call:
+            Names.insert(static_cast<const VCallStmt &>(*S).ResultTarget);
+            break;
+          case VStmt::If:
+            Walk(static_cast<const VIfStmt &>(*S).Then);
+            Walk(static_cast<const VIfStmt &>(*S).Else);
+            break;
+          case VStmt::While:
+            Walk(static_cast<const VWhileStmt &>(*S).Body);
+            break;
+          case VStmt::Seq:
+            Walk(static_cast<const VSeqStmt &>(*S).Stmts);
+            break;
+          case VStmt::GhostBlock:
+            Walk(static_cast<const VGhostBlockStmt &>(*S).Body);
+            break;
+          default:
+            break;
+          }
+        }
+      };
+  Walk(Stmts);
+  return Names;
+}
+
+std::vector<AbstractObject> verify::abstractObjects(const VFunction &Fn) {
+  std::vector<AbstractObject> Objects;
+  for (const auto &[Name, Ty] : Fn.Params) {
+    if (Ty.Kind != VTypeKind::Ptr || Ty.PointeeSizeBytes == 0)
+      continue;
+    AbstractObject Object{Name, Ty, nullptr};
+    for (const VValidExtent &Extent : Fn.ValidExtents)
+      if (Extent.Base == Name)
+        Object.Length = Extent.Length.get();
+    Objects.push_back(std::move(Object));
+  }
+  return Objects;
+}
+
+std::unique_ptr<VExpr> verify::objectMembership(
+    const std::vector<AbstractObject> &Objects, const VExpr *Address,
+    bool Closed, SourceLocation Loc,
+    const std::function<std::unique_ptr<VExpr>(const VExpr *)> &Value) {
+  auto makeBin = [&](VBinOp Op, std::unique_ptr<VExpr> L,
+                     std::unique_ptr<VExpr> R, VType Ty) {
+    return std::make_unique<VBinOpExpr>(Op, std::move(L), std::move(R), Ty,
+                                        Loc);
+  };
+  std::unique_ptr<VExpr> Any =
+      std::make_unique<VLiteralExpr>(false, VType::makeBool(), Loc);
+  for (const AbstractObject &Object : Objects) {
+    const uint64_t Stride = Object.PointerType.PointeeSizeBytes;
+    VVarExpr Parameter(Object.Name, Object.PointerType, Loc);
+    std::unique_ptr<VExpr> Start = Value(&Parameter);
+    std::unique_ptr<VExpr> Bytes;
+    if (Object.Length) {
+      Bytes = mathValue(Value(Object.Length).get());
+      if (Stride > 1)
+        Bytes = makeBin(VBinOp::Mul, std::move(Bytes),
+                        std::make_unique<VLiteralExpr>(
+                            std::to_string(Stride), Bytes->Ty, Loc),
+                        Bytes->Ty);
+    } else {
+      Bytes = std::make_unique<VLiteralExpr>(std::to_string(Stride),
+                                             mathOffsetType(), Loc);
+    }
+    auto End = makeBin(VBinOp::Add, cloneVExpr(Start.get()), std::move(Bytes),
+                       Object.PointerType);
+    auto NonNull = makeBin(
+        VBinOp::Ne, cloneVExpr(Start.get()),
+        std::make_unique<VLiteralExpr>(0, VType::makePtr(), Loc),
+        VType::makeBool());
+    auto Low = makeBin(VBinOp::Le, std::move(Start), cloneVExpr(Address),
+                       VType::makeBool());
+    auto High = makeBin(Closed ? VBinOp::Le : VBinOp::Lt, cloneVExpr(Address),
+                        std::move(End), VType::makeBool());
+    Any = makeBin(VBinOp::Or, std::move(Any),
+                  makeBin(VBinOp::And, std::move(NonNull),
+                          makeBin(VBinOp::And, std::move(Low), std::move(High),
+                                  VType::makeBool()),
+                          VType::makeBool()),
+                  VType::makeBool());
+  }
+  return Any;
+}
+
+std::unique_ptr<VExpr> verify::objectPlacement(const AbstractObject &Object,
+                                               SourceLocation Loc) {
+  auto Start = std::make_unique<VVarExpr>(Object.Name, Object.PointerType, Loc);
+  const uint64_t Stride = Object.PointerType.PointeeSizeBytes;
+  std::unique_ptr<VExpr> Bytes;
+  if (Object.Length) {
+    Bytes = mathValue(Object.Length);
+    if (Stride > 1)
+      Bytes = std::make_unique<VBinOpExpr>(
+          VBinOp::Mul, std::move(Bytes),
+          std::make_unique<VLiteralExpr>(std::to_string(Stride), Bytes->Ty,
+                                         Loc),
+          Bytes->Ty, Loc);
+  } else {
+    Bytes = std::make_unique<VLiteralExpr>(std::to_string(Stride),
+                                           mathOffsetType(), Loc);
+  }
+  auto End = std::make_unique<VBinOpExpr>(VBinOp::Add, cloneVExpr(Start.get()),
+                                          std::move(Bytes), Object.PointerType,
+                                          Loc);
+  auto Null = std::make_unique<VBinOpExpr>(
+      VBinOp::Eq, cloneVExpr(Start.get()),
+      std::make_unique<VLiteralExpr>(0, VType::makePtr(), Loc),
+      VType::makeBool(), Loc);
+  auto Positive = std::make_unique<VBinOpExpr>(
+      VBinOp::Lt, std::make_unique<VLiteralExpr>(0, VType::makePtr(), Loc),
+      std::move(Start), VType::makeBool(), Loc);
+  auto Within = std::make_unique<VBinOpExpr>(
+      VBinOp::Le, std::move(End),
+      std::make_unique<VLiteralExpr>(std::to_string(GlobalRegionBase),
+                                     VType::makePtr(), Loc),
+      VType::makeBool(), Loc);
+  return std::make_unique<VBinOpExpr>(
+      VBinOp::Or, std::move(Null),
+      std::make_unique<VBinOpExpr>(VBinOp::And, std::move(Positive),
+                                   std::move(Within), VType::makeBool(), Loc),
+      VType::makeBool(), Loc);
+}
+
+bool verify::hasRepresentedRoot(const VExpr *E) {
+  if (!E)
+    return false;
+  switch (E->K) {
+  case VExpr::Var:
+    return !static_cast<const VVarExpr *>(E)->ProvenanceVariable.empty();
+  case VExpr::Cast:
+    return hasRepresentedRoot(static_cast<const VCastExpr *>(E)->Inner.get());
+  case VExpr::BinOp: {
+    const auto *B = static_cast<const VBinOpExpr *>(E);
+    if (B->Op != VBinOp::Add && B->Op != VBinOp::Sub)
+      return false;
+    return (B->Lhs->Ty.Kind == VTypeKind::Ptr &&
+            hasRepresentedRoot(B->Lhs.get())) ||
+           (B->Rhs->Ty.Kind == VTypeKind::Ptr &&
+            hasRepresentedRoot(B->Rhs.get()));
+  }
+  case VExpr::Conditional: {
+    const auto *C = static_cast<const VConditionalExpr *>(E);
+    return hasRepresentedRoot(C->Then.get()) ||
+           hasRepresentedRoot(C->Else.get());
+  }
+  default:
+    return false;
+  }
+}
+
 bool verify::usesValidMarker(const VFunction &Fn) {
   if (Fn.IsSpec)
     return false;
@@ -624,6 +1027,13 @@ std::optional<std::string> verify::instrumentUBChecks(VFunction &Fn) {
     return UB.Error;
   UB.appendValidSemantics(Fn);
   UB.appendExtentSeparation(Fn);
+  if (!Fn.IsProof) {
+    Fn.ObjectModel = true;
+    UB.ObjectModel = true;
+    UB.Objects = abstractObjects(Fn);
+    UB.Reassigned = assignedNames(Fn.Body);
+    UB.dropSingleObjectValidity(Fn);
+  }
   UB.instrumentStmts(Fn.Body);
   return std::nullopt;
 }
