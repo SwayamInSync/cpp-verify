@@ -94,6 +94,21 @@ static cl::opt<unsigned> SolverTimeout(
         "exceeds it is reported as unresolved instead of hanging"),
     cl::init(verify::DefaultSolverTimeoutMs), cl::cat(CppVerifyCategory));
 
+static cl::opt<unsigned> CollectionTimeout(
+    "collection-timeout",
+    cl::desc("Per-query solver timeout in milliseconds for queries over "
+             "sequences, sets, multisets, or maps (default: twice --timeout; "
+             "0 = no limit)"),
+    cl::cat(CppVerifyCategory));
+
+static unsigned collectionTimeoutMs() {
+  if (CollectionTimeout.getNumOccurrences())
+    return CollectionTimeout;
+  return SolverTimeout > std::numeric_limits<unsigned>::max() / 2
+             ? 0
+             : 2 * SolverTimeout;
+}
+
 static cl::opt<unsigned> SolverResourceLimit(
     "solver-rlimit",
     cl::desc("Per-query deterministic solver resource limit (0 = no limit)"),
@@ -189,6 +204,7 @@ static uint64_t proofCacheMaxBytes() {
 static verify::BackendExecutionOptions backendExecutionOptions() {
   verify::BackendExecutionOptions Options;
   Options.SolverTimeoutMs = SolverTimeout;
+  Options.CollectionTimeoutMs = collectionTimeoutMs();
   Options.SolverResourceLimit = SolverResourceLimit;
   Options.Jobs = Jobs;
   Options.MaxQueryNodes = MaxQueryNodes;
@@ -259,6 +275,7 @@ public:
       VOpts.LeanCertify = LeanCertify.getValue();
       VOpts.BMCUnroll = BMCUnroll.getValue();
       VOpts.SolverTimeoutMs = SolverTimeout.getValue();
+      VOpts.CollectionTimeoutMs = collectionTimeoutMs();
       VOpts.SolverResourceLimit = SolverResourceLimit.getValue();
       VOpts.Jobs = Jobs.getValue();
       VOpts.MaxQueryNodes = MaxQueryNodes.getValue();
