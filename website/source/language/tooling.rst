@@ -15,7 +15,8 @@ Standalone verifier
    cpp-verify --backend=lean --lean-project=proof file.cpp
    cpp-verify --backend=lean --lean-project=proof --lean-certify file.cpp
    cpp-verify --lean-fallback=proof file.cpp
-   cpp-verify --check-ub file.cpp
+   cpp-verify --no-check-ub file.cpp
+   cpp-verify --profile-quantifiers file.cpp
    cpp-verify --timeout=20000 file.cpp
    cpp-verify --jobs=4 --proof-cache=.cppverify-cache file.cpp
    cpp-verify --solver-rlimit=500000 --max-query-nodes=50000 file.cpp
@@ -86,12 +87,25 @@ Backends
      - Maximum BMC loop bound. Source verification explores ``0..N``;
        lower-only and archive replay retain one exact recorded bound.
    * - ``--check-ub``
-     - On Z3, cvc5, portfolio, BMC, and Lean, additionally recognize ``valid(p, n)``
-       preconditions as buffer extents and prove indexed accesses, modular
-       sub-slices, and same-array pointer positions are in bounds. Markers must
-       be positive top-level conjunction clauses on bare pointers. Core
-       expression definedness (overflow, division, shifts, and dereferences)
-       is always checked. See :doc:`integers` and :doc:`pointers`.
+     - The default. On every backend, prove each memory access lies in an
+       object: a ``valid(p, n)`` precondition declares a buffer extent, and a
+       pointer without one addresses a single object. Indexed accesses,
+       pointer arithmetic, modular sub-slices, and same-array pointer
+       positions are checked. Extent markers must be positive top-level
+       conjunction clauses on bare pointers. See :doc:`integers` and
+       :doc:`pointers`.
+   * - ``--no-check-ub``
+     - Turn memory checking off. Core expression definedness (overflow,
+       division, shifts, and dereferences of null or dead storage) is always
+       checked. Region ``modifies`` footprints then forget the whole heap at
+       a call.
+   * - ``--profile-quantifiers``
+     - For a quantified Z3 query left unresolved, rerun it counting each
+       quantifier's instantiations and report the busiest, by the source
+       location of the quantifier (``note: the quantifier at L:C was
+       instantiated N times, up to generation G``; JSON
+       ``quantifier_profile``). Use it to find matching loops and poor
+       triggers. Needs a POSIX host.
    * - ``--timeout=N``
      - Per-query solver timeout in milliseconds (default 30000; ``0`` disables).
        A query that exceeds it is reported as unresolved instead of hanging.
@@ -145,6 +159,9 @@ Backends
        produced after BMC unrolling retain their bound and replay with BMC
        unwinding semantics; applying BMC to an untransformed archive is
        rejected because unrolling must run before obligation lowering.
+       Each module is replayed on its own: a module that relies on a spec's
+       termination, ``reads``, or ``post`` is not demoted when that spec's own
+       module fails, which the replay reports separately.
 
 ``--lower-only`` is deliberately different from compiler ``-fno-verify``.
 ``-fno-verify`` stops after Clang syntax and contract semantic checks;
@@ -245,8 +262,56 @@ codes include ``counterexample``, ``solver.timeout``, ``solver.unknown``,
 ``obligation.invalid``, ``logic.unsupported``, ``query.missing``,
 ``backend.invalid-result``,
 ``backend.inconsistent-results``, ``bmc.incomplete-bound``,
-``lean.export-failed``, ``cache.corrupt``, ``cache.io-failed``, and
-``spec.fuel``.
+``lean.export-failed``, ``cache.corrupt``, ``cache.io-failed``,
+``spec.fuel``, ``spec.hidden``, ``spec.termination``, ``spec.reads``,
+``spec.post``, ``counterexample.unchecked``, ``callee.contract``,
+``decreases.missing``, and ``construct.unsupported``.
+
+What a verified result rests on
+-------------------------------
+
+A verified result may carry qualifiers that say what the proof assumed:
+
+- ``[partial]``: it holds only for terminating executions, after
+  ``decreases(*)`` here or in a callee (JSON ``"partial": true``).
+- ``[trusts=f,g]``: it relies on the contracts of ``f`` and ``g``, marked
+  ``[[cppverify::trusted]]``, directly or through verified callees (JSON
+  ``"trusts": ["f", "g"]``). Each trusted function itself reports
+  ``Trusted: f (contract assumed, not verified)`` (JSON ``"status":
+  "trusted"``). See :doc:`functions-loops`.
+- ``[vacuous]``: no execution reaches the claim, so it holds for no reason
+  (JSON ``"vacuous": true``), with a warning naming the cause.
+
+A proof can only hold vacuously when an assumption excludes every execution,
+and assumptions enter a function in a few places: its preconditions and type
+invariants, its behaviors' assumptions, and the contracts of its callees.
+Every ``Verified`` result is checked at each:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 35 65
+
+   * - Cause
+     - Warning
+   * - The preconditions (with type invariants) are unsatisfiable.
+     - ``f: the precondition is unsatisfiable, so every claim about it holds
+       vacuously``
+   * - No execution reaches the end of the function.
+     - ``f: no execution reaches the end, so its postcondition holds
+       vacuously; check the contracts it calls and its assumptions``
+   * - A behavior's assumption contradicts the preconditions.
+     - ``f: behavior b never applies: its assumption contradicts the
+       preconditions, so its postconditions are never checked`` (the result
+       itself is not ``[vacuous]``: the other behaviors were checked)
+   * - A trusted contract cannot hold in the state of one call.
+     - ``f: the trusted contract of g contradicts the state of this call, so
+       everything after it holds vacuously``, at the call
+
+A verified callee always returns, so only a trusted contract can end the
+paths through a call. Unreachable code itself is not flagged: a defensive
+``if (p == nullptr) return -1;`` under ``pre(p != nullptr)`` is dead for a
+good reason, and every claim the function makes is still checked on the
+paths that remain.
 
 ``--diagnostics-format=json`` covers verification-result diagnostics.
 Command-line validation and frontend parse errors may still use text. Combining
