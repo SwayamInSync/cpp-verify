@@ -292,6 +292,9 @@ struct Obligation {
   SourceLocation EndLoc;
   ObligationSource Source;
   uint64_t TraceEventCount = 0;
+  /// For an unsupported obligation, what the verifier does not model there.
+  /// Diagnostic only: neither archived nor hashed.
+  std::string Note;
   std::unique_ptr<LogicExpr> Goal;
   std::unique_ptr<LogicExpr> CounterexampleQuery;
 };
