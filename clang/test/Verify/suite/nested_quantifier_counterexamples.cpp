@@ -43,10 +43,20 @@ proof void some_repeated(seq s)
 }
 // CHECK-DAG: error: verification failed: some_repeated [{{.*}}::assertion@[[@LINE-4]]:3] (counterexample: s [ssa=s_0] [type=seq] = [{{.*}}]) [backend=z3] [reason=counterexample]
 
-// A product of bound variables is outside the decided fragment.
+// A product of bound variables is outside Presburger arithmetic, but a
+// witness decides the claim: no j makes 0 * j == 6.
 proof void not_all_products_even(int n)
   pre(n == 3)
 {
   contract_assert(forall(i, exists(j, i * j == 2 * n)));
 }
-// CHECK-DAG: Unresolved: not_all_products_even [backend=z3] [reason={{counterexample.unchecked|solver.unknown|solver.timeout}}]
+// CHECK-DAG: error: verification failed: not_all_products_even [{{.*}}::assertion@[[@LINE-2]]:3] (counterexample: n [ssa=n_0] [type=i32] = 3) [backend=z3] [reason=counterexample]
+
+// Refuting this needs every value of i: no witness can, and i * j is no
+// linear term.
+proof void no_opposite_factors(int n)
+  pre(n == 2)
+{
+  contract_assert(exists(i, exists(j, i * j == n && i + j == 0)));
+}
+// CHECK-DAG: Unresolved: no_opposite_factors [backend=z3] [reason={{counterexample.unchecked|solver.unknown|solver.timeout}}]
