@@ -1,0 +1,14 @@
+# REQUIRES: cvc5
+# cvc5 receives the same instances; without them it proved none of these.
+# RUN: not %cpp-verify --backend=cvc5 --timeout=20000 %S/read_instances.cpp 2>&1 \
+# RUN:   | FileCheck %s
+#
+# CHECK-DAG: Verified: constant_index [backend=cvc5]
+# CHECK-DAG: Verified: first_and_deref [backend=cvc5]
+# CHECK-DAG: Verified: next_index [backend=cvc5]
+# CHECK-DAG: Verified: long_elements [backend=cvc5]
+# CHECK-DAG: Verified: adjacent_chain [backend=cvc5]
+# CHECK-DAG: Verified: witness [backend=cvc5]
+# CHECK-NOT: Verified: too_strong
+# CHECK-NOT: Verified: outside_range
+# CHECK-NOT: Verified: wrong_witness
