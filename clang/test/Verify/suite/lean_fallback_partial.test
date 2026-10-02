@@ -6,8 +6,8 @@
 # RUN: rm -rf %t.project
 # RUN: not %cpp-verify --solver-rlimit=100 --lean-fallback=%t.project %S/Inputs/lean_fallback_partial.cpp 2>&1 | FileCheck %s --check-prefix=EXPORT
 # RUN: FileCheck %s --input-file=%t.project/CppVerify/Check.lean --check-prefix=GOALS
+# RUN: cp %S/Inputs/lean_fallback_partial_goal_1.lean %t.project/CppVerify/Proofs/Goal_ea6538a5c8cb138e.lean
 # RUN: cp %S/Inputs/lean_fallback_partial_goal_2.lean %t.project/CppVerify/Proofs/Goal_53d4e62b4037d310.lean
-# RUN: cp %S/Inputs/lean_fallback_partial_goal_3.lean %t.project/CppVerify/Proofs/Goal_0b876b5cb5210395.lean
 # RUN: %cpp-verify --solver-rlimit=100 --lean-fallback=%t.project --lean-certify %S/Inputs/lean_fallback_partial.cpp 2>&1 | FileCheck %s --check-prefix=MIXED
 # RUN: %cpp-verify --solver-rlimit=100 --lean-fallback=%t.project --lean-certify --diagnostics-format=json %S/Inputs/lean_fallback_partial.cpp 2>&1 | FileCheck %s --check-prefix=MIXED-JSON
 # RUN: not %cpp-verify --solver-rlimit=100 --lean-fallback=%t.project --lean-fallback-scope=all --lean-certify %S/Inputs/lean_fallback_partial.cpp 2>&1 | FileCheck %s --check-prefix=ALL
@@ -15,15 +15,15 @@
 # EXPORT: Exported: lean fallback: bump [z3: 1 of 3 proved; lean: 2 exported]
 # EXPORT: Unresolved: bump [backend=z3] [reason=solver.resource-limit]
 
-# GOALS-NOT: obligation_1_goal
+# GOALS: obligation_1_goal
 # GOALS: obligation_2_goal
-# GOALS: obligation_3_goal
+# GOALS-NOT: obligation_3_goal
 
 # MIXED: Proved (z3+lean): bump [z3: 1 of 3 proved; lean: 2 certified]
 # MIXED-NOT: Unresolved
 
 # MIXED-JSON: "backend":"z3+lean"
-# MIXED-JSON-SAME: "evidence":{"lean":["{{.*}}::overflow@4:14","{{.*}}::postcondition@4:14"],"solver":"z3","solver_proved":1,"total":3}
+# MIXED-JSON-SAME: "evidence":{"lean":["{{.*}}::overflow@5:3","{{.*}}::assertion@6:3"],"solver":"z3","solver_proved":1,"total":3}
 # MIXED-JSON-SAME: "status":"mixed-proof"
 
 # The complete export includes the return check, whose proof is still `sorry`.
