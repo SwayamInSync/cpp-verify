@@ -1845,7 +1845,27 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
     if (Fn) {
       Identities.insert(Fn->Identity);
       Out.push_back(std::move(Fn));
+      continue;
     }
+    // A body the verifier does not verify still calls contracted functions,
+    // whose preconditions it then assumes without checking (Frama-C reports
+    // such properties as valid under hypotheses).
+    if (!FD->hasBody() ||
+        Ctx.getSourceManager().isInSystemHeader(FD->getLocation()))
+      continue;
+    std::function<void(const Stmt *)> Calls = [&](const Stmt *S) {
+      if (!S)
+        return;
+      if (const auto *Call = dyn_cast<CallExpr>(S))
+        if (const FunctionDecl *Callee = Call->getDirectCallee())
+          if (const FunctionContractInfo *FCI = functionContract(Callee);
+              FCI && !FCI->IsSpec && !FCI->IsProof)
+            UnverifiedCallers[functionIdentity(Callee)].insert(
+                FD->getNameAsString());
+      for (const Stmt *Child : S->children())
+        Calls(Child);
+    };
+    Calls(FD->getBody());
   }
   for (const FunctionDecl *FD : Definitions) {
     if (isa<CXXMethodDecl>(FD) || FD->isTemplated())
@@ -4236,8 +4256,10 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
       }
       VType Ty = VType::fromQualType(
           E->getType(),
-          Bound != BoundValues.end() && contractMath() ? VIntMode::Math
-                                                      : IntMode,
+          Bound != BoundValues.end() &&
+                  (contractMath() || ArbitraryValues.count(VD))
+              ? VIntMode::Math
+              : IntMode,
           Ctx);
       std::string ProvenanceVariable;
       if (auto It = DynamicPointerProvenanceVariables.find(VD);
@@ -6198,8 +6220,55 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     Out.push_back(std::make_unique<VAssignStmt>(
         Choice, std::make_unique<VLiteralExpr>(0, VType::makeBool(), Loc), Loc));
     Out.push_back(std::make_unique<VHavocStmt>(Choice, Loc));
-    std::vector<std::unique_ptr<VStmt>> Proof = convertStmt(CA->getBy());
+    // contract_assert(forall(k, lo, hi, P)) by { proof }: the proof shows P
+    // for one arbitrary k in range, which it reads but cannot assign; by
+    // universal generalization, forall(k, lo, hi, P) then holds.
+    const auto *Introduced =
+        dyn_cast<ForallExpr>(CA->getCond()->IgnoreParenImpCasts());
+    const VarDecl *Arbitrary = Introduced ? Introduced->getBoundVar() : nullptr;
+    std::vector<std::unique_ptr<VStmt>> Proof;
+    if (Arbitrary) {
+      const std::string Name = Choice + "_" + Arbitrary->getNameAsString();
+      const VType Ty =
+          VType::fromQualType(Arbitrary->getType(), VIntMode::Math, Ctx);
+      Proof.push_back(std::make_unique<VAssignStmt>(
+          Name, std::make_unique<VLiteralExpr>(0, Ty, Loc), Loc));
+      Proof.push_back(std::make_unique<VHavocStmt>(Name, Loc));
+      if (!Introduced->isUnbounded()) {
+        InContractExpression = true;
+        auto Lo = convertExpr(Introduced->getLo());
+        auto Hi = convertExpr(Introduced->getHi());
+        InContractExpression = SavedContract;
+        if (!Lo || !Hi)
+          return Out;
+        auto In = std::make_unique<VBinOpExpr>(
+            VBinOp::And,
+            std::make_unique<VBinOpExpr>(
+                VBinOp::Le, std::move(Lo),
+                std::make_unique<VVarExpr>(Name, Ty, Loc), VType::makeBool(),
+                Loc),
+            std::make_unique<VBinOpExpr>(
+                VBinOp::Lt, std::make_unique<VVarExpr>(Name, Ty, Loc),
+                std::move(Hi), VType::makeBool(), Loc),
+            VType::makeBool(), Loc);
+        Proof.push_back(std::make_unique<VAssumeStmt>(std::move(In), Loc));
+      }
+      BoundValues.emplace(Arbitrary, Name);
+      ArbitraryValues.insert(Arbitrary);
+    }
+    for (auto &Step : convertStmt(CA->getBy()))
+      Proof.push_back(std::move(Step));
     auto Fact = cloneVExpr(C.get());
+    if (Arbitrary) {
+      InContractExpression = true;
+      auto Instance = convertExpr(Introduced->getBody());
+      InContractExpression = SavedContract;
+      BoundValues.erase(Arbitrary);
+      ArbitraryValues.erase(Arbitrary);
+      if (!Instance)
+        return Out;
+      C = std::move(Instance);
+    }
     Proof.push_back(std::make_unique<VContractAssertStmt>(std::move(C), Loc));
     Proof.push_back(std::make_unique<VAssumeStmt>(
         std::make_unique<VLiteralExpr>(0, VType::makeBool(), Loc), Loc));
@@ -6251,6 +6320,15 @@ ASTConverter::convertStmtBody(const Stmt *S) {
   }
   if (const auto *BO = dyn_cast<BinaryOperator>(S)) {
     if (BO->isAssignmentOp()) {
+      if (const auto *Target =
+              dyn_cast<DeclRefExpr>(BO->getLHS()->IgnoreParenImpCasts());
+          Target && ArbitraryValues.count(Target->getDecl())) {
+        Errors.push_back(CurrentFn->Name + ": " +
+                         Target->getDecl()->getNameAsString() +
+                         " stands for every value of its forall and cannot "
+                         "be assigned");
+        return Out;
+      }
       if (!ghostAssignmentAllowed(BO->getLHS())) {
         Errors.push_back(CurrentFn->Name +
                          ": ghost code cannot modify executable state");
