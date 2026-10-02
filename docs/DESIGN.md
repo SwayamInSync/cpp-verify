@@ -983,7 +983,7 @@ counterparts of Verus's `Seq`, `Set`, `Multiset`, and `Map`:
 
 | Type | Operations |
 |---|---|
-| `seq` | `seq_empty()`, `seq_of(x)`, `len()`, `s[i]`, `push(x)`, `update(i, x)`, `subrange(lo, hi)`, `s + t`, `contains(x)` |
+| `seq` | `seq_empty()`, `seq_of(x)`, `len()`, `s[i]`, `push(x)`, `update(i, x)`, `reverse()`, `subrange(lo, hi)`, `s + t`, `contains(x)` |
 | `set` | `set_empty()`, `insert(x)`, `remove(x)`, `contains(x)`, `unite(t)`, `intersect(t)`, `difference(t)`, `subset_of(t)` |
 | `multiset` | `multiset_empty()`, `insert(x)`, `remove(x)`, `count(x)` |
 | `map` | `map_empty()`, `insert(k, v)`, `remove(k)`, `contains(k)`, `m[k]` |
@@ -996,6 +996,36 @@ counterparts of Verus's `Seq`, `Set`, `Multiset`, and `Map`:
   may be infinite (a set may hold every integer).
 - `==` and `!=` compare elements in order, members, counts, or domain and
   values.
+- `update` and `reverse` are spec functions of `<cppverify.h>` over the
+  other operations, so every backend that decides sequences supports them:
+  `s.update(i, x)` is `s.subrange(0, i).push(x) + s.subrange(i + 1, len)`
+  for `i` in `[0, len())` and `s` otherwise; `s.reverse()` is `s` when empty
+  and otherwise `s.subrange(1, len).reverse().push(s[0])`, with the
+  postcondition `s.reverse().len() == s.len()`, proved with its termination.
+  Facts about the elements of a reverse are proved by induction, like those
+  of any recursive spec.
+- A sequence equality that a proof must establish (in an assertion, a
+  postcondition, an invariant) may also be proved element by element: equal
+  lengths and equal elements imply equality, as Verus's `=~=` and Dafny's
+  sequence equality. A stated `contract_assert(a == b)` is therefore a hint
+  where the solver needs one.
+- Induction over a sequence is written by the user, as in Verus and Dafny: a
+  recursive proof function with `decreases(s.len())` that cites itself on a
+  shorter sequence:
+
+```cpp
+proof void sum_concat(seq s, seq t)
+  post(sum(s + t) == sum(s) + sum(t))
+  decreases(t.len())
+{
+  if (t.len() > 0)
+    sum_concat(s, t.subrange(0, t.len() - 1));
+}
+```
+
+- A query over collections gets `--collection-timeout` milliseconds (by
+  default twice `--timeout`): their theories need more search than integer
+  arithmetic.
 - Collections exist only for verification: they may appear in contracts,
   ghost code (`ghost seq s = ...;`, assignment in ghost blocks), and as
   parameters and results of spec and proof functions. Sema rejects every use
