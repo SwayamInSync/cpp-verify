@@ -109,6 +109,10 @@ Backends
    * - ``--timeout=N``
      - Per-query solver timeout in milliseconds (default 30000; ``0`` disables).
        A query that exceeds it is reported as unresolved instead of hanging.
+   * - ``--collection-timeout=N``
+     - Per-query timeout for a function whose queries involve sequences,
+       sets, multisets, or maps, whose theories need more search (default
+       twice ``--timeout``; ``0`` disables).
    * - ``--solver-rlimit=N``
      - Deterministic per-query Z3/cvc5 resource budget (default ``0``, disabled).
        Exhaustion is ``Unresolved``. Z3 reports ``solver.resource-limit``;
