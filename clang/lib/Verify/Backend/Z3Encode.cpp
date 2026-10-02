@@ -1348,7 +1348,8 @@ void Z3Encoder::indexFacts(
     const z3::expr &Term,
     llvm::function_ref<z3::expr(const z3::expr &)> Element) {
   // Only a closed term: an axiom beside the query cannot mention a binder.
-  if (mentionsBinder(Term) || !IndexedTerms.insert(Term.id()).second)
+  if (!SequenceFacts || mentionsBinder(Term) ||
+      !IndexedTerms.insert(Term.id()).second)
     return;
   z3::expr K = Ctx.int_const("cppverify!k");
   z3::expr Read = seqAt(patternable(Term), K);
@@ -1359,7 +1360,8 @@ void Z3Encoder::indexFacts(
 void Z3Encoder::bridgeContains(const z3::expr &Contains, const z3::expr &S,
                                const z3::expr &X) {
   // Only a closed term: an axiom beside the query cannot mention a binder.
-  if (mentionsBinder(Contains) || !BridgedContains.insert(Contains.id()).second)
+  if (!SequenceFacts || mentionsBinder(Contains) ||
+      !BridgedContains.insert(Contains.id()).second)
     return;
   const z3::expr Zero = Ctx.int_val(0);
   z3::expr Length(Ctx, Z3_mk_seq_length(Ctx, S));
@@ -1416,9 +1418,9 @@ z3::expr Z3Encoder::seqExtract(const z3::expr &S, const z3::expr &From,
   // equations rarely find the split themselves. A quantified form would
   // leave every satisfiable query to model-based instantiation, which
   // cannot check a quantifier over sequences.
-  if (!S.is_app() || S.decl().decl_kind() != Z3_OP_SEQ_CONCAT ||
-      S.num_args() != 2 || mentionsBinder(Whole) ||
-      !SplitExtracts.insert(Whole.id()).second)
+  if (!SequenceFacts || !S.is_app() ||
+      S.decl().decl_kind() != Z3_OP_SEQ_CONCAT || S.num_args() != 2 ||
+      mentionsBinder(Whole) || !SplitExtracts.insert(Whole.id()).second)
     return Whole;
   z3::expr A = S.arg(0);
   z3::expr B = S.arg(1);
@@ -1696,37 +1698,56 @@ z3::solver Z3Encoder::freshSolver() {
   return Fresh;
 }
 
+void Z3Encoder::interrupt() {
+  {
+    std::lock_guard<std::mutex> Guard(CheckLock);
+    Stopped = true;
+  }
+  CheckChanged.notify_all();
+  Ctx.interrupt();
+}
+
 z3::check_result Z3Encoder::check(z3::solver &S, unsigned Ms) {
-  if (Ms == 0)
-    return S.check();
-  // Z3 forgets a timeout that fires inside one of its nested resource
-  // scopes: leaving the scope clears the cancellation. A check that outlives
-  // its time is therefore interrupted again until it returns.
+  using Clock = std::chrono::steady_clock;
+  {
+    std::lock_guard<std::mutex> Guard(CheckLock);
+    if (Stopped)
+      return z3::unknown;
+    CheckFinished = false;
+  }
+  // Z3 forgets a cancellation that arrives inside one of its nested resource
+  // scopes (leaving the scope clears it), whether from its own timeout or
+  // from interrupt(). A check past its time, or stopped, is therefore
+  // interrupted again until it returns.
   constexpr std::chrono::milliseconds Grace(100);
   constexpr std::chrono::milliseconds Interval(50);
-  std::mutex Lock;
-  std::condition_variable Changed;
-  bool Finished = false;
+  bool TimedOut = false;
   bool Interrupted = false;
   std::thread Watchdog([&] {
-    std::unique_lock<std::mutex> Guard(Lock);
-    auto Next = std::chrono::steady_clock::now() +
-                std::chrono::milliseconds(Ms) + Grace;
-    while (!Changed.wait_until(Guard, Next, [&] { return Finished; })) {
-      Ctx.interrupt();
-      Interrupted = true;
-      Next = std::chrono::steady_clock::now() + Interval;
+    std::unique_lock<std::mutex> Lock(CheckLock);
+    const auto Limit =
+        Ms == 0 ? Clock::now() + std::chrono::hours(24 * 365)
+                : Clock::now() + std::chrono::milliseconds(Ms) + Grace;
+    auto Next = Limit;
+    while (!CheckFinished) {
+      if (Stopped || Clock::now() >= Next) {
+        TimedOut = TimedOut || Clock::now() >= Limit;
+        Ctx.interrupt();
+        Interrupted = true;
+        Next = Clock::now() + Interval;
+      }
+      CheckChanged.wait_until(Lock, Next);
     }
   });
   auto Join = llvm::make_scope_exit([&] {
     {
-      std::lock_guard<std::mutex> Guard(Lock);
-      Finished = true;
+      std::lock_guard<std::mutex> Guard(CheckLock);
+      CheckFinished = true;
     }
-    Changed.notify_one();
+    CheckChanged.notify_all();
     Watchdog.join();
+    Overran = Overran || TimedOut;
     if (Interrupted) {
-      Overran = true;
       // A check opens a resource scope, which clears an interrupt left over.
       z3::solver Reset(Ctx);
       (void)Reset.check();
@@ -1785,7 +1806,7 @@ Z3Encoder::encodeModuleAs(const ObligationModule &Module,
   std::unique_ptr<LogicExpr> Instantiated = instantiateAtReads(*Query);
   const LogicExpr *Goal = Instantiated ? Instantiated.get() : Query;
   if (std::unique_ptr<LogicExpr> Extensional =
-          instantiateExtensionality(*Goal)) {
+          SequenceFacts ? instantiateExtensionality(*Goal) : nullptr) {
     Instantiated = std::move(Extensional);
     Goal = Instantiated.get();
     collectBinderNames(Goal, BinderNames);
@@ -3258,6 +3279,63 @@ void Z3VerifyBackend::Race::cancel() {
     Encoder->interrupt();
 }
 
+bool Z3VerifyBackend::racesEncodings(const ObligationModule &Module) const {
+  return Jobs != 1 &&
+         (Module.RequiredFeatures & logicFeature(LogicFeature::Sequences));
+}
+
+VerifyResult Z3VerifyBackend::solveQuery(
+    const ObligationModule &Module, const LogicExpr *Query,
+    std::optional<uint64_t> TraceEventCount, unsigned Timeout, Race *Racing) {
+  auto solve = [&](bool Facts, Race *Pair) {
+    Z3Encoder Encoder;
+    Encoder.setTimeoutMs(Timeout);
+    Encoder.setResourceLimit(ResourceLimit);
+    Encoder.setIntegerEncoding(IntegerEncoding);
+    Encoder.setProfileQuantifiers(ProfileQuantifiers && Facts);
+    Encoder.setSequenceFacts(Facts);
+    if (Racing)
+      Racing->enter(Encoder);
+    if (Pair)
+      Pair->enter(Encoder);
+    VerifyResult Result = Encoder.verifyModule(Module, Query, TraceEventCount);
+    if (Pair)
+      Pair->leave(Encoder);
+    if (Racing)
+      Racing->leave(Encoder);
+    return Result;
+  };
+  if (!racesEncodings(Module))
+    return solve(true, nullptr);
+  // Sequence facts are theorems that help proofs but slow model search (a
+  // false claim over a chain of 200 pushes took minutes with them and 0.1 s
+  // without), so with workers to spare the query is also solved without
+  // them. Both are exact: the first proof or certified counterexample
+  // stands and stops the other.
+  auto decisive = [](const VerifyResult &Result) {
+    return Result.Status == VerifyStatus::Verified ||
+           Result.Status == VerifyStatus::Failed;
+  };
+  Race Pair;
+  std::optional<llvm::StdThreadPool> OwnPool;
+  if (!Pool)
+    OwnPool.emplace(llvm::heavyweight_hardware_concurrency(2));
+  llvm::ThreadPoolTaskGroup Group(Pool ? *Pool : *OwnPool);
+  VerifyResult Plain;
+  Group.async([&] {
+    Plain = solve(false, &Pair);
+    if (decisive(Plain))
+      Pair.cancel();
+  });
+  VerifyResult WithFacts = solve(true, &Pair);
+  if (decisive(WithFacts))
+    Pair.cancel();
+  Group.wait();
+  if (!decisive(WithFacts) && decisive(Plain))
+    return Plain;
+  return WithFacts;
+}
+
 VerifyResult Z3VerifyBackend::verifyObligation(const ObligationModule &Module,
                                                const Obligation &Item,
                                                llvm::StringRef SemanticHash,
@@ -3291,21 +3369,10 @@ VerifyResult Z3VerifyBackend::verifyObligation(const ObligationModule &Module,
   if (Result.Status != VerifyStatus::Verified &&
       Result.Reason != VerifyReason::CacheCorrupt &&
       Result.Reason != VerifyReason::CacheIOFailure) {
-    if (spent()) {
-      Result = timeSpent();
-    } else {
-      Z3Encoder Encoder;
-      Encoder.setTimeoutMs(budget(TimeoutMs));
-      Encoder.setResourceLimit(ResourceLimit);
-      Encoder.setIntegerEncoding(IntegerEncoding);
-      Encoder.setProfileQuantifiers(ProfileQuantifiers);
-      if (Racing)
-        Racing->enter(Encoder);
-      Result = Encoder.verifyModule(Module, Item.CounterexampleQuery.get(),
-                                    Item.TraceEventCount);
-      if (Racing)
-        Racing->leave(Encoder);
-    }
+    Result = spent()
+                 ? timeSpent()
+                 : solveQuery(Module, Item.CounterexampleQuery.get(),
+                              Item.TraceEventCount, budget(TimeoutMs), Racing);
     if (Cache)
       Result.CacheMisses = 1;
     if (Cache && Result.Status == VerifyStatus::Verified) {
@@ -3548,19 +3615,14 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
   }
   VerifyResult Whole;
   if (Racing) {
-    Z3Encoder WholeEncoder;
-    WholeEncoder.setTimeoutMs(WholeTimeout);
-    WholeEncoder.setResourceLimit(ResourceLimit);
-    WholeEncoder.setIntegerEncoding(IntegerEncoding);
-    WholeEncoder.setProfileQuantifiers(ProfileQuantifiers);
-    WholeRace.enter(WholeEncoder);
-    Whole = WholeEncoder.verifyModule(Module);
-    WholeRace.leave(WholeEncoder);
+    Whole = solveQuery(Module, nullptr, std::nullopt, WholeTimeout, &WholeRace);
     if (Whole.Status == VerifyStatus::Verified)
       Rivals.cancel();
     Group->wait();
     if (OwnPool)
       Pool = nullptr;
+  } else if (racesEncodings(Module)) {
+    Whole = solveQuery(Module, nullptr, std::nullopt, WholeTimeout, nullptr);
   } else {
     Enc.setTimeoutMs(WholeTimeout);
     Whole = Enc.verifyModule(Module);
@@ -3599,8 +3661,14 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
   auto retryWhole = [&](VerifyResult SplitResult) {
     if (WholeUsedFullBudget || SkipWholeModuleRetry || spent())
       return finishZ3Result(std::move(SplitResult));
-    Enc.setTimeoutMs(budget(TimeoutMs));
-    VerifyResult Retry = Enc.verifyModule(Module);
+    VerifyResult Retry;
+    if (racesEncodings(Module)) {
+      Retry =
+          solveQuery(Module, nullptr, std::nullopt, budget(TimeoutMs), nullptr);
+    } else {
+      Enc.setTimeoutMs(budget(TimeoutMs));
+      Retry = Enc.verifyModule(Module);
+    }
     if (Retry.Status != VerifyStatus::Unresolved)
       return finishZ3Result(std::move(Retry));
     return finishZ3Result(std::move(SplitResult));
