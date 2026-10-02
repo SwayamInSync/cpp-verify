@@ -106,6 +106,26 @@ static std::unique_ptr<VExpr> machineOperand(std::unique_ptr<VExpr> V,
   return std::make_unique<VCastExpr>(std::move(V), From, To, Loc);
 }
 
+/// The exact value of an integer operand.
+static std::unique_ptr<VExpr> mathOperand(std::unique_ptr<VExpr> V) {
+  if (!V || !V->Ty.isInt() || evaluatedIntMode(V.get()) == VIntMode::Math)
+    return V;
+  VType To = V->Ty;
+  To.IntMode = VIntMode::Math;
+  To.EnumMin.clear();
+  To.EnumMax.clear();
+  if (V->K == VExpr::Literal) {
+    V->Ty = To;
+    return V;
+  }
+  VType From = V->Ty;
+  SourceLocation Loc = V->Loc;
+  SourceLocation EndLoc = V->EndLoc;
+  auto Cast = std::make_unique<VCastExpr>(std::move(V), From, To, Loc);
+  Cast->EndLoc = EndLoc;
+  return Cast;
+}
+
 static bool carriesPointerProvenance(const VExpr *E) {
   if (!E || E->Ty.Kind != VTypeKind::Ptr)
     return false;
@@ -144,6 +164,62 @@ isHeapBackedLocalName(const std::string &Name,
   const std::string::size_type Dot = Name.find('.');
   return Dot != std::string::npos &&
          HeapBackedLocals.count(Name.substr(0, Dot)) != 0;
+}
+
+static bool mentionsOld(const VExpr *E) {
+  if (!E)
+    return false;
+  switch (E->K) {
+  case VExpr::Old:
+    return true;
+  case VExpr::Literal:
+  case VExpr::Var:
+  case VExpr::Result:
+    return false;
+  case VExpr::BinOp: {
+    const auto *B = static_cast<const VBinOpExpr *>(E);
+    return mentionsOld(B->Lhs.get()) || mentionsOld(B->Rhs.get());
+  }
+  case VExpr::UnaryOp:
+    return mentionsOld(static_cast<const VUnaryOpExpr *>(E)->Operand.get());
+  case VExpr::Cast:
+    return mentionsOld(static_cast<const VCastExpr *>(E)->Inner.get());
+  case VExpr::Load: {
+    const auto *L = static_cast<const VLoadExpr *>(E);
+    return mentionsOld(L->Ptr.get()) || mentionsOld(L->AccessCondition.get());
+  }
+  case VExpr::Conditional: {
+    const auto *C = static_cast<const VConditionalExpr *>(E);
+    return mentionsOld(C->Cond.get()) || mentionsOld(C->Then.get()) ||
+           mentionsOld(C->Else.get());
+  }
+  case VExpr::Forall:
+  case VExpr::Exists: {
+    const auto *Q = static_cast<const VQuantifiedExpr *>(E);
+    return mentionsOld(Q->Lo.get()) || mentionsOld(Q->Hi.get()) ||
+           mentionsOld(Q->Body.get());
+  }
+  case VExpr::HeapStore: {
+    const auto *H = static_cast<const VHeapStoreExpr *>(E);
+    return mentionsOld(H->Ptr.get()) || mentionsOld(H->Val.get());
+  }
+  case VExpr::HeapFrame:
+    return llvm::any_of(static_cast<const VHeapFrameExpr *>(E)->Regions,
+                        [](const auto &Region) {
+                          return mentionsOld(Region.first.get()) ||
+                                 mentionsOld(Region.second.get());
+                        });
+  case VExpr::FieldAccess:
+    return mentionsOld(static_cast<const VFieldAccessExpr *>(E)->Base.get());
+  case VExpr::SpecCall:
+    return llvm::any_of(static_cast<const VSpecCallExpr *>(E)->Args,
+                        [](const auto &Arg) { return mentionsOld(Arg.get()); });
+  case VExpr::OverflowCheck: {
+    const auto *O = static_cast<const VOverflowCheckExpr *>(E);
+    return mentionsOld(O->Lhs.get()) || mentionsOld(O->Rhs.get());
+  }
+  }
+  llvm_unreachable("unknown VCR expression kind");
 }
 
 static bool
@@ -206,6 +282,12 @@ usesHeapBackedLocalAsScalar(const VExpr *E,
     return usesHeapBackedLocalAsScalar(Store->Ptr.get(), HeapBackedLocals) ||
            usesHeapBackedLocalAsScalar(Store->Val.get(), HeapBackedLocals);
   }
+  case VExpr::HeapFrame:
+    for (const auto &[Lo, Hi] : static_cast<const VHeapFrameExpr *>(E)->Regions)
+      if (usesHeapBackedLocalAsScalar(Lo.get(), HeapBackedLocals) ||
+          usesHeapBackedLocalAsScalar(Hi.get(), HeapBackedLocals))
+        return true;
+    return false;
   case VExpr::FieldAccess:
     return usesHeapBackedLocalAsScalar(
         static_cast<const VFieldAccessExpr *>(E)->Base.get(), HeapBackedLocals);
@@ -223,7 +305,8 @@ usesHeapBackedLocalAsScalar(const VExpr *E,
   llvm_unreachable("unknown VCR expression kind");
 }
 
-static bool expressionReadsHeap(const VExpr *E) {
+/// \p SpecReads also counts calls of heap-reading specs.
+static bool expressionReadsHeap(const VExpr *E, bool SpecReads = false) {
   if (!E)
     return false;
   switch (E->K) {
@@ -233,44 +316,49 @@ static bool expressionReadsHeap(const VExpr *E) {
     return false;
   case VExpr::BinOp: {
     const auto *B = static_cast<const VBinOpExpr *>(E);
-    return expressionReadsHeap(B->Lhs.get()) ||
-           expressionReadsHeap(B->Rhs.get());
+    return expressionReadsHeap(B->Lhs.get(), SpecReads) ||
+           expressionReadsHeap(B->Rhs.get(), SpecReads);
   }
   case VExpr::UnaryOp:
     return expressionReadsHeap(
-        static_cast<const VUnaryOpExpr *>(E)->Operand.get());
+        static_cast<const VUnaryOpExpr *>(E)->Operand.get(), SpecReads);
   case VExpr::Cast:
-    return expressionReadsHeap(static_cast<const VCastExpr *>(E)->Inner.get());
+    return expressionReadsHeap(static_cast<const VCastExpr *>(E)->Inner.get(),
+                               SpecReads);
   case VExpr::Load:
   case VExpr::HeapStore:
+  case VExpr::HeapFrame:
     return true;
   case VExpr::Old:
-    return expressionReadsHeap(static_cast<const VOldExpr *>(E)->Inner.get());
+    return expressionReadsHeap(static_cast<const VOldExpr *>(E)->Inner.get(),
+                               SpecReads);
   case VExpr::Conditional: {
     const auto *C = static_cast<const VConditionalExpr *>(E);
-    return expressionReadsHeap(C->Cond.get()) ||
-           expressionReadsHeap(C->Then.get()) ||
-           expressionReadsHeap(C->Else.get());
+    return expressionReadsHeap(C->Cond.get(), SpecReads) ||
+           expressionReadsHeap(C->Then.get(), SpecReads) ||
+           expressionReadsHeap(C->Else.get(), SpecReads);
   }
   case VExpr::Forall:
   case VExpr::Exists: {
     const auto *Q = static_cast<const VQuantifiedExpr *>(E);
-    return expressionReadsHeap(Q->Lo.get()) ||
-           expressionReadsHeap(Q->Hi.get()) ||
-           expressionReadsHeap(Q->Body.get());
+    return expressionReadsHeap(Q->Lo.get(), SpecReads) ||
+           expressionReadsHeap(Q->Hi.get(), SpecReads) ||
+           expressionReadsHeap(Q->Body.get(), SpecReads);
   }
   case VExpr::FieldAccess:
     return expressionReadsHeap(
-        static_cast<const VFieldAccessExpr *>(E)->Base.get());
+        static_cast<const VFieldAccessExpr *>(E)->Base.get(), SpecReads);
   case VExpr::SpecCall:
+    if (SpecReads && static_cast<const VSpecCallExpr *>(E)->ReadsHeap)
+      return true;
     for (const auto &Arg : static_cast<const VSpecCallExpr *>(E)->Args)
-      if (expressionReadsHeap(Arg.get()))
+      if (expressionReadsHeap(Arg.get(), SpecReads))
         return true;
     return false;
   case VExpr::OverflowCheck: {
     const auto *O = static_cast<const VOverflowCheckExpr *>(E);
-    return expressionReadsHeap(O->Lhs.get()) ||
-           expressionReadsHeap(O->Rhs.get());
+    return expressionReadsHeap(O->Lhs.get(), SpecReads) ||
+           expressionReadsHeap(O->Rhs.get(), SpecReads);
   }
   }
   llvm_unreachable("unknown VCR expression kind");
@@ -374,6 +462,11 @@ isSupportedVerificationTypeImpl(QualType Ty,
   if (Ty->isFunctionType() || Ty->isVoidType() || Ty->isBooleanType() ||
       Ty->isIntegerType() || Ty->isEnumeralType() || Ty->isNullPtrType())
     return true;
+  // cppverify collections, and a member function naming one of their
+  // operations (lowering accepts no other member call).
+  if (VType::collectionKind(Ty) ||
+      Ty->isSpecificPlaceholderType(BuiltinType::BoundMember))
+    return true;
   if (Ty->isReferenceType())
     return false;
   if (Ty->isPointerType()) {
@@ -447,6 +540,11 @@ static bool isFlatScalarRecordType(QualType Ty) {
   return true;
 }
 
+/// A record lowered field by field; a cppverify collection is one value.
+static bool isFlattenedRecordType(QualType Ty) {
+  return Ty->isRecordType() && !VType::collectionKind(Ty);
+}
+
 /// A local object that may be promoted to one automatic byte-addressed object.
 /// Every constant local array qualifies; records qualify when trivial,
 /// standard layout, and recursively made of supported leaves.
@@ -459,7 +557,7 @@ static bool isPromotableObjectType(QualType Ty, const ASTContext &Ctx) {
                         Canonical->isIntegerType() ||
                         Canonical->isEnumeralType();
   const bool IsObject = Ctx.getAsConstantArrayType(Canonical) != nullptr ||
-                        Canonical->isRecordType();
+                        isFlattenedRecordType(Canonical);
   if (!IsScalar && !IsObject)
     return false;
   return isSupportedVerificationType(Canonical);
@@ -470,7 +568,7 @@ static bool isPromotableAggregateType(QualType Ty, const ASTContext &Ctx) {
     return false;
   QualType Canonical = Ty.getCanonicalType().getUnqualifiedType();
   return Ctx.getAsConstantArrayType(Canonical) != nullptr ||
-         Canonical->isRecordType();
+         isFlattenedRecordType(Canonical);
 }
 
 /// Largest automatic object the byte-granular allocation metadata can describe.
@@ -494,7 +592,8 @@ findUnsupportedType(const FunctionDecl *FD, bool AllowScalarReferences) {
   auto UnsupportedValueType = [](QualType Ty) {
     if (!isSupportedVerificationType(Ty))
       return true;
-    return Ty->isRecordType() && !isFlatScalarRecordType(Ty);
+    return Ty->isRecordType() && !isFlatScalarRecordType(Ty) &&
+           !VType::collectionKind(Ty);
   };
   if (UnsupportedValueType(FD->getReturnType()))
     return FD->getReturnType().getAsString();
@@ -615,6 +714,28 @@ static const FunctionContractInfo *findFunctionContract(const FunctionDecl *FD,
 const FunctionContractInfo *
 ASTConverter::functionContract(const FunctionDecl *FD) const {
   return findFunctionContract(FD, Ctx);
+}
+
+/// Whether the body states something to verify although the function has no
+/// contract clause.
+static bool hasContractStatements(const FunctionDecl *FD,
+                                  const ASTContext &Ctx) {
+  struct Finder : RecursiveASTVisitor<Finder> {
+    const ASTContext &Ctx;
+    bool Found = false;
+    explicit Finder(const ASTContext &Ctx) : Ctx(Ctx) {}
+    bool TraverseLambdaExpr(LambdaExpr *) { return true; }
+    bool VisitStmt(Stmt *S) {
+      if (isa<ContractAssertStmt>(S) || isa<GhostBlockStmt>(S) ||
+          isa<RevealWithFuelStmt>(S) || isa<HideSpecStmt>(S) ||
+          isa<RevealSpecStmt>(S) || Ctx.getLoopContract(S))
+        Found = true;
+      return !Found;
+    }
+  } F(Ctx);
+  if (const Stmt *Body = FD->getBody())
+    F.TraverseStmt(const_cast<Stmt *>(Body));
+  return F.Found;
 }
 
 bool ASTConverter::calleeIsSpec(const FunctionDecl *FD) const {
@@ -828,6 +949,12 @@ static bool exprReferencesSpecCall(const VExpr *E, const std::string &Name) {
     return exprReferencesSpecCall(H->Ptr.get(), Name) ||
            exprReferencesSpecCall(H->Val.get(), Name);
   }
+  case VExpr::HeapFrame:
+    for (const auto &[Lo, Hi] : static_cast<const VHeapFrameExpr *>(E)->Regions)
+      if (exprReferencesSpecCall(Lo.get(), Name) ||
+          exprReferencesSpecCall(Hi.get(), Name))
+        return true;
+    return false;
   case VExpr::FieldAccess:
     return exprReferencesSpecCall(
         static_cast<const VFieldAccessExpr *>(E)->Base.get(), Name);
@@ -850,6 +977,9 @@ static const RecordDecl *getRecordFromType(QualType T) {
   // injection applies. Pointers are intentionally excluded: `p->field` lowers
   // to a heap Load, which the "param.field" substitution does not model.
   T = T.getNonReferenceType().getUnqualifiedType();
+  // A cppverify collection is one mathematical value, not a record of fields.
+  if (VType::collectionKind(T))
+    return nullptr;
   if (const auto *RT = T->getAs<RecordType>())
     return RT->getDecl();
   return nullptr;
@@ -1697,7 +1827,7 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
   collectFunctionCandidates(Ctx.getTranslationUnitDecl(), Ctx, Definitions);
   for (const FunctionDecl *FD : Definitions) {
     if (isa<CXXMethodDecl>(FD)) {
-      if (functionContract(FD))
+      if (functionContract(FD) || hasContractStatements(FD, Ctx))
         Errors.push_back(FD->getNameAsString() +
                          ": member function verification is unsupported");
       continue;
@@ -1732,6 +1862,63 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
       Out.push_back(std::move(Fn));
     }
   }
+  // when(c): the body defines the spec on its domain, and elsewhere its value
+  // is that of an uninterpreted function of the same arguments.
+  std::vector<std::unique_ptr<VFunction>> Unspecified;
+  for (auto &Fn : Out) {
+    if (!Fn->Domain)
+      continue;
+    const SourceLocation Loc = Fn->Domain->Loc;
+    auto Outside = std::make_unique<VFunction>();
+    Outside->Name = Fn->Name + ".unspecified";
+    Outside->Identity = Fn->Identity + "::unspecified";
+    Outside->ReturnType = Fn->ReturnType;
+    Outside->IntMode = Fn->IntMode;
+    Outside->IsSpec = true;
+    Outside->Uninterpreted = true;
+    Outside->ReadsHeap = Fn->ReadsHeap;
+    Outside->Params = Fn->Params;
+    for (const VReadRange &Range : Fn->Reads)
+      Outside->Reads.push_back({cloneVExpr(Range.Base.get()),
+                                cloneVExpr(Range.Count.get()),
+                                Range.ElementSize});
+    std::vector<std::unique_ptr<VExpr>> Args;
+    for (const auto &[Name, Type] : Fn->Params)
+      Args.push_back(std::make_unique<VVarExpr>(Name, Type, Loc));
+    std::vector<std::unique_ptr<VStmt>> Else;
+    Else.push_back(std::make_unique<VReturnStmt>(
+        std::make_unique<VSpecCallExpr>(Outside->Name, Outside->Identity,
+                                        std::move(Args), Fn->ReturnType, Loc,
+                                        Fn->ReadsHeap),
+        Loc));
+    std::vector<std::unique_ptr<VStmt>> Body;
+    Body.push_back(std::make_unique<VIfStmt>(cloneVExpr(Fn->Domain.get()),
+                                             std::move(Fn->Body),
+                                             std::move(Else), Loc));
+    Fn->Body = std::move(Body);
+    // The post describes the spec where its body defines it.
+    for (auto &Post : Fn->Postconditions) {
+      const SourceLocation PostLoc = Post->Loc;
+      const SourceLocation PostEnd = Post->EndLoc;
+      Post = std::make_unique<VBinOpExpr>(
+          VBinOp::Or,
+          std::make_unique<VUnaryOpExpr>(VUnaryOp::Not,
+                                         cloneVExpr(Fn->Domain.get()),
+                                         VType::makeBool(), PostLoc),
+          std::move(Post), VType::makeBool(), PostLoc);
+      Post->EndLoc = PostEnd;
+    }
+    Unspecified.push_back(std::move(Outside));
+  }
+  for (auto &Fn : Unspecified)
+    Out.push_back(std::move(Fn));
+  for (auto &Fn : ChoiceFunctions)
+    Out.push_back(std::move(Fn));
+  ChoiceFunctions.clear();
+  for (auto &Fn : BuiltinFunctions)
+    Out.push_back(std::move(Fn));
+  BuiltinFunctions.clear();
+
   std::map<std::string, std::set<std::string>> CallGraph;
   for (const auto &Fn : Out) {
     for (const auto &Target : Out)
@@ -1761,44 +1948,122 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
     }
   }
 
-  for (auto &Fn : Out) {
-    bool MutuallyRecursive = false;
-    for (const std::string &Next : CallGraph[Fn->Identity]) {
-      if (Next == Fn->Identity)
-        continue;
-      std::set<std::string> Visited;
-      std::function<bool(const std::string &)> ReachesSelf =
-          [&](const std::string &Current) {
-            if (!Visited.insert(Current).second)
-              return false;
-            for (const std::string &Successor : CallGraph[Current]) {
-              if (Successor == Fn->Identity)
-                return true;
-              if (ReachesSelf(Successor))
-                return true;
-            }
-            return false;
-          };
-      if (ReachesSelf(Next)) {
-        MutuallyRecursive = true;
-        break;
-      }
+  auto reachable = [&](const std::string &From) {
+    std::set<std::string> Seen;
+    std::vector<std::string> Work{From};
+    while (!Work.empty()) {
+      const std::string Current = std::move(Work.back());
+      Work.pop_back();
+      for (const std::string &Successor : CallGraph[Current])
+        if (Seen.insert(Successor).second)
+          Work.push_back(Successor);
     }
-    if (MutuallyRecursive) {
-      Errors.push_back(
-          Fn->Name +
-          (Fn->IsSpec || Fn->IsProof
-               ? ": mutually recursive spec and proof functions are unsupported"
-               : ": mutually recursive executable functions are unsupported"));
+    return Seen;
+  };
+  std::map<std::string, std::set<std::string>> Reach;
+  std::map<std::string, const VFunction *> ByIdentity;
+  for (const auto &Fn : Out) {
+    Reach[Fn->Identity] = reachable(Fn->Identity);
+    ByIdentity[Fn->Identity] = Fn.get();
+  }
+
+  // The specs a function's verification may rely on: those its contracts or
+  // body reach, through specs and through callees' contracts.
+  {
+    std::map<std::string, std::set<std::string>> Uses = CallGraph;
+    for (const auto &Fn : Out)
+      for (const auto &Target : Out) {
+        auto inClauses = [&](const auto &Clauses) {
+          return llvm::any_of(Clauses, [&](const auto &Clause) {
+            return exprReferencesSpecCall(Clause.get(), Target->Identity);
+          });
+        };
+        if (inClauses(Fn->Preconditions) || inClauses(Fn->Postconditions))
+          Uses[Fn->Identity].insert(Target->Identity);
+      }
+    for (auto &Fn : Out) {
+      std::set<std::string> Seen;
+      std::vector<std::string> Work{Fn->Identity};
+      while (!Work.empty()) {
+        const std::string Current = std::move(Work.back());
+        Work.pop_back();
+        for (const std::string &Next : Uses[Current])
+          if (Seen.insert(Next).second)
+            Work.push_back(Next);
+      }
+      for (const std::string &Identity : Seen)
+        if (auto It = ByIdentity.find(Identity);
+            It != ByIdentity.end() && It->second->IsSpec)
+          Fn->SpecDependencies.insert(Identity);
+    }
+  }
+  for (auto &Fn : Out) {
+    std::set<std::string> Group;
+    for (const std::string &Other : Reach[Fn->Identity])
+      if (Other != Fn->Identity && Reach[Other].count(Fn->Identity))
+        Group.insert(Other);
+    if (!Group.empty()) {
+      // A cycle terminates when every call within it lowers one shared
+      // lexicographic measure. Its functions are all specs, all proof
+      // functions, or all executable.
+      auto kindOf = [](const VFunction &Member) {
+        return Member.IsConstexprSpec ? 3
+               : Member.IsSpec        ? 0
+               : Member.IsProof       ? 1
+                                      : 2;
+      };
+      const bool SameKind =
+          kindOf(*Fn) != 3 && llvm::all_of(Group, [&](const std::string &Id) {
+            return kindOf(*ByIdentity[Id]) == kindOf(*Fn);
+          });
+      if (!SameKind) {
+        Errors.push_back(Fn->Name +
+                         ": mutual recursion is supported only among "
+                         "functions of one kind: spec, proof, or executable");
+        continue;
+      }
+      const bool AllDiverge =
+          Fn->DivergenceDeclared && Fn->Decreases.empty() &&
+          llvm::all_of(Group, [&](const std::string &Id) {
+            return ByIdentity[Id]->DivergenceDeclared &&
+                   ByIdentity[Id]->Decreases.empty();
+          });
+      if (AllDiverge) {
+        Fn->RecursionGroup = std::move(Group);
+        continue;
+      }
+      const bool SameMeasure =
+          !Fn->Decreases.empty() &&
+          llvm::all_of(Group, [&](const std::string &Id) {
+            return ByIdentity[Id]->Decreases.size() == Fn->Decreases.size() &&
+                   !ByIdentity[Id]->DivergenceDeclared;
+          });
+      if (!SameMeasure) {
+        Errors.push_back(Fn->Name + ": mutually recursive " +
+                         (Fn->IsSpec    ? "spec"
+                          : Fn->IsProof ? "proof"
+                                        : "executable") +
+                         " functions require decreases clauses, all of the "
+                         "same length" +
+                         (Fn->IsSpec || Fn->IsProof
+                              ? ""
+                              : ", or all decreases(*)"));
+        continue;
+      }
+      Fn->RecursionGroup = std::move(Group);
+      Fn->NeedsDecreasesCheck = true;
       continue;
     }
     bool Recursive = CallGraph[Fn->Identity].count(Fn->Identity) != 0;
+    if (Recursive && Fn->Decreases.empty() && Fn->DivergenceDeclared)
+      continue;
     if (Recursive && Fn->Decreases.empty()) {
       Errors.push_back(
           Fn->Name +
           (Fn->IsSpec || Fn->IsProof
                ? ": recursive spec and proof functions require decreases"
-               : ": recursive executable functions require decreases"));
+               : ": recursive executable functions require decreases, or "
+                 "decreases(*) to allow divergence"));
       continue;
     }
     Fn->NeedsDecreasesCheck = Recursive;
@@ -1978,7 +2243,7 @@ void ASTConverter::registerLayoutType(QualType QT, VFunction &Fn) {
     buildArrayLayout(QT, CAT, Fn);
     return;
   }
-  if (QT->isRecordType())
+  if (isFlattenedRecordType(QT))
     buildRecordLayout(QT, Fn);
 }
 
@@ -2014,8 +2279,14 @@ void ASTConverter::collectLayouts(const FunctionDecl *FD, VFunction &Fn) {
 std::unique_ptr<VFunction>
 ASTConverter::convertFunction(const FunctionDecl *FD) {
   const FunctionContractInfo *FCI = functionContract(FD);
-  if (!FCI)
-    return nullptr;
+  if (!FCI) {
+    // Assertions and ghost code are obligations even without a contract
+    // clause; only a function that states nothing is left unverified.
+    static const FunctionContractInfo NoClauses;
+    if (FD->isConstexpr() || !hasContractStatements(FD, Ctx))
+      return nullptr;
+    FCI = &NoClauses;
+  }
   ParameterNames.clear();
   const FunctionDecl *ContractDecl = FCI->ContractDecl ? FCI->ContractDecl : FD;
   if (ContractDecl->getNumParams() != FD->getNumParams()) {
@@ -2044,7 +2315,16 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
                      ": spec functions must not write memory");
     return nullptr;
   }
-  if (FCI->IsSpec && FD->getReturnType()->isRecordType()) {
+  if (FCI->IsSpec && (!FCI->Preconditions.empty() || !FCI->Modifies.empty() ||
+                      !FCI->Aliases.empty())) {
+    Errors.push_back(FD->getNameAsString() +
+                     ": a spec function is defined for every argument and "
+                     "its body is its meaning, so pre, modifies, and aliases "
+                     "do not apply; use recommends for a soft precondition");
+    return nullptr;
+  }
+  if (FCI->IsSpec && FD->getReturnType()->isRecordType() &&
+      !VType::collectionKind(FD->getReturnType())) {
     Errors.push_back(FD->getNameAsString() +
                      ": aggregate-returning spec functions are unsupported");
     return nullptr;
@@ -2061,11 +2341,31 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   Fn->Identity = functionIdentity(FD);
   Fn->IsSpec = FCI->IsSpec;
   Fn->IsProof = FCI->IsProof;
+  if (FCI->MayDiverge.isValid() && !FCI->IsSpec && !FCI->IsProof) {
+    Fn->DivergenceLoc = FCI->MayDiverge;
+    Fn->DivergenceDeclared = true;
+  }
   Fn->ReadsHeap = FCI->IsSpec && specReadsHeap(FD);
-  Fn->IsExternalContract = !FD->hasBody();
-  if (Fn->IsExternalContract && (Fn->IsSpec || Fn->IsProof)) {
+  Fn->DeclLoc = FD->getLocation();
+  Fn->IsTrusted = llvm::any_of(FD->redecls(), [](const FunctionDecl *D) {
+    return D->hasAttr<CppVerifyTrustedAttr>();
+  });
+  if (Fn->IsTrusted && Fn->IsSpec) {
+    Errors.push_back(Fn->Name + ": [[cppverify::trusted]] does not apply to a "
+                                "spec function, whose definition is its "
+                                "meaning");
+    CurrentFn = nullptr;
+    return nullptr;
+  }
+  Fn->IsExternalContract = !FD->hasBody() || Fn->IsTrusted;
+  if (Fn->IsExternalContract && !Fn->IsTrusted &&
+      (Fn->IsSpec || Fn->IsProof)) {
     Errors.push_back(Fn->Name +
-                     ": spec and proof declarations require a definition");
+                     (Fn->IsSpec
+                          ? ": a spec declaration requires a definition"
+                          : ": a proof declaration requires a definition; "
+                            "mark it [[cppverify::trusted]] to assume its "
+                            "contract as an axiom"));
     CurrentFn = nullptr;
     return nullptr;
   }
@@ -2089,6 +2389,9 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   for (const ParmVarDecl *P : FD->parameters()) {
     if (P->getType()->isReferenceType())
       Fn->ReferenceParams.insert(valueName(P));
+    if ((P->getType()->isPointerType() || P->getType()->isReferenceType()) &&
+        !isMutableAddressParam(P))
+      Fn->ConstAddressParams.insert(valueName(P));
     if (const RecordDecl *RD = getRecordFromType(P->getType())) {
       if (const RecordDecl *Definition = RD->getDefinition())
         for (const FieldDecl *Field : Definition->fields())
@@ -2138,6 +2441,11 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   for (const Expr *E : FCI->Postconditions) {
     std::unique_ptr<VExpr> PE;
     recordContractExpr("post", E, PE);
+    if (PE && Fn->IsSpec && mentionsOld(PE.get())) {
+      Errors.push_back(Fn->Name + ": a spec changes no state, so its post "
+                                  "cannot use old");
+      continue;
+    }
     if (PE)
       Fn->Postconditions.push_back(std::move(PE));
   }
@@ -2149,10 +2457,52 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
       Fn->Recommends.push_back(std::move(RE));
   }
   for (const Expr *E : FCI->Modifies) {
-    std::unique_ptr<VExpr> ME;
-    recordContractExpr("modifies", E, ME);
-    if (ME)
-      Fn->Modifies.push_back(std::move(ME));
+    if (std::optional<VFootprint> Footprint = convertFootprint(E))
+      Fn->Modifies.push_back(std::move(*Footprint));
+    else
+      Errors.push_back(Fn->Name + ": unsupported expression in modifies");
+  }
+  for (const auto &[Pointer, Count] : FCI->Reads) {
+    const PointerType *PT =
+        Pointer ? Pointer->getType()->getAs<PointerType>() : nullptr;
+    if (!Fn->IsSpec || !PT || PT->getPointeeType()->isIncompleteType() ||
+        !Count || !Count->getType()->isIntegerType() ||
+        Count->getType()->isBooleanType()) {
+      Errors.push_back(Fn->Name +
+                       ": reads takes a pointer and an integer count, and "
+                       "only on a spec function");
+      continue;
+    }
+    VReadRange Range;
+    recordContractExpr("reads", Pointer, Range.Base);
+    recordContractExpr("reads", Count, Range.Count);
+    Range.ElementSize = static_cast<uint64_t>(
+        Ctx.getTypeSizeInChars(PT->getPointeeType()).getQuantity());
+    if (expressionReadsHeap(Range.Base.get(), true) ||
+        expressionReadsHeap(Range.Count.get(), true)) {
+      Errors.push_back(Fn->Name + ": a reads range cannot depend on the heap");
+      continue;
+    }
+    if (Range.Base && Range.Count)
+      Fn->Reads.push_back(std::move(Range));
+  }
+  for (const Expr *Condition : FCI->When) {
+    if (!Fn->IsSpec) {
+      Errors.push_back(Fn->Name + ": when restricts the domain of a spec "
+                                  "function only");
+      break;
+    }
+    std::unique_ptr<VExpr> Domain;
+    recordContractExpr("when", Condition, Domain);
+    if (!Domain)
+      continue;
+    if (Fn->Domain) {
+      const SourceLocation Loc = Domain->Loc;
+      Domain = std::make_unique<VBinOpExpr>(VBinOp::And, std::move(Fn->Domain),
+                                            std::move(Domain),
+                                            VType::makeBool(), Loc);
+    }
+    Fn->Domain = std::move(Domain);
   }
   for (const auto &Pair : FCI->Aliases) {
     std::unique_ptr<VExpr> L;
@@ -2303,10 +2653,30 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     }
   }
 
-  if (const Stmt *Body = FD->getBody()) {
+  if (FCI)
+    for (const auto &[Name, Assumes] : FCI->Behaviors) {
+      std::unique_ptr<VExpr> Condition;
+      recordContractExpr("behavior", Assumes, Condition);
+      if (Condition)
+        Fn->Behaviors.emplace_back(Name->getName().str(), std::move(Condition));
+    }
+
+  if (const Stmt *Body = Fn->IsTrusted ? nullptr : FD->getBody()) {
     injectTypeInvariants(FD, *Fn);
     beginInitializationTracking(FD);
-    Fn->Body = convertStmt(Body);
+    // complete_behaviors and disjoint_behaviors hold whenever the
+    // preconditions do.
+    if (FCI)
+      for (const Expr *Check : FCI->BehaviorChecks) {
+        std::unique_ptr<VExpr> Condition;
+        recordContractExpr("complete_behaviors or disjoint_behaviors", Check,
+                           Condition);
+        if (Condition)
+          Fn->Body.push_back(std::make_unique<VContractAssertStmt>(
+              std::move(Condition), Check->getExprLoc()));
+      }
+    for (auto &S : convertStmt(Body))
+      Fn->Body.push_back(std::move(S));
     TrackInitialization = false;
     if (!DynamicPointerProvenanceVariables.empty()) {
       std::vector<std::pair<std::string, SourceLocation>> InitialProvenance;
@@ -2346,7 +2716,8 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
       CurrentFn = nullptr;
       return nullptr;
     }
-    if (!Fn->IsSpec && Fn->Body.empty() && Fn->Postconditions.empty()) {
+    if (!Fn->IsSpec && Fn->Body.empty() && Fn->Postconditions.empty() &&
+        !functionContract(FD)) {
       CurrentFn = nullptr;
       return nullptr;
     }
@@ -2358,6 +2729,121 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   collectLayouts(FD, *Fn);
   CurrentFn = nullptr;
   return Fn;
+}
+
+std::optional<llvm::APSInt>
+ASTConverter::globalConstant(const VarDecl *VD) const {
+  if (!VD->getType().isConstQualified() ||
+      !VD->getType()->isIntegralOrEnumerationType())
+    return std::nullopt;
+  const VarDecl *Definition = VD->getDefinition();
+  if (!Definition)
+    Definition = VD;
+  const APValue *Value = Definition->evaluateValue();
+  if (!Value || !Value->isInt())
+    return std::nullopt;
+  return Value->getInt();
+}
+
+std::unique_ptr<VExpr> ASTConverter::globalAddress(const VarDecl *VD,
+                                                   SourceLocation Loc) {
+  const VarDecl *Canonical = VD->getCanonicalDecl();
+  QualType Type = VD->getType();
+  if (!VD->hasGlobalStorage() || VD->isStaticLocal() ||
+      VD->getTLSKind() != VarDecl::TLS_None || Type.isVolatileQualified() ||
+      !(Type->isIntegralOrEnumerationType() || Type->isBooleanType())) {
+    Errors.push_back(CurrentFn->Name +
+                     ": only scalar integral global variables are supported: " +
+                     VD->getNameAsString());
+    return nullptr;
+  }
+  const uint64_t Size = Ctx.getTypeSizeInChars(Type).getQuantity();
+  auto [It, Inserted] = GlobalAddresses.try_emplace(Canonical, 0);
+  if (Inserted) {
+    It->second = NextGlobalAddress;
+    NextGlobalAddress += (std::max<uint64_t>(Size, 1) + 15) / 16 * 16;
+  }
+  return std::make_unique<VLiteralExpr>(std::to_string(It->second),
+                                        VType::makePtr(Size), Loc);
+}
+
+/// Every loop needs a measure, except that an executable loop may allow
+/// divergence with decreases(*), leaving its function partially correct.
+std::optional<VFootprint> ASTConverter::convertFootprint(const Expr *E) {
+  bool SavedContract = InContractExpression;
+  InContractExpression = true;
+  VFootprint Out;
+  if (const auto *Section = dyn_cast<ArraySectionExpr>(E->IgnoreParens())) {
+    // The range p[lo : n] starts at the cell p[lo].
+    Expr *Base = const_cast<Expr *>(Section->getBase());
+    const QualType Element = Base->getType()->getPointeeType();
+    Expr *Lower = const_cast<Expr *>(Section->getLowerBound());
+    if (!Lower)
+      Lower = IntegerLiteral::Create(
+          Ctx, llvm::APInt(Ctx.getIntWidth(Ctx.IntTy), 0), Ctx.IntTy,
+          Section->getBeginLoc());
+    auto *First = new (Ctx) ArraySubscriptExpr(
+        Base, Lower, Element, VK_LValue, OK_Ordinary, Section->getEndLoc());
+    if (auto Address = convertSubscriptAddress(First)) {
+      Out.Target = std::make_unique<VLoadExpr>(
+          std::move(Address), VType::fromQualType(Element, IntMode, Ctx),
+          Section->getBeginLoc());
+      Out.Count = convertExpr(Section->getLength());
+      Out.ElementSize = static_cast<uint64_t>(
+          Ctx.getTypeSizeInChars(Element).getQuantity());
+      if (!Out.Count)
+        Out.Target.reset();
+    }
+  } else {
+    Out.Target = convertExpr(E);
+  }
+  InContractExpression = SavedContract;
+  if (!Out.Target)
+    return std::nullopt;
+  return Out;
+}
+
+std::vector<VFootprint>
+ASTConverter::convertLoopFootprints(const LoopContractInfo &LCI) {
+  std::vector<VFootprint> Out;
+  for (const Expr *E : LCI.Modifies) {
+    std::optional<VFootprint> Footprint = convertFootprint(E);
+    if (!Footprint || Footprint->Target->K != VExpr::Load) {
+      Errors.push_back(CurrentFn->Name +
+                       ": a loop's modifies names memory: *p, p[i], "
+                       "p[lo : n], p->f, or a reference");
+      continue;
+    }
+    Out.push_back(std::move(*Footprint));
+  }
+  return Out;
+}
+
+bool ASTConverter::checkLoopTermination(const Stmt *Loop, bool HasMeasure) {
+  const LoopContractInfo *LCI = Ctx.getLoopContract(Loop);
+  const bool MayDiverge = LCI && LCI->MayDiverge.isValid();
+  if (InGhost || CurrentFn->IsProof) {
+    if (MayDiverge) {
+      Errors.push_back(CurrentFn->Name +
+                       ": proof-only loops must terminate; decreases(*) is "
+                       "not allowed");
+      return false;
+    }
+    if (!HasMeasure) {
+      Errors.push_back(CurrentFn->Name +
+                       ": proof-only loops require a decreases clause");
+      return false;
+    }
+    return true;
+  }
+  if (MayDiverge) {
+    if (CurrentFn->DivergenceLoc.isInvalid())
+      CurrentFn->DivergenceLoc = LCI->MayDiverge;
+  } else if (!HasMeasure && !CurrentFn->IsSpec &&
+             CurrentFn->UnmeasuredLoop.isInvalid()) {
+    CurrentFn->UnmeasuredLoop = Loop->getBeginLoc();
+  }
+  return true;
 }
 
 std::unique_ptr<VFunction>
@@ -3084,7 +3570,392 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
   auto Result = convertExprImpl(E);
   if (Result && E)
     Result->EndLoc = E->getEndLoc();
+  if (Result && E && isTriggerMarked(E))
+    markTrigger(Result, E);
   return Result;
+}
+
+/// E with each occurrence of the variable Name replaced by With.
+static std::unique_ptr<VExpr> replaceVariable(const VExpr *E,
+                                              const std::string &Name,
+                                              const VExpr &With) {
+  auto Out = cloneVExpr(E);
+  std::function<void(std::unique_ptr<VExpr> &)> replace =
+      [&](std::unique_ptr<VExpr> &Slot) {
+        if (Slot->K == VExpr::Var &&
+            static_cast<VVarExpr &>(*Slot).Name == Name) {
+          Slot = cloneVExpr(&With);
+          return;
+        }
+        forEachVExprChildSlot(Slot.get(), replace);
+      };
+  replace(Out);
+  return Out;
+}
+
+std::unique_ptr<VExpr>
+ASTConverter::convertChoose(const ContractChooseExpr *C) {
+  const VarDecl *BoundVar = C->getBoundVar();
+  const std::string Binder = "__cppverify_bound_" +
+                             std::to_string(BoundValueId++) + "_" +
+                             BoundVar->getNameAsString();
+  const bool Unbounded = C->isUnbounded();
+  auto Lo = Unbounded ? nullptr : convertExpr(C->getLo());
+  auto Hi = Unbounded ? nullptr : convertExpr(C->getHi());
+  BoundValues.emplace(BoundVar, Binder);
+  auto Body = convertExpr(C->getBody());
+  BoundValues.erase(BoundVar);
+  if ((!Unbounded && (!Lo || !Hi)) || !Body)
+    return nullptr;
+  const SourceLocation Loc = C->getExprLoc();
+  const VType ValueType =
+      VType::fromQualType(BoundVar->getType(), VIntMode::Math, Ctx);
+
+  // The choice is a function of the values its range and body mention: each
+  // variable, result, old(...), and field becomes a parameter.
+  std::vector<std::pair<std::string, VType>> Params;
+  std::vector<std::unique_ptr<VExpr>> Args;
+  std::map<std::string, std::string> ParameterOf;
+  std::set<std::string> Bound{Binder};
+  std::function<void(std::unique_ptr<VExpr> &)> abstract =
+      [&](std::unique_ptr<VExpr> &Slot) {
+        VExpr *Node = Slot.get();
+        std::string Key;
+        if (Node->K == VExpr::Var) {
+          const auto *Var = static_cast<const VVarExpr *>(Node);
+          if (Bound.count(Var->Name))
+            return;
+          Key = Var->Name;
+        } else if (Node->K == VExpr::Result) {
+          Key = "result";
+        }
+        if (!Key.empty() || Node->K == VExpr::Old ||
+            Node->K == VExpr::FieldAccess) {
+          std::string &Parameter = ParameterOf[Key];
+          if (Key.empty() || Parameter.empty()) {
+            Parameter = "__choose_arg_" + std::to_string(Params.size());
+            Params.push_back({Parameter, Node->Ty});
+            Args.push_back(cloneVExpr(Node));
+          }
+          Slot = std::make_unique<VVarExpr>(Parameter, Node->Ty, Node->Loc);
+          if (Key.empty())
+            ParameterOf.erase(Key);
+          return;
+        }
+        bool Inserted = false;
+        if (Node->K == VExpr::Forall || Node->K == VExpr::Exists)
+          Inserted =
+              Bound.insert(static_cast<VQuantifiedExpr *>(Node)->Binder).second;
+        forEachVExprChildSlot(Node, abstract);
+        if (Inserted)
+          Bound.erase(static_cast<VQuantifiedExpr *>(Node)->Binder);
+      };
+  abstract(Body);
+  if (Lo)
+    abstract(Lo);
+  if (Hi)
+    abstract(Hi);
+
+  auto Fn = std::make_unique<VFunction>();
+  Fn->Name = "choose";
+  Fn->Identity = "__cppverify_choose_" + std::to_string(ChoiceFunctions.size()) +
+                 "_" + (CurrentFn ? CurrentFn->Identity : std::string("tu"));
+  Fn->ReturnType = ValueType;
+  Fn->IntMode = VIntMode::Math;
+  Fn->IsSpec = true;
+  Fn->Uninterpreted = true;
+  Fn->IsChoice = true;
+  Fn->Params = Params;
+  Fn->ReadsHeap = expressionReadsHeap(Body.get()) ||
+                  expressionReadsHeap(Lo.get()) ||
+                  expressionReadsHeap(Hi.get());
+  // Hilbert's choice: a witness, if there is one.
+  auto mathOf = [&](std::unique_ptr<VExpr> V) -> std::unique_ptr<VExpr> {
+    if (V->Ty.IntMode == VIntMode::Math)
+      return V;
+    const VType From = V->Ty;
+    return std::make_unique<VCastExpr>(std::move(V), From, ValueType, Loc);
+  };
+  VResultExpr Chosen(ValueType, Loc);
+  auto Holds = replaceVariable(Body.get(), Binder, Chosen);
+  if (!Unbounded)
+    Holds = std::make_unique<VBinOpExpr>(
+        VBinOp::And,
+        std::make_unique<VBinOpExpr>(
+            VBinOp::And,
+            std::make_unique<VBinOpExpr>(VBinOp::Le, mathOf(cloneVExpr(Lo.get())),
+                                         cloneVExpr(&Chosen), VType::makeBool(),
+                                         Loc),
+            std::make_unique<VBinOpExpr>(VBinOp::Lt, cloneVExpr(&Chosen),
+                                         mathOf(cloneVExpr(Hi.get())),
+                                         VType::makeBool(), Loc),
+            VType::makeBool(), Loc),
+        std::move(Holds), VType::makeBool(), Loc);
+  auto Witnessed = std::make_unique<VExistsExpr>(
+      Binder, std::move(Lo), std::move(Hi), std::move(Body), Loc, ValueType);
+  Fn->Postconditions.push_back(std::make_unique<VBinOpExpr>(
+      VBinOp::Or,
+      std::make_unique<VUnaryOpExpr>(VUnaryOp::Not, std::move(Witnessed),
+                                     VType::makeBool(), Loc),
+      std::move(Holds), VType::makeBool(), Loc));
+  const std::string Identity = Fn->Identity;
+  const bool ReadsHeap = Fn->ReadsHeap;
+  ChoiceFunctions.push_back(std::move(Fn));
+  auto Call = std::make_unique<VSpecCallExpr>("choose", Identity,
+                                              std::move(Args), ValueType, Loc,
+                                              ReadsHeap);
+  // Executable-style code stores the mathematical choice in a C++ type.
+  const VType Stored = VType::fromQualType(C->getType(), IntMode, Ctx);
+  if (!InContractExpression && Stored.IntMode == VIntMode::Machine &&
+      Stored.isInt())
+    return std::make_unique<VCastExpr>(std::move(Call), ValueType, Stored, Loc);
+  return Call;
+}
+
+/// Declared by cppverify.h: a function or member of namespace cppverify.
+static bool isCppVerifyBuiltin(const FunctionDecl *FD) {
+  if (!FD)
+    return false;
+  const DeclContext *DC = FD->getDeclContext();
+  if (const auto *RD = dyn_cast<CXXRecordDecl>(DC))
+    DC = RD->getDeclContext();
+  const auto *NS = dyn_cast<NamespaceDecl>(DC);
+  return NS && NS->getIdentifier() && NS->getIdentifier()->isStr("cppverify") &&
+         NS->getDeclContext()->isTranslationUnit();
+}
+
+/// A full-expression whose only temporaries are collections runs no
+/// destructor.
+static bool onlyCollectionTemporaries(const ExprWithCleanups *Cleanups) {
+  struct DestructorFinder : RecursiveASTVisitor<DestructorFinder> {
+    bool Found = false;
+    bool VisitCXXBindTemporaryExpr(CXXBindTemporaryExpr *B) {
+      Found |= !VType::collectionKind(B->getType());
+      return !Found;
+    }
+  } Finder;
+  Finder.TraverseStmt(const_cast<Expr *>(Cleanups->getSubExpr()));
+  return Cleanups->getNumObjects() == 0 && !Finder.Found;
+}
+
+std::unique_ptr<VExpr> ASTConverter::convertCollection(const Expr *E,
+                                                       bool &Handled) {
+  Handled = false;
+  E = E->IgnoreParens();
+  if (const auto *Cleanups = dyn_cast<ExprWithCleanups>(E)) {
+    if (!onlyCollectionTemporaries(Cleanups))
+      return nullptr;
+    Handled = true;
+    return convertExpr(Cleanups->getSubExpr());
+  }
+  const bool CollectionValue =
+      VType::collectionKind(E->getType()).has_value();
+  // Copies and temporaries of a collection are the collection.
+  if (CollectionValue) {
+    if (const auto *M = dyn_cast<MaterializeTemporaryExpr>(E)) {
+      Handled = true;
+      return convertExpr(M->getSubExpr());
+    }
+    if (const auto *B = dyn_cast<CXXBindTemporaryExpr>(E)) {
+      Handled = true;
+      return convertExpr(B->getSubExpr());
+    }
+    if (const auto *Ctor = dyn_cast<CXXConstructExpr>(E);
+        Ctor && Ctor->getNumArgs() == 1 &&
+        Ctor->getConstructor()->isCopyOrMoveConstructor()) {
+      Handled = true;
+      return convertExpr(Ctor->getArg(0));
+    }
+  }
+  const auto *Call = dyn_cast<CallExpr>(E);
+  if (!Call)
+    return nullptr;
+  const FunctionDecl *Callee = Call->getDirectCallee();
+  if (!isCppVerifyBuiltin(Callee))
+    return nullptr;
+  Handled = true;
+  const SourceLocation Loc = E->getExprLoc();
+
+  // The collection operated on, then the other operands.
+  std::vector<const Expr *> Operands;
+  if (const auto *Member = dyn_cast<CXXMemberCallExpr>(Call)) {
+    Operands.push_back(Member->getImplicitObjectArgument());
+    for (const Expr *Arg : Member->arguments())
+      Operands.push_back(Arg);
+  } else {
+    for (const Expr *Arg : Call->arguments())
+      Operands.push_back(Arg);
+  }
+  std::string Kind;
+  if (const auto *Method = dyn_cast<CXXMethodDecl>(Callee))
+    Kind = Method->getParent()->getName().str();
+  std::string Name;
+  if (Callee->isOverloadedOperator()) {
+    switch (Callee->getOverloadedOperator()) {
+    case OO_Subscript:
+      Name = Kind == "map" ? "get" : "index";
+      break;
+    case OO_Plus:
+      Name = "concat";
+      break;
+    case OO_EqualEqual:
+      Name = "==";
+      break;
+    case OO_ExclaimEqual:
+      Name = "!=";
+      break;
+    default:
+      break;
+    }
+  } else if (Callee->getIdentifier()) {
+    Name = Callee->getName().str();
+  }
+  if (Kind.empty()) {
+    // Free functions: seq_empty, seq_of, set_empty, multiset_empty, map_empty.
+    llvm::StringRef Free(Name);
+    if (Free == "seq_of") {
+      Kind = "seq";
+      Name = "unit";
+    } else if (Free.consume_back("_empty")) {
+      Kind = Free.str();
+      Name = "empty";
+    }
+  }
+  static const std::map<std::string, std::string> Renamed = {
+      {"seq.len", "seq.len"},           {"seq.push", "seq.push"},
+      {"seq.update", "seq.update"},     {"seq.subrange", "seq.subrange"},
+      {"seq.contains", "seq.contains"}, {"set.unite", "set.union"},
+      {"set.subset_of", "set.subset"}};
+  std::string Operation = Kind + "." + Name;
+  if (auto It = Renamed.find(Operation); It != Renamed.end())
+    Operation = It->second;
+
+  std::vector<std::unique_ptr<VExpr>> Args;
+  for (const Expr *Operand : Operands) {
+    auto Arg = convertExpr(Operand);
+    if (!Arg)
+      return nullptr;
+    Args.push_back(std::move(Arg));
+  }
+  if (Operation == ".valid") {
+    // cppverify::valid(p, n): the extent marker, as a spec whose body is
+    // true, exactly like a user-declared valid.
+    static const char Identity[] = "__cppverify_valid";
+    if (Args.size() != 2)
+      return nullptr;
+    if (llvm::none_of(BuiltinFunctions, [](const auto &Fn) {
+          return Fn->Identity == Identity;
+        })) {
+      auto Fn = std::make_unique<VFunction>();
+      Fn->Name = "valid";
+      Fn->Identity = Identity;
+      Fn->IsSpec = true;
+      Fn->IsBuiltin = true;
+      Fn->IntMode = VIntMode::Math;
+      Fn->ReturnType = VType::makeBool();
+      Fn->Params = {{"p", VType::makePtr()},
+                    {"n", VType::makeInt(VIntMode::Math, 64, true)}};
+      Fn->Body.push_back(std::make_unique<VReturnStmt>(
+          std::make_unique<VLiteralExpr>(1, VType::makeBool(), Loc), Loc));
+      BuiltinFunctions.push_back(std::move(Fn));
+    }
+    return std::make_unique<VSpecCallExpr>("valid", Identity, std::move(Args),
+                                           VType::makeBool(), Loc);
+  }
+  if (Name == "==" || Name == "!=") {
+    if (Args.size() != 2)
+      return nullptr;
+    return std::make_unique<VBinOpExpr>(Name == "==" ? VBinOp::Eq : VBinOp::Ne,
+                                        std::move(Args[0]), std::move(Args[1]),
+                                        VType::makeBool(), Loc);
+  }
+  VType ResultType;
+  if (std::optional<VTypeKind> Collection =
+          VType::collectionKind(Call->getType()))
+    ResultType = VType::makeCollection(*Collection);
+  else if (Call->getType()->isBooleanType())
+    ResultType = VType::makeBool();
+  else
+    ResultType = VType::makeInt(VIntMode::Math, 64, true);
+  return std::make_unique<VSpecCallExpr>(
+      Operation, "__cppverify." + Operation, std::move(Args), ResultType, Loc);
+}
+
+static bool mentionsVariable(const VExpr *E, const std::string &Name) {
+  if (!E)
+    return false;
+  if (E->K == VExpr::Var)
+    return static_cast<const VVarExpr *>(E)->Name == Name;
+  bool Found = false;
+  forEachVExprChild(E, [&](const VExpr *Child) {
+    Found |= mentionsVariable(Child, Name);
+  });
+  return Found;
+}
+
+bool ASTConverter::isTriggerMarked(const Expr *E) const {
+  while (E) {
+    if (Ctx.isTriggerTerm(E))
+      return true;
+    if (const auto *Paren = dyn_cast<ParenExpr>(E))
+      E = Paren->getSubExpr();
+    else if (const auto *Cast = dyn_cast<ImplicitCastExpr>(E))
+      E = Cast->getSubExpr();
+    else
+      return false;
+  }
+  return false;
+}
+
+/// Mark the term below the conversions as a trigger of its quantifier.
+void ASTConverter::markTrigger(std::unique_ptr<VExpr> &Result, const Expr *E) {
+  std::unique_ptr<VExpr> *Term = &Result;
+  while ((*Term)->K == VExpr::Cast &&
+         !static_cast<VCastExpr &>(**Term).IsTrigger)
+    Term = &static_cast<VCastExpr &>(**Term).Inner;
+  if ((*Term)->K == VExpr::Cast)
+    return;
+  auto collectionRead = [](const VExpr &Call) {
+    static const std::set<std::string> Reads = {
+        "__cppverify.seq.index", "__cppverify.set.contains",
+        "__cppverify.multiset.count", "__cppverify.map.get",
+        "__cppverify.map.contains"};
+    const std::string &Identity =
+        static_cast<const VSpecCallExpr &>(Call).CalleeIdentity;
+    return !llvm::StringRef(Identity).starts_with("__cppverify.") ||
+           Reads.count(Identity);
+  };
+  const bool Pattern =
+      (*Term)->K == VExpr::Load ||
+      ((*Term)->K == VExpr::SpecCall && collectionRead(**Term));
+  bool MentionsBinder = false;
+  for (const auto &[Decl, Binder] : BoundValues)
+    MentionsBinder |= mentionsVariable(Term->get(), Binder);
+  if (!Pattern || !MentionsBinder) {
+    Warnings.push_back(
+        {E->getExprLoc(),
+         !Pattern ? "trigger(...) is ignored: only a memory read, a "
+                    "collection read, or a spec function call can trigger a "
+                    "quantifier"
+                  : "trigger(...) is ignored: the term mentions no "
+                    "quantified variable"});
+    return;
+  }
+  const auto *Call = dyn_cast<CallExpr>(E->IgnoreParenImpCasts());
+  const FunctionDecl *Callee = Call ? Call->getDirectCallee() : nullptr;
+  if (const FunctionContractInfo *FCI =
+          Callee ? functionContract(Callee) : nullptr;
+      (*Term)->K == VExpr::SpecCall && FCI && FCI->Decreases.empty()) {
+      Warnings.push_back(
+          {E->getExprLoc(),
+           "trigger(...) is ignored: a call of a non-recursive spec function "
+           "is replaced by its body; mark a term of the body instead"});
+      return;
+    }
+  const VType Ty = (*Term)->Ty;
+  const SourceLocation Loc = (*Term)->Loc;
+  *Term = std::make_unique<VCastExpr>(std::move(*Term), Ty, Ty, Loc,
+                                      /*IsTrigger=*/true);
 }
 
 std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
@@ -3233,10 +4104,22 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
         return nullptr;
       }
       if (!VD->isLocalVarDeclOrParm() && Bound == BoundValues.end()) {
-        Errors.push_back(CurrentFn->Name +
-                         ": global variable access is unsupported: " +
-                         VD->getNameAsString());
-        return nullptr;
+        VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
+        if (std::optional<llvm::APSInt> Value = globalConstant(VD))
+          return std::make_unique<VLiteralExpr>(integerValueString(*Value), Ty,
+                                                E->getExprLoc());
+        if (CurrentFn->IsSpec) {
+          Errors.push_back(CurrentFn->Name +
+                           ": a spec function cannot read the mutable global " +
+                           VD->getNameAsString() +
+                           "; pass its value as a parameter");
+          return nullptr;
+        }
+        auto Address = globalAddress(VD, E->getExprLoc());
+        if (!Address)
+          return nullptr;
+        return std::make_unique<VLoadExpr>(std::move(Address), Ty,
+                                           E->getExprLoc());
       }
       requireInitialized(VD);
       if (AddressableLocals.count(VD)) {
@@ -3265,7 +4148,11 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
         return std::make_unique<VLoadExpr>(std::move(Address), Ty,
                                            E->getExprLoc());
       }
-      VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
+      VType Ty = VType::fromQualType(
+          E->getType(),
+          Bound != BoundValues.end() && contractMath() ? VIntMode::Math
+                                                      : IntMode,
+          Ctx);
       std::string ProvenanceVariable;
       if (auto It = DynamicPointerProvenanceVariables.find(VD);
           It != DynamicPointerProvenanceVariables.end())
@@ -3303,8 +4190,9 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
       return nullptr;
     VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
     if (U->getOpcode() == UO_Minus)
-      return std::make_unique<VUnaryOpExpr>(VUnaryOp::Neg, std::move(Op), Ty,
-                                            E->getExprLoc());
+      return std::make_unique<VUnaryOpExpr>(
+          VUnaryOp::Neg, contractMath() ? mathOperand(std::move(Op)) : std::move(Op),
+          Ty, E->getExprLoc());
     if (U->getOpcode() == UO_LNot)
       return std::make_unique<VUnaryOpExpr>(VUnaryOp::Not, std::move(Op), Ty,
                                             E->getExprLoc());
@@ -3415,6 +4303,12 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
       L = machineOperand(std::move(L), B->getLHS()->getType(), Ctx);
       R = machineOperand(std::move(R), B->getRHS()->getType(), Ctx);
     }
+    if (contractMath() && E->getType()->isIntegerType() &&
+        (*Op == VBinOp::Add || *Op == VBinOp::Sub || *Op == VBinOp::Mul ||
+         *Op == VBinOp::Div || *Op == VBinOp::Rem)) {
+      L = mathOperand(std::move(L));
+      R = mathOperand(std::move(R));
+    }
     VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
     if (Ty.Kind == VTypeKind::Ptr &&
         (B->getOpcode() == BO_Add || B->getOpcode() == BO_Sub)) {
@@ -3455,6 +4349,31 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
                        ": unsupported implicit pointer or aggregate cast");
       return nullptr;
     }
+    // In a contract an implicit integral conversion keeps the value. One
+    // that C++ performs without changing any value stays a machine extension.
+    const bool Widens =
+        From.BitWidth != 0 && To.BitWidth != 0 &&
+        (From.IsSigned == To.IsSigned ? To.BitWidth >= From.BitWidth
+                                      : !From.IsSigned &&
+                                            To.BitWidth > From.BitWidth);
+    if (contractMath() && ICE->getCastKind() == CK_IntegralCast &&
+        !ICE->isPartOfExplicitCast() && From.isInt() && To.isInt() &&
+        (!Widens || evaluatedIntMode(Inner.get()) == VIntMode::Math)) {
+      const Expr *Source = ICE->getSubExpr();
+      Expr::EvalResult Constant;
+      if (E->getType()->isUnsignedIntegerType() &&
+          Source->getType()->isSignedIntegerType() &&
+          !Source->isValueDependent() &&
+          Source->EvaluateAsInt(Constant, Ctx) &&
+          Constant.Val.getInt().isNegative())
+        Warnings.emplace_back(
+            E->getExprLoc(),
+            "contract arithmetic is mathematical: the negative value " +
+                llvm::toString(Constant.Val.getInt(), 10, true) +
+                " keeps its value here instead of converting to " +
+                E->getType().getAsString());
+      return mathOperand(std::move(Inner));
+    }
     // Usual arithmetic conversions do not bound a mathematical value.
     if (From.isInt() && evaluatedIntMode(Inner.get()) == VIntMode::Math &&
         To.isInt())
@@ -3483,14 +4402,23 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
                        ": unsupported explicit pointer or aggregate cast");
       return nullptr;
     }
-    if (sameRepresentation(From, To) &&
+    // A conversion into an enumeration's value range is checked.
+    const bool EnumRange = !To.EnumMin.empty() &&
+                           (From.EnumMin != To.EnumMin ||
+                            From.EnumMax != To.EnumMax);
+    if (sameRepresentation(From, To) && !EnumRange &&
         evaluatedIntMode(Inner.get()) == From.IntMode)
       return Inner;
     return std::make_unique<VCastExpr>(std::move(Inner), From, To,
                                        E->getExprLoc());
   }
   if (const auto *O = dyn_cast<OldExpr>(E)) {
+    // An enclosing quantifier's binder is a logical value, the same in every
+    // state.
     llvm::SmallPtrSet<const VarDecl *, 4> BoundVars;
+    for (const auto &[Decl, Name] : BoundValues)
+      if (const auto *VD = dyn_cast<VarDecl>(Decl))
+        BoundVars.insert(VD);
     if (const VarDecl *Local =
             findOldLocalWithoutEntryState(O->getInner(), BoundVars)) {
       Errors.push_back(CurrentFn->Name +
@@ -3612,23 +4540,35 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     return std::make_unique<VResultExpr>(
         VType::fromQualType(E->getType(), IntMode, Ctx), E->getExprLoc());
   }
+  if (const auto *Choose = dyn_cast<ContractChooseExpr>(E))
+    return convertChoose(Choose);
+  {
+    bool Handled = false;
+    auto Collection = convertCollection(E, Handled);
+    if (Handled)
+      return Collection;
+  }
   if (const auto *F = dyn_cast<ForallExpr>(E)) {
     std::string Binder =
         "__cppverify_bound_" + std::to_string(BoundValueId++) + "_" +
         (F->getBoundVar() ? F->getBoundVar()->getNameAsString() : "i");
-    auto Lo = convertExpr(F->getLo());
-    auto Hi = convertExpr(F->getHi());
+    // An unbounded binder ranges over the mathematical integers.
+    const bool Unbounded = F->isUnbounded();
+    auto Lo = Unbounded ? nullptr : convertExpr(F->getLo());
+    auto Hi = Unbounded ? nullptr : convertExpr(F->getHi());
     if (F->getBoundVar())
       BoundValues.emplace(F->getBoundVar(), Binder);
     auto Body = convertExpr(F->getBody());
     if (F->getBoundVar())
       BoundValues.erase(F->getBoundVar());
-    if (!Lo || !Hi || !Body)
+    if ((!Unbounded && (!Lo || !Hi)) || !Body)
       return nullptr;
+    const VIntMode BinderMode =
+        contractMath() || Unbounded ? VIntMode::Math : IntMode;
     VType BinderType =
         F->getBoundVar()
-            ? VType::fromQualType(F->getBoundVar()->getType(), IntMode, Ctx)
-            : VType::makeInt32(IntMode);
+            ? VType::fromQualType(F->getBoundVar()->getType(), BinderMode, Ctx)
+            : VType::makeInt32(BinderMode);
     return std::make_unique<VForallExpr>(Binder, std::move(Lo), std::move(Hi),
                                          std::move(Body), E->getExprLoc(),
                                          BinderType);
@@ -3637,19 +4577,23 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     std::string Binder =
         "__cppverify_bound_" + std::to_string(BoundValueId++) + "_" +
         (Ex->getBoundVar() ? Ex->getBoundVar()->getNameAsString() : "i");
-    auto Lo = convertExpr(Ex->getLo());
-    auto Hi = convertExpr(Ex->getHi());
+    // An unbounded binder ranges over the mathematical integers.
+    const bool Unbounded = Ex->isUnbounded();
+    auto Lo = Unbounded ? nullptr : convertExpr(Ex->getLo());
+    auto Hi = Unbounded ? nullptr : convertExpr(Ex->getHi());
     if (Ex->getBoundVar())
       BoundValues.emplace(Ex->getBoundVar(), Binder);
     auto Body = convertExpr(Ex->getBody());
     if (Ex->getBoundVar())
       BoundValues.erase(Ex->getBoundVar());
-    if (!Lo || !Hi || !Body)
+    if ((!Unbounded && (!Lo || !Hi)) || !Body)
       return nullptr;
+    const VIntMode BinderMode =
+        contractMath() || Unbounded ? VIntMode::Math : IntMode;
     VType BinderType =
         Ex->getBoundVar()
-            ? VType::fromQualType(Ex->getBoundVar()->getType(), IntMode, Ctx)
-            : VType::makeInt32(IntMode);
+            ? VType::fromQualType(Ex->getBoundVar()->getType(), BinderMode, Ctx)
+            : VType::makeInt32(BinderMode);
     return std::make_unique<VExistsExpr>(Binder, std::move(Lo), std::move(Hi),
                                          std::move(Body), E->getExprLoc(),
                                          BinderType);
@@ -3689,7 +4633,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
           const ParmVarDecl *Formal = ArgIndex < Callee->getNumParams()
                                           ? Callee->getParamDecl(ArgIndex)
                                           : nullptr;
-          if (Formal && Formal->getType()->isRecordType()) {
+          if (Formal && isFlattenedRecordType(Formal->getType())) {
             appendRecordCallArgument(A, Formal, Args);
           } else if (auto AE = convertExpr(A)) {
             // A mathematical value bound to a machine parameter is converted
@@ -3706,18 +4650,12 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
           }
           ++ArgIndex;
         }
+        // A mathematical result stays mathematical until it is stored.
         VType Ty = VType::fromQualType(
-            E->getType(), InContractExpression ? CalleeMode : IntMode, Ctx);
-        // Executable-style code stores a mathematical result in a C++ type.
-        if (!InContractExpression && CalleeMode == VIntMode::Math &&
-            Ty.IntMode == VIntMode::Machine && Ty.isInt()) {
-          VType MathTy = VType::fromQualType(E->getType(), VIntMode::Math, Ctx);
-          auto Call = std::make_unique<VSpecCallExpr>(
-              Callee->getNameAsString(), functionIdentity(Callee),
-              std::move(Args), MathTy, E->getExprLoc(), specReadsHeap(Callee));
-          return std::make_unique<VCastExpr>(std::move(Call), MathTy, Ty,
-                                             E->getExprLoc());
-        }
+            E->getType(),
+            InContractExpression || CalleeMode == VIntMode::Math ? CalleeMode
+                                                                 : IntMode,
+            Ctx);
         return std::make_unique<VSpecCallExpr>(
             Callee->getNameAsString(), functionIdentity(Callee),
             std::move(Args), Ty, E->getExprLoc(), specReadsHeap(Callee));
@@ -3802,7 +4740,18 @@ void ASTConverter::convertExecCallArg(
       }
     }
   }
-  Out = convertExpr(E);
+  Out = materialize(convertExpr(E), Formal ? Formal->getType() : E->getType());
+}
+
+std::unique_ptr<VExpr> ASTConverter::materialize(std::unique_ptr<VExpr> V,
+                                                 const VType &Target) {
+  if (!V || InContractExpression || !V->Ty.isInt() || !Target.isInt() ||
+      Target.IntMode != VIntMode::Machine ||
+      evaluatedIntMode(V.get()) != VIntMode::Math)
+    return V;
+  VType From = V->Ty;
+  SourceLocation Loc = V->Loc;
+  return std::make_unique<VCastExpr>(std::move(V), From, Target, Loc);
 }
 
 std::unique_ptr<VExpr> ASTConverter::convertCallResultValue(
@@ -3906,7 +4855,7 @@ void ASTConverter::convertExecCallArgs(
     const ParmVarDecl *Formal = Callee && ArgIndex < Callee->getNumParams()
                                     ? Callee->getParamDecl(ArgIndex)
                                     : nullptr;
-    if (Formal && Formal->getType()->isRecordType()) {
+    if (Formal && isFlattenedRecordType(Formal->getType())) {
       appendRecordCallArgument(A, Formal, Args);
     } else {
       std::unique_ptr<VExpr> Arg;
@@ -3993,6 +4942,9 @@ ASTConverter::convertAssignmentValue(const BinaryOperator *Assignment) {
   auto LHS = convertExpr(Assignment->getLHS());
   if (!LHS)
     return nullptr;
+  if (Op == VBinOp::BitAnd || Op == VBinOp::BitOr || Op == VBinOp::BitXor ||
+      Op == VBinOp::Shl || Op == VBinOp::Shr)
+    RHS = machineOperand(std::move(RHS), Assignment->getRHS()->getType(), Ctx);
   const auto *Compound = cast<CompoundAssignOperator>(Assignment);
   VType TargetTy =
       VType::fromQualType(Assignment->getLHS()->getType(), IntMode, Ctx);
@@ -4020,6 +4972,7 @@ void ASTConverter::appendAssignment(const Expr *LHS,
                                     std::vector<std::unique_ptr<VStmt>> &Out) {
   if (!LHS || !Value)
     return;
+  Value = materialize(std::move(Value), LHS->getType());
   if (!ghostAssignmentAllowed(LHS)) {
     Errors.push_back(CurrentFn->Name +
                      ": ghost code cannot modify executable state");
@@ -4070,9 +5023,18 @@ void ASTConverter::appendAssignment(const Expr *LHS,
   if (const auto *DRE = dyn_cast<DeclRefExpr>(LHS)) {
     if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
       if (!VD->isLocalVarDeclOrParm()) {
-        Errors.push_back(CurrentFn->Name +
-                         ": global variable assignment is unsupported: " +
-                         VD->getNameAsString());
+        if (InGhost || CurrentFn->IsProof || CurrentFn->IsSpec) {
+          Errors.push_back(CurrentFn->Name +
+                           ": ghost and proof code cannot modify the global " +
+                           VD->getNameAsString());
+          return;
+        }
+        auto Address = globalAddress(VD, Loc);
+        if (!Address)
+          return;
+        Out.push_back(
+            std::make_unique<VStoreStmt>(std::move(Address), std::move(Value),
+                                         Loc));
         return;
       }
       if (VD->getType()->isReferenceType()) {
@@ -4285,7 +5247,8 @@ bool ASTConverter::appendRecordInitializer(
     return false;
   unsigned Index = 0;
   for (const FieldDecl *Field : Definition->fields()) {
-    auto Value = convertExpr(Init->getInit(Index++));
+    auto Value = materialize(convertExpr(Init->getInit(Index++)),
+                             Field->getType());
     if (!Value)
       return true;
     Out.push_back(std::make_unique<VAssignStmt>(valueName(Target) + "." +
@@ -4607,6 +5570,7 @@ ASTConverter::convertScopedSubstatement(const Stmt *S) {
 void ASTConverter::appendReturn(std::unique_ptr<VExpr> Value,
                                 std::vector<std::unique_ptr<VStmt>> &Out,
                                 SourceLocation Loc) {
+  Value = materialize(std::move(Value), CurrentFn->ReturnType);
   if (Value && !ActiveAutomaticLocals.empty() && !Value->Ty.isAggregate() &&
       expressionReadsHeap(Value.get())) {
     VType Ty = Value->Ty;
@@ -4823,11 +5787,8 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           Decreases.push_back(std::move(E));
       InContractExpression = SavedContract;
     }
-    if ((InGhost || CurrentFn->IsProof) && Decreases.empty()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": proof-only loops require a decreases clause");
+    if (!checkLoopTermination(WS, !Decreases.empty()))
       return Out;
-    }
     const std::set<std::string> Before = InitializedValues;
     const bool BeforeReachable = InitializationPathReachable;
     ++LoopDepth;
@@ -4837,9 +5798,12 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     --LoopDepth;
     InitializedValues = Before;
     InitializationPathReachable = BeforeReachable;
-    Out.push_back(std::make_unique<VWhileStmt>(
+    auto Loop = std::make_unique<VWhileStmt>(
         std::move(Cond), std::move(Invariants), std::move(Decreases),
-        std::move(Body), WS->getBeginLoc()));
+        std::move(Body), WS->getBeginLoc());
+    if (const LoopContractInfo *LCI = Ctx.getLoopContract(WS))
+      Loop->Modifies = convertLoopFootprints(*LCI);
+    Out.push_back(std::move(Loop));
     return Out;
   }
   if (const auto *DS = dyn_cast<DoStmt>(S)) {
@@ -4875,9 +5839,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           Decreases.push_back(std::move(E));
       InContractExpression = SavedContract;
     }
-    if ((InGhost || CurrentFn->IsProof) && Decreases.empty()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": proof-only loops require a decreases clause");
+    if (!checkLoopTermination(DS, !Decreases.empty())) {
       InitializedValues = Before;
       InitializationPathReachable = BeforeReachable;
       return Out;
@@ -4888,9 +5850,12 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     // after the mandatory first iteration.
     for (const auto &Stmt : Body)
       Out.push_back(cloneVStmt(Stmt.get()));
-    Out.push_back(std::make_unique<VWhileStmt>(
+    auto Loop = std::make_unique<VWhileStmt>(
         std::move(Cond), std::move(Invariants), std::move(Decreases),
-        std::move(Body), DS->getBeginLoc()));
+        std::move(Body), DS->getBeginLoc());
+    if (const LoopContractInfo *LCI = Ctx.getLoopContract(DS))
+      Loop->Modifies = convertLoopFootprints(*LCI);
+    Out.push_back(std::move(Loop));
     InitializedValues = AfterFirst;
     InitializationPathReachable = AfterFirstReachable;
     return Out;
@@ -4932,9 +5897,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           Decreases.push_back(std::move(E));
       InContractExpression = SavedContract;
     }
-    if ((InGhost || CurrentFn->IsProof) && Decreases.empty()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": proof-only loops require a decreases clause");
+    if (!checkLoopTermination(FS, !Decreases.empty())) {
       leaveAutomaticScope(Out, FS->getEndLoc());
       return Out;
     }
@@ -4954,10 +5917,41 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     --LoopDepth;
     InitializedValues = BeforeLoop;
     InitializationPathReachable = BeforeLoopReachable;
-    Out.push_back(std::make_unique<VWhileStmt>(
+    auto Loop = std::make_unique<VWhileStmt>(
         std::move(Cond), std::move(Invariants), std::move(Decreases),
-        std::move(Body), FS->getBeginLoc()));
+        std::move(Body), FS->getBeginLoc());
+    if (const LoopContractInfo *LCI = Ctx.getLoopContract(FS))
+      Loop->Modifies = convertLoopFootprints(*LCI);
+    Out.push_back(std::move(Loop));
     leaveAutomaticScope(Out, FS->getEndLoc());
+    return Out;
+  }
+  if (const auto *Cleanups = dyn_cast<ExprWithCleanups>(S);
+      Cleanups && onlyCollectionTemporaries(Cleanups))
+    return convertStmt(Cleanups->getSubExpr());
+  if (const auto *OperatorCall = dyn_cast<CXXOperatorCallExpr>(S);
+      OperatorCall && OperatorCall->getOperator() == OO_Equal &&
+      OperatorCall->getNumArgs() == 2 &&
+      VType::collectionKind(OperatorCall->getArg(0)->getType())) {
+    if (!ghostAssignmentAllowed(OperatorCall->getArg(0))) {
+      Errors.push_back(CurrentFn->Name +
+                       ": ghost code cannot modify executable state");
+      return Out;
+    }
+    const auto *Target = dyn_cast<DeclRefExpr>(
+        OperatorCall->getArg(0)->IgnoreParenImpCasts());
+    const auto *TargetVar =
+        Target ? dyn_cast<VarDecl>(Target->getDecl()) : nullptr;
+    if (!TargetVar || !TargetVar->hasLocalStorage()) {
+      Errors.push_back(CurrentFn->Name +
+                       ": only a local collection can be assigned");
+      return Out;
+    }
+    if (auto Value = convertExpr(OperatorCall->getArg(1))) {
+      Out.push_back(std::make_unique<VAssignStmt>(
+          valueName(TargetVar), std::move(Value), OperatorCall->getExprLoc()));
+      markInitialized(TargetVar);
+    }
     return Out;
   }
   if (const auto *OperatorCall = dyn_cast<CXXOperatorCallExpr>(S)) {
@@ -5102,10 +6096,31 @@ ASTConverter::convertStmtBody(const Stmt *S) {
   if (const auto *CA = dyn_cast<ContractAssertStmt>(S)) {
     bool SavedContract = InContractExpression;
     InContractExpression = true;
-    if (auto C = convertExpr(CA->getCond()))
-      Out.push_back(std::make_unique<VContractAssertStmt>(std::move(C),
-                                                          CA->getBeginLoc()));
+    auto C = convertExpr(CA->getCond());
     InContractExpression = SavedContract;
+    if (!C)
+      return Out;
+    if (!CA->getBy()) {
+      Out.push_back(
+          std::make_unique<VContractAssertStmt>(std::move(C), CA->getBeginLoc()));
+      return Out;
+    }
+    // if (*) { proof; contract_assert(c); assume(false); } assume(c): the
+    // proof's facts prove c and go no further.
+    const SourceLocation Loc = CA->getBeginLoc();
+    const std::string Choice = "__assert_by_" + std::to_string(NextAssertBy++);
+    Out.push_back(std::make_unique<VAssignStmt>(
+        Choice, std::make_unique<VLiteralExpr>(0, VType::makeBool(), Loc), Loc));
+    Out.push_back(std::make_unique<VHavocStmt>(Choice, Loc));
+    std::vector<std::unique_ptr<VStmt>> Proof = convertStmt(CA->getBy());
+    auto Fact = cloneVExpr(C.get());
+    Proof.push_back(std::make_unique<VContractAssertStmt>(std::move(C), Loc));
+    Proof.push_back(std::make_unique<VAssumeStmt>(
+        std::make_unique<VLiteralExpr>(0, VType::makeBool(), Loc), Loc));
+    Out.push_back(std::make_unique<VIfStmt>(
+        std::make_unique<VVarExpr>(Choice, VType::makeBool(), Loc),
+        std::move(Proof), std::vector<std::unique_ptr<VStmt>>(), Loc));
+    Out.push_back(std::make_unique<VAssumeStmt>(std::move(Fact), Loc));
     return Out;
   }
   if (const auto *Delete = dyn_cast<CXXDeleteExpr>(S)) {
@@ -5412,7 +6427,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
                 VType::fromQualType(VD->getType(), IntMode, Ctx),
                 VD->getBeginLoc());
           } else {
-            Initializer = convertExpr(VD->getInit());
+            Initializer = materialize(convertExpr(VD->getInit()), VD->getType());
           }
         }
         if (VD->hasInit() && !Initializer)
@@ -5578,6 +6593,20 @@ ASTConverter::convertStmtBody(const Stmt *S) {
                                        Out);
         continue;
       }
+      if (VType::collectionKind(VD->getType())) {
+        const auto *Ctor = dyn_cast<CXXConstructExpr>(VD->getInit());
+        if (Ctor && Ctor->getNumArgs() == 0) {
+          Errors.push_back(CurrentFn->Name +
+                           ": a collection declaration needs an initializer");
+          continue;
+        }
+        if (auto Value = convertExpr(VD->getInit())) {
+          Out.push_back(std::make_unique<VAssignStmt>(
+              VD->getNameAsString(), std::move(Value), VD->getBeginLoc()));
+          markInitialized(VD);
+        }
+        continue;
+      }
       if (const auto *CE = dyn_cast<CXXConstructExpr>(VD->getInit())) {
         const CXXConstructorDecl *Ctor = CE->getConstructor();
         if (CE->getNumArgs() == 0 && Ctor->isDefaultConstructor() &&
@@ -5588,7 +6617,8 @@ ASTConverter::convertStmtBody(const Stmt *S) {
               dyn_cast<CallExpr>(VD->getInit()->IgnoreParenImpCasts())) {
         if (const FunctionDecl *Callee = CE->getDirectCallee()) {
           if (calleeIsSpec(Callee)) {
-            if (auto Val = convertExpr(VD->getInit())) {
+            if (auto Val = materialize(convertExpr(VD->getInit()),
+                                       VD->getType())) {
               Out.push_back(std::make_unique<VAssignStmt>(
                   VD->getNameAsString(), std::move(Val), VD->getBeginLoc()));
               markInitialized(VD);
@@ -5598,7 +6628,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           if (functionContract(Callee)) {
             std::vector<std::unique_ptr<VExpr>> Args;
             convertExecCallArgs(CE, Out, Args);
-            const bool RecordResult = VD->getType()->isRecordType();
+            const bool RecordResult = isFlattenedRecordType(VD->getType());
             const std::string ResultTarget =
                 RecordResult ? VD->getNameAsString()
                              : "__local_call_" + std::to_string(++NestedCallId);
@@ -5632,7 +6662,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
                          "unsupported");
         continue;
       }
-      auto Val = convertExpr(VD->getInit());
+      auto Val = materialize(convertExpr(VD->getInit()), VD->getType());
       if (Val) {
         Out.push_back(std::make_unique<VAssignStmt>(
             VD->getNameAsString(), std::move(Val), VD->getBeginLoc()));

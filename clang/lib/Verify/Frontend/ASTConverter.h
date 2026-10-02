@@ -23,6 +23,7 @@ class ASTConverter {
   VFunction *CurrentFn = nullptr;
   unsigned NestedCallId = 0;
   std::vector<std::string> Errors;
+  std::vector<std::pair<SourceLocation, std::string>> Warnings;
   /// Maps unqualified field name -> "param." for type_invariant lowering.
   std::map<std::string, std::string> FieldSubstPrefix;
   bool TrackInitialization = false;
@@ -56,6 +57,9 @@ class ASTConverter {
     bool IsGhost = false;
   };
   std::vector<EnclosingLoop> EnclosingLoops;
+  /// Fixed addresses of the mutable global variables, assigned on first use.
+  std::map<const VarDecl *, uint64_t> GlobalAddresses;
+  uint64_t NextGlobalAddress = GlobalRegionBase;
 
 public:
   explicit ASTConverter(
@@ -65,9 +69,39 @@ public:
 
   std::vector<std::unique_ptr<VFunction>> convertTranslationUnit();
   const std::vector<std::string> &getErrors() const { return Errors; }
+  const std::vector<std::pair<SourceLocation, std::string>> &
+  getWarnings() const {
+    return Warnings;
+  }
 
 private:
+  /// Contract arithmetic is mathematical, as in ACSL and Verus spec code: an
+  /// integer operand is read exactly and no operation wraps.
+  bool contractMath() const {
+    return InContractExpression && IntMode == VIntMode::Machine;
+  }
   std::unique_ptr<VFunction> convertFunction(const FunctionDecl *FD);
+  /// Numbers the nondeterministic choices of contract_assert(...) by.
+  unsigned NextAssertBy = 0;
+  /// The functions choose(...) expressions are lifted to.
+  std::vector<std::unique_ptr<VFunction>> ChoiceFunctions;
+  /// Specs of <cppverify.h> the translation unit calls, such as valid.
+  std::vector<std::unique_ptr<VFunction>> BuiltinFunctions;
+  std::unique_ptr<VExpr> convertChoose(const ContractChooseExpr *C);
+  /// A cppverify collection operation or copy, with Handled set; null and
+  /// Handled clear for anything else.
+  std::unique_ptr<VExpr> convertCollection(const Expr *E, bool &Handled);
+  bool checkLoopTermination(const Stmt *Loop, bool HasMeasure);
+  bool isTriggerMarked(const Expr *E) const;
+  void markTrigger(std::unique_ptr<VExpr> &Result, const Expr *E);
+  /// A modifies footprint: an lvalue, or the cells p[lo : n].
+  std::optional<VFootprint> convertFootprint(const Expr *E);
+  /// A loop's declared footprints, each naming memory.
+  std::vector<VFootprint> convertLoopFootprints(const LoopContractInfo &LCI);
+  /// A global's constant value, when it is const with a constant initializer.
+  std::optional<llvm::APSInt> globalConstant(const VarDecl *VD) const;
+  /// The address of a supported mutable global, or null after an error.
+  std::unique_ptr<VExpr> globalAddress(const VarDecl *VD, SourceLocation Loc);
   std::unique_ptr<VFunction> convertConstexprSpec(const FunctionDecl *FD);
   std::unique_ptr<VExpr> convertExpr(const Expr *E);
   std::unique_ptr<VExpr> convertExprImpl(const Expr *E);
@@ -144,6 +178,17 @@ private:
   void convertExecCallArg(const Expr *E, const ParmVarDecl *Formal,
                           std::vector<std::unique_ptr<VStmt>> &Prelude,
                           std::unique_ptr<VExpr> &Out);
+  /// A mathematical value stored in a machine-typed C++ object (a ghost or
+  /// proof variable, a parameter, a return value) is converted there, and
+  /// must fit; until then it stays mathematical.
+  std::unique_ptr<VExpr> materialize(std::unique_ptr<VExpr> V,
+                                     const VType &Target);
+  std::unique_ptr<VExpr> materialize(std::unique_ptr<VExpr> V,
+                                     QualType Target) {
+    return materialize(std::move(V),
+                       VType::fromQualType(Target.getNonReferenceType(),
+                                           IntMode, Ctx));
+  }
   std::unique_ptr<VExpr> convertCallResultValue(std::string Name,
                                                 QualType SourceType,
                                                 const VType &TargetType,
