@@ -171,6 +171,16 @@ void verify::dumpVExpr(const VExpr *E, llvm::raw_ostream &OS, unsigned Depth) {
     dumpVExpr(Store->Val.get(), OS, Depth + 1);
     break;
   }
+  case VExpr::HeapFrame: {
+    const auto *Frame = static_cast<const VHeapFrameExpr *>(E);
+    OS << "heap_frame " << Frame->HeapBefore << " -> " << Frame->HeapAfter
+       << " except\n";
+    for (const auto &[Lo, Hi] : Frame->Regions) {
+      dumpVExpr(Lo.get(), OS, Depth + 1);
+      dumpVExpr(Hi.get(), OS, Depth + 1);
+    }
+    break;
+  }
   case VExpr::FieldAccess: {
     const auto *F = static_cast<const VFieldAccessExpr *>(E);
     OS << "field " << F->Field << "\n";
@@ -265,6 +275,14 @@ static void dumpVStmt(const VStmt &S, llvm::raw_ostream &OS, unsigned Depth) {
       dumpVExpr(Inv.get(), OS, Depth + 1);
     for (const auto &D : W.Decreases)
       dumpVExpr(D.get(), OS, Depth + 1);
+    for (const VFootprint &M : W.Modifies) {
+      ind(OS, Depth + 1) << "modifies\n";
+      dumpVExpr(M.Target.get(), OS, Depth + 2);
+      if (M.Count) {
+        ind(OS, Depth + 2) << "range " << M.ElementSize << "\n";
+        dumpVExpr(M.Count.get(), OS, Depth + 3);
+      }
+    }
     for (const auto &B : W.Body)
       dumpVStmt(*B, OS, Depth + 1);
     break;
@@ -342,6 +360,14 @@ static std::string leafTypeToken(const VType &Ty) {
     return "ptr(" + std::to_string(Ty.PointeeSizeBytes) + ")";
   case VTypeKind::Struct:
     return "struct";
+  case VTypeKind::Seq:
+    return "seq";
+  case VTypeKind::Set:
+    return "set";
+  case VTypeKind::Multiset:
+    return "multiset";
+  case VTypeKind::Map:
+    return "map";
   case VTypeKind::Array:
     return "array";
   case VTypeKind::Unsupported:
@@ -363,8 +389,13 @@ void verify::dumpVFunction(const VFunction &Fn, llvm::raw_ostream &OS) {
   for (const auto &Post : Fn.Postconditions)
     dumpVExpr(Post.get(), OS, 2);
   ind(OS, 1) << "modifies\n";
-  for (const auto &Modifies : Fn.Modifies)
-    dumpVExpr(Modifies.get(), OS, 2);
+  for (const VFootprint &Modifies : Fn.Modifies) {
+    dumpVExpr(Modifies.Target.get(), OS, 2);
+    if (Modifies.Count) {
+      ind(OS, 2) << "range " << Modifies.ElementSize << "\n";
+      dumpVExpr(Modifies.Count.get(), OS, 3);
+    }
+  }
   for (const VValidExtent &Extent : Fn.ValidExtents) {
     ind(OS, 1) << "valid_extent " << Extent.Base << " stride "
                << Extent.PointerType.PointeeSizeBytes << "\n";
@@ -486,6 +517,10 @@ static const char *logicExprToken(LogicExpr::Kind Kind) {
     return "heap_select";
   case LogicExpr::Store:
     return "heap_store";
+  case LogicExpr::HeapFrame:
+    return "heap_frame";
+  case LogicExpr::Collection:
+    return "collection";
   case LogicExpr::Forall:
     return "forall";
   case LogicExpr::Exists:
@@ -527,6 +562,8 @@ static void dumpLogicExpr(const LogicExpr *Expr, llvm::raw_ostream &OS,
     OS << logicExprToken(Expr->K) << " " << Expr->Binder;
   else if (Expr->K == LogicExpr::SpecCall)
     OS << logicExprToken(Expr->K) << " " << Expr->SpecCallee;
+  else if (Expr->K == LogicExpr::Collection)
+    OS << logicCollectionOpName(Expr->CollectionOp);
   else
     OS << logicExprToken(Expr->K);
   OS << " : ";
@@ -534,6 +571,10 @@ static void dumpLogicExpr(const LogicExpr *Expr, llvm::raw_ostream &OS,
   OS << "\n";
   for (const auto &Child : Expr->Children)
     dumpLogicExpr(Child.get(), OS, Depth + 1);
+  for (const auto &Pattern : Expr->Patterns) {
+    ind(OS, Depth + 1) << "trigger\n";
+    dumpLogicExpr(Pattern.get(), OS, Depth + 2);
+  }
 }
 
 void verify::dumpVC(const ObligationModule &Module, llvm::raw_ostream &OS,
