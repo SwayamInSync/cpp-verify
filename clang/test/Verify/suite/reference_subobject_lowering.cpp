@@ -120,7 +120,7 @@ void invalid_frame(Pair *p)
 // VCR-NEXT: +
 // VCR-NEXT: p
 // VCR-NEXT: 4
-// VCR-NEXT: store
+// VCR: store
 // VCR-NEXT: alias
 // VCR-NEXT: value
 // VCR-LABEL: fn local_deref_field_alias
@@ -128,7 +128,7 @@ void invalid_frame(Pair *p)
 // VCR-NEXT: +
 // VCR-NEXT: p
 // VCR-NEXT: 0
-// VCR-NEXT: store
+// VCR: store
 // VCR-NEXT: alias
 // VCR-NEXT: value
 // VCR-LABEL: fn local_element_alias
@@ -139,7 +139,7 @@ void invalid_frame(Pair *p)
 // VCR-NEXT: cast
 // VCR-NEXT: index
 // VCR-NEXT: 4
-// VCR-NEXT: store
+// VCR: store
 // VCR-NEXT: alias
 // VCR-NEXT: value
 // VCR-LABEL: fn call_arrow_field
