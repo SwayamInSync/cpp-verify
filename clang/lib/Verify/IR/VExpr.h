@@ -6,7 +6,9 @@
 #include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include <memory>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace clang {
 namespace verify {
@@ -103,6 +105,11 @@ public:
   std::string Name;
   /// SSA companion carrying the lifetime identity of a local pointer value.
   std::string ProvenanceVariable;
+  /// The objects a pointer may address here (annotatePointerOrigins); unset
+  /// when unknown, empty when only null.
+  std::optional<std::vector<std::string>> Origins;
+  /// With several origins, the variable holding which one.
+  std::string OriginCompanion;
   VVarExpr(std::string Name, VType Ty, SourceLocation Loc,
            std::string ProvenanceVariable = "")
       : VExpr(Var, Ty, Loc), Name(std::move(Name)),
