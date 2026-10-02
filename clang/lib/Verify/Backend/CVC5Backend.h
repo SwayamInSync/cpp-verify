@@ -24,6 +24,7 @@ class CVC5VerifyBackend : public VerifyBackend {
   std::string SolverPath;
   std::string SolverPathError;
   unsigned TimeoutMs;
+  std::optional<unsigned> CollectionTimeoutMs;
   unsigned ResourceLimit;
   unsigned Jobs;
   uint64_t MaxQueryNodes;
