@@ -21,6 +21,9 @@
 #include "llvm/Support/raw_ostream.h"
 #include <cstdlib>
 #include <limits>
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
 
 using namespace clang;
 using namespace clang::tooling;
@@ -136,8 +139,21 @@ static cl::opt<uint64_t> ProofCacheMaxEntries(
 
 static cl::opt<bool> CheckUB(
     "check-ub",
-    cl::desc("Enable valid(p, n)-based buffer bounds checks in addition to "
-             "always-on expression definedness checks"),
+    cl::desc("Check memory accesses and pointer arithmetic against the "
+             "objects they may address (the default)"),
+    cl::init(true), cl::cat(CppVerifyCategory));
+
+static cl::opt<bool> NoCheckUB(
+    "no-check-ub",
+    cl::desc("Do not check memory accesses against objects; only the "
+             "always-on expression definedness checks remain"),
+    cl::init(false), cl::cat(CppVerifyCategory));
+
+static cl::opt<bool> ProfileQuantifiers(
+    "profile-quantifiers",
+    cl::desc("For an unresolved Z3 query, rerun it counting each "
+             "quantifier's instantiations and report the busiest, to find "
+             "matching loops and poor triggers"),
     cl::init(false), cl::cat(CppVerifyCategory));
 
 static cl::opt<std::string> ObligationOut(
@@ -251,7 +267,8 @@ public:
       VOpts.ProofCachePath = ProofCache.getValue();
       VOpts.ProofCacheMaxBytes = proofCacheMaxBytes();
       VOpts.ProofCacheMaxEntries = ProofCacheMaxEntries.getValue();
-      VOpts.CheckUB = CheckUB.getValue();
+      VOpts.CheckUB = CheckUB.getValue() && !NoCheckUB.getValue();
+      VOpts.ProfileQuantifiers = ProfileQuantifiers.getValue();
       VOpts.Diagnostics = DiagnosticsFormat.getValue();
       VOpts.ObligationOut = gObligationOut;
       if (!verify::verifyTranslationUnit(Ctx, llvm::outs(), VOpts))
@@ -652,6 +669,12 @@ static int replayObligationArchive() {
 
 int main(int argc, const char **argv) {
   llvm::InitLLVM X(argc, argv);
+#if defined(__GLIBC__)
+  // Each obligation's Z3 context frees about 17 MB. Without padding, glibc
+  // returns it to the system when it lies at the top of the heap, and the
+  // next context faults every page back in.
+  mallopt(M_TOP_PAD, 64 << 20);
+#endif
 
   static const char ReplayPlaceholder[] = "cppverify-obligation-replay.cpp";
   bool HasObligationInput = false;
