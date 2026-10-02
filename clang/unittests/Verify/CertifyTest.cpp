@@ -6,14 +6,17 @@
 //===----------------------------------------------------------------------===//
 
 #include "Backend/Certify.h"
+#include "Backend/Presburger.h"
 #include "Backend/VerifyBackend.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/Program.h"
 #include "gtest/gtest.h"
 #include <cstdlib>
+#include <functional>
 #include <map>
 #include <random>
+#include <z3++.h>
 
 using namespace clang::verify;
 using llvm::APInt;
@@ -1378,3 +1381,189 @@ TEST(CertifyTest, AgreesWithCVC5Encodings) {
 }
 
 } // namespace
+
+// --- Presburger arithmetic --------------------------------------------------
+
+TEST(CertifyTest, PresburgerDecidesClosedFormulas) {
+  namespace pb = clang::verify::presburger;
+  const pb::Linear X = pb::Linear::variable("x");
+  const pb::Linear Y = pb::Linear::variable("y");
+  const pb::Linear Z = pb::Linear::variable("z");
+  auto c = [](int64_t V) { return pb::Linear::constant(CertInt(V)); };
+  auto two = [](const pb::Linear &T) { return T.scaled(CertInt(2)); };
+  auto decide = [](const pb::FormulaPtr &F) { return pb::decide(F, 100000); };
+  EXPECT_EQ(decide(pb::forall("x", pb::exists("y", pb::equal(Y, X + c(1))))),
+            true);
+  EXPECT_EQ(decide(pb::forall("x", pb::exists("y", pb::equal(two(Y), X)))),
+            false);
+  EXPECT_EQ(decide(pb::forall(
+                "x", pb::exists(
+                         "y", pb::disjunction({pb::equal(two(Y), X),
+                                               pb::equal(two(Y) + c(1), X)})))),
+            true);
+  EXPECT_EQ(decide(pb::exists("x", pb::equal(two(X), c(3)))), false);
+  EXPECT_EQ(decide(pb::forall(
+                "x", pb::disjunction({pb::negation(pb::divides(CertInt(6), X)),
+                                      pb::divides(CertInt(3), X)}))),
+            true);
+  EXPECT_EQ(decide(pb::forall(
+                "x", pb::disjunction({pb::negation(pb::divides(CertInt(3), X)),
+                                      pb::divides(CertInt(6), X)}))),
+            false);
+  // x = 3: 3x + 1 = 10 and x is odd.
+  EXPECT_EQ(decide(pb::exists(
+                "x", pb::conjunction(
+                         {pb::lessEqual(X.scaled(CertInt(3)) + c(1), c(10)),
+                          pb::lessEqual(c(10), X.scaled(CertInt(3)) + c(4)),
+                          pb::negation(pb::divides(CertInt(2), X))}))),
+            true);
+  // Between x and x + 2 lies only x + 1, which is odd for even x.
+  EXPECT_EQ(decide(pb::forall(
+                "x", pb::exists("y", pb::conjunction(
+                                         {pb::less(X, Y), pb::less(Y, X + c(2)),
+                                          pb::divides(CertInt(2), Y)})))),
+            false);
+  EXPECT_EQ(
+      decide(pb::forall(
+          "x",
+          pb::exists("y", pb::forall("z", pb::disjunction({pb::lessEqual(Z, Y),
+                                                           pb::less(X, Z)}))))),
+      true);
+}
+
+TEST(CertifyTest, PresburgerAgreesWithZ3) {
+  // Random sentences over three variables: Cooper's elimination and Z3 must
+  // agree wherever Z3 decides.
+  namespace pb = clang::verify::presburger;
+  std::mt19937_64 Random(7);
+  auto pick = [&](int64_t Low, int64_t High) {
+    return std::uniform_int_distribution<int64_t>(Low, High)(Random);
+  };
+  z3::context Ctx;
+  const char *Names[] = {"a", "b", "c"};
+  unsigned Compared = 0;
+  unsigned TooLarge = 0;
+  for (unsigned Round = 0; Round != 300; ++Round) {
+    const unsigned Depth = static_cast<unsigned>(pick(1, 3));
+    auto term = [&](pb::Linear &P, z3::expr &E) {
+      P = pb::Linear::constant(CertInt(pick(-6, 6)));
+      E = Ctx.int_val(static_cast<int>(P.Constant.bits(64).getSExtValue()));
+      for (unsigned V = 0; V != Depth; ++V) {
+        const int64_t Coefficient = pick(-3, 3);
+        P = P + pb::Linear::variable(Names[V]).scaled(CertInt(Coefficient));
+        E = E + Ctx.int_val(static_cast<int>(Coefficient)) *
+                    Ctx.int_const(Names[V]);
+      }
+    };
+    std::function<std::pair<pb::FormulaPtr, z3::expr>(unsigned)> formula =
+        [&](unsigned Level) -> std::pair<pb::FormulaPtr, z3::expr> {
+      if (Level == 0 || pick(0, 2) == 0) {
+        pb::Linear P;
+        z3::expr E(Ctx);
+        term(P, E);
+        switch (pick(0, 2)) {
+        case 0:
+          return {pb::atMostZero(P), E <= 0};
+        case 1:
+          return {pb::zero(P), E == 0};
+        default: {
+          const int64_t D = pick(2, 3);
+          return {pb::divides(CertInt(D), P),
+                  z3::mod(E, Ctx.int_val(static_cast<int>(D))) == 0};
+        }
+        }
+      }
+      auto [L, LE] = formula(Level - 1);
+      auto [R, RE] = formula(Level - 1);
+      switch (pick(0, 2)) {
+      case 0:
+        return {pb::conjunction({L, R}), LE && RE};
+      case 1:
+        return {pb::disjunction({L, R}), LE || RE};
+      default:
+        return {pb::negation(L), !LE};
+      }
+    };
+    auto [Body, BodyE] = formula(2);
+    pb::FormulaPtr Sentence = Body;
+    z3::expr SentenceE = BodyE;
+    for (unsigned V = Depth; V-- > 0;) {
+      z3::expr_vector Bound(Ctx);
+      Bound.push_back(Ctx.int_const(Names[V]));
+      if (pick(0, 1)) {
+        Sentence = pb::forall(Names[V], Sentence);
+        SentenceE = z3::forall(Bound, SentenceE);
+      } else {
+        Sentence = pb::exists(Names[V], Sentence);
+        SentenceE = z3::exists(Bound, SentenceE);
+      }
+    }
+    std::optional<bool> Ours = pb::decide(Sentence, 1000000);
+    if (!Ours) {
+      ++TooLarge;
+      continue;
+    }
+    z3::solver Solver(Ctx);
+    z3::params Params(Ctx);
+    Params.set("timeout", 5000u);
+    Solver.set(Params);
+    Solver.add(SentenceE);
+    const z3::check_result Theirs = Solver.check();
+    if (Theirs == z3::unknown)
+      continue;
+    ++Compared;
+    EXPECT_EQ(*Ours, Theirs == z3::sat) << SentenceE.to_string();
+  }
+  EXPECT_GT(Compared, 250u);
+  EXPECT_LT(TooLarge, 15u);
+}
+
+TEST(CertifyTest, NestedUnboundedQuantifiersAreDecided) {
+  // s = [3, 1, 2]: not every element has a larger one, but every element
+  // has one at least as large.
+  TableModel Model;
+  Model.Constants["s"] =
+      LogicValue::sequence({CertInt(3), CertInt(1), CertInt(2)});
+  ObligationModule Module;
+  auto read = [](const char *Binder) {
+    Expr Read = node(LogicExpr::Collection, math(),
+                     variable("s", LogicSort::collection(LogicSortKind::Seq)),
+                     variable(Binder, math()));
+    Read->CollectionOp = LogicCollectionOp::SeqIndex;
+    return Read;
+  };
+  auto length = [] {
+    Expr Length =
+        node(LogicExpr::Collection, math(),
+             variable("s", LogicSort::collection(LogicSortKind::Seq)));
+    Length->CollectionOp = LogicCollectionOp::SeqLength;
+    return Length;
+  };
+  auto inside = [&](const char *Binder) {
+    return node(
+        LogicExpr::And, LogicSort::boolSort(),
+        boolean(LogicExpr::Le, mathLiteral(0), variable(Binder, math())),
+        boolean(LogicExpr::Lt, variable(Binder, math()), length()));
+  };
+  auto everyHasAbove = [&](LogicExpr::Kind Compare) {
+    Expr Inner = node(LogicExpr::Exists, LogicSort::boolSort(),
+                      node(LogicExpr::And, LogicSort::boolSort(), inside("j"),
+                           boolean(Compare, read("j"), read("i"))));
+    Inner->Binder = "j";
+    Expr Outer = node(LogicExpr::Forall, LogicSort::boolSort(),
+                      node(LogicExpr::Or, LogicSort::boolSort(),
+                           negation(inside("i")), std::move(Inner)));
+    Outer->Binder = "i";
+    return Outer;
+  };
+  EXPECT_EQ(certifyCounterexample(
+                Module, *negation(everyHasAbove(LogicExpr::Gt)), Model)
+                .Outcome,
+            CertifyOutcome::Certified);
+  EXPECT_EQ(certifyCounterexample(Module, *everyHasAbove(LogicExpr::Ge), Model)
+                .Outcome,
+            CertifyOutcome::Certified);
+  EXPECT_EQ(certifyCounterexample(Module, *everyHasAbove(LogicExpr::Gt), Model)
+                .Outcome,
+            CertifyOutcome::Inconsistent);
+}
