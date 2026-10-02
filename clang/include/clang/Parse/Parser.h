@@ -917,6 +917,8 @@ private:
   bool isContractWhenClause();
   /// behavior(name, assumes), complete_behaviors, or disjoint_behaviors.
   bool isContractBehaviorClause();
+  /// inductive, on a spec predicate.
+  bool isContractInductiveClause();
 
   DeclGroupPtrTy ParseDeclarationOrFunctionDefinition(
       ParsedAttributes &DeclAttrs, ParsedAttributes &DeclSpecAttrs,
