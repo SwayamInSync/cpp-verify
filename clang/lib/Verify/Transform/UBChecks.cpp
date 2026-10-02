@@ -1,6 +1,7 @@
 //===--- UBChecks.cpp - valid(p, n) extent obligations --------------------===//
 #include "UBChecks.h"
 #include "../IR/VExpr.h"
+#include "Origins.h"
 #include "llvm/ADT/STLExtras.h"
 #include <map>
 #include <set>
@@ -314,8 +315,38 @@ struct UBInstrumenter {
     return Result;
   }
 
-  // Addresses lie in one object they may address: their parameter's when
-  // they step from one, otherwise any parameter's or their root's own.
+  // Addresses lie in a global's object of Size bytes at Address.
+  static std::unique_ptr<VExpr>
+  globalMembership(const std::string &Origin, const VType &PointerType,
+                   const std::vector<const VExpr *> &Within, bool Closed,
+                   SourceLocation Loc) {
+    auto [Address, Size] = globalOriginExtent(Origin);
+    std::unique_ptr<VExpr> All =
+        std::make_unique<VLiteralExpr>(true, VType::makeBool(), Loc);
+    for (const VExpr *At : Within) {
+      auto Start = std::make_unique<VLiteralExpr>(Address, PointerType, Loc);
+      auto End = std::make_unique<VBinOpExpr>(
+          VBinOp::Add, cloneVExpr(Start.get()),
+          std::make_unique<VLiteralExpr>(std::to_string(Size), mathOffsetType(),
+                                         Loc),
+          PointerType, Loc);
+      auto Low = std::make_unique<VBinOpExpr>(
+          VBinOp::Le, std::move(Start), cloneVExpr(At), VType::makeBool(), Loc);
+      auto High = std::make_unique<VBinOpExpr>(Closed ? VBinOp::Le : VBinOp::Lt,
+                                               cloneVExpr(At), std::move(End),
+                                               VType::makeBool(), Loc);
+      All = std::make_unique<VBinOpExpr>(
+          VBinOp::And, std::move(All),
+          std::make_unique<VBinOpExpr>(VBinOp::And, std::move(Low),
+                                       std::move(High), VType::makeBool(), Loc),
+          VType::makeBool(), Loc);
+    }
+    return All;
+  }
+
+  // Addresses lie in one object they may address: the one their origin
+  // names when it is known, else their parameter's when they step from one,
+  // otherwise any parameter's or their root's own.
   std::unique_ptr<VExpr> sameObject(const VExpr *Root,
                                     const std::vector<const VExpr *> &Within,
                                     bool Closed, SourceLocation Loc) const {
@@ -331,6 +362,36 @@ struct UBInstrumenter {
       }
       return All;
     };
+    // A pointer whose origins are known stays in the object it came from.
+    if (auto Origins = pointerOrigins(Root)) {
+      auto Term = Origins->size() > 1 ? pointerOriginTerm(Root) : nullptr;
+      std::unique_ptr<VExpr> Any =
+          std::make_unique<VLiteralExpr>(false, VType::makeBool(), Loc);
+      for (const std::string &Origin : *Origins) {
+        std::unique_ptr<VExpr> In;
+        if (isGlobalOrigin(Origin)) {
+          In = globalMembership(Origin, Root->Ty, Within, Closed, Loc);
+        } else {
+          auto Object = llvm::find_if(Objects, [&](const AbstractObject &O) {
+            return O.Name == Origin;
+          });
+          if (Object == Objects.end())
+            continue;
+          In = inObject(*Object);
+        }
+        if (Term)
+          In = std::make_unique<VBinOpExpr>(
+              VBinOp::And,
+              std::make_unique<VBinOpExpr>(VBinOp::Eq, cloneVExpr(Term.get()),
+                                           originIdentity(Origin, Loc),
+                                           VType::makeBool(), Loc),
+              std::move(In), VType::makeBool(), Loc);
+        Any = std::make_unique<VBinOpExpr>(
+            VBinOp::Or, std::move(Any), std::move(In), VType::makeBool(), Loc);
+      }
+      if (!Origins->empty() && (Origins->size() == 1 || Term))
+        return Any;
+    }
     if (const AbstractObject *Object = parameterObject(Root))
       return inObject(*Object);
     std::unique_ptr<VExpr> Any = validSingleObject(Root, Within, Closed, Loc);
