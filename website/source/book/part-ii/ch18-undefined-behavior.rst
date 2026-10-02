@@ -181,9 +181,13 @@ further out is already undefined:
      return 0;
    }
 
-The object of a pointer that steps from a parameter the body never reassigns
-is that parameter's entry object; otherwise it may be any parameter's object,
-or the object at a base known to be valid, such as a callee's result.
+The object of a pointer is the one it came from, its *origin*: arithmetic
+keeps it, assignment copies it, and branches and loops join the
+possibilities (:doc:`../../language/pointers`). A pointer stepped one past the
+end of ``p`` cannot be dereferenced even where another object starts. When
+the origin is unknown (a pointer loaded from memory), the object may be any
+parameter's object, or the object at a base known to be valid, such as a
+callee's result.
 
 Enumeration values
 ------------------
