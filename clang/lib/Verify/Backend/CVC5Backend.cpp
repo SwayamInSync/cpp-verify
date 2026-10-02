@@ -19,6 +19,7 @@
 #include <chrono>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <thread>
@@ -1011,13 +1012,6 @@ class SMTLibEncoder {
              len(arg(0)) + ")) (seq.nth " + arg(0) + " " + arg(1) + ") 0)";
     case Op::SeqPush:
       return "(seq.++ " + arg(0) + " " + unit(arg(1)) + ")";
-    case Op::SeqUpdate: {
-      const std::string S = arg(0), I = arg(1), X = arg(2);
-      return "(ite (and (<= 0 " + I + ") (< " + I + " " + len(S) +
-             ")) (seq.++ " + extract(S, "0", I) + " " + unit(X) + " " +
-             extract(S, "(+ " + I + " 1)", "(- " + len(S) + " " + I + " 1)") +
-             ") " + S + ")";
-    }
     case Op::SeqSubrange: {
       // seq.extract clamps by itself; only a negative start differs.
       const std::string S = arg(0), Lo = arg(1), Hi = arg(2);
@@ -1900,9 +1894,33 @@ struct ModelDefinition {
   }
 };
 
-/// The define-fun list cvc5 prints after sat.
+/// A printed sequence value: (str.++ (seq.unit c) ...) over integer
+/// constants c.
+bool isSequenceConstant(const SExpr &E) {
+  if (!E.IsList || E.List.size() < 3 || E.List[0].IsList ||
+      (E.List[0].Atom != "str.++" && E.List[0].Atom != "seq.++"))
+    return false;
+  for (size_t I = 1; I != E.List.size(); ++I) {
+    const SExpr &Unit = E.List[I];
+    if (!Unit.IsList || Unit.List.size() != 2 || Unit.List[0].IsList ||
+        Unit.List[0].Atom != "seq.unit")
+      return false;
+    const SExpr &Element = Unit.List[1];
+    const bool Numeral =
+        !Element.IsList ||
+        (Element.List.size() == 2 && !Element.List[0].IsList &&
+         Element.List[0].Atom == "-" && !Element.List[1].IsList);
+    if (!Numeral || (!Element.IsList && !CertInt::fromDecimal(Element.Atom)) ||
+        (Element.IsList && !CertInt::fromDecimal(Element.List[1].Atom)))
+      return false;
+  }
+  return true;
+}
+
+/// The define-fun list cvc5 prints after sat. With \p ReversedSequences,
+/// sequence values are printed last element first and are read reversed.
 llvm::Expected<std::map<std::string, ModelDefinition>>
-parseModel(llvm::StringRef Text) {
+parseModel(llvm::StringRef Text, bool ReversedSequences = false) {
   auto malformed = [](llvm::StringRef Why) {
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    "malformed cvc5 model: %s",
@@ -1914,6 +1932,20 @@ parseModel(llvm::StringRef Text) {
     return malformed("no model follows sat");
   if (!Text.drop_front(Pos).trim().empty())
     return malformed("unexpected text after the model");
+  if (ReversedSequences) {
+    std::vector<SExpr *> Work = {&*Root};
+    while (!Work.empty()) {
+      SExpr *Current = Work.back();
+      Work.pop_back();
+      if (isSequenceConstant(*Current)) {
+        std::reverse(Current->List.begin() + 1, Current->List.end());
+        continue;
+      }
+      for (SExpr &Child : Current->List)
+        if (Child.IsList)
+          Work.push_back(&Child);
+    }
+  }
   std::map<std::string, ModelDefinition> Definitions;
   for (SExpr &Entry : Root->List) {
     if (!Entry.IsList || Entry.List.size() != 5 || Entry.List[0].IsList ||
@@ -2117,6 +2149,7 @@ verify::lowerSMTLibModule(const ObligationModule &Module,
 
 CVC5VerifyBackend::CVC5VerifyBackend(const BackendExecutionOptions &Execution)
     : TimeoutMs(Execution.SolverTimeoutMs),
+      CollectionTimeoutMs(Execution.CollectionTimeoutMs),
       ResourceLimit(Execution.SolverResourceLimit), Jobs(Execution.Jobs),
       MaxQueryNodes(Execution.MaxQueryNodes),
       IntegerEncoding(Execution.IntegerEncoding) {
@@ -2141,6 +2174,46 @@ struct SolverRun {
   VerifyResult Failure;
 };
 } // namespace
+
+static SolverRun runCVC5(const std::string &SolverPath, llvm::StringRef Script,
+                         unsigned TimeoutMs, unsigned ResourceLimit);
+
+/// Whether the cvc5 at \p SolverPath prints a sequence value last element
+/// first, as cvc5 1.1 does (the value itself is right: seq.nth reads it in
+/// order). Asked once per executable, with a sequence of known order.
+static bool printsSequencesReversed(const std::string &SolverPath) {
+  static std::mutex Lock;
+  static std::map<std::string, bool> Known;
+  std::lock_guard<std::mutex> Guard(Lock);
+  if (auto It = Known.find(SolverPath); It != Known.end())
+    return It->second;
+  bool Reversed = false;
+  SolverRun Run = runCVC5(SolverPath,
+                          "(set-logic ALL)\n"
+                          "(declare-fun x () (Seq Int))\n"
+                          "(assert (= x (seq.++ (seq.unit 1) (seq.unit 2))))\n"
+                          "(check-sat)\n",
+                          10000, 0);
+  if (Run.Output) {
+    const auto [Verdict, Rest] = llvm::StringRef(*Run.Output).split('\n');
+    if (Verdict.trim() == "sat")
+      if (auto Definitions = parseModel(Rest)) {
+        if (auto It = Definitions->find("x"); It != Definitions->end()) {
+          SMTEnvironment Closed;
+          std::optional<SMTValue> Value =
+              evaluateModelTerm(It->second.Body, Closed);
+          Reversed =
+              Value && Value->K == SMTValue::Kind::Seq &&
+              Value->Elements == std::vector<CertInt>{CertInt(int64_t(2)),
+                                                      CertInt(int64_t(1))};
+        }
+      } else {
+        llvm::consumeError(Definitions.takeError());
+      }
+  }
+  Known.emplace(SolverPath, Reversed);
+  return Reversed;
+}
 
 static SolverRun runCVC5(const std::string &SolverPath, llvm::StringRef Script,
                          unsigned TimeoutMs, unsigned ResourceLimit) {
@@ -2339,7 +2412,9 @@ VerifyResult
 CVC5VerifyBackend::verifyQuery(const ObligationModule &Module,
                                const LogicExpr *Query,
                                std::optional<unsigned> BudgetMs) const {
-  const unsigned TimeoutMs = BudgetMs ? *BudgetMs : this->TimeoutMs;
+  const unsigned TimeoutMs =
+      BudgetMs ? *BudgetMs
+               : moduleTimeoutMs(Module, this->TimeoutMs, CollectionTimeoutMs);
   VerifyResult Result;
   Result.BackendName = "cvc5";
   Result.Status = VerifyStatus::Unresolved;
@@ -2461,7 +2536,7 @@ CVC5VerifyBackend::verifyQuery(const ObligationModule &Module,
                            : "malformed cvc5 output: " + diagnosticText(Output);
       return Result;
     }
-    auto Definitions = parseModel(Rest);
+    auto Definitions = parseModel(Rest, printsSequencesReversed(SolverPath));
     if (!Definitions) {
       Result.Reason = VerifyReason::SolverMalformedOutput;
       Result.Message = llvm::toString(Definitions.takeError());
@@ -2586,7 +2661,8 @@ VerifyResult CVC5VerifyBackend::verifyModule(const ObligationModule &Module) {
         Tried.push_back(Variable);
         VerifyResult Proof =
             verifyQuery(*Inductive, Inductive->CounterexampleQuery.get(),
-                        inductionBudgetMs(TimeoutMs));
+                        inductionBudgetMs(moduleTimeoutMs(
+                            Module, TimeoutMs, CollectionTimeoutMs)));
         if (Proof.Status == VerifyStatus::Verified) {
           Proof.BackendName = "cvc5";
           return Proof;
