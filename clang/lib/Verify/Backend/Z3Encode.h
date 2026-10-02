@@ -6,6 +6,7 @@
 #include "Obligation.h"
 #include "ProofCache.h"
 #include "VerifyBackend.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include <chrono>
 #include <functional>
 #include <map>
@@ -82,14 +83,30 @@ class Z3Encoder {
   std::optional<z3::sort> OptionSort;
   std::optional<z3::func_decl> NoneDecl, SomeDecl, IsSomeDecl, OptionValueDecl;
   z3::expr encodeCollection(const VCExpr *E, std::vector<z3::expr> Args);
-  /// s[k] as the recursive-function definition cppverify.seq_at. Its lemmas
-  /// over concatenation, units, and extraction let quantifiers match index
-  /// terms, which the native sequence theory does not.
+  /// s[k] as the recursive-function definition cppverify.seq_at.
   z3::expr seqAt(const z3::expr &S, const z3::expr &K);
   std::optional<z3::func_decl> SeqAtDecl;
   /// Axioms of the collection functions the query uses, asserted beside it.
   std::vector<z3::expr> CollectionAxioms;
-  bool SeqAtLemmas = false;
+  /// forall k. Term[k] == Element(k), triggered by reads of Term: what each
+  /// element of a sequence the query builds is. Quantified over the index
+  /// only, so model search can check it and it fires only on terms of the
+  /// query, never on the sequences Z3 creates while solving word equations.
+  void indexFacts(const z3::expr &Term,
+                  llvm::function_ref<z3::expr(const z3::expr &)> Element);
+  /// forall Bound. Body, triggered by Trigger: a theorem stated beside the
+  /// query, with an id starting "fact!" for --profile-quantifiers.
+  z3::expr theorem(const z3::expr &Bound, const z3::expr &Trigger,
+                   const z3::expr &Body, const char *Id);
+  /// forall Bound. Body, without a pattern, named for --profile-quantifiers.
+  z3::expr namedForall(const z3::expr &Bound, const z3::expr &Body,
+                       const char *Id);
+  std::set<unsigned> IndexedTerms;
+  std::set<unsigned> SplitExtracts;
+  /// Term, or a constant defined as the closed Term when Term contains an
+  /// ite, which a pattern cannot.
+  z3::expr patternable(const z3::expr &Term);
+  std::map<unsigned, z3::expr> PatternNames;
   /// Relates seq.contains(S, unit(X)) to the reads of S, which Z3 does not.
   void bridgeContains(const z3::expr &Contains, const z3::expr &S,
                       const z3::expr &X);
@@ -231,7 +248,10 @@ public:
 
 class Z3VerifyBackend : public VerifyBackend {
   Z3Encoder Enc;
+  /// The timeout of the module being verified.
   unsigned TimeoutMs;
+  unsigned SolverTimeoutMs;
+  std::optional<unsigned> CollectionTimeoutMs;
   unsigned ResourceLimit;
   unsigned Jobs;
   uint64_t MaxQueryNodes;
