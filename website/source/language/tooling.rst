@@ -136,9 +136,7 @@ Backends
        ``0`` selects every core). Lean export remains serial.
    * - ``--function-timeout=N``
      - Milliseconds all queries of one function may take together (default
-       ``0``: no limit). Each query gets at most what is left, and none
-       starts once it is spent; the function is then ``Unresolved`` with
-       reason ``solver.timeout``.
+       ten times ``--timeout``; ``0`` disables). See `Time limits`_.
    * - ``--proof-cache=DIR``
      - Persist successful dependency-scoped Z3 or BMC proofs. In portfolio mode
        this caches only the Z3 component and cvc5 still runs on every query.
@@ -192,6 +190,49 @@ explored bound proves complete unwinding. Text diagnostics publish the terminal
 reused across prefixes. JSON uses ``bound``, ``explored_bounds``, and
 ``reused_queries``. Lean generation reports ``Exported``. Only the pinned,
 admission-free kernel workflow reports ``Certified``.
+
+Time limits
+-----------
+
+Three limits bound how long verification takes:
+
+- ``--timeout`` bounds **one** solver query (default 30 s). A query that
+  reaches it is unknown, never a proof or a counterexample.
+- ``--collection-timeout`` replaces it for queries over sequences, sets,
+  multisets, or maps (default twice ``--timeout``).
+- ``--function-timeout`` bounds **all** queries of one function together,
+  measured in wall-clock time from the function's first query (default ten
+  times ``--timeout``, so five minutes).
+
+A function rarely needs only one query. The verifier tries the whole
+function as one query, then each obligation on its own, and may retry a
+query in another integer encoding, by induction, or with refined
+definitions; with ``--int-encoding=bitvector`` and ``--timeout=5000``,
+``extent_separation.cpp``'s ``copy`` spends 32 s across such queries before
+it is proved. The function budget lets that happen while still stopping a
+function that would otherwise run for hours, such as one with hundreds of
+hard obligations. Each query gets at most the time the function has left,
+and once it is spent no further query starts: the function is
+``Unresolved`` with reason ``solver.timeout`` and the message ``the
+function's time (--function-timeout) is spent``. Nothing else changes, so a
+result is never worse than ``Unresolved`` because of the budget.
+
+Choosing the limits:
+
+- Interactive use: the defaults. A function that reaches the budget is
+  usually one to split, or to help with lemmas, assertions, or
+  ``reveal_with_fuel``.
+- A large function that legitimately needs many queries (many obligations
+  verified on one job): raise ``--function-timeout``, or set it to ``0``.
+- Continuous integration with a time allowance per function: set
+  ``--function-timeout`` to that allowance; ``--timeout`` then only bounds
+  single queries inside it.
+- With ``--jobs`` above one, a function's queries run at once, so the same
+  budget covers more of them.
+
+The limits are wall-clock times and depend on the machine. For results that
+must repeat exactly across machines, use ``--solver-rlimit``, a
+deterministic per-query budget of solver steps.
 
 Parallel solving and proof caching
 ----------------------------------
