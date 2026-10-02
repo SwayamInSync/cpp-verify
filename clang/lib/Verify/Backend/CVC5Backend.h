@@ -27,6 +27,8 @@ class CVC5VerifyBackend : public VerifyBackend {
   std::optional<unsigned> CollectionTimeoutMs;
   unsigned ResourceLimit;
   unsigned Jobs;
+  llvm::ThreadPoolInterface *Pool;
+  std::optional<std::chrono::steady_clock::time_point> Deadline;
   uint64_t MaxQueryNodes;
   MachineIntegerEncoding IntegerEncoding;
 
@@ -39,6 +41,10 @@ class CVC5VerifyBackend : public VerifyBackend {
 public:
   explicit CVC5VerifyBackend(const BackendExecutionOptions &Execution = {});
   llvm::StringRef getName() const override { return "cvc5"; }
+  void
+  setDeadline(std::optional<std::chrono::steady_clock::time_point> D) override {
+    Deadline = D;
+  }
   BackendCapabilities getCapabilities() const override {
     // Sets, multisets, and maps range over all integers; cvc5's set theory
     // is finite.
