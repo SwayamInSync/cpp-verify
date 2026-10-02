@@ -236,24 +236,26 @@ callee-local value when that formal was modified, so ``post(p == nullptr)``
 after rebinding a local pointer cannot contradict the caller's non-null
 argument.
 
-Calls also enforce the caller's frame in its **entry state**. Exact footprints
-(``p[i]``, ``p->field``) freshen only those addresses. A region footprint
-(``*p``) may freshen the complete value heap because its finite extent is not
-part of the frame IR. A conservative body scan preserves the heap for verified,
-acyclic read-only callees and read-only call chains; unknown, external,
-recursive, allocating, freeing, or writing callees remain effectful. The
-postcondition then re-establishes whatever the caller may rely on. This boundary
-prevents offset writes from masquerading as preservation of unrelated memory.
+A call changes the caller's heap only inside the callee's ``modifies``
+footprints, instantiated with the arguments: a cell (``p[i]``, ``p->field``)
+or a range (``p[lo : n]``) is exactly those cells, and a region (``*p``) is
+the object the argument addresses, its ``valid`` extent or else one object.
+Every other cell keeps its value, and the postcondition then re-establishes
+whatever the caller may rely on inside the footprints. Each footprint must
+also lie within the caller's own ``modifies``, read in the caller's entry
+state. A callee without ``modifies`` whose body (or a callee of it) may write
+is treated as writing the whole heap; a conservative body scan keeps the heap
+for verified, acyclic read-only callees.
 Functions that perform dynamic allocation or deallocation are currently
 verified only as standalone bodies; calls to them fail closed until lifetime
 effects have contract syntax.
 
-With ``--check-ub``, ``valid(p, n)`` extents also cross calls as checked
-sub-slices. Passing ``p + offset`` to a ``valid(q, length)`` formal asserts one
-root, nonnegative offset and length, and
-``offset + length <= n``. Empty one-past slices and exact-cell writes are
-supported. A symbolic writable range or unbounded ``modifies(*q)`` through a
-proper sub-slice fails closed rather than silently widening the effect.
+``valid(p, n)`` extents also cross calls as checked sub-slices. Passing
+``p + offset`` to a ``valid(q, length)`` formal asserts one root, nonnegative
+offset and length, and ``offset + length <= n``. Empty one-past slices,
+exact-cell writes, ranges ``modifies(q[lo : n])``, and whole-slice
+``modifies(*q)`` are supported; the call changes only the written cells of
+the slice.
 
 A caller-owned dynamic scalar may be passed in the other direction to a
 verified, non-allocating executable callee. Its direct matching pointer
@@ -269,6 +271,80 @@ pointer-result calls, recursion cycles, ghost use, proof/external contracts,
 and allocation in the callee fail closed. Within the caller, address and
 identity remain a pair through local copies, assignments, branches,
 ``nullptr``, and supported call results.
+
+Where verification stops: trusted contracts
+-------------------------------------------
+
+Modular verification proves each function against its callees' contracts.
+At the edge of the program there are functions it cannot see into: a
+library compiled elsewhere, a system call, a routine written in assembly.
+Their contracts can only be assumed, and CppVerify assumes a contract only
+when you say so, with the standard attribute syntax:
+
+.. code-block:: cpp
+
+   [[cppverify::trusted]] int clamp_byte(int v)
+     post(0 <= result && result <= 255);
+
+   [[cppverify::trusted]] int read_sensor(int channel)
+     pre(channel >= 0 && channel < 4)
+     post(result >= 0 && result <= 1023)
+   {
+     return channel * 300;   // stands for hardware access
+   }
+
+   int sample(int c)
+     pre(c >= 0 && c < 4)
+     post(0 <= result && result <= 255)
+   {
+     int r = read_sensor(c);
+     return clamp_byte(r);
+   }
+
+   int twice(int c)
+     pre(c >= 0 && c < 4)
+     post(0 <= result && result <= 510)
+   {
+     int a = sample(c);
+     int b = sample(c);
+     return a + b;
+   }
+
+``clamp_byte`` has no definition here; ``read_sensor`` has one, which is
+compiled but not verified. Each reports ``Trusted: ... (contract assumed, not
+verified)``, and every proof that relies on either names it, through any
+number of verified callers:
+
+.. code-block:: text
+
+   trusted.cpp:1:28: Trusted: clamp_byte (contract assumed, not verified)
+   trusted.cpp:4:28: Trusted: read_sensor (contract assumed, not verified)
+   Verified: sample [backend=z3] [trusts=clamp_byte,read_sensor]
+   Verified: twice [backend=z3] [trusts=clamp_byte,read_sensor]
+
+The ``[trusts=...]`` list is the trusted computing base of that one proof:
+the verdict is exactly as reliable as those contracts. Keep it short. A
+trusted contract should state what the function guarantees and nothing more,
+and a function whose body is in the verified subset should be verified
+instead.
+
+On a ``proof`` function the mark makes an axiom: its postcondition is assumed
+for every argument that meets its precondition. That is occasionally the
+right tool, for a mathematical fact that the solver cannot prove and that
+you would rather cite than prove. It is also the easiest way to make every
+proof true, so an axiom that a call cannot satisfy is reported as
+``[vacuous]`` (see :doc:`ch16-when-verification-fails`).
+
+A contract with neither a definition nor the mark is not assumed: its callers
+are ``Unresolved`` with reason ``callee.contract``, and a warning points at
+the declaration. A forgotten definition therefore cannot silently turn into
+an axiom.
+
+The same boundary exists in other verifiers. Verus assumes the specification
+of a function marked ``#[verifier::external_body]``. Frama-C assumes the
+contract of a function without a body when it proves the callers. CppVerify
+makes the assumption an explicit mark on the declaration and carries it into
+every verdict that depends on it.
 
 Z3 result discipline
 --------------------
