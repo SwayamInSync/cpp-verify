@@ -1095,9 +1095,11 @@ obligations, so with one only the obligations are solved.
 Results merge in source order, with each function's dependency indices
 offset; spec termination, callee contracts, trust, and unverified callers are
 resolved after all functions. A per-function deadline
-(`VerifyBackend::setDeadline`, `--function-timeout`, unset by default) caps
-every query at the time the function has left, and no query starts once it
-has passed. Z3 forgets a timeout that fires inside one of its nested
+(`VerifyBackend::setDeadline`, `--function-timeout`, by default ten times
+`--timeout`) caps every query at the time the function has left, and no
+query starts once it has passed. Four times `--timeout` was too little: the
+bit-vector run of `extent_separation`'s `copy` needs 32 s of queries at
+`--timeout=5000`. Z3 forgets a timeout that fires inside one of its nested
 resource scopes (leaving a scope clears the cancellation; a check given one
 or two milliseconds never returned), so `Z3Encoder::check` interrupts a
 check again, every 50 ms from 100 ms past its time, until it returns.
