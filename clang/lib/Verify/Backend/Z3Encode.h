@@ -9,6 +9,7 @@
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <functional>
 #include <map>
 #include <mutex>
@@ -55,10 +56,18 @@ class Z3Encoder {
   std::chrono::steady_clock::time_point QueryStart;
   bool QuantifiedQuery = false;
   z3::solver freshSolver();
-  /// \p S.check() within \p Ms milliseconds (0: no limit).
+  /// \p S.check() within \p Ms milliseconds (0: no limit), unknown at once
+  /// after interrupt().
   z3::check_result check(z3::solver &S, unsigned Ms);
   /// A check outlived its time and was interrupted.
   bool Overran = false;
+  std::mutex CheckLock;
+  std::condition_variable CheckChanged;
+  bool CheckFinished = true;
+  bool Stopped = false;
+  /// Index, membership, and split facts for sequences, and extensionality
+  /// instances.
+  bool SequenceFacts = true;
   /// Encode logical functions as native recursive definitions. Hidden ones
   /// are defined too, but only to find counterexamples: an unsat that may use
   /// them is not a proof.
@@ -236,7 +245,10 @@ public:
   Z3Encoder();
   void setTimeoutMs(unsigned Ms) { TimeoutMs = Ms; }
   /// Stops the check running in this encoder, from any thread.
-  void interrupt() { Ctx.interrupt(); }
+  void interrupt();
+  /// Without SequenceFacts the query is in the solver's plain sequence
+  /// theory, which finds models faster and proofs slower.
+  void setSequenceFacts(bool Value) { SequenceFacts = Value; }
   void setProofOnly(bool Value) { ProofOnly = Value; }
   void setResourceLimit(unsigned Limit) { ResourceLimit = Limit; }
   void setIntegerEncoding(MachineIntegerEncoding Encoding) {
@@ -291,6 +303,14 @@ class Z3VerifyBackend : public VerifyBackend {
   };
 
   VerifyResult verifyModuleDirect(const ObligationModule &Module);
+  /// Whether a query over \p Module is also solved without sequence facts.
+  bool racesEncodings(const ObligationModule &Module) const;
+  /// \p Query of \p Module (null: the complete query) in a fresh encoder,
+  /// and, when racesEncodings, at once in one without sequence facts.
+  VerifyResult solveQuery(const ObligationModule &Module,
+                          const LogicExpr *Query,
+                          std::optional<uint64_t> TraceEventCount,
+                          unsigned Timeout, Race *Racing);
   VerifyResult verifyObligation(const ObligationModule &Module,
                                 const Obligation &Item,
                                 llvm::StringRef SemanticHash = {},
