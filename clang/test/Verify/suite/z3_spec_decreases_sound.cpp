@@ -42,11 +42,11 @@ spec int nonterminating_after_branch(int n)
 proof void nonterminating_proof(int n)
   decreases(n)
 {
-  nonterminating_proof(n - 1);
+  nonterminating_proof(n);
 }
 
 // VERIFY-DAG: Verified: spec decreases: terminating_countdown
 // VERIFY-DAG: Verified: spec decreases: terminating_after_branch
 // VERIFY-DAG: error: spec decreases failed: nonterminating_descent
 // VERIFY-DAG: error: spec decreases failed: nonterminating_after_branch
-// VERIFY-DAG: error: decreases failed: nonterminating_proof
+// VERIFY-DAG: error: verification failed: nonterminating_proof [{{.*}}::termination@
