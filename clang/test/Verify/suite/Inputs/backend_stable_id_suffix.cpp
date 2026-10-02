@@ -1,13 +1,11 @@
-int two_invariants(int n)
+void needs_both(int n)
+  pre(n >= 0)
+  pre(n > 100)
+{
+}
+
+void two_preconditions(int n)
   pre(n >= 0 && n <= 10)
 {
-  int i = 0;
-  while (i < n)
-    invariant(0 <= i)
-    invariant(i < 0)
-    decreases(n - i)
-  {
-    i = i + 1;
-  }
-  return i;
+  needs_both(n);
 }
