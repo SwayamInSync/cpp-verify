@@ -2185,6 +2185,7 @@ public:
       ObligationKind ProofKind;
       uint64_t TraceEventCount;
       std::unique_ptr<VCExpr> Cond;
+      std::string Note;
     };
     std::vector<LoweredStmt> Stmts;
     for (const auto &Stmt : P.Stmts) {
@@ -2193,7 +2194,8 @@ public:
         continue;
       }
       Stmts.push_back({Stmt->K, obligationKind(Stmt->ProofKind),
-                       Stmt->TraceEventCount, fromVExpr(Stmt->Cond.get())});
+                       Stmt->TraceEventCount, fromVExpr(Stmt->Cond.get()),
+                       Stmt->Note});
     }
 
     std::vector<std::pair<ObligationKind, std::unique_ptr<VCExpr>>> ExitAsserts;
@@ -2224,9 +2226,11 @@ public:
             : (!P.FunctionName.empty() ? P.FunctionName : "__anonymous");
     unsigned ObligationIndex = 0;
     auto appendObligation = [&](ObligationKind Kind, const VCExpr *Condition,
-                                uint64_t TraceEventCount) {
+                                uint64_t TraceEventCount,
+                                const std::string &Note = "") {
       Obligation Item;
       Item.Kind = Kind;
+      Item.Note = Note;
       Item.Loc = Condition->Loc;
       Item.EndLoc = Condition->EndLoc;
       Item.TraceEventCount = TraceEventCount;
@@ -2243,7 +2247,8 @@ public:
         Assumptions.push_back(Stmt.Cond.get());
         continue;
       }
-      appendObligation(Stmt.ProofKind, Stmt.Cond.get(), Stmt.TraceEventCount);
+      appendObligation(Stmt.ProofKind, Stmt.Cond.get(), Stmt.TraceEventCount,
+                       Stmt.Note);
     }
     for (const auto &[Kind, Exit] : ExitAsserts)
       appendObligation(Kind, Exit.get(), M.TraceEvents.size());
