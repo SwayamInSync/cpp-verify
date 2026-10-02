@@ -21685,9 +21685,14 @@ ExprResult Sema::CheckPlaceholderExpr(Expr *E) {
   case BuiltinType::ArraySection:
     // If we've already diagnosed something on the array section type, we
     // shouldn't need to do any further diagnostic here.
-    if (!E->containsErrors())
-      Diag(E->getBeginLoc(), diag::err_array_section_use)
-          << cast<ArraySectionExpr>(E)->isOMPArraySection();
+    if (!E->containsErrors()) {
+      if (cast<ArraySectionExpr>(E)->isOpenACCArraySection() &&
+          !getLangOpts().OpenACC)
+        Diag(E->getBeginLoc(), diag::err_contract_range_use);
+      else
+        Diag(E->getBeginLoc(), diag::err_array_section_use)
+            << cast<ArraySectionExpr>(E)->isOMPArraySection();
+    }
     return ExprError();
 
   // Expressions of unknown type.
