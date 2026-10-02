@@ -1325,9 +1325,9 @@ void ASTContext::InitBuiltinTypes(const TargetInfo &Target,
     InitBuiltinType(OMPArrayShapingTy, BuiltinType::OMPArrayShaping);
     InitBuiltinType(OMPIteratorTy, BuiltinType::OMPIterator);
   }
-  // Placeholder type for OpenACC array sections, if we are ALSO in OMP mode,
-  // don't bother, as we're just using the same type as OMP.
-  if (LangOpts.OpenACC && !LangOpts.OpenMP) {
+  // Placeholder type for OpenACC array sections and CppVerify modifies
+  // ranges; in OMP mode, the same type as OMP.
+  if ((LangOpts.OpenACC || LangOpts.VerifyContracts) && !LangOpts.OpenMP) {
     InitBuiltinType(ArraySectionTy, BuiltinType::ArraySection);
   }
   if (LangOpts.MatrixTypes)
