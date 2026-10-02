@@ -74,7 +74,8 @@ long slice_difference_ir(int *p, int count, int left, int right)
 // PASSIVE: __return_call_1_1
 // PASSIVE: load
 // PASSIVE-LABEL: passive slice_difference_ir
-// PASSIVE: assert
+// PASSIVE: assert pointer-difference
+// PASSIVE: assert bounds
 // PASSIVE: <=
 // PASSIVE-NEXT: left_0
 // PASSIVE-NEXT: count_0
@@ -97,11 +98,14 @@ long slice_difference_ir(int *p, int count, int left, int right)
 // VC-NEXT: >= : bool
 // VC-NEXT: length_0 : bitvector32
 // VC-NEXT: 1 : bitvector32
-// VC-NEXT: <= : bool
-// VC-NEXT: length_0 : bitvector32
-// VC-NEXT: - : bitvector32
+// VC-NEXT: || : bool
+// VC-NEXT: > : bool
+// VC-NEXT: - : int
+// VC-NEXT: bv_to_int : int
 // VC-NEXT: count_0 : bitvector32
+// VC-NEXT: bv_to_int : int
 // VC-NEXT: offset_0 : bitvector32
+// VC-NEXT: 2147483647 : int
 // VC: bv_to_int
 // VC: obligations
 // VC-LABEL: vc slice_difference_ir
