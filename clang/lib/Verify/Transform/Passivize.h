@@ -16,6 +16,8 @@ struct PassiveStmt {
   Kind K = Assume;
   ProofObligationKind ProofKind = ProofObligationKind::Assertion;
   std::unique_ptr<VExpr> Cond;
+  /// For an unsupported obligation: what the verifier does not model here.
+  std::string Note;
   uint64_t TraceEventCount = 0;
   /// The first assumption of a trusted callee's postcondition: the callee,
   /// how many clauses its postcondition has, the call, and the path
