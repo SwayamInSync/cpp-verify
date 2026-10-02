@@ -10,6 +10,7 @@ int loop_incr(int n, int *p)
   while (i < n)
     invariant(i >= 0 && i <= n)
     invariant(*p == i)
+    decreases(n - i)
   {
     *p = *p + 1;
     i = i + 1;
