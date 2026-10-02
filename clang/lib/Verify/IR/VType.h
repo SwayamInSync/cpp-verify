@@ -4,6 +4,7 @@
 
 #include "clang/Basic/SourceLocation.h"
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -23,6 +24,12 @@ enum class VTypeKind {
   Struct,
   Array,
   Unsupported,
+  /// Specification values of cppverify::seq, set, multiset, and map: finite
+  /// collections of mathematical integers.
+  Seq,
+  Set,
+  Multiset,
+  Map,
 };
 
 /// A source-type marker.
@@ -47,6 +54,10 @@ struct VType {
   uint64_t ArrayStrideBytes = 0;
   /// Stable canonical identity of the aggregate type (Struct/Array markers).
   std::string TypeIdentity;
+  /// An unscoped enumeration without a fixed underlying type holds values in
+  /// [EnumMin, EnumMax) only; converting another value to it is undefined.
+  std::string EnumMin;
+  std::string EnumMax;
 
   static VType makeVoid() {
     return VType{VTypeKind::Void, VIntMode::Machine, true, 0};
@@ -75,6 +86,14 @@ struct VType {
   static VType makeUnsupported() {
     return VType{VTypeKind::Unsupported, VIntMode::Machine, false, 0};
   }
+  static VType makeCollection(VTypeKind Kind) {
+    return VType{Kind, VIntMode::Math, false, 0};
+  }
+
+  bool isCollection() const {
+    return Kind == VTypeKind::Seq || Kind == VTypeKind::Set ||
+           Kind == VTypeKind::Multiset || Kind == VTypeKind::Map;
+  }
 
   bool isInt() const {
     return Kind == VTypeKind::Int32 || Kind == VTypeKind::Int64;
@@ -92,6 +111,8 @@ struct VType {
 
   static VType fromQualType(QualType QT, VIntMode DefaultMode,
                             const ASTContext &Ctx);
+  /// The collection kind of cppverify::seq, set, multiset, or map.
+  static std::optional<VTypeKind> collectionKind(QualType QT);
 };
 
 /// Canonical representation equality. Pointer pointee sizes are source
