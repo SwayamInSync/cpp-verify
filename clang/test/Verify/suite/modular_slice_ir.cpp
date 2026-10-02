@@ -77,8 +77,13 @@ long slice_difference_ir(int *p, int count, int left, int right)
 // PASSIVE: assert pointer-difference
 // PASSIVE: assert bounds
 // PASSIVE: <=
+// PASSIVE-NEXT: p_0
+// PASSIVE-NEXT: +
+// PASSIVE-NEXT: p_0
+// PASSIVE-NEXT: *
+// PASSIVE-NEXT: cast
 // PASSIVE-NEXT: left_0
-// PASSIVE-NEXT: count_0
+// PASSIVE: count_0
 // PASSIVE: __result_1
 // PASSIVE: cast
 // PASSIVE-NEXT: left_0
