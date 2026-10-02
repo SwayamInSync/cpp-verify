@@ -18,6 +18,7 @@
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Process.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdlib>
 #include <limits>
@@ -101,6 +102,12 @@ static cl::opt<unsigned> CollectionTimeout(
              "0 = no limit)"),
     cl::cat(CppVerifyCategory));
 
+static cl::opt<unsigned> FunctionTimeout(
+    "function-timeout",
+    cl::desc("Milliseconds all queries of one function may take together "
+             "(default 0 = no limit)"),
+    cl::init(0), cl::cat(CppVerifyCategory));
+
 static unsigned collectionTimeoutMs() {
   if (CollectionTimeout.getNumOccurrences())
     return CollectionTimeout;
@@ -116,8 +123,25 @@ static cl::opt<unsigned> SolverResourceLimit(
 
 static cl::opt<unsigned>
     Jobs("jobs",
-         cl::desc("Isolated solver jobs (0 = available physical cores)"),
-         cl::init(1), cl::cat(CppVerifyCategory));
+         cl::desc("Solver workers shared by every function and obligation "
+                  "(0 = available physical cores, the default; the "
+                  "CPPVERIFY_JOBS environment variable sets the default)"),
+         cl::init(0), cl::cat(CppVerifyCategory));
+
+/// --jobs, else one for Lean, which is serial, else CPPVERIFY_JOBS, else
+/// every core.
+static unsigned jobs() {
+  if (Jobs.getNumOccurrences())
+    return Jobs;
+  if (BackendOpt == "lean")
+    return 1;
+  unsigned FromEnvironment = 0;
+  if (std::optional<std::string> Value =
+          llvm::sys::Process::GetEnv("CPPVERIFY_JOBS"))
+    if (!llvm::StringRef(*Value).getAsInteger(10, FromEnvironment))
+      return FromEnvironment;
+  return 0;
+}
 
 static cl::opt<uint64_t>
     MaxQueryNodes("max-query-nodes",
@@ -206,7 +230,7 @@ static verify::BackendExecutionOptions backendExecutionOptions() {
   Options.SolverTimeoutMs = SolverTimeout;
   Options.CollectionTimeoutMs = collectionTimeoutMs();
   Options.SolverResourceLimit = SolverResourceLimit;
-  Options.Jobs = Jobs;
+  Options.Jobs = jobs();
   Options.MaxQueryNodes = MaxQueryNodes;
   Options.IntegerEncoding = IntEncoding;
   Options.CVC5Path = CVC5Path;
@@ -276,8 +300,9 @@ public:
       VOpts.BMCUnroll = BMCUnroll.getValue();
       VOpts.SolverTimeoutMs = SolverTimeout.getValue();
       VOpts.CollectionTimeoutMs = collectionTimeoutMs();
+      VOpts.FunctionTimeoutMs = FunctionTimeout.getValue();
       VOpts.SolverResourceLimit = SolverResourceLimit.getValue();
-      VOpts.Jobs = Jobs.getValue();
+      VOpts.Jobs = jobs();
       VOpts.MaxQueryNodes = MaxQueryNodes.getValue();
       VOpts.IntegerEncoding = IntEncoding.getValue();
       VOpts.CVC5Path = CVC5Path.getValue();
@@ -458,7 +483,7 @@ static int replayObligationArchive() {
                     "certification\n";
     return 1;
   }
-  if (BackendOpt == "lean" && (Jobs != 1 || !ProofCache.empty())) {
+  if (BackendOpt == "lean" && (jobs() != 1 || !ProofCache.empty())) {
     llvm::errs()
         << "error: --jobs and --proof-cache are not supported by Lean replay\n";
     return 1;
