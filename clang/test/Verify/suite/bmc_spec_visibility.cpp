@@ -12,6 +12,8 @@ int valid_visible_spec(int value)
   return value;
 }
 
+// The assertion is true, but the solver may not use identity's definition. A
+// model that interprets identity arbitrarily is not a counterexample.
 int invalid_hidden_spec(int value)
   post(result == value)
 {
@@ -23,4 +25,4 @@ int invalid_hidden_spec(int value)
 }
 
 // VERIFY-DAG: Verified: valid_visible_spec
-// VERIFY-DAG: error: verification failed: invalid_hidden_spec
+// VERIFY-DAG: Unresolved: invalid_hidden_spec [backend=bmc{{.*}}[reason=spec.hidden]
