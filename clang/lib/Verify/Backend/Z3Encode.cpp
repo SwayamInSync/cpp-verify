@@ -3,6 +3,7 @@
 #include "ObligationSerialization.h"
 #include "ObligationSimplify.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -14,12 +15,14 @@
 #include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <functional>
 #include <iostream>
 #include <map>
 #include <mutex>
 #include <set>
+#include <thread>
 #include <z3_api.h>
 #ifdef LLVM_ON_UNIX
 #include <unistd.h>
@@ -1520,7 +1523,7 @@ Z3Encoder::profileQuantifiers(const z3::expr_vector &Assertions) {
     Rerun.set(Params);
     for (unsigned I = 0; I != Assertions.size(); ++I)
       Rerun.add(Assertions[I]);
-    (void)Rerun.check();
+    (void)check(Rerun, TimeoutMs == 0 ? 10000U : std::min(TimeoutMs, 10000U));
   }
   std::cerr.flush();
   std::fflush(stderr);
@@ -1691,6 +1694,45 @@ z3::solver Z3Encoder::freshSolver() {
   Params.set("qi.eager_threshold", 0.0);
   Fresh.set(Params);
   return Fresh;
+}
+
+z3::check_result Z3Encoder::check(z3::solver &S, unsigned Ms) {
+  if (Ms == 0)
+    return S.check();
+  // Z3 forgets a timeout that fires inside one of its nested resource
+  // scopes: leaving the scope clears the cancellation. A check that outlives
+  // its time is therefore interrupted again until it returns.
+  constexpr std::chrono::milliseconds Grace(100);
+  constexpr std::chrono::milliseconds Interval(50);
+  std::mutex Lock;
+  std::condition_variable Changed;
+  bool Finished = false;
+  bool Interrupted = false;
+  std::thread Watchdog([&] {
+    std::unique_lock<std::mutex> Guard(Lock);
+    auto Next = std::chrono::steady_clock::now() +
+                std::chrono::milliseconds(Ms) + Grace;
+    while (!Changed.wait_until(Guard, Next, [&] { return Finished; })) {
+      Ctx.interrupt();
+      Interrupted = true;
+      Next = std::chrono::steady_clock::now() + Interval;
+    }
+  });
+  auto Join = llvm::make_scope_exit([&] {
+    {
+      std::lock_guard<std::mutex> Guard(Lock);
+      Finished = true;
+    }
+    Changed.notify_one();
+    Watchdog.join();
+    if (Interrupted) {
+      Overran = true;
+      // A check opens a resource scope, which clears an interrupt left over.
+      z3::solver Reset(Ctx);
+      (void)Reset.check();
+    }
+  });
+  return S.check();
 }
 
 std::optional<z3::expr>
@@ -2475,7 +2517,7 @@ std::vector<SpecDispute> Z3Encoder::boundedDomainDisputes(
     z3::params Params(Ctx);
     Params.set("timeout", static_cast<unsigned>(Remaining));
     Solver.set(Params);
-    return Solver.check();
+    return this->check(Solver, static_cast<unsigned>(Remaining));
   };
   // The model at the extreme of \p Argument, if the solver proves one.
   auto extreme = [&](const z3::expr &Argument,
@@ -2582,20 +2624,20 @@ z3::check_result Z3Encoder::certifyModels(const ObligationModule &Module,
   auto check = [&]() {
     const auto Limit = Covered ? QueryDeadline : Deadline;
     Covered = false;
-    if (Limit) {
-      const auto Remaining =
-          std::chrono::duration_cast<std::chrono::milliseconds>(
-              *Limit - std::chrono::steady_clock::now())
-              .count();
-      if (Remaining <= 0) {
-        OutOfTime = true;
-        return z3::unknown;
-      }
-      z3::params Params(Ctx);
-      Params.set("timeout", static_cast<unsigned>(Remaining));
-      Solver.set(Params);
+    if (!Limit)
+      return this->check(Solver, 0);
+    const auto Remaining =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            *Limit - std::chrono::steady_clock::now())
+            .count();
+    if (Remaining <= 0) {
+      OutOfTime = true;
+      return z3::unknown;
     }
-    return Solver.check();
+    z3::params Params(Ctx);
+    Params.set("timeout", static_cast<unsigned>(Remaining));
+    Solver.set(Params);
+    return this->check(Solver, static_cast<unsigned>(Remaining));
   };
   while (Result == z3::sat) {
     z3::model Current = Solver.get_model();
@@ -2768,7 +2810,7 @@ VerifyResult Z3Encoder::verifyModule(const ObligationModule &Module,
   Solver.add(rangeFacts());
   const z3::expr_vector Asserted = Solver.assertions();
   const z3::check_result Checked =
-      certifyModels(Module, Asked, Solver.check(), Out);
+      certifyModels(Module, Asked, check(Solver, TimeoutMs), Out);
   if (ProfileQuantifiers && Checked == z3::unknown && QuantifiedQuery)
     Out.QuantifierProfile = profileQuantifiers(Asserted);
   if (CoverInIntegers) {
@@ -2963,9 +3005,11 @@ VerifyResult Z3Encoder::verifyModule(const ObligationModule &Module,
     Out.Status = VerifyStatus::Unresolved;
     Out.Message = Solver.reason_unknown();
     llvm::StringRef Reason = llvm::StringRef(Out.Message).trim();
-    if (TimeoutMs > 0 && Reason.equals_insensitive("timeout"))
+    if (TimeoutMs > 0 && (Reason.equals_insensitive("timeout") || Overran)) {
       Out.Reason = VerifyReason::SolverTimeout;
-    else if (ResourceLimit > 0 && Reason.contains_insensitive("resource limit"))
+      Out.Message = "timeout";
+    } else if (ResourceLimit > 0 &&
+               Reason.contains_insensitive("resource limit"))
       Out.Reason = VerifyReason::SolverResourceLimit;
     else
       Out.Reason = VerifyReason::SolverUnknown;
@@ -3011,6 +3055,15 @@ verify::lowerObligationModule(const ObligationModule &Module,
   Encoder.setIntegerEncoding(Execution.IntegerEncoding);
   VerifyResult Result = Encoder.lowerModule(Module, Z3Out);
   Result.BackendName = "z3";
+  return Result;
+}
+
+static VerifyResult timeSpent() {
+  VerifyResult Result;
+  Result.BackendName = "z3";
+  Result.Status = VerifyStatus::Unresolved;
+  Result.Reason = VerifyReason::SolverTimeout;
+  Result.Message = "the function's time (--function-timeout) is spent";
   return Result;
 }
 
@@ -3075,8 +3128,9 @@ static VerifyResult finishZ3Result(VerifyResult Result) {
 
 std::vector<VerifyResult>
 Z3VerifyBackend::verifyObligations(const ObligationModule &Module,
-                                   bool StopAtFailure) {
-  TimeoutMs = moduleTimeoutMs(Module, SolverTimeoutMs, CollectionTimeoutMs);
+                                   bool StopAtFailure, Race *Racing) {
+  TimeoutMs =
+      budget(moduleTimeoutMs(Module, SolverTimeoutMs, CollectionTimeoutMs));
   Enc.setTimeoutMs(TimeoutMs);
   if (auto Limit = querySizeLimitResult(Module, MaxQueryNodes))
     return {std::move(*Limit)};
@@ -3107,23 +3161,29 @@ Z3VerifyBackend::verifyObligations(const ObligationModule &Module,
       Results.push_back(verifyObligation(
           Module, Module.Obligations[I],
           Cache ? llvm::StringRef(CacheHashes[I]) : llvm::StringRef(),
-          Cache ? &CacheLookups[I] : nullptr, IsReused(I)));
+          Cache ? &CacheLookups[I] : nullptr, IsReused(I), Racing));
       if (StopAtFailure && Results.back().Status == VerifyStatus::Failed)
         break;
     }
   } else {
-    llvm::StdThreadPool Pool(llvm::heavyweight_hardware_concurrency(Jobs));
+    // On the driver's pool when there is one: waiting on the group from a
+    // worker runs its tasks, so nesting cannot exceed the jobs.
+    std::optional<llvm::StdThreadPool> OwnPool;
+    if (!Pool)
+      OwnPool.emplace(llvm::heavyweight_hardware_concurrency(Jobs));
+    llvm::ThreadPoolTaskGroup Group(Pool ? *Pool : *OwnPool);
     std::vector<std::shared_future<VerifyResult>> Futures;
     Futures.reserve(Module.Obligations.size());
     for (size_t I = 0; I != Module.Obligations.size(); ++I) {
-      Futures.push_back(Pool.async(
-          [this, &Module, &CacheHashes, &CacheLookups, &IsReused, I] {
+      Futures.push_back(Group.async(
+          [this, &Module, &CacheHashes, &CacheLookups, &IsReused, I, Racing] {
             return verifyObligation(
                 Module, Module.Obligations[I],
                 Cache ? llvm::StringRef(CacheHashes[I]) : llvm::StringRef(),
-                Cache ? &CacheLookups[I] : nullptr, IsReused(I));
+                Cache ? &CacheLookups[I] : nullptr, IsReused(I), Racing);
           }));
     }
+    Group.wait();
     for (std::shared_future<VerifyResult> &Future : Futures)
       Results.push_back(Future.get());
   }
@@ -3157,7 +3217,7 @@ Z3VerifyBackend::Z3VerifyBackend(const BackendExecutionOptions &Execution,
       SolverTimeoutMs(Execution.SolverTimeoutMs),
       CollectionTimeoutMs(Execution.CollectionTimeoutMs),
       ResourceLimit(Execution.SolverResourceLimit), Jobs(Execution.Jobs),
-      MaxQueryNodes(Execution.MaxQueryNodes),
+      Pool(Execution.Pool), MaxQueryNodes(Execution.MaxQueryNodes),
       IntegerEncoding(Execution.IntegerEncoding),
       SkipWholeModuleRetry(Execution.SkipWholeModuleRetry),
       SingleQuery(Execution.SingleQuery),
@@ -3179,11 +3239,30 @@ Z3VerifyBackend::Z3VerifyBackend(const BackendExecutionOptions &Execution,
   }
 }
 
+void Z3VerifyBackend::Race::enter(Z3Encoder &Encoder) {
+  std::lock_guard<std::mutex> Guard(Lock);
+  Running.insert(&Encoder);
+  if (Cancelled)
+    Encoder.interrupt();
+}
+
+void Z3VerifyBackend::Race::leave(Z3Encoder &Encoder) {
+  std::lock_guard<std::mutex> Guard(Lock);
+  Running.erase(&Encoder);
+}
+
+void Z3VerifyBackend::Race::cancel() {
+  std::lock_guard<std::mutex> Guard(Lock);
+  Cancelled = true;
+  for (Z3Encoder *Encoder : Running)
+    Encoder->interrupt();
+}
+
 VerifyResult Z3VerifyBackend::verifyObligation(const ObligationModule &Module,
                                                const Obligation &Item,
                                                llvm::StringRef SemanticHash,
                                                const ProofCacheLookup *Lookup,
-                                               bool Reused) {
+                                               bool Reused, Race *Racing) {
   VerifyResult Result;
   if (Reused) {
     Result.Status = VerifyStatus::Verified;
@@ -3212,13 +3291,21 @@ VerifyResult Z3VerifyBackend::verifyObligation(const ObligationModule &Module,
   if (Result.Status != VerifyStatus::Verified &&
       Result.Reason != VerifyReason::CacheCorrupt &&
       Result.Reason != VerifyReason::CacheIOFailure) {
-    Z3Encoder Encoder;
-    Encoder.setTimeoutMs(TimeoutMs);
-    Encoder.setResourceLimit(ResourceLimit);
-    Encoder.setIntegerEncoding(IntegerEncoding);
-    Encoder.setProfileQuantifiers(ProfileQuantifiers);
-    Result = Encoder.verifyModule(Module, Item.CounterexampleQuery.get(),
-                                  Item.TraceEventCount);
+    if (spent()) {
+      Result = timeSpent();
+    } else {
+      Z3Encoder Encoder;
+      Encoder.setTimeoutMs(budget(TimeoutMs));
+      Encoder.setResourceLimit(ResourceLimit);
+      Encoder.setIntegerEncoding(IntegerEncoding);
+      Encoder.setProfileQuantifiers(ProfileQuantifiers);
+      if (Racing)
+        Racing->enter(Encoder);
+      Result = Encoder.verifyModule(Module, Item.CounterexampleQuery.get(),
+                                    Item.TraceEventCount);
+      if (Racing)
+        Racing->leave(Encoder);
+    }
     if (Cache)
       Result.CacheMisses = 1;
     if (Cache && Result.Status == VerifyStatus::Verified) {
@@ -3261,7 +3348,7 @@ Z3VerifyBackend::proveByInduction(const ObligationModule &Module,
   constexpr unsigned MaxInductionVariables = 2;
   unsigned Attempts = 0;
   for (const auto &[Variable, Sort] : inductionVariables(Module, Item)) {
-    if (Attempts++ == MaxInductionVariables)
+    if (Attempts++ == MaxInductionVariables || spent())
       break;
     auto Inductive = inductionModule(Module, Variable, Sort, Item);
     if (!Inductive) {
@@ -3273,7 +3360,7 @@ Z3VerifyBackend::proveByInduction(const ObligationModule &Module,
     // Both encodings are exact; bit-vector conversions of the binder would
     // hide the hypothesis from instantiation.
     Z3Encoder Encoder;
-    Encoder.setTimeoutMs(inductionBudgetMs(TimeoutMs));
+    Encoder.setTimeoutMs(budget(inductionBudgetMs(TimeoutMs)));
     Encoder.setResourceLimit(ResourceLimit);
     Encoder.setIntegerEncoding(IntegerEncoding ==
                                        MachineIntegerEncoding::BitVector
@@ -3288,17 +3375,20 @@ Z3VerifyBackend::proveByInduction(const ObligationModule &Module,
 }
 
 VerifyResult Z3VerifyBackend::verifyModule(const ObligationModule &Module) {
-  TimeoutMs = moduleTimeoutMs(Module, SolverTimeoutMs, CollectionTimeoutMs);
+  TimeoutMs =
+      budget(moduleTimeoutMs(Module, SolverTimeoutMs, CollectionTimeoutMs));
   Enc.setTimeoutMs(TimeoutMs);
   if (SingleQuery) {
     if (auto Limit = querySizeLimitResult(Module, MaxQueryNodes))
       return std::move(*Limit);
+    if (spent())
+      return timeSpent();
     return finishZ3Result(Enc.verifyModule(Module));
   }
   VerifyResult Result = verifyModuleDirect(Module);
   // The integer encoding is as exact: where bit-blasting gives up, it often
   // settles the same query.
-  if (IntegerEncoding == MachineIntegerEncoding::BitVector &&
+  if (IntegerEncoding == MachineIntegerEncoding::BitVector && !spent() &&
       Result.Status == VerifyStatus::Unresolved &&
       (Result.Reason == VerifyReason::SolverTimeout ||
        Result.Reason == VerifyReason::SolverUnknown ||
@@ -3333,7 +3423,10 @@ VerifyResult
 Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
   if (auto Limit = querySizeLimitResult(Module, MaxQueryNodes))
     return std::move(*Limit);
-  if (Jobs != 1 || Cache) {
+  if (spent())
+    return timeSpent();
+  // The cache holds proofs of single obligations.
+  if (Cache) {
     std::vector<VerifyResult> Results = verifyObligations(Module);
     std::optional<std::vector<std::string>> Unproved =
         unprovedObligations(Module, Results);
@@ -3363,7 +3456,7 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
       const bool CacheFailure =
           FirstUnresolved->Reason == VerifyReason::CacheCorrupt ||
           FirstUnresolved->Reason == VerifyReason::CacheIOFailure;
-      if (!CacheFailure && !SkipWholeModuleRetry) {
+      if (!CacheFailure && !SkipWholeModuleRetry && !spent()) {
         VerifyResult Whole = Enc.verifyModule(Module);
         if (Whole.Status != VerifyStatus::Unresolved) {
           Result = finishZ3Result(std::move(Whole));
@@ -3423,16 +3516,66 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
   const bool WholeUsedFullBudget =
       TimeoutMs == 0 ? !Module.LogicFunctions.empty()
                      : WholeBudget >= TimeoutMs;
-  Enc.setTimeoutMs(WholeUsedFullBudget ? TimeoutMs : WholeBudget);
-  VerifyResult Whole = Enc.verifyModule(Module);
-  Enc.setTimeoutMs(TimeoutMs);
+  // With workers to spare, the obligations are solved one by one beside the
+  // whole query. Both are exact, so whichever settles the module first
+  // decides it and interrupts the other. The whole query then runs in an
+  // encoder of its own, since an interrupt can outlive the check it stops.
+  const bool Racing = Jobs != 1 && Module.Obligations.size() > 1;
+  const unsigned WholeTimeout =
+      budget(WholeUsedFullBudget ? TimeoutMs : WholeBudget);
+  Race Rivals;
+  Race WholeRace;
+  std::optional<llvm::StdThreadPool> OwnPool;
+  std::optional<llvm::ThreadPoolTaskGroup> Group;
+  std::shared_future<std::vector<VerifyResult>> Ordered;
+  if (Racing) {
+    // Without the driver's pool, one of its own serves both strategies.
+    if (!Pool) {
+      OwnPool.emplace(llvm::heavyweight_hardware_concurrency(Jobs));
+      Pool = &*OwnPool;
+    }
+    Group.emplace(*Pool);
+    Ordered = Group->async([this, &Module, &Rivals, &WholeRace] {
+      std::vector<VerifyResult> Results =
+          verifyObligations(Module, /*StopAtFailure=*/true, &Rivals);
+      if (Results.size() == Module.Obligations.size() &&
+          llvm::all_of(Results, [](const VerifyResult &R) {
+            return R.Status == VerifyStatus::Verified;
+          }))
+        WholeRace.cancel();
+      return Results;
+    });
+  }
+  VerifyResult Whole;
+  if (Racing) {
+    Z3Encoder WholeEncoder;
+    WholeEncoder.setTimeoutMs(WholeTimeout);
+    WholeEncoder.setResourceLimit(ResourceLimit);
+    WholeEncoder.setIntegerEncoding(IntegerEncoding);
+    WholeEncoder.setProfileQuantifiers(ProfileQuantifiers);
+    WholeRace.enter(WholeEncoder);
+    Whole = WholeEncoder.verifyModule(Module);
+    WholeRace.leave(WholeEncoder);
+    if (Whole.Status == VerifyStatus::Verified)
+      Rivals.cancel();
+    Group->wait();
+    if (OwnPool)
+      Pool = nullptr;
+  } else {
+    Enc.setTimeoutMs(WholeTimeout);
+    Whole = Enc.verifyModule(Module);
+  }
+  Enc.setTimeoutMs(budget(TimeoutMs));
   if (Whole.Status == VerifyStatus::Verified)
     return finishZ3Result(std::move(Whole));
+  auto orderedResults = [&] {
+    return Racing ? Ordered.get()
+                  : verifyObligations(Module, /*StopAtFailure=*/true);
+  };
 
   if (Whole.Status == VerifyStatus::Failed) {
     bool SawUnresolved = false;
-    for (VerifyResult Result :
-         verifyObligations(Module, /*StopAtFailure=*/true)) {
+    for (VerifyResult Result : orderedResults()) {
       if (Result.Status == VerifyStatus::Verified)
         continue;
       if (Result.Status == VerifyStatus::Unresolved) {
@@ -3454,16 +3597,16 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
   }
 
   auto retryWhole = [&](VerifyResult SplitResult) {
-    if (WholeUsedFullBudget || SkipWholeModuleRetry)
+    if (WholeUsedFullBudget || SkipWholeModuleRetry || spent())
       return finishZ3Result(std::move(SplitResult));
+    Enc.setTimeoutMs(budget(TimeoutMs));
     VerifyResult Retry = Enc.verifyModule(Module);
     if (Retry.Status != VerifyStatus::Unresolved)
       return finishZ3Result(std::move(Retry));
     return finishZ3Result(std::move(SplitResult));
   };
 
-  std::vector<VerifyResult> Results =
-      verifyObligations(Module, /*StopAtFailure=*/true);
+  std::vector<VerifyResult> Results = orderedResults();
   std::optional<std::vector<std::string>> Unproved =
       unprovedObligations(Module, Results);
   std::optional<VerifyResult> FirstUnresolved;
