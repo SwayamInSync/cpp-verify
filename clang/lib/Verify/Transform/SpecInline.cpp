@@ -73,11 +73,10 @@ bindParams(const VFunction &Fn,
 
 static std::unique_ptr<VExpr>
 envLookup(const std::map<std::string, std::unique_ptr<VExpr>> &Env,
-          const std::string &Name, VType Ty, SourceLocation Loc,
-          const std::string &ProvenanceVariable) {
-  if (auto It = Env.find(Name); It != Env.end())
+          const VVarExpr &V) {
+  if (auto It = Env.find(V.Name); It != Env.end())
     return cloneVExpr(It->second.get());
-  return std::make_unique<VVarExpr>(Name, Ty, Loc, ProvenanceVariable);
+  return cloneVExpr(&V);
 }
 
 class SpecInlinerImpl {
@@ -531,7 +530,7 @@ public:
       return cloneVExpr(E);
     case VExpr::Var: {
       const auto *V = static_cast<const VVarExpr *>(E);
-      return envLookup(Env, V->Name, E->Ty, E->Loc, V->ProvenanceVariable);
+      return envLookup(Env, *V);
     }
     case VExpr::BinOp: {
       const auto *B = static_cast<const VBinOpExpr *>(E);
@@ -1808,6 +1807,9 @@ PassiveProgram verify::buildDecreasesChecks(const VFunction &Fn,
     auto PS = std::make_unique<PassiveStmt>();
     PS->K = PassiveStmt::Assert;
     PS->ProofKind = ProofObligationKind::Unsupported;
+    PS->Note = "the termination check of " + Fn.Name +
+               " cannot follow a recursive call through a construct of its "
+               "body (a loop, a store, or a callee without a definition)";
     PS->Cond = std::make_unique<VLiteralExpr>(false, VType::makeBool(),
                                               Fn.Decreases.front()->Loc);
     P.Stmts.push_back(std::move(PS));
@@ -2211,6 +2213,9 @@ PassiveProgram verify::buildReadsChecks(const VFunction &Fn,
     auto PS = std::make_unique<PassiveStmt>();
     PS->K = PassiveStmt::Assert;
     PS->ProofKind = ProofObligationKind::Unsupported;
+    PS->Note = "the reads check of " + Fn.Name +
+               " cannot follow a construct of its body (a loop, a store, or "
+               "a heap frame)";
     PS->Cond = std::make_unique<VLiteralExpr>(false, VType::makeBool(),
                                               SourceLocation());
     P.Stmts.push_back(std::move(PS));
@@ -2392,6 +2397,9 @@ static void addSpecPostChecks(PassiveProgram &P, const VFunction &Fn,
     auto PS = std::make_unique<PassiveStmt>();
     PS->K = PassiveStmt::Assert;
     PS->ProofKind = ProofObligationKind::Unsupported;
+    PS->Note = "the postcondition check of " + Fn.Name +
+               " cannot follow a construct of its body (a loop, a store, or "
+               "a heap frame)";
     PS->Cond = std::make_unique<VLiteralExpr>(false, VType::makeBool(),
                                               Fn.Postconditions.front()->Loc);
     P.Stmts.push_back(std::move(PS));
