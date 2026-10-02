@@ -182,28 +182,28 @@ void discard_owned_result()
   make_value(1);
 }
 
-// VERIFY-DAG: error: verification failed: consume_uninitialized_factory
-// VERIFY-DAG: error: verification failed: consume_freed_factory
-// VERIFY-DAG: error: verification failed: consume_freed_forward_factory
-// VERIFY-DAG: error: verification failed: consume_multiple_allocation_factory
-// VERIFY-DAG: error: verification failed: consume_secondary_escape_factory
-// VERIFY-DAG: error: verification failed: consume_nullable_leak_factory
-// VERIFY-DAG: error: verification failed: consume_recursive_factory
+// VERIFY-DAG: Unresolved: consume_uninitialized_factory {{.*}}[reason=construct.unsupported]
+// VERIFY-DAG: Unresolved: consume_freed_factory {{.*}}[reason=construct.unsupported]
+// VERIFY-DAG: Unresolved: consume_freed_forward_factory {{.*}}[reason=construct.unsupported]
+// VERIFY-DAG: Unresolved: consume_multiple_allocation_factory {{.*}}[reason=construct.unsupported]
+// VERIFY-DAG: Unresolved: consume_secondary_escape_factory {{.*}}[reason=construct.unsupported]
+// VERIFY-DAG: Unresolved: consume_nullable_leak_factory {{.*}}[reason=construct.unsupported]
+// VERIFY-DAG: Unresolved: consume_recursive_factory {{.*}}[reason=construct.unsupported]
 // VERIFY-DAG: error: verification failed: consume_external_factory
 // VERIFY-DAG: error: verification failed: double_delete_owned
 // VERIFY-DAG: error: verification failed: stale_alias_owned
 // VERIFY-DAG: error: verification failed: equal_factory_results
-// VERIFY-DAG: error: verification failed: discard_owned_result
+// VERIFY-DAG: Unresolved: discard_owned_result {{.*}}[reason=construct.unsupported]
 
-// BMC-DAG: error: verification failed: consume_uninitialized_factory
-// BMC-DAG: error: verification failed: consume_freed_factory
-// BMC-DAG: error: verification failed: consume_freed_forward_factory
-// BMC-DAG: error: verification failed: consume_multiple_allocation_factory
-// BMC-DAG: error: verification failed: consume_secondary_escape_factory
-// BMC-DAG: error: verification failed: consume_nullable_leak_factory
-// BMC-DAG: error: verification failed: consume_recursive_factory
+// BMC-DAG: Unresolved: consume_uninitialized_factory {{.*}}[reason=construct.unsupported]
+// BMC-DAG: Unresolved: consume_freed_factory {{.*}}[reason=construct.unsupported]
+// BMC-DAG: Unresolved: consume_freed_forward_factory {{.*}}[reason=construct.unsupported]
+// BMC-DAG: Unresolved: consume_multiple_allocation_factory {{.*}}[reason=construct.unsupported]
+// BMC-DAG: Unresolved: consume_secondary_escape_factory {{.*}}[reason=construct.unsupported]
+// BMC-DAG: Unresolved: consume_nullable_leak_factory {{.*}}[reason=construct.unsupported]
+// BMC-DAG: Unresolved: consume_recursive_factory {{.*}}[reason=construct.unsupported]
 // BMC-DAG: error: verification failed: consume_external_factory
 // BMC-DAG: error: verification failed: double_delete_owned
 // BMC-DAG: error: verification failed: stale_alias_owned
 // BMC-DAG: error: verification failed: equal_factory_results
-// BMC-DAG: error: verification failed: discard_owned_result
+// BMC-DAG: Unresolved: discard_owned_result {{.*}}[reason=construct.unsupported]
