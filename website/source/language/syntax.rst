@@ -31,6 +31,9 @@ Requires ``-fverify-contracts``. Full table:
    * - ``when(c)``
      - Spec functions
      - Domain on which the body defines the spec
+   * - ``inductive``
+     - Spec functions returning ``bool``
+     - The least predicate the body defines (no ``decreases``)
    * - ``behavior(name, assumes)``
      - After ``)``, then its ``pre``/``post``
      - A case of the contract
