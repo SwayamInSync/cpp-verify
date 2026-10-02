@@ -184,8 +184,8 @@ llvm::Error verify::materializeLogicFunctions(ObligationModule &Module,
       return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                      "spec step definition unavailable: %s",
                                      Spec->Name.c_str());
-    auto StepLowered =
-        lowerLogicExpr(StepBody.get(), "", DefinitionHeap, Spec->IntMode);
+    auto StepLowered = lowerLogicExpr(StepBody.get(), "", DefinitionHeap,
+                                      Spec->IntMode, &Ctx.Functions);
     if (!StepLowered)
       return llvm::createStringError(
           llvm::inconvertibleErrorCode(),
@@ -206,8 +206,8 @@ llvm::Error verify::materializeLogicFunctions(ObligationModule &Module,
       std::unique_ptr<VExpr> Body = unfoldSpecDefinition(*Spec, Ctx, Depth);
       if (!Body)
         continue;
-      auto Lowered =
-          lowerLogicExpr(Body.get(), "", DefinitionHeap, Spec->IntMode);
+      auto Lowered = lowerLogicExpr(Body.get(), "", DefinitionHeap,
+                                    Spec->IntMode, &Ctx.Functions);
       if (!Lowered)
         return llvm::createStringError(
             llvm::inconvertibleErrorCode(),
