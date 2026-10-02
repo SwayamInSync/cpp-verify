@@ -4,6 +4,7 @@
 
 spec bool valid(int *p, int count) { return true; }
 spec bool valid(int *p, unsigned long count) { return true; }
+spec bool valid(char *p, unsigned long count) { return true; }
 
 int read_first(int *p, int count)
   pre(valid(p, count) && count >= 1)
@@ -77,7 +78,8 @@ long negative_position_difference(int *p, int count)
   return (p - 1) - p;
 }
 
-long unrepresentable_pointer_difference(int *p, unsigned long count)
+// 2^63 bytes fit in the address space; their distance does not fit ptrdiff_t.
+long unrepresentable_pointer_difference(char *p, unsigned long count)
   pre(valid(p, count) && p != nullptr && count == 9223372036854775808UL)
   post(true)
 {
@@ -130,7 +132,8 @@ long call_unsafe_difference_precondition(int *p, int count)
   return unsafe_difference_precondition(p, count);
 }
 
-void unbounded_slice_write(int *p, int count, int offset)
+// A region write through a sub-slice stays within the slice's extent.
+void slice_region_write(int *p, int count, int offset)
   pre(valid(p, count) && count >= 1 && offset >= 0 && offset < count)
   modifies(*p)
 {
@@ -149,7 +152,7 @@ void unbounded_slice_write(int *p, int count, int offset)
 // VERIFY-DAG: error: verification failed: unsafe_difference_postcondition
 // VERIFY-DAG: error: verification failed: missing_extent_pointer_forward
 // VERIFY-DAG: error: verification failed: call_unsafe_difference_precondition
-// VERIFY-DAG: error: verification failed: unbounded_slice_write
+// VERIFY-DAG: Verified: slice_region_write
 
 // BMC-DAG: error: verification failed: insufficient_slice
 // BMC-DAG: error: verification failed: one_past_nonempty_slice
@@ -163,4 +166,4 @@ void unbounded_slice_write(int *p, int count, int offset)
 // BMC-DAG: error: verification failed: unsafe_difference_postcondition
 // BMC-DAG: error: verification failed: missing_extent_pointer_forward
 // BMC-DAG: error: verification failed: call_unsafe_difference_precondition
-// BMC-DAG: error: verification failed: unbounded_slice_write
+// BMC-DAG: Verified: slice_region_write
