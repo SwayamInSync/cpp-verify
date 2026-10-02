@@ -1,0 +1,15 @@
+# REQUIRES: cvc5
+# cvc5 proves the inductions over exact contract arithmetic and refutes the
+# false claims, but does not settle the induction through nonlinear machine
+# arithmetic in a function body, nor the unbounded closed form.
+# RUN: not %cpp-verify --backend=cvc5 %S/spec_induction.cpp 2>&1 \
+# RUN:   | FileCheck %s
+
+# CHECK-DAG: Verified: sum_closed [backend=cvc5]
+# CHECK-DAG: Verified: sum_nonnegative [backend=cvc5]
+# CHECK-DAG: Verified: pow2_positive [backend=cvc5]
+# CHECK-DAG: Unresolved: twice_sum [backend=cvc5] [reason=spec.fuel]
+# CHECK-DAG: verification failed: sum_wrong_once {{.*}}[backend=cvc5] [reason=counterexample]
+# CHECK-DAG: verification failed: pow2_bounded {{.*}}[backend=cvc5] [reason=counterexample]
+# CHECK-DAG: verification failed: sum_is_seven {{.*}}[backend=cvc5] [reason=counterexample]
+# CHECK-DAG: Unresolved: closed_form_everywhere [backend=cvc5] [reason=spec.fuel]
