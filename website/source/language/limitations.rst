@@ -266,18 +266,20 @@ Pointer difference
 A bounded executable same-array pointer-difference fragment is supported:
 
 - both operands have one matching complete pointee type;
-- operands may contain compositional arithmetic rooted at one pointer;
-- a ``valid(p, n)`` extent admits element positions in ``[0, n]``, including
-  the one-past endpoint; without an extent, direct abstract and represented
-  scalar-dynamic pointers retain only complete-object positions ``0`` and ``1``;
-- abstract operands use one syntactic SSA base, or dynamic aliases carry one
-  shared live lifetime identity;
+- operands have one origin: they came from one parameter's object or one
+  global (stepped, copied, or chosen through branches and loops), or dynamic
+  aliases carry one shared live lifetime identity;
+- each position lies in its origin's object: a ``valid(p, n)`` extent admits
+  element positions in ``[0, n]``, including the one-past endpoint; without an
+  extent, direct abstract and represented scalar-dynamic pointers retain only
+  complete-object positions ``0`` and ``1``;
 - target-byte difference is divided by ``sizeof(T)`` and converted to target
   machine ``ptrdiff_t`` only after proving representability.
 
-Stored or indirect positions whose root cannot be recovered, merely equal
-abstract addresses, distinct allocations, null/dangling operands, out-of-range
-positions, explicit ``spec`` bodies, and lifted ``constexpr`` specs fail closed.
+Differences between different parameters' objects (which may be one caller
+array) are ``construct.unsupported``. Pointers loaded from memory, distinct
+allocations, null/dangling operands, out-of-range positions, explicit
+``spec`` bodies, and lifted ``constexpr`` specs fail closed.
 Specs still need first-class ``(object origin, extent, element position)``
 metadata that survives substitution, quantifiers, and recursion.
 
