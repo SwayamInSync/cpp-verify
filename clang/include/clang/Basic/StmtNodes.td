@@ -346,5 +346,6 @@ def HideSpecStmt : StmtNode<Stmt>;
 def RevealSpecStmt : StmtNode<Stmt>;
 def ForallExpr : StmtNode<Expr>;
 def ExistsExpr : StmtNode<Expr>;
+def ContractChooseExpr : StmtNode<Expr>;
 def OldExpr : StmtNode<Expr>;
 def ResultExpr : StmtNode<Expr>;
