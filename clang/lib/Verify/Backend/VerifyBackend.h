@@ -4,6 +4,8 @@
 
 #include "Obligation.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/ThreadPool.h"
+#include <chrono>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -153,6 +155,10 @@ public:
   virtual llvm::StringRef getName() const = 0;
   virtual BackendCapabilities getCapabilities() const = 0;
   VerifyResult verify(const ObligationModule &Module);
+  /// Queries started after this get only the time left before Deadline: one
+  /// function's budget, shared by its queries. Unset removes the limit.
+  virtual void
+  setDeadline(std::optional<std::chrono::steady_clock::time_point> Deadline) {}
 
 protected:
   virtual VerifyResult verifyModule(const ObligationModule &Module) = 0;
@@ -182,6 +188,9 @@ struct BackendExecutionOptions {
   unsigned SolverResourceLimit = 0;
   /// Isolated solver jobs. 0 selects the available physical-core count.
   unsigned Jobs = 1;
+  /// The workers obligations run on, shared with the driver's function tasks
+  /// so that exactly Jobs run at once; null gives each call its own.
+  llvm::ThreadPoolInterface *Pool = nullptr;
   /// Maximum canonical expression nodes in a module; 0 disables it.
   uint64_t MaxQueryNodes = 0;
   MachineIntegerEncoding IntegerEncoding = MachineIntegerEncoding::Auto;
@@ -202,6 +211,22 @@ struct BackendExecutionOptions {
   uint64_t ProofCacheMaxBytes = 1024ULL * 1024ULL * 1024ULL;
   uint64_t ProofCacheMaxEntries = 100000;
 };
+
+/// \p Ms, or the time left before \p Deadline when that is less (at least
+/// one millisecond); 0 means no limit.
+inline unsigned
+withinDeadline(unsigned Ms,
+               std::optional<std::chrono::steady_clock::time_point> Deadline) {
+  if (!Deadline)
+    return Ms;
+  const auto Left = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        *Deadline - std::chrono::steady_clock::now())
+                        .count();
+  const unsigned Remaining =
+      Left <= 1 ? 1U
+                : static_cast<unsigned>(std::min<long long>(Left, UINT32_MAX));
+  return Ms == 0 ? Remaining : std::min(Ms, Remaining);
+}
 
 /// The per-query timeout for \p Module: the collection timeout when it
 /// reasons about collections, whose theories need more search.
