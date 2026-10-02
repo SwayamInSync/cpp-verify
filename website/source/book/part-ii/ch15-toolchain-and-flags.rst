@@ -49,7 +49,7 @@ Other flags
 - ``cpp-verify --collection-timeout=N`` — per-query timeout for queries over
   sequences, sets, multisets, or maps (default twice ``--timeout``)
 - ``cpp-verify --function-timeout=N`` — time all queries of one function may
-  take together (default no limit)
+  take together (default ten times ``--timeout``; ``0`` disables)
 - ``cpp-verify --jobs=N`` — solver workers shared by all functions (default
   every core)
 - ``cpp-verify --diagnostics-format=json`` — emit versioned
