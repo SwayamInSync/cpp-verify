@@ -175,9 +175,10 @@ Generated validity ties the result identity to its current byte owner. The
 explicit equality postcondition ties its address to ``owner``; together they
 recover the exact caller-owned lifetime. ``modifies`` authority is never
 granted merely because a variable has a provenance companion—the identity must
-equal one of the caller's issued allocations. The pointee postcondition restores
-the value because pointer-taking modular calls otherwise conservatively forget
-the value heap.
+equal one of the caller's issued allocations. Since ``identity`` writes no
+memory, the call leaves the heap unchanged; the pointee postcondition would be
+needed only for a callee that may write memory without a ``modifies``, which
+forgets the value heap at the call.
 
 The callee still must have a verified body and may not delete the borrowed
 dynamic formal. Returned local copies, pointer-returning intermediates without
