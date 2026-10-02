@@ -26,6 +26,7 @@ add_clang_library(clangVerify
   Transform/LoopUnroll.cpp
   Transform/SpecInline.cpp
   Transform/UBChecks.cpp
+  Backend/Certify.cpp
   Backend/Obligation.cpp
   Backend/ObligationSimplify.cpp
   Backend/ObligationSerialization.cpp
