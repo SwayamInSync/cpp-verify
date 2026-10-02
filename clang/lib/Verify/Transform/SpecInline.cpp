@@ -2311,6 +2311,22 @@ std::unique_ptr<VExpr> verify::specPostcondition(
   return Holds;
 }
 
+std::unique_ptr<VExpr> verify::specApplicationFacts(
+    const VFunction &Spec, const std::vector<std::unique_ptr<VExpr>> &Args,
+    const VExpr *Value, SourceLocation Loc, const std::string &Heap) {
+  std::unique_ptr<VExpr> Facts =
+      specPostcondition(Spec, Args, Value, Loc, Heap);
+  if (!Spec.Unfolding)
+    return Facts;
+  auto Map = bindParams(Spec, Args);
+  auto Unfolded = std::make_unique<VBinOpExpr>(
+      VBinOp::Eq, cloneVExpr(Value),
+      substParamsInExpr(Spec.Unfolding.get(), Map), VType::makeBool(), Loc);
+  if (!Facts)
+    return Unfolded;
+  return makeDecreaseAnd(std::move(Facts), std::move(Unfolded), Loc);
+}
+
 /// The postconditions of the specs a spec body calls, and of the spec itself
 /// at each return. A call within the recursion cycle may assume its callee's
 /// postcondition only where the measure is lower: the postconditions and
@@ -2329,7 +2345,8 @@ static void addSpecPostChecks(PassiveProgram &P, const VFunction &Fn,
 
   std::vector<std::unique_ptr<PassiveStmt>> Facts;
   for (BodySite &Site : Collector.Sites) {
-    if (!Site.Call || !Site.Callee || Site.Callee->Postconditions.empty())
+    if (!Site.Call || !Site.Callee ||
+        (Site.Callee->Postconditions.empty() && !Site.Callee->Unfolding))
       continue;
     const VSpecCallExpr &Call = *Site.Call;
     std::vector<std::unique_ptr<VExpr>> Args;
@@ -2338,8 +2355,8 @@ static void addSpecPostChecks(PassiveProgram &P, const VFunction &Fn,
     auto Application = std::make_unique<VSpecCallExpr>(
         Call.Callee, Call.CalleeIdentity, std::move(Args), Call.Ty, Call.Loc,
         Call.ReadsHeap, Call.HeapVar);
-    std::unique_ptr<VExpr> Fact =
-        specPostcondition(*Site.Callee, Site.Args, Application.get(), Site.Loc);
+    std::unique_ptr<VExpr> Fact = specApplicationFacts(
+        *Site.Callee, Site.Args, Application.get(), Site.Loc);
     if (!Fact)
       continue;
     const bool InCycle = Call.CalleeIdentity == Fn.Identity ||
