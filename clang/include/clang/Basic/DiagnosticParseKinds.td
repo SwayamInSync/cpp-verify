@@ -1894,6 +1894,23 @@ def err_contract_expected_semi : Error<
   "expected ';' after contract_assert">;
 def err_contract_expected_body : Error<
   "expected '{' after ghost">;
+def err_ghost_declaration_not_variable : Error<
+  "a ghost declaration must declare variables">;
+def err_contract_behavior_on_spec : Error<
+  "a spec function has no behaviors; state its post directly">;
+def err_contract_behavior_name : Error<
+  "expected a behavior name, then ',' and its assumption">;
+def err_contract_behavior_redefined : Error<
+  "behavior %0 is already defined">;
+def err_contract_behavior_unknown : Error<
+  "no behavior named %0">;
+def err_contract_behavior_relation_empty : Error<
+  "%select{disjoint_behaviors needs two|complete_behaviors needs a}0 "
+  "behavior%select{s|}0">;
+def err_calc_no_steps : Error<
+  "a calc chain needs at least one step: a relation and a term">;
+def err_calc_mixed_directions : Error<
+  "a calc chain cannot both increase and decrease">;
 def err_contract_redeclaration : Error<
   "contract clauses may only be specified on one declaration of a function">;
 def err_result_outside_postcondition : Error<
