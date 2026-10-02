@@ -48,6 +48,10 @@ Other flags
 - ``cpp-verify --timeout=N`` — per-query solver timeout in ms (default 30000)
 - ``cpp-verify --collection-timeout=N`` — per-query timeout for queries over
   sequences, sets, multisets, or maps (default twice ``--timeout``)
+- ``cpp-verify --function-timeout=N`` — time all queries of one function may
+  take together (default no limit)
+- ``cpp-verify --jobs=N`` — solver workers shared by all functions (default
+  every core)
 - ``cpp-verify --diagnostics-format=json`` — emit versioned
   ``cppverify.diagnostic/1`` JSON Lines for verification results
 - ``cpp-verify --lean-project=DIR`` — generate a preserved, pinned Lean project
