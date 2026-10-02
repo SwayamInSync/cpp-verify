@@ -50,7 +50,10 @@ settles it: that goal is an induction, and the fix is a lemma (see
 bound the argument, or state a lemma. For a hidden spec the reason is
 ``spec.hidden``: the definition would settle the query, but ``hide`` keeps it
 out of proofs, so reveal it or state a lemma. A model that cannot be checked
-within the checker's limits is reported as ``counterexample.unchecked``.
+within the checker's limits is reported as ``counterexample.unchecked``: for
+quantifiers, that is a body that multiplies or divides bound variables or
+applies a spec to one. Nested quantifiers over linear terms and reads, such as
+"every element has a larger one", are always checked.
 
 Other results that are not counterexamples:
 
@@ -63,12 +66,19 @@ Other results that are not counterexamples:
   contract but no definition. Fix the callee first; for a library function
   whose contract you accept, mark the declaration ``[[cppverify::trusted]]``.
 - ``construct.unsupported``: the failed obligation stands for a construct the
-  verifier does not model, so it says nothing about the program.
+  verifier does not model, so it says nothing about the program. The message
+  names the construct, such as a pointer difference between two parameters'
+  objects or a call that keeps a pointer to local storage.
 - ``[trusts=f]`` on a verified result: the proof relies on the contract of
   ``f``, marked ``[[cppverify::trusted]]`` (see
   :doc:`ch17-backends-modular-calls`).
 - ``[vacuous]`` on a verified result, with a warning: no execution reaches
   the claim. See the next section.
+- ``(its precondition is assumed, not checked, at calls from unverified g)``
+  on a verified result: ``g`` is not verified (it has no contract, assertion,
+  ghost code, or loop contract), so nothing checks that it establishes the
+  precondition when it calls. The proof holds for every call that does; give
+  ``g`` a contract to have its calls checked (JSON ``unverified_callers``).
 
 When a proof is too easy
 ------------------------
