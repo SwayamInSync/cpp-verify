@@ -4,7 +4,7 @@
 // RUN: %cpp-verify --check-ub --lower-only --dump-ir=1 %s 2>&1 | FileCheck %s --check-prefix=VCR
 // RUN: %cpp-verify --check-ub --lower-only --dump-ir=2 %s 2>&1 | FileCheck %s --check-prefix=PASSIVE
 // RUN: %cpp-verify --check-ub --lower-only --dump-ir=3 %s 2>&1 | FileCheck %s --check-prefix=VC
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=NOUB
+// RUN: not %cpp-verify --no-check-ub %s 2>&1 | FileCheck %s --check-prefix=NOUB
 
 // Under --check-ub the non-aliasing default separates whole valid(p, n)
 // extents; callers prove it, and `aliases` pairs may still overlap.
@@ -130,11 +130,13 @@ int aliasing_caller(int *buffer)
 // CHECK-DAG: Verified: aliasing_caller
 
 // The callee's clauses are asserted at the call under their own kinds: the
-// explicit precondition, pointer validity, and element then extent separation.
+// explicit precondition, element separation, each extent's validity, and
+// extent separation. A parameter with a declared extent has no single-object
+// validity of its own.
 // PASSIVE-LABEL: passive disjoint_caller
 // PASSIVE: assert precondition
-// PASSIVE: assert pointer-validity
 // PASSIVE: assert aliasing
+// PASSIVE: assert pointer-validity
 // PASSIVE: assert pointer-validity
 // PASSIVE: assert aliasing
 // PASSIVE: assert missing-return
