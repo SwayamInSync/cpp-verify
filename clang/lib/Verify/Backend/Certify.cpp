@@ -1590,9 +1590,24 @@ class Evaluator {
         return LogicValue::boolean(*Holds);
       if (!Failure.empty())
         return std::nullopt;
+      // A witness still decides it: a value where the body holds proves an
+      // exists, one where it fails refutes a forall (an inductive
+      // predicate's derivation height, for one).
+      for (unsigned I = 0; I != Limits.QuantifierProbe; ++I)
+        for (const CertInt &Binder : {CertInt(static_cast<int64_t>(I)),
+                                      CertInt(-static_cast<int64_t>(I) - 1)}) {
+          ++Instances;
+          Scope.emplace_back(E->Binder, LogicValue::integer(Binder));
+          std::optional<bool> Holds = truthOf(E->Children[0].get());
+          Scope.pop_back();
+          if (!Holds)
+            return std::nullopt;
+          if (*Holds != Forall)
+            return LogicValue::boolean(!Forall);
+        }
       return limit("an unbounded quantifier whose body depends on its binder "
                    "other than through linear arithmetic, reads, and "
-                   "quantifiers");
+                   "quantifiers, with no witness among the values tried");
     }
     std::set<CertInt> Checked = *Distinguished;
     if (Distinguished->empty()) {
