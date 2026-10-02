@@ -186,11 +186,25 @@ struct VHavocStmt : VStmt {
       : VStmt(Havoc, Loc), Target(std::move(T)) {}
 };
 
+/// A modifies footprint. Target names the lvalue (a Load for memory); with
+/// Count, the footprint is the Count cells of ElementSize bytes from Target's
+/// address.
+struct VFootprint {
+  std::unique_ptr<VExpr> Target;
+  std::unique_ptr<VExpr> Count;
+  uint64_t ElementSize = 0;
+};
+
+VFootprint cloneFootprint(const VFootprint &F);
+
 struct VWhileStmt : VStmt {
   std::unique_ptr<VExpr> Cond;
   std::vector<std::unique_ptr<VExpr>> Invariants;
   /// Lexicographic termination measure (ordered tuple); empty means none.
   std::vector<std::unique_ptr<VExpr>> Decreases;
+  /// The memory the loop may write, read in each iteration's state; empty
+  /// means none was declared.
+  std::vector<VFootprint> Modifies;
   std::vector<std::unique_ptr<VStmt>> Body;
   VWhileStmt(std::unique_ptr<VExpr> C, std::vector<std::unique_ptr<VExpr>> Inv,
              std::vector<std::unique_ptr<VExpr>> Dec,
@@ -289,6 +303,14 @@ struct VSourceVariable {
   SourceLocation EndLoc;
 };
 
+/// reads(Base, Count) on a spec: the cells Base[0..Count), ElementSize bytes
+/// apart, which bound everything the spec reads.
+struct VReadRange {
+  std::unique_ptr<VExpr> Base;
+  std::unique_ptr<VExpr> Count;
+  uint64_t ElementSize = 1;
+};
+
 struct VFunction {
   /// User-facing source name.
   std::string Name;
@@ -303,7 +325,38 @@ struct VFunction {
   bool ReadsHeap = false;
   bool RequiresCallDefinedness = false;
   bool IsExternalContract = false;
+  /// [[cppverify::trusted]]: its contract is assumed and its body, if any,
+  /// is not verified.
+  bool IsTrusted = false;
+  /// The declaration, for diagnostics about the function itself.
+  SourceLocation DeclLoc;
   bool NeedsDecreasesCheck = false;
+  /// decreases(*) on the function or one of its loops: it may diverge.
+  SourceLocation DivergenceLoc;
+  /// decreases(*) on the function itself: it may also recurse without a
+  /// measure.
+  bool DivergenceDeclared = false;
+  /// An executable loop with no decreases clause.
+  SourceLocation UnmeasuredLoop;
+  /// Memory is checked against the parameters' objects: an access through a
+  /// pointer without provenance lies in one at entry.
+  bool ObjectModel = false;
+  /// The other spec functions of a mutually recursive cycle.
+  std::set<std::string> RecursionGroup;
+  /// Every spec function its contracts and body reach, transitively.
+  std::set<std::string> SpecDependencies;
+  std::vector<VReadRange> Reads;
+  /// when(c): the domain on which the body defines a spec.
+  std::unique_ptr<VExpr> Domain;
+  /// A spec without a definition: the value of another outside its domain.
+  bool Uninterpreted = false;
+  /// A choose(...) lifted to a function of what its body mentions: its post
+  /// is the defining axiom (a witness when one exists), assumed, not proved.
+  bool IsChoice = false;
+  /// Supplied by <cppverify.h> rather than written in the program.
+  bool IsBuiltin = false;
+  /// Each behavior's name and assumption, to check that it can apply.
+  std::vector<std::pair<std::string, std::unique_ptr<VExpr>>> Behaviors;
   bool UsesDynamicStorage = false;
   std::optional<VFreshOwnedReturn> FreshOwnedReturn;
   std::map<std::string, unsigned> SpecFuel;
@@ -312,6 +365,9 @@ struct VFunction {
   std::vector<std::pair<std::string, VType>> Params;
   std::map<std::string, VSourceVariable> SourceVariables;
   std::set<std::string> ReferenceParams;
+  /// Pointer and reference parameters to const objects: the function
+  /// writes nothing through them.
+  std::set<std::string> ConstAddressParams;
   std::vector<std::pair<std::string, VType>> ReturnFields;
   /// Number of leading preconditions originating from explicit pre clauses.
   unsigned ExplicitPreconditionCount = 0;
@@ -321,7 +377,7 @@ struct VFunction {
   std::vector<ProofObligationKind> PreconditionKinds;
   std::vector<ProofObligationKind> PostconditionKinds;
   std::vector<std::unique_ptr<VExpr>> Recommends;
-  std::vector<std::unique_ptr<VExpr>> Modifies;
+  std::vector<VFootprint> Modifies;
   std::vector<std::pair<std::unique_ptr<VExpr>, std::unique_ptr<VExpr>>>
       Aliases;
   /// Positive top-level valid(base, length) interface extents discovered by
@@ -336,6 +392,10 @@ struct VFunction {
   /// type identity; non-recursive (pointer fields stop at Ptr leaves).
   std::vector<VObjectLayout> Layouts;
 };
+
+/// Global variables live at fixed addresses from here to the end of the
+/// address space; every other object lies below.
+inline constexpr uint64_t GlobalRegionBase = 0xFFFFFFFF00000000ULL;
 
 VFunction cloneVFunction(const VFunction &Fn);
 

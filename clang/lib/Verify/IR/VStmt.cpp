@@ -4,6 +4,11 @@
 using namespace clang;
 using namespace verify;
 
+VFootprint verify::cloneFootprint(const VFootprint &F) {
+  return {cloneVExpr(F.Target.get()), cloneVExpr(F.Count.get()),
+          F.ElementSize};
+}
+
 std::unique_ptr<VStmt> verify::cloneVStmt(const VStmt *S) {
   if (!S)
     return nullptr;
@@ -57,9 +62,12 @@ std::unique_ptr<VStmt> verify::cloneVStmt(const VStmt *S) {
     std::vector<std::unique_ptr<VStmt>> Body;
     for (const auto &B : W.Body)
       Body.push_back(cloneVStmt(B.get()));
-    return std::make_unique<VWhileStmt>(cloneVExpr(W.Cond.get()),
-                                        std::move(Inv), std::move(Dec),
-                                        std::move(Body), W.Loc);
+    auto Out = std::make_unique<VWhileStmt>(cloneVExpr(W.Cond.get()),
+                                            std::move(Inv), std::move(Dec),
+                                            std::move(Body), W.Loc);
+    for (const VFootprint &M : W.Modifies)
+      Out->Modifies.push_back(cloneFootprint(M));
+    return Out;
   }
   case VStmt::Call: {
     const auto &C = static_cast<const VCallStmt &>(*S);
@@ -138,7 +146,24 @@ VFunction verify::cloneVFunction(const VFunction &Fn) {
   Out.ReadsHeap = Fn.ReadsHeap;
   Out.RequiresCallDefinedness = Fn.RequiresCallDefinedness;
   Out.IsExternalContract = Fn.IsExternalContract;
+  Out.IsTrusted = Fn.IsTrusted;
+  Out.IsBuiltin = Fn.IsBuiltin;
+  for (const auto &[Name, Assumes] : Fn.Behaviors)
+    Out.Behaviors.emplace_back(Name, cloneVExpr(Assumes.get()));
+  Out.DeclLoc = Fn.DeclLoc;
   Out.NeedsDecreasesCheck = Fn.NeedsDecreasesCheck;
+  Out.DivergenceLoc = Fn.DivergenceLoc;
+  Out.DivergenceDeclared = Fn.DivergenceDeclared;
+  Out.ObjectModel = Fn.ObjectModel;
+  Out.UnmeasuredLoop = Fn.UnmeasuredLoop;
+  Out.RecursionGroup = Fn.RecursionGroup;
+  Out.SpecDependencies = Fn.SpecDependencies;
+  for (const VReadRange &R : Fn.Reads)
+    Out.Reads.push_back(
+        {cloneVExpr(R.Base.get()), cloneVExpr(R.Count.get()), R.ElementSize});
+  Out.Domain = cloneVExpr(Fn.Domain.get());
+  Out.Uninterpreted = Fn.Uninterpreted;
+  Out.IsChoice = Fn.IsChoice;
   Out.UsesDynamicStorage = Fn.UsesDynamicStorage;
   Out.FreshOwnedReturn = Fn.FreshOwnedReturn;
   Out.SpecFuel = Fn.SpecFuel;
@@ -147,6 +172,7 @@ VFunction verify::cloneVFunction(const VFunction &Fn) {
   Out.Params = Fn.Params;
   Out.SourceVariables = Fn.SourceVariables;
   Out.ReferenceParams = Fn.ReferenceParams;
+  Out.ConstAddressParams = Fn.ConstAddressParams;
   Out.ReturnFields = Fn.ReturnFields;
   Out.ExplicitPreconditionCount = Fn.ExplicitPreconditionCount;
   for (const auto &P : Fn.Preconditions)
@@ -157,8 +183,8 @@ VFunction verify::cloneVFunction(const VFunction &Fn) {
   Out.PostconditionKinds = Fn.PostconditionKinds;
   for (const auto &R : Fn.Recommends)
     Out.Recommends.push_back(cloneVExpr(R.get()));
-  for (const auto &M : Fn.Modifies)
-    Out.Modifies.push_back(cloneVExpr(M.get()));
+  for (const VFootprint &M : Fn.Modifies)
+    Out.Modifies.push_back(cloneFootprint(M));
   for (const auto &A : Fn.Aliases)
     Out.Aliases.emplace_back(cloneVExpr(A.first.get()),
                              cloneVExpr(A.second.get()));
