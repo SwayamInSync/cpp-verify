@@ -90,12 +90,77 @@ so it provably cannot overflow:
 
    invariant(i >= 0 && i <= n && s == i)   // s tracks i, bounded by n -> inductive
 
-``decreases`` is optional
--------------------------
+Every loop needs ``decreases``
+------------------------------
 
-Omit ``decreases`` and the verifier checks establishment and preservation only —
-**partial correctness**. The loop is allowed to be one that you have not proven
-terminates. Add ``decreases`` to also get a termination proof.
+Verification is total correctness, as in Verus. A loop without ``decreases``
+leaves its function ``Unresolved`` with reason ``decreases.missing``. When a
+loop really may run forever (an event loop, a server), say so with
+``decreases(*)``: the function is then proved for the executions that
+terminate and reported ``Verified ... [partial]``, and so is every caller.
+
+.. code-block:: cpp
+
+   int wait_for(const int *flag)
+     pre(valid(flag, 1))
+     post(result == 1)
+   {
+     while (*flag != 1)
+       decreases(*)
+     {
+     }
+     return *flag;
+   }
+
+What a loop does not write
+--------------------------
+
+A loop writes only the objects its stores and calls reach, so every other
+object keeps its value with no invariant saying so. To narrow the frame inside
+one object, list what the loop writes with ``modifies`` after its invariants
+(ACSL's ``loop assigns``). The footprints are read in each iteration's state:
+
+.. code-block:: cpp
+
+   void zero_prefix(int *a, int n)
+     pre(valid(a, n + 1) && n >= 1 && n <= 1000)
+     modifies(*a)
+     post(a[n] == old(a[n]))
+   {
+     for (int i = 0; i < n; i = i + 1)
+       invariant(0 <= i && i <= n)
+       modifies(a[0 : n])
+       decreases(n - i)
+     {
+       a[i] = 0;
+     }
+   }
+
+Ghost variables
+---------------
+
+``ghost T x = e;`` declares a variable that exists only for verification and
+lives in the function's scope, so loop invariants may name it. It can snapshot
+a value from before the loop:
+
+.. code-block:: cpp
+
+   void add_all(int *a, int n, int d)
+     pre(valid(a, n) && n >= 0 && n <= 1000 && d >= 0 && d <= 1000)
+     pre(forall(k, 0, n, 0 <= a[k] && a[k] <= 1000))
+     modifies(*a)
+     post(forall(k, 0, n, a[k] == old(a[k]) + d))
+   {
+     ghost int total = n;
+     for (int i = 0; i < n; i = i + 1)
+       invariant(0 <= i && i <= n && total == n)
+       invariant(forall(k, 0, i, a[k] == old(a[k]) + d))
+       invariant(forall(k, i, n, a[k] == old(a[k])))
+       decreases(total - i)
+     {
+       a[i] = a[i] + d;
+     }
+   }
 
 Lexicographic measures
 ----------------------
