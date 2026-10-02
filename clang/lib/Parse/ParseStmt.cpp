@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "clang/AST/ExprContract.h"
 #include "clang/AST/PrettyDeclStackTrace.h"
 #include "clang/AST/StmtContract.h"
 #include "clang/Basic/Attributes.h"
@@ -3049,7 +3050,16 @@ StmtResult Parser::ParseContractAssert() {
   if (Tok.is(tok::identifier) && Tok.getIdentifierInfo()->isStr("by") &&
       NextToken().is(tok::l_brace)) {
     SourceLocation ByLoc = ConsumeToken();
+    // contract_assert(forall(k, ...)) by { ... } proves the body for one
+    // arbitrary k, so the block sees k.
+    ParseScope BinderScope(this, Scope::DeclScope);
+    if (const auto *Forall =
+            dyn_cast<ForallExpr>(Cond.get()->IgnoreParenImpCasts()))
+      if (VarDecl *Binder = Forall->getBoundVar())
+        Actions.PushOnScopeChains(Binder, getCurScope(),
+                                  /*AddToContext=*/false);
     StmtResult Body = ParseCompoundStatement();
+    BinderScope.Exit();
     if (Body.isInvalid())
       return StmtError();
     By = new (Actions.getASTContext()) GhostBlockStmt(ByLoc, Body.get());
