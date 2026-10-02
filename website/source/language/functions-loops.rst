@@ -20,20 +20,129 @@ inherits that declaration's contract even when its parameter names differ::
 
    int f(int x) { return x + 1; }
 
-A contracted declaration with no definition is an explicit trusted interface.
-Calls are verified against its contract, and ``cpp-verify`` emits a warning that
-the external contract is being assumed rather than reporting it as verified.
+A caller's proof uses its callees' contracts, so a verdict is only as good as
+those contracts. A caller whose proof relies on a callee contract that the
+callee's own verification did not establish is ``Unresolved`` with reason
+``callee.contract``, naming the callee.
+
+Trusted contracts
+-----------------
+
+Some contracts cannot be proved in the program being verified: a function
+from a library compiled elsewhere, a system call, a routine whose body is
+outside the verified subset, or a lemma you decide to assume.
+``[[cppverify::trusted]]`` marks such a contract as assumed, as Verus's
+``#[verifier::external_body]`` does:
+
+.. code-block:: cpp
+
+   // Defined in another library.
+   [[cppverify::trusted]] int clamp_byte(int v)
+     post(0 <= result && result <= 255);
+
+   // Compiled and run, but its body is not verified.
+   [[cppverify::trusted]] int read_sensor(int channel)
+     pre(channel >= 0 && channel < 4)
+     post(result >= 0 && result <= 1023)
+   {
+     return channel * 300;
+   }
+
+   // An axiom: a proof function without a proof.
+   spec int sq(int x) { return x * x; }
+
+   [[cppverify::trusted]] proof void sq_nonnegative(int x)
+     post(sq(x) >= 0);
+
+   int sample(int c)
+     pre(c >= 0 && c < 4)
+     post(0 <= result && result <= 255)
+   {
+     int r = read_sensor(c);
+     ghost { sq_nonnegative(r); }
+     return clamp_byte(r);
+   }
+
+.. code-block:: text
+
+   trusted.cpp:2:28: Trusted: clamp_byte (contract assumed, not verified)
+   trusted.cpp:6:28: Trusted: read_sensor (contract assumed, not verified)
+   Verified: spec axiom: sq
+   trusted.cpp:16:35: Trusted: sq_nonnegative (contract assumed, not verified)
+   Verified: sample [backend=z3] [trusts=clamp_byte,read_sensor,sq_nonnegative]
+
+- On a declaration, the contract is assumed at every call; the preconditions
+  are still checked there.
+- On a definition, the body is compiled but not verified.
+- On a proof function, the postcondition is an axiom.
+- A spec function cannot be trusted: its definition is its meaning, so there
+  is nothing to assume. The attribute is an error there.
+- Every verdict that relies on a trusted contract lists it in
+  ``[trusts=...]`` (JSON ``"trusts"``), transitively through verified
+  callees: a caller of ``sample`` carries the same three names.
+
+The mark may appear on any declaration of the function. Without it, a
+contract with no definition is neither proved nor vouched for, so it proves
+nothing:
+
+.. code-block:: cpp
+
+   int helper(int v)
+     post(result == v);
+
+   int uses_helper(int v)
+     post(result == v)
+   {
+     return helper(v);
+   }
+
+.. code-block:: text
+
+   warning: helper has a contract but no definition, so its callers are not
+     verified; mark the declaration [[cppverify::trusted]] to assume the contract
+   Unresolved: uses_helper [backend=z3] [reason=callee.contract] (relies on the
+     contract of helper (no definition; mark it [[cppverify::trusted]] to
+     assume it), which is not established)
+
+A trusted contract is an assumption, and a wrong one makes proofs wrong. One
+that contradicts the state of a call (no result can satisfy it) would make
+everything after the call hold vacuously; CppVerify reports that case with
+``[vacuous]`` and a warning at the call (see :doc:`tooling`).
 
 An uncontracted ``constexpr`` definition may be lifted for use in contract
 expressions.  Once a ``constexpr`` function has executable ``pre``/``post``
 clauses, it remains a modular executable function: calls must satisfy its
 preconditions and cannot be used as pure contract expressions.
 
-At a modular call, preconditions and ``old(parameter)`` use the argument's
-entry value. If a by-value parameter is reassigned inside the callee, an
-unwrapped occurrence of that parameter in a postcondition denotes its final
-local value, not the caller's unchanged argument. The call summary therefore
-uses a fresh final value for each syntactically modified parameter.
+Preconditions, ``old(parameter)``, and a parameter named in a postcondition
+all denote the argument's entry value, as in ACSL, even when the callee
+reassigns its by-value parameter; a caller can therefore use the
+postcondition directly.
+
+Behaviors
+---------
+
+A contract can be split into cases, as ACSL behaviors do. ``behavior(name,
+assumes)`` starts a case; the ``pre`` and ``post`` clauses after it apply
+where its assumption holds (``assumes`` at entry):
+
+.. code-block:: cpp
+
+   int abs_value(int x)
+     behavior(nonnegative, x >= 0)
+       post(result == x)
+     behavior(negative, x < 0)
+       pre(x > -2147483647 - 1)
+       post(result == -x)
+     complete_behaviors
+     disjoint_behaviors
+   {
+     return x < 0 ? -x : x;
+   }
+
+``complete_behaviors`` requires that some behavior applies to every input the
+preconditions admit, and ``disjoint_behaviors`` that no two do; either may
+list the behaviors it relates, as in ``disjoint_behaviors(low, high)``.
 
 Loops
 -----
@@ -90,29 +199,43 @@ obligations:
        re-establishes ``I``. (Loop-modified variables are havocked first, so the
        invariant must be *inductive* — strong enough to re-prove itself.)
    * - Termination
-     - ``0 <= D_new < D_old`` each iteration. Only checked when ``decreases`` is
-       present; without it the loop is verified for **partial correctness**.
+     - ``0 <= D_old`` and ``D_new < D_old`` each iteration (and at each
+       ``continue``).
+   * - Frame
+     - With a loop ``modifies``, every cell outside its footprints, read in the
+       iteration's state, is unchanged since the loop began.
 
-Ghost-block and proof-function loops are erased at runtime and therefore must
-include ``decreases``; partial-correctness nontermination cannot be used as a
-proof step.
+Verification is total correctness, as in Verus: an executable loop without
+``decreases`` leaves its function ``Unresolved`` with reason
+``decreases.missing``. ``decreases(*)`` allows a loop (or an executable
+function) to diverge; its function and every caller are then reported
+``Verified ... [partial]``, proved only for the executions that terminate.
+Ghost-block and proof-function loops are erased at runtime and must have a
+real measure; ``decreases(*)`` is rejected there.
+
+A loop writes only the objects its stores and calls reach, so other memory
+keeps its value across it without an invariant. ``modifies(...)`` after the
+invariants narrows that further, like ACSL's ``loop assigns``; its footprints
+are read in each iteration's state, so ``modifies(a[0 : i])`` describes the
+prefix written so far.
 
 After the loop the verifier knows exactly ``I && !c`` — anything needed
 downstream must be captured by the invariant.
 
 .. note::
 
-   Invariants are checked under **honest machine integers**. An unbounded
-   accumulator invariant like ``s >= 0`` is *not* inductive (from ``s ==
-   INT_MAX``, ``s + 1`` overflows negative); bound the accumulator instead
-   (e.g. ``s == i``). A loop placed after an early ``return`` is checked only on
+   Contracts are mathematical, but the loop body runs on machine integers.
+   An unbounded accumulator invariant like ``s >= 0`` does not prove that the
+   body's ``s + 1`` cannot overflow (``s`` may be ``INT_MAX``); bound the
+   accumulator instead (e.g. ``s == i``). A loop placed after an early ``return`` is checked only on
    the path that reaches it.
 
 Each ``decreases`` expression must be integer-typed. A comma-separated tuple
 ``decreases(a, b)`` is a **lexicographic** measure: each iteration the tuple must
 strictly decrease in lexicographic order (some component drops while every
-earlier component stays equal), with all components non-negative. This proves
-termination of nested counters and Ackermann-style recursion.
+earlier component stays equal), and the component that drops must be
+non-negative before the step, as in ACSL. This proves termination of nested
+counters and Ackermann-style recursion.
 
 Recursive ``spec``, ``proof``, and executable functions use the same
 well-founded, lexicographic discipline. Each recursive call must occur on a
