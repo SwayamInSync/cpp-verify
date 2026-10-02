@@ -13,6 +13,7 @@ All contract syntax is enabled with `-fverify-contracts`. Without this flag, the
 | `modifies(lvalue, ...)` | After function `)`, or after a loop's invariants | Frame condition — the cells, ranges `p[lo : n]`, or objects this function or loop may write |
 | `aliases(p, q)` | After function `)` | Opts out of implicit non-aliasing for a supported same-pointee pointer/reference address pair |
 | `recommends(expr)` | After function `)` (spec only) | Soft precondition for spec functions; reported on verification failure |
+| `inductive` | After function `)` (spec returning `bool` only) | The least predicate the body defines: true where a finite derivation shows it |
 | `behavior(name, assumes)` | After function `)`, followed by its `pre`/`post` | A case of the contract (ACSL behavior) |
 | `complete_behaviors` / `disjoint_behaviors` | After the behaviors | Some behavior / at most one behavior applies to every admitted input |
 | `invariant(expr)` | After a `while`/`for` condition or a `do` loop's trailing condition | Loop invariant |
@@ -311,6 +312,51 @@ spec int fibo(int n)
 - Type-checked by Clang Sema like normal functions.
 
 **Why termination must be verified:** A non-terminating spec function introduces a logical contradiction — Z3 can derive `bad(0) == bad(0) + 1`, therefore `0 == 1`, and from that prove anything. The `decreases` clause is the only thing about a spec function that needs verification. Its body is the mathematical definition and is axiomatically true by construction once the spec terminates, which is why the termination check cannot use it: a diverging spec's equations can be contradictory exactly where it diverges. Non-recursive spec functions need no verification at all.
+
+### Inductive predicates
+
+```cpp
+spec bool edge(int a, int b) { return b == a + 1 || b == 2 * a; }
+
+spec bool reach(int a, int b)
+  inductive
+  post(!result || a < 0 || a <= b)
+{
+  return a == b || exists(c, edge(a, c) && reach(c, b));
+}
+```
+
+- `inductive` makes a spec returning `bool` the least predicate its body
+  defines, as Dafny's `least predicate` and Coq's inductive propositions: it
+  holds exactly where a finite derivation shows it. It needs no measure, so
+  it describes reachability, derivability, or a process that may run forever
+  (`n == 1 || (n > 1 && reaches_one(next(n)))`). `inductive` is contextual,
+  like `reads`.
+- The body returns a condition, under `if` and `else` at most, in which the
+  predicate occurs only positively: as a conjunct or disjunct, a branch of
+  `?:`, under `exists`, or under a bounded `forall`; never negated, compared,
+  converted, in a condition, in an argument, or under a `forall` without
+  bounds. The predicate applies itself only directly, reads no memory, and
+  takes no `decreases` or `when`.
+- Meaning: with `F` its body, `P(x)` is `exists(h, P.step(h, x))`, where the
+  generated spec `P.step(h, x)` is `h > 0 && F` with each `P(a)` read as
+  `P.step(h - 1, a)`: `F` applied `h` times to false. The conditions above
+  make `F` monotone and continuous, so this union is the least fixpoint
+  (Kleene's theorem) and `P(x) == F(x)` is a theorem.
+- Proofs see `P` through that equation, assumed at every application: one
+  unfolding, both ways (introduction and inversion). An application that
+  appears only inside an unfolding is unfolded once it is named, as in
+  `contract_assert(reach(2, 4));`. `reveal(P)` gives the definition instead.
+- A postcondition states what every derivation satisfies and has the form
+  `!result || Q`, where `Q` does not apply `P`. It is proved for `P.step` by
+  induction on `h`, which is induction on derivations, together with the
+  termination of `P.step`, and it holds at every application of `P`. A
+  failure is reported as `spec post by induction failed: P`, and proofs that
+  rely on it are `spec.post`.
+- A counterexample that needs `P(v)` true is certified by a derivation, a
+  height `h` with `P.step(h, v)`, found by trying heights. One that needs
+  `P(v)` false is `counterexample.unchecked` unless the quantifier analysis
+  decides it, since no height shows that no derivation exists.
 
 ### `recommends` — soft preconditions for spec functions
 
@@ -1114,8 +1160,8 @@ KEYWORD(result,           KEYCONTRACT)
 
 KEYCONTRACT flag: only active when `-fverify-contracts` is passed. Otherwise these are valid identifiers.
 
-`reads`, `when`, `behavior`, `complete_behaviors`, `disjoint_behaviors`,
-`calc`, `trigger`, and `choose` are contextual: they are recognized only in
+`reads`, `when`, `inductive`, `behavior`, `complete_behaviors`,
+`disjoint_behaviors`, `calc`, `trigger`, and `choose` are contextual: they are recognized only in
 their contract positions (and `calc`, `trigger`, `choose` only when no
 declaration of that name is visible), so ordinary code keeps those names.
 
