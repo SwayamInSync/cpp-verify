@@ -107,6 +107,14 @@ its `modifies` footprints; without them it writes nothing through a pointer
 or reference to const, and is taken to write the whole heap through a
 mutable one (see `modifies` below).
 
+A function the verifier does not verify (no contract, assertion, ghost code,
+or loop contract) may call a contracted one. Its precondition is then
+assumed at that call, not checked, and the callee's verdict says so, as
+Frama-C reports a property valid under hypotheses:
+`Verified: f [backend=z3] (its precondition is assumed, not checked, at calls
+from unverified g, h)` (JSON `unverified_callers`). Nothing else changes: the
+callee's proof stands for every call that establishes its precondition.
+
 A proof that holds only because no execution reaches the claim is reported
 with `[vacuous]` and a warning. Assumptions enter a proof only at the
 preconditions and type invariants, behavior assumptions, and trusted
@@ -206,6 +214,18 @@ contract_assert(sq(a) <= sq(b)) by {
   afterwards. It is encoded as `if (*) { proof; assert c; assume false }
   assume c`, with the choice fresh in every execution, so BMC unrolling stays
   sound.
+
+```cpp
+contract_assert(forall(k, 0, n, a[k] <= a[n - 1])) by {
+    pair_ordered(a, n, k, n - 1);
+}
+```
+
+- With a `forall` as the condition, the proof is about one arbitrary value of
+  its variable, as Verus's `assert forall ... by`: inside the block `k` is in
+  scope, lies in `[lo, hi)`, and cannot be assigned; the block must establish
+  the body for that `k`, and the whole `forall` holds afterwards (universal
+  generalization). An implication is a branch: `if (A(k)) lemma(k);`.
 
 ```cpp
 calc {
@@ -409,10 +429,13 @@ post(forall(k, sq(k) >= 0))
 - `binder` is a fresh mathematical integer, scoped to `body`.
 - `lo` and `hi` must be integer; `body` must be bool.
 - Without bounds the quantifier ranges over all mathematical integers. A
-  counterexample to one is certified exactly when its body depends on the
-  binder through memory reads, collection reads, and comparisons, because the
-  body is then constant beyond finitely many values; otherwise it is
-  `counterexample.unchecked`.
+  counterexample to one is certified exactly when its body depends on its
+  binders through linear arithmetic, comparisons, memory and collection
+  reads, and other quantifiers, nested to any depth: once the model fixes
+  everything else, each read is one of finitely many constant pieces, which
+  leaves a sentence of Presburger arithmetic that the certifier decides.
+  Otherwise (a product or quotient of binders, or a spec applied to a binder)
+  it is `counterexample.unchecked`.
 
 ### Triggers
 
@@ -470,14 +493,16 @@ addresses, so address arithmetic itself cannot wrap. A typed `T*` step is
 multiplied by Clang's target `sizeof(T)` and record fields add their target
 byte-layout offset. The supported buffer fragment includes `p + i`, `p - i`,
 `*(p + i)`, and `p[i]`. Executable pointer-pointer subtraction is additionally
-supported for same-array positions. A `valid(p, n)` extent admits compositional
-positions in `[0, n]`, including one-past; without an extent, direct abstract
-and represented scalar-dynamic pointers retain only base and one-past
-complete-object positions. Operands must share either one syntactic abstract
-base or one concrete local lifetime identity. The target-byte difference is
-divided by `sizeof(T)`, proved representable by target `ptrdiff_t`, and then
-materialized as a machine value. Stored/indirect positions, equal-address
-distinct abstract bases, subtraction inside explicit specs or lifted
+supported for positions in one object. Both operands must have one origin
+(below), and each must lie in its origin's object, one past the end included:
+`[0, n]` for a `valid(p, n)` extent, `[0, 1]` for a single object. Pointers
+into local or dynamic storage share an origin when they share a lifetime
+identity. Pointers into different parameters' or globals' objects may still
+lie in one caller array, which the object model does not describe, so their
+difference is `construct.unsupported`, not an error. The target-byte
+difference is divided by `sizeof(T)`, proved representable by target
+`ptrdiff_t`, and then materialized as a machine value. Pointers loaded from
+memory (no known origin), subtraction inside explicit specs or lifted
 `constexpr` functions, pointer compound assignment, and forged pointer/integer
 casts remain rejected.
 
@@ -573,15 +598,38 @@ positions prove the inclusive one-past range `[0, n]`.
 
 A pointer without a declared extent addresses one object, as Frama-C's RTE
 `\valid` guards and Verus permissions require. An access through it must lie
-in that object: the parameter's entry object when the pointer steps from a
-parameter the body never reassigns, otherwise some parameter's object or the
-single object at a base known to be valid (a callee or external result).
+in that object: the object its origin names when the origin is known (a
+parameter's entry object, however the pointer was stepped, copied, or
+chosen), otherwise some parameter's object or the single object at a base
+known to be valid (a callee or external result).
 Pointer arithmetic must stay within the same object's closed range
 `[0, size]`, so forming `p + 10` from `valid(p, 2)` fails even without a
 dereference. Objects lie at positive addresses below `2^64`. A caller
 discharges a callee's single-object validity by showing its argument lies in
 one of its own objects. Abstract storage is initialized; represented local
 and dynamic storage keeps its metadata checks.
+
+**Pointer origins.** Every pointer variable has, at every point, the objects it
+may address: its origins, as CompCert's blocks and Frama-C's base addresses.
+A pointer parameter starts with its entry object and a global's address with
+the global; arithmetic keeps the origin, assignment copies it, and branches
+and loops join the possibilities. A pointer loaded from memory or returned by
+a call has no known origin. Origins decide three things:
+
+- an access or a step must stay in its origin's object, so `*q` one past the
+  end of `a` is rejected even where another object starts;
+- a pointer difference needs one origin on both sides;
+- a loop writes only its stores' origins (and, with a function `modifies`,
+  only where they meet it), so every other object keeps its value without
+  an invariant.
+
+A variable that may hold either of two origins carries a hidden companion
+that names which. A loop that moves a pointer gets two generated invariants,
+proved like the user's: such a companion stays among the possible origins,
+and the pointer stays a whole number of elements from its origin's start. An
+invariant still bounds pointers by address, and an address alone does not say
+where a pointer came from: when a walker may be in either of two objects,
+relate it to the condition that chose, as in `s ? q == a + i : q == b + i`.
 
 The marker must be a positive top-level conjunction clause on a bare pointer to
 a complete object type. At most one marker may describe each pointer. Shifted,
@@ -941,7 +989,9 @@ int safe_fib(int n) pre(...) post(result == fibo(n)) {
   `decreases.missing`: a loop has no termination measure;
   `construct.unsupported`: the obligation that failed stands for a construct
   the verifier does not model, so its counterexample says nothing about the
-  program.
+  program; the message names the construct (for example "the operands of
+  this pointer difference may address the objects of different parameters
+  or globals, which may be one caller array").
 - Qualifiers: `[partial]` (proved for terminating executions only, after
   `decreases(*)`), `[trusts=f]` (relies on the contract of `f`, marked
   `[[cppverify::trusted]]`), `[vacuous]` (no execution reaches the claim).
@@ -1238,12 +1288,18 @@ their human message: `counterexample`, `solver.timeout`, `solver.unknown`,
 Lines (`cppverify.diagnostic/1`) for both source verification and archive
 replay.
 
-Z3-backed ordered obligations may run concurrently under `--jobs=N`. Each task
-constructs a distinct Z3 context/solver and results are consumed in canonical
-source order, so concurrency cannot choose which failure is public. AST/VCR
-lowering, canonicalization, dumps, archive writes, Lean emission, and diagnostic
-publication remain serial. `--solver-rlimit` adds a deterministic per-query Z3
-budget, while `--max-query-nodes` rejects an oversized canonical module before
+`--jobs=N` runs one pool of exactly `N` workers (default: every core, or
+`CPPVERIFY_JOBS`; the compile-time verifier uses one). Functions are verified
+as tasks on it, each with its own backends; a function's obligations are
+tasks on the same pool, and with workers to spare its whole query races the
+obligations solved one by one, a proof by either interrupting the other.
+Each task constructs a distinct Z3 context/solver, and dumps, archive
+records, and diagnostics are buffered per function and published in
+canonical source order, so concurrency cannot choose which failure is public.
+`--function-timeout` (by default unset) bounds all queries of one function
+together. AST/VCR lowering and Lean emission remain serial.
+`--solver-rlimit` adds a deterministic per-query Z3 budget, while
+`--max-query-nodes` rejects an oversized canonical module before
 verification, lower-only encoding, or a requested Z3 dump; neither limit can
 become success.
 
