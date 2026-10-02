@@ -18,4 +18,4 @@ proof void lemma_double_value(int value)
 // CHECK-DAG: Verified: spec axiom: double_value
 // CHECK-DAG: Exported: lean fallback: lemma_double_value
 // CHECK-DAG: Unresolved: lemma_double_value [backend=z3] [reason=solver.resource-limit] (proof obligation
-// GOALS: 3
+// GOALS: 2

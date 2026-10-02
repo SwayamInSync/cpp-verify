@@ -3,20 +3,21 @@ import CppVerify.User
 theorem cppverify_fibo_step_fn_5f5a396669626f5f7374657069_obligation_2_goal_proof :
     cppverify_fibo_step_fn_5f5a396669626f5f7374657069_obligation_2_goal := by
   unfold cppverify_fibo_step_fn_5f5a396669626f5f7374657069_obligation_2_goal
-  intro __heap_alloc_0 __heap_live_0 i_0
+  intro __heap_alloc_0 __heap_live_0 i_0 spec1 spec2 spec3
   by_cases h :
       cppBvSle (BitVec.ofInt 32 1) i_0 ∧
         cppBvSle i_0 (BitVec.ofInt 32 10)
   · right
     right
     right
-    right
-    obtain ⟨low, high⟩ := h
-    simp only [cppBvSle, BitVec.sle, decide_eq_true_eq] at low high
-    have one : (BitVec.ofInt 32 1).toInt = 1 := rfl
-    have ten : (BitVec.ofInt 32 10).toInt = 10 := rfl
-    simp only [BitVec.signExtend_eq, BitVec.saddOverflow, BitVec.ssubOverflow,
-      one]
-    simp only [Bool.or_eq_false_iff, decide_eq_false_iff_not]
-    omega
+    have bounds := h
+    simp [cppBvSle, BitVec.sle] at bounds
+    have positive : ¬i_0.toInt + 1 ≤ 0 := by omega
+    have notOne : i_0.toInt + 1 ≠ 1 := by omega
+    have minusTwo : i_0.toInt + 1 - 2 = i_0.toInt - 1 := by omega
+    have minusOne : i_0.toInt + 1 - 1 = i_0.toInt := by omega
+    rw [spec1]
+    unfold cppSpecBody_m1_fn_5f5a346669626f69_1
+    rw [if_neg positive, if_neg notOne, minusTwo, minusOne]
+    exact Int.add_comm _ _
   · exact Or.inl h
