@@ -541,6 +541,9 @@ public:
   Value *VisitExistsExpr(const ExistsExpr *) {
     return llvm::PoisonValue::get(CGF.ConvertType(CGF.getContext().BoolTy));
   }
+  Value *VisitContractChooseExpr(const ContractChooseExpr *E) {
+    return llvm::PoisonValue::get(CGF.ConvertType(E->getType()));
+  }
   Value *VisitOldExpr(const OldExpr *E) {
     return llvm::PoisonValue::get(CGF.ConvertType(E->getType()));
   }
