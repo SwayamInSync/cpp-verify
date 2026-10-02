@@ -1,10 +1,12 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
 // RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 // Heap: memcpy verifies end-to-end -- a two-buffer copy loop whose quantified
-// invariant is preserved across stores, using the non-overlap precondition
-// (d's range and s's range are disjoint).
+// invariant is preserved across stores, using the non-overlap default: the
+// two buffers are distinct objects.
+spec bool valid(int *p, int n) { return true; }
+
 void mcpy(int* d, int* s, int n)
-  pre(d != nullptr && s != nullptr && n >= 0 && n <= 1000 && (d + n <= s || s + n <= d))
+  pre(valid(d, n) && valid(s, n) && n >= 0 && n <= 1000)
   modifies(*d)
   post(forall(i, 0, n, d[i] == s[i]))
 {
