@@ -82,16 +82,15 @@ enum class LogicOverflowOp { Add, Sub, Mul, Neg, SignedDiv };
 
 /// An operation on a collection; elements, keys, values, indices, lengths,
 /// and counts are mathematical integers. Each is total: an index outside a
-/// sequence reads 0 and an update there leaves it unchanged; a subrange
-/// clamps its bounds into the sequence; a key outside a map's domain maps
-/// to 0.
+/// sequence reads 0; a subrange clamps its bounds into the sequence; a key
+/// outside a map's domain maps to 0. Sequence update and reverse are specs
+/// over these, defined by the frontend.
 enum class LogicCollectionOp {
   SeqEmpty,
   SeqUnit,
   SeqLength,
   SeqIndex,
   SeqPush,
-  SeqUpdate,
   SeqSubrange,
   SeqConcat,
   SeqContains,
