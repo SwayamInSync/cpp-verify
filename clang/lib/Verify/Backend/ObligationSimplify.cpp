@@ -1051,6 +1051,136 @@ private:
   }
 };
 
+/// Joins each closed sequence equality the query refutes with its
+/// extensionality instance; see instantiateExtensionality.
+class ExtensionalityInstantiator {
+public:
+  explicit ExtensionalityInstantiator(std::set<std::string> Binders)
+      : Binders(std::move(Binders)) {}
+
+  /// Polarity is 1 where the query asserts the term, -1 where it asserts the
+  /// negation, and 0 where it does both or the term is an operand.
+  std::unique_ptr<LogicExpr> rewrite(const LogicExpr *Expr, int Polarity) {
+    if (!Expr)
+      return nullptr;
+    auto Copy = logicNode(Expr->K, Expr->Sort, *Expr);
+    Copy->IntVal = Expr->IntVal;
+    Copy->BoolVal = Expr->BoolVal;
+    Copy->Name = Expr->Name;
+    Copy->Binder = Expr->Binder;
+    Copy->OverflowOp = Expr->OverflowOp;
+    Copy->CollectionOp = Expr->CollectionOp;
+    Copy->SpecCallee = Expr->SpecCallee;
+    const bool Quantifier =
+        Expr->K == LogicExpr::Forall || Expr->K == LogicExpr::Exists;
+    const bool Inserted = Quantifier && Bound.insert(Expr->Binder).second;
+    for (size_t I = 0; I != Expr->Children.size(); ++I)
+      Copy->Children.push_back(
+          rewrite(Expr->Children[I].get(), childPolarity(*Expr, I, Polarity)));
+    if (Inserted)
+      Bound.erase(Expr->Binder);
+    for (const auto &Pattern : Expr->Patterns)
+      Copy->Patterns.push_back(cloneLogicExpr(Pattern.get()));
+    const bool Refuted = (Expr->K == LogicExpr::Eq && Polarity < 0) ||
+                         (Expr->K == LogicExpr::Ne && Polarity > 0);
+    if (!Refuted || Expr->Children.size() != 2 ||
+        Expr->Children[0]->Sort.Kind != LogicSortKind::Seq ||
+        mentionsAny(Expr, Bound) || Instances == MaxInstances)
+      return Copy;
+    ++Instances;
+    std::unique_ptr<LogicExpr> Extensional =
+        extensional(*Copy->Children[0], *Copy->Children[1], *Expr);
+    if (Expr->K == LogicExpr::Eq) {
+      auto Joined = logicNode(LogicExpr::Or, LogicSort::boolSort(), *Expr);
+      Joined->Children.push_back(std::move(Copy));
+      Joined->Children.push_back(std::move(Extensional));
+      return Joined;
+    }
+    auto Different = logicNode(LogicExpr::Not, LogicSort::boolSort(), *Expr);
+    Different->Children.push_back(std::move(Extensional));
+    auto Joined = logicNode(LogicExpr::And, LogicSort::boolSort(), *Expr);
+    Joined->Children.push_back(std::move(Copy));
+    Joined->Children.push_back(std::move(Different));
+    return Joined;
+  }
+
+  bool added() const { return Instances != 0; }
+
+private:
+  static constexpr unsigned MaxInstances = 64;
+
+  std::set<std::string> Binders;
+  std::set<std::string> Bound;
+  unsigned Instances = 0;
+
+  static int childPolarity(const LogicExpr &Parent, size_t Index,
+                           int Polarity) {
+    switch (Parent.K) {
+    case LogicExpr::Not:
+      return -Polarity;
+    case LogicExpr::And:
+    case LogicExpr::Or:
+      return Polarity;
+    case LogicExpr::Ite:
+      return Parent.Sort.Kind == LogicSortKind::Bool && Index != 0 ? Polarity
+                                                                   : 0;
+    case LogicExpr::Forall:
+    case LogicExpr::Exists:
+      return Index + 1 == Parent.Children.size() ? Polarity : 0;
+    default:
+      return 0;
+    }
+  }
+
+  /// len(a) == len(b) && forall k in [0, len(a)). a[k] == b[k]
+  std::unique_ptr<LogicExpr> extensional(const LogicExpr &A, const LogicExpr &B,
+                                         const LogicExpr &At) {
+    const LogicSort Integer = LogicSort::mathematicalInteger(64);
+    std::string Binder;
+    do
+      Binder = "__cppverify_ext" + std::to_string(Binders.size());
+    while (!Binders.insert(Binder).second);
+    auto collection = [&](LogicCollectionOp Op, LogicSort Sort,
+                          std::unique_ptr<LogicExpr> Sequence,
+                          std::unique_ptr<LogicExpr> Index) {
+      auto Node = logicNode(LogicExpr::Collection, Sort, At);
+      Node->CollectionOp = Op;
+      Node->Children.push_back(std::move(Sequence));
+      if (Index)
+        Node->Children.push_back(std::move(Index));
+      return Node;
+    };
+    auto length = [&](const LogicExpr &Sequence) {
+      return collection(LogicCollectionOp::SeqLength, Integer,
+                        cloneLogicExpr(&Sequence), nullptr);
+    };
+    auto read = [&](const LogicExpr &Sequence) {
+      auto K = logicNode(LogicExpr::Var, Integer, At);
+      K->Name = Binder;
+      return collection(LogicCollectionOp::SeqIndex, Integer,
+                        cloneLogicExpr(&Sequence), std::move(K));
+    };
+    auto equal = [&](std::unique_ptr<LogicExpr> L,
+                     std::unique_ptr<LogicExpr> R) {
+      auto Node = logicNode(LogicExpr::Eq, LogicSort::boolSort(), At);
+      Node->Children.push_back(std::move(L));
+      Node->Children.push_back(std::move(R));
+      return Node;
+    };
+    auto Elements = logicNode(LogicExpr::Forall, LogicSort::boolSort(), At);
+    Elements->Binder = Binder;
+    auto Zero = logicNode(LogicExpr::IntLit, Integer, At);
+    Zero->IntVal = "0";
+    Elements->Children.push_back(std::move(Zero));
+    Elements->Children.push_back(length(A));
+    Elements->Children.push_back(equal(read(A), read(B)));
+    auto Both = logicNode(LogicExpr::And, LogicSort::boolSort(), At);
+    Both->Children.push_back(equal(length(A), length(B)));
+    Both->Children.push_back(std::move(Elements));
+    return Both;
+  }
+};
+
 } // namespace
 
 std::unique_ptr<LogicExpr> instantiateAtReads(const LogicExpr &Query) {
@@ -1066,6 +1196,16 @@ std::unique_ptr<LogicExpr> instantiateAtReads(const LogicExpr &Query) {
     return nullptr;
   ReadInstantiator Instantiator(std::move(Reads));
   std::unique_ptr<LogicExpr> Rewritten = Instantiator.rewrite(&Query);
+  if (!Instantiator.added())
+    return nullptr;
+  return Rewritten;
+}
+
+std::unique_ptr<LogicExpr> instantiateExtensionality(const LogicExpr &Query) {
+  std::set<std::string> Binders;
+  collectBinders(&Query, Binders);
+  ExtensionalityInstantiator Instantiator(std::move(Binders));
+  std::unique_ptr<LogicExpr> Rewritten = Instantiator.rewrite(&Query, 1);
   if (!Instantiator.added())
     return nullptr;
   return Rewritten;
