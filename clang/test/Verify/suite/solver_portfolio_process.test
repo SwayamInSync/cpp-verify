@@ -75,20 +75,22 @@
 # CRASH: Unresolved: solver_process_valid [backend=cvc5] [reason=solver.invocation-failed]
 # TIMEOUT: Unresolved: cached_identity [backend=cvc5] [reason=solver.timeout]
 
+# A sat answer counts only with a model that satisfies the query; the fake
+# solver's arbitrary model does not.
 # DISAGREE-SAT: Unresolved: solver_process_valid [backend=portfolio]
-# DISAGREE-SAT-SAME: [reason=backend.inconsistent-results]
-# DISAGREE-SAT-SAME: backend disagreement: z3=verified, cvc5=failed
+# DISAGREE-SAT-SAME: [reason=backend.invalid-result]
+# DISAGREE-SAT-SAME: z3=verified, cvc5=unresolved
 # DISAGREE-UNSAT: Unresolved: solver_process_invalid [backend=portfolio]
 # DISAGREE-UNSAT-SAME: [reason=backend.inconsistent-results]
 # DISAGREE-UNSAT-SAME: backend disagreement: z3=failed, cvc5=verified
 # DISAGREE-JSON: "backend":"portfolio"
-# DISAGREE-JSON-SAME: "reason":"backend.inconsistent-results"
+# DISAGREE-JSON-SAME: "reason":"backend.invalid-result"
 # DISAGREE-JSON-SAME: "status":"unresolved"
 # FALLBACK-DAG: Exported: lean fallback: solver_process_valid
 # FALLBACK-DAG: Unresolved: solver_process_valid [backend=portfolio]
 # CACHE-DISAGREE: Unresolved: solver_process_valid [backend=portfolio]
 # CACHE-DISAGREE-SAME: [cache=[[HITS:[1-9][0-9]*]]/[[HITS]]]
-# CACHE-DISAGREE-SAME: [reason=backend.inconsistent-results]
+# CACHE-DISAGREE-SAME: [reason=backend.invalid-result]
 
 # MISSING: Unresolved: solver_process_valid [backend=cvc5] [reason=solver.unavailable]
 # CACHE: error: --proof-cache is not supported by --backend=cvc5
