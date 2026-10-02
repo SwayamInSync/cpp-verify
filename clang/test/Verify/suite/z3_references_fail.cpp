@@ -105,5 +105,5 @@ void implicit_effect_in_loop(int &value)
 // VERIFY-DAG: error: verification failed: alias_without_permission
 // VERIFY-DAG: error: verification failed: nullable_reference_actual
 // VERIFY-DAG: error: verification failed: implicit_effect_exceeds_frame
-// VERIFY-DAG: error: decreases failed: nonterminating_reference_store
+// VERIFY-DAG: error: verification failed: nonterminating_reference_store [{{.*}}::termination@
 // VERIFY-DAG: error: verification failed: implicit_effect_in_loop
