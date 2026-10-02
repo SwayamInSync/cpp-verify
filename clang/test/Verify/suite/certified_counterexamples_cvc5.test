@@ -1,0 +1,22 @@
+# REQUIRES: cvc5
+# cvc5 checks its own models against the definitions, and the strict portfolio
+# fails only where both solvers produce a checked counterexample.
+# RUN: not %cpp-verify --backend=cvc5 %S/certified_counterexamples.cpp 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=CVC5
+# RUN: not %cpp-verify --backend=portfolio %S/certified_counterexamples.cpp \
+# RUN:   2>&1 | FileCheck %s --check-prefix=PORTFOLIO
+
+# CVC5-DAG: Unresolved: hidden_true [backend=cvc5] [reason=spec.hidden]
+# CVC5-DAG: verification failed: hidden_false {{.*}}[backend=cvc5] [reason=counterexample]
+# CVC5-DAG: Unresolved: hidden_recursive [backend=cvc5] [reason=spec.hidden]
+# CVC5-DAG: Verified: bounded_closed_form [backend=cvc5]
+# CVC5-DAG: verification failed: bounded_closed_form_wrong {{.*}}[backend=cvc5]
+# CVC5-DAG: Unresolved: scaled_true [backend=cvc5] [reason=spec.hidden]
+# CVC5-DAG: verification failed: scaled_wrong {{.*}}[backend=cvc5]
+# CVC5-DAG: verification failed: masked_wrong {{.*}}[backend=cvc5]
+
+# PORTFOLIO-DAG: Unresolved: hidden_true [backend=portfolio] [reason=spec.hidden]
+# PORTFOLIO-DAG: verification failed: hidden_false {{.*}}x [ssa=x_0]
+# PORTFOLIO-DAG: Verified: bounded_closed_form [backend=portfolio]
+# PORTFOLIO-DAG: verification failed: scaled_wrong {{.*}}x [ssa=x_0] [type=u32] = 3000000000;
+# PORTFOLIO-DAG: verification failed: masked_wrong {{.*}}x [ssa=x_0] [type=i32] = 700;
