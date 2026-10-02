@@ -90,11 +90,393 @@ transparency for the rest of a function:
 Use the smallest fuel that exposes the recurrence needed at the current proof
 site. If a proof function has already supplied a finite table or step lemma,
 ``hide(f)`` can suppress irrelevant recursive equations while the imported
-postconditions remain available. The full-range factorial and Fibonacci
+postconditions remain available. Hiding a spec keeps its definition out of
+proofs, never out of the program's meaning: a counterexample must still fail
+under the real definition, and an obligation that only the hidden definition
+would settle is reported as ``spec.hidden``. The full-range factorial and Fibonacci
 acceptance tests use this pattern to retain exact mathematical specifications
 without making solver time depend on unnecessary unfolding.
 
 See also :doc:`ch17-backends-modular-calls`.
+
+Termination of recursive specs
+------------------------------
+
+A recursive ``spec`` needs ``decreases``, and every recursive call must lower
+the measure: a single measure must stay nonnegative and strictly decrease; for
+a tuple, the first component that changes must stay nonnegative and decrease.
+A spec's definition becomes a fact only once the spec is known to terminate,
+so the termination proof cannot use it. Each recursive call must decrease the
+measure whatever the spec's other calls return:
+
+.. code-block:: cpp
+
+   spec int ack(int m, int n)
+     decreases(m, n)                     // verified: m decides the outer call
+   {
+     return m <= 0 ? n + 1
+          : n <= 0 ? ack(m - 1, 1)
+          : ack(m - 1, ack(m, n - 1));
+   }
+
+   spec int nested(int n)
+     decreases(n)                        // unresolved: needs nested(n - 1) < n,
+   {                                     // a fact about nested itself
+     return n <= 0 ? 0 : 1 + nested(nested(n - 1));
+   }
+
+A recursive call inside ``forall`` or ``exists`` must decrease the measure
+for every value of the bound variable. Spec functions may call each other in a
+cycle when they share a measure of the same length and every call within the
+cycle lowers it; the termination proof treats all of them as opaque:
+
+.. code-block:: cpp
+
+   spec bool is_odd(int n);
+   spec bool is_even(int n) decreases(n) { return n <= 0 ? n == 0 : is_odd(n - 1); }
+   spec bool is_odd(int n)  decreases(n) { return n <= 0 ? false : is_even(n - 1); }
+
+A spec whose termination is not established has no definition, so a proof
+that relies on it is reported as not verified with reason
+``spec.termination`` rather than as verified.
+
+Proof and executable functions may also call each other in a cycle under the
+same rule, with calls inside the cycle reasoned about through the callees'
+contracts.
+
+A spec takes no ``pre``, ``modifies``, or ``aliases``: it is defined for every
+argument, and ``recommends`` states its intended domain.
+
+A spec's ``post`` is a property of its value at every argument, proved
+together with its termination by well-founded induction on the measure: a
+recursive call may assume the post only where its measure is lower than the
+caller's. That is what lets a nested call terminate:
+
+.. code-block:: cpp
+
+   spec int g(int n)
+     decreases(n)
+     post(result >= 0 && result <= (n < 0 ? 0 : n))
+   {
+     return n <= 0 ? 0 : g(g(n - 1));   // g(n - 1) < n by the post
+   }
+
+   spec int m91(int n)                  // McCarthy's 91 function
+     decreases(n > 100 ? 0 : 101 - n)
+     post(n > 100 ? result == n - 10 : result == 91)
+   {
+     return n > 100 ? n - 10 : m91(m91(n + 11));
+   }
+
+Every application of the spec then carries its post, so ``m91(n) == 91``
+for ``n <= 100`` needs no unfolding. A post that fails is reported; a proof
+that relied on it is reported with reason ``spec.post``, or
+``spec.termination`` for a recursive spec, whose termination may have used
+it. A non-recursive spec is unfolded at its calls, so its post matters where
+it is hidden.
+
+``when(c)`` restricts a spec's definition to the domain ``c``. Termination is
+checked under ``c`` only, and outside it the spec's value is unspecified:
+nothing about it can be proved, and a counterexample that depends on it is
+reported as ``counterexample.unchecked``. A post is required, and assumed,
+only within the domain:
+
+.. code-block:: cpp
+
+   spec int log2(int n)
+     when(n >= 1)
+     decreases(n)
+     post(result >= 0 && result < n)
+   {
+     return n == 1 ? 0 : 1 + log2(n / 2);   // no base case needed for n <= 0
+   }
+
+Proving properties of recursive specs
+-------------------------------------
+
+The verifier gives the solver each spec's defining equation at the call sites
+in a function, unfolded as deep as the fuel allows. Beyond that, it settles
+four kinds of goal without help:
+
+- **Closed applications** such as ``sum(15000) == 112507500`` or
+  ``fib(90) == ...`` are computed: the solver receives the defining equation
+  at every argument the evaluation reaches, up to 20000 of them.
+- **Bounded domains.** For ``pre(n >= 0 && n <= 200)``, the solver first proves
+  the domain bounded, then receives the definitions across it and checks every
+  value. Domains of up to about a thousand values are settled this way.
+- **Counterexamples.** A failure is reported only after the counterexample is
+  checked against the true definitions, so it never relies on a value the
+  solver invented for an unfolded call.
+- **Inductions.** When no finite unfolding settles a goal, the verifier tries
+  strong induction on an integer variable that the recursive calls depend on:
+  it proves the goal assuming it holds at every smaller nonnegative value of
+  that variable, with everything else fixed. A least counterexample would
+  satisfy that assumption, so this never proves a false goal; below zero the
+  assumption is empty, and those values are proved directly. Assignments are
+  substituted first, so ``return n * (n + 1);`` with
+  ``post(result == 2 * sum(n))`` is proved this way, and a lemma such as
+  ``2 * sum(n) == n * (n + 1)`` needs no body.
+
+The automatic induction keeps every other variable fixed and assumes nothing
+but the goal itself. When the recursion changes another argument, or the step
+needs a stronger statement than the goal, the verifier reports ``spec.fuel``
+and says so. State the induction as a ``proof`` function whose ``decreases``
+clause shrinks on each recursive call, and call the lemma where the fact is
+needed:
+
+.. code-block:: cpp
+
+   spec int sum(int n) decreases(n) { return n <= 0 ? 0 : n + sum(n - 1); }
+
+   spec int accumulate(int n, int acc) decreases(n) {
+     return n <= 0 ? acc : accumulate(n - 1, acc + n);
+   }
+
+   proof void accumulate_sum(int n, int acc)
+     pre(n >= 0 && n <= 25000 && acc >= 0 && acc <= 1000000000 - 40000 * n)
+     post(accumulate(n, acc) == acc + sum(n))
+     decreases(n)
+   {
+     if (n > 0)
+       accumulate_sum(n - 1, acc + n);   // the hypothesis at another acc
+   }
+
+   void check(int n)
+     pre(n >= 0 && n <= 25000)
+   {
+     ghost {
+       accumulate_sum(n, 0);
+       contract_assert(accumulate(n, 0) == sum(n));
+     }
+   }
+
+The recursive call is legal only at a smaller measure, and its postcondition
+is the induction hypothesis. Machine arithmetic in the lemma is checked for
+overflow and reasoned about exactly. A ``contract_assert`` is proved where it
+stands and assumed afterwards, so a chain of assertions in a ghost block
+works as a step-by-step proof.
+
+Use Z3, the default backend, for recursive specs. cvc5 checks its
+counterexamples against the same definitions but has no recursive definitions,
+does not cover bounded domains, computes deep closed applications much more
+slowly, and settles fewer lemmas and inductions with nonlinear machine
+arithmetic, so more such goals stay unresolved there.
+The strict portfolio is unresolved whenever cvc5 is.
+
+Frames of heap-reading specs
+----------------------------
+
+A spec that reads through a pointer is evaluated in the heap state of each
+call. After a write, the solver knows the value of the written cell but not
+that a recursive spec over other cells is unchanged: that is an induction over
+the spec. ``reads(p, n)`` declares the cells ``p[0..n)`` the spec depends on,
+and every write outside them then leaves the spec unchanged:
+
+.. code-block:: cpp
+
+   spec int sum(const int *p, int n)
+     reads(p, n)
+     decreases(n)
+   {
+     return n <= 0 ? 0 : sum(p, n - 1) + p[n - 1];
+   }
+
+   void append(int *p, int n)
+     pre(n >= 0 && n <= 100 && valid(p, n + 1))
+     modifies(p[n])
+     post(sum(p, n) == old(sum(p, n)))   // verified: p[n] is outside p[0..n)
+   {
+     p[n] = 7;
+   }
+
+The clause is checked against the body: every load, under the conditions
+that reach it, and every range that a heap-reading callee reads must lie in
+the declared cells, so a spec may call another heap-reading spec only if that
+spec has a ``reads`` clause too. A wrong clause fails with a counterexample,
+and a proof that used its frames is reported with reason ``spec.reads``. The
+range is a pointer and an element count fixed by the arguments; it cannot
+depend on the heap. Several ``reads`` clauses declare the union of their
+ranges.
+
+Structured proofs: ``by`` and ``calc``
+--------------------------------------
+
+A lemma call in a ghost block adds its postcondition to everything after it.
+``contract_assert(c) by { ... }`` keeps a proof local instead: the block may
+call lemmas, assert intermediate facts, and declare locals, and only ``c``
+holds afterwards, as with Verus's and Dafny's ``assert ... by``:
+
+.. code-block:: cpp
+
+   spec int sq(int x) { return x * x; }
+
+   proof void sq_monotone(int a, int b)
+     pre(0 <= a && a <= b)
+     post(sq(a) <= sq(b))
+   {
+   }
+
+   int bigger(int a, int b)
+     pre(0 <= a && a <= b && b <= 1000)
+     post(result == 1)
+   {
+     contract_assert(sq(a) <= sq(b)) by {
+       sq_monotone(a, b);
+     }
+     return 1;
+   }
+
+A lemma's precondition is checked where the proof calls it. ``calc`` chains
+such steps, each with an optional proof block, and concludes the relation
+between its first and last terms: ``==`` when every step is ``==``, ``<`` (or
+``>``) when some step is strict, otherwise ``<=`` (or ``>=``):
+
+.. code-block:: cpp
+
+   void chain(int a, int b, int c)
+     pre(0 <= a && a <= b && b <= c && c <= 1000)
+   {
+     calc {
+       sq(a);
+       <= { sq_monotone(a, b); }
+       sq(b);
+       <= { sq_monotone(b, c); }
+       sq(c);
+       == c * c;
+     }
+     contract_assert(sq(a) <= c * c);
+   }
+
+Quantifiers over all integers
+-----------------------------
+
+``forall(k, body)`` and ``exists(k, body)`` range over all mathematical
+integers. They state lemmas without an artificial range and let a caller
+instantiate them anywhere:
+
+.. code-block:: cpp
+
+   proof void sq_nonnegative_all()
+     post(forall(k, sq(k) >= 0))
+   {
+   }
+
+   void uses_lemma(int a)
+   {
+     ghost { sq_nonnegative_all(); }
+     contract_assert(sq(a + 7) >= 0);
+   }
+
+A counterexample to an unbounded quantifier is certified exactly when its
+body depends on the bound variable through memory reads, collection reads,
+and comparisons: the body is then constant beyond finitely many values, which
+the checker evaluates. Otherwise the result is ``counterexample.unchecked``.
+
+Triggers
+--------
+
+The solver uses a quantified fact by instantiating it at terms that match a
+*pattern*. Usually it picks the patterns itself; ``trigger(term)`` inside the
+body chooses one, as Verus's ``#[trigger]`` does:
+
+.. code-block:: cpp
+
+   void positive(const int *a, int n)
+     pre(valid(a, n) && n >= 1 && n <= 1000)
+     pre(forall(k, 0, n, trigger(a[k]) > 0))
+   {
+     contract_assert(a[n - 1] > 0);
+   }
+
+A trigger must be a memory read, a collection read, or a call of a recursive
+spec, and must mention a quantified variable; any other mark draws a warning
+and is ignored. A trigger whose instances create new matching terms (for
+example ``trigger(g(k))`` with a fact about ``g(k + 1)``) makes a *matching
+loop*, and the query times out. ``--profile-quantifiers`` reports how often
+each quantifier of an unresolved query was instantiated, which points at the
+culprit (see :doc:`ch16-when-verification-fails`).
+
+``choose``
+----------
+
+``choose(k, body)`` is an integer for which ``body`` holds, when there is one,
+and otherwise some unspecified integer (Hilbert's ε). ``choose(k, lo, hi,
+body)`` chooses in ``[lo, hi)``:
+
+.. code-block:: cpp
+
+   spec int index_of(const int *a, int n, int x)
+   {
+     return choose(k, 0, n, a[k] == x);
+   }
+
+   void found(const int *a, int n, int x)
+     pre(valid(a, n) && n >= 1 && n <= 1000)
+     pre(exists(k, 0, n, a[k] == x))
+   {
+     contract_assert(0 <= index_of(a, n, x) && index_of(a, n, x) < n);
+     contract_assert(a[index_of(a, n, x)] == x);
+   }
+
+A choice is a function of the values its body mentions, so it is the same
+for the same values, and that is all the verifier knows about it: a claim
+that holds for some choices but not others fails with a checked
+counterexample.
+
+Spec collections
+----------------
+
+``<cppverify.h>`` provides ``cppverify::seq``, ``set``, ``multiset``, and
+``map`` of mathematical integers, the counterparts of Verus's ``Seq``,
+``Set``, ``Multiset``, and ``Map``. They exist only for verification: use
+them in contracts, ghost code, and spec and proof functions. A ghost
+sequence can record what a loop has seen:
+
+.. code-block:: cpp
+
+   #include <cppverify.h>
+   using cppverify::seq;
+
+   int count_positive(const int *a, int n)
+     pre(valid(a, n) && n >= 0 && n <= 1000)
+     post(0 <= result && result <= n)
+   {
+     ghost seq seen = cppverify::seq_empty();
+     int c = 0;
+     for (int i = 0; i < n; i = i + 1)
+       invariant(0 <= i && i <= n && 0 <= c && c <= i)
+       invariant(seen.len() == i)
+       invariant(forall(k, 0, i, seen[k] == a[k]))
+       decreases(n - i)
+     {
+       if (a[i] > 0)
+         c = c + 1;
+       ghost { seen = seen.push(a[i]); }
+     }
+     return c;
+   }
+
+Spec functions over collections recurse on their size:
+
+.. code-block:: cpp
+
+   spec int sum(seq s)
+     decreases(s.len())
+   {
+     return s.len() <= 0 ? 0 : sum(s.subrange(0, s.len() - 1)) + s[s.len() - 1];
+   }
+
+   proof void sum_push(seq s, int x)
+     post(sum(s.push(x)) == sum(s) + x)
+   {
+   }
+
+Every operation is total: an index outside ``[0, len())`` reads 0, an update
+there changes nothing, ``subrange`` clamps its bounds, and a key outside a
+map's domain maps to 0. Sequences are finite; sets, multisets, and maps range
+over all integers and may be infinite. Counterexamples show their values, such
+as ``s = [4, 3]`` or ``m = {1 -> 7, 4.. -> 2}``. Z3 decides all four; cvc5
+decides sequences only, and Lean none.
 
 ``constexpr`` as spec
 ---------------------
