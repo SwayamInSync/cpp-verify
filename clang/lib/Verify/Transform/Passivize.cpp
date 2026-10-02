@@ -2895,13 +2895,17 @@ static void addFrameInstances(PassiveProgram &P, const FunctionMap &FnMap) {
   P.Stmts = std::move(Stmts);
 }
 
-/// A spec's proved postcondition holds at every application of it.
+/// A spec's proved postcondition, and an inductive predicate's unfolding,
+/// hold at every application of it.
 static void addSpecPostInstances(PassiveProgram &P, const FunctionMap &FnMap) {
   auto WithPost = [](const VSpecCallExpr &, const VFunction &Spec) {
-    return !Spec.Postconditions.empty();
+    return !Spec.Postconditions.empty() || Spec.Unfolding;
   };
   std::map<std::string, FramedApplication> Applications;
   std::vector<const VQuantifiedExpr *> Enclosing;
+  for (const auto &Assumption : P.EntryAssumes)
+    collectFramedApplications(Assumption.get(), FnMap, Enclosing, Applications,
+                              WithPost);
   for (const auto &S : P.Stmts)
     collectFramedApplications(S->Cond.get(), FnMap, Enclosing, Applications,
                               WithPost);
@@ -2913,8 +2917,8 @@ static void addSpecPostInstances(PassiveProgram &P, const FunctionMap &FnMap) {
     const VSpecCallExpr &Call = *Application.Call;
     const VFunction &Spec = *FnMap.at(Call.CalleeIdentity);
     std::unique_ptr<VExpr> Fact =
-        specPostcondition(Spec, Call.Args, &Call, Call.Loc,
-                          Call.ReadsHeap ? Call.HeapVar : std::string());
+        specApplicationFacts(Spec, Call.Args, &Call, Call.Loc,
+                             Call.ReadsHeap ? Call.HeapVar : std::string());
     if (!Fact)
       continue;
     for (auto Q = Application.Enclosing.rbegin();
