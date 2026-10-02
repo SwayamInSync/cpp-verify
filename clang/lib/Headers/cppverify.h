@@ -42,6 +42,8 @@ struct seq {
   seq push(long long value) const;
   /// This sequence with the element at index replaced by value.
   seq update(long long index, long long value) const;
+  /// The elements in reverse order.
+  seq reverse() const;
   /// The elements at [lo, hi).
   seq subrange(long long lo, long long hi) const;
   /// This sequence followed by other.
@@ -54,7 +56,7 @@ seq seq_empty();
 /// The sequence of one element.
 seq seq_of(long long value);
 
-/// A finite set.
+/// A set of integers, possibly infinite.
 struct set {
   set insert(long long value) const;
   set remove(long long value) const;
@@ -68,7 +70,7 @@ struct set {
 };
 set set_empty();
 
-/// A finite multiset.
+/// A multiset of integers.
 struct multiset {
   /// One more occurrence of value.
   multiset insert(long long value) const;
@@ -80,7 +82,7 @@ struct multiset {
 };
 multiset multiset_empty();
 
-/// A finite map.
+/// A map from integers to integers.
 struct map {
   map insert(long long key, long long value) const;
   map remove(long long key) const;
