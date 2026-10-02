@@ -99,6 +99,7 @@ class OwnedReturnAnalyzer {
     case VExpr::Forall:
     case VExpr::Exists:
     case VExpr::HeapStore:
+    case VExpr::HeapFrame:
     case VExpr::FieldAccess:
     case VExpr::SpecCall:
     case VExpr::OverflowCheck:
