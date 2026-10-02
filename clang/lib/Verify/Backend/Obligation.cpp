@@ -1726,15 +1726,30 @@ class ObligationBuilder {
 
   VIntMode CallerIntMode = VIntMode::Machine;
   bool ForceCallerIntMode = false;
+  /// The specs, whose integer modes their applications' arguments take.
+  const FunctionMap *Functions = nullptr;
+
+  const VFunction *specFunction(const std::string &Identity) const {
+    if (!Functions)
+      return nullptr;
+    if (auto It = Functions->find(Identity);
+        It != Functions->end() && It->second)
+      return It->second;
+    for (const auto &[Key, Function] : *Functions)
+      if (Function && Function->Identity == Identity)
+        return Function;
+    return nullptr;
+  }
 
 public:
   ObligationBuilder(std::string ResultVar, std::string Heap,
                     VIntMode CallerMode,
                     std::set<std::string> HeapVariables = {},
-                    bool ForceCallerMode = false)
+                    bool ForceCallerMode = false,
+                    const FunctionMap *Functions = nullptr)
       : ResultVarName(std::move(ResultVar)), CurHeap(std::move(Heap)),
         HeapVariables(std::move(HeapVariables)), CallerIntMode(CallerMode),
-        ForceCallerIntMode(ForceCallerMode) {}
+        ForceCallerIntMode(ForceCallerMode), Functions(Functions) {}
 
   std::unique_ptr<VCExpr> fromVExpr(const VExpr *E) {
     auto Result = fromVExprImpl(E);
@@ -2060,11 +2075,16 @@ public:
         setHeapSort(*H);
         N->Children.push_back(std::move(H));
       }
+      // An argument takes the mode of the callee's parameters, mathematical
+      // for an explicit spec: the call's type is only its result's, and a
+      // bool result has none.
+      const VFunction *Callee = specFunction(C->CalleeIdentity);
+      const VIntMode ArgumentMode = Callee ? Callee->IntMode : C->Ty.IntMode;
       for (const auto &A : C->Args) {
         auto Arg = fromVExpr(A.get());
         if (Arg && (Arg->Sort.Kind == LogicSortKind::BitVector ||
                     Arg->Sort.Kind == LogicSortKind::MathematicalInteger))
-          Arg = toMode(std::move(Arg), C->Ty.IntMode);
+          Arg = toMode(std::move(Arg), ArgumentMode);
         N->Children.push_back(std::move(Arg));
       }
       return N;
@@ -2524,13 +2544,16 @@ verify::buildObligationModule(const PassiveProgram &P) {
   ObligationBuilder B(P.ResultVarName,
                       P.OldHeapName.empty() ? std::string(VHeapName) + "_0"
                                             : P.OldHeapName,
-                      P.CallerIntMode, P.HeapVariables);
+                      P.CallerIntMode, P.HeapVariables,
+                      /*ForceCallerMode=*/false, &P.SpecFunctions);
   return B.buildPassive(P);
 }
 
 llvm::Expected<std::unique_ptr<LogicExpr>>
 verify::lowerLogicExpr(const VExpr *E, const std::string &ResultVar,
-                       const std::string &CurHeap, VIntMode CallerMode) {
-  ObligationBuilder B(ResultVar, CurHeap, CallerMode);
+                       const std::string &CurHeap, VIntMode CallerMode,
+                       const FunctionMap *Functions) {
+  ObligationBuilder B(ResultVar, CurHeap, CallerMode, {},
+                      /*ForceCallerMode=*/false, Functions);
   return B.buildExpression(E);
 }
