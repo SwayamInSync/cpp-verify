@@ -57,6 +57,11 @@ applies a spec to one. Nested quantifiers over linear terms and reads, such as
 
 Other results that are not counterexamples:
 
+- ``solver.timeout`` with ``the function's time (--function-timeout) is
+  spent``: every query of the function together used its budget (ten times
+  ``--timeout`` by default), so the remaining ones did not start. Split the
+  function, help it with lemmas or assertions, or raise
+  ``--function-timeout`` (``0`` disables it).
 - ``decreases.missing``: a loop has no termination measure. Give it
   ``decreases``, or ``decreases(*)`` to allow divergence, after which the
   function and its callers report ``Verified ... [partial]``: proved for the
