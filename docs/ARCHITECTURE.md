@@ -251,7 +251,11 @@ VFunction =
   `complete_behaviors`/`disjoint_behaviors` become assertions at body entry.
 - `contract_assert(c) by { proof }` is desugared to
   `Assign(k, false); Havoc(k); if (k) { proof; assert c; assume false }
-  assume c`; `calc` to nested assert-by steps.
+  assume c`; `calc` to nested assert-by steps. When `c` is
+  `forall(x, lo, hi, P)`, the parser puts `x` in scope for the block, and the
+  branch starts with `Havoc(x')` and `Assume(lo <= x' && x' < hi)` for a
+  fresh mathematical `x'`, the block reads `x` as `x'` (assigning it is an
+  error), and it asserts `P[x := x']` instead of `c`.
 
 ## Layer 2: Passive IR
 
@@ -373,9 +377,13 @@ if (cond) {                        // 4. if loop continues:
 
 **Loop frames.** In the object model the heap havoc is framed by the loop's
 write set: its explicit `modifies` footprints, read in each iteration's state
-(ACSL `loop assigns`), else the objects its stores and calls reach. When
-every written region is a single cell the frame is a chain of stores of fresh
-values; otherwise it is a `HeapFrame(mem_entry, mem_head, regions)` relation.
+(ACSL `loop assigns`), else the objects its stores and calls reach: the entry
+objects of their pointers' origins (below). With a function `modifies` too,
+both frames are assumed, so only cells inside both may change; when an
+origin is unknown the function's frame alone bounds the loop, since every
+store is checked against it. When every written region is a single cell the
+frame is a chain of stores of fresh values; otherwise it is a
+`HeapFrame(mem_entry, mem_head, regions)` relation.
 An explicit loop `modifies` is also asserted at the end of each iteration and
 at each `continue` (obligation kind `frame`, located at the footprint).
 
@@ -878,6 +886,26 @@ multisets, and maps are already piecewise constant over the integers. A
 `HeapFrame` is compared segment by segment over the heaps' breakpoints. A
 lifted `choose` is read from the model, like an uninterpreted function.
 
+A quantifier the distinguished values do not cover, such as one whose body
+holds another quantifier over its binder, is decided as Presburger
+arithmetic (`Backend/Presburger.cpp`). With the model fixed, every binder-free
+term is a number; a term over binders becomes pieces of linear terms under
+linear guards: a read at a linear address or key is the value of each run of
+its heap or collection where the address falls in that run, an `ite` splits
+on its condition, and machine operations, conversions, and division are
+evaluated only on constant pieces. Comparisons become linear atoms over the
+pairs of pieces, nested quantifiers (renamed apart) and their bounds stay
+quantifiers, and the sentence is decided by Cooper's elimination, innermost
+quantifier first (`forall` as `not exists not`): after scaling the binder's
+coefficients to one, `exists x. F` is the disjunction of `F` with `x` far
+below every bound at one residue per period of its divisibility atoms, and
+of `F` at each lower bound plus each such residue (or the same from above,
+whichever side has fewer bounds). A product or quotient of binders, a
+machine operation on a binder, or a spec at a binder is outside the fragment,
+as is a blowup beyond 200,000 nodes; that counterexample stays
+`counterexample.unchecked`. Unit tests cross-check the decisions against Z3
+on random sentences.
+
 `--profile-quantifiers` reruns a quantified Z3 query that stayed unresolved
 with `qi.profile`, one rerun at a time, capturing what Z3 writes to file
 descriptor 2. Each quantifier's instance count and greatest generation are
@@ -949,8 +977,9 @@ pure JSON stream.
    b. Passivize to Layer 2 (SSA + havoc/assume/assert + heap versioning).
    c. Build and validate one canonical `ObligationModule`.
    d. Validate the selected backend's declared logical capabilities.
-   e. Submit the complete query, or dependency-scoped ordered queries when
-      parallel execution/caching is selected, to the backend.
+   e. Submit the complete query and, when it does not settle the module,
+      the ordered queries to the backend; with more than one job both run
+      at once, and with a proof cache only the ordered queries run.
    f. Report verified / counterexample / unresolved / bounded-safe / exported,
       or kernel-certified.
 3. For each failure, run a second pass with `recommends` checks → warnings.
@@ -1000,11 +1029,30 @@ Z3-backed execution accepts explicit timeout, deterministic solver-resource,
 canonical query-node, job-count, and proof-cache budgets. A module that
 requires the `sequences` or `collections` feature gets the collection
 timeout (`--collection-timeout`, by default twice `--timeout`) on every
-solver backend. Ordered queries run
-in isolated worker-owned `Z3Encoder` instances and are gathered in source
-order; lowering, archives, dumps, Lean streams, and diagnostics remain serial.
-The compile-time verifier already runs beside CodeGen and keeps the default
-single solver job, avoiding an implicit nested concurrency layer.
+solver backend. The driver verifies each function as a task (its own backend,
+smoke backend, passivizer, and buffers for diagnostics, dumps, and archive
+records) on one `llvm::StdThreadPool` of exactly `--jobs` workers, which the
+Z3 and cvc5 backends also receive (`BackendExecutionOptions::Pool`) for their
+obligations: a task waiting on its obligation group runs those tasks itself,
+so nesting never exceeds the pool. With more than one job and obligation, Z3
+solves the obligations beside the whole query (`Z3VerifyBackend::Race`): a
+proved whole query interrupts the obligation encoders, and a complete set of
+proved obligations interrupts the whole query, which then runs in an encoder
+of its own because a Z3 interrupt can outlive the check it stops. Otherwise
+the obligations decide, exactly as after a whole query alone, so the verdict
+does not depend on the jobs. A proof cache stores proofs of single
+obligations, so with one only the obligations are solved.
+Results merge in source order, with each function's dependency indices
+offset; spec termination, callee contracts, trust, and unverified callers are
+resolved after all functions. A per-function deadline
+(`VerifyBackend::setDeadline`, `--function-timeout`, unset by default) caps
+every query at the time the function has left, and no query starts once it
+has passed. Z3 forgets a timeout that fires inside one of its nested
+resource scopes (leaving a scope clears the cancellation; a check given one
+or two milliseconds never returned), so `Z3Encoder::check` interrupts a
+check again, every 50 ms from 100 ms past its time, until it returns. Source-location annotation takes a lock, since
+the source manager caches its last lookup. Lean stays serial, and the
+compile-time verifier keeps a single job.
 
 cvc5 execution resolves an explicit `--cvc5-path` or searches `PATH`, writes one
 bounded temporary SMT-LIB2 query, invokes the executable without a shell under
@@ -1118,19 +1166,46 @@ admitting general pointer copies or rebinding. Provenance-backed reference
 actuals can therefore use exact scalar-cell framing after the same scan rejects
 offset access, escape, recursion cycles, and unsupported boundaries.
 
+**Pointer origins.** Before UB instrumentation the driver runs
+`annotatePointerOrigins` (`Transform/Origins.cpp`) on each executable and
+proof function: an abstract interpretation over the structured VCR body that
+records on every occurrence of a pointer variable (`VVarExpr::Origins`) the
+objects it may address there. A pointer parameter with an object starts with
+it (its name), a global's address is `@address/size`, null is the empty set,
+and a load, a call result, or an allocation is unknown (represented storage
+keeps its lifetime companion instead). Arithmetic keeps the origin,
+assignment copies it, an `if` joins its branches, and a loop's head is the
+least fixpoint over its body and `continue`s; sets above eight origins
+become unknown. Every clone copies the annotation. An origin's identity is a
+literal: a global's address, or the negated base-256 number of a
+parameter's name, so distinct origins never compare equal. A variable whose
+occurrence may hold several origins gets a companion `name.__origin`,
+assigned beside it (not on a step, which keeps it), initialized for a
+parameter at entry. For each loop the pass adds two invariants, proved like
+any other: a companion the loop assigns stays among the head's origins, and
+a pointer the loop assigns is null or `q % S == o % S` for each origin `o`
+of `S`-byte elements, since typed steps move by whole elements and objects
+lie at positive addresses.
+
+The annotations are consumed in three places. UB instrumentation requires an
+access or step through a pointer with known origins to lie in one of those
+objects (guarded by the companion when there are several), instead of in
+some parameter's object. Loop write sets use the origins' entry objects. And
+pointer difference requires one origin.
+
 Executable pointer difference consumes the same identity model. `ASTConverter`
 admits matching complete pointee types with recursively compositional pointer
 arithmetic. VCR first subtracts mathematical target-byte addresses and divides
 by the Clang target `sizeof(T)`. Passivization asserts non-null/live bases,
-one origin, in-range element positions, and target-`ptrdiff_t`
-representability before normalizing recoverable same-base indices to machine
-subtraction. A `VValidExtent` supplies the closed `[0, n]` position range for
-an abstract array; absent that extent, direct abstract and represented
-scalar-dynamic bases retain only positions `0` and `1`. Without concrete
-provenance, origin equality requires the exact same SSA base; numeric pointer
-equality is deliberately insufficient because equal addresses need not share
-C++ object provenance. Explicit specs and lifted `constexpr` functions still
-reject pointer difference.
+one origin, in-range positions, and target-`ptrdiff_t` representability
+before normalizing recoverable same-base indices to machine subtraction.
+Represented storage compares lifetime identities (a mismatch is a
+`pointer-difference` error). Otherwise both operands' origin terms must be
+equal, an obligation of kind `unsupported`: different parameters' objects
+may be one caller array, which the object model does not describe. Each
+position must lie in its origin's entry object, one past the end included
+(`[0, n]` of a `VValidExtent`, else `[0, 1]`). Explicit specs and lifted
+`constexpr` functions still reject pointer difference.
 
 The driver builds a UB-instrumented interface map before passivization so
 callee `VValidExtent` summaries are available at call sites. A slice actual is
