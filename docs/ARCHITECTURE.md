@@ -107,6 +107,7 @@ VType =
   | Int64(IntMode, bitWidth, isSigned)
   | Struct
   | Ptr(pointeeSizeBytes)                    // raw pointer / reference
+  | Seq | Set | Multiset | Map                 // <cppverify.h> collections
   | Void
   | Unsupported
 ```
@@ -121,6 +122,9 @@ VType =
 - `Ptr(pointeeSizeBytes)` retains Clang's target `sizeof(T)`. Typed pointer
   arithmetic scales element offsets by this stride before entering the
   mathematical-address heap; record fields add Clang's target byte offset.
+- A `cppverify::seq`, `set`, `multiset`, or `map` is one value of its
+  collection type, never a flattened record; its elements are mathematical
+  integers.
 
 ### Expressions (VExpr)
 
@@ -136,10 +140,11 @@ VExpr =
   | FieldAccess(base: VExpr, field: string, type)
   | Load(ptr: VExpr, type)                       // *p in an expression context
   | HeapStore(before, after, ptr, value)          // passive heap relation
+  | HeapFrame(before, after, [(lo, hi)])          // passive frame relation
   | SpecCall(identity, args: [VExpr], type)
   | OverflowCheck(op, lhs, rhs?)
-  | Forall(binder: VarDecl, lo: VExpr, hi: VExpr, body: VExpr)
-  | Exists(binder: VarDecl, lo: VExpr, hi: VExpr, body: VExpr)
+  | Forall(binder: VarDecl, lo: VExpr?, hi: VExpr?, body: VExpr)
+  | Exists(binder: VarDecl, lo: VExpr?, hi: VExpr?, body: VExpr)
   | Old(inner: VExpr)
   | Result(type)
   | Conditional(cond: VExpr, then: VExpr, else: VExpr, type)
@@ -154,6 +159,29 @@ All carry `SourceLocation` for diagnostics.
 `(select mem p)`. For `p[i]`, the selected address is
 `p + mathematical_value(i) * pointeeSizeBytes`.
 
+**Quantifiers, triggers, choices, collections:** a quantifier without bounds
+ranges over all mathematical integers. A `trigger(term)` mark is an identity
+`Cast` flagged `IsTrigger` around the term. Each `choose` is lifted to a
+synthesized uninterpreted spec function (`IsChoice`) of the values its body
+mentions, whose postcondition is the Hilbert axiom `!exists(k, P) || P(result)`
+(with the range for a bounded choose). A collection operation is a `SpecCall`
+whose identity is `__cppverify.<op>`, such as `__cppverify.seq.push`.
+`cppverify::valid(p, n)` becomes a call of the synthesized builtin spec
+`__cppverify_valid(p, n)` (body `true`, marked `IsBuiltin` and never
+reported), so the extent marker scan treats it exactly like a user-declared
+`valid`.
+
+**Mathematical values in ghost and proof code:** a spec result or a
+collection length, element, or count keeps its mathematical type wherever
+it is used, as in contracts; arithmetic with it is exact
+(`evaluatedIntMode`). The frontend converts it, with a `Cast` that
+passivization guards by an `overflow` obligation, only where it is stored in
+a machine-typed object: an initializer, an assignment, a record field, a
+call argument for a machine parameter, or a return value.
+
+**HeapFrame:** produced by passivization only: `after` equals `before` at
+every address outside the half-open regions.
+
 ### Statements (VStmt)
 
 ```
@@ -164,7 +192,7 @@ VStmt =
   | Allocate(target, allocatedType, init?, sizeBytes, alignBytes)
   | Free(ptr: VExpr)
   | If(cond: VExpr, then: [VStmt], else: [VStmt])
-  | While(cond: VExpr, invariants: [VExpr], decreases: VExpr?, body: [VStmt])
+  | While(cond: VExpr, invariants: [VExpr], decreases: VExpr?, modifies: [VFootprint], body: [VStmt])
   | Assert(expr: VExpr)
   | Assume(expr: VExpr)
   | Return(value: VExpr?)
@@ -190,7 +218,7 @@ VFunction =
   returnType: VType
   preconditions: [VExpr]
   postconditions: [VExpr]
-  modifies: [VLvalue]                  // explicit frame, or inferred conservative default
+  modifies: [VFootprint]               // explicit frame, or inferred conservative default
   aliases: [(VarName, VarName)]        // opted-in aliasing pairs
   recommends: [VExpr]                  // spec functions only
   body: [VStmt]
@@ -200,6 +228,10 @@ VFunction =
   freshOwnedReturn: (allocatedType, size, alignment, nullable)? // inferred
   decreases: [VExpr]                   // tuple → lex-ordered
   intMode: VIntMode                    // Math for explicit spec; Machine otherwise
+  isTrusted: bool                      // [[cppverify::trusted]] on any declaration
+  isExternalContract: bool             // no definition, or trusted: body not verified
+  constAddressParams: {name}           // pointers/references to const
+  behaviors: [(name, assumes)]         // for the vacuity check
 ```
 
 - Parameter ownership/borrowing is not yet represented by a `ParamMode` field.
@@ -211,6 +243,15 @@ VFunction =
 - `identity` includes the canonical signature, so overloads with the same
   source spelling remain distinct through modular calls and SMT symbols.
 - `aliases` empty means the implicit non-aliasing precondition applies to all mutable pointer/reference parameter pairs.
+- A `VFootprint` is a target lvalue with an optional element count and
+  element size: a cell (`p[i]`, `p->f`, a reference), a range `p[lo : n]`
+  (target `p[lo]`, count `n`), or a region `*p` (the object `p` addresses).
+- Behaviors are desugared in the frontend: each scoped `pre` becomes
+  `!assumes || pre`, each scoped `post` `!old(assumes) || post`, and
+  `complete_behaviors`/`disjoint_behaviors` become assertions at body entry.
+- `contract_assert(c) by { proof }` is desugared to
+  `Assign(k, false); Havoc(k); if (k) { proof; assert c; assume false }
+  assume c`; `calc` to nested assert-by steps.
 
 ## Layer 2: Passive IR
 
@@ -317,16 +358,33 @@ y_0 = x_3 + 1;
 
 assert(I);                         // 1. invariant on entry
 havoc(modified_vars + mem);        // 2. forget loop-modified state + heap
+assume(frame(mem_entry, mem));     //    cells outside the loop's write set kept
 assume(I);                         // 3. inductive hypothesis
 if (cond) {                        // 4. if loop continues:
     [body in SSA]                  //    execute one iteration
     assert(I);                     //    invariant preserved
     assert(D_new < D_old);         //    termination measure decreases
+    assert(frame(mem_entry, mem)); //    explicit loop modifies respected
     assume(false);                 //    cut path
 } else {
     // continue with I ∧ ¬cond
 }
 ```
+
+**Loop frames.** In the object model the heap havoc is framed by the loop's
+write set: its explicit `modifies` footprints, read in each iteration's state
+(ACSL `loop assigns`), else the objects its stores and calls reach. When
+every written region is a single cell the frame is a chain of stores of fresh
+values; otherwise it is a `HeapFrame(mem_entry, mem_head, regions)` relation.
+An explicit loop `modifies` is also asserted at the end of each iteration and
+at each `continue` (obligation kind `frame`, located at the footprint).
+
+**Termination.** An executable loop without `decreases` contributes no
+measure obligation, and the driver reports the function `Unresolved` with
+`decreases.missing` unless BMC proved the unwinding. `decreases(*)` marks the
+function as possibly divergent: its proof, and the proof of every caller, is
+reported `[partial]`. Calls within an executable or proof recursion cycle
+assert the decrease of the shared measure at the call site.
 
 **Loop exits.** A `break` or `return` inside the body leaves from the
 inductive iteration: its path guard is recorded and the path ends. After the
@@ -340,6 +398,10 @@ state and ends the path; the frontend emits a `for` increment before it. BMC
 unrolling lowers `break` and `continue` to flag assignments that guard the
 remaining statements and the next iteration.
 
+**Assertions → assert, then assume:** `contract_assert(P)` is proved where it
+stands and assumed from there on, so later obligations can use it as a proof
+step. Other obligations stay independent of each other.
+
 **Function calls → assert precondition, havoc modifies, assume postcondition:**
 ```
 // y = foo(x)  where foo has pre(P) modifies(M) post(Q)
@@ -351,6 +413,11 @@ assume(Q[Result := y, Old(params) := args]);
 ```
 
 - The heap version increments only across the modifies set: `mem_{k+1}(loc) = mem_k(loc)` for `loc ∉ modifies`.
+  Cell footprints become stores of fresh values (no quantifier). In the
+  object model, ranges and regions (the actual's `valid` extent, else one
+  object) become `HeapFrame(mem_k, mem_{k+1}, regions)`; each footprint of
+  the callee must lie inside the caller's own frame (index-based
+  containment).
 - If `modifies` is the conservative default (all reachable through mut params), the entire heap is havocked.
 - A `freshOwnedReturn` call is not a whole-heap havoc. It preserves every old
   cell, materializes one disjoint initialized scalar object, then assumes the
@@ -362,7 +429,8 @@ assume(Q[Result := y, Old(params) := args]);
 ordered `PassiveProgram` once and publishes:
 
 - a typed `LogicExpr` tree with explicit `Bool`, mathematical integer,
-  width-indexed bit-vector, pointer, and heap-array sorts; integer sorts retain
+  width-indexed bit-vector, pointer, heap-array, and collection (`seq`, `set`,
+  `multiset`, `map`) sorts; integer sorts retain
   canonical signedness and originating C++ width for explicit mode conversion,
   without exposing VCR enums to adapters;
 - one complete **counterexample query** (satisfiable iff some proof obligation
@@ -397,6 +465,32 @@ quantifiers, pointer/heap terms, and assumptions are not rewritten. Layer 3
 reports before/after node counts, rewrite count, and removed declarations for
 source-built modules.
 
+Terms added for the R3 language features:
+
+- `HeapFrame(before, after, lo1, hi1, ...)`: `after[a] == before[a]` for
+  every integer address `a` outside the half-open regions. It is
+  deliberately unbounded: a quantifier over `[0, 2^64)` defeats Z3's
+  model-based instantiation (a failing copy loop took 50 s instead of
+  0.9 s), and it is sound because verified stores lie inside objects in
+  `(0, 2^64)`. Adapters encode it as an unbounded universal quantifier; the
+  certifier compares the piecewise-constant heaps exactly.
+- A quantifier with one child (its body) ranges over all integers.
+- `Patterns`: the trigger terms of a quantifier (memory reads, collection
+  reads, recursive spec applications). They steer instantiation only and are
+  neither serialized nor hashed.
+- `Collection(op, operands)`: one of 26 operations (`seq.push`, `set.union`,
+  `multiset.count`, `map.get`, ...), with the total semantics of
+  `<cppverify.h>`. Collections of sequences require the `sequences` feature,
+  the others `collections`.
+- A logical function marked `Choice` is a lifted `choose`: uninterpreted,
+  with the Hilbert axiom as its postcondition. The certifier reads its
+  value from the model, so a claim true only for some choices fails
+  certified.
+- A comparison between a machine and a mathematical operand is lifted to
+  the integers when the mathematical side mentions a quantifier binder or a
+  collection, and otherwise split by range so the machine side keeps its
+  sort.
+
 `Obligation.h` is a VCR-free consumer boundary. VCR/passive lowering APIs live
 in `ObligationLowering.h`; Z3, cvc5, Lean, serialization, dumps, and future adapters
 depend only on canonical sorts, expressions, declarations, sources, features,
@@ -412,7 +506,12 @@ tags rather than C++ enum ordinals. The reader bounds strings, collections,
 expression depth, and total nodes, then revalidates every sort, term, call
 signature, logical declaration, feature bit, and identity. The driver refuses
 to publish a record unless deserialize/validate/reserialize is byte-exact and
-preserves semantic identity.
+preserves semantic identity. `HeapFrame` has expression tag 38 and
+`Collection` tag 39 (followed by its operation's tag); the collection sorts
+`seq`, `set`, `multiset`, and `map` have sort tags 6 to 9. Trigger patterns
+and the `Choice` marker of a logical function are not archived, so a
+replayed module instantiates quantifiers by the solver's own patterns and
+treats a choice as an ordinary uninterpreted function.
 
 Schema v2 adds the precise obligation kinds and still reads schema v1, whose
 records name only assertions, postconditions, and unwinding checks. Records
@@ -494,6 +593,10 @@ canonical module that lower-only and the selected backend consume.
 | `BitVector(N)` | `BitVec(N)`, or `Int` in the integer encoding |
 | `Pointer` | `Int` (mathematical target-byte address) |
 | `Heap` | `Array(Int, Int)`; typed reads convert cells at the boundary |
+| `Seq` | `Seq(Int)` |
+| `Set` | `Array(Int, Bool)` |
+| `Multiset` | `Array(Int, Int)`; a count is `max(0, cell)` |
+| `Map` | `Array(Int, cppverify.option)`, the datatype `none \| some(value)` |
 
 | VExpr | Z3 Expr |
 |---|---|
@@ -503,9 +606,65 @@ canonical module that lower-only and the selected backend consume.
 | Cast(inner, UInt32, UInt64) | math mode: identity — BitVec mode: `(zero_ext 32 inner)` |
 | Load(p, T) | `(select mem_k p)` for the current heap version k |
 | Forall(x, lo, hi, P) | `(forall ((x Int)) (=> (and (<= lo x) (< x hi)) P))` — bound is the implicit trigger |
+| Forall(x, P) | `(forall ((x Int)) P)`; marked triggers become `:pattern`, and the quantifier id is `q@line:col` |
+| HeapFrame(h, h', lo, hi, ...) | `(forall ((a Int)) (or (and (<= lo a) (< a hi)) ... (= (select h' a) (select h a))))` |
+| `s[i]` | `(cppverify.seq_at s i)`, see below |
+| `s.push(x)`, `s + t` | `seq.++`, `seq.unit` |
+| `s.subrange(lo, hi)` | `(seq.extract s lo (- hi lo))`, or `(seq.extract s 0 hi)` when `lo < 0`, see below |
+| `a.insert(x)`, `a.unite(b)`, `m.count(x)` | `store`, `set.union`, `(ite (>= c 0) c 0)` over the arrays |
 | Old(x) | `x_entry` (SSA version at function entry) |
 | Old(*p) | `(select mem_0 p_entry)` |
 | Result | `result_var` (SSA version of return value) |
+
+**Sequence reads.** `s[i]` is `cppverify.seq_at(s, i)`, a recursive-function
+definition `(ite (and (<= 0 i) (< i (seq.len s))) (seq.nth s i) 0)`, plus three
+lemmas that hold by that definition, each with an E-matching pattern:
+`seq_at(a ++ b, k)` reads `a` below `len(a)` and `b` beyond it,
+`seq_at(unit(x), k)` is `x` at 0 and 0 elsewhere, and `seq_at` of an in-range
+`seq.extract` reads the source at the offset. Z3's own `seq.nth` gives
+quantifiers nothing to match (a loop invariant over a pushed sequence stayed
+`unknown` after 30 s, and proves in 3 ms with the lemmas). The definition is a
+recursive-function definition rather than a quantified axiom so that models
+interpret it exactly: model-based instantiation cannot check a quantifier
+over sequences, and every satisfiable query timed out with one.
+
+**Subranges.** `seq.extract` already clamps: from a start in `[0, len)` it
+stops at the end, and it is empty from any other start or for a count below
+one. `subrange(lo, hi)` is therefore exactly `extract(s, lo, hi - lo)` for
+`lo >= 0` and `extract(s, 0, hi)` below, with no case split for a literal
+`lo >= 0`. Every extract of a concatenation `a ++ b` also receives, as a
+ground fact beside the query, the theorem that splits it: from a start
+`i >= 0` it lies in `b` (`i >= len(a)`), in `a` (`i + n <= len(a)`), or is
+`extract(a, i, len(a) - i) ++ extract(b, 0, n - (len(a) - i))`. Z3's word
+equations rarely find that split themselves (dropping the last element of
+`s + t` took 30 s and now takes 50 ms); a quantified form of the theorem
+would leave satisfiable queries to model-based instantiation, which cannot
+check it.
+
+**Typed loads.** In the integer encoding of a query over collections, a
+typed load is `cppverify.cell_<sort>(select(mem, p))`, a recursive-function
+definition of the exact reduction of a cell into the load's sort. A
+collection element read from a cell is then equal to a load of that cell by
+congruence once the indices are; with the reduction inline, the arithmetic
+explored its `mod` under every quantifier instance (a ghost-sequence copy
+invariant was `unknown` after 10 s and now takes 4 ms). Other queries keep
+the reduction inline, because model search over heap frames is much slower
+through the definition (a frame counterexample went from 8 ms to over 20 s).
+
+**Instances at reads.** A quantifier over a buffer reads `p + S * k`; the
+solver instantiates it at the reads of the query that match that pattern,
+but its rewriter folds a read at a constant or compound index (`p[2]` is
+`p + 2 * 4`, then `p + 8`; `p[i + 1]` is flattened), which no longer
+matches. Before encoding, each Z3 and cvc5 adapter therefore joins every
+quantifier with its instances at the closed reads of the query in the same
+heap whose address is `Base + S * t` for the quantifier's own base and
+stride (`instantiateAtReads`): `forall k. B` becomes `forall k. B && B(t)`,
+and `exists k. B` becomes `exists k. B || B(t)`. Both are equivalences in
+any polarity, so no verdict can change; the canonical module, its hashes,
+and the certifier never see them. Instances are taken once (never from other
+instances), at most 16 per quantifier and 50,000 added nodes per query.
+Without them, `forall(k, 0, n, p[k] >= 0)` did not prove `p[2] >= 0` on Z3
+or even `p[0] >= 0` on cvc5.
 
 ### Machine-integer encodings
 
@@ -524,7 +683,10 @@ In the integer encoding each free machine variable has a range fact
 every operation stays in range by construction:
 
 - `+`, `-`, `*`, unary `-`, truncation, and mathematical-to-machine conversion
-  reduce modulo `2^N` (`mod(x + 2^(N-1), 2^N) - 2^(N-1)` when signed);
+  reduce modulo `2^N` (`mod(x + 2^(N-1), 2^N) - 2^(N-1)` when signed). Z3
+  receives each reduction as `ite(inRange(x), x, reduced)`, so that `mod`
+  drops out of the arithmetic whenever it knows an operation does not wrap;
+  cvc5 keeps the plain form, which it handles better;
 - `/` and `%` truncate toward zero and follow the SMT-LIB zero-divisor extension
   of the bit-vector encoding (`bvsdiv x 0` is `-1` or `1`, `bvudiv x 0` is all
   ones, and both remainders are the dividend);
@@ -550,7 +712,7 @@ guards every such conversion with an `overflow` obligation that the value fits.
 Equality and ordering between a machine and a mathematical operand do not lift
 the machine side: a mathematical value outside the machine range decides the
 comparison, and one inside it is compared as a machine value. Operands that
-mention a quantifier binder are lifted instead.
+mention a quantifier binder or a collection are lifted instead.
 
 Range facts make Z3 assign every machine variable. Counterexample extraction
 therefore reports a variable as undetermined (`<unknown>`) when the goal and
@@ -570,6 +732,29 @@ spec, becomes a logical function with a leading `__spec_heap` parameter of sort
 `Heap`; its definitions read through that parameter. Each call site passes the
 heap version passivization resolves for it, exactly as for a load, and
 modules containing such functions require the `heap-functions` logic feature.
+A spec with `reads(p, n)` clauses is checked in its own module (`spec reads:`,
+the spec and its recursion cycle opaque): every load address under its path
+guard, and every range a heap-reading callee reads, lies in the declared
+ranges. Since the spec then depends only on those cells (by induction on its
+terminating definition), passivization adds, for each application `f(H', a)`
+and each store `H' = store(H, q, v)` reached backwards through the heap
+versions, the assumption `q outside R(a) -> f(H', a) == f(H, a)` under the
+store's guard. The driver demotes a proof that relies on a spec whose reads
+check did not pass to `Unresolved` with reason `spec.reads`.
+
+**Spec postconditions and domains:** a spec's `post` is checked in its
+termination module (its own module `spec post:` when it is not recursive):
+each call within the recursion cycle contributes the assumption
+`dec(a) < dec(x) -> post(a, f(a))` under the cycle's well-founded relation,
+each call of another spec its post, and every return value must satisfy the
+post. Since the facts at lower measures are the induction hypothesis, a
+proof establishes termination and the post together. Passivization then
+assumes `post(t, f(t))` at every application `f(t)` in a function, quantified
+like the application. `when(c)` is desugared in the frontend: the body
+becomes `if (c) body else return f.unspecified(params)`, where
+`f.unspecified` is a logical function without a definition (Z3 and cvc5
+declare it; the certifier cannot evaluate it, so a counterexample that needs
+its value is `counterexample.unchecked`), and each post becomes `!c || post`.
 
 **`recommends`:** parsed and stored; not emitted into the main VC. On
 verification failure, a second pass adds `recommends` checks and reports
@@ -577,27 +762,124 @@ violations as warnings. These diagnostic-only second-pass modules are not
 serialized into canonical archives.
 
 **Verification:** each module already contains a counterexample query. Z3
-asserts that query directly. UNSAT means every encoded obligation holds; SAT
-produces a counterexample; UNKNOWN is reported honestly. When a finite
-definition still contains a logical application, the model may interpret it
-arbitrarily, so a SAT model counts only if the query also holds with every
-free symbol at its model value and every defined logical function at its true
-definition, evaluated concretely. Otherwise the true values at the disputed
-arguments are added as facts and the query is solved again, up to 64 rounds;
-because the facts are true, a later UNSAT is a proof. A model that cannot be
-confirmed is `Unresolved` with reason `spec.fuel`. cvc5 returns no model, so
-its `sat` for such a module is `spec.fuel` too. If the complete query
-is unresolved, Z3 may solve the module-owned ordered queries. It does not
-reconstruct alternate passive programs.
+asserts that query directly. UNSAT means every encoded obligation holds;
+UNKNOWN is reported honestly. A SAT model is a counterexample only after the
+certifier (`Certify.cpp`) confirms it: it evaluates the canonical query, not a
+solver's encoding, with every free symbol at its model value and every logical
+function at its definition, using exact integer, machine-integer, heap, and
+bounded-quantifier semantics under step, nesting, and time budgets. Every
+module carries each logical function's definition, a hidden one included;
+fuel and `hide` only decide which unfoldings a solver receives.
+
+When a model interprets an application differently from its definition, the
+adapter adds the definition instances `f(v) = body[v]` at the disputed
+arguments and solves again. The certifier chooses the points, but the
+instances come from the definitions, so a later UNSAT is a proof whatever the
+certifier computed. Instances of a hidden function only steer the search: a
+counterexample found with them is reported, but an UNSAT that may rely on
+them is `spec.hidden`, never `Verified`. A round that needs thousands of
+instances is chasing an unbounded argument, as an induction goal makes a
+solver do, and ends as `spec.fuel` at once, with a message that the goal needs
+an induction lemma.
+
+Two cases are settled by instances without a model-by-model search. An
+application at closed arguments is evaluated before the first check, and the
+solver receives the instances at every application the evaluation reaches (at
+most 20000), so `sum(15000) == 112507500` is computed. On the first disputed
+model, Z3 also asks for the least and greatest values the query allows for
+each integer argument of a disputed application, doubling a step until the
+solver proves no further value exists. When both ends are proved, the models
+there are certified and their disputes all become instances, which covers a
+bounded domain such as `0 <= n <= 200` in one round. The check that follows
+runs in a fresh solver with the remaining budget, since Z3's incremental core
+is much slower on thousands of ground equations. The probe only chooses
+models: an end the solver cannot prove adds nothing, and a model at an end
+that holds under the definitions pins the search to that counterexample.
+
+Z3 gives refinement a short slice of the query budget (5%, at least half a
+second) and at most eight rounds that only search among hidden values. It
+then solves the query again with whole definitions in the remaining time and
+certifies any model it returns: a non-recursive function is replaced by its
+definition and a recursive one becomes a native recursive definition
+(`RecAddDefinition`). Hidden functions are defined there too, so after a
+hidden-spec stop that pass gets only a short slice and its UNSAT is
+`spec.hidden`. cvc5 prints its model after `sat` (`--dump-models`), the same
+certifier checks it, and refinement re-runs cvc5 with the instances within a
+fifth of the budget (at least two seconds). cvc5 does not decide queries over
+recursive definitions, so recursive functions stay declared there; once a
+hidden instance has been given, every non-recursive function is defined whole
+(`define-fun`).
+
+A model may give a bounded quantifier a range too wide to expand. When the
+body uses the binder only in affine load addresses and in comparisons between
+polynomials in it (degree at most eight; machine operations, conversions, and
+resizes count when each provably stays within its sort over the range, since
+it then equals the exact one), the certifier evaluates the binder values
+that reach an explicitly assigned heap cell or where a comparison may change,
+plus one value between each two of them: the body is constant in between. For
+an affine comparison that is its root; for a polynomial, the sign changes of
+left minus right are isolated by bisection, bounding the polynomial on each
+interval exactly by its expansion around the midpoint
+(`d0 -/+ sum |dk| h^k`), so an interval whose bound excludes zero has one sign
+and the rest is split down to single values; adjacent intervals of different
+sign add their boundary. The same bound decides that a machine value does
+not wrap. Otherwise it probes both ends of the range. If that does not
+decide a quantifier outside every binder, the adapter asks the solver for a
+model whose range is at most 4096. Failing to find one settles nothing.
+
+The same analysis decides a quantifier without bounds: the distinguished
+values, one value between each two, and one beyond each end cover every
+integer, provided every converted value is constant in the binder (a
+polynomial comparison's roots lie within the Cauchy bound
+`1 + max|a_i| / |a_n|`). Collection reads count as loads: a sequence is 0
+before index 0, its elements, then 0 from its length on, and sets,
+multisets, and maps are already piecewise constant over the integers. A
+`HeapFrame` is compared segment by segment over the heaps' breakpoints. A
+lifted `choose` is read from the model, like an uninterpreted function.
+
+`--profile-quantifiers` reruns a quantified Z3 query that stayed unresolved
+with `qi.profile`, one rerun at a time, capturing what Z3 writes to file
+descriptor 2. Each quantifier's instance count and greatest generation are
+reported by its id `q@line:col` (text notes and JSON `quantifier_profile`),
+the busiest first. The profile needs a POSIX host.
+
+A bounded domain found by Z3 under the bit-vector encoding is settled by a
+fresh encoder in the integer encoding with the remaining budget: both are
+exact, and thousands of definition instances over bit-blasted machine
+arithmetic would otherwise exhaust the budget.
+
+A model that fails the query even under its own interpretation is
+`backend.invalid-result`; one that cannot be checked within the budgets is
+`counterexample.unchecked`, or `spec.fuel` when checking it needs unbounded
+unfolding. If the complete query is unresolved, Z3 may solve the module-owned
+ordered queries. It does not reconstruct alternate passive programs.
+
+A `spec.fuel` result is retried by strong induction (`inductionModule`). For
+an integer variable `n` in an argument of an application (at most two are
+tried), the adapter first substitutes the definitions the query assumes:
+where the query is antitone in `(x == t && A) -> B`, that implication becomes
+`(A -> B)[x := t]`, which only adds models. It then asks whether
+`Q && forall(k, 0, n, !Q[n := k])` has a model, every other variable fixed. If
+`Q` had one, either `n < 0`, where the hypothesis is empty, or the least
+`n >= 0` with the same other values satisfies the hypothesis; so only UNSAT
+is used, as `Verified`. Each attempt gets a sixth of the query budget (at
+least two seconds) and no domain probing, whose thousands of ground instances
+can keep Z3's simplex from noticing a timeout. BMC applies it per obligation,
+never to an unwinding obligation. In cvc5's integer encoding a binder whose
+range fits a machine sort converts to that sort as itself rather than through
+the modular reduction, so its applications stay visible to instantiation.
 
 ## Counterexample Extraction
 
 When Z3 returns SAT, CppVerify evaluates source-attributed SSA variables without
 model completion. Diagnostic metadata supplies the original display name,
 exact logic sort, internal SSA identity, and declaration range. Signed and
-unsigned bit-vectors are rendered as source-level decimal values. A value that
-the model does not determine is reported as `<unknown>` in text and JSON
-`null`; the verifier never invents a convenient value.
+unsigned bit-vectors are rendered as source-level decimal values, and
+collections as their elements, members, counts, or entries in order, a run of
+equal cells as `lo..hi` with a missing bound for an unbounded run (`[1, 2]`,
+`{1, 3..5}`, `{2: 3}`, `{1 -> 7, 4.. -> 2}`, `{..}`), at most 64 items. A
+value that the model does not determine is reported as `<unknown>` in text
+and JSON `null`; the verifier never invents a convenient value.
 
 Passivization also records guarded branch, modular-call, loop, heap-write,
 allocation, lifetime-end, deletion, and return events. Each obligation owns the
@@ -631,6 +913,21 @@ pure JSON stream.
    f. Report verified / counterexample / unresolved / bounded-safe / exported,
       or kernel-certified.
 3. For each failure, run a second pass with `recommends` checks → warnings.
+4. Qualify each verdict by what it rests on:
+   - a trusted function reports `Trusted`; an unmarked contract without a
+     definition draws a warning, and every caller whose proof relies on it
+     (or on any callee contract whose verification failed) is demoted to
+     `Unresolved` with reason `callee.contract`;
+   - `[trusts=...]` lists the trusted contracts a proof uses, closed
+     transitively over verified callees (JSON `"trusts"`);
+   - every `Verified` result gets the vacuity checks, small queries over the
+     same passive program: `false` at the end of the function (the whole
+     proof is vacuous), each behavior's `pre && assumes` (a behavior that
+     never applies), and, for each call of a trusted contract, whether its
+     path is reachable before the postcondition assumptions and unreachable
+     after them (the trusted contract contradicts that call). Passivization
+     marks the first assumption of a trusted callee's postcondition with the
+     callee, its clause count, and the call's path condition for this.
 
 ## Verification Backends (`VerifyBackend`)
 
@@ -639,10 +936,10 @@ The driver selects a backend via `VerifyOptions` (`Verifier.h` / `cpp-verify --b
 | Backend | Implementation | Notes |
 |---------|----------------|-------|
 | **Z3** | `Z3VerifyBackend` | Default. Consumes `ObligationModule`; counterexamples come from models. |
-| **cvc5** | `CVC5VerifyBackend` + standalone SMT-LIB2 | Encodes the same canonical sorts, C++ truncating math division/remainder, bit-vectors, signed overflow, total heap, bounded quantifiers, and finite ground spec equations. Solver process failures and malformed output are unresolved. |
-| **Strict portfolio** | `PortfolioVerifyBackend` | Runs ordered Z3 and cvc5 queries. Matching UNSAT proves; matching SAT fails and retains the Z3 model (a cvc5 `spec.fuel` counts as SAT beside a checked Z3 counterexample); disagreement or an unresolved side is unresolved. |
+| **cvc5** | `CVC5VerifyBackend` + standalone SMT-LIB2 | Encodes the same canonical sorts, C++ truncating math division/remainder, bit-vectors, signed overflow, total heap, bounded and unbounded quantifiers (marked triggers as `:pattern`), heap frames, sequences (`full-saturate-quant` when sequences meet quantifiers), and finite ground spec equations. Sets, multisets, and maps are `logic.unsupported`: cvc5's set theory is finite, which would prove facts false of an infinite set. Solver process failures and malformed output are unresolved. |
+| **Strict portfolio** | `PortfolioVerifyBackend` | Runs ordered Z3 and cvc5 queries. Matching UNSAT proves; matching certified counterexamples fail and retain the Z3 model; disagreement or an unresolved side is unresolved. |
 | **BMC** | `LoopUnroll` on VCR, then shared obligation/Z3 path | Source verification grows bounds from zero through `--unroll=N`, stopping on a counterexample, complete unwinding, unresolved query, or the maximum frontier. Safety with failed unwinding is `BoundedSafe(N)`; only proved unwinding is `Verified`. |
-| **Lean** | `exportLeanScratchPad` / project certification | Standalone mode emits unchecked theorem stubs. Project mode emits direct source goals, total functional heaps, typed bit-vector/integer operations, and compact finite-fuel spec bodies into generated files while preserving user proofs. Export is `Exported`; only the pinned admission-free kernel/axiom check is `Certified`. |
+| **Lean** | `exportLeanScratchPad` / project certification | Standalone mode emits unchecked theorem stubs. Project mode emits direct source goals, total functional heaps, typed bit-vector/integer operations, and compact finite-fuel spec bodies into generated files while preserving user proofs. Export is `Exported`; only the pinned admission-free kernel/axiom check is `Certified`. Collections are `logic.unsupported`. |
 
 Each backend declares supported `LogicFeature`s. Central dispatch rejects a
 module requiring an unavailable feature before backend execution. Spec
@@ -668,10 +965,10 @@ single solver job, avoiding an implicit nested concurrency layer.
 cvc5 execution resolves an explicit `--cvc5-path` or searches `PATH`, writes one
 bounded temporary SMT-LIB2 query, invokes the executable without a shell under
 the same timeout/resource policy, accepts only one exact `sat`, `unsat`, or
-`unknown` token, bounds captured output, and removes query/output files. cvc5
-processes may run concurrently; each exact child is polled, bounded, terminated,
-and reaped independently, while results remain source ordered. It does not
-manufacture models. Portfolio mode uses a separate Z3 cache namespace for its Z3
+`unknown` verdict, reads the model printed after `sat`, bounds captured output,
+and removes query/output files. cvc5 processes may run concurrently; each exact
+child is polled, bounded, terminated, and reaped independently, while results
+remain source ordered. Portfolio mode uses a separate Z3 cache namespace for its Z3
 component and always reruns cvc5, so a cached single-solver proof cannot bypass
 independent agreement.
 
@@ -705,10 +1002,9 @@ At each call the passivizer:
 
 1. Maps actual arguments into the callee parameter namespace.
 2. `assert`s callee preconditions (including implicit non-aliasing from the callee's contract).
-3. Havocs value-heap SSA according to `modifies`.
-4. Maps syntactically reassigned by-value formals to fresh final values while
-   retaining entry actuals for `old(formal)`.
-5. `assume`s callee postconditions (including `result` linkage).
+3. Changes the value heap only inside the callee's `modifies` footprints.
+4. `assume`s callee postconditions (including `result` linkage), where a
+   formal, inside or outside `old`, denotes its entry actual.
 
 Calls to functions marked `usesDynamicStorage` fail closed unless they carry
 the inferred `freshOwnedReturn` summary. That one effect materializes a fresh
@@ -819,7 +1115,11 @@ semantics.
 and per-obligation semantic hashes, function identity, required features,
 direct and negated goals, typed terms, obligation IDs/kinds, resolved source
 metadata, ordered queries, and owned finite-fuel logic declarations.
-Layer 4 encodes that same in-memory module. The layer mask is parsed by
+Frames print as `heap_frame` with their regions, trigger patterns as
+`trigger` children of their quantifier, and collection operations by name
+(`seq.push : seq`). Layer 4 encodes that same in-memory module, preceded by
+the range facts, bit definitions, and the definitions and lemmas of
+`cppverify.cell_*` and `cppverify.seq_at` that the query uses. The layer mask is parsed by
 `parseDumpIRLayers` (`1`, `2`,
 `layer-3,4`, `all`, etc.).
 
