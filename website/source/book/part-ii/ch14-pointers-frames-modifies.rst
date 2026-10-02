@@ -157,13 +157,12 @@ Without the loop's ``modifies``, the whole object ``p`` addresses is written
 as far as the verifier knows, and ``p[n] == old(p[n])`` would need an
 invariant.
 
-The object a store writes is found from its address, not from how the
-pointer is spelled. A pointer that walks through a buffer (``*q = 0; q = q +
-1;``) still writes only that buffer, and a pointer chosen at run time
-(``int *p = first ? a : b;``) writes one of the function's ``modifies``
-objects, which then frame the loop. In both cases every other object keeps
-its value without an invariant; :doc:`../../language/pointers` has the
-complete examples.
+The object a store writes is found from where its pointer came from (its
+*origin*), not from how the pointer is spelled. A pointer that walks through
+a buffer (``*q = 0; q = q + 1;``) still writes only that buffer, and a pointer
+chosen at run time (``int *p = first ? a : b;``) writes one of ``a`` and
+``b``. In both cases every other object keeps its value without an
+invariant; :doc:`../../language/pointers` has the complete examples.
 
 A subtle point shows up when a loop relates **two** buffers, as in a ``memcpy``:
 
@@ -226,16 +225,18 @@ concrete liveness, initialization, size, alignment, and local
 pointer-provenance model (see :doc:`../../language/dynamic-storage`).
 
 Pointer difference supports general same-array positions under a declared
-extent. For ``(p + i) - (p + j)``, both indices must be proved in ``[0, n]``
-for the same ``valid(p, n)`` origin; the inclusive endpoint is the legal
-one-past position. The verifier subtracts target-byte addresses, divides by
-``sizeof(T)``, proves non-nullness, liveness, common origin, bounds, and
-``ptrdiff_t`` representability, and then materializes the machine result.
-Without an extent, abstract and scalar-dynamic pointers retain only base and
-one-past complete-object positions. Merely proving ``left == right`` does not
-establish shared C++ provenance. Stored/indirect positions, distinct origins,
-and subtraction in explicit specs or lifted ``constexpr`` functions remain
-fail-closed.
+extent. For ``q - p``, both pointers must come from one object and lie in
+``[0, n]`` of its ``valid(p, n)`` extent; the inclusive endpoint is the legal
+one-past position. The pointers may have been stepped or copied, in loops
+too: ``decreases(end - q)`` for a walking ``q`` is a pointer difference. The
+verifier subtracts target-byte addresses, divides by ``sizeof(T)``, proves
+non-nullness, liveness, common origin, bounds, and ``ptrdiff_t``
+representability, and then materializes the machine result. Without an
+extent, abstract and scalar-dynamic pointers retain only base and one-past
+complete-object positions. Pointers into two different parameters' objects
+may be one caller array, which contracts cannot state, so their difference is
+``construct.unsupported``. Pointers loaded from memory and subtraction in
+explicit specs or lifted ``constexpr`` functions remain fail-closed.
 
 Extents also compose at modular calls. If a callee requires
 ``valid(q, length)`` and receives ``p + offset``, the caller must prove one
