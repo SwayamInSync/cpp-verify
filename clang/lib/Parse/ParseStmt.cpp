@@ -172,6 +172,13 @@ Retry:
       return ParseLabeledStatement(CXX11Attrs, StmtCtx);
     }
 
+    // CppVerify: `calc {` unless calc names a type.
+    if (getLangOpts().VerifyContracts && Next.is(tok::l_brace) &&
+        Tok.getIdentifierInfo()->isStr("calc") &&
+        !Actions.getTypeName(*Tok.getIdentifierInfo(), Tok.getLocation(),
+                             getCurScope()))
+      return ParseCalcStatement();
+
     // Look up the identifier, and typo-correct it to a keyword if it's not
     // found.
     if (Next.isNot(tok::coloncolon)) {
@@ -290,6 +297,9 @@ Retry:
     return ParseGhostBlock();
   case tok::kw_contract_assert:
     Res = ParseContractAssert();
+    // A proof block ends the statement, like a compound statement.
+    if (Res.isUsable() && cast<ContractAssertStmt>(Res.get())->getBy())
+      return Res;
     SemiError = "contract_assert";
     break;
   case tok::kw_reveal_with_fuel:
@@ -1774,8 +1784,11 @@ StmtResult Parser::ParseWhileStatement(SourceLocation *TrailingElseLoc,
   // CppVerify: parse loop contract clauses (invariant/decreases) if present.
   SmallVector<Expr *, 2> Invariants;
   SmallVector<Expr *, 2> LoopDecreases;
+  SourceLocation LoopMayDiverge;
+  SmallVector<Expr *, 2> LoopModifies;
   if (getLangOpts().VerifyContracts)
-    ParseLoopContractClauses(Invariants, LoopDecreases);
+    ParseLoopContractClauses(Invariants, LoopDecreases, LoopMayDiverge,
+                             LoopModifies);
 
   // OpenACC Restricts a while-loop inside of certain construct/clause
   // combinations, so diagnose that here in OpenACC mode.
@@ -1814,11 +1827,14 @@ StmtResult Parser::ParseWhileStatement(SourceLocation *TrailingElseLoc,
       Actions.ActOnWhileStmt(WhileLoc, LParen, Cond, RParen, Body.get());
 
   // Store loop contracts in ASTContext side table.
-  if (Result.isUsable() && (!Invariants.empty() || !LoopDecreases.empty())) {
+  if (Result.isUsable() && (!Invariants.empty() || !LoopDecreases.empty() ||
+                            LoopMayDiverge.isValid() || !LoopModifies.empty())) {
     LoopContractInfo &LCI =
         Actions.getASTContext().getOrCreateLoopContract(Result.get());
     LCI.Invariants = std::move(Invariants);
     LCI.Decreases = std::move(LoopDecreases);
+    LCI.MayDiverge = LoopMayDiverge;
+    LCI.Modifies = std::move(LoopModifies);
   }
   return Result;
 }
@@ -1899,8 +1915,11 @@ StmtResult Parser::ParseDoStatement(LabelDecl *PrecedingLabel) {
 
   SmallVector<Expr *, 2> Invariants;
   SmallVector<Expr *, 2> LoopDecreases;
+  SourceLocation LoopMayDiverge;
+  SmallVector<Expr *, 2> LoopModifies;
   if (getLangOpts().VerifyContracts)
-    ParseLoopContractClauses(Invariants, LoopDecreases);
+    ParseLoopContractClauses(Invariants, LoopDecreases, LoopMayDiverge,
+                             LoopModifies);
 
   DoScope.Exit();
 
@@ -1910,11 +1929,14 @@ StmtResult Parser::ParseDoStatement(LabelDecl *PrecedingLabel) {
   StmtResult Result =
       Actions.ActOnDoStmt(DoLoc, Body.get(), WhileLoc, T.getOpenLocation(),
                           Cond.get(), T.getCloseLocation());
-  if (Result.isUsable() && (!Invariants.empty() || !LoopDecreases.empty())) {
+  if (Result.isUsable() && (!Invariants.empty() || !LoopDecreases.empty() ||
+                            LoopMayDiverge.isValid() || !LoopModifies.empty())) {
     LoopContractInfo &LCI =
         Actions.getASTContext().getOrCreateLoopContract(Result.get());
     LCI.Invariants = std::move(Invariants);
     LCI.Decreases = std::move(LoopDecreases);
+    LCI.MayDiverge = LoopMayDiverge;
+    LCI.Modifies = std::move(LoopModifies);
   }
   return Result;
 }
@@ -2230,8 +2252,11 @@ StmtResult Parser::ParseForStatement(SourceLocation *TrailingElseLoc,
   // CppVerify: parse loop contract clauses (invariant/decreases) if present.
   SmallVector<Expr *, 2> ForInvariants;
   SmallVector<Expr *, 2> ForDecreases;
+  SourceLocation ForMayDiverge;
+  SmallVector<Expr *, 2> ForModifies;
   if (getLangOpts().VerifyContracts)
-    ParseLoopContractClauses(ForInvariants, ForDecreases);
+    ParseLoopContractClauses(ForInvariants, ForDecreases, ForMayDiverge,
+                             ForModifies);
 
   // C++ Coroutines [stmt.iter]:
   //   'co_await' can only be used for a range-based for statement.
@@ -2333,11 +2358,14 @@ StmtResult Parser::ParseForStatement(SourceLocation *TrailingElseLoc,
       T.getCloseLocation(), Body.get());
 
   // Store loop contracts in ASTContext side table.
-  if (ForResult.isUsable() && (!ForInvariants.empty() || !ForDecreases.empty())) {
+  if (ForResult.isUsable() && (!ForInvariants.empty() || !ForDecreases.empty() ||
+                               ForMayDiverge.isValid() || !ForModifies.empty())) {
     LoopContractInfo &LCI =
         Actions.getASTContext().getOrCreateLoopContract(ForResult.get());
     LCI.Invariants = std::move(ForInvariants);
     LCI.Decreases = std::move(ForDecreases);
+    LCI.MayDiverge = ForMayDiverge;
+    LCI.Modifies = std::move(ForModifies);
   }
   return ForResult;
 }
@@ -2777,23 +2805,49 @@ void Parser::ParseMicrosoftIfExistsStatement(StmtVector &Stmts) {
 // CppVerify Contract Statement Parsing
 //===----------------------------------------------------------------------===//
 
-/// Parse loop contract clauses: invariant(expr) and decreases(expr)
-/// These appear after the while/for condition ')' and before the body '{'.
+void Parser::ParseContractFootprints(SmallVectorImpl<Expr *> &Footprints) {
+  llvm::SaveAndRestore<bool> FootprintRAII(InContractFootprint, true);
+  do {
+    ExprResult E = ParseAssignmentExpression();
+    if (E.isInvalid())
+      break;
+    Footprints.push_back(E.get());
+    if (Tok.is(tok::comma))
+      ConsumeToken();
+    else
+      break;
+  } while (Tok.isNot(tok::r_paren));
+}
+
+/// Parse loop contract clauses: invariant(expr), decreases(expr), and
+/// modifies(footprints). These appear after the while/for condition ')' and
+/// before the body '{'.
 void Parser::ParseLoopContractClauses(SmallVectorImpl<Expr *> &Invariants,
-                                      SmallVectorImpl<Expr *> &Decreases) {
+                                      SmallVectorImpl<Expr *> &Decreases,
+                                      SourceLocation &MayDiverge,
+                                      SmallVectorImpl<Expr *> &Modifies) {
   llvm::SaveAndRestore<bool> ParsingContractExprRAII(InParsingContractExpr, true);
-  while (Tok.is(tok::kw_invariant) || Tok.is(tok::kw_decreases)) {
+  while (Tok.is(tok::kw_invariant) || Tok.is(tok::kw_decreases) ||
+         Tok.is(tok::kw_modifies)) {
     bool IsInvariant = Tok.is(tok::kw_invariant);
+    bool IsModifies = Tok.is(tok::kw_modifies);
+    const char *ClauseName =
+        IsInvariant ? "invariant" : IsModifies ? "modifies" : "decreases";
     ConsumeToken();
 
     if (Tok.isNot(tok::l_paren)) {
-      Diag(Tok, diag::err_contract_expected_lparen)
-          << (IsInvariant ? "invariant" : "decreases");
+      Diag(Tok, diag::err_contract_expected_lparen) << ClauseName;
       return;
     }
     ConsumeParen();
 
-    if (IsInvariant) {
+    if (IsModifies) {
+      // Footprints are read in each iteration's state; old(...) denotes
+      // function entry, as in an invariant.
+      llvm::SaveAndRestore<bool> LoopInvariantRAII(InLoopContractInvariant,
+                                                   true);
+      ParseContractFootprints(Modifies);
+    } else if (IsInvariant) {
       llvm::SaveAndRestore<bool> LoopInvariantRAII(InLoopContractInvariant,
                                                    true);
       ExprResult E = ParseExpression();
@@ -2807,7 +2861,13 @@ void Parser::ParseLoopContractClauses(SmallVectorImpl<Expr *> &Invariants,
         return;
       }
       Invariants.push_back(E.get());
+    } else if (Tok.is(tok::star) && NextToken().is(tok::r_paren)) {
+      MayDiverge = ConsumeToken();
+      if (!Decreases.empty())
+        Diag(MayDiverge, diag::err_contract_decreases_star_with_measure);
     } else {
+      if (MayDiverge.isValid())
+        Diag(Tok, diag::err_contract_decreases_star_with_measure);
       // decreases: a comma-separated lexicographic tuple of integer measures.
       // Parse each component with ParseAssignmentExpression so the comma is a
       // tuple separator, not the C comma operator.
@@ -2830,8 +2890,7 @@ void Parser::ParseLoopContractClauses(SmallVectorImpl<Expr *> &Invariants,
     }
 
     if (Tok.isNot(tok::r_paren)) {
-      Diag(Tok, diag::err_contract_expected_rparen)
-          << (IsInvariant ? "invariant" : "decreases");
+      Diag(Tok, diag::err_contract_expected_rparen) << ClauseName;
       SkipUntil(tok::r_paren, StopAtSemi);
       return;
     }
@@ -2839,11 +2898,110 @@ void Parser::ParseLoopContractClauses(SmallVectorImpl<Expr *> &Invariants,
   }
 }
 
+StmtResult Parser::ParseCalcStatement() {
+  SourceLocation CalcLoc = ConsumeToken();
+  BalancedDelimiterTracker Braces(*this, tok::l_brace);
+  Braces.consumeOpen();
+  llvm::SaveAndRestore<bool> ParsingContractExprRAII(InParsingContractExpr,
+                                                     true);
+  auto term = [&]() -> Expr * {
+    ExprResult E = ParseExpression();
+    if (E.isInvalid() || ExpectAndConsume(tok::semi)) {
+      SkipUntil(tok::r_brace, StopBeforeMatch);
+      return nullptr;
+    }
+    return E.get();
+  };
+  Expr *First = term();
+  if (!First) {
+    Braces.consumeClose();
+    return StmtError();
+  }
+  Expr *Previous = First;
+  StmtVector Steps;
+  bool Increasing = false, Decreasing = false, Strict = false;
+  while (Tok.isOneOf(tok::equalequal, tok::lessequal, tok::less,
+                     tok::greaterequal, tok::greater)) {
+    const tok::TokenKind Op = Tok.getKind();
+    SourceLocation OpLoc = ConsumeToken();
+    Stmt *Proof = nullptr;
+    if (Tok.is(tok::l_brace)) {
+      StmtResult Body = ParseCompoundStatement();
+      if (Body.isInvalid()) {
+        SkipUntil(tok::r_brace, StopBeforeMatch);
+        break;
+      }
+      Proof = new (Actions.getASTContext()) GhostBlockStmt(OpLoc, Body.get());
+    }
+    Expr *Next = term();
+    if (!Next)
+      break;
+    ExprResult Step = Actions.ActOnContractCondition(
+        Actions.ActOnBinOp(getCurScope(), OpLoc, Op, Previous, Next));
+    if (Step.isInvalid())
+      break;
+    Steps.push_back(new (Actions.getASTContext()) ContractAssertStmt(
+        OpLoc, OpLoc, Next->getEndLoc(), Step.get(), Proof));
+    Increasing |= Op == tok::lessequal || Op == tok::less;
+    Decreasing |= Op == tok::greaterequal || Op == tok::greater;
+    Strict |= Op == tok::less || Op == tok::greater;
+    Previous = Next;
+  }
+  if (Braces.consumeClose())
+    return StmtError();
+  if (Steps.empty()) {
+    Diag(CalcLoc, diag::err_calc_no_steps);
+    return StmtError();
+  }
+  if (Increasing && Decreasing) {
+    Diag(CalcLoc, diag::err_calc_mixed_directions);
+    return StmtError();
+  }
+  // Each step is proved, with its proof's facts kept local, and the chain
+  // proves only First R Last.
+  const tok::TokenKind Relation =
+      Increasing   ? (Strict ? tok::less : tok::lessequal)
+      : Decreasing ? (Strict ? tok::greater : tok::greaterequal)
+                   : tok::equalequal;
+  ExprResult Conclusion = Actions.ActOnContractCondition(
+      Actions.ActOnBinOp(getCurScope(), CalcLoc, Relation, First, Previous));
+  if (Conclusion.isInvalid())
+    return StmtError();
+  SourceLocation EndLoc = Braces.getCloseLocation();
+  CompoundStmt *Body = CompoundStmt::Create(Actions.getASTContext(), Steps,
+                                            FPOptionsOverride(), CalcLoc,
+                                            EndLoc);
+  Stmt *By = new (Actions.getASTContext()) GhostBlockStmt(CalcLoc, Body);
+  return new (Actions.getASTContext())
+      ContractAssertStmt(CalcLoc, CalcLoc, EndLoc, Conclusion.get(), By);
+}
+
 /// Parse ghost { ... }
 StmtResult Parser::ParseGhostBlock() {
   assert(Tok.is(tok::kw_ghost) && "Expected 'ghost'");
   SourceLocation GhostLoc = ConsumeToken();
 
+  // `ghost T x = e;` declares function-scoped ghost variables: the
+  // declaration joins the enclosing scope, and the statement is erased.
+  if (Tok.isNot(tok::l_brace) && isDeclarationStatement()) {
+    StmtVector Stmts;
+    StmtResult Declaration =
+        ParseStatementOrDeclaration(Stmts, ParsedStmtContext::Compound);
+    if (Declaration.isInvalid())
+      return StmtError();
+    auto *DS = dyn_cast<DeclStmt>(Declaration.get());
+    if (!DS || llvm::any_of(DS->decls(),
+                            [](const Decl *D) { return !isa<VarDecl>(D); })) {
+      Diag(GhostLoc, diag::err_ghost_declaration_not_variable);
+      return StmtError();
+    }
+    for (Decl *D : DS->decls())
+      Actions.getASTContext().markGhostVariable(cast<VarDecl>(D));
+    CompoundStmt *Body = CompoundStmt::Create(
+        Actions.getASTContext(), {DS}, FPOptionsOverride(), DS->getBeginLoc(),
+        DS->getEndLoc());
+    return new (Actions.getASTContext()) GhostBlockStmt(GhostLoc, Body);
+  }
   if (Tok.isNot(tok::l_brace)) {
     Diag(Tok, diag::err_contract_expected_body);
     return StmtError();
@@ -2886,8 +3044,19 @@ StmtResult Parser::ParseContractAssert() {
   }
   SourceLocation RParenLoc = ConsumeParen();
 
+  // contract_assert(e) by { ghost proof }: `by` is contextual.
+  Stmt *By = nullptr;
+  if (Tok.is(tok::identifier) && Tok.getIdentifierInfo()->isStr("by") &&
+      NextToken().is(tok::l_brace)) {
+    SourceLocation ByLoc = ConsumeToken();
+    StmtResult Body = ParseCompoundStatement();
+    if (Body.isInvalid())
+      return StmtError();
+    By = new (Actions.getASTContext()) GhostBlockStmt(ByLoc, Body.get());
+  }
+
   return new (Actions.getASTContext())
-      ContractAssertStmt(CALoc, LParenLoc, RParenLoc, Cond.get());
+      ContractAssertStmt(CALoc, LParenLoc, RParenLoc, Cond.get(), By);
 }
 
 /// Parse reveal_with_fuel(fn, depth);
