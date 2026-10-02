@@ -23,14 +23,15 @@ range (the common case for loop invariants and postconditions) is well supported
 report ``unknown`` — use a concrete range, or supply the witness, when you need
 one.
 
-Quantifiers without bounds range over all integers; a counterexample to one
-is certified when its body depends on the bound variable through memory or
-collection reads and comparisons. ``trigger(term)`` marks a memory read,
-collection read, or recursive spec call that mentions a bound variable as the
-quantifier's pattern; other marks are ignored with a warning.
-``--profile-quantifiers`` shows which quantifiers an unresolved query
-instantiated most. ``choose`` and the collections exist only for verification.
-See :doc:`../book/part-ii/ch13-spec-and-proof-functions`.
+Quantifiers without bounds range over all integers; a counterexample to one is
+certified when its body depends on the bound variables through linear
+arithmetic, comparisons, memory or collection reads, and other quantifiers,
+nested to any depth (the checker decides it as Presburger arithmetic).
+``trigger(term)`` marks a memory read, collection read, or recursive spec call
+that mentions a bound variable as the quantifier's pattern; other marks are
+ignored with a warning. ``--profile-quantifiers`` shows which quantifiers an
+unresolved query instantiated most. ``choose`` and the collections exist only
+for verification. See :doc:`../book/part-ii/ch13-spec-and-proof-functions`.
 
 ``old`` is valid in postconditions and loop invariants, where it denotes the
 function's entry state. ``result`` is only valid in postconditions and cannot
