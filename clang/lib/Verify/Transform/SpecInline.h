@@ -54,6 +54,12 @@ std::unique_ptr<VExpr> specApplicationFacts(
     const VFunction &Spec, const std::vector<std::unique_ptr<VExpr>> &Args,
     const VExpr *Value, SourceLocation Loc, const std::string &Heap = {});
 
+/// Build passive obligations for a recursive spec whose termination is
+/// established on its own: its postconditions hold of its body, by
+/// well-founded induction on its measure, with its definition known.
+PassiveProgram buildInductionChecks(const VFunction &Fn,
+                                    const FunctionMap &FnMap);
+
 /// Build passive obligations for a non-recursive spec: its postconditions
 /// hold of its body, assuming those of the specs it calls.
 PassiveProgram buildSpecPostChecks(const VFunction &Fn,
