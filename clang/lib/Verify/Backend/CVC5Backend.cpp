@@ -104,6 +104,10 @@ class SMTLibEncoder {
   /// Sequence operations under quantifiers need enumerative instantiation.
   bool UsesSequences = false;
   bool UsesQuantifiers = false;
+  /// Maps hold cppverify.option values; set union, intersection, and
+  /// difference are functions defined pointwise by an axiom each.
+  bool UsesMaps = false;
+  std::set<std::string> SetOperations;
   bool UsedBitLevelOperation = false;
   bool Failed = false;
   std::string Error;
@@ -134,11 +138,15 @@ class SMTLibEncoder {
       return "(Array Int Int)";
     case LogicSortKind::Seq:
       return "(Seq Int)";
+    // Collections over all integers are arrays, as for Z3; cvc5's set
+    // theory is finite.
     case LogicSortKind::Set:
+      return "(Array Int Bool)";
     case LogicSortKind::Multiset:
+      return "(Array Int Int)";
     case LogicSortKind::Map:
-      fail("sets, multisets, and maps have no SMT-LIB encoding for cvc5");
-      return "Int";
+      UsesMaps = true;
+      return "(Array Int cppverify.option)";
     case LogicSortKind::Invalid:
       fail("cannot encode an invalid logic sort");
       return "Bool";
@@ -707,9 +715,9 @@ class SMTLibEncoder {
     case LogicExpr::Ite:
       return "(ite " + Child(0) + " " + Child(1) + " " + Child(2) + ")";
     case LogicExpr::Eq:
-      return "(= " + Child(0) + " " + Child(1) + ")";
+      return equality(Expr, Child(0), Child(1));
     case LogicExpr::Ne:
-      return "(not (= " + Child(0) + " " + Child(1) + "))";
+      return "(not " + equality(Expr, Child(0), Child(1)) + ")";
     case LogicExpr::Lt:
     case LogicExpr::Le:
     case LogicExpr::Gt:
@@ -981,9 +989,10 @@ class SMTLibEncoder {
     return "false";
   }
 
-  /// A sequence operation, with cppverify.h's total semantics.
+  /// A collection operation, with cppverify.h's total semantics.
   std::string collection(const LogicExpr *Expr) {
-    UsesSequences = true;
+    if (isSequenceOperation(Expr->CollectionOp))
+      UsesSequences = true;
     std::vector<std::string> A;
     for (const auto &Child : Expr->Children)
       A.push_back(encode(Child.get()));
@@ -1028,9 +1037,99 @@ class SMTLibEncoder {
       return "(seq.++ " + arg(0) + " " + arg(1) + ")";
     case Op::SeqContains:
       return "(seq.contains " + arg(0) + " " + unit(arg(1)) + ")";
+    case Op::SetEmpty:
+      return "((as const (Array Int Bool)) false)";
+    case Op::SetInsert:
+      return "(store " + arg(0) + " " + arg(1) + " true)";
+    case Op::SetRemove:
+      return "(store " + arg(0) + " " + arg(1) + " false)";
+    case Op::SetContains:
+      return "(select " + arg(0) + " " + arg(1) + ")";
+    case Op::SetUnion:
+    case Op::SetIntersect:
+    case Op::SetDifference: {
+      const std::string Name =
+          Expr->CollectionOp == Op::SetUnion       ? "cppverify.set_union"
+          : Expr->CollectionOp == Op::SetIntersect ? "cppverify.set_intersect"
+                                                   : "cppverify.set_difference";
+      SetOperations.insert(Name);
+      return "(" + Name + " " + arg(0) + " " + arg(1) + ")";
+    }
+    case Op::SetSubset: {
+      const std::string K = freshLocal("subset");
+      UsesQuantifiers = true;
+      return "(forall ((" + K + " Int)) (=> (select " + arg(0) + " " + K +
+             ") (select " + arg(1) + " " + K + ")))";
+    }
+    case Op::MultisetEmpty:
+      return "((as const (Array Int Int)) 0)";
+    case Op::MultisetInsert:
+      return "(store " + arg(0) + " " + arg(1) + " (+ " +
+             count(arg(0), arg(1)) + " 1))";
+    case Op::MultisetRemove: {
+      const std::string C = count(arg(0), arg(1));
+      return "(store " + arg(0) + " " + arg(1) + " (ite (> " + C + " 0) (- " +
+             C + " 1) 0))";
+    }
+    case Op::MultisetCount:
+      return count(arg(0), arg(1));
+    case Op::MapEmpty:
+      UsesMaps = true;
+      return "((as const (Array Int cppverify.option)) cppverify.none)";
+    case Op::MapInsert:
+      UsesMaps = true;
+      return "(store " + arg(0) + " " + arg(1) + " (cppverify.some " + arg(2) +
+             "))";
+    case Op::MapRemove:
+      UsesMaps = true;
+      return "(store " + arg(0) + " " + arg(1) + " cppverify.none)";
+    case Op::MapContains:
+      UsesMaps = true;
+      return "((_ is cppverify.some) (select " + arg(0) + " " + arg(1) + "))";
+    case Op::MapGet: {
+      UsesMaps = true;
+      const std::string Cell = "(select " + arg(0) + " " + arg(1) + ")";
+      return "(ite ((_ is cppverify.some) " + Cell + ") (cppverify.value " +
+             Cell + ") 0)";
+    }
     default:
-      fail("sets, multisets, and maps have no SMT-LIB encoding for cvc5");
+      fail("unsupported collection operation for cvc5");
       return "false";
+    }
+  }
+
+  /// Equality as cppverify.h defines it: multisets agree count by count,
+  /// since a cell below zero counts zero.
+  std::string equality(const LogicExpr *Expr, const std::string &Left,
+                       const std::string &Right) {
+    if (Expr->Children[0]->Sort.Kind != LogicSortKind::Multiset)
+      return "(= " + Left + " " + Right + ")";
+    UsesQuantifiers = true;
+    const std::string E = freshLocal("element");
+    return "(forall ((" + E + " Int)) (= " + count(Left, E) + " " +
+           count(Right, E) + "))";
+  }
+
+  /// A multiset count: a cell below zero counts as none.
+  static std::string count(const std::string &Multiset,
+                           const std::string &Element) {
+    const std::string Cell = "(select " + Multiset + " " + Element + ")";
+    return "(ite (>= " + Cell + " 0) " + Cell + " 0)";
+  }
+
+  static bool isSequenceOperation(LogicCollectionOp Op) {
+    switch (Op) {
+    case LogicCollectionOp::SeqEmpty:
+    case LogicCollectionOp::SeqUnit:
+    case LogicCollectionOp::SeqLength:
+    case LogicCollectionOp::SeqIndex:
+    case LogicCollectionOp::SeqPush:
+    case LogicCollectionOp::SeqSubrange:
+    case LogicCollectionOp::SeqConcat:
+    case LogicCollectionOp::SeqContains:
+      return true;
+    default:
+      return false;
     }
   }
 
@@ -1307,6 +1406,31 @@ public:
     if (UsesSequences && UsesQuantifiers)
       Out << "(set-option :full-saturate-quant true)\n";
     for (const auto &[Name, VariableSort] : FreeVariables)
+      UsesMaps |= VariableSort.Kind == LogicSortKind::Map;
+    for (const auto &[Identity, Function] : UsedFunctions) {
+      UsesMaps |= Function->ResultSort.Kind == LogicSortKind::Map;
+      for (const LogicFunctionParameter &Parameter : Function->Parameters)
+        UsesMaps |= Parameter.Sort.Kind == LogicSortKind::Map;
+    }
+    if (UsesMaps)
+      Out << "(declare-datatype cppverify.option ((cppverify.none) "
+             "(cppverify.some (cppverify.value Int))))\n";
+    // Each set operation is the function its pointwise axiom defines, by
+    // extensionality of arrays.
+    for (const std::string &Name : SetOperations) {
+      const char *Cell = Name == "cppverify.set_union"
+                             ? "(or (select a k) (select b k))"
+                         : Name == "cppverify.set_intersect"
+                             ? "(and (select a k) (select b k))"
+                             : "(and (select a k) (not (select b k)))";
+      Out << "(declare-fun " << Name
+          << " ((Array Int Bool) (Array Int Bool)) (Array Int Bool))\n"
+          << "(assert (forall ((a (Array Int Bool)) (b (Array Int Bool)) "
+             "(k Int)) (! (= (select ("
+          << Name << " a b) k) " << Cell << ") :pattern ((select (" << Name
+          << " a b) k)))))\n";
+    }
+    for (const auto &[Name, VariableSort] : FreeVariables)
       Out << "(declare-fun " << smtSymbol("v_", Name) << " () "
           << sort(VariableSort) << ")\n";
     if (integerMode())
@@ -1561,12 +1685,17 @@ std::optional<SExpr> readSExpr(llvm::StringRef Text, size_t &Pos) {
 
 /// A value of an SMT-LIB sort in a solver model.
 struct SMTValue {
-  enum class Kind { Bool, Int, BitVector, Array, Seq };
+  /// Option is a map cell: none, or some(Integer) when Truth is set.
+  enum class Kind { Bool, Int, BitVector, Array, Seq, Option };
   Kind K = Kind::Bool;
   bool Truth = false;
   CertInt Integer;
   llvm::APInt Bits;
+  /// An array's cells, as integers: Bool ones as 0 or 1, option ones as
+  /// whether they are some, with their values in Values.
   HeapValue Heap;
+  HeapValue Values;
+  Kind Cells = Kind::Int;
   std::vector<CertInt> Elements;
 
   std::string key() const {
@@ -1579,12 +1708,21 @@ struct SMTValue {
       return "#" + std::to_string(Bits.getBitWidth()) + ":" +
              decimalUnsigned(Bits);
     case Kind::Array:
-      return LogicValue::heap(Heap).key();
+      return std::to_string(static_cast<int>(Cells)) +
+             LogicValue::heap(Heap).key() +
+             (Cells == Kind::Option ? LogicValue::heap(Values).key() : "");
     case Kind::Seq:
       return LogicValue::sequence(Elements).key();
+    case Kind::Option:
+      return Truth ? "some " + Integer.toDecimal() : "none";
     }
     return {};
   }
+
+  /// The cell of an array, as a value of its kind.
+  SMTValue cell(const CertInt &Index) const;
+  /// Sets the cell of an array to \p Value, which must be of its kind.
+  bool set(const CertInt &Index, const SMTValue &Value);
   friend bool operator==(const SMTValue &L, const SMTValue &R) {
     return L.K == R.K && L.key() == R.key();
   }
@@ -1611,6 +1749,39 @@ SMTValue smtBits(llvm::APInt Bits) {
   return Value;
 }
 
+SMTValue smtOption(std::optional<CertInt> Some) {
+  SMTValue Value;
+  Value.K = SMTValue::Kind::Option;
+  Value.Truth = Some.has_value();
+  if (Some)
+    Value.Integer = std::move(*Some);
+  return Value;
+}
+
+SMTValue SMTValue::cell(const CertInt &Index) const {
+  const CertInt Stored = Heap.get(Index);
+  if (Cells == Kind::Bool)
+    return smtBool(!Stored.isZero());
+  if (Cells == Kind::Option)
+    return Stored.isZero() ? smtOption(std::nullopt)
+                           : smtOption(Values.get(Index));
+  return smtInt(Stored);
+}
+
+bool SMTValue::set(const CertInt &Index, const SMTValue &Value) {
+  if (Value.K != Cells)
+    return false;
+  if (Cells == Kind::Bool) {
+    Heap.set(Index, CertInt(Value.Truth ? 1 : 0));
+  } else if (Cells == Kind::Option) {
+    Heap.set(Index, CertInt(Value.Truth ? 1 : 0));
+    Values.set(Index, Value.Truth ? Value.Integer : CertInt(0));
+  } else {
+    Heap.set(Index, Value.Integer);
+  }
+  return true;
+}
+
 using SMTEnvironment = std::vector<std::pair<std::string, SMTValue>>;
 
 /// Evaluate a closed model term: literals, the core and arithmetic
@@ -1627,6 +1798,8 @@ std::optional<SMTValue> evaluateModelTerm(const SExpr &E,
     llvm::StringRef Atom = E.Atom;
     if (Atom == "true" || Atom == "false")
       return smtBool(Atom == "true");
+    if (Atom == "cppverify.none")
+      return smtOption(std::nullopt);
     for (auto It = Environment.rbegin(); It != Environment.rend(); ++It)
       if (It->first == Atom)
         return It->second;
@@ -1649,11 +1822,20 @@ std::optional<SMTValue> evaluateModelTerm(const SExpr &E,
         Head.List[1].Atom != "const")
       return std::nullopt;
     std::optional<SMTValue> Default = eval(E.List[1]);
-    if (!Default || Default->K != SMTValue::Kind::Int)
+    if (!Default || (Default->K != SMTValue::Kind::Int &&
+                     Default->K != SMTValue::Kind::Bool &&
+                     Default->K != SMTValue::Kind::Option))
       return std::nullopt;
     SMTValue Array;
     Array.K = SMTValue::Kind::Array;
-    Array.Heap.Default = Default->Integer;
+    Array.Cells = Default->K;
+    if (Default->K == SMTValue::Kind::Int) {
+      Array.Heap.Default = Default->Integer;
+    } else {
+      Array.Heap.Default = CertInt(Default->Truth ? 1 : 0);
+      if (Default->K == SMTValue::Kind::Option && Default->Truth)
+        Array.Values.Default = Default->Integer;
+    }
     return Array;
   }
   const std::string &Op = Head.Atom;
@@ -1768,18 +1950,21 @@ std::optional<SMTValue> evaluateModelTerm(const SExpr &E,
       return smtBool(!Args[0].Truth || Args[1].Truth);
     return smtBool(Args[0].Truth != Args[1].Truth);
   }
-  if (Op == "store" || Op == "select") {
-    if ((Op == "store") != (Arity == 3) || Args[0].K != SMTValue::Kind::Array)
+  if (Op == "cppverify.some") {
+    if (Arity != 1 || Args[0].K != SMTValue::Kind::Int)
       return std::nullopt;
-    for (size_t I = 1; I != Args.size(); ++I)
-      if (Args[I].K != SMTValue::Kind::Int)
-        return std::nullopt;
+    return smtOption(Args[0].Integer);
+  }
+  if (Op == "store" || Op == "select") {
+    if ((Op == "store") != (Arity == 3) || Args[0].K != SMTValue::Kind::Array ||
+        Args[1].K != SMTValue::Kind::Int)
+      return std::nullopt;
     if (Op == "select")
-      return Arity == 2 ? std::optional<SMTValue>(
-                              smtInt(Args[0].Heap.get(Args[1].Integer)))
+      return Arity == 2 ? std::optional<SMTValue>(Args[0].cell(Args[1].Integer))
                         : std::nullopt;
     SMTValue Array = std::move(Args[0]);
-    Array.Heap.set(Args[1].Integer, Args[2].Integer);
+    if (!Array.set(Args[1].Integer, Args[2]))
+      return std::nullopt;
     return Array;
   }
   if (!allOf(SMTValue::Kind::Int))
@@ -2000,9 +2185,22 @@ class CVC5CandidateModel : public CandidateModel {
       return Sequence;
     }
     case LogicValue::Kind::Set:
-    case LogicValue::Kind::Multiset:
-    case LogicValue::Kind::Map:
-      break;
+    case LogicValue::Kind::Multiset: {
+      SMTValue Array;
+      Array.K = SMTValue::Kind::Array;
+      Array.Cells = Value.K == LogicValue::Kind::Set ? SMTValue::Kind::Bool
+                                                     : SMTValue::Kind::Int;
+      Array.Heap = *Value.Heap;
+      return Array;
+    }
+    case LogicValue::Kind::Map: {
+      SMTValue Array;
+      Array.K = SMTValue::Kind::Array;
+      Array.Cells = SMTValue::Kind::Option;
+      Array.Heap = *Value.Heap;
+      Array.Values = *Value.Values;
+      return Array;
+    }
     }
     return std::nullopt;
   }
@@ -2019,7 +2217,8 @@ class CVC5CandidateModel : public CandidateModel {
         return LogicValue::boolean(Value->Truth);
       return std::nullopt;
     case LogicSortKind::Heap:
-      if (Value->K == SMTValue::Kind::Array)
+      if (Value->K == SMTValue::Kind::Array &&
+          Value->Cells == SMTValue::Kind::Int)
         return LogicValue::heap(Value->Heap);
       return std::nullopt;
     case LogicSortKind::Seq:
@@ -2027,8 +2226,19 @@ class CVC5CandidateModel : public CandidateModel {
         return LogicValue::sequence(Value->Elements);
       return std::nullopt;
     case LogicSortKind::Set:
+      if (Value->K == SMTValue::Kind::Array &&
+          Value->Cells == SMTValue::Kind::Bool)
+        return LogicValue::set(Value->Heap);
+      return std::nullopt;
     case LogicSortKind::Multiset:
+      if (Value->K == SMTValue::Kind::Array &&
+          Value->Cells == SMTValue::Kind::Int)
+        return LogicValue::multiset(Value->Heap);
+      return std::nullopt;
     case LogicSortKind::Map:
+      if (Value->K == SMTValue::Kind::Array &&
+          Value->Cells == SMTValue::Kind::Option)
+        return LogicValue::map(Value->Heap, Value->Values);
       return std::nullopt;
     case LogicSortKind::MathematicalInteger:
     case LogicSortKind::Pointer:
@@ -2523,6 +2733,27 @@ CVC5VerifyBackend::verifyQuery(const ObligationModule &Module,
     llvm::StringRef Output = *Run.Output;
     const auto [FirstLine, Rest] = Output.split('\n');
     const llvm::StringRef Verdict = FirstLine.trim();
+    // A model cvc5 prints with unknown is a candidate like any other: a
+    // counterexample once certified against the definitions.
+    if (Verdict == "unknown" && !Rest.trim().empty()) {
+      if (auto Candidates =
+              parseModel(Rest, printsSequencesReversed(SolverPath))) {
+        CVC5CandidateModel Candidate(
+            *Candidates, Encoding == MachineIntegerEncoding::Integer, Defined);
+        CertifyLimits Limits;
+        Limits.Deadline = QueryDeadline;
+        CertifyResult Certified =
+            certifyCounterexample(Module, *Query, Candidate, Limits);
+        if (Certified.Outcome == CertifyOutcome::Certified) {
+          Result.Status = VerifyStatus::Failed;
+          Result.Reason = VerifyReason::Counterexample;
+          Result.CertifiedWith = std::move(Certified.Evidence);
+          return Result;
+        }
+      } else {
+        llvm::consumeError(Candidates.takeError());
+      }
+    }
     if (!Narrowed.empty() && (Verdict == "unsat" || Verdict == "unknown"))
       return unchecked();
     if (Verdict == "unsat" && Rest.trim().empty()) {
