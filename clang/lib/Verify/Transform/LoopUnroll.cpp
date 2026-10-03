@@ -240,6 +240,12 @@ VFunction LoopUnroller::unroll(const VFunction &Fn, unsigned K) {
   Out.InductiveRuleOf = Fn.InductiveRuleOf;
   Out.FactsWithheld = Fn.FactsWithheld;
   Out.TotalExpressions = Fn.TotalExpressions;
+  for (const VFunction::ClauseProof &Proof : Fn.ClauseProofs) {
+    VFunction::ClauseProof Copy{Proof.K, {}, Proof.Loc};
+    for (const auto &S : Proof.Body)
+      Copy.Body.push_back(cloneVStmt(S.get()));
+    Out.ClauseProofs.push_back(std::move(Copy));
+  }
   for (const auto &[Name, Assumes] : Fn.Behaviors)
     Out.Behaviors.emplace_back(Name, cloneVExpr(Assumes.get()));
   Out.DeclLoc = Fn.DeclLoc;
