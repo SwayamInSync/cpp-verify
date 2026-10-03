@@ -359,7 +359,8 @@ Current proof-language limitations include:
   sharing ``decreases`` clauses of one length); otherwise they are
   ``proof.cycle``;
 - spec collections hold mathematical integers only (no nested collections or
-  records), and Lean supports none of them;
+  records), and Lean does not support them yet (planned for a future
+  release);
 - user-written loop invariants, with no candidate-invariant/Houdini pass;
 - no automatic termination-measure or lemma discovery. Strong induction on one
   integer variable, everything else fixed and the goal itself as hypothesis,
@@ -480,7 +481,9 @@ goal per ordered obligation. Generated files are separated from preserved user
 lemmas/proofs. The pinned admission-free kernel path reports ``Certified`` only
 after every active proof checks and rejects user axiom/opaque shortcuts.
 Memory checks are lowered on this path as well as on Z3/cvc5/portfolio/BMC.
-Spec collections are not supported on Lean (``logic.unsupported``).
+Spec collections are not yet supported on Lean (``logic.unsupported``); Lean
+support for them is planned for a future release, and Z3 and cvc5 decide them
+today.
 Automation, proof ergonomics, semantic simplification, dependency-aware
 caching, and broader future C++ theories remain incomplete.
 
