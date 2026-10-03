@@ -48,6 +48,9 @@ struct VerifyOptions {
   /// its obligations, and their retries and induction attempts; 0 disables
   /// it.
   unsigned FunctionTimeoutMs = DefaultFunctionTimeoutMs;
+  /// The time one counterexample check may take: unset, half the query
+  /// timeout; 0, the query's own time.
+  std::optional<unsigned> CertifyTimeoutMs;
   /// Deterministic per-query solver resource limit; 0 disables it.
   unsigned SolverResourceLimit = 0;
   /// Number of isolated solver jobs. 0 selects available physical cores.
