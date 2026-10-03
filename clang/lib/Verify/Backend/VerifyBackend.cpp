@@ -450,6 +450,8 @@ llvm::StringRef verify::verifyReasonCode(VerifyReason Reason) {
     return "spec.post";
   case VerifyReason::SpecInductive:
     return "spec.inductive";
+  case VerifyReason::ProofCycle:
+    return "proof.cycle";
   case VerifyReason::UnsupportedConstruct:
     return "construct.unsupported";
   case VerifyReason::CalleeContract:
