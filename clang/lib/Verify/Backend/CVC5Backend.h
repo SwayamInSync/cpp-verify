@@ -46,10 +46,7 @@ public:
     Deadline = D;
   }
   BackendCapabilities getCapabilities() const override {
-    // Sets, multisets, and maps range over all integers; cvc5's set theory
-    // is finite.
-    return {allLogicFeatures() & ~logicFeature(LogicFeature::Collections),
-            true};
+    return {allLogicFeatures(), true};
   }
   std::vector<VerifyResult>
   verifyObligations(const ObligationModule &Module) const;
