@@ -75,6 +75,11 @@ Other results that are not counterexamples:
   all hold, so its unfolding is not a fact. The failing rule is reported on
   its own line, such as ``reach (introduction)``; it usually needs more
   ``--timeout``.
+- ``proof.cycle``: the proof relies on facts whose own proofs rely on it,
+  such as a spec's proof block that calls a lemma proved from that spec's
+  postcondition. Each would hold only by the other. Prove the lemma without
+  the spec's postcondition (by its own induction), or move the reasoning
+  into the block.
 - ``construct.unsupported``: the failed obligation stands for a construct the
   verifier does not model, so it says nothing about the program. The message
   names the construct, such as a pointer difference between two parameters'
