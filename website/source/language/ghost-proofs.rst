@@ -103,6 +103,54 @@ send Z3 into a matching loop; ``reveal_with_fuel(f, n)`` raises the depth when a
      return x + x + x;
    }
 
+Proof blocks for spec clauses
+-----------------------------
+
+A spec's ``post``, ``decreases``, and ``reads`` clauses are checked by the
+verifier, and a spec body is an expression with no room for proof steps. A
+proof block gives them room: ``post(Q) by { ... }`` runs ghost code in the
+check of ``Q``, after the facts that check assumes and before its
+obligations.
+
+.. code-block:: cpp
+
+   spec int mul(int a, int b) decreases(b) { return b <= 0 ? 0 : mul(a, b - 1) + a; }
+
+   proof void mul_is(int a, int b)
+     post(b < 0 || mul(a, b) == a * b)
+     decreases(b)
+   {
+     if (b > 0)
+       mul_is(a, b - 1);
+   }
+
+   // Commutativity of mul: the solver needs the lemma at both orders.
+   spec int area(int a, int b)
+     post(a < 0 || b < 0 || result == mul(b, a)) by { mul_is(a, b); mul_is(b, a); }
+   {
+     return mul(a, b);
+   }
+
+   // Termination by a measure the lemma explains.
+   spec int zig(int a, int b)
+     decreases(mul(a, b)) by { if (a > 0 && b > 0) { mul_is(a, b); mul_is(b - 1, a); } }
+   {
+     return a <= 0 || b <= 0 ? 0 : 1 + zig(b - 1, a);
+   }
+
+- In a ``post`` block, ``result`` is the value the body returns.
+- Naming the spec at a smaller measure in a block, as in
+  ``contract_assert(tri(n - 1) >= 0);``, uses the induction hypothesis
+  there; at a measure that is not smaller it assumes nothing.
+- The block is ghost code: it may declare and assign its own locals,
+  branch, assert, and call proof functions, whose preconditions it must
+  establish. It cannot return, write memory, or assign a parameter.
+- Only a spec's definition takes proof blocks; other functions put their
+  proof in their bodies.
+- A block cannot use a lemma whose own proof rests on the property being
+  proved: both proofs would hold only by each other, and both are
+  ``Unresolved`` with reason ``proof.cycle``.
+
 Inductive predicates
 --------------------
 
@@ -144,7 +192,8 @@ derivation shows it, so it needs no ``decreases``.
   predicate itself, as transitivity does:
   ``post(!result || forall(c, !reach(b, c) || reach(a, c)))``; there the
   predicate is seen through its proved unfolding, never through the
-  postcondition being proved.
+  postcondition being proved. A proof block on it is the induction step:
+  it runs for a derivation whose premises already satisfy ``Q``.
 - A counterexample that needs the predicate true at some argument is checked
   by finding a derivation; one that needs it false is usually
   ``counterexample.unchecked``.
