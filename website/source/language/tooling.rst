@@ -324,7 +324,8 @@ codes include ``counterexample``, ``solver.timeout``, ``solver.unknown``,
 ``backend.inconsistent-results``, ``bmc.incomplete-bound``,
 ``lean.export-failed``, ``cache.corrupt``, ``cache.io-failed``,
 ``spec.fuel``, ``spec.hidden``, ``spec.termination``, ``spec.reads``,
-``spec.post``, ``counterexample.unchecked``, ``callee.contract``,
+``spec.post``, ``spec.inductive``, ``counterexample.unchecked``,
+``callee.contract``,
 ``decreases.missing``, and ``construct.unsupported``.
 
 What a verified result rests on
