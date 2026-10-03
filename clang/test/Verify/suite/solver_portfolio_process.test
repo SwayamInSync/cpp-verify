@@ -94,5 +94,5 @@
 
 # MISSING: Unresolved: solver_process_valid [backend=cvc5] [reason=solver.unavailable]
 # CACHE: error: --proof-cache is not supported by --backend=cvc5
-# PATH: error: --cvc5-path requires --backend=cvc5 or --backend=portfolio
-# BMC: error: cvc5 and portfolio replay do not yet aggregate BMC-transformed archives
+# PATH: error: --cvc5-path requires --backend=cvc5, --backend=portfolio, or --backend=race
+# BMC: error: cvc5, portfolio, and race replay do not yet aggregate BMC-transformed archives
