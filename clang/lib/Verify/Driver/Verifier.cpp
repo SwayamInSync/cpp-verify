@@ -41,6 +41,10 @@ using namespace verify;
 
 namespace {
 
+/// How deep the driver unfolds inductive predicates in a function, one
+/// level more at a time, while its verdict waits on them.
+constexpr unsigned MaxUnfoldingDepth = 4;
+
 /// The functions a body calls, whose contracts its proof assumes.
 static void collectCallees(const std::vector<std::unique_ptr<VStmt>> &Stmts,
                            std::set<std::string> &Out) {
@@ -1119,6 +1123,14 @@ public:
                               Verified.FactsWithheld};
         Reliance.AssumedPosts = Used.AssumedPosts;
         Reliance.AssumedUnfoldings = Used.AssumedUnfoldings;
+        // And those a solver was given for it, beyond its own text.
+        if (Used.Given) {
+          std::lock_guard<std::mutex> Guard(Used.Given->Lock);
+          Reliance.AssumedPosts.insert(Used.Given->Postconditions.begin(),
+                                       Used.Given->Postconditions.end());
+          Reliance.AssumedUnfoldings.insert(Used.Given->Unfoldings.begin(),
+                                            Used.Given->Unfoldings.end());
+        }
         ProofDependencies.push_back(std::move(Reliance));
       };
       auto exportLeanFallback = [&](const ObligationModule &Module,
@@ -1814,6 +1826,7 @@ public:
             Module.BMCTransform = BMCTransformProvenance{Opts.BMCUnroll};
           annotateObligationSources(Module);
         }
+        const size_t ArchiveMark = Run.Archive.size();
         if (llvm::Error Error = emitObligationArchive(Module)) {
           AllOk = false;
           AnyFailed = true;
@@ -1883,6 +1896,62 @@ public:
 
         VerifyResult R =
             BMCResult ? std::move(*BMCResult) : Backend->verify(Module);
+        // Every unfolding depth gives the solver only proved facts, so the
+        // first decided verdict among depths stands; a counterexample is
+        // checked against the true definitions at any depth.
+        auto atDepth = [&](unsigned Depth, bool WithFuel) {
+          Passivizer Again;
+          Again.setFunctionMap(InterfaceMap);
+          Again.setUnfoldingDepth(Depth, WithFuel);
+          auto Built = buildObligationModule(Again.run(*WorkFn));
+          if (!Built) {
+            llvm::consumeError(Built.takeError());
+            return false;
+          }
+          auto Simplified = simplifyObligationModule(std::move(*Built));
+          if (!Simplified) {
+            llvm::consumeError(Simplified.takeError());
+            return false;
+          }
+          annotateObligationSources(*Simplified);
+          VerifyResult Decided = Backend->verify(*Simplified);
+          if (Decided.Status != VerifyStatus::Verified &&
+              Decided.Status != VerifyStatus::Failed)
+            return false;
+          Module = std::move(*Simplified);
+          R = std::move(Decided);
+          Run.Archive.resize(ArchiveMark);
+          if (llvm::Error Error = emitObligationArchive(Module))
+            llvm::consumeError(std::move(Error));
+          return true;
+        };
+        auto fuelOf = [&](const std::string &Predicate) {
+          auto It = WorkFn->SpecFuel.find(Predicate);
+          return It == WorkFn->SpecFuel.end() ? 1U : std::max(1U, It->second);
+        };
+        const std::set<std::string> Unfolded = Module.AssumedUnfoldings;
+        // A verdict that waits on inductive predicates gets them unfolded one
+        // level deeper at a time, as Stainless unrolls recursive functions.
+        if (!BMCResult && R.Status == VerifyStatus::Unresolved &&
+            !R.InductionOnly &&
+            (R.Reason == VerifyReason::SpecFuel ||
+             R.Reason == VerifyReason::SpecHidden ||
+             R.Reason == VerifyReason::UncheckedCounterexample))
+          for (unsigned Depth = 2; Depth <= MaxUnfoldingDepth; ++Depth)
+            if (llvm::any_of(Unfolded,
+                             [&](const std::string &Predicate) {
+                               return fuelOf(Predicate) < Depth;
+                             }) &&
+                atDepth(Depth, /*WithFuel=*/true))
+              break;
+        // Deeper unfoldings under a quantifier are quantified facts, which can
+        // keep the solver from finding a model: after reveal_with_fuel, the
+        // fewest unfoldings are tried too.
+        if (!BMCResult && R.Status == VerifyStatus::Unresolved &&
+            llvm::any_of(Unfolded, [&](const std::string &Predicate) {
+              return fuelOf(Predicate) > 1;
+            }))
+          atDepth(1, /*WithFuel=*/false);
         if (R.Status == VerifyStatus::Verified ||
             R.Status == VerifyStatus::Certified) {
           Diags.push_back(
