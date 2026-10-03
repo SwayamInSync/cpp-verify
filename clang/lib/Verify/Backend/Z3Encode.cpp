@@ -2107,8 +2107,9 @@ std::optional<HeapValue> Z3Encoder::piecewiseHeap(
       Points.insert(*N + CertInt(1));
     }
   auto read = [&](const CertInt &Address) -> std::optional<CertInt> {
-    z3::expr Cell = Model.eval(
-        z3::select(Value, Ctx.int_val(Address.toDecimal().c_str())), true);
+    z3::expr Cell = evaluated(
+        Model, z3::select(Value, Ctx.int_val(Address.toDecimal().c_str())),
+        true);
     if (Decode)
       return Decode(Cell);
     std::string Numeral;
@@ -2131,6 +2132,28 @@ std::optional<HeapValue> Z3Encoder::piecewiseHeap(
   }
   Heap.normalize();
   return Heap;
+}
+
+z3::expr Z3Encoder::evaluated(const z3::model &Model, const z3::expr &E,
+                             bool Completion) {
+  z3::expr Value = Model.eval(E, Completion);
+  if (static_cast<Z3_ast>(Value))
+    return Value;
+  return Ctx.constant("cppverify.unevaluated", E.get_sort());
+}
+
+CertifyResult Z3Encoder::certify(const ObligationModule &Module,
+                                 const LogicExpr &Query,
+                                 CandidateModel &Candidate,
+                                 const CertifyLimits &Limits) {
+  CertifyResult Result =
+      certifyCounterexample(Module, Query, Candidate, Limits);
+  std::lock_guard<std::mutex> Guard(CheckLock);
+  if (!Stopped)
+    return Result;
+  CertifyResult Stop;
+  Stop.Detail = "the solver was stopped while its model was checked";
+  return Stop;
 }
 
 std::optional<LogicValue> Z3Encoder::modelValue(const z3::model &Model,
@@ -2173,7 +2196,7 @@ std::optional<LogicValue> Z3Encoder::modelValue(const z3::model &Model,
         return false;
       }
     };
-    if (!collect(Model.eval(Value, true)))
+    if (!collect(evaluated(Model, Value, true)))
       return std::nullopt;
     return LogicValue::sequence(std::move(Elements));
   }
@@ -2261,13 +2284,15 @@ public:
   std::optional<LogicValue> constant(const std::string &Name,
                                      const LogicSort &Sort) override {
     return Encoder.modelValue(
-        Model, Model.eval(Encoder.symbol(Name, Sort), true), Sort);
+        Model, Encoder.evaluated(Model, Encoder.symbol(Name, Sort), true), Sort);
   }
 
   std::optional<bool> validPointer(const CertInt &Address) override {
-    z3::expr Valid = Model.eval(Encoder.validPointerDecl()(Encoder.Ctx.int_val(
-                                    Address.toDecimal().c_str())),
-                                true);
+    z3::expr Valid = Encoder.evaluated(
+        Model,
+        Encoder.validPointerDecl()(
+            Encoder.Ctx.int_val(Address.toDecimal().c_str())),
+        true);
     if (Valid.is_true() || Valid.is_false())
       return Valid.is_true();
     return std::nullopt;
@@ -2296,7 +2321,8 @@ public:
       Terms.push_back(
           Encoder.valueTerm(Arguments[I], Function.Parameters[I].Sort));
     return read(Function,
-                Model.eval(Encoder.specFuncDecl(Function)(Terms), true));
+                Encoder.evaluated(Model, Encoder.specFuncDecl(Function)(Terms),
+                                  true));
   }
 
 private:
@@ -2707,7 +2733,7 @@ std::vector<SpecDispute> Z3Encoder::boundedDomainDisputes(
   auto extreme = [&](const z3::expr &Argument,
                      bool Greatest) -> std::optional<z3::model> {
     std::optional<z3::model> Best;
-    z3::expr Current = Model.eval(Argument, true);
+    z3::expr Current = evaluated(Model, Argument, true);
     if (!Current.is_numeral())
       return std::nullopt;
     int64_t Step = 1;
@@ -2719,7 +2745,7 @@ std::vector<SpecDispute> Z3Encoder::boundedDomainDisputes(
       const z3::check_result Result = check();
       if (Result == z3::sat) {
         Best = Solver.get_model();
-        Current = Best->eval(Argument, true);
+        Current = evaluated(*Best, Argument, true);
         Solver.pop();
         if (!Current.is_numeral())
           return std::nullopt;
@@ -2747,9 +2773,9 @@ std::vector<SpecDispute> Z3Encoder::boundedDomainDisputes(
         continue;
       Z3CandidateModel Candidate(*this, *Extreme);
       CertifyResult Certified =
-          certifyCounterexample(Module, Query, Candidate, Limits);
+          certify(Module, Query, Candidate, Limits);
       if (Certified.Outcome == CertifyOutcome::Certified) {
-        Pin = Argument == Extreme->eval(Argument, true);
+        Pin = Argument == evaluated(*Extreme, Argument, true);
         return {};
       }
       if (Certified.Outcome != CertifyOutcome::Disputed)
@@ -2830,7 +2856,7 @@ z3::check_result Z3Encoder::certifyModels(const ObligationModule &Module,
     CertifyLimits Limits;
     Limits.Deadline = QueryDeadline;
     CertifyResult Certified =
-        certifyCounterexample(Module, Query, Candidate, Limits);
+        certify(Module, Query, Candidate, Limits);
     bool BoundedDomain = false;
     if (Certified.Outcome == CertifyOutcome::Disputed && !Probed &&
         !NativeRecursion && !Narrowed && !ProofOnly) {
@@ -2850,7 +2876,7 @@ z3::check_result Z3Encoder::certifyModels(const ObligationModule &Module,
         if (check() == z3::sat) {
           Z3CandidateModel Pinned(*this, Solver.get_model());
           CertifyResult PinnedResult =
-              certifyCounterexample(Module, Query, Pinned, Limits);
+              certify(Module, Query, Pinned, Limits);
           if (PinnedResult.Outcome == CertifyOutcome::Certified) {
             Out.CertifiedWith = std::move(PinnedResult.Evidence);
             return z3::sat;
@@ -3060,7 +3086,7 @@ VerifyResult Z3Encoder::verifyModule(const ObligationModule &Module,
           continue;
         Assigned.push_back(Ctx.int_const(Name.c_str()));
         Unassigned.push_back(Ctx.int_const(("free!" + Name).c_str()));
-        z3::expr Holds = Mod.eval(Semantics.substitute(Assigned, Unassigned),
+        z3::expr Holds = evaluated(Mod, Semantics.substitute(Assigned, Unassigned),
                                   /*model_completion=*/false);
         if (Holds.is_true()) {
           Freed.insert(Name);
@@ -3075,14 +3101,14 @@ VerifyResult Z3Encoder::verifyModule(const ObligationModule &Module,
     // the one the certifier checked.
     auto modelValue = [&](z3::expr Encoded) {
       if (NativeRecursion)
-        return Mod.eval(Encoded, true);
+        return evaluated(Mod, Encoded, true);
       if (Freed.empty())
-        return Mod.eval(Encoded, false);
+        return evaluated(Mod, Encoded, false);
       z3::expr Substituted = Encoded.substitute(Assigned, Unassigned);
       for (const std::string &Name : divisorConstants(Encoded))
         if (Freed.count(Name))
           return Substituted;
-      return Mod.eval(Substituted, false);
+      return evaluated(Mod, Substituted, false);
     };
     auto sourceValue = [&](const z3::expr &Evaluated,
                            const LogicSort &Sort) -> std::optional<std::string> {
