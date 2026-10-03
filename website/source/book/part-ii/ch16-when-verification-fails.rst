@@ -62,6 +62,19 @@ checked with such a postcondition rests on it: while that postcondition is
 not established, the failure is reported as unresolved with reason
 ``spec.post``.
 
+An inductive predicate is seen through its unfolding at each application a
+proof names. When a verdict still depends on it, the verifier unfolds the
+applications inside those unfoldings as well, one level more at a time, up
+to four levels, before it reports one of the reasons above. A claim that
+needs the predicate false where its derivations go round a cycle is
+``spec.fuel`` with ``every counterexample found needs P(...) to hold, but no
+derivation shows it``: every unfolding holds just as well of a predicate
+true on the cycle, so no unfolding settles it, and a postcondition
+``!result || Q`` or a lemma proved by induction is the fix.
+``backend.invalid-result`` is different: the solver's answer contradicts the
+query or a fact the verifier gave it, which is a solver fault and says
+nothing about your program.
+
 Other results that are not counterexamples:
 
 - ``solver.timeout`` with ``the function's time (--function-timeout) is
