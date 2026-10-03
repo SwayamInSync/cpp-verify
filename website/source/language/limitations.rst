@@ -347,10 +347,13 @@ Current proof-language limitations include:
   variable are unfolded or approximated, or when a witness among the values
   tried decides it; otherwise it is ``counterexample.unchecked``. ``choose`` is uninterpreted apart from its
   Hilbert axiom;
-- an inductive predicate unfolds once at each named application; a
-  counterexample that needs it false where its derivations reach infinitely
-  many arguments is ``counterexample.unchecked`` unless a proved
-  postcondition excludes the argument;
+- an inductive predicate unfolds at most four levels below each named
+  application by itself (more with ``reveal_with_fuel``); a claim that needs
+  it false where its derivations go round a cycle needs a postcondition or
+  an induction lemma, and a counterexample that needs it false where its
+  derivations reach infinitely many arguments is
+  ``counterexample.unchecked`` unless a proved postcondition excludes the
+  argument;
 - proofs may rest on each other only through a checked measure (a recursion
   cycle, a spec's induction hypothesis): a spec's proof block cannot call a
   lemma proved from that spec's facts, even when a measure would justify it
