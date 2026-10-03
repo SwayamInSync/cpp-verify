@@ -1,4 +1,5 @@
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s
+// RUN: not %cpp-verify --backend=bmc %s 2>&1 | FileCheck %s --check-prefix=BMC
 // RUN: not %cpp-verify %S/Inputs/clause_proof_rejected.cpp 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=REJECT
 // RUN: not %cpp-verify %S/Inputs/clause_proof_assigns.cpp 2>&1 \
@@ -116,6 +117,8 @@ spec int f(int n)
 }
 // CHECK-DAG: Unresolved: f_lie [backend=z3] [reason=proof.cycle]
 // CHECK-DAG: Unresolved: spec decreases and post: f [reason=proof.cycle] (relies on the contract of f_lie, whose proof rests in turn on this one)
+// BMC-DAG: Unresolved: f_lie [backend=bmc, bound=0] [reason=proof.cycle]
+// BMC-DAG: Unresolved: spec decreases and post: f [reason=proof.cycle]
 
 // A lemma's precondition is checked in the block like anywhere else.
 spec bool bad(int n);
