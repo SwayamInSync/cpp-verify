@@ -1646,8 +1646,9 @@ void ASTConverter::emitReturnInvariantAssert(
   FieldSubstPrefix.clear();
 }
 
-static bool bodyReferencesFunction(const VFunction &Fn,
-                                   const std::string &Identity) {
+static bool
+stmtsReferenceFunction(const std::vector<std::unique_ptr<VStmt>> &Stmts,
+                       const std::string &Identity) {
   std::function<bool(const std::vector<std::unique_ptr<VStmt>> &)> Contains =
       [&](const std::vector<std::unique_ptr<VStmt>> &Body) {
         for (const auto &S : Body) {
@@ -1747,7 +1748,29 @@ static bool bodyReferencesFunction(const VFunction &Fn,
         }
         return false;
       };
-  return Contains(Fn.Body);
+  return Contains(Stmts);
+}
+
+static bool bodyReferencesFunction(const VFunction &Fn,
+                                   const std::string &Identity) {
+  return stmtsReferenceFunction(Fn.Body, Identity);
+}
+
+/// Whether \p Fn's body, contracts, or proof blocks call or apply
+/// \p Identity: the edges of its cluster.
+static bool referencesFunction(const VFunction &Fn,
+                               const std::string &Identity) {
+  auto inClauses = [&](const auto &Clauses) {
+    return llvm::any_of(Clauses, [&](const auto &Clause) {
+      return exprReferencesSpecCall(Clause.get(), Identity);
+    });
+  };
+  return bodyReferencesFunction(Fn, Identity) || inClauses(Fn.Preconditions) ||
+         inClauses(Fn.Postconditions) || inClauses(Fn.Decreases) ||
+         llvm::any_of(Fn.ClauseProofs,
+                      [&](const VFunction::ClauseProof &Proof) {
+                        return stmtsReferenceFunction(Proof.Body, Identity);
+                      });
 }
 
 struct SpecBodyShape {
@@ -2105,6 +2128,61 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
       continue;
     }
     Fn->NeedsDecreasesCheck = Recursive;
+  }
+
+  // Clusters, as Dafny's: the specs and proof functions that reach each
+  // other through bodies, contracts, and proof blocks. Sharing a measure,
+  // every call between them lowers it and every postcondition of one is
+  // assumed only below it, so their contracts and postconditions are proved
+  // together by well-founded induction; without one, a proof that rests on
+  // another of them is a cycle (proof.cycle).
+  std::map<std::string, std::set<std::string>> Edges;
+  for (const auto &Fn : Out)
+    for (const auto &Target : Out)
+      if (referencesFunction(*Fn, Target->Identity))
+        Edges[Fn->Identity].insert(Target->Identity);
+  std::map<std::string, std::set<std::string>> Reaches;
+  for (const auto &Fn : Out) {
+    std::set<std::string> &Seen = Reaches[Fn->Identity];
+    std::vector<std::string> Work{Fn->Identity};
+    while (!Work.empty()) {
+      const std::string Current = std::move(Work.back());
+      Work.pop_back();
+      for (const std::string &Next : Edges[Current])
+        if (Seen.insert(Next).second)
+          Work.push_back(Next);
+    }
+  }
+  auto measured = [](const VFunction &Member) {
+    return (Member.IsSpec || Member.IsProof) && !Member.IsConstexprSpec &&
+           !Member.Unfolding && Member.InductiveStepOf.empty() &&
+           Member.InductiveRuleOf.empty() && !Member.DivergenceDeclared &&
+           !Member.Decreases.empty();
+  };
+  for (auto &Fn : Out) {
+    std::set<std::string> Members;
+    for (const std::string &Other : Reaches[Fn->Identity])
+      if (Other != Fn->Identity && Reaches[Other].count(Fn->Identity))
+        Members.insert(Other);
+    if (Members.empty() || !measured(*Fn))
+      continue;
+    if (llvm::all_of(Members, [&](const std::string &Identity) {
+          auto It = ByIdentity.find(Identity);
+          return It != ByIdentity.end() && measured(*It->second) &&
+                 It->second->Decreases.size() == Fn->Decreases.size();
+        }))
+      Fn->Cluster = std::move(Members);
+    // A member sees the recursive specs of its cluster only below its
+    // measure: their definitions are not given outright, whatever it
+    // reveals.
+    for (const std::string &Identity : Fn->Cluster)
+      if (const VFunction *Member = ByIdentity[Identity];
+          Member->IsSpec && Member->NeedsDecreasesCheck &&
+          !Fn->RecursionGroup.count(Identity)) {
+        Fn->HiddenSpecs.insert(Identity);
+        Fn->RevealedSpecs.erase(Identity);
+        Fn->SpecFuel.erase(Identity);
+      }
   }
   return Out;
 }
