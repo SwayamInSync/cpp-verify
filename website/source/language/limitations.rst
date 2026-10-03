@@ -356,7 +356,7 @@ Current proof-language limitations include:
   lemma proved from that spec's facts, even when a measure would justify it
   (``proof.cycle``);
 - spec collections hold mathematical integers only (no nested collections or
-  records), cvc5 decides only sequences, and Lean none;
+  records), and Lean supports none of them;
 - user-written loop invariants, with no candidate-invariant/Houdini pass;
 - no automatic termination-measure or lemma discovery. Strong induction on one
   integer variable, everything else fixed and the goal itself as hypothesis,
@@ -463,9 +463,9 @@ formulas that Z3 solves; strict mode then remains ``Unresolved``. Recursive
 specs are weaker on cvc5: it computes closed applications and checks its
 counterexamples against the definitions, but native recursive definitions and
 bounded-domain coverage are Z3 only, so cvc5 settles fewer such queries. Use Z3
-for recursive specs. cvc5 decides sequences but reports sets, multisets, and
-maps as ``logic.unsupported``: its set theory is finite, which would prove
-facts false of an infinite set. In a forced bit-vector encoding cvc5 does not
+for recursive specs. cvc5 decides sets, multisets, and maps as arrays, as Z3
+does, but settles fewer goals that need an infinite set or ghost collections
+in loops. In a forced bit-vector encoding cvc5 does not
 relate exact contract arithmetic to bit-vectors as well as Z3.
 BMC-transformed archive replay still uses the Z3-backed BMC aggregator.
 
