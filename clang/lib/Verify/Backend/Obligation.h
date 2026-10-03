@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
@@ -352,6 +353,16 @@ struct BMCTransformProvenance {
 /// fail. Obligations contain equivalent ordered queries used for diagnostics
 /// and solver fallback. LogicFunctions own every declaration and finite
 /// definition needed by an adapter; no adapter may reach back into VCR.
+/// The facts beyond a module's own text that adapters gave a solver for it:
+/// the inductive predicates whose unfoldings, and the specs whose
+/// postconditions, a proof of the module may rest on. Shared by the copies
+/// of a module, written by concurrent solves.
+struct GivenFacts {
+  std::mutex Lock;
+  std::set<std::string> Unfoldings;
+  std::set<std::string> Postconditions;
+};
+
 class ObligationModule {
 public:
   std::string FunctionName;
@@ -377,6 +388,8 @@ public:
   /// postconditions above apply, for the counterexample check alone. Never
   /// encoded, archived, or hashed.
   std::map<std::string, LogicFunctionDecl> EvidenceFunctions;
+  /// Never archived or hashed.
+  std::shared_ptr<GivenFacts> Given = std::make_shared<GivenFacts>();
 };
 
 /// Validate every declaration, sort, call signature, obligation identity, and
