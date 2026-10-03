@@ -147,6 +147,8 @@ list the behaviors it relates, as in ``disjoint_behaviors(low, high)``.
 Loops
 -----
 
+.. cppverify-example: fragment
+
 .. code-block:: cpp
 
    while (c)
@@ -157,6 +159,8 @@ Loops
 Clauses go after the loop header's closing ``)``; ``for`` loops use the same
 placement. For ``do`` loops, clauses go after the trailing ``while (c)`` and
 before its semicolon:
+
+.. cppverify-example: fragment
 
 .. code-block:: cpp
 
@@ -213,11 +217,65 @@ function) to diverge; its function and every caller are then reported
 Ghost-block and proof-function loops are erased at runtime and must have a
 real measure; ``decreases(*)`` is rejected there.
 
+Nobody knows whether this loop ends for every start, so it has no measure:
+
+.. code-block:: cpp
+
+   unsigned collatz_steps(unsigned n)
+     post(n != 1 || result == 0)
+   {
+     unsigned steps = 0;
+     while (n != 1)
+       invariant(old(n) != 1 || (n == 1 && steps == 0))
+       decreases(*)
+     {
+       n = n % 2 == 0 ? n / 2 : 3 * n + 1;
+       steps = steps + 1;
+     }
+     return steps;
+   }
+
+   unsigned none()
+     post(result == 0)
+   {
+     return collatz_steps(1);
+   }
+
+.. code-block:: text
+
+   Verified: collatz_steps [backend=z3] [partial]
+   Verified: none [backend=z3] [partial]
+   warning: collatz_steps: proved only for executions that terminate: decreases(*) at 11:15 allows it to diverge
+   warning: none: proved only for executions that terminate: it calls collatz_steps, which may diverge
+
 A loop writes only the objects its stores and calls reach, so other memory
 keeps its value across it without an invariant. ``modifies(...)`` after the
 invariants narrows that further, like ACSL's ``loop assigns``; its footprints
 are read in each iteration's state, so ``modifies(a[0 : i])`` describes the
 prefix written so far.
+
+.. code-block:: cpp
+
+   void clear_prefix(int *a, int n, int k)
+     pre(valid(a, n) && 0 <= k && k <= n && n <= 1000)
+     modifies(a[0 : k])
+     post(forall(j, 0, k, a[j] == 0))
+     post(forall(j, k, n, a[j] == old(a[j])))
+   {
+     for (int i = 0; i < k; i = i + 1)
+       invariant(0 <= i && i <= k)
+       invariant(forall(j, 0, i, a[j] == 0))
+       modifies(a[0 : i])
+       decreases(k - i)
+     {
+       a[i] = 0;
+     }
+   }
+
+The loop's frame is checked at the end of each iteration, after the ``for``
+increment, so ``a[0 : i]`` then covers the cell just written; the function's
+``modifies(a[0 : k])`` is the range ``[0, k)``, and the cells from ``k`` on
+keep their values without an invariant saying so.
 
 After the loop the verifier knows exactly ``I && !c`` — anything needed
 downstream must be captured by the invariant.
