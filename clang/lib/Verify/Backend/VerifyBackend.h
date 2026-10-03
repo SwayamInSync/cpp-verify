@@ -172,12 +172,18 @@ public:
   /// function's budget, shared by its queries. Unset removes the limit.
   virtual void
   setDeadline(std::optional<std::chrono::steady_clock::time_point> Deadline) {}
+  /// Stops the work in progress, from any thread: queries running end
+  /// unresolved and no further one starts, until resume().
+  virtual void cancel() {}
+  virtual void resume() {}
 
 protected:
   virtual VerifyResult verifyModule(const ObligationModule &Module) = 0;
 };
 
-enum class BackendKind { Z3, Lean, BMC, CVC5, Portfolio };
+/// Race: Z3 and cvc5 at once, the first proof or certified counterexample
+/// standing, as Frama-C's prover list; Portfolio: both must agree.
+enum class BackendKind { Z3, Lean, BMC, CVC5, Portfolio, Race };
 
 /// Solver representation of C++ machine integers. Every choice is exact.
 enum class MachineIntegerEncoding {
@@ -199,6 +205,10 @@ struct BackendExecutionOptions {
   std::optional<unsigned> CollectionTimeoutMs;
   /// Per-query deterministic solver resource limit; 0 disables it.
   unsigned SolverResourceLimit = 0;
+  /// The time one counterexample check may take, so that one model cannot
+  /// spend a query's time: unset, half the query timeout; 0, the query's
+  /// own time.
+  std::optional<unsigned> CertifyTimeoutMs;
   /// Isolated solver jobs. 0 selects the available physical-core count.
   unsigned Jobs = 1;
   /// The workers obligations run on, shared with the driver's function tasks
