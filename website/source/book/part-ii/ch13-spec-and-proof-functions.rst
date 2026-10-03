@@ -285,10 +285,46 @@ it, it is verified. In the block, ``result`` is the value the body returns,
 and naming the spec at a smaller measure uses the induction hypothesis
 there. ``decreases(...) by { ... }`` helps a termination proof the same
 way, and ``reads(p, n) by { ... }`` a frame. The block of an inductive
-predicate's postcondition is its induction step. A lemma the block calls
-must not itself be proved from the spec's postcondition: the two proofs
-would only support each other, and both are reported with reason
-``proof.cycle``.
+predicate's postcondition is its induction step.
+
+A block may also call a lemma about the spec itself. The two proofs then
+rest on each other, which is sound only as an induction: they form a
+cluster, as in Dafny, and must share ``decreases`` clauses of one length.
+Every call between them lowers the measure, and the lemma sees the spec's
+definition and postcondition only where the spec's measure is below its
+own. Lexicographic measures put the spec just below the lemma at the same
+argument:
+
+.. code-block:: cpp
+
+   proof void total_nonneg(int n);
+
+   spec int total(int n)
+     decreases(n, 0)
+     post(result >= 0) by { if (n > 0) total_nonneg(n - 1); }
+   {
+     return n <= 0 ? 0 : total(n - 1) + n;
+   }
+
+   proof void total_nonneg(int n)
+     decreases(n, 1)
+     post(total(n) >= 0)
+   {
+     if (n > 0)
+       total_nonneg(n - 1);
+   }
+
+.. code-block:: text
+
+   Verified: spec decreases and post: total
+   Verified: total_nonneg [backend=z3]
+
+The lemma unfolds ``total(n)``, since ``(n, 0)`` is below ``(n, 1)``; the
+block calls the lemma at ``n - 1``, since ``(n - 1, 1)`` is below
+``(n, 0)``. A lemma that would use the spec at the same measure gets
+nothing from it, and a block call that does not lower the measure fails
+like a non-terminating call. Without shared measures, two proofs that rest
+on each other are reported with reason ``proof.cycle``.
 
 Use Z3, the default backend, for recursive specs. cvc5 checks its
 counterexamples against the same definitions but has no recursive definitions,
