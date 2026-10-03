@@ -1,0 +1,9 @@
+# The C++ examples of the website, the book, and the design notes compile,
+# every function in them verifies unless the page says otherwise, and the
+# verdicts a page shows are the ones the verifier gives.
+# website/scripts/check-doc-examples.py describes the comments that mark
+# fragments and expected failures.
+# RUN: %python %S/../../../website/scripts/check-doc-examples.py \
+# RUN:   --cpp-verify %cpp-verify %S/../../../website/source \
+# RUN:   %S/../../../docs/DESIGN.md | FileCheck %s
+# CHECK: examples checked ({{[0-9]+}} against the verdicts their pages show), 0 failed
