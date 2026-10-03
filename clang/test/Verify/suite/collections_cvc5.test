@@ -1,0 +1,19 @@
+# REQUIRES: cvc5
+# cvc5 decides sets, multisets, and maps as arrays over all integers, as Z3
+# does: union, intersection, and difference are functions defined pointwise
+# by an axiom each, and multisets are equal count by count. It proves the
+# laws and certifies every false claim the solver refutes; a model it prints
+# with unknown is certified like any other. It leaves the claim that needs
+# an infinite set and the loop with ghost collections unresolved.
+# RUN: not %cpp-verify --backend=cvc5 --timeout=20000 %S/collections.cpp 2>&1 \
+# RUN:   | FileCheck %s
+
+# CHECK-DAG: Verified: sets [backend=cvc5]
+# CHECK-DAG: Verified: multisets [backend=cvc5]
+# CHECK-DAG: Verified: maps [backend=cvc5]
+# CHECK-DAG: error: verification failed: set_wrong {{.*}}[backend=cvc5] [reason=counterexample]
+# CHECK-DAG: error: verification failed: multiset_wrong {{.*}}[backend=cvc5] [reason=counterexample]
+# CHECK-DAG: error: verification failed: map_wrong {{.*}}[backend=cvc5] [reason=counterexample]
+# CHECK-DAG: error: verification failed: map_values {{.*}}[backend=cvc5] [reason=counterexample]
+# CHECK-DAG: Unresolved: some_outside [backend=cvc5]
+# CHECK-DAG: Unresolved: count_equal [backend=cvc5]
