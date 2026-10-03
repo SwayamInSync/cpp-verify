@@ -120,6 +120,6 @@ spec bool odd(int n)
 // REJECT-DAG: error: counted: only a spec function returning bool can be inductive
 // REJECT-DAG: error: measured: an inductive predicate holds by its derivations, so it takes no decreases
 // REJECT-DAG: error: exact: a postcondition of an inductive predicate states what holds where it is true, as !result || Q
-// REJECT-DAG: error: through: an inductive predicate applies itself only directly in its body, not through another spec
+// REJECT-DAG: error: through: an inductive predicate applies itself only in its body or through inductive predicates, not through another spec
 
 // NOTSPEC: error: only a spec function can be inductive
