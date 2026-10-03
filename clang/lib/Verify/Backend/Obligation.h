@@ -356,6 +356,11 @@ public:
   std::string ResultVarName;
   std::string HeapPrefix;
   std::optional<BMCTransformProvenance> BMCTransform;
+  /// The specs whose postconditions, and the inductive predicates whose
+  /// unfoldings, the module assumes. Bookkeeping of what a proof rests on,
+  /// never archived or hashed.
+  std::set<std::string> AssumedPosts;
+  std::set<std::string> AssumedUnfoldings;
 };
 
 /// Validate every declaration, sort, call signature, obligation identity, and
