@@ -26,6 +26,12 @@ Verification backends
      - Run Z3 and cvc5 over the same ordered canonical obligations. Use when a
        matching independent verdict is more important than accepting either
        solver alone.
+   * - **Race**
+     - ``cpp-verify --backend=race file.cpp``
+     - Run Z3 and cvc5 at once and keep whichever settles a function first,
+       as Frama-C's prover list. Use when the solvers' strengths differ, as
+       with collections or nonlinear arithmetic, and either solver's word is
+       enough.
    * - **BMC**
      - ``cpp-verify --backend=bmc --unroll=N file.cpp``
      - Small bounded loops: grow the unrolling from zero through ``N`` and stop
@@ -52,12 +58,30 @@ Text output lists the attempted bounds and reuse count, while JSON publishes
 ``iteration 2`` reconstruct the counterexample depth at the original loop
 source.
 
+A bounded result that no execution reaches says nothing, so BMC runs the
+same vacuity checks as Z3 on the program unrolled to the bound, as Kani
+reports an unreachable check. When every execution runs a loop past the
+bound, the result is ``BoundedSafe ... [vacuous]`` with
+``warning: f: no execution finishes within 3 loop iterations, so its bounded
+safety covers no complete run; raise --unroll``; an unsatisfiable
+precondition is reported as on the default path.
+
 Strict portfolio mode never votes or silently trusts the primary solver. Two
 ``unsat`` verdicts are ``Verified``; two ``sat`` verdicts are ``Failed`` and use
 Z3's typed model/trace. Opposite verdicts, missing cvc5, unknown/timeout,
 malformed process output, and unsupported encoding are ``Unresolved``. cvc5 is
 not vendored because it is an optional independent implementation; install it
 through the platform package manager or select an executable explicitly.
+
+Race mode trusts each solver alone, which is sound: a proof is a proof, and
+a counterexample is reported only once the certifier has checked it against
+the true definitions, whichever solver found it. The first decisive answer
+stops the other solver. When neither settles a function, each obligation one
+of them proved counts as proved, since every obligation is a query of its
+own; the function is ``Verified`` with ``[backend=z3+cvc5]`` when together
+they cover all of them, and otherwise the unresolved ones are listed as for
+Z3. Two decisive answers that differ, which a sound pair cannot give, are
+``backend.inconsistent-results``.
 
 Backend release fidelity
 ------------------------
@@ -135,6 +159,12 @@ module and every active proof with admissions promoted to errors, checks the
 aggregate module, and rejects proof dependencies other than Lean's documented
 foundational axioms.
 
+The Lean backend does not yet translate the spec collections of
+``<cppverify.h>`` (``seq``, ``set``, ``multiset``, ``map``): a function whose
+obligations use one is ``Unresolved`` with reason ``logic.unsupported`` on
+it. Lean support for them is planned for a future release; until then such
+functions are verified with Z3 (the default) or cvc5.
+
 To keep Z3 as the fast path and export only unresolved functions:
 
 .. code-block:: bash
@@ -208,6 +238,8 @@ Functions with ``pre`` / ``post`` are verified **modularly**: the caller assumes
 precondition and inherits its postcondition (and frame conditions) without re-analyzing the callee body.
 
 Simple call:
+
+.. cppverify-example: fragment
 
 .. code-block:: cpp
 
