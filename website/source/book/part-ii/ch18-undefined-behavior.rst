@@ -31,6 +31,8 @@ Why functional verification alone would be blind
 Machine arithmetic wraps modulo ``2^N``. A proof about the wrapped value of
 an overflowing addition would describe an execution C++ does not define:
 
+.. cppverify-example: fails add
+
 .. code-block:: cpp
 
    int add(int a, int b) post(result == a + b) { return a + b; }
@@ -85,13 +87,20 @@ The classic example — the tool tells you the precondition you forgot:
 
 .. code-block:: cpp
 
-   int abs(int x) post(result >= 0)
+   int abs_unguarded(int x) post(result >= 0)
    { return x < 0 ? -x : x; }
-   //   FAILS: counterexample x = INT_MIN  (negating INT_MIN overflows)
 
-   int abs(int x) pre(x > -2147483648) post(result >= 0)
+   int abs_guarded(int x) pre(x > -2147483648) post(result >= 0)
    { return x < 0 ? -x : x; }
-   //   verifies
+
+.. code-block:: text
+
+   abs.cpp:2:3: error: verification failed: abs_unguarded [...::overflow@2:3]
+     (counterexample: x [type=i32] = -2147483648)
+   Verified: abs_guarded [backend=z3]
+
+Negating ``INT_MIN`` overflows, so the first version fails at that input;
+the second states the precondition the counterexample points to.
 
 Array out-of-bounds
 -------------------
@@ -162,6 +171,8 @@ copy loop is proven memory-safe from its guard and invariant.
 A pointer with **no** ``valid`` declaration addresses a single object, as
 Frama-C's ``\valid`` guards and Verus permissions require:
 
+.. cppverify-example: fails second
+
 .. code-block:: cpp
 
    int second(int* p)
@@ -171,6 +182,8 @@ Frama-C's ``\valid`` guards and Verus permissions require:
 Pointer arithmetic itself must stay within the object's closed range
 ``[0, n]`` (the one-past position included), because forming a pointer
 further out is already undefined:
+
+.. cppverify-example: fails far
 
 .. code-block:: cpp
 
@@ -196,7 +209,11 @@ A conversion to an enumeration without a fixed underlying type must produce a
 value in the enumeration's range (C++17 [dcl.enum]); for ``enum Color { Red,
 Green }`` that is ``0`` or ``1``:
 
+.. cppverify-example: fails pick
+
 .. code-block:: cpp
+
+   enum Color { Red, Green };
 
    Color pick(int k)
      pre(k >= 0 && k <= 5)
@@ -207,11 +224,12 @@ Signed vs. unsigned
 
 This distinction is load-bearing. **Signed** overflow is UB in C++ and is
 checked. **Unsigned** overflow is *defined* modular wraparound, so it is **never
-flagged**:
+flagged**. Contract arithmetic is exact, so a contract about the wrapped
+value says so with ``% 2^N``:
 
 .. code-block:: cpp
 
-   unsigned mix(unsigned a, unsigned b) post(result == a + b)
+   unsigned mix(unsigned a, unsigned b) post(result == (a + b) % 4294967296)
    { return a + b; }            // verifies: unsigned wrapping is legal
 
 Width follows the target
