@@ -600,6 +600,32 @@ read memory:
      return p == q || (p != nullptr && segment(p->next, q));
    }
 
+A postcondition may mention the predicate itself. Transitivity is one: a
+derivation of ``reach(a, b)`` extends every path from ``b``:
+
+.. code-block:: cpp
+
+   spec bool reach(int a, int b);
+   spec bool reach(int a, int b)
+     inductive
+     post(!result || forall(c, !reach(b, c) || reach(a, c)))
+   {
+     return a == b || exists(c, edge(a, c) && reach(c, b));
+   }
+
+   proof void chain(int a, int b, int c)
+     pre(reach(a, b) && reach(b, c))
+     post(reach(a, c))
+   {
+   }
+
+In the induction, the premise ``reach(c, b)`` already extends every path
+from ``b`` (the induction hypothesis), and ``reach(a, c2)`` follows from
+``edge(a, c)`` and ``reach(c, c2)`` by the predicate's proved unfolding. The
+postcondition itself is never assumed while it is being proved, so a false
+one such as ``post(!result || !reach(a, b))`` is never proved. (The forward
+declaration lets the postcondition name the predicate.)
+
 ``constexpr`` as spec
 ---------------------
 
