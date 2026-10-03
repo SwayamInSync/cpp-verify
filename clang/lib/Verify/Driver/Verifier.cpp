@@ -1271,8 +1271,9 @@ public:
                            "inductive predicate: " + Fn->Name});
           InductiveLines.emplace_back(Diags.size() - 1, Fn->Identity);
         }
+        const bool Step = !Fn->InductiveStepOf.empty();
         if (Fn->IsSpec && !Fn->NeedsDecreasesCheck &&
-            !Fn->Postconditions.empty()) {
+            !Fn->Postconditions.empty() && !Step) {
           UnprovenPosts.insert(Fn->Identity);
           std::optional<ObligationModule> PostModule;
           std::string PostError;
@@ -1349,7 +1350,7 @@ public:
           continue;
         }
 
-        if (Fn->IsSpec && !Fn->NeedsDecreasesCheck) {
+        if (Fn->IsSpec && !Fn->NeedsDecreasesCheck && !Step) {
           const VerifyDiagnostic::Kind Kind =
               Opts.LowerOnly ? VerifyDiagnostic::Lowered
                              : (Opts.Backend == BackendKind::Lean
@@ -1369,7 +1370,6 @@ public:
         // postconditions say, so they are proved apart: by induction on the
         // height, with its definition known, which its own termination check
         // establishes. Only a failure is reported.
-        const bool Step = !Fn->InductiveStepOf.empty();
         if (Step && !Fn->Postconditions.empty()) {
           UnprovenPosts.insert(Fn->Identity);
           const std::string Label = "spec post by induction";
@@ -1445,6 +1445,8 @@ public:
           }
         }
 
+        if (Step && !Fn->NeedsDecreasesCheck)
+          continue;
         if (Fn->NeedsDecreasesCheck && Fn->IsSpec) {
           std::optional<VFunction> Bare;
           if (Step && !Fn->Postconditions.empty()) {
