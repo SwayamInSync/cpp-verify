@@ -681,6 +681,7 @@ llvm::Expected<ObligationModule> inductionModule(const ObligationModule &Module,
     Result.EvidenceFunctions.emplace(Identity, copy(Function));
   Result.AssumedPosts = Module.AssumedPosts;
   Result.AssumedUnfoldings = Module.AssumedUnfoldings;
+  Result.InductivePosts = Module.InductivePosts;
   Result.Given = Module.Given;
   const Obligation &First = Item ? *Item : Module.Obligations.front();
   Obligation Inductive;
