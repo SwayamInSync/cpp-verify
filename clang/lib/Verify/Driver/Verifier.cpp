@@ -1411,10 +1411,12 @@ public:
         // function's own obligations; a spec's definition cannot help prove its
         // termination, so it is checked separately.
         // A step function of an inductive predicate terminates whatever its
-        // postconditions say, so they are proved apart: by induction on the
-        // height, with its definition known, which its own termination check
-        // establishes. Only a failure is reported.
-        if (Step && !Fn->Postconditions.empty()) {
+        // postconditions say, so they are proved apart, after its
+        // termination: by induction on the height, with its definition known,
+        // which that check establishes. Only a failure is reported.
+        auto runInduction = [&] {
+          if (!Step || Fn->Postconditions.empty())
+            return;
           UnprovenPosts.insert(Fn->Identity);
           const std::string Label = "spec post by induction";
           std::optional<ObligationModule> Induction;
@@ -1499,10 +1501,12 @@ public:
               }
             }
           }
-        }
+        };
 
-        if (Step && !Fn->NeedsDecreasesCheck)
+        if (Step && !Fn->NeedsDecreasesCheck) {
+          runInduction();
           continue;
+        }
         if (Fn->NeedsDecreasesCheck && Fn->IsSpec) {
           std::optional<VFunction> Bare;
           if (Step && !Fn->Postconditions.empty()) {
@@ -1536,6 +1540,7 @@ public:
                 {VerifyDiagnostic::Unresolved,
                  "obligation lowering failed for decreases: " + Shown + " (" +
                      llvm::toString(DecModuleOrErr.takeError()) + ")"});
+            runInduction();
             continue;
           }
           ObligationSimplificationStats DecSimplification;
@@ -1549,6 +1554,7 @@ public:
                  "obligation simplification failed for decreases: " + Shown +
                      " (" + llvm::toString(SimplifiedDecModule.takeError()) +
                      ")"});
+            runInduction();
             continue;
           }
           ObligationModule DecModule = std::move(*SimplifiedDecModule);
@@ -1562,6 +1568,7 @@ public:
                              "cannot serialize decreases obligation: " + Shown +
                                  " (" + llvm::toString(std::move(Error)) +
                                  ")"});
+            runInduction();
             continue;
           }
           if (Opts.LowerOnly) {
@@ -1581,6 +1588,7 @@ public:
                 Message += " (" + DR.Message + ")";
               Diags.push_back({VerifyDiagnostic::Error, std::move(Message),
                                DR.Location, Fn->Name, std::move(DR)});
+              runInduction();
               continue;
             }
             if (Fn->IsSpec) {
@@ -1589,6 +1597,7 @@ public:
               if (!Quiet)
                 Diags.push_back({VerifyDiagnostic::Lowered, DecLabel + Shown,
                                  SourceLocation(), Fn->Name, DR});
+              runInduction();
               continue;
             }
           } else {
@@ -1614,6 +1623,7 @@ public:
                 UndefinedSpecs.erase(Fn->Identity);
                 if (!Step)
                   UnprovenPosts.erase(Fn->Identity);
+                runInduction();
                 continue;
               }
             } else if (R.Status == VerifyStatus::Verified) {
@@ -1635,6 +1645,7 @@ public:
                          : clauseProofCallees(
                                *Fn, {VFunction::ClauseProof::Decreases,
                                      VFunction::ClauseProof::Post});
+                runInduction();
                 continue;
               }
             } else {
@@ -1646,6 +1657,7 @@ public:
                 if (Fn->IsSpec) {
                   UndefinedSpecs.erase(Fn->Identity);
                   UnprovenPosts.erase(Fn->Identity);
+                  runInduction();
                   continue;
                 }
               } else {
@@ -1665,6 +1677,7 @@ public:
                 Diags.push_back({IsUnresolved ? VerifyDiagnostic::Unresolved
                                               : VerifyDiagnostic::Error,
                                  std::move(Message), R.Location, Fn->Name, R});
+                runInduction();
                 continue;
               }
             }
@@ -1866,7 +1879,8 @@ public:
               {R.Status == VerifyStatus::Verified ? VerifyDiagnostic::Verified
                                                   : VerifyDiagnostic::Certified,
                Fn->Name + backendSuffix(R), R.Location, Fn->Name, R});
-          recordDependencies(*Fn, BMCModule ? *BMCModule : Module);
+          // The module verified, the bounded one under BMC (moved into it).
+          recordDependencies(*Fn, Module);
           std::set<std::string> Callees;
           collectCallees(Fn->Body, Callees);
           CallDependencies.emplace_back(Diags.size() - 1, Fn->Identity,
@@ -2128,20 +2142,24 @@ public:
         for (const SpecReliance &Reliance : ProofDependencies) {
           if (!settled(Reliance.Index))
             continue;
+          // Definitions and frames of what the proof may reach;
+          // postconditions and unfoldings where its module assumes them.
           std::string Undefined, Unframed, Unproven, Unruled;
           for (const std::string &Identity : Reliance.Specs) {
             if (UndefinedSpecs.count(Identity))
               list(Undefined, nameOf(Identity));
             else if (UnframedSpecs.count(Identity))
               list(Unframed, nameOf(Identity));
-            else if (UnprovenPosts.count(Identity) &&
-                     Identity != Reliance.Establishes &&
-                     !Reliance.Withheld.count(Identity) &&
-                     !Reliance.PostsWithheld.count(Identity))
+          }
+          for (const std::string &Identity : Reliance.AssumedPosts)
+            if (UnprovenPosts.count(Identity) &&
+                Identity != Reliance.Establishes &&
+                !Reliance.Withheld.count(Identity) &&
+                !Reliance.PostsWithheld.count(Identity))
               list(Unproven, nameOf(Identity));
+          for (const std::string &Identity : Reliance.AssumedUnfoldings)
             if (Unproved.count(Identity) && !Reliance.Withheld.count(Identity))
               list(Unruled, nameOf(Identity));
-          }
           if (!Undefined.empty())
             demote(Reliance.Index, VerifyReason::SpecTermination,
                    "relies on the definition of " + Undefined +
@@ -2184,6 +2202,29 @@ public:
               Diags[Index].K == VerifyDiagnostic::Verified)
             demote(Index, VerifyReason::SpecInductive,
                    "its rules are not established: " + It->second);
+        // A counterexample whose check needed a postcondition rests on it.
+        for (size_t Index = 0; Index != Diags.size(); ++Index) {
+          VerifyDiagnostic &Diagnostic = Diags[Index];
+          if (Diagnostic.K != VerifyDiagnostic::Error || !Diagnostic.Result ||
+              Diagnostic.Result->CertifiedWith.empty())
+            continue;
+          std::string Unproven;
+          for (const std::string &Identity : Diagnostic.Result->CertifiedWith)
+            if (UnprovenPosts.count(Identity) || UndefinedSpecs.count(Identity))
+              list(Unproven, nameOf(Identity));
+          if (Unproven.empty())
+            continue;
+          std::string &Message = Diagnostic.Message;
+          if (size_t At = Message.find(" [reason=counterexample]");
+              At != std::string::npos)
+            Message.erase(At, std::string(" [reason=counterexample]").size());
+          if (size_t At = Message.find("failed"); At != std::string::npos)
+            Message.replace(At, 6, "unresolved");
+          demote(Index, VerifyReason::SpecPost,
+                 "its counterexample is checked with the postcondition of " +
+                     Unproven + ", which is not established");
+          Changed = true;
+        }
       }
 
       // No proof may rest on itself. A fact is established only by verdicts
