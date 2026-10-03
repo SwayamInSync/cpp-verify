@@ -234,6 +234,9 @@ VFunction =
   behaviors: [(name, assumes)]         // for the vacuity check
   inductiveLoc, unfolding: VExpr?      // inductive: the least fixpoint of unfolding
   inductiveStepOf: string              // the generated step-indexed definition of it
+  inductiveRuleOf: string              // a generated proof of that predicate's rules
+  factsWithheld: {identity}            // specs whose facts this proof may not assume
+  totalExpressions: bool               // no definedness obligations, as in specs
 ```
 
 - Parameter ownership/borrowing is not yet represented by a `ParamMode` field.
@@ -822,30 +825,79 @@ declare it; the certifier cannot evaluate it, so a counterexample that needs
 its value is `counterexample.unchecked`), and each post becomes `!c || post`.
 
 **Inductive predicates:** `inductive` on a spec returning `bool` sets
-`VFunction::InductiveLoc`. After conversion the frontend turns the body into
-one condition `F` (returns under `if`/`else`), checks that the predicate
-occurs in it only positively and continuously (conjuncts, disjuncts, `?:`
-branches, `exists`, bounded `forall`; never under negation, in a comparison,
-conversion, condition, argument, quantifier bound, or unbounded `forall`),
-and generates the recursive spec `P.step(h, x)` (`InductiveStepOf`,
-`decreases(h)`, mathematical `h`) with body `h > 0 && F[P(a) := P.step(h -
-1, a)]`. `P`'s body becomes `exists(h, P.step(h, x))`, its true definition,
-and `F` is kept as `VFunction::Unfolding`. `P` is hidden in every function
-that does not `reveal` it, and `specApplicationFacts` assumes `P(t) ==
-F[t]` beside its postconditions at each application, in function bodies
-(`addSpecPostInstances`) and in spec checks (`addSpecPostChecks`); the
-applications inside that instance get none, so each named application
-unfolds once. The equation is a theorem by Kleene's fixpoint theorem, given
-the checked conditions, and is never itself checked. A postcondition `!result
-|| Q` is copied to `P.step`, whose termination check proves it by induction
-on `h` (reported only on failure, as `spec post by induction: P`), and `P`'s
-own post module derives it from `P.step`'s under the existential. A
-predicate reached again through another spec is rejected, since its
-occurrences there escape the positivity check. When neither the
-distinguished values nor Presburger arithmetic decide an unbounded
-quantifier, the certifier tries binder values `0, -1, 1, -2, ...` up to
-`QuantifierProbe` on each side: a value where an `exists` body holds, or a
-`forall` body fails, decides it. This certifies `P(v)` by a derivation
+`VFunction::InductiveLoc`. After conversion, `expandInductivePredicates`
+(`Transform/Inductive.cpp`) turns each body into one condition `F` (returns
+under `if`/`else`), groups predicates that apply each other (strongly
+connected components), checks that the members occur in each body only
+positively and continuously (conjuncts, disjuncts, `?:` branches, `exists`,
+bounded `forall`; never under negation, in a comparison, conversion,
+condition, argument, quantifier bound, or unbounded `forall`), and generates
+for each member the recursive spec `P.step(h, x)` (`InductiveStepOf`,
+`decreases(h)`, mathematical `h`) with body `h > 0 && F[Q(a) := Q.step(h -
+1, a)]` for every member `Q`. `P`'s body becomes `exists(h, P.step(h, x))`,
+its true definition, and `F` is kept as `VFunction::Unfolding`. `P` is
+hidden in every function that does not `reveal` it, and
+`specApplicationFacts` assumes `P(t) == F[t]` beside its postconditions at
+each application, in function bodies (`addSpecPostInstances`) and in spec
+checks (`addSpecPostChecks`); the applications inside that instance get
+none, so each named application unfolds once. A predicate reached again
+through a spec outside its group is rejected, since its occurrences there
+escape the positivity check.
+
+The equation is a theorem only of this construction, so it is proved per
+predicate by three generated proof functions (`InductiveRuleOf`), in
+mathematical integers, with every member revealed:
+
+- `P (monotonicity)`, `P::monotone(h, j, x)`: `pre(P.step(h, x) && h <= j)`,
+  `post(P.step(j, x))`, `decreases(h)`. For `h > 0` it states the induction
+  hypothesis for each member `Q` that `F` applies, `forall y. Q.step(h - 1,
+  y) -> Q.step(j - 1, y)`, by generalization: a fresh `y` is havocked in a
+  branch that calls `Q::monotone(h - 1, j - 1, y)`, asserts the instance, and
+  ends in `assume false`; the universal is assumed after it. Bounded
+  universals in `F` are carried from `h - 1` to `j - 1` the same way, and an
+  existential above one is fixed at a chosen witness (`P::transportN`).
+- `P (case analysis)`, `P::inversion(x)`: `pre(P(x))`, `post(F)`. It names
+  the height `P.height(x)`, a Hilbert choice (`IsChoice`) with axiom
+  `!exists(h, P.step(h, x)) || P.step(result, x)`, asserts `P.step` there,
+  proves `forall y. Q.step(H - 1, y) -> Q(y)` by generalization, and
+  transports `F`.
+- `P (introduction)`, `P::introduction(x)`: `pre(F)`, `post(P(x))`. The
+  bound `B` is the height of `F`, clamped at zero: `Q.height(a)` for an
+  application, the larger of two parts, the height at the chosen witness
+  (`P::witnessN`) for an existential, and for a bounded universal the
+  generated spec `P::boundN(lo, hi, v)` = `lo >= hi ? 0 : max(height[w :=
+  lo], bound(lo + 1, hi, v))`, `decreases(hi - lo)`, whose postcondition
+  bounds the height at every `w` in range. Each application is raised to `B`
+  by a guarded `Q::monotone` call, and `P.step(B + 1, x)` is asserted.
+
+The binders of these universals range only over parameter positions that
+some application changes: a position where every application passes the
+enclosing member's parameter of the same name and type is fixed (as
+Isabelle's `for` parameters). A pointer binder lowers to the address
+`0 + k` of an integer binder `k`, since pointers are integer addresses in
+every adapter. The proofs set `TotalExpressions`, so, like spec
+definitions, they carry no definedness obligations and no UB
+instrumentation, and `FactsWithheld` (every member and step), so neither
+the unfoldings nor the postconditions they are proving are assumed in
+them; `SpecReliance::Withheld` exempts them from the demotions that follow.
+They are reported only on failure (`VerifyDiagnostic::Quiet`). The driver
+then settles the rules in a fixpoint with the callee contracts: a predicate
+whose rule proofs do not all hold prints `Unresolved: inductive predicate:
+P` with reason `spec.inductive`, and every verdict that relied on its
+unfolding is demoted with that reason.
+
+A postcondition `!result || Q` is copied to `P.step` and proved by
+induction on `h` in a module of its own (`buildInductionChecks`): the
+definition of `P.step` is visible and each application at a lower measure
+assumes the postcondition. Termination of `P.step` is checked separately,
+without its postconditions. A failure is reported as `spec post by
+induction failed: P`, and `P`'s own post module derives the postcondition
+from `P.step`'s under the existential.
+
+When neither the distinguished values nor Presburger arithmetic decide an
+unbounded quantifier, the certifier tries binder values `0, -1, 1, -2, ...`
+up to `QuantifierProbe` on each side: a value where an `exists` body holds,
+or a `forall` body fails, decides it. This certifies `P(v)` by a derivation
 height; `P(v)` false stays undecided.
 
 **`recommends`:** parsed and stored; not emitted into the main VC. On
