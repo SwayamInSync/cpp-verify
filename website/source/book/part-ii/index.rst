@@ -5,6 +5,11 @@ These chapters cover verified C++ in practice: the toolchain, contract syntax, c
 patterns, backends (Z3, BMC, editable Lean certification), modular calls, how to respond when verification fails,
 and proving freedom from undefined behavior.
 
+The examples in these chapters use the names of ``<cppverify.h>`` (``valid``, ``seq``,
+``set``, ``multiset``, ``map``, ...) unqualified, as a file does after
+``#include <cppverify.h>`` and ``using namespace cppverify;``. Each example is compiled and
+verified by the test suite, and where a chapter shows verdicts, the example must give them.
+
 .. figure:: /_static/diagrams/cppverify-workflow.svg
    :align: center
    :figclass: book-figure
