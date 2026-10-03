@@ -960,12 +960,12 @@ class SMTLibEncoder {
       }
       return overflowCheck(Expr);
     case LogicExpr::SpecCall: {
-      auto It = Module.LogicFunctions.find(Expr->SpecCallee);
-      if (It == Module.LogicFunctions.end()) {
+      const LogicFunctionDecl *Found = declaration(Expr->SpecCallee);
+      if (!Found) {
         fail("missing SMT-LIB spec declaration: " + Expr->SpecCallee);
         return "false";
       }
-      const LogicFunctionDecl &Function = It->second;
+      const LogicFunctionDecl &Function = *Found;
       std::string Application = functionName(Function);
       if (!Expr->Children.empty())
         Application = "(" + Application;
@@ -1292,10 +1292,29 @@ class SMTLibEncoder {
     Definitions += Text;
   }
 
-  /// f(args) = definition[args], true of the defined function.
+  /// A declared function of the module, or one only the facts of a
+  /// counterexample check apply.
+  const LogicFunctionDecl *declaration(const std::string &Identity) const {
+    if (auto It = Module.LogicFunctions.find(Identity);
+        It != Module.LogicFunctions.end())
+      return &It->second;
+    if (auto It = Module.EvidenceFunctions.find(Identity);
+        It != Module.EvidenceFunctions.end())
+      return &It->second;
+    return nullptr;
+  }
+
+  /// A true fact at one application: f(args) = definition[args], an
+  /// inductive predicate's unfolding, or proved postconditions.
   void emitDefinitionInstance(const DefinitionInstance &Instance) {
     const LogicFunctionDecl &Function = *Instance.Function;
-    if (!Function.StepDefinition ||
+    using Kind = DefinitionInstance::Kind;
+    const LogicExpr *Body = Instance.Of == Kind::Unfolding
+                                ? Function.Unfolding.get()
+                                : Function.StepDefinition.get();
+    if ((Instance.Of != Kind::Postcondition && !Body) ||
+        (Instance.Of == Kind::Postcondition &&
+         Function.Postconditions.empty()) ||
         Instance.Arguments.size() != Function.Parameters.size()) {
       fail("definition instance of " + Function.DisplayName +
            " cannot be encoded");
@@ -1315,9 +1334,17 @@ class SMTLibEncoder {
     std::map<std::string, std::string> Saved = Substitutions;
     for (unsigned I = 0; I != Function.Parameters.size(); ++I)
       Substitutions[Function.Parameters[I].Name] = Arguments[I];
+    if (Instance.Of == Kind::Postcondition) {
+      Substitutions[LogicFunctionDecl::ResultVariable] = Left;
+      std::string Holds = "true";
+      for (const auto &Post : Function.Postconditions)
+        Holds = "(and " + Holds + " " + encode(Post.get()) + ")";
+      Substitutions = std::move(Saved);
+      Axioms.push_back("(assert " + Holds + ")");
+      return;
+    }
     std::string Right =
-        coerce(encode(Function.StepDefinition.get()),
-               Function.StepDefinition->Sort, Function.ResultSort,
+        coerce(encode(Body), Body->Sort, Function.ResultSort,
                Function.ResultSort.Signedness == LogicSignedness::Signed);
     Substitutions = std::move(Saved);
     Axioms.push_back("(assert (= " + Left + " " + Right + "))");
@@ -2817,6 +2844,7 @@ CVC5VerifyBackend::verifyQuery(const ObligationModule &Module,
         return unchecked();
       Result.Reason = Decision.Reason;
       Result.Message = Decision.Message;
+      Result.InductionOnly = Decision.InductionOnly;
       return Result;
     }
     Instances.insert(Instances.end(), Decision.Instances.begin(),
