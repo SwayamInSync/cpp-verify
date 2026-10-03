@@ -1804,6 +1804,9 @@ Z3Encoder::encodeModuleAs(const ObligationModule &Module,
   UsedBitLevelOperation = false;
   for (const auto &[Identity, Function] : Module.LogicFunctions)
     LogicFunctions.emplace(Identity, &Function);
+  // Only facts given for a counterexample check apply these.
+  for (const auto &[Identity, Function] : Module.EvidenceFunctions)
+    LogicFunctions.emplace(Identity, &Function);
   if (!Query) {
     Result.Status = VerifyStatus::Unresolved;
     Result.Reason = VerifyReason::MissingQuery;
@@ -2349,7 +2352,12 @@ private:
 std::optional<z3::expr>
 Z3Encoder::definitionInstance(const DefinitionInstance &Instance) {
   const LogicFunctionDecl &Function = *Instance.Function;
-  if (!Function.StepDefinition ||
+  using Kind = DefinitionInstance::Kind;
+  const LogicExpr *Body = Instance.Of == Kind::Unfolding
+                              ? Function.Unfolding.get()
+                              : Function.StepDefinition.get();
+  if ((Instance.Of != Kind::Postcondition && !Body) ||
+      (Instance.Of == Kind::Postcondition && Function.Postconditions.empty()) ||
       Instance.Arguments.size() != Function.Parameters.size())
     return std::nullopt;
   z3::expr_vector Terms(Ctx);
@@ -2369,9 +2377,24 @@ Z3Encoder::definitionInstance(const DefinitionInstance &Instance) {
   const bool SavedShadows = DefineBitShadows;
   EncodingFailed = false;
   DefineBitShadows = false;
-  z3::expr Body = coerce(encodeVC(Function.StepDefinition.get()),
-                         Function.StepDefinition->Sort, Function.ResultSort,
-                         isSignedSort(Function.ResultSort));
+  z3::expr Applied = specFuncDecl(Function)(Terms);
+  std::optional<z3::expr> Fact;
+  if (Instance.Of == Kind::Postcondition) {
+    auto Existing = Vars.find(LogicFunctionDecl::ResultVariable);
+    Saved.emplace_back(LogicFunctionDecl::ResultVariable,
+                       Existing == Vars.end()
+                           ? std::optional<z3::expr>()
+                           : std::optional<z3::expr>(Existing->second));
+    Vars.erase(LogicFunctionDecl::ResultVariable);
+    Vars.emplace(LogicFunctionDecl::ResultVariable, Applied);
+    z3::expr Holds = Ctx.bool_val(true);
+    for (const auto &Post : Function.Postconditions)
+      Holds = Holds && asBool(encodeVC(Post.get()));
+    Fact = Holds;
+  } else {
+    Fact = Applied == coerce(encodeVC(Body), Body->Sort, Function.ResultSort,
+                             isSignedSort(Function.ResultSort));
+  }
   const bool Failed = EncodingFailed;
   EncodingFailed = SavedFailure;
   DefineBitShadows = SavedShadows;
@@ -2382,7 +2405,7 @@ Z3Encoder::definitionInstance(const DefinitionInstance &Instance) {
   }
   if (Failed)
     return std::nullopt;
-  return (specFuncDecl(Function)(Terms) == Body).simplify();
+  return Fact->simplify();
 }
 
 std::pair<z3::expr_vector, z3::expr>
@@ -2440,13 +2463,17 @@ namespace {
 
 /// Whether \p E applies a function that is defined natively by recursion.
 bool appliesDefined(const LogicExpr *E,
-                    const std::function<bool(const std::string &)> &Defined) {
+                    const std::function<bool(const std::string &)> &Defined,
+                    bool IntoQuantifiers = true) {
   if (!E)
     return false;
   if (E->K == LogicExpr::SpecCall && Defined(E->SpecCallee))
     return true;
+  if (!IntoQuantifiers &&
+      (E->K == LogicExpr::Forall || E->K == LogicExpr::Exists))
+    return false;
   return llvm::any_of(E->Children, [&](const std::unique_ptr<LogicExpr> &C) {
-    return appliesDefined(C.get(), Defined);
+    return appliesDefined(C.get(), Defined, IntoQuantifiers);
   });
 }
 
@@ -2512,15 +2539,17 @@ guardRecursion(const LogicExpr *E,
 
 /// Whether every recursive application of \p E lies in a branch of a case
 /// split, as Z3 needs to bound its unfolding: a case split is an ite with a
-/// recursive application in a branch, and Z3 does not split inside a
-/// quantifier.
+/// recursive application in a branch outside quantifiers, since Z3 neither
+/// splits inside a quantifier nor sees applications there. A definition
+/// without a split is a macro, which Z3 expands at every application
+/// without bound or interruption.
 bool recursionGuarded(const LogicExpr *E, bool InBranch,
                       const std::function<bool(const std::string &)> &Defined) {
   if (!E)
     return true;
   if (E->K == LogicExpr::Ite &&
-      (appliesDefined(E->Children[1].get(), Defined) ||
-       appliesDefined(E->Children[2].get(), Defined)))
+      (appliesDefined(E->Children[1].get(), Defined, false) ||
+       appliesDefined(E->Children[2].get(), Defined, false)))
     return recursionGuarded(E->Children[0].get(), InBranch, Defined) &&
            recursionGuarded(E->Children[1].get(), true, Defined) &&
            recursionGuarded(E->Children[2].get(), true, Defined);
@@ -2761,6 +2790,7 @@ z3::check_result Z3Encoder::certifyModels(const ObligationModule &Module,
     Out.Status = VerifyStatus::Unresolved;
     Out.Reason = Decision.Reason;
     Out.Message = Decision.Message;
+    Out.InductionOnly = Decision.InductionOnly;
     EscalateToNative = !NativeRecursion && !Decision.Unbounded &&
                        !Decision.NoCounterexample &&
                        (Decision.Reason == VerifyReason::SpecFuel ||
