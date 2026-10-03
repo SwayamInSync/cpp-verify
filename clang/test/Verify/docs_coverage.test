@@ -1,0 +1,5 @@
+# Every contract keyword, collection operation, and verification construct
+# has an example in the language reference and in the book, and every
+# option, backend, and reason code is described in both.
+# RUN: %python %S/../../../website/scripts/check-doc-coverage.py %S/../../.. | FileCheck %s
+# CHECK: constructs, {{[0-9]+}} options, {{[0-9]+}} backends, {{[0-9]+}} reason codes checked, 0 missing
