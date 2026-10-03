@@ -1162,10 +1162,13 @@ void verify::expandInductivePredicates(
   for (auto &Fn : Generated)
     Functions.push_back(std::move(Fn));
   // A proof sees an inductive predicate through its unfolding, unless it
-  // reveals the definition.
+  // reveals the definition; reveal_with_fuel asks for deeper unfolding.
   for (const auto &Predicate : Functions)
     if (Predicate->Unfolding)
-      for (auto &Fn : Functions)
+      for (auto &Fn : Functions) {
+        if (Fn->SpecFuel.count(Predicate->Identity))
+          Fn->RevealedSpecs.erase(Predicate->Identity);
         if (!Fn->RevealedSpecs.count(Predicate->Identity))
           Fn->HiddenSpecs.insert(Predicate->Identity);
+      }
 }
