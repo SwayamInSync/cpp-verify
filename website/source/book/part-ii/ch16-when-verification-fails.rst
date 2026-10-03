@@ -75,6 +75,88 @@ true on the cycle, so no unfolding settles it, and a postcondition
 query or a fact the verifier gave it, which is a solver fault and says
 nothing about your program.
 
+Every reason code at a glance
+-----------------------------
+
+Every result that is not a proof carries one stable reason code (text
+``[reason=...]``, JSON ``"reason"``). What it means and what to do:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Reason
+     - Meaning, and what to do
+   * - ``counterexample``
+     - A failure: the counterexample holds under the true definitions.
+       Fix the code or the contract.
+   * - ``counterexample.unchecked``
+     - The solver found a model the checker could not confirm within its
+       limits (``--certify-timeout`` among them). Bound the inputs, or raise
+       the limit.
+   * - ``spec.fuel``
+     - Every counterexample relies on a recursive spec or an inductive
+       predicate beyond what unfolding settles. Raise ``reveal_with_fuel``,
+       bound the argument, or prove the property by induction (a lemma, or
+       a postcondition ``!result || Q`` on a predicate).
+   * - ``spec.hidden``
+     - The proof needs a definition that is hidden (``hide``, or a spec of
+       the function's cluster at an equal measure). Reveal it, or give it a
+       lower measure.
+   * - ``spec.termination``
+     - The proof relies on a spec whose termination check did not pass.
+   * - ``spec.post``
+     - The proof relies on a spec's postcondition that is not established.
+   * - ``spec.reads``
+     - The proof relies on a spec's ``reads`` frame that is not established.
+   * - ``spec.inductive``
+     - The proof relies on an inductive predicate whose rules did not all
+       hold.
+   * - ``proof.cycle``
+     - Proofs rest on each other without a shared measure. Give them
+       ``decreases`` clauses of one length (chapter 13).
+   * - ``callee.contract``
+     - The proof relies on a callee contract nothing establishes. Fix the
+       callee, or mark a library declaration ``[[cppverify::trusted]]``.
+   * - ``decreases.missing``
+     - A loop has no termination measure. Add ``decreases``, or
+       ``decreases(*)``.
+   * - ``construct.unsupported``
+     - The failed obligation stands for a construct the verifier does not
+       model; the message names it.
+   * - ``solver.timeout``
+     - A query, or the function's whole budget, ran out of time. Raise
+       ``--timeout`` or ``--function-timeout``, or help the proof.
+   * - ``solver.unknown``
+     - The solver gave up without a verdict, or was stopped because the
+       other solver of ``--backend=race`` settled the function.
+   * - ``solver.resource-limit``
+     - ``--solver-rlimit`` was reached.
+   * - ``solver.unavailable``
+     - The solver (cvc5) is not installed; pass ``--cvc5-path``.
+   * - ``solver.invocation-failed``, ``solver.malformed-output``
+     - The cvc5 process could not run or printed something unexpected.
+   * - ``backend.inconsistent-results``
+     - Two solvers, or two queries, gave opposite decisive answers. Report
+       it: it is a fault in a solver or in the verifier.
+   * - ``backend.invalid-result``
+     - A solver's answer contradicts the query or a fact it was given: a
+       solver fault, which says nothing about the program.
+   * - ``bmc.incomplete-bound``
+     - ``BoundedSafe``: safe within ``--unroll`` iterations, but a loop can
+       run longer. Raise the bound, or prove the loop with an invariant.
+   * - ``query.size-limit``
+     - The query is larger than ``--max-query-nodes``.
+   * - ``logic.unsupported``
+     - The backend does not support a feature the query needs (Lean and
+       collections, for example).
+   * - ``encoding.failed``, ``obligation.invalid``, ``query.missing``
+     - The verifier could not build or encode the query. Report it.
+   * - ``lean.export-failed``
+     - Lean export or certification could not complete.
+   * - ``cache.corrupt``, ``cache.io-failed``
+     - The proof cache could not be read; the proof is not taken from it.
+
 Other results that are not counterexamples:
 
 - ``solver.timeout`` with ``the function's time (--function-timeout) is
