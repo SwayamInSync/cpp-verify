@@ -81,6 +81,36 @@ envLookup(const std::map<std::string, std::unique_ptr<VExpr>> &Env,
   return cloneVExpr(&V);
 }
 
+/// The names \p E mentions, as variables or binders.
+static void namesIn(const VExpr *E, std::set<std::string> &Out) {
+  if (!E)
+    return;
+  if (E->K == VExpr::Var)
+    Out.insert(static_cast<const VVarExpr *>(E)->Name);
+  if (E->K == VExpr::Forall || E->K == VExpr::Exists)
+    Out.insert(static_cast<const VQuantifiedExpr *>(E)->Binder);
+  forEachVExprChild(E, [&](const VExpr *Child) { namesIn(Child, Out); });
+}
+
+/// Substituting \p Values under quantifier \p Q: when a value mentions the
+/// binder's name, the binder is renamed apart (into \p Values, which
+/// receives its new name), since the value would be captured otherwise.
+static std::string
+binderApart(const VQuantifiedExpr &Q,
+            std::map<std::string, std::unique_ptr<VExpr>> &Values) {
+  std::set<std::string> Taken;
+  for (const auto &[Name, Value] : Values)
+    namesIn(Value.get(), Taken);
+  if (!Taken.count(Q.Binder))
+    return Q.Binder;
+  namesIn(Q.Body.get(), Taken);
+  std::string Binder = Q.Binder;
+  for (unsigned N = 1; Taken.count(Binder); ++N)
+    Binder = Q.Binder + "." + std::to_string(N);
+  Values[Q.Binder] = std::make_unique<VVarExpr>(Binder, Q.BinderType, Q.Loc);
+  return Binder;
+}
+
 class SpecInlinerImpl {
   const FunctionMap &FnMap;
   std::map<std::string, unsigned> Fuel;
@@ -598,15 +628,16 @@ public:
       auto Hi = Q->Hi ? evalExpr(Q->Hi.get(), Env) : nullptr;
       auto BodyEnv = cloneEnv(Env);
       BodyEnv.erase(Q->Binder);
+      const std::string Binder = binderApart(*Q, BodyEnv);
       auto Body = evalExpr(Q->Body.get(), BodyEnv);
       if ((Q->Lo && (!Lo || !Hi)) || !Body)
         return nullptr;
       if (E->K == VExpr::Forall)
         return std::unique_ptr<VExpr>(std::make_unique<VForallExpr>(
-            Q->Binder, std::move(Lo), std::move(Hi), std::move(Body), Q->Loc,
+            Binder, std::move(Lo), std::move(Hi), std::move(Body), Q->Loc,
             Q->BinderType));
       return std::unique_ptr<VExpr>(std::make_unique<VExistsExpr>(
-          Q->Binder, std::move(Lo), std::move(Hi), std::move(Body), Q->Loc,
+          Binder, std::move(Lo), std::move(Hi), std::move(Body), Q->Loc,
           Q->BinderType));
     }
     case VExpr::Load: {
@@ -1176,15 +1207,16 @@ std::unique_ptr<VExpr> verify::substParamsInExpr(
     for (const auto &[Name, Value] : Map)
       if (Name != Q->Binder)
         BodyMap[Name] = cloneVExpr(Value.get());
+    const std::string Binder = binderApart(*Q, BodyMap);
     auto Lo = substParamsInExpr(Q->Lo.get(), Map);
     auto Hi = substParamsInExpr(Q->Hi.get(), Map);
     auto Body = substParamsInExpr(Q->Body.get(), BodyMap);
     if (E->K == VExpr::Forall)
-      return std::make_unique<VForallExpr>(Q->Binder, std::move(Lo),
-                                           std::move(Hi), std::move(Body),
-                                           Q->Loc, Q->BinderType);
-    return std::make_unique<VExistsExpr>(Q->Binder, std::move(Lo),
-                                         std::move(Hi), std::move(Body), Q->Loc,
+      return std::make_unique<VForallExpr>(Binder, std::move(Lo), std::move(Hi),
+                                           std::move(Body), Q->Loc,
+                                           Q->BinderType);
+    return std::make_unique<VExistsExpr>(Binder, std::move(Lo), std::move(Hi),
+                                         std::move(Body), Q->Loc,
                                          Q->BinderType);
   }
   case VExpr::HeapStore: {
