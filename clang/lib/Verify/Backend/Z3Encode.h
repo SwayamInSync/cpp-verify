@@ -54,6 +54,7 @@ class Z3Encoder {
   bool EncodingFailed = false;
   std::string EncodingError;
   std::chrono::steady_clock::time_point QueryStart;
+  std::optional<unsigned> CertifyTimeoutMs;
   bool QuantifiedQuery = false;
   z3::solver freshSolver();
   /// \p S.check() within \p Ms milliseconds (0: no limit), unknown at once
@@ -65,6 +66,15 @@ class Z3Encoder {
   std::condition_variable CheckChanged;
   bool CheckFinished = true;
   bool Stopped = false;
+  /// The encoder running a pass of this one's query, which an interrupt
+  /// reaches too.
+  Z3Encoder *Pass = nullptr;
+  /// Runs \p Inner as a pass of this encoder while it lives.
+  struct PassScope {
+    Z3Encoder &Outer;
+    PassScope(Z3Encoder &Outer, Z3Encoder &Inner);
+    ~PassScope();
+  };
   /// Index, membership, and split facts for sequences, and extensionality
   /// instances.
   bool SequenceFacts = true;
@@ -259,8 +269,15 @@ class Z3Encoder {
 public:
   Z3Encoder();
   void setTimeoutMs(unsigned Ms) { TimeoutMs = Ms; }
+  /// The time one counterexample check may take; unset, half the timeout;
+  /// 0, the query's own time.
+  void setCertifyTimeoutMs(std::optional<unsigned> Ms) {
+    CertifyTimeoutMs = Ms;
+  }
   /// Stops the check running in this encoder, from any thread.
   void interrupt();
+  /// Lets checks run again after interrupt().
+  void resume();
   /// Without SequenceFacts the query is in the solver's plain sequence
   /// theory, which finds models faster and proofs slower.
   void setSequenceFacts(bool Value) { SequenceFacts = Value; }
@@ -285,6 +302,7 @@ class Z3VerifyBackend : public VerifyBackend {
   Z3Encoder Enc;
   /// The timeout of the module being verified.
   unsigned TimeoutMs;
+  std::optional<unsigned> CertifyTimeoutMs;
   unsigned SolverTimeoutMs;
   std::optional<unsigned> CollectionTimeoutMs;
   unsigned ResourceLimit;
@@ -303,7 +321,8 @@ class Z3VerifyBackend : public VerifyBackend {
   unsigned budget(unsigned Ms) const { return withinDeadline(Ms, Deadline); }
   /// The function's time is spent, so no further query starts.
   bool spent() const {
-    return Deadline && std::chrono::steady_clock::now() >= *Deadline;
+    return Cancellation.Cancelled ||
+           (Deadline && std::chrono::steady_clock::now() >= *Deadline);
   }
 
   /// Strategies solving one module at once: whichever settles it first
@@ -315,7 +334,11 @@ class Z3VerifyBackend : public VerifyBackend {
     void enter(Z3Encoder &Encoder);
     void leave(Z3Encoder &Encoder);
     void cancel();
+    /// Lets the encoders still entered run again.
+    void reset();
   };
+  /// Every encoder this backend runs, which cancel() stops.
+  Race Cancellation;
 
   VerifyResult verifyModuleDirect(const ObligationModule &Module);
   /// Whether a query over \p Module is also solved without sequence facts.
@@ -349,6 +372,8 @@ public:
   setDeadline(std::optional<std::chrono::steady_clock::time_point> D) override {
     Deadline = D;
   }
+  void cancel() override { Cancellation.cancel(); }
+  void resume() override { Cancellation.reset(); }
   /// A proof of \p Item, or of the whole module, by strong induction on one
   /// of its integer variables, if one is found.
   std::optional<VerifyResult>
