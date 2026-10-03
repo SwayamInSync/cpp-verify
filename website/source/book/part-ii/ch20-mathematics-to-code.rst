@@ -41,6 +41,8 @@ and the induction a recursive call at a smaller ``decreases`` measure, which
 is the induction hypothesis. ``calc`` writes the chain of equalities as it
 stands on paper, with the hypothesis cited at the step that uses it:
 
+.. cppverify-example: label S
+
 .. code-block:: cpp
 
    spec int S(int n)
@@ -69,6 +71,8 @@ A lemma is used by calling it, which makes its postcondition a fact at that
 point. A loop that adds up ``0 + 1 + ... + (n - 1)`` keeps ``s == S(i)`` as
 its invariant. To show that ``s + i`` cannot overflow, it needs the closed
 form at ``i``, so the body calls the lemma there:
+
+.. cppverify-example: with S
 
 .. code-block:: cpp
 
@@ -116,6 +120,8 @@ induction on one variable, or to record why the claim holds.
 
 A lemma's facts last until the end of the function. To use one for a single
 claim only, prove the claim ``by`` it; nothing else from the block remains:
+
+.. cppverify-example: with S
 
 .. code-block:: cpp
 
@@ -196,13 +202,53 @@ conditions:
 
 Writing ``x <= lo`` for the first case makes two cases overlap at
 ``x == lo``, and writing ``lo < x`` for the second leaves ``x == lo`` in no
-case. Both are reported with the input that shows it:
+case:
+
+.. code-block:: cpp
+
+   int clamp_overlap(int x, int lo, int hi)
+     pre(lo <= hi)
+     behavior(below, x <= lo)
+       post(result == lo)
+     behavior(inside, lo <= x && x <= hi)
+       post(result == x)
+     behavior(above, x > hi)
+       post(result == hi)
+     complete_behaviors
+     disjoint_behaviors
+   {
+     if (x < lo)
+       return lo;
+     if (x > hi)
+       return hi;
+     return x;
+   }
+
+   int clamp_gap(int x, int lo, int hi)
+     pre(lo <= hi)
+     behavior(below, x < lo)
+       post(result == lo)
+     behavior(inside, lo < x && x <= hi)
+       post(result == x)
+     behavior(above, x > hi)
+       post(result == hi)
+     complete_behaviors
+     disjoint_behaviors
+   {
+     if (x < lo)
+       return lo;
+     if (x > hi)
+       return hi;
+     return x;
+   }
+
+Both are reported with the input that shows it:
 
 .. code-block:: text
 
    error: verification failed: clamp_overlap [...::assertion@10:3]
      (counterexample: hi = 0, lo = 0, x = 0)
-   error: verification failed: clamp_gap [...::assertion@9:3]
+   error: verification failed: clamp_gap [...::assertion@27:3]
      (counterexample: hi = 0, lo = 0, x = 0)
 
 Universal statements: sorted arrays
@@ -212,6 +258,8 @@ An array is sorted when :math:`a_i \le a_j` for all :math:`i \le j`. It is
 enough to check neighbors: **Claim:** if :math:`a_k \le a_{k+1}` for every
 :math:`k`, then :math:`a_i \le a_j` whenever :math:`i \le j`. **Proof** by
 induction on :math:`j - i`: :math:`a_i \le a_{j-1} \le a_j`.
+
+.. cppverify-example: label sortedpair
 
 .. code-block:: cpp
 
@@ -232,6 +280,8 @@ The lemma's parameters ``i`` and ``j`` play the role of "for all
 :math:`i \le j`": a caller instantiates it where it needs it. Binary search
 needs the pairwise form at every probe, so it is easiest to assume that form
 directly. The invariant says what the search has ruled out:
+
+.. cppverify-example: with sortedpair
 
 .. code-block:: cpp
 
@@ -313,6 +363,8 @@ Existence and choice
 **Claim:** a nonempty finite array has a largest element. The constructive
 proof is the loop that finds it:
 
+.. cppverify-example: label argmax
+
 .. code-block:: cpp
 
    int argmax(const int *a, int n)
@@ -335,6 +387,9 @@ proof is the loop that finds it:
 A specification may need "the" maximum without an algorithm. ``choose``
 names some index that has the property, Hilbert's :math:`\varepsilon`:
 
+.. cppverify-example: with argmax
+.. cppverify-example: label maxes
+
 .. code-block:: cpp
 
    spec int some_max(const int *a, int n)
@@ -356,6 +411,8 @@ returned a witness, so a maximum exists, and therefore ``some_max`` is one.
 Two maxima have equal values, so ``a[m] == a[some_max(a, n)]``. Which index
 ``choose`` picks is not known, though, and a claim that depends on it
 fails:
+
+.. cppverify-example: with argmax maxes
 
 .. code-block:: cpp
 
@@ -386,6 +443,8 @@ states what the loop computes:
 
    \mathrm{total}(\langle\rangle) = 0, \qquad
    \mathrm{total}(s \cdot x) = \mathrm{total}(s) + x
+
+.. cppverify-example: label total
 
 .. code-block:: cpp
 
@@ -460,6 +519,8 @@ membership and an index:
 Sequence induction follows the shape of the definition. **Claim:**
 :math:`\mathrm{total}(s \cdot t) = \mathrm{total}(s) + \mathrm{total}(t)`,
 by induction on the length of :math:`t`, removing its last element:
+
+.. cppverify-example: with total
 
 .. code-block:: cpp
 
