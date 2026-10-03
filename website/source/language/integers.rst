@@ -92,19 +92,37 @@ Core checks include:
      - value is in the type's range
 
 **Unsigned arithmetic is never flagged** — C++ defines it as modular wraparound,
-so the machine operation wraps modulo ``2^N``.
+so the machine operation wraps modulo ``2^N``. Contract arithmetic is
+mathematical, though: ``a + b`` in a contract is the exact sum, so a
+contract that means the wrapped value says so with ``% 2^N``.
 
 .. code-block:: cpp
 
-   int abs(int x) post(result >= 0)
+   int abs_unguarded(int x) post(result >= 0)
    { return x < 0 ? -x : x; }
-   // cpp-verify abs.cpp -> FAILS: counterexample x = INT_MIN
 
-   int abs(int x) pre(x > -2147483648) post(result >= 0)
-   { return x < 0 ? -x : x; }      // the precondition the tool asked for -> verifies
+   int abs_guarded(int x) pre(x > -2147483648) post(result >= 0)
+   { return x < 0 ? -x : x; }
 
-   unsigned mix(unsigned a, unsigned b) post(result == a + b)
-   { return a + b; }               // verifies: unsigned wraparound is defined
+   unsigned mix(unsigned a, unsigned b) post(result == (a + b) % 4294967296)
+   { return a + b; }
+
+   unsigned mix_wrong(unsigned a, unsigned b) post(result == a + b)
+   { return a + b; }
+
+.. code-block:: text
+
+   abs.cpp:2:3: error: verification failed: abs_unguarded [...::overflow@2:3]
+     (counterexample: x [type=i32] = -2147483648)
+   Verified: abs_guarded [backend=z3]
+   Verified: mix [backend=z3]
+   abs.cpp:10:56: error: verification failed: mix_wrong [...::postcondition@10:56]
+     (counterexample: result [type=u32] = 0, a [type=u32] = 1, ...)
+
+Negating ``INT_MIN`` overflows, so ``abs_unguarded`` fails at the overflow
+check with that input, and the precondition the tool asks for makes
+``abs_guarded`` verify. ``mix_wrong`` claims the exact sum, which the
+wrapped result is not when the sum reaches ``2^32``.
 
 Memory bounds
 -------------
@@ -156,6 +174,8 @@ A mathematical value never wraps into a C++ type:
   ``(int)total(x)``, and a bitwise operator applied to it convert it to a
   machine type. The conversion is defined only when the value fits, and it
   carries an ``overflow`` obligation instead of wrapping:
+
+.. cppverify-example: fails too_big element
 
 .. code-block:: cpp
 
