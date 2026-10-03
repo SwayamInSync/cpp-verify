@@ -16,6 +16,8 @@ What testing cannot guarantee
 
 Consider ``int abs(int x)`` that should return a non-negative value. Tests might check:
 
+.. cppverify-example: fragment
+
 .. code-block:: cpp
 
    assert(abs(0) == 0);
