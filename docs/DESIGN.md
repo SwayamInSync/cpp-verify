@@ -1480,7 +1480,11 @@ namespace-separated Z3 component and never skips cvc5. BMC remains Z3-backed,
 and bounded archives must replay through the BMC aggregator.
 
 BMC remains a VCR loop transformation followed by the shared passive,
-obligation, and Z3 path. Source verification treats `--unroll=N` as a maximum
+obligation, and Z3 path. A spec's own checks (termination, postcondition,
+induction, reads, and their proof blocks) contain no loops, so under BMC
+they are solved exactly as on the default Z3 path and reported as `z3`;
+their archived modules keep the bound, so a BMC archive replays as before.
+Source verification treats `--unroll=N` as a maximum
 and explores bounds `0..N` in order. A failed safety query terminates as
 `Failed`; complete unwinding terminates as `Verified`; an unresolved query
 terminates fail-closed; and a failed unwinding query at `N` is
