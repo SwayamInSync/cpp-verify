@@ -343,6 +343,13 @@ struct VFunction {
   bool ObjectModel = false;
   /// The other spec functions of a mutually recursive cycle.
   std::set<std::string> RecursionGroup;
+  /// The other specs and proof functions this one reaches and is reached
+  /// from through calls and applications in bodies, contracts, and proof
+  /// blocks, when all of them share a measure of one length (Dafny's
+  /// cluster): a call to one lowers the measure, and a postcondition of one
+  /// is assumed only where the measure is lower, so their contracts and
+  /// postconditions are proved together by well-founded induction.
+  std::set<std::string> Cluster;
   /// Every spec function its contracts and body reach, transitively.
   std::set<std::string> SpecDependencies;
   std::vector<VReadRange> Reads;
