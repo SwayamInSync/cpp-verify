@@ -237,6 +237,7 @@ VFunction =
   inductiveRuleOf: string              // a generated proof of that predicate's rules
   factsWithheld: {identity}            // specs whose facts this proof may not assume
   totalExpressions: bool               // no definedness obligations, as in specs
+  clauseProofs: [(post|decreases|reads, [VStmt])]  // a spec's proof blocks
 ```
 
 - Parameter ownership/borrowing is not yet represented by a `ParamMode` field.
@@ -900,9 +901,36 @@ In every spec check module (termination, post, induction), the applications
 a postcondition makes receive facts as the body's do
 (`addPostApplicationFacts`), quantified like the application, one level
 deep: the spec itself and its recursion cycle get none (they are opaque or
-covered by the induction hypothesis), and, in a step's induction, the
-predicates of its group give their unfoldings only, so a lemma such as
-transitivity can mention its own predicate without assuming itself.
+covered by the induction hypothesis), and, in a step's induction and in a
+predicate's own post module, the predicates of its group give their
+unfoldings only, so a lemma such as transitivity can mention its own
+predicate without assuming itself. A step's bare termination check assumes
+nothing of its cycle's postconditions, which are proved after it.
+
+**Proof blocks of spec clauses:** `post(...) by { ... }`, and the same
+after `decreases` and `reads`, on a spec definition. The parser caches the
+block's tokens (`PendingClauseProofs`) and parses each, once
+`ActOnStartOfFunctionDef` has put the parameters in scope, as a compound
+statement before the body (`post` blocks with `result` enabled), into
+`FunctionContractInfo::ClauseProofs`; a block on another clause, on a
+non-spec, or on a declaration is an error. The converter lowers it as ghost
+code in the spec's mathematical mode into `VFunction::ClauseProofs`, so the
+ghost rules apply (no return, store, or assignment but to its own locals).
+An inductive predicate's `post` and `reads` blocks move to its step.
+`withClauseProofs` (`Transform/SpecInline.cpp`) turns a check with blocks
+into one generated proof function, `TotalExpressions`, with the spec's
+parameters and visibility: the check's assumptions as `assume` statements,
+the blocks, then the check's obligations as `assert` statements of their
+kinds (an `unsupported` obligation is kept as it is), passivized normally,
+with the spec, its cycle, and its group's predicates in `FactsWithheld`.
+In a `post` block, `result` is replaced by the body's value (its returns as
+nested conditionals); each application of the spec's recursion cycle in
+the passivized program assumes the callee's postcondition under the
+measure's decrease (the induction hypothesis at the block's arguments).
+The driver applies it to the post module (`post` blocks), the termination
+module (`decreases` and, unless a step's bare check, `post` blocks), a
+step's induction module (`post`), and the reads module (`reads`), and
+records the proof functions the blocks call as dependencies of that check.
 
 When neither the distinguished values nor Presburger arithmetic decide an
 unbounded quantifier, the certifier tries binder values `0, -1, 1, -2, ...`
@@ -1102,6 +1130,22 @@ pure JSON stream.
      `Unresolved` with reason `callee.contract`;
    - `[trusts=...]` lists the trusted contracts a proof uses, closed
      transitively over verified callees (JSON `"trusts"`);
+   - one fixpoint settles the reasons: a verdict relying on a spec whose
+     termination, reads, or postcondition is not established, on an
+     inductive predicate whose rule proofs are not, or on a callee contract
+     that is not, is demoted (`spec.termination`, `spec.reads`,
+     `spec.post`, `spec.inductive`, `callee.contract`), and a demoted check
+     of a spec stops establishing its facts (`SpecReliance::Establishes`), a
+     demoted function its contract, until nothing changes;
+   - a least fixpoint then rejects circles: starting from no established
+     fact, a verdict is sound once every fact it needs is, and a fact once
+     every verdict producing it is sound. It needs its callees' contracts
+     and its proof blocks' callees, the definitions and frames of the specs
+     it mentions, and the postconditions and unfoldings its module assumes
+     (`PassiveProgram`/`ObligationModule::AssumedPosts` and
+     `AssumedUnfoldings`, recorded where the facts are added, never
+     archived), except within a recursion cycle and for the spec it checks.
+     A verdict left unsound is `Unresolved` with reason `proof.cycle`;
    - every `Verified` result gets the vacuity checks, small queries over the
      same passive program: `false` at the end of the function (the whole
      proof is vacuous), each behavior's `pre && assumes` (a behavior that
