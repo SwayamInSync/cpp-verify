@@ -148,8 +148,9 @@ struct VerifyResult {
   /// For a counterexample: the specs whose postconditions decided a value
   /// its check needed, so that it rests on them.
   std::set<std::string> CertifiedWith;
-  /// Unresolved because the goal needs an inductive predicate false where
-  /// only induction shows it: unfolding further cannot settle it.
+  /// Unresolved where unfolding further cannot settle the goal (an inductive
+  /// predicate false where its derivations never end, a value too deep to
+  /// evaluate): only induction can.
   bool InductionOnly = false;
   /// With --profile-quantifiers, the busiest quantifiers of an unresolved
   /// query, most instantiated first.
