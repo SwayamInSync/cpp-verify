@@ -42,6 +42,8 @@ Default initialization matters
 ``new int`` starts an ``int`` lifetime but leaves its value indeterminate.
 ``new int()`` value-initializes it to zero. CppVerify keeps the distinction:
 
+.. cppverify-example: fails bad
+
 .. code-block:: cpp
 
    int good(int value) post(result == value) {
@@ -247,6 +249,8 @@ Liveness heaps merge across ``if`` statements in the same way as ordinary SSA
 variables. A second ``delete`` is rejected only on paths where the first one
 executed, and a dereference must be live and initialized on every path that can
 reach it.
+
+.. cppverify-example: fails maybe_bad
 
 .. code-block:: cpp
 
