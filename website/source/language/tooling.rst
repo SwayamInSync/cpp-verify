@@ -10,6 +10,7 @@ Standalone verifier
    cpp-verify --backend=z3 file.cpp
    cpp-verify --backend=cvc5 file.cpp
    cpp-verify --backend=portfolio file.cpp
+   cpp-verify --backend=race file.cpp
    cpp-verify --backend=bmc --unroll=3 file.cpp
    cpp-verify --backend=lean --lean-out=goal.lean file.cpp
    cpp-verify --backend=lean --lean-project=proof file.cpp
@@ -49,6 +50,14 @@ Backends
        are ``Failed``. A timeout, missing solver, malformed output, unsupported
        query, or opposite verdict is ``Unresolved``; decisive disagreement uses
        reason ``backend.inconsistent-results``.
+   * - ``--backend=race``
+     - Run Z3 and cvc5 at once on each function, as Frama-C's prover list:
+       the first proof or certified counterexample stands and stops the
+       other solver. Where neither settles the function, the obligations
+       each proved are joined, and the function is ``Verified`` when they
+       cover all of them (``[backend=z3+cvc5]``). The tag names the solver
+       that settled it. Unlike ``portfolio`` it never waits for agreement:
+       every proof and every counterexample is already sound on its own.
    * - ``--cvc5-path=FILE``
      - Use this cvc5 executable instead of searching ``PATH``. cvc5 is an
        optional system dependency and is not vendored.
@@ -56,7 +65,10 @@ Backends
      - Incrementally unroll loops from zero through ``--unroll=N`` (default 10),
        stopping at the first counterexample, complete unwinding proof,
        unresolved query, or maximum frontier. A spec's own checks have no
-       loops and run as with Z3 (reported as ``z3``).
+       loops and run as with Z3 (reported as ``z3``). As Kani reports an
+       unreachable check, a bounded result that no execution reaches is
+       ``[vacuous]`` with a warning: an unsatisfiable precondition, or
+       ``no execution finishes within N loop iterations``.
    * - ``--backend=lean``
      - Write an unchecked Lean 4 scratch-pad to ``--lean-out``. This path does
        not run Z3 and reports ``Exported``, never ``Verified``. Multi-function
@@ -110,6 +122,13 @@ Backends
    * - ``--timeout=N``
      - Per-query solver timeout in milliseconds (default 30000; ``0`` disables).
        A query that exceeds it is reported as unresolved instead of hanging.
+   * - ``--certify-timeout=N``
+     - The milliseconds checking one counterexample against the true
+       definitions may take (default half of the query timeout; ``0`` lets
+       it take the query's own time). A slow check leaves the rest of the
+       query's time to other models and later stages; when it is reached the
+       reason says so (``the time one counterexample check may take (N ms,
+       --certify-timeout) was spent``).
    * - ``--collection-timeout=N``
      - Per-query timeout for a function whose queries involve sequences,
        sets, multisets, or maps, whose theories need more search (default
