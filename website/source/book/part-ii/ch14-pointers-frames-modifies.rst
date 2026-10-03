@@ -32,6 +32,8 @@ Scalar ``T&`` and ``const T&`` parameters use the same addressable heap model.
 The binding itself is immutable; a value use loads its referent and assignment
 stores through the binding:
 
+.. cppverify-example: label swap
+
 .. code-block:: cpp
 
    void swap_values(int& left, int& right)
@@ -51,6 +53,8 @@ object-range disjoint unless ``aliases(left, right)`` is present.
 Reference formals can be forwarded from another reference, bound to a direct
 dereference such as ``set_value(*p, value)``, or passed an initialized ordinary
 scalar local. Local references may bind those same direct forms and chain:
+
+.. cppverify-example: with swap
 
 .. code-block:: cpp
 
@@ -110,6 +114,8 @@ effect; an unframed caller may still make the call.
 To state a property of a whole range, put a **bounded quantifier** in the loop
 invariant and the postcondition — the half-open bound ``[lo, hi)`` is the trigger.
 A buffer-zeroing loop proves its full postcondition this way:
+
+.. cppverify-example: label zero
 
 .. code-block:: cpp
 
@@ -245,6 +251,8 @@ origin and ``0 <= offset``, ``0 <= length``, and
 chains preserve the heap, while exact-cell effects such as
 ``modifies(q[0])`` update only the corresponding caller cell, and a range or
 a whole-slice ``modifies(*q)`` updates only the slice:
+
+.. cppverify-example: with zero
 
 .. code-block:: cpp
 
