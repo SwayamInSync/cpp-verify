@@ -555,6 +555,7 @@ where a finite derivation shows it.
 .. code-block:: text
 
    Verified: spec axiom: edge
+   Verified: inductive predicate: reach
    Verified: spec post: reach
    Verified: three_reaches_twelve [backend=z3]
    Verified: no_way_back [backend=z3]
@@ -571,9 +572,33 @@ holds with no step at all.
 
 The predicate may occur in its body only positively (as a conjunct, a
 disjunct, a branch, or under ``exists`` or a bounded ``forall``), which makes
-the least predicate exist and equal its body. A postcondition that does not
-hold of every derivation fails with ``spec post by induction failed`` and a
-counterexample giving the height of a derivation.
+the least predicate exist and equal its body. That equality is what the
+proofs above use, and it is proved, not assumed: for each predicate the
+verifier generates proofs of three rules, by induction on the height of
+derivations where needed, and ``Verified: inductive predicate: reach`` says
+they hold. Monotonicity says that a derivation of some height is one of
+every greater height; case analysis, that ``reach(a, b)`` implies its body;
+introduction, that the body implies ``reach(a, b)``. If one fails, the
+predicate and every proof that uses it are ``Unresolved`` with reason
+``spec.inductive``. A postcondition that does not hold of every derivation
+fails with ``spec post by induction failed`` and a counterexample giving the
+height of a derivation.
+
+Predicates that apply each other are defined together, and a predicate may
+read memory:
+
+.. code-block:: cpp
+
+   spec bool ev(int n);
+   spec bool od(int n) inductive { return n == 1 || ev(n - 1); }
+   spec bool ev(int n) inductive { return n == 0 || od(n - 1); }
+
+   struct node { int value; node *next; };
+
+   // q is reached from p by following next.
+   spec bool segment(const node *p, const node *q) inductive {
+     return p == q || (p != nullptr && segment(p->next, q));
+   }
 
 ``constexpr`` as spec
 ---------------------
