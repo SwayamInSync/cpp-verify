@@ -14,6 +14,7 @@ All contract syntax is enabled with `-fverify-contracts`. Without this flag, the
 | `aliases(p, q)` | After function `)` | Opts out of implicit non-aliasing for a supported same-pointee pointer/reference address pair |
 | `recommends(expr)` | After function `)` (spec only) | Soft precondition for spec functions; reported on verification failure |
 | `inductive` | After function `)` (spec returning `bool` only) | The least predicate the body defines: true where a finite derivation shows it |
+| `post(...) by { ... }`, `decreases(...) by { ... }`, `reads(...) by { ... }` | After a spec's clause | Proof steps for that clause's check (lemma calls, assertions) |
 | `behavior(name, assumes)` | After function `)`, followed by its `pre`/`post` | A case of the contract (ACSL behavior) |
 | `complete_behaviors` / `disjoint_behaviors` | After the behaviors | Some behavior / at most one behavior applies to every admitted input |
 | `invariant(expr)` | After a `while`/`for` condition or a `do` loop's trailing condition | Loop invariant |
@@ -125,6 +126,16 @@ execution reaches, a behavior whose assumption contradicts the preconditions
 (its postconditions are never checked; warning only), and a trusted call
 whose contract contradicts the state of the call. Unreachable code alone
 is not flagged.
+
+A proof never rests on itself. Every fact a proof assumes (a callee's
+contract, a spec's definition, frame, or postcondition, an inductive
+predicate's unfolding) is established only by verdicts whose own facts are
+established, starting from none. Proofs may rely on each other only through
+a checked measure: the functions of one recursion cycle, and a spec's
+induction hypothesis at a lower measure. Anything else is a circle, such as
+a spec's proof block that calls a lemma proved from that spec's
+postcondition, and every verdict on it is `Unresolved` with reason
+`proof.cycle`.
 
 ## Loop Contracts: invariant / decreases
 
@@ -303,6 +314,31 @@ spec int fibo(int n)
   measure is lower) and assumed at every application. A failed post demotes
   the proofs that relied on it (`spec.post`, or `spec.termination` for a
   recursive spec).
+- Any `post`, `decreases`, or `reads` clause of a spec definition may be
+  followed by a proof block, `post(Q) by { ... }`: ghost code that runs in
+  that clause's check, after the facts the check assumes and before its
+  obligations, as a proof function's body runs before its postcondition.
+  It is where the solver gets the step it cannot find, such as a lemma at
+  a chosen argument:
+
+```cpp
+spec int area(int a, int b)
+  post(a < 0 || b < 0 || result == mul(b, a)) by { mul_is(a, b); mul_is(b, a); }
+{
+  return mul(a, b);
+}
+```
+
+  In a post block, `result` is the value the body returns. An application
+  of the spec (or of its recursion cycle) in a block assumes its
+  postconditions where the measure is lower, which states the induction
+  hypothesis at an argument of the user's choice. The block is ghost code:
+  it may declare and assign its own locals, branch, assert, and call proof
+  functions (whose preconditions it must establish), but not return, write
+  memory, or assign a parameter. Its facts reach every obligation of the
+  check. A block belongs to the definition, not to a declaration, and only
+  a spec's clauses take one: other functions prove their contracts in their
+  bodies.
 - May declare `when(c)`: the body defines the spec only where `c` holds,
   termination is checked there, and elsewhere its value is an uninterpreted
   function of its arguments. A post holds within the domain.
@@ -373,7 +409,10 @@ spec bool reach(int a, int b)
   premise (an application at a lower height) may assume it and is itself a
   derivation of its predicate. It then holds at every application of `P`. A
   failure is reported as `spec post by induction failed: P`, and proofs
-  that rely on it are `spec.post`.
+  that rely on it are `spec.post`. A proof block on it,
+  `post(!result || Q) by { ... }`, is the induction step: it runs for a
+  derivation of `x` whose premises satisfy `Q`, and in it `P` is the
+  predicate itself (a premise is a derivation of it).
 - `Q` may apply `P` and the predicates defined with it, as in transitivity:
   `post(!result || forall(c, !reach(b, c) || reach(a, c)))`. There they are
   seen through their unfoldings, which rest on the proved rules, never
@@ -1057,6 +1096,11 @@ int safe_fib(int n) pre(...) post(result == fibo(n)) {
   so its frames are not facts; `spec.post`: it relies on a spec whose
   postcondition is not established; `spec.inductive`: it relies on the
   unfolding of an inductive predicate whose rules are not proved;
+  `proof.cycle`: it relies on facts whose own proofs rely on it, as when a
+  spec's proof block calls a lemma that is proved from that spec's
+  postcondition; only recursion through a checked measure (a function's
+  recursion cycle, a spec's induction hypothesis) may make proofs rest on
+  each other;
   `callee.contract`: it relies on a
   callee contract that nothing establishes: the callee's verification
   failed, or it has a contract but no definition and no trust mark;
@@ -1359,7 +1403,8 @@ their human message: `counterexample`, `solver.timeout`, `solver.unknown`,
 `backend.invalid-result`, `backend.inconsistent-results`,
 `bmc.incomplete-bound`, `lean.export-failed`, `cache.corrupt`,
 `cache.io-failed`, `spec.fuel`, `spec.hidden`, `spec.termination`,
-`spec.reads`, `spec.post`, `spec.inductive`, and `counterexample.unchecked`.
+`spec.reads`, `spec.post`, `spec.inductive`, `proof.cycle`, and
+`counterexample.unchecked`.
 `--diagnostics-format=json` serializes verification results as versioned JSON
 Lines (`cppverify.diagnostic/1`) for both source verification and archive
 replay.
