@@ -1915,8 +1915,12 @@ public:
           }
           annotateObligationSources(*Simplified);
           VerifyResult Decided = Backend->verify(*Simplified);
+          // Short of a verdict, a finding that no unfolding can settle the
+          // goal is the more precise reason, and ends the search.
           if (Decided.Status != VerifyStatus::Verified &&
-              Decided.Status != VerifyStatus::Failed)
+              Decided.Status != VerifyStatus::Failed &&
+              !(Decided.Status == VerifyStatus::Unresolved &&
+                Decided.InductionOnly && !R.InductionOnly))
             return false;
           Module = std::move(*Simplified);
           R = std::move(Decided);
