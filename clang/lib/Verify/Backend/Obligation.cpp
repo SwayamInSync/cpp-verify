@@ -1790,6 +1790,20 @@ public:
       if (Bound != BoundVars.end()) {
         N->Sort = LogicSort::mathematicalInteger(Variable->Ty.BitWidth,
                                                  Variable->Ty.IsSigned);
+        // A quantified pointer ranges over the addresses, which are the
+        // integers.
+        if (Variable->Ty.Kind == VTypeKind::Ptr) {
+          N->Sort = LogicSort::mathematicalInteger(64, false);
+          auto Null = std::make_unique<VCExpr>(VCExpr::IntLit);
+          Null->Sort = LogicSort::pointer();
+          Null->Loc = E->Loc;
+          auto Address = std::make_unique<VCExpr>(VCExpr::Add);
+          Address->Sort = LogicSort::pointer();
+          Address->Loc = E->Loc;
+          Address->Children.push_back(std::move(Null));
+          Address->Children.push_back(std::move(N));
+          return Address;
+        }
         if (BoundVarModes.at(Name) == VIntMode::Machine)
           return toMode(std::move(N), VIntMode::Machine);
       } else if (HeapVariables.count(N->Name)) {
