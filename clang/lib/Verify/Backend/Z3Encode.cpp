@@ -1702,9 +1702,29 @@ void Z3Encoder::interrupt() {
   {
     std::lock_guard<std::mutex> Guard(CheckLock);
     Stopped = true;
+    if (Pass)
+      Pass->interrupt();
   }
   CheckChanged.notify_all();
   Ctx.interrupt();
+}
+
+void Z3Encoder::resume() {
+  std::lock_guard<std::mutex> Guard(CheckLock);
+  Stopped = false;
+}
+
+Z3Encoder::PassScope::PassScope(Z3Encoder &Outer, Z3Encoder &Inner)
+    : Outer(Outer) {
+  std::lock_guard<std::mutex> Guard(Outer.CheckLock);
+  Outer.Pass = &Inner;
+  if (Outer.Stopped)
+    Inner.interrupt();
+}
+
+Z3Encoder::PassScope::~PassScope() {
+  std::lock_guard<std::mutex> Guard(Outer.CheckLock);
+  Outer.Pass = nullptr;
 }
 
 z3::check_result Z3Encoder::check(z3::solver &S, unsigned Ms) {
@@ -2146,8 +2166,19 @@ CertifyResult Z3Encoder::certify(const ObligationModule &Module,
                                  const LogicExpr &Query,
                                  CandidateModel &Candidate,
                                  const CertifyLimits &Limits) {
-  CertifyResult Result =
-      certifyCounterexample(Module, Query, Candidate, Limits);
+  // One model's check may not spend the whole query: a slow one leaves
+  // time for the others and for the later stages.
+  CertifyLimits Check = Limits;
+  const unsigned CapMs = CertifyTimeoutMs ? *CertifyTimeoutMs : TimeoutMs / 2;
+  if (CapMs > 0) {
+    const auto Cap =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(CapMs);
+    if (!Check.Deadline || Cap < *Check.Deadline) {
+      Check.Deadline = Cap;
+      Check.CheckTimeoutMs = CapMs;
+    }
+  }
+  CertifyResult Result = certifyCounterexample(Module, Query, Candidate, Check);
   std::lock_guard<std::mutex> Guard(CheckLock);
   if (!Stopped)
     return Result;
@@ -2641,6 +2672,8 @@ std::optional<VerifyResult> Z3Encoder::verifyNatively(
   Native.ProofOnly = ProofOnly;
   Native.setIntegerEncoding(IntegerEncoding);
   Native.setResourceLimit(ResourceLimit);
+  Native.setCertifyTimeoutMs(CertifyTimeoutMs);
+  PassScope Scope(*this, Native);
   if (TimeoutMs > 0) {
     const auto Remaining =
         std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -3033,6 +3066,8 @@ VerifyResult Z3Encoder::verifyModule(const ObligationModule &Module,
     Z3Encoder Integers;
     Integers.setIntegerEncoding(MachineIntegerEncoding::Integer);
     Integers.setResourceLimit(ResourceLimit);
+    Integers.setCertifyTimeoutMs(CertifyTimeoutMs);
+    PassScope Scope(*this, Integers);
     Integers.setProofOnly(ProofOnly);
     if (TimeoutMs > 0) {
       const auto Remaining =
@@ -3439,8 +3474,11 @@ Z3VerifyBackend::Z3VerifyBackend(const BackendExecutionOptions &Execution,
       SingleQuery(Execution.SingleQuery),
       ProfileQuantifiers(Execution.ProfileQuantifiers),
       ReuseVerifiedQueries(ReuseVerifiedQueries) {
+  CertifyTimeoutMs = Execution.CertifyTimeoutMs;
+  Cancellation.enter(Enc);
   Enc.setTimeoutMs(TimeoutMs);
   Enc.setResourceLimit(ResourceLimit);
+  Enc.setCertifyTimeoutMs(CertifyTimeoutMs);
   Enc.setIntegerEncoding(IntegerEncoding);
   Enc.setProfileQuantifiers(ProfileQuantifiers);
   if (!Execution.ProofCachePath.empty()) {
@@ -3474,6 +3512,13 @@ void Z3VerifyBackend::Race::cancel() {
     Encoder->interrupt();
 }
 
+void Z3VerifyBackend::Race::reset() {
+  std::lock_guard<std::mutex> Guard(Lock);
+  Cancelled = false;
+  for (Z3Encoder *Encoder : Running)
+    Encoder->resume();
+}
+
 bool Z3VerifyBackend::racesEncodings(const ObligationModule &Module) const {
   return Jobs != 1 &&
          (Module.RequiredFeatures & logicFeature(LogicFeature::Sequences));
@@ -3486,9 +3531,11 @@ VerifyResult Z3VerifyBackend::solveQuery(
     Z3Encoder Encoder;
     Encoder.setTimeoutMs(Timeout);
     Encoder.setResourceLimit(ResourceLimit);
+    Encoder.setCertifyTimeoutMs(CertifyTimeoutMs);
     Encoder.setIntegerEncoding(IntegerEncoding);
     Encoder.setProfileQuantifiers(ProfileQuantifiers && Facts);
     Encoder.setSequenceFacts(Facts);
+    Cancellation.enter(Encoder);
     if (Racing)
       Racing->enter(Encoder);
     if (Pair)
@@ -3498,6 +3545,7 @@ VerifyResult Z3VerifyBackend::solveQuery(
       Pair->leave(Encoder);
     if (Racing)
       Racing->leave(Encoder);
+    Cancellation.leave(Encoder);
     return Result;
   };
   if (!racesEncodings(Module))
@@ -3624,12 +3672,15 @@ Z3VerifyBackend::proveByInduction(const ObligationModule &Module,
     Z3Encoder Encoder;
     Encoder.setTimeoutMs(budget(inductionBudgetMs(TimeoutMs)));
     Encoder.setResourceLimit(ResourceLimit);
+    Encoder.setCertifyTimeoutMs(CertifyTimeoutMs);
     Encoder.setIntegerEncoding(IntegerEncoding ==
                                        MachineIntegerEncoding::BitVector
                                    ? MachineIntegerEncoding::Auto
                                    : IntegerEncoding);
     Encoder.setProofOnly(true);
+    Cancellation.enter(Encoder);
     VerifyResult Proof = Encoder.verifyModule(*Inductive);
+    Cancellation.leave(Encoder);
     if (Proof.Status == VerifyStatus::Verified)
       return Proof;
   }
