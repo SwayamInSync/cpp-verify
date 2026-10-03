@@ -364,6 +364,15 @@ struct VFunction {
   std::unique_ptr<VExpr> Unfolding;
   /// The step-indexed definition of the inductive predicate named here.
   std::string InductiveStepOf;
+  /// A generated proof of a rule of the inductive predicate with this
+  /// identity; its unfolding may be used once all of them are proved.
+  std::string InductiveRuleOf;
+  /// Specs whose postconditions and unfoldings are not assumed at their
+  /// applications here: the rules this function proves come before them.
+  std::set<std::string> FactsWithheld;
+  /// A generated proof about specs, not C++ code: its expressions are total
+  /// as in specs, so they carry no definedness obligations.
+  bool TotalExpressions = false;
   /// Each behavior's name and assumption, to check that it can apply.
   std::vector<std::pair<std::string, std::unique_ptr<VExpr>>> Behaviors;
   bool UsesDynamicStorage = false;
