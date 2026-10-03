@@ -382,10 +382,20 @@ spec bool reach(int a, int b)
   times to false. The conditions above make `F` monotone and continuous, so
   this union is the least fixpoint (Kleene's theorem).
 - Proofs see `P` through its unfolding `P(x) == F(x)`, assumed at every
-  application: one unfolding, both ways (introduction and inversion). An
-  application that appears only inside an unfolding is unfolded once it is
-  named, as in `contract_assert(reach(2, 4));`. `reveal(P)` gives the
-  definition instead.
+  application: one unfolding, both ways (introduction and inversion), in
+  the memory state where the application is evaluated. An application that
+  appears only inside an unfolding is unfolded once it is named, as in
+  `contract_assert(reach(2, 4));`. `reveal(P)` gives the definition
+  instead.
+- Deeper unfolding, as Stainless unrolls recursive functions:
+  `reveal_with_fuel(P, n)` unfolds the applications inside unfoldings `n`
+  levels deep, and a verdict that still depends on `P` (`spec.fuel`,
+  `spec.hidden`, `counterexample.unchecked`) is retried with one more level
+  at a time, up to four. An application at constant arguments, such as
+  `post(reach(1, 4))`, is decided by the counterexample check before
+  solving, and the solver receives the unfoldings along the derivation it
+  found. Every unfolding is a proved theorem, so none of this can make a
+  false claim verify.
 - The unfolding is not assumed on trust. As Isabelle's inductive package
   does, the verifier generates three proof functions for each predicate and
   proves them before any proof may rely on it:
@@ -431,6 +441,13 @@ spec bool reach(int a, int b)
   `Unresolved` with reason `spec.post`. When none of these decides, the
   message names the application (`whether odd(4) holds: ...`) and the kind
   of postcondition that would.
+- When unfolding cannot settle a claim, the reason says so.
+  `backend.invalid-result` means the solver's model breaks a fact the
+  solver was given. A model that keeps every fact but needs `P(v)` true
+  where the least fixpoint is false (derivations that go round forever)
+  is `spec.fuel`: `every counterexample found needs P(v) to hold, but no
+  derivation shows it`, which only induction shows; a postcondition
+  `!result || Q` or a lemma proved by induction supplies it.
 
 ### `recommends` — soft preconditions for spec functions
 
@@ -1072,6 +1089,10 @@ int safe_fib(int n) pre(...) post(result == fibo(n)) {
 
 - Default fuel for any recursive spec: **1**.
 - `reveal_with_fuel(fn, n)` locally raises the unfolding depth Z3 uses for `fn` within the enclosing function's VC.
+- For an inductive predicate it unfolds the applications inside its
+  unfoldings `n` levels deep, the predicate staying hidden behind proved
+  unfoldings (see Inductive predicates). The verifier also deepens on its
+  own, up to four levels, when a verdict still depends on the predicate.
 - Without this, recursive `spec` axioms cause Z3 matching loops.
 - Inside ghost blocks only.
 
@@ -1104,7 +1125,9 @@ int safe_fib(int n) pre(...) post(result == fibo(n)) {
   unfold, and strong induction on the query's integer variables did not
   prove it; `spec.hidden`: it relies on a hidden spec's value;
   `counterexample.unchecked`: the counterexample could not be checked within
-  the certifier's budgets; `spec.termination`: the proof relies on a spec
+  the certifier's budgets; `backend.invalid-result`: the solver's answer
+  contradicts the query or a fact it was given, which is a solver fault and
+  says nothing about the program; `spec.termination`: the proof relies on a spec
   whose termination check did not pass, so that spec has no definition;
   `spec.reads`: the proof relies on a spec whose `reads` check did not pass,
   so its frames are not facts; `spec.post`: it relies on a spec whose
