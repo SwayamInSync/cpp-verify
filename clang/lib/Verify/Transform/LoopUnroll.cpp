@@ -224,6 +224,7 @@ VFunction LoopUnroller::unroll(const VFunction &Fn, unsigned K) {
   Out.ObjectModel = Fn.ObjectModel;
   Out.UnmeasuredLoop = Fn.UnmeasuredLoop;
   Out.RecursionGroup = Fn.RecursionGroup;
+  Out.Cluster = Fn.Cluster;
   Out.SpecDependencies = Fn.SpecDependencies;
   for (const VReadRange &R : Fn.Reads)
     Out.Reads.push_back(
