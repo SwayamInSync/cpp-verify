@@ -355,9 +355,9 @@ Current proof-language limitations include:
   ``counterexample.unchecked`` unless a proved postcondition excludes the
   argument;
 - proofs may rest on each other only through a checked measure (a recursion
-  cycle, a spec's induction hypothesis): a spec's proof block cannot call a
-  lemma proved from that spec's facts, even when a measure would justify it
-  (``proof.cycle``);
+  cycle, a spec's induction hypothesis, or a cluster of specs and lemmas
+  sharing ``decreases`` clauses of one length); otherwise they are
+  ``proof.cycle``;
 - spec collections hold mathematical integers only (no nested collections or
   records), and Lean supports none of them;
 - user-written loop invariants, with no candidate-invariant/Houdini pass;
