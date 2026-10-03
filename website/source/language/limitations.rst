@@ -346,10 +346,12 @@ Current proof-language limitations include:
   witness among the values tried decides it; otherwise it is
   ``counterexample.unchecked``. ``choose`` is uninterpreted apart from its
   Hilbert axiom;
-- an inductive predicate unfolds once at each named application; its
-  induction is stated as ``post(!result || Q)`` and proved automatically,
-  with no proof block for the step; a counterexample that needs it false is
-  usually ``counterexample.unchecked``;
+- an inductive predicate unfolds once at each named application; a
+  counterexample that needs it false is usually ``counterexample.unchecked``;
+- proofs may rest on each other only through a checked measure (a recursion
+  cycle, a spec's induction hypothesis): a spec's proof block cannot call a
+  lemma proved from that spec's facts, even when a measure would justify it
+  (``proof.cycle``);
 - spec collections hold mathematical integers only (no nested collections or
   records), cvc5 decides only sequences, and Lean none;
 - user-written loop invariants, with no candidate-invariant/Houdini pass;
