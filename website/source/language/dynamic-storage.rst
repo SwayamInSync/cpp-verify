@@ -246,6 +246,8 @@ proof failures.
 
 Consequently, all of these are rejected:
 
+.. cppverify-example: fails use_after_delete double_delete uninitialized_read
+
 .. code-block:: cpp
 
    int use_after_delete() post(true) {
