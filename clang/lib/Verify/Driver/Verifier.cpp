@@ -123,7 +123,7 @@ static PassiveProgram smokeProgram(const PassiveProgram &P, size_t Count,
 
 static bool isDeductiveBackend(BackendKind Kind) {
   return Kind == BackendKind::Z3 || Kind == BackendKind::CVC5 ||
-         Kind == BackendKind::Portfolio;
+         Kind == BackendKind::Portfolio || Kind == BackendKind::Race;
 }
 
 static VerifyResult lowerForBackend(const ObligationModule &Module,
@@ -131,10 +131,11 @@ static VerifyResult lowerForBackend(const ObligationModule &Module,
                                     const BackendExecutionOptions &Execution) {
   if (Kind == BackendKind::CVC5)
     return lowerSMTLibModule(Module, nullptr, Execution);
-  if (Kind == BackendKind::Portfolio) {
+  if (Kind == BackendKind::Portfolio || Kind == BackendKind::Race) {
+    const std::string Name = Kind == BackendKind::Race ? "race" : "portfolio";
     VerifyResult Z3Result = lowerObligationModule(Module, nullptr, Execution);
     if (Z3Result.Status != VerifyStatus::Lowered) {
-      Z3Result.BackendName = "portfolio";
+      Z3Result.BackendName = Name;
       Z3Result.Message =
           "z3 component" +
           (Z3Result.Message.empty() ? std::string() : ": " + Z3Result.Message);
@@ -142,7 +143,7 @@ static VerifyResult lowerForBackend(const ObligationModule &Module,
     }
     VerifyResult CVC5Result = lowerSMTLibModule(Module, nullptr, Execution);
     if (CVC5Result.Status != VerifyStatus::Lowered) {
-      CVC5Result.BackendName = "portfolio";
+      CVC5Result.BackendName = Name;
       CVC5Result.Message = "cvc5 component" + (CVC5Result.Message.empty()
                                                    ? std::string()
                                                    : ": " + CVC5Result.Message);
@@ -150,7 +151,7 @@ static VerifyResult lowerForBackend(const ObligationModule &Module,
     }
     VerifyResult Result;
     Result.Status = VerifyStatus::Lowered;
-    Result.BackendName = "portfolio";
+    Result.BackendName = Name;
     return Result;
   }
   return lowerObligationModule(Module, nullptr, Execution);
@@ -747,10 +748,11 @@ public:
     }
     if (!Opts.LeanFallbackProjectPath.empty() &&
         Opts.Backend != BackendKind::Z3 &&
-        Opts.Backend != BackendKind::Portfolio) {
-      Diags.push_back(
-          {VerifyDiagnostic::Error,
-           "--lean-fallback requires --backend=z3 or --backend=portfolio"});
+        Opts.Backend != BackendKind::Portfolio &&
+        Opts.Backend != BackendKind::Race) {
+      Diags.push_back({VerifyDiagnostic::Error,
+                       "--lean-fallback requires --backend=z3, "
+                       "--backend=portfolio, or --backend=race"});
       return false;
     }
     if (!Opts.LeanFallbackProjectPath.empty() &&
@@ -799,10 +801,11 @@ public:
       return false;
     }
     if (!Opts.CVC5Path.empty() && Opts.Backend != BackendKind::CVC5 &&
-        Opts.Backend != BackendKind::Portfolio) {
-      Diags.push_back(
-          {VerifyDiagnostic::Error,
-           "--cvc5-path requires --backend=cvc5 or --backend=portfolio"});
+        Opts.Backend != BackendKind::Portfolio &&
+        Opts.Backend != BackendKind::Race) {
+      Diags.push_back({VerifyDiagnostic::Error,
+                       "--cvc5-path requires --backend=cvc5, "
+                       "--backend=portfolio, or --backend=race"});
       return false;
     }
     if (Opts.LowerOnly && !Opts.ProofCachePath.empty()) {
@@ -893,6 +896,7 @@ public:
     BackendExecutionOptions Execution;
     Execution.SolverTimeoutMs = Opts.SolverTimeoutMs;
     Execution.CollectionTimeoutMs = Opts.CollectionTimeoutMs;
+    Execution.CertifyTimeoutMs = Opts.CertifyTimeoutMs;
     Execution.SolverResourceLimit = Opts.SolverResourceLimit;
     Execution.MaxQueryNodes = Opts.MaxQueryNodes;
     Execution.IntegerEncoding = Opts.IntegerEncoding;
@@ -1888,11 +1892,11 @@ public:
         if (Opts.LowerOnly) {
           VerifyResult Result;
           Result.Status = VerifyStatus::Lowered;
-          Result.BackendName =
-              Opts.Backend == BackendKind::CVC5
-                  ? "cvc5"
-                  : (Opts.Backend == BackendKind::Portfolio ? "portfolio"
-                                                            : "z3");
+          Result.BackendName = Opts.Backend == BackendKind::CVC5 ? "cvc5"
+                               : Opts.Backend == BackendKind::Portfolio
+                                   ? "portfolio"
+                               : Opts.Backend == BackendKind::Race ? "race"
+                                                                   : "z3";
           Diags.push_back({VerifyDiagnostic::Lowered, Fn->Name,
                            SourceLocation(), Fn->Name, std::move(Result)});
           continue;
@@ -1997,9 +2001,9 @@ public:
                                         std::move(Callees));
           const bool Rule = !Fn->InductiveRuleOf.empty();
           Diags.back().Quiet = Rule;
-          // A proof that no execution reaches the end says nothing.
-          const bool Smoke =
-              !BMCResult && Opts.Backend != BackendKind::Lean && !Rule;
+          // A proof that no execution reaches the end says nothing. Under BMC
+          // the program is unrolled to the bound that was proved complete.
+          const bool Smoke = Opts.Backend != BackendKind::Lean && !Rule;
           bool WhollyVacuous = false;
           if (Smoke && unreachable(PP, /*EntryOnly=*/false)) {
             WhollyVacuous = true;
@@ -2067,6 +2071,25 @@ public:
             Message += " (" + R.Message + ")";
           Diags.push_back({VerifyDiagnostic::BoundedSafe, std::move(Message),
                            R.Location, Fn->Name, R});
+          // Kani's unreachable checks: safety within the bound says nothing
+          // when no execution finishes within it (every one runs a loop
+          // past the bound, or the assumptions contradict each other).
+          if (unreachable(PP, /*EntryOnly=*/false)) {
+            const size_t Verdict = Diags.size() - 1;
+            Diags[Verdict].Message += " [vacuous]";
+            Diags[Verdict].Vacuous = true;
+            const std::string Bound =
+                R.Bound ? std::to_string(*R.Bound) : std::string("the bound");
+            Diags.push_back(
+                {VerifyDiagnostic::Warning,
+                 unreachable(PP, /*EntryOnly=*/true)
+                     ? Fn->Name + ": the precondition is unsatisfiable, so "
+                                  "every claim about it holds vacuously"
+                     : Fn->Name + ": no execution finishes within " + Bound +
+                           " loop iterations, so its bounded safety covers "
+                           "no complete run; raise --unroll",
+                 R.Location, Fn->Name});
+          }
         } else if (R.Status == VerifyStatus::Failed) {
           AllOk = false;
           AnyFailed = true;
