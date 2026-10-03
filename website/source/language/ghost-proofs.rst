@@ -194,9 +194,12 @@ derivation shows it, so it needs no ``decreases``.
   predicate is seen through its proved unfolding, never through the
   postcondition being proved. A proof block on it is the induction step:
   it runs for a derivation whose premises already satisfy ``Q``.
-- A counterexample that needs the predicate true at some argument is checked
-  by finding a derivation; one that needs it false is usually
-  ``counterexample.unchecked``.
+- A counterexample is checked against the predicate's true meaning either
+  way: when its derivations from an argument reach finitely many arguments,
+  by computing the predicate over all of them; otherwise by finding a
+  derivation (true) or by a proved postcondition that excludes the argument
+  (false), on which the failure then rests. Undecided, the message names
+  the application, such as ``whether odd(4) holds``.
 
 ``constexpr`` as spec
 ---------------------
