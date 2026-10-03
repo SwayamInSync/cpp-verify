@@ -131,11 +131,38 @@ A proof never rests on itself. Every fact a proof assumes (a callee's
 contract, a spec's definition, frame, or postcondition, an inductive
 predicate's unfolding) is established only by verdicts whose own facts are
 established, starting from none. Proofs may rely on each other only through
-a checked measure: the functions of one recursion cycle, and a spec's
-induction hypothesis at a lower measure. Anything else is a circle, such as
-a spec's proof block that calls a lemma proved from that spec's
-postcondition, and every verdict on it is `Unresolved` with reason
-`proof.cycle`.
+a checked measure, as in Dafny's clusters: specs and proof functions that
+reach each other through bodies, contracts, and proof blocks, and share
+`decreases` clauses of one length, form a cluster. Every call between them
+must lower the measure, and each uses another's postcondition, and a
+recursive spec's definition, only where that one's measure is lower, so
+their proofs hold together by well-founded induction. A lemma about a spec
+that the spec's own proof uses therefore works with lexicographic measures:
+
+```cpp
+proof void total_nonneg(int n);
+
+spec int total(int n)
+  decreases(n, 0)
+  post(result >= 0) by { if (n > 0) total_nonneg(n - 1); }
+{
+  return n <= 0 ? 0 : total(n - 1) + n;
+}
+
+proof void total_nonneg(int n)
+  decreases(n, 1)
+  post(total(n) >= 0)
+{
+  if (n > 0)
+    total_nonneg(n - 1);
+}
+```
+
+The lemma may unfold `total(n)` since `(n, 0)` is below `(n, 1)`, and the
+block may call the lemma at `n - 1` since `(n - 1, 1)` is below `(n, 0)`.
+Without a shared measure such proofs are a circle, and every verdict on it
+is `Unresolved` with reason `proof.cycle`. Frames (`reads`) are never used
+this way.
 
 ## Loop Contracts: invariant / decreases
 
@@ -1136,8 +1163,8 @@ int safe_fib(int n) pre(...) post(result == fibo(n)) {
   `proof.cycle`: it relies on facts whose own proofs rely on it, as when a
   spec's proof block calls a lemma that is proved from that spec's
   postcondition; only recursion through a checked measure (a function's
-  recursion cycle, a spec's induction hypothesis) may make proofs rest on
-  each other;
+  recursion cycle, a spec's induction hypothesis, a cluster sharing one
+  measure) may make proofs rest on each other;
   `callee.contract`: it relies on a
   callee contract that nothing establishes: the callee's verification
   failed, or it has a contract but no definition and no trust mark;
