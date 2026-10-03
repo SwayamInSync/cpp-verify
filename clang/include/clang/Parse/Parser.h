@@ -919,6 +919,9 @@ private:
   bool isContractBehaviorClause();
   /// inductive, on a spec predicate.
   bool isContractInductiveClause();
+  /// Parses the proof blocks of the clauses of the function definition
+  /// \p Function, cached until its parameters are in scope.
+  void ParseContractClauseProofs(Decl *Function);
 
   DeclGroupPtrTy ParseDeclarationOrFunctionDefinition(
       ParsedAttributes &DeclAttrs, ParsedAttributes &DeclSpecAttrs,
@@ -7495,6 +7498,14 @@ public:
 
   /// True when we are currently parsing a postcondition expression.
   bool InContractPostcondition = false;
+  /// The proof blocks of the clauses being parsed, post(...) by { ... }, as
+  /// tokens until the definition's scope exists.
+  struct PendingClauseProof {
+    FunctionContractInfo::ClauseProof::Kind K;
+    SourceLocation Loc;
+    CachedTokens Toks;
+  };
+  SmallVector<PendingClauseProof, 1> PendingClauseProofs;
   /// True when parsing a loop invariant; old(...) denotes function entry.
   bool InLoopContractInvariant = false;
   /// True while parsing a modifies footprint, where p[start : length] names
