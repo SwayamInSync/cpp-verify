@@ -1061,6 +1061,18 @@ public:
         Deadline = std::chrono::steady_clock::now() +
                    std::chrono::milliseconds(Opts.FunctionTimeoutMs);
       Backend->setDeadline(Deadline);
+      // A spec's checks have no loops to bound: under BMC they are solved as
+      // Z3 solves them (their archived modules keep the bound for replay).
+      std::unique_ptr<VerifyBackend> OwnSpecBackend;
+      VerifyBackend *SpecBackend = Backend;
+      BackendKind SpecKind = Opts.Backend;
+      if (Opts.Backend == BackendKind::BMC) {
+        OwnSpecBackend = createVerifyBackend(BackendKind::Z3, nullptr, 0,
+                                             Execution, nullptr);
+        OwnSpecBackend->setDeadline(Deadline);
+        SpecBackend = OwnSpecBackend.get();
+        SpecKind = BackendKind::Z3;
+      }
       auto SmokeBackend = createVerifyBackend(BackendKind::Z3, nullptr, 0,
                                               SmokeExecution, nullptr);
       Passivizer P;
@@ -1230,6 +1242,7 @@ public:
                  "spec reads failed: " + Fn->Name + " (" + ReadsError + ")",
                  SourceLocation(), Fn->Name});
           } else if (Opts.Backend == BackendKind::BMC) {
+            // Kept for archive replay; the check runs as Z3 runs it.
             ReadsModule->BMCTransform = BMCTransformProvenance{Opts.BMCUnroll};
           }
           if (ReadsModule) {
@@ -1245,7 +1258,7 @@ public:
             }
             if (Opts.LowerOnly) {
               VerifyResult R =
-                  lowerForBackend(*ReadsModule, Opts.Backend, Execution);
+                  lowerForBackend(*ReadsModule, SpecKind, Execution);
               if (R.Status == VerifyStatus::Lowered) {
                 UnframedSpecs.erase(Fn->Identity);
                 Diags.push_back({VerifyDiagnostic::Lowered,
@@ -1260,7 +1273,7 @@ public:
                                  R.Location, Fn->Name, R});
               }
             } else {
-              VerifyResult R = Backend->verify(*ReadsModule);
+              VerifyResult R = SpecBackend->verify(*ReadsModule);
               if (R.Status == VerifyStatus::Verified ||
                   R.Status == VerifyStatus::Exported) {
                 UnframedSpecs.erase(Fn->Identity);
@@ -1339,8 +1352,7 @@ public:
             continue;
           }
           if (Opts.LowerOnly) {
-            VerifyResult R =
-                lowerForBackend(*PostModule, Opts.Backend, Execution);
+            VerifyResult R = lowerForBackend(*PostModule, SpecKind, Execution);
             if (R.Status == VerifyStatus::Lowered) {
               UnprovenPosts.erase(Fn->Identity);
               Diags.push_back({VerifyDiagnostic::Lowered,
@@ -1356,7 +1368,7 @@ public:
             }
             continue;
           }
-          VerifyResult R = Backend->verify(*PostModule);
+          VerifyResult R = SpecBackend->verify(*PostModule);
           if (R.Status == VerifyStatus::Verified ||
               R.Status == VerifyStatus::Exported) {
             UnprovenPosts.erase(Fn->Identity);
@@ -1449,8 +1461,7 @@ public:
                                    Fn->InductiveStepOf + " (" +
                                    llvm::toString(std::move(Error)) + ")"});
             } else if (Opts.LowerOnly) {
-              VerifyResult R =
-                  lowerForBackend(*Induction, Opts.Backend, Execution);
+              VerifyResult R = lowerForBackend(*Induction, SpecKind, Execution);
               if (R.Status == VerifyStatus::Lowered) {
                 UnprovenPosts.erase(Fn->Identity);
               } else {
@@ -1462,7 +1473,7 @@ public:
                                  R.Location, Fn->Name, R});
               }
             } else {
-              VerifyResult R = Backend->verify(*Induction);
+              VerifyResult R = SpecBackend->verify(*Induction);
               if (R.Status == VerifyStatus::Verified ||
                   R.Status == VerifyStatus::Exported) {
                 UnprovenPosts.erase(Fn->Identity);
@@ -1572,8 +1583,7 @@ public:
             continue;
           }
           if (Opts.LowerOnly) {
-            VerifyResult DR =
-                lowerForBackend(DecModule, Opts.Backend, Execution);
+            VerifyResult DR = lowerForBackend(DecModule, SpecKind, Execution);
             if (DR.Status != VerifyStatus::Lowered) {
               AllOk = false;
               AnyFailed = true;
@@ -1601,7 +1611,7 @@ public:
               continue;
             }
           } else {
-            VerifyResult R = Backend->verify(DecModule);
+            VerifyResult R = SpecBackend->verify(DecModule);
             if (Fn->IsSpec && (R.Reason == VerifyReason::SpecHidden ||
                                R.Reason == VerifyReason::SpecFuel)) {
               // The function is opaque in its own termination check.
