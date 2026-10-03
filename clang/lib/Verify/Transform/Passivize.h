@@ -84,6 +84,9 @@ struct PassiveProgram {
   /// rests on besides definitions and contracts.
   std::set<std::string> AssumedPosts;
   std::set<std::string> AssumedUnfoldings;
+  /// The specs of the function's cluster whose postconditions it assumes
+  /// only where their measure is below its own: the induction hypothesis.
+  std::set<std::string> InductivePosts;
   /// Exact source identity for SSA variables eligible for counterexample
   /// presentation. Generated temporaries are deliberately absent.
   std::map<std::string, PassiveModelVariable> ModelVariables;
