@@ -57,7 +57,16 @@ int one_past_nonempty_slice(int *p, int count)
   return read_first(p + count, 1);
 }
 
+// Without an extent the caller's pointer addresses one object, so a call
+// may pass it as a one-element slice but not as a longer one.
 int missing_caller_extent(int *p)
+  pre(p != nullptr)
+  post(true)
+{
+  return read_first(p, 2);
+}
+
+int single_object_slice(int *p)
   pre(p != nullptr)
   post(true)
 {
@@ -143,6 +152,7 @@ void slice_region_write(int *p, int count, int offset)
 // VERIFY-DAG: error: verification failed: insufficient_slice
 // VERIFY-DAG: error: verification failed: one_past_nonempty_slice
 // VERIFY-DAG: error: verification failed: missing_caller_extent
+// VERIFY-DAG: Verified: single_object_slice
 // VERIFY-DAG: error: verification failed: out_of_bounds_difference
 // VERIFY-DAG: error: verification failed: negative_position_difference
 // VERIFY-DAG: error: verification failed: unrepresentable_pointer_difference
@@ -157,6 +167,7 @@ void slice_region_write(int *p, int count, int offset)
 // BMC-DAG: error: verification failed: insufficient_slice
 // BMC-DAG: error: verification failed: one_past_nonempty_slice
 // BMC-DAG: error: verification failed: missing_caller_extent
+// BMC-DAG: Verified: single_object_slice
 // BMC-DAG: error: verification failed: out_of_bounds_difference
 // BMC-DAG: error: verification failed: negative_position_difference
 // BMC-DAG: error: verification failed: unrepresentable_pointer_difference
