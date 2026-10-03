@@ -140,7 +140,11 @@ derivation shows it, so it needs no ``decreases``.
   ``Unresolved`` with reason ``spec.inductive``.
 - ``post(!result || Q)`` states what every derivation satisfies. It is proved
   by induction on derivations (a failure reads ``spec post by induction
-  failed``) and holds wherever the predicate does.
+  failed``) and holds wherever the predicate does. ``Q`` may mention the
+  predicate itself, as transitivity does:
+  ``post(!result || forall(c, !reach(b, c) || reach(a, c)))``; there the
+  predicate is seen through its proved unfolding, never through the
+  postcondition being proved.
 - A counterexample that needs the predicate true at some argument is checked
   by finding a derivation; one that needs it false is usually
   ``counterexample.unchecked``.
