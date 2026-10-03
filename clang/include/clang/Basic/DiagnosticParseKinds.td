@@ -1898,6 +1898,12 @@ def err_ghost_declaration_not_variable : Error<
   "a ghost declaration must declare variables">;
 def err_contract_inductive_not_spec : Error<
   "only a spec function can be inductive">;
+def err_contract_clause_proof_misplaced : Error<
+  "a proof block follows only a post, decreases, or reads clause of a spec "
+  "function; write the proof of other functions in their bodies">;
+def err_contract_clause_proof_on_declaration : Error<
+  "a proof block belongs to the definition of the function, not to a "
+  "declaration">;
 def err_contract_behavior_on_spec : Error<
   "a spec function has no behaviors; state its post directly">;
 def err_contract_behavior_name : Error<
