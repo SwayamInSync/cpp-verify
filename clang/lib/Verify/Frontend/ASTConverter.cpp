@@ -2761,6 +2761,21 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
       return nullptr;
     }
   }
+  // A spec's proof blocks are ghost code in its mathematical context, under
+  // the rules of ghost code: no returns, stores, or assignments to anything
+  // but its own locals.
+  if (FCI && Fn->IsSpec)
+    for (const FunctionContractInfo::ClauseProof &Proof : FCI->ClauseProofs) {
+      const bool SavedGhost = InGhost, SavedPost = InPost;
+      InGhost = true;
+      InPost = Proof.K == FunctionContractInfo::ClauseProof::Post;
+      VFunction::ClauseProof Converted{
+          static_cast<VFunction::ClauseProof::Kind>(Proof.K),
+          convertStmt(Proof.Body), Proof.Loc};
+      InGhost = SavedGhost;
+      InPost = SavedPost;
+      Fn->ClauseProofs.push_back(std::move(Converted));
+    }
   if (Fn->IsSpec && Fn->Body.empty() && Fn->Decreases.empty()) {
     CurrentFn = nullptr;
     return nullptr;
