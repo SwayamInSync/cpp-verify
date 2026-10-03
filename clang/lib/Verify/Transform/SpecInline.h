@@ -54,6 +54,16 @@ std::unique_ptr<VExpr> specApplicationFacts(
     const VFunction &Spec, const std::vector<std::unique_ptr<VExpr>> &Args,
     const VExpr *Value, SourceLocation Loc, const std::string &Heap = {});
 
+/// The definitions of \p Call's spec that a module gives the solver, at the
+/// call's arguments and memory: its body unfolded once, twice, ... as deep as
+/// \p Fuel, \p Hidden, and \p Revealed let it (SpecAxioms gives the same
+/// levels). Empty for a hidden or uninterpreted spec.
+std::vector<std::unique_ptr<VExpr>>
+specDefinitionLevels(const VSpecCallExpr &Call, const FunctionMap &FnMap,
+                     const std::map<std::string, unsigned> &Fuel,
+                     const std::set<std::string> &Hidden,
+                     const std::set<std::string> &Revealed);
+
 /// What a member of \p Spec's cluster may use of it at an application: its
 /// postconditions and, for a recursive spec, its definition, where
 /// \p Spec's measure at \p Args is below \p Measure, the user's measure at
