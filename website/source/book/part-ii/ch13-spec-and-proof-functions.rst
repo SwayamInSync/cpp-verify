@@ -4,6 +4,8 @@ Chapter 13 — Spec and proof functions
 **Spec** functions (mathematical)
 ---------------------------------
 
+.. cppverify-example: label fibo
+
 .. code-block:: cpp
 
    spec int fibo(int n)
@@ -14,6 +16,8 @@ Chapter 13 — Spec and proof functions
    }
 
 Use in contracts:
+
+.. cppverify-example: with fibo
 
 .. code-block:: cpp
 
@@ -30,15 +34,36 @@ the unbounded value to ``int``, and the verifier checks that it fits.
 **Proof** functions (lemmas)
 ----------------------------
 
+.. cppverify-example: with fibo
+
 .. code-block:: cpp
+
+   proof void fibo_nonneg(int n)
+     pre(n >= 0)
+     post(fibo(n) >= 0)
+     decreases(n)
+   {
+     if (n >= 2) {
+       fibo_nonneg(n - 1);
+       fibo_nonneg(n - 2);
+     }
+   }
 
    proof void lemma(int i, int j)
      pre(i <= j)
      post(fibo(i) <= fibo(j))
      decreases(j - i)
-   { /* ghost proof */ }
+   {
+     if (i < j) {
+       lemma(i, j - 1);        // fibo(i) <= fibo(j - 1)
+       if (j >= 2)
+         fibo_nonneg(j - 2);   // so fibo(j - 1) <= fibo(j)
+     }
+   }
 
-Call from ``ghost { ... }`` blocks in executable functions.
+A lemma's body is its proof: each call is the induction hypothesis at a
+smaller measure, or another lemma. Call lemmas from ``ghost { ... }`` blocks
+in executable functions.
 
 Proof functions are isolated from runtime state: they may update local proof
 variables, but cannot write pointees/globals or call executable functions.
@@ -109,6 +134,8 @@ A spec's definition becomes a fact only once the spec is known to terminate,
 so the termination proof cannot use it. Each recursive call must decrease the
 measure whatever the spec's other calls return:
 
+.. cppverify-example: unresolved nested
+
 .. code-block:: cpp
 
    spec int ack(int m, int n)
@@ -174,6 +201,30 @@ that relied on it is reported with reason ``spec.post``, or
 ``spec.termination`` for a recursive spec, whose termination may have used
 it. A non-recursive spec is unfolded at its calls, so its post matters where
 it is hidden.
+
+A post holds at the applications a proof names and also at those inside the
+unfoldings it receives, as Dafny's function postconditions do. With the post
+on the spec, the monotonicity lemma above needs no separate lemma for
+nonnegativity: ``fib(j - 1) <= fib(j)`` needs ``fib(j - 2) >= 0``, and only
+the unfolding of ``fib(j)`` names ``fib(j - 2)``.
+
+.. code-block:: cpp
+
+   spec int fib(int n)
+     decreases(n)
+     post(result >= 0)
+   {
+     return n <= 0 ? 0 : n == 1 ? 1 : fib(n - 2) + fib(n - 1);
+   }
+
+   proof void fib_monotone(int i, int j)
+     pre(i <= j)
+     post(fib(i) <= fib(j))
+     decreases(j - i)
+   {
+     if (i < j)
+       fib_monotone(i, j - 1);
+   }
 
 ``when(c)`` restricts a spec's definition to the domain ``c``. Termination is
 checked under ``c`` only, and outside it the spec's value is unspecified:
@@ -376,6 +427,8 @@ A lemma call in a ghost block adds its postcondition to everything after it.
 call lemmas, assert intermediate facts, and declare locals, and only ``c``
 holds afterwards, as with Verus's and Dafny's ``assert ... by``:
 
+.. cppverify-example: label sq
+
 .. code-block:: cpp
 
    spec int sq(int x) { return x * x; }
@@ -429,6 +482,8 @@ such steps, each with an optional proof block, and concludes the relation
 between its first and last terms: ``==`` when every step is ``==``, ``<`` (or
 ``>``) when some step is strict, otherwise ``<=`` (or ``>=``):
 
+.. cppverify-example: with sq
+
 .. code-block:: cpp
 
    void chain(int a, int b, int c)
@@ -451,6 +506,8 @@ Quantifiers over all integers
 ``forall(k, body)`` and ``exists(k, body)`` range over all mathematical
 integers. They state lemmas without an artificial range and let a caller
 instantiate them anywhere:
+
+.. cppverify-example: with sq
 
 .. code-block:: cpp
 
@@ -576,12 +633,67 @@ A sequence has ``len()``, ``s[i]``, ``push(x)``, ``update(i, x)``,
 its length, ``s.reverse().len() == s.len()``, and other facts about it are
 proved by induction (see :doc:`ch20-mathematics-to-code`).
 
+A set has ``insert``, ``remove``, ``contains``, ``unite``, ``intersect``,
+``difference``, and ``subset_of``; a multiset counts its elements; a map
+has ``insert(k, v)``, ``remove(k)``, ``contains(k)``, and ``m[k]``. Values
+compare with ``==`` and ``!=``. Facts about them are proved like any other:
+
+.. code-block:: cpp
+
+   proof void set_facts(set s, int x, int y)
+     pre(x != y)
+     post(s.insert(x).contains(x))
+     post(s.insert(x).remove(y).contains(x))
+     post(s.subset_of(s.unite(set_empty().insert(y))))
+     post(!s.difference(s).contains(x))
+   {
+   }
+
+   proof void multiset_facts(multiset m, int x, int y)
+     pre(x != y)
+     post(m.insert(x).count(x) == m.count(x) + 1)
+     post(m.insert(x).count(y) == m.count(y))
+     post(m.insert(x).remove(x) == m)
+   {
+   }
+
+   proof void map_facts(map m, int k, int v, int j)
+     pre(j != k)
+     post(m.insert(k, v)[k] == v && m.insert(k, v).contains(k))
+     post(m.insert(k, v)[j] == m[j])
+     post(!m.remove(k).contains(k))
+   {
+   }
+
+A ghost multiset can stand for the elements a loop has passed, so an
+invariant can say what a counter counts:
+
+.. code-block:: cpp
+
+   int count_of(const int *a, int n, int x)
+     pre(valid(a, n) && n >= 0 && n <= 1000)
+     post(0 <= result && result <= n)
+   {
+     ghost multiset bag = multiset_empty();
+     int c = 0;
+     for (int i = 0; i < n; i = i + 1)
+       invariant(0 <= i && i <= n && 0 <= c && c <= i)
+       invariant(c == bag.count(x))
+       decreases(n - i)
+     {
+       if (a[i] == x)
+         c = c + 1;
+       ghost { bag = bag.insert(a[i]); }
+     }
+     return c;
+   }
+
 Every operation is total: an index outside ``[0, len())`` reads 0, an update
 there changes nothing, ``subrange`` clamps its bounds, and a key outside a
 map's domain maps to 0. Sequences are finite; sets, multisets, and maps range
 over all integers and may be infinite. Counterexamples show their values, such
 as ``s = [4, 3]`` or ``m = {1 -> 7, 4.. -> 2}``. Z3 and cvc5 decide all
-four, and Lean none.
+four; Lean support for them is planned for a future release.
 
 Inductive predicates
 --------------------
@@ -591,6 +703,8 @@ steps ``x -> x + 1`` and ``x -> 2 * x`` is a question about paths, not about a
 smaller argument. ``inductive`` makes a ``spec`` returning ``bool`` the
 *least* predicate its body defines (Dafny's ``least predicate``): true exactly
 where a finite derivation shows it.
+
+.. cppverify-example: label reach
 
 .. code-block:: cpp
 
@@ -648,6 +762,8 @@ proof needs no body. When a verdict still depends on the predicate, the
 verifier unfolds the applications inside the unfoldings too, one level more
 at a time, up to four levels; ``reveal_with_fuel(reach, n)`` asks for ``n``
 levels from the start.
+
+.. cppverify-example: with reach
 
 .. code-block:: cpp
 
@@ -723,6 +839,8 @@ A postcondition may mention the predicate itself. Transitivity is one: a
 derivation of ``reach(a, b)`` extends every path from ``b``:
 
 .. code-block:: cpp
+
+   spec bool edge(int a, int b) { return b == a + 1 || b == 2 * a; }
 
    spec bool reach(int a, int b);
    spec bool reach(int a, int b)
