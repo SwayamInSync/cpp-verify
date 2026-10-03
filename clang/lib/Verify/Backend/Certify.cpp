@@ -1,6 +1,7 @@
 //===--- Certify.cpp ------------------------------------------------------===//
 #include "Certify.h"
 #include "Presburger.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/thread.h"
 #include <algorithm>
@@ -440,6 +441,35 @@ class Evaluator {
   std::vector<SpecDispute> Disputes;
   std::set<std::string> DisputeKeys;
   std::vector<DefinitionInstance> Evaluated;
+  /// The specs whose postconditions decided a value.
+  std::set<std::string> Evidence;
+  /// Applications whose definitions could not be decided, and why: tried
+  /// once.
+  std::map<std::string, std::string> Undecided;
+  /// The time or step budget is spent: no failure is recovered from.
+  bool Exhausted = false;
+  /// Functions whose postconditions are being evaluated as evidence.
+  std::set<std::string> PostsInUse;
+  std::optional<std::set<std::string>> NonRecursive;
+
+  /// The least fixpoint of an inductive predicate's group over the
+  /// arguments its derivations reach: every value starts false and becomes
+  /// true once its unfolding holds; a value that changes wakes those that
+  /// read it.
+  struct Fixpoint {
+    std::set<std::string> Group;
+    std::map<std::string, size_t> Index;
+    std::vector<std::pair<const LogicFunctionDecl *, std::vector<LogicValue>>>
+        Nodes;
+    std::vector<bool> Values;
+    std::vector<std::set<size_t>> Readers;
+    std::vector<size_t> Pending;
+    size_t Reader = 0;
+  };
+  std::vector<Fixpoint *> Fixpoints;
+  static constexpr size_t MaxFixpointArguments = 1024;
+  /// Terms a quantifier body may grow to by unfolding definitions.
+  static constexpr uint64_t MaxUnfoldedTerms = 20000;
 
   std::nullopt_t fail(std::string Message) {
     if (Failure.empty())
@@ -1577,6 +1607,75 @@ class Evaluator {
     return Holds;
   }
 
+  /// The binder values around which a comparison of \p E's body, affine in
+  /// the binder once applications at it are unfolded, changes.
+  std::set<CertInt> candidateWitnesses(const LogicExpr *E) {
+    std::vector<std::unique_ptr<LogicExpr>> Unfolded;
+    std::vector<const LogicExpr *> Comparisons;
+    std::function<void(const LogicExpr *)> collect = [&](const LogicExpr *C) {
+      switch (C->K) {
+      case LogicExpr::Eq:
+      case LogicExpr::Ne:
+      case LogicExpr::Lt:
+      case LogicExpr::Le:
+      case LogicExpr::Gt:
+      case LogicExpr::Ge:
+        if (mentions(C, E->Binder) &&
+            comparesAffine(C->Children[0].get(), E->Binder) &&
+            comparesAffine(C->Children[1].get(), E->Binder))
+          Comparisons.push_back(C);
+        break;
+      default:
+        break;
+      }
+      for (const auto &Child : C->Children)
+        collect(Child.get());
+    };
+    for (unsigned Recursive = 0; Recursive != 3; ++Recursive) {
+      Unfolded.push_back(cloneLogicExpr(E->Children.back().get()));
+      uint64_t Budget = MaxUnfoldedTerms;
+      inlineAt(Unfolded.back(), E->Binder, 4, Recursive, Budget);
+      collect(Unfolded.back().get());
+    }
+    std::set<CertInt> Values;
+    for (const LogicExpr *Comparison : Comparisons) {
+      if (Values.size() >= Limits.QuantifierProbe)
+        break;
+      const bool SavedLimit = LimitInDefinition;
+      CertInt Difference[2];
+      bool Known = true;
+      for (int64_t I : {0, 1}) {
+        bool Fits = true;
+        Scope.emplace_back(E->Binder, LogicValue::integer(CertInt(I)));
+        std::optional<CertInt> Left =
+            comparedValue(Comparison->Children[0].get(), Fits);
+        std::optional<CertInt> Right =
+            Left ? comparedValue(Comparison->Children[1].get(), Fits)
+                 : std::nullopt;
+        Scope.pop_back();
+        if (!Right) {
+          Known = false;
+          break;
+        }
+        Difference[I] = *Left - *Right;
+      }
+      if (!Known) {
+        if (Exhausted)
+          break;
+        Failure.clear();
+        LimitInDefinition = SavedLimit;
+        continue;
+      }
+      const CertInt Slope = Difference[1] - Difference[0];
+      if (Slope.isZero())
+        continue;
+      const CertInt Root = (-Difference[0]).floorDiv(Slope);
+      for (int64_t Near = -1; Near <= 2; ++Near)
+        Values.insert(Root + CertInt(Near));
+    }
+    return Values;
+  }
+
   /// Over all integers: the distinguished values, one value between each
   /// two, and one beyond each end, where the body is constant.
   std::optional<LogicValue> unboundedQuantifier(const LogicExpr *E) {
@@ -1590,9 +1689,26 @@ class Evaluator {
         return LogicValue::boolean(*Holds);
       if (!Failure.empty())
         return std::nullopt;
+      if (std::optional<LogicValue> Decided =
+              byWitnesses(E, CertInt(0), CertInt(0), /*Bounded=*/false))
+        return Decided;
+      if (!Failure.empty())
+        return std::nullopt;
       // A witness still decides it: a value where the body holds proves an
       // exists, one where it fails refutes a forall (an inductive
-      // predicate's derivation height, for one).
+      // predicate's derivation height, for one). The values where the
+      // body's comparisons change, once its non-recursive applications are
+      // unfolded, come first.
+      for (const CertInt &Binder : candidateWitnesses(E)) {
+        ++Instances;
+        Scope.emplace_back(E->Binder, LogicValue::integer(Binder));
+        std::optional<bool> Holds = truthOf(E->Children[0].get());
+        Scope.pop_back();
+        if (!Holds)
+          return std::nullopt;
+        if (*Holds != Forall)
+          return LogicValue::boolean(!Forall);
+      }
       for (unsigned I = 0; I != Limits.QuantifierProbe; ++I)
         for (const CertInt &Binder : {CertInt(static_cast<int64_t>(I)),
                                       CertInt(-static_cast<int64_t>(I) - 1)}) {
@@ -1636,6 +1752,9 @@ class Evaluator {
   }
 
   std::optional<LogicValue> quantifier(const LogicExpr *E) {
+    if (!Fixpoints.empty() &&
+        appliesAny(E->Children.back().get(), Fixpoints.back()->Group))
+      return fixpointQuantifier(E);
     if (E->Children.size() == 1)
       return unboundedQuantifier(E);
     std::optional<CertInt> Low = integerOf(E->Children[0].get());
@@ -1685,6 +1804,11 @@ class Evaluator {
         return LogicValue::boolean(*Holds);
       if (!Failure.empty())
         return std::nullopt;
+      if (std::optional<LogicValue> Decided =
+              byWitnesses(E, *Low, *High, /*Bounded=*/true))
+        return Decided;
+      if (!Failure.empty())
+        return std::nullopt;
     }
     const uint64_t Remaining = Limits.QuantifierInstances -
                                std::min(Instances, Limits.QuantifierInstances);
@@ -1717,6 +1841,561 @@ class Evaluator {
     return LogicValue::boolean(Forall);
   }
 
+  const LogicFunctionDecl *function(const std::string &Identity) const {
+    if (auto It = Module.LogicFunctions.find(Identity);
+        It != Module.LogicFunctions.end())
+      return &It->second;
+    if (auto It = Module.EvidenceFunctions.find(Identity);
+        It != Module.EvidenceFunctions.end())
+      return &It->second;
+    return nullptr;
+  }
+
+  static void appliedFunctions(const LogicExpr *E, std::set<std::string> &Out) {
+    if (!E)
+      return;
+    if (E->K == LogicExpr::SpecCall)
+      Out.insert(E->SpecCallee);
+    for (const auto &Child : E->Children)
+      appliedFunctions(Child.get(), Out);
+  }
+
+  /// The inductive predicates defined with \p Predicate: those its unfolding
+  /// reaches that reach it back.
+  std::set<std::string> groupOf(const LogicFunctionDecl &Predicate) {
+    std::map<std::string, std::set<std::string>> Applies;
+    auto successors = [&](const std::string &Identity) {
+      auto [It, Inserted] = Applies.try_emplace(Identity);
+      if (Inserted)
+        if (const LogicFunctionDecl *Function = function(Identity);
+            Function && Function->Unfolding) {
+          std::set<std::string> Called;
+          appliedFunctions(Function->Unfolding.get(), Called);
+          for (const std::string &Callee : Called)
+            if (const LogicFunctionDecl *Other = function(Callee);
+                Other && Other->Unfolding)
+              It->second.insert(Callee);
+        }
+      return It->second;
+    };
+    auto reaches = [&](const std::string &From, const std::string &To) {
+      std::set<std::string> Seen{From};
+      std::vector<std::string> Work{From};
+      while (!Work.empty()) {
+        const std::string Current = Work.back();
+        Work.pop_back();
+        for (const std::string &Next : successors(Current)) {
+          if (Next == To)
+            return true;
+          if (Seen.insert(Next).second)
+            Work.push_back(Next);
+        }
+      }
+      return false;
+    };
+    std::set<std::string> Group{Predicate.Identity};
+    std::set<std::string> Seen{Predicate.Identity};
+    std::vector<std::string> Work{Predicate.Identity};
+    while (!Work.empty()) {
+      const std::string Current = Work.back();
+      Work.pop_back();
+      for (const std::string &Next : successors(Current))
+        if (Seen.insert(Next).second) {
+          Work.push_back(Next);
+          if (reaches(Next, Predicate.Identity))
+            Group.insert(Next);
+        }
+    }
+    return Group;
+  }
+
+  size_t fixpointNode(Fixpoint &F, const LogicFunctionDecl &Function,
+                      const std::vector<LogicValue> &Args) {
+    std::string Key = Function.Identity;
+    for (const LogicValue &Argument : Args)
+      Key += "\x1f" + Argument.key();
+    auto [It, Inserted] = F.Index.try_emplace(Key, F.Nodes.size());
+    if (Inserted) {
+      F.Nodes.push_back({&Function, Args});
+      F.Values.push_back(false);
+      F.Readers.emplace_back();
+      F.Pending.push_back(It->second);
+    }
+    return It->second;
+  }
+
+  std::optional<bool> unfoldingAt(const LogicFunctionDecl &Function,
+                                  const std::vector<LogicValue> &Args) {
+    const size_t SavedBase = ScopeBase;
+    const size_t SavedSize = Scope.size();
+    ScopeBase = SavedSize;
+    for (unsigned I = 0; I != Args.size(); ++I)
+      Scope.emplace_back(Function.Parameters[I].Name, Args[I]);
+    Active.push_back(&Function);
+    std::optional<bool> Holds = truthOf(Function.Unfolding.get());
+    Active.pop_back();
+    Scope.resize(SavedSize);
+    ScopeBase = SavedBase;
+    return Holds;
+  }
+
+  /// An inductive predicate at \p Args, when its derivations from there
+  /// reach finitely many arguments: the least fixpoint of its group's
+  /// unfoldings over them. nullopt, with the evaluation state as before,
+  /// when they do not.
+  std::optional<bool> leastFixpoint(const LogicFunctionDecl &Predicate,
+                                    const std::vector<LogicValue> &Args) {
+    Fixpoint F;
+    F.Group = groupOf(Predicate);
+    for (const std::string &Member : F.Group)
+      if (const LogicFunctionDecl *Function = function(Member);
+          !Function || !Function->Unfolding)
+        return std::nullopt;
+    const bool SavedLimit = LimitInDefinition;
+    const LogicExpr *SavedWide = Wide;
+    const LogicExpr *SavedDeep = Deep;
+    fixpointNode(F, Predicate, Args);
+    Fixpoints.push_back(&F);
+    bool Complete = true;
+    while (!F.Pending.empty()) {
+      const size_t Node = F.Pending.back();
+      F.Pending.pop_back();
+      if (F.Values[Node])
+        continue;
+      if (F.Nodes.size() > MaxFixpointArguments) {
+        Complete = false;
+        break;
+      }
+      const LogicFunctionDecl *Function = F.Nodes[Node].first;
+      const std::vector<LogicValue> NodeArgs = F.Nodes[Node].second;
+      F.Reader = Node;
+      std::optional<bool> Holds = unfoldingAt(*Function, NodeArgs);
+      if (!Holds) {
+        Complete = false;
+        break;
+      }
+      if (*Holds) {
+        F.Values[Node] = true;
+        for (size_t Reader : F.Readers[Node])
+          if (!F.Values[Reader])
+            F.Pending.push_back(Reader);
+      }
+    }
+    Fixpoints.pop_back();
+    if (!Complete) {
+      if (Exhausted)
+        return std::nullopt;
+      Failure.clear();
+      LimitInDefinition = SavedLimit;
+      Wide = SavedWide;
+      Deep = SavedDeep;
+      return std::nullopt;
+    }
+    // Every value of a complete fixpoint is exact.
+    for (const auto &[Key, Node] : F.Index)
+      Applications.emplace(Key, LogicValue::boolean(F.Values[Node]));
+    return F.Values[0];
+  }
+
+  static std::unique_ptr<LogicExpr> trueTerm() {
+    auto True = std::make_unique<LogicExpr>(LogicExpr::True);
+    True->Sort = LogicSort::boolSort();
+    return True;
+  }
+
+  static void substitute(std::unique_ptr<LogicExpr> &E,
+                         const std::map<std::string, const LogicExpr *> &Map) {
+    if (E->K == LogicExpr::Var)
+      if (auto It = Map.find(E->Name); It != Map.end()) {
+        E = cloneLogicExpr(It->second);
+        return;
+      }
+    for (auto &Child : E->Children)
+      substitute(Child, Map);
+  }
+
+  static std::unique_ptr<LogicExpr> falseTerm() {
+    auto False = std::make_unique<LogicExpr>(LogicExpr::False);
+    False->Sort = LogicSort::boolSort();
+    return False;
+  }
+
+  /// Whether \p E applies a function at arguments that mention \p Binder.
+  static bool appliesAt(const LogicExpr *E, const std::string &Binder) {
+    if (E->K == LogicExpr::SpecCall && mentions(E, Binder))
+      return true;
+    return llvm::any_of(E->Children, [&](const std::unique_ptr<LogicExpr> &C) {
+      return appliesAt(C.get(), Binder);
+    });
+  }
+
+  /// Unfolds each application whose arguments mention \p Binder by its
+  /// definition, an equation: \p Depth levels deep, of which \p Recursive
+  /// may unfold recursive functions, while the term stays within \p Budget
+  /// nodes.
+  void inlineAt(std::unique_ptr<LogicExpr> &E, const std::string &Binder,
+                unsigned Depth, unsigned Recursive, uint64_t &Budget) {
+    if (E->K == LogicExpr::SpecCall && Depth && mentions(E.get(), Binder))
+      if (const LogicFunctionDecl *Function = function(E->SpecCallee);
+          Function && Function->StepDefinition && !Function->Choice &&
+          Function->Parameters.size() == E->Children.size() &&
+          (Recursive || nonRecursive().count(Function->Identity)) &&
+          countTerms(Function->StepDefinition.get()) < Budget) {
+        Budget -= countTerms(Function->StepDefinition.get());
+        if (!nonRecursive().count(Function->Identity))
+          --Recursive;
+        std::unique_ptr<LogicExpr> Body =
+            cloneLogicExpr(Function->StepDefinition.get());
+        std::map<std::string, const LogicExpr *> Map;
+        for (size_t I = 0; I != E->Children.size(); ++I)
+          Map[Function->Parameters[I].Name] = E->Children[I].get();
+        substitute(Body, Map);
+        E = std::move(Body);
+        inlineAt(E, Binder, Depth - 1, Recursive, Budget);
+        return;
+      }
+    for (auto &Child : E->Children)
+      inlineAt(Child, Binder, Depth, Recursive, Budget);
+  }
+
+  const std::set<std::string> &nonRecursive() {
+    if (!NonRecursive)
+      NonRecursive = nonRecursiveDefinitions(Module);
+    return *NonRecursive;
+  }
+
+  static uint64_t countTerms(const LogicExpr *E) {
+    uint64_t Count = 1;
+    for (const auto &Child : E->Children)
+      Count += countTerms(Child.get());
+    return Count;
+  }
+
+  /// Replaces each condition that applies a function at \p Binder by true
+  /// where \p E is monotone in it (\p Positive) and false where antitone,
+  /// so that E implies the result. False when one occurs where E is
+  /// neither.
+  static bool approximate(std::unique_ptr<LogicExpr> &E, bool Positive,
+                          const std::string &Binder) {
+    if (!appliesAt(E.get(), Binder))
+      return true;
+    switch (E->K) {
+    case LogicExpr::SpecCall:
+      if (E->Sort.Kind != LogicSortKind::Bool)
+        return false;
+      E = Positive ? trueTerm() : falseTerm();
+      return true;
+    case LogicExpr::Not:
+      return approximate(E->Children[0], !Positive, Binder);
+    case LogicExpr::And:
+    case LogicExpr::Or:
+      return llvm::all_of(E->Children, [&](std::unique_ptr<LogicExpr> &C) {
+        return approximate(C, Positive, Binder);
+      });
+    case LogicExpr::Ite:
+      return E->Sort.Kind == LogicSortKind::Bool &&
+             !appliesAt(E->Children[0].get(), Binder) &&
+             approximate(E->Children[1], Positive, Binder) &&
+             approximate(E->Children[2], Positive, Binder);
+    case LogicExpr::Forall:
+    case LogicExpr::Exists:
+      // A condition in a monotone position may become true, in an antitone
+      // one false: a quantifier over the binder is one the analysis below
+      // cannot read.
+      E = Positive ? trueTerm() : falseTerm();
+      return true;
+    default:
+      return false;
+    }
+  }
+
+  /// Replaces each condition of \p E that does not mention \p Binder by its
+  /// value, and simplifies the connectives over them.
+  void fold(std::unique_ptr<LogicExpr> &E, const std::string &Binder) {
+    if (E->Sort.Kind != LogicSortKind::Bool)
+      return;
+    if (!mentions(E.get(), Binder)) {
+      if (E->K == LogicExpr::True || E->K == LogicExpr::False)
+        return;
+      const bool SavedLimit = LimitInDefinition;
+      std::optional<bool> Holds = truthOf(E.get());
+      if (!Holds) {
+        if (!Exhausted) {
+          Failure.clear();
+          LimitInDefinition = SavedLimit;
+        }
+        return;
+      }
+      E = *Holds ? trueTerm() : falseTerm();
+      return;
+    }
+    switch (E->K) {
+    case LogicExpr::Not:
+      fold(E->Children[0], Binder);
+      if (E->Children[0]->K == LogicExpr::True)
+        E = falseTerm();
+      else if (E->Children[0]->K == LogicExpr::False)
+        E = trueTerm();
+      return;
+    case LogicExpr::And:
+    case LogicExpr::Or: {
+      const bool And = E->K == LogicExpr::And;
+      for (auto &Child : E->Children) {
+        fold(Child, Binder);
+        if (Child->K == (And ? LogicExpr::False : LogicExpr::True)) {
+          E = And ? falseTerm() : trueTerm();
+          return;
+        }
+      }
+      return;
+    }
+    case LogicExpr::Ite:
+      fold(E->Children[0], Binder);
+      fold(E->Children[1], Binder);
+      fold(E->Children[2], Binder);
+      if (E->Children[0]->K == LogicExpr::True) {
+        std::unique_ptr<LogicExpr> Then = std::move(E->Children[1]);
+        E = std::move(Then);
+      } else if (E->Children[0]->K == LogicExpr::False) {
+        std::unique_ptr<LogicExpr> Else = std::move(E->Children[2]);
+        E = std::move(Else);
+      }
+      return;
+    default:
+      return;
+    }
+  }
+
+  /// The binder values of quantifier \p Q at which its body may hold
+  /// (\p Negated: may fail), when they are finitely many: found where the
+  /// comparisons of the body change, once its applications at the binder
+  /// are unfolded or approximated. nullopt when they are not, or cannot be
+  /// told apart.
+  std::optional<std::vector<CertInt>>
+  witnessesOf(const LogicExpr *Q, bool Negated, const CertInt &Low,
+              const CertInt &High, bool Bounded) {
+    // Unfolding recursive definitions can expose comparisons, or bury them
+    // under quantifiers: try none first, then deeper.
+    for (unsigned Recursive = 0; Recursive != 3; ++Recursive)
+      if (std::optional<std::vector<CertInt>> Witnesses =
+              witnessesAt(Q, Negated, Low, High, Bounded, Recursive))
+        return Witnesses;
+    return std::nullopt;
+  }
+
+  std::optional<std::vector<CertInt>>
+  witnessesAt(const LogicExpr *Q, bool Negated, const CertInt &Low,
+              const CertInt &High, bool Bounded, unsigned Recursive) {
+    if (!Failure.empty())
+      return std::nullopt;
+    std::unique_ptr<LogicExpr> Probe = cloneLogicExpr(Q);
+    std::unique_ptr<LogicExpr> &Body = Probe->Children.back();
+    if (Negated) {
+      auto Not = std::make_unique<LogicExpr>(LogicExpr::Not);
+      Not->Sort = LogicSort::boolSort();
+      Not->Children.push_back(std::move(Body));
+      Body = std::move(Not);
+    }
+    uint64_t Budget = MaxUnfoldedTerms;
+    inlineAt(Body, Q->Binder, 4, Recursive, Budget);
+    if (!approximate(Body, true, Q->Binder))
+      return std::nullopt;
+    fold(Body, Q->Binder);
+    if (Body->K == LogicExpr::False)
+      return std::vector<CertInt>();
+    std::optional<std::set<CertInt>> Distinguished =
+        distinguishedValues(Probe.get(), Low, High, !Bounded);
+    if (!Distinguished)
+      return std::nullopt;
+    const CertInt Expansion(static_cast<int64_t>(Limits.DirectExpansion));
+    std::vector<CertInt> Witnesses;
+    auto holds = [&](const CertInt &Binder) -> std::optional<bool> {
+      ++Instances;
+      Scope.emplace_back(Q->Binder, LogicValue::integer(Binder));
+      std::optional<bool> Holds = truthOf(Body.get());
+      Scope.pop_back();
+      return Holds;
+    };
+    // Between distinguished values the approximation is constant: a stretch
+    // where it holds contributes every value, which must be few.
+    auto stretch = [&](const CertInt &From, const CertInt &To,
+                       bool Open) -> bool {
+      std::optional<bool> Holds = holds(From);
+      if (!Holds)
+        return false;
+      if (!*Holds)
+        return true;
+      if (Open || Expansion < To - From)
+        return false;
+      for (CertInt B = From; B < To; B = B + CertInt(1))
+        Witnesses.push_back(B);
+      return true;
+    };
+    std::optional<CertInt> Previous;
+    for (const CertInt &Value : *Distinguished) {
+      if (Bounded && (Value < Low || !(Value < High)))
+        continue;
+      const CertInt Start = Previous ? *Previous + CertInt(1)
+                                     : (Bounded ? Low : Value - CertInt(1));
+      if (Start < Value && !stretch(Start, Value, !Previous && !Bounded))
+        return std::nullopt;
+      std::optional<bool> Holds = holds(Value);
+      if (!Holds)
+        return std::nullopt;
+      if (*Holds)
+        Witnesses.push_back(Value);
+      Previous = Value;
+    }
+    const CertInt Start = Previous ? *Previous + CertInt(1) : Low;
+    if (!Bounded || Start < High)
+      if (!stretch(Start, Bounded ? High : Start + CertInt(1), !Bounded))
+        return std::nullopt;
+    return Witnesses;
+  }
+
+  /// Decides quantifier \p Q by its finitely many witnesses, if it has them.
+  std::optional<LogicValue> byWitnesses(const LogicExpr *Q, const CertInt &Low,
+                                        const CertInt &High, bool Bounded) {
+    const bool Forall = Q->K == LogicExpr::Forall;
+    std::optional<std::vector<CertInt>> Witnesses =
+        witnessesOf(Q, Forall, Low, High, Bounded);
+    if (!Witnesses)
+      return std::nullopt;
+    for (const CertInt &Binder : *Witnesses) {
+      ++Instances;
+      Scope.emplace_back(Q->Binder, LogicValue::integer(Binder));
+      std::optional<bool> Holds = truthOf(Q->Children.back().get());
+      Scope.pop_back();
+      if (!Holds)
+        return std::nullopt;
+      if (*Holds != Forall)
+        return LogicValue::boolean(!Forall);
+    }
+    return LogicValue::boolean(Forall);
+  }
+
+  static bool appliesAny(const LogicExpr *E,
+                         const std::set<std::string> &Group) {
+    if (!E)
+      return false;
+    if (E->K == LogicExpr::SpecCall && Group.count(E->SpecCallee))
+      return true;
+    return llvm::any_of(E->Children, [&](const std::unique_ptr<LogicExpr> &C) {
+      return appliesAny(C.get(), Group);
+    });
+  }
+
+  /// A quantifier over premises of the fixpoint being computed. A universal
+  /// is bounded and expanded. An existential's witnesses lie where its body
+  /// can hold with every premise true; they must be finitely many, found
+  /// where the comparisons of that body change.
+  std::optional<LogicValue> fixpointQuantifier(const LogicExpr *E) {
+    const bool Forall = E->K == LogicExpr::Forall;
+    const bool Bounded = E->Children.size() == 3;
+    CertInt Low(0), High(0);
+    if (Bounded) {
+      std::optional<CertInt> L = integerOf(E->Children[0].get());
+      if (!L)
+        return std::nullopt;
+      std::optional<CertInt> H = integerOf(E->Children[1].get());
+      if (!H)
+        return std::nullopt;
+      Low = *L;
+      High = *H;
+      if (!(Low < High))
+        return LogicValue::boolean(Forall);
+    }
+    auto at = [&](const LogicExpr *Body,
+                  const CertInt &Binder) -> std::optional<bool> {
+      ++Instances;
+      Scope.emplace_back(E->Binder, LogicValue::integer(Binder));
+      std::optional<bool> Holds = truthOf(Body);
+      Scope.pop_back();
+      return Holds;
+    };
+    const CertInt Expansion(static_cast<int64_t>(Limits.DirectExpansion));
+    if (Forall) {
+      if (!Bounded || Expansion < High - Low)
+        return limit("a universal over premises of an inductive predicate "
+                     "has too many values to expand");
+      for (CertInt B = Low; B < High; B = B + CertInt(1)) {
+        std::optional<bool> Holds = at(E->Children[2].get(), B);
+        if (!Holds)
+          return std::nullopt;
+        if (!*Holds)
+          return LogicValue::boolean(false);
+      }
+      return LogicValue::boolean(true);
+    }
+    // An existential's witnesses lie where its body can hold with every
+    // premise true; they must be finitely many.
+    if (std::optional<LogicValue> Decided = byWitnesses(E, Low, High, Bounded))
+      return Decided;
+    return Failure.empty()
+               ? limit("the witnesses of an existential over premises of an "
+                       "inductive predicate are not finitely many")
+               : std::nullopt;
+  }
+
+  /// A bool function's value as its postconditions decide it: the one
+  /// value they allow at \p Args.
+  std::optional<LogicValue>
+  fromPostconditions(const LogicFunctionDecl &Function,
+                     const std::vector<LogicValue> &Args) {
+    if (Function.ResultSort.Kind != LogicSortKind::Bool ||
+        Function.Postconditions.empty() ||
+        !PostsInUse.insert(Function.Identity).second)
+      return std::nullopt;
+    llvm::scope_exit Release([&] { PostsInUse.erase(Function.Identity); });
+    bool Allowed[2];
+    for (bool Candidate : {false, true}) {
+      const size_t SavedBase = ScopeBase;
+      const size_t SavedSize = Scope.size();
+      ScopeBase = SavedSize;
+      for (unsigned I = 0; I != Args.size(); ++I)
+        Scope.emplace_back(Function.Parameters[I].Name, Args[I]);
+      Scope.emplace_back(LogicFunctionDecl::ResultVariable,
+                         LogicValue::boolean(Candidate));
+      Active.push_back(&Function);
+      bool All = true;
+      bool Known = true;
+      for (const auto &Post : Function.Postconditions) {
+        std::optional<bool> Holds = truthOf(Post.get());
+        if (!Holds) {
+          Known = false;
+          break;
+        }
+        if (!*Holds) {
+          All = false;
+          break;
+        }
+      }
+      Active.pop_back();
+      Scope.resize(SavedSize);
+      ScopeBase = SavedBase;
+      if (!Known)
+        return std::nullopt;
+      Allowed[Candidate] = All;
+    }
+    if (Allowed[0] == Allowed[1])
+      return std::nullopt;
+    Evidence.insert(Function.Identity);
+    return LogicValue::boolean(Allowed[1]);
+  }
+
+  static std::string shown(const LogicFunctionDecl &Function,
+                           const std::vector<LogicValue> &Args) {
+    std::string Text = displayName(Function) + "(";
+    bool First = true;
+    for (size_t I = 0; I != Args.size(); ++I) {
+      if (Function.Parameters[I].Sort.Kind == LogicSortKind::Heap)
+        continue;
+      Text += (First ? "" : ", ") + Args[I].key();
+      First = false;
+    }
+    return Text + ")";
+  }
+
   std::optional<LogicValue> definition(const LogicFunctionDecl &Function,
                                        const std::vector<LogicValue> &Args) {
     std::string Key = Function.Identity;
@@ -1724,24 +2403,68 @@ class Evaluator {
       Key += "\x1f" + Argument.key();
     if (auto It = Applications.find(Key); It != Applications.end())
       return It->second;
+    if (auto It = Undecided.find(Key); It != Undecided.end()) {
+      LimitInDefinition = true;
+      return fail(It->second);
+    }
     if (!Function.StepDefinition)
       return fail(Function.DisplayName +
                   " has no definition, so the counterexample relies on a "
                   "value the specification leaves open");
-    const size_t SavedBase = ScopeBase;
-    const size_t SavedSize = Scope.size();
-    ScopeBase = SavedSize;
-    for (unsigned I = 0; I != Args.size(); ++I)
-      Scope.emplace_back(Function.Parameters[I].Name, Args[I]);
-    Active.push_back(&Function);
-    std::optional<LogicValue> Value = coerce(
-        eval(Function.StepDefinition.get()), Function.StepDefinition->Sort,
-        Function.ResultSort, isSigned(Function.ResultSort));
-    Active.pop_back();
-    Scope.resize(SavedSize);
-    ScopeBase = SavedBase;
-    if (!Value)
+    std::optional<LogicValue> Value;
+    if (Function.Unfolding) {
+      if (std::optional<bool> Least = leastFixpoint(Function, Args))
+        Value = LogicValue::boolean(*Least);
+      // Its postconditions settle a false value at once, which no search for
+      // a derivation can.
+      if (!Value && Failure.empty() && !Function.Postconditions.empty()) {
+        const bool SavedLimit = LimitInDefinition;
+        Value = fromPostconditions(Function, Args);
+        if (!Value && !Exhausted) {
+          Failure.clear();
+          LimitInDefinition = SavedLimit;
+        }
+      }
+    }
+    if (!Value && Failure.empty()) {
+      const size_t SavedBase = ScopeBase;
+      const size_t SavedSize = Scope.size();
+      ScopeBase = SavedSize;
+      for (unsigned I = 0; I != Args.size(); ++I)
+        Scope.emplace_back(Function.Parameters[I].Name, Args[I]);
+      Active.push_back(&Function);
+      Value = coerce(eval(Function.StepDefinition.get()),
+                     Function.StepDefinition->Sort, Function.ResultSort,
+                     isSigned(Function.ResultSort));
+      Active.pop_back();
+      Scope.resize(SavedSize);
+      ScopeBase = SavedBase;
+    }
+    // Where the definition runs out, a postcondition may still decide the
+    // value; the counterexample then rests on it.
+    if (!Value && LimitInDefinition && !Exhausted && !Function.Unfolding &&
+        !Function.Postconditions.empty()) {
+      const std::string Saved = std::move(Failure);
+      Failure.clear();
+      Value = fromPostconditions(Function, Args);
+      if (!Value)
+        Failure = Saved;
+    }
+    if (!Value && Function.Unfolding && LimitInDefinition && !Exhausted)
+      Failure = "whether " + shown(Function, Args) +
+                " holds: no derivation was found among the heights tried, "
+                "its derivations from there do not reach finitely many "
+                "arguments, and no postcondition of " +
+                displayName(Function) +
+                " decides it (a proved one such as !result || Q, with Q "
+                "false there, would)";
+    if (!Value) {
+      // A nesting limit depends on where the application is evaluated.
+      if (LimitInDefinition && !Exhausted &&
+          !llvm::StringRef(Failure).starts_with("the evaluation nesting limit"))
+        Undecided.emplace(Key, Failure);
       return std::nullopt;
+    }
     Applications.emplace(Key, *Value);
     Evaluated.push_back({&Function, Args});
     // A model's application can be expensive to read: check the clock first.
@@ -1754,10 +2477,10 @@ class Evaluator {
   }
 
   std::optional<LogicValue> application(const LogicExpr *E) {
-    auto It = Module.LogicFunctions.find(E->SpecCallee);
-    if (It == Module.LogicFunctions.end())
+    const LogicFunctionDecl *Declared = function(E->SpecCallee);
+    if (!Declared)
       return fail("no declaration for " + E->SpecCallee);
-    const LogicFunctionDecl &Function = It->second;
+    const LogicFunctionDecl &Function = *Declared;
     if (E->Children.size() != Function.Parameters.size())
       return fail("argument count mismatch for " + Function.DisplayName);
     std::vector<LogicValue> Args;
@@ -1771,6 +2494,15 @@ class Evaluator {
       Args.push_back(std::move(*Argument));
     }
     std::optional<LogicValue> Value;
+    // A premise of the least fixpoint being computed: its current value.
+    if (!Fixpoints.empty() &&
+        Fixpoints.back()->Group.count(Function.Identity)) {
+      Fixpoint &F = *Fixpoints.back();
+      const size_t Node = fixpointNode(F, Function, Args);
+      F.Readers[Node].insert(F.Reader);
+      return coerce(LogicValue::boolean(F.Values[Node]), Function.ResultSort,
+                    E->Sort, isSigned(Function.ResultSort));
+    }
     // A choice function means any interpretation that satisfies its axioms,
     // which the query assumes: the model's is one.
     if (!Function.Choice &&
@@ -2229,10 +2961,14 @@ public:
       return std::nullopt;
     if (!E)
       return fail("null term");
-    if (++Steps > Limits.Steps)
+    if (++Steps > Limits.Steps) {
+      Exhausted = true;
       return limit("the evaluation step limit was reached");
-    if ((Steps & 4095) == 0 && pastDeadline())
+    }
+    if (Exhausted || ((Steps & 4095) == 0 && pastDeadline())) {
+      Exhausted = true;
       return limit("the time limit was reached");
+    }
     if (Frames >= Limits.Frames)
       return limit("the evaluation nesting limit was reached");
     ++Frames;
@@ -2246,6 +2982,7 @@ public:
   const LogicExpr *wideQuantifier() const { return Wide; }
   const LogicExpr *deepApplication() const { return Deep; }
   std::vector<SpecDispute> takeDisputes() { return std::move(Disputes); }
+  const std::set<std::string> &evidence() const { return Evidence; }
   std::vector<DefinitionInstance> takeEvaluated() {
     return std::move(Evaluated);
   }
@@ -2314,6 +3051,7 @@ CertifyResult verify::certifyCounterexample(const ObligationModule &Module,
     }
     if (Holds->Truth) {
       Result.Outcome = CertifyOutcome::Certified;
+      Result.Evidence = Definitions.evidence();
       return;
     }
     Evaluator Claimed(Module, Model, Limits, View::Model);
