@@ -70,6 +70,17 @@ static void collectCallees(const std::vector<std::unique_ptr<VStmt>> &Stmts,
   }
 }
 
+/// The functions the proof blocks of \p Fn's clauses of \p Kinds call.
+static std::set<std::string>
+clauseProofCallees(const VFunction &Fn,
+                   std::initializer_list<VFunction::ClauseProof::Kind> Kinds) {
+  std::set<std::string> Out;
+  for (const VFunction::ClauseProof &Proof : Fn.ClauseProofs)
+    if (llvm::is_contained(Kinds, Proof.K))
+      collectCallees(Proof.Body, Out);
+  return Out;
+}
+
 /// A passive program asking whether its end is reachable: every assertion
 /// becomes an assumption, and the end asserts false. With \p EntryOnly only
 /// the precondition is kept.
@@ -949,7 +960,18 @@ public:
       size_t Index;
       std::set<std::string> Specs;
       std::set<std::string> Withheld;
+      /// A check of a spec establishes these facts of it.
+      std::string Establishes;
+      unsigned Facts = 0;
+      /// Specs whose postconditions, but not unfoldings, it does not assume.
+      std::set<std::string> PostsWithheld;
+      /// Proof functions whose contracts its proof blocks assume.
+      std::set<std::string> Callees;
+      /// The postconditions and unfoldings its module assumes.
+      std::set<std::string> AssumedPosts;
+      std::set<std::string> AssumedUnfoldings;
     };
+    enum : unsigned { DefinitionFact = 1, PostFact = 2, ReadsFact = 4 };
     std::vector<SpecReliance> ProofDependencies;
     // The line of each inductive predicate, which reports its rules.
     std::vector<std::pair<size_t, std::string>> InductiveLines;
@@ -1081,8 +1103,11 @@ public:
         Specs.erase(Verified.Identity);
         // A rule's proof uses its predicate's definition, not its unfolding.
         Specs.erase(Verified.InductiveRuleOf);
-        ProofDependencies.push_back(
-            {Diags.size() - 1, std::move(Specs), Verified.FactsWithheld});
+        SpecReliance Reliance{Diags.size() - 1, std::move(Specs),
+                              Verified.FactsWithheld};
+        Reliance.AssumedPosts = Used.AssumedPosts;
+        Reliance.AssumedUnfoldings = Used.AssumedUnfoldings;
+        ProofDependencies.push_back(std::move(Reliance));
       };
       auto exportLeanFallback = [&](const ObligationModule &Module,
                                     llvm::StringRef Label,
@@ -1180,7 +1205,9 @@ public:
 
         if (Fn->IsSpec && !Fn->Reads.empty()) {
           std::string Missing;
-          PassiveProgram ReadsPP = buildReadsChecks(*Fn, FnMap, Missing);
+          PassiveProgram ReadsPP =
+              withClauseProofs(buildReadsChecks(*Fn, FnMap, Missing), *Fn,
+                               {VFunction::ClauseProof::Reads}, FnMap);
           UnframedSpecs.insert(Fn->Identity);
           std::optional<ObligationModule> ReadsModule;
           std::string ReadsError;
@@ -1243,6 +1270,10 @@ public:
                                  "spec reads: " + Fn->Name, R.Location,
                                  Fn->Name, R});
                 recordDependencies(*Fn, *ReadsModule);
+                ProofDependencies.back().Establishes = Fn->Identity;
+                ProofDependencies.back().Facts = ReadsFact;
+                ProofDependencies.back().Callees =
+                    clauseProofCallees(*Fn, {VFunction::ClauseProof::Reads});
               } else {
                 AllOk = false;
                 AnyFailed = true;
@@ -1277,8 +1308,9 @@ public:
           UnprovenPosts.insert(Fn->Identity);
           std::optional<ObligationModule> PostModule;
           std::string PostError;
-          if (auto Lowered =
-                  buildObligationModule(buildSpecPostChecks(*Fn, FnMap))) {
+          if (auto Lowered = buildObligationModule(
+                  withClauseProofs(buildSpecPostChecks(*Fn, FnMap), *Fn,
+                                   {VFunction::ClauseProof::Post}, FnMap))) {
             if (auto Simplified = simplifyObligationModule(std::move(*Lowered)))
               PostModule = std::move(*Simplified);
             else
@@ -1334,6 +1366,18 @@ public:
                              "spec post: " + Fn->Name, R.Location, Fn->Name,
                              R});
             recordDependencies(*Fn, *PostModule);
+            ProofDependencies.back().Establishes = Fn->Identity;
+            ProofDependencies.back().Facts = PostFact;
+            // An inductive predicate's post comes from its step's; the
+            // predicates defined with it give their unfoldings only.
+            if (auto Step = FnMap.find(Fn->Identity + "::step");
+                Fn->Unfolding && Step != FnMap.end())
+              for (llvm::StringRef Member : Step->second->RecursionGroup)
+                if (Member.ends_with("::step"))
+                  ProofDependencies.back().PostsWithheld.insert(
+                      Member.drop_back(6).str());
+            ProofDependencies.back().Callees =
+                clauseProofCallees(*Fn, {VFunction::ClauseProof::Post});
           } else {
             AllOk = false;
             AnyFailed = true;
@@ -1375,8 +1419,9 @@ public:
           const std::string Label = "spec post by induction";
           std::optional<ObligationModule> Induction;
           std::string Error;
-          if (auto Lowered =
-                  buildObligationModule(buildInductionChecks(*Fn, FnMap))) {
+          if (auto Lowered = buildObligationModule(
+                  withClauseProofs(buildInductionChecks(*Fn, FnMap), *Fn,
+                                   {VFunction::ClauseProof::Post}, FnMap))) {
             if (auto Simplified = simplifyObligationModule(std::move(*Lowered)))
               Induction = std::move(*Simplified);
             else
@@ -1425,9 +1470,20 @@ public:
                                  Label + ": " + Fn->InductiveStepOf, R.Location,
                                  Fn->Name, R});
                 Diags.back().Quiet = true;
-                // The proof uses the definition, so it rests on termination.
+                // The proof uses the definition, so it rests on termination,
+                // and the predicates of the group through their unfoldings.
                 recordDependencies(*Fn, *Induction);
-                ProofDependencies.back().Specs.insert(Fn->Identity);
+                SpecReliance &Reliance = ProofDependencies.back();
+                Reliance.Specs.insert(Fn->Identity);
+                Reliance.Establishes = Fn->Identity;
+                Reliance.Facts = PostFact;
+                Reliance.Callees =
+                    clauseProofCallees(*Fn, {VFunction::ClauseProof::Post});
+                std::set<std::string> Group = Fn->RecursionGroup;
+                Group.insert(Fn->Identity);
+                for (llvm::StringRef Member : Group)
+                  if (Member.ends_with("::step"))
+                    Reliance.PostsWithheld.insert(Member.drop_back(6).str());
               } else {
                 AllOk = false;
                 AnyFailed = true;
@@ -1454,8 +1510,15 @@ public:
             Bare->Postconditions.clear();
             Bare->PostconditionKinds.clear();
           }
-          PassiveProgram DecPP =
-              buildDecreasesChecks(Bare ? *Bare : *Fn, FnMap);
+          PassiveProgram DecPP = withClauseProofs(
+              buildDecreasesChecks(Bare ? *Bare : *Fn, FnMap),
+              Bare ? *Bare : *Fn,
+              Bare ? std::set<VFunction::ClauseProof::
+                                  Kind>{VFunction::ClauseProof::Decreases}
+                   : std::set<VFunction::ClauseProof::
+                                  Kind>{VFunction::ClauseProof::Post,
+                                        VFunction::ClauseProof::Decreases},
+              FnMap);
           auto DecModuleOrErr = buildObligationModule(DecPP);
           // A spec's postcondition is proved with its termination.
           const std::string &Shown = Step ? Fn->InductiveStepOf : Fn->Name;
@@ -1558,10 +1621,20 @@ public:
                 UndefinedSpecs.erase(Fn->Identity);
                 if (!Step)
                   UnprovenPosts.erase(Fn->Identity);
-                if (!Quiet)
-                  Diags.push_back({VerifyDiagnostic::Verified, DecLabel + Shown,
-                                   R.Location, Fn->Name, R});
+                Diags.push_back({VerifyDiagnostic::Verified, DecLabel + Shown,
+                                 R.Location, Fn->Name, R});
+                Diags.back().Quiet = Quiet;
                 recordDependencies(*Fn, DecModule);
+                SpecReliance &Reliance = ProofDependencies.back();
+                Reliance.Establishes = Fn->Identity;
+                Reliance.Facts =
+                    DefinitionFact | (Step ? 0U : unsigned(PostFact));
+                Reliance.Callees =
+                    Step ? clauseProofCallees(
+                               *Fn, {VFunction::ClauseProof::Decreases})
+                         : clauseProofCallees(
+                               *Fn, {VFunction::ClauseProof::Decreases,
+                                     VFunction::ClauseProof::Post});
                 continue;
               }
             } else {
@@ -1924,58 +1997,16 @@ public:
       for (auto &[Index, Identity, Callees] : Run.CallDependencies)
         CallDependencies.emplace_back(Base + Index, std::move(Identity),
                                       std::move(Callees));
-      for (SpecReliance &Reliance : Run.ProofDependencies)
-        ProofDependencies.push_back({Base + Reliance.Index,
-                                     std::move(Reliance.Specs),
-                                     std::move(Reliance.Withheld)});
+      for (SpecReliance &Reliance : Run.ProofDependencies) {
+        Reliance.Index += Base;
+        ProofDependencies.push_back(std::move(Reliance));
+      }
       for (auto &[Index, Identity] : Run.InductiveLines)
         InductiveLines.emplace_back(Base + Index, std::move(Identity));
       if (DumpOS)
         *DumpOS << Run.Dump;
       if (Opts.ObligationOut)
         *Opts.ObligationOut << Run.Archive;
-    }
-
-    for (const auto &[Index, Specs, Withheld] : ProofDependencies) {
-      std::string Undefined;
-      std::string Unframed;
-      std::string Unproven;
-      for (const std::string &Identity : Specs) {
-        auto It = FnMap.find(Identity);
-        const std::string &Name =
-            It != FnMap.end() ? It->second->Name : Identity;
-        if (UndefinedSpecs.count(Identity))
-          Undefined += (Undefined.empty() ? "" : ", ") + Name;
-        else if (UnframedSpecs.count(Identity))
-          Unframed += (Unframed.empty() ? "" : ", ") + Name;
-        else if (UnprovenPosts.count(Identity) && !Withheld.count(Identity))
-          Unproven += (Unproven.empty() ? "" : ", ") + Name;
-      }
-      if (Undefined.empty() && Unframed.empty() && Unproven.empty())
-        continue;
-      VerifyDiagnostic &Diagnostic = Diags[Index];
-      AllOk = false;
-      Diagnostic.K = VerifyDiagnostic::Unresolved;
-      if (!Undefined.empty())
-        Diagnostic.Message += " [reason=spec.termination] (relies on the "
-                              "definition of " +
-                              Undefined +
-                              ", whose termination is not established)";
-      else if (!Unframed.empty())
-        Diagnostic.Message += " [reason=spec.reads] (relies on the reads "
-                              "clause of " +
-                              Unframed + ", which is not established)";
-      else
-        Diagnostic.Message += " [reason=spec.post] (relies on the "
-                              "postcondition of " +
-                              Unproven + ", which is not established)";
-      if (Diagnostic.Result) {
-        Diagnostic.Result->Status = VerifyStatus::Unresolved;
-        Diagnostic.Result->Reason =
-            !Undefined.empty()  ? VerifyReason::SpecTermination
-            : !Unframed.empty() ? VerifyReason::SpecReads
-                                : VerifyReason::SpecPost;
-      }
     }
 
     // Total correctness needs every loop to terminate. A bounded proof
@@ -2006,115 +2037,283 @@ public:
       }
     }
 
-    // A verdict that assumes a callee's contract is a proof only once the
-    // callee establishes it.
+    // Settle what each verdict rests on until nothing changes: the facts of
+    // specs (definitions, frames, postconditions, unfoldings) and callee
+    // contracts. A demoted check of a spec no longer establishes its facts,
+    // a demoted function no longer its contract, and an inductive predicate
+    // whose rule proofs are not all established has no unfolding.
     std::set<std::string> Unestablished;
     for (const auto &Fn : Functions)
       if (!Fn->IsSpec && !Fn->Uninterpreted && !Fn->IsTrusted)
         Unestablished.insert(Fn->Identity);
-    for (const auto &[Index, Identity, Callees] : CallDependencies)
-      if (Diags[Index].K == VerifyDiagnostic::Verified ||
-          Diags[Index].K == VerifyDiagnostic::Certified)
-        Unestablished.erase(Identity);
-    auto settleCallees = [&] {
-      for (bool Changed = true; Changed;) {
-        Changed = false;
-        for (const auto &[Index, Identity, Callees] : CallDependencies) {
-          VerifyDiagnostic &Diagnostic = Diags[Index];
-          if (Diagnostic.K != VerifyDiagnostic::Verified &&
-              Diagnostic.K != VerifyDiagnostic::Certified)
-            continue;
-          std::string Names;
-          for (const std::string &Callee : Callees)
-            if (Callee != Identity && Unestablished.count(Callee)) {
-              auto It = FnMap.find(Callee);
-              Names += (Names.empty() ? "" : ", ") +
-                       (It != FnMap.end() ? It->second->Name : Callee);
-              if (It != FnMap.end() && It->second->IsExternalContract)
-                Names += " (no definition; mark it [[cppverify::trusted]] to "
-                         "assume it)";
-            }
-          if (Names.empty())
-            continue;
-          AllOk = false;
-          Diagnostic.K = VerifyDiagnostic::Unresolved;
-          Diagnostic.Message += " [reason=callee.contract] (relies on the "
-                                "contract of " +
-                                Names + ", which is not established)";
-          if (Diagnostic.Result) {
-            Diagnostic.Result->Status = VerifyStatus::Unresolved;
-            Diagnostic.Result->Reason = VerifyReason::CalleeContract;
-          }
-          Unestablished.insert(Identity);
-          Changed = true;
-        }
-      }
+    auto settled = [&](size_t Index) {
+      return Diags[Index].K == VerifyDiagnostic::Verified ||
+             Diags[Index].K == VerifyDiagnostic::Certified;
     };
-    settleCallees();
-
-    // An inductive predicate's unfolding is a fact only once its rules are
-    // proved: a verdict that relies on it otherwise proves nothing, and the
-    // rules of predicates it is used in may in turn be left unproved.
+    for (const auto &[Index, Identity, Callees] : CallDependencies)
+      if (settled(Index))
+        Unestablished.erase(Identity);
+    std::map<size_t, std::string> VerdictOf;
+    for (const auto &[Index, Identity, Callees] : CallDependencies)
+      VerdictOf[Index] = Identity;
+    std::map<size_t, const SpecReliance *> CheckOf;
+    for (const SpecReliance &Reliance : ProofDependencies)
+      if (!Reliance.Establishes.empty())
+        CheckOf[Reliance.Index] = &Reliance;
+    auto demote = [&](size_t Index, VerifyReason Reason,
+                      const std::string &Why) {
+      VerifyDiagnostic &Diagnostic = Diags[Index];
+      AllOk = false;
+      Diagnostic.K = VerifyDiagnostic::Unresolved;
+      Diagnostic.Message +=
+          " [reason=" + verifyReasonCode(Reason).str() + "] (" + Why + ")";
+      if (Diagnostic.Result) {
+        Diagnostic.Result->Status = VerifyStatus::Unresolved;
+        Diagnostic.Result->Reason = Reason;
+      }
+      if (auto It = CheckOf.find(Index); It != CheckOf.end()) {
+        const SpecReliance &Check = *It->second;
+        if (Check.Facts & DefinitionFact)
+          UndefinedSpecs.insert(Check.Establishes);
+        if (Check.Facts & ReadsFact)
+          UnframedSpecs.insert(Check.Establishes);
+        if (Check.Facts & PostFact)
+          UnprovenPosts.insert(Check.Establishes);
+      }
+      if (auto It = VerdictOf.find(Index); It != VerdictOf.end())
+        Unestablished.insert(It->second);
+    };
+    auto nameOf = [&](const std::string &Identity) {
+      auto It = FnMap.find(Identity);
+      return It != FnMap.end() ? It->second->Name : Identity;
+    };
+    auto list = [](std::string &List, const std::string &Name) {
+      List += (List.empty() ? "" : ", ") + Name;
+    };
+    auto missingContracts = [&](const std::string &Self,
+                                const std::set<std::string> &Callees) {
+      std::string Names;
+      for (const std::string &Callee : Callees)
+        if (Callee != Self && Unestablished.count(Callee)) {
+          list(Names, nameOf(Callee));
+          auto It = FnMap.find(Callee);
+          if (It != FnMap.end() && It->second->IsExternalContract)
+            Names += " (no definition; mark it [[cppverify::trusted]] to "
+                     "assume it)";
+        }
+      return Names;
+    };
     std::map<std::string, std::vector<const VFunction *>> RulesOf;
     for (const auto &Fn : Functions)
       if (!Fn->InductiveRuleOf.empty())
         RulesOf[Fn->InductiveRuleOf].push_back(Fn.get());
-    std::map<size_t, std::string> VerdictOf;
-    for (const auto &[Index, Identity, Callees] : CallDependencies)
-      VerdictOf[Index] = Identity;
-    auto demoteForRules = [&](VerifyDiagnostic &Diagnostic,
-                              const std::string &Why) {
-      AllOk = false;
-      Diagnostic.K = VerifyDiagnostic::Unresolved;
-      Diagnostic.Message += " [reason=spec.inductive] (" + Why + ")";
-      if (Diagnostic.Result) {
-        Diagnostic.Result->Status = VerifyStatus::Unresolved;
-        Diagnostic.Result->Reason = VerifyReason::SpecInductive;
-      }
-    };
-    for (bool Changed = !RulesOf.empty(); Changed;) {
-      Changed = false;
+    auto unprovedRules = [&] {
       std::map<std::string, std::string> Unproved;
       for (const auto &[Predicate, Rules] : RulesOf)
         for (const VFunction *Rule : Rules)
           if (Unestablished.count(Rule->Identity)) {
-            std::string &Names = Unproved[Predicate];
             const size_t Open = Rule->Name.rfind(" (");
-            Names += (Names.empty() ? "" : ", ") +
-                     (Open == std::string::npos
-                          ? Rule->Name
-                          : Rule->Name.substr(Open + 2,
-                                              Rule->Name.size() - Open - 3));
+            list(Unproved[Predicate],
+                 Open == std::string::npos
+                     ? Rule->Name
+                     : Rule->Name.substr(Open + 2,
+                                         Rule->Name.size() - Open - 3));
           }
-      for (const auto &[Index, Specs, Withheld] : ProofDependencies) {
-        VerifyDiagnostic &Diagnostic = Diags[Index];
-        if (Diagnostic.K != VerifyDiagnostic::Verified &&
-            Diagnostic.K != VerifyDiagnostic::Certified)
+      return Unproved;
+    };
+    for (bool Demoted = true; Demoted;) {
+      for (bool Changed = true; Changed;) {
+        Changed = false;
+        const std::map<std::string, std::string> Unproved = unprovedRules();
+        for (const SpecReliance &Reliance : ProofDependencies) {
+          if (!settled(Reliance.Index))
+            continue;
+          std::string Undefined, Unframed, Unproven, Unruled;
+          for (const std::string &Identity : Reliance.Specs) {
+            if (UndefinedSpecs.count(Identity))
+              list(Undefined, nameOf(Identity));
+            else if (UnframedSpecs.count(Identity))
+              list(Unframed, nameOf(Identity));
+            else if (UnprovenPosts.count(Identity) &&
+                     Identity != Reliance.Establishes &&
+                     !Reliance.Withheld.count(Identity) &&
+                     !Reliance.PostsWithheld.count(Identity))
+              list(Unproven, nameOf(Identity));
+            if (Unproved.count(Identity) && !Reliance.Withheld.count(Identity))
+              list(Unruled, nameOf(Identity));
+          }
+          if (!Undefined.empty())
+            demote(Reliance.Index, VerifyReason::SpecTermination,
+                   "relies on the definition of " + Undefined +
+                       ", whose termination is not established");
+          else if (!Unframed.empty())
+            demote(Reliance.Index, VerifyReason::SpecReads,
+                   "relies on the reads clause of " + Unframed +
+                       ", which is not established");
+          else if (!Unproven.empty())
+            demote(Reliance.Index, VerifyReason::SpecPost,
+                   "relies on the postcondition of " + Unproven +
+                       ", which is not established");
+          else if (!Unruled.empty())
+            demote(Reliance.Index, VerifyReason::SpecInductive,
+                   "relies on the unfolding of " + Unruled +
+                       ", whose rules are not established");
+          else if (std::string Missing = missingContracts("", Reliance.Callees);
+                   !Missing.empty())
+            demote(Reliance.Index, VerifyReason::CalleeContract,
+                   "relies on the contract of " + Missing +
+                       ", which is not established");
+          else
+            continue;
+          Changed = true;
+        }
+        for (const auto &[Index, Identity, Callees] : CallDependencies) {
+          if (!settled(Index))
+            continue;
+          std::string Missing = missingContracts(Identity, Callees);
+          if (Missing.empty())
+            continue;
+          demote(Index, VerifyReason::CalleeContract,
+                 "relies on the contract of " + Missing +
+                     ", which is not established");
+          Changed = true;
+        }
+        for (const auto &[Index, Identity] : InductiveLines)
+          if (auto It = Unproved.find(Identity);
+              It != Unproved.end() &&
+              Diags[Index].K == VerifyDiagnostic::Verified)
+            demote(Index, VerifyReason::SpecInductive,
+                   "its rules are not established: " + It->second);
+      }
+
+      // No proof may rest on itself. A fact is established only by verdicts
+      // whose own dependencies are, starting from none (a least fixpoint);
+      // recursion is justified only through a checked measure: within a
+      // function's recursion cycle, and by a spec's induction hypothesis.
+      Demoted = false;
+      auto fact = [](char Kind, const std::string &Identity) {
+        return std::string(1, Kind) + Identity;
+      };
+      std::map<std::string, std::vector<size_t>> Producers;
+      std::set<size_t> Verdicts;
+      for (const auto &[Index, Identity, Callees] : CallDependencies) {
+        Verdicts.insert(Index);
+        Producers[fact('C', Identity)].push_back(Index);
+        auto It = FnMap.find(Identity);
+        if (It != FnMap.end() && !It->second->InductiveRuleOf.empty())
+          Producers[fact('U', It->second->InductiveRuleOf)].push_back(Index);
+      }
+      for (const SpecReliance &Reliance : ProofDependencies) {
+        Verdicts.insert(Reliance.Index);
+        if (Reliance.Establishes.empty())
+          continue;
+        if (Reliance.Facts & DefinitionFact)
+          Producers[fact('D', Reliance.Establishes)].push_back(Reliance.Index);
+        if (Reliance.Facts & PostFact)
+          Producers[fact('P', Reliance.Establishes)].push_back(Reliance.Index);
+        if (Reliance.Facts & ReadsFact)
+          Producers[fact('R', Reliance.Establishes)].push_back(Reliance.Index);
+      }
+      auto cycleOf = [&](const std::string &Identity) {
+        std::set<std::string> Cycle;
+        if (auto It = FnMap.find(Identity); It != FnMap.end())
+          Cycle = It->second->RecursionGroup;
+        Cycle.insert(Identity);
+        return Cycle;
+      };
+      std::map<size_t, std::set<std::string>> Needs;
+      for (const auto &[Index, Identity, Callees] : CallDependencies) {
+        const std::set<std::string> Cycle = cycleOf(Identity);
+        for (const std::string &Callee : Callees)
+          if (!Cycle.count(Callee))
+            Needs[Index].insert(fact('C', Callee));
+      }
+      for (const SpecReliance &Reliance : ProofDependencies) {
+        std::set<std::string> &Mine = Needs[Reliance.Index];
+        for (const std::string &Callee : Reliance.Callees)
+          Mine.insert(fact('C', Callee));
+        const std::string Self =
+            !Reliance.Establishes.empty()     ? Reliance.Establishes
+            : VerdictOf.count(Reliance.Index) ? VerdictOf[Reliance.Index]
+                                              : std::string();
+        const std::set<std::string> Cycle =
+            Self.empty() ? std::set<std::string>() : cycleOf(Self);
+        // Definitions and frames of what the proof mentions; postconditions
+        // and unfoldings only where it assumes them.
+        for (const std::string &Spec : Reliance.Specs) {
+          if (Spec == Reliance.Establishes) {
+            if (!(Reliance.Facts & DefinitionFact))
+              Mine.insert(fact('D', Spec));
+            continue;
+          }
+          if (Cycle.count(Spec))
+            continue;
+          Mine.insert(fact('D', Spec));
+          Mine.insert(fact('R', Spec));
+        }
+        for (const std::string &Spec : Reliance.AssumedPosts)
+          if (Spec != Reliance.Establishes && !Cycle.count(Spec) &&
+              !Reliance.Withheld.count(Spec))
+            Mine.insert(fact('P', Spec));
+        for (const std::string &Spec : Reliance.AssumedUnfoldings)
+          if (!Cycle.count(Spec) && !Reliance.Withheld.count(Spec))
+            Mine.insert(fact('U', Spec));
+      }
+      std::set<std::string> Established;
+      std::set<size_t> Sound;
+      auto established = [&](const std::string &Fact) {
+        return !Producers.count(Fact) || Established.count(Fact);
+      };
+      for (bool Changed = true; Changed;) {
+        Changed = false;
+        for (size_t Index : Verdicts)
+          if (!Sound.count(Index) && settled(Index) &&
+              llvm::all_of(Needs[Index], established)) {
+            Sound.insert(Index);
+            Changed = true;
+          }
+        for (const auto &[Fact, Indices] : Producers)
+          if (!Established.count(Fact) &&
+              llvm::all_of(Indices,
+                           [&](size_t Index) { return Sound.count(Index); })) {
+            Established.insert(Fact);
+            Changed = true;
+          }
+      }
+      auto describe = [&](const std::string &Fact) {
+        const std::string Name = nameOf(Fact.substr(1));
+        switch (Fact[0]) {
+        case 'C':
+          return "the contract of " + Name;
+        case 'D':
+          return "the definition of " + Name;
+        case 'P':
+          return "the postcondition of " + Name;
+        case 'R':
+          return "the reads clause of " + Name;
+        default:
+          return "the rules of " + Name;
+        }
+      };
+      for (size_t Index : Verdicts) {
+        if (Sound.count(Index) || !settled(Index))
           continue;
         std::string Names;
-        for (const std::string &Identity : Specs)
-          if (Unproved.count(Identity) && !Withheld.count(Identity)) {
-            auto It = FnMap.find(Identity);
-            Names += (Names.empty() ? "" : ", ") +
-                     (It != FnMap.end() ? It->second->Name : Identity);
-          }
-        if (Names.empty())
-          continue;
-        demoteForRules(Diagnostic, "relies on the unfolding of " + Names +
-                                       ", whose rules are not established");
-        if (auto It = VerdictOf.find(Index); It != VerdictOf.end())
-          Unestablished.insert(It->second);
-        Changed = true;
+        for (const std::string &Fact : Needs[Index])
+          if (!established(Fact))
+            list(Names, describe(Fact));
+        demote(Index, VerifyReason::ProofCycle,
+               "relies on " + Names +
+                   ", whose proof rests in turn on this one");
+        Demoted = true;
       }
-      for (const auto &[Index, Identity] : InductiveLines) {
-        VerifyDiagnostic &Diagnostic = Diags[Index];
-        auto It = Unproved.find(Identity);
-        if (It != Unproved.end() && Diagnostic.K == VerifyDiagnostic::Verified)
-          demoteForRules(Diagnostic,
-                         "its rules are not established: " + It->second);
-      }
-      if (Changed)
-        settleCallees();
+      for (const auto &[Index, Identity] : InductiveLines)
+        if (!established(fact('U', Identity)) &&
+            Diags[Index].K == VerifyDiagnostic::Verified) {
+          demote(Index, VerifyReason::ProofCycle,
+                 "its rules rest on facts whose proofs rest on them");
+          Demoted = true;
+        }
     }
     // A proof trusts what its callees' proofs trust, too.
     std::map<std::string, std::set<std::string>> Trusts;
