@@ -149,8 +149,13 @@ obligations.
   establish. It cannot return, write memory, or assign a parameter.
 - Only a spec's definition takes proof blocks; other functions put their
   proof in their bodies.
-- A block cannot use a lemma whose own proof rests on the property being
-  proved: both proofs would hold only by each other, and both are
+- A block may use a lemma about the spec itself when both have
+  ``decreases`` clauses of one length (a cluster, as in Dafny): the block's
+  call must lower the measure, and the lemma uses the spec's definition and
+  postcondition only where the spec's measure is below the lemma's. With
+  ``decreases(n, 0)`` on the spec and ``decreases(n, 1)`` on the lemma, the
+  lemma unfolds the spec at ``n`` and the block calls the lemma at
+  ``n - 1``. Without shared measures, proofs that rest on each other are
   ``Unresolved`` with reason ``proof.cycle``.
 
 Inductive predicates
