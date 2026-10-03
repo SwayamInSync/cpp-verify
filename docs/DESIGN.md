@@ -418,10 +418,19 @@ spec bool reach(int a, int b)
   seen through their unfoldings, which rest on the proved rules, never
   through the postcondition being proved: `post(!result || !bad(n))` on a
   predicate with `bad(0)` true fails.
-- A counterexample that needs `P(v)` true is certified by a derivation, a
-  height `h` with `P.step(h, v)`, found by trying heights. One that needs
-  `P(v)` false is `counterexample.unchecked` unless the quantifier analysis
-  decides it, since no height shows that no derivation exists.
+- A counterexample is certified against the true definition of `P` either
+  way. When the arguments `P`'s derivations can reach from `v` are finitely
+  many, the check computes the least fixpoint over them: every value starts
+  false and becomes true once its body holds, until nothing changes (an
+  existential's witnesses are found where its body's comparisons change,
+  with the premises taken as true). This decides `climb(3, 4)` false,
+  mutual predicates, and walks over memory. Otherwise `P(v)` true is shown
+  by a derivation height found by trying heights, and `P(v)` false by a
+  postcondition of `P` that excludes it; the counterexample then rests on
+  that postcondition, and if it is not established the failure is
+  `Unresolved` with reason `spec.post`. When none of these decides, the
+  message names the application (`whether odd(4) holds: ...`) and the kind
+  of postcondition that would.
 
 ### `recommends` — soft preconditions for spec functions
 
@@ -544,9 +553,14 @@ post(forall(k, sq(k) >= 0))
   binders through linear arithmetic, comparisons, memory and collection
   reads, and other quantifiers, nested to any depth: once the model fixes
   everything else, each read is one of finitely many constant pieces, which
-  leaves a sentence of Presburger arithmetic that the certifier decides.
-  Otherwise (a product or quotient of binders, or a spec applied to a binder)
-  it is `counterexample.unchecked`.
+  leaves a sentence of Presburger arithmetic that the certifier decides. A
+  spec applied to a binder is unfolded by its definition, or, where the
+  body is monotone or antitone in it, taken as true or false: when the body
+  can hold (or fail) at finitely many binder values only, found where its
+  comparisons change, evaluating it there decides the quantifier. A witness
+  among the values where those comparisons change, or near zero, also
+  decides it. Otherwise (a product or quotient of binders, say) it is
+  `counterexample.unchecked`.
 
 ### Triggers
 
