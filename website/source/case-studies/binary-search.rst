@@ -12,6 +12,8 @@ in 2006.
 
 The defect is one line:
 
+.. cppverify-example: fragment
+
 .. code-block:: cpp
 
    int mid = (lo + hi) / 2;
@@ -39,6 +41,8 @@ overflow.
 
 Replacing the midpoint with the standard safe form makes the same function
 verify:
+
+.. cppverify-example: fragment
 
 .. code-block:: cpp
 
