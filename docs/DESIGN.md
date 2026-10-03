@@ -1217,8 +1217,9 @@ proof void sum_concat(seq s, seq t)
 - A collection read can be a trigger, and counterexamples show collection
   values: `[1, 2]`, `{1, 3..5}` (a run), `{2: 3}` (counts), `{1 -> 7}`, and
   `{..}` (every integer).
-- Backends: Z3 decides all four. cvc5 decides sequences; sets, multisets,
-  and maps are `logic.unsupported` there, and Lean supports none.
+- Backends: Z3 and cvc5 decide all four (cvc5 settles fewer goals that
+  need an infinite set or ghost collections in loops), and Lean supports
+  none.
 
 ## Clang Modification Details
 
