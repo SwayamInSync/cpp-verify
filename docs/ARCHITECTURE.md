@@ -1285,7 +1285,23 @@ pure JSON stream.
      (`PassiveProgram`/`ObligationModule::AssumedPosts` and
      `AssumedUnfoldings`, recorded where the facts are added, never
      archived), except within a recursion cycle and for the spec it checks.
-     A verdict left unsound is `Unresolved` with reason `proof.cycle`;
+     A verdict left unsound is `Unresolved` with reason `proof.cycle`.
+     Clusters (`VFunction::Cluster`, computed in the frontend) relax this
+     as Dafny does: the specs and proof functions that reach each other
+     through bodies, contracts (pre, post, decreases), and proof blocks,
+     when all share `decreases` clauses of one length. A call to a member
+     asserts the decrease (the passivizer's call-site check, which a
+     spec's generated block function gets by taking the spec's measure);
+     a member's postcondition, and a recursive member's one-step
+     definition, are assumed only under the decrease of the callee's
+     measure below the user's at entry (`specInductionFacts`, recorded as
+     `InductivePosts`); and recursive members are hidden from each other,
+     so no definition reaches the solver unguarded. The fixpoint then
+     needs no contract, postcondition, or definition fact of a member;
+     frames are not guarded and stay needed. Every use descends the shared
+     measure, so the members' facts hold by well-founded induction, and
+     the failure of one still demotes the others through the first
+     fixpoint;
    - every `Verified` result gets the vacuity checks, small queries over the
      same passive program: `false` at the end of the function (the whole
      proof is vacuous), each behavior's `pre && assumes` (a behavior that
