@@ -37,10 +37,19 @@ CI pre-flight, and LLM/agent loops.
 Other flags
 -----------
 
-- ``cpp-verify --backend={z3,bmc,lean}`` — verification engine (see :doc:`ch17-backends-modular-calls`)
-- ``cpp-verify --no-check-ub`` — turn off the default memory checks (object
-  bounds of accesses and pointer arithmetic, enumeration ranges); core
-  definedness stays on (see :doc:`ch18-undefined-behavior`)
+- ``cpp-verify --backend={z3,cvc5,portfolio,race,bmc,lean}`` — verification
+  engine: Z3 (the default), cvc5, both with agreement required
+  (``portfolio``), both at once with the first proof or certified
+  counterexample standing (``race``), bounded model checking, or Lean export
+  (see :doc:`ch17-backends-modular-calls`)
+- ``cpp-verify --cvc5-path=FILE`` — the cvc5 executable, for ``cvc5``,
+  ``portfolio``, and ``race``
+- ``cpp-verify --check-ub`` / ``--no-check-ub`` — the default memory checks
+  (object bounds of accesses and pointer arithmetic, enumeration ranges) on or
+  off; core definedness stays on (see :doc:`ch18-undefined-behavior`)
+- ``cpp-verify --int-encoding={auto,integer,bitvector}`` — how machine
+  integers reach the solver; every choice is exact, so only speed changes
+  (see :doc:`../../language/integers`)
 - ``cpp-verify --profile-quantifiers`` — for an unresolved quantified query,
   report how often each quantifier was instantiated (see
   :doc:`ch16-when-verification-fails`)
@@ -50,10 +59,22 @@ Other flags
   sequences, sets, multisets, or maps (default twice ``--timeout``)
 - ``cpp-verify --function-timeout=N`` — time all queries of one function may
   take together (default ten times ``--timeout``; ``0`` disables)
+- ``cpp-verify --certify-timeout=N`` — time checking one counterexample
+  against the true definitions may take (default half the query timeout;
+  ``0`` lets it take the query's own time), so one slow model leaves time to
+  others
+- ``cpp-verify --solver-rlimit=N`` — deterministic per-query resource budget
+  for Z3 and cvc5 (``0`` disables)
+- ``cpp-verify --max-query-nodes=N`` — refuse a query larger than ``N``
+  expression nodes (``query.size-limit``)
 - ``cpp-verify --jobs=N`` — solver workers shared by all functions (default
   every core)
+- ``cpp-verify --proof-cache=DIR`` — keep proofs of single obligations between
+  runs (``--proof-cache-max-mb``, ``--proof-cache-max-entries`` bound it)
 - ``cpp-verify --diagnostics-format=json`` — emit versioned
   ``cppverify.diagnostic/1`` JSON Lines for verification results
+- ``cpp-verify --lean-out=FILE`` — with ``--backend=lean``, write a standalone
+  Lean scratch-pad
 - ``cpp-verify --lean-project=DIR`` — generate a preserved, pinned Lean project
 - ``cpp-verify --lean-fallback=DIR`` — export the obligations Z3 left unproved
   in unresolved functions to Lean (``--lean-fallback-scope=all`` exports every
