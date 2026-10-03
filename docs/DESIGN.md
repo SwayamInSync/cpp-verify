@@ -125,7 +125,10 @@ checked at each: an unsatisfiable precondition, a function whose end no
 execution reaches, a behavior whose assumption contradicts the preconditions
 (its postconditions are never checked; warning only), and a trusted call
 whose contract contradicts the state of the call. Unreachable code alone
-is not flagged.
+is not flagged. Under BMC the same checks run on the program unrolled to
+the bound, as Kani reports an unreachable check, and a `BoundedSafe`
+result that no execution finishes within the bound is `[vacuous]` too
+(`no execution finishes within N loop iterations`).
 
 A proof never rests on itself. Every fact a proof assumes (a callee's
 contract, a spec's definition, frame, or postcondition, an inductive
@@ -166,6 +169,8 @@ this way.
 
 ## Loop Contracts: invariant / decreases
 
+<!-- cppverify-example: fragment -->
+
 ```cpp
 while (i < n)
   invariant(2 <= i && i <= n)
@@ -189,6 +194,8 @@ while (i < n)
   began, and must end (and `continue`) that way, so a range such as
   `a[0 : i]` can describe progress:
 
+<!-- cppverify-example: fragment -->
+
 ```cpp
 for (int i = 0; i < n; i = i + 1)
   invariant(0 <= i && i <= n)
@@ -204,6 +211,8 @@ for (int i = 0; i < n; i = i + 1)
   an invariant saying so.
 
 `do` loops place the clauses between the trailing condition and its semicolon:
+
+<!-- cppverify-example: fragment -->
 
 ```cpp
 do {
@@ -231,6 +240,8 @@ loop fail closed.
 
 ## Assertions: contract_assert
 
+<!-- cppverify-example: fragment -->
+
 ```cpp
 contract_assert(x > 0);
 ```
@@ -240,6 +251,8 @@ contract_assert(x > 0);
   assumed for the rest of the function.
 - A function without contract clauses is still verified when its body has a
   `contract_assert`, ghost code, or a loop contract.
+
+<!-- cppverify-example: fragment -->
 
 ```cpp
 contract_assert(sq(a) <= sq(b)) by {
@@ -254,6 +267,8 @@ contract_assert(sq(a) <= sq(b)) by {
   assume c`, with the choice fresh in every execution, so BMC unrolling stays
   sound.
 
+<!-- cppverify-example: fragment -->
+
 ```cpp
 contract_assert(forall(k, 0, n, a[k] <= a[n - 1])) by {
     pair_ordered(a, n, k, n - 1);
@@ -265,6 +280,8 @@ contract_assert(forall(k, 0, n, a[k] <= a[n - 1])) by {
   scope, lies in `[lo, hi)`, and cannot be assigned; the block must establish
   the body for that `k`, and the whole `forall` holds afterwards (universal
   generalization). An implication is a branch: `if (A(k)) lemma(k);`.
+
+<!-- cppverify-example: fragment -->
 
 ```cpp
 calc {
@@ -282,6 +299,8 @@ calc {
   type or variable named `calc` keeps its meaning.
 
 ## Ghost Blocks
+
+<!-- cppverify-example: fragment -->
 
 ```cpp
 ghost {
@@ -305,11 +324,14 @@ ghost {
 
 ## Spec Functions
 
+<!-- cppverify-example: label fibo -->
+
 ```cpp
 spec int fibo(int n)
   decreases(n)
+  post(result >= 0)
 {
-    if (n == 0) return 0;
+    if (n <= 0) return 0;
     if (n == 1) return 1;
     return fibo(n - 2) + fibo(n - 1);
 }
@@ -338,7 +360,10 @@ spec int fibo(int n)
   argument, and `recommends` states its intended domain.
 - May declare `post(...)`, proved with its termination by well-founded
   induction on the measure (a recursive call assumes the post only where its
-  measure is lower) and assumed at every application. A failed post demotes
+  measure is lower) and assumed at every application, including those
+  inside the unfoldings of its definition that a proof receives (as Dafny's
+  function postconditions): a lemma about `fibo(j)` may use
+  `fibo(j - 2) >= 0` without naming it. A failed post demotes
   the proofs that relied on it (`spec.post`, or `spec.termination` for a
   recursive spec).
 - Any `post`, `decreases`, or `reads` clause of a spec definition may be
@@ -347,6 +372,8 @@ spec int fibo(int n)
   obligations, as a proof function's body runs before its postcondition.
   It is where the solver gets the step it cannot find, such as a lemma at
   a chosen argument:
+
+<!-- cppverify-example: fragment -->
 
 ```cpp
 spec int area(int a, int b)
@@ -492,6 +519,8 @@ spec int safe_div(int a, int b)
 
 ## `constexpr` Functions as Automatic Spec Functions
 
+<!-- cppverify-example: fragment -->
+
 ```cpp
 constexpr bool is_power_of_two(int n) {
     return n > 0 && (n & (n - 1)) == 0;
@@ -539,6 +568,8 @@ This is genuinely a CppVerify advantage over Verus — Verus forces users to mai
 
 **Compile-time partial evaluation:** When a contract contains a `constexpr` call with all-concrete arguments, Clang evaluates it at compile time before the verifier sees it:
 
+<!-- cppverify-example: fragment -->
+
 ```cpp
 write_data(buf, 512);
 // At this call site, Clang evaluates is_power_of_two(512) → true.
@@ -549,20 +580,16 @@ This is unique to being inside the compiler.
 
 ## Proof Functions
 
+<!-- cppverify-example: with fibo -->
+
 ```cpp
 proof void lemma_fibo_monotonic(int i, int j)
   pre(i <= j)
   post(fibo(i) <= fibo(j))
   decreases(j - i)
 {
-    if (i < 2 && j < 2) {
-    } else if (i == j) {
-    } else if (i == j - 1) {
-        lemma_fibo_monotonic(i, j - 1);
-    } else {
-        lemma_fibo_monotonic(i, j - 1);
-        lemma_fibo_monotonic(i, j - 2);
-    }
+    if (i < j)
+        lemma_fibo_monotonic(i, j - 1);  // fibo(i) <= fibo(j - 1) <= fibo(j)
 }
 ```
 
@@ -577,6 +604,8 @@ proof void lemma_fibo_monotonic(int i, int j)
 - **Integer semantics:** machine integers (matches `exec`).
 
 ## Quantifiers: forall / exists
+
+<!-- cppverify-example: fragment -->
 
 ```cpp
 post(forall(i, 2, n, ret[i] == ret[i-1] + ret[i-2]))
@@ -607,6 +636,8 @@ post(forall(k, sq(k) >= 0))
   `counterexample.unchecked`.
 
 ### Triggers
+
+<!-- cppverify-example: fragment -->
 
 ```cpp
 pre(forall(k, 0, n, trigger(a[k]) > 0))
@@ -816,7 +847,7 @@ lvalue references.
 pre(p != q && p != r && q != r && ...)   // for all distinct mut ptr/ref pairs
 ```
 
-- The caller's verification must establish these inequalities. Calling `swap(&x, &x)` produces a precondition failure.
+- The caller's verification must establish these inequalities. Calling `swap(p, p)` fails the call's `aliasing` check.
 - A pointer carrying a `valid(p, n)` extent contributes the
   whole extent (`n * sizeof(T)` bytes) as its complete object, so the pair is
   disjoint unless either pointer is null or either extent is empty. Callers
@@ -889,6 +920,7 @@ state updates.
 
 ```cpp
 void incr_first(int* a, int* b)
+  pre(a != nullptr && b != nullptr && *a < 2147483647)
   modifies(*a)              // promises: only writes to *a; *b unchanged
   post(*a == old(*a) + 1)
 {
@@ -934,24 +966,23 @@ void incr_first(int* a, int* b)
 ### Worked example
 
 ```cpp
-void swap(int* a, int* b)
-  pre(a != nullptr && b != nullptr)
-  modifies(*a, *b)
-  post(*a == old(*b) && *b == old(*a))
+void swap(int& a, int& b)
+  modifies(a, b)
+  post(a == old(b) && b == old(a))
 {
-    int t = *a;
-    *a = *b;
-    *b = t;
+    int t = a;
+    a = b;
+    b = t;
 }
 
 int compute() {
     int x = 5;
     int y = 10;
     int z = 100;
-    swap(&x, &y);
+    swap(x, y);
     // Verifier knows:
-    //  - x and y are non-aliased (implicit default) OK
-    //  - swap modified only *(&x) and *(&y)
+    //  - x and y are distinct objects (implicit non-aliasing default)
+    //  - swap modified only x and y
     //  - therefore z is unchanged
     contract_assert(z == 100);          // verifies
     contract_assert(x == 10 && y == 5); // verifies from post
@@ -959,16 +990,23 @@ int compute() {
 }
 ```
 
+`swap(x, x)` from a verified function fails the call's `aliasing` check.
+Binding a reference to a local is supported; taking a local's raw address
+(`&x`) is not, until lexical lifetimes and escapes are modeled.
+
 ## Type Invariants
 
 ```cpp
-class Coordinate {
+struct Coordinate {
     int x;
     int y;
-    type_invariant(x >= 0 && y >= 0);   // must appear after the fields it names
+    // must appear after the fields it names
+    type_invariant(x >= 0 && x <= 10000 && y >= 0 && y <= 10000);
 };
 
-int dist_sq(Coordinate p, Coordinate q) {
+int dist_sq(Coordinate p, Coordinate q)
+  post(result >= 0)
+{
     // Verifier auto-injects (lazy — only because the body accesses .x and .y):
     //   assume(p.x >= 0 && p.y >= 0);
     //   assume(q.x >= 0 && q.y >= 0);
@@ -1021,24 +1059,41 @@ This is purely an optimization — correctness is identical to eager injection. 
 When verifying code over a concrete data structure, define `spec` functions that produce a mathematical view of the data. Specs are then written against the view, not the internals.
 
 ```cpp
-class SortedArray {
-    int data[100];
-    int len;
+struct Interval {
+    int lo;
+    int hi;
 };
 
 // abstract view: what the structure means mathematically
-spec int elem(SortedArray a, int i) { return a.data[i]; }
-spec int size(SortedArray a) { return a.len; }
+spec int size(Interval r) { return r.hi - r.lo; }
+spec bool has(Interval r, int x) { return r.lo <= x && x < r.hi; }
 
-bool contains(SortedArray a, int target)
-  pre(size(a) > 0 && size(a) <= 100)
-  post(result == exists(i, 0, size(a), elem(a, i) == target))
-{ ... }
+bool contains(Interval r, int x)
+  pre(size(r) >= 0)
+  post(result == has(r, x))
+{
+    return r.lo <= x && x < r.hi;
+}
+
+Interval shift(Interval r, int d)
+  pre(-1000 <= d && d <= 1000)
+  pre(-1000000 <= r.lo && r.lo <= r.hi && r.hi <= 1000000)
+  post(size(result) == size(r))
+  post(forall(x, has(r, x) == has(result, x + d)))
+{
+    Interval s;
+    s.lo = r.lo + d;
+    s.hi = r.hi + d;
+    return s;
+}
 ```
 
 - No new syntax. `spec` functions named `view()`, `elem()`, `size()`, etc. are a documented convention.
 - The verifier treats these spec function bodies as axioms (definitions), not as code to execute.
 - This is Verus's main abstraction idiom and the recommended style for non-trivial data structures.
+- Records are passed by value with scalar fields; a record holding an array
+  or a pointer is not yet in the verified subset, so a view of a buffer is a
+  spec over the pointer and its length (`spec int sum(const int *p, int n)`).
 
 ## Integer Semantics — summary
 
@@ -1079,6 +1134,8 @@ bool contains(SortedArray a, int target)
 
 ## old() Expression
 
+<!-- cppverify-example: fragment -->
+
 ```cpp
 post(result == old(x) + 1)
 post(result == old(*p))
@@ -1091,6 +1148,8 @@ post(result == old(*p))
 
 ## result Expression
 
+<!-- cppverify-example: fragment -->
+
 ```cpp
 post(result > 0)
 post(result.size() == n)
@@ -1102,6 +1161,8 @@ post(result.size() == n)
 - Supports postfix operators: `result.x`, `result[i]`.
 
 ## reveal_with_fuel (control recursive spec unfolding)
+
+<!-- cppverify-example: fragment -->
 
 ```cpp
 spec int fibo(int n) decreases(n) { ... }
@@ -1152,7 +1213,8 @@ int safe_fib(int n) pre(...) post(result == fibo(n)) {
   unfold, and strong induction on the query's integer variables did not
   prove it; `spec.hidden`: it relies on a hidden spec's value;
   `counterexample.unchecked`: the counterexample could not be checked within
-  the certifier's budgets; `backend.invalid-result`: the solver's answer
+  the certifier's budgets, among them the time one check may take
+  (`--certify-timeout`, by default half the query timeout); `backend.invalid-result`: the solver's answer
   contradicts the query or a fact it was given, which is a solver fault and
   says nothing about the program; `spec.termination`: the proof relies on a spec
   whose termination check did not pass, so that spec has no definition;
@@ -1179,6 +1241,8 @@ int safe_fib(int n) pre(...) post(result == fibo(n)) {
   `[[cppverify::trusted]]`), `[vacuous]` (no execution reaches the claim).
 
 ## Spec Collections
+
+<!-- cppverify-example: label sum -->
 
 ```cpp
 #include <cppverify.h>
@@ -1245,6 +1309,8 @@ counterparts of Verus's `Seq`, `Set`, `Multiset`, and `Map`:
   recursive proof function with `decreases(s.len())` that cites itself on a
   shorter sequence:
 
+<!-- cppverify-example: with sum -->
+
 ```cpp
 proof void sum_concat(seq s, seq t)
   post(sum(s + t) == sum(s) + sum(t))
@@ -1268,8 +1334,9 @@ proof void sum_concat(seq s, seq t)
   values: `[1, 2]`, `{1, 3..5}` (a run), `{2: 3}` (counts), `{1 -> 7}`, and
   `{..}` (every integer).
 - Backends: Z3 and cvc5 decide all four (cvc5 settles fewer goals that
-  need an infinite set or ghost collections in loops), and Lean supports
-  none.
+  need an infinite set or ghost collections in loops). Lean does not
+  support them yet (`logic.unsupported`); that is planned for a future
+  release.
 
 ## Clang Modification Details
 
@@ -1526,6 +1593,14 @@ Only `unsat`/`unsat` is `Verified`; only two certified counterexamples are
 `Failed`; a decisive split is `backend.inconsistent-results`; and an
 unresolved side keeps the portfolio unresolved. Agreed failures retain Z3's
 typed source model and trace.
+`--backend=race` runs the same Z3 and cvc5 adapters at once and trusts
+either alone, as Frama-C's prover list does: a proof is sound and a
+counterexample is certified whichever solver found it, so the first
+decisive answer stands and cancels the other (`VerifyBackend::cancel`
+interrupts every running Z3 encoder and stops the cvc5 process). When
+neither settles a module, the obligations each proved are joined, every
+obligation being a query of its own, and the module is `Verified`
+(`[backend=z3+cvc5]`) when they cover all of them.
 The persistent cache, when requested, memoizes only the portfolio's
 namespace-separated Z3 component and never skips cvc5. BMC remains Z3-backed,
 and bounded archives must replay through the BMC aggregator.
