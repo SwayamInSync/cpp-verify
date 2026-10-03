@@ -54,6 +54,17 @@ std::unique_ptr<VExpr> specApplicationFacts(
     const VFunction &Spec, const std::vector<std::unique_ptr<VExpr>> &Args,
     const VExpr *Value, SourceLocation Loc, const std::string &Heap = {});
 
+/// What a member of \p Spec's cluster may use of it at an application: its
+/// postconditions and, for a recursive spec, its definition, where
+/// \p Spec's measure at \p Args is below \p Measure, the user's measure at
+/// entry (the induction hypothesis); null when nothing holds.
+std::unique_ptr<VExpr>
+specInductionFacts(const VFunction &Spec,
+                   const std::vector<std::unique_ptr<VExpr>> &Args,
+                   const VExpr *Value, SourceLocation Loc,
+                   const std::vector<std::unique_ptr<VExpr>> &Measure,
+                   const FunctionMap &FnMap, const std::string &Heap = {});
+
 /// Build passive obligations for a recursive spec whose termination is
 /// established on its own: its postconditions hold of its body, by
 /// well-founded induction on its measure, with its definition known.
