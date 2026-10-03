@@ -825,6 +825,10 @@ class GroupExpander {
     Step->Params.push_back({Height, HeightType});
     Step->Params.insert(Step->Params.end(), P.Params.begin(), P.Params.end());
     Step->Decreases.push_back(var(Height, HeightType));
+    // The proofs of P's clauses are about derivations: they run in the
+    // checks of its step.
+    Step->ClauseProofs = std::move(P.ClauseProofs);
+    P.ClauseProofs.clear();
     M.Step = Step.get();
     Generated.push_back(std::move(Step));
   }
