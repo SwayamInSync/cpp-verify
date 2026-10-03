@@ -79,6 +79,11 @@ struct PassiveProgram {
   /// Explicitly declared heap-array SSA variables. Backends must not infer
   /// array sorts from generated variable spellings.
   std::set<std::string> HeapVariables;
+  /// The specs whose postconditions, and the inductive predicates whose
+  /// unfoldings, the program assumes at their applications: what its proof
+  /// rests on besides definitions and contracts.
+  std::set<std::string> AssumedPosts;
+  std::set<std::string> AssumedUnfoldings;
   /// Exact source identity for SSA variables eligible for counterexample
   /// presentation. Generated temporaries are deliberately absent.
   std::map<std::string, PassiveModelVariable> ModelVariables;
