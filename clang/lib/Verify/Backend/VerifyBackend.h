@@ -59,6 +59,9 @@ enum class VerifyReason {
   SpecReads,
   /// The proof uses a spec whose postcondition is not established.
   SpecPost,
+  /// The proof uses the unfolding of an inductive predicate whose rules are
+  /// not established.
+  SpecInductive,
   /// An obligation stands for a construct the verifier cannot model.
   UnsupportedConstruct,
   /// The proof assumes a callee contract the callee did not establish.
