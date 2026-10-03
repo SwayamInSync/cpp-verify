@@ -4,6 +4,7 @@
 
 #include "VerifyBackend.h"
 #include "llvm/Support/raw_ostream.h"
+#include <atomic>
 #include <optional>
 #include <string>
 #include <vector>
@@ -25,6 +26,9 @@ class CVC5VerifyBackend : public VerifyBackend {
   std::string SolverPathError;
   unsigned TimeoutMs;
   std::optional<unsigned> CollectionTimeoutMs;
+  std::optional<unsigned> CertifyTimeoutMs;
+  /// Set by cancel(): the running process is stopped and no other starts.
+  std::atomic<bool> Cancelled{false};
   unsigned ResourceLimit;
   unsigned Jobs;
   llvm::ThreadPoolInterface *Pool;
@@ -45,6 +49,8 @@ public:
   setDeadline(std::optional<std::chrono::steady_clock::time_point> D) override {
     Deadline = D;
   }
+  void cancel() override { Cancelled = true; }
+  void resume() override { Cancelled = false; }
   BackendCapabilities getCapabilities() const override {
     return {allLogicFeatures(), true};
   }
