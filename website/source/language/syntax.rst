@@ -34,6 +34,9 @@ Requires ``-fverify-contracts``. Full table:
    * - ``inductive``
      - Spec functions returning ``bool``
      - The least predicate the body defines (no ``decreases``)
+   * - ``post(...) by { }``, ``decreases(...) by { }``, ``reads(...) by { }``
+     - Spec function definitions
+     - Proof steps for that clause's check
    * - ``behavior(name, assumes)``
      - After ``)``, then its ``pre``/``post``
      - A case of the contract
