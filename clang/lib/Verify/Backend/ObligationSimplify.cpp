@@ -11,7 +11,6 @@
 
 namespace clang {
 namespace verify {
-namespace {
 
 std::unique_ptr<LogicExpr> cloneLogicExpr(const LogicExpr *Expr) {
   if (!Expr)
@@ -34,6 +33,8 @@ std::unique_ptr<LogicExpr> cloneLogicExpr(const LogicExpr *Expr) {
     Copy->Patterns.push_back(cloneLogicExpr(Pattern.get()));
   return Copy;
 }
+
+namespace {
 
 uint64_t countNodes(const LogicExpr *Expr) {
   if (!Expr)
@@ -340,6 +341,8 @@ void simplifyFunctions(ObligationModule &Module,
       ++It;
       continue;
     }
+    // Kept only for a counterexample check's unfoldings and postconditions.
+    Module.EvidenceFunctions.emplace(It->first, std::move(It->second));
     It = Module.LogicFunctions.erase(It);
     ++Stats.FunctionsRemoved;
   }
