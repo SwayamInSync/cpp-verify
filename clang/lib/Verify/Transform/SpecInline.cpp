@@ -2423,6 +2423,20 @@ static void addSpecPostChecks(PassiveProgram &P, const VFunction &Fn,
   }
 }
 
+PassiveProgram verify::buildInductionChecks(const VFunction &Fn,
+                                            const FunctionMap &FnMap) {
+  PassiveProgram P;
+  P.FunctionName = Fn.Name + ".induction";
+  P.FunctionIdentity = Fn.Identity + "::induction";
+  P.CallerIntMode = Fn.IntMode;
+  P.SpecFunctions = FnMap;
+  P.SpecFuel = Fn.SpecFuel;
+  P.HiddenSpecs = Fn.HiddenSpecs;
+  P.RevealedSpecs = Fn.RevealedSpecs;
+  addSpecPostChecks(P, Fn, FnMap);
+  return P;
+}
+
 PassiveProgram verify::buildSpecPostChecks(const VFunction &Fn,
                                            const FunctionMap &FnMap) {
   PassiveProgram P;
