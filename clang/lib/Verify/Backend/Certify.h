@@ -177,6 +177,9 @@ struct CertifyResult {
   CertifyOutcome Outcome = CertifyOutcome::Undetermined;
   std::vector<SpecDispute> Disputes;
   std::string Detail;
+  /// For Certified: the specs whose postconditions decided a value the
+  /// definitions did not, which the counterexample rests on.
+  std::set<std::string> Evidence;
   /// For Undetermined: a limit ran out while evaluating a definition.
   bool DefinitionTooDeep = false;
   /// For Undetermined: a quantifier of the query, outside every binder, whose
