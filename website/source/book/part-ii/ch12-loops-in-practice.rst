@@ -6,6 +6,8 @@ Map Part I’s invariant story to CppVerify syntax.
 Example skeleton
 ----------------
 
+.. cppverify-example: fragment
+
 .. code-block:: cpp
 
    while (i < n)
@@ -44,6 +46,8 @@ it has to be in the invariant.
 A contracted ``do`` loop places its clauses after the trailing condition and
 before the semicolon:
 
+.. cppverify-example: fragment
+
 .. code-block:: cpp
 
    do {
@@ -68,6 +72,8 @@ Because preservation starts from an *arbitrary* ``I``-state, the invariant must
 be **inductive**: strong enough to re-prove itself. The classic trap is an
 unbounded accumulator under honest machine integers:
 
+.. cppverify-example: fails sum
+
 .. code-block:: cpp
 
    // REJECTED: s >= 0 is not inductive.
@@ -88,7 +94,14 @@ so it provably cannot overflow:
 
 .. code-block:: cpp
 
-   invariant(i >= 0 && i <= n && s == i)   // s tracks i, bounded by n -> inductive
+   int sum_bounded(int n) pre(n >= 0 && n <= 1000) post(result >= 0) {
+     int s = 0, i = 0;
+     while (i < n)
+       invariant(i >= 0 && i <= n && s == i)   // s tracks i, bounded by n
+       decreases(n - i)
+     { s = s + 1; i = i + 1; }
+     return s;
+   }
 
 Every loop needs ``decreases``
 ------------------------------
@@ -170,6 +183,8 @@ When no single quantity falls every iteration, pass a comma-separated **tuple** 
 strictly decrease in lex order: some component drops while every earlier
 component is unchanged. Every component must stay non-negative. This is what
 proves nested counters and Ackermann-style recursion terminate:
+
+.. cppverify-example: fragment
 
 .. code-block:: cpp
 
