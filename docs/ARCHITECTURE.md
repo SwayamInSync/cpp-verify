@@ -819,7 +819,17 @@ each call of another spec its post, and every return value must satisfy the
 post. Since the facts at lower measures are the induction hypothesis, a
 proof establishes termination and the post together. Passivization then
 assumes `post(t, f(t))` at every application `f(t)` in a function, the
-preconditions included, quantified like the application. `when(c)` is desugared in the frontend: the body
+preconditions included, quantified like the application, and at every
+application inside the definition levels the module gives the solver for
+the applications it names (`specDefinitionLevels`, the same levels as
+`SpecAxioms`, at the call's arguments and memory), as Dafny's function
+postconditions hold at every application: `fibo(j - 1) <= fibo(j)` needs
+`fibo(j - 2) >= 0`, which only the unfolding of `fibo(j)` names. Spec check
+modules add the same facts for the applications their definitions expose
+(`addPostApplicationFacts`). These are proved facts recorded in
+`AssumedPosts`, so they cannot make a false claim verify; each puts its
+application into the query, whose definition levels the solver then also
+receives. `when(c)` is desugared in the frontend: the body
 becomes `if (c) body else return f.unspecified(params)`, where
 `f.unspecified` is a logical function without a definition (Z3 and cvc5
 declare it; the certifier cannot evaluate it, so a counterexample that needs
@@ -1176,7 +1186,10 @@ arithmetic would otherwise exhaust the budget.
 A model that fails the query even under its own interpretation is
 `backend.invalid-result`; one that cannot be checked within the budgets is
 `counterexample.unchecked`, or `spec.fuel` when checking it needs unbounded
-unfolding.
+unfolding. One check may take at most `--certify-timeout` milliseconds (by
+default half the query timeout; `CertifyLimits::CheckTimeoutMs` names it in
+the reason), so a model whose check is slow leaves time to others and to
+the later stages instead of spending the query.
 
 The certifier evaluates `&&` and `||` in Kleene's strong logic: operands
 without applications or quantifiers first, and an operand that decides the
@@ -1310,6 +1323,10 @@ pure JSON stream.
      after them (the trusted contract contradicts that call). Passivization
      marks the first assumption of a trusted callee's postcondition with the
      callee, its clause count, and the call's path condition for this.
+     Under BMC the passive program is the one unrolled to the final bound,
+     so the same checks apply there, and a `BoundedSafe` result whose end
+     no execution reaches within the bound is `[vacuous]` with a warning
+     naming the bound;
 
 ## Verification Backends (`VerifyBackend`)
 
@@ -1320,8 +1337,9 @@ The driver selects a backend via `VerifyOptions` (`Verifier.h` / `cpp-verify --b
 | **Z3** | `Z3VerifyBackend` | Default. Consumes `ObligationModule`; counterexamples come from models. |
 | **cvc5** | `CVC5VerifyBackend` + standalone SMT-LIB2 | Encodes the same canonical sorts, C++ truncating math division/remainder, bit-vectors, signed overflow, total heap, bounded and unbounded quantifiers (marked triggers as `:pattern`), heap frames, sequences (`full-saturate-quant` when sequences meet quantifiers), and finite ground spec equations. Sets, multisets, and maps are arrays over all integers, as for Z3 (cvc5's own set theory is finite, which would prove facts false of an infinite set): `(Array Int Bool)`, `(Array Int Int)` with a count of `max(0, cell)` and equality count by count, and `(Array Int cppverify.option)` over a declared `none | some(value)` datatype; union, intersection, and difference are declared functions each defined pointwise by one quantified axiom, exact by array extensionality, and subset is a quantified formula. A model cvc5 prints with `unknown` is certified like one after `sat`. Solver process failures and malformed output are unresolved. |
 | **Strict portfolio** | `PortfolioVerifyBackend` | Runs ordered Z3 and cvc5 queries. Matching UNSAT proves; matching certified counterexamples fail and retain the Z3 model; disagreement or an unresolved side is unresolved. |
+| **Race** | `RaceVerifyBackend` | Runs the Z3 and cvc5 backends at once; the first proof or certified counterexample stands and cancels the other (`cancel`/`resume`: a backend-wide `Race` of Z3 encoders, each forwarding an interrupt to the pass it runs, and a flag the cvc5 process loop polls). Otherwise the obligations either proved are joined, `Verified` (`z3+cvc5`) when they cover the module. |
 | **BMC** | `LoopUnroll` on VCR, then shared obligation/Z3 path | Source verification grows bounds from zero through `--unroll=N`, stopping on a counterexample, complete unwinding, unresolved query, or the maximum frontier. Safety with failed unwinding is `BoundedSafe(N)`; only proved unwinding is `Verified`. A spec's checks have no loops: the driver solves them with a Z3 backend (`SpecBackend`), as on the default path, and keeps the bound on their archived modules for replay. |
-| **Lean** | `exportLeanScratchPad` / project certification | Standalone mode emits unchecked theorem stubs. Project mode emits direct source goals, total functional heaps, typed bit-vector/integer operations, and compact finite-fuel spec bodies into generated files while preserving user proofs. Export is `Exported`; only the pinned admission-free kernel/axiom check is `Certified`. Collections are `logic.unsupported`. |
+| **Lean** | `exportLeanScratchPad` / project certification | Standalone mode emits unchecked theorem stubs. Project mode emits direct source goals, total functional heaps, typed bit-vector/integer operations, and compact finite-fuel spec bodies into generated files while preserving user proofs. Export is `Exported`; only the pinned admission-free kernel/axiom check is `Certified`. Collections are `logic.unsupported` (planned for a future release). |
 
 Each backend declares supported `LogicFeature`s. Central dispatch rejects a
 module requiring an unavailable feature before backend execution. Spec
