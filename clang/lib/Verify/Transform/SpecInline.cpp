@@ -2366,6 +2366,55 @@ std::unique_ptr<VExpr> verify::specApplicationFacts(
   return makeDecreaseAnd(std::move(Facts), std::move(Unfolded), Loc);
 }
 
+std::unique_ptr<VExpr>
+verify::specInductionFacts(const VFunction &Spec,
+                           const std::vector<std::unique_ptr<VExpr>> &Args,
+                           const VExpr *Value, SourceLocation Loc,
+                           const std::vector<std::unique_ptr<VExpr>> &Measure,
+                           const FunctionMap &FnMap, const std::string &Heap) {
+  if (Measure.empty() || Spec.Decreases.size() != Measure.size())
+    return nullptr;
+  std::unique_ptr<VExpr> Facts =
+      specApplicationFacts(Spec, Args, Value, Loc, Heap);
+  if (Spec.NeedsDecreasesCheck) {
+    SpecBodyCollector Collector{FnMap};
+    Collector.run(Spec);
+    if (!Collector.Unsupported && !Collector.Returns.empty()) {
+      std::unique_ptr<VExpr> Body = std::move(Collector.Returns.back().Value);
+      for (size_t I = Collector.Returns.size() - 1; I-- > 0;) {
+        BodyReturn &Return = Collector.Returns[I];
+        const VType Ty = Return.Value->Ty;
+        Body = std::make_unique<VConditionalExpr>(
+            std::move(Return.Guard), std::move(Return.Value), std::move(Body),
+            Ty, Return.Loc);
+      }
+      if (!Heap.empty())
+        readHeapAt(Body.get(), Heap);
+      auto Map = bindParams(Spec, Args);
+      auto Definition = std::make_unique<VBinOpExpr>(
+          VBinOp::Eq, cloneVExpr(Value), substParamsInExpr(Body.get(), Map),
+          VType::makeBool(), Loc);
+      Facts =
+          Facts ? makeDecreaseAnd(std::move(Facts), std::move(Definition), Loc)
+                : std::move(Definition);
+    }
+  }
+  if (!Facts)
+    return nullptr;
+  auto Map = bindParams(Spec, Args);
+  std::vector<std::unique_ptr<VExpr>> Lower;
+  for (const auto &Decrease : Spec.Decreases) {
+    auto At = cloneVExpr(Decrease.get());
+    if (!Heap.empty())
+      readHeapAt(At.get(), Heap);
+    Lower.push_back(substParamsInExpr(At.get(), Map));
+  }
+  return std::make_unique<VBinOpExpr>(
+      VBinOp::Or,
+      makeDecreaseNot(lexicographicDecrease(Lower, Measure, Loc), Loc),
+      std::move(Facts), VType::makeBool(), Loc);
+}
+
 /// The inductive predicate whose step-indexed definition \p Step is.
 static const VFunction *predicateOfStep(const VFunction &Step,
                                         const FunctionMap &FnMap) {
@@ -2424,7 +2473,20 @@ static void addPostApplicationFacts(PassiveProgram &P, const VFunction &Fn,
       return;
     const VFunction &Callee = *It->second;
     std::unique_ptr<VExpr> Fact;
-    if (!Group.count(Callee.Identity)) {
+    if (Fn.Cluster.count(Callee.Identity)) {
+      // Another spec of its cluster, below the measure.
+      std::vector<std::unique_ptr<VExpr>> Measure;
+      std::map<std::string, std::unique_ptr<VExpr>> Self;
+      for (const auto &Param : Fn.Params)
+        Self[Param.first] = std::make_unique<VVarExpr>(
+            Param.first, Param.second, SourceLocation());
+      for (const auto &Decrease : Fn.Decreases)
+        Measure.push_back(substParamsInExpr(Decrease.get(), Self));
+      Fact = specInductionFacts(Callee, Call.Args, &Call, Call.Loc, Measure,
+                                FnMap);
+      if (Fact && !Callee.Postconditions.empty())
+        P.InductivePosts.insert(Callee.Identity);
+    } else if (!Group.count(Callee.Identity)) {
       Fact = specApplicationFacts(Callee, Call.Args, &Call, Call.Loc);
       if (!Callee.Postconditions.empty())
         P.AssumedPosts.insert(Callee.Identity);
@@ -2474,9 +2536,19 @@ static void addSpecPostChecks(PassiveProgram &P, const VFunction &Fn,
     CurrentDec.push_back(substParamsInExpr(Decrease.get(), Self));
 
   std::vector<std::unique_ptr<PassiveStmt>> Facts;
+  auto quantified = [&](std::unique_ptr<VExpr> Fact, const BodySite &Site) {
+    for (auto It = Site.Quantifiers.rbegin(); It != Site.Quantifiers.rend();
+         ++It)
+      Fact = std::make_unique<VForallExpr>(
+          It->Binder, cloneVExpr(It->Lo.get()), cloneVExpr(It->Hi.get()),
+          std::move(Fact), Site.Loc, It->BinderType);
+    auto PS = std::make_unique<PassiveStmt>();
+    PS->K = PassiveStmt::Assume;
+    PS->Cond = cloneAtEntryState(Fact.get());
+    Facts.push_back(std::move(PS));
+  };
   for (BodySite &Site : Collector.Sites) {
-    if (!Site.Call || !Site.Callee ||
-        (Site.Callee->Postconditions.empty() && !Site.Callee->Unfolding))
+    if (!Site.Call || !Site.Callee)
       continue;
     const VSpecCallExpr &Call = *Site.Call;
     std::vector<std::unique_ptr<VExpr>> Args;
@@ -2485,6 +2557,23 @@ static void addSpecPostChecks(PassiveProgram &P, const VFunction &Fn,
     auto Application = std::make_unique<VSpecCallExpr>(
         Call.Callee, Call.CalleeIdentity, std::move(Args), Call.Ty, Call.Loc,
         Call.ReadsHeap, Call.HeapVar);
+    // Another spec of its cluster holds where its measure is lower: the
+    // cluster's joint induction gives its postconditions and definition.
+    if (Call.CalleeIdentity != Fn.Identity &&
+        !Fn.RecursionGroup.count(Call.CalleeIdentity) &&
+        Fn.Cluster.count(Call.CalleeIdentity)) {
+      std::unique_ptr<VExpr> Guarded =
+          specInductionFacts(*Site.Callee, Site.Args, Application.get(),
+                             Site.Loc, CurrentDec, FnMap);
+      if (!Guarded)
+        continue;
+      if (!Site.Callee->Postconditions.empty())
+        P.InductivePosts.insert(Site.Callee->Identity);
+      quantified(std::move(Guarded), Site);
+      continue;
+    }
+    if (Site.Callee->Postconditions.empty() && !Site.Callee->Unfolding)
+      continue;
     std::unique_ptr<VExpr> Fact = specApplicationFacts(
         *Site.Callee, Site.Args, Application.get(), Site.Loc);
     if (!Fact)
@@ -2535,15 +2624,7 @@ static void addSpecPostChecks(PassiveProgram &P, const VFunction &Fn,
               lexicographicDecrease(CalleeDec, CurrentDec, Site.Loc), Site.Loc),
           std::move(Fact), VType::makeBool(), Site.Loc);
     }
-    for (auto It = Site.Quantifiers.rbegin(); It != Site.Quantifiers.rend();
-         ++It)
-      Fact = std::make_unique<VForallExpr>(
-          It->Binder, cloneVExpr(It->Lo.get()), cloneVExpr(It->Hi.get()),
-          std::move(Fact), Site.Loc, It->BinderType);
-    auto PS = std::make_unique<PassiveStmt>();
-    PS->K = PassiveStmt::Assume;
-    PS->Cond = cloneAtEntryState(Fact.get());
-    Facts.push_back(std::move(PS));
+    quantified(std::move(Fact), Site);
   }
   P.Stmts.insert(P.Stmts.begin(), std::make_move_iterator(Facts.begin()),
                  std::make_move_iterator(Facts.end()));
@@ -2757,6 +2838,10 @@ verify::withClauseProofs(PassiveProgram Check, const VFunction &Spec,
   Proof.HiddenSpecs = Check.HiddenSpecs;
   Proof.RevealedSpecs = Check.RevealedSpecs;
   Proof.SpecFuel = Check.SpecFuel;
+  // A call of the spec's cluster lowers its measure.
+  for (const auto &Decrease : Spec.Decreases)
+    Proof.Decreases.push_back(cloneVExpr(Decrease.get()));
+  Proof.Cluster = Spec.Cluster;
   // The spec and its cycle are opaque here or covered by the induction
   // hypothesis, and a predicate whose step is being proved gives only its
   // unfolding, which the check states.
