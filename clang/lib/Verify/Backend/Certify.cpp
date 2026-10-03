@@ -625,6 +625,14 @@ class Evaluator {
     return LogicValue::boolean(*Decided ? !Forall : Forall);
   }
 
+  std::string timeLimitReached() const {
+    if (!Limits.CheckTimeoutMs)
+      return "the time limit was reached";
+    return "the time one counterexample check may take (" +
+           std::to_string(*Limits.CheckTimeoutMs) +
+           " ms, --certify-timeout) was spent";
+  }
+
   std::nullopt_t limit(std::string Message) {
     if (Failure.empty() && !Active.empty()) {
       LimitInDefinition = true;
@@ -2714,7 +2722,7 @@ class Evaluator {
                                     const Computed &Value) {
     // A model's application can be expensive to read: check the clock first.
     if (pastDeadline())
-      return limit("the time limit was reached");
+      return limit(timeLimitReached());
     if (DisputeKeys.count(Key))
       return Value.Value;
     std::optional<LogicValue> Claimed = Model.application(Function, Args);
@@ -2764,7 +2772,7 @@ class Evaluator {
         Deep = E;
     } else {
       if (pastDeadline())
-        return limit("the time limit was reached");
+        return limit(timeLimitReached());
       Value = Model.application(Function, Args);
       if (!Value && Failure.empty()) {
         return fail("the model gives no value for an application of " +
@@ -3256,7 +3264,7 @@ public:
     }
     if (Exhausted || (NextClockCheck <= Steps && pastDeadline())) {
       Exhausted = true;
-      return limit("the time limit was reached");
+      return limit(timeLimitReached());
     }
     if (NextClockCheck <= Steps)
       NextClockCheck = Steps + 4096;
