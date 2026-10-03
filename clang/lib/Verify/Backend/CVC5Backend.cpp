@@ -2578,6 +2578,7 @@ CVC5VerifyBackend::verifyQuery(const ObligationModule &Module,
     if (Decision.Next == RefinementDecision::Action::Report) {
       Result.Status = VerifyStatus::Failed;
       Result.Reason = VerifyReason::Counterexample;
+      Result.CertifiedWith = Certified.Evidence;
       return Result;
     }
     if (Decision.Next == RefinementDecision::Action::Stop) {
