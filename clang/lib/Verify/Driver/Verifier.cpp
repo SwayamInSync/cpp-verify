@@ -168,6 +168,9 @@ struct VerifyDiagnostic {
   /// Functions not verified that call this one: its precondition is assumed
   /// at those calls.
   std::vector<std::string> UnverifiedCallers;
+  /// Kept for the steps that relate verdicts, but not printed: a proof the
+  /// verifier generated, which is reported only if it fails.
+  bool Quiet = false;
 };
 
 static std::string backendSuffix(const VerifyResult &Result) {
@@ -940,7 +943,16 @@ public:
     std::set<std::string> UnframedSpecs;
     // Specs whose postcondition is not established.
     std::set<std::string> UnprovenPosts;
-    std::vector<std::pair<size_t, std::set<std::string>>> ProofDependencies;
+    // A verdict and the specs it relies on: their definitions and frames,
+    // and their postconditions and unfoldings except where it withholds them.
+    struct SpecReliance {
+      size_t Index;
+      std::set<std::string> Specs;
+      std::set<std::string> Withheld;
+    };
+    std::vector<SpecReliance> ProofDependencies;
+    // The line of each inductive predicate, which reports its rules.
+    std::vector<std::pair<size_t, std::string>> InductiveLines;
     auto exportLeanFallbackTo = [&](std::vector<VerifyDiagnostic> &Out,
                                     const ObligationModule &Module,
                                     llvm::StringRef Label,
@@ -992,7 +1004,8 @@ public:
           CallDependencies;
       std::set<std::string> UnframedSpecs;
       std::set<std::string> UnprovenPosts;
-      std::vector<std::pair<size_t, std::set<std::string>>> ProofDependencies;
+      std::vector<SpecReliance> ProofDependencies;
+      std::vector<std::pair<size_t, std::string>> InductiveLines;
       std::string Dump;
       std::string Archive;
     };
@@ -1010,6 +1023,7 @@ public:
       std::set<std::string> &UnframedSpecs = Run.UnframedSpecs;
       std::set<std::string> &UnprovenPosts = Run.UnprovenPosts;
       auto &ProofDependencies = Run.ProofDependencies;
+      auto &InductiveLines = Run.InductiveLines;
       llvm::raw_string_ostream DumpStream(Run.Dump);
       llvm::raw_ostream *DumpOS = this->DumpOS ? &DumpStream : nullptr;
       std::unique_ptr<VerifyBackend> OwnBackend;
@@ -1065,7 +1079,10 @@ public:
         for (const auto &[Identity, Function] : Used.LogicFunctions)
           Specs.insert(Identity);
         Specs.erase(Verified.Identity);
-        ProofDependencies.emplace_back(Diags.size() - 1, std::move(Specs));
+        // A rule's proof uses its predicate's definition, not its unfolding.
+        Specs.erase(Verified.InductiveRuleOf);
+        ProofDependencies.push_back(
+            {Diags.size() - 1, std::move(Specs), Verified.FactsWithheld});
       };
       auto exportLeanFallback = [&](const ObligationModule &Module,
                                     llvm::StringRef Label,
@@ -1121,11 +1138,13 @@ public:
           annotatePointerOrigins(*PreparedFn);
           // `valid(p, n)` is a recognized UB marker. Discover it before spec
           // preparation folds its deliberately trivial body to `true`.
-          if (Opts.CheckUB && (isDeductiveBackend(Opts.Backend) ||
-                               Opts.Backend == BackendKind::BMC ||
-                               Opts.Backend == BackendKind::Lean))
+          // A generated proof about specs is not C++ code.
+          if (Fn->TotalExpressions) {
+          } else if (Opts.CheckUB && (isDeductiveBackend(Opts.Backend) ||
+                                      Opts.Backend == BackendKind::BMC ||
+                                      Opts.Backend == BackendKind::Lean)) {
             UBError = instrumentUBChecks(*PreparedFn);
-          else if (usesValidMarker(*Fn))
+          } else if (usesValidMarker(*Fn))
             Diags.push_back(
                 {VerifyDiagnostic::Warning,
                  "contract of " + Fn->Name +
@@ -1242,6 +1261,16 @@ public:
           }
         }
 
+        // An inductive predicate's line stands for its rules, which its
+        // generated proofs establish.
+        if (Fn->Unfolding) {
+          Diags.push_back({Opts.LowerOnly ? VerifyDiagnostic::Lowered
+                           : Opts.Backend == BackendKind::Lean
+                               ? VerifyDiagnostic::Exported
+                               : VerifyDiagnostic::Verified,
+                           "inductive predicate: " + Fn->Name});
+          InductiveLines.emplace_back(Diags.size() - 1, Fn->Identity);
+        }
         if (Fn->IsSpec && !Fn->NeedsDecreasesCheck &&
             !Fn->Postconditions.empty()) {
           UnprovenPosts.insert(Fn->Identity);
@@ -1328,9 +1357,7 @@ public:
                                     : VerifyDiagnostic::Verified);
           if (Fn->IsConstexprSpec)
             Diags.push_back({Kind, "constexpr spec axiom: " + Fn->Name});
-          else if (Fn->Unfolding)
-            Diags.push_back({Kind, "inductive predicate: " + Fn->Name});
-          else
+          else if (!Fn->Unfolding)
             Diags.push_back({Kind, "spec axiom: " + Fn->Name});
           continue;
         }
@@ -1338,23 +1365,104 @@ public:
         // Executable and proof recursion is checked at each call in the
         // function's own obligations; a spec's definition cannot help prove its
         // termination, so it is checked separately.
+        // A step function of an inductive predicate terminates whatever its
+        // postconditions say, so they are proved apart: by induction on the
+        // height, with its definition known, which its own termination check
+        // establishes. Only a failure is reported.
+        const bool Step = !Fn->InductiveStepOf.empty();
+        if (Step && !Fn->Postconditions.empty()) {
+          UnprovenPosts.insert(Fn->Identity);
+          const std::string Label = "spec post by induction";
+          std::optional<ObligationModule> Induction;
+          std::string Error;
+          if (auto Lowered =
+                  buildObligationModule(buildInductionChecks(*Fn, FnMap))) {
+            if (auto Simplified = simplifyObligationModule(std::move(*Lowered)))
+              Induction = std::move(*Simplified);
+            else
+              Error = llvm::toString(Simplified.takeError());
+          } else {
+            Error = llvm::toString(Lowered.takeError());
+          }
+          if (!Induction) {
+            AllOk = false;
+            AnyFailed = true;
+            Diags.push_back({VerifyDiagnostic::Unresolved,
+                             "obligation lowering failed for " + Label + ": " +
+                                 Fn->InductiveStepOf + " (" + Error + ")"});
+          } else {
+            if (Opts.Backend == BackendKind::BMC)
+              Induction->BMCTransform = BMCTransformProvenance{Opts.BMCUnroll};
+            annotateObligationSources(*Induction);
+            if (llvm::Error Error = emitObligationArchive(*Induction)) {
+              AllOk = false;
+              AnyFailed = true;
+              Diags.push_back({VerifyDiagnostic::Error,
+                               "cannot serialize " + Label + " obligation: " +
+                                   Fn->InductiveStepOf + " (" +
+                                   llvm::toString(std::move(Error)) + ")"});
+            } else if (Opts.LowerOnly) {
+              VerifyResult R =
+                  lowerForBackend(*Induction, Opts.Backend, Execution);
+              if (R.Status == VerifyStatus::Lowered) {
+                UnprovenPosts.erase(Fn->Identity);
+              } else {
+                AllOk = false;
+                AnyFailed = true;
+                Diags.push_back({VerifyDiagnostic::Error,
+                                 "lowering failed for " + Label + ": " +
+                                     Fn->InductiveStepOf + backendSuffix(R),
+                                 R.Location, Fn->Name, R});
+              }
+            } else {
+              VerifyResult R = Backend->verify(*Induction);
+              if (R.Status == VerifyStatus::Verified ||
+                  R.Status == VerifyStatus::Exported) {
+                UnprovenPosts.erase(Fn->Identity);
+                Diags.push_back({R.Status == VerifyStatus::Verified
+                                     ? VerifyDiagnostic::Verified
+                                     : VerifyDiagnostic::Exported,
+                                 Label + ": " + Fn->InductiveStepOf, R.Location,
+                                 Fn->Name, R});
+                Diags.back().Quiet = true;
+                // The proof uses the definition, so it rests on termination.
+                recordDependencies(*Fn, *Induction);
+                ProofDependencies.back().Specs.insert(Fn->Identity);
+              } else {
+                AllOk = false;
+                AnyFailed = true;
+                const bool IsUnresolved = R.Status == VerifyStatus::Unresolved;
+                std::string Message =
+                    Label + (IsUnresolved ? " unresolved: " : " failed: ") +
+                    Fn->InductiveStepOf + backendSuffix(R);
+                if (!R.Message.empty())
+                  Message += " (" + R.Message + ")";
+                Diags.push_back({IsUnresolved ? VerifyDiagnostic::Unresolved
+                                              : VerifyDiagnostic::Error,
+                                 std::move(Message), R.Location, Fn->Name, R});
+              }
+            }
+          }
+        }
+
         if (Fn->NeedsDecreasesCheck && Fn->IsSpec) {
-          PassiveProgram DecPP = buildDecreasesChecks(*Fn, FnMap);
+          std::optional<VFunction> Bare;
+          if (Step && !Fn->Postconditions.empty()) {
+            Bare = cloneVFunction(*Fn);
+            Bare->Postconditions.clear();
+            Bare->PostconditionKinds.clear();
+          }
+          PassiveProgram DecPP =
+              buildDecreasesChecks(Bare ? *Bare : *Fn, FnMap);
           auto DecModuleOrErr = buildObligationModule(DecPP);
-          // A spec's postcondition is proved with its termination; an
-          // inductive predicate's, by induction on its derivations, where
-          // only a failure is reported.
-          const bool Step = !Fn->InductiveStepOf.empty();
+          // A spec's postcondition is proved with its termination.
           const std::string &Shown = Step ? Fn->InductiveStepOf : Fn->Name;
           const bool Quiet = Fn->IsBuiltin || Step;
-          const std::string DecLabel =
-              Step && !Fn->Postconditions.empty() ? "spec post by induction: "
-              : Fn->IsSpec && !Fn->Postconditions.empty()
-                  ? "spec decreases and post: "
-                  : "spec decreases: ";
-          if (Fn->IsSpec)
-            UndefinedSpecs.insert(Fn->Identity);
-          if (Fn->IsSpec && !Fn->Postconditions.empty())
+          const std::string DecLabel = !Step && !Fn->Postconditions.empty()
+                                           ? "spec decreases and post: "
+                                           : "spec decreases: ";
+          UndefinedSpecs.insert(Fn->Identity);
+          if (!Step && !Fn->Postconditions.empty())
             UnprovenPosts.insert(Fn->Identity);
           if (!DecModuleOrErr) {
             AllOk = false;
@@ -1411,7 +1519,8 @@ public:
               continue;
             }
             if (Fn->IsSpec) {
-              UnprovenPosts.erase(Fn->Identity);
+              if (!Step)
+                UnprovenPosts.erase(Fn->Identity);
               if (!Quiet)
                 Diags.push_back({VerifyDiagnostic::Lowered, DecLabel + Shown,
                                  SourceLocation(), Fn->Name, DR});
@@ -1438,13 +1547,15 @@ public:
                                  R});
               if (Fn->IsSpec) {
                 UndefinedSpecs.erase(Fn->Identity);
-                UnprovenPosts.erase(Fn->Identity);
+                if (!Step)
+                  UnprovenPosts.erase(Fn->Identity);
                 continue;
               }
             } else if (R.Status == VerifyStatus::Verified) {
               if (Fn->IsSpec) {
                 UndefinedSpecs.erase(Fn->Identity);
-                UnprovenPosts.erase(Fn->Identity);
+                if (!Step)
+                  UnprovenPosts.erase(Fn->Identity);
                 if (!Quiet)
                   Diags.push_back({VerifyDiagnostic::Verified, DecLabel + Shown,
                                    R.Location, Fn->Name, R});
@@ -1467,28 +1578,6 @@ public:
                 AnyFailed = true;
                 if (!Fn->IsProof)
                   FailedCallers.insert(Fn->Identity);
-                // When the induction of an inductive predicate fails, its
-                // step may still terminate, and then its definition stands.
-                if (Step && !Fn->Postconditions.empty()) {
-                  VFunction Bare = cloneVFunction(*Fn);
-                  Bare.Postconditions.clear();
-                  Bare.PostconditionKinds.clear();
-                  if (auto Lowered = buildObligationModule(
-                          buildDecreasesChecks(Bare, FnMap)))
-                    if (auto Simplified =
-                            simplifyObligationModule(std::move(*Lowered))) {
-                      if (Opts.Backend == BackendKind::BMC)
-                        Simplified->BMCTransform =
-                            BMCTransformProvenance{Opts.BMCUnroll};
-                      if (Backend->verify(*Simplified).Status ==
-                          VerifyStatus::Verified)
-                        UndefinedSpecs.erase(Fn->Identity);
-                    } else {
-                      llvm::consumeError(Simplified.takeError());
-                    }
-                  else
-                    llvm::consumeError(Lowered.takeError());
-                }
                 std::string Message =
                     std::string(Fn->IsSpec
                                     ? DecLabel.substr(0, DecLabel.size() - 2) +
@@ -1707,8 +1796,11 @@ public:
           collectCallees(Fn->Body, Callees);
           CallDependencies.emplace_back(Diags.size() - 1, Fn->Identity,
                                         std::move(Callees));
+          const bool Rule = !Fn->InductiveRuleOf.empty();
+          Diags.back().Quiet = Rule;
           // A proof that no execution reaches the end says nothing.
-          const bool Smoke = !BMCResult && Opts.Backend != BackendKind::Lean;
+          const bool Smoke =
+              !BMCResult && Opts.Backend != BackendKind::Lean && !Rule;
           bool WhollyVacuous = false;
           if (Smoke && unreachable(PP, /*EntryOnly=*/false)) {
             WhollyVacuous = true;
@@ -1830,15 +1922,19 @@ public:
       for (auto &[Index, Identity, Callees] : Run.CallDependencies)
         CallDependencies.emplace_back(Base + Index, std::move(Identity),
                                       std::move(Callees));
-      for (auto &[Index, Specs] : Run.ProofDependencies)
-        ProofDependencies.emplace_back(Base + Index, std::move(Specs));
+      for (SpecReliance &Reliance : Run.ProofDependencies)
+        ProofDependencies.push_back({Base + Reliance.Index,
+                                     std::move(Reliance.Specs),
+                                     std::move(Reliance.Withheld)});
+      for (auto &[Index, Identity] : Run.InductiveLines)
+        InductiveLines.emplace_back(Base + Index, std::move(Identity));
       if (DumpOS)
         *DumpOS << Run.Dump;
       if (Opts.ObligationOut)
         *Opts.ObligationOut << Run.Archive;
     }
 
-    for (const auto &[Index, Specs] : ProofDependencies) {
+    for (const auto &[Index, Specs, Withheld] : ProofDependencies) {
       std::string Undefined;
       std::string Unframed;
       std::string Unproven;
@@ -1850,7 +1946,7 @@ public:
           Undefined += (Undefined.empty() ? "" : ", ") + Name;
         else if (UnframedSpecs.count(Identity))
           Unframed += (Unframed.empty() ? "" : ", ") + Name;
-        else if (UnprovenPosts.count(Identity))
+        else if (UnprovenPosts.count(Identity) && !Withheld.count(Identity))
           Unproven += (Unproven.empty() ? "" : ", ") + Name;
       }
       if (Undefined.empty() && Unframed.empty() && Unproven.empty())
@@ -1918,37 +2014,105 @@ public:
       if (Diags[Index].K == VerifyDiagnostic::Verified ||
           Diags[Index].K == VerifyDiagnostic::Certified)
         Unestablished.erase(Identity);
-    for (bool Changed = true; Changed;) {
+    auto settleCallees = [&] {
+      for (bool Changed = true; Changed;) {
+        Changed = false;
+        for (const auto &[Index, Identity, Callees] : CallDependencies) {
+          VerifyDiagnostic &Diagnostic = Diags[Index];
+          if (Diagnostic.K != VerifyDiagnostic::Verified &&
+              Diagnostic.K != VerifyDiagnostic::Certified)
+            continue;
+          std::string Names;
+          for (const std::string &Callee : Callees)
+            if (Callee != Identity && Unestablished.count(Callee)) {
+              auto It = FnMap.find(Callee);
+              Names += (Names.empty() ? "" : ", ") +
+                       (It != FnMap.end() ? It->second->Name : Callee);
+              if (It != FnMap.end() && It->second->IsExternalContract)
+                Names += " (no definition; mark it [[cppverify::trusted]] to "
+                         "assume it)";
+            }
+          if (Names.empty())
+            continue;
+          AllOk = false;
+          Diagnostic.K = VerifyDiagnostic::Unresolved;
+          Diagnostic.Message += " [reason=callee.contract] (relies on the "
+                                "contract of " +
+                                Names + ", which is not established)";
+          if (Diagnostic.Result) {
+            Diagnostic.Result->Status = VerifyStatus::Unresolved;
+            Diagnostic.Result->Reason = VerifyReason::CalleeContract;
+          }
+          Unestablished.insert(Identity);
+          Changed = true;
+        }
+      }
+    };
+    settleCallees();
+
+    // An inductive predicate's unfolding is a fact only once its rules are
+    // proved: a verdict that relies on it otherwise proves nothing, and the
+    // rules of predicates it is used in may in turn be left unproved.
+    std::map<std::string, std::vector<const VFunction *>> RulesOf;
+    for (const auto &Fn : Functions)
+      if (!Fn->InductiveRuleOf.empty())
+        RulesOf[Fn->InductiveRuleOf].push_back(Fn.get());
+    std::map<size_t, std::string> VerdictOf;
+    for (const auto &[Index, Identity, Callees] : CallDependencies)
+      VerdictOf[Index] = Identity;
+    auto demoteForRules = [&](VerifyDiagnostic &Diagnostic,
+                              const std::string &Why) {
+      AllOk = false;
+      Diagnostic.K = VerifyDiagnostic::Unresolved;
+      Diagnostic.Message += " [reason=spec.inductive] (" + Why + ")";
+      if (Diagnostic.Result) {
+        Diagnostic.Result->Status = VerifyStatus::Unresolved;
+        Diagnostic.Result->Reason = VerifyReason::SpecInductive;
+      }
+    };
+    for (bool Changed = !RulesOf.empty(); Changed;) {
       Changed = false;
-      for (const auto &[Index, Identity, Callees] : CallDependencies) {
+      std::map<std::string, std::string> Unproved;
+      for (const auto &[Predicate, Rules] : RulesOf)
+        for (const VFunction *Rule : Rules)
+          if (Unestablished.count(Rule->Identity)) {
+            std::string &Names = Unproved[Predicate];
+            const size_t Open = Rule->Name.rfind(" (");
+            Names += (Names.empty() ? "" : ", ") +
+                     (Open == std::string::npos
+                          ? Rule->Name
+                          : Rule->Name.substr(Open + 2,
+                                              Rule->Name.size() - Open - 3));
+          }
+      for (const auto &[Index, Specs, Withheld] : ProofDependencies) {
         VerifyDiagnostic &Diagnostic = Diags[Index];
         if (Diagnostic.K != VerifyDiagnostic::Verified &&
             Diagnostic.K != VerifyDiagnostic::Certified)
           continue;
         std::string Names;
-        for (const std::string &Callee : Callees)
-          if (Callee != Identity && Unestablished.count(Callee)) {
-            auto It = FnMap.find(Callee);
+        for (const std::string &Identity : Specs)
+          if (Unproved.count(Identity) && !Withheld.count(Identity)) {
+            auto It = FnMap.find(Identity);
             Names += (Names.empty() ? "" : ", ") +
-                     (It != FnMap.end() ? It->second->Name : Callee);
-            if (It != FnMap.end() && It->second->IsExternalContract)
-              Names += " (no definition; mark it [[cppverify::trusted]] to "
-                       "assume it)";
+                     (It != FnMap.end() ? It->second->Name : Identity);
           }
         if (Names.empty())
           continue;
-        AllOk = false;
-        Diagnostic.K = VerifyDiagnostic::Unresolved;
-        Diagnostic.Message += " [reason=callee.contract] (relies on the "
-                              "contract of " +
-                              Names + ", which is not established)";
-        if (Diagnostic.Result) {
-          Diagnostic.Result->Status = VerifyStatus::Unresolved;
-          Diagnostic.Result->Reason = VerifyReason::CalleeContract;
-        }
-        Unestablished.insert(Identity);
+        demoteForRules(Diagnostic, "relies on the unfolding of " + Names +
+                                       ", whose rules are not established");
+        if (auto It = VerdictOf.find(Index); It != VerdictOf.end())
+          Unestablished.insert(It->second);
         Changed = true;
       }
+      for (const auto &[Index, Identity] : InductiveLines) {
+        VerifyDiagnostic &Diagnostic = Diags[Index];
+        auto It = Unproved.find(Identity);
+        if (It != Unproved.end() && Diagnostic.K == VerifyDiagnostic::Verified)
+          demoteForRules(Diagnostic,
+                         "its rules are not established: " + It->second);
+      }
+      if (Changed)
+        settleCallees();
     }
     // A proof trusts what its callees' proofs trust, too.
     std::map<std::string, std::set<std::string>> Trusts;
@@ -2307,6 +2471,11 @@ public:
 
   void printDiagnostics(llvm::raw_ostream &OS) const {
     for (const auto &D : Diags) {
+      // A generated proof is reported only if it is not a proof.
+      if (D.Quiet && (D.K == VerifyDiagnostic::Verified ||
+                      D.K == VerifyDiagnostic::Certified ||
+                      D.K == VerifyDiagnostic::Exported))
+        continue;
       if (Opts.Diagnostics == DiagnosticFormat::Json) {
         printJSONDiagnostic(D, OS);
         continue;
