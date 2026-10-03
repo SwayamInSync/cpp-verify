@@ -10,6 +10,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 
 namespace clang {
@@ -144,6 +145,9 @@ struct VerifyResult {
   /// individually; absent when the backend did not check each one.
   std::optional<std::vector<std::string>> UnprovedObligations;
   std::optional<ProofEvidence> Evidence;
+  /// For a counterexample: the specs whose postconditions decided a value
+  /// its check needed, so that it rests on them.
+  std::set<std::string> CertifiedWith;
   /// With --profile-quantifiers, the busiest quantifiers of an unresolved
   /// query, most instantiated first.
   std::vector<QuantifierProfileEntry> QuantifierProfile;
