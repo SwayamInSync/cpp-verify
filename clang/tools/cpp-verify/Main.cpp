@@ -46,13 +46,15 @@ static cl::opt<bool> LowerOnly(
 
 static cl::opt<std::string> BackendOpt(
     "backend",
-    cl::desc("Verification backend: z3 (default), cvc5, portfolio, lean, bmc"),
+    cl::desc("Verification backend: z3 (default), cvc5, portfolio (z3 and "
+             "cvc5 must agree), race (z3 and cvc5 at once, the first proof or "
+             "certified counterexample stands), lean, bmc"),
     cl::value_desc("name"), cl::init("z3"), cl::cat(CppVerifyCategory));
 
-static cl::opt<std::string> CVC5Path(
-    "cvc5-path",
-    cl::desc("cvc5 executable for --backend=cvc5 or --backend=portfolio"),
-    cl::value_desc("file"), cl::cat(CppVerifyCategory));
+static cl::opt<std::string>
+    CVC5Path("cvc5-path",
+             cl::desc("cvc5 executable for --backend=cvc5, portfolio, or race"),
+             cl::value_desc("file"), cl::cat(CppVerifyCategory));
 
 static cl::opt<std::string>
     LeanOut("lean-out",
@@ -101,6 +103,20 @@ static cl::opt<unsigned> CollectionTimeout(
              "sequences, sets, multisets, or maps (default: twice --timeout; "
              "0 = no limit)"),
     cl::cat(CppVerifyCategory));
+
+static cl::opt<unsigned> CertifyTimeout(
+    "certify-timeout",
+    cl::desc("Milliseconds the check of one counterexample against the "
+             "definitions may take, so that one slow model leaves the query "
+             "time to others (default: half of the query timeout; 0 = the "
+             "query's own time)"),
+    cl::cat(CppVerifyCategory));
+
+static std::optional<unsigned> certifyTimeoutMs() {
+  if (CertifyTimeout.getNumOccurrences())
+    return CertifyTimeout.getValue();
+  return std::nullopt;
+}
 
 static cl::opt<unsigned> FunctionTimeout(
     "function-timeout",
@@ -237,6 +253,7 @@ static verify::BackendExecutionOptions backendExecutionOptions() {
   verify::BackendExecutionOptions Options;
   Options.SolverTimeoutMs = SolverTimeout;
   Options.CollectionTimeoutMs = collectionTimeoutMs();
+  Options.CertifyTimeoutMs = certifyTimeoutMs();
   Options.SolverResourceLimit = SolverResourceLimit;
   Options.Jobs = jobs();
   Options.MaxQueryNodes = MaxQueryNodes;
@@ -254,11 +271,14 @@ lowerForBackend(const verify::ObligationModule &Module,
   verify::BackendExecutionOptions Execution = backendExecutionOptions();
   if (Kind == verify::BackendKind::CVC5)
     return verify::lowerSMTLibModule(Module, nullptr, Execution);
-  if (Kind == verify::BackendKind::Portfolio) {
+  if (Kind == verify::BackendKind::Portfolio ||
+      Kind == verify::BackendKind::Race) {
+    const std::string Name =
+        Kind == verify::BackendKind::Race ? "race" : "portfolio";
     verify::VerifyResult Z3Result =
         verify::lowerObligationModule(Module, Z3Out, Execution);
     if (Z3Result.Status != verify::VerifyStatus::Lowered) {
-      Z3Result.BackendName = "portfolio";
+      Z3Result.BackendName = Name;
       Z3Result.Message =
           "z3 component" +
           (Z3Result.Message.empty() ? std::string() : ": " + Z3Result.Message);
@@ -267,7 +287,7 @@ lowerForBackend(const verify::ObligationModule &Module,
     verify::VerifyResult CVC5Result =
         verify::lowerSMTLibModule(Module, nullptr, Execution);
     if (CVC5Result.Status != verify::VerifyStatus::Lowered) {
-      CVC5Result.BackendName = "portfolio";
+      CVC5Result.BackendName = Name;
       CVC5Result.Message = "cvc5 component" + (CVC5Result.Message.empty()
                                                    ? std::string()
                                                    : ": " + CVC5Result.Message);
@@ -275,7 +295,7 @@ lowerForBackend(const verify::ObligationModule &Module,
     }
     verify::VerifyResult Result;
     Result.Status = verify::VerifyStatus::Lowered;
-    Result.BackendName = "portfolio";
+    Result.BackendName = Name;
     return Result;
   }
   return verify::lowerObligationModule(Module, Z3Out, Execution);
@@ -298,6 +318,8 @@ public:
         VOpts.Backend = verify::BackendKind::CVC5;
       else if (B == "portfolio")
         VOpts.Backend = verify::BackendKind::Portfolio;
+      else if (B == "race")
+        VOpts.Backend = verify::BackendKind::Race;
       else
         VOpts.Backend = verify::BackendKind::Z3;
       VOpts.LeanOutPath = LeanOut.getValue();
@@ -308,6 +330,7 @@ public:
       VOpts.BMCUnroll = BMCUnroll.getValue();
       VOpts.SolverTimeoutMs = SolverTimeout.getValue();
       VOpts.CollectionTimeoutMs = collectionTimeoutMs();
+      VOpts.CertifyTimeoutMs = certifyTimeoutMs();
       VOpts.FunctionTimeoutMs = functionTimeoutMs();
       VOpts.SolverResourceLimit = SolverResourceLimit.getValue();
       VOpts.Jobs = jobs();
@@ -548,10 +571,11 @@ static int replayObligationArchive() {
                       "BMC-transformed obligation archive\n";
       return 1;
     }
-    if ((BackendOpt == "cvc5" || BackendOpt == "portfolio") &&
+    if ((BackendOpt == "cvc5" || BackendOpt == "portfolio" ||
+         BackendOpt == "race") &&
         Module.BMCTransform) {
-      llvm::errs() << "error: cvc5 and portfolio replay do not yet aggregate "
-                      "BMC-transformed archives; use --backend=bmc\n";
+      llvm::errs() << "error: cvc5, portfolio, and race replay do not yet "
+                      "aggregate BMC-transformed archives; use --backend=bmc\n";
       return 1;
     }
     if (Module.BMCTransform && BMCUnroll.getNumOccurrences() > 0 &&
@@ -589,8 +613,9 @@ static int replayObligationArchive() {
                              : BackendOpt == "cvc5" ? verify::BackendKind::CVC5
                              : BackendOpt == "portfolio"
                                  ? verify::BackendKind::Portfolio
-                             : BackendOpt == "bmc" ? verify::BackendKind::BMC
-                                                   : verify::BackendKind::Z3;
+                             : BackendOpt == "race" ? verify::BackendKind::Race
+                             : BackendOpt == "bmc"  ? verify::BackendKind::BMC
+                                                    : verify::BackendKind::Z3;
   std::unique_ptr<verify::VerifyBackend> Backend = verify::createVerifyBackend(
       Kind, LeanStream, BMCUnroll, backendExecutionOptions());
   const unsigned DumpLayers = DumpIR.getNumOccurrences() > 0
@@ -752,14 +777,15 @@ int main(int argc, const char **argv) {
   CommonOptionsParser &OptionsParser = ExpectedParser.get();
   StringRef Backend = BackendOpt.getValue();
   if (Backend != "z3" && Backend != "cvc5" && Backend != "portfolio" &&
-      Backend != "lean" && Backend != "bmc") {
+      Backend != "race" && Backend != "lean" && Backend != "bmc") {
     llvm::errs() << "error: unknown verification backend '" << Backend
-                 << "'; expected z3, cvc5, portfolio, lean, or bmc\n";
+                 << "'; expected z3, cvc5, portfolio, race, lean, or bmc\n";
     return 1;
   }
-  if (!CVC5Path.empty() && Backend != "cvc5" && Backend != "portfolio") {
-    llvm::errs() << "error: --cvc5-path requires --backend=cvc5 or "
-                    "--backend=portfolio\n";
+  if (!CVC5Path.empty() && Backend != "cvc5" && Backend != "portfolio" &&
+      Backend != "race") {
+    llvm::errs() << "error: --cvc5-path requires --backend=cvc5, "
+                    "--backend=portfolio, or --backend=race\n";
     return 1;
   }
   if (!ObligationIn.empty()) {
