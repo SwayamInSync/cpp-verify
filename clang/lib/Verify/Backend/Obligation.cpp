@@ -2560,7 +2560,12 @@ verify::buildObligationModule(const PassiveProgram &P) {
                                             : P.OldHeapName,
                       P.CallerIntMode, P.HeapVariables,
                       /*ForceCallerMode=*/false, &P.SpecFunctions);
-  return B.buildPassive(P);
+  auto Module = B.buildPassive(P);
+  if (Module) {
+    Module->AssumedPosts = P.AssumedPosts;
+    Module->AssumedUnfoldings = P.AssumedUnfoldings;
+  }
+  return Module;
 }
 
 llvm::Expected<std::unique_ptr<LogicExpr>>
