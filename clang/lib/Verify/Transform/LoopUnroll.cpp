@@ -237,6 +237,9 @@ VFunction LoopUnroller::unroll(const VFunction &Fn, unsigned K) {
   Out.InductiveLoc = Fn.InductiveLoc;
   Out.Unfolding = cloneVExpr(Fn.Unfolding.get());
   Out.InductiveStepOf = Fn.InductiveStepOf;
+  Out.InductiveRuleOf = Fn.InductiveRuleOf;
+  Out.FactsWithheld = Fn.FactsWithheld;
+  Out.TotalExpressions = Fn.TotalExpressions;
   for (const auto &[Name, Assumes] : Fn.Behaviors)
     Out.Behaviors.emplace_back(Name, cloneVExpr(Assumes.get()));
   Out.DeclLoc = Fn.DeclLoc;
