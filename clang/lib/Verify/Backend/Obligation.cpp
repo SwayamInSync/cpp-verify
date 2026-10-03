@@ -2564,6 +2564,7 @@ verify::buildObligationModule(const PassiveProgram &P) {
   if (Module) {
     Module->AssumedPosts = P.AssumedPosts;
     Module->AssumedUnfoldings = P.AssumedUnfoldings;
+    Module->InductivePosts = P.InductivePosts;
   }
   return Module;
 }
