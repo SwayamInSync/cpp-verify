@@ -151,6 +151,9 @@ struct CertifyLimits {
   uint64_t DirectExpansion = 4096;
   unsigned MaxIntegerBits = 1U << 20;
   std::optional<std::chrono::steady_clock::time_point> Deadline;
+  /// Set when Deadline is the time one counterexample check may take, not
+  /// the query's: the message then says so.
+  std::optional<unsigned> CheckTimeoutMs;
 };
 
 /// A logical application at concrete arguments whose model value differs from
