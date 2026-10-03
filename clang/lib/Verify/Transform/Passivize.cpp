@@ -2957,6 +2957,31 @@ addSpecPostInstances(PassiveProgram &P, const FunctionMap &FnMap,
       Facts.push_back(std::move(Instance));
     }
   };
+  // The applications inside the definitions the solver receives, as
+  // Dafny's function postconditions hold at every application.
+  auto Defined = [&](const VSpecCallExpr &, const VFunction &Spec) {
+    return !Withheld.count(Spec.Identity);
+  };
+  std::map<std::string, FramedApplication> Named;
+  for (const auto &Assumption : P.EntryAssumes)
+    collectFramedApplications(Assumption.get(), FnMap, Enclosing, Named,
+                              Defined);
+  for (const auto &S : P.Stmts)
+    collectFramedApplications(S->Cond.get(), FnMap, Enclosing, Named, Defined);
+  for (const auto &Exit : P.ExitAsserts)
+    collectFramedApplications(Exit.Cond.get(), FnMap, Enclosing, Named,
+                              Defined);
+  std::vector<std::unique_ptr<VExpr>> Levels;
+  for (const auto &[Key, Application] : Named) {
+    for (auto &Level :
+         specDefinitionLevels(*Application.Call, FnMap, P.SpecFuel,
+                              P.HiddenSpecs, P.RevealedSpecs)) {
+      std::vector<const VQuantifiedExpr *> Outer = Application.Enclosing;
+      collectFramedApplications(Level.get(), FnMap, Outer, Applications,
+                                WithPost);
+      Levels.push_back(std::move(Level));
+    }
+  }
   addFacts(Applications);
   for (unsigned Level = 2; !Unfolded.empty(); ++Level) {
     auto Deeper = [&](const VSpecCallExpr &, const VFunction &Spec) {
@@ -4515,9 +4540,26 @@ public:
         continue;
       }
       auto Length = substParams(Extent.Length.get(), ParamMap, Ctx, EntryHeap);
+      // In the object model a pointer parameter without an extent addresses
+      // one object of its pointee type: a slice of one element.
+      std::vector<VValidExtent> CallerExtents;
+      for (const VValidExtent &Outer : ActiveValidExtents)
+        CallerExtents.emplace_back(Outer.Base, Outer.PointerType,
+                                   cloneVExpr(Outer.Length.get()));
+      if (Fn.ObjectModel) {
+        CloneCtx EntryCtx{Renames, OldState, true};
+        for (const auto &[Name, Ty] : Fn.Params)
+          if (Ty.Kind == VTypeKind::Ptr && Ty.PointeeSizeBytes > 0 &&
+              llvm::none_of(Fn.ValidExtents, [&](const VValidExtent &Outer) {
+                return Outer.Base == Name;
+              }))
+            CallerExtents.emplace_back(
+                stateVariableName(EntryCtx, Name), Ty,
+                std::make_unique<VLiteralExpr>(1, Length->Ty, C.Loc));
+      }
       auto Contained = sliceContainment(Actual->second.get(), Length.get(),
                                         Extent.PointerType.PointeeSizeBytes,
-                                        ActiveValidExtents, C.Loc);
+                                        CallerExtents, C.Loc);
       emitPassive(P, PassiveStmt::Assert, std::move(Contained), nullptr, C.Loc,
                   ProofObligationKind::Bounds);
       // A region write through an extent is framed by the extent itself
@@ -4623,11 +4665,15 @@ public:
       const VExpr *Pre = Callee->Preconditions[I].get();
       auto BoundPre = substParams(Pre, ParamMap, Ctx, EntryHeap, "", {},
                                   nullptr, &ContainedPointerParams);
-      // A parameter with a declared extent is the slice machinery's.
+      // A parameter with a declared extent is the slice machinery's, whose
+      // containment also places it in the caller's objects: a callee outside
+      // the object model (a proof function) still states its abstract
+      // validity, which that membership gives.
       if (Fn.ObjectModel &&
-          llvm::none_of(ContainedPointerParams, [&](const std::string &Name) {
-            return referencesVar(Pre, Name);
-          }))
+          (!Callee->ObjectModel ||
+           llvm::none_of(ContainedPointerParams, [&](const std::string &Name) {
+             return referencesVar(Pre, Name);
+           })))
         BoundPre = abstractValidity(std::move(BoundPre), Renames);
       BoundPre = rebaseSliceBinders(std::move(BoundPre));
       SafetyChecks Checks;
