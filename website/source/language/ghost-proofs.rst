@@ -123,11 +123,21 @@ derivation shows it, so it needs no ``decreases``.
   no finite derivation provides.
 - The body returns a condition (under ``if``/``else`` at most) in which the
   predicate occurs only positively: as a conjunct or disjunct, a branch of
-  ``?:``, under ``exists``, or under a bounded ``forall``. It applies itself
-  only directly, reads no memory, and takes no ``decreases`` or ``when``.
+  ``?:``, under ``exists``, or under a bounded ``forall``. It takes no
+  ``decreases`` or ``when``, and it may read memory. Predicates that apply
+  each other are defined together; a predicate never applies itself through
+  a spec that is not inductive.
 - Proofs see the predicate through its body, unfolded once at each
   application, both ways: naming an application, as in
   ``contract_assert(even(2));``, unfolds it to ``2 == 0 || even(0)``.
+- That unfolding is a theorem, and the verifier proves it for each predicate
+  before any proof may use it, with three generated proofs: monotonicity
+  (a derivation of some height is one of every greater height), case
+  analysis (the predicate implies its body), and introduction (its body
+  implies the predicate). ``Verified: inductive predicate: even`` reports
+  that they hold. If one fails it is reported (as ``even (introduction)``,
+  for example), and the predicate and every proof that uses it are
+  ``Unresolved`` with reason ``spec.inductive``.
 - ``post(!result || Q)`` states what every derivation satisfies. It is proved
   by induction on derivations (a failure reads ``spec post by induction
   failed``) and holds wherever the predicate does.
