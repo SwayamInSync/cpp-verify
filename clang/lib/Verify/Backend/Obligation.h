@@ -226,6 +226,9 @@ using VCExpr = LogicExpr;
 /// trigger a quantifier.
 bool isCollectionRead(const LogicExpr &E);
 
+/// A deep copy of \p Expr, patterns included.
+std::unique_ptr<LogicExpr> cloneLogicExpr(const LogicExpr *Expr);
+
 /// What an obligation establishes. Only Unwinding changes result semantics;
 /// every other kind is diagnostic metadata.
 enum class ObligationKind {
@@ -325,6 +328,15 @@ struct LogicFunctionDecl {
   /// A choice function: any interpretation satisfying its axioms, which the
   /// module assumes, is its meaning. Not archived.
   bool Choice = false;
+  /// An inductive predicate's body over its parameters, of which it is the
+  /// least fixpoint: a counterexample check evaluates it over the arguments
+  /// its derivations reach. Not archived.
+  std::unique_ptr<LogicExpr> Unfolding;
+  /// The postconditions over the parameters and ResultVariable, which a
+  /// counterexample check may use where the definition does not settle a
+  /// value; a verdict that does rests on them. Not archived.
+  std::vector<std::unique_ptr<LogicExpr>> Postconditions;
+  static constexpr const char *ResultVariable = "cppverify.result";
 };
 
 /// Semantic transform provenance that changes how verification results must be
@@ -361,6 +373,10 @@ public:
   /// never archived or hashed.
   std::set<std::string> AssumedPosts;
   std::set<std::string> AssumedUnfoldings;
+  /// Declarations no obligation reaches that the unfoldings and
+  /// postconditions above apply, for the counterexample check alone. Never
+  /// encoded, archived, or hashed.
+  std::map<std::string, LogicFunctionDecl> EvidenceFunctions;
 };
 
 /// Validate every declaration, sort, call signature, obligation identity, and
