@@ -4,6 +4,8 @@
 #include "LeanBackend.h"
 #include "ObligationSimplify.h"
 #include "Z3Encode.h"
+#include <set>
+#include <thread>
 
 using namespace clang;
 using namespace verify;
@@ -558,6 +560,111 @@ VerifyResult VerifyBackend::verify(const ObligationModule &Module) {
   return Result;
 }
 
+/// Z3 and cvc5 at once, as Frama-C's prover list: the first proof or
+/// certified counterexample stands and stops the other. Where neither
+/// settles the module, the obligations each proved are joined: every
+/// obligation is a query of its own, so proofs by different solvers compose.
+class RaceVerifyBackend : public VerifyBackend {
+  std::unique_ptr<Z3VerifyBackend> Z3;
+  std::unique_ptr<CVC5VerifyBackend> CVC5;
+  uint64_t MaxQueryNodes;
+
+  static bool isDecisive(VerifyStatus Status) {
+    return Status == VerifyStatus::Verified || Status == VerifyStatus::Failed;
+  }
+
+public:
+  explicit RaceVerifyBackend(const BackendExecutionOptions &Execution)
+      : Z3(std::make_unique<Z3VerifyBackend>(Execution, "z3")),
+        CVC5(std::make_unique<CVC5VerifyBackend>(Execution)),
+        MaxQueryNodes(Execution.MaxQueryNodes) {}
+
+  llvm::StringRef getName() const override { return "race"; }
+  void
+  setDeadline(std::optional<std::chrono::steady_clock::time_point> D) override {
+    Z3->setDeadline(D);
+    CVC5->setDeadline(D);
+  }
+  void cancel() override {
+    Z3->cancel();
+    CVC5->cancel();
+  }
+  void resume() override {
+    Z3->resume();
+    CVC5->resume();
+  }
+  BackendCapabilities getCapabilities() const override {
+    return {Z3->getCapabilities().SupportedFeatures |
+                CVC5->getCapabilities().SupportedFeatures,
+            true};
+  }
+
+protected:
+  VerifyResult verifyModule(const ObligationModule &Module) override {
+    if (MaxQueryNodes != 0 &&
+        obligationModuleNodeCount(Module) > MaxQueryNodes) {
+      VerifyResult Result;
+      Result.Status = VerifyStatus::Unresolved;
+      Result.Reason = VerifyReason::QuerySizeLimit;
+      Result.Message =
+          "canonical obligation module exceeds query node budget " +
+          std::to_string(MaxQueryNodes);
+      Result.BackendName = "race";
+      return Result;
+    }
+    resume();
+    VerifyResult Z3Result;
+    VerifyResult CVC5Result;
+    std::thread Other([&] {
+      CVC5Result = CVC5->verify(Module);
+      if (isDecisive(CVC5Result.Status))
+        Z3->cancel();
+    });
+    Z3Result = Z3->verify(Module);
+    if (isDecisive(Z3Result.Status))
+      CVC5->cancel();
+    Other.join();
+    resume();
+    Z3Result.BackendName = "z3";
+    CVC5Result.BackendName = "cvc5";
+    const bool Z3Decides = isDecisive(Z3Result.Status);
+    const bool CVC5Decides = isDecisive(CVC5Result.Status);
+    if (Z3Decides && CVC5Decides && Z3Result.Status != CVC5Result.Status) {
+      VerifyResult Result;
+      Result.Status = VerifyStatus::Unresolved;
+      Result.Reason = VerifyReason::InconsistentBackendResults;
+      Result.Message =
+          std::string("backend disagreement: z3=") +
+          (Z3Result.Status == VerifyStatus::Verified ? "verified" : "failed") +
+          ", cvc5=" +
+          (CVC5Result.Status == VerifyStatus::Verified ? "verified" : "failed");
+      Result.BackendName = "race";
+      return Result;
+    }
+    if (Z3Decides)
+      return Z3Result;
+    if (CVC5Decides)
+      return CVC5Result;
+    // Neither settled the module: an obligation either proved is proved.
+    if (Z3Result.UnprovedObligations && CVC5Result.UnprovedObligations) {
+      std::set<std::string> CVC5Left(CVC5Result.UnprovedObligations->begin(),
+                                     CVC5Result.UnprovedObligations->end());
+      std::vector<std::string> Left;
+      for (const std::string &Id : *Z3Result.UnprovedObligations)
+        if (CVC5Left.count(Id))
+          Left.push_back(Id);
+      if (Left.empty()) {
+        VerifyResult Result;
+        Result.Status = VerifyStatus::Verified;
+        Result.BackendName = "z3+cvc5";
+        return Result;
+      }
+      Z3Result.UnprovedObligations = std::move(Left);
+    }
+    return Z3Result;
+  }
+};
+
 std::unique_ptr<VerifyBackend>
 verify::createVerifyBackend(BackendKind K, llvm::raw_ostream *LeanOut,
                             unsigned BMCUnroll,
@@ -574,6 +681,8 @@ verify::createVerifyBackend(BackendKind K, llvm::raw_ostream *LeanOut,
     return std::make_unique<CVC5VerifyBackend>(Execution);
   case BackendKind::Portfolio:
     return std::make_unique<PortfolioVerifyBackend>(Execution);
+  case BackendKind::Race:
+    return std::make_unique<RaceVerifyBackend>(Execution);
   }
   llvm_unreachable("unknown verification backend");
 }
