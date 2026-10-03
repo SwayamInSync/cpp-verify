@@ -368,12 +368,17 @@ spec bool reach(int a, int b)
   `Unresolved` with reason `spec.inductive`, and so is every proof that
   relies on its unfolding.
 - A postcondition states what every derivation satisfies and has the form
-  `!result || Q`, where `Q` does not apply `P`. It is proved for `P.step` by
-  induction on `h`, which is induction on derivations: with the definition
-  of `P.step` visible, each application at a lower height may assume it. It
-  then holds at every application of `P`. A failure is reported as `spec
-  post by induction failed: P`, and proofs that rely on it are
-  `spec.post`.
+  `!result || Q`. It is proved for `P.step` by induction on `h`, which is
+  induction on derivations: with the definition of `P.step` visible, each
+  premise (an application at a lower height) may assume it and is itself a
+  derivation of its predicate. It then holds at every application of `P`. A
+  failure is reported as `spec post by induction failed: P`, and proofs
+  that rely on it are `spec.post`.
+- `Q` may apply `P` and the predicates defined with it, as in transitivity:
+  `post(!result || forall(c, !reach(b, c) || reach(a, c)))`. There they are
+  seen through their unfoldings, which rest on the proved rules, never
+  through the postcondition being proved: `post(!result || !bad(n))` on a
+  predicate with `bad(0)` true fails.
 - A counterexample that needs `P(v)` true is certified by a derivation, a
   height `h` with `P.step(h, v)`, found by trying heights. One that needs
   `P(v)` false is `counterexample.unchecked` unless the quantifier analysis
