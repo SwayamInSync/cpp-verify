@@ -336,23 +336,44 @@ spec bool reach(int a, int b)
   predicate occurs only positively: as a conjunct or disjunct, a branch of
   `?:`, under `exists`, or under a bounded `forall`; never negated, compared,
   converted, in a condition, in an argument, or under a `forall` without
-  bounds. The predicate applies itself only directly, reads no memory, and
-  takes no `decreases` or `when`.
+  bounds. It takes no `decreases` or `when`, and it may read memory.
+  Predicates that apply each other are defined together, each under the same
+  conditions; a predicate never applies itself through a spec that is not
+  inductive, since the conditions could not be checked there.
 - Meaning: with `F` its body, `P(x)` is `exists(h, P.step(h, x))`, where the
-  generated spec `P.step(h, x)` is `h > 0 && F` with each `P(a)` read as
-  `P.step(h - 1, a)`: `F` applied `h` times to false. The conditions above
-  make `F` monotone and continuous, so this union is the least fixpoint
-  (Kleene's theorem) and `P(x) == F(x)` is a theorem.
-- Proofs see `P` through that equation, assumed at every application: one
-  unfolding, both ways (introduction and inversion). An application that
-  appears only inside an unfolding is unfolded once it is named, as in
-  `contract_assert(reach(2, 4));`. `reveal(P)` gives the definition instead.
+  generated spec `P.step(h, x)` is `h > 0 && F` with each application `Q(a)`
+  of a predicate of its group read as `Q.step(h - 1, a)`: `F` applied `h`
+  times to false. The conditions above make `F` monotone and continuous, so
+  this union is the least fixpoint (Kleene's theorem).
+- Proofs see `P` through its unfolding `P(x) == F(x)`, assumed at every
+  application: one unfolding, both ways (introduction and inversion). An
+  application that appears only inside an unfolding is unfolded once it is
+  named, as in `contract_assert(reach(2, 4));`. `reveal(P)` gives the
+  definition instead.
+- The unfolding is not assumed on trust. As Isabelle's inductive package
+  does, the verifier generates three proof functions for each predicate and
+  proves them before any proof may rely on it:
+  - monotonicity: a derivation of height `h` is one of every height
+    `j >= h`, by induction on `h`;
+  - case analysis: `P(x)` implies `F(x)`;
+  - introduction: `F(x)` implies `P(x)`, at a height built for it: one more
+    than the heights of the applications `F` uses, at the witnesses chosen
+    for its existentials and the largest over its bounded universals (a
+    generated recursive spec `P.bound` computes it).
+  Every height and witness these proofs need is named, and every universal
+  is introduced from a fresh value, so no solver has to invent one. They
+  quantify only over the parameters an application changes. Success shows
+  as `Verified: inductive predicate: P`; a failed rule is reported (as
+  `P (monotonicity)`, `P (case analysis)`, or `P (introduction)`), `P` is
+  `Unresolved` with reason `spec.inductive`, and so is every proof that
+  relies on its unfolding.
 - A postcondition states what every derivation satisfies and has the form
   `!result || Q`, where `Q` does not apply `P`. It is proved for `P.step` by
-  induction on `h`, which is induction on derivations, together with the
-  termination of `P.step`, and it holds at every application of `P`. A
-  failure is reported as `spec post by induction failed: P`, and proofs that
-  rely on it are `spec.post`.
+  induction on `h`, which is induction on derivations: with the definition
+  of `P.step` visible, each application at a lower height may assume it. It
+  then holds at every application of `P`. A failure is reported as `spec
+  post by induction failed: P`, and proofs that rely on it are
+  `spec.post`.
 - A counterexample that needs `P(v)` true is certified by a derivation, a
   height `h` with `P.step(h, v)`, found by trying heights. One that needs
   `P(v)` false is `counterexample.unchecked` unless the quantifier analysis
@@ -1029,7 +1050,9 @@ int safe_fib(int n) pre(...) post(result == fibo(n)) {
   whose termination check did not pass, so that spec has no definition;
   `spec.reads`: the proof relies on a spec whose `reads` check did not pass,
   so its frames are not facts; `spec.post`: it relies on a spec whose
-  postcondition is not established; `callee.contract`: it relies on a
+  postcondition is not established; `spec.inductive`: it relies on the
+  unfolding of an inductive predicate whose rules are not proved;
+  `callee.contract`: it relies on a
   callee contract that nothing establishes: the callee's verification
   failed, or it has a contract but no definition and no trust mark;
   `decreases.missing`: a loop has no termination measure;
@@ -1331,7 +1354,7 @@ their human message: `counterexample`, `solver.timeout`, `solver.unknown`,
 `backend.invalid-result`, `backend.inconsistent-results`,
 `bmc.incomplete-bound`, `lean.export-failed`, `cache.corrupt`,
 `cache.io-failed`, `spec.fuel`, `spec.hidden`, `spec.termination`,
-`spec.reads`, `spec.post`, and `counterexample.unchecked`.
+`spec.reads`, `spec.post`, `spec.inductive`, and `counterexample.unchecked`.
 `--diagnostics-format=json` serializes verification results as versioned JSON
 Lines (`cppverify.diagnostic/1`) for both source verification and archive
 replay.
