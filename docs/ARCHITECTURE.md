@@ -888,11 +888,21 @@ unfolding is demoted with that reason.
 
 A postcondition `!result || Q` is copied to `P.step` and proved by
 induction on `h` in a module of its own (`buildInductionChecks`): the
-definition of `P.step` is visible and each application at a lower measure
-assumes the postcondition. Termination of `P.step` is checked separately,
-without its postconditions. A failure is reported as `spec post by
-induction failed: P`, and `P`'s own post module derives the postcondition
-from `P.step`'s under the existential.
+definition of `P.step` is visible, each application at a lower measure
+assumes the postcondition, each application `Q.step(k, y)` also gives
+`Q(y)`, and `P.step(h, x)` gives `P(x)` (both by the definition of `Q` and
+`P` as existentials over heights). Termination of `P.step` is checked
+separately, without its postconditions. A failure is reported as `spec post
+by induction failed: P`, and `P`'s own post module derives the
+postcondition from `P.step`'s under the existential.
+
+In every spec check module (termination, post, induction), the applications
+a postcondition makes receive facts as the body's do
+(`addPostApplicationFacts`), quantified like the application, one level
+deep: the spec itself and its recursion cycle get none (they are opaque or
+covered by the induction hypothesis), and, in a step's induction, the
+predicates of its group give their unfoldings only, so a lemma such as
+transitivity can mention its own predicate without assuming itself.
 
 When neither the distinguished values nor Presburger arithmetic decide an
 unbounded quantifier, the certifier tries binder values `0, -1, 1, -2, ...`
