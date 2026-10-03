@@ -21,6 +21,8 @@ For loop condition ``cond``, invariant ``I``, and body ``B``:
 Example: ascending index
 ------------------------
 
+.. cppverify-example: fragment
+
 .. code-block:: cpp
 
    int i = 0;
