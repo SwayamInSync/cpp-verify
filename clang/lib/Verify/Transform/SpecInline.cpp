@@ -2322,9 +2322,13 @@ std::unique_ptr<VExpr> verify::specApplicationFacts(
   if (!Spec.Unfolding)
     return Facts;
   auto Map = bindParams(Spec, Args);
+  // The body reads memory where the application does.
+  auto Body = cloneVExpr(Spec.Unfolding.get());
+  if (!Heap.empty())
+    readHeapAt(Body.get(), Heap);
   auto Unfolded = std::make_unique<VBinOpExpr>(
-      VBinOp::Eq, cloneVExpr(Value),
-      substParamsInExpr(Spec.Unfolding.get(), Map), VType::makeBool(), Loc);
+      VBinOp::Eq, cloneVExpr(Value), substParamsInExpr(Body.get(), Map),
+      VType::makeBool(), Loc);
   if (!Facts)
     return Unfolded;
   return makeDecreaseAnd(std::move(Facts), std::move(Unfolded), Loc);
