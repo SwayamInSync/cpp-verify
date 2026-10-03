@@ -2393,6 +2393,7 @@ verify::lowerSMTLibModule(const ObligationModule &Module,
 CVC5VerifyBackend::CVC5VerifyBackend(const BackendExecutionOptions &Execution)
     : TimeoutMs(Execution.SolverTimeoutMs),
       CollectionTimeoutMs(Execution.CollectionTimeoutMs),
+      CertifyTimeoutMs(Execution.CertifyTimeoutMs),
       ResourceLimit(Execution.SolverResourceLimit), Jobs(Execution.Jobs),
       Pool(Execution.Pool), MaxQueryNodes(Execution.MaxQueryNodes),
       IntegerEncoding(Execution.IntegerEncoding) {
@@ -2419,7 +2420,8 @@ struct SolverRun {
 } // namespace
 
 static SolverRun runCVC5(const std::string &SolverPath, llvm::StringRef Script,
-                         unsigned TimeoutMs, unsigned ResourceLimit);
+                         unsigned TimeoutMs, unsigned ResourceLimit,
+                         const std::atomic<bool> *Cancelled = nullptr);
 
 /// Whether the cvc5 at \p SolverPath prints a sequence value last element
 /// first, as cvc5 1.1 does (the value itself is right: seq.nth reads it in
@@ -2460,7 +2462,8 @@ static bool printsSequencesReversed(const std::string &SolverPath) {
 }
 
 static SolverRun runCVC5(const std::string &SolverPath, llvm::StringRef Script,
-                         unsigned TimeoutMs, unsigned ResourceLimit) {
+                         unsigned TimeoutMs, unsigned ResourceLimit,
+                         const std::atomic<bool> *Cancelled) {
   SolverRun Run;
   VerifyResult &Result = Run.Failure;
   Result.BackendName = "cvc5";
@@ -2532,6 +2535,7 @@ static SolverRun runCVC5(const std::string &SolverPath, llvm::StringRef Script,
                         std::chrono::seconds(1);
   int ExitCode = -1;
   bool TimedOut = false;
+  bool Stopped = false;
   bool OutputLimitExceeded = false;
   while (true) {
     ProcessPollResult Poll = pollProcess(Process);
@@ -2557,6 +2561,13 @@ static SolverRun runCVC5(const std::string &SolverPath, llvm::StringRef Script,
       if (!terminateAndReap(Process, TerminationError) &&
           !TerminationError.empty())
         InvocationError += ": " + TerminationError;
+      break;
+    }
+    if (Cancelled && *Cancelled) {
+      Stopped = true;
+      std::string TerminationError;
+      if (!terminateAndReap(Process, TerminationError))
+        InvocationError = std::move(TerminationError);
       break;
     }
     if (TimeoutMs != 0 && std::chrono::steady_clock::now() >= Deadline) {
@@ -2586,6 +2597,11 @@ static SolverRun runCVC5(const std::string &SolverPath, llvm::StringRef Script,
     Result.Reason = VerifyReason::SolverTimeout;
     Result.Message = InvocationError.empty() ? "cvc5 process timed out"
                                              : std::move(InvocationError);
+    return Run;
+  }
+  if (Stopped) {
+    Result.Reason = VerifyReason::SolverUnknown;
+    Result.Message = "stopped: another solver settled the query";
     return Run;
   }
   if (ExitCode != 0) {
@@ -2673,6 +2689,11 @@ CVC5VerifyBackend::verifyQuery(const ObligationModule &Module,
     Result.Message = "the function's time (--function-timeout) is spent";
     return Result;
   }
+  if (Cancelled) {
+    Result.Reason = VerifyReason::SolverUnknown;
+    Result.Message = "stopped: another solver settled the query";
+    return Result;
+  }
   auto Features = validateObligationModule(Module);
   if (!Features || *Features != Module.RequiredFeatures) {
     Result.Reason = VerifyReason::EncodingFailure;
@@ -2710,6 +2731,21 @@ CVC5VerifyBackend::verifyQuery(const ObligationModule &Module,
     Limits.Deadline = QueryDeadline;
     Instances = closedApplicationInstances(Module, *Query, Limits);
   }
+  // One model's check may not spend the whole query.
+  auto checkLimits = [&] {
+    CertifyLimits Limits;
+    Limits.Deadline = QueryDeadline;
+    const unsigned CapMs = CertifyTimeoutMs ? *CertifyTimeoutMs : TimeoutMs / 2;
+    if (CapMs > 0) {
+      const auto Cap =
+          std::chrono::steady_clock::now() + std::chrono::milliseconds(CapMs);
+      if (!Limits.Deadline || Cap < *Limits.Deadline) {
+        Limits.Deadline = Cap;
+        Limits.CheckTimeoutMs = CapMs;
+      }
+    }
+    return Limits;
+  };
   // cvc5 has only instances to refine with; they get a share of the budget.
   const auto Deadline =
       Start + std::chrono::milliseconds(
@@ -2742,7 +2778,8 @@ CVC5VerifyBackend::verifyQuery(const ObligationModule &Module,
       }
       Budget = static_cast<unsigned>(Remaining);
     }
-    SolverRun Run = runCVC5(SolverPath, *Script, Budget, ResourceLimit);
+    SolverRun Run =
+        runCVC5(SolverPath, *Script, Budget, ResourceLimit, &Cancelled);
     auto giveUp = [&](llvm::StringRef Outcome) {
       RefinementDecision Exhausted = Refinement.exhausted(Outcome);
       Result.Reason = Exhausted.Reason;
@@ -2767,10 +2804,8 @@ CVC5VerifyBackend::verifyQuery(const ObligationModule &Module,
               parseModel(Rest, printsSequencesReversed(SolverPath))) {
         CVC5CandidateModel Candidate(
             *Candidates, Encoding == MachineIntegerEncoding::Integer, Defined);
-        CertifyLimits Limits;
-        Limits.Deadline = QueryDeadline;
         CertifyResult Certified =
-            certifyCounterexample(Module, *Query, Candidate, Limits);
+            certifyCounterexample(Module, *Query, Candidate, checkLimits());
         if (Certified.Outcome == CertifyOutcome::Certified) {
           Result.Status = VerifyStatus::Failed;
           Result.Reason = VerifyReason::Counterexample;
@@ -2815,10 +2850,8 @@ CVC5VerifyBackend::verifyQuery(const ObligationModule &Module,
     }
     CVC5CandidateModel Candidate(
         *Definitions, Encoding == MachineIntegerEncoding::Integer, Defined);
-    CertifyLimits Limits;
-    Limits.Deadline = QueryDeadline;
     CertifyResult Certified =
-        certifyCounterexample(Module, *Query, Candidate, Limits);
+        certifyCounterexample(Module, *Query, Candidate, checkLimits());
     if (Certified.Outcome == CertifyOutcome::Undetermined &&
         Narrowed.size() < MaxNarrowedQuantifiers) {
       const LogicExpr *Narrow =
