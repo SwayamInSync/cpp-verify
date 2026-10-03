@@ -2366,6 +2366,37 @@ std::unique_ptr<VExpr> verify::specApplicationFacts(
   return makeDecreaseAnd(std::move(Facts), std::move(Unfolded), Loc);
 }
 
+std::vector<std::unique_ptr<VExpr>>
+verify::specDefinitionLevels(const VSpecCallExpr &Call,
+                             const FunctionMap &FnMap,
+                             const std::map<std::string, unsigned> &Fuel,
+                             const std::set<std::string> &Hidden,
+                             const std::set<std::string> &Revealed) {
+  std::vector<std::unique_ptr<VExpr>> Levels;
+  auto It = FnMap.find(Call.CalleeIdentity);
+  if (It == FnMap.end() || !It->second)
+    return Levels;
+  const VFunction &Spec = *It->second;
+  if (Spec.Uninterpreted || Hidden.count(Spec.Identity))
+    return Levels;
+  unsigned Depth = 1;
+  if (auto F = Fuel.find(Spec.Identity); F != Fuel.end())
+    Depth = F->second;
+  if (!Spec.NeedsDecreasesCheck)
+    Depth = std::min(Depth, 1U);
+  SpecInliner Inliner(FnMap, Fuel);
+  auto Map = bindParams(Spec, Call.Args);
+  for (unsigned Level = 1; Level <= Depth; ++Level) {
+    auto Body = Inliner.unfoldDefinition(Spec, Fuel, Hidden, Revealed, Level);
+    if (!Body)
+      continue;
+    if (Call.ReadsHeap && !Call.HeapVar.empty())
+      readHeapAt(Body.get(), Call.HeapVar);
+    Levels.push_back(substParamsInExpr(Body.get(), Map));
+  }
+  return Levels;
+}
+
 std::unique_ptr<VExpr>
 verify::specInductionFacts(const VFunction &Spec,
                            const std::vector<std::unique_ptr<VExpr>> &Args,
@@ -2450,6 +2481,11 @@ static void addPostApplicationFacts(PassiveProgram &P, const VFunction &Fn,
   }
   std::vector<std::unique_ptr<PassiveStmt>> Facts;
   std::vector<const VQuantifiedExpr *> Enclosing;
+  // The applications the check names, whose definitions the solver receives.
+  std::vector<
+      std::pair<const VSpecCallExpr *, std::vector<const VQuantifiedExpr *>>>
+      Named;
+  bool Naming = true;
   std::function<void(const VExpr *)> visit = [&](const VExpr *E) {
     if (!E)
       return;
@@ -2466,6 +2502,8 @@ static void addPostApplicationFacts(PassiveProgram &P, const VFunction &Fn,
     if (E->K != VExpr::SpecCall)
       return;
     const auto &Call = static_cast<const VSpecCallExpr &>(*E);
+    if (Naming)
+      Named.push_back({&Call, Enclosing});
     auto It = FnMap.find(Call.CalleeIdentity);
     if (It == FnMap.end() || !It->second ||
         Call.CalleeIdentity == Fn.Identity ||
@@ -2515,6 +2553,14 @@ static void addPostApplicationFacts(PassiveProgram &P, const VFunction &Fn,
     if (S->K == PassiveStmt::Assert &&
         S->ProofKind == ProofObligationKind::Postcondition)
       visit(S->Cond.get());
+  // And those inside these definitions, as at applications in functions.
+  Naming = false;
+  for (const auto &[Call, Outer] : Named)
+    for (const auto &Level : specDefinitionLevels(
+             *Call, FnMap, P.SpecFuel, P.HiddenSpecs, P.RevealedSpecs)) {
+      Enclosing = Outer;
+      visit(Level.get());
+    }
   P.Stmts.insert(P.Stmts.begin(), std::make_move_iterator(Facts.begin()),
                  std::make_move_iterator(Facts.end()));
 }
