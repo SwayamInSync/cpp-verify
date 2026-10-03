@@ -169,6 +169,7 @@ VFunction verify::cloneVFunction(const VFunction &Fn) {
   Out.ObjectModel = Fn.ObjectModel;
   Out.UnmeasuredLoop = Fn.UnmeasuredLoop;
   Out.RecursionGroup = Fn.RecursionGroup;
+  Out.Cluster = Fn.Cluster;
   Out.SpecDependencies = Fn.SpecDependencies;
   for (const VReadRange &R : Fn.Reads)
     Out.Reads.push_back(
