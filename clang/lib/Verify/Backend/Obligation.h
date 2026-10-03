@@ -384,6 +384,9 @@ public:
   /// never archived or hashed.
   std::set<std::string> AssumedPosts;
   std::set<std::string> AssumedUnfoldings;
+  /// The specs of the function's cluster whose postconditions the module
+  /// assumes only below its measure: the induction hypothesis.
+  std::set<std::string> InductivePosts;
   /// Declarations no obligation reaches that the unfoldings and
   /// postconditions above apply, for the counterexample check alone. Never
   /// encoded, archived, or hashed.
