@@ -2900,9 +2900,10 @@ static void addFrameInstances(PassiveProgram &P, const FunctionMap &FnMap) {
 /// hold at every application of it. An inductive predicate is unfolded
 /// \p Depth levels deep, or as deep as reveal_with_fuel asks when \p WithFuel:
 /// the applications inside an unfolding are unfolded in turn.
-static void addSpecPostInstances(PassiveProgram &P, const FunctionMap &FnMap,
-                                 const VFunction &Fn, unsigned Depth,
-                                 bool WithFuel) {
+static void
+addSpecPostInstances(PassiveProgram &P, const FunctionMap &FnMap,
+                     const VFunction &Fn, unsigned Depth, bool WithFuel,
+                     const std::vector<std::unique_ptr<VExpr>> &EntryMeasure) {
   const std::set<std::string> &Withheld = Fn.FactsWithheld;
   auto depthOf = [&](const VFunction &Spec) {
     auto It = Fn.SpecFuel.find(Spec.Identity);
@@ -2911,7 +2912,7 @@ static void addSpecPostInstances(PassiveProgram &P, const FunctionMap &FnMap,
   };
   auto WithPost = [&](const VSpecCallExpr &, const VFunction &Spec) {
     return (!Spec.Postconditions.empty() || Spec.Unfolding) &&
-           !Withheld.count(Spec.Identity);
+           !Withheld.count(Spec.Identity) && !Fn.Cluster.count(Spec.Identity);
   };
   std::map<std::string, FramedApplication> Applications;
   std::vector<const VQuantifiedExpr *> Enclosing;
@@ -2967,6 +2968,43 @@ static void addSpecPostInstances(PassiveProgram &P, const FunctionMap &FnMap,
       collectFramedApplications(Fact, FnMap, Enclosing, Next, Deeper);
     Unfolded.clear();
     addFacts(Next);
+  }
+  // The specs of the function's cluster, where their measure is below the
+  // function's at entry: the induction hypothesis of their joint proof.
+  auto InCluster = [&](const VSpecCallExpr &, const VFunction &Spec) {
+    return Fn.Cluster.count(Spec.Identity) && !Withheld.count(Spec.Identity);
+  };
+  std::map<std::string, FramedApplication> Members;
+  if (!EntryMeasure.empty()) {
+    for (const auto &Assumption : P.EntryAssumes)
+      collectFramedApplications(Assumption.get(), FnMap, Enclosing, Members,
+                                InCluster);
+    for (const auto &S : P.Stmts)
+      collectFramedApplications(S->Cond.get(), FnMap, Enclosing, Members,
+                                InCluster);
+    for (const auto &Exit : P.ExitAsserts)
+      collectFramedApplications(Exit.Cond.get(), FnMap, Enclosing, Members,
+                                InCluster);
+  }
+  for (const auto &[Key, Application] : Members) {
+    const VSpecCallExpr &Call = *Application.Call;
+    const VFunction &Spec = *FnMap.at(Call.CalleeIdentity);
+    std::unique_ptr<VExpr> Fact = specInductionFacts(
+        Spec, Call.Args, &Call, Call.Loc, EntryMeasure, FnMap,
+        Call.ReadsHeap ? Call.HeapVar : std::string());
+    if (!Fact)
+      continue;
+    if (!Spec.Postconditions.empty())
+      P.InductivePosts.insert(Spec.Identity);
+    for (auto Q = Application.Enclosing.rbegin();
+         Q != Application.Enclosing.rend(); ++Q)
+      Fact = std::make_unique<VForallExpr>(
+          (*Q)->Binder, cloneVExpr((*Q)->Lo.get()), cloneVExpr((*Q)->Hi.get()),
+          std::move(Fact), Call.Loc, (*Q)->BinderType);
+    auto Instance = std::make_unique<PassiveStmt>();
+    Instance->K = PassiveStmt::Assume;
+    Instance->Cond = std::move(Fact);
+    Facts.push_back(std::move(Instance));
   }
   P.Stmts.insert(P.Stmts.begin(), std::make_move_iterator(Facts.begin()),
                  std::make_move_iterator(Facts.end()));
@@ -4342,7 +4380,15 @@ public:
     P.RevealedSpecs = Fn.RevealedSpecs;
     P.CallerIntMode = Fn.IntMode;
     addFrameInstances(P, FnMap);
-    addSpecPostInstances(P, FnMap, Fn, UnfoldingDepth, UnfoldingFuel);
+    // The measure at entry, below which the function's cluster may be used.
+    std::vector<std::unique_ptr<VExpr>> EntryMeasure;
+    if (!Fn.Cluster.empty()) {
+      CloneCtx MeasureCtx{PostRenames, OldState, false};
+      for (const auto &Decrease : Fn.Decreases)
+        EntryMeasure.push_back(cloneExpr(Decrease.get(), MeasureCtx));
+    }
+    addSpecPostInstances(P, FnMap, Fn, UnfoldingDepth, UnfoldingFuel,
+                         EntryMeasure);
     return P;
   }
 
@@ -4602,7 +4648,8 @@ public:
     // well-founded induction.
     if (!Fn.IsSpec && !Fn.Decreases.empty() &&
         (C.CalleeIdentity == Fn.Identity ||
-         Fn.RecursionGroup.count(C.CalleeIdentity)) &&
+         Fn.RecursionGroup.count(C.CalleeIdentity) ||
+         Fn.Cluster.count(C.CalleeIdentity)) &&
         Callee->Decreases.size() == Fn.Decreases.size()) {
       CloneCtx EntryCtx{Renames, OldState, true};
       std::vector<std::unique_ptr<VExpr>> CalleeMeasure;
