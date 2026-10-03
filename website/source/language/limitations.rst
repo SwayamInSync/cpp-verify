@@ -346,9 +346,8 @@ Current proof-language limitations include:
   witness among the values tried decides it; otherwise it is
   ``counterexample.unchecked``. ``choose`` is uninterpreted apart from its
   Hilbert axiom;
-- an inductive predicate is defined alone (no mutually inductive
-  predicates), reads no memory, and unfolds once at each named application;
-  its induction is stated as ``post(!result || Q)`` and proved automatically,
+- an inductive predicate unfolds once at each named application; its
+  induction is stated as ``post(!result || Q)`` and proved automatically,
   with no proof block for the step; a counterexample that needs it false is
   usually ``counterexample.unchecked``;
 - spec collections hold mathematical integers only (no nested collections or
