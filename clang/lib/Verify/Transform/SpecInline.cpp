@@ -1,6 +1,8 @@
 //===--- SpecInline.cpp ---------------------------------------------------===//
 #include "SpecInline.h"
 #include "../Transform/Passivize.h"
+#include "llvm/ADT/StringRef.h"
+#include <functional>
 #include <iterator>
 #include <map>
 #include <set>
@@ -2327,6 +2329,85 @@ std::unique_ptr<VExpr> verify::specApplicationFacts(
   return makeDecreaseAnd(std::move(Facts), std::move(Unfolded), Loc);
 }
 
+/// The inductive predicate whose step-indexed definition \p Step is.
+static const VFunction *predicateOfStep(const VFunction &Step,
+                                        const FunctionMap &FnMap) {
+  if (Step.InductiveStepOf.empty() ||
+      !llvm::StringRef(Step.Identity).ends_with("::step"))
+    return nullptr;
+  auto It = FnMap.find(llvm::StringRef(Step.Identity).drop_back(6).str());
+  return It != FnMap.end() && It->second && It->second->Unfolding ? It->second
+                                                                  : nullptr;
+}
+
+/// The facts at the applications a spec's postcondition makes, as at those of
+/// its body. The spec and its recursion cycle are opaque there. A predicate
+/// whose step is being proved, and the predicates defined with it, give
+/// their unfoldings only: their postconditions are what is being proved.
+static void addPostApplicationFacts(PassiveProgram &P, const VFunction &Fn,
+                                    const FunctionMap &FnMap) {
+  std::set<std::string> Group;
+  auto predicateOf = [](llvm::StringRef Step) {
+    return Step.ends_with("::step") ? Step.drop_back(6).str() : std::string();
+  };
+  if (!Fn.InductiveStepOf.empty()) {
+    Group.insert(predicateOf(Fn.Identity));
+    for (const std::string &Member : Fn.RecursionGroup)
+      Group.insert(predicateOf(Member));
+  }
+  std::vector<std::unique_ptr<PassiveStmt>> Facts;
+  std::vector<const VQuantifiedExpr *> Enclosing;
+  std::function<void(const VExpr *)> visit = [&](const VExpr *E) {
+    if (!E)
+      return;
+    if (E->K == VExpr::Forall || E->K == VExpr::Exists) {
+      const auto *Q = static_cast<const VQuantifiedExpr *>(E);
+      visit(Q->Lo.get());
+      visit(Q->Hi.get());
+      Enclosing.push_back(Q);
+      visit(Q->Body.get());
+      Enclosing.pop_back();
+      return;
+    }
+    forEachVExprChild(E, visit);
+    if (E->K != VExpr::SpecCall)
+      return;
+    const auto &Call = static_cast<const VSpecCallExpr &>(*E);
+    auto It = FnMap.find(Call.CalleeIdentity);
+    if (It == FnMap.end() || !It->second ||
+        Call.CalleeIdentity == Fn.Identity ||
+        Fn.RecursionGroup.count(Call.CalleeIdentity))
+      return;
+    const VFunction &Callee = *It->second;
+    std::unique_ptr<VExpr> Fact;
+    if (!Group.count(Callee.Identity)) {
+      Fact = specApplicationFacts(Callee, Call.Args, &Call, Call.Loc);
+    } else if (Callee.Unfolding) {
+      auto Map = bindParams(Callee, Call.Args);
+      Fact = std::make_unique<VBinOpExpr>(
+          VBinOp::Eq, cloneVExpr(&Call),
+          substParamsInExpr(Callee.Unfolding.get(), Map), VType::makeBool(),
+          Call.Loc);
+    }
+    if (!Fact)
+      return;
+    for (auto Q = Enclosing.rbegin(); Q != Enclosing.rend(); ++Q)
+      Fact = std::make_unique<VForallExpr>(
+          (*Q)->Binder, cloneVExpr((*Q)->Lo.get()), cloneVExpr((*Q)->Hi.get()),
+          std::move(Fact), Call.Loc, (*Q)->BinderType);
+    auto PS = std::make_unique<PassiveStmt>();
+    PS->K = PassiveStmt::Assume;
+    PS->Cond = cloneAtEntryState(Fact.get());
+    Facts.push_back(std::move(PS));
+  };
+  for (const auto &S : P.Stmts)
+    if (S->K == PassiveStmt::Assert &&
+        S->ProofKind == ProofObligationKind::Postcondition)
+      visit(S->Cond.get());
+  P.Stmts.insert(P.Stmts.begin(), std::make_move_iterator(Facts.begin()),
+                 std::make_move_iterator(Facts.end()));
+}
+
 /// The postconditions of the specs a spec body calls, and of the spec itself
 /// at each return. A call within the recursion cycle may assume its callee's
 /// postcondition only where the measure is lower: the postconditions and
@@ -2361,6 +2442,22 @@ static void addSpecPostChecks(PassiveProgram &P, const VFunction &Fn,
       continue;
     const bool InCycle = Call.CalleeIdentity == Fn.Identity ||
                          Fn.RecursionGroup.count(Call.CalleeIdentity);
+    // A derivation of some height is one of its predicate, by definition.
+    if (const VFunction *Predicate = predicateOfStep(*Site.Callee, FnMap)) {
+      std::vector<std::unique_ptr<VExpr>> Rest;
+      for (size_t I = 1; I < Site.Args.size(); ++I)
+        Rest.push_back(cloneVExpr(Site.Args[I].get()));
+      auto Derived = std::make_unique<VSpecCallExpr>(
+          Predicate->Name, Predicate->Identity, std::move(Rest),
+          Predicate->ReturnType, Call.Loc, Predicate->ReadsHeap);
+      Fact = makeDecreaseAnd(
+          std::move(Fact),
+          std::make_unique<VBinOpExpr>(
+              VBinOp::Or,
+              makeDecreaseNot(cloneVExpr(Application.get()), Site.Loc),
+              std::move(Derived), VType::makeBool(), Site.Loc),
+          Site.Loc);
+    }
     if (InCycle) {
       auto ArgMap = bindParams(*Site.Callee, Site.Args);
       std::vector<std::unique_ptr<VExpr>> CalleeDec;
@@ -2410,6 +2507,7 @@ static void addSpecPostChecks(PassiveProgram &P, const VFunction &Fn,
     PS->Cond = cloneAtEntryState(Obligation.get());
     P.Stmts.push_back(std::move(PS));
   }
+  addPostApplicationFacts(P, Fn, FnMap);
   if (Collector.Unsupported) {
     auto PS = std::make_unique<PassiveStmt>();
     PS->K = PassiveStmt::Assert;
@@ -2434,6 +2532,29 @@ PassiveProgram verify::buildInductionChecks(const VFunction &Fn,
   P.HiddenSpecs = Fn.HiddenSpecs;
   P.RevealedSpecs = Fn.RevealedSpecs;
   addSpecPostChecks(P, Fn, FnMap);
+  // The derivation at hand is one of its predicate.
+  if (const VFunction *Predicate = predicateOfStep(Fn, FnMap)) {
+    const SourceLocation Loc = Fn.DeclLoc;
+    std::vector<std::unique_ptr<VExpr>> All, Rest;
+    for (const auto &[Name, Ty] : Fn.Params) {
+      All.push_back(std::make_unique<VVarExpr>(Name, Ty, Loc));
+      if (All.size() > 1)
+        Rest.push_back(std::make_unique<VVarExpr>(Name, Ty, Loc));
+    }
+    auto PS = std::make_unique<PassiveStmt>();
+    PS->K = PassiveStmt::Assume;
+    PS->Cond = std::make_unique<VBinOpExpr>(
+        VBinOp::Or,
+        makeDecreaseNot(std::make_unique<VSpecCallExpr>(
+                            Fn.Name, Fn.Identity, std::move(All), Fn.ReturnType,
+                            Loc, Fn.ReadsHeap),
+                        Loc),
+        std::make_unique<VSpecCallExpr>(Predicate->Name, Predicate->Identity,
+                                        std::move(Rest), Predicate->ReturnType,
+                                        Loc, Predicate->ReadsHeap),
+        VType::makeBool(), Loc);
+    P.Stmts.insert(P.Stmts.begin(), std::move(PS));
+  }
   return P;
 }
 
