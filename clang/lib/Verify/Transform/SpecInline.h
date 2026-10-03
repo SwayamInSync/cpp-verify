@@ -84,6 +84,16 @@ regionOutsideReads(const VFunction &Spec,
                    const std::vector<std::unique_ptr<VExpr>> &Args,
                    const VExpr *Lo, const VExpr *Hi, SourceLocation Loc);
 
+/// \p Check, a check of \p Spec, with the user's proof blocks of the kinds
+/// \p Kinds run after its assumptions and before its obligations. Within a
+/// block, result is the value the body returns, and an application of the
+/// spec's recursion cycle assumes its postconditions where the measure is
+/// lower.
+PassiveProgram
+withClauseProofs(PassiveProgram Check, const VFunction &Spec,
+                 const std::set<VFunction::ClauseProof::Kind> &Kinds,
+                 const FunctionMap &FnMap);
+
 void collectSpecCalls(const VExpr *E, std::vector<const VSpecCallExpr *> &Out);
 void collectSpecCallsInFunction(const VFunction &Fn,
                                 std::vector<const VSpecCallExpr *> &Out);
