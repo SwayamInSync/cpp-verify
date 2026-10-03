@@ -51,9 +51,16 @@ bound the argument, or state a lemma. For a hidden spec the reason is
 ``spec.hidden``: the definition would settle the query, but ``hide`` keeps it
 out of proofs, so reveal it or state a lemma. A model that cannot be checked
 within the checker's limits is reported as ``counterexample.unchecked``: for
-quantifiers, that is a body that multiplies or divides bound variables or
-applies a spec to one. Nested quantifiers over linear terms and reads, such as
-"every element has a larger one", are always checked.
+quantifiers, that is a body that multiplies or divides bound variables, or
+applies a spec to one at infinitely many values that matter. Nested
+quantifiers over linear terms and reads, such as "every element has a larger
+one", are always checked. For an inductive predicate that the
+counterexample needs false, the message names the application
+(``whether odd(4) holds``): a proved postcondition of the predicate that
+excludes those arguments lets the checker decide it. A counterexample
+checked with such a postcondition rests on it: while that postcondition is
+not established, the failure is reported as unresolved with reason
+``spec.post``.
 
 Other results that are not counterexamples:
 
