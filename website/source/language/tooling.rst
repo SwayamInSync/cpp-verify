@@ -55,7 +55,8 @@ Backends
    * - ``--backend=bmc``
      - Incrementally unroll loops from zero through ``--unroll=N`` (default 10),
        stopping at the first counterexample, complete unwinding proof,
-       unresolved query, or maximum frontier.
+       unresolved query, or maximum frontier. A spec's own checks have no
+       loops and run as with Z3 (reported as ``z3``).
    * - ``--backend=lean``
      - Write an unchecked Lean 4 scratch-pad to ``--lean-out``. This path does
        not run Z3 and reports ``Exported``, never ``Verified``. Multi-function
