@@ -974,6 +974,9 @@ public:
       /// The postconditions and unfoldings its module assumes.
       std::set<std::string> AssumedPosts;
       std::set<std::string> AssumedUnfoldings;
+      /// The postconditions of its cluster that it assumes below its
+      /// measure: they hold by the cluster's joint induction.
+      std::set<std::string> InductivePosts;
     };
     enum : unsigned { DefinitionFact = 1, PostFact = 2, ReadsFact = 4 };
     std::vector<SpecReliance> ProofDependencies;
@@ -1123,6 +1126,7 @@ public:
                               Verified.FactsWithheld};
         Reliance.AssumedPosts = Used.AssumedPosts;
         Reliance.AssumedUnfoldings = Used.AssumedUnfoldings;
+        Reliance.InductivePosts = Used.InductivePosts;
         // And those a solver was given for it, beyond its own text.
         if (Used.Given) {
           std::lock_guard<std::mutex> Guard(Used.Given->Lock);
@@ -1956,6 +1960,29 @@ public:
               return fuelOf(Predicate) > 1;
             }))
           atDepth(1, /*WithFuel=*/false);
+        // A member of a cluster sees another's definition only below its
+        // measure, whatever it reveals: say so where a proof needs one.
+        if (R.Status == VerifyStatus::Unresolved &&
+            R.Reason == VerifyReason::SpecHidden) {
+          std::string Names;
+          for (const std::string &Identity : WorkFn->Cluster)
+            if (auto It = InterfaceMap.find(Identity);
+                It != InterfaceMap.end() && It->second->IsSpec &&
+                WorkFn->HiddenSpecs.count(Identity) &&
+                R.Message.find(It->second->Name) != std::string::npos)
+              Names += (Names.empty() ? "" : ", ") + It->second->Name;
+          if (!Names.empty()) {
+            if (size_t At = R.Message.find("; reveal it or state a lemma");
+                At != std::string::npos)
+              R.Message.erase(At, std::strlen("; reveal it or state a lemma"));
+            R.Message += "; " + Names + " shares a cluster with " + Fn->Name +
+                         ", whose members use each other's definitions only "
+                         "where the measure is lower: give " +
+                         Names +
+                         " a lower measure at these arguments, as "
+                         "decreases(n, 0) against decreases(n, 1)";
+          }
+        }
         if (R.Status == VerifyStatus::Verified ||
             R.Status == VerifyStatus::Certified) {
           Diags.push_back(
@@ -2234,12 +2261,15 @@ public:
             else if (UnframedSpecs.count(Identity))
               list(Unframed, nameOf(Identity));
           }
-          for (const std::string &Identity : Reliance.AssumedPosts)
-            if (UnprovenPosts.count(Identity) &&
-                Identity != Reliance.Establishes &&
-                !Reliance.Withheld.count(Identity) &&
-                !Reliance.PostsWithheld.count(Identity))
-              list(Unproven, nameOf(Identity));
+          for (const std::set<std::string> *Posts :
+               {&Reliance.AssumedPosts, &Reliance.InductivePosts})
+            for (const std::string &Identity : *Posts)
+              if (UnprovenPosts.count(Identity) &&
+                  Identity != Reliance.Establishes &&
+                  !Reliance.Withheld.count(Identity) &&
+                  !Reliance.PostsWithheld.count(Identity) &&
+                  Unproven.find(nameOf(Identity)) == std::string::npos)
+                list(Unproven, nameOf(Identity));
           for (const std::string &Identity : Reliance.AssumedUnfoldings)
             if (Unproved.count(Identity) && !Reliance.Withheld.count(Identity))
               list(Unruled, nameOf(Identity));
@@ -2345,23 +2375,36 @@ public:
         Cycle.insert(Identity);
         return Cycle;
       };
+      // A cluster's members use each other's contracts, postconditions, and
+      // definitions only below their shared measure, so their proofs rest
+      // on each other by well-founded induction; frames are not so guarded.
+      auto clusterOf = [&](const std::string &Identity) {
+        std::set<std::string> Cluster = cycleOf(Identity);
+        if (auto It = FnMap.find(Identity); It != FnMap.end())
+          Cluster.insert(It->second->Cluster.begin(),
+                         It->second->Cluster.end());
+        return Cluster;
+      };
       std::map<size_t, std::set<std::string>> Needs;
       for (const auto &[Index, Identity, Callees] : CallDependencies) {
-        const std::set<std::string> Cycle = cycleOf(Identity);
+        const std::set<std::string> Cluster = clusterOf(Identity);
         for (const std::string &Callee : Callees)
-          if (!Cycle.count(Callee))
+          if (!Cluster.count(Callee))
             Needs[Index].insert(fact('C', Callee));
       }
       for (const SpecReliance &Reliance : ProofDependencies) {
         std::set<std::string> &Mine = Needs[Reliance.Index];
-        for (const std::string &Callee : Reliance.Callees)
-          Mine.insert(fact('C', Callee));
         const std::string Self =
             !Reliance.Establishes.empty()     ? Reliance.Establishes
             : VerdictOf.count(Reliance.Index) ? VerdictOf[Reliance.Index]
                                               : std::string();
         const std::set<std::string> Cycle =
             Self.empty() ? std::set<std::string>() : cycleOf(Self);
+        const std::set<std::string> Cluster =
+            Self.empty() ? std::set<std::string>() : clusterOf(Self);
+        for (const std::string &Callee : Reliance.Callees)
+          if (!Cluster.count(Callee))
+            Mine.insert(fact('C', Callee));
         // Definitions and frames of what the proof mentions; postconditions
         // and unfoldings only where it assumes them.
         for (const std::string &Spec : Reliance.Specs) {
@@ -2370,10 +2413,10 @@ public:
               Mine.insert(fact('D', Spec));
             continue;
           }
-          if (Cycle.count(Spec))
-            continue;
-          Mine.insert(fact('D', Spec));
-          Mine.insert(fact('R', Spec));
+          if (!Cluster.count(Spec))
+            Mine.insert(fact('D', Spec));
+          if (!Cycle.count(Spec))
+            Mine.insert(fact('R', Spec));
         }
         for (const std::string &Spec : Reliance.AssumedPosts)
           if (Spec != Reliance.Establishes && !Cycle.count(Spec) &&
@@ -2428,7 +2471,10 @@ public:
             list(Names, describe(Fact));
         demote(Index, VerifyReason::ProofCycle,
                "relies on " + Names +
-                   ", whose proof rests in turn on this one");
+                   ", whose proof rests in turn on this one; proofs rest on "
+                   "each other only by induction, when the functions share "
+                   "decreases clauses of one length that every call and "
+                   "application between them lowers");
         Demoted = true;
       }
       for (const auto &[Index, Identity] : InductiveLines)
