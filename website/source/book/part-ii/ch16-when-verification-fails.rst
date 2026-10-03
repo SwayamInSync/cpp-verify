@@ -70,6 +70,11 @@ Other results that are not counterexamples:
   establishes: the callee's own verification failed, or the callee has a
   contract but no definition. Fix the callee first; for a library function
   whose contract you accept, mark the declaration ``[[cppverify::trusted]]``.
+- ``spec.inductive``: the proof uses an inductive predicate whose rules (the
+  generated proofs that its body and the predicate imply each other) did not
+  all hold, so its unfolding is not a fact. The failing rule is reported on
+  its own line, such as ``reach (introduction)``; it usually needs more
+  ``--timeout``.
 - ``construct.unsupported``: the failed obligation stands for a construct the
   verifier does not model, so it says nothing about the program. The message
   names the construct, such as a pointer difference between two parameters'
