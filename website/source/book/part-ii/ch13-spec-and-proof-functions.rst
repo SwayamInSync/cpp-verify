@@ -256,6 +256,40 @@ overflow and reasoned about exactly. A ``contract_assert`` is proved where it
 stands and assumed afterwards, so a chain of assertions in a ghost block
 works as a step-by-step proof.
 
+A spec's own ``post``, ``decreases``, and ``reads`` clauses are checked
+without a function body to put a lemma call in. A proof block after the
+clause gives them one. ``mul`` below is multiplication by repeated
+addition; its commutativity needs ``mul(a, b) == a * b`` at both orders,
+an induction the verifier does not find by itself:
+
+.. code-block:: cpp
+
+   spec int mul(int a, int b) decreases(b) { return b <= 0 ? 0 : mul(a, b - 1) + a; }
+
+   proof void mul_is(int a, int b)
+     post(b < 0 || mul(a, b) == a * b)
+     decreases(b)
+   {
+     if (b > 0)
+       mul_is(a, b - 1);
+   }
+
+   spec int area(int a, int b)
+     post(a < 0 || b < 0 || result == mul(b, a)) by { mul_is(a, b); mul_is(b, a); }
+   {
+     return mul(a, b);
+   }
+
+Without the block, ``spec post: area`` is unresolved (``spec.fuel``); with
+it, it is verified. In the block, ``result`` is the value the body returns,
+and naming the spec at a smaller measure uses the induction hypothesis
+there. ``decreases(...) by { ... }`` helps a termination proof the same
+way, and ``reads(p, n) by { ... }`` a frame. The block of an inductive
+predicate's postcondition is its induction step. A lemma the block calls
+must not itself be proved from the spec's postcondition: the two proofs
+would only support each other, and both are reported with reason
+``proof.cycle``.
+
 Use Z3, the default backend, for recursive specs. cvc5 checks its
 counterexamples against the same definitions but has no recursive definitions,
 does not cover bounded domains, computes deep closed applications much more
