@@ -1684,7 +1684,8 @@ lexicographicDecrease(const std::vector<std::unique_ptr<VExpr>> &CalleeDec,
 }
 
 static void addSpecPostChecks(PassiveProgram &P, const VFunction &Fn,
-                              const FunctionMap &FnMap);
+                              const FunctionMap &FnMap,
+                              bool PremisesDerive = false);
 
 PassiveProgram verify::buildDecreasesChecks(const VFunction &Fn,
                                             const FunctionMap &FnMap) {
@@ -2346,13 +2347,20 @@ static const VFunction *predicateOfStep(const VFunction &Step,
 /// their unfoldings only: their postconditions are what is being proved.
 static void addPostApplicationFacts(PassiveProgram &P, const VFunction &Fn,
                                     const FunctionMap &FnMap) {
+  // The predicates defined with the one being proved, by its step or, in
+  // its own post check, by itself.
   std::set<std::string> Group;
   auto predicateOf = [](llvm::StringRef Step) {
     return Step.ends_with("::step") ? Step.drop_back(6).str() : std::string();
   };
-  if (!Fn.InductiveStepOf.empty()) {
-    Group.insert(predicateOf(Fn.Identity));
-    for (const std::string &Member : Fn.RecursionGroup)
+  const VFunction *Step = &Fn;
+  if (Fn.Unfolding)
+    if (auto It = FnMap.find(Fn.Identity + "::step");
+        It != FnMap.end() && It->second)
+      Step = It->second;
+  if (!Step->InductiveStepOf.empty()) {
+    Group.insert(predicateOf(Step->Identity));
+    for (const std::string &Member : Step->RecursionGroup)
       Group.insert(predicateOf(Member));
   }
   std::vector<std::unique_ptr<PassiveStmt>> Facts;
@@ -2382,7 +2390,12 @@ static void addPostApplicationFacts(PassiveProgram &P, const VFunction &Fn,
     std::unique_ptr<VExpr> Fact;
     if (!Group.count(Callee.Identity)) {
       Fact = specApplicationFacts(Callee, Call.Args, &Call, Call.Loc);
+      if (!Callee.Postconditions.empty())
+        P.AssumedPosts.insert(Callee.Identity);
+      if (Callee.Unfolding)
+        P.AssumedUnfoldings.insert(Callee.Identity);
     } else if (Callee.Unfolding) {
+      P.AssumedUnfoldings.insert(Callee.Identity);
       auto Map = bindParams(Callee, Call.Args);
       Fact = std::make_unique<VBinOpExpr>(
           VBinOp::Eq, cloneVExpr(&Call),
@@ -2413,7 +2426,7 @@ static void addPostApplicationFacts(PassiveProgram &P, const VFunction &Fn,
 /// postcondition only where the measure is lower: the postconditions and
 /// termination are proved together by well-founded induction on the measure.
 static void addSpecPostChecks(PassiveProgram &P, const VFunction &Fn,
-                              const FunctionMap &FnMap) {
+                              const FunctionMap &FnMap, bool PremisesDerive) {
   SpecBodyCollector Collector{FnMap};
   Collector.run(Fn);
   std::map<std::string, std::unique_ptr<VExpr>> Self;
@@ -2442,8 +2455,19 @@ static void addSpecPostChecks(PassiveProgram &P, const VFunction &Fn,
       continue;
     const bool InCycle = Call.CalleeIdentity == Fn.Identity ||
                          Fn.RecursionGroup.count(Call.CalleeIdentity);
-    // A derivation of some height is one of its predicate, by definition.
-    if (const VFunction *Predicate = predicateOfStep(*Site.Callee, FnMap)) {
+    // A step terminates whatever its postconditions say, and they are proved
+    // by induction after it, so its termination check does not assume them.
+    if (InCycle && !Fn.InductiveStepOf.empty() && Fn.Postconditions.empty())
+      continue;
+    if (!Site.Callee->Postconditions.empty())
+      P.AssumedPosts.insert(Site.Callee->Identity);
+    if (Site.Callee->Unfolding)
+      P.AssumedUnfoldings.insert(Site.Callee->Identity);
+    // In an induction on derivations, a premise is a derivation of its
+    // predicate, by definition.
+    const VFunction *Predicate =
+        PremisesDerive ? predicateOfStep(*Site.Callee, FnMap) : nullptr;
+    if (Predicate) {
       std::vector<std::unique_ptr<VExpr>> Rest;
       for (size_t I = 1; I < Site.Args.size(); ++I)
         Rest.push_back(cloneVExpr(Site.Args[I].get()));
@@ -2521,6 +2545,292 @@ static void addSpecPostChecks(PassiveProgram &P, const VFunction &Fn,
   }
 }
 
+/// Replaces result in \p E by \p Value.
+static void replaceResult(std::unique_ptr<VExpr> &E, const VExpr &Value) {
+  if (!E)
+    return;
+  if (E->K == VExpr::Result) {
+    E = cloneVExpr(&Value);
+    return;
+  }
+  forEachVExprChildSlot(E.get(), [&](std::unique_ptr<VExpr> &Child) {
+    replaceResult(Child, Value);
+  });
+}
+
+static void replaceResult(std::vector<std::unique_ptr<VStmt>> &Stmts,
+                          const VExpr &Value) {
+  for (auto &S : Stmts) {
+    switch (S->K) {
+    case VStmt::Assign:
+      replaceResult(static_cast<VAssignStmt &>(*S).Value, Value);
+      break;
+    case VStmt::If: {
+      auto &If = static_cast<VIfStmt &>(*S);
+      replaceResult(If.Cond, Value);
+      replaceResult(If.Then, Value);
+      replaceResult(If.Else, Value);
+      break;
+    }
+    case VStmt::While: {
+      auto &While = static_cast<VWhileStmt &>(*S);
+      replaceResult(While.Cond, Value);
+      for (auto &Invariant : While.Invariants)
+        replaceResult(Invariant, Value);
+      for (auto &Decrease : While.Decreases)
+        replaceResult(Decrease, Value);
+      replaceResult(While.Body, Value);
+      break;
+    }
+    case VStmt::Call:
+      for (auto &Arg : static_cast<VCallStmt &>(*S).Args)
+        replaceResult(Arg, Value);
+      break;
+    case VStmt::Assert:
+      replaceResult(static_cast<VAssertStmt &>(*S).Cond, Value);
+      break;
+    case VStmt::Assume:
+      replaceResult(static_cast<VAssumeStmt &>(*S).Cond, Value);
+      break;
+    case VStmt::ContractAssert:
+      replaceResult(static_cast<VContractAssertStmt &>(*S).Cond, Value);
+      break;
+    case VStmt::Seq:
+      replaceResult(static_cast<VSeqStmt &>(*S).Stmts, Value);
+      break;
+    case VStmt::GhostBlock:
+      replaceResult(static_cast<VGhostBlockStmt &>(*S).Body, Value);
+      break;
+    default:
+      break;
+    }
+  }
+}
+
+static bool mentionsResultIn(const std::vector<std::unique_ptr<VStmt>> &Stmts) {
+  std::vector<const VSpecCallExpr *> Unused;
+  bool Found = false;
+  std::function<void(const VExpr *)> visit = [&](const VExpr *E) {
+    if (!E || Found)
+      return;
+    if (E->K == VExpr::Result) {
+      Found = true;
+      return;
+    }
+    forEachVExprChild(E, visit);
+  };
+  std::function<void(const std::vector<std::unique_ptr<VStmt>> &)> walk =
+      [&](const std::vector<std::unique_ptr<VStmt>> &Body) {
+        for (const auto &S : Body) {
+          switch (S->K) {
+          case VStmt::Assign:
+            visit(static_cast<const VAssignStmt &>(*S).Value.get());
+            break;
+          case VStmt::If: {
+            const auto &If = static_cast<const VIfStmt &>(*S);
+            visit(If.Cond.get());
+            walk(If.Then);
+            walk(If.Else);
+            break;
+          }
+          case VStmt::While: {
+            const auto &While = static_cast<const VWhileStmt &>(*S);
+            visit(While.Cond.get());
+            for (const auto &Invariant : While.Invariants)
+              visit(Invariant.get());
+            walk(While.Body);
+            break;
+          }
+          case VStmt::Call:
+            for (const auto &Arg : static_cast<const VCallStmt &>(*S).Args)
+              visit(Arg.get());
+            break;
+          case VStmt::Assert:
+            visit(static_cast<const VAssertStmt &>(*S).Cond.get());
+            break;
+          case VStmt::Assume:
+            visit(static_cast<const VAssumeStmt &>(*S).Cond.get());
+            break;
+          case VStmt::ContractAssert:
+            visit(static_cast<const VContractAssertStmt &>(*S).Cond.get());
+            break;
+          case VStmt::Seq:
+            walk(static_cast<const VSeqStmt &>(*S).Stmts);
+            break;
+          case VStmt::GhostBlock:
+            walk(static_cast<const VGhostBlockStmt &>(*S).Body);
+            break;
+          default:
+            break;
+          }
+        }
+      };
+  walk(Stmts);
+  return Found;
+}
+
+PassiveProgram
+verify::withClauseProofs(PassiveProgram Check, const VFunction &Spec,
+                         const std::set<VFunction::ClauseProof::Kind> &Kinds,
+                         const FunctionMap &FnMap) {
+  std::vector<std::unique_ptr<VStmt>> Blocks;
+  for (const VFunction::ClauseProof &Proof : Spec.ClauseProofs)
+    if (Kinds.count(Proof.K))
+      for (const auto &S : Proof.Body)
+        Blocks.push_back(cloneVStmt(S.get()));
+  if (Blocks.empty())
+    return Check;
+
+  // result is the value the body returns.
+  if (mentionsResultIn(Blocks)) {
+    SpecBodyCollector Collector{FnMap};
+    Collector.run(Spec);
+    if (Collector.Unsupported || Collector.Returns.empty()) {
+      auto PS = std::make_unique<PassiveStmt>();
+      PS->K = PassiveStmt::Assert;
+      PS->ProofKind = ProofObligationKind::Unsupported;
+      PS->Note = "a proof block of " + Spec.Name +
+                 " uses result, but its body does not give one value";
+      PS->Cond = std::make_unique<VLiteralExpr>(false, VType::makeBool(),
+                                                Spec.DeclLoc);
+      Check.Stmts.push_back(std::move(PS));
+      return Check;
+    }
+    std::unique_ptr<VExpr> Value = std::move(Collector.Returns.back().Value);
+    for (size_t I = Collector.Returns.size() - 1; I-- > 0;) {
+      BodyReturn &Return = Collector.Returns[I];
+      const VType Ty = Return.Value->Ty;
+      Value = std::make_unique<VConditionalExpr>(
+          std::move(Return.Guard), std::move(Return.Value), std::move(Value),
+          Ty, Return.Loc);
+    }
+    replaceResult(Blocks, *Value);
+  }
+
+  // One proof: the check's assumptions, the blocks, then its obligations.
+  VFunction Proof;
+  Proof.Name = Spec.Name;
+  Proof.Identity = Check.FunctionIdentity;
+  Proof.IsProof = true;
+  Proof.IntMode = Spec.IntMode;
+  Proof.ReturnType = VType::makeVoid();
+  Proof.Params = Spec.Params;
+  Proof.DeclLoc = Spec.DeclLoc;
+  Proof.SourceVariables = Spec.SourceVariables;
+  Proof.TotalExpressions = true;
+  Proof.HiddenSpecs = Check.HiddenSpecs;
+  Proof.RevealedSpecs = Check.RevealedSpecs;
+  Proof.SpecFuel = Check.SpecFuel;
+  // The spec and its cycle are opaque here or covered by the induction
+  // hypothesis, and a predicate whose step is being proved gives only its
+  // unfolding, which the check states.
+  Proof.FactsWithheld.insert(Spec.Identity);
+  Proof.FactsWithheld.insert(Spec.RecursionGroup.begin(),
+                             Spec.RecursionGroup.end());
+  if (const VFunction *Predicate = predicateOfStep(Spec, FnMap)) {
+    Proof.FactsWithheld.insert(Predicate->Identity);
+    for (const std::string &Member : Spec.RecursionGroup)
+      if (auto It = FnMap.find(Member); It != FnMap.end() && It->second)
+        if (const VFunction *Other = predicateOfStep(*It->second, FnMap))
+          Proof.FactsWithheld.insert(Other->Identity);
+  }
+  std::vector<std::unique_ptr<PassiveStmt>> Unsupported;
+  for (auto &S : Check.Stmts)
+    if (S->K == PassiveStmt::Assume)
+      Proof.Body.push_back(
+          std::make_unique<VAssumeStmt>(std::move(S->Cond), Spec.DeclLoc));
+  for (auto &S : Blocks)
+    Proof.Body.push_back(std::move(S));
+  for (auto &S : Check.Stmts) {
+    if (S->K != PassiveStmt::Assert)
+      continue;
+    if (S->ProofKind == ProofObligationKind::Unsupported) {
+      Unsupported.push_back(std::move(S));
+      continue;
+    }
+    const SourceLocation Loc = S->Cond->Loc;
+    Proof.Body.push_back(
+        std::make_unique<VAssertStmt>(std::move(S->Cond), Loc, S->ProofKind));
+  }
+  Passivizer Lowering;
+  Lowering.setFunctionMap(FnMap);
+  PassiveProgram P = Lowering.run(Proof);
+  P.AssumedPosts.insert(Check.AssumedPosts.begin(), Check.AssumedPosts.end());
+  P.AssumedUnfoldings.insert(Check.AssumedUnfoldings.begin(),
+                             Check.AssumedUnfoldings.end());
+
+  // An application of the spec's recursion cycle in a block assumes its
+  // postcondition where the measure is lower: the induction hypothesis.
+  std::map<std::string, std::unique_ptr<VExpr>> Entry;
+  for (const auto &[Name, Ty] : Spec.Params)
+    Entry[Name] = std::make_unique<VVarExpr>(Name + "_0", Ty, SourceLocation());
+  std::vector<std::unique_ptr<VExpr>> CurrentDec;
+  for (const auto &Decrease : Spec.Decreases)
+    CurrentDec.push_back(substParamsInExpr(Decrease.get(), Entry));
+  std::vector<std::unique_ptr<PassiveStmt>> Hypotheses;
+  std::vector<const VQuantifiedExpr *> Enclosing;
+  std::function<void(const VExpr *)> visit = [&](const VExpr *E) {
+    if (!E)
+      return;
+    if (E->K == VExpr::Forall || E->K == VExpr::Exists) {
+      const auto *Q = static_cast<const VQuantifiedExpr *>(E);
+      visit(Q->Lo.get());
+      visit(Q->Hi.get());
+      Enclosing.push_back(Q);
+      visit(Q->Body.get());
+      Enclosing.pop_back();
+      return;
+    }
+    forEachVExprChild(E, visit);
+    if (E->K != VExpr::SpecCall || CurrentDec.empty())
+      return;
+    const auto &Call = static_cast<const VSpecCallExpr &>(*E);
+    if (Call.CalleeIdentity != Spec.Identity &&
+        !Spec.RecursionGroup.count(Call.CalleeIdentity))
+      return;
+    auto It = FnMap.find(Call.CalleeIdentity);
+    if (It == FnMap.end() || !It->second ||
+        It->second->Postconditions.empty() ||
+        It->second->Decreases.size() != CurrentDec.size())
+      return;
+    const VFunction &Callee = *It->second;
+    auto Map = bindParams(Callee, Call.Args);
+    std::vector<std::unique_ptr<VExpr>> CalleeDec;
+    for (const auto &Decrease : Callee.Decreases)
+      CalleeDec.push_back(substParamsInExpr(Decrease.get(), Map));
+    std::unique_ptr<VExpr> Fact = std::make_unique<VBinOpExpr>(
+        VBinOp::Or,
+        makeDecreaseNot(lexicographicDecrease(CalleeDec, CurrentDec, Call.Loc),
+                        Call.Loc),
+        specPostcondition(Callee, Call.Args, &Call, Call.Loc,
+                          Call.ReadsHeap ? Call.HeapVar : std::string()),
+        VType::makeBool(), Call.Loc);
+    for (auto Q = Enclosing.rbegin(); Q != Enclosing.rend(); ++Q)
+      Fact = std::make_unique<VForallExpr>(
+          (*Q)->Binder, cloneVExpr((*Q)->Lo.get()), cloneVExpr((*Q)->Hi.get()),
+          std::move(Fact), Call.Loc, (*Q)->BinderType);
+    auto PS = std::make_unique<PassiveStmt>();
+    PS->K = PassiveStmt::Assume;
+    PS->Cond = std::move(Fact);
+    Hypotheses.push_back(std::move(PS));
+    P.AssumedPosts.insert(Callee.Identity);
+  };
+  for (const auto &S : P.Stmts)
+    visit(S->Cond.get());
+  P.Stmts.insert(P.Stmts.begin(), std::make_move_iterator(Hypotheses.begin()),
+                 std::make_move_iterator(Hypotheses.end()));
+  for (auto &S : Unsupported)
+    P.Stmts.push_back(std::move(S));
+  P.FunctionName = Check.FunctionName;
+  P.FunctionIdentity = Check.FunctionIdentity;
+  P.CallerIntMode = Check.CallerIntMode;
+  P.SpecFunctions = Check.SpecFunctions;
+  P.SpecFuel = Check.SpecFuel;
+  P.HiddenSpecs = Check.HiddenSpecs;
+  P.RevealedSpecs = Check.RevealedSpecs;
+  return P;
+}
+
 PassiveProgram verify::buildInductionChecks(const VFunction &Fn,
                                             const FunctionMap &FnMap) {
   PassiveProgram P;
@@ -2531,7 +2841,7 @@ PassiveProgram verify::buildInductionChecks(const VFunction &Fn,
   P.SpecFuel = Fn.SpecFuel;
   P.HiddenSpecs = Fn.HiddenSpecs;
   P.RevealedSpecs = Fn.RevealedSpecs;
-  addSpecPostChecks(P, Fn, FnMap);
+  addSpecPostChecks(P, Fn, FnMap, /*PremisesDerive=*/true);
   // The derivation at hand is one of its predicate.
   if (const VFunction *Predicate = predicateOfStep(Fn, FnMap)) {
     const SourceLocation Loc = Fn.DeclLoc;
