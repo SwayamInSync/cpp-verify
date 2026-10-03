@@ -861,7 +861,10 @@ adds only proved unfoldings, so a proof stays sound and a counterexample is
 still certified against the true definitions. It does not deepen a verdict
 marked `VerifyResult::InductionOnly`: the goal needs a predicate false where
 its derivations go round forever, and every fixpoint, the greatest
-included, keeps every unfolding. Unfoldings under an unbounded binder (the
+included, keeps every unfolding; or checking it needs a value too deep to
+evaluate (no derivation among the heights tried, and no finite fixpoint),
+which four more levels cannot change. A deeper attempt that finds the
+first of these replaces the reason and ends the search. Unfoldings under an unbounded binder (the
 `exists` of `reach`) are quantified facts, which help proofs but can keep
 the solver from finding a model, so after `reveal_with_fuel` an unresolved
 verdict is also tried at depth one without the fuel.
@@ -1048,7 +1051,13 @@ keeps them (`Evaluator::keeps`): a model that breaks one is
 one needs a value no finite set of instances fixes, which is `spec.fuel`,
 and when that value is an inductive predicate's, false where derivations go
 round forever, the message names the application and asks for a
-postcondition `!result || Q`, since only induction shows it.
+postcondition `!result || Q`, since only induction shows it. An unfolding
+at a memory value the model chose speaks of that memory only, never of the
+program's symbolic memory, so a round whose only new facts are such
+unfoldings stops at once (`spec.fuel`, without the native pass): the
+driver's deeper unfolding at the program's memory takes over. Refining at
+model memory instead spent the whole budget (`both_states` took 30 s, now
+0.3 s).
 
 Two cases are settled by instances without a model-by-model search. An
 application at closed arguments is evaluated before the first check, and the
@@ -1063,6 +1072,13 @@ runs in a fresh solver with the remaining budget, since Z3's incremental core
 is much slower on thousands of ground equations. The probe only chooses
 models: an end the solver cannot prove adds nothing, and a model at an end
 that holds under the definitions pins the search to that counterexample.
+
+A race interrupts the losing encoder's context, possibly while its
+certifier reads a model; Z3 then evaluates a term to nothing. Every model
+evaluation goes through `Z3Encoder::evaluated`, which reads an empty result
+as an opaque constant (undetermined), and a certification made by an
+encoder that was stopped is discarded (`Z3Encoder::certify`). Before this,
+about one run in six over sequences crashed on the empty term.
 
 Z3 gives refinement a short slice of the query budget (5%, at least half a
 second) and at most eight rounds that only search among hidden values. It
@@ -1178,8 +1194,9 @@ derivations branch without end, could no longer take the whole budget
 first. Steps count the terms built by unfolding definitions for witness
 analysis and by Presburger decisions, so a slice measures work. A failure
 caused by a spent slice is never cached as undecided and is recovered from
-only by the search that set the slice. A try's slice is what remains of the
-round divided among the tries left, so a try after cheap ones gets nearly
+only by the search that set the slice. Slices start at 65536 steps, so an
+ordinary finite chain of definitions finishes in its first try. A try's
+slice is what remains of the round divided among the tries left, so a try after cheap ones gets nearly
 all of it and a deep chain of searches costs linear work. An application
 whose definition needs its own value (`f(1) == !f(1)` for a spec whose
 termination fails) is undecided at once, as a definition limit, instead of
