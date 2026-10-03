@@ -62,6 +62,8 @@ enum class VerifyReason {
   /// The proof uses the unfolding of an inductive predicate whose rules are
   /// not established.
   SpecInductive,
+  /// The proof relies on facts whose own proofs rely on it.
+  ProofCycle,
   /// An obligation stands for a construct the verifier cannot model.
   UnsupportedConstruct,
   /// The proof assumes a callee contract the callee did not establish.
