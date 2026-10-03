@@ -2723,7 +2723,8 @@ collectFramedApplications(const VExpr *E, const FunctionMap &FnMap,
                !expressionKey(Q->Hi.get(), Key))
         return;
     }
-    Key += C->CalleeIdentity;
+    // Applications in different memory states are different values.
+    Key += C->CalleeIdentity + '@' + C->HeapVar;
     for (const auto &Arg : C->Args)
       if (!expressionKey(Arg.get(), Key))
         return;
