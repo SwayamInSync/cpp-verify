@@ -604,6 +604,14 @@ derivation satisfies; the verifier proves it by induction on derivations,
 and ``no_way_back`` follows from it. ``wrong_way`` fails: ``reach(38, 38)``
 holds with no step at all.
 
+A counterexample is checked against what the predicate really means, true
+or false. Where its derivations from an argument reach finitely many
+arguments, the checker computes it over all of them: every value starts
+false and becomes true once the body holds, until nothing changes. Where
+they reach infinitely many, ``reach(a, b)`` true is shown by a derivation,
+and false by the postcondition: ``reach(5, 3)`` cannot hold because
+``5 <= 3`` does not.
+
 The predicate may occur in its body only positively (as a conjunct, a
 disjunct, a branch, or under ``exists`` or a bounded ``forall``), which makes
 the least predicate exist and equal its body. That equality is what the
