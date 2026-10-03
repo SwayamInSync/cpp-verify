@@ -659,7 +659,7 @@ llvm::Expected<ObligationModule> inductionModule(const ObligationModule &Module,
   Result.DiagnosticVariables = Module.DiagnosticVariables;
   Result.ResultVarName = Module.ResultVarName;
   Result.HeapPrefix = Module.HeapPrefix;
-  for (const auto &[Identity, Function] : Module.LogicFunctions) {
+  auto copy = [](const LogicFunctionDecl &Function) {
     LogicFunctionDecl Copy;
     Copy.Identity = Function.Identity;
     Copy.DisplayName = Function.DisplayName;
@@ -670,8 +670,18 @@ llvm::Expected<ObligationModule> inductionModule(const ObligationModule &Module,
     Copy.StepDefinition = cloneLogicExpr(Function.StepDefinition.get());
     for (const auto &Definition : Function.DefinitionLevels)
       Copy.DefinitionLevels.push_back(cloneLogicExpr(Definition.get()));
-    Result.LogicFunctions.emplace(Identity, std::move(Copy));
-  }
+    Copy.Unfolding = cloneLogicExpr(Function.Unfolding.get());
+    for (const auto &Post : Function.Postconditions)
+      Copy.Postconditions.push_back(cloneLogicExpr(Post.get()));
+    return Copy;
+  };
+  for (const auto &[Identity, Function] : Module.LogicFunctions)
+    Result.LogicFunctions.emplace(Identity, copy(Function));
+  for (const auto &[Identity, Function] : Module.EvidenceFunctions)
+    Result.EvidenceFunctions.emplace(Identity, copy(Function));
+  Result.AssumedPosts = Module.AssumedPosts;
+  Result.AssumedUnfoldings = Module.AssumedUnfoldings;
+  Result.Given = Module.Given;
   const Obligation &First = Item ? *Item : Module.Obligations.front();
   Obligation Inductive;
   Inductive.Id = First.Id;
