@@ -22,6 +22,7 @@ add_clang_library(clangVerify
   IR/VStmt.cpp
   Frontend/ASTConverter.cpp
   Transform/Passivize.cpp
+  Transform/Inductive.cpp
   Transform/Origins.cpp
   Transform/Ownership.cpp
   Transform/LoopUnroll.cpp
