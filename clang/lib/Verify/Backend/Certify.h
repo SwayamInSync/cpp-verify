@@ -155,9 +155,19 @@ struct CertifyLimits {
 
 /// A logical application at concrete arguments whose model value differs from
 /// the value its definition gives.
+struct DefinitionInstance;
+
 struct SpecDispute {
   const LogicFunctionDecl *Function = nullptr;
   std::vector<LogicValue> Arguments;
+  /// The true facts that decide the value, when the definition alone does
+  /// not: unfoldings of an inductive predicate along its derivation, or
+  /// along every derivation that could reach a base case; or a proved
+  /// postcondition. Empty: the definition instance decides it.
+  std::vector<DefinitionInstance> Justification;
+  /// The model breaks a fact of the dispute that the solver may have been
+  /// given: if it was, the solver's answer is wrong.
+  bool Violated = false;
 };
 
 enum class CertifyOutcome {
@@ -221,10 +231,15 @@ std::optional<LogicValue> evaluateTerm(const ObligationModule &Module,
 /// it. An adapter can give a solver such a definition whole.
 std::set<std::string> nonRecursiveDefinitions(const ObligationModule &Module);
 
-/// A definition instance f(args) = body[args] to give a solver.
+/// A true fact about one application to give a solver: its definition
+/// f(args) = body[args]; for an inductive predicate, its unfolding
+/// P(args) = F[args], a theorem once its rules are proved; or its proved
+/// postconditions at args.
 struct DefinitionInstance {
+  enum class Kind { Definition, Unfolding, Postcondition };
   const LogicFunctionDecl *Function = nullptr;
   std::vector<LogicValue> Arguments;
+  Kind Of = Kind::Definition;
   std::string key() const;
 };
 
@@ -240,6 +255,10 @@ struct RefinementDecision {
   bool Unbounded = false;
   /// Stopped although no counterexample exists.
   bool NoCounterexample = false;
+  /// Stopped because the goal needs an inductive predicate false where its
+  /// derivations go round forever: every fixpoint, the greatest included,
+  /// keeps every unfolding, so only induction settles it.
+  bool InductionOnly = false;
 };
 
 /// Definition instances that let a solver compute the applications \p Query
@@ -295,6 +314,11 @@ public:
   std::optional<RefinementDecision> unsatisfiable() const;
   const std::set<std::string> &disputedFunctions() const { return Disputed; }
 };
+
+/// Records on \p Module the unfoldings and postconditions among
+/// \p Instances, which a proof that uses them rests on.
+void recordGivenFacts(const ObligationModule &Module,
+                      const std::vector<DefinitionInstance> &Instances);
 
 } // namespace verify
 } // namespace clang
