@@ -840,10 +840,37 @@ its true definition, and `F` is kept as `VFunction::Unfolding`. `P` is
 hidden in every function that does not `reveal` it, and
 `specApplicationFacts` assumes `P(t) == F[t]` beside its postconditions at
 each application, in function bodies (`addSpecPostInstances`) and in spec
-checks (`addSpecPostChecks`); the applications inside that instance get
-none, so each named application unfolds once. A predicate reached again
-through a spec outside its group is rejected, since its occurrences there
-escape the positivity check.
+checks (`addSpecPostChecks`). The unfolding reads memory at the
+application's heap version, and the facts of an application are keyed by
+callee, arguments, and heap version, so the same application before and
+after a store has facts of its own. The applications inside an unfolding
+get none at depth one, so each named application unfolds once; at depth
+`d` the applications of inductive predicates inside the unfoldings of
+level `l < d` get theirs too (`Passivizer::setUnfoldingDepth`, and per
+predicate `reveal_with_fuel(P, d)`, which keeps `P` hidden). A predicate
+reached again through a spec outside its group is rejected, since its
+occurrences there escape the positivity check.
+
+The driver deepens automatically, as Stainless unrolls: a function verdict
+`Unresolved` with `spec.fuel`, `spec.hidden`, or
+`counterexample.unchecked` whose module assumed unfoldings is passivized
+again at depth 2, 3, and 4 (`MaxUnfoldingDepth`), skipping depths that
+`reveal_with_fuel` already reached; the first `Verified` or `Failed`
+verdict replaces it, and its module replaces the archived one. Every level
+adds only proved unfoldings, so a proof stays sound and a counterexample is
+still certified against the true definitions. It does not deepen a verdict
+marked `VerifyResult::InductionOnly`: the goal needs a predicate false where
+its derivations go round forever, and every fixpoint, the greatest
+included, keeps every unfolding. Unfoldings under an unbounded binder (the
+`exists` of `reach`) are quantified facts, which help proofs but can keep
+the solver from finding a model, so after `reveal_with_fuel` an unresolved
+verdict is also tried at depth one without the fuel.
+
+Unfolding nests a body inside itself, so every substitution under a binder
+renames the binder apart when a substituted value mentions its name
+(`substParamsInExpr`, the spec inliner, and the certifier's own unfolding):
+the second level of `reach` once read `edge(c, c)` for `edge(c, c')`, which
+stated `reach(c, b) == (c == b || reach(0, b))` and proved a false claim.
 
 The equation is a theorem only of this construction, so it is proved per
 predicate by three generated proof functions (`InductiveRuleOf`), in
@@ -1002,6 +1029,27 @@ instances is chasing an unbounded argument, as an induction goal makes a
 solver do, and ends as `spec.fuel` at once, with a message that the goal needs
 an induction lemma.
 
+Every value the certifier computes carries the facts that justify it
+(`DefinitionInstance`, of kind `Definition`, `Unfolding`, or
+`Postcondition`): a definition instance; for an inductive predicate the
+unfoldings along its derivation when it holds (the true nodes the
+derivation read), and the unfoldings of every argument its derivations
+reach when it does not; or the proved postcondition that decided it. A
+dispute carries these facts, and refinement gives them to the solver, which
+is how a predicate's value at closed arguments, such as `reach(1, 4)`, is
+proved without the user naming its premises. Unfoldings and postconditions
+are theorems: the adapter records each one it gives
+(`ObligationModule::Given`, shared by a module's copies), and the driver adds
+them to the verdict's dependencies (`AssumedUnfoldings`, `AssumedPosts`), so
+a rule or postcondition that later fails demotes it. When a round adds no
+fact that was not given before, the outcome depends on whether the model
+keeps them (`Evaluator::keeps`): a model that breaks one is
+`backend.invalid-result`, a wrong solver answer; a model that keeps every
+one needs a value no finite set of instances fixes, which is `spec.fuel`,
+and when that value is an inductive predicate's, false where derivations go
+round forever, the message names the application and asks for a
+postcondition `!result || Q`, since only induction shows it.
+
 Two cases are settled by instances without a model-by-model search. An
 application at closed arguments is evaluated before the first check, and the
 solver receives the instances at every application the evaluation reaches (at
@@ -1021,7 +1069,17 @@ second) and at most eight rounds that only search among hidden values. It
 then solves the query again with whole definitions in the remaining time and
 certifies any model it returns: a non-recursive function is replaced by its
 definition and a recursive one becomes a native recursive definition
-(`RecAddDefinition`). Hidden functions are defined there too, so after a
+(`RecAddDefinition`) when its recursion is guarded: `&&` and `||` over a
+recursive application become `ite`s, and every recursive application must
+lie in a branch of an `ite` whose branches apply a recursive function
+outside quantifiers. Z3 splits a recursive definition into cases only at
+such `ite`s, neither inside a quantifier nor at one whose branches apply
+recursion only under one, and a definition with one case is a macro, which
+Z3 expands at every application without bound and without honoring an
+interrupt (an inductive predicate's step, whose recursion is under an
+`exists`, hung a query for ten minutes). A function whose recursion is not
+guarded stays declared, and refinement gives its instances. Hidden
+functions are defined there too, so after a
 hidden-spec stop that pass gets only a short slice and its UNSAT is
 `spec.hidden`. cvc5 prints its model after `sat` (`--dump-models`), and
 often after `unknown` (with quantified axioms, say); the same certifier
@@ -1102,7 +1160,30 @@ arithmetic would otherwise exhaust the budget.
 A model that fails the query even under its own interpretation is
 `backend.invalid-result`; one that cannot be checked within the budgets is
 `counterexample.unchecked`, or `spec.fuel` when checking it needs unbounded
-unfolding. If the complete query is unresolved, Z3 may solve the module-owned
+unfolding.
+
+The certifier evaluates `&&` and `||` in Kleene's strong logic: operands
+without applications or quantifiers first, and an operand that decides the
+connective decides it whatever the others are, so an undecidable operand
+settles nothing only when no operand decides. Wherever several
+evaluations may each decide a value (the operands of a connective, a
+quantifier's instances, its candidate witnesses, the binder values near
+zero), they run fairly (`Evaluator::fairly`): each gets a slice of
+evaluation steps in turn, doubling every round, and a search nested in a
+slice divides that slice among its own tries. A cheap decision is then
+found whatever the order, as dovetailing finds a halting computation among
+many: refuting an induction hypothesis `forall c. !reach.step(38, c, b) ||
+!reach(c, b)` at `c = 7718` took 4 s once candidates near zero, whose
+derivations branch without end, could no longer take the whole budget
+first. Steps count the terms built by unfolding definitions for witness
+analysis and by Presburger decisions, so a slice measures work. A failure
+caused by a spent slice is never cached as undecided and is recovered from
+only by the search that set the slice. A try's slice is what remains of the
+round divided among the tries left, so a try after cheap ones gets nearly
+all of it and a deep chain of searches costs linear work. An application
+whose definition needs its own value (`f(1) == !f(1)` for a spec whose
+termination fails) is undecided at once, as a definition limit, instead of
+recursing to the nesting limit. If the complete query is unresolved, Z3 may solve the module-owned
 ordered queries. It does not reconstruct alternate passive programs.
 
 A `spec.fuel` result is retried by strong induction (`inductionModule`). For
