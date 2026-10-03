@@ -2923,6 +2923,10 @@ static void addSpecPostInstances(PassiveProgram &P, const FunctionMap &FnMap,
                              Call.ReadsHeap ? Call.HeapVar : std::string());
     if (!Fact)
       continue;
+    if (!Spec.Postconditions.empty())
+      P.AssumedPosts.insert(Spec.Identity);
+    if (Spec.Unfolding)
+      P.AssumedUnfoldings.insert(Spec.Identity);
     for (auto Q = Application.Enclosing.rbegin();
          Q != Application.Enclosing.rend(); ++Q)
       Fact = std::make_unique<VForallExpr>(
