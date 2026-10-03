@@ -180,6 +180,15 @@ class Z3Encoder {
   std::set<std::string> UsedCellDecls;
   z3::expr arrayTerm(const HeapValue &Heap,
                      const std::function<z3::expr(const CertInt &)> &Cell);
+  /// \p E's value in \p Model. An evaluation cut short (a race interrupts
+  /// the context while its model is read) gives no term, which reads as an
+  /// opaque constant: undetermined, never a value.
+  z3::expr evaluated(const z3::model &Model, const z3::expr &E,
+                     bool Completion);
+  /// The certifier's verdict on \p Candidate; undetermined once the encoder
+  /// was stopped, since its model then evaluates unreliably.
+  CertifyResult certify(const ObligationModule &Module, const LogicExpr &Query,
+                        CandidateModel &Candidate, const CertifyLimits &Limits);
   std::optional<LogicValue> modelValue(const z3::model &Model,
                                        const z3::expr &Value,
                                        const LogicSort &Sort);
