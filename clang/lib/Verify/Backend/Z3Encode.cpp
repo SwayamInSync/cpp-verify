@@ -2696,9 +2696,12 @@ z3::check_result Z3Encoder::certifyModels(const ObligationModule &Module,
         Solver.add(*Pin);
         if (check() == z3::sat) {
           Z3CandidateModel Pinned(*this, Solver.get_model());
-          if (certifyCounterexample(Module, Query, Pinned, Limits).Outcome ==
-              CertifyOutcome::Certified)
+          CertifyResult PinnedResult =
+              certifyCounterexample(Module, Query, Pinned, Limits);
+          if (PinnedResult.Outcome == CertifyOutcome::Certified) {
+            Out.CertifiedWith = std::move(PinnedResult.Evidence);
             return z3::sat;
+          }
         }
         Solver.pop();
       } else if (!Extremes.empty()) {
@@ -2774,8 +2777,10 @@ z3::check_result Z3Encoder::certifyModels(const ObligationModule &Module,
     RefinementDecision Decision = Refinement.next(Certified, BoundedDomain);
     Covered =
         BoundedDomain && Decision.Next == RefinementDecision::Action::Refine;
-    if (Decision.Next == RefinementDecision::Action::Report)
+    if (Decision.Next == RefinementDecision::Action::Report) {
+      Out.CertifiedWith = Certified.Evidence;
       return Result;
+    }
     if (Decision.Next == RefinementDecision::Action::Stop)
       return stop(Narrowed && Decision.Reason == VerifyReason::SpecFuel
                       ? Unchecked
