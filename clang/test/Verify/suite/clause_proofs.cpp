@@ -106,7 +106,8 @@ spec int at_unhelped(const int *p, int n, int i)
 // CHECK-DAG: Unresolved: spec reads unresolved: at_unhelped
 
 // A block cannot use a lemma whose own proof assumes the property: the two
-// proofs would rest on each other.
+// proofs would rest on each other, and without a shared measure they are no
+// induction (suite/proof_clusters.cpp has the measured kind).
 spec int f(int n);
 proof void f_lie(int n) post(f(n) > 100) {}
 spec int f(int n)
@@ -116,7 +117,7 @@ spec int f(int n)
   return n <= 0 ? 101 : f(n - 1);
 }
 // CHECK-DAG: Unresolved: f_lie [backend=z3] [reason=proof.cycle]
-// CHECK-DAG: Unresolved: spec decreases and post: f [reason=proof.cycle] (relies on the contract of f_lie, whose proof rests in turn on this one)
+// CHECK-DAG: Unresolved: spec decreases and post: f [reason=proof.cycle] (relies on the contract of f_lie, whose proof rests in turn on this one; {{.*}}decreases clauses of one length
 // BMC-DAG: Unresolved: f_lie [backend=bmc, bound=0] [reason=proof.cycle]
 // BMC-DAG: Unresolved: spec decreases and post: f [reason=proof.cycle]
 
