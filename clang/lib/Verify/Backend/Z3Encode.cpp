@@ -196,7 +196,7 @@ z3::func_decl Z3Encoder::specFuncDecl(const LogicFunctionDecl &Function) {
     Domain.push_back(valueSort(Parameter.Sort));
   z3::sort Ret = valueSort(Function.ResultSort);
   const std::string Name = "spec$" + Function.Identity;
-  const bool Recursive = NativeRecursion && Function.StepDefinition;
+  const bool Recursive = nativelyDefined(Function);
   if (Recursive && Function.DefinitionFuel == 0)
     NativeHidden.insert(Function.DisplayName.empty() ? Function.Identity
                                                      : Function.DisplayName);
@@ -1771,6 +1771,7 @@ Z3Encoder::encodeModuleAs(const ObligationModule &Module,
   UndefinedRecursive.clear();
   NativeHidden.clear();
   Inlined.clear();
+  NativeBodies.clear();
   NonRecursive.clear();
   if (NativeRecursion) {
     NonRecursive = nonRecursiveDefinitions(Module);
@@ -2403,9 +2404,13 @@ Z3Encoder::encodeDefinition(const LogicFunctionDecl &Function) {
   }
   const bool SavedShadows = DefineBitShadows;
   DefineBitShadows = false;
-  z3::expr Body = coerce(encodeVC(Function.StepDefinition.get()),
-                         Function.StepDefinition->Sort, Function.ResultSort,
-                         isSignedSort(Function.ResultSort));
+  auto Native = NativeBodies.find(Function.Identity);
+  const LogicExpr *Definition = Native != NativeBodies.end() && Native->second
+                                    ? Native->second.get()
+                                    : Function.StepDefinition.get();
+  z3::expr Body =
+      coerce(encodeVC(Definition), Definition->Sort, Function.ResultSort,
+             isSignedSort(Function.ResultSort));
   DefineBitShadows = SavedShadows;
   for (auto &[Name, Value] : Saved) {
     Vars.erase(Name);
@@ -2429,6 +2434,124 @@ z3::expr Z3Encoder::inlineDefinition(const LogicFunctionDecl &Function,
     Arguments.push_back(Arg);
   z3::expr Body = It->second.second;
   return Body.substitute(It->second.first, Arguments);
+}
+
+namespace {
+
+/// Whether \p E applies a function that is defined natively by recursion.
+bool appliesDefined(const LogicExpr *E,
+                    const std::function<bool(const std::string &)> &Defined) {
+  if (!E)
+    return false;
+  if (E->K == LogicExpr::SpecCall && Defined(E->SpecCallee))
+    return true;
+  return llvm::any_of(E->Children, [&](const std::unique_ptr<LogicExpr> &C) {
+    return appliesDefined(C.get(), Defined);
+  });
+}
+
+std::unique_ptr<LogicExpr> booleanConstant(bool Value) {
+  auto E =
+      std::make_unique<LogicExpr>(Value ? LogicExpr::True : LogicExpr::False);
+  E->Sort = LogicSort::boolSort();
+  return E;
+}
+
+std::unique_ptr<LogicExpr> ite(std::unique_ptr<LogicExpr> C,
+                               std::unique_ptr<LogicExpr> T,
+                               std::unique_ptr<LogicExpr> F) {
+  auto E = std::make_unique<LogicExpr>(LogicExpr::Ite);
+  E->Sort = T->Sort;
+  E->Children.push_back(std::move(C));
+  E->Children.push_back(std::move(T));
+  E->Children.push_back(std::move(F));
+  return E;
+}
+
+/// \p E with the connectives above its recursive applications as case
+/// splits: a && b is ite(a, b, false), a || b is ite(a, true, b), a => b is
+/// ite(a, b, true). Each rewrite is an equivalence.
+std::unique_ptr<LogicExpr>
+guardRecursion(const LogicExpr *E,
+               const std::function<bool(const std::string &)> &Defined) {
+  if (!appliesDefined(E, Defined) || E->Sort.Kind != LogicSortKind::Bool)
+    return cloneLogicExpr(E);
+  auto rest = [&](size_t From) {
+    auto Tail = std::make_unique<LogicExpr>(E->K);
+    Tail->Sort = E->Sort;
+    for (size_t I = From; I != E->Children.size(); ++I)
+      Tail->Children.push_back(cloneLogicExpr(E->Children[I].get()));
+    return Tail->Children.size() == 1 ? std::move(Tail->Children.front())
+                                      : std::move(Tail);
+  };
+  switch (E->K) {
+  case LogicExpr::And:
+  case LogicExpr::Or: {
+    if (E->Children.size() < 2)
+      break;
+    const bool And = E->K == LogicExpr::And;
+    std::unique_ptr<LogicExpr> Tail = rest(1);
+    std::unique_ptr<LogicExpr> GuardedTail =
+        guardRecursion(Tail.get(), Defined);
+    std::unique_ptr<LogicExpr> Head =
+        guardRecursion(E->Children.front().get(), Defined);
+    return And ? ite(std::move(Head), std::move(GuardedTail),
+                     booleanConstant(false))
+               : ite(std::move(Head), booleanConstant(true),
+                     std::move(GuardedTail));
+  }
+  case LogicExpr::Ite:
+    return ite(cloneLogicExpr(E->Children[0].get()),
+               guardRecursion(E->Children[1].get(), Defined),
+               guardRecursion(E->Children[2].get(), Defined));
+  default:
+    break;
+  }
+  return cloneLogicExpr(E);
+}
+
+/// Whether every recursive application of \p E lies in a branch of a case
+/// split, as Z3 needs to bound its unfolding: a case split is an ite with a
+/// recursive application in a branch, and Z3 does not split inside a
+/// quantifier.
+bool recursionGuarded(const LogicExpr *E, bool InBranch,
+                      const std::function<bool(const std::string &)> &Defined) {
+  if (!E)
+    return true;
+  if (E->K == LogicExpr::Ite &&
+      (appliesDefined(E->Children[1].get(), Defined) ||
+       appliesDefined(E->Children[2].get(), Defined)))
+    return recursionGuarded(E->Children[0].get(), InBranch, Defined) &&
+           recursionGuarded(E->Children[1].get(), true, Defined) &&
+           recursionGuarded(E->Children[2].get(), true, Defined);
+  if (E->K == LogicExpr::Forall || E->K == LogicExpr::Exists)
+    return InBranch || !appliesDefined(E, Defined);
+  if (E->K == LogicExpr::SpecCall && Defined(E->SpecCallee) && !InBranch)
+    return false;
+  return llvm::all_of(E->Children, [&](const std::unique_ptr<LogicExpr> &C) {
+    return recursionGuarded(C.get(), InBranch, Defined);
+  });
+}
+
+} // namespace
+
+bool Z3Encoder::nativelyDefined(const LogicFunctionDecl &Function) {
+  if (!NativeRecursion || !Function.StepDefinition ||
+      Function.Parameters.empty())
+    return false;
+  auto [It, Inserted] = NativeBodies.try_emplace(Function.Identity);
+  if (Inserted) {
+    auto Defined = [&](const std::string &Identity) {
+      auto Callee = LogicFunctions.find(Identity);
+      return Callee != LogicFunctions.end() && Callee->second &&
+             Callee->second->StepDefinition && !inlined(*Callee->second);
+    };
+    std::unique_ptr<LogicExpr> Body =
+        guardRecursion(Function.StepDefinition.get(), Defined);
+    if (recursionGuarded(Body.get(), false, Defined))
+      It->second = std::move(Body);
+  }
+  return It->second != nullptr;
 }
 
 bool Z3Encoder::defineRecursiveFunctions() {
