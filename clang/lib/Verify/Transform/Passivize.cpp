@@ -2897,9 +2897,11 @@ static void addFrameInstances(PassiveProgram &P, const FunctionMap &FnMap) {
 
 /// A spec's proved postcondition, and an inductive predicate's unfolding,
 /// hold at every application of it.
-static void addSpecPostInstances(PassiveProgram &P, const FunctionMap &FnMap) {
-  auto WithPost = [](const VSpecCallExpr &, const VFunction &Spec) {
-    return !Spec.Postconditions.empty() || Spec.Unfolding;
+static void addSpecPostInstances(PassiveProgram &P, const FunctionMap &FnMap,
+                                 const std::set<std::string> &Withheld) {
+  auto WithPost = [&](const VSpecCallExpr &, const VFunction &Spec) {
+    return (!Spec.Postconditions.empty() || Spec.Unfolding) &&
+           !Withheld.count(Spec.Identity);
   };
   std::map<std::string, FramedApplication> Applications;
   std::vector<const VQuantifiedExpr *> Enclosing;
@@ -3645,6 +3647,10 @@ class PassivizerImpl {
               SourceLocation Loc = SourceLocation(),
               ProofObligationKind ProofKind = ProofObligationKind::Unsupported,
               std::string Note = "") {
+    // A generated proof about specs evaluates them as specs do: totally.
+    if (Fn.TotalExpressions && K == PassiveStmt::Assert &&
+        isDefinedness(ProofKind))
+      return;
     auto PS = std::make_unique<PassiveStmt>();
     PS->K = K;
     PS->ProofKind = ProofKind;
@@ -3654,6 +3660,22 @@ class PassivizerImpl {
       Cond = makeImplies(cloneVExpr(Guard), std::move(Cond), Loc);
     PS->Cond = std::move(Cond);
     P.Stmts.push_back(std::move(PS));
+  }
+
+  static bool isDefinedness(ProofObligationKind Kind) {
+    switch (Kind) {
+    case ProofObligationKind::Overflow:
+    case ProofObligationKind::DivisionByZero:
+    case ProofObligationKind::Shift:
+    case ProofObligationKind::Bounds:
+    case ProofObligationKind::Dereference:
+    case ProofObligationKind::Initialization:
+    case ProofObligationKind::PointerDifference:
+    case ProofObligationKind::PointerValidity:
+      return true;
+    default:
+      return false;
+    }
   }
 
   static bool needsInactiveFrame(const VExpr *Guard) {
@@ -4260,6 +4282,8 @@ public:
                     &Fn.ValidExtents);
       groupByKind(Checks);
       for (const SafetyCheck &Check : Checks) {
+        if (Fn.TotalExpressions && isDefinedness(Check.Kind))
+          continue;
         // Anchor at the clause; an unfolded helper's operators may lie in
         // another file.
         auto Cond = cloneExpr(Check.Cond.get(), PCtx);
@@ -4279,7 +4303,7 @@ public:
     P.RevealedSpecs = Fn.RevealedSpecs;
     P.CallerIntMode = Fn.IntMode;
     addFrameInstances(P, FnMap);
-    addSpecPostInstances(P, FnMap);
+    addSpecPostInstances(P, FnMap, Fn.FactsWithheld);
     return P;
   }
 
