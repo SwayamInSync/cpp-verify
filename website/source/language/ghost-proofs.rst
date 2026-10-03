@@ -17,7 +17,9 @@ Ghost statements
 - ``calc { e0; op { ... } e1; ... }`` — a chain of steps, each proved like
   an assert-by, concluding the combined relation between ``e0`` and the last
   term
-- ``reveal_with_fuel(f, n)`` — unfold recursive spec ``f`` up to depth ``n`` (ghost blocks only)
+- ``reveal_with_fuel(f, n)`` — unfold recursive spec ``f`` up to depth ``n``,
+  or an inductive predicate ``f`` ``n`` levels below each application a proof
+  names (ghost blocks only)
 - ``reveal(f)`` / ``hide(f)`` — make spec ``f`` transparent / opaque for the rest of the
   enclosing function (ghost blocks only)
 
@@ -172,12 +174,22 @@ derivation shows it, so it needs no ``decreases``.
 - The body returns a condition (under ``if``/``else`` at most) in which the
   predicate occurs only positively: as a conjunct or disjunct, a branch of
   ``?:``, under ``exists``, or under a bounded ``forall``. It takes no
-  ``decreases`` or ``when``, and it may read memory. Predicates that apply
+  ``decreases`` or ``when``, and it may read memory (each application is
+  unfolded in the memory state it is applied in). Predicates that apply
   each other are defined together; a predicate never applies itself through
   a spec that is not inductive.
 - Proofs see the predicate through its body, unfolded once at each
   application, both ways: naming an application, as in
   ``contract_assert(even(2));``, unfolds it to ``2 == 0 || even(0)``.
+- The verifier unfolds further where a verdict needs it. An application at
+  constant arguments, such as ``post(even(4))``, is decided before solving,
+  and the solver receives the unfoldings along the derivation found. A
+  verdict that still depends on the predicate is retried with the
+  applications inside the unfoldings unfolded as well, one level more at a
+  time, up to four levels. ``reveal_with_fuel(even, n)`` asks for ``n``
+  levels from the start, and ``reveal(even)`` gives the definition instead
+  of unfoldings. Each level is a proved unfolding, so a proof found this way
+  stands.
 - That unfolding is a theorem, and the verifier proves it for each predicate
   before any proof may use it, with three generated proofs: monotonicity
   (a derivation of some height is one of every greater height), case
@@ -200,6 +212,17 @@ derivation shows it, so it needs no ``decreases``.
   derivation (true) or by a proved postcondition that excludes the argument
   (false), on which the failure then rests. Undecided, the message names
   the application, such as ``whether odd(4) holds``.
+- When no unfolding settles a claim, the reason says what the claim needs.
+  Where the predicate's derivations from an argument go round a cycle
+  (``linked`` over a list whose cell points to itself), it is false there,
+  but every unfolding also holds of a predicate true on the cycle. A claim
+  that needs it false is then ``spec.fuel`` with ``every counterexample
+  found needs linked(..., 0, 1) to hold, but no derivation shows it``:
+  only induction shows it, so state what derivations satisfy as a
+  postcondition (``!result || Q``) or prove it by induction in a proof
+  function. The verifier does not unfold further in that case, since no
+  unfolding can help. ``backend.invalid-result`` is reserved for a solver
+  answer that contradicts a fact it was given.
 
 ``constexpr`` as spec
 ---------------------
