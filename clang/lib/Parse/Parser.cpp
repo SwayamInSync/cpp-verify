@@ -1100,6 +1100,40 @@ bool Parser::isContractInductiveClause() {
          NextToken().isNot(tok::l_paren);
 }
 
+void Parser::ParseContractClauseProofs(Decl *Function) {
+  SmallVector<PendingClauseProof, 1> Proofs = std::move(PendingClauseProofs);
+  PendingClauseProofs.clear();
+  auto *FD = Function ? Function->getAsFunction() : nullptr;
+  for (PendingClauseProof &Proof : Proofs) {
+    Token End;
+    End.startToken();
+    End.setKind(tok::eof);
+    End.setLocation(Proof.Toks.back().getEndLoc());
+    End.setEofData(&Proof);
+    Proof.Toks.push_back(End);
+    // Keep the token that follows, the start of the body.
+    Proof.Toks.push_back(Tok);
+    PP.EnterTokenStream(Proof.Toks, /*DisableMacroExpansion=*/true,
+                        /*IsReinject=*/true);
+    ConsumeAnyToken(/*ConsumeCodeCompletionTok=*/true);
+    StmtResult Body;
+    {
+      llvm::SaveAndRestore<bool> InPost(
+          InContractPostcondition,
+          Proof.K == FunctionContractInfo::ClauseProof::Post);
+      Body = ParseCompoundStatement();
+    }
+    while (Tok.isNot(tok::eof))
+      ConsumeAnyToken();
+    if (Tok.getEofData() == &Proof)
+      ConsumeAnyToken();
+    if (FD && Body.isUsable())
+      Actions.getASTContext()
+          .getOrCreateFunctionContract(FD)
+          .ClauseProofs.push_back({Proof.K, Body.get(), Proof.Loc});
+  }
+}
+
 bool Parser::isContractBehaviorClause() {
   if (!getLangOpts().VerifyContracts || Tok.isNot(tok::identifier))
     return false;
@@ -1295,6 +1329,7 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
                    D.getDeclSpec().isProofFunctionSpecified();
 
   if (getLangOpts().VerifyContracts) {
+    PendingClauseProofs.clear();
     // Re-enter function parameters into scope so contract conditions can
     // reference them. This mirrors ParseTrailingRequiresClause in
     // ParseDeclCXX.cpp: create a FunctionPrototypeScope and push params.
@@ -1542,6 +1577,25 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
         ConsumeParen();
       else
         Diag(Tok, diag::err_contract_expected_rparen) << ClauseName;
+
+      // clause(...) by { proof }: `by` is contextual. The block is parsed
+      // once the definition's parameters are in scope.
+      if (Tok.is(tok::identifier) && Tok.getIdentifierInfo()->isStr("by") &&
+          NextToken().is(tok::l_brace)) {
+        PendingClauseProof Proof;
+        Proof.Loc = ConsumeToken();
+        Proof.K = IsPost        ? FunctionContractInfo::ClauseProof::Post
+                  : IsDecreases ? FunctionContractInfo::ClauseProof::Decreases
+                                : FunctionContractInfo::ClauseProof::Reads;
+        Proof.Toks.push_back(Tok);
+        ConsumeBrace();
+        ConsumeAndStoreUntil(tok::r_brace, Proof.Toks, /*StopAtSemi=*/false,
+                             /*ConsumeFinalToken=*/true);
+        if (!IsSpecFn || !(IsPost || IsDecreases || IsReads))
+          Diag(Proof.Loc, diag::err_contract_clause_proof_misplaced);
+        else
+          PendingClauseProofs.push_back(std::move(Proof));
+      }
     }
 
     for (const BehaviorRelation &Relation : BehaviorRelations) {
@@ -1636,6 +1690,11 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
         ParseDeclarationAfterDeclaratorAndAttributes(D, TemplateInfo);
     D.complete(Res);
     AttachFunctionContract(Res);
+    if (!PendingClauseProofs.empty()) {
+      Diag(PendingClauseProofs.front().Loc,
+           diag::err_contract_clause_proof_on_declaration);
+      PendingClauseProofs.clear();
+    }
     ResetContractParsingState();
     D.getMutableDeclSpec().abort();
     ConsumeToken();
@@ -1796,6 +1855,7 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
 
   // CppVerify: store contract clauses on the FunctionDecl.
   AttachFunctionContract(Res);
+  ParseContractClauseProofs(Res);
 
   // Reset contract parsing state so it doesn't leak into subsequent functions.
   ResetContractParsingState();
