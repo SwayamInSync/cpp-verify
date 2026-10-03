@@ -80,6 +80,12 @@ class Z3Encoder {
   /// definitions: parameters and body, encoded once.
   std::set<std::string> NonRecursive;
   std::map<std::string, std::pair<z3::expr_vector, z3::expr>> Inlined;
+  /// With NativeRecursion, each recursive definition with its recursion
+  /// under case splits, or null when it cannot be: Z3 expands a definition
+  /// with a single case at every application, without a depth bound.
+  std::map<std::string, std::unique_ptr<LogicExpr>> NativeBodies;
+  /// Whether \p Function is given to Z3 as a native recursive definition.
+  bool nativelyDefined(const LogicFunctionDecl &Function);
   unsigned EncodingPass = 0;
   std::vector<const LogicFunctionDecl *> UndefinedRecursive;
   /// Refinement stopped on a bounded domain; native definitions may settle it.
