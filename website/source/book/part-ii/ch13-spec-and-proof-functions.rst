@@ -604,6 +604,47 @@ derivation satisfies; the verifier proves it by induction on derivations,
 and ``no_way_back`` follows from it. ``wrong_way`` fails: ``reach(38, 38)``
 holds with no step at all.
 
+How deep a proof sees ``reach`` depends on what it needs, and the verifier
+works most of it out itself. With constant arguments the counterexample
+check computes the predicate: ``reach(3, 12)`` holds by the derivation
+``3 -> 6 -> 12``, and the solver receives the unfoldings along it, so the
+proof needs no body. When a verdict still depends on the predicate, the
+verifier unfolds the applications inside the unfoldings too, one level more
+at a time, up to four levels; ``reveal_with_fuel(reach, n)`` asks for ``n``
+levels from the start.
+
+.. code-block:: cpp
+
+   proof void three_reaches_twelve_again() post(reach(3, 12)) {}
+
+   proof void doubles(int b)
+     pre(b >= 1)
+     post(reach(b, 2 * b + 1))
+   {
+   }
+
+   proof void far(int b)
+     pre(b == 64)
+     post(reach(1, b))
+   {
+     ghost { reveal_with_fuel(reach, 7); }
+   }
+
+.. code-block:: text
+
+   Verified: three_reaches_twelve_again [backend=z3]
+   Verified: doubles [backend=z3]
+   Verified: far [backend=z3]
+
+Each level is an unfolding the verifier proved, so a proof found this way
+stands, and a false claim still fails with a checked counterexample. Some
+claims no unfolding settles. Where the derivations from an argument go
+round a cycle, the predicate is false there, but every unfolding holds just
+as well of a predicate that is true on the cycle. The verdict says so
+(``spec.fuel``: ``every counterexample found needs ... to hold, but no
+derivation shows it``), the verifier does not unfold further, and a
+postcondition or a lemma proved by induction supplies the missing step.
+
 A counterexample is checked against what the predicate really means, true
 or false. Where its derivations from an argument reach finitely many
 arguments, the checker computes it over all of them: every value starts
@@ -665,8 +706,9 @@ In the induction, the premise ``reach(c, b)`` already extends every path
 from ``b`` (the induction hypothesis), and ``reach(a, c2)`` follows from
 ``edge(a, c)`` and ``reach(c, c2)`` by the predicate's proved unfolding. The
 postcondition itself is never assumed while it is being proved, so a false
-one such as ``post(!result || !reach(a, b))`` is never proved. (The forward
-declaration lets the postcondition name the predicate.)
+one such as ``post(!result || !reach(a, b))`` is never proved: it fails, with
+a derivation of height 1 where ``a == b``. (The forward declaration lets the
+postcondition name the predicate.)
 
 ``constexpr`` as spec
 ---------------------
