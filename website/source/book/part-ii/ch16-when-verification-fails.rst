@@ -97,9 +97,11 @@ Other results that are not counterexamples:
   ``--timeout``.
 - ``proof.cycle``: the proof relies on facts whose own proofs rely on it,
   such as a spec's proof block that calls a lemma proved from that spec's
-  postcondition. Each would hold only by the other. Prove the lemma without
-  the spec's postcondition (by its own induction), or move the reasoning
-  into the block.
+  postcondition. Each would hold only by the other. Give the functions
+  ``decreases`` clauses of one length that every call and application
+  between them lowers (see chapter 13), so they are proved together by
+  induction; or prove the lemma without the spec's postcondition, or move
+  the reasoning into the block.
 - ``construct.unsupported``: the failed obligation stands for a construct the
   verifier does not model, so it says nothing about the program. The message
   names the construct, such as a pointer difference between two parameters'
