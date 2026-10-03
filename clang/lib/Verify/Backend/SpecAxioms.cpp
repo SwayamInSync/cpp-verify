@@ -115,15 +115,12 @@ static const VFunction *findSpecFunction(const FunctionMap &Functions,
 
 llvm::Error verify::materializeLogicFunctions(ObligationModule &Module,
                                               const SpecAxiomContext &Ctx) {
-  std::set<std::string> Pending;
-  collectReferencedLogicFunctions(Module.CorrectnessGoal.get(), Pending);
-
-  while (!Pending.empty()) {
-    std::string Identity = *Pending.begin();
-    Pending.erase(Pending.begin());
-    if (Module.LogicFunctions.count(Identity))
-      continue;
-
+  // The functions the query reaches; then, for a counterexample check only,
+  // those their unfoldings and postconditions apply, where a failure leaves
+  // the function out instead of failing the module.
+  std::set<std::string> Extra;
+  auto materialize = [&](const std::string &Identity,
+                         std::set<std::string> &Pending) -> llvm::Error {
     const VFunction *Spec = findSpecFunction(Ctx.Functions, Identity);
     if (!Spec)
       return llvm::createStringError(llvm::inconvertibleErrorCode(),
@@ -158,7 +155,7 @@ llvm::Error verify::materializeLogicFunctions(ObligationModule &Module,
     LogicFunctionDecl &Owned = It->second;
     // Its value is any function of its arguments.
     if (Spec->Uninterpreted)
-      continue;
+      return llvm::Error::success();
 
     unsigned Fuel = 0;
     if (Ctx.HiddenSpecs.count(Spec->Identity))
@@ -221,6 +218,50 @@ llvm::Error verify::materializeLogicFunctions(ObligationModule &Module,
             "spec definition result sort mismatch: %s", Spec->Name.c_str());
       collectReferencedLogicFunctions(Definition.get(), Pending);
       Owned.DefinitionLevels.push_back(std::move(Definition));
+    }
+
+    // What a counterexample check may use beyond the definition. A term
+    // that does not lower is left out: the check then decides less.
+    if (Spec->Unfolding) {
+      if (auto Lowered =
+              lowerLogicExpr(Spec->Unfolding.get(), "", DefinitionHeap,
+                             Spec->IntMode, &Ctx.Functions)) {
+        collectReferencedLogicFunctions(Lowered->get(), Extra);
+        Owned.Unfolding = std::move(*Lowered);
+      } else {
+        llvm::consumeError(Lowered.takeError());
+      }
+    }
+    for (const auto &Post : Spec->Postconditions) {
+      if (auto Lowered =
+              lowerLogicExpr(Post.get(), LogicFunctionDecl::ResultVariable,
+                             DefinitionHeap, Spec->IntMode, &Ctx.Functions)) {
+        collectReferencedLogicFunctions(Lowered->get(), Extra);
+        Owned.Postconditions.push_back(std::move(*Lowered));
+      } else {
+        llvm::consumeError(Lowered.takeError());
+      }
+    }
+    return llvm::Error::success();
+  };
+  std::set<std::string> Pending;
+  collectReferencedLogicFunctions(Module.CorrectnessGoal.get(), Pending);
+  while (!Pending.empty()) {
+    std::string Identity = *Pending.begin();
+    Pending.erase(Pending.begin());
+    if (Module.LogicFunctions.count(Identity))
+      continue;
+    if (llvm::Error Error = materialize(Identity, Pending))
+      return Error;
+  }
+  while (!Extra.empty()) {
+    std::string Identity = *Extra.begin();
+    Extra.erase(Extra.begin());
+    if (Module.LogicFunctions.count(Identity))
+      continue;
+    if (llvm::Error Error = materialize(Identity, Extra)) {
+      llvm::consumeError(std::move(Error));
+      Module.LogicFunctions.erase(Identity);
     }
   }
   return llvm::Error::success();
