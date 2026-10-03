@@ -101,9 +101,18 @@ std::unique_ptr<VExpr> cloneAtEntryState(const VExpr *E);
 
 class Passivizer {
   FunctionMap FnMap;
+  unsigned UnfoldingDepth = 1;
+  bool UnfoldingFuel = true;
 
 public:
   void setFunctionMap(FunctionMap Map) { FnMap = std::move(Map); }
+  /// How many levels each inductive predicate is unfolded at the
+  /// applications a function names, unless reveal_with_fuel asks for more
+  /// and \p WithFuel heeds it.
+  void setUnfoldingDepth(unsigned Depth, bool WithFuel = true) {
+    UnfoldingDepth = Depth;
+    UnfoldingFuel = WithFuel;
+  }
   PassiveProgram run(const VFunction &Fn);
 };
 
