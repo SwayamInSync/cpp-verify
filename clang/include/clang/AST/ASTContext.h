@@ -119,6 +119,14 @@ struct FunctionContractInfo {
   SmallVector<Expr *, 1> BehaviorChecks;
   /// Each behavior's name and assumption.
   SmallVector<std::pair<IdentifierInfo *, Expr *>, 2> Behaviors;
+  /// Proof blocks of a spec's clauses, post(...) by { ... }: ghost code run
+  /// in the clause's check before its obligations.
+  struct ClauseProof {
+    enum Kind { Post, Decreases, Reads } K;
+    Stmt *Body;
+    SourceLocation Loc;
+  };
+  SmallVector<ClauseProof, 1> ClauseProofs;
   bool IsSpec = false;
   bool IsProof = false;
 };
