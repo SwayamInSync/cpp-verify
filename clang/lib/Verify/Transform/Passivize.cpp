@@ -2897,9 +2897,18 @@ static void addFrameInstances(PassiveProgram &P, const FunctionMap &FnMap) {
 }
 
 /// A spec's proved postcondition, and an inductive predicate's unfolding,
-/// hold at every application of it.
+/// hold at every application of it. An inductive predicate is unfolded
+/// \p Depth levels deep, or as deep as reveal_with_fuel asks when \p WithFuel:
+/// the applications inside an unfolding are unfolded in turn.
 static void addSpecPostInstances(PassiveProgram &P, const FunctionMap &FnMap,
-                                 const std::set<std::string> &Withheld) {
+                                 const VFunction &Fn, unsigned Depth,
+                                 bool WithFuel) {
+  const std::set<std::string> &Withheld = Fn.FactsWithheld;
+  auto depthOf = [&](const VFunction &Spec) {
+    auto It = Fn.SpecFuel.find(Spec.Identity);
+    return !WithFuel || It == Fn.SpecFuel.end() ? Depth
+                                                : std::max(Depth, It->second);
+  };
   auto WithPost = [&](const VSpecCallExpr &, const VFunction &Spec) {
     return (!Spec.Postconditions.empty() || Spec.Unfolding) &&
            !Withheld.count(Spec.Identity);
@@ -2916,27 +2925,48 @@ static void addSpecPostInstances(PassiveProgram &P, const FunctionMap &FnMap,
     collectFramedApplications(Exit.Cond.get(), FnMap, Enclosing, Applications,
                               WithPost);
   std::vector<std::unique_ptr<PassiveStmt>> Facts;
-  for (const auto &[Key, Application] : Applications) {
-    const VSpecCallExpr &Call = *Application.Call;
-    const VFunction &Spec = *FnMap.at(Call.CalleeIdentity);
-    std::unique_ptr<VExpr> Fact =
-        specApplicationFacts(Spec, Call.Args, &Call, Call.Loc,
-                             Call.ReadsHeap ? Call.HeapVar : std::string());
-    if (!Fact)
-      continue;
-    if (!Spec.Postconditions.empty())
-      P.AssumedPosts.insert(Spec.Identity);
-    if (Spec.Unfolding)
-      P.AssumedUnfoldings.insert(Spec.Identity);
-    for (auto Q = Application.Enclosing.rbegin();
-         Q != Application.Enclosing.rend(); ++Q)
-      Fact = std::make_unique<VForallExpr>(
-          (*Q)->Binder, cloneVExpr((*Q)->Lo.get()), cloneVExpr((*Q)->Hi.get()),
-          std::move(Fact), Call.Loc, (*Q)->BinderType);
-    auto Instance = std::make_unique<PassiveStmt>();
-    Instance->K = PassiveStmt::Assume;
-    Instance->Cond = std::move(Fact);
-    Facts.push_back(std::move(Instance));
+  std::set<std::string> Seen;
+  std::vector<const VExpr *> Unfolded;
+  auto addFacts = [&](const std::map<std::string, FramedApplication> &Found) {
+    for (const auto &[Key, Application] : Found) {
+      if (!Seen.insert(Key).second)
+        continue;
+      const VSpecCallExpr &Call = *Application.Call;
+      const VFunction &Spec = *FnMap.at(Call.CalleeIdentity);
+      std::unique_ptr<VExpr> Fact =
+          specApplicationFacts(Spec, Call.Args, &Call, Call.Loc,
+                               Call.ReadsHeap ? Call.HeapVar : std::string());
+      if (!Fact)
+        continue;
+      if (!Spec.Postconditions.empty())
+        P.AssumedPosts.insert(Spec.Identity);
+      if (Spec.Unfolding)
+        P.AssumedUnfoldings.insert(Spec.Identity);
+      for (auto Q = Application.Enclosing.rbegin();
+           Q != Application.Enclosing.rend(); ++Q)
+        Fact = std::make_unique<VForallExpr>(
+            (*Q)->Binder, cloneVExpr((*Q)->Lo.get()),
+            cloneVExpr((*Q)->Hi.get()), std::move(Fact), Call.Loc,
+            (*Q)->BinderType);
+      auto Instance = std::make_unique<PassiveStmt>();
+      Instance->K = PassiveStmt::Assume;
+      Instance->Cond = std::move(Fact);
+      if (Spec.Unfolding)
+        Unfolded.push_back(Instance->Cond.get());
+      Facts.push_back(std::move(Instance));
+    }
+  };
+  addFacts(Applications);
+  for (unsigned Level = 2; !Unfolded.empty(); ++Level) {
+    auto Deeper = [&](const VSpecCallExpr &, const VFunction &Spec) {
+      return Spec.Unfolding && !Withheld.count(Spec.Identity) &&
+             depthOf(Spec) >= Level;
+    };
+    std::map<std::string, FramedApplication> Next;
+    for (const VExpr *Fact : Unfolded)
+      collectFramedApplications(Fact, FnMap, Enclosing, Next, Deeper);
+    Unfolded.clear();
+    addFacts(Next);
   }
   P.Stmts.insert(P.Stmts.begin(), std::make_move_iterator(Facts.begin()),
                  std::make_move_iterator(Facts.end()));
@@ -2992,6 +3022,8 @@ class PassivizerImpl {
   std::string ResultVar = "__result";
   const VFunction &Fn;
   FunctionMap FnMap;
+  unsigned UnfoldingDepth = 1;
+  bool UnfoldingFuel = true;
   /// Names the body assigns: a parameter outside it keeps its entry value.
   std::set<std::string> AssignedNames;
 
@@ -4156,8 +4188,10 @@ class PassivizerImpl {
   }
 
 public:
-  PassivizerImpl(const VFunction &Fn, FunctionMap FnMap)
-      : Fn(Fn), FnMap(std::move(FnMap)) {}
+  PassivizerImpl(const VFunction &Fn, FunctionMap FnMap,
+                 unsigned UnfoldingDepth, bool UnfoldingFuel)
+      : Fn(Fn), FnMap(std::move(FnMap)), UnfoldingDepth(UnfoldingDepth),
+        UnfoldingFuel(UnfoldingFuel) {}
 
   PassiveProgram run() {
     PassiveProgram P;
@@ -4308,7 +4342,7 @@ public:
     P.RevealedSpecs = Fn.RevealedSpecs;
     P.CallerIntMode = Fn.IntMode;
     addFrameInstances(P, FnMap);
-    addSpecPostInstances(P, FnMap, Fn.FactsWithheld);
+    addSpecPostInstances(P, FnMap, Fn, UnfoldingDepth, UnfoldingFuel);
     return P;
   }
 
@@ -5752,6 +5786,6 @@ public:
 };
 
 PassiveProgram Passivizer::run(const VFunction &Fn) {
-  PassivizerImpl Impl(Fn, FnMap);
+  PassivizerImpl Impl(Fn, FnMap, UnfoldingDepth, UnfoldingFuel);
   return Impl.run();
 }
