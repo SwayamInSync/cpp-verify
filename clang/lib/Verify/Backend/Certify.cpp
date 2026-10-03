@@ -6,6 +6,8 @@
 #include "llvm/Support/thread.h"
 #include <algorithm>
 #include <deque>
+#include <unordered_map>
+#include <unordered_set>
 
 using namespace clang;
 using namespace verify;
@@ -467,7 +469,7 @@ class Evaluator {
   /// once.
   std::map<std::string, std::string> Undecided;
   /// Applications whose definitions are being evaluated.
-  std::set<std::string> InProgress;
+  std::unordered_set<std::string> InProgress;
   /// The time or step budget is spent: no failure is recovered from.
   bool Exhausted = false;
   /// The step at which the slice of the innermost fair search ends.
@@ -475,7 +477,7 @@ class Evaluator {
   /// That slice ran out: the failure says nothing of the term, and only
   /// the search that gave the slice recovers from it.
   bool SliceSpent = false;
-  static constexpr uint64_t FirstSlice = 4096;
+  static constexpr uint64_t FirstSlice = 65536;
   static constexpr uint64_t LeastSlice = 64;
   uint64_t NextClockCheck = 4096;
   /// Functions whose postconditions are being evaluated as evidence.
@@ -2718,8 +2720,8 @@ class Evaluator {
     std::optional<LogicValue> Claimed = Model.application(Function, Args);
     if (Claimed && !(*Claimed == Value.Value)) {
       DisputeKeys.insert(Key);
-      Disputes.push_back(
-          {&Function, Args, justification(Value, Function, Args), false});
+      Disputes.push_back({&Function, Args, justification(Value, Function, Args),
+                          false, Value.Value});
     }
     return Value.Value;
   }
@@ -3027,14 +3029,18 @@ class Evaluator {
   }
 
   /// Whether evaluating \p E may unfold a definition or expand a quantifier.
-  static bool costly(const LogicExpr *E) {
-    if (E->K == LogicExpr::SpecCall || E->K == LogicExpr::Forall ||
-        E->K == LogicExpr::Exists)
-      return true;
-    return llvm::any_of(E->Children,
-                        [](const std::unique_ptr<LogicExpr> &Child) {
-                          return costly(Child.get());
-                        });
+  /// It orders evaluation only, so a stale entry for a reused address costs
+  /// time, never a value.
+  std::unordered_map<const LogicExpr *, bool> Costly;
+  bool costly(const LogicExpr *E) {
+    if (auto It = Costly.find(E); It != Costly.end())
+      return It->second;
+    bool Result = E->K == LogicExpr::SpecCall || E->K == LogicExpr::Forall ||
+                  E->K == LogicExpr::Exists;
+    for (const auto &Child : E->Children)
+      Result = costly(Child.get()) || Result;
+    Costly[E] = Result;
+    return Result;
   }
 
   /// A conjunction or disjunction in Kleene's strong logic: an operand that
@@ -3541,6 +3547,26 @@ verify::nonRecursiveDefinitions(const ObligationModule &Module) {
   return NonRecursive;
 }
 
+/// Why a counterexample that needs \p Dispute's predicate to hold is not
+/// refuted: no derivation shows it, which only induction can.
+static std::string needsDerivation(const SpecDispute &Dispute) {
+  std::string Application = displayName(*Dispute.Function) + "(";
+  bool First = true;
+  for (size_t I = 0; I != Dispute.Arguments.size(); ++I) {
+    if (Dispute.Function->Parameters[I].Sort.Kind == LogicSortKind::Heap)
+      continue;
+    Application += (First ? "" : ", ") + Dispute.Arguments[I].key();
+    First = false;
+  }
+  Application += ")";
+  return "every counterexample found needs " + Application +
+         " to hold, but no derivation shows it: its derivations from there "
+         "never reach a base case, and only induction over derivations, not "
+         "unfolding, shows that; state what they satisfy as a postcondition "
+         "of " +
+         displayName(*Dispute.Function) + " (!result || Q)";
+}
+
 RefinementDecision DefinitionRefinement::next(const CertifyResult &Result,
                                               bool BoundedDomain) {
   RefinementDecision Decision;
@@ -3551,6 +3577,7 @@ RefinementDecision DefinitionRefinement::next(const CertifyResult &Result,
   case CertifyOutcome::Undetermined:
     if (Result.DefinitionTooDeep) {
       Decision.Unbounded = true;
+      Decision.InductionOnly = true;
       Decision.Reason = VerifyReason::SpecFuel;
       Decision.Message = "checking the counterexample needs a definition "
                          "evaluated beyond the certifier's limits (" +
@@ -3602,6 +3629,37 @@ RefinementDecision DefinitionRefinement::next(const CertifyResult &Result,
         Stalled = &Dispute;
     }
   }
+  // An unfolding at a memory value the model chose speaks of that memory
+  // only, never of the program's own: when nothing else is new, more rounds
+  // cannot settle the query, and unfolding at the program's memory (deeper,
+  // as the driver retries) may.
+  auto atModelMemory = [](const DefinitionInstance &Fact) {
+    return Fact.Of != DefinitionInstance::Kind::Definition &&
+           llvm::any_of(Fact.Arguments, [](const LogicValue &Argument) {
+             return Argument.K == LogicValue::Kind::Heap;
+           });
+  };
+  if (!Decision.Instances.empty() &&
+      llvm::all_of(Decision.Instances, atModelMemory)) {
+    Decision.Instances.clear();
+    Decision.Reason = VerifyReason::SpecFuel;
+    Decision.Unbounded = true;
+    // A predicate the model needs true where it is false, its derivations
+    // going round forever, is what holds the query up at any memory.
+    for (const SpecDispute &Dispute : Result.Disputes)
+      if (Dispute.Function->Unfolding && !Dispute.Justification.empty() &&
+          Dispute.Value.K == LogicValue::Kind::Bool && !Dispute.Value.Truth) {
+        Decision.Message = needsDerivation(Dispute);
+        return Decision;
+      }
+    Decision.Message = "every counterexample found needs " +
+                       joinNames(Disputed) +
+                       " in a memory state the solver chose, where its "
+                       "unfoldings do not meet the program's memory; "
+                       "unfolding it deeper at the program's memory "
+                       "(reveal_with_fuel) may settle it";
+    return Decision;
+  }
   if (Decision.Instances.empty()) {
     // Every fact was given before. A model that breaks one is a wrong
     // answer; otherwise the value follows from no finite set of instances.
@@ -3615,22 +3673,7 @@ RefinementDecision DefinitionRefinement::next(const CertifyResult &Result,
     if (Stalled && Stalled->Function->Unfolding) {
       Decision.Unbounded = true;
       Decision.InductionOnly = true;
-      std::string Application = displayName(*Stalled->Function) + "(";
-      bool First = true;
-      for (size_t I = 0; I != Stalled->Arguments.size(); ++I) {
-        if (Stalled->Function->Parameters[I].Sort.Kind == LogicSortKind::Heap)
-          continue;
-        Application += (First ? "" : ", ") + Stalled->Arguments[I].key();
-        First = false;
-      }
-      Application += ")";
-      Decision.Message =
-          "every counterexample found needs " + Application +
-          " to hold, but no derivation shows it: its derivations from there "
-          "never reach a base case, and only induction over derivations, not "
-          "unfolding, shows that; state what they satisfy as a postcondition "
-          "of " +
-          displayName(*Stalled->Function) + " (!result || Q)";
+      Decision.Message = needsDerivation(*Stalled);
     } else {
       Decision.Message = "every counterexample found applies " +
                          joinNames(Disputed) +
