@@ -342,12 +342,15 @@ Current proof-language limitations include:
   supported);
 - an unbounded quantifier's counterexample is checked when its body depends
   on the bound variables through linear arithmetic, comparisons, memory and
-  collection reads, and nested quantifiers (Presburger arithmetic), or when a
-  witness among the values tried decides it; otherwise it is
-  ``counterexample.unchecked``. ``choose`` is uninterpreted apart from its
+  collection reads, and nested quantifiers (Presburger arithmetic), when its
+  body can hold at finitely many values once the specs applied to the
+  variable are unfolded or approximated, or when a witness among the values
+  tried decides it; otherwise it is ``counterexample.unchecked``. ``choose`` is uninterpreted apart from its
   Hilbert axiom;
 - an inductive predicate unfolds once at each named application; a
-  counterexample that needs it false is usually ``counterexample.unchecked``;
+  counterexample that needs it false where its derivations reach infinitely
+  many arguments is ``counterexample.unchecked`` unless a proved
+  postcondition excludes the argument;
 - proofs may rest on each other only through a checked measure (a recursion
   cycle, a spec's induction hypothesis): a spec's proof block cannot call a
   lemma proved from that spec's facts, even when a measure would justify it
