@@ -1023,8 +1023,12 @@ certifies any model it returns: a non-recursive function is replaced by its
 definition and a recursive one becomes a native recursive definition
 (`RecAddDefinition`). Hidden functions are defined there too, so after a
 hidden-spec stop that pass gets only a short slice and its UNSAT is
-`spec.hidden`. cvc5 prints its model after `sat` (`--dump-models`), the same
-certifier checks it (cvc5 1.1 prints a sequence value last element first,
+`spec.hidden`. cvc5 prints its model after `sat` (`--dump-models`), and
+often after `unknown` (with quantified axioms, say); the same certifier
+checks either, and only a certified one is a counterexample. Arrays print
+as `store` chains over a constant array, with `Bool`, `Int`, or option
+(`cppverify.none`, `(cppverify.some v)`) cells (cvc5 1.1 prints a sequence
+value last element first,
 `(str.++ (seq.unit 2) (seq.unit 1))` for `[1, 2]`, so the adapter asks each
 cvc5 executable once how it prints a sequence of known order and reads its
 models accordingly), and refinement re-runs cvc5 with the instances within a
@@ -1200,7 +1204,7 @@ The driver selects a backend via `VerifyOptions` (`Verifier.h` / `cpp-verify --b
 | Backend | Implementation | Notes |
 |---------|----------------|-------|
 | **Z3** | `Z3VerifyBackend` | Default. Consumes `ObligationModule`; counterexamples come from models. |
-| **cvc5** | `CVC5VerifyBackend` + standalone SMT-LIB2 | Encodes the same canonical sorts, C++ truncating math division/remainder, bit-vectors, signed overflow, total heap, bounded and unbounded quantifiers (marked triggers as `:pattern`), heap frames, sequences (`full-saturate-quant` when sequences meet quantifiers), and finite ground spec equations. Sets, multisets, and maps are `logic.unsupported`: cvc5's set theory is finite, which would prove facts false of an infinite set. Solver process failures and malformed output are unresolved. |
+| **cvc5** | `CVC5VerifyBackend` + standalone SMT-LIB2 | Encodes the same canonical sorts, C++ truncating math division/remainder, bit-vectors, signed overflow, total heap, bounded and unbounded quantifiers (marked triggers as `:pattern`), heap frames, sequences (`full-saturate-quant` when sequences meet quantifiers), and finite ground spec equations. Sets, multisets, and maps are arrays over all integers, as for Z3 (cvc5's own set theory is finite, which would prove facts false of an infinite set): `(Array Int Bool)`, `(Array Int Int)` with a count of `max(0, cell)` and equality count by count, and `(Array Int cppverify.option)` over a declared `none | some(value)` datatype; union, intersection, and difference are declared functions each defined pointwise by one quantified axiom, exact by array extensionality, and subset is a quantified formula. A model cvc5 prints with `unknown` is certified like one after `sat`. Solver process failures and malformed output are unresolved. |
 | **Strict portfolio** | `PortfolioVerifyBackend` | Runs ordered Z3 and cvc5 queries. Matching UNSAT proves; matching certified counterexamples fail and retain the Z3 model; disagreement or an unresolved side is unresolved. |
 | **BMC** | `LoopUnroll` on VCR, then shared obligation/Z3 path | Source verification grows bounds from zero through `--unroll=N`, stopping on a counterexample, complete unwinding, unresolved query, or the maximum frontier. Safety with failed unwinding is `BoundedSafe(N)`; only proved unwinding is `Verified`. A spec's checks have no loops: the driver solves them with a Z3 backend (`SpecBackend`), as on the default path, and keeps the bound on their archived modules for replay. |
 | **Lean** | `exportLeanScratchPad` / project certification | Standalone mode emits unchecked theorem stubs. Project mode emits direct source goals, total functional heaps, typed bit-vector/integer operations, and compact finite-fuel spec bodies into generated files while preserving user proofs. Export is `Exported`; only the pinned admission-free kernel/axiom check is `Certified`. Collections are `logic.unsupported`. |
