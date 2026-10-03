@@ -893,7 +893,8 @@ definition of `P.step` is visible, each application at a lower measure
 assumes the postcondition, each application `Q.step(k, y)` also gives
 `Q(y)`, and `P.step(h, x)` gives `P(x)` (both by the definition of `Q` and
 `P` as existentials over heights). Termination of `P.step` is checked
-separately, without its postconditions. A failure is reported as `spec post
+separately and first, without its postconditions, so a slow induction
+cannot spend the function's time before it. A failure is reported as `spec post
 by induction failed: P`, and `P`'s own post module derives the
 postcondition from `P.step`'s under the existential.
 
@@ -932,11 +933,48 @@ module (`decreases` and, unless a step's bare check, `post` blocks), a
 step's induction module (`post`), and the reads module (`reads`), and
 records the proof functions the blocks call as dependencies of that check.
 
-When neither the distinguished values nor Presburger arithmetic decide an
-unbounded quantifier, the certifier tries binder values `0, -1, 1, -2, ...`
-up to `QuantifierProbe` on each side: a value where an `exists` body holds,
-or a `forall` body fails, decides it. This certifies `P(v)` by a derivation
-height; `P(v)` false stays undecided.
+The certifier evaluates `P(v)` (`Evaluator::definition`) first as the least
+fixpoint of the group's unfoldings over the arguments the derivations from
+`v` reach (`leastFixpoint`; `LogicFunctionDecl::Unfolding`, lowered by
+`SpecAxioms`, not archived): a worklist of (member, arguments) nodes, each
+false until its unfolding holds, an application of a member read from the
+table (a new one added as a node), and a node that becomes true re-queued
+for its readers. A quantifier over premises is decided by its witnesses
+(`fixpointQuantifier`): a universal is bounded and expanded, an
+existential's witnesses must be finitely many (`witnessesOf`, below). The
+fixpoint is complete only when every node is evaluated within 1024 nodes;
+its values are then exact and cached, and otherwise the state is restored
+and `P(v)` is evaluated by its definition, `exists(h, P.step(h, v))`, which
+finds a height for a true `P(v)`. Where a definition runs out, a bool
+function's postconditions (`LogicFunctionDecl::Postconditions`, over
+`ResultVariable`, not archived) decide its value if they allow only one;
+the identity is recorded (`CertifyResult::Evidence`,
+`VerifyResult::CertifiedWith`), and the driver demotes a failure whose
+evidence postcondition is not established to `Unresolved` (`spec.post`).
+Functions only these refer to are materialized in an error-tolerant second
+phase and kept in `ObligationModule::EvidenceFunctions` when simplification
+removes them, never encoded, archived, or hashed. An application whose
+definition could not be decided is remembered (`Undecided`) and fails at
+once when met again; once the time or step budget is spent no failure is
+recovered from (`Exhausted`). The message for an undecided inductive
+predicate names the application and the postcondition that would decide
+it.
+
+`witnessesOf` decides a quantifier whose body applies specs at its binder:
+the body (negated for a `forall`) is unfolded at the binder, non-recursive
+definitions first, then one and two levels of recursive ones (definitions
+are equations, so each try is exact), within 20000 terms; each remaining
+application at the binder, and each quantifier over it, becomes `true`
+where the body is monotone in it and `false` where antitone
+(`approximate`; any other position gives up), and binder-free conditions
+are folded to constants. The result follows from the body and depends on
+the binder only through comparisons, so the distinguished values show
+where it can hold: if that is finitely many values (a stretch of at most
+`DirectExpansion` between two of them counts), evaluating the true body
+there decides the quantifier. Otherwise the certifier tries candidate
+witnesses where the comparisons of the unfolded bodies change, then binder
+values `0, -1, 1, -2, ...` up to `QuantifierProbe` on each side: a value
+where an `exists` body holds, or a `forall` body fails, decides it.
 
 **`recommends`:** parsed and stored; not emitted into the main VC. On
 verification failure, a second pass adds `recommends` checks and reports
@@ -1038,12 +1076,12 @@ below every bound at one residue per period of its divisibility atoms, and
 of `F` at each lower bound plus each such residue (or the same from above,
 whichever side has fewer bounds). A product or quotient of binders, a
 machine operation on a binder, or a spec at a binder is outside the fragment,
-as is a blowup beyond 200,000 nodes. An unbounded quantifier outside the
-fragment is still decided by a witness: binder values `0, -1, 1, -2, ...`
-are tried, up to `QuantifierProbe` on each side, and one where an `exists`
-body holds or a `forall` body fails settles it (with the outer binder fixed,
-an inner quantifier often becomes linear). Otherwise the counterexample
-stays `counterexample.unchecked`. Unit tests cross-check the decisions
+as is a blowup beyond 200,000 nodes. A quantifier outside the fragment is
+still decided by its finitely many witnesses (`witnessesOf`, above) or by a
+witness among the candidate values and binder values `0, -1, 1, -2, ...`,
+up to `QuantifierProbe` on each side (with the outer binder fixed, an
+inner quantifier often becomes linear). Otherwise the counterexample stays
+`counterexample.unchecked`. Unit tests cross-check the decisions
 against Z3 on random sentences.
 
 `--profile-quantifiers` reruns a quantified Z3 query that stayed unresolved
