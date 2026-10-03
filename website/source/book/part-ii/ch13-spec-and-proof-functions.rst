@@ -544,8 +544,8 @@ Every operation is total: an index outside ``[0, len())`` reads 0, an update
 there changes nothing, ``subrange`` clamps its bounds, and a key outside a
 map's domain maps to 0. Sequences are finite; sets, multisets, and maps range
 over all integers and may be infinite. Counterexamples show their values, such
-as ``s = [4, 3]`` or ``m = {1 -> 7, 4.. -> 2}``. Z3 decides all four; cvc5
-decides sequences only, and Lean none.
+as ``s = [4, 3]`` or ``m = {1 -> 7, 4.. -> 2}``. Z3 and cvc5 decide all
+four, and Lean none.
 
 Inductive predicates
 --------------------
