@@ -373,6 +373,15 @@ struct VFunction {
   /// A generated proof about specs, not C++ code: its expressions are total
   /// as in specs, so they carry no definedness obligations.
   bool TotalExpressions = false;
+  /// Ghost code the user gave for a check of a spec's clause,
+  /// post(...) by { ... }: it runs after the check's assumptions and before
+  /// its obligations.
+  struct ClauseProof {
+    enum Kind { Post, Decreases, Reads } K;
+    std::vector<std::unique_ptr<VStmt>> Body;
+    SourceLocation Loc;
+  };
+  std::vector<ClauseProof> ClauseProofs;
   /// Each behavior's name and assumption, to check that it can apply.
   std::vector<std::pair<std::string, std::unique_ptr<VExpr>>> Behaviors;
   bool UsesDynamicStorage = false;
