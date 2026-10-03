@@ -31,6 +31,59 @@ the enclosing function are rejected. A loop in ghost code must carry a
 ``decreases`` clause so nontermination cannot make the executable continuation
 unreachable only in the proof model.
 
+.. code-block:: cpp
+
+   spec int sq(int x) { return x * x; }
+
+   proof void sq_monotone(int a, int b)
+     pre(0 <= a && a <= b)
+     post(sq(a) <= sq(b))
+   {
+   }
+
+   void ordered_squares(int a, int b)
+     pre(0 <= a && a <= b && b <= 1000)
+   {
+     contract_assert(a <= b);
+     contract_assert(sq(a) <= sq(b)) by { sq_monotone(a, b); }
+     ghost { int t = sq(b); contract_assert(t >= 0); }
+   }
+
+   proof void pair_ordered(const int *a, int n, int i, int j)
+     pre(valid(a, n) && n <= 1000 && 0 <= i && i <= j && j < n)
+     pre(forall(k, 0, n - 1, a[k] <= a[k + 1]))
+     post(a[i] <= a[j])
+     decreases(j - i)
+   {
+     if (i < j)
+       pair_ordered(a, n, i, j - 1);
+   }
+
+   void last_is_largest(const int *a, int n)
+     pre(valid(a, n) && 1 <= n && n <= 1000)
+     pre(forall(k, 0, n - 1, a[k] <= a[k + 1]))
+   {
+     contract_assert(forall(k, 0, n, a[k] <= a[n - 1])) by {
+       pair_ordered(a, n, k, n - 1);
+     }
+   }
+
+   void chain(int a, int b, int c)
+     pre(0 <= a && a <= b && b <= c && c <= 1000)
+   {
+     calc {
+       sq(a);
+       <= { sq_monotone(a, b); }
+       sq(b);
+       <= { sq_monotone(b, c); }
+       sq(c);
+     }
+     contract_assert(sq(a) <= sq(c));
+   }
+
+In ``last_is_largest`` the block proves the body for one ``k``, and the
+``forall`` holds after it; the lemma's own facts stay inside the block.
+
 Spec and proof functions
 ------------------------
 
@@ -44,6 +97,10 @@ Spec and proof functions
   the value must fit (see :doc:`integers`).
 - ``recommends(expr)`` (``spec`` only) is a **soft** precondition: it does not generate call-site
   obligations, but the verifier warns when a call may not satisfy it.
+- ``post(expr)`` on a ``spec`` is proved with its termination, by well-founded induction on its
+  measure, and then holds at every application: those a proof names and those inside the
+  unfoldings it receives (``fib(j - 2) >= 0`` from the unfolding of ``fib(j)``), as Dafny's
+  function postconditions do. See :doc:`../book/part-ii/ch13-spec-and-proof-functions`.
 
 Proof functions may update their own local values and call other proof
 functions, but cannot write executable memory/global state or call executable
@@ -54,6 +111,23 @@ functions. Their loops require ``decreases`` just like recursive proof calls.
    spec int safe_div(int a, int b)
      recommends(b != 0)
    { return a / b; }
+
+``when(c)`` restricts where the body defines a spec: outside ``c`` its value
+is left open (an uninterpreted function of its arguments), and termination
+is checked only inside:
+
+.. code-block:: cpp
+
+   spec int safe_inverse(int x)
+     when(x != 0)
+   {
+     return 1000 / x;
+   }
+
+   proof void inverse_of_ten()
+     post(safe_inverse(10) == 100)
+   {
+   }
 
 Specs that read memory
 ----------------------
@@ -83,10 +157,35 @@ is instantiated.
      return acc;
    }
 
-A heap-reading spec has no ``reads`` frame yet: after a write, the verifier
-relates the new value to the old one only by unfolding the definition, so a
-symbolic-length reduction is not automatically preserved across unrelated
-writes.
+Without a frame, a write relates the new value of such a spec to the old
+one only by unfolding its definition, so a reduction over a symbolic length
+is not preserved across an unrelated write. ``reads(p, n)`` declares the
+cells ``p[0..n)`` the spec depends on. The verifier checks it against the
+body (every load, and every range a heap-reading callee reads, lies
+inside), and callers then keep every application across a store outside
+those cells without unfolding:
+
+.. code-block:: cpp
+
+   spec int sum_of(const int *p, int n)
+     reads(p, n)
+     decreases(n)
+   {
+     return n <= 0 ? 0 : sum_of(p, n - 1) + p[n - 1];
+   }
+
+   void unrelated(int *p, int n, int *q)
+     pre(valid(p, n) && 0 <= n && n <= 1000 && q != nullptr)
+     modifies(*q)
+     post(sum_of(p, n) == old(sum_of(p, n)))
+   {
+     *q = 0;
+   }
+
+``q`` is a different object from ``p``'s buffer (distinct mutable pointer
+parameters do not alias), so the store lies outside the frame. A failed
+``reads`` check is reported as ``spec reads failed``, and every proof that
+relied on the frame is ``Unresolved`` with reason ``spec.reads``.
 
 Opacity and fuel
 ----------------
@@ -97,6 +196,8 @@ send Z3 into a matching loop; ``reveal_with_fuel(f, n)`` raises the depth when a
 
 .. code-block:: cpp
 
+   spec int triple(int x) { return x + x + x; }
+
    int f(int x)
      pre(x >= 0 && x <= 10)
      post(result == triple(x))
@@ -104,6 +205,25 @@ send Z3 into a matching loop; ``reveal_with_fuel(f, n)`` raises the depth when a
      ghost { reveal(triple); }   // hide(triple) makes it opaque again
      return x + x + x;
    }
+
+With fuel 1 a proof sees one unfolding of each application it names, so
+``pow2(3) == 8`` needs three more:
+
+.. code-block:: cpp
+
+   spec int pow2(int n) decreases(n) { return n <= 0 ? 1 : 2 * pow2(n - 1); }
+
+   void eight()
+   {
+     ghost { reveal_with_fuel(pow2, 4); }
+     contract_assert(pow2(3) == 8);
+   }
+
+Fuel is local to the function that raises it. For an inductive predicate,
+``reveal_with_fuel(P, n)`` unfolds the applications inside its unfoldings
+``n`` levels deep, and the verifier also deepens on its own, up to four
+levels, when a verdict still depends on the predicate (see
+:ref:`inductive predicates <inductive-predicates>`).
 
 Proof blocks for spec clauses
 -----------------------------
@@ -157,6 +277,8 @@ obligations.
   lemma unfolds the spec at ``n`` and the block calls the lemma at
   ``n - 1``. Without shared measures, proofs that rest on each other are
   ``Unresolved`` with reason ``proof.cycle``.
+
+.. _inductive-predicates:
 
 Inductive predicates
 --------------------
