@@ -44,6 +44,46 @@ reference. Mutable pointer/reference parameter pairs are object-range disjoint
 by default (over whole ``valid(p, n)`` extents);
 ``aliases(left, right)`` permits same-object aliasing.
 
+The default is a precondition every caller must establish. A function that
+works when its parameters share storage says so with ``aliases``, and its
+body is then verified for both cases:
+
+.. cppverify-example: fails same_cell_wrong
+
+.. code-block:: cpp
+
+   void copy_or_self(int *dst, int *src)
+     aliases(dst, src)
+     pre(dst != nullptr && src != nullptr)
+     modifies(*dst)
+     post(*dst == old(*src))
+   {
+     *dst = *src;
+   }
+
+   void copy_one(int *dst, int *src)
+     pre(dst != nullptr && src != nullptr)
+     modifies(*dst)
+     post(*dst == old(*src))
+   {
+     *dst = *src;
+   }
+
+   void same_cell(int *p)
+     pre(p != nullptr)
+     modifies(*p)
+     post(*p == old(*p))
+   {
+     copy_or_self(p, p);
+   }
+
+   void same_cell_wrong(int *p)
+     pre(p != nullptr)
+     modifies(*p)
+   {
+     copy_one(p, p);   // fails: the aliasing check at this call
+   }
+
 ``modifies(left)`` names the referent, a single scalar object, so a call
 changes only that cell. A provenance-backed automatic or dynamic scalar actual
 is framed as one exact cell after the callee passes the structural non-escape
@@ -105,7 +145,7 @@ the verifier gets this from array theory:
 .. code-block:: cpp
 
    void set(int* p, int i, int j, int v)
-     pre(p != nullptr && i != j)
+     pre(valid(p, 1000) && i != j)
      pre(0 <= i && i < 1000 && 0 <= j && j < 1000)
      pre(p[j] == 5)
      modifies(*p)
