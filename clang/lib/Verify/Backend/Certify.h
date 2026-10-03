@@ -168,6 +168,8 @@ struct SpecDispute {
   /// The model breaks a fact of the dispute that the solver may have been
   /// given: if it was, the solver's answer is wrong.
   bool Violated = false;
+  /// The value the true definitions give, which the model's differs from.
+  LogicValue Value;
 };
 
 enum class CertifyOutcome {
@@ -255,9 +257,10 @@ struct RefinementDecision {
   bool Unbounded = false;
   /// Stopped although no counterexample exists.
   bool NoCounterexample = false;
-  /// Stopped because the goal needs an inductive predicate false where its
-  /// derivations go round forever: every fixpoint, the greatest included,
-  /// keeps every unfolding, so only induction settles it.
+  /// Stopped where unfolding further cannot settle the goal: it needs an
+  /// inductive predicate false where its derivations never end (round a
+  /// cycle, which every fixpoint's unfoldings allow, or beyond every height
+  /// tried), or a value too deep to evaluate. Only induction settles it.
   bool InductionOnly = false;
 };
 
