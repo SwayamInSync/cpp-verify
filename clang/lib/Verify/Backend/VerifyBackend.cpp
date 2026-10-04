@@ -490,7 +490,9 @@ VerifyResult VerifyBackend::verify(const ObligationModule &Module) {
       llvm::consumeError(Inductive.takeError());
       continue;
     }
-    Tried.push_back(Scheme.Description);
+    // Schemes at different applications of one spec read the same.
+    if (llvm::find(Tried, Scheme.Description) == Tried.end())
+      Tried.push_back(Scheme.Description);
     VerifyResult Attempt = verifyDirect(*Inductive);
     if (Attempt.Status != VerifyStatus::Verified &&
         Attempt.Status != VerifyStatus::BoundedSafe)
