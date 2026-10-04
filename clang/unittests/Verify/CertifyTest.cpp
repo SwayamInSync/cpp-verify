@@ -6,6 +6,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Backend/Certify.h"
+#include "Backend/Induction.h"
 #include "Backend/Presburger.h"
 #include "Backend/VerifyBackend.h"
 #include "llvm/ADT/APInt.h"
@@ -1122,6 +1123,107 @@ TEST(CertifyTest, DeepDefinitionsReportFuel) {
   // Within the limits, a long chain evaluates through memoized definitions.
   Model.Constants["x"] = integerValue(5000);
   EXPECT_EQ(certifyCounterexample(Module, *triangleQuery(F, -1), Model).Outcome,
+            CertifyOutcome::Certified);
+}
+
+TEST(CertifyTest, ProofOnlyRefinementStopsLongChains) {
+  ObligationModule Module = withFunction(triangle());
+  const LogicFunctionDecl &F = Module.LogicFunctions.at("triangle_id");
+  TableModel Model;
+  Model.Constants["x"] = integerValue(300);
+  Model.DefaultApplication = integerValue(-1);
+  Expr Query = triangleQuery(F, 1);
+  CertifyResult Long = certifyCounterexample(Module, *Query, Model);
+  ASSERT_EQ(Long.Outcome, CertifyOutcome::Disputed);
+  // Settling triangle(300) takes the chain of its 301 unfoldings: one round
+  // of the program's own search.
+  RefinementDecision Searched = DefinitionRefinement(Module).next(Long);
+  EXPECT_EQ(Searched.Next, RefinementDecision::Action::Refine);
+  EXPECT_GT(Searched.Instances.size(),
+            DefinitionRefinement::MaxProofRoundInstances);
+  // A pass that only seeks a proof stops there instead.
+  DefinitionRefinement ProofOnly(Module);
+  ProofOnly.seekProofOnly();
+  RefinementDecision Stopped = ProofOnly.next(Long);
+  EXPECT_EQ(Stopped.Next, RefinementDecision::Action::Stop);
+  EXPECT_EQ(Stopped.Reason, VerifyReason::SpecFuel);
+  EXPECT_TRUE(Stopped.Unbounded);
+  // Short chains are refined as before.
+  Model.Constants["x"] = integerValue(5);
+  DefinitionRefinement Short(Module);
+  Short.seekProofOnly();
+  EXPECT_EQ(Short.next(certifyCounterexample(Module, *Query, Model)).Next,
+            RefinementDecision::Action::Refine);
+}
+
+/// loop(n) = (pick(n) ? true : !loop(n)), with pick a choice when Choice.
+LogicFunctionDecl selfDependent(const LogicFunctionDecl *Pick) {
+  LogicFunctionDecl F;
+  F.Identity = Pick ? "loop_pick_id" : "loop_id";
+  F.DisplayName = "loop";
+  F.Parameters.push_back({"n", math()});
+  F.ResultSort = LogicSort::boolSort();
+  F.DefinitionFuel = 1;
+  auto at = [](const LogicFunctionDecl &G) {
+    std::vector<Expr> Args;
+    Args.push_back(variable("n", math()));
+    return call(G, std::move(Args));
+  };
+  Expr Again = negation(at(F));
+  F.StepDefinition =
+      Pick ? node(LogicExpr::Ite, LogicSort::boolSort(), at(*Pick),
+                  boolLiteral(true), std::move(Again))
+           : std::move(Again);
+  F.DefinitionLevels.push_back(clone(*F.StepDefinition));
+  return F;
+}
+
+TEST(CertifyTest, UndecidedApplicationsAreKeptByTheModule) {
+  ObligationModule Module = withFunction(selfDependent(nullptr));
+  const LogicFunctionDecl &F = Module.LogicFunctions.at("loop_id");
+  TableModel Model;
+  Model.Constants["x"] = integerValue(1);
+  Model.DefaultApplication = LogicValue::boolean(true);
+  std::vector<Expr> Args;
+  Args.push_back(variable("x", math()));
+  Expr Query = call(F, std::move(Args));
+  CertifyResult First = certifyCounterexample(Module, *Query, Model);
+  ASSERT_EQ(First.Outcome, CertifyOutcome::Undetermined);
+  EXPECT_TRUE(First.DefinitionTooDeep);
+  // Deciding loop(1) read nothing from the model, so the failure is a fact
+  // about the definition: the module keeps it, shared with its copies, and a
+  // later check fails the same way without evaluating it.
+  ASSERT_TRUE(Module.Undecided);
+  ASSERT_EQ(Module.Undecided->Reasons.size(), 1u);
+  EXPECT_EQ(Module.Undecided->Reasons.begin()->second, First.Detail);
+  ObligationModule Copy = copyObligationModule(Module);
+  EXPECT_EQ(Copy.Undecided, Module.Undecided);
+  CertifyResult Again = certifyCounterexample(Copy, *Query, Model);
+  EXPECT_EQ(Again.Outcome, CertifyOutcome::Undetermined);
+  EXPECT_TRUE(Again.DefinitionTooDeep);
+  EXPECT_EQ(Again.Detail, First.Detail);
+
+  // A failure that read the model holds for that model only.
+  LogicFunctionDecl Pick;
+  Pick.Identity = "pick_id";
+  Pick.DisplayName = "pick";
+  Pick.Parameters.push_back({"n", math()});
+  Pick.ResultSort = LogicSort::boolSort();
+  Pick.Choice = true;
+  LogicFunctionDecl Loop = selfDependent(&Pick);
+  ObligationModule Chosen = withFunction(std::move(Pick));
+  Chosen.LogicFunctions.emplace("loop_pick_id", std::move(Loop));
+  std::vector<Expr> PickArgs;
+  PickArgs.push_back(variable("x", math()));
+  Expr ByChoice =
+      call(Chosen.LogicFunctions.at("loop_pick_id"), std::move(PickArgs));
+  Model.DefaultApplication = LogicValue::boolean(false);
+  CertifyResult Open = certifyCounterexample(Chosen, *ByChoice, Model);
+  EXPECT_EQ(Open.Outcome, CertifyOutcome::Undetermined);
+  EXPECT_TRUE(Chosen.Undecided->Reasons.empty());
+  // Another choice decides it.
+  Model.DefaultApplication = LogicValue::boolean(true);
+  EXPECT_EQ(certifyCounterexample(Chosen, *ByChoice, Model).Outcome,
             CertifyOutcome::Certified);
 }
 
