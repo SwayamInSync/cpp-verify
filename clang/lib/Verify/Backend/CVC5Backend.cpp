@@ -2716,22 +2716,22 @@ CVC5VerifyBackend::verifyQuery(const ObligationModule &Module,
   // counterexamples: failing to find one settles nothing.
   std::vector<const LogicExpr *> Narrowed;
   RefinementDecision Unchecked;
+  std::vector<VerifyModelValue> UncheckedValues;
+  std::string UncheckedApplication;
+  std::string UncheckedReason;
   auto unchecked = [&] {
     Result.Reason = Unchecked.Reason;
     Result.Message = Unchecked.Message;
+    Result.Unchecked = UncheckedValues;
+    Result.UncheckedApplication = UncheckedApplication;
+    Result.UncheckedReason = UncheckedReason;
     return Result;
   };
   const auto Start = std::chrono::steady_clock::now();
   std::optional<std::chrono::steady_clock::time_point> QueryDeadline;
   if (TimeoutMs != 0)
     QueryDeadline = Start + std::chrono::milliseconds(TimeoutMs);
-  {
-    // Applications at closed arguments are computed, not searched for.
-    CertifyLimits Limits;
-    Limits.Deadline = QueryDeadline;
-    Instances = closedApplicationInstances(Module, *Query, Limits);
-  }
-  // One model's check may not spend the whole query.
+  // One check may not spend the whole query.
   auto checkLimits = [&] {
     CertifyLimits Limits;
     Limits.Deadline = QueryDeadline;
@@ -2746,6 +2746,8 @@ CVC5VerifyBackend::verifyQuery(const ObligationModule &Module,
     }
     return Limits;
   };
+  // Applications at closed arguments are computed, not searched for.
+  Instances = closedApplicationInstances(Module, *Query, checkLimits());
   // cvc5 has only instances to refine with; they get a share of the budget.
   const auto Deadline =
       Start + std::chrono::milliseconds(
@@ -2859,8 +2861,15 @@ CVC5VerifyBackend::verifyQuery(const ObligationModule &Module,
               ? Certified.DeepApplication
               : Certified.WideQuantifier;
       if (Narrow && llvm::find(Narrowed, Narrow) == Narrowed.end()) {
-        if (Narrowed.empty())
+        if (Narrowed.empty()) {
           Unchecked = Refinement.next(Certified);
+          if (Narrow == Certified.DeepApplication) {
+            UncheckedValues = candidateValues(Module, *Query, Candidate);
+            UncheckedApplication = shownApplication(
+                Module, *Certified.DeepApplication, Candidate, checkLimits());
+            UncheckedReason = Certified.Detail;
+          }
+        }
         Narrowed.push_back(Narrow);
         continue;
       }
@@ -2938,7 +2947,10 @@ VerifyResult CVC5VerifyBackend::verifyModule(const ObligationModule &Module) {
   for (VerifyResult &Result : Results) {
     if (Result.Status == VerifyStatus::Failed && !FirstFailure)
       FirstFailure = std::move(Result);
-    else if (Result.Status == VerifyStatus::Unresolved && !FirstUnresolved)
+    else if (Result.Status == VerifyStatus::Unresolved &&
+             (!FirstUnresolved ||
+              (FirstUnresolved->Reason != VerifyReason::SpecFuel &&
+               Result.Reason == VerifyReason::SpecFuel)))
       FirstUnresolved = std::move(Result);
     else if (Result.Status != VerifyStatus::Verified &&
              Result.Status != VerifyStatus::Failed &&
@@ -2954,32 +2966,6 @@ VerifyResult CVC5VerifyBackend::verifyModule(const ObligationModule &Module) {
   if (FirstFailure)
     return std::move(*FirstFailure);
   if (FirstUnresolved) {
-    // No finite unfolding settles the goal: try strong induction on a
-    // variable that the refuted applications grow with.
-    if (FirstUnresolved->Reason == VerifyReason::SpecFuel) {
-      constexpr unsigned MaxInductionVariables = 2;
-      unsigned Attempts = 0;
-      std::vector<std::string> Tried;
-      for (const auto &[Variable, Sort] : inductionVariables(Module)) {
-        if (Attempts++ == MaxInductionVariables)
-          break;
-        auto Inductive = inductionModule(Module, Variable, Sort);
-        if (!Inductive) {
-          llvm::consumeError(Inductive.takeError());
-          continue;
-        }
-        Tried.push_back(Variable);
-        VerifyResult Proof =
-            verifyQuery(*Inductive, Inductive->CounterexampleQuery.get(),
-                        inductionBudgetMs(moduleTimeoutMs(
-                            Module, TimeoutMs, CollectionTimeoutMs)));
-        if (Proof.Status == VerifyStatus::Verified) {
-          Proof.BackendName = "cvc5";
-          return Proof;
-        }
-      }
-      FirstUnresolved->Message += inductionNote(Module, Tried);
-    }
     return std::move(*FirstUnresolved);
   }
   VerifyResult Result;
