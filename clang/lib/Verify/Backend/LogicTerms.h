@@ -20,6 +20,10 @@ std::unique_ptr<LogicExpr>
 logicCompleteGoal(const std::vector<Obligation> &Obligations);
 /// Every variable and binder name in \p Expr.
 void logicNames(const LogicExpr *Expr, std::set<std::string> &Names);
+/// Appends to \p Out, once each and in order of appearance, the variables
+/// of \p Expr outside \p Bound and its own binders, with their sorts.
+void logicFreeVariables(const LogicExpr *Expr, std::set<std::string> &Bound,
+                        std::vector<std::pair<std::string, LogicSort>> &Out);
 
 } // namespace verify
 } // namespace clang
