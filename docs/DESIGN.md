@@ -503,6 +503,70 @@ spec bool reach(int a, int b)
   derivation shows it`, which only induction shows; a postcondition
   `!result || Q` or a lemma proved by induction supplies it.
 
+### Automatic induction and counterexamples too large to compute
+
+When no finite unfolding settles a claim about a recursive spec, the verifier
+tries well-founded inductions over it, as Dafny's automatic induction and
+Lean's and Isabelle's functional induction do: the claim at every value
+smaller in a measure, everything else fixed. The measure is a recursive
+spec's own `decreases` at the application the claim makes, and the
+hypothesis is also given at the values the spec's recursion reaches, through
+the other members of its recursion group and under quantifiers; strong
+induction on an integer variable is tried too. Smaller means smaller by the
+decrease relation of termination checks, which has no infinite descending
+chain, so no induction proves a false claim; the hypothesis is the
+function's own claim, without the facts the verifier added. A verified
+result names the induction:
+
+```cpp
+spec int fibo(int n)
+  decreases(n)
+  post(result >= 0)
+{
+    if (n <= 0) return 0;
+    if (n == 1) return 1;
+    return fibo(n - 2) + fibo(n - 1);
+}
+
+proof void grows(int n)   // Verified ... [by induction following fibo]
+  pre(n >= 3)
+  post(fibo(n) >= n - 1)
+{
+}
+```
+
+A claim whose step needs a stronger statement (an accumulator, say) stays
+`spec.fuel`; the message names the inductions tried and, for a proof
+function, shows a body to start a proof by induction from.
+
+A counterexample whose spec values cannot be computed (`pow2(1000000000)`
+has a billion bits) is confirmed by a proof at its input once every function
+is verified: with its values fixed, the facts its query states assumed, and
+the postconditions of the established proof functions instantiated where
+they speak of the same applications, the solver proves that the claim fails
+there. The failure rests on those facts and contracts:
+
+<!-- cppverify-example: fails small_power -->
+
+```cpp
+spec int pow2(int n)
+  decreases(n)
+  post(result >= n + 1)
+{
+    return n <= 0 ? 1 : 2 * pow2(n - 1);
+}
+
+proof void small_power(int n)   // fails at n >= 1000000000, confirmed by proof
+  pre(n >= 1000000000)
+  post(pow2(n) < 1000)
+{
+}
+```
+
+Where no proved fact settles it, the claim may as well be true for want of a
+lemma: it stays `spec.fuel`, and the message shows the proposed input and
+says both.
+
 ### `recommends` — soft preconditions for spec functions
 
 ```cpp
@@ -1210,8 +1274,8 @@ int safe_fib(int n) pre(...) post(result == fibo(n)) {
   frames.
 - Anything else is `Unresolved` with a reason. `spec.fuel`: every
   counterexample found relies on a recursive spec beyond what refinement could
-  unfold, and strong induction on the query's integer variables did not
-  prove it; `spec.hidden`: it relies on a hidden spec's value;
+  unfold, the automatic inductions did not prove it, and no counterexample
+  could be confirmed by a proof from proved facts; `spec.hidden`: it relies on a hidden spec's value;
   `counterexample.unchecked`: the counterexample could not be checked within
   the certifier's budgets, among them the time one check may take
   (`--certify-timeout`, by default half the query timeout); `backend.invalid-result`: the solver's answer
