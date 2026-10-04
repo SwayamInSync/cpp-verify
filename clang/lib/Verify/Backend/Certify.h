@@ -232,6 +232,19 @@ std::optional<LogicValue> evaluateTerm(const ObligationModule &Module,
                                        const CertifyLimits &Limits = {},
                                        std::string *Failure = nullptr);
 
+/// The source variables of \p Query with the values \p Model gives them, as
+/// a counterexample shows them; no value where the model gives none.
+std::vector<VerifyModelValue> candidateValues(const ObligationModule &Module,
+                                              const LogicExpr &Query,
+                                              CandidateModel &Model);
+
+/// \p Application with its arguments' values under \p Model, as
+/// "fibo(1000000000)".
+std::string shownApplication(const ObligationModule &Module,
+                             const LogicExpr &Application,
+                             CandidateModel &Model,
+                             const CertifyLimits &Limits = {});
+
 /// The functions that have a definition and do not reach themselves through
 /// it. An adapter can give a solver such a definition whole.
 std::set<std::string> nonRecursiveDefinitions(const ObligationModule &Module);
@@ -291,6 +304,7 @@ class DefinitionRefinement {
   /// Rounds whose instances were all of hidden functions: pure search.
   unsigned HiddenRounds = 0;
   const unsigned MaxHiddenRounds;
+  size_t RoundLimit = MaxRoundInstances;
 
 public:
   static constexpr unsigned MaxRounds = 256;
@@ -298,12 +312,18 @@ public:
   /// A round needing more instances than this is chasing an unbounded
   /// argument, as an induction goal makes a solver do.
   static constexpr size_t MaxRoundInstances = 2000;
+  /// The same for a pass that only seeks a proof within a slice: the
+  /// instances such a proof needs are few (at most 7 in the induction tests),
+  /// and a round of 1799 kept Z3 from noticing its timeout for 6 s.
+  static constexpr size_t MaxProofRoundInstances = 200;
 
   /// \p MaxHiddenRounds bounds the search among hidden functions' values,
   /// which can find a counterexample but never a proof.
   explicit DefinitionRefinement(const ObligationModule &Module,
                                 unsigned MaxHiddenRounds = MaxRounds)
       : Module(Module), MaxHiddenRounds(MaxHiddenRounds) {}
+  /// Rounds above MaxProofRoundInstances stop, as for a proof-only pass.
+  void seekProofOnly() { RoundLimit = MaxProofRoundInstances; }
   /// \p BoundedDomain: the disputes cover a domain the solver proved bounded,
   /// so a large round is exhaustive evaluation, not an unbounded chase.
   RefinementDecision next(const CertifyResult &Result,
