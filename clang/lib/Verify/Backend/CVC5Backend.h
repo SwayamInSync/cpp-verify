@@ -45,12 +45,12 @@ class CVC5VerifyBackend : public VerifyBackend {
 public:
   explicit CVC5VerifyBackend(const BackendExecutionOptions &Execution = {});
   llvm::StringRef getName() const override { return "cvc5"; }
-  void
-  setDeadline(std::optional<std::chrono::steady_clock::time_point> D) override {
-    Deadline = D;
-  }
   void cancel() override { Cancelled = true; }
   void resume() override { Cancelled = false; }
+  std::optional<unsigned>
+  queryTimeoutMs(const ObligationModule &Module) const override {
+    return moduleTimeoutMs(Module, TimeoutMs, CollectionTimeoutMs);
+  }
   BackendCapabilities getCapabilities() const override {
     return {allLogicFeatures(), true};
   }
@@ -59,6 +59,10 @@ public:
 
 protected:
   VerifyResult verifyModule(const ObligationModule &Module) override;
+  void applyDeadline(
+      std::optional<std::chrono::steady_clock::time_point> D) override {
+    Deadline = D;
+  }
 };
 
 } // namespace verify
