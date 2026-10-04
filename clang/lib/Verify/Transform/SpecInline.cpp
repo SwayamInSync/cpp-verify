@@ -2511,7 +2511,11 @@ static void addPostApplicationFacts(PassiveProgram &P, const VFunction &Fn,
       return;
     const VFunction &Callee = *It->second;
     std::unique_ptr<VExpr> Fact;
+    // Facts below the measure belong to the cluster's joint proof; the
+    // others hold at every value.
+    bool Theorem = true;
     if (Fn.Cluster.count(Callee.Identity)) {
+      Theorem = false;
       // Another spec of its cluster, below the measure.
       std::vector<std::unique_ptr<VExpr>> Measure;
       std::map<std::string, std::unique_ptr<VExpr>> Self;
@@ -2546,6 +2550,7 @@ static void addPostApplicationFacts(PassiveProgram &P, const VFunction &Fn,
           std::move(Fact), Call.Loc, (*Q)->BinderType);
     auto PS = std::make_unique<PassiveStmt>();
     PS->K = PassiveStmt::Assume;
+    PS->Theorem = Theorem;
     PS->Cond = cloneAtEntryState(Fact.get());
     Facts.push_back(std::move(PS));
   };
