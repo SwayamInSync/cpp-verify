@@ -1,11 +1,12 @@
 //===--- ObligationSimplify.cpp
 //--------------------------------------------===//
 #include "ObligationSimplify.h"
+#include "LogicTerms.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/CheckedArithmetic.h"
-#include <map>
 #include <algorithm>
+#include <map>
 #include <optional>
 #include <set>
 
@@ -363,28 +364,6 @@ void collectNames(const LogicExpr *Expr, std::set<std::string> &Names) {
     collectNames(Child.get(), Names);
 }
 
-void collectArgumentVariables(
-    const LogicExpr *Expr, bool InArgument, std::set<std::string> &Bound,
-    std::set<std::string> &Seen,
-    std::vector<std::pair<std::string, LogicSort>> &Out) {
-  if (!Expr)
-    return;
-  if (Expr->K == LogicExpr::Var && InArgument && !Bound.count(Expr->Name) &&
-      (Expr->Sort.Kind == LogicSortKind::MathematicalInteger ||
-       Expr->Sort.Kind == LogicSortKind::BitVector) &&
-      Seen.insert(Expr->Name).second)
-    Out.emplace_back(Expr->Name, Expr->Sort);
-  const bool Quantifier =
-      Expr->K == LogicExpr::Forall || Expr->K == LogicExpr::Exists;
-  const bool Inserted = Quantifier && Bound.insert(Expr->Binder).second;
-  for (const auto &Child : Expr->Children)
-    collectArgumentVariables(Child.get(),
-                             InArgument || Expr->K == LogicExpr::SpecCall,
-                             Bound, Seen, Out);
-  if (Inserted)
-    Bound.erase(Expr->Binder);
-}
-
 std::unique_ptr<LogicExpr> substituteVariable(const LogicExpr *Expr,
                                               const std::string &Name,
                                               const LogicExpr &Value) {
@@ -441,267 +420,7 @@ bool mentionsAny(const LogicExpr *Expr, const std::set<std::string> &Names) {
   return false;
 }
 
-/// The definition x == t that \p Expr states, if x may be replaced by t.
-std::optional<std::pair<std::string, const LogicExpr *>>
-definitionIn(const LogicExpr *Expr, const std::string &Keep,
-             const std::set<std::string> &Binders) {
-  if (!Expr || Expr->K != LogicExpr::Eq || Expr->Children.size() != 2)
-    return std::nullopt;
-  for (unsigned Side : {0U, 1U}) {
-    const LogicExpr *Var = Expr->Children[Side].get();
-    const LogicExpr *Value = Expr->Children[1 - Side].get();
-    if (Var->K != LogicExpr::Var || Var->Name == Keep ||
-        Binders.count(Var->Name) ||
-        (Var->Sort.Kind != LogicSortKind::MathematicalInteger &&
-         Var->Sort.Kind != LogicSortKind::BitVector &&
-         Var->Sort.Kind != LogicSortKind::Bool &&
-         Var->Sort.Kind != LogicSortKind::Pointer))
-      continue;
-    std::set<std::string> Names = Binders;
-    Names.insert(Var->Name);
-    if (!mentionsAny(Value, Names))
-      return std::make_pair(Var->Name, Value);
-  }
-  return std::nullopt;
-}
-
-/// Substitutes the definitions assumed by implications where \p Expr is
-/// antitone: (x == t && A) -> B becomes (A -> B)[x := t], which is no
-/// weaker there, so the result has a model whenever \p Expr has.
-std::unique_ptr<LogicExpr>
-eliminateDefinitions(const LogicExpr *Expr, bool Antitone,
-                     const std::string &Keep,
-                     const std::set<std::string> &Binders, unsigned &Budget) {
-  if (!Expr)
-    return nullptr;
-  if (Antitone && Expr->K == LogicExpr::Or && Budget != 0) {
-    for (unsigned I = 0; I != Expr->Children.size(); ++I) {
-      const LogicExpr *Child = Expr->Children[I].get();
-      if (Child->K != LogicExpr::Not || Child->Children.size() != 1)
-        continue;
-      const LogicExpr *Assumed = Child->Children.front().get();
-      std::vector<const LogicExpr *> Conjuncts;
-      std::vector<const LogicExpr *> Work{Assumed};
-      while (!Work.empty()) {
-        const LogicExpr *Next = Work.back();
-        Work.pop_back();
-        if (Next->K == LogicExpr::And)
-          for (auto It = Next->Children.rbegin(); It != Next->Children.rend();
-               ++It)
-            Work.push_back(It->get());
-        else
-          Conjuncts.push_back(Next);
-      }
-      for (unsigned J = 0; J != Conjuncts.size(); ++J) {
-        auto Definition = definitionIn(Conjuncts[J], Keep, Binders);
-        if (!Definition)
-          continue;
-        --Budget;
-        auto Rest = logicNode(LogicExpr::And, LogicSort::boolSort(), *Assumed);
-        for (unsigned K = 0; K != Conjuncts.size(); ++K)
-          if (K != J)
-            Rest->Children.push_back(cloneLogicExpr(Conjuncts[K]));
-        auto TrueNode =
-            logicNode(LogicExpr::True, LogicSort::boolSort(), *Assumed);
-        auto Rewritten = logicNode(LogicExpr::Or, LogicSort::boolSort(), *Expr);
-        for (unsigned K = 0; K != Expr->Children.size(); ++K) {
-          if (K != I) {
-            Rewritten->Children.push_back(
-                cloneLogicExpr(Expr->Children[K].get()));
-            continue;
-          }
-          Rewritten->Children.push_back(negate(
-              Rest->Children.empty() ? std::move(TrueNode) : std::move(Rest)));
-        }
-        auto Substituted = substituteVariable(
-            Rewritten.get(), Definition->first, *Definition->second);
-        return eliminateDefinitions(Substituted.get(), Antitone, Keep, Binders,
-                                    Budget);
-      }
-    }
-  }
-  auto Copy = std::make_unique<LogicExpr>(Expr->K);
-  Copy->Sort = Expr->Sort;
-  Copy->Loc = Expr->Loc;
-  Copy->EndLoc = Expr->EndLoc;
-  Copy->Source = Expr->Source;
-  Copy->IntVal = Expr->IntVal;
-  Copy->BoolVal = Expr->BoolVal;
-  Copy->Name = Expr->Name;
-  Copy->Binder = Expr->Binder;
-  Copy->OverflowOp = Expr->OverflowOp;
-  Copy->CollectionOp = Expr->CollectionOp;
-  Copy->SpecCallee = Expr->SpecCallee;
-  const bool Monotone = Expr->K == LogicExpr::And || Expr->K == LogicExpr::Or ||
-                        Expr->K == LogicExpr::Not ||
-                        Expr->K == LogicExpr::Forall ||
-                        Expr->K == LogicExpr::Exists;
-  for (unsigned I = 0; I != Expr->Children.size(); ++I) {
-    const LogicExpr *Child = Expr->Children[I].get();
-    const bool Body =
-        (Expr->K != LogicExpr::Forall && Expr->K != LogicExpr::Exists) ||
-        I + 1 == Expr->Children.size();
-    if (!Monotone || !Body) {
-      Copy->Children.push_back(cloneLogicExpr(Child));
-      continue;
-    }
-    Copy->Children.push_back(eliminateDefinitions(
-        Child, Expr->K == LogicExpr::Not ? !Antitone : Antitone, Keep, Binders,
-        Budget));
-  }
-  return Copy;
-}
-
 } // namespace
-
-std::vector<std::pair<std::string, LogicSort>>
-inductionVariables(const ObligationModule &Module, const Obligation *Item) {
-  std::vector<std::pair<std::string, LogicSort>> Out;
-  std::set<std::string> Bound;
-  std::set<std::string> Seen;
-  collectArgumentVariables(Item ? Item->CounterexampleQuery.get()
-                                : Module.CounterexampleQuery.get(),
-                           false, Bound, Seen, Out);
-  return Out;
-}
-
-std::string inductionNote(const ObligationModule &Module,
-                          const std::vector<std::string> &Variables) {
-  if (Variables.empty())
-    return {};
-  std::string Names;
-  for (const std::string &Variable : Variables) {
-    auto It = Module.DiagnosticVariables.find(Variable);
-    Names += (Names.empty() ? "" : ", ") +
-             (It != Module.DiagnosticVariables.end() ? It->second.DisplayName
-                                                     : Variable);
-  }
-  return "; strong induction on " + Names +
-         ", assuming the goal at every smaller nonnegative value with all else "
-         "fixed, did not settle it";
-}
-
-llvm::Expected<ObligationModule> inductionModule(const ObligationModule &Module,
-                                                 const std::string &Variable,
-                                                 const LogicSort &Sort,
-                                                 const Obligation *Item) {
-  // An unwinding obligation is read with bounded semantics on its own.
-  const bool Unwinds =
-      Item ? Item->Kind == ObligationKind::Unwinding
-           : std::any_of(Module.Obligations.begin(), Module.Obligations.end(),
-                         [](const Obligation &Each) {
-                           return Each.Kind == ObligationKind::Unwinding;
-                         });
-  const LogicExpr *Original =
-      Item ? Item->CounterexampleQuery.get() : Module.CounterexampleQuery.get();
-  if (!Original || Module.Obligations.empty() || Unwinds ||
-      (Sort.Kind != LogicSortKind::MathematicalInteger &&
-       Sort.Kind != LogicSortKind::BitVector))
-    return llvm::createStringError(llvm::inconvertibleErrorCode(),
-                                   "no induction over this module");
-  std::set<std::string> Binders;
-  collectBinders(Original, Binders);
-  // A query with the assumed definitions substituted has a model whenever
-  // the original has, and only then is the hypothesis about the variable.
-  unsigned Budget = 256;
-  auto Eliminated =
-      eliminateDefinitions(Original, false, Variable, Binders, Budget);
-  if (countNodes(Eliminated.get()) > 4 * countNodes(Original) + 10000)
-    Eliminated = cloneLogicExpr(Original);
-  const LogicExpr &Query = *Eliminated;
-  std::set<std::string> Names;
-  collectNames(&Query, Names);
-  for (const auto &[Identity, Function] : Module.LogicFunctions) {
-    (void)Identity;
-    collectNames(Function.StepDefinition.get(), Names);
-    for (const auto &Definition : Function.DefinitionLevels)
-      collectNames(Definition.get(), Names);
-  }
-  std::string Binder = "__induction_" + Variable;
-  while (Names.count(Binder))
-    Binder += "_";
-
-  const LogicSort MathSort = LogicSort::mathematicalInteger();
-  auto Smaller = logicNode(LogicExpr::Var, MathSort, Query);
-  Smaller->Name = Binder;
-  auto Current = logicNode(LogicExpr::Var, Sort, Query);
-  Current->Name = Variable;
-  std::unique_ptr<LogicExpr> Hi;
-  if (Sort.Kind == LogicSortKind::BitVector) {
-    auto Converted = logicNode(LogicExpr::IntToBv, Sort, Query);
-    Converted->Children.push_back(std::move(Smaller));
-    Smaller = std::move(Converted);
-    Hi = logicNode(LogicExpr::BvToInt,
-                   LogicSort::mathematicalInteger(Sort.BitWidth,
-                                                  Sort.Signedness ==
-                                                      LogicSignedness::Signed),
-                   Query);
-    Hi->Children.push_back(std::move(Current));
-  } else {
-    Hi = std::move(Current);
-  }
-  auto Lo = logicNode(LogicExpr::IntLit, MathSort, Query);
-  Lo->IntVal = "0";
-  auto Hypothesis = logicNode(LogicExpr::Forall, LogicSort::boolSort(), Query);
-  Hypothesis->Binder = Binder;
-  Hypothesis->Children.push_back(std::move(Lo));
-  Hypothesis->Children.push_back(std::move(Hi));
-  Hypothesis->Children.push_back(
-      negate(substituteVariable(&Query, Variable, *Smaller)));
-  auto Least = logicNode(LogicExpr::And, LogicSort::boolSort(), Query);
-  Least->Children.push_back(std::move(Hypothesis));
-  Least->Children.push_back(cloneLogicExpr(&Query));
-
-  ObligationModule Result;
-  Result.FunctionName = Module.FunctionName;
-  Result.FunctionIdentity = Module.FunctionIdentity;
-  Result.BMCTransform = Module.BMCTransform;
-  Result.DiagnosticVariables = Module.DiagnosticVariables;
-  Result.ResultVarName = Module.ResultVarName;
-  Result.HeapPrefix = Module.HeapPrefix;
-  auto copy = [](const LogicFunctionDecl &Function) {
-    LogicFunctionDecl Copy;
-    Copy.Identity = Function.Identity;
-    Copy.DisplayName = Function.DisplayName;
-    Copy.Parameters = Function.Parameters;
-    Copy.ResultSort = Function.ResultSort;
-    Copy.DefinitionFuel = Function.DefinitionFuel;
-    Copy.Choice = Function.Choice;
-    Copy.StepDefinition = cloneLogicExpr(Function.StepDefinition.get());
-    for (const auto &Definition : Function.DefinitionLevels)
-      Copy.DefinitionLevels.push_back(cloneLogicExpr(Definition.get()));
-    Copy.Unfolding = cloneLogicExpr(Function.Unfolding.get());
-    for (const auto &Post : Function.Postconditions)
-      Copy.Postconditions.push_back(cloneLogicExpr(Post.get()));
-    return Copy;
-  };
-  for (const auto &[Identity, Function] : Module.LogicFunctions)
-    Result.LogicFunctions.emplace(Identity, copy(Function));
-  for (const auto &[Identity, Function] : Module.EvidenceFunctions)
-    Result.EvidenceFunctions.emplace(Identity, copy(Function));
-  Result.AssumedPosts = Module.AssumedPosts;
-  Result.AssumedUnfoldings = Module.AssumedUnfoldings;
-  Result.InductivePosts = Module.InductivePosts;
-  Result.Given = Module.Given;
-  const Obligation &First = Item ? *Item : Module.Obligations.front();
-  Obligation Inductive;
-  Inductive.Id = First.Id;
-  Inductive.StableId = First.StableId;
-  Inductive.Kind = First.Kind;
-  Inductive.Loc = First.Loc;
-  Inductive.EndLoc = First.EndLoc;
-  Inductive.Source = First.Source;
-  Inductive.Goal = negate(std::move(Least));
-  Inductive.CounterexampleQuery = negate(cloneLogicExpr(Inductive.Goal.get()));
-  Result.CorrectnessGoal = cloneLogicExpr(Inductive.Goal.get());
-  Result.CounterexampleQuery = negate(cloneLogicExpr(Inductive.Goal.get()));
-  Result.Obligations.push_back(std::move(Inductive));
-  auto Features = validateObligationModule(Result);
-  if (!Features)
-    return Features.takeError();
-  Result.RequiredFeatures = *Features;
-  return std::move(Result);
-}
 
 namespace {
 
@@ -1246,6 +965,11 @@ simplifyObligationModule(ObligationModule Module,
     Item.Goal = simplifyExpr(std::move(Item.Goal), Stats);
     Item.CounterexampleQuery = negate(cloneLogicExpr(Item.Goal.get()));
   }
+  // The copies of assumptions stay equal to the assumptions in the goals.
+  ObligationSimplificationStats Uncounted;
+  for (auto *Copies : {&Module.Theorems, &Module.Preconditions})
+    for (auto &Copy : *Copies)
+      Copy = simplifyExpr(std::move(Copy), Uncounted);
   simplifyFunctions(Module, Stats);
   Module.CorrectnessGoal = buildCompleteGoal(Module.Obligations);
   Module.CounterexampleQuery =
@@ -1267,6 +991,27 @@ simplifyObligationModule(ObligationModule Module,
   if (OutputStats)
     *OutputStats = Stats;
   return std::move(Module);
+}
+
+uint64_t logicNodeCount(const LogicExpr *Expr) { return countNodes(Expr); }
+
+bool logicEqual(const LogicExpr *Left, const LogicExpr *Right) {
+  return equalLogicExpr(Left, Right);
+}
+
+std::string logicKey(const LogicExpr *Expr) { return termKey(Expr); }
+
+std::unique_ptr<LogicExpr> logicNot(std::unique_ptr<LogicExpr> Expr) {
+  return negate(std::move(Expr));
+}
+
+std::unique_ptr<LogicExpr>
+logicCompleteGoal(const std::vector<Obligation> &Obligations) {
+  return buildCompleteGoal(Obligations);
+}
+
+void logicNames(const LogicExpr *Expr, std::set<std::string> &Names) {
+  collectNames(Expr, Names);
 }
 
 } // namespace verify
