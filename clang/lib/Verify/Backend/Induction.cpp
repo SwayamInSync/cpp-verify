@@ -138,26 +138,6 @@ std::set<std::string> freeVariables(const LogicExpr *Expr) {
   return Out;
 }
 
-/// The free variables of \p Expr with their sorts, in order of appearance.
-void freeVariableSorts(const LogicExpr *Expr, std::set<std::string> &Bound,
-                       std::vector<std::pair<std::string, LogicSort>> &Out) {
-  if (!Expr)
-    return;
-  if (Expr->K == LogicExpr::Var && !Bound.count(Expr->Name) &&
-      llvm::none_of(Out,
-                    [&](const auto &Seen) { return Seen.first == Expr->Name; }))
-    Out.emplace_back(Expr->Name, Expr->Sort);
-  const bool Quantifier =
-      Expr->K == LogicExpr::Forall || Expr->K == LogicExpr::Exists;
-  for (size_t I = 0; I != Expr->Children.size(); ++I) {
-    const bool Body = Quantifier && I + 1 == Expr->Children.size();
-    const bool Inserted = Body && Bound.insert(Expr->Binder).second;
-    freeVariableSorts(Expr->Children[I].get(), Bound, Out);
-    if (Inserted)
-      Bound.erase(Expr->Binder);
-  }
-}
-
 /// Names no term of the module uses.
 class FreshNames {
   std::set<std::string> Used;
@@ -581,7 +561,7 @@ public:
       }
       std::vector<std::pair<std::string, LogicSort>> Occurrences;
       std::set<std::string> None;
-      freeVariableSorts(E->Children.back().get(), None, Occurrences);
+      logicFreeVariables(E->Children.back().get(), None, Occurrences);
       auto Renamed = node(LogicExpr::Var, LogicSort::mathematicalInteger(), E);
       Renamed->Name = Binder->Name;
       for (const auto &[Name, Sort] : Occurrences)
@@ -776,6 +756,7 @@ ObligationModule copyObligationModule(const ObligationModule &Module) {
   Copy.InductivePosts = Module.InductivePosts;
   Copy.Given = Module.Given;
   Copy.Undecided = Module.Undecided;
+  Copy.Contract = Module.Contract;
   for (const auto &Theorem : Module.Theorems)
     Copy.Theorems.push_back(cloneLogicExpr(Theorem.get()));
   for (const auto &Precondition : Module.Preconditions)
@@ -807,7 +788,7 @@ std::vector<InductionScheme> inductionSchemes(const ObligationModule &Module) {
       continue;
     std::vector<std::pair<std::string, LogicSort>> Free;
     std::set<std::string> Outside = Binders;
-    freeVariableSorts(Application, Outside, Free);
+    logicFreeVariables(Application, Outside, Free);
     std::set<std::string> Variables;
     for (const auto &[Name, Sort] : Free)
       if (Sort.Kind != LogicSortKind::Heap)
