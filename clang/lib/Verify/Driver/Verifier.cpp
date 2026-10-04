@@ -1,11 +1,14 @@
 //===--- Verifier.cpp - CppVerify driver ----------------------------------===//
 #include "Verifier.h"
 #include "../Backend/CVC5Backend.h"
+#include "../Backend/Induction.h"
 #include "../Backend/LeanBackend.h"
+#include "../Backend/LogicTerms.h"
 #include "../Backend/Obligation.h"
 #include "../Backend/ObligationLowering.h"
 #include "../Backend/ObligationSerialization.h"
 #include "../Backend/ObligationSimplify.h"
+#include "../Backend/SpecAxioms.h"
 #include "../Frontend/ASTConverter.h"
 #include "../IR/VStmt.h"
 #include "../Transform/LoopUnroll.h"
@@ -44,6 +47,732 @@ namespace {
 /// How deep the driver unfolds inductive predicates in a function, one
 /// level more at a time, while its verdict waits on them.
 constexpr unsigned MaxUnfoldingDepth = 4;
+
+/// How tightly a C++ operator binds.
+int precedence(LogicExpr::Kind K) {
+  switch (K) {
+  case LogicExpr::Or:
+    return 1;
+  case LogicExpr::And:
+    return 2;
+  case LogicExpr::Eq:
+  case LogicExpr::Ne:
+    return 3;
+  case LogicExpr::Lt:
+  case LogicExpr::Le:
+  case LogicExpr::Gt:
+  case LogicExpr::Ge:
+    return 4;
+  case LogicExpr::Add:
+  case LogicExpr::Sub:
+    return 5;
+  case LogicExpr::Mul:
+  case LogicExpr::Div:
+  case LogicExpr::Rem:
+    return 6;
+  case LogicExpr::Not:
+  case LogicExpr::Neg:
+    return 7;
+  default:
+    return 9;
+  }
+}
+
+/// \p Expr spelled as C++ with source names, for messages, parenthesized
+/// where an operator around it binds at \p Context (\p Right for its right
+/// operand); empty where a term has no spelling here.
+std::string sourceText(const LogicExpr *Expr, const ObligationModule &Module,
+                       int Context = 0, bool Right = false) {
+  if (!Expr)
+    return {};
+  const int Own = precedence(Expr->K);
+  auto wrap = [&](std::string Text) {
+    if (Text.empty())
+      return Text;
+    const bool Associative =
+        Expr->K == LogicExpr::Add || Expr->K == LogicExpr::Mul ||
+        Expr->K == LogicExpr::And || Expr->K == LogicExpr::Or;
+    if (Own < Context || (Own == Context && Right && !Associative))
+      return "(" + Text + ")";
+    return Text;
+  };
+  auto binary = [&](const char *Op) -> std::string {
+    std::string L = sourceText(Expr->Children[0].get(), Module, Own, false);
+    std::string R = sourceText(Expr->Children[1].get(), Module, Own, true);
+    if (L.empty() || R.empty())
+      return {};
+    return wrap(L + " " + Op + " " + R);
+  };
+  switch (Expr->K) {
+  case LogicExpr::True:
+    return "true";
+  case LogicExpr::False:
+    return "false";
+  case LogicExpr::IntLit:
+    return Expr->IntVal.front() == '-' && Context >= 5
+               ? "(" + Expr->IntVal + ")"
+               : Expr->IntVal;
+  case LogicExpr::BoolLit:
+    return Expr->BoolVal ? "true" : "false";
+  case LogicExpr::Var:
+    if (auto It = Module.DiagnosticVariables.find(Expr->Name);
+        It != Module.DiagnosticVariables.end())
+      return It->second.DisplayName;
+    return Expr->Name;
+  case LogicExpr::BvToInt:
+  case LogicExpr::IntToBv:
+  case LogicExpr::BvResize:
+    return sourceText(Expr->Children[0].get(), Module, Context, Right);
+  case LogicExpr::Not: {
+    const LogicExpr *Inner = Expr->Children[0].get();
+    static const std::map<LogicExpr::Kind, LogicExpr::Kind> Opposite = {
+        {LogicExpr::Lt, LogicExpr::Ge}, {LogicExpr::Le, LogicExpr::Gt},
+        {LogicExpr::Gt, LogicExpr::Le}, {LogicExpr::Ge, LogicExpr::Lt},
+        {LogicExpr::Eq, LogicExpr::Ne}, {LogicExpr::Ne, LogicExpr::Eq}};
+    if (auto It = Opposite.find(Inner->K); It != Opposite.end()) {
+      LogicExpr Flipped(It->second);
+      Flipped.Sort = Inner->Sort;
+      for (const auto &Child : Inner->Children)
+        Flipped.Children.push_back(cloneLogicExpr(Child.get()));
+      return sourceText(&Flipped, Module, Context, Right);
+    }
+    if (Inner->K == LogicExpr::Not)
+      return sourceText(Inner->Children[0].get(), Module, Context, Right);
+    std::string Text = sourceText(Inner, Module, Own);
+    return Text.empty() ? Text : wrap("!" + Text);
+  }
+  case LogicExpr::Neg: {
+    std::string Text = sourceText(Expr->Children[0].get(), Module, Own);
+    return Text.empty() ? Text : wrap("-" + Text);
+  }
+  case LogicExpr::And:
+    return binary("&&");
+  case LogicExpr::Or:
+    return binary("||");
+  case LogicExpr::Eq:
+    return binary("==");
+  case LogicExpr::Ne:
+    return binary("!=");
+  case LogicExpr::Lt:
+    return binary("<");
+  case LogicExpr::Le:
+    return binary("<=");
+  case LogicExpr::Gt:
+    return binary(">");
+  case LogicExpr::Ge:
+    return binary(">=");
+  case LogicExpr::Add:
+    return binary("+");
+  case LogicExpr::Sub:
+    return binary("-");
+  case LogicExpr::Mul:
+    return binary("*");
+  case LogicExpr::Div:
+    return binary("/");
+  case LogicExpr::Rem:
+    return binary("%");
+  case LogicExpr::SpecCall: {
+    std::string Name = Expr->SpecCallee;
+    for (const auto *Functions :
+         {&Module.LogicFunctions, &Module.EvidenceFunctions})
+      if (auto It = Functions->find(Expr->SpecCallee); It != Functions->end())
+        Name = It->second.DisplayName;
+    std::string Text = Name + "(";
+    bool First = true;
+    for (const auto &Argument : Expr->Children) {
+      if (Argument->Sort.Kind == LogicSortKind::Heap)
+        continue;
+      std::string Shown = sourceText(Argument.get(), Module);
+      if (Shown.empty())
+        return {};
+      Text += (First ? "" : ", ") + Shown;
+      First = false;
+    }
+    return Text + ")";
+  }
+  default:
+    return {};
+  }
+}
+
+/// The body that would prove the postcondition of the proof function \p Fn
+/// by the induction \p Scheme: a call of \p Fn at each value the scheme's
+/// recursion reaches, under the condition that reaches it and the function's
+/// precondition there. Empty when some part has no C++ spelling here.
+std::string proofOutline(const ObligationModule &Module,
+                         const InductionScheme &Scheme, const VFunction &Fn) {
+  if (Scheme.Function.empty() || Scheme.Instances.empty())
+    return {};
+  // One branch per condition of the recursion: its calls, each under the
+  // function's precondition at its arguments.
+  struct Branch {
+    std::string Condition;
+    std::vector<std::string> Preconditions;
+    std::vector<std::string> Calls;
+  };
+  std::vector<Branch> Branches;
+  for (const InductionInstance &Instance : Scheme.Instances) {
+    if (!Instance.Binders.empty() ||
+        Instance.Values.size() != Scheme.Variables.size())
+      return {};
+    std::map<std::string, const LogicExpr *> At;
+    for (size_t I = 0; I != Scheme.Variables.size(); ++I)
+      At[Scheme.Variables[I].first] = Instance.Values[I].get();
+    std::vector<std::string> Arguments;
+    for (const auto &[Param, Type] : Fn.Params) {
+      (void)Type;
+      std::string Argument = Param;
+      for (size_t I = 0; I != Scheme.Variables.size(); ++I) {
+        auto It = Module.DiagnosticVariables.find(Scheme.Variables[I].first);
+        if (It != Module.DiagnosticVariables.end() &&
+            It->second.DisplayName == Param)
+          Argument = sourceText(Instance.Values[I].get(), Module);
+      }
+      if (Argument.empty())
+        return {};
+      Arguments.push_back(std::move(Argument));
+    }
+    std::string Call = Fn.Name + "(";
+    for (size_t I = 0; I != Arguments.size(); ++I)
+      Call += (I ? ", " : "") + Arguments[I];
+    Call += ");";
+    std::string Condition;
+    if (Instance.Guard->K != LogicExpr::True) {
+      Condition =
+          sourceText(Instance.Guard.get(), Module, precedence(LogicExpr::And));
+      if (Condition.empty())
+        return {};
+    }
+    auto Same = llvm::find_if(Branches, [&](const Branch &Each) {
+      return Each.Condition == Condition;
+    });
+    if (Same == Branches.end()) {
+      Branches.push_back({Condition, {}, {}});
+      Same = std::prev(Branches.end());
+    }
+    for (const auto &Precondition : Module.Preconditions) {
+      std::string Shown =
+          sourceText(substituteFree(Module, Precondition.get(), At).get(),
+                     Module, precedence(LogicExpr::And));
+      if (Shown.empty())
+        return {};
+      if (llvm::find(Same->Preconditions, Shown) == Same->Preconditions.end())
+        Same->Preconditions.push_back(std::move(Shown));
+    }
+    Same->Calls.push_back(std::move(Call));
+  }
+  std::string Body;
+  for (const Branch &Each : Branches) {
+    std::string Guard = Each.Condition;
+    for (const std::string &Precondition : Each.Preconditions)
+      Guard += (Guard.empty() ? "" : " && ") + Precondition;
+    std::string Block;
+    for (const std::string &Call : Each.Calls)
+      Block += " " + Call;
+    Body += (Body.empty() ? "" : " ") +
+            (Guard.empty() ? "{" + Block + " }"
+                           : "if (" + Guard + ") {" + Block + " }");
+  }
+  if (Fn.Decreases.empty()) {
+    std::string Measure;
+    for (const auto &Component : Scheme.Measure) {
+      std::string Shown = sourceText(Component.get(), Module);
+      if (Shown.empty())
+        return Body;
+      Measure += (Measure.empty() ? "" : ", ") + Shown;
+    }
+    Body += "', with decreases(" + Measure + ")";
+    return "'" + Body;
+  }
+  return "'" + Body + "'";
+}
+
+/// The conjuncts of the counterexample query whose goal is \p Goal: the
+/// goal is !A1 || ... || !An || C, so they are A1, ..., An and !C, each
+/// split at its conjunctions.
+void counterexampleConjuncts(const LogicExpr *Goal,
+                             std::vector<std::unique_ptr<LogicExpr>> &Out) {
+  if (Goal->K == LogicExpr::Or) {
+    for (const auto &Child : Goal->Children)
+      counterexampleConjuncts(Child.get(), Out);
+    return;
+  }
+  std::vector<const LogicExpr *> Work;
+  if (Goal->K == LogicExpr::Not)
+    Work.push_back(Goal->Children[0].get());
+  else if (Goal->K == LogicExpr::False)
+    return;
+  else {
+    Out.push_back(logicNot(cloneLogicExpr(Goal)));
+    return;
+  }
+  while (!Work.empty()) {
+    const LogicExpr *Next = Work.back();
+    Work.pop_back();
+    if (Next->K == LogicExpr::And) {
+      for (const auto &Child : Next->Children)
+        Work.push_back(Child.get());
+      continue;
+    }
+    if (Next->K != LogicExpr::True)
+      Out.push_back(cloneLogicExpr(Next));
+  }
+}
+
+bool mentionsVariable(const LogicExpr *Expr, const std::string &Name) {
+  if (!Expr)
+    return false;
+  if (Expr->K == LogicExpr::Var && Expr->Name == Name)
+    return true;
+  for (const auto &Child : Expr->Children)
+    if (mentionsVariable(Child.get(), Name))
+      return true;
+  return false;
+}
+
+/// Binds the pattern variables of \p Pattern so that it equals \p Term. A
+/// machine variable seen as an integer, bv_to_int(p), matches an integer
+/// term t with p := int_to_bv(t): the instance then speaks of t wherever t
+/// fits p's sort, and is a true instance elsewhere too.
+bool matchTerm(const LogicExpr *Pattern, const LogicExpr *Term,
+               const std::set<std::string> &Variables,
+               std::map<std::string, const LogicExpr *> &Bound,
+               std::vector<std::unique_ptr<LogicExpr>> &Owned) {
+  if (Pattern->K == LogicExpr::BvToInt && Term->K != LogicExpr::BvToInt &&
+      Term->Sort.Kind == LogicSortKind::MathematicalInteger &&
+      Pattern->Children[0]->K == LogicExpr::Var &&
+      Variables.count(Pattern->Children[0]->Name)) {
+    const LogicExpr &Machine = *Pattern->Children[0];
+    auto Value = std::make_unique<LogicExpr>(LogicExpr::IntToBv);
+    Value->Sort = Machine.Sort;
+    Value->Children.push_back(cloneLogicExpr(Term));
+    auto [It, Inserted] = Bound.emplace(Machine.Name, Value.get());
+    if (!Inserted)
+      return logicEqual(It->second, Value.get());
+    Owned.push_back(std::move(Value));
+    return true;
+  }
+  if (Pattern->K == LogicExpr::Var && Variables.count(Pattern->Name)) {
+    if (Pattern->Sort.Kind != Term->Sort.Kind ||
+        Pattern->Sort.BitWidth != Term->Sort.BitWidth)
+      return false;
+    auto [It, Inserted] = Bound.emplace(Pattern->Name, Term);
+    return Inserted || logicEqual(It->second, Term);
+  }
+  if (Pattern->K != Term->K ||
+      Pattern->Children.size() != Term->Children.size() ||
+      Pattern->IntVal != Term->IntVal || Pattern->Name != Term->Name ||
+      Pattern->SpecCallee != Term->SpecCallee ||
+      Pattern->CollectionOp != Term->CollectionOp ||
+      Pattern->Sort.Kind != Term->Sort.Kind)
+    return false;
+  for (size_t I = 0; I != Pattern->Children.size(); ++I)
+    if (!matchTerm(Pattern->Children[I].get(), Term->Children[I].get(),
+                   Variables, Bound, Owned))
+      return false;
+  return true;
+}
+
+void specApplications(const LogicExpr *Expr,
+                      std::vector<const LogicExpr *> &Out) {
+  if (!Expr)
+    return;
+  if (Expr->K == LogicExpr::SpecCall)
+    Out.push_back(Expr);
+  for (const auto &Child : Expr->Children)
+    specApplications(Child.get(), Out);
+}
+
+/// A counterexample the solver proposed but its check could not evaluate,
+/// confirmed by a proof at its input: with the values it gives the source
+/// variables fixed, the other variables defined by the query's equations
+/// replaced by their definitions (an equation x == t lets any x stand for
+/// t), the theorems the query states assumed, and the postconditions of the
+/// established proof functions \p Lemmas instantiated where their
+/// applications match the query's, \p Backend proves that the query holds
+/// there. It then fails at that input whatever the values no equation
+/// defines, resting on those theorems and contracts.
+std::optional<VerifyResult>
+confirmCounterexample(const ObligationModule &Module, const VerifyResult &R,
+                      const FunctionMap &Functions, const VFunction &Fn,
+                      const std::set<std::string> &Lemmas,
+                      VerifyBackend &Backend) {
+  const Obligation *Target = nullptr;
+  for (const Obligation &Item : Module.Obligations)
+    if (!R.ObligationId.empty() &&
+        (Item.Id == R.ObligationId || Item.StableId == R.ObligationId))
+      Target = &Item;
+  const LogicExpr *Goal =
+      Target ? Target->Goal.get() : Module.CorrectnessGoal.get();
+  if (!Goal || Module.Obligations.empty())
+    return std::nullopt;
+
+  std::vector<std::unique_ptr<LogicExpr>> Literals;
+  std::map<std::string, const LogicExpr *> Fixed;
+  for (const VerifyModelValue &Value : R.Unchecked) {
+    if (!Value.Value)
+      continue;
+    std::unique_ptr<LogicExpr> Literal;
+    const LogicSortKind Kind = Value.Sort.Kind;
+    if (Kind == LogicSortKind::Bool &&
+        (*Value.Value == "true" || *Value.Value == "false")) {
+      Literal = std::make_unique<LogicExpr>(
+          *Value.Value == "true" ? LogicExpr::True : LogicExpr::False);
+    } else if ((Kind == LogicSortKind::MathematicalInteger ||
+                Kind == LogicSortKind::BitVector ||
+                Kind == LogicSortKind::Pointer) &&
+               !Value.Value->empty() &&
+               llvm::all_of(llvm::StringRef(*Value.Value)
+                                .drop_front(Value.Value->front() == '-'),
+                            [](char C) { return C >= '0' && C <= '9'; })) {
+      Literal = std::make_unique<LogicExpr>(LogicExpr::IntLit);
+      Literal->IntVal = *Value.Value;
+    } else {
+      continue;
+    }
+    Literal->Sort = Value.Sort;
+    Fixed[Value.InternalName] = Literal.get();
+    Literals.push_back(std::move(Literal));
+  }
+  std::vector<std::unique_ptr<LogicExpr>> Conjuncts;
+  counterexampleConjuncts(Goal, Conjuncts);
+  for (auto &Conjunct : Conjuncts)
+    Conjunct = substituteFree(Module, Conjunct.get(), Fixed);
+  // One-point rule: an equation x == t defines x wherever t does not
+  // mention it.
+  for (unsigned Budget = 4096; Budget != 0; --Budget) {
+    bool Replaced = false;
+    for (size_t I = 0; I != Conjuncts.size() && !Replaced; ++I) {
+      const LogicExpr *C = Conjuncts[I].get();
+      if (C->K != LogicExpr::Eq)
+        continue;
+      for (unsigned Side : {0U, 1U}) {
+        const LogicExpr *Var = C->Children[Side].get();
+        const LogicExpr *Value = C->Children[1 - Side].get();
+        if (Var->K != LogicExpr::Var || mentionsVariable(Value, Var->Name))
+          continue;
+        std::unique_ptr<LogicExpr> Definition = cloneLogicExpr(Value);
+        const std::string Name = Var->Name;
+        Conjuncts.erase(Conjuncts.begin() + I);
+        for (auto &Other : Conjuncts)
+          Other =
+              substituteFree(Module, Other.get(), {{Name, Definition.get()}});
+        Replaced = true;
+        break;
+      }
+    }
+    if (!Replaced)
+      break;
+  }
+
+  // The theorems the query states are assumed, not proved, conjunct by
+  // conjunct as the query states them.
+  std::set<std::string> TheoremKeys;
+  for (const auto &Theorem : Module.Theorems) {
+    std::vector<std::unique_ptr<LogicExpr>> Parts;
+    counterexampleConjuncts(
+        logicNot(substituteFree(Module, Theorem.get(), Fixed)).get(), Parts);
+    for (const auto &Part : Parts)
+      TheoremKeys.insert(logicKey(Part.get()));
+  }
+  // What only constrains variables no value or equation fixes, without
+  // applying a spec, is assumed too, once a checked model shows it can hold:
+  // the query then holds at that input for some such values.
+  std::set<std::string> Open;
+  for (const auto &Conjunct : Conjuncts)
+    logicNames(Conjunct.get(), Open);
+  std::vector<std::unique_ptr<LogicExpr>> Assumed, Context, Claimed;
+  for (auto &Conjunct : Conjuncts) {
+    std::vector<const LogicExpr *> Applications;
+    specApplications(Conjunct.get(), Applications);
+    bool Free = false;
+    for (const std::string &Name : Open)
+      if (Module.DiagnosticVariables.count(Name) == 0 &&
+          mentionsVariable(Conjunct.get(), Name))
+        Free = true;
+    if (TheoremKeys.count(logicKey(Conjunct.get())))
+      Assumed.push_back(std::move(Conjunct));
+    else if (Free && Applications.empty())
+      Context.push_back(std::move(Conjunct));
+    else
+      Claimed.push_back(std::move(Conjunct));
+  }
+  if (Claimed.empty())
+    return std::nullopt;
+
+  // The proof functions' postconditions where they speak of these terms.
+  std::vector<const LogicExpr *> Terms;
+  for (const auto &Conjunct : Claimed)
+    specApplications(Conjunct.get(), Terms);
+  for (const auto &Conjunct : Assumed)
+    specApplications(Conjunct.get(), Terms);
+  std::set<std::string> Contracts;
+  constexpr unsigned MaxLemmaInstances = 64;
+  unsigned Instances = 0;
+  for (const auto &[Identity, Lemma] : Functions) {
+    (void)Identity;
+    if (!Lemma || !Lemmas.count(Lemma->Identity) ||
+        Lemma->Postconditions.empty() || Lemma->Identity == Fn.Identity)
+      continue;
+    // A pointer or reference parameter brings implicit preconditions (valid
+    // storage, distinct objects) that callers establish and the declared
+    // ones do not state, so its contract is not instantiated here.
+    if (llvm::any_of(Lemma->Params, [](const auto &Param) {
+          return Param.second.Kind == VTypeKind::Ptr;
+        }))
+      continue;
+    const std::string Heap = "__lemma.heap";
+    std::vector<std::unique_ptr<LogicExpr>> Pres, Posts;
+    bool Lowered = true;
+    for (const auto *Clauses : {&Lemma->Preconditions, &Lemma->Postconditions})
+      for (const auto &Clause : *Clauses) {
+        auto Expr =
+            lowerLogicExpr(Clause.get(), "", Heap, Lemma->IntMode, &Functions);
+        if (!Expr) {
+          llvm::consumeError(Expr.takeError());
+          Lowered = false;
+          continue;
+        }
+        (Clauses == &Lemma->Preconditions ? Pres : Posts)
+            .push_back(std::move(*Expr));
+      }
+    if (!Lowered)
+      continue;
+    std::set<std::string> Variables{Heap};
+    for (const auto &[Param, Type] : Lemma->Params) {
+      (void)Type;
+      Variables.insert(Param);
+    }
+    std::vector<const LogicExpr *> Patterns;
+    for (const auto &Post : Posts)
+      specApplications(Post.get(), Patterns);
+    std::set<std::string> Seen;
+    for (const LogicExpr *Pattern : Patterns)
+      for (const LogicExpr *Term : Terms) {
+        if (Pattern->SpecCallee != Term->SpecCallee ||
+            Instances == MaxLemmaInstances)
+          continue;
+        std::map<std::string, const LogicExpr *> Bound;
+        std::vector<std::unique_ptr<LogicExpr>> Owned;
+        if (!matchTerm(Pattern, Term, Variables, Bound, Owned))
+          continue;
+        auto Instance = std::make_unique<LogicExpr>(LogicExpr::True);
+        Instance->Sort = LogicSort::boolSort();
+        std::vector<std::unique_ptr<LogicExpr>> Parts;
+        std::unique_ptr<LogicExpr> Premise, Conclusion;
+        bool Closed = true;
+        auto conjoin = [&](std::vector<std::unique_ptr<LogicExpr>> &Clauses) {
+          std::unique_ptr<LogicExpr> All;
+          for (const auto &Clause : Clauses) {
+            auto At = substituteFree(Module, Clause.get(), Bound);
+            for (const std::string &Variable : Variables)
+              if (mentionsVariable(At.get(), Variable))
+                Closed = false;
+            if (!All) {
+              All = std::move(At);
+              continue;
+            }
+            auto Both = std::make_unique<LogicExpr>(LogicExpr::And);
+            Both->Sort = LogicSort::boolSort();
+            Both->Children.push_back(std::move(All));
+            Both->Children.push_back(std::move(At));
+            All = std::move(Both);
+          }
+          if (!All) {
+            All = std::make_unique<LogicExpr>(LogicExpr::True);
+            All->Sort = LogicSort::boolSort();
+          }
+          return All;
+        };
+        Premise = conjoin(Pres);
+        Conclusion = conjoin(Posts);
+        if (!Closed || !Seen.insert(logicKey(Conclusion.get())).second)
+          continue;
+        auto Implication = std::make_unique<LogicExpr>(LogicExpr::Or);
+        Implication->Sort = LogicSort::boolSort();
+        Implication->Children.push_back(logicNot(std::move(Premise)));
+        Implication->Children.push_back(std::move(Conclusion));
+        Assumed.push_back(std::move(Implication));
+        Contracts.insert(Lemma->Identity);
+        ++Instances;
+      }
+  }
+
+  auto conjunction = [](std::vector<std::unique_ptr<LogicExpr>> Parts) {
+    std::unique_ptr<LogicExpr> All;
+    for (auto &Part : Parts) {
+      if (!All) {
+        All = std::move(Part);
+        continue;
+      }
+      auto Both = std::make_unique<LogicExpr>(LogicExpr::And);
+      Both->Sort = LogicSort::boolSort();
+      Both->Children.push_back(std::move(All));
+      Both->Children.push_back(std::move(Part));
+      All = std::move(Both);
+    }
+    if (!All) {
+      All = std::make_unique<LogicExpr>(LogicExpr::True);
+      All->Sort = LogicSort::boolSort();
+    }
+    return All;
+  };
+  const Obligation &Like = Target ? *Target : Module.Obligations.front();
+  SpecAxiomContext Visibility{Functions, Fn.SpecFuel, Fn.HiddenSpecs,
+                              Fn.RevealedSpecs};
+  // The module whose one obligation is \p Goal, in Like's place.
+  auto moduleFor =
+      [&](std::unique_ptr<LogicExpr> Goal) -> std::optional<ObligationModule> {
+    ObligationModule Confirm = copyObligationModule(Module);
+    Obligation Item;
+    Item.Id = Like.Id;
+    Item.StableId = Like.StableId;
+    Item.Kind = Like.Kind;
+    Item.Loc = Like.Loc;
+    Item.EndLoc = Like.EndLoc;
+    Item.Source = Like.Source;
+    Item.Goal = std::move(Goal);
+    Item.CounterexampleQuery = logicNot(cloneLogicExpr(Item.Goal.get()));
+    Confirm.Obligations.clear();
+    Confirm.Obligations.push_back(std::move(Item));
+    Confirm.TraceEvents.clear();
+    Confirm.Theorems.clear();
+    Confirm.Preconditions.clear();
+    Confirm.CorrectnessGoal = logicCompleteGoal(Confirm.Obligations);
+    Confirm.CounterexampleQuery =
+        logicNot(cloneLogicExpr(Confirm.CorrectnessGoal.get()));
+    if (llvm::Error Error = materializeLogicFunctions(Confirm, Visibility)) {
+      llvm::consumeError(std::move(Error));
+      return std::nullopt;
+    }
+    auto Features = validateObligationModule(Confirm);
+    if (!Features) {
+      llvm::consumeError(Features.takeError());
+      return std::nullopt;
+    }
+    Confirm.RequiredFeatures = *Features;
+    Confirm.Attempt = ModuleAttempt::Confirmation;
+    return Confirm;
+  };
+  // The context can hold: a certified counterexample to its negation.
+  if (!Context.empty()) {
+    std::vector<std::unique_ptr<LogicExpr>> Copy;
+    for (const auto &Part : Context)
+      Copy.push_back(cloneLogicExpr(Part.get()));
+    std::optional<ObligationModule> Satisfiable =
+        moduleFor(logicNot(conjunction(std::move(Copy))));
+    if (!Satisfiable ||
+        Backend.verify(*Satisfiable).Status != VerifyStatus::Failed)
+      return std::nullopt;
+  }
+  for (auto &Part : Context)
+    Assumed.push_back(std::move(Part));
+  auto Holds = std::make_unique<LogicExpr>(LogicExpr::Or);
+  Holds->Sort = LogicSort::boolSort();
+  Holds->Children.push_back(logicNot(conjunction(std::move(Assumed))));
+  Holds->Children.push_back(conjunction(std::move(Claimed)));
+  std::optional<ObligationModule> Confirm = moduleFor(std::move(Holds));
+  if (!Confirm || Backend.verify(*Confirm).Status != VerifyStatus::Verified)
+    return std::nullopt;
+
+  VerifyResult Failed = R;
+  Failed.Status = VerifyStatus::Failed;
+  Failed.Reason = VerifyReason::Counterexample;
+  Failed.Model.clear();
+  for (const VerifyModelValue &Value : R.Unchecked)
+    if (Fixed.count(Value.InternalName))
+      Failed.Model.push_back(Value);
+  std::string Message;
+  for (const VerifyModelValue &Value : Failed.Model) {
+    Message += (Message.empty() ? "" : ", ") + Value.DisplayName;
+    if (Value.DisplayName != Value.InternalName)
+      Message += " [ssa=" + Value.InternalName + "]";
+    Message += " [type=" + formatLogicSort(Value.Sort) + "] = " + *Value.Value;
+  }
+  std::string Using;
+  for (const std::string &Identity : Contracts)
+    if (auto It = Functions.find(Identity); It != Functions.end())
+      Using += (Using.empty() ? "" : ", ") + It->second->Name;
+  Failed.Message =
+      Message + (Message.empty() ? "" : "; ") +
+      "confirmed by a proof at this input" +
+      (Using.empty() ? std::string() : " that uses the contract of " + Using) +
+      ", since its check could not compute " + R.UncheckedApplication;
+  Failed.Trace.clear();
+  // It rests on the facts the proof assumed: the theorems of the query and
+  // the definitions it applies, and the lemmas' contracts.
+  std::vector<const LogicExpr *> Used;
+  specApplications(Confirm->CorrectnessGoal.get(), Used);
+  for (const LogicExpr *Application : Used)
+    Failed.CertifiedWith.insert(Application->SpecCallee);
+  Failed.CertifiedWith.insert(Module.AssumedPosts.begin(),
+                              Module.AssumedPosts.end());
+  Failed.CertifiedWith.insert(Module.AssumedUnfoldings.begin(),
+                              Module.AssumedUnfoldings.end());
+  Failed.ConfirmedWithContracts = std::move(Contracts);
+  Failed.Unchecked.clear();
+  Failed.UncheckedApplication.clear();
+  Failed.InductionTried.clear();
+  return Failed;
+}
+
+/// Says in plain words why a verdict that waits on recursive specs stayed
+/// unresolved: the counterexample the solver proposed and could not be
+/// checked, the inductions tried, and for a proof function a body that
+/// would prove it by induction.
+void explainUnsettled(VerifyResult &R, const VFunction &Fn,
+                      const ObligationModule &Module) {
+  if (R.Status != VerifyStatus::Unresolved ||
+      (R.Reason != VerifyReason::SpecFuel &&
+       R.Reason != VerifyReason::UncheckedCounterexample))
+    return;
+  std::string Prefix;
+  if (llvm::StringRef(R.Message).starts_with("proof obligation "))
+    if (size_t At = R.Message.find(": "); At != std::string::npos)
+      Prefix = R.Message.substr(0, At + 2);
+  std::string Text = R.Message.substr(Prefix.size());
+  if (!R.UncheckedApplication.empty()) {
+    std::string Values;
+    for (const VerifyModelValue &Value : R.Unchecked)
+      if (Value.Value)
+        Values += (Values.empty() ? "" : ", ") + Value.DisplayName + " = " +
+                  *Value.Value;
+    const std::string Solver = R.BackendName == "cvc5" ? "cvc5"
+                               : R.BackendName == "z3" || R.BackendName == "bmc"
+                                   ? "Z3"
+                                   : "the solver";
+    Text = Solver + " proposed " +
+           (Values.empty() ? std::string("a counterexample")
+                           : Values + " as a counterexample") +
+           ", but checking it needs " + R.UncheckedApplication +
+           (R.UncheckedReason.empty() ? std::string()
+                                      : " (" + R.UncheckedReason + ")") +
+           ", and no proved fact settles it: either the claim is false "
+           "there, or it is true and needs a proof by induction";
+  }
+  if (!R.InductionTried.empty()) {
+    std::string Tried;
+    for (const std::string &Each : R.InductionTried)
+      Tried += (Tried.empty() ? "" : " and induction ") + Each;
+    Text += "; induction " + Tried + " did not prove it";
+  }
+  bool Outlined = false;
+  if (Fn.IsProof && R.Reason == VerifyReason::SpecFuel)
+    for (const InductionScheme &Scheme : inductionSchemes(Module))
+      if (std::string Outline = proofOutline(Module, Scheme, Fn);
+          !Outline.empty()) {
+        Text += "; a proof by induction " + Scheme.Description +
+                " could start from the body " + Outline;
+        Outlined = true;
+        break;
+      }
+  if (!Outlined && R.UncheckedApplication.empty() && !R.InductionOnly &&
+      R.Reason == VerifyReason::SpecFuel &&
+      Text.find("by induction") == std::string::npos)
+    Text += "; if the claim holds, it needs a proof by induction: a "
+            "recursive proof function that uses it at smaller values";
+  R.Message = Prefix + Text;
+}
 
 /// The functions a body calls, whose contracts its proof assumes.
 static void collectCallees(const std::vector<std::unique_ptr<VStmt>> &Stmts,
@@ -181,6 +910,9 @@ struct VerifyDiagnostic {
   bool Partial = false;
   /// Trusted contracts the proof relies on.
   std::vector<std::string> Trusts;
+  /// For a counterexample confirmed by a proof at its input: the proof
+  /// functions whose contracts that proof used.
+  std::vector<std::string> ConfirmedWith;
   /// Functions not verified that call this one: its precondition is assumed
   /// at those calls.
   std::vector<std::string> UnverifiedCallers;
@@ -220,6 +952,8 @@ static std::string backendSuffix(const VerifyResult &Result) {
   }
   if (Result.ReusedQueries)
     Suffix += " [reused-queries=" + std::to_string(Result.ReusedQueries) + "]";
+  if (!Result.InductionUsed.empty())
+    Suffix += " [by induction " + Result.InductionUsed + "]";
   return Suffix;
 }
 
@@ -1039,6 +1773,18 @@ public:
       std::set<std::string> UnprovenPosts;
       std::vector<SpecReliance> ProofDependencies;
       std::vector<std::pair<size_t, std::string>> InductiveLines;
+      /// Unresolved verdicts whose proposed counterexample its check could
+      /// not evaluate, to be confirmed once it is known which contracts are
+      /// established; Index is the verdict's place in Diags.
+      struct Confirmation {
+        size_t Index;
+        std::shared_ptr<ObligationModule> Module;
+        VerifyResult Result;
+        const VFunction *Fn;
+        std::string Label;
+        BackendKind Kind;
+      };
+      std::vector<Confirmation> Confirmations;
       std::string Dump;
       std::string Archive;
     };
@@ -1057,6 +1803,20 @@ public:
       std::set<std::string> &UnprovenPosts = Run.UnprovenPosts;
       auto &ProofDependencies = Run.ProofDependencies;
       auto &InductiveLines = Run.InductiveLines;
+      // What stays unresolved for want of unfolding is explained in plain
+      // words; a counterexample its check could not evaluate is kept for a
+      // confirmation by proof, whose verdict is the next one reported.
+      auto settle = [&](VerifyResult &R, const ObligationModule &Checked,
+                        const VFunction &In, const std::string &Label,
+                        BackendKind Kind) {
+        if (R.Status == VerifyStatus::Unresolved &&
+            !R.UncheckedApplication.empty())
+          Run.Confirmations.push_back({Diags.size(),
+                                       std::make_shared<ObligationModule>(
+                                           copyObligationModule(Checked)),
+                                       R, &In, Label, Kind});
+        explainUnsettled(R, In, Checked);
+      };
       llvm::raw_string_ostream DumpStream(Run.Dump);
       llvm::raw_ostream *DumpOS = this->DumpOS ? &DumpStream : nullptr;
       std::unique_ptr<VerifyBackend> OwnBackend;
@@ -1294,6 +2054,7 @@ public:
               }
             } else {
               VerifyResult R = SpecBackend->verify(*ReadsModule);
+              settle(R, *ReadsModule, *Fn, "spec reads", SpecKind);
               if (R.Status == VerifyStatus::Verified ||
                   R.Status == VerifyStatus::Exported) {
                 UnframedSpecs.erase(Fn->Identity);
@@ -1389,6 +2150,7 @@ public:
             continue;
           }
           VerifyResult R = SpecBackend->verify(*PostModule);
+          settle(R, *PostModule, *Fn, "spec post", SpecKind);
           if (R.Status == VerifyStatus::Verified ||
               R.Status == VerifyStatus::Exported) {
             UnprovenPosts.erase(Fn->Identity);
@@ -1494,6 +2256,7 @@ public:
               }
             } else {
               VerifyResult R = SpecBackend->verify(*Induction);
+              settle(R, *Induction, *Fn, "spec post by induction", SpecKind);
               if (R.Status == VerifyStatus::Verified ||
                   R.Status == VerifyStatus::Exported) {
                 UnprovenPosts.erase(Fn->Identity);
@@ -1987,6 +2750,7 @@ public:
                          "decreases(n, 0) against decreases(n, 1)";
           }
         }
+        settle(R, Module, *Fn, "verification", Opts.Backend);
         if (R.Status == VerifyStatus::Verified ||
             R.Status == VerifyStatus::Certified) {
           Diags.push_back(
@@ -2130,6 +2894,7 @@ public:
       for (size_t I = 0; I != Functions.size(); ++I)
         verifyFunction(I);
     }
+    std::vector<FunctionRun::Confirmation> Confirmations;
     for (FunctionRun &Run : Runs) {
       const size_t Base = Diags.size();
       for (VerifyDiagnostic &D : Run.Diags)
@@ -2150,6 +2915,10 @@ public:
       }
       for (auto &[Index, Identity] : Run.InductiveLines)
         InductiveLines.emplace_back(Base + Index, std::move(Identity));
+      for (FunctionRun::Confirmation &Pending : Run.Confirmations) {
+        Pending.Index += Base;
+        Confirmations.push_back(std::move(Pending));
+      }
       if (DumpOS)
         *DumpOS << Run.Dump;
       if (Opts.ObligationOut)
@@ -2344,11 +3113,15 @@ public:
           if (Diagnostic.K != VerifyDiagnostic::Error || !Diagnostic.Result ||
               Diagnostic.Result->CertifiedWith.empty())
             continue;
-          std::string Unproven;
+          std::string Undefined, Unruled, Unproven;
           for (const std::string &Identity : Diagnostic.Result->CertifiedWith)
-            if (UnprovenPosts.count(Identity) || UndefinedSpecs.count(Identity))
+            if (UndefinedSpecs.count(Identity))
+              list(Undefined, nameOf(Identity));
+            else if (Unproved.count(Identity))
+              list(Unruled, nameOf(Identity));
+            else if (UnprovenPosts.count(Identity))
               list(Unproven, nameOf(Identity));
-          if (Unproven.empty())
+          if (Undefined.empty() && Unruled.empty() && Unproven.empty())
             continue;
           std::string &Message = Diagnostic.Message;
           if (size_t At = Message.find(" [reason=counterexample]");
@@ -2356,9 +3129,18 @@ public:
             Message.erase(At, std::string(" [reason=counterexample]").size());
           if (size_t At = Message.find("failed"); At != std::string::npos)
             Message.replace(At, 6, "unresolved");
-          demote(Index, VerifyReason::SpecPost,
-                 "its counterexample is checked with the postcondition of " +
-                     Unproven + ", which is not established");
+          if (!Undefined.empty())
+            demote(Index, VerifyReason::SpecTermination,
+                   "its counterexample rests on the definition of " +
+                       Undefined + ", whose termination is not established");
+          else if (!Unruled.empty())
+            demote(Index, VerifyReason::SpecInductive,
+                   "its counterexample rests on the unfolding of " + Unruled +
+                       ", whose rules are not established");
+          else
+            demote(Index, VerifyReason::SpecPost,
+                   "its counterexample is checked with the postcondition of " +
+                       Unproven + ", which is not established");
           Changed = true;
         }
       }
@@ -2507,6 +3289,85 @@ public:
                  "its rules rest on facts whose proofs rest on them");
           Demoted = true;
         }
+    }
+    // Counterexamples their checks could not evaluate are confirmed by proof
+    // now that it is known which contracts are established: a confirmation
+    // rests only on those, and only where the spec facts its query assumes
+    // are established. Turning an unresolved verdict into a failure changes
+    // no other verdict, since neither establishes a contract.
+    if (!Confirmations.empty()) {
+      const std::map<std::string, std::string> UnprovedRules = unprovedRules();
+      std::set<std::string> Lemmas;
+      for (const auto &Fn : Functions)
+        if (Fn->IsProof && !Fn->IsSpec && !Unestablished.count(Fn->Identity))
+          Lemmas.insert(Fn->Identity);
+      std::vector<std::optional<VerifyResult>> Outcomes(Confirmations.size());
+      auto confirm = [&](size_t I) {
+        const FunctionRun::Confirmation &Pending = Confirmations[I];
+        const VerifyDiagnostic &Verdict = Diags[Pending.Index];
+        if (Verdict.K != VerifyDiagnostic::Unresolved ||
+            Verdict.FunctionName != Pending.Fn->Name)
+          return;
+        const ObligationModule &Checked = *Pending.Module;
+        for (const std::string &Identity : Checked.AssumedPosts)
+          if (UnprovenPosts.count(Identity))
+            return;
+        for (const std::string &Identity : Checked.AssumedUnfoldings)
+          if (UnprovedRules.count(Identity))
+            return;
+        for (const auto &[Identity, Function] : Checked.LogicFunctions) {
+          (void)Function;
+          if (UndefinedSpecs.count(Identity))
+            return;
+        }
+        std::unique_ptr<VerifyBackend> By = createVerifyBackend(
+            Pending.Kind, nullptr, Opts.BMCUnroll, Execution, nullptr);
+        Outcomes[I] = confirmCounterexample(
+            Checked, Pending.Result, InterfaceMap, *Pending.Fn, Lemmas, *By);
+      };
+      if (Parallel) {
+        llvm::ThreadPoolTaskGroup Group(*Pool);
+        for (size_t I = 0; I != Confirmations.size(); ++I)
+          Group.async([&confirm, I] { confirm(I); });
+        Group.wait();
+      } else {
+        for (size_t I = 0; I != Confirmations.size(); ++I)
+          confirm(I);
+      }
+      for (size_t I = 0; I != Confirmations.size(); ++I) {
+        if (!Outcomes[I])
+          continue;
+        const FunctionRun::Confirmation &Pending = Confirmations[I];
+        VerifyDiagnostic &Verdict = Diags[Pending.Index];
+        VerifyResult &Failed = *Outcomes[I];
+        std::string Message;
+        if (Pending.Label == "verification") {
+          Message = "verification failed: " + Pending.Fn->Name;
+          if (!Failed.ObligationId.empty())
+            Message += " [" + Failed.ObligationId + "]";
+          Message += " (counterexample: " + Failed.Message + ")" +
+                     backendSuffix(Failed);
+        } else {
+          Message = Pending.Label + " failed: " + Pending.Fn->Name +
+                    backendSuffix(Failed) + " (" + Failed.Message + ")";
+        }
+        std::string Trusted;
+        for (const std::string &Identity : Failed.ConfirmedWithContracts)
+          if (auto It = FnMap.find(Identity); It != FnMap.end()) {
+            Verdict.ConfirmedWith.push_back(It->second->Name);
+            if (It->second->IsTrusted) {
+              Trusted += (Trusted.empty() ? "" : ",") + It->second->Name;
+              Verdict.Trusts.push_back(It->second->Name);
+            }
+          }
+        if (!Trusted.empty())
+          Message += " [trusts=" + Trusted + "]";
+        Verdict.K = VerifyDiagnostic::Error;
+        Verdict.Message = std::move(Message);
+        Verdict.Result = std::move(Failed);
+        AllOk = false;
+        AnyFailed = true;
+      }
     }
     // A proof trusts what its callees' proofs trust, too.
     std::map<std::string, std::set<std::string>> Trusts;
@@ -2781,6 +3642,37 @@ public:
       }
       if (!Result.CacheError.empty())
         Record["cache_error"] = jsonText(Result.CacheError);
+      if (!Result.InductionUsed.empty())
+        Record["induction"] = jsonText(Result.InductionUsed);
+      if (!Result.InductionTried.empty()) {
+        llvm::json::Array Tried;
+        for (const std::string &Each : Result.InductionTried)
+          Tried.push_back(jsonText(Each));
+        Record["induction_tried"] = std::move(Tried);
+      }
+      if (!Result.UncheckedApplication.empty()) {
+        llvm::json::Object Unchecked;
+        Unchecked["application"] = jsonText(Result.UncheckedApplication);
+        llvm::json::Array Values;
+        for (const VerifyModelValue &Value : Result.Unchecked) {
+          llvm::json::Object Item;
+          Item["name"] = jsonText(Value.DisplayName);
+          Item["ssa"] = jsonText(Value.InternalName);
+          Item["type"] = formatLogicSort(Value.Sort);
+          Item["value"] = Value.Value
+                              ? llvm::json::Value(jsonText(*Value.Value))
+                              : llvm::json::Value(nullptr);
+          Values.push_back(std::move(Item));
+        }
+        Unchecked["model"] = std::move(Values);
+        Record["unchecked_counterexample"] = std::move(Unchecked);
+      }
+      if (!D.ConfirmedWith.empty()) {
+        llvm::json::Array Contracts;
+        for (const std::string &Name : D.ConfirmedWith)
+          Contracts.push_back(jsonText(Name));
+        Record["confirmed_with"] = std::move(Contracts);
+      }
       if (!Result.QuantifierProfile.empty()) {
         llvm::json::Array Quantifiers;
         for (const QuantifierProfileEntry &Entry : Result.QuantifierProfile) {
