@@ -259,19 +259,36 @@ four kinds of goal without help:
   checked against the true definitions, so it never relies on a value the
   solver invented for an unfolded call.
 - **Inductions.** When no finite unfolding settles a goal, the verifier tries
-  well-founded inductions over it: it proves the goal assuming it holds at
-  every value that is smaller in a measure, with everything else fixed. The
-  measure is that of a recursive spec the goal applies, at that application,
-  and the assumption is also stated at the values the spec's own recursion
-  reaches: through the other specs of its recursion group, and under a
-  ``forall`` or ``exists`` for every value it ranges over. Strong induction
-  on an integer variable is tried too. Smaller means smaller by the relation
-  termination checks use, which has no infinite descending chains, so this
-  never proves a false goal; the assumption is the function's own claim,
-  without the facts the verifier added to it. A verified result names the
-  induction, as in ``[by induction following fibo]``.
+  to prove it by induction on its own (below).
+- **Counterexamples too large to compute.** When a counterexample needs a
+  spec value too large to compute, the verifier tries to confirm it by a
+  proof at that input (below).
 
-The lemmas below need no body:
+Automatic induction
+~~~~~~~~~~~~~~~~~~~
+
+Unfolding a recursive spec a few levels settles claims about a few values.
+A claim about every ``n``, such as ``fibo(n) >= n - 1`` for all ``n >= 3``,
+needs induction: show it at ``n`` assuming it at smaller values. When
+unfolding leaves a claim unresolved (``spec.fuel``), the verifier tries
+inductions by itself before reporting it:
+
+- **Following a recursive spec** that the claim applies (shown as
+  ``following fibo``): the claim is assumed at every value smaller in the
+  spec's ``decreases`` measure, and in particular at the values the spec's own
+  recursion visits. ``fibo(n)`` calls ``fibo(n - 1)`` and ``fibo(n - 2)``, so
+  the claim is assumed at ``n - 1`` and ``n - 2``. The values are found by
+  walking the definition: through the other specs of a mutual recursion, and
+  for a call inside ``forall`` or ``exists``, at every value the quantifier
+  ranges over.
+- **On an integer variable** (shown as ``on n``): strong induction, the claim
+  assumed at every smaller nonnegative value of ``n``.
+
+Everything else stays fixed, and the assumption is the claim exactly as the
+function states it, so these never prove a false claim: the measure cannot
+decrease forever, which is what the ``decreases`` check of each spec shows.
+Only proofs are taken from these attempts. None of the lemmas below needs a
+body:
 
 .. code-block:: cpp
 
@@ -304,66 +321,151 @@ The lemmas below need no body:
    {
    }
 
+   // Mutual recursion: even reaches even(n - 2) through odd.
+   spec bool odd(int n);
+   spec bool even(int n) decreases(n) { return n <= 0 ? true : odd(n - 1); }
+   spec bool odd(int n) decreases(n) { return n <= 0 ? false : even(n - 1); }
+
+   proof void even_mod(int n)
+     pre(n >= 0)
+     post(even(n) == (n % 2 == 0))
+   {
+   }
+
+   // A call under forall: the claim at every k the forall ranges over.
+   spec bool good(int n) decreases(n) { return n <= 0 || forall(k, 0, n, good(k)); }
+
+   proof void all_good(int n)
+     post(good(n))
+   {
+   }
+
 .. code-block:: text
 
    Verified: grows [backend=z3] [by induction following fibo]
    Verified: total_nonneg [backend=z3] [by induction following total]
+   Verified: even_mod [backend=z3] [by induction following even]
+   Verified: all_good [backend=z3] [by induction following good]
 
-Assignments are substituted first, so ``return n * (n + 1);`` with
+The suffix ``[by induction following fibo]`` says which induction proved
+the claim (JSON ``"induction": "following fibo"``). Assignments in a body are
+substituted first, so ``return n * (n + 1);`` with
 ``post(result == 2 * sum(n))`` is proved the same way.
 
-The automatic inductions keep every other variable fixed and assume nothing
-but the goal itself. When the recursion changes another argument, or the step
-needs a stronger statement than the goal, the verifier reports ``spec.fuel``,
-names the inductions it tried, and for a ``proof`` function shows a body to
-start from: a call of the lemma at each value the recursion reaches, under the
-condition that reaches it and the lemma's precondition there. State the
-induction as a ``proof`` function whose ``decreases`` clause shrinks on each
-recursive call, and call the lemma where the fact is needed:
+Inductions cost time only where a claim would otherwise stay unresolved:
+verified and failed claims never try one. Each attempt gets a sixth of
+``--timeout``, but at least two seconds (all of ``--timeout`` when that is
+shorter, and five seconds when there is no timeout), and the attempts for
+one claim stop after two such shares. With the default 30-second timeout an
+unresolved claim takes at most 10 seconds more.
+
+**When no induction finds the proof.** The automatic inductions assume the
+claim itself. When the recursion changes another argument, the claim at the
+smaller value is not the statement the step needs:
+
+.. cppverify-example: unresolved accumulated
 
 .. code-block:: cpp
 
-   spec int sum(int n) decreases(n) { return n <= 0 ? 0 : n + sum(n - 1); }
-
-   spec int accumulate(int n, int acc) decreases(n) {
+   spec int accumulate(int n, int acc)
+     decreases(n)
+   {
      return n <= 0 ? acc : accumulate(n - 1, acc + n);
    }
 
-   proof void accumulate_sum(int n, int acc)
-     pre(n >= 0 && n <= 25000 && acc >= 0 && acc <= 1000000000 - 40000 * n)
+   spec int sum(int n) decreases(n) { return n <= 0 ? 0 : n + sum(n - 1); }
+
+   proof void accumulated(int n)
+     pre(n >= 0 && n <= 25000)
+     post(accumulate(n, 0) == sum(n))
+   {
+   }
+
+.. code-block:: text
+
+   Unresolved: accumulated [backend=z3] [reason=spec.fuel] (proof obligation ...: every counterexample found needs accumulate, sum unfolded at ever larger arguments (the last one needed 21887 unfoldings), so no finite unfolding settles it; prove it by induction in a proof function whose decreases clause shrinks on each recursive call, and call that lemma here; induction following accumulate and induction following sum and induction on n did not prove it; a proof by induction following sum could start from the body 'if (n > 0 && n - 1 >= 0 && n - 1 <= 25000) { accumulated(n - 1); }', with decreases(n))
+
+The message says, in order:
+
+1. what the solver tried: every counterexample it proposed needed the specs
+   at ever larger arguments, so no amount of unfolding settles the claim;
+2. which inductions the verifier tried, none of which proved it;
+3. a body to start a proof by induction from: a call of the function itself
+   at each value the recursion reaches, under the condition that reaches it
+   and the function's precondition there, with the ``decreases`` clause to
+   add.
+
+Here the suggested body does not work as it stands: ``accumulate(n, 0)``
+continues as ``accumulate(n - 1, n)``, so the claim at ``n - 1``, which is
+about ``accumulate(n - 1, 0)``, does not help. The step needs a stronger
+statement, about every ``acc``. Prove that as a lemma whose ``decreases``
+clause shrinks on each recursive call, and call it:
+
+.. code-block:: cpp
+
+   spec int accumulate(int n, int acc)
+     decreases(n)
+   {
+     return n <= 0 ? acc : accumulate(n - 1, acc + n);
+   }
+
+   spec int sum(int n) decreases(n) { return n <= 0 ? 0 : n + sum(n - 1); }
+
+   proof void accumulate_adds(int n, long long acc)
+     pre(n >= 0 && acc >= 0 && acc + n * n <= 1000000000000)
      post(accumulate(n, acc) == acc + sum(n))
      decreases(n)
    {
      if (n > 0)
-       accumulate_sum(n - 1, acc + n);   // the hypothesis at another acc
+       accumulate_adds(n - 1, acc + n);   // the claim at n - 1, for another acc
    }
+
+   proof void accumulated(int n)
+     pre(n >= 0 && n <= 25000)
+     post(accumulate(n, 0) == sum(n))
+   {
+     accumulate_adds(n, 0);
+   }
+
+.. code-block:: text
+
+   Verified: accumulate_adds [backend=z3]
+   Verified: accumulated [backend=z3]
+
+The recursive call is legal only at a smaller measure, and its postcondition
+is the induction hypothesis. A proof function computes with machine
+integers, so ``acc + n`` is checked for overflow; the precondition bounds it.
+Executable code calls a lemma from a ``ghost`` block, and a
+``contract_assert`` is proved where it stands and assumed afterwards, so a
+chain of assertions in a ghost block works as a step-by-step proof:
+
+.. cppverify-example: fragment
+
+.. code-block:: cpp
 
    void check(int n)
      pre(n >= 0 && n <= 25000)
    {
      ghost {
-       accumulate_sum(n, 0);
+       accumulate_adds(n, 0);
        contract_assert(accumulate(n, 0) == sum(n));
      }
    }
 
-The recursive call is legal only at a smaller measure, and its postcondition
-is the induction hypothesis. Machine arithmetic in the lemma is checked for
-overflow and reasoned about exactly. A ``contract_assert`` is proved where it
-stands and assumed afterwards, so a chain of assertions in a ghost block
-works as a step-by-step proof.
-
 Counterexamples too large to compute
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A claim can be false only at inputs whose spec values cannot be computed:
-``pow2(1000000000)`` has a billion bits. The counterexample's check then
-cannot evaluate it, and the verifier confirms the counterexample by a proof
-at that input instead. With the values the counterexample gives fixed, the
-facts the query states assumed (a spec's proved ``post``), and the
-postconditions of the verified ``proof`` functions that speak of the same
-applications, the solver proves that the claim fails there. The failure then
-rests on those facts and contracts:
+A failure is reported only after its counterexample is checked against the
+true definitions of the specs, so that it never rests on a value the solver
+made up. Checking means computing the specs at the counterexample's input,
+and some values are too large for that: ``pow2(1000000000)`` has a billion
+bits, and ``fibo(1000000000)`` takes a billion steps. The verifier then tries
+to prove, at that input, that the claim fails. With the input fixed, it may
+use only facts that are proved: the postconditions of specs, and the
+contracts of ``proof`` functions whose own verification succeeded. If the
+solver proves it, the counterexample is confirmed:
+
+.. cppverify-example: fails small_power
 
 .. code-block:: cpp
 
@@ -385,18 +487,127 @@ rests on those facts and contracts:
 
    error: verification failed: small_power (counterexample: n = 1000023594; confirmed by a proof at this input, since its check could not compute pow2(1000023594)) [backend=z3] [reason=counterexample]
 
-Only facts that are proved count: a confirmation runs once every function
-is verified and uses only the contracts that are established. When no proved
-fact settles the claim, it may as well be true for want of a lemma, and the
-verdict stays unresolved and says so:
+The failure rests on the facts the proof used (here ``pow2``'s
+postcondition); if one of them is not established, the verdict is not a
+failure. When no proved fact settles the claim, the verifier cannot tell a
+false claim from a true one that needs a proof, and says both:
+
+.. cppverify-example: unresolved fibo_small
+
+.. code-block:: cpp
+
+   spec int fibo(int n)
+     decreases(n)
+     post(result >= 0)
+   {
+     if (n <= 0) return 0;
+     if (n == 1) return 1;
+     return fibo(n - 2) + fibo(n - 1);
+   }
+
+   proof void fibo_small(int n)
+     pre(n >= 1000000000)
+     post(fibo(n) < 5)
+   {
+   }
 
 .. code-block:: text
 
-   Unresolved: fib3_small [backend=z3] [reason=spec.fuel] (proof obligation ...: Z3 proposed n = 1000000000 as a counterexample, but checking it needs fib3(1000000000) (the evaluation nesting limit was reached while evaluating fib3), and no proved fact settles it: either the claim is false there, or it is true and needs a proof by induction; ...)
+   Unresolved: fibo_small [backend=z3] [reason=spec.fuel] (proof obligation ...: Z3 proposed n = 1000000000 as a counterexample, but checking it needs fibo(1000000000) (the evaluation nesting limit was reached while evaluating fibo), and no proved fact settles it: either the claim is false there, or it is true and needs a proof by induction; induction following fibo and induction on n did not prove it; a proof by induction following fibo could start from the body 'if (n > 0 && n != 1 && n - 2 >= 1000000000 && n - 1 >= 1000000000) { fibo_small(n - 2); fibo_small(n - 1); }', with decreases(n))
 
-A lemma such as ``post(fib3(n) >= 5)`` for ``n >= 5``, proved by
-induction, settles it: the claim then fails, confirmed with that lemma's
-contract.
+Which to do depends on what you believe:
+
+- the claim is true: prove it by induction, starting from the body the
+  message shows;
+- the claim is false: state the fact that refutes it as a lemma. Here
+  ``fibo(n) >= 5`` for ``n >= 5``, proved by induction, makes the
+  counterexample confirmed:
+
+.. cppverify-example: fails fibo_small
+
+.. code-block:: cpp
+
+   spec int fibo(int n)
+     decreases(n)
+     post(result >= 0)
+   {
+     if (n <= 0) return 0;
+     if (n == 1) return 1;
+     return fibo(n - 2) + fibo(n - 1);
+   }
+
+   proof void fibo_at_least_5(int n)
+     pre(n >= 5)
+     post(fibo(n) >= 5)
+     decreases(n)
+   {
+     if (n >= 6)
+       fibo_at_least_5(n - 1);
+   }
+
+   proof void fibo_small(int n)
+     pre(n >= 1000000000)
+     post(fibo(n) < 5)
+   {
+   }
+
+.. code-block:: text
+
+   Verified: fibo_at_least_5 [backend=z3]
+   error: verification failed: fibo_small (counterexample: n = 1000000000; confirmed by a proof at this input that uses the contract of fibo_at_least_5, since its check could not compute fibo(1000000000)) [backend=z3] [reason=counterexample]
+
+The proof instantiates a lemma where its postcondition speaks of the same
+spec application as the claim, here ``fibo_at_least_5`` at
+``n = 1000000000``. What it instantiates is what the lemma's verification
+proved: its postconditions wherever every assumption its proof started from
+holds. These are its preconditions and the ones the verifier adds for its
+parameters: a pointer is null or points to valid storage, ``valid(p, n)``
+means ``n >= 0`` and ``n`` valid objects, mutable pointers address distinct
+objects, and a record parameter satisfies its type invariant. A lemma is
+therefore never used where an assumption its proof relied on fails. A
+parameter the match leaves open, such as a pointer the conclusion does not
+mention, can take any value, so the lemma applies wherever some value meets
+those assumptions. A lemma over memory is used the same way:
+
+.. cppverify-example: fails total_negative
+
+.. code-block:: cpp
+
+   spec int total(const int *a, int n)
+     reads(a, n)
+     decreases(n)
+   {
+     return n <= 0 ? 0 : total(a, n - 1) + a[n - 1];
+   }
+
+   proof void total_nonneg(const int *a, int n)
+     pre(valid(a, n) && forall(k, 0, n, a[k] >= 0))
+     post(total(a, n) >= 0)
+     decreases(n)
+   {
+     if (n > 0)
+       total_nonneg(a, n - 1);
+   }
+
+   proof void total_negative(const int *a, int n)
+     pre(valid(a, n) && n >= 1000000000)
+     pre(forall(k, 0, n, a[k] >= 0))
+     post(total(a, n) < 0)
+   {
+   }
+
+.. code-block:: text
+
+   Verified: total_nonneg [backend=z3]
+   error: verification failed: total_negative (counterexample: n = 1000000000, a = 1; confirmed by a proof at this input that uses the contract of total_nonneg, since its check could not compute total(1, 1000000000)) [backend=z3] [reason=counterexample]
+
+Only contracts that are established count: a confirmation runs after every
+function is verified, and a lemma that failed, or that rests on a fact that
+is not established, is not used. Each confirmation gets one attempt's share
+of the time, and only verdicts that would otherwise stay unresolved try one.
+In JSON, an unresolved verdict gives the proposed input and the value it
+could not compute as ``unchecked_counterexample``, and a confirmed failure
+lists the lemmas it used as ``confirmed_with``.
 
 A spec's own ``post``, ``decreases``, and ``reads`` clauses are checked
 without a function body to put a lemma call in. A proof block after the
