@@ -26,6 +26,10 @@ struct PassiveStmt {
   unsigned PostClauses = 0;
   SourceLocation CallLoc;
   std::unique_ptr<VExpr> CallGuard;
+  /// An assumption true at every value of every variable (a proved spec
+  /// postcondition or unfolding, a frame of a spec's reads), not a premise
+  /// of the function's claim. Unmarked assumptions are premises.
+  bool Theorem = false;
 };
 
 /// A goal checked in the final state.
@@ -71,6 +75,8 @@ struct PassiveProgram {
   std::string FunctionIdentity;
   std::vector<std::unique_ptr<PassiveStmt>> Stmts;
   std::vector<std::unique_ptr<VExpr>> EntryAssumes;
+  /// How many leading EntryAssumes are the function's own preconditions.
+  size_t PreconditionCount = 0;
   /// Each behavior's assumption in the entry state.
   std::vector<std::pair<std::string, std::unique_ptr<VExpr>>> BehaviorAssumes;
   std::vector<PassiveExitAssert> ExitAsserts;
