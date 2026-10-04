@@ -337,8 +337,16 @@ struct LogicFunctionDecl {
   /// counterexample check may use where the definition does not settle a
   /// value; a verdict that does rests on them. Not archived.
   std::vector<std::unique_ptr<LogicExpr>> Postconditions;
+  /// A recursive function's termination measure over the parameters, by
+  /// which an induction over its applications descends. Not archived.
+  std::vector<std::unique_ptr<LogicExpr>> Decreases;
   static constexpr const char *ResultVariable = "cppverify.result";
 };
+
+/// Why a module is solved: as the program's own, or as a step a backend
+/// takes to settle one that stayed unresolved, which gets a slice of the
+/// budget and no further steps of its own.
+enum class ModuleAttempt { Primary, Induction, Confirmation };
 
 /// Semantic transform provenance that changes how verification results must be
 /// interpreted. A module carrying this marker contains a finite loop unrolling,
@@ -361,6 +369,15 @@ struct GivenFacts {
   std::mutex Lock;
   std::set<std::string> Unfoldings;
   std::set<std::string> Postconditions;
+};
+
+/// Applications, keyed by function identity and argument values, whose
+/// definitions the counterexample check could not decide within its limits
+/// without reading a model, with why: so no check of the module evaluates
+/// one again. Shared by the copies of a module, written by concurrent checks.
+struct UndecidedApplications {
+  std::mutex Lock;
+  std::map<std::string, std::string> Reasons;
 };
 
 class ObligationModule {
@@ -393,6 +410,20 @@ public:
   std::map<std::string, LogicFunctionDecl> EvidenceFunctions;
   /// Never archived or hashed.
   std::shared_ptr<GivenFacts> Given = std::make_shared<GivenFacts>();
+  /// Where the goals' assumptions came from, for proofs that need the
+  /// function's own claim apart from the facts added to it: Theorems hold at
+  /// every value of every variable (proved spec postconditions and
+  /// unfoldings, frames of reads), Preconditions are the function's own.
+  /// Each is a copy of an assumption in the goals, simplified like them.
+  /// Never archived or hashed; an assumption in neither is a premise, so a
+  /// module without them is read exactly as before.
+  std::vector<std::unique_ptr<LogicExpr>> Theorems;
+  std::vector<std::unique_ptr<LogicExpr>> Preconditions;
+  /// Never archived or hashed.
+  ModuleAttempt Attempt = ModuleAttempt::Primary;
+  /// Never archived or hashed.
+  std::shared_ptr<UndecidedApplications> Undecided =
+      std::make_shared<UndecidedApplications>();
 };
 
 /// Validate every declaration, sort, call signature, obligation identity, and
