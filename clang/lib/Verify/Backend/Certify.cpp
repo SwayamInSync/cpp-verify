@@ -466,8 +466,11 @@ class Evaluator {
   /// The specs whose postconditions decided a value.
   std::set<std::string> Evidence;
   /// Applications whose definitions could not be decided, and why: tried
-  /// once.
+  /// once. Those decided without reading the model are the module's to keep.
   std::map<std::string, std::string> Undecided;
+  std::map<std::string, std::string> Learned;
+  /// Values read from the model: a definition that reads one depends on it.
+  uint64_t ModelReads = 0;
   /// Applications whose definitions are being evaluated.
   std::unordered_set<std::string> InProgress;
   /// The time or step budget is spent: no failure is recovered from.
@@ -737,6 +740,7 @@ class Evaluator {
     if (ScopeBase != 0)
       return fail("a definition refers to " + E->Name +
                   ", which is not a parameter");
+    ++ModelReads;
     if (auto It = Constants.find(E->Name); It != Constants.end())
       return It->second;
     std::optional<LogicValue> Value = Model.constant(E->Name, E->Sort);
@@ -2636,6 +2640,7 @@ class Evaluator {
       return fail(Function.DisplayName +
                   " has no definition, so the counterexample relies on a "
                   "value the specification leaves open");
+    const uint64_t ReadsBefore = ModelReads;
     Computed Result;
     std::optional<LogicValue> Value;
     if (Function.Unfolding) {
@@ -2697,8 +2702,12 @@ class Evaluator {
     if (!Value) {
       // A nesting limit depends on where the application is evaluated.
       if (LimitInDefinition && !spent() &&
-          !llvm::StringRef(Failure).starts_with("the evaluation nesting limit"))
+          !llvm::StringRef(Failure).starts_with(
+              "the evaluation nesting limit")) {
         Undecided.emplace(Key, Failure);
+        if (ModelReads == ReadsBefore)
+          Learned.emplace(Key, Failure);
+      }
       return std::nullopt;
     }
     if (!Result.Graph)
@@ -2773,6 +2782,7 @@ class Evaluator {
     } else {
       if (pastDeadline())
         return limit(timeLimitReached());
+      ++ModelReads;
       Value = Model.application(Function, Args);
       if (!Value && Failure.empty()) {
         return fail("the model gives no value for an application of " +
@@ -3154,6 +3164,7 @@ class Evaluator {
       std::optional<CertInt> Address = integerOf(E->Children[0].get());
       if (!Address)
         return std::nullopt;
+      ++ModelReads;
       std::optional<bool> Valid = Model.validPointer(*Address);
       if (!Valid)
         return fail("the model gives no pointer validity");
@@ -3251,7 +3262,18 @@ class Evaluator {
 public:
   Evaluator(const ObligationModule &Module, CandidateModel &Model,
             const CertifyLimits &Limits, View Mode)
-      : Module(Module), Model(Model), Limits(Limits), Mode(Mode) {}
+      : Module(Module), Model(Model), Limits(Limits), Mode(Mode) {
+    if (!Module.Undecided)
+      return;
+    std::lock_guard<std::mutex> Guard(Module.Undecided->Lock);
+    Undecided = Module.Undecided->Reasons;
+  }
+  ~Evaluator() {
+    if (!Module.Undecided || Learned.empty())
+      return;
+    std::lock_guard<std::mutex> Guard(Module.Undecided->Lock);
+    Module.Undecided->Reasons.insert(Learned.begin(), Learned.end());
+  }
 
   std::optional<LogicValue> eval(const LogicExpr *E) {
     if (!Failure.empty())
@@ -3587,11 +3609,9 @@ RefinementDecision DefinitionRefinement::next(const CertifyResult &Result,
       Decision.Unbounded = true;
       Decision.InductionOnly = true;
       Decision.Reason = VerifyReason::SpecFuel;
-      Decision.Message = "checking the counterexample needs a definition "
-                         "evaluated beyond the certifier's limits (" +
-                         Result.Detail +
-                         "); bound the argument, or prove the property by "
-                         "induction in a proof function";
+      Decision.Message = "a counterexample the solver proposed needs a value "
+                         "too deep to compute (" +
+                         Result.Detail + ")";
       return Decision;
     }
     Decision.Reason = VerifyReason::UncheckedCounterexample;
@@ -3683,16 +3703,14 @@ RefinementDecision DefinitionRefinement::next(const CertifyResult &Result,
       Decision.InductionOnly = true;
       Decision.Message = needsDerivation(*Stalled);
     } else {
-      Decision.Message = "every counterexample found applies " +
+      Decision.Message = "every counterexample the solver proposed applies " +
                          joinNames(Disputed) +
                          " where its definition, unfolded at every disputed "
-                         "argument, does not settle the value; prove the "
-                         "property by induction in a proof function";
+                         "argument, does not settle the value";
     }
     return Decision;
   }
-  if (Decision.Instances.size() >
-      (BoundedDomain ? MaxInstances : MaxRoundInstances)) {
+  if (Decision.Instances.size() > (BoundedDomain ? MaxInstances : RoundLimit)) {
     RefinementDecision Deep = exhausted();
     Deep.Unbounded = true;
     if (Deep.Reason == VerifyReason::SpecFuel)
@@ -3759,13 +3777,86 @@ DefinitionRefinement::exhausted(llvm::StringRef Detail) const {
     return Decision;
   }
   Decision.Reason = VerifyReason::SpecFuel;
-  Decision.Message = "every counterexample found applies " +
+  Decision.Message = "every counterexample the solver proposed applies " +
                      joinNames(Disputed) +
-                     " beyond its unfolding fuel and is refuted by its "
-                     "definition";
+                     " beyond the unfoldings it was given and is refuted by "
+                     "its definition";
   if (!Detail.empty())
     Decision.Message += " (" + Detail.str() + ")";
-  Decision.Message += "; raise reveal_with_fuel, bound the argument, or prove "
-                      "it by induction in a proof function";
+  Decision.Message += "; reveal_with_fuel settles it if a fixed depth of "
+                      "unfolding does";
   return Decision;
+}
+
+namespace {
+void sourceVariables(const LogicExpr *Expr, std::set<std::string> &Bound,
+                     std::vector<std::pair<std::string, LogicSort>> &Out) {
+  if (!Expr)
+    return;
+  if (Expr->K == LogicExpr::Var && !Bound.count(Expr->Name) &&
+      llvm::none_of(Out,
+                    [&](const auto &Seen) { return Seen.first == Expr->Name; }))
+    Out.emplace_back(Expr->Name, Expr->Sort);
+  const bool Quantifier =
+      Expr->K == LogicExpr::Forall || Expr->K == LogicExpr::Exists;
+  for (size_t I = 0; I != Expr->Children.size(); ++I) {
+    const bool Body = Quantifier && I + 1 == Expr->Children.size();
+    const bool Inserted = Body && Bound.insert(Expr->Binder).second;
+    sourceVariables(Expr->Children[I].get(), Bound, Out);
+    if (Inserted)
+      Bound.erase(Expr->Binder);
+  }
+}
+} // namespace
+
+std::vector<VerifyModelValue>
+verify::candidateValues(const ObligationModule &Module, const LogicExpr &Query,
+                        CandidateModel &Model) {
+  std::vector<std::pair<std::string, LogicSort>> Variables;
+  std::set<std::string> Bound;
+  sourceVariables(&Query, Bound, Variables);
+  // As counterexamples show them: the source variables, or every variable
+  // of a module that names none (a spec's own checks).
+  std::vector<VerifyModelValue> Values;
+  for (const auto &[Name, Sort] : Variables) {
+    auto It = Module.DiagnosticVariables.find(Name);
+    if (Sort.Kind == LogicSortKind::Heap ||
+        (It == Module.DiagnosticVariables.end() &&
+         !Module.DiagnosticVariables.empty()))
+      continue;
+    VerifyModelValue Value;
+    Value.DisplayName =
+        It != Module.DiagnosticVariables.end() ? It->second.DisplayName : Name;
+    Value.InternalName = Name;
+    Value.Sort = Sort;
+    if (It != Module.DiagnosticVariables.end())
+      Value.Source = It->second.Source;
+    if (std::optional<LogicValue> Given = Model.constant(Name, Sort))
+      Value.Value = formatLogicValue(*Given);
+    Values.push_back(std::move(Value));
+  }
+  return Values;
+}
+
+std::string verify::shownApplication(const ObligationModule &Module,
+                                     const LogicExpr &Application,
+                                     CandidateModel &Model,
+                                     const CertifyLimits &Limits) {
+  std::string Name = Application.SpecCallee;
+  for (const auto *Functions :
+       {&Module.LogicFunctions, &Module.EvidenceFunctions})
+    if (auto It = Functions->find(Application.SpecCallee);
+        It != Functions->end())
+      Name = It->second.DisplayName;
+  std::string Text = Name + "(";
+  bool First = true;
+  for (const auto &Argument : Application.Children) {
+    if (Argument->Sort.Kind == LogicSortKind::Heap)
+      continue;
+    std::optional<LogicValue> Value =
+        evaluateTerm(Module, *Argument, Model, Limits);
+    Text += (First ? "" : ", ") + (Value ? formatLogicValue(*Value) : "?");
+    First = false;
+  }
+  return Text + ")";
 }
