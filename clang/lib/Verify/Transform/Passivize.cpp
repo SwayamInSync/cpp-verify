@@ -4381,6 +4381,8 @@ public:
           postconditionKind(Fn, I) == ProofObligationKind::PointerValidity)
         BoundPost = abstractValidity(std::move(BoundPost), Renames);
       emitMathBridge(P, BoundPost.get(), nullptr, BoundPost->Loc);
+      if (Fn.IsProof && !Fn.IsSpec)
+        P.ContractConclusions.push_back(cloneVExpr(BoundPost.get()));
       SafetyChecks Checks;
       collectSafety(Post, &FnMap, &Fn.ValidExtents,
                     &SourcePointerParameterNames, Checks, Fn.ObjectModel,
@@ -4398,6 +4400,10 @@ public:
       }
       P.ExitAsserts.push_back({postconditionKind(Fn, I), std::move(BoundPost)});
     }
+    if (Fn.IsProof && !Fn.IsSpec)
+      for (const auto &[Name, Entry] : OldState)
+        if (Entry->K == VExpr::Var)
+          P.EntryVariables.insert(static_cast<const VVarExpr &>(*Entry).Name);
     P.OldHeapName = Heap0;
     P.HeapVariables = HeapVariables;
     P.ModelVariables = std::move(ModelVariables);
