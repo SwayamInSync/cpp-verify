@@ -242,6 +242,19 @@ llvm::Error verify::materializeLogicFunctions(ObligationModule &Module,
         llvm::consumeError(Lowered.takeError());
       }
     }
+    if (Spec->NeedsDecreasesCheck) {
+      for (const auto &Decrease : Spec->Decreases) {
+        auto Lowered = lowerLogicExpr(Decrease.get(), "", DefinitionHeap,
+                                      Spec->IntMode, &Ctx.Functions);
+        if (!Lowered) {
+          llvm::consumeError(Lowered.takeError());
+          Owned.Decreases.clear();
+          break;
+        }
+        collectReferencedLogicFunctions(Lowered->get(), Extra);
+        Owned.Decreases.push_back(std::move(*Lowered));
+      }
+    }
     return llvm::Error::success();
   };
   std::set<std::string> Pending;
