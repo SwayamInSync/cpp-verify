@@ -1014,5 +1014,24 @@ void logicNames(const LogicExpr *Expr, std::set<std::string> &Names) {
   collectNames(Expr, Names);
 }
 
+void logicFreeVariables(const LogicExpr *Expr, std::set<std::string> &Bound,
+                        std::vector<std::pair<std::string, LogicSort>> &Out) {
+  if (!Expr)
+    return;
+  if (Expr->K == LogicExpr::Var && !Bound.count(Expr->Name) &&
+      llvm::none_of(Out,
+                    [&](const auto &Seen) { return Seen.first == Expr->Name; }))
+    Out.emplace_back(Expr->Name, Expr->Sort);
+  const bool Quantifier =
+      Expr->K == LogicExpr::Forall || Expr->K == LogicExpr::Exists;
+  for (size_t I = 0; I != Expr->Children.size(); ++I) {
+    const bool Body = Quantifier && I + 1 == Expr->Children.size();
+    const bool Inserted = Body && Bound.insert(Expr->Binder).second;
+    logicFreeVariables(Expr->Children[I].get(), Bound, Out);
+    if (Inserted)
+      Bound.erase(Expr->Binder);
+  }
+}
+
 } // namespace verify
 } // namespace clang
