@@ -362,11 +362,22 @@ Current proof-language limitations include:
   records), and Lean does not support them yet (planned for a future
   release);
 - user-written loop invariants, with no candidate-invariant/Houdini pass;
-- no automatic termination-measure or lemma discovery. Strong induction on one
-  integer variable, everything else fixed and the goal itself as hypothesis,
-  is tried automatically; a property whose recursion changes another argument,
-  or whose step needs a stronger statement, needs an induction lemma (a
-  recursive ``proof`` function);
+- no automatic termination-measure or lemma discovery. Inductions over a goal
+  are tried automatically (by the measure of a recursive spec it applies, with
+  the hypothesis at the values that spec's recursion reaches, and strong
+  induction on an integer variable), everything else fixed and the goal itself
+  as hypothesis; a property whose step needs a stronger statement than the
+  goal, such as one whose recursion changes an accumulator, needs an induction
+  lemma (a recursive ``proof`` function), as in Dafny, Lean, and Isabelle. The
+  hypothesis over all smaller values is stated as one quantifier only for
+  integer variables, since canonical quantifiers range over integers; over a
+  sequence the hypothesis is given at the values its recursion reaches;
+- a counterexample whose spec values cannot be computed is confirmed only by
+  a proof from facts that are proved: when none settles the claim, it stays
+  ``spec.fuel``, with the proposed input in the message. The contracts of
+  ``proof`` functions with pointer or reference parameters are not used for
+  this yet: their implicit preconditions (valid storage, distinct objects)
+  would have to be stated at each instance;
 - bounded domains are settled by evaluating the definitions across them, which
   reaches about a thousand values at the default budget; larger ones need a
   lemma;
