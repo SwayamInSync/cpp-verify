@@ -2220,6 +2220,7 @@ public:
       uint64_t TraceEventCount;
       std::unique_ptr<VCExpr> Cond;
       std::string Note;
+      bool Theorem;
     };
     std::vector<LoweredStmt> Stmts;
     for (const auto &Stmt : P.Stmts) {
@@ -2229,7 +2230,7 @@ public:
       }
       Stmts.push_back({Stmt->K, obligationKind(Stmt->ProofKind),
                        Stmt->TraceEventCount, fromVExpr(Stmt->Cond.get()),
-                       Stmt->Note});
+                       Stmt->Note, Stmt->Theorem});
     }
 
     std::vector<std::pair<ObligationKind, std::unique_ptr<VCExpr>>> ExitAsserts;
@@ -2244,6 +2245,8 @@ public:
     std::vector<const VCExpr *> Assumptions;
     for (const auto &Entry : EntryAssumes)
       Assumptions.push_back(Entry.get());
+    for (size_t I = 0; I < P.PreconditionCount && I < EntryAssumes.size(); ++I)
+      M.Preconditions.push_back(cloneVCExpr(EntryAssumes[I].get()));
 
     auto makeGoal = [&](const VCExpr *Condition) -> std::unique_ptr<VCExpr> {
       std::unique_ptr<VCExpr> ConditionWP = cloneVCExpr(Condition);
@@ -2279,6 +2282,8 @@ public:
     for (const LoweredStmt &Stmt : Stmts) {
       if (Stmt.Kind == PassiveStmt::Assume) {
         Assumptions.push_back(Stmt.Cond.get());
+        if (Stmt.Theorem)
+          M.Theorems.push_back(cloneVCExpr(Stmt.Cond.get()));
         continue;
       }
       appendObligation(Stmt.ProofKind, Stmt.Cond.get(), Stmt.TraceEventCount,
