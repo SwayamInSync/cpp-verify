@@ -1,6 +1,7 @@
 //===--- Verifier.cpp - CppVerify driver ----------------------------------===//
 #include "Verifier.h"
 #include "../Backend/CVC5Backend.h"
+#include "../Backend/Certify.h"
 #include "../Backend/Induction.h"
 #include "../Backend/LeanBackend.h"
 #include "../Backend/LogicTerms.h"
@@ -373,6 +374,36 @@ bool matchTerm(const LogicExpr *Pattern, const LogicExpr *Term,
   return true;
 }
 
+/// The value each sort starts from: zero, false, empty, memory of zeros.
+class DefaultValues : public CandidateModel {
+public:
+  std::optional<LogicValue> constant(const std::string &,
+                                     const LogicSort &Sort) override {
+    switch (Sort.Kind) {
+    case LogicSortKind::Bool:
+      return LogicValue::boolean(false);
+    case LogicSortKind::Heap:
+      return LogicValue::heap(HeapValue());
+    case LogicSortKind::Seq:
+      return LogicValue::sequence({});
+    case LogicSortKind::Set:
+      return LogicValue::set(HeapValue());
+    case LogicSortKind::Multiset:
+      return LogicValue::multiset(HeapValue());
+    case LogicSortKind::Map:
+      return LogicValue::map(HeapValue(), HeapValue());
+    default:
+      return LogicValue::integer(CertInt());
+    }
+  }
+  std::optional<bool> validPointer(const CertInt &) override { return false; }
+  std::optional<LogicValue>
+  application(const LogicFunctionDecl &,
+              const std::vector<LogicValue> &) override {
+    return std::nullopt;
+  }
+};
+
 void specApplications(const LogicExpr *Expr,
                       std::vector<const LogicExpr *> &Out) {
   if (!Expr)
@@ -387,16 +418,17 @@ void specApplications(const LogicExpr *Expr,
 /// confirmed by a proof at its input: with the values it gives the source
 /// variables fixed, the other variables defined by the query's equations
 /// replaced by their definitions (an equation x == t lets any x stand for
-/// t), the theorems the query states assumed, and the postconditions of the
-/// established proof functions \p Lemmas instantiated where their
-/// applications match the query's, \p Backend proves that the query holds
+/// t), the theorems the query states assumed, and the theorems of the
+/// established proof functions \p Lemmas (what each one's verification
+/// proved) instantiated where their conclusions' applications match the
+/// query's, \p Backend proves that the query holds
 /// there. It then fails at that input whatever the values no equation
 /// defines, resting on those theorems and contracts.
-std::optional<VerifyResult>
-confirmCounterexample(const ObligationModule &Module, const VerifyResult &R,
-                      const FunctionMap &Functions, const VFunction &Fn,
-                      const std::set<std::string> &Lemmas,
-                      VerifyBackend &Backend) {
+std::optional<VerifyResult> confirmCounterexample(
+    const ObligationModule &Module, const VerifyResult &R,
+    const FunctionMap &Functions, const VFunction &Fn,
+    const std::map<std::string, std::shared_ptr<const ContractTheorem>> &Lemmas,
+    VerifyBackend &Backend) {
   const Obligation *Target = nullptr;
   for (const Obligation &Item : Module.Obligations)
     if (!R.ObligationId.empty() &&
@@ -506,98 +538,6 @@ confirmCounterexample(const ObligationModule &Module, const VerifyResult &R,
     specApplications(Conjunct.get(), Terms);
   for (const auto &Conjunct : Assumed)
     specApplications(Conjunct.get(), Terms);
-  std::set<std::string> Contracts;
-  constexpr unsigned MaxLemmaInstances = 64;
-  unsigned Instances = 0;
-  for (const auto &[Identity, Lemma] : Functions) {
-    (void)Identity;
-    if (!Lemma || !Lemmas.count(Lemma->Identity) ||
-        Lemma->Postconditions.empty() || Lemma->Identity == Fn.Identity)
-      continue;
-    // A pointer or reference parameter brings implicit preconditions (valid
-    // storage, distinct objects) that callers establish and the declared
-    // ones do not state, so its contract is not instantiated here.
-    if (llvm::any_of(Lemma->Params, [](const auto &Param) {
-          return Param.second.Kind == VTypeKind::Ptr;
-        }))
-      continue;
-    const std::string Heap = "__lemma.heap";
-    std::vector<std::unique_ptr<LogicExpr>> Pres, Posts;
-    bool Lowered = true;
-    for (const auto *Clauses : {&Lemma->Preconditions, &Lemma->Postconditions})
-      for (const auto &Clause : *Clauses) {
-        auto Expr =
-            lowerLogicExpr(Clause.get(), "", Heap, Lemma->IntMode, &Functions);
-        if (!Expr) {
-          llvm::consumeError(Expr.takeError());
-          Lowered = false;
-          continue;
-        }
-        (Clauses == &Lemma->Preconditions ? Pres : Posts)
-            .push_back(std::move(*Expr));
-      }
-    if (!Lowered)
-      continue;
-    std::set<std::string> Variables{Heap};
-    for (const auto &[Param, Type] : Lemma->Params) {
-      (void)Type;
-      Variables.insert(Param);
-    }
-    std::vector<const LogicExpr *> Patterns;
-    for (const auto &Post : Posts)
-      specApplications(Post.get(), Patterns);
-    std::set<std::string> Seen;
-    for (const LogicExpr *Pattern : Patterns)
-      for (const LogicExpr *Term : Terms) {
-        if (Pattern->SpecCallee != Term->SpecCallee ||
-            Instances == MaxLemmaInstances)
-          continue;
-        std::map<std::string, const LogicExpr *> Bound;
-        std::vector<std::unique_ptr<LogicExpr>> Owned;
-        if (!matchTerm(Pattern, Term, Variables, Bound, Owned))
-          continue;
-        auto Instance = std::make_unique<LogicExpr>(LogicExpr::True);
-        Instance->Sort = LogicSort::boolSort();
-        std::vector<std::unique_ptr<LogicExpr>> Parts;
-        std::unique_ptr<LogicExpr> Premise, Conclusion;
-        bool Closed = true;
-        auto conjoin = [&](std::vector<std::unique_ptr<LogicExpr>> &Clauses) {
-          std::unique_ptr<LogicExpr> All;
-          for (const auto &Clause : Clauses) {
-            auto At = substituteFree(Module, Clause.get(), Bound);
-            for (const std::string &Variable : Variables)
-              if (mentionsVariable(At.get(), Variable))
-                Closed = false;
-            if (!All) {
-              All = std::move(At);
-              continue;
-            }
-            auto Both = std::make_unique<LogicExpr>(LogicExpr::And);
-            Both->Sort = LogicSort::boolSort();
-            Both->Children.push_back(std::move(All));
-            Both->Children.push_back(std::move(At));
-            All = std::move(Both);
-          }
-          if (!All) {
-            All = std::make_unique<LogicExpr>(LogicExpr::True);
-            All->Sort = LogicSort::boolSort();
-          }
-          return All;
-        };
-        Premise = conjoin(Pres);
-        Conclusion = conjoin(Posts);
-        if (!Closed || !Seen.insert(logicKey(Conclusion.get())).second)
-          continue;
-        auto Implication = std::make_unique<LogicExpr>(LogicExpr::Or);
-        Implication->Sort = LogicSort::boolSort();
-        Implication->Children.push_back(logicNot(std::move(Premise)));
-        Implication->Children.push_back(std::move(Conclusion));
-        Assumed.push_back(std::move(Implication));
-        Contracts.insert(Lemma->Identity);
-        ++Instances;
-      }
-  }
-
   auto conjunction = [](std::vector<std::unique_ptr<LogicExpr>> Parts) {
     std::unique_ptr<LogicExpr> All;
     for (auto &Part : Parts) {
@@ -617,6 +557,206 @@ confirmCounterexample(const ObligationModule &Module, const VerifyResult &R,
     }
     return All;
   };
+  // The established proof functions' theorems where their conclusions speak
+  // of these terms. An instance gives each variable of a theorem a value:
+  // the term the match binds; otherwise every integer, machine integer,
+  // pointer, or truth value (a universal); otherwise, for memory or a
+  // collection, a value where the premises only it constrains hold, which
+  // are then dropped, or else the module's own variable of that name. Any
+  // values give an instance of a theorem; these are where the module's
+  // facts can meet its premises.
+  std::map<std::string, LogicSort> ModuleVariables;
+  {
+    std::set<std::string> None;
+    std::vector<std::pair<std::string, LogicSort>> Free;
+    logicFreeVariables(Module.CorrectnessGoal.get(), None, Free);
+    ModuleVariables.insert(Free.begin(), Free.end());
+  }
+  auto variable = [](const std::string &Name, LogicSort Sort) {
+    auto Var = std::make_unique<LogicExpr>(LogicExpr::Var);
+    Var->Name = Name;
+    Var->Sort = Sort;
+    return Var;
+  };
+  // Every value of Sort as a term of an integer binder, if there is one.
+  auto overIntegers = [&](const std::string &Binder,
+                          const LogicSort &Sort) -> std::unique_ptr<LogicExpr> {
+    auto Integer = variable(Binder, LogicSort::mathematicalInteger(64, true));
+    auto Zero = [](LogicSort Sort) {
+      auto Literal = std::make_unique<LogicExpr>(LogicExpr::IntLit);
+      Literal->Sort = Sort;
+      return Literal;
+    };
+    std::unique_ptr<LogicExpr> Value;
+    switch (Sort.Kind) {
+    case LogicSortKind::MathematicalInteger:
+      return Integer;
+    case LogicSortKind::BitVector:
+      Value = std::make_unique<LogicExpr>(LogicExpr::IntToBv);
+      Value->Children.push_back(std::move(Integer));
+      break;
+    case LogicSortKind::Pointer:
+      Value = std::make_unique<LogicExpr>(LogicExpr::Add);
+      Value->Children.push_back(Zero(Sort));
+      Value->Children.push_back(std::move(Integer));
+      break;
+    case LogicSortKind::Bool:
+      Value = std::make_unique<LogicExpr>(LogicExpr::Ne);
+      Value->Children.push_back(std::move(Integer));
+      Value->Children.push_back(Zero(LogicSort::mathematicalInteger(64, true)));
+      break;
+    default:
+      return nullptr;
+    }
+    Value->Sort = Sort;
+    return Value;
+  };
+  std::set<std::string> Contracts;
+  constexpr unsigned MaxLemmaInstances = 64;
+  unsigned Instances = 0;
+  unsigned Lemma = 0;
+  for (const auto &[Identity, Theorem] : Lemmas) {
+    if (!Theorem || Identity == Fn.Identity)
+      continue;
+    // Its variables, apart from the module's names.
+    const std::string Prefix = "__lemma." + std::to_string(Lemma++) + ".";
+    std::set<std::string> None;
+    std::vector<std::pair<std::string, LogicSort>> Free;
+    for (const auto *Part : {&Theorem->Premises, &Theorem->Conclusions})
+      for (const auto &Term : *Part)
+        logicFreeVariables(Term.get(), None, Free);
+    std::vector<std::unique_ptr<LogicExpr>> Apart;
+    std::map<std::string, const LogicExpr *> Renamed;
+    std::set<std::string> Variables;
+    for (const auto &[Name, Sort] : Free) {
+      Apart.push_back(variable(Prefix + Name, Sort));
+      Renamed[Name] = Apart.back().get();
+      Variables.insert(Prefix + Name);
+    }
+    std::vector<std::unique_ptr<LogicExpr>> Premises, Conclusions;
+    for (const auto &Term : Theorem->Premises)
+      Premises.push_back(substituteFree(Module, Term.get(), Renamed));
+    for (const auto &Term : Theorem->Conclusions)
+      Conclusions.push_back(substituteFree(Module, Term.get(), Renamed));
+    std::vector<const LogicExpr *> Patterns;
+    for (const auto &Conclusion : Conclusions)
+      specApplications(Conclusion.get(), Patterns);
+    std::set<std::string> Seen;
+    for (const LogicExpr *Pattern : Patterns)
+      for (const LogicExpr *Term : Terms) {
+        if (Pattern->SpecCallee != Term->SpecCallee ||
+            Instances == MaxLemmaInstances)
+          continue;
+        std::map<std::string, const LogicExpr *> Values;
+        std::vector<std::unique_ptr<LogicExpr>> Owned;
+        if (!matchTerm(Pattern, Term, Variables, Values, Owned))
+          continue;
+        std::vector<std::unique_ptr<LogicExpr>> Premise, Conclusion;
+        std::vector<std::string> Binders;
+        std::set<std::string> Unbound;
+        for (const auto &[Name, Sort] : Free) {
+          const std::string Own = Prefix + Name;
+          if (Values.count(Own))
+            continue;
+          if (auto Value = overIntegers(Own, Sort)) {
+            Binders.push_back(Own);
+            Values[Own] = Value.get();
+            Owned.push_back(std::move(Value));
+          } else {
+            Unbound.insert(Own);
+          }
+        }
+        // Premises on unbound memory alone, which nothing else mentions,
+        // hold for some value of it (memory of zeros, by the certifier):
+        // the theorem then holds without them.
+        std::vector<const LogicExpr *> Side;
+        std::set<std::string> SideNames;
+        for (const auto &Part : Premises) {
+          std::set<std::string> Outer;
+          std::vector<std::pair<std::string, LogicSort>> Names;
+          logicFreeVariables(Part.get(), Outer, Names);
+          if (!Names.empty() && llvm::all_of(Names, [&](const auto &Name) {
+                return Unbound.count(Name.first) != 0;
+              })) {
+            Side.push_back(Part.get());
+            for (const auto &Name : Names)
+              SideNames.insert(Name.first);
+          }
+        }
+        auto mentionsSide = [&](const LogicExpr *E) {
+          return llvm::any_of(SideNames, [&](const std::string &Name) {
+            return mentionsVariable(E, Name);
+          });
+        };
+        bool Independent = !Side.empty();
+        for (const auto *Part : {&Premises, &Conclusions})
+          for (const auto &E : *Part)
+            if (llvm::find(Side, E.get()) == Side.end() &&
+                mentionsSide(E.get()))
+              Independent = false;
+        if (Independent) {
+          DefaultValues Zeros;
+          for (const LogicExpr *Fact : Side) {
+            std::optional<LogicValue> Holds =
+                evaluateTerm(Module, *Fact, Zeros);
+            if (!Holds || Holds->K != LogicValue::Kind::Bool || !Holds->Truth)
+              Independent = false;
+          }
+        }
+        for (const std::string &Own : Unbound) {
+          if (Independent && SideNames.count(Own))
+            continue;
+          const std::string Name = Own.substr(Prefix.size());
+          const LogicSort &Sort = Renamed.at(Name)->Sort;
+          auto It = ModuleVariables.find(Name);
+          if (It == ModuleVariables.end() || It->second.Kind != Sort.Kind ||
+              It->second.BitWidth != Sort.BitWidth ||
+              It->second.Signedness != Sort.Signedness)
+            continue;
+          Owned.push_back(variable(Name, Sort));
+          Values[Own] = Owned.back().get();
+        }
+        for (const auto &Part : Premises)
+          if (!Independent || llvm::find(Side, Part.get()) == Side.end())
+            Premise.push_back(substituteFree(Module, Part.get(), Values));
+        for (const auto &Part : Conclusions)
+          Conclusion.push_back(substituteFree(Module, Part.get(), Values));
+        auto Instance = std::make_unique<LogicExpr>(LogicExpr::Or);
+        Instance->Sort = LogicSort::boolSort();
+        Instance->Children.push_back(logicNot(conjunction(std::move(Premise))));
+        Instance->Children.push_back(conjunction(std::move(Conclusion)));
+        // At zero too: an instance the solver need not search for.
+        std::vector<std::unique_ptr<LogicExpr>> Zeros;
+        std::map<std::string, const LogicExpr *> AtZero;
+        for (const std::string &Binder : Binders) {
+          Zeros.push_back(std::make_unique<LogicExpr>(LogicExpr::IntLit));
+          Zeros.back()->Sort = LogicSort::mathematicalInteger(64, true);
+          AtZero[Binder] = Zeros.back().get();
+        }
+        std::vector<std::unique_ptr<LogicExpr>> Made;
+        if (!Binders.empty())
+          Made.push_back(substituteFree(Module, Instance.get(), AtZero));
+        for (auto It = Binders.rbegin(); It != Binders.rend(); ++It) {
+          if (!mentionsVariable(Instance.get(), *It))
+            continue;
+          auto Quantifier = std::make_unique<LogicExpr>(LogicExpr::Forall);
+          Quantifier->Sort = LogicSort::boolSort();
+          Quantifier->Binder = *It;
+          Quantifier->Children.push_back(std::move(Instance));
+          Instance = std::move(Quantifier);
+        }
+        Made.push_back(std::move(Instance));
+        for (auto &Fact : Made) {
+          if (Instances == MaxLemmaInstances ||
+              !Seen.insert(logicKey(Fact.get())).second)
+            continue;
+          Assumed.push_back(std::move(Fact));
+          Contracts.insert(Identity);
+          ++Instances;
+        }
+      }
+  }
+
   const Obligation &Like = Target ? *Target : Module.Obligations.front();
   SpecAxiomContext Visibility{Functions, Fn.SpecFuel, Fn.HiddenSpecs,
                               Fn.RevealedSpecs};
@@ -1785,6 +1925,8 @@ public:
         BackendKind Kind;
       };
       std::vector<Confirmation> Confirmations;
+      /// For a verified proof function: what its verification proves.
+      std::shared_ptr<const ContractTheorem> Contract;
       std::string Dump;
       std::string Archive;
     };
@@ -2759,6 +2901,8 @@ public:
                Fn->Name + backendSuffix(R), R.Location, Fn->Name, R});
           // The module verified, the bounded one under BMC (moved into it).
           recordDependencies(*Fn, Module);
+          if (Fn->IsProof && !Fn->IsSpec)
+            Run.Contract = Module.Contract;
           std::set<std::string> Callees;
           collectCallees(Fn->Body, Callees);
           CallDependencies.emplace_back(Diags.size() - 1, Fn->Identity,
@@ -3297,10 +3441,10 @@ public:
     // no other verdict, since neither establishes a contract.
     if (!Confirmations.empty()) {
       const std::map<std::string, std::string> UnprovedRules = unprovedRules();
-      std::set<std::string> Lemmas;
-      for (const auto &Fn : Functions)
-        if (Fn->IsProof && !Fn->IsSpec && !Unestablished.count(Fn->Identity))
-          Lemmas.insert(Fn->Identity);
+      std::map<std::string, std::shared_ptr<const ContractTheorem>> Lemmas;
+      for (size_t I = 0; I != Functions.size(); ++I)
+        if (Runs[I].Contract && !Unestablished.count(Functions[I]->Identity))
+          Lemmas.emplace(Functions[I]->Identity, Runs[I].Contract);
       std::vector<std::optional<VerifyResult>> Outcomes(Confirmations.size());
       auto confirm = [&](size_t I) {
         const FunctionRun::Confirmation &Pending = Confirmations[I];
