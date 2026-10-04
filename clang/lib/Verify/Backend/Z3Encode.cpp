@@ -2162,23 +2162,27 @@ z3::expr Z3Encoder::evaluated(const z3::model &Model, const z3::expr &E,
   return Ctx.constant("cppverify.unevaluated", E.get_sort());
 }
 
-CertifyResult Z3Encoder::certify(const ObligationModule &Module,
-                                 const LogicExpr &Query,
-                                 CandidateModel &Candidate,
-                                 const CertifyLimits &Limits) {
-  // One model's check may not spend the whole query: a slow one leaves
-  // time for the others and for the later stages.
-  CertifyLimits Check = Limits;
+CertifyLimits Z3Encoder::checkLimits(CertifyLimits Limits) const {
+  // One check may not spend the whole query: a slow one leaves time for the
+  // others and for the later stages.
   const unsigned CapMs = CertifyTimeoutMs ? *CertifyTimeoutMs : TimeoutMs / 2;
   if (CapMs > 0) {
     const auto Cap =
         std::chrono::steady_clock::now() + std::chrono::milliseconds(CapMs);
-    if (!Check.Deadline || Cap < *Check.Deadline) {
-      Check.Deadline = Cap;
-      Check.CheckTimeoutMs = CapMs;
+    if (!Limits.Deadline || Cap < *Limits.Deadline) {
+      Limits.Deadline = Cap;
+      Limits.CheckTimeoutMs = CapMs;
     }
   }
-  CertifyResult Result = certifyCounterexample(Module, Query, Candidate, Check);
+  return Limits;
+}
+
+CertifyResult Z3Encoder::certify(const ObligationModule &Module,
+                                 const LogicExpr &Query,
+                                 CandidateModel &Candidate,
+                                 const CertifyLimits &Limits) {
+  CertifyResult Result =
+      certifyCounterexample(Module, Query, Candidate, checkLimits(Limits));
   std::lock_guard<std::mutex> Guard(CheckLock);
   if (!Stopped)
     return Result;
@@ -2829,6 +2833,8 @@ z3::check_result Z3Encoder::certifyModels(const ObligationModule &Module,
   DefinitionRefinement Refinement(Module, NativeRecursion
                                               ? DefinitionRefinement::MaxRounds
                                               : HiddenRoundsBeforeNative);
+  if (ProofOnly)
+    Refinement.seekProofOnly();
   // Instances settle a few disputed points cheaply; beyond that the solver's
   // own unfolding of native recursive definitions does far better, so
   // refinement gets only a slice of the budget before they take over.
@@ -2845,11 +2851,21 @@ z3::check_result Z3Encoder::certifyModels(const ObligationModule &Module,
                                  : 4 * RefinementSliceMs);
   }
   EscalateToNative = false;
+  std::vector<VerifyModelValue> UncheckedValues;
+  std::string UncheckedApplication;
+  std::string UncheckedReason;
   auto stop = [&](const RefinementDecision &Decision) {
     Out.Status = VerifyStatus::Unresolved;
     Out.Reason = Decision.Reason;
     Out.Message = Decision.Message;
     Out.InductionOnly = Decision.InductionOnly;
+    if (!UncheckedApplication.empty() &&
+        (Decision.Reason == VerifyReason::SpecFuel ||
+         Decision.Reason == VerifyReason::UncheckedCounterexample)) {
+      Out.Unchecked = UncheckedValues;
+      Out.UncheckedApplication = UncheckedApplication;
+      Out.UncheckedReason = UncheckedReason;
+    }
     EscalateToNative = !NativeRecursion && !Decision.Unbounded &&
                        !Decision.NoCounterexample &&
                        (Decision.Reason == VerifyReason::SpecFuel ||
@@ -2929,8 +2945,13 @@ z3::check_result Z3Encoder::certifyModels(const ObligationModule &Module,
     if (Certified.Outcome == CertifyOutcome::Undetermined &&
         Certified.DefinitionTooDeep && Certified.DeepApplication &&
         Narrowed < MaxNarrowedQuantifiers) {
-      if (Narrowed++ == 0)
+      if (Narrowed++ == 0) {
         Unchecked = Refinement.next(Certified);
+        UncheckedValues = candidateValues(Module, Query, Candidate);
+        UncheckedApplication = shownApplication(
+            Module, *Certified.DeepApplication, Candidate, Limits);
+        UncheckedReason = Certified.Detail;
+      }
       const bool SavedFailure = EncodingFailed;
       const bool SavedShadows = DefineBitShadows;
       EncodingFailed = false;
@@ -3035,6 +3056,11 @@ VerifyResult Z3Encoder::verifyModule(const ObligationModule &Module,
                                      std::optional<uint64_t> TraceEventCount) {
   VerifyResult Out;
   QueryStart = std::chrono::steady_clock::now();
+  // A step toward settling another module wants a proof or a certified
+  // counterexample within its slice: no domain probing, whose thousands of
+  // ground instances can keep the solver from noticing its timeout.
+  if (Module.Attempt != ModuleAttempt::Primary)
+    ProofOnly = true;
   const bool IsCompleteQuery = Query == nullptr;
   auto EncodedGoal = encodeModule(Module, Query, Out);
   if (!EncodedGoal)
@@ -3049,7 +3075,7 @@ VerifyResult Z3Encoder::verifyModule(const ObligationModule &Module,
     if (TimeoutMs > 0)
       Limits.Deadline = QueryStart + std::chrono::milliseconds(TimeoutMs);
     for (const DefinitionInstance &Instance :
-         closedApplicationInstances(Module, Asked, Limits))
+         closedApplicationInstances(Module, Asked, checkLimits(Limits)))
       if (std::optional<z3::expr> Equation = definitionInstance(Instance))
         Solver.add(*Equation);
   }
@@ -3649,47 +3675,20 @@ unprovedObligations(const ObligationModule &Module,
   return Unproved;
 }
 
-std::optional<VerifyResult>
-Z3VerifyBackend::proveByInduction(const ObligationModule &Module,
-                                  const Obligation *Item,
-                                  std::vector<std::string> *Tried) {
-  // No finite unfolding settles the goal: try strong induction on a variable
-  // that the refuted applications grow with.
-  constexpr unsigned MaxInductionVariables = 2;
-  unsigned Attempts = 0;
-  for (const auto &[Variable, Sort] : inductionVariables(Module, Item)) {
-    if (Attempts++ == MaxInductionVariables || spent())
-      break;
-    auto Inductive = inductionModule(Module, Variable, Sort, Item);
-    if (!Inductive) {
-      llvm::consumeError(Inductive.takeError());
-      continue;
-    }
-    if (Tried)
-      Tried->push_back(Variable);
-    // Both encodings are exact; bit-vector conversions of the binder would
-    // hide the hypothesis from instantiation.
-    Z3Encoder Encoder;
-    Encoder.setTimeoutMs(budget(inductionBudgetMs(TimeoutMs)));
-    Encoder.setResourceLimit(ResourceLimit);
-    Encoder.setCertifyTimeoutMs(CertifyTimeoutMs);
-    Encoder.setIntegerEncoding(IntegerEncoding ==
-                                       MachineIntegerEncoding::BitVector
-                                   ? MachineIntegerEncoding::Auto
-                                   : IntegerEncoding);
-    Encoder.setProofOnly(true);
-    Cancellation.enter(Encoder);
-    VerifyResult Proof = Encoder.verifyModule(*Inductive);
-    Cancellation.leave(Encoder);
-    if (Proof.Status == VerifyStatus::Verified)
-      return Proof;
-  }
-  return std::nullopt;
-}
-
 VerifyResult Z3VerifyBackend::verifyModule(const ObligationModule &Module) {
   TimeoutMs =
       budget(moduleTimeoutMs(Module, SolverTimeoutMs, CollectionTimeoutMs));
+  // A step toward settling another module gets integers: bit-vector
+  // conversions of a hypothesis's binders hide it from instantiation.
+  const bool Attempt = Module.Attempt != ModuleAttempt::Primary;
+  const MachineIntegerEncoding Requested = IntegerEncoding;
+  if (Attempt && IntegerEncoding == MachineIntegerEncoding::BitVector)
+    IntegerEncoding = MachineIntegerEncoding::Auto;
+  Enc.setIntegerEncoding(IntegerEncoding);
+  llvm::scope_exit Restore([&] {
+    IntegerEncoding = Requested;
+    Enc.setIntegerEncoding(Requested);
+  });
   Enc.setTimeoutMs(TimeoutMs);
   if (SingleQuery) {
     if (auto Limit = querySizeLimitResult(Module, MaxQueryNodes))
@@ -3715,21 +3714,7 @@ VerifyResult Z3VerifyBackend::verifyModule(const ObligationModule &Module) {
         Retry.Reason == VerifyReason::SpecFuel)
       Result = std::move(Retry);
   }
-  if (Result.Status != VerifyStatus::Unresolved ||
-      Result.Reason != VerifyReason::SpecFuel)
-    return Result;
-  std::vector<std::string> Tried;
-  std::optional<VerifyResult> Proof = proveByInduction(Module, nullptr, &Tried);
-  if (!Proof) {
-    Result.Message += inductionNote(Module, Tried);
-    return Result;
-  }
-  Proof->CacheHits = Result.CacheHits;
-  Proof->CacheMisses = Result.CacheMisses;
-  Proof->CacheErrors = Result.CacheErrors;
-  Proof->CacheError = Result.CacheError;
-  Proof->ReusedQueries = Result.ReusedQueries;
-  return std::move(*Proof);
+  return Result;
 }
 
 VerifyResult
