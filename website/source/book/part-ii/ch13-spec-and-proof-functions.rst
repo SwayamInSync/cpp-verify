@@ -259,21 +259,67 @@ four kinds of goal without help:
   checked against the true definitions, so it never relies on a value the
   solver invented for an unfolded call.
 - **Inductions.** When no finite unfolding settles a goal, the verifier tries
-  strong induction on an integer variable that the recursive calls depend on:
-  it proves the goal assuming it holds at every smaller nonnegative value of
-  that variable, with everything else fixed. A least counterexample would
-  satisfy that assumption, so this never proves a false goal; below zero the
-  assumption is empty, and those values are proved directly. Assignments are
-  substituted first, so ``return n * (n + 1);`` with
-  ``post(result == 2 * sum(n))`` is proved this way, and a lemma such as
-  ``2 * sum(n) == n * (n + 1)`` needs no body.
+  well-founded inductions over it: it proves the goal assuming it holds at
+  every value that is smaller in a measure, with everything else fixed. The
+  measure is that of a recursive spec the goal applies, at that application,
+  and the assumption is also stated at the values the spec's own recursion
+  reaches: through the other specs of its recursion group, and under a
+  ``forall`` or ``exists`` for every value it ranges over. Strong induction
+  on an integer variable is tried too. Smaller means smaller by the relation
+  termination checks use, which has no infinite descending chains, so this
+  never proves a false goal; the assumption is the function's own claim,
+  without the facts the verifier added to it. A verified result names the
+  induction, as in ``[by induction following fibo]``.
 
-The automatic induction keeps every other variable fixed and assumes nothing
+The lemmas below need no body:
+
+.. code-block:: cpp
+
+   spec int fibo(int n)
+     decreases(n)
+     post(result >= 0)
+   {
+     if (n <= 0) return 0;
+     if (n == 1) return 1;
+     return fibo(n - 2) + fibo(n - 1);
+   }
+
+   // The claim at n - 1 and n - 2, as fibo recurses.
+   proof void grows(int n)
+     pre(n >= 3)
+     post(fibo(n) >= n - 1)
+   {
+   }
+
+   spec int total(seq s)
+     decreases(s.len())
+   {
+     return s.len() <= 0 ? 0 : total(s.subrange(0, s.len() - 1)) + s[s.len() - 1];
+   }
+
+   // The claim at the shorter sequence total recurses on.
+   proof void total_nonneg(seq s)
+     pre(forall(k, 0, s.len(), s[k] >= 0))
+     post(total(s) >= 0)
+   {
+   }
+
+.. code-block:: text
+
+   Verified: grows [backend=z3] [by induction following fibo]
+   Verified: total_nonneg [backend=z3] [by induction following total]
+
+Assignments are substituted first, so ``return n * (n + 1);`` with
+``post(result == 2 * sum(n))`` is proved the same way.
+
+The automatic inductions keep every other variable fixed and assume nothing
 but the goal itself. When the recursion changes another argument, or the step
-needs a stronger statement than the goal, the verifier reports ``spec.fuel``
-and says so. State the induction as a ``proof`` function whose ``decreases``
-clause shrinks on each recursive call, and call the lemma where the fact is
-needed:
+needs a stronger statement than the goal, the verifier reports ``spec.fuel``,
+names the inductions it tried, and for a ``proof`` function shows a body to
+start from: a call of the lemma at each value the recursion reaches, under the
+condition that reaches it and the lemma's precondition there. State the
+induction as a ``proof`` function whose ``decreases`` clause shrinks on each
+recursive call, and call the lemma where the fact is needed:
 
 .. code-block:: cpp
 
@@ -306,6 +352,51 @@ is the induction hypothesis. Machine arithmetic in the lemma is checked for
 overflow and reasoned about exactly. A ``contract_assert`` is proved where it
 stands and assumed afterwards, so a chain of assertions in a ghost block
 works as a step-by-step proof.
+
+Counterexamples too large to compute
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A claim can be false only at inputs whose spec values cannot be computed:
+``pow2(1000000000)`` has a billion bits. The counterexample's check then
+cannot evaluate it, and the verifier confirms the counterexample by a proof
+at that input instead. With the values the counterexample gives fixed, the
+facts the query states assumed (a spec's proved ``post``), and the
+postconditions of the verified ``proof`` functions that speak of the same
+applications, the solver proves that the claim fails there. The failure then
+rests on those facts and contracts:
+
+.. code-block:: cpp
+
+   spec int pow2(int n)
+     decreases(n)
+     post(result >= n + 1)
+   {
+     return n <= 0 ? 1 : 2 * pow2(n - 1);
+   }
+
+   // pow2(n) >= n + 1 > 1000, at inputs of a billion and more.
+   proof void small_power(int n)
+     pre(n >= 1000000000)
+     post(pow2(n) < 1000)
+   {
+   }
+
+.. code-block:: text
+
+   error: verification failed: small_power (counterexample: n = 1000023594; confirmed by a proof at this input, since its check could not compute pow2(1000023594)) [backend=z3] [reason=counterexample]
+
+Only facts that are proved count: a confirmation runs once every function
+is verified and uses only the contracts that are established. When no proved
+fact settles the claim, it may as well be true for want of a lemma, and the
+verdict stays unresolved and says so:
+
+.. code-block:: text
+
+   Unresolved: fib3_small [backend=z3] [reason=spec.fuel] (proof obligation ...: Z3 proposed n = 1000000000 as a counterexample, but checking it needs fib3(1000000000) (the evaluation nesting limit was reached while evaluating fib3), and no proved fact settles it: either the claim is false there, or it is true and needs a proof by induction; ...)
+
+A lemma such as ``post(fib3(n) >= 5)`` for ``n >= 5``, proved by
+induction, settles it: the claim then fails, confirmed with that lemma's
+contract.
 
 A spec's own ``post``, ``decreases``, and ``reads`` clauses are checked
 without a function body to put a lemma call in. A proof block after the
