@@ -80,6 +80,11 @@ struct PassiveProgram {
   /// Each behavior's assumption in the entry state.
   std::vector<std::pair<std::string, std::unique_ptr<VExpr>>> BehaviorAssumes;
   std::vector<PassiveExitAssert> ExitAsserts;
+  /// For a proof function: its postconditions as asserted, and the variables
+  /// of its entry state. With EntryAssumes they state what its verification
+  /// proves (ObligationModule::Contract).
+  std::vector<std::unique_ptr<VExpr>> ContractConclusions;
+  std::set<std::string> EntryVariables;
   std::string ResultVarName;
   std::string OldHeapName;
   /// Explicitly declared heap-array SSA variables. Backends must not infer
