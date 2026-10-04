@@ -12,7 +12,7 @@
 # CHECK-DAG: Verified: bounded [backend=cvc5]
 # CHECK-DAG: verification failed: bounded_wrong {{.*}}[backend=cvc5] [reason=counterexample]
 # CHECK-DAG: Verified: inductive [backend=cvc5]
-# CHECK-DAG: Unresolved: accumulated [backend=cvc5] [reason=spec.fuel] {{.*}}by induction in a proof function
+# CHECK-DAG: Unresolved: accumulated [backend=cvc5] [reason=spec.fuel] {{.*}}induction following accumulate and induction following sum and induction on n did not prove it; if the claim holds, it needs a proof by induction
 # CHECK-DAG: Verified: accumulate_sum [backend=cvc5]
 # CHECK-DAG: Verified: accumulated_by_lemma [backend=cvc5]
 # CHECK-DAG: Unresolved: sum_closed [backend=cvc5]
