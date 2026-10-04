@@ -44,25 +44,30 @@ the check refutes it, CppVerify gives the solver the definition at the
 disputed arguments and solves again, which can also prove the obligation. If
 that does not settle the query, the result is not verified with reason
 ``spec.fuel`` rather than a counterexample. Before reporting it, the verifier
-tries inductions over the goal (see :doc:`ch13-spec-and-proof-functions`); the
-message names those it tried, as ``induction following fibo and induction on
-n did not prove it``, and for a ``proof`` function shows a body to start a
-proof by induction from. When the solver's counterexamples need the spec at
-ever larger arguments, the message says no finite unfolding settles it: the
-goal needs an induction the verifier did not find, often one over a stronger
-statement, and the fix is a lemma. Otherwise raise ``reveal_with_fuel``,
-bound the argument, or state a lemma.
+tries to prove the goal by induction on its own (section "Automatic
+induction" of :doc:`ch13-spec-and-proof-functions`); the message names the
+inductions it tried, as ``induction following fibo and induction on n did not
+prove it``, and for a ``proof`` function shows a body to start a proof by
+induction from. When the solver's counterexamples need the spec at ever
+larger arguments, the message says no finite unfolding settles it: the goal
+needs an induction the verifier did not find, often one over a stronger
+statement, and the fix is a lemma (that section works through one).
+Otherwise raise ``reveal_with_fuel``, bound the argument, or state a lemma.
 
 When the solver proposes a counterexample whose spec values its check cannot
 compute, such as ``fibo(1000000000)``, the verifier tries to confirm it by a
-proof at that input, from the facts that are proved (a spec's ``post``, the
-contracts of verified ``proof`` functions). A confirmed counterexample is a
-failure that says so (``confirmed by a proof at this input that uses the
-contract of ...``). Otherwise the message shows the proposed input and both
-possibilities: the claim is false there, or it is true and needs a proof by
-induction; the verifier cannot tell these apart, since neither the solver's
-proposal nor the missing value decides it. JSON gives the proposed input as
-``unchecked_counterexample``. For a hidden spec the reason is
+proof at that input, from facts that are proved: the postconditions of specs
+and the contracts of ``proof`` functions that are established, each lemma
+with every assumption its own proof made (section "Counterexamples too large
+to compute" of :doc:`ch13-spec-and-proof-functions`). A confirmed
+counterexample is a failure that says so (``confirmed by a proof at this
+input that uses the contract of ...``). Otherwise the message shows the
+proposed input and both possibilities: the claim is false there, or it is
+true and needs a proof by induction. The verifier cannot tell these apart,
+since neither the solver's proposal nor the missing value decides it; prove
+the claim if you believe it, or state the lemma that refutes it if you do
+not. JSON gives the proposed input as ``unchecked_counterexample``. For a
+hidden spec the reason is
 ``spec.hidden``: the definition would settle the query, but ``hide`` keeps it
 out of proofs, so reveal it or state a lemma. A model that cannot be checked
 within the checker's limits is reported as ``counterexample.unchecked``: for
