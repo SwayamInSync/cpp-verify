@@ -565,7 +565,45 @@ proof void small_power(int n)   // fails at n >= 1000000000, confirmed by proof
 
 Where no proved fact settles it, the claim may as well be true for want of a
 lemma: it stays `spec.fuel`, and the message shows the proposed input and
-says both.
+says both. A lemma that refutes the claim settles it:
+
+<!-- cppverify-example: fails fibo_small -->
+
+```cpp
+spec int fibo(int n)
+  decreases(n)
+  post(result >= 0)
+{
+    if (n <= 0) return 0;
+    if (n == 1) return 1;
+    return fibo(n - 2) + fibo(n - 1);
+}
+
+proof void fibo_at_least_5(int n)
+  pre(n >= 5)
+  post(fibo(n) >= 5)
+  decreases(n)
+{
+    if (n >= 6)
+        fibo_at_least_5(n - 1);
+}
+
+proof void fibo_small(int n)   // fails at n = 1000000000, confirmed with
+  pre(n >= 1000000000)         // the contract of fibo_at_least_5
+  post(fibo(n) < 5)
+{
+}
+```
+
+A lemma is instantiated where its postcondition speaks of the same spec
+application as the claim, and what is instantiated is what its verification
+proved: its postconditions wherever every assumption its proof started from
+holds, the generated ones included (a pointer parameter is null or valid,
+`valid(p, n)` gives `n >= 0`, mutable pointers are distinct objects, a record
+satisfies its type invariant). A parameter the match leaves open ranges over
+every value. So a lemma is never used where an assumption of its proof fails,
+whatever its parameters' types, and it applies wherever some value of the
+open parameters meets those assumptions.
 
 ### `recommends` — soft preconditions for spec functions
 
