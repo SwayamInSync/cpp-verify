@@ -104,19 +104,26 @@ and ``S(i)`` could be anything:
 .. code-block:: text
 
    gauss.cpp:33:7: Unresolved: sum_below [backend=z3] [reason=spec.fuel]
-     (proof obligation ...::overflow@33:7: every counterexample found
-     applies S beyond its unfolding fuel and is refuted by its definition
-     (then z3 returned unknown: timeout); raise reveal_with_fuel, bound the
-     argument, or prove it by induction in a proof function)
+     (proof obligation ...::overflow@33:7: every counterexample the solver
+     proposed applies S beyond the unfoldings it was given and is refuted by
+     its definition (then z3 returned unknown: timeout); reveal_with_fuel
+     settles it if a fixed depth of unfolding does; induction following S
+     and induction on i did not prove it; if the claim holds, it needs a
+     proof by induction: a recursive proof function that uses it at smaller
+     values)
 
-The location is the statement ``s = s + i``. The message names the remedy:
-the induction is already proved, as ``gauss``, and only needs citing.
+The location is the statement ``s = s + i``. The message says what was
+tried: the solver needed ``S`` beyond the unfoldings it was given, and the
+inductions the verifier tried by itself did not prove the step, which needs
+the closed form rather than the loop's own invariant. The induction it asks
+for is already proved, as ``gauss``, and only needs citing.
 
-For a claim as direct as this one, CppVerify also tries induction by itself
-when the solver alone cannot settle a recursive spec (see
-:doc:`ch16-when-verification-fails`), and ``gauss`` verifies even with an
-empty body. Write the proof anyway when the argument is not a plain
-induction on one variable, or to record why the claim holds.
+CppVerify tries induction by itself when the solver alone cannot settle a
+recursive spec (section "Automatic induction" of
+:doc:`ch13-spec-and-proof-functions`), and ``gauss`` on its own verifies
+even with an empty body, ``[by induction following S]``. Write the proof
+anyway when the argument is not a plain induction over the spec's
+recursion, or to record why the claim holds.
 
 A lemma's facts last until the end of the function. To use one for a single
 claim only, prove the claim ``by`` it; nothing else from the block remains:
