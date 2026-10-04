@@ -349,6 +349,14 @@ codes include ``counterexample``, ``solver.timeout``, ``solver.unknown``,
 ``callee.contract``,
 ``decreases.missing``, and ``construct.unsupported``.
 
+A result settled by an automatic induction says which, as ``[by induction
+following fibo]`` (JSON ``induction``); an unresolved one lists the
+inductions tried (``induction_tried``) and, when the solver proposed a
+counterexample its check could not evaluate, that input and the application
+it could not compute (``unchecked_counterexample``, with ``application`` and
+``model``). A counterexample confirmed by a proof at its input names the
+``proof`` functions whose contracts the proof used (``confirmed_with``).
+
 What a verified result rests on
 -------------------------------
 
