@@ -371,13 +371,21 @@ Current proof-language limitations include:
   lemma (a recursive ``proof`` function), as in Dafny, Lean, and Isabelle. The
   hypothesis over all smaller values is stated as one quantifier only for
   integer variables, since canonical quantifiers range over integers; over a
-  sequence the hypothesis is given at the values its recursion reaches;
+  sequence the hypothesis is given at the values its recursion reaches. The
+  inductions for one claim share the time of two attempts (each a sixth of
+  ``--timeout``, see :doc:`../book/part-ii/ch13-spec-and-proof-functions`),
+  so an induction that needs longer is not found: raise ``--timeout`` or
+  state the lemma;
 - a counterexample whose spec values cannot be computed is confirmed only by
   a proof from facts that are proved: when none settles the claim, it stays
-  ``spec.fuel``, with the proposed input in the message. The contracts of
-  ``proof`` functions with pointer or reference parameters are not used for
-  this yet: their implicit preconditions (valid storage, distinct objects)
-  would have to be stated at each instance;
+  ``spec.fuel``, with the proposed input in the message. The proof fixes the
+  counterexample's integers, truth values, and pointers, not its memory or
+  collections, so facts about those must come from the claim's preconditions
+  or from lemmas. A lemma is used where its conclusion speaks of the same
+  spec application as the claim; when that application does not determine
+  the memory the lemma reads, the lemma is taken at the function's entry
+  memory. cvc5 confirms fewer counterexamples than Z3, since it returns
+  ``unknown`` on more queries over memory;
 - bounded domains are settled by evaluating the definitions across them, which
   reaches about a thousand values at the default budget; larger ones need a
   lemma;
