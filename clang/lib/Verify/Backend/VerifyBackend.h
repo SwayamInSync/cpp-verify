@@ -155,6 +155,22 @@ struct VerifyResult {
   /// With --profile-quantifiers, the busiest quantifiers of an unresolved
   /// query, most instantiated first.
   std::vector<QuantifierProfileEntry> QuantifierProfile;
+  /// For an unresolved module: the inductions tried without settling it,
+  /// as "following fibo" or "on n".
+  std::vector<std::string> InductionTried;
+  /// The induction that settled the module, if one did.
+  std::string InductionUsed;
+  /// A counterexample the solver proposed that its check could not
+  /// evaluate, and the application it could not compute there, as
+  /// "fibo(1000000000)": either a real failure or a claim that needs a
+  /// proof the solver cannot find.
+  std::vector<VerifyModelValue> Unchecked;
+  std::string UncheckedApplication;
+  /// Why the check stopped there.
+  std::string UncheckedReason;
+  /// For a counterexample confirmed by a proof at its input: the proof
+  /// functions whose contracts that proof used, so that it rests on them.
+  std::set<std::string> ConfirmedWithContracts;
 };
 
 struct BackendCapabilities {
@@ -167,18 +183,35 @@ public:
   virtual ~VerifyBackend() = default;
   virtual llvm::StringRef getName() const = 0;
   virtual BackendCapabilities getCapabilities() const = 0;
+  /// Solves \p Module, and where it stays unresolved because no finite
+  /// unfolding settles it, tries inductions over it (Induction.h).
   VerifyResult verify(const ObligationModule &Module);
+  /// Solves \p Module alone: what a backend made of others runs on them.
+  VerifyResult verifyDirect(const ObligationModule &Module);
   /// Queries started after this get only the time left before Deadline: one
   /// function's budget, shared by its queries. Unset removes the limit.
-  virtual void
-  setDeadline(std::optional<std::chrono::steady_clock::time_point> Deadline) {}
+  void setDeadline(std::optional<std::chrono::steady_clock::time_point> D) {
+    FunctionDeadline = D;
+    applyDeadline(D);
+  }
   /// Stops the work in progress, from any thread: queries running end
   /// unresolved and no further one starts, until resume().
   virtual void cancel() {}
   virtual void resume() {}
+  /// The time one query of \p Module may take, when the backend bounds it.
+  virtual std::optional<unsigned>
+  queryTimeoutMs(const ObligationModule &Module) const {
+    return std::nullopt;
+  }
 
 protected:
   virtual VerifyResult verifyModule(const ObligationModule &Module) = 0;
+  /// Limits the queries that start from now on to \p D.
+  virtual void
+  applyDeadline(std::optional<std::chrono::steady_clock::time_point> D) {}
+
+private:
+  std::optional<std::chrono::steady_clock::time_point> FunctionDeadline;
 };
 
 /// Race: Z3 and cvc5 at once, the first proof or certified counterexample
