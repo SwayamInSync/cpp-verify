@@ -1,9 +1,11 @@
 //===--- VerifyBackend.cpp ------------------------------------------------===//
 #include "VerifyBackend.h"
 #include "CVC5Backend.h"
+#include "Induction.h"
 #include "LeanBackend.h"
 #include "ObligationSimplify.h"
 #include "Z3Encode.h"
+#include "llvm/ADT/ScopeExit.h"
 #include <set>
 #include <thread>
 
@@ -37,15 +39,19 @@ public:
                                              /*ReuseVerifiedQueries=*/true)),
         MaxUnrollBound(UnrollBound) {}
   llvm::StringRef getName() const override { return "bmc"; }
-  void
-  setDeadline(std::optional<std::chrono::steady_clock::time_point> D) override {
-    Z3->setDeadline(D);
+  std::optional<unsigned>
+  queryTimeoutMs(const ObligationModule &Module) const override {
+    return Z3->queryTimeoutMs(Module);
   }
   BackendCapabilities getCapabilities() const override {
     return {allLogicFeatures(), true};
   }
 
 protected:
+  void applyDeadline(
+      std::optional<std::chrono::steady_clock::time_point> D) override {
+    Z3->setDeadline(D);
+  }
   VerifyResult verifyModule(const ObligationModule &Module) override {
     if (!Module.BMCTransform) {
       VerifyResult Result;
@@ -64,27 +70,6 @@ protected:
       return Result;
     }
     std::vector<VerifyResult> Results = Z3->verifyObligations(Module);
-    for (size_t I = 0; I != Results.size() && I != Module.Obligations.size();
-         ++I) {
-      if (Results[I].Status != VerifyStatus::Unresolved ||
-          Results[I].Reason != VerifyReason::SpecFuel)
-        continue;
-      const Obligation &Item = Module.Obligations[I];
-      std::vector<std::string> Tried;
-      if (std::optional<VerifyResult> Proof =
-              Z3->proveByInduction(Module, &Item, &Tried)) {
-        Proof->CacheHits = Results[I].CacheHits;
-        Proof->CacheMisses = Results[I].CacheMisses;
-        Proof->CacheErrors = Results[I].CacheErrors;
-        Proof->CacheError = Results[I].CacheError;
-        Proof->ReusedQueries = Results[I].ReusedQueries;
-        Proof->ObligationId = Item.StableId.empty() ? Item.Id : Item.StableId;
-        Proof->ObligationType = Item.Kind;
-        Results[I] = std::move(*Proof);
-      } else {
-        Results[I].Message += inductionNote(Module, Tried);
-      }
-    }
     uint64_t CacheHits = 0;
     uint64_t CacheMisses = 0;
     uint64_t CacheErrors = 0;
@@ -114,7 +99,11 @@ protected:
       if (Result.Status == VerifyStatus::Verified)
         continue;
       if (Result.Status == VerifyStatus::Unresolved) {
-        if (!FirstUnresolved)
+        // One that only induction can settle is the one an induction over
+        // the module is tried for.
+        if (!FirstUnresolved ||
+            (FirstUnresolved->Reason != VerifyReason::SpecFuel &&
+             Result.Reason == VerifyReason::SpecFuel))
           FirstUnresolved = std::move(Result);
         continue;
       }
@@ -223,10 +212,9 @@ public:
         MaxQueryNodes(Execution.MaxQueryNodes) {}
 
   llvm::StringRef getName() const override { return "portfolio"; }
-  void
-  setDeadline(std::optional<std::chrono::steady_clock::time_point> D) override {
-    Z3->setDeadline(D);
-    CVC5->setDeadline(D);
+  std::optional<unsigned>
+  queryTimeoutMs(const ObligationModule &Module) const override {
+    return Z3->queryTimeoutMs(Module);
   }
   BackendCapabilities getCapabilities() const override {
     return {Z3->getCapabilities().SupportedFeatures &
@@ -235,6 +223,11 @@ public:
   }
 
 protected:
+  void applyDeadline(
+      std::optional<std::chrono::steady_clock::time_point> D) override {
+    Z3->setDeadline(D);
+    CVC5->setDeadline(D);
+  }
   VerifyResult verifyModule(const ObligationModule &Module) override {
     if (MaxQueryNodes != 0 &&
         obligationModuleNodeCount(Module) > MaxQueryNodes) {
@@ -251,8 +244,8 @@ protected:
     std::vector<VerifyResult> Z3Results;
     std::vector<VerifyResult> CVC5Results;
     if (Module.Obligations.empty()) {
-      Z3Results.push_back(Z3->verify(Module));
-      CVC5Results.push_back(CVC5->verify(Module));
+      Z3Results.push_back(Z3->verifyDirect(Module));
+      CVC5Results.push_back(CVC5->verifyDirect(Module));
     } else {
       Z3Results = Z3->verifyObligations(Module);
       CVC5Results = CVC5->verifyObligations(Module);
@@ -465,6 +458,60 @@ llvm::StringRef verify::verifyReasonCode(VerifyReason Reason) {
 }
 
 VerifyResult VerifyBackend::verify(const ObligationModule &Module) {
+  VerifyResult Result = verifyDirect(Module);
+  if (Module.Attempt != ModuleAttempt::Primary ||
+      Result.Status != VerifyStatus::Unresolved ||
+      (Result.Reason != VerifyReason::SpecFuel && !Result.InductionOnly))
+    return Result;
+  // No finite unfolding settles the module: a proof of the claim under an
+  // induction hypothesis proves it everywhere. Inductions settle proofs only:
+  // a model of one satisfies hypotheses foreign to the program, which keeps
+  // its counterexample from being attributed and shown, and the module's own
+  // counterexamples are found, checked, and confirmed by proof without it.
+  // All of a module's inductions share two attempts' slices of its budget,
+  // the most specific schemes first.
+  const std::optional<std::chrono::steady_clock::time_point> Saved =
+      FunctionDeadline;
+  std::optional<std::chrono::steady_clock::time_point> Until = Saved;
+  if (std::optional<unsigned> Query = queryTimeoutMs(Module)) {
+    const auto Cap = std::chrono::steady_clock::now() +
+                     std::chrono::milliseconds(2 * attemptBudgetMs(*Query));
+    if (!Until || Cap < *Until)
+      Until = Cap;
+  }
+  setDeadline(Until);
+  llvm::scope_exit Restore([&] { setDeadline(Saved); });
+  std::vector<std::string> Tried;
+  for (const InductionScheme &Scheme : inductionSchemes(Module)) {
+    if (Until && std::chrono::steady_clock::now() >= *Until)
+      break;
+    auto Inductive = inductionModule(Module, Scheme);
+    if (!Inductive) {
+      llvm::consumeError(Inductive.takeError());
+      continue;
+    }
+    Tried.push_back(Scheme.Description);
+    VerifyResult Attempt = verifyDirect(*Inductive);
+    if (Attempt.Status != VerifyStatus::Verified &&
+        Attempt.Status != VerifyStatus::BoundedSafe)
+      continue;
+    Attempt.InductionUsed = Scheme.Description;
+    // Its obligations rest on one another through the hypothesis.
+    Attempt.UnprovedObligations.reset();
+    Attempt.CacheHits += Result.CacheHits;
+    Attempt.CacheMisses += Result.CacheMisses;
+    Attempt.CacheErrors += Result.CacheErrors;
+    if (Attempt.CacheError.empty())
+      Attempt.CacheError = Result.CacheError;
+    Attempt.ReusedQueries += Result.ReusedQueries;
+    Attempt.ExploredBounds = Result.ExploredBounds;
+    return Attempt;
+  }
+  Result.InductionTried = std::move(Tried);
+  return Result;
+}
+
+VerifyResult VerifyBackend::verifyDirect(const ObligationModule &Module) {
   if (!Module.CounterexampleQuery) {
     VerifyResult Result;
     Result.Status = VerifyStatus::Unresolved;
@@ -505,6 +552,22 @@ VerifyResult VerifyBackend::verify(const ObligationModule &Module) {
                      formatLogicFeatures(Missing);
     return Result;
   }
+  // A step toward settling another module (an induction, a confirmation)
+  // gets a slice of that module's budget, for all its queries together.
+  std::optional<std::chrono::steady_clock::time_point> Limit = FunctionDeadline;
+  if (Module.Attempt != ModuleAttempt::Primary)
+    if (std::optional<unsigned> Query = queryTimeoutMs(Module)) {
+      const auto Slice = std::chrono::steady_clock::now() +
+                         std::chrono::milliseconds(attemptBudgetMs(*Query));
+      if (!Limit || Slice < *Limit)
+        Limit = Slice;
+    }
+  if (Limit != FunctionDeadline)
+    applyDeadline(Limit);
+  llvm::scope_exit Restore([&] {
+    if (Limit != FunctionDeadline)
+      applyDeadline(FunctionDeadline);
+  });
   VerifyResult Result = verifyModule(Module);
   if (Result.BackendName.empty())
     Result.BackendName = getName().str();
@@ -580,10 +643,9 @@ public:
         MaxQueryNodes(Execution.MaxQueryNodes) {}
 
   llvm::StringRef getName() const override { return "race"; }
-  void
-  setDeadline(std::optional<std::chrono::steady_clock::time_point> D) override {
-    Z3->setDeadline(D);
-    CVC5->setDeadline(D);
+  std::optional<unsigned>
+  queryTimeoutMs(const ObligationModule &Module) const override {
+    return Z3->queryTimeoutMs(Module);
   }
   void cancel() override {
     Z3->cancel();
@@ -600,6 +662,11 @@ public:
   }
 
 protected:
+  void applyDeadline(
+      std::optional<std::chrono::steady_clock::time_point> D) override {
+    Z3->setDeadline(D);
+    CVC5->setDeadline(D);
+  }
   VerifyResult verifyModule(const ObligationModule &Module) override {
     if (MaxQueryNodes != 0 &&
         obligationModuleNodeCount(Module) > MaxQueryNodes) {
@@ -616,11 +683,11 @@ protected:
     VerifyResult Z3Result;
     VerifyResult CVC5Result;
     std::thread Other([&] {
-      CVC5Result = CVC5->verify(Module);
+      CVC5Result = CVC5->verifyDirect(Module);
       if (isDecisive(CVC5Result.Status))
         Z3->cancel();
     });
-    Z3Result = Z3->verify(Module);
+    Z3Result = Z3->verifyDirect(Module);
     if (isDecisive(Z3Result.Status))
       CVC5->cancel();
     Other.join();
