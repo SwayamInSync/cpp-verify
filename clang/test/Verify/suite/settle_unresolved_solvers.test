@@ -13,10 +13,14 @@
 # RUN:   | FileCheck %s --check-prefix=RACE
 # RUN: not %cpp-verify --timeout=10000 --backend=cvc5 %S/counterexample_confirmation.cpp 2>&1 \
 # RUN:   | FileCheck %s --check-prefix=CONFIRM-CVC5 \
-# RUN:       --implicit-check-not='failed: true_at_large'
+# RUN:       --implicit-check-not='failed: true_at_large' \
+# RUN:       --implicit-check-not='failed: depth_below_zero' \
+# RUN:       --implicit-check-not='failed: total_of_negatives'
 # RUN: not %cpp-verify --timeout=10000 --backend=race %S/counterexample_confirmation.cpp 2>&1 \
 # RUN:   | FileCheck %s --check-prefix=CONFIRM-RACE \
-# RUN:       --implicit-check-not='failed: true_at_large'
+# RUN:       --implicit-check-not='failed: true_at_large' \
+# RUN:       --implicit-check-not='failed: depth_below_zero' \
+# RUN:       --implicit-check-not='failed: total_of_negatives'
 
 # CVC5-DAG: Verified: grows [backend=cvc5] [by induction following fibo]
 # CVC5-DAG: Verified: all_good [backend=cvc5] [by induction following good]
@@ -33,7 +37,17 @@
 # CONFIRM-CVC5-DAG: error: verification failed: fibo_small {{.*}}confirmed by a proof at this input that uses the contract of fibo_at_least_5{{.*}}[backend=cvc5]
 # CONFIRM-CVC5-DAG: Unresolved: fib3_small [backend=cvc5] [reason=spec.fuel] (proof obligation {{.*}}: cvc5 proposed n = 1000000000 as a counterexample
 # CONFIRM-CVC5-DAG: Unresolved: true_at_large
+# CONFIRM-CVC5-DAG: error: verification failed: fib4_small {{.*}}that uses the contract of fib4_at_least_5{{.*}}[backend=cvc5]
+# CONFIRM-CVC5-DAG: error: verification failed: fib5_small {{.*}}that uses the contract of fib5_at_least_5{{.*}}[backend=cvc5]
+# CONFIRM-CVC5-DAG: error: verification failed: fib6_small {{.*}}that uses the contract of fib6_at_least_5{{.*}}[backend=cvc5]
+# CONFIRM-CVC5-DAG: Unresolved: depth_below_zero
 
 # CONFIRM-RACE-DAG: error: verification failed: small_power {{.*}}confirmed by a proof at this input
 # CONFIRM-RACE-DAG: error: verification failed: fibo_small {{.*}}confirmed by a proof at this input that uses the contract of fibo_at_least_5
 # CONFIRM-RACE-DAG: Unresolved: true_at_large
+# CONFIRM-RACE-DAG: error: verification failed: fib4_small {{.*}}that uses the contract of fib4_at_least_5
+# CONFIRM-RACE-DAG: error: verification failed: fib5_small {{.*}}that uses the contract of fib5_at_least_5
+# CONFIRM-RACE-DAG: error: verification failed: fib6_small {{.*}}that uses the contract of fib6_at_least_5
+# CONFIRM-RACE-DAG: error: verification failed: total_negative {{.*}}that uses the contract of total_nonneg
+# CONFIRM-RACE-DAG: Unresolved: depth_below_zero
+# CONFIRM-RACE-DAG: Unresolved: total_of_negatives
