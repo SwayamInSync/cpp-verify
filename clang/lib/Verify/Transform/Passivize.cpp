@@ -2879,6 +2879,7 @@ static void addFrameInstances(PassiveProgram &P, const FunctionMap &FnMap) {
       auto Instance = std::make_unique<PassiveStmt>();
       Instance->K = PassiveStmt::Assume;
       Instance->TraceEventCount = P.Stmts[S.Index]->TraceEventCount;
+      Instance->Theorem = true;
       Instance->Cond = std::move(Fact);
       After[S.Index].push_back(std::move(Instance));
       Work.push_back(S.Before);
@@ -2951,6 +2952,7 @@ addSpecPostInstances(PassiveProgram &P, const FunctionMap &FnMap,
             (*Q)->BinderType);
       auto Instance = std::make_unique<PassiveStmt>();
       Instance->K = PassiveStmt::Assume;
+      Instance->Theorem = true;
       Instance->Cond = std::move(Fact);
       if (Spec.Unfolding)
         Unfolded.push_back(Instance->Cond.get());
@@ -4326,6 +4328,7 @@ public:
       CloneCtx PCtx{Renames, OldState, false};
       P.EntryAssumes.push_back(cloneExpr(Pre.get(), PCtx));
     }
+    P.PreconditionCount = P.EntryAssumes.size();
     for (const auto &[Name, Assumes] : Fn.Behaviors) {
       CloneCtx PCtx{Renames, OldState, false};
       P.BehaviorAssumes.emplace_back(Name, cloneExpr(Assumes.get(), PCtx));
