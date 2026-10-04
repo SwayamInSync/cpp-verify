@@ -31,6 +31,7 @@ add_clang_library(clangVerify
   Backend/Certify.cpp
   Backend/Presburger.cpp
   Backend/Obligation.cpp
+  Backend/Induction.cpp
   Backend/ObligationSimplify.cpp
   Backend/ObligationSerialization.cpp
   Backend/ProofCache.cpp
