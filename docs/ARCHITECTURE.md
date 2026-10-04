@@ -1290,13 +1290,10 @@ the candidate's values, removes every variable an equation of the query
 defines (the one-point rule: `x == t` with `x` not in `t`), assumes the
 query's theorems, assumes what only constrains the remaining free variables
 without applying a spec once a certified model of it exists (a separate
-query whose `Failed` result shows it can hold), instantiates the
-postconditions of the established proof functions where their spec
-applications match the query's (a machine parameter seen as `bv_to_int(p)`
-matches an integer term `t` with `p := int_to_bv(t)`; a proof function with
-a pointer or reference parameter is left out, since its implicit
-preconditions, valid storage and distinct objects, are not stated by its
-declared ones), and asks the same
+query whose `Failed` result shows it can hold), instantiates the theorems of
+the established proof functions where their conclusions' spec applications
+match the query's (a machine parameter seen as `bv_to_int(p)` matches an
+integer term `t` with `p := int_to_bv(t)`), and asks the same
 backend to prove the rest of the query (`ModuleAttempt::Confirmation`, with
 an attempt's slice, as above). A
 proof shows the claim fails at that input for some values of the free
@@ -1310,6 +1307,32 @@ false there or it needs a proof by induction, which inductions were tried,
 and, for a proof function, a body that starts one: a call at each value the
 recursion reaches, under the condition reaching it and the precondition
 there (`proofOutline`, printed from logic terms with source names).
+
+A proof function's theorem is what its verification proves, built by the
+same lowering as its module. Passivization records its postconditions as
+asserted (`PassiveProgram::ContractConclusions`) and the variables of its
+entry state (`EntryVariables`); Layer 3 lowers them with every entry
+assumption (`ObligationModule::Contract`: `Premises`, which hold the
+preconditions with the generated ones, such as pointer validity in the
+memory model's own terms, extents, separation, and type invariants injected
+where the body reads a field, and the facts about null at entry;
+`Conclusions`). It is published only when every variable it mentions belongs
+to the entry state, so it is a theorem on its own, and the driver keeps it
+for a verified proof function (`FunctionRun::Contract`). Before, the
+confirmation lowered a lemma's declared clauses from source: `valid(p, n)`
+became `true` and `initialized_ptr` `false`, so pointer lemmas were left out.
+An instance renames the theorem's variables apart, binds those a match
+fixes, and quantifies the other integer, machine, pointer, and Boolean ones
+over the integers (`int_to_bv(k)`, `0 + k`, `k != 0`), adding the instance
+at zero as a witness the solver need not find (cvc5 did not find the
+two-pointer one). A premise that constrains only unbound memory, which
+nothing else mentions, is dropped once the certifier evaluates it true with
+memory of zeros: the theorem then holds without it. Other unbound memory is
+the module's variable of the same name, its entry state. Every value gives
+an instance of a theorem, so none of these choices can make a confirmation
+unsound; they decide only where the module's facts can meet the premises.
+The tests `depth_below_zero` and `total_of_negatives` are true claims that a
+lemma used without such a premise would refute: they stay unresolved.
 
 ## Counterexample Extraction
 
