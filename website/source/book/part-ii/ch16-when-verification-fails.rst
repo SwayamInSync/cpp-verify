@@ -43,11 +43,26 @@ CppVerify checks every model from every solver against the definitions. When
 the check refutes it, CppVerify gives the solver the definition at the
 disputed arguments and solves again, which can also prove the obligation. If
 that does not settle the query, the result is not verified with reason
-``spec.fuel`` rather than a counterexample. When the solver's counterexamples
-need the spec at ever larger arguments, the message says no finite unfolding
-settles it: that goal is an induction, and the fix is a lemma (see
-:doc:`ch13-spec-and-proof-functions`). Otherwise raise ``reveal_with_fuel``,
-bound the argument, or state a lemma. For a hidden spec the reason is
+``spec.fuel`` rather than a counterexample. Before reporting it, the verifier
+tries inductions over the goal (see :doc:`ch13-spec-and-proof-functions`); the
+message names those it tried, as ``induction following fibo and induction on
+n did not prove it``, and for a ``proof`` function shows a body to start a
+proof by induction from. When the solver's counterexamples need the spec at
+ever larger arguments, the message says no finite unfolding settles it: the
+goal needs an induction the verifier did not find, often one over a stronger
+statement, and the fix is a lemma. Otherwise raise ``reveal_with_fuel``,
+bound the argument, or state a lemma.
+
+When the solver proposes a counterexample whose spec values its check cannot
+compute, such as ``fibo(1000000000)``, the verifier tries to confirm it by a
+proof at that input, from the facts that are proved (a spec's ``post``, the
+contracts of verified ``proof`` functions). A confirmed counterexample is a
+failure that says so (``confirmed by a proof at this input that uses the
+contract of ...``). Otherwise the message shows the proposed input and both
+possibilities: the claim is false there, or it is true and needs a proof by
+induction; the verifier cannot tell these apart, since neither the solver's
+proposal nor the missing value decides it. JSON gives the proposed input as
+``unchecked_counterexample``. For a hidden spec the reason is
 ``spec.hidden``: the definition would settle the query, but ``hide`` keeps it
 out of proofs, so reveal it or state a lemma. A model that cannot be checked
 within the checker's limits is reported as ``counterexample.unchecked``: for
@@ -96,9 +111,12 @@ Every result that is not a proof carries one stable reason code (text
        the limit.
    * - ``spec.fuel``
      - Every counterexample relies on a recursive spec or an inductive
-       predicate beyond what unfolding settles. Raise ``reveal_with_fuel``,
-       bound the argument, or prove the property by induction (a lemma, or
-       a postcondition ``!result || Q`` on a predicate).
+       predicate beyond what unfolding settles, the automatic inductions did
+       not prove the goal, and no proved fact confirms a counterexample.
+       Raise ``reveal_with_fuel``, bound the argument, or prove the property
+       by induction (a lemma, or a postcondition ``!result || Q`` on a
+       predicate); the message names the inductions tried and the input the
+       solver proposed.
    * - ``spec.hidden``
      - The proof needs a definition that is hidden (``hide``, or a spec of
        the function's cluster at an equal measure). Reveal it, or give it a
