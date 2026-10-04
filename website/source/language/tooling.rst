@@ -355,7 +355,17 @@ inductions tried (``induction_tried``) and, when the solver proposed a
 counterexample its check could not evaluate, that input and the application
 it could not compute (``unchecked_counterexample``, with ``application`` and
 ``model``). A counterexample confirmed by a proof at its input names the
-``proof`` functions whose contracts the proof used (``confirmed_with``).
+``proof`` functions whose contracts the proof used (``confirmed_with``). For
+example (other fields left out):
+
+.. code-block:: text
+
+   {"function":"even_mod","induction":"following even","status":"verified",...}
+   {"function":"fibo_small","induction_tried":["following fibo","on n"],"reason":"spec.fuel","status":"unresolved","unchecked_counterexample":{"application":"fibo(1000000000)","model":[{"name":"n","ssa":"n_0","type":"i32","value":"1000000000"}]},...}
+   {"confirmed_with":["fibo_at_least_5"],"function":"fibo_small","reason":"counterexample","status":"failed",...}
+
+The last line is the same claim once the lemma ``fibo_at_least_5`` is
+proved; see :doc:`../book/part-ii/ch13-spec-and-proof-functions`.
 
 What a verified result rests on
 -------------------------------
