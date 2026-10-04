@@ -82,8 +82,9 @@ class Z3Encoder {
   /// are defined too, but only to find counterexamples: an unsat that may use
   /// them is not a proof.
   bool NativeRecursion = false;
-  /// Only an unsat result is wanted: no domain probing or coverage, whose
-  /// thousands of ground instances can stall the solver.
+  /// No domain probing or coverage, and refinement rounds of at most
+  /// MaxProofRoundInstances, since thousands of ground instances can stall
+  /// the solver: for a module solved as an attempt (ModuleAttempt).
   bool ProofOnly = false;
   std::set<std::string> NativeHidden;
   /// With NativeRecursion, non-recursive functions are replaced by their
@@ -195,6 +196,8 @@ class Z3Encoder {
   /// opaque constant: undetermined, never a value.
   z3::expr evaluated(const z3::model &Model, const z3::expr &E,
                      bool Completion);
+  /// \p Limits within the time one check may take (--certify-timeout).
+  CertifyLimits checkLimits(CertifyLimits Limits) const;
   /// The certifier's verdict on \p Candidate; undetermined once the encoder
   /// was stopped, since its model then evaluates unreliably.
   CertifyResult certify(const ObligationModule &Module, const LogicExpr &Query,
@@ -368,21 +371,19 @@ public:
   std::vector<VerifyResult> verifyObligations(const ObligationModule &Module,
                                               bool StopAtFailure = false,
                                               Race *Racing = nullptr);
-  void
-  setDeadline(std::optional<std::chrono::steady_clock::time_point> D) override {
-    Deadline = D;
-  }
   void cancel() override { Cancellation.cancel(); }
   void resume() override { Cancellation.reset(); }
-  /// A proof of \p Item, or of the whole module, by strong induction on one
-  /// of its integer variables, if one is found.
-  std::optional<VerifyResult>
-  proveByInduction(const ObligationModule &Module,
-                   const Obligation *Item = nullptr,
-                   std::vector<std::string> *Tried = nullptr);
+  std::optional<unsigned>
+  queryTimeoutMs(const ObligationModule &Module) const override {
+    return moduleTimeoutMs(Module, SolverTimeoutMs, CollectionTimeoutMs);
+  }
 
 protected:
   VerifyResult verifyModule(const ObligationModule &Module) override;
+  void applyDeadline(
+      std::optional<std::chrono::steady_clock::time_point> D) override {
+    Deadline = D;
+  }
 };
 
 } // namespace verify
