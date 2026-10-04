@@ -996,7 +996,14 @@ phase and kept in `ObligationModule::EvidenceFunctions` when simplification
 removes them, never encoded, archived, or hashed. An application whose
 definition could not be decided is remembered (`Undecided`) and fails at
 once when met again; once the time or step budget is spent no failure is
-recovered from (`Exhausted`). The message for an undecided inductive
+recovered from (`Exhausted`). When deciding it read nothing from the model
+(no choice, constant, or pointer validity), the failure is a fact about the
+definition, and the module keeps it (`ObligationModule::Undecided`, shared
+by the module's copies like `Given`): its other checks, its inductions, and
+its confirmation then do not evaluate the application again. In
+`certify_timeout`, deciding each of `odd(4)`, `odd(2)`, and `odd(0)` fails
+after about 1.4 s, and every check of `four_is_odd` repeated them: the
+function took 10 s and its confirmation 5 s; they now take 3 s and 1.5 s. The message for an undecided inductive
 predicate names the application and the postcondition that would decide
 it.
 
@@ -1070,9 +1077,10 @@ model memory instead spent the whole budget (`both_states` took 30 s, now
 0.3 s).
 
 Two cases are settled by instances without a model-by-model search. An
-application at closed arguments is evaluated before the first check, and the
-solver receives the instances at every application the evaluation reaches (at
-most 20000), so `sum(15000) == 112507500` is computed. On the first disputed
+application at closed arguments is evaluated before the first check, within
+the time of one check (`--certify-timeout`), and the solver receives the
+instances at every application the evaluation reaches (at most 20000), so
+`sum(15000) == 112507500` is computed. On the first disputed
 model, Z3 also asks for the least and greatest values the query allows for
 each integer argument of a disputed application, doubling a step until the
 solver proves no further value exists. When both ends are proved, the models
@@ -1216,20 +1224,92 @@ termination fails) is undecided at once, as a definition limit, instead of
 recursing to the nesting limit. If the complete query is unresolved, Z3 may solve the module-owned
 ordered queries. It does not reconstruct alternate passive programs.
 
-A `spec.fuel` result is retried by strong induction (`inductionModule`). For
-an integer variable `n` in an argument of an application (at most two are
-tried), the adapter first substitutes the definitions the query assumes:
-where the query is antitone in `(x == t && A) -> B`, that implication becomes
-`(A -> B)[x := t]`, which only adds models. It then asks whether
-`Q && forall(k, 0, n, !Q[n := k])` has a model, every other variable fixed. If
-`Q` had one, either `n < 0`, where the hypothesis is empty, or the least
-`n >= 0` with the same other values satisfies the hypothesis; so only UNSAT
-is used, as `Verified`. Each attempt gets a sixth of the query budget (at
-least two seconds) and no domain probing, whose thousands of ground instances
-can keep Z3's simplex from noticing a timeout. BMC applies it per obligation,
-never to an unwinding obligation. In cvc5's integer encoding a binder whose
-range fits a machine sort converts to that sort as itself rather than through
-the modular reduction, so its applications stay visible to instantiation.
+**Induction.** A module left `Unresolved` with `spec.fuel` (or marked
+`InductionOnly`) is retried by well-founded inductions in
+`VerifyBackend::verify`, the entry every caller and backend shares; composite
+backends call `verifyDirect` on their solvers, so the step runs once, over
+the composite (`Backend/Induction.cpp`). The claim of a module is its
+obligations other than unwinding ones without the theorems added to them: each
+passive assumption is labeled where it comes from (`PassiveStmt::Theorem` for
+a proved spec postcondition or unfolding instance or a reads frame, which
+hold at every value of every variable; the leading `PreconditionCount` entry
+assumptions are the function's preconditions), and Layer 3 keeps copies of
+those assumptions, simplified like the goals (`ObligationModule::Theorems`,
+`Preconditions`; never archived or hashed, so an archive replays with every
+assumption a premise, as before). A scheme (`InductionScheme`) is a measure
+over some variables: the `decreases` of a recursive spec applied in the claim
+at that application (`LogicFunctionDecl::Decreases`, lowered by `SpecAxioms`),
+or one integer variable (strong induction). Its induction module is the
+module with a hypothesis assumed by every obligation other than unwinding
+ones: the claim, with the definitions it assumes substituted
+(`(x == t && A) -> B` becomes `(A -> B)[x := t]`, which only adds models),
+at every value of the variables smaller by the decrease relation of
+termination checks (`(lower_I == upper_I for I < J) && upper_J >= 0 &&
+lower_J < upper_J` for some J), which has no infinite descending chain, so
+the hypothesis holds of a least counterexample whatever the measure. The
+whole hypothesis is one quantifier where the variables are integers (canonical
+quantifiers range over integers); beside it come instances at the values the
+spec's recursion reaches, found by walking its step definition with the
+conditions on the path (an `ite` branch, the operands an `&&` or `||` passes),
+through the step definitions of the other members of its recursion group
+(computed from the step definitions, at most three deep), and under
+quantifiers as quantified instances with the binder's range, each guarded by
+the decrease and joined by the theorems restated at its values. A heap
+argument stays fixed; an argument that is a variable or its conversion to the
+parameter's sort gives the variable's value. Only `Verified` and
+`BoundedSafe` are taken from an induction module: its models satisfy
+hypotheses foreign to the program, so a counterexample is left to the
+module's own search. Each attempt is marked `ModuleAttempt::Induction`,
+and `verifyDirect` gives every attempt a deadline a sixth of the query
+budget away (at least two seconds, `attemptBudgetMs`), which all its queries
+share: the whole query, the obligations, refinement rounds, and the native
+pass. The inductions of a module together get at most two such slices,
+since the loop lowers the backend's deadline for them (`setDeadline` keeps
+the function's, `applyDeadline` passes the one in force to the solvers).
+Before, the slice bounded each query, and one attempt of `not_inductive`
+took 30 s. An attempt also gets the integer encoding, no domain probing,
+and refinement rounds of at most `MaxProofRoundInstances` (200) instances:
+thousands of ground instances can keep Z3 from noticing a timeout (a round
+of 1799 instances of `triangle` ran 6 s past a deadline of 5 s), while the
+instances a proof by induction needs are few (at most 7 in the tests). At
+most three schemes by a spec and two by a variable are tried. The result names the induction that
+settled it (`InductionUsed`) or those tried (`InductionTried`). In cvc5's
+integer encoding a binder whose range fits a machine sort converts to that
+sort as itself rather than through the modular reduction, so its
+applications stay visible to instantiation.
+
+**Confirming a counterexample by proof.** When the certifier cannot evaluate
+an application a candidate needs (`DefinitionTooDeep`), the adapter records
+the candidate's values of the source variables (every non-heap variable for a
+module that names none), the application with its arguments' values, and the
+reason (`VerifyResult::Unchecked`, `UncheckedApplication`,
+`UncheckedReason`). After every function is verified and the reasons and the
+cycle fixpoint are settled, the driver confirms each such verdict, in
+parallel, when the spec facts its module assumes are established: it fixes
+the candidate's values, removes every variable an equation of the query
+defines (the one-point rule: `x == t` with `x` not in `t`), assumes the
+query's theorems, assumes what only constrains the remaining free variables
+without applying a spec once a certified model of it exists (a separate
+query whose `Failed` result shows it can hold), instantiates the
+postconditions of the established proof functions where their spec
+applications match the query's (a machine parameter seen as `bv_to_int(p)`
+matches an integer term `t` with `p := int_to_bv(t)`; a proof function with
+a pointer or reference parameter is left out, since its implicit
+preconditions, valid storage and distinct objects, are not stated by its
+declared ones), and asks the same
+backend to prove the rest of the query (`ModuleAttempt::Confirmation`, with
+an attempt's slice, as above). A
+proof shows the claim fails at that input for some values of the free
+variables, so the verdict becomes `Failed`, its message saying it was
+confirmed by proof and naming the contracts used (`ConfirmedWithContracts`,
+JSON `confirmed_with`); it rests on the definitions, postconditions, and
+unfoldings the query used (`CertifiedWith`) and on those contracts, all
+established when it is made. A verdict that stays unresolved says in plain
+words what was proposed and could not be checked, that either the claim is
+false there or it needs a proof by induction, which inductions were tried,
+and, for a proof function, a body that starts one: a call at each value the
+recursion reaches, under the condition reaching it and the precondition
+there (`proofOutline`, printed from logic terms with source names).
 
 ## Counterexample Extraction
 
@@ -1315,6 +1395,11 @@ pure JSON stream.
      measure, so the members' facts hold by well-founded induction, and
      the failure of one still demotes the others through the first
      fixpoint;
+   - an `Unresolved` verdict whose solver proposed a counterexample its
+     check could not evaluate is then confirmed by proof where it can be,
+     from the contracts and spec facts now known to be established (see
+     "Confirming a counterexample by proof"); it becomes `Failed`, which
+     changes no other verdict, since neither establishes a contract;
    - every `Verified` result gets the vacuity checks, small queries over the
      same passive program: `false` at the end of the function (the whole
      proof is vacuous), each behavior's `pre && assumes` (a behavior that
