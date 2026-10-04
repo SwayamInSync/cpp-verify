@@ -1,4 +1,5 @@
 //===--- Obligation.cpp ---------------------------------------------------===//
+#include "LogicTerms.h"
 #include "ObligationLowering.h"
 #include "SpecAxioms.h"
 #include "llvm/ADT/APInt.h"
@@ -2237,6 +2238,25 @@ public:
     for (const PassiveExitAssert &Exit : P.ExitAsserts)
       ExitAsserts.emplace_back(obligationKind(Exit.ProofKind),
                                fromVExpr(Exit.Cond.get()));
+
+    // A theorem only where it speaks of the entry state alone: the body's
+    // later states are not part of it.
+    if (!P.ContractConclusions.empty()) {
+      auto Contract = std::make_shared<ContractTheorem>();
+      for (const auto &Entry : EntryAssumes)
+        Contract->Premises.push_back(cloneVCExpr(Entry.get()));
+      for (const auto &Conclusion : P.ContractConclusions)
+        Contract->Conclusions.push_back(fromVExpr(Conclusion.get()));
+      std::set<std::string> Bound;
+      std::vector<std::pair<std::string, LogicSort>> Free;
+      for (const auto *Part : {&Contract->Premises, &Contract->Conclusions})
+        for (const auto &Term : *Part)
+          logicFreeVariables(Term.get(), Bound, Free);
+      if (llvm::all_of(Free, [&](const auto &Variable) {
+            return P.EntryVariables.count(Variable.first) != 0;
+          }))
+        M.Contract = std::move(Contract);
+    }
 
     if (!ConstructionError.empty())
       return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
