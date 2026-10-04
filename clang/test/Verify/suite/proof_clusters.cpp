@@ -110,6 +110,8 @@ proof void swing_lemma(int k)
 {
   contract_assert(swing(1) == 1 - swing(1));
 }
-// The lemma has no counterexample to show either: swing(1) has no value.
+// Nor does it fail: a counterexample to it would rest on the definition of
+// swing, which has no value at 1 since its termination is not proved, so
+// none is confirmed.
 // CHECK-DAG: Unresolved: spec decreases: swing [reason=callee.contract]
-// CHECK-DAG: Unresolved: swing_lemma
+// CHECK-DAG: Unresolved: swing_lemma [backend=z3] [reason=spec.fuel] {{.*}}checking it needs swing(1)
