@@ -380,6 +380,17 @@ struct UndecidedApplications {
   std::map<std::string, std::string> Reasons;
 };
 
+/// What a proof function's verification proves: for all values of the
+/// variables they mention, where every premise holds (the assumptions its
+/// proof starts from: preconditions, generated ones such as pointer
+/// validity, extents, separation, and type invariants included, and the
+/// facts of its entry state), every conclusion holds (its postconditions as
+/// asserted).
+struct ContractTheorem {
+  std::vector<std::unique_ptr<LogicExpr>> Premises;
+  std::vector<std::unique_ptr<LogicExpr>> Conclusions;
+};
+
 class ObligationModule {
 public:
   std::string FunctionName;
@@ -424,6 +435,9 @@ public:
   /// Never archived or hashed.
   std::shared_ptr<UndecidedApplications> Undecided =
       std::make_shared<UndecidedApplications>();
+  /// For a proof function whose postconditions speak of its entry state
+  /// only. Never archived or hashed.
+  std::shared_ptr<const ContractTheorem> Contract;
 };
 
 /// Validate every declaration, sort, call signature, obligation identity, and
