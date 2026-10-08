@@ -1,7 +1,7 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
 // RUN: %clang -std=c++17 -fverify-contracts -DCPPVERIFY_POSITIVE_ONLY \
 // RUN:   -c %s -o %t.o
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 cppverify::spec int math_factorial(int n)
   cppverify::decreases(n)
