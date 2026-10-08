@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: %cpp-verify --dump-ir=1 %s 2>&1 | FileCheck %s
+// RUN: %cpp-verify --dump-ir=1 %s -- 2>&1 | FileCheck %s
 
 struct WithFloat {
   int integer;
