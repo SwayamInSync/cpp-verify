@@ -410,7 +410,6 @@ type:
 
 .. code-block:: cpp
 
-   #include <cppverify.h>
    using cppverify::valid;
 
    int get(const int* p, int n, int i)
