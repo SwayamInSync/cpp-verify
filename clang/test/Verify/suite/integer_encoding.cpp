@@ -8,7 +8,7 @@
 // All encodings are exact, so decided verdicts and counterexamples agree.
 
 unsigned wrap_add(unsigned x)
-  post(result == (x == 4294967295u ? 0u : x + 1u))
+  cppverify::post(cppverify::result == (x == 4294967295u ? 0u : x + 1u))
 {
   return x + 1u;
 }
@@ -18,8 +18,8 @@ unsigned wrap_add(unsigned x)
 // AUTO: (mod (+ x_0 1) 4294967296)
 
 int signed_add(int x)
-  pre(x < 2147483647)
-  post(result > x)
+  cppverify::pre(x < 2147483647)
+  cppverify::post(cppverify::result > x)
 {
   return x + 1;
 }
@@ -27,7 +27,7 @@ int signed_add(int x)
 // INT: (- (mod (+ (+ x_0 1) 2147483648) 4294967296) 2147483648)
 
 unsigned char narrow(unsigned x)
-  post(result == (x & 255u))
+  cppverify::post(cppverify::result == (x & 255u))
 {
   return (unsigned char)x;
 }
@@ -38,7 +38,7 @@ unsigned char narrow(unsigned x)
 // INT: (= __result_1 (mod x_0 256))
 
 unsigned combine(unsigned x, unsigned y)
-  post(result == (y | x))
+  cppverify::post(cppverify::result == (y | x))
 {
   return x | y;
 }
@@ -51,8 +51,8 @@ unsigned combine(unsigned x, unsigned y)
 // AUTO: (not (= __result_1 (bvor x_0 y_0)))
 
 unsigned shift_by_signed(unsigned x, int s)
-  pre(s >= 0 && s < 32)
-  post(result <= x)
+  cppverify::pre(s >= 0 && s < 32)
+  cppverify::post(cppverify::result <= x)
 {
   return x >> s;
 }
@@ -63,14 +63,14 @@ unsigned shift_by_signed(unsigned x, int s)
 // AUTO: (not (= __result_1 (bvlshr x_0 s_0)))
 
 unsigned bad_wrap(unsigned x)
-  post(result > x)
+  cppverify::post(cppverify::result > x)
 {
   return x + 1u;
 }
 
 int bad_negative_shift(int x)
-  pre(x == 1)
-  post(result == result)
+  cppverify::pre(x == 1)
+  cppverify::post(cppverify::result == cppverify::result)
 {
   return x << -1;
 }
