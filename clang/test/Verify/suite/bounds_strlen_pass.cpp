@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: %cpp-verify --check-ub %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: %cpp-verify --check-ub %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 // strlen: correct AND memory-safe in one proof (the scan stays in bounds).
 cppverify::spec bool valid(int* p, int n) { return true; }
 int slen(int* s, int n)
