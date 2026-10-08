@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify --backend=bmc --unroll=3 %s 2>&1 | FileCheck %s --check-prefix=CHECK
+// RUN: not %cpp-verify --backend=bmc --unroll=3 %s -- 2>&1 | FileCheck %s --check-prefix=CHECK
 
 int counter()
   cppverify::pre(true)
