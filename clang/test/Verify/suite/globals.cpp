@@ -1,6 +1,6 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s
-// RUN: not %cpp-verify --backend=bmc --unroll=1 %s 2>&1 | FileCheck %s
-// RUN: not %cpp-verify %S/Inputs/globals_spec.cpp 2>&1 | FileCheck %s --check-prefix=SPEC
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s
+// RUN: not %cpp-verify --backend=bmc --unroll=1 %s -- 2>&1 | FileCheck %s
+// RUN: not %cpp-verify %S/Inputs/globals_spec.cpp -- 2>&1 | FileCheck %s --check-prefix=SPEC
 //
 // A const integral global with a constant initializer is its value. A mutable
 // scalar global is a memory cell of its own: functions read it, write it only
