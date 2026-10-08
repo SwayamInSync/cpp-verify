@@ -1,4 +1,4 @@
-// RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 // copy only writes when n > 0, and aliases() merely *permits* dst and src to
 // alias (it does not force it), so the postcondition must account for the n == 0
