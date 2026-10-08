@@ -2,35 +2,35 @@
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s
 
 int reject_old_entry_overflow(int value)
-  pre(value == 2147483647)
-  post(result == 0)
+  cppverify::pre(value == 2147483647)
+  cppverify::post(cppverify::result == 0)
 {
   do {
     value = 0;
   } while (false)
-    invariant(old(value + 1) == old(value + 1));
+    cppverify::invariant(cppverify::old(value + 1) == cppverify::old(value + 1));
   return value;
 }
 
 int reject_quantified_old_entry_overflow(int value)
-  pre(value == 2147483647)
-  post(result == 0)
+  cppverify::pre(value == 2147483647)
+  cppverify::post(cppverify::result == 0)
 {
   do {
     value = 0;
   } while (false)
-    invariant(old(forall(i, 0, 2, value + i == value + i)));
+    cppverify::invariant(cppverify::old(cppverify::forall(i, 0, 2, value + i == value + i)));
   return value;
 }
 
 int reject_old_entry_null_dereference(int *pointer, int *replacement)
-  pre(pointer == nullptr && replacement != nullptr)
-  post(result == 0)
+  cppverify::pre(pointer == nullptr && replacement != nullptr)
+  cppverify::post(cppverify::result == 0)
 {
   do {
     pointer = replacement;
   } while (false)
-    invariant(old(*pointer) == old(*pointer));
+    cppverify::invariant(cppverify::old(*pointer) == cppverify::old(*pointer));
   return 0;
 }
 
