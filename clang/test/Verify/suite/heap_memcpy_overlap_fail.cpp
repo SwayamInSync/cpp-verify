@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 // Heap soundness: without a non-overlap precondition the copy is NOT correct
 // (storing to d may clobber an s cell still to be read -- exactly the memcpy vs
 // memmove distinction), so it must never verify. Z3 may find a concrete
