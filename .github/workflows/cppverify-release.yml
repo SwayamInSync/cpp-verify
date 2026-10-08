@@ -57,7 +57,7 @@ jobs:
           if [ "$RUNNER_OS" = Linux ]; then
             extra+=(-DLLVM_STATIC_LINK_CXX_STDLIB=ON)
           else
-            extra+=(-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0)
+            extra+=(-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 -DCLANG_USE_XCSELECT=ON)
           fi
           cmake -S llvm -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
