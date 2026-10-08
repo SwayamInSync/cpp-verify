@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 // Tier-0: a straightforward counting loop with an inductive invariant and a
 // well-founded measure verifies (establishment + preservation + termination).
 int count_up(int n)
