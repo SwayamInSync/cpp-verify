@@ -2,8 +2,8 @@
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 int valid_if_initializer(int value)
-  pre(value == 4)
-  post(result == 5)
+  cppverify::pre(value == 4)
+  cppverify::post(cppverify::result == 5)
 {
   if (int next = value + 1; next > 0)
     return next;
@@ -11,8 +11,8 @@ int valid_if_initializer(int value)
 }
 
 int valid_if_condition_declaration(int value)
-  pre(value == 4)
-  post(result == 4)
+  cppverify::pre(value == 4)
+  cppverify::post(cppverify::result == 4)
 {
   if (int condition = value)
     return condition;
@@ -20,8 +20,8 @@ int valid_if_condition_declaration(int value)
 }
 
 int invalid_if_initializer_claim(int value)
-  pre(value == 4)
-  post(result == 4)
+  cppverify::pre(value == 4)
+  cppverify::post(cppverify::result == 4)
 {
   if (int next = value + 1; next > 0)
     return next;
