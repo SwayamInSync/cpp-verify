@@ -2,67 +2,67 @@
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 // RUN: %cpp-verify --lower-only --timeout=1 %s 2>&1 | FileCheck %s --check-prefix=LOWER
 
-spec int bump(int x) {
+cppverify::spec int bump(int x) {
   return x + 1;
 }
 
-spec int countdown(int n)
-  decreases(n)
+cppverify::spec int countdown(int n)
+  cppverify::decreases(n)
 {
   if (n > 0)
     return countdown(n - 1);
   return 0;
 }
 
-spec bool contains_last(int limit) {
-  return exists(j, 0, limit, j == limit - 1);
+cppverify::spec bool contains_last(int limit) {
+  return cppverify::exists(j, 0, limit, j == limit - 1);
 }
 
-spec bool binder_shadows_parameter(int j) {
-  return forall(j, 0, 1, j == 0);
+cppverify::spec bool binder_shadows_parameter(int j) {
+  return cppverify::forall(j, 0, 1, j == 0);
 }
 
-spec bool exists_below_ten(int target) {
-  return exists(k, 0, 10, k == target);
+cppverify::spec bool exists_below_ten(int target) {
+  return cppverify::exists(k, 0, 10, k == target);
 }
 
 int valid_quantified_nonrecursive_spec(int n)
-  pre(n >= 0 && n <= 100)
-  post(forall(k, 0, n, bump(k) == k + 1))
+  cppverify::pre(n >= 0 && n <= 100)
+  cppverify::post(cppverify::forall(k, 0, n, bump(k) == k + 1))
 {
   return n;
 }
 
 int valid_nested_quantified_bound(int n)
-  pre(n >= 0 && n <= 100)
-  post(forall(k, 0, n, contains_last(k + 1)))
+  cppverify::pre(n >= 0 && n <= 100)
+  cppverify::post(cppverify::forall(k, 0, n, contains_last(k + 1)))
 {
   return n;
 }
 
 int valid_quantified_binder_shadowing(int n)
-  pre(n >= 0 && n <= 100)
-  post(forall(k, 0, n, binder_shadows_parameter(k + 10)))
+  cppverify::pre(n >= 0 && n <= 100)
+  cppverify::post(cppverify::forall(k, 0, n, binder_shadows_parameter(k + 10)))
 {
   return n;
 }
 
-proof void valid_quantified_recursive_spec()
-  post(forall(k, 0, 4, countdown(k) == 0))
+cppverify::proof void valid_quantified_recursive_spec()
+  cppverify::post(cppverify::forall(k, 0, 4, countdown(k) == 0))
 {
-  reveal_with_fuel(countdown, 4);
+  cppverify::reveal_with_fuel(countdown, 4);
 }
 
 int invalid_quantified_spec(int n)
-  pre(n > 0)
-  post(forall(k, 0, n, bump(k) == k + 2))
+  cppverify::pre(n > 0)
+  cppverify::post(cppverify::forall(k, 0, n, bump(k) == k + 2))
 {
   return n;
 }
 
 int invalid_quantifier_capture(int n)
-  pre(n == 100)
-  post(forall(k, 5, 100, exists_below_ten(k)))
+  cppverify::pre(n == 100)
+  cppverify::post(cppverify::forall(k, 5, 100, exists_below_ten(k)))
 {
   return n;
 }
