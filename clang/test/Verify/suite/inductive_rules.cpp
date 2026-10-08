@@ -1,8 +1,8 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s \
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s \
 // RUN:   --implicit-check-not=monotonicity \
 // RUN:   --implicit-check-not="case analysis" \
 // RUN:   --implicit-check-not=introduction
-// RUN: not %cpp-verify --solver-rlimit=1 %S/Inputs/inductive_unproved.cpp 2>&1 \
+// RUN: not %cpp-verify --solver-rlimit=1 %S/Inputs/inductive_unproved.cpp -- 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=UNPROVED
 //
 // Proofs use an inductive predicate through its unfolding P(x) == F(x) only
