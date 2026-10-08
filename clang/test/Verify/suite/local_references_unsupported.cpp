@@ -2,28 +2,28 @@
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 void set_value(int &target, int value)
-  modifies(target)
-  post(target == value)
+  cppverify::modifies(target)
+  cppverify::post(target == value)
 {
   target = value;
 }
 
 int set_and_return(int &target, int value)
-  modifies(target)
-  post(target == value && result == value)
+  cppverify::modifies(target)
+  cppverify::post(target == value && cppverify::result == value)
 {
   target = value;
   return value;
 }
 
 int pick_second(int first, int second)
-  post(result == second)
+  cppverify::post(cppverify::result == second)
 {
   return second;
 }
 
 int uninitialized_local_actual()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   int local;
   set_value(local, 1);
@@ -31,21 +31,21 @@ int uninitialized_local_actual()
 }
 
 int order_dependent_local()
-  post(result == 0 || result == 1)
+  cppverify::post(cppverify::result == 0 || cppverify::result == 1)
 {
   int local = 0;
   return pick_second(set_and_return(local, 1), local);
 }
 
 int temporary_binding()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   const int &alias = 1;
   return alias;
 }
 
 int conditional_binding(bool choose)
-  post(result == 1 || result == 2)
+  cppverify::post(cppverify::result == 1 || cppverify::result == 2)
 {
   int first = 1;
   int second = 2;
@@ -59,7 +59,7 @@ struct Pair {
 };
 
 int conditional_field_binding(bool choose)
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   Pair value{1, 2};
   const int &alias = choose ? value.first : value.second;
@@ -67,12 +67,12 @@ int conditional_field_binding(bool choose)
 }
 
 int loop_local_declaration()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   int iteration = 0;
   while (iteration < 1)
-    invariant(iteration >= 0 && iteration <= 1)
-    decreases(1 - iteration)
+    cppverify::invariant(iteration >= 0 && iteration <= 1)
+    cppverify::decreases(1 - iteration)
   {
     int local = 0;
     set_value(local, 1);
