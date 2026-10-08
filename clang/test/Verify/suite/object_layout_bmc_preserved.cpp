@@ -1,6 +1,6 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: %cpp-verify --backend=bmc --unroll=3 %s 2>&1 | FileCheck %s --check-prefix=VERIFY
-// RUN: %cpp-verify --backend=bmc --unroll=3 --dump-ir=1 %s 2>&1 | FileCheck %s --check-prefix=DUMP
+// RUN: %cpp-verify --backend=bmc --unroll=3 %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: %cpp-verify --backend=bmc --unroll=3 --dump-ir=1 %s -- 2>&1 | FileCheck %s --check-prefix=DUMP
 
 // The layout table is metadata on the VFunction, so it must survive the BMC
 // bounded-unrolling transform. The Layer-1 dump of the unrolled function still
