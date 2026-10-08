@@ -1,0 +1,171 @@
+name: CppVerify release
+
+# A tag v<version> builds the distribution for Linux x86_64 and macOS arm64,
+# tests each archive on a fresh runner of a newer system than the one it was
+# built on, and publishes both on the tag's GitHub release (a pre-release for
+# a tag with a pre-release suffix such as -rc.1).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and publish
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    name: Build (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-22.04
+          - platform: macos-arm64
+            runner: macos-14
+    steps:
+      - name: Free disk space
+        if: runner.os == 'Linux'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          submodules: recursive
+
+      - name: Install build tools
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get update && sudo apt-get install -y ninja-build
+          else
+            brew install ninja
+          fi
+
+      - name: Configure
+        run: |
+          extra=()
+          if [ "$RUNNER_OS" = Linux ]; then
+            extra+=(-DLLVM_STATIC_LINK_CXX_STDLIB=ON)
+          else
+            extra+=(-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0)
+          fi
+          cmake -S llvm -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra" \
+            -DLLVM_TARGETS_TO_BUILD=Native \
+            -DCPPVERIFY_VENDOR_Z3=ON \
+            -DCPPVERIFY_PREFER_SYSTEM_Z3=OFF \
+            -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF \
+            -DLLVM_ENABLE_LIBXML2=OFF -DLLVM_ENABLE_LIBEDIT=OFF \
+            -DLLVM_DISTRIBUTION_COMPONENTS="clang;clang-resource-headers;clangd;clang-format;cpp-verify" \
+            -DCMAKE_INSTALL_PREFIX="$PWD/dist/cpp-verify" \
+            "${extra[@]}"
+
+      - name: Build and install
+        run: ninja -C build install-distribution
+
+      - name: Package
+        id: package
+        run: |
+          version="${TAG#v}"
+          first="$(dist/cpp-verify/bin/cpp-verify --version | head -1)"
+          echo "$first"
+          case "$first" in
+            "cpp-verify $version" | "cpp-verify $version "*) ;;
+            *) echo "error: the tag $TAG does not match '$first'" >&2; exit 1 ;;
+          esac
+          llvm="$(dist/cpp-verify/bin/cpp-verify --version | sed -n 's/^  based on LLVM \([0-9.]*\).*/\1/p')"
+          name="cpp-verify-$version-llvm$llvm-${{ matrix.platform }}"
+          mv dist/cpp-verify "dist/$name"
+          cp LICENSE.TXT "dist/$name/LICENSE.TXT"
+          cp third_party/z3/LICENSE.txt "dist/$name/LICENSE-Z3.txt"
+          cat > "dist/$name/README.txt" <<EOF
+          cpp-verify $version, built on LLVM $llvm, for ${{ matrix.platform }}.
+
+          bin/cpp-verify FILE.cpp     verify FILE.cpp
+          bin/clang++                 compile with -fverify-contracts
+          bin/clangd, bin/clang-format  editor support for the constructs
+
+          cvc5 (--backend=cvc5, portfolio, race) and Lean (--lean-certify) are
+          found on PATH; cpp-verify --version shows what it finds.
+          Documentation: https://swayaminsync.github.io/cpp-verify/
+          EOF
+          tar -C dist -cJf "$name.tar.xz" "$name"
+          shasum -a 256 "$name.tar.xz" > "$name.tar.xz.sha256"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: |
+            ${{ steps.package.outputs.name }}.tar.xz
+            ${{ steps.package.outputs.name }}.tar.xz.sha256
+
+  test:
+    name: Test (${{ matrix.platform }} on ${{ matrix.runner }})
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-24.04
+          - platform: macos-arm64
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          sparse-checkout: .github/workflows/cppverify-smoke.sh
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+
+      - name: Unpack and verify
+        run: |
+          shasum -a 256 -c ./*.sha256
+          mkdir "$RUNNER_TEMP/unpacked"
+          tar -C "$RUNNER_TEMP/unpacked" -xJf ./*.tar.xz
+          ./.github/workflows/cppverify-smoke.sh "$(echo "$RUNNER_TEMP"/unpacked/*/bin)"
+
+  publish:
+    name: Publish
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${TAG#v}"
+          flags=()
+          case "$version" in *-*) flags+=(--prerelease) ;; esac
+          cat > notes.md <<EOF
+          cpp-verify $version. What changed, what is supported, and what is not yet:
+          https://swayaminsync.github.io/cpp-verify/release-notes.html
+
+          Unpack an archive and run \`bin/cpp-verify --version\`. Each archive
+          has a \`.sha256\` file to check it with \`shasum -a 256 -c\`.
+          EOF
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --title "cpp-verify $version" --notes-file notes.md "${flags[@]}" \
+            ./*.tar.xz ./*.tar.xz.sha256
