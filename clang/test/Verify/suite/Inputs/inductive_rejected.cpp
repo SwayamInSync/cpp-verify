@@ -1,23 +1,23 @@
 #include <cppverify.h>
 
-spec bool negated(int n) inductive { return n == 0 || !negated(n - 1); }
+cppverify::spec bool negated(int n) cppverify::inductive { return n == 0 || !negated(n - 1); }
 
-spec bool compared(int n) inductive {
+cppverify::spec bool compared(int n) cppverify::inductive {
   return n == 0 || compared(n - 1) == false;
 }
 
-spec bool everywhere(int n) inductive {
-  return n == 0 || forall(k, everywhere(k));
+cppverify::spec bool everywhere(int n) cppverify::inductive {
+  return n == 0 || cppverify::forall(k, everywhere(k));
 }
 
-spec bool chosen(int n) inductive { return chosen(n - 1) ? n > 0 : n == 0; }
+cppverify::spec bool chosen(int n) cppverify::inductive { return chosen(n - 1) ? n > 0 : n == 0; }
 
-spec int counted(int n) inductive { return n; }
+cppverify::spec int counted(int n) cppverify::inductive { return n; }
 
-spec bool measured(int n) inductive decreases(n) { return n == 0; }
+cppverify::spec bool measured(int n) cppverify::inductive cppverify::decreases(n) { return n == 0; }
 
-spec bool through(int n);
-spec bool helper(int n) { return through(n - 1); }
-spec bool through(int n) inductive { return n == 0 || helper(n); }
+cppverify::spec bool through(int n);
+cppverify::spec bool helper(int n) { return through(n - 1); }
+cppverify::spec bool through(int n) cppverify::inductive { return n == 0 || helper(n); }
 
-spec bool exact(int n) inductive post(result == (n == 0)) { return n == 0; }
+cppverify::spec bool exact(int n) cppverify::inductive cppverify::post(cppverify::result == (n == 0)) { return n == 0; }
