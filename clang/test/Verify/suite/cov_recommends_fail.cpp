@@ -1,4 +1,4 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=CHECK
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=CHECK
 
 cppverify::spec int need_pos(int x)
   cppverify::recommends(x > 0)
