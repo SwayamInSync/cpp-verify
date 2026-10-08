@@ -1,8 +1,8 @@
-// RUN: not %cpp-verify --timeout=10000 %s 2>&1 | FileCheck %s \
+// RUN: not %cpp-verify --timeout=10000 %s -- 2>&1 | FileCheck %s \
 // RUN:   --implicit-check-not='failed: true_at_large' \
 // RUN:   --implicit-check-not='failed: depth_below_zero' \
 // RUN:   --implicit-check-not='failed: total_of_negatives'
-// RUN: not %cpp-verify --timeout=10000 --diagnostics-format=json %s 2>&1 \
+// RUN: not %cpp-verify --timeout=10000 --diagnostics-format=json %s -- 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=JSON
 //
 // A counterexample the solver proposes is checked against the true
