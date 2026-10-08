@@ -4,16 +4,16 @@
 // RUN: %cpp-verify --backend=bmc --unroll=1 %s 2>&1 | FileCheck %s --check-prefix=BMC
 
 int *make_value(int value)
-  post(result != nullptr)
-  post(*result == value)
+  cppverify::post(cppverify::result != nullptr)
+  cppverify::post(*cppverify::result == value)
 {
   int *owner = new int(value);
   return owner;
 }
 
 int *make_stored_value(int value)
-  post(result != nullptr)
-  post(*result == value)
+  cppverify::post(cppverify::result != nullptr)
+  cppverify::post(*cppverify::result == value)
 {
   int *owner = new int;
   *owner = value;
@@ -21,8 +21,8 @@ int *make_stored_value(int value)
 }
 
 int *make_nullable(bool create, int value)
-  post((result != nullptr) == create)
-  post(result == nullptr || *result == value)
+  cppverify::post((cppverify::result != nullptr) == create)
+  cppverify::post(cppverify::result == nullptr || *cppverify::result == value)
 {
   if (!create)
     return nullptr;
@@ -31,22 +31,22 @@ int *make_nullable(bool create, int value)
 }
 
 int *forward_value(int value)
-  post(result != nullptr)
-  post(*result == value)
+  cppverify::post(cppverify::result != nullptr)
+  cppverify::post(*cppverify::result == value)
 {
   return make_value(value);
 }
 
 int *forward_again(int value)
-  post(result != nullptr)
-  post(*result == value)
+  cppverify::post(cppverify::result != nullptr)
+  cppverify::post(*cppverify::result == value)
 {
   return forward_value(value);
 }
 
 int *alias_forward(int value)
-  post(result != nullptr)
-  post(*result == value)
+  cppverify::post(cppverify::result != nullptr)
+  cppverify::post(*cppverify::result == value)
 {
   int *owner = make_value(value);
   int *alias = owner;
@@ -54,15 +54,15 @@ int *alias_forward(int value)
 }
 
 int *forward_nullable(bool create, int value)
-  post((result != nullptr) == create)
-  post(result == nullptr || *result == value)
+  cppverify::post((cppverify::result != nullptr) == create)
+  cppverify::post(cppverify::result == nullptr || *cppverify::result == value)
 {
   return make_nullable(create, value);
 }
 
 int *branch_forward(bool first, int value)
-  post(result != nullptr)
-  post(*result == value)
+  cppverify::post(cppverify::result != nullptr)
+  cppverify::post(*cppverify::result == value)
 {
   if (first)
     return make_value(value);
@@ -70,14 +70,14 @@ int *branch_forward(bool first, int value)
 }
 
 int read_owned(const int *value)
-  pre(value != nullptr)
-  post(result == old(*value))
+  cppverify::pre(value != nullptr)
+  cppverify::post(cppverify::result == cppverify::old(*value))
 {
   return *value;
 }
 
 int consume_value(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int *owner = forward_again(value);
   int observed = read_owned(owner);
@@ -86,7 +86,7 @@ int consume_value(int value)
 }
 
 int consume_nullable(bool create, int value)
-  post(result == (create ? value : 0))
+  cppverify::post(cppverify::result == (create ? value : 0))
 {
   int *owner = forward_nullable(create, value);
   if (!owner)
@@ -97,8 +97,8 @@ int consume_nullable(bool create, int value)
 }
 
 int mutate_owned(int value)
-  pre(value < 2147483647)
-  post(result == value + 1)
+  cppverify::pre(value < 2147483647)
+  cppverify::post(cppverify::result == value + 1)
 {
   int *owner = make_value(value);
   *owner = value + 1;
@@ -108,7 +108,7 @@ int mutate_owned(int value)
 }
 
 bool distinct_factory_results()
-  post(result)
+  cppverify::post(cppverify::result)
 {
   int *left = make_value(1);
   int *right = make_value(2);
@@ -119,7 +119,7 @@ bool distinct_factory_results()
 }
 
 bool distinct_local_and_factory()
-  post(result)
+  cppverify::post(cppverify::result)
 {
   int *local = new int(1);
   int *returned = make_value(2);
@@ -130,15 +130,15 @@ bool distinct_local_and_factory()
 }
 
 bool *make_bool(bool value)
-  post(result != nullptr)
-  post(*result == value)
+  cppverify::post(cppverify::result != nullptr)
+  cppverify::post(*cppverify::result == value)
 {
   bool *owner = new bool(value);
   return owner;
 }
 
 bool consume_bool(bool value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   bool *owner = make_bool(value);
   bool observed = *owner;
