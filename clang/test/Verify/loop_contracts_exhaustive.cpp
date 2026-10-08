@@ -10,13 +10,13 @@
 // CHECK: invariant: BinaryOperator {{.*}} 'bool' '>='
 // CHECK: decreases: BinaryOperator {{.*}} 'int' '-'
 int while_basic(int n)
-  pre(n >= 0)
-  post(result >= 0)
+  cppverify::pre(n >= 0)
+  cppverify::post(cppverify::result >= 0)
 {
   int s = 0, i = 0;
   while (i < n)
-    invariant(s >= 0)
-    decreases(n - i)
+    cppverify::invariant(s >= 0)
+    cppverify::decreases(n - i)
   {
     s += i;
     i++;
@@ -34,15 +34,15 @@ int while_basic(int n)
 // CHECK: invariant: BinaryOperator {{.*}} 'bool' '<='
 // CHECK: decreases: BinaryOperator {{.*}} 'int' '-'
 int while_multi_inv(int n)
-  pre(n >= 0)
-  post(result >= 0)
+  cppverify::pre(n >= 0)
+  cppverify::post(cppverify::result >= 0)
 {
   int s = 0, i = 0;
   while (i < n)
-    invariant(s >= 0)
-    invariant(i >= 0)
-    invariant(i <= n)
-    decreases(n - i)
+    cppverify::invariant(s >= 0)
+    cppverify::invariant(i >= 0)
+    cppverify::invariant(i <= n)
+    cppverify::decreases(n - i)
   {
     s += i;
     i++;
@@ -57,11 +57,11 @@ int while_multi_inv(int n)
 // CHECK: WhileStmt
 // CHECK: invariant: BinaryOperator {{.*}} 'bool' '>='
 int while_inv_only(int n)
-  pre(n >= 0)
+  cppverify::pre(n >= 0)
 {
   int s = 0, i = 0;
   while (i < n)
-    invariant(s >= 0)
+    cppverify::invariant(s >= 0)
   {
     s += i;
     i++;
@@ -76,11 +76,11 @@ int while_inv_only(int n)
 // CHECK: WhileStmt
 // CHECK: decreases: BinaryOperator {{.*}} 'int' '-'
 int while_dec_only(int n)
-  pre(n >= 0)
+  cppverify::pre(n >= 0)
 {
   int s = 0, i = 0;
   while (i < n)
-    decreases(n - i)
+    cppverify::decreases(n - i)
   {
     s += i;
     i++;
@@ -95,12 +95,12 @@ int while_dec_only(int n)
 // CHECK: WhileStmt
 // CHECK: invariant: BinaryOperator {{.*}} 'bool' '&&'
 int while_complex_inv(int n)
-  pre(n >= 0)
+  cppverify::pre(n >= 0)
 {
   int s = 0, i = 0;
   while (i < n)
-    invariant(s >= 0 && i <= n)
-    decreases(n - i)
+    cppverify::invariant(s >= 0 && i <= n)
+    cppverify::decreases(n - i)
   {
     s += i;
     i++;
@@ -116,13 +116,13 @@ int while_complex_inv(int n)
 // CHECK: invariant: BinaryOperator {{.*}} 'bool' '>='
 // CHECK: decreases: BinaryOperator {{.*}} 'int' '-'
 int for_basic(int n)
-  pre(n >= 0)
-  post(result >= 0)
+  cppverify::pre(n >= 0)
+  cppverify::post(cppverify::result >= 0)
 {
   int s = 0;
   for (int i = 0; i < n; i = i + 1)
-    invariant(s >= 0)
-    decreases(n - i)
+    cppverify::invariant(s >= 0)
+    cppverify::decreases(n - i)
   {
     s = s + i;
   }
@@ -138,13 +138,13 @@ int for_basic(int n)
 // CHECK: invariant: BinaryOperator {{.*}} 'bool' '<='
 // CHECK: decreases: BinaryOperator {{.*}} 'int' '-'
 int for_multi_inv(int n)
-  pre(n >= 0)
+  cppverify::pre(n >= 0)
 {
   int s = 0;
   for (int i = 0; i < n; i = i + 1)
-    invariant(s >= 0)
-    invariant(i <= n)
-    decreases(n - i)
+    cppverify::invariant(s >= 0)
+    cppverify::invariant(i <= n)
+    cppverify::decreases(n - i)
   {
     s = s + i;
   }
@@ -162,20 +162,20 @@ int for_multi_inv(int n)
 // CHECK:   invariant: BinaryOperator {{.*}} 'bool' '>='
 // CHECK:   decreases: BinaryOperator {{.*}} 'int' '-'
 int nested_while(int m, int n)
-  pre(m >= 0)
-  pre(n >= 0)
-  post(result >= 0)
+  cppverify::pre(m >= 0)
+  cppverify::pre(n >= 0)
+  cppverify::post(cppverify::result >= 0)
 {
   int total = 0;
   int i = 0;
   while (i < m)
-    invariant(total >= 0)
-    decreases(m - i)
+    cppverify::invariant(total >= 0)
+    cppverify::decreases(m - i)
   {
     int j = 0;
     while (j < n)
-      invariant(j >= 0)
-      decreases(n - j)
+      cppverify::invariant(j >= 0)
+      cppverify::decreases(n - j)
     {
       total = total + 1;
       j = j + 1;
@@ -192,11 +192,11 @@ int nested_while(int m, int n)
 // CHECK: ForStmt
 // CHECK: invariant: BinaryOperator {{.*}} 'bool' '>='
 int for_inv_only(int n)
-  pre(n >= 0)
+  cppverify::pre(n >= 0)
 {
   int s = 0;
   for (int i = 0; i < n; i = i + 1)
-    invariant(s >= 0)
+    cppverify::invariant(s >= 0)
   {
     s = s + i;
   }
@@ -210,12 +210,12 @@ int for_inv_only(int n)
 // CHECK: WhileStmt
 // CHECK: invariant: BinaryOperator {{.*}} 'bool' '!='
 int while_bool_inv(int n)
-  pre(n >= 0)
+  cppverify::pre(n >= 0)
 {
   int i = 0;
   while (i < n)
-    invariant(i != n)
-    decreases(n - i)
+    cppverify::invariant(i != n)
+    cppverify::decreases(n - i)
   {
     i++;
   }
@@ -233,14 +233,14 @@ int while_bool_inv(int n)
 // CHECK: pre: BinaryOperator {{.*}} 'bool' '>='
 // CHECK: post: BinaryOperator {{.*}} 'bool' '>='
 int full_annotated(int n)
-  pre(n >= 0)
-  post(result >= 1)
+  cppverify::pre(n >= 0)
+  cppverify::post(cppverify::result >= 1)
 {
   int r = 1, k = 1;
   while (k <= n)
-    invariant(r >= 1)
-    invariant(k >= 1)
-    decreases(n - k + 1)
+    cppverify::invariant(r >= 1)
+    cppverify::invariant(k >= 1)
+    cppverify::decreases(n - k + 1)
   {
     r = r * k;
     k = k + 1;
@@ -255,11 +255,11 @@ int full_annotated(int n)
 // CHECK: ForStmt
 // CHECK: decreases: DeclRefExpr {{.*}} 'int'
 int for_dec_only(int n)
-  pre(n >= 0)
+  cppverify::pre(n >= 0)
 {
   int s = 0;
   for (int i = n; i > 0; i = i - 1)
-    decreases(i)
+    cppverify::decreases(i)
   {
     s = s + i;
   }
