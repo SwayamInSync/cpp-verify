@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: %cpp-verify --lower-only %s 2>&1 | FileCheck %s
+// RUN: %cpp-verify --lower-only %s -- 2>&1 | FileCheck %s
 
 cppverify::spec unsigned int recursive_unsigned_cast(int x)
   cppverify::decreases(x)
