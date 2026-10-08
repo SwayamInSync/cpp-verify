@@ -1,4 +1,4 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=FAIL \
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=FAIL \
 // RUN:   --implicit-check-not="recommends not implied" \
 // RUN:   --implicit-check-not="call in good_call"
 
