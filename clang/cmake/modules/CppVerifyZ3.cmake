@@ -86,10 +86,10 @@ function(cppverify_z3_build_external)
     INTERFACE_INCLUDE_DIRECTORIES "${_incdir}"
     INTERFACE_LINK_LIBRARIES "Threads::Threads;${CMAKE_DL_LIBS}")
 
-  # Ensure the ExternalProject is built before anything links the imported lib.
-  # BUILD_BYPRODUCTS handles Ninja ordering; this property lets consuming targets
-  # add an explicit dependency for the Makefiles generator too.
+  # BUILD_BYPRODUCTS orders only the steps that read the library; a target whose
+  # sources include the headers must depend on this target as well.
   set_property(GLOBAL PROPERTY CPPVERIFY_Z3_EP_TARGET cppverify_z3_ep)
+  set_property(GLOBAL PROPERTY CPPVERIFY_Z3_ORIGIN vendored)
 endfunction()
 
 function(cppverify_z3_try_system out_var)
@@ -125,6 +125,7 @@ function(cppverify_z3_try_system out_var)
   endif()
   if(_target)
     message(STATUS "CppVerify: using system Z3 (${_target})")
+    set_property(GLOBAL PROPERTY CPPVERIFY_Z3_ORIGIN system)
   endif()
   set(${out_var} "${_target}" PARENT_SCOPE)
 endfunction()
