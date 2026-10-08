@@ -36,15 +36,17 @@ if ($Generator -eq "Ninja") {
 }
 # Visual Studio generator: multi-config; build with --config Release below.
 & cmake @cmakeArgs
+if ($LASTEXITCODE -ne 0) { Write-Error "Configuration failed." }
 
 Write-Host "==> Building clang, cpp-verify, clangd, and clang-format"
 if ($Generator -match "Visual Studio") {
-    & cmake --build $BuildDir --config $BuildType --target clang cpp-verify clangd clang-format -m
+    & cmake --build $BuildDir --config $BuildType --target clang cpp-verify clangd clang-format --parallel
     $BinDir = Join-Path $BuildDir "bin\$BuildType"
 } else {
-    & cmake --build $BuildDir --target clang cpp-verify clangd clang-format -m
+    & cmake --build $BuildDir --target clang cpp-verify clangd clang-format --parallel
     $BinDir = Join-Path $BuildDir "bin"
 }
+if ($LASTEXITCODE -ne 0) { Write-Error "Build failed." }
 
 Write-Host ""
 Write-Host "Done."
