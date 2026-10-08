@@ -2,35 +2,35 @@
 // RUN:   --implicit-check-not="recommends not implied" \
 // RUN:   --implicit-check-not="call in good_call"
 
-spec int id_spec(int a)
-  recommends(a >= 0)
+cppverify::spec int id_spec(int a)
+  cppverify::recommends(a >= 0)
 {
   return a;
 }
 
 int good_call(int a)
-  pre(a >= 0 && a <= 100)
-  post(result == id_spec(a))
+  cppverify::pre(a >= 0 && a <= 100)
+  cppverify::post(cppverify::result == id_spec(a))
 {
   return a;
 }
 
 int bad_call(int a)
-  pre(true)
-  post(result == id_spec(-1))
+  cppverify::pre(true)
+  cppverify::post(cppverify::result == id_spec(-1))
 {
   return a;
 }
 
 int bad_nested_call(int a)
-  pre(a == -1)
-  post(result == 0)
+  cppverify::pre(a == -1)
+  cppverify::post(cppverify::result == 0)
 {
-  ghost {
+  cppverify::ghost {
     int value = 0;
     if (a == -1)
       value = (short)id_spec(a);
-    contract_assert(value == 0);
+    cppverify::check(value == 0);
   }
   return 0;
 }
