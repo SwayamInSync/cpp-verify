@@ -10,16 +10,16 @@ is the verifier's.
 =====================================  ==============================================
 On paper                               In CppVerify
 =====================================  ==============================================
-:math:`f(n) = \dots f(n-1) \dots`      a ``spec`` function with ``decreases``
-Lemma: if :math:`H` then :math:`C`     ``proof void l(...) pre(H) post(C)``
+:math:`f(n) = \dots f(n-1) \dots`      a ``cppverify::spec`` function with ``cppverify::decreases``
+Lemma: if :math:`H` then :math:`C`     ``cppverify::proof void l(...) cppverify::pre(H) cppverify::post(C)``
 induction on :math:`n`                 the lemma calls itself at a smaller measure
 "by Lemma L"                           call ``L`` in a ghost block or a ``by`` block
-:math:`a = b \le c < d`                ``calc { a; == b; <= c; < d; }``
-definition by cases                    ``behavior(name, case)`` clauses
-:math:`\forall k \in [lo, hi).\ P`     ``forall(k, lo, hi, P)``
-:math:`\forall k \in \mathbb{Z}.\ P`   ``forall(k, P)``, with ``trigger(...)``
-:math:`\exists k.\ P`                  ``exists(k, lo, hi, P)`` or ``exists(k, P)``
-"some :math:`k` with :math:`P`"        ``choose(k, lo, hi, P)``
+:math:`a = b \le c < d`                ``cppverify::calc { a; == b; <= c; < d; }``
+definition by cases                    ``cppverify::behavior(name, case)`` clauses
+:math:`\forall k \in [lo, hi).\ P`     ``cppverify::forall(k, lo, hi, P)``
+:math:`\forall k \in \mathbb{Z}.\ P`   ``cppverify::forall(k, P)``, with ``cppverify::trigger(...)``
+:math:`\exists k.\ P`                  ``cppverify::exists(k, lo, hi, P)`` or ``cppverify::exists(k, P)``
+"some :math:`k` with :math:`P`"        ``cppverify::choose(k, lo, hi, P)``
 a finite sequence, set, multiset, map  ``cppverify::seq``, ``set``, ``multiset``, ``map``
 =====================================  ==============================================
 
@@ -36,28 +36,28 @@ both sides are 0. For :math:`n > 0`,
 
 using the claim for :math:`n - 1` in the second step.
 
-The definition becomes a ``spec`` function, the claim a ``proof`` function,
-and the induction a recursive call at a smaller ``decreases`` measure, which
-is the induction hypothesis. ``calc`` writes the chain of equalities as it
+The definition becomes a ``cppverify::spec`` function, the claim a ``cppverify::proof`` function,
+and the induction a recursive call at a smaller ``cppverify::decreases`` measure, which
+is the induction hypothesis. ``cppverify::calc`` writes the chain of equalities as it
 stands on paper, with the hypothesis cited at the step that uses it:
 
 .. cppverify-example: label S
 
 .. code-block:: cpp
 
-   spec int S(int n)
-     decreases(n)
+   cv::spec int S(int n)
+     cv::decreases(n)
    {
      return n <= 0 ? 0 : S(n - 1) + (n - 1);
    }
 
-   proof void gauss(int n)
-     pre(n >= 0)
-     post(2 * S(n) == n * (n - 1))
-     decreases(n)
+   cv::proof void gauss(int n)
+     cv::pre(n >= 0)
+     cv::post(2 * S(n) == n * (n - 1))
+     cv::decreases(n)
    {
      if (n > 0) {
-       calc {
+       cv::calc {
          2 * S(n);
          == 2 * (S(n - 1) + (n - 1));
          == { gauss(n - 1); }
@@ -77,18 +77,18 @@ form at ``i``, so the body calls the lemma there:
 .. code-block:: cpp
 
    int sum_below(int n)
-     pre(n >= 0 && n <= 10000)
-     post(2 * result == n * (n - 1))
+     cv::pre(n >= 0 && n <= 10000)
+     cv::post(2 * cv::result == n * (n - 1))
    {
      int s = 0;
      for (int i = 0; i < n; i = i + 1)
-       invariant(0 <= i && i <= n && s == S(i))
-       decreases(n - i)
+       cv::invariant(0 <= i && i <= n && s == S(i))
+       cv::decreases(n - i)
      {
-       ghost { gauss(i); }
+       cv::ghost { gauss(i); }
        s = s + i;
      }
-     ghost { gauss(n); }
+     cv::ghost { gauss(n); }
      return s;
    }
 
@@ -98,7 +98,7 @@ form at ``i``, so the body calls the lemma there:
    Verified: gauss [backend=z3]
    Verified: sum_below [backend=z3]
 
-Without ``ghost { gauss(i); }`` the overflow check knows only ``s == S(i)``,
+Without ``cppverify::ghost { gauss(i); }`` the overflow check knows only ``s == S(i)``,
 and ``S(i)`` could be anything:
 
 .. code-block:: text
@@ -133,9 +133,9 @@ claim only, prove the claim ``by`` it; nothing else from the block remains:
 .. code-block:: cpp
 
    void bound(int n)
-     pre(n >= 0 && n <= 10000)
+     cv::pre(n >= 0 && n <= 10000)
    {
-     contract_assert(2 * S(n) <= n * n) by { gauss(n); }
+     cv::check(2 * S(n) <= n * n) by { gauss(n); }
    }
 
 Chains of inequalities
@@ -150,26 +150,26 @@ each step cites it:
 
 .. code-block:: cpp
 
-   proof void mul_monotone(int a, int b, int c)
-     pre(a <= b && c >= 0)
-     post(a * c <= b * c)
+   cv::proof void mul_monotone(int a, int b, int c)
+     cv::pre(a <= b && c >= 0)
+     cv::post(a * c <= b * c)
    {
    }
 
    void squares(int a, int b)
-     pre(0 <= a && a <= b && b <= 46340)
+     cv::pre(0 <= a && a <= b && b <= 46340)
    {
-     calc {
+     cv::calc {
        a * a;
        <= { mul_monotone(a, b, a); }
        b * a;
        <= { mul_monotone(a, b, b); }
        b * b;
      }
-     contract_assert(a * a <= b * b);
+     cv::check(a * a <= b * b);
    }
 
-``calc`` proves each step on its own and concludes the relation between the
+``cppverify::calc`` proves each step on its own and concludes the relation between the
 first and the last term: here ``a * a <= b * b``. Contract arithmetic is
 mathematical, so ``a * a`` in a contract never overflows; the bound on ``b``
 matters only for the executable code that might compute it.
@@ -184,21 +184,21 @@ Definitions by cases
 
 A definition by cases is meaningful when the cases cover every input and do
 not overlap. Behaviors state the cases of a contract, and
-``complete_behaviors`` and ``disjoint_behaviors`` check exactly those two
+``cppverify::complete_behaviors`` and ``cppverify::disjoint_behaviors`` check exactly those two
 conditions:
 
 .. code-block:: cpp
 
    int clamp(int x, int lo, int hi)
-     pre(lo <= hi)
-     behavior(below, x < lo)
-       post(result == lo)
-     behavior(inside, lo <= x && x <= hi)
-       post(result == x)
-     behavior(above, x > hi)
-       post(result == hi)
-     complete_behaviors
-     disjoint_behaviors
+     cv::pre(lo <= hi)
+     cv::behavior(below, x < lo)
+       cv::post(cv::result == lo)
+     cv::behavior(inside, lo <= x && x <= hi)
+       cv::post(cv::result == x)
+     cv::behavior(above, x > hi)
+       cv::post(cv::result == hi)
+     cv::complete_behaviors
+     cv::disjoint_behaviors
    {
      if (x < lo)
        return lo;
@@ -214,15 +214,15 @@ case:
 .. code-block:: cpp
 
    int clamp_overlap(int x, int lo, int hi)
-     pre(lo <= hi)
-     behavior(below, x <= lo)
-       post(result == lo)
-     behavior(inside, lo <= x && x <= hi)
-       post(result == x)
-     behavior(above, x > hi)
-       post(result == hi)
-     complete_behaviors
-     disjoint_behaviors
+     cv::pre(lo <= hi)
+     cv::behavior(below, x <= lo)
+       cv::post(cv::result == lo)
+     cv::behavior(inside, lo <= x && x <= hi)
+       cv::post(cv::result == x)
+     cv::behavior(above, x > hi)
+       cv::post(cv::result == hi)
+     cv::complete_behaviors
+     cv::disjoint_behaviors
    {
      if (x < lo)
        return lo;
@@ -232,15 +232,15 @@ case:
    }
 
    int clamp_gap(int x, int lo, int hi)
-     pre(lo <= hi)
-     behavior(below, x < lo)
-       post(result == lo)
-     behavior(inside, lo < x && x <= hi)
-       post(result == x)
-     behavior(above, x > hi)
-       post(result == hi)
-     complete_behaviors
-     disjoint_behaviors
+     cv::pre(lo <= hi)
+     cv::behavior(below, x < lo)
+       cv::post(cv::result == lo)
+     cv::behavior(inside, lo < x && x <= hi)
+       cv::post(cv::result == x)
+     cv::behavior(above, x > hi)
+       cv::post(cv::result == hi)
+     cv::complete_behaviors
+     cv::disjoint_behaviors
    {
      if (x < lo)
        return lo;
@@ -273,11 +273,11 @@ induction on :math:`j - i`: :math:`a_i \le a_{j-1} \le a_j`.
    #include <cppverify.h>
    using cppverify::valid;
 
-   proof void sorted_pair(const int *a, int n, int i, int j)
-     pre(valid(a, n) && 0 <= i && i <= j && j < n)
-     pre(forall(k, 0, n - 1, a[k] <= a[k + 1]))
-     post(a[i] <= a[j])
-     decreases(j - i)
+   cv::proof void sorted_pair(const int *a, int n, int i, int j)
+     cv::pre(valid(a, n) && 0 <= i && i <= j && j < n)
+     cv::pre(cv::forall(k, 0, n - 1, a[k] <= a[k + 1]))
+     cv::post(a[i] <= a[j])
+     cv::decreases(j - i)
    {
      if (i < j)
        sorted_pair(a, n, i, j - 1);
@@ -293,18 +293,18 @@ directly. The invariant says what the search has ruled out:
 .. code-block:: cpp
 
    int search(const int *a, int n, int x)
-     pre(valid(a, n) && 0 <= n && n <= 100000)
-     pre(forall(i, 0, n, forall(j, i, n, a[i] <= a[j])))
-     post(-1 <= result && result < n)
-     post(result >= 0 ? a[result] == x : forall(k, 0, n, a[k] != x))
+     cv::pre(valid(a, n) && 0 <= n && n <= 100000)
+     cv::pre(cv::forall(i, 0, n, cv::forall(j, i, n, a[i] <= a[j])))
+     cv::post(-1 <= cv::result && cv::result < n)
+     cv::post(cv::result >= 0 ? a[cv::result] == x : cv::forall(k, 0, n, a[k] != x))
    {
      int lo = 0;
      int hi = n;
      while (lo < hi)
-       invariant(0 <= lo && lo <= hi && hi <= n)
-       invariant(forall(k, 0, lo, a[k] < x))
-       invariant(forall(k, hi, n, a[k] > x))
-       decreases(hi - lo)
+       cv::invariant(0 <= lo && lo <= hi && hi <= n)
+       cv::invariant(cv::forall(k, 0, lo, a[k] < x))
+       cv::invariant(cv::forall(k, hi, n, a[k] > x))
+       cv::decreases(hi - lo)
      {
        int mid = lo + (hi - lo) / 2;
        if (a[mid] < x)
@@ -337,20 +337,20 @@ Over all integers there are no reads to match, so a quantified fact needs a
 
 .. code-block:: cpp
 
-   spec int pow2(int n)
-     decreases(n)
+   cv::spec int pow2(int n)
+     cv::decreases(n)
    {
      return n <= 0 ? 1 : 2 * pow2(n - 1);
    }
 
    void doubles(int a)
-     pre(a >= 0 && a <= 50)
-     pre(forall(k, k < 0 || trigger(pow2(k)) < pow2(k + 1)))
+     cv::pre(a >= 0 && a <= 50)
+     cv::pre(cv::forall(k, k < 0 || cv::trigger(pow2(k)) < pow2(k + 1)))
    {
-     contract_assert(pow2(a) < pow2(a + 1));
+     cv::check(pow2(a) < pow2(a + 1));
    }
 
-``trigger(pow2(k))`` makes every ``pow2(t)`` in the proof an instance at
+``cppverify::trigger(pow2(k))`` makes every ``pow2(t)`` in the proof an instance at
 ``k = t``; here ``pow2(a)`` gives the fact at ``a``. Each instance mentions
 ``pow2(k + 1)``, which matches the trigger again: proving ``pow2(a) <
 pow2(a + 3)`` this way takes three generations of instances, and a goal the
@@ -360,7 +360,7 @@ instantiated thousands of times (see :doc:`ch16-when-verification-fails`).
 Prefer a lemma with a parameter, which is used exactly where it is called,
 to a quantified fact whose trigger recreates itself.
 
-A proof function cannot yet prove ``forall(k, ...)`` by induction, since its
+A proof function cannot yet prove ``cppverify::forall(k, ...)`` by induction, since its
 body cannot name the bound ``k``; state the lemma for a parameter, as
 ``sorted_pair`` does, and quantify in the caller's precondition.
 
@@ -375,15 +375,15 @@ proof is the loop that finds it:
 .. code-block:: cpp
 
    int argmax(const int *a, int n)
-     pre(valid(a, n) && 1 <= n && n <= 1000)
-     post(0 <= result && result < n)
-     post(forall(k, 0, n, a[k] <= a[result]))
+     cv::pre(valid(a, n) && 1 <= n && n <= 1000)
+     cv::post(0 <= cv::result && cv::result < n)
+     cv::post(cv::forall(k, 0, n, a[k] <= a[cv::result]))
    {
      int m = 0;
      for (int i = 1; i < n; i = i + 1)
-       invariant(1 <= i && i <= n && 0 <= m && m < i)
-       invariant(forall(k, 0, i, a[k] <= a[m]))
-       decreases(n - i)
+       cv::invariant(1 <= i && i <= n && 0 <= m && m < i)
+       cv::invariant(cv::forall(k, 0, i, a[k] <= a[m]))
+       cv::decreases(n - i)
      {
        if (a[i] > a[m])
          m = i;
@@ -391,7 +391,7 @@ proof is the loop that finds it:
      return m;
    }
 
-A specification may need "the" maximum without an algorithm. ``choose``
+A specification may need "the" maximum without an algorithm. ``cppverify::choose``
 names some index that has the property, Hilbert's :math:`\varepsilon`:
 
 .. cppverify-example: with argmax
@@ -399,24 +399,24 @@ names some index that has the property, Hilbert's :math:`\varepsilon`:
 
 .. code-block:: cpp
 
-   spec int some_max(const int *a, int n)
+   cv::spec int some_max(const int *a, int n)
    {
-     return choose(i, 0, n, forall(k, 0, n, a[k] <= a[i]));
+     return cv::choose(i, 0, n, cv::forall(k, 0, n, a[k] <= a[i]));
    }
 
    int largest(const int *a, int n)
-     pre(valid(a, n) && 1 <= n && n <= 1000)
-     post(result == a[some_max(a, n)])
+     cv::pre(valid(a, n) && 1 <= n && n <= 1000)
+     cv::post(cv::result == a[some_max(a, n)])
    {
      int m = argmax(a, n);
-     contract_assert(exists(i, 0, n, forall(k, 0, n, a[k] <= a[i])));
+     cv::check(cv::exists(i, 0, n, cv::forall(k, 0, n, a[k] <= a[i])));
      return a[m];
    }
 
-The ``contract_assert`` is the existence half of the argument: ``argmax``
+The ``cppverify::check`` is the existence half of the argument: ``argmax``
 returned a witness, so a maximum exists, and therefore ``some_max`` is one.
 Two maxima have equal values, so ``a[m] == a[some_max(a, n)]``. Which index
-``choose`` picks is not known, though, and a claim that depends on it
+``cppverify::choose`` picks is not known, though, and a claim that depends on it
 fails:
 
 .. cppverify-example: with argmax maxes
@@ -424,8 +424,8 @@ fails:
 .. code-block:: cpp
 
    int which(const int *a, int n)
-     pre(valid(a, n) && 1 <= n && n <= 1000)
-     post(result == some_max(a, n))
+     cv::pre(valid(a, n) && 1 <= n && n <= 1000)
+     cv::post(cv::result == some_max(a, n))
    {
      return argmax(a, n);
    }
@@ -436,7 +436,7 @@ fails:
      (counterexample: result = 0, a = 536, n = 2; trace: call.argmax ...)
 
 In the counterexample both elements are maxima, ``argmax`` returns 0, and
-``choose`` picks 1.
+``cppverify::choose`` picks 1.
 
 Collections: sums over a sequence
 ---------------------------------
@@ -459,40 +459,40 @@ states what the loop computes:
    using cppverify::seq;
    using cppverify::valid;
 
-   spec int total(seq s)
-     decreases(s.len())
+   cv::spec int total(seq s)
+     cv::decreases(s.len())
    {
      return s.len() <= 0 ? 0 : total(s.subrange(0, s.len() - 1)) + s[s.len() - 1];
    }
 
-   proof void total_empty()
-     post(total(cppverify::seq_empty()) == 0)
+   cv::proof void total_empty()
+     cv::post(total(cppverify::seq_empty()) == 0)
    {
    }
 
-   proof void total_push(seq s, int x)
-     post(total(s.push(x)) == total(s) + x)
+   cv::proof void total_push(seq s, int x)
+     cv::post(total(s.push(x)) == total(s) + x)
    {
    }
 
    int sum_array(const int *a, int n)
-     pre(valid(a, n) && n >= 0 && n <= 100)
-     pre(forall(k, 0, n, 0 <= a[k] && a[k] <= 1000))
-     post(0 <= result && result <= 1000 * n)
+     cv::pre(valid(a, n) && n >= 0 && n <= 100)
+     cv::pre(cv::forall(k, 0, n, 0 <= a[k] && a[k] <= 1000))
+     cv::post(0 <= cv::result && cv::result <= 1000 * n)
    {
-     ghost {
-       hide(total);
+     cv::ghost {
+       cv::hide(total);
        total_empty();
      }
-     ghost seq seen = cppverify::seq_empty();
+     cv::ghost seq seen = cppverify::seq_empty();
      int s = 0;
      for (int i = 0; i < n; i = i + 1)
-       invariant(0 <= i && i <= n && 0 <= s && s <= 1000 * i)
-       invariant(seen.len() == i && forall(k, 0, i, seen[k] == a[k]))
-       invariant(s == total(seen))
-       decreases(n - i)
+       cv::invariant(0 <= i && i <= n && 0 <= s && s <= 1000 * i)
+       cv::invariant(seen.len() == i && cv::forall(k, 0, i, seen[k] == a[k]))
+       cv::invariant(s == total(seen))
+       cv::decreases(n - i)
      {
-       ghost {
+       cv::ghost {
          total_push(seen, a[i]);
          seen = seen.push(a[i]);
        }
@@ -502,7 +502,7 @@ states what the loop computes:
    }
 
 The two lemmas are the two equations of the definition, each proved from
-the spec's body. The loop uses only them: ``hide(total)`` keeps the
+the spec's body. The loop uses only them: ``cppverify::hide(total)`` keeps the
 recursive definition out of this function's queries, which would otherwise
 unfold it at every sequence in sight. Hiding a definition and citing the
 lemmas that matter is the standard remedy when a proof that "should" be
@@ -518,8 +518,8 @@ membership and an index:
 
 .. code-block:: cpp
 
-   proof void contains_is_exists(seq s, int x)
-     post(s.contains(x) == exists(k, 0, s.len(), s[k] == x))
+   cv::proof void contains_is_exists(seq s, int x)
+     cv::post(s.contains(x) == cv::exists(k, 0, s.len(), s[k] == x))
    {
    }
 
@@ -531,9 +531,9 @@ by induction on the length of :math:`t`, removing its last element:
 
 .. code-block:: cpp
 
-   proof void total_concat(seq s, seq t)
-     post(total(s + t) == total(s) + total(t))
-     decreases(t.len())
+   cv::proof void total_concat(seq s, seq t)
+     cv::post(total(s + t) == total(s) + total(t))
+     cv::decreases(t.len())
    {
      if (t.len() > 0)
        total_concat(s, t.subrange(0, t.len() - 1));
@@ -546,7 +546,7 @@ by induction on the length of :math:`t`, removing its last element:
    Verified: total_concat [backend=z3]
 
 The recursive call is the induction hypothesis for the shorter sequence,
-and ``decreases(t.len())`` is what makes the recursion a proof: the
+and ``cppverify::decreases(t.len())`` is what makes the recursion a proof: the
 verifier checks that every call lowers it, so the argument is well founded.
 The step also needs a fact about sequences: dropping the last element of
 ``s + t`` leaves ``s`` followed by ``t`` without its last element. The
@@ -563,8 +563,8 @@ from then on it is a fact. A count of occurrences, and its invariance under
 
 .. code-block:: cpp
 
-   spec int count(seq s, int x)
-     decreases(s.len())
+   cv::spec int count(seq s, int x)
+     cv::decreases(s.len())
    {
      return s.len() <= 0
                 ? 0
@@ -572,23 +572,23 @@ from then on it is a fact. A count of occurrences, and its invariance under
                       (s[s.len() - 1] == x ? 1 : 0);
    }
 
-   proof void count_concat(seq s, seq t, int x)
-     post(count(s + t, x) == count(s, x) + count(t, x))
-     decreases(t.len())
+   cv::proof void count_concat(seq s, seq t, int x)
+     cv::post(count(s + t, x) == count(s, x) + count(t, x))
+     cv::decreases(t.len())
    {
      if (t.len() > 0)
        count_concat(s, t.subrange(0, t.len() - 1), x);
    }
 
-   proof void count_reverse(seq s, int x)
-     post(count(s.reverse(), x) == count(s, x))
-     decreases(s.len())
+   cv::proof void count_reverse(seq s, int x)
+     cv::post(count(s.reverse(), x) == count(s, x))
+     cv::decreases(s.len())
    {
      if (s.len() > 0) {
        seq tail = s.subrange(1, s.len());
        count_reverse(tail, x);
        count_concat(cppverify::seq_of(s[0]), tail, x);
-       contract_assert(cppverify::seq_of(s[0]) + tail == s);
+       cv::check(cppverify::seq_of(s[0]) + tail == s);
      }
    }
 
@@ -604,10 +604,10 @@ elements is a lemma like any other:
 
 .. code-block:: cpp
 
-   proof void reverse_index(seq s, long long k)
-     pre(0 <= k && k < s.len())
-     post(s.reverse()[k] == s[s.len() - 1 - k])
-     decreases(s.len())
+   cv::proof void reverse_index(seq s, long long k)
+     cv::pre(0 <= k && k < s.len())
+     cv::post(s.reverse()[k] == s[s.len() - 1 - k])
+     cv::decreases(s.len())
    {
      if (k < s.len() - 1)
        reverse_index(s.subrange(1, s.len()), k);
@@ -621,10 +621,10 @@ The examples above use a handful of techniques, which cover most proofs:
 - **Cite a lemma where it is needed**, as ``sum_below`` does with
   ``gauss(i)``. A lemma call is an instance chosen by you rather than by
   the solver.
-- **Split an argument into steps** with ``calc`` or a few
-  ``contract_assert`` statements. Each step is a smaller query.
-- **Keep facts local** with ``contract_assert(...) by { ... }``, and keep
-  definitions out of the way with ``hide`` once lemmas state what matters.
+- **Split an argument into steps** with ``cppverify::calc`` or a few
+  ``cppverify::check`` statements. Each step is a smaller query.
+- **Keep facts local** with ``cppverify::check(...) by { ... }``, and keep
+  definitions out of the way with ``cppverify::hide`` once lemmas state what matters.
 - **Choose triggers** that the proof mentions and that instances do not
   recreate; check with ``--profile-quantifiers``.
 - **State the sequence equality** a step needs, as ``count_reverse`` does:
