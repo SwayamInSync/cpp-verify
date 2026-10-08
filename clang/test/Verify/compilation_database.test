@@ -1,0 +1,23 @@
+# Without "--", cpp-verify takes a file's other compiler flags from the
+# compile_commands.json beside it or above it, or in the directory -p names;
+# a file the database does not list gets the flags of a listed neighbour.
+# Flags after "--" replace the database. Each --extra-arg reaches the compiler
+# once.
+#
+# UNSUPPORTED: system-windows
+# RUN: rm -rf %t && mkdir -p %t/src
+# RUN: sed -e 's|@DIR@|%/t|g' %S/Inputs/compilation_database.json > %t/compile_commands.json
+# RUN: cp %S/Inputs/compilation_database.cpp %t/src/listed.cpp
+# RUN: cp %S/Inputs/compilation_database.cpp %t/src/unlisted.cpp
+# RUN: %cpp-verify %t/src/listed.cpp 2>&1 | FileCheck %s --implicit-check-not=error
+# RUN: %cpp-verify %t/src/unlisted.cpp 2>&1 | FileCheck %s --implicit-check-not=error
+# RUN: %cpp-verify -p %t %t/src/listed.cpp 2>&1 | FileCheck %s --implicit-check-not=error
+# RUN: not %cpp-verify %t/src/listed.cpp -- 2>&1 | FileCheck %s --check-prefix=FLAGS
+# RUN: %cpp-verify %t/src/listed.cpp -- -DFROM_DATABASE 2>&1 | FileCheck %s --implicit-check-not=error
+# RUN: %cpp-verify --extra-arg=-include --extra-arg=%S/Inputs/compilation_database_once.h \
+# RUN:   %t/src/listed.cpp 2>&1 | FileCheck %s --implicit-check-not=error
+# RUN: %cpp-verify --extra-arg=-include --extra-arg=%S/Inputs/compilation_database_once.h \
+# RUN:   %t/src/listed.cpp -- -DFROM_DATABASE 2>&1 | FileCheck %s --implicit-check-not=error
+
+# CHECK: Verified: identity
+# FLAGS: error: compiled without the flags of the compilation database
