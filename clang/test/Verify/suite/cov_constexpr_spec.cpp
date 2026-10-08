@@ -3,8 +3,8 @@
 constexpr int twice(int x) { return 2 * x; }
 
 int use_constexpr(int x)
-  pre(x >= 0 && x < 50)
-  post(result == twice(x))
+  cppverify::pre(x >= 0 && x < 50)
+  cppverify::post(cppverify::result == twice(x))
 {
   return twice(x);
 }
