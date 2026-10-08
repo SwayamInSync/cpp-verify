@@ -12,12 +12,12 @@ struct Box {
 };
 
 int pick(Box *b, int n)
-  pre(b != nullptr && n >= 0 && n <= 2)
+  cppverify::pre(b != nullptr && n >= 0 && n <= 2)
 {
   int r = b->lo;
   int i = 0;
   while (i < n)
-    invariant(i >= 0 && i <= n)
+    cppverify::invariant(i >= 0 && i <= n)
   {
     r = b->hi;
     i = i + 1;
