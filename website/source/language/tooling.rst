@@ -110,7 +110,7 @@ Backends
    * - ``--no-check-ub``
      - Turn memory checking off. Core expression definedness (overflow,
        division, shifts, and dereferences of null or dead storage) is always
-       checked. Region ``modifies`` footprints then forget the whole heap at
+       checked. Region ``cppverify::modifies`` footprints then forget the whole heap at
        a call.
    * - ``--profile-quantifiers``
      - For a quantified Z3 query left unresolved, rerun it counting each
@@ -189,7 +189,7 @@ Backends
        unwinding semantics; applying BMC to an untransformed archive is
        rejected because unrolling must run before obligation lowering.
        Each module is replayed on its own: a module that relies on a spec's
-       termination, ``reads``, or ``post`` is not demoted when that spec's own
+       termination, ``cppverify::reads``, or ``cppverify::post`` is not demoted when that spec's own
        module fails, which the replay reports separately.
 
 ``--lower-only`` is deliberately different from compiler ``-fno-verify``.
@@ -241,7 +241,7 @@ Choosing the limits:
 
 - Interactive use: the defaults. A function that reaches the budget is
   usually one to split, or to help with lemmas, assertions, or
-  ``reveal_with_fuel``.
+  ``cppverify::reveal_with_fuel``.
 - A large function that legitimately needs many queries (many obligations
   verified on one job): raise ``--function-timeout``, or set it to ``0``.
 - Continuous integration with a time allowance per function: set
@@ -305,7 +305,7 @@ what the obligation checks:
 
 - contracts: ``assertion``, ``precondition``, ``postcondition``,
   ``invariant-entry``, ``invariant-preserved``, ``termination``,
-  ``type-invariant``, and ``recommends``;
+  ``type-invariant``, and ``cppverify::recommends``;
 - C++ definedness: ``overflow`` (including a mathematical value converted to
   a machine type it does not fit), ``division-by-zero``, ``shift``,
   ``bounds``, ``dereference``, ``initialization``, ``pointer-difference``,
@@ -313,7 +313,7 @@ what the obligation checks:
 - generated interfaces: ``pointer-validity`` (a pointer parameter, result, or
   ``valid(p, n)`` extent must denote valid storage), ``aliasing`` (implicit
   non-aliasing), ``frame`` (writes and callee effects stay within
-  ``modifies``), and ``missing-return``;
+  ``cppverify::modifies``), and ``missing-return``;
 - ``unwinding`` for a BMC bound, and ``unsupported`` for a construct the
   verifier rejects fail-closed.
 
@@ -355,7 +355,7 @@ inductions tried (``induction_tried``) and, when the solver proposed a
 counterexample its check could not evaluate, that input and the application
 it could not compute (``unchecked_counterexample``, with ``application`` and
 ``model``). A counterexample confirmed by a proof at its input names the
-``proof`` functions whose contracts the proof used (``confirmed_with``). For
+``cppverify::proof`` functions whose contracts the proof used (``confirmed_with``). For
 example (other fields left out):
 
 .. code-block:: text
@@ -373,7 +373,7 @@ What a verified result rests on
 A verified result may carry qualifiers that say what the proof assumed:
 
 - ``[partial]``: it holds only for terminating executions, after
-  ``decreases(*)`` here or in a callee (JSON ``"partial": true``).
+  ``cppverify::decreases(*)`` here or in a callee (JSON ``"partial": true``).
 - ``[trusts=f,g]``: it relies on the contracts of ``f`` and ``g``, marked
   ``[[cppverify::trusted]]``, directly or through verified callees (JSON
   ``"trusts": ["f", "g"]``). Each trusted function itself reports
@@ -409,7 +409,7 @@ Every ``Verified`` result is checked at each:
 
 A verified callee always returns, so only a trusted contract can end the
 paths through a call. Unreachable code itself is not flagged: a defensive
-``if (p == nullptr) return -1;`` under ``pre(p != nullptr)`` is dead for a
+``if (p == nullptr) return -1;`` under ``cppverify::pre(p != nullptr)`` is dead for a
 good reason, and every claim the function makes is still checked on the
 paths that remain.
 
@@ -443,7 +443,7 @@ source, inserting an unrelated earlier obligation, or changing display metadata
 preserves an individual goal's semantic identity.
 Archives still
 retain that metadata for replay diagnostics. Failure-triggered
-``recommends`` warnings are diagnostic-only and do not make archive bytes depend
+``cppverify::recommends`` warnings are diagnostic-only and do not make archive bytes depend
 on a solver result. BMC transform provenance is semantic: it is retained in
 archives and hashes so bounded obligations cannot be mistaken for unbounded
 deductive proofs.
@@ -464,7 +464,7 @@ Supported compiler
 Contract syntax and ``-fverify-contracts`` exist **only in this repository's
 Clang**. Use the shipped ``./build/bin/cpp-verify`` and
 ``./build/bin/clang++`` for any code that uses contracts — stock GCC or upstream
-Clang reject the flag and the contract keywords. (Building cpp-verify itself from
+Clang reject the flag and the contract constructs. (Building cpp-verify itself from
 source is independent and works with any standard host compiler.)
 
 Compile with contracts (``clang++``)
@@ -492,7 +492,7 @@ split is the whole game:
 
        ``-fverify-contracts`` / ``-fno-verify-contracts``
      - off
-     - Whether the parser recognises ``pre``/``post``/``ghost``/``spec``/… (and
+     - Whether the parser recognises ``cppverify::pre``/``cppverify::post``/``cppverify::ghost``/``cppverify::spec``/… (and
        therefore whether CodeGen strips them). This is the **master** switch — with
        it off, the file is byte-identical to stock C++ and the verifier never runs.
    * - **Run the prover**
@@ -506,7 +506,7 @@ split is the whole game:
 ``-fno-verify`` is meaningless without the contract language, so it **implies
 -fverify-contracts** (unless you explicitly pass ``-fno-verify-contracts``). That
 makes a lone ``-fno-verify`` a fast *light check*: it validates C++ syntax,
-contract syntax, **and** contract semantics (the ``old``/``result`` placement and
+contract syntax, **and** contract semantics (the ``cppverify::old``/``cppverify::result`` placement and
 bool-convertibility rules), but does **not** check your logic. Ideal for
 editors, CI pre-flight, and LLM/agent loops.
 
@@ -524,7 +524,8 @@ Quick lookup
    * - *(none)*
      - off
      - —
-     - Plain C++; ``pre``/``post`` are ordinary identifiers. Zero overhead.
+     - Plain C++: the constructs are not recognized, so a file that uses them does not
+       compile. Zero overhead.
    * - ``-fverify-contracts``
      - on
      - **yes**
@@ -546,6 +547,64 @@ Quick lookup
 The standalone ``cpp-verify`` tool normally runs the **full** path (it adds
 ``-fverify-contracts`` for you and does no code generation);
 ``--lower-only`` is its explicit solver-free verification-IR mode.
+
+Editor support
+--------------
+
+The build also produces ``clangd`` and ``clang-format`` from the same sources, so an editor
+sees contracts exactly as the compiler does. With them:
+
+- contract syntax and semantics errors appear as you type, with quick fixes for a
+  construct written without its qualifier;
+- hovering a construct (``cv::pre``, ``cv::forall``, ``cv::result``, ...) shows its
+  documentation, and hovering a function shows its contract;
+- go to definition, find references, rename, document highlights, and semantic
+  highlighting reach into function clauses, loop clauses, and type invariants. Renaming a
+  parameter, a spec function, or the alias ``cv`` updates every contract that uses it;
+- completion after ``cv::`` lists the constructs with their documentation, and the
+  ``<cppverify.h>`` collections;
+- ``clang-format`` puts each clause on its own line and the body's brace below them, as it
+  does for a trailing ``requires`` clause.
+
+clangd needs ``-fverify-contracts`` in each file's compile command. A
+``compile_commands.json`` from a build that uses the flag provides it; otherwise add it in a
+``.clangd`` file at the project root:
+
+.. code-block:: yaml
+
+   CompileFlags:
+     Add: [-fverify-contracts]
+
+Then point the editor at this clangd:
+
+- **VS Code**: the clangd extension with ``"clangd.path": "/path/to/build/bin/clangd"``.
+  Turn off the Microsoft C/C++ extension's own engine
+  (``"C_Cpp.intelliSenseEngine": "disabled"``), which does not know the constructs.
+- **Neovim** (nvim-lspconfig): ``cmd = { "/path/to/build/bin/clangd" }`` in the clangd setup.
+- **Emacs**: ``eglot-server-programs`` or ``lsp-clients-clangd-executable``.
+- **Others** (Sublime LSP, Zed, Helix, Qt Creator, Kate): set the clangd path in the
+  language server settings.
+
+A tool that does not use this build's parser (a stock clangd, Visual Studio's IntelliSense)
+reports the constructs as errors; a stock ``clang-format`` keeps every clause on the
+declarator's line. Tools built on this build's libclang see the contracts as well.
+
+Migrating from the keyword syntax
+---------------------------------
+
+Earlier versions wrote the constructs as keywords (``pre(x > 0)``,
+``contract_assert(e)``). ``clang/tools/cpp-verify/cppverify-migrate.py`` rewrites C++
+sources in place: each construct gains the qualifier and ``contract_assert`` becomes
+``cppverify::check``, while comments and string literals stay as they are.
+
+.. code-block:: bash
+
+   python3 clang/tools/cpp-verify/cppverify-migrate.py src/*.cpp src/*.h
+   python3 clang/tools/cpp-verify/cppverify-migrate.py --prefix=cv src/*.cpp  # writes cv::
+
+With ``--prefix=cv``, declare ``namespace cv = cppverify;`` before the first construct.
+Review the diff and compile with ``-fverify-contracts``: a construct the script missed is
+an error whose fix-it writes the qualifier, which clangd offers as a quick fix.
 
 IR dump layers
 --------------
