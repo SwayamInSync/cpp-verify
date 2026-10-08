@@ -3835,7 +3835,7 @@ def Unused : InheritableAttr {
 def CppVerifyTrusted : InheritableAttr {
   let Spellings = [CXX11<"cppverify", "trusted">];
   let Subjects = SubjectList<[Function]>;
-  let Documentation = [Undocumented];
+  let Documentation = [CppVerifyTrustedDocs];
   let SimpleHandler = 1;
   // Each assumed contract is marked on its own function.
   let PragmaAttributeSupport = 0;
