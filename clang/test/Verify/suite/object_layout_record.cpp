@@ -1,6 +1,6 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
-// RUN: %cpp-verify --dump-ir=1 %s 2>&1 | FileCheck %s --check-prefix=DUMP
+// RUN: %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: %cpp-verify --dump-ir=1 %s -- 2>&1 | FileCheck %s --check-prefix=DUMP
 
 // A by-value record reached through a pointer parameter records a canonical,
 // target-exact object layout (with padding) on the function, and its field
