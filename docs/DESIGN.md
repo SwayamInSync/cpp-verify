@@ -643,7 +643,10 @@ void allocate(int n)
 ```
 
 Any uncontracted `constexpr` definition is automatically available as a spec
-function — no `cppverify::spec` or re-declaration. A `constexpr` function with
+function — no `cppverify::spec` or re-declaration. It is lifted where
+verification uses it: in a contract, a verified body, a type invariant, or
+another lifted function. The `constexpr` functions of a header that nothing
+verified uses are never examined. A `constexpr` function with
 `cppverify::pre`/`cppverify::post` clauses remains a modular executable function so its contract
 cannot be bypassed through implicit lifting.
 
