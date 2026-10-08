@@ -2,16 +2,16 @@
 // RUN: %cpp-verify --lower-only --dump-ir=3 %s 2>&1 | FileCheck %s --check-prefix=IR
 // RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
-spec int unused_when_folded(int value) {
+cppverify::spec int unused_when_folded(int value) {
   return value + 1;
 }
 
 int canonical_bool_simplification(int value)
-  pre(true)
-  post(result == value)
+  cppverify::pre(true)
+  cppverify::post(cppverify::result == value)
 {
-  contract_assert(true && !!(value == value));
-  contract_assert((value == value) || unused_when_folded(value) > 0);
+  cppverify::check(true && !!(value == value));
+  cppverify::check((value == value) || unused_when_folded(value) > 0);
   return value;
 }
 
