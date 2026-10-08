@@ -1,7 +1,7 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
 // RUN: %clang -std=c++17 -fverify-contracts -c -o %t.o %s
-// RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
-// RUN: %cpp-verify --backend=bmc --unroll=1 %s 2>&1 | FileCheck %s --check-prefix=BMC
+// RUN: %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: %cpp-verify --backend=bmc --unroll=1 %s -- 2>&1 | FileCheck %s --check-prefix=BMC
 
 int *make_value(int value)
   cppverify::post(cppverify::result != nullptr)
