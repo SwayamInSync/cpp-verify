@@ -2,14 +2,14 @@
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 void set_value(int &value, int next)
-  modifies(value)
-  post(value == next)
+  cppverify::modifies(value)
+  cppverify::post(value == next)
 {
   value = next;
 }
 
 int read_value(const int &value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   return value;
 }
@@ -24,7 +24,7 @@ struct WithReference {
 };
 
 int local_actual()
-  post(result == 2)
+  cppverify::post(cppverify::result == 2)
 {
   int value = 1;
   set_value(value, 2);
@@ -32,108 +32,108 @@ int local_actual()
 }
 
 int temporary_actual()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   return read_value(1);
 }
 
 int local_reference(int *value)
-  pre(value != nullptr)
+  cppverify::pre(value != nullptr)
 {
   int &alias = *value;
   return alias;
 }
 
-int &reference_return(int &value) pre(true) {
+int &reference_return(int &value) cppverify::pre(true) {
   return value;
 }
 
 int record_reference(Pair &value)
-  post(result == value.first)
+  cppverify::post(cppverify::result == value.first)
 {
   return value.first;
 }
 
 int rvalue_reference(int &&value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   return value;
 }
 
 int volatile_reference(volatile int &value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   return value;
 }
 
 int pointer_reference(int *&value)
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   return value == nullptr ? 0 : 1;
 }
 
 int reference_member(WithReference value)
-  post(result == value.value)
+  cppverify::post(cppverify::result == value.value)
 {
   return value.value;
 }
 
-spec int spec_reference(const int &value) {
+cppverify::spec int spec_reference(const int &value) {
   return value;
 }
 
-proof void proof_reference(const int &value)
-  post(value == value)
+cppverify::proof void proof_reference(const int &value)
+  cppverify::post(value == value)
 {
 }
 
 int address_of_reference(int &value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int *pointer = &value;
   return *pointer;
 }
 
 int set_and_return(int &value)
-  modifies(value)
-  post(value == 1 && result == 1)
+  cppverify::modifies(value)
+  cppverify::post(value == 1 && cppverify::result == 1)
 {
   value = 1;
   return 1;
 }
 
 int pick_second(int first, int second)
-  post(result == second)
+  cppverify::post(cppverify::result == second)
 {
   return second;
 }
 
 int order_dependent_reference_read(int &value)
-  pre(value == 0)
-  modifies(value)
+  cppverify::pre(value == 0)
+  cppverify::modifies(value)
 {
   return pick_second(set_and_return(value), value);
 }
 
 int order_dependent_subscript_read(int *value)
-  pre(value != nullptr && value[0] == 0)
-  modifies(*value)
+  cppverify::pre(value != nullptr && value[0] == 0)
+  cppverify::modifies(*value)
 {
   return pick_second(set_and_return(*value), value[0]);
 }
 
 int opaque_reference(int &value)
-  post(value == 1 && result == 1);
+  cppverify::post(value == 1 && cppverify::result == 1);
 
 int order_dependent_implicit_effect(int &value)
-  pre(value == 0)
+  cppverify::pre(value == 0)
 {
   return pick_second(opaque_reference(value), value);
 }
 
 void conditional_reference_actual(bool choose, int *value)
-  pre(value != nullptr)
-  modifies(*value)
+  cppverify::pre(value != nullptr)
+  cppverify::modifies(*value)
 {
   set_value(choose ? *value : *value, 2);
 }
