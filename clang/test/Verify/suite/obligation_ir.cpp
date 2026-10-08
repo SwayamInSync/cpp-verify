@@ -16,12 +16,12 @@
 // RUN: diff %t.original.hashes %t.relocated.hashes
 
 int canonical_obligations(int x)
-  pre(x >= 0 && x < 10)
-  post(result == x + 1)
+  cppverify::pre(x >= 0 && x < 10)
+  cppverify::post(cppverify::result == x + 1)
 {
-  contract_assert(x >= 0);
+  cppverify::check(x >= 0);
   int next = x + 1;
-  contract_assert(next > x);
+  cppverify::check(next > x);
   return next;
 }
 
