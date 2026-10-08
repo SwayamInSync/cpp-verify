@@ -15,8 +15,8 @@ A complete scalar lifetime
 .. code-block:: cpp
 
    int compute(int input)
-     pre(input < 2147483647)
-     post(result == input + 1)
+     cv::pre(input < 2147483647)
+     cv::post(cv::result == input + 1)
    {
      int *p = new int;
      *p = input + 1;
@@ -46,7 +46,7 @@ Default initialization matters
 
 .. code-block:: cpp
 
-   int good(int value) post(result == value) {
+   int good(int value) cv::post(cv::result == value) {
      int *p = new int;
      *p = value;
      int result_value = *p;
@@ -54,7 +54,7 @@ Default initialization matters
      return result_value;
    }
 
-   int bad() post(true) {
+   int bad() cv::post(true) {
      int *p = new int;
      return *p;              // rejected: uninitialized heap read
    }
@@ -74,7 +74,7 @@ simultaneous scalar allocations are distinct:
 
 .. code-block:: cpp
 
-   bool two_objects() post(result) {
+   bool two_objects() cv::post(cv::result) {
      int *left = new int(1);
      int *right = new int(2);
      bool distinct = left != right;
@@ -98,7 +98,7 @@ assignment update both through ordinary SSA and branch merges:
 
 .. code-block:: cpp
 
-   int reassigned_alias(int value) post(result == value) {
+   int reassigned_alias(int value) cv::post(cv::result == value) {
      int *first = new int(0);
      int *owner = new int;
      int *alias = first;
@@ -124,14 +124,14 @@ matching pointer parameter stays inside the checked scalar interface:
 .. code-block:: cpp
 
    void set_value(int *target, int value)
-     pre(target != nullptr)
-     modifies(*target)
-     post(*target == value)
+     cv::pre(target != nullptr)
+     cv::modifies(*target)
+     cv::post(*target == value)
    {
      *target = value;
    }
 
-   int through_helper(int value) post(result == value) {
+   int through_helper(int value) cv::post(cv::result == value) {
      int *p = new int(0);
      set_value(p, value);
      int answer = *p;
@@ -140,7 +140,7 @@ matching pointer parameter stays inside the checked scalar interface:
    }
 
 The call asserts the callee preconditions against the current allocation and
-uses the usual ``modifies``/postcondition abstraction for the value heap.
+uses the usual ``cppverify::modifies``/postcondition abstraction for the value heap.
 Metadata ownership and liveness stay with the caller. This catches passing an
 uninitialized object to a reader, passing a dangling pointer, and violating a
 callee's implicit non-aliasing precondition.
@@ -158,14 +158,14 @@ fresh pointer result and a fresh provenance result:
 .. code-block:: cpp
 
    int *identity(int *source)
-     pre(source != nullptr)
-     post(result == source)
-     post(*result == old(*source))
+     cv::pre(source != nullptr)
+     cv::post(cv::result == source)
+     cv::post(*cv::result == cv::old(*source))
    {
      return source;
    }
 
-   int through_return(int value) post(result == value) {
+   int through_return(int value) cv::post(cv::result == value) {
      int *owner = new int(value);
      int *alias = identity(owner);
      int answer = *alias;
@@ -175,11 +175,11 @@ fresh pointer result and a fresh provenance result:
 
 Generated validity ties the result identity to its current byte owner. The
 explicit equality postcondition ties its address to ``owner``; together they
-recover the exact caller-owned lifetime. ``modifies`` authority is never
+recover the exact caller-owned lifetime. ``cppverify::modifies`` authority is never
 granted merely because a variable has a provenance companion—the identity must
 equal one of the caller's issued allocations. Since ``identity`` writes no
 memory, the call leaves the heap unchanged; the pointee postcondition would be
-needed only for a callee that may write memory without a ``modifies``, which
+needed only for a callee that may write memory without a ``cppverify::modifies``, which
 forgets the value heap at the call.
 
 The callee still must have a verified body and may not delete the borrowed
@@ -197,15 +197,15 @@ A separate inferred effect handles a factory's own scalar allocation:
 .. code-block:: cpp
 
    int *make_value(int value)
-     post(result != nullptr)
-     post(*result == value)
+     cv::post(cv::result != nullptr)
+     cv::post(*cv::result == value)
    {
      int *owner = new int(value);
      return owner;
    }
 
    int use_factory(int value)
-     post(result == value)
+     cv::post(cv::result == value)
    {
      int *p = make_value(value);
      int answer = *p;
@@ -254,7 +254,7 @@ reach it.
 
 .. code-block:: cpp
 
-   int maybe_bad(bool release) post(true) {
+   int maybe_bad(bool release) cv::post(true) {
      int *p = new int(1);
      if (release)
        delete p;
