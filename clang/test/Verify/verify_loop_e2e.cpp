@@ -2,8 +2,8 @@
 // RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 int sum_first_n(int n)
-  pre(n >= 0 && n <= 3)
-  post(result >= 0)
+  cppverify::pre(n >= 0 && n <= 3)
+  cppverify::post(cppverify::result >= 0)
 {
   int s = 0;
   int i = 0;
@@ -11,8 +11,8 @@ int sum_first_n(int n)
     // s accumulates i each step; s <= i * n bounds it (i, n <= 3 so s <= 9),
     // making s + i overflow-free and the invariant inductive. s >= 0 alone is
     // not preserved from an arbitrary large s.
-    invariant(s >= 0 && i >= 0 && i <= n && s <= i * n)
-    decreases(n - i)
+    cppverify::invariant(s >= 0 && i >= 0 && i <= n && s <= i * n)
+    cppverify::decreases(n - i)
   {
     s = s + i;
     i = i + 1;
