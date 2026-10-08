@@ -1,4 +1,4 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s
 //
 // ACSL behaviors: behavior(name, assumes) introduces a case; the pre and
 // post clauses after it hold where its assumption does (assumes -> pre,
