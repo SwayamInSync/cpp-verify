@@ -53,7 +53,7 @@ What is proved
 
 For every ``n`` and every input satisfying the precondition:
 
-- termination, via the ``decreases`` clause on the search range;
+- termination, via the ``cppverify::decreases`` clause on the search range;
 - memory safety -- every ``a[mid]`` read lies inside the declared extent;
 - definedness -- no signed overflow anywhere, the midpoint included;
 - the result is ``-1`` or a valid index into the buffer.
@@ -63,7 +63,7 @@ What is not proved
 
 That a non-negative result points at the key, and that ``-1`` means the key is
 absent. Both need the array's sortedness as a nested quantifier
-(``forall i <= j. a[i] <= a[j]``). The isolated instantiation lemmas verify, but
+(``cppverify::forall i <= j. a[i] <= a[j]``). The isolated instantiation lemmas verify, but
 the inductive loop obligation did not close within 900 seconds. This is
 incomplete automation, not a proved property, and it is not claimed as one. See
 :doc:`/language/limitations`.
