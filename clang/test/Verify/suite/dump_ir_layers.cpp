@@ -3,8 +3,8 @@
 // RUN: %cpp-verify --dump-ir=3,4 %s 2>&1 | FileCheck %s --check-prefix=L34
 
 int inc(int x)
-  pre(x >= 0 && x < 100)
-  post(result == x + 1)
+  cppverify::pre(x >= 0 && x < 100)
+  cppverify::post(cppverify::result == x + 1)
 {
   return x + 1;
 }
