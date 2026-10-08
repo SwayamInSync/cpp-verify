@@ -3,17 +3,17 @@
 ## Why this exists
 
 A verifier for **runtime** C++ code has two obligations, not one. For a function
-with `pre`/`post`:
+with `cppverify::pre`/`cppverify::post`:
 
 1. **Safety** — every operation the function executes is *well-defined* (no UB).
 2. **Functional** — `pre ∧ code ⇒ post`.
 
 Both are mandatory. The functional obligation is **meaningless without the
 safety one**: if the code can execute UB, the real program has no defined
-behavior at all, so proving `post` against our (necessarily total) model proves
+behavior at all, so proving `cppverify::post` against our (necessarily total) model proves
 nothing about the binary. UB-freedom is therefore *prior to* functional
 correctness, and — crucially — it is the **tool's** job to generate the safety
-obligations, not the user's. The user writes `pre`/`post`; if `pre` is too weak
+obligations, not the user's. The user writes `cppverify::pre`/`cppverify::post`; if `cppverify::pre` is too weak
 to rule out an overflow, the tool reports the overflow and tells the user the
 precondition their algorithm actually needs.
 
@@ -23,8 +23,8 @@ verification fails.
 
 ### Spec world vs. exec world
 
-UB checking applies only to the **exec world** (real `exec`/`proof` functions,
-machine integers, `VIntMode::Machine`). The **spec world** (`spec` functions,
+UB checking applies only to the **exec world** (real `exec`/`cppverify::proof` functions,
+machine integers, `VIntMode::Machine`). The **spec world** (`cppverify::spec` functions,
 unbounded `VIntMode::Math`) has no notion of overflow by construction and is
 never instrumented.
 
@@ -57,7 +57,7 @@ wp(x = a + b, Q)  =  no_overflow_signed(a, b)   ∧   Q[x := a + b]
 The safety obligation sits **inline at each operation**; the functional
 obligation (the postcondition) sits at the end. They compose soundly because of
 order: once `no_overflow(a,b)` holds, the machine result of `a + b` equals the
-true mathematical sum, so functional reasoning about `post` is faithful.
+true mathematical sum, so functional reasoning about `cppverify::post` is faithful.
 The backend's sound UNKNOWN-recovery path may submit individual ordered
 assertions separately, but it never changes this program order or lets a later
 assumption justify an earlier safety check.
@@ -107,7 +107,7 @@ deliberately not flagged.
 `valid` is a conventional pure spec declaration, not a new keyword:
 
 ```cpp
-spec bool valid(int *p, int n) { return true; }
+cppverify::spec bool valid(int *p, int n) { return true; }
 ```
 
 When `valid(p, n)` appears in a precondition under `--check-ub`, the verifier
@@ -121,7 +121,7 @@ adds these semantics before the intentionally trivial body can inline to
 - the extent is the pointer's complete object for the implicit non-aliasing
   default: a separated address-parameter pair is disjoint over whole extents
   unless either pointer is null or either extent is empty, and callers prove
-  it. `aliases` pairs are not widened.
+  it. `cppverify::aliases` pairs are not widened.
 
 An access through a base with no declared extent still receives the mandatory
 non-null/abstract-valid dereference check, but no size claim is invented.
@@ -191,8 +191,8 @@ rely on them are outside the verified subset:
 
 ## Scope and the flag
 
-- Core expression safety applies to exec and `proof` functions; mathematical
-  `spec` functions are total and are never instrumented for machine UB.
+- Core expression safety applies to exec and `cppverify::proof` functions; mathematical
+  `cppverify::spec` functions are total and are never instrumented for machine UB.
 - **`cpp-verify --check-ub`** additionally enables buffer extent discovery and
   bounds obligations on every backend. It adds no second copy of the core
   checks, and it has no `clang++` driver spelling yet.
