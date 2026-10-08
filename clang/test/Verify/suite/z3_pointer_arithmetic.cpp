@@ -2,8 +2,8 @@
 // RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 bool supported_pointer_arithmetic(int *pointer)
-  pre(pointer != nullptr)
-  post(result)
+  cppverify::pre(pointer != nullptr)
+  cppverify::post(cppverify::result)
 {
   return pointer + 1 != pointer;
 }
