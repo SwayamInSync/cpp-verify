@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: %cpp-verify --check-ub %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: %cpp-verify --check-ub %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 // memset: correct AND memory-safe in one proof (every p[j] write is in bounds).
 cppverify::spec bool valid(int* p, int n) { return true; }
 void memset0(int* p, int n)
