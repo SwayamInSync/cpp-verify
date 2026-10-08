@@ -6,53 +6,53 @@
 // memory reads and comparisons: it is constant beyond them, so finitely many
 // values decide it.
 
-spec int sq(int x) { return x * x; }
+cppverify::spec int sq(int x) { return x * x; }
 
-proof void sq_nonnegative_all()
-  post(forall(k, sq(k) >= 0))
+cppverify::proof void sq_nonnegative_all()
+  cppverify::post(cppverify::forall(k, sq(k) >= 0))
 {
 }
 // CHECK-DAG: Verified: sq_nonnegative_all
 
 void uses_lemma(int a)
 {
-  ghost { sq_nonnegative_all(); }
-  contract_assert(sq(a + 7) >= 0);
+  cppverify::ghost { sq_nonnegative_all(); }
+  cppverify::check(sq(a + 7) >= 0);
 }
 // CHECK-DAG: Verified: uses_lemma
 
 void false_over_integers()
 {
-  contract_assert(forall(k, 2 * k + 1 > 0));
+  cppverify::check(cppverify::forall(k, 2 * k + 1 > 0));
 }
 // CHECK-DAG: error: verification failed: false_over_integers [{{.*}}::assertion@{{.*}}[reason=counterexample]
 
 void true_over_range()
 {
-  contract_assert(forall(k, 0, 10, 2 * k + 1 > 0));
+  cppverify::check(cppverify::forall(k, 0, 10, 2 * k + 1 > 0));
 }
 // CHECK-DAG: Verified: true_over_range
 
 void square_above(int n)
-  pre(n >= 0 && n < 1000)
+  cppverify::pre(n >= 0 && n < 1000)
 {
-  contract_assert(exists(k, k * k >= n));
+  cppverify::check(cppverify::exists(k, k * k >= n));
 }
 // CHECK-DAG: Verified: square_above
 
-spec bool valid(int *p, int n) { return true; }
+cppverify::spec bool valid(int *p, int n) { return true; }
 
 void cell_claim(int *p)
-  pre(valid(p, 4) && p[0] == 3 && p[1] == 4)
+  cppverify::pre(valid(p, 4) && p[0] == 3 && p[1] == 4)
 {
-  contract_assert(forall(k, k < 0 || k > 1 || p[k] == 3));
+  cppverify::check(cppverify::forall(k, k < 0 || k > 1 || p[k] == 3));
 }
 // CHECK-DAG: error: verification failed: cell_claim [{{.*}}::assertion@{{.*}}[reason=counterexample]
 
 void cell_claim_holds(int *p)
-  pre(valid(p, 4) && p[0] == 3)
+  cppverify::pre(valid(p, 4) && p[0] == 3)
 {
-  contract_assert(forall(k, k != 0 || p[k] == 3));
+  cppverify::check(cppverify::forall(k, k != 0 || p[k] == 3));
 }
 // CHECK-DAG: Verified: cell_claim_holds
 
