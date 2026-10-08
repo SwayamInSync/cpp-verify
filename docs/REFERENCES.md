@@ -131,6 +131,6 @@
 - **WP (Weakest Precondition)**: walk backward from postcondition through statements, substituting, to derive the weakest condition that guarantees the postcondition.
 - **Verification Condition (VC)**: the logical formula produced by wp. If valid, the program is correct.
 - **Modular Verification**: verify each function independently. Caller asserts pre, assumes post. Callee assumes pre, proves post.
-- **Two-state context**: postconditions reference both pre-state (`old(x)`) and post-state (`x`, `result`).
+- **Two-state context**: postconditions reference both pre-state (`cppverify::old(x)`) and post-state (`x`, `cppverify::result`).
 - **Ghost code**: code that exists only for verification (spec/proof functions, ghost blocks). Zero runtime cost.
 - **QualType**: Clang's type representation. Carries const/volatile qualifiers, signedness, bit-width. Your IR's VType is populated from QualType.
