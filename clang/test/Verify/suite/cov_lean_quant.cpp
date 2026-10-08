@@ -1,5 +1,5 @@
-// RUN: %cpp-verify --backend=lean --lean-out=%t.lean %s 2>&1 | FileCheck %s --check-prefix=VERIFY
-// RUN: %cpp-verify --lower-only --dump-ir=3 %s 2>&1 | FileCheck %s --check-prefix=QUANT
+// RUN: %cpp-verify --backend=lean --lean-out=%t.lean %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: %cpp-verify --lower-only --dump-ir=3 %s -- 2>&1 | FileCheck %s --check-prefix=QUANT
 
 int quant_client(int n)
   cppverify::pre(n > 0 && n <= 3)
