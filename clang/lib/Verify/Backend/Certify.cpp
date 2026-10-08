@@ -2697,8 +2697,8 @@ class Evaluator {
                 "its derivations from there do not reach finitely many "
                 "arguments, and no postcondition of " +
                 displayName(Function) +
-                " decides it (a proved one such as !result || Q, with Q "
-                "false there, would)";
+                " decides it (a proved one such as !cppverify::result || Q, "
+                "with Q false there, would)";
     if (!Value) {
       // A nesting limit depends on where the application is evaluated.
       if (LimitInDefinition && !spent() &&
@@ -3594,7 +3594,7 @@ static std::string needsDerivation(const SpecDispute &Dispute) {
          "never reach a base case, and only induction over derivations, not "
          "unfolding, shows that; state what they satisfy as a postcondition "
          "of " +
-         displayName(*Dispute.Function) + " (!result || Q)";
+         displayName(*Dispute.Function) + " (!cppverify::result || Q)";
 }
 
 RefinementDecision DefinitionRefinement::next(const CertifyResult &Result,
