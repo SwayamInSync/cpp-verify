@@ -1,15 +1,15 @@
 // RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
-spec int bump(int x) { return x + 1; }
+cppverify::spec int bump(int x) { return x + 1; }
 
 int use_bump(int x)
-  pre(x >= 0 && x < 10)
-  post(result == x + 1)
+  cppverify::pre(x >= 0 && x < 10)
+  cppverify::post(cppverify::result == x + 1)
 {
-  ghost {
-    reveal(bump);
+  cppverify::ghost {
+    cppverify::reveal(bump);
     int bumped = bump(x);
-    contract_assert(bumped == x + 1);
+    cppverify::check(bumped == x + 1);
   }
   return x + 1;
 }
