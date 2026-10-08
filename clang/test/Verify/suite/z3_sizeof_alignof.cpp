@@ -7,31 +7,31 @@ struct Pair {
 };
 
 unsigned long valid_sizeof()
-  post(result == 8)
+  cppverify::post(cppverify::result == 8)
 {
   return sizeof(Pair);
 }
 
 unsigned long valid_alignof()
-  post(result == 4)
+  cppverify::post(cppverify::result == 4)
 {
   return alignof(Pair);
 }
 
 unsigned long valid_unevaluated_dereference(int *pointer)
-  post(result == 4)
+  cppverify::post(cppverify::result == 4)
 {
   return sizeof(*pointer);
 }
 
 unsigned long valid_reference_type_layout()
-  post(result == 4)
+  cppverify::post(cppverify::result == 4)
 {
   return sizeof(int &);
 }
 
 unsigned long invalid_sizeof_claim()
-  post(result == 4)
+  cppverify::post(cppverify::result == 4)
 {
   return sizeof(Pair);
 }
