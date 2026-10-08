@@ -40,7 +40,7 @@ constexpr int unsafe_division_assignment(int value) {
   return output;
 }
 
-spec int selected_value(bool choose_first, int first, int second) {
+cppverify::spec int selected_value(bool choose_first, int first, int second) {
   int output;
   if (choose_first)
     output = first;
@@ -50,52 +50,52 @@ spec int selected_value(bool choose_first, int first, int second) {
 }
 
 int valid_assigned_absolute_value(int value)
-  pre(value != -2147483648)
-  post(assigned_absolute_value(value) >= 0)
+  cppverify::pre(value != -2147483648)
+  cppverify::post(assigned_absolute_value(value) >= 0)
 {
   return 0;
 }
 
 int valid_positive_or_zero(int value)
-  post(positive_or_zero(value) >= 0)
+  cppverify::post(positive_or_zero(value) >= 0)
 {
   return 0;
 }
 
 int valid_return_or_assign(int value)
-  post(return_or_assign(value) >= 0)
+  cppverify::post(return_or_assign(value) >= 0)
 {
   return 0;
 }
 
 int valid_spec_branch_assignment(bool choose_first, int first, int second)
-  post(selected_value(choose_first, first, second) ==
+  cppverify::post(selected_value(choose_first, first, second) ==
        (choose_first ? first : second))
 {
   return 0;
 }
 
 int valid_guarded_division_assignment(int value)
-  post(guarded_division_assignment(value) ==
+  cppverify::post(guarded_division_assignment(value) ==
        (value != 0 ? 10 / value : 0))
 {
   return 0;
 }
 
 int invalid_assigned_absolute_min()
-  post(assigned_absolute_value(-2147483648) == -2147483648)
+  cppverify::post(assigned_absolute_value(-2147483648) == -2147483648)
 {
   return 0;
 }
 
 int invalid_spec_branch_assignment()
-  post(selected_value(true, 1, 2) == 2)
+  cppverify::post(selected_value(true, 1, 2) == 2)
 {
   return 0;
 }
 
 int invalid_unsafe_division_assignment()
-  post(unsafe_division_assignment(0) == unsafe_division_assignment(0))
+  cppverify::post(unsafe_division_assignment(0) == unsafe_division_assignment(0))
 {
   return 0;
 }
