@@ -2,9 +2,9 @@
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=FAIL
 
 void bad_framing(int *a, int *b)
-  pre(a != nullptr && b != nullptr)
-  modifies(*b)
-  post(*a == old(*a))
+  cppverify::pre(a != nullptr && b != nullptr)
+  cppverify::modifies(*b)
+  cppverify::post(*a == cppverify::old(*a))
 {
   *a = 42;
 }
