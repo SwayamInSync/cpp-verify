@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: %cpp-verify --check-ub %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: %cpp-verify --check-ub %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 // memcpy is provably memory-safe: every d[j] write and s[j] read is in bounds.
 // (Its functional correctness is verified separately; see heap_memcpy_pass.)
 cppverify::spec bool valid(int* p, int n) { return true; }
