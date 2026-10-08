@@ -13,9 +13,7 @@
 #include "clang/Parse/Parser.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
-#include "clang/AST/ExprContract.h"
 #include "clang/AST/ASTLambda.h"
-#include "clang/AST/Decl.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/Basic/DiagnosticParse.h"
 #include "clang/Basic/StackExhaustionHandler.h"
@@ -1069,78 +1067,14 @@ bool Parser::isStartOfFunctionDefinition(const ParsingDeclarator &Declarator) {
     return KW.is(tok::kw_default) || KW.is(tok::kw_delete);
   }
 
-  // CppVerify: contract clauses (pre/post/decreases) precede the function body.
+  // CppVerify: contract clauses precede the function body (a misspelled one
+  // is skipped).
   if (getLangOpts().VerifyContracts &&
-      (Tok.is(tok::kw_pre) || Tok.is(tok::kw_post) ||
-       Tok.is(tok::kw_decreases) || Tok.is(tok::kw_modifies) ||
-       Tok.is(tok::kw_aliases) || Tok.is(tok::kw_recommends) ||
-       isContractReadsClause() || isContractWhenClause() ||
-       isContractBehaviorClause() || isContractInductiveClause()))
+      (isFunctionContractClause() || Tok.is(tok::l_brace)))
     return true;
 
   return Tok.is(tok::colon) ||         // X() : Base() {} (used for ctors)
          Tok.is(tok::kw_try);          // X() try { ... }
-}
-
-bool Parser::isContractReadsClause() {
-  // A contextual keyword, so that ordinary code may still name things reads.
-  return getLangOpts().VerifyContracts && Tok.is(tok::identifier) &&
-         Tok.getIdentifierInfo()->isStr("reads") &&
-         NextToken().is(tok::l_paren);
-}
-
-bool Parser::isContractWhenClause() {
-  return getLangOpts().VerifyContracts && Tok.is(tok::identifier) &&
-         Tok.getIdentifierInfo()->isStr("when") && NextToken().is(tok::l_paren);
-}
-
-bool Parser::isContractInductiveClause() {
-  return getLangOpts().VerifyContracts && Tok.is(tok::identifier) &&
-         Tok.getIdentifierInfo()->isStr("inductive") &&
-         NextToken().isNot(tok::l_paren);
-}
-
-void Parser::ParseContractClauseProofs(Decl *Function) {
-  SmallVector<PendingClauseProof, 1> Proofs = std::move(PendingClauseProofs);
-  PendingClauseProofs.clear();
-  auto *FD = Function ? Function->getAsFunction() : nullptr;
-  for (PendingClauseProof &Proof : Proofs) {
-    Token End;
-    End.startToken();
-    End.setKind(tok::eof);
-    End.setLocation(Proof.Toks.back().getEndLoc());
-    End.setEofData(&Proof);
-    Proof.Toks.push_back(End);
-    // Keep the token that follows, the start of the body.
-    Proof.Toks.push_back(Tok);
-    PP.EnterTokenStream(Proof.Toks, /*DisableMacroExpansion=*/true,
-                        /*IsReinject=*/true);
-    ConsumeAnyToken(/*ConsumeCodeCompletionTok=*/true);
-    StmtResult Body;
-    {
-      llvm::SaveAndRestore<bool> InPost(
-          InContractPostcondition,
-          Proof.K == FunctionContractInfo::ClauseProof::Post);
-      Body = ParseCompoundStatement();
-    }
-    while (Tok.isNot(tok::eof))
-      ConsumeAnyToken();
-    if (Tok.getEofData() == &Proof)
-      ConsumeAnyToken();
-    if (FD && Body.isUsable())
-      Actions.getASTContext()
-          .getOrCreateFunctionContract(FD)
-          .ClauseProofs.push_back({Proof.K, Body.get(), Proof.Loc});
-  }
-}
-
-bool Parser::isContractBehaviorClause() {
-  if (!getLangOpts().VerifyContracts || Tok.isNot(tok::identifier))
-    return false;
-  const IdentifierInfo *II = Tok.getIdentifierInfo();
-  if (II->isStr("behavior"))
-    return NextToken().is(tok::l_paren);
-  return II->isStr("complete_behaviors") || II->isStr("disjoint_behaviors");
 }
 
 Parser::DeclGroupPtrTy Parser::ParseDeclOrFunctionDefInternal(
@@ -1309,399 +1243,16 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
   if (FTI.isKNRPrototype())
     ParseKNRParamDeclarations(D);
 
-  // CppVerify: parse contract clauses (pre/post/decreases) before the body.
-  SmallVector<Expr *, 2> ContractPreconditions;
-  SmallVector<Expr *, 2> ContractPostconditions;
-  SmallVector<Expr *, 4> ContractModifies;
-  SmallVector<std::pair<Expr *, Expr *>, 2> ContractAliases;
-  SmallVector<Expr *, 2> ContractRecommends;
-  SmallVector<std::pair<Expr *, Expr *>, 1> ContractReads;
-  SmallVector<Expr *, 1> ContractWhen;
-  SmallVector<Expr *, 2> ContractDecreases;
-  SourceLocation ContractMayDiverge;
-  SourceLocation ContractInductive;
-  SmallVector<Expr *, 1> ContractBehaviorChecks;
-  SmallVector<std::pair<IdentifierInfo *, Expr *>, 2> ContractBehaviors;
-  // Detect spec/proof from DeclSpec bits set during declaration parsing.
-  bool IsSpecFn = getLangOpts().VerifyContracts &&
-                  D.getDeclSpec().isSpecFunctionSpecified();
-  bool IsProofFn = getLangOpts().VerifyContracts &&
-                   D.getDeclSpec().isProofFunctionSpecified();
-
+  // CppVerify: contract clauses before the body; a semicolon after them
+  // makes this a contracted declaration.
+  FunctionContractClauses Contract;
   if (getLangOpts().VerifyContracts) {
-    PendingClauseProofs.clear();
-    // Re-enter function parameters into scope so contract conditions can
-    // reference them. This mirrors ParseTrailingRequiresClause in
-    // ParseDeclCXX.cpp: create a FunctionPrototypeScope and push params.
-    std::optional<ParseScope> ContractParamScope;
-    if (D.isFunctionDeclarator() &&
-        (Tok.is(tok::kw_pre) || Tok.is(tok::kw_post) ||
-         Tok.is(tok::kw_decreases) || Tok.is(tok::kw_modifies) ||
-         Tok.is(tok::kw_aliases) || Tok.is(tok::kw_recommends) ||
-         isContractReadsClause() || isContractWhenClause() ||
-         isContractBehaviorClause() || isContractInductiveClause())) {
-      ContractParamScope.emplace(this, Scope::DeclScope |
-                                           Scope::FunctionDeclarationScope |
-                                           Scope::FunctionPrototypeScope);
-      Actions.ActOnStartTrailingRequiresClause(getCurScope(), D);
-
-      // Compute the return type from the full Declarator (not just the
-      // DeclSpec) so that 'result' in postconditions gets the correct type.
-      // This handles pointers, references, typedefs, trailing return types,
-      // struct returns, etc. — all declarator modifiers are accounted for.
-      // The FunctionDecl doesn't exist yet, so we ask Sema to compute the
-      // full function type from the Declarator and extract the return type.
-      {
-        TypeSourceInfo *TSI = Actions.GetTypeForDeclarator(D);
-        QualType FullType = TSI->getType();
-        if (const auto *FT = FullType->getAs<FunctionType>())
-          CurrentContractReturnType = FT->getReturnType();
-        else
-          CurrentContractReturnType = Actions.getASTContext().IntTy;
-      }
-    }
-
-    llvm::SaveAndRestore<bool> ParsingContractExprRAII(InParsingContractExpr,
-                                                       true);
-    // ACSL behaviors: pre and post clauses after behavior(name, assumes)
-    // belong to it; complete_behaviors and disjoint_behaviors relate the
-    // assumptions of all, or of the named, behaviors.
-    struct Behavior {
-      IdentifierInfo *Name;
-      Expr *Assumes;
-    };
-    SmallVector<Behavior, 2> Behaviors;
-    struct BehaviorRelation {
-      bool Complete;
-      SourceLocation Loc;
-      SmallVector<std::pair<IdentifierInfo *, SourceLocation>, 2> Names;
-    };
-    SmallVector<BehaviorRelation, 1> BehaviorRelations;
-    auto implies = [&](Expr *Condition, Expr *Consequence) -> ExprResult {
-      SourceLocation Loc = Consequence->getBeginLoc();
-      ExprResult Negated =
-          Actions.ActOnUnaryOp(getCurScope(), Loc, tok::exclaim, Condition);
-      if (Negated.isInvalid())
-        return ExprError();
-      return Actions.ActOnContractCondition(Actions.ActOnBinOp(
-          getCurScope(), Loc, tok::pipepipe, Negated.get(), Consequence));
-    };
-    while (Tok.is(tok::kw_pre) || Tok.is(tok::kw_post) ||
-           Tok.is(tok::kw_decreases) || Tok.is(tok::kw_modifies) ||
-           Tok.is(tok::kw_aliases) || Tok.is(tok::kw_recommends) ||
-           isContractReadsClause() || isContractWhenClause() ||
-           isContractBehaviorClause() || isContractInductiveClause()) {
-      if (isContractInductiveClause()) {
-        ContractInductive = ConsumeToken();
-        if (!IsSpecFn)
-          Diag(ContractInductive, diag::err_contract_inductive_not_spec);
-        continue;
-      }
-      if (isContractBehaviorClause()) {
-        const bool IsBehavior = Tok.getIdentifierInfo()->isStr("behavior");
-        const bool IsComplete =
-            Tok.getIdentifierInfo()->isStr("complete_behaviors");
-        SourceLocation ClauseLoc = ConsumeToken();
-        if (IsSpecFn)
-          Diag(ClauseLoc, diag::err_contract_behavior_on_spec);
-        if (IsBehavior) {
-          BalancedDelimiterTracker T(*this, tok::l_paren);
-          T.consumeOpen();
-          if (Tok.isNot(tok::identifier) ||
-              !NextToken().isOneOf(tok::comma, tok::r_paren)) {
-            Diag(Tok, diag::err_contract_behavior_name);
-            T.skipToEnd();
-            continue;
-          }
-          IdentifierInfo *Name = Tok.getIdentifierInfo();
-          SourceLocation NameLoc = ConsumeToken();
-          for (const Behavior &Other : Behaviors)
-            if (Other.Name == Name)
-              Diag(NameLoc, diag::err_contract_behavior_redefined) << Name;
-          Expr *Assumes = nullptr;
-          if (TryConsumeToken(tok::comma)) {
-            ExprResult E = Actions.ActOnContractCondition(ParseExpression());
-            if (!E.isInvalid())
-              Assumes = E.get();
-          } else {
-            Assumes = Actions.ActOnCXXBoolLiteral(NameLoc, tok::kw_true).get();
-          }
-          T.consumeClose();
-          if (Assumes) {
-            Behaviors.push_back({Name, Assumes});
-            ContractBehaviors.push_back({Name, Assumes});
-          }
-          continue;
-        }
-        BehaviorRelation Relation{IsComplete, ClauseLoc, {}};
-        if (Tok.is(tok::l_paren)) {
-          BalancedDelimiterTracker T(*this, tok::l_paren);
-          T.consumeOpen();
-          while (Tok.is(tok::identifier)) {
-            Relation.Names.push_back(
-                {Tok.getIdentifierInfo(), Tok.getLocation()});
-            ConsumeToken();
-            if (!TryConsumeToken(tok::comma))
-              break;
-          }
-          T.consumeClose();
-        }
-        BehaviorRelations.push_back(std::move(Relation));
-        continue;
-      }
-      bool IsPre = Tok.is(tok::kw_pre);
-      bool IsPost = Tok.is(tok::kw_post);
-      bool IsDecreases = Tok.is(tok::kw_decreases);
-      bool IsModifies = Tok.is(tok::kw_modifies);
-      bool IsAliases = Tok.is(tok::kw_aliases);
-      bool IsRecommends = Tok.is(tok::kw_recommends);
-      bool IsReads = isContractReadsClause();
-      bool IsWhen = isContractWhenClause();
-      StringRef ClauseName = IsPre         ? "pre"
-                             : IsPost      ? "post"
-                             : IsDecreases ? "decreases"
-                             : IsModifies  ? "modifies"
-                             : IsAliases   ? "aliases"
-                             : IsReads     ? "reads"
-                             : IsWhen      ? "when"
-                                           : "recommends";
-      ConsumeToken();
-
-      if (Tok.isNot(tok::l_paren)) {
-        Diag(Tok, diag::err_contract_expected_lparen) << ClauseName;
-        break;
-      }
-      ConsumeParen();
-
-      if (IsPost)
-        InContractPostcondition = true;
-
-      if (IsModifies) {
-        ParseContractFootprints(ContractModifies);
-      } else if (IsReads) {
-        // reads(pointer, count): the cells pointer[0..count).
-        ExprResult First = ParseAssignmentExpression();
-        if (First.isInvalid() || Tok.isNot(tok::comma)) {
-          if (!First.isInvalid())
-            Diag(Tok, diag::err_contract_expected_comma) << "reads";
-        } else {
-          ConsumeToken();
-          ExprResult Second = ParseAssignmentExpression();
-          if (!Second.isInvalid())
-            ContractReads.push_back(std::make_pair(First.get(), Second.get()));
-        }
-      } else if (IsAliases) {
-        ExprResult First = ParseAssignmentExpression();
-        if (First.isInvalid() || Tok.isNot(tok::comma)) {
-          if (!First.isInvalid())
-            Diag(Tok, diag::err_contract_expected_comma) << "aliases";
-        } else {
-          ConsumeToken();
-          ExprResult Second = ParseAssignmentExpression();
-          if (!Second.isInvalid()) {
-            ContractAliases.push_back(
-                std::make_pair(First.get(), Second.get()));
-          }
-        }
-      } else if (IsDecreases && Tok.is(tok::star) &&
-                 NextToken().is(tok::r_paren)) {
-        ContractMayDiverge = ConsumeToken();
-        if (IsSpecFn || IsProofFn)
-          Diag(ContractMayDiverge,
-               diag::err_contract_decreases_star_must_terminate)
-              << (IsSpecFn ? 0 : 1);
-        else if (!ContractDecreases.empty())
-          Diag(ContractMayDiverge,
-               diag::err_contract_decreases_star_with_measure);
-      } else if (IsDecreases) {
-        if (ContractMayDiverge.isValid())
-          Diag(Tok, diag::err_contract_decreases_star_with_measure);
-        // Lexicographic termination measure: a comma-separated tuple of integer
-        // expressions. Parse each with ParseAssignmentExpression so the comma is
-        // a tuple separator, not the C comma operator.
-        do {
-          ExprResult E = ParseAssignmentExpression();
-          if (E.isInvalid())
-            break;
-          if (!E.get()->getType()->isIntegerType())
-            Diag(E.get()->getExprLoc(), diag::err_contract_decreases_not_int);
-          else
-            ContractDecreases.push_back(E.get());
-          if (Tok.is(tok::comma))
-            ConsumeToken();
-          else
-            break;
-        } while (Tok.isNot(tok::r_paren));
-      } else {
-        ExprResult E = ParseExpression();
-        if (!E.isInvalid() && (IsPre || IsPost || IsRecommends || IsWhen)) {
-          E = Actions.ActOnContractCondition(E);
-          if (!E.isInvalid() && (IsPre || IsPost) && !Behaviors.empty()) {
-            Expr *Assumes = Behaviors.back().Assumes;
-            if (IsPost)
-              Assumes = new (Actions.getASTContext())
-                  OldExpr(Assumes->getBeginLoc(), Assumes->getBeginLoc(),
-                          Assumes->getEndLoc(), Assumes);
-            E = implies(Assumes, E.get());
-          }
-          if (!E.isInvalid() && IsPre)
-            ContractPreconditions.push_back(E.get());
-          else if (!E.isInvalid() && IsPost)
-            ContractPostconditions.push_back(E.get());
-          else if (IsWhen)
-            ContractWhen.push_back(E.get());
-          else
-            ContractRecommends.push_back(E.get());
-        }
-      }
-
-      if (IsPost)
-        InContractPostcondition = false;
-
-      if (!Tok.is(tok::r_paren)) {
-        unsigned Depth = 0;
-        while (Tok.isNot(tok::eof)) {
-          if (Tok.is(tok::l_paren))
-            ++Depth;
-          else if (Tok.is(tok::r_paren)) {
-            if (Depth == 0)
-              break;
-            --Depth;
-          }
-          // ConsumeAnyToken: the recovery stream may contain annotation/special
-          // tokens, which ConsumeToken() asserts against.
-          ConsumeAnyToken();
-        }
-      }
-      if (Tok.is(tok::r_paren))
-        ConsumeParen();
-      else
-        Diag(Tok, diag::err_contract_expected_rparen) << ClauseName;
-
-      // clause(...) by { proof }: `by` is contextual. The block is parsed
-      // once the definition's parameters are in scope.
-      if (Tok.is(tok::identifier) && Tok.getIdentifierInfo()->isStr("by") &&
-          NextToken().is(tok::l_brace)) {
-        PendingClauseProof Proof;
-        Proof.Loc = ConsumeToken();
-        Proof.K = IsPost        ? FunctionContractInfo::ClauseProof::Post
-                  : IsDecreases ? FunctionContractInfo::ClauseProof::Decreases
-                                : FunctionContractInfo::ClauseProof::Reads;
-        Proof.Toks.push_back(Tok);
-        ConsumeBrace();
-        ConsumeAndStoreUntil(tok::r_brace, Proof.Toks, /*StopAtSemi=*/false,
-                             /*ConsumeFinalToken=*/true);
-        if (!IsSpecFn || !(IsPost || IsDecreases || IsReads))
-          Diag(Proof.Loc, diag::err_contract_clause_proof_misplaced);
-        else
-          PendingClauseProofs.push_back(std::move(Proof));
-      }
-    }
-
-    for (const BehaviorRelation &Relation : BehaviorRelations) {
-      SmallVector<Expr *, 2> Assumptions;
-      if (Relation.Names.empty())
-        for (const Behavior &B : Behaviors)
-          Assumptions.push_back(B.Assumes);
-      for (const auto &[Name, NameLoc] : Relation.Names) {
-        auto It = llvm::find_if(
-            Behaviors, [&](const Behavior &B) { return B.Name == Name; });
-        if (It == Behaviors.end())
-          Diag(NameLoc, diag::err_contract_behavior_unknown) << Name;
-        else
-          Assumptions.push_back(It->Assumes);
-      }
-      if (Assumptions.size() < (Relation.Complete ? 1u : 2u)) {
-        Diag(Relation.Loc, diag::err_contract_behavior_relation_empty)
-            << Relation.Complete;
-        continue;
-      }
-      // complete: some behavior applies; disjoint: no two apply together.
-      ExprResult Check;
-      if (Relation.Complete) {
-        Check = Assumptions.front();
-        for (size_t I = 1; I < Assumptions.size(); ++I)
-          Check = Actions.ActOnBinOp(getCurScope(), Relation.Loc, tok::pipepipe,
-                                     Check.get(), Assumptions[I]);
-      } else {
-        for (size_t I = 0; I < Assumptions.size(); ++I)
-          for (size_t J = I + 1; J < Assumptions.size(); ++J) {
-            ExprResult Both =
-                Actions.ActOnBinOp(getCurScope(), Relation.Loc, tok::ampamp,
-                                   Assumptions[I], Assumptions[J]);
-            ExprResult Apart = Actions.ActOnUnaryOp(
-                getCurScope(), Relation.Loc, tok::exclaim, Both.get());
-            Check = Check.isUsable()
-                        ? Actions.ActOnBinOp(getCurScope(), Relation.Loc,
-                                             tok::ampamp, Check.get(),
-                                             Apart.get())
-                        : Apart;
-          }
-      }
-      Check = Actions.ActOnContractCondition(Check);
-      if (Check.isUsable())
-        ContractBehaviorChecks.push_back(Check.get());
-    }
+    ParseFunctionContractClauses(D, Contract);
+    if (Tok.is(tok::semi))
+      return ParseContractedFunctionDeclaration(D, TemplateInfo, Contract);
   }
 
-  auto AttachFunctionContract = [&](Decl *Result) {
-    if (!Result ||
-        (ContractPreconditions.empty() && ContractPostconditions.empty() &&
-         ContractModifies.empty() && ContractAliases.empty() &&
-         ContractRecommends.empty() && ContractReads.empty() &&
-         ContractWhen.empty() && ContractDecreases.empty() &&
-         ContractMayDiverge.isInvalid() && ContractInductive.isInvalid() &&
-         ContractBehaviorChecks.empty() && !IsSpecFn && !IsProofFn))
-      return;
-    FunctionDecl *FD = Result->getAsFunction();
-    if (!FD)
-      return;
-    FunctionContractInfo &FCI =
-        Actions.getASTContext().getOrCreateFunctionContract(FD);
-    if (FCI.ContractDecl && FCI.ContractDecl != FD) {
-      Diag(FD->getLocation(), diag::err_contract_redeclaration);
-      return;
-    }
-    FCI.ContractDecl = FD;
-    FCI.Preconditions = std::move(ContractPreconditions);
-    FCI.Postconditions = std::move(ContractPostconditions);
-    FCI.Modifies = std::move(ContractModifies);
-    FCI.Aliases = std::move(ContractAliases);
-    FCI.Recommends = std::move(ContractRecommends);
-    FCI.Reads = std::move(ContractReads);
-    FCI.When = std::move(ContractWhen);
-    FCI.Decreases = std::move(ContractDecreases);
-    FCI.MayDiverge = ContractMayDiverge;
-    FCI.Inductive = ContractInductive;
-    FCI.BehaviorChecks = std::move(ContractBehaviorChecks);
-    FCI.Behaviors = std::move(ContractBehaviors);
-    FCI.IsSpec = IsSpecFn;
-    FCI.IsProof = IsProofFn;
-    CurrentContractFunction = Result;
-  };
-  auto ResetContractParsingState = [&] {
-    CurrentContractReturnType = QualType();
-  };
-
-  // A semicolon after the clauses makes this a contracted declaration. The
-  // canonical contract side table lets a later definition inherit the clauses.
-  if (Tok.is(tok::semi)) {
-    Decl *Res =
-        ParseDeclarationAfterDeclaratorAndAttributes(D, TemplateInfo);
-    D.complete(Res);
-    AttachFunctionContract(Res);
-    if (!PendingClauseProofs.empty()) {
-      Diag(PendingClauseProofs.front().Loc,
-           diag::err_contract_clause_proof_on_declaration);
-      PendingClauseProofs.clear();
-    }
-    ResetContractParsingState();
-    D.getMutableDeclSpec().abort();
-    ConsumeToken();
-    return Res;
-  }
-
-  // We should have either an opening brace, or in a C++ constructor,
+  // We should have either an opening brace or, in a C++ constructor,
   // we may have a colon.
   if (Tok.isNot(tok::l_brace) &&
       (!getLangOpts().CPlusPlus ||
@@ -1854,14 +1405,10 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
   D.complete(Res);
 
   // CppVerify: store contract clauses on the FunctionDecl.
-  AttachFunctionContract(Res);
-  ParseContractClauseProofs(Res);
-
-  // Reset contract parsing state so it doesn't leak into subsequent functions.
-  ResetContractParsingState();
-  // Note: CurrentContractFunction is intentionally kept alive — it can be
-  // used by the VCGen backend later. InContractPostcondition was already
-  // reset after each post(...) clause above.
+  if (getLangOpts().VerifyContracts) {
+    attachFunctionContract(Res, Contract);
+    ParseContractClauseProofs(Res);
+  }
 
   // Break out of the ParsingDeclSpec context, too.  This const_cast is
   // safe because we're always the sole owner.
@@ -1912,12 +1459,6 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
   } else
     Actions.ActOnDefaultCtorInitializers(Res);
 
-  const bool HasContractClauses =
-      getLangOpts().VerifyContracts && Res &&
-      Actions.getASTContext().getFunctionContract(
-          cast<FunctionDecl>(Res)) != nullptr;
-  llvm::SaveAndRestore<bool> InContractFnRAII(InContractedFunction,
-                                               HasContractClauses);
   return ParseFunctionStatementBody(Res, BodyScope);
 }
 
