@@ -6,22 +6,22 @@
 // RUN: %cpp-verify --backend=lean --lean-out=%t.lean %s 2>&1 | FileCheck %s --check-prefix=LEAN
 
 int *ownership_factory(int value)
-  post(result != nullptr)
-  post(*result == value)
+  cppverify::post(cppverify::result != nullptr)
+  cppverify::post(*cppverify::result == value)
 {
   int *owner = new int(value);
   return owner;
 }
 
 int *ownership_forward(int value)
-  post(result != nullptr)
-  post(*result == value)
+  cppverify::post(cppverify::result != nullptr)
+  cppverify::post(*cppverify::result == value)
 {
   return ownership_factory(value);
 }
 
 int ownership_consume(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int *owner = ownership_forward(value);
   int observed = *owner;
