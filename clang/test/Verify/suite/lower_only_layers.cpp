@@ -1,12 +1,12 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: %cpp-verify --lower-only %s 2>&1 | FileCheck %s --check-prefix=LOWER
-// RUN: %cpp-verify --lower-only --backend=bmc --unroll=1 %s 2>&1 | FileCheck %s --check-prefix=LOWER
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
-// RUN: not %cpp-verify --lower-only --backend=lean %s 2>&1 | FileCheck %s --check-prefix=LEAN
-// RUN: %cpp-verify --lower-only --dump-ir=1 %s 2>&1 | FileCheck %s --check-prefix=VCR
-// RUN: %cpp-verify --lower-only --dump-ir=2 %s 2>&1 | FileCheck %s --check-prefix=PASSIVE
-// RUN: %cpp-verify --lower-only --dump-ir=3 %s 2>&1 | FileCheck %s --check-prefix=VC
-// RUN: %cpp-verify --int-encoding=bitvector --lower-only --dump-ir=4 %s 2>&1 | FileCheck %s --check-prefix=Z3
+// RUN: %cpp-verify --lower-only %s -- 2>&1 | FileCheck %s --check-prefix=LOWER
+// RUN: %cpp-verify --lower-only --backend=bmc --unroll=1 %s -- 2>&1 | FileCheck %s --check-prefix=LOWER
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: not %cpp-verify --lower-only --backend=lean %s -- 2>&1 | FileCheck %s --check-prefix=LEAN
+// RUN: %cpp-verify --lower-only --dump-ir=1 %s -- 2>&1 | FileCheck %s --check-prefix=VCR
+// RUN: %cpp-verify --lower-only --dump-ir=2 %s -- 2>&1 | FileCheck %s --check-prefix=PASSIVE
+// RUN: %cpp-verify --lower-only --dump-ir=3 %s -- 2>&1 | FileCheck %s --check-prefix=VC
+// RUN: %cpp-verify --int-encoding=bitvector --lower-only --dump-ir=4 %s -- 2>&1 | FileCheck %s --check-prefix=Z3
 
 cppverify::spec int mathematical_successor(int x)
 {
