@@ -23,18 +23,18 @@
 // `res` and the live range is collapsed to end the search. This is a
 // restructuring of the control flow, not of the algorithm.
 
-spec bool valid(int* p, int n) { return true; }
+cppverify::spec bool valid(int* p, int n) { return true; }
 
 int bsearch_fixed(int* a, int n, int key)
-  pre(valid(a, n) && n >= 0)
-  post(-1 <= result && result < n)
+  cppverify::pre(valid(a, n) && n >= 0)
+  cppverify::post(-1 <= cppverify::result && cppverify::result < n)
 {
   int lo = 0;
   int hi = n - 1;
   int res = -1;
   while (lo <= hi)
-    invariant(0 <= lo && lo <= n && -1 <= hi && hi < n && -1 <= res && res < n)
-    decreases(hi - lo + 1)
+    cppverify::invariant(0 <= lo && lo <= n && -1 <= hi && hi < n && -1 <= res && res < n)
+    cppverify::decreases(hi - lo + 1)
   {
     int mid = lo + (hi - lo) / 2;
     if (a[mid] == key) { res = mid; lo = mid; hi = mid - 1; }
