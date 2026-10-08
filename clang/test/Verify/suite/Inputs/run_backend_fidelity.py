@@ -228,7 +228,7 @@ def backend_command(cpp_verify, backend, source, encoding=None):
         command.append("--int-encoding={}".format(encoding))
     if backend == "bmc":
         command.append("--unroll=2")
-    command.append(source)
+    command.extend([source, "--"])
     return command
 
 
@@ -309,6 +309,7 @@ def check_lowering_matrix(cpp_verify, source):
             "--dump-ir=3",
             "--check-ub",
             source,
+            "--",
         ],
         {0},
     )
@@ -337,7 +338,7 @@ def check_lowering_matrix(cpp_verify, source):
         ]
         if backend == "bmc":
             command.append("--unroll=2")
-        command.append(source)
+        command.extend([source, "--"])
         run(command, {0})
 
 
@@ -350,7 +351,7 @@ def create_archive(cpp_verify, backend, source, archive, extra=()):
         "--obligation-out={}".format(archive),
     ]
     command.extend(extra)
-    command.append(source)
+    command.extend([source, "--"])
     output = run(command, {1})
     if not archive.is_file() or archive.stat().st_size == 0:
         fail("{} did not produce an obligation archive".format(backend))
@@ -440,6 +441,7 @@ def check_lean_identity(cpp_verify, source, canonical, work):
             "--check-ub",
             "--lean-out={}".format(source_lean),
             source,
+            "--",
         ],
         {0},
     )
@@ -463,6 +465,7 @@ def check_lean_identity(cpp_verify, source, canonical, work):
             "--check-ub",
             "--lean-project={}".format(project),
             source,
+            "--",
         ],
         {0},
     )
@@ -528,6 +531,7 @@ def check_recommends_exclusion(cpp_verify, source, work):
                     "--backend={}".format(backend),
                     "--diagnostics-format=json",
                     source,
+                    "--",
                 ],
                 {1},
             )
@@ -545,6 +549,7 @@ def check_recommends_exclusion(cpp_verify, source, work):
                 "--unroll=1",
                 "--diagnostics-format=json",
                 source,
+                "--",
             ],
             {1},
         )
