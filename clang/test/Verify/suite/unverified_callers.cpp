@@ -1,5 +1,5 @@
-// RUN: %cpp-verify --timeout=30000 %s 2>&1 | FileCheck %s
-// RUN: %cpp-verify --timeout=30000 --diagnostics-format=json %s 2>/dev/null \
+// RUN: %cpp-verify --timeout=30000 %s -- 2>&1 | FileCheck %s
+// RUN: %cpp-verify --timeout=30000 --diagnostics-format=json %s -- 2>/dev/null \
 // RUN:   | FileCheck %s --check-prefix=JSON
 //
 // A function that is not verified may still call a contracted one, whose
