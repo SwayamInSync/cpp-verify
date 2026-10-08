@@ -2108,7 +2108,7 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
                          "same length" +
                          (Fn->IsSpec || Fn->IsProof
                               ? ""
-                              : ", or all decreases(*)"));
+                              : ", or all cppverify::decreases(*)"));
         continue;
       }
       Fn->RecursionGroup = std::move(Group);
@@ -2124,7 +2124,7 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
           (Fn->IsSpec || Fn->IsProof
                ? ": recursive spec and proof functions require decreases"
                : ": recursive executable functions require decreases, or "
-                 "decreases(*) to allow divergence"));
+                 "cppverify::decreases(*) to allow divergence"));
       continue;
     }
     Fn->NeedsDecreasesCheck = Recursive;
@@ -2957,8 +2957,8 @@ bool ASTConverter::checkLoopTermination(const Stmt *Loop, bool HasMeasure) {
   if (InGhost || CurrentFn->IsProof) {
     if (MayDiverge) {
       Errors.push_back(CurrentFn->Name +
-                       ": proof-only loops must terminate; decreases(*) is "
-                       "not allowed");
+                       ": proof-only loops must terminate; "
+                       "cppverify::decreases(*) is not allowed");
       return false;
     }
     if (!HasMeasure) {
@@ -4152,10 +4152,10 @@ void ASTConverter::markTrigger(std::unique_ptr<VExpr> &Result, const Expr *E) {
   if (!Pattern || !MentionsBinder) {
     Warnings.push_back(
         {E->getExprLoc(),
-         !Pattern ? "trigger(...) is ignored: only a memory read, a "
+         !Pattern ? "cppverify::trigger(...) is ignored: only a memory read, a "
                     "collection read, or a spec function call can trigger a "
                     "quantifier"
-                  : "trigger(...) is ignored: the term mentions no "
+                  : "cppverify::trigger(...) is ignored: the term mentions no "
                     "quantified variable"});
     return;
   }
@@ -4164,11 +4164,12 @@ void ASTConverter::markTrigger(std::unique_ptr<VExpr> &Result, const Expr *E) {
   if (const FunctionContractInfo *FCI =
           Callee ? functionContract(Callee) : nullptr;
       (*Term)->K == VExpr::SpecCall && FCI && FCI->Decreases.empty()) {
-      Warnings.push_back(
-          {E->getExprLoc(),
-           "trigger(...) is ignored: a call of a non-recursive spec function "
-           "is replaced by its body; mark a term of the body instead"});
-      return;
+    Warnings.push_back(
+        {E->getExprLoc(),
+         "cppverify::trigger(...) is ignored: a call of a non-recursive spec "
+         "function "
+         "is replaced by its body; mark a term of the body instead"});
+    return;
     }
   const VType Ty = (*Term)->Ty;
   const SourceLocation Loc = (*Term)->Loc;
@@ -4315,10 +4316,11 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
       auto Bound = BoundValues.find(VD);
       if (InOld && VD->isLocalVarDecl() && Bound == BoundValues.end()) {
-        Errors.push_back(CurrentFn->Name +
-                         ": old(...) cannot refer to local variable without a "
-                         "function-entry state: " +
-                         VD->getNameAsString());
+        Errors.push_back(
+            CurrentFn->Name +
+            ": cppverify::old(...) cannot refer to local variable without a "
+            "function-entry state: " +
+            VD->getNameAsString());
         return nullptr;
       }
       if (!VD->isLocalVarDeclOrParm() && Bound == BoundValues.end()) {
@@ -4641,10 +4643,11 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
         BoundVars.insert(VD);
     if (const VarDecl *Local =
             findOldLocalWithoutEntryState(O->getInner(), BoundVars)) {
-      Errors.push_back(CurrentFn->Name +
-                       ": old(...) cannot refer to local variable without a "
-                       "function-entry state: " +
-                       Local->getNameAsString());
+      Errors.push_back(
+          CurrentFn->Name +
+          ": cppverify::old(...) cannot refer to local variable without a "
+          "function-entry state: " +
+          Local->getNameAsString());
       return nullptr;
     }
     bool Saved = InOld;
@@ -4749,7 +4752,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
   if (dyn_cast<ResultExpr>(E)) {
     if (!InPost) {
       Errors.push_back(CurrentFn->Name +
-                       ": result expression outside a postcondition");
+                       ": cppverify::result outside a postcondition");
       return nullptr;
     }
     if (InOld) {
