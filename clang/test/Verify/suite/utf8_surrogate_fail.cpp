@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify --check-ub --jobs=4 --timeout=120000 %s 2>&1 | FileCheck %s
+// RUN: not %cpp-verify --check-ub --jobs=4 --timeout=120000 %s -- 2>&1 | FileCheck %s
 //
 // The surrogate-acceptance defect: dropping the ED ceiling.
 //
