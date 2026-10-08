@@ -13866,9 +13866,9 @@ def err_cuda_device_kernel_launch_require_rdc
 def err_contract_expr_not_bool : Error<
   "contract expression must be convertible to bool">;
 def err_contract_result_not_in_post : Error<
-  "'result' can only appear in a postcondition">;
+  "'cppverify::result' can only appear in a postcondition">;
 def err_contract_old_not_in_post : Error<
-  "'old' can only appear in a postcondition">;
+  "'cppverify::old' can only appear in a postcondition">;
 def err_contract_quantifier_bound_not_int : Error<
   "quantifier bound must have integer type">;
 def err_contract_quantifier_body_not_bool : Error<
@@ -13878,10 +13878,11 @@ def err_proof_fn_must_return_void : Error<
 def err_contract_decreases_not_int : Error<
   "decreases expression must have integer type">;
 def err_contract_decreases_star_with_measure : Error<
-  "decreases(*) allows divergence and cannot be combined with a measure">;
+  "cppverify::decreases(*) allows divergence and cannot be combined with a "
+  "measure">;
 def err_contract_decreases_star_must_terminate : Error<
-  "%select{spec|proof}0 functions must terminate; decreases(*) is not "
-  "allowed">;
+  "%select{spec|proof}0 functions must terminate; cppverify::decreases(*) is "
+  "not allowed">;
 def err_contract_range_base : Error<
   "a modifies range needs a pointer to a complete object type, not %0">;
 def err_contract_range_bound_not_int : Error<
@@ -13891,8 +13892,9 @@ def err_contract_range_no_length : Error<
 def err_contract_range_use : Error<
   "a range p[start : length] is a whole modifies footprint, not an operand">;
 def err_choose_in_executable_code : Error<
-  "choose exists only for verification and cannot be used in executable "
-  "code; use it in a contract, ghost block, or spec or proof function">;
+  "cppverify::choose exists only for verification and cannot be used in "
+  "executable code; use it in a contract, ghost block, or spec or proof "
+  "function">;
 def err_ghost_variable_in_executable_code : Error<
   "ghost variable %0 exists only for verification and cannot be used in "
   "executable code; use it in a contract or ghost block">;
