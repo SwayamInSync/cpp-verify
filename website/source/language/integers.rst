@@ -8,18 +8,18 @@ Integer semantics depend on where the value lives.
 
    * - Kind
      - Semantics
-   * - ``spec``
+   * - ``cppverify::spec``
      - Mathematical ``Int`` (unbounded, no overflow)
    * - ``constexpr`` in contracts
      - Machine integer (target width, wraps modulo ``2^N``)
-   * - ``proof`` / ``exec``
+   * - ``cppverify::proof`` / ``exec``
      - Machine integer (target width, wraps modulo ``2^N``)
-   * - Contract arithmetic (``pre``, ``post``, invariants, assertions)
+   * - Contract arithmetic (``cppverify::pre``, ``cppverify::post``, invariants, assertions)
      - Mathematical ``Int`` on the values of C++ expressions
 
 Contracts are mathematical, as in ACSL and Verus. ``+``, ``-``, ``*``,
 ``/``, ``%``, and unary ``-`` in a contract are exact, so
-``post(result + 1 > result)`` holds rather than overflowing. An implicit
+``cppverify::post(cppverify::result + 1 > cppverify::result)`` holds rather than overflowing. An implicit
 conversion whose result C++ could change (a narrowing or a sign change) keeps
 the value; a value-preserving one is an ordinary extension. Quantifier binders
 are mathematical integers. A negative constant converted to an unsigned type
@@ -56,7 +56,7 @@ uses mathematical integers kept in the type's range: every variable carries its
 range, and every operation is reduced modulo ``2^N``, so wraparound, division by
 zero, conversions, and overflow checks are exactly the bit-vector ones. Integers
 combine far better with quantifiers and the heap, for example a 64-bit
-``forall`` over a buffer. The default ``auto`` uses integers for a query unless
+``cppverify::forall`` over a buffer. The default ``auto`` uses integers for a query unless
 it needs the bits of a non-constant operand (``a & b``, ``x << s``); masks such as
 ``x & 0xff`` and constant shifts are arithmetic and keep integers. Every mode
 gives the same verdicts and counterexamples, so the flag is purely a
@@ -65,7 +65,7 @@ performance choice.
 Mandatory C++ definedness
 -------------------------
 
-Executable and ``proof`` code must be well-defined C++. CppVerify therefore
+Executable and ``cppverify::proof`` code must be well-defined C++. CppVerify therefore
 generates path-sensitive safety obligations automatically; these checks are not
 optional because a functional proof about an undefined execution would be
 meaningless.
@@ -98,16 +98,16 @@ contract that means the wrapped value says so with ``% 2^N``.
 
 .. code-block:: cpp
 
-   int abs_unguarded(int x) post(result >= 0)
+   int abs_unguarded(int x) cv::post(cv::result >= 0)
    { return x < 0 ? -x : x; }
 
-   int abs_guarded(int x) pre(x > -2147483648) post(result >= 0)
+   int abs_guarded(int x) cv::pre(x > -2147483648) cv::post(cv::result >= 0)
    { return x < 0 ? -x : x; }
 
-   unsigned mix(unsigned a, unsigned b) post(result == (a + b) % 4294967296)
+   unsigned mix(unsigned a, unsigned b) cv::post(cv::result == (a + b) % 4294967296)
    { return a + b; }
 
-   unsigned mix_wrong(unsigned a, unsigned b) post(result == a + b)
+   unsigned mix_wrong(unsigned a, unsigned b) cv::post(cv::result == a + b)
    { return a + b; }
 
 .. code-block:: text
@@ -154,7 +154,7 @@ and the shifted value must fit the corresponding unsigned type.  This permits
 constructing the sign bit (for example, ``1 << 31`` for a 32-bit ``int``) while
 still rejecting values beyond the unsigned range.
 
-Calls crossing between mathematical ``spec`` code and lifted machine
+Calls crossing between mathematical ``cppverify::spec`` code and lifted machine
 ``constexpr`` code convert at each parameter and return boundary. A machine
 result converts exactly to an unbounded integer; an unsigned result has already
 wrapped at its target width, as C++ defines. A mathematical argument must fit
@@ -163,13 +163,13 @@ the machine parameter type.
 A mathematical value never wraps into a C++ type:
 
 - A spec result, and a length, element, or count of a spec collection,
-  stays unbounded wherever it is used: in contracts and in ``ghost`` and
-  ``proof`` code alike. Arithmetic, selections, and comparisons involving it
+  stays unbounded wherever it is used: in contracts and in ``cppverify::ghost`` and
+  ``cppverify::proof`` code alike. Arithmetic, selections, and comparisons involving it
   are exact, and the implicit conversions of C++'s usual arithmetic
-  conversions do not bound it, so ``post(result == total(x) + n)`` compares
+  conversions do not bound it, so ``cppverify::post(cppverify::result == total(x) + n)`` compares
   exact values and ``s.subrange(0, s.len() - 1)`` in a proof is exact. A
   comparison between a machine value and a mathematical one is exact.
-- Storing such a value in a ``ghost`` or ``proof`` variable, passing it to a
+- Storing such a value in a ``cppverify::ghost`` or ``cppverify::proof`` variable, passing it to a
   machine parameter, returning it, an explicit cast such as
   ``(int)total(x)``, and a bitwise operator applied to it convert it to a
   machine type. The conversion is defined only when the value fits, and it
@@ -179,15 +179,15 @@ A mathematical value never wraps into a C++ type:
 
 .. code-block:: cpp
 
-   spec int scaled(int x) { return x * 1000; }
+   cv::spec int scaled(int x) { return x * 1000; }
 
-   proof void lemma(int x) pre(x >= 0 && x <= 1000)
+   cv::proof void lemma(int x) cv::pre(x >= 0 && x <= 1000)
    { int value = scaled(x); }   // verifies: the value fits in int
 
-   proof void too_big(int x) pre(x == 3000000)
+   cv::proof void too_big(int x) cv::pre(x == 3000000)
    { int value = scaled(x); }   // FAILS (overflow): 3000000000 is not an int
 
-   proof void element(cppverify::seq s) pre(s.len() > 0)
+   cv::proof void element(cppverify::seq s) cv::pre(s.len() > 0)
    { int x = s[0]; }            // FAILS (overflow): an element need not fit
 
 - Executable code cannot call a spec function at all; see :doc:`ghost-proofs`.
