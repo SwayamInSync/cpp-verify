@@ -2,25 +2,25 @@
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 void set_value(int &target, int value)
-  modifies(target)
-  post(target == value)
+  cppverify::modifies(target)
+  cppverify::post(target == value)
 {
   target = value;
 }
 
 void set_pair(int &left, int &right, int value)
-  modifies(left, right)
-  post(left == value && right == value)
+  cppverify::modifies(left, right)
+  cppverify::post(left == value && right == value)
 {
   left = value;
   right = value;
 }
 
 void opaque_reference(int &value)
-  post(value == 1);
+  cppverify::post(value == 1);
 
 int wrong_local_post()
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   int local = 0;
   set_value(local, 1);
@@ -28,7 +28,7 @@ int wrong_local_post()
 }
 
 int same_local_without_aliases()
-  post(result == 4)
+  cppverify::post(cppverify::result == 4)
 {
   int local = 0;
   set_pair(local, local, 4);
@@ -36,14 +36,14 @@ int same_local_without_aliases()
 }
 
 int nullable_local_reference(int *pointer)
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   int &alias = *pointer;
   return alias;
 }
 
 int external_local_reference()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   int local = 0;
   opaque_reference(local);
@@ -51,9 +51,9 @@ int external_local_reference()
 }
 
 int recursive_local_reference(int value)
-  pre(value >= 0)
-  post(result == 0)
-  decreases(value)
+  cppverify::pre(value >= 0)
+  cppverify::post(cppverify::result == 0)
+  cppverify::decreases(value)
 {
   int local = value;
   set_value(local, value);
