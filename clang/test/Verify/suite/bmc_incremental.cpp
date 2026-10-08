@@ -1,10 +1,10 @@
-// RUN: not %cpp-verify --backend=bmc --unroll=4 --jobs=4 %s 2>&1 \
+// RUN: not %cpp-verify --backend=bmc --unroll=4 --jobs=4 %s -- 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=TEXT
 // RUN: not %cpp-verify --backend=bmc --unroll=4 --jobs=4 \
-// RUN:   --diagnostics-format=json %s 2>&1 \
+// RUN:   --diagnostics-format=json %s -- 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=JSON
 // RUN: not %cpp-verify --backend=bmc --unroll=4 \
-// RUN:   --obligation-out=%t.obligations %s > /dev/null 2>&1
+// RUN:   --obligation-out=%t.obligations %s -- > /dev/null 2>&1
 // RUN: not %cpp-verify --obligation-in=%t.obligations \
 // RUN:   --diagnostics-format=json 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=REPLAY
