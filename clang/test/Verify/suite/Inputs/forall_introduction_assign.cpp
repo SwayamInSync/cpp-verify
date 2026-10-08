@@ -1,7 +1,7 @@
-proof void assigns_arbitrary(int n)
-  pre(n >= 0)
+cppverify::proof void assigns_arbitrary(int n)
+  cppverify::pre(n >= 0)
 {
-  contract_assert(forall(k, 0, n, k >= 0)) by {
+  cppverify::check(cppverify::forall(k, 0, n, k >= 0)) by {
     k = 0;
   }
 }
