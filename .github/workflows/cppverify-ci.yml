@@ -1,0 +1,153 @@
+name: CppVerify CI
+
+# Linux runs every Clang and clang-tools-extra test in a release and an
+# assertions build. macOS and Windows build a fresh clone the way setup.sh and
+# setup.ps1 do for a user, then verify a program with the result.
+
+on:
+  push:
+    branches: [main, "feat/**", "release/**"]
+    paths-ignore:
+      - "website/**"
+      - "docs/**"
+      - "**/*.md"
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "website/**"
+      - "docs/**"
+      - "**/*.md"
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cppverify-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CVC5_VERSION: "1.1.2"
+  LEAN_TOOLCHAIN: "leanprover/lean4:v4.32.2"
+
+jobs:
+  linux:
+    name: Linux (${{ matrix.config }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [release, assertions]
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 4G
+      CCACHE_COMPRESS: "1"
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build tools, cvc5, and Lean
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build ccache
+          curl -sSfL -o "$RUNNER_TEMP/cvc5.zip" \
+            "https://github.com/cvc5/cvc5/releases/download/cvc5-$CVC5_VERSION/cvc5-Linux-static.zip"
+          unzip -q "$RUNNER_TEMP/cvc5.zip" -d "$RUNNER_TEMP/cvc5"
+          dirname "$(find "$RUNNER_TEMP/cvc5" -name cvc5 -type f)" >> "$GITHUB_PATH"
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            | sh -s -- -y --default-toolchain "$LEAN_TOOLCHAIN"
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-linux-${{ matrix.config }}-${{ github.sha }}
+          restore-keys: ccache-linux-${{ matrix.config }}-
+
+      - name: Configure
+        run: |
+          cmake -S llvm -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra" \
+            -DLLVM_TARGETS_TO_BUILD=Native \
+            -DCPPVERIFY_VENDOR_Z3=ON \
+            -DCPPVERIFY_PREFER_SYSTEM_Z3=OFF \
+            -DLLVM_ENABLE_ASSERTIONS=${{ matrix.config == 'assertions' && 'ON' || 'OFF' }} \
+            -DLLVM_CCACHE_BUILD=ON
+
+      - name: Build
+        run: ninja -C build all clang-test-depends
+
+      - name: Report the versions
+        run: |
+          build/bin/cpp-verify --version
+          cvc5 --version | head -1
+          lean --version
+
+      - name: Test Clang
+        run: ninja -C build check-clang
+        env:
+          LIT_OPTS: -s --no-progress-bar
+
+      - name: Test clang-tools-extra and clangd
+        run: ninja -C build check-clang-tools
+        env:
+          LIT_OPTS: -s --no-progress-bar
+
+      - name: Report the cache
+        if: always()
+        run: ccache --show-stats
+
+  macos:
+    name: macOS (fresh clone, setup.sh)
+    runs-on: macos-14
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build tools
+        run: brew install ninja
+
+      - name: Build with setup.sh
+        run: ./setup.sh
+
+      - name: Verify a program
+        run: ./.github/workflows/cppverify-smoke.sh build/bin
+
+      - name: Test the verifier
+        run: |
+          ninja -C build FileCheck not count split-file
+          build/bin/llvm-lit -s --no-progress-bar clang/test/Verify
+
+  windows:
+    name: Windows (fresh clone, setup.ps1)
+    runs-on: windows-2022
+    timeout-minutes: 355
+    steps:
+      - name: Keep line endings
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build with setup.ps1
+        shell: pwsh
+        run: .\setup.ps1
+
+      - name: Verify a program
+        shell: bash
+        run: ./.github/workflows/cppverify-smoke.sh build/bin
