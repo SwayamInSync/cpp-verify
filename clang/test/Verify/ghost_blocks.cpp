@@ -9,11 +9,11 @@
 // CHECK: ContractAssertStmt
 
 int abs_val(int x)
-  pre(x != -2147483648)
-  post(result >= 0)
+  cppverify::pre(x != -2147483648)
+  cppverify::post(cppverify::result >= 0)
 {
-  ghost {
-    contract_assert(x != -2147483648);
+  cppverify::ghost {
+    cppverify::check(x != -2147483648);
   }
   if (x < 0) return -x;
   return x;
