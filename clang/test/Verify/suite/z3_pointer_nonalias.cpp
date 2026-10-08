@@ -2,14 +2,14 @@
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 int valid_nonnull_default_nonalias(int *p, int *q)
-  pre(p != nullptr && q != nullptr)
-  post(result == 1)
+  cppverify::pre(p != nullptr && q != nullptr)
+  cppverify::post(cppverify::result == 1)
 {
   return p != q;
 }
 
 int invalid_nulls_excluded_by_nonalias(int *p, int *q)
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   if (p == nullptr && q == nullptr)
     return 0;
