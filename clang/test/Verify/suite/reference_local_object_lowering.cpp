@@ -32,21 +32,21 @@ struct WithPtr {
 };
 
 int read_first(Pair *p)
-  pre(p != nullptr && p->first == 1)
-  post(result == 1)
+  cppverify::pre(p != nullptr && p->first == 1)
+  cppverify::post(cppverify::result == 1)
 {
   return p->first;
 }
 
 void set_scalar(int &target, int value)
-  modifies(target)
-  post(target == value)
+  cppverify::modifies(target)
+  cppverify::post(target == value)
 {
   target = value;
 }
 
 int field_reference_binding()
-  post(result == 7)
+  cppverify::post(cppverify::result == 7)
 {
   Pair value{1, 2};
   int &alias = value.second;
@@ -55,7 +55,7 @@ int field_reference_binding()
 }
 
 int modular_field_argument()
-  post(result == 9)
+  cppverify::post(cppverify::result == 9)
 {
   Pair value{1, 2};
   set_scalar(value.first, 9);
@@ -63,7 +63,7 @@ int modular_field_argument()
 }
 
 int sibling_field_unchanged()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   Pair value{1, 2};
   int &alias = value.second;
@@ -72,7 +72,7 @@ int sibling_field_unchanged()
 }
 
 int nested_field_binding()
-  post(result == 5)
+  cppverify::post(cppverify::result == 5)
 {
   Outer o{{1, 2}, 3};
   int &alias = o.inner.hi;
@@ -81,7 +81,7 @@ int nested_field_binding()
 }
 
 int nested_siblings_unchanged()
-  post(result == 4)
+  cppverify::post(cppverify::result == 4)
 {
   Outer o{{1, 2}, 3};
   set_scalar(o.inner.hi, 5);
@@ -89,7 +89,7 @@ int nested_siblings_unchanged()
 }
 
 int value_initialized_record()
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   Pair value{};
   int &alias = value.first;
@@ -98,7 +98,7 @@ int value_initialized_record()
 
 // The copy must read the promoted source's current storage, leaf by leaf.
 int leafwise_copy()
-  post(result == 7)
+  cppverify::post(cppverify::result == 7)
 {
   Pair source{2, 3};
   int &alias = source.first;
@@ -110,7 +110,7 @@ int leafwise_copy()
 // A stale flattened companion would answer 2 here; the single representation
 // must observe the store performed through the callee's reference formal.
 int stale_dual_representation()
-  post(result == 2)
+  cppverify::post(cppverify::result == 2)
 {
   Pair value{1, 2};
   set_scalar(value.second, 7);
@@ -120,8 +120,8 @@ int stale_dual_representation()
 // A pointer field is an ordinary leaf: the stored value round-trips exactly
 // through the heap, and nothing else about it is assumed.
 int pointer_leaf_roundtrip(int *q)
-  pre(q != nullptr)
-  post(result == 4)
+  cppverify::pre(q != nullptr)
+  cppverify::post(cppverify::result == 4)
 {
   WithPtr w{4, q};
   int &alias = w.value;
@@ -131,7 +131,7 @@ int pointer_leaf_roundtrip(int *q)
 // An unwritten pointer leaf stays uninitialized: its validity is never
 // assumed, so dereferencing it cannot be proven.
 int unwritten_pointer_leaf()
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   WithPtr w;
   int &alias = w.value;
@@ -142,8 +142,8 @@ int unwritten_pointer_leaf()
 // A heap-loaded pointer leaf is an unconstrained pointer value: the pointee
 // it designates is not known.
 int pointer_leaf_pointee_unknown(int *q)
-  pre(q != nullptr)
-  post(result == 0)
+  cppverify::pre(q != nullptr)
+  cppverify::post(cppverify::result == 0)
 {
   WithPtr w{4, q};
   int &alias = w.value;
@@ -151,7 +151,7 @@ int pointer_leaf_pointee_unknown(int *q)
 }
 
 int false_sibling_changed()
-  post(result == 7)
+  cppverify::post(cppverify::result == 7)
 {
   Pair value{1, 2};
   int &alias = value.second;
@@ -160,7 +160,7 @@ int false_sibling_changed()
 }
 
 int uninitialized_field_binding()
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   Pair value;
   int &alias = value.first;
@@ -168,7 +168,7 @@ int uninitialized_field_binding()
 }
 
 int uninitialized_sibling_read()
-  post(result == 3)
+  cppverify::post(cppverify::result == 3)
 {
   Pair value;
   int &alias = value.first;
