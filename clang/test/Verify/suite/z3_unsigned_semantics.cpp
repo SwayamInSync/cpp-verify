@@ -2,15 +2,15 @@
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 int valid_unsigned_max(unsigned x)
-  post(x <= 0xffffffffU)
+  cppverify::post(x <= 0xffffffffU)
 {
   return 0;
 }
 
 int valid_unsigned_div_rem(unsigned x)
-  pre(x == 0xffffffffU)
-  post(x / 2U == 0x7fffffffU)
-  post(x % 2U == 1U)
+  cppverify::pre(x == 0xffffffffU)
+  cppverify::post(x / 2U == 0x7fffffffU)
+  cppverify::post(x % 2U == 1U)
 {
   return 0;
 }
@@ -18,21 +18,21 @@ int valid_unsigned_div_rem(unsigned x)
 // Contract arithmetic is mathematical: a signed and an unsigned value compare
 // as values, without C++'s conversion of the signed one to unsigned.
 int valid_mixed_comparison(int x, unsigned y)
-  pre(x == -1 && y == 1U)
-  post(x < y)
+  cppverify::pre(x == -1 && y == 1U)
+  cppverify::post(x < y)
 {
   return 0;
 }
 
 int invalid_unsigned_upper_half(unsigned x)
-  post(x <= 0x7fffffffU)
+  cppverify::post(x <= 0x7fffffffU)
 {
   return 0;
 }
 
 int invalid_mixed_comparison(int x, unsigned y)
-  pre(x == -1 && y == 1U)
-  post(x > y)
+  cppverify::pre(x == -1 && y == 1U)
+  cppverify::post(x > y)
 {
   return 0;
 }
