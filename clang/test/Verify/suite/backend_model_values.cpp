@@ -1,13 +1,13 @@
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s
 
 int negative_result()
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   return -1;
 }
 
 unsigned maximum_result()
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   return static_cast<unsigned>(-1);
 }
