@@ -1,6 +1,6 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
 // RUN: %cpp-verify --check-ub --jobs=4 \
-// RUN:   --timeout=30000 %s 2>&1 | FileCheck %s
+// RUN:   --timeout=30000 %s -- 2>&1 | FileCheck %s
 
 // Deductive checks for the two error predicates in LLVM's decoder. Nested
 // const-char** message plumbing is intentionally represented by scalar status.
