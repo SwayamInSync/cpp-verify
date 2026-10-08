@@ -146,7 +146,8 @@ public:
     const auto *FD = dyn_cast<FunctionDecl>(E->getDecl());
     if (!FD)
       return true;
-    if (isCollectionDecl(FD)) {
+    // The constructs' declarations are deleted.
+    if (isCollectionDecl(FD) && !FD->isDeleted()) {
       diagnoseCollectionOperation(E->getExprLoc(), FD);
       return true;
     }
