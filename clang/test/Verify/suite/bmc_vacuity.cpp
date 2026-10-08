@@ -6,8 +6,8 @@
 // ends.
 
 int impossible(int x)
-  pre(x > 0 && x < 0)
-  post(result == 42)
+  cppverify::pre(x > 0 && x < 0)
+  cppverify::post(cppverify::result == 42)
 {
   return 0;
 }
@@ -16,13 +16,13 @@ int impossible(int x)
 
 // Every execution runs the loop at least 100 times.
 int long_loop(int n)
-  pre(n >= 100 && n <= 200)
-  post(result == n)
+  cppverify::pre(n >= 100 && n <= 200)
+  cppverify::post(cppverify::result == n)
 {
   int i = 0;
   while (i < n)
-    invariant(0 <= i && i <= n)
-    decreases(n - i)
+    cppverify::invariant(0 <= i && i <= n)
+    cppverify::decreases(n - i)
   {
     i = i + 1;
   }
@@ -32,13 +32,13 @@ int long_loop(int n)
 // CHECK-DAG: warning: long_loop: no execution finishes within 3 loop iterations
 
 int short_loop(int n)
-  pre(n >= 0 && n <= 2)
-  post(result == n)
+  cppverify::pre(n >= 0 && n <= 2)
+  cppverify::post(cppverify::result == n)
 {
   int i = 0;
   while (i < n)
-    invariant(0 <= i && i <= n)
-    decreases(n - i)
+    cppverify::invariant(0 <= i && i <= n)
+    cppverify::decreases(n - i)
   {
     i = i + 1;
   }
