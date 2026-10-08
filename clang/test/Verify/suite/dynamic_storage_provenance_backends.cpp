@@ -1,6 +1,6 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify --backend=bmc --unroll=1 %s 2>&1 | FileCheck %s --check-prefix=BMC
-// RUN: %cpp-verify --backend=lean --lean-out=%t.lean %s 2>&1 | FileCheck %s --check-prefix=LEAN
+// RUN: not %cpp-verify --backend=bmc --unroll=1 %s -- 2>&1 | FileCheck %s --check-prefix=BMC
+// RUN: %cpp-verify --backend=lean --lean-out=%t.lean %s -- 2>&1 | FileCheck %s --check-prefix=LEAN
 
 int backend_reassignment(bool choose)
   cppverify::post(cppverify::result == 1 || cppverify::result == 2)
