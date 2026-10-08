@@ -102,8 +102,8 @@ Quick start
 .. code-block:: cpp
 
    int abs(int x)
-     pre(x >= -2147483647)   // every int except INT_MIN, whose negation overflows
-     post(result >= 0)
+     cv::pre(x >= -2147483647)   // every int except INT_MIN, whose negation overflows
+     cv::post(cv::result >= 0)
    {
      return x < 0 ? -x : x;
    }
@@ -122,8 +122,8 @@ Quick start
 
          ./build/bin/clang++ -std=c++17 -fverify-contracts -c abs.cpp -o abs.o
 
-Use ``-fverify-contracts`` on ``clang++`` so ``pre`` / ``post`` are keywords.
-``cpp-verify`` adds that flag automatically.
+Use ``-fverify-contracts`` on ``clang++`` so the constructs (``cppverify::pre``,
+``cppverify::post``, ...) are recognized. ``cpp-verify`` adds that flag automatically.
 
 Verified scalar lifetimes
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -132,7 +132,7 @@ CppVerify also tracks initialized local scalar ``new``/``delete`` lifetimes:
 
 .. code-block:: cpp
 
-   int roundtrip(int value) post(result == value) {
+   int roundtrip(int value) cv::post(cv::result == value) {
      int *p = new int;
      *p = value;
      int observed = *p;
@@ -153,14 +153,14 @@ parameters:
 .. code-block:: cpp
 
    void increment(int& value)
-     pre(value < 2147483647)
-     modifies(value)
-     post(value == old(value) + 1)
+     cv::pre(value < 2147483647)
+     cv::modifies(value)
+     cv::post(value == cv::old(value) + 1)
    {
      ++value;
    }
 
-Reference values lower to heap loads, writes lower to stores, and ``old`` reads
+Reference values lower to heap loads, writes lower to stores, and ``cppverify::old`` reads
 the entry heap. The bounded scalar slice supports direct forwarding, direct
 ``*p`` bindings, ordinary initialized scalar local actuals, and chained local
 reference aliases. Subobjects, temporaries, reference returns, and non-scalar
