@@ -5,7 +5,7 @@
 # laws and certifies every false claim the solver refutes; a model it prints
 # with unknown is certified like any other. It leaves the claim that needs
 # an infinite set and the loop with ghost collections unresolved.
-# RUN: not %cpp-verify --backend=cvc5 --timeout=20000 %S/collections.cpp 2>&1 \
+# RUN: not %cpp-verify --backend=cvc5 --timeout=20000 %S/collections.cpp -- 2>&1 \
 # RUN:   | FileCheck %s
 
 # CHECK-DAG: Verified: sets [backend=cvc5]
