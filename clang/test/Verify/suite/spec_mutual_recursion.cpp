@@ -5,51 +5,51 @@
 // cycle lowers one shared measure. Each function's termination is proved
 // with every function of the cycle opaque.
 
-spec bool is_odd(int n);
+cppverify::spec bool is_odd(int n);
 
-spec bool is_even(int n)
-  decreases(n)
+cppverify::spec bool is_even(int n)
+  cppverify::decreases(n)
 {
   return n <= 0 ? n == 0 : is_odd(n - 1);
 }
 
-spec bool is_odd(int n)
-  decreases(n)
+cppverify::spec bool is_odd(int n)
+  cppverify::decreases(n)
 {
   return n <= 0 ? false : is_even(n - 1);
 }
 
 // pong calls ping at the same argument, so the cycle need not terminate, and
 // neither function's termination is established.
-spec int ping(int n);
+cppverify::spec int ping(int n);
 
-spec int pong(int n)
-  decreases(n)
+cppverify::spec int pong(int n)
+  cppverify::decreases(n)
 {
   return n <= 0 ? 0 : ping(n) + 1;
 }
 
-spec int ping(int n)
-  decreases(n)
+cppverify::spec int ping(int n)
+  cppverify::decreases(n)
 {
   return n <= 0 ? 0 : pong(n - 1);
 }
 
 void parity()
 {
-  ghost { contract_assert(is_even(10) && is_odd(7) && !is_even(7)); }
+  cppverify::ghost { cppverify::check(is_even(10) && is_odd(7) && !is_even(7)); }
 }
 
 void parity_exclusive(int n)
-  pre(n >= 0 && n <= 50)
+  cppverify::pre(n >= 0 && n <= 50)
 {
-  ghost { contract_assert(is_even(n) != is_odd(n)); }
+  cppverify::ghost { cppverify::check(is_even(n) != is_odd(n)); }
 }
 
 void parity_wrong(int n)
-  pre(n >= 0 && n <= 50)
+  cppverify::pre(n >= 0 && n <= 50)
 {
-  ghost { contract_assert(is_even(n) == is_odd(n)); }
+  cppverify::ghost { cppverify::check(is_even(n) == is_odd(n)); }
 }
 
 // CHECK-DAG: Verified: spec decreases: is_even
