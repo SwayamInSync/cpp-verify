@@ -1,0 +1,34 @@
+# RUN: clangd -lit-test < %s | FileCheck %s
+# cpp-verify contracts: names in a clause resolve, a construct shows its
+# documentation, and a rename reaches every use, the contracts included.
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"clangd","capabilities":{},"initializationOptions":{"fallbackFlags":["-std=c++17","-fverify-contracts","-fno-verify"]},"trace":"off"}}
+---
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"test:///main.cpp","languageId":"cpp","version":1,"text":"namespace cv = cppverify;\nint f(int n)\n  cv::pre(n > 0)\n  cv::post(cv::result == n)\n{\n  for (int i = 0; i < n; ++i)\n    cv::invariant(i <= n)\n  {\n  }\n  return n;\n}\n"}}}
+#      CHECK:  "method": "textDocument/publishDiagnostics",
+# CHECK-NEXT:  "params": {
+# CHECK-NEXT:    "diagnostics": [],
+---
+{"jsonrpc":"2.0","id":1,"method":"textDocument/hover","params":{"textDocument":{"uri":"test:///main.cpp"},"position":{"line":2,"character":10}}}
+#      CHECK:  "id": 1,
+#      CHECK:      "value": "param n\n\nType: int
+---
+{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"test:///main.cpp"},"position":{"line":2,"character":7}}}
+#      CHECK:  "id": 2,
+#      CHECK:      "value": "function pre\n\nprovided by <cppverify.h>
+#      CHECK:  Precondition, after a function's parameter list
+---
+{"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"test:///main.cpp"},"position":{"line":6,"character":18}}}
+#      CHECK:  "id": 3,
+#      CHECK:      "value": "variable i\n\nType: int
+---
+{"jsonrpc":"2.0","id":4,"method":"textDocument/rename","params":{"textDocument":{"uri":"test:///main.cpp"},"position":{"line":1,"character":10},"newName":"count"}}
+#      CHECK:  "id": 4,
+#      CHECK:  "changes": {
+#      CHECK:    "{{.*}}/main.cpp": [
+# CHECK-COUNT-6: "newText": "count",
+#  CHECK-NOT:  "newText": "count",
+#      CHECK:  ]
+---
+{"jsonrpc":"2.0","id":5,"method":"shutdown"}
+---
+{"jsonrpc":"2.0","method":"exit"}
