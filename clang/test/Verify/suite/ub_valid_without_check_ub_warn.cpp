@@ -12,11 +12,11 @@
 // Under --no-check-ub it does, so the driver warns rather than letting a
 // fabricated counterexample stand unexplained. By default it verifies.
 
-spec bool valid(int* p, int n) { return true; }
+cppverify::spec bool valid(int* p, int n) { return true; }
 
 int echo_point(int* a)
-  pre(valid(a, 3) && a[0] > 0)
-  post(a[0] > 0)
+  cppverify::pre(valid(a, 3) && a[0] > 0)
+  cppverify::post(a[0] > 0)
 {
   return 0;
 }
