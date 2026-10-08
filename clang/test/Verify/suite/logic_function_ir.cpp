@@ -1,10 +1,10 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: %cpp-verify --lower-only --dump-ir=3 %s > %t.first 2>&1
-// RUN: %cpp-verify --lower-only --dump-ir=3 %s > %t.second 2>&1
+// RUN: %cpp-verify --lower-only --dump-ir=3 %s -- > %t.first 2>&1
+// RUN: %cpp-verify --lower-only --dump-ir=3 %s -- > %t.second 2>&1
 // RUN: diff %t.first %t.second
 // RUN: FileCheck %s --input-file=%t.first --check-prefix=LOGIC
-// RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=Z3
-// RUN: %cpp-verify --backend=lean --lean-out=%t.lean %s
+// RUN: %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=Z3
+// RUN: %cpp-verify --backend=lean --lean-out=%t.lean %s --
 // RUN: FileCheck %s --input-file=%t.lean --check-prefix=LEAN
 
 cppverify::spec int hidden(int x) { return x + 1; }
