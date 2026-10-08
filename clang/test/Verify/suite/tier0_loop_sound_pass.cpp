@@ -3,13 +3,13 @@
 // Tier-0: a straightforward counting loop with an inductive invariant and a
 // well-founded measure verifies (establishment + preservation + termination).
 int count_up(int n)
-  pre(n >= 0 && n <= 100)
-  post(result == n)
+  cppverify::pre(n >= 0 && n <= 100)
+  cppverify::post(cppverify::result == n)
 {
   int i = 0;
   while (i < n)
-    invariant(0 <= i && i <= n)
-    decreases(n - i)
+    cppverify::invariant(0 <= i && i <= n)
+    cppverify::decreases(n - i)
   {
     i = i + 1;
   }
