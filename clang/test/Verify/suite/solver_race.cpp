@@ -17,8 +17,8 @@
 using cppverify::seq;
 
 int add_one(int x)
-  pre(x < 1000)
-  post(result == x + 1)
+  cppverify::pre(x < 1000)
+  cppverify::post(cppverify::result == x + 1)
 {
   return x + 1;
 }
@@ -28,17 +28,17 @@ int add_one(int x)
 // REPLAY-DAG: Verified: {{.*}}add_one{{.*}} [backend={{z3|cvc5|z3\+cvc5}}]
 
 int wrong_bound(int x)
-  pre(x >= 0 && x < 10)
-  post(result < 10)
+  cppverify::pre(x >= 0 && x < 10)
+  cppverify::post(cppverify::result < 10)
 {
   return x + 1;
 }
 // CHECK-DAG: error: verification failed: wrong_bound {{.*}}[backend={{z3|cvc5}}] [reason=counterexample]
 // REPLAY-DAG: wrong_bound {{.*}}[reason=counterexample]
 
-proof void pushed(seq s, int x)
-  post((s.push(x)).len() == s.len() + 1)
-  post((s.push(x))[s.len()] == x)
+cppverify::proof void pushed(seq s, int x)
+  cppverify::post((s.push(x)).len() == s.len() + 1)
+  cppverify::post((s.push(x))[s.len()] == x)
 {
 }
 // CHECK-DAG: Verified: pushed [backend={{z3|cvc5|z3\+cvc5}}]
