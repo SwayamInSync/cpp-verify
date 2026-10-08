@@ -1,31 +1,32 @@
 // RUN: %clang_cc1 -std=c++17 -fverify-contracts -verify %s
 //
-// Negative tests: result and old used outside their supported contexts.
+// Negative tests: cppverify::result and cppverify::old used outside their
+// supported contexts.
 // These are context errors caught by the parser.
 
 // ---------------------------------------------------------------------------
 // 1. result in function body (not in postcondition)
 // ---------------------------------------------------------------------------
 int f1(int x)
-  pre(x > 0)
+  cppverify::pre(x > 0)
 {
-  return result; // expected-error {{'result' can only be used in postconditions}}
+  return cppverify::result; // expected-error {{'cppverify::result' can only be used in postconditions}}
 }
 
 // ---------------------------------------------------------------------------
 // 2. old() in function body (not in postcondition or loop invariant)
 // ---------------------------------------------------------------------------
 int f2(int x)
-  pre(x > 0)
+  cppverify::pre(x > 0)
 {
-  return old(x); // expected-error {{'old' can only be used in postconditions and loop invariants}}
+  return cppverify::old(x); // expected-error {{'cppverify::old' can only be used in postconditions and loop invariants}}
 }
 
 // ---------------------------------------------------------------------------
 // 3. result in precondition
 // ---------------------------------------------------------------------------
 int f3(int x)
-  pre(result > 0) // expected-error {{'result' can only be used in postconditions}}
+  cppverify::pre(cppverify::result > 0) // expected-error {{'cppverify::result' can only be used in postconditions}}
 {
   return x;
 }
@@ -34,7 +35,7 @@ int f3(int x)
 // 4. old() in precondition
 // ---------------------------------------------------------------------------
 int f4(int x)
-  pre(old(x) > 0) // expected-error {{'old' can only be used in postconditions and loop invariants}}
+  cppverify::pre(cppverify::old(x) > 0) // expected-error {{'cppverify::old' can only be used in postconditions and loop invariants}}
 {
   return x;
 }
@@ -43,11 +44,11 @@ int f4(int x)
 // 5. result in loop invariant
 // ---------------------------------------------------------------------------
 int f5(int n)
-  pre(n >= 0)
+  cppverify::pre(n >= 0)
 {
   int i = 0;
   while (i < n)
-    invariant(result >= 0) // expected-error {{'result' can only be used in postconditions}}
+    cppverify::invariant(cppverify::result >= 0) // expected-error {{'cppverify::result' can only be used in postconditions}}
   {
     i++;
   }
@@ -58,11 +59,11 @@ int f5(int n)
 // 6. old() in a loop invariant denotes function entry.
 // ---------------------------------------------------------------------------
 int f6(int n)
-  pre(n >= 0)
+  cppverify::pre(n >= 0)
 {
   int i = 0;
   while (i < n)
-    invariant(old(n) == n)
+    cppverify::invariant(cppverify::old(n) == n)
   {
     i++;
   }
@@ -73,7 +74,18 @@ int f6(int n)
 // 7. result has no function-entry value for old()
 // ---------------------------------------------------------------------------
 int f7(int x)
-  post(old(result) == x) // expected-error {{'result' has no value in the function pre-state}}
+  cppverify::post(cppverify::old(cppverify::result) == x) // expected-error {{'cppverify::result' has no value in the function pre-state}}
 {
   return x;
+}
+
+// ---------------------------------------------------------------------------
+// 8. Bare result and old are ordinary names.
+// ---------------------------------------------------------------------------
+int old(int v) { return v; }
+int f8(int x)
+  cppverify::post(cppverify::result == x)
+{
+  int result = old(x);
+  return result;
 }
