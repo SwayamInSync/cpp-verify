@@ -3,32 +3,32 @@
 # publishes: verdicts, the steps that relate functions (spec termination,
 # callee contracts, unverified callers), dumps, and archive records.
 #
-# RUN: not %cpp-verify --jobs=1 %S/Inputs/parallel_functions.cpp > %t.serial 2>&1
-# RUN: not %cpp-verify --jobs=4 %S/Inputs/parallel_functions.cpp > %t.parallel 2>&1
+# RUN: not %cpp-verify --jobs=1 %S/Inputs/parallel_functions.cpp -- > %t.serial 2>&1
+# RUN: not %cpp-verify --jobs=4 %S/Inputs/parallel_functions.cpp -- > %t.parallel 2>&1
 # RUN: diff %t.serial %t.parallel
 # RUN: FileCheck %s < %t.parallel
 #
 # RUN: not %cpp-verify --jobs=1 --diagnostics-format=json \
-# RUN:   %S/Inputs/parallel_functions.cpp > %t.serial.json 2>&1
+# RUN:   %S/Inputs/parallel_functions.cpp -- > %t.serial.json 2>&1
 # RUN: not %cpp-verify --jobs=4 --diagnostics-format=json \
-# RUN:   %S/Inputs/parallel_functions.cpp > %t.parallel.json 2>&1
+# RUN:   %S/Inputs/parallel_functions.cpp -- > %t.parallel.json 2>&1
 # RUN: diff %t.serial.json %t.parallel.json
 #
 # RUN: not %cpp-verify --jobs=1 --obligation-out=%t.serial.cpv \
-# RUN:   %S/Inputs/parallel_functions.cpp > /dev/null 2>&1
+# RUN:   %S/Inputs/parallel_functions.cpp -- > /dev/null 2>&1
 # RUN: not %cpp-verify --jobs=4 --obligation-out=%t.parallel.cpv \
-# RUN:   %S/Inputs/parallel_functions.cpp > /dev/null 2>&1
+# RUN:   %S/Inputs/parallel_functions.cpp -- > /dev/null 2>&1
 # RUN: cmp %t.serial.cpv %t.parallel.cpv
 #
 # RUN: %cpp-verify --jobs=1 --lower-only --dump-ir=all \
-# RUN:   %S/Inputs/parallel_functions.cpp > %t.serial.ir 2>&1
+# RUN:   %S/Inputs/parallel_functions.cpp -- > %t.serial.ir 2>&1
 # RUN: %cpp-verify --jobs=4 --lower-only --dump-ir=all \
-# RUN:   %S/Inputs/parallel_functions.cpp > %t.parallel.ir 2>&1
+# RUN:   %S/Inputs/parallel_functions.cpp -- > %t.parallel.ir 2>&1
 # RUN: cmp %t.serial.ir %t.parallel.ir
 #
 # One budget for all queries of a function.
 # RUN: not %cpp-verify --jobs=4 --function-timeout=1 \
-# RUN:   %S/Inputs/parallel_functions.cpp 2>&1 | FileCheck %s --check-prefix=BUDGET
+# RUN:   %S/Inputs/parallel_functions.cpp -- 2>&1 | FileCheck %s --check-prefix=BUDGET
 
 # CHECK: Verified: spec decreases: climb
 # CHECK-NEXT: error: spec decreases failed: diverge
