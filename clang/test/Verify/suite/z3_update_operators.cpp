@@ -2,40 +2,40 @@
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s
 
 int compound_add(int x)
-  pre(x == 10)
-  post(result == 15)
+  cppverify::pre(x == 10)
+  cppverify::post(cppverify::result == 15)
 {
   x += 5;
   return x;
 }
 
 int prefix_increment(int x)
-  pre(x == 10)
-  post(result == 11)
+  cppverify::pre(x == 10)
+  cppverify::post(cppverify::result == 11)
 {
   ++x;
   return x;
 }
 
 int postfix_increment(int x)
-  pre(x == 10)
-  post(result == 11)
+  cppverify::pre(x == 10)
+  cppverify::post(cppverify::result == 11)
 {
   x++;
   return x;
 }
 
 int reject_old_compound_model(int x)
-  pre(x == 10)
-  post(result == 5)
+  cppverify::pre(x == 10)
+  cppverify::post(cppverify::result == 5)
 {
   x += 5;
   return x;
 }
 
 int reject_dropped_increment(int x)
-  pre(x == 10)
-  post(result == 10)
+  cppverify::pre(x == 10)
+  cppverify::post(cppverify::result == 10)
 {
   x++;
   return x;
