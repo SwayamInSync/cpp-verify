@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: %cpp-verify %s 2>&1 | FileCheck %s
+// RUN: %cpp-verify %s -- 2>&1 | FileCheck %s
 
 int preserve_entry_value(int value)
   cppverify::pre(value >= 0 && value <= 20)
