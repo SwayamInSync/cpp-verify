@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify --check-ub --timeout=30000 %s 2>&1 | FileCheck %s
+// RUN: not %cpp-verify --check-ub --timeout=30000 %s -- 2>&1 | FileCheck %s
 //
 // The classic broken binary-search midpoint. Bentley's *Programming Pearls*
 // carried it for two decades and java.util.Arrays.binarySearch carried it for
