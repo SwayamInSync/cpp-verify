@@ -1,4 +1,4 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s
 //
 // A postcondition of an inductive predicate is a lemma about every
 // derivation, proved by induction on derivations. It may mention the
