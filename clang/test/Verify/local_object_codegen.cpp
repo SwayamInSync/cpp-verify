@@ -13,14 +13,14 @@ struct Pair {
 };
 
 void set_scalar(int &target, int value)
-  modifies(target)
-  post(target == value)
+  cppverify::modifies(target)
+  cppverify::post(target == value)
 {
   target = value;
 }
 
 int local_record_object()
-  post(result == 7)
+  cppverify::post(cppverify::result == 7)
 {
   Pair value{1, 2};
   int &alias = value.second;
@@ -29,8 +29,8 @@ int local_record_object()
 }
 
 int local_array_object(int index)
-  pre(index >= 0 && index < 4)
-  post(result == 9)
+  cppverify::pre(index >= 0 && index < 4)
+  cppverify::post(cppverify::result == 9)
 {
   int a[4] = {1, 2, 3, 4};
   set_scalar(a[index], 9);
