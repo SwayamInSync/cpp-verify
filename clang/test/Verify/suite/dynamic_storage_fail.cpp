@@ -2,73 +2,73 @@
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 int read_allocated(const int *source)
-  pre(source != nullptr)
-  post(result == old(*source))
+  cppverify::pre(source != nullptr)
+  cppverify::post(cppverify::result == cppverify::old(*source))
 {
   return *source;
 }
 
 int *pointer_identity(int *value)
-  pre(value != nullptr)
-  post(result == value)
-  post(*result == old(*value))
+  cppverify::pre(value != nullptr)
+  cppverify::post(cppverify::result == value)
+  cppverify::post(*cppverify::result == cppverify::old(*value))
 {
   return value;
 }
 
 bool require_distinct(int *left, int *right)
-  post(result)
+  cppverify::post(cppverify::result)
 {
   return left != right;
 }
 
 int read_next(const int *source)
-  post(result == old(source[1]))
+  cppverify::post(cppverify::result == cppverify::old(source[1]))
 {
   return source[1];
 }
 
 int external_read(const int *source)
-  pre(source != nullptr)
-  post(result == old(*source));
+  cppverify::pre(source != nullptr)
+  cppverify::post(cppverify::result == cppverify::old(*source));
 
 void rebind_pointer(int *target)
-  post(target == nullptr)
+  cppverify::post(target == nullptr)
 {
   target = nullptr;
 }
 
 int offset_precondition(const int *source)
-  pre((source + 1) == (source + 1))
-  post(result == old(*source))
+  cppverify::pre((source + 1) == (source + 1))
+  cppverify::post(cppverify::result == cppverify::old(*source))
 {
   return *source;
 }
 
 int scalar_identity(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   return value;
 }
 
 int forward_loaded_scalar(const int *source)
-  pre(source != nullptr)
-  post(result == old(*source))
+  cppverify::pre(source != nullptr)
+  cppverify::post(cppverify::result == cppverify::old(*source))
 {
   return scalar_identity(*source);
 }
 
 int forward_saved_scalar(const int *source)
-  pre(source != nullptr)
-  post(result == old(*source))
+  cppverify::pre(source != nullptr)
+  cppverify::post(cppverify::result == cppverify::old(*source))
 {
   int saved = *source;
   return scalar_identity(saved);
 }
 
 int forward_controlled_scalar(const int *source)
-  pre(source != nullptr)
-  post(true)
+  cppverify::pre(source != nullptr)
+  cppverify::post(true)
 {
   int selected = 0;
   if (*source != 0)
@@ -76,48 +76,48 @@ int forward_controlled_scalar(const int *source)
   return scalar_identity(selected);
 }
 
-spec int spec_identity(int value)
+cppverify::spec int spec_identity(int value)
 {
   return value;
 }
 
 int forward_loaded_spec(const int *source)
-  pre(source != nullptr)
-  post(result == spec_identity(old(*source)))
+  cppverify::pre(source != nullptr)
+  cppverify::post(cppverify::result == spec_identity(cppverify::old(*source)))
 {
   return *source;
 }
 
-proof void pointer_lemma(const int *source)
-  pre(source != nullptr)
-  post(true)
+cppverify::proof void pointer_lemma(const int *source)
+  cppverify::pre(source != nullptr)
+  cppverify::post(true)
 {
 }
 
 int *copied_pointer(int *source)
-  pre(source != nullptr)
-  post(result == source)
+  cppverify::pre(source != nullptr)
+  cppverify::post(cppverify::result == source)
 {
   int *copy = source;
   return copy;
 }
 
 int unsafe_forwarded_read(const int *source)
-  pre(source != nullptr)
-  post(result == old(source[1]))
+  cppverify::pre(source != nullptr)
+  cppverify::post(cppverify::result == cppverify::old(source[1]))
 {
   return read_next(source);
 }
 
 void discard_pointer_result(int *source)
-  pre(source != nullptr)
-  post(true)
+  cppverify::pre(source != nullptr)
+  cppverify::post(true)
 {
   pointer_identity(source);
 }
 
 int use_after_delete()
-  post(true)
+  cppverify::post(true)
 {
   int *p = new int(1);
   delete p;
@@ -125,7 +125,7 @@ int use_after_delete()
 }
 
 int double_delete()
-  post(true)
+  cppverify::post(true)
 {
   int *p = new int(1);
   delete p;
@@ -134,14 +134,14 @@ int double_delete()
 }
 
 int uninitialized_read()
-  post(true)
+  cppverify::post(true)
 {
   int *p = new int;
   return *p;
 }
 
 bool simultaneous_allocations_are_equal()
-  post(result)
+  cppverify::post(cppverify::result)
 {
   int *p = new int(1);
   int *q = new int(2);
@@ -152,7 +152,7 @@ bool simultaneous_allocations_are_equal()
 }
 
 int path_sensitive_double_delete(bool twice)
-  post(true)
+  cppverify::post(true)
 {
   int *p = new int(1);
   if (twice)
@@ -163,7 +163,7 @@ int path_sensitive_double_delete(bool twice)
 }
 
 int path_sensitive_uninitialized_read(bool initialize)
-  post(true)
+  cppverify::post(true)
 {
   int *p = new int;
   if (initialize)
@@ -172,7 +172,7 @@ int path_sensitive_uninitialized_read(bool initialize)
 }
 
 int stale_pointer_after_reuse()
-  post(true)
+  cppverify::post(true)
 {
   int *old_pointer = new int(1);
   delete old_pointer;
@@ -185,7 +185,7 @@ int stale_pointer_after_reuse()
 }
 
 int alias_use_after_delete()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = new int(1);
   int *alias = owner;
@@ -194,7 +194,7 @@ int alias_use_after_delete()
 }
 
 int alias_double_delete()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = new int(1);
   int *alias = owner;
@@ -204,7 +204,7 @@ int alias_double_delete()
 }
 
 bool aliases_are_distinct()
-  post(result)
+  cppverify::post(cppverify::result)
 {
   int *owner = new int(1);
   int *alias = owner;
@@ -214,7 +214,7 @@ bool aliases_are_distinct()
 }
 
 int modular_uninitialized_read()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = new int;
   int observed = read_allocated(owner);
@@ -223,7 +223,7 @@ int modular_uninitialized_read()
 }
 
 int modular_use_after_delete()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = new int(1);
   delete owner;
@@ -231,7 +231,7 @@ int modular_use_after_delete()
 }
 
 int modular_nonalias_violation()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = new int(1);
   int *alias = owner;
@@ -241,7 +241,7 @@ int modular_nonalias_violation()
 }
 
 int modular_scalar_extent_violation()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = new int(1);
   int observed = read_next(owner);
@@ -250,7 +250,7 @@ int modular_scalar_extent_violation()
 }
 
 int modular_external_contract()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = new int(1);
   int observed = external_read(owner);
@@ -259,7 +259,7 @@ int modular_external_contract()
 }
 
 int modular_rebinding_false_proof()
-  post(result == 2)
+  cppverify::post(cppverify::result == 2)
 {
   int *owner = new int(1);
   rebind_pointer(owner);
@@ -268,7 +268,7 @@ int modular_rebinding_false_proof()
 }
 
 int modular_offset_precondition()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = new int(1);
   int observed = offset_precondition(owner);
@@ -277,7 +277,7 @@ int modular_offset_precondition()
 }
 
 int modular_forwarded_scalar()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = new int(1);
   int observed = forward_loaded_scalar(owner);
@@ -286,7 +286,7 @@ int modular_forwarded_scalar()
 }
 
 int modular_forwarded_temporary()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = new int(1);
   int observed = forward_saved_scalar(owner);
@@ -295,7 +295,7 @@ int modular_forwarded_temporary()
 }
 
 int modular_forwarded_control()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = new int(1);
   int observed = forward_controlled_scalar(owner);
@@ -304,7 +304,7 @@ int modular_forwarded_control()
 }
 
 int modular_forwarded_spec()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = new int(1);
   int observed = forward_loaded_spec(owner);
@@ -313,7 +313,7 @@ int modular_forwarded_spec()
 }
 
 int modular_proof_call()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = new int(1);
   pointer_lemma(owner);
@@ -322,7 +322,7 @@ int modular_proof_call()
 }
 
 int branch_reassignment_use_after_delete(bool choose)
-  post(true)
+  cppverify::post(true)
 {
   int *first = new int(1);
   int *second = new int(2);
@@ -334,7 +334,7 @@ int branch_reassignment_use_after_delete(bool choose)
 }
 
 int reassigned_alias_double_delete()
-  post(true)
+  cppverify::post(true)
 {
   int *first = new int(1);
   int *second = new int(2);
@@ -346,7 +346,7 @@ int reassigned_alias_double_delete()
 }
 
 int stale_alias_after_owner_reassignment()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = new int(1);
   int *alias = owner;
@@ -357,7 +357,7 @@ int stale_alias_after_owner_reassignment()
 }
 
 int copied_stale_pointer()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = new int(1);
   delete owner;
@@ -366,7 +366,7 @@ int copied_stale_pointer()
 }
 
 int null_reassignment_dereference()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = new int(1);
   owner = nullptr;
@@ -374,7 +374,7 @@ int null_reassignment_dereference()
 }
 
 int returned_pointer_use_after_delete()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = new int(1);
   int *returned = pointer_identity(owner);
@@ -383,7 +383,7 @@ int returned_pointer_use_after_delete()
 }
 
 int modular_copied_pointer_return()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = new int(1);
   int *returned = copied_pointer(owner);
@@ -393,7 +393,7 @@ int modular_copied_pointer_return()
 }
 
 int modular_unsafe_forwarding()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = new int(1);
   int observed = unsafe_forwarded_read(owner);
@@ -402,7 +402,7 @@ int modular_unsafe_forwarding()
 }
 
 int modular_discarded_pointer_forwarding()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = new int(1);
   discard_pointer_result(owner);
