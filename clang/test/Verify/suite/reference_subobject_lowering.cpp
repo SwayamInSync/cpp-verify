@@ -11,94 +11,94 @@ struct Pair {
   int second;
 };
 
-spec bool valid(int *p, int count) { return true; }
+cppverify::spec bool valid(int *p, int count) { return true; }
 
 void set_scalar(int &target, int value)
-  modifies(target)
-  post(target == value)
+  cppverify::modifies(target)
+  cppverify::post(target == value)
 {
   target = value;
 }
 
 void local_arrow_alias(Pair *p, int value)
-  pre(p != nullptr && p->first == 1 && p->second == 2)
-  modifies(p->second)
-  post(p->first == 1 && p->second == value)
+  cppverify::pre(p != nullptr && p->first == 1 && p->second == 2)
+  cppverify::modifies(p->second)
+  cppverify::post(p->first == 1 && p->second == value)
 {
   int &alias = p->second;
   alias = value;
 }
 
 void local_deref_field_alias(Pair *p, int value)
-  pre(p != nullptr && p->first == 1 && p->second == 2)
-  modifies((*p).first)
-  post((*p).first == value && (*p).second == 2)
+  cppverify::pre(p != nullptr && p->first == 1 && p->second == 2)
+  cppverify::modifies((*p).first)
+  cppverify::post((*p).first == value && (*p).second == 2)
 {
   int &alias = (*p).first;
   alias = value;
 }
 
 void local_field_alias_in_region(Pair *p, int value)
-  pre(p != nullptr && p->first == 1 && p->second == 2)
-  modifies(*p)
-  post(p->first == 1 && p->second == value)
+  cppverify::pre(p != nullptr && p->first == 1 && p->second == 2)
+  cppverify::modifies(*p)
+  cppverify::post(p->first == 1 && p->second == value)
 {
   int &alias = p->second;
   alias = value;
 }
 
 void local_element_alias(int *p, int count, int index, int value)
-  pre(p != nullptr && valid(p, count) && 0 <= index && index < count &&
+  cppverify::pre(p != nullptr && valid(p, count) && 0 <= index && index < count &&
       p[index] == 3)
-  modifies(p[index])
-  post(p[index] == value)
+  cppverify::modifies(p[index])
+  cppverify::post(p[index] == value)
 {
   int &alias = p[index];
   alias = value;
 }
 
 void call_arrow_field(Pair *p, int value)
-  pre(p != nullptr && p->first == 1 && p->second == 2)
-  modifies(p->second)
-  post(p->first == 1 && p->second == value)
+  cppverify::pre(p != nullptr && p->first == 1 && p->second == 2)
+  cppverify::modifies(p->second)
+  cppverify::post(p->first == 1 && p->second == value)
 {
   set_scalar(p->second, value);
 }
 
 void call_deref_field(Pair *p, int value)
-  pre(p != nullptr && p->first == 1 && p->second == 2)
-  modifies((*p).first)
-  post((*p).first == value && (*p).second == 2)
+  cppverify::pre(p != nullptr && p->first == 1 && p->second == 2)
+  cppverify::modifies((*p).first)
+  cppverify::post((*p).first == value && (*p).second == 2)
 {
   set_scalar((*p).first, value);
 }
 
 void call_element(int *p, int count, int index, int value)
-  pre(p != nullptr && valid(p, count) && 0 <= index && index < count &&
+  cppverify::pre(p != nullptr && valid(p, count) && 0 <= index && index < count &&
       p[index] == 3)
-  modifies(p[index])
-  post(p[index] == value)
+  cppverify::modifies(p[index])
+  cppverify::post(p[index] == value)
 {
   set_scalar(p[index], value);
 }
 
 int unchecked_element_alias(int *p, int index)
-  pre(p != nullptr)
+  cppverify::pre(p != nullptr)
 {
   int &alias = p[index];
   return alias;
 }
 
 int out_of_range_element_alias(int *p, int count)
-  pre(p != nullptr && valid(p, count) && count >= 0)
+  cppverify::pre(p != nullptr && valid(p, count) && count >= 0)
 {
   int &alias = p[count];
   return alias;
 }
 
 void invalid_frame(Pair *p)
-  pre(p != nullptr && p->first == 1 && p->second == 2)
-  modifies(p->first)
+  cppverify::pre(p != nullptr && p->first == 1 && p->second == 2)
+  cppverify::modifies(p->first)
 {
   set_scalar(p->second, 7);
 }
