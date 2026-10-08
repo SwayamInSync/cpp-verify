@@ -7,7 +7,7 @@
 // RUN: %cpp-verify --lower-only --dump-ir=4 %s 2>&1 | FileCheck %s --check-prefix=Z3
 
 int provenance_branch(bool choose)
-  post(result == 1 || result == 2)
+  cppverify::post(cppverify::result == 1 || cppverify::result == 2)
 {
   int *first = new int(1);
   int *second = new int(2);
@@ -21,15 +21,15 @@ int provenance_branch(bool choose)
 }
 
 int *provenance_identity(int *value)
-  pre(value != nullptr)
-  post(result == value)
-  post(*result == old(*value))
+  cppverify::pre(value != nullptr)
+  cppverify::post(cppverify::result == value)
+  cppverify::post(*cppverify::result == cppverify::old(*value))
 {
   return value;
 }
 
 int provenance_call(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int *owner = new int(value);
   int *returned = provenance_identity(owner);
