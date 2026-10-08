@@ -1,9 +1,9 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: %cpp-verify --lower-only --dump-ir=1 %s 2>&1 | FileCheck %s --check-prefix=VCR
-// RUN: %cpp-verify --lower-only --dump-ir=2 %s 2>&1 | FileCheck %s --check-prefix=PASSIVE
-// RUN: %cpp-verify --lower-only --dump-ir=3 %s 2>&1 | FileCheck %s --check-prefix=VC
-// RUN: %cpp-verify --lower-only --dump-ir=4 %s 2>&1 | FileCheck %s --check-prefix=Z3
-// RUN: %cpp-verify --backend=lean --lean-out=%t.lean %s 2>&1 | FileCheck %s --check-prefix=LEAN
+// RUN: %cpp-verify --lower-only --dump-ir=1 %s -- 2>&1 | FileCheck %s --check-prefix=VCR
+// RUN: %cpp-verify --lower-only --dump-ir=2 %s -- 2>&1 | FileCheck %s --check-prefix=PASSIVE
+// RUN: %cpp-verify --lower-only --dump-ir=3 %s -- 2>&1 | FileCheck %s --check-prefix=VC
+// RUN: %cpp-verify --lower-only --dump-ir=4 %s -- 2>&1 | FileCheck %s --check-prefix=Z3
+// RUN: %cpp-verify --backend=lean --lean-out=%t.lean %s -- 2>&1 | FileCheck %s --check-prefix=LEAN
 
 int *ownership_factory(int value)
   cppverify::post(cppverify::result != nullptr)
