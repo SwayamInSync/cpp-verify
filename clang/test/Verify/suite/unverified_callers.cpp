@@ -7,8 +7,8 @@
 // property as valid under hypotheses). The callee's verdict says so.
 
 int decrement(int x)
-  pre(x >= 1)
-  post(result == x - 1)
+  cppverify::pre(x >= 1)
+  cppverify::post(cppverify::result == x - 1)
 {
   return x - 1;
 }
@@ -19,8 +19,8 @@ int helper(int y) { return decrement(y); }
 int other(int y) { return decrement(y + 1); }
 
 int verified_caller(int y)
-  pre(y >= 1)
-  post(result == y - 1)
+  cppverify::pre(y >= 1)
+  cppverify::post(cppverify::result == y - 1)
 {
   return decrement(y);
 }
@@ -28,8 +28,8 @@ int verified_caller(int y)
 
 // No precondition, nothing assumed.
 int twice(int x)
-  pre(true)
-  post(true)
+  cppverify::pre(true)
+  cppverify::post(true)
 {
   return x;
 }
