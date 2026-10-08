@@ -63,7 +63,7 @@ add_clang_library(clangVerify
 
 target_link_libraries(clangVerify PRIVATE ${CPPVERIFY_Z3_TARGET})
 
-set(CPPVERIFY_VERSION 0.1.0)
+set(CPPVERIFY_VERSION 0.1.0-dev)
 get_property(_cppverify_z3_origin GLOBAL PROPERTY CPPVERIFY_Z3_ORIGIN)
 set_property(SOURCE Driver/CppVerifyVersion.cpp APPEND PROPERTY COMPILE_DEFINITIONS
   CPPVERIFY_VERSION="${CPPVERIFY_VERSION}"
