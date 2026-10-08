@@ -1,6 +1,6 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s
-// RUN: not %cpp-verify --backend=bmc --unroll=1 %s 2>&1 | FileCheck %s
-// RUN: not %cpp-verify --diagnostics-format=json %s 2>&1 \
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s
+// RUN: not %cpp-verify --backend=bmc --unroll=1 %s -- 2>&1 | FileCheck %s
+// RUN: not %cpp-verify --diagnostics-format=json %s -- 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=JSON
 //
 // A spec's definition is an axiom only once the spec terminates, so the
