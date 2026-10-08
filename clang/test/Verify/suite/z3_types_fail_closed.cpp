@@ -2,7 +2,7 @@
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 double unsupported_float(double x)
-  post(result == x)
+  cppverify::post(cppverify::result == x)
 {
   return x;
 }
@@ -12,17 +12,17 @@ struct WithArray {
 };
 
 int unsupported_aggregate(WithArray value)
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   return value.values[0];
 }
 
-int &unsupported_reference_return(int &value) pre(true) {
+int &unsupported_reference_return(int &value) cppverify::pre(true) {
   return value;
 }
 
 int unsupported_pointer_indirection(int **value)
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   return value == nullptr ? 0 : 1;
 }
