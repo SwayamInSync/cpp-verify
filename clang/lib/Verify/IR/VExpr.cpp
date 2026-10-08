@@ -19,7 +19,8 @@ std::string verify::canonicalTypeIdentity(QualType QT, const ASTContext &Ctx) {
   Policy.SuppressTagKeyword = true;
   Policy.FullyQualifiedName = true;
   Policy.PrintAsCanonical = true;
-  Policy.AnonymousTagLocations = true;
+  Policy.AnonymousTagNameStyle =
+      llvm::to_underlying(PrintingPolicy::AnonymousTagMode::SourceLocation);
   return C.getAsString(Policy);
 }
 
