@@ -1,6 +1,6 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify --check-ub %s 2>&1 | FileCheck %s --check-prefix=VERIFY
-// RUN: not %cpp-verify --check-ub --backend=bmc --unroll=1 %s 2>&1 | FileCheck %s --check-prefix=BMC
+// RUN: not %cpp-verify --check-ub %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: not %cpp-verify --check-ub --backend=bmc --unroll=1 %s -- 2>&1 | FileCheck %s --check-prefix=BMC
 
 cppverify::spec bool valid(int *p, int count) { return true; }
 cppverify::spec bool valid(int *p, unsigned long count) { return true; }
