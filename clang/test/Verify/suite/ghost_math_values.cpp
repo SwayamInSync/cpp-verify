@@ -8,71 +8,71 @@
 #include <cppverify.h>
 using cppverify::seq;
 
-proof void length_arithmetic(seq s)
-  pre(s.len() > 0)
-  post(true)
+cppverify::proof void length_arithmetic(seq s)
+  cppverify::pre(s.len() > 0)
+  cppverify::post(true)
 {
   seq t = s.subrange(0, s.len() - 1);
-  contract_assert(t.len() == s.len() - 1);
+  cppverify::check(t.len() == s.len() - 1);
   if (t.len() + 1 > s.len())
-    contract_assert(false);
+    cppverify::check(false);
 }
 // CHECK-DAG: Verified: length_arithmetic
 
 // An element is a mathematical integer, which need not fit in an int.
-proof void stores_element(seq s)
-  pre(s.len() > 0)
-  post(true)
+cppverify::proof void stores_element(seq s)
+  cppverify::pre(s.len() > 0)
+  cppverify::post(true)
 {
   int x = s[0];
 }
 // CHECK-DAG: error: verification failed: stores_element [{{.*}}::overflow@[[@LINE-2]]:3]
 
-proof void stores_bounded_element(seq s)
-  pre(s.len() > 0 && 0 <= s[0] && s[0] < 100)
-  post(true)
+cppverify::proof void stores_bounded_element(seq s)
+  cppverify::pre(s.len() > 0 && 0 <= s[0] && s[0] < 100)
+  cppverify::post(true)
 {
   int x = s[0];
-  contract_assert(x < 100);
+  cppverify::check(x < 100);
 }
 // CHECK-DAG: Verified: stores_bounded_element
 
-proof void takes_int(int n)
-  post(true)
+cppverify::proof void takes_int(int n)
+  cppverify::post(true)
 {
 }
 
-proof void passes_length(seq s)
-  pre(s.len() > 0)
-  post(true)
+cppverify::proof void passes_length(seq s)
+  cppverify::pre(s.len() > 0)
+  cppverify::post(true)
 {
   takes_int(s.len() + 2147483647);
 }
 // CHECK-DAG: error: verification failed: passes_length [{{.*}}::overflow@[[@LINE-2]]:3]
 
-proof void passes_bounded_length(seq s)
-  pre(s.len() < 1000)
-  post(true)
+cppverify::proof void passes_bounded_length(seq s)
+  cppverify::pre(s.len() < 1000)
+  cppverify::post(true)
 {
   takes_int(s.len());
 }
 // CHECK-DAG: Verified: passes_bounded_length
 
-proof void assigns_sum(seq s, seq t)
-  pre(s.len() < 1000 && t.len() < 1000)
-  post(true)
+cppverify::proof void assigns_sum(seq s, seq t)
+  cppverify::pre(s.len() < 1000 && t.len() < 1000)
+  cppverify::post(true)
 {
   int n = 0;
   n = s.len() + t.len();
-  contract_assert(n == (s + t).len());
+  cppverify::check(n == (s + t).len());
 }
 // CHECK-DAG: Verified: assigns_sum
 
 void ghost_length_too_large(int n)
-  pre(n >= 0)
-  post(true)
+  cppverify::pre(n >= 0)
+  cppverify::post(true)
 {
-  ghost {
+  cppverify::ghost {
     seq s = cppverify::seq_of(n);
     int k = s.len() + 2147483647;
   }
