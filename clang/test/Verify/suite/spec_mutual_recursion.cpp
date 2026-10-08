@@ -1,5 +1,5 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s
-// RUN: not %cpp-verify --backend=bmc --unroll=1 %s 2>&1 | FileCheck %s
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s
+// RUN: not %cpp-verify --backend=bmc --unroll=1 %s -- 2>&1 | FileCheck %s
 //
 // Spec functions may call each other in a cycle when every call within the
 // cycle lowers one shared measure. Each function's termination is proved
