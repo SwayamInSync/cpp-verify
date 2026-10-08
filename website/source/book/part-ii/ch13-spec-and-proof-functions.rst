@@ -8,8 +8,8 @@ Chapter 13 — Spec and proof functions
 
 .. code-block:: cpp
 
-   spec int fibo(int n)
-     decreases(n)
+   cv::spec int fibo(int n)
+     cv::decreases(n)
    {
      if (n <= 1) return n;
      return fibo(n - 1) + fibo(n - 2);
@@ -22,10 +22,10 @@ Use in contracts:
 .. code-block:: cpp
 
    int client(int n)
-     pre(n >= 0 && n <= 40)
-     post(result == fibo(n));
+     cv::pre(n >= 0 && n <= 40)
+     cv::post(cv::result == fibo(n));
 
-``fibo`` is not compiled. Integers are **mathematical** (unbounded) inside ``spec``.
+``fibo`` is not compiled. Integers are **mathematical** (unbounded) inside ``cppverify::spec``.
 Because it has no compiled form, a spec can be called only from contracts, ghost
 code, and other spec or proof functions; ``return fibo(n);`` in an executable
 body is a compile error. In ghost or proof code, ``int f = fibo(n);`` converts
@@ -38,10 +38,10 @@ the unbounded value to ``int``, and the verifier checks that it fits.
 
 .. code-block:: cpp
 
-   proof void fibo_nonneg(int n)
-     pre(n >= 0)
-     post(fibo(n) >= 0)
-     decreases(n)
+   cv::proof void fibo_nonneg(int n)
+     cv::pre(n >= 0)
+     cv::post(fibo(n) >= 0)
+     cv::decreases(n)
    {
      if (n >= 2) {
        fibo_nonneg(n - 1);
@@ -49,10 +49,10 @@ the unbounded value to ``int``, and the verifier checks that it fits.
      }
    }
 
-   proof void lemma(int i, int j)
-     pre(i <= j)
-     post(fibo(i) <= fibo(j))
-     decreases(j - i)
+   cv::proof void lemma(int i, int j)
+     cv::pre(i <= j)
+     cv::post(fibo(i) <= fibo(j))
+     cv::decreases(j - i)
    {
      if (i < j) {
        lemma(i, j - 1);        // fibo(i) <= fibo(j - 1)
@@ -62,59 +62,59 @@ the unbounded value to ``int``, and the verifier checks that it fits.
    }
 
 A lemma's body is its proof: each call is the induction hypothesis at a
-smaller measure, or another lemma. Call lemmas from ``ghost { ... }`` blocks
+smaller measure, or another lemma. Call lemmas from ``cppverify::ghost { ... }`` blocks
 in executable functions.
 
 Proof functions are isolated from runtime state: they may update local proof
 variables, but cannot write pointees/globals or call executable functions.
-Every proof-only loop needs ``decreases``. The same erased-state rules apply to
-inline ``ghost`` blocks, which also cannot return from their executable
+Every proof-only loop needs ``cppverify::decreases``. The same erased-state rules apply to
+inline ``cppverify::ghost`` blocks, which also cannot return from their executable
 enclosing function.
 
-Soft preconditions (``recommends``)
------------------------------------
+Soft preconditions (``cppverify::recommends``)
+----------------------------------------------
 
-A ``spec`` function stays **total**, but ``recommends`` flags likely misuse. It generates no
+A ``cppverify::spec`` function stays **total**, but ``cppverify::recommends`` flags likely misuse. It generates no
 call-site obligation; the verifier only **warns** when a call may violate it:
 
 .. code-block:: cpp
 
-   spec int safe_div(int a, int b)
-     recommends(b != 0)
+   cv::spec int safe_div(int a, int b)
+     cv::recommends(b != 0)
    { return a / b; }
 
-Opacity: fuel, ``reveal``, ``hide``
------------------------------------
+Opacity: fuel, ``cppverify::reveal``, ``cppverify::hide``
+---------------------------------------------------------
 
-A recursive ``spec`` is finitely transparent by default (fuel 1), so its
+A recursive ``cppverify::spec`` is finitely transparent by default (fuel 1), so its
 defining equation cannot send Z3 into a matching loop.
-``reveal_with_fuel(f, n)`` raises the depth when a proof needs more (the
-``safe_fib`` walkthrough uses it). ``reveal`` / ``hide`` toggle a spec's
+``cppverify::reveal_with_fuel(f, n)`` raises the depth when a proof needs more (the
+``safe_fib`` walkthrough uses it). ``cppverify::reveal`` / ``cppverify::hide`` toggle a spec's
 transparency for the rest of a function:
 
 .. code-block:: cpp
 
-   spec int triple(int x) { return 3 * x; }
+   cv::spec int triple(int x) { return 3 * x; }
 
    int f(int x)
-     pre(x >= 0 && x <= 10)
-     post(result == triple(x))
+     cv::pre(x >= 0 && x <= 10)
+     cv::post(cv::result == triple(x))
    {
-     ghost { reveal(triple); }            // reveal_with_fuel(f, n) for recursive specs
+     cv::ghost { cv::reveal(triple); }            // reveal_with_fuel(f, n) for recursive specs
      return x + x + x;
    }
 
    int g(int x)
-     pre(x >= 0 && x <= 10)
-     post(result == x + x + x)
+     cv::pre(x >= 0 && x <= 10)
+     cv::post(cv::result == x + x + x)
    {
-     ghost { hide(triple); }              // keep triple opaque; prove without unfolding it
+     cv::ghost { cv::hide(triple); }              // keep triple opaque; prove without unfolding it
      return x + x + x;
    }
 
 Use the smallest fuel that exposes the recurrence needed at the current proof
 site. If a proof function has already supplied a finite table or step lemma,
-``hide(f)`` can suppress irrelevant recursive equations while the imported
+``cppverify::hide(f)`` can suppress irrelevant recursive equations while the imported
 postconditions remain available. Hiding a spec keeps its definition out of
 proofs, never out of the program's meaning: a counterexample must still fail
 under the real definition, and an obligation that only the hidden definition
@@ -127,7 +127,7 @@ See also :doc:`ch17-backends-modular-calls`.
 Termination of recursive specs
 ------------------------------
 
-A recursive ``spec`` needs ``decreases``, and every recursive call must lower
+A recursive ``cppverify::spec`` needs ``cppverify::decreases``, and every recursive call must lower
 the measure: a single measure must stay nonnegative and strictly decrease; for
 a tuple, the first component that changes must stay nonnegative and decrease.
 A spec's definition becomes a fact only once the spec is known to terminate,
@@ -138,30 +138,30 @@ measure whatever the spec's other calls return:
 
 .. code-block:: cpp
 
-   spec int ack(int m, int n)
-     decreases(m, n)                     // verified: m decides the outer call
+   cv::spec int ack(int m, int n)
+     cv::decreases(m, n)                     // verified: m decides the outer call
    {
      return m <= 0 ? n + 1
           : n <= 0 ? ack(m - 1, 1)
           : ack(m - 1, ack(m, n - 1));
    }
 
-   spec int nested(int n)
-     decreases(n)                        // unresolved: needs nested(n - 1) < n,
+   cv::spec int nested(int n)
+     cv::decreases(n)                        // unresolved: needs nested(n - 1) < n,
    {                                     // a fact about nested itself
      return n <= 0 ? 0 : 1 + nested(nested(n - 1));
    }
 
-A recursive call inside ``forall`` or ``exists`` must decrease the measure
+A recursive call inside ``cppverify::forall`` or ``cppverify::exists`` must decrease the measure
 for every value of the bound variable. Spec functions may call each other in a
 cycle when they share a measure of the same length and every call within the
 cycle lowers it; the termination proof treats all of them as opaque:
 
 .. code-block:: cpp
 
-   spec bool is_odd(int n);
-   spec bool is_even(int n) decreases(n) { return n <= 0 ? n == 0 : is_odd(n - 1); }
-   spec bool is_odd(int n)  decreases(n) { return n <= 0 ? false : is_even(n - 1); }
+   cv::spec bool is_odd(int n);
+   cv::spec bool is_even(int n) cv::decreases(n) { return n <= 0 ? n == 0 : is_odd(n - 1); }
+   cv::spec bool is_odd(int n)  cv::decreases(n) { return n <= 0 ? false : is_even(n - 1); }
 
 A spec whose termination is not established has no definition, so a proof
 that relies on it is reported as not verified with reason
@@ -171,26 +171,26 @@ Proof and executable functions may also call each other in a cycle under the
 same rule, with calls inside the cycle reasoned about through the callees'
 contracts.
 
-A spec takes no ``pre``, ``modifies``, or ``aliases``: it is defined for every
-argument, and ``recommends`` states its intended domain.
+A spec takes no ``cppverify::pre``, ``cppverify::modifies``, or ``cppverify::aliases``: it is defined for every
+argument, and ``cppverify::recommends`` states its intended domain.
 
-A spec's ``post`` is a property of its value at every argument, proved
+A spec's ``cppverify::post`` is a property of its value at every argument, proved
 together with its termination by well-founded induction on the measure: a
 recursive call may assume the post only where its measure is lower than the
 caller's. That is what lets a nested call terminate:
 
 .. code-block:: cpp
 
-   spec int g(int n)
-     decreases(n)
-     post(result >= 0 && result <= (n < 0 ? 0 : n))
+   cv::spec int g(int n)
+     cv::decreases(n)
+     cv::post(cv::result >= 0 && cv::result <= (n < 0 ? 0 : n))
    {
      return n <= 0 ? 0 : g(g(n - 1));   // g(n - 1) < n by the post
    }
 
-   spec int m91(int n)                  // McCarthy's 91 function
-     decreases(n > 100 ? 0 : 101 - n)
-     post(n > 100 ? result == n - 10 : result == 91)
+   cv::spec int m91(int n)                  // McCarthy's 91 function
+     cv::decreases(n > 100 ? 0 : 101 - n)
+     cv::post(n > 100 ? cv::result == n - 10 : cv::result == 91)
    {
      return n > 100 ? n - 10 : m91(m91(n + 11));
    }
@@ -210,23 +210,23 @@ the unfolding of ``fib(j)`` names ``fib(j - 2)``.
 
 .. code-block:: cpp
 
-   spec int fib(int n)
-     decreases(n)
-     post(result >= 0)
+   cv::spec int fib(int n)
+     cv::decreases(n)
+     cv::post(cv::result >= 0)
    {
      return n <= 0 ? 0 : n == 1 ? 1 : fib(n - 2) + fib(n - 1);
    }
 
-   proof void fib_monotone(int i, int j)
-     pre(i <= j)
-     post(fib(i) <= fib(j))
-     decreases(j - i)
+   cv::proof void fib_monotone(int i, int j)
+     cv::pre(i <= j)
+     cv::post(fib(i) <= fib(j))
+     cv::decreases(j - i)
    {
      if (i < j)
        fib_monotone(i, j - 1);
    }
 
-``when(c)`` restricts a spec's definition to the domain ``c``. Termination is
+``cppverify::when(c)`` restricts a spec's definition to the domain ``c``. Termination is
 checked under ``c`` only, and outside it the spec's value is unspecified:
 nothing about it can be proved, and a counterexample that depends on it is
 reported as ``counterexample.unchecked``. A post is required, and assumed,
@@ -234,10 +234,10 @@ only within the domain:
 
 .. code-block:: cpp
 
-   spec int log2(int n)
-     when(n >= 1)
-     decreases(n)
-     post(result >= 0 && result < n)
+   cv::spec int log2(int n)
+     cv::when(n >= 1)
+     cv::decreases(n)
+     cv::post(cv::result >= 0 && cv::result < n)
    {
      return n == 1 ? 0 : 1 + log2(n / 2);   // no base case needed for n <= 0
    }
@@ -252,7 +252,7 @@ four kinds of goal without help:
 - **Closed applications** such as ``sum(15000) == 112507500`` or
   ``fib(90) == ...`` are computed: the solver receives the defining equation
   at every argument the evaluation reaches, up to 20000 of them.
-- **Bounded domains.** For ``pre(n >= 0 && n <= 200)``, the solver first proves
+- **Bounded domains.** For ``cppverify::pre(n >= 0 && n <= 200)``, the solver first proves
   the domain bounded, then receives the definitions across it and checks every
   value. Domains of up to about a thousand values are settled this way.
 - **Counterexamples.** A failure is reported only after the counterexample is
@@ -275,26 +275,26 @@ inductions by itself before reporting it:
 
 - **Following a recursive spec** that the claim applies (shown as
   ``following fibo``): the claim is assumed at every value smaller in the
-  spec's ``decreases`` measure, and in particular at the values the spec's own
+  spec's ``cppverify::decreases`` measure, and in particular at the values the spec's own
   recursion visits. ``fibo(n)`` calls ``fibo(n - 1)`` and ``fibo(n - 2)``, so
   the claim is assumed at ``n - 1`` and ``n - 2``. The values are found by
   walking the definition: through the other specs of a mutual recursion, and
-  for a call inside ``forall`` or ``exists``, at every value the quantifier
+  for a call inside ``cppverify::forall`` or ``cppverify::exists``, at every value the quantifier
   ranges over.
 - **On an integer variable** (shown as ``on n``): strong induction, the claim
   assumed at every smaller nonnegative value of ``n``.
 
 Everything else stays fixed, and the assumption is the claim exactly as the
 function states it, so these never prove a false claim: the measure cannot
-decrease forever, which is what the ``decreases`` check of each spec shows.
+decrease forever, which is what the ``cppverify::decreases`` check of each spec shows.
 Only proofs are taken from these attempts. None of the lemmas below needs a
 body:
 
 .. code-block:: cpp
 
-   spec int fibo(int n)
-     decreases(n)
-     post(result >= 0)
+   cv::spec int fibo(int n)
+     cv::decreases(n)
+     cv::post(cv::result >= 0)
    {
      if (n <= 0) return 0;
      if (n == 1) return 1;
@@ -302,41 +302,41 @@ body:
    }
 
    // The claim at n - 1 and n - 2, as fibo recurses.
-   proof void grows(int n)
-     pre(n >= 3)
-     post(fibo(n) >= n - 1)
+   cv::proof void grows(int n)
+     cv::pre(n >= 3)
+     cv::post(fibo(n) >= n - 1)
    {
    }
 
-   spec int total(seq s)
-     decreases(s.len())
+   cv::spec int total(seq s)
+     cv::decreases(s.len())
    {
      return s.len() <= 0 ? 0 : total(s.subrange(0, s.len() - 1)) + s[s.len() - 1];
    }
 
    // The claim at the shorter sequence total recurses on.
-   proof void total_nonneg(seq s)
-     pre(forall(k, 0, s.len(), s[k] >= 0))
-     post(total(s) >= 0)
+   cv::proof void total_nonneg(seq s)
+     cv::pre(cv::forall(k, 0, s.len(), s[k] >= 0))
+     cv::post(total(s) >= 0)
    {
    }
 
    // Mutual recursion: even reaches even(n - 2) through odd.
-   spec bool odd(int n);
-   spec bool even(int n) decreases(n) { return n <= 0 ? true : odd(n - 1); }
-   spec bool odd(int n) decreases(n) { return n <= 0 ? false : even(n - 1); }
+   cv::spec bool odd(int n);
+   cv::spec bool even(int n) cv::decreases(n) { return n <= 0 ? true : odd(n - 1); }
+   cv::spec bool odd(int n) cv::decreases(n) { return n <= 0 ? false : even(n - 1); }
 
-   proof void even_mod(int n)
-     pre(n >= 0)
-     post(even(n) == (n % 2 == 0))
+   cv::proof void even_mod(int n)
+     cv::pre(n >= 0)
+     cv::post(even(n) == (n % 2 == 0))
    {
    }
 
    // A call under forall: the claim at every k the forall ranges over.
-   spec bool good(int n) decreases(n) { return n <= 0 || forall(k, 0, n, good(k)); }
+   cv::spec bool good(int n) cv::decreases(n) { return n <= 0 || cv::forall(k, 0, n, good(k)); }
 
-   proof void all_good(int n)
-     post(good(n))
+   cv::proof void all_good(int n)
+     cv::post(good(n))
    {
    }
 
@@ -350,7 +350,7 @@ body:
 The suffix ``[by induction following fibo]`` says which induction proved
 the claim (JSON ``"induction": "following fibo"``). Assignments in a body are
 substituted first, so ``return n * (n + 1);`` with
-``post(result == 2 * sum(n))`` is proved the same way.
+``cppverify::post(cppverify::result == 2 * sum(n))`` is proved the same way.
 
 Inductions cost time only where a claim would otherwise stay unresolved:
 verified and failed claims never try one. Each attempt gets a sixth of
@@ -367,17 +367,17 @@ smaller value is not the statement the step needs:
 
 .. code-block:: cpp
 
-   spec int accumulate(int n, int acc)
-     decreases(n)
+   cv::spec int accumulate(int n, int acc)
+     cv::decreases(n)
    {
      return n <= 0 ? acc : accumulate(n - 1, acc + n);
    }
 
-   spec int sum(int n) decreases(n) { return n <= 0 ? 0 : n + sum(n - 1); }
+   cv::spec int sum(int n) cv::decreases(n) { return n <= 0 ? 0 : n + sum(n - 1); }
 
-   proof void accumulated(int n)
-     pre(n >= 0 && n <= 25000)
-     post(accumulate(n, 0) == sum(n))
+   cv::proof void accumulated(int n)
+     cv::pre(n >= 0 && n <= 25000)
+     cv::post(accumulate(n, 0) == sum(n))
    {
    }
 
@@ -392,37 +392,37 @@ The message says, in order:
 2. which inductions the verifier tried, none of which proved it;
 3. a body to start a proof by induction from: a call of the function itself
    at each value the recursion reaches, under the condition that reaches it
-   and the function's precondition there, with the ``decreases`` clause to
+   and the function's precondition there, with the ``cppverify::decreases`` clause to
    add.
 
 Here the suggested body does not work as it stands: ``accumulate(n, 0)``
 continues as ``accumulate(n - 1, n)``, so the claim at ``n - 1``, which is
 about ``accumulate(n - 1, 0)``, does not help. The step needs a stronger
-statement, about every ``acc``. Prove that as a lemma whose ``decreases``
+statement, about every ``acc``. Prove that as a lemma whose ``cppverify::decreases``
 clause shrinks on each recursive call, and call it:
 
 .. code-block:: cpp
 
-   spec int accumulate(int n, int acc)
-     decreases(n)
+   cv::spec int accumulate(int n, int acc)
+     cv::decreases(n)
    {
      return n <= 0 ? acc : accumulate(n - 1, acc + n);
    }
 
-   spec int sum(int n) decreases(n) { return n <= 0 ? 0 : n + sum(n - 1); }
+   cv::spec int sum(int n) cv::decreases(n) { return n <= 0 ? 0 : n + sum(n - 1); }
 
-   proof void accumulate_adds(int n, long long acc)
-     pre(n >= 0 && acc >= 0 && acc + n * n <= 1000000000000)
-     post(accumulate(n, acc) == acc + sum(n))
-     decreases(n)
+   cv::proof void accumulate_adds(int n, long long acc)
+     cv::pre(n >= 0 && acc >= 0 && acc + n * n <= 1000000000000)
+     cv::post(accumulate(n, acc) == acc + sum(n))
+     cv::decreases(n)
    {
      if (n > 0)
        accumulate_adds(n - 1, acc + n);   // the claim at n - 1, for another acc
    }
 
-   proof void accumulated(int n)
-     pre(n >= 0 && n <= 25000)
-     post(accumulate(n, 0) == sum(n))
+   cv::proof void accumulated(int n)
+     cv::pre(n >= 0 && n <= 25000)
+     cv::post(accumulate(n, 0) == sum(n))
    {
      accumulate_adds(n, 0);
    }
@@ -435,8 +435,8 @@ clause shrinks on each recursive call, and call it:
 The recursive call is legal only at a smaller measure, and its postcondition
 is the induction hypothesis. A proof function computes with machine
 integers, so ``acc + n`` is checked for overflow; the precondition bounds it.
-Executable code calls a lemma from a ``ghost`` block, and a
-``contract_assert`` is proved where it stands and assumed afterwards, so a
+Executable code calls a lemma from a ``cppverify::ghost`` block, and a
+``cppverify::check`` is proved where it stands and assumed afterwards, so a
 chain of assertions in a ghost block works as a step-by-step proof:
 
 .. cppverify-example: fragment
@@ -444,11 +444,11 @@ chain of assertions in a ghost block works as a step-by-step proof:
 .. code-block:: cpp
 
    void check(int n)
-     pre(n >= 0 && n <= 25000)
+     cv::pre(n >= 0 && n <= 25000)
    {
-     ghost {
+     cv::ghost {
        accumulate_adds(n, 0);
-       contract_assert(accumulate(n, 0) == sum(n));
+       cv::check(accumulate(n, 0) == sum(n));
      }
    }
 
@@ -462,24 +462,24 @@ and some values are too large for that: ``pow2(1000000000)`` has a billion
 bits, and ``fibo(1000000000)`` takes a billion steps. The verifier then tries
 to prove, at that input, that the claim fails. With the input fixed, it may
 use only facts that are proved: the postconditions of specs, and the
-contracts of ``proof`` functions whose own verification succeeded. If the
+contracts of ``cppverify::proof`` functions whose own verification succeeded. If the
 solver proves it, the counterexample is confirmed:
 
 .. cppverify-example: fails small_power
 
 .. code-block:: cpp
 
-   spec int pow2(int n)
-     decreases(n)
-     post(result >= n + 1)
+   cv::spec int pow2(int n)
+     cv::decreases(n)
+     cv::post(cv::result >= n + 1)
    {
      return n <= 0 ? 1 : 2 * pow2(n - 1);
    }
 
    // pow2(n) >= n + 1 > 1000, at inputs of a billion and more.
-   proof void small_power(int n)
-     pre(n >= 1000000000)
-     post(pow2(n) < 1000)
+   cv::proof void small_power(int n)
+     cv::pre(n >= 1000000000)
+     cv::post(pow2(n) < 1000)
    {
    }
 
@@ -496,18 +496,18 @@ false claim from a true one that needs a proof, and says both:
 
 .. code-block:: cpp
 
-   spec int fibo(int n)
-     decreases(n)
-     post(result >= 0)
+   cv::spec int fibo(int n)
+     cv::decreases(n)
+     cv::post(cv::result >= 0)
    {
      if (n <= 0) return 0;
      if (n == 1) return 1;
      return fibo(n - 2) + fibo(n - 1);
    }
 
-   proof void fibo_small(int n)
-     pre(n >= 1000000000)
-     post(fibo(n) < 5)
+   cv::proof void fibo_small(int n)
+     cv::pre(n >= 1000000000)
+     cv::post(fibo(n) < 5)
    {
    }
 
@@ -527,27 +527,27 @@ Which to do depends on what you believe:
 
 .. code-block:: cpp
 
-   spec int fibo(int n)
-     decreases(n)
-     post(result >= 0)
+   cv::spec int fibo(int n)
+     cv::decreases(n)
+     cv::post(cv::result >= 0)
    {
      if (n <= 0) return 0;
      if (n == 1) return 1;
      return fibo(n - 2) + fibo(n - 1);
    }
 
-   proof void fibo_at_least_5(int n)
-     pre(n >= 5)
-     post(fibo(n) >= 5)
-     decreases(n)
+   cv::proof void fibo_at_least_5(int n)
+     cv::pre(n >= 5)
+     cv::post(fibo(n) >= 5)
+     cv::decreases(n)
    {
      if (n >= 6)
        fibo_at_least_5(n - 1);
    }
 
-   proof void fibo_small(int n)
-     pre(n >= 1000000000)
-     post(fibo(n) < 5)
+   cv::proof void fibo_small(int n)
+     cv::pre(n >= 1000000000)
+     cv::post(fibo(n) < 5)
    {
    }
 
@@ -573,26 +573,26 @@ those assumptions. A lemma over memory is used the same way:
 
 .. code-block:: cpp
 
-   spec int total(const int *a, int n)
-     reads(a, n)
-     decreases(n)
+   cv::spec int total(const int *a, int n)
+     cv::reads(a, n)
+     cv::decreases(n)
    {
      return n <= 0 ? 0 : total(a, n - 1) + a[n - 1];
    }
 
-   proof void total_nonneg(const int *a, int n)
-     pre(valid(a, n) && forall(k, 0, n, a[k] >= 0))
-     post(total(a, n) >= 0)
-     decreases(n)
+   cv::proof void total_nonneg(const int *a, int n)
+     cv::pre(valid(a, n) && cv::forall(k, 0, n, a[k] >= 0))
+     cv::post(total(a, n) >= 0)
+     cv::decreases(n)
    {
      if (n > 0)
        total_nonneg(a, n - 1);
    }
 
-   proof void total_negative(const int *a, int n)
-     pre(valid(a, n) && n >= 1000000000)
-     pre(forall(k, 0, n, a[k] >= 0))
-     post(total(a, n) < 0)
+   cv::proof void total_negative(const int *a, int n)
+     cv::pre(valid(a, n) && n >= 1000000000)
+     cv::pre(cv::forall(k, 0, n, a[k] >= 0))
+     cv::post(total(a, n) < 0)
    {
    }
 
@@ -609,7 +609,7 @@ In JSON, an unresolved verdict gives the proposed input and the value it
 could not compute as ``unchecked_counterexample``, and a confirmed failure
 lists the lemmas it used as ``confirmed_with``.
 
-A spec's own ``post``, ``decreases``, and ``reads`` clauses are checked
+A spec's own ``cppverify::post``, ``cppverify::decreases``, and ``cppverify::reads`` clauses are checked
 without a function body to put a lemma call in. A proof block after the
 clause gives them one. ``mul`` below is multiplication by repeated
 addition; its commutativity needs ``mul(a, b) == a * b`` at both orders,
@@ -617,32 +617,32 @@ an induction the verifier does not find by itself:
 
 .. code-block:: cpp
 
-   spec int mul(int a, int b) decreases(b) { return b <= 0 ? 0 : mul(a, b - 1) + a; }
+   cv::spec int mul(int a, int b) cv::decreases(b) { return b <= 0 ? 0 : mul(a, b - 1) + a; }
 
-   proof void mul_is(int a, int b)
-     post(b < 0 || mul(a, b) == a * b)
-     decreases(b)
+   cv::proof void mul_is(int a, int b)
+     cv::post(b < 0 || mul(a, b) == a * b)
+     cv::decreases(b)
    {
      if (b > 0)
        mul_is(a, b - 1);
    }
 
-   spec int area(int a, int b)
-     post(a < 0 || b < 0 || result == mul(b, a)) by { mul_is(a, b); mul_is(b, a); }
+   cv::spec int area(int a, int b)
+     cv::post(a < 0 || b < 0 || cv::result == mul(b, a)) by { mul_is(a, b); mul_is(b, a); }
    {
      return mul(a, b);
    }
 
 Without the block, ``spec post: area`` is unresolved (``spec.fuel``); with
-it, it is verified. In the block, ``result`` is the value the body returns,
+it, it is verified. In the block, ``cppverify::result`` is the value the body returns,
 and naming the spec at a smaller measure uses the induction hypothesis
-there. ``decreases(...) by { ... }`` helps a termination proof the same
-way, and ``reads(p, n) by { ... }`` a frame. The block of an inductive
+there. ``cppverify::decreases(...) by { ... }`` helps a termination proof the same
+way, and ``cppverify::reads(p, n) by { ... }`` a frame. The block of an inductive
 predicate's postcondition is its induction step.
 
 A block may also call a lemma about the spec itself. The two proofs then
 rest on each other, which is sound only as an induction: they form a
-cluster, as in Dafny, and must share ``decreases`` clauses of one length.
+cluster, as in Dafny, and must share ``cppverify::decreases`` clauses of one length.
 Every call between them lowers the measure, and the lemma sees the spec's
 definition and postcondition only where the spec's measure is below its
 own. Lexicographic measures put the spec just below the lemma at the same
@@ -650,18 +650,18 @@ argument:
 
 .. code-block:: cpp
 
-   proof void total_nonneg(int n);
+   cv::proof void total_nonneg(int n);
 
-   spec int total(int n)
-     decreases(n, 0)
-     post(result >= 0) by { if (n > 0) total_nonneg(n - 1); }
+   cv::spec int total(int n)
+     cv::decreases(n, 0)
+     cv::post(cv::result >= 0) by { if (n > 0) total_nonneg(n - 1); }
    {
      return n <= 0 ? 0 : total(n - 1) + n;
    }
 
-   proof void total_nonneg(int n)
-     decreases(n, 1)
-     post(total(n) >= 0)
+   cv::proof void total_nonneg(int n)
+     cv::decreases(n, 1)
+     cv::post(total(n) >= 0)
    {
      if (n > 0)
        total_nonneg(n - 1);
@@ -692,22 +692,22 @@ Frames of heap-reading specs
 A spec that reads through a pointer is evaluated in the heap state of each
 call. After a write, the solver knows the value of the written cell but not
 that a recursive spec over other cells is unchanged: that is an induction over
-the spec. ``reads(p, n)`` declares the cells ``p[0..n)`` the spec depends on,
+the spec. ``cppverify::reads(p, n)`` declares the cells ``p[0..n)`` the spec depends on,
 and every write outside them then leaves the spec unchanged:
 
 .. code-block:: cpp
 
-   spec int sum(const int *p, int n)
-     reads(p, n)
-     decreases(n)
+   cv::spec int sum(const int *p, int n)
+     cv::reads(p, n)
+     cv::decreases(n)
    {
      return n <= 0 ? 0 : sum(p, n - 1) + p[n - 1];
    }
 
    void append(int *p, int n)
-     pre(n >= 0 && n <= 100 && valid(p, n + 1))
-     modifies(p[n])
-     post(sum(p, n) == old(sum(p, n)))   // verified: p[n] is outside p[0..n)
+     cv::pre(n >= 0 && n <= 100 && valid(p, n + 1))
+     cv::modifies(p[n])
+     cv::post(sum(p, n) == cv::old(sum(p, n)))   // verified: p[n] is outside p[0..n)
    {
      p[n] = 7;
    }
@@ -715,17 +715,17 @@ and every write outside them then leaves the spec unchanged:
 The clause is checked against the body: every load, under the conditions
 that reach it, and every range that a heap-reading callee reads must lie in
 the declared cells, so a spec may call another heap-reading spec only if that
-spec has a ``reads`` clause too. A wrong clause fails with a counterexample,
+spec has a ``cppverify::reads`` clause too. A wrong clause fails with a counterexample,
 and a proof that used its frames is reported with reason ``spec.reads``. The
 range is a pointer and an element count fixed by the arguments; it cannot
-depend on the heap. Several ``reads`` clauses declare the union of their
+depend on the heap. Several ``cppverify::reads`` clauses declare the union of their
 ranges.
 
-Structured proofs: ``by`` and ``calc``
---------------------------------------
+Structured proofs: ``by`` and ``cppverify::calc``
+-------------------------------------------------
 
 A lemma call in a ghost block adds its postcondition to everything after it.
-``contract_assert(c) by { ... }`` keeps a proof local instead: the block may
+``cppverify::check(c) by { ... }`` keeps a proof local instead: the block may
 call lemmas, assert intermediate facts, and declare locals, and only ``c``
 holds afterwards, as with Verus's and Dafny's ``assert ... by``:
 
@@ -733,53 +733,53 @@ holds afterwards, as with Verus's and Dafny's ``assert ... by``:
 
 .. code-block:: cpp
 
-   spec int sq(int x) { return x * x; }
+   cv::spec int sq(int x) { return x * x; }
 
-   proof void sq_monotone(int a, int b)
-     pre(0 <= a && a <= b)
-     post(sq(a) <= sq(b))
+   cv::proof void sq_monotone(int a, int b)
+     cv::pre(0 <= a && a <= b)
+     cv::post(sq(a) <= sq(b))
    {
    }
 
    int bigger(int a, int b)
-     pre(0 <= a && a <= b && b <= 1000)
-     post(result == 1)
+     cv::pre(0 <= a && a <= b && b <= 1000)
+     cv::post(cv::result == 1)
    {
-     contract_assert(sq(a) <= sq(b)) by {
+     cv::check(sq(a) <= sq(b)) by {
        sq_monotone(a, b);
      }
      return 1;
    }
 
 A lemma's precondition is checked where the proof calls it. When the claim
-is a ``forall``, the block proves it for one arbitrary value of the bound
+is a ``cppverify::forall``, the block proves it for one arbitrary value of the bound
 variable, which it can name (Verus's ``assert forall ... by``):
 
 .. code-block:: cpp
 
-   proof void pair_ordered(const int *a, int n, int i, int j)
-     pre(valid(a, n) && n <= 1000 && 0 <= i && i <= j && j < n)
-     pre(forall(k, 0, n - 1, a[k] <= a[k + 1]))
-     post(a[i] <= a[j])
-     decreases(j - i)
+   cv::proof void pair_ordered(const int *a, int n, int i, int j)
+     cv::pre(valid(a, n) && n <= 1000 && 0 <= i && i <= j && j < n)
+     cv::pre(cv::forall(k, 0, n - 1, a[k] <= a[k + 1]))
+     cv::post(a[i] <= a[j])
+     cv::decreases(j - i)
    {
      if (i < j)
        pair_ordered(a, n, i, j - 1);
    }
 
-   proof void below_last(const int *a, int n)
-     pre(valid(a, n) && n >= 1 && n <= 1000)
-     pre(forall(k, 0, n - 1, a[k] <= a[k + 1]))
-     post(forall(k, 0, n, a[k] <= a[n - 1]))
+   cv::proof void below_last(const int *a, int n)
+     cv::pre(valid(a, n) && n >= 1 && n <= 1000)
+     cv::pre(cv::forall(k, 0, n - 1, a[k] <= a[k + 1]))
+     cv::post(cv::forall(k, 0, n, a[k] <= a[n - 1]))
    {
-     contract_assert(forall(k, 0, n, a[k] <= a[n - 1])) by {
+     cv::check(cv::forall(k, 0, n, a[k] <= a[n - 1])) by {
        pair_ordered(a, n, k, n - 1);
      }
    }
 
 Inside the block ``k`` lies in ``[0, n)`` and cannot be assigned; a lemma
 call there is an instance for that ``k``, and since ``k`` is arbitrary the
-whole ``forall`` follows. ``calc`` chains
+whole ``cppverify::forall`` follows. ``cppverify::calc`` chains
 such steps, each with an optional proof block, and concludes the relation
 between its first and last terms: ``==`` when every step is ``==``, ``<`` (or
 ``>``) when some step is strict, otherwise ``<=`` (or ``>=``):
@@ -789,9 +789,9 @@ between its first and last terms: ``==`` when every step is ``==``, ``<`` (or
 .. code-block:: cpp
 
    void chain(int a, int b, int c)
-     pre(0 <= a && a <= b && b <= c && c <= 1000)
+     cv::pre(0 <= a && a <= b && b <= c && c <= 1000)
    {
-     calc {
+     cv::calc {
        sq(a);
        <= { sq_monotone(a, b); }
        sq(b);
@@ -799,13 +799,13 @@ between its first and last terms: ``==`` when every step is ``==``, ``<`` (or
        sq(c);
        == c * c;
      }
-     contract_assert(sq(a) <= c * c);
+     cv::check(sq(a) <= c * c);
    }
 
 Quantifiers over all integers
 -----------------------------
 
-``forall(k, body)`` and ``exists(k, body)`` range over all mathematical
+``cppverify::forall(k, body)`` and ``cppverify::exists(k, body)`` range over all mathematical
 integers. They state lemmas without an artificial range and let a caller
 instantiate them anywhere:
 
@@ -813,15 +813,15 @@ instantiate them anywhere:
 
 .. code-block:: cpp
 
-   proof void sq_nonnegative_all()
-     post(forall(k, sq(k) >= 0))
+   cv::proof void sq_nonnegative_all()
+     cv::post(cv::forall(k, sq(k) >= 0))
    {
    }
 
    void uses_lemma(int a)
    {
-     ghost { sq_nonnegative_all(); }
-     contract_assert(sq(a + 7) >= 0);
+     cv::ghost { sq_nonnegative_all(); }
+     cv::check(sq(a + 7) >= 0);
    }
 
 A counterexample to an unbounded quantifier is certified exactly when its
@@ -833,46 +833,46 @@ Triggers
 --------
 
 The solver uses a quantified fact by instantiating it at terms that match a
-*pattern*. Usually it picks the patterns itself; ``trigger(term)`` inside the
+*pattern*. Usually it picks the patterns itself; ``cppverify::trigger(term)`` inside the
 body chooses one, as Verus's ``#[trigger]`` does:
 
 .. code-block:: cpp
 
    void positive(const int *a, int n)
-     pre(valid(a, n) && n >= 1 && n <= 1000)
-     pre(forall(k, 0, n, trigger(a[k]) > 0))
+     cv::pre(valid(a, n) && n >= 1 && n <= 1000)
+     cv::pre(cv::forall(k, 0, n, cv::trigger(a[k]) > 0))
    {
-     contract_assert(a[n - 1] > 0);
+     cv::check(a[n - 1] > 0);
    }
 
 A trigger must be a memory read, a collection read, or a call of a recursive
 spec, and must mention a quantified variable; any other mark draws a warning
 and is ignored. A trigger whose instances create new matching terms (for
-example ``trigger(g(k))`` with a fact about ``g(k + 1)``) makes a *matching
+example ``cppverify::trigger(g(k))`` with a fact about ``g(k + 1)``) makes a *matching
 loop*, and the query times out. ``--profile-quantifiers`` reports how often
 each quantifier of an unresolved query was instantiated, which points at the
 culprit (see :doc:`ch16-when-verification-fails`).
 
-``choose``
-----------
+``cppverify::choose``
+---------------------
 
-``choose(k, body)`` is an integer for which ``body`` holds, when there is one,
+``cppverify::choose(k, body)`` is an integer for which ``body`` holds, when there is one,
 and otherwise some unspecified integer (Hilbert's ε). ``choose(k, lo, hi,
 body)`` chooses in ``[lo, hi)``:
 
 .. code-block:: cpp
 
-   spec int index_of(const int *a, int n, int x)
+   cv::spec int index_of(const int *a, int n, int x)
    {
-     return choose(k, 0, n, a[k] == x);
+     return cv::choose(k, 0, n, a[k] == x);
    }
 
    void found(const int *a, int n, int x)
-     pre(valid(a, n) && n >= 1 && n <= 1000)
-     pre(exists(k, 0, n, a[k] == x))
+     cv::pre(valid(a, n) && n >= 1 && n <= 1000)
+     cv::pre(cv::exists(k, 0, n, a[k] == x))
    {
-     contract_assert(0 <= index_of(a, n, x) && index_of(a, n, x) < n);
-     contract_assert(a[index_of(a, n, x)] == x);
+     cv::check(0 <= index_of(a, n, x) && index_of(a, n, x) < n);
+     cv::check(a[index_of(a, n, x)] == x);
    }
 
 A choice is a function of the values its body mentions, so it is the same
@@ -895,20 +895,20 @@ sequence can record what a loop has seen:
    using cppverify::seq;
 
    int count_positive(const int *a, int n)
-     pre(valid(a, n) && n >= 0 && n <= 1000)
-     post(0 <= result && result <= n)
+     cv::pre(valid(a, n) && n >= 0 && n <= 1000)
+     cv::post(0 <= cv::result && cv::result <= n)
    {
-     ghost seq seen = cppverify::seq_empty();
+     cv::ghost seq seen = cppverify::seq_empty();
      int c = 0;
      for (int i = 0; i < n; i = i + 1)
-       invariant(0 <= i && i <= n && 0 <= c && c <= i)
-       invariant(seen.len() == i)
-       invariant(forall(k, 0, i, seen[k] == a[k]))
-       decreases(n - i)
+       cv::invariant(0 <= i && i <= n && 0 <= c && c <= i)
+       cv::invariant(seen.len() == i)
+       cv::invariant(cv::forall(k, 0, i, seen[k] == a[k]))
+       cv::decreases(n - i)
      {
        if (a[i] > 0)
          c = c + 1;
-       ghost { seen = seen.push(a[i]); }
+       cv::ghost { seen = seen.push(a[i]); }
      }
      return c;
    }
@@ -917,14 +917,14 @@ Spec functions over collections recurse on their size:
 
 .. code-block:: cpp
 
-   spec int sum(seq s)
-     decreases(s.len())
+   cv::spec int sum(seq s)
+     cv::decreases(s.len())
    {
      return s.len() <= 0 ? 0 : sum(s.subrange(0, s.len() - 1)) + s[s.len() - 1];
    }
 
-   proof void sum_push(seq s, int x)
-     post(sum(s.push(x)) == sum(s) + x)
+   cv::proof void sum_push(seq s, int x)
+     cv::post(sum(s.push(x)) == sum(s) + x)
    {
    }
 
@@ -942,28 +942,28 @@ compare with ``==`` and ``!=``. Facts about them are proved like any other:
 
 .. code-block:: cpp
 
-   proof void set_facts(set s, int x, int y)
-     pre(x != y)
-     post(s.insert(x).contains(x))
-     post(s.insert(x).remove(y).contains(x))
-     post(s.subset_of(s.unite(set_empty().insert(y))))
-     post(!s.difference(s).contains(x))
+   cv::proof void set_facts(set s, int x, int y)
+     cv::pre(x != y)
+     cv::post(s.insert(x).contains(x))
+     cv::post(s.insert(x).remove(y).contains(x))
+     cv::post(s.subset_of(s.unite(set_empty().insert(y))))
+     cv::post(!s.difference(s).contains(x))
    {
    }
 
-   proof void multiset_facts(multiset m, int x, int y)
-     pre(x != y)
-     post(m.insert(x).count(x) == m.count(x) + 1)
-     post(m.insert(x).count(y) == m.count(y))
-     post(m.insert(x).remove(x) == m)
+   cv::proof void multiset_facts(multiset m, int x, int y)
+     cv::pre(x != y)
+     cv::post(m.insert(x).count(x) == m.count(x) + 1)
+     cv::post(m.insert(x).count(y) == m.count(y))
+     cv::post(m.insert(x).remove(x) == m)
    {
    }
 
-   proof void map_facts(map m, int k, int v, int j)
-     pre(j != k)
-     post(m.insert(k, v)[k] == v && m.insert(k, v).contains(k))
-     post(m.insert(k, v)[j] == m[j])
-     post(!m.remove(k).contains(k))
+   cv::proof void map_facts(map m, int k, int v, int j)
+     cv::pre(j != k)
+     cv::post(m.insert(k, v)[k] == v && m.insert(k, v).contains(k))
+     cv::post(m.insert(k, v)[j] == m[j])
+     cv::post(!m.remove(k).contains(k))
    {
    }
 
@@ -973,19 +973,19 @@ invariant can say what a counter counts:
 .. code-block:: cpp
 
    int count_of(const int *a, int n, int x)
-     pre(valid(a, n) && n >= 0 && n <= 1000)
-     post(0 <= result && result <= n)
+     cv::pre(valid(a, n) && n >= 0 && n <= 1000)
+     cv::post(0 <= cv::result && cv::result <= n)
    {
-     ghost multiset bag = multiset_empty();
+     cv::ghost multiset bag = multiset_empty();
      int c = 0;
      for (int i = 0; i < n; i = i + 1)
-       invariant(0 <= i && i <= n && 0 <= c && c <= i)
-       invariant(c == bag.count(x))
-       decreases(n - i)
+       cv::invariant(0 <= i && i <= n && 0 <= c && c <= i)
+       cv::invariant(c == bag.count(x))
+       cv::decreases(n - i)
      {
        if (a[i] == x)
          c = c + 1;
-       ghost { bag = bag.insert(a[i]); }
+       cv::ghost { bag = bag.insert(a[i]); }
      }
      return c;
    }
@@ -1002,7 +1002,7 @@ Inductive predicates
 
 Some predicates have no measure: whether ``b`` can be reached from ``a`` by
 steps ``x -> x + 1`` and ``x -> 2 * x`` is a question about paths, not about a
-smaller argument. ``inductive`` makes a ``spec`` returning ``bool`` the
+smaller argument. ``cppverify::inductive`` makes a ``cppverify::spec`` returning ``bool`` the
 *least* predicate its body defines (Dafny's ``least predicate``): true exactly
 where a finite derivation shows it.
 
@@ -1010,31 +1010,31 @@ where a finite derivation shows it.
 
 .. code-block:: cpp
 
-   spec bool edge(int a, int b) { return b == a + 1 || b == 2 * a; }
+   cv::spec bool edge(int a, int b) { return b == a + 1 || b == 2 * a; }
 
-   spec bool reach(int a, int b)
-     inductive
-     post(!result || a < 0 || a <= b)
+   cv::spec bool reach(int a, int b)
+     cv::inductive
+     cv::post(!cv::result || a < 0 || a <= b)
    {
-     return a == b || exists(c, edge(a, c) && reach(c, b));
+     return a == b || cv::exists(c, edge(a, c) && reach(c, b));
    }
 
-   proof void three_reaches_twelve()
-     post(reach(3, 12))
+   cv::proof void three_reaches_twelve()
+     cv::post(reach(3, 12))
    {
-     contract_assert(reach(12, 12));
-     contract_assert(reach(6, 12));
+     cv::check(reach(12, 12));
+     cv::check(reach(6, 12));
    }
 
-   proof void no_way_back(int a, int b)
-     pre(a >= 0 && b < a)
-     post(!reach(a, b))
+   cv::proof void no_way_back(int a, int b)
+     cv::pre(a >= 0 && b < a)
+     cv::post(!reach(a, b))
    {
    }
 
-   proof void wrong_way(int a, int b)
-     pre(a >= 0 && reach(a, b))
-     post(a < b)
+   cv::proof void wrong_way(int a, int b)
+     cv::pre(a >= 0 && reach(a, b))
+     cv::post(a < b)
    {
    }
 
@@ -1062,26 +1062,26 @@ check computes the predicate: ``reach(3, 12)`` holds by the derivation
 ``3 -> 6 -> 12``, and the solver receives the unfoldings along it, so the
 proof needs no body. When a verdict still depends on the predicate, the
 verifier unfolds the applications inside the unfoldings too, one level more
-at a time, up to four levels; ``reveal_with_fuel(reach, n)`` asks for ``n``
+at a time, up to four levels; ``cppverify::reveal_with_fuel(reach, n)`` asks for ``n``
 levels from the start.
 
 .. cppverify-example: with reach
 
 .. code-block:: cpp
 
-   proof void three_reaches_twelve_again() post(reach(3, 12)) {}
+   cv::proof void three_reaches_twelve_again() cv::post(reach(3, 12)) {}
 
-   proof void doubles(int b)
-     pre(b >= 1)
-     post(reach(b, 2 * b + 1))
+   cv::proof void doubles(int b)
+     cv::pre(b >= 1)
+     cv::post(reach(b, 2 * b + 1))
    {
    }
 
-   proof void far(int b)
-     pre(b == 64)
-     post(reach(1, b))
+   cv::proof void far(int b)
+     cv::pre(b == 64)
+     cv::post(reach(1, b))
    {
-     ghost { reveal_with_fuel(reach, 7); }
+     cv::ghost { cv::reveal_with_fuel(reach, 7); }
    }
 
 .. code-block:: text
@@ -1108,7 +1108,7 @@ and false by the postcondition: ``reach(5, 3)`` cannot hold because
 ``5 <= 3`` does not.
 
 The predicate may occur in its body only positively (as a conjunct, a
-disjunct, a branch, or under ``exists`` or a bounded ``forall``), which makes
+disjunct, a branch, or under ``cppverify::exists`` or a bounded ``cppverify::forall``), which makes
 the least predicate exist and equal its body. That equality is what the
 proofs above use, and it is proved, not assumed: for each predicate the
 verifier generates proofs of three rules, by induction on the height of
@@ -1126,14 +1126,14 @@ read memory:
 
 .. code-block:: cpp
 
-   spec bool ev(int n);
-   spec bool od(int n) inductive { return n == 1 || ev(n - 1); }
-   spec bool ev(int n) inductive { return n == 0 || od(n - 1); }
+   cv::spec bool ev(int n);
+   cv::spec bool od(int n) cv::inductive { return n == 1 || ev(n - 1); }
+   cv::spec bool ev(int n) cv::inductive { return n == 0 || od(n - 1); }
 
    struct node { int value; node *next; };
 
    // q is reached from p by following next.
-   spec bool segment(const node *p, const node *q) inductive {
+   cv::spec bool segment(const node *p, const node *q) cv::inductive {
      return p == q || (p != nullptr && segment(p->next, q));
    }
 
@@ -1142,19 +1142,19 @@ derivation of ``reach(a, b)`` extends every path from ``b``:
 
 .. code-block:: cpp
 
-   spec bool edge(int a, int b) { return b == a + 1 || b == 2 * a; }
+   cv::spec bool edge(int a, int b) { return b == a + 1 || b == 2 * a; }
 
-   spec bool reach(int a, int b);
-   spec bool reach(int a, int b)
-     inductive
-     post(!result || forall(c, !reach(b, c) || reach(a, c)))
+   cv::spec bool reach(int a, int b);
+   cv::spec bool reach(int a, int b)
+     cv::inductive
+     cv::post(!cv::result || cv::forall(c, !reach(b, c) || reach(a, c)))
    {
-     return a == b || exists(c, edge(a, c) && reach(c, b));
+     return a == b || cv::exists(c, edge(a, c) && reach(c, b));
    }
 
-   proof void chain(int a, int b, int c)
-     pre(reach(a, b) && reach(b, c))
-     post(reach(a, c))
+   cv::proof void chain(int a, int b, int c)
+     cv::pre(reach(a, b) && reach(b, c))
+     cv::post(reach(a, c))
    {
    }
 
@@ -1162,14 +1162,14 @@ In the induction, the premise ``reach(c, b)`` already extends every path
 from ``b`` (the induction hypothesis), and ``reach(a, c2)`` follows from
 ``edge(a, c)`` and ``reach(c, c2)`` by the predicate's proved unfolding. The
 postcondition itself is never assumed while it is being proved, so a false
-one such as ``post(!result || !reach(a, b))`` is never proved: it fails, with
+one such as ``cppverify::post(!cppverify::result || !reach(a, b))`` is never proved: it fails, with
 a derivation of height 1 where ``a == b``. (The forward declaration lets the
 postcondition name the predicate.)
 
 ``constexpr`` as spec
 ---------------------
 
-Any ``constexpr`` function is usable in ``pre``/``post`` **directly** — no separate ``spec``
+Any ``constexpr`` function is usable in ``cppverify::pre``/``cppverify::post`` **directly** — no separate ``cppverify::spec``
 re-declaration:
 
 .. code-block:: cpp
@@ -1177,11 +1177,11 @@ re-declaration:
    constexpr int square(int x) { return x * x; }
 
    int area(int side)
-     pre(side >= 0 && side <= 1000)
-     post(result == square(side))
+     cv::pre(side >= 0 && side <= 1000)
+     cv::post(cv::result == square(side))
    { return side * side; }
 
 One body does double duty: the same ``constexpr`` runs at execution time and defines the spec, so
 the two can never silently diverge (Verus requires a separate ``spec fn``). A lifted ``constexpr``
-keeps **machine** integer semantics — honest overflow — unlike an explicit ``spec`` (mathematical
+keeps **machine** integer semantics — honest overflow — unlike an explicit ``cppverify::spec`` (mathematical
 ``Int``); see :doc:`../../language/integers`.
