@@ -1,6 +1,6 @@
 int stable_identity(int value)
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
-  contract_assert(value == value);
+  cppverify::check(value == value);
   return value;
 }
