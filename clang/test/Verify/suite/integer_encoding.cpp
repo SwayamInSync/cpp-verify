@@ -1,9 +1,9 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only -Wno-shift-count-negative %s
-// RUN: %cpp-verify --int-encoding=integer --lower-only --dump-ir=4 %s 2>&1 | FileCheck %s --check-prefix=INT
-// RUN: %cpp-verify --lower-only --dump-ir=4 %s 2>&1 | FileCheck %s --check-prefix=AUTO
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefixes=VERIFY,WRAP,DECIDED,MODEL
-// RUN: not %cpp-verify --int-encoding=bitvector %s 2>&1 | FileCheck %s --check-prefixes=VERIFY,WRAP,DECIDED,MODEL
-// RUN: not %cpp-verify --int-encoding=integer %s 2>&1 | FileCheck %s --check-prefixes=VERIFY,WRAP,UNDECIDED,MODEL
+// RUN: %cpp-verify --int-encoding=integer --lower-only --dump-ir=4 %s -- 2>&1 | FileCheck %s --check-prefix=INT
+// RUN: %cpp-verify --lower-only --dump-ir=4 %s -- 2>&1 | FileCheck %s --check-prefix=AUTO
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefixes=VERIFY,WRAP,DECIDED,MODEL
+// RUN: not %cpp-verify --int-encoding=bitvector %s -- 2>&1 | FileCheck %s --check-prefixes=VERIFY,WRAP,DECIDED,MODEL
+// RUN: not %cpp-verify --int-encoding=integer %s -- 2>&1 | FileCheck %s --check-prefixes=VERIFY,WRAP,UNDECIDED,MODEL
 
 // All encodings are exact, so decided verdicts and counterexamples agree.
 
