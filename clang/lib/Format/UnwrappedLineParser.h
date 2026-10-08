@@ -16,6 +16,8 @@
 #define LLVM_CLANG_LIB_FORMAT_UNWRAPPEDLINEPARSER_H
 
 #include "Macros.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/StringSet.h"
 #include <stack>
 
 namespace clang {
@@ -98,6 +100,9 @@ public:
 
 class FormatTokenSource;
 
+/// Where cpp-verify clauses may follow.
+enum class CppVerifyClausePosition { Function, Loop, DoWhile };
+
 class UnwrappedLineParser {
 public:
   UnwrappedLineParser(SourceManager &SourceMgr, const FormatStyle &Style,
@@ -170,6 +175,12 @@ private:
   bool parseStructLike();
   bool parseRequires(bool SeenEqual);
   void parseRequiresClause();
+  // cpp-verify clauses (CppVerifyClauses.cpp).
+  bool tryToParseCppVerifyClauses(CppVerifyClausePosition Where);
+  bool mayFollowCppVerifyDeclarator(const FormatToken &Previous) const;
+  void noteCppVerifyAlias();
+  llvm::StringSet<> CppVerifyAliases;
+  llvm::SmallPtrSet<const FormatToken *, 8> CppVerifyClauseEnds;
   void parseRequiresExpression();
   void parseConstraintExpression();
   void parseCppExportBlock();
