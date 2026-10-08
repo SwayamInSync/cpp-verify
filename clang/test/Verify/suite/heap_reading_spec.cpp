@@ -7,11 +7,11 @@
 
 // Each heap-reading spec call reads the heap state a load at that point would.
 
-spec bool valid(const int *p, int n) { return true; }
-spec bool valid(int *p, int n) { return true; }
+cppverify::spec bool valid(const int *p, int n) { return true; }
+cppverify::spec bool valid(int *p, int n) { return true; }
 
-spec int sum(const int *p, int n)
-  decreases(n)
+cppverify::spec int sum(const int *p, int n)
+  cppverify::decreases(n)
 {
   if (n <= 0)
     return 0;
@@ -26,16 +26,16 @@ spec int sum(const int *p, int n)
 // VC-NEXT: __spec_heap : heap
 
 int total(const int *p, int n)
-  pre(n >= 0 && n <= 1000 && valid(p, n))
-  pre(forall(j, 0, n, -1000 <= p[j] && p[j] <= 1000))
-  post(result == sum(p, n))
+  cppverify::pre(n >= 0 && n <= 1000 && valid(p, n))
+  cppverify::pre(cppverify::forall(j, 0, n, -1000 <= p[j] && p[j] <= 1000))
+  cppverify::post(cppverify::result == sum(p, n))
 {
   int acc = 0;
   int i = 0;
   while (i < n)
-    invariant(0 <= i && i <= n && acc == sum(p, i))
-    invariant(-1000 * i <= acc && acc <= 1000 * i)
-    decreases(n - i)
+    cppverify::invariant(0 <= i && i <= n && acc == sum(p, i))
+    cppverify::invariant(-1000 * i <= acc && acc <= 1000 * i)
+    cppverify::decreases(n - i)
   {
     acc = acc + p[i];
     i = i + 1;
@@ -48,16 +48,16 @@ int total(const int *p, int n)
 // VC: features {{.*}}heap-functions
 
 int skip_first(const int *p, int n)
-  pre(n >= 0 && n <= 1000 && valid(p, n))
-  pre(forall(j, 0, n, -1000 <= p[j] && p[j] <= 1000))
-  post(result == sum(p, n))
+  cppverify::pre(n >= 0 && n <= 1000 && valid(p, n))
+  cppverify::pre(cppverify::forall(j, 0, n, -1000 <= p[j] && p[j] <= 1000))
+  cppverify::post(cppverify::result == sum(p, n))
 {
   int acc = 0;
   int i = 0;
   while (i < n)
-    invariant(0 <= i && i <= n && acc == sum(p, i))
-    invariant(-1000 * i <= acc && acc <= 1000 * i)
-    decreases(n - i)
+    cppverify::invariant(0 <= i && i <= n && acc == sum(p, i))
+    cppverify::invariant(-1000 * i <= acc && acc <= 1000 * i)
+    cppverify::decreases(n - i)
   {
     if (i > 0)
       acc = acc + p[i];
@@ -70,24 +70,24 @@ int skip_first(const int *p, int n)
 // REPLAY-DAG: verification failed: skip_first
 
 void clear_first(int *p)
-  pre(valid(p, 2))
-  pre(-1000 <= p[0] && p[0] <= 1000 && -1000 <= p[1] && p[1] <= 1000)
-  modifies(*p)
-  post(sum(p, 2) == old(sum(p, 2)) - old(p[0]))
+  cppverify::pre(valid(p, 2))
+  cppverify::pre(-1000 <= p[0] && p[0] <= 1000 && -1000 <= p[1] && p[1] <= 1000)
+  cppverify::modifies(*p)
+  cppverify::post(sum(p, 2) == cppverify::old(sum(p, 2)) - cppverify::old(p[0]))
 {
-  ghost { reveal_with_fuel(sum, 3); }
+  cppverify::ghost { cppverify::reveal_with_fuel(sum, 3); }
   p[0] = 0;
 }
 // CHECK-DAG: Verified: clear_first
 // REPLAY-DAG: Verified: clear_first
 
 void clear_first_unchanged(int *p)
-  pre(valid(p, 2))
-  pre(-1000 <= p[0] && p[0] <= 1000 && -1000 <= p[1] && p[1] <= 1000)
-  modifies(*p)
-  post(sum(p, 2) == old(sum(p, 2)))
+  cppverify::pre(valid(p, 2))
+  cppverify::pre(-1000 <= p[0] && p[0] <= 1000 && -1000 <= p[1] && p[1] <= 1000)
+  cppverify::modifies(*p)
+  cppverify::post(sum(p, 2) == cppverify::old(sum(p, 2)))
 {
-  ghost { reveal_with_fuel(sum, 3); }
+  cppverify::ghost { cppverify::reveal_with_fuel(sum, 3); }
   p[0] = 0;
 }
 // The post-state call reads the stored heap and old(...) the entry heap.
@@ -101,15 +101,15 @@ void clear_first_unchanged(int *p)
 // REPLAY-DAG: verification failed: clear_first_unchanged
 
 // A non-recursive heap-reading spec is inlined at each call.
-spec int sum2(int *p)
+cppverify::spec int sum2(int *p)
 {
   return p[0] + p[1];
 }
 
 int total2(int *p)
-  pre(valid(p, 2))
-  pre(-1000 <= p[0] && p[0] <= 1000 && -1000 <= p[1] && p[1] <= 1000)
-  post(result == sum2(p))
+  cppverify::pre(valid(p, 2))
+  cppverify::pre(-1000 <= p[0] && p[0] <= 1000 && -1000 <= p[1] && p[1] <= 1000)
+  cppverify::post(cppverify::result == sum2(p))
 {
   return p[0] + p[1];
 }
@@ -117,9 +117,9 @@ int total2(int *p)
 
 // A callee postcondition is instantiated in the heap of its call.
 int caller(int *q)
-  pre(valid(q, 2))
-  modifies(*q)
-  post(result == 12)
+  cppverify::pre(valid(q, 2))
+  cppverify::modifies(*q)
+  cppverify::post(cppverify::result == 12)
 {
   q[0] = 5;
   q[1] = 7;
@@ -128,10 +128,10 @@ int caller(int *q)
 // CHECK-DAG: Verified: caller
 
 int caller_stale(int *q)
-  pre(valid(q, 2))
-  pre(q[0] == 1 && q[1] == 1)
-  modifies(*q)
-  post(result == 2)
+  cppverify::pre(valid(q, 2))
+  cppverify::pre(q[0] == 1 && q[1] == 1)
+  cppverify::modifies(*q)
+  cppverify::post(cppverify::result == 2)
 {
   q[0] = 5;
   q[1] = 7;
@@ -144,21 +144,21 @@ struct Pair {
   int second;
 };
 
-spec int pair_sum(const Pair *pair) {
+cppverify::spec int pair_sum(const Pair *pair) {
   return pair->first + pair->second;
 }
 
 int read_pair(Pair *pair)
-  pre(pair != nullptr && pair->first == 1 && pair->second == 2)
-  post(result == pair_sum(pair))
+  cppverify::pre(pair != nullptr && pair->first == 1 && pair->second == 2)
+  cppverify::post(cppverify::result == pair_sum(pair))
 {
   return 3;
 }
 // CHECK-DAG: Verified: read_pair
 
 int read_pair_wrong(Pair *pair)
-  pre(pair != nullptr && pair->first == 1 && pair->second == 2)
-  post(result == pair_sum(pair))
+  cppverify::pre(pair != nullptr && pair->first == 1 && pair->second == 2)
+  cppverify::post(cppverify::result == pair_sum(pair))
 {
   return 4;
 }
