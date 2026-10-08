@@ -2,14 +2,14 @@
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 int pointer_arithmetic()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   int *p = new int(1);
   return *(p + 0);
 }
 
 int pointer_parameter(int *external)
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   int *p = new int(1);
   delete p;
@@ -17,7 +17,7 @@ int pointer_parameter(int *external)
 }
 
 int array_allocation()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   int *p = new int[2]{1, 2};
   delete[] p;
@@ -25,7 +25,7 @@ int array_allocation()
 }
 
 int allocation_in_loop()
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   for (int i = 0; i < 1; ++i) {
     int *p = new int(i);
@@ -35,7 +35,7 @@ int allocation_in_loop()
 }
 
 int void_pointer_target()
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   void *p = new int(1);
   delete p;
@@ -43,7 +43,7 @@ int void_pointer_target()
 }
 
 int subscript_store()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   int *p = new int;
   p[0] = 1;
@@ -53,14 +53,14 @@ int subscript_store()
 }
 
 int *arithmetic_derived_return()
-  post(result != nullptr)
+  cppverify::post(cppverify::result != nullptr)
 {
   int *owner = new int(1);
   return owner + 0;
 }
 
 int subscript_reference_binding()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   int *p = new int(1);
   int &alias = p[0];
@@ -70,7 +70,7 @@ int subscript_reference_binding()
 }
 
 int offset_store()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   int *p = new int;
   *(p + 0) = 1;
@@ -79,43 +79,43 @@ int offset_store()
   return observed;
 }
 
-spec bool dynamic_nonnull(int *p)
+cppverify::spec bool dynamic_nonnull(int *p)
 {
   return p != nullptr;
 }
 
 int spec_call_boundary()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   int *p = new int(1);
-  contract_assert(dynamic_nonnull(p));
+  cppverify::check(dynamic_nonnull(p));
   delete p;
   return 1;
 }
 
 int *return_pointer(int *p)
-  post(result == p)
+  cppverify::post(cppverify::result == p)
 {
   return p;
 }
 
 int *external_pointer()
-  post(result != nullptr);
+  cppverify::post(cppverify::result != nullptr);
 
 bool erased_nonnull(void *p)
-  post(result == (p != nullptr))
+  cppverify::post(cppverify::result == (p != nullptr))
 {
   return p != nullptr;
 }
 
 bool bool_identity(bool value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   return value;
 }
 
 int erased_pointer_copy()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   int *p = new int(1);
   void *erased = p;
@@ -124,7 +124,7 @@ int erased_pointer_copy()
 }
 
 int conditional_erased_pointer_copy(bool choose)
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   int *p = new int(1);
   void *erased = choose ? p : nullptr;
@@ -133,7 +133,7 @@ int conditional_erased_pointer_copy(bool choose)
 }
 
 int pointer_returning_call()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   int *p = new int(1);
   int *returned = return_pointer(p);
@@ -143,7 +143,7 @@ int pointer_returning_call()
 }
 
 int pointer_return_reassignment_in_loop()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   int *p = new int(1);
   int *returned = nullptr;
@@ -155,7 +155,7 @@ int pointer_return_reassignment_in_loop()
 }
 
 int pointer_return_type_erasure()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   int *p = new int(1);
   void *returned = return_pointer(p);
@@ -164,7 +164,7 @@ int pointer_return_type_erasure()
 }
 
 int foreign_provenance_reassignment()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   int *foreign = external_pointer();
   int *owner = new int(1);
@@ -175,7 +175,7 @@ int foreign_provenance_reassignment()
 }
 
 int erased_pointer_call()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   int *p = new int(1);
   bool nonnull = erased_nonnull(p);
@@ -184,7 +184,7 @@ int erased_pointer_call()
 }
 
 int pointer_to_bool_call()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   int *p = new int(1);
   bool nonnull = bool_identity(p);
@@ -193,7 +193,7 @@ int pointer_to_bool_call()
 }
 
 int reassignment_in_loop()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   int *owner = new int(1);
   int *alias = owner;
