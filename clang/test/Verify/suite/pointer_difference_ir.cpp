@@ -2,7 +2,7 @@
 // RUN: %cpp-verify --int-encoding=bitvector --lower-only --dump-ir=1,2,3,4 %s 2>&1 | FileCheck %s
 
 long pointer_difference_ir(int value)
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   int *pointer = new int(value);
   long distance = (pointer + 1) - pointer;
