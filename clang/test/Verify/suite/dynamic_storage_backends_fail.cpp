@@ -3,13 +3,13 @@
 // RUN: %cpp-verify --backend=lean --lean-out=%t.lean %s 2>&1 | FileCheck %s --check-prefix=LEAN
 
 void rebind_pointer(int *target)
-  post(target == nullptr)
+  cppverify::post(target == nullptr)
 {
   target = nullptr;
 }
 
 int dynamic_backend_rebinding()
-  post(result == 2)
+  cppverify::post(cppverify::result == 2)
 {
   int *owner = new int(1);
   rebind_pointer(owner);
