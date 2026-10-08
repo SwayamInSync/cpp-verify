@@ -9,7 +9,7 @@ struct Holder {
 };
 
 unsigned long incomplete_array_pointee()
-  post(result == sizeof(Holder) + sizeof(Incomplete (*)[4]))
+  cppverify::post(cppverify::result == sizeof(Holder) + sizeof(Incomplete (*)[4]))
 {
   return sizeof(Holder) + sizeof(Incomplete (*)[4]);
 }
