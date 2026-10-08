@@ -1,4 +1,4 @@
-// RUN: not %cpp-verify --timeout=20000 %s 2>&1 | FileCheck %s
+// RUN: not %cpp-verify --timeout=20000 %s -- 2>&1 | FileCheck %s
 //
 // choose(k, body) is an integer for which body holds, when one exists, and
 // otherwise an unspecified integer; choose(k, lo, hi, body) chooses in
