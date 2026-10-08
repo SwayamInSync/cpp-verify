@@ -10,17 +10,17 @@
 // RUN:   | FileCheck %s --check-prefix=REPLAY
 
 int loop_free(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   return value;
 }
 
 int completes_at_two()
-  post(result == 2)
+  cppverify::post(cppverify::result == 2)
 {
   int index = 0;
   while (index < 2)
-    invariant(index >= 0 && index <= 2)
+    cppverify::invariant(index >= 0 && index <= 2)
   {
     ++index;
   }
@@ -28,25 +28,25 @@ int completes_at_two()
 }
 
 int bug_on_second_iteration()
-  post(result == 3)
+  cppverify::post(cppverify::result == 3)
 {
   int index = 0;
   while (index < 3)
-    invariant(index >= 0 && index <= 3)
+    cppverify::invariant(index >= 0 && index <= 3)
   {
-    contract_assert(index != 1);
+    cppverify::check(index != 1);
     ++index;
   }
   return index;
 }
 
 int open_frontier(int limit)
-  pre(limit >= 0)
-  post(result >= 0)
+  cppverify::pre(limit >= 0)
+  cppverify::post(cppverify::result >= 0)
 {
   int index = 0;
   while (index < limit)
-    invariant(index >= 0)
+    cppverify::invariant(index >= 0)
   {
     ++index;
   }
