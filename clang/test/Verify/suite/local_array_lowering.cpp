@@ -31,18 +31,18 @@ struct PointerBox {
 };
 
 int *external_pointer()
-  post(result != nullptr);
+  cppverify::post(cppverify::result != nullptr);
 
 void set_scalar(int &target, int value)
-  modifies(target)
-  post(target == value)
+  cppverify::modifies(target)
+  cppverify::post(target == value)
 {
   target = value;
 }
 
 int element_reference_binding(int index)
-  pre(index >= 0 && index < 4)
-  post(result == 7)
+  cppverify::pre(index >= 0 && index < 4)
+  cppverify::post(cppverify::result == 7)
 {
   int a[4] = {1, 2, 3, 4};
   int &alias = a[index];
@@ -51,8 +51,8 @@ int element_reference_binding(int index)
 }
 
 int modular_element_argument(int index)
-  pre(index >= 0 && index < 4)
-  post(result == 9)
+  cppverify::pre(index >= 0 && index < 4)
+  cppverify::post(cppverify::result == 9)
 {
   int a[4] = {1, 2, 3, 4};
   set_scalar(a[index], 9);
@@ -60,7 +60,7 @@ int modular_element_argument(int index)
 }
 
 int other_element_unchanged()
-  post(result == 3)
+  cppverify::post(cppverify::result == 3)
 {
   int a[4] = {1, 2, 3, 4};
   a[1] = 9;
@@ -68,22 +68,22 @@ int other_element_unchanged()
 }
 
 int partially_initialized_array()
-  post(result == 3)
+  cppverify::post(cppverify::result == 3)
 {
   int a[4] = {1, 2};
   return a[0] + a[1] + a[2] + a[3];
 }
 
 int zero_initialized_array()
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   int a[4] = {};
   return a[0] + a[3];
 }
 
 int array_of_records(int index)
-  pre(index >= 0 && index < 2)
-  post(result == 8)
+  cppverify::pre(index >= 0 && index < 2)
+  cppverify::post(cppverify::result == 8)
 {
   Pair a[2] = {{1, 2}, {3, 4}};
   int &alias = a[index].second;
@@ -92,8 +92,8 @@ int array_of_records(int index)
 }
 
 int nested_array(int index)
-  pre(index >= 0 && index < 2)
-  post(result == 9)
+  cppverify::pre(index >= 0 && index < 2)
+  cppverify::post(cppverify::result == 9)
 {
   int m[2][3] = {{1, 2, 3}, {4, 5, 6}};
   int &alias = m[index][2];
@@ -102,31 +102,31 @@ int nested_array(int index)
 }
 
 int skipped_conditional_access(bool take, int index)
-  pre(!take && index == 4)
-  post(result == 0)
+  cppverify::pre(!take && index == 4)
+  cppverify::post(cppverify::result == 0)
 {
   int a[4] = {1, 2, 3, 4};
   return take ? a[index] : 0;
 }
 
 bool skipped_and_access(bool take, int index)
-  pre(!take && index == 4)
-  post(!result)
+  cppverify::pre(!take && index == 4)
+  cppverify::post(!cppverify::result)
 {
   int a[4] = {1, 2, 3, 4};
   return take && a[index] == 1;
 }
 
 bool skipped_or_access(bool skip, int index)
-  pre(skip && index == 4)
-  post(result)
+  cppverify::pre(skip && index == 4)
+  cppverify::post(cppverify::result)
 {
   int a[4] = {1, 2, 3, 4};
   return skip || a[index] == 1;
 }
 
 int false_other_element_changed()
-  post(result == 9)
+  cppverify::post(cppverify::result == 9)
 {
   int a[4] = {1, 2, 3, 4};
   a[1] = 9;
@@ -134,7 +134,7 @@ int false_other_element_changed()
 }
 
 int false_bad_result()
-  post(result == 8)
+  cppverify::post(cppverify::result == 8)
 {
   int a[4] = {1, 2, 3, 4};
   a[1] = 9;
@@ -142,15 +142,15 @@ int false_bad_result()
 }
 
 int out_of_bounds_symbolic_index(int index)
-  pre(index >= 0)
-  post(result == 1)
+  cppverify::pre(index >= 0)
+  cppverify::post(cppverify::result == 1)
 {
   int a[4] = {1, 1, 1, 1};
   return a[index];
 }
 
 int uninitialized_element_read()
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   int a[4];
   a[0] = 0;
@@ -158,7 +158,7 @@ int uninitialized_element_read()
 }
 
 int uninitialized_element_binding()
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   int a[4];
   int &alias = a[1];
@@ -168,40 +168,40 @@ int uninitialized_element_binding()
 // These accesses would alias sibling storage if their declared subarray bounds
 // were replaced by the containing allocation's byte extent.
 int conditional_array_field_alias(bool take, int index)
-  pre(take && index == 3)
-  post(result == 9)
+  cppverify::pre(take && index == 3)
+  cppverify::post(cppverify::result == 9)
 {
   ArrayAndTag value{{1, 2, 3}, 9};
   return take ? value.values[index] : 0;
 }
 
 bool short_circuit_and_array_field_alias(bool take, int index)
-  pre(take && index == 3)
-  post(result)
+  cppverify::pre(take && index == 3)
+  cppverify::post(cppverify::result)
 {
   ArrayAndTag value{{1, 2, 3}, 9};
   return take && value.values[index] == 9;
 }
 
 bool short_circuit_or_array_field_alias(bool skip, int index)
-  pre(!skip && index == 3)
-  post(result)
+  cppverify::pre(!skip && index == 3)
+  cppverify::post(cppverify::result)
 {
   ArrayAndTag value{{1, 2, 3}, 9};
   return skip || value.values[index] == 9;
 }
 
 int conditional_inner_array_alias(bool take, int row, int column)
-  pre(take && row == 0 && column == 3)
-  post(result == 4)
+  cppverify::pre(take && row == 0 && column == 3)
+  cppverify::post(cppverify::result == 4)
 {
   int matrix[2][3] = {{1, 2, 3}, {4, 5, 6}};
   return take ? matrix[row][column] : 0;
 }
 
 int aggregate_copy_sibling_alias(int index)
-  pre(index == 1)
-  post(result == 9)
+  cppverify::pre(index == 1)
+  cppverify::post(cppverify::result == 9)
 {
   PairArrayAndTail value{{{1, 2}}, {8, 9}};
   Pair copy = value.values[index];
@@ -209,8 +209,8 @@ int aggregate_copy_sibling_alias(int index)
 }
 
 int aggregate_assignment_sibling_alias(int index)
-  pre(index == 1)
-  post(result == 9)
+  cppverify::pre(index == 1)
+  cppverify::post(cppverify::result == 9)
 {
   PairArrayAndTail value{{{1, 2}}, {8, 9}};
   Pair replacement{4, 5};
@@ -219,15 +219,15 @@ int aggregate_assignment_sibling_alias(int index)
 }
 
 int loop_condition_array_alias(int index)
-  pre(index == 3)
-  post(result == 9)
+  cppverify::pre(index == 3)
+  cppverify::post(cppverify::result == 9)
 {
   ArrayAndTag value{{1, 2, 3}, 9};
   int observed = 0;
   while (observed == 0 && value.values[index] == 9)
-    invariant(observed == 0 || observed == 9)
-    invariant(value.tag == 9)
-    decreases(observed == 0 ? 1 : 0)
+    cppverify::invariant(observed == 0 || observed == 9)
+    cppverify::invariant(value.tag == 9)
+    cppverify::decreases(observed == 0 ? 1 : 0)
   {
     observed = 9;
   }
@@ -235,7 +235,7 @@ int loop_condition_array_alias(int index)
 }
 
 bool stored_one_past_allows_adjacent_allocation()
-  post(result)
+  cppverify::post(cppverify::result)
 {
   int *pointer = external_pointer();
   PointerBox saved{0, pointer + 1};
