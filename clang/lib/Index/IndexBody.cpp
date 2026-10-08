@@ -32,9 +32,12 @@ class BodyIndexer : public RecursiveASTVisitor<BodyIndexer> {
     return StmtStack.size() < 2 ? nullptr : StmtStack.end()[-2];
   }
 public:
-  BodyIndexer(IndexingContext &indexCtx,
-              const NamedDecl *Parent, const DeclContext *DC)
-    : IndexCtx(indexCtx), Parent(Parent), ParentDC(DC) { }
+  BodyIndexer(IndexingContext &indexCtx, const NamedDecl *Parent,
+              const DeclContext *DC)
+      : IndexCtx(indexCtx), Parent(Parent), ParentDC(DC) {
+    // CppVerify: loop contracts are found through the context.
+    ContractContext = &Decl::castFromDeclContext(DC)->getASTContext();
+  }
 
   bool shouldWalkTypesOfTypeLocs() const { return false; }
 
