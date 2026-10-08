@@ -4,5 +4,5 @@
 // are set to 0, but the post claims some cell equals 9.
 // (Symbolic-range exists in a postcondition is currently incomplete -- it may
 // report unknown -- so this uses a concrete range.)
-void f(int* p) pre(p != nullptr) modifies(*p) post(exists(i, 0, 3, p[i] == 9)) { p[0] = 0; p[1] = 0; p[2] = 0; }
+void f(int* p) cppverify::pre(p != nullptr) cppverify::modifies(*p) cppverify::post(cppverify::exists(i, 0, 3, p[i] == 9)) { p[0] = 0; p[1] = 0; p[2] = 0; }
 // VERIFY: verification failed
