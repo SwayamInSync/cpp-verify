@@ -1088,7 +1088,7 @@ void verify::expandInductivePredicates(
           return !describesDerivations(Post.get());
         })) {
       reject("a postcondition of an inductive predicate states what holds "
-             "where it is true, as !result || Q");
+             "where it is true, as !cppverify::result || Q");
       continue;
     }
     Unfoldings[Identity] = std::move(Unfolding);
