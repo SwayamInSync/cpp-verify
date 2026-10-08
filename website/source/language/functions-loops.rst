@@ -7,8 +7,8 @@ Functions
 .. code-block:: cpp
 
    int f(int x)
-     pre(x > 0 && x < 1000)
-     post(result > x)
+     cv::pre(x > 0 && x < 1000)
+     cv::post(cv::result > x)
    { return x + 1; }
 
 Contracts may instead appear on a forward declaration.  A later definition
@@ -38,28 +38,28 @@ outside the verified subset, or a lemma you decide to assume.
 
    // Defined in another library.
    [[cppverify::trusted]] int clamp_byte(int v)
-     post(0 <= result && result <= 255);
+     cv::post(0 <= cv::result && cv::result <= 255);
 
    // Compiled and run, but its body is not verified.
    [[cppverify::trusted]] int read_sensor(int channel)
-     pre(channel >= 0 && channel < 4)
-     post(result >= 0 && result <= 1023)
+     cv::pre(channel >= 0 && channel < 4)
+     cv::post(cv::result >= 0 && cv::result <= 1023)
    {
      return channel * 300;
    }
 
    // An axiom: a proof function without a proof.
-   spec int sq(int x) { return x * x; }
+   cv::spec int sq(int x) { return x * x; }
 
-   [[cppverify::trusted]] proof void sq_nonnegative(int x)
-     post(sq(x) >= 0);
+   [[cppverify::trusted]] cv::proof void sq_nonnegative(int x)
+     cv::post(sq(x) >= 0);
 
    int sample(int c)
-     pre(c >= 0 && c < 4)
-     post(0 <= result && result <= 255)
+     cv::pre(c >= 0 && c < 4)
+     cv::post(0 <= cv::result && cv::result <= 255)
    {
      int r = read_sensor(c);
-     ghost { sq_nonnegative(r); }
+     cv::ghost { sq_nonnegative(r); }
      return clamp_byte(r);
    }
 
@@ -88,10 +88,10 @@ nothing:
 .. code-block:: cpp
 
    int helper(int v)
-     post(result == v);
+     cv::post(cv::result == v);
 
    int uses_helper(int v)
-     post(result == v)
+     cv::post(cv::result == v)
    {
      return helper(v);
    }
@@ -110,11 +110,11 @@ everything after the call hold vacuously; CppVerify reports that case with
 ``[vacuous]`` and a warning at the call (see :doc:`tooling`).
 
 An uncontracted ``constexpr`` definition may be lifted for use in contract
-expressions.  Once a ``constexpr`` function has executable ``pre``/``post``
+expressions.  Once a ``constexpr`` function has executable ``cppverify::pre``/``cppverify::post``
 clauses, it remains a modular executable function: calls must satisfy its
 preconditions and cannot be used as pure contract expressions.
 
-Preconditions, ``old(parameter)``, and a parameter named in a postcondition
+Preconditions, ``cppverify::old(parameter)``, and a parameter named in a postcondition
 all denote the argument's entry value, as in ACSL, even when the callee
 reassigns its by-value parameter; a caller can therefore use the
 postcondition directly.
@@ -129,20 +129,20 @@ where its assumption holds (``assumes`` at entry):
 .. code-block:: cpp
 
    int abs_value(int x)
-     behavior(nonnegative, x >= 0)
-       post(result == x)
-     behavior(negative, x < 0)
-       pre(x > -2147483647 - 1)
-       post(result == -x)
-     complete_behaviors
-     disjoint_behaviors
+     cv::behavior(nonnegative, x >= 0)
+       cv::post(cv::result == x)
+     cv::behavior(negative, x < 0)
+       cv::pre(x > -2147483647 - 1)
+       cv::post(cv::result == -x)
+     cv::complete_behaviors
+     cv::disjoint_behaviors
    {
      return x < 0 ? -x : x;
    }
 
-``complete_behaviors`` requires that some behavior applies to every input the
-preconditions admit, and ``disjoint_behaviors`` that no two do; either may
-list the behaviors it relates, as in ``disjoint_behaviors(low, high)``.
+``cppverify::complete_behaviors`` requires that some behavior applies to every input the
+preconditions admit, and ``cppverify::disjoint_behaviors`` that no two do; either may
+list the behaviors it relates, as in ``cppverify::disjoint_behaviors(low, high)``.
 
 Loops
 -----
@@ -152,8 +152,8 @@ Loops
 .. code-block:: cpp
 
    while (c)
-     invariant(I)
-     decreases(D)
+     cv::invariant(I)
+     cv::decreases(D)
    { ... }
 
 Clauses go after the loop header's closing ``)``; ``for`` loops use the same
@@ -167,24 +167,24 @@ before its semicolon:
    do {
      value = value + 1;
    } while (value <= n)
-     invariant(value >= 1 && value <= n + 1)
-     decreases(n + 1 - value);
+     cv::invariant(value >= 1 && value <= n + 1)
+     cv::decreases(n + 1 - value);
 
 The mandatory first body execution is checked from the concrete incoming state.
 It must establish the invariant; subsequent iterations use the ordinary
 modular ``while`` rule. The invariant therefore need not hold before entering
 the first body.
 
-Multiple ``invariant`` clauses are conjoined. ``old(expr)`` is permitted in an
+Multiple ``cppverify::invariant`` clauses are conjoined. ``cppverify::old(expr)`` is permitted in an
 invariant and always denotes the enclosing function's entry state, not the
 previous iteration. Function locals do not exist at function entry and are
-rejected inside ``old(...)``; use an ordinary snapshot local directly instead.
+rejected inside ``cppverify::old(...)``; use an ordinary snapshot local directly instead.
 ``return``, ``break``, and ``continue`` may leave a ``while`` or ``for`` loop
 from any iteration. A ``return`` checks the postcondition in its own state and
 a ``break`` continues after the loop in its own state. A ``continue`` ends the
-iteration: the invariant must hold again and the ``decreases`` measure must
+iteration: the invariant must hold again and the ``cppverify::decreases`` measure must
 drop, after a ``for`` increment has run. ``break`` and ``continue`` in a
-``do`` loop are not supported yet, and ``ghost`` code cannot leave an
+``do`` loop are not supported yet, and ``cppverify::ghost`` code cannot leave an
 executable loop.
 
 The verifier checks a loop **modularly** (no unrolling), discharging three
@@ -206,28 +206,28 @@ obligations:
      - ``0 <= D_old`` and ``D_new < D_old`` each iteration (and at each
        ``continue``).
    * - Frame
-     - With a loop ``modifies``, every cell outside its footprints, read in the
+     - With a loop ``cppverify::modifies``, every cell outside its footprints, read in the
        iteration's state, is unchanged since the loop began.
 
 Verification is total correctness, as in Verus: an executable loop without
-``decreases`` leaves its function ``Unresolved`` with reason
-``decreases.missing``. ``decreases(*)`` allows a loop (or an executable
+``cppverify::decreases`` leaves its function ``Unresolved`` with reason
+``decreases.missing``. ``cppverify::decreases(*)`` allows a loop (or an executable
 function) to diverge; its function and every caller are then reported
 ``Verified ... [partial]``, proved only for the executions that terminate.
 Ghost-block and proof-function loops are erased at runtime and must have a
-real measure; ``decreases(*)`` is rejected there.
+real measure; ``cppverify::decreases(*)`` is rejected there.
 
 Nobody knows whether this loop ends for every start, so it has no measure:
 
 .. code-block:: cpp
 
    unsigned collatz_steps(unsigned n)
-     post(n != 1 || result == 0)
+     cv::post(n != 1 || cv::result == 0)
    {
      unsigned steps = 0;
      while (n != 1)
-       invariant(old(n) != 1 || (n == 1 && steps == 0))
-       decreases(*)
+       cv::invariant(cv::old(n) != 1 || (n == 1 && steps == 0))
+       cv::decreases(*)
      {
        n = n % 2 == 0 ? n / 2 : 3 * n + 1;
        steps = steps + 1;
@@ -236,7 +236,7 @@ Nobody knows whether this loop ends for every start, so it has no measure:
    }
 
    unsigned none()
-     post(result == 0)
+     cv::post(cv::result == 0)
    {
      return collatz_steps(1);
    }
@@ -249,24 +249,24 @@ Nobody knows whether this loop ends for every start, so it has no measure:
    warning: none: proved only for executions that terminate: it calls collatz_steps, which may diverge
 
 A loop writes only the objects its stores and calls reach, so other memory
-keeps its value across it without an invariant. ``modifies(...)`` after the
+keeps its value across it without an invariant. ``cppverify::modifies(...)`` after the
 invariants narrows that further, like ACSL's ``loop assigns``; its footprints
-are read in each iteration's state, so ``modifies(a[0 : i])`` describes the
+are read in each iteration's state, so ``cppverify::modifies(a[0 : i])`` describes the
 prefix written so far.
 
 .. code-block:: cpp
 
    void clear_prefix(int *a, int n, int k)
-     pre(valid(a, n) && 0 <= k && k <= n && n <= 1000)
-     modifies(a[0 : k])
-     post(forall(j, 0, k, a[j] == 0))
-     post(forall(j, k, n, a[j] == old(a[j])))
+     cv::pre(valid(a, n) && 0 <= k && k <= n && n <= 1000)
+     cv::modifies(a[0 : k])
+     cv::post(cv::forall(j, 0, k, a[j] == 0))
+     cv::post(cv::forall(j, k, n, a[j] == cv::old(a[j])))
    {
      for (int i = 0; i < k; i = i + 1)
-       invariant(0 <= i && i <= k)
-       invariant(forall(j, 0, i, a[j] == 0))
-       modifies(a[0 : i])
-       decreases(k - i)
+       cv::invariant(0 <= i && i <= k)
+       cv::invariant(cv::forall(j, 0, i, a[j] == 0))
+       cv::modifies(a[0 : i])
+       cv::decreases(k - i)
      {
        a[i] = 0;
      }
@@ -274,7 +274,7 @@ prefix written so far.
 
 The loop's frame is checked at the end of each iteration, after the ``for``
 increment, so ``a[0 : i]`` then covers the cell just written; the function's
-``modifies(a[0 : k])`` is the range ``[0, k)``, and the cells from ``k`` on
+``cppverify::modifies(a[0 : k])`` is the range ``[0, k)``, and the cells from ``k`` on
 keep their values without an invariant saying so.
 
 After the loop the verifier knows exactly ``I && !c`` — anything needed
@@ -288,16 +288,16 @@ downstream must be captured by the invariant.
    accumulator instead (e.g. ``s == i``). A loop placed after an early ``return`` is checked only on
    the path that reaches it.
 
-Each ``decreases`` expression must be integer-typed. A comma-separated tuple
-``decreases(a, b)`` is a **lexicographic** measure: each iteration the tuple must
+Each ``cppverify::decreases`` expression must be integer-typed. A comma-separated tuple
+``cppverify::decreases(a, b)`` is a **lexicographic** measure: each iteration the tuple must
 strictly decrease in lexicographic order (some component drops while every
 earlier component stays equal), and the component that drops must be
 non-negative before the step, as in ACSL. This proves termination of nested
 counters and Ackermann-style recursion.
 
-Recursive ``spec``, ``proof``, and executable functions use the same
+Recursive ``cppverify::spec``, ``cppverify::proof``, and executable functions use the same
 well-founded, lexicographic discipline. Each recursive call must occur on a
-path where its ``decreases`` measure is nonnegative and strictly smaller than
+path where its ``cppverify::decreases`` measure is nonnegative and strictly smaller than
 the caller's. Calls hidden after assignment-only or fallthrough branches are
 checked as well.
 
