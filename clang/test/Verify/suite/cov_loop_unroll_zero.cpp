@@ -2,12 +2,12 @@
 // RUN: %cpp-verify --lower-only --backend=bmc --unroll=0 --dump-ir=3 %s 2>&1 | FileCheck %s --check-prefix=UNWIND
 
 int zero_iterations(int n)
-  pre(n == 0)
-  post(result >= 0)
+  cppverify::pre(n == 0)
+  cppverify::post(cppverify::result >= 0)
 {
   int i = 0;
   while (i < n)
-    invariant(i >= 0)
+    cppverify::invariant(i >= 0)
   {
     i = i + 1;
   }
@@ -15,12 +15,12 @@ int zero_iterations(int n)
 }
 
 int one_step_may_run(int n)
-  pre(n == 0 || n == 1)
-  post(result >= 0)
+  cppverify::pre(n == 0 || n == 1)
+  cppverify::post(cppverify::result >= 0)
 {
   int i = 0;
   while (i < n)
-    invariant(i >= 0)
+    cppverify::invariant(i >= 0)
   {
     i = i + 1;
   }
