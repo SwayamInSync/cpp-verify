@@ -3,7 +3,7 @@
 // RUN: %cpp-verify --backend=lean --lean-out=%t.lean %s 2>&1 | FileCheck %s --check-prefix=LEAN
 
 int backend_reassignment(bool choose)
-  post(result == 1 || result == 2)
+  cppverify::post(cppverify::result == 1 || cppverify::result == 2)
 {
   int *first = new int(1);
   int *second = new int(2);
@@ -17,7 +17,7 @@ int backend_reassignment(bool choose)
 }
 
 int backend_reassignment_use_after_delete(bool choose)
-  post(true)
+  cppverify::post(true)
 {
   int *first = new int(1);
   int *second = new int(2);
