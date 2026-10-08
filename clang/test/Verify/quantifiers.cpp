@@ -12,7 +12,7 @@
 // CHECK:   IntegerLiteral {{.*}} 'int' 10
 // CHECK:   BinaryOperator {{.*}} 'bool' '>='
 bool forall_literal()
-  post(result == forall(i, 0, 10, i >= 0))
+  cppverify::post(cppverify::result == cppverify::forall(i, 0, 10, i >= 0))
 {
   return true;
 }
@@ -26,7 +26,7 @@ bool forall_literal()
 // CHECK:   IntegerLiteral {{.*}} 'int' 10
 // CHECK:   BinaryOperator {{.*}} 'bool' '=='
 bool exists_literal()
-  post(result == exists(j, 0, 10, j == 5))
+  cppverify::post(cppverify::result == cppverify::exists(j, 0, 10, j == 5))
 {
   return true;
 }
@@ -39,7 +39,7 @@ bool exists_literal()
 // CHECK:   IntegerLiteral {{.*}} 'int' 0
 // CHECK:   DeclRefExpr {{.*}} 'int' {{.*}} 'n'
 int forall_var_bounds(int n)
-  pre(forall(i, 0, n, i >= 0))
+  cppverify::pre(cppverify::forall(i, 0, n, i >= 0))
 {
   return n;
 }
@@ -50,7 +50,7 @@ int forall_var_bounds(int n)
 // CHECK: FunctionDecl {{.*}} exists_var_bounds 'int (int)'
 // CHECK: pre: ExistsExpr {{.*}} 'bool'
 int exists_var_bounds(int n)
-  pre(exists(k, 0, n, k == 0))
+  cppverify::pre(cppverify::exists(k, 0, n, k == 0))
 {
   return n;
 }
@@ -63,7 +63,7 @@ int exists_var_bounds(int n)
 // CHECK:   BinaryOperator {{.*}} 'int' '+'
 // CHECK:   BinaryOperator {{.*}} 'int' '*'
 int forall_expr_bounds(int a, int b)
-  pre(forall(i, a + 1, b * 2, i > 0))
+  cppverify::pre(cppverify::forall(i, a + 1, b * 2, i > 0))
 {
   return a + b;
 }
@@ -75,7 +75,7 @@ int forall_expr_bounds(int a, int b)
 // CHECK: pre: ForallExpr {{.*}} 'bool'
 // CHECK:   BinaryOperator {{.*}} 'bool' '&&'
 int forall_complex_body(int n)
-  pre(forall(i, 0, n, i >= 0 && i < 1000))
+  cppverify::pre(cppverify::forall(i, 0, n, i >= 0 && i < 1000))
 {
   return n;
 }
@@ -87,7 +87,7 @@ int forall_complex_body(int n)
 // CHECK: pre: ForallExpr {{.*}} 'bool'
 // CHECK:   ForallExpr {{.*}} 'bool'
 int nested_forall(int m, int n)
-  pre(forall(i, 0, m, forall(j, 0, n, i + j >= 0)))
+  cppverify::pre(cppverify::forall(i, 0, m, cppverify::forall(j, 0, n, i + j >= 0)))
 {
   return m + n;
 }
@@ -99,7 +99,7 @@ int nested_forall(int m, int n)
 // CHECK: pre: ForallExpr {{.*}} 'bool'
 // CHECK:   ExistsExpr {{.*}} 'bool'
 int exists_in_forall(int m, int n)
-  pre(forall(i, 0, m, exists(j, 0, n, j >= i)))
+  cppverify::pre(cppverify::forall(i, 0, m, cppverify::exists(j, 0, n, j >= i)))
 {
   return m;
 }
@@ -111,7 +111,7 @@ int exists_in_forall(int m, int n)
 // CHECK: pre: ExistsExpr {{.*}} 'bool'
 // CHECK:   ForallExpr {{.*}} 'bool'
 int forall_in_exists(int m, int n)
-  pre(exists(i, 0, m, forall(j, 0, n, j + i > 0)))
+  cppverify::pre(cppverify::exists(i, 0, m, cppverify::forall(j, 0, n, j + i > 0)))
 {
   return m;
 }
@@ -122,8 +122,8 @@ int forall_in_exists(int m, int n)
 // CHECK: FunctionDecl {{.*}} forall_in_post 'int (int)'
 // CHECK: post: ForallExpr {{.*}} 'bool'
 int forall_in_post(int n)
-  pre(n >= 0)
-  post(forall(k, 0, n, k < n))
+  cppverify::pre(n >= 0)
+  cppverify::post(cppverify::forall(k, 0, n, k < n))
 {
   return n;
 }
@@ -134,8 +134,8 @@ int forall_in_post(int n)
 // CHECK: FunctionDecl {{.*}} exists_in_post 'int (int)'
 // CHECK: post: ExistsExpr {{.*}} 'bool'
 int exists_in_post(int n)
-  pre(n > 0)
-  post(exists(k, 0, n, k == 0))
+  cppverify::pre(n > 0)
+  cppverify::post(cppverify::exists(k, 0, n, k == 0))
 {
   return n;
 }
@@ -147,8 +147,8 @@ int exists_in_post(int n)
 // CHECK: pre: ForallExpr {{.*}} 'bool'
 // CHECK: pre: ForallExpr {{.*}} 'bool'
 int binder_names(int n)
-  pre(forall(x, 0, n, x >= 0))
-  pre(forall(y, 0, n, y >= 0))
+  cppverify::pre(cppverify::forall(x, 0, n, x >= 0))
+  cppverify::pre(cppverify::forall(y, 0, n, y >= 0))
 {
   return n;
 }
@@ -161,7 +161,7 @@ int binder_names(int n)
 // CHECK:   BinaryOperator {{.*}} 'bool' '<'
 // CHECK:     BinaryOperator {{.*}} 'int' '*'
 int binder_arithmetic(int n)
-  pre(forall(i, 0, n, i * i < 1000000))
+  cppverify::pre(cppverify::forall(i, 0, n, i * i < 1000000))
 {
   return n;
 }
@@ -174,7 +174,7 @@ int binder_arithmetic(int n)
 // CHECK:   ForallExpr {{.*}} 'bool'
 // CHECK:     ForallExpr {{.*}} 'bool'
 int triple_nested(int n)
-  pre(forall(i, 0, n, forall(j, 0, n, forall(k, 0, n, i + j + k >= 0))))
+  cppverify::pre(cppverify::forall(i, 0, n, cppverify::forall(j, 0, n, cppverify::forall(k, 0, n, i + j + k >= 0))))
 {
   return n;
 }
