@@ -3079,6 +3079,7 @@ void ASTStmtReader::VisitOldExpr(OldExpr *E) {
 void ASTStmtReader::VisitResultExpr(ResultExpr *E) {
   VisitExpr(E);
   E->ResultLoc = readSourceLocation();
+  E->EndLoc = readSourceLocation();
 }
 
 //===----------------------------------------------------------------------===//
