@@ -69,7 +69,7 @@ Measured evidence
    * - Complete deductive proof
      - Z3 verified
      - 370 canonical obligations: 318 across encoder, decoder, and round
-       trip, plus 52 discharging the machine-byte ``proof`` lemmas
+       trip, plus 52 discharging the machine-byte ``cppverify::proof`` lemmas
    * - Reduced length/bounds proof
      - Z3+cvc5 portfolio verified
      - Both solvers agree on the smaller surface
