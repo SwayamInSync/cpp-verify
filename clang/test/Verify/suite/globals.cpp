@@ -12,39 +12,39 @@ int counter = 0;
 long total;
 
 int clamp(int x)
-  post(result <= LIMIT)
+  cppverify::post(cppverify::result <= LIMIT)
 {
   return x > LIMIT ? LIMIT : x;
 }
 // CHECK-DAG: Verified: clamp
 
 unsigned low_byte(unsigned x)
-  post(result <= MASK)
+  cppverify::post(cppverify::result <= MASK)
 {
   return x & MASK;
 }
 // CHECK-DAG: Verified: low_byte
 
 void bump()
-  pre(counter < 1000)
-  modifies(counter)
-  post(counter == old(counter) + 1)
+  cppverify::pre(counter < 1000)
+  cppverify::modifies(counter)
+  cppverify::post(counter == cppverify::old(counter) + 1)
 {
   counter = counter + 1;
 }
 // CHECK-DAG: Verified: bump
 
 void bump_unframed()
-  pre(counter < 1000)
+  cppverify::pre(counter < 1000)
 {
   counter = counter + 1;
 }
 // CHECK-DAG: error: verification failed: bump_unframed [{{.*}}::frame@
 
 int twice()
-  pre(counter < 100)
-  modifies(counter)
-  post(counter == old(counter) + 2)
+  cppverify::pre(counter < 100)
+  cppverify::modifies(counter)
+  cppverify::post(counter == cppverify::old(counter) + 2)
 {
   bump();
   bump();
@@ -53,26 +53,26 @@ int twice()
 // CHECK-DAG: Verified: twice
 
 void keeps_others(int *p)
-  pre(p != nullptr && counter < 1000)
-  modifies(counter)
-  post(total == old(total) && *p == old(*p))
+  cppverify::pre(p != nullptr && counter < 1000)
+  cppverify::modifies(counter)
+  cppverify::post(total == cppverify::old(total) && *p == cppverify::old(*p))
 {
   bump();
 }
 // CHECK-DAG: Verified: keeps_others
 
 void frames_wrong(int *p)
-  pre(p != nullptr && counter < 1000)
-  modifies(*p)
+  cppverify::pre(p != nullptr && counter < 1000)
+  cppverify::modifies(*p)
 {
   bump();
 }
 // CHECK-DAG: error: verification failed: frames_wrong [{{.*}}::frame@
 
 void forgets_old()
-  pre(counter < 1000)
-  modifies(counter)
-  post(counter == old(counter))
+  cppverify::pre(counter < 1000)
+  cppverify::modifies(counter)
+  cppverify::post(counter == cppverify::old(counter))
 {
   bump();
 }
