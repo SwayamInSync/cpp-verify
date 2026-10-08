@@ -1,0 +1,7 @@
+[
+  {
+    "directory": "@DIR@",
+    "file": "src/listed.cpp",
+    "command": "clang++ -DFROM_DATABASE -c src/listed.cpp"
+  }
+]
