@@ -9,8 +9,8 @@
 // CHECK: FunctionDecl {{.*}} int_to_bool 'int (int)'
 // CHECK: pre: ImplicitCastExpr {{.*}} 'bool' <IntegralToBoolean>
 int int_to_bool(int x)
-  pre(x)
-  post(result >= 0)
+  cppverify::pre(x)
+  cppverify::post(cppverify::result >= 0)
 {
   return x > 0 ? x : -x;
 }
@@ -22,8 +22,8 @@ int int_to_bool(int x)
 // CHECK: post: ImplicitCastExpr {{.*}} 'bool' <IntegralToBoolean>
 // CHECK:   ResultExpr {{.*}} 'int'
 int result_to_bool(int x)
-  pre(x > 0)
-  post(result)
+  cppverify::pre(x > 0)
+  cppverify::post(cppverify::result)
 {
   return x;
 }
@@ -36,8 +36,8 @@ int result_to_bool(int x)
 // CHECK: post: BinaryOperator {{.*}} 'bool' '>='
 // CHECK:   ResultExpr {{.*}} 'unsigned int'
 unsigned int unsigned_contracts(unsigned int x)
-  pre(x < 100)
-  post(result >= 0)
+  cppverify::pre(x < 100)
+  cppverify::post(cppverify::result >= 0)
 {
   return x;
 }
@@ -48,8 +48,8 @@ unsigned int unsigned_contracts(unsigned int x)
 // CHECK: FunctionDecl {{.*}} mixed_sign 'int (int, unsigned int)'
 // CHECK: pre: BinaryOperator {{.*}} 'bool'
 int mixed_sign(int a, unsigned int b)
-  pre(a >= 0)
-  post(result >= 0)
+  cppverify::pre(a >= 0)
+  cppverify::post(cppverify::result >= 0)
 {
   return a + b;
 }
@@ -61,7 +61,7 @@ int mixed_sign(int a, unsigned int b)
 // CHECK: post: BinaryOperator {{.*}} 'bool' '=='
 // CHECK:   ResultExpr {{.*}} 'bool'
 bool bool_result(int x)
-  post(result == (x > 0))
+  cppverify::post(cppverify::result == (x > 0))
 {
   return x > 0;
 }
@@ -73,10 +73,10 @@ bool bool_result(int x)
 // CHECK: ContractAssertStmt
 // CHECK:   ImplicitCastExpr {{.*}} 'bool' <IntegralToBoolean>
 int assert_int(int x)
-  pre(x > 0)
+  cppverify::pre(x > 0)
 {
-  ghost {
-    contract_assert(x);
+  cppverify::ghost {
+    cppverify::check(x);
   }
   return x;
 }
@@ -87,12 +87,12 @@ int assert_int(int x)
 // CHECK: FunctionDecl {{.*}} inv_int 'int (int)'
 // CHECK: invariant: ImplicitCastExpr {{.*}} 'bool' <IntegralToBoolean>
 int inv_int(int n)
-  pre(n > 0)
+  cppverify::pre(n > 0)
 {
   int i = 1;
   while (i < n)
-    invariant(i)
-    decreases(n - i)
+    cppverify::invariant(i)
+    cppverify::decreases(n - i)
   {
     i++;
   }
