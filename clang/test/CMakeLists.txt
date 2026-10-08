@@ -112,6 +112,10 @@ list(APPEND CLANG_TEST_DEPS
   hmaptool
   )
 
+if(TARGET cpp-verify)
+  list(APPEND CLANG_TEST_DEPS cpp-verify)
+endif()
+
 if(CLANG_ENABLE_CIR)
   list(APPEND CLANG_TEST_DEPS
     cir-opt
