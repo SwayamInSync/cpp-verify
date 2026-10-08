@@ -3,6 +3,7 @@
 #include "../../lib/Verify/Backend/ObligationSerialization.h"
 #include "../../lib/Verify/Backend/ObligationSimplify.h"
 #include "../../lib/Verify/Backend/VerifyBackend.h"
+#include "CppVerifyVersion.h"
 #include "DumpIR.h"
 #include "Verifier.h"
 #include "clang/AST/ASTConsumer.h"
@@ -760,14 +761,22 @@ int main(int argc, const char **argv) {
       break;
     }
   }
-  std::vector<const char *> AdjustedArgv;
-  if (HasObligationInput) {
-    AdjustedArgv.assign(argv, argv + argc);
+  std::vector<const char *> AdjustedArgv(argv, argv + argc);
+  if (HasObligationInput)
     AdjustedArgv.push_back(ReplayPlaceholder);
-    argv = AdjustedArgv.data();
-    argc = static_cast<int>(AdjustedArgv.size());
-  }
+  // Without "--", Clang tooling looks for a compile_commands.json and reports
+  // running "without flags" when there is none. cpp-verify adds its own flags,
+  // so it looks for the database itself below, and a file without one is
+  // ordinary use.
+  const bool ExplicitFlags = llvm::any_of(AdjustedArgv, [](const char *Arg) {
+    return llvm::StringRef(Arg) == "--";
+  });
+  if (!ExplicitFlags)
+    AdjustedArgv.push_back("--");
+  argv = AdjustedArgv.data();
+  argc = static_cast<int>(AdjustedArgv.size());
 
+  cl::SetVersionPrinter([](raw_ostream &OS) { verify::printVersion(OS); });
   auto ExpectedParser =
       CommonOptionsParser::create(argc, argv, CppVerifyCategory);
   if (!ExpectedParser) {
@@ -811,9 +820,31 @@ int main(int argc, const char **argv) {
     gObligationOut = ObligationFile.get();
   }
 
-  ClangTool Tool(OptionsParser.getCompilations(),
+  std::unique_ptr<ArgumentsAdjustingCompilations> Database;
+  if (!ExplicitFlags) {
+    std::string Error;
+    llvm::StringRef BuildPath;
+    if (auto *Option = cl::getRegisteredOptions().lookup("p"))
+      BuildPath = static_cast<cl::opt<std::string> *>(Option)->getValue();
+    std::unique_ptr<CompilationDatabase> Found =
+        BuildPath.empty()
+            ? CompilationDatabase::autoDetectFromSource(
+                  OptionsParser.getSourcePathList().front(), Error)
+            : CompilationDatabase::autoDetectFromDirectory(BuildPath, Error);
+    if (!Found && !BuildPath.empty()) {
+      llvm::errs() << "error: -p " << BuildPath
+                   << " names no compilation database:\n"
+                   << Error;
+      return 1;
+    }
+    if (Found) {
+      Database =
+          std::make_unique<ArgumentsAdjustingCompilations>(std::move(Found));
+      Database->appendArgumentsAdjuster(OptionsParser.getArgumentsAdjuster());
+    }
+  }
+  ClangTool Tool(Database ? *Database : OptionsParser.getCompilations(),
                  OptionsParser.getSourcePathList());
-  Tool.appendArgumentsAdjuster(OptionsParser.getArgumentsAdjuster());
   Tool.appendArgumentsAdjuster(getInsertArgumentAdjuster(
       {"-fverify-contracts", "-std=c++17"}, ArgumentInsertPosition::BEGIN));
 #if defined(__APPLE__)
