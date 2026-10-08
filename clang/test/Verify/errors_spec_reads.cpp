@@ -1,4 +1,4 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s
 //
 // A reads range is a pointer and an element count fixed by the arguments: a
 // range that moved with the heap could not frame it.
