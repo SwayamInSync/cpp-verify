@@ -18,6 +18,7 @@
 #include "../Transform/Passivize.h"
 #include "../Transform/SpecInline.h"
 #include "../Transform/UBChecks.h"
+#include "CppVerifyVersion.h"
 #include "DumpIR.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/Basic/SourceManager.h"
@@ -1397,7 +1398,7 @@ class Verifier {
                                      Root.c_str());
 
     const std::string ToolchainPath = leanProjectPath(Root, {"lean-toolchain"});
-    constexpr llvm::StringLiteral Toolchain = "leanprover/lean4:v4.32.2\n";
+    const std::string Toolchain = (LeanToolchain + "\n").str();
     if (llvm::sys::fs::exists(ToolchainPath)) {
       auto Existing = llvm::MemoryBuffer::getFile(ToolchainPath);
       if (!Existing)
