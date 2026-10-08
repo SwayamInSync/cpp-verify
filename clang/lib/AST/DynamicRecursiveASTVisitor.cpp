@@ -109,6 +109,10 @@ template <bool Const> struct Impl : RecursiveASTVisitor<Impl<Const>> {
 
   bool shouldVisitLambdaBody() const { return Visitor.ShouldVisitLambdaBody; }
 
+  bool shouldVisitCppVerifyContracts() const {
+    return Visitor.ShouldVisitCppVerifyContracts;
+  }
+
   // Supporting post-order would be very hard because of quirks of the
   // RAV implementation that only work with CRTP. It also is only used
   // by less than 5 visitors in the entire code base.
