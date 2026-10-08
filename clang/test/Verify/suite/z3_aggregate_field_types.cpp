@@ -8,22 +8,22 @@ struct Mixed {
 };
 
 Mixed valid_mixed_copy(Mixed input)
-  post(result.flag == input.flag)
-  post(result.value == input.value)
-  post(result.wide == input.wide)
+  cppverify::post(cppverify::result.flag == input.flag)
+  cppverify::post(cppverify::result.value == input.value)
+  cppverify::post(cppverify::result.wide == input.wide)
 {
   return input;
 }
 
 bool valid_mixed_copy_call(Mixed input)
-  post(result == input.flag)
+  cppverify::post(cppverify::result == input.flag)
 {
   Mixed output = valid_mixed_copy(input);
   return output.flag;
 }
 
 unsigned long long valid_old_wide_field(Mixed input)
-  post(result == old(input.wide))
+  cppverify::post(cppverify::result == cppverify::old(input.wide))
 {
   unsigned long long saved = input.wide;
   input.wide = 0;
@@ -31,7 +31,7 @@ unsigned long long valid_old_wide_field(Mixed input)
 }
 
 Mixed invalid_bool_field_copy(Mixed input)
-  post(result.flag != input.flag)
+  cppverify::post(cppverify::result.flag != input.flag)
 {
   return input;
 }
