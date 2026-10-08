@@ -2,13 +2,13 @@
 // RUN: %cpp-verify --backend=bmc --unroll=2 %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 int sum_for(int n)
-  pre(n >= 0 && n <= 2)
-  post(result >= 0)
+  cppverify::pre(n >= 0 && n <= 2)
+  cppverify::post(cppverify::result >= 0)
 {
   int s = 0;
   for (int i = 0; i < n; ++i)
-    invariant(s >= 0)
-    invariant(i >= 0)
+    cppverify::invariant(s >= 0)
+    cppverify::invariant(i >= 0)
   {
     s = s + 1;
   }
