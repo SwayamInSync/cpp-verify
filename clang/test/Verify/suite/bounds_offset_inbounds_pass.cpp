@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: %cpp-verify --check-ub %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: %cpp-verify --check-ub %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 // Array-bounds: p[i + 1] is in bounds and overflow-free when i < n - 1 with n
 // bounded, so it verifies.
 cppverify::spec bool valid(int* p, int n) { return true; }
