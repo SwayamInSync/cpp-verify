@@ -1,5 +1,5 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s
-// RUN: not %cpp-verify --backend=bmc --unroll=1 %s 2>&1 | FileCheck %s
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s
+// RUN: not %cpp-verify --backend=bmc --unroll=1 %s -- 2>&1 | FileCheck %s
 //
 // when(c) restricts a spec's definition to the domain c: its termination is
 // checked there only, and outside it the spec's value is unspecified, so
