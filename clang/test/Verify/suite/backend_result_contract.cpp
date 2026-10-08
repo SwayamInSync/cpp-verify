@@ -8,13 +8,13 @@
 // RUN: not grep -q '^import CppVerify.Proofs.Goal_' %t.no-fallback/CppVerify/Check.lean
 
 int valid_result(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   return value;
 }
 
 int invalid_result()
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   return 1;
 }
