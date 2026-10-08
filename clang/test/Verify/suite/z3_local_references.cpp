@@ -2,32 +2,32 @@
 // RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 void set_value(int &target, int value)
-  modifies(target)
-  post(target == value)
+  cppverify::modifies(target)
+  cppverify::post(target == value)
 {
   target = value;
 }
 
 void set_pair(int &left, int &right, int value)
-  modifies(left, right)
-  post(left == value && right == value)
+  cppverify::modifies(left, right)
+  cppverify::post(left == value && right == value)
 {
   left = value;
   right = value;
 }
 
 void set_aliases(int &left, int &right, int value)
-  aliases(left, right)
-  modifies(left, right)
-  post(left == value && right == value)
+  cppverify::aliases(left, right)
+  cppverify::modifies(left, right)
+  cppverify::post(left == value && right == value)
 {
   left = value;
   right = value;
 }
 
 void swap_values(int &left, int &right)
-  modifies(left, right)
-  post(left == old(right) && right == old(left))
+  cppverify::modifies(left, right)
+  cppverify::post(left == cppverify::old(right) && right == cppverify::old(left))
 {
   int temporary = left;
   left = right;
@@ -35,39 +35,39 @@ void swap_values(int &left, int &right)
 }
 
 int identity(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   return value;
 }
 
 void set_through_alias(int &target, int value)
-  modifies(target)
-  post(target == value)
+  cppverify::modifies(target)
+  cppverify::post(target == value)
 {
   int &alias = target;
   alias = value;
 }
 
 void forward_reference_alias(int &target, int value)
-  modifies(target)
-  post(target == value)
+  cppverify::modifies(target)
+  cppverify::post(target == value)
 {
   int &alias = target;
   set_value(alias, value);
 }
 
 void set_through_pointer_alias(int *target, int value)
-  pre(target != nullptr)
-  modifies(*target)
-  post(*target == value)
+  cppverify::pre(target != nullptr)
+  cppverify::modifies(*target)
+  cppverify::post(*target == value)
 {
   int &alias = *target;
   alias = value;
 }
 
 int local_actual(int value)
-  pre(value < 2147483647)
-  post(result == value + 1)
+  cppverify::pre(value < 2147483647)
+  cppverify::post(cppverify::result == value + 1)
 {
   int local = value;
   set_value(local, value + 1);
@@ -75,7 +75,7 @@ int local_actual(int value)
 }
 
 int call_initialized_local(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int local = identity(value);
   set_value(local, value);
@@ -83,7 +83,7 @@ int call_initialized_local(int value)
 }
 
 int modular_local_alias(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int local = 0;
   set_through_alias(local, value);
@@ -91,7 +91,7 @@ int modular_local_alias(int value)
 }
 
 int forwarded_local_alias(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int local = 0;
   forward_reference_alias(local, value);
@@ -99,7 +99,7 @@ int forwarded_local_alias(int value)
 }
 
 int dynamic_pointer_alias()
-  post(result == 5)
+  cppverify::post(cppverify::result == 5)
 {
   int *pointer = new int(0);
   set_through_pointer_alias(pointer, 5);
@@ -109,9 +109,9 @@ int dynamic_pointer_alias()
 }
 
 int pointer_binding_snapshot(int *first, int *second)
-  pre(first != nullptr && second != nullptr && *first == 1 && *second == 2)
-  modifies(*first)
-  post(result == 4 && *second == 2)
+  cppverify::pre(first != nullptr && second != nullptr && *first == 1 && *second == 2)
+  cppverify::modifies(*first)
+  cppverify::post(cppverify::result == 4 && *second == 2)
 {
   int &alias = *first;
   first = second;
@@ -120,14 +120,14 @@ int pointer_binding_snapshot(int *first, int *second)
 }
 
 void set_flag(bool &target)
-  modifies(target)
-  post(target)
+  cppverify::modifies(target)
+  cppverify::post(target)
 {
   target = true;
 }
 
 bool bool_local()
-  post(result)
+  cppverify::post(cppverify::result)
 {
   bool local = false;
   set_flag(local);
@@ -135,7 +135,7 @@ bool bool_local()
 }
 
 int branch_local(bool choose)
-  post(result == (choose ? 3 : 4))
+  cppverify::post(cppverify::result == (choose ? 3 : 4))
 {
   if (choose) {
     int chosen = 0;
@@ -148,8 +148,8 @@ int branch_local(bool choose)
 }
 
 int local_alias(int value)
-  pre(value < 2147483647)
-  post(result == value + 1)
+  cppverify::pre(value < 2147483647)
+  cppverify::post(cppverify::result == value + 1)
 {
   int local = value;
   int &alias = local;
@@ -158,7 +158,7 @@ int local_alias(int value)
 }
 
 int chained_const_alias(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int local = value;
   int &first = local;
@@ -167,7 +167,7 @@ int chained_const_alias(int value)
 }
 
 int distinct_locals()
-  post(result == 6)
+  cppverify::post(cppverify::result == 6)
 {
   int first = 0;
   int second = 0;
@@ -176,7 +176,7 @@ int distinct_locals()
 }
 
 int permitted_local_alias()
-  post(result == 4)
+  cppverify::post(cppverify::result == 4)
 {
   int local = 0;
   set_aliases(local, local, 4);
@@ -184,7 +184,7 @@ int permitted_local_alias()
 }
 
 bool local_swap()
-  post(result)
+  cppverify::post(cppverify::result)
 {
   int left = 1;
   int right = 2;
@@ -193,15 +193,15 @@ bool local_swap()
 }
 
 void preserve_parameter(int &parameter)
-  pre(parameter == 7)
-  post(parameter == 7)
+  cppverify::pre(parameter == 7)
+  cppverify::post(parameter == 7)
 {
   int local = 1;
   set_value(local, 2);
 }
 
 int branch_alias(bool choose)
-  post(result == (choose ? 2 : 3))
+  cppverify::post(cppverify::result == (choose ? 2 : 3))
 {
   int local = 1;
   int &alias = local;
@@ -213,16 +213,16 @@ int branch_alias(bool choose)
 }
 
 int loop_local(int count)
-  pre(count >= 0 && count <= 100)
-  post(result == count)
+  cppverify::pre(count >= 0 && count <= 100)
+  cppverify::post(cppverify::result == count)
 {
   int local = 0;
   set_value(local, 0);
   int iteration = 0;
   while (iteration < count)
-    invariant(iteration >= 0 && iteration <= count)
-    invariant(local == iteration)
-    decreases(count - iteration)
+    cppverify::invariant(iteration >= 0 && iteration <= count)
+    cppverify::invariant(local == iteration)
+    cppverify::decreases(count - iteration)
   {
     ++local;
     ++iteration;
@@ -231,15 +231,15 @@ int loop_local(int count)
 }
 
 int loop_reference(int count)
-  pre(count >= 0 && count <= 100)
-  post(result == count)
+  cppverify::pre(count >= 0 && count <= 100)
+  cppverify::post(cppverify::result == count)
 {
   int local = 0;
   int iteration = 0;
   while (iteration < count)
-    invariant(iteration >= 0 && iteration <= count)
-    invariant(local == iteration)
-    decreases(count - iteration)
+    cppverify::invariant(iteration >= 0 && iteration <= count)
+    cppverify::invariant(local == iteration)
+    cppverify::decreases(count - iteration)
   {
     int &alias = local;
     ++alias;
@@ -249,9 +249,9 @@ int loop_reference(int count)
 }
 
 int pointer_alias(int *pointer)
-  pre(pointer != nullptr && *pointer == 3)
-  modifies(*pointer)
-  post(*pointer == 4 && result == 4)
+  cppverify::pre(pointer != nullptr && *pointer == 3)
+  cppverify::modifies(*pointer)
+  cppverify::post(*pointer == 4 && cppverify::result == 4)
 {
   int &alias = *pointer;
   ++alias;
@@ -264,14 +264,14 @@ enum class State : unsigned char {
 };
 
 void set_state(State &target, State value)
-  modifies(target)
-  post(target == value)
+  cppverify::modifies(target)
+  cppverify::post(target == value)
 {
   target = value;
 }
 
 bool enum_local()
-  post(result)
+  cppverify::post(cppverify::result)
 {
   State state = State::Off;
   set_state(state, State::On);
