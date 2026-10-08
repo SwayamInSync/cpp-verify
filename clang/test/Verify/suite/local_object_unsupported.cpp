@@ -28,8 +28,8 @@ struct PointerBox {
 };
 
 void set_scalar(int &target, int value)
-  modifies(target)
-  post(target == value)
+  cppverify::modifies(target)
+  cppverify::post(target == value)
 {
   target = value;
 }
@@ -37,7 +37,7 @@ void set_scalar(int &target, int value)
 // The byte-granular allocation metadata is emitted per target byte, so an
 // oversized automatic object is rejected rather than truncated.
 int oversized_array()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   int big[100];
   big[0] = 1;
@@ -49,7 +49,7 @@ struct Wide {
 };
 
 int oversized_record()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   Wide wide;
   int &alias = wide.values[0];
@@ -58,12 +58,12 @@ int oversized_record()
 }
 
 int loop_local_array()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   int iteration = 0;
   while (iteration < 1)
-    invariant(iteration >= 0 && iteration <= 1)
-    decreases(1 - iteration)
+    cppverify::invariant(iteration >= 0 && iteration <= 1)
+    cppverify::decreases(1 - iteration)
   {
     int a[2] = {1, 2};
     set_scalar(a[0], 1);
@@ -73,12 +73,12 @@ int loop_local_array()
 }
 
 int loop_local_addressable_record()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   int iteration = 0;
   while (iteration < 1)
-    invariant(iteration >= 0 && iteration <= 1)
-    decreases(1 - iteration)
+    cppverify::invariant(iteration >= 0 && iteration <= 1)
+    cppverify::decreases(1 - iteration)
   {
     Pair value{1, 2};
     set_scalar(value.first, 1);
@@ -90,7 +90,7 @@ int loop_local_addressable_record()
 // A constant index outside the declared extent is rejected outright; the
 // one-past address is never formed.
 int constant_out_of_bounds()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   int a[4] = {1, 2, 3, 4};
   int &alias = a[4];
@@ -98,14 +98,14 @@ int constant_out_of_bounds()
 }
 
 int wide_constant_out_of_bounds()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   int a[1] = {1};
   return a[((unsigned __int128)1) << 100];
 }
 
 int string_literal_array()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   char text[4] = "abc";
   char &alias = text[0];
@@ -113,8 +113,8 @@ int string_literal_array()
 }
 
 int unsupported_copy_source(Pair *source)
-  pre(source != nullptr)
-  post(result == 1)
+  cppverify::pre(source != nullptr)
+  cppverify::post(cppverify::result == 1)
 {
   Pair value = *source;
   int &alias = value.first;
@@ -122,27 +122,27 @@ int unsupported_copy_source(Pair *source)
 }
 
 int *return_local_address()
-  post(result != nullptr)
+  cppverify::post(cppverify::result != nullptr)
 {
   int value = 7;
   return &value;
 }
 
 int *return_local_array()
-  post(result != nullptr)
+  cppverify::post(cppverify::result != nullptr)
 {
   int values[2] = {1, 2};
   return values;
 }
 
 int dereference_escaped_local()
-  post(result == 7)
+  cppverify::post(cppverify::result == 7)
 {
   return *return_local_address();
 }
 
 int raw_pointer_into_local_array()
-  post(result == 5)
+  cppverify::post(cppverify::result == 5)
 {
   int values[4] = {1, 2, 3, 4};
   int *pointer = &values[1];
@@ -151,7 +151,7 @@ int raw_pointer_into_local_array()
 }
 
 int whole_object_pointer_argument()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   Pair value{1, 2};
   int &alias = value.first;
@@ -159,7 +159,7 @@ int whole_object_pointer_argument()
 }
 
 int provenance_pointer_field()
-  post(result == 9)
+  cppverify::post(cppverify::result == 9)
 {
   int *owner = new int(7);
   PointerBox box{0, owner};
@@ -177,7 +177,7 @@ int provenance_pointer_field()
 // A non-promoted record keeps its flattened SSA form, which only exists for
 // records made purely of scalar fields.
 int flattened_nested_record()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   Outer o{{1, 2}, 3};
   return o.inner.lo;
