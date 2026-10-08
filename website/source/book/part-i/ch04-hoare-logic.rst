@@ -54,7 +54,7 @@ Modular function calls
 For a call to ``f`` with contract ``requires P_f``, ``ensures Q_f``:
 
 - **Caller** must prove the precondition ``P_f`` at the call site.
-- **Caller** may assume ``Q_f`` after the call (with return value wired to ``result`` in CppVerify).
+- **Caller** may assume ``Q_f`` after the call (with return value wired to ``cppverify::result`` in CppVerify).
 
 .. figure:: /_static/diagrams/modular-verification.svg
    :align: center
