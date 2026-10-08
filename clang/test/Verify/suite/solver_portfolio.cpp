@@ -1,11 +1,11 @@
 // REQUIRES: cvc5
-// RUN: not %cpp-verify --backend=cvc5 --jobs=4 --timeout=10000 %s 2>&1 \
+// RUN: not %cpp-verify --backend=cvc5 --jobs=4 --timeout=10000 %s -- 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=CVC5
-// RUN: not %cpp-verify --backend=portfolio --jobs=4 --timeout=10000 %s 2>&1 \
+// RUN: not %cpp-verify --backend=portfolio --jobs=4 --timeout=10000 %s -- 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=PORTFOLIO
-// RUN: %cpp-verify --backend=cvc5 --lower-only %s 2>&1 \
+// RUN: %cpp-verify --backend=cvc5 --lower-only %s -- 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=LOWER
-// RUN: not %cpp-verify --obligation-out=%t.obligations %s > /dev/null 2>&1
+// RUN: not %cpp-verify --obligation-out=%t.obligations %s -- > /dev/null 2>&1
 // RUN: not %cpp-verify --backend=portfolio --jobs=4 --timeout=10000 \
 // RUN:   --obligation-in=%t.obligations 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=REPLAY
