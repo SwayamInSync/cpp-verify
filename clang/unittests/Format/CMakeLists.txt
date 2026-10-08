@@ -9,6 +9,7 @@ add_distinct_clang_unittest(FormatTests
   DefinitionBlockSeparatorTest.cpp
   FormatTest.cpp
   FormatTestComments.cpp
+  FormatTestCppVerify.cpp
   FormatTestCSharp.cpp
   FormatTestJS.cpp
   FormatTestJava.cpp
