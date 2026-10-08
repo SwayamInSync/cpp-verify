@@ -25,6 +25,21 @@ cd cpp-verify
 
 Without `--recurse-submodules`, run `git submodule update --init third_party/z3` before building (or rely on CMake FetchContent on first configure).
 
+## LLVM base
+
+The branch `llvm-upstream` holds only untouched LLVM releases: its first commit
+is the `llvmorg-22.1.3` import that `main` starts from, and each later commit
+replaces the tree with the next release (`llvmorg-23.1.3`). `main` merges that
+branch, so an upgrade is one merge whose base is the previous release:
+
+```bash
+git fetch --depth 1 https://github.com/llvm/llvm-project refs/tags/llvmorg-X.Y.Z:refs/tags/llvmorg-X.Y.Z
+git branch -f llvm-upstream "$(git commit-tree 'llvmorg-X.Y.Z^{tree}' -p llvm-upstream -m 'llvmorg-X.Y.Z base')"
+git merge llvm-upstream
+```
+
+`cpp-verify --version` reports the LLVM release a build is based on.
+
 ## Z3
 
 `CppVerifyZ3.cmake` prefers `third_party/z3` when present, else fetches from GitHub.
