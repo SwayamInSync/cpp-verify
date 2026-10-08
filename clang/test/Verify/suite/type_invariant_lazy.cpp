@@ -4,7 +4,7 @@
 struct Coordinate {
   int x;
   int y;
-  type_invariant(x >= 0 && x <= 1000 && y >= 0 && y <= 1000);
+  cppverify::type_invariant(x >= 0 && x <= 1000 && y >= 0 && y <= 1000);
 };
 
 // Reads x: injects p.x in [0,1000] and p.y in [0,1000] as preconditions.
@@ -12,21 +12,21 @@ struct Coordinate {
 // p.x is not in itself >= 0), so this exercises injection rather than passing
 // trivially.
 int bounded_x(Coordinate p)
-  post(result >= 0 && result <= 1000)
+  cppverify::post(cppverify::result >= 0 && cppverify::result <= 1000)
 {
   return p.x;
 }
 
 // Reads both fields; sum is bounded only because both invariants are injected.
 int sum_bounded(Coordinate p)
-  post(result >= 0 && result <= 2000)
+  cppverify::post(cppverify::result >= 0 && cppverify::result <= 2000)
 {
   return p.x + p.y;
 }
 
 // Never reads p.x/p.y: no type_invariant injection, still verifies.
 int ignore_coords(Coordinate p)
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   (void)p;
   return 0;
