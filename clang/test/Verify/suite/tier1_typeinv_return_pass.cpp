@@ -4,12 +4,12 @@
 struct Box {
   int w;
   int h;
-  type_invariant(w >= 0 && h >= 0);
+  cppverify::type_invariant(w >= 0 && h >= 0);
 };
 
 Box make_box(int a, int b)
-  pre(a >= 0 && a <= 50 && b >= 0 && b <= 50)
-  post(result.w == a)
+  cppverify::pre(a >= 0 && a <= 50 && b >= 0 && b <= 50)
+  cppverify::post(cppverify::result.w == a)
 {
   Box x;
   x.w = a;
