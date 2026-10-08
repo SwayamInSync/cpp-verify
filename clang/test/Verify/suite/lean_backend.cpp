@@ -6,8 +6,8 @@
 // RUN: grep -q 'sorry' %t.lean
 
 int inc(int x)
-  pre(x >= 0 && x < 100)
-  post(result == x + 1)
+  cppverify::pre(x >= 0 && x < 100)
+  cppverify::post(cppverify::result == x + 1)
 {
   return x + 1;
 }
