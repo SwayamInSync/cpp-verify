@@ -3,14 +3,14 @@
 // RUN: %cpp-verify --dump-ir=1 %s 2>&1 | FileCheck %s --check-prefix=DUMP
 
 int *identity_pointer(int *p)
-  post(result == p)
+  cppverify::post(cppverify::result == p)
 {
   return p;
 }
 
 int read_identity(int *p)
-  pre(p != nullptr)
-  post(result == *p)
+  cppverify::pre(p != nullptr)
+  cppverify::post(cppverify::result == *p)
 {
   int *q = identity_pointer(p);
   return *q;
