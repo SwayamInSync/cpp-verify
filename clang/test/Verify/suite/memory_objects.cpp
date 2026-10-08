@@ -1,5 +1,5 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefixes=CHECK,DEDUCTIVE
-// RUN: not %cpp-verify --backend=bmc --unroll=2 %s 2>&1 | FileCheck %s
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefixes=CHECK,DEDUCTIVE
+// RUN: not %cpp-verify --backend=bmc --unroll=2 %s -- 2>&1 | FileCheck %s
 //
 // Memory checking is on by default. A pointer parameter addresses its
 // declared valid(p, n) extent, or else a single object; every access and
