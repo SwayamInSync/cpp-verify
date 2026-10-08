@@ -5,14 +5,14 @@
 // to a negative value, so preservation fails. The sound encoding catches this;
 // the old flat-VC encoding masked it.
 int overflow_invariant_fail(int n)
-  pre(n >= 0 && n <= 1000)
-  post(result >= 0)
+  cppverify::pre(n >= 0 && n <= 1000)
+  cppverify::post(cppverify::result >= 0)
 {
   int s = 0;
   int i = 0;
   while (i < n)
-    invariant(i >= 0 && i <= n && s >= 0)
-    decreases(n - i)
+    cppverify::invariant(i >= 0 && i <= n && s >= 0)
+    cppverify::decreases(n - i)
   {
     s = s + 1;
     i = i + 1;
