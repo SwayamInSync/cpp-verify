@@ -3,8 +3,8 @@
 // Layer-A UB: preconditions that bound the operands discharge the overflow
 // obligation.
 int add(int a, int b)
-  pre(a >= 0 && a <= 1000 && b >= 0 && b <= 1000)
-  post(result == a + b)
+  cppverify::pre(a >= 0 && a <= 1000 && b >= 0 && b <= 1000)
+  cppverify::post(cppverify::result == a + b)
 {
   return a + b;
 }
