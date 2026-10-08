@@ -10,8 +10,8 @@
 // CHECK: post: BinaryOperator {{.*}} 'bool' '>='
 // CHECK:   ResultExpr {{.*}} 'int'
 int result_int(int x)
-  pre(x >= 0)
-  post(result >= 0)
+  cppverify::pre(x >= 0)
+  cppverify::post(cppverify::result >= 0)
 {
   return x;
 }
@@ -23,7 +23,7 @@ int result_int(int x)
 // CHECK: post: BinaryOperator {{.*}} 'bool' '>='
 // CHECK:   ResultExpr {{.*}} 'unsigned int'
 unsigned int result_uint(unsigned int x)
-  post(result >= 0)
+  cppverify::post(cppverify::result >= 0)
 {
   return x;
 }
@@ -35,7 +35,7 @@ unsigned int result_uint(unsigned int x)
 // CHECK: post: BinaryOperator {{.*}} 'bool' '=='
 // CHECK:   ResultExpr {{.*}} 'bool'
 bool result_bool(int x)
-  post(result == true)
+  cppverify::post(cppverify::result == true)
 {
   return x > 0;
 }
@@ -48,7 +48,7 @@ bool result_bool(int x)
 // CHECK:   ResultExpr {{.*}} 'int'
 // CHECK:   BinaryOperator {{.*}} 'int' '+'
 int result_eq_expr(int a, int b)
-  post(result == a + b)
+  cppverify::post(cppverify::result == a + b)
 {
   return a + b;
 }
@@ -63,9 +63,9 @@ int result_eq_expr(int a, int b)
 // CHECK:   BinaryOperator {{.*}} 'bool' '<='
 // CHECK:     ResultExpr {{.*}} 'int'
 int result_multi_use(int x)
-  pre(x >= 0)
-  pre(x <= 100)
-  post(result >= 0 && result <= 100)
+  cppverify::pre(x >= 0)
+  cppverify::pre(x <= 100)
+  cppverify::post(cppverify::result >= 0 && cppverify::result <= 100)
 {
   return x;
 }
@@ -79,10 +79,10 @@ int result_multi_use(int x)
 // CHECK: post: BinaryOperator {{.*}} 'bool' '<='
 // CHECK:   ResultExpr {{.*}} 'int'
 int result_multi_post(int x)
-  pre(x >= 0)
-  pre(x <= 50)
-  post(result >= 0)
-  post(result <= 50)
+  cppverify::pre(x >= 0)
+  cppverify::pre(x <= 50)
+  cppverify::post(cppverify::result >= 0)
+  cppverify::post(cppverify::result <= 50)
 {
   return x;
 }
@@ -97,8 +97,8 @@ int result_multi_post(int x)
 // CHECK:     OldExpr {{.*}} 'int'
 // CHECK:       DeclRefExpr {{.*}} 'int' {{.*}} 'x'
 int old_simple(int x)
-  pre(x >= 0)
-  post(result == old(x) + 1)
+  cppverify::pre(x >= 0)
+  cppverify::post(cppverify::result == cppverify::old(x) + 1)
 {
   return x + 1;
 }
@@ -112,9 +112,9 @@ int old_simple(int x)
 // CHECK:   OldExpr {{.*}} 'int'
 // CHECK:     BinaryOperator {{.*}} 'int' '+'
 int old_expr(int a, int b)
-  pre(a >= 0)
-  pre(b >= 0)
-  post(result == old(a + b))
+  cppverify::pre(a >= 0)
+  cppverify::pre(b >= 0)
+  cppverify::post(cppverify::result == cppverify::old(a + b))
 {
   return a + b;
 }
@@ -129,7 +129,7 @@ int old_expr(int a, int b)
 // CHECK:     OldExpr {{.*}} 'int'
 // CHECK:     OldExpr {{.*}} 'int'
 int old_multi(int a, int b)
-  post(result == old(a) + old(b))
+  cppverify::post(cppverify::result == cppverify::old(a) + cppverify::old(b))
 {
   return a + b;
 }
@@ -143,8 +143,8 @@ int old_multi(int a, int b)
 // CHECK:   OldExpr {{.*}} 'int'
 // CHECK:     BinaryOperator {{.*}} 'int' '*'
 int old_nested(int x)
-  pre(x >= 0)
-  post(result == old(x * x))
+  cppverify::pre(x >= 0)
+  cppverify::post(cppverify::result == cppverify::old(x * x))
 {
   return x * x;
 }
@@ -158,8 +158,8 @@ int old_nested(int x)
 // CHECK:     ResultExpr {{.*}} 'int'
 // CHECK:     OldExpr {{.*}} 'int'
 int result_old_chain(int x)
-  pre(x > 0)
-  post(result - old(x) == 1)
+  cppverify::pre(x > 0)
+  cppverify::post(cppverify::result - cppverify::old(x) == 1)
 {
   return x + 1;
 }
@@ -172,7 +172,7 @@ int result_old_chain(int x)
 // CHECK:   ResultExpr {{.*}} 'unsigned int'
 // CHECK:   OldExpr {{.*}} 'unsigned int'
 unsigned int old_unsigned(unsigned int x)
-  post(result == old(x) + 1)
+  cppverify::post(cppverify::result == cppverify::old(x) + 1)
 {
   return x + 1;
 }
