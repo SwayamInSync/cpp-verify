@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 // Tier-0 (machine-integer honesty): `s >= 0` is NOT an inductive invariant for
 // an unbounded accumulator -- from an arbitrary s == INT_MAX, `s + 1` overflows
 // to a negative value, so preservation fails. The sound encoding catches this;
