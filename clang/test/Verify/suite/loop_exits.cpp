@@ -1,9 +1,9 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify --check-ub %s 2>&1 | FileCheck %s --check-prefixes=CHECK,DEDUCTIVE
-// RUN: not %cpp-verify --backend=bmc --unroll=5 --check-ub %s 2>&1 | FileCheck %s --check-prefixes=CHECK,BMC
-// RUN: %cpp-verify --check-ub --lower-only --dump-ir=1 %s 2>&1 | FileCheck %s --check-prefix=VCR
-// RUN: %cpp-verify --check-ub --lower-only --dump-ir=2 %s 2>&1 | FileCheck %s --check-prefix=PASSIVE
-// RUN: %cpp-verify --check-ub --lower-only --dump-ir=3 %s 2>&1 | FileCheck %s --check-prefix=VC
+// RUN: not %cpp-verify --check-ub %s -- 2>&1 | FileCheck %s --check-prefixes=CHECK,DEDUCTIVE
+// RUN: not %cpp-verify --backend=bmc --unroll=5 --check-ub %s -- 2>&1 | FileCheck %s --check-prefixes=CHECK,BMC
+// RUN: %cpp-verify --check-ub --lower-only --dump-ir=1 %s -- 2>&1 | FileCheck %s --check-prefix=VCR
+// RUN: %cpp-verify --check-ub --lower-only --dump-ir=2 %s -- 2>&1 | FileCheck %s --check-prefix=PASSIVE
+// RUN: %cpp-verify --check-ub --lower-only --dump-ir=3 %s -- 2>&1 | FileCheck %s --check-prefix=VC
 
 // Every correct function below has a wrong twin that must be refuted.
 
