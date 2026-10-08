@@ -26,7 +26,7 @@
 typedef __UINT8_TYPE__ uint8_t;
 typedef __INT32_TYPE__ int32_t;
 
-spec bool valid(uint8_t* p, int n) { return true; }
+cppverify::spec bool valid(uint8_t* p, int n) { return true; }
 
 // Unicode 15 Table 3-7 "Well-Formed UTF-8 Byte Sequences", verbatim:
 //   00..7F                          1 byte
@@ -39,14 +39,14 @@ spec bool valid(uint8_t* p, int n) { return true; }
 //   F1..F3  80..BF  80..BF  80..BF  4 bytes
 //   F4      80..8F  80..BF  80..BF  4 bytes   (8F ceiling caps at U+10FFFF)
 int32_t utf8_decode(uint8_t* s, int n, int& len)
-  pre(valid(s, n) && n >= 1 && n <= 4)
-  modifies(len)
-  post(result == -1 || (result >= 0 && result <= 1114111))
-  post(result == -1 || result < 55296 || result > 57343)
-  post(result == -1 || (len >= 1 && len <= 4 && len <= n))
-  post(result == -1 || len != 2 || result >= 128)
-  post(result == -1 || len != 3 || result >= 2048)
-  post(result == -1 || len != 4 || result >= 65536)
+  cppverify::pre(valid(s, n) && n >= 1 && n <= 4)
+  cppverify::modifies(len)
+  cppverify::post(cppverify::result == -1 || (cppverify::result >= 0 && cppverify::result <= 1114111))
+  cppverify::post(cppverify::result == -1 || cppverify::result < 55296 || cppverify::result > 57343)
+  cppverify::post(cppverify::result == -1 || (len >= 1 && len <= 4 && len <= n))
+  cppverify::post(cppverify::result == -1 || len != 2 || cppverify::result >= 128)
+  cppverify::post(cppverify::result == -1 || len != 3 || cppverify::result >= 2048)
+  cppverify::post(cppverify::result == -1 || len != 4 || cppverify::result >= 65536)
 {
   int32_t b0 = s[0];
   int32_t cp = -1;
