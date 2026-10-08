@@ -2,32 +2,32 @@
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 void write_value(int *p, int value)
-  pre(p != nullptr)
-  modifies(*p)
-  post(*p == value)
+  cppverify::pre(p != nullptr)
+  cppverify::modifies(*p)
+  cppverify::post(*p == value)
 {
   *p = value;
 }
 
 void valid_reassigned_pointer(int *p, int *q)
-  pre(p != nullptr && q != nullptr)
-  modifies(*p, *q)
+  cppverify::pre(p != nullptr && q != nullptr)
+  cppverify::modifies(*p, *q)
 {
   p = q;
   *p = 123;
 }
 
 void invalid_reassigned_store(int *p, int *q)
-  pre(p != nullptr && q != nullptr)
-  modifies(*p)
+  cppverify::pre(p != nullptr && q != nullptr)
+  cppverify::modifies(*p)
 {
   p = q;
   *p = 123;
 }
 
 void invalid_reassigned_call(int *p, int *q)
-  pre(p != nullptr && q != nullptr)
-  modifies(*p)
+  cppverify::pre(p != nullptr && q != nullptr)
+  cppverify::modifies(*p)
 {
   p = q;
   write_value(p, 123);
