@@ -60,10 +60,22 @@ function(cppverify_z3_build_external)
       "(first build needs network)")
   endif()
 
+  # Z3 is built with the toolchain and target of the build that links it.
+  set(_forward "")
+  foreach(_var CMAKE_C_COMPILER CMAKE_CXX_COMPILER CMAKE_OSX_DEPLOYMENT_TARGET
+               CMAKE_OSX_ARCHITECTURES CMAKE_OSX_SYSROOT)
+    if(${_var})
+      string(REPLACE ";" "|" _value "${${_var}}")
+      list(APPEND _forward "-D${_var}:STRING=${_value}")
+    endif()
+  endforeach()
+
   ExternalProject_Add(cppverify_z3_ep
     ${_src_args}
     PREFIX "${_prefix}"
+    LIST_SEPARATOR |
     CMAKE_CACHE_ARGS
+      ${_forward}
       -DCMAKE_BUILD_TYPE:STRING=Release
       -DCMAKE_INSTALL_PREFIX:PATH=${_install}
       -DCMAKE_POSITION_INDEPENDENT_CODE:BOOL=ON
