@@ -10,16 +10,16 @@
 
 // CHECK: FunctionDecl {{.*}} sum_spec 'int (int)' inline contract_spec
 // CHECK: decreases: DeclRefExpr {{.*}} 'int' {{.*}} 'n'
-spec int sum_spec(int n)
-  decreases(n)
+cppverify::spec int sum_spec(int n)
+  cppverify::decreases(n)
 {
   if (n <= 0) return 0;
   return n + sum_spec(n - 1);
 }
 
 // CHECK: FunctionDecl {{.*}} is_sorted_spec 'bool (int)' inline contract_spec
-spec bool is_sorted_spec(int n) {
-  return forall(i, 0, n, i >= 0);
+cppverify::spec bool is_sorted_spec(int n) {
+  return cppverify::forall(i, 0, n, i >= 0);
 }
 
 // ===========================================================================
@@ -30,12 +30,12 @@ spec bool is_sorted_spec(int n) {
 // CHECK: pre: BinaryOperator {{.*}} 'bool' '>='
 // CHECK: post: BinaryOperator {{.*}} 'bool' '>='
 // CHECK: decreases: DeclRefExpr {{.*}} 'int' {{.*}} 'n'
-proof void lemma_sum_nonneg(int n)
-  pre(n >= 0)
-  post(sum_spec(n) >= 0)
-  decreases(n)
+cppverify::proof void lemma_sum_nonneg(int n)
+  cppverify::pre(n >= 0)
+  cppverify::post(sum_spec(n) >= 0)
+  cppverify::decreases(n)
 {
-  reveal_with_fuel(sum_spec, 2);
+  cppverify::reveal_with_fuel(sum_spec, 2);
   if (n == 0) {
   } else {
     lemma_sum_nonneg(n - 1);
@@ -50,18 +50,18 @@ proof void lemma_sum_nonneg(int n)
 // CHECK-NOT: contract_spec
 // CHECK-NOT: contract_proof
 int compute_sum(int n)
-  pre(n >= 0)
-  pre(n <= 1000)
-  post(result >= 0)
-  post(result == sum_spec(n))
+  cppverify::pre(n >= 0)
+  cppverify::pre(n <= 1000)
+  cppverify::post(cppverify::result >= 0)
+  cppverify::post(cppverify::result == sum_spec(n))
 {
   // Ghost block at start
   // CHECK: GhostBlockStmt
   // CHECK:   ContractAssertStmt
-  ghost {
-    reveal_with_fuel(sum_spec, 2);
+  cppverify::ghost {
+    cppverify::reveal_with_fuel(sum_spec, 2);
     lemma_sum_nonneg(n);
-    contract_assert(sum_spec(n) >= 0);
+    cppverify::check(sum_spec(n) >= 0);
   }
 
   int s = 0, i = 0;
@@ -74,16 +74,16 @@ int compute_sum(int n)
   // CHECK: invariant: BinaryOperator {{.*}} 'bool' '<='
   // CHECK: decreases: BinaryOperator {{.*}} 'int' '-'
   while (i < n)
-    invariant(s >= 0)
-    invariant(s == sum_spec(i))
-    invariant(i >= 0)
-    invariant(i <= n)
-    invariant(s <= 1001 * i)
-    decreases(n - i)
+    cppverify::invariant(s >= 0)
+    cppverify::invariant(s == sum_spec(i))
+    cppverify::invariant(i >= 0)
+    cppverify::invariant(i <= n)
+    cppverify::invariant(s <= 1001 * i)
+    cppverify::decreases(n - i)
   {
     // Ghost block inside loop
-    ghost {
-      contract_assert(i < n);
+    cppverify::ghost {
+      cppverify::check(i < n);
     }
     s = s + i + 1;
     i = i + 1;
@@ -98,16 +98,16 @@ int compute_sum(int n)
 
 // CHECK: FunctionDecl {{.*}} compute_sum_for 'int (int)'
 int compute_sum_for(int n)
-  pre(n >= 0 && n <= 1000)
-  post(result >= 0)
+  cppverify::pre(n >= 0 && n <= 1000)
+  cppverify::post(cppverify::result >= 0)
 {
   int s = 0;
   // CHECK: ForStmt
   // CHECK: invariant: BinaryOperator {{.*}} 'bool' '&&'
   // CHECK: decreases: BinaryOperator {{.*}} 'int' '-'
   for (int i = 0; i < n; i = i + 1)
-    invariant(s >= 0 && s <= i * i && i >= 0 && i <= n)
-    decreases(n - i)
+    cppverify::invariant(s >= 0 && s <= i * i && i >= 0 && i <= n)
+    cppverify::decreases(n - i)
   {
     s = s + i + 1;
   }
@@ -124,8 +124,8 @@ int compute_sum_for(int n)
 // CHECK:   BinaryOperator {{.*}} 'int' '+'
 // CHECK:     OldExpr {{.*}} 'int'
 int increment(int x)
-  pre(x >= 0 && x < 2147483647)
-  post(result == old(x) + 1)
+  cppverify::pre(x >= 0 && x < 2147483647)
+  cppverify::post(cppverify::result == cppverify::old(x) + 1)
 {
   return x + 1;
 }
@@ -138,9 +138,9 @@ int increment(int x)
 // CHECK: pre: ForallExpr {{.*}} 'bool'
 // CHECK: post: ExistsExpr {{.*}} 'bool'
 int quant_test(int n)
-  pre(n > 0)
-  pre(forall(i, 0, n, i >= 0))
-  post(exists(j, 0, n, j == 0))
+  cppverify::pre(n > 0)
+  cppverify::pre(cppverify::forall(i, 0, n, i >= 0))
+  cppverify::post(cppverify::exists(j, 0, n, j == 0))
 {
   return n;
 }
@@ -153,9 +153,9 @@ int quant_test(int n)
 // CHECK: pre: ForallExpr {{.*}} 'bool'
 // CHECK:   ExistsExpr {{.*}} 'bool'
 int nested_quant(int m, int n)
-  pre(m >= 0 && m <= 1000000)
-  pre(n >= 0 && n <= 1000000)
-  pre(forall(i, 0, m, exists(j, 0, n, j >= i)))
+  cppverify::pre(m >= 0 && m <= 1000000)
+  cppverify::pre(n >= 0 && n <= 1000000)
+  cppverify::pre(cppverify::forall(i, 0, m, cppverify::exists(j, 0, n, j >= i)))
 {
   return m + n;
 }
@@ -169,19 +169,19 @@ int nested_quant(int m, int n)
 // CHECK: GhostBlockStmt
 // CHECK: GhostBlockStmt
 int multi_ghost_fn(int x)
-  pre(x >= 0 && x <= 1073741823)
-  post(result == x * 2)
+  cppverify::pre(x >= 0 && x <= 1073741823)
+  cppverify::post(cppverify::result == x * 2)
 {
-  ghost {
-    contract_assert(x >= 0);
+  cppverify::ghost {
+    cppverify::check(x >= 0);
   }
   int a = x;
-  ghost {
-    contract_assert(a == x);
+  cppverify::ghost {
+    cppverify::check(a == x);
   }
   int b = a + x;
-  ghost {
-    contract_assert(b == x * 2);
+  cppverify::ghost {
+    cppverify::check(b == x * 2);
   }
   return b;
 }
