@@ -3,24 +3,24 @@
 // Test that ghost code, spec functions, proof functions, and contract_assert
 // produce zero LLVM IR. Only regular functions should appear in the output.
 
-spec int spec_double(int x) {
+cppverify::spec int spec_double(int x) {
   return x * 2;
 }
 
-proof void proof_trivial(int x)
-  pre(x >= 0)
-  post(x >= 0)
+cppverify::proof void proof_trivial(int x)
+  cppverify::pre(x >= 0)
+  cppverify::post(x >= 0)
 {
 }
 
 int regular_with_ghost(int x)
-  pre(x >= 0 && x < 2147483647)
-  post(result >= 0)
+  cppverify::pre(x >= 0 && x < 2147483647)
+  cppverify::post(cppverify::result >= 0)
 {
-  ghost {
-    contract_assert(x >= 0);
+  cppverify::ghost {
+    cppverify::check(x >= 0);
     int tmp = x + 1;
-    contract_assert(tmp > 0);
+    cppverify::check(tmp > 0);
   }
   return x;
 }
