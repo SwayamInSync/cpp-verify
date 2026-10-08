@@ -3,29 +3,29 @@
 // RUN: not %cpp-verify --backend=bmc --unroll=1 %s 2>&1 | FileCheck %s --check-prefix=BMC
 
 int *make_value(int value)
-  post(result != nullptr)
-  post(*result == value)
+  cppverify::post(cppverify::result != nullptr)
+  cppverify::post(*cppverify::result == value)
 {
   int *owner = new int(value);
   return owner;
 }
 
 int observe_pointer(const int *value)
-  pre(value != nullptr)
-  post(result == old(*value))
+  cppverify::pre(value != nullptr)
+  cppverify::post(cppverify::result == cppverify::old(*value))
 {
   return *value;
 }
 
 int *uninitialized_factory()
-  post(result != nullptr)
+  cppverify::post(cppverify::result != nullptr)
 {
   int *owner = new int;
   return owner;
 }
 
 int consume_uninitialized_factory()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = uninitialized_factory();
   delete owner;
@@ -33,7 +33,7 @@ int consume_uninitialized_factory()
 }
 
 int *freed_factory()
-  post(result != nullptr)
+  cppverify::post(cppverify::result != nullptr)
 {
   int *owner = new int(1);
   delete owner;
@@ -41,7 +41,7 @@ int *freed_factory()
 }
 
 int consume_freed_factory()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = freed_factory();
   delete owner;
@@ -49,7 +49,7 @@ int consume_freed_factory()
 }
 
 int *freed_forward_factory()
-  post(result != nullptr)
+  cppverify::post(cppverify::result != nullptr)
 {
   int *owner = make_value(1);
   delete owner;
@@ -57,7 +57,7 @@ int *freed_forward_factory()
 }
 
 int consume_freed_forward_factory()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = freed_forward_factory();
   delete owner;
@@ -65,7 +65,7 @@ int consume_freed_forward_factory()
 }
 
 int *multiple_allocation_factory()
-  post(result != nullptr)
+  cppverify::post(cppverify::result != nullptr)
 {
   int *first = new int(1);
   int *second = new int(2);
@@ -73,7 +73,7 @@ int *multiple_allocation_factory()
 }
 
 int consume_multiple_allocation_factory()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = multiple_allocation_factory();
   delete owner;
@@ -81,8 +81,8 @@ int consume_multiple_allocation_factory()
 }
 
 int *secondary_escape_factory()
-  post(result != nullptr)
-  post(*result == 1)
+  cppverify::post(cppverify::result != nullptr)
+  cppverify::post(*cppverify::result == 1)
 {
   int *owner = new int(1);
   int observed = observe_pointer(owner);
@@ -90,7 +90,7 @@ int *secondary_escape_factory()
 }
 
 int consume_secondary_escape_factory()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = secondary_escape_factory();
   delete owner;
@@ -98,7 +98,7 @@ int consume_secondary_escape_factory()
 }
 
 int *nullable_leak_factory(bool discard)
-  post(result == nullptr || *result == 1)
+  cppverify::post(cppverify::result == nullptr || *cppverify::result == 1)
 {
   int *owner = new int(1);
   if (discard)
@@ -107,7 +107,7 @@ int *nullable_leak_factory(bool discard)
 }
 
 int consume_nullable_leak_factory(bool discard)
-  post(true)
+  cppverify::post(true)
 {
   int *owner = nullable_leak_factory(discard);
   delete owner;
@@ -115,10 +115,10 @@ int consume_nullable_leak_factory(bool discard)
 }
 
 int *recursive_factory(int count)
-  pre(count >= 0)
-  post(result != nullptr)
-  post(*result == count)
-  decreases(count)
+  cppverify::pre(count >= 0)
+  cppverify::post(cppverify::result != nullptr)
+  cppverify::post(*cppverify::result == count)
+  cppverify::decreases(count)
 {
   if (count == 0) {
     int *owner = new int(0);
@@ -128,7 +128,7 @@ int *recursive_factory(int count)
 }
 
 int consume_recursive_factory()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = recursive_factory(1);
   delete owner;
@@ -136,11 +136,11 @@ int consume_recursive_factory()
 }
 
 int *external_factory(int value)
-  post(result != nullptr)
-  post(*result == value);
+  cppverify::post(cppverify::result != nullptr)
+  cppverify::post(*cppverify::result == value);
 
 int consume_external_factory()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = external_factory(1);
   delete owner;
@@ -148,7 +148,7 @@ int consume_external_factory()
 }
 
 int double_delete_owned()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = make_value(1);
   delete owner;
@@ -157,7 +157,7 @@ int double_delete_owned()
 }
 
 int stale_alias_owned()
-  post(true)
+  cppverify::post(true)
 {
   int *owner = make_value(1);
   int *alias = owner;
@@ -166,7 +166,7 @@ int stale_alias_owned()
 }
 
 bool equal_factory_results()
-  post(result)
+  cppverify::post(cppverify::result)
 {
   int *left = make_value(1);
   int *right = make_value(2);
@@ -177,7 +177,7 @@ bool equal_factory_results()
 }
 
 void discard_owned_result()
-  post(true)
+  cppverify::post(true)
 {
   make_value(1);
 }
