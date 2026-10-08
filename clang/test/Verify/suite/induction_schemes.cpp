@@ -1,8 +1,8 @@
-// RUN: not %cpp-verify --timeout=10000 %s 2>&1 | FileCheck %s \
+// RUN: not %cpp-verify --timeout=10000 %s -- 2>&1 | FileCheck %s \
 // RUN:   --implicit-check-not='Verified: loopy_zero'
-// RUN: not %cpp-verify --timeout=10000 --backend=bmc --unroll=1 %s 2>&1 \
+// RUN: not %cpp-verify --timeout=10000 --backend=bmc --unroll=1 %s -- 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=BMC
-// RUN: not %cpp-verify --timeout=10000 --diagnostics-format=json %s 2>&1 \
+// RUN: not %cpp-verify --timeout=10000 --diagnostics-format=json %s -- 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=JSON
 //
 // When no finite unfolding settles a claim about a recursive spec, the
