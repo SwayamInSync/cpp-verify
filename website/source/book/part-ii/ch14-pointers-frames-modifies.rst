@@ -9,21 +9,21 @@ Swap with contract
 .. code-block:: cpp
 
    void swap(int* a, int* b)
-     pre(a != nullptr && b != nullptr)
-     modifies(*a, *b)
-     post(*a == old(*b) && *b == old(*a))
+     cv::pre(a != nullptr && b != nullptr)
+     cv::modifies(*a, *b)
+     cv::post(*a == cv::old(*b) && *b == cv::old(*a))
    {
      int t = *a; *a = *b; *b = t;
    }
 
-``old(*b)`` is the value at ``b`` at function entry.
+``cppverify::old(*b)`` is the value at ``b`` at function entry.
 
 Aliasing
 --------
 
 - Distinct mutable pointer/reference address parameters are assumed
   **non-aliased** by default.
-- Use ``aliases(dst, src)`` when aliasing is allowed.
+- Use ``cppverify::aliases(dst, src)`` when aliasing is allowed.
 
 Scalar lvalue references
 ------------------------
@@ -37,8 +37,8 @@ stores through the binding:
 .. code-block:: cpp
 
    void swap_values(int& left, int& right)
-     modifies(left, right)
-     post(left == old(right) && right == old(left))
+     cv::modifies(left, right)
+     cv::post(left == cv::old(right) && right == cv::old(left))
    {
      int temporary = left;
      left = right;
@@ -46,9 +46,9 @@ stores through the binding:
    }
 
 The verifier implicitly requires each reference to be non-null, live, and
-initialized. ``old(left)`` reads the entry heap, while the unwrapped ``left`` in
+initialized. ``cppverify::old(left)`` reads the entry heap, while the unwrapped ``left`` in
 the postcondition reads the final heap. Distinct mutable references are
-object-range disjoint unless ``aliases(left, right)`` is present.
+object-range disjoint unless ``cppverify::aliases(left, right)`` is present.
 
 Reference formals can be forwarded from another reference, bound to a direct
 dereference such as ``set_value(*p, value)``, or passed an initialized ordinary
@@ -59,7 +59,7 @@ scalar local. Local references may bind those same direct forms and chain:
 .. code-block:: cpp
 
    bool swap_locals()
-     post(result)
+     cv::post(cv::result)
    {
      int left = 1;
      int right = 2;
@@ -76,7 +76,7 @@ rebind the reference.
 
 Subscript/field/conditional bindings, temporaries, reference returns,
 address-taking, rvalue references, and non-scalar referents remain rejected.
-Addressable declarations inside loops and ``old`` of automatic locals or local
+Addressable declarations inside loops and ``cppverify::old`` of automatic locals or local
 bindings are also fail-closed; outer automatic locals and loop-local reference
 aliases are supported.
 
@@ -93,11 +93,11 @@ single object ``p`` addresses (see :doc:`ch18-undefined-behavior`).
 
 There are three frame granularities:
 
-- a **cell**, ``modifies(p[i])`` or ``modifies(p->field)``, names one exact
+- a **cell**, ``cppverify::modifies(p[i])`` or ``cppverify::modifies(p->field)``, names one exact
   address;
-- a **range**, ``modifies(p[lo : n])``, names the ``n`` elements from
+- a **range**, ``cppverify::modifies(p[lo : n])``, names the ``n`` elements from
   ``p[lo]``, half-open ``[lo, lo + n)`` (Clang's array-section syntax);
-- a **region**, ``modifies(*p)``, names the object ``p`` addresses: its
+- a **region**, ``cppverify::modifies(*p)``, names the object ``p`` addresses: its
   ``valid(p, n)`` extent, or one object.
 
 Inside the function, every store must lie in a footprint read in the entry
@@ -105,7 +105,7 @@ state. At a modular call, the caller's heap changes only inside the callee's
 footprints instantiated with the arguments, and every other cell keeps its
 value. A callee footprint must lie within the caller's own frame.
 
-A pointer-taking callee with no explicit ``modifies`` that may write memory is
+A pointer-taking callee with no explicit ``cppverify::modifies`` that may write memory is
 treated as writing the whole heap: a caller may lose a true fact about an
 unrelated object, but it cannot retain a frame fact that an unknown write
 might invalidate. An explicit caller frame cannot contain that implicit
@@ -123,44 +123,44 @@ A buffer-zeroing loop proves its full postcondition this way:
    using cppverify::valid;
 
    void zero(int* p, int n)
-     pre(valid(p, n) && n >= 0 && n <= 1000)
-     modifies(*p)
-     post(forall(i, 0, n, p[i] == 0))
+     cv::pre(valid(p, n) && n >= 0 && n <= 1000)
+     cv::modifies(*p)
+     cv::post(cv::forall(i, 0, n, p[i] == 0))
    {
      int j = 0;
      while (j < n)
-       invariant(0 <= j && j <= n && forall(i, 0, j, p[i] == 0))
-       decreases(n - j)
+       cv::invariant(0 <= j && j <= n && cv::forall(i, 0, j, p[i] == 0))
+       cv::decreases(n - j)
      { p[j] = 0; j = j + 1; }
    }
 
-The invariant ``forall(i, 0, j, p[i] == 0)`` says "everything written so far is
+The invariant ``cppverify::forall(i, 0, j, p[i] == 0)`` says "everything written so far is
 zero"; preservation across the store uses the disjointness of ``p[j]`` from each
 earlier ``p[i]``, and at exit (``j == n``) it yields the postcondition.
 
 The loop needs no invariant about memory it does not touch: a loop writes
 only the objects its stores and calls reach, and every other object keeps its
-value. A loop may also name what it writes with ``modifies`` after its
+value. A loop may also name what it writes with ``cppverify::modifies`` after its
 invariants, ACSL's ``loop assigns``. The footprints are read in each
-iteration's state, so ``modifies(p[0 : j])`` says "only the prefix written so
+iteration's state, so ``cppverify::modifies(p[0 : j])`` says "only the prefix written so
 far has changed":
 
 .. code-block:: cpp
 
    void zero_prefix(int* p, int n)
-     pre(valid(p, n + 1) && n >= 1 && n <= 1000)
-     modifies(*p)
-     post(p[n] == old(p[n]))
+     cv::pre(valid(p, n + 1) && n >= 1 && n <= 1000)
+     cv::modifies(*p)
+     cv::post(p[n] == cv::old(p[n]))
    {
      for (int j = 0; j < n; j = j + 1)
-       invariant(0 <= j && j <= n)
-       modifies(p[0 : n])
-       decreases(n - j)
+       cv::invariant(0 <= j && j <= n)
+       cv::modifies(p[0 : n])
+       cv::decreases(n - j)
      { p[j] = 0; }
    }
 
-Without the loop's ``modifies``, the whole object ``p`` addresses is written
-as far as the verifier knows, and ``p[n] == old(p[n])`` would need an
+Without the loop's ``cppverify::modifies``, the whole object ``p`` addresses is written
+as far as the verifier knows, and ``p[n] == cppverify::old(p[n])`` would need an
 invariant.
 
 The object a store writes is found from where its pointer came from (its
@@ -175,21 +175,21 @@ A subtle point shows up when a loop relates **two** buffers, as in a ``memcpy``:
 .. code-block:: cpp
 
    void copy(int* d, int* s, int n)
-     pre(valid(d, n) && valid(s, n) && n >= 0 && n <= 1000 &&
+     cv::pre(valid(d, n) && valid(s, n) && n >= 0 && n <= 1000 &&
          (d + n <= s || s + n <= d))             // explicit non-overlap
-     aliases(d, s)
-     modifies(*d)
-     post(forall(i, 0, n, d[i] == s[i]))
+     cv::aliases(d, s)
+     cv::modifies(*d)
+     cv::post(cv::forall(i, 0, n, d[i] == s[i]))
    {
      int j = 0;
      while (j < n)
-       invariant(0 <= j && j <= n && forall(i, 0, j, d[i] == s[i]))
-       decreases(n - j)
+       cv::invariant(0 <= j && j <= n && cv::forall(i, 0, j, d[i] == s[i]))
+       cv::decreases(n - j)
      { d[j] = s[j]; j = j + 1; }
    }
 
 This verifies. Two declared extents are disjoint by default, as two
-mutable pointer parameters are; ``aliases(d, s)`` lifts that default here to
+mutable pointer parameters are; ``cppverify::aliases(d, s)`` lifts that default here to
 show what the default provides. The non-overlap precondition is then
 essential: **without** it the verifier is right to reject the copy, because a store to ``d[j]`` could clobber
 some ``s[i]`` still to be read — which is exactly why the C standard library has
@@ -204,7 +204,7 @@ Declaring a checked extent
 
 Memory checking is on by default (``--no-check-ub`` turns it off). The
 ``valid(p, n)`` marker of ``<cppverify.h>`` declares a buffer's extent (a
-user-declared ``spec bool valid(int* p, int n)`` is the same marker; see
+user-declared ``cppverify::spec bool valid(int* p, int n)`` is the same marker; see
 :doc:`ch18-undefined-behavior`):
 
 .. code-block:: cpp
@@ -213,8 +213,8 @@ user-declared ``spec bool valid(int* p, int n)`` is the same marker; see
    using cppverify::valid;
 
    int get(int* p, int n, int i)
-     pre(valid(p, n) && 0 <= i && i < n)
-     post(result == p[i])
+     cv::pre(valid(p, n) && 0 <= i && i < n)
+     cv::post(cv::result == p[i])
    { return p[i]; }
 
 ``valid(p, n)`` entails ``n >= 0``. If ``n > 0``, ``p`` must be non-null and
@@ -234,7 +234,7 @@ Pointer difference supports general same-array positions under a declared
 extent. For ``q - p``, both pointers must come from one object and lie in
 ``[0, n]`` of its ``valid(p, n)`` extent; the inclusive endpoint is the legal
 one-past position. The pointers may have been stepped or copied, in loops
-too: ``decreases(end - q)`` for a walking ``q`` is a pointer difference. The
+too: ``cppverify::decreases(end - q)`` for a walking ``q`` is a pointer difference. The
 verifier subtracts target-byte addresses, divides by ``sizeof(T)``, proves
 non-nullness, liveness, common origin, bounds, and ``ptrdiff_t``
 representability, and then materializes the machine result. Without an
@@ -249,18 +249,18 @@ Extents also compose at modular calls. If a callee requires
 origin and ``0 <= offset``, ``0 <= length``, and
 ``offset + length <= n``. Empty one-past slices are legal. Read-only slice
 chains preserve the heap, while exact-cell effects such as
-``modifies(q[0])`` update only the corresponding caller cell, and a range or
-a whole-slice ``modifies(*q)`` updates only the slice:
+``cppverify::modifies(q[0])`` update only the corresponding caller cell, and a range or
+a whole-slice ``cppverify::modifies(*q)`` updates only the slice:
 
 .. cppverify-example: with zero
 
 .. code-block:: cpp
 
    void zero_tail(int* p, int n, int lo)
-     pre(valid(p, n) && n >= 1 && n <= 1000 && 0 <= lo && lo <= n)
-     modifies(*p)
-     post(forall(k, 0, lo, p[k] == old(p[k])))
-     post(forall(k, lo, n, p[k] == 0))
+     cv::pre(valid(p, n) && n >= 1 && n <= 1000 && 0 <= lo && lo <= n)
+     cv::modifies(*p)
+     cv::post(cv::forall(k, 0, lo, p[k] == cv::old(p[k])))
+     cv::post(cv::forall(k, lo, n, p[k] == 0))
    {
      zero(p + lo, n - lo);
    }
@@ -274,15 +274,15 @@ factory:
 .. code-block:: cpp
 
    int *make(int value)
-     post(result != nullptr)
-     post(*result == value)
+     cv::post(cv::result != nullptr)
+     cv::post(*cv::result == value)
    {
      int *owner = new int(value);
      return owner;
    }
 
    int consume(int value)
-     post(result == value)
+     cv::post(cv::result == value)
    {
      int *p = make(value);
      int observed = *p;
@@ -307,7 +307,7 @@ results fail closed.
 Type invariants
 ---------------
 
-A ``type_invariant`` attaches a property to a struct that every function may assume of its
+A ``cppverify::type_invariant`` attaches a property to a struct that every function may assume of its
 parameters — a frame condition on *values* rather than memory. Declare it after the fields it names:
 
 .. code-block:: cpp
@@ -315,11 +315,11 @@ parameters — a frame condition on *values* rather than memory. Declare it afte
    struct Point {
      int x;
      int y;
-     type_invariant(x >= 0 && x <= 1000 && y >= 0 && y <= 1000);
+     cv::type_invariant(x >= 0 && x <= 1000 && y >= 0 && y <= 1000);
    };
 
    int sum(Point p)
-     post(result >= 0 && result <= 2000)
+     cv::post(cv::result >= 0 && cv::result <= 2000)
    { return p.x + p.y; }            // the invariant on x, y is assumed here
 
 It is injected as a precondition at the first use of an invariant field for
