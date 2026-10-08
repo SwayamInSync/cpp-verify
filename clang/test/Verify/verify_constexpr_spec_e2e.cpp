@@ -6,8 +6,8 @@ constexpr int double_it(int x) {
 }
 
 int use_constexpr_spec(int x)
-  pre(x >= 0 && x <= 100)
-  post(result == double_it(x))
+  cppverify::pre(x >= 0 && x <= 100)
+  cppverify::post(cppverify::result == double_it(x))
 {
   return x + x;
 }
