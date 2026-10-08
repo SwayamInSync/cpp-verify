@@ -1,7 +1,7 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
-// RUN: not %cpp-verify --int-encoding=bitvector %s 2>&1 \
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: not %cpp-verify --int-encoding=bitvector %s -- 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=VERIFY
-// RUN: %cpp-verify --int-encoding=bitvector --lower-only --dump-ir=1,2,3 %s \
+// RUN: %cpp-verify --int-encoding=bitvector --lower-only --dump-ir=1,2,3 %s -- \
 // RUN:   2>&1 | FileCheck %s --check-prefix=IR
 //
 // A mathematical spec value never wraps into a C++ type. Materializing one in
