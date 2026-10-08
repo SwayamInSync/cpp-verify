@@ -17,11 +17,11 @@
 // CHECK:     ContractAssertStmt
 // CHECK:       BinaryOperator {{.*}} 'bool' '>='
 int basic_ghost(int x)
-  pre(x >= 0)
-  post(result >= 0)
+  cppverify::pre(x >= 0)
+  cppverify::post(cppverify::result >= 0)
 {
-  ghost {
-    contract_assert(x >= 0);
+  cppverify::ghost {
+    cppverify::check(x >= 0);
   }
   return x;
 }
@@ -35,15 +35,15 @@ int basic_ghost(int x)
 // CHECK: GhostBlockStmt
 // CHECK:   ContractAssertStmt
 int multi_ghost(int x)
-  pre(x >= 0 && x <= 1073741823)
-  post(result == x + x)
+  cppverify::pre(x >= 0 && x <= 1073741823)
+  cppverify::post(cppverify::result == x + x)
 {
-  ghost {
-    contract_assert(x >= 0);
+  cppverify::ghost {
+    cppverify::check(x >= 0);
   }
   int r = x + x;
-  ghost {
-    contract_assert(r == x + x);
+  cppverify::ghost {
+    cppverify::check(r == x + x);
   }
   return r;
 }
@@ -60,13 +60,13 @@ int multi_ghost(int x)
 // CHECK:   ContractAssertStmt
 // CHECK:     BinaryOperator {{.*}} 'bool' '!='
 int multi_assert(int x)
-  pre(x >= 0)
-  pre(x < 100)
+  cppverify::pre(x >= 0)
+  cppverify::pre(x < 100)
 {
-  ghost {
-    contract_assert(x >= 0);
-    contract_assert(x < 100);
-    contract_assert(x != -1);
+  cppverify::ghost {
+    cppverify::check(x >= 0);
+    cppverify::check(x < 100);
+    cppverify::check(x != -1);
   }
   return x;
 }
@@ -79,16 +79,16 @@ int multi_assert(int x)
 // CHECK:   GhostBlockStmt
 // CHECK:     ContractAssertStmt
 int ghost_in_loop(int n)
-  pre(n >= 0 && n <= 100)
-  post(result >= 0)
+  cppverify::pre(n >= 0 && n <= 100)
+  cppverify::post(cppverify::result >= 0)
 {
   int s = 0, i = 0;
   while (i < n)
-    invariant(s >= 0 && s <= i * i && i >= 0 && i <= n)
-    decreases(n - i)
+    cppverify::invariant(s >= 0 && s <= i * i && i >= 0 && i <= n)
+    cppverify::decreases(n - i)
   {
-    ghost {
-      contract_assert(s >= 0);
+    cppverify::ghost {
+      cppverify::check(s >= 0);
     }
     s = s + i;
     i = i + 1;
@@ -104,12 +104,12 @@ int ghost_in_loop(int n)
 // CHECK:   GhostBlockStmt
 // CHECK:     ContractAssertStmt
 int ghost_in_if(int x)
-  pre(x >= -100)
-  post(result >= 0)
+  cppverify::pre(x >= -100)
+  cppverify::post(cppverify::result >= 0)
 {
   if (x < 0) {
-    ghost {
-      contract_assert(x < 0);
+    cppverify::ghost {
+      cppverify::check(x < 0);
     }
     return -x;
   }
@@ -126,11 +126,11 @@ int ghost_in_if(int x)
 // CHECK:       VarDecl {{.*}} tmp 'int'
 // CHECK:     ContractAssertStmt
 int ghost_with_vars(int x)
-  pre(x >= 0 && x < 2147483647)
+  cppverify::pre(x >= 0 && x < 2147483647)
 {
-  ghost {
+  cppverify::ghost {
     int tmp = x + 1;
-    contract_assert(tmp > 0);
+    cppverify::check(tmp > 0);
   }
   return x;
 }
@@ -142,7 +142,7 @@ int ghost_with_vars(int x)
 // CHECK: GhostBlockStmt
 // CHECK:   CompoundStmt
 int empty_ghost(int x) {
-  ghost {
+  cppverify::ghost {
   }
   return x;
 }
@@ -155,11 +155,11 @@ int empty_ghost(int x) {
 // CHECK:   ContractAssertStmt
 // CHECK:     BinaryOperator {{.*}} 'bool' '&&'
 int ghost_complex(int a, int b)
-  pre(a >= 0 && a <= 1000000)
-  pre(b >= 0 && b <= 1000000)
+  cppverify::pre(a >= 0 && a <= 1000000)
+  cppverify::pre(b >= 0 && b <= 1000000)
 {
-  ghost {
-    contract_assert(a >= 0 && b >= 0);
+  cppverify::ghost {
+    cppverify::check(a >= 0 && b >= 0);
   }
   return a + b;
 }
