@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s
 
 int reject_old_do_local()
   cppverify::post(cppverify::result == 1)
