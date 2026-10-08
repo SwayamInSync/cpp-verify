@@ -196,7 +196,7 @@ int multi_return(int x)
 // ---------------------------------------------------------------------------
 // 13. Spec function with no decreases and no recursion
 // ---------------------------------------------------------------------------
-// CHECK: FunctionDecl {{.*}} identity_spec 'int (int)' inline contract_spec
+// CHECK: FunctionDecl {{.*}} identity_spec 'int (int)' inline external-linkage contract_spec
 cppverify::spec int identity_spec(int x) {
   return x;
 }
