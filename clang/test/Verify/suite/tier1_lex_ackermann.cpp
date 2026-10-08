@@ -3,8 +3,8 @@
 // Tier-1: function-level lexicographic decreases on the textbook example. Each
 // recursive call decreases (m, n) lexicographically: ack(m-1, _) drops the
 // first component; ack(m, n-1) keeps m and drops n.
-spec int ack(int m, int n)
-  decreases(m, n)
+cppverify::spec int ack(int m, int n)
+  cppverify::decreases(m, n)
 {
   if (m <= 0) return n + 1;
   if (n < 0) return 0;
