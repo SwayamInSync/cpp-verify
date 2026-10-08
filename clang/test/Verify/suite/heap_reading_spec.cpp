@@ -1,8 +1,8 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify --check-ub %s 2>&1 | FileCheck %s --check-prefixes=CHECK,LOOP
-// RUN: %cpp-verify --check-ub --lower-only --dump-ir=2 %s 2>&1 | FileCheck %s --check-prefix=PASSIVE
-// RUN: %cpp-verify --check-ub --lower-only --dump-ir=3 %s 2>&1 | FileCheck %s --check-prefix=VC
-// RUN: %cpp-verify --check-ub --lower-only --obligation-out=%t.cpv %s
+// RUN: not %cpp-verify --check-ub %s -- 2>&1 | FileCheck %s --check-prefixes=CHECK,LOOP
+// RUN: %cpp-verify --check-ub --lower-only --dump-ir=2 %s -- 2>&1 | FileCheck %s --check-prefix=PASSIVE
+// RUN: %cpp-verify --check-ub --lower-only --dump-ir=3 %s -- 2>&1 | FileCheck %s --check-prefix=VC
+// RUN: %cpp-verify --check-ub --lower-only --obligation-out=%t.cpv %s --
 // RUN: not %cpp-verify --obligation-in=%t.cpv 2>&1 | FileCheck %s --check-prefix=REPLAY
 
 // Each heap-reading spec call reads the heap state a load at that point would.
