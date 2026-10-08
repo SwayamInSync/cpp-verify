@@ -1,4 +1,4 @@
-// RUN: not %cpp-verify --timeout=10000 %s 2>&1 | FileCheck %s
+// RUN: not %cpp-verify --timeout=10000 %s -- 2>&1 | FileCheck %s
 //
 // Executable code calls lemmas about its buffers. A proof function is
 // outside the object model, so its preconditions state abstract validity;
