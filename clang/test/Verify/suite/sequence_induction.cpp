@@ -1,4 +1,4 @@
-// RUN: not %cpp-verify --timeout=20000 %s 2>&1 | FileCheck %s
+// RUN: not %cpp-verify --timeout=20000 %s -- 2>&1 | FileCheck %s
 //
 // Induction over sequences is written by the user: a recursive proof
 // function whose decreases clause is the length, citing itself on a shorter
