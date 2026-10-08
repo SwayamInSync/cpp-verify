@@ -119,7 +119,6 @@ A buffer-zeroing loop proves its full postcondition this way:
 
 .. code-block:: cpp
 
-   #include <cppverify.h>
    using cppverify::valid;
 
    void zero(int* p, int n)
@@ -209,7 +208,6 @@ user-declared ``cppverify::spec bool valid(int* p, int n)`` is the same marker; 
 
 .. code-block:: cpp
 
-   #include <cppverify.h>
    using cppverify::valid;
 
    int get(int* p, int n, int i)
