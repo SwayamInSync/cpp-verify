@@ -3189,6 +3189,7 @@ void ASTStmtWriter::VisitOldExpr(OldExpr *E) {
 void ASTStmtWriter::VisitResultExpr(ResultExpr *E) {
   VisitExpr(E);
   Record.AddSourceLocation(E->getResultLoc());
+  Record.AddSourceLocation(E->getEndLoc());
   Code = serialization::EXPR_RESULT;
 }
 
