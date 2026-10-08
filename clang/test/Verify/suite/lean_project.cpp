@@ -19,7 +19,7 @@
 // RUN: not %cpp-verify --backend=lean --lean-project=%t.empty --lean-certify %S/Inputs/lean_no_obligations.cpp 2>&1 | FileCheck %s --check-prefix=EMPTY
 
 void trivial()
-  post(true)
+  cppverify::post(true)
 {}
 
 // EXPORT: Exported: lean obligation: trivial
