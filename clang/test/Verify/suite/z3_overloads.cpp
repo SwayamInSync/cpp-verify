@@ -2,60 +2,60 @@
 // RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 int overloaded_identity(int x)
-  post(result == x)
+  cppverify::post(cppverify::result == x)
 {
   return x;
 }
 
 long overloaded_identity(long x)
-  pre(x < 9223372036854775807L)
-  post(result == x + 1)
+  cppverify::pre(x < 9223372036854775807L)
+  cppverify::post(cppverify::result == x + 1)
 {
   return x + 1;
 }
 
 int call_int_overload()
-  post(result == 7)
+  cppverify::post(cppverify::result == 7)
 {
   return overloaded_identity(7);
 }
 
 long call_long_overload()
-  post(result == 8)
+  cppverify::post(cppverify::result == 8)
 {
   return overloaded_identity(7L);
 }
 
-spec int overloaded_spec(int x) {
+cppverify::spec int overloaded_spec(int x) {
   return x + 1;
 }
 
-spec long overloaded_spec(long x) {
+cppverify::spec long overloaded_spec(long x) {
   return x + 2;
 }
 
-spec int overloaded_countdown(int n)
-  decreases(n)
+cppverify::spec int overloaded_countdown(int n)
+  cppverify::decreases(n)
 {
   if (n <= 0)
     return 0;
   return overloaded_countdown(n - 1);
 }
 
-spec long overloaded_countdown(long n)
-  decreases(n)
+cppverify::spec long overloaded_countdown(long n)
+  cppverify::decreases(n)
 {
   return n;
 }
 
 int use_int_spec_overload()
-  post(overloaded_spec(3) == 4)
+  cppverify::post(overloaded_spec(3) == 4)
 {
   return 0;
 }
 
 int use_long_spec_overload()
-  post(overloaded_spec(3L) == 5)
+  cppverify::post(overloaded_spec(3L) == 5)
 {
   return 0;
 }
