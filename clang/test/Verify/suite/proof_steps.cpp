@@ -1,5 +1,5 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s
-// RUN: not %cpp-verify --backend=bmc --unroll=2 %s 2>&1 | FileCheck %s --check-prefix=BMC
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s
+// RUN: not %cpp-verify --backend=bmc --unroll=2 %s -- 2>&1 | FileCheck %s --check-prefix=BMC
 //
 // contract_assert(c) by { proof } proves c from a ghost proof whose facts go
 // no further: only c holds afterwards. calc { e0; op { proof } e1; ... }
