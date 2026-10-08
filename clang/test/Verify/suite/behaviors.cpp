@@ -7,73 +7,73 @@
 // that no two do; either may name the behaviors it relates.
 
 int abs_value(int x)
-  behavior(nonnegative, x >= 0)
-    post(result == x)
-  behavior(negative, x < 0)
-    pre(x > -2147483647 - 1)
-    post(result == -x)
-  complete_behaviors
-  disjoint_behaviors
+  cppverify::behavior(nonnegative, x >= 0)
+    cppverify::post(cppverify::result == x)
+  cppverify::behavior(negative, x < 0)
+    cppverify::pre(x > -2147483647 - 1)
+    cppverify::post(cppverify::result == -x)
+  cppverify::complete_behaviors
+  cppverify::disjoint_behaviors
 {
   return x < 0 ? -x : x;
 }
 // CHECK-DAG: Verified: abs_value
 
 int uses_abs(int y)
-  pre(y >= -100)
-  post(result >= 0 && (y < 0 || result == y))
+  cppverify::pre(y >= -100)
+  cppverify::post(cppverify::result >= 0 && (y < 0 || cppverify::result == y))
 {
   return abs_value(y);
 }
 // CHECK-DAG: Verified: uses_abs
 
 int calls_with_minimum(int y)
-  post(true)
+  cppverify::post(true)
 {
   return abs_value(y);
 }
 // CHECK-DAG: error: verification failed: calls_with_minimum [{{.*}}::precondition@[[@LINE-2]]:3]
 
 int sign(int x)
-  behavior(positive, x > 0)
-    post(result == 1)
-  behavior(negative, x < 0)
-    post(result == -1)
-  complete_behaviors
+  cppverify::behavior(positive, x > 0)
+    cppverify::post(cppverify::result == 1)
+  cppverify::behavior(negative, x < 0)
+    cppverify::post(cppverify::result == -1)
+  cppverify::complete_behaviors
 {
   return x > 0 ? 1 : (x < 0 ? -1 : 0);
 }
 // CHECK-DAG: error: verification failed: sign [{{.*}}::assertion@[[@LINE-4]]:3]
 
 int clamp(int x)
-  behavior(low, x <= 0)
-    post(result <= 0)
-  behavior(high, x >= 0)
-    post(result >= 0)
-  disjoint_behaviors(low, high)
+  cppverify::behavior(low, x <= 0)
+    cppverify::post(cppverify::result <= 0)
+  cppverify::behavior(high, x >= 0)
+    cppverify::post(cppverify::result >= 0)
+  cppverify::disjoint_behaviors(low, high)
 {
   return x;
 }
 // CHECK-DAG: error: verification failed: clamp [{{.*}}::assertion@[[@LINE-4]]:3]
 
 int small_zero(int x)
-  behavior(small, x < 10)
-    post(result == 0)
+  cppverify::behavior(small, x < 10)
+    cppverify::post(cppverify::result == 0)
 {
   return x < 5 ? 0 : 1;
 }
-// CHECK-DAG: error: verification failed: small_zero [{{.*}}::postcondition@[[@LINE-4]]:10]
+// CHECK-DAG: error: verification failed: small_zero [{{.*}}::postcondition@[[@LINE-4]]:21]
 
 // A behavior's assumption reads memory at entry.
 void bump(int *p)
-  pre(p != nullptr)
-  modifies(*p)
-  behavior(below, *p < 100)
-    post(*p == old(*p) + 1)
-  behavior(at_limit, *p >= 100)
-    post(*p == old(*p))
-  complete_behaviors
-  disjoint_behaviors
+  cppverify::pre(p != nullptr)
+  cppverify::modifies(*p)
+  cppverify::behavior(below, *p < 100)
+    cppverify::post(*p == cppverify::old(*p) + 1)
+  cppverify::behavior(at_limit, *p >= 100)
+    cppverify::post(*p == cppverify::old(*p))
+  cppverify::complete_behaviors
+  cppverify::disjoint_behaviors
 {
   if (*p < 100)
     *p = *p + 1;
@@ -82,14 +82,14 @@ void bump(int *p)
 
 // Global clauses hold in every behavior.
 int halve(int x)
-  pre(x >= 0)
-  post(result <= x)
-  behavior(even, x % 2 == 0)
-    post(result * 2 == x)
-  behavior(odd, x % 2 == 1)
-    post(result * 2 + 1 == x)
-  complete_behaviors
-  disjoint_behaviors
+  cppverify::pre(x >= 0)
+  cppverify::post(cppverify::result <= x)
+  cppverify::behavior(even, x % 2 == 0)
+    cppverify::post(cppverify::result * 2 == x)
+  cppverify::behavior(odd, x % 2 == 1)
+    cppverify::post(cppverify::result * 2 + 1 == x)
+  cppverify::complete_behaviors
+  cppverify::disjoint_behaviors
 {
   return x / 2;
 }
