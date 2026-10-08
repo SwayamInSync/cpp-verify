@@ -3,8 +3,8 @@
 // RUN:   -c %s -o %t.o
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
-spec int math_fibonacci(int n)
-  decreases(n)
+cppverify::spec int math_fibonacci(int n)
+  cppverify::decreases(n)
 {
   if (n <= 0)
     return 0;
@@ -13,7 +13,7 @@ spec int math_fibonacci(int n)
   return math_fibonacci(n - 1) + math_fibonacci(n - 2);
 }
 
-spec int math_value(int value) {
+cppverify::spec int math_value(int value) {
   return value;
 }
 
@@ -67,28 +67,28 @@ constexpr bool machine_fibonacci_value(int n, int value) {
          (n == 46 && value == 1836311903);
 }
 
-proof void lemma_fibonacci_step(int n)
-  pre(n >= 2)
-  post(math_fibonacci(n) ==
+cppverify::proof void lemma_fibonacci_step(int n)
+  cppverify::pre(n >= 2)
+  cppverify::post(math_fibonacci(n) ==
        math_fibonacci(n - 1) + math_fibonacci(n - 2))
 {
-  reveal_with_fuel(math_fibonacci, 1);
+  cppverify::reveal_with_fuel(math_fibonacci, 1);
 }
 
-proof void lemma_fibonacci_base(int n)
-  pre(n >= 0 && n <= 1)
-  post(math_fibonacci(n) == math_value(n))
+cppverify::proof void lemma_fibonacci_base(int n)
+  cppverify::pre(n >= 0 && n <= 1)
+  cppverify::post(math_fibonacci(n) == math_value(n))
 {
-  reveal_with_fuel(math_fibonacci, 1);
+  cppverify::reveal_with_fuel(math_fibonacci, 1);
 }
 
-proof void lemma_fibonacci_machine_step(int i, int previous, int current)
-  pre(i >= 1 && i < 46)
-  pre(previous >= 0 && previous <= 701408733)
-  pre(current >= 0 && current <= 1134903170)
-  pre(math_value(previous) == math_fibonacci(i - 1))
-  pre(math_value(current) == math_fibonacci(i))
-  post(math_value(previous + current) == math_fibonacci(i + 1))
+cppverify::proof void lemma_fibonacci_machine_step(int i, int previous, int current)
+  cppverify::pre(i >= 1 && i < 46)
+  cppverify::pre(previous >= 0 && previous <= 701408733)
+  cppverify::pre(current >= 0 && current <= 1134903170)
+  cppverify::pre(math_value(previous) == math_fibonacci(i - 1))
+  cppverify::pre(math_value(current) == math_fibonacci(i))
+  cppverify::post(math_value(previous + current) == math_fibonacci(i + 1))
 {
   lemma_fibonacci_step(i + 1);
   // Materialize the addition to check both machine definedness and its
@@ -97,48 +97,48 @@ proof void lemma_fibonacci_machine_step(int i, int previous, int current)
 }
 
 int recursive_fibonacci(int n)
-  pre(n >= 0 && n <= 46)
-  post(machine_fibonacci_value(n, result))
-  post(result == math_fibonacci(n))
-  decreases(n)
+  cppverify::pre(n >= 0 && n <= 46)
+  cppverify::post(machine_fibonacci_value(n, cppverify::result))
+  cppverify::post(cppverify::result == math_fibonacci(n))
+  cppverify::decreases(n)
 {
-  ghost {
-    hide(math_fibonacci);
+  cppverify::ghost {
+    cppverify::hide(math_fibonacci);
   }
   int answer = n;
   if (n <= 1) {
-    ghost {
+    cppverify::ghost {
       lemma_fibonacci_base(n);
     }
   } else {
     int previous = recursive_fibonacci(n - 1);
     int before_previous = recursive_fibonacci(n - 2);
-    ghost {
+    cppverify::ghost {
       lemma_fibonacci_machine_step(n - 1, before_previous, previous);
     }
     answer = previous + before_previous;
-    ghost {
-      contract_assert(math_value(answer) == math_fibonacci(n));
+    cppverify::ghost {
+      cppverify::check(math_value(answer) == math_fibonacci(n));
     }
   }
   return answer;
 }
 
 int iterative_fibonacci(int n)
-  pre(n >= 0 && n <= 46)
-  post(machine_fibonacci_value(n, result))
-  post(result == math_fibonacci(n))
+  cppverify::pre(n >= 0 && n <= 46)
+  cppverify::post(machine_fibonacci_value(n, cppverify::result))
+  cppverify::post(cppverify::result == math_fibonacci(n))
 {
-  ghost {
-    hide(math_fibonacci);
+  cppverify::ghost {
+    cppverify::hide(math_fibonacci);
   }
   if (n <= 1) {
-    ghost {
+    cppverify::ghost {
       lemma_fibonacci_base(n);
     }
     return n;
   }
-  ghost {
+  cppverify::ghost {
     lemma_fibonacci_base(0);
     lemma_fibonacci_base(1);
   }
@@ -147,19 +147,19 @@ int iterative_fibonacci(int n)
   int current = 1;
   int i = 1;
   while (i < n)
-    invariant(i >= 1 && i <= n)
-    invariant(machine_fibonacci_value(i - 1, previous))
-    invariant(machine_fibonacci_value(i, current))
-    invariant(math_value(previous) == math_fibonacci(i - 1))
-    invariant(math_value(current) == math_fibonacci(i))
-    decreases(n - i)
+    cppverify::invariant(i >= 1 && i <= n)
+    cppverify::invariant(machine_fibonacci_value(i - 1, previous))
+    cppverify::invariant(machine_fibonacci_value(i, current))
+    cppverify::invariant(math_value(previous) == math_fibonacci(i - 1))
+    cppverify::invariant(math_value(current) == math_fibonacci(i))
+    cppverify::decreases(n - i)
   {
-    ghost {
+    cppverify::ghost {
       lemma_fibonacci_machine_step(i, previous, current);
     }
     int next = previous + current;
-    ghost {
-      contract_assert(math_value(next) == math_fibonacci(i + 1));
+    cppverify::ghost {
+      cppverify::check(math_value(next) == math_fibonacci(i + 1));
     }
     previous = current;
     current = next;
@@ -169,14 +169,14 @@ int iterative_fibonacci(int n)
 }
 
 int fibonacci_forty_six()
-  post(result == 1836311903)
+  cppverify::post(cppverify::result == 1836311903)
 {
   return iterative_fibonacci(46);
 }
 
 #ifndef CPPVERIFY_POSITIVE_ONLY
 int fibonacci_forty_seven_overflows()
-  post(result == result)
+  cppverify::post(cppverify::result == cppverify::result)
 {
   int fibonacci_forty_six = recursive_fibonacci(46);
   int fibonacci_forty_five = iterative_fibonacci(45);
