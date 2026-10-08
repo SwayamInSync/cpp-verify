@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 // Tier-1: lexicographic decreases tuple. (i, j) strictly decreases each
 // iteration in lex order -- j falls while i is fixed, and when j resets i drops.
 int countdown2(int a, int b)
