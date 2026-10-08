@@ -299,6 +299,14 @@ public:
         IndexCtx.indexBody(Body, D, D);
       }
     }
+    // CppVerify: the contract, and the constructs written in the function.
+    const ASTContext &Ctx = D->getASTContext();
+    if (const FunctionContractInfo *FCI = Ctx.getFunctionContract(D);
+        FCI && FCI->ContractDecl == D)
+      for (const Stmt *Child : FCI->children())
+        IndexCtx.indexBody(Child, D, D);
+    for (const Expr *Reference : Ctx.getCppVerifyReferences(D))
+      IndexCtx.indexBody(Reference, D, D);
     return true;
   }
 
@@ -368,6 +376,14 @@ public:
         SmallVector<SymbolRelation, 4> Relations;
         gatherTemplatePseudoOverrides(D, Relations);
         IndexCtx.indexTagDecl(D, Relations);
+        // CppVerify: the type invariants.
+        const ASTContext &Ctx = D->getASTContext();
+        if (const auto *RD = dyn_cast<RecordDecl>(D))
+          if (const TypeContractInfo *TCI = Ctx.getTypeContract(RD))
+            for (const Expr *E : TCI->Invariants)
+              IndexCtx.indexBody(E, D, D);
+        for (const Expr *Reference : Ctx.getCppVerifyReferences(D))
+          IndexCtx.indexBody(Reference, D, D);
       } else {
         SmallVector<SymbolRelation, 1> Relations;
         gatherTemplatePseudoOverrides(D, Relations);
