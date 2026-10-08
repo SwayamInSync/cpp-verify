@@ -6,16 +6,16 @@ struct Pair {
 };
 
 int inc(int x)
-  pre(x >= 0 && x < 50)
-  post(result == x + 1)
+  cppverify::pre(x >= 0 && x < 50)
+  cppverify::post(cppverify::result == x + 1)
 {
   return x + 1;
 }
 
 int rich(int n, int *p)
-  pre(n >= 0 && n <= 2 && p != 0)
-  modifies(*p)
-  post(result >= 0)
+  cppverify::pre(n >= 0 && n <= 2 && p != 0)
+  cppverify::modifies(*p)
+  cppverify::post(cppverify::result >= 0)
 {
   Pair pr;
   pr.a = 0;
