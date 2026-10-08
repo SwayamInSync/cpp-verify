@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 // SOUNDNESS REGRESSION: a symbolic-range forall over the heap must NOT be
 // vacuously true. The loop stores 7 everywhere, so post forall p[i] == 0 is
 // false and must be rejected (previously a forall over a symbolic range was
