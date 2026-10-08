@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 // A heap-modifying callee with no explicit modifies clause must still havoc the
 // caller's heap (pointer param => conservatively modifies). Otherwise the caller
 // could prove a false fact about the modified cell.
