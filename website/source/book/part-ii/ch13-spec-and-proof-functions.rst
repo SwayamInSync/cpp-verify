@@ -891,7 +891,6 @@ sequence can record what a loop has seen:
 
 .. code-block:: cpp
 
-   #include <cppverify.h>
    using cppverify::seq;
 
    int count_positive(const int *a, int n)
