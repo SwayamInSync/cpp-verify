@@ -1,0 +1,42 @@
+# cpp-verify --version names its release, the LLVM release it is built on, the
+# Z3 linked into it, and the cvc5 and Lean it finds on PATH.
+#
+# UNSUPPORTED: system-windows
+# RUN: rm -rf %t && mkdir -p %t/none %t/plain %t/elan
+# RUN: env PATH=%t/none %cpp-verify --version | FileCheck %s --check-prefixes=HEAD,NONE
+# RUN: printf '#!/bin/sh\necho "This is cvc5 version 9.8.7 [git tag 9.8.7]"\n' > %t/plain/cvc5
+# RUN: printf '#!/bin/sh\necho "Lake version 5.0.0 (Lean version 4.1.0)"\n' > %t/plain/lake
+# RUN: chmod +x %t/plain/cvc5 %t/plain/lake
+# RUN: env PATH=%t/plain %cpp-verify --version | FileCheck %s --check-prefixes=HEAD,PLAIN -DDIR=%t/plain
+# RUN: mkdir -p %t/match && printf '#!/bin/sh\necho "Lake version 5.0.0 (Lean version 4.32.2)"\n' > %t/match/lake
+# RUN: chmod +x %t/match/lake
+# RUN: env PATH=%t/match %cpp-verify --version | FileCheck %s --check-prefixes=HEAD,MATCH -DDIR=%t/match
+# RUN: printf '#!/bin/sh\necho "leanprover/lean4:v4.32.2 (default)"\n' > %t/elan/elan
+# RUN: chmod +x %t/elan/elan && ln -s elan %t/elan/lake
+# RUN: env PATH=%t/elan %cpp-verify --version | FileCheck %s --check-prefixes=HEAD,ELAN -DDIR=%t/elan
+# RUN: printf '#!/bin/sh\necho "leanprover/lean4:v4.30.0 (default)"\n' > %t/elan/elan
+# RUN: env PATH=%t/elan %cpp-verify --version | FileCheck %s --check-prefixes=HEAD,ELAN-MISSING -DDIR=%t/elan
+
+# HEAD:      {{^}}cpp-verify {{[0-9]+\.[0-9]+\.[0-9]+}}
+# HEAD-NEXT: {{^}}  based on LLVM {{[0-9]+\.[0-9]+\.[0-9]+}}
+# HEAD-NEXT: {{^}}  default target: {{.+}}
+# HEAD-EMPTY:
+# HEAD-NEXT: {{^}}Verification backends:
+# HEAD-NEXT: {{^}}  z3 {{[0-9]+\.[0-9]+\.[0-9]+}} built in ({{vendored|system}})
+
+# NONE-NEXT: {{^}}  cvc5 missing not on PATH; --backend=cvc5, portfolio, and race run it (tested with 1.1.2)
+# NONE-NEXT: {{^}}  lean missing lake is not on PATH; --lean-certify runs it (projects pin leanprover/lean4:v4.32.2)
+
+# PLAIN-NEXT: {{^}}  cvc5 9.8.7 [[DIR]]/cvc5 (tested with 1.1.2)
+# PLAIN-NEXT: {{^}}  lean 4.1.0 [[DIR]]/lake, but projects pin leanprover/lean4:v4.32.2
+
+# MATCH-NEXT: {{^}}  cvc5 missing
+# MATCH-NEXT: {{^}}  lean 4.32.2 [[DIR]]/lake (projects pin leanprover/lean4:v4.32.2)
+
+# ELAN-NEXT: {{^}}  cvc5 missing
+# ELAN-NEXT: {{^}}  lean 4.32.2 [[DIR]]/lake (elan; projects pin leanprover/lean4:v4.32.2, installed)
+
+# ELAN-MISSING-NEXT: {{^}}  cvc5 missing
+# ELAN-MISSING-NEXT: {{^}}  lean 4.32.2 [[DIR]]/lake (elan; projects pin leanprover/lean4:v4.32.2, which elan installs on first use)
+
+# HEAD-NEXT: {{^}}  bmc uses z3; portfolio and race use z3 and cvc5
