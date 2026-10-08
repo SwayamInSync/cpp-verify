@@ -3,13 +3,13 @@
 
 // BMC path: loop unroll + Z3.
 int sum_small(int n)
-  pre(n >= 0 && n <= 2)
-  post(result >= 0)
+  cppverify::pre(n >= 0 && n <= 2)
+  cppverify::post(cppverify::result >= 0)
 {
   int s = 0;
   int i = 0;
   while (i < n)
-    invariant(s >= 0)
+    cppverify::invariant(s >= 0)
   {
     s = s + 1;
     i = i + 1;
