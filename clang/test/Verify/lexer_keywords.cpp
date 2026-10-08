@@ -1,36 +1,15 @@
 // RUN: %clang_cc1 -std=c++17 -fverify-contracts -dump-tokens %s 2>&1 | FileCheck %s
-// RUN: %clang_cc1 -std=c++17 -dump-tokens %s 2>&1 | FileCheck -check-prefix=NOCONTRACT %s
 //
-// Lexer test: clause keywords with -fverify-contracts; old/result are always
-// identifiers (contextual in post/body/contract expressions only).
+// The lexer sees a construct as the tokens of a qualified name; the parser
+// forms it where the construct may appear.
 
-// With -fverify-contracts, each word is a keyword token:
-//   dump-tokens format: <token-kind> '<spelling>' ...
-// CHECK:      pre 'pre'
-// CHECK-NEXT: post 'post'
-// CHECK-NEXT: invariant 'invariant'
-// CHECK-NEXT: decreases 'decreases'
-// CHECK-NEXT: ghost 'ghost'
-// CHECK-NEXT: spec 'spec'
-// CHECK-NEXT: proof 'proof'
-// CHECK-NEXT: contract_assert 'contract_assert'
-// CHECK-NEXT: forall 'forall'
-// CHECK-NEXT: exists 'exists'
+// CHECK:      identifier 'cppverify' {{.*}}lexer_keywords.cpp
+// CHECK-NEXT: coloncolon '::'
+// CHECK-NEXT: identifier 'pre'
+// CHECK-NEXT: identifier 'cv'
+// CHECK-NEXT: coloncolon '::'
+// CHECK-NEXT: identifier 'check'
 // CHECK-NEXT: identifier 'old'
 // CHECK-NEXT: identifier 'result'
 
-// Without -fverify-contracts, all become plain identifiers:
-// NOCONTRACT:      identifier 'pre'
-// NOCONTRACT-NEXT: identifier 'post'
-// NOCONTRACT-NEXT: identifier 'invariant'
-// NOCONTRACT-NEXT: identifier 'decreases'
-// NOCONTRACT-NEXT: identifier 'ghost'
-// NOCONTRACT-NEXT: identifier 'spec'
-// NOCONTRACT-NEXT: identifier 'proof'
-// NOCONTRACT-NEXT: identifier 'contract_assert'
-// NOCONTRACT-NEXT: identifier 'forall'
-// NOCONTRACT-NEXT: identifier 'exists'
-// NOCONTRACT-NEXT: identifier 'old'
-// NOCONTRACT-NEXT: identifier 'result'
-
-pre post invariant decreases ghost spec proof contract_assert forall exists old result
+cppverify::pre cv::check old result
