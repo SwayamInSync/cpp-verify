@@ -23,17 +23,27 @@ same-array pointer difference; `return`, `break`, and `continue` in `while` and
 `--int-encoding` (integers by default, bit-vectors for bit-level queries), and
 every obligation carries a precise kind in its public ID.
 
+Every construct is written qualified (`cppverify::pre`, or `cv::pre` through a
+namespace alias), and `-fverify-contracts` includes `<cppverify.h>` implicitly.
+No word is reserved, so every standard header compiles. clangd, libclang, the
+index, the AST printer, and clang-format understand the constructs, and
+`cpp-verify --version` reports the release, the LLVM release it is built on,
+and the backend versions.
+
 Current boundaries are listed in the
 [limitations reference](https://swayaminsync.github.io/cpp-verify/language/limitations.html).
-The next frontiers are floating-point semantics, `cppverify::reads` frames for heap-reading
-specs, `break`/`continue` in `do` loops, and general arrays and provenance
+The next frontiers are floating-point semantics, member functions and
+templates, `break`/`continue` in `do` loops, and general arrays and provenance
 across ownership-taking interfaces.
 
 ## Historical 2-Month MVP Timeline
 
 The original plan, kept for history. Its checkboxes were not maintained; the
 checkpoint above and the list below track current status. The planned `--bv`
-flag was superseded by `--int-encoding`.
+flag was superseded by `--int-encoding`. The plan predates the qualified
+syntax: its constructs are keywords (`KEYCONTRACT` in `TokenKinds.def`), which
+became `cppverify::`-qualified names in October 2026 (DESIGN, "Construct
+recognition").
 
 ### Weeks 1-2: Clang Frontend + Hello World — **COMPLETE**
 
@@ -61,7 +71,7 @@ flag was superseded by `--int-encoding`.
 **Goal**: Verify first integer and first pointer function end-to-end.
 
 **New keywords landed in this phase:**
-- [ ] Add `cppverify::modifies`, `cppverify::aliases`, `cppverify::recommends`, `cppverify::reveal_with_fuel` to `TokenKinds.def` under KEYCONTRACT
+- [ ] Add `modifies`, `aliases`, `recommends`, `reveal_with_fuel` to `TokenKinds.def` under KEYCONTRACT
 - [ ] Extend `FunctionContractInfo` to carry `cppverify::modifies`, `cppverify::aliases`, `cppverify::recommends`
 - [ ] Extend `ParseContractClauses` for the new clauses
 - [ ] Implement `RevealWithFuelStmt` AST node + parser entry point
@@ -113,7 +123,7 @@ flag was superseded by `--int-encoding`.
 
 **Goal**: Reduce per-function annotation burden for custom types.
 
-- [ ] Add `cppverify::type_invariant` keyword to `TokenKinds.def`
+- [ ] Add `type_invariant` keyword to `TokenKinds.def`
 - [ ] Add `TypeContractInfo` side table on `RecordDecl` in `ASTContext`
 - [ ] Parse `cppverify::type_invariant(expr)` inside record/class body in `ParseDecl.cpp`
 - [ ] ASTConverter: track which fields the function body references; inject `assume(invariant)` only at the first use of an invariant-named field — **not eagerly at function entry**
@@ -130,7 +140,7 @@ flag was superseded by `--int-encoding`.
 - [ ] Implement while loop desugaring (havoc/assume/assert pattern); heap is havocked alongside modified locals
 - [ ] Implement `cppverify::decreases` termination checking
 - [ ] Implement lexicographic `cppverify::decreases(a, b, c)` — lex order on tuple
-- [ ] Parse and represent `cppverify::spec` functions (existing keyword)
+- [ ] Parse and represent `spec` functions (existing keyword)
 - [ ] Implement spec function encoding: `(declare-fun)` + axiom; recursion depth gated by per-call-site fuel
 - [ ] Implement `RevealWithFuel` semantics: locally raise the unfolding depth for a named spec function within the enclosing function's VC
 - [ ] Parse and represent `cppverify::proof` functions
