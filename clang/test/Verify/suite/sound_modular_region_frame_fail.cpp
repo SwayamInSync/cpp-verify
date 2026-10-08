@@ -1,21 +1,21 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
-spec bool valid(int *p, int n) { return true; }
+cppverify::spec bool valid(int *p, int n) { return true; }
 
 void clobber_offset(int *p)
-  pre(valid(p, 2))
-  modifies(*p)
-  post(*p == 0)
+  cppverify::pre(valid(p, 2))
+  cppverify::modifies(*p)
+  cppverify::post(*p == 0)
 {
   *p = 0;
   p[1] = 999;
 }
 
 void invalid_region_frame(int *p)
-  pre(valid(p, 2) && p[1] == 5)
-  modifies(*p)
-  post(p[1] == 5)
+  cppverify::pre(valid(p, 2) && p[1] == 5)
+  cppverify::modifies(*p)
+  cppverify::post(p[1] == 5)
 {
   clobber_offset(p);
 }
