@@ -10,6 +10,7 @@ set(LLVM_LINK_COMPONENTS
 add_clang_library(clangParse
   ParseAST.cpp
   ParseCXXInlineMethods.cpp
+  ParseCppVerify.cpp
   ParseDecl.cpp
   ParseDeclCXX.cpp
   ParseExpr.cpp
