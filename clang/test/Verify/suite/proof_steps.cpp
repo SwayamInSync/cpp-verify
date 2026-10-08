@@ -6,24 +6,24 @@
 // proves each step that way and concludes e0 R en, where R is == when every
 // step is ==, < or > when some step is strict, else <= or >=.
 
-spec int sq(int x) { return x * x; }
+cppverify::spec int sq(int x) { return x * x; }
 
-proof void sq_monotone(int a, int b)
-  pre(0 <= a && a <= b)
-  post(sq(a) <= sq(b))
+cppverify::proof void sq_monotone(int a, int b)
+  cppverify::pre(0 <= a && a <= b)
+  cppverify::post(sq(a) <= sq(b))
 {
 }
 
-proof void sq_nonnegative(int a)
-  post(sq(a) >= 0)
+cppverify::proof void sq_nonnegative(int a)
+  cppverify::post(sq(a) >= 0)
 {
 }
 
 int bigger(int a, int b)
-  pre(0 <= a && a <= b && b <= 1000)
-  post(result == 1)
+  cppverify::pre(0 <= a && a <= b && b <= 1000)
+  cppverify::post(cppverify::result == 1)
 {
-  contract_assert(sq(a) <= sq(b)) by {
+  cppverify::check(sq(a) <= sq(b)) by {
     sq_monotone(a, b);
   }
   return 1;
@@ -34,8 +34,8 @@ int bigger(int a, int b)
 // the proof that used it.
 void proved_with_lemma(int a)
 {
-  ghost { hide(sq); }
-  contract_assert(sq(a) >= 0) by {
+  cppverify::ghost { cppverify::hide(sq); }
+  cppverify::check(sq(a) >= 0) by {
     sq_nonnegative(a);
   }
 }
@@ -43,18 +43,18 @@ void proved_with_lemma(int a)
 
 void lemma_fact_is_local(int a)
 {
-  ghost { hide(sq); }
-  contract_assert(true) by {
+  cppverify::ghost { cppverify::hide(sq); }
+  cppverify::check(true) by {
     sq_nonnegative(a);
   }
-  contract_assert(sq(a) >= 0);
+  cppverify::check(sq(a) >= 0);
 }
 // CHECK-DAG: Unresolved: lemma_fact_is_local {{.*}}[reason=spec.hidden]
 
 void wrong_claim(int a, int b)
-  pre(0 <= a && a <= b && b <= 1000)
+  cppverify::pre(0 <= a && a <= b && b <= 1000)
 {
-  contract_assert(sq(b) <= sq(a)) by {
+  cppverify::check(sq(b) <= sq(a)) by {
     sq_monotone(a, b);
   }
 }
@@ -62,33 +62,33 @@ void wrong_claim(int a, int b)
 
 // A lemma's precondition is checked where the proof calls it.
 void lemma_outside_its_domain(int a, int b)
-  pre(0 <= b && b < a && a <= 1000)
+  cppverify::pre(0 <= b && b < a && a <= 1000)
 {
-  contract_assert(true) by {
+  cppverify::check(true) by {
     sq_monotone(a, b);
   }
 }
 // CHECK-DAG: error: verification failed: lemma_outside_its_domain [{{.*}}::precondition@[[@LINE-3]]:5]
 
 void ghost_local_in_proof(int a)
-  pre(0 <= a && a <= 1000)
+  cppverify::pre(0 <= a && a <= 1000)
 {
-  contract_assert(sq(a) >= 0) by {
+  cppverify::check(sq(a) >= 0) by {
     int t = sq(a);
-    contract_assert(t == a * a);
+    cppverify::check(t == a * a);
   }
 }
 // CHECK-DAG: Verified: ghost_local_in_proof
 
 // Each iteration proves its own instance.
 void in_loop(int n)
-  pre(0 <= n && n <= 100)
+  cppverify::pre(0 <= n && n <= 100)
 {
   for (int i = 0; i < n; i = i + 1)
-    invariant(0 <= i && i <= n)
-    decreases(n - i)
+    cppverify::invariant(0 <= i && i <= n)
+    cppverify::decreases(n - i)
   {
-    contract_assert(sq(i) <= sq(i + 1)) by {
+    cppverify::check(sq(i) <= sq(i + 1)) by {
       sq_monotone(i, i + 1);
     }
   }
@@ -96,9 +96,9 @@ void in_loop(int n)
 // CHECK-DAG: Verified: in_loop
 
 void chain(int a, int b, int c)
-  pre(0 <= a && a <= b && b < c && c <= 1000)
+  cppverify::pre(0 <= a && a <= b && b < c && c <= 1000)
 {
-  calc {
+  cppverify::calc {
     sq(a);
     <= { sq_monotone(a, b); }
     sq(b);
@@ -106,26 +106,26 @@ void chain(int a, int b, int c)
     sq(c);
     == c * c;
   }
-  contract_assert(sq(a) <= c * c);
+  cppverify::check(sq(a) <= c * c);
 }
 // CHECK-DAG: Verified: chain
 
 void strict_chain(int a, int b)
-  pre(0 <= a && a < b && b <= 1000)
+  cppverify::pre(0 <= a && a < b && b <= 1000)
 {
-  calc {
+  cppverify::calc {
     a;
     < b;
     <= b + 1;
   }
-  contract_assert(a < b + 1);
+  cppverify::check(a < b + 1);
 }
 // CHECK-DAG: Verified: strict_chain
 
 void descending_chain(int a, int b)
-  pre(0 <= b && b <= a && a <= 1000)
+  cppverify::pre(0 <= b && b <= a && a <= 1000)
 {
-  calc {
+  cppverify::calc {
     sq(a);
     >= { sq_monotone(b, a); }
     sq(b);
@@ -136,9 +136,9 @@ void descending_chain(int a, int b)
 // CHECK-DAG: Verified: descending_chain
 
 void wrong_step(int a, int b)
-  pre(0 <= a && a <= b && b <= 1000)
+  cppverify::pre(0 <= a && a <= b && b <= 1000)
 {
-  calc {
+  cppverify::calc {
     sq(b);
     <= { sq_monotone(a, b); }
     sq(a);
@@ -149,14 +149,14 @@ void wrong_step(int a, int b)
 // The chain's steps are local; its conclusion is not.
 void step_is_local(int a)
 {
-  ghost { hide(sq); }
-  calc {
+  cppverify::ghost { cppverify::hide(sq); }
+  cppverify::calc {
     sq(a);
     >= { sq_nonnegative(a); }
     0;
   }
-  contract_assert(sq(a) >= 0);
-  contract_assert(sq(a) + 1 > 0);
+  cppverify::check(sq(a) >= 0);
+  cppverify::check(sq(a) + 1 > 0);
 }
 // CHECK-DAG: Verified: step_is_local
 
