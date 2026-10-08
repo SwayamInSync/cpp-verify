@@ -36,7 +36,7 @@ cd cpp-verify
 .\setup.ps1
 ```
 
-Binaries: `build/bin/cpp-verify` and `build/bin/clang++` (on Windows, under `build\bin\`).
+Binaries: `build/bin/cpp-verify`, `build/bin/clang++`, `build/bin/clangd`, and `build/bin/clang-format` (on Windows, under `build\bin\`).
 
 Z3 is vendored by default (`third_party/z3` submodule, or CMake FetchContent on first configure). See `third_party/README.md`. cvc5 is optional and is not vendored; install it (`apt install cvc5` or `brew install cvc5`) for `--backend=cvc5` and `--backend=portfolio`, or pass `--cvc5-path`.
 `cpp-verify --version` shows the cpp-verify release, the LLVM release it is built on, and the Z3, cvc5, and Lean versions it uses.
@@ -46,11 +46,11 @@ Z3 is vendored by default (`third_party/z3` submodule, or CMake FetchContent on 
 ```bash
 cmake -S llvm -B build -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
-  -DLLVM_ENABLE_PROJECTS=clang \
+  -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra" \
   -DLLVM_TARGETS_TO_BUILD=Native \
   -DCPPVERIFY_VENDOR_Z3=ON \
   -DCPPVERIFY_PREFER_SYSTEM_Z3=OFF
-ninja -C build clang cpp-verify
+ninja -C build clang cpp-verify clangd clang-format
 ```
 
 ## Quick start
