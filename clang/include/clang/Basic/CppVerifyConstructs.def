@@ -1,0 +1,58 @@
+//===--- CppVerifyConstructs.def - cpp-verify construct words ---*- C++ -*-===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+//
+// The words that name a cpp-verify construct when qualified by the namespace
+// cppverify, as in cppverify::pre(x > 0), with the positions each may take.
+//
+// CPPVERIFY_CONSTRUCT(Name, Spelling, Positions)
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef CPPVERIFY_CONSTRUCT
+#define CPPVERIFY_CONSTRUCT(Name, Spelling, Positions)
+#endif
+
+// Function clauses.
+CPPVERIFY_CONSTRUCT(Pre, "pre", FunctionClause)
+CPPVERIFY_CONSTRUCT(Post, "post", FunctionClause)
+CPPVERIFY_CONSTRUCT(Modifies, "modifies", FunctionClause | LoopClause)
+CPPVERIFY_CONSTRUCT(Aliases, "aliases", FunctionClause)
+CPPVERIFY_CONSTRUCT(Recommends, "recommends", FunctionClause)
+CPPVERIFY_CONSTRUCT(Reads, "reads", FunctionClause)
+CPPVERIFY_CONSTRUCT(When, "when", FunctionClause)
+CPPVERIFY_CONSTRUCT(Decreases, "decreases", FunctionClause | LoopClause)
+CPPVERIFY_CONSTRUCT(Inductive, "inductive", FunctionClause)
+CPPVERIFY_CONSTRUCT(Behavior, "behavior", FunctionClause)
+CPPVERIFY_CONSTRUCT(CompleteBehaviors, "complete_behaviors", FunctionClause)
+CPPVERIFY_CONSTRUCT(DisjointBehaviors, "disjoint_behaviors", FunctionClause)
+
+// Loop and class clauses.
+CPPVERIFY_CONSTRUCT(Invariant, "invariant", LoopClause)
+CPPVERIFY_CONSTRUCT(TypeInvariant, "type_invariant", ClassMember)
+
+// Declaration specifiers.
+CPPVERIFY_CONSTRUCT(Spec, "spec", Specifier)
+CPPVERIFY_CONSTRUCT(Proof, "proof", Specifier)
+
+// Statements.
+CPPVERIFY_CONSTRUCT(Ghost, "ghost", Statement)
+CPPVERIFY_CONSTRUCT(Check, "check", Statement)
+CPPVERIFY_CONSTRUCT(Calc, "calc", Statement)
+CPPVERIFY_CONSTRUCT(RevealWithFuel, "reveal_with_fuel", Statement)
+CPPVERIFY_CONSTRUCT(Hide, "hide", Statement)
+CPPVERIFY_CONSTRUCT(Reveal, "reveal", Statement)
+
+// Expressions.
+CPPVERIFY_CONSTRUCT(Forall, "forall", Expression)
+CPPVERIFY_CONSTRUCT(Exists, "exists", Expression)
+CPPVERIFY_CONSTRUCT(Choose, "choose", Expression)
+CPPVERIFY_CONSTRUCT(Old, "old", Expression)
+CPPVERIFY_CONSTRUCT(Result, "result", Expression)
+CPPVERIFY_CONSTRUCT(Trigger, "trigger", Expression)
+
+#undef CPPVERIFY_CONSTRUCT
