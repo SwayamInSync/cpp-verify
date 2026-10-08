@@ -1,8 +1,8 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify --check-ub %s 2>&1 | FileCheck %s
-// RUN: not %cpp-verify --check-ub --diagnostics-format=json %s 2>&1 \
+// RUN: not %cpp-verify --check-ub %s -- 2>&1 | FileCheck %s
+// RUN: not %cpp-verify --check-ub --diagnostics-format=json %s -- 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=JSON
-// RUN: not %cpp-verify --check-ub --lower-only --obligation-out=%t.cpv %s
+// RUN: not %cpp-verify --check-ub --lower-only --obligation-out=%t.cpv %s --
 // RUN: not %cpp-verify --obligation-in=%t.cpv 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=REPLAY
 //
