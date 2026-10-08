@@ -295,7 +295,6 @@ PUNCTUATOR(greatergreatergreater, ">>>")
 //                   extension.
 //   KEYDEFERTS - This is a keyword if the C '_Defer' TS is enabled
 //   KEYZOS - This is a keyword in C/C++ on z/OS
-//   KEYCONTRACT - This is a keyword if -fverify-contracts is enabled
 //
 KEYWORD(auto                        , KEYALL)
 KEYWORD(break                       , KEYALL)
@@ -445,27 +444,6 @@ C23_KEYWORD(typeof_unqual           , 0)
 
 // '_Defer' TS
 KEYWORD(_Defer                      , KEYDEFERTS)
-
-// CppVerify contract keywords (enabled by -fverify-contracts)
-KEYWORD(pre                         , KEYCONTRACT)
-KEYWORD(post                        , KEYCONTRACT)
-KEYWORD(invariant                   , KEYCONTRACT)
-KEYWORD(type_invariant              , KEYCONTRACT)
-KEYWORD(decreases                   , KEYCONTRACT)
-KEYWORD(ghost                       , KEYCONTRACT)
-KEYWORD(spec                        , KEYCONTRACT)
-KEYWORD(proof                       , KEYCONTRACT)
-KEYWORD(contract_assert             , KEYCONTRACT)
-KEYWORD(forall                      , KEYCONTRACT)
-KEYWORD(exists                      , KEYCONTRACT)
-// old/result are contextual identifiers (postconditions only), not lexer
-// keywords — avoids clashes with libc++ (e.g. std::codecvt::result).
-KEYWORD(modifies                      , KEYCONTRACT)
-KEYWORD(aliases                       , KEYCONTRACT)
-KEYWORD(recommends                    , KEYCONTRACT)
-KEYWORD(reveal_with_fuel              , KEYCONTRACT)
-KEYWORD(hide                          , KEYCONTRACT)
-KEYWORD(reveal                        , KEYCONTRACT)
 
 // ISO/IEC JTC1 SC22 WG14 N1169 Extension
 KEYWORD(_Accum                      , KEYFIXEDPOINT)
@@ -1061,6 +1039,10 @@ ANNOTATION(repl_input_end)
 
 // Annotation for #embed
 ANNOTATION(embed)
+
+// CppVerify: a construct written cppverify::word; the annotation value is its
+// CppVerifyConstruct.
+ANNOTATION(cppverify)
 
 #undef PRAGMA_ANNOTATION
 #undef ANNOTATION
