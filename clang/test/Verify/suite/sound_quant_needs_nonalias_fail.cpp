@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 // A quantified post that only holds when two buffers alias must never verify:
 // without a non-aliasing/overlap precondition the store to d may clobber s.
 // Z3 may report a counterexample or conservatively time out.
