@@ -2,7 +2,7 @@
 // RUN: not %cpp-verify --diagnostics-format=json %s 2>&1 | FileCheck %s --check-prefix=JSON
 
 unsigned renamed_parameter(unsigned interface_name)
-  post(result == interface_name);
+  cppverify::post(cppverify::result == interface_name);
 
 unsigned renamed_parameter(unsigned implementation_name) {
   return implementation_name + 1;
