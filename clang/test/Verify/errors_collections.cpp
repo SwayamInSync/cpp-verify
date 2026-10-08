@@ -16,7 +16,7 @@ seq identity(seq s) { return s; } // expected-error {{the cppverify type 'seq' e
                                   // expected-error {{the cppverify type 'seq' exists only for verification}}
 
 int subscript(int n) {
-  ghost seq g = cppverify::seq_of(n);
+  cppverify::ghost seq g = cppverify::seq_of(n);
   return g[0]; // expected-error {{ghost variable 'g' exists only for verification}} \
                // expected-error {{the cppverify operation 'operator[]' exists only for verification}}
 }
@@ -27,16 +27,16 @@ bool has_room(const int *p, int n) {
 
 // Ghost code, contracts, and spec and proof functions may use them.
 void ghost_use(int n)
-  pre(cppverify::seq_of(n).len() == 1)
+  cppverify::pre(cppverify::seq_of(n).len() == 1)
 {
-  ghost seq g = cppverify::seq_empty().push(n);
-  ghost { g = g.push(n); }
-  contract_assert(g.len() == 2);
+  cppverify::ghost seq g = cppverify::seq_empty().push(n);
+  cppverify::ghost { g = g.push(n); }
+  cppverify::check(g.len() == 2);
 }
 
-spec seq twice(seq s) { return s + s; }
+cppverify::spec seq twice(seq s) { return s + s; }
 
-proof void lemma(seq s)
-  post(twice(s).len() == 2 * s.len())
+cppverify::proof void lemma(seq s)
+  cppverify::post(twice(s).len() == 2 * s.len())
 {
 }
