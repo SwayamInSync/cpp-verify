@@ -6,58 +6,58 @@
 // it is the same for the same values. A claim that holds for only some
 // choices fails with a certified counterexample for another.
 
-spec bool valid(const int *p, int n) { return true; }
+cppverify::spec bool valid(const int *p, int n) { return true; }
 
-spec int half(int n) { return choose(k, 2 * k == n); }
+cppverify::spec int half(int n) { return cppverify::choose(k, 2 * k == n); }
 
 void even(int n)
-  pre(n % 2 == 0 && n >= 0 && n <= 1000)
+  cppverify::pre(n % 2 == 0 && n >= 0 && n <= 1000)
 {
-  contract_assert(2 * half(n) == n);
+  cppverify::check(2 * half(n) == n);
 }
 // CHECK-DAG: Verified: even
 
-spec int index_of(const int *a, int n, int x)
+cppverify::spec int index_of(const int *a, int n, int x)
 {
-  return choose(k, 0, n, a[k] == x);
+  return cppverify::choose(k, 0, n, a[k] == x);
 }
 
 void found(const int *a, int n, int x)
-  pre(valid(a, n) && n >= 1 && n <= 1000)
-  pre(exists(k, 0, n, a[k] == x))
+  cppverify::pre(valid(a, n) && n >= 1 && n <= 1000)
+  cppverify::pre(cppverify::exists(k, 0, n, a[k] == x))
 {
-  contract_assert(0 <= index_of(a, n, x) && index_of(a, n, x) < n);
-  contract_assert(a[index_of(a, n, x)] == x);
+  cppverify::check(0 <= index_of(a, n, x) && index_of(a, n, x) < n);
+  cppverify::check(a[index_of(a, n, x)] == x);
 }
 // CHECK-DAG: Verified: found
 
-spec int pick() { return choose(x, x > 0); }
+cppverify::spec int pick() { return cppverify::choose(x, x > 0); }
 
 void same_choice()
 {
-  contract_assert(pick() == pick());
-  contract_assert(pick() > 0);
+  cppverify::check(pick() == pick());
+  cppverify::check(pick() > 0);
 }
 // CHECK-DAG: Verified: same_choice
 
 void claims_one()
-  post(pick() == 1)
+  cppverify::post(pick() == 1)
 {
 }
 // CHECK-DAG: error: verification failed: claims_one [{{.*}}::postcondition@{{.*}}[reason=counterexample]
 
 void no_witness()
 {
-  contract_assert(choose(x, x * x == 2) == 0);
+  cppverify::check(cppverify::choose(x, x * x == 2) == 0);
 }
 // CHECK-DAG: error: verification failed: no_witness [{{.*}}::assertion@{{.*}}[reason=counterexample]
 
 // In ghost code a choice is stored like any mathematical value: the store
 // must fit, which the range guarantees when a witness exists.
 void ghost_choice(int n)
-  pre(n >= 1 && n <= 100)
+  cppverify::pre(n >= 1 && n <= 100)
 {
-  ghost int w = choose(k, 0, n + 1, k == n);
-  contract_assert(w == n);
+  cppverify::ghost int w = cppverify::choose(k, 0, n + 1, k == n);
+  cppverify::check(w == n);
 }
 // CHECK-DAG: Verified: ghost_choice
