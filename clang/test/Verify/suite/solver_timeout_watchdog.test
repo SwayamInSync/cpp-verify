@@ -5,7 +5,7 @@
 #
 # RUN: %python -c "import subprocess, sys; sys.exit(subprocess.run(sys.argv[1:], timeout=120).returncode not in (0, 1))" \
 # RUN:   %cpp-verify --jobs=1 --int-encoding=bitvector --timeout=1 \
-# RUN:   %S/Inputs/tiny_timeout.cpp > %t.out 2>&1
+# RUN:   %S/Inputs/tiny_timeout.cpp -- > %t.out 2>&1
 # RUN: FileCheck %s < %t.out
 
 # CHECK: {{Verified|Unresolved}}: copy
