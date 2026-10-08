@@ -6,10 +6,10 @@
 # RUN: not %cpp-verify --diagnostics-format=json %S/Inputs/backend_inlined_source.cpp 2>&1 | FileCheck %s --check-prefix=INLINED
 # RUN: not %cpp-verify %S/Inputs/backend_stable_id_suffix.cpp 2>&1 | FileCheck %s --check-prefix=SUFFIX
 
-# CHECK: verification failed: stable_identity [{{.*}}::postcondition@2:15]
+# CHECK: verification failed: stable_identity [{{.*}}::postcondition@2:37]
 # INLINED: "function":"inlined_source"
-# INLINED-SAME: "id":"{{.*}}::postcondition@4:8"
-# INLINED-SAME: "end_column":26
+# INLINED-SAME: "id":"{{.*}}::postcondition@4:19"
+# INLINED-SAME: "end_column":37
 # INLINED-SAME: "line":4
 
 # The suffix separates obligations of one kind at one anchor: here both
