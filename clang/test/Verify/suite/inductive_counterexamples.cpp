@@ -1,4 +1,4 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s
 //
 // A counterexample may need an inductive predicate to be false somewhere,
 // which no derivation height shows. Its check decides that by the least
