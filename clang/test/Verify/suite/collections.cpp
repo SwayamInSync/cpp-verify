@@ -15,102 +15,102 @@ using cppverify::map;
 using cppverify::multiset;
 using cppverify::set;
 
-proof void sets(set a, int x, int y)
-  pre(x != y)
+cppverify::proof void sets(set a, int x, int y)
+  cppverify::pre(x != y)
 {
-  contract_assert(a.insert(x).contains(x));
-  contract_assert(!a.remove(x).contains(x));
-  contract_assert(a.insert(x).remove(y).contains(x));
-  contract_assert(a.unite(cppverify::set_empty().insert(y)).contains(y));
-  contract_assert(a.intersect(cppverify::set_empty()) == cppverify::set_empty());
-  contract_assert(a.difference(a).subset_of(cppverify::set_empty()));
-  contract_assert(a.subset_of(a.insert(x)));
+  cppverify::check(a.insert(x).contains(x));
+  cppverify::check(!a.remove(x).contains(x));
+  cppverify::check(a.insert(x).remove(y).contains(x));
+  cppverify::check(a.unite(cppverify::set_empty().insert(y)).contains(y));
+  cppverify::check(a.intersect(cppverify::set_empty()) == cppverify::set_empty());
+  cppverify::check(a.difference(a).subset_of(cppverify::set_empty()));
+  cppverify::check(a.subset_of(a.insert(x)));
 }
 // CHECK-DAG: Verified: sets
 
-proof void set_wrong(set a, int x)
+cppverify::proof void set_wrong(set a, int x)
 {
-  contract_assert(a.contains(x));
+  cppverify::check(a.contains(x));
 }
 // CHECK-DAG: error: verification failed: set_wrong [{{.*}}::assertion@[[@LINE-2]]:3] (counterexample: a [ssa=a_0] [type=set] = {{{.*}}}{{.*}}) [backend=z3] [reason=counterexample]
 
-proof void multisets(multiset m, int x)
+cppverify::proof void multisets(multiset m, int x)
 {
-  contract_assert(m.insert(x).count(x) == m.count(x) + 1);
-  contract_assert(m.insert(x).remove(x) == m);
-  contract_assert(m.count(x) >= 0);
-  contract_assert(cppverify::multiset_empty().remove(x).count(x) == 0);
+  cppverify::check(m.insert(x).count(x) == m.count(x) + 1);
+  cppverify::check(m.insert(x).remove(x) == m);
+  cppverify::check(m.count(x) >= 0);
+  cppverify::check(cppverify::multiset_empty().remove(x).count(x) == 0);
 }
 // CHECK-DAG: Verified: multisets
 
 // Removing first loses an occurrence that is not there.
-proof void multiset_wrong(multiset m, int x)
+cppverify::proof void multiset_wrong(multiset m, int x)
 {
-  contract_assert(m.remove(x).insert(x) == m);
+  cppverify::check(m.remove(x).insert(x) == m);
 }
 // CHECK-DAG: error: verification failed: multiset_wrong [{{.*}}::assertion@[[@LINE-2]]:3] (counterexample: {{.*}}) [backend=z3] [reason=counterexample]
 
-proof void maps(map m, int k, int v, int j)
-  pre(k != j)
+cppverify::proof void maps(map m, int k, int v, int j)
+  cppverify::pre(k != j)
 {
-  contract_assert(m.insert(k, v)[k] == v);
-  contract_assert(m.insert(k, v).contains(k));
-  contract_assert(!m.remove(k).contains(k));
-  contract_assert(m.remove(k)[k] == 0);
-  contract_assert(m.insert(k, v)[j] == m[j]);
-  contract_assert(cppverify::map_empty().insert(k, v).remove(k) ==
+  cppverify::check(m.insert(k, v)[k] == v);
+  cppverify::check(m.insert(k, v).contains(k));
+  cppverify::check(!m.remove(k).contains(k));
+  cppverify::check(m.remove(k)[k] == 0);
+  cppverify::check(m.insert(k, v)[j] == m[j]);
+  cppverify::check(cppverify::map_empty().insert(k, v).remove(k) ==
                   cppverify::map_empty());
 }
 // CHECK-DAG: Verified: maps
 
-proof void map_wrong(map m, int k)
+cppverify::proof void map_wrong(map m, int k)
 {
-  contract_assert(m.insert(k, 1).remove(k) == m);
+  cppverify::check(m.insert(k, 1).remove(k) == m);
 }
 // CHECK-DAG: error: verification failed: map_wrong [{{.*}}::assertion@[[@LINE-2]]:3] (counterexample: {{.*}}m [ssa=m_0] [type=map] = {{{.*}} -> {{.*}}}) [backend=z3] [reason=counterexample]
 
 // A set may hold every integer; the certifier checks the infinite one.
-proof void some_outside(set a)
+cppverify::proof void some_outside(set a)
 {
-  contract_assert(exists(k, !a.contains(k)));
+  cppverify::check(cppverify::exists(k, !a.contains(k)));
 }
 // CHECK-DAG: error: verification failed: some_outside [{{.*}}::assertion@[[@LINE-2]]:3] (counterexample: a [ssa=a_0] [type=set] = {..}) [backend=z3] [reason=counterexample]
 
-proof void map_values(map m)
-  pre(m.contains(5))
+cppverify::proof void map_values(map m)
+  cppverify::pre(m.contains(5))
 {
-  contract_assert(forall(k, m[k] == 0));
+  cppverify::check(cppverify::forall(k, m[k] == 0));
 }
 // CHECK-DAG: error: verification failed: map_values [{{.*}}::assertion@[[@LINE-2]]:3] (counterexample: m [ssa=m_0] [type=map] = {{{.*}}5{{.*}}}) [backend=z3] [reason=counterexample]
 
-spec bool valid(const int *p, int n) { return true; }
+cppverify::spec bool valid(const int *p, int n) { return true; }
 
 // Ghost collections record what a loop has read.
 int count_equal(const int *a, int n, int x)
-  pre(valid(a, n) && n >= 0 && n <= 1000)
-  post(0 <= result && result <= n)
+  cppverify::pre(valid(a, n) && n >= 0 && n <= 1000)
+  cppverify::post(0 <= cppverify::result && cppverify::result <= n)
 {
-  ghost multiset seen = cppverify::multiset_empty();
-  ghost set values = cppverify::set_empty();
-  ghost map at = cppverify::map_empty();
+  cppverify::ghost multiset seen = cppverify::multiset_empty();
+  cppverify::ghost set values = cppverify::set_empty();
+  cppverify::ghost map at = cppverify::map_empty();
   int c = 0;
   for (int i = 0; i < n; i = i + 1)
-    invariant(0 <= i && i <= n && 0 <= c && c <= i)
-    invariant(seen.count(x) == c)
-    invariant(forall(k, 0, i, values.contains(a[k])))
-    invariant(forall(k, 0, i, at.contains(k) && at[k] == a[k]))
-    decreases(n - i)
+    cppverify::invariant(0 <= i && i <= n && 0 <= c && c <= i)
+    cppverify::invariant(seen.count(x) == c)
+    cppverify::invariant(cppverify::forall(k, 0, i, values.contains(a[k])))
+    cppverify::invariant(cppverify::forall(k, 0, i, at.contains(k) && at[k] == a[k]))
+    cppverify::decreases(n - i)
   {
     if (a[i] == x)
       c = c + 1;
-    ghost {
+    cppverify::ghost {
       seen = seen.insert(a[i]);
       values = values.insert(a[i]);
       at = at.insert(i, a[i]);
     }
   }
-  contract_assert(forall(k, 0, n, values.contains(a[k])));
-  contract_assert(n == 0 || at[n - 1] == a[n - 1]);
+  cppverify::check(cppverify::forall(k, 0, n, values.contains(a[k])));
+  cppverify::check(n == 0 || at[n - 1] == a[n - 1]);
   return c;
 }
 // CHECK-DAG: Verified: count_equal
