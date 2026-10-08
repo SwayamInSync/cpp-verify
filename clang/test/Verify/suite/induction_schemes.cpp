@@ -18,9 +18,9 @@
 #include <cppverify.h>
 using namespace cppverify;
 
-spec int fibo(int n)
-  decreases(n)
-  post(result >= 0)
+cppverify::spec int fibo(int n)
+  cppverify::decreases(n)
+  cppverify::post(cppverify::result >= 0)
 {
   if (n <= 0) return 0;
   if (n == 1) return 1;
@@ -28,9 +28,9 @@ spec int fibo(int n)
 }
 
 // The hypothesis at n - 1 and n - 2, as fibo recurses.
-proof void grows(int n)
-  pre(n >= 3)
-  post(fibo(n) >= n - 1)
+cppverify::proof void grows(int n)
+  cppverify::pre(n >= 3)
+  cppverify::post(fibo(n) >= n - 1)
 {
 }
 // CHECK-DAG: Verified: grows [backend=z3] [by induction following fibo]
@@ -39,60 +39,60 @@ proof void grows(int n)
 
 // Over a sequence: the hypothesis at the shorter sequence the recursion
 // reaches.
-spec int total(seq s)
-  decreases(s.len())
+cppverify::spec int total(seq s)
+  cppverify::decreases(s.len())
 {
   return s.len() <= 0 ? 0 : total(s.subrange(0, s.len() - 1)) + s[s.len() - 1];
 }
 
-proof void total_nonneg(seq s)
-  pre(forall(k, 0, s.len(), s[k] >= 0))
-  post(total(s) >= 0)
+cppverify::proof void total_nonneg(seq s)
+  cppverify::pre(cppverify::forall(k, 0, s.len(), s[k] >= 0))
+  cppverify::post(total(s) >= 0)
 {
 }
 // CHECK-DAG: Verified: total_nonneg [backend=z3] [by induction following total]
 
 // Through another member of a recursion group: even reaches even(n - 2)
 // through odd.
-spec bool odd(int n);
-spec bool even(int n) decreases(n) { return n <= 0 ? true : odd(n - 1); }
-spec bool odd(int n) decreases(n) { return n <= 0 ? false : even(n - 1); }
+cppverify::spec bool odd(int n);
+cppverify::spec bool even(int n) cppverify::decreases(n) { return n <= 0 ? true : odd(n - 1); }
+cppverify::spec bool odd(int n) cppverify::decreases(n) { return n <= 0 ? false : even(n - 1); }
 
-proof void even_mod(int n)
-  pre(n >= 0)
-  post(even(n) == (n % 2 == 0))
+cppverify::proof void even_mod(int n)
+  cppverify::pre(n >= 0)
+  cppverify::post(even(n) == (n % 2 == 0))
 {
 }
 // CHECK-DAG: Verified: even_mod
 
 // Under a quantifier: the hypothesis for every k the forall ranges over.
-spec bool good(int n) decreases(n) { return n <= 0 || forall(k, 0, n, good(k)); }
+cppverify::spec bool good(int n) cppverify::decreases(n) { return n <= 0 || cppverify::forall(k, 0, n, good(k)); }
 
-proof void all_good(int n)
-  post(good(n))
+cppverify::proof void all_good(int n)
+  cppverify::post(good(n))
 {
 }
 // CHECK-DAG: Verified: all_good
 
 // False claims still fail, with counterexamples checked against the
 // definitions: fibo(1) == fibo(2), odd(1) holds.
-proof void strictly_grows(int n)
-  pre(n >= 1)
-  post(fibo(n) < fibo(n + 1))
+cppverify::proof void strictly_grows(int n)
+  cppverify::pre(n >= 1)
+  cppverify::post(fibo(n) < fibo(n + 1))
 {
 }
 // CHECK-DAG: error: verification failed: strictly_grows {{.*}}[reason=counterexample]
 
-proof void even_wrong(int n)
-  pre(n >= 0)
-  post(even(n) == (n % 2 == 1))
+cppverify::proof void even_wrong(int n)
+  cppverify::pre(n >= 0)
+  cppverify::post(even(n) == (n % 2 == 1))
 {
 }
 // CHECK-DAG: error: verification failed: even_wrong {{.*}}[reason=counterexample]
 
-proof void total_positive(seq s)
-  pre(forall(k, 0, s.len(), s[k] >= 0))
-  post(total(s) > 0)
+cppverify::proof void total_positive(seq s)
+  cppverify::pre(cppverify::forall(k, 0, s.len(), s[k] >= 0))
+  cppverify::post(total(s) > 0)
 {
 }
 // CHECK-DAG: error: verification failed: total_positive {{.*}}[reason=counterexample]
@@ -100,10 +100,10 @@ proof void total_positive(seq s)
 // A spec whose termination fails gives no well-founded recursion: its
 // recursive call is at the same value, which the hypothesis's decrease
 // excludes, and nothing that rests on its definition is established.
-spec int loopy(int n) decreases(n) { return n <= 0 ? 0 : loopy(n); }
+cppverify::spec int loopy(int n) cppverify::decreases(n) { return n <= 0 ? 0 : loopy(n); }
 
-proof void loopy_zero(int n)
-  post(loopy(n) == 0)
+cppverify::proof void loopy_zero(int n)
+  cppverify::post(loopy(n) == 0)
 {
 }
 // CHECK-DAG: error: spec decreases failed: loopy
@@ -113,17 +113,17 @@ proof void loopy_zero(int n)
 // accumulator does not apply: the claim needs a stronger statement, which
 // no induction finds. The message says what was tried, and a body to start
 // from.
-spec int accumulate(int n, int acc)
-  decreases(n)
+cppverify::spec int accumulate(int n, int acc)
+  cppverify::decreases(n)
 {
   return n <= 0 ? acc : accumulate(n - 1, acc + n);
 }
 
-spec int sum(int n) decreases(n) { return n <= 0 ? 0 : n + sum(n - 1); }
+cppverify::spec int sum(int n) cppverify::decreases(n) { return n <= 0 ? 0 : n + sum(n - 1); }
 
-proof void accumulated(int n)
-  pre(n >= 0 && n <= 25000)
-  post(accumulate(n, 0) == sum(n))
+cppverify::proof void accumulated(int n)
+  cppverify::pre(n >= 0 && n <= 25000)
+  cppverify::post(accumulate(n, 0) == sum(n))
 {
 }
-// CHECK-DAG: Unresolved: accumulated [backend=z3] [reason=spec.fuel] {{.*}}induction following accumulate and induction following sum and induction on n did not prove it; a proof by induction following sum could start from the body 'if (n > 0 && n - 1 >= 0 && n - 1 <= 25000) { accumulated(n - 1); }', with decreases(n)
+// CHECK-DAG: Unresolved: accumulated [backend=z3] [reason=spec.fuel] {{.*}}induction following accumulate and induction following sum and induction on n did not prove it; a proof by induction following sum could start from the body 'if (n > 0 && n - 1 >= 0 && n - 1 <= 25000) { accumulated(n - 1); }', with cppverify::decreases(n)
