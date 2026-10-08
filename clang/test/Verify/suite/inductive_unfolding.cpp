@@ -1,4 +1,4 @@
-// RUN: not %cpp-verify --timeout=10000 %s 2>&1 \
+// RUN: not %cpp-verify --timeout=10000 %s -- 2>&1 \
 // RUN:   | FileCheck %s --implicit-check-not=invalid-result
 //
 // How far a proof sees an inductive predicate. Each named application
