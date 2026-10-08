@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 int max2(int a, int b)
   cppverify::pre(a >= -1000 && b >= -1000 && a <= 1000 && b <= 1000)
