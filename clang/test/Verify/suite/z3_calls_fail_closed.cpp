@@ -2,13 +2,13 @@
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 int overloaded(int x)
-  post(result == x)
+  cppverify::post(cppverify::result == x)
 {
   return x;
 }
 
 long overloaded(long x)
-  post(result == x)
+  cppverify::post(cppverify::result == x)
 {
   return x;
 }
@@ -18,45 +18,45 @@ int *global_state;
 
 template <typename T>
 int unsupported_template(T)
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   return 0;
 }
 
 int calls_uncontracted()
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   opaque_side_effect();
   return 0;
 }
 
 int reads_global_state()
-  post(result == result)
+  cppverify::post(cppverify::result == cppverify::result)
 {
   return *global_state;
 }
 
 int *unsupported_pointer_compound(int *pointer)
-  post(result == result)
+  cppverify::post(cppverify::result == cppverify::result)
 {
   pointer += 1;
   return pointer;
 }
 
 long unsupported_pointer_difference(int *left, int *right)
-  post(result == result)
+  cppverify::post(cppverify::result == cppverify::result)
 {
   return left - right;
 }
 
 int *unsupported_forged_pointer()
-  post(result == result)
+  cppverify::post(cppverify::result == cppverify::result)
 {
   return (int *)1;
 }
 
 int unsupported_switch(int x)
-  post(result >= 0)
+  cppverify::post(cppverify::result >= 0)
 {
   switch (x) {
   case 0:
@@ -67,29 +67,29 @@ int unsupported_switch(int x)
 }
 
 int unsupported_evaluated_expression(int x)
-  pre(x == 2147483647)
-  post(result == 0)
+  cppverify::pre(x == 2147483647)
+  cppverify::post(cppverify::result == 0)
 {
   x + 1;
   return 0;
 }
 
 int unsupported_conditionless_for()
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   for (;;) {
   }
 }
 
 void unsupported_cross_type_alias(int *value, unsigned char *byte)
-  aliases(value, byte)
-  modifies(*byte)
+  cppverify::aliases(value, byte)
+  cppverify::modifies(*byte)
 {
   *byte = 0;
 }
 
 int unsupported_recursive_exec(int n)
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   return unsupported_recursive_exec(n);
 }
