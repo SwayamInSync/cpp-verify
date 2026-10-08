@@ -21,7 +21,7 @@
 // RUN: not %cpp-verify --backend=lean --lean-project=%t.stale --lean-certify %S/Inputs/lean_certify_stale.cpp 2>&1 | FileCheck %s --check-prefix=STALE
 
 void trivial()
-  post(true)
+  cppverify::post(true)
 {}
 
 // ADMITTED: Unresolved: lean obligation: trivial (Lean certification failed:
