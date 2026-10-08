@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 constexpr int assigned_absolute_value(int value) {
   int output;
