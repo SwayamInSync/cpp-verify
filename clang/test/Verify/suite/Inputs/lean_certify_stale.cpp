@@ -1,3 +1,3 @@
 void trivial()
-  post(false)
+  cppverify::post(false)
 {}
