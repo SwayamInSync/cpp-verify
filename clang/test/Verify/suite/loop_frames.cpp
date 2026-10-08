@@ -1,5 +1,5 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s
-// RUN: %cpp-verify --lower-only --dump-ir=1,2,3 %s 2>&1 | FileCheck %s --check-prefix=IR
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s
+// RUN: %cpp-verify --lower-only --dump-ir=1,2,3 %s -- 2>&1 | FileCheck %s --check-prefix=IR
 //
 // A loop writes only the objects its stores and calls reach, so every other
 // cell keeps its value without an invariant saying so. A loop's modifies
