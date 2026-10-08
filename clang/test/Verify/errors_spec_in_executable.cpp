@@ -7,29 +7,29 @@
 // Contracts, ghost code, spec and proof functions, and unevaluated operands
 // may; none of those references reaches the object file.
 
-spec int scaled(int x) { return x * 1000; }
-spec int scaled_twice(int x) { return scaled(x) + scaled(x); }
+cppverify::spec int scaled(int x) { return x * 1000; }
+cppverify::spec int scaled_twice(int x) { return scaled(x) + scaled(x); }
 
-proof void lemma(int x)
-  post(scaled(x) == x * 1000)
+cppverify::proof void lemma(int x)
+  cppverify::post(scaled(x) == x * 1000)
 {
   int value = scaled(1);
 }
 
 // CHECK: define {{.*}}allowed
 int allowed(int x)
-  pre(scaled(x) >= 0)
-  post(result == x)
+  cppverify::pre(scaled(x) >= 0)
+  cppverify::post(cppverify::result == x)
 {
-  ghost {
+  cppverify::ghost {
     int value = scaled(x);
-    reveal_with_fuel(scaled, 2);
+    cppverify::reveal_with_fuel(scaled, 2);
   }
-  contract_assert(scaled(x) == scaled(x));
+  cppverify::check(scaled(x) == scaled(x));
   int i = 0;
   while (i < x)
-    invariant(scaled(i) == scaled(i))
-    decreases(x - i)
+    cppverify::invariant(scaled(i) == scaled(i))
+    cppverify::decreases(x - i)
   {
     i = i + 1;
   }
@@ -40,12 +40,12 @@ int allowed(int x)
 // CHECK: define {{.*}}constructed
 struct Checked {
   int value;
-  Checked(int v) : value(v) { contract_assert(scaled(v) == v * 1000); }
+  Checked(int v) : value(v) { cppverify::check(scaled(v) == v * 1000); }
 };
 int constructed(int v) { return Checked(v).value; }
 
 template <typename T> int ghost_template(T v) {
-  ghost { int value = scaled(v); }
+  cppverify::ghost { int value = scaled(v); }
   return 0;
 }
 int ghost_instance = ghost_template(1);
