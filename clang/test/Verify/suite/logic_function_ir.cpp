@@ -7,27 +7,27 @@
 // RUN: %cpp-verify --backend=lean --lean-out=%t.lean %s
 // RUN: FileCheck %s --input-file=%t.lean --check-prefix=LEAN
 
-spec int hidden(int x) { return x + 1; }
+cppverify::spec int hidden(int x) { return x + 1; }
 
-spec int countdown(int n)
-  decreases(n)
+cppverify::spec int countdown(int n)
+  cppverify::decreases(n)
 {
   if (n <= 0)
     return 0;
   return 1 + countdown(n - 1);
 }
 
-proof void recursive_logic()
-  post(countdown(2) == 2)
+cppverify::proof void recursive_logic()
+  cppverify::post(countdown(2) == 2)
 {
-  reveal_with_fuel(countdown, 3);
+  cppverify::reveal_with_fuel(countdown, 3);
 }
 
-proof void opaque_logic()
-  pre(hidden(1) == 2)
-  post(hidden(1) == 2)
+cppverify::proof void opaque_logic()
+  cppverify::pre(hidden(1) == 2)
+  cppverify::post(hidden(1) == 2)
 {
-  hide(hidden);
+  cppverify::hide(hidden);
 }
 
 // LOGIC-LABEL: vc recursive_logic
