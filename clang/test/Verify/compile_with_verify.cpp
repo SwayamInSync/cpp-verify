@@ -2,8 +2,8 @@
 // RUN: %clang_cc1 -std=c++17 -fverify-contracts -fno-verify -emit-obj -o %t2.o %s
 
 int id(int x)
-  pre(true)
-  post(result == x)
+  cppverify::pre(true)
+  cppverify::post(cppverify::result == x)
 {
   return x;
 }
