@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: %cpp-verify --backend=lean --lean-out=%t.lean %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: %cpp-verify --backend=lean --lean-out=%t.lean %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 cppverify::spec int triple(int x) { return 3 * x; }
 
