@@ -3,7 +3,7 @@
 # through nonlinear machine arithmetic in a function body (its hypothesis at
 # n - 1, following sum, is a ground fact), and refutes the false claims, but
 # does not settle the unbounded closed form.
-# RUN: not %cpp-verify --backend=cvc5 %S/spec_induction.cpp 2>&1 \
+# RUN: not %cpp-verify --backend=cvc5 %S/spec_induction.cpp -- 2>&1 \
 # RUN:   | FileCheck %s
 
 # CHECK-DAG: Verified: sum_closed [backend=cvc5]
