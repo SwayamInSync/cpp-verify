@@ -2,35 +2,35 @@
 // RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 long abstract_unit_difference(int *pointer)
-  pre(pointer != nullptr)
-  post(result == 1)
+  cppverify::pre(pointer != nullptr)
+  cppverify::post(cppverify::result == 1)
 {
   return (pointer + 1) - pointer;
 }
 
 long abstract_reverse_difference(int *pointer)
-  pre(pointer != nullptr)
-  post(result == -1)
+  cppverify::pre(pointer != nullptr)
+  cppverify::post(cppverify::result == -1)
 {
   return pointer - (pointer + 1);
 }
 
 long abstract_zero_difference(int *pointer)
-  pre(pointer != nullptr)
-  post(result == 0)
+  cppverify::pre(pointer != nullptr)
+  cppverify::post(cppverify::result == 0)
 {
   return (pointer + 0) - (pointer - 0);
 }
 
 long unit_pointer_difference(int *pointer)
-  pre(pointer != nullptr)
-  post(result == 1)
+  cppverify::pre(pointer != nullptr)
+  cppverify::post(cppverify::result == 1)
 {
   return (pointer + 1) - pointer;
 }
 
 long dynamic_unit_difference(int value)
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   int *pointer = new int(value);
   long distance = (pointer + 1) - pointer;
@@ -39,7 +39,7 @@ long dynamic_unit_difference(int value)
 }
 
 long dynamic_reverse_difference(int value)
-  post(result == -1)
+  cppverify::post(cppverify::result == -1)
 {
   int *pointer = new int(value);
   long distance = pointer - (pointer + 1);
@@ -48,7 +48,7 @@ long dynamic_reverse_difference(int value)
 }
 
 long dynamic_alias_difference(int value)
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   int *owner = new int(value);
   int *alias = owner;
@@ -58,7 +58,7 @@ long dynamic_alias_difference(int value)
 }
 
 long modular_dynamic_difference(int value)
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
   int *owner = new int(value);
   int *alias = owner;
