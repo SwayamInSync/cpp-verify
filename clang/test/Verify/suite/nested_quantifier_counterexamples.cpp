@@ -1,4 +1,4 @@
-// RUN: not %cpp-verify --timeout=30000 %s 2>&1 | FileCheck %s
+// RUN: not %cpp-verify --timeout=30000 %s -- 2>&1 | FileCheck %s
 //
 // A counterexample to nested quantifiers is checked exactly: with the model
 // fixed, reads are constant pieces and the claim is Presburger arithmetic.
