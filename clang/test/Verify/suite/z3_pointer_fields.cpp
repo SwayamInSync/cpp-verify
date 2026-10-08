@@ -7,41 +7,41 @@ struct Pair {
 };
 
 void set_second(Pair *p, int value)
-  pre(p != nullptr)
-  modifies(p->second)
-  post(p->first == old(p->first))
-  post(p->second == value)
+  cppverify::pre(p != nullptr)
+  cppverify::modifies(p->second)
+  cppverify::post(p->first == cppverify::old(p->first))
+  cppverify::post(p->second == value)
 {
   p->second = value;
 }
 
 void valid_pointer_field_client(Pair *p)
-  pre(p != nullptr && p->first == 3)
-  modifies(p->second)
-  post(p->first == 3 && p->second == 7)
+  cppverify::pre(p != nullptr && p->first == 3)
+  cppverify::modifies(p->second)
+  cppverify::post(p->first == 3 && p->second == 7)
 {
   set_second(p, 7);
 }
 
 void valid_explicit_dereference_field(Pair *p, int value)
-  pre(p != nullptr)
-  modifies((*p).first)
-  post((*p).first == value)
+  cppverify::pre(p != nullptr)
+  cppverify::modifies((*p).first)
+  cppverify::post((*p).first == value)
 {
   (*p).first = value;
 }
 
 void invalid_pointer_field_modifies(Pair *p)
-  pre(p != nullptr)
-  modifies(p->first)
+  cppverify::pre(p != nullptr)
+  cppverify::modifies(p->first)
 {
   p->second = 7;
 }
 
 void invalid_pointer_field_claim(Pair *p)
-  pre(p != nullptr && p->first == 3)
-  modifies(p->second)
-  post(p->first == 4)
+  cppverify::pre(p != nullptr && p->first == 3)
+  cppverify::modifies(p->second)
+  cppverify::post(p->first == 4)
 {
   set_second(p, 7);
 }
