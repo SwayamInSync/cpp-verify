@@ -1,5 +1,5 @@
 // RUN: rm -rf %t.project
-// RUN: not %cpp-verify --solver-rlimit=1 --lean-fallback=%t.project %s 2>&1 \
+// RUN: not %cpp-verify --solver-rlimit=1 --lean-fallback=%t.project %s -- 2>&1 \
 // RUN:   | FileCheck %s
 // RUN: test -f %t.project/CppVerify/Check.lean
 // RUN: grep -c '^import CppVerify.Proofs.Goal_' \
