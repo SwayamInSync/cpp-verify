@@ -6,7 +6,9 @@ Standalone verifier
 
 .. code-block:: bash
 
+   cpp-verify --version
    cpp-verify file.cpp
+   cpp-verify file.cpp -- -I include -DNDEBUG
    cpp-verify --backend=z3 file.cpp
    cpp-verify --backend=cvc5 file.cpp
    cpp-verify --backend=portfolio file.cpp
@@ -28,6 +30,16 @@ Standalone verifier
    cpp-verify --obligation-in=goals.cpv --backend=z3
 
 ``cpp-verify`` is a Clang tooling driver: it always adds ``-std=c++17`` and ``-fverify-contracts``.
+Other compiler flags come from the ``compile_commands.json`` beside the file or in a directory
+above it, or in the directory ``-p DIR`` names; a file the database does not list gets the
+flags of a listed neighbour. Without a database the file is compiled with those two flags
+alone. Flags after ``--`` replace the database, and ``--extra-arg=FLAG`` adds one flag either
+way.
+
+``cpp-verify --version`` shows the cpp-verify release and repository revision, the LLVM
+release it is built on, and each backend: the Z3 linked into it, and the cvc5 and Lean
+(``lake``) it finds on ``PATH`` with their versions. cvc5 is tested with 1.1.2, and every
+Lean project pins ``leanprover/lean4:v4.32.2``.
 
 Backends
 --------
