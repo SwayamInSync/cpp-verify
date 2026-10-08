@@ -17,8 +17,8 @@ Why aliasing matters
 
 If ``a`` and ``b`` alias (same address), the “swap” fails. Callers must know whether ``&x`` and ``&y`` are distinct.
 
-Frame conditions (``modifies``)
--------------------------------
+Frame conditions (``cppverify::modifies``)
+------------------------------------------
 
 A **frame** lists what a function may change. Anything **not** listed should be unchanged (in the model).
 
@@ -29,7 +29,7 @@ Example contract shape:
    modifies(*a, *b)
    post(*a == old(*b) && *b == old(*a))
 
-``old`` refers to the pre-call heap/value. The frame tells callers ``*c`` for unrelated ``c`` is untouched.
+``cppverify::old`` refers to the pre-call heap/value. The frame tells callers ``*c`` for unrelated ``c`` is untouched.
 
 Heap models (conceptual)
 ------------------------
@@ -44,5 +44,5 @@ CppVerify uses array theory in Z3 internally (Part II). You write normal C++; th
 Default non-aliasing
 --------------------
 
-To keep call-site proofs tractable, CppVerify assumes distinct **mutable** pointer parameters do not alias unless you opt out with ``aliases(p, q)``.
+To keep call-site proofs tractable, CppVerify assumes distinct **mutable** pointer parameters do not alias unless you opt out with ``cppverify::aliases(p, q)``.
 
