@@ -9,41 +9,41 @@
 // assume it at each application, without unfolding the definition.
 
 // Nested recursion terminates only because of what g returns.
-spec int g(int n)
-  decreases(n)
-  post(result >= 0 && result <= (n < 0 ? 0 : n))
+cppverify::spec int g(int n)
+  cppverify::decreases(n)
+  cppverify::post(cppverify::result >= 0 && cppverify::result <= (n < 0 ? 0 : n))
 {
   return n <= 0 ? 0 : g(g(n - 1));
 }
 // CHECK-DAG: Verified: spec decreases and post: g
 
-spec int m91(int n)
-  decreases(n > 100 ? 0 : 101 - n)
-  post(n > 100 ? result == n - 10 : result == 91)
+cppverify::spec int m91(int n)
+  cppverify::decreases(n > 100 ? 0 : 101 - n)
+  cppverify::post(n > 100 ? cppverify::result == n - 10 : cppverify::result == 91)
 {
   return n > 100 ? n - 10 : m91(m91(n + 11));
 }
 // CHECK-DAG: Verified: spec decreases and post: m91
 
 void uses_m91(int n)
-  pre(n <= 100)
+  cppverify::pre(n <= 100)
 {
-  ghost { contract_assert(m91(n) == 91); }
+  cppverify::ghost { cppverify::check(m91(n) == 91); }
 }
 // CHECK-DAG: Verified: uses_m91
 
 // The post never assumes itself at the same argument.
-spec int loops(int n)
-  decreases(n)
-  post(result == 0)
+cppverify::spec int loops(int n)
+  cppverify::decreases(n)
+  cppverify::post(cppverify::result == 0)
 {
   return n <= 0 ? 0 : loops(loops(n));
 }
 // CHECK-DAG: Unresolved: spec decreases and post unresolved: loops
 
-spec int half(int n)
-  decreases(n)
-  post(result * 2 == n)
+cppverify::spec int half(int n)
+  cppverify::decreases(n)
+  cppverify::post(cppverify::result * 2 == n)
 {
   return n <= 1 ? 0 : 1 + half(n - 2);
 }
@@ -51,12 +51,12 @@ spec int half(int n)
 
 void uses_half()
 {
-  ghost { contract_assert(half(4) == 2); }
+  cppverify::ghost { cppverify::check(half(4) == 2); }
 }
 // CHECK-DAG: Unresolved: uses_half {{.*}}[reason=spec.termination]
 
-spec int clamp(int x)
-  post(result >= 0 && result <= 100)
+cppverify::spec int clamp(int x)
+  cppverify::post(cppverify::result >= 0 && cppverify::result <= 100)
 {
   return x < 0 ? 0 : (x > 100 ? 100 : x);
 }
@@ -65,15 +65,15 @@ spec int clamp(int x)
 // A call keeps the post where the definition is hidden.
 void clamped(int x)
 {
-  ghost {
-    hide(clamp);
-    contract_assert(clamp(x) <= 100);
+  cppverify::ghost {
+    cppverify::hide(clamp);
+    cppverify::check(clamp(x) <= 100);
   }
 }
 // CHECK-DAG: Verified: clamped
 
-spec int bad_clamp(int x)
-  post(result >= 0)
+cppverify::spec int bad_clamp(int x)
+  cppverify::post(cppverify::result >= 0)
 {
   return x > 100 ? 100 : x;
 }
@@ -81,16 +81,16 @@ spec int bad_clamp(int x)
 
 void uses_bad_clamp(int x)
 {
-  ghost {
-    hide(bad_clamp);
-    contract_assert(bad_clamp(x) >= 0);
+  cppverify::ghost {
+    cppverify::hide(bad_clamp);
+    cppverify::check(bad_clamp(x) >= 0);
   }
 }
 
 // Unfolded, the definition decides.
 void unfolds_bad_clamp(int x)
 {
-  ghost { contract_assert(bad_clamp(x) >= 0); }
+  cppverify::ghost { cppverify::check(bad_clamp(x) >= 0); }
 }
 // CHECK-DAG: error: verification failed: unfolds_bad_clamp {{.*}}(counterexample: x [ssa=x_0] [type=i32] = {{-[0-9]+}})
 // CHECK-DAG: Unresolved: uses_bad_clamp {{.*}}[reason=spec.post] (relies on the postcondition of bad_clamp, which is not established)
