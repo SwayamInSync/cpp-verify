@@ -4,8 +4,8 @@
 // 1; the caller claiming +2 must fail. (Regression: old(*p) in the callee post
 // once collapsed onto the post-state heap, yielding assume(false) and letting
 // the caller prove anything.)
-void inc(int* a) pre(a != nullptr) modifies(*a) post(*a == old(*a) + 1)
+void inc(int* a) cppverify::pre(a != nullptr) cppverify::modifies(*a) cppverify::post(*a == cppverify::old(*a) + 1)
 { *a = *a + 1; }
-int caller(int* x) pre(x != nullptr) modifies(*x) post(*x == old(*x) + 2)
+int caller(int* x) cppverify::pre(x != nullptr) cppverify::modifies(*x) cppverify::post(*x == cppverify::old(*x) + 2)
 { inc(x); return 0; }
 // VERIFY: verification failed: caller
