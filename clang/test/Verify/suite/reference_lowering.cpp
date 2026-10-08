@@ -1,17 +1,17 @@
 // RUN: %cpp-verify --int-encoding=bitvector --lower-only --dump-ir=1,2,3,4 %s 2>&1 | FileCheck %s
 
 void lower_reference(int &value, int next)
-  pre(value == 4)
-  modifies(value)
-  post(value == next && old(value) == 4)
+  cppverify::pre(value == 4)
+  cppverify::modifies(value)
+  cppverify::post(value == next && cppverify::old(value) == 4)
 {
   value = next;
 }
 
 void lower_reference_call(int *value, int next)
-  pre(value != nullptr && *value == 4)
-  modifies(*value)
-  post(*value == next)
+  cppverify::pre(value != nullptr && *value == 4)
+  cppverify::modifies(*value)
+  cppverify::post(*value == next)
 {
   lower_reference(*value, next);
 }
