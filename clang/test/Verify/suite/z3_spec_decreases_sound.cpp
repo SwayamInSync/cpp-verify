@@ -1,8 +1,8 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
-spec int terminating_countdown(int n)
-  decreases(n)
+cppverify::spec int terminating_countdown(int n)
+  cppverify::decreases(n)
 {
   if (n > 0) {
     int next = n - 1;
@@ -11,14 +11,14 @@ spec int terminating_countdown(int n)
   return 0;
 }
 
-spec int nonterminating_descent(int n)
-  decreases(n)
+cppverify::spec int nonterminating_descent(int n)
+  cppverify::decreases(n)
 {
   return nonterminating_descent(n - 1);
 }
 
-spec int terminating_after_branch(int n)
-  decreases(n)
+cppverify::spec int terminating_after_branch(int n)
+  cppverify::decreases(n)
 {
   int next;
   if (n > 0)
@@ -28,8 +28,8 @@ spec int terminating_after_branch(int n)
   return terminating_after_branch(next);
 }
 
-spec int nonterminating_after_branch(int n)
-  decreases(n * n)
+cppverify::spec int nonterminating_after_branch(int n)
+  cppverify::decreases(n * n)
 {
   int next;
   if (n > 0)
@@ -39,8 +39,8 @@ spec int nonterminating_after_branch(int n)
   return 1 + nonterminating_after_branch(next);
 }
 
-proof void nonterminating_proof(int n)
-  decreases(n)
+cppverify::proof void nonterminating_proof(int n)
+  cppverify::decreases(n)
 {
   nonterminating_proof(n);
 }
