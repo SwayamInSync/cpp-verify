@@ -9,20 +9,20 @@ The program
 .. code-block:: cpp
 
    int abs(int x)
-     pre(x >= -2147483647)
-     post(result >= 0)
+     cv::pre(x >= -2147483647)
+     cv::post(cv::result >= 0)
    {
      return x < 0 ? -x : x;
    }
 
-- ``pre(x >= -2147483647)`` — the precondition the caller must satisfy. It admits
+- ``cppverify::pre(x >= -2147483647)`` — the precondition the caller must satisfy. It admits
   every ``int`` except ``INT_MIN``: CppVerify uses honest machine integers, and
-  ``-INT_MIN`` overflows (see :doc:`ch16-when-verification-fails`). With ``pre(true)``
+  ``-INT_MIN`` overflows (see :doc:`ch16-when-verification-fails`). With ``cppverify::pre(true)``
   the verifier correctly *rejects* this function and reports ``x = INT_MIN`` as a
   counterexample — a real bug it just caught for you.
-- ``post(result >= 0)`` — ``result`` is the return value (Part I: postcondition).
+- ``cppverify::post(cppverify::result >= 0)`` — ``cppverify::result`` is the return value (Part I: postcondition).
 - The verifier must prove: assuming the precondition and the implementation,
-  ``result >= 0`` follows.
+  ``cppverify::result >= 0`` follows.
 
 Run verification
 ----------------
@@ -34,7 +34,7 @@ Run verification
 What the verifier did (conceptually)
 ------------------------------------
 
-1. Built a VC: the precondition and path facts about ``x`` imply ``result >= 0``.
+1. Built a VC: the precondition and path facts about ``x`` imply ``cppverify::result >= 0``.
 2. Asked Z3: is ``(facts ∧ ¬(result >= 0))`` unsatisfiable?
 3. **Unsat** ⇒ verified.
 
