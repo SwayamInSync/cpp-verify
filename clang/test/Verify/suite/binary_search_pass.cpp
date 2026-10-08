@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: %cpp-verify --check-ub --timeout=60000 %s 2>&1 | FileCheck %s
+// RUN: %cpp-verify --check-ub --timeout=60000 %s -- 2>&1 | FileCheck %s
 //
 // Binary search over an abstract sorted buffer, with the overflow-safe
 // midpoint. Companion to binary_search_overflow_fail.cpp, which shows the
