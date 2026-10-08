@@ -3,8 +3,8 @@
 // RUN:   -c %s -o %t.o
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
-spec int math_factorial(int n)
-  decreases(n)
+cppverify::spec int math_factorial(int n)
+  cppverify::decreases(n)
 {
   if (n <= 1)
     return 1;
@@ -27,87 +27,87 @@ constexpr bool machine_factorial_value(int n, int value) {
          (n == 12 && value == 479001600);
 }
 
-proof void lemma_factorial_constants()
-  post(math_factorial(0) == 1)
-  post(math_factorial(1) == 1)
-  post(math_factorial(2) == 2)
-  post(math_factorial(3) == 6)
-  post(math_factorial(4) == 24)
-  post(math_factorial(5) == 120)
-  post(math_factorial(6) == 720)
-  post(math_factorial(7) == 5040)
-  post(math_factorial(8) == 40320)
-  post(math_factorial(9) == 362880)
-  post(math_factorial(10) == 3628800)
-  post(math_factorial(11) == 39916800)
-  post(math_factorial(12) == 479001600)
+cppverify::proof void lemma_factorial_constants()
+  cppverify::post(math_factorial(0) == 1)
+  cppverify::post(math_factorial(1) == 1)
+  cppverify::post(math_factorial(2) == 2)
+  cppverify::post(math_factorial(3) == 6)
+  cppverify::post(math_factorial(4) == 24)
+  cppverify::post(math_factorial(5) == 120)
+  cppverify::post(math_factorial(6) == 720)
+  cppverify::post(math_factorial(7) == 5040)
+  cppverify::post(math_factorial(8) == 40320)
+  cppverify::post(math_factorial(9) == 362880)
+  cppverify::post(math_factorial(10) == 3628800)
+  cppverify::post(math_factorial(11) == 39916800)
+  cppverify::post(math_factorial(12) == 479001600)
 {
-  reveal_with_fuel(math_factorial, 12);
+  cppverify::reveal_with_fuel(math_factorial, 12);
 }
 
 int recursive_factorial(int n)
-  pre(n >= 0 && n <= 12)
-  post(machine_factorial_value(n, result))
-  post(result == math_factorial(n))
-  decreases(n)
+  cppverify::pre(n >= 0 && n <= 12)
+  cppverify::post(machine_factorial_value(n, cppverify::result))
+  cppverify::post(cppverify::result == math_factorial(n))
+  cppverify::decreases(n)
 {
-  ghost {
-    hide(math_factorial);
+  cppverify::ghost {
+    cppverify::hide(math_factorial);
   }
   int answer = 1;
   if (n > 1) {
     int previous = recursive_factorial(n - 1);
     answer = n * previous;
   }
-  ghost {
+  cppverify::ghost {
     lemma_factorial_constants();
   }
   return answer;
 }
 
 int iterative_factorial(int n)
-  pre(n >= 0 && n <= 12)
-  post(machine_factorial_value(n, result))
-  post(result == math_factorial(n))
+  cppverify::pre(n >= 0 && n <= 12)
+  cppverify::post(machine_factorial_value(n, cppverify::result))
+  cppverify::post(cppverify::result == math_factorial(n))
 {
-  ghost {
-    hide(math_factorial);
+  cppverify::ghost {
+    cppverify::hide(math_factorial);
   }
   int accumulator = 1;
   int i = 1;
   while (i <= n)
-    invariant(i >= 1 && i <= n + 1)
-    invariant(machine_factorial_value(i - 1, accumulator))
-    decreases(n - i + 1)
+    cppverify::invariant(i >= 1 && i <= n + 1)
+    cppverify::invariant(machine_factorial_value(i - 1, accumulator))
+    cppverify::decreases(n - i + 1)
   {
     accumulator = accumulator * i;
     i = i + 1;
   }
-  ghost {
+  cppverify::ghost {
     lemma_factorial_constants();
   }
   return accumulator;
 }
 
 int factorial_twelve()
-  post(result == 479001600)
+  cppverify::post(cppverify::result == 479001600)
 {
   return recursive_factorial(12);
 }
 
 void write_factorial(int n, int *out, int *preserved)
-  pre(n >= 0 && n <= 12)
-  pre(out != nullptr && preserved != nullptr)
-  modifies(*out)
-  post(*out == math_factorial(n))
-  post(*preserved == old(*preserved))
+  cppverify::pre(n >= 0 && n <= 12)
+  cppverify::pre(out != nullptr && preserved != nullptr)
+  cppverify::modifies(*out)
+  cppverify::post(*out == math_factorial(n))
+  cppverify::post(*preserved == cppverify::old(*preserved))
 {
   *out = iterative_factorial(n);
 }
 
 #ifndef CPPVERIFY_POSITIVE_ONLY
 int factorial_thirteen_overflows()
-  post(result == result)
+  cppverify::post(cppverify::result == cppverify::result)
 {
   int factorial_twelve = recursive_factorial(12);
   return factorial_twelve * 13;
