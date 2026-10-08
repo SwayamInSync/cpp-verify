@@ -4,8 +4,8 @@
 constexpr int sq(int x) { return x * x; }
 
 int use_sq(int x)
-  pre(x >= 0 && x <= 100)
-  post(result == x * x)
+  cppverify::pre(x >= 0 && x <= 100)
+  cppverify::post(cppverify::result == x * x)
 {
   return sq(x);
 }
