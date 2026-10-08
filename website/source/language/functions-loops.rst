@@ -112,7 +112,10 @@ everything after the call hold vacuously; CppVerify reports that case with
 ``[vacuous]`` and a warning at the call (see :doc:`tooling`).
 
 An uncontracted ``constexpr`` definition may be lifted for use in contract
-expressions.  Once a ``constexpr`` function has executable ``cppverify::pre``/``cppverify::post``
+expressions. It is lifted where verification uses it: in a contract, a
+verified body, a type invariant, or another lifted function, so the
+``constexpr`` functions of a header that nothing verified uses are never
+examined. Once a ``constexpr`` function has executable ``cppverify::pre``/``cppverify::post``
 clauses, it remains a modular executable function: calls must satisfy its
 preconditions and cannot be used as pure contract expressions.
 
