@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify --no-check-ub %s 2>&1 | FileCheck %s --check-prefix=NO-EXTENT
+// RUN: not %cpp-verify --no-check-ub %s -- 2>&1 | FileCheck %s --check-prefix=NO-EXTENT
 
 cppverify::spec bool valid(int *p, int count) { return true; }
 
