@@ -4,7 +4,7 @@
 # does not settle the nonlinear lemma, its machine-arithmetic use, or the
 # accumulator, so those stay unresolved there, as do the functions relying on
 # that lemma; Z3 is the backend for recursive specs.
-# RUN: not %cpp-verify --backend=cvc5 %S/spec_automation.cpp 2>&1 \
+# RUN: not %cpp-verify --backend=cvc5 %S/spec_automation.cpp -- 2>&1 \
 # RUN:   | FileCheck %s
 
 # CHECK-DAG: Verified: computed [backend=cvc5]
