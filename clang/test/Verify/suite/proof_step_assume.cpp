@@ -4,10 +4,10 @@
 // is what makes it a proof step for the obligations after it.
 
 int step(int x)
-  pre(x > 0)
-  post(result > 0)
+  cppverify::pre(x > 0)
+  cppverify::post(cppverify::result > 0)
 {
-  contract_assert(x >= 1);
+  cppverify::check(x >= 1);
   return x;
 }
 
