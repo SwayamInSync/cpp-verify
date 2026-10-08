@@ -1,4 +1,4 @@
-// RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 bool all_small(int n)
   cppverify::pre(n >= 2 && n <= 4)
