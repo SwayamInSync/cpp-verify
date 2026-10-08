@@ -85,7 +85,7 @@ jobs:
             -DLLVM_CCACHE_BUILD=ON
 
       - name: Build
-        run: ninja -C build all clang-test-depends
+        run: ninja -C build clang-test-depends
 
       - name: Report the versions
         run: |
@@ -143,6 +143,9 @@ jobs:
           submodules: recursive
 
       - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Ninja
+        run: choco install ninja --no-progress -y
 
       - name: Build with setup.ps1
         shell: pwsh
