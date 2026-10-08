@@ -1,9 +1,9 @@
 // REQUIRES: cvc5
-// RUN: not %cpp-verify --backend=race --jobs=4 --timeout=10000 %s 2>&1 \
+// RUN: not %cpp-verify --backend=race --jobs=4 --timeout=10000 %s -- 2>&1 \
 // RUN:   | FileCheck %s
-// RUN: %cpp-verify --backend=race --lower-only %s 2>&1 \
+// RUN: %cpp-verify --backend=race --lower-only %s -- 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=LOWER
-// RUN: not %cpp-verify --obligation-out=%t.obligations %s > /dev/null 2>&1
+// RUN: not %cpp-verify --obligation-out=%t.obligations %s -- > /dev/null 2>&1
 // RUN: not %cpp-verify --backend=race --jobs=4 --timeout=10000 \
 // RUN:   --obligation-in=%t.obligations 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=REPLAY
