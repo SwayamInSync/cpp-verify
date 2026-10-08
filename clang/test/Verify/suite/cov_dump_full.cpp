@@ -1,5 +1,5 @@
-// RUN: %cpp-verify --dump-ir=all %s 2>&1 | FileCheck %s --check-prefix=DUMP
-// RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: %cpp-verify --dump-ir=all %s -- 2>&1 | FileCheck %s --check-prefix=DUMP
+// RUN: %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 cppverify::spec int len_spec(int n) {
   int value = n;
