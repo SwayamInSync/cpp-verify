@@ -11,13 +11,19 @@ struct Point {
 // ---------------------------------------------------------------------------
 // 1. Function returning struct with postcondition on member
 // ---------------------------------------------------------------------------
+// The member of the returned value is read from a temporary, which the
+// clause's full-expression ends.
 // CHECK: FunctionDecl {{.*}} make_origin 'Point ()'
-// CHECK: post: BinaryOperator {{.*}} 'bool' '=='
+// CHECK: post: ExprWithCleanups {{.*}} 'bool'
+// CHECK-NEXT: BinaryOperator {{.*}} 'bool' '=='
 // CHECK:   MemberExpr {{.*}} 'int' {{.*}} .x
-// CHECK:     ResultExpr {{.*}} 'Point'
-// CHECK: post: BinaryOperator {{.*}} 'bool' '=='
+// CHECK:     MaterializeTemporaryExpr {{.*}} 'Point' xvalue
+// CHECK:       ResultExpr {{.*}} 'Point'
+// CHECK: post: ExprWithCleanups {{.*}} 'bool'
+// CHECK-NEXT: BinaryOperator {{.*}} 'bool' '=='
 // CHECK:   MemberExpr {{.*}} 'int' {{.*}} .y
-// CHECK:     ResultExpr {{.*}} 'Point'
+// CHECK:     MaterializeTemporaryExpr {{.*}} 'Point' xvalue
+// CHECK:       ResultExpr {{.*}} 'Point'
 Point make_origin()
   cppverify::post(cppverify::result.x == 0)
   cppverify::post(cppverify::result.y == 0)
@@ -50,7 +56,8 @@ int point_sum(Point p)
 // 3. Function with old() on struct member
 // ---------------------------------------------------------------------------
 // CHECK: FunctionDecl {{.*}} translate 'Point (Point, int, int)'
-// CHECK: post: BinaryOperator {{.*}} 'bool' '=='
+// CHECK: post: ExprWithCleanups {{.*}} 'bool'
+// CHECK-NEXT: BinaryOperator {{.*}} 'bool' '=='
 // CHECK:   MemberExpr {{.*}} 'int' {{.*}} .x
 // CHECK:     ResultExpr {{.*}} 'Point'
 // CHECK:   BinaryOperator {{.*}} 'int' '+'
