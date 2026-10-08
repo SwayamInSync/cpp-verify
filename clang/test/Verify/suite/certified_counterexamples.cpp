@@ -11,10 +11,10 @@
 // query that its definition would settle is unresolved (spec.hidden), while a
 // counterexample that holds whatever its value is still a failure.
 
-spec int twice(int x) { return 2 * x; }
+cppverify::spec int twice(int x) { return 2 * x; }
 
-spec int triangle(int n)
-  decreases(n)
+cppverify::spec int triangle(int n)
+  cppverify::decreases(n)
 {
   if (n <= 0)
     return 0;
@@ -27,66 +27,66 @@ constexpr int low_bits(int x) { return x & 255; }
 
 // True, but the solver may not use twice's definition: not a counterexample.
 int hidden_true(int x)
-  pre(0 <= x && x <= 10)
-  post(result == twice(x))
+  cppverify::pre(0 <= x && x <= 10)
+  cppverify::post(cppverify::result == twice(x))
 {
-  ghost { hide(twice); }
+  cppverify::ghost { cppverify::hide(twice); }
   return 2 * x;
 }
 
 // False whatever value twice has at x: a checked counterexample.
 int hidden_false(int x)
-  pre(0 <= x && x <= 10)
-  post(result == twice(x) + 1)
+  cppverify::pre(0 <= x && x <= 10)
+  cppverify::post(cppverify::result == twice(x) + 1)
 {
-  ghost { hide(twice); }
+  cppverify::ghost { cppverify::hide(twice); }
   return 2 * x;
 }
 
 int hidden_recursive(int n)
-  pre(0 <= n && n <= 3)
-  post(result == triangle(n))
+  cppverify::pre(0 <= n && n <= 3)
+  cppverify::post(cppverify::result == triangle(n))
 {
-  ghost { hide(triangle); }
+  cppverify::ghost { cppverify::hide(triangle); }
   return n * (n + 1) / 2;
 }
 
 // Beyond the default fuel; settled by definition instances.
 int bounded_closed_form(int n)
-  pre(0 <= n && n <= 40)
-  post(result == triangle(n))
+  cppverify::pre(0 <= n && n <= 40)
+  cppverify::post(cppverify::result == triangle(n))
 {
   return n * (n + 1) / 2;
 }
 
 int bounded_closed_form_wrong(int n)
-  pre(0 <= n && n <= 40)
-  post(result == triangle(n))
+  cppverify::pre(0 <= n && n <= 40)
+  cppverify::post(cppverify::result == triangle(n))
 {
   return n == 33 ? 0 : n * (n + 1) / 2;
 }
 
 // Machine semantics: scale wraps, and the counterexample must agree.
 unsigned scaled_true(unsigned x)
-  post(result == scale(x))
+  cppverify::post(cppverify::result == scale(x))
 {
-  ghost { hide(scale); }
+  cppverify::ghost { cppverify::hide(scale); }
   return x + x + x;
 }
 
 unsigned scaled_wrong(unsigned x)
-  pre(x >= 2000000000u)
-  post(result == scale(x))
+  cppverify::pre(x >= 2000000000u)
+  cppverify::post(cppverify::result == scale(x))
 {
-  ghost { hide(scale); }
+  cppverify::ghost { cppverify::hide(scale); }
   return x * 3u + (x == 3000000000u ? 1u : 0u);
 }
 
 int masked_wrong(int x)
-  pre(0 <= x && x <= 1000)
-  post(result == low_bits(x))
+  cppverify::pre(0 <= x && x <= 1000)
+  cppverify::post(cppverify::result == low_bits(x))
 {
-  ghost { hide(low_bits); }
+  cppverify::ghost { cppverify::hide(low_bits); }
   return x % 256 + (x == 700 ? 1 : 0);
 }
 
