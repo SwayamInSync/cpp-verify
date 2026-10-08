@@ -1,116 +1,71 @@
-// Verify KEYCONTRACT lexer keywords (old/result are contextual, not listed here).
+// cpp-verify writes its constructs qualified, cppverify::pre(...), so no word
+// is reserved: with or without -fverify-contracts each construct word, and
+// the former keyword contract_assert, lexes as an identifier and remains a
+// valid name.
 //
-// With -fverify-contracts:    each name lexes as a keyword token.
-// Without -fverify-contracts: each name lexes as an identifier (no conflict
-//                             with existing C++ code).
-
-// --- dump-tokens: WITH flag — expect keyword tokens ---
-// RUN: %clang_cc1 -std=c++20 -fverify-contracts -dump-tokens %s 2>&1 \
-// RUN:   | FileCheck %s --check-prefix=KW
-
-// --- dump-tokens: WITHOUT flag — expect identifier tokens ---
-// RUN: %clang_cc1 -std=c++20 -dump-tokens %s 2>&1 \
-// RUN:   | FileCheck %s --check-prefix=ID
-
-// --- __is_identifier: WITH flag (-DWITH_FLAG selects the right assertions) ---
-// RUN: %clang_cc1 -std=c++20 -fverify-contracts -DWITH_FLAG -fsyntax-only %s
-
-// --- __is_identifier: WITHOUT flag ---
+// RUN: %clang_cc1 -std=c++20 -fverify-contracts -dump-tokens %s 2>&1 | FileCheck %s
+// RUN: %clang_cc1 -std=c++20 -dump-tokens %s 2>&1 | FileCheck %s
+// RUN: %clang_cc1 -std=c++20 -fverify-contracts -fsyntax-only %s
 // RUN: %clang_cc1 -std=c++20 -fsyntax-only %s
 
-// ==========================================================================
-// Section 1: FileCheck patterns for dump-tokens runs
-//
-// dump-tokens is lex-only; syntax does not matter.  The tokens that satisfy
-// these checks come from the variable declarations in Section 3, which are
-// compiled by every dump-tokens run (neither run defines WITH_FLAG).
-//
-// KW-DAG checks that each name appears as a keyword token.
-// ID-DAG checks that each name appears as an identifier token.
-// ==========================================================================
+// CHECK-DAG: identifier 'pre' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'post' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'modifies' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'aliases' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'recommends' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'reads' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'when' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'decreases' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'inductive' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'behavior' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'complete_behaviors' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'disjoint_behaviors' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'invariant' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'type_invariant' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'spec' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'proof' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'ghost' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'check' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'calc' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'reveal_with_fuel' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'hide' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'reveal' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'forall' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'exists' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'choose' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'old' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'result' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'trigger' {{.*}}verify_contracts_keywords.cpp
+// CHECK-DAG: identifier 'contract_assert' {{.*}}verify_contracts_keywords.cpp
 
-// KW-DAG: pre 'pre'
-// KW-DAG: post 'post'
-// KW-DAG: invariant 'invariant'
-// KW-DAG: type_invariant 'type_invariant'
-// KW-DAG: decreases 'decreases'
-// KW-DAG: ghost 'ghost'
-// KW-DAG: spec 'spec'
-// KW-DAG: proof 'proof'
-// KW-DAG: contract_assert 'contract_assert'
-// KW-DAG: forall 'forall'
-// KW-DAG: exists 'exists'
-// old/result are contextual (always lex as identifiers); see Verify/iostream test.
+static_assert(__is_identifier(pre), "pre is an identifier");
+static_assert(__is_identifier(post), "post is an identifier");
+static_assert(__is_identifier(modifies), "modifies is an identifier");
+static_assert(__is_identifier(aliases), "aliases is an identifier");
+static_assert(__is_identifier(recommends), "recommends is an identifier");
+static_assert(__is_identifier(reads), "reads is an identifier");
+static_assert(__is_identifier(when), "when is an identifier");
+static_assert(__is_identifier(decreases), "decreases is an identifier");
+static_assert(__is_identifier(inductive), "inductive is an identifier");
+static_assert(__is_identifier(behavior), "behavior is an identifier");
+static_assert(__is_identifier(complete_behaviors), "complete_behaviors is an identifier");
+static_assert(__is_identifier(disjoint_behaviors), "disjoint_behaviors is an identifier");
+static_assert(__is_identifier(invariant), "invariant is an identifier");
+static_assert(__is_identifier(type_invariant), "type_invariant is an identifier");
+static_assert(__is_identifier(spec), "spec is an identifier");
+static_assert(__is_identifier(proof), "proof is an identifier");
+static_assert(__is_identifier(ghost), "ghost is an identifier");
+static_assert(__is_identifier(check), "check is an identifier");
+static_assert(__is_identifier(calc), "calc is an identifier");
+static_assert(__is_identifier(reveal_with_fuel), "reveal_with_fuel is an identifier");
+static_assert(__is_identifier(hide), "hide is an identifier");
+static_assert(__is_identifier(reveal), "reveal is an identifier");
+static_assert(__is_identifier(forall), "forall is an identifier");
+static_assert(__is_identifier(exists), "exists is an identifier");
+static_assert(__is_identifier(choose), "choose is an identifier");
+static_assert(__is_identifier(old), "old is an identifier");
+static_assert(__is_identifier(result), "result is an identifier");
+static_assert(__is_identifier(trigger), "trigger is an identifier");
+static_assert(__is_identifier(contract_assert), "contract_assert is an identifier");
 
-// ID-DAG: identifier 'pre'
-// ID-DAG: identifier 'post'
-// ID-DAG: identifier 'invariant'
-// ID-DAG: identifier 'decreases'
-// ID-DAG: identifier 'ghost'
-// ID-DAG: identifier 'spec'
-// ID-DAG: identifier 'proof'
-// ID-DAG: identifier 'contract_assert'
-// ID-DAG: identifier 'forall'
-// ID-DAG: identifier 'exists'
-// ID-DAG: identifier 'old'
-// ID-DAG: identifier 'result'
-
-// ==========================================================================
-// Section 2: __is_identifier() static assertions
-//
-// __is_identifier(X) is a preprocessor built-in: it expands to 0 or 1
-// *before* the C++ parser runs, so the parser never sees the keyword token
-// inside the parens.  The result is a pure integer literal.
-//
-// WITH_FLAG  → -fverify-contracts active → clause keywords are not identifiers
-// !WITH_FLAG → flag absent               → all names are identifiers
-// ==========================================================================
-
-#ifdef WITH_FLAG
-static_assert(!__is_identifier(pre),             "pre must be a keyword with -fverify-contracts");
-static_assert(!__is_identifier(post),            "post must be a keyword with -fverify-contracts");
-static_assert(!__is_identifier(invariant),       "invariant must be a keyword with -fverify-contracts");
-static_assert(!__is_identifier(type_invariant),  "type_invariant must be a keyword with -fverify-contracts");
-static_assert(!__is_identifier(decreases),       "decreases must be a keyword with -fverify-contracts");
-static_assert(!__is_identifier(ghost),           "ghost must be a keyword with -fverify-contracts");
-static_assert(!__is_identifier(spec),            "spec must be a keyword with -fverify-contracts");
-static_assert(!__is_identifier(proof),           "proof must be a keyword with -fverify-contracts");
-static_assert(!__is_identifier(contract_assert), "contract_assert must be a keyword with -fverify-contracts");
-static_assert(!__is_identifier(forall),          "forall must be a keyword with -fverify-contracts");
-static_assert(!__is_identifier(exists),          "exists must be a keyword with -fverify-contracts");
-static_assert(__is_identifier(old),    "old must stay an identifier (contextual in post only)");
-static_assert(__is_identifier(result), "result must stay an identifier (contextual in post only)");
-#else
-// ==========================================================================
-// Section 3: identifier-mode checks + token source for dump-tokens runs
-//
-// This block is compiled by:
-//   - the two dump-tokens runs (no WITH_FLAG defined)
-//   - the fsyntax-only run WITHOUT -fverify-contracts
-//
-// The variable declarations give dump-tokens the tokens to match against.
-// The static_assert lines verify backward compatibility.
-// ==========================================================================
-
-// Backward compatibility: all names remain valid C++ identifiers.
-static_assert(__is_identifier(pre),             "pre must be an identifier without -fverify-contracts");
-static_assert(__is_identifier(post),            "post must be an identifier without -fverify-contracts");
-static_assert(__is_identifier(invariant),       "invariant must be an identifier without -fverify-contracts");
-static_assert(__is_identifier(decreases),       "decreases must be an identifier without -fverify-contracts");
-static_assert(__is_identifier(ghost),           "ghost must be an identifier without -fverify-contracts");
-static_assert(__is_identifier(spec),            "spec must be an identifier without -fverify-contracts");
-static_assert(__is_identifier(proof),           "proof must be an identifier without -fverify-contracts");
-static_assert(__is_identifier(contract_assert), "contract_assert must be an identifier without -fverify-contracts");
-static_assert(__is_identifier(forall),          "forall must be an identifier without -fverify-contracts");
-static_assert(__is_identifier(exists),          "exists must be an identifier without -fverify-contracts");
-static_assert(__is_identifier(old),             "old must be an identifier without -fverify-contracts");
-static_assert(__is_identifier(result),          "result must be an identifier without -fverify-contracts");
-
-// Declarations whose names produce the keyword/identifier tokens that the
-// dump-tokens FileCheck patterns match against.  With -fverify-contracts each
-// name lexes as its keyword token; without it, as an identifier token.
-// (dump-tokens is lex-only so no parse error occurs in either case.)
-int pre, post, invariant, type_invariant, decreases, ghost, spec, proof;
-int contract_assert, forall, exists;
-int old, result; // always identifiers at lex time
-#endif
+int pre, post, modifies, aliases, recommends, reads, when, decreases, inductive, behavior, complete_behaviors, disjoint_behaviors, invariant, type_invariant, spec, proof, ghost, check, calc, reveal_with_fuel, hide, reveal, forall, exists, choose, old, result, trigger, contract_assert;
