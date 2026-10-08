@@ -15,8 +15,8 @@ Contracts may instead appear on a forward declaration.  A later definition
 inherits that declaration's contract even when its parameter names differ::
 
    int f(int value)
-     pre(value > 0)
-     post(result > value);
+     cv::pre(value > 0)
+     cv::post(cv::result > value);
 
    int f(int x) { return x + 1; }
 
@@ -77,6 +77,8 @@ outside the verified subset, or a lemma you decide to assume.
 - On a proof function, the postcondition is an axiom.
 - A spec function cannot be trusted: its definition is its meaning, so there
   is nothing to assume. The attribute is an error there.
+- Each trusted contract is marked on its own function: ``#pragma clang
+  attribute`` cannot apply the attribute to a region.
 - Every verdict that relies on a trusted contract lists it in
   ``[trusts=...]`` (JSON ``"trusts"``), transitively through verified
   callees: a caller of ``sample`` carries the same three names.
