@@ -12,16 +12,16 @@ struct Padded {
 };
 
 int read_field(Padded *p)
-  pre(p != nullptr && p->x >= 0)
-  post(result == p->x)
+  cppverify::pre(p != nullptr && p->x >= 0)
+  cppverify::post(cppverify::result == p->x)
 {
   return p->x;
 }
 
 void write_field(Padded *p, int v)
-  pre(p != nullptr)
-  modifies(p->x)
-  post(p->x == v)
+  cppverify::pre(p != nullptr)
+  cppverify::modifies(p->x)
+  cppverify::post(p->x == v)
 {
   p->x = v;
 }
