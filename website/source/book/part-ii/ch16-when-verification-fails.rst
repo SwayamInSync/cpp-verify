@@ -36,7 +36,7 @@ quantifiers with heap arrays. CppVerify may retry smaller ordered obligations,
 but if those also remain unknown it reports the function as **not verified**.
 It never treats solver uncertainty as success.
 
-A recursive spec applied beyond its unfolding fuel, or a spec you ``hide``, is
+A recursive spec applied beyond its unfolding fuel, or a spec you ``cppverify::hide``, is
 an opaque value that a solver model may choose freely, so a model is a
 counterexample only if it still fails under the spec's real definition.
 CppVerify checks every model from every solver against the definitions. When
@@ -52,12 +52,12 @@ induction from. When the solver's counterexamples need the spec at ever
 larger arguments, the message says no finite unfolding settles it: the goal
 needs an induction the verifier did not find, often one over a stronger
 statement, and the fix is a lemma (that section works through one).
-Otherwise raise ``reveal_with_fuel``, bound the argument, or state a lemma.
+Otherwise raise ``cppverify::reveal_with_fuel``, bound the argument, or state a lemma.
 
 When the solver proposes a counterexample whose spec values its check cannot
 compute, such as ``fibo(1000000000)``, the verifier tries to confirm it by a
 proof at that input, from facts that are proved: the postconditions of specs
-and the contracts of ``proof`` functions that are established, each lemma
+and the contracts of ``cppverify::proof`` functions that are established, each lemma
 with every assumption its own proof made (section "Counterexamples too large
 to compute" of :doc:`ch13-spec-and-proof-functions`). A confirmed
 counterexample is a failure that says so (``confirmed by a proof at this
@@ -68,7 +68,7 @@ since neither the solver's proposal nor the missing value decides it; prove
 the claim if you believe it, or state the lemma that refutes it if you do
 not. JSON gives the proposed input as ``unchecked_counterexample``. For a
 hidden spec the reason is
-``spec.hidden``: the definition would settle the query, but ``hide`` keeps it
+``spec.hidden``: the definition would settle the query, but ``cppverify::hide`` keeps it
 out of proofs, so reveal it or state a lemma. A model that cannot be checked
 within the checker's limits is reported as ``counterexample.unchecked``: for
 quantifiers, that is a body that multiplies or divides bound variables, or
@@ -90,7 +90,7 @@ needs the predicate false where its derivations go round a cycle is
 ``spec.fuel`` with ``every counterexample found needs P(...) to hold, but no
 derivation shows it``: every unfolding holds just as well of a predicate
 true on the cycle, so no unfolding settles it, and a postcondition
-``!result || Q`` or a lemma proved by induction is the fix.
+``!cppverify::result || Q`` or a lemma proved by induction is the fix.
 ``backend.invalid-result`` is different: the solver's answer contradicts the
 query or a fact the verifier gave it, which is a solver fault and says
 nothing about your program.
@@ -118,12 +118,12 @@ Every result that is not a proof carries one stable reason code (text
      - Every counterexample relies on a recursive spec or an inductive
        predicate beyond what unfolding settles, the automatic inductions did
        not prove the goal, and no proved fact confirms a counterexample.
-       Raise ``reveal_with_fuel``, bound the argument, or prove the property
-       by induction (a lemma, or a postcondition ``!result || Q`` on a
+       Raise ``cppverify::reveal_with_fuel``, bound the argument, or prove the property
+       by induction (a lemma, or a postcondition ``!cppverify::result || Q`` on a
        predicate); the message names the inductions tried and the input the
        solver proposed.
    * - ``spec.hidden``
-     - The proof needs a definition that is hidden (``hide``, or a spec of
+     - The proof needs a definition that is hidden (``cppverify::hide``, or a spec of
        the function's cluster at an equal measure). Reveal it, or give it a
        lower measure.
    * - ``spec.termination``
@@ -131,19 +131,19 @@ Every result that is not a proof carries one stable reason code (text
    * - ``spec.post``
      - The proof relies on a spec's postcondition that is not established.
    * - ``spec.reads``
-     - The proof relies on a spec's ``reads`` frame that is not established.
+     - The proof relies on a spec's ``cppverify::reads`` frame that is not established.
    * - ``spec.inductive``
      - The proof relies on an inductive predicate whose rules did not all
        hold.
    * - ``proof.cycle``
      - Proofs rest on each other without a shared measure. Give them
-       ``decreases`` clauses of one length (chapter 13).
+       ``cppverify::decreases`` clauses of one length (chapter 13).
    * - ``callee.contract``
      - The proof relies on a callee contract nothing establishes. Fix the
        callee, or mark a library declaration ``[[cppverify::trusted]]``.
    * - ``decreases.missing``
-     - A loop has no termination measure. Add ``decreases``, or
-       ``decreases(*)``.
+     - A loop has no termination measure. Add ``cppverify::decreases``, or
+       ``cppverify::decreases(*)``.
    * - ``construct.unsupported``
      - The failed obligation stands for a construct the verifier does not
        model; the message names it.
@@ -188,7 +188,7 @@ Other results that are not counterexamples:
   function, help it with lemmas or assertions, or raise
   ``--function-timeout`` (``0`` disables it).
 - ``decreases.missing``: a loop has no termination measure. Give it
-  ``decreases``, or ``decreases(*)`` to allow divergence, after which the
+  ``cppverify::decreases``, or ``cppverify::decreases(*)`` to allow divergence, after which the
   function and its callers report ``Verified ... [partial]``: proved for the
   executions that terminate.
 - ``callee.contract``: the proof relies on a callee contract that nothing
@@ -203,7 +203,7 @@ Other results that are not counterexamples:
 - ``proof.cycle``: the proof relies on facts whose own proofs rely on it,
   such as a spec's proof block that calls a lemma proved from that spec's
   postcondition. Each would hold only by the other. Give the functions
-  ``decreases`` clauses of one length that every call and application
+  ``cppverify::decreases`` clauses of one length that every call and application
   between them lowers (see chapter 13), so they are proved together by
   induction; or prove the lemma without the spec's postcondition, or move
   the reasoning into the block.
@@ -232,8 +232,8 @@ assumption contradicts itself or the program:
 .. code-block:: cpp
 
    int never(int x)
-     pre(x > 0 && x < 0)       // no x satisfies this
-     post(result == 42)
+     cv::pre(x > 0 && x < 0)       // no x satisfies this
+     cv::post(cv::result == 42)
    {
      return 0;
    }
@@ -244,7 +244,7 @@ assumption contradicts itself or the program:
    warning: never: the precondition is unsatisfiable, so every claim about it
      holds vacuously
 
-``return 0`` "establishes" ``result == 42`` because no call can reach it. The
+``return 0`` "establishes" ``cppverify::result == 42`` because no call can reach it. The
 mark is there so that such a result is never read as a proof. Every
 ``Verified`` result is checked at the places an assumption can enter: the
 preconditions and type invariants, each behavior's assumption, and each call
@@ -253,11 +253,11 @@ of a trusted contract, whose postcondition is assumed without proof:
 .. code-block:: cpp
 
    [[cppverify::trusted]] int impossible(int x)
-     post(result > x && result < x);
+     cv::post(cv::result > x && cv::result < x);
 
    int sometimes_calls(int x)
-     pre(x >= 0 && x <= 10)
-     post(result >= 0)
+     cv::pre(x >= 0 && x <= 10)
+     cv::post(cv::result >= 0)
    {
      if (x == 3) {
        int y = impossible(x);   // no result satisfies the contract
@@ -280,14 +280,14 @@ postconditions are never checked.
 .. code-block:: cpp
 
    int clipped(int x)
-     pre(x >= 0 && x <= 10)
-     behavior(small, x < 5)
-       post(result == x)
-     behavior(huge, x > 20)      // contradicts the precondition
-       post(result == 1000)
-     behavior(large, x >= 5)
-       post(result == x)
-     complete_behaviors
+     cv::pre(x >= 0 && x <= 10)
+     cv::behavior(small, x < 5)
+       cv::post(cv::result == x)
+     cv::behavior(huge, x > 20)      // contradicts the precondition
+       cv::post(cv::result == 1000)
+     cv::behavior(large, x >= 5)
+       cv::post(cv::result == x)
+     cv::complete_behaviors
    {
      return x;
    }
@@ -318,7 +318,7 @@ instantiating:
 
    note: the quantifier at 43:7 was instantiated 2914 times, up to generation 41
 
-The fix is usually a better trigger. ``trigger(term)`` inside a quantifier body
+The fix is usually a better trigger. ``cppverify::trigger(term)`` inside a quantifier body
 makes ``term`` the pattern that instantiates it (see
 :doc:`ch13-spec-and-proof-functions`); choose a term that the instance does not
 recreate at a larger argument.
@@ -411,30 +411,30 @@ Adjusting contracts
    * - Situation
      - Response
    * - Precondition too weak
-     - Strengthen ``pre`` so callers cannot supply bad inputs
+     - Strengthen ``cppverify::pre`` so callers cannot supply bad inputs
    * - Postcondition too strong
-     - Weaken ``post`` or fix the implementation
+     - Weaken ``cppverify::post`` or fix the implementation
    * - Loop invariant too weak
-     - Add facts to ``invariant`` so preservation holds
+     - Add facts to ``cppverify::invariant`` so preservation holds
    * - Spec vs machine integers disagree
-     - Use ``spec`` for mathematical integers; ``constexpr`` for machine semantics
+     - Use ``cppverify::spec`` for mathematical integers; ``constexpr`` for machine semantics
    * - Recursive specification
-     - Use the smallest sufficient ``reveal_with_fuel`` depth; after importing
-       finite lemma facts, ``hide`` an irrelevant recursive definition to keep
+     - Use the smallest sufficient ``cppverify::reveal_with_fuel`` depth; after importing
+       finite lemma facts, ``cppverify::hide`` an irrelevant recursive definition to keep
        the VC tractable
    * - Pointer aliasing
-     - Prove distinct pointers or declare ``aliases``
+     - Prove distinct pointers or declare ``cppverify::aliases``
    * - Overflow / divide-by-zero
      - Add the precondition the counterexample points to (see :doc:`ch18-undefined-behavior`)
    * - Indexed access or pointer step is out of bounds (``bounds``)
      - Declare the correct ``valid(p, n)`` extent and prove the index lies in
        ``[0, n)``; a pointer without an extent addresses one object
    * - Heap fact disappears after a call
-     - Give the callee a ``modifies`` with exact cells, a range
+     - Give the callee a ``cppverify::modifies`` with exact cells, a range
        ``p[lo : n]``, or a region; a pointer-taking callee without
-       ``modifies`` forgets the whole heap
+       ``cppverify::modifies`` forgets the whole heap
    * - Heap fact disappears after a loop
-     - Add a loop ``modifies`` naming what the loop writes, read in each
+     - Add a loop ``cppverify::modifies`` naming what the loop writes, read in each
        iteration (``a[0 : i]`` for a prefix)
 
 Further reference: :doc:`../../language/index`.
