@@ -2,13 +2,13 @@
 // RUN: not %cpp-verify --backend=bmc --unroll=3 %s 2>&1 | FileCheck %s --check-prefix=CHECK
 
 int counter()
-  pre(true)
-  post(result == 0)
+  cppverify::pre(true)
+  cppverify::post(cppverify::result == 0)
 {
   int x = 0;
   int i = 0;
   while (i < 5)
-    invariant(true)
+    cppverify::invariant(true)
   {
     x = x + 1;
     i = i + 1;
@@ -17,13 +17,13 @@ int counter()
 }
 
 int immediate_bug()
-  post(result >= 0)
+  cppverify::post(cppverify::result >= 0)
 {
   int i = 0;
   while (i < 3)
-    invariant(true)
+    cppverify::invariant(true)
   {
-    contract_assert(i != 1);
+    cppverify::check(i != 1);
     i = i + 1;
   }
   return i;
