@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify --backend=bmc --unroll=2 %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: not %cpp-verify --backend=bmc --unroll=2 %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 cppverify::spec int identity(int value) {
   return value;
