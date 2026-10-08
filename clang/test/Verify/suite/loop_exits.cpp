@@ -7,20 +7,20 @@
 
 // Every correct function below has a wrong twin that must be refuted.
 
-spec bool valid(const int *p, int n) { return true; }
-spec bool valid(int *p, int n) { return true; }
+cppverify::spec bool valid(const int *p, int n) { return true; }
+cppverify::spec bool valid(int *p, int n) { return true; }
 
 int find(const int *p, int n, int target)
-  pre(n >= 0 && n <= 4 && valid(p, n))
-  post(result >= -1 && result < n)
-  post(result < 0 || p[result] == target)
-  post(result >= 0 || forall(k, 0, n, p[k] != target))
+  cppverify::pre(n >= 0 && n <= 4 && valid(p, n))
+  cppverify::post(cppverify::result >= -1 && cppverify::result < n)
+  cppverify::post(cppverify::result < 0 || p[cppverify::result] == target)
+  cppverify::post(cppverify::result >= 0 || cppverify::forall(k, 0, n, p[k] != target))
 {
   int i = 0;
   while (i < n)
-    invariant(0 <= i && i <= n)
-    invariant(forall(k, 0, i, p[k] != target))
-    decreases(n - i)
+    cppverify::invariant(0 <= i && i <= n)
+    cppverify::invariant(cppverify::forall(k, 0, i, p[k] != target))
+    cppverify::decreases(n - i)
   {
     if (p[i] == target)
       return i;
@@ -30,13 +30,13 @@ int find(const int *p, int n, int target)
 }
 
 int find_wrong(const int *p, int n, int target)
-  pre(n >= 0 && n <= 4 && valid(p, n))
-  post(result == -1)
+  cppverify::pre(n >= 0 && n <= 4 && valid(p, n))
+  cppverify::post(cppverify::result == -1)
 {
   int i = 0;
   while (i < n)
-    invariant(0 <= i && i <= n)
-    decreases(n - i)
+    cppverify::invariant(0 <= i && i <= n)
+    cppverify::decreases(n - i)
   {
     if (p[i] == target)
       return i;
@@ -46,14 +46,14 @@ int find_wrong(const int *p, int n, int target)
 }
 
 int return_state(int n)
-  pre(n >= 1 && n <= 4)
-  post(result == 3)
+  cppverify::pre(n >= 1 && n <= 4)
+  cppverify::post(cppverify::result == 3)
 {
   int i = 0;
   int x = 0;
   while (i < n)
-    invariant(0 <= i && i <= 0)
-    decreases(n - i)
+    cppverify::invariant(0 <= i && i <= 0)
+    cppverify::decreases(n - i)
   {
     x = 3;
     if (i == 0)
@@ -65,14 +65,14 @@ int return_state(int n)
 }
 
 int return_state_wrong(int n)
-  pre(n >= 1 && n <= 4)
-  post(result == 9)
+  cppverify::pre(n >= 1 && n <= 4)
+  cppverify::post(cppverify::result == 9)
 {
   int i = 0;
   int x = 0;
   while (i < n)
-    invariant(0 <= i && i <= 0)
-    decreases(n - i)
+    cppverify::invariant(0 <= i && i <= 0)
+    cppverify::decreases(n - i)
   {
     x = 3;
     if (i == 0)
@@ -84,14 +84,14 @@ int return_state_wrong(int n)
 }
 
 int break_state(int n)
-  pre(n >= 2 && n <= 4)
-  post(result == 5)
+  cppverify::pre(n >= 2 && n <= 4)
+  cppverify::post(cppverify::result == 5)
 {
   int i = 0;
   int x = 0;
   while (i < n)
-    invariant(0 <= i && i <= 1)
-    decreases(n - i)
+    cppverify::invariant(0 <= i && i <= 1)
+    cppverify::decreases(n - i)
   {
     x = 5;
     if (i == 1)
@@ -103,14 +103,14 @@ int break_state(int n)
 }
 
 int break_state_wrong(int n)
-  pre(n >= 2 && n <= 4)
-  post(result == 0)
+  cppverify::pre(n >= 2 && n <= 4)
+  cppverify::post(cppverify::result == 0)
 {
   int i = 0;
   int x = 0;
   while (i < n)
-    invariant(0 <= i && i <= 1)
-    decreases(n - i)
+    cppverify::invariant(0 <= i && i <= 1)
+    cppverify::decreases(n - i)
   {
     x = 5;
     if (i == 1)
@@ -122,16 +122,16 @@ int break_state_wrong(int n)
 }
 
 void break_heap(int *p)
-  pre(valid(p, 4))
-  modifies(*p)
-  post(p[0] == 1 && p[1] == 1 && p[2] == old(p[2]))
+  cppverify::pre(valid(p, 4))
+  cppverify::modifies(*p)
+  cppverify::post(p[0] == 1 && p[1] == 1 && p[2] == cppverify::old(p[2]))
 {
   int i = 0;
   while (i < 4)
-    invariant(0 <= i && i <= 1)
-    invariant(forall(k, 0, i, p[k] == 1))
-    invariant(p[2] == old(p[2]) && p[3] == old(p[3]))
-    decreases(4 - i)
+    cppverify::invariant(0 <= i && i <= 1)
+    cppverify::invariant(cppverify::forall(k, 0, i, p[k] == 1))
+    cppverify::invariant(p[2] == cppverify::old(p[2]) && p[3] == cppverify::old(p[3]))
+    cppverify::decreases(4 - i)
   {
     p[i] = 1;
     if (i == 1)
@@ -141,15 +141,15 @@ void break_heap(int *p)
 }
 
 void break_heap_wrong(int *p)
-  pre(valid(p, 4))
-  modifies(*p)
-  post(p[2] == 1)
+  cppverify::pre(valid(p, 4))
+  cppverify::modifies(*p)
+  cppverify::post(p[2] == 1)
 {
   int i = 0;
   while (i < 4)
-    invariant(0 <= i && i <= 1)
-    invariant(forall(k, 0, i, p[k] == 1))
-    decreases(4 - i)
+    cppverify::invariant(0 <= i && i <= 1)
+    cppverify::invariant(cppverify::forall(k, 0, i, p[k] == 1))
+    cppverify::decreases(4 - i)
   {
     p[i] = 1;
     if (i == 1)
@@ -159,13 +159,13 @@ void break_heap_wrong(int *p)
 }
 
 int count_odd(int n)
-  pre(n >= 0 && n <= 4)
-  post(result >= 0 && result <= n)
+  cppverify::pre(n >= 0 && n <= 4)
+  cppverify::post(cppverify::result >= 0 && cppverify::result <= n)
 {
   int c = 0;
   for (int i = 0; i < n; i = i + 1)
-    invariant(0 <= i && i <= n && 0 <= c && c <= i)
-    decreases(n - i)
+    cppverify::invariant(0 <= i && i <= n && 0 <= c && c <= i)
+    cppverify::decreases(n - i)
   {
     if (i % 2 == 0)
       continue;
@@ -175,13 +175,13 @@ int count_odd(int n)
 }
 
 int continue_without_step(int n)
-  pre(n >= 0 && n <= 4)
-  post(true)
+  cppverify::pre(n >= 0 && n <= 4)
+  cppverify::post(true)
 {
   int i = 0;
   while (i < n)
-    invariant(0 <= i && i <= n)
-    decreases(n - i)
+    cppverify::invariant(0 <= i && i <= n)
+    cppverify::decreases(n - i)
   {
     if (i % 2 == 0)
       continue;
@@ -191,14 +191,14 @@ int continue_without_step(int n)
 }
 
 int continue_wrong_invariant(int n)
-  pre(n >= 0 && n <= 4)
-  post(true)
+  cppverify::pre(n >= 0 && n <= 4)
+  cppverify::post(true)
 {
   int i = 0;
   int c = 0;
   while (i < n)
-    invariant(0 <= i && i <= n && c == i)
-    decreases(n - i)
+    cppverify::invariant(0 <= i && i <= n && c == i)
+    cppverify::decreases(n - i)
   {
     i = i + 1;
     if (i % 2 == 0)
@@ -209,18 +209,18 @@ int continue_wrong_invariant(int n)
 }
 
 int inner_break(int n)
-  pre(n >= 0 && n <= 3)
-  post(result == n)
+  cppverify::pre(n >= 0 && n <= 3)
+  cppverify::post(cppverify::result == n)
 {
   int i = 0;
   while (i < n)
-    invariant(0 <= i && i <= n)
-    decreases(n - i)
+    cppverify::invariant(0 <= i && i <= n)
+    cppverify::decreases(n - i)
   {
     int j = 0;
     while (j < 3)
-      invariant(0 <= j && j <= 3)
-      decreases(3 - j)
+      cppverify::invariant(0 <= j && j <= 3)
+      cppverify::decreases(3 - j)
     {
       if (j == 1)
         break;
@@ -232,11 +232,11 @@ int inner_break(int n)
 }
 
 int while_return(bool stop)
-  post(result == 0 || result == 1)
+  cppverify::post(cppverify::result == 0 || cppverify::result == 1)
 {
   while (stop)
-    invariant(true)
-    decreases(0)
+    cppverify::invariant(true)
+    cppverify::decreases(0)
   {
     return 1;
   }
@@ -244,23 +244,23 @@ int while_return(bool stop)
 }
 
 int do_return(bool stop)
-  post(result == 0 || result == 1)
+  cppverify::post(cppverify::result == 0 || cppverify::result == 1)
 {
   do {
     if (stop)
       return 1;
   } while (false)
-    invariant(true)
-    decreases(0);
+    cppverify::invariant(true)
+    cppverify::decreases(0);
   return 0;
 }
 
 int for_return(bool stop)
-  post(result == 0 || result == 1)
+  cppverify::post(cppverify::result == 0 || cppverify::result == 1)
 {
   for (int index = 0; index < 1; ++index)
-    invariant(index >= 0 && index <= 1)
-    decreases(1 - index)
+    cppverify::invariant(index >= 0 && index <= 1)
+    cppverify::decreases(1 - index)
   {
     if (stop)
       return 1;
