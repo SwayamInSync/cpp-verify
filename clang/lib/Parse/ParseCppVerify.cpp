@@ -399,8 +399,9 @@ void Parser::ParseFunctionContractClauses(ParsingDeclarator &D,
         Actions.ActOnUnaryOp(getCurScope(), Loc, tok::exclaim, Condition);
     if (Negated.isInvalid())
       return ExprError();
-    return Actions.ActOnContractCondition(Actions.ActOnBinOp(
-        getCurScope(), Loc, tok::pipepipe, Negated.get(), Consequence));
+    return finishCppVerifyExpression(
+        Actions.ActOnContractCondition(Actions.ActOnBinOp(
+            getCurScope(), Loc, tok::pipepipe, Negated.get(), Consequence)));
   };
   while (isFunctionContractClause()) {
     const CppVerifyConstruct C = getCppVerifyConstruct(Tok);
@@ -437,7 +438,8 @@ void Parser::ParseFunctionContractClauses(ParsingDeclarator &D,
             Diag(NameLoc, diag::err_contract_behavior_redefined) << Name;
         Expr *Assumes = nullptr;
         if (TryConsumeToken(tok::comma)) {
-          ExprResult E = Actions.ActOnContractCondition(ParseExpression());
+          ExprResult E = finishCppVerifyExpression(
+              Actions.ActOnContractCondition(ParseExpression()));
           if (!E.isInvalid())
             Assumes = E.get();
         } else {
@@ -490,13 +492,14 @@ void Parser::ParseFunctionContractClauses(ParsingDeclarator &D,
       ParseContractFootprints(I.Modifies);
     } else if (IsReads || IsAliases) {
       // reads(pointer, count): the cells pointer[0..count); aliases(p, q).
-      ExprResult First = ParseAssignmentExpression();
+      ExprResult First = finishCppVerifyExpression(ParseAssignmentExpression());
       if (First.isInvalid() || Tok.isNot(tok::comma)) {
         if (!First.isInvalid())
           Diag(Tok, diag::err_contract_expected_comma) << ClauseName;
       } else {
         ConsumeToken();
-        ExprResult Second = ParseAssignmentExpression();
+        ExprResult Second =
+            finishCppVerifyExpression(ParseAssignmentExpression());
         if (!Second.isInvalid() && IsReads)
           I.Reads.push_back(std::make_pair(First.get(), Second.get()));
         else if (!Second.isInvalid())
@@ -517,7 +520,7 @@ void Parser::ParseFunctionContractClauses(ParsingDeclarator &D,
       // expressions. Parse each with ParseAssignmentExpression so the comma is
       // a tuple separator, not the C comma operator.
       do {
-        ExprResult E = ParseAssignmentExpression();
+        ExprResult E = finishCppVerifyExpression(ParseAssignmentExpression());
         if (E.isInvalid())
           break;
         if (!E.get()->getType()->isIntegerType())
@@ -532,7 +535,7 @@ void Parser::ParseFunctionContractClauses(ParsingDeclarator &D,
     } else {
       ExprResult E = ParseExpression();
       if (!E.isInvalid() && (IsPre || IsPost || IsRecommends || IsWhen)) {
-        E = Actions.ActOnContractCondition(E);
+        E = finishCppVerifyExpression(Actions.ActOnContractCondition(E));
         if (!E.isInvalid() && (IsPre || IsPost) && !Behaviors.empty()) {
           Expr *Assumes = Behaviors.back().Assumes;
           if (IsPost)
@@ -632,7 +635,7 @@ void Parser::ParseFunctionContractClauses(ParsingDeclarator &D,
                   : Apart;
         }
     }
-    Check = Actions.ActOnContractCondition(Check);
+    Check = finishCppVerifyExpression(Actions.ActOnContractCondition(Check));
     if (Check.isUsable())
       I.BehaviorChecks.push_back(Check.get());
   }
@@ -735,7 +738,7 @@ void Parser::ParseContractClauseProofs(Decl *Function) {
 void Parser::ParseContractFootprints(SmallVectorImpl<Expr *> &Footprints) {
   llvm::SaveAndRestore<bool> FootprintRAII(InContractFootprint, true);
   do {
-    ExprResult E = ParseAssignmentExpression();
+    ExprResult E = finishCppVerifyExpression(ParseAssignmentExpression());
     if (E.isInvalid())
       break;
     Footprints.push_back(E.get());
@@ -782,7 +785,7 @@ void Parser::ParseLoopContractClauses(LoopContractInfo &Contract) {
         SkipUntil(tok::r_paren, StopAtSemi);
         return;
       }
-      E = Actions.ActOnContractCondition(E);
+      E = finishCppVerifyExpression(Actions.ActOnContractCondition(E));
       if (E.isInvalid()) {
         SkipUntil(tok::r_paren, StopAtSemi);
         return;
@@ -800,7 +803,7 @@ void Parser::ParseLoopContractClauses(LoopContractInfo &Contract) {
       // Parse each component with ParseAssignmentExpression so the comma is a
       // tuple separator, not the C comma operator.
       while (true) {
-        ExprResult D = ParseAssignmentExpression();
+        ExprResult D = finishCppVerifyExpression(ParseAssignmentExpression());
         if (D.isInvalid()) {
           SkipUntil(tok::r_paren, StopAtSemi);
           return;
@@ -956,7 +959,7 @@ StmtResult Parser::ParseCalcStatement() {
   llvm::SaveAndRestore<unsigned> ContextRAII(CppVerifyContextDepth,
                                              CppVerifyContextDepth + 1);
   auto term = [&]() -> Expr * {
-    ExprResult E = ParseExpression();
+    ExprResult E = finishCppVerifyExpression(ParseExpression());
     if (E.isInvalid() || ExpectAndConsume(tok::semi)) {
       SkipUntil(tok::r_brace, StopBeforeMatch);
       return nullptr;
@@ -987,8 +990,8 @@ StmtResult Parser::ParseCalcStatement() {
     Expr *Next = term();
     if (!Next)
       break;
-    ExprResult Step = Actions.ActOnContractCondition(
-        Actions.ActOnBinOp(getCurScope(), OpLoc, Op, Previous, Next));
+    ExprResult Step = finishCppVerifyExpression(Actions.ActOnContractCondition(
+        Actions.ActOnBinOp(getCurScope(), OpLoc, Op, Previous, Next)));
     if (Step.isInvalid())
       break;
     Steps.push_back(new (Actions.getASTContext()) ContractAssertStmt(
@@ -1014,8 +1017,9 @@ StmtResult Parser::ParseCalcStatement() {
       Increasing   ? (Strict ? tok::less : tok::lessequal)
       : Decreasing ? (Strict ? tok::greater : tok::greaterequal)
                    : tok::equalequal;
-  ExprResult Conclusion = Actions.ActOnContractCondition(
-      Actions.ActOnBinOp(getCurScope(), CalcLoc, Relation, First, Previous));
+  ExprResult Conclusion = finishCppVerifyExpression(
+      Actions.ActOnContractCondition(Actions.ActOnBinOp(
+          getCurScope(), CalcLoc, Relation, First, Previous)));
   if (Conclusion.isInvalid())
     return StmtError();
   SourceLocation EndLoc = Braces.getCloseLocation();
@@ -1083,7 +1087,7 @@ StmtResult Parser::ParseContractAssert() {
     return StmtError();
   }
 
-  Cond = Actions.ActOnContractCondition(Cond);
+  Cond = finishCppVerifyExpression(Actions.ActOnContractCondition(Cond));
   if (Cond.isInvalid()) {
     SkipUntil(tok::r_paren, StopAtSemi);
     return StmtError();
@@ -1131,7 +1135,7 @@ StmtResult Parser::ParseRevealWithFuel() {
   }
   SourceLocation LParenLoc = ConsumeParen();
 
-  ExprResult Fn = ParseAssignmentExpression();
+  ExprResult Fn = finishCppVerifyExpression(ParseAssignmentExpression());
   if (Fn.isInvalid() || Tok.isNot(tok::comma)) {
     if (!Fn.isInvalid())
       Diag(Tok, diag::err_contract_expected_comma)
@@ -1141,7 +1145,7 @@ StmtResult Parser::ParseRevealWithFuel() {
   }
   ConsumeToken();
 
-  ExprResult Fuel = ParseExpression();
+  ExprResult Fuel = finishCppVerifyExpression(ParseExpression());
   if (Fuel.isInvalid()) {
     SkipUntil(tok::r_paren, StopAtSemi);
     return StmtError();
@@ -1167,7 +1171,7 @@ StmtResult Parser::ParseHideSpec() {
     return StmtError();
   }
   SourceLocation LParenLoc = ConsumeParen();
-  ExprResult Fn = ParseAssignmentExpression();
+  ExprResult Fn = finishCppVerifyExpression(ParseAssignmentExpression());
   if (Fn.isInvalid()) {
     SkipUntil(tok::r_paren, StopAtSemi);
     return StmtError();
@@ -1190,7 +1194,7 @@ StmtResult Parser::ParseRevealSpec() {
     return StmtError();
   }
   SourceLocation LParenLoc = ConsumeParen();
-  ExprResult Fn = ParseAssignmentExpression();
+  ExprResult Fn = finishCppVerifyExpression(ParseAssignmentExpression());
   if (Fn.isInvalid()) {
     SkipUntil(tok::r_paren, StopAtSemi);
     return StmtError();
