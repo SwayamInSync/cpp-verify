@@ -1,6 +1,6 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fno-verify -c -o %t.o %s
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s
-// RUN: not %cpp-verify --backend=bmc --unroll=3 %s 2>&1 | FileCheck %s
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s
+// RUN: not %cpp-verify --backend=bmc --unroll=3 %s -- 2>&1 | FileCheck %s
 //
 // `ghost T x = e;` declares a variable for the rest of the function: loop
 // invariants, assertions, and later ghost blocks may use it, and compilation
