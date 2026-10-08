@@ -3,8 +3,8 @@
 // C++ % is the truncated remainder (sign of the dividend), so a negative
 // dividend gives a non-positive remainder -- result >= 0 is false here.
 int rem(int a, int b)
-  pre(b > 0 && a >= -100 && a < 0)
-  post(result >= 0)
+  cppverify::pre(b > 0 && a >= -100 && a < 0)
+  cppverify::post(cppverify::result >= 0)
 {
   return a % b;
 }
