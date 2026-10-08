@@ -1,9 +1,9 @@
 # REQUIRES: cvc5
 # cvc5 checks its own models against the definitions, and the strict portfolio
 # fails only where both solvers produce a checked counterexample.
-# RUN: not %cpp-verify --backend=cvc5 %S/certified_counterexamples.cpp 2>&1 \
+# RUN: not %cpp-verify --backend=cvc5 %S/certified_counterexamples.cpp -- 2>&1 \
 # RUN:   | FileCheck %s --check-prefix=CVC5
-# RUN: not %cpp-verify --backend=portfolio %S/certified_counterexamples.cpp \
+# RUN: not %cpp-verify --backend=portfolio %S/certified_counterexamples.cpp -- \
 # RUN:   2>&1 | FileCheck %s --check-prefix=PORTFOLIO
 
 # CVC5-DAG: Unresolved: hidden_true [backend=cvc5] [reason=spec.hidden]
