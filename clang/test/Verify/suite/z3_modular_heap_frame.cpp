@@ -2,56 +2,56 @@
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 void set_value(int *p, int value)
-  pre(p != nullptr)
-  modifies(*p)
-  post(*p == value)
+  cppverify::pre(p != nullptr)
+  cppverify::modifies(*p)
+  cppverify::post(*p == value)
 {
   *p = value;
 }
 
 void region_frame_keeps_other_object(int *p, int *q)
-  pre(p != nullptr && q != nullptr && p != q)
-  pre(*q == 9)
-  modifies(*p)
-  post(*p == 7 && *q == 9)
+  cppverify::pre(p != nullptr && q != nullptr && p != q)
+  cppverify::pre(*q == 9)
+  cppverify::modifies(*p)
+  cppverify::post(*p == 7 && *q == 9)
 {
   set_value(p, 7);
 }
 
 void increment_value(int *p)
-  pre(p != nullptr && *p < 2147483647)
-  modifies(*p)
-  post(*p == old(*p) + 1)
+  cppverify::pre(p != nullptr && *p < 2147483647)
+  cppverify::modifies(*p)
+  cppverify::post(*p == cppverify::old(*p) + 1)
 {
   *p = *p + 1;
 }
 
 void valid_old_uses_call_entry(int *p)
-  pre(p != nullptr && *p == 4)
-  modifies(*p)
-  post(*p == 6)
+  cppverify::pre(p != nullptr && *p == 4)
+  cppverify::modifies(*p)
+  cppverify::post(*p == 6)
 {
   increment_value(p);
   increment_value(p);
 }
 
 void invalid_unframed_claim(int *p, int *q)
-  pre(p != nullptr && q != nullptr && p != q)
-  modifies(*p)
-  post(*q == 9)
+  cppverify::pre(p != nullptr && q != nullptr && p != q)
+  cppverify::modifies(*p)
+  cppverify::post(*q == 9)
 {
   set_value(p, 7);
 }
 
 void invalid_caller_modifies(int *p, int *q)
-  pre(p != nullptr && q != nullptr)
-  modifies(*q)
+  cppverify::pre(p != nullptr && q != nullptr)
+  cppverify::modifies(*q)
 {
   set_value(p, 7);
 }
 
 void invalid_missing_modifies(int *p)
-  pre(p != nullptr)
+  cppverify::pre(p != nullptr)
 {
   *p = 7;
 }
