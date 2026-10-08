@@ -53,7 +53,7 @@ the other.
 | Host frontend | Rust compiler integration | Modified Clang frontend |
 | Verification language | Rust-oriented exec/proof/spec modes | C++ contracts plus proof/spec/ghost constructs |
 | Integer modeling | Explicit mathematical and machine-oriented types | Mathematical explicit specs; machine executable/proof and lifted `constexpr` |
-| Recursive specifications | Checked termination measures | Explicit spec recursion requires `decreases`; automatic `constexpr` lifting still needs a closed totality policy |
+| Recursive specifications | Checked termination measures | Explicit spec recursion requires `cppverify::decreases`; automatic `constexpr` lifting still needs a closed totality policy |
 | Executable helper reuse | Uses Verus's mode and specification mechanisms | Experiments with selected `constexpr` helpers and Clang constant evaluation |
 | Current maturity | Evaluated research verifier with substantial examples and formal core | Research prototype with one flagship real-code extraction; broader evaluation and formalization remain open |
 
