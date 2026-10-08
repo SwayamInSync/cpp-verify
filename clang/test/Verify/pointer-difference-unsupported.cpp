@@ -9,5 +9,12 @@ constexpr long constexpr_pointer_difference(int *pointer) {
   return (pointer + 1) - pointer;
 }
 
+// The contract makes the constexpr function a lifted spec.
+long lifted(int *pointer)
+  cppverify::post(cppverify::result == constexpr_pointer_difference(pointer))
+{
+  return 1;
+}
+
 // VERIFY-DAG: error: spec_pointer_difference: pointer difference in spec or lifted constexpr functions is unsupported
 // VERIFY-DAG: error: constexpr_pointer_difference: pointer difference in spec or lifted constexpr functions is unsupported
