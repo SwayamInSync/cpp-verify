@@ -1,5 +1,5 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s
-// RUN: not %cpp-verify --diagnostics-format=json %s 2>&1 \
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s
+// RUN: not %cpp-verify --diagnostics-format=json %s -- 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=JSON
 //
 // A counterexample is checked even when its model gives a bounded quantifier a
