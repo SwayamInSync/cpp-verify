@@ -39,7 +39,7 @@ The niche
    * - **CppVerify**
      - **Clang**
      - **Native subset**
-     - **Keywords**
+     - **First-class, namespaced**
      - **Sema-typed**
 
 Contracts go through the same type checker as your program. ``cppverify::post(cppverify::result == fibo(n))`` knows the return type of ``fibo``.
