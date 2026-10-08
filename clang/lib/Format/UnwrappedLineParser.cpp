@@ -1732,6 +1732,11 @@ void UnwrappedLineParser::parseStructuralElement(
                                                  TT_CompoundRequirementLBrace);
        !eof();) {
     const FormatToken *Previous = FormatTok->Previous;
+    // cpp-verify: clauses after a function declarator.
+    if (IsCpp && Previous && mayFollowCppVerifyDeclarator(*Previous) &&
+        tryToParseCppVerifyClauses(CppVerifyClausePosition::Function)) {
+      return;
+    }
     switch (FormatTok->Tok.getKind()) {
     case tok::at:
       nextToken();
@@ -3184,6 +3189,8 @@ void UnwrappedLineParser::parseNamespaceOrExportBlock(unsigned AddLevels) {
 void UnwrappedLineParser::parseNamespace() {
   assert(FormatTok->isOneOf(tok::kw_namespace, TT_NamespaceMacro) &&
          "'namespace' expected");
+  if (IsCpp && FormatTok->is(tok::kw_namespace))
+    noteCppVerifyAlias();
 
   const FormatToken &InitialToken = *FormatTok;
   nextToken();
@@ -3316,6 +3323,8 @@ void UnwrappedLineParser::parseForOrWhileLoop(bool HasParens) {
       FormatTok->setFinalizedType(TT_ConditionLParen);
     parseParens();
   }
+  if (IsCpp)
+    tryToParseCppVerifyClauses(CppVerifyClausePosition::Loop);
 
   if (Style.isVerilog()) {
     // Event control.
@@ -3351,6 +3360,23 @@ void UnwrappedLineParser::parseDoWhile() {
     ++Line->Level;
 
   nextToken();
+  // cpp-verify: clauses after the condition.
+  if (IsCpp && FormatTok->is(tok::l_paren)) {
+    unsigned StoredPosition = Tokens->getPosition();
+    FormatToken *Tok = FormatTok;
+    for (int Depth = 0; Tok->isNot(tok::eof); Tok = Tokens->getNextToken())
+      if (Tok->is(tok::l_paren))
+        ++Depth;
+      else if (Tok->is(tok::r_paren) && --Depth == 0)
+        break;
+    const bool ClauseFollows =
+        Tokens->getNextToken()->isOneOf(tok::identifier, tok::coloncolon);
+    FormatTok = Tokens->setPosition(StoredPosition);
+    if (ClauseFollows) {
+      parseParens();
+      tryToParseCppVerifyClauses(CppVerifyClausePosition::DoWhile);
+    }
+  }
   parseStructuralElement();
 }
 
