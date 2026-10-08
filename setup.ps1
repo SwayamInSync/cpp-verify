@@ -26,7 +26,7 @@ $cmakeArgs = @(
     "-S", (Join-Path $Root "llvm"),
     "-B", $BuildDir,
     "-G", $Generator,
-    "-DLLVM_ENABLE_PROJECTS=clang",
+    "-DLLVM_ENABLE_PROJECTS=clang;clang-tools-extra",
     "-DLLVM_TARGETS_TO_BUILD=$LLVMTargets",
     "-DCPPVERIFY_VENDOR_Z3=ON",
     "-DCPPVERIFY_PREFER_SYSTEM_Z3=OFF"
@@ -37,12 +37,12 @@ if ($Generator -eq "Ninja") {
 # Visual Studio generator: multi-config; build with --config Release below.
 & cmake @cmakeArgs
 
-Write-Host "==> Building clang and cpp-verify"
+Write-Host "==> Building clang, cpp-verify, clangd, and clang-format"
 if ($Generator -match "Visual Studio") {
-    & cmake --build $BuildDir --config $BuildType --target clang cpp-verify -m
+    & cmake --build $BuildDir --config $BuildType --target clang cpp-verify clangd clang-format -m
     $BinDir = Join-Path $BuildDir "bin\$BuildType"
 } else {
-    & cmake --build $BuildDir --target clang cpp-verify -m
+    & cmake --build $BuildDir --target clang cpp-verify clangd clang-format -m
     $BinDir = Join-Path $BuildDir "bin"
 }
 
@@ -50,4 +50,5 @@ Write-Host ""
 Write-Host "Done."
 Write-Host "  Verifier:  $(Join-Path $BinDir 'cpp-verify.exe')"
 Write-Host "  Compiler:  $(Join-Path $BinDir 'clang++.exe')"
+Write-Host "  Editors:   $(Join-Path $BinDir 'clangd.exe'), $(Join-Path $BinDir 'clang-format.exe')"
 Write-Host ""
