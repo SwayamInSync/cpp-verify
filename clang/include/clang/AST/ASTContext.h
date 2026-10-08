@@ -129,6 +129,24 @@ struct FunctionContractInfo {
   SmallVector<ClauseProof, 1> ClauseProofs;
   bool IsSpec = false;
   bool IsProof = false;
+
+  /// The clauses' expressions and proof blocks, as written.
+  SmallVector<Stmt *, 8> children() const {
+    SmallVector<Stmt *, 8> Children;
+    Children.append(Preconditions.begin(), Preconditions.end());
+    Children.append(Postconditions.begin(), Postconditions.end());
+    Children.append(Modifies.begin(), Modifies.end());
+    for (const auto &[First, Second] : Aliases)
+      Children.append({First, Second});
+    Children.append(Recommends.begin(), Recommends.end());
+    for (const auto &[Pointer, Count] : Reads)
+      Children.append({Pointer, Count});
+    Children.append(When.begin(), When.end());
+    Children.append(Decreases.begin(), Decreases.end());
+    for (const ClauseProof &Proof : ClauseProofs)
+      Children.push_back(Proof.Body);
+    return Children;
+  }
 };
 
 /// Contract information attached to an iteration statement via side table.
@@ -140,6 +158,14 @@ struct LoopContractInfo {
   SourceLocation MayDiverge;
   /// The heap the loop may write, read in each iteration's state.
   SmallVector<Expr *, 2> Modifies;
+
+  /// The clauses' expressions, as written.
+  SmallVector<Stmt *, 8> children() const {
+    SmallVector<Stmt *, 8> Children(Invariants.begin(), Invariants.end());
+    Children.append(Decreases.begin(), Decreases.end());
+    Children.append(Modifies.begin(), Modifies.end());
+    return Children;
+  }
 };
 
 /// Type invariant clauses on a RecordDecl (CppVerify).
@@ -414,6 +440,10 @@ class ASTContext : public RefCountedBase<ASTContext> {
 
   /// CppVerify: type_invariant clauses on record/class types.
   llvm::DenseMap<const RecordDecl *, TypeContractInfo *> TypeContracts;
+
+  /// CppVerify: the constructs written in a declaration, cppverify::pre and
+  /// the others, as references to their <cppverify.h> declarations.
+  llvm::DenseMap<const Decl *, SmallVector<Expr *, 4>> CppVerifyReferences;
 
   /// Mapping from GUIDs to the corresponding MSGuidDecl.
   mutable llvm::FoldingSet<MSGuidDecl> MSGuidDecls;
@@ -3511,6 +3541,16 @@ public:
   TypeContractInfo &getOrCreateTypeContract(const RecordDecl *RD);
   /// CppVerify: get type_invariant info, or nullptr if none.
   const TypeContractInfo *getTypeContract(const RecordDecl *RD) const;
+
+  /// CppVerify: the construct references written in \p D, for tools.
+  void addCppVerifyReference(const Decl *D, Expr *Reference) {
+    CppVerifyReferences[D].push_back(Reference);
+  }
+  ArrayRef<Expr *> getCppVerifyReferences(const Decl *D) const {
+    auto I = CppVerifyReferences.find(D);
+    return I != CppVerifyReferences.end() ? ArrayRef<Expr *>(I->second)
+                                          : ArrayRef<Expr *>();
+  }
 
   /// Allocate an uninitialized TypeSourceInfo.
   ///
