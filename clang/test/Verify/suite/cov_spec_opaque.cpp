@@ -1,17 +1,17 @@
 // RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
-spec int hidden(int x) { return x + 1; }
+cppverify::spec int hidden(int x) { return x + 1; }
 
 int client(int x)
-  pre(x >= 0 && x < 10)
-  post(result == x)
+  cppverify::pre(x >= 0 && x < 10)
+  cppverify::post(cppverify::result == x)
 {
-  ghost { hide(hidden); }
+  cppverify::ghost { cppverify::hide(hidden); }
   return x;
 }
 
-spec int rec(int n)
-  decreases(n)
+cppverify::spec int rec(int n)
+  cppverify::decreases(n)
 {
   if (n <= 0)
     return 0;
@@ -19,11 +19,11 @@ spec int rec(int n)
 }
 
 int use_rec(int n)
-  pre(n >= 0 && n <= 1)
-  post(result == rec(n))
-  decreases(n)
+  cppverify::pre(n >= 0 && n <= 1)
+  cppverify::post(cppverify::result == rec(n))
+  cppverify::decreases(n)
 {
-  ghost { reveal_with_fuel(rec, 2); }
+  cppverify::ghost { cppverify::reveal_with_fuel(rec, 2); }
   return n;
 }
 
