@@ -44,7 +44,7 @@ Verification backends
        kernel build is ``Certified``.
 
 BMC does not replace loop contracts on the default path; it is an alternate pipeline stage that
-**expands** loops before passivization. You still write ``invariant`` / ``decreases`` for documentation
+**expands** loops before passivization. You still write ``cppverify::invariant`` / ``cppverify::decreases`` for documentation
 and for the Z3 backend.
 
 BMC's result is also bounded explicitly. A counterexample inside the explored
@@ -225,7 +225,7 @@ cannot be applied to an untransformed record because loop unrolling is a VCR
 transformation that occurs before canonical obligation construction. Lean
 scratch replay of bounded records is rejected until the generated theorem
 format carries the same transform provenance.
-Failure-only ``recommends`` checks are not archived, so bytes do not depend on
+Failure-only ``cppverify::recommends`` checks are not archived, so bytes do not depend on
 whether a prior solver run succeeded or failed.
 The dependency-scoped proof cache is shared by direct verification and replay,
 so identical canonical goals reuse proofs without trusting source paths or
@@ -234,7 +234,7 @@ diagnostic identities.
 Modular function calls
 ----------------------
 
-Functions with ``pre`` / ``post`` are verified **modularly**: the caller assumes the callee’s
+Functions with ``cppverify::pre`` / ``cppverify::post`` are verified **modularly**: the caller assumes the callee’s
 precondition and inherits its postcondition (and frame conditions) without re-analyzing the callee body.
 
 Simple call:
@@ -249,11 +249,11 @@ Chained calls in one expression are supported by lowering inner calls to tempora
 
 .. code-block:: cpp
 
-   int inc(int x) pre(x >= 0 && x < 100) post(result == x + 1) { return x + 1; }
+   int inc(int x) cv::pre(x >= 0 && x < 100) cv::post(cv::result == x + 1) { return x + 1; }
 
    int twice(int x)
-     pre(x >= 0 && x < 98)
-     post(result == x + 2)
+     cv::pre(x >= 0 && x < 98)
+     cv::post(cv::result == x + 2)
    {
      return inc(inc(x));   // inner inc, then outer inc
    }
@@ -262,20 +262,20 @@ The converter emits ``VCallStmt`` for each exec call site; passivization substit
 in order. Spec and proof functions are not emitted at runtime and are handled by inlining or axioms.
 
 By-value parameters have separate entry and final meanings when the callee
-reassigns them. Preconditions and ``old(parameter)`` substitute the caller's
+reassigns them. Preconditions and ``cppverify::old(parameter)`` substitute the caller's
 argument. A plain parameter occurrence in the postcondition uses a fresh final
-callee-local value when that formal was modified, so ``post(p == nullptr)``
+callee-local value when that formal was modified, so ``cppverify::post(p == nullptr)``
 after rebinding a local pointer cannot contradict the caller's non-null
 argument.
 
-A call changes the caller's heap only inside the callee's ``modifies``
+A call changes the caller's heap only inside the callee's ``cppverify::modifies``
 footprints, instantiated with the arguments: a cell (``p[i]``, ``p->field``)
 or a range (``p[lo : n]``) is exactly those cells, and a region (``*p``) is
 the object the argument addresses, its ``valid`` extent or else one object.
 Every other cell keeps its value, and the postcondition then re-establishes
 whatever the caller may rely on inside the footprints. Each footprint must
-also lie within the caller's own ``modifies``, read in the caller's entry
-state. A callee without ``modifies`` whose body (or a callee of it) may write
+also lie within the caller's own ``cppverify::modifies``, read in the caller's entry
+state. A callee without ``cppverify::modifies`` whose body (or a callee of it) may write
 is treated as writing the whole heap; a conservative body scan keeps the heap
 for verified, acyclic read-only callees.
 Functions that perform dynamic allocation or deallocation are currently
@@ -285,14 +285,14 @@ effects have contract syntax.
 ``valid(p, n)`` extents also cross calls as checked sub-slices. Passing
 ``p + offset`` to a ``valid(q, length)`` formal asserts one root, nonnegative
 offset and length, and ``offset + length <= n``. Empty one-past slices,
-exact-cell writes, ranges ``modifies(q[lo : n])``, and whole-slice
-``modifies(*q)`` are supported; the call changes only the written cells of
+exact-cell writes, ranges ``cppverify::modifies(q[lo : n])``, and whole-slice
+``cppverify::modifies(*q)`` are supported; the call changes only the written cells of
 the slice.
 
 A caller-owned dynamic scalar may be passed in the other direction to a
 verified, non-allocating executable callee. Its direct matching pointer
 parameter may be compared or dereferenced, including a write authorized by
-``modifies(*p)``. The call substitutes the caller's lifetime identity into
+``cppverify::modifies(*p)``. The call substitutes the caller's lifetime identity into
 validity checks and accepts the footprint only after proving that identity is
 one of the caller's live allocations. Acyclic direct-pointer forwarding,
 scalar-value executable/spec helpers, and direct/conditional/null pointer
@@ -316,26 +316,26 @@ when you say so, with the standard attribute syntax:
 .. code-block:: cpp
 
    [[cppverify::trusted]] int clamp_byte(int v)
-     post(0 <= result && result <= 255);
+     cv::post(0 <= cv::result && cv::result <= 255);
 
    [[cppverify::trusted]] int read_sensor(int channel)
-     pre(channel >= 0 && channel < 4)
-     post(result >= 0 && result <= 1023)
+     cv::pre(channel >= 0 && channel < 4)
+     cv::post(cv::result >= 0 && cv::result <= 1023)
    {
      return channel * 300;   // stands for hardware access
    }
 
    int sample(int c)
-     pre(c >= 0 && c < 4)
-     post(0 <= result && result <= 255)
+     cv::pre(c >= 0 && c < 4)
+     cv::post(0 <= cv::result && cv::result <= 255)
    {
      int r = read_sensor(c);
      return clamp_byte(r);
    }
 
    int twice(int c)
-     pre(c >= 0 && c < 4)
-     post(0 <= result && result <= 510)
+     cv::pre(c >= 0 && c < 4)
+     cv::post(0 <= cv::result && cv::result <= 510)
    {
      int a = sample(c);
      int b = sample(c);
@@ -360,7 +360,7 @@ trusted contract should state what the function guarantees and nothing more,
 and a function whose body is in the verified subset should be verified
 instead.
 
-On a ``proof`` function the mark makes an axiom: its postcondition is assumed
+On a ``cppverify::proof`` function the mark makes an axiom: its postcondition is assumed
 for every argument that meets its precondition. That is occasionally the
 right tool, for a mathematical fact that the solver cannot prove and that
 you would rather cite than prove. It is also the easiest way to make every
@@ -414,7 +414,7 @@ Parallel verify + compile
 
    clang++ -std=c++17 -fverify-contracts -c module.cpp -o module.o
 
-With ``-fverify-contracts``, contract keywords parse as part of the language. Unless you pass
+With ``-fverify-contracts``, the contract constructs parse as part of the language. Unless you pass
 ``-fno-verify``, the compiler runs **cpp-verify in parallel** with code generation. Ghost blocks,
 spec functions, and proof functions are stripped from the object file — no runtime cost.
 
@@ -431,11 +431,11 @@ When a proof fails or looks wrong, dump intermediate representations:
 
 Layer aliases: ``layer-1`` … ``layer-4``, or ``all``. Multiple layers are separated by ``======``.
 
-``recommends`` and soft checks
-------------------------------
+``cppverify::recommends`` and soft checks
+-----------------------------------------
 
-``recommends`` on spec functions is optional advice. If verification **fails**, the tool may
-report that a ``recommends`` clause at a call site was not implied by the caller’s precondition —
+``cppverify::recommends`` on spec functions is optional advice. If verification **fails**, the tool may
+report that a ``cppverify::recommends`` clause at a call site was not implied by the caller’s precondition —
 a warning, not a hard error.
 
 Regression tests
