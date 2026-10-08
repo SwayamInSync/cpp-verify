@@ -7,24 +7,24 @@ struct Pair {
 };
 
 Pair valid_brace_initialization()
-  post(result.first == 3)
-  post(result.second == 4)
+  cppverify::post(cppverify::result.first == 3)
+  cppverify::post(cppverify::result.second == 4)
 {
   Pair value{3, 4};
   return value;
 }
 
 Pair valid_copy_initialization(Pair source)
-  post(result.first == source.first)
-  post(result.second == source.second)
+  cppverify::post(cppverify::result.first == source.first)
+  cppverify::post(cppverify::result.second == source.second)
 {
   Pair copy = source;
   return copy;
 }
 
 Pair valid_copy_assignment(Pair source)
-  post(result.first == source.first)
-  post(result.second == source.second)
+  cppverify::post(cppverify::result.first == source.first)
+  cppverify::post(cppverify::result.second == source.second)
 {
   Pair copy{};
   copy = source;
@@ -32,8 +32,8 @@ Pair valid_copy_assignment(Pair source)
 }
 
 Pair valid_const_copy()
-  post(result.first == 5)
-  post(result.second == 6)
+  cppverify::post(cppverify::result.first == 5)
+  cppverify::post(cppverify::result.second == 6)
 {
   const Pair source{5, 6};
   Pair copy(source);
@@ -41,13 +41,13 @@ Pair valid_const_copy()
 }
 
 int valid_conditional_field(bool choose_first, Pair first, Pair second)
-  post(result == (choose_first ? first.first : second.first))
+  cppverify::post(cppverify::result == (choose_first ? first.first : second.first))
 {
   return (choose_first ? first : second).first;
 }
 
 int valid_old_conditional_field(bool choose_first, Pair first, Pair second)
-  post(result == old((choose_first ? first : second).first))
+  cppverify::post(cppverify::result == cppverify::old((choose_first ? first : second).first))
 {
   int saved = (choose_first ? first : second).first;
   first.first = 0;
@@ -56,8 +56,8 @@ int valid_old_conditional_field(bool choose_first, Pair first, Pair second)
 }
 
 Pair invalid_copy_claim(Pair source)
-  post(result.first == source.second)
-  post(result.second == source.first)
+  cppverify::post(cppverify::result.first == source.second)
+  cppverify::post(cppverify::result.second == source.first)
 {
   Pair copy = source;
   return copy;
@@ -65,7 +65,7 @@ Pair invalid_copy_claim(Pair source)
 
 int invalid_conditional_field_alias(bool left, bool right, Pair first,
                                     Pair second)
-  post((left ? first : second).first ==
+  cppverify::post((left ? first : second).first ==
        (right ? first : second).first)
 {
   return 0;
