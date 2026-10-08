@@ -14,71 +14,71 @@ struct Cell {
 Cell runtime_cell;
 
 void write_value(int *target)
-  pre(target != nullptr)
-  modifies(*target)
-  post(*target == 2)
+  cppverify::pre(target != nullptr)
+  cppverify::modifies(*target)
+  cppverify::post(*target == 2)
 {
   *target = 2;
 }
 
 int ghost_local_escape(int value)
-  post(result == 2)
+  cppverify::post(cppverify::result == 2)
 {
-  ghost {
+  cppverify::ghost {
     value = 2;
   }
   return value;
 }
 
 void ghost_heap_store(int *target)
-  pre(target != nullptr)
-  modifies(*target)
-  post(*target == 2)
+  cppverify::pre(target != nullptr)
+  cppverify::modifies(*target)
+  cppverify::post(*target == 2)
 {
-  ghost {
+  cppverify::ghost {
     *target = 2;
   }
 }
 
 int ghost_exec_call(int value)
-  post(result == 2)
+  cppverify::post(cppverify::result == 2)
 {
-  ghost {
+  cppverify::ghost {
     write_value(&value);
   }
   return value;
 }
 
-proof void proof_heap_store(int *target)
-  modifies(*target)
-  post(*target == 2)
+cppverify::proof void proof_heap_store(int *target)
+  cppverify::modifies(*target)
+  cppverify::post(*target == 2)
 {
   *target = 2;
 }
 
-proof void proof_exec_call(int *target)
+cppverify::proof void proof_exec_call(int *target)
 {
   write_value(target);
 }
 
 int ghost_pointer_store(Cell *target)
-  pre(target != nullptr)
-  modifies(*target)
+  cppverify::pre(target != nullptr)
+  cppverify::modifies(*target)
 {
-  ghost {
+  cppverify::ghost {
     Cell *alias = target;
     alias->value = 2;
   }
   return target->value;
 }
 
-proof void proof_global_store()
+cppverify::proof void proof_global_store()
 {
   runtime_cell.value = 2;
 }
 
 Cell user_defined_assignment(Cell input)
-  post(result.value == input.value)
+  cppverify::post(cppverify::result.value == input.value)
 {
   Cell output{0};
   output = input;
@@ -86,26 +86,26 @@ Cell user_defined_assignment(Cell input)
 }
 
 int ghost_return()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
-  ghost {
+  cppverify::ghost {
     return 1;
   }
   return 0;
 }
 
 int ghost_nonterminating_loop()
-  post(result == 1)
+  cppverify::post(cppverify::result == 1)
 {
-  ghost {
+  cppverify::ghost {
     while (true) {
     }
   }
   return 0;
 }
 
-proof void nonterminating_proof()
-  post(false)
+cppverify::proof void nonterminating_proof()
+  cppverify::post(false)
 {
   while (true) {
   }
