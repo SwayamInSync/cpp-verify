@@ -5,15 +5,15 @@
 // post-condition reads the right result on both the early-return path and the
 // loop path.
 int sum_or_zero(int n)
-  pre(n >= 0 && n <= 50)
-  post(result >= 0)
+  cppverify::pre(n >= 0 && n <= 50)
+  cppverify::post(cppverify::result >= 0)
 {
   if (n == 0)
     return 0;
   int i = 0;
   while (i < n)
-    invariant(0 <= i && i <= n)
-    decreases(n - i)
+    cppverify::invariant(0 <= i && i <= n)
+    cppverify::decreases(n - i)
   {
     i = i + 1;
   }
