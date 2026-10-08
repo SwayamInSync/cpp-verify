@@ -1,7 +1,7 @@
 int parallel_failure(int value)
-    pre(value >= 0 && value <= 100)
-    post(result == value) {
-  contract_assert(value < 50);
-  contract_assert(value == 101);
+    cppverify::pre(value >= 0 && value <= 100)
+    cppverify::post(cppverify::result == value) {
+  cppverify::check(value < 50);
+  cppverify::check(value == 101);
   return value;
 }
