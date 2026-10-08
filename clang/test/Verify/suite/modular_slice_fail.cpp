@@ -2,57 +2,57 @@
 // RUN: not %cpp-verify --check-ub %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 // RUN: not %cpp-verify --check-ub --backend=bmc --unroll=1 %s 2>&1 | FileCheck %s --check-prefix=BMC
 
-spec bool valid(int *p, int count) { return true; }
-spec bool valid(int *p, unsigned long count) { return true; }
-spec bool valid(char *p, unsigned long count) { return true; }
+cppverify::spec bool valid(int *p, int count) { return true; }
+cppverify::spec bool valid(int *p, unsigned long count) { return true; }
+cppverify::spec bool valid(char *p, unsigned long count) { return true; }
 
 int read_first(int *p, int count)
-  pre(valid(p, count) && count >= 1)
-  post(result == p[0])
+  cppverify::pre(valid(p, count) && count >= 1)
+  cppverify::post(cppverify::result == p[0])
 {
   return p[0];
 }
 
 long consume_difference(long value)
-  pre(true)
-  post(result == value)
+  cppverify::pre(true)
+  cppverify::post(cppverify::result == value)
 {
   return value;
 }
 
 int read_complete_object(int *p)
-  pre(p != nullptr)
-  post(result == *p)
+  cppverify::pre(p != nullptr)
+  cppverify::post(cppverify::result == *p)
 {
   return *p;
 }
 
 long unsafe_difference_precondition(int *p, int count)
-  pre(valid(p, count) && p != nullptr && count >= 0 && count <= 1000 &&
+  cppverify::pre(valid(p, count) && p != nullptr && count >= 0 && count <= 1000 &&
       (p + (count + 1)) - p == count + 1)
-  post(true)
+  cppverify::post(true)
 {
   return 0;
 }
 
 void overwrite_region(int *p, int count)
-  pre(valid(p, count) && count >= 1)
-  modifies(*p)
+  cppverify::pre(valid(p, count) && count >= 1)
+  cppverify::modifies(*p)
 {
   p[0] = 1;
 }
 
 int insufficient_slice(int *p, int count, int offset, int length)
-  pre(valid(p, count) && count >= 0 && offset >= 0 && offset <= count &&
+  cppverify::pre(valid(p, count) && count >= 0 && offset >= 0 && offset <= count &&
       length >= 1)
-  post(true)
+  cppverify::post(true)
 {
   return read_first(p + offset, length);
 }
 
 int one_past_nonempty_slice(int *p, int count)
-  pre(valid(p, count) && count >= 0 && count <= 1000)
-  post(true)
+  cppverify::pre(valid(p, count) && count >= 0 && count <= 1000)
+  cppverify::post(true)
 {
   return read_first(p + count, 1);
 }
@@ -60,91 +60,91 @@ int one_past_nonempty_slice(int *p, int count)
 // Without an extent the caller's pointer addresses one object, so a call
 // may pass it as a one-element slice but not as a longer one.
 int missing_caller_extent(int *p)
-  pre(p != nullptr)
-  post(true)
+  cppverify::pre(p != nullptr)
+  cppverify::post(true)
 {
   return read_first(p, 2);
 }
 
 int single_object_slice(int *p)
-  pre(p != nullptr)
-  post(true)
+  cppverify::pre(p != nullptr)
+  cppverify::post(true)
 {
   return read_first(p, 1);
 }
 
 long out_of_bounds_difference(int *p, int count)
-  pre(valid(p, count) && p != nullptr && count >= 0 && count <= 1000)
-  post(true)
+  cppverify::pre(valid(p, count) && p != nullptr && count >= 0 && count <= 1000)
+  cppverify::post(true)
 {
   return (p + (count + 1)) - p;
 }
 
 long negative_position_difference(int *p, int count)
-  pre(valid(p, count) && p != nullptr && count >= 1 && count <= 1000)
-  post(true)
+  cppverify::pre(valid(p, count) && p != nullptr && count >= 1 && count <= 1000)
+  cppverify::post(true)
 {
   return (p - 1) - p;
 }
 
 // 2^63 bytes fit in the address space; their distance does not fit ptrdiff_t.
 long unrepresentable_pointer_difference(char *p, unsigned long count)
-  pre(valid(p, count) && p != nullptr && count == 9223372036854775808UL)
-  post(true)
+  cppverify::pre(valid(p, count) && p != nullptr && count == 9223372036854775808UL)
+  cppverify::post(true)
 {
   return (p + count) - p;
 }
 
 long cross_origin_difference(int *left, int left_count, int *right,
                              int right_count)
-  pre(valid(left, left_count) && valid(right, right_count) &&
+  cppverify::pre(valid(left, left_count) && valid(right, right_count) &&
       left_count >= 1 && right_count >= 1 && left != nullptr &&
       right != nullptr)
-  post(true)
+  cppverify::post(true)
 {
   return (left + 1) - right;
 }
 
 long wrong_slice_difference(int *p, int count, int left, int right)
-  pre(valid(p, count) && p != nullptr && count >= 0 && count <= 1000 &&
+  cppverify::pre(valid(p, count) && p != nullptr && count >= 0 && count <= 1000 &&
       left >= 0 && left <= count && right >= 0 && right <= count)
-  post(result == right - left)
+  cppverify::post(cppverify::result == right - left)
 {
   return (p + left) - (p + right);
 }
 
 long unsafe_difference_argument(int *p, int count)
-  pre(valid(p, count) && p != nullptr && count >= 0 && count <= 1000)
-  post(true)
+  cppverify::pre(valid(p, count) && p != nullptr && count >= 0 && count <= 1000)
+  cppverify::post(true)
 {
   return consume_difference((p + (count + 1)) - p);
 }
 
 long unsafe_difference_postcondition(int *p, int count)
-  pre(valid(p, count) && p != nullptr && count >= 0 && count <= 1000)
-  post((p + (count + 1)) - p == count + 1)
+  cppverify::pre(valid(p, count) && p != nullptr && count >= 0 && count <= 1000)
+  cppverify::post((p + (count + 1)) - p == count + 1)
 {
   return 0;
 }
 
 int missing_extent_pointer_forward(int *p)
-  pre(p != nullptr && p + 2 != nullptr)
-  post(true)
+  cppverify::pre(p != nullptr && p + 2 != nullptr)
+  cppverify::post(true)
 {
   return read_complete_object(p + 2);
 }
 
 long call_unsafe_difference_precondition(int *p, int count)
-  pre(valid(p, count) && p != nullptr && count >= 0 && count <= 1000)
-  post(true)
+  cppverify::pre(valid(p, count) && p != nullptr && count >= 0 && count <= 1000)
+  cppverify::post(true)
 {
   return unsafe_difference_precondition(p, count);
 }
 
 // A region write through a sub-slice stays within the slice's extent.
 void slice_region_write(int *p, int count, int offset)
-  pre(valid(p, count) && count >= 1 && offset >= 0 && offset < count)
-  modifies(*p)
+  cppverify::pre(valid(p, count) && count >= 1 && offset >= 0 && offset < count)
+  cppverify::modifies(*p)
 {
   overwrite_region(p + offset, count - offset);
 }
