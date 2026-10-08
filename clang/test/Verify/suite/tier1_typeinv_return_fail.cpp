@@ -5,11 +5,11 @@
 struct Box {
   int w;
   int h;
-  type_invariant(w >= 0 && h >= 0);
+  cppverify::type_invariant(w >= 0 && h >= 0);
 };
 
 Box make_bad(int a, int b)
-  pre(a >= 0 && a <= 50 && b <= 50)   // b may be negative
+  cppverify::pre(a >= 0 && a <= 50 && b <= 50)   // b may be negative
 {
   Box x;
   x.w = a;
