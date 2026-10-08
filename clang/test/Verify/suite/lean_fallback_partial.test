@@ -4,13 +4,13 @@
 # goal names, and certifying them yields a mixed Z3+Lean proof.
 #
 # RUN: rm -rf %t.project
-# RUN: not %cpp-verify --solver-rlimit=100 --lean-fallback=%t.project %S/Inputs/lean_fallback_partial.cpp 2>&1 | FileCheck %s --check-prefix=EXPORT
+# RUN: not %cpp-verify --solver-rlimit=100 --lean-fallback=%t.project %S/Inputs/lean_fallback_partial.cpp -- 2>&1 | FileCheck %s --check-prefix=EXPORT
 # RUN: FileCheck %s --input-file=%t.project/CppVerify/Check.lean --check-prefix=GOALS
 # RUN: cp %S/Inputs/lean_fallback_partial_goal_1.lean %t.project/CppVerify/Proofs/Goal_ea6538a5c8cb138e.lean
 # RUN: cp %S/Inputs/lean_fallback_partial_goal_2.lean %t.project/CppVerify/Proofs/Goal_53d4e62b4037d310.lean
-# RUN: %cpp-verify --solver-rlimit=100 --lean-fallback=%t.project --lean-certify %S/Inputs/lean_fallback_partial.cpp 2>&1 | FileCheck %s --check-prefix=MIXED
-# RUN: %cpp-verify --solver-rlimit=100 --lean-fallback=%t.project --lean-certify --diagnostics-format=json %S/Inputs/lean_fallback_partial.cpp 2>&1 | FileCheck %s --check-prefix=MIXED-JSON
-# RUN: not %cpp-verify --solver-rlimit=100 --lean-fallback=%t.project --lean-fallback-scope=all --lean-certify %S/Inputs/lean_fallback_partial.cpp 2>&1 | FileCheck %s --check-prefix=ALL
+# RUN: %cpp-verify --solver-rlimit=100 --lean-fallback=%t.project --lean-certify %S/Inputs/lean_fallback_partial.cpp -- 2>&1 | FileCheck %s --check-prefix=MIXED
+# RUN: %cpp-verify --solver-rlimit=100 --lean-fallback=%t.project --lean-certify --diagnostics-format=json %S/Inputs/lean_fallback_partial.cpp -- 2>&1 | FileCheck %s --check-prefix=MIXED-JSON
+# RUN: not %cpp-verify --solver-rlimit=100 --lean-fallback=%t.project --lean-fallback-scope=all --lean-certify %S/Inputs/lean_fallback_partial.cpp -- 2>&1 | FileCheck %s --check-prefix=ALL
 
 # EXPORT: Exported: lean fallback: bump [z3: 1 of 3 proved; lean: 2 exported]
 # EXPORT: Unresolved: bump [backend=z3] [reason=solver.resource-limit]
