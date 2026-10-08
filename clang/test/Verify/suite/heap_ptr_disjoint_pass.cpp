@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 // Heap: storing at p+k does not disturb p+i when i != k (array theory over
 // integer addresses). Indices are bounded, as in real buffer code.
 cppverify::spec bool valid(int *p, int n) { return true; }
