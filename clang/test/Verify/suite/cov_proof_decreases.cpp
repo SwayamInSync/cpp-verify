@@ -1,24 +1,24 @@
 // RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
-spec int id_spec(int n) { return n; }
+cppverify::spec int id_spec(int n) { return n; }
 
-proof void lemma_id(int n)
-  pre(n >= 0 && n <= 10)
-  post(id_spec(n) == n)
-  decreases(n)
+cppverify::proof void lemma_id(int n)
+  cppverify::pre(n >= 0 && n <= 10)
+  cppverify::post(id_spec(n) == n)
+  cppverify::decreases(n)
 {
-  ghost { reveal(id_spec); }
+  cppverify::ghost { cppverify::reveal(id_spec); }
 }
 
 int walk(int n)
-  pre(n >= 0 && n <= 3)
-  post(result >= 0)
-  decreases(n)
+  cppverify::pre(n >= 0 && n <= 3)
+  cppverify::post(cppverify::result >= 0)
+  cppverify::decreases(n)
 {
   int i = 0;
   while (i < n)
-    invariant(i >= 0)
-    decreases(n - i)
+    cppverify::invariant(i >= 0)
+    cppverify::decreases(n - i)
   {
     i = i + 1;
   }
