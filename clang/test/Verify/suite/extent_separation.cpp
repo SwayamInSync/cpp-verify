@@ -9,19 +9,19 @@
 // Under --check-ub the non-aliasing default separates whole valid(p, n)
 // extents; callers prove it, and `aliases` pairs may still overlap.
 
-spec bool valid(const int *p, int n) { return true; }
-spec bool valid(int *p, int n) { return true; }
+cppverify::spec bool valid(const int *p, int n) { return true; }
+cppverify::spec bool valid(int *p, int n) { return true; }
 
 void copy(const int *a, int *out, int n)
-  pre(n >= 0 && valid(a, n) && valid(out, n))
-  modifies(*out)
-  post(forall(i, 0, n, out[i] == a[i]))
+  cppverify::pre(n >= 0 && valid(a, n) && valid(out, n))
+  cppverify::modifies(*out)
+  cppverify::post(cppverify::forall(i, 0, n, out[i] == a[i]))
 {
   int i = 0;
   while (i < n)
-    invariant(0 <= i && i <= n)
-    invariant(forall(j, 0, i, out[j] == a[j]))
-    decreases(n - i)
+    cppverify::invariant(0 <= i && i <= n)
+    cppverify::invariant(cppverify::forall(j, 0, i, out[j] == a[j]))
+    cppverify::decreases(n - i)
   {
     out[i] = a[i];
     i = i + 1;
@@ -51,15 +51,15 @@ void copy(const int *a, int *out, int n)
 // VCR-NEXT: post
 
 void wrong_copy(const int *a, int *out, int n)
-  pre(n >= 0 && valid(a, n) && valid(out, n))
-  modifies(*out)
-  post(forall(i, 0, n, out[i] == a[i]))
+  cppverify::pre(n >= 0 && valid(a, n) && valid(out, n))
+  cppverify::modifies(*out)
+  cppverify::post(cppverify::forall(i, 0, n, out[i] == a[i]))
 {
   int i = 0;
   while (i < n)
-    invariant(0 <= i && i <= n)
-    invariant(forall(j, 0, i, out[j] == a[j]))
-    decreases(n - i)
+    cppverify::invariant(0 <= i && i <= n)
+    cppverify::invariant(cppverify::forall(j, 0, i, out[j] == a[j]))
+    cppverify::decreases(n - i)
   {
     out[i] = a[n - 1 - i];
     i = i + 1;
@@ -70,17 +70,17 @@ void wrong_copy(const int *a, int *out, int n)
 
 // The separation must not make the preconditions contradictory.
 void separation_is_satisfiable(const int *a, int *out, int n)
-  pre(n > 1 && valid(a, n) && valid(out, n))
-  post(false)
+  cppverify::pre(n > 1 && valid(a, n) && valid(out, n))
+  cppverify::post(false)
 {
 }
 // CHECK-DAG: verification failed: separation_is_satisfiable
 
 // A scalar pointer is separated from a whole extent as well.
 void extent_and_scalar(int *buffer, int *count, int n)
-  pre(n >= 0 && valid(buffer, n) && count != nullptr)
-  modifies(*count)
-  post(forall(i, 0, n, buffer[i] == old(buffer[i])))
+  cppverify::pre(n >= 0 && valid(buffer, n) && count != nullptr)
+  cppverify::modifies(*count)
+  cppverify::post(cppverify::forall(i, 0, n, buffer[i] == cppverify::old(buffer[i])))
 {
   *count = n;
 }
@@ -89,41 +89,41 @@ void extent_and_scalar(int *buffer, int *count, int n)
 // Call sites prove the separation. The callees do not write, so the callers
 // need no range frame for a sub-slice.
 int inspect(int *out, const int *a, int n)
-  pre(n >= 0 && valid(out, n) && valid(a, n))
+  cppverify::pre(n >= 0 && valid(out, n) && valid(a, n))
 {
   return 0;
 }
 
 int shift_left(int *dst, int *src, int n)
-  aliases(dst, src)
-  pre(n >= 0 && valid(dst, n) && valid(src, n))
+  cppverify::aliases(dst, src)
+  cppverify::pre(n >= 0 && valid(dst, n) && valid(src, n))
 {
   return 0;
 }
 
 int disjoint_caller(int *buffer)
-  pre(valid(buffer, 8))
+  cppverify::pre(valid(buffer, 8))
 {
   return inspect(buffer + 4, buffer, 4);
 }
 // CHECK-DAG: Verified: disjoint_caller
 
 int overlapping_caller(int *buffer)
-  pre(valid(buffer, 8))
+  cppverify::pre(valid(buffer, 8))
 {
   return inspect(buffer + 2, buffer, 4);
 }
 // CHECK-DAG: verification failed: overlapping_caller [{{.*}}::aliasing@
 
 int empty_caller(int *buffer)
-  pre(valid(buffer, 8))
+  cppverify::pre(valid(buffer, 8))
 {
   return inspect(buffer + 2, buffer, 0);
 }
 // CHECK-DAG: Verified: empty_caller
 
 int aliasing_caller(int *buffer)
-  pre(valid(buffer, 8))
+  cppverify::pre(valid(buffer, 8))
 {
   return shift_left(buffer, buffer + 2, 4);
 }
