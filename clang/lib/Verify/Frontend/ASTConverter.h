@@ -39,6 +39,8 @@ class ASTConverter {
   unsigned BoundValueId = 0;
   std::map<const FunctionDecl *, std::string> FunctionIdentities;
   std::map<const FunctionDecl *, bool> SpecHeapReads;
+  /// Uncontracted constexpr functions the lowered code calls or names.
+  std::set<const FunctionDecl *> UsedConstexprSpecs;
   std::set<std::string> FreshOwnedCalleeIdentities;
   std::set<const VarDecl *> DynamicPointers;
   std::map<const VarDecl *, std::string> DynamicPointerProvenanceVariables;
@@ -112,6 +114,7 @@ private:
   /// The address of a supported mutable global, or null after an error.
   std::unique_ptr<VExpr> globalAddress(const VarDecl *VD, SourceLocation Loc);
   std::unique_ptr<VFunction> convertConstexprSpec(const FunctionDecl *FD);
+  void noteSpecUse(const FunctionDecl *FD);
   std::unique_ptr<VExpr> convertExpr(const Expr *E);
   std::unique_ptr<VExpr> convertExprImpl(const Expr *E);
   std::unique_ptr<VExpr> convertPointerDifferenceOperand(const Expr *E,
