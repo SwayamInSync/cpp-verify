@@ -2,9 +2,9 @@
 // RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 void swap_ptr(int *a, int *b)
-  pre(a != nullptr && b != nullptr)
-  modifies(*a, *b)
-  post(*a == old(*b) && *b == old(*a))
+  cppverify::pre(a != nullptr && b != nullptr)
+  cppverify::modifies(*a, *b)
+  cppverify::post(*a == cppverify::old(*b) && *b == cppverify::old(*a))
 {
   int tmp = *a;
   *a = *b;
@@ -12,9 +12,9 @@ void swap_ptr(int *a, int *b)
 }
 
 void write_ptr(int *p, int v)
-  pre(p != nullptr)
-  modifies(*p)
-  post(*p == v)
+  cppverify::pre(p != nullptr)
+  cppverify::modifies(*p)
+  cppverify::post(*p == v)
 {
   *p = v;
 }
