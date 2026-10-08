@@ -4,37 +4,37 @@
 // Supported loop exits are tested in loop_exits.cpp.
 
 int reject_do_break(bool stop)
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   do {
     if (stop)
       break;
   } while (false)
-    invariant(true);
+    cppverify::invariant(true);
   return 0;
 }
 
 int reject_do_continue(bool stop)
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   do {
     if (stop)
       continue;
   } while (false)
-    invariant(true);
+    cppverify::invariant(true);
   return 0;
 }
 
 int reject_ghost_break(int n)
-  pre(n >= 0)
-  post(result == n)
+  cppverify::pre(n >= 0)
+  cppverify::post(cppverify::result == n)
 {
   int i = 0;
   while (i < n)
-    invariant(0 <= i && i <= n)
-    decreases(n - i)
+    cppverify::invariant(0 <= i && i <= n)
+    cppverify::decreases(n - i)
   {
-    ghost {
+    cppverify::ghost {
       if (i == 0)
         break;
     }
