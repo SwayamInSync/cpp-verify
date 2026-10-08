@@ -169,6 +169,13 @@ template <bool Const> struct Impl : RecursiveASTVisitor<Impl<Const>> {
     return Visitor.TraverseConceptReference(CR);
   }
 
+  bool TraverseOffsetOfNode(const OffsetOfNode *Node) {
+    return Visitor.TraverseOffsetOfNode(Node);
+  }
+  bool VisitOffsetOfNode(const OffsetOfNode *Node) {
+    return Visitor.VisitOffsetOfNode(Node);
+  }
+
   bool TraverseCXXBaseSpecifier(const CXXBaseSpecifier &Base) {
     return Visitor.TraverseCXXBaseSpecifier(Base);
   }
@@ -316,6 +323,8 @@ FORWARD_TO_BASE(TraverseConceptExprRequirement, concepts::ExprRequirement, *)
 FORWARD_TO_BASE(TraverseConceptReference, ConceptReference, *)
 FORWARD_TO_BASE(TraverseConceptNestedRequirement,
                 concepts::NestedRequirement, *)
+
+FORWARD_TO_BASE_EXACT(TraverseOffsetOfNode, const OffsetOfNode *)
 
 FORWARD_TO_BASE_EXACT(TraverseCXXBaseSpecifier, const CXXBaseSpecifier &)
 FORWARD_TO_BASE_EXACT(TraverseDeclarationNameInfo, DeclarationNameInfo)

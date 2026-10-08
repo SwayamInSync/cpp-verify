@@ -16,7 +16,7 @@ clang_tablegen(Opcodes.inc
   TARGET Opcodes)
 
 clang_tablegen(AttrDocTable.inc -gen-clang-attr-doc-table
-  -I ${CMAKE_CURRENT_SOURCE_DIR}/../../include/
+  EXTRA_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../../include/
   SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/../../include/clang/Basic/Attr.td
   TARGET ClangAttrDocTable)
 
@@ -77,7 +77,6 @@ add_clang_library(clangAST
   ByteCode/Disasm.cpp
   ByteCode/EvalEmitter.cpp
   ByteCode/Function.cpp
-  ByteCode/FunctionPointer.cpp
   ByteCode/InterpBuiltin.cpp
   ByteCode/InterpBuiltinBitCast.cpp
   ByteCode/Floating.cpp
@@ -97,6 +96,7 @@ add_clang_library(clangAST
   ByteCode/State.cpp
   ByteCode/MemberPointer.cpp
   ByteCode/InterpShared.cpp
+  HLSLResource.cpp
   ItaniumCXXABI.cpp
   ItaniumMangle.cpp
   JSONNodeDumper.cpp
@@ -137,6 +137,9 @@ add_clang_library(clangAST
   TypePrinter.cpp
   VTableBuilder.cpp
   VTTBuilder.cpp
+
+  PRECOMPILE_HEADERS
+  [["clang/AST/pch.h"]]
 
   LINK_LIBS
   clangBasic

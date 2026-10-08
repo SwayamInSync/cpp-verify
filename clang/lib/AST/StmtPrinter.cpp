@@ -265,7 +265,8 @@ void StmtPrinter::VisitDeclStmt(DeclStmt *Node) {
   PrintRawDeclStmt(Node);
   // Certain pragma declarations shouldn't have a semi-colon after them.
   if (!Node->isSingleDecl() ||
-      !isa<OpenACCDeclareDecl, OpenACCRoutineDecl>(Node->getSingleDecl()))
+      !isa<CXXExpansionStmtDecl, OpenACCDeclareDecl, OpenACCRoutineDecl>(
+          Node->getSingleDecl()))
     OS << ";";
   OS << NL;
 }
@@ -490,6 +491,37 @@ void StmtPrinter::VisitCXXForRangeStmt(CXXForRangeStmt *Node) {
   PrintExpr(Node->getRangeInit());
   OS << ")";
   PrintControlledStmt(Node->getBody());
+}
+
+void StmtPrinter::VisitCXXExpansionStmtPattern(CXXExpansionStmtPattern *Node) {
+  OS << "template for (";
+  if (Node->getInit())
+    PrintInitStmt(Node->getInit(), 14);
+  PrintingPolicy SubPolicy(Policy);
+  SubPolicy.SuppressInitializers = true;
+  Node->getExpansionVariable()->print(OS, SubPolicy, IndentLevel);
+  OS << " : ";
+
+  if (Node->isIterating())
+    PrintExpr(Node->getRangeVar()->getInit());
+  else if (Node->isDependent())
+    PrintExpr(Node->getExpansionInitializer());
+  else if (Node->isDestructuring())
+    PrintExpr(Node->getDecompositionDecl()->getInit());
+  else
+    PrintExpr(Node->getExpansionVariable()->getInit());
+
+  OS << ")";
+  PrintControlledStmt(Node->getBody());
+}
+
+void StmtPrinter::VisitCXXExpansionStmtInstantiation(
+    CXXExpansionStmtInstantiation *) {
+  llvm_unreachable("should never be printed");
+}
+
+void StmtPrinter::VisitCXXExpansionSelectExpr(CXXExpansionSelectExpr *Node) {
+  PrintExpr(Node->getRangeExpr());
 }
 
 void StmtPrinter::VisitMSDependentExistsStmt(MSDependentExistsStmt *Node) {
@@ -727,7 +759,7 @@ void StmtPrinter::VisitOldExpr(OldExpr *Node) {
 void StmtPrinter::VisitResultExpr(ResultExpr *) { OS << "cppverify::result"; }
 
 void StmtPrinter::VisitSYCLKernelCallStmt(SYCLKernelCallStmt *Node) {
-  PrintStmt(Node->getOutlinedFunctionDecl()->getBody());
+  PrintStmt(Node->getOriginalStmt());
 }
 
 void StmtPrinter::VisitObjCAtTryStmt(ObjCAtTryStmt *Node) {
@@ -924,6 +956,11 @@ void StmtPrinter::VisitOMPReverseDirective(OMPReverseDirective *Node) {
 
 void StmtPrinter::VisitOMPInterchangeDirective(OMPInterchangeDirective *Node) {
   Indent() << "#pragma omp interchange";
+  PrintOMPExecutableDirective(Node);
+}
+
+void StmtPrinter::VisitOMPSplitDirective(OMPSplitDirective *Node) {
+  Indent() << "#pragma omp split";
   PrintOMPExecutableDirective(Node);
 }
 
@@ -1452,42 +1489,49 @@ void StmtPrinter::VisitDeclRefExpr(DeclRefExpr *Node) {
     TPOD->printAsExpr(OS, Policy);
     return;
   }
-  Node->getQualifier().print(OS, Policy);
-  if (Node->hasTemplateKeyword())
-    OS << "template ";
-
   bool ForceAnonymous =
       Policy.PrintAsCanonical && VD->getKind() == Decl::NonTypeTemplateParm;
-  DeclarationNameInfo NameInfo = Node->getNameInfo();
-  if (IdentifierInfo *ID = NameInfo.getName().getAsIdentifierInfo();
-      !ForceAnonymous &&
-      (ID || NameInfo.getName().getNameKind() != DeclarationName::Identifier)) {
-    if (Policy.CleanUglifiedParameters &&
-        isa<ParmVarDecl, NonTypeTemplateParmDecl>(VD) && ID)
-      OS << ID->deuglifiedName();
-    else
-      NameInfo.printName(OS, Policy);
+  bool CleanUglifiedParameter = Policy.CleanUglifiedParameters &&
+                                isa<ParmVarDecl, NonTypeTemplateParmDecl>(VD);
+
+  if (Policy.FullyQualifiedName && !ForceAnonymous && !CleanUglifiedParameter) {
+    VD->printQualifiedName(OS, Policy);
   } else {
-    switch (VD->getKind()) {
-    case Decl::NonTypeTemplateParm: {
-      auto *TD = cast<NonTypeTemplateParmDecl>(VD);
-      OS << "value-parameter-" << TD->getDepth() << '-' << TD->getIndex() << "";
-      break;
-    }
-    case Decl::ParmVar: {
-      auto *PD = cast<ParmVarDecl>(VD);
-      OS << "function-parameter-" << PD->getFunctionScopeDepth() << '-'
-         << PD->getFunctionScopeIndex();
-      break;
-    }
-    case Decl::Decomposition:
-      OS << "decomposition";
-      for (const auto &I : cast<DecompositionDecl>(VD)->bindings())
-        OS << '-' << I->getName();
-      break;
-    default:
-      OS << "unhandled-anonymous-" << VD->getDeclKindName();
-      break;
+    Node->getQualifier().print(OS, Policy);
+    if (Node->hasTemplateKeyword())
+      OS << "template ";
+
+    DeclarationNameInfo NameInfo = Node->getNameInfo();
+    if (IdentifierInfo *ID = NameInfo.getName().getAsIdentifierInfo();
+        !ForceAnonymous && (ID || NameInfo.getName().getNameKind() !=
+                                      DeclarationName::Identifier)) {
+      if (CleanUglifiedParameter && ID)
+        OS << ID->deuglifiedName();
+      else
+        NameInfo.printName(OS, Policy);
+    } else {
+      switch (VD->getKind()) {
+      case Decl::NonTypeTemplateParm: {
+        auto *TD = cast<NonTypeTemplateParmDecl>(VD);
+        OS << "value-parameter-" << TD->getDepth() << '-' << TD->getIndex()
+           << "";
+        break;
+      }
+      case Decl::ParmVar: {
+        auto *PD = cast<ParmVarDecl>(VD);
+        OS << "function-parameter-" << PD->getFunctionScopeDepth() << '-'
+           << PD->getFunctionScopeIndex();
+        break;
+      }
+      case Decl::Decomposition:
+        OS << "decomposition";
+        for (const auto &I : cast<DecompositionDecl>(VD)->bindings())
+          OS << '-' << I->getName();
+        break;
+      default:
+        OS << "unhandled-anonymous-" << VD->getDeclKindName();
+        break;
+      }
     }
   }
   if (Node->hasExplicitTemplateArgs()) {
@@ -1572,6 +1616,11 @@ void StmtPrinter::VisitSYCLUniqueStableNameExpr(
   OS << "__builtin_sycl_unique_stable_name(";
   Node->getTypeSourceInfo()->getType().print(OS, Policy);
   OS << ")";
+}
+
+void StmtPrinter::VisitUnresolvedSYCLKernelCallStmt(
+    UnresolvedSYCLKernelCallStmt *Node) {
+  PrintStmt(Node->getOriginalStmt());
 }
 
 void StmtPrinter::VisitPredefinedExpr(PredefinedExpr *Node) {
@@ -1948,6 +1997,12 @@ void StmtPrinter::VisitObjCIsaExpr(ObjCIsaExpr *Node) {
 }
 
 void StmtPrinter::VisitExtVectorElementExpr(ExtVectorElementExpr *Node) {
+  PrintExpr(Node->getBase());
+  OS << ".";
+  OS << Node->getAccessor().getName();
+}
+
+void StmtPrinter::VisitMatrixElementExpr(MatrixElementExpr *Node) {
   PrintExpr(Node->getBase());
   OS << ".";
   OS << Node->getAccessor().getName();
@@ -2579,7 +2634,7 @@ void StmtPrinter::VisitLambdaExpr(LambdaExpr *Node) {
 
   // Print the body.
   OS << ' ';
-  if (Policy.TerseOutput)
+  if (Policy.TerseOutput || Policy.SuppressLambdaBody)
     OS << "{}";
   else
     PrintRawCompoundStmt(Node->getCompoundStmtBody());
@@ -2704,6 +2759,11 @@ void StmtPrinter::VisitCXXUnresolvedConstructExpr(
   }
   if (!Node->isListInitialization())
     OS << ')';
+}
+
+void StmtPrinter::VisitCXXReflectExpr(CXXReflectExpr *S) {
+  // TODO(Reflection): Implement this.
+  assert(false && "not implemented yet");
 }
 
 void StmtPrinter::VisitCXXDependentScopeMemberExpr(

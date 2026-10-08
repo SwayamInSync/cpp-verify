@@ -42,6 +42,9 @@ namespace {
 
     void VisitStmt(const Stmt *S);
 
+    /// Fold a scalar value into the profile
+    void VisitInteger(uint64_t Value) { ID.AddInteger(Value); }
+
     void VisitStmtNoChildren(const Stmt *S) {
       HandleStmtClass(S->getStmtClass());
     }
@@ -331,7 +334,7 @@ void StmtProfiler::VisitGCCAsmStmt(const GCCAsmStmt *S) {
   VisitStmt(S);
   ID.AddBoolean(S->isVolatile());
   ID.AddBoolean(S->isSimple());
-  VisitExpr(S->getAsmStringExpr());
+  Visit(S->getAsmStringExpr());
   ID.AddInteger(S->getNumOutputs());
   for (unsigned I = 0, N = S->getNumOutputs(); I != N; ++I) {
     ID.AddString(S->getOutputName(I));
@@ -344,7 +347,7 @@ void StmtProfiler::VisitGCCAsmStmt(const GCCAsmStmt *S) {
   }
   ID.AddInteger(S->getNumClobbers());
   for (unsigned I = 0, N = S->getNumClobbers(); I != N; ++I)
-    VisitExpr(S->getClobberExpr(I));
+    Visit(S->getClobberExpr(I));
   ID.AddInteger(S->getNumLabels());
   for (auto *L : S->labels())
     VisitDecl(L->getLabel());
@@ -366,6 +369,17 @@ void StmtProfiler::VisitCXXTryStmt(const CXXTryStmt *S) {
 
 void StmtProfiler::VisitCXXForRangeStmt(const CXXForRangeStmt *S) {
   VisitStmt(S);
+}
+
+void StmtProfiler::VisitCXXExpansionStmtPattern(
+    const CXXExpansionStmtPattern *S) {
+  VisitStmt(S);
+}
+
+void StmtProfiler::VisitCXXExpansionStmtInstantiation(
+    const CXXExpansionStmtInstantiation *S) {
+  VisitStmt(S);
+  ID.AddBoolean(S->shouldApplyLifetimeExtensionToPreamble());
 }
 
 void StmtProfiler::VisitMSDependentExistsStmt(const MSDependentExistsStmt *S) {
@@ -537,6 +551,12 @@ void OMPClauseProfiler::VisitOMPSizesClause(const OMPSizesClause *C) {
       Profiler->VisitExpr(E);
 }
 
+void OMPClauseProfiler::VisitOMPCountsClause(const OMPCountsClause *C) {
+  for (auto *E : C->getCountsRefs())
+    if (E)
+      Profiler->VisitExpr(E);
+}
+
 void OMPClauseProfiler::VisitOMPPermutationClause(
     const OMPPermutationClause *C) {
   for (Expr *E : C->getArgsRefs())
@@ -588,6 +608,12 @@ void OMPClauseProfiler::VisitOMPNocontextClause(const OMPNocontextClause *C) {
 void OMPClauseProfiler::VisitOMPDefaultClause(const OMPDefaultClause *C) { }
 
 void OMPClauseProfiler::VisitOMPThreadsetClause(const OMPThreadsetClause *C) {}
+
+void OMPClauseProfiler::VisitOMPTransparentClause(
+    const OMPTransparentClause *C) {
+  if (C->getImpexType())
+    Profiler->VisitStmt(C->getImpexType());
+}
 
 void OMPClauseProfiler::VisitOMPProcBindClause(const OMPProcBindClause *C) { }
 
@@ -685,7 +711,18 @@ void OMPClauseProfiler::VisitOMPSIMDClause(const OMPSIMDClause *) {}
 void OMPClauseProfiler::VisitOMPNogroupClause(const OMPNogroupClause *) {}
 
 void OMPClauseProfiler::VisitOMPInitClause(const OMPInitClause *C) {
-  VisitOMPClauseList(C);
+  // Enumerate per pref-spec so the {fr, attr} grouping is part of the profile.
+  Profiler->VisitStmt(C->getInteropVar());
+  Profiler->VisitInteger(C->hasPreferAttrs() ? 1 : 0);
+  Profiler->VisitInteger(C->varlist_size() - 1);
+  for (OMPInitClause::PrefView P : C->prefs()) {
+    Profiler->VisitInteger(P.Fr ? 1 : 0);
+    if (P.Fr)
+      Profiler->VisitStmt(P.Fr);
+    Profiler->VisitInteger(P.Attrs.size());
+    for (const Expr *A : P.Attrs)
+      Profiler->VisitStmt(A);
+  }
 }
 
 void OMPClauseProfiler::VisitOMPUseClause(const OMPUseClause *C) {
@@ -925,6 +962,9 @@ void OMPClauseProfiler::VisitOMPAllocateClause(const OMPAllocateClause *C) {
   VisitOMPClauseList(C);
 }
 void OMPClauseProfiler::VisitOMPNumTeamsClause(const OMPNumTeamsClause *C) {
+  Profiler->VisitInteger(C->getModifier());
+  if (const Expr *Modifier = C->getModifierExpr())
+    Profiler->VisitStmt(Modifier);
   VisitOMPClauseList(C);
   VisitOMPClauseWithPreInit(C);
 }
@@ -1081,6 +1121,10 @@ void StmtProfiler::VisitOMPReverseDirective(const OMPReverseDirective *S) {
 
 void StmtProfiler::VisitOMPInterchangeDirective(
     const OMPInterchangeDirective *S) {
+  VisitOMPCanonicalLoopNestTransformationDirective(S);
+}
+
+void StmtProfiler::VisitOMPSplitDirective(const OMPSplitDirective *S) {
   VisitOMPCanonicalLoopNestTransformationDirective(S);
 }
 
@@ -1443,6 +1487,11 @@ void StmtProfiler::VisitSYCLUniqueStableNameExpr(
   VisitType(S->getTypeSourceInfo()->getType());
 }
 
+void StmtProfiler::VisitUnresolvedSYCLKernelCallStmt(
+    const UnresolvedSYCLKernelCallStmt *S) {
+  VisitStmt(S);
+}
+
 void StmtProfiler::VisitPredefinedExpr(const PredefinedExpr *S) {
   VisitExpr(S);
   ID.AddInteger(llvm::to_underlying(S->getIdentKind()));
@@ -1709,6 +1758,11 @@ void StmtProfiler::VisitImplicitValueInitExpr(const ImplicitValueInitExpr *S) {
 }
 
 void StmtProfiler::VisitExtVectorElementExpr(const ExtVectorElementExpr *S) {
+  VisitExpr(S);
+  VisitName(&S->getAccessor());
+}
+
+void StmtProfiler::VisitMatrixElementExpr(const MatrixElementExpr *S) {
   VisitExpr(S);
   VisitName(&S->getAccessor());
 }
@@ -2221,6 +2275,11 @@ StmtProfiler::VisitLambdaExpr(const LambdaExpr *S) {
   ID.AddInteger(Hasher.CalculateHash());
 }
 
+void StmtProfiler::VisitCXXReflectExpr(const CXXReflectExpr *E) {
+  // TODO(Reflection): Implement this.
+  assert(false && "not implemented yet");
+}
+
 void
 StmtProfiler::VisitCXXScalarValueInitExpr(const CXXScalarValueInitExpr *S) {
   VisitExpr(S);
@@ -2370,14 +2429,14 @@ void StmtProfiler::VisitSizeOfPackExpr(const SizeOfPackExpr *S) {
 }
 
 void StmtProfiler::VisitPackIndexingExpr(const PackIndexingExpr *E) {
-  VisitExpr(E->getIndexExpr());
-
+  VisitStmtNoChildren(E);
+  Visit(E->getIndexExpr());
   if (E->expandsToEmptyPack() || E->getExpressions().size() != 0) {
     ID.AddInteger(E->getExpressions().size());
     for (const Expr *Sub : E->getExpressions())
       Visit(Sub);
   } else {
-    VisitExpr(E->getPackIdExpression());
+    Visit(E->getPackIdExpression());
   }
 }
 
@@ -2408,7 +2467,26 @@ void StmtProfiler::VisitMaterializeTemporaryExpr(
 }
 
 void StmtProfiler::VisitCXXFoldExpr(const CXXFoldExpr *S) {
-  VisitExpr(S);
+  VisitStmtNoChildren(S);
+  // The callee sub-expression is not part of how the expression is written,
+  // so it's not added to the profile.
+  //
+  // Example:
+  // template <typename... T> requires ((sizeof(T) > 0) && ...) void f() {}
+  // class A;
+  // void operator&&(A, A);
+  // template <typename... T> requires ((sizeof(T) > 0) && ...) void f() {}
+  //
+  // Both definitions have identically written fold expressions, but semantic
+  // analysis adds the overloaded operator to the second one.
+  if (S->getLHS())
+    Visit(S->getLHS());
+  else
+    ID.AddInteger(0);
+  if (S->getRHS())
+    Visit(S->getRHS());
+  else
+    ID.AddInteger(0);
   ID.AddInteger(S->getOperator());
 }
 
@@ -2446,22 +2524,31 @@ void StmtProfiler::VisitSourceLocExpr(const SourceLocExpr *E) {
 
 void StmtProfiler::VisitEmbedExpr(const EmbedExpr *E) { VisitExpr(E); }
 
+void StmtProfiler::VisitCXXExpansionSelectExpr(
+    const CXXExpansionSelectExpr *E) {
+  VisitExpr(E);
+}
+
 void StmtProfiler::VisitRecoveryExpr(const RecoveryExpr *E) { VisitExpr(E); }
 
+void StmtProfiler::VisitObjCObjectLiteral(const ObjCObjectLiteral *E) {
+  VisitExpr(E);
+}
+
 void StmtProfiler::VisitObjCStringLiteral(const ObjCStringLiteral *S) {
-  VisitExpr(S);
+  VisitObjCObjectLiteral(S);
 }
 
 void StmtProfiler::VisitObjCBoxedExpr(const ObjCBoxedExpr *E) {
-  VisitExpr(E);
+  VisitObjCObjectLiteral(E);
 }
 
 void StmtProfiler::VisitObjCArrayLiteral(const ObjCArrayLiteral *E) {
-  VisitExpr(E);
+  VisitObjCObjectLiteral(E);
 }
 
 void StmtProfiler::VisitObjCDictionaryLiteral(const ObjCDictionaryLiteral *E) {
-  VisitExpr(E);
+  VisitObjCObjectLiteral(E);
 }
 
 void StmtProfiler::VisitObjCEncodeExpr(const ObjCEncodeExpr *S) {
