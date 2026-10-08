@@ -3,44 +3,44 @@
 // RUN: not %cpp-verify --lower-only %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 int unsupported_comma_contract(int x)
-  post((x, result) == x)
+  cppverify::post((x, cppverify::result) == x)
 {
   return x;
 }
 
-spec int unsupported_math_bitwise(int x) {
+cppverify::spec int unsupported_math_bitwise(int x) {
   return x & 1;
 }
 
-spec int unsupported_heap_write(int *p) {
+cppverify::spec int unsupported_heap_write(int *p) {
   *p = 1;
   return 0;
 }
 
-spec int unsupported_indexed_increment(int *p) {
+cppverify::spec int unsupported_indexed_increment(int *p) {
   p[1]++;
   return 0;
 }
 
-spec int unsupported_loop_spec(int x) {
+cppverify::spec int unsupported_loop_spec(int x) {
   while (x > 0)
     x = x - 1;
   return x;
 }
 
-spec int unsupported_recursive_spec(int n) {
+cppverify::spec int unsupported_recursive_spec(int n) {
   if (n > 0)
     return unsupported_recursive_spec(n - 1);
   return 0;
 }
 
-spec int unsupported_mutual_b(int n);
+cppverify::spec int unsupported_mutual_b(int n);
 
-spec int unsupported_mutual_a(int n) {
+cppverify::spec int unsupported_mutual_a(int n) {
   return unsupported_mutual_b(n);
 }
 
-spec int unsupported_mutual_b(int n) {
+cppverify::spec int unsupported_mutual_b(int n) {
   return unsupported_mutual_a(n);
 }
 
