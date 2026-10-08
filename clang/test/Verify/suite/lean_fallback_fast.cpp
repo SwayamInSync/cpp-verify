@@ -5,13 +5,13 @@
 // RUN: grep -c '^import CppVerify.Proofs.Goal_' \
 // RUN:   %t.project/CppVerify/Check.lean | FileCheck %s --check-prefix=GOALS
 
-spec int double_value(int value) {
+cppverify::spec int double_value(int value) {
   return value + value;
 }
 
-proof void lemma_double_value(int value)
-  pre(value >= 0 && value <= 1000)
-  post(double_value(value) == 2 * value)
+cppverify::proof void lemma_double_value(int value)
+  cppverify::pre(value >= 0 && value <= 1000)
+  cppverify::post(double_value(value) == 2 * value)
 {
 }
 
