@@ -1,4 +1,4 @@
-// RUN: %cpp-verify --backend=bmc --unroll=2 %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: %cpp-verify --backend=bmc --unroll=2 %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 int nested_sum(int n)
   cppverify::pre(n >= 0 && n <= 1)
