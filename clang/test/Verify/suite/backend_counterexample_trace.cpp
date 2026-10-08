@@ -1,7 +1,7 @@
-// RUN: not %cpp-verify --diagnostics-format=json %s 2>&1 | FileCheck %s --check-prefix=TRACE
-// RUN: %cpp-verify --lower-only --obligation-out=%t.obligations %s
+// RUN: not %cpp-verify --diagnostics-format=json %s -- 2>&1 | FileCheck %s --check-prefix=TRACE
+// RUN: %cpp-verify --lower-only --obligation-out=%t.obligations %s --
 // RUN: not %cpp-verify --obligation-in=%t.obligations --diagnostics-format=json 2>&1 | FileCheck %s --check-prefix=ARCHIVE
-// RUN: not %cpp-verify --backend=bmc --unroll=1 --diagnostics-format=json %s 2>&1 | FileCheck %s --check-prefix=BMC
+// RUN: not %cpp-verify --backend=bmc --unroll=1 --diagnostics-format=json %s -- 2>&1 | FileCheck %s --check-prefix=BMC
 
 void set_value(int &target, int value)
   cppverify::modifies(target)
