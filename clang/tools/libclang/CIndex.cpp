@@ -878,6 +878,17 @@ bool CursorVisitor::VisitFunctionDecl(FunctionDecl *ND) {
       return true;
   }
 
+  // CppVerify: the contract, and the constructs written in the function.
+  const ASTContext &Ctx = ND->getASTContext();
+  if (const FunctionContractInfo *FCI = Ctx.getFunctionContract(ND);
+      FCI && FCI->ContractDecl == ND)
+    for (Stmt *Child : FCI->children())
+      if (Visit(MakeCXCursor(Child, ND, TU, RegionOfInterest)))
+        return true;
+  for (Expr *Reference : Ctx.getCppVerifyReferences(ND))
+    if (Visit(MakeCXCursor(Reference, ND, TU, RegionOfInterest)))
+      return true;
+
   if (ND->doesThisDeclarationHaveABody() && !ND->isLateTemplateParsed()) {
     if (CXXConstructorDecl *Constructor = dyn_cast<CXXConstructorDecl>(ND)) {
       // Find the initializers that were written in the source.
@@ -2111,6 +2122,8 @@ public:
   void VisitStmt(const Stmt *S);
   void VisitSwitchStmt(const SwitchStmt *S);
   void VisitWhileStmt(const WhileStmt *W);
+  void VisitDoStmt(const DoStmt *D);
+  void AddLoopContract(const Stmt *Loop);
   void VisitTypeTraitExpr(const TypeTraitExpr *E);
   void VisitArrayTypeTraitExpr(const ArrayTypeTraitExpr *E);
   void VisitExpressionTraitExpr(const ExpressionTraitExpr *E);
@@ -3130,8 +3143,23 @@ void EnqueueVisitor::VisitExplicitCastExpr(const ExplicitCastExpr *E) {
   EnqueueChildren(E);
   AddTypeLoc(E->getTypeInfoAsWritten());
 }
+void EnqueueVisitor::AddLoopContract(const Stmt *Loop) {
+  // CppVerify: the loop's clauses, between its head and its body.
+  if (const LoopContractInfo *LCI =
+          getCursorContext(Parent).getLoopContract(Loop)) {
+    SmallVector<Stmt *, 8> Children = LCI->children();
+    for (Stmt *Child : llvm::reverse(Children))
+      AddStmt(Child);
+  }
+}
+void EnqueueVisitor::VisitDoStmt(const DoStmt *D) {
+  AddLoopContract(D);
+  AddStmt(D->getCond());
+  AddStmt(D->getBody());
+}
 void EnqueueVisitor::VisitForStmt(const ForStmt *FS) {
   AddStmt(FS->getBody());
+  AddLoopContract(FS);
   AddStmt(FS->getInc());
   AddStmt(FS->getCond());
   AddDecl(FS->getConditionVariable());
@@ -3222,6 +3250,7 @@ void EnqueueVisitor::VisitSwitchStmt(const SwitchStmt *S) {
 
 void EnqueueVisitor::VisitWhileStmt(const WhileStmt *W) {
   AddStmt(W->getBody());
+  AddLoopContract(W);
   AddStmt(W->getCond());
   AddDecl(W->getConditionVariable());
 }
