@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify --check-ub %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: not %cpp-verify --check-ub %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 // Layer-A UB inside a loop: the invariant does not bound s, so s + i can
 // overflow on some iteration. The obligation is checked in the inductive step.
 int sum(int n)
