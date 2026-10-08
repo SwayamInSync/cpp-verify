@@ -71,6 +71,10 @@ public:
   /// Whether this visitor should recurse into lambda body.
   bool ShouldVisitLambdaBody = true;
 
+  /// Whether this visitor should visit cpp-verify contracts, which exist only
+  /// for verification and emit no code.
+  bool ShouldVisitCppVerifyContracts = true;
+
 protected:
   DynamicRecursiveASTVisitorBase() = default;
   DynamicRecursiveASTVisitorBase(DynamicRecursiveASTVisitorBase &&) = default;
