@@ -2,9 +2,9 @@
 // RUN: grep -Eq 'theorem cppverify_swap_val_fn_[0-9a-f]+_correct' %t.lean
 
 int swap_val(int *a, int *b)
-  pre(a != 0 && b != 0 && a != b)
-  modifies(*a, *b)
-  post(*a == old(*b) && *b == old(*a))
+  cppverify::pre(a != 0 && b != 0 && a != b)
+  cppverify::modifies(*a, *b)
+  cppverify::post(*a == cppverify::old(*b) && *b == cppverify::old(*a))
 {
   int t = *a;
   *a = *b;
