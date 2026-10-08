@@ -379,13 +379,49 @@ void StmtPrinter::VisitSwitchStmt(SwitchStmt *Node) {
   PrintControlledStmt(Node->getBody());
 }
 
+/// CppVerify: the clauses of a loop, one per line.
+static void printLoopContract(raw_ostream &OS, const ASTContext *Context,
+                              const Stmt *Loop,
+                              llvm::function_ref<raw_ostream &()> Indent,
+                              llvm::function_ref<void(Expr *)> PrintExpr,
+                              StringRef NL) {
+  const LoopContractInfo *LCI =
+      Context ? Context->getLoopContract(Loop) : nullptr;
+  if (!LCI)
+    return;
+  auto clause = [&](StringRef Name, ArrayRef<Expr *> Args) {
+    OS << NL;
+    Indent() << "cppverify::" << Name << '(';
+    for (Expr *Arg : Args) {
+      if (Arg != Args.front())
+        OS << ", ";
+      PrintExpr(Arg);
+    }
+    OS << ')';
+  };
+  for (Expr *E : LCI->Invariants)
+    clause("invariant", E);
+  if (!LCI->Decreases.empty())
+    clause("decreases", LCI->Decreases);
+  if (LCI->MayDiverge.isValid()) {
+    OS << NL;
+    Indent() << "cppverify::decreases(*)";
+  }
+  if (!LCI->Modifies.empty())
+    clause("modifies", LCI->Modifies);
+}
+
 void StmtPrinter::VisitWhileStmt(WhileStmt *Node) {
   Indent() << "while (";
   if (const DeclStmt *DS = Node->getConditionVariableDeclStmt())
     PrintRawDeclStmt(DS);
   else
     PrintExpr(Node->getCond());
-  OS << ")" << NL;
+  OS << ")";
+  printLoopContract(
+      OS, Context, Node, [&]() -> raw_ostream & { return Indent(1); },
+      [&](Expr *E) { PrintExpr(E); }, NL);
+  OS << NL;
   PrintStmt(Node->getBody());
 }
 
@@ -402,7 +438,11 @@ void StmtPrinter::VisitDoStmt(DoStmt *Node) {
 
   OS << "while (";
   PrintExpr(Node->getCond());
-  OS << ");" << NL;
+  OS << ")";
+  printLoopContract(
+      OS, Context, Node, [&]() -> raw_ostream & { return Indent(1); },
+      [&](Expr *E) { PrintExpr(E); }, NL);
+  OS << ";" << NL;
 }
 
 void StmtPrinter::VisitForStmt(ForStmt *Node) {
@@ -421,6 +461,9 @@ void StmtPrinter::VisitForStmt(ForStmt *Node) {
     PrintExpr(Node->getInc());
   }
   OS << ")";
+  printLoopContract(
+      OS, Context, Node, [&]() -> raw_ostream & { return Indent(1); },
+      [&](Expr *E) { PrintExpr(E); }, NL);
   PrintControlledStmt(Node->getBody());
 }
 
@@ -603,7 +646,7 @@ void StmtPrinter::VisitCapturedStmt(CapturedStmt *Node) {
 
 // CppVerify contract nodes
 void StmtPrinter::VisitContractAssertStmt(ContractAssertStmt *Node) {
-  Indent() << "contract_assert(";
+  Indent() << "cppverify::check(";
   PrintExpr(Node->getCond());
   if (const auto *By = dyn_cast_or_null<GhostBlockStmt>(Node->getBy())) {
     OS << ") by ";
@@ -615,12 +658,12 @@ void StmtPrinter::VisitContractAssertStmt(ContractAssertStmt *Node) {
 }
 
 void StmtPrinter::VisitGhostBlockStmt(GhostBlockStmt *Node) {
-  Indent() << "ghost ";
+  Indent() << "cppverify::ghost ";
   PrintStmt(Node->getBody());
 }
 
 void StmtPrinter::VisitRevealWithFuelStmt(RevealWithFuelStmt *Node) {
-  Indent() << "reveal_with_fuel(";
+  Indent() << "cppverify::reveal_with_fuel(";
   PrintExpr(Node->getFunction());
   OS << ", ";
   PrintExpr(Node->getFuel());
@@ -628,19 +671,19 @@ void StmtPrinter::VisitRevealWithFuelStmt(RevealWithFuelStmt *Node) {
 }
 
 void StmtPrinter::VisitHideSpecStmt(HideSpecStmt *Node) {
-  Indent() << "hide(";
+  Indent() << "cppverify::hide(";
   PrintExpr(Node->getFunction());
   OS << ");\n";
 }
 
 void StmtPrinter::VisitRevealSpecStmt(RevealSpecStmt *Node) {
-  Indent() << "reveal(";
+  Indent() << "cppverify::reveal(";
   PrintExpr(Node->getFunction());
   OS << ");\n";
 }
 
 void StmtPrinter::VisitForallExpr(ForallExpr *Node) {
-  OS << "forall(" << Node->getBoundVar()->getName() << ", ";
+  OS << "cppverify::forall(" << Node->getBoundVar()->getName() << ", ";
   if (!Node->isUnbounded()) {
     PrintExpr(Node->getLo());
     OS << ", ";
@@ -652,7 +695,7 @@ void StmtPrinter::VisitForallExpr(ForallExpr *Node) {
 }
 
 void StmtPrinter::VisitExistsExpr(ExistsExpr *Node) {
-  OS << "exists(" << Node->getBoundVar()->getName() << ", ";
+  OS << "cppverify::exists(" << Node->getBoundVar()->getName() << ", ";
   if (!Node->isUnbounded()) {
     PrintExpr(Node->getLo());
     OS << ", ";
@@ -664,7 +707,7 @@ void StmtPrinter::VisitExistsExpr(ExistsExpr *Node) {
 }
 
 void StmtPrinter::VisitContractChooseExpr(ContractChooseExpr *Node) {
-  OS << "choose(" << Node->getBoundVar()->getName() << ", ";
+  OS << "cppverify::choose(" << Node->getBoundVar()->getName() << ", ";
   if (!Node->isUnbounded()) {
     PrintExpr(Node->getLo());
     OS << ", ";
@@ -676,14 +719,12 @@ void StmtPrinter::VisitContractChooseExpr(ContractChooseExpr *Node) {
 }
 
 void StmtPrinter::VisitOldExpr(OldExpr *Node) {
-  OS << "old(";
+  OS << "cppverify::old(";
   PrintExpr(Node->getInner());
   OS << ")";
 }
 
-void StmtPrinter::VisitResultExpr(ResultExpr *) {
-  OS << "result";
-}
+void StmtPrinter::VisitResultExpr(ResultExpr *) { OS << "cppverify::result"; }
 
 void StmtPrinter::VisitSYCLKernelCallStmt(SYCLKernelCallStmt *Node) {
   PrintStmt(Node->getOutlinedFunctionDecl()->getBody());
