@@ -1,4 +1,4 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s
 //
 // In ghost and proof code a mathematical value (a spec result, a sequence
 // length or element, a count) stays mathematical until it is stored in a
