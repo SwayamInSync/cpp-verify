@@ -9,8 +9,8 @@
 
 // Only the component that decides a lexicographic decrease is bounded below,
 // so the inner call's value need not be known.
-spec int ack(int m, int n)
-  decreases(m, n)
+cppverify::spec int ack(int m, int n)
+  cppverify::decreases(m, n)
 {
   return m <= 0 ? n + 1
        : n <= 0 ? ack(m - 1, 1)
@@ -19,15 +19,15 @@ spec int ack(int m, int n)
 
 void ack_values()
 {
-  ghost { contract_assert(ack(1, 1) == 3 && ack(2, 2) == 7); }
+  cppverify::ghost { cppverify::check(ack(1, 1) == 3 && ack(2, 2) == 7); }
 }
 
 // f(1) calls f(1): the argument chosen for the earlier call is short-circuited
 // at n == 1, so its own equation there would read f(1) == !f(1). Using it
 // would make the termination check vacuous; without it the call at n == 1 is
 // a counterexample.
-spec bool diverges_at_one(int n)
-  decreases(n)
+cppverify::spec bool diverges_at_one(int n)
+  cppverify::decreases(n)
 {
   return n <= 0 ? true
        : ((n > 1 && diverges_at_one(n > 1 ? n - 1 : n)) ||
@@ -38,46 +38,46 @@ spec bool diverges_at_one(int n)
 // nothing: here the spec's equation at 1 would read f(1) == !f(1).
 void uses_divergent()
 {
-  ghost { contract_assert(diverges_at_one(1) == !diverges_at_one(1)); }
+  cppverify::ghost { cppverify::check(diverges_at_one(1) == !diverges_at_one(1)); }
 }
 
 // Terminates, but only because nested(n) == n, which is not known while its
 // termination is being proved.
-spec int nested(int n)
-  decreases(n)
+cppverify::spec int nested(int n)
+  cppverify::decreases(n)
 {
   return n <= 0 ? 0 : 1 + nested(nested(n - 1));
 }
 
-spec int second_unbounded(int m, int n)
-  decreases(m, n)
+cppverify::spec int second_unbounded(int m, int n)
+  cppverify::decreases(m, n)
 {
   return m <= 0 ? 0 : second_unbounded(m, n - 1);
 }
 
-spec int first_unbounded(int m, int n)
-  decreases(m, n)
+cppverify::spec int first_unbounded(int m, int n)
+  cppverify::decreases(m, n)
 {
   return n <= 0 ? 0 : first_unbounded(m - 1, n);
 }
 
 // A call under a quantifier happens at every value in its range.
-spec bool all_below(int n)
-  decreases(n)
+cppverify::spec bool all_below(int n)
+  cppverify::decreases(n)
 {
-  return n <= 0 || forall(i, 0, n, all_below(i));
+  return n <= 0 || cppverify::forall(i, 0, n, all_below(i));
 }
 
-spec bool reaches_itself(int n)
-  decreases(n)
+cppverify::spec bool reaches_itself(int n)
+  cppverify::decreases(n)
 {
-  return n < 0 || forall(i, 0, n + 1, !reaches_itself(i));
+  return n < 0 || cppverify::forall(i, 0, n + 1, !reaches_itself(i));
 }
 
 void all_below_small(int n)
-  pre(n >= 0 && n <= 5)
+  cppverify::pre(n >= 0 && n <= 5)
 {
-  ghost { contract_assert(all_below(n)); }
+  cppverify::ghost { cppverify::check(all_below(n)); }
 }
 
 // CHECK-DAG: Verified: spec decreases: ack
