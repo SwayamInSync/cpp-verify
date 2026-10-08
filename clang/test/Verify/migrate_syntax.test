@@ -1,0 +1,23 @@
+# The migration script rewrites the keyword syntax to the qualified one;
+# the result verifies.
+# RUN: cp %S/Inputs/keyword_syntax.cpp %t.cpp
+# RUN: %python %S/../../tools/cpp-verify/cppverify-migrate.py %t.cpp | FileCheck %s --check-prefix=COUNT
+# RUN: FileCheck %s --input-file=%t.cpp
+# RUN: %cpp-verify %t.cpp -- -std=c++17 | FileCheck %s --check-prefix=VERIFY
+
+# COUNT: 20 total
+
+# CHECK: // pre(x) and contract_assert in comments and "post(" in strings stay.
+# CHECK-NEXT: cppverify::spec int sq(int x) cppverify::recommends(x >= 0)
+# CHECK:      cppverify::pre(n > 0 && cppverify::valid(a, n))
+# CHECK-NEXT: cppverify::post(0 <= cppverify::result && cppverify::result < n)
+# CHECK-NEXT: cppverify::post(cppverify::forall(k, 0, n, a[k] <= a[cppverify::result]))
+# CHECK:      cppverify::invariant(cppverify::forall(k, 0, i, a[k] <= a[best]))
+# CHECK-NEXT: cppverify::decreases(n - i)
+# CHECK:      cppverify::check(best < n);
+# CHECK-NEXT: cppverify::ghost { cppverify::check(sq(best) >= 0); }
+# CHECK:      const char *label() { return "post("; }
+# CHECK:      void inc(int *p) cppverify::pre(p != nullptr && *p < 100) cppverify::modifies(*p) cppverify::post(*p == cppverify::old(*p) + 1)
+
+# VERIFY-DAG: Verified: max_index
+# VERIFY-DAG: Verified: inc
