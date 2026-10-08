@@ -10,8 +10,8 @@
 
 // The precondition can never hold.
 int never(int x)
-  pre(x > 0 && x < 0)
-  post(result == 42)
+  cppverify::pre(x > 0 && x < 0)
+  cppverify::post(cppverify::result == 42)
 {
   return 0;
 }
@@ -21,10 +21,10 @@ int never(int x)
 
 // A trusted contract that no call can satisfy, on every path.
 [[cppverify::trusted]] int impossible(int x)
-  post(result > x && result < x);
+  cppverify::post(cppverify::result > x && cppverify::result < x);
 
 int always_calls(int x)
-  post(result == 7)
+  cppverify::post(cppverify::result == 7)
 {
   return impossible(x);
 }
@@ -34,8 +34,8 @@ int always_calls(int x)
 // The same contract on one path: the rest of the function is checked, the
 // call's path is reported.
 int sometimes_calls(int x)
-  pre(x >= 0 && x <= 10)
-  post(result >= 0)
+  cppverify::pre(x >= 0 && x <= 10)
+  cppverify::post(cppverify::result >= 0)
 {
   if (x == 3) {
     int y = impossible(x);
@@ -48,25 +48,25 @@ int sometimes_calls(int x)
 
 // A behavior whose assumption contradicts the preconditions is never checked.
 int clipped(int x)
-  pre(x >= 0 && x <= 10)
-  behavior(small, x < 5)
-    post(result == x)
-  behavior(huge, x > 20)
-    post(result == 1000)
-  behavior(large, x >= 5)
-    post(result == x)
-  complete_behaviors
+  cppverify::pre(x >= 0 && x <= 10)
+  cppverify::behavior(small, x < 5)
+    cppverify::post(cppverify::result == x)
+  cppverify::behavior(huge, x > 20)
+    cppverify::post(cppverify::result == 1000)
+  cppverify::behavior(large, x >= 5)
+    cppverify::post(cppverify::result == x)
+  cppverify::complete_behaviors
 {
   return x;
 }
 // CHECK-DAG: Verified: clipped [backend=z3]
-// CHECK-DAG: vacuity.cpp:[[@LINE-9]]:20: warning: clipped: behavior huge never applies: its assumption contradicts the preconditions, so its postconditions are never checked
+// CHECK-DAG: vacuity.cpp:[[@LINE-9]]:31: warning: clipped: behavior huge never applies: its assumption contradicts the preconditions, so its postconditions are never checked
 
 // A type invariant that can never hold is a precondition that cannot hold.
-struct span { int lo; int hi; type_invariant(lo <= hi && hi < lo); };
+struct span { int lo; int hi; cppverify::type_invariant(lo <= hi && hi < lo); };
 
 int width(span s)
-  post(result >= 0)
+  cppverify::post(cppverify::result >= 0)
 {
   return s.hi - s.lo;
 }
@@ -76,8 +76,8 @@ int width(span s)
 // Not flagged: a defensive branch the precondition excludes. Code may be
 // unreachable for good reasons; only assumptions that kill the claims are.
 int defensive(const int *p)
-  pre(p != nullptr)
-  post(result == 1)
+  cppverify::pre(p != nullptr)
+  cppverify::post(cppverify::result == 1)
 {
   if (p == nullptr)
     return -1;
@@ -88,11 +88,11 @@ int defensive(const int *p)
 // Not flagged: a trusted contract that some calls can satisfy. The proof
 // rests on it, which [trusts=...] says.
 [[cppverify::trusted]] int positive_only(int x)
-  post(result == x && x > 0);
+  cppverify::post(cppverify::result == x && x > 0);
 
 int partly(int x)
-  pre(x >= -5 && x <= 10)
-  post(result >= -5)
+  cppverify::pre(x >= -5 && x <= 10)
+  cppverify::post(cppverify::result >= -5)
 {
   return positive_only(x - 6);
 }
