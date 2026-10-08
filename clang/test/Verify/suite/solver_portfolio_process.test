@@ -13,54 +13,54 @@
 # RUN:   %t.stream %t.crash %t.hang %t.sat %t.unsat
 #
 # RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.unknown \
-# RUN:   %S/Inputs/solver_process_valid.cpp 2>&1 | FileCheck %s --check-prefix=UNKNOWN
+# RUN:   %S/Inputs/solver_process_valid.cpp -- 2>&1 | FileCheck %s --check-prefix=UNKNOWN
 # RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.comment \
-# RUN:   %S/Inputs/solver_process_valid.cpp 2>&1 | FileCheck %s --check-prefix=MALFORMED
+# RUN:   %S/Inputs/solver_process_valid.cpp -- 2>&1 | FileCheck %s --check-prefix=MALFORMED
 # RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.trailing \
-# RUN:   %S/Inputs/solver_process_valid.cpp 2>&1 | FileCheck %s --check-prefix=MALFORMED
+# RUN:   %S/Inputs/solver_process_valid.cpp -- 2>&1 | FileCheck %s --check-prefix=MALFORMED
 # RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.large \
-# RUN:   %S/Inputs/solver_process_valid.cpp 2>&1 | FileCheck %s --check-prefix=OUTPUT-LIMIT
-# RUN: %python -c "import pathlib, subprocess, time; start = time.monotonic(); p = subprocess.run([r'%cpp-verify', '--backend=cvc5', '--cvc5-path=%t.stream', '--timeout=5', r'%S/Inputs/solver_process_valid.cpp'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True); pathlib.Path(r'%t.stream.out').write_text(p.stdout); assert p.returncode != 0 and time.monotonic() - start < 3"
+# RUN:   %S/Inputs/solver_process_valid.cpp -- 2>&1 | FileCheck %s --check-prefix=OUTPUT-LIMIT
+# RUN: %python -c "import pathlib, subprocess, time; start = time.monotonic(); p = subprocess.run([r'%cpp-verify', '--backend=cvc5', '--cvc5-path=%t.stream', '--timeout=5', r'%S/Inputs/solver_process_valid.cpp', '--'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True); pathlib.Path(r'%t.stream.out').write_text(p.stdout); assert p.returncode != 0 and time.monotonic() - start < 3"
 # RUN: FileCheck %s --check-prefix=STREAM-LIMIT < %t.stream.out
 # RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.stderr \
-# RUN:   %S/Inputs/solver_process_valid.cpp 2>&1 | FileCheck %s --check-prefix=STDERR
+# RUN:   %S/Inputs/solver_process_valid.cpp -- 2>&1 | FileCheck %s --check-prefix=STDERR
 # RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.exit \
-# RUN:   %S/Inputs/solver_process_valid.cpp 2>&1 | FileCheck %s --check-prefix=EXIT
+# RUN:   %S/Inputs/solver_process_valid.cpp -- 2>&1 | FileCheck %s --check-prefix=EXIT
 # RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.crash --timeout=5 \
-# RUN:   %S/Inputs/solver_process_valid.cpp 2>&1 | FileCheck %s --check-prefix=CRASH
+# RUN:   %S/Inputs/solver_process_valid.cpp -- 2>&1 | FileCheck %s --check-prefix=CRASH
 # RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.hang --timeout=1 --jobs=4 \
-# RUN:   %S/Inputs/backend_cache_base.cpp 2>&1 | FileCheck %s --check-prefix=TIMEOUT
+# RUN:   %S/Inputs/backend_cache_base.cpp -- 2>&1 | FileCheck %s --check-prefix=TIMEOUT
 #
 # RUN: not %cpp-verify --backend=portfolio --cvc5-path=%t.sat \
-# RUN:   %S/Inputs/solver_process_valid.cpp 2>&1 | FileCheck %s --check-prefix=DISAGREE-SAT
+# RUN:   %S/Inputs/solver_process_valid.cpp -- 2>&1 | FileCheck %s --check-prefix=DISAGREE-SAT
 # RUN: not %cpp-verify --backend=portfolio --cvc5-path=%t.unsat \
-# RUN:   %S/Inputs/solver_process_invalid.cpp 2>&1 | FileCheck %s --check-prefix=DISAGREE-UNSAT
+# RUN:   %S/Inputs/solver_process_invalid.cpp -- 2>&1 | FileCheck %s --check-prefix=DISAGREE-UNSAT
 # RUN: not %cpp-verify --backend=portfolio --cvc5-path=%t.sat \
-# RUN:   --diagnostics-format=json %S/Inputs/solver_process_valid.cpp 2>&1 \
+# RUN:   --diagnostics-format=json %S/Inputs/solver_process_valid.cpp -- 2>&1 \
 # RUN:   | FileCheck %s --check-prefix=DISAGREE-JSON
 #
 # RUN: rm -rf %t.fallback
 # RUN: not %cpp-verify --backend=portfolio --cvc5-path=%t.unknown \
-# RUN:   --lean-fallback=%t.fallback %S/Inputs/solver_process_valid.cpp 2>&1 \
+# RUN:   --lean-fallback=%t.fallback %S/Inputs/solver_process_valid.cpp -- 2>&1 \
 # RUN:   | FileCheck %s --check-prefix=FALLBACK
 # RUN: test -f %t.fallback/CppVerify/Generated.lean
 #
 # RUN: rm -rf %t.cache
 # RUN: %cpp-verify --backend=portfolio --cvc5-path=%t.unsat \
-# RUN:   --proof-cache=%t.cache %S/Inputs/solver_process_valid.cpp > /dev/null
+# RUN:   --proof-cache=%t.cache %S/Inputs/solver_process_valid.cpp -- > /dev/null
 # RUN: not %cpp-verify --backend=portfolio --cvc5-path=%t.sat \
-# RUN:   --proof-cache=%t.cache %S/Inputs/solver_process_valid.cpp 2>&1 \
+# RUN:   --proof-cache=%t.cache %S/Inputs/solver_process_valid.cpp -- 2>&1 \
 # RUN:   | FileCheck %s --check-prefix=CACHE-DISAGREE
 #
 # RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.missing \
-# RUN:   %S/Inputs/solver_process_valid.cpp 2>&1 | FileCheck %s --check-prefix=MISSING
+# RUN:   %S/Inputs/solver_process_valid.cpp -- 2>&1 | FileCheck %s --check-prefix=MISSING
 # RUN: not %cpp-verify --backend=cvc5 --proof-cache=%t.cache \
-# RUN:   %S/Inputs/solver_process_valid.cpp 2>&1 | FileCheck %s --check-prefix=CACHE
+# RUN:   %S/Inputs/solver_process_valid.cpp -- 2>&1 | FileCheck %s --check-prefix=CACHE
 # RUN: not %cpp-verify --backend=z3 --cvc5-path=%t.unsat \
-# RUN:   %S/Inputs/solver_process_valid.cpp 2>&1 | FileCheck %s --check-prefix=PATH
+# RUN:   %S/Inputs/solver_process_valid.cpp -- 2>&1 | FileCheck %s --check-prefix=PATH
 #
 # RUN: %cpp-verify --obligation-out=%t.bmc --backend=bmc --unroll=0 \
-# RUN:   %S/Inputs/solver_process_valid.cpp > /dev/null
+# RUN:   %S/Inputs/solver_process_valid.cpp -- > /dev/null
 # RUN: not %cpp-verify --backend=portfolio --obligation-in=%t.bmc 2>&1 \
 # RUN:   | FileCheck %s --check-prefix=BMC
 
