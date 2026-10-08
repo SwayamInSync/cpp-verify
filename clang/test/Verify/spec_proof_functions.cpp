@@ -8,7 +8,7 @@
 // ---------------------------------------------------------------------------
 // CHECK: FunctionDecl {{.*}} simple_spec 'int (int)' inline contract_spec
 // CHECK: CompoundStmt
-spec int simple_spec(int x) {
+cppverify::spec int simple_spec(int x) {
   return x;
 }
 
@@ -17,8 +17,8 @@ spec int simple_spec(int x) {
 // ---------------------------------------------------------------------------
 // CHECK: FunctionDecl {{.*}} factorial 'int (int)' inline contract_spec
 // CHECK: decreases: DeclRefExpr {{.*}} 'int' {{.*}} 'n'
-spec int factorial(int n)
-  decreases(n)
+cppverify::spec int factorial(int n)
+  cppverify::decreases(n)
 {
   if (n <= 1) return 1;
   return n * factorial(n - 1);
@@ -28,7 +28,7 @@ spec int factorial(int n)
 // 3. Spec function returning bool
 // ---------------------------------------------------------------------------
 // CHECK: FunctionDecl {{.*}} is_positive 'bool (int)' inline contract_spec
-spec bool is_positive(int x) {
+cppverify::spec bool is_positive(int x) {
   return x > 0;
 }
 
@@ -36,7 +36,7 @@ spec bool is_positive(int x) {
 // 4. Spec function with multiple parameters
 // ---------------------------------------------------------------------------
 // CHECK: FunctionDecl {{.*}} max_spec 'int (int, int)' inline contract_spec
-spec int max_spec(int a, int b) {
+cppverify::spec int max_spec(int a, int b) {
   if (a >= b) return a;
   return b;
 }
@@ -46,8 +46,8 @@ spec int max_spec(int a, int b) {
 // ---------------------------------------------------------------------------
 // CHECK: FunctionDecl {{.*}} double_factorial 'int (int)' inline contract_spec
 // CHECK: decreases: DeclRefExpr {{.*}} 'int' {{.*}} 'n'
-spec int double_factorial(int n)
-  decreases(n)
+cppverify::spec int double_factorial(int n)
+  cppverify::decreases(n)
 {
   return factorial(n) * 2;
 }
@@ -57,8 +57,8 @@ spec int double_factorial(int n)
 // ---------------------------------------------------------------------------
 // CHECK: FunctionDecl {{.*}} all_nonneg 'bool (int)' inline contract_spec
 // CHECK: ForallExpr {{.*}} 'bool'
-spec bool all_nonneg(int n) {
-  return forall(i, 0, n, i >= 0);
+cppverify::spec bool all_nonneg(int n) {
+  return cppverify::forall(i, 0, n, i >= 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -66,8 +66,8 @@ spec bool all_nonneg(int n) {
 // ---------------------------------------------------------------------------
 // CHECK: FunctionDecl {{.*}} has_positive 'bool (int)' inline contract_spec
 // CHECK: ExistsExpr {{.*}} 'bool'
-spec bool has_positive(int n) {
-  return exists(i, 0, n, i > 0);
+cppverify::spec bool has_positive(int n) {
+  return cppverify::exists(i, 0, n, i > 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -76,9 +76,9 @@ spec bool has_positive(int n) {
 // CHECK: FunctionDecl {{.*}} trivial_proof 'void (int)' inline contract_proof
 // CHECK: pre: BinaryOperator {{.*}} 'bool' '>='
 // CHECK: post: BinaryOperator {{.*}} 'bool' '>='
-proof void trivial_proof(int n)
-  pre(n >= 0)
-  post(n >= 0)
+cppverify::proof void trivial_proof(int n)
+  cppverify::pre(n >= 0)
+  cppverify::post(n >= 0)
 {
 }
 
@@ -89,10 +89,10 @@ proof void trivial_proof(int n)
 // CHECK: pre: BinaryOperator {{.*}} 'bool' '>='
 // CHECK: post: BinaryOperator {{.*}} 'bool' '>='
 // CHECK: decreases: DeclRefExpr {{.*}} 'int' {{.*}} 'n'
-proof void lemma_positive(int n)
-  pre(n >= 1)
-  post(factorial(n) >= 1)
-  decreases(n)
+cppverify::proof void lemma_positive(int n)
+  cppverify::pre(n >= 1)
+  cppverify::post(factorial(n) >= 1)
+  cppverify::decreases(n)
 {
   if (n == 1) {
   } else {
@@ -106,9 +106,9 @@ proof void lemma_positive(int n)
 // CHECK: FunctionDecl {{.*}} lemma_max 'void (int, int)' inline contract_proof
 // CHECK: pre: BinaryOperator {{.*}} 'bool' '>='
 // CHECK: post: BinaryOperator {{.*}} 'bool' '>='
-proof void lemma_max(int a, int b)
-  pre(a >= 0)
-  post(max_spec(a, b) >= a)
+cppverify::proof void lemma_max(int a, int b)
+  cppverify::pre(a >= 0)
+  cppverify::post(max_spec(a, b) >= a)
 {
 }
 
@@ -122,16 +122,16 @@ proof void lemma_max(int a, int b)
 // CHECK: post: BinaryOperator {{.*}} 'bool' '=='
 // CHECK:   ResultExpr {{.*}} 'int'
 int compute_factorial(int n)
-  pre(n >= 0)
-  pre(n <= 12)
-  post(result == factorial(n))
+  cppverify::pre(n >= 0)
+  cppverify::pre(n <= 12)
+  cppverify::post(cppverify::result == factorial(n))
 {
   int acc = 1;
   int i = 1;
   while (i <= n)
-    invariant(acc >= 1)
-    invariant(i >= 1)
-    decreases(n - i + 1)
+    cppverify::invariant(acc >= 1)
+    cppverify::invariant(i >= 1)
+    cppverify::decreases(n - i + 1)
   {
     acc = acc * i;
     i = i + 1;
@@ -145,17 +145,17 @@ int compute_factorial(int n)
 // CHECK: FunctionDecl {{.*}} safe_compute 'int (int)'
 // CHECK: GhostBlockStmt
 int safe_compute(int n)
-  pre(n >= 1)
-  post(result >= 1)
+  cppverify::pre(n >= 1)
+  cppverify::post(cppverify::result >= 1)
 {
-  ghost {
+  cppverify::ghost {
     lemma_positive(n);
   }
   int acc = 1;
   int i = 1;
   while (i <= n)
-    invariant(acc >= 1)
-    decreases(n - i + 1)
+    cppverify::invariant(acc >= 1)
+    cppverify::decreases(n - i + 1)
   {
     acc = acc * i;
     i = i + 1;
@@ -168,8 +168,8 @@ int safe_compute(int n)
 // ---------------------------------------------------------------------------
 // CHECK: FunctionDecl {{.*}} fib 'int (int)' inline contract_spec
 // CHECK: decreases: DeclRefExpr {{.*}} 'int' {{.*}} 'n'
-spec int fib(int n)
-  decreases(n)
+cppverify::spec int fib(int n)
+  cppverify::decreases(n)
 {
   if (n <= 0) return 0;
   if (n == 1) return 1;
@@ -181,10 +181,10 @@ spec int fib(int n)
 // ---------------------------------------------------------------------------
 // CHECK: FunctionDecl {{.*}} lemma2 'void (int)' inline contract_proof
 // CHECK: decreases: DeclRefExpr {{.*}} 'int' {{.*}} 'n'
-proof void lemma2(int n)
-  pre(n >= 2)
-  post(fib(n) >= 1)
-  decreases(n)
+cppverify::proof void lemma2(int n)
+  cppverify::pre(n >= 2)
+  cppverify::post(fib(n) >= 1)
+  cppverify::decreases(n)
 {
   if (n == 2) {
   } else {
@@ -196,6 +196,6 @@ proof void lemma2(int n)
 // 15. Spec function with no parameters
 // ---------------------------------------------------------------------------
 // CHECK: FunctionDecl {{.*}} zero_spec 'int ()' inline contract_spec
-spec int zero_spec() {
+cppverify::spec int zero_spec() {
   return 0;
 }
