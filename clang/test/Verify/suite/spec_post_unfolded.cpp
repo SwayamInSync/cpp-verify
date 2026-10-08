@@ -1,5 +1,5 @@
-// RUN: not %cpp-verify --timeout=10000 %s 2>&1 | FileCheck %s
-// RUN: %cpp-verify --lower-only --dump-ir=4 %s 2>&1 | FileCheck %s --check-prefix=DUMP
+// RUN: not %cpp-verify --timeout=10000 %s -- 2>&1 | FileCheck %s
+// RUN: %cpp-verify --lower-only --dump-ir=4 %s -- 2>&1 | FileCheck %s --check-prefix=DUMP
 //
 // A spec's proved postcondition holds at every application the solver sees,
 // as Dafny's function postconditions do: those the function names, and those
