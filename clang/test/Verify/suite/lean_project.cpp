@@ -1,5 +1,5 @@
 // RUN: rm -rf %t.project
-// RUN: %cpp-verify --backend=lean --lean-project=%t.project %s 2>&1 | FileCheck %s --check-prefix=EXPORT
+// RUN: %cpp-verify --backend=lean --lean-project=%t.project %s -- 2>&1 | FileCheck %s --check-prefix=EXPORT
 // RUN: test -f %t.project/lean-toolchain
 // RUN: test -f %t.project/lakefile.toml
 // RUN: test -f %t.project/CppVerify/Generated.lean
@@ -11,12 +11,12 @@
 // RUN: grep -Fq 'import CppVerify.Proofs.Goal_583ed320b83a75f8' %t.project/CppVerify/Check.lean
 // RUN: echo '/- USER_KEEP -/' >> %t.project/CppVerify/User.lean
 // RUN: echo '/- PROOF_KEEP -/' >> %t.project/CppVerify/Proofs/Goal_583ed320b83a75f8.lean
-// RUN: %cpp-verify --backend=lean --lean-project=%t.project %s 2>&1 | FileCheck %s --check-prefix=EXPORT
+// RUN: %cpp-verify --backend=lean --lean-project=%t.project %s -- 2>&1 | FileCheck %s --check-prefix=EXPORT
 // RUN: grep -Fq 'USER_KEEP' %t.project/CppVerify/User.lean
 // RUN: grep -Fq 'PROOF_KEEP' %t.project/CppVerify/Proofs/Goal_583ed320b83a75f8.lean
 // RUN: echo 'leanprover/lean4:v4.31.0' > %t.project/lean-toolchain
-// RUN: not %cpp-verify --backend=lean --lean-project=%t.project %s 2>&1 | FileCheck %s --check-prefix=PIN
-// RUN: not %cpp-verify --backend=lean --lean-project=%t.empty --lean-certify %S/Inputs/lean_no_obligations.cpp 2>&1 | FileCheck %s --check-prefix=EMPTY
+// RUN: not %cpp-verify --backend=lean --lean-project=%t.project %s -- 2>&1 | FileCheck %s --check-prefix=PIN
+// RUN: not %cpp-verify --backend=lean --lean-project=%t.empty --lean-certify %S/Inputs/lean_no_obligations.cpp -- 2>&1 | FileCheck %s --check-prefix=EMPTY
 
 void trivial()
   cppverify::post(true)
