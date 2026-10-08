@@ -1,6 +1,6 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify --no-check-ub --timeout=30000 %s 2>&1 | FileCheck %s --check-prefix=WARN
-// RUN: %cpp-verify --timeout=30000 %s 2>&1 | FileCheck %s --check-prefix=OK
+// RUN: not %cpp-verify --no-check-ub --timeout=30000 %s -- 2>&1 | FileCheck %s --check-prefix=WARN
+// RUN: %cpp-verify --timeout=30000 %s -- 2>&1 | FileCheck %s --check-prefix=OK
 //
 // valid(p, n) is only meaningful with memory checking, the default. Under
 // --no-check-ub the marker's deliberately trivial spec body folds to `true`,
