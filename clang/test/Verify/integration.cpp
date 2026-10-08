@@ -8,7 +8,7 @@
 // Spec functions
 // ===========================================================================
 
-// CHECK: FunctionDecl {{.*}} sum_spec 'int (int)' inline contract_spec
+// CHECK: FunctionDecl {{.*}} sum_spec 'int (int)' inline external-linkage contract_spec
 // CHECK: decreases: DeclRefExpr {{.*}} 'int' {{.*}} 'n'
 cppverify::spec int sum_spec(int n)
   cppverify::decreases(n)
@@ -17,7 +17,7 @@ cppverify::spec int sum_spec(int n)
   return n + sum_spec(n - 1);
 }
 
-// CHECK: FunctionDecl {{.*}} is_sorted_spec 'bool (int)' inline contract_spec
+// CHECK: FunctionDecl {{.*}} is_sorted_spec 'bool (int)' inline external-linkage contract_spec
 cppverify::spec bool is_sorted_spec(int n) {
   return cppverify::forall(i, 0, n, i >= 0);
 }
@@ -26,7 +26,7 @@ cppverify::spec bool is_sorted_spec(int n) {
 // Proof functions
 // ===========================================================================
 
-// CHECK: FunctionDecl {{.*}} lemma_sum_nonneg 'void (int)' inline contract_proof
+// CHECK: FunctionDecl {{.*}} lemma_sum_nonneg 'void (int)' inline external-linkage contract_proof
 // CHECK: pre: BinaryOperator {{.*}} 'bool' '>='
 // CHECK: post: BinaryOperator {{.*}} 'bool' '>='
 // CHECK: decreases: DeclRefExpr {{.*}} 'int' {{.*}} 'n'
