@@ -2,7 +2,7 @@
 // RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 int assigned_before_read()
-  post(result == 7)
+  cppverify::post(cppverify::result == 7)
 {
   int value;
   value = 7;
@@ -10,7 +10,7 @@ int assigned_before_read()
 }
 
 int initialized_on_both_branches(bool choose_first)
-  post(result == 1 || result == 2)
+  cppverify::post(cppverify::result == 1 || cppverify::result == 2)
 {
   int value;
   if (choose_first)
@@ -21,7 +21,7 @@ int initialized_on_both_branches(bool choose_first)
 }
 
 int initialized_on_fallthrough_branch(bool return_early)
-  post(result == 0 || result == 4)
+  cppverify::post(cppverify::result == 0 || cppverify::result == 4)
 {
   int value;
   if (return_early)
@@ -32,7 +32,7 @@ int initialized_on_fallthrough_branch(bool return_early)
 }
 
 int unreachable_uninitialized_read(bool choose_first)
-  post(result == 1 || result == 2)
+  cppverify::post(cppverify::result == 1 || cppverify::result == 2)
 {
   int value;
   if (choose_first)
