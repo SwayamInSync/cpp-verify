@@ -39,6 +39,7 @@ cd cpp-verify
 Binaries: `build/bin/cpp-verify` and `build/bin/clang++` (on Windows, under `build\bin\`).
 
 Z3 is vendored by default (`third_party/z3` submodule, or CMake FetchContent on first configure). See `third_party/README.md`. cvc5 is optional and is not vendored; install it (`apt install cvc5` or `brew install cvc5`) for `--backend=cvc5` and `--backend=portfolio`, or pass `--cvc5-path`.
+`cpp-verify --version` shows the cpp-verify release, the LLVM release it is built on, and the Z3, cvc5, and Lean versions it uses.
 
 ### Manual build
 
