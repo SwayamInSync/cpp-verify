@@ -7,15 +7,15 @@ namespace cppverify_uleb128_mutation {
 typedef __UINT64_TYPE__ uint64_t;
 typedef __UINT8_TYPE__ uint8_t;
 
-spec bool valid(uint8_t *pointer, int count) {
+cppverify::spec bool valid(uint8_t *pointer, int count) {
   return true;
 }
 
 unsigned encode_128(uint8_t *buffer)
-  pre(valid(buffer, 10))
-  modifies(buffer[0], buffer[1])
-  post(result == 2)
-  post(buffer[0] == 0x80 && buffer[1] == 0x01)
+  cppverify::pre(valid(buffer, 10))
+  cppverify::modifies(buffer[0], buffer[1])
+  cppverify::post(cppverify::result == 2)
+  cppverify::post(buffer[0] == 0x80 && buffer[1] == 0x01)
 {
   uint64_t value = 128;
   unsigned count = 0;
@@ -31,10 +31,10 @@ unsigned encode_128(uint8_t *buffer)
 }
 
 unsigned encode_128_missing_continuation(uint8_t *buffer)
-  pre(valid(buffer, 10))
-  modifies(buffer[0], buffer[1])
-  post(result == 2)
-  post(buffer[0] == 0x80 && buffer[1] == 0x01)
+  cppverify::pre(valid(buffer, 10))
+  cppverify::modifies(buffer[0], buffer[1])
+  cppverify::post(cppverify::result == 2)
+  cppverify::post(buffer[0] == 0x80 && buffer[1] == 0x01)
 {
   uint64_t value = 128;
   unsigned count = 0;
