@@ -2,14 +2,14 @@
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 constexpr int positive_only(int value)
-  pre(value > 0)
-  post(result == value)
+  cppverify::pre(value > 0)
+  cppverify::post(cppverify::result == value)
 {
   return value;
 }
 
 int invalid_contract_expression_call()
-  post(positive_only(0) == 0)
+  cppverify::post(positive_only(0) == 0)
 {
   return 0;
 }
