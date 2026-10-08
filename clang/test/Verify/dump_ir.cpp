@@ -1,7 +1,7 @@
-// RUN: %cpp-verify --dump-ir=1 %s 2>&1 | FileCheck %s --check-prefix=L1
-// RUN: %cpp-verify --dump-ir=2 %s 2>&1 | FileCheck %s --check-prefix=L2
-// RUN: %cpp-verify --dump-ir=layer-3,layer-4 %s 2>&1 | FileCheck %s --check-prefix=L34
-// RUN: %cpp-verify --dump-ir %s 2>&1 | FileCheck %s --check-prefix=ALL
+// RUN: %cpp-verify --dump-ir=1 %s -- 2>&1 | FileCheck %s --check-prefix=L1
+// RUN: %cpp-verify --dump-ir=2 %s -- 2>&1 | FileCheck %s --check-prefix=L2
+// RUN: %cpp-verify --dump-ir=layer-3,layer-4 %s -- 2>&1 | FileCheck %s --check-prefix=L34
+// RUN: %cpp-verify --dump-ir %s -- 2>&1 | FileCheck %s --check-prefix=ALL
 
 int abs(int x)
   cppverify::pre(x != (-2147483647 - 1))
