@@ -1,1 +1,1 @@
-bool positive(int n) inductive { return n > 0; }
+bool positive(int n) cppverify::inductive { return n > 0; }
