@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: %cpp-verify --check-ub --timeout=10000 %s 2>&1 | FileCheck %s
+// RUN: %cpp-verify --check-ub --timeout=10000 %s -- 2>&1 | FileCheck %s
 
 typedef __UINT64_TYPE__ uint64_t;
 typedef __UINT8_TYPE__ uint8_t;
