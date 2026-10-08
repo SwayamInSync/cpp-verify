@@ -840,13 +840,20 @@ std::string ASTConverter::functionIdentity(const FunctionDecl *FD) {
   return Identity;
 }
 
+void ASTConverter::noteSpecUse(const FunctionDecl *FD) {
+  if (FD->isConstexpr() && !functionContract(FD))
+    UsedConstexprSpecs.insert(FD->getCanonicalDecl());
+}
+
 std::string ASTConverter::specIdentityFromExpr(const Expr *E) {
   if (!E)
     return {};
   if (const auto *DRE = dyn_cast<DeclRefExpr>(E->IgnoreParenImpCasts()))
     if (const auto *FD = dyn_cast<FunctionDecl>(DRE->getDecl()))
-      if (calleeIsSpec(FD))
+      if (calleeIsSpec(FD)) {
+        noteSpecUse(FD);
         return functionIdentity(FD);
+      }
   return {};
 }
 
@@ -1849,6 +1856,7 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
   llvm::StringSet<> Identities;
   std::vector<const FunctionDecl *> Definitions;
   collectFunctionCandidates(Ctx.getTranslationUnitDecl(), Ctx, Definitions);
+  UsedConstexprSpecs.clear();
   for (const FunctionDecl *FD : Definitions) {
     if (isa<CXXMethodDecl>(FD)) {
       if (functionContract(FD) || hasContractStatements(FD, Ctx))
@@ -1891,21 +1899,39 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
     };
     Calls(FD->getBody());
   }
-  for (const FunctionDecl *FD : Definitions) {
-    if (isa<CXXMethodDecl>(FD) || FD->isTemplated())
-      continue;
-    if (FD->isInStdNamespace() || Identities.contains(functionIdentity(FD)))
-      continue;
-    if (!FD->isConstexpr() || !FD->hasBody())
-      continue;
-    if (functionContract(FD))
-      continue;
-    auto Fn = convertConstexprSpec(FD);
-    if (Fn) {
-      Identities.insert(Fn->Identity);
-      Out.push_back(std::move(Fn));
+  // An uncontracted constexpr definition is a spec once the lowered code
+  // calls it: lift those the converted functions call, then those the lifted
+  // ones call, in source order. The others (a header's, say) are never
+  // converted, so a construct the verifier does not support in one cannot
+  // fail the run.
+  std::vector<std::pair<size_t, std::unique_ptr<VFunction>>> Lifted;
+  std::set<const FunctionDecl *> Considered;
+  for (bool Changed = true; Changed;) {
+    Changed = false;
+    for (size_t I = 0; I < Definitions.size(); ++I) {
+      const FunctionDecl *FD = Definitions[I];
+      if (isa<CXXMethodDecl>(FD) || FD->isTemplated())
+        continue;
+      if (FD->isInStdNamespace() || !FD->isConstexpr() || !FD->hasBody() ||
+          functionContract(FD))
+        continue;
+      const FunctionDecl *Canonical = FD->getCanonicalDecl();
+      if (!UsedConstexprSpecs.count(Canonical) ||
+          !Considered.insert(Canonical).second)
+        continue;
+      Changed = true;
+      if (Identities.contains(functionIdentity(FD)))
+        continue;
+      if (auto Fn = convertConstexprSpec(FD)) {
+        Identities.insert(Fn->Identity);
+        Lifted.push_back({I, std::move(Fn)});
+      }
     }
   }
+  llvm::stable_sort(
+      Lifted, [](const auto &A, const auto &B) { return A.first < B.first; });
+  for (auto &Entry : Lifted)
+    Out.push_back(std::move(Entry.second));
   // when(c): the body defines the spec on its domain, and elsewhere its value
   // is that of an uninterpreted function of the same arguments.
   std::vector<std::unique_ptr<VFunction>> Unspecified;
@@ -4879,6 +4905,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
             InContractExpression || CalleeMode == VIntMode::Math ? CalleeMode
                                                                  : IntMode,
             Ctx);
+        noteSpecUse(Callee);
         return std::make_unique<VSpecCallExpr>(
             Callee->getNameAsString(), functionIdentity(Callee),
             std::move(Args), Ty, E->getExprLoc(), specReadsHeap(Callee));
