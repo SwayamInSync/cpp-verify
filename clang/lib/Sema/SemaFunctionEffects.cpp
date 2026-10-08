@@ -980,6 +980,7 @@ private:
           CurrentCaller(CurrentCaller) {
       ShouldVisitImplicitCode = true;
       ShouldWalkTypesOfTypeLocs = false;
+      ShouldVisitCppVerifyContracts = false;
     }
 
     // -- Entry point --
