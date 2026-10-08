@@ -1,5 +1,5 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s
-// RUN: not %cpp-verify %S/Inputs/inductive_rejected.cpp 2>&1 \
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s
+// RUN: not %cpp-verify %S/Inputs/inductive_rejected.cpp -- 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=REJECT
 // RUN: not %clang -std=c++17 -fverify-contracts -fsyntax-only \
 // RUN:   %S/Inputs/inductive_not_spec.cpp 2>&1 | FileCheck %s --check-prefix=NOTSPEC
