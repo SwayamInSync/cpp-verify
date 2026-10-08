@@ -13,100 +13,100 @@
 
 // No measure exists: even(-2) would need even(-4), and so on forever, which
 // no derivation provides, so it is false.
-spec bool even(int n)
-  inductive
-  post(!result || (n >= 0 && n % 2 == 0))
+cppverify::spec bool even(int n)
+  cppverify::inductive
+  cppverify::post(!cppverify::result || (n >= 0 && n % 2 == 0))
 {
   return n == 0 || even(n - 2);
 }
 // CHECK-DAG: Verified: spec post: even
 
 // Each named application unfolds once.
-proof void four_is_even()
-  post(even(4))
+cppverify::proof void four_is_even()
+  cppverify::post(even(4))
 {
-  contract_assert(even(0));
-  contract_assert(even(2));
+  cppverify::check(even(0));
+  cppverify::check(even(2));
 }
 // CHECK-DAG: Verified: four_is_even
 
 // From the postcondition: every derivation is of a nonnegative even number.
-proof void even_nonnegative(int n)
-  pre(even(n))
-  post(n >= 0)
+cppverify::proof void even_nonnegative(int n)
+  cppverify::pre(even(n))
+  cppverify::post(n >= 0)
 {
 }
 // CHECK-DAG: Verified: even_nonnegative
 
 // Inversion: an even number other than 0 came from n - 2.
-proof void even_step_back(int n)
-  pre(even(n) && n != 0)
-  post(even(n - 2))
+cppverify::proof void even_step_back(int n)
+  cppverify::pre(even(n) && n != 0)
+  cppverify::post(even(n - 2))
 {
 }
 // CHECK-DAG: Verified: even_step_back
 
-spec bool edge(int a, int b) { return b == a + 1 || b == 2 * a; }
+cppverify::spec bool edge(int a, int b) { return b == a + 1 || b == 2 * a; }
 
 // Reachability: the least relation closed under edges.
-spec bool reach(int a, int b)
-  inductive
-  post(!result || a < 0 || a <= b)
+cppverify::spec bool reach(int a, int b)
+  cppverify::inductive
+  cppverify::post(!cppverify::result || a < 0 || a <= b)
 {
-  return a == b || exists(c, edge(a, c) && reach(c, b));
+  return a == b || cppverify::exists(c, edge(a, c) && reach(c, b));
 }
 // CHECK-DAG: Verified: spec post: reach
 
-proof void one_reaches_four()
-  post(reach(1, 4))
+cppverify::proof void one_reaches_four()
+  cppverify::post(reach(1, 4))
 {
-  contract_assert(reach(4, 4));
-  contract_assert(reach(2, 4));
+  cppverify::check(reach(4, 4));
+  cppverify::check(reach(2, 4));
 }
 // CHECK-DAG: Verified: one_reaches_four
 
-proof void reach_grows(int a, int b)
-  pre(a >= 0 && reach(a, b))
-  post(a <= b)
+cppverify::proof void reach_grows(int a, int b)
+  cppverify::pre(a >= 0 && reach(a, b))
+  cppverify::post(a <= b)
 {
 }
 // CHECK-DAG: Verified: reach_grows
 
 // A predicate with no measure at all.
-spec bool reaches_one(int n)
-  inductive
+cppverify::spec bool reaches_one(int n)
+  cppverify::inductive
 {
   return n == 1 || (n > 1 && reaches_one(n % 2 == 0 ? n / 2 : 3 * n + 1));
 }
 // CHECK-DAG: Verified: inductive predicate: reaches_one
 
-proof void six_reaches_one()
-  post(reaches_one(6))
+cppverify::proof void six_reaches_one()
+  cppverify::post(reaches_one(6))
 {
-  contract_assert(reaches_one(1));
-  contract_assert(reaches_one(2));
-  contract_assert(reaches_one(4));
-  contract_assert(reaches_one(8));
-  contract_assert(reaches_one(16));
-  contract_assert(reaches_one(5));
-  contract_assert(reaches_one(10));
-  contract_assert(reaches_one(3));
+  cppverify::check(reaches_one(1));
+  cppverify::check(reaches_one(2));
+  cppverify::check(reaches_one(4));
+  cppverify::check(reaches_one(8));
+  cppverify::check(reaches_one(16));
+  cppverify::check(reaches_one(5));
+  cppverify::check(reaches_one(10));
+  cppverify::check(reaches_one(3));
 }
 // CHECK-DAG: Verified: six_reaches_one
 
 // A false claim: its counterexample is certified by a derivation of even(4).
-proof void four_is_odd()
-  post(!even(4))
+cppverify::proof void four_is_odd()
+  cppverify::post(!even(4))
 {
-  contract_assert(even(0));
-  contract_assert(even(2));
+  cppverify::check(even(0));
+  cppverify::check(even(2));
 }
 // CHECK-DAG: error: verification failed: four_is_odd {{.*}}[reason=counterexample]
 
 // A postcondition that is not true of every derivation.
-spec bool odd(int n)
-  inductive
-  post(!result || n % 4 == 1)
+cppverify::spec bool odd(int n)
+  cppverify::inductive
+  cppverify::post(!cppverify::result || n % 4 == 1)
 {
   return n == 1 || odd(n - 2);
 }
@@ -119,7 +119,7 @@ spec bool odd(int n)
 // REJECT-DAG: error: chosen: chosen occurs in its body in a condition
 // REJECT-DAG: error: counted: only a spec function returning bool can be inductive
 // REJECT-DAG: error: measured: an inductive predicate holds by its derivations, so it takes no decreases
-// REJECT-DAG: error: exact: a postcondition of an inductive predicate states what holds where it is true, as !result || Q
+// REJECT-DAG: error: exact: a postcondition of an inductive predicate states what holds where it is true, as !cppverify::result || Q
 // REJECT-DAG: error: through: an inductive predicate applies itself only in its body or through inductive predicates, not through another spec
 
 // NOTSPEC: error: only a spec function can be inductive
