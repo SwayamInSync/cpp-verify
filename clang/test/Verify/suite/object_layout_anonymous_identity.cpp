@@ -12,7 +12,7 @@ struct Outer {
 };
 
 unsigned long anonymous_layouts()
-  post(result == sizeof(Outer))
+  cppverify::post(cppverify::result == sizeof(Outer))
 {
   return sizeof(Outer);
 }
