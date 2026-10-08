@@ -3,13 +3,13 @@
 // Layer-A UB inside a loop: an invariant that bounds the accumulator discharges
 // the per-iteration overflow obligation.
 int count_up(int n)
-  pre(n >= 0 && n <= 1000)
-  post(result == n)
+  cppverify::pre(n >= 0 && n <= 1000)
+  cppverify::post(cppverify::result == n)
 {
   int i = 0;
   while (i < n)
-    invariant(0 <= i && i <= n)
-    decreases(n - i)
+    cppverify::invariant(0 <= i && i <= n)
+    cppverify::decreases(n - i)
   {
     i = i + 1;
   }
