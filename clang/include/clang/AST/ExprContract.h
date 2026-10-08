@@ -225,16 +225,18 @@ public:
   }
 };
 
-/// ResultExpr - Represents 'result' in postconditions, referring to the
-/// return value of the enclosing function.
+/// ResultExpr - Represents cppverify::result in postconditions, referring to
+/// the return value of the enclosing function.
 class ResultExpr : public Expr {
   friend class ASTStmtReader;
   SourceLocation ResultLoc;
+  SourceLocation EndLoc;
 
 public:
-  ResultExpr(SourceLocation ResultLoc, QualType ReturnType)
+  ResultExpr(SourceLocation ResultLoc, SourceLocation EndLoc,
+             QualType ReturnType)
       : Expr(ResultExprClass, ReturnType, VK_PRValue, OK_Ordinary),
-        ResultLoc(ResultLoc) {
+        ResultLoc(ResultLoc), EndLoc(EndLoc) {
     setDependence(ExprDependence::None);
   }
 
@@ -242,7 +244,7 @@ public:
 
   SourceLocation getResultLoc() const { return ResultLoc; }
   SourceLocation getBeginLoc() const LLVM_READONLY { return ResultLoc; }
-  SourceLocation getEndLoc() const LLVM_READONLY { return ResultLoc; }
+  SourceLocation getEndLoc() const LLVM_READONLY { return EndLoc; }
 
   static bool classof(const Stmt *T) {
     return T->getStmtClass() == ResultExprClass;
