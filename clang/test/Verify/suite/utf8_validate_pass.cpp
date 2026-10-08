@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: %cpp-verify --check-ub --jobs=4 --timeout=120000 %s 2>&1 | FileCheck %s
+// RUN: %cpp-verify --check-ub --jobs=4 --timeout=120000 %s -- 2>&1 | FileCheck %s
 //
 // UTF-8 decoding, the validation half. This is core logic in every C++ text
 // stack -- ICU, Qt, simdjson, Boost.Locale -- and it is the classic example of
