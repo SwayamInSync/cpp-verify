@@ -24,7 +24,7 @@ Contract behaviour is two independent switches (full reference and a quick-looku
 table: :doc:`../../language/tooling`):
 
 - **Contract language** — ``-fverify-contracts`` / ``-fno-verify-contracts`` (default
-  off). The master switch: enables the keywords and the codegen stripping. With it
+  off). The master switch: enables the constructs and the codegen stripping. With it
   off, the file is plain C++ and the verifier never runs.
 - **Run the prover** — ``-fno-verify`` (the verifier runs by default once contracts
   are on). There is no ``-fverify`` — it would just be the default.
