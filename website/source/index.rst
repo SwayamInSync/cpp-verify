@@ -18,6 +18,10 @@ brings that discipline to everyday C++ without a separate language or annotation
 Install
 -------
 
+Each `release <https://github.com/SwayamInSync/cpp-verify/releases>`_ has
+archives for Linux x86_64 and macOS arm64: unpack one and run
+``bin/cpp-verify --version``. To build from source:
+
 .. tabs::
 
    .. tab:: macOS
@@ -82,7 +86,7 @@ Manual build (from repository root; same flags as ``setup.sh``)
            -DLLVM_TARGETS_TO_BUILD=Native `
            -DCPPVERIFY_VENDOR_Z3=ON `
            -DCPPVERIFY_PREFER_SYSTEM_Z3=OFF
-         cmake --build build --target clang cpp-verify clangd clang-format -m
+         cmake --build build --target clang cpp-verify clangd clang-format --parallel
 
    .. tab:: Windows (Visual Studio)
 
@@ -94,7 +98,7 @@ Manual build (from repository root; same flags as ``setup.sh``)
            -DLLVM_TARGETS_TO_BUILD=Native `
            -DCPPVERIFY_VENDOR_Z3=ON `
            -DCPPVERIFY_PREFER_SYSTEM_Z3=OFF
-         cmake --build build --config Release --target clang cpp-verify clangd clang-format -m
+         cmake --build build --config Release --target clang cpp-verify clangd clang-format --parallel
 
 Quick start
 -----------
@@ -235,3 +239,10 @@ Learn more
    :maxdepth: 2
 
    case-studies/index
+
+.. toctree::
+   :hidden:
+   :caption: Releases
+   :maxdepth: 1
+
+   release-notes
