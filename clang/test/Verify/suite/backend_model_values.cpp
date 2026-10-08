@@ -1,4 +1,4 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s
 
 int negative_result()
   cppverify::post(cppverify::result == 0)
