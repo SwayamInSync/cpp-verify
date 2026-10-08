@@ -9,14 +9,14 @@ member syntax:
    struct Rect { int w; int h; };
 
    int area(Rect r)
-     pre(r.w >= 0 && r.w <= 1000 && r.h >= 0 && r.h <= 1000)
-     post(result >= 0)
+     cv::pre(r.w >= 0 && r.w <= 1000 && r.h >= 0 && r.h <= 1000)
+     cv::post(cv::result >= 0)
    { return r.w * r.h; }
 
-``type_invariant``
-------------------
+``cppverify::type_invariant``
+-----------------------------
 
-A ``type_invariant`` states a property every instance of a type maintains. Declare it **after** the
+A ``cppverify::type_invariant`` states a property every instance of a type maintains. Declare it **after** the
 fields it names (it is parsed in place):
 
 .. code-block:: cpp
@@ -24,11 +24,11 @@ fields it names (it is parsed in place):
    struct Point {
      int x;
      int y;
-     type_invariant(x >= 0 && x <= 1000 && y >= 0 && y <= 1000);
+     cv::type_invariant(x >= 0 && x <= 1000 && y >= 0 && y <= 1000);
    };
 
    int sum(Point p)
-     post(result >= 0 && result <= 2000)
+     cv::post(cv::result >= 0 && cv::result <= 2000)
    { return p.x + p.y; }            // x, y in [0, 1000] are assumed from the invariant
 
 Semantics:
@@ -43,10 +43,10 @@ Semantics:
 
 .. code-block:: cpp
 
-   struct Box { int w; int h; type_invariant(w >= 0 && h >= 0); };
+   struct Box { int w; int h; cv::type_invariant(w >= 0 && h >= 0); };
 
    Box make(int a, int b)
-     pre(a >= 0 && a <= 50 && b >= 0 && b <= 50)   // drop b >= 0 and this fails
+     cv::pre(a >= 0 && a <= 50 && b >= 0 && b <= 50)   // drop b >= 0 and this fails
    { Box x; x.w = a; x.h = b; return x; }          // invariant asserted here
 
 The invariant may be temporarily broken **inside** the function while you assign fields one at a
@@ -56,14 +56,14 @@ individual field write.
 View functions
 --------------
 
-Define ``spec`` functions that expose a mathematical view of a struct, then write contracts against
+Define ``cppverify::spec`` functions that expose a mathematical view of a struct, then write contracts against
 the view rather than the layout:
 
 .. code-block:: cpp
 
    struct Pair { int first; int second; };
 
-   spec int total(Pair p) { return p.first + p.second; }
+   cv::spec int total(Pair p) { return p.first + p.second; }
 
 The current aggregate model is intentionally narrow: records must be trivial,
 standard-layout, and flat, with scalar fields. References, nested records,
