@@ -2,9 +2,9 @@
 # cvc5 and the strict portfolio decide the same sequence obligations; cvc5
 # saturates quantified sequence goals that E-matching leaves open. cvc5 1.1
 # prints sequence values last element first; the adapter reads them in order.
-# RUN: not %cpp-verify --backend=cvc5 --timeout=20000 %S/sequences.cpp 2>&1 \
+# RUN: not %cpp-verify --backend=cvc5 --timeout=20000 %S/sequences.cpp -- 2>&1 \
 # RUN:   | FileCheck %s --check-prefixes=BOTH,CVC5
-# RUN: not %cpp-verify --backend=portfolio --timeout=20000 %S/sequences.cpp \
+# RUN: not %cpp-verify --backend=portfolio --timeout=20000 %S/sequences.cpp -- \
 # RUN:   2>&1 | FileCheck %s --check-prefixes=BOTH,PORTFOLIO
 #
 # BOTH-DAG: Verified: spec decreases: sum
