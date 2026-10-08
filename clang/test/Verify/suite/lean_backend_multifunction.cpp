@@ -5,13 +5,13 @@
 // RUN: not grep -q '^Verified:' %t.out
 
 int overloaded(int x)
-  post(result == x)
+  cppverify::post(cppverify::result == x)
 {
   return x;
 }
 
 long overloaded(long x)
-  post(result == x)
+  cppverify::post(cppverify::result == x)
 {
   return x;
 }
