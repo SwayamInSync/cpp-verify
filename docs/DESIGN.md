@@ -2,61 +2,71 @@
 
 ## Enabling Contracts
 
-All contract syntax is enabled with `-fverify-contracts`. Without this flag, the new keywords are not reserved and existing C++ code compiles normally.
+All contract syntax is enabled with `-fverify-contracts`, and every construct
+is written qualified by the namespace `cppverify`: `cppverify::pre(x > 0)`,
+`cppverify::check(e)`, `cppverify::forall(k, ...)`. The parser recognizes a
+construct when the qualifier names the global namespace `cppverify`, directly,
+as `::cppverify::`, or through any namespace alias (`namespace cv =
+cppverify;`, then `cv::pre`). No word is reserved: `pre`, `result`, `ghost`,
+or `check` without the qualifier is ordinary C++, so every standard header and
+every existing name keeps working, and C++26 contracts (`pre`, `post`,
+`contract_assert`) are left to the compiler. `using namespace cppverify;` does
+not make bare words constructs. With the flag, `<cppverify.h>` is included
+implicitly; without it, the constructs are not recognized.
 
 ## Contract Syntax Overview
 
 | Syntax | Where | Meaning |
 |---|---|---|
-| `pre(expr)` | After function `)` | Precondition — caller must satisfy |
-| `post(expr)` | After function `)` | Postcondition — callee must establish; may use `result` and `old(x)` |
-| `modifies(lvalue, ...)` | After function `)`, or after a loop's invariants | Frame condition — the cells, ranges `p[lo : n]`, or objects this function or loop may write |
-| `aliases(p, q)` | After function `)` | Opts out of implicit non-aliasing for a supported same-pointee pointer/reference address pair |
-| `recommends(expr)` | After function `)` (spec only) | Soft precondition for spec functions; reported on verification failure |
-| `inductive` | After function `)` (spec returning `bool` only) | The least predicate the body defines: true where a finite derivation shows it |
-| `post(...) by { ... }`, `decreases(...) by { ... }`, `reads(...) by { ... }` | After a spec's clause | Proof steps for that clause's check (lemma calls, assertions) |
-| `behavior(name, assumes)` | After function `)`, followed by its `pre`/`post` | A case of the contract (ACSL behavior) |
-| `complete_behaviors` / `disjoint_behaviors` | After the behaviors | Some behavior / at most one behavior applies to every admitted input |
-| `invariant(expr)` | After a `while`/`for` condition or a `do` loop's trailing condition | Loop invariant |
-| `decreases(expr [, expr...])` | After loop `)` or function `)` | Termination measure. Tuple form is lex-ordered. Required on executable loops. |
-| `decreases(*)` | After an executable loop or function | Allows divergence; proofs then cover terminating executions (`[partial]`) |
-| `type_invariant(expr)` | Inside class/struct body | Per-instance invariant injected at function boundaries |
-| `ghost { ... }` | Statement | Ghost block — proof steps, stripped by CodeGen |
-| `ghost T x = e;` | Statement | Function-scoped ghost variable |
-| `contract_assert(expr)` | Statement | Verification condition (not a runtime check) |
-| `contract_assert(expr) by { ... }` | Statement | Proves `expr` from a local proof whose other facts are discarded |
-| `calc { e0; op { ... } e1; ... }` | Statement | Chain of proved steps concluding `e0 R en` |
-| `reveal_with_fuel(fn, n)` | Inside ghost blocks | Locally raise Z3 unfolding depth for spec function `fn` |
-| `spec T f(...)` | Declaration | Pure spec function — interpreted by verifier only |
-| `proof void f(...)` | Declaration | Ghost proof function — establishes lemmas |
-| `forall(i, lo, hi, expr)` | Expression | Bounded universal quantifier |
-| `exists(i, lo, hi, expr)` | Expression | Bounded existential quantifier |
-| `forall(i, expr)` / `exists(i, expr)` | Expression | Quantifier over all mathematical integers |
-| `trigger(term)` | Inside a quantifier body | Makes `term` the pattern that instantiates the quantifier |
-| `choose(i, [lo, hi,] expr)` | Expression | Some integer satisfying `expr` (Hilbert ε) |
-| `old(expr)` | Inside `post` or `invariant` | Value of `expr` at function entry |
-| `result` | Inside `post` | Return value of the enclosing function |
+| `cppverify::pre(expr)` | After function `)` | Precondition — caller must satisfy |
+| `cppverify::post(expr)` | After function `)` | Postcondition — callee must establish; may use `cppverify::result` and `cppverify::old(x)` |
+| `cppverify::modifies(lvalue, ...)` | After function `)`, or after a loop's invariants | Frame condition — the cells, ranges `p[lo : n]`, or objects this function or loop may write |
+| `cppverify::aliases(p, q)` | After function `)` | Opts out of implicit non-aliasing for a supported same-pointee pointer/reference address pair |
+| `cppverify::recommends(expr)` | After function `)` (spec only) | Soft precondition for spec functions; reported on verification failure |
+| `cppverify::inductive` | After function `)` (spec returning `bool` only) | The least predicate the body defines: true where a finite derivation shows it |
+| `cppverify::post(...) by { ... }`, `cppverify::decreases(...) by { ... }`, `cppverify::reads(...) by { ... }` | After a spec's clause | Proof steps for that clause's check (lemma calls, assertions) |
+| `cppverify::behavior(name, assumes)` | After function `)`, followed by its `cppverify::pre`/`cppverify::post` | A case of the contract (ACSL behavior) |
+| `cppverify::complete_behaviors` / `cppverify::disjoint_behaviors` | After the behaviors | Some behavior / at most one behavior applies to every admitted input |
+| `cppverify::invariant(expr)` | After a `while`/`for` condition or a `do` loop's trailing condition | Loop invariant |
+| `cppverify::decreases(expr [, expr...])` | After loop `)` or function `)` | Termination measure. Tuple form is lex-ordered. Required on executable loops. |
+| `cppverify::decreases(*)` | After an executable loop or function | Allows divergence; proofs then cover terminating executions (`[partial]`) |
+| `cppverify::type_invariant(expr)` | Inside class/struct body | Per-instance invariant injected at function boundaries |
+| `cppverify::ghost { ... }` | Statement | Ghost block — proof steps, stripped by CodeGen |
+| `cppverify::ghost T x = e;` | Statement | Function-scoped ghost variable |
+| `cppverify::check(expr)` | Statement | Verification condition (not a runtime check) |
+| `cppverify::check(expr) by { ... }` | Statement | Proves `expr` from a local proof whose other facts are discarded |
+| `cppverify::calc { e0; op { ... } e1; ... }` | Statement | Chain of proved steps concluding `e0 R en` |
+| `cppverify::reveal_with_fuel(fn, n)` | Inside ghost blocks | Locally raise Z3 unfolding depth for spec function `fn` |
+| `cppverify::spec T f(...)` | Declaration | Pure spec function — interpreted by verifier only |
+| `cppverify::proof void f(...)` | Declaration | Ghost proof function — establishes lemmas |
+| `cppverify::forall(i, lo, hi, expr)` | Expression | Bounded universal quantifier |
+| `cppverify::exists(i, lo, hi, expr)` | Expression | Bounded existential quantifier |
+| `cppverify::forall(i, expr)` / `cppverify::exists(i, expr)` | Expression | Quantifier over all mathematical integers |
+| `cppverify::trigger(term)` | Inside a quantifier body | Makes `term` the pattern that instantiates the quantifier |
+| `cppverify::choose(i, [lo, hi,] expr)` | Expression | Some integer satisfying `expr` (Hilbert ε) |
+| `cppverify::old(expr)` | Inside `cppverify::post` or `cppverify::invariant` | Value of `expr` at function entry |
+| `cppverify::result` | Inside `cppverify::post` | Return value of the enclosing function |
 | `cppverify::seq`, `set`, `multiset`, `map` | `<cppverify.h>` | Mathematical collections for specifications and ghost code |
 
 ## Function Contracts: pre / post / modifies / aliases / recommends
 
 ```cpp
 void swap(int* a, int* b)
-  pre(a != nullptr && b != nullptr)
-  modifies(*a, *b)
-  post(*a == old(*b) && *b == old(*a))
+  cppverify::pre(a != nullptr && b != nullptr)
+  cppverify::modifies(*a, *b)
+  cppverify::post(*a == cppverify::old(*b) && *b == cppverify::old(*a))
 {
     int t = *a; *a = *b; *b = t;
 }
 ```
 
-- `pre(expr)`: precondition. `expr` must be contextually convertible to bool.
-- `post(expr)`: postcondition. `expr` may reference `result` (return value) and `old(x)` (pre-state).
-- `modifies(lvalue, ...)`: frame condition — see §Pointers and Memory below.
-- `aliases(p, q)`: see §Pointers and Memory below.
-- Multiple `pre` / `post` / `modifies` clauses are conjuncted.
+- `cppverify::pre(expr)`: precondition. `expr` must be contextually convertible to bool.
+- `cppverify::post(expr)`: postcondition. `expr` may reference `cppverify::result` (return value) and `cppverify::old(x)` (pre-state).
+- `cppverify::modifies(lvalue, ...)`: frame condition — see §Pointers and Memory below.
+- `cppverify::aliases(p, q)`: see §Pointers and Memory below.
+- Multiple `cppverify::pre` / `cppverify::post` / `cppverify::modifies` clauses are conjuncted.
 - Parsed after the function declarator's `)` and before `{`.
-- A parameter named in `post` denotes its value at entry, as in ACSL, even
+- A parameter named in `cppverify::post` denotes its value at entry, as in ACSL, even
   when the body assigns the parameter; callers can therefore use the
   postcondition.
 
@@ -64,24 +74,24 @@ void swap(int* a, int* b)
 
 ```cpp
 int abs_value(int x)
-  behavior(nonnegative, x >= 0)
-    post(result == x)
-  behavior(negative, x < 0)
-    pre(x > -2147483647 - 1)
-    post(result == -x)
-  complete_behaviors
-  disjoint_behaviors
+  cppverify::behavior(nonnegative, x >= 0)
+    cppverify::post(cppverify::result == x)
+  cppverify::behavior(negative, x < 0)
+    cppverify::pre(x > -2147483647 - 1)
+    cppverify::post(cppverify::result == -x)
+  cppverify::complete_behaviors
+  cppverify::disjoint_behaviors
 {
   return x < 0 ? -x : x;
 }
 ```
 
-- `behavior(name, assumes)` starts a case, as ACSL behaviors do. The `pre`
-  and `post` clauses after it, up to the next behavior, apply where the
+- `cppverify::behavior(name, assumes)` starts a case, as ACSL behaviors do. The `cppverify::pre`
+  and `cppverify::post` clauses after it, up to the next behavior, apply where the
   assumption holds: `assumes -> pre`, and `old(assumes) -> post`.
-- `complete_behaviors` requires that some behavior applies to every input the
-  preconditions admit; `disjoint_behaviors` that no two do. Either may list
-  the behaviors it relates, e.g. `disjoint_behaviors(low, high)`. Both are
+- `cppverify::complete_behaviors` requires that some behavior applies to every input the
+  preconditions admit; `cppverify::disjoint_behaviors` that no two do. Either may list
+  the behaviors it relates, e.g. `cppverify::disjoint_behaviors(low, high)`. Both are
   checked at function entry.
 
 ### Verdicts that rest on other contracts
@@ -92,7 +102,7 @@ it is `Unresolved` with reason `callee.contract`.
 
 ```cpp
 [[cppverify::trusted]] int clamp_byte(int v)
-  post(0 <= result && result <= 255);
+  cppverify::post(0 <= cppverify::result && cppverify::result <= 255);
 ```
 
 `[[cppverify::trusted]]` (a standard C++ attribute, like Verus's
@@ -105,9 +115,9 @@ verified)`, and every verdict that relies on it, directly or through verified
 callees, carries `[trusts=f]`. A contract without a definition and without
 the mark is not assumed: a warning names it, and its callers are
 `Unresolved` with reason `callee.contract`. A trusted contract writes only
-its `modifies` footprints; without them it writes nothing through a pointer
+its `cppverify::modifies` footprints; without them it writes nothing through a pointer
 or reference to const, and is taken to write the whole heap through a
-mutable one (see `modifies` below).
+mutable one (see `cppverify::modifies` below).
 
 A function the verifier does not verify (no contract, assertion, ghost code,
 or loop contract) may call a contracted one. Its precondition is then
@@ -136,25 +146,25 @@ predicate's unfolding) is established only by verdicts whose own facts are
 established, starting from none. Proofs may rely on each other only through
 a checked measure, as in Dafny's clusters: specs and proof functions that
 reach each other through bodies, contracts, and proof blocks, and share
-`decreases` clauses of one length, form a cluster. Every call between them
+`cppverify::decreases` clauses of one length, form a cluster. Every call between them
 must lower the measure, and each uses another's postcondition, and a
 recursive spec's definition, only where that one's measure is lower, so
 their proofs hold together by well-founded induction. A lemma about a spec
 that the spec's own proof uses therefore works with lexicographic measures:
 
 ```cpp
-proof void total_nonneg(int n);
+cppverify::proof void total_nonneg(int n);
 
-spec int total(int n)
-  decreases(n, 0)
-  post(result >= 0) by { if (n > 0) total_nonneg(n - 1); }
+cppverify::spec int total(int n)
+  cppverify::decreases(n, 0)
+  cppverify::post(cppverify::result >= 0) by { if (n > 0) total_nonneg(n - 1); }
 {
   return n <= 0 ? 0 : total(n - 1) + n;
 }
 
-proof void total_nonneg(int n)
-  decreases(n, 1)
-  post(total(n) >= 0)
+cppverify::proof void total_nonneg(int n)
+  cppverify::decreases(n, 1)
+  cppverify::post(total(n) >= 0)
 {
   if (n > 0)
     total_nonneg(n - 1);
@@ -164,7 +174,7 @@ proof void total_nonneg(int n)
 The lemma may unfold `total(n)` since `(n, 0)` is below `(n, 1)`, and the
 block may call the lemma at `n - 1` since `(n - 1, 1)` is below `(n, 0)`.
 Without a shared measure such proofs are a circle, and every verdict on it
-is `Unresolved` with reason `proof.cycle`. Frames (`reads`) are never used
+is `Unresolved` with reason `proof.cycle`. Frames (`cppverify::reads`) are never used
 this way.
 
 ## Loop Contracts: invariant / decreases
@@ -173,22 +183,22 @@ this way.
 
 ```cpp
 while (i < n)
-  invariant(2 <= i && i <= n)
-  invariant(fib.size() == i)
-  decreases(n - i)
+  cppverify::invariant(2 <= i && i <= n)
+  cppverify::invariant(fib.size() == i)
+  cppverify::decreases(n - i)
 { ... }
 ```
 
-- `invariant(expr)`: must hold on entry and be preserved by each iteration.
-- `decreases(expr [, expr...])`: termination measure. Single expression must be non-negative and strictly decreasing. Tuple form is lex-ordered: `decreases(a, b)` means `(a, b)` strictly decreases lexicographically, and only the first component that changes must stay non-negative.
+- `cppverify::invariant(expr)`: must hold on entry and be preserved by each iteration.
+- `cppverify::decreases(expr [, expr...])`: termination measure. Single expression must be non-negative and strictly decreasing. Tuple form is lex-ordered: `cppverify::decreases(a, b)` means `(a, b)` strictly decreases lexicographically, and only the first component that changes must stay non-negative.
 - Verification is total correctness, as in Verus: every executable loop needs
-  `decreases`. Without one the function is `Unresolved` with reason
+  `cppverify::decreases`. Without one the function is `Unresolved` with reason
   `decreases.missing`, unless BMC proves the loop's unwinding.
-  `decreases(*)` on a loop or an executable function allows divergence; the
+  `cppverify::decreases(*)` on a loop or an executable function allows divergence; the
   proof then covers only executions that terminate, and that function and
   every caller are reported `Verified ... [partial]` with a warning (JSON
-  `"partial": true`). Ghost and proof loops cannot use `decreases(*)`.
-- `modifies(...)` after a loop's invariants is ACSL's `loop assigns`: the
+  `"partial": true`). Ghost and proof loops cannot use `cppverify::decreases(*)`.
+- `cppverify::modifies(...)` after a loop's invariants is ACSL's `loop assigns`: the
   cells, ranges, and objects the loop may write, read in each iteration's
   state. Each iteration starts with every other cell unchanged since the loop
   began, and must end (and `continue`) that way, so a range such as
@@ -198,15 +208,15 @@ while (i < n)
 
 ```cpp
 for (int i = 0; i < n; i = i + 1)
-  invariant(0 <= i && i <= n)
-  modifies(a[0 : n])
-  decreases(n - i)
+  cppverify::invariant(0 <= i && i <= n)
+  cppverify::modifies(a[0 : n])
+  cppverify::decreases(n - i)
 {
   a[i] = 0;
 }
 ```
 
-  Without `modifies`, a loop writes only the objects its stores and calls
+  Without `cppverify::modifies`, a loop writes only the objects its stores and calls
   reach, inferred from the body: every other object keeps its value without
   an invariant saying so.
 
@@ -218,17 +228,17 @@ for (int i = 0; i < n; i = i + 1)
 do {
     i = i + 1;
 } while (i < n)
-  invariant(i >= 1 && i <= n)
-  decreases(n - i);
+  cppverify::invariant(i >= 1 && i <= n)
+  cppverify::decreases(n - i);
 ```
 
 The body executes once before invariant establishment. CppVerify verifies that
 mandatory execution from the concrete incoming state, establishes the invariant
 after it, and then applies the ordinary modular `while` rule to every subsequent
-iteration. `old(expr)` in any loop invariant denotes the enclosing function's
+iteration. `cppverify::old(expr)` in any loop invariant denotes the enclosing function's
 entry state, not the previous iteration. A function local has no value at
-function entry and is rejected inside `old(...)`; snapshot such a value in an
-ordinary local and refer to that snapshot without `old`.
+function entry and is rejected inside `cppverify::old(...)`; snapshot such a value in an
+ordinary local and refer to that snapshot without `cppverify::old`.
 
 `return`, `break`, and `continue` may leave a `while` or `for` loop from an
 arbitrary inductive iteration. A return checks the postcondition in its own
@@ -243,24 +253,24 @@ loop fail closed.
 <!-- cppverify-example: fragment -->
 
 ```cpp
-contract_assert(x > 0);
+cppverify::check(x > 0);
 ```
 
 - Generates a verification condition (not a runtime check).
 - In ghost blocks, used for proof steps: once proved, the condition is
   assumed for the rest of the function.
 - A function without contract clauses is still verified when its body has a
-  `contract_assert`, ghost code, or a loop contract.
+  `cppverify::check`, ghost code, or a loop contract.
 
 <!-- cppverify-example: fragment -->
 
 ```cpp
-contract_assert(sq(a) <= sq(b)) by {
+cppverify::check(sq(a) <= sq(b)) by {
     sq_monotone(a, b);
 }
 ```
 
-- `contract_assert(c) by { proof }` proves `c` from a ghost proof, as Verus's
+- `cppverify::check(c) by { proof }` proves `c` from a ghost proof, as Verus's
   `assert ... by` and Dafny's `assert ... by` do: the proof's facts (lemma
   posts, its own assertions, its locals) stay inside it, and only `c` holds
   afterwards. It is encoded as `if (*) { proof; assert c; assume false }
@@ -270,21 +280,21 @@ contract_assert(sq(a) <= sq(b)) by {
 <!-- cppverify-example: fragment -->
 
 ```cpp
-contract_assert(forall(k, 0, n, a[k] <= a[n - 1])) by {
+cppverify::check(cppverify::forall(k, 0, n, a[k] <= a[n - 1])) by {
     pair_ordered(a, n, k, n - 1);
 }
 ```
 
-- With a `forall` as the condition, the proof is about one arbitrary value of
+- With a `cppverify::forall` as the condition, the proof is about one arbitrary value of
   its variable, as Verus's `assert forall ... by`: inside the block `k` is in
   scope, lies in `[lo, hi)`, and cannot be assigned; the block must establish
-  the body for that `k`, and the whole `forall` holds afterwards (universal
+  the body for that `k`, and the whole `cppverify::forall` holds afterwards (universal
   generalization). An implication is a branch: `if (A(k)) lemma(k);`.
 
 <!-- cppverify-example: fragment -->
 
 ```cpp
-calc {
+cppverify::calc {
     sq(a);
     <= { sq_monotone(a, b); }
     sq(b);
@@ -292,32 +302,31 @@ calc {
 }
 ```
 
-- `calc { e0; op { proof } e1; ...; en; }` proves each step `e(k-1) op ek`
+- `cppverify::calc { e0; op { proof } e1; ...; en; }` proves each step `e(k-1) op ek`
   as an assert-by (the block is optional) and concludes `e0 R en`: `==` when
   every step is `==`, `<` or `>` when some step is strict, else `<=` or `>=`.
-  Mixing `<`-like and `>`-like steps is rejected. `calc` is contextual: a
-  type or variable named `calc` keeps its meaning.
+  Mixing `<`-like and `>`-like steps is rejected.
 
 ## Ghost Blocks
 
 <!-- cppverify-example: fragment -->
 
 ```cpp
-ghost {
+cppverify::ghost {
     lemma_fibo_monotonic(i, n);
-    contract_assert(fibo(i) <= fibo(n));
-    reveal_with_fuel(fibo, 3);
+    cppverify::check(fibo(i) <= fibo(n));
+    cppverify::reveal_with_fuel(fibo, 3);
 }
 ```
 
-- Code inside `ghost { }` exists only for verification.
-- May contain `contract_assert`, `reveal_with_fuel`, spec/proof function calls, ghost variable declarations.
+- Code inside `cppverify::ghost { }` exists only for verification.
+- May contain `cppverify::check`, `cppverify::reveal_with_fuel`, spec/proof function calls, ghost variable declarations.
 - May assign only ghost-local variables and their direct dot-fields; executable
   locals, globals, pointees, executable calls, and enclosing-function returns
   are rejected.
-- Ghost loops require `decreases`, because the loop is absent at runtime.
+- Ghost loops require `cppverify::decreases`, because the loop is absent at runtime.
 - Stripped entirely by CodeGen — zero runtime cost.
-- `ghost T x = e;` declares a ghost variable in the enclosing function scope,
+- `cppverify::ghost T x = e;` declares a ghost variable in the enclosing function scope,
   like Verus's `let ghost`: later ghost code, assertions, and loop invariants
   may name it, so an invariant can refer to a value from before the loop.
   Sema rejects any use from executable code.
@@ -327,9 +336,9 @@ ghost {
 <!-- cppverify-example: label fibo -->
 
 ```cpp
-spec int fibo(int n)
-  decreases(n)
-  post(result >= 0)
+cppverify::spec int fibo(int n)
+  cppverify::decreases(n)
+  cppverify::post(cppverify::result >= 0)
 {
     if (n <= 0) return 0;
     if (n == 1) return 1;
@@ -338,27 +347,27 @@ spec int fibo(int n)
 ```
 
 - Pure mathematical functions used in contracts.
-- Usable only in contracts, ghost code, and other `spec` or `proof`
+- Usable only in contracts, ghost code, and other `cppverify::spec` or `cppverify::proof`
   functions. A spec is never compiled, so Sema rejects a reference from
   executable code (a body, initializer, or default argument).
-- Must be total (all paths return, termination proven via `decreases`).
+- Must be total (all paths return, termination proven via `cppverify::decreases`).
 - No side effects, no mutation, no I/O. A spec may read memory through its
   pointer parameters but never write it; each call is evaluated in the heap
   state a load at that point would read (the current state, the entry state
-  inside `old(...)`, or the call-site state of a callee contract).
-- Can be recursive (with `decreases`). Its termination is proved without its
+  inside `cppverify::old(...)`, or the call-site state of a callee contract).
+- Can be recursive (with `cppverify::decreases`). Its termination is proved without its
   own definition, so every recursive call must lower the measure whatever the
-  spec's other calls return; a call inside `forall` or `exists` must lower it
+  spec's other calls return; a call inside `cppverify::forall` or `cppverify::exists` must lower it
   for every bound value. Functions of one kind (spec, proof, or executable)
   may recurse through each other when they share a measure of one length that
   every call within the cycle lowers.
-- May declare `reads(p, n)`: the cells `p[0..n)` it depends on, checked
+- May declare `cppverify::reads(p, n)`: the cells `p[0..n)` it depends on, checked
   against its body (every load, and every range a heap-reading callee reads,
   lies inside). A write outside them leaves every application unchanged, and
   callers receive that frame at each store without unfolding the spec.
-- Takes no `pre`, `modifies`, or `aliases`: a spec is defined for every
-  argument, and `recommends` states its intended domain.
-- May declare `post(...)`, proved with its termination by well-founded
+- Takes no `cppverify::pre`, `cppverify::modifies`, or `cppverify::aliases`: a spec is defined for every
+  argument, and `cppverify::recommends` states its intended domain.
+- May declare `cppverify::post(...)`, proved with its termination by well-founded
   induction on the measure (a recursive call assumes the post only where its
   measure is lower) and assumed at every application, including those
   inside the unfoldings of its definition that a proof receives (as Dafny's
@@ -366,8 +375,8 @@ spec int fibo(int n)
   `fibo(j - 2) >= 0` without naming it. A failed post demotes
   the proofs that relied on it (`spec.post`, or `spec.termination` for a
   recursive spec).
-- Any `post`, `decreases`, or `reads` clause of a spec definition may be
-  followed by a proof block, `post(Q) by { ... }`: ghost code that runs in
+- Any `cppverify::post`, `cppverify::decreases`, or `cppverify::reads` clause of a spec definition may be
+  followed by a proof block, `cppverify::post(Q) by { ... }`: ghost code that runs in
   that clause's check, after the facts the check assumes and before its
   obligations, as a proof function's body runs before its postcondition.
   It is where the solver gets the step it cannot find, such as a lemma at
@@ -376,14 +385,14 @@ spec int fibo(int n)
 <!-- cppverify-example: fragment -->
 
 ```cpp
-spec int area(int a, int b)
-  post(a < 0 || b < 0 || result == mul(b, a)) by { mul_is(a, b); mul_is(b, a); }
+cppverify::spec int area(int a, int b)
+  cppverify::post(a < 0 || b < 0 || cppverify::result == mul(b, a)) by { mul_is(a, b); mul_is(b, a); }
 {
   return mul(a, b);
 }
 ```
 
-  In a post block, `result` is the value the body returns. An application
+  In a post block, `cppverify::result` is the value the body returns. An application
   of the spec (or of its recursion cycle) in a block assumes its
   postconditions where the measure is lower, which states the induction
   hypothesis at an argument of the user's choice. The block is ghost code:
@@ -393,7 +402,7 @@ spec int area(int a, int b)
   check. A block belongs to the definition, not to a declaration, and only
   a spec's clauses take one: other functions prove their contracts in their
   bodies.
-- May declare `when(c)`: the body defines the spec only where `c` holds,
+- May declare `cppverify::when(c)`: the body defines the spec only where `c` holds,
   termination is checked there, and elsewhere its value is an uninterpreted
   function of its arguments. A post holds within the domain.
 - **Integer semantics: mathematical (unbounded `Int` in Z3) by default.** See §Integer Semantics.
@@ -401,36 +410,35 @@ spec int area(int a, int b)
 - Can call other spec functions.
 - Type-checked by Clang Sema like normal functions.
 
-**Why termination must be verified:** A non-terminating spec function introduces a logical contradiction — Z3 can derive `bad(0) == bad(0) + 1`, therefore `0 == 1`, and from that prove anything. The `decreases` clause is the only thing about a spec function that needs verification. Its body is the mathematical definition and is axiomatically true by construction once the spec terminates, which is why the termination check cannot use it: a diverging spec's equations can be contradictory exactly where it diverges. Non-recursive spec functions need no verification at all.
+**Why termination must be verified:** A non-terminating spec function introduces a logical contradiction — Z3 can derive `bad(0) == bad(0) + 1`, therefore `0 == 1`, and from that prove anything. The `cppverify::decreases` clause is the only thing about a spec function that needs verification. Its body is the mathematical definition and is axiomatically true by construction once the spec terminates, which is why the termination check cannot use it: a diverging spec's equations can be contradictory exactly where it diverges. Non-recursive spec functions need no verification at all.
 
 ### Inductive predicates
 
 ```cpp
-spec bool edge(int a, int b) { return b == a + 1 || b == 2 * a; }
+cppverify::spec bool edge(int a, int b) { return b == a + 1 || b == 2 * a; }
 
-spec bool reach(int a, int b)
-  inductive
-  post(!result || a < 0 || a <= b)
+cppverify::spec bool reach(int a, int b)
+  cppverify::inductive
+  cppverify::post(!cppverify::result || a < 0 || a <= b)
 {
-  return a == b || exists(c, edge(a, c) && reach(c, b));
+  return a == b || cppverify::exists(c, edge(a, c) && reach(c, b));
 }
 ```
 
-- `inductive` makes a spec returning `bool` the least predicate its body
+- `cppverify::inductive` makes a spec returning `bool` the least predicate its body
   defines, as Dafny's `least predicate` and Coq's inductive propositions: it
   holds exactly where a finite derivation shows it. It needs no measure, so
   it describes reachability, derivability, or a process that may run forever
-  (`n == 1 || (n > 1 && reaches_one(next(n)))`). `inductive` is contextual,
-  like `reads`.
+  (`n == 1 || (n > 1 && reaches_one(next(n)))`).
 - The body returns a condition, under `if` and `else` at most, in which the
   predicate occurs only positively: as a conjunct or disjunct, a branch of
-  `?:`, under `exists`, or under a bounded `forall`; never negated, compared,
-  converted, in a condition, in an argument, or under a `forall` without
-  bounds. It takes no `decreases` or `when`, and it may read memory.
+  `?:`, under `cppverify::exists`, or under a bounded `cppverify::forall`; never negated, compared,
+  converted, in a condition, in an argument, or under a `cppverify::forall` without
+  bounds. It takes no `cppverify::decreases` or `cppverify::when`, and it may read memory.
   Predicates that apply each other are defined together, each under the same
   conditions; a predicate never applies itself through a spec that is not
   inductive, since the conditions could not be checked there.
-- Meaning: with `F` its body, `P(x)` is `exists(h, P.step(h, x))`, where the
+- Meaning: with `F` its body, `P(x)` is `cppverify::exists(h, P.step(h, x))`, where the
   generated spec `P.step(h, x)` is `h > 0 && F` with each application `Q(a)`
   of a predicate of its group read as `Q.step(h - 1, a)`: `F` applied `h`
   times to false. The conditions above make `F` monotone and continuous, so
@@ -439,14 +447,14 @@ spec bool reach(int a, int b)
   application: one unfolding, both ways (introduction and inversion), in
   the memory state where the application is evaluated. An application that
   appears only inside an unfolding is unfolded once it is named, as in
-  `contract_assert(reach(2, 4));`. `reveal(P)` gives the definition
+  `cppverify::check(reach(2, 4));`. `cppverify::reveal(P)` gives the definition
   instead.
 - Deeper unfolding, as Stainless unrolls recursive functions:
-  `reveal_with_fuel(P, n)` unfolds the applications inside unfoldings `n`
+  `cppverify::reveal_with_fuel(P, n)` unfolds the applications inside unfoldings `n`
   levels deep, and a verdict that still depends on `P` (`spec.fuel`,
   `spec.hidden`, `counterexample.unchecked`) is retried with one more level
   at a time, up to four. An application at constant arguments, such as
-  `post(reach(1, 4))`, is decided by the counterexample check before
+  `cppverify::post(reach(1, 4))`, is decided by the counterexample check before
   solving, and the solver receives the unfoldings along the derivation it
   found. Every unfolding is a proved theorem, so none of this can make a
   false claim verify.
@@ -468,19 +476,19 @@ spec bool reach(int a, int b)
   `Unresolved` with reason `spec.inductive`, and so is every proof that
   relies on its unfolding.
 - A postcondition states what every derivation satisfies and has the form
-  `!result || Q`. It is proved for `P.step` by induction on `h`, which is
+  `!cppverify::result || Q`. It is proved for `P.step` by induction on `h`, which is
   induction on derivations: with the definition of `P.step` visible, each
   premise (an application at a lower height) may assume it and is itself a
   derivation of its predicate. It then holds at every application of `P`. A
   failure is reported as `spec post by induction failed: P`, and proofs
   that rely on it are `spec.post`. A proof block on it,
-  `post(!result || Q) by { ... }`, is the induction step: it runs for a
+  `cppverify::post(!cppverify::result || Q) by { ... }`, is the induction step: it runs for a
   derivation of `x` whose premises satisfy `Q`, and in it `P` is the
   predicate itself (a premise is a derivation of it).
 - `Q` may apply `P` and the predicates defined with it, as in transitivity:
-  `post(!result || forall(c, !reach(b, c) || reach(a, c)))`. There they are
+  `cppverify::post(!cppverify::result || cppverify::forall(c, !reach(b, c) || reach(a, c)))`. There they are
   seen through their unfoldings, which rest on the proved rules, never
-  through the postcondition being proved: `post(!result || !bad(n))` on a
+  through the postcondition being proved: `cppverify::post(!cppverify::result || !bad(n))` on a
   predicate with `bad(0)` true fails.
 - A counterexample is certified against the true definition of `P` either
   way. When the arguments `P`'s derivations can reach from `v` are finitely
@@ -501,7 +509,7 @@ spec bool reach(int a, int b)
   where the least fixpoint is false (derivations that go round forever)
   is `spec.fuel`: `every counterexample found needs P(v) to hold, but no
   derivation shows it`, which only induction shows; a postcondition
-  `!result || Q` or a lemma proved by induction supplies it.
+  `!cppverify::result || Q` or a lemma proved by induction supplies it.
 
 ### Automatic induction and counterexamples too large to compute
 
@@ -509,7 +517,7 @@ When no finite unfolding settles a claim about a recursive spec, the verifier
 tries well-founded inductions over it, as Dafny's automatic induction and
 Lean's and Isabelle's functional induction do: the claim at every value
 smaller in a measure, everything else fixed. The measure is a recursive
-spec's own `decreases` at the application the claim makes, and the
+spec's own `cppverify::decreases` at the application the claim makes, and the
 hypothesis is also given at the values the spec's recursion reaches, through
 the other members of its recursion group and under quantifiers; strong
 induction on an integer variable is tried too. Smaller means smaller by the
@@ -519,18 +527,18 @@ function's own claim, without the facts the verifier added. A verified
 result names the induction:
 
 ```cpp
-spec int fibo(int n)
-  decreases(n)
-  post(result >= 0)
+cppverify::spec int fibo(int n)
+  cppverify::decreases(n)
+  cppverify::post(cppverify::result >= 0)
 {
     if (n <= 0) return 0;
     if (n == 1) return 1;
     return fibo(n - 2) + fibo(n - 1);
 }
 
-proof void grows(int n)   // Verified ... [by induction following fibo]
-  pre(n >= 3)
-  post(fibo(n) >= n - 1)
+cppverify::proof void grows(int n)   // Verified ... [by induction following fibo]
+  cppverify::pre(n >= 3)
+  cppverify::post(fibo(n) >= n - 1)
 {
 }
 ```
@@ -549,16 +557,16 @@ there. The failure rests on those facts and contracts:
 <!-- cppverify-example: fails small_power -->
 
 ```cpp
-spec int pow2(int n)
-  decreases(n)
-  post(result >= n + 1)
+cppverify::spec int pow2(int n)
+  cppverify::decreases(n)
+  cppverify::post(cppverify::result >= n + 1)
 {
     return n <= 0 ? 1 : 2 * pow2(n - 1);
 }
 
-proof void small_power(int n)   // fails at n >= 1000000000, confirmed by proof
-  pre(n >= 1000000000)
-  post(pow2(n) < 1000)
+cppverify::proof void small_power(int n)   // fails at n >= 1000000000, confirmed by proof
+  cppverify::pre(n >= 1000000000)
+  cppverify::post(pow2(n) < 1000)
 {
 }
 ```
@@ -570,27 +578,27 @@ says both. A lemma that refutes the claim settles it:
 <!-- cppverify-example: fails fibo_small -->
 
 ```cpp
-spec int fibo(int n)
-  decreases(n)
-  post(result >= 0)
+cppverify::spec int fibo(int n)
+  cppverify::decreases(n)
+  cppverify::post(cppverify::result >= 0)
 {
     if (n <= 0) return 0;
     if (n == 1) return 1;
     return fibo(n - 2) + fibo(n - 1);
 }
 
-proof void fibo_at_least_5(int n)
-  pre(n >= 5)
-  post(fibo(n) >= 5)
-  decreases(n)
+cppverify::proof void fibo_at_least_5(int n)
+  cppverify::pre(n >= 5)
+  cppverify::post(fibo(n) >= 5)
+  cppverify::decreases(n)
 {
     if (n >= 6)
         fibo_at_least_5(n - 1);
 }
 
-proof void fibo_small(int n)   // fails at n = 1000000000, confirmed with
-  pre(n >= 1000000000)         // the contract of fibo_at_least_5
-  post(fibo(n) < 5)
+cppverify::proof void fibo_small(int n)   // fails at n = 1000000000, confirmed with
+  cppverify::pre(n >= 1000000000)         // the contract of fibo_at_least_5
+  cppverify::post(fibo(n) < 5)
 {
 }
 ```
@@ -605,17 +613,17 @@ every value. So a lemma is never used where an assumption of its proof fails,
 whatever its parameters' types, and it applies wherever some value of the
 open parameters meets those assumptions.
 
-### `recommends` — soft preconditions for spec functions
+### `cppverify::recommends` — soft preconditions for spec functions
 
 ```cpp
-spec int safe_div(int a, int b)
-  recommends(b != 0)
+cppverify::spec int safe_div(int a, int b)
+  cppverify::recommends(b != 0)
 {
     return a / b;
 }
 ```
 
-- `recommends` clauses do **not** generate VCs at call sites. Spec functions remain total.
+- `cppverify::recommends` clauses do **not** generate VCs at call sites. Spec functions remain total.
 - They are checked only on verification failure of any function calling the spec, and reported as warnings.
 - Cheap UX recovery — gives users feedback that they probably misused a spec function without imposing real preconditions.
 
@@ -629,13 +637,13 @@ constexpr bool is_power_of_two(int n) {
 }
 
 void allocate(int n)
-  pre(is_power_of_two(n))
+  cppverify::pre(is_power_of_two(n))
 { ... }
 ```
 
 Any uncontracted `constexpr` definition is automatically available as a spec
-function — no `spec` keyword or re-declaration. A `constexpr` function with
-`pre`/`post` clauses remains a modular executable function so its contract
+function — no `cppverify::spec` or re-declaration. A `constexpr` function with
+`cppverify::pre`/`cppverify::post` clauses remains a modular executable function so its contract
 cannot be bypassed through implicit lifting.
 
 **Soundness:** Clang enforces the restrictions on a `constexpr` definition.
@@ -651,8 +659,8 @@ an overflowing call is rejected rather than interpreted as signed wraparound.
 For C++17 signed left shift, a nonnegative value may set the sign bit when the
 shifted mathematical value fits the corresponding unsigned type.
 
-**Contrast with explicit `spec`:** `spec int fibo(int n)` uses mathematical integers (Z3 `Int`, unbounded). Users pick:
-- Want fast verification with abstract math semantics → write `spec`.
+**Contrast with explicit `cppverify::spec`:** `cppverify::spec int fibo(int n)` uses mathematical integers (Z3 `Int`, unbounded). Users pick:
+- Want fast verification with abstract math semantics → write `cppverify::spec`.
 - Want code reuse with runtime-honest semantics → write `constexpr` (and accept the machine-integer encoding cost).
 
 Calls retain the callee's integer semantics, in contracts and in ghost and
@@ -685,10 +693,10 @@ This is unique to being inside the compiler.
 <!-- cppverify-example: with fibo -->
 
 ```cpp
-proof void lemma_fibo_monotonic(int i, int j)
-  pre(i <= j)
-  post(fibo(i) <= fibo(j))
-  decreases(j - i)
+cppverify::proof void lemma_fibo_monotonic(int i, int j)
+  cppverify::pre(i <= j)
+  cppverify::post(fibo(i) <= fibo(j))
+  cppverify::decreases(j - i)
 {
     if (i < j)
         lemma_fibo_monotonic(i, j - 1);  // fibo(i) <= fibo(j - 1) <= fibo(j)
@@ -696,12 +704,12 @@ proof void lemma_fibo_monotonic(int i, int j)
 ```
 
 - Ghost functions that serve as proofs.
-- Must terminate (proven via `decreases`).
+- Must terminate (proven via `cppverify::decreases`).
 - Body establishes that precondition implies postcondition.
 - Can call other proof functions and spec functions.
 - May mutate local proof values, but cannot write executable memory/global
   state or call executable functions.
-- Every proof-function loop requires `decreases`.
+- Every proof-function loop requires `cppverify::decreases`.
 - Not compiled — exist only for verification.
 - **Integer semantics:** machine integers (matches `exec`).
 
@@ -710,14 +718,14 @@ proof void lemma_fibo_monotonic(int i, int j)
 <!-- cppverify-example: fragment -->
 
 ```cpp
-post(forall(i, 2, n, ret[i] == ret[i-1] + ret[i-2]))
+cppverify::post(cppverify::forall(i, 2, n, ret[i] == ret[i-1] + ret[i-2]))
 //   forall(binder, lo, hi, body)
 //   means: ∀i. lo ≤ i < hi → body
 
-pre(exists(j, 0, n, arr[j] == target))
+cppverify::pre(cppverify::exists(j, 0, n, arr[j] == target))
 //   means: ∃j. 0 ≤ j < n ∧ body
 
-post(forall(k, sq(k) >= 0))
+cppverify::post(cppverify::forall(k, sq(k) >= 0))
 //   forall(binder, body): ∀k ∈ ℤ. body
 ```
 
@@ -742,18 +750,16 @@ post(forall(k, sq(k) >= 0))
 <!-- cppverify-example: fragment -->
 
 ```cpp
-pre(forall(k, 0, n, trigger(a[k]) > 0))
+cppverify::pre(cppverify::forall(k, 0, n, cppverify::trigger(a[k]) > 0))
 ```
 
-- `trigger(term)` marks `term` as the pattern that instantiates the
+- `cppverify::trigger(term)` marks `term` as the pattern that instantiates the
   quantifier, as Verus's `#[trigger]` does. It must be a memory read, a
   collection read (`s[k]`, `contains`, `count`, map `[]`), or a call of a
   recursive spec function, and it must mention a quantified variable; other
   marks are ignored with a warning (a non-recursive spec is replaced by its
   body, so mark a term of the body). Several marks in one body form one
   multi-pattern. Without marks the solver chooses patterns itself.
-- `trigger` is contextual: a function or variable named `trigger` keeps its
-  meaning.
 - `--profile-quantifiers` reruns each query the solver left unresolved and
   reports how often each quantifier was instantiated, and up to which
   generation (`note: the quantifier at L:C was instantiated N times, up to
@@ -764,18 +770,17 @@ pre(forall(k, 0, n, trigger(a[k]) > 0))
 ### choose
 
 ```cpp
-spec int half(int n) { return choose(k, 2 * k == n); }
-spec int index_of(const int *a, int n, int x) { return choose(k, 0, n, a[k] == x); }
+cppverify::spec int half(int n) { return cppverify::choose(k, 2 * k == n); }
+cppverify::spec int index_of(const int *a, int n, int x) { return cppverify::choose(k, 0, n, a[k] == x); }
 ```
 
-- `choose(k, body)` is an integer for which `body` holds, when one exists,
-  and otherwise an unspecified integer (Hilbert ε); `choose(k, lo, hi, body)`
-  chooses in `[lo, hi)`. Each `choose` is a function of the values its body
+- `cppverify::choose(k, body)` is an integer for which `body` holds, when one exists,
+  and otherwise an unspecified integer (Hilbert ε); `cppverify::choose(k, lo, hi, body)`
+  chooses in `[lo, hi)`. Each `cppverify::choose` is a function of the values its body
   mentions, so it is the same for the same values.
 - The verifier knows only that: a claim true for some choices but not all
   fails with a certified counterexample for another choice.
-- `choose` exists only for verification; Sema rejects it in executable code.
-  It is contextual, like `trigger`.
+- `cppverify::choose` exists only for verification; Sema rejects it in executable code.
 
 ## Pointers and Memory
 
@@ -849,7 +854,7 @@ loops, and allocation/deallocation inside loops fail closed.
 A checked modular interface admits a direct dynamic pointer argument to a
 verified, non-allocating executable callee with a matching scalar pointer
 parameter. Identity is substituted into call-site validity checks, and
-ordinary pre/`modifies`/post abstraction controls the value heap. A recursive
+ordinary pre/`cppverify::modifies`/post abstraction controls the value heap. A recursive
 VCR scan admits direct scalar access, acyclic direct-pointer forwarding, and
 executable/spec helpers over loaded scalar values. It rejects offset/subscript
 access, pointer copies/rebinding, deallocation, recursive scan cycles, nested
@@ -891,7 +896,7 @@ default; `--no-check-ub` turns it off, leaving only the core expression
 definedness checks). `valid(p, n)` in a precondition declares a buffer
 extent: `p` points to `n` objects. `<cppverify.h>` provides it as
 `cppverify::valid` for every pointee type (verification-only, like the spec
-collections); a user-declared `spec bool valid(T *p, int n)` is the same
+collections); a user-declared `cppverify::spec bool valid(T *p, int n)` is the same
 marker. It entails `n >= 0`; a positive extent
 entails non-null abstractly valid storage, while extent zero permits null.
 Every access rooted at `p` must then prove its index lies in `[0, n)`.
@@ -921,7 +926,7 @@ a call has no known origin. Origins decide three things:
 - an access or a step must stay in its origin's object, so `*q` one past the
   end of `a` is rejected even where another object starts;
 - a pointer difference needs one origin on both sides;
-- a loop writes only its stores' origins (and, with a function `modifies`,
+- a loop writes only its stores' origins (and, with a function `cppverify::modifies`,
   only where they meet it), so every other object keeps its value without
   an invariant.
 
@@ -953,26 +958,26 @@ pre(p != q && p != r && q != r && ...)   // for all distinct mut ptr/ref pairs
 - A pointer carrying a `valid(p, n)` extent contributes the
   whole extent (`n * sizeof(T)` bytes) as its complete object, so the pair is
   disjoint unless either pointer is null or either extent is empty. Callers
-  prove disjointness of the extents they pass. An `aliases` pair keeps the
+  prove disjointness of the extents they pass. An `cppverify::aliases` pair keeps the
   single-object rule and may share storage, as `memmove` does.
 - **This is NOT the C++ `__restrict__` keyword.** `__restrict__` is a compiler optimization hint affecting codegen; the implicit assumption above is a verification-level precondition affecting correctness. The keyword `__restrict__`, if present, is a no-op for verification.
 
-### 3. `aliases(p, q)` opt-out
+### 3. `cppverify::aliases(p, q)` opt-out
 
 If a function legitimately accepts aliased parameters, declare it:
 
 ```cpp
 void copy_or_self(int* dst, int* src)
-  aliases(dst, src)
-  pre(dst != nullptr && src != nullptr)
-  modifies(*dst)
-  post(*dst == old(*src))
+  cppverify::aliases(dst, src)
+  cppverify::pre(dst != nullptr && src != nullptr)
+  cppverify::modifies(*dst)
+  cppverify::post(*dst == cppverify::old(*src))
 {
     *dst = *src;
 }
 ```
 
-The `aliases(dst, src)` clause disables the implicit `dst != src` precondition
+The `cppverify::aliases(dst, src)` clause disables the implicit `dst != src` precondition
 for this function. The body must verify under both `dst == src` and `dst != src`.
 The same rule applies to supported scalar lvalue-reference parameters.
 
@@ -981,13 +986,13 @@ The same rule applies to supported scalar lvalue-reference parameters.
 Contracted executable free functions support `T&` and `const T&` parameters
 when `T` is `bool`, integral, or enum. The reference binding lowers to an
 immutable VCR address. A value use is a heap load, assignment is a heap store,
-and `old(ref)` reads through the same address in the entry heap.
+and `cppverify::old(ref)` reads through the same address in the entry heap.
 
 Every reference receives a generated non-null, live, and initialized entry
 precondition. Distinct address parameters are object-range disjoint by default
-when at least one is mutable; `aliases` permits the same complete object.
-`modifies(ref)` is an open region rooted at the referent, matching
-`modifies(*p)`.
+when at least one is mutable; `cppverify::aliases` permits the same complete object.
+`cppverify::modifies(ref)` is an open region rooted at the referent, matching
+`cppverify::modifies(*p)`.
 
 A reference formal may bind to another supported reference, an initialized
 ordinary scalar local, or a direct pointer dereference. Local `T&`/`const T&`
@@ -1004,13 +1009,13 @@ check rejects accidental scalar use of the same local. Lifetime is
 conservatively extended to function return, which is unobservable under the
 non-escaping boundary.
 
-A provenance-backed scalar actual permits an open-region `modifies(ref)` or
-`modifies(*p)` footprint to be framed as its exact scalar cell only after the
+A provenance-backed scalar actual permits an open-region `cppverify::modifies(ref)` or
+`cppverify::modifies(*p)` footprint to be framed as its exact scalar cell only after the
 callee passes the structural non-escape scan. Immutable local reference aliases
 are tracked transitively by that scan and retain the same owned lifetime
 identity.
 
-Addressable local declarations inside loops, `old(local)`, `old(local_ref)`,
+Addressable local declarations inside loops, `cppverify::old(local)`, `cppverify::old(local_ref)`,
 subscript/field/conditional bindings, temporaries, reference returns,
 address-taking, rvalue references, and non-scalar referents remain fail-closed.
 An outer automatic local and a local reference declaration may be used inside a
@@ -1018,28 +1023,28 @@ loop. Recursive executable bodies that allocate an automatic object or store
 through references fail closed until the termination collector models heap
 state updates.
 
-### 4. `modifies(...)` frame condition
+### 4. `cppverify::modifies(...)` frame condition
 
 ```cpp
 void incr_first(int* a, int* b)
-  pre(a != nullptr && b != nullptr && *a < 2147483647)
-  modifies(*a)              // promises: only writes to *a; *b unchanged
-  post(*a == old(*a) + 1)
+  cppverify::pre(a != nullptr && b != nullptr && *a < 2147483647)
+  cppverify::modifies(*a)              // promises: only writes to *a; *b unchanged
+  cppverify::post(*a == cppverify::old(*a) + 1)
 {
     *a = *a + 1;
 }
 ```
 
-- `modifies(X, Y, Z)` lists every footprint the function may write to.
+- `cppverify::modifies(X, Y, Z)` lists every footprint the function may write to.
   Anything not listed is preserved.
 - Every store to memory the function did not create itself (its own locals
   and allocations) must lie in a footprint, as Frama-C's WP checks
-  `assigns`; a function without `modifies` stores only to its own storage.
+  `assigns`; a function without `cppverify::modifies` stores only to its own storage.
 - A callee whose writes are not stated, because its contract has no
-  `modifies` while it takes a mutable pointer or reference and may write
+  `cppverify::modifies` while it takes a mutable pointer or reference and may write
   (a trusted contract, or a verified function that calls such a callee), is
   treated as writing the whole heap at a call: a caller with its own
-  `modifies` cannot call it, and a caller without one forgets every cell.
+  `cppverify::modifies` cannot call it, and a caller without one forgets every cell.
   With a `valid` extent on such a callee the call is not supported.
 - Footprints:
   - a cell: scalar `ref`, `p->field`, or `p[i]`, at its exact address;
@@ -1055,12 +1060,12 @@ void incr_first(int* a, int* b)
 - At a call, the caller's heap changes only inside the callee's footprints
   instantiated with the arguments: a cell or range is exactly those cells, a
   region is the argument's extent (or one object). Every other cell keeps its
-  value, and specs with `reads` clauses outside the footprints keep theirs.
+  value, and specs with `cppverify::reads` clauses outside the footprints keep theirs.
   When every footprint is a cell, the effect is a chain of stores of fresh
   values; otherwise it is a frame relation over the regions. Region
   footprints need the object model: under `--no-check-ub` a call with one
   forgets the whole heap.
-- Preconditions and `old(parameter)` use entry actual arguments, and so does
+- Preconditions and `cppverify::old(parameter)` use entry actual arguments, and so does
   a parameter named in a postcondition.
 - General reference binding and member-function effects are not yet in the
   verified subset.
@@ -1069,8 +1074,8 @@ void incr_first(int* a, int* b)
 
 ```cpp
 void swap(int& a, int& b)
-  modifies(a, b)
-  post(a == old(b) && b == old(a))
+  cppverify::modifies(a, b)
+  cppverify::post(a == cppverify::old(b) && b == cppverify::old(a))
 {
     int t = a;
     a = b;
@@ -1086,8 +1091,8 @@ int compute() {
     //  - x and y are distinct objects (implicit non-aliasing default)
     //  - swap modified only x and y
     //  - therefore z is unchanged
-    contract_assert(z == 100);          // verifies
-    contract_assert(x == 10 && y == 5); // verifies from post
+    cppverify::check(z == 100);          // verifies
+    cppverify::check(x == 10 && y == 5); // verifies from post
     return x + y + z;
 }
 ```
@@ -1103,11 +1108,11 @@ struct Coordinate {
     int x;
     int y;
     // must appear after the fields it names
-    type_invariant(x >= 0 && x <= 10000 && y >= 0 && y <= 10000);
+    cppverify::type_invariant(x >= 0 && x <= 10000 && y >= 0 && y <= 10000);
 };
 
 int dist_sq(Coordinate p, Coordinate q)
-  post(result >= 0)
+  cppverify::post(cppverify::result >= 0)
 {
     // Verifier auto-injects (lazy — only because the body accesses .x and .y):
     //   assume(p.x >= 0 && p.y >= 0);
@@ -1118,7 +1123,7 @@ int dist_sq(Coordinate p, Coordinate q)
 }
 ```
 
-- `type_invariant(expr)`: holds for every instance of the type at all times.
+- `cppverify::type_invariant(expr)`: holds for every instance of the type at all times.
 - `expr` may reference any field of the enclosing type by name.
 - Must be contextually convertible to bool.
 
@@ -1135,7 +1140,8 @@ This is purely an optimization — correctness is identical to eager injection. 
 ### Status
 
 - Parser: implemented in Weeks 4.5 (after Weeks 3-4 core IR).
-- New keyword `type_invariant` in `TokenKinds.def` under KEYCONTRACT.
+- Written `cppverify::type_invariant(...)` in the class body (see Construct
+  recognition below).
 - `TypeContractInfo` side table on `RecordDecl` in `ASTContext`.
 - The clause must appear **after** the fields it names (it is parsed eagerly;
   late parsing is future work).
@@ -1158,7 +1164,7 @@ This is purely an optimization — correctness is identical to eager injection. 
 
 ## View Functions (idiomatic spec abstraction)
 
-When verifying code over a concrete data structure, define `spec` functions that produce a mathematical view of the data. Specs are then written against the view, not the internals.
+When verifying code over a concrete data structure, define `cppverify::spec` functions that produce a mathematical view of the data. Specs are then written against the view, not the internals.
 
 ```cpp
 struct Interval {
@@ -1167,21 +1173,21 @@ struct Interval {
 };
 
 // abstract view: what the structure means mathematically
-spec int size(Interval r) { return r.hi - r.lo; }
-spec bool has(Interval r, int x) { return r.lo <= x && x < r.hi; }
+cppverify::spec int size(Interval r) { return r.hi - r.lo; }
+cppverify::spec bool has(Interval r, int x) { return r.lo <= x && x < r.hi; }
 
 bool contains(Interval r, int x)
-  pre(size(r) >= 0)
-  post(result == has(r, x))
+  cppverify::pre(size(r) >= 0)
+  cppverify::post(cppverify::result == has(r, x))
 {
     return r.lo <= x && x < r.hi;
 }
 
 Interval shift(Interval r, int d)
-  pre(-1000 <= d && d <= 1000)
-  pre(-1000000 <= r.lo && r.lo <= r.hi && r.hi <= 1000000)
-  post(size(result) == size(r))
-  post(forall(x, has(r, x) == has(result, x + d)))
+  cppverify::pre(-1000 <= d && d <= 1000)
+  cppverify::pre(-1000000 <= r.lo && r.lo <= r.hi && r.hi <= 1000000)
+  cppverify::post(size(cppverify::result) == size(r))
+  cppverify::post(cppverify::forall(x, has(r, x) == has(cppverify::result, x + d)))
 {
     Interval s;
     s.lo = r.lo + d;
@@ -1190,26 +1196,26 @@ Interval shift(Interval r, int d)
 }
 ```
 
-- No new syntax. `spec` functions named `view()`, `elem()`, `size()`, etc. are a documented convention.
+- No new syntax. `cppverify::spec` functions named `view()`, `elem()`, `size()`, etc. are a documented convention.
 - The verifier treats these spec function bodies as axioms (definitions), not as code to execute.
 - This is Verus's main abstraction idiom and the recommended style for non-trivial data structures.
 - Records are passed by value with scalar fields; a record holding an array
   or a pointer is not yet in the verified subset, so a view of a buffer is a
-  spec over the pointer and its length (`spec int sum(const int *p, int n)`).
+  spec over the pointer and its length (`cppverify::spec int sum(const int *p, int n)`).
 
 ## Integer Semantics — summary
 
 | Function kind | Integer semantics | Solver encoding |
 |---|---|---|
-| `spec` function (explicit) | Mathematical (unbounded) | `Int` |
+| `cppverify::spec` function (explicit) | Mathematical (unbounded) | `Int` |
 | `constexpr` lifted as spec | Machine (overflow happens) | `BitVec(N)` or range-checked `Int` |
-| `proof` function | Machine | `BitVec(N)` or range-checked `Int` |
+| `cppverify::proof` function | Machine | `BitVec(N)` or range-checked `Int` |
 | `exec` (regular) function | Machine | `BitVec(N)` or range-checked `Int` |
-| Contract arithmetic (`pre`, `post`, invariants, assertions) | Mathematical | `Int` |
+| Contract arithmetic (`cppverify::pre`, `cppverify::post`, invariants, assertions) | Mathematical | `Int` |
 
 - Contracts are mathematical, as in ACSL and Verus: `+`, `-`, `*`, `/`, `%`,
   and unary `-` on the values of C++ expressions are exact, so
-  `post(result + 1 > result)` holds. An implicit conversion whose result C++
+  `cppverify::post(cppverify::result + 1 > cppverify::result)` holds. An implicit conversion whose result C++
   could change (a narrowing, a sign change) keeps the value; a value-preserving
   one is a machine extension. Quantifier binders are mathematical. A negative
   constant converted to an unsigned type draws a warning. An explicit cast
@@ -1224,7 +1230,7 @@ Interval shift(Interval r, int d)
   is an `overflow` obligation that the value fits; it never wraps. Until
   then, in contracts and in ghost and proof code, implicit C++ conversions
   keep a mathematical value unbounded and arithmetic on it is exact.
-- Mathematical `spec` division and remainder are unbounded but use C++'s
+- Mathematical `cppverify::spec` division and remainder are unbounded but use C++'s
   truncate-toward-zero sign convention. At a zero divisor their total logical
   extension is quotient zero and remainder equal to the dividend; evaluated
   executable and contract expressions must still prove a nonzero divisor.
@@ -1239,64 +1245,64 @@ Interval shift(Interval r, int d)
 <!-- cppverify-example: fragment -->
 
 ```cpp
-post(result == old(x) + 1)
-post(result == old(*p))
+cppverify::post(cppverify::result == cppverify::old(x) + 1)
+cppverify::post(cppverify::result == cppverify::old(*p))
 ```
 
 - Refers to the value of an expression at function entry.
 - Valid in postconditions and loop invariants. In either location it denotes
   the enclosing function's entry state, not the previous iteration.
-- The inner expression is evaluated in the pre-state. For pointer-typed expressions, `old(*p)` is the value at the pre-state heap.
+- The inner expression is evaluated in the pre-state. For pointer-typed expressions, `cppverify::old(*p)` is the value at the pre-state heap.
 
 ## result Expression
 
 <!-- cppverify-example: fragment -->
 
 ```cpp
-post(result > 0)
-post(result.size() == n)
+cppverify::post(cppverify::result > 0)
+cppverify::post(cppverify::result.size() == n)
 ```
 
 - Refers to the return value of the enclosing function.
 - Only valid in postconditions.
 - Type is computed via `Sema::GetTypeForDeclarator` from the full Declarator.
-- Supports postfix operators: `result.x`, `result[i]`.
+- Supports postfix operators: `result.x`, `cppverify::result[i]`.
 
 ## reveal_with_fuel (control recursive spec unfolding)
 
 <!-- cppverify-example: fragment -->
 
 ```cpp
-spec int fibo(int n) decreases(n) { ... }
+cppverify::spec int fibo(int n) cppverify::decreases(n) { ... }
 
-int safe_fib(int n) pre(...) post(result == fibo(n)) {
-    ghost {
-        reveal_with_fuel(fibo, 5);  // unfold fibo up to 5 levels in this VC
+int safe_fib(int n) cppverify::pre(...) cppverify::post(cppverify::result == fibo(n)) {
+    cppverify::ghost {
+        cppverify::reveal_with_fuel(fibo, 5);  // unfold fibo up to 5 levels in this VC
     }
     ...
 }
 ```
 
 - Default fuel for any recursive spec: **1**.
-- `reveal_with_fuel(fn, n)` locally raises the unfolding depth Z3 uses for `fn` within the enclosing function's VC.
+- `cppverify::reveal_with_fuel(fn, n)` locally raises the unfolding depth Z3 uses for `fn` within the enclosing function's VC.
 - For an inductive predicate it unfolds the applications inside its
   unfoldings `n` levels deep, the predicate staying hidden behind proved
   unfoldings (see Inductive predicates). The verifier also deepens on its
   own, up to four levels, when a verdict still depends on the predicate.
-- Without this, recursive `spec` axioms cause Z3 matching loops.
+- Without this, recursive `cppverify::spec` axioms cause Z3 matching loops.
 - Inside ghost blocks only.
 
 ## hide / reveal
 
-- `hide(fn_name)` and `reveal(fn_name)` in ghost blocks selectively control whether the body of a spec function is visible to Z3.
+- `cppverify::hide(fn_name)` and `cppverify::reveal(fn_name)` in ghost blocks selectively control whether the body of a spec function is visible to Z3.
 - Default for non-recursive specs: visible (body inlined into queries).
 - Default for recursive specs: one finite unfolding step. Deeper unfolding
-  requires `reveal_with_fuel`.
-- `hide` suppresses defining equations while leaving the function application
+  requires `cppverify::reveal_with_fuel`.
+- `cppverify::hide` suppresses defining equations while leaving the function application
   available to contracts and imported lemma postconditions. This is useful
   after a finite lemma has established all facts needed by a large arithmetic
   proof: irrelevant recursive equations can otherwise dominate solver time.
-- `hide` withholds the definition from proofs, not from the meaning of the
+- `cppverify::hide` withholds the definition from proofs, not from the meaning of the
   program. A counterexample must still hold under the hidden function's true
   definition; a query that only its definition would settle is `Unresolved`
   with reason `spec.hidden`, never `Failed` and never `Verified`.
@@ -1308,7 +1314,7 @@ int safe_fib(int n) pre(...) post(result == fibo(n)) {
   semantics: definitions, C++ machine arithmetic, and declared contracts.
 - `Failed`: a counterexample that holds when every logical function is
   evaluated at its true definition. It is relative to the declared
-  abstractions only: callee contracts, loop invariants, and `modifies`
+  abstractions only: callee contracts, loop invariants, and `cppverify::modifies`
   frames.
 - Anything else is `Unresolved` with a reason. `spec.fuel`: every
   counterexample found relies on a recursive spec beyond what refinement could
@@ -1320,7 +1326,7 @@ int safe_fib(int n) pre(...) post(result == fibo(n)) {
   contradicts the query or a fact it was given, which is a solver fault and
   says nothing about the program; `spec.termination`: the proof relies on a spec
   whose termination check did not pass, so that spec has no definition;
-  `spec.reads`: the proof relies on a spec whose `reads` check did not pass,
+  `spec.reads`: the proof relies on a spec whose `cppverify::reads` check did not pass,
   so its frames are not facts; `spec.post`: it relies on a spec whose
   postcondition is not established; `spec.inductive`: it relies on the
   unfolding of an inductive predicate whose rules are not proved;
@@ -1339,7 +1345,7 @@ int safe_fib(int n) pre(...) post(result == fibo(n)) {
   this pointer difference may address the objects of different parameters
   or globals, which may be one caller array").
 - Qualifiers: `[partial]` (proved for terminating executions only, after
-  `decreases(*)`), `[trusts=f]` (relies on the contract of `f`, marked
+  `cppverify::decreases(*)`), `[trusts=f]` (relies on the contract of `f`, marked
   `[[cppverify::trusted]]`), `[vacuous]` (no execution reaches the claim).
 
 ## Spec Collections
@@ -1350,27 +1356,27 @@ int safe_fib(int n) pre(...) post(result == fibo(n)) {
 #include <cppverify.h>
 using cppverify::seq;
 
-spec int sum(seq s)
-  decreases(s.len())
+cppverify::spec int sum(seq s)
+  cppverify::decreases(s.len())
 {
   return s.len() <= 0 ? 0 : sum(s.subrange(0, s.len() - 1)) + s[s.len() - 1];
 }
 
 int count_positive(const int *a, int n)
-  pre(valid(a, n) && n >= 0 && n <= 1000)
-  post(0 <= result && result <= n)
+  cppverify::pre(valid(a, n) && n >= 0 && n <= 1000)
+  cppverify::post(0 <= cppverify::result && cppverify::result <= n)
 {
-  ghost seq seen = cppverify::seq_empty();
+  cppverify::ghost seq seen = cppverify::seq_empty();
   int c = 0;
   for (int i = 0; i < n; i = i + 1)
-    invariant(0 <= i && i <= n && 0 <= c && c <= i)
-    invariant(seen.len() == i)
-    invariant(forall(k, 0, i, seen[k] == a[k]))
-    decreases(n - i)
+    cppverify::invariant(0 <= i && i <= n && 0 <= c && c <= i)
+    cppverify::invariant(seen.len() == i)
+    cppverify::invariant(cppverify::forall(k, 0, i, seen[k] == a[k]))
+    cppverify::decreases(n - i)
   {
     if (a[i] > 0)
       c = c + 1;
-    ghost { seen = seen.push(a[i]); }
+    cppverify::ghost { seen = seen.push(a[i]); }
   }
   return c;
 }
@@ -1405,18 +1411,18 @@ counterparts of Verus's `Seq`, `Set`, `Multiset`, and `Map`:
 - A sequence equality that a proof must establish (in an assertion, a
   postcondition, an invariant) may also be proved element by element: equal
   lengths and equal elements imply equality, as Verus's `=~=` and Dafny's
-  sequence equality. A stated `contract_assert(a == b)` is therefore a hint
+  sequence equality. A stated `cppverify::check(a == b)` is therefore a hint
   where the solver needs one.
 - Induction over a sequence is written by the user, as in Verus and Dafny: a
-  recursive proof function with `decreases(s.len())` that cites itself on a
+  recursive proof function with `cppverify::decreases(s.len())` that cites itself on a
   shorter sequence:
 
 <!-- cppverify-example: with sum -->
 
 ```cpp
-proof void sum_concat(seq s, seq t)
-  post(sum(s + t) == sum(s) + sum(t))
-  decreases(t.len())
+cppverify::proof void sum_concat(seq s, seq t)
+  cppverify::post(sum(s + t) == sum(s) + sum(t))
+  cppverify::decreases(t.len())
 {
   if (t.len() > 0)
     sum_concat(s, t.subrange(0, t.len() - 1));
@@ -1429,7 +1435,7 @@ proof void sum_concat(seq s, seq t)
   is also solved in the plain sequence theory, which refutes false claims
   much faster than the encoding tuned for proofs.
 - Collections exist only for verification: they may appear in contracts,
-  ghost code (`ghost seq s = ...;`, assignment in ghost blocks), and as
+  ghost code (`cppverify::ghost seq s = ...;`, assignment in ghost blocks), and as
   parameters and results of spec and proof functions. Sema rejects every use
   in executable code (declarations, operations, parameters, results).
 - A collection read can be a trigger, and counterexamples show collection
@@ -1442,34 +1448,35 @@ proof void sum_concat(seq s, seq t)
 
 ## Clang Modification Details
 
-### New Keywords (TokenKinds.def — KEYCONTRACT)
+### Construct recognition
 
-```
-KEYWORD(pre,              KEYCONTRACT)
-KEYWORD(post,             KEYCONTRACT)
-KEYWORD(modifies,         KEYCONTRACT)
-KEYWORD(aliases,          KEYCONTRACT)
-KEYWORD(recommends,       KEYCONTRACT)
-KEYWORD(invariant,        KEYCONTRACT)
-KEYWORD(decreases,        KEYCONTRACT)
-KEYWORD(type_invariant,   KEYCONTRACT)
-KEYWORD(ghost,            KEYCONTRACT)
-KEYWORD(spec,             KEYCONTRACT)
-KEYWORD(proof,            KEYCONTRACT)
-KEYWORD(contract_assert,  KEYCONTRACT)
-KEYWORD(reveal_with_fuel, KEYCONTRACT)
-KEYWORD(forall,           KEYCONTRACT)
-KEYWORD(exists,           KEYCONTRACT)
-KEYWORD(old,              KEYCONTRACT)
-KEYWORD(result,           KEYCONTRACT)
-```
+The lexer reserves nothing. `clang/include/clang/Basic/CppVerifyConstructs.def`
+lists the 28 construct words and the positions each may take (function
+clause, loop clause, class member, declaration specifier, statement,
+expression). At each position the parser calls `tryAnnotateCppVerify`
+(`clang/lib/Parse/ParseCppVerify.cpp`), which looks ahead for
+`[::] (name ::)+ word` with `word` a construct, resolves the qualifier with
+Clang's own scope annotation (so aliases and `::cppverify::` work through
+ordinary name lookup), and, when the qualifier denotes the global namespace
+`cppverify`, replaces the qualified name with one `annot_cppverify` token
+spanning it. The token carries the construct and a `DeclRefExpr` to the
+construct's declaration in `<cppverify.h>`, which tools use for hover,
+go-to-definition, rename, and references. A name that Clang's own
+disambiguation already resolved (an `annot_non_type` or `annot_overload_set`
+after the scope) is recognized the same way.
 
-KEYCONTRACT flag: only active when `-fverify-contracts` is passed. Otherwise these are valid identifiers.
+`<cppverify.h>` declares every construct, documented: call-like ones as
+deleted functions (`void pre(bool condition) = delete;`) and the others as
+unavailable enumerators (`result`, `inductive`, `spec`, ...), so any use the
+parser does not take as a construct is an error. `InitPreprocessor` includes
+the header in every C++ translation unit compiled with `-fverify-contracts`.
 
-`reads`, `when`, `inductive`, `behavior`, `complete_behaviors`,
-`disjoint_behaviors`, `calc`, `trigger`, and `choose` are contextual: they are recognized only in
-their contract positions (and `calc`, `trigger`, `choose` only when no
-declaration of that name is visible), so ordinary code keeps those names.
+Misuse is diagnosed where the parser would otherwise fail: a construct in the
+wrong position (`'cppverify::pre' follows a function's parameter list`), an
+unknown word after `cppverify::` in clause position (with a suggestion), a
+construct word written bare where only the construct fits (with a fix-it
+inserting the qualifier; for `pre`/`post` after a declarator, the message
+names C++26 contracts), and the header missing from the include path.
 
 ### AST Nodes
 
@@ -1484,15 +1491,15 @@ declaration of that name is visible), so ordinary code keeps those names.
 | ResultExpr | — | enclosing function's return type |
 
 A range footprint `p[lo : n]` reuses Clang's `ArraySectionExpr`; Sema accepts
-it only as a whole `modifies` footprint. A `trigger(term)` mark leaves `term`
+it only as a whole `cppverify::modifies` footprint. A `cppverify::trigger(term)` mark leaves `term`
 in place and records it in an `ASTContext` side table.
 
 **Statements (inherit from Stmt):**
 
 | Node | Fields |
 |---|---|
-| ContractAssertStmt | Expr (the condition), optional CompoundStmt (the `by` proof); `calc` builds nested ones |
-| GhostBlockStmt | CompoundStmt (the body); `ghost T x = e;` wraps its declaration |
+| ContractAssertStmt | Expr (the condition), optional CompoundStmt (the `by` proof); `cppverify::calc` builds nested ones |
+| GhostBlockStmt | CompoundStmt (the body); `cppverify::ghost T x = e;` wraps its declaration |
 | RevealWithFuelStmt | FunctionDecl* fn, int fuel |
 
 **Side-table info on existing nodes:**
@@ -1506,45 +1513,43 @@ in place and records it in an `ASTContext` side table.
 
 ### Parser Entry Points
 
-| Syntax Position | Parser Method | File |
+All in `clang/lib/Parse/ParseCppVerify.cpp`; each upstream parse function has
+a one-line hook.
+
+| Syntax Position | Parser Method | Hook in |
 |---|---|---|
-| After function declarator `)` | ParseContractClauses() | ParseDecl.cpp |
-| After a while/for condition or a do-loop trailing condition | ParseLoopContracts() | ParseStmt.cpp |
-| `ghost { ... }` | ParseGhostBlock() | ParseStmt.cpp |
-| `contract_assert(...)` | ParseContractAssert() | ParseStmt.cpp |
-| `reveal_with_fuel(...)` | ParseRevealWithFuel() | ParseStmt.cpp |
-| `spec type name(...)` | ParseSpecFunction() | ParseDecl.cpp |
-| `proof void name(...)` | ParseProofFunction() | ParseDecl.cpp |
-| `forall(...)` / `exists(...)` | ParseQuantifierExpr() | ParseExpr.cpp |
-| `old(...)` | ParseOldExpr() | ParseExpr.cpp |
-| `result` | ParseResultExpr() | ParseExpr.cpp |
-| `type_invariant(...)` inside record | ParseTypeInvariant() | ParseDecl.cpp |
+| After a function declarator | `ParseFunctionContractClauses`, `attachFunctionContract`, `ParseContractClauseProofs` | `ParseFunctionDefinition` (Parser.cpp) |
+| After a while/for head or a do-loop condition | `ParseLoopContractClauses`, `attachLoopContract` | `ParseWhileStatement`, `ParseForStatement`, `ParseDoStatement` |
+| Statements (`ghost`, `check`, `calc`, `reveal_with_fuel`, `hide`, `reveal`) | `ParseCppVerifyStatement` | `ParseStatementOrDeclarationAfterAttributes` |
+| `cppverify::spec` / `cppverify::proof` | `ParseCppVerifySpecifier` | `ParseDeclarationSpecifiers` |
+| `cppverify::type_invariant(...)` | `ParseTypeInvariant` | `ParseCXXMemberSpecification` |
+| Expressions (`forall`, `exists`, `choose`, `old`, `result`, `trigger`) | `ParseCppVerifyExpression` | `ParseCastExpression` |
 
 ### Sema Rules
 
-1. All contract expressions must be contextually convertible to bool (except `decreases` which must be integer; and `modifies` lvalues which need ordinary lvalue typing).
-2. `old(expr)` is only valid in postconditions and loop invariants; both use
+1. All contract expressions must be contextually convertible to bool (except `cppverify::decreases` which must be integer; and `cppverify::modifies` lvalues which need ordinary lvalue typing).
+2. `cppverify::old(expr)` is only valid in postconditions and loop invariants; both use
    the enclosing function's entry state.
-3. `result` is only valid in postconditions. Its type matches the enclosing function's return type.
+3. `cppverify::result` is only valid in postconditions. Its type matches the enclosing function's return type.
 4. Quantifier binders are pushed into scope during body type-checking, popped after.
 5. Spec functions must have no side effects (no assignments to non-local state, no I/O calls).
 6. Proof functions must return void.
 7. Ghost blocks may only contain ghost-safe statements. They can update
    ghost-local variables/direct dot-fields and call proof functions, but cannot
    mutate executable state, call executable functions, return from the
-   enclosing function, or contain a loop without `decreases`.
-8. `modifies` lvalues must be ordinary lvalues; the parser computes their alias keys for the encoder.
-9. `aliases(p, q)` arguments must be pointer/reference-typed parameters of the enclosing function.
-10. `recommends` is only valid on `spec` functions.
-11. A `spec` function may be referenced only from contracts, ghost code, and
-    `spec` or `proof` functions; executable code, including initializers and
+   enclosing function, or contain a loop without `cppverify::decreases`.
+8. `cppverify::modifies` lvalues must be ordinary lvalues; the parser computes their alias keys for the encoder.
+9. `cppverify::aliases(p, q)` arguments must be pointer/reference-typed parameters of the enclosing function.
+10. `cppverify::recommends` is only valid on `cppverify::spec` functions.
+11. A `cppverify::spec` function may be referenced only from contracts, ghost code, and
+    `cppverify::spec` or `cppverify::proof` functions; executable code, including initializers and
     default arguments, may not reference one. Unevaluated operands
     (`sizeof`, `decltype`) are exempt.
-12. The same holds for ghost variables, `choose`, and the `cppverify`
+12. The same holds for ghost variables, `cppverify::choose`, and the `cppverify`
     collections (their types as executable declarations, parameters, or
     results, and every operation).
 13. A range `p[lo : n]` needs a pointer to a complete object type and
-    integer bounds, and is valid only as a whole `modifies` footprint.
+    integer bounds, and is valid only as a whole `cppverify::modifies` footprint.
 
 ### CodeGen Rules
 
@@ -1554,7 +1559,7 @@ in place and records it in an `ASTContext` side table.
 - Functions with `isSpec` or `isProof` → skip entirely (already gated in CodeGenModule)
 - All contract clauses on FunctionDecl → ignored by codegen
 - Loop invariants/decreases → ignored by codegen
-- `type_invariant` on RecordDecl → ignored by codegen
+- `cppverify::type_invariant` on RecordDecl → ignored by codegen
 
 ## Backend-Neutral Obligation Contract
 
@@ -1622,7 +1627,7 @@ without reparsing C++.
 BMC-produced records carry their unroll bound in semantics and replay through
 the BMC result aggregator; untransformed records cannot acquire BMC semantics
 after this boundary. Lean scratch replay of bounded records is rejected.
-Failure-only `recommends` diagnostics do not alter archive contents.
+Failure-only `cppverify::recommends` diagnostics do not alter archive contents.
 Imported records are untrusted input: bounded parsing precedes structural,
 scope, sort, signature, feature, canonical-payload, exact-negation, and
 complete-versus-ordered-goal validation. Module-local finite fuel may differ
@@ -1760,7 +1765,7 @@ documentation-only example:
 |---|---:|---:|---|
 | Factorial | `0..12` | `13!` | mathematical spec, executable recursion, loop invariant, termination, signed multiplication overflow |
 | Fibonacci | `0..46` | `F(47)` | mathematical recurrence, proof lemmas, executable recursion, loop invariant, termination, signed addition overflow |
-| Framed output | factorial range | null or out-of-frame writes | non-null pointers, `modifies(*out)`, `old(*preserved)`, heap framing |
+| Framed output | factorial range | null or out-of-frame writes | non-null pointers, `cppverify::modifies(*out)`, `cppverify::old(*preserved)`, heap framing |
 
 Both arithmetic programs have recursive and iterative executable
 implementations with exact 32-bit signed-`int` contracts. They are proved equal
