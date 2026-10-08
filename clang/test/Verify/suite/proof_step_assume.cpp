@@ -1,4 +1,4 @@
-// RUN: %cpp-verify --lower-only --dump-ir=2 %s 2>&1 | FileCheck %s
+// RUN: %cpp-verify --lower-only --dump-ir=2 %s -- 2>&1 | FileCheck %s
 //
 // A contract_assert is proved where it stands and assumed from there on, which
 // is what makes it a proof step for the obligations after it.
