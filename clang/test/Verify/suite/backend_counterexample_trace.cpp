@@ -4,40 +4,40 @@
 // RUN: not %cpp-verify --backend=bmc --unroll=1 --diagnostics-format=json %s 2>&1 | FileCheck %s --check-prefix=BMC
 
 void set_value(int &target, int value)
-  modifies(target)
-  post(target == value)
+  cppverify::modifies(target)
+  cppverify::post(target == value)
 {
   target = value;
 }
 
 int pass_through(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   return value;
 }
 
 int require_positive(int value)
-  pre(value > 0)
-  post(result == value)
+  cppverify::pre(value > 0)
+  cppverify::post(cppverify::result == value)
 {
   return value;
 }
 
-spec int trace_only_identity(int value)
+cppverify::spec int trace_only_identity(int value)
 {
   return value;
 }
 
 int unreachable_trace_only_spec(int value)
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   return 0;
-  ghost { int unused = trace_only_identity(value); }
+  cppverify::ghost { int unused = trace_only_identity(value); }
 }
 
 int path_and_call(int value)
-  pre(value == 1)
-  post(result == 0)
+  cppverify::pre(value == 1)
+  cppverify::post(cppverify::result == 0)
 {
   int answer = 0;
   if (value > 0)
@@ -48,13 +48,13 @@ int path_and_call(int value)
 }
 
 int failing_call_precondition()
-  post(result == -1)
+  cppverify::post(cppverify::result == -1)
 {
   return require_positive(-1);
 }
 
 int heap_and_provenance()
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   int *owner = new int(1);
   *owner = 2;
@@ -64,7 +64,7 @@ int heap_and_provenance()
 }
 
 int lexical_lifetime()
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   {
     int local = 0;
@@ -74,7 +74,7 @@ int lexical_lifetime()
 }
 
 int unknown_branch_guard(bool choose)
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   if (choose) {
   } else {
@@ -83,12 +83,12 @@ int unknown_branch_guard(bool choose)
 }
 
 int loop_path()
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   int index = 0;
   while (index < 1)
-    invariant(index >= 0 && index <= 1)
-    decreases(1 - index)
+    cppverify::invariant(index >= 0 && index <= 1)
+    cppverify::decreases(1 - index)
   {
     index = index + 1;
   }
