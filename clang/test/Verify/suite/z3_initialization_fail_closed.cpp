@@ -7,14 +7,14 @@ struct Pair {
 };
 
 int uninitialized_scalar()
-  post(result == result)
+  cppverify::post(cppverify::result == cppverify::result)
 {
   int value;
   return value;
 }
 
 int uninitialized_field()
-  post(result == result)
+  cppverify::post(cppverify::result == cppverify::result)
 {
   Pair pair;
   pair.first = 1;
@@ -22,7 +22,7 @@ int uninitialized_field()
 }
 
 int initialized_on_one_branch(bool initialize)
-  post(result == result)
+  cppverify::post(cppverify::result == cppverify::result)
 {
   int value;
   if (initialize)
