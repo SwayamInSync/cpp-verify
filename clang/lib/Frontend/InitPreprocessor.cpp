@@ -1623,6 +1623,12 @@ void clang::InitializePreprocessor(Preprocessor &PP,
     AddImplicitIncludePCH(Builder, PP, PCHContainerRdr,
                           InitOpts.ImplicitPCHInclude);
 
+  // CppVerify: the namespace cppverify needs no #include.
+  if (PP.getLangOpts().VerifyContracts && PP.getLangOpts().CPlusPlus)
+    Builder.append("#if __has_include(<cppverify.h>)\n"
+                   "#include <cppverify.h>\n"
+                   "#endif");
+
   // Process -include directives.
   for (unsigned i = 0, e = InitOpts.Includes.size(); i != e; ++i) {
     const std::string &Path = InitOpts.Includes[i];
