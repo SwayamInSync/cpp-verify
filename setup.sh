@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-shot build: Clang + cpp-verify with vendored Z3.
+# One-shot build: Clang, cpp-verify with vendored Z3, and the editor tools.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -24,20 +24,21 @@ need cmake
 need ninja
 need "${CXX:-c++}"
 
-echo "==> Configuring LLVM + Clang + CppVerify (vendored Z3)"
+echo "==> Configuring LLVM + Clang + clang-tools-extra + CppVerify (vendored Z3)"
 cmake -S "$ROOT/llvm" -B "$BUILD_DIR" -G "$GENERATOR" \
   -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-  -DLLVM_ENABLE_PROJECTS=clang \
+  -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra" \
   -DLLVM_TARGETS_TO_BUILD="$LLVM_TARGETS" \
   -DCPPVERIFY_VENDOR_Z3=ON \
   -DCPPVERIFY_PREFER_SYSTEM_Z3=OFF
 
-echo "==> Building clang and cpp-verify"
+echo "==> Building clang, cpp-verify, clangd, and clang-format"
 JOBS="${JOBS:-$( (nproc 2>/dev/null) || echo 8 )}"
-ninja -C "$BUILD_DIR" -j"$JOBS" clang cpp-verify
+ninja -C "$BUILD_DIR" -j"$JOBS" clang cpp-verify clangd clang-format
 
 echo ""
 echo "Done."
 echo "  Verifier:  $BUILD_DIR/bin/cpp-verify"
 echo "  Compiler:  $BUILD_DIR/bin/clang++"
+echo "  Editors:   $BUILD_DIR/bin/clangd, $BUILD_DIR/bin/clang-format"
 echo ""
