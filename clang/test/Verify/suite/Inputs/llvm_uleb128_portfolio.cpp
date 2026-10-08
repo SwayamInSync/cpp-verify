@@ -3,11 +3,11 @@ namespace cppverify_uleb128_portfolio {
 typedef __UINT64_TYPE__ uint64_t;
 typedef __UINT8_TYPE__ uint8_t;
 
-spec bool valid(uint8_t *pointer, int count) {
+cppverify::spec bool valid(uint8_t *pointer, int count) {
   return true;
 }
 
-spec int uleb_length(uint64_t value) {
+cppverify::spec int uleb_length(uint64_t value) {
   if (value < 128ULL)
     return 1;
   if (value < 16384ULL)
@@ -30,10 +30,10 @@ spec int uleb_length(uint64_t value) {
 }
 
 unsigned encode_uleb128_length(uint64_t value, uint8_t *buffer)
-  pre(valid(buffer, 10))
-  modifies(*buffer)
-  post(result == uleb_length(old(value)))
-  post(result >= 1 && result <= 10)
+  cppverify::pre(valid(buffer, 10))
+  cppverify::modifies(*buffer)
+  cppverify::post(cppverify::result == uleb_length(cppverify::old(value)))
+  cppverify::post(cppverify::result >= 1 && cppverify::result <= 10)
 {
   uint64_t original = value;
   unsigned count = 0;
@@ -45,12 +45,12 @@ unsigned encode_uleb128_length(uint64_t value, uint8_t *buffer)
       byte |= 0x80;
     buffer[count - 1] = byte;
   } while (value != 0)
-    invariant(count >= 1 && count <= 10)
-    invariant(count <= uleb_length(original))
-    invariant(value ==
+    cppverify::invariant(count >= 1 && count <= 10)
+    cppverify::invariant(count <= uleb_length(original))
+    cppverify::invariant(value ==
               (count == 10 ? 0ULL : original >> (7 * count)))
-    invariant((value == 0) == (count == uleb_length(original)))
-    decreases(value);
+    cppverify::invariant((value == 0) == (count == uleb_length(original)))
+    cppverify::decreases(value);
   return count;
 }
 
