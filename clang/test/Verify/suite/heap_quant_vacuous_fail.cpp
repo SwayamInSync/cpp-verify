@@ -5,11 +5,11 @@
 // false and must be rejected (previously a forall over a symbolic range was
 // encoded as `true`).
 void v(int* p, int n)
-  pre(p != nullptr && n >= 1 && n <= 10)
-  modifies(*p)
-  post(forall(i, 0, n, p[i] == 0))
+  cppverify::pre(p != nullptr && n >= 1 && n <= 10)
+  cppverify::modifies(*p)
+  cppverify::post(cppverify::forall(i, 0, n, p[i] == 0))
 {
   int j = 0;
-  while (j < n) invariant(0 <= j && j <= n) decreases(n - j) { p[j] = 7; j = j + 1; }
+  while (j < n) cppverify::invariant(0 <= j && j <= n) cppverify::decreases(n - j) { p[j] = 7; j = j + 1; }
 }
 // VERIFY: verification failed
