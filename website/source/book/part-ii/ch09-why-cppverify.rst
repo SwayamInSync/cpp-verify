@@ -42,7 +42,7 @@ The niche
      - **Keywords**
      - **Sema-typed**
 
-Contracts go through the same type checker as your program. ``post(result == fibo(n))`` knows the return type of ``fibo``.
+Contracts go through the same type checker as your program. ``cppverify::post(cppverify::result == fibo(n))`` knows the return type of ``fibo``.
 
 Architecture in one picture
 ---------------------------
