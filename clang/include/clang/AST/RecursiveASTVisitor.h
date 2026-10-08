@@ -49,6 +49,7 @@
 #include "clang/Basic/OpenMPKinds.h"
 #include "clang/Basic/Specifiers.h"
 #include "llvm/ADT/PointerIntPair.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
 #include <algorithm>
@@ -182,6 +183,10 @@ public:
 
   /// Return whether this visitor should recurse into lambda body
   bool shouldVisitLambdaBody() const { return true; }
+
+  /// Return whether this visitor should visit cpp-verify contracts, which
+  /// exist only for verification and emit no code.
+  bool shouldVisitCppVerifyContracts() const { return true; }
 
   /// Return whether this visitor should traverse post-order.
   bool shouldTraversePostOrder() const { return false; }
@@ -481,7 +486,15 @@ public:
 
   bool dataTraverseNode(Stmt *S, DataRecursionQueue *Queue);
 
+protected:
+  /// CppVerify: the context whose contract tables a loop's contract is in,
+  /// set while a function is traversed.
+  ASTContext *ContractContext = nullptr;
+
 private:
+  bool TraverseFunctionContract(FunctionDecl *D);
+  bool TraverseLoopContract(Stmt *S);
+
   // These are helper methods used by more than one Traverse* method.
   bool TraverseTemplateParameterListHelper(TemplateParameterList *TPL);
 
@@ -2174,7 +2187,18 @@ bool RecursiveASTVisitor<Derived>::TraverseCXXRecordHelper(CXXRecordDecl *D) {
 
 DEF_TRAVERSE_DECL(RecordDecl, { TRY_TO(TraverseRecordHelper(D)); })
 
-DEF_TRAVERSE_DECL(CXXRecordDecl, { TRY_TO(TraverseCXXRecordHelper(D)); })
+DEF_TRAVERSE_DECL(CXXRecordDecl, {
+  TRY_TO(TraverseCXXRecordHelper(D));
+  if (getDerived().shouldVisitCppVerifyContracts()) {
+    ASTContext &Ctx = D->getASTContext();
+    for (Expr *Reference : Ctx.getCppVerifyReferences(D))
+      TRY_TO(TraverseStmt(Reference));
+    if (const TypeContractInfo *TCI = Ctx.getTypeContract(D);
+        TCI && D->isThisDeclarationADefinition())
+      for (Expr *E : TCI->Invariants)
+        TRY_TO(TraverseStmt(E));
+  }
+})
 
 template <typename Derived>
 bool RecursiveASTVisitor<Derived>::TraverseTemplateArgumentLocsHelper(
@@ -2307,6 +2331,34 @@ DEF_TRAVERSE_DECL(ObjCIvarDecl, {
 })
 
 template <typename Derived>
+bool RecursiveASTVisitor<Derived>::TraverseFunctionContract(FunctionDecl *D) {
+  if (!getDerived().shouldVisitCppVerifyContracts())
+    return true;
+  // The construct names first: each names the construct it is written in.
+  ASTContext &Ctx = D->getASTContext();
+  for (Expr *Reference : Ctx.getCppVerifyReferences(D))
+    TRY_TO(TraverseStmt(Reference));
+  if (const FunctionContractInfo *FCI = Ctx.getFunctionContract(D);
+      FCI && FCI->ContractDecl == D)
+    for (Stmt *Child : FCI->children())
+      TRY_TO(TraverseStmt(Child));
+  return true;
+}
+
+template <typename Derived>
+bool RecursiveASTVisitor<Derived>::TraverseLoopContract(Stmt *S) {
+  const LoopContractInfo *LCI =
+      ContractContext && getDerived().shouldVisitCppVerifyContracts()
+          ? ContractContext->getLoopContract(S)
+          : nullptr;
+  if (!LCI)
+    return true;
+  for (Stmt *Child : LCI->children())
+    TRY_TO(TraverseStmt(Child));
+  return true;
+}
+
+template <typename Derived>
 bool RecursiveASTVisitor<Derived>::TraverseFunctionHelper(FunctionDecl *D) {
   TRY_TO(TraverseDeclTemplateParameterLists(D));
   TRY_TO(TraverseNestedNameSpecifierLoc(D->getQualifierLoc()));
@@ -2368,6 +2420,12 @@ bool RecursiveASTVisitor<Derived>::TraverseFunctionHelper(FunctionDecl *D) {
         TRY_TO(TraverseConstructorInitializer(I));
     }
   }
+
+  ASTContext *SavedContractContext = ContractContext;
+  ContractContext = &D->getASTContext();
+  llvm::scope_exit RestoreContractContext(
+      [&] { ContractContext = SavedContractContext; });
+  TRY_TO(TraverseFunctionContract(D));
 
   bool VisitBody =
       D->isThisDeclarationADefinition() &&
@@ -2560,8 +2618,8 @@ DEF_TRAVERSE_STMT(CaseStmt, {})
 DEF_TRAVERSE_STMT(CompoundStmt, {})
 DEF_TRAVERSE_STMT(ContinueStmt, {})
 DEF_TRAVERSE_STMT(DefaultStmt, {})
-DEF_TRAVERSE_STMT(DoStmt, {})
-DEF_TRAVERSE_STMT(ForStmt, {})
+DEF_TRAVERSE_STMT(DoStmt, { TRY_TO(TraverseLoopContract(S)); })
+DEF_TRAVERSE_STMT(ForStmt, { TRY_TO(TraverseLoopContract(S)); })
 DEF_TRAVERSE_STMT(GotoStmt, {})
 DEF_TRAVERSE_STMT(DeferStmt, {})
 DEF_TRAVERSE_STMT(IfStmt, {})
@@ -2596,7 +2654,7 @@ DEF_TRAVERSE_STMT(MSDependentExistsStmt, {
 
 DEF_TRAVERSE_STMT(ReturnStmt, {})
 DEF_TRAVERSE_STMT(SwitchStmt, {})
-DEF_TRAVERSE_STMT(WhileStmt, {})
+DEF_TRAVERSE_STMT(WhileStmt, { TRY_TO(TraverseLoopContract(S)); })
 
 // CppVerify contract nodes.
 DEF_TRAVERSE_STMT(ContractAssertStmt, {})
