@@ -2,10 +2,10 @@
 // RUN: %cpp-verify --lower-only --dump-ir=3 %s 2>&1 | FileCheck %s --check-prefix=QUANT
 
 int quant_client(int n)
-  pre(n > 0 && n <= 3)
-  pre(forall(i, 0, n, i >= 0))
-  pre(exists(j, 0, n, j == 0))
-  post(result == n)
+  cppverify::pre(n > 0 && n <= 3)
+  cppverify::pre(cppverify::forall(i, 0, n, i >= 0))
+  cppverify::pre(cppverify::exists(j, 0, n, j == 0))
+  cppverify::post(cppverify::result == n)
 {
   int x = 0;
   if (n > 1)
