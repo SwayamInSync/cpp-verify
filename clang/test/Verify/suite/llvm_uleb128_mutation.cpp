@@ -1,6 +1,6 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
 // RUN: not %cpp-verify --backend=bmc --unroll=1 --check-ub --jobs=4 \
-// RUN:   --timeout=10000 %s 2>&1 | FileCheck %s
+// RUN:   --timeout=10000 %s -- 2>&1 | FileCheck %s
 
 namespace cppverify_uleb128_mutation {
 
