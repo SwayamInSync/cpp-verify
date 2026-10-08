@@ -1,4 +1,4 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s
 //
 // <cppverify.h> provides valid(p, n) for every pointee type: in a
 // precondition it declares that p points to n objects, p[0] to p[n - 1]. A
