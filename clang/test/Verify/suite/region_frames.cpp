@@ -6,17 +6,17 @@
 // extent, else one object). Every other cell keeps its value, and specs
 // that read only such cells keep theirs.
 
-spec bool valid(int *p, int n) { return true; }
-spec bool valid(const int *p, int n) { return true; }
+cppverify::spec bool valid(int *p, int n) { return true; }
+cppverify::spec bool valid(const int *p, int n) { return true; }
 
 void zero(int *q, int m)
-  pre(valid(q, m) && m >= 0 && m <= 1000)
-  modifies(*q)
-  post(forall(k, 0, m, q[k] == 0))
+  cppverify::pre(valid(q, m) && m >= 0 && m <= 1000)
+  cppverify::modifies(*q)
+  cppverify::post(cppverify::forall(k, 0, m, q[k] == 0))
 {
   for (int i = 0; i < m; i = i + 1)
-    invariant(0 <= i && i <= m && forall(k, 0, i, q[k] == 0))
-    decreases(m - i)
+    cppverify::invariant(0 <= i && i <= m && cppverify::forall(k, 0, i, q[k] == 0))
+    cppverify::decreases(m - i)
   {
     q[i] = 0;
   }
@@ -26,21 +26,21 @@ void zero(int *q, int m)
 // The slice p + lo is the callee's whole extent; the prefix and other
 // objects keep their values.
 void zero_tail(int *p, int n, int lo, const int *other)
-  pre(valid(p, n) && n >= 1 && n <= 1000 && 0 <= lo && lo <= n)
-  pre(valid(other, 1))
-  modifies(*p)
-  post(forall(k, 0, lo, p[k] == old(p[k])))
-  post(forall(k, lo, n, p[k] == 0))
-  post(other[0] == old(other[0]))
+  cppverify::pre(valid(p, n) && n >= 1 && n <= 1000 && 0 <= lo && lo <= n)
+  cppverify::pre(valid(other, 1))
+  cppverify::modifies(*p)
+  cppverify::post(cppverify::forall(k, 0, lo, p[k] == cppverify::old(p[k])))
+  cppverify::post(cppverify::forall(k, lo, n, p[k] == 0))
+  cppverify::post(other[0] == cppverify::old(other[0]))
 {
   zero(p + lo, n - lo);
 }
 // CHECK-DAG: Verified: zero_tail
 
 void claims_too_much(int *p, int n, int lo)
-  pre(valid(p, n) && n >= 2 && n <= 1000 && 1 <= lo && lo < n)
-  modifies(*p)
-  post(p[lo - 1] == 0)
+  cppverify::pre(valid(p, n) && n >= 2 && n <= 1000 && 1 <= lo && lo < n)
+  cppverify::modifies(*p)
+  cppverify::post(p[lo - 1] == 0)
 {
   zero(p + lo, n - lo);
 }
@@ -48,13 +48,13 @@ void claims_too_much(int *p, int n, int lo)
 
 // A function writing a range of its buffer.
 void zero_from(int *p, int n, int lo)
-  pre(valid(p, n) && n >= 1 && n <= 1000 && 0 <= lo && lo <= n)
-  modifies(p[lo : n - lo])
-  post(forall(k, lo, n, p[k] == 0))
+  cppverify::pre(valid(p, n) && n >= 1 && n <= 1000 && 0 <= lo && lo <= n)
+  cppverify::modifies(p[lo : n - lo])
+  cppverify::post(cppverify::forall(k, lo, n, p[k] == 0))
 {
   for (int i = lo; i < n; i = i + 1)
-    invariant(lo <= i && i <= n && forall(k, lo, i, p[k] == 0))
-    decreases(n - i)
+    cppverify::invariant(lo <= i && i <= n && cppverify::forall(k, lo, i, p[k] == 0))
+    cppverify::decreases(n - i)
   {
     p[i] = 0;
   }
@@ -62,47 +62,47 @@ void zero_from(int *p, int n, int lo)
 // CHECK-DAG: Verified: zero_from
 
 void keeps_prefix(int *p, int n)
-  pre(valid(p, n) && n >= 2 && n <= 1000 && p[0] == 7)
-  modifies(*p)
-  post(p[0] == 7 && p[1] == 0)
+  cppverify::pre(valid(p, n) && n >= 2 && n <= 1000 && p[0] == 7)
+  cppverify::modifies(*p)
+  cppverify::post(p[0] == 7 && p[1] == 0)
 {
   zero_from(p, n, 1);
 }
 // CHECK-DAG: Verified: keeps_prefix
 
 void writes_outside(int *p, int n, int lo)
-  pre(valid(p, n) && n >= 2 && n <= 1000 && 1 <= lo && lo < n)
-  modifies(p[lo : n - lo])
+  cppverify::pre(valid(p, n) && n >= 2 && n <= 1000 && 1 <= lo && lo < n)
+  cppverify::modifies(p[lo : n - lo])
 {
   p[lo - 1] = 0;
 }
 // CHECK-DAG: error: verification failed: writes_outside [{{.*}}::frame@[[@LINE-2]]:13]
 
 void range_in_range(int *p, int n)
-  pre(valid(p, n) && n >= 4 && n <= 1000)
-  modifies(p[1 : n - 1])
+  cppverify::pre(valid(p, n) && n >= 4 && n <= 1000)
+  cppverify::modifies(p[1 : n - 1])
 {
   zero_from(p, n, 2);
 }
 // CHECK-DAG: Verified: range_in_range
 
 void range_escapes(int *p, int n)
-  pre(valid(p, n) && n >= 4 && n <= 1000)
-  modifies(p[2 : n - 2])
+  cppverify::pre(valid(p, n) && n >= 4 && n <= 1000)
+  cppverify::modifies(p[2 : n - 2])
 {
   zero_from(p, n, 1);
 }
 // CHECK-DAG: error: verification failed: range_escapes [{{.*}}::frame@[[@LINE-2]]:3]
 
 void writes_nothing(int *p, int n)
-  pre(valid(p, n) && n >= 1 && n <= 1000)
-  modifies(p[0 : 0])
+  cppverify::pre(valid(p, n) && n >= 1 && n <= 1000)
+  cppverify::modifies(p[0 : 0])
 {
 }
 
 void calls_empty(int *p, int n)
-  pre(valid(p, n) && n >= 1 && n <= 1000 && p[0] == 5)
-  post(p[0] == 5)
+  cppverify::pre(valid(p, n) && n >= 1 && n <= 1000 && p[0] == 5)
+  cppverify::post(p[0] == 5)
 {
   writes_nothing(p, n);
 }
@@ -110,43 +110,43 @@ void calls_empty(int *p, int n)
 
 // One scalar object is one cell.
 void set(int *x)
-  pre(x != nullptr)
-  modifies(*x)
-  post(*x == 1)
+  cppverify::pre(x != nullptr)
+  cppverify::modifies(*x)
+  cppverify::post(*x == 1)
 {
   *x = 1;
 }
 
 void keeps_neighbor(int *a, int *b)
-  pre(a != nullptr && b != nullptr && *b == 5)
-  modifies(*a)
-  post(*b == 5 && *a == 1)
+  cppverify::pre(a != nullptr && b != nullptr && *b == 5)
+  cppverify::modifies(*a)
+  cppverify::post(*b == 5 && *a == 1)
 {
   set(a);
 }
 // CHECK-DAG: Verified: keeps_neighbor
 
 // A heap-reading spec over cells a call does not write keeps its value.
-spec int total(const int *a, int n)
-  reads(a, n)
-  decreases(n)
+cppverify::spec int total(const int *a, int n)
+  cppverify::reads(a, n)
+  cppverify::decreases(n)
 {
   return n <= 0 ? 0 : total(a, n - 1) + a[n - 1];
 }
 
 void keeps_sum(int *out, const int *in, int n)
-  pre(valid(out, n) && valid(in, n) && n >= 0 && n <= 1000)
-  modifies(*out)
-  post(total(in, n) == old(total(in, n)))
+  cppverify::pre(valid(out, n) && valid(in, n) && n >= 0 && n <= 1000)
+  cppverify::modifies(*out)
+  cppverify::post(total(in, n) == cppverify::old(total(in, n)))
 {
   zero(out, n);
 }
 // CHECK-DAG: Verified: keeps_sum
 
 void changes_sum(int *out, int n)
-  pre(valid(out, n) && n >= 1 && n <= 1000)
-  modifies(*out)
-  post(total(out, n) == old(total(out, n)))
+  cppverify::pre(valid(out, n) && n >= 1 && n <= 1000)
+  cppverify::modifies(*out)
+  cppverify::post(total(out, n) == cppverify::old(total(out, n)))
 {
   zero(out, n);
 }
