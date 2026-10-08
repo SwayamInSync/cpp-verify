@@ -1,4 +1,4 @@
-// RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 int sum_for(int n)
   cppverify::pre(n >= 0 && n <= 3)
