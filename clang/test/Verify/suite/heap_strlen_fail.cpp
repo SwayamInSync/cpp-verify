@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 // Heap soundness: returning i + 1 overshoots the terminator -> post fails.
 int slen_bad(int* s, int n)
   cppverify::pre(s != nullptr && n >= 1 && n <= 1000 && s[n - 1] == 0)
