@@ -31,8 +31,8 @@ import subprocess
 import sys
 import tempfile
 
-PRELUDE = ("#include <cppverify.h>\n#include <cstdint>\n#include <cstddef>\n"
-           "using namespace cppverify;\n")
+PRELUDE = ("#include <cstdint>\n#include <cstddef>\n"
+           "using namespace cppverify;\nnamespace cv = cppverify;\n")
 DIRECTIVE = re.compile(r"^\s*\.\. cppverify-example:\s*(\w+)\s*(.*)$")
 MARKDOWN_DIRECTIVE = re.compile(
     r"^\s*<!--\s*cppverify-example:\s*(\w+)\s*(.*?)\s*-->\s*$")
