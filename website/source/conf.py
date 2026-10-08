@@ -1,6 +1,7 @@
 # Sphinx — CppVerify book, language reference, and links to Doxygen API.
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -10,7 +11,12 @@ BUILD = ROOT.parent / "build"
 project = "CppVerify"
 author = "CppVerify contributors"
 copyright = f"{datetime.now().year}, {author}"
-version = release = "0.1"
+# The one version of cpp-verify, which --version also reports.
+release = re.search(
+    r"set\(CPPVERIFY_VERSION (\S+)\)",
+    (ROOT.parents[1] / "clang/lib/Verify/CMakeLists.txt").read_text(),
+).group(1)
+version = ".".join(release.split(".")[:2])
 
 extensions = [
     "sphinx.ext.todo",
