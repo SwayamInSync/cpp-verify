@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 // Tier-0: the invariant holds on entry (j == 0) but the body breaks it, so
 // preservation (checked from an arbitrary state satisfying the invariant) fails.
 int preservation_fail(int n)
