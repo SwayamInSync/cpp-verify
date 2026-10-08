@@ -19,8 +19,8 @@ struct Point {
 // CHECK:   MemberExpr {{.*}} 'int' {{.*}} .y
 // CHECK:     ResultExpr {{.*}} 'Point'
 Point make_origin()
-  post(result.x == 0)
-  post(result.y == 0)
+  cppverify::post(cppverify::result.x == 0)
+  cppverify::post(cppverify::result.y == 0)
 {
   Point p;
   p.x = 0;
@@ -39,9 +39,9 @@ Point make_origin()
 // CHECK: post: BinaryOperator {{.*}} 'bool' '>='
 // CHECK:   ResultExpr {{.*}} 'int'
 int point_sum(Point p)
-  pre(p.x >= 0)
-  pre(p.y >= 0)
-  post(result >= 0)
+  cppverify::pre(p.x >= 0)
+  cppverify::pre(p.y >= 0)
+  cppverify::post(cppverify::result >= 0)
 {
   return p.x + p.y;
 }
@@ -59,8 +59,8 @@ int point_sum(Point p)
 // CHECK:     OldExpr {{.*}} 'int'
 // CHECK:       DeclRefExpr {{.*}} 'int' {{.*}} 'dx'
 Point translate(Point p, int dx, int dy)
-  post(result.x == old(p.x) + old(dx))
-  post(result.y == old(p.y) + old(dy))
+  cppverify::post(cppverify::result.x == cppverify::old(p.x) + cppverify::old(dx))
+  cppverify::post(cppverify::result.y == cppverify::old(p.y) + cppverify::old(dy))
 {
   Point r;
   r.x = p.x + dx;
@@ -75,11 +75,11 @@ Point translate(Point p, int dx, int dy)
 // CHECK: GhostBlockStmt
 // CHECK:   ContractAssertStmt
 int mirror_point_sum(Point p)
-  pre(p.x >= 0)
-  post(result >= 0)
+  cppverify::pre(p.x >= 0)
+  cppverify::post(cppverify::result >= 0)
 {
-  ghost {
-    contract_assert(p.x >= 0);
+  cppverify::ghost {
+    cppverify::check(p.x >= 0);
   }
   return p.x + p.y;
 }
