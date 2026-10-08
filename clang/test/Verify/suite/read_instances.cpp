@@ -1,5 +1,5 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefixes=CHECK,Z3
-// RUN: %cpp-verify --lower-only --dump-ir=4 %s 2>&1 | FileCheck %s --check-prefix=SMT
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefixes=CHECK,Z3
+// RUN: %cpp-verify --lower-only --dump-ir=4 %s -- 2>&1 | FileCheck %s --check-prefix=SMT
 //
 // A quantified fact about p[k] reads p + 4 * k. A solver matches it against
 // the reads of the query, but its rewriter folds a read at a constant or
