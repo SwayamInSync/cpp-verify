@@ -1,9 +1,9 @@
 #include <cppverify.h>
 
-int exec_fn(int x) post(result == x) by { contract_assert(true); } { return x; }
+int exec_fn(int x) cppverify::post(cppverify::result == x) by { cppverify::check(true); } { return x; }
 
-spec int when_block(int n) when(n > 0) by { contract_assert(true); } {
+cppverify::spec int when_block(int n) cppverify::when(n > 0) by { cppverify::check(true); } {
   return n;
 }
 
-spec int declared(int n) post(result >= 0) by { contract_assert(true); };
+cppverify::spec int declared(int n) cppverify::post(cppverify::result >= 0) by { cppverify::check(true); };
