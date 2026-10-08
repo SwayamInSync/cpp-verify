@@ -11,14 +11,14 @@ Example skeleton
 .. code-block:: cpp
 
    while (i < n)
-     invariant(0 <= i && i <= n)
-     decreases(n - i)
+     cv::invariant(0 <= i && i <= n)
+     cv::decreases(n - i)
    {
      // ...
      i++;
    }
 
-Place ``invariant`` and ``decreases`` **after** the loop header’s closing ``)``.
+Place ``cppverify::invariant`` and ``cppverify::decreases`` **after** the loop header’s closing ``)``.
 
 What the verifier actually checks
 ---------------------------------
@@ -53,15 +53,15 @@ before the semicolon:
    do {
      i = i + 1;
    } while (i < n)
-     invariant(i >= 1 && i <= n)
-     decreases(n - i);
+     cv::invariant(i >= 1 && i <= n)
+     cv::decreases(n - i);
 
 The first body execution is mandatory. CppVerify checks it from the concrete
 incoming state and establishes the invariant **after** that execution. It then
 uses the same modular preservation and termination rule as ``while`` for all
-later iterations. ``old(expr)`` in a loop invariant always reads the enclosing
+later iterations. ``cppverify::old(expr)`` in a loop invariant always reads the enclosing
 function's entry state; it is not a previous-iteration operator. A function
-local has no entry-state value and is rejected inside ``old(...)``.
+local has no entry-state value and is rejected inside ``cppverify::old(...)``.
 Returns inside loop bodies remain fail-closed; place an early return before the
 loop or restructure the loop with an explicit state variable.
 
@@ -77,11 +77,11 @@ unbounded accumulator under honest machine integers:
 .. code-block:: cpp
 
    // REJECTED: s >= 0 is not inductive.
-   int sum(int n) pre(n >= 0 && n <= 1000) post(result >= 0) {
+   int sum(int n) cv::pre(n >= 0 && n <= 1000) cv::post(cv::result >= 0) {
      int s = 0, i = 0;
      while (i < n)
-       invariant(i >= 0 && i <= n && s >= 0)   // too weak
-       decreases(n - i)
+       cv::invariant(i >= 0 && i <= n && s >= 0)   // too weak
+       cv::decreases(n - i)
      { s = s + 1; i = i + 1; }
      return s;
    }
@@ -94,32 +94,32 @@ so it provably cannot overflow:
 
 .. code-block:: cpp
 
-   int sum_bounded(int n) pre(n >= 0 && n <= 1000) post(result >= 0) {
+   int sum_bounded(int n) cv::pre(n >= 0 && n <= 1000) cv::post(cv::result >= 0) {
      int s = 0, i = 0;
      while (i < n)
-       invariant(i >= 0 && i <= n && s == i)   // s tracks i, bounded by n
-       decreases(n - i)
+       cv::invariant(i >= 0 && i <= n && s == i)   // s tracks i, bounded by n
+       cv::decreases(n - i)
      { s = s + 1; i = i + 1; }
      return s;
    }
 
-Every loop needs ``decreases``
-------------------------------
+Every loop needs ``cppverify::decreases``
+-----------------------------------------
 
-Verification is total correctness, as in Verus. A loop without ``decreases``
+Verification is total correctness, as in Verus. A loop without ``cppverify::decreases``
 leaves its function ``Unresolved`` with reason ``decreases.missing``. When a
 loop really may run forever (an event loop, a server), say so with
-``decreases(*)``: the function is then proved for the executions that
+``cppverify::decreases(*)``: the function is then proved for the executions that
 terminate and reported ``Verified ... [partial]``, and so is every caller.
 
 .. code-block:: cpp
 
    int wait_for(const int *flag)
-     pre(valid(flag, 1))
-     post(result == 1)
+     cv::pre(valid(flag, 1))
+     cv::post(cv::result == 1)
    {
      while (*flag != 1)
-       decreases(*)
+       cv::decreases(*)
      {
      }
      return *flag;
@@ -130,20 +130,20 @@ What a loop does not write
 
 A loop writes only the objects its stores and calls reach, so every other
 object keeps its value with no invariant saying so. To narrow the frame inside
-one object, list what the loop writes with ``modifies`` after its invariants
+one object, list what the loop writes with ``cppverify::modifies`` after its invariants
 (ACSL's ``loop assigns``). The footprints are read in each iteration's state:
 
 .. code-block:: cpp
 
    void zero_prefix(int *a, int n)
-     pre(valid(a, n + 1) && n >= 1 && n <= 1000)
-     modifies(*a)
-     post(a[n] == old(a[n]))
+     cv::pre(valid(a, n + 1) && n >= 1 && n <= 1000)
+     cv::modifies(*a)
+     cv::post(a[n] == cv::old(a[n]))
    {
      for (int i = 0; i < n; i = i + 1)
-       invariant(0 <= i && i <= n)
-       modifies(a[0 : n])
-       decreases(n - i)
+       cv::invariant(0 <= i && i <= n)
+       cv::modifies(a[0 : n])
+       cv::decreases(n - i)
      {
        a[i] = 0;
      }
@@ -152,24 +152,24 @@ one object, list what the loop writes with ``modifies`` after its invariants
 Ghost variables
 ---------------
 
-``ghost T x = e;`` declares a variable that exists only for verification and
+``cppverify::ghost T x = e;`` declares a variable that exists only for verification and
 lives in the function's scope, so loop invariants may name it. It can snapshot
 a value from before the loop:
 
 .. code-block:: cpp
 
    void add_all(int *a, int n, int d)
-     pre(valid(a, n) && n >= 0 && n <= 1000 && d >= 0 && d <= 1000)
-     pre(forall(k, 0, n, 0 <= a[k] && a[k] <= 1000))
-     modifies(*a)
-     post(forall(k, 0, n, a[k] == old(a[k]) + d))
+     cv::pre(valid(a, n) && n >= 0 && n <= 1000 && d >= 0 && d <= 1000)
+     cv::pre(cv::forall(k, 0, n, 0 <= a[k] && a[k] <= 1000))
+     cv::modifies(*a)
+     cv::post(cv::forall(k, 0, n, a[k] == cv::old(a[k]) + d))
    {
-     ghost int total = n;
+     cv::ghost int total = n;
      for (int i = 0; i < n; i = i + 1)
-       invariant(0 <= i && i <= n && total == n)
-       invariant(forall(k, 0, i, a[k] == old(a[k]) + d))
-       invariant(forall(k, i, n, a[k] == old(a[k])))
-       decreases(total - i)
+       cv::invariant(0 <= i && i <= n && total == n)
+       cv::invariant(cv::forall(k, 0, i, a[k] == cv::old(a[k]) + d))
+       cv::invariant(cv::forall(k, i, n, a[k] == cv::old(a[k])))
+       cv::decreases(total - i)
      {
        a[i] = a[i] + d;
      }
@@ -179,7 +179,7 @@ Lexicographic measures
 ----------------------
 
 When no single quantity falls every iteration, pass a comma-separated **tuple** —
-``decreases(a, b)`` is ordered lexicographically. Each iteration the tuple must
+``cppverify::decreases(a, b)`` is ordered lexicographically. Each iteration the tuple must
 strictly decrease in lex order: some component drops while every earlier
 component is unchanged. Every component must stay non-negative. This is what
 proves nested counters and Ackermann-style recursion terminate:
@@ -189,15 +189,15 @@ proves nested counters and Ackermann-style recursion terminate:
 .. code-block:: cpp
 
    while (i > 0 || j > 0)
-     invariant(i >= 0 && j >= 0)
-     decreases(i, j)        // j falls while i is fixed; when j resets, i drops
+     cv::invariant(i >= 0 && j >= 0)
+     cv::decreases(i, j)        // j falls while i is fixed; when j resets, i drops
    {
      if (j > 0) { j = j - 1; }
      else       { i = i - 1; j = b; }
    }
 
-The same tuple syntax works on a function's ``decreases`` clause, for recursive
-``spec``/``proof`` functions whose arguments shrink lexicographically.
+The same tuple syntax works on a function's ``cppverify::decreases`` clause, for recursive
+``cppverify::spec``/``cppverify::proof`` functions whose arguments shrink lexicographically.
 
 Loops after an early return
 ---------------------------
@@ -207,12 +207,12 @@ only checked on the path that actually reaches it:
 
 .. code-block:: cpp
 
-   int f(int n) pre(n >= 0 && n <= 50) post(result >= 0) {
+   int f(int n) cv::pre(n >= 0 && n <= 50) cv::post(cv::result >= 0) {
      if (n == 0) return 0;          // early exit
      int i = 0;
      while (i < n)
-       invariant(0 <= i && i <= n)  // not checked on the n == 0 path
-       decreases(n - i)
+       cv::invariant(0 <= i && i <= n)  // not checked on the n == 0 path
+       cv::decreases(n - i)
      { i = i + 1; }
      return i;
    }
@@ -231,7 +231,7 @@ Common failure modes
    * - Preservation fails
      - Strengthen invariant to include facts needed after body
    * - Termination fails
-     - Fix ``decreases`` expression; show it decreases and stays nonnegative
+     - Fix ``cppverify::decreases`` expression; show it decreases and stays nonnegative
 
 ``for`` loops use the same clause placement after the ``for (...)`` part.
 
@@ -239,24 +239,24 @@ Quantified properties
 ---------------------
 
 A loop usually establishes a property over a *range*. Express that with the bounded quantifiers
-``forall(i, lo, hi, e)`` and ``exists(i, lo, hi, e)`` — ``i`` ranges over ``[lo, hi)`` and the
+``cppverify::forall(i, lo, hi, e)`` and ``cppverify::exists(i, lo, hi, e)`` — ``i`` ranges over ``[lo, hi)`` and the
 half-open bound is the implicit trigger:
 
 .. code-block:: cpp
 
    bool nonneg_prefix(int n)
-     pre(n >= 0 && n <= 8)
-     post(result == forall(i, 0, n, i >= 0))
+     cv::pre(n >= 0 && n <= 8)
+     cv::post(cv::result == cv::forall(i, 0, n, i >= 0))
    { return true; }
 
-Quantifiers are valid anywhere a contract expression is — ``pre``, ``post``, ``invariant`` — which
+Quantifiers are valid anywhere a contract expression is — ``cppverify::pre``, ``cppverify::post``, ``cppverify::invariant`` — which
 is how a loop invariant talks about "everything processed so far". MVP supports **bounded**
 quantifiers only.
 
 Recursive spec functions in an invariant
 ----------------------------------------
 
-A common pattern relates the accumulator to a recursive ``spec`` function — the
+A common pattern relates the accumulator to a recursive ``cppverify::spec`` function — the
 loop *computes* what the spec *defines*. The invariant ``acc == count(i - 1)``
 below says "after processing ``i - 1`` elements, ``acc`` equals the spec's
 value":
@@ -264,40 +264,40 @@ value":
 .. warning::
 
    The pattern below is the *intended* shape for relating a loop accumulator to
-   a recursive ``spec`` function, but as written it does **not** verify on the
+   a recursive ``cppverify::spec`` function, but as written it does **not** verify on the
    current implementation: the step lemma itself fails. Relating loops to
    recursive specs at a symbolic index is a known automation gap. It is shown
    here to document the technique, not as a working example.
 
 .. code-block:: cpp
 
-   spec int count(int n)
-     decreases(n)
+   cv::spec int count(int n)
+     cv::decreases(n)
    { if (n <= 0) return 0; return 1 + count(n - 1); }
 
    // Step lemma: feeds Z3 the one-step recurrence at a symbolic index. It MUST
    // recurse — `reveal_with_fuel` alone does not unfold a spec call at a
    // symbolic argument.
-   proof void lemma_count_step(int i)
-     pre(i >= 1)
-     post(count(i) == 1 + count(i - 1))
-     decreases(i)
+   cv::proof void lemma_count_step(int i)
+     cv::pre(i >= 1)
+     cv::post(count(i) == 1 + count(i - 1))
+     cv::decreases(i)
    {
-     reveal_with_fuel(count, 2);
+     cv::reveal_with_fuel(count, 2);
      if (i > 1) { lemma_count_step(i - 1); }
    }
 
    int compute_count(int n)
-     pre(n >= 0 && n <= 10)
-     post(result == count(n))
+     cv::pre(n >= 0 && n <= 10)
+     cv::post(cv::result == count(n))
    {
      int acc = 0, i = 1;
      while (i <= n)
-       invariant(i >= 1 && i <= n + 1 && acc == count(i - 1))
-       decreases(n - i + 1)
+       cv::invariant(i >= 1 && i <= n + 1 && acc == count(i - 1))
+       cv::decreases(n - i + 1)
      {
-       ghost {
-         reveal_with_fuel(count, 2);
+       cv::ghost {
+         cv::reveal_with_fuel(count, 2);
          lemma_count_step(i);   // supplies count(i) == 1 + count(i - 1)
        }
        acc = acc + 1;
