@@ -3398,6 +3398,10 @@ void Parser::ParseDeclarationSpecifiers(
         !DS.hasTypeSpecifier() && GetLookAheadToken(1).is(tok::less))
       Tok.setKind(tok::identifier);
 
+    if (getLangOpts().VerifyContracts &&
+        Tok.isOneOf(tok::identifier, tok::coloncolon, tok::annot_cxxscope))
+      tryAnnotateCppVerify(CppVerifyPosition::Specifier);
+
     SourceLocation Loc = Tok.getLocation();
 
     // Helper for image types in OpenCL.
@@ -4153,22 +4157,11 @@ void Parser::ParseDeclarationSpecifiers(
       isInvalid = DS.setFunctionSpecInline(Loc, PrevSpec, DiagID);
       break;
 
-    // CppVerify: spec/proof function qualifiers.
-    case tok::kw_spec:
-      // Also mark inline so Clang's normal function machinery works.
-      // The dedicated FS_spec_specified bit preserves the original intent.
-      isInvalid = DS.setFunctionSpecInline(Loc, PrevSpec, DiagID);
-      if (!isInvalid) {
-        DS.SetRangeStart(Loc);
-        DS.setSpecFunctionSpec();
-      }
-      break;
-    case tok::kw_proof:
-      isInvalid = DS.setFunctionSpecInline(Loc, PrevSpec, DiagID);
-      if (!isInvalid) {
-        DS.SetRangeStart(Loc);
-        DS.setProofFunctionSpec();
-      }
+    // CppVerify: cppverify::spec and cppverify::proof.
+    case tok::annot_cppverify:
+      if (!ParseCppVerifySpecifier(DS, isInvalid, PrevSpec, DiagID,
+                                   ConsumedEnd))
+        goto DoneWithDeclSpec;
       break;
     case tok::kw_virtual:
       // C++ for OpenCL does not allow virtual function qualifier, to avoid
@@ -5758,6 +5751,10 @@ bool Parser::isDeclarationSpecifier(
   switch (Tok.getKind()) {
   default: return false;
 
+  case tok::annot_cppverify:
+    return isCppVerify(CppVerifyConstruct::Spec) ||
+           isCppVerify(CppVerifyConstruct::Proof);
+
   // OpenCL 2.0 and later define this keyword.
   case tok::kw_pipe:
     return getLangOpts().OpenCL &&
@@ -5877,10 +5874,6 @@ bool Parser::isDeclarationSpecifier(
   case tok::kw_virtual:
   case tok::kw_explicit:
   case tok::kw__Noreturn:
-
-    // CppVerify function qualifiers
-  case tok::kw_spec:
-  case tok::kw_proof:
 
     // alignment-specifier
   case tok::kw__Alignas:
