@@ -10,8 +10,8 @@ struct NotBool { int x; };
 // ---------------------------------------------------------------------------
 int f1(int x) {
   NotBool s;
-  ghost {
-    contract_assert(s); // expected-error {{value of type 'NotBool' is not contextually convertible to 'bool'}}
+  cppverify::ghost {
+    cppverify::check(s); // expected-error {{value of type 'NotBool' is not contextually convertible to 'bool'}}
   }
   return x;
 }
@@ -20,7 +20,7 @@ int f1(int x) {
 // 2. Quantifier with float lower bound
 // ---------------------------------------------------------------------------
 int f2(int n)
-  pre(forall(i, 0.5, n, i >= 0)) // expected-error {{quantifier bound must have integer type}}
+  cppverify::pre(cppverify::forall(i, 0.5, n, i >= 0)) // expected-error {{quantifier bound must have integer type}}
 {
   return n;
 }
@@ -29,7 +29,7 @@ int f2(int n)
 // 3. Quantifier with float upper bound
 // ---------------------------------------------------------------------------
 int f3(int n)
-  pre(forall(i, 0, 1.5, i >= 0)) // expected-error {{quantifier bound must have integer type}}
+  cppverify::pre(cppverify::forall(i, 0, 1.5, i >= 0)) // expected-error {{quantifier bound must have integer type}}
 {
   return n;
 }
@@ -40,7 +40,7 @@ int f3(int n)
 int f4(int n) {
   int i = 0;
   while (i < n)
-    decreases(1.5) // expected-error {{decreases expression must have integer type}}
+    cppverify::decreases(1.5) // expected-error {{decreases expression must have integer type}}
   {
     i++;
   }
@@ -52,7 +52,7 @@ int f4(int n) {
 // ---------------------------------------------------------------------------
 int f5(int n) {
   for (int i = 0; i < n; i++)
-    decreases(0.5) // expected-error {{decreases expression must have integer type}}
+    cppverify::decreases(0.5) // expected-error {{decreases expression must have integer type}}
   {
   }
   return n;
@@ -61,8 +61,8 @@ int f5(int n) {
 // ---------------------------------------------------------------------------
 // 6. decreases on spec function with float
 // ---------------------------------------------------------------------------
-spec int f6(int n)
-  decreases(1.0) // expected-error {{decreases expression must have integer type}}
+cppverify::spec int f6(int n)
+  cppverify::decreases(1.0) // expected-error {{decreases expression must have integer type}}
 {
   return n;
 }
