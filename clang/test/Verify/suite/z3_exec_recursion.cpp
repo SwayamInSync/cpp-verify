@@ -3,9 +3,9 @@
 // RUN: %cpp-verify --lower-only --timeout=1 %s 2>&1 | FileCheck %s --check-prefix=LOWER
 
 int valid_countdown(int n)
-  pre(n >= 0)
-  post(result == 0)
-  decreases(n)
+  cppverify::pre(n >= 0)
+  cppverify::post(cppverify::result == 0)
+  cppverify::decreases(n)
 {
   if (n == 0)
     return 0;
@@ -13,10 +13,10 @@ int valid_countdown(int n)
 }
 
 int invalid_nonterminating_exec(int n)
-  pre(n >= 0)
-  post(result == 0)
-  post(result == 1)
-  decreases(n)
+  cppverify::pre(n >= 0)
+  cppverify::post(cppverify::result == 0)
+  cppverify::post(cppverify::result == 1)
+  cppverify::decreases(n)
 {
   return invalid_nonterminating_exec(n);
 }
