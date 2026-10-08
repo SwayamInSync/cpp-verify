@@ -16,7 +16,7 @@ functions. The result must directly initialize a local raw pointer:
 .. code-block:: cpp
 
    int roundtrip(int value)
-     post(result == value)
+     cv::post(cv::result == value)
    {
      int *p = new int(value);
      int observed = *p;
@@ -30,7 +30,7 @@ Default initialization does not:
 .. code-block:: cpp
 
    int write_before_read(int value)
-     post(result == value)
+     cv::post(cv::result == value)
    {
      int *p = new int;       // the pointee is uninitialized
      *p = value;             // this store marks it initialized
@@ -40,7 +40,7 @@ Default initialization does not:
    }
 
    int zero_initialized()
-     post(result == 0)
+     cv::post(cv::result == 0)
    {
      int *p = new int();     // value-initialized to zero
      int observed = *p;
@@ -93,7 +93,7 @@ Matching-type local copies, assignments, conditional selections, and
 
 .. code-block:: cpp
 
-   int alias_write(int value) post(result == value) {
+   int alias_write(int value) cv::post(cv::result == value) {
      int *first = new int(0);
      int *owner = new int;
      int *alias = first;
@@ -114,19 +114,19 @@ Contracted scalar interfaces
 A live initialized allocation pointer may cross a checked modular interface
 when the callee is a verified in-translation-unit executable function with a
 direct, matching-typed pointer parameter. The callee may compare or directly
-dereference that parameter, and may write it under ``modifies(*p)``:
+dereference that parameter, and may write it under ``cppverify::modifies(*p)``:
 
 .. code-block:: cpp
 
    void write_value(int *target, int value)
-     pre(target != nullptr)
-     modifies(*target)
-     post(*target == value)
+     cv::pre(target != nullptr)
+     cv::modifies(*target)
+     cv::post(*target == value)
    {
      *target = value;
    }
 
-   int modular_write(int value) post(result == value) {
+   int modular_write(int value) cv::post(cv::result == value) {
      int *p = new int(0);
      write_value(p, value);
      int observed = *p;
@@ -150,19 +150,19 @@ A verified callee may return the direct dynamic formal, ``nullptr``, or a
 conditional selection of direct dynamic formals. ``VCallStmt`` gives the
 pointer result a separate SSA provenance output. Generated result
 validity/initialization clauses bind that output to the current byte owner, and
-a contract such as ``post(result == source)`` preserves the source identity:
+a contract such as ``cppverify::post(cppverify::result == source)`` preserves the source identity:
 
 .. code-block:: cpp
 
    int *identity(int *source)
-     pre(source != nullptr)
-     post(result == source)
-     post(*result == old(*source))
+     cv::pre(source != nullptr)
+     cv::post(cv::result == source)
+     cv::post(*cv::result == cv::old(*source))
    {
      return source;
    }
 
-   int returned_alias(int value) post(result == value) {
+   int returned_alias(int value) cv::post(cv::result == value) {
      int *owner = new int(value);
      int *alias = identity(owner);
      int observed = *alias;
@@ -172,7 +172,7 @@ a contract such as ``post(result == source)`` preserves the source identity:
 
 A callee that writes no memory leaves the heap unchanged, so the pointee
 postcondition above is not needed for ``returned_alias``. A pointer-taking
-callee that may write memory and has no ``modifies`` forgets the value heap at
+callee that may write memory and has no ``cppverify::modifies`` forgets the value heap at
 the call; such a postcondition then restores the value. Provenance alone proves
 which live object the pointer denotes; it does not invent a value-preservation
 promise.
@@ -182,10 +182,10 @@ subscript, copy, rebind, or deallocate the dynamic formal. Pointer-returning
 calls nested inside the callee, proof functions, body-less external contracts,
 ghost use, allocation inside the callee, type erasure, and a returned local
 pointer copy are rejected. A weak pointer-result contract may be read as an
-arbitrary valid pointer, but cannot gain caller-owned ``modifies`` or
+arbitrary valid pointer, but cannot gain caller-owned ``cppverify::modifies`` or
 ``delete`` authority without proving equality to an owned result.
 Ordinary modular heap framing still applies: a read helper that must return the
-entry value should state ``post(result == old(*p))``.
+entry value should state ``cppverify::post(cppverify::result == cppverify::old(*p))``.
 
 Fresh-owned pointer results
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -196,15 +196,15 @@ owned scalar allocation:
 .. code-block:: cpp
 
    int *make_value(int value)
-     post(result != nullptr)
-     post(*result == value)
+     cv::post(cv::result != nullptr)
+     cv::post(*cv::result == value)
    {
      int *owner = new int(value);
      return owner;
    }
 
    int use_factory(int value)
-     post(result == value)
+     cv::post(cv::result == value)
    {
      int *p = make_value(value);
      int observed = *p;
@@ -212,11 +212,11 @@ owned scalar allocation:
      return observed;
    }
 
-There is deliberately no contract keyword that claims freshness. CppVerify
+There is deliberately no contract clause that claims freshness. CppVerify
 infers the effect only from a body-present executable function when a
 conservative path analysis establishes all of the following:
 
-* the function has no pointer parameters or explicit ``modifies`` clause;
+* the function has no pointer parameters or explicit ``cppverify::modifies`` clause;
 * every return path returns ``nullptr`` or the exact live base of one fresh
   scalar allocation of the declared pointee type;
 * the allocation is fully initialized before return and has not been freed;
@@ -235,9 +235,9 @@ target size and alignment, byte ownership, liveness, initialization, and an
 arbitrary typed scalar value. The new range must be disjoint from every live
 represented object, live pointer value, stored pointer cell, and declared
 ``valid`` extent. The ordinary postcondition then constrains that arbitrary
-value; for example, ``post(*result == value)`` supplies the functional fact
+value; for example, ``cppverify::post(*cppverify::result == value)`` supplies the functional fact
 used above. A nullable factory guards all allocation metadata on
-``result != nullptr``.
+``cppverify::result != nullptr``.
 
 The caller owns the materialized identity and may copy, forward, mutate, or
 delete it through the supported scalar-pointer operations. Deletion through
@@ -250,20 +250,20 @@ Consequently, all of these are rejected:
 
 .. code-block:: cpp
 
-   int use_after_delete() post(true) {
+   int use_after_delete() cv::post(true) {
      int *p = new int(1);
      delete p;
      return *p;              // use after lifetime
    }
 
-   int double_delete() post(true) {
+   int double_delete() cv::post(true) {
      int *p = new int(1);
      delete p;
      delete p;               // no live allocation remains
      return 0;
    }
 
-   int uninitialized_read() post(true) {
+   int uninitialized_read() cv::post(true) {
      int *p = new int;
      return *p;              // no preceding store
    }
