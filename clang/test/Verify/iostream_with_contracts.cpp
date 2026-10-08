@@ -13,8 +13,8 @@ struct codecvt : codecvt_base {
 } // namespace std_like
 
 int abs_val(int x)
-  pre(true)
-  post(result >= 0)
+  cppverify::pre(true)
+  cppverify::post(cppverify::result >= 0)
 {
   return x < 0 ? -x : x;
 }
