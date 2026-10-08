@@ -6,21 +6,21 @@
 // and aliases are rejected. A post is a checked property of the body, and a
 // spec changes no state for it to refer to with old.
 
-spec int needs_pre(int n)
-  pre(n >= 0)
-  decreases(n)
+cppverify::spec int needs_pre(int n)
+  cppverify::pre(n >= 0)
+  cppverify::decreases(n)
 {
   return n < 0 ? needs_pre(n) + 1 : 0;
 }
 
-spec int post_with_old(int n)
-  post(result == old(n))
+cppverify::spec int post_with_old(int n)
+  cppverify::post(cppverify::result == cppverify::old(n))
 {
   return n;
 }
 
 int executable_when(int n)
-  when(n > 0)
+  cppverify::when(n > 0)
 {
   return n;
 }
