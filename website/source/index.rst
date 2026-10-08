@@ -29,7 +29,7 @@ Install
          cd cpp-verify
          ./setup.sh
 
-      → ``build/bin/cpp-verify``, ``build/bin/clang++``
+      → ``build/bin/cpp-verify``, ``build/bin/clang++``, ``build/bin/clangd``, ``build/bin/clang-format``
 
    .. tab:: Linux
 
@@ -40,7 +40,7 @@ Install
          cd cpp-verify
          ./setup.sh
 
-      → ``build/bin/cpp-verify``, ``build/bin/clang++``
+      → ``build/bin/cpp-verify``, ``build/bin/clang++``, ``build/bin/clangd``, ``build/bin/clang-format``
 
    .. tab:: Windows
 
@@ -53,7 +53,7 @@ Install
          cd cpp-verify
          .\setup.ps1
 
-      → ``build\bin\cpp-verify.exe``, ``build\bin\clang++.exe``
+      → ``build\bin\cpp-verify.exe``, ``build\bin\clang++.exe``, ``build\bin\clangd.exe``, ``build\bin\clang-format.exe``
 
 Manual build (from repository root; same flags as ``setup.sh``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -66,11 +66,11 @@ Manual build (from repository root; same flags as ``setup.sh``)
 
          cmake -S llvm -B build -G Ninja \
            -DCMAKE_BUILD_TYPE=Release \
-           -DLLVM_ENABLE_PROJECTS=clang \
+           -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra" \
            -DLLVM_TARGETS_TO_BUILD=Native \
            -DCPPVERIFY_VENDOR_Z3=ON \
            -DCPPVERIFY_PREFER_SYSTEM_Z3=OFF
-         ninja -C build clang cpp-verify
+         ninja -C build clang cpp-verify clangd clang-format
 
    .. tab:: Windows (Ninja)
 
@@ -78,11 +78,11 @@ Manual build (from repository root; same flags as ``setup.sh``)
 
          cmake -S llvm -B build -G Ninja `
            -DCMAKE_BUILD_TYPE=Release `
-           -DLLVM_ENABLE_PROJECTS=clang `
+           -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra" `
            -DLLVM_TARGETS_TO_BUILD=Native `
            -DCPPVERIFY_VENDOR_Z3=ON `
            -DCPPVERIFY_PREFER_SYSTEM_Z3=OFF
-         cmake --build build --target clang cpp-verify -m
+         cmake --build build --target clang cpp-verify clangd clang-format -m
 
    .. tab:: Windows (Visual Studio)
 
@@ -90,11 +90,11 @@ Manual build (from repository root; same flags as ``setup.sh``)
 
          cmake -S llvm -B build `
            -G "Visual Studio 17 2022" -A x64 `
-           -DLLVM_ENABLE_PROJECTS=clang `
+           -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra" `
            -DLLVM_TARGETS_TO_BUILD=Native `
            -DCPPVERIFY_VENDOR_Z3=ON `
            -DCPPVERIFY_PREFER_SYSTEM_Z3=OFF
-         cmake --build build --config Release --target clang cpp-verify -m
+         cmake --build build --config Release --target clang cpp-verify clangd clang-format -m
 
 Quick start
 -----------
