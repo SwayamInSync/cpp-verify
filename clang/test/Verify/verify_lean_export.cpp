@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: %cpp-verify --backend=lean --lean-out=%t.lean %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: %cpp-verify --backend=lean --lean-out=%t.lean %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 // RUN: grep -Eq 'theorem cppverify_abs_fn_[0-9a-f]+_correct' %t.lean
 // RUN: grep -q 'unchecked Lean scratch-pad' %t.lean
 // RUN: grep -q 'sorry' %t.lean
