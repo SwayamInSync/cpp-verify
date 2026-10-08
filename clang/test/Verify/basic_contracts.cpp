@@ -9,20 +9,20 @@
 // CHECK: ForallExpr
 
 int safe_add(int a, int b)
-  pre(a >= 0)
-  pre(b >= 0)
-  post(result >= 0)
+  cppverify::pre(a >= 0)
+  cppverify::pre(b >= 0)
+  cppverify::post(cppverify::result >= 0)
 {
-  ghost {
-    contract_assert(a + b >= 0);
+  cppverify::ghost {
+    cppverify::check(a + b >= 0);
   }
   return a + b;
 }
 
 int clamped_index(int i, int n)
-  pre(n > 0)
-  pre(forall(j, 0, n, j >= 0))
-  post(result >= 0)
+  cppverify::pre(n > 0)
+  cppverify::pre(cppverify::forall(j, 0, n, j >= 0))
+  cppverify::post(cppverify::result >= 0)
 {
   if (i < 0) return 0;
   if (i >= n) return n - 1;
