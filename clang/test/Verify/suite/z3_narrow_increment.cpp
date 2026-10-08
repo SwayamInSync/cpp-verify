@@ -2,32 +2,32 @@
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 signed char valid_i8_increment(signed char value)
-  pre(value == 127)
-  post(result == -128)
+  cppverify::pre(value == 127)
+  cppverify::post(cppverify::result == -128)
 {
   ++value;
   return value;
 }
 
 signed char valid_i8_decrement(signed char value)
-  pre(value == -128)
-  post(result == 127)
+  cppverify::pre(value == -128)
+  cppverify::post(cppverify::result == 127)
 {
   value--;
   return value;
 }
 
 void valid_i8_pointer_increment(signed char *value)
-  pre(value != nullptr && *value == 127)
-  modifies(*value)
-  post(*value == -128)
+  cppverify::pre(value != nullptr && *value == 127)
+  cppverify::modifies(*value)
+  cppverify::post(*value == -128)
 {
   ++*value;
 }
 
 signed char invalid_i8_increment_claim(signed char value)
-  pre(value == 127)
-  post(result == 127)
+  cppverify::pre(value == 127)
+  cppverify::post(cppverify::result == 127)
 {
   ++value;
   return value;
