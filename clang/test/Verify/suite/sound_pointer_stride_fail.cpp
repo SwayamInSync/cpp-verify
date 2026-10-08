@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 //
 // Pointer expressions and implicit pointee-object ranges must use the same byte
 // unit. For int*, q == p + 1 places q immediately after p's int object, so the
