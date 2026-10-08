@@ -2,78 +2,78 @@
 // RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 void write_allocated(int *target, int value)
-  pre(target != nullptr)
-  modifies(*target)
-  post(*target == value)
+  cppverify::pre(target != nullptr)
+  cppverify::modifies(*target)
+  cppverify::post(*target == value)
 {
   *target = value;
 }
 
 int read_allocated(const int *source)
-  pre(source != nullptr)
-  post(result == old(*source))
+  cppverify::pre(source != nullptr)
+  cppverify::post(cppverify::result == cppverify::old(*source))
 {
   return *source;
 }
 
 bool observe_aliases(int *left, int *right)
-  aliases(left, right)
-  post(result == (left == right))
+  cppverify::aliases(left, right)
+  cppverify::post(cppverify::result == (left == right))
 {
   return left == right;
 }
 
 int pass_scalar_value(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   return value;
 }
 
 int *pointer_identity(int *value)
-  pre(value != nullptr)
-  post(result == value)
-  post(*result == old(*value))
+  cppverify::pre(value != nullptr)
+  cppverify::post(cppverify::result == value)
+  cppverify::post(*cppverify::result == cppverify::old(*value))
 {
   return value;
 }
 
 int *choose_pointer(bool choose, int *left, int *right)
-  pre(left != nullptr && right != nullptr)
-  post(result == (choose ? left : right))
-  post(*result == (choose ? old(*left) : old(*right)))
+  cppverify::pre(left != nullptr && right != nullptr)
+  cppverify::post(cppverify::result == (choose ? left : right))
+  cppverify::post(*cppverify::result == (choose ? cppverify::old(*left) : cppverify::old(*right)))
 {
   return choose ? left : right;
 }
 
 int forward_read(const int *source)
-  pre(source != nullptr)
-  post(result == old(*source))
+  cppverify::pre(source != nullptr)
+  cppverify::post(cppverify::result == cppverify::old(*source))
 {
   return pass_scalar_value(*source);
 }
 
 void forward_write(int *target, int value)
-  pre(target != nullptr)
-  modifies(*target)
-  post(*target == value)
+  cppverify::pre(target != nullptr)
+  cppverify::modifies(*target)
+  cppverify::post(*target == value)
 {
   write_allocated(target, value);
 }
 
-spec int scalar_spec_identity(int value)
+cppverify::spec int scalar_spec_identity(int value)
 {
   return value;
 }
 
 int forward_spec_read(const int *source)
-  pre(source != nullptr)
-  post(result == scalar_spec_identity(old(*source)))
+  cppverify::pre(source != nullptr)
+  cppverify::post(cppverify::result == scalar_spec_identity(cppverify::old(*source)))
 {
   return *source;
 }
 
 int initialized_roundtrip(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int *p = new int(value);
   int observed = *p;
@@ -82,7 +82,7 @@ int initialized_roundtrip(int value)
 }
 
 int stored_roundtrip(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int *p = new int;
   *p = value;
@@ -92,7 +92,7 @@ int stored_roundtrip(int value)
 }
 
 bool distinct_allocations()
-  post(result)
+  cppverify::post(cppverify::result)
 {
   int *p = new int(1);
   int *q = new int(2);
@@ -103,7 +103,7 @@ bool distinct_allocations()
 }
 
 int value_initialized()
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   int *p = new int();
   int observed = *p;
@@ -112,7 +112,7 @@ int value_initialized()
 }
 
 int reuse_after_delete(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int *old_object = new int(1);
   delete old_object;
@@ -123,7 +123,7 @@ int reuse_after_delete(int value)
 }
 
 int branch_initialized(bool choose)
-  post(result == 1 || result == 2)
+  cppverify::post(cppverify::result == 1 || cppverify::result == 2)
 {
   int *p = new int;
   if (choose)
@@ -136,10 +136,10 @@ int branch_initialized(bool choose)
 }
 
 int allocation_after_incrementless_loop(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   for (int i = 0; false;)
-    decreases(0)
+    cppverify::decreases(0)
   {
   }
   int *p = new int(value);
@@ -149,7 +149,7 @@ int allocation_after_incrementless_loop(int value)
 }
 
 bool bool_roundtrip(bool value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   bool *p = new bool(value);
   bool observed = *p;
@@ -163,7 +163,7 @@ enum class ByteState : unsigned char {
 };
 
 ByteState enum_roundtrip(ByteState value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   const ByteState *p = new ByteState(value);
   ByteState observed = *p;
@@ -172,7 +172,7 @@ ByteState enum_roundtrip(ByteState value)
 }
 
 int alias_store_roundtrip(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int *owner = new int;
   int *alias = owner;
@@ -183,7 +183,7 @@ int alias_store_roundtrip(int value)
 }
 
 int const_alias_roundtrip(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int *owner = new int(value);
   const int *alias = owner;
@@ -193,7 +193,7 @@ int const_alias_roundtrip(int value)
 }
 
 int modular_alias_write(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int *owner = new int(0);
   int *alias = owner;
@@ -204,7 +204,7 @@ int modular_alias_write(int value)
 }
 
 int modular_read(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int *owner = new int(value);
   int observed = read_allocated(owner);
@@ -213,7 +213,7 @@ int modular_read(int value)
 }
 
 bool modular_alias_observation()
-  post(result)
+  cppverify::post(cppverify::result)
 {
   int *owner = new int(1);
   int *alias = owner;
@@ -223,7 +223,7 @@ bool modular_alias_observation()
 }
 
 int modular_loaded_value(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int *owner = new int(value);
   int observed = pass_scalar_value(*owner);
@@ -232,7 +232,7 @@ int modular_loaded_value(int value)
 }
 
 int direct_pointer_reassignment(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int *first = new int(1);
   int *second = new int(value);
@@ -245,7 +245,7 @@ int direct_pointer_reassignment(int value)
 }
 
 int owner_reassignment_preserves_alias(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int *owner = new int(value);
   int *alias = owner;
@@ -258,7 +258,7 @@ int owner_reassignment_preserves_alias(int value)
 }
 
 int conditional_pointer_copy(bool choose)
-  post(result == 1 || result == 2)
+  cppverify::post(cppverify::result == 1 || cppverify::result == 2)
 {
   int *first = new int(1);
   int *second = new int(2);
@@ -270,7 +270,7 @@ int conditional_pointer_copy(bool choose)
 }
 
 int branch_pointer_reassignment(bool choose)
-  post(result == 1 || result == 2)
+  cppverify::post(cppverify::result == 1 || cppverify::result == 2)
 {
   int *first = new int(1);
   int *second = new int(2);
@@ -284,7 +284,7 @@ int branch_pointer_reassignment(bool choose)
 }
 
 bool null_pointer_reassignment()
-  post(result)
+  cppverify::post(cppverify::result)
 {
   int *owner = new int(1);
   int *alias = owner;
@@ -295,7 +295,7 @@ bool null_pointer_reassignment()
 }
 
 int conditional_null_pointer(bool choose, int value)
-  post(result == 0 || result == value)
+  cppverify::post(cppverify::result == 0 || cppverify::result == value)
 {
   int *owner = new int(value);
   int *alias = choose ? owner : nullptr;
@@ -307,7 +307,7 @@ int conditional_null_pointer(bool choose, int value)
 }
 
 int stale_pointer_reassigned_to_fresh_object(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int *owner = new int(1);
   int *alias = owner;
@@ -320,7 +320,7 @@ int stale_pointer_reassigned_to_fresh_object(int value)
 }
 
 int modular_write_after_reassignment(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int *first = new int(1);
   int *second = new int(2);
@@ -334,7 +334,7 @@ int modular_write_after_reassignment(int value)
 }
 
 int self_referential_conditional_reassignment(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int *owner = new int(value);
   int *alias = nullptr;
@@ -345,7 +345,7 @@ int self_referential_conditional_reassignment(int value)
 }
 
 int branch_assignment_from_null(bool choose, int value)
-  post(result == 0 || result == value)
+  cppverify::post(cppverify::result == 0 || cppverify::result == value)
 {
   int *owner = new int(value);
   int *alias = nullptr;
@@ -359,7 +359,7 @@ int branch_assignment_from_null(bool choose, int value)
 }
 
 int delete_null_preserves_liveness(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int *owner = new int(value);
   int *alias = owner;
@@ -371,7 +371,7 @@ int delete_null_preserves_liveness(int value)
 }
 
 int branch_order_independent_provenance(bool choose, int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int *owner = new int(value);
   int *alias = nullptr;
@@ -385,7 +385,7 @@ int branch_order_independent_provenance(bool choose, int value)
 }
 
 int modular_pointer_return(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int *owner = new int(value);
   int *returned = pointer_identity(owner);
@@ -395,7 +395,7 @@ int modular_pointer_return(int value)
 }
 
 int modular_pointer_return_assignment(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int *owner = new int(value);
   int *returned = nullptr;
@@ -406,7 +406,7 @@ int modular_pointer_return_assignment(int value)
 }
 
 int modular_pointer_return_branches(bool choose)
-  post(result == 1 || result == 2)
+  cppverify::post(cppverify::result == 1 || cppverify::result == 2)
 {
   int *first = new int(1);
   int *second = new int(2);
@@ -422,7 +422,7 @@ int modular_pointer_return_branches(bool choose)
 }
 
 int modular_conditional_pointer_return(bool choose)
-  post(result == 1 || result == 2)
+  cppverify::post(cppverify::result == 1 || cppverify::result == 2)
 {
   int *first = new int(1);
   int *second = new int(2);
@@ -434,7 +434,7 @@ int modular_conditional_pointer_return(bool choose)
 }
 
 int modular_forwarded_read(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int *owner = new int(value);
   int observed = forward_read(owner);
@@ -443,7 +443,7 @@ int modular_forwarded_read(int value)
 }
 
 int modular_forwarded_write(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int *owner = new int(0);
   forward_write(owner, value);
@@ -453,7 +453,7 @@ int modular_forwarded_write(int value)
 }
 
 int modular_forwarded_spec_read(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int *owner = new int(value);
   int observed = forward_spec_read(owner);
