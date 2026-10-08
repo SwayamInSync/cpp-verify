@@ -24,13 +24,20 @@ need cmake
 need ninja
 need "${CXX:-c++}"
 
+PLATFORM_ARGS=()
+# On macOS, clang finds the SDK as Xcode's tools do, without SDKROOT.
+if [ "$(uname -s)" = Darwin ]; then
+  PLATFORM_ARGS+=(-DCLANG_USE_XCSELECT=ON)
+fi
+
 echo "==> Configuring LLVM + Clang + clang-tools-extra + CppVerify (vendored Z3)"
 cmake -S "$ROOT/llvm" -B "$BUILD_DIR" -G "$GENERATOR" \
   -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
   -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra" \
   -DLLVM_TARGETS_TO_BUILD="$LLVM_TARGETS" \
   -DCPPVERIFY_VENDOR_Z3=ON \
-  -DCPPVERIFY_PREFER_SYSTEM_Z3=OFF
+  -DCPPVERIFY_PREFER_SYSTEM_Z3=OFF \
+  ${PLATFORM_ARGS[@]+"${PLATFORM_ARGS[@]}"}
 
 echo "==> Building clang, cpp-verify, clangd, and clang-format"
 JOBS="${JOBS:-$( (nproc 2>/dev/null) || echo 8 )}"
