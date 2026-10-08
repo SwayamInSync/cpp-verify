@@ -1,6 +1,6 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
-// RUN: not %cpp-verify --dump-ir=1 %s 2>&1 | FileCheck %s --check-prefix=VCR
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: not %cpp-verify --dump-ir=1 %s -- 2>&1 | FileCheck %s --check-prefix=VCR
 
 int count_to(int n)
   cppverify::pre(n >= 0 && n <= 20)
