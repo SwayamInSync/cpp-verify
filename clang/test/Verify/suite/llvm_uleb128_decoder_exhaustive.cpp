@@ -32,11 +32,11 @@ struct DecodeResult {
   unsigned status;
 };
 
-spec bool valid(const uint8_t *pointer, unsigned count) {
+cppverify::spec bool valid(const uint8_t *pointer, unsigned count) {
   return true;
 }
 
-spec unsigned uleb_status_math(unsigned length, uint8_t b0, uint8_t b1,
+cppverify::spec unsigned uleb_status_math(unsigned length, uint8_t b0, uint8_t b1,
                                uint8_t b2, uint8_t b3, uint8_t b4, uint8_t b5,
                                uint8_t b6, uint8_t b7, uint8_t b8, uint8_t b9,
                                uint8_t b10) {
@@ -91,7 +91,7 @@ spec unsigned uleb_status_math(unsigned length, uint8_t b0, uint8_t b1,
   return 1;
 }
 
-spec unsigned uleb_consumed_math(unsigned length, uint8_t b0, uint8_t b1,
+cppverify::spec unsigned uleb_consumed_math(unsigned length, uint8_t b0, uint8_t b1,
                                  uint8_t b2, uint8_t b3, uint8_t b4,
                                  uint8_t b5, uint8_t b6, uint8_t b7,
                                  uint8_t b8, uint8_t b9, uint8_t b10) {
@@ -124,38 +124,38 @@ spec unsigned uleb_consumed_math(unsigned length, uint8_t b0, uint8_t b1,
   return 11;
 }
 
-spec uint64_t uleb_value_math_1(uint64_t b0) {
+cppverify::spec uint64_t uleb_value_math_1(uint64_t b0) {
   return b0 % 128;
 }
 
-spec uint64_t uleb_value_math_2(uint64_t b0, uint64_t b1) {
+cppverify::spec uint64_t uleb_value_math_2(uint64_t b0, uint64_t b1) {
   return (b0 % 128) + (b1 % 128) * 128;
 }
 
-spec uint64_t uleb_value_math_3(uint64_t b0, uint64_t b1, uint64_t b2) {
+cppverify::spec uint64_t uleb_value_math_3(uint64_t b0, uint64_t b1, uint64_t b2) {
   return (b0 % 128) + (b1 % 128) * 128 + (b2 % 128) * 16384;
 }
 
-spec uint64_t uleb_value_math_4(uint64_t b0, uint64_t b1, uint64_t b2,
+cppverify::spec uint64_t uleb_value_math_4(uint64_t b0, uint64_t b1, uint64_t b2,
                                 uint64_t b3) {
   return (b0 % 128) + (b1 % 128) * 128 + (b2 % 128) * 16384 +
          (b3 % 128) * 2097152;
 }
 
-spec uint64_t uleb_value_math_5(uint64_t b0, uint64_t b1, uint64_t b2,
+cppverify::spec uint64_t uleb_value_math_5(uint64_t b0, uint64_t b1, uint64_t b2,
                                 uint64_t b3, uint64_t b4) {
   return (b0 % 128) + (b1 % 128) * 128 + (b2 % 128) * 16384 +
          (b3 % 128) * 2097152 + (b4 % 128) * 268435456;
 }
 
-spec uint64_t uleb_value_math_6(uint64_t b0, uint64_t b1, uint64_t b2,
+cppverify::spec uint64_t uleb_value_math_6(uint64_t b0, uint64_t b1, uint64_t b2,
                                 uint64_t b3, uint64_t b4, uint64_t b5) {
   return (b0 % 128) + (b1 % 128) * 128 + (b2 % 128) * 16384 +
          (b3 % 128) * 2097152 + (b4 % 128) * 268435456 +
          (b5 % 128) * 34359738368ULL;
 }
 
-spec uint64_t uleb_value_math_7(uint64_t b0, uint64_t b1, uint64_t b2,
+cppverify::spec uint64_t uleb_value_math_7(uint64_t b0, uint64_t b1, uint64_t b2,
                                 uint64_t b3, uint64_t b4, uint64_t b5,
                                 uint64_t b6) {
   return (b0 % 128) + (b1 % 128) * 128 + (b2 % 128) * 16384 +
@@ -164,7 +164,7 @@ spec uint64_t uleb_value_math_7(uint64_t b0, uint64_t b1, uint64_t b2,
          (b6 % 128) * 4398046511104ULL;
 }
 
-spec uint64_t uleb_value_math_8(uint64_t b0, uint64_t b1, uint64_t b2,
+cppverify::spec uint64_t uleb_value_math_8(uint64_t b0, uint64_t b1, uint64_t b2,
                                 uint64_t b3, uint64_t b4, uint64_t b5,
                                 uint64_t b6, uint64_t b7) {
   return (b0 % 128) + (b1 % 128) * 128 + (b2 % 128) * 16384 +
@@ -174,7 +174,7 @@ spec uint64_t uleb_value_math_8(uint64_t b0, uint64_t b1, uint64_t b2,
          (b7 % 128) * 562949953421312ULL;
 }
 
-spec uint64_t uleb_value_math_9(uint64_t b0, uint64_t b1, uint64_t b2,
+cppverify::spec uint64_t uleb_value_math_9(uint64_t b0, uint64_t b1, uint64_t b2,
                                 uint64_t b3, uint64_t b4, uint64_t b5,
                                 uint64_t b6, uint64_t b7, uint64_t b8) {
   return (b0 % 128) + (b1 % 128) * 128 + (b2 % 128) * 16384 +
@@ -185,7 +185,7 @@ spec uint64_t uleb_value_math_9(uint64_t b0, uint64_t b1, uint64_t b2,
          (b8 % 128) * 72057594037927936ULL;
 }
 
-spec uint64_t uleb_value_math_10(uint64_t b0, uint64_t b1, uint64_t b2,
+cppverify::spec uint64_t uleb_value_math_10(uint64_t b0, uint64_t b1, uint64_t b2,
                                  uint64_t b3, uint64_t b4, uint64_t b5,
                                  uint64_t b6, uint64_t b7, uint64_t b8,
                                  uint64_t b9) {
@@ -312,146 +312,146 @@ uleb_value_machine_for_count(unsigned count, uint8_t b0, uint8_t b1,
   return 0;
 }
 
-proof void lemma_digit_math_1(uint8_t b0)
-  post((uint64_t)(b0 & 0x7f) == uleb_value_math_1(b0))
+cppverify::proof void lemma_digit_math_1(uint8_t b0)
+  cppverify::post((uint64_t)(b0 & 0x7f) == uleb_value_math_1(b0))
 {
 }
 
-proof void lemma_digit_math_2(uint8_t b1)
-  post(((uint64_t)(b1 & 0x7f) << 7) == uleb_value_math_2(0, b1))
+cppverify::proof void lemma_digit_math_2(uint8_t b1)
+  cppverify::post(((uint64_t)(b1 & 0x7f) << 7) == uleb_value_math_2(0, b1))
 {
 }
 
-proof void lemma_digit_math_3(uint8_t b2)
-  post(((uint64_t)(b2 & 0x7f) << 14) ==
+cppverify::proof void lemma_digit_math_3(uint8_t b2)
+  cppverify::post(((uint64_t)(b2 & 0x7f) << 14) ==
        uleb_value_math_3(0, 0, b2))
 {
 }
 
-proof void lemma_digit_math_4(uint8_t b3)
-  post(((uint64_t)(b3 & 0x7f) << 21) ==
+cppverify::proof void lemma_digit_math_4(uint8_t b3)
+  cppverify::post(((uint64_t)(b3 & 0x7f) << 21) ==
        uleb_value_math_4(0, 0, 0, b3))
 {
 }
 
-proof void lemma_digit_math_5(uint8_t b4)
-  post(((uint64_t)(b4 & 0x7f) << 28) ==
+cppverify::proof void lemma_digit_math_5(uint8_t b4)
+  cppverify::post(((uint64_t)(b4 & 0x7f) << 28) ==
        uleb_value_math_5(0, 0, 0, 0, b4))
 {
 }
 
-proof void lemma_digit_math_6(uint8_t b5)
-  post(((uint64_t)(b5 & 0x7f) << 35) ==
+cppverify::proof void lemma_digit_math_6(uint8_t b5)
+  cppverify::post(((uint64_t)(b5 & 0x7f) << 35) ==
        uleb_value_math_6(0, 0, 0, 0, 0, b5))
 {
 }
 
-proof void lemma_digit_math_7(uint8_t b6)
-  post(((uint64_t)(b6 & 0x7f) << 42) ==
+cppverify::proof void lemma_digit_math_7(uint8_t b6)
+  cppverify::post(((uint64_t)(b6 & 0x7f) << 42) ==
        uleb_value_math_7(0, 0, 0, 0, 0, 0, b6))
 {
 }
 
-proof void lemma_digit_math_8(uint8_t b7)
-  post(((uint64_t)(b7 & 0x7f) << 49) ==
+cppverify::proof void lemma_digit_math_8(uint8_t b7)
+  cppverify::post(((uint64_t)(b7 & 0x7f) << 49) ==
        uleb_value_math_8(0, 0, 0, 0, 0, 0, 0, b7))
 {
 }
 
-proof void lemma_digit_math_9(uint8_t b8)
-  post(((uint64_t)(b8 & 0x7f) << 56) ==
+cppverify::proof void lemma_digit_math_9(uint8_t b8)
+  cppverify::post(((uint64_t)(b8 & 0x7f) << 56) ==
        uleb_value_math_9(0, 0, 0, 0, 0, 0, 0, 0, b8))
 {
 }
 
-proof void lemma_digit_math_10(uint8_t b9)
-  pre((uint64_t)b9 % 128 <= 1)
-  post(((uint64_t)(b9 & 0x7f) << 63) ==
+cppverify::proof void lemma_digit_math_10(uint8_t b9)
+  cppverify::pre((uint64_t)b9 % 128 <= 1)
+  cppverify::post(((uint64_t)(b9 & 0x7f) << 63) ==
        uleb_value_math_10(0, 0, 0, 0, 0, 0, 0, 0, 0, b9))
 {
 }
 
-proof void lemma_value_math_1(uint8_t b0)
-  post(uleb_value_machine_1(b0) == uleb_value_math_1(b0))
+cppverify::proof void lemma_value_math_1(uint8_t b0)
+  cppverify::post(uleb_value_machine_1(b0) == uleb_value_math_1(b0))
 {
   lemma_digit_math_1(b0);
 }
 
-proof void lemma_value_math_2(uint8_t b0, uint8_t b1)
-  post(uleb_value_machine_2(b0, b1) ==
+cppverify::proof void lemma_value_math_2(uint8_t b0, uint8_t b1)
+  cppverify::post(uleb_value_machine_2(b0, b1) ==
        uleb_value_math_2(b0, b1))
 {
   lemma_value_math_1(b0);
   lemma_digit_math_2(b1);
 }
 
-proof void lemma_value_math_3(uint8_t b0, uint8_t b1, uint8_t b2)
-  post(uleb_value_machine_3(b0, b1, b2) ==
+cppverify::proof void lemma_value_math_3(uint8_t b0, uint8_t b1, uint8_t b2)
+  cppverify::post(uleb_value_machine_3(b0, b1, b2) ==
        uleb_value_math_3(b0, b1, b2))
 {
   lemma_value_math_2(b0, b1);
   lemma_digit_math_3(b2);
 }
 
-proof void lemma_value_math_4(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3)
-  post(uleb_value_machine_4(b0, b1, b2, b3) ==
+cppverify::proof void lemma_value_math_4(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3)
+  cppverify::post(uleb_value_machine_4(b0, b1, b2, b3) ==
        uleb_value_math_4(b0, b1, b2, b3))
 {
   lemma_value_math_3(b0, b1, b2);
   lemma_digit_math_4(b3);
 }
 
-proof void lemma_value_math_5(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3,
+cppverify::proof void lemma_value_math_5(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3,
                               uint8_t b4)
-  post(uleb_value_machine_5(b0, b1, b2, b3, b4) ==
+  cppverify::post(uleb_value_machine_5(b0, b1, b2, b3, b4) ==
        uleb_value_math_5(b0, b1, b2, b3, b4))
 {
   lemma_value_math_4(b0, b1, b2, b3);
   lemma_digit_math_5(b4);
 }
 
-proof void lemma_value_math_6(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3,
+cppverify::proof void lemma_value_math_6(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3,
                               uint8_t b4, uint8_t b5)
-  post(uleb_value_machine_6(b0, b1, b2, b3, b4, b5) ==
+  cppverify::post(uleb_value_machine_6(b0, b1, b2, b3, b4, b5) ==
        uleb_value_math_6(b0, b1, b2, b3, b4, b5))
 {
   lemma_value_math_5(b0, b1, b2, b3, b4);
   lemma_digit_math_6(b5);
 }
 
-proof void lemma_value_math_7(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3,
+cppverify::proof void lemma_value_math_7(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3,
                               uint8_t b4, uint8_t b5, uint8_t b6)
-  post(uleb_value_machine_7(b0, b1, b2, b3, b4, b5, b6) ==
+  cppverify::post(uleb_value_machine_7(b0, b1, b2, b3, b4, b5, b6) ==
        uleb_value_math_7(b0, b1, b2, b3, b4, b5, b6))
 {
   lemma_value_math_6(b0, b1, b2, b3, b4, b5);
   lemma_digit_math_7(b6);
 }
 
-proof void lemma_value_math_8(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3,
+cppverify::proof void lemma_value_math_8(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3,
                               uint8_t b4, uint8_t b5, uint8_t b6, uint8_t b7)
-  post(uleb_value_machine_8(b0, b1, b2, b3, b4, b5, b6, b7) ==
+  cppverify::post(uleb_value_machine_8(b0, b1, b2, b3, b4, b5, b6, b7) ==
        uleb_value_math_8(b0, b1, b2, b3, b4, b5, b6, b7))
 {
   lemma_value_math_7(b0, b1, b2, b3, b4, b5, b6);
   lemma_digit_math_8(b7);
 }
 
-proof void lemma_value_math_9(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3,
+cppverify::proof void lemma_value_math_9(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3,
                               uint8_t b4, uint8_t b5, uint8_t b6, uint8_t b7,
                               uint8_t b8)
-  post(uleb_value_machine_9(b0, b1, b2, b3, b4, b5, b6, b7, b8) ==
+  cppverify::post(uleb_value_machine_9(b0, b1, b2, b3, b4, b5, b6, b7, b8) ==
        uleb_value_math_9(b0, b1, b2, b3, b4, b5, b6, b7, b8))
 {
   lemma_value_math_8(b0, b1, b2, b3, b4, b5, b6, b7);
   lemma_digit_math_9(b8);
 }
 
-proof void lemma_value_math_10(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3,
+cppverify::proof void lemma_value_math_10(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3,
                                uint8_t b4, uint8_t b5, uint8_t b6, uint8_t b7,
                                uint8_t b8, uint8_t b9)
-  pre((uint64_t)b9 % 128 <= 1)
-  post(uleb_value_machine_10(b0, b1, b2, b3, b4, b5, b6, b7, b8, b9) ==
+  cppverify::pre((uint64_t)b9 % 128 <= 1)
+  cppverify::post(uleb_value_machine_10(b0, b1, b2, b3, b4, b5, b6, b7, b8, b9) ==
        uleb_value_math_10(b0, b1, b2, b3, b4, b5, b6, b7, b8, b9))
 {
   lemma_value_math_9(b0, b1, b2, b3, b4, b5, b6, b7, b8);
@@ -460,12 +460,12 @@ proof void lemma_value_math_10(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3,
 
 
 DecodeResult scan_uleb128_1(const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  post(result.status == (buffer[0] < 128 ? 0U : 1U))
-  post(result.consumed == 1)
-  post(result.value ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::post(cppverify::result.status == (buffer[0] < 128 ? 0U : 1U))
+  cppverify::post(cppverify::result.consumed == 1)
+  cppverify::post(cppverify::result.value ==
        uleb_value_machine_for_count(
-         result.consumed, buffer[0], buffer[1], buffer[2], buffer[3], buffer[4],
+         cppverify::result.consumed, buffer[0], buffer[1], buffer[2], buffer[3], buffer[4],
          buffer[5], buffer[6], buffer[7], buffer[8], buffer[9]))
 {
   DecodeResult scanned;
@@ -476,13 +476,13 @@ DecodeResult scan_uleb128_1(const uint8_t *buffer)
 }
 
 DecodeResult scan_uleb128_2(const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  post(result.status ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::post(cppverify::result.status ==
        (buffer[0] < 128 || buffer[1] < 128 ? 0U : 1U))
-  post(result.consumed == (buffer[0] < 128 ? 1U : 2U))
-  post(result.value ==
+  cppverify::post(cppverify::result.consumed == (buffer[0] < 128 ? 1U : 2U))
+  cppverify::post(cppverify::result.value ==
        uleb_value_machine_for_count(
-         result.consumed, buffer[0], buffer[1], buffer[2], buffer[3], buffer[4],
+         cppverify::result.consumed, buffer[0], buffer[1], buffer[2], buffer[3], buffer[4],
          buffer[5], buffer[6], buffer[7], buffer[8], buffer[9]))
 {
   DecodeResult scanned = scan_uleb128_1(buffer);
@@ -495,14 +495,14 @@ DecodeResult scan_uleb128_2(const uint8_t *buffer)
 }
 
 DecodeResult scan_uleb128_3(const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  post(result.status ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::post(cppverify::result.status ==
        (buffer[0] < 128 || buffer[1] < 128 || buffer[2] < 128 ? 0U : 1U))
-  post(result.consumed ==
+  cppverify::post(cppverify::result.consumed ==
        (buffer[0] < 128 ? 1U : (buffer[1] < 128 ? 2U : 3U)))
-  post(result.value ==
+  cppverify::post(cppverify::result.value ==
        uleb_value_machine_for_count(
-         result.consumed, buffer[0], buffer[1], buffer[2], buffer[3], buffer[4],
+         cppverify::result.consumed, buffer[0], buffer[1], buffer[2], buffer[3], buffer[4],
          buffer[5], buffer[6], buffer[7], buffer[8], buffer[9]))
 {
   DecodeResult scanned = scan_uleb128_2(buffer);
@@ -515,18 +515,18 @@ DecodeResult scan_uleb128_3(const uint8_t *buffer)
 }
 
 DecodeResult scan_uleb128_4(const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  post(result.status ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::post(cppverify::result.status ==
        uleb_status_math(4, buffer[0], buffer[1], buffer[2], buffer[3],
                         buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                         buffer[9], buffer[10]))
-  post(result.consumed ==
+  cppverify::post(cppverify::result.consumed ==
        uleb_consumed_math(4, buffer[0], buffer[1], buffer[2], buffer[3],
                           buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                           buffer[9], buffer[10]))
-  post(result.status == 2 ||
-       result.value == uleb_value_machine_for_count(
-                         result.consumed, buffer[0], buffer[1], buffer[2],
+  cppverify::post(cppverify::result.status == 2 ||
+       cppverify::result.value == uleb_value_machine_for_count(
+                         cppverify::result.consumed, buffer[0], buffer[1], buffer[2],
                          buffer[3], buffer[4], buffer[5], buffer[6], buffer[7],
                          buffer[8], buffer[9]))
 {
@@ -540,18 +540,18 @@ DecodeResult scan_uleb128_4(const uint8_t *buffer)
 }
 
 DecodeResult scan_uleb128_5(const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  post(result.status ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::post(cppverify::result.status ==
        uleb_status_math(5, buffer[0], buffer[1], buffer[2], buffer[3],
                         buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                         buffer[9], buffer[10]))
-  post(result.consumed ==
+  cppverify::post(cppverify::result.consumed ==
        uleb_consumed_math(5, buffer[0], buffer[1], buffer[2], buffer[3],
                           buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                           buffer[9], buffer[10]))
-  post(result.status == 2 ||
-       result.value == uleb_value_machine_for_count(
-                         result.consumed, buffer[0], buffer[1], buffer[2],
+  cppverify::post(cppverify::result.status == 2 ||
+       cppverify::result.value == uleb_value_machine_for_count(
+                         cppverify::result.consumed, buffer[0], buffer[1], buffer[2],
                          buffer[3], buffer[4], buffer[5], buffer[6], buffer[7],
                          buffer[8], buffer[9]))
 {
@@ -565,18 +565,18 @@ DecodeResult scan_uleb128_5(const uint8_t *buffer)
 }
 
 DecodeResult scan_uleb128_6(const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  post(result.status ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::post(cppverify::result.status ==
        uleb_status_math(6, buffer[0], buffer[1], buffer[2], buffer[3],
                         buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                         buffer[9], buffer[10]))
-  post(result.consumed ==
+  cppverify::post(cppverify::result.consumed ==
        uleb_consumed_math(6, buffer[0], buffer[1], buffer[2], buffer[3],
                           buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                           buffer[9], buffer[10]))
-  post(result.status == 2 ||
-       result.value == uleb_value_machine_for_count(
-                         result.consumed, buffer[0], buffer[1], buffer[2],
+  cppverify::post(cppverify::result.status == 2 ||
+       cppverify::result.value == uleb_value_machine_for_count(
+                         cppverify::result.consumed, buffer[0], buffer[1], buffer[2],
                          buffer[3], buffer[4], buffer[5], buffer[6], buffer[7],
                          buffer[8], buffer[9]))
 {
@@ -590,18 +590,18 @@ DecodeResult scan_uleb128_6(const uint8_t *buffer)
 }
 
 DecodeResult scan_uleb128_7(const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  post(result.status ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::post(cppverify::result.status ==
        uleb_status_math(7, buffer[0], buffer[1], buffer[2], buffer[3],
                         buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                         buffer[9], buffer[10]))
-  post(result.consumed ==
+  cppverify::post(cppverify::result.consumed ==
        uleb_consumed_math(7, buffer[0], buffer[1], buffer[2], buffer[3],
                           buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                           buffer[9], buffer[10]))
-  post(result.status == 2 ||
-       result.value == uleb_value_machine_for_count(
-                         result.consumed, buffer[0], buffer[1], buffer[2],
+  cppverify::post(cppverify::result.status == 2 ||
+       cppverify::result.value == uleb_value_machine_for_count(
+                         cppverify::result.consumed, buffer[0], buffer[1], buffer[2],
                          buffer[3], buffer[4], buffer[5], buffer[6], buffer[7],
                          buffer[8], buffer[9]))
 {
@@ -615,18 +615,18 @@ DecodeResult scan_uleb128_7(const uint8_t *buffer)
 }
 
 DecodeResult scan_uleb128_8(const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  post(result.status ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::post(cppverify::result.status ==
        uleb_status_math(8, buffer[0], buffer[1], buffer[2], buffer[3],
                         buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                         buffer[9], buffer[10]))
-  post(result.consumed ==
+  cppverify::post(cppverify::result.consumed ==
        uleb_consumed_math(8, buffer[0], buffer[1], buffer[2], buffer[3],
                           buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                           buffer[9], buffer[10]))
-  post(result.status == 2 ||
-       result.value == uleb_value_machine_for_count(
-                         result.consumed, buffer[0], buffer[1], buffer[2],
+  cppverify::post(cppverify::result.status == 2 ||
+       cppverify::result.value == uleb_value_machine_for_count(
+                         cppverify::result.consumed, buffer[0], buffer[1], buffer[2],
                          buffer[3], buffer[4], buffer[5], buffer[6], buffer[7],
                          buffer[8], buffer[9]))
 {
@@ -640,18 +640,18 @@ DecodeResult scan_uleb128_8(const uint8_t *buffer)
 }
 
 DecodeResult scan_uleb128_9(const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  post(result.status ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::post(cppverify::result.status ==
        uleb_status_math(9, buffer[0], buffer[1], buffer[2], buffer[3],
                         buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                         buffer[9], buffer[10]))
-  post(result.consumed ==
+  cppverify::post(cppverify::result.consumed ==
        uleb_consumed_math(9, buffer[0], buffer[1], buffer[2], buffer[3],
                           buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                           buffer[9], buffer[10]))
-  post(result.status == 2 ||
-       result.value == uleb_value_machine_for_count(
-                         result.consumed, buffer[0], buffer[1], buffer[2],
+  cppverify::post(cppverify::result.status == 2 ||
+       cppverify::result.value == uleb_value_machine_for_count(
+                         cppverify::result.consumed, buffer[0], buffer[1], buffer[2],
                          buffer[3], buffer[4], buffer[5], buffer[6], buffer[7],
                          buffer[8], buffer[9]))
 {
@@ -665,23 +665,23 @@ DecodeResult scan_uleb128_9(const uint8_t *buffer)
 }
 
 DecodeResult scan_uleb128_10(const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  post(result.status ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::post(cppverify::result.status ==
        uleb_status_math(10, buffer[0], buffer[1], buffer[2], buffer[3],
                         buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                         buffer[9], buffer[10]))
-  post(result.consumed ==
+  cppverify::post(cppverify::result.consumed ==
        uleb_consumed_math(10, buffer[0], buffer[1], buffer[2], buffer[3],
                           buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                           buffer[9], buffer[10]))
-  post(result.status == 2 ||
-       result.value == uleb_value_machine_for_count(
-                         result.consumed, buffer[0], buffer[1], buffer[2],
+  cppverify::post(cppverify::result.status == 2 ||
+       cppverify::result.value == uleb_value_machine_for_count(
+                         cppverify::result.consumed, buffer[0], buffer[1], buffer[2],
                          buffer[3], buffer[4], buffer[5], buffer[6], buffer[7],
                          buffer[8], buffer[9]))
-  post(result.status != 0 || result.consumed < 10 ||
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed < 10 ||
        (uint64_t)buffer[9] % 128 <= 1)
-  post(result.status != 2 || result.value == 0)
+  cppverify::post(cppverify::result.status != 2 || cppverify::result.value == 0)
 {
   DecodeResult scanned = scan_uleb128_9(buffer);
   if (scanned.status != 1)
@@ -699,23 +699,23 @@ DecodeResult scan_uleb128_10(const uint8_t *buffer)
 }
 
 DecodeResult scan_uleb128_11(const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  post(result.status ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::post(cppverify::result.status ==
        uleb_status_math(11, buffer[0], buffer[1], buffer[2], buffer[3],
                         buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                         buffer[9], buffer[10]))
-  post(result.consumed ==
+  cppverify::post(cppverify::result.consumed ==
        uleb_consumed_math(11, buffer[0], buffer[1], buffer[2], buffer[3],
                           buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                           buffer[9], buffer[10]))
-  post(result.status == 2 ||
-       result.value == uleb_value_machine_for_count(
-                         result.consumed, buffer[0], buffer[1], buffer[2],
+  cppverify::post(cppverify::result.status == 2 ||
+       cppverify::result.value == uleb_value_machine_for_count(
+                         cppverify::result.consumed, buffer[0], buffer[1], buffer[2],
                          buffer[3], buffer[4], buffer[5], buffer[6], buffer[7],
                          buffer[8], buffer[9]))
-  post(result.status != 0 || result.consumed < 10 ||
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed < 10 ||
        (uint64_t)buffer[9] % 128 <= 1)
-  post(result.status != 2 || result.value == 0)
+  cppverify::post(cppverify::result.status != 2 || cppverify::result.value == 0)
 {
   DecodeResult scanned = scan_uleb128_10(buffer);
   if (scanned.status != 1)
@@ -733,124 +733,124 @@ DecodeResult scan_uleb128_11(const uint8_t *buffer)
 
 
 DecodeResult refine_success_1(DecodeResult decoded, const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  pre(decoded.status == 0)
-  pre(decoded.consumed == 1)
-  pre(decoded.value ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::pre(decoded.status == 0)
+  cppverify::pre(decoded.consumed == 1)
+  cppverify::pre(decoded.value ==
       uleb_value_machine_for_count(
         decoded.consumed, buffer[0], buffer[1], buffer[2], buffer[3], buffer[4],
         buffer[5], buffer[6], buffer[7], buffer[8], buffer[9]))
-  post(result.status == 0)
-  post(result.consumed == 1)
-  post(result.value == uleb_value_math_1(buffer[0]))
+  cppverify::post(cppverify::result.status == 0)
+  cppverify::post(cppverify::result.consumed == 1)
+  cppverify::post(cppverify::result.value == uleb_value_math_1(buffer[0]))
 {
-  ghost {
-    hide(uleb_value_machine_1);
-    hide(uleb_value_math_1);
+  cppverify::ghost {
+    cppverify::hide(uleb_value_machine_1);
+    cppverify::hide(uleb_value_math_1);
     lemma_value_math_1(buffer[0]);
   }
   return decoded;
 }
 
 DecodeResult refine_success_2(DecodeResult decoded, const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  pre(decoded.status == 0)
-  pre(decoded.consumed == 2)
-  pre(decoded.value ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::pre(decoded.status == 0)
+  cppverify::pre(decoded.consumed == 2)
+  cppverify::pre(decoded.value ==
       uleb_value_machine_for_count(
         decoded.consumed, buffer[0], buffer[1], buffer[2], buffer[3], buffer[4],
         buffer[5], buffer[6], buffer[7], buffer[8], buffer[9]))
-  post(result.status == 0)
-  post(result.consumed == 2)
-  post(result.value == uleb_value_math_2(buffer[0], buffer[1]))
+  cppverify::post(cppverify::result.status == 0)
+  cppverify::post(cppverify::result.consumed == 2)
+  cppverify::post(cppverify::result.value == uleb_value_math_2(buffer[0], buffer[1]))
 {
-  ghost {
-    hide(uleb_value_machine_2);
-    hide(uleb_value_math_2);
+  cppverify::ghost {
+    cppverify::hide(uleb_value_machine_2);
+    cppverify::hide(uleb_value_math_2);
     lemma_value_math_2(buffer[0], buffer[1]);
   }
   return decoded;
 }
 
 DecodeResult refine_success_3(DecodeResult decoded, const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  pre(decoded.status == 0)
-  pre(decoded.consumed == 3)
-  pre(decoded.value ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::pre(decoded.status == 0)
+  cppverify::pre(decoded.consumed == 3)
+  cppverify::pre(decoded.value ==
       uleb_value_machine_for_count(
         decoded.consumed, buffer[0], buffer[1], buffer[2], buffer[3], buffer[4],
         buffer[5], buffer[6], buffer[7], buffer[8], buffer[9]))
-  post(result.status == 0)
-  post(result.consumed == 3)
-  post(result.value == uleb_value_math_3(buffer[0], buffer[1], buffer[2]))
+  cppverify::post(cppverify::result.status == 0)
+  cppverify::post(cppverify::result.consumed == 3)
+  cppverify::post(cppverify::result.value == uleb_value_math_3(buffer[0], buffer[1], buffer[2]))
 {
-  ghost {
-    hide(uleb_value_machine_3);
-    hide(uleb_value_math_3);
+  cppverify::ghost {
+    cppverify::hide(uleb_value_machine_3);
+    cppverify::hide(uleb_value_math_3);
     lemma_value_math_3(buffer[0], buffer[1], buffer[2]);
   }
   return decoded;
 }
 
 DecodeResult refine_success_4(DecodeResult decoded, const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  pre(decoded.status == 0)
-  pre(decoded.consumed == 4)
-  pre(decoded.value ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::pre(decoded.status == 0)
+  cppverify::pre(decoded.consumed == 4)
+  cppverify::pre(decoded.value ==
       uleb_value_machine_for_count(
         decoded.consumed, buffer[0], buffer[1], buffer[2], buffer[3], buffer[4],
         buffer[5], buffer[6], buffer[7], buffer[8], buffer[9]))
-  post(result.status == 0)
-  post(result.consumed == 4)
-  post(result.value ==
+  cppverify::post(cppverify::result.status == 0)
+  cppverify::post(cppverify::result.consumed == 4)
+  cppverify::post(cppverify::result.value ==
        uleb_value_math_4(buffer[0], buffer[1], buffer[2], buffer[3]))
 {
-  ghost {
-    hide(uleb_value_machine_4);
-    hide(uleb_value_math_4);
+  cppverify::ghost {
+    cppverify::hide(uleb_value_machine_4);
+    cppverify::hide(uleb_value_math_4);
     lemma_value_math_4(buffer[0], buffer[1], buffer[2], buffer[3]);
   }
   return decoded;
 }
 
 DecodeResult refine_success_5(DecodeResult decoded, const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  pre(decoded.status == 0)
-  pre(decoded.consumed == 5)
-  pre(decoded.value ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::pre(decoded.status == 0)
+  cppverify::pre(decoded.consumed == 5)
+  cppverify::pre(decoded.value ==
       uleb_value_machine_for_count(
         decoded.consumed, buffer[0], buffer[1], buffer[2], buffer[3], buffer[4],
         buffer[5], buffer[6], buffer[7], buffer[8], buffer[9]))
-  post(result.status == 0)
-  post(result.consumed == 5)
-  post(result.value ==
+  cppverify::post(cppverify::result.status == 0)
+  cppverify::post(cppverify::result.consumed == 5)
+  cppverify::post(cppverify::result.value ==
        uleb_value_math_5(buffer[0], buffer[1], buffer[2], buffer[3], buffer[4]))
 {
-  ghost {
-    hide(uleb_value_machine_5);
-    hide(uleb_value_math_5);
+  cppverify::ghost {
+    cppverify::hide(uleb_value_machine_5);
+    cppverify::hide(uleb_value_math_5);
     lemma_value_math_5(buffer[0], buffer[1], buffer[2], buffer[3], buffer[4]);
   }
   return decoded;
 }
 
 DecodeResult refine_success_6(DecodeResult decoded, const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  pre(decoded.status == 0)
-  pre(decoded.consumed == 6)
-  pre(decoded.value ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::pre(decoded.status == 0)
+  cppverify::pre(decoded.consumed == 6)
+  cppverify::pre(decoded.value ==
       uleb_value_machine_for_count(
         decoded.consumed, buffer[0], buffer[1], buffer[2], buffer[3], buffer[4],
         buffer[5], buffer[6], buffer[7], buffer[8], buffer[9]))
-  post(result.status == 0)
-  post(result.consumed == 6)
-  post(result.value ==
+  cppverify::post(cppverify::result.status == 0)
+  cppverify::post(cppverify::result.consumed == 6)
+  cppverify::post(cppverify::result.value ==
        uleb_value_math_6(buffer[0], buffer[1], buffer[2], buffer[3], buffer[4],
                          buffer[5]))
 {
-  ghost {
-    hide(uleb_value_machine_6);
-    hide(uleb_value_math_6);
+  cppverify::ghost {
+    cppverify::hide(uleb_value_machine_6);
+    cppverify::hide(uleb_value_math_6);
     lemma_value_math_6(buffer[0], buffer[1], buffer[2], buffer[3], buffer[4],
                        buffer[5]);
   }
@@ -858,22 +858,22 @@ DecodeResult refine_success_6(DecodeResult decoded, const uint8_t *buffer)
 }
 
 DecodeResult refine_success_7(DecodeResult decoded, const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  pre(decoded.status == 0)
-  pre(decoded.consumed == 7)
-  pre(decoded.value ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::pre(decoded.status == 0)
+  cppverify::pre(decoded.consumed == 7)
+  cppverify::pre(decoded.value ==
       uleb_value_machine_for_count(
         decoded.consumed, buffer[0], buffer[1], buffer[2], buffer[3], buffer[4],
         buffer[5], buffer[6], buffer[7], buffer[8], buffer[9]))
-  post(result.status == 0)
-  post(result.consumed == 7)
-  post(result.value ==
+  cppverify::post(cppverify::result.status == 0)
+  cppverify::post(cppverify::result.consumed == 7)
+  cppverify::post(cppverify::result.value ==
        uleb_value_math_7(buffer[0], buffer[1], buffer[2], buffer[3], buffer[4],
                          buffer[5], buffer[6]))
 {
-  ghost {
-    hide(uleb_value_machine_7);
-    hide(uleb_value_math_7);
+  cppverify::ghost {
+    cppverify::hide(uleb_value_machine_7);
+    cppverify::hide(uleb_value_math_7);
     lemma_value_math_7(buffer[0], buffer[1], buffer[2], buffer[3], buffer[4],
                        buffer[5], buffer[6]);
   }
@@ -881,22 +881,22 @@ DecodeResult refine_success_7(DecodeResult decoded, const uint8_t *buffer)
 }
 
 DecodeResult refine_success_8(DecodeResult decoded, const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  pre(decoded.status == 0)
-  pre(decoded.consumed == 8)
-  pre(decoded.value ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::pre(decoded.status == 0)
+  cppverify::pre(decoded.consumed == 8)
+  cppverify::pre(decoded.value ==
       uleb_value_machine_for_count(
         decoded.consumed, buffer[0], buffer[1], buffer[2], buffer[3], buffer[4],
         buffer[5], buffer[6], buffer[7], buffer[8], buffer[9]))
-  post(result.status == 0)
-  post(result.consumed == 8)
-  post(result.value ==
+  cppverify::post(cppverify::result.status == 0)
+  cppverify::post(cppverify::result.consumed == 8)
+  cppverify::post(cppverify::result.value ==
        uleb_value_math_8(buffer[0], buffer[1], buffer[2], buffer[3], buffer[4],
                          buffer[5], buffer[6], buffer[7]))
 {
-  ghost {
-    hide(uleb_value_machine_8);
-    hide(uleb_value_math_8);
+  cppverify::ghost {
+    cppverify::hide(uleb_value_machine_8);
+    cppverify::hide(uleb_value_math_8);
     lemma_value_math_8(buffer[0], buffer[1], buffer[2], buffer[3], buffer[4],
                        buffer[5], buffer[6], buffer[7]);
   }
@@ -904,22 +904,22 @@ DecodeResult refine_success_8(DecodeResult decoded, const uint8_t *buffer)
 }
 
 DecodeResult refine_success_9(DecodeResult decoded, const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  pre(decoded.status == 0)
-  pre(decoded.consumed == 9)
-  pre(decoded.value ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::pre(decoded.status == 0)
+  cppverify::pre(decoded.consumed == 9)
+  cppverify::pre(decoded.value ==
       uleb_value_machine_for_count(
         decoded.consumed, buffer[0], buffer[1], buffer[2], buffer[3], buffer[4],
         buffer[5], buffer[6], buffer[7], buffer[8], buffer[9]))
-  post(result.status == 0)
-  post(result.consumed == 9)
-  post(result.value ==
+  cppverify::post(cppverify::result.status == 0)
+  cppverify::post(cppverify::result.consumed == 9)
+  cppverify::post(cppverify::result.value ==
        uleb_value_math_9(buffer[0], buffer[1], buffer[2], buffer[3], buffer[4],
                          buffer[5], buffer[6], buffer[7], buffer[8]))
 {
-  ghost {
-    hide(uleb_value_machine_9);
-    hide(uleb_value_math_9);
+  cppverify::ghost {
+    cppverify::hide(uleb_value_machine_9);
+    cppverify::hide(uleb_value_math_9);
     lemma_value_math_9(buffer[0], buffer[1], buffer[2], buffer[3], buffer[4],
                        buffer[5], buffer[6], buffer[7], buffer[8]);
   }
@@ -928,23 +928,23 @@ DecodeResult refine_success_9(DecodeResult decoded, const uint8_t *buffer)
 
 DecodeResult refine_success_10_or_11(DecodeResult decoded,
                                      const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  pre(decoded.status == 0)
-  pre(decoded.consumed == 10 || decoded.consumed == 11)
-  pre(decoded.value ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::pre(decoded.status == 0)
+  cppverify::pre(decoded.consumed == 10 || decoded.consumed == 11)
+  cppverify::pre(decoded.value ==
       uleb_value_machine_for_count(
         decoded.consumed, buffer[0], buffer[1], buffer[2], buffer[3], buffer[4],
         buffer[5], buffer[6], buffer[7], buffer[8], buffer[9]))
-  pre((uint64_t)buffer[9] % 128 <= 1)
-  post(result.status == 0)
-  post(result.consumed == decoded.consumed)
-  post(result.value ==
+  cppverify::pre((uint64_t)buffer[9] % 128 <= 1)
+  cppverify::post(cppverify::result.status == 0)
+  cppverify::post(cppverify::result.consumed == decoded.consumed)
+  cppverify::post(cppverify::result.value ==
        uleb_value_math_10(buffer[0], buffer[1], buffer[2], buffer[3], buffer[4],
                           buffer[5], buffer[6], buffer[7], buffer[8], buffer[9]))
 {
-  ghost {
-    hide(uleb_value_machine_10);
-    hide(uleb_value_math_10);
+  cppverify::ghost {
+    cppverify::hide(uleb_value_machine_10);
+    cppverify::hide(uleb_value_math_10);
     lemma_value_math_10(buffer[0], buffer[1], buffer[2], buffer[3], buffer[4],
                         buffer[5], buffer[6], buffer[7], buffer[8], buffer[9]);
   }
@@ -952,26 +952,26 @@ DecodeResult refine_success_10_or_11(DecodeResult decoded,
 }
 
 DecodeResult refine_error(DecodeResult decoded)
-  pre(decoded.status != 0)
-  post(result.status == decoded.status)
-  post(result.consumed == decoded.consumed)
-  post(result.value == 0)
+  cppverify::pre(decoded.status != 0)
+  cppverify::post(cppverify::result.status == decoded.status)
+  cppverify::post(cppverify::result.consumed == decoded.consumed)
+  cppverify::post(cppverify::result.value == 0)
 {
   decoded.value = 0;
   return decoded;
 }
 
 DecodeResult decode_uleb128_length_0(const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  post(result.status ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::post(cppverify::result.status ==
        uleb_status_math(0, buffer[0], buffer[1], buffer[2], buffer[3],
                         buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                         buffer[9], buffer[10]))
-  post(result.consumed ==
+  cppverify::post(cppverify::result.consumed ==
        uleb_consumed_math(0, buffer[0], buffer[1], buffer[2], buffer[3],
                           buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                           buffer[9], buffer[10]))
-  post(result.value == 0)
+  cppverify::post(cppverify::result.value == 0)
 {
   DecodeResult empty;
   empty.value = 0;
@@ -981,22 +981,22 @@ DecodeResult decode_uleb128_length_0(const uint8_t *buffer)
 }
 
 DecodeResult decode_uleb128_length_1(const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  post(result.status ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::post(cppverify::result.status ==
        uleb_status_math(1, buffer[0], buffer[1], buffer[2], buffer[3],
                         buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                         buffer[9], buffer[10]))
-  post(result.consumed ==
+  cppverify::post(cppverify::result.consumed ==
        uleb_consumed_math(1, buffer[0], buffer[1], buffer[2], buffer[3],
                           buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                           buffer[9], buffer[10]))
-  post(result.status != 0 || result.consumed != 1 ||
-       result.value == uleb_value_math_1(buffer[0]))
-  post(result.status == 0 || result.value == 0)
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 1 ||
+       cppverify::result.value == uleb_value_math_1(buffer[0]))
+  cppverify::post(cppverify::result.status == 0 || cppverify::result.value == 0)
 {
-  ghost {
-    hide(uleb_value_machine_for_count);
-    hide(uleb_value_math_1);
+  cppverify::ghost {
+    cppverify::hide(uleb_value_machine_for_count);
+    cppverify::hide(uleb_value_math_1);
   }
   DecodeResult scanned = scan_uleb128_1(buffer);
   if (scanned.status != 0)
@@ -1005,25 +1005,25 @@ DecodeResult decode_uleb128_length_1(const uint8_t *buffer)
 }
 
 DecodeResult decode_uleb128_length_2(const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  post(result.status ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::post(cppverify::result.status ==
        uleb_status_math(2, buffer[0], buffer[1], buffer[2], buffer[3],
                         buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                         buffer[9], buffer[10]))
-  post(result.consumed ==
+  cppverify::post(cppverify::result.consumed ==
        uleb_consumed_math(2, buffer[0], buffer[1], buffer[2], buffer[3],
                           buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                           buffer[9], buffer[10]))
-  post(result.status != 0 || result.consumed != 1 ||
-       result.value == uleb_value_math_1(buffer[0]))
-  post(result.status != 0 || result.consumed != 2 ||
-       result.value == uleb_value_math_2(buffer[0], buffer[1]))
-  post(result.status == 0 || result.value == 0)
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 1 ||
+       cppverify::result.value == uleb_value_math_1(buffer[0]))
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 2 ||
+       cppverify::result.value == uleb_value_math_2(buffer[0], buffer[1]))
+  cppverify::post(cppverify::result.status == 0 || cppverify::result.value == 0)
 {
-  ghost {
-    hide(uleb_value_machine_for_count);
-    hide(uleb_value_math_1);
-    hide(uleb_value_math_2);
+  cppverify::ghost {
+    cppverify::hide(uleb_value_machine_for_count);
+    cppverify::hide(uleb_value_math_1);
+    cppverify::hide(uleb_value_math_2);
   }
   DecodeResult scanned = scan_uleb128_2(buffer);
   if (scanned.status != 0)
@@ -1034,28 +1034,28 @@ DecodeResult decode_uleb128_length_2(const uint8_t *buffer)
 }
 
 DecodeResult decode_uleb128_length_3(const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  post(result.status ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::post(cppverify::result.status ==
        uleb_status_math(3, buffer[0], buffer[1], buffer[2], buffer[3],
                         buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                         buffer[9], buffer[10]))
-  post(result.consumed ==
+  cppverify::post(cppverify::result.consumed ==
        uleb_consumed_math(3, buffer[0], buffer[1], buffer[2], buffer[3],
                           buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                           buffer[9], buffer[10]))
-  post(result.status != 0 || result.consumed != 1 ||
-       result.value == uleb_value_math_1(buffer[0]))
-  post(result.status != 0 || result.consumed != 2 ||
-       result.value == uleb_value_math_2(buffer[0], buffer[1]))
-  post(result.status != 0 || result.consumed != 3 ||
-       result.value == uleb_value_math_3(buffer[0], buffer[1], buffer[2]))
-  post(result.status == 0 || result.value == 0)
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 1 ||
+       cppverify::result.value == uleb_value_math_1(buffer[0]))
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 2 ||
+       cppverify::result.value == uleb_value_math_2(buffer[0], buffer[1]))
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 3 ||
+       cppverify::result.value == uleb_value_math_3(buffer[0], buffer[1], buffer[2]))
+  cppverify::post(cppverify::result.status == 0 || cppverify::result.value == 0)
 {
-  ghost {
-    hide(uleb_value_machine_for_count);
-    hide(uleb_value_math_1);
-    hide(uleb_value_math_2);
-    hide(uleb_value_math_3);
+  cppverify::ghost {
+    cppverify::hide(uleb_value_machine_for_count);
+    cppverify::hide(uleb_value_math_1);
+    cppverify::hide(uleb_value_math_2);
+    cppverify::hide(uleb_value_math_3);
   }
   DecodeResult scanned = scan_uleb128_3(buffer);
   if (scanned.status != 0) {
@@ -1070,32 +1070,32 @@ DecodeResult decode_uleb128_length_3(const uint8_t *buffer)
 }
 
 DecodeResult decode_uleb128_length_4(const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  post(result.status ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::post(cppverify::result.status ==
        uleb_status_math(4, buffer[0], buffer[1], buffer[2], buffer[3],
                         buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                         buffer[9], buffer[10]))
-  post(result.consumed ==
+  cppverify::post(cppverify::result.consumed ==
        uleb_consumed_math(4, buffer[0], buffer[1], buffer[2], buffer[3],
                           buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                           buffer[9], buffer[10]))
-  post(result.status != 0 || result.consumed != 1 ||
-       result.value == uleb_value_math_1(buffer[0]))
-  post(result.status != 0 || result.consumed != 2 ||
-       result.value == uleb_value_math_2(buffer[0], buffer[1]))
-  post(result.status != 0 || result.consumed != 3 ||
-       result.value == uleb_value_math_3(buffer[0], buffer[1], buffer[2]))
-  post(result.status != 0 || result.consumed != 4 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 1 ||
+       cppverify::result.value == uleb_value_math_1(buffer[0]))
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 2 ||
+       cppverify::result.value == uleb_value_math_2(buffer[0], buffer[1]))
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 3 ||
+       cppverify::result.value == uleb_value_math_3(buffer[0], buffer[1], buffer[2]))
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 4 ||
+       cppverify::result.value ==
          uleb_value_math_4(buffer[0], buffer[1], buffer[2], buffer[3]))
-  post(result.status == 0 || result.value == 0)
+  cppverify::post(cppverify::result.status == 0 || cppverify::result.value == 0)
 {
-  ghost {
-    hide(uleb_value_machine_for_count);
-    hide(uleb_value_math_1);
-    hide(uleb_value_math_2);
-    hide(uleb_value_math_3);
-    hide(uleb_value_math_4);
+  cppverify::ghost {
+    cppverify::hide(uleb_value_machine_for_count);
+    cppverify::hide(uleb_value_math_1);
+    cppverify::hide(uleb_value_math_2);
+    cppverify::hide(uleb_value_math_3);
+    cppverify::hide(uleb_value_math_4);
   }
   DecodeResult scanned = scan_uleb128_4(buffer);
   if (scanned.status != 0)
@@ -1110,36 +1110,36 @@ DecodeResult decode_uleb128_length_4(const uint8_t *buffer)
 }
 
 DecodeResult decode_uleb128_length_5(const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  post(result.status ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::post(cppverify::result.status ==
        uleb_status_math(5, buffer[0], buffer[1], buffer[2], buffer[3],
                         buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                         buffer[9], buffer[10]))
-  post(result.consumed ==
+  cppverify::post(cppverify::result.consumed ==
        uleb_consumed_math(5, buffer[0], buffer[1], buffer[2], buffer[3],
                           buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                           buffer[9], buffer[10]))
-  post(result.status != 0 || result.consumed != 1 ||
-       result.value == uleb_value_math_1(buffer[0]))
-  post(result.status != 0 || result.consumed != 2 ||
-       result.value == uleb_value_math_2(buffer[0], buffer[1]))
-  post(result.status != 0 || result.consumed != 3 ||
-       result.value == uleb_value_math_3(buffer[0], buffer[1], buffer[2]))
-  post(result.status != 0 || result.consumed != 4 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 1 ||
+       cppverify::result.value == uleb_value_math_1(buffer[0]))
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 2 ||
+       cppverify::result.value == uleb_value_math_2(buffer[0], buffer[1]))
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 3 ||
+       cppverify::result.value == uleb_value_math_3(buffer[0], buffer[1], buffer[2]))
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 4 ||
+       cppverify::result.value ==
          uleb_value_math_4(buffer[0], buffer[1], buffer[2], buffer[3]))
-  post(result.status != 0 || result.consumed != 5 ||
-       result.value == uleb_value_math_5(buffer[0], buffer[1], buffer[2],
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 5 ||
+       cppverify::result.value == uleb_value_math_5(buffer[0], buffer[1], buffer[2],
                                          buffer[3], buffer[4]))
-  post(result.status == 0 || result.value == 0)
+  cppverify::post(cppverify::result.status == 0 || cppverify::result.value == 0)
 {
-  ghost {
-    hide(uleb_value_machine_for_count);
-    hide(uleb_value_math_1);
-    hide(uleb_value_math_2);
-    hide(uleb_value_math_3);
-    hide(uleb_value_math_4);
-    hide(uleb_value_math_5);
+  cppverify::ghost {
+    cppverify::hide(uleb_value_machine_for_count);
+    cppverify::hide(uleb_value_math_1);
+    cppverify::hide(uleb_value_math_2);
+    cppverify::hide(uleb_value_math_3);
+    cppverify::hide(uleb_value_math_4);
+    cppverify::hide(uleb_value_math_5);
   }
   DecodeResult scanned = scan_uleb128_5(buffer);
   if (scanned.status != 0)
@@ -1156,41 +1156,41 @@ DecodeResult decode_uleb128_length_5(const uint8_t *buffer)
 }
 
 DecodeResult decode_uleb128_length_6(const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  post(result.status ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::post(cppverify::result.status ==
        uleb_status_math(6, buffer[0], buffer[1], buffer[2], buffer[3],
                         buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                         buffer[9], buffer[10]))
-  post(result.consumed ==
+  cppverify::post(cppverify::result.consumed ==
        uleb_consumed_math(6, buffer[0], buffer[1], buffer[2], buffer[3],
                           buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                           buffer[9], buffer[10]))
-  post(result.status != 0 || result.consumed != 1 ||
-       result.value == uleb_value_math_1(buffer[0]))
-  post(result.status != 0 || result.consumed != 2 ||
-       result.value == uleb_value_math_2(buffer[0], buffer[1]))
-  post(result.status != 0 || result.consumed != 3 ||
-       result.value == uleb_value_math_3(buffer[0], buffer[1], buffer[2]))
-  post(result.status != 0 || result.consumed != 4 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 1 ||
+       cppverify::result.value == uleb_value_math_1(buffer[0]))
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 2 ||
+       cppverify::result.value == uleb_value_math_2(buffer[0], buffer[1]))
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 3 ||
+       cppverify::result.value == uleb_value_math_3(buffer[0], buffer[1], buffer[2]))
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 4 ||
+       cppverify::result.value ==
          uleb_value_math_4(buffer[0], buffer[1], buffer[2], buffer[3]))
-  post(result.status != 0 || result.consumed != 5 ||
-       result.value == uleb_value_math_5(buffer[0], buffer[1], buffer[2],
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 5 ||
+       cppverify::result.value == uleb_value_math_5(buffer[0], buffer[1], buffer[2],
                                          buffer[3], buffer[4]))
-  post(result.status != 0 || result.consumed != 6 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 6 ||
+       cppverify::result.value ==
          uleb_value_math_6(buffer[0], buffer[1], buffer[2], buffer[3],
                            buffer[4], buffer[5]))
-  post(result.status == 0 || result.value == 0)
+  cppverify::post(cppverify::result.status == 0 || cppverify::result.value == 0)
 {
-  ghost {
-    hide(uleb_value_machine_for_count);
-    hide(uleb_value_math_1);
-    hide(uleb_value_math_2);
-    hide(uleb_value_math_3);
-    hide(uleb_value_math_4);
-    hide(uleb_value_math_5);
-    hide(uleb_value_math_6);
+  cppverify::ghost {
+    cppverify::hide(uleb_value_machine_for_count);
+    cppverify::hide(uleb_value_math_1);
+    cppverify::hide(uleb_value_math_2);
+    cppverify::hide(uleb_value_math_3);
+    cppverify::hide(uleb_value_math_4);
+    cppverify::hide(uleb_value_math_5);
+    cppverify::hide(uleb_value_math_6);
   }
   DecodeResult scanned = scan_uleb128_6(buffer);
   if (scanned.status != 0)
@@ -1209,46 +1209,46 @@ DecodeResult decode_uleb128_length_6(const uint8_t *buffer)
 }
 
 DecodeResult decode_uleb128_length_7(const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  post(result.status ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::post(cppverify::result.status ==
        uleb_status_math(7, buffer[0], buffer[1], buffer[2], buffer[3],
                         buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                         buffer[9], buffer[10]))
-  post(result.consumed ==
+  cppverify::post(cppverify::result.consumed ==
        uleb_consumed_math(7, buffer[0], buffer[1], buffer[2], buffer[3],
                           buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                           buffer[9], buffer[10]))
-  post(result.status != 0 || result.consumed != 1 ||
-       result.value == uleb_value_math_1(buffer[0]))
-  post(result.status != 0 || result.consumed != 2 ||
-       result.value == uleb_value_math_2(buffer[0], buffer[1]))
-  post(result.status != 0 || result.consumed != 3 ||
-       result.value == uleb_value_math_3(buffer[0], buffer[1], buffer[2]))
-  post(result.status != 0 || result.consumed != 4 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 1 ||
+       cppverify::result.value == uleb_value_math_1(buffer[0]))
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 2 ||
+       cppverify::result.value == uleb_value_math_2(buffer[0], buffer[1]))
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 3 ||
+       cppverify::result.value == uleb_value_math_3(buffer[0], buffer[1], buffer[2]))
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 4 ||
+       cppverify::result.value ==
          uleb_value_math_4(buffer[0], buffer[1], buffer[2], buffer[3]))
-  post(result.status != 0 || result.consumed != 5 ||
-       result.value == uleb_value_math_5(buffer[0], buffer[1], buffer[2],
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 5 ||
+       cppverify::result.value == uleb_value_math_5(buffer[0], buffer[1], buffer[2],
                                          buffer[3], buffer[4]))
-  post(result.status != 0 || result.consumed != 6 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 6 ||
+       cppverify::result.value ==
          uleb_value_math_6(buffer[0], buffer[1], buffer[2], buffer[3],
                            buffer[4], buffer[5]))
-  post(result.status != 0 || result.consumed != 7 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 7 ||
+       cppverify::result.value ==
          uleb_value_math_7(buffer[0], buffer[1], buffer[2], buffer[3],
                            buffer[4], buffer[5], buffer[6]))
-  post(result.status == 0 || result.value == 0)
+  cppverify::post(cppverify::result.status == 0 || cppverify::result.value == 0)
 {
-  ghost {
-    hide(uleb_value_machine_for_count);
-    hide(uleb_value_math_1);
-    hide(uleb_value_math_2);
-    hide(uleb_value_math_3);
-    hide(uleb_value_math_4);
-    hide(uleb_value_math_5);
-    hide(uleb_value_math_6);
-    hide(uleb_value_math_7);
+  cppverify::ghost {
+    cppverify::hide(uleb_value_machine_for_count);
+    cppverify::hide(uleb_value_math_1);
+    cppverify::hide(uleb_value_math_2);
+    cppverify::hide(uleb_value_math_3);
+    cppverify::hide(uleb_value_math_4);
+    cppverify::hide(uleb_value_math_5);
+    cppverify::hide(uleb_value_math_6);
+    cppverify::hide(uleb_value_math_7);
   }
   DecodeResult scanned = scan_uleb128_7(buffer);
   if (scanned.status != 0)
@@ -1269,51 +1269,51 @@ DecodeResult decode_uleb128_length_7(const uint8_t *buffer)
 }
 
 DecodeResult decode_uleb128_length_8(const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  post(result.status ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::post(cppverify::result.status ==
        uleb_status_math(8, buffer[0], buffer[1], buffer[2], buffer[3],
                         buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                         buffer[9], buffer[10]))
-  post(result.consumed ==
+  cppverify::post(cppverify::result.consumed ==
        uleb_consumed_math(8, buffer[0], buffer[1], buffer[2], buffer[3],
                           buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                           buffer[9], buffer[10]))
-  post(result.status != 0 || result.consumed != 1 ||
-       result.value == uleb_value_math_1(buffer[0]))
-  post(result.status != 0 || result.consumed != 2 ||
-       result.value == uleb_value_math_2(buffer[0], buffer[1]))
-  post(result.status != 0 || result.consumed != 3 ||
-       result.value == uleb_value_math_3(buffer[0], buffer[1], buffer[2]))
-  post(result.status != 0 || result.consumed != 4 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 1 ||
+       cppverify::result.value == uleb_value_math_1(buffer[0]))
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 2 ||
+       cppverify::result.value == uleb_value_math_2(buffer[0], buffer[1]))
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 3 ||
+       cppverify::result.value == uleb_value_math_3(buffer[0], buffer[1], buffer[2]))
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 4 ||
+       cppverify::result.value ==
          uleb_value_math_4(buffer[0], buffer[1], buffer[2], buffer[3]))
-  post(result.status != 0 || result.consumed != 5 ||
-       result.value == uleb_value_math_5(buffer[0], buffer[1], buffer[2],
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 5 ||
+       cppverify::result.value == uleb_value_math_5(buffer[0], buffer[1], buffer[2],
                                          buffer[3], buffer[4]))
-  post(result.status != 0 || result.consumed != 6 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 6 ||
+       cppverify::result.value ==
          uleb_value_math_6(buffer[0], buffer[1], buffer[2], buffer[3],
                            buffer[4], buffer[5]))
-  post(result.status != 0 || result.consumed != 7 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 7 ||
+       cppverify::result.value ==
          uleb_value_math_7(buffer[0], buffer[1], buffer[2], buffer[3],
                            buffer[4], buffer[5], buffer[6]))
-  post(result.status != 0 || result.consumed != 8 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 8 ||
+       cppverify::result.value ==
          uleb_value_math_8(buffer[0], buffer[1], buffer[2], buffer[3],
                            buffer[4], buffer[5], buffer[6], buffer[7]))
-  post(result.status == 0 || result.value == 0)
+  cppverify::post(cppverify::result.status == 0 || cppverify::result.value == 0)
 {
-  ghost {
-    hide(uleb_value_machine_for_count);
-    hide(uleb_value_math_1);
-    hide(uleb_value_math_2);
-    hide(uleb_value_math_3);
-    hide(uleb_value_math_4);
-    hide(uleb_value_math_5);
-    hide(uleb_value_math_6);
-    hide(uleb_value_math_7);
-    hide(uleb_value_math_8);
+  cppverify::ghost {
+    cppverify::hide(uleb_value_machine_for_count);
+    cppverify::hide(uleb_value_math_1);
+    cppverify::hide(uleb_value_math_2);
+    cppverify::hide(uleb_value_math_3);
+    cppverify::hide(uleb_value_math_4);
+    cppverify::hide(uleb_value_math_5);
+    cppverify::hide(uleb_value_math_6);
+    cppverify::hide(uleb_value_math_7);
+    cppverify::hide(uleb_value_math_8);
   }
   DecodeResult scanned = scan_uleb128_8(buffer);
   if (scanned.status != 0)
@@ -1336,57 +1336,57 @@ DecodeResult decode_uleb128_length_8(const uint8_t *buffer)
 }
 
 DecodeResult decode_uleb128_length_9(const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  post(result.status ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::post(cppverify::result.status ==
        uleb_status_math(9, buffer[0], buffer[1], buffer[2], buffer[3],
                         buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                         buffer[9], buffer[10]))
-  post(result.consumed ==
+  cppverify::post(cppverify::result.consumed ==
        uleb_consumed_math(9, buffer[0], buffer[1], buffer[2], buffer[3],
                           buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                           buffer[9], buffer[10]))
-  post(result.status != 0 || result.consumed != 1 ||
-       result.value == uleb_value_math_1(buffer[0]))
-  post(result.status != 0 || result.consumed != 2 ||
-       result.value == uleb_value_math_2(buffer[0], buffer[1]))
-  post(result.status != 0 || result.consumed != 3 ||
-       result.value == uleb_value_math_3(buffer[0], buffer[1], buffer[2]))
-  post(result.status != 0 || result.consumed != 4 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 1 ||
+       cppverify::result.value == uleb_value_math_1(buffer[0]))
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 2 ||
+       cppverify::result.value == uleb_value_math_2(buffer[0], buffer[1]))
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 3 ||
+       cppverify::result.value == uleb_value_math_3(buffer[0], buffer[1], buffer[2]))
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 4 ||
+       cppverify::result.value ==
          uleb_value_math_4(buffer[0], buffer[1], buffer[2], buffer[3]))
-  post(result.status != 0 || result.consumed != 5 ||
-       result.value == uleb_value_math_5(buffer[0], buffer[1], buffer[2],
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 5 ||
+       cppverify::result.value == uleb_value_math_5(buffer[0], buffer[1], buffer[2],
                                          buffer[3], buffer[4]))
-  post(result.status != 0 || result.consumed != 6 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 6 ||
+       cppverify::result.value ==
          uleb_value_math_6(buffer[0], buffer[1], buffer[2], buffer[3],
                            buffer[4], buffer[5]))
-  post(result.status != 0 || result.consumed != 7 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 7 ||
+       cppverify::result.value ==
          uleb_value_math_7(buffer[0], buffer[1], buffer[2], buffer[3],
                            buffer[4], buffer[5], buffer[6]))
-  post(result.status != 0 || result.consumed != 8 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 8 ||
+       cppverify::result.value ==
          uleb_value_math_8(buffer[0], buffer[1], buffer[2], buffer[3],
                            buffer[4], buffer[5], buffer[6], buffer[7]))
-  post(result.status != 0 || result.consumed != 9 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 9 ||
+       cppverify::result.value ==
          uleb_value_math_9(buffer[0], buffer[1], buffer[2], buffer[3],
                            buffer[4], buffer[5], buffer[6], buffer[7],
                            buffer[8]))
-  post(result.status == 0 || result.value == 0)
+  cppverify::post(cppverify::result.status == 0 || cppverify::result.value == 0)
 {
-  ghost {
-    hide(uleb_value_machine_for_count);
-    hide(uleb_value_math_1);
-    hide(uleb_value_math_2);
-    hide(uleb_value_math_3);
-    hide(uleb_value_math_4);
-    hide(uleb_value_math_5);
-    hide(uleb_value_math_6);
-    hide(uleb_value_math_7);
-    hide(uleb_value_math_8);
-    hide(uleb_value_math_9);
+  cppverify::ghost {
+    cppverify::hide(uleb_value_machine_for_count);
+    cppverify::hide(uleb_value_math_1);
+    cppverify::hide(uleb_value_math_2);
+    cppverify::hide(uleb_value_math_3);
+    cppverify::hide(uleb_value_math_4);
+    cppverify::hide(uleb_value_math_5);
+    cppverify::hide(uleb_value_math_6);
+    cppverify::hide(uleb_value_math_7);
+    cppverify::hide(uleb_value_math_8);
+    cppverify::hide(uleb_value_math_9);
   }
   DecodeResult scanned = scan_uleb128_9(buffer);
   if (scanned.status != 0)
@@ -1411,63 +1411,63 @@ DecodeResult decode_uleb128_length_9(const uint8_t *buffer)
 }
 
 DecodeResult decode_uleb128_length_10(const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  post(result.status ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::post(cppverify::result.status ==
        uleb_status_math(10, buffer[0], buffer[1], buffer[2], buffer[3],
                         buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                         buffer[9], buffer[10]))
-  post(result.consumed ==
+  cppverify::post(cppverify::result.consumed ==
        uleb_consumed_math(10, buffer[0], buffer[1], buffer[2], buffer[3],
                           buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                           buffer[9], buffer[10]))
-  post(result.status != 0 || result.consumed != 1 ||
-       result.value == uleb_value_math_1(buffer[0]))
-  post(result.status != 0 || result.consumed != 2 ||
-       result.value == uleb_value_math_2(buffer[0], buffer[1]))
-  post(result.status != 0 || result.consumed != 3 ||
-       result.value == uleb_value_math_3(buffer[0], buffer[1], buffer[2]))
-  post(result.status != 0 || result.consumed != 4 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 1 ||
+       cppverify::result.value == uleb_value_math_1(buffer[0]))
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 2 ||
+       cppverify::result.value == uleb_value_math_2(buffer[0], buffer[1]))
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 3 ||
+       cppverify::result.value == uleb_value_math_3(buffer[0], buffer[1], buffer[2]))
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 4 ||
+       cppverify::result.value ==
          uleb_value_math_4(buffer[0], buffer[1], buffer[2], buffer[3]))
-  post(result.status != 0 || result.consumed != 5 ||
-       result.value == uleb_value_math_5(buffer[0], buffer[1], buffer[2],
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 5 ||
+       cppverify::result.value == uleb_value_math_5(buffer[0], buffer[1], buffer[2],
                                          buffer[3], buffer[4]))
-  post(result.status != 0 || result.consumed != 6 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 6 ||
+       cppverify::result.value ==
          uleb_value_math_6(buffer[0], buffer[1], buffer[2], buffer[3],
                            buffer[4], buffer[5]))
-  post(result.status != 0 || result.consumed != 7 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 7 ||
+       cppverify::result.value ==
          uleb_value_math_7(buffer[0], buffer[1], buffer[2], buffer[3],
                            buffer[4], buffer[5], buffer[6]))
-  post(result.status != 0 || result.consumed != 8 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 8 ||
+       cppverify::result.value ==
          uleb_value_math_8(buffer[0], buffer[1], buffer[2], buffer[3],
                            buffer[4], buffer[5], buffer[6], buffer[7]))
-  post(result.status != 0 || result.consumed != 9 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 9 ||
+       cppverify::result.value ==
          uleb_value_math_9(buffer[0], buffer[1], buffer[2], buffer[3],
                            buffer[4], buffer[5], buffer[6], buffer[7],
                            buffer[8]))
-  post(result.status != 0 || result.consumed != 10 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 10 ||
+       cppverify::result.value ==
          uleb_value_math_10(buffer[0], buffer[1], buffer[2], buffer[3],
                             buffer[4], buffer[5], buffer[6], buffer[7],
                             buffer[8], buffer[9]))
-  post(result.status == 0 || result.value == 0)
+  cppverify::post(cppverify::result.status == 0 || cppverify::result.value == 0)
 {
-  ghost {
-    hide(uleb_value_machine_for_count);
-    hide(uleb_value_math_1);
-    hide(uleb_value_math_2);
-    hide(uleb_value_math_3);
-    hide(uleb_value_math_4);
-    hide(uleb_value_math_5);
-    hide(uleb_value_math_6);
-    hide(uleb_value_math_7);
-    hide(uleb_value_math_8);
-    hide(uleb_value_math_9);
-    hide(uleb_value_math_10);
+  cppverify::ghost {
+    cppverify::hide(uleb_value_machine_for_count);
+    cppverify::hide(uleb_value_math_1);
+    cppverify::hide(uleb_value_math_2);
+    cppverify::hide(uleb_value_math_3);
+    cppverify::hide(uleb_value_math_4);
+    cppverify::hide(uleb_value_math_5);
+    cppverify::hide(uleb_value_math_6);
+    cppverify::hide(uleb_value_math_7);
+    cppverify::hide(uleb_value_math_8);
+    cppverify::hide(uleb_value_math_9);
+    cppverify::hide(uleb_value_math_10);
   }
   DecodeResult scanned = scan_uleb128_10(buffer);
   if (scanned.status != 0)
@@ -1494,68 +1494,68 @@ DecodeResult decode_uleb128_length_10(const uint8_t *buffer)
 }
 
 DecodeResult decode_uleb128_length_11(const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  post(result.status ==
+  cppverify::pre(valid(buffer, 11))
+  cppverify::post(cppverify::result.status ==
        uleb_status_math(11, buffer[0], buffer[1], buffer[2], buffer[3],
                         buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                         buffer[9], buffer[10]))
-  post(result.consumed ==
+  cppverify::post(cppverify::result.consumed ==
        uleb_consumed_math(11, buffer[0], buffer[1], buffer[2], buffer[3],
                           buffer[4], buffer[5], buffer[6], buffer[7], buffer[8],
                           buffer[9], buffer[10]))
-  post(result.status != 0 || result.consumed != 1 ||
-       result.value == uleb_value_math_1(buffer[0]))
-  post(result.status != 0 || result.consumed != 2 ||
-       result.value == uleb_value_math_2(buffer[0], buffer[1]))
-  post(result.status != 0 || result.consumed != 3 ||
-       result.value == uleb_value_math_3(buffer[0], buffer[1], buffer[2]))
-  post(result.status != 0 || result.consumed != 4 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 1 ||
+       cppverify::result.value == uleb_value_math_1(buffer[0]))
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 2 ||
+       cppverify::result.value == uleb_value_math_2(buffer[0], buffer[1]))
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 3 ||
+       cppverify::result.value == uleb_value_math_3(buffer[0], buffer[1], buffer[2]))
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 4 ||
+       cppverify::result.value ==
          uleb_value_math_4(buffer[0], buffer[1], buffer[2], buffer[3]))
-  post(result.status != 0 || result.consumed != 5 ||
-       result.value == uleb_value_math_5(buffer[0], buffer[1], buffer[2],
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 5 ||
+       cppverify::result.value == uleb_value_math_5(buffer[0], buffer[1], buffer[2],
                                          buffer[3], buffer[4]))
-  post(result.status != 0 || result.consumed != 6 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 6 ||
+       cppverify::result.value ==
          uleb_value_math_6(buffer[0], buffer[1], buffer[2], buffer[3],
                            buffer[4], buffer[5]))
-  post(result.status != 0 || result.consumed != 7 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 7 ||
+       cppverify::result.value ==
          uleb_value_math_7(buffer[0], buffer[1], buffer[2], buffer[3],
                            buffer[4], buffer[5], buffer[6]))
-  post(result.status != 0 || result.consumed != 8 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 8 ||
+       cppverify::result.value ==
          uleb_value_math_8(buffer[0], buffer[1], buffer[2], buffer[3],
                            buffer[4], buffer[5], buffer[6], buffer[7]))
-  post(result.status != 0 || result.consumed != 9 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 9 ||
+       cppverify::result.value ==
          uleb_value_math_9(buffer[0], buffer[1], buffer[2], buffer[3],
                            buffer[4], buffer[5], buffer[6], buffer[7],
                            buffer[8]))
-  post(result.status != 0 || result.consumed != 10 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 10 ||
+       cppverify::result.value ==
          uleb_value_math_10(buffer[0], buffer[1], buffer[2], buffer[3],
                             buffer[4], buffer[5], buffer[6], buffer[7],
                             buffer[8], buffer[9]))
-  post(result.status != 0 || result.consumed != 11 ||
-       result.value ==
+  cppverify::post(cppverify::result.status != 0 || cppverify::result.consumed != 11 ||
+       cppverify::result.value ==
          uleb_value_math_10(buffer[0], buffer[1], buffer[2], buffer[3],
                             buffer[4], buffer[5], buffer[6], buffer[7],
                             buffer[8], buffer[9]))
-  post(result.status == 0 || result.value == 0)
+  cppverify::post(cppverify::result.status == 0 || cppverify::result.value == 0)
 {
-  ghost {
-    hide(uleb_value_machine_for_count);
-    hide(uleb_value_math_1);
-    hide(uleb_value_math_2);
-    hide(uleb_value_math_3);
-    hide(uleb_value_math_4);
-    hide(uleb_value_math_5);
-    hide(uleb_value_math_6);
-    hide(uleb_value_math_7);
-    hide(uleb_value_math_8);
-    hide(uleb_value_math_9);
-    hide(uleb_value_math_10);
+  cppverify::ghost {
+    cppverify::hide(uleb_value_machine_for_count);
+    cppverify::hide(uleb_value_math_1);
+    cppverify::hide(uleb_value_math_2);
+    cppverify::hide(uleb_value_math_3);
+    cppverify::hide(uleb_value_math_4);
+    cppverify::hide(uleb_value_math_5);
+    cppverify::hide(uleb_value_math_6);
+    cppverify::hide(uleb_value_math_7);
+    cppverify::hide(uleb_value_math_8);
+    cppverify::hide(uleb_value_math_9);
+    cppverify::hide(uleb_value_math_10);
   }
   DecodeResult scanned = scan_uleb128_11(buffer);
   if (scanned.status != 0)
