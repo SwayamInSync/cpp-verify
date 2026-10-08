@@ -1,6 +1,6 @@
-// RUN: %cpp-verify --dump-ir=1 %s 2>&1 | FileCheck %s --check-prefix=L1
-// RUN: %cpp-verify --dump-ir=2 %s 2>&1 | FileCheck %s --check-prefix=L2
-// RUN: %cpp-verify --dump-ir=3,4 %s 2>&1 | FileCheck %s --check-prefix=L34
+// RUN: %cpp-verify --dump-ir=1 %s -- 2>&1 | FileCheck %s --check-prefix=L1
+// RUN: %cpp-verify --dump-ir=2 %s -- 2>&1 | FileCheck %s --check-prefix=L2
+// RUN: %cpp-verify --dump-ir=3,4 %s -- 2>&1 | FileCheck %s --check-prefix=L34
 
 int inc(int x)
   cppverify::pre(x >= 0 && x < 100)
