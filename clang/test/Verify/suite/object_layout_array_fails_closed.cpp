@@ -14,7 +14,7 @@ struct WithArray {
 };
 
 int unsupported_element_array()
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   float a[4];
   a[0] = 0;
@@ -22,7 +22,7 @@ int unsupported_element_array()
 }
 
 int array_value_parameter(WithArray box)
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   return box.values[0];
 }
