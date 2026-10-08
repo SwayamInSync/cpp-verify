@@ -6,14 +6,14 @@
 // RUN: %cpp-verify --backend=bmc --unroll=1 %s 2>&1 | FileCheck %s --check-prefix=BMC
 
 void set_value(int &target, int value)
-  modifies(target)
-  post(target == value)
+  cppverify::modifies(target)
+  cppverify::post(target == value)
 {
   target = value;
 }
 
 int local_reference_lowering(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int local = 0;
   int &alias = local;
