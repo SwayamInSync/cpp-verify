@@ -7,7 +7,7 @@
 // RUN: %cpp-verify --backend=bmc --unroll=1 %s 2>&1 | FileCheck %s --check-prefix=BMC
 
 int nested_scope_fallthrough()
-  post(result == 7)
+  cppverify::post(cppverify::result == 7)
 {
   int result_value = 0;
   {
@@ -18,7 +18,7 @@ int nested_scope_fallthrough()
 }
 
 int early_return_lifetime(bool choose)
-  post(result == (choose ? 2 : 3))
+  cppverify::post(cppverify::result == (choose ? 2 : 3))
 {
   int outer[1] = {3};
   if (choose) {
@@ -29,7 +29,7 @@ int early_return_lifetime(bool choose)
 }
 
 int reverse_lifetime_order()
-  post(result == 5)
+  cppverify::post(cppverify::result == 5)
 {
   int first[1] = {4};
   int second[1] = {5};
