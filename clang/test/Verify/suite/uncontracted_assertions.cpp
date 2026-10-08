@@ -1,4 +1,4 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --implicit-check-not=plain
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s --implicit-check-not=plain
 //
 // An assertion or ghost block is an obligation even in a function without a
 // contract clause. Only a function that states nothing is left alone.
