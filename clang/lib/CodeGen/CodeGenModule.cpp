@@ -4403,6 +4403,7 @@ namespace {
     bool SafeToInline = true;
 
     bool shouldVisitImplicitCode() const { return true; }
+    bool shouldVisitCppVerifyContracts() const { return false; }
 
     bool VisitVarDecl(VarDecl *VD) {
       if (VD->getTLSKind()) {
