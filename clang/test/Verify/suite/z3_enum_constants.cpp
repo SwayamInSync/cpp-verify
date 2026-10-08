@@ -7,7 +7,7 @@ enum Status : unsigned char {
 };
 
 int enum_constant_value()
-  post(result == 9)
+  cppverify::post(cppverify::result == 9)
 {
   return Complete;
 }
