@@ -1,5 +1,5 @@
-// RUN: not %cpp-verify --timeout=30000 %s 2>&1 | FileCheck %s
-// RUN: not %cpp-verify --lower-only %S/Inputs/forall_introduction_assign.cpp 2>&1 \
+// RUN: not %cpp-verify --timeout=30000 %s -- 2>&1 | FileCheck %s
+// RUN: not %cpp-verify --lower-only %S/Inputs/forall_introduction_assign.cpp -- 2>&1 \
 // RUN:   | FileCheck %S/Inputs/forall_introduction_assign.cpp --check-prefix=ASSIGN
 //
 // contract_assert(forall(k, lo, hi, P)) by { proof } proves P for one
