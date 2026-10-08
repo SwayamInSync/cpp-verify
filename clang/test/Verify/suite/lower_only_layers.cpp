@@ -8,14 +8,14 @@
 // RUN: %cpp-verify --lower-only --dump-ir=3 %s 2>&1 | FileCheck %s --check-prefix=VC
 // RUN: %cpp-verify --int-encoding=bitvector --lower-only --dump-ir=4 %s 2>&1 | FileCheck %s --check-prefix=Z3
 
-spec int mathematical_successor(int x)
+cppverify::spec int mathematical_successor(int x)
 {
   return x + 1;
 }
 
 int machine_identity(int x)
-  pre(x >= 0 && x < 100)
-  post(result == mathematical_successor(x))
+  cppverify::pre(x >= 0 && x < 100)
+  cppverify::post(cppverify::result == mathematical_successor(x))
 {
   return x;
 }
