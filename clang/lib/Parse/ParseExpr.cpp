@@ -22,7 +22,6 @@
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Availability.h"
-#include "clang/AST/ExprContract.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/LocInfoType.h"
 #include "clang/Basic/PrettyStackTrace.h"
@@ -724,6 +723,8 @@ Parser::ParseCastExpression(CastParseKind ParseKind, bool isAddressOfOperand,
                             TypoCorrectionTypeBehavior CorrectionBehavior,
                             bool isVectorLiteral, bool *NotPrimaryExpression) {
   ExprResult Res;
+  if (getLangOpts().VerifyContracts)
+    tryAnnotateCppVerify(CppVerifyPosition::Expression);
   tok::TokenKind SavedKind = Tok.getKind();
   auto SavedType = PreferredType;
   NotCastExpr = false;
@@ -861,57 +862,7 @@ Parser::ParseCastExpression(CastParseKind ParseKind, bool isAddressOfOperand,
                                CorrectionBehavior, isVectorLiteral,
                                NotPrimaryExpression);
 
-  case tok::identifier: {
-    if (getLangOpts().VerifyContracts) {
-      const IdentifierInfo *II = Tok.getIdentifierInfo();
-      if ((InContractPostcondition || InLoopContractInvariant) &&
-          II->isStr("old") && NextToken().is(tok::l_paren))
-        return ParseOldExpr();
-      // choose(k, body): unless the program declares its own choose.
-      if (II->isStr("choose") && NextToken().is(tok::l_paren) &&
-          !Actions.LookupSingleName(getCurScope(),
-                                    const_cast<IdentifierInfo *>(II),
-                                    Tok.getLocation(),
-                                    Sema::LookupOrdinaryName)) {
-        Res = ParseQuantifierExpr();
-        break;
-      }
-      // trigger(term) in a quantifier body marks term as an instantiation
-      // pattern, unless the program declares its own trigger.
-      if (QuantifierBodyDepth != 0 && II->isStr("trigger") &&
-          NextToken().is(tok::l_paren) &&
-          !Actions.LookupSingleName(getCurScope(),
-                                    const_cast<IdentifierInfo *>(II),
-                                    Tok.getLocation(),
-                                    Sema::LookupOrdinaryName)) {
-        ConsumeToken();
-        BalancedDelimiterTracker T(*this, tok::l_paren);
-        T.consumeOpen();
-        ExprResult Term = ParseExpression();
-        if (Term.isInvalid() || T.consumeClose())
-          return ExprError();
-        Actions.getASTContext().markTriggerTerm(Term.get());
-        Res = Term;
-        break;
-      }
-      if (InContractPostcondition && II->isStr("result")) {
-        Res = ParseResultExpr();
-        break;
-      }
-      if ((InContractedFunction || InParsingContractExpr) &&
-          II->isStr("result")) {
-        Diag(Tok, diag::err_result_outside_postcondition);
-        return ExprError();
-      }
-      if (!InContractPostcondition && !InLoopContractInvariant &&
-          (InContractedFunction || InParsingContractExpr) && II->isStr("old") &&
-          NextToken().is(tok::l_paren)) {
-        Diag(Tok, diag::err_old_outside_postcondition);
-        return ExprError();
-      }
-    }
-    goto ParseIdentifier;
-  }
+  case tok::identifier:
   ParseIdentifier: {    // primary-expression: identifier
                         // unqualified-id: identifier
                         // constant: enumeration-constant
@@ -1138,10 +1089,9 @@ Parser::ParseCastExpression(CastParseKind ParseKind, bool isAddressOfOperand,
     Res = Actions.ActOnGNUNullExpr(ConsumeToken());
     break;
 
-  // CppVerify contract expressions
-  case tok::kw_forall:
-  case tok::kw_exists:
-    return ParseQuantifierExpr();
+  case tok::annot_cppverify:
+    Res = ParseCppVerifyExpression();
+    break;
 
   case tok::plusplus:      // unary-expression: '++' unary-expression [C99]
   case tok::minusminus: {  // unary-expression: '--' unary-expression [C99]
@@ -3536,249 +3486,4 @@ ExprResult Parser::ParseAvailabilityCheckExpr(SourceLocation BeginLoc) {
 
   return Actions.ObjC().ActOnObjCAvailabilityCheckExpr(
       AvailSpecs, BeginLoc, Parens.getCloseLocation());
-}
-
-//===----------------------------------------------------------------------===//
-// CppVerify Contract Expression Parsing
-//===----------------------------------------------------------------------===//
-
-/// Parse forall(binder, lo, hi, body) or exists(binder, lo, hi, body)
-ExprResult Parser::ParseQuantifierExpr() {
-  // choose(...) is contextual: the caller checked the identifier.
-  const bool IsChoose = Tok.is(tok::identifier);
-  assert((Tok.is(tok::kw_forall) || Tok.is(tok::kw_exists) || IsChoose) &&
-         "Expected forall, exists, or choose");
-  bool IsForall = Tok.is(tok::kw_forall);
-  const char *Keyword = IsChoose ? "choose" : IsForall ? "forall" : "exists";
-  SourceLocation KwLoc = ConsumeToken();
-
-  if (Tok.isNot(tok::l_paren)) {
-    Diag(Tok, diag::err_contract_expected_lparen) << Keyword;
-    return ExprError();
-  }
-  SourceLocation LParenLoc = ConsumeParen();
-
-  // Parse binder name (an identifier that becomes a fresh int variable).
-  if (Tok.isNot(tok::identifier)) {
-    Diag(Tok, diag::err_expected) << tok::identifier;
-    SkipUntil(tok::r_paren, StopAtSemi);
-    return ExprError();
-  }
-  IdentifierInfo *BinderII = Tok.getIdentifierInfo();
-  SourceLocation BinderLoc = ConsumeToken();
-
-  if (ExpectAndConsume(tok::comma)) {
-    SkipUntil(tok::r_paren, StopAtSemi);
-    return ExprError();
-  }
-
-  // forall(k, body) ranges over all integers: one more top-level comma
-  // before the closing parenthesis, where the bounded form has three.
-  bool Unbounded = false;
-  {
-    TentativeParsingAction Scan(*this);
-    unsigned Depth = 0, Commas = 0;
-    while (Tok.isNot(tok::eof) && Tok.isNot(tok::semi)) {
-      if (Tok.isOneOf(tok::l_paren, tok::l_square, tok::l_brace))
-        ++Depth;
-      else if (Tok.isOneOf(tok::r_paren, tok::r_square, tok::r_brace)) {
-        if (Depth == 0)
-          break;
-        --Depth;
-      } else if (Tok.is(tok::comma) && Depth == 0)
-        ++Commas;
-      ConsumeAnyToken();
-    }
-    Unbounded = Commas == 0;
-    Scan.Revert();
-  }
-
-  ASTContext &Ctx = Actions.getASTContext();
-  if (Unbounded) {
-    VarDecl *BoundVar = VarDecl::Create(
-        Ctx, Actions.CurContext, BinderLoc, BinderLoc, BinderII, Ctx.IntTy,
-        Ctx.getTrivialTypeSourceInfo(Ctx.IntTy, BinderLoc), SC_None);
-    ParseScope QuantifierScope(this, Scope::DeclScope);
-    Actions.PushOnScopeChains(BoundVar, getCurScope(), /*AddToContext=*/false);
-    ++QuantifierBodyDepth;
-    ExprResult Body = ParseAssignmentExpression();
-    --QuantifierBodyDepth;
-    QuantifierScope.Exit();
-    if (Body.isInvalid()) {
-      SkipUntil(tok::r_paren, StopAtSemi);
-      return ExprError();
-    }
-    ExprResult BodyBool = Actions.ActOnContractCondition(Body);
-    if (BodyBool.isInvalid()) {
-      SkipUntil(tok::r_paren, StopAtSemi);
-      return ExprError();
-    }
-    if (Tok.isNot(tok::r_paren)) {
-      Diag(Tok, diag::err_contract_expected_rparen) << Keyword;
-      SkipUntil(tok::r_paren, StopAtSemi);
-      return ExprError();
-    }
-    SourceLocation RParenLoc = ConsumeParen();
-    if (IsChoose)
-      return new (Ctx) ContractChooseExpr(KwLoc, LParenLoc, RParenLoc, BoundVar,
-                                  nullptr, nullptr, BodyBool.get(), Ctx.IntTy);
-    if (IsForall)
-      return new (Ctx) ForallExpr(KwLoc, LParenLoc, RParenLoc, BoundVar,
-                                  nullptr, nullptr, BodyBool.get(), Ctx.BoolTy);
-    return new (Ctx) ExistsExpr(KwLoc, LParenLoc, RParenLoc, BoundVar, nullptr,
-                                nullptr, BodyBool.get(), Ctx.BoolTy);
-  }
-
-  // Parse lo expression
-  ExprResult Lo = ParseAssignmentExpression();
-  if (Lo.isInvalid()) {
-    SkipUntil(tok::r_paren, StopAtSemi);
-    return ExprError();
-  }
-
-  if (ExpectAndConsume(tok::comma)) {
-    SkipUntil(tok::r_paren, StopAtSemi);
-    return ExprError();
-  }
-
-  // Parse hi expression
-  ExprResult Hi = ParseAssignmentExpression();
-  if (Hi.isInvalid()) {
-    SkipUntil(tok::r_paren, StopAtSemi);
-    return ExprError();
-  }
-
-  if (ExpectAndConsume(tok::comma)) {
-    SkipUntil(tok::r_paren, StopAtSemi);
-    return ExprError();
-  }
-
-  // Create the bound variable and push it into scope.
-  VarDecl *BoundVar = VarDecl::Create(
-      Ctx, Actions.CurContext, BinderLoc, BinderLoc, BinderII, Ctx.IntTy,
-      Ctx.getTrivialTypeSourceInfo(Ctx.IntTy, BinderLoc), SC_None);
-
-  // Push a scope for the binder and add the decl.
-  ParseScope QuantifierScope(this, Scope::DeclScope);
-  Actions.PushOnScopeChains(BoundVar, getCurScope(), /*AddToContext=*/false);
-
-  // Parse body expression
-  ++QuantifierBodyDepth;
-  ExprResult Body = ParseAssignmentExpression();
-  --QuantifierBodyDepth;
-  if (Body.isInvalid()) {
-    SkipUntil(tok::r_paren, StopAtSemi);
-    return ExprError();
-  }
-
-  QuantifierScope.Exit();
-
-  // Validate bound types: lo and hi must be integer.
-  if (!Lo.get()->getType()->isIntegerType()) {
-    Diag(Lo.get()->getExprLoc(), diag::err_contract_quantifier_bound_not_int);
-    SkipUntil(tok::r_paren, StopAtSemi);
-    return ExprError();
-  }
-  if (!Hi.get()->getType()->isIntegerType()) {
-    Diag(Hi.get()->getExprLoc(), diag::err_contract_quantifier_bound_not_int);
-    SkipUntil(tok::r_paren, StopAtSemi);
-    return ExprError();
-  }
-
-  // Validate body: must be contextually convertible to bool.
-  ExprResult BodyBool = Actions.ActOnContractCondition(Body);
-  if (BodyBool.isInvalid()) {
-    SkipUntil(tok::r_paren, StopAtSemi);
-    return ExprError();
-  }
-
-  if (Tok.isNot(tok::r_paren)) {
-    Diag(Tok, diag::err_contract_expected_rparen) << Keyword;
-    SkipUntil(tok::r_paren, StopAtSemi);
-    return ExprError();
-  }
-  SourceLocation RParenLoc = ConsumeParen();
-
-  QualType BoolTy = Ctx.BoolTy;
-  if (IsChoose)
-    return new (Ctx) ContractChooseExpr(KwLoc, LParenLoc, RParenLoc, BoundVar,
-                                Lo.get(), Hi.get(), BodyBool.get(), Ctx.IntTy);
-  if (IsForall)
-    return new (Ctx) ForallExpr(KwLoc, LParenLoc, RParenLoc, BoundVar,
-                                Lo.get(), Hi.get(), BodyBool.get(), BoolTy);
-  return new (Ctx) ExistsExpr(KwLoc, LParenLoc, RParenLoc, BoundVar,
-                              Lo.get(), Hi.get(), BodyBool.get(), BoolTy);
-}
-
-/// Parse old(expr)
-ExprResult Parser::ParseOldExpr() {
-  assert(Tok.is(tok::identifier) && Tok.getIdentifierInfo()->isStr("old") &&
-         "Expected 'old'");
-  SourceLocation OldLoc = ConsumeToken();
-
-  // In a loop invariant, old(...) still denotes the function-entry state.
-  // TODO: also allow it in proof bodies once that parser context is tracked.
-  if (!InContractPostcondition && !InLoopContractInvariant) {
-    Diag(OldLoc, diag::err_old_outside_postcondition);
-    return ExprError();
-  }
-
-  if (Tok.isNot(tok::l_paren)) {
-    Diag(Tok, diag::err_contract_expected_lparen) << "old";
-    return ExprError();
-  }
-  SourceLocation LParenLoc = ConsumeParen();
-
-  bool WasInOldExpression = InOldExpression;
-  InOldExpression = true;
-  ExprResult Inner = ParseExpression();
-  InOldExpression = WasInOldExpression;
-  if (Inner.isInvalid()) {
-    SkipUntil(tok::r_paren, StopAtSemi);
-    return ExprError();
-  }
-
-  if (Tok.isNot(tok::r_paren)) {
-    Diag(Tok, diag::err_contract_expected_rparen) << "old";
-    SkipUntil(tok::r_paren, StopAtSemi);
-    return ExprError();
-  }
-  SourceLocation RParenLoc = ConsumeParen();
-
-  ASTContext &Ctx = Actions.getASTContext();
-  return new (Ctx) OldExpr(OldLoc, LParenLoc, RParenLoc, Inner.get());
-}
-
-/// Parse 'result' keyword
-ExprResult Parser::ParseResultExpr() {
-  assert(Tok.is(tok::identifier) && Tok.getIdentifierInfo()->isStr("result") &&
-         "Expected 'result'");
-  SourceLocation ResultLoc = ConsumeToken();
-
-  // 'result' is only valid in postconditions.
-  if (!InContractPostcondition) {
-    Diag(ResultLoc, diag::err_result_outside_postcondition);
-    return ExprError();
-  }
-  if (InOldExpression) {
-    Diag(ResultLoc, diag::err_result_in_old_expression);
-    return ExprError();
-  }
-
-  // Use the return type computed from the full Declarator before contract
-  // parsing. CurrentContractReturnType is set via GetTypeForDeclarator in
-  // ParseFunctionDefinition, so it reflects the true return type including
-  // pointers, references, typedefs, etc.
-  QualType RetTy = CurrentContractReturnType;
-  if (RetTy.isNull()) {
-    // Fallback: try the FunctionDecl if available (e.g. from a previous pass).
-    if (CurrentContractFunction)
-      if (auto *FD = dyn_cast<FunctionDecl>(CurrentContractFunction))
-        RetTy = FD->getReturnType();
-  }
-  if (RetTy.isNull())
-    RetTy = Actions.getASTContext().IntTy; // last-resort fallback
-
-  ASTContext &Ctx = Actions.getASTContext();
-  return new (Ctx) ResultExpr(ResultLoc, RetTy);
 }
