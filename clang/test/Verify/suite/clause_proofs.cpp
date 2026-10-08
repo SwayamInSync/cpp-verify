@@ -1,8 +1,8 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s
-// RUN: not %cpp-verify --backend=bmc %s 2>&1 | FileCheck %s --check-prefix=BMC
-// RUN: not %cpp-verify %S/Inputs/clause_proof_rejected.cpp 2>&1 \
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s
+// RUN: not %cpp-verify --backend=bmc %s -- 2>&1 | FileCheck %s --check-prefix=BMC
+// RUN: not %cpp-verify %S/Inputs/clause_proof_rejected.cpp -- 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=REJECT
-// RUN: not %cpp-verify %S/Inputs/clause_proof_assigns.cpp 2>&1 \
+// RUN: not %cpp-verify %S/Inputs/clause_proof_assigns.cpp -- 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=ASSIGNS
 //
 // A spec's post, decreases, and reads clauses take a proof block,
