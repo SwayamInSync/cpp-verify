@@ -14,7 +14,7 @@ While proving a function, you may need an intermediate fact:
    // We know a <= b and b <= c from earlier lines
    // We need a <= c before the return
 
-A **proof step** (``contract_assert`` in CppVerify) asks the verifier to show the formula at that point.
+A **proof step** (``cppverify::check`` in CppVerify) asks the verifier to show the formula at that point.
 It is not a runtime check.
 
 Lemmas as separate functions
@@ -67,4 +67,4 @@ unfold them only as far as a proof needs:
 - **reveal / hide** — turn a spec transparent or opaque for a region of a proof.
 
 This is a knob on *automation*, not on truth: revealing more never changes what is provable, only how
-hard the solver works. Part II maps these to ``reveal_with_fuel``, ``reveal``, and ``hide``.
+hard the solver works. Part II maps these to ``cppverify::reveal_with_fuel``, ``cppverify::reveal``, and ``cppverify::hide``.
