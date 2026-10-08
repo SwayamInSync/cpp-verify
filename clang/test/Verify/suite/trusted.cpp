@@ -1,5 +1,5 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s
-// RUN: not %cpp-verify --diagnostics-format=json %s 2>/dev/null \
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s
+// RUN: not %cpp-verify --diagnostics-format=json %s -- 2>/dev/null \
 // RUN:   | FileCheck %s --check-prefix=JSON
 // RUN: not %cpp-verify %s -- -std=c++17 -DTRUSTED_SPEC 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=SPEC
