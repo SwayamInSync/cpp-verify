@@ -1,4 +1,4 @@
-// RUN: not %cpp-verify --timeout=10000 %s 2>&1 | FileCheck %s
+// RUN: not %cpp-verify --timeout=10000 %s -- 2>&1 | FileCheck %s
 //
 // An inductive predicate that reads memory is a function of the memory state
 // it is applied in. Each application's unfolding reads memory where the
