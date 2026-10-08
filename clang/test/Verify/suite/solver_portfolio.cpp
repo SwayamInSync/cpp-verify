@@ -10,79 +10,79 @@
 // RUN:   --obligation-in=%t.obligations 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=REPLAY
 
-spec int quotient(int value, int divisor) {
+cppverify::spec int quotient(int value, int divisor) {
   return value / divisor;
 }
 
-spec int remainder(int value, int divisor) {
+cppverify::spec int remainder(int value, int divisor) {
   return value % divisor;
 }
 
-spec int answer() {
+cppverify::spec int answer() {
   return 42;
 }
 
 int valid_spec_arithmetic()
-  post(quotient(-5, 2) == -2)
-  post(remainder(-5, 2) == -1)
-  post(quotient(5, 0) == 0)
-  post(remainder(5, 0) == 5)
+  cppverify::post(quotient(-5, 2) == -2)
+  cppverify::post(remainder(-5, 2) == -1)
+  cppverify::post(quotient(5, 0) == 0)
+  cppverify::post(remainder(5, 0) == 5)
 {
   return 0;
 }
 
 int valid_zero_arity_spec()
-  post(answer() == 42)
+  cppverify::post(answer() == 42)
 {
   return 0;
 }
 
 int valid_unsigned(unsigned x)
-  pre(x == 0xffffffffU)
-  post(x / 2U == 0x7fffffffU)
-  post(x % 2U == 1U)
+  cppverify::pre(x == 0xffffffffU)
+  cppverify::post(x / 2U == 0x7fffffffU)
+  cppverify::post(x % 2U == 1U)
 {
   return 0;
 }
 
 int valid_quantifier(int n)
-  pre(n > 0 && n <= 3)
-  pre(forall(i, 0, n, i >= 0))
-  pre(exists(j, 0, n, j == 0))
-  post(result == n)
+  cppverify::pre(n > 0 && n <= 3)
+  cppverify::pre(cppverify::forall(i, 0, n, i >= 0))
+  cppverify::pre(cppverify::exists(j, 0, n, j == 0))
+  cppverify::post(cppverify::result == n)
 {
   return n;
 }
 
 int read_pointer(int *p)
-  pre(p != nullptr)
-  post(result == *p)
+  cppverify::pre(p != nullptr)
+  cppverify::post(cppverify::result == *p)
 {
   return *p;
 }
 
 void write_pointer(int *p)
-  pre(p != nullptr)
-  modifies(*p)
-  post(*p == 7)
+  cppverify::pre(p != nullptr)
+  cppverify::modifies(*p)
+  cppverify::post(*p == 7)
 {
   *p = 7;
 }
 
 int unsafe_add(int x)
-  post(result > x)
+  cppverify::post(cppverify::result > x)
 {
   return x + 1;
 }
 
 int invalid_unsigned(unsigned x)
-  post(x <= 0x7fffffffU)
+  cppverify::post(x <= 0x7fffffffU)
 {
   return 0;
 }
 
 int invalid_spec_arithmetic()
-  post(quotient(-5, 2) == -3)
+  cppverify::post(quotient(-5, 2) == -3)
 {
   return 0;
 }
