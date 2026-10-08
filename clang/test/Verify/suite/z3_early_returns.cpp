@@ -4,16 +4,16 @@
 // RUN: %cpp-verify --lower-only --dump-ir=2 %s 2>&1 | FileCheck %s --check-prefix=PASSIVE
 
 int valid_early_return(int x)
-  post((x > 0 && result == 1) || (x <= 0 && result == 0))
+  cppverify::post((x > 0 && cppverify::result == 1) || (x <= 0 && cppverify::result == 0))
 {
   if (x > 0)
     return 1;
-  contract_assert(x <= 0);
+  cppverify::check(x <= 0);
   return 0;
 }
 
 int invalid_early_return(int x)
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   if (x > 0)
     return 1;
@@ -21,7 +21,7 @@ int invalid_early_return(int x)
 }
 
 int valid_assignment_after_early_return(bool stop, int value)
-  post(result == (stop ? value : 1))
+  cppverify::post(cppverify::result == (stop ? value : 1))
 {
   if (stop)
     return value;
@@ -30,14 +30,14 @@ int valid_assignment_after_early_return(bool stop, int value)
 }
 
 int valid_loop_after_early_return(bool stop, int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int expected = value;
   if (stop)
     return value;
   while (false)
-    invariant(value == expected)
-    decreases(0)
+    cppverify::invariant(value == expected)
+    cppverify::decreases(0)
   {
     value = 1;
   }
