@@ -162,6 +162,7 @@ static PGOHashVersion getPGOHashVersion(llvm::IndexedInstrProfReader *PGOReader,
 /// A RecursiveASTVisitor that fills a map of statements to PGO counters.
 struct MapRegionCounters : public RecursiveASTVisitor<MapRegionCounters> {
   using Base = RecursiveASTVisitor<MapRegionCounters>;
+  bool shouldVisitCppVerifyContracts() const { return false; }
 
   /// The next counter value to assign.
   unsigned NextCounter;
