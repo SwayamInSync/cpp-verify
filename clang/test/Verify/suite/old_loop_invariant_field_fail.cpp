@@ -6,15 +6,15 @@ struct LocalRecord {
 };
 
 int reject_old_do_local_field()
-  post(result == 2)
+  cppverify::post(cppverify::result == 2)
 {
   LocalRecord local;
   do {
     local.field = 2;
   } while (false)
-    invariant(old(local.field) == 2);
+    cppverify::invariant(cppverify::old(local.field) == 2);
   return local.field;
 }
 
-// CHECK: error: reject_old_do_local_field: old(...) cannot refer to local
+// CHECK: error: reject_old_do_local_field: cppverify::old(...) cannot refer to local
 // CHECK-SAME: variable without a function-entry state: local
