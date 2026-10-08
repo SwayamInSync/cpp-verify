@@ -9,8 +9,8 @@
 bool is_odd(unsigned n);
 
 bool is_even(unsigned n)
-  decreases(n)
-  post(result == (n % 2 == 0))
+  cppverify::decreases(n)
+  cppverify::post(cppverify::result == (n % 2 == 0))
 {
   if (n == 0)
     return true;
@@ -18,8 +18,8 @@ bool is_even(unsigned n)
 }
 
 bool is_odd(unsigned n)
-  decreases(n)
-  post(result == (n % 2 == 1))
+  cppverify::decreases(n)
+  cppverify::post(cppverify::result == (n % 2 == 1))
 {
   if (n == 0)
     return false;
@@ -28,27 +28,27 @@ bool is_odd(unsigned n)
 // CHECK-DAG: Verified: is_even
 // CHECK-DAG: Verified: is_odd
 
-spec int tri(int n)
-  decreases(n)
+cppverify::spec int tri(int n)
+  cppverify::decreases(n)
 {
   return n <= 0 ? 0 : n + tri(n - 1);
 }
 
-proof void tri_odd_step(int n);
+cppverify::proof void tri_odd_step(int n);
 
-proof void tri_even_step(int n)
-  pre(n >= 1 && n <= 1000)
-  decreases(n)
-  post(tri(n) >= n)
+cppverify::proof void tri_even_step(int n)
+  cppverify::pre(n >= 1 && n <= 1000)
+  cppverify::decreases(n)
+  cppverify::post(tri(n) >= n)
 {
   if (n > 1)
     tri_odd_step(n - 1);
 }
 
-proof void tri_odd_step(int n)
-  pre(n >= 1 && n <= 1000)
-  decreases(n)
-  post(tri(n) >= n)
+cppverify::proof void tri_odd_step(int n)
+  cppverify::pre(n >= 1 && n <= 1000)
+  cppverify::decreases(n)
+  cppverify::post(tri(n) >= n)
 {
   if (n > 1)
     tri_even_step(n - 1);
@@ -60,9 +60,9 @@ proof void tri_odd_step(int n)
 int ping(int n);
 
 int pong(int n)
-  pre(n >= 0)
-  decreases(n)
-  post(result == 0)
+  cppverify::pre(n >= 0)
+  cppverify::decreases(n)
+  cppverify::post(cppverify::result == 0)
 {
   if (n == 0)
     return 0;
@@ -70,9 +70,9 @@ int pong(int n)
 }
 
 int ping(int n)
-  pre(n >= 0)
-  decreases(n)
-  post(result == 0)
+  cppverify::pre(n >= 0)
+  cppverify::decreases(n)
+  cppverify::post(cppverify::result == 0)
 {
   if (n == 0)
     return 0;
