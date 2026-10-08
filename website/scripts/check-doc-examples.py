@@ -137,7 +137,7 @@ def run(cpp_verify, source, arguments, timeout):
         path = pathlib.Path(directory) / "example.cpp"
         path.write_text(source)
         try:
-            done = subprocess.run([cpp_verify, *arguments, str(path)],
+            done = subprocess.run([cpp_verify, *arguments, str(path), "--"],
                                   capture_output=True, text=True,
                                   timeout=timeout)
         except subprocess.TimeoutExpired:
