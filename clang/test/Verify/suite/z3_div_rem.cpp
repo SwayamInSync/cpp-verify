@@ -2,29 +2,29 @@
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 int valid_division(int x)
-  pre(x == 10)
-  post(result == 2)
+  cppverify::pre(x == 10)
+  cppverify::post(cppverify::result == 2)
 {
   return x / 5;
 }
 
 int valid_negative_remainder(int x)
-  pre(x == -5)
-  post(result == -1)
+  cppverify::pre(x == -5)
+  cppverify::post(cppverify::result == -1)
 {
   return x % 2;
 }
 
 int invalid_division(int x)
-  pre(x == 10)
-  post(result == 2)
+  cppverify::pre(x == 10)
+  cppverify::post(cppverify::result == 2)
 {
   return x / 2;
 }
 
 int invalid_remainder(int x)
-  pre(x == 5)
-  post(result == 0)
+  cppverify::pre(x == 5)
+  cppverify::post(cppverify::result == 0)
 {
   return x % 2;
 }
