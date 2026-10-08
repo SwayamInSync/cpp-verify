@@ -5,8 +5,8 @@
 // RUN: grep -q 'sorry' %t.lean
 
 int abs(int x)
-  pre(x != (-2147483647 - 1))
-  post(result >= 0)
+  cppverify::pre(x != (-2147483647 - 1))
+  cppverify::post(cppverify::result >= 0)
 {
   return x < 0 ? -x : x;
 }
