@@ -129,4 +129,4 @@
 # BMC-BOUND: error: requested BMC bound 1 does not match archived bound 0
 # BMC-LOWER: transform bmc-unroll 0
 # BMC-DECREASES: Verified: dec.decreases [backend=bmc, bound=2]
-# FAIL: obligation_archive_fail.cpp:2:15: error: verification failed: archived_failure
+# FAIL: obligation_archive_fail.cpp:2:37: error: verification failed: archived_failure
