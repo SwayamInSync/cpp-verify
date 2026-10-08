@@ -110,7 +110,8 @@ it is `Unresolved` with reason `callee.contract`.
 the contract holds at every call (whose preconditions are still checked); on
 a definition the body is compiled but not verified; on a proof function the
 postcondition is an axiom. A spec cannot be trusted, since its definition is
-its meaning. A trusted function reports `Trusted: f (contract assumed, not
+its meaning. The mark is written on each function: `#pragma clang attribute`
+cannot apply it to a region. A trusted function reports `Trusted: f (contract assumed, not
 verified)`, and every verdict that relies on it, directly or through verified
 callees, carries `[trusts=f]`. A contract without a definition and without
 the mark is not assumed: a warning names it, and its callers are
@@ -248,7 +249,7 @@ running a `for` increment. `break` and `continue` in a `do` loop, whose first
 iteration is lowered outside the loop, and ghost code leaving an executable
 loop fail closed.
 
-## Assertions: contract_assert
+## Assertions: cppverify::check
 
 <!-- cppverify-example: fragment -->
 
@@ -951,7 +952,7 @@ entry. Address parameters currently include raw pointers and supported scalar
 lvalue references.
 
 ```
-pre(p != q && p != r && q != r && ...)   // for all distinct mut ptr/ref pairs
+cppverify::pre(p != q && p != r && q != r && ...)   // for all distinct mut ptr/ref pairs
 ```
 
 - The caller's verification must establish these inequalities. Calling `swap(p, p)` fails the call's `aliasing` check.
@@ -1353,7 +1354,6 @@ int safe_fib(int n) cppverify::pre(...) cppverify::post(cppverify::result == fib
 <!-- cppverify-example: label sum -->
 
 ```cpp
-#include <cppverify.h>
 using cppverify::seq;
 
 cppverify::spec int sum(seq s)
