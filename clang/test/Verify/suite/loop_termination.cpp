@@ -1,6 +1,6 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefixes=CHECK,DEDUCTIVE
-// RUN: not %cpp-verify --backend=bmc --unroll=4 %s 2>&1 | FileCheck %s --check-prefixes=CHECK,BMC
-// RUN: not %cpp-verify --diagnostics-format=json %s 2>&1 | FileCheck %s --check-prefix=JSON
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefixes=CHECK,DEDUCTIVE
+// RUN: not %cpp-verify --backend=bmc --unroll=4 %s -- 2>&1 | FileCheck %s --check-prefixes=CHECK,BMC
+// RUN: not %cpp-verify --diagnostics-format=json %s -- 2>&1 | FileCheck %s --check-prefix=JSON
 //
 // Total correctness: every loop needs a termination measure, and every call
 // within a recursion cycle must lower the caller's. decreases(*) allows a
