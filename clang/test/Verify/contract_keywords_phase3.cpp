@@ -3,27 +3,27 @@
 // CHECK: FunctionDecl {{.*}} with_modifies 'void (int *, int *)'
 // CHECK: modifies
 void with_modifies(int *a, int *b)
-  pre(a != nullptr && b != nullptr)
-  modifies(*a, *b)
-  post(true)
+  cppverify::pre(a != nullptr && b != nullptr)
+  cppverify::modifies(*a, *b)
+  cppverify::post(true)
 {
 }
 
 // CHECK: aliases
 void with_aliases(int *dst, int *src)
-  aliases(dst, src)
-  pre(true)
-  post(true)
+  cppverify::aliases(dst, src)
+  cppverify::pre(true)
+  cppverify::post(true)
 {
 }
 
-spec int div_spec(int a, int b)
-  recommends(b != 0)
+cppverify::spec int div_spec(int a, int b)
+  cppverify::recommends(b != 0)
 {
   return a / b;
 }
 
 // CHECK: RevealWithFuelStmt
 void use_reveal() {
-  ghost { reveal_with_fuel(div_spec, 2); }
+  cppverify::ghost { cppverify::reveal_with_fuel(div_spec, 2); }
 }
