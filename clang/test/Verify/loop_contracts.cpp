@@ -7,14 +7,14 @@
 // CHECK: WhileStmt
 
 int sum(int n)
-  pre(n >= 0)
-  post(result >= 0)
+  cppverify::pre(n >= 0)
+  cppverify::post(cppverify::result >= 0)
 {
   int s = 0, i = 0;
   while (i < n)
-    invariant(s >= 0)
-    invariant(i >= 0)
-    decreases(n - i)
+    cppverify::invariant(s >= 0)
+    cppverify::invariant(i >= 0)
+    cppverify::decreases(n - i)
   {
     s += i;
     i++;
@@ -23,14 +23,14 @@ int sum(int n)
 }
 
 int factorial(int n)
-  pre(n >= 0)
-  post(result >= 1)
+  cppverify::pre(n >= 0)
+  cppverify::post(cppverify::result >= 1)
 {
   int r = 1, k = 1;
   while (k <= n)
-    invariant(r >= 1)
-    invariant(k >= 1)
-    decreases(n - k + 1)
+    cppverify::invariant(r >= 1)
+    cppverify::invariant(k >= 1)
+    cppverify::decreases(n - k + 1)
   {
     r *= k;
     k++;
