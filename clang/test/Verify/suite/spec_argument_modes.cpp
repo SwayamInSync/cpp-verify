@@ -1,4 +1,4 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s
 //
 // An argument of a spec is a mathematical integer, whatever the spec
 // returns: a + 1 below is 2147483648 and does not wrap.
