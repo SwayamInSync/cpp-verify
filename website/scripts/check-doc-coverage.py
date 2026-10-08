@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Check that the language reference and the book cover every feature.
 
-Each contract keyword (the KEYCONTRACT tokens and the contextual keywords),
-each ``<cppverify.h>`` collection operation, and each verification construct
-below must appear in a C++ example of the language reference and of the book.
+Each cpp-verify construct (the words of CppVerifyConstructs.def, written
+qualified), each ``<cppverify.h>`` collection operation, and each
+verification construct below must appear in a C++ example of the language
+reference and of the book.
 Each ``cpp-verify`` option, backend, and reason code must be described in
 both. A feature that lands without documentation then fails the test suite.
 """
@@ -13,11 +14,10 @@ import pathlib
 import re
 import sys
 
-CONTEXTUAL = ["reads(", "when(", "inductive", "behavior(", "complete_behaviors",
-              "disjoint_behaviors", "calc {", "trigger(", "choose(", ") by {"]
-CONSTRUCTS = ["[[cppverify::trusted]]", "ghost {", "valid(", "decreases(*)",
-              "modifies(*", "[0 :", "aliases(", "type_invariant(", "do {",
-              "new ", "delete ", "seq ", "set ", "multiset ", "map "]
+CONTEXTUAL = [") by {"]
+CONSTRUCTS = ["[[cppverify::trusted]]", "::ghost {", "valid(", "::calc {",
+              "::decreases(*)", "::modifies(*", "[0 :", "do {", "new ",
+              "delete ", "seq ", "set ", "multiset ", "map "]
 COLLECTION_OPERATIONS = [".len()", ".push(", ".subrange(", ".contains(",
                          ".insert(", ".remove(", ".count(", ".unite(",
                          ".subset_of("]
@@ -50,8 +50,10 @@ def main():
                         help="the llvm-project checkout")
     root = parser.parse_args().root
 
-    tokens = (root / "clang/include/clang/Basic/TokenKinds.def").read_text()
-    keywords = re.findall(r"KEYWORD\((\w+)\s*,\s*KEYCONTRACT\)", tokens)
+    constructs = (root /
+                  "clang/include/clang/Basic/CppVerifyConstructs.def").read_text()
+    keywords = re.findall(r'^CPPVERIFY_CONSTRUCT\(\w+, "(\w+)"', constructs,
+                          re.M)
     main_cpp = (root / "clang/tools/cpp-verify/Main.cpp").read_text()
     options = sorted(set(re.findall(
         r"cl::(?:opt|list)<.*?>\s*\w+\(\s*\"([\w-]+)\"", main_cpp, re.S)))
@@ -81,7 +83,8 @@ def main():
                                f" shows it")
 
     for keyword in keywords:
-        need("construct", keyword, [keyword], reference_code, book_code)
+        need("construct", "cppverify::" + keyword, ["::" + keyword],
+             reference_code, book_code)
     for construct in CONTEXTUAL + CONSTRUCTS + COLLECTION_OPERATIONS:
         need("construct", construct.strip(), [construct], reference_code,
              book_code)
