@@ -270,7 +270,6 @@ induction on :math:`j - i`: :math:`a_i \le a_{j-1} \le a_j`.
 
 .. code-block:: cpp
 
-   #include <cppverify.h>
    using cppverify::valid;
 
    cv::proof void sorted_pair(const int *a, int n, int i, int j)
@@ -455,7 +454,6 @@ states what the loop computes:
 
 .. code-block:: cpp
 
-   #include <cppverify.h>
    using cppverify::seq;
    using cppverify::valid;
 
