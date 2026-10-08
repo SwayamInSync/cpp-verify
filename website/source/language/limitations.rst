@@ -32,8 +32,8 @@ Meaning of a result
 ``Verified`` means the selected backend proved the generated verification
 condition. It does not certify uncontracted functions, linked libraries, the
 operating system, or any contract marked ``[[cppverify::trusted]]``. Proofs
-are of total correctness: every executable loop needs ``decreases``. A proof
-that holds only for terminating executions (after ``decreases(*)``) is marked
+are of total correctness: every executable loop needs ``cppverify::decreases``. A proof
+that holds only for terminating executions (after ``cppverify::decreases(*)``) is marked
 ``[partial]``, one that relies on a trusted contract ``[trusts=f]``, and one
 that no execution reaches ``[vacuous]``. A caller whose proof relies on a
 callee contract that is neither established by the callee's own verification
@@ -43,8 +43,8 @@ nor marked trusted (including a contract without a definition) is
 Distinct pointer/reference address parameters are **non-aliasing by default**
 whenever at least one pointee or referent is mutable. CppVerify generates a
 complete-object disjointness precondition. Verified callers must prove it;
-unverified external callers must honor it like a written ``pre``.
-``aliases(p, q)`` permits same-object aliasing.
+unverified external callers must honor it like a written ``cppverify::pre``.
+``cppverify::aliases(p, q)`` permits same-object aliasing.
 
 ``Lowered`` is emitted by ``--lower-only``. It means Clang AST conversion, VCR,
 passive SSA, canonical obligation construction, and backend encoding succeeded
@@ -61,17 +61,17 @@ Current verified core
 The most mature current fragment includes:
 
 - free functions over booleans, enums, and target-width integers;
-- mathematical ``spec`` functions connected to machine-integer code;
+- mathematical ``cppverify::spec`` functions connected to machine-integer code;
 - ``if``, conventional ``while``/``for``, contracted ``do`` loops, loop
-  invariants, loop ``modifies``, and ``decreases`` (required on executable
-  loops; ``decreases(*)`` opts out);
+  invariants, loop ``cppverify::modifies``, and ``cppverify::decreases`` (required on executable
+  loops; ``cppverify::decreases(*)`` opts out);
 - direct recursion with a well-founded termination measure;
-- ``pre``, ``post``, ``old``, ``result``, ``modifies`` (cells, ranges
-  ``p[lo : n]``, and regions), ``aliases``, and ACSL-style behaviors;
+- ``cppverify::pre``, ``cppverify::post``, ``cppverify::old``, ``cppverify::result``, ``cppverify::modifies`` (cells, ranges
+  ``p[lo : n]``, and regions), ``cppverify::aliases``, and ACSL-style behaviors;
 - scalar ``T&``/``const T&`` parameters with address-preserving reads, writes,
   contracts, and direct forwarding;
-- proof functions, ghost code and ghost locals, ``contract_assert ... by``
-  and ``calc``, bounded and unbounded quantifiers with triggers, ``choose``,
+- proof functions, ghost code and ghost locals, ``cppverify::check ... by``
+  and ``cppverify::calc``, bounded and unbounded quantifiers with triggers, ``cppverify::choose``,
   spec collections (``seq``, ``set``, ``multiset``, ``map``), and controlled
   recursive unfolding;
 - mutable scalar integral globals and integral ``const`` globals;
@@ -178,8 +178,8 @@ Abstract pointer parameters
 Typed pointer arithmetic uses mathematical target-byte addresses: every ``T*``
 step is multiplied by Clang's target ``sizeof(T)``, and fields use the target
 record-layout byte offset. Supported code can reason about ``*p``, ``p[i]``,
-``*(p + i)``, exact footprints such as ``modifies(p[i])``, ranges such as
-``modifies(p[lo : n])``, and region footprints such as ``modifies(*p)``.
+``*(p + i)``, exact footprints such as ``cppverify::modifies(p[i])``, ranges such as
+``cppverify::modifies(p[lo : n])``, and region footprints such as ``cppverify::modifies(*p)``.
 
 Memory accesses are checked by default (``--no-check-ub`` turns it off). A
 pointer without a declared extent addresses one object; accesses and pointer
@@ -191,7 +191,7 @@ short-circuit evaluation, and fresh represented storage is kept disjoint from
 the complete declared incoming extent.
 
 For pairs involving mutable pointees, CppVerify adds a generated
-complete-object disjointness precondition. ``aliases(p, q)`` opts a pair into
+complete-object disjointness precondition. ``cppverify::aliases(p, q)`` opts a pair into
 same-object aliasing; it does not establish arbitrary partial overlap or create
 provenance.
 
@@ -206,11 +206,11 @@ Scalar lvalue references and automatic locals
 Contracted executable free functions may accept ``T&`` and ``const T&`` when
 ``T`` is ``bool``, integral, or enum. VCR retains the binding as an immutable
 address: reading loads the referent, assignment stores through that address,
-and ``old(ref)`` selects the entry heap. Every reference receives an implicit
+and ``cppverify::old(ref)`` selects the entry heap. Every reference receives an implicit
 non-null, live, and initialized precondition.
 
-``modifies(ref)`` is an open region rooted at the referent, like
-``modifies(*p)``. Default object-range disjointness and ``aliases`` apply across
+``cppverify::modifies(ref)`` is an open region rooted at the referent, like
+``cppverify::modifies(*p)``. Default object-range disjointness and ``cppverify::aliases`` apply across
 pointer and reference parameters. A call may bind a reference from another
 supported reference, an initialized ordinary scalar local, or a direct
 dereference such as ``set(*p, value)``. Local references may bind those direct
@@ -228,7 +228,7 @@ order; heap-reading return values are materialized before teardown.
 Scalar references may bind supported fields and fixed-array elements of these
 promoted objects. Conditional bindings, temporaries, reference returns, general
 raw address-taking/array decay, rvalue references, and non-scalar referents
-remain fail-closed. Addressable declarations inside loops and ``old`` of local
+remain fail-closed. Addressable declarations inside loops and ``cppverify::old`` of local
 objects/bindings are also rejected; outer automatic locals and loop-local aliases
 are supported. Pointer leaves may retain abstract pointer values, but storing a
 provenance-bearing local dynamic pointer fails closed until pointer provenance is
@@ -279,7 +279,7 @@ A bounded executable same-array pointer-difference fragment is supported:
 Differences between different parameters' objects (which may be one caller
 array) are ``construct.unsupported``. Pointers loaded from memory, distinct
 allocations, null/dangling operands, out-of-range positions, explicit
-``spec`` bodies, and lifted ``constexpr`` specs fail closed.
+``cppverify::spec`` bodies, and lifted ``constexpr`` specs fail closed.
 Specs still need first-class ``(object origin, extent, element position)``
 metadata that survives substitution, quantifiers, and recursion.
 
@@ -297,9 +297,9 @@ Modular calls and effects
 
 Calls assert callee preconditions, apply declared effects, and assume
 postconditions. A call changes only the cells of its footprints: exact cells
-such as ``modifies(p[i])`` and ``modifies(p->field)``, ranges
-``p[lo : n]``, and regions ``modifies(*p)``, which are the argument's
-``valid`` extent or one object. A pointer-taking callee without ``modifies``
+such as ``cppverify::modifies(p[i])`` and ``cppverify::modifies(p->field)``, ranges
+``p[lo : n]``, and regions ``cppverify::modifies(*p)``, which are the argument's
+``valid`` extent or one object. A pointer-taking callee without ``cppverify::modifies``
 that may write memory forgets the whole value heap, as does a region
 footprint under ``--no-check-ub``.
 
@@ -330,7 +330,7 @@ Recursive specs are termination-checked and fuel-controlled. Fuel exposes a
 finite number of defining-equation steps and prevents uncontrolled SMT matching
 loops.
 
-Recursive ``proof`` functions with ``decreases`` already provide manual
+Recursive ``cppverify::proof`` functions with ``cppverify::decreases`` already provide manual
 well-founded induction: the recursive call is legal only at a smaller measure,
 and its postcondition is the guarded induction hypothesis. Fuel and induction
 have different jobs; increasing fuel is not a proof for all inputs.
@@ -338,17 +338,17 @@ have different jobs; increasing fuel is not a proof for all inputs.
 Current proof-language limitations include:
 
 - no first-class ``induction`` syntax generating explicit base/step obligations;
-- no named rewrite sets (``calc`` chains and ``contract_assert ... by`` are
+- no named rewrite sets (``cppverify::calc`` chains and ``cppverify::check ... by`` are
   supported);
 - an unbounded quantifier's counterexample is checked when its body depends
   on the bound variables through linear arithmetic, comparisons, memory and
   collection reads, and nested quantifiers (Presburger arithmetic), when its
   body can hold at finitely many values once the specs applied to the
   variable are unfolded or approximated, or when a witness among the values
-  tried decides it; otherwise it is ``counterexample.unchecked``. ``choose`` is uninterpreted apart from its
+  tried decides it; otherwise it is ``counterexample.unchecked``. ``cppverify::choose`` is uninterpreted apart from its
   Hilbert axiom;
 - an inductive predicate unfolds at most four levels below each named
-  application by itself (more with ``reveal_with_fuel``); a claim that needs
+  application by itself (more with ``cppverify::reveal_with_fuel``); a claim that needs
   it false where its derivations go round a cycle needs a postcondition or
   an induction lemma, and a counterexample that needs it false where its
   derivations reach infinitely many arguments is
@@ -356,7 +356,7 @@ Current proof-language limitations include:
   argument;
 - proofs may rest on each other only through a checked measure (a recursion
   cycle, a spec's induction hypothesis, or a cluster of specs and lemmas
-  sharing ``decreases`` clauses of one length); otherwise they are
+  sharing ``cppverify::decreases`` clauses of one length); otherwise they are
   ``proof.cycle``;
 - spec collections hold mathematical integers only (no nested collections or
   records), and Lean does not support them yet (planned for a future
@@ -368,7 +368,7 @@ Current proof-language limitations include:
   induction on an integer variable), everything else fixed and the goal itself
   as hypothesis; a property whose step needs a stronger statement than the
   goal, such as one whose recursion changes an accumulator, needs an induction
-  lemma (a recursive ``proof`` function), as in Dafny, Lean, and Isabelle. The
+  lemma (a recursive ``cppverify::proof`` function), as in Dafny, Lean, and Isabelle. The
   hypothesis over all smaller values is stated as one quantifier only for
   integer variables, since canonical quantifiers range over integers; over a
   sequence the hypothesis is given at the values its recursion reaches. The
@@ -391,7 +391,7 @@ Current proof-language limitations include:
   lemma;
 - a spec's termination cannot use the spec's own definition: a nested call
   such as ``f(f(n - 1))`` whose argument is smaller only because of what ``f``
-  returns needs a ``post`` on ``f`` stating it, which is proved with the
+  returns needs a ``cppverify::post`` on ``f`` stating it, which is proved with the
   termination by induction on the measure;
 - a counterexample whose bounded quantifier ranges over millions of values is
   checked when the body depends on the bound variable only through loads and
@@ -399,8 +399,8 @@ Current proof-language limitations include:
   included where it provably never wraps over the range; otherwise, as with
   division, wrapping arithmetic, or a spec applied to the bound variable, it
   may be reported as ``counterexample.unchecked`` instead of a failure;
-- a heap-reading spec without a ``reads`` clause is not framed: preservation
-  across an unrelated write needs unfolding. A ``reads`` range is a pointer
+- a heap-reading spec without a ``cppverify::reads`` clause is not framed: preservation
+  across an unrelated write needs unfolding. A ``cppverify::reads`` range is a pointer
   and an element count; ranges that depend on the heap, such as a linked list,
   are not supported, and frames are not carried across loops or calls that
   do not name their written cells exactly;
@@ -455,7 +455,7 @@ Important missing optimizations and tactics are:
 #. content-addressed proof caching and affected-function invalidation;
 #. parallel per-function solving in the standalone tool;
 #. first-class induction syntax;
-#. trigger inference reported to the user (manual ``trigger`` marks and
+#. trigger inference reported to the user (manual ``cppverify::trigger`` marks and
    ``--profile-quantifiers`` exist);
 #. candidate invariants with Houdini-style elimination;
 #. solver-resource stability measurement across seeds;
