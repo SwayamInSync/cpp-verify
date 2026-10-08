@@ -9,8 +9,8 @@
 // query under the true definitions; otherwise the definitions are added at the
 // disputed points and the query is solved again.
 
-spec int triangle(int n)
-  decreases(n)
+cppverify::spec int triangle(int n)
+  cppverify::decreases(n)
 {
   if (n <= 0)
     return 0;
@@ -19,16 +19,16 @@ spec int triangle(int n)
 
 // Previously a failure with a model in which triangle(n - 1) was arbitrary.
 int closed_form(int n)
-  pre(0 <= n && n <= 6)
-  post(result == triangle(n))
+  cppverify::pre(0 <= n && n <= 6)
+  cppverify::post(cppverify::result == triangle(n))
 {
   return n * (n + 1) / 2;
 }
 
 // A real counterexample survives the check against the definition.
 int closed_form_wrong(int n)
-  pre(0 <= n && n <= 6)
-  post(result == triangle(n))
+  cppverify::pre(0 <= n && n <= 6)
+  cppverify::post(cppverify::result == triangle(n))
 {
   return n * (n - 1) / 2;
 }
@@ -37,15 +37,15 @@ int closed_form_wrong(int n)
 // only the missing unfolding makes fail is not reported as a counterexample.
 // The property is inductive, so strong induction on n proves it.
 void unbounded(int n)
-  pre(n >= 0)
-  post(triangle(n) >= 0)
+  cppverify::pre(n >= 0)
+  cppverify::post(triangle(n) >= 0)
 {
 }
 
 // True, but the property at smaller n says nothing about n.
 void not_inductive(int n)
-  pre(n >= 0)
-  post(triangle(n) != 7)
+  cppverify::pre(n >= 0)
+  cppverify::post(triangle(n) != 7)
 {
 }
 
