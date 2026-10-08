@@ -1,7 +1,7 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
-// RUN: not %cpp-verify --lower-only %s 2>&1 | FileCheck %s --check-prefix=VERIFY
-// RUN: not %cpp-verify --backend=bmc --unroll=2 %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: not %cpp-verify --lower-only %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: not %cpp-verify --backend=bmc --unroll=2 %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 // Negative: an array *value* must never degrade into a scalar. Fixed local
 // arrays are modelled as byte-addressed automatic objects (see
