@@ -3,5 +3,5 @@
 // A quantified post that only holds when two buffers alias must never verify:
 // without a non-aliasing/overlap precondition the store to d may clobber s.
 // Z3 may report a counterexample or conservatively time out.
-void f(int* d, int* s, int n) pre(d != nullptr && s != nullptr && n >= 1 && n <= 100 && forall(i, 0, n, s[i] == 1)) modifies(*d) post(forall(i, 0, n, s[i] == 1)) { int j = 0; while (j < n) invariant(0 <= j && j <= n) decreases(n - j) { d[j] = 0; j = j + 1; } }
+void f(int* d, int* s, int n) cppverify::pre(d != nullptr && s != nullptr && n >= 1 && n <= 100 && cppverify::forall(i, 0, n, s[i] == 1)) cppverify::modifies(*d) cppverify::post(cppverify::forall(i, 0, n, s[i] == 1)) { int j = 0; while (j < n) cppverify::invariant(0 <= j && j <= n) cppverify::decreases(n - j) { d[j] = 0; j = j + 1; } }
 // VERIFY: {{(error: verification failed|Unresolved): f}}
