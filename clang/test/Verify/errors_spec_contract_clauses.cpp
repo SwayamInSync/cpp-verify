@@ -1,4 +1,4 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s
 //
 // A spec function is defined for every argument and its body is its meaning.
 // A precondition assumed by its termination check while its definition is
