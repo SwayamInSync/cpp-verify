@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: %cpp-verify --backend=bmc --unroll=3 %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: %cpp-verify --backend=bmc --unroll=3 %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 int sum_first_n(int n)
   cppverify::pre(n >= 0 && n <= 3)
