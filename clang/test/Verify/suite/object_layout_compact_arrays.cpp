@@ -2,7 +2,7 @@
 // RUN: %cpp-verify --dump-ir=1 %s 2>&1 | FileCheck %s
 
 unsigned long compact_nested_array()
-  post(result == sizeof(int[300][300][300]))
+  cppverify::post(cppverify::result == sizeof(int[300][300][300]))
 {
   return sizeof(int[300][300][300]);
 }
