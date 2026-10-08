@@ -3,17 +3,17 @@
 // Heap: memcpy verifies end-to-end -- a two-buffer copy loop whose quantified
 // invariant is preserved across stores, using the non-overlap default: the
 // two buffers are distinct objects.
-spec bool valid(int *p, int n) { return true; }
+cppverify::spec bool valid(int *p, int n) { return true; }
 
 void mcpy(int* d, int* s, int n)
-  pre(valid(d, n) && valid(s, n) && n >= 0 && n <= 1000)
-  modifies(*d)
-  post(forall(i, 0, n, d[i] == s[i]))
+  cppverify::pre(valid(d, n) && valid(s, n) && n >= 0 && n <= 1000)
+  cppverify::modifies(*d)
+  cppverify::post(cppverify::forall(i, 0, n, d[i] == s[i]))
 {
   int j = 0;
   while (j < n)
-    invariant(0 <= j && j <= n && forall(i, 0, j, d[i] == s[i]))
-    decreases(n - j)
+    cppverify::invariant(0 <= j && j <= n && cppverify::forall(i, 0, j, d[i] == s[i]))
+    cppverify::decreases(n - j)
   { d[j] = s[j]; j = j + 1; }
 }
 // VERIFY: Verified: mcpy
