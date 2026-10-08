@@ -117,8 +117,8 @@ VType =
   integers; `isSigned` selects signed operations.
 - Every `VExpr` carries a `VType`. Populated from Clang's `QualType` during ASTConverter.
 - The `IntMode` tag on integer types is set by ASTConverter:
-  - In `spec` function bodies → `Math` (Z3 `Int`)
-  - In `proof`/`exec`/lifted-`constexpr` function bodies → `Machine` (Z3 `BitVec`)
+  - In `cppverify::spec` function bodies → `Math` (Z3 `Int`)
+  - In `cppverify::proof`/`exec`/lifted-`constexpr` function bodies → `Machine` (Z3 `BitVec`)
 - `Ptr(pointeeSizeBytes)` retains Clang's target `sizeof(T)`. Typed pointer
   arithmetic scales element offsets by this stride before entering the
   mathematical-address heap; record fields add Clang's target byte offset.
@@ -160,10 +160,10 @@ All carry `SourceLocation` for diagnostics.
 `p + mathematical_value(i) * pointeeSizeBytes`.
 
 **Quantifiers, triggers, choices, collections:** a quantifier without bounds
-ranges over all mathematical integers. A `trigger(term)` mark is an identity
-`Cast` flagged `IsTrigger` around the term. Each `choose` is lifted to a
+ranges over all mathematical integers. A `cppverify::trigger(term)` mark is an identity
+`Cast` flagged `IsTrigger` around the term. Each `cppverify::choose` is lifted to a
 synthesized uninterpreted spec function (`IsChoice`) of the values its body
-mentions, whose postcondition is the Hilbert axiom `!exists(k, P) || P(result)`
+mentions, whose postcondition is the Hilbert axiom `!cppverify::exists(k, P) || P(cppverify::result)`
 (with the range for a bounded choose). A collection operation is a `SpecCall`
 whose identity is `__cppverify.<op>`, such as `__cppverify.seq.push`.
 `cppverify::valid(p, n)` becomes a call of the synthesized builtin spec
@@ -248,17 +248,17 @@ VFunction =
   cloning, loop unrolling, dumps, and every backend preserve it.
 - `identity` includes the canonical signature, so overloads with the same
   source spelling remain distinct through modular calls and SMT symbols.
-- `aliases` empty means the implicit non-aliasing precondition applies to all mutable pointer/reference parameter pairs.
+- `cppverify::aliases` empty means the implicit non-aliasing precondition applies to all mutable pointer/reference parameter pairs.
 - A `VFootprint` is a target lvalue with an optional element count and
   element size: a cell (`p[i]`, `p->f`, a reference), a range `p[lo : n]`
   (target `p[lo]`, count `n`), or a region `*p` (the object `p` addresses).
-- Behaviors are desugared in the frontend: each scoped `pre` becomes
-  `!assumes || pre`, each scoped `post` `!old(assumes) || post`, and
-  `complete_behaviors`/`disjoint_behaviors` become assertions at body entry.
-- `contract_assert(c) by { proof }` is desugared to
+- Behaviors are desugared in the frontend: each scoped `cppverify::pre` becomes
+  `!assumes || pre`, each scoped `cppverify::post` `!old(assumes) || post`, and
+  `cppverify::complete_behaviors`/`cppverify::disjoint_behaviors` become assertions at body entry.
+- `cppverify::check(c) by { proof }` is desugared to
   `Assign(k, false); Havoc(k); if (k) { proof; assert c; assume false }
-  assume c`; `calc` to nested assert-by steps. When `c` is
-  `forall(x, lo, hi, P)`, the parser puts `x` in scope for the block, and the
+  assume c`; `cppverify::calc` to nested assert-by steps. When `c` is
+  `cppverify::forall(x, lo, hi, P)`, the parser puts `x` in scope for the block, and the
   branch starts with `Havoc(x')` and `Assume(lo <= x' && x' < hi)` for a
   fresh mathematical `x'`, the block reads `x` as `x'` (assigning it is an
   error), and it asserts `P[x := x']` instead of `c`.
@@ -382,20 +382,20 @@ if (cond) {                        // 4. if loop continues:
 ```
 
 **Loop frames.** In the object model the heap havoc is framed by the loop's
-write set: its explicit `modifies` footprints, read in each iteration's state
+write set: its explicit `cppverify::modifies` footprints, read in each iteration's state
 (ACSL `loop assigns`), else the objects its stores and calls reach: the entry
-objects of their pointers' origins (below). With a function `modifies` too,
+objects of their pointers' origins (below). With a function `cppverify::modifies` too,
 both frames are assumed, so only cells inside both may change; when an
 origin is unknown the function's frame alone bounds the loop, since every
 store is checked against it. When every written region is a single cell the
 frame is a chain of stores of fresh values; otherwise it is a
 `HeapFrame(mem_entry, mem_head, regions)` relation.
-An explicit loop `modifies` is also asserted at the end of each iteration and
+An explicit loop `cppverify::modifies` is also asserted at the end of each iteration and
 at each `continue` (obligation kind `frame`, located at the footprint).
 
-**Termination.** An executable loop without `decreases` contributes no
+**Termination.** An executable loop without `cppverify::decreases` contributes no
 measure obligation, and the driver reports the function `Unresolved` with
-`decreases.missing` unless BMC proved the unwinding. `decreases(*)` marks the
+`decreases.missing` unless BMC proved the unwinding. `cppverify::decreases(*)` marks the
 function as possibly divergent: its proof, and the proof of every caller, is
 reported `[partial]`. Calls within an executable or proof recursion cycle
 assert the decrease of the shared measure at the call site.
@@ -412,7 +412,7 @@ state and ends the path; the frontend emits a `for` increment before it. BMC
 unrolling lowers `break` and `continue` to flag assignments that guard the
 remaining statements and the next iteration.
 
-**Assertions → assert, then assume:** `contract_assert(P)` is proved where it
+**Assertions → assert, then assume:** `cppverify::check(P)` is proved where it
 stands and assumed from there on, so later obligations can use it as a proof
 step. Other obligations stay independent of each other.
 
@@ -432,7 +432,7 @@ assume(Q[Result := y, Old(params) := args]);
   object) become `HeapFrame(mem_k, mem_{k+1}, regions)`; each footprint of
   the callee must lie inside the caller's own frame (index-based
   containment).
-- If `modifies` is the conservative default (all reachable through mut params), the entire heap is havocked.
+- If `cppverify::modifies` is the conservative default (all reachable through mut params), the entire heap is havocked.
 - A `freshOwnedReturn` call is not a whole-heap havoc. It preserves every old
   cell, materializes one disjoint initialized scalar object, then assumes the
   ordinary postconditions against that new heap.
@@ -459,7 +459,7 @@ ordered `PassiveProgram` once and publishes:
   checks such as `aliasing` or `frame`, `unwinding`, and `unsupported`), and
   resolved file/line/column metadata. Passivization splits an expression's
   definedness into one check per category, each under its own short-circuit,
-  conditional, quantifier, and `old` guards, so the conjunction is unchanged;
+  conditional, quantifier, and `cppverify::old` guards, so the conjunction is unchanged;
 - owned logical-function declarations, typed signatures, compact one-step
   definitions, and exact finite definition levels for the caller's fuel;
 - the logical features required by the module for capability validation.
@@ -501,7 +501,7 @@ Terms added for the R3 language features:
   so they reach every backend as ordinary logical functions, and the
   driver checks the termination and length postcondition of `reverse` like
   any recursive spec's, reporting only a failure.
-- A logical function marked `Choice` is a lifted `choose`: uninterpreted,
+- A logical function marked `Choice` is a lifted `cppverify::choose`: uninterpreted,
   with the Hilbert axiom as its postcondition. The certifier reads its
   value from the model, so a claim true only for some choices fails
   certified.
@@ -583,7 +583,7 @@ than becoming an ordinary program failure or an unbounded proof. Applying BMC
 to an untransformed archive is rejected because loop unrolling must precede
 obligation construction. Lean scratch export of a bounded archive is also
 rejected until bounded theorem provenance is represented in generated Lean.
-Failure-triggered `recommends` diagnostics are excluded from archives, keeping
+Failure-triggered `cppverify::recommends` diagnostics are excluded from archives, keeping
 archive contents independent of solver outcomes.
 
 Concatenated records may use different reveal fuel for the same logical
@@ -627,7 +627,7 @@ canonical module that lower-only and the selected backend consume.
 | Load(p, T) | `(select mem_k p)` for the current heap version k |
 | Forall(x, lo, hi, P) | `(forall ((x Int)) (=> (and (<= lo x) (< x hi)) P))` — bound is the implicit trigger |
 | Forall(x, P) | `(forall ((x Int)) P)`; marked triggers become `:pattern`, and the quantifier id is `q@line:col` |
-| HeapFrame(h, h', lo, hi, ...) | `(forall ((a Int)) (or (and (<= lo a) (< a hi)) ... (= (select h' a) (select h a))))` |
+| HeapFrame(h, h', lo, hi, ...) | `(cppverify::forall ((a Int)) (or (and (<= lo a) (< a hi)) ... (= (select h' a) (select h a))))` |
 | `s[i]` | `(cppverify.seq_at s i)`, see below |
 | `s.push(x)`, `s + t` | `seq.++`, `seq.unit`, with index facts, see below |
 | `s.subrange(lo, hi)` | `(seq.extract s lo (- hi lo))`, or `(seq.extract s 0 hi)` when `lo < 0`, see below |
@@ -711,7 +711,7 @@ and `exists k. B` becomes `exists k. B || B(t)`. Both are equivalences in
 any polarity, so no verdict can change; the canonical module, its hashes,
 and the certifier never see them. Instances are taken once (never from other
 instances), at most 16 per quantifier and 50,000 added nodes per query.
-Without them, `forall(k, 0, n, p[k] >= 0)` did not prove `p[2] >= 0` on Z3
+Without them, `cppverify::forall(k, 0, n, p[k] >= 0)` did not prove `p[2] >= 0` on Z3
 or even `p[0] >= 0` on cvc5.
 
 **Extensionality.** A sequence equality the query refutes (an `a == b` it
@@ -722,7 +722,7 @@ len(b) && forall k in [0, len(a)). a[k] == b[k])`. The two are equivalent,
 and the quantifier occurs negatively, so the solver introduces one witness
 index rather than instantiating it. Z3 then proves an equality from equal
 elements, as Verus's `=~=` and Dafny's sequence equality do, and a stated
-`contract_assert(a == b)` works as a hint. Equalities the query assumes, such
+`cppverify::check(a == b)` works as a hint. Equalities the query assumes, such
 as ghost assignments, are left alone. cvc5 decides extensionality itself and
 does not receive the instances: in the sequence benchmark, given them
 together with membership witnesses, it returned no model for any false
@@ -788,7 +788,7 @@ definition level into `ObligationModule`. A visible non-recursive definition
 is exact and finite, so Z3 substitutes it at every application, under a
 quantifier too, and cvc5 receives it as `define-fun`; a recursive one gets
 equations only at concrete logical call sites. Recursive leaves remain
-applications of the opaque logical function, and `reveal_with_fuel` controls
+applications of the opaque logical function, and `cppverify::reveal_with_fuel` controls
 the exact finite depth. An application's arguments take the integer mode of
 the callee's parameters (mathematical for an explicit spec), not that of its
 result: with the result's mode, a `bool` spec's argument `a + 1` was reduced
@@ -801,7 +801,7 @@ spec, becomes a logical function with a leading `__spec_heap` parameter of sort
 `Heap`; its definitions read through that parameter. Each call site passes the
 heap version passivization resolves for it, exactly as for a load, and
 modules containing such functions require the `heap-functions` logic feature.
-A spec with `reads(p, n)` clauses is checked in its own module (`spec reads:`,
+A spec with `cppverify::reads(p, n)` clauses is checked in its own module (`spec reads:`,
 the spec and its recursion cycle opaque): every load address under its path
 guard, and every range a heap-reading callee reads, lies in the declared
 ranges. Since the spec then depends only on those cells (by induction on its
@@ -811,7 +811,7 @@ versions, the assumption `q outside R(a) -> f(H', a) == f(H, a)` under the
 store's guard. The driver demotes a proof that relies on a spec whose reads
 check did not pass to `Unresolved` with reason `spec.reads`.
 
-**Spec postconditions and domains:** a spec's `post` is checked in its
+**Spec postconditions and domains:** a spec's `cppverify::post` is checked in its
 termination module (its own module `spec post:` when it is not recursive):
 each call within the recursion cycle contributes the assumption
 `dec(a) < dec(x) -> post(a, f(a))` under the cycle's well-founded relation,
@@ -829,25 +829,25 @@ modules add the same facts for the applications their definitions expose
 (`addPostApplicationFacts`). These are proved facts recorded in
 `AssumedPosts`, so they cannot make a false claim verify; each puts its
 application into the query, whose definition levels the solver then also
-receives. `when(c)` is desugared in the frontend: the body
+receives. `cppverify::when(c)` is desugared in the frontend: the body
 becomes `if (c) body else return f.unspecified(params)`, where
 `f.unspecified` is a logical function without a definition (Z3 and cvc5
 declare it; the certifier cannot evaluate it, so a counterexample that needs
 its value is `counterexample.unchecked`), and each post becomes `!c || post`.
 
-**Inductive predicates:** `inductive` on a spec returning `bool` sets
+**Inductive predicates:** `cppverify::inductive` on a spec returning `bool` sets
 `VFunction::InductiveLoc`. After conversion, `expandInductivePredicates`
 (`Transform/Inductive.cpp`) turns each body into one condition `F` (returns
 under `if`/`else`), groups predicates that apply each other (strongly
 connected components), checks that the members occur in each body only
-positively and continuously (conjuncts, disjuncts, `?:` branches, `exists`,
-bounded `forall`; never under negation, in a comparison, conversion,
-condition, argument, quantifier bound, or unbounded `forall`), and generates
+positively and continuously (conjuncts, disjuncts, `?:` branches, `cppverify::exists`,
+bounded `cppverify::forall`; never under negation, in a comparison, conversion,
+condition, argument, quantifier bound, or unbounded `cppverify::forall`), and generates
 for each member the recursive spec `P.step(h, x)` (`InductiveStepOf`,
-`decreases(h)`, mathematical `h`) with body `h > 0 && F[Q(a) := Q.step(h -
-1, a)]` for every member `Q`. `P`'s body becomes `exists(h, P.step(h, x))`,
+`cppverify::decreases(h)`, mathematical `h`) with body `h > 0 && F[Q(a) := Q.step(h -
+1, a)]` for every member `Q`. `P`'s body becomes `cppverify::exists(h, P.step(h, x))`,
 its true definition, and `F` is kept as `VFunction::Unfolding`. `P` is
-hidden in every function that does not `reveal` it, and
+hidden in every function that does not `cppverify::reveal` it, and
 `specApplicationFacts` assumes `P(t) == F[t]` beside its postconditions at
 each application, in function bodies (`addSpecPostInstances`) and in spec
 checks (`addSpecPostChecks`). The unfolding reads memory at the
@@ -857,7 +857,7 @@ after a store has facts of its own. The applications inside an unfolding
 get none at depth one, so each named application unfolds once; at depth
 `d` the applications of inductive predicates inside the unfoldings of
 level `l < d` get theirs too (`Passivizer::setUnfoldingDepth`, and per
-predicate `reveal_with_fuel(P, d)`, which keeps `P` hidden). A predicate
+predicate `cppverify::reveal_with_fuel(P, d)`, which keeps `P` hidden). A predicate
 reached again through a spec outside its group is rejected, since its
 occurrences there escape the positivity check.
 
@@ -865,7 +865,7 @@ The driver deepens automatically, as Stainless unrolls: a function verdict
 `Unresolved` with `spec.fuel`, `spec.hidden`, or
 `counterexample.unchecked` whose module assumed unfoldings is passivized
 again at depth 2, 3, and 4 (`MaxUnfoldingDepth`), skipping depths that
-`reveal_with_fuel` already reached; the first `Verified` or `Failed`
+`cppverify::reveal_with_fuel` already reached; the first `Verified` or `Failed`
 verdict replaces it, and its module replaces the archived one. Every level
 adds only proved unfoldings, so a proof stays sound and a counterexample is
 still certified against the true definitions. It does not deepen a verdict
@@ -875,8 +875,8 @@ included, keeps every unfolding; or checking it needs a value too deep to
 evaluate (no derivation among the heights tried, and no finite fixpoint),
 which four more levels cannot change. A deeper attempt that finds the
 first of these replaces the reason and ends the search. Unfoldings under an unbounded binder (the
-`exists` of `reach`) are quantified facts, which help proofs but can keep
-the solver from finding a model, so after `reveal_with_fuel` an unresolved
+`cppverify::exists` of `reach`) are quantified facts, which help proofs but can keep
+the solver from finding a model, so after `cppverify::reveal_with_fuel` an unresolved
 verdict is also tried at depth one without the fuel.
 
 Unfolding nests a body inside itself, so every substitution under a binder
@@ -889,25 +889,25 @@ The equation is a theorem only of this construction, so it is proved per
 predicate by three generated proof functions (`InductiveRuleOf`), in
 mathematical integers, with every member revealed:
 
-- `P (monotonicity)`, `P::monotone(h, j, x)`: `pre(P.step(h, x) && h <= j)`,
-  `post(P.step(j, x))`, `decreases(h)`. For `h > 0` it states the induction
+- `P (monotonicity)`, `P::monotone(h, j, x)`: `cppverify::pre(P.step(h, x) && h <= j)`,
+  `cppverify::post(P.step(j, x))`, `cppverify::decreases(h)`. For `h > 0` it states the induction
   hypothesis for each member `Q` that `F` applies, `forall y. Q.step(h - 1,
   y) -> Q.step(j - 1, y)`, by generalization: a fresh `y` is havocked in a
   branch that calls `Q::monotone(h - 1, j - 1, y)`, asserts the instance, and
   ends in `assume false`; the universal is assumed after it. Bounded
   universals in `F` are carried from `h - 1` to `j - 1` the same way, and an
   existential above one is fixed at a chosen witness (`P::transportN`).
-- `P (case analysis)`, `P::inversion(x)`: `pre(P(x))`, `post(F)`. It names
+- `P (case analysis)`, `P::inversion(x)`: `cppverify::pre(P(x))`, `cppverify::post(F)`. It names
   the height `P.height(x)`, a Hilbert choice (`IsChoice`) with axiom
-  `!exists(h, P.step(h, x)) || P.step(result, x)`, asserts `P.step` there,
+  `!cppverify::exists(h, P.step(h, x)) || P.step(cppverify::result, x)`, asserts `P.step` there,
   proves `forall y. Q.step(H - 1, y) -> Q(y)` by generalization, and
   transports `F`.
-- `P (introduction)`, `P::introduction(x)`: `pre(F)`, `post(P(x))`. The
+- `P (introduction)`, `P::introduction(x)`: `cppverify::pre(F)`, `cppverify::post(P(x))`. The
   bound `B` is the height of `F`, clamped at zero: `Q.height(a)` for an
   application, the larger of two parts, the height at the chosen witness
   (`P::witnessN`) for an existential, and for a bounded universal the
   generated spec `P::boundN(lo, hi, v)` = `lo >= hi ? 0 : max(height[w :=
-  lo], bound(lo + 1, hi, v))`, `decreases(hi - lo)`, whose postcondition
+  lo], bound(lo + 1, hi, v))`, `cppverify::decreases(hi - lo)`, whose postcondition
   bounds the height at every `w` in range. Each application is raised to `B`
   by a guarded `Q::monotone` call, and `P.step(B + 1, x)` is asserted.
 
@@ -927,7 +927,7 @@ whose rule proofs do not all hold prints `Unresolved: inductive predicate:
 P` with reason `spec.inductive`, and every verdict that relied on its
 unfolding is demoted with that reason.
 
-A postcondition `!result || Q` is copied to `P.step` and proved by
+A postcondition `!cppverify::result || Q` is copied to `P.step` and proved by
 induction on `h` in a module of its own (`buildInductionChecks`): the
 definition of `P.step` is visible, each application at a lower measure
 assumes the postcondition, each application `Q.step(k, y)` also gives
@@ -948,29 +948,29 @@ unfoldings only, so a lemma such as transitivity can mention its own
 predicate without assuming itself. A step's bare termination check assumes
 nothing of its cycle's postconditions, which are proved after it.
 
-**Proof blocks of spec clauses:** `post(...) by { ... }`, and the same
-after `decreases` and `reads`, on a spec definition. The parser caches the
+**Proof blocks of spec clauses:** `cppverify::post(...) by { ... }`, and the same
+after `cppverify::decreases` and `cppverify::reads`, on a spec definition. The parser caches the
 block's tokens (`PendingClauseProofs`) and parses each, once
 `ActOnStartOfFunctionDef` has put the parameters in scope, as a compound
-statement before the body (`post` blocks with `result` enabled), into
+statement before the body (`cppverify::post` blocks with `cppverify::result` enabled), into
 `FunctionContractInfo::ClauseProofs`; a block on another clause, on a
 non-spec, or on a declaration is an error. The converter lowers it as ghost
 code in the spec's mathematical mode into `VFunction::ClauseProofs`, so the
 ghost rules apply (no return, store, or assignment but to its own locals).
-An inductive predicate's `post` and `reads` blocks move to its step.
+An inductive predicate's `cppverify::post` and `cppverify::reads` blocks move to its step.
 `withClauseProofs` (`Transform/SpecInline.cpp`) turns a check with blocks
 into one generated proof function, `TotalExpressions`, with the spec's
 parameters and visibility: the check's assumptions as `assume` statements,
 the blocks, then the check's obligations as `assert` statements of their
 kinds (an `unsupported` obligation is kept as it is), passivized normally,
 with the spec, its cycle, and its group's predicates in `FactsWithheld`.
-In a `post` block, `result` is replaced by the body's value (its returns as
+In a `cppverify::post` block, `cppverify::result` is replaced by the body's value (its returns as
 nested conditionals); each application of the spec's recursion cycle in
 the passivized program assumes the callee's postcondition under the
 measure's decrease (the induction hypothesis at the block's arguments).
-The driver applies it to the post module (`post` blocks), the termination
-module (`decreases` and, unless a step's bare check, `post` blocks), a
-step's induction module (`post`), and the reads module (`reads`), and
+The driver applies it to the post module (`cppverify::post` blocks), the termination
+module (`cppverify::decreases` and, unless a step's bare check, `cppverify::post` blocks), a
+step's induction module (`cppverify::post`), and the reads module (`cppverify::reads`), and
 records the proof functions the blocks call as dependencies of that check.
 
 The certifier evaluates `P(v)` (`Evaluator::definition`) first as the least
@@ -984,7 +984,7 @@ for its readers. A quantifier over premises is decided by its witnesses
 existential's witnesses must be finitely many (`witnessesOf`, below). The
 fixpoint is complete only when every node is evaluated within 1024 nodes;
 its values are then exact and cached, and otherwise the state is restored
-and `P(v)` is evaluated by its definition, `exists(h, P.step(h, v))`, which
+and `P(v)` is evaluated by its definition, `cppverify::exists(h, P.step(h, v))`, which
 finds a height for a true `P(v)`. Where a definition runs out, a bool
 function's postconditions (`LogicFunctionDecl::Postconditions`, over
 `ResultVariable`, not archived) decide its value if they allow only one;
@@ -1008,7 +1008,7 @@ predicate names the application and the postcondition that would decide
 it.
 
 `witnessesOf` decides a quantifier whose body applies specs at its binder:
-the body (negated for a `forall`) is unfolded at the binder, non-recursive
+the body (negated for a `cppverify::forall`) is unfolded at the binder, non-recursive
 definitions first, then one and two levels of recursive ones (definitions
 are equations, so each try is exact), within 20000 terms; each remaining
 application at the binder, and each quantifier over it, becomes `true`
@@ -1021,10 +1021,10 @@ where it can hold: if that is finitely many values (a stretch of at most
 there decides the quantifier. Otherwise the certifier tries candidate
 witnesses where the comparisons of the unfolded bodies change, then binder
 values `0, -1, 1, -2, ...` up to `QuantifierProbe` on each side: a value
-where an `exists` body holds, or a `forall` body fails, decides it.
+where an `cppverify::exists` body holds, or a `cppverify::forall` body fails, decides it.
 
-**`recommends`:** parsed and stored; not emitted into the main VC. On
-verification failure, a second pass adds `recommends` checks and reports
+**`cppverify::recommends`:** parsed and stored; not emitted into the main VC. On
+verification failure, a second pass adds `cppverify::recommends` checks and reports
 violations as warnings. These diagnostic-only second-pass modules are not
 serialized into canonical archives.
 
@@ -1036,7 +1036,7 @@ solver's encoding, with every free symbol at its model value and every logical
 function at its definition, using exact integer, machine-integer, heap, and
 bounded-quantifier semantics under step, nesting, and time budgets. Every
 module carries each logical function's definition, a hidden one included;
-fuel and `hide` only decide which unfoldings a solver receives.
+fuel and `cppverify::hide` only decide which unfoldings a solver receives.
 
 When a model interprets an application differently from its definition, the
 adapter adds the definition instances `f(v) = body[v]` at the disputed
@@ -1068,7 +1068,7 @@ keeps them (`Evaluator::keeps`): a model that breaks one is
 one needs a value no finite set of instances fixes, which is `spec.fuel`,
 and when that value is an inductive predicate's, false where derivations go
 round forever, the message names the application and asks for a
-postcondition `!result || Q`, since only induction shows it. An unfolding
+postcondition `!cppverify::result || Q`, since only induction shows it. An unfolding
 at a memory value the model chose speaks of that memory only, never of the
 program's symbolic memory, so a round whose only new facts are such
 unfoldings stops at once (`spec.fuel`, without the native pass): the
@@ -1111,7 +1111,7 @@ such `ite`s, neither inside a quantifier nor at one whose branches apply
 recursion only under one, and a definition with one case is a macro, which
 Z3 expands at every application without bound and without honoring an
 interrupt (an inductive predicate's step, whose recursion is under an
-`exists`, hung a query for ten minutes). A function whose recursion is not
+`cppverify::exists`, hung a query for ten minutes). A function whose recursion is not
 guarded stays declared, and refinement gives its instances. Hidden
 functions are defined there too, so after a
 hidden-spec stop that pass gets only a short slice and its UNSAT is
@@ -1154,7 +1154,7 @@ polynomial comparison's roots lie within the Cauchy bound
 before index 0, its elements, then 0 from its length on, and sets,
 multisets, and maps are already piecewise constant over the integers. A
 `HeapFrame` is compared segment by segment over the heaps' breakpoints. A
-lifted `choose` is read from the model, like an uninterpreted function.
+lifted `cppverify::choose` is read from the model, like an uninterpreted function.
 
 A quantifier the distinguished values do not cover, such as one whose body
 holds another quantifier over its binder, is decided as Presburger
@@ -1166,7 +1166,7 @@ on its condition, and machine operations, conversions, and division are
 evaluated only on constant pieces. Comparisons become linear atoms over the
 pairs of pieces, nested quantifiers (renamed apart) and their bounds stay
 quantifiers, and the sentence is decided by Cooper's elimination, innermost
-quantifier first (`forall` as `not exists not`): after scaling the binder's
+quantifier first (`cppverify::forall` as `not exists not`): after scaling the binder's
 coefficients to one, `exists x. F` is the disjunction of `F` with `x` far
 below every bound at one residue per period of its divisibility atoms, and
 of `F` at each lower bound plus each such residue (or the same from above,
@@ -1237,7 +1237,7 @@ assumptions are the function's preconditions), and Layer 3 keeps copies of
 those assumptions, simplified like the goals (`ObligationModule::Theorems`,
 `Preconditions`; never archived or hashed, so an archive replays with every
 assumption a premise, as before). A scheme (`InductionScheme`) is a measure
-over some variables: the `decreases` of a recursive spec applied in the claim
+over some variables: the `cppverify::decreases` of a recursive spec applied in the claim
 at that application (`LogicFunctionDecl::Decreases`, lowered by `SpecAxioms`),
 or one integer variable (strong induction). Its induction module is the
 module with a hypothesis assumed by every obligation other than unwinding
@@ -1378,7 +1378,7 @@ pure JSON stream.
       at once, and with a proof cache only the ordered queries run.
    f. Report verified / counterexample / unresolved / bounded-safe / exported,
       or kernel-certified.
-3. For each failure, run a second pass with `recommends` checks → warnings.
+3. For each failure, run a second pass with `cppverify::recommends` checks → warnings.
 4. Qualify each verdict by what it rests on:
    - a trusted function reports `Trusted`; an unmarked contract without a
      definition draws a warning, and every caller whose proof relies on it
@@ -1405,7 +1405,7 @@ pure JSON stream.
      Clusters (`VFunction::Cluster`, computed in the frontend) relax this
      as Dafny does: the specs and proof functions that reach each other
      through bodies, contracts (pre, post, decreases), and proof blocks,
-     when all share `decreases` clauses of one length. A call to a member
+     when all share `cppverify::decreases` clauses of one length. A call to a member
      asserts the decrease (the passivizer's call-site check, which a
      spec's generated block function gets by taking the spec's measure);
      a member's postcondition, and a recursive member's one-step
@@ -1531,15 +1531,15 @@ carry one-based iteration numbers at the original source location.
 
 ## Modular Exec Calls
 
-`ASTConverter` lowers contracted **exec** calls to `VCallStmt` nodes. Nested calls in expressions (e.g. `return f(g(x))`) are flattened into a sequence of calls with temporaries (`__nested_N`) so `Passivize::emitCallStmt` can apply callee `pre`/`post` at each site.
+`ASTConverter` lowers contracted **exec** calls to `VCallStmt` nodes. Nested calls in expressions (e.g. `return f(g(x))`) are flattened into a sequence of calls with temporaries (`__nested_N`) so `Passivize::emitCallStmt` can apply callee `cppverify::pre`/`cppverify::post` at each site.
 
 At each call the passivizer:
 
 1. Maps actual arguments into the callee parameter namespace.
 2. `assert`s callee preconditions (including implicit non-aliasing from the callee's contract).
-3. Changes the value heap only inside the callee's `modifies` footprints.
-4. `assume`s callee postconditions (including `result` linkage), where a
-   formal, inside or outside `old`, denotes its entry actual.
+3. Changes the value heap only inside the callee's `cppverify::modifies` footprints.
+4. `assume`s callee postconditions (including `cppverify::result` linkage), where a
+   formal, inside or outside `cppverify::old`, denotes its entry actual.
 
 Calls to functions marked `usesDynamicStorage` fail closed unless they carry
 the inferred `freshOwnedReturn` summary. That one effect materializes a fresh
@@ -1565,7 +1565,7 @@ address to the caller input, while the metadata owner map determines its
 lifetime identity. Returned local copies and foreign pointer sources fail the
 structural scan.
 
-The callee may update the value heap under its ordinary `modifies` contract;
+The callee may update the value heap under its ordinary `cppverify::modifies` contract;
 metadata heaps remain with the caller. A provenance-bearing footprint is not
 accepted merely by shape: its identity must equal one of
 `OwnedAllocationIdentities`. This prevents a fresh or foreign pointer result
@@ -1662,13 +1662,49 @@ until passive/obligation IR has a quantified range-frame primitive.
 Ghost blocks and proof functions share the VCR statement vocabulary but are
 erased by CodeGen. Frontend isolation therefore permits assignments only to
 ghost/proof-local values, rejects executable calls and runtime-memory/global
-writes, and requires `decreases` on proof-only loops. This prevents erased
+writes, and requires `cppverify::decreases` on proof-only loops. This prevents erased
 mutation, returns, or nontermination from changing executable verification
 semantics.
 
 ## Compile-Time Integration
 
 `CppVerifyIntegration` (`clang/lib/Verify/Driver/CppVerifyIntegration.cpp`) hooks **CodeGen**: when `-fverify-contracts` is on and `-fno-verify` is off, verification runs asynchronously while LLVM IR is generated. Failures surface as `diag::err_fe_cppverify_failed`. Zero ghost/spec code in the object file.
+
+## Tooling Integration
+
+Contracts are visible to every Clang-based tool, so editors treat them as
+code:
+
+- `RecursiveASTVisitor` (and `DynamicRecursiveASTVisitor`) visits function
+  contracts and the construct references written in a function from
+  `TraverseFunctionHelper`, loop contracts from the `while`/`for`/`do`
+  traversals (found through the `ASTContext` the function's traversal sets),
+  and type invariants from the `CXXRecordDecl` traversal. clangd's hover,
+  go-to-definition, rename, document highlights, semantic highlighting, and
+  inlay hints, clang-tidy's matchers, and the parent map all build on it.
+  A visitor that analyzes executable code opts out with
+  `shouldVisitCppVerifyContracts()` returning false (`ShouldVisitCppVerifyContracts`
+  for the dynamic visitor): PGO counter mapping (`CodeGenPGO`), the dllimport
+  inlining check (`CodeGenModule`), and function-effect analysis
+  (`SemaFunctionEffects`), so contracts never change generated code. A walk
+  that starts at a function body, as the verifier's own and Sema's do, sees
+  no contract.
+- libIndex indexes the contract expressions and construct references of each
+  function and record, and loop contracts inside bodies, which gives clangd's
+  find references, cross-file rename, and call hierarchy.
+- libclang exposes them as child cursors of the function and the loop.
+- `DeclPrinter` prints a function's clauses, one per line, after its
+  declarator, and `cppverify::spec`/`cppverify::proof` as its specifier;
+  `StmtPrinter` prints loop clauses and the constructs qualified. clangd's
+  hover on a function therefore shows its contract, and `-ast-print` output
+  parses again.
+- Each construct written in a function is recorded as a `DeclRefExpr` to its
+  declaration in `<cppverify.h>` (`ASTContext::getCppVerifyReferences`), with
+  the qualifier as written, so hover shows the construct's documentation and
+  renaming a namespace alias updates every construct.
+- clang-format (`lib/Format/CppVerifyClauses.cpp`) lays out each clause after
+  a function declarator or a loop head like a trailing `requires` clause: on
+  its own line, the body's brace below.
 
 ## IR Debugging (`--dump-ir`)
 
@@ -1678,7 +1714,7 @@ and per-obligation semantic hashes, function identity, required features,
 direct and negated goals, typed terms, obligation IDs/kinds, resolved source
 metadata, ordered queries, and owned finite-fuel logic declarations.
 Frames print as `heap_frame` with their regions, trigger patterns as
-`trigger` children of their quantifier, and collection operations by name
+`cppverify::trigger` children of their quantifier, and collection operations by name
 (`seq.push : seq`). Layer 4 encodes that same in-memory module, preceded by
 the range facts, bit definitions, the definitions of `cppverify.cell_*` and
 `cppverify.seq_at` that the query uses, and the sequence index, split, and
@@ -1734,7 +1770,7 @@ an unchecked support table:
 | Frontend-derived semantics | Type invariants and complete-loop Z3/BMC parity |
 | Portable artifacts | Source-stable obligation IDs, canonical/BMC archive replay, and deterministic parallel results |
 | Lean | Source/archive theorem identity, stable proof-module hashes, generated-file kernel build, and bounds instrumentation |
-| Advisory checks | `recommends` warnings stay source-only and never enter BMC or Lean replay artifacts |
+| Advisory checks | `cppverify::recommends` warnings stay source-only and never enter BMC or Lean replay artifacts |
 
 An approved valid quantified or inductive query may remain
 `solver.unknown` on cvc5; every false matrix case must still be found, and
