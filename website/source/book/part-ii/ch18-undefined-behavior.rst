@@ -114,7 +114,6 @@ base is ``p`` then carries the obligation ``0 <= i < n``:
 
 .. code-block:: cpp
 
-   #include <cppverify.h>
    using cppverify::valid;
 
    int get(const int* p, int n, int i)
