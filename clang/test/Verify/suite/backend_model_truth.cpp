@@ -1,6 +1,6 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s
-// RUN: not %cpp-verify --diagnostics-format=json %s 2>&1 | FileCheck %s --check-prefix=JSON
-// RUN: %cpp-verify --lower-only --obligation-out=%t.obligations %s
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s
+// RUN: not %cpp-verify --diagnostics-format=json %s -- 2>&1 | FileCheck %s --check-prefix=JSON
+// RUN: %cpp-verify --lower-only --obligation-out=%t.obligations %s --
 // RUN: not %cpp-verify --obligation-in=%t.obligations --diagnostics-format=json 2>&1 | FileCheck %s --check-prefix=ARCHIVE
 
 int underdetermined_model(int value, bool take_value)
