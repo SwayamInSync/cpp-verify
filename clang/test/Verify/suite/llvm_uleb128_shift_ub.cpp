@@ -12,28 +12,28 @@ namespace cppverify_uleb128_shift {
 typedef __UINT64_TYPE__ uint64_t;
 typedef __UINT8_TYPE__ uint8_t;
 
-spec bool valid(const uint8_t *pointer, int count) {
+cppverify::spec bool valid(const uint8_t *pointer, int count) {
   return true;
 }
 
 uint64_t decode_overlong_repaired(const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  pre(buffer[0] == 0x80 && buffer[1] == 0x80 &&
+  cppverify::pre(valid(buffer, 11))
+  cppverify::pre(buffer[0] == 0x80 && buffer[1] == 0x80 &&
       buffer[2] == 0x80 && buffer[3] == 0x80 &&
       buffer[4] == 0x80 && buffer[5] == 0x80 &&
       buffer[6] == 0x80 && buffer[7] == 0x80 &&
       buffer[8] == 0x80 && buffer[9] == 0x80 &&
       buffer[10] == 0x00)
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   uint64_t value = 0;
   unsigned shift = 0;
   unsigned index = 0;
   while (index < 11)
-    invariant(index <= 11)
-    invariant(shift == 7 * index)
-    invariant(value == 0)
-    decreases(11 - index)
+    cppverify::invariant(index <= 11)
+    cppverify::invariant(shift == 7 * index)
+    cppverify::invariant(value == 0)
+    cppverify::decreases(11 - index)
   {
     uint64_t slice = buffer[index] & 0x7f;
     if (shift < 64)
@@ -45,23 +45,23 @@ uint64_t decode_overlong_repaired(const uint8_t *buffer)
 }
 
 uint64_t decode_overlong_upstream(const uint8_t *buffer)
-  pre(valid(buffer, 11))
-  pre(buffer[0] == 0x80 && buffer[1] == 0x80 &&
+  cppverify::pre(valid(buffer, 11))
+  cppverify::pre(buffer[0] == 0x80 && buffer[1] == 0x80 &&
       buffer[2] == 0x80 && buffer[3] == 0x80 &&
       buffer[4] == 0x80 && buffer[5] == 0x80 &&
       buffer[6] == 0x80 && buffer[7] == 0x80 &&
       buffer[8] == 0x80 && buffer[9] == 0x80 &&
       buffer[10] == 0x00)
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   uint64_t value = 0;
   unsigned shift = 0;
   unsigned index = 0;
   while (index < 11)
-    invariant(index <= 11)
-    invariant(shift == 7 * index)
-    invariant(value == 0)
-    decreases(11 - index)
+    cppverify::invariant(index <= 11)
+    cppverify::invariant(shift == 7 * index)
+    cppverify::invariant(value == 0)
+    cppverify::decreases(11 - index)
   {
     uint64_t slice = buffer[index] & 0x7f;
     value += slice << shift;
