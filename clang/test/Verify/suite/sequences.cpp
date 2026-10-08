@@ -1,9 +1,9 @@
-// RUN: not %cpp-verify --timeout=20000 %s 2>&1 | FileCheck %s
-// RUN: not %cpp-verify --timeout=20000 --diagnostics-format=json %s 2>/dev/null \
+// RUN: not %cpp-verify --timeout=20000 %s -- 2>&1 | FileCheck %s
+// RUN: not %cpp-verify --timeout=20000 --diagnostics-format=json %s -- 2>/dev/null \
 // RUN:   | FileCheck %s --check-prefix=JSON
-// RUN: %cpp-verify --lower-only --dump-ir=3,4 %s 2>&1 \
+// RUN: %cpp-verify --lower-only --dump-ir=3,4 %s -- 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=VC
-// RUN: not %cpp-verify --obligation-out=%t.obligations %s > /dev/null 2>&1
+// RUN: not %cpp-verify --obligation-out=%t.obligations %s -- > /dev/null 2>&1
 // RUN: not %cpp-verify --timeout=20000 --obligation-in=%t.obligations 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=REPLAY
 //
