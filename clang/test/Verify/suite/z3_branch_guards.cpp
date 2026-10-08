@@ -2,14 +2,14 @@
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 int requires_positive(int x)
-  pre(x > 0)
-  post(result == x)
+  cppverify::pre(x > 0)
+  cppverify::post(cppverify::result == x)
 {
   return x;
 }
 
 int valid_guarded_call(int x)
-  post(result == x)
+  cppverify::post(cppverify::result == x)
 {
   if (x > 0)
     return requires_positive(x);
@@ -17,16 +17,16 @@ int valid_guarded_call(int x)
 }
 
 int valid_guarded_assert(int x)
-  post(result == x)
+  cppverify::post(cppverify::result == x)
 {
   if (x > 0)
-    contract_assert(x > 0);
+    cppverify::check(x > 0);
   return x;
 }
 
 int invalid_guarded_call(int x)
-  pre(x <= 0)
-  post(result == x)
+  cppverify::pre(x <= 0)
+  cppverify::post(cppverify::result == x)
 {
   if (x <= 0)
     return requires_positive(x);
