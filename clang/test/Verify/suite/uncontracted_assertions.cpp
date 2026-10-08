@@ -5,17 +5,17 @@
 
 void asserts_false()
 {
-  contract_assert(false);
+  cppverify::check(false);
 }
 
 void ghost_false()
 {
-  ghost { contract_assert(false); }
+  cppverify::ghost { cppverify::check(false); }
 }
 
 int asserts_argument(int n)
 {
-  contract_assert(n > 0);
+  cppverify::check(n > 0);
   return n;
 }
 
@@ -23,12 +23,12 @@ int loop_invariant(int n)
 {
   int i = 0;
   while (i < 10)
-    invariant(0 <= i && i <= 10)
-    decreases(10 - i)
+    cppverify::invariant(0 <= i && i <= 10)
+    cppverify::decreases(10 - i)
   {
     i = i + 1;
   }
-  contract_assert(i == 10);
+  cppverify::check(i == 10);
   return i;
 }
 
