@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify --check-ub --jobs=8 --timeout=30000 %s 2>&1 \
+// RUN: not %cpp-verify --check-ub --jobs=8 --timeout=30000 %s -- 2>&1 \
 // RUN:   | FileCheck %s
 
 // LLVM commit 8014a1d208f0f9e58cfeaf022517cf3d69257bff added the
