@@ -1891,9 +1891,9 @@ def err_contract_expected_comma : Error<
 def err_contract_expected_rparen : Error<
   "expected ')' after %0 expression">;
 def err_contract_expected_semi : Error<
-  "expected ';' after contract_assert">;
+  "expected ';' after cppverify::check">;
 def err_contract_expected_body : Error<
-  "expected '{' after ghost">;
+  "expected '{' or a declaration after cppverify::ghost">;
 def err_ghost_declaration_not_variable : Error<
   "a ghost declaration must declare variables">;
 def err_contract_inductive_not_spec : Error<
@@ -1913,20 +1913,43 @@ def err_contract_behavior_redefined : Error<
 def err_contract_behavior_unknown : Error<
   "no behavior named %0">;
 def err_contract_behavior_relation_empty : Error<
-  "%select{disjoint_behaviors needs two|complete_behaviors needs a}0 "
+  "%select{cppverify::disjoint_behaviors needs two|"
+  "cppverify::complete_behaviors needs a}0 "
   "behavior%select{s|}0">;
 def err_calc_no_steps : Error<
-  "a calc chain needs at least one step: a relation and a term">;
+  "a cppverify::calc chain needs at least one step: a relation and a term">;
 def err_calc_mixed_directions : Error<
-  "a calc chain cannot both increase and decrease">;
+  "a cppverify::calc chain cannot both increase and decrease">;
 def err_contract_redeclaration : Error<
   "contract clauses may only be specified on one declaration of a function">;
 def err_result_outside_postcondition : Error<
-  "'result' can only be used in postconditions">;
+  "'cppverify::result' can only be used in postconditions">;
 def err_result_in_old_expression : Error<
-  "'result' has no value in the function pre-state">;
+  "'cppverify::result' has no value in the function pre-state">;
 def err_old_outside_postcondition : Error<
-  "'old' can only be used in postconditions and loop invariants">;
+  "'cppverify::old' can only be used in postconditions and loop invariants">;
+def err_cppverify_trigger_outside_quantifier : Error<
+  "'cppverify::trigger' marks a term of a quantifier body">;
+def err_cppverify_unqualified : Error<
+  "'%0' is a cpp-verify construct only when qualified: write "
+  "'cppverify::%1'">;
+def err_cppverify_cxx26_contract : Error<
+  "C++26 contract specifiers are not supported; a cpp-verify "
+  "%select{precondition|postcondition}0 is written 'cppverify::%1'">;
+def err_cppverify_misplaced : Error<
+  "'cppverify::%0' %select{follows a function's parameter list|"
+  "goes between a loop's head and its body|goes in a class body|"
+  "starts a declaration|is a statement in a function body|is an expression|"
+  "follows a function's parameter list or a loop's head}1">;
+def err_cppverify_header_missing : Error<
+  "'cppverify::%0' is declared in <cppverify.h>, which is not in the include "
+  "path; it is in the compiler's resource directory (check -resource-dir, "
+  "-nobuiltininc, and -nostdinc)">;
+def err_cppverify_unknown : Error<
+  "no cpp-verify construct named 'cppverify::%0'">;
+def err_cppverify_unknown_suggest : Error<
+  "no cpp-verify construct named 'cppverify::%0'; did you mean "
+  "'cppverify::%1'?">;
 def warn_contract_member_function_unsupported : Warning<
   "contracts on member functions are not yet supported and are ignored; "
   "move the function out of the class or verify it as a free function">,
