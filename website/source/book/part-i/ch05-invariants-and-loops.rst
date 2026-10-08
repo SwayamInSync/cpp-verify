@@ -57,7 +57,7 @@ Invariants alone give **partial** correctness. To prove the loop **terminates**,
 - Is bounded below (often ``>= 0``)
 - **Strictly decreases** each iteration while the loop runs
 
-Example: ``decreases(n - i)`` in a loop where ``i`` increases toward ``n``.
+Example: ``cppverify::decreases(n - i)`` in a loop where ``i`` increases toward ``n``.
 
 CppVerify will check both invariant preservation and measure decrease (Part II).
 
