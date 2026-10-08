@@ -10,7 +10,7 @@ memory checking is on by default (``--no-check-ub`` turns it off).
 Two obligations, not one
 ------------------------
 
-For an ``exec`` function with ``pre``/``post`` there are really two things to
+For an ``exec`` function with ``cppverify::pre``/``cppverify::post`` there are really two things to
 prove:
 
 #. **Safety** — every operation is well-defined (no UB).
@@ -18,10 +18,10 @@ prove:
 
 The functional obligation is **meaningless without the safety one**. If the code
 can execute UB, the real program has *no* defined behavior at all, so a proof of
-``post`` against any model says nothing about the binary. UB-freedom comes first.
+``cppverify::post`` against any model says nothing about the binary. UB-freedom comes first.
 
 And it is the **tool's** job to generate the safety obligations — not yours. You
-write ``pre`` and ``post``; the verifier derives "this operation must not
+write ``cppverify::pre`` and ``cppverify::post``; the verifier derives "this operation must not
 overflow / must not divide by zero" from the code. If your precondition is too
 weak to rule the UB out, it reports the exact counterexample.
 
@@ -35,7 +35,7 @@ an overflowing addition would describe an execution C++ does not define:
 
 .. code-block:: cpp
 
-   int add(int a, int b) post(result == a + b) { return a + b; }
+   int add(int a, int b) cv::post(cv::result == a + b) { return a + b; }
 
 CppVerify therefore inserts a signed-overflow assertion before each evaluated
 addition, and this function fails at the addition when the precondition admits
@@ -87,10 +87,10 @@ The classic example — the tool tells you the precondition you forgot:
 
 .. code-block:: cpp
 
-   int abs_unguarded(int x) post(result >= 0)
+   int abs_unguarded(int x) cv::post(cv::result >= 0)
    { return x < 0 ? -x : x; }
 
-   int abs_guarded(int x) pre(x > -2147483648) post(result >= 0)
+   int abs_guarded(int x) cv::pre(x > -2147483648) cv::post(cv::result >= 0)
    { return x < 0 ? -x : x; }
 
 .. code-block:: text
@@ -118,12 +118,12 @@ base is ``p`` then carries the obligation ``0 <= i < n``:
    using cppverify::valid;
 
    int get(const int* p, int n, int i)
-     pre(valid(p, n) && 0 <= i && i < n)              // in bounds -> verifies
-     post(result == p[i])
+     cv::pre(valid(p, n) && 0 <= i && i < n)              // in bounds -> verifies
+     cv::post(cv::result == p[i])
    { return p[i]; }
 
    int last(const int* p, int n)
-     pre(valid(p, n) && n >= 1)
+     cv::pre(valid(p, n) && n >= 1)
    { return p[n]; }   // FAILS: p[n] is one past the end
 
 .. code-block:: text
@@ -136,15 +136,15 @@ base is ``p`` then carries the obligation ``0 <= i < n``:
 marker describes an ``int`` buffer, a ``char`` buffer, or an array of
 structs. Like the header's spec collections it exists only for
 verification: Sema rejects it in executable code. Programs written before
-the header declare the marker themselves, and that still works; a ``spec``
+the header declare the marker themselves, and that still works; a ``cppverify::spec``
 function named ``valid`` taking a pointer and an integer is the same marker:
 
 .. code-block:: cpp
 
-   spec bool valid(const long* p, int n) { return true; }   // one per type
+   cv::spec bool valid(const long* p, int n) { return true; }   // one per type
 
    long last_long(const long* p, int n)
-     pre(valid(p, n) && n >= 1)
+     cv::pre(valid(p, n) && n >= 1)
    { return p[n - 1]; }   // verifies
 
 The marker also entails ``n >= 0``. For ``n > 0``, ``p`` must be non-null and
@@ -176,7 +176,7 @@ Frama-C's ``\valid`` guards and Verus permissions require:
 .. code-block:: cpp
 
    int second(int* p)
-     pre(p != nullptr)
+     cv::pre(p != nullptr)
    { return p[1]; }   // FAILS: p addresses one int
 
 Pointer arithmetic itself must stay within the object's closed range
@@ -188,7 +188,7 @@ further out is already undefined:
 .. code-block:: cpp
 
    int far(int* p)
-     pre(valid(p, 2))
+     cv::pre(valid(p, 2))
    {
      int *q = p + 10;   // FAILS: outside [0, 2]
      return 0;
@@ -216,7 +216,7 @@ Green }`` that is ``0`` or ``1``:
    enum Color { Red, Green };
 
    Color pick(int k)
-     pre(k >= 0 && k <= 5)
+     cv::pre(k >= 0 && k <= 5)
    { return (Color)k; }   // FAILS: k = 2 is not a Color
 
 Signed vs. unsigned
@@ -229,7 +229,7 @@ value says so with ``% 2^N``:
 
 .. code-block:: cpp
 
-   unsigned mix(unsigned a, unsigned b) post(result == (a + b) % 4294967296)
+   unsigned mix(unsigned a, unsigned b) cv::post(cv::result == (a + b) % 4294967296)
    { return a + b; }            // verifies: unsigned wrapping is legal
 
 Width follows the target
@@ -242,8 +242,8 @@ Overflow is checked at the type's real bit width (from the target data model):
 .. code-block:: cpp
 
    long sum(long a, long b)
-     pre(a == 2000000000 && b == 2000000000)
-     post(result == 4000000000)        // 4e9 > INT_MAX, fits in int64
+     cv::pre(a == 2000000000 && b == 2000000000)
+     cv::post(cv::result == 4000000000)        // 4e9 > INT_MAX, fits in int64
    { return a + b; }                   // verifies — long is modeled at 64-bit
 
 Mixed ``int``/``long`` arithmetic sign-extends the narrower operand, just like
