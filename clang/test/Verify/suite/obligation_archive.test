@@ -1,4 +1,4 @@
-# RUN: %cpp-verify --lower-only --obligation-out=%t.one %S/obligation_ir.cpp
+# RUN: %cpp-verify --lower-only --obligation-out=%t.one %S/obligation_ir.cpp --
 # RUN: %cpp-verify --obligation-in=%t.one --backend=z3 | FileCheck %s --check-prefix=REPLAY
 # RUN: %cpp-verify --obligation-in=%t.one --lower-only --dump-ir=3,4 | FileCheck %s --check-prefix=LOWER
 # RUN: %cpp-verify --obligation-in=%t.one --backend=lean --lean-out=%t.lean | FileCheck %s --check-prefix=LEAN
@@ -58,7 +58,7 @@
 # RUN: %python %S/Inputs/mutate_obligation_archive.py lean-comment %t.one %t.lean-comment
 # RUN: %cpp-verify --obligation-in=%t.lean-comment --backend=lean --lean-out=%t.lean-comment.lean
 # RUN: grep -Fq '/- function: - /' %t.lean-comment.lean
-# RUN: %cpp-verify --lower-only --obligation-out=%t.functions %S/Inputs/obligation_archive_functions.cpp
+# RUN: %cpp-verify --lower-only --obligation-out=%t.functions %S/Inputs/obligation_archive_functions.cpp --
 # RUN: %python %S/Inputs/mutate_obligation_archive.py append-unreachable-function %t.functions %t.unreachable-function
 # RUN: %cpp-verify --obligation-in=%t.functions --lower-only --dump-ir=3 > %t.functions.dump
 # RUN: %cpp-verify --obligation-in=%t.unreachable-function --lower-only --dump-ir=3 > %t.unreachable-function.dump
@@ -69,27 +69,27 @@
 # RUN: %python %S/Inputs/mutate_obligation_archive.py different-function-definition %t.function-records %t.different-function-definition
 # RUN: %cpp-verify --obligation-in=%t.different-function-definition --lower-only
 # RUN: not %cpp-verify --obligation-in=%t.one --backend=bmc 2>&1 | FileCheck %s --check-prefix=BMC
-# RUN: %cpp-verify --lower-only --backend=bmc --unroll=0 --obligation-out=%t.bmc %S/cov_loop_unroll_zero.cpp
+# RUN: %cpp-verify --lower-only --backend=bmc --unroll=0 --obligation-out=%t.bmc %S/cov_loop_unroll_zero.cpp --
 # RUN: not %cpp-verify --obligation-in=%t.bmc --backend=z3 2>&1 | FileCheck %s --check-prefix=BMC-REPLAY
 # RUN: not %cpp-verify --obligation-in=%t.bmc --backend=bmc --unroll=1 2>&1 | FileCheck %s --check-prefix=BMC-BOUND
 # RUN: not %cpp-verify --obligation-in=%t.bmc --backend=z3 --unroll=1 2>&1 | FileCheck %s --check-prefix=BMC-BOUND
 # RUN: %cpp-verify --obligation-in=%t.bmc --lower-only --dump-ir=3 2>&1 | FileCheck %s --check-prefix=BMC-LOWER
-# RUN: %cpp-verify --lower-only --backend=bmc --unroll=2 --obligation-out=%t.bmc-decreases %S/cov_spec_decreases.cpp
+# RUN: %cpp-verify --lower-only --backend=bmc --unroll=2 --obligation-out=%t.bmc-decreases %S/cov_spec_decreases.cpp --
 # RUN: %cpp-verify --obligation-in=%t.bmc-decreases --backend=bmc --unroll=2 2>&1 | FileCheck %s --check-prefix=BMC-DECREASES
-# RUN: %cpp-verify --lower-only --obligation-out=%t.fail %S/Inputs/obligation_archive_fail.cpp
+# RUN: %cpp-verify --lower-only --obligation-out=%t.fail %S/Inputs/obligation_archive_fail.cpp --
 # RUN: not %cpp-verify --obligation-in=%t.fail --backend=z3 2>&1 | FileCheck %s --check-prefix=FAIL
-# RUN: %cpp-verify --lower-only --obligation-out=%t.recommends-lower %S/z3_recommends_warning.cpp
-# RUN: not %cpp-verify --obligation-out=%t.recommends-solve %S/z3_recommends_warning.cpp
+# RUN: %cpp-verify --lower-only --obligation-out=%t.recommends-lower %S/z3_recommends_warning.cpp --
+# RUN: not %cpp-verify --obligation-out=%t.recommends-solve %S/z3_recommends_warning.cpp --
 # RUN: cmp %t.recommends-lower %t.recommends-solve
-# RUN: %cpp-verify --lower-only --dump-ir=3 %S/Inputs/obligation_hash_scope.cpp > %t.hash-base
-# RUN: %cpp-verify --lower-only --dump-ir=3 %S/Inputs/obligation_hash_scope_quantifier.cpp > %t.hash-quantifier
+# RUN: %cpp-verify --lower-only --dump-ir=3 %S/Inputs/obligation_hash_scope.cpp -- > %t.hash-base
+# RUN: %cpp-verify --lower-only --dump-ir=3 %S/Inputs/obligation_hash_scope_quantifier.cpp -- > %t.hash-quantifier
 # RUN: grep 'semantic-hash' %t.hash-base | sed -n '2p' > %t.hash-base.first
 # RUN: grep 'semantic-hash' %t.hash-quantifier | sed -n '2p' > %t.hash-quantifier.first
 # RUN: cmp %t.hash-base.first %t.hash-quantifier.first
-# RUN: %cpp-verify --lower-only --obligation-out=%t.quantifier %S/Inputs/obligation_hash_scope_quantifier.cpp
+# RUN: %cpp-verify --lower-only --obligation-out=%t.quantifier %S/Inputs/obligation_hash_scope_quantifier.cpp --
 # RUN: %python %S/Inputs/mutate_obligation_archive.py bad-binder-sort %t.quantifier %t.bad-binder-sort
 # RUN: not %cpp-verify --obligation-in=%t.bad-binder-sort 2>&1 | FileCheck %s --check-prefix=BAD-BINDER-SORT
-# RUN: %cpp-verify --lower-only --dump-ir=3 %S/heap_memcpy_pass.cpp 2>&1 | grep -B1 '__quant_.* : int' | FileCheck %s --check-prefix=QUANTIFIED-INDEX
+# RUN: %cpp-verify --lower-only --dump-ir=3 %S/heap_memcpy_pass.cpp -- 2>&1 | grep -B1 '__quant_.* : int' | FileCheck %s --check-prefix=QUANTIFIED-INDEX
 
 # REPLAY: Verified: canonical_obligations [backend=z3] [semantic-hash=sha256:{{[0-9a-f]+}}]
 # LOWER: vc canonical_obligations
