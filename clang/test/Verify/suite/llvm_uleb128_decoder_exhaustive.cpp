@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: %cpp-verify --check-ub --jobs=8 --timeout=30000 %s 2>&1 \
+// RUN: %cpp-verify --check-ub --jobs=8 --timeout=30000 %s -- 2>&1 \
 // RUN:   | FileCheck %s
 //
 // UNSUPPORTED: true
