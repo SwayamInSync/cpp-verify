@@ -2,14 +2,14 @@
 // RUN: %clang_cc1 -std=c++17 -fverify-contracts -fno-verify -emit-obj -o %t2.o %s
 
 void set_value(int &target, int value)
-  modifies(target)
-  post(target == value)
+  cppverify::modifies(target)
+  cppverify::post(target == value)
 {
   target = value;
 }
 
 int local_reference_codegen(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   int local = 0;
   int &alias = local;
