@@ -1,5 +1,5 @@
-// RUN: %cpp-verify %s 2>&1 | FileCheck %s
-// RUN: %cpp-verify --diagnostics-format=json %s 2>/dev/null \
+// RUN: %cpp-verify %s -- 2>&1 | FileCheck %s
+// RUN: %cpp-verify --diagnostics-format=json %s -- 2>/dev/null \
 // RUN:   | FileCheck %s --check-prefix=JSON
 //
 // A proof that holds because no execution reaches the claim proves nothing,
