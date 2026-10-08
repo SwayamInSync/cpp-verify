@@ -12,7 +12,7 @@ struct Polymorphic {
 };
 
 unsigned long unsupported_leaf_layout()
-  post(result == sizeof(WithFloat) + sizeof(Polymorphic))
+  cppverify::post(cppverify::result == sizeof(WithFloat) + sizeof(Polymorphic))
 {
   return sizeof(WithFloat) + sizeof(Polymorphic);
 }
