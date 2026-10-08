@@ -1,6 +1,6 @@
-// RUN: not %cpp-verify --timeout=3000 --profile-quantifiers %s 2>&1 | FileCheck %s
-// RUN: not %cpp-verify --timeout=3000 --profile-quantifiers --diagnostics-format=json %s 2>/dev/null | FileCheck %s --check-prefix=JSON
-// RUN: %cpp-verify --lower-only --dump-ir=3 %s 2>&1 | FileCheck %s --check-prefix=VC
+// RUN: not %cpp-verify --timeout=3000 --profile-quantifiers %s -- 2>&1 | FileCheck %s
+// RUN: not %cpp-verify --timeout=3000 --profile-quantifiers --diagnostics-format=json %s -- 2>/dev/null | FileCheck %s --check-prefix=JSON
+// RUN: %cpp-verify --lower-only --dump-ir=3 %s -- 2>&1 | FileCheck %s --check-prefix=VC
 //
 // trigger(term) in a quantifier body makes term the pattern that
 // instantiates the quantifier: a memory read, a collection read, or a call of
