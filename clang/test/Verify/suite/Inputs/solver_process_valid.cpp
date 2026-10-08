@@ -1,5 +1,5 @@
 int solver_process_valid(int value)
-  post(result == value)
+  cppverify::post(cppverify::result == value)
 {
   return value;
 }
