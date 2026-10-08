@@ -1,10 +1,10 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=Z3
-// RUN: not %cpp-verify --backend=bmc --unroll=1 %s 2>&1 | FileCheck %s --check-prefix=BMC
-// RUN: %cpp-verify --lower-only %s 2>&1 | FileCheck %s --check-prefix=LOWER
-// RUN: %cpp-verify --backend=lean --lean-out=%t.lean %s 2>&1 | FileCheck %s --check-prefix=LEAN
-// RUN: not %cpp-verify --backend=unknown %s 2>&1 | FileCheck %s --check-prefix=INVALID
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=Z3
+// RUN: not %cpp-verify --backend=bmc --unroll=1 %s -- 2>&1 | FileCheck %s --check-prefix=BMC
+// RUN: %cpp-verify --lower-only %s -- 2>&1 | FileCheck %s --check-prefix=LOWER
+// RUN: %cpp-verify --backend=lean --lean-out=%t.lean %s -- 2>&1 | FileCheck %s --check-prefix=LEAN
+// RUN: not %cpp-verify --backend=unknown %s -- 2>&1 | FileCheck %s --check-prefix=INVALID
 // RUN: rm -rf %t.no-fallback
-// RUN: not %cpp-verify --lean-fallback=%t.no-fallback %s 2>&1 | FileCheck %s --check-prefix=NO-FALLBACK
+// RUN: not %cpp-verify --lean-fallback=%t.no-fallback %s -- 2>&1 | FileCheck %s --check-prefix=NO-FALLBACK
 // RUN: not grep -q '^import CppVerify.Proofs.Goal_' %t.no-fallback/CppVerify/Check.lean
 
 int valid_result(int value)
