@@ -1,5 +1,5 @@
-// RUN: %cpp-verify --dump-ir=3,4 %s 2>&1 | FileCheck %s --check-prefix=DUMP
-// RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: %cpp-verify --dump-ir=3,4 %s -- 2>&1 | FileCheck %s --check-prefix=DUMP
+// RUN: %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 struct Pair {
   int a;
