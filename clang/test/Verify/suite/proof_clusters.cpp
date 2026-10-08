@@ -1,4 +1,4 @@
-// RUN: not %cpp-verify --timeout=10000 %s 2>&1 | FileCheck %s \
+// RUN: not %cpp-verify --timeout=10000 %s -- 2>&1 | FileCheck %s \
 // RUN:   --implicit-check-not='Verified: swing_lemma' \
 // RUN:   --implicit-check-not='Verified: spec decreases: swing'
 //
