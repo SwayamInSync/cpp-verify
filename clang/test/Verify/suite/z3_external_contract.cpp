@@ -5,29 +5,29 @@
 // so with [[cppverify::trusted]]. Unmarked, nothing verifies its callers.
 
 [[cppverify::trusted]] int external_increment(int value)
-  pre(value < 2147483647)
-  post(result == value + 1);
+  cppverify::pre(value < 2147483647)
+  cppverify::post(cppverify::result == value + 1);
 
 int valid_external_call(int value)
-  pre(value < 2147483647)
-  post(result == value + 1)
+  cppverify::pre(value < 2147483647)
+  cppverify::post(cppverify::result == value + 1)
 {
   return external_increment(value);
 }
 
 int invalid_external_call(int value)
-  post(result == value + 1)
+  cppverify::post(cppverify::result == value + 1)
 {
   return external_increment(value);
 }
 
 int unmarked_increment(int value)
-  pre(value < 2147483647)
-  post(result == value + 1);
+  cppverify::pre(value < 2147483647)
+  cppverify::post(cppverify::result == value + 1);
 
 int unmarked_call(int value)
-  pre(value < 2147483647)
-  post(result == value + 1)
+  cppverify::pre(value < 2147483647)
+  cppverify::post(cppverify::result == value + 1)
 {
   return unmarked_increment(value);
 }
