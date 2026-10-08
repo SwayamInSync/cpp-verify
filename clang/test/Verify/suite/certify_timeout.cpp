@@ -1,5 +1,5 @@
-// RUN: not %cpp-verify --certify-timeout=200 %s 2>&1 | FileCheck %s
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=DEFAULT
+// RUN: not %cpp-verify --certify-timeout=200 %s -- 2>&1 | FileCheck %s
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=DEFAULT
 //
 // Checking one counterexample against the true definitions may take
 // --certify-timeout milliseconds (by default half the query timeout), so
