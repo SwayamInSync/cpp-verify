@@ -1,4 +1,4 @@
-// RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 cppverify::spec int dec(int n)
   cppverify::decreases(n)
