@@ -1,5 +1,5 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s
-// RUN: %cpp-verify --lower-only --dump-ir=3 %s 2>&1 | FileCheck %s --check-prefix=VC
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s
+// RUN: %cpp-verify --lower-only --dump-ir=3 %s -- 2>&1 | FileCheck %s --check-prefix=VC
 //
 // forall(k, body) and exists(k, body) range over all mathematical integers.
 // A counterexample is certified when the body depends on the binder through
