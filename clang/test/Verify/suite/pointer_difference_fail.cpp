@@ -3,36 +3,36 @@
 // RUN: not %cpp-verify --backend=bmc --unroll=1 %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 long unrelated_pointer_difference(int *left, int *right)
-  pre(left != nullptr && right != nullptr)
-  post(true)
+  cppverify::pre(left != nullptr && right != nullptr)
+  cppverify::post(true)
 {
   return left - right;
 }
 
 long equal_address_without_provenance(int *left, int *right)
-  aliases(left, right)
-  pre(left != nullptr && right != nullptr && left == right)
-  post(true)
+  cppverify::aliases(left, right)
+  cppverify::pre(left != nullptr && right != nullptr && left == right)
+  cppverify::post(true)
 {
   return left - right;
 }
 
 long null_pointer_difference()
-  post(true)
+  cppverify::post(true)
 {
   int *pointer = nullptr;
   return pointer - pointer;
 }
 
 long incorrect_unit_difference(int *pointer)
-  pre(pointer != nullptr)
-  post(result == 2)
+  cppverify::pre(pointer != nullptr)
+  cppverify::post(cppverify::result == 2)
 {
   return (pointer + 1) - pointer;
 }
 
 long dynamic_distinct_difference()
-  post(true)
+  cppverify::post(true)
 {
   int *left = new int(1);
   int *right = new int(2);
@@ -43,7 +43,7 @@ long dynamic_distinct_difference()
 }
 
 long dangling_pointer_difference()
-  post(true)
+  cppverify::post(true)
 {
   int *pointer = new int(1);
   delete pointer;
@@ -51,23 +51,23 @@ long dangling_pointer_difference()
 }
 
 long copied_offset_difference(int *pointer)
-  pre(pointer != nullptr)
-  post(true)
+  cppverify::pre(pointer != nullptr)
+  cppverify::post(true)
 {
   int *next = pointer + 1;
   return next - pointer;
 }
 
 long offset_beyond_complete_object(int *pointer)
-  pre(pointer != nullptr)
-  post(true)
+  cppverify::pre(pointer != nullptr)
+  cppverify::post(true)
 {
   return (pointer + 2) - pointer;
 }
 
 long negative_offset_without_extent(int *pointer)
-  pre(pointer != nullptr)
-  post(true)
+  cppverify::pre(pointer != nullptr)
+  cppverify::post(true)
 {
   return (pointer - 1) - pointer;
 }
