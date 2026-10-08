@@ -1,9 +1,9 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefixes=CHECK,Z3
-// RUN: not %cpp-verify --int-encoding=bitvector %s 2>&1 \
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefixes=CHECK,Z3
+// RUN: not %cpp-verify --int-encoding=bitvector %s -- 2>&1 \
 // RUN:   | FileCheck %s --check-prefixes=CHECK,Z3
-// RUN: not %cpp-verify --backend=bmc --unroll=1 %s 2>&1 \
+// RUN: not %cpp-verify --backend=bmc --unroll=1 %s -- 2>&1 \
 // RUN:   | FileCheck %s --check-prefixes=CHECK,BMC
-// RUN: not %cpp-verify --diagnostics-format=json %s 2>&1 \
+// RUN: not %cpp-verify --diagnostics-format=json %s -- 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=JSON
 //
 // A counterexample is reported only when it holds with every logical function
