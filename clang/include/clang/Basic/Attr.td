@@ -3753,6 +3753,8 @@ def CppVerifyTrusted : InheritableAttr {
   let Subjects = SubjectList<[Function]>;
   let Documentation = [Undocumented];
   let SimpleHandler = 1;
+  // Each assumed contract is marked on its own function.
+  let PragmaAttributeSupport = 0;
 }
 
 def Used : InheritableAttr {
