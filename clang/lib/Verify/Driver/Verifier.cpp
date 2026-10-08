@@ -282,7 +282,7 @@ std::string proofOutline(const ObligationModule &Module,
         return Body;
       Measure += (Measure.empty() ? "" : ", ") + Shown;
     }
-    Body += "', with decreases(" + Measure + ")";
+    Body += "', with cppverify::decreases(" + Measure + ")";
     return "'" + Body;
   }
   return "'" + Body + "'";
@@ -2884,12 +2884,13 @@ public:
             if (size_t At = R.Message.find("; reveal it or state a lemma");
                 At != std::string::npos)
               R.Message.erase(At, std::strlen("; reveal it or state a lemma"));
-            R.Message += "; " + Names + " shares a cluster with " + Fn->Name +
-                         ", whose members use each other's definitions only "
-                         "where the measure is lower: give " +
-                         Names +
-                         " a lower measure at these arguments, as "
-                         "decreases(n, 0) against decreases(n, 1)";
+            R.Message +=
+                "; " + Names + " shares a cluster with " + Fn->Name +
+                ", whose members use each other's definitions only "
+                "where the measure is lower: give " +
+                Names +
+                " a lower measure at these arguments, as "
+                "cppverify::decreases(n, 0) against cppverify::decreases(n, 1)";
           }
         }
         settle(R, Module, *Fn, "verification", Opts.Backend);
@@ -3089,8 +3090,8 @@ public:
           (Where.isValid() ? std::to_string(Where.getLine()) + ":" +
                                  std::to_string(Where.getColumn())
                            : std::string("?")) +
-          " has no decreases clause: give it a measure, or decreases(*) to "
-          "allow it to diverge)";
+          " has no decreases clause: give it a measure, or "
+          "cppverify::decreases(*) to allow it to diverge)";
       if (Diagnostic.Result) {
         Diagnostic.Result->Status = VerifyStatus::Unresolved;
         Diagnostic.Result->Reason = VerifyReason::DecreasesMissing;
@@ -3579,7 +3580,7 @@ public:
         const PresumedLoc Where =
             Ctx.getSourceManager().getPresumedLoc(Fn->DivergenceLoc);
         Diverges[Fn->Identity] =
-            "decreases(*) at " +
+            "cppverify::decreases(*) at " +
             (Where.isValid() ? std::to_string(Where.getLine()) + ":" +
                                    std::to_string(Where.getColumn())
                              : std::string("?")) +
