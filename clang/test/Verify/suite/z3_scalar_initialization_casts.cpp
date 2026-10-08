@@ -2,7 +2,7 @@
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 unsigned valid_explicit_narrowing()
-  post(result == 44U)
+  cppverify::post(cppverify::result == 44U)
 {
   unsigned value{300U};
   unsigned char narrowed = static_cast<unsigned char>(value);
@@ -10,7 +10,7 @@ unsigned valid_explicit_narrowing()
 }
 
 int valid_scalar_value_initialization()
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   int zero = int();
   bool false_value{};
@@ -18,7 +18,7 @@ int valid_scalar_value_initialization()
 }
 
 int valid_scalar_brace_assignment()
-  post(result == 3)
+  cppverify::post(cppverify::result == 3)
 {
   int value;
   value = {3};
@@ -26,31 +26,31 @@ int valid_scalar_brace_assignment()
 }
 
 int valid_empty_brace_return()
-  post(result == 0)
+  cppverify::post(cppverify::result == 0)
 {
   return {};
 }
 
 bool valid_pointer_to_bool(int *pointer)
-  post(result == (pointer != nullptr))
+  cppverify::post(cppverify::result == (pointer != nullptr))
 {
   return static_cast<bool>(pointer);
 }
 
 bool valid_implicit_pointer_to_bool(int *pointer)
-  post(result == (pointer != nullptr))
+  cppverify::post(cppverify::result == (pointer != nullptr))
 {
   return pointer;
 }
 
 bool valid_integer_to_bool()
-  post(result)
+  cppverify::post(cppverify::result)
 {
   return static_cast<bool>(2);
 }
 
 unsigned invalid_explicit_narrowing_claim()
-  post(result == 300U)
+  cppverify::post(cppverify::result == 300U)
 {
   unsigned value{300U};
   unsigned char narrowed = static_cast<unsigned char>(value);
@@ -58,7 +58,7 @@ unsigned invalid_explicit_narrowing_claim()
 }
 
 bool invalid_integer_to_bool_claim()
-  post(!result)
+  cppverify::post(!cppverify::result)
 {
   return static_cast<bool>(2);
 }
