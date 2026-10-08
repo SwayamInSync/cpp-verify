@@ -1,7 +1,7 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
-// RUN: not %cpp-verify --backend=bmc --unroll=1 %s 2>&1 | FileCheck %s --check-prefix=BMC
-// RUN: %cpp-verify --lower-only --dump-ir=2 %s 2>&1 | FileCheck %s --check-prefix=PASSIVE
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: not %cpp-verify --backend=bmc --unroll=1 %s -- 2>&1 | FileCheck %s --check-prefix=BMC
+// RUN: %cpp-verify --lower-only --dump-ir=2 %s -- 2>&1 | FileCheck %s --check-prefix=PASSIVE
 
 int valid_early_return(int x)
   cppverify::post((x > 0 && cppverify::result == 1) || (x <= 0 && cppverify::result == 0))
