@@ -697,7 +697,13 @@ void DeclPrinter::VisitFunctionDecl(FunctionDecl *D) {
       llvm_unreachable("invalid for functions");
     }
 
-    if (D->isInlineSpecified())  Out << "inline ";
+    const FunctionContractInfo *FCI = Context.getFunctionContract(D);
+    if (FCI && FCI->IsSpec)
+      Out << "cppverify::spec ";
+    else if (FCI && FCI->IsProof)
+      Out << "cppverify::proof ";
+    else if (D->isInlineSpecified())
+      Out << "inline ";
     if (D->isVirtualAsWritten()) Out << "virtual ";
     if (D->isModulePrivate())    Out << "__module_private__ ";
     if (D->isConstexprSpecified() && !D->isExplicitlyDefaulted())
@@ -848,6 +854,53 @@ void DeclPrinter::VisitFunctionDecl(FunctionDecl *D) {
   if (std::optional<std::string> Attrs =
           prettyPrintAttributes(D, AttrPosAsWritten::Right))
     Out << ' ' << *Attrs;
+
+  // CppVerify: the clauses written on this declaration, one per line.
+  if (const FunctionContractInfo *FCI = Context.getFunctionContract(D);
+      FCI && FCI->ContractDecl == D) {
+    auto clause = [&](StringRef Name, ArrayRef<const Expr *> Args) {
+      Out << "\n";
+      Indentation += Policy.Indentation;
+      Indent() << "cppverify::" << Name << '(';
+      Indentation -= Policy.Indentation;
+      for (const Expr *Arg : Args) {
+        if (Arg != Args.front())
+          Out << ", ";
+        Arg->printPretty(Out, nullptr, SubPolicy, Indentation, "\n", &Context);
+      }
+      Out << ')';
+    };
+    for (const Expr *E : FCI->Preconditions)
+      clause("pre", E);
+    for (const Expr *E : FCI->Recommends)
+      clause("recommends", E);
+    for (const auto &[Pointer, Count] : FCI->Reads)
+      clause("reads", {Pointer, Count});
+    for (const Expr *E : FCI->When)
+      clause("when", E);
+    for (const auto &[First, Second] : FCI->Aliases)
+      clause("aliases", {First, Second});
+    if (!FCI->Modifies.empty())
+      clause("modifies", ArrayRef<const Expr *>(FCI->Modifies.begin(),
+                                                FCI->Modifies.end()));
+    for (const Expr *E : FCI->Postconditions)
+      clause("post", E);
+    if (!FCI->Decreases.empty())
+      clause("decreases", ArrayRef<const Expr *>(FCI->Decreases.begin(),
+                                                 FCI->Decreases.end()));
+    if (FCI->MayDiverge.isValid()) {
+      Out << "\n";
+      Indentation += Policy.Indentation;
+      Indent() << "cppverify::decreases(*)";
+      Indentation -= Policy.Indentation;
+    }
+    if (FCI->Inductive.isValid()) {
+      Out << "\n";
+      Indentation += Policy.Indentation;
+      Indent() << "cppverify::inductive";
+      Indentation -= Policy.Indentation;
+    }
+  }
 
   if (D->isPureVirtual())
     Out << " = 0";
