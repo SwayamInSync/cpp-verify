@@ -8,7 +8,7 @@
 // execution (see object_layout_array_fails_closed.cpp).
 
 unsigned long array_layout()
-  post(result == sizeof(int[4]))
+  cppverify::post(cppverify::result == sizeof(int[4]))
 {
   return sizeof(int[4]);
 }
