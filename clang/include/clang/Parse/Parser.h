@@ -13,6 +13,7 @@
 #ifndef LLVM_CLANG_PARSE_PARSER_H
 #define LLVM_CLANG_PARSE_PARSER_H
 
+#include "clang/Basic/CppVerifyConstructs.h"
 #include "clang/Basic/OpenACCKinds.h"
 #include "clang/Basic/OperatorPrecedence.h"
 #include "clang/Lex/CodeCompletionHandler.h"
@@ -911,17 +912,6 @@ private:
   /// Determine whether the current token, if it occurs after a
   /// declarator, indicates the start of a function definition.
   bool isStartOfFunctionDefinition(const ParsingDeclarator &Declarator);
-
-  /// CppVerify: whether the current token starts a reads(...) clause.
-  bool isContractReadsClause();
-  bool isContractWhenClause();
-  /// behavior(name, assumes), complete_behaviors, or disjoint_behaviors.
-  bool isContractBehaviorClause();
-  /// inductive, on a spec predicate.
-  bool isContractInductiveClause();
-  /// Parses the proof blocks of the clauses of the function definition
-  /// \p Function, cached until its parameters are in scope.
-  void ParseContractClauseProofs(Decl *Function);
 
   DeclGroupPtrTy ParseDeclarationOrFunctionDefinition(
       ParsedAttributes &DeclAttrs, ParsedAttributes &DeclSpecAttrs,
@@ -7461,39 +7451,67 @@ public:
                                LabelDecl *PrecedingLabel);
 
   //===--------------------------------------------------------------------===//
-  // CppVerify Contract Parsing
+  // CppVerify Contract Parsing (ParseCppVerify.cpp)
 
-  /// Parse invariant/decreases clauses on an iteration statement.
-  void ParseLoopContractClauses(SmallVectorImpl<Expr *> &Invariants,
-                                SmallVectorImpl<Expr *> &Decreases,
-                                SourceLocation &MayDiverge,
-                                SmallVectorImpl<Expr *> &Modifies);
+  /// If Tok starts Q::word, where Q denotes the global namespace cppverify
+  /// and word names a construct, turn it into one annot_cppverify token.
+  /// In \p Position, a construct word written without the qualifier is
+  /// diagnosed and annotated too when it names nothing.
+  bool tryAnnotateCppVerify(unsigned Position);
+  CppVerifyConstruct getCppVerifyConstruct(const Token &T) const;
+  bool isCppVerify(CppVerifyConstruct C) const {
+    return Tok.is(tok::annot_cppverify) && getCppVerifyConstruct(Tok) == C;
+  }
+  /// Consume an annot_cppverify token, recording its reference for tools.
+  SourceLocation ConsumeCppVerify();
+  /// Diagnose a construct written where it does not belong, and skip it.
+  void diagnoseMisplacedCppVerify();
 
+  /// The clauses written after a function declarator.
+  struct FunctionContractClauses {
+    FunctionContractInfo Info;
+    bool Present = false;
+  };
+  /// Whether Tok starts a function clause, after a declarator.
+  bool isFunctionContractClause();
+  void ParseFunctionContractClauses(ParsingDeclarator &D,
+                                    FunctionContractClauses &Clauses);
+  void attachFunctionContract(Decl *Function, FunctionContractClauses &Clauses);
+  /// A declaration ending in ';' after its clauses.
+  Decl *
+  ParseContractedFunctionDeclaration(ParsingDeclarator &D,
+                                     const ParsedTemplateInfo &TemplateInfo,
+                                     FunctionContractClauses &Clauses);
+  /// Parses the proof blocks of the clauses of the function definition
+  /// \p Function, cached until its parameters are in scope.
+  void ParseContractClauseProofs(Decl *Function);
+
+  /// Parse invariant/decreases/modifies clauses on an iteration statement.
+  void ParseLoopContractClauses(LoopContractInfo &Contract);
+  void attachLoopContract(StmtResult &Loop, LoopContractInfo &Contract);
   /// Parse the footprints of a modifies clause up to its ')'.
   void ParseContractFootprints(SmallVectorImpl<Expr *> &Footprints);
 
-  /// Parse ghost { ... } block.
+  /// A cpp-verify statement at Tok: ghost, check, calc, reveal_with_fuel,
+  /// hide, or reveal. \p SemiError names a statement that ends in ';'.
+  StmtResult ParseCppVerifyStatement(const char *&SemiError);
   StmtResult ParseGhostBlock();
-
-  /// Parse calc { e0; op [{ proof }] e1; ... }, which proves e0 R en.
   StmtResult ParseCalcStatement();
-
-  /// Parse contract_assert(expr);
   StmtResult ParseContractAssert();
-
-  /// Parse reveal_with_fuel(fn, depth);
   StmtResult ParseRevealWithFuel();
   StmtResult ParseHideSpec();
-  void ParseTypeInvariant(Decl *TagDecl);
   StmtResult ParseRevealSpec();
+  void ParseTypeInvariant(Decl *TagDecl);
+  /// spec or proof among the declaration specifiers.
+  bool ParseCppVerifySpecifier(DeclSpec &DS, bool &IsInvalid,
+                               const char *&PrevSpec, unsigned &DiagID,
+                               SourceLocation &ConsumedEnd);
 
-  /// Parse forall(binder, lo, hi, body) or exists(binder, lo, hi, body).
+  /// A cpp-verify expression at Tok: forall, exists, choose, old, result,
+  /// or trigger.
+  ExprResult ParseCppVerifyExpression();
   ExprResult ParseQuantifierExpr();
-
-  /// Parse old(expr).
   ExprResult ParseOldExpr();
-
-  /// Parse 'result' keyword in postconditions.
   ExprResult ParseResultExpr();
 
   /// True when we are currently parsing a postcondition expression.
@@ -7506,6 +7524,12 @@ public:
     CachedTokens Toks;
   };
   SmallVector<PendingClauseProof, 1> PendingClauseProofs;
+  /// The constructs written before the declaration they belong to exists.
+  SmallVector<Expr *, 4> PendingCppVerifyReferences;
+  /// How many contract clauses or ghost constructs enclose Tok, where a bare
+  /// construct word is likely meant qualified.
+  unsigned CppVerifyContextDepth = 0;
+  bool DiagnosedMissingCppVerifyHeader = false;
   /// True when parsing a loop invariant; old(...) denotes function entry.
   bool InLoopContractInvariant = false;
   /// True while parsing a modifies footprint, where p[start : length] names
@@ -7516,10 +7540,6 @@ public:
   unsigned QuantifierBodyDepth = 0;
   /// True while parsing the operand of old(...).
   bool InOldExpression = false;
-  /// True while parsing the body of a function that has contract clauses.
-  bool InContractedFunction = false;
-  /// True while parsing pre/post/decreases/recommends or loop invariant/decreases.
-  bool InParsingContractExpr = false;
 
   /// The return type of the function whose contracts we are currently
   /// parsing, extracted from the DeclSpec before the FunctionDecl exists.
