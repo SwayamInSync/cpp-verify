@@ -7466,6 +7466,11 @@ public:
   SourceLocation ConsumeCppVerify();
   /// Diagnose a construct written where it does not belong, and skip it.
   void diagnoseMisplacedCppVerify();
+  /// End the full-expression that a clause argument, an assertion, or a calc
+  /// term forms, so its temporaries do not belong to the code after it.
+  ExprResult finishCppVerifyExpression(ExprResult E) {
+    return Actions.MaybeCreateExprWithCleanups(E);
+  }
 
   /// The clauses written after a function declarator.
   struct FunctionContractClauses {
