@@ -1,5 +1,5 @@
 // RUN: %clang_cc1 -std=c++17 -fverify-contracts -emit-obj -o %t.o %s
-// RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 enum class State : unsigned { Idle, Ready };
 
