@@ -2,13 +2,13 @@
 // RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 int valid_count(int n)
-  pre(n >= 0 && n <= 20)
-  post(result == n)
+  cppverify::pre(n >= 0 && n <= 20)
+  cppverify::post(cppverify::result == n)
 {
   int i = 0;
   while (i < n)
-    invariant(i >= 0 && i <= n)
-    decreases(n - i)
+    cppverify::invariant(i >= 0 && i <= n)
+    cppverify::decreases(n - i)
   {
     ++i;
   }
@@ -16,12 +16,12 @@ int valid_count(int n)
 }
 
 int invalid_invariant_entry(int n)
-  pre(n == 0)
-  post(result == 0)
+  cppverify::pre(n == 0)
+  cppverify::post(cppverify::result == 0)
 {
   int i = 0;
   while (i < n)
-    invariant(i > 0)
+    cppverify::invariant(i > 0)
   {
     ++i;
   }
@@ -29,12 +29,12 @@ int invalid_invariant_entry(int n)
 }
 
 int invalid_invariant_preservation(int n)
-  pre(n == 1)
-  post(result >= 0)
+  cppverify::pre(n == 1)
+  cppverify::post(cppverify::result >= 0)
 {
   int i = 0;
   while (i < n)
-    invariant(i == 0)
+    cppverify::invariant(i == 0)
   {
     ++i;
   }
@@ -42,13 +42,13 @@ int invalid_invariant_preservation(int n)
 }
 
 int invalid_decreases(int n)
-  pre(n > 0 && n <= 20)
-  post(result == n)
+  cppverify::pre(n > 0 && n <= 20)
+  cppverify::post(cppverify::result == n)
 {
   int i = 0;
   while (i < n)
-    invariant(i >= 0 && i <= n)
-    decreases(i)
+    cppverify::invariant(i >= 0 && i <= n)
+    cppverify::decreases(i)
   {
     ++i;
   }
