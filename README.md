@@ -6,7 +6,7 @@ Formal verification lets you treat correctness as an engineering artifact: you s
 
 📖 **[Documentation](https://swayaminsync.github.io/cpp-verify/)** — install guide, the book (Part I–II), language reference, and Doxygen API.
 
-This repository is an [LLVM/Clang](https://github.com/llvm/llvm-project) fork (base `llvmorg-22.1.3`) with a verification engine in `clang/lib/Verify`, discharged by Z3, cvc5, or Lean.
+This repository is an [LLVM/Clang](https://github.com/llvm/llvm-project) fork (base `llvmorg-23.1.3`) with a verification engine in `clang/lib/Verify`, discharged by Z3, cvc5, or Lean.
 
 ## Install
 
@@ -35,6 +35,8 @@ git clone --recurse-submodules https://github.com/SwayamInSync/cpp-verify.git
 cd cpp-verify
 .\setup.ps1
 ```
+
+Prebuilt archives for Linux x86_64 and macOS arm64 are attached to each [release](https://github.com/SwayamInSync/cpp-verify/releases).
 
 Binaries: `build/bin/cpp-verify`, `build/bin/clang++`, `build/bin/clangd`, and `build/bin/clang-format` (on Windows, under `build\bin\`).
 
