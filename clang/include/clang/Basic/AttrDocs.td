@@ -10485,3 +10485,16 @@ The attribute is also supported with blocks and in Objective-C.
   }
   }];
 }
+
+def CppVerifyTrustedDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+``[[cppverify::trusted]]`` marks a function's cpp-verify contract as assumed
+instead of verified. On a declaration the contract holds at every call, whose
+preconditions are still checked; on a definition the body is compiled but not
+verified; on a proof function the postcondition is an axiom. A spec function
+cannot be trusted. Every verdict that relies on a trusted contract names it
+(``[trusts=f]``). The attribute is written on each function: ``#pragma clang
+attribute`` cannot apply it. Without ``-fverify-contracts`` it has no effect.
+  }];
+}
