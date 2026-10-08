@@ -1,4 +1,4 @@
-// RUN: %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 
 cppverify::spec int inc_s(int x) { return x + 1; }
 cppverify::spec int add_s(int x, int y) { return x + y; }
