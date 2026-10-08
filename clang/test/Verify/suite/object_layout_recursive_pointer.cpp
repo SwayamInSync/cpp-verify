@@ -12,7 +12,7 @@ struct Node {
 };
 
 unsigned long node_size()
-  post(result == sizeof(Node))
+  cppverify::post(cppverify::result == sizeof(Node))
 {
   return sizeof(Node);
 }
