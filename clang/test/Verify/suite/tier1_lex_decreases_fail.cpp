@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=VERIFY
 // Tier-1: the body resets i = a after decrementing, so the tuple (i, j) does
 // not decrease lexicographically -- termination fails.
 int bad_lex(int a, int b)
