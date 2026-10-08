@@ -1,6 +1,6 @@
-// RUN: not %cpp-verify %s 2>&1 | FileCheck %s --check-prefixes=CHECK,DEDUCTIVE
-// RUN: not %cpp-verify --backend=bmc --unroll=1 %s 2>&1 | FileCheck %s --check-prefixes=CHECK,BMC
-// RUN: not %cpp-verify --int-encoding=integer %s 2>&1 | FileCheck %s --check-prefixes=CHECK,DEDUCTIVE
+// RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefixes=CHECK,DEDUCTIVE
+// RUN: not %cpp-verify --backend=bmc --unroll=1 %s -- 2>&1 | FileCheck %s --check-prefixes=CHECK,BMC
+// RUN: not %cpp-verify --int-encoding=integer %s -- 2>&1 | FileCheck %s --check-prefixes=CHECK,DEDUCTIVE
 //
 // Contract arithmetic is mathematical, as in ACSL and Verus spec code:
 // integer operands are read exactly, no operation wraps or overflows, and an
