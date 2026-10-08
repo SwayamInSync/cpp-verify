@@ -6,7 +6,7 @@
 // RUN: not grep -q 'Z3 check:' %t.lean
 
 int invalid_lean_export(int x)
-  post(result == x + 1)
+  cppverify::post(cppverify::result == x + 1)
 {
   return x;
 }
