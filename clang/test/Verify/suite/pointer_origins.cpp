@@ -1,5 +1,5 @@
-// RUN: not %cpp-verify --timeout=30000 %s 2>&1 | FileCheck %s
-// RUN: %cpp-verify --lower-only --dump-ir=1 %s 2>&1 \
+// RUN: not %cpp-verify --timeout=30000 %s -- 2>&1 | FileCheck %s
+// RUN: %cpp-verify --lower-only --dump-ir=1 %s -- 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=VCR
 //
 // Every pointer variable has origins: the objects it may address. Pointer
