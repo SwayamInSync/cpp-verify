@@ -1,4 +1,4 @@
-// RUN: not %cpp-verify --backend=bmc --unroll=3 %s 2>&1 | FileCheck %s
+// RUN: not %cpp-verify --backend=bmc --unroll=3 %s -- 2>&1 | FileCheck %s
 //
 // A bounded proof that no execution reaches says nothing, as Kani reports
 // an unreachable check: under BMC the vacuity checks run on the program
