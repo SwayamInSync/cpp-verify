@@ -1,10 +1,10 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify --check-ub %s 2>&1 | FileCheck %s --check-prefixes=CHECK,DECIDED
-// RUN: not %cpp-verify --check-ub --int-encoding=bitvector --timeout=5000 %s 2>&1 | FileCheck %s --check-prefixes=CHECK,BV
-// RUN: %cpp-verify --check-ub --lower-only --dump-ir=1 %s 2>&1 | FileCheck %s --check-prefix=VCR
-// RUN: %cpp-verify --check-ub --lower-only --dump-ir=2 %s 2>&1 | FileCheck %s --check-prefix=PASSIVE
-// RUN: %cpp-verify --check-ub --lower-only --dump-ir=3 %s 2>&1 | FileCheck %s --check-prefix=VC
-// RUN: not %cpp-verify --no-check-ub %s 2>&1 | FileCheck %s --check-prefix=NOUB
+// RUN: not %cpp-verify --check-ub %s -- 2>&1 | FileCheck %s --check-prefixes=CHECK,DECIDED
+// RUN: not %cpp-verify --check-ub --int-encoding=bitvector --timeout=5000 %s -- 2>&1 | FileCheck %s --check-prefixes=CHECK,BV
+// RUN: %cpp-verify --check-ub --lower-only --dump-ir=1 %s -- 2>&1 | FileCheck %s --check-prefix=VCR
+// RUN: %cpp-verify --check-ub --lower-only --dump-ir=2 %s -- 2>&1 | FileCheck %s --check-prefix=PASSIVE
+// RUN: %cpp-verify --check-ub --lower-only --dump-ir=3 %s -- 2>&1 | FileCheck %s --check-prefix=VC
+// RUN: not %cpp-verify --no-check-ub %s -- 2>&1 | FileCheck %s --check-prefix=NOUB
 
 // Under --check-ub the non-aliasing default separates whole valid(p, n)
 // extents; callers prove it, and `aliases` pairs may still overlap.
