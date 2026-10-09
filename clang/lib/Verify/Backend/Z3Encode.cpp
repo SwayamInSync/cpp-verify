@@ -533,6 +533,13 @@ z3::expr Z3Encoder::integerArithOp(const VCExpr *E, z3::expr L, z3::expr R) {
     return machineBits(Value, OperandSort);
   };
   auto fromBits = [&](z3::expr Bits) { return z3::bv2int(Bits, Signed); };
+  // The left operand's bits are named first, whatever the compiler's order of
+  // argument evaluation.
+  auto bitwise = [&](auto Combine) {
+    z3::expr Left = toBits(L, Sort);
+    z3::expr Right = toBits(R, RightSort);
+    return fromBits(Combine(Left, Right));
+  };
   // Shift amounts are read as unsigned w-bit patterns, as in SMT-LIB.
   auto constantAmount = [&]() -> std::optional<llvm::APInt> {
     std::string Numeral;
@@ -584,12 +591,12 @@ z3::expr Z3Encoder::integerArithOp(const VCExpr *E, z3::expr L, z3::expr R) {
       if ((Bits + 1).isPowerOf2() || Bits.isZero())
         return z3::mod(Value, powerOfTwo((Bits + 1).logBase2()));
     }
-    return fromBits(toBits(L, Sort) & toBits(R, RightSort));
+    return bitwise([](z3::expr A, z3::expr B) { return A & B; });
   }
   case VCExpr::BitOr:
-    return fromBits(toBits(L, Sort) | toBits(R, RightSort));
+    return bitwise([](z3::expr A, z3::expr B) { return A | B; });
   case VCExpr::BitXor:
-    return fromBits(toBits(L, Sort) ^ toBits(R, RightSort));
+    return bitwise([](z3::expr A, z3::expr B) { return A ^ B; });
   case VCExpr::Shl:
   case VCExpr::Shr: {
     std::optional<llvm::APInt> Amount = constantAmount();
