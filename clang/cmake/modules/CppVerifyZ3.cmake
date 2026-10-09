@@ -46,7 +46,12 @@ function(cppverify_z3_build_external)
   set(_prefix  "${CMAKE_BINARY_DIR}/cppverify-z3")
   set(_install "${_prefix}/install")
   set(_incdir  "${_install}/include")
-  set(_libpath "${_install}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}z3${CMAKE_STATIC_LIBRARY_SUFFIX}")
+  # Z3 names its library z3, except with MSVC, where it keeps libz3.
+  if(MSVC)
+    set(_libpath "${_install}/lib/libz3${CMAKE_STATIC_LIBRARY_SUFFIX}")
+  else()
+    set(_libpath "${_install}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}z3${CMAKE_STATIC_LIBRARY_SUFFIX}")
+  endif()
 
   if(Z3EP_SOURCE_DIR)
     set(_src_args SOURCE_DIR "${Z3EP_SOURCE_DIR}")
