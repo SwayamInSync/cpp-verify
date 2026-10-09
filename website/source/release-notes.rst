@@ -25,8 +25,10 @@ Lean 4.32.2 are optional and found on ``PATH``.
 
 **Install.** Archives for Linux x86_64 and macOS arm64 are attached to the
 release on GitHub; each holds ``cpp-verify``, ``clang``/``clang++``,
-``clangd``, ``clang-format``, and Clang's headers. On other systems, including
-Windows, build from source with ``setup.sh`` or ``setup.ps1``
+``clangd``, ``clang-format``, and Clang's headers. The macOS binaries are not
+notarized; if macOS refuses to open one downloaded with a browser, run
+``xattr -dr com.apple.quarantine`` on the unpacked directory. On other systems,
+including Windows, build from source with ``setup.sh`` or ``setup.ps1``
 (:doc:`index`).
 
 **Language.** Every construct is written qualified, ``cppverify::pre(...)``,
@@ -41,8 +43,12 @@ collections, behaviors, inductive predicates, and automatic induction, over
 integers, flat records, abstract buffers, scalar references, and constrained
 pointer lifetimes. Backends: Z3 (default), cvc5, a strict Z3 and cvc5
 portfolio, a race of both, bounded model checking, and Lean export and kernel
-certification. ``Verified`` is a proof, ``Failed`` a certified
-counterexample, and anything else ``Unresolved`` with a reason.
+certification. On the solver backends ``Verified`` is a proof, a failure
+(``error: verification failed``) is a counterexample checked against the true
+definitions, and anything else is ``Unresolved`` with a reason. BMC reports
+``BoundedSafe`` when no failure exists within its bound, Lean export
+``Exported``, Lean certification ``Certified`` or ``Proved (z3+lean)``, and a
+``[[cppverify::trusted]]`` contract ``Trusted``.
 
 **Editors.** clangd from this release gives hover, go to definition, find
 references, rename, and completion inside contracts, and clang-format lays
@@ -54,6 +60,9 @@ v4.
 
 **Not yet verified.** Member functions, templates, floating point,
 exceptions, lambdas, virtual dispatch, ``switch`` and range-``for``, and the
-standard library's containers; a function using them fails closed. Contracts
-are not saved in precompiled headers. The full boundary is in
-:doc:`language/limitations`.
+standard library's containers. Contracts on member functions are ignored with
+a warning (``-Wcontract-unsupported``). A contracted function that uses one of
+the others fails closed: the run stops with an error naming the construct and
+reports no verdicts for the file. Contracts are not saved in precompiled
+headers.
+The full boundary is in :doc:`language/limitations`.
