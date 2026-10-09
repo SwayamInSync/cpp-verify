@@ -60,7 +60,7 @@
 - Different paradigm (bounded model checking, not deductive). Useful reference for:
   - Bit-precise C semantics encoding
   - Automatic property generation (bounds checks, overflow, null deref)
-  - Future BMC backend for our tool
+  - Our BMC backend (`--backend=bmc`)
 
 ## Verification Automation and Scaling
 
@@ -100,10 +100,12 @@
   transition-system fragments.
 
 ### Verification caching
-- **Paper**: "Cache-a-lot: Scalable Verification through Aggressive Caching"
+- **Paper**: "Cache-a-lot: Pushing the Limits of Unsatisfiable Core Reuse in
+  SMT-Based Program Analysis"
 - **URL**: https://arxiv.org/abs/2504.07642
-- **Why**: Dependency-aware, content-addressed reuse of verification results
-  across incremental builds.
+- **Why**: Unsatisfiable-core reuse for SMT-based program analysis: an unsat
+  result is reused for later queries under variable substitutions, which
+  reduces solver calls.
 
 ### Proof-certificate research
 - **Boogie proof generation**:
@@ -119,7 +121,7 @@
 
 - Clang Internals Manual: https://clang.llvm.org/docs/InternalsManual.html
 - LLVM Programmer's Manual: https://llvm.org/docs/ProgrammersManual.html
-- Clang source: study `ParseStmt.cpp`, `ParseDecl.cpp`, `Stmt.h`, `Expr.h`, `TokenKinds.def`
+- Clang source: study `ParseStmt.cpp`, `ParseDecl.cpp`, `Stmt.h`, `Expr.h`, `clang/include/clang/Basic/CppVerifyConstructs.def`, `clang/lib/Parse/ParseCppVerify.cpp`
 - Eric Fiselier's Clang contracts fork (P2900): available on Compiler Explorer, reference for how contracts are parsed in practice
 
 ## Key Concepts Glossary
