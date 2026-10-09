@@ -601,8 +601,9 @@ void Parser::ParseFunctionContractClauses(ParsingDeclarator &D,
       for (const Behavior &B : Behaviors)
         Assumptions.push_back(B.Assumes);
     for (const auto &[Name, NameLoc] : Relation.Names) {
-      auto It = llvm::find_if(
-          Behaviors, [&](const Behavior &B) { return B.Name == Name; });
+      auto It = llvm::find_if(Behaviors, [Name = Name](const Behavior &B) {
+        return B.Name == Name;
+      });
       if (It == Behaviors.end())
         Diag(NameLoc, diag::err_contract_behavior_unknown) << Name;
       else
