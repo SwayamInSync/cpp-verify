@@ -55,9 +55,9 @@ run_one() {
   elif grep -q '%cpp-verify --backend=bmc' "$f" 2>/dev/null; then
     extra_args=(--backend=bmc)
   fi
-  # Undefined-behavior checking is opt-in per test via the RUN line.
-  if grep -qE '(not )?%cpp-verify --check-ub' "$f" 2>/dev/null; then
-    extra_args+=(--check-ub)
+  # Memory checking is the default; mirror a RUN line that turns it off.
+  if grep -qE '%cpp-verify .*--no-check-ub' "$f" 2>/dev/null; then
+    extra_args+=(--no-check-ub)
   fi
 
   # Hard wall-clock cap per test. cpp-verify ignores SIGTERM (LLVM installs
