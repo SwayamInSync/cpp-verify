@@ -17,7 +17,8 @@ CppVerify proves ``Hypothesis ⇒ Goal`` by checking unsatisfiability of ``Hypot
    :alt: Verification checks UNSAT of hypothesis combined with negated goal
 
 If Z3 returns **unsat**, no counterexample exists — the implication holds in the modeled theory.
-If **sat**, the model is a **counterexample** (concrete values for variables).
+If **sat**, the model is a candidate **counterexample** (concrete values for variables); CppVerify
+reports it only after checking it against the true definitions of the spec functions.
 
 Weakest precondition calculus
 -----------------------------
