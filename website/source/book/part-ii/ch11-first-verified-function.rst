@@ -45,10 +45,11 @@ Compile the same file
 
 .. code-block:: bash
 
-   clang++ -std=c++17 -fverify-contracts -c abs.cpp -o abs.o
+   ./build/bin/clang++ -std=c++17 -fverify-contracts -c abs.cpp -o abs.o
 
 Verification runs in parallel; ghost code is stripped — no runtime contract overhead.
 
-Larger programs compose **modularly**: callee contracts are assumed at call sites, including nested
+Larger programs compose **modularly**: at a call site the caller proves the callee's precondition
+and assumes its postcondition, including nested
 calls such as ``return f(g(x))`` (see :doc:`ch17-backends-modular-calls`).
 
