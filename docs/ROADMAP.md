@@ -1,6 +1,6 @@
 # Roadmap
 
-## Current product checkpoint
+## Release 0.1.0 (based on LLVM 23.1.3)
 
 The end-to-end MVP gate is achieved and permanently exercises:
 
@@ -39,7 +39,7 @@ across ownership-taking interfaces.
 ## Historical 2-Month MVP Timeline
 
 The original plan, kept for history. Its checkboxes were not maintained; the
-checkpoint above and the list below track current status. The planned `--bv`
+release section above and the list below track current status. The planned `--bv`
 flag was superseded by `--int-encoding`. The plan predates the qualified
 syntax: its constructs are keywords (`KEYCONTRACT` in `TokenKinds.def`), which
 became `cppverify::`-qualified names in October 2026 (DESIGN, "Construct
@@ -202,13 +202,13 @@ recognition").
 
 ### Ring 4: Advanced Quantifiers and Specs
 
-- Unbounded quantifiers `cppverify::forall(i: T, body)`
-- Manual trigger annotations `cppverify::trigger(...)`
-- `cppverify::choose` (Hilbert ε) for spec functions
+- [x] Unbounded quantifiers `cppverify::forall(i, body)`
+- [x] Manual trigger annotations `cppverify::trigger(...)`
+- [x] `cppverify::choose` (Hilbert ε) for spec functions
 - [x] Heap-reading spec functions
-- `cppverify::reads` frames for heap-reading specs
+- [x] `cppverify::reads` frames for heap-reading specs
 - Floating-point semantics (IEEE 754 through SMT floating-point theories)
-- Quantifier-instantiation profiling exposed via verifier flags
+- [x] Quantifier-instantiation profiling (`--profile-quantifiers`)
 
 ### Ring 5: Advanced Backends
 
