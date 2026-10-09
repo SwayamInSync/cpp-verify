@@ -359,9 +359,12 @@ instantiated thousands of times (see :doc:`ch16-when-verification-fails`).
 Prefer a lemma with a parameter, which is used exactly where it is called,
 to a quantified fact whose trigger recreates itself.
 
-A proof function cannot yet prove ``cppverify::forall(k, ...)`` by induction, since its
-body cannot name the bound ``k``; state the lemma for a parameter, as
-``sorted_pair`` does, and quantify in the caller's precondition.
+A proof function can prove ``cppverify::forall(k, ...)`` from a lemma
+stated for a parameter, as ``sorted_pair`` is: in
+``cppverify::check(cppverify::forall(k, lo, hi, P)) by { ... }`` the block
+names an arbitrary ``k`` in ``[lo, hi)``, and a lemma call there is the
+instance for that ``k`` (``below_last`` in
+:doc:`ch13-spec-and-proof-functions`).
 
 Existence and choice
 --------------------
@@ -550,8 +553,10 @@ The step also needs a fact about sequences: dropping the last element of
 ``s + t`` leaves ``s`` followed by ``t`` without its last element. The
 verifier knows how an element is read from a concatenation, a push, or a
 subrange, and how a subrange of a concatenation splits, so it finds that
-itself. No solver finds the induction itself; the recursive call is yours,
-as in Verus and Dafny.
+itself. CppVerify's automatic induction also proves ``total_concat`` with an
+empty body, ``[by induction following total]``, but slowly (about two
+minutes with four jobs); the recursive call states the induction hypothesis
+and makes the proof fast and robust.
 
 Sometimes the step needs a sequence equality that the solver does not see.
 State it: an equality of sequences that a proof asserts is proved element by
