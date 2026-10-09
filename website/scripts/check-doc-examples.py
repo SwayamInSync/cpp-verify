@@ -166,18 +166,23 @@ def name_of(verdict):
 
 
 def check(cpp_verify, job):
+    """Returns None, or a failure message and whether every mismatch is a
+    function left unresolved where a proof was expected, which only the
+    wall-clock budgets of a loaded machine can cause."""
     block, source, arguments, expected, fails, unresolved = job
     where = f"{block.page}:{block.line}"
     code, output = run(cpp_verify, source, ["--lower-only", *arguments], 300)
     if code is None or code != 0 or "error:" in output:
-        return f"{where}: the example does not compile:\n{output.strip()[:1500]}"
+        return f"{where}: the example does not compile:\n{output.strip()[:1500]}", False
     code, output = run(cpp_verify, source,
                        [f"--jobs={SOLVER_JOBS}", *arguments], 900)
     if code is None:
-        return f"{where}: verifying the example timed out"
+        return f"{where}: verifying the example timed out", False
+    given = verdicts(output)
+    unproved = {name_of(verdict) for verdict in given if verdict[0] == "Unresolved"}
     if not expected:
         wrong = []
-        for verdict in sorted(verdicts(output)):
+        for verdict in sorted(given):
             status, name = verdict[0], name_of(verdict)
             if status == "Failed" and name in fails:
                 continue
@@ -188,15 +193,16 @@ def check(cpp_verify, job):
         if wrong:
             return (f"{where}: the example does not verify, and no comment "
                     f"says which functions fail or stay unresolved:\n" +
-                    "\n".join(wrong) + f"\nactual output:\n{output.strip()[:2500]}")
+                    "\n".join(wrong) + f"\nactual output:\n{output.strip()[:2500]}",
+                    all(line.startswith("  Unresolved: ") for line in wrong))
         return None
-    if code is None:
-        return f"{where}: verifying the example timed out"
-    missing = expected - verdicts(output)
+    missing = expected - given
     if missing:
         shown = "\n".join(f"  {status}: {name}" for status, name in sorted(missing))
         return (f"{where}: the page shows verdicts the verifier does not give:\n"
-                f"{shown}\nactual output:\n{output.strip()[:2500]}")
+                f"{shown}\nactual output:\n{output.strip()[:2500]}",
+                all(status == "Verified" and name_of((status, name)) in unproved
+                    for status, name in missing))
     return None
 
 
@@ -244,11 +250,25 @@ def main():
                          set(modes.get("unresolved", []))))
 
     failures = []
+    alone = []
     with concurrent.futures.ThreadPoolExecutor(options.jobs) as pool:
-        for failure in pool.map(lambda job: check(options.cpp_verify, job),
-                                jobs):
-            if failure:
-                failures.append(failure)
+        for job, result in zip(jobs, pool.map(
+                lambda job: check(options.cpp_verify, job), jobs)):
+            if result is None:
+                continue
+            message, unproved_only = result
+            if unproved_only:
+                alone.append(job)
+            else:
+                failures.append(message)
+    # An example left unresolved beside the others is checked again alone.
+    for job in alone:
+        result = check(options.cpp_verify, job)
+        if result is None:
+            print(f"note: {job[0].page}:{job[0].line}: verified when checked "
+                  f"alone", file=sys.stderr)
+        else:
+            failures.append(result[0])
     for failure in failures:
         print(failure, end="\n\n")
     shown = sum(1 for job in jobs if job[3])
