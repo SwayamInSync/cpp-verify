@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="${BUILD_DIR:-$ROOT/build}"
 
-if [ -f "$ROOT/.gitmodules" ] && command -v git >/dev/null 2>&1; then
+if [ -e "$ROOT/.git" ] && command -v git >/dev/null 2>&1; then
   echo "==> Initializing submodules (Z3)"
   git -C "$ROOT" submodule update --init third_party/z3
 fi
@@ -40,8 +40,9 @@ cmake -S "$ROOT/llvm" -B "$BUILD_DIR" -G "$GENERATOR" \
   ${PLATFORM_ARGS[@]+"${PLATFORM_ARGS[@]}"}
 
 echo "==> Building clang, cpp-verify, clangd, and clang-format"
-JOBS="${JOBS:-$( (nproc 2>/dev/null) || echo 8 )}"
-ninja -C "$BUILD_DIR" -j"$JOBS" clang cpp-verify clangd clang-format
+JOBS_ARGS=()
+if [ -n "${JOBS:-}" ]; then JOBS_ARGS=(-j"$JOBS"); fi
+ninja -C "$BUILD_DIR" ${JOBS_ARGS[@]+"${JOBS_ARGS[@]}"} clang cpp-verify clangd clang-format
 
 echo ""
 echo "Done."
