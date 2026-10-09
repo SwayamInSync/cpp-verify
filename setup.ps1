@@ -1,5 +1,6 @@
 # Build Clang + cpp-verify with vendored Z3 on Windows (no separate Z3 install).
-# Requires: CMake, Ninja (or use Visual Studio generator), MSVC Build Tools, Git.
+# Requires: CMake, Ninja (or use Visual Studio generator), MSVC Build Tools, Git, Python 3.
+# With Ninja, run from an x64 Developer PowerShell or Native Tools prompt for VS.
 param(
     [string]$BuildDir = "",
     [string]$Generator = "Ninja",
@@ -18,7 +19,12 @@ function Require-Command($name) {
 }
 
 Require-Command cmake
-if ($Generator -eq "Ninja") { Require-Command ninja }
+if ($Generator -eq "Ninja") {
+    Require-Command ninja
+    if (-not (Get-Command cl -ErrorAction SilentlyContinue)) {
+        Write-Error "MSVC's cl is not on PATH. Run from an x64 Developer PowerShell or Native Tools prompt for VS, or pass -Generator 'Visual Studio 17 2022'."
+    }
+}
 Require-Command git
 
 Write-Host "==> Configuring LLVM + Clang + CppVerify (vendored Z3)"
@@ -41,7 +47,7 @@ if ($LASTEXITCODE -ne 0) { Write-Error "Configuration failed." }
 Write-Host "==> Building clang, cpp-verify, clangd, and clang-format"
 if ($Generator -match "Visual Studio") {
     & cmake --build $BuildDir --config $BuildType --target clang cpp-verify clangd clang-format --parallel
-    $BinDir = Join-Path $BuildDir "bin\$BuildType"
+    $BinDir = Join-Path $BuildDir "$BuildType\bin"
 } else {
     & cmake --build $BuildDir --target clang cpp-verify clangd clang-format --parallel
     $BinDir = Join-Path $BuildDir "bin"
