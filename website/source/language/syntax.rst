@@ -3,11 +3,15 @@ Contract syntax
 
 Every construct is written qualified by the namespace ``cppverify``:
 ``cppverify::pre(x > 0)``, ``cppverify::check(e)``, ``cppverify::forall(k, ...)``.
-A namespace alias shortens it, and the examples of this reference use one:
+A namespace alias shortens it. The examples of this reference write the
+constructs through the alias ``cv`` and use the names of ``<cppverify.h>``
+(``valid``, ``seq``, ``set``, ``multiset``, ``map``) unqualified, as a file
+does after ``namespace cv = cppverify;`` and ``using namespace cppverify;``:
 
 .. code-block:: cpp
 
    namespace cv = cppverify;
+   using namespace cppverify;
 
    int abs_value(int x)
      cv::pre(x > -2147483647 - 1)
@@ -101,11 +105,11 @@ Full table:
      - Statement
      - Chain of proved steps
    * - ``cppverify::reveal_with_fuel(f, n)``
-     - In ``cppverify::ghost { }``
-     - Unfold recursive spec ``f`` up to depth ``n``
+     - Statement anywhere in a function body, ghost blocks included
+     - Unfold recursive spec ``f`` up to depth ``n`` in the whole function
    * - ``cppverify::reveal(f)`` / ``cppverify::hide(f)``
-     - In ``cppverify::ghost { }``
-     - Make spec ``f`` transparent / opaque locally
+     - Statement anywhere in a function body, ghost blocks included
+     - Make spec ``f`` transparent / opaque in the whole function
    * - ``cppverify::forall(i, lo, hi, e)``
      - Expression
      - Bounded ``∀`` over ``[lo, hi)``
