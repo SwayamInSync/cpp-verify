@@ -20,8 +20,10 @@ This page separates four different situations:
    * - **Partial**
      - A documented fragment works; neighboring forms are rejected.
    * - **Trusted**
-     - An interface contract is assumed because its body is unavailable, not
-       proved by CppVerify.
+     - An interface contract marked ``[[cppverify::trusted]]`` is assumed, not
+       proved by CppVerify: on a declaration, on a definition (whose body is
+       compiled but not verified), or on a proof function (whose
+       postcondition is an axiom).
    * - **Incomplete automation**
      - The semantics are represented soundly, but Z3 may need user lemmas or
        return ``unknown``.
@@ -122,11 +124,13 @@ C++ feature boundaries
      - Non-trivial, inherited, polymorphic, union, and bit-field records, and
        nested/pointer/array-bearing records used by value.
    * - Functions
-     - Free functions, overloads, namespaces, contracts, direct calls,
-       scalar-state direct and mutual recursion, with mutual recursion among
-       functions of one kind (spec, proof, or executable).
-     - Member functions, templates, variadics, indirect calls,
-       heap-mutating executable recursion, and general link-time summaries.
+     - Free functions, overloads, namespaces, contracts, direct calls, and
+       direct and mutual recursion, also through stores to pointer and
+       reference parameters and through automatic objects, with mutual
+       recursion among functions of one kind (spec, proof, or executable).
+     - Member functions (their contracts are ignored with a warning),
+       templates, variadics, indirect calls, recursion through a function
+       that allocates or frees storage, and general link-time summaries.
    * - Storage
      - Supported locals, constrained scalar dynamic storage, and inferred
        acyclic fresh-owned scalar factory results.
@@ -148,6 +152,13 @@ C++ feature boundaries
 An unsupported syntax case is not considered implemented merely because Clang
 can parse it. It also needs VCR semantics, C++ definedness rules, modular
 effects, backend encoding, and false-proof coverage.
+
+A contracted free function that uses an unsupported construct (a ``switch``,
+say) fails closed: the construct is reported as an error, and then no
+function of the file gets a verdict. Contracts on member functions are
+instead ignored with a warning (``-Wcontract-unsupported``: "contracts on
+member functions are not yet supported and are ignored ..."), and the run
+continues with the other functions.
 
 Objects, classes, and RAII
 --------------------------
@@ -196,9 +207,10 @@ same-object aliasing; it does not establish arbitrary partial overlap or create
 provenance.
 
 A returned pointer must be dereferenceable: the implicit postcondition that
-callers rely on rejects a one-past-the-end result. ``valid`` is an ordinary
-user-declared spec, so a program declares one per pointee type it uses
-(``valid(int *, int)``, ``valid(const int *, int)``).
+callers rely on rejects a one-past-the-end result. ``cppverify::valid`` of
+``<cppverify.h>`` covers every pointee type; a user-declared spec named
+``valid`` with a pointer and an integer parameter is still recognized as the
+same marker.
 
 Scalar lvalue references and automatic locals
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -315,8 +327,8 @@ when the caller owns the identity. Body-derived fresh-owned returns additionally
 transfer one initialized scalar allocation through acyclic in-translation-unit
 factories; external contracts cannot claim this effect. Missing effect concepts
 include general allocation/deallocation contracts, parameter ownership
-transfer, escape sets, separate read footprints, global state, exceptional
-cleanup, lock state, and concurrency interference.
+transfer, escape sets, separate read footprints, non-integral or aggregate
+global state, exceptional cleanup, lock state, and concurrency interference.
 
 Contracts marked ``[[cppverify::trusted]]`` are assumed. CppVerify checks
 callers against their preconditions but cannot prove an unavailable or
@@ -399,16 +411,21 @@ Current proof-language limitations include:
   included where it provably never wraps over the range; otherwise, as with
   division, wrapping arithmetic, or a spec applied to the bound variable, it
   may be reported as ``counterexample.unchecked`` instead of a failure;
-- a heap-reading spec without a ``cppverify::reads`` clause is not framed: preservation
-  across an unrelated write needs unfolding. A ``cppverify::reads`` range is a pointer
-  and an element count; ranges that depend on the heap, such as a linked list,
-  are not supported, and frames are not carried across loops or calls that
-  do not name their written cells exactly;
+- a heap-reading spec without a ``cppverify::reads`` clause is not framed: that its
+  value is preserved across an unrelated write must be proved by induction
+  over the spec, which the verifier tries automatically at a cost in solver
+  time, while ``cppverify::reads(p, n)`` gives it directly. A ``cppverify::reads`` range
+  is a pointer and an element count; ranges that depend on the heap, such as
+  a linked list, are not supported. Under ``--no-check-ub`` a call with a
+  region footprint and a loop without its own ``cppverify::modifies`` forget the
+  whole heap, so no frame is carried across them;
 - no aggregate-returning specs;
 - mutual recursion only among functions of one kind (spec, proof, or
   executable) sharing a measure of one length.
-- no heap-mutating executable recursion: stores, allocation/deallocation, and
-  separate heap-modifying calls fail the termination check conservatively.
+- recursion through a function that allocates or frees storage is
+  ``construct.unsupported``; recursion that stores through pointer or
+  reference parameters, calls heap-modifying functions, or uses automatic
+  objects is supported.
 
 These are mainly automation and usability limits. They do not permit an
 unproved recursive property to become ``Verified``.
@@ -417,15 +434,15 @@ C++ definedness coverage
 ------------------------
 
 Always-on obligations currently cover signed arithmetic overflow, invalid
-division/remainder, invalid shifts, non-null/live represented dereferences,
-supported local definite initialization, and local scalar dynamic lifetime
-errors.
+division/remainder, invalid shifts, conversions to an enumeration outside its
+value range, non-null/live represented dereferences, supported local definite
+initialization, and local scalar dynamic lifetime errors.
 
 Memory checking (the default, off with ``--no-check-ub``) adds object
 bounds: an access or pointer step stays in the ``valid(p, n)`` extent or the
 single object a pointer addresses, across modular sub-slices and same-array
-pointer positions. Enumeration conversions must land in the enumeration's
-value range. It is not yet comprehensive C++ undefined-behavior checking.
+pointer positions. Together they are not yet comprehensive C++
+undefined-behavior checking.
 
 Missing general UB semantics include object provenance outside the represented
 fragment, strict aliasing, arbitrary alignment, unsequenced side effects and
@@ -451,9 +468,7 @@ Important missing optimizations and tactics are:
 #. richer source-level obligation categories, VC slicing, and independent
    resource reports beyond the current IDs/raw source encodings;
 #. a verifier-specific simplifier before SMT;
-#. source-level path/heap/provenance counterexamples instead of raw SSA models;
-#. content-addressed proof caching and affected-function invalidation;
-#. parallel per-function solving in the standalone tool;
+#. affected-function invalidation;
 #. first-class induction syntax;
 #. trigger inference reported to the user (manual ``cppverify::trigger`` marks and
    ``--profile-quantifiers`` exist);
@@ -461,9 +476,10 @@ Important missing optimizations and tactics are:
 #. solver-resource stability measurement across seeds;
 #. broader portfolio model extraction and optional CHC/PDR invariant discovery.
 
-Candidate invariants, assertion batching, parallel solving, caching, and
-trigger control are production-proven techniques in systems such as
-Boogie/Dafny, Verus, Why3, and Frama-C. Fully automatic invariant/lemma
+Candidate invariants and assertion batching, like the parallel solving,
+proof caching, and trigger control CppVerify already has, are
+production-proven techniques in systems such as Boogie/Dafny, Verus, Why3, and
+Frama-C. Fully automatic invariant/lemma
 synthesis and heap CEGAR remain research-heavy.
 
 Backend-specific boundaries
@@ -492,6 +508,11 @@ in loops. In a forced bit-vector encoding cvc5 does not
 relate exact contract arithmetic to bit-vectors as well as Z3.
 BMC-transformed archive replay still uses the Z3-backed BMC aggregator.
 
+**Race** (``--backend=race``) runs Z3 and cvc5 at once on the same canonical
+obligations. The first proof or certified counterexample stands and stops the
+other solver; when neither settles a module alone, the obligations each one
+proved are joined. Each solver's own boundaries above still apply.
+
 **Lean** consumes the same typed canonical obligation as Z3. Standalone export
 is an unchecked scratch-pad and reports ``Exported``. Project mode emits
 faithful definitions for the current integer, bit-vector, pointer, total-heap,
@@ -517,7 +538,8 @@ There is currently no CHC backend, separation-logic backend, or independently
 checked Z3 proof-object pipeline. Portfolio agreement is independent solver
 evidence, not a portable proof certificate.
 
-Portable obligation schema v1 bounds imported integer sorts to 4096 bits and
+Portable obligation schema v2 (which also reads v1 records) bounds imported
+integer sorts to 4096 bits and
 uses explicit parser depth/node/collection budgets. Supporting wider backend
 sorts requires a deliberate schema/capability revision, not unbounded resource
 allocation from an archive.
@@ -527,7 +549,10 @@ Libraries and real programs
 
 CppVerify does not yet ship comprehensive libc or C++ standard-library models.
 An uncontracted call fails closed; a contract is assumed only when it is
-marked ``[[cppverify::trusted]]``.
+marked ``[[cppverify::trusted]]``. Contracts are not saved in precompiled
+headers: a function declared in a PCH has no contract for the verifier, so a
+contracted function that calls it fails closed (``call to function without a
+verification contract``).
 
 Broader application verification needs:
 
@@ -545,15 +570,17 @@ need executable conformance and false-model tests.
 Diagnostics and developer tooling
 ---------------------------------
 
-Current diagnostics identify failed functions and often include a Z3 model.
+Diagnostics name each obligation they report by a stable source-anchored ID
+and range, show counterexamples with source variable names and a trace of
+branches, calls, loops, heap writes, and lifetimes, and are also emitted as
+JSON Lines (``--diagnostics-format=json``). ``--profile-quantifiers`` reports
+quantifier instantiations, ``--solver-rlimit`` sets reproducible solver
+budgets, and clangd, built with the tool, provides editor integration.
 Production readiness still needs:
 
-- exact source ranges and stable IDs for each contract/frame/UB obligation;
-- original variable names and entry/current values instead of SSA names;
-- branch, call, loop, heap, lifetime, and provenance traces;
-- useful ``unknown`` explanations and quantifier/unfolding statistics;
-- JSON/SARIF, LSP/editor integration, and affected-function verification;
-- reproducible proof-resource budgets and CI regression reports.
+- SARIF output;
+- affected-function verification;
+- CI regression reports.
 
 Assurance and testing gaps
 --------------------------
@@ -604,16 +631,18 @@ nested/base subobjects, and closed-target indirect calls.
 P3 — automation and scale
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Add induction/calculation ergonomics, triggers/profiling, candidate invariants,
-VC splitting/slicing/simplification, source counterexamples, caching,
-parallelism, stability gates, and solver diversity.
+Add first-class induction syntax, candidate invariants, VC splitting and
+slicing, stability gates, and further solvers. Automatic induction,
+``cppverify::calc``, triggers and quantifier profiling, source-level
+counterexamples, proof caching, parallel solving, and the Z3/cvc5 portfolio
+and race already ship.
 
 P4 — libraries and application ecosystem
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Add verified/conformance-tested standard-library models, mathematical views,
-build-system and IDE integration, machine-readable diagnostics, and stable
-multi-file incremental verification.
+build-system integration, SARIF diagnostics, and stable multi-file incremental
+verification. clangd support and JSON Lines diagnostics already ship.
 
 P5 — advanced systems C++
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -638,7 +667,3 @@ CppVerify should not claim raw/arbitrary C++ verification until:
 #. cross-target, fuzzing, differential, and proof-stability gates run
    continuously;
 #. high-assurance users have reproducible proof replay or certificates.
-
-The detailed contributor inventory, dependencies, and acceptance gates live in
-`LIMITATIONS.md on GitHub
-<https://github.com/SwayamInSync/cpp-verify-roadmap/blob/main/extras/docs/LIMITATIONS.md>`_.
