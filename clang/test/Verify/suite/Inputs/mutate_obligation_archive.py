@@ -351,6 +351,7 @@ parser.add_argument(
         "invalid-utf8",
         "schema-v1",
         "schema-v1-kinds",
+        "truncated",
     ],
 )
 parser.add_argument("input")
@@ -565,6 +566,8 @@ elif args.mode == "invalid-utf8":
     if size == 0:
         raise ValueError("archive function display name is empty")
     archive.data[start] = 0xFF
+elif args.mode == "truncated":
+    del archive.data[-1]
 
 with open(args.output, "wb") as destination:
     destination.write(archive.data)
