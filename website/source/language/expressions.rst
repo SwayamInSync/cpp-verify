@@ -14,14 +14,14 @@ Contract expressions
 
 Must be contextually ``bool`` where used as conditions.
 
-The range ``[lo, hi)`` may be **symbolic** (e.g. ``cppverify::forall(i, 0, n, ...)``): a small
-concrete range is unrolled, otherwise a real quantifier is emitted with the
-heap-access terms as triggers. This is what lets a loop invariant talk about a
+The range ``[lo, hi)`` may be **symbolic** (e.g. ``cppverify::forall(i, 0, n, ...)``).
+A bounded quantifier reaches the solver as a quantifier, whatever its range:
+the ``cppverify::trigger`` marks in its body become its patterns, and without
+them the solver chooses its own. This is what lets a loop invariant talk about a
 whole array range (see :doc:`pointers`). Proving a ``cppverify::forall`` over a symbolic
 range (the common case for loop invariants and postconditions) is well supported;
 *proving* an ``cppverify::exists`` over a symbolic range is currently incomplete and may
-report ``unknown`` — use a concrete range, or supply the witness, when you need
-one.
+report ``unknown`` — supply the witness when you need one.
 
 Quantifiers without bounds range over all integers; a counterexample to one is
 certified when its body depends on the bound variables through linear
