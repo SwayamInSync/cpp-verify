@@ -44,9 +44,9 @@ unsigned combine(unsigned x, unsigned y)
 }
 // Forced integers name each operand's bits by a defined bit-vector; auto
 // encodes this query with bit-vectors instead.
-// INT: (=> (and (>= y_0 0) (< y_0 4294967296)) (= (bv2int bits!0) y_0))
-// INT-NEXT: (=> (and (>= x_0 0) (< x_0 4294967296)) (= (bv2int bits!1) x_0))
-// INT: (bv2int (bvor bits!1 bits!0))
+// INT: (=> (and (>= x_0 0) (< x_0 4294967296)) (= (bv2int bits!0) x_0))
+// INT-NEXT: (=> (and (>= y_0 0) (< y_0 4294967296)) (= (bv2int bits!1) y_0))
+// INT: (bv2int (bvor bits!0 bits!1))
 // AUTO-NOT: bits!
 // AUTO: (not (= __result_1 (bvor x_0 y_0)))
 
