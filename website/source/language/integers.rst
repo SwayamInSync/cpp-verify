@@ -11,9 +11,11 @@ Integer semantics depend on where the value lives.
    * - ``cppverify::spec``
      - Mathematical ``Int`` (unbounded, no overflow)
    * - ``constexpr`` in contracts
-     - Machine integer (target width, wraps modulo ``2^N``)
+     - Machine integer (target width; unsigned wraps modulo ``2^N``, signed
+       overflow must be proved absent)
    * - ``cppverify::proof`` / ``exec``
-     - Machine integer (target width, wraps modulo ``2^N``)
+     - Machine integer (target width; unsigned wraps modulo ``2^N``, signed
+       overflow must be proved absent)
    * - Contract arithmetic (``cppverify::pre``, ``cppverify::post``, invariants, assertions)
      - Mathematical ``Int`` on the values of C++ expressions
 
@@ -116,7 +118,7 @@ contract that means the wrapped value says so with ``% 2^N``.
      (counterexample: x [type=i32] = -2147483648)
    Verified: abs_guarded [backend=z3]
    Verified: mix [backend=z3]
-   abs.cpp:10:56: error: verification failed: mix_wrong [...::postcondition@10:56]
+   abs.cpp:10:64: error: verification failed: mix_wrong [...::postcondition@10:64]
      (counterexample: result [type=u32] = 0, a [type=u32] = 1, ...)
 
 Negating ``INT_MIN`` overflows, so ``abs_unguarded`` fails at the overflow
@@ -140,7 +142,9 @@ element bounds. The marker must be a positive top-level conjunction clause on
 the bare pointer. See :doc:`pointers`.
 
 Concrete extent, lifetime, alignment, and initialization metadata is tracked
-for the bounded local scalar ``new``/``delete`` subset. General buffer
+for the bounded local scalar ``new``/``delete`` subset and for promoted
+automatic objects (address-taken scalar locals, fixed local arrays, and their
+enclosing records). General buffer
 provenance and parameter-pointer extents remain abstract; see
 :doc:`dynamic-storage` and :doc:`limitations`.
 
