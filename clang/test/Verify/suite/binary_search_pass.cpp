@@ -11,17 +11,11 @@
 //   - definedness: no signed overflow anywhere, including the midpoint;
 //   - the result is -1 or a valid index.
 //
-// Not proved here: that a non-negative result points at the key, and that -1
-// means the key is absent. Both need the array's sortedness as a nested
-// quantifier (forall i <= j. a[i] <= a[j]); the isolated instantiation lemmas
-// verify, but the inductive loop obligation did not close within 900s. Treated
-// as incomplete automation, not as a proved property. See
-// extras/docs/LIMITATIONS.md.
-//
-// Normalization: `return mid` inside the loop is not expressible (return
-// statements inside loops are unsupported), so a found index is recorded in
-// `res` and the live range is collapsed to end the search. This is a
-// restructuring of the control flow, not of the algorithm.
+// Not stated here: that a non-negative result points at the key, and that -1
+// means the key is absent. That functional specification, with sortedness as
+// a nested quantifier and `return mid` inside the loop, verifies in section
+// "Universal statements: sorted arrays" of the book's chapter 20
+// (website/source/book/part-ii/ch20-mathematics-to-code.rst).
 
 cppverify::spec bool valid(int* p, int n) { return true; }
 
