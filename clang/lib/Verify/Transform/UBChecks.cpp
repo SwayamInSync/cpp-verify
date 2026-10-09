@@ -971,11 +971,13 @@ std::unique_ptr<VExpr> verify::objectMembership(
     std::unique_ptr<VExpr> Bytes;
     if (Object.Length) {
       Bytes = mathValue(Value(Object.Length).get());
-      if (Stride > 1)
-        Bytes = makeBin(VBinOp::Mul, std::move(Bytes),
-                        std::make_unique<VLiteralExpr>(
-                            std::to_string(Stride), Bytes->Ty, Loc),
-                        Bytes->Ty);
+      if (Stride > 1) {
+        const VType Ty = Bytes->Ty;
+        Bytes = makeBin(
+            VBinOp::Mul, std::move(Bytes),
+            std::make_unique<VLiteralExpr>(std::to_string(Stride), Ty, Loc),
+            Ty);
+      }
     } else {
       Bytes = std::make_unique<VLiteralExpr>(std::to_string(Stride),
                                              mathOffsetType(), Loc);
