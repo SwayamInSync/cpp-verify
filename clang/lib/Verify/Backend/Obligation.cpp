@@ -1819,7 +1819,11 @@ public:
     }
     case VExpr::BinOp: {
       const auto *B = static_cast<const VBinOpExpr *>(E);
-      auto N = fromBin(B->Op, fromVExpr(B->Lhs.get()), fromVExpr(B->Rhs.get()));
+      // The left operand is lowered first, so binders are numbered in source
+      // order whatever the compiler's order of argument evaluation.
+      auto Lhs = fromVExpr(B->Lhs.get());
+      auto Rhs = fromVExpr(B->Rhs.get());
+      auto N = fromBin(B->Op, std::move(Lhs), std::move(Rhs));
       N->Loc = B->Loc;
       return N;
     }
