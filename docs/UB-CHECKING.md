@@ -37,12 +37,14 @@ carries no machine overflow check of its own. Executable code cannot reference
 a spec function at all; Sema rejects it because spec functions are never
 compiled.
 
-Core expression definedness is mandatory; it is not disabled by omitting a
-flag. The current `--check-ub` option is narrower than its historical name: it
-enables `valid(p, n)`-based **buffer extent** checking on the Z3 path. This
-rollout split lets existing pointer code opt into explicit bounds while signed
-arithmetic, division, shifts, dereference validity, and lifted-`constexpr`
-definedness remain checked on every normal proof.
+Core expression definedness is mandatory; no flag disables it. **Memory
+checking** (`--check-ub`) is on by default on every backend: each access and
+each pointer step must lie in the object it may address, which is its declared
+`valid(p, n)` extent and otherwise the single object the pointer's origin
+names. `cpp-verify --no-check-ub` turns memory checking off; the core checks
+(signed overflow, division, shifts, enumeration ranges, dereference validity,
+initialization, the lifetimes of bounded `new`/`delete` and automatic
+objects, and lifted-`constexpr` definedness) stay.
 
 ## How the two obligations combine
 
@@ -62,15 +64,16 @@ The backend's sound UNKNOWN-recovery path may submit individual ordered
 assertions separately, but it never changes this program order or lets a later
 assumption justify an earlier safety check.
 
-Mechanically, each safety obligation is emitted as a **guarded `assert`** in the
-Layer-1 IR, *before* the statement that consumes the value. From there the
-existing pipeline does the rest:
+Mechanically, each safety obligation is a **guarded `assert`** that
+passivization emits *before* the statement that consumes the value:
 
-- **Passivization** SSA-renames the obligation's operands and path-guards it
-  (`guardCond` / `DeadConds`), so an obligation inside a branch or after an early
+- **Passivization** collects the checks of each expression, SSA-renames their
+  operands, and guards each with the active path condition
+  (`guard -> obligation`), so an obligation inside a branch or after an early
   return is only required on the path that reaches it.
-- The **nested-WP VC machine** checks each obligation against exactly the
-  assumes that precede it.
+- **`buildObligationModule`** (`ObligationBuilder` in `Backend/Obligation.cpp`)
+  folds the ordered passive program once, so each obligation is checked
+  against exactly the assumes that precede it.
 
 So the UB layer is *purely additive*: it inserts asserts; the Tier-0 soundness
 machinery discharges them.
@@ -83,10 +86,11 @@ additive insertion points:
 ```
    Layer-1 VFunction
           │
-          ├─ --check-ub
+          ├─ --check-ub: default (off with --no-check-ub)
           │    instrumentUBChecks()
           │    - discover valid(p, n) before spec inlining
-          │    - add extent semantics and indexed-access bounds asserts
+          │    - add extent semantics and object-bounds asserts for
+          │      accesses and pointer steps
           │
           ▼
    passivization, in C++ evaluation order
@@ -104,38 +108,49 @@ applicable: machine integers (`IntMode == Machine`) and, for overflow,
 **signed** operands. Unsigned overflow is defined wraparound in C++ and is
 deliberately not flagged.
 
-`valid` is a conventional pure spec declaration, not a new keyword:
+`valid` is a verification-only declaration, not a new keyword: `<cppverify.h>`
+provides `cppverify::valid(p, n)` for any pointee type, and a user declaration
 
 ```cpp
 cppverify::spec bool valid(int *p, int n) { return true; }
 ```
 
-When `valid(p, n)` appears in a precondition under `--check-ub`, the verifier
+is recognized the same way.
+
+When `valid(p, n)` appears in a precondition, memory checking (the default)
 adds these semantics before the intentionally trivial body can inline to
 `true`:
 
 - `n >= 0`;
 - `n == 0` permits a null pointer;
 - `n > 0` requires `p != nullptr` and the abstract pointer-validity predicate;
-- every `p[i]` or `*(p + i)` access must prove `0 <= i && i < n`;
+- every `p[i]` or `*(p + i)` access must prove `0 <= i && i < n`, and every
+  step `p + i` must stay in `[0, n]`;
 - the extent is the pointer's complete object for the implicit non-aliasing
   default: a separated address-parameter pair is disjoint over whole extents
   unless either pointer is null or either extent is empty, and callers prove
   it. `cppverify::aliases` pairs are not widened.
 
-An access through a base with no declared extent still receives the mandatory
-non-null/abstract-valid dereference check, but no size claim is invented.
+A pointer without a declared extent addresses one object, so `p[1]` through a
+pointer known only to be non-null fails. Under `--no-check-ub` the marker
+folds to `true` (with a warning), no extent or object bound is checked, and
+only the non-null/abstract-valid dereference check remains.
 
 ### Obligation representation
 
 Most obligations are ordinary `VExpr` (`b != 0` for division-by-zero, a range
 comparison, …). Arithmetic *overflow* obligations use a dedicated node,
-`VOverflowCheckExpr`, because the precise predicate is a primitive of the solver
-(`Z3_mk_bvadd_no_overflow` and friends) rather than something safely expressible
-in surface arithmetic (the surface form would itself overflow). The node carries
-the operation and operands and is threaded `VExpr → VCExpr → Z3`:
+`VOverflowCheckExpr`, because the precise predicate depends on the solver
+encoding rather than being safely expressible in surface machine arithmetic
+(the surface form would itself overflow). The node carries the operation and
+operands and is threaded `VExpr → VCExpr (NoOverflow) → Z3`. In the integer
+encoding (`--int-encoding=auto` uses it unless a query needs operand bits), the
+check compares the exact mathematical result with the signed range
+(`Z3Encoder::integerNoOverflow`; `SDiv` excludes `INT_MIN / -1`). In the
+bit-vector encoding it is a solver primitive (`Z3_mk_bvadd_no_overflow` and
+friends):
 
-| `VOverflowCheckExpr` op | Z3 encoding (signed) |
+| `VOverflowCheckExpr` op | Z3 bit-vector encoding (signed) |
 |---|---|
 | `Add` | `bvadd_no_overflow(a,b,signed) ∧ bvadd_no_underflow(a,b)` |
 | `Sub` | `bvsub_no_overflow(a,b) ∧ bvsub_no_underflow(a,b,signed)` |
@@ -173,32 +188,33 @@ check, rather than trying to encode the whole abstract machine up front.
 
 | Layer | UB caught | IR / model need | Status |
 |---|---|---|---|
-| **A** | signed arithmetic/negation overflow, out-of-range mathematical-to-machine conversion, division/modulo by zero, invalid shifts, null/abstract-invalid dereference | typed expressions + signedness/width in `VType` | **implemented, always on** |
-| **B1** | out-of-bounds indexed access for a declared buffer extent | `valid(p, n)` marker + base/offset recovery | **implemented with `--check-ub` on Z3** |
-| **B2** | use-after-end-of-lifetime and reads of uninitialized heap storage | block-structured heap (allocation = size+liveness+initialization) | planned |
-| **C** | pointer provenance, strict-aliasing (TBAA), alignment | precise object model | assumed-away (documented) |
+| **A** | signed arithmetic/negation overflow, out-of-range mathematical-to-machine and enumeration conversion, division/modulo by zero, invalid shifts, null/abstract-invalid dereference | typed expressions + signedness/width in `VType` | **implemented, always on** |
+| **B1** | an access or pointer step outside the object it may address: a declared `valid(p, n)` extent, otherwise the single object the pointer's origin names | `valid(p, n)` marker + base/offset recovery + pointer origins | **implemented, on by default on every backend** (off with `--no-check-ub`) |
+| **B2** | use-after-end-of-lifetime, invalid or double `delete`, and reads of uninitialized storage | block-structured heap (allocation = size+liveness+initialization) | **implemented for bounded scalar `new`/`delete` and promoted automatic objects, always on**; general heap planned |
+| **C** | pointer provenance across interfaces, pointer reinterpretation, strict-aliasing (TBAA), alignment | precise object model | assumed-away (documented) |
 
 ### Assumed-away (Layer C and beyond)
 
 These are explicitly **not** checked and are assumed not to occur. Programs that
 rely on them are outside the verified subset:
 
-- pointer provenance / out-of-object pointer arithmetic,
+- pointer provenance across interfaces / pointer reinterpretation,
 - strict-aliasing violations (accessing an object through the wrong type),
 - alignment violations,
-- data races / concurrency,
-- allocation/deallocation and heap-object lifetime changes.
+- data races / concurrency.
 
 ## Scope and the flag
 
 - Core expression safety applies to exec and `cppverify::proof` functions; mathematical
   `cppverify::spec` functions are total and are never instrumented for machine UB.
-- **`cpp-verify --check-ub`** additionally enables buffer extent discovery and
-  bounds obligations on every backend. It adds no second copy of the core
-  checks, and it has no `clang++` driver spelling yet.
-- Omitting `--check-ub` does **not** disable overflow, division, shift, or
-  dereference checks. It only means the verifier has no declared buffer length
-  from which to prove indexed bounds.
+- **Memory checking** (`--check-ub`: extent discovery and object-bounds
+  obligations) is on by default on every backend, and `clang++
+  -fverify-contracts` always runs it; there it cannot be turned off. It adds
+  no second copy of the core checks.
+- **`cpp-verify --no-check-ub`** turns memory checking off. It does **not**
+  disable overflow, division, shift, enumeration, dereference, initialization,
+  or bounded-lifetime checks: `valid(p, n)` folds to `true` (with a warning),
+  and no access or pointer step is checked against an extent or object.
 
 ## How to add a new check (the recipe)
 
@@ -209,8 +225,12 @@ rely on them are outside the verified subset:
    that metadata before spec preparation and inject guarded `VExpr` assertions
    in `instrumentUBChecks`.
 3. If it needs a solver primitive (like overflow), add a variant to
-   `VOverflowCheckExpr` (or a sibling node), one case in `VCMachine::fromVExpr`,
-   and one case in `Z3Encoder` mapping to the primitive.
+   `VOverflowCheckExpr` (or a sibling node), one case in
+   `ObligationBuilder::fromVExpr` (`Backend/Obligation.cpp`, called from
+   `buildObligationModule`), and one case in each handler of the logic node:
+   `Z3Encode.cpp` (bit-vector and integer encodings), `CVC5Backend.cpp`,
+   `LeanBackend.cpp`, `Certify.cpp`, `ObligationSerialization.cpp` (a new
+   wire tag), and the Layer 3 dump name in `Driver/DumpIR.cpp`.
 4. Add the applicability guard (type/signedness/mode) in the checker.
 5. Add edge-case and general tests under `clang/test/Verify/suite/` and a runnable
    example under `examples/`.
