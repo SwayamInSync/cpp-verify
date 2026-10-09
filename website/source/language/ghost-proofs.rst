@@ -19,9 +19,11 @@ Ghost statements
   term
 - ``cppverify::reveal_with_fuel(f, n)`` — unfold recursive spec ``f`` up to depth ``n``,
   or an inductive predicate ``f`` ``n`` levels below each application a proof
-  names (ghost blocks only)
-- ``cppverify::reveal(f)`` / ``cppverify::hide(f)`` — make spec ``f`` transparent / opaque for the rest of the
-  enclosing function (ghost blocks only)
+  names, in the whole enclosing function; a statement accepted anywhere in a
+  function body, inside a ghost block or not
+- ``cppverify::reveal(f)`` / ``cppverify::hide(f)`` — make spec ``f`` transparent / opaque in the whole
+  enclosing function, wherever the statement appears in its body (inside a
+  ghost block or not)
 
 Because a ghost block is erased, it cannot change anything observed by the
 compiled program. Assignments are limited to variables declared inside ghost
@@ -96,7 +98,8 @@ Spec and proof functions
   Storing a spec result in a ghost or ``cppverify::proof`` variable converts it to that machine type, and
   the value must fit (see :doc:`integers`).
 - ``cppverify::recommends(expr)`` (``cppverify::spec`` only) is a **soft** precondition: it does not generate call-site
-  obligations, but the verifier warns when a call may not satisfy it.
+  obligations; when an executable function that calls the spec fails verification, the verifier
+  warns where a call in it may not satisfy it.
 - ``cppverify::post(expr)`` on a ``cppverify::spec`` is proved with its termination, by well-founded induction on its
   measure, and then holds at every application: those a proof names and those inside the
   unfoldings it receives (``fib(j - 2) >= 0`` from the unfolding of ``fib(j)``), as Dafny's
@@ -157,13 +160,14 @@ is instantiated.
      return acc;
    }
 
-Without a frame, a write relates the new value of such a spec to the old
-one only by unfolding its definition, so a reduction over a symbolic length
-is not preserved across an unrelated write. ``cppverify::reads(p, n)`` declares the
-cells ``p[0..n)`` the spec depends on. The verifier checks it against the
-body (every load, and every range a heap-reading callee reads, lies
-inside), and callers then keep every application across a store outside
-those cells without unfolding:
+Without a frame, that a reduction over a symbolic length keeps its value
+across an unrelated write must be proved by induction over the spec, which
+the verifier tries automatically at a cost in solver time.
+``cppverify::reads(p, n)`` declares the cells ``p[0..n)`` the spec depends on and
+gives that fact directly. The verifier checks it against the body (every
+load, and every range a heap-reading callee reads, lies inside), and callers
+then keep every application across a store outside those cells without
+unfolding:
 
 .. code-block:: cpp
 
@@ -184,7 +188,7 @@ those cells without unfolding:
 
 ``q`` is a different object from ``p``'s buffer (distinct mutable pointer
 parameters do not alias), so the store lies outside the frame. A failed
-``cppverify::reads`` check is reported as ``cppverify::spec cppverify::reads failed``, and every proof that
+``cppverify::reads`` check is reported as ``spec reads failed: f`` for a spec ``f``, and every proof that
 relied on the frame is ``Unresolved`` with reason ``spec.reads``.
 
 Opacity and fuel
@@ -192,7 +196,8 @@ Opacity and fuel
 
 A recursive ``cppverify::spec`` is **opaque** by default (unfolded with fuel 1) so its defining axiom does not
 send Z3 into a matching loop; ``cppverify::reveal_with_fuel(f, n)`` raises the depth when a proof needs more.
-``cppverify::reveal`` / ``cppverify::hide`` toggle a spec's transparency for the rest of a function:
+``cppverify::reveal`` / ``cppverify::hide`` make a spec transparent / opaque in the whole function,
+wherever the statement appears:
 
 .. code-block:: cpp
 
@@ -362,8 +367,8 @@ derivation shows it, so it needs no ``cppverify::decreases``.
 ``constexpr`` as spec
 ---------------------
 
-Any ``constexpr`` function is usable directly in contracts — no separate ``cppverify::spec`` declaration. It
-keeps **machine** integer semantics (see :doc:`integers`):
+A non-recursive, loop-free ``constexpr`` function without its own contract is usable directly in contracts — no separate
+``cppverify::spec`` declaration. It keeps **machine** integer semantics (see :doc:`integers`):
 
 .. code-block:: cpp
 
@@ -373,3 +378,6 @@ keeps **machine** integer semantics (see :doc:`integers`):
      cv::pre(side >= 0 && side <= 1000)
      cv::post(cv::result == square(side))
    { return side * side; }
+
+A ``constexpr`` function with ``cppverify::pre``/``cppverify::post`` clauses stays an
+executable function and cannot appear in a contract.
