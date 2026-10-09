@@ -1,7 +1,6 @@
-// WITHOUT --check-ub: verifies (under wrapping, -INT_MIN == INT_MIN).
-// WITH --check-ub: fails -- negating INT_MIN overflows.
+// Negating INT_MIN overflows: verification fails with x = INT_MIN.
 int negate(int x)
-  post(result == -x)
+  cppverify::post(cppverify::result == -x)
 {
   return -x;
 }
