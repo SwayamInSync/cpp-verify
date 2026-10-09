@@ -4364,10 +4364,11 @@ public:
     for (const auto &[Name, Entry] : OldState) {
       if (Entry->K != VExpr::Var)
         continue;
-      const bool OfParameter = llvm::any_of(Fn.Params, [&](const auto &P) {
-        return Name == P.first ||
-               llvm::StringRef(Name).starts_with(P.first + ".");
-      });
+      const bool OfParameter =
+          llvm::any_of(Fn.Params, [&, &Name = Name](const auto &P) {
+            return Name == P.first ||
+                   llvm::StringRef(Name).starts_with(P.first + ".");
+          });
       if (OfParameter)
         PostRenames[Name] = static_cast<const VVarExpr &>(*Entry).Name;
     }
@@ -4559,9 +4560,10 @@ public:
         CloneCtx EntryCtx{Renames, OldState, true};
         for (const auto &[Name, Ty] : Fn.Params)
           if (Ty.Kind == VTypeKind::Ptr && Ty.PointeeSizeBytes > 0 &&
-              llvm::none_of(Fn.ValidExtents, [&](const VValidExtent &Outer) {
-                return Outer.Base == Name;
-              }))
+              llvm::none_of(Fn.ValidExtents,
+                            [&, &Name = Name](const VValidExtent &Outer) {
+                              return Outer.Base == Name;
+                            }))
             CallerExtents.emplace_back(
                 stateVariableName(EntryCtx, Name), Ty,
                 std::make_unique<VLiteralExpr>(1, Length->Ty, C.Loc));
