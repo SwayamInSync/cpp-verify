@@ -2,7 +2,9 @@ LLVM ULEB128
 ============
 
 CppVerify's flagship case study verifies the unpadded 64-bit ULEB128 buffer
-codec derived from LLVM 22.1.3's ``llvm/Support/LEB128.h``.
+codec derived from LLVM 22.1.3's ``llvm/Support/LEB128.h``. This release is
+based on LLVM 23.1.3, whose encoder is unchanged and whose decoder adds the
+guard described under "Known LLVM shift defect" below.
 
 ULEB128 stores an unsigned integer in seven-bit groups. The high bit says
 whether another byte follows. It is a small algorithm with systems-level proof
@@ -41,8 +43,9 @@ The artifact is faithful but not verbatim:
    * - ``PadTo`` is fixed at zero.
      - The theorem covers canonical unpadded ULEB128.
    * - ``*p++`` becomes ``buffer[count - 1]``.
-     - The current abstract extent is attached to the allocation base and does
-       not survive loop-carried cursor reassignment.
+     - Pointer increment (``p++``, ``p += 1``) is not in the verified subset,
+       so the extraction indexes from the base. A loop-carried ``p = p + 1``
+       with an invariant relating ``p`` to the base would also verify.
    * - The decoder receives an ``expected`` proof witness.
      - It appears only in contracts and invariants, not executable accumulator
        arithmetic.
@@ -53,8 +56,8 @@ The artifact is faithful but not verbatim:
        quantified form timed out.
 
 A native harness compiles the extraction with proof constructs erased and
-compares it with LLVM on lengths, bytes, sentinels, decoding, consumed counts,
-and error results.
+compares it with this tree's LLVM 23.1.3 header on lengths, bytes, sentinels,
+decoding, consumed counts, and error results.
 
 Measured evidence
 -----------------
@@ -68,14 +71,16 @@ Measured evidence
      - Scope
    * - Complete deductive proof
      - Z3 verified
-     - 370 canonical obligations: 318 across encoder, decoder, and round
-       trip, plus 52 discharging the machine-byte ``cppverify::proof`` lemmas
+     - 328 canonical obligations: 285 across encoder (186), decoder (33), and
+       round trip (66), plus 43 discharging the eleven machine-byte
+       ``cppverify::proof`` lemmas (four for each of ten, three for the last)
    * - Reduced length/bounds proof
      - Z3+cvc5 portfolio verified
      - Both solvers agree on the smaller surface
    * - Complete strict portfolio
      - Unresolved
-     - cvc5 returns ``unknown`` on encoder and decoder; Z3 verifies them
+     - cvc5 returns ``unknown`` or times out (``--timeout=30000``); Z3 alone
+       verifies every function (row above)
    * - Native canonical comparison
      - 2,048,618 executions pass
      - 42 boundary, 1,048,576 exhaustive-small, and 1,000,000 deterministic
@@ -90,42 +95,44 @@ portfolio-certified.
 Known LLVM shift defect
 -----------------------
 
-The pinned LLVM decoder validates pure zero extension in an overlong input but
+LLVM 22.1.3's decoder validates pure zero extension in an overlong input but
 still evaluates ``Slice << Shift``. For ten ``0x80`` bytes followed by
 ``0x00``, the next accumulator step has ``Shift == 70``. A 64-bit shift by 70
-is undefined in C++.
+is undefined in C++. LLVM 23.1.3's decoder, the one in this tree, evaluates
+the step only under ``if (LLVM_LIKELY(Shift < 64))``, so that shift no longer
+occurs.
 
-The deductive regression isolates the accumulator in an indexed, fixed-input
-model: CppVerify accepts the guarded form and rejects the unguarded form with a
-source-level ``shift = 70`` counterexample. A separate GCC UBSan executable
-calls the pinned LLVM decoder and independently reports the same shift. LLVM
-fixed this known defect in
-`commit 8014a1d2 <https://github.com/llvm/llvm-project/commit/8014a1d208f0f9e58cfeaf022517cf3d69257bff>`_,
-`PR #205907 <https://github.com/llvm/llvm-project/pull/205907>`_. The case
-study independently reproduces the defect; it does not claim to have
-discovered it.
+The deductive regression ``llvm_uleb128_shift_ub.cpp`` isolates the
+accumulator in an indexed, fixed-input model: CppVerify accepts the guarded
+form and rejects the 22.1.3 accumulator, kept as ``decode_overlong_upstream``,
+with a source-level ``shift = 70`` counterexample. Built with GCC's
+``-fsanitize=undefined``,
+``clang/test/Verify/suite/Inputs/llvm_uleb128_ubsan.cpp`` reports the same
+shift when it calls LLVM 22.1.3's decoder, and nothing with this tree's
+header. LLVM has fixed this known defect; the case study independently
+reproduces it and does not claim to have discovered it.
 
 Reproduce
 ---------
 
-From the outer repository root, with the existing build plus cvc5 and a
-UBSan-capable ``g++``:
+From the repository root, after building the lit tools with
+``ninja -C build FileCheck not count split-file llvm-config``:
 
 .. code-block:: bash
 
-   ./scripts/run-uleb128-case-study.sh
+   ./build/bin/llvm-lit -sv \
+     clang/test/Verify/suite/llvm_uleb128.cpp \
+     clang/test/Verify/suite/llvm_uleb128_errors.cpp \
+     clang/test/Verify/suite/llvm_uleb128_mutation.cpp \
+     clang/test/Verify/suite/llvm_uleb128_portfolio.cpp \
+     clang/test/Verify/suite/llvm_uleb128_shift_ub.cpp
 
-The command writes validated, schema-versioned evidence to
-``build/uleb128-case-study/summary.json`` and retains the individual JSON Lines
-diagnostics, obligation hashes, timings, native result, and sanitizer witness.
-It rebuilds the verifier, verifies the pinned LLVM header, and records SHA-256
-digests for every proof/harness source and principal tool binary before
-execution. Proof and native commands consume a read-only source snapshot; the
-workflow rejects input, snapshot, or tool changes and validates compiler
-dependency files to ensure the native builds resolved the snapshotted pinned
-header.
+``llvm_uleb128_portfolio.cpp`` requires cvc5. The native comparison builds the
+extraction with its proof constructs erased:
 
-Read the full
-`technical report <https://github.com/SwayamInSync/cpp-verify-roadmap/blob/main/extras/docs/TECHNICAL_REPORT.md>`_
-for the architecture, proof design, trust boundary, measurements, limitations,
-and references.
+.. code-block:: bash
+
+   ./build/bin/clang++ -std=c++17 -O2 -fverify-contracts -fno-verify \
+     -Illvm/include -Ibuild/include \
+     clang/test/Verify/suite/Inputs/llvm_uleb128_native.cpp -o uleb128-native
+   ./uleb128-native
