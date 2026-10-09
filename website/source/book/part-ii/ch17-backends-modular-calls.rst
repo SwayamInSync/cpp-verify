@@ -86,18 +86,19 @@ Z3. Two decisive answers that differ, which a sound pair cannot give, are
 Backend release fidelity
 ------------------------
 
-Contributors can run the repeatable cross-backend release gate from the outer
-checkout:
+Contributors can run the repeatable cross-backend release gate as a lit test
+from the repository root:
 
 .. code-block:: bash
 
-   ./scripts/backend-fidelity-gate.sh
+   ./build/bin/llvm-lit -sv clang/test/Verify/suite/backend_fidelity_gate.test
 
 It requires cvc5 and Lean 4.32.2. The gate checks every canonical feature
 family through Layer 3 and Z3/cvc5/portfolio/BMC, source-identical failures,
 deterministic parallel execution, canonical and bounded archive replay, Lean
-theorem/proof-module identity and generated-file compilation, and adversarial
-solver process handling. cvc5 may conservatively return ``unknown`` for
+theorem/proof-module identity and generated-file compilation, and that
+``cppverify::recommends`` warnings stay out of BMC and Lean replay
+artifacts. cvc5 may conservatively return ``unknown`` for
 designated valid quantified or inductive goals; every false matrix goal must
 remain decisive, and any solver disagreement fails the gate.
 
@@ -234,8 +235,9 @@ diagnostic identities.
 Modular function calls
 ----------------------
 
-Functions with ``cppverify::pre`` / ``cppverify::post`` are verified **modularly**: the caller assumes the callee’s
-precondition and inherits its postcondition (and frame conditions) without re-analyzing the callee body.
+Functions with ``cppverify::pre`` / ``cppverify::post`` are verified **modularly**: the caller must prove the callee’s
+precondition at the call site and may then assume its postcondition (and frame conditions) without
+re-analyzing the callee body.
 
 Simple call:
 
@@ -258,15 +260,16 @@ Chained calls in one expression are supported by lowering inner calls to tempora
      return inc(inc(x));   // inner inc, then outer inc
    }
 
-The converter emits ``VCallStmt`` for each exec call site; passivization substitutes callee contracts
-in order. Spec and proof functions are not emitted at runtime and are handled by inlining or axioms.
+The converter emits ``VCallStmt`` for each exec or proof call site; passivization substitutes callee
+contracts in order. A call to a proof function is therefore a modular contract call like an exec
+call: its precondition is asserted and its postcondition assumed. Spec functions are inlined or
+axiomatized. Neither spec nor proof functions are emitted at runtime.
 
-By-value parameters have separate entry and final meanings when the callee
-reassigns them. Preconditions and ``cppverify::old(parameter)`` substitute the caller's
-argument. A plain parameter occurrence in the postcondition uses a fresh final
-callee-local value when that formal was modified, so ``cppverify::post(p == nullptr)``
-after rebinding a local pointer cannot contradict the caller's non-null
-argument.
+Preconditions, ``cppverify::old(parameter)``, and a parameter named in a
+postcondition all denote the argument's entry value, as in ACSL, even when the
+callee reassigns its by-value parameter; the caller substitutes its argument.
+A function that sets its parameter ``p`` to null and returns therefore does
+not prove ``cppverify::post(p == nullptr)`` for a non-null argument.
 
 A call changes the caller's heap only inside the callee's ``cppverify::modifies``
 footprints, instantiated with the arguments: a cell (``p[i]``, ``p->field``)
@@ -278,9 +281,11 @@ also lie within the caller's own ``cppverify::modifies``, read in the caller's e
 state. A callee without ``cppverify::modifies`` whose body (or a callee of it) may write
 is treated as writing the whole heap; a conservative body scan keeps the heap
 for verified, acyclic read-only callees.
-Functions that perform dynamic allocation or deallocation are currently
-verified only as standalone bodies; calls to them fail closed until lifetime
-effects have contract syntax.
+A function that allocates or deallocates storage is verified as a standalone
+body. A call to it is supported only when it is an inferred fresh-owned scalar
+factory (see "Returning fresh ownership" in :doc:`ch19-dynamic-storage`); a
+call to a function that deallocates, or that has any other lifetime effect,
+fails closed (``Unresolved`` with reason ``construct.unsupported``).
 
 ``valid(p, n)`` extents also cross calls as checked sub-slices. Passing
 ``p + offset`` to a ``valid(q, length)`` formal asserts one root, nonnegative
@@ -389,17 +394,24 @@ queries with deterministic internal IDs, a precise kind per obligation
 source-anchored public IDs/ranges, original-name typed model metadata, and
 guarded trace events. Display-only diagnostic metadata persists through
 archives but is excluded from semantic hashes, including both positional and
-source-anchored obligation IDs. The default serial, uncached backend first
-submits the complete query. Parallel or cached execution uses the equivalent
-ordered queries directly.
-``unsat`` means verified and ``sat`` produces a counterexample. On ``unknown``,
-CppVerify retries the module-owned assertions separately in source order, using
-only entry facts and assumptions that precede each obligation. It does not
-rebuild a second VC. The retry helps quantified heap programs without letting a
-later assumption prove an earlier assertion. If it still cannot discharge every
-obligation, the final result remains ``unknown`` and the function is not
-certified unless the user opted into the Lean fallback and its current project
-passes the admission-free kernel check.
+source-anchored obligation IDs. With one job and no proof cache, the backend
+submits the complete query first, then the ordered queries if it does not
+settle the module. With more than one job (the default uses the available
+physical cores) and more than one obligation, the ordered queries run beside
+the complete query, and a proof by either interrupts the other. With a proof
+cache, only the ordered queries run, since the cache holds proofs of single
+obligations.
+``unsat`` means verified. A ``sat`` model is reported as a counterexample only
+once the certifier has checked it against the true definitions; otherwise the
+function is ``Unresolved`` with a reason, such as
+``counterexample.unchecked``. When the complete query ends ``unknown`` or with
+an unchecked model, the ordered queries check the module-owned assertions
+separately in source order, using only entry facts and assumptions that
+precede each obligation. They do not rebuild a second VC. This helps
+quantified heap programs without letting a later assumption prove an earlier
+assertion. If they still cannot discharge every obligation, the function is
+``Unresolved`` and is not certified unless the user opted into the Lean
+fallback and its current project passes the admission-free kernel check.
 
 Model extraction never uses Z3 model completion. Undetermined values and path
 guards stay explicitly unknown. When a complete-query model makes a particular
@@ -452,4 +464,4 @@ Contributors can measure ``clang/lib/Verify`` region coverage with
 ``./scripts/coverage-sweep.sh`` (after a normal build) or ``./scripts/coverage-verify.sh``
 (full instrumented rebuild). Use ``-DCPPVERIFY_ENABLE_COVERAGE=ON`` on ``clangVerify`` only.
 
-Next: :doc:`ch16-when-verification-fails` for counterexamples and fixing failed proofs.
+Next: :doc:`ch18-undefined-behavior` for proving freedom from undefined behavior.
