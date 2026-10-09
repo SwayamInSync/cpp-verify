@@ -23,7 +23,8 @@ Place ``cppverify::invariant`` and ``cppverify::decreases`` **after** the loop h
 What the verifier actually checks
 ---------------------------------
 
-A loop is verified **modularly** — the verifier never unrolls it. Instead it
+A loop is verified **modularly**: the verifier does not unroll it (bounded
+model checking, ``--backend=bmc``, does; see Chapter 17). Instead it
 discharges three obligations from the invariant ``I`` and measure ``D``:
 
 #. **Establishment.** ``I`` holds when the loop is first reached (from the
@@ -33,12 +34,14 @@ discharges three obligations from the invariant ``I`` and measure ``D``:
    ``I``. The state is arbitrary — the verifier forgets ("havocs") every
    variable the loop writes and assumes only ``I``. This is what makes the proof
    cover *all* iterations at once.
-#. **Termination.** Under the same arbitrary state, the measure strictly
-   decreases and stays non-negative: ``0 <= D_new < D_old``.
+#. **Termination.** Under the same arbitrary state, the measure is
+   non-negative before the iteration and strictly smaller after it:
+   ``0 <= D_old`` and ``D_new < D_old``.
 
-After the loop, the verifier continues with ``I && !cond`` — that, and nothing
-else, is what it knows about the post-loop state. If you need a fact afterwards,
-it has to be in the invariant.
+After a normal exit the verifier knows ``I && !cond``, plus the unchanged
+values of everything the loop does not write. A ``break`` or ``return`` leaves
+from its own state. A fact about what the loop writes has to be in the
+invariant.
 
 ``do`` loops
 ------------
@@ -62,8 +65,9 @@ uses the same modular preservation and termination rule as ``while`` for all
 later iterations. ``cppverify::old(expr)`` in a loop invariant always reads the enclosing
 function's entry state; it is not a previous-iteration operator. A function
 local has no entry-state value and is rejected inside ``cppverify::old(...)``.
-Returns inside loop bodies remain fail-closed; place an early return before the
-loop or restructure the loop with an explicit state variable.
+A ``return`` in a loop body checks the postcondition in its own state, in
+every kind of loop. ``break`` and ``continue`` in a ``do`` loop, and ghost code
+that leaves a loop, are rejected.
 
 Inductive invariants and machine integers
 -----------------------------------------
@@ -87,9 +91,10 @@ unbounded accumulator under honest machine integers:
    }
 
 From an arbitrary ``s`` satisfying ``s >= 0`` the verifier may pick
-``s == INT_MAX``; then ``s + 1`` overflows to a negative number and ``s >= 0`` is
-*not* preserved. CppVerify reasons about ``int`` as a real 32-bit type, so it
-reports this — it is not a false alarm. The fix is to **bound the accumulator**
+``s == INT_MAX``; then ``s + 1`` overflows ``int``, which is undefined
+behavior, and the verifier reports the ``overflow`` obligation at ``s + 1``.
+CppVerify reasons about ``int`` as a real 32-bit type, so this is not a false
+alarm. The fix is to **bound the accumulator**
 so it provably cannot overflow:
 
 .. code-block:: cpp
@@ -181,7 +186,8 @@ Lexicographic measures
 When no single quantity falls every iteration, pass a comma-separated **tuple** —
 ``cppverify::decreases(a, b)`` is ordered lexicographically. Each iteration the tuple must
 strictly decrease in lex order: some component drops while every earlier
-component is unchanged. Every component must stay non-negative. This is what
+component is unchanged. The component that drops must be non-negative before
+the step; the others may be anything. This is what
 proves nested counters and Ackermann-style recursion terminate:
 
 .. cppverify-example: fragment
@@ -231,7 +237,7 @@ Common failure modes
    * - Preservation fails
      - Strengthen invariant to include facts needed after body
    * - Termination fails
-     - Fix ``cppverify::decreases`` expression; show it decreases and stays nonnegative
+     - Fix ``cppverify::decreases`` expression; show it is non-negative before each iteration and decreases
 
 ``for`` loops use the same clause placement after the ``for (...)`` part.
 
@@ -250,8 +256,8 @@ half-open bound is the implicit trigger:
    { return true; }
 
 Quantifiers are valid anywhere a contract expression is — ``cppverify::pre``, ``cppverify::post``, ``cppverify::invariant`` — which
-is how a loop invariant talks about "everything processed so far". MVP supports **bounded**
-quantifiers only.
+is how a loop invariant talks about "everything processed so far". Quantifiers
+without bounds, ``cppverify::forall(i, e)``, range over all integers (Chapter 13).
 
 Recursive spec functions in an invariant
 ----------------------------------------
@@ -261,31 +267,11 @@ loop *computes* what the spec *defines*. The invariant ``acc == count(i - 1)``
 below says "after processing ``i - 1`` elements, ``acc`` equals the spec's
 value":
 
-.. warning::
-
-   The pattern below is the *intended* shape for relating a loop accumulator to
-   a recursive ``cppverify::spec`` function, but as written it does **not** verify on the
-   current implementation: the step lemma itself fails. Relating loops to
-   recursive specs at a symbolic index is a known automation gap. It is shown
-   here to document the technique, not as a working example.
-
 .. code-block:: cpp
 
    cv::spec int count(int n)
      cv::decreases(n)
    { if (n <= 0) return 0; return 1 + count(n - 1); }
-
-   // Step lemma: feeds Z3 the one-step recurrence at a symbolic index. It MUST
-   // recurse — `reveal_with_fuel` alone does not unfold a spec call at a
-   // symbolic argument.
-   cv::proof void lemma_count_step(int i)
-     cv::pre(i >= 1)
-     cv::post(count(i) == 1 + count(i - 1))
-     cv::decreases(i)
-   {
-     cv::reveal_with_fuel(count, 2);
-     if (i > 1) { lemma_count_step(i - 1); }
-   }
 
    int compute_count(int n)
      cv::pre(n >= 0 && n <= 10)
@@ -296,22 +282,38 @@ value":
        cv::invariant(i >= 1 && i <= n + 1 && acc == count(i - 1))
        cv::decreases(n - i + 1)
      {
-       cv::ghost {
-         cv::reveal_with_fuel(count, 2);
-         lemma_count_step(i);   // supplies count(i) == 1 + count(i - 1)
-       }
        acc = acc + 1;
        i = i + 1;
      }
      return acc;
    }
 
-Two rules of thumb for this pattern:
+The solver unfolds ``count`` once at each application the proof names, so
+preservation sees ``count(i) == 1 + count(i - 1)`` at the symbolic index ``i``
+without help. A spec that multiplies works the same way:
 
-- The **step lemma must be recursive**. Revealing fuel exposes the spec's
-  definition, but proving the recurrence at the *symbolic* loop index needs the
-  inductive call ``lemma_count_step(i - 1)``. A non-recursive lemma returns
-  ``unknown``. (See ``safe_fib``'s ``lemma_fibo_step`` for the canonical form.)
-- **Keep specs linear.** ``count(n) == n`` and Fibonacci verify; a spec whose
-  body multiplies (``n * factorial(n - 1)``) lands in nonlinear arithmetic, which
-  SMT cannot decide, so the prover honestly reports ``unknown``.
+.. code-block:: cpp
+
+   cv::spec int factorial(int n)
+     cv::decreases(n)
+   { return n <= 0 ? 1 : n * factorial(n - 1); }
+
+   int fact_loop(int n)
+     cv::pre(n >= 0 && n <= 12)
+     cv::post(cv::result == factorial(n))
+   {
+     int acc = 1, i = 1;
+     while (i <= n)
+       cv::invariant(i >= 1 && i <= n + 1 && acc == factorial(i - 1))
+       cv::decreases(n - i + 1)
+     {
+       acc = acc * i;
+       i = i + 1;
+     }
+     return acc;
+   }
+
+When a step needs more than one unfolding, raise the depth with
+``cppverify::reveal_with_fuel`` in a ghost block, or state the step as a lemma (a
+``cppverify::proof`` function whose postcondition is the fact) and call it from the
+loop body. Chapter 13 shows both.
