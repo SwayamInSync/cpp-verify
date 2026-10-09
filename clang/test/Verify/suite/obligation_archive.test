@@ -12,7 +12,7 @@
 #
 # RUN: printf 'bad archive' > %t.bad-magic
 # RUN: not %cpp-verify --obligation-in=%t.bad-magic 2>&1 | FileCheck %s --check-prefix=BAD-MAGIC
-# RUN: head -c -1 %t.one > %t.truncated
+# RUN: %python %S/Inputs/mutate_obligation_archive.py truncated %t.one %t.truncated
 # RUN: not %cpp-verify --obligation-in=%t.truncated 2>&1 | FileCheck %s --check-prefix=TRUNCATED
 # RUN: cp %t.one %t.version
 # RUN: printf '\003\000\000\000' | dd of=%t.version bs=1 seek=8 conv=notrunc 2>/dev/null
