@@ -42,8 +42,8 @@ correctly" but "it cannot be tricked":
 - the consumed length never exceeds the bytes actually available;
 - every read lies inside the declared extent, and no arithmetic overflows.
 
-The last two come from the always-on definedness obligations and ``--check-ub``
-extents; nothing in the contract asks for them.
+The last one comes from the always-on definedness obligations and the
+default memory checks; nothing in the contract asks for it.
 
 The defects, injected and caught
 --------------------------------
@@ -59,23 +59,24 @@ witness.
      - Counterexample
      - Meaning
    * - Lead-byte floor ``C2`` becomes ``C0``
-     - ``result = 64``
-     - ``@`` smuggled as a two-byte overlong sequence
+     - ``result = 0``, with ``b0 = 192`` and ``c1 = 128``
+     - NUL smuggled as the two-byte overlong sequence ``C0 80``
    * - ``ED`` second-byte ceiling removed
      - ``result = 57343``
      - exactly U+DFFF, the last surrogate
 
 Neither counterexample was guessed. Both are the solver's own witness to the
 failing postcondition, reported at the source location of the contract clause
-that broke.
+that broke. The solver chooses the witness, so another version may report a
+different input with the same defect.
 
 Reproduce
 ---------
 
 .. code-block:: bash
 
-   ./build/bin/cpp-verify --check-ub clang/test/Verify/suite/utf8_validate_pass.cpp
-   ./build/bin/cpp-verify --check-ub clang/test/Verify/suite/utf8_overlong_fail.cpp
-   ./build/bin/cpp-verify --check-ub clang/test/Verify/suite/utf8_surrogate_fail.cpp
+   ./build/bin/cpp-verify clang/test/Verify/suite/utf8_validate_pass.cpp
+   ./build/bin/cpp-verify clang/test/Verify/suite/utf8_overlong_fail.cpp
+   ./build/bin/cpp-verify clang/test/Verify/suite/utf8_surrogate_fail.cpp
 
 All three are lit tests; the latter two are expected to fail closed.
