@@ -20,7 +20,10 @@ Install
 
 Each `release <https://github.com/SwayamInSync/cpp-verify/releases>`_ has
 archives for Linux x86_64 and macOS arm64: unpack one and run
-``bin/cpp-verify --version``. To build from source:
+``bin/cpp-verify --version``. The macOS binaries are not notarized; if macOS
+refuses to open one downloaded with a browser, remove the quarantine mark with
+``xattr -dr com.apple.quarantine`` on the unpacked directory. To build from
+source:
 
 .. tabs::
 
@@ -49,7 +52,10 @@ archives for Linux x86_64 and macOS arm64: unpack one and run
    .. tab:: Windows
 
       Install `CMake <https://cmake.org/download/>`_, `Ninja <https://github.com/ninja-build/ninja/releases>`_,
-      and `Git <https://git-scm.com/download/win>`_, plus **Visual Studio Build Tools** (C++ workload).
+      `Git <https://git-scm.com/download/win>`_, and `Python 3 <https://www.python.org/downloads/windows/>`_,
+      plus **Visual Studio Build Tools** (C++ workload). Run the commands from an x64 Developer
+      PowerShell for VS 2022 (or an x64 Native Tools prompt) so that CMake finds the compiler, or
+      pass ``-Generator "Visual Studio 17 2022"`` to ``setup.ps1``.
 
       .. code-block:: powershell
 
@@ -61,6 +67,9 @@ archives for Linux x86_64 and macOS arm64: unpack one and run
 
 Manual build (from repository root; same flags as ``setup.sh``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+On macOS, also pass ``-DCLANG_USE_XCSELECT=ON``, as ``setup.sh`` does, so that the
+built ``clang++`` finds the SDK without ``SDKROOT``.
 
 .. tabs::
 
@@ -106,8 +115,8 @@ Quick start
 .. code-block:: cpp
 
    int abs(int x)
-     cv::pre(x >= -2147483647)   // every int except INT_MIN, whose negation overflows
-     cv::post(cv::result >= 0)
+     cppverify::pre(x >= -2147483647)   // every int except INT_MIN, whose negation overflows
+     cppverify::post(cppverify::result >= 0)
    {
      return x < 0 ? -x : x;
    }
@@ -128,6 +137,8 @@ Quick start
 
 Use ``-fverify-contracts`` on ``clang++`` so the constructs (``cppverify::pre``,
 ``cppverify::post``, ...) are recognized. ``cpp-verify`` adds that flag automatically.
+Every construct is written qualified; the examples below use the alias that a
+file declares with ``namespace cv = cppverify;``.
 
 Verified scalar lifetimes
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -135,6 +146,8 @@ Verified scalar lifetimes
 CppVerify also tracks initialized local scalar ``new``/``delete`` lifetimes:
 
 .. code-block:: cpp
+
+   namespace cv = cppverify;
 
    int roundtrip(int value) cv::post(cv::result == value) {
      int *p = new int;
@@ -156,6 +169,8 @@ parameters:
 
 .. code-block:: cpp
 
+   namespace cv = cppverify;
+
    void increment(int& value)
      cv::pre(value < 2147483647)
      cv::modifies(value)
@@ -166,9 +181,10 @@ parameters:
 
 Reference values lower to heap loads, writes lower to stores, and ``cppverify::old`` reads
 the entry heap. The bounded scalar slice supports direct forwarding, direct
-``*p`` bindings, ordinary initialized scalar local actuals, and chained local
-reference aliases. Subobjects, temporaries, reference returns, and non-scalar
-referents remain fail-closed. See
+``*p`` bindings, fields and elements of local objects and of parameter buffers,
+ordinary initialized scalar local actuals, and chained local reference aliases.
+Conditional bindings, temporaries, reference returns, and non-scalar referents
+remain fail-closed. See
 :doc:`language/pointers`.
 
 Backends and modular calls
@@ -214,7 +230,7 @@ Learn more
       :link: case-studies/index
       :link-type: doc
 
-      Reproducible verification of LLVM ULEB128.
+      LLVM ULEB128, UTF-8 validation, and binary search.
 
 `Source on GitHub <https://github.com/SwayamInSync/cpp-verify>`_
 
