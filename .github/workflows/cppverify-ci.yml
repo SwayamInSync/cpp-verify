@@ -5,18 +5,14 @@ name: CppVerify CI
 # setup.ps1 do for a user, then verify a program with the result.
 
 on:
+  # The book, the language reference, the website scripts, and DESIGN.md are
+  # tested by lit (docs_examples.test, docs_coverage.test); other Markdown is not.
   push:
     branches: [main, "feat/**", "release/**"]
-    paths-ignore:
-      - "website/**"
-      - "docs/**"
-      - "**/*.md"
+    paths: ["**", "!**/*.md", "docs/DESIGN.md"]
   pull_request:
     branches: [main]
-    paths-ignore:
-      - "website/**"
-      - "docs/**"
-      - "**/*.md"
+    paths: ["**", "!**/*.md", "docs/DESIGN.md"]
   schedule:
     - cron: "17 3 * * 1"
   workflow_dispatch:
