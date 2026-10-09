@@ -2523,7 +2523,7 @@ defm experimental_overflow_behavior_types
 defm verify_contracts : BoolFOption<"verify-contracts",
   LangOpts<"VerifyContracts">, DefaultFalse,
   PosFlag<SetTrue, [], [ClangOption, CC1Option],
-          "Enable CppVerify contracts (pre/post/invariant/decreases/ghost/spec/proof) "
+          "Enable the CppVerify contract constructs (cppverify::pre, cppverify::post, ...) "
           "and verify in parallel with compilation">,
   NegFlag<SetFalse, [], [ClangOption], "Disable CppVerify contract syntax">>;
 
