@@ -54,6 +54,10 @@ definitions, and anything else is ``Unresolved`` with a reason. BMC reports
 references, rename, and completion inside contracts, and clang-format lays
 clauses out one per line (:doc:`language/tooling`).
 
+**License.** cpp-verify, like LLVM, is distributed under the Apache License
+v2.0 with LLVM Exceptions. Each archive includes ``LICENSE.TXT`` and, for the
+built-in Z3, ``LICENSE-Z3.txt`` (MIT).
+
 **Data formats.** Obligation archives ``cppverify.obligation/2`` (reads
 ``/1``), JSON diagnostics ``cppverify.diagnostic/1``, and semantic hash format
 v4.
