@@ -358,10 +358,10 @@ std::unique_ptr<LogicExpr> eliminateDefinitions(
           if (K != J)
             Rest.push_back(cloneLogicExpr(Conjuncts[K]));
         auto Rewritten = node(LogicExpr::Or, LogicSort::boolSort(), Expr);
-        for (unsigned K = 0; K != Expr->Children.size(); ++K)
-          Rewritten->Children.push_back(
-              K != I ? cloneLogicExpr(Expr->Children[K].get())
-                     : logicNot(junction(LogicExpr::And, std::move(Rest))));
+        for (const auto &Child : Expr->Children)
+          Rewritten->Children.push_back(cloneLogicExpr(Child.get()));
+        Rewritten->Children[I] =
+            logicNot(junction(LogicExpr::And, std::move(Rest)));
         auto Substituted = substitute(Rewritten.get(), Definition->first,
                                       *Definition->second, Fresh);
         return eliminateDefinitions(Substituted.get(), Antitone, Keep, Binders,
