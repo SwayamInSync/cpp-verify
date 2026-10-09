@@ -70,3 +70,10 @@ the others fails closed: the run stops with an error naming the construct and
 reports no verdicts for the file. Contracts are not saved in precompiled
 headers.
 The full boundary is in :doc:`language/limitations`.
+
+**Known issue.** The solver's time budgets are wall-clock, and Z3 does not
+always search the same way on every platform. On macOS arm64, a false claim
+that is hard for the solver is sometimes reported ``Unresolved`` (reason
+``solver.timeout`` or ``spec.fuel``) where Linux reports its counterexample
+within the same budget. Such a result is never a wrong verdict, and a larger
+``--timeout`` gives the solver more time to settle it.
