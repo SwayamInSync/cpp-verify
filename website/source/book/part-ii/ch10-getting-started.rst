@@ -1,7 +1,9 @@
 Chapter 10 — Getting started
 ============================
 
-After :doc:`../../index` (install), you will have ``cpp-verify`` and ``clang++`` under ``build/bin/``.
+After :doc:`../../index` (install), you will have ``cpp-verify`` and ``clang++`` under ``build/bin/``
+(built from source) or under ``bin/`` of the unpacked release archive. The commands below use
+``./build/bin/``; with an archive, use its ``bin/`` instead.
 
 Verify a source file:
 
