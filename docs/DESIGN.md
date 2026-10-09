@@ -9,8 +9,12 @@ construct when the qualifier names the global namespace `cppverify`, directly,
 as `::cppverify::`, or through any namespace alias (`namespace cv =
 cppverify;`, then `cv::pre`). No word is reserved: `pre`, `result`, `ghost`,
 or `check` without the qualifier is ordinary C++, so every standard header and
-every existing name keeps working, and C++26 contracts (`pre`, `post`,
-`contract_assert`) are left to the compiler. `using namespace cppverify;` does
+every existing name keeps working, and the bare words stay free for C++26
+contracts (`pre`, `post`, `contract_assert`). This compiler does not implement
+C++26 contracts: with `-fverify-contracts`, a bare `pre(...)` or `post(...)`
+after a declarator is an error (`C++26 contract specifiers are not supported;
+a cpp-verify precondition is written 'cppverify::pre'`) with a fix-it to the
+`cppverify::` form. `using namespace cppverify;` does
 not make bare words constructs. With the flag, `<cppverify.h>` is included
 implicitly; without it, the constructs are not recognized.
 
@@ -36,9 +40,9 @@ implicitly; without it, the constructs are not recognized.
 | `cppverify::check(expr)` | Statement | Verification condition (not a runtime check) |
 | `cppverify::check(expr) by { ... }` | Statement | Proves `expr` from a local proof whose other facts are discarded |
 | `cppverify::calc { e0; op { ... } e1; ... }` | Statement | Chain of proved steps concluding `e0 R en` |
-| `cppverify::reveal_with_fuel(fn, n)` | Inside ghost blocks | Locally raise Z3 unfolding depth for spec function `fn` |
+| `cppverify::reveal_with_fuel(fn, n)` | Statement (function body or ghost block) | Locally raise Z3 unfolding depth for spec function `fn` |
 | `cppverify::spec T f(...)` | Declaration | Pure spec function — interpreted by verifier only |
-| `cppverify::proof void f(...)` | Declaration | Ghost proof function — establishes lemmas |
+| `cppverify::proof T f(...)` | Declaration | Ghost proof function — establishes lemmas |
 | `cppverify::forall(i, lo, hi, expr)` | Expression | Bounded universal quantifier |
 | `cppverify::exists(i, lo, hi, expr)` | Expression | Bounded existential quantifier |
 | `cppverify::forall(i, expr)` / `cppverify::exists(i, expr)` | Expression | Quantifier over all mathematical integers |
@@ -642,18 +646,24 @@ void allocate(int n)
 { ... }
 ```
 
-Any uncontracted `constexpr` definition is automatically available as a spec
-function — no `cppverify::spec` or re-declaration. It is lifted where
-verification uses it: in a contract, a verified body, a type invariant, or
-another lifted function. The `constexpr` functions of a header that nothing
-verified uses are never examined. A `constexpr` function with
-`cppverify::pre`/`cppverify::post` clauses remains a modular executable function so its contract
-cannot be bypassed through implicit lifting.
+An uncontracted, non-recursive, loop-free `constexpr` definition is
+automatically available as a spec function — no `cppverify::spec` or
+re-declaration. Only the helpers verification uses are lifted: those a
+verified function uses (in a contract, its body, or a type invariant), then,
+transitively, those the lifted ones use, in source order. The `constexpr`
+functions of a header that nothing verified uses are never examined. A
+recursive helper used symbolically is rejected, and a helper with a loop is
+not unfolded: a proof that needs its value or its C++ definedness is
+`Unresolved` (`construct.unsupported`). A `constexpr`
+function with any contract clause (`cppverify::decreases` included) remains
+modular executable code, so its contract cannot be bypassed through implicit
+lifting; contracts cannot call it. A call whose arguments are all constants
+is evaluated by Clang (see Compile-time partial evaluation below).
 
 **Soundness:** Clang enforces the restrictions on a `constexpr` definition.
-CppVerify additionally unfolds symbolic calls for path-sensitive C++ definedness
-and uses finite call-site equations, so recursive calls do not introduce an
-unbounded self-triggering axiom.
+CppVerify additionally unfolds symbolic calls for path-sensitive C++
+definedness. A lifted helper is neither recursive nor looping, so its
+definition is exact and finite and introduces no self-triggering axiom.
 
 **Integer semantics — machine integers:** A lifted `constexpr` function
 retains C++ integer semantics — `int` has its target width, unsigned arithmetic
@@ -680,14 +690,18 @@ exact, while `int x = s[0];` must show that the element fits in an `int`.
 
 This is genuinely a CppVerify advantage over Verus — Verus forces users to maintain two separate bodies; we let one body do double duty *or* let users opt into a clean math-integer spec.
 
-**Compile-time partial evaluation:** When a contract contains a `constexpr` call with all-concrete arguments, Clang evaluates it at compile time before the verifier sees it:
+**Compile-time partial evaluation:** When a contract contains a `constexpr` call whose arguments are all constants, Clang evaluates it at compile time before the verifier sees it. A callee precondition instantiated at a call site is not such a call: there the argument is substituted for the parameter, and the solver settles the application from the lifted definition:
 
 <!-- cppverify-example: fragment -->
 
 ```cpp
+cppverify::post(is_power_of_two(512))
+// Clang evaluates is_power_of_two(512) → true; the solver receives true.
+
 write_data(buf, 512);
-// At this call site, Clang evaluates is_power_of_two(512) → true.
-// Z3 receives pre(true) for this site — no SMT reasoning needed.
+// write_data has cppverify::pre(is_power_of_two(n)): the precondition check at
+// this call is the application is_power_of_two(512), settled from the lifted
+// definition.
 ```
 
 This is unique to being inside the compiler.
@@ -710,6 +724,7 @@ cppverify::proof void lemma_fibo_monotonic(int i, int j)
 - Ghost functions that serve as proofs.
 - Must terminate (proven via `cppverify::decreases`).
 - Body establishes that precondition implies postcondition.
+- May return a value, named `cppverify::result` in its postcondition.
 - Can call other proof functions and spec functions.
 - May mutate local proof values, but cannot write executable memory/global
   state or call executable functions.
@@ -949,13 +964,13 @@ unconditional extent assumptions.
 
 ### 2. Implicit non-aliasing default
 
-When a function has multiple mutable address parameters, the verifier
-*implicitly* assumes their complete object ranges do not overlap at function
-entry. Address parameters currently include raw pointers and supported scalar
-lvalue references.
+For every pair of distinct address parameters of which at least one is
+mutable, the verifier *implicitly* assumes their complete object ranges do not
+overlap at function entry. Address parameters currently include raw pointers
+and supported scalar lvalue references.
 
 ```
-cppverify::pre(p != q && p != r && q != r && ...)   // for all distinct mut ptr/ref pairs
+cppverify::pre(p != q && p != r && q != r && ...)   // every distinct ptr/ref pair, at least one mutable
 ```
 
 - The caller's verification must establish these inequalities. Calling `swap(p, p)` fails the call's `aliasing` check.
@@ -999,7 +1014,8 @@ when at least one is mutable; `cppverify::aliases` permits the same complete obj
 `cppverify::modifies(*p)`.
 
 A reference formal may bind to another supported reference, an initialized
-ordinary scalar local, or a direct pointer dereference. Local `T&`/`const T&`
+ordinary scalar local, a field or fixed-array element of a local, a direct
+pointer dereference, or a pointer subscript. Local `T&`/`const T&`
 declarations may bind the same direct forms, may chain through other local
 references, and snapshot a raw pointer's address at the declaration. Reassigning
 that pointer therefore does not rebind the reference.
@@ -1009,9 +1025,9 @@ local becomes an automatic `VAllocateStmt` with a fresh lifetime identity,
 target size/alignment, byte ownership, liveness, and initialization metadata.
 It is disjoint from incoming address parameters and every simultaneously live
 allocation. All reads and writes then use heap loads/stores; a defensive VCR
-check rejects accidental scalar use of the same local. Lifetime is
-conservatively extended to function return, which is unobservable under the
-non-escaping boundary.
+check rejects accidental scalar use of the same local. Its lifetime ends at
+its lexical closing brace and at each supported early return, in reverse
+construction order.
 
 A provenance-backed scalar actual permits an open-region `cppverify::modifies(ref)` or
 `cppverify::modifies(*p)` footprint to be framed as its exact scalar cell only after the
@@ -1020,7 +1036,7 @@ are tracked transitively by that scan and retain the same owned lifetime
 identity.
 
 Addressable local declarations inside loops, `cppverify::old(local)`, `cppverify::old(local_ref)`,
-subscript/field/conditional bindings, temporaries, reference returns,
+conditional bindings, temporaries, reference returns,
 address-taking, rvalue references, and non-scalar referents remain fail-closed.
 An outer automatic local and a local reference declaration may be used inside a
 loop. Recursive executable bodies that allocate an automatic object or store
@@ -1127,7 +1143,8 @@ int dist_sq(Coordinate p, Coordinate q)
 }
 ```
 
-- `cppverify::type_invariant(expr)`: holds for every instance of the type at all times.
+- `cppverify::type_invariant(expr)`: holds at function boundaries for by-value
+  records of the type; pointer-to-record parameters get no injection.
 - `expr` may reference any field of the enclosing type by name.
 - Must be contextually convertible to bool.
 
@@ -1135,11 +1152,11 @@ int dist_sq(Coordinate p, Coordinate q)
 
 The verifier injects assume/assert only where they matter:
 
-- `assume(invariant)` at the *first use* of an invariant-named field within a function body — not blindly at the function entry. A function that takes a `Coordinate` parameter but never reads `c.x` or `c.y` gets no injection.
-- `assert(invariant_holds_after_assignment)` after assignments to fields named in the invariant — not after every assignment.
-- Return values of invariant-bearing types: `assert(invariant)` at every return point that constructs a value of that type.
+- `assume(invariant)` at the *first use* of an invariant-named field of a by-value parameter within a function body — not blindly at the function entry. A function that takes a `Coordinate` parameter but never reads `c.x` or `c.y` gets no injection.
+- `assert(invariant)` at each `return s;` of a by-value struct of an invariant-bearing type — not after individual field writes.
+- By-value arguments: where the callee assumes the invariant, a caller establishes it at the call, as a precondition.
 
-This is purely an optimization — correctness is identical to eager injection. The win is that VCs stay tight on large structs and rarely-touched fields.
+For by-value parameters this is purely an optimization — correctness is identical to eager injection at entry. The win is that VCs stay tight on large structs and rarely-touched fields.
 
 ### Status
 
@@ -1264,13 +1281,13 @@ cppverify::post(cppverify::result == cppverify::old(*p))
 
 ```cpp
 cppverify::post(cppverify::result > 0)
-cppverify::post(cppverify::result.size() == n)
+cppverify::post(cppverify::result.lo <= cppverify::result.hi)
 ```
 
 - Refers to the return value of the enclosing function.
 - Only valid in postconditions.
 - Type is computed via `Sema::GetTypeForDeclarator` from the full Declarator.
-- Supports postfix operators: `result.x`, `cppverify::result[i]`.
+- Supports postfix operators: `cppverify::result.x`, `cppverify::result[i]`.
 
 ## reveal_with_fuel (control recursive spec unfolding)
 
@@ -1294,11 +1311,12 @@ int safe_fib(int n) cppverify::pre(...) cppverify::post(cppverify::result == fib
   unfoldings (see Inductive predicates). The verifier also deepens on its
   own, up to four levels, when a verdict still depends on the predicate.
 - Without this, recursive `cppverify::spec` axioms cause Z3 matching loops.
-- Inside ghost blocks only.
+- A statement accepted anywhere in a function body or a ghost block; it emits
+  no code.
 
 ## hide / reveal
 
-- `cppverify::hide(fn_name)` and `cppverify::reveal(fn_name)` in ghost blocks selectively control whether the body of a spec function is visible to Z3.
+- `cppverify::hide(fn_name)` and `cppverify::reveal(fn_name)` are statements, accepted anywhere in a function body or ghost block, that control whether the body of a spec function is visible to Z3 in the whole function.
 - Default for non-recursive specs: visible (body inlined into queries).
 - Default for recursive specs: one finite unfolding step. Deeper unfolding
   requires `cppverify::reveal_with_fuel`.
@@ -1366,7 +1384,7 @@ cppverify::spec int sum(seq s)
 }
 
 int count_positive(const int *a, int n)
-  cppverify::pre(valid(a, n) && n >= 0 && n <= 1000)
+  cppverify::pre(cppverify::valid(a, n) && n >= 0 && n <= 1000)
   cppverify::post(0 <= cppverify::result && cppverify::result <= n)
 {
   cppverify::ghost seq seen = cppverify::seq_empty();
@@ -1503,7 +1521,9 @@ in place and records it in an `ASTContext` side table.
 |---|---|
 | ContractAssertStmt | Expr (the condition), optional CompoundStmt (the `by` proof); `cppverify::calc` builds nested ones |
 | GhostBlockStmt | CompoundStmt (the body); `cppverify::ghost T x = e;` wraps its declaration |
-| RevealWithFuelStmt | FunctionDecl* fn, int fuel |
+| RevealWithFuelStmt | Expr* fn (the spec function), Expr* fuel |
+| HideSpecStmt | Expr* fn (`cppverify::hide`) |
+| RevealSpecStmt | Expr* fn (`cppverify::reveal`) |
 
 **Side-table info on existing nodes:**
 
@@ -1536,29 +1556,28 @@ a one-line hook.
 3. `cppverify::result` is only valid in postconditions. Its type matches the enclosing function's return type.
 4. Quantifier binders are pushed into scope during body type-checking, popped after.
 5. Spec functions must have no side effects (no assignments to non-local state, no I/O calls).
-6. Proof functions must return void.
-7. Ghost blocks may only contain ghost-safe statements. They can update
+6. Ghost blocks may only contain ghost-safe statements. They can update
    ghost-local variables/direct dot-fields and call proof functions, but cannot
    mutate executable state, call executable functions, return from the
    enclosing function, or contain a loop without `cppverify::decreases`.
-8. `cppverify::modifies` lvalues must be ordinary lvalues; the parser computes their alias keys for the encoder.
-9. `cppverify::aliases(p, q)` arguments must be pointer/reference-typed parameters of the enclosing function.
-10. `cppverify::recommends` is only valid on `cppverify::spec` functions.
-11. A `cppverify::spec` function may be referenced only from contracts, ghost code, and
+7. `cppverify::modifies` footprints must be ordinary lvalues or ranges `p[lo : n]`.
+8. `cppverify::aliases(p, q)` arguments must be pointer/reference-typed parameters of the enclosing function.
+9. `cppverify::recommends` is only valid on `cppverify::spec` functions.
+10. A `cppverify::spec` function may be referenced only from contracts, ghost code, and
     `cppverify::spec` or `cppverify::proof` functions; executable code, including initializers and
     default arguments, may not reference one. Unevaluated operands
     (`sizeof`, `decltype`) are exempt.
-12. The same holds for ghost variables, `cppverify::choose`, and the `cppverify`
+11. The same holds for ghost variables, `cppverify::choose`, and the `cppverify`
     collections (their types as executable declarations, parameters, or
     results, and every operation).
-13. A range `p[lo : n]` needs a pointer to a complete object type and
+12. A range `p[lo : n]` needs a pointer to a complete object type and
     integer bounds, and is valid only as a whole `cppverify::modifies` footprint.
 
 ### CodeGen Rules
 
 - `GhostBlockStmt` → emit nothing
-- `ContractAssertStmt` → emit nothing (or optionally emit runtime assert in debug mode)
-- `RevealWithFuelStmt` → emit nothing
+- `ContractAssertStmt` → emit nothing
+- `RevealWithFuelStmt`, `HideSpecStmt`, `RevealSpecStmt` → emit nothing
 - Functions with `isSpec` or `isProof` → skip entirely (already gated in CodeGenModule)
 - All contract clauses on FunctionDecl → ignored by codegen
 - Loop invariants/decreases → ignored by codegen
@@ -1645,14 +1664,16 @@ their human message: `counterexample`, `solver.timeout`, `solver.unknown`,
 `backend.invalid-result`, `backend.inconsistent-results`,
 `bmc.incomplete-bound`, `lean.export-failed`, `cache.corrupt`,
 `cache.io-failed`, `spec.fuel`, `spec.hidden`, `spec.termination`,
-`spec.reads`, `spec.post`, `spec.inductive`, `proof.cycle`, and
-`counterexample.unchecked`.
+`spec.reads`, `spec.post`, `spec.inductive`, `proof.cycle`,
+`counterexample.unchecked`, `construct.unsupported`, `callee.contract`, and
+`decreases.missing`.
 `--diagnostics-format=json` serializes verification results as versioned JSON
 Lines (`cppverify.diagnostic/1`) for both source verification and archive
 replay.
 
-`--jobs=N` runs one pool of exactly `N` workers (default: every core, or
-`CPPVERIFY_JOBS`; the compile-time verifier uses one). Functions are verified
+`--jobs=N` runs one pool of exactly `N` workers (default: the available
+physical cores, or `CPPVERIFY_JOBS`; 1 for `--backend=lean` and for the
+compile-time verifier). Functions are verified
 as tasks on it, each with its own backends; a function's obligations are
 tasks on the same pool, and with workers to spare its whole query races the
 obligations solved one by one, a proof by either interrupting the other; a
@@ -1785,9 +1806,7 @@ Feature acceptance is layered. Real C++ positive/negative programs establish
 user-visible behavior, while `cpp-verify --lower-only --dump-ir=1,2,3,4`
 provides solver-independent VCR, passive, VC, and Z3 encoding oracles.
 `Lowered` means only that encoding succeeded; only an ordinary backend
-`Verified` result certifies the obligations. The executable sweep performs
-this lowering preflight for every solver-positive example before invoking its
-backend.
+`Verified` result certifies the obligations.
 
 This gate established the integer/control-flow/pointer core of the MVP.
 Subsequent bounded lifetime checkpoints added scalar `new`/`delete`,
