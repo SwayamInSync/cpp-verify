@@ -29,12 +29,13 @@ text, and IR dumps intentionally make the stream mixed. Malformed display bytes
 are replaced with the Unicode replacement character, so JSON output remains
 valid UTF-8.
 
-``unknown`` is different from a counterexample. It means Z3 timed out, exhausted
-an explicit resource/query budget, or entered a fragment it could not decide,
-often because the VC combines bounded
-quantifiers with heap arrays. CppVerify may retry smaller ordered obligations,
-but if those also remain unknown it reports the function as **not verified**.
-It never treats solver uncertainty as success.
+An undecided query is different from a counterexample. ``Unresolved`` with
+reason ``solver.timeout``, ``solver.resource-limit``, or ``solver.unknown``
+means Z3 timed out, exhausted an explicit resource/query budget, or entered a
+fragment it could not decide, often because the VC combines quantifiers with
+heap arrays. CppVerify may retry smaller ordered obligations, but if those also
+remain undecided it reports the function ``Unresolved``. It never treats solver
+uncertainty as success.
 
 A recursive spec applied beyond its unfolding fuel, or a spec you ``cppverify::hide``, is
 an opaque value that a solver model may choose freely, so a model is a
@@ -295,7 +296,7 @@ postconditions are never checked.
 .. code-block:: text
 
    Verified: clipped [backend=z3]
-   vacuity.cpp:5:20: warning: clipped: behavior huge never applies: its
+   vacuity.cpp:5:24: warning: clipped: behavior huge never applies: its
      assumption contradicts the preconditions, so its postconditions are
      never checked
 
@@ -304,7 +305,8 @@ nullptr) return -1;`` under ``pre(p != nullptr)`` is unreachable for a good
 reason, and every claim of the function is still checked on the paths that
 remain. Only an assumption that removes the paths a claim needs is a
 problem, and those are exactly the places checked above: a verified callee
-always returns, so ordinary calls cannot cut paths.
+returns, so ordinary calls cannot cut paths (a callee with
+``cppverify::decreases(*)`` may not, and its callers are reported ``[partial]``).
 
 Quantifiers that run away
 -------------------------
@@ -331,11 +333,14 @@ telemetry and does not erase the fresh solver proof. Text diagnostics report
 cache hits/queries, while JSON includes ``cache.hits``, ``cache.misses``, and
 ``cache.errors``.
 
-For a deliberately invalid program, both outcomes are sound:
+For a deliberately invalid program, two outcomes are sound:
 
-- ``error: verification failed`` means Z3 found a concrete model;
-- ``unknown`` means the verifier conservatively refused to certify it;
-- only ``Verified`` is a proof result.
+- ``error: verification failed`` means a counterexample was found and
+  checked;
+- ``Unresolved`` (with a reason code) means the verifier conservatively
+  refused to certify it.
+
+Only ``Verified``, ``Certified``, and ``Proved (z3+lean)`` are proof results.
 
 ``Lowered`` is not a fourth solver outcome. It is emitted only by
 ``cpp-verify --lower-only`` and says that Clang AST conversion, VCR, passive
@@ -390,7 +395,8 @@ is different from a failed proof:
   modeled and verification stopped fail-closed;
 - **verification failed** means the semantics were lowered and a
   counterexample violates an obligation;
-- **unknown** means the obligation was lowered but automation did not decide it.
+- **Unresolved** means the obligation was lowered but automation did not
+  decide it; its reason code says why.
 
 Do not work around an unsupported diagnostic by replacing a C++ operation with
 an unchecked integer or external axiom. Either reformulate the program within
@@ -431,8 +437,8 @@ Adjusting contracts
        ``[0, n)``; a pointer without an extent addresses one object
    * - Heap fact disappears after a call
      - Give the callee a ``cppverify::modifies`` with exact cells, a range
-       ``p[lo : n]``, or a region; a pointer-taking callee without
-       ``cppverify::modifies`` forgets the whole heap
+       ``p[lo : n]``, or a region; a trusted or bodyless callee that takes a
+       mutable pointer and has no ``cppverify::modifies`` forgets the whole heap
    * - Heap fact disappears after a loop
      - Add a loop ``cppverify::modifies`` naming what the loop writes, read in each
        iteration (``a[0 : i]`` for a prefix)
