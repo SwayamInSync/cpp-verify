@@ -1,7 +1,7 @@
-// result == a + b holds under wrapping, so this verifies WITHOUT --check-ub.
-// WITH --check-ub it fails: a + b can overflow (signed overflow is UB).
+// Nothing bounds a and b, so a + b can overflow, and signed overflow is
+// undefined behavior: verification fails with a counterexample.
 int add(int a, int b)
-  post(result == a + b)
+  cppverify::post(cppverify::result == a + b)
 {
   return a + b;
 }
