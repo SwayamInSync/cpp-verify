@@ -134,7 +134,7 @@ jobs:
       - name: Test the verifier
         run: |
           ninja -C build FileCheck not count split-file llvm-config
-          build/bin/llvm-lit -s --no-progress-bar clang/test/Verify
+          build/bin/llvm-lit -sv --no-progress-bar clang/test/Verify
 
   windows:
     name: Windows (fresh clone, setup.ps1)
