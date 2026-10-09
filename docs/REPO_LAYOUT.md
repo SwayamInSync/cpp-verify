@@ -23,7 +23,7 @@ cd cpp-verify
 ./setup.sh
 ```
 
-Without `--recurse-submodules`, run `git submodule update --init third_party/z3` before building (or rely on CMake FetchContent on first configure).
+Without `--recurse-submodules`, run `git submodule update --init third_party/z3` before building; otherwise the first build clones Z3 4.13.4 itself (it needs network access).
 
 ## LLVM base
 
