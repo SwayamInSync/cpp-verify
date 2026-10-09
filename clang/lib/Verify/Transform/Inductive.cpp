@@ -40,9 +40,9 @@ using namespace clang::verify;
 
 namespace {
 
-using Expr = std::unique_ptr<VExpr>;
+using ExprPtr = std::unique_ptr<VExpr>;
 using Stmts = std::vector<std::unique_ptr<VStmt>>;
-using Env = std::map<std::string, Expr>;
+using Env = std::map<std::string, ExprPtr>;
 
 const VType HeightType = VType::makeInt(VIntMode::Math, 64);
 
@@ -65,7 +65,7 @@ using StmtCursor =
 
 /// The value a body returns, as one expression, when it consists of returns
 /// under if and else; null otherwise.
-Expr returnedValue(StmtCursor Cursor) {
+ExprPtr returnedValue(StmtCursor Cursor) {
   while (!Cursor.empty() && Cursor.back().second == Cursor.back().first->size())
     Cursor.pop_back();
   if (Cursor.empty())
@@ -110,7 +110,7 @@ std::string nonPositiveOccurrence(const VExpr *E,
       return "in an argument of " + Call->Callee;
     return llvm::any_of(
                Call->Args,
-               [&](const Expr &Arg) { return appliesAny(Arg.get(), Group); })
+               [&](const ExprPtr &Arg) { return appliesAny(Arg.get(), Group); })
                ? "in its own argument"
                : "";
   }
@@ -196,7 +196,7 @@ bool describesDerivations(const VExpr *Post) {
   return Negated;
 }
 
-void replaceVariable(Expr &E, const std::string &Name, const VExpr &With) {
+void replaceVariable(ExprPtr &E, const std::string &Name, const VExpr &With) {
   if (!E)
     return;
   if (E->K == VExpr::Var && static_cast<VVarExpr &>(*E).Name == Name) {
@@ -204,7 +204,7 @@ void replaceVariable(Expr &E, const std::string &Name, const VExpr &With) {
     return;
   }
   forEachVExprChildSlot(
-      E.get(), [&](Expr &Child) { replaceVariable(Child, Name, With); });
+      E.get(), [&](ExprPtr &Child) { replaceVariable(Child, Name, With); });
 }
 
 /// The variables \p E reads that no quantifier within it binds, in order of
@@ -260,7 +260,7 @@ bool readsHeap(const VExpr *E) {
 /// The members of one group and what is generated for each.
 struct Member {
   VFunction *Predicate = nullptr;
-  Expr Unfolding;
+  ExprPtr Unfolding;
   VFunction *Step = nullptr;
   VFunction *Height = nullptr;
   VFunction *Monotone = nullptr;
@@ -279,32 +279,32 @@ class GroupExpander {
   std::map<std::string, std::vector<bool>> Fixed;
 
   // Expressions.
-  Expr var(const std::string &Name, VType Ty) const {
+  ExprPtr var(const std::string &Name, VType Ty) const {
     return std::make_unique<VVarExpr>(Name, Ty, Loc);
   }
-  Expr literal(int64_t Value, VType Ty) const {
+  ExprPtr literal(int64_t Value, VType Ty) const {
     return std::make_unique<VLiteralExpr>(Value, Ty, Loc);
   }
-  Expr boolean(VBinOp Op, Expr L, Expr R) const {
+  ExprPtr boolean(VBinOp Op, ExprPtr L, ExprPtr R) const {
     return std::make_unique<VBinOpExpr>(Op, std::move(L), std::move(R),
                                         VType::makeBool(), Loc);
   }
-  Expr arithmetic(VBinOp Op, Expr L, Expr R) const {
+  ExprPtr arithmetic(VBinOp Op, ExprPtr L, ExprPtr R) const {
     return std::make_unique<VBinOpExpr>(Op, std::move(L), std::move(R),
                                         HeightType, Loc);
   }
-  Expr negation(Expr E) const {
+  ExprPtr negation(ExprPtr E) const {
     return std::make_unique<VUnaryOpExpr>(VUnaryOp::Not, std::move(E),
                                           VType::makeBool(), Loc);
   }
-  Expr implies(Expr A, Expr B) const {
+  ExprPtr implies(ExprPtr A, ExprPtr B) const {
     return boolean(VBinOp::Or, negation(std::move(A)), std::move(B));
   }
   static bool isZero(const VExpr *E) {
     return E->K == VExpr::Literal &&
            static_cast<const VLiteralExpr *>(E)->Value == "0";
   }
-  Expr maximum(Expr A, Expr B) const {
+  ExprPtr maximum(ExprPtr A, ExprPtr B) const {
     if (isZero(A.get()))
       return B;
     if (isZero(B.get()))
@@ -313,28 +313,30 @@ class GroupExpander {
     return std::make_unique<VConditionalExpr>(std::move(Larger), std::move(A),
                                               std::move(B), HeightType, Loc);
   }
-  Expr apply(const VFunction &Fn, std::vector<Expr> Args) const {
+  ExprPtr apply(const VFunction &Fn, std::vector<ExprPtr> Args) const {
     return std::make_unique<VSpecCallExpr>(Fn.Name, Fn.Identity,
                                            std::move(Args), Fn.ReturnType, Loc,
                                            Fn.ReadsHeap);
   }
-  std::vector<Expr>
+  std::vector<ExprPtr>
   variables(const std::vector<std::pair<std::string, VType>> &Names) const {
-    std::vector<Expr> Out;
+    std::vector<ExprPtr> Out;
     for (const auto &[Name, Ty] : Names)
       Out.push_back(var(Name, Ty));
     return Out;
   }
-  std::vector<Expr> cloned(const std::vector<Expr> &Args, const Env &E) const {
-    std::vector<Expr> Out;
-    for (const Expr &Arg : Args)
+  std::vector<ExprPtr> cloned(const std::vector<ExprPtr> &Args,
+                              const Env &E) const {
+    std::vector<ExprPtr> Out;
+    for (const ExprPtr &Arg : Args)
       Out.push_back(substParamsInExpr(Arg.get(), E));
     return Out;
   }
-  Expr stepAt(const Member &M, Expr Height, std::vector<Expr> Args) const {
-    std::vector<Expr> All;
+  ExprPtr stepAt(const Member &M, ExprPtr Height,
+                 std::vector<ExprPtr> Args) const {
+    std::vector<ExprPtr> All;
     All.push_back(std::move(Height));
-    for (Expr &Arg : Args)
+    for (ExprPtr &Arg : Args)
       All.push_back(std::move(Arg));
     return apply(*M.Step, std::move(All));
   }
@@ -343,11 +345,12 @@ class GroupExpander {
   }
 
   /// Phi under \p E with every application Q(a) of a member mapped by \p Map.
-  Expr mapped(
-      const VExpr *Phi, const Env &E,
-      const std::function<Expr(const Member &, std::vector<Expr>)> &Map) const {
-    Expr Out = substParamsInExpr(Phi, E);
-    std::function<void(Expr &)> visit = [&](Expr &Slot) {
+  ExprPtr
+  mapped(const VExpr *Phi, const Env &E,
+         const std::function<ExprPtr(const Member &, std::vector<ExprPtr>)>
+             &Map) const {
+    ExprPtr Out = substParamsInExpr(Phi, E);
+    std::function<void(ExprPtr &)> visit = [&](ExprPtr &Slot) {
       forEachVExprChildSlot(Slot.get(), visit);
       if (Slot->K != VExpr::SpecCall)
         return;
@@ -364,11 +367,11 @@ class GroupExpander {
   /// forall(Binders, Fact): Proof shows Fact for fresh values of the binders
   /// in their ranges, which by generalization then holds for all.
   /// Proof receives the fresh values and returns Fact over them.
-  Expr
+  ExprPtr
   generalize(Stmts &Out,
              const std::vector<std::tuple<std::string, VType, const VExpr *,
                                           const VExpr *>> &Binders,
-             const std::function<Expr(Stmts &, const Env &)> &Proof) {
+             const std::function<ExprPtr(Stmts &, const Env &)> &Proof) {
     const std::string Choice = fresh("choice");
     Out.push_back(std::make_unique<VAssignStmt>(
         Choice, literal(0, VType::makeBool()), Loc));
@@ -391,7 +394,7 @@ class GroupExpander {
             Loc));
       Values[Binder] = var(Name, Ty);
     }
-    Expr Fact = Proof(Block, Values);
+    ExprPtr Fact = Proof(Block, Values);
     Block.push_back(
         std::make_unique<VContractAssertStmt>(cloneVExpr(Fact.get()), Loc));
     Block.push_back(
@@ -431,7 +434,7 @@ class GroupExpander {
     Fn->Params = Params;
     Fn->ReadsHeap = readsHeap(Probe.get());
     VResultExpr Chosen(BinderType, Loc);
-    Expr Holds = cloneVExpr(Body);
+    ExprPtr Holds = cloneVExpr(Body);
     replaceVariable(Holds, Binder, Chosen);
     if (Lo && Hi)
       Holds = boolean(
@@ -448,7 +451,7 @@ class GroupExpander {
   }
 
   /// The choice of the witness of an existential that introduction uses.
-  Expr witnessAt(const VQuantifiedExpr &Exists) {
+  ExprPtr witnessAt(const VQuantifiedExpr &Exists) {
     VFunction *&Fn = Witnesses[&Exists];
     if (!Fn) {
       std::vector<std::pair<std::string, VType>> Params;
@@ -466,7 +469,7 @@ class GroupExpander {
   /// height Q.height(a) chosen for each application Q(a), the largest of its
   /// parts, at the witness chosen for an existential, and the largest over a
   /// bounded universal's range.
-  Expr heightOf(const VExpr *Phi, const Env &E) {
+  ExprPtr heightOf(const VExpr *Phi, const Env &E) {
     if (!appliesAny(Phi, Group))
       return literal(0, HeightType);
     switch (Phi->K) {
@@ -494,7 +497,7 @@ class GroupExpander {
     case VExpr::Forall: {
       const auto *Q = static_cast<const VQuantifiedExpr *>(Phi);
       VFunction *Bound = boundOver(*Q);
-      std::vector<Expr> Args;
+      std::vector<ExprPtr> Args;
       Args.push_back(substParamsInExpr(Q->Lo.get(), E));
       Args.push_back(substParamsInExpr(Q->Hi.get(), E));
       for (size_t I = 2; I < Bound->Params.size(); ++I)
@@ -531,7 +534,7 @@ class GroupExpander {
     Bound->IntMode = VIntMode::Math;
     Bound->IsSpec = true;
     Bound->DeclLoc = Owner.Predicate->DeclLoc;
-    Expr Height = heightOf(Forall.Body.get(), Env());
+    ExprPtr Height = heightOf(Forall.Body.get(), Env());
     const std::string Lo = "derivation.lo";
     const std::string Hi = "derivation.hi";
     Bound->Params.push_back({Lo, HeightType});
@@ -539,9 +542,9 @@ class GroupExpander {
     for (const auto &Free : freeVariables(&Forall))
       Bound->Params.push_back(Free);
     Bound->ReadsHeap = readsHeap(Height.get());
-    Expr AtLo = cloneVExpr(Height.get());
+    ExprPtr AtLo = cloneVExpr(Height.get());
     replaceVariable(AtLo, Forall.Binder, *var(Lo, HeightType));
-    std::vector<Expr> Next;
+    std::vector<ExprPtr> Next;
     Next.push_back(
         arithmetic(VBinOp::Add, var(Lo, HeightType), literal(1, HeightType)));
     Next.push_back(var(Hi, HeightType));
@@ -568,11 +571,11 @@ class GroupExpander {
   /// Steps showing Phi[From] implies Phi[To] under \p E where that needs a
   /// fresh value: each bounded universal is generalized from one, and an
   /// existential above one is fixed at its chosen witness.
-  void
-  transport(const VExpr *Phi, const Env &E,
-            const std::function<Expr(const Member &, std::vector<Expr>)> &From,
-            const std::function<Expr(const Member &, std::vector<Expr>)> &To,
-            Stmts &Out) {
+  void transport(
+      const VExpr *Phi, const Env &E,
+      const std::function<ExprPtr(const Member &, std::vector<ExprPtr>)> &From,
+      const std::function<ExprPtr(const Member &, std::vector<ExprPtr>)> &To,
+      Stmts &Out) {
     if (!appliesAny(Phi, Group) || !containsForall(Phi))
       return;
     switch (Phi->K) {
@@ -595,7 +598,7 @@ class GroupExpander {
     case VExpr::Exists: {
       // The witness chosen for the existential of Phi[From].
       const auto *Q = static_cast<const VQuantifiedExpr *>(Phi);
-      Expr Source = mapped(Q, E, From);
+      ExprPtr Source = mapped(Q, E, From);
       const auto &SourceExists = static_cast<const VQuantifiedExpr &>(*Source);
       std::vector<std::pair<std::string, VType>> Params;
       VFunction *Fn = choice(Members.front().Predicate->Name + ".witness",
@@ -611,15 +614,15 @@ class GroupExpander {
     }
     case VExpr::Forall: {
       const auto *Q = static_cast<const VQuantifiedExpr *>(Phi);
-      Expr Lo = substParamsInExpr(Q->Lo.get(), E);
-      Expr Hi = substParamsInExpr(Q->Hi.get(), E);
+      ExprPtr Lo = substParamsInExpr(Q->Lo.get(), E);
+      ExprPtr Hi = substParamsInExpr(Q->Hi.get(), E);
       generalize(
           Out, {{Q->Binder, Q->BinderType, Lo.get(), Hi.get()}},
           [&](Stmts &Block, const Env &Values) {
             Env Inner = copy(E);
             for (const auto &[Name, Value] : Values)
               Inner[Name] = cloneVExpr(Value.get());
-            Expr Source = mapped(Q->Body.get(), Inner, From);
+            ExprPtr Source = mapped(Q->Body.get(), Inner, From);
             Stmts Steps;
             transport(Q->Body.get(), Inner, From, To, Steps);
             Block.push_back(std::make_unique<VIfStmt>(
@@ -647,8 +650,8 @@ class GroupExpander {
   /// Introduction steps for Phi under \p E: every application Q(a) Phi uses
   /// is raised to height \p Bound by monotonicity. Returns what they show,
   /// an implication per application.
-  Expr introduce(const VExpr *Phi, const Env &E, const VExpr &Bound,
-                 Stmts &Out) {
+  ExprPtr introduce(const VExpr *Phi, const Env &E, const VExpr &Bound,
+                    Stmts &Out) {
     if (!appliesAny(Phi, Group))
       return literal(1, VType::makeBool());
     switch (Phi->K) {
@@ -657,12 +660,13 @@ class GroupExpander {
       const Member &Q = *ByIdentity.at(Call->CalleeIdentity);
       auto args = [&] { return cloned(Call->Args, E); };
       auto height = [&] { return apply(*Q.Height, args()); };
-      Expr Guard = boolean(VBinOp::And, stepAt(Q, height(), args()),
-                           boolean(VBinOp::Le, height(), cloneVExpr(&Bound)));
-      std::vector<Expr> CallArgs;
+      ExprPtr Guard =
+          boolean(VBinOp::And, stepAt(Q, height(), args()),
+                  boolean(VBinOp::Le, height(), cloneVExpr(&Bound)));
+      std::vector<ExprPtr> CallArgs;
       CallArgs.push_back(height());
       CallArgs.push_back(cloneVExpr(&Bound));
-      for (Expr &Arg : args())
+      for (ExprPtr &Arg : args())
         CallArgs.push_back(std::move(Arg));
       Stmts Raise;
       Raise.push_back(std::make_unique<VCallStmt>(
@@ -674,7 +678,7 @@ class GroupExpander {
     }
     case VExpr::BinOp: {
       const auto *B = static_cast<const VBinOpExpr *>(Phi);
-      Expr L = introduce(B->Lhs.get(), E, Bound, Out);
+      ExprPtr L = introduce(B->Lhs.get(), E, Bound, Out);
       return boolean(VBinOp::And, std::move(L),
                      introduce(B->Rhs.get(), E, Bound, Out));
     }
@@ -683,7 +687,7 @@ class GroupExpander {
                        Bound, Out);
     case VExpr::Conditional: {
       const auto *C = static_cast<const VConditionalExpr *>(Phi);
-      Expr T = introduce(C->Then.get(), E, Bound, Out);
+      ExprPtr T = introduce(C->Then.get(), E, Bound, Out);
       return boolean(VBinOp::And, std::move(T),
                      introduce(C->Else.get(), E, Bound, Out));
     }
@@ -695,8 +699,8 @@ class GroupExpander {
     }
     case VExpr::Forall: {
       const auto *Q = static_cast<const VQuantifiedExpr *>(Phi);
-      Expr Lo = substParamsInExpr(Q->Lo.get(), E);
-      Expr Hi = substParamsInExpr(Q->Hi.get(), E);
+      ExprPtr Lo = substParamsInExpr(Q->Lo.get(), E);
+      ExprPtr Hi = substParamsInExpr(Q->Hi.get(), E);
       return generalize(Out, {{Q->Binder, Q->BinderType, Lo.get(), Hi.get()}},
                         [&](Stmts &Block, const Env &Values) {
                           Env Inner = copy(E);
@@ -773,8 +777,8 @@ class GroupExpander {
                              Q.Predicate->Params[K].second, nullptr, nullptr);
     return Binders;
   }
-  std::vector<Expr> argumentsIn(const Member &Q, const Env &Values) const {
-    std::vector<Expr> Out;
+  std::vector<ExprPtr> argumentsIn(const Member &Q, const Env &Values) const {
+    std::vector<ExprPtr> Out;
     const std::vector<bool> &Positions = Fixed.at(Q.Predicate->Identity);
     for (size_t K = 0; K != Q.Predicate->Params.size(); ++K) {
       const auto &[Name, Ty] = Q.Predicate->Params[K];
@@ -837,8 +841,9 @@ class GroupExpander {
   void finishStep(Member &M) {
     VFunction &P = *M.Predicate;
     const std::string Height = M.Step->Params.front().first;
-    Expr Lowered = mapped(
-        M.Unfolding.get(), Env(), [&](const Member &Q, std::vector<Expr> Args) {
+    ExprPtr Lowered = mapped(
+        M.Unfolding.get(), Env(),
+        [&](const Member &Q, std::vector<ExprPtr> Args) {
           return stepAt(Q,
                         arithmetic(VBinOp::Sub, var(Height, HeightType),
                                    literal(1, HeightType)),
@@ -864,7 +869,7 @@ class GroupExpander {
     // P.height(x): a height at which P.step holds, when one does.
     const std::string Chosen = "derivation.chosen";
     std::vector<std::pair<std::string, VType>> Params;
-    Expr Body = stepAt(M, var(Chosen, HeightType), variables(P.Params));
+    ExprPtr Body = stepAt(M, var(Chosen, HeightType), variables(P.Params));
     M.Height = choice(P.Name + ".height", P.Identity + "::height", Chosen,
                       HeightType, nullptr, nullptr, Body.get(), Params);
     // Keep the predicate's parameter order whatever the body mentions.
@@ -891,7 +896,7 @@ class GroupExpander {
     const std::string J = Fn.Params[1].first;
     auto h = [&] { return var(H, HeightType); };
     auto j = [&] { return var(J, HeightType); };
-    auto less = [&](Expr E) {
+    auto less = [&](ExprPtr E) {
       return arithmetic(VBinOp::Sub, std::move(E), literal(1, HeightType));
     };
     addPrecondition(Fn,
@@ -910,10 +915,10 @@ class GroupExpander {
       generalize(Induction, everyArgument(Q),
                  [&](Stmts &Block, const Env &Values) {
                    auto args = [&] { return argumentsIn(Q, Values); };
-                   std::vector<Expr> CallArgs;
+                   std::vector<ExprPtr> CallArgs;
                    CallArgs.push_back(less(h()));
                    CallArgs.push_back(less(j()));
-                   for (Expr &Arg : args())
+                   for (ExprPtr &Arg : args())
                      CallArgs.push_back(std::move(Arg));
                    Stmts Recurse;
                    Recurse.push_back(std::make_unique<VCallStmt>(
@@ -929,10 +934,10 @@ class GroupExpander {
     }
     transport(
         M.Unfolding.get(), Env(),
-        [&](const Member &Q, std::vector<Expr> Args) {
+        [&](const Member &Q, std::vector<ExprPtr> Args) {
           return stepAt(Q, less(h()), std::move(Args));
         },
-        [&](const Member &Q, std::vector<Expr> Args) {
+        [&](const Member &Q, std::vector<ExprPtr> Args) {
           return stepAt(Q, less(j()), std::move(Args));
         },
         Induction);
@@ -968,10 +973,10 @@ class GroupExpander {
         });
     transport(
         M.Unfolding.get(), Env(),
-        [&](const Member &Q, std::vector<Expr> Args) {
+        [&](const Member &Q, std::vector<ExprPtr> Args) {
           return stepAt(Q, below(), std::move(Args));
         },
-        [&](const Member &Q, std::vector<Expr> Args) {
+        [&](const Member &Q, std::vector<ExprPtr> Args) {
           return apply(*Q.Predicate, std::move(Args));
         },
         Fn->Body);
@@ -990,8 +995,8 @@ class GroupExpander {
     const std::string B = "derivation.bound";
     // A chosen height is arbitrary where its predicate is false, so the bound
     // is clamped at zero explicitly.
-    Expr Height = heightOf(M.Unfolding.get(), Env());
-    Expr Positive =
+    ExprPtr Height = heightOf(M.Unfolding.get(), Env());
+    ExprPtr Positive =
         boolean(VBinOp::Ge, cloneVExpr(Height.get()), literal(0, HeightType));
     Fn->Body.push_back(std::make_unique<VAssignStmt>(
         B,
@@ -999,7 +1004,7 @@ class GroupExpander {
             std::move(Positive), std::move(Height), literal(0, HeightType),
             HeightType, Loc),
         Loc));
-    Expr Bound = var(B, HeightType);
+    ExprPtr Bound = var(B, HeightType);
     introduce(M.Unfolding.get(), Env(), *Bound, Fn->Body);
     Fn->Body.push_back(std::make_unique<VContractAssertStmt>(
         stepAt(
@@ -1059,7 +1064,7 @@ void verify::expandInductivePredicates(
     return;
 
   std::set<std::string> Rejected;
-  std::map<std::string, Expr> Unfoldings;
+  std::map<std::string, ExprPtr> Unfoldings;
   for (auto &[Identity, Fn] : Inductive) {
     auto reject = [&, &Identity = Identity, Fn = Fn](const std::string &Why) {
       Errors.push_back(Fn->Name + ": " + Why);
@@ -1079,13 +1084,13 @@ void verify::expandInductivePredicates(
              "when");
       continue;
     }
-    Expr Unfolding = returnedValue({{&Fn->Body, 0}});
+    ExprPtr Unfolding = returnedValue({{&Fn->Body, 0}});
     if (!Unfolding) {
       reject("the body of an inductive predicate returns a condition, under "
              "if and else at most");
       continue;
     }
-    if (llvm::any_of(Fn->Postconditions, [&](const Expr &Post) {
+    if (llvm::any_of(Fn->Postconditions, [&](const ExprPtr &Post) {
           return !describesDerivations(Post.get());
         })) {
       reject("a postcondition of an inductive predicate states what holds "
