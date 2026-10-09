@@ -77,8 +77,8 @@ C++ source with contracts
 The same modified Clang can also compile the program normally. CodeGen simply skips:
 - All `GhostBlockStmt` nodes
 - All `ContractAssertStmt` nodes
-- All `RevealWithFuelStmt` nodes
-- All `spec_fn` / `proof_fn` function declarations (gated in CodeGenModule)
+- All `RevealWithFuelStmt`, `HideSpecStmt`, and `RevealSpecStmt` nodes
+- All `cppverify::spec` / `cppverify::proof` function declarations (gated in CodeGenModule)
 - All contract clauses (pre/post/modifies/aliases/invariant/decreases/recommends/type_invariant)
 
 Result: standard binary with zero overhead from contracts.
@@ -92,9 +92,10 @@ Purpose: clean, typed, control-flow-preserving representation of the verified pr
 Every `VExpr` carries a `VType` populated automatically from canonical Clang
 `QualType` data during `ASTConverter`; users never re-annotate contract terms.
 `VType::fromQualType` recognizes booleans, void, pointers/references, integral
-and enum widths/signedness, and a record marker. Record fields are flattened by
-the converter where supported. Arrays do **not** have a first-class `VType`
-today and fail closed outside the supported pointer/index lowering.
+and enum widths/signedness, and two aggregate markers: `Struct` for a record
+and `Array` for a constant array (with its element count and stride). Record
+fields are flattened by the converter where supported, and fixed local arrays
+are supported as automatic objects; other arrays fail closed.
 
 ### Types (VType)
 
@@ -106,6 +107,7 @@ VType =
   | Int32(IntMode, bitWidth, isSigned)
   | Int64(IntMode, bitWidth, isSigned)
   | Struct
+  | Array(count, strideBytes)                // constant-array marker
   | Ptr(pointeeSizeBytes)                    // raw pointer / reference
   | Seq | Set | Multiset | Map                 // <cppverify.h> collections
   | Void
@@ -118,7 +120,7 @@ VType =
 - Every `VExpr` carries a `VType`. Populated from Clang's `QualType` during ASTConverter.
 - The `IntMode` tag on integer types is set by ASTConverter:
   - In `cppverify::spec` function bodies → `Math` (Z3 `Int`)
-  - In `cppverify::proof`/`exec`/lifted-`constexpr` function bodies → `Machine` (Z3 `BitVec`)
+  - In `cppverify::proof`/`exec`/lifted-`constexpr` function bodies → `Machine` (Z3 `BitVec(N)` or range-checked `Int`, per `--int-encoding`)
 - `Ptr(pointeeSizeBytes)` retains Clang's target `sizeof(T)`. Typed pointer
   arithmetic scales element offsets by this stride before entering the
   mathematical-address heap; record fields add Clang's target byte offset.
@@ -197,7 +199,7 @@ VStmt =
   | Assume(expr: VExpr)
   | Return(value: VExpr?)
   | GhostBlock(body: [VStmt])
-  | RevealWithFuel(fn: VFunction*, fuel: int)
+  | RevealWithFuel(fn: spec name, fuel: unsigned)
   | Call(name, args: [VExpr], result_var: string?)
 ```
 
@@ -248,7 +250,7 @@ VFunction =
   cloning, loop unrolling, dumps, and every backend preserve it.
 - `identity` includes the canonical signature, so overloads with the same
   source spelling remain distinct through modular calls and SMT symbols.
-- `cppverify::aliases` empty means the implicit non-aliasing precondition applies to all mutable pointer/reference parameter pairs.
+- `cppverify::aliases` empty means the implicit non-aliasing precondition applies to every pair of distinct pointer/reference parameters of which at least one is mutable.
 - A `VFootprint` is a target lvalue with an optional element count and
   element size: a cell (`p[i]`, `p->f`, a reference), a range `p[lo : n]`
   (target `p[lo]`, count `n`), or a region `*p` (the object `p` addresses).
@@ -627,7 +629,7 @@ canonical module that lower-only and the selected backend consume.
 | Load(p, T) | `(select mem_k p)` for the current heap version k |
 | Forall(x, lo, hi, P) | `(forall ((x Int)) (=> (and (<= lo x) (< x hi)) P))` — bound is the implicit trigger |
 | Forall(x, P) | `(forall ((x Int)) P)`; marked triggers become `:pattern`, and the quantifier id is `q@line:col` |
-| HeapFrame(h, h', lo, hi, ...) | `(cppverify::forall ((a Int)) (or (and (<= lo a) (< a hi)) ... (= (select h' a) (select h a))))` |
+| HeapFrame(h, h', lo, hi, ...) | `(forall ((a Int)) (or (and (<= lo a) (< a hi)) ... (= (select h' a) (select h a))))` |
 | `s[i]` | `(cppverify.seq_at s i)`, see below |
 | `s.push(x)`, `s + t` | `seq.++`, `seq.unit`, with index facts, see below |
 | `s.subrange(lo, hi)` | `(seq.extract s lo (- hi lo))`, or `(seq.extract s 0 hi)` when `lo < 0`, see below |
@@ -1008,7 +1010,7 @@ predicate names the application and the postcondition that would decide
 it.
 
 `witnessesOf` decides a quantifier whose body applies specs at its binder:
-the body (negated for a `cppverify::forall`) is unfolded at the binder, non-recursive
+the body (negated for a `forall`) is unfolded at the binder, non-recursive
 definitions first, then one and two levels of recursive ones (definitions
 are equations, so each try is exact), within 20000 terms; each remaining
 application at the binder, and each quantifier over it, becomes `true`
@@ -1021,7 +1023,7 @@ where it can hold: if that is finitely many values (a stretch of at most
 there decides the quantifier. Otherwise the certifier tries candidate
 witnesses where the comparisons of the unfolded bodies change, then binder
 values `0, -1, 1, -2, ...` up to `QuantifierProbe` on each side: a value
-where an `cppverify::exists` body holds, or a `cppverify::forall` body fails, decides it.
+where an `exists` body holds, or a `forall` body fails, decides it.
 
 **`cppverify::recommends`:** parsed and stored; not emitted into the main VC. On
 verification failure, a second pass adds `cppverify::recommends` checks and reports
@@ -1103,7 +1105,7 @@ second) and at most eight rounds that only search among hidden values. It
 then solves the query again with whole definitions in the remaining time and
 certifies any model it returns: a non-recursive function is replaced by its
 definition and a recursive one becomes a native recursive definition
-(`RecAddDefinition`) when its recursion is guarded: `&&` and `||` over a
+(`z3::context::recdef`) when its recursion is guarded: `&&` and `||` over a
 recursive application become `ite`s, and every recursive application must
 lie in a branch of an `ite` whose branches apply a recursive function
 outside quantifiers. Z3 splits a recursive definition into cases only at
@@ -1111,7 +1113,7 @@ such `ite`s, neither inside a quantifier nor at one whose branches apply
 recursion only under one, and a definition with one case is a macro, which
 Z3 expands at every application without bound and without honoring an
 interrupt (an inductive predicate's step, whose recursion is under an
-`cppverify::exists`, hung a query for ten minutes). A function whose recursion is not
+`exists`, hung a query for ten minutes). A function whose recursion is not
 guarded stays declared, and refinement gives its instances. Hidden
 functions are defined there too, so after a
 hidden-spec stop that pass gets only a short slice and its UNSAT is
@@ -1166,7 +1168,7 @@ on its condition, and machine operations, conversions, and division are
 evaluated only on constant pieces. Comparisons become linear atoms over the
 pairs of pieces, nested quantifiers (renamed apart) and their bounds stay
 quantifiers, and the sentence is decided by Cooper's elimination, innermost
-quantifier first (`cppverify::forall` as `not exists not`): after scaling the binder's
+quantifier first (`forall` as `not exists not`): after scaling the binder's
 coefficients to one, `exists x. F` is the disjunction of `F` with `x` far
 below every bound at one residue per period of its divisibility atoms, and
 of `F` at each lower bound plus each such residue (or the same from above,
@@ -1451,9 +1453,9 @@ The driver selects a backend via `VerifyOptions` (`Verifier.h` / `cpp-verify --b
 
 Each backend declares supported `LogicFeature`s. Central dispatch rejects a
 module requiring an unavailable feature before backend execution. Spec
-inlining runs before passivization on Z3/cvc5/portfolio/BMC
-(`SpecInliner::prepareFunction` or `prepareFunctionAxiomatic` for recursive
-specs). `--lean-fallback=DIR` keeps Z3 or strict portfolio as the primary
+inlining runs before passivization: `SpecInliner::prepareFunctionAxiomatic`
+on Z3, cvc5, portfolio, race, and Lean, and `SpecInliner::prepareFunction` on
+BMC. `--lean-fallback=DIR` keeps Z3 or strict portfolio as the primary
 backend and sends only `Unresolved` modules through the same canonical Lean
 adapter. An unresolved Z3 or portfolio result lists the obligations it did not
 prove individually, and by default only those are exported, under their
@@ -1655,9 +1657,9 @@ callee `VValidExtent` summaries are available at call sites. A slice actual is
 lowered only after proving structural same-origin containment, including
 nonnegative offset/length and the one-past empty case. A conservative transitive
 body scan distinguishes acyclic read-only callees from unknown, recursive, or
-writing effects. Exact-cell writes reuse ordinary frame substitution; symbolic
-writable ranges and unbounded region writes through a sub-slice fail closed
-until passive/obligation IR has a quantified range-frame primitive.
+writing effects. Exact-cell writes reuse ordinary frame substitution; writes to
+a symbolic range or a whole sub-slice are supported, framed by a `HeapFrame`
+relation over the written regions.
 
 Ghost blocks and proof functions share the VCR statement vocabulary but are
 erased by CodeGen. Frontend isolation therefore permits assignments only to
@@ -1714,7 +1716,7 @@ and per-obligation semantic hashes, function identity, required features,
 direct and negated goals, typed terms, obligation IDs/kinds, resolved source
 metadata, ordered queries, and owned finite-fuel logic declarations.
 Frames print as `heap_frame` with their regions, trigger patterns as
-`cppverify::trigger` children of their quantifier, and collection operations by name
+`trigger` children of their quantifier, and collection operations by name
 (`seq.push : seq`). Layer 4 encodes that same in-memory module, preceded by
 the range facts, bit definitions, the definitions of `cppverify.cell_*` and
 `cppverify.seq_at` that the query uses, and the sequence index, split, and
@@ -1736,8 +1738,7 @@ stops before VCR conversion.
 - Unit oracles: `clang/unittests/Verify` (`VerifyTests`) checks every machine-integer
   operator against `llvm::APInt` under each encoding; with
   `CPPVERIFY_PARITY_ARCHIVES` it also compares encodings per archived obligation.
-- Runner: `scripts/run-verify-tests.sh`; every solver-positive example receives
-  a solver-free lowering preflight before its semantic verification run.
+- Runner: `scripts/run-verify-tests.sh`.
 - Backend fidelity gate: `clang/test/Verify/suite/backend_fidelity_gate.test`
   requires cvc5 and pinned Lean 4.32.2 and runs the permanent differential
   matrix under every machine-integer encoding.
@@ -1806,8 +1807,8 @@ and fail-closed review.
 
 Remaining platform work is explicit rather than hidden:
 
-- VCR still lacks a first-class object/place/effect type system, arrays, and
-  structured aggregate values;
+- VCR still lacks a first-class object/place/effect type system, general
+  arrays, and structured aggregate values;
 - pass registration and a stable plugin ABI are not implemented yet;
 - archives carry portable inclusive presumed source ranges rather than raw
   Clang locations or macro-expansion stacks;
@@ -1816,10 +1817,8 @@ Remaining platform work is explicit rather than hidden:
 
 | Future feature | Correct extension point |
 |---|---|
-| Alternate SMT solver / portfolio | New `ObligationModule` adapter with capability and model semantics |
 | Symbolic execution | VCR analysis/backend preserving C++ and source metadata |
 | Separation/ownership reasoning | VCR object/effect extension plus a declared logic feature and adapter |
 | Abstract interpretation / invariant inference | VCR pass that proposes facts rechecked as ordinary obligations |
 | `std::vector` model | Frontend/library model lowered to VCR object/place operations |
 | Concurrency | VCR atomic/effect model, then explicit happens-before logic terms |
-| Manual quantifier triggers | Extend neutral quantifier terms and backend capabilities |
