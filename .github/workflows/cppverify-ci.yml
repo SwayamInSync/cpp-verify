@@ -133,7 +133,7 @@ jobs:
 
       - name: Test the verifier
         run: |
-          ninja -C build FileCheck not count split-file
+          ninja -C build FileCheck not count split-file llvm-config
           build/bin/llvm-lit -s --no-progress-bar clang/test/Verify
 
   windows:
