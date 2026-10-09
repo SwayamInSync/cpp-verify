@@ -21,8 +21,8 @@ Swap with contract
 Aliasing
 --------
 
-- Distinct mutable pointer/reference address parameters are assumed
-  **non-aliased** by default.
+- Distinct pointer/reference parameters are assumed **non-aliased** by
+  default whenever at least one of the pair is mutable.
 - Use ``cppverify::aliases(dst, src)`` when aliasing is allowed.
 
 Scalar lvalue references
@@ -47,12 +47,15 @@ stores through the binding:
 
 The verifier implicitly requires each reference to be non-null, live, and
 initialized. ``cppverify::old(left)`` reads the entry heap, while the unwrapped ``left`` in
-the postcondition reads the final heap. Distinct mutable references are
-object-range disjoint unless ``cppverify::aliases(left, right)`` is present.
+the postcondition reads the final heap. Two distinct references, at least one
+of them mutable, are object-range disjoint unless ``cppverify::aliases(left, right)``
+is present.
 
 Reference formals can be forwarded from another reference, bound to a direct
-dereference such as ``set_value(*p, value)``, or passed an initialized ordinary
-scalar local. Local references may bind those same direct forms and chain:
+dereference such as ``set_value(*p, value)``, bound to a field or element of a
+local object or of a parameter's buffer (``set_value(pt.x, 7)``,
+``set_value(a[1], 9)``), or passed an initialized ordinary scalar local. Local
+references may bind those same forms and chain:
 
 .. cppverify-example: with swap
 
@@ -68,14 +71,14 @@ scalar local. Local references may bind those same direct forms and chain:
      return left == 2 && right == 1;
    }
 
-CppVerify spills only address-required scalar locals from scalar SSA. Each
-becomes a fresh automatic object with target size/alignment, byte ownership,
+CppVerify spills only the locals whose addresses are needed (scalars, fixed
+arrays, and simple records) from scalar SSA. Each becomes a fresh automatic object with target size/alignment, byte ownership,
 liveness, initialization, and a non-escaping lifetime identity. A local
 binding snapshots its address, so changing a source pointer later does not
 rebind the reference.
 
-Subscript/field/conditional bindings, temporaries, reference returns,
-address-taking, rvalue references, and non-scalar referents remain rejected.
+Conditional bindings, temporaries, reference returns, address-taking, rvalue
+references, and non-scalar referents remain rejected.
 Addressable declarations inside loops and ``cppverify::old`` of automatic locals or local
 bindings are also fail-closed; outer automatic locals and loop-local reference
 aliases are supported.
