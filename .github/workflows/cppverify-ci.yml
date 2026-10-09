@@ -67,7 +67,7 @@ jobs:
             | sh -s -- -y --default-toolchain "$LEAN_TOOLCHAIN"
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
 
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         with:
           path: .ccache
           key: ccache-linux-${{ matrix.config }}-${{ github.sha }}
@@ -106,6 +106,12 @@ jobs:
       - name: Report the cache
         if: always()
         run: ccache --show-stats
+
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .ccache
+          key: ccache-linux-${{ matrix.config }}-${{ github.sha }}
 
   macos:
     name: macOS (fresh clone, setup.sh)
