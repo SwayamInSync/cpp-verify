@@ -1,7 +1,7 @@
-// Excluding INT_MIN makes negation safe: verifies both ways.
+// Excluding INT_MIN makes negation safe: verifies.
 int negate(int x)
-  pre(x > -2147483648)
-  post(result == -x)
+  cppverify::pre(x > -2147483648)
+  cppverify::post(cppverify::result == -x)
 {
   return -x;
 }
