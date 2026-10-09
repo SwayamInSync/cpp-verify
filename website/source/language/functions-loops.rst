@@ -12,10 +12,12 @@ Functions
    { return x + 1; }
 
 Contracts may instead appear on a forward declaration.  A later definition
-inherits that declaration's contract even when its parameter names differ::
+inherits that declaration's contract even when its parameter names differ:
+
+.. code-block:: cpp
 
    int f(int value)
-     cv::pre(value > 0)
+     cv::pre(value > 0 && value < 1000)
      cv::post(cv::result > value);
 
    int f(int x) { return x + 1; }
@@ -68,7 +70,7 @@ outside the verified subset, or a lemma you decide to assume.
    trusted.cpp:2:28: Trusted: clamp_byte (contract assumed, not verified)
    trusted.cpp:6:28: Trusted: read_sensor (contract assumed, not verified)
    Verified: spec axiom: sq
-   trusted.cpp:16:35: Trusted: sq_nonnegative (contract assumed, not verified)
+   trusted.cpp:16:39: Trusted: sq_nonnegative (contract assumed, not verified)
    Verified: sample [backend=z3] [trusts=clamp_byte,read_sensor,sq_nonnegative]
 
 - On a declaration, the contract is assumed at every call; the preconditions
@@ -111,8 +113,9 @@ that contradicts the state of a call (no result can satisfy it) would make
 everything after the call hold vacuously; CppVerify reports that case with
 ``[vacuous]`` and a warning at the call (see :doc:`tooling`).
 
-An uncontracted ``constexpr`` definition may be lifted for use in contract
-expressions. It is lifted where verification uses it: in a contract, a
+An uncontracted, non-recursive, loop-free ``constexpr`` definition may be
+lifted for use in contract expressions; a recursive one used with symbolic
+arguments is rejected. It is lifted where verification uses it: in a contract, a
 verified body, a type invariant, or another lifted function, so the
 ``constexpr`` functions of a header that nothing verified uses are never
 examined. Once a ``constexpr`` function has executable ``cppverify::pre``/``cppverify::post``
@@ -127,9 +130,10 @@ postcondition directly.
 Behaviors
 ---------
 
-A contract can be split into cases, as ACSL behaviors do. ``behavior(name,
-assumes)`` starts a case; the ``pre`` and ``post`` clauses after it apply
-where its assumption holds (``assumes`` at entry):
+A contract can be split into cases, as ACSL behaviors do.
+``cppverify::behavior(name, assumes)`` starts a case; the ``cppverify::pre`` and
+``cppverify::post`` clauses after it apply where its assumption holds
+(``assumes`` at entry):
 
 .. code-block:: cpp
 
@@ -192,7 +196,7 @@ drop, after a ``for`` increment has run. ``break`` and ``continue`` in a
 ``do`` loop are not supported yet, and ``cppverify::ghost`` code cannot leave an
 executable loop.
 
-The verifier checks a loop **modularly** (no unrolling), discharging three
+The verifier checks a loop **modularly** (no unrolling), discharging four
 obligations:
 
 .. list-table::
@@ -250,7 +254,7 @@ Nobody knows whether this loop ends for every start, so it has no measure:
 
    Verified: collatz_steps [backend=z3] [partial]
    Verified: none [backend=z3] [partial]
-   warning: collatz_steps: proved only for executions that terminate: decreases(*) at 11:15 allows it to diverge
+   warning: collatz_steps: proved only for executions that terminate: cppverify::decreases(*) at 7:19 allows it to diverge
    warning: none: proved only for executions that terminate: it calls collatz_steps, which may diverge
 
 A loop writes only the objects its stores and calls reach, so other memory
@@ -282,8 +286,9 @@ increment, so ``a[0 : i]`` then covers the cell just written; the function's
 ``cppverify::modifies(a[0 : k])`` is the range ``[0, k)``, and the cells from ``k`` on
 keep their values without an invariant saying so.
 
-After the loop the verifier knows exactly ``I && !c`` — anything needed
-downstream must be captured by the invariant.
+After a normal exit the verifier knows ``I && !c`` about what the loop may
+change; variables the loop does not assign and memory outside its write set
+keep their values. A ``break`` or ``return`` leaves in its own state instead.
 
 .. note::
 
