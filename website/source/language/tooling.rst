@@ -211,11 +211,13 @@ encoding. A successful run prints ``Lowered: function``. That means the formula
 was constructed and encoded, **not** that its obligations are true.
 
 Backend results are intentionally distinct. Z3 ``unsat`` reports ``Verified``;
-``sat`` reports a failed source obligation; timeout/``unknown`` reports
-``Unresolved``. cvc5 follows the same status mapping without model extraction.
+a ``sat`` model reports a failed source obligation once it is checked against
+the true definitions (otherwise ``Unresolved`` with a reason); timeout and
+``unknown`` report ``Unresolved``. cvc5 follows the same mapping, and its models
+are checked the same way.
 Portfolio mode requires agreement; an agreed ``sat`` result uses Z3's typed
 model and trace, while disagreement or incomplete secondary evidence is
-``Unresolved``. BMC reports ``BoundedSafe(N)`` when only its unwinding
+``Unresolved``. BMC reports ``BoundedSafe: f [backend=bmc, bound=N]`` when only its unwinding
 obligation fails at the maximum frontier, and reports ``Verified`` only when an
 explored bound proves complete unwinding. Text diagnostics publish the terminal
 ``bound``, all attempted ``bounds``, and the count of successful ordered queries
@@ -283,7 +285,8 @@ owns a fresh Z3 context/solver or a separate cvc5 process; no solver state is
 shared between workers. The first failing source obligation is therefore
 identical for ``--jobs=1`` and ``--jobs=N`` even if worker completion order
 differs. Lean generation and certification stay serial. The compile-time
-verifier uses one job unless told otherwise.
+verifier (``clang++ -fverify-contracts``) always uses one job and the default
+limits; use ``cpp-verify`` for ``--jobs`` and the other options.
 
 With ``--proof-cache``, CppVerify solves and caches individual ordered
 obligations. A cache key combines the dependency-scoped semantic hash, semantic
