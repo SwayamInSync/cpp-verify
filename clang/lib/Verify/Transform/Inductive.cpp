@@ -745,7 +745,8 @@ class GroupExpander {
                   Positions[K] && Arg->K == VExpr::Var &&
                   static_cast<const VVarExpr *>(Arg)->Name == Name &&
                   !Bound.count(Name) &&
-                  llvm::any_of(M.Predicate->Params, [&](const auto &Own) {
+                  llvm::any_of(M.Predicate->Params, [&, &Name = Name, &Ty = Ty](
+                                                        const auto &Own) {
                     return Own.first == Name && Own.second.Kind == Ty.Kind &&
                            Own.second.BitWidth == Ty.BitWidth &&
                            Own.second.IsSigned == Ty.IsSigned;
@@ -1060,7 +1061,7 @@ void verify::expandInductivePredicates(
   std::set<std::string> Rejected;
   std::map<std::string, Expr> Unfoldings;
   for (auto &[Identity, Fn] : Inductive) {
-    auto reject = [&](const std::string &Why) {
+    auto reject = [&, &Identity = Identity, Fn = Fn](const std::string &Why) {
       Errors.push_back(Fn->Name + ": " + Why);
       Rejected.insert(Identity);
     };
