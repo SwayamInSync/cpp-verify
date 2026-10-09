@@ -25,6 +25,7 @@ are invisible in the rendered pages.
 
 import argparse
 import concurrent.futures
+import os
 import pathlib
 import re
 import subprocess
@@ -132,6 +133,20 @@ def verdicts(text):
     return shown
 
 
+# The verifier's time budgets are wall-clock, so an example verified on a
+# loaded machine gets less work done in each. Each example runs with the
+# default budgets and two solver workers, as on a two-core machine, and the
+# checker runs no more of them at once than the processors it may use.
+SOLVER_JOBS = 2
+
+
+def processors():
+    try:
+        return len(os.sched_getaffinity(0))
+    except AttributeError:
+        return os.cpu_count() or 1
+
+
 def run(cpp_verify, source, arguments, timeout):
     with tempfile.TemporaryDirectory() as directory:
         path = pathlib.Path(directory) / "example.cpp"
@@ -156,7 +171,8 @@ def check(cpp_verify, job):
     code, output = run(cpp_verify, source, ["--lower-only", *arguments], 300)
     if code is None or code != 0 or "error:" in output:
         return f"{where}: the example does not compile:\n{output.strip()[:1500]}"
-    code, output = run(cpp_verify, source, ["--timeout=20000", *arguments], 900)
+    code, output = run(cpp_verify, source,
+                       [f"--jobs={SOLVER_JOBS}", *arguments], 900)
     if code is None:
         return f"{where}: verifying the example timed out"
     if not expected:
@@ -187,7 +203,8 @@ def check(cpp_verify, job):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--cpp-verify", required=True)
-    parser.add_argument("--jobs", type=int, default=8)
+    parser.add_argument("--jobs", type=int,
+                        default=max(1, processors() // SOLVER_JOBS))
     parser.add_argument("sources", type=pathlib.Path, nargs="+",
                         help="pages, or directories of .rst pages")
     options = parser.parse_args()
