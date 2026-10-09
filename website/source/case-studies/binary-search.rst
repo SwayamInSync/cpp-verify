@@ -58,31 +58,28 @@ For every ``n`` and every input satisfying the precondition:
 - definedness -- no signed overflow anywhere, the midpoint included;
 - the result is ``-1`` or a valid index into the buffer.
 
-What is not proved
-------------------
+This is what ``binary_search_pass.cpp`` proves. Its contract does not say
+that a non-negative result points at the key, or that ``-1`` means the key is
+absent.
 
-That a non-negative result points at the key, and that ``-1`` means the key is
-absent. Both need the array's sortedness as a nested quantifier
-(``cppverify::forall i <= j. a[i] <= a[j]``). The isolated instantiation lemmas verify, but
-the inductive loop obligation did not close within 900 seconds. This is
-incomplete automation, not a proved property, and it is not claimed as one. See
-:doc:`/language/limitations`.
+The full functional specification
+---------------------------------
 
-Normalization
--------------
-
-``return mid`` inside the loop is not expressible today -- return statements
-inside loops are unsupported -- so a found index is recorded in ``res`` and the
-live range is collapsed to end the search. That restructures the control flow,
-not the algorithm.
+The full functional specification verifies too, in about a second. Section
+"Universal statements: sorted arrays" of
+:doc:`/book/part-ii/ch20-mathematics-to-code` proves it: sortedness is the
+precondition ``cppverify::forall(i, 0, n, cppverify::forall(j, i, n, a[i] <= a[j]))``,
+the postcondition is
+``cppverify::result >= 0 ? a[cppverify::result] == x : cppverify::forall(k, 0, n, a[k] != x)``,
+and the loop returns ``mid`` when it finds the key.
 
 Reproduce
 ---------
 
 .. code-block:: bash
 
-   ./build/bin/cpp-verify --check-ub clang/test/Verify/suite/binary_search_pass.cpp
-   ./build/bin/cpp-verify --check-ub clang/test/Verify/suite/binary_search_overflow_fail.cpp
+   ./build/bin/cpp-verify clang/test/Verify/suite/binary_search_pass.cpp
+   ./build/bin/cpp-verify clang/test/Verify/suite/binary_search_overflow_fail.cpp
 
 Both are lit tests in ``clang/test/Verify/suite/``; the second is expected to
 fail closed.
