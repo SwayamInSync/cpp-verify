@@ -75,7 +75,8 @@ Soft preconditions (``cppverify::recommends``)
 ----------------------------------------------
 
 A ``cppverify::spec`` function stays **total**, but ``cppverify::recommends`` flags likely misuse. It generates no
-call-site obligation; the verifier only **warns** when a call may violate it:
+call-site obligation; when a function that calls the spec fails verification,
+the verifier warns if one of its calls may violate it:
 
 .. code-block:: cpp
 
@@ -88,8 +89,8 @@ Opacity: fuel, ``cppverify::reveal``, ``cppverify::hide``
 
 A recursive ``cppverify::spec`` is finitely transparent by default (fuel 1), so its
 defining equation cannot send Z3 into a matching loop.
-``cppverify::reveal_with_fuel(f, n)`` raises the depth when a proof needs more (the
-``safe_fib`` walkthrough uses it). ``cppverify::reveal`` / ``cppverify::hide`` toggle a spec's
+``cppverify::reveal_with_fuel(f, n)`` raises the depth when a proof needs more.
+``cppverify::reveal`` / ``cppverify::hide`` toggle a spec's
 transparency for the rest of a function:
 
 .. code-block:: cpp
@@ -167,9 +168,10 @@ A spec whose termination is not established has no definition, so a proof
 that relies on it is reported as not verified with reason
 ``spec.termination`` rather than as verified.
 
-Proof and executable functions may also call each other in a cycle under the
-same rule, with calls inside the cycle reasoned about through the callees'
-contracts.
+Proof functions may also recurse through each other, and so may executable
+functions, under the same rule, with calls inside the cycle reasoned about
+through the callees' contracts. A proof function cannot call an executable
+one.
 
 A spec takes no ``cppverify::pre``, ``cppverify::modifies``, or ``cppverify::aliases``: it is defined for every
 argument, and ``cppverify::recommends`` states its intended domain.
@@ -247,7 +249,7 @@ Proving properties of recursive specs
 
 The verifier gives the solver each spec's defining equation at the call sites
 in a function, unfolded as deep as the fuel allows. Beyond that, it settles
-four kinds of goal without help:
+five kinds of goal without help:
 
 - **Closed applications** such as ``sum(15000) == 112507500`` or
   ``fib(90) == ...`` are computed: the solver receives the defining equation
@@ -383,7 +385,7 @@ smaller value is not the statement the step needs:
 
 .. code-block:: text
 
-   Unresolved: accumulated [backend=z3] [reason=spec.fuel] (proof obligation ...: every counterexample found needs accumulate, sum unfolded at ever larger arguments (the last one needed 21887 unfoldings), so no finite unfolding settles it; prove it by induction in a proof function whose decreases clause shrinks on each recursive call, and call that lemma here; induction following accumulate and induction following sum and induction on n did not prove it; a proof by induction following sum could start from the body 'if (n > 0 && n - 1 >= 0 && n - 1 <= 25000) { accumulated(n - 1); }', with decreases(n))
+   Unresolved: accumulated [backend=z3] [reason=spec.fuel] (proof obligation ...: every counterexample found needs accumulate, sum unfolded at ever larger arguments (the last one needed 21887 unfoldings), so no finite unfolding settles it; prove it by induction in a proof function whose decreases clause shrinks on each recursive call, and call that lemma here; induction following accumulate and induction following sum and induction on n did not prove it; a proof by induction following sum could start from the body 'if (n > 0 && n - 1 >= 0 && n - 1 <= 25000) { accumulated(n - 1); }', with cppverify::decreases(n))
 
 The message says, in order:
 
@@ -485,7 +487,7 @@ solver proves it, the counterexample is confirmed:
 
 .. code-block:: text
 
-   error: verification failed: small_power (counterexample: n = 1000023594; confirmed by a proof at this input, since its check could not compute pow2(1000023594)) [backend=z3] [reason=counterexample]
+   error: verification failed: small_power [...::postcondition@...] (counterexample: n [ssa=n_0] [type=i32] = 1000023594; confirmed by a proof at this input, since its check could not compute pow2(1000023594)) [backend=z3] [reason=counterexample]
 
 The failure rests on the facts the proof used (here ``pow2``'s
 postcondition); if one of them is not established, the verdict is not a
@@ -513,7 +515,7 @@ false claim from a true one that needs a proof, and says both:
 
 .. code-block:: text
 
-   Unresolved: fibo_small [backend=z3] [reason=spec.fuel] (proof obligation ...: Z3 proposed n = 1000000000 as a counterexample, but checking it needs fibo(1000000000) (the evaluation nesting limit was reached while evaluating fibo), and no proved fact settles it: either the claim is false there, or it is true and needs a proof by induction; induction following fibo and induction on n did not prove it; a proof by induction following fibo could start from the body 'if (n > 0 && n != 1 && n - 2 >= 1000000000 && n - 1 >= 1000000000) { fibo_small(n - 2); fibo_small(n - 1); }', with decreases(n))
+   Unresolved: fibo_small [backend=z3] [reason=spec.fuel] (proof obligation ...: Z3 proposed n = 1000000000 as a counterexample, but checking it needs fibo(1000000000) (the evaluation nesting limit was reached while evaluating fibo), and no proved fact settles it: either the claim is false there, or it is true and needs a proof by induction; induction following fibo and induction on n did not prove it; a proof by induction following fibo could start from the body 'if (n > 0 && n != 1 && n - 2 >= 1000000000 && n - 1 >= 1000000000) { fibo_small(n - 2); fibo_small(n - 1); }', with cppverify::decreases(n))
 
 Which to do depends on what you believe:
 
@@ -554,7 +556,7 @@ Which to do depends on what you believe:
 .. code-block:: text
 
    Verified: fibo_at_least_5 [backend=z3]
-   error: verification failed: fibo_small (counterexample: n = 1000000000; confirmed by a proof at this input that uses the contract of fibo_at_least_5, since its check could not compute fibo(1000000000)) [backend=z3] [reason=counterexample]
+   error: verification failed: fibo_small [...::postcondition@...] (counterexample: n [ssa=n_0] [type=i32] = 1000000000; confirmed by a proof at this input that uses the contract of fibo_at_least_5, since its check could not compute fibo(1000000000)) [backend=z3] [reason=counterexample]
 
 The proof instantiates a lemma where its postcondition speaks of the same
 spec application as the claim, here ``fibo_at_least_5`` at
@@ -599,7 +601,7 @@ those assumptions. A lemma over memory is used the same way:
 .. code-block:: text
 
    Verified: total_nonneg [backend=z3]
-   error: verification failed: total_negative (counterexample: n = 1000000000, a = 1; confirmed by a proof at this input that uses the contract of total_nonneg, since its check could not compute total(1, 1000000000)) [backend=z3] [reason=counterexample]
+   error: verification failed: total_negative [...::postcondition@...] (counterexample: n [ssa=n_0] [type=i32] = 1000000000, a [ssa=a_0] [type=pointer] = 1; confirmed by a proof at this input that uses the contract of total_nonneg, since its check could not compute total(1, 1000000000)) [backend=z3] [reason=counterexample]
 
 Only contracts that are established count: a confirmation runs after every
 function is verified, and a lemma that failed, or that rests on a fact that
@@ -824,10 +826,13 @@ instantiate them anywhere:
      cv::check(sq(a + 7) >= 0);
    }
 
-A counterexample to an unbounded quantifier is certified exactly when its
-body depends on the bound variable through memory reads, collection reads,
-and comparisons: the body is then constant beyond finitely many values, which
-the checker evaluates. Otherwise the result is ``counterexample.unchecked``.
+A counterexample to an unbounded quantifier is certified when its body
+depends on its binders through linear arithmetic, comparisons, memory and
+collection reads, and nested quantifiers, which the checker decides as
+Presburger arithmetic once the model fixes everything else, or when a witness
+among the values where the body's comparisons change decides it. Otherwise (a
+product or quotient of binders, say) the result is
+``counterexample.unchecked``.
 
 Triggers
 --------
@@ -1044,7 +1049,7 @@ where a finite derivation shows it.
    Verified: spec post: reach
    Verified: three_reaches_twelve [backend=z3]
    Verified: no_way_back [backend=z3]
-   book.cpp:27:10: error: verification failed: wrong_way [...::postcondition@27:10]
+   book.cpp:25:14: error: verification failed: wrong_way [...::postcondition@25:14]
      (counterexample: a [ssa=a_0] [type=i32] = 38, b [ssa=b_0] [type=i32] = 38)
      [backend=z3] [reason=counterexample]
 
@@ -1168,7 +1173,8 @@ postcondition name the predicate.)
 ``constexpr`` as spec
 ---------------------
 
-Any ``constexpr`` function is usable in ``cppverify::pre``/``cppverify::post`` **directly** — no separate ``cppverify::spec``
+Any non-recursive, loop-free ``constexpr`` function without a contract of its own is usable in
+``cppverify::pre``/``cppverify::post`` **directly**, with no separate ``cppverify::spec``
 re-declaration:
 
 .. code-block:: cpp
@@ -1183,4 +1189,8 @@ re-declaration:
 One body does double duty: the same ``constexpr`` runs at execution time and defines the spec, so
 the two can never silently diverge (Verus requires a separate ``spec fn``). A lifted ``constexpr``
 keeps **machine** integer semantics — honest overflow — unlike an explicit ``cppverify::spec`` (mathematical
-``Int``); see :doc:`../../language/integers`.
+``Int``); see :doc:`../../language/integers`. It is lifted when a verified function uses it, so the
+``constexpr`` functions of a header such as ``<vector>`` cost nothing until
+called, and a call with constant arguments is evaluated by Clang. A
+``constexpr`` function with its own contract stays an executable function,
+which a contract cannot call.
