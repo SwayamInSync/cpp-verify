@@ -1584,8 +1584,9 @@ class Evaluator {
     for (const auto &[G, Key] : *Keys) {
       std::optional<CertInt> Start;
       CertInt Value = Cells->Default;
-      auto run = [&](const std::optional<CertInt> &From,
-                     const std::optional<CertInt> &To, const CertInt &V) {
+      auto run = [&, &G = G, &Key = Key](const std::optional<CertInt> &From,
+                                         const std::optional<CertInt> &To,
+                                         const CertInt &V) {
         std::vector<FormulaPtr> Guard{G};
         if (From)
           Guard.push_back(lessEqual(Linear::constant(*From), Key));
