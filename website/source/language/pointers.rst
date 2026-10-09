@@ -120,17 +120,19 @@ A reference argument may also be an initialized ordinary scalar local:
 Only address-required scalar locals are spilled from scalar SSA. They use fresh
 automatic lifetime identities, target size/alignment, byte ownership,
 liveness, and initialization. Local bindings snapshot the address, may chain,
-and cannot escape; their conservative function-wide modeled lifetime is
-therefore unobservable.
+and cannot escape. Each automatic object's lifetime ends at the closing brace
+of its block and on each early return.
 
-Subscript/field/conditional bindings, temporaries, reference returns,
-address-taking, rvalue references, and non-scalar referents fail closed.
-Addressable declarations inside loops and ``cppverify::old`` of an automatic local/local
+A reference may bind to a field or a fixed-array element, of a promoted local
+object or of a parameter's buffer. Conditional bindings, temporaries,
+reference returns, address-taking, rvalue references, and non-scalar
+referents fail closed. Addressable declarations inside loops and ``cppverify::old`` of an automatic local/local
 binding are rejected, while an outer automatic local and a local reference
 declared inside a loop are supported. Requiring initialized storage excludes
 output-only references to an indeterminate object for now.
-Heap-mutating executable recursion through a reference fails closed until
-termination analysis models heap-state updates.
+Recursion that stores through a pointer or reference parameter, or uses
+automatic objects, is supported; recursion through a function that allocates
+or frees storage is ``construct.unsupported``.
 
 Buffers and array indexing
 --------------------------
@@ -158,8 +160,8 @@ the verifier gets this from array theory:
    separating ``4*i`` from ``4*j``. The default integer encoding derives that
    from ``i != j`` alone. With ``--int-encoding=bitvector`` it needs range
    reasoning about sign extension that bit-vector solvers do not do well, and
-   the query returns ``unknown`` unless the indices are bounded, as the
-   precondition above does.
+   the bit-vector attempt can time out on such a query; the verifier then
+   retries it in the default encoding.
 
 Within a verified function body, ``cppverify::modifies(*p)`` authorizes the **whole
 region** rooted at ``p`` — a write to any ``p[i]`` is covered. A write through
@@ -298,10 +300,7 @@ pointer is null or an extent is empty, and every caller must prove that. An
    }
 
 Addresses are reasoned about as mathematical integers, so range conditions like
-the non-overlap above are exact (no wraparound). Array indices used in
-disjointness facts should be bounded (as in real buffer code); an *unbounded*
-pure-disequality disjointness (``i != k`` with no range) may report ``unknown``
-(see :doc:`limitations`).
+the non-overlap above are exact (no wraparound).
 
 Same-array pointer difference
 -----------------------------
@@ -424,7 +423,7 @@ type:
 .. code-block:: text
 
    Verified: get [backend=z3]
-   error: verification failed: past_end [...::bounds@11:10]
+   error: verification failed: past_end [...::bounds@10:10]
 
 The marker means ``n >= 0``. A positive extent also means ``p`` is non-null and
 abstractly valid; an extent of zero permits null. Every ``p[i]`` or ``*(p + i)``
@@ -513,11 +512,13 @@ supported, and frame every cell of ``p`` outside the slice.
 
 With ``--no-check-ub``, dereferences must still be non-null and live, but
 accesses are not checked against objects. Parameter pointers use abstract
-entry-state allocation and initialization assumptions. Concrete identity, liveness, alignment, and initialization are available only
-for the bounded scalar allocation and inferred fresh-owned return subset. Its
-provenance is first-class across supported local values and checked scalar
-call/return interfaces, but abstract buffers and general pointer interfaces
-remain unsupported.
+entry-state allocation and initialization assumptions. Concrete identity,
+liveness, alignment, and initialization are available only for promoted
+automatic objects (address-taken scalar locals, fixed local arrays, and their
+enclosing records) and for the bounded scalar allocation and inferred
+fresh-owned return subset. Their provenance is first-class across supported
+local values and checked scalar call/return interfaces, but abstract buffers
+and general pointer interfaces remain unsupported.
 
 Frames also preserve unrelated objects across a write:
 
