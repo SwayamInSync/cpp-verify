@@ -210,4 +210,4 @@ Contributor coverage (instrument ``clangVerify`` only):
 
 ## License
 
-LLVM components use the [LLVM License](https://llvm.org/LICENSE.txt) (`LICENSE.TXT`). See file headers in the tree. Z3, built into cpp-verify from `third_party/z3`, is under the MIT license (`third_party/z3/LICENSE.txt`).
+cpp-verify, like the LLVM project it is built on, is distributed under the [Apache License v2.0 with LLVM Exceptions](https://llvm.org/LICENSE.txt) (`LICENSE.TXT`). Z3, built into cpp-verify from `third_party/z3`, is under the MIT license (`third_party/z3/LICENSE.txt`).
