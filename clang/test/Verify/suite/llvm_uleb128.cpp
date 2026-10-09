@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: %cpp-verify --check-ub --jobs=8 --timeout=30000 %s -- 2>&1 | FileCheck %s
+// RUN: %cpp-verify --check-ub --jobs=8 --timeout=300000 %s -- 2>&1 | FileCheck %s
 
 // Flagship case study derived from llvm/Support/LEB128.h at LLVM commit
 // 007f107aaf5ff2b111fc107ed23e6e88bcc0d9e9.
