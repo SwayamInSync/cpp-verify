@@ -53,15 +53,15 @@ Core safety and memory checking
    cpp-verify --no-check-ub file.cpp  # without the memory checks
 
 Always-on checks cover signed arithmetic and negation overflow, zero divisors,
-the signed-minimum divided by minus one case, invalid shifts, and non-null
-abstract-valid dereferences. They also follow operations executed inside lifted
-``constexpr`` functions.
+the signed-minimum divided by minus one case, invalid shifts, conversions to an
+enumeration outside its value range, and non-null abstract-valid dereferences.
+They also follow operations executed inside lifted ``constexpr`` functions.
 
 Memory checking, the default on every backend (``--check-ub``), proves that
-each access and each pointer step stays in its object, and that a conversion
-to an enumeration lands in its value range. It discovers ``valid(p, n)``
-before that marker's trivial spec body is inlined. ``--no-check-ub`` turns it
-off; it does not control the always-on checks above.
+each access and each pointer step stays in its object. It discovers
+``valid(p, n)`` before that marker's trivial spec body is inlined.
+``--no-check-ub`` turns it off; it does not control the always-on checks
+above.
 
 What is always checked
 ----------------------
@@ -80,6 +80,8 @@ What is always checked
      - not ``INT_MIN / -1``
    * - ``<<`` / ``>>``
      - valid count; signed left operand/range follows C++17 rules
+   * - conversion to an enumeration without a fixed underlying type
+     - the value lies in the enumeration's range
    * - ``*p``, ``p[i]``, ``p->field``
      - base is non-null and satisfies the abstract validity predicate
 
@@ -263,14 +265,16 @@ What is not covered yet
 -----------------------
 
 Checked today: core expression definedness, local scalar/flat-record definite
-initialization, object bounds of accesses and pointer arithmetic, and
-enumeration ranges. The bounded
+initialization, object bounds of accesses and pointer arithmetic, enumeration
+ranges, and bounded local fixed arrays (element bounds and per-element
+initialization). The bounded
 local scalar ``new``/``delete`` subset additionally checks initialized heap
 reads, live dereferences, exact-base deletion, double deletion, target
 alignment, and non-overlap of simultaneous allocations.
 
-General pointer provenance, arrays, strict aliasing, placement construction,
-and subobject lifetime remain outside the model. Parameter buffers use
+General pointer provenance, array allocation (``new[]``) and arrays other
+than bounded local fixed arrays, strict aliasing, placement construction, and
+subobject lifetime remain outside the model. Parameter buffers use
 abstract validity/initialization assumptions rather than concrete caller
 allocation state. See :doc:`ch19-dynamic-storage` and the full layering plan in
 ``docs/UB-CHECKING.md``.
