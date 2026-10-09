@@ -65,7 +65,10 @@ the view rather than the layout:
 
    cv::spec int total(Pair p) { return p.first + p.second; }
 
-The current aggregate model is intentionally narrow: records must be trivial,
-standard-layout, and flat, with scalar fields. References, nested records,
-arrays or pointers as fields, unions, bases, virtual dispatch, and non-trivial
+The current aggregate model is intentionally narrow. A record passed or
+returned by value must be trivial, standard-layout, and flat, with scalar
+fields. A local object whose address is needed (it holds a fixed array, or a
+reference binds to one of its members) is promoted to an automatic object and
+may also have nested record, pointer, and fixed-array members. Reference
+members, unions, bases, virtual dispatch, and non-trivial
 construction/destruction are rejected rather than approximated.
