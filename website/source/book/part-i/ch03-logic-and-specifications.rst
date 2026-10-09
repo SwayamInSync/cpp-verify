@@ -51,8 +51,10 @@ To say “there exists an index with value ``target``”:
 
    exists i in [0, n) . arr[i] == target
 
-CppVerify uses bounded ``cppverify::forall`` / ``cppverify::exists`` syntax in contracts; the idea is standard first-order logic
-over integers and arrays.
+CppVerify writes these as ``cppverify::forall(i, 0, n, arr[i] >= 0)`` and
+``cppverify::exists(i, 0, n, arr[i] == target)``, with ``i`` ranging over ``[0, n)``, or without
+bounds, as ``cppverify::forall(i, P)`` and ``cppverify::exists(i, P)``, over all integers; the idea is
+standard first-order logic over integers and arrays.
 
 Abstraction in specifications
 -----------------------------
