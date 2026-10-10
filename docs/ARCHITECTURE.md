@@ -1091,7 +1091,14 @@ bounded domain such as `0 <= n <= 200` in one round. The check that follows
 runs in a fresh solver with the remaining budget, since Z3's incremental core
 is much slower on thousands of ground equations. The probe only chooses
 models: an end the solver cannot prove adds nothing, and a model at an end
-that holds under the definitions pins the search to that counterexample.
+that holds under the definitions pins the search to that counterexample. The
+probe is bounded by its checks (at most 96 for each end) and the query's
+deadline, not by a share of the refinement slice, and its time moves the
+slice's end. Within half the slice, a slower machine spent it all on an end
+that no number of doubling steps proves for a 32-bit argument, and the end
+that pinned the counterexample got no check: `fibo_strict`
+(`spec_post_unfolded.cpp`) ended `spec.fuel` in 20 of 20 runs on the
+efficiency cores of an M1.
 
 A race interrupts the losing encoder's context, possibly while its
 certifier reads a model; Z3 then evaluates a term to nothing. Every model
@@ -1483,8 +1490,7 @@ obligations: a task waiting on its obligation group runs those tasks itself,
 so nesting never exceeds the pool. With more than one job and obligation, Z3
 solves the obligations beside the whole query (`Z3VerifyBackend::Race`): a
 proved whole query interrupts the obligation encoders, and a complete set of
-proved obligations interrupts the whole query, which then runs in an encoder
-of its own because a Z3 interrupt can outlive the check it stops. Otherwise
+proved obligations interrupts the whole query. Otherwise
 the obligations decide, exactly as after a whole query alone, so the verdict
 does not depend on the jobs. When the whole query yields a certified
 counterexample, the obligations only choose which failure is reported, the
@@ -1497,6 +1503,18 @@ the whole query had refuted the function in milliseconds: model search over
 quantified heap queries depends on the solver's search order, and 16 of 40
 random seeds took the full 30 s. A proof cache stores proofs of single
 obligations, so with one only the obligations are solved.
+
+Every query runs in an encoder of its own (`Z3VerifyBackend::solveQuery`):
+a Z3 context keeps the state of the queries solved in it, as far as an
+interrupted one got, and that state steers the search of the next. With one
+long-lived encoder per backend, which with one job (as under lit) solved
+every function of a file, the retry of a complete query interrupted under
+load timed out in 2 of 40 runs of `loop_exits.cpp`, a file's counterexamples
+changed from run to run (14 outputs in 16 runs), and after one induction
+attempt every later query of the file only sought a proof. A query is still
+not entirely independent of the process: Z3 hashes some objects by address,
+so a model's values can depend on what ran before it.
+
 Results merge in source order, with each function's dependency indices
 offset; spec termination, callee contracts, trust, and unverified callers are
 resolved after all functions. A per-function deadline
