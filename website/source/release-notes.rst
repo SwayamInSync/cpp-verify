@@ -18,8 +18,8 @@ The data formats keep versions of their own, listed with each release.
 
 A patch release of 0.1.0, on the same LLVM 23.1.3, with the same language and
 data formats. It is not released yet: the fixes below are on ``main`` and on
-the ``release/0.1`` branch. Each changes how long the verifier searches, or
-which entries the proof cache keeps; none changes what a verdict means.
+the ``release/0.1`` branch. Each changes how the verifier searches, or which
+entries the proof cache keeps; none changes what a verdict means.
 
 **Fixed: certified failures reported at once.** A false claim could take the
 full query timeout, or end ``Unresolved`` with ``solver.timeout`` under load,
@@ -37,6 +37,25 @@ with ``spec.fuel`` on a loaded machine. The check's time is now its own. Such
 a check still takes up to ``--certify-timeout``, so under heavy load the
 result can still be ``spec.fuel``.
 
+**Fixed: results that depended on earlier queries.** The Z3 backend solved
+complete queries in one long-lived solver context, which with one job
+(``--jobs=1``, as in the test suite) every function of a file shared. Z3 keeps
+the state of the queries solved in a context, as far as an interrupted one
+got, and that state steers its next search. On a loaded machine a false
+claim could therefore end ``Unresolved`` with ``solver.timeout``, a file's
+counterexamples could change from run to run, and after one function needed
+an induction, every later query of the file only sought a proof. Every query
+is now solved in a context of its own. A proof that fitted its time only in
+an earlier query's context may now need a larger ``--timeout``.
+
+**Fixed: counterexamples that only fast machines found.** When a model needs
+spec values beyond the solver's unfoldings, the verifier tries the least and
+greatest values the query allows for their arguments. That probe had half of
+a short refinement slice: on slow cores its first try could use all of it,
+and a false claim whose counterexample lay at the other end ended
+``Unresolved`` with ``spec.fuel``. The probe is now bounded by its number of
+checks and the query's timeout.
+
 **Fixed: proof cache pruning.** With ``--proof-cache`` and a limit small
 enough to evict entries (``--proof-cache-max-entries``,
 ``--proof-cache-max-mb``), the cache was pruned after each function, which
@@ -46,11 +65,11 @@ or proved its obligations again then depended on scheduling. The cache is now
 pruned once, after the run's last lookup, and a failure to prune is a warning
 instead of ``cache-error`` telemetry on a result.
 
-The solver's search for a counterexample depends on its search order, so the
-first two showed on some programs on Linux and more often on macOS arm64 (the
-known issue of 0.1.0). On macOS arm64 a hard false claim can still end
-``Unresolved`` on a loaded machine, with ``solver.timeout`` or ``spec.fuel``;
-that remains under investigation.
+The solver's search depends on its search order, which differs between
+platforms, so these showed more often on macOS arm64 (the known issue of
+0.1.0). Time budgets are still wall-clock: a claim whose proof or
+counterexample needs more time than its budget can end ``Unresolved`` on a
+slow or loaded machine, and a larger ``--timeout`` gives it more.
 
 0.1.0
 -----
@@ -115,5 +134,6 @@ always search the same way on every platform. On macOS arm64, a false claim
 that is hard for the solver is sometimes reported ``Unresolved`` (reason
 ``solver.timeout`` or ``spec.fuel``) where Linux reports its counterexample
 within the same budget. Such a result is never a wrong verdict, and a larger
-``--timeout`` gives the solver more time to settle it. 0.1.1 removes two
-causes of such results, but they can still occur on a loaded machine.
+``--timeout`` gives the solver more time to settle it. 0.1.1 removes four
+causes of such results; a claim that needs more time than its budget can still
+end this way on a slow or loaded machine.
