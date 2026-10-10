@@ -1695,8 +1695,10 @@ namespace and adapter revision, and the exact Z3 version. Relevant C++ target,
 UB, fuel, transform, and bound choices are already represented in the canonical
 goal and reachable declarations; BMC additionally has a distinct namespace.
 Entries are immutable and atomically installed. Corruption and I/O errors are
-reported fail-closed when reading a requested proof, while store/prune errors
+reported fail-closed when reading a requested proof, while store errors
 after a fresh proof are explicit telemetry and do not replace that verdict.
+The cache is pruned once, after a run's last lookup, so functions verified
+side by side see the same entries, and a failure to prune is a warning.
 Pruning still runs after errors, retries capacity-limited writes after eviction,
 and removes abandoned atomic-write files after 24 hours. Failed, unresolved,
 resource-limited, and `BoundedSafe` results are never stored. Source verification
