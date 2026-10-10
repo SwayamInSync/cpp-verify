@@ -300,8 +300,10 @@ Only ``Verified`` obligations are written, using immutable records and atomic
 replacement. Counterexamples, timeouts, resource exhaustion, unknown results,
 and ``BoundedSafe`` frontiers are solved again. A malformed or unreadable lookup
 produces ``cache.corrupt`` or ``cache.io-failed`` rather than proof success.
-Failure to store or prune after a fresh proof is reported as cache-error
-telemetry but does not invalidate that solver verdict. Pruning still runs after
+Failure to store a fresh proof is reported as cache-error telemetry but does
+not invalidate that solver verdict. The cache is pruned to its limits once,
+after the run's last lookup, so functions verified side by side see the same
+entries; a failure to prune is reported as a warning. Pruning still runs after
 cache errors, retries capacity-limited writes after eviction, and removes
 abandoned atomic-write files after 24 hours while leaving newer concurrent
 writes alone. Text results show ``[cache=hits/queries]`` and JSON records carry
