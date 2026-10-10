@@ -125,7 +125,8 @@ unroll provenance. Counterexamples, unknown/resource-limited
 queries, and ``BoundedSafe`` results are never cached. Corrupt or unreadable
 entries produce ``Unresolved`` instead of being trusted or silently replaced.
 Use ``--proof-cache-max-mb`` and ``--proof-cache-max-entries`` to bound storage.
-Pruning proceeds even when another cache operation fails; capacity errors evict
+Pruning runs once, after a run's last lookup, and proceeds even when another
+cache operation fails; capacity errors evict
 an old record and retry once, and abandoned atomic-write files older than 24
 hours are removed without disturbing newer concurrent writes.
 The opt-in directory is trusted local memoization, not a portable certificate;
