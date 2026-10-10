@@ -1480,7 +1480,16 @@ proved whole query interrupts the obligation encoders, and a complete set of
 proved obligations interrupts the whole query, which then runs in an encoder
 of its own because a Z3 interrupt can outlive the check it stops. Otherwise
 the obligations decide, exactly as after a whole query alone, so the verdict
-does not depend on the jobs. A proof cache stores proofs of single
+does not depend on the jobs. When the whole query yields a certified
+counterexample, the obligations only choose which failure is reported, the
+first in source order: the ones solved beside it are stopped, and they are
+solved in order with every query's timeout at most the whole query's own,
+with any number of jobs, so the choice does not depend on them either. If the
+failing obligation's query does not finish within it, the whole query's
+counterexample stands. Before, that query could run to the timeout although
+the whole query had refuted the function in milliseconds: model search over
+quantified heap queries depends on the solver's search order, and 16 of 40
+random seeds took the full 30 s. A proof cache stores proofs of single
 obligations, so with one only the obligations are solved.
 Results merge in source order, with each function's dependency indices
 offset; spec termination, callee contracts, trust, and unverified callers are
