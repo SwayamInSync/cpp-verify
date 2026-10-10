@@ -24,7 +24,7 @@
 # RUN:   %S/Inputs/backend_cache_base.cpp -- > /dev/null
 # RUN: %python -c "import pathlib; [p.write_text('broken') for p in pathlib.Path(r'%t.error-prune').glob('llvmcache-cppverify-*')]"
 # RUN: not %cpp-verify --jobs=4 --proof-cache=%t.error-prune \
-# RUN:   --proof-cache-max-entries=1 %S/Inputs/backend_cache_base.cpp -- 2>&1 | FileCheck %s --check-prefix=CORRUPT
+# RUN:   --proof-cache-max-entries=1 %S/Inputs/backend_cache_base.cpp -- 2>&1 | FileCheck %s --check-prefix=PRUNE-ONCE
 # RUN: %python -c "import pathlib; assert len(list(pathlib.Path(r'%t.error-prune').glob('llvmcache-cppverify-*'))) <= 1"
 #
 # RUN: not %cpp-verify --jobs=4 --max-query-nodes=1 \
@@ -87,6 +87,13 @@
 # CORRUPT: Unresolved: cached_identity
 # CORRUPT-SAME: [reason=cache.corrupt]
 # CORRUPT-SAME: corrupt or incompatible proof cache entry
+
+# The cache is pruned once, after every lookup, so each function finds all of
+# its corrupt entries whichever finishes first.
+# PRUNE-ONCE: Unresolved: cached_identity [backend=z3] [cache=0/3, errors=3]
+# PRUNE-ONCE-SAME: [reason=cache.corrupt]
+# PRUNE-ONCE: Unresolved: cached_offset [backend=z3] [cache=0/4, errors=4]
+# PRUNE-ONCE-SAME: [reason=cache.corrupt]
 
 # NODES: Unresolved: cached_identity [backend=z3] [reason=query.size-limit]
 # NODES-SAME: exceeds query node budget 1
