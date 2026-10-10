@@ -3431,7 +3431,6 @@ Z3VerifyBackend::verifyObligations(const ObligationModule &Module,
   if (TimeoutCapMs != 0)
     TimeoutMs =
         TimeoutMs == 0 ? TimeoutCapMs : std::min(TimeoutMs, TimeoutCapMs);
-  Enc.setTimeoutMs(TimeoutMs);
   if (auto Limit = querySizeLimitResult(Module, MaxQueryNodes))
     return {std::move(*Limit)};
 
@@ -3508,12 +3507,6 @@ Z3VerifyBackend::Z3VerifyBackend(const BackendExecutionOptions &Execution,
       ProfileQuantifiers(Execution.ProfileQuantifiers),
       ReuseVerifiedQueries(ReuseVerifiedQueries) {
   CertifyTimeoutMs = Execution.CertifyTimeoutMs;
-  Cancellation.enter(Enc);
-  Enc.setTimeoutMs(TimeoutMs);
-  Enc.setResourceLimit(ResourceLimit);
-  Enc.setCertifyTimeoutMs(CertifyTimeoutMs);
-  Enc.setIntegerEncoding(IntegerEncoding);
-  Enc.setProfileQuantifiers(ProfileQuantifiers);
   if (!Execution.ProofCachePath.empty()) {
     std::string Identity =
         CacheBackendName.str() + ";adapter=cppverify-z3-v" +
@@ -3560,6 +3553,10 @@ bool Z3VerifyBackend::racesEncodings(const ObligationModule &Module) const {
 VerifyResult Z3VerifyBackend::solveQuery(
     const ObligationModule &Module, const LogicExpr *Query,
     std::optional<uint64_t> TraceEventCount, unsigned Timeout, Race *Racing) {
+  // Every query gets an encoder of its own. A Z3 context keeps the state of
+  // the queries solved in it, as far as an interrupted one got, and that
+  // state steers the search of the next: a query refuted in 5 ms timed out
+  // in 5 of 30 solves repeated in one context.
   auto solve = [&](bool Facts, Race *Pair) {
     Z3Encoder Encoder;
     Encoder.setTimeoutMs(Timeout);
@@ -3691,18 +3688,14 @@ VerifyResult Z3VerifyBackend::verifyModule(const ObligationModule &Module) {
   const MachineIntegerEncoding Requested = IntegerEncoding;
   if (Attempt && IntegerEncoding == MachineIntegerEncoding::BitVector)
     IntegerEncoding = MachineIntegerEncoding::Auto;
-  Enc.setIntegerEncoding(IntegerEncoding);
-  llvm::scope_exit Restore([&] {
-    IntegerEncoding = Requested;
-    Enc.setIntegerEncoding(Requested);
-  });
-  Enc.setTimeoutMs(TimeoutMs);
+  llvm::scope_exit Restore([&] { IntegerEncoding = Requested; });
   if (SingleQuery) {
     if (auto Limit = querySizeLimitResult(Module, MaxQueryNodes))
       return std::move(*Limit);
     if (spent())
       return timeSpent();
-    return finishZ3Result(Enc.verifyModule(Module));
+    return finishZ3Result(
+        solveQuery(Module, nullptr, std::nullopt, TimeoutMs, nullptr));
   }
   VerifyResult Result = verifyModuleDirect(Module);
   // The integer encoding is as exact: where bit-blasting gives up, it often
@@ -3713,10 +3706,8 @@ VerifyResult Z3VerifyBackend::verifyModule(const ObligationModule &Module) {
        Result.Reason == VerifyReason::SolverUnknown ||
        Result.Reason == VerifyReason::SolverResourceLimit)) {
     IntegerEncoding = MachineIntegerEncoding::Auto;
-    Enc.setIntegerEncoding(IntegerEncoding);
     VerifyResult Retry = verifyModuleDirect(Module);
     IntegerEncoding = MachineIntegerEncoding::BitVector;
-    Enc.setIntegerEncoding(IntegerEncoding);
     if (Retry.Status != VerifyStatus::Unresolved ||
         Retry.Reason == VerifyReason::SpecFuel)
       Result = std::move(Retry);
@@ -3762,7 +3753,8 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
           FirstUnresolved->Reason == VerifyReason::CacheCorrupt ||
           FirstUnresolved->Reason == VerifyReason::CacheIOFailure;
       if (!CacheFailure && !SkipWholeModuleRetry && !spent()) {
-        VerifyResult Whole = Enc.verifyModule(Module);
+        VerifyResult Whole = solveQuery(Module, nullptr, std::nullopt,
+                                        budget(TimeoutMs), nullptr);
         if (Whole.Status != VerifyStatus::Unresolved) {
           Result = finishZ3Result(std::move(Whole));
           if (Cache && Result.Status == VerifyStatus::Verified) {
@@ -3816,8 +3808,7 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
                      : WholeBudget >= TimeoutMs;
   // With workers to spare, the obligations are solved one by one beside the
   // whole query. Both are exact, so whichever settles the module first
-  // decides it and interrupts the other. The whole query then runs in an
-  // encoder of its own, since an interrupt can outlive the check it stops.
+  // decides it and interrupts the other.
   const bool Racing = Jobs != 1 && Module.Obligations.size() > 1;
   const unsigned WholeTimeout =
       budget(WholeUsedFullBudget ? TimeoutMs : WholeBudget);
@@ -3853,13 +3844,9 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
     Group->wait();
     if (OwnPool)
       Pool = nullptr;
-  } else if (racesEncodings(Module)) {
-    Whole = solveQuery(Module, nullptr, std::nullopt, WholeTimeout, nullptr);
   } else {
-    Enc.setTimeoutMs(WholeTimeout);
-    Whole = Enc.verifyModule(Module);
+    Whole = solveQuery(Module, nullptr, std::nullopt, WholeTimeout, nullptr);
   }
-  Enc.setTimeoutMs(budget(TimeoutMs));
   if (Whole.Status == VerifyStatus::Verified)
     return finishZ3Result(std::move(Whole));
   auto orderedResults = [&] {
@@ -3872,10 +3859,7 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
     // only choose the failure to report, within the complete query's budget,
     // the same way with any number of jobs.
     const unsigned FullTimeout = TimeoutMs;
-    llvm::scope_exit Restore([&] {
-      TimeoutMs = FullTimeout;
-      Enc.setTimeoutMs(TimeoutMs);
-    });
+    llvm::scope_exit Restore([&] { TimeoutMs = FullTimeout; });
     std::vector<VerifyResult> Results = verifyObligations(
         Module, /*StopAtFailure=*/true, nullptr, WholeTimeout);
     bool SawUnresolved = false;
@@ -3903,14 +3887,8 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
   auto retryWhole = [&](VerifyResult SplitResult) {
     if (WholeUsedFullBudget || SkipWholeModuleRetry || spent())
       return finishZ3Result(std::move(SplitResult));
-    VerifyResult Retry;
-    if (racesEncodings(Module)) {
-      Retry =
-          solveQuery(Module, nullptr, std::nullopt, budget(TimeoutMs), nullptr);
-    } else {
-      Enc.setTimeoutMs(budget(TimeoutMs));
-      Retry = Enc.verifyModule(Module);
-    }
+    VerifyResult Retry =
+        solveQuery(Module, nullptr, std::nullopt, budget(TimeoutMs), nullptr);
     if (Retry.Status != VerifyStatus::Unresolved)
       return finishZ3Result(std::move(Retry));
     return finishZ3Result(std::move(SplitResult));
