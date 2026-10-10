@@ -2,6 +2,7 @@
 #include "../../lib/Verify/Backend/CVC5Backend.h"
 #include "../../lib/Verify/Backend/ObligationSerialization.h"
 #include "../../lib/Verify/Backend/ObligationSimplify.h"
+#include "../../lib/Verify/Backend/ProofCache.h"
 #include "../../lib/Verify/Backend/VerifyBackend.h"
 #include "CppVerifyVersion.h"
 #include "DumpIR.h"
@@ -731,6 +732,10 @@ static int replayObligationArchive() {
       break;
     }
   }
+  if (llvm::Error Error = verify::pruneProofCache(
+          ProofCache.getValue(), proofCacheMaxBytes(), ProofCacheMaxEntries))
+    llvm::errs() << "warning: cannot prune the proof cache: "
+                 << llvm::toString(std::move(Error)) << "\n";
   if (LeanFile) {
     LeanFile->flush();
     if (LeanFile->has_error()) {
