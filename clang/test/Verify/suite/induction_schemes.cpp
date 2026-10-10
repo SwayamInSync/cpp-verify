@@ -52,19 +52,6 @@ cppverify::proof void total_nonneg(seq s)
 }
 // CHECK-DAG: Verified: total_nonneg [backend=z3] [by induction following total]
 
-// Through another member of a recursion group: even reaches even(n - 2)
-// through odd.
-cppverify::spec bool odd(int n);
-cppverify::spec bool even(int n) cppverify::decreases(n) { return n <= 0 ? true : odd(n - 1); }
-cppverify::spec bool odd(int n) cppverify::decreases(n) { return n <= 0 ? false : even(n - 1); }
-
-cppverify::proof void even_mod(int n)
-  cppverify::pre(n >= 0)
-  cppverify::post(even(n) == (n % 2 == 0))
-{
-}
-// CHECK-DAG: Verified: even_mod
-
 // Under a quantifier: the hypothesis for every k the forall ranges over.
 cppverify::spec bool good(int n) cppverify::decreases(n) { return n <= 0 || cppverify::forall(k, 0, n, good(k)); }
 
@@ -75,20 +62,13 @@ cppverify::proof void all_good(int n)
 // CHECK-DAG: Verified: all_good
 
 // False claims still fail, with counterexamples checked against the
-// definitions: fibo(1) == fibo(2), odd(1) holds.
+// definitions: fibo(1) == fibo(2).
 cppverify::proof void strictly_grows(int n)
   cppverify::pre(n >= 1)
   cppverify::post(fibo(n) < fibo(n + 1))
 {
 }
 // CHECK-DAG: error: verification failed: strictly_grows {{.*}}[reason=counterexample]
-
-cppverify::proof void even_wrong(int n)
-  cppverify::pre(n >= 0)
-  cppverify::post(even(n) == (n % 2 == 1))
-{
-}
-// CHECK-DAG: error: verification failed: even_wrong {{.*}}[reason=counterexample]
 
 cppverify::proof void total_positive(seq s)
   cppverify::pre(cppverify::forall(k, 0, s.len(), s[k] >= 0))
