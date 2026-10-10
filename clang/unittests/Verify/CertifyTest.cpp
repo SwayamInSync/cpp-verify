@@ -6,6 +6,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Backend/Certify.h"
+#include "Backend/ExtremeSearch.h"
 #include "Backend/Induction.h"
 #include "Backend/Presburger.h"
 #include "Backend/VerifyBackend.h"
@@ -1124,6 +1125,61 @@ TEST(CertifyTest, DeepDefinitionsReportFuel) {
   Model.Constants["x"] = integerValue(5000);
   EXPECT_EQ(certifyCounterexample(Module, *triangleQuery(F, -1), Model).Outcome,
             CertifyOutcome::Certified);
+}
+
+/// Runs \p Search toward \p End from \p Start; each yes moves exactly the
+/// distance asked when \p Least, or to \p End otherwise. Returns the value
+/// reached; the search must have ended.
+int64_t searchTo(ExtremeSearch &Search, int64_t Start, int64_t End,
+                 bool Least) {
+  int64_t Current = Start;
+  while (std::optional<int64_t> Distance = Search.next()) {
+    if (End - Current < *Distance) {
+      Search.blocked(*Distance);
+      continue;
+    }
+    const int64_t Reached = Least ? Current + *Distance : End;
+    Search.reached(Reached - Current);
+    Current = Reached;
+  }
+  EXPECT_TRUE(Search.ended());
+  return Current;
+}
+
+TEST(CertifyTest, ExtremeSearchTakesAboutTwoQuestionsPerBit) {
+  // The greatest 32-bit value from as far as 2^32 below, whether the solver
+  // moves as little as asked or all the way: 33 doublings and 32 halvings at
+  // most, where restarting at distance 1 after every no takes hundreds.
+  for (bool Least : {true, false})
+    for (int64_t Start : {int64_t(-2147483648LL), int64_t(0), int64_t(2500),
+                          int64_t(2147483646)}) {
+      ExtremeSearch Search(96);
+      EXPECT_EQ(searchTo(Search, Start, 2147483647, Least), 2147483647)
+          << Start;
+      EXPECT_TRUE(Search.atExtreme());
+      EXPECT_LE(Search.questions(), 66u) << Start;
+    }
+}
+
+TEST(CertifyTest, ExtremeSearchEndsWithoutAnAnswerOrAnEnd) {
+  ExtremeSearch Proved(96);
+  ASSERT_EQ(Proved.next(), std::optional<int64_t>(1));
+  Proved.blocked(1);
+  EXPECT_TRUE(Proved.atExtreme());
+  EXPECT_EQ(Proved.next(), std::nullopt);
+
+  ExtremeSearch Unanswered(96);
+  ASSERT_TRUE(Unanswered.next());
+  Unanswered.abandon();
+  EXPECT_TRUE(Unanswered.ended());
+  EXPECT_FALSE(Unanswered.atExtreme());
+
+  // A range without an end uses up its questions and proves nothing.
+  ExtremeSearch Unbounded(96);
+  while (std::optional<int64_t> Distance = Unbounded.next())
+    Unbounded.reached(*Distance);
+  EXPECT_EQ(Unbounded.questions(), 96u);
+  EXPECT_FALSE(Unbounded.atExtreme());
 }
 
 TEST(CertifyTest, ProofOnlyRefinementStopsLongChains) {
