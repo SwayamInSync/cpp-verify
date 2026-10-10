@@ -3412,9 +3412,13 @@ static VerifyResult finishZ3Result(VerifyResult Result) {
 
 std::vector<VerifyResult>
 Z3VerifyBackend::verifyObligations(const ObligationModule &Module,
-                                   bool StopAtFailure, Race *Racing) {
+                                   bool StopAtFailure, Race *Racing,
+                                   unsigned TimeoutCapMs) {
   TimeoutMs =
       budget(moduleTimeoutMs(Module, SolverTimeoutMs, CollectionTimeoutMs));
+  if (TimeoutCapMs != 0)
+    TimeoutMs =
+        TimeoutMs == 0 ? TimeoutCapMs : std::min(TimeoutMs, TimeoutCapMs);
   Enc.setTimeoutMs(TimeoutMs);
   if (auto Limit = querySizeLimitResult(Module, MaxQueryNodes))
     return {std::move(*Limit)};
@@ -3854,7 +3858,8 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
   VerifyResult Whole;
   if (Racing) {
     Whole = solveQuery(Module, nullptr, std::nullopt, WholeTimeout, &WholeRace);
-    if (Whole.Status == VerifyStatus::Verified)
+    if (Whole.Status == VerifyStatus::Verified ||
+        Whole.Status == VerifyStatus::Failed)
       Rivals.cancel();
     Group->wait();
     if (OwnPool)
@@ -3874,8 +3879,18 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
   };
 
   if (Whole.Status == VerifyStatus::Failed) {
+    // The complete query's counterexample is certified, so the obligations
+    // only choose the failure to report, within the complete query's budget,
+    // the same way with any number of jobs.
+    const unsigned FullTimeout = TimeoutMs;
+    llvm::scope_exit Restore([&] {
+      TimeoutMs = FullTimeout;
+      Enc.setTimeoutMs(TimeoutMs);
+    });
+    std::vector<VerifyResult> Results = verifyObligations(
+        Module, /*StopAtFailure=*/true, nullptr, WholeTimeout);
     bool SawUnresolved = false;
-    for (VerifyResult Result : orderedResults()) {
+    for (VerifyResult &Result : Results) {
       if (Result.Status == VerifyStatus::Verified)
         continue;
       if (Result.Status == VerifyStatus::Unresolved) {
@@ -3883,7 +3898,7 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
         continue;
       }
       if (Result.Status == VerifyStatus::Failed)
-        return Result;
+        return std::move(Result);
     }
     if (SawUnresolved)
       return finishZ3Result(std::move(Whole));
