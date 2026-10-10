@@ -42,6 +42,12 @@ public:
   llvm::Error prune() const;
 };
 
+/// Prunes the cache at \p Root to the limits. Pruning removes entries that a
+/// concurrent lookup may still need, so a run prunes once, after its last
+/// lookup. A missing directory has nothing to prune.
+llvm::Error pruneProofCache(llvm::StringRef Root, uint64_t MaxBytes,
+                            uint64_t MaxEntries);
+
 } // namespace verify
 } // namespace clang
 
