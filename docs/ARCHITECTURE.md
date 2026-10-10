@@ -1092,13 +1092,20 @@ runs in a fresh solver with the remaining budget, since Z3's incremental core
 is much slower on thousands of ground equations. The probe only chooses
 models: an end the solver cannot prove adds nothing, and a model at an end
 that holds under the definitions pins the search to that counterexample. The
-probe is bounded by its checks (at most 96 for each end) and the query's
-deadline, not by a share of the refinement slice, and its time moves the
-slice's end. Within half the slice, a slower machine spent it all on an end
-that no number of doubling steps proves for a 32-bit argument, and the end
-that pinned the counterexample got no check: `fibo_strict`
-(`spec_post_unfolded.cpp`) ended `spec.fuel` in 20 of 20 runs on the
-efficiency cores of an M1.
+probe has half the slice left, and its time moves the slice's end, so
+refinement keeps the rest. Its searches, one for each end of each argument,
+take turns, each check with an equal share of the time left, and each doubles
+its distance while the solver finds a value beyond and then halves the gap
+below the first distance it cannot reach (`ExtremeSearch`), so a 32-bit end
+takes at most 65 checks. Before, the ends ran one after the other and each
+restarted at distance 1 after every overshoot, hundreds of checks for a 32-bit
+end: on the efficiency cores of an M1 the first end spent the budget, and
+`fibo_strict` (`spec_post_unfolded.cpp`), whose counterexample lies at the
+other end, ended `spec.fuel` in 20 of 20 runs. A probe bounded only by its
+checks and the query's deadline instead spent 72 s on `count_reverse`
+(`sequence_induction.cpp`), one check taking 39 s, and its direct proof gave
+way to an induction ten times slower; Z3's resource limit does not bound
+those checks.
 
 A race interrupts the losing encoder's context, possibly while its
 certifier reads a model; Z3 then evaluates a term to nothing. Every model
