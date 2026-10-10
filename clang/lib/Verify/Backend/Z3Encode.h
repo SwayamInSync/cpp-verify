@@ -367,10 +367,12 @@ public:
     return {allLogicFeatures(), true};
   }
   /// One result per obligation in order. With StopAtFailure a serial run ends
-  /// after the first failure, since later results cannot change it.
+  /// after the first failure, since later results cannot change it. A nonzero
+  /// TimeoutCapMs bounds every query's timeout.
   std::vector<VerifyResult> verifyObligations(const ObligationModule &Module,
                                               bool StopAtFailure = false,
-                                              Race *Racing = nullptr);
+                                              Race *Racing = nullptr,
+                                              unsigned TimeoutCapMs = 0);
   void cancel() override { Cancellation.cancel(); }
   void resume() override { Cancellation.reset(); }
   std::optional<unsigned>
