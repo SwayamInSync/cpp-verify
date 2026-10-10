@@ -13,6 +13,42 @@ next release with ``-dev``.
 
 The data formats keep versions of their own, listed with each release.
 
+0.1.1
+-----
+
+A patch release of 0.1.0, on the same LLVM 23.1.3, with the same language and
+data formats. Each fix below changes how long the verifier searches, or which
+entries the proof cache keeps; none changes what a verdict means.
+
+**Fixed: certified failures reported at once.** A false claim could take the
+full query timeout, or end ``Unresolved`` with ``solver.timeout`` under load,
+although the verifier had already found a certified counterexample for it.
+Once a function's complete query is refuted, the individual obligations only
+choose which failure is reported, the first in source order; they now get no
+more time than the complete query had, and the complete query's
+counterexample stands when they do not finish.
+
+**Fixed: small counterexamples after a large one.** When the solver first
+proposed a counterexample whose spec values are too large to compute
+(``fibo`` at a billion, say), checking it used up the time of the search for a
+small counterexample that follows, so a false claim could end ``Unresolved``
+with ``spec.fuel`` on a loaded machine. The check's time is now its own. Such
+a check still takes up to ``--certify-timeout``, so under heavy load the
+result can still be ``spec.fuel``.
+
+**Fixed: proof cache pruning.** With ``--proof-cache`` and a limit small
+enough to evict entries (``--proof-cache-max-entries``,
+``--proof-cache-max-mb``), the cache was pruned after each function, which
+could remove entries that functions verified at the same time had not looked
+up yet. Whether such a function reported a corrupt entry (``cache.corrupt``)
+or proved its obligations again then depended on scheduling. The cache is now
+pruned once, after the run's last lookup, and a failure to prune is a warning
+instead of ``cache-error`` telemetry on a result.
+
+The solver's search for a counterexample depends on its search order, so the
+first two showed on some programs on Linux and more often on macOS arm64 (the
+known issue of 0.1.0).
+
 0.1.0
 -----
 
@@ -76,4 +112,6 @@ always search the same way on every platform. On macOS arm64, a false claim
 that is hard for the solver is sometimes reported ``Unresolved`` (reason
 ``solver.timeout`` or ``spec.fuel``) where Linux reports its counterexample
 within the same budget. Such a result is never a wrong verdict, and a larger
-``--timeout`` gives the solver more time to settle it.
+``--timeout`` gives the solver more time to settle it. 0.1.1 fixes the cause
+of the ``solver.timeout`` results seen in testing and makes the ``spec.fuel``
+ones rarer.
