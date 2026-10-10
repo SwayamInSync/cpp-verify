@@ -226,7 +226,9 @@ class Z3Encoder {
   /// allows for the integer arguments of disputed applications, when it proves
   /// those values bounded. Covering a bounded domain this way takes a few
   /// checks instead of one round per value. \p Pin is set instead when such a
-  /// model is a real counterexample.
+  /// model is a real counterexample. The checks are bounded by their number
+  /// and by \p Until, the query's deadline (max for none), so what the probe
+  /// settles does not depend on the machine's speed.
   std::vector<SpecDispute>
   boundedDomainDisputes(const ObligationModule &Module, const LogicExpr &Query,
                         const CertifyResult &Disputed, const z3::model &Model,
