@@ -3491,22 +3491,6 @@ Z3VerifyBackend::verifyObligations(const ObligationModule &Module,
     for (size_t I = 0; I != Results.size(); ++I)
       if (Results[I].Status == VerifyStatus::Verified)
         VerifiedQueries.insert(QueryHashes[I]);
-  if (Cache) {
-    if (llvm::Error Error = Cache->prune()) {
-      std::string Message = llvm::toString(std::move(Error));
-      if (Results.empty()) {
-        VerifyResult Result;
-        Result.Status = VerifyStatus::Unresolved;
-        Result.Reason = VerifyReason::CacheIOFailure;
-        Result.Message = Message;
-        Result.BackendName = "z3";
-        Results.push_back(std::move(Result));
-      } else {
-        ++Results.front().CacheErrors;
-        Results.front().CacheError = std::move(Message);
-      }
-    }
-  }
   return Results;
 }
 
@@ -3791,13 +3775,6 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
                 else
                   llvm::consumeError(std::move(Error));
               }
-            }
-            if (llvm::Error Error = Cache->prune()) {
-              ++Errors;
-              if (CacheError.empty())
-                CacheError = llvm::toString(std::move(Error));
-              else
-                llvm::consumeError(std::move(Error));
             }
           }
         } else {
