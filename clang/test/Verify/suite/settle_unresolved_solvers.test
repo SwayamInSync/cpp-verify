@@ -6,11 +6,15 @@
 # RUN: not %cpp-verify --timeout=10000 --backend=cvc5 %S/induction_schemes.cpp -- 2>&1 \
 # RUN:   | FileCheck %s --check-prefix=CVC5 \
 # RUN:       --implicit-check-not='Verified: strictly_grows' \
-# RUN:       --implicit-check-not='Verified: even_wrong' \
 # RUN:       --implicit-check-not='Verified: total_positive' \
 # RUN:       --implicit-check-not='Verified: loopy_zero'
 # RUN: not %cpp-verify --timeout=10000 --backend=race %S/induction_schemes.cpp -- 2>&1 \
 # RUN:   | FileCheck %s --check-prefix=RACE
+# RUN: not %cpp-verify --timeout=10000 --backend=cvc5 %S/induction_mutual_recursion.cpp -- 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=GROUP-CVC5 \
+# RUN:       --implicit-check-not='Verified: even_wrong'
+# RUN: not %cpp-verify --timeout=10000 --backend=race %S/induction_mutual_recursion.cpp -- 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=GROUP-RACE
 # RUN: not %cpp-verify --timeout=10000 --backend=cvc5 %S/counterexample_confirmation.cpp -- 2>&1 \
 # RUN:   | FileCheck %s --check-prefix=CONFIRM-CVC5 \
 # RUN:       --implicit-check-not='failed: true_at_large' \
@@ -24,14 +28,16 @@
 
 # CVC5-DAG: Verified: grows [backend=cvc5] [by induction following fibo]
 # CVC5-DAG: Verified: all_good [backend=cvc5] [by induction following good]
-# CVC5-DAG: error: verification failed: even_wrong {{.*}}[backend=cvc5] [reason=counterexample]
 # CVC5-DAG: Unresolved: loopy_zero
 
 # RACE-DAG: Verified: grows [backend={{z3|cvc5}}] [by induction following fibo]
 # RACE-DAG: Verified: total_nonneg [backend=z3] [by induction following total]
 # RACE-DAG: Verified: all_good [backend={{z3|cvc5}}] [by induction following good]
-# RACE-DAG: error: verification failed: even_wrong {{.*}}[reason=counterexample]
 # RACE-DAG: error: verification failed: strictly_grows {{.*}}[reason=counterexample]
+
+# GROUP-CVC5: error: verification failed: even_wrong {{.*}}[backend=cvc5] [reason=counterexample]
+
+# GROUP-RACE: error: verification failed: even_wrong {{.*}}[reason=counterexample]
 
 # CONFIRM-CVC5-DAG: error: verification failed: small_power {{.*}}confirmed by a proof at this input{{.*}}[backend=cvc5] [reason=counterexample]
 # CONFIRM-CVC5-DAG: error: verification failed: fibo_small {{.*}}confirmed by a proof at this input that uses the contract of fibo_at_least_5{{.*}}[backend=cvc5]
