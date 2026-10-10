@@ -9,6 +9,7 @@
 #include "../Backend/ObligationLowering.h"
 #include "../Backend/ObligationSerialization.h"
 #include "../Backend/ObligationSimplify.h"
+#include "../Backend/ProofCache.h"
 #include "../Backend/SpecAxioms.h"
 #include "../Frontend/ASTConverter.h"
 #include "../IR/VStmt.h"
@@ -22,6 +23,7 @@
 #include "DumpIR.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/Basic/SourceManager.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Error.h"
@@ -1688,6 +1690,16 @@ public:
                        "--proof-cache cannot be combined with --lower-only"});
       return false;
     }
+    // Pruning may remove an entry that another function still looks up, so
+    // the run prunes once, after everything that may look one up.
+    llvm::scope_exit PruneProofCache([&] {
+      if (llvm::Error Error =
+              pruneProofCache(Opts.ProofCachePath, Opts.ProofCacheMaxBytes,
+                              Opts.ProofCacheMaxEntries))
+        Diags.push_back({VerifyDiagnostic::Warning,
+                         "cannot prune the proof cache: " +
+                             llvm::toString(std::move(Error))});
+    });
 
     ASTConverter DiscoveryConverter(Ctx);
     auto DiscoveryFunctions = DiscoveryConverter.convertTranslationUnit();
