@@ -1101,7 +1101,13 @@ encoder that was stopped is discarded (`Z3Encoder::certify`). Before this,
 about one run in six over sequences crashed on the empty term.
 
 Z3 gives refinement a short slice of the query budget (5%, at least half a
-second) and at most eight rounds that only search among hidden values. It
+second) and at most eight rounds that only search among hidden values. A model
+whose applications are too deep to evaluate is followed by a search for one
+whose arguments to them lie within 4096 of zero. Checking a model has a budget
+of its own (`--certify-timeout`), so the time a check takes moves the slice's
+end, and that search keeps its time. Before, one check of an application such
+as `fibo` at a billion could spend the slice, leaving a false claim
+`spec.fuel` on a loaded machine. It
 then solves the query again with whole definitions in the remaining time and
 certifies any model it returns: a non-recursive function is replaced by its
 definition and a recursive one becomes a native recursive definition
@@ -1523,11 +1529,14 @@ entry binds the dependency-scoped semantic hash to semantic-hash format v4, the
 Z3/BMC backend namespace, adapter revision, and exact Z3 version. BMC bound
 provenance is part of the semantic hash. Writes use temporary files plus atomic
 replacement; malformed/incompatible or unreadable entries are fail-closed
-`Unresolved`, never cache misses or proofs. Store/prune failures after a fresh
-solver proof remain explicit telemetry rather than invalidating that proof.
-Size and entry-count pruning proceeds independently of cache errors, retries a
-capacity-limited write after eviction, touches only CppVerify-prefixed records,
-and removes abandoned atomic-write files after 24 hours. Failed, unknown,
+`Unresolved`, never cache misses or proofs. A store failure after a fresh
+solver proof remains explicit telemetry rather than invalidating that proof.
+Size and entry-count pruning runs once, after the run's last lookup: pruning
+after each function removed entries that the functions verified beside it had
+not yet looked up, so their verdicts depended on scheduling. A failure to
+prune is a warning. Pruning proceeds independently of cache errors, touches
+only CppVerify-prefixed records, and removes abandoned atomic-write files
+after 24 hours; a capacity-limited write is retried after evicting an entry. Failed, unknown,
 resource-limited, and `BoundedSafe` results are not cached.
 
 Incremental BMC retains one `BMCVerifyBackend` across bounds. It reuses only
