@@ -2879,6 +2879,20 @@ z3::check_result Z3Encoder::certifyModels(const ObligationModule &Module,
                         Decision.Reason == VerifyReason::SpecHidden);
     return z3::unknown;
   };
+  // The slice bounds refinement's solving. Checking a model has a budget of
+  // its own, so the time a check takes moves the slice's end, and a model too
+  // deep to evaluate still leaves time to narrow the search.
+  auto certifyModel = [&](CandidateModel &Candidate,
+                          const CertifyLimits &Limits) {
+    const auto Start = std::chrono::steady_clock::now();
+    CertifyResult Checked = certify(Module, Query, Candidate, Limits);
+    if (Deadline && !NativeRecursion) {
+      *Deadline += std::chrono::steady_clock::now() - Start;
+      if (QueryDeadline && *Deadline > *QueryDeadline)
+        Deadline = QueryDeadline;
+    }
+    return Checked;
+  };
   // Once a quantifier range is narrowed, the solver only searches among
   // small counterexamples: failing to find one settles nothing.
   unsigned Narrowed = 0;
@@ -2911,8 +2925,7 @@ z3::check_result Z3Encoder::certifyModels(const ObligationModule &Module,
     Z3CandidateModel Candidate(*this, Current);
     CertifyLimits Limits;
     Limits.Deadline = QueryDeadline;
-    CertifyResult Certified =
-        certify(Module, Query, Candidate, Limits);
+    CertifyResult Certified = certifyModel(Candidate, Limits);
     bool BoundedDomain = false;
     if (Certified.Outcome == CertifyOutcome::Disputed && !Probed &&
         !NativeRecursion && !Narrowed && !ProofOnly) {
@@ -2931,8 +2944,7 @@ z3::check_result Z3Encoder::certifyModels(const ObligationModule &Module,
         Solver.add(*Pin);
         if (check() == z3::sat) {
           Z3CandidateModel Pinned(*this, Solver.get_model());
-          CertifyResult PinnedResult =
-              certify(Module, Query, Pinned, Limits);
+          CertifyResult PinnedResult = certifyModel(Pinned, Limits);
           if (PinnedResult.Outcome == CertifyOutcome::Certified) {
             Out.CertifiedWith = std::move(PinnedResult.Evidence);
             return z3::sat;
