@@ -13,13 +13,12 @@ next release with ``-dev``.
 
 The data formats keep versions of their own, listed with each release.
 
-0.1.1 (in preparation)
-----------------------
+0.1.1
+-----
 
 A patch release of 0.1.0, on the same LLVM 23.1.3, with the same language and
-data formats. It is not released yet: the fixes below are on ``main`` and on
-the ``release/0.1`` branch. Each changes how the verifier searches, or which
-entries the proof cache keeps; none changes what a verdict means.
+data formats. Each fix changes how the verifier searches, or which entries the
+proof cache keeps; none changes what a verdict means.
 
 **Fixed: certified failures reported at once.** A false claim could take the
 full query timeout, or end ``Unresolved`` with ``solver.timeout`` under load,
