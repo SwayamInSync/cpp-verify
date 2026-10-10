@@ -1156,6 +1156,47 @@ TEST(CertifyTest, ProofOnlyRefinementStopsLongChains) {
             RefinementDecision::Action::Refine);
 }
 
+TEST(CertifyTest, QueriesDoNotInheritAnEarlierAttempt) {
+  // x == 300 implies triangle(x) == 45150: settling it takes a round of 301
+  // unfoldings, more than a pass that only seeks a proof allows.
+  auto module = [](ModuleAttempt Attempt) {
+    ObligationModule M = withFunction(triangle());
+    M.FunctionName = "triangle_300";
+    M.FunctionIdentity = "triangle_300";
+    M.Attempt = Attempt;
+    const LogicFunctionDecl &F = M.LogicFunctions.at("triangle_id");
+    std::vector<Expr> Args;
+    Args.push_back(variable("x", math()));
+    Expr Goal = boolean(
+        LogicExpr::Or,
+        boolean(LogicExpr::Ne, variable("x", math()), mathLiteral(300)),
+        boolean(LogicExpr::Eq, call(F, std::move(Args)), mathLiteral(45150)));
+    Obligation Item;
+    Item.Id = "triangle_300";
+    Item.Goal = clone(*Goal);
+    Item.CounterexampleQuery = negation(clone(*Goal));
+    M.Obligations.push_back(std::move(Item));
+    M.CorrectnessGoal = clone(*Goal);
+    M.CounterexampleQuery = negation(std::move(Goal));
+    auto Features = validateObligationModule(M);
+    EXPECT_TRUE(static_cast<bool>(Features))
+        << (Features ? "" : llvm::toString(Features.takeError()));
+    if (Features)
+      M.RequiredFeatures = *Features;
+    return M;
+  };
+  BackendExecutionOptions Execution;
+  Execution.SolverTimeoutMs = 60000;
+  Execution.SingleQuery = true;
+  auto Backend = createVerifyBackend(BackendKind::Z3, nullptr, 0, Execution);
+  // An induction attempt only seeks a proof...
+  EXPECT_NE(Backend->verifyDirect(module(ModuleAttempt::Induction)).Status,
+            VerifyStatus::Verified);
+  // ...and the next query of the same backend does not inherit that.
+  VerifyResult Result = Backend->verifyDirect(module(ModuleAttempt::Primary));
+  EXPECT_EQ(Result.Status, VerifyStatus::Verified) << Result.Message;
+}
+
 /// loop(n) = (pick(n) ? true : !loop(n)), with pick a choice when Choice.
 LogicFunctionDecl selfDependent(const LogicFunctionDecl *Pick) {
   LogicFunctionDecl F;
