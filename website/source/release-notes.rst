@@ -50,11 +50,12 @@ an earlier query's context may now need a larger ``--timeout``.
 
 **Fixed: counterexamples that only fast machines found.** When a model needs
 spec values beyond the solver's unfoldings, the verifier tries the least and
-greatest values the query allows for their arguments. That probe had half of
-a short refinement slice: on slow cores its first try could use all of it,
+greatest values the query allows for their arguments. It tried one end after
+the other, and each end restarted from small steps after every overshoot, so
+on slow cores the first end could use the whole of this probe's short budget,
 and a false claim whose counterexample lay at the other end ended
-``Unresolved`` with ``spec.fuel``. The probe is now bounded by its number of
-checks and the query's timeout.
+``Unresolved`` with ``spec.fuel``. The ends now take turns, and each takes at
+most about two checks per bit of its argument.
 
 **Fixed: proof cache pruning.** With ``--proof-cache`` and a limit small
 enough to evict entries (``--proof-cache-max-entries``,
