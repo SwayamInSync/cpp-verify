@@ -302,7 +302,6 @@ public:
 };
 
 class Z3VerifyBackend : public VerifyBackend {
-  Z3Encoder Enc;
   /// The timeout of the module being verified.
   unsigned TimeoutMs;
   std::optional<unsigned> CertifyTimeoutMs;
