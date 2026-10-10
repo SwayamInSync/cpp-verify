@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <set>
@@ -2768,10 +2769,14 @@ std::vector<SpecDispute> Z3Encoder::boundedDomainDisputes(
             .count();
     if (Remaining <= 0)
       return z3::unknown;
+    const unsigned Ms =
+        Remaining < std::numeric_limits<unsigned>::max()
+            ? static_cast<unsigned>(Remaining)
+            : 0;
     z3::params Params(Ctx);
-    Params.set("timeout", static_cast<unsigned>(Remaining));
+    Params.set("timeout", Ms ? Ms : std::numeric_limits<unsigned>::max());
     Solver.set(Params);
-    return this->check(Solver, static_cast<unsigned>(Remaining));
+    return this->check(Solver, Ms);
   };
   // The model at the extreme of \p Argument, if the solver proves one.
   auto extreme = [&](const z3::expr &Argument,
@@ -2930,13 +2935,20 @@ z3::check_result Z3Encoder::certifyModels(const ObligationModule &Module,
     if (Certified.Outcome == CertifyOutcome::Disputed && !Probed &&
         !NativeRecursion && !Narrowed && !ProofOnly) {
       Probed = true;
-      const auto Now = std::chrono::steady_clock::now();
-      const auto Until = Deadline && *Deadline > Now
-                             ? Now + (*Deadline - Now) / 2
-                             : Now + std::chrono::milliseconds(250);
+      // Within a share of the slice, a slower machine left a cheap extreme
+      // untried after a costly one, so the probe has a budget of its own and
+      // its time moves the slice's end.
+      const auto ProbeStart = std::chrono::steady_clock::now();
       std::optional<z3::expr> Pin;
-      std::vector<SpecDispute> Extremes =
-          boundedDomainDisputes(Module, Query, Certified, Current, Until, Pin);
+      std::vector<SpecDispute> Extremes = boundedDomainDisputes(
+          Module, Query, Certified, Current,
+          QueryDeadline.value_or(std::chrono::steady_clock::time_point::max()),
+          Pin);
+      if (Deadline) {
+        *Deadline += std::chrono::steady_clock::now() - ProbeStart;
+        if (QueryDeadline && *Deadline > *QueryDeadline)
+          Deadline = QueryDeadline;
+      }
       if (Pin) {
         // The pin only selects a counterexample: it stays only if the model
         // found under it is certified, so no unsat can ever rely on it.
