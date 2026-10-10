@@ -247,3 +247,10 @@ llvm::Error ProofCache::pruneImpl(uint64_t ReserveBytes,
 }
 
 llvm::Error ProofCache::prune() const { return pruneImpl(0, 0, false); }
+
+llvm::Error verify::pruneProofCache(llvm::StringRef Root, uint64_t MaxBytes,
+                                    uint64_t MaxEntries) {
+  if (Root.empty() || !llvm::sys::fs::is_directory(Root))
+    return llvm::Error::success();
+  return ProofCache(Root.str(), "", MaxBytes, MaxEntries).prune();
+}
