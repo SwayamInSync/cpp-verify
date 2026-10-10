@@ -1,5 +1,6 @@
 //===--- Z3Encode.cpp -----------------------------------------------------===//
 #include "Z3Encode.h"
+#include "ExtremeSearch.h"
 #include "ObligationSerialization.h"
 #include "ObligationSimplify.h"
 #include "llvm/ADT/APInt.h"
@@ -19,7 +20,6 @@
 #include <cstdio>
 #include <functional>
 #include <iostream>
-#include <limits>
 #include <map>
 #include <mutex>
 #include <set>
@@ -2762,69 +2762,91 @@ std::vector<SpecDispute> Z3Encoder::boundedDomainDisputes(
   if (!Encoded)
     return Found;
 
-  auto check = [&]() {
+  // One search for each end of each argument.
+  struct Search {
+    z3::expr Argument;
+    bool Greatest;
+    z3::expr Current;
+    ExtremeSearch Questions;
+    std::optional<z3::model> Best;
+  };
+  std::vector<Search> Searches;
+  for (const z3::expr &Argument : Arguments)
+    for (bool Greatest : {true, false}) {
+      z3::expr Current = evaluated(Model, Argument, true);
+      if (Current.is_numeral())
+        Searches.push_back(
+            {Argument, Greatest, Current, ExtremeSearch(MaxProbes), {}});
+    }
+
+  // Asks \p S its next question with \p Share of the time left.
+  auto ask = [&](Search &S, unsigned Share) {
     const auto Remaining =
         std::chrono::duration_cast<std::chrono::milliseconds>(
             Until - std::chrono::steady_clock::now())
             .count();
-    if (Remaining <= 0)
-      return z3::unknown;
-    const unsigned Ms =
-        Remaining < std::numeric_limits<unsigned>::max()
-            ? static_cast<unsigned>(Remaining)
-            : 0;
-    z3::params Params(Ctx);
-    Params.set("timeout", Ms ? Ms : std::numeric_limits<unsigned>::max());
-    Solver.set(Params);
-    return this->check(Solver, Ms);
-  };
-  // The model at the extreme of \p Argument, if the solver proves one.
-  auto extreme = [&](const z3::expr &Argument,
-                     bool Greatest) -> std::optional<z3::model> {
-    std::optional<z3::model> Best;
-    z3::expr Current = evaluated(Model, Argument, true);
-    if (!Current.is_numeral())
-      return std::nullopt;
-    int64_t Step = 1;
-    for (unsigned Probe = 0; Probe != MaxProbes; ++Probe) {
-      z3::expr Distance = Ctx.int_val(Step);
-      Solver.push();
-      Solver.add(Greatest ? Argument >= Current + Distance
-                          : Argument <= Current - Distance);
-      const z3::check_result Result = check();
-      if (Result == z3::sat) {
-        Best = Solver.get_model();
-        Current = evaluated(*Best, Argument, true);
-        Solver.pop();
-        if (!Current.is_numeral())
-          return std::nullopt;
-        if (Step < (int64_t(1) << 40))
-          Step *= 2;
-        continue;
-      }
-      Solver.pop();
-      if (Result != z3::unsat)
-        return std::nullopt;
-      if (Step == 1)
-        return Best;
-      Step = 1;
+    std::optional<int64_t> Distance = S.Questions.next();
+    if (!Distance)
+      return;
+    if (Remaining / Share <= 0) {
+      S.Questions.abandon();
+      return;
     }
-    return std::nullopt;
+    Solver.push();
+    Solver.add(S.Greatest ? S.Argument >= S.Current + Ctx.int_val(*Distance)
+                          : S.Argument <= S.Current - Ctx.int_val(*Distance));
+    const unsigned Ms = static_cast<unsigned>(Remaining / Share);
+    z3::params Params(Ctx);
+    Params.set("timeout", Ms);
+    Solver.set(Params);
+    const z3::check_result Result = this->check(Solver, Ms);
+    if (Result == z3::sat) {
+      z3::model Reached = Solver.get_model();
+      z3::expr Value = evaluated(Reached, S.Argument, true);
+      Solver.pop();
+      if (!Value.is_numeral()) {
+        S.Questions.abandon();
+        return;
+      }
+      int64_t Moved = 0;
+      const bool Small =
+          (S.Greatest ? Value - S.Current : S.Current - Value)
+              .simplify()
+              .is_numeral_i64(Moved);
+      S.Questions.reached(Small ? std::optional<int64_t>(Moved)
+                                : std::nullopt);
+      S.Current = Value;
+      S.Best = std::move(Reached);
+      return;
+    }
+    Solver.pop();
+    if (Result == z3::unsat)
+      S.Questions.blocked(*Distance);
+    else
+      S.Questions.abandon();
   };
 
   CertifyLimits Limits;
   if (TimeoutMs > 0)
     Limits.Deadline = QueryStart + std::chrono::milliseconds(TimeoutMs);
-  for (const z3::expr &Argument : Arguments)
-    for (bool Greatest : {true, false}) {
-      std::optional<z3::model> Extreme = extreme(Argument, Greatest);
-      if (!Extreme)
+  // The searches take turns, each check with an equal share of the time
+  // left, so an end that is slow to settle leaves the others their checks.
+  unsigned Live = Searches.size();
+  while (Live) {
+    for (Search &S : Searches) {
+      if (S.Questions.ended())
         continue;
-      Z3CandidateModel Candidate(*this, *Extreme);
-      CertifyResult Certified =
-          certify(Module, Query, Candidate, Limits);
+      ask(S, Live);
+      if (!S.Questions.ended())
+        continue;
+      --Live;
+      if (!S.Questions.atExtreme() || !S.Best)
+        continue;
+      const z3::model &Extreme = *S.Best;
+      Z3CandidateModel Candidate(*this, Extreme);
+      CertifyResult Certified = certify(Module, Query, Candidate, Limits);
       if (Certified.Outcome == CertifyOutcome::Certified) {
-        Pin = Argument == evaluated(*Extreme, Argument, true);
+        Pin = S.Argument == evaluated(Extreme, S.Argument, true);
         return {};
       }
       if (Certified.Outcome != CertifyOutcome::Disputed)
@@ -2835,6 +2857,7 @@ std::vector<SpecDispute> Z3Encoder::boundedDomainDisputes(
       Found.insert(Found.end(), Certified.Disputes.begin(),
                    Certified.Disputes.end());
     }
+  }
   return Found;
 }
 
@@ -2935,15 +2958,15 @@ z3::check_result Z3Encoder::certifyModels(const ObligationModule &Module,
     if (Certified.Outcome == CertifyOutcome::Disputed && !Probed &&
         !NativeRecursion && !Narrowed && !ProofOnly) {
       Probed = true;
-      // Within a share of the slice, a slower machine left a cheap extreme
-      // untried after a costly one, so the probe has a budget of its own and
-      // its time moves the slice's end.
+      // The probe has half the slice left, and its time moves the slice's
+      // end, so refinement keeps the rest.
       const auto ProbeStart = std::chrono::steady_clock::now();
+      const auto Until = Deadline && *Deadline > ProbeStart
+                             ? ProbeStart + (*Deadline - ProbeStart) / 2
+                             : ProbeStart + std::chrono::milliseconds(250);
       std::optional<z3::expr> Pin;
-      std::vector<SpecDispute> Extremes = boundedDomainDisputes(
-          Module, Query, Certified, Current,
-          QueryDeadline.value_or(std::chrono::steady_clock::time_point::max()),
-          Pin);
+      std::vector<SpecDispute> Extremes =
+          boundedDomainDisputes(Module, Query, Certified, Current, Until, Pin);
       if (Deadline) {
         *Deadline += std::chrono::steady_clock::now() - ProbeStart;
         if (QueryDeadline && *Deadline > *QueryDeadline)
