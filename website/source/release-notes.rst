@@ -13,12 +13,13 @@ next release with ``-dev``.
 
 The data formats keep versions of their own, listed with each release.
 
-0.1.1
------
+0.1.1 (in preparation)
+----------------------
 
 A patch release of 0.1.0, on the same LLVM 23.1.3, with the same language and
-data formats. Each fix below changes how long the verifier searches, or which
-entries the proof cache keeps; none changes what a verdict means.
+data formats. It is not released yet: the fixes below are on ``main`` and on
+the ``release/0.1`` branch. Each changes how long the verifier searches, or
+which entries the proof cache keeps; none changes what a verdict means.
 
 **Fixed: certified failures reported at once.** A false claim could take the
 full query timeout, or end ``Unresolved`` with ``solver.timeout`` under load,
@@ -47,7 +48,9 @@ instead of ``cache-error`` telemetry on a result.
 
 The solver's search for a counterexample depends on its search order, so the
 first two showed on some programs on Linux and more often on macOS arm64 (the
-known issue of 0.1.0).
+known issue of 0.1.0). On macOS arm64 a hard false claim can still end
+``Unresolved`` on a loaded machine, with ``solver.timeout`` or ``spec.fuel``;
+that remains under investigation.
 
 0.1.0
 -----
@@ -112,6 +115,5 @@ always search the same way on every platform. On macOS arm64, a false claim
 that is hard for the solver is sometimes reported ``Unresolved`` (reason
 ``solver.timeout`` or ``spec.fuel``) where Linux reports its counterexample
 within the same budget. Such a result is never a wrong verdict, and a larger
-``--timeout`` gives the solver more time to settle it. 0.1.1 fixes the cause
-of the ``solver.timeout`` results seen in testing and makes the ``spec.fuel``
-ones rarer.
+``--timeout`` gives the solver more time to settle it. 0.1.1 removes two
+causes of such results, but they can still occur on a loaded machine.
