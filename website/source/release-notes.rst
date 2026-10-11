@@ -54,7 +54,10 @@ the other, and each end restarted from small steps after every overshoot, so
 on slow cores the first end could use the whole of this probe's short budget,
 and a false claim whose counterexample lay at the other end ended
 ``Unresolved`` with ``spec.fuel``. The ends now take turns, and each takes at
-most about two checks per bit of its argument.
+most about two checks per bit of its argument. This makes such results rarer,
+not impossible: the probe keeps a short budget, so that it cannot hold up a
+proof, and on a heavily loaded machine (the test suite on a 3-core macOS
+runner) it can still run out.
 
 **Fixed: proof cache pruning.** With ``--proof-cache`` and a limit small
 enough to evict entries (``--proof-cache-max-entries``,
