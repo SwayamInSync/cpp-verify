@@ -362,10 +362,10 @@ cppverify::spec int fibo(int n)
   inside `cppverify::old(...)`, or the call-site state of a callee contract).
 - Can be recursive (with `cppverify::decreases`). Its termination is proved without its
   own definition, so every recursive call must lower the measure whatever the
-  spec's other calls return; a call inside `cppverify::forall` or `cppverify::exists` must lower it
-  for every bound value. Functions of one kind (spec, proof, or executable)
-  may recurse through each other when they share a measure of one length that
-  every call within the cycle lowers.
+  spec's other calls return; a call inside `cppverify::forall`, `cppverify::exists`, or
+  `cppverify::choose` must lower it for every bound value. Functions of one kind
+  (spec, proof, or executable) may recurse through each other when they share
+  a measure of one length that every call within the cycle lowers.
 - May declare `cppverify::reads(p, n)`: the cells `p[0..n)` it depends on, checked
   against its body (every load, and every range a heap-reading callee reads,
   lies inside). A write outside them leaves every application unchanged, and
@@ -438,8 +438,9 @@ cppverify::spec bool reach(int a, int b)
 - The body returns a condition, under `if` and `else` at most, in which the
   predicate occurs only positively: as a conjunct or disjunct, a branch of
   `?:`, under `cppverify::exists`, or under a bounded `cppverify::forall`; never negated, compared,
-  converted, in a condition, in an argument, or under a `cppverify::forall` without
-  bounds. It takes no `cppverify::decreases` or `cppverify::when`, and it may read memory.
+  converted, in a condition, in an argument, inside `cppverify::choose`, or under a
+  `cppverify::forall` without bounds. It takes no `cppverify::decreases` or
+  `cppverify::when`, and it may read memory.
   Predicates that apply each other are defined together, each under the same
   conditions; a predicate never applies itself through a spec that is not
   inductive, since the conditions could not be checked there.
