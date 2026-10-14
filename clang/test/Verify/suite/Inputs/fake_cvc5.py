@@ -57,6 +57,9 @@ elif mode == "stderr":
 elif mode == "exit":
     print("solver failure", file=sys.stderr)
     sys.exit(7)
+elif mode == "rejected":
+    print('(error "Parse Error: input.smt2:3.4: constant arrays need --arrays-exp")')
+    sys.exit(1)
 elif mode == "crash":
     os.kill(os.getpid(), signal.SIGTERM)
 elif mode == "hang":
