@@ -1987,9 +1987,13 @@ def err_cppverify_unknown : Error<
 def err_cppverify_unknown_suggest : Error<
   "no cpp-verify construct named 'cppverify::%0'; did you mean "
   "'cppverify::%1'?">;
+def warn_contract_template_unsupported : Warning<
+  "contracts in %select{function|class}0 template %1 are not yet supported "
+  "and are ignored">,
+  InGroup<ContractUnsupported>;
 def warn_contract_member_function_unsupported : Warning<
   "contracts on member functions are not yet supported and are ignored; "
   "move the function out of the class or verify it as a free function">,
-  InGroup<DiagGroup<"contract-unsupported">>;
+  InGroup<ContractUnsupported>;
 
 } // end of Parser diagnostics
