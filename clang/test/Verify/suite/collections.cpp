@@ -115,8 +115,8 @@ int count_equal(const int *a, int n, int x)
 }
 // CHECK-DAG: Verified: count_equal
 
-// REPLAY-DAG: Verified: sets
-// REPLAY-DAG: Verified: count_equal
+// REPLAY-DAG: Proved obligations: sets (dependencies not checked in replay)
+// REPLAY-DAG: Proved obligations: count_equal (dependencies not checked in replay)
 // REPLAY-DAG: error: verification failed: map_wrong
 
 // VC-LABEL: vc sets
