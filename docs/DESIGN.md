@@ -1261,6 +1261,13 @@ Interval shift(Interval r, int d)
   is an `overflow` obligation that the value fits; it never wraps. Until
   then, in contracts and in ghost and proof code, implicit C++ conversions
   keep a mathematical value unbounded and arithmetic on it is exact.
+- An enumeration without a fixed underlying type holds only the values of
+  its range, the smallest bit-field that fits its enumerators
+  ([dcl.enum]/8): `enum Color { Red, Green, Blue }` holds 0 to 3. A
+  conversion into it is checked (`overflow`), so in executable and proof
+  code every value of it, a parameter, a read from memory, or a call result
+  included, is assumed to lie in the range. A spec converts without a check,
+  so its enumeration values range over the underlying type.
 - Mathematical `cppverify::spec` division and remainder are unbounded but use C++'s
   truncate-toward-zero sign convention. At a zero divisor their total logical
   extension is quotient zero and remainder equal to the dividend; evaluated
