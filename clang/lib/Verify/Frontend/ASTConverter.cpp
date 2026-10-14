@@ -1864,9 +1864,12 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
                          ": member function verification is unsupported");
       continue;
     }
+    // Only a template with contracts is reported here: one without matters
+    // where verified code calls it, which reports the call.
     if (FD->isTemplated()) {
       if (!FD->isInStdNamespace() &&
-          Ctx.getSourceManager().isWrittenInMainFile(FD->getLocation()))
+          Ctx.getSourceManager().isWrittenInMainFile(FD->getLocation()) &&
+          (functionContract(FD) || hasContractStatements(FD, Ctx)))
         Errors.push_back(FD->getNameAsString() +
                          ": function template verification is unsupported");
       continue;
