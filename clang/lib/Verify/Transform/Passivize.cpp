@@ -5583,6 +5583,10 @@ public:
       if (!W.Modifies.empty() && Modified.count(VHeapName))
         if (auto It = Renames.find(VHeapName); It != Renames.end())
           LoopEntryHeap = It->second;
+      // A loop whose condition is the constant false changes nothing.
+      std::unique_ptr<VExpr> Enters = isFalseLiteral(W.Cond.get())
+                                          ? makeBoolLiteral(false, W.Loc)
+                                          : cloneVExpr(Active.get());
       for (const std::string &Name : Modified) {
         auto Previous = Renames.find(Name);
         if (Previous == Renames.end())
@@ -5591,7 +5595,7 @@ public:
         const std::string HeadName = bump(Name);
         Renames[Name] = HeadName;
         emitInactiveFrame(P, PreviousName, HeadName, typeForName(Name),
-                          Active.get(), W.Loc);
+                          Enters.get(), W.Loc);
         if (Framed && Name == VHeapName) {
           const bool OnlyCells =
               !WriteRegions.empty() &&
