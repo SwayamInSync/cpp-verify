@@ -397,7 +397,10 @@ at each `continue` (obligation kind `frame`, located at the footprint).
 
 **Termination.** An executable loop without `cppverify::decreases` contributes no
 measure obligation, and the driver reports the function `Unresolved` with
-`decreases.missing` unless BMC proved the unwinding. `cppverify::decreases(*)` marks the
+`decreases.missing` unless BMC proved the unwinding or the loop's condition is
+the constant false, so that it never repeats: the converter gives such a loop
+(`while (false)`, the `do { ... } while (0)` of a macro) the condition
+`false`, and its havoc keeps every value. `cppverify::decreases(*)` marks the
 function as possibly divergent: its proof, and the proof of every caller, is
 reported `[partial]`. Calls within an executable or proof recursion cycle
 assert the decrease of the shared measure at the call site.
