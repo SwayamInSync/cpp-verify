@@ -153,7 +153,39 @@ llvm::Error verify::materializeLogicFunctions(ObligationModule &Module,
         Module.LogicFunctions.try_emplace(Identity, std::move(Declaration));
     (void)Inserted;
     LogicFunctionDecl &Owned = It->second;
-    // Its value is any function of its arguments.
+    const std::string DefinitionHeap = Spec->ReadsHeap
+                                           ? std::string(VSpecHeapName)
+                                           : std::string(VHeapName) + "_0";
+    // What a counterexample check may use beyond the definition. A term
+    // that does not lower is left out: the check then decides less. Without
+    // a definition, postconditions are axioms every value must meet.
+    if (Spec->Unfolding) {
+      if (auto Lowered =
+              lowerLogicExpr(Spec->Unfolding.get(), "", DefinitionHeap,
+                             Spec->IntMode, &Ctx.Functions)) {
+        collectReferencedLogicFunctions(Lowered->get(), Extra);
+        Owned.Unfolding = std::move(*Lowered);
+      } else {
+        llvm::consumeError(Lowered.takeError());
+      }
+    }
+    for (const auto &Post : Spec->Postconditions) {
+      auto Lowered =
+          lowerLogicExpr(Post.get(), LogicFunctionDecl::ResultVariable,
+                         DefinitionHeap, Spec->IntMode, &Ctx.Functions);
+      if (!Lowered) {
+        if (Spec->Uninterpreted)
+          return llvm::createStringError(
+              llvm::inconvertibleErrorCode(),
+              "axiom lowering failed for %s: %s", Spec->Name.c_str(),
+              llvm::toString(Lowered.takeError()).c_str());
+        llvm::consumeError(Lowered.takeError());
+        continue;
+      }
+      collectReferencedLogicFunctions(Lowered->get(), Extra);
+      Owned.Postconditions.push_back(std::move(*Lowered));
+    }
+    // Its value is any function of its arguments that they allow.
     if (Spec->Uninterpreted)
       return llvm::Error::success();
 
@@ -168,9 +200,6 @@ llvm::Error verify::materializeLogicFunctions(ObligationModule &Module,
     else
       Fuel = Spec->NeedsDecreasesCheck ? 1 : 64;
 
-    const std::string DefinitionHeap = Spec->ReadsHeap
-                                           ? std::string(VSpecHeapName)
-                                           : std::string(VHeapName) + "_0";
     // Fuel and hide decide which unfoldings a solver receives; the definition
     // itself is kept for every function, so a counterexample can always be
     // checked against it.
@@ -220,28 +249,6 @@ llvm::Error verify::materializeLogicFunctions(ObligationModule &Module,
       Owned.DefinitionLevels.push_back(std::move(Definition));
     }
 
-    // What a counterexample check may use beyond the definition. A term
-    // that does not lower is left out: the check then decides less.
-    if (Spec->Unfolding) {
-      if (auto Lowered =
-              lowerLogicExpr(Spec->Unfolding.get(), "", DefinitionHeap,
-                             Spec->IntMode, &Ctx.Functions)) {
-        collectReferencedLogicFunctions(Lowered->get(), Extra);
-        Owned.Unfolding = std::move(*Lowered);
-      } else {
-        llvm::consumeError(Lowered.takeError());
-      }
-    }
-    for (const auto &Post : Spec->Postconditions) {
-      if (auto Lowered =
-              lowerLogicExpr(Post.get(), LogicFunctionDecl::ResultVariable,
-                             DefinitionHeap, Spec->IntMode, &Ctx.Functions)) {
-        collectReferencedLogicFunctions(Lowered->get(), Extra);
-        Owned.Postconditions.push_back(std::move(*Lowered));
-      } else {
-        llvm::consumeError(Lowered.takeError());
-      }
-    }
     if (Spec->NeedsDecreasesCheck) {
       for (const auto &Decrease : Spec->Decreases) {
         auto Lowered = lowerLogicExpr(Decrease.get(), "", DefinitionHeap,
