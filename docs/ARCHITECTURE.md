@@ -1127,6 +1127,15 @@ as an opaque constant (undetermined), and a certification made by an
 encoder that was stopped is discarded (`Z3Encoder::certify`). Before this,
 about one run in six over sequences crashed on the empty term.
 
+The verifier is built without exceptions, so a failed Z3 call returns a
+null term and records an error code that the next call clears. Each encoder
+therefore installs an error handler on its context that keeps the first
+error and marks the encoding failed, and `verifyModule` and `lowerModule`
+end a query in which a call failed as `Unresolved [encoding.failed]` with
+Z3's message, whatever the result was. Errors inside a check do not count
+(Z3 reports them as the check's `unknown`), nor do those of a stopped
+encoder.
+
 Z3 gives refinement a short slice of the query budget (5%, at least half a
 second) and at most eight rounds that only search among hidden values. A model
 whose applications are too deep to evaluate is followed by a search for one
