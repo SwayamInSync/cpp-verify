@@ -3256,8 +3256,9 @@ class Evaluator {
   }
 
   bool pastDeadline() const {
-    return Limits.Deadline &&
-           std::chrono::steady_clock::now() >= *Limits.Deadline;
+    return interruptRequested() ||
+           (Limits.Deadline &&
+            std::chrono::steady_clock::now() >= *Limits.Deadline);
   }
 
 public:
