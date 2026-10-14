@@ -38,6 +38,38 @@ bool isClauseWord(const FormatToken &Tok, CppVerifyClausePosition Where,
              : Positions & CppVerifyPosition::LoopClause;
 }
 
+/// Marks the colon of each range footprint p[lo : n] between \p Open and
+/// \p Close, which C++ and Objective-C give no meaning in brackets.
+void markRangeColons(FormatToken *Open, FormatToken *Close) {
+  SmallVector<FormatToken *, 16> Tokens;
+  for (FormatToken *Tok = Close; Tok && Tok != Open; Tok = Tok->Previous)
+    Tokens.push_back(Tok);
+  // Per open bracket, the conditionals whose ':' is still to come.
+  SmallVector<unsigned, 4> Questions;
+  unsigned Parens = 0;
+  SmallVector<unsigned, 4> ParensAtSquare;
+  for (FormatToken *Tok : llvm::reverse(Tokens)) {
+    if (Tok->is(tok::l_square)) {
+      Questions.push_back(0);
+      ParensAtSquare.push_back(Parens);
+    } else if (Tok->is(tok::r_square) && !Questions.empty()) {
+      Questions.pop_back();
+      ParensAtSquare.pop_back();
+    } else if (Tok->is(tok::l_paren)) {
+      ++Parens;
+    } else if (Tok->is(tok::r_paren) && Parens > 0) {
+      --Parens;
+    } else if (!Questions.empty() && Parens == ParensAtSquare.back()) {
+      if (Tok->is(tok::question))
+        ++Questions.back();
+      else if (Tok->is(tok::colon) && Questions.back() > 0)
+        --Questions.back();
+      else if (Tok->is(tok::colon))
+        Tok->setFinalizedType(TT_ArraySectionColon);
+    }
+  }
+}
+
 } // namespace
 
 bool UnwrappedLineParser::mayFollowCppVerifyDeclarator(
@@ -158,8 +190,11 @@ bool UnwrappedLineParser::tryToParseCppVerifyClauses(
       nextToken();
     }
     nextToken();
-    if (FormatTok->is(tok::l_paren))
+    if (FormatTok->is(tok::l_paren)) {
+      FormatToken *Open = FormatTok;
       parseParens();
+      markRangeColons(Open, FormatTok->Previous);
+    }
     // A spec's clause proof: post(...) by { ... }.
     if (Where == CppVerifyClausePosition::Function &&
         FormatTok->is(tok::identifier) && FormatTok->TokenText == "by" &&
