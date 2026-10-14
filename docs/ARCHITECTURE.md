@@ -166,8 +166,10 @@ ranges over all mathematical integers. A `cppverify::trigger(term)` mark is an i
 `Cast` flagged `IsTrigger` around the term. Each `cppverify::choose` is lifted to a
 synthesized uninterpreted spec function (`IsChoice`) of the values its body
 mentions, whose postcondition is the Hilbert axiom `!cppverify::exists(k, P) || P(cppverify::result)`
-(with the range for a bounded choose). A collection operation is a `SpecCall`
-whose identity is `__cppverify.<op>`, such as `__cppverify.seq.push`.
+(with the range for a bounded choose). The calls in its body are calls of the
+function it is written in, for recursion and termination. A collection
+operation is a `SpecCall` whose identity is `__cppverify.<op>`, such as
+`__cppverify.seq.push`.
 `cppverify::valid(p, n)` becomes a call of the synthesized builtin spec
 `__cppverify_valid(p, n)` (body `true`, marked `IsBuiltin` and never
 reported), so the extent marker scan treats it exactly like a user-declared
@@ -817,8 +819,9 @@ check did not pass to `Unresolved` with reason `spec.reads`.
 termination module (its own module `spec post:` when it is not recursive):
 each call within the recursion cycle contributes the assumption
 `dec(a) < dec(x) -> post(a, f(a))` under the cycle's well-founded relation,
-each call of another spec its post, and every return value must satisfy the
-post. Since the facts at lower measures are the induction hypothesis, a
+each call of another spec its post (a choose its axiom only where the calls
+of the cycle in its body lower the measure), and every return value must
+satisfy the post. Since the facts at lower measures are the induction hypothesis, a
 proof establishes termination and the post together. Passivization then
 assumes `post(t, f(t))` at every application `f(t)` in a function, the
 preconditions included, quantified like the application, and at every

@@ -153,10 +153,11 @@ measure whatever the spec's other calls return:
      return n <= 0 ? 0 : 1 + nested(nested(n - 1));
    }
 
-A recursive call inside ``cppverify::forall`` or ``cppverify::exists`` must decrease the measure
-for every value of the bound variable. Spec functions may call each other in a
-cycle when they share a measure of the same length and every call within the
-cycle lowers it; the termination proof treats all of them as opaque:
+A recursive call inside ``cppverify::forall``, ``cppverify::exists``, or ``cppverify::choose`` must
+decrease the measure for every value of the bound variable. Spec functions may
+call each other in a cycle when they share a measure of the same length and
+every call within the cycle lowers it; the termination proof treats all of them
+as opaque:
 
 .. code-block:: cpp
 
