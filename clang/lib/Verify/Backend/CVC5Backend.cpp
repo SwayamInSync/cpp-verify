@@ -2573,7 +2573,7 @@ static SolverRun runCVC5(const std::string &SolverPath, llvm::StringRef Script,
         InvocationError += ": " + TerminationError;
       break;
     }
-    if (Cancelled && *Cancelled) {
+    if ((Cancelled && *Cancelled) || interruptRequested()) {
       Stopped = true;
       std::string TerminationError;
       if (!terminateAndReap(Process, TerminationError))
