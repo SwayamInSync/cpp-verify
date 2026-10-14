@@ -1488,8 +1488,29 @@ struct RecursiveSpecSite {
   std::vector<EnclosingQuantifier> Quantifiers;
 };
 
+/// The `exists` of a lifted choose's axiom, `!exists(k, P) || P(result)`, at
+/// the arguments of \p Call; null if the axiom has another shape.
+static std::unique_ptr<VExpr> choiceWitness(const VFunction &Choice,
+                                            const VSpecCallExpr &Call) {
+  if (Choice.Postconditions.empty() || Choice.Params.size() != Call.Args.size())
+    return nullptr;
+  const VExpr *Axiom = Choice.Postconditions.front().get();
+  if (Axiom->K != VExpr::BinOp)
+    return nullptr;
+  const auto *Or = static_cast<const VBinOpExpr *>(Axiom);
+  if (Or->Op != VBinOp::Or || Or->Lhs->K != VExpr::UnaryOp)
+    return nullptr;
+  const auto *Not = static_cast<const VUnaryOpExpr *>(Or->Lhs.get());
+  if (Not->Op != VUnaryOp::Not || Not->Operand->K != VExpr::Exists)
+    return nullptr;
+  std::map<std::string, std::unique_ptr<VExpr>> Arguments;
+  for (size_t I = 0; I < Call.Args.size(); ++I)
+    Arguments[Choice.Params[I].first] = cloneVExpr(Call.Args[I].get());
+  return substParamsInExpr(Not->Operand.get(), Arguments);
+}
+
 static void collectRecursiveSpecCallsInExpr(
-    const VExpr *E, const VFunction &Fn,
+    const VExpr *E, const VFunction &Fn, const FunctionMap &FnMap,
     const std::map<std::string, std::unique_ptr<VExpr>> &Env,
     const VExpr *Guard, std::vector<RecursiveSpecSite> &Sites,
     const std::vector<const VQuantifiedExpr *> &Quantifiers,
@@ -1514,13 +1535,23 @@ static void collectRecursiveSpecCallsInExpr(
       Sites.push_back(std::move(Site));
     }
     for (const auto &A : C->Args)
-      collectRecursiveSpecCallsInExpr(A.get(), Fn, Env, Guard, Sites,
+      collectRecursiveSpecCallsInExpr(A.get(), Fn, FnMap, Env, Guard, Sites,
                                       Quantifiers, Unsupported);
+    // A choose is evaluated where it is written: the calls in its body, at
+    // every value of its binder, are the caller's.
+    if (auto It = FnMap.find(C->CalleeIdentity);
+        It != FnMap.end() && It->second->IsChoice) {
+      if (std::unique_ptr<VExpr> Witness = choiceWitness(*It->second, *C))
+        collectRecursiveSpecCallsInExpr(Witness.get(), Fn, FnMap, Env, Guard,
+                                        Sites, Quantifiers, Unsupported);
+      else
+        Unsupported = true;
+    }
     return;
   }
   case VExpr::BinOp: {
     const auto *B = static_cast<const VBinOpExpr *>(E);
-    collectRecursiveSpecCallsInExpr(B->Lhs.get(), Fn, Env, Guard, Sites,
+    collectRecursiveSpecCallsInExpr(B->Lhs.get(), Fn, FnMap, Env, Guard, Sites,
                                     Quantifiers, Unsupported);
     std::unique_ptr<VExpr> RightGuard = cloneVExpr(Guard);
     if (B->Op == VBinOp::And)
@@ -1531,74 +1562,77 @@ static void collectRecursiveSpecCallsInExpr(
           std::move(RightGuard),
           makeDecreaseNot(substParamsInExpr(B->Lhs.get(), Env), B->Loc),
           B->Loc);
-    collectRecursiveSpecCallsInExpr(B->Rhs.get(), Fn, Env, RightGuard.get(),
-                                    Sites, Quantifiers, Unsupported);
+    collectRecursiveSpecCallsInExpr(B->Rhs.get(), Fn, FnMap, Env,
+                                    RightGuard.get(), Sites, Quantifiers,
+                                    Unsupported);
     return;
   }
   case VExpr::UnaryOp:
     collectRecursiveSpecCallsInExpr(
-        static_cast<const VUnaryOpExpr *>(E)->Operand.get(), Fn, Env, Guard,
-        Sites, Quantifiers, Unsupported);
+        static_cast<const VUnaryOpExpr *>(E)->Operand.get(), Fn, FnMap, Env,
+        Guard, Sites, Quantifiers, Unsupported);
     return;
   case VExpr::Cast:
     collectRecursiveSpecCallsInExpr(
-        static_cast<const VCastExpr *>(E)->Inner.get(), Fn, Env, Guard, Sites,
-        Quantifiers, Unsupported);
+        static_cast<const VCastExpr *>(E)->Inner.get(), Fn, FnMap, Env, Guard,
+        Sites, Quantifiers, Unsupported);
     return;
   case VExpr::Load: {
     const auto *Load = static_cast<const VLoadExpr *>(E);
-    collectRecursiveSpecCallsInExpr(Load->Ptr.get(), Fn, Env, Guard, Sites,
-                                    Quantifiers, Unsupported);
-    collectRecursiveSpecCallsInExpr(Load->AccessCondition.get(), Fn, Env, Guard,
+    collectRecursiveSpecCallsInExpr(Load->Ptr.get(), Fn, FnMap, Env, Guard,
                                     Sites, Quantifiers, Unsupported);
+    collectRecursiveSpecCallsInExpr(Load->AccessCondition.get(), Fn, FnMap, Env,
+                                    Guard, Sites, Quantifiers, Unsupported);
     return;
   }
   case VExpr::Old:
     collectRecursiveSpecCallsInExpr(
-        static_cast<const VOldExpr *>(E)->Inner.get(), Fn, Env, Guard, Sites,
-        Quantifiers, Unsupported);
+        static_cast<const VOldExpr *>(E)->Inner.get(), Fn, FnMap, Env, Guard,
+        Sites, Quantifiers, Unsupported);
     return;
   case VExpr::Conditional: {
     const auto *C = static_cast<const VConditionalExpr *>(E);
-    collectRecursiveSpecCallsInExpr(C->Cond.get(), Fn, Env, Guard, Sites,
+    collectRecursiveSpecCallsInExpr(C->Cond.get(), Fn, FnMap, Env, Guard, Sites,
                                     Quantifiers, Unsupported);
     auto Cond = substParamsInExpr(C->Cond.get(), Env);
     auto ThenGuard =
         makeDecreaseAnd(cloneVExpr(Guard), cloneVExpr(Cond.get()), C->Loc);
     auto ElseGuard = makeDecreaseAnd(
         cloneVExpr(Guard), makeDecreaseNot(std::move(Cond), C->Loc), C->Loc);
-    collectRecursiveSpecCallsInExpr(C->Then.get(), Fn, Env, ThenGuard.get(),
-                                    Sites, Quantifiers, Unsupported);
-    collectRecursiveSpecCallsInExpr(C->Else.get(), Fn, Env, ElseGuard.get(),
-                                    Sites, Quantifiers, Unsupported);
+    collectRecursiveSpecCallsInExpr(C->Then.get(), Fn, FnMap, Env,
+                                    ThenGuard.get(), Sites, Quantifiers,
+                                    Unsupported);
+    collectRecursiveSpecCallsInExpr(C->Else.get(), Fn, FnMap, Env,
+                                    ElseGuard.get(), Sites, Quantifiers,
+                                    Unsupported);
     return;
   }
   case VExpr::OverflowCheck: {
     const auto *O = static_cast<const VOverflowCheckExpr *>(E);
-    collectRecursiveSpecCallsInExpr(O->Lhs.get(), Fn, Env, Guard, Sites,
+    collectRecursiveSpecCallsInExpr(O->Lhs.get(), Fn, FnMap, Env, Guard, Sites,
                                     Quantifiers, Unsupported);
-    collectRecursiveSpecCallsInExpr(O->Rhs.get(), Fn, Env, Guard, Sites,
+    collectRecursiveSpecCallsInExpr(O->Rhs.get(), Fn, FnMap, Env, Guard, Sites,
                                     Quantifiers, Unsupported);
     return;
   }
   case VExpr::Forall:
   case VExpr::Exists: {
     const auto *Q = static_cast<const VQuantifiedExpr *>(E);
-    collectRecursiveSpecCallsInExpr(Q->Lo.get(), Fn, Env, Guard, Sites,
+    collectRecursiveSpecCallsInExpr(Q->Lo.get(), Fn, FnMap, Env, Guard, Sites,
                                     Quantifiers, Unsupported);
-    collectRecursiveSpecCallsInExpr(Q->Hi.get(), Fn, Env, Guard, Sites,
+    collectRecursiveSpecCallsInExpr(Q->Hi.get(), Fn, FnMap, Env, Guard, Sites,
                                     Quantifiers, Unsupported);
     std::vector<const VQuantifiedExpr *> Inner = Quantifiers;
     Inner.push_back(Q);
-    collectRecursiveSpecCallsInExpr(Q->Body.get(), Fn, Env, Guard, Sites, Inner,
-                                    Unsupported);
+    collectRecursiveSpecCallsInExpr(Q->Body.get(), Fn, FnMap, Env, Guard, Sites,
+                                    Inner, Unsupported);
     return;
   }
   case VExpr::HeapStore: {
     const auto *H = static_cast<const VHeapStoreExpr *>(E);
-    collectRecursiveSpecCallsInExpr(H->Ptr.get(), Fn, Env, Guard, Sites,
+    collectRecursiveSpecCallsInExpr(H->Ptr.get(), Fn, FnMap, Env, Guard, Sites,
                                     Quantifiers, Unsupported);
-    collectRecursiveSpecCallsInExpr(H->Val.get(), Fn, Env, Guard, Sites,
+    collectRecursiveSpecCallsInExpr(H->Val.get(), Fn, FnMap, Env, Guard, Sites,
                                     Quantifiers, Unsupported);
     return;
   }
@@ -1607,8 +1641,8 @@ static void collectRecursiveSpecCallsInExpr(
     return;
   case VExpr::FieldAccess:
     collectRecursiveSpecCallsInExpr(
-        static_cast<const VFieldAccessExpr *>(E)->Base.get(), Fn, Env, Guard,
-        Sites, Quantifiers, Unsupported);
+        static_cast<const VFieldAccessExpr *>(E)->Base.get(), Fn, FnMap, Env,
+        Guard, Sites, Quantifiers, Unsupported);
     return;
   case VExpr::Literal:
   case VExpr::Var:
@@ -1619,15 +1653,15 @@ static void collectRecursiveSpecCallsInExpr(
 
 static std::vector<DecreaseState> collectRecursiveSpecCallsInBody(
     const std::vector<std::unique_ptr<VStmt>> &Stmts, const VFunction &Fn,
-    std::vector<RecursiveSpecSite> &Sites, std::vector<DecreaseState> States,
-    bool &Unsupported) {
+    const FunctionMap &FnMap, std::vector<RecursiveSpecSite> &Sites,
+    std::vector<DecreaseState> States, bool &Unsupported) {
   for (const auto &S : Stmts) {
     std::vector<DecreaseState> NextStates;
     for (DecreaseState &State : States) {
       switch (S->K) {
       case VStmt::Assign: {
         const auto &A = static_cast<const VAssignStmt &>(*S);
-        collectRecursiveSpecCallsInExpr(A.Value.get(), Fn, State.Env,
+        collectRecursiveSpecCallsInExpr(A.Value.get(), Fn, FnMap, State.Env,
                                         State.Guard.get(), Sites, {},
                                         Unsupported);
         State.Env[A.Target] = substParamsInExpr(A.Value.get(), State.Env);
@@ -1636,12 +1670,12 @@ static std::vector<DecreaseState> collectRecursiveSpecCallsInBody(
       }
       case VStmt::Return:
         collectRecursiveSpecCallsInExpr(
-            static_cast<const VReturnStmt &>(*S).Value.get(), Fn, State.Env,
-            State.Guard.get(), Sites, {}, Unsupported);
+            static_cast<const VReturnStmt &>(*S).Value.get(), Fn, FnMap,
+            State.Env, State.Guard.get(), Sites, {}, Unsupported);
         break;
       case VStmt::If: {
         const auto &I = static_cast<const VIfStmt &>(*S);
-        collectRecursiveSpecCallsInExpr(I.Cond.get(), Fn, State.Env,
+        collectRecursiveSpecCallsInExpr(I.Cond.get(), Fn, FnMap, State.Env,
                                         State.Guard.get(), Sites, {},
                                         Unsupported);
         auto Cond = substParamsInExpr(I.Cond.get(), State.Env);
@@ -1652,7 +1686,7 @@ static std::vector<DecreaseState> collectRecursiveSpecCallsInBody(
         std::vector<DecreaseState> ThenStates;
         ThenStates.push_back(std::move(ThenState));
         ThenStates = collectRecursiveSpecCallsInBody(
-            I.Then, Fn, Sites, std::move(ThenStates), Unsupported);
+            I.Then, Fn, FnMap, Sites, std::move(ThenStates), Unsupported);
         NextStates.insert(NextStates.end(),
                           std::make_move_iterator(ThenStates.begin()),
                           std::make_move_iterator(ThenStates.end()));
@@ -1664,7 +1698,7 @@ static std::vector<DecreaseState> collectRecursiveSpecCallsInBody(
         std::vector<DecreaseState> ElseStates;
         ElseStates.push_back(std::move(ElseState));
         ElseStates = collectRecursiveSpecCallsInBody(
-            I.Else, Fn, Sites, std::move(ElseStates), Unsupported);
+            I.Else, Fn, FnMap, Sites, std::move(ElseStates), Unsupported);
         NextStates.insert(NextStates.end(),
                           std::make_move_iterator(ElseStates.begin()),
                           std::make_move_iterator(ElseStates.end()));
@@ -1713,6 +1747,57 @@ lexicographicDecrease(const std::vector<std::unique_ptr<VExpr>> &CalleeDec,
                                            VType::makeBool(), Loc);
   }
   return LexLess;
+}
+
+/// \p Fact, the axiom of the choose \p Call, where the calls of \p Fn's
+/// recursion cycle in the choose's body lower \p Measure: the choose is part
+/// of the definition it is written in, whose values are facts only there.
+static std::unique_ptr<VExpr>
+guardChoiceAxiom(std::unique_ptr<VExpr> Fact, const VFunction &Fn,
+                 const FunctionMap &FnMap, const VFunction &Choice,
+                 const VSpecCallExpr &Call,
+                 const std::vector<std::unique_ptr<VExpr>> &Measure) {
+  std::unique_ptr<VExpr> Witness = choiceWitness(Choice, Call);
+  if (!Fact || !Witness)
+    return Fact;
+  std::vector<RecursiveSpecSite> Sites;
+  bool Unsupported = false;
+  const auto True =
+      std::make_unique<VLiteralExpr>(1, VType::makeBool(), Call.Loc);
+  collectRecursiveSpecCallsInExpr(Witness.get(), Fn, FnMap, {}, True.get(),
+                                  Sites, {}, Unsupported);
+  if (Unsupported)
+    return Fact;
+  for (const RecursiveSpecSite &Site : Sites) {
+    const VFunction *Callee = &Fn;
+    if (Site.Callee != Fn.Identity)
+      if (auto It = FnMap.find(Site.Callee); It != FnMap.end())
+        Callee = It->second;
+    auto ArgMap = bindParams(*Callee, Site.Args);
+    std::vector<std::unique_ptr<VExpr>> CalleeDec;
+    bool Complete = !Measure.empty() && Callee->Identity == Site.Callee &&
+                    Callee->Decreases.size() == Measure.size();
+    for (const auto &Decrease : Callee->Decreases) {
+      CalleeDec.push_back(substParamsInExpr(Decrease.get(), ArgMap));
+      Complete = Complete && CalleeDec.back();
+    }
+    std::unique_ptr<VExpr> Lower =
+        Complete ? lexicographicDecrease(CalleeDec, Measure, Site.Loc)
+                 : std::make_unique<VLiteralExpr>(false, VType::makeBool(),
+                                                  Site.Loc);
+    Lower = std::make_unique<VBinOpExpr>(
+        VBinOp::Or, makeDecreaseNot(cloneVExpr(Site.Guard.get()), Site.Loc),
+        std::move(Lower), VType::makeBool(), Site.Loc);
+    for (auto It = Site.Quantifiers.rbegin(); It != Site.Quantifiers.rend();
+         ++It)
+      Lower = std::make_unique<VForallExpr>(
+          It->Binder, cloneVExpr(It->Lo.get()), cloneVExpr(It->Hi.get()),
+          std::move(Lower), Site.Loc, It->BinderType);
+    Fact = std::make_unique<VBinOpExpr>(
+        VBinOp::Or, makeDecreaseNot(std::move(Lower), Site.Loc),
+        std::move(Fact), VType::makeBool(), Site.Loc);
+  }
+  return Fact;
 }
 
 static void addSpecPostChecks(PassiveProgram &P, const VFunction &Fn,
@@ -1766,7 +1851,7 @@ PassiveProgram verify::buildDecreasesChecks(const VFunction &Fn,
         std::make_unique<VLiteralExpr>(1, VType::makeBool(), SourceLocation());
     std::vector<DecreaseState> SpecStates;
     SpecStates.push_back(std::move(SpecInitial));
-    collectRecursiveSpecCallsInBody(Fn.Body, Fn, SpecSites,
+    collectRecursiveSpecCallsInBody(Fn.Body, Fn, FnMap, SpecSites,
                                     std::move(SpecStates),
                                     UnsupportedSpecRecursion);
   }
@@ -2479,6 +2564,13 @@ static void addPostApplicationFacts(PassiveProgram &P, const VFunction &Fn,
     for (const std::string &Member : Step->RecursionGroup)
       Group.insert(predicateOf(Member));
   }
+  std::vector<std::unique_ptr<VExpr>> Measure;
+  std::map<std::string, std::unique_ptr<VExpr>> Self;
+  for (const auto &Param : Fn.Params)
+    Self[Param.first] =
+        std::make_unique<VVarExpr>(Param.first, Param.second, SourceLocation());
+  for (const auto &Decrease : Fn.Decreases)
+    Measure.push_back(substParamsInExpr(Decrease.get(), Self));
   std::vector<std::unique_ptr<PassiveStmt>> Facts;
   std::vector<const VQuantifiedExpr *> Enclosing;
   // The applications the check names, whose definitions the solver receives.
@@ -2517,19 +2609,15 @@ static void addPostApplicationFacts(PassiveProgram &P, const VFunction &Fn,
     if (Fn.Cluster.count(Callee.Identity)) {
       Theorem = false;
       // Another spec of its cluster, below the measure.
-      std::vector<std::unique_ptr<VExpr>> Measure;
-      std::map<std::string, std::unique_ptr<VExpr>> Self;
-      for (const auto &Param : Fn.Params)
-        Self[Param.first] = std::make_unique<VVarExpr>(
-            Param.first, Param.second, SourceLocation());
-      for (const auto &Decrease : Fn.Decreases)
-        Measure.push_back(substParamsInExpr(Decrease.get(), Self));
       Fact = specInductionFacts(Callee, Call.Args, &Call, Call.Loc, Measure,
                                 FnMap);
       if (Fact && !Callee.Postconditions.empty())
         P.InductivePosts.insert(Callee.Identity);
     } else if (!Group.count(Callee.Identity)) {
       Fact = specApplicationFacts(Callee, Call.Args, &Call, Call.Loc);
+      if (Callee.IsChoice)
+        Fact =
+            guardChoiceAxiom(std::move(Fact), Fn, FnMap, Callee, Call, Measure);
       if (!Callee.Postconditions.empty())
         P.AssumedPosts.insert(Callee.Identity);
       if (Callee.Unfolding)
@@ -2627,6 +2715,9 @@ static void addSpecPostChecks(PassiveProgram &P, const VFunction &Fn,
       continue;
     std::unique_ptr<VExpr> Fact = specApplicationFacts(
         *Site.Callee, Site.Args, Application.get(), Site.Loc);
+    if (Site.Callee->IsChoice)
+      Fact = guardChoiceAxiom(std::move(Fact), Fn, FnMap, *Site.Callee,
+                              *Application, CurrentDec);
     if (!Fact)
       continue;
     const bool InCycle = Call.CalleeIdentity == Fn.Identity ||
