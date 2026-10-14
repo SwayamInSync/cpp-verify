@@ -25,7 +25,7 @@ int add_one(int x)
 // CHECK-DAG: Verified: add_one [backend={{z3|cvc5|z3\+cvc5}}]
 // LOWER-DAG: Lowered: add_one
 // LOWER-NOT: Verified:
-// REPLAY-DAG: Verified: {{.*}}add_one{{.*}} [backend={{z3|cvc5|z3\+cvc5}}]
+// REPLAY-DAG: Proved obligations: {{.*}}add_one{{.*}} (dependencies not checked in replay) [backend={{z3|cvc5|z3\+cvc5}}]
 
 int wrong_bound(int x)
   cppverify::pre(x >= 0 && x < 10)

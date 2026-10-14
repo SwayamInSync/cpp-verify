@@ -178,9 +178,9 @@ void ghost_loop_wrong(int n)
 }
 // CHECK-DAG: error: verification failed: ghost_loop_wrong [{{.*}}::assertion@[[@LINE-2]]:3] (counterexample: {{.*}}s [ssa=s_2] [type=seq] = [{{-?[0-9]+}}]{{.*}}) [backend=z3] [reason=counterexample]
 
-// REPLAY-DAG: Verified: basics
-// REPLAY-DAG: Verified: reverse_index
-// REPLAY-DAG: Verified: count_positive
+// REPLAY-DAG: Proved obligations: basics (dependencies not checked in replay)
+// REPLAY-DAG: Proved obligations: reverse_index (dependencies not checked in replay)
+// REPLAY-DAG: Proved obligations: count_positive (dependencies not checked in replay)
 // REPLAY-DAG: error: verification failed: elements_differ
 // REPLAY-DAG: error: verification failed: ghost_loop_wrong
 

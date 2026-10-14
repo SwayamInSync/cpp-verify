@@ -33,7 +33,7 @@ void write_after(int *p, int n)
 }
 // CHECK-DAG: Verified: write_after
 // The frames are ordinary assumptions of the archived query.
-// REPLAY-DAG: Verified: write_after
+// REPLAY-DAG: Proved obligations: write_after (dependencies not checked in replay)
 
 // Each store is framed separately, through both branches.
 void write_around(int *p, int n, bool front)

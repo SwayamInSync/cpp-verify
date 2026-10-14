@@ -90,7 +90,8 @@ Other flags
   obligation records with semantic hashes
 - ``cpp-verify --obligation-in=FILE`` — validate and replay records through Z3,
   lower-only dumps, or Lean scratch export without reparsing C++; records made
-  by BMC retain and enforce their archived unroll bound
+  by BMC retain and enforce their archived unroll bound. A proof is reported
+  as ``Proved obligations``, since what a verdict rests on is not archived
 
 IR layers
 ---------

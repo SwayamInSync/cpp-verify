@@ -200,9 +200,11 @@ Backends
        produced after BMC unrolling retain their bound and replay with BMC
        unwinding semantics; applying BMC to an untransformed archive is
        rejected because unrolling must run before obligation lowering.
-       Each module is replayed on its own: a module that relies on a spec's
-       termination, ``cppverify::reads``, or ``cppverify::post`` is not demoted when that spec's own
-       module fails, which the replay reports separately.
+       Each module is replayed on its own, without the callee and trusted
+       contracts, spec facts, partiality, and vacuity its source verdict
+       rests on: a module whose obligations all hold reports ``Proved
+       obligations: f (dependencies not checked in replay)`` (JSON
+       ``"status":"proved-obligations"``), never ``Verified``.
 
 ``--lower-only`` is deliberately different from compiler ``-fno-verify``.
 ``-fno-verify`` stops after Clang syntax and contract semantic checks;

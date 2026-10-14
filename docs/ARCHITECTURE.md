@@ -580,6 +580,13 @@ reach any adapter. Semantically equivalent records that differ only by
 supported constant structure or unreachable logical declarations therefore
 converge to the same backend module and semantic identity.
 
+Replay settles each module alone. What a source verdict also rests on (callee
+and trusted contracts, spec facts, partiality) and the vacuity checks are not
+archived, so a module whose obligations all hold reports `Proved obligations:
+f (dependencies not checked in replay)` (JSON status `proved-obligations`),
+never `Verified`. A counterexample is still a failure: postconditions are not
+archived either, so replay certifies it by the definitions alone.
+
 BMC-produced modules retain the unroll bound as semantic transform provenance.
 Replay aggregates those modules with BMC unwinding semantics even when Z3 is
 the selected solver, so an exhausted frontier remains `BoundedSafe(N)` rather
