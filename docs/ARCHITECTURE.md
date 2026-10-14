@@ -419,6 +419,16 @@ state and ends the path; the frontend emits a `for` increment before it. BMC
 unrolling lowers `break` and `continue` to flag assignments that guard the
 remaining statements and the next iteration.
 
+**Enumeration ranges.** A machine value of an enumeration type without a
+fixed underlying type (`VType::EnumMin`, `EnumMax`) lies in its range, since
+a conversion into it is asserted. Each expression's definedness checks are
+followed by an assumption of facts about the values it reads
+(`machineMathBridgeForExpr`), under the expression's guards and quantifiers;
+it includes the range of every enumeration variable and memory read, which
+covers parameters, call results, loop heads, and the heap after a havoc.
+Mathematical values (specs, and the proofs generated from them) convert
+without a check and get no range.
+
 **Assertions → assert, then assume:** `cppverify::check(P)` is proved where it
 stands and assumed from there on, so later obligations can use it as a proof
 step. Other obligations stay independent of each other.
