@@ -80,6 +80,21 @@ TEST_F(FormatTestCppVerify, LoopClauses) {
                "}");
 }
 
+TEST_F(FormatTestCppVerify, RangeFootprints) {
+  verifyFormat("void zero(int *a, int n)\n"
+               "  cppverify::modifies(a[0 : n])\n"
+               "{}",
+               "void zero(int *a, int n) cppverify::modifies(a[0:n]) {}");
+  verifyFormat("void f(int *a, int *b, int n, bool c) {\n"
+               "  for (int i = 0; i < n; ++i)\n"
+               "    cppverify::modifies(a[i : n - i], b[c ? 0 : 1])\n"
+               "    cppverify::decreases(n - i)\n"
+               "  {\n"
+               "    a[i] = 0;\n"
+               "  }\n"
+               "}");
+}
+
 TEST_F(FormatTestCppVerify, OrdinaryCodeIsUnchanged) {
   // A call statement after a loop head or a condition is the body.
   verifyFormat("void f(int n) {\n"
