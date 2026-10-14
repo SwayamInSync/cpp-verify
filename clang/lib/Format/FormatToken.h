@@ -27,6 +27,7 @@ namespace format {
 #define LIST_TOKEN_TYPES                                                       \
   TYPE(AfterPPDirective)                                                       \
   TYPE(ArrayInitializerLSquare)                                                \
+  TYPE(ArraySectionColon)                                                      \
   TYPE(ArraySubscriptLSquare)                                                  \
   TYPE(AttributeColon)                                                         \
   TYPE(AttributeLParen)                                                        \
