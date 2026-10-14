@@ -2654,6 +2654,13 @@ static void addPostApplicationFacts(PassiveProgram &P, const VFunction &Fn,
       Enclosing = Outer;
       visit(Level.get());
     }
+  std::set<std::string> Chosen;
+  addChoiceAxioms(Facts, 0, FnMap, Chosen, true,
+                  [&](std::unique_ptr<VExpr> Axiom, const VFunction &Choice,
+                      const VSpecCallExpr &Call) {
+                    return guardChoiceAxiom(std::move(Axiom), Fn, FnMap, Choice,
+                                            Call, Measure);
+                  });
   P.Stmts.insert(P.Stmts.begin(), std::make_move_iterator(Facts.begin()),
                  std::make_move_iterator(Facts.end()));
 }
@@ -2768,6 +2775,13 @@ static void addSpecPostChecks(PassiveProgram &P, const VFunction &Fn,
     }
     quantified(std::move(Fact), Site);
   }
+  std::set<std::string> Chosen;
+  addChoiceAxioms(Facts, 0, FnMap, Chosen, false,
+                  [&](std::unique_ptr<VExpr> Axiom, const VFunction &Choice,
+                      const VSpecCallExpr &Call) {
+                    return guardChoiceAxiom(std::move(Axiom), Fn, FnMap, Choice,
+                                            Call, CurrentDec);
+                  });
   P.Stmts.insert(P.Stmts.begin(), std::make_move_iterator(Facts.begin()),
                  std::make_move_iterator(Facts.end()));
 
@@ -3080,6 +3094,13 @@ verify::withClauseProofs(PassiveProgram Check, const VFunction &Spec,
   };
   for (const auto &S : P.Stmts)
     visit(S->Cond.get());
+  std::set<std::string> Chosen;
+  addChoiceAxioms(Hypotheses, 0, FnMap, Chosen, false,
+                  [&](std::unique_ptr<VExpr> Axiom, const VFunction &Choice,
+                      const VSpecCallExpr &Call) {
+                    return guardChoiceAxiom(std::move(Axiom), Spec, FnMap,
+                                            Choice, Call, CurrentDec);
+                  });
   P.Stmts.insert(P.Stmts.begin(), std::make_move_iterator(Hypotheses.begin()),
                  std::make_move_iterator(Hypotheses.end()));
   for (auto &S : Unsupported)
