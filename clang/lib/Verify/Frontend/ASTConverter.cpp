@@ -1064,16 +1064,39 @@ void ASTConverter::recordSourceVariable(const ValueDecl *D) {
          VType::fromQualType(D->getType(), IntMode, Ctx));
 }
 
-bool ASTConverter::referencesDynamicPointer(const Expr *E) const {
-  if (!E)
+bool ASTConverter::isDynamicAddress(const Expr *E) const {
+  if (!E || !E->getType()->isPointerType())
     return false;
-  if (const auto *DRE = dyn_cast<DeclRefExpr>(E->IgnoreParenImpCasts()))
-    if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl()))
-      if (DynamicPointers.count(VD))
-        return true;
+  E = E->IgnoreParens();
+  if (const auto *DRE = dyn_cast<DeclRefExpr>(E)) {
+    const auto *VD = dyn_cast<VarDecl>(DRE->getDecl());
+    return VD && DynamicPointers.count(VD);
+  }
+  if (isa<ArraySubscriptExpr, MemberExpr>(E))
+    return false;
+  if (const auto *U = dyn_cast<UnaryOperator>(E)) {
+    if (U->getOpcode() == UO_Deref)
+      return false;
+    if (U->getOpcode() == UO_AddrOf) {
+      // The address of the object the operand names, through the pointer
+      // that reaches it.
+      const Expr *Object = U->getSubExpr()->IgnoreParens();
+      while (const auto *ME = dyn_cast<MemberExpr>(Object)) {
+        if (ME->isArrow())
+          return isDynamicAddress(ME->getBase());
+        Object = ME->getBase()->IgnoreParens();
+      }
+      if (const auto *AS = dyn_cast<ArraySubscriptExpr>(Object))
+        return isDynamicAddress(AS->getBase());
+      if (const auto *Inner = dyn_cast<UnaryOperator>(Object);
+          Inner && Inner->getOpcode() == UO_Deref)
+        return isDynamicAddress(Inner->getSubExpr());
+      return false;
+    }
+  }
   for (const Stmt *Child : E->children())
     if (const auto *ChildExpr = dyn_cast_or_null<Expr>(Child))
-      if (referencesDynamicPointer(ChildExpr))
+      if (isDynamicAddress(ChildExpr))
         return true;
   return false;
 }
@@ -3207,7 +3230,7 @@ std::optional<VPlace> ASTConverter::arrowFieldPlace(const MemberExpr *M) {
   }
   if (!Pointer)
     return std::nullopt;
-  if (referencesDynamicPointer(Pointer)) {
+  if (isDynamicAddress(Pointer)) {
     Errors.push_back(CurrentFn->Name +
                      ": dynamic-storage pointers cannot select record fields");
     return std::nullopt;
@@ -3250,7 +3273,7 @@ ASTConverter::subscriptPlace(const ArraySubscriptExpr *AS) {
     return std::nullopt;
   if (promotedRootLocal(AS))
     return promotedObjectPlace(AS);
-  if (referencesDynamicPointer(AS)) {
+  if (isDynamicAddress(AS->getBase())) {
     Errors.push_back(CurrentFn->Name +
                      ": subscripting dynamic-storage pointers is unsupported");
     return std::nullopt;
@@ -3722,7 +3745,7 @@ std::optional<VPlace> ASTConverter::lvaluePlace(const Expr *E) {
         PointerRef ? dyn_cast<VarDecl>(PointerRef->getDecl()) : nullptr;
     if (!PointerVar || !PointerVar->getType()->isPointerType())
       return std::nullopt;
-    if (referencesDynamicPointer(U->getSubExpr()) &&
+    if (isDynamicAddress(U->getSubExpr()) &&
         !directDynamicPointer(U->getSubExpr())) {
       Errors.push_back(CurrentFn->Name +
                        ": dynamic-storage reference binding requires its "
@@ -4503,7 +4526,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
       return nullptr;
     }
     if (U->getOpcode() == UO_Deref) {
-      if (referencesDynamicPointer(U->getSubExpr()) &&
+      if (isDynamicAddress(U->getSubExpr()) &&
           !directDynamicPointer(U->getSubExpr())) {
         Errors.push_back(CurrentFn->Name +
                          ": dynamic-storage dereference requires its direct "
@@ -4612,8 +4635,10 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
                                          AddressType, ResultType,
                                          E->getExprLoc());
     }
+    const bool DynamicOperand =
+        isDynamicAddress(B->getLHS()) || isDynamicAddress(B->getRHS());
     if ((B->getOpcode() == BO_Add || B->getOpcode() == BO_Sub) &&
-        referencesDynamicPointer(B)) {
+        DynamicOperand) {
       Errors.push_back(CurrentFn->Name +
                        ": arithmetic on dynamic-storage pointers is "
                        "unsupported");
@@ -4621,7 +4646,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     }
     if ((B->getOpcode() == BO_LT || B->getOpcode() == BO_LE ||
          B->getOpcode() == BO_GT || B->getOpcode() == BO_GE) &&
-        referencesDynamicPointer(B)) {
+        DynamicOperand) {
       Errors.push_back(CurrentFn->Name +
                        ": ordering dynamic-storage pointers is unsupported");
       return nullptr;
@@ -4955,7 +4980,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
           return nullptr;
         }
         for (const Expr *A : CE->arguments())
-          if (referencesDynamicPointer(A)) {
+          if (isDynamicAddress(A)) {
             Errors.push_back(
                 CurrentFn->Name +
                 ": dynamic-storage pointers cannot cross a function-call "
@@ -5045,8 +5070,7 @@ void ASTConverter::convertExecCallArg(
     return;
   }
   const VarDecl *Source = directDynamicPointer(E);
-  if (Source ||
-      (referencesDynamicPointer(E) && E->getType()->isPointerType())) {
+  if (Source || isDynamicAddress(E)) {
     if (!Source || !Formal || !Formal->getType()->isPointerType() ||
         !Ctx.hasSameUnqualifiedType(Formal->getType()->getPointeeType(),
                                     Source->getType()->getPointeeType())) {
@@ -5466,7 +5490,7 @@ void ASTConverter::appendAssignment(const Expr *LHS,
                          ": proof functions cannot modify executable memory");
         return;
       }
-      if (referencesDynamicPointer(U->getSubExpr()) &&
+      if (isDynamicAddress(U->getSubExpr()) &&
           !directDynamicPointer(U->getSubExpr())) {
         Errors.push_back(CurrentFn->Name +
                          ": dynamic-storage dereference requires its direct "
@@ -5963,8 +5987,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
             const bool ReturnsVoid = Callee->getReturnType()->isVoidType();
             const bool TrackOwnedResult =
                 Callee->getReturnType()->isPointerType() &&
-                (referencesDynamicPointer(RetE) ||
-                 calleeReturnsFreshOwned(Callee));
+                (isDynamicAddress(RetE) || calleeReturnsFreshOwned(Callee));
             const std::string Provenance =
                 TrackOwnedResult
                     ? "__return_call_provenance_" + std::to_string(CallId)
@@ -6600,13 +6623,13 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       if (BO->getOpcode() == BO_Assign && DirectTarget &&
           DirectTarget->getType()->isPointerType() &&
           (DynamicPointers.count(DirectTarget) ||
-           referencesDynamicPointer(BO->getRHS()))) {
+           isDynamicAddress(BO->getRHS()))) {
         appendDynamicPointerAssignment(DirectTarget, BO->getRHS(),
                                        BO->getExprLoc(), Out);
         return Out;
       }
       if (BO->getRHS()->getType()->isPointerType() &&
-          referencesDynamicPointer(BO->getRHS())) {
+          isDynamicAddress(BO->getRHS())) {
         Errors.push_back(CurrentFn->Name +
                          ": copying a dynamic-storage pointer is unsupported");
         return Out;
@@ -6983,8 +7006,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           continue;
         }
       }
-      if (VD->getType()->isPointerType() &&
-          referencesDynamicPointer(VD->getInit())) {
+      if (VD->getType()->isPointerType() && isDynamicAddress(VD->getInit())) {
         appendDynamicPointerAssignment(VD, VD->getInit(), VD->getBeginLoc(),
                                        Out);
         continue;
