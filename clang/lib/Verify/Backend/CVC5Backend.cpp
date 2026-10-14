@@ -107,6 +107,9 @@ class SMTLibEncoder {
   /// Maps hold cppverify.option values; set union, intersection, and
   /// difference are functions defined pointwise by an axiom each.
   bool UsesMaps = false;
+  /// cvc5 1.4 accepts a constant array only with arrays-exp, which other
+  /// queries are better off without.
+  bool UsesConstantArrays = false;
   std::set<std::string> SetOperations;
   bool UsedBitLevelOperation = false;
   bool Failed = false;
@@ -1038,6 +1041,7 @@ class SMTLibEncoder {
     case Op::SeqContains:
       return "(seq.contains " + arg(0) + " " + unit(arg(1)) + ")";
     case Op::SetEmpty:
+      UsesConstantArrays = true;
       return "((as const (Array Int Bool)) false)";
     case Op::SetInsert:
       return "(store " + arg(0) + " " + arg(1) + " true)";
@@ -1062,6 +1066,7 @@ class SMTLibEncoder {
              ") (select " + arg(1) + " " + K + ")))";
     }
     case Op::MultisetEmpty:
+      UsesConstantArrays = true;
       return "((as const (Array Int Int)) 0)";
     case Op::MultisetInsert:
       return "(store " + arg(0) + " " + arg(1) + " (+ " +
@@ -1075,6 +1080,7 @@ class SMTLibEncoder {
       return count(arg(0), arg(1));
     case Op::MapEmpty:
       UsesMaps = true;
+      UsesConstantArrays = true;
       return "((as const (Array Int cppverify.option)) cppverify.none)";
     case Op::MapInsert:
       UsesMaps = true;
@@ -1213,6 +1219,7 @@ class SMTLibEncoder {
     case LogicValue::Kind::Heap: {
       // Runs become stores, cell by cell, up to a bound; a longer run keeps
       // only its first cell, which still names a true instance argument.
+      UsesConstantArrays = true;
       std::string Heap = "((as const (Array Int Int)) " +
                          smtInteger(Value.Heap->Default.toDecimal()) + ")";
       const auto &Breaks = Value.Heap->Breaks;
@@ -1426,6 +1433,8 @@ public:
 
     std::string Script;
     llvm::raw_string_ostream Out(Script);
+    if (UsesConstantArrays)
+      Out << "(set-option :arrays-exp true)\n";
     Out << "(set-logic ALL)\n";
     Out << "(set-option :print-success false)\n";
     // Without it, cvc5 gives up on quantified sequence goals that E-matching
@@ -2611,6 +2620,18 @@ static SolverRun runCVC5(const std::string &SolverPath, llvm::StringRef Script,
       Result.Message += ": " + InvocationError;
     if (!StandardError->empty())
       Result.Message += ": " + diagnosticText(*StandardError);
+    // cvc5 reports a script it rejects on standard output.
+    std::string OutputError;
+    if (std::optional<std::string> StandardOutput =
+            readSolverOutput(OutputPath, OutputError, MaxSolverOutputBytes))
+      for (llvm::StringRef Rest = *StandardOutput; !Rest.empty();) {
+        auto [Line, Next] = Rest.split('\n');
+        if (Line.trim().starts_with("(error")) {
+          Result.Message += ": " + diagnosticText(Line);
+          break;
+        }
+        Rest = Next;
+      }
     return Run;
   }
   std::optional<std::string> StandardOutput =

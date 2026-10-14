@@ -5,12 +5,13 @@
 # RUN: cp %S/Inputs/fake_cvc5.py %t.stream
 # RUN: cp %S/Inputs/fake_cvc5.py %t.stderr
 # RUN: cp %S/Inputs/fake_cvc5.py %t.exit
+# RUN: cp %S/Inputs/fake_cvc5.py %t.rejected
 # RUN: cp %S/Inputs/fake_cvc5.py %t.crash
 # RUN: cp %S/Inputs/fake_cvc5.py %t.hang
 # RUN: cp %S/Inputs/fake_cvc5.py %t.sat
 # RUN: cp %S/Inputs/fake_cvc5.py %t.unsat
 # RUN: chmod +x %t.unknown %t.comment %t.trailing %t.large %t.stderr %t.exit \
-# RUN:   %t.stream %t.crash %t.hang %t.sat %t.unsat
+# RUN:   %t.rejected %t.stream %t.crash %t.hang %t.sat %t.unsat
 #
 # RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.unknown \
 # RUN:   %S/Inputs/solver_process_valid.cpp -- 2>&1 | FileCheck %s --check-prefix=UNKNOWN
@@ -26,6 +27,8 @@
 # RUN:   %S/Inputs/solver_process_valid.cpp -- 2>&1 | FileCheck %s --check-prefix=STDERR
 # RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.exit \
 # RUN:   %S/Inputs/solver_process_valid.cpp -- 2>&1 | FileCheck %s --check-prefix=EXIT
+# RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.rejected \
+# RUN:   %S/Inputs/solver_process_valid.cpp -- 2>&1 | FileCheck %s --check-prefix=REJECTED
 # RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.crash --timeout=5 \
 # RUN:   %S/Inputs/solver_process_valid.cpp -- 2>&1 | FileCheck %s --check-prefix=CRASH
 # RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.hang --timeout=1 --jobs=4 \
@@ -72,6 +75,7 @@
 # STREAM-LIMIT-SAME: solver output exceeds the 64 KiB limit
 # STDERR: Unresolved: solver_process_valid [backend=cvc5] [reason=solver.malformed-output]
 # EXIT: Unresolved: solver_process_valid [backend=cvc5] [reason=solver.invocation-failed]
+# REJECTED: Unresolved: solver_process_valid [backend=cvc5] [reason=solver.invocation-failed] {{.*}}cvc5 exited with status 1: (error "Parse Error: input.smt2:3.4: constant arrays need --arrays-exp")
 # CRASH: Unresolved: solver_process_valid [backend=cvc5] [reason=solver.invocation-failed]
 # TIMEOUT: Unresolved: cached_identity [backend=cvc5] [reason=solver.timeout]
 
