@@ -103,4 +103,4 @@ int unsupported_recursive_exec(int n)
 // VERIFY-DAG: error: unsupported_conditionless_for: conditionless for loops are unsupported
 // VERIFY-DAG: error: unsupported_cross_type_alias: aliases between different pointee types are unsupported
 // VERIFY-DAG: error: unsupported_recursive_exec: recursive executable functions require decreases
-// VERIFY-DAG: error: unsupported_template: function template verification is unsupported
+// VERIFY-DAG: warning: contracts in function template 'unsupported_template' are not yet supported and are ignored
