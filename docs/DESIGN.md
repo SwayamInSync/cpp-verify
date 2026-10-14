@@ -1678,8 +1678,8 @@ their human message: `counterexample`, `solver.timeout`, `solver.unknown`,
 `bmc.incomplete-bound`, `lean.export-failed`, `cache.corrupt`,
 `cache.io-failed`, `spec.fuel`, `spec.hidden`, `spec.termination`,
 `spec.reads`, `spec.post`, `spec.inductive`, `proof.cycle`,
-`counterexample.unchecked`, `construct.unsupported`, `callee.contract`, and
-`decreases.missing`.
+`counterexample.unchecked`, `construct.unsupported`, `callee.contract`,
+`decreases.missing`, and `interrupted`.
 `--diagnostics-format=json` serializes verification results as versioned JSON
 Lines (`cppverify.diagnostic/1`) for both source verification and archive
 replay.
