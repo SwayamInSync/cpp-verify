@@ -10,7 +10,9 @@
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/Frontend/CompilerInstance.h"
+#include "clang/Frontend/CompilerInvocation.h"
 #include "clang/Frontend/FrontendAction.h"
+#include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Tooling.h"
 #include "llvm/ADT/STLExtras.h"
@@ -20,6 +22,7 @@
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdlib>
@@ -359,6 +362,33 @@ public:
     CI.getLangOpts().VerifyContracts = true;
     return std::make_unique<VerifyConsumer>();
   }
+};
+
+/// Verifies each file whose command line clang accepts. An argument error
+/// stops the file, as it stops clang; tooling would print it and go on.
+class VerifyActionFactory : public FrontendActionFactory {
+public:
+  explicit VerifyActionFactory(const DiagnosticConsumer &Arguments)
+      : Arguments(Arguments) {}
+  std::unique_ptr<FrontendAction> create() override {
+    return std::make_unique<VerifyAction>();
+  }
+  bool runInvocation(std::shared_ptr<CompilerInvocation> Invocation,
+                     FileManager *Files,
+                     std::shared_ptr<PCHContainerOperations> PCHContainerOps,
+                     DiagnosticConsumer *) override {
+    if (Arguments.getNumErrors() != ArgumentErrors) {
+      ArgumentErrors = Arguments.getNumErrors();
+      return false;
+    }
+    // The file reports with its own diagnostic options.
+    return FrontendActionFactory::runInvocation(
+        std::move(Invocation), Files, std::move(PCHContainerOps), nullptr);
+  }
+
+private:
+  const DiagnosticConsumer &Arguments;
+  unsigned ArgumentErrors = 0;
 };
 
 // Replay proves each module alone: the contracts and spec facts its proof
@@ -860,13 +890,27 @@ int main(int argc, const char **argv) {
                  OptionsParser.getSourcePathList());
   Tool.appendArgumentsAdjuster(getInsertArgumentAdjuster(
       {"-fverify-contracts", "-std=c++17"}, ArgumentInsertPosition::BEGIN));
+  // Clang takes a .h file for C; here every input is C++.
+  Tool.appendArgumentsAdjuster(
+      [](const CommandLineArguments &Args, StringRef Filename) {
+        if (llvm::sys::path::extension(Filename) != ".h")
+          return Args;
+        CommandLineArguments Adjusted = Args;
+        Adjusted.insert(Adjusted.begin() + 1, "-xc++-header");
+        return Adjusted;
+      });
 #if defined(__APPLE__)
   if (const char *SDK = std::getenv("SDKROOT"); SDK && SDK[0])
     Tool.appendArgumentsAdjuster(getInsertArgumentAdjuster(
         {"-isysroot", SDK}, ArgumentInsertPosition::BEGIN));
 #endif
 
-  int RC = Tool.run(newFrontendActionFactory<VerifyAction>().get());
+  std::unique_ptr<DiagnosticOptions> ArgumentOptions =
+      CreateAndPopulateDiagOpts({"cpp-verify"});
+  TextDiagnosticPrinter ArgumentDiagnostics(llvm::errs(), *ArgumentOptions);
+  Tool.setDiagnosticConsumer(&ArgumentDiagnostics);
+  VerifyActionFactory Factory(ArgumentDiagnostics);
+  int RC = Tool.run(&Factory);
   if (RC != 0)
     return RC;
   if (ObligationFile) {

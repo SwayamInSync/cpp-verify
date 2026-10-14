@@ -34,7 +34,8 @@ Other compiler flags come from the ``compile_commands.json`` beside the file or 
 above it, or in the directory ``-p DIR`` names; a file the database does not list gets the
 flags of a listed neighbour. Without a database the file is compiled with those two flags
 alone. Flags after ``--`` replace the database, and ``--extra-arg=FLAG`` adds one flag either
-way.
+way. A ``.h`` file given as input is a C++ header. A compiler error, in a command line or in
+the file, stops that file without verifying it, and ``cpp-verify`` then exits with status 1.
 
 ``cpp-verify --version`` shows the cpp-verify release and repository revision, the LLVM
 release it is built on, and each backend: the Z3 linked into it, and the cvc5 and Lean
