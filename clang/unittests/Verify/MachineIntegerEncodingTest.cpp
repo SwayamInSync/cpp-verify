@@ -1058,4 +1058,30 @@ TEST(MachineIntegerEncodingTest, IrrelevantVariablesStayUnknown) {
   }
 }
 
+// A term Z3 rejects ends the query unresolved with Z3's message; Z3 returns a
+// null term for it and goes on.
+TEST(MachineIntegerEncodingTest, Z3ErrorsLeaveTheQueryUnresolved) {
+  Expr Length =
+      node(LogicExpr::Collection, LogicSort::mathematicalInteger(64, true),
+           variable("h", LogicSort::heap()));
+  Length->CollectionOp = LogicCollectionOp::SeqLength;
+  Expr Goal = boolean(LogicExpr::Ge, std::move(Length),
+                      mathLiteral(APInt(64, 0), true));
+  ObligationModule M;
+  M.FunctionName = "ill_sorted";
+  M.FunctionIdentity = "ill_sorted";
+  M.CorrectnessGoal = clone(*Goal);
+  M.CounterexampleQuery =
+      node(LogicExpr::Not, LogicSort::boolSort(), std::move(Goal));
+  for (bool Lower : {false, true}) {
+    Z3Encoder Encoder;
+    VerifyResult Result =
+        Lower ? Encoder.lowerModule(M) : Encoder.verifyModule(M);
+    EXPECT_EQ(Result.Status, VerifyStatus::Unresolved) << Lower;
+    EXPECT_EQ(Result.Reason, VerifyReason::EncodingFailure) << Lower;
+    EXPECT_NE(Result.Message.find("Z3 reported an error"), std::string::npos)
+        << Result.Message;
+  }
+}
+
 } // namespace
