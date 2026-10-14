@@ -24,6 +24,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
+#include "llvm/Support/Signals.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdlib>
 #include <limits>
@@ -377,6 +378,9 @@ public:
                      FileManager *Files,
                      std::shared_ptr<PCHContainerOperations> PCHContainerOps,
                      DiagnosticConsumer *) override {
+    // After Ctrl-C the files left are not read.
+    if (verify::interruptRequested())
+      return true;
     if (Arguments.getNumErrors() != ArgumentErrors) {
       ArgumentErrors = Arguments.getNumErrors();
       return false;
@@ -720,7 +724,7 @@ static int replayObligationArchive() {
     if (LowerOnly) {
       Result = lowerForBackend(
           Module, Kind, DumpLayers & verify::LayerZ3 ? &llvm::outs() : nullptr);
-    } else {
+    } else if (!verify::interruptRequested()) {
       if (Module.BMCTransform) {
         std::unique_ptr<verify::VerifyBackend> BMCBackend =
             verify::createVerifyBackend(verify::BackendKind::BMC, nullptr,
@@ -731,6 +735,12 @@ static int replayObligationArchive() {
         Result = Backend->verify(Module);
       }
     }
+    // After Ctrl-C no result is final, whatever the queries returned.
+    if (!LowerOnly && verify::interruptRequested()) {
+      Result = verify::VerifyResult();
+      Result.Status = verify::VerifyStatus::Unresolved;
+      Result.Reason = verify::VerifyReason::Interrupted;
+    }
 
     const std::string Hash = verify::obligationSemanticHash(Module);
     if (DiagnosticsFormat == verify::DiagnosticFormat::Json) {
@@ -739,6 +749,11 @@ static int replayObligationArchive() {
           Result.Status != verify::VerifyStatus::Verified &&
           Result.Status != verify::VerifyStatus::Exported)
         AllOk = false;
+      continue;
+    }
+    if (Result.Reason == verify::VerifyReason::Interrupted) {
+      AllOk = false;
+      llvm::outs() << "Interrupted: " << Module.FunctionName << "\n";
       continue;
     }
     std::string Suffix = " [backend=" + Result.BackendName;
@@ -832,6 +847,8 @@ static int replayObligationArchive() {
       return 1;
     }
   }
+  if (verify::interruptRequested())
+    return 130;
   return AllOk ? 0 : 1;
 }
 
@@ -839,6 +856,9 @@ static int replayObligationArchive() {
 
 int main(int argc, const char **argv) {
   llvm::InitLLVM X(argc, argv);
+  // The first Ctrl-C stops the solvers and reports what is not finished; a
+  // second one ends the process.
+  llvm::sys::SetInterruptFunction(verify::requestInterrupt);
 #if defined(__GLIBC__)
   // Each obligation's Z3 context frees about 17 MB. Without padding, glibc
   // returns it to the system when it lies at the top of the heap, and the
@@ -951,6 +971,8 @@ int main(int argc, const char **argv) {
   Tool.setDiagnosticConsumer(&ArgumentDiagnostics);
   VerifyActionFactory Factory(ArgumentDiagnostics);
   int RC = Tool.run(&Factory);
+  if (verify::interruptRequested())
+    return 130;
   if (RC != 0)
     return RC;
   if (ObligationFile) {
