@@ -1684,8 +1684,9 @@ pointer difference requires one origin.
 Executable pointer difference consumes the same identity model. `ASTConverter`
 admits matching complete pointee types with recursively compositional pointer
 arithmetic. VCR first subtracts mathematical target-byte addresses and divides
-by the Clang target `sizeof(T)`. Passivization asserts non-null/live bases,
-one origin, in-range positions, and target-`ptrdiff_t` representability
+by the Clang target `sizeof(T)`. Unless both operands are null (a difference
+of 0, as C++ defines), passivization asserts non-null/live bases, one origin,
+and in-range positions; it always asserts target-`ptrdiff_t` representability
 before normalizing recoverable same-base indices to machine subtraction.
 Represented storage compares lifetime identities (a mismatch is a
 `pointer-difference` error). Otherwise both operands' origin terms must be
