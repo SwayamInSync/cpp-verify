@@ -116,9 +116,9 @@ int invalid_spec_arithmetic()
 // LOWER-DAG: Lowered: unsafe_add
 // LOWER-NOT: Verified:
 
-// REPLAY-DAG: Verified: valid_spec_arithmetic [backend=portfolio]
-// REPLAY-DAG: Verified: valid_zero_arity_spec [backend=portfolio]
-// REPLAY-DAG: Verified: write_pointer [backend=portfolio]
+// REPLAY-DAG: Proved obligations: valid_spec_arithmetic (dependencies not checked in replay) [backend=portfolio]
+// REPLAY-DAG: Proved obligations: valid_zero_arity_spec (dependencies not checked in replay) [backend=portfolio]
+// REPLAY-DAG: Proved obligations: write_pointer (dependencies not checked in replay) [backend=portfolio]
 // REPLAY-DAG: error: verification failed: unsafe_add
 // REPLAY-DAG: error: verification failed: invalid_unsigned
 // REPLAY-DAG: error: verification failed: invalid_spec_arithmetic
