@@ -825,8 +825,9 @@ addresses, so address arithmetic itself cannot wrap. A typed `T*` step is
 multiplied by Clang's target `sizeof(T)` and record fields add their target
 byte-layout offset. The supported buffer fragment includes `p + i`, `p - i`,
 `*(p + i)`, and `p[i]`. Executable pointer-pointer subtraction is additionally
-supported for positions in one object. Both operands must have one origin
-(below), and each must lie in its origin's object, one past the end included:
+supported for positions in one object. Two null pointers differ by 0, as C++
+defines; otherwise both operands must have one origin (below), and each must
+lie in its origin's object, one past the end included:
 `[0, n]` for a `valid(p, n)` extent, `[0, 1]` for a single object. Pointers
 into local or dynamic storage share an origin when they share a lifetime
 identity. Pointers into different parameters' or globals' objects may still

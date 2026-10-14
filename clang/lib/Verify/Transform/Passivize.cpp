@@ -1883,7 +1883,8 @@ collectSafety(const VExpr *E, const FunctionMap *FnMap,
         B->Rhs->Ty.Kind == VTypeKind::Ptr) {
       const VExpr *LeftBase = pointerBase(B->Lhs.get());
       const VExpr *RightBase = pointerBase(B->Rhs.get());
-      addSafety(Out, ProofObligationKind::PointerDifference,
+      SafetyChecks Difference;
+      addSafety(Difference, ProofObligationKind::PointerDifference,
                 makeAnd(nonNullSafety(LeftBase, B->Loc, ObjectModel),
                         nonNullSafety(RightBase, B->Loc, ObjectModel), B->Loc),
                 B->Loc);
@@ -1891,18 +1892,29 @@ collectSafety(const VExpr *E, const FunctionMap *FnMap,
           samePointerDifferenceOrigin(B->Lhs.get(), B->Rhs.get(), B->Loc);
       const bool Known =
           pointerOriginTerm(B->Lhs.get()) && pointerOriginTerm(B->Rhs.get());
-      addSafety(Out, OriginKind, std::move(SameOrigin), B->Loc,
+      addSafety(Difference, OriginKind, std::move(SameOrigin), B->Loc,
                 OriginKind != ProofObligationKind::Unsupported ? ""
                 : Known ? DifferentObjectsNote
                         : UnknownOriginNote);
-      addSafety(Out, ProofObligationKind::Bounds,
+      addSafety(Difference, ProofObligationKind::Bounds,
                 pointerPositionSafety(B->Lhs.get(), ValidExtents, PointerParams,
                                       OriginExtents, B->Loc),
                 B->Loc);
-      addSafety(Out, ProofObligationKind::Bounds,
+      addSafety(Difference, ProofObligationKind::Bounds,
                 pointerPositionSafety(B->Rhs.get(), ValidExtents, PointerParams,
                                       OriginExtents, B->Loc),
                 B->Loc);
+      // Two null pointers differ by 0 ([expr.add]).
+      auto isNull = [&](const VExpr *Ptr) {
+        return std::make_unique<VBinOpExpr>(
+            VBinOp::Eq, cloneVExpr(Ptr),
+            std::make_unique<VLiteralExpr>(0, VType::makePtr(), B->Loc),
+            VType::makeBool(), B->Loc);
+      };
+      auto NotBothNull = makeNot(
+          makeAnd(isNull(B->Lhs.get()), isNull(B->Rhs.get()), B->Loc), B->Loc);
+      appendGuardedSafety(Out, std::move(Difference), NotBothNull.get(),
+                          B->Loc);
     }
     if (B->Op == VBinOp::Shl || B->Op == VBinOp::Shr) {
       addSafety(Out, ProofObligationKind::Shift, shiftSafety(B), B->Loc);

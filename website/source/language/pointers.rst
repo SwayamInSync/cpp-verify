@@ -318,7 +318,8 @@ positions are proved to belong to one array object:
      return (p + i) - (p + j);
    }
 
-The operands must have the same complete pointee type and one origin, and
+The operands must have the same complete pointee type. Two null pointers
+differ by 0, as C++ defines; otherwise the operands must have one origin, and
 each must lie in its origin's object: a ``valid(p, n)`` marker supplies the
 extent and each position must lie in the closed interval ``[0, n]``; the
 inclusive endpoint is the legal one-past position. CppVerify subtracts

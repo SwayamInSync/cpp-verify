@@ -279,9 +279,10 @@ Pointer difference
 A bounded executable same-array pointer-difference fragment is supported:
 
 - both operands have one matching complete pointee type;
-- operands have one origin: they came from one parameter's object or one
-  global (stepped, copied, or chosen through branches and loops), or dynamic
-  aliases carry one shared live lifetime identity;
+- two null pointers differ by 0; other operands have one origin: they came
+  from one parameter's object or one global (stepped, copied, or chosen
+  through branches and loops), or dynamic aliases carry one shared live
+  lifetime identity;
 - each position lies in its origin's object: a ``valid(p, n)`` extent admits
   element positions in ``[0, n]``, including the one-past endpoint; without an
   extent, direct abstract and represented scalar-dynamic pointers retain only
