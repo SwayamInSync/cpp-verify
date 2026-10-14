@@ -44,7 +44,7 @@ int total(const int *p, int n)
 }
 // LOOP-DAG: Verified: total
 // CVC5-DAG: {{Verified|Unresolved}}: total
-// REPLAY-DAG: Verified: total
+// REPLAY-DAG: Proved obligations: total (dependencies not checked in replay)
 // VC: features {{.*}}heap-functions
 
 int skip_first(const int *p, int n)
@@ -79,7 +79,7 @@ void clear_first(int *p)
   p[0] = 0;
 }
 // CHECK-DAG: Verified: clear_first
-// REPLAY-DAG: Verified: clear_first
+// REPLAY-DAG: Proved obligations: clear_first (dependencies not checked in replay)
 
 void clear_first_unchanged(int *p)
   cppverify::pre(valid(p, 2))
