@@ -886,6 +886,8 @@ private:
           // Remember that this is a [[using ns: foo]] C++ attribute, so we
           // don't add a space before the colon (unlike other colons).
           CurrentToken->setType(TT_AttributeColon);
+        } else if (CurrentToken->is(TT_ArraySectionColon)) {
+          // A cpp-verify range footprint, p[lo : n].
         } else if (!Style.isVerilog() && !Line.InPragmaDirective &&
                    Left->isOneOf(TT_ArraySubscriptLSquare,
                                  TT_DesignatedInitializerLSquare)) {
@@ -5676,6 +5678,8 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
       !Style.SpaceBeforeRangeBasedForLoopColon) {
     return false;
   }
+  if (Left.is(TT_ArraySectionColon) || Right.is(TT_ArraySectionColon))
+    return true;
   if (Left.is(TT_BitFieldColon)) {
     return Style.BitFieldColonSpacing == FormatStyle::BFCS_Both ||
            Style.BitFieldColonSpacing == FormatStyle::BFCS_After;
