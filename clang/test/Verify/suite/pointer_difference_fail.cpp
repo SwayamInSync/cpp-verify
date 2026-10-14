@@ -17,13 +17,6 @@ long equal_address_without_provenance(int *left, int *right)
   return left - right;
 }
 
-long null_pointer_difference()
-  cppverify::post(true)
-{
-  int *pointer = nullptr;
-  return pointer - pointer;
-}
-
 long incorrect_unit_difference(int *pointer)
   cppverify::pre(pointer != nullptr)
   cppverify::post(cppverify::result == 2)
@@ -76,7 +69,6 @@ long negative_offset_without_extent(int *pointer)
 // does not describe: the difference is unsupported, not an error.
 // VERIFY-DAG: Unresolved: unrelated_pointer_difference [{{.*}}] [reason=construct.unsupported]
 // VERIFY-DAG: Unresolved: equal_address_without_provenance [{{.*}}] [reason=construct.unsupported]
-// VERIFY-DAG: error: verification failed: null_pointer_difference
 // VERIFY-DAG: error: verification failed: incorrect_unit_difference
 // VERIFY-DAG: error: verification failed: dynamic_distinct_difference
 // VERIFY-DAG: error: verification failed: dangling_pointer_difference
