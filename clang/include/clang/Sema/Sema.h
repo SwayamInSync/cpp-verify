@@ -10406,6 +10406,10 @@ public:
   /// instantiations and repeated default arguments report each once.
   llvm::DenseSet<SourceLocation> DiagnosedSpecFunctionUses;
 
+  /// Generic lambdas written in executable code, whose call operator
+  /// specializations are therefore executable code too.
+  llvm::SmallPtrSet<const CXXRecordDecl *, 4> ExecutableGenericLambdas;
+
   /// PerformContextuallyConvertToObjCPointer - Perform a contextual
   /// conversion of the expression From to an Objective-C pointer type.
   /// Returns a valid but null ExprResult if no conversion sequence exists.
