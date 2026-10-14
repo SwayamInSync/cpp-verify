@@ -884,7 +884,9 @@ body)`` chooses in ``[lo, hi)``:
 A choice is a function of the values its body mentions, so it is the same
 for the same values, and that is all the verifier knows about it: a claim
 that holds for some choices but not others fails with a checked
-counterexample.
+counterexample. A checked counterexample uses only choices that satisfy
+their bodies wherever some value does, including the chooses inside the
+definitions and postconditions a proof unfolds.
 
 Spec collections
 ----------------
