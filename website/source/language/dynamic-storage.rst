@@ -280,7 +280,9 @@ conditional, or set directly to ``nullptr``. Their provenance follows the value
 through branch SSA merges. They may be dereferenced, stored through when the C++
 type permits, compared for equality, converted to ``bool``, deleted, passed
 through the checked verified scalar interfaces above, or returned by the
-inferred fresh-owned factory boundary.
+inferred fresh-owned factory boundary. These limits apply to the pointer, not
+to the value read through it: ``*p + 1``, ``*p < 50``, ``*p + *q``, and
+``sq(*p)`` in a spec call are ordinary integer expressions.
 
 Type-erasing or indirect copies, ownership-taking pointer parameters,
 arithmetic-derived ownership, uninitialized/freed/multiple/escaped results,
