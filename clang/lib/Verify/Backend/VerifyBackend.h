@@ -246,7 +246,7 @@ struct BackendExecutionOptions {
   unsigned Jobs = 1;
   /// The workers obligations run on, shared with the driver's function tasks
   /// so that exactly Jobs run at once; null gives each call its own.
-  llvm::ThreadPoolInterface *Pool = nullptr;
+  llvm::StdThreadPool *Pool = nullptr;
   /// Maximum canonical expression nodes in a module; 0 disables it.
   uint64_t MaxQueryNodes = 0;
   MachineIntegerEncoding IntegerEncoding = MachineIntegerEncoding::Auto;
