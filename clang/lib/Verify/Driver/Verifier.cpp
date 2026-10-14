@@ -1035,6 +1035,8 @@ struct VerifyDiagnostic {
     Verified,
     Error,
     Unresolved,
+    /// A function whose verification Ctrl-C cut short.
+    Interrupted,
     BoundedSafe,
     Exported,
     Certified,
@@ -1062,6 +1064,9 @@ struct VerifyDiagnostic {
   /// Kept for the steps that relate verdicts, but not printed: a proof the
   /// verifier generated, which is reported only if it fails.
   bool Quiet = false;
+  /// A verdict of an interrupted function, which its Interrupted line
+  /// replaces: kept for the steps that relate verdicts, never printed.
+  bool Hidden = false;
 };
 
 static std::string backendSuffix(const VerifyResult &Result) {
@@ -1110,6 +1115,8 @@ static llvm::StringRef diagnosticKindCode(VerifyDiagnostic::Kind Kind) {
     return "error";
   case VerifyDiagnostic::Unresolved:
     return "unresolved";
+  case VerifyDiagnostic::Interrupted:
+    return "interrupted";
   case VerifyDiagnostic::BoundedSafe:
     return "bounded-safe";
   case VerifyDiagnostic::Exported:
@@ -1942,6 +1949,8 @@ public:
       std::shared_ptr<const ContractTheorem> Contract;
       std::string Dump;
       std::string Archive;
+      /// Ctrl-C came before the verification ended.
+      bool Interrupted = false;
     };
     std::vector<FunctionRun> Runs(Functions.size());
     // The source manager caches its last line lookup.
@@ -2094,6 +2103,8 @@ public:
                  Fn->DeclLoc, Fn->Name});
           continue;
         }
+        llvm::scope_exit MarkInterrupted(
+            [&] { Run.Interrupted = interruptRequested(); });
         bool DumpedAny = false;
         auto dumpSep = [&]() {
           if (DumpedAny && MultiLayerDump)
@@ -2344,6 +2355,8 @@ public:
         }
 
         if (Fn->IsSpec && !Fn->NeedsDecreasesCheck && !Step) {
+          // Nothing is solved for a spec axiom.
+          MarkInterrupted.release();
           const VerifyDiagnostic::Kind Kind =
               Opts.LowerOnly ? VerifyDiagnostic::Lowered
                              : (Opts.Backend == BackendKind::Lean
@@ -3052,8 +3065,26 @@ public:
       for (size_t I = 0; I != Functions.size(); ++I)
         verifyFunction(I);
     }
+    // A function whose verification Ctrl-C cut short is reported by one
+    // line. Its verdicts stay, hidden, for what they establish: a query the
+    // interrupt stopped left its verdict unresolved, and a proof found
+    // before it is a proof.
+    auto interrupted = [](FunctionRun &Run, const VFunction &Fn) {
+      for (VerifyDiagnostic &D : Run.Diags)
+        D.Hidden = true;
+      Run.AllOk = false;
+      Run.Confirmations.clear();
+      VerifyResult Result;
+      Result.Status = VerifyStatus::Unresolved;
+      Result.Reason = VerifyReason::Interrupted;
+      Run.Diags.push_back({VerifyDiagnostic::Interrupted, Fn.Name, Fn.DeclLoc,
+                           Fn.Name, std::move(Result)});
+    };
     std::vector<FunctionRun::Confirmation> Confirmations;
-    for (FunctionRun &Run : Runs) {
+    for (size_t I = 0; I != Runs.size(); ++I) {
+      FunctionRun &Run = Runs[I];
+      if (Run.Interrupted)
+        interrupted(Run, *Functions[I]);
       const size_t Base = Diags.size();
       for (VerifyDiagnostic &D : Run.Diags)
         Diags.push_back(std::move(D));
@@ -3460,6 +3491,7 @@ public:
         if (Runs[I].Contract && !Unestablished.count(Functions[I]->Identity))
           Lemmas.emplace(Functions[I]->Identity, Runs[I].Contract);
       std::vector<std::optional<VerifyResult>> Outcomes(Confirmations.size());
+      std::vector<char> CutShort(Confirmations.size());
       auto confirm = [&](size_t I) {
         const FunctionRun::Confirmation &Pending = Confirmations[I];
         const VerifyDiagnostic &Verdict = Diags[Pending.Index];
@@ -3478,10 +3510,15 @@ public:
           if (UndefinedSpecs.count(Identity))
             return;
         }
+        if (interruptRequested()) {
+          CutShort[I] = true;
+          return;
+        }
         std::unique_ptr<VerifyBackend> By = createVerifyBackend(
             Pending.Kind, nullptr, Opts.BMCUnroll, Execution, nullptr);
         Outcomes[I] = confirmCounterexample(
             Checked, Pending.Result, InterfaceMap, *Pending.Fn, Lemmas, *By);
+        CutShort[I] = !Outcomes[I] && interruptRequested();
       };
       if (Parallel) {
         llvm::ThreadPoolTaskGroup Group(*Pool);
@@ -3493,6 +3530,14 @@ public:
           confirm(I);
       }
       for (size_t I = 0; I != Confirmations.size(); ++I) {
+        if (CutShort[I]) {
+          VerifyDiagnostic &Verdict = Diags[Confirmations[I].Index];
+          Verdict.K = VerifyDiagnostic::Interrupted;
+          Verdict.Message = Confirmations[I].Fn->Name;
+          if (Verdict.Result)
+            Verdict.Result->Reason = VerifyReason::Interrupted;
+          continue;
+        }
         if (!Outcomes[I])
           continue;
         const FunctionRun::Confirmation &Pending = Confirmations[I];
@@ -3645,7 +3690,7 @@ public:
         Diags.push_back({VerifyDiagnostic::Error,
                          "cannot finalize Lean project (" +
                              llvm::toString(std::move(Error)) + ")"});
-      } else if (Opts.LeanCertify && !AnyFailed &&
+      } else if (Opts.LeanCertify && !AnyFailed && !interruptRequested() &&
                  (!LeanProjectGoals.empty() ||
                   Opts.LeanFallbackProjectPath.empty())) {
         if (llvm::Error Error = certifyLeanProject(LeanProjectGoals)) {
@@ -3710,7 +3755,8 @@ public:
       }
     }
 
-    if (AnyFailed && !Opts.LowerOnly && isDeductiveBackend(Opts.Backend)) {
+    if (AnyFailed && !Opts.LowerOnly && isDeductiveBackend(Opts.Backend) &&
+        !interruptRequested()) {
       BackendExecutionOptions RecommendsExecution = Execution;
       RecommendsExecution.Jobs = 1;
       RecommendsExecution.ProofCachePath.clear();
@@ -3736,7 +3782,9 @@ public:
     Record["severity"] =
         D.K == VerifyDiagnostic::Warning || D.K == VerifyDiagnostic::BoundedSafe
             ? "warning"
-        : D.K == VerifyDiagnostic::Error || D.K == VerifyDiagnostic::Unresolved
+        : D.K == VerifyDiagnostic::Error ||
+                D.K == VerifyDiagnostic::Unresolved ||
+                D.K == VerifyDiagnostic::Interrupted
             ? "error"
             : "note";
     Record["message"] = jsonText(D.Message);
@@ -3915,6 +3963,8 @@ public:
 
   void printDiagnostics(llvm::raw_ostream &OS) const {
     for (const auto &D : Diags) {
+      if (D.Hidden)
+        continue;
       // A generated proof is reported only if it is not a proof.
       if (D.Quiet && (D.K == VerifyDiagnostic::Verified ||
                       D.K == VerifyDiagnostic::Certified ||
@@ -3947,6 +3997,9 @@ public:
             OS << "note: the quantifier at " << Entry.Line << ":"
                << Entry.Column << " was instantiated " << Entry.Instances
                << " times, up to generation " << Entry.MaxGeneration << "\n";
+        break;
+      case VerifyDiagnostic::Interrupted:
+        OS << "Interrupted: " << D.Message << "\n";
         break;
       case VerifyDiagnostic::BoundedSafe:
         OS << "BoundedSafe: " << D.Message << "\n";
