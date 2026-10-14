@@ -361,12 +361,17 @@ public:
   }
 };
 
+// Replay proves each module alone: the contracts and spec facts its proof
+// rests on, its qualifiers, and its vacuity belong to the source run.
+static constexpr const char ReplayProofNote[] =
+    "dependencies not checked in replay";
+
 static llvm::StringRef replayStatusCode(verify::VerifyStatus Status) {
   switch (Status) {
   case verify::VerifyStatus::Lowered:
     return "lowered";
   case verify::VerifyStatus::Verified:
-    return "verified";
+    return "proved-obligations";
   case verify::VerifyStatus::Failed:
     return "failed";
   case verify::VerifyStatus::Unresolved:
@@ -414,7 +419,9 @@ static void printReplayJSON(const verify::ObligationModule &Module,
                            ? "error"
                            : "note";
   Record["function"] = jsonText(Module.FunctionName);
-  Record["message"] = jsonText(Result.Message);
+  Record["message"] = Result.Status == verify::VerifyStatus::Verified
+                          ? ReplayProofNote
+                          : jsonText(Result.Message);
   Record["semantic_hash"] = ("sha256:" + SemanticHash).str();
   if (!Result.BackendName.empty())
     Record["backend"] = Result.BackendName;
@@ -691,7 +698,8 @@ static int replayObligationArchive() {
       llvm::outs() << "Lowered: " << Module.FunctionName << Suffix << "\n";
       break;
     case verify::VerifyStatus::Verified:
-      llvm::outs() << "Verified: " << Module.FunctionName << Suffix << "\n";
+      llvm::outs() << "Proved obligations: " << Module.FunctionName << " ("
+                   << ReplayProofNote << ")" << Suffix << "\n";
       break;
     case verify::VerifyStatus::Exported:
       llvm::outs() << "Exported: lean obligation: " << Module.FunctionName
