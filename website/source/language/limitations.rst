@@ -361,7 +361,8 @@ Current proof-language limitations include:
   body can hold at finitely many values once the specs applied to the
   variable are unfolded or approximated, or when a witness among the values
   tried decides it; otherwise it is ``counterexample.unchecked``. ``cppverify::choose`` is uninterpreted apart from its
-  Hilbert axiom;
+  Hilbert axiom, and a counterexample whose choice the axiom cannot be
+  decided at is ``counterexample.unchecked`` too;
 - an inductive predicate unfolds at most four levels below each named
   application by itself (more with ``cppverify::reveal_with_fuel``); a claim that needs
   it false where its derivations go round a cycle needs a postcondition or
