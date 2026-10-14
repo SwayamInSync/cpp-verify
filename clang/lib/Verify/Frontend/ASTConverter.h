@@ -239,6 +239,10 @@ private:
   std::vector<std::string> trackedValueNames(const ValueDecl *D) const;
   std::string valueName(const ValueDecl *D) const;
   void recordSourceVariable(const ValueDecl *D);
+  /// Reports \p FD when an expression in it, or in a contract it carries,
+  /// nests deeper than every later pass, which recurses, can take.
+  bool exceedsNestingLimit(const FunctionDecl *FD,
+                           const FunctionContractInfo *FCI);
   void beginInitializationTracking(const FunctionDecl *FD);
   bool requireInitialized(const ValueDecl *D, const FieldDecl *Field = nullptr);
   void markInitialized(const ValueDecl *D, const FieldDecl *Field = nullptr);
