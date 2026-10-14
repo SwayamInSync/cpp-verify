@@ -87,7 +87,8 @@ Core checks include:
    * - signed ``/`` ``%``
      - not ``INT_MIN / -1`` (which overflows)
    * - ``<<`` and ``>>``
-     - shift count is in range; signed left shift satisfies the C++17 rule
+     - shift count is in range; before C++20, signed left shift satisfies the
+       C++17 rule
    * - pointer loads and stores
      - base pointer is non-null and abstractly valid
    * - mathematical value converted to a machine type
@@ -153,10 +154,13 @@ verifier unfolds the body for C++ definedness checks, so signed overflow, invali
 shifts, and division undefined behavior cannot be justified by machine
 wraparound.
 
-Signed left shift follows the C++17 rule: the left operand must be nonnegative
-and the shifted value must fit the corresponding unsigned type.  This permits
-constructing the sign bit (for example, ``1 << 31`` for a 32-bit ``int``) while
-still rejecting values beyond the unsigned range.
+Before C++20, signed left shift follows the C++17 rule: the left operand must
+be nonnegative and the shifted value must fit the corresponding unsigned type.
+This permits constructing the sign bit (for example, ``1 << 31`` for a 32-bit
+``int``) while still rejecting values beyond the unsigned range. From C++20
+(``-std=c++20``), a signed left shift is the value congruent to
+``E1 * 2^E2`` modulo ``2^N``, as the standard defines, so ``-1 << 1`` is
+``-2``; only the shift count must be in range.
 
 Calls crossing between mathematical ``cppverify::spec`` code and lifted machine
 ``constexpr`` code convert at each parameter and return boundary. A machine
