@@ -129,6 +129,14 @@ void collectModelVariables(const VCExpr *Expression,
     collectModelVariables(Child.get(), Bound, Variables);
 }
 
+/// Without ctrl_c off, Z3 swaps its own SIGINT handler in around each check,
+/// which is not thread-safe; the driver handles Ctrl-C.
+z3::params solverParams(z3::context &Ctx) {
+  z3::params Params(Ctx);
+  Params.set("ctrl_c", false);
+  return Params;
+}
+
 } // namespace
 
 namespace {
@@ -143,6 +151,7 @@ Z3Encoder::Z3Encoder() : Ctx(), Solver(Ctx) {
     APIErrorEncoders[Ctx] = this;
   }
   Z3_set_error_handler(Ctx, &Z3Encoder::recordAPIError);
+  Solver.set(solverParams(Ctx));
 }
 
 Z3Encoder::~Z3Encoder() {
@@ -168,7 +177,7 @@ VerifyResult Z3Encoder::withAPIError(VerifyResult Result) {
     return Result;
   {
     std::lock_guard<std::mutex> Guard(CheckLock);
-    if (Stopped)
+    if (Stopped || interruptRequested())
       return Result;
   }
   VerifyResult Failed;
@@ -1573,7 +1582,7 @@ Z3Encoder::profileQuantifiers(const z3::expr_vector &Assertions) {
   ::dup2(Fd, 2);
   {
     z3::solver Rerun = z3::tactic(Ctx, "smt").mk_solver();
-    z3::params Params(Ctx);
+    z3::params Params = solverParams(Ctx);
     Params.set("timeout", TimeoutMs == 0 ? 10000U : std::min(TimeoutMs, 10000U));
     Params.set("qi.profile", true);
     Rerun.set(Params);
@@ -1741,7 +1750,7 @@ z3::expr_vector Z3Encoder::rangeFacts() {
 z3::solver Z3Encoder::freshSolver() {
   z3::solver Fresh =
       QuantifiedQuery ? z3::tactic(Ctx, "smt").mk_solver() : z3::solver(Ctx);
-  z3::params Params(Ctx);
+  z3::params Params = solverParams(Ctx);
   if (TimeoutMs > 0)
     Params.set("timeout", TimeoutMs);
   if (ResourceLimit > 0)
@@ -1785,15 +1794,16 @@ z3::check_result Z3Encoder::check(z3::solver &S, unsigned Ms) {
   using Clock = std::chrono::steady_clock;
   {
     std::lock_guard<std::mutex> Guard(CheckLock);
-    if (Stopped)
+    if (Stopped || interruptRequested())
       return z3::unknown;
     CheckFinished = false;
   }
   Checking = true;
   // Z3 forgets a cancellation that arrives inside one of its nested resource
   // scopes (leaving the scope clears it), whether from its own timeout or
-  // from interrupt(). A check past its time, or stopped, is therefore
-  // interrupted again until it returns.
+  // from interrupt(). A check past its time, stopped, or interrupted by
+  // Ctrl-C, which the watchdog polls for, is therefore interrupted again
+  // until it returns.
   constexpr std::chrono::milliseconds Grace(100);
   constexpr std::chrono::milliseconds Interval(50);
   bool TimedOut = false;
@@ -1805,13 +1815,13 @@ z3::check_result Z3Encoder::check(z3::solver &S, unsigned Ms) {
                 : Clock::now() + std::chrono::milliseconds(Ms) + Grace;
     auto Next = Limit;
     while (!CheckFinished) {
-      if (Stopped || Clock::now() >= Next) {
+      if (Stopped || interruptRequested() || Clock::now() >= Next) {
         TimedOut = TimedOut || Clock::now() >= Limit;
         Ctx.interrupt();
         Interrupted = true;
         Next = Clock::now() + Interval;
       }
-      CheckChanged.wait_until(Lock, Next);
+      CheckChanged.wait_until(Lock, std::min(Next, Clock::now() + Interval));
     }
   });
   auto Join = llvm::make_scope_exit([&] {
@@ -1825,6 +1835,7 @@ z3::check_result Z3Encoder::check(z3::solver &S, unsigned Ms) {
     if (Interrupted) {
       // A check opens a resource scope, which clears an interrupt left over.
       z3::solver Reset(Ctx);
+      Reset.set(solverParams(Ctx));
       (void)Reset.check();
     }
     Checking = false;
