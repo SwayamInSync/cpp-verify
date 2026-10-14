@@ -91,19 +91,19 @@
 # RUN: not %cpp-verify --obligation-in=%t.bad-binder-sort 2>&1 | FileCheck %s --check-prefix=BAD-BINDER-SORT
 # RUN: %cpp-verify --lower-only --dump-ir=3 %S/heap_memcpy_pass.cpp -- 2>&1 | grep -B1 '__quant_.* : int' | FileCheck %s --check-prefix=QUANTIFIED-INDEX
 
-# REPLAY: Verified: canonical_obligations [backend=z3] [semantic-hash=sha256:{{[0-9a-f]+}}]
+# REPLAY: Proved obligations: canonical_obligations (dependencies not checked in replay) [backend=z3] [semantic-hash=sha256:{{[0-9a-f]+}}]
 # LOWER: vc canonical_obligations
 # LOWER: schema cppverify.obligation/2
 # LOWER: (let
 # LOWER: Lowered: canonical_obligations [backend=z3] [semantic-hash=sha256:{{[0-9a-f]+}}]
 # LEAN: Exported: lean obligation: canonical_obligations [backend=lean]
 # LEAN-FILE: theorem cppverify_canonical_obligations_
-# MULTI-COUNT-2: Verified: canonical_obligations
+# MULTI-COUNT-2: Proved obligations: canonical_obligations (dependencies not checked in replay)
 # BAD-MAGIC: error: invalid obligation archive: invalid obligation archive magic
 # TRUNCATED: error: invalid obligation archive: truncated obligation archive
 # VERSION: error: invalid obligation archive: unsupported obligation archive version
 # SCHEMA-V1: error: invalid obligation archive: invalid obligation kind in obligation archive
-# SCHEMA-V1-KINDS: Verified: canonical_obligations [backend=z3]
+# SCHEMA-V1-KINDS: Proved obligations: canonical_obligations (dependencies not checked in replay) [backend=z3]
 # KIND: error: invalid obligation archive: invalid expression kind in obligation archive
 # FEATURES: error: invalid obligation archive: obligation archive feature declaration does not match contents
 # DUPLICATE-ID: error: invalid obligation archive: obligation module has an empty or duplicate obligation identity
@@ -118,15 +118,15 @@
 # SYMBOL-SORT: error: invalid obligation archive: logical variable has inconsistent sorts:
 # TRACE-SORT: error: invalid obligation archive: obligation module has invalid diagnostic trace value
 # INVALID-UTF8: "function":"{{.*}}anonical_obligations"
-# INVALID-UTF8-SAME: "status":"verified"
+# INVALID-UTF8-SAME: "status":"proved-obligations"
 # DUPLICATE-FUNCTION: error: invalid obligation archive: duplicate logical function in obligation archive
 # BAD-BINDER-SORT: error: invalid obligation archive: quantifier binder occurrence is not a mathematical integer
 # QUANTIFIED-INDEX: * : int
 # QUANTIFIED-INDEX-NEXT: __quant_{{[0-9]+}}_{{.*}} : int
 # BMC: error: BMC cannot replay an untransformed backend-neutral archive
-# BMC-REPLAY-DAG: Verified: zero_iterations [backend=bmc, bound=0]
+# BMC-REPLAY-DAG: Proved obligations: zero_iterations (dependencies not checked in replay) [backend=bmc, bound=0]
 # BMC-REPLAY-DAG: cov_loop_unroll_zero.cpp:22:3: BoundedSafe: one_step_may_run (unwinding bound 0 is insufficient for a complete proof) [backend=bmc, bound=0]
 # BMC-BOUND: error: requested BMC bound 1 does not match archived bound 0
 # BMC-LOWER: transform bmc-unroll 0
-# BMC-DECREASES: Verified: dec.decreases [backend=bmc, bound=2]
+# BMC-DECREASES: Proved obligations: dec.decreases (dependencies not checked in replay) [backend=bmc, bound=2]
 # FAIL: obligation_archive_fail.cpp:2:37: error: verification failed: archived_failure
