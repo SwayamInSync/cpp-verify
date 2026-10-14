@@ -70,10 +70,17 @@ enum class VerifyReason {
   /// The proof assumes a callee contract the callee did not establish.
   CalleeContract,
   /// A loop has no termination measure.
-  DecreasesMissing
+  DecreasesMissing,
+  /// The run was interrupted before the verdict was final.
+  Interrupted
 };
 
 llvm::StringRef verifyReasonCode(VerifyReason Reason);
+
+/// Stops verification for the rest of the process (Ctrl-C): queries running
+/// end unresolved and none starts. Safe to call from a signal handler.
+void requestInterrupt();
+bool interruptRequested();
 
 struct VerifyModelValue {
   std::string DisplayName;
