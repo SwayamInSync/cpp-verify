@@ -147,13 +147,17 @@ def function_records(records):
     return selected
 
 
-def check_matrix(records, backend):
+def check_matrix(records, backend, replay=False):
+    # Replay proves each module alone, without the verdicts it rests on.
+    proved = "proved-obligations" if replay else "verified"
     selected = function_records(records)
     for name, expected in EXPECTED_STATUS.items():
+        if expected == "verified":
+            expected = proved
         record = selected[name]
         actual = record.get("status")
         if backend in {"cvc5", "portfolio"} and name in CONSERVATIVE_CVC5:
-            if actual == "verified":
+            if actual == proved:
                 continue
             if actual != "unresolved" or record.get("reason") != "solver.unknown":
                 fail(
@@ -365,7 +369,7 @@ def check_archive_matrix(cpp_verify, source, work, source_records):
         replayed = parse_json_lines(
             run(replay_command(cpp_verify, backend, canonical), {1})
         )
-        selected = check_matrix(replayed, backend)
+        selected = check_matrix(replayed, backend, replay=True)
         for name in INVALID_FUNCTIONS:
             if diagnostic_identity(selected[name]) != diagnostic_identity(
                 function_records(source_records[backend])[name]
@@ -383,7 +387,7 @@ def check_archive_matrix(cpp_verify, source, work, source_records):
     replayed_bmc = parse_json_lines(
         run(replay_command(cpp_verify, "bmc", bmc_archive), {1})
     )
-    selected_bmc = check_matrix(replayed_bmc, "bmc")
+    selected_bmc = check_matrix(replayed_bmc, "bmc", replay=True)
     source_bmc = function_records(source_records["bmc"])
     for name in INVALID_FUNCTIONS:
         if diagnostic_identity(selected_bmc[name]) != diagnostic_identity(
