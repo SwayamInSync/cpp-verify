@@ -509,9 +509,21 @@ Terms added for the R3 language features:
   driver checks the termination and length postcondition of `reverse` like
   any recursive spec's, reporting only a failure.
 - A logical function marked `Choice` is a lifted `cppverify::choose`: uninterpreted,
-  with the Hilbert axiom as its postcondition. The certifier reads its
-  value from the model, so a claim true only for some choices fails
-  certified.
+  with the Hilbert axiom as its postcondition. `SpecAxioms` lowers the
+  postconditions of a function without a definition, its axioms, into every
+  module that applies it, and fails the module when one does not lower.
+  Passivization assumes the axiom at every application of a choice in a
+  fact as well, an unfolding, a postcondition, or an induction hypothesis
+  (`addChoiceAxioms`), quantified like the application and read in its
+  memory. The certifier reads a choice's value from the model and, after
+  the evaluation, checks the axiom at every value read, including those the
+  checks read (`Evaluator::checkChoices`): a value the axiom excludes is no
+  evidence, but a dispute whose refinement gives the solver the axiom
+  there, and a value it cannot decide leaves the counterexample unchecked.
+  Before, the certifier took the model's choices on trust, and a model that
+  broke the axiom of a choice applied only inside an unfolding certified
+  false counterexamples. A claim true only for some choices still fails
+  certified, with choices the axioms allow.
 - A comparison between a machine and a mathematical operand is lifted to
   the integers when the mathematical side mentions a quantifier binder or a
   collection, and otherwise split by range so the machine side keeps its
@@ -1189,7 +1201,8 @@ polynomial comparison's roots lie within the Cauchy bound
 before index 0, its elements, then 0 from its length on, and sets,
 multisets, and maps are already piecewise constant over the integers. A
 `HeapFrame` is compared segment by segment over the heaps' breakpoints. A
-lifted `cppverify::choose` is read from the model, like an uninterpreted function.
+lifted `cppverify::choose` is read from the model and checked against its axiom
+(see `Choice` above).
 
 A quantifier the distinguished values do not cover, such as one whose body
 holds another quantifier over its binder, is decided as Presburger
