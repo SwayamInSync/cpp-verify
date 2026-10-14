@@ -677,7 +677,10 @@ wraps, and signed overflow is undefined. The verifier uses machine-integer
 values but unfolds the function into the path-sensitive definedness checker at every call;
 an overflowing call is rejected rather than interpreted as signed wraparound.
 For C++17 signed left shift, a nonnegative value may set the sign bit when the
-shifted mathematical value fits the corresponding unsigned type.
+shifted mathematical value fits the corresponding unsigned type. From C++20
+(`-std=c++20`), a signed left shift is the value congruent to `E1 * 2^E2`
+modulo `2^N`, as the standard defines, and only its amount must lie below the
+width.
 
 **Contrast with explicit `cppverify::spec`:** `cppverify::spec int fibo(int n)` uses mathematical integers (Z3 `Int`, unbounded). Users pick:
 - Want fast verification with abstract math semantics → write `cppverify::spec`.
