@@ -1990,11 +1990,38 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
     Out.push_back(std::move(Fn));
   BuiltinFunctions.clear();
 
+  // A lifted choose is defined by its axiom, and it belongs to the function
+  // it is written in: that function reaches what the choose applies.
+  std::set<std::string> ChoiceIdentities;
+  for (const auto &Fn : Out)
+    if (Fn->IsChoice)
+      ChoiceIdentities.insert(Fn->Identity);
   std::map<std::string, std::set<std::string>> CallGraph;
   for (const auto &Fn : Out) {
     for (const auto &Target : Out)
-      if (bodyReferencesFunction(*Fn, Target->Identity))
+      if (Fn->IsChoice ? llvm::any_of(Fn->Postconditions,
+                                      [&](const auto &Axiom) {
+                                        return exprReferencesSpecCall(
+                                            Axiom.get(), Target->Identity);
+                                      })
+                       : bodyReferencesFunction(*Fn, Target->Identity))
         CallGraph[Fn->Identity].insert(Target->Identity);
+  }
+  for (const auto &Fn : Out) {
+    if (Fn->IsChoice)
+      continue;
+    std::set<std::string> &Edges = CallGraph[Fn->Identity];
+    std::set<std::string> Seen;
+    std::vector<std::string> Work(Edges.begin(), Edges.end());
+    while (!Work.empty()) {
+      const std::string Current = std::move(Work.back());
+      Work.pop_back();
+      if (!ChoiceIdentities.count(Current) || !Seen.insert(Current).second)
+        continue;
+      for (const std::string &Next : CallGraph[Current])
+        if (Edges.insert(Next).second || ChoiceIdentities.count(Next))
+          Work.push_back(Next);
+    }
   }
 
   std::set<std::string> RequiresCallDefinedness;
@@ -2042,9 +2069,17 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
   std::set<std::string> InductiveCycles;
   for (const auto &Fn : Out)
     if (Fn->Unfolding && Reach[Fn->Identity].count(Fn->Identity)) {
-      Errors.push_back(Fn->Name + ": an inductive predicate applies itself "
-                                  "only in its body or through inductive "
-                                  "predicates, not through another spec");
+      const bool InChoice =
+          llvm::any_of(Reach[Fn->Identity], [&](const std::string &Id) {
+            return ChoiceIdentities.count(Id) && Reach[Id].count(Fn->Identity);
+          });
+      Errors.push_back(
+          Fn->Name +
+          (InChoice ? ": an inductive predicate occurs in the bodies of its "
+                      "group only positively, never inside cppverify::choose"
+                    : ": an inductive predicate applies itself only in its "
+                      "body or through inductive predicates, not through "
+                      "another spec"));
       for (const std::string &Other : Reach[Fn->Identity])
         if (Reach[Other].count(Fn->Identity))
           InductiveCycles.insert(Other);
@@ -2082,12 +2117,13 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
   }
   for (auto &Fn : Out) {
     // A rejected inductive predicate keeps a body without a measure.
-    if (InductiveCycles.count(Fn->Identity) ||
+    if (Fn->IsChoice || InductiveCycles.count(Fn->Identity) ||
         (Fn->InductiveLoc.isValid() && !Fn->Unfolding))
       continue;
     std::set<std::string> Group;
     for (const std::string &Other : Reach[Fn->Identity])
-      if (Other != Fn->Identity && Reach[Other].count(Fn->Identity))
+      if (Other != Fn->Identity && !ChoiceIdentities.count(Other) &&
+          Reach[Other].count(Fn->Identity))
         Group.insert(Other);
     if (!Group.empty()) {
       // A cycle terminates when every call within it lowers one shared
