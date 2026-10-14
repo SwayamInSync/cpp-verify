@@ -439,11 +439,6 @@ static std::unique_ptr<VExpr> makeImplies(std::unique_ptr<VExpr> L,
                                       std::move(R), VType::makeBool(), Loc);
 }
 
-static std::unique_ptr<VExpr>
-safetyForExpr(const VExpr *E, const FunctionMap *FnMap,
-              const std::vector<VValidExtent> *ValidExtents = nullptr,
-              const std::set<std::string> *PointerParams = nullptr);
-
 static std::unique_ptr<VExpr> combineSafety(std::unique_ptr<VExpr> L,
                                             std::unique_ptr<VExpr> R,
                                             SourceLocation Loc) {
@@ -1843,6 +1838,72 @@ static void appendGuardedSafety(SafetyChecks &Out, SafetyChecks Checks,
                    std::move(Check.Note)});
 }
 
+/// The definedness of the arithmetic operation \p E itself, its operands
+/// taken as they are.
+static void addOperationSafety(const VExpr *E, SafetyChecks &Out) {
+  if (E->K == VExpr::UnaryOp) {
+    const auto *U = static_cast<const VUnaryOpExpr *>(E);
+    if (U->Op != VUnaryOp::Neg || !isSignedMachineInteger(U->Operand->Ty) ||
+        evaluatedIntMode(U->Operand.get()) == VIntMode::Math ||
+        U->Operand->Ty.BitWidth == 0)
+      return;
+    addSafety(Out, ProofObligationKind::Overflow,
+              std::make_unique<VBinOpExpr>(
+                  VBinOp::Ne, cloneVExpr(U->Operand.get()),
+                  std::make_unique<VLiteralExpr>(
+                      signedLimit(U->Operand->Ty.BitWidth, true),
+                      U->Operand->Ty, U->Loc),
+                  VType::makeBool(), U->Loc),
+              U->Loc);
+    return;
+  }
+  if (E->K != VExpr::BinOp)
+    return;
+  const auto *B = static_cast<const VBinOpExpr *>(E);
+  if (B->Op == VBinOp::Shl || B->Op == VBinOp::Shr) {
+    addSafety(Out, ProofObligationKind::Shift, shiftSafety(B), B->Loc);
+    return;
+  }
+  // A mathematical operand makes the whole operation mathematical.
+  const bool MachineOperation =
+      evaluatedIntMode(B->Lhs.get()) == VIntMode::Machine &&
+      evaluatedIntMode(B->Rhs.get()) == VIntMode::Machine;
+  if (B->Op == VBinOp::Add || B->Op == VBinOp::Sub || B->Op == VBinOp::Mul) {
+    if (MachineOperation)
+      addSafety(Out, ProofObligationKind::Overflow, signedArithmeticSafety(B),
+                B->Loc);
+    return;
+  }
+  // Only a spec body divides totally; evaluated C++ division needs a
+  // nonzero divisor whatever the operands' modes.
+  if ((B->Op == VBinOp::Div || B->Op == VBinOp::Rem) &&
+      B->Ty.IntMode == VIntMode::Machine) {
+    addSafety(Out, ProofObligationKind::DivisionByZero,
+              std::make_unique<VBinOpExpr>(
+                  VBinOp::Ne, cloneVExpr(B->Rhs.get()),
+                  std::make_unique<VLiteralExpr>(0, B->Rhs->Ty, B->Loc),
+                  VType::makeBool(), B->Loc),
+              B->Loc);
+    if (MachineOperation && isSignedMachineInteger(B->Lhs->Ty) &&
+        B->Lhs->Ty.BitWidth != 0) {
+      auto IsMin = std::make_unique<VBinOpExpr>(
+          VBinOp::Eq, cloneVExpr(B->Lhs.get()),
+          std::make_unique<VLiteralExpr>(signedLimit(B->Lhs->Ty.BitWidth, true),
+                                         B->Lhs->Ty, B->Loc),
+          VType::makeBool(), B->Loc);
+      auto IsMinusOne = std::make_unique<VBinOpExpr>(
+          VBinOp::Eq, cloneVExpr(B->Rhs.get()),
+          std::make_unique<VLiteralExpr>(-1, B->Rhs->Ty, B->Loc),
+          VType::makeBool(), B->Loc);
+      addSafety(
+          Out, ProofObligationKind::Overflow,
+          makeNot(makeAnd(std::move(IsMin), std::move(IsMinusOne), B->Loc),
+                  B->Loc),
+          B->Loc);
+    }
+  }
+}
+
 static void
 collectSafety(const VExpr *E, const FunctionMap *FnMap,
               const std::vector<VValidExtent> *ValidExtents,
@@ -1916,65 +1977,13 @@ collectSafety(const VExpr *E, const FunctionMap *FnMap,
       appendGuardedSafety(Out, std::move(Difference), NotBothNull.get(),
                           B->Loc);
     }
-    if (B->Op == VBinOp::Shl || B->Op == VBinOp::Shr) {
-      addSafety(Out, ProofObligationKind::Shift, shiftSafety(B), B->Loc);
-      return;
-    }
-    // A mathematical operand makes the whole operation mathematical.
-    const bool MachineOperation =
-        evaluatedIntMode(B->Lhs.get()) == VIntMode::Machine &&
-        evaluatedIntMode(B->Rhs.get()) == VIntMode::Machine;
-    if (B->Op == VBinOp::Add || B->Op == VBinOp::Sub || B->Op == VBinOp::Mul) {
-      if (MachineOperation)
-        addSafety(Out, ProofObligationKind::Overflow, signedArithmeticSafety(B),
-                  B->Loc);
-      return;
-    }
-    // Only a spec body divides totally; evaluated C++ division needs a
-    // nonzero divisor whatever the operands' modes.
-    if ((B->Op == VBinOp::Div || B->Op == VBinOp::Rem) &&
-        B->Ty.IntMode == VIntMode::Machine) {
-      addSafety(Out, ProofObligationKind::DivisionByZero,
-                std::make_unique<VBinOpExpr>(
-                    VBinOp::Ne, cloneVExpr(B->Rhs.get()),
-                    std::make_unique<VLiteralExpr>(0, B->Rhs->Ty, B->Loc),
-                    VType::makeBool(), B->Loc),
-                B->Loc);
-      if (MachineOperation && isSignedMachineInteger(B->Lhs->Ty) &&
-          B->Lhs->Ty.BitWidth != 0) {
-        auto IsMin = std::make_unique<VBinOpExpr>(
-            VBinOp::Eq, cloneVExpr(B->Lhs.get()),
-            std::make_unique<VLiteralExpr>(
-                signedLimit(B->Lhs->Ty.BitWidth, true), B->Lhs->Ty, B->Loc),
-            VType::makeBool(), B->Loc);
-        auto IsMinusOne = std::make_unique<VBinOpExpr>(
-            VBinOp::Eq, cloneVExpr(B->Rhs.get()),
-            std::make_unique<VLiteralExpr>(-1, B->Rhs->Ty, B->Loc),
-            VType::makeBool(), B->Loc);
-        addSafety(
-            Out, ProofObligationKind::Overflow,
-            makeNot(makeAnd(std::move(IsMin), std::move(IsMinusOne), B->Loc),
-                    B->Loc),
-            B->Loc);
-      }
-    }
+    addOperationSafety(E, Out);
     return;
   }
   case VExpr::UnaryOp: {
     const auto *U = static_cast<const VUnaryOpExpr *>(E);
     Collect(U->Operand.get(), Out);
-    if (U->Op != VUnaryOp::Neg || !isSignedMachineInteger(U->Operand->Ty) ||
-        evaluatedIntMode(U->Operand.get()) == VIntMode::Math ||
-        U->Operand->Ty.BitWidth == 0)
-      return;
-    addSafety(Out, ProofObligationKind::Overflow,
-              std::make_unique<VBinOpExpr>(
-                  VBinOp::Ne, cloneVExpr(U->Operand.get()),
-                  std::make_unique<VLiteralExpr>(
-                      signedLimit(U->Operand->Ty.BitWidth, true),
-                      U->Operand->Ty, U->Loc),
-                  VType::makeBool(), U->Loc),
-              U->Loc);
+    addOperationSafety(E, Out);
     return;
   }
   case VExpr::Cast: {
@@ -2100,19 +2109,14 @@ collectSafety(const VExpr *E, const FunctionMap *FnMap,
             "an expression whose C++ definedness is not modeled");
 }
 
-/// The conjunction of every definedness check of E.
-static std::unique_ptr<VExpr>
-safetyForExpr(const VExpr *E, const FunctionMap *FnMap,
-              const std::vector<VValidExtent> *ValidExtents,
-              const std::set<std::string> *PointerParams) {
+/// The definedness of the operation \p E itself: what makes its machine
+/// value equal its mathematical one, whatever its operands' values.
+static std::unique_ptr<VExpr> operationSafety(const VExpr *E) {
   SafetyChecks Checks;
-  collectSafety(E, FnMap, ValidExtents, PointerParams, Checks);
-  const SourceLocation Loc = E ? E->Loc : SourceLocation();
-  if (Checks.empty())
-    return makeBoolLiteral(true, Loc);
-  std::unique_ptr<VExpr> Safe = std::move(Checks.front().Cond);
-  for (size_t I = 1; I != Checks.size(); ++I)
-    Safe = combineSafety(std::move(Safe), std::move(Checks[I].Cond), Loc);
+  addOperationSafety(E, Checks);
+  std::unique_ptr<VExpr> Safe = makeBoolLiteral(true, E->Loc);
+  for (SafetyCheck &Check : Checks)
+    Safe = combineSafety(std::move(Safe), std::move(Check.Cond), E->Loc);
   return Safe;
 }
 
@@ -2169,7 +2173,7 @@ machineMathBridgeForExpr(const VExpr *E, const FunctionMap *FnMap,
         B->Op, mathCast(B->Lhs.get()), mathCast(B->Rhs.get()), MathTy, B->Loc);
     auto Equality = makeEq(mathCast(B), std::move(MathValue), B->Loc);
     auto GuardedEquality =
-        makeImplies(safetyForExpr(B, FnMap), std::move(Equality), B->Loc);
+        makeImplies(operationSafety(B), std::move(Equality), B->Loc);
     return combineSafety(std::move(Bridge), std::move(GuardedEquality), B->Loc);
   }
   case VExpr::UnaryOp: {
@@ -2186,7 +2190,7 @@ machineMathBridgeForExpr(const VExpr *E, const FunctionMap *FnMap,
         VUnaryOp::Neg, mathCast(U->Operand.get()), MathTy, U->Loc);
     auto Equality = makeEq(mathCast(U), std::move(MathValue), U->Loc);
     auto GuardedEquality =
-        makeImplies(safetyForExpr(U, FnMap), std::move(Equality), U->Loc);
+        makeImplies(operationSafety(U), std::move(Equality), U->Loc);
     return combineSafety(std::move(Bridge), std::move(GuardedEquality), U->Loc);
   }
   case VExpr::Cast: {
