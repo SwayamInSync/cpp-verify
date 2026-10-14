@@ -145,7 +145,9 @@ C++ feature boundaries
        ``break``/``continue`` in ``while``/``for`` loops.
      - ``switch``, range-``for``, ``goto``, labels, conditionless ``for``,
        loop condition declarations, and ``break``/``continue`` in ``do``
-       loops.
+       loops. An expression or statement nested more than 256 operations
+       deep (a sum of 300 terms, say) is reported where it is; split it into
+       intermediate variables.
    * - Advanced C++
      - Not in the verified core.
      - Exceptions, lambdas, coroutines, RTTI, virtual dispatch, multiple
