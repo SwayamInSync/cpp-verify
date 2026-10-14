@@ -209,6 +209,14 @@ ill-scoped variables, and contradictory complete/ordered goals fail closed.
 Different records may request different reveal fuel for one logical function,
 but its shared parameter/result signature must remain compatible.
 
+Replay proves each module's obligations alone. What a source verdict also
+rests on is not archived: the callee and trusted contracts and spec facts it
+uses, ``[partial]``, and the vacuity checks. Where the source run reports
+``Verified``, replay therefore reports ``Proved obligations: f (dependencies
+not checked in replay)``, with JSON status ``proved-obligations``. A
+counterexample is checked against the definitions alone and is still a
+failure.
+
 Source-built and replayed records pass through the same conservative
 canonicalizer before hashing and dispatch. It folds only trivial Boolean
 structure and reflexive equality/inequality, removes transitively unreachable
