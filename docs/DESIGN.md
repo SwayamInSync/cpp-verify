@@ -1645,7 +1645,10 @@ diagnostic identities advanced it to v3, and excluding diagnostic kinds
 advances it to v4.
 `--obligation-in=FILE` validates and replays the records through Z3, cvc5,
 strict Z3+cvc5 portfolio, lower-only/Layer 3-4 dumps, or Lean scratch export
-without reparsing C++.
+without reparsing C++. Each module is replayed alone, without the contracts,
+spec facts, partiality, and vacuity checks its source verdict rests on, so a
+module whose obligations hold reports `Proved obligations` (JSON
+`proved-obligations`), never `Verified`.
 BMC-produced records carry their unroll bound in semantics and replay through
 the BMC result aggregator; untransformed records cannot acquire BMC semantics
 after this boundary. Lean scratch replay of bounded records is rejected.
