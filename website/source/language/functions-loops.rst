@@ -220,11 +220,14 @@ obligations:
 
 Verification is total correctness, as in Verus: an executable loop without
 ``cppverify::decreases`` leaves its function ``Unresolved`` with reason
-``decreases.missing``. ``cppverify::decreases(*)`` allows a loop (or an executable
-function) to diverge; its function and every caller are then reported
-``Verified ... [partial]``, proved only for the executions that terminate.
-Ghost-block and proof-function loops are erased at runtime and must have a
-real measure; ``cppverify::decreases(*)`` is rejected there.
+``decreases.missing``, unless its condition is the constant false, so that it
+never repeats (``while (false)``, the ``do { ... } while (0)`` of a macro).
+Such a loop keeps the state it starts in. ``cppverify::decreases(*)`` allows a
+loop (or an executable function) to diverge; its function and every caller
+are then reported ``Verified ... [partial]``, proved only for the executions
+that terminate. Ghost-block and proof-function loops are erased at runtime and
+must have a real measure, unless their condition is the constant false;
+``cppverify::decreases(*)`` is rejected there.
 
 Nobody knows whether this loop ends for every start, so it has no measure:
 

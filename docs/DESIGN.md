@@ -195,10 +195,14 @@ while (i < n)
 ```
 
 - `cppverify::invariant(expr)`: must hold on entry and be preserved by each iteration.
+  A loop whose condition is the constant false keeps every value it would
+  change: after `while (false) { ... }` the state is the one before it.
 - `cppverify::decreases(expr [, expr...])`: termination measure. Single expression must be non-negative and strictly decreasing. Tuple form is lex-ordered: `cppverify::decreases(a, b)` means `(a, b)` strictly decreases lexicographically, and only the first component that changes must stay non-negative.
 - Verification is total correctness, as in Verus: every executable loop needs
-  `cppverify::decreases`. Without one the function is `Unresolved` with reason
-  `decreases.missing`, unless BMC proves the loop's unwinding.
+  `cppverify::decreases`, unless its condition is the constant false, so that
+  it never repeats (`while (false)`, the `do { ... } while (0)` of a macro).
+  Without one the function is `Unresolved` with reason `decreases.missing`,
+  unless BMC proves the loop's unwinding.
   `cppverify::decreases(*)` on a loop or an executable function allows divergence; the
   proof then covers only executions that terminate, and that function and
   every caller are reported `Verified ... [partial]` with a warning (JSON
@@ -329,7 +333,8 @@ cppverify::ghost {
 - May assign only ghost-local variables and their direct dot-fields; executable
   locals, globals, pointees, executable calls, and enclosing-function returns
   are rejected.
-- Ghost loops require `cppverify::decreases`, because the loop is absent at runtime.
+- Ghost loops require `cppverify::decreases`, because the loop is absent at runtime,
+  unless their condition is the constant false.
 - Stripped entirely by CodeGen — zero runtime cost.
 - `cppverify::ghost T x = e;` declares a ghost variable in the enclosing function scope,
   like Verus's `let ghost`: later ghost code, assertions, and loop invariants

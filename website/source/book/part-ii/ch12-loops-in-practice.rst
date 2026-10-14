@@ -112,7 +112,9 @@ Every loop needs ``cppverify::decreases``
 -----------------------------------------
 
 Verification is total correctness, as in Verus. A loop without ``cppverify::decreases``
-leaves its function ``Unresolved`` with reason ``decreases.missing``. When a
+leaves its function ``Unresolved`` with reason ``decreases.missing``, unless
+its condition is the constant false (the ``do { ... } while (0)`` of a macro):
+such a loop never repeats. When a
 loop really may run forever (an event loop, a server), say so with
 ``cppverify::decreases(*)``: the function is then proved for the executions that
 terminate and reported ``Verified ... [partial]``, and so is every caller.

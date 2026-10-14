@@ -34,7 +34,8 @@ Meaning of a result
 ``Verified`` means the selected backend proved the generated verification
 condition. It does not certify uncontracted functions, linked libraries, the
 operating system, or any contract marked ``[[cppverify::trusted]]``. Proofs
-are of total correctness: every executable loop needs ``cppverify::decreases``. A proof
+are of total correctness: every executable loop needs ``cppverify::decreases``,
+unless its condition is the constant false. A proof
 that holds only for terminating executions (after ``cppverify::decreases(*)``) is marked
 ``[partial]``, one that relies on a trusted contract ``[trusts=f]``, and one
 that no execution reaches ``[vacuous]``. A caller whose proof relies on a

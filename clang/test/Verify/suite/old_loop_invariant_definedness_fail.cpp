@@ -8,7 +8,7 @@ int reject_old_entry_overflow(int value)
   do {
     value = 0;
   } while (false)
-    cppverify::invariant(cppverify::old(value + 1) == cppverify::old(value + 1));
+    cppverify::invariant(cppverify::old((int)(value + 1)) == cppverify::old((int)(value + 1)));
   return value;
 }
 
@@ -19,7 +19,7 @@ int reject_quantified_old_entry_overflow(int value)
   do {
     value = 0;
   } while (false)
-    cppverify::invariant(cppverify::old(cppverify::forall(i, 0, 2, value + i == value + i)));
+    cppverify::invariant(cppverify::old(cppverify::forall(i, 0, 2, (int)(value + i) == (int)(value + i))));
   return value;
 }
 
@@ -34,7 +34,7 @@ int reject_old_entry_null_dereference(int *pointer, int *replacement)
   return 0;
 }
 
-// CHECK-DAG: error: verification failed: reject_old_entry_overflow
-// CHECK-DAG: error: verification failed: reject_quantified_old_entry_overflow
-// CHECK-DAG: error: verification failed: reject_old_entry_null_dereference
+// CHECK-DAG: error: verification failed: reject_old_entry_overflow [{{.*}}::overflow@
+// CHECK-DAG: error: verification failed: reject_quantified_old_entry_overflow [{{.*}}::overflow@
+// CHECK-DAG: error: verification failed: reject_old_entry_null_dereference [{{.*}}::dereference@
 

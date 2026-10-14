@@ -103,6 +103,9 @@ private:
   /// Handled clear for anything else.
   std::unique_ptr<VExpr> convertCollection(const Expr *E, bool &Handled);
   bool checkLoopTermination(const Stmt *Loop, bool HasMeasure);
+  /// The condition of \p Loop: the constant false when it never repeats.
+  std::unique_ptr<VExpr> convertLoopCondition(const Stmt *Loop,
+                                              const Expr *Cond);
   bool isTriggerMarked(const Expr *E) const;
   void markTrigger(std::unique_ptr<VExpr> &Result, const Expr *E);
   /// A modifies footprint: an lvalue, or the cells p[lo : n].
