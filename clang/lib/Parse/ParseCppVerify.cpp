@@ -485,7 +485,8 @@ void Parser::ParseFunctionContractClauses(ParsingDeclarator &D,
       Diag(Tok, diag::err_contract_expected_lparen) << ClauseName;
       break;
     }
-    ConsumeParen();
+    SourceLocation OpenLoc = ConsumeParen();
+    const unsigned ErrorsBefore = Diags.getNumErrors();
 
     llvm::SaveAndRestore<bool> InPost(InContractPostcondition, IsPost);
     if (IsModifies) {
@@ -556,6 +557,10 @@ void Parser::ParseFunctionContractClauses(ParsingDeclarator &D,
     }
 
     if (!Tok.is(tok::r_paren)) {
+      if (Diags.getNumErrors() == ErrorsBefore) {
+        Diag(Tok, diag::err_contract_expected_rparen) << ClauseName;
+        Diag(OpenLoc, diag::note_matching) << tok::l_paren;
+      }
       unsigned Depth = 0;
       while (Tok.isNot(tok::eof)) {
         if (Tok.is(tok::l_paren))
@@ -572,7 +577,7 @@ void Parser::ParseFunctionContractClauses(ParsingDeclarator &D,
     }
     if (Tok.is(tok::r_paren))
       ConsumeParen();
-    else
+    else if (Diags.getNumErrors() == ErrorsBefore)
       Diag(Tok, diag::err_contract_expected_rparen) << ClauseName;
 
     // clause(...) by { proof }: `by` is contextual. The block is parsed
