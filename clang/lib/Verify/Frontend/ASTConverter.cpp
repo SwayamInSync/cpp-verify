@@ -107,6 +107,27 @@ static std::unique_ptr<VExpr> machineOperand(std::unique_ptr<VExpr> V,
   return std::make_unique<VCastExpr>(std::move(V), From, To, Loc);
 }
 
+/// \p L shifted left by \p R. C++20 defines a signed left shift as the value
+/// congruent to L * 2^R modulo 2^N, which is the unsigned shift
+/// reinterpreted; before C++20 a negative or overflowing one is undefined.
+static std::unique_ptr<VExpr> shiftLeft(std::unique_ptr<VExpr> L,
+                                        std::unique_ptr<VExpr> R,
+                                        const VType &Ty, SourceLocation Loc,
+                                        const ASTContext &Ctx) {
+  if (!Ctx.getLangOpts().CPlusPlus20 || !Ty.isSignedInt() ||
+      Ty.IntMode != VIntMode::Machine || !sameRepresentation(L->Ty, Ty))
+    return std::make_unique<VBinOpExpr>(VBinOp::Shl, std::move(L), std::move(R),
+                                        Ty, Loc);
+  VType Unsigned = Ty;
+  Unsigned.IsSigned = false;
+  const VType From = L->Ty;
+  auto Shifted = std::make_unique<VBinOpExpr>(
+      VBinOp::Shl,
+      std::make_unique<VCastExpr>(std::move(L), From, Unsigned, Loc),
+      std::move(R), Unsigned, Loc);
+  return std::make_unique<VCastExpr>(std::move(Shifted), Unsigned, Ty, Loc);
+}
+
 /// The exact value of an integer operand.
 static std::unique_ptr<VExpr> mathOperand(std::unique_ptr<VExpr> V) {
   if (!V || !V->Ty.isInt() || evaluatedIntMode(V.get()) == VIntMode::Math)
@@ -4573,6 +4594,8 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
         return nullptr;
       }
     }
+    if (*Op == VBinOp::Shl)
+      return shiftLeft(std::move(L), std::move(R), Ty, E->getExprLoc(), Ctx);
     return std::make_unique<VBinOpExpr>(*Op, std::move(L), std::move(R), Ty,
                                         E->getExprLoc());
   }
@@ -5208,8 +5231,12 @@ ASTConverter::convertAssignmentValue(const BinaryOperator *Assignment) {
         std::make_unique<VCastExpr>(std::move(LHS), LHSSourceTy,
                                     LHSComputationTy, Assignment->getExprLoc());
   }
-  std::unique_ptr<VExpr> Value = std::make_unique<VBinOpExpr>(
-      Op, std::move(LHS), std::move(RHS), ResultTy, Assignment->getExprLoc());
+  std::unique_ptr<VExpr> Value =
+      Op == VBinOp::Shl
+          ? shiftLeft(std::move(LHS), std::move(RHS), ResultTy,
+                      Assignment->getExprLoc(), Ctx)
+          : std::make_unique<VBinOpExpr>(Op, std::move(LHS), std::move(RHS),
+                                         ResultTy, Assignment->getExprLoc());
   if (!sameRepresentation(ResultTy, TargetTy))
     return std::make_unique<VCastExpr>(std::move(Value), ResultTy, TargetTy,
                                        Assignment->getExprLoc());
