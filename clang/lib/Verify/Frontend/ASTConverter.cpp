@@ -2977,9 +2977,33 @@ ASTConverter::convertLoopFootprints(const LoopContractInfo &LCI) {
   return Out;
 }
 
+/// A loop whose condition is the constant false never repeats its body.
+static bool neverRepeats(const Stmt *Loop, const ASTContext &Ctx) {
+  const Expr *Cond = nullptr;
+  if (const auto *W = dyn_cast<WhileStmt>(Loop))
+    Cond = W->getCond();
+  else if (const auto *D = dyn_cast<DoStmt>(Loop))
+    Cond = D->getCond();
+  else if (const auto *F = dyn_cast<ForStmt>(Loop))
+    Cond = F->getCond();
+  if (!Cond || Cond->isValueDependent())
+    return false;
+  std::optional<llvm::APSInt> Value = Cond->getIntegerConstantExpr(Ctx);
+  return Value && Value->isZero();
+}
+
+std::unique_ptr<VExpr> ASTConverter::convertLoopCondition(const Stmt *Loop,
+                                                          const Expr *Cond) {
+  if (neverRepeats(Loop, Ctx))
+    return std::make_unique<VLiteralExpr>(false, VType::makeBool(),
+                                          Cond->getExprLoc());
+  return convertExpr(Cond);
+}
+
 bool ASTConverter::checkLoopTermination(const Stmt *Loop, bool HasMeasure) {
   const LoopContractInfo *LCI = Ctx.getLoopContract(Loop);
   const bool MayDiverge = LCI && LCI->MayDiverge.isValid();
+  const bool Terminates = HasMeasure || neverRepeats(Loop, Ctx);
   if (InGhost || CurrentFn->IsProof) {
     if (MayDiverge) {
       Errors.push_back(CurrentFn->Name +
@@ -2987,7 +3011,7 @@ bool ASTConverter::checkLoopTermination(const Stmt *Loop, bool HasMeasure) {
                        "cppverify::decreases(*) is not allowed");
       return false;
     }
-    if (!HasMeasure) {
+    if (!Terminates) {
       Errors.push_back(CurrentFn->Name +
                        ": proof-only loops require a decreases clause");
       return false;
@@ -2997,7 +3021,7 @@ bool ASTConverter::checkLoopTermination(const Stmt *Loop, bool HasMeasure) {
   if (MayDiverge) {
     if (CurrentFn->DivergenceLoc.isInvalid())
       CurrentFn->DivergenceLoc = LCI->MayDiverge;
-  } else if (!HasMeasure && !CurrentFn->IsSpec &&
+  } else if (!Terminates && !CurrentFn->IsSpec &&
              CurrentFn->UnmeasuredLoop.isInvalid()) {
     CurrentFn->UnmeasuredLoop = Loop->getBeginLoc();
   }
@@ -6021,7 +6045,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
                        ": while condition declarations are unsupported");
       return Out;
     }
-    auto Cond = convertExpr(WS->getCond());
+    auto Cond = convertLoopCondition(WS, WS->getCond());
     if (!Cond)
       return Out;
     std::vector<std::unique_ptr<VExpr>> Invariants;
@@ -6069,7 +6093,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     // observed. Preserve definite initialization from that mandatory pass.
     const std::set<std::string> AfterFirst = InitializedValues;
     const bool AfterFirstReachable = InitializationPathReachable;
-    auto Cond = convertExpr(DS->getCond());
+    auto Cond = convertLoopCondition(DS, DS->getCond());
     if (!Cond) {
       InitializedValues = Before;
       InitializationPathReachable = BeforeReachable;
@@ -6129,7 +6153,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       leaveAutomaticScope(Out, FS->getEndLoc());
       return Out;
     }
-    auto Cond = convertExpr(FS->getCond());
+    auto Cond = convertLoopCondition(FS, FS->getCond());
     if (!Cond) {
       leaveAutomaticScope(Out, FS->getEndLoc());
       return Out;
