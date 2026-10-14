@@ -180,6 +180,9 @@ Every result that is not a proof carries one stable reason code (text
      - Lean export or certification could not complete.
    * - ``cache.corrupt``, ``cache.io-failed``
      - The proof cache could not be read; the proof is not taken from it.
+   * - ``interrupted``
+     - The run was stopped with Ctrl-C before the function's verification
+       ended (``Interrupted: f``).
 
 Other results that are not counterexamples:
 
