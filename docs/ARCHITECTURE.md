@@ -1587,7 +1587,19 @@ or two milliseconds never returned), so `Z3Encoder::check` interrupts a
 check again, every 50 ms from 100 ms past its time, until it returns.
 `Z3Encoder::interrupt`, which races use, is sticky the same way: a stopped
 encoder's checks return `unknown` at once, and a running one is interrupted
-until it returns. Source-location annotation takes a lock, since
+until it returns. Ctrl-C stops the whole process the same way:
+`cpp-verify` installs `requestInterrupt` as LLVM's interrupt function, which
+only sets a flag, and every check's watchdog, the cvc5 process loop, and the
+certifier's clock poll it, so running queries stop and none starts. The
+driver reports each function whose verification had not ended as
+`Interrupted` (reason `interrupted`), keeping its verdicts, hidden, for what
+they establish, and the tool exits with 130; a second Ctrl-C ends the
+process, since LLVM restores the default handler before it calls the
+interrupt function. Every solver is created with Z3's `ctrl_c` parameter
+off: otherwise each check swaps Z3's own SIGINT handler in, Z3 keeps the
+handlers of concurrent checks in one unsynchronized stack, and Ctrl-C ran the
+handler of a finished check (a crash report, then a run that went on).
+Source-location annotation takes a lock, since
 the source manager caches its last lookup. Lean stays serial, and the
 compile-time verifier keeps a single job.
 
