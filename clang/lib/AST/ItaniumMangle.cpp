@@ -5023,6 +5023,11 @@ recurse:
   }
 
   // FIXME: invent manglings for all these.
+  case Expr::ForallExprClass:
+  case Expr::ExistsExprClass:
+  case Expr::ContractChooseExprClass:
+  case Expr::OldExprClass:
+  case Expr::ResultExprClass:
   case Expr::BlockExprClass:
   case Expr::ChooseExprClass:
   case Expr::CompoundLiteralExprClass:
