@@ -81,7 +81,15 @@ jobs:
             -DLLVM_CCACHE_BUILD=ON
 
       - name: Build
-        run: ninja -C build clang-test-depends
+        run: |
+          set -o pipefail
+          ninja -C build clang-test-depends 2>&1 | tee build.log
+
+      - name: Check that every switch over statement classes handles the contract classes
+        run: |
+          if grep -E "enumeration value '((Forall|Exists|Old|Result|ContractChoose)Expr|(ContractAssert|GhostBlock|HideSpec|RevealSpec|RevealWithFuel)Stmt)Class' not handled in switch" build.log; then
+            exit 1
+          fi
 
       - name: Report the versions
         run: |
