@@ -14396,8 +14396,8 @@ def err_contract_range_no_length : Error<
   "a modifies range needs a length: p[start : length]">;
 def err_contract_range_use : Error<
   "a range p[start : length] is a whole modifies footprint, not an operand">;
-def err_choose_in_executable_code : Error<
-  "cppverify::choose exists only for verification and cannot be used in "
+def err_verification_construct_in_executable_code : Error<
+  "cppverify::%0 exists only for verification and cannot be used in "
   "executable code; use it in a contract, ghost block, or spec or proof "
   "function">;
 def err_ghost_variable_in_executable_code : Error<
