@@ -12,7 +12,9 @@ Contract expressions
 - collection operations of ``<cppverify.h>`` (``s.len()``, ``s[i]``,
   ``a.contains(x)``, ``m[k]``, ...)
 
-Must be contextually ``bool`` where used as conditions.
+Must be contextually ``bool`` where used as conditions. They exist only for
+verification: a quantifier or a ``cppverify::choose`` in executable code is an
+error, outside an unevaluated operand such as ``sizeof``.
 
 The range ``[lo, hi)`` may be **symbolic** (e.g. ``cppverify::forall(i, 0, n, ...)``).
 A bounded quantifier reaches the solver as a quantifier, whatever its range:
