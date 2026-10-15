@@ -36,6 +36,8 @@ struct PassiveStmt {
 struct PassiveExitAssert {
   ProofObligationKind ProofKind = ProofObligationKind::Postcondition;
   std::unique_ptr<VExpr> Cond;
+  /// What an unsupported obligation stands for.
+  std::string Note = {};
 };
 
 enum class PassiveTraceKind {
