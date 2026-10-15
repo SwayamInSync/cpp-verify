@@ -22209,6 +22209,12 @@ static ICEDiag CheckICE(const Expr* E, const ASTContext &Ctx) {
   case Expr::CXXParenListInitExprClass:
   case Expr::HLSLOutArgExprClass:
   case Expr::CXXExpansionSelectExprClass:
+  // cpp-verify: contract expressions have no value at run time.
+  case Expr::ForallExprClass:
+  case Expr::ExistsExprClass:
+  case Expr::ContractChooseExprClass:
+  case Expr::OldExprClass:
+  case Expr::ResultExprClass:
     return ICEDiag(IK_NotICE, E->getBeginLoc());
 
   case Expr::MemberExprClass: {
