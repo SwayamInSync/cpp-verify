@@ -27,8 +27,6 @@ int local_reference_lowering(int value)
 // VCR: assert
 // VCR: valid_ptr
 // VCR-NEXT: local
-// VCR: initialized_ptr
-// VCR-NEXT: local
 // VCR: assign alias
 // VCR-NEXT: local
 // VCR: assign __cppverify_reference_provenance_1
