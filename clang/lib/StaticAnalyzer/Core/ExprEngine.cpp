@@ -1846,6 +1846,18 @@ void ExprEngine::Visit(const Stmt *S, ExplodedNode *Pred,
     case Stmt::WhileStmtClass:
     case Stmt::DeferStmtClass:
     case Expr::MSDependentExistsStmtClass:
+    // cpp-verify: the CFG omits ghost code and contract statements, and
+    // contract expressions occur only inside those or in contract clauses.
+    case Stmt::ContractAssertStmtClass:
+    case Stmt::GhostBlockStmtClass:
+    case Stmt::RevealWithFuelStmtClass:
+    case Stmt::HideSpecStmtClass:
+    case Stmt::RevealSpecStmtClass:
+    case Expr::ForallExprClass:
+    case Expr::ExistsExprClass:
+    case Expr::ContractChooseExprClass:
+    case Expr::OldExprClass:
+    case Expr::ResultExprClass:
       llvm_unreachable("Stmt should not be in analyzer evaluation loop");
     case Stmt::ImplicitValueInitExprClass:
       // These nodes are shared in the CFG and would case caching out.
