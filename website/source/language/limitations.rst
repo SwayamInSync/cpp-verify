@@ -221,12 +221,13 @@ Contracted executable free functions may accept ``T&`` and ``const T&`` when
 ``T`` is ``bool``, integral, or enum. VCR retains the binding as an immutable
 address: reading loads the referent, assignment stores through that address,
 and ``cppverify::old(ref)`` selects the entry heap. Every reference receives an implicit
-non-null, live, and initialized precondition.
+non-null and live precondition, and the body is verified as reading the
+referent initialized.
 
 ``cppverify::modifies(ref)`` is an open region rooted at the referent, like
 ``cppverify::modifies(*p)``. Default object-range disjointness and ``cppverify::aliases`` apply across
 pointer and reference parameters. A call may bind a reference from another
-supported reference, an initialized ordinary scalar local, or a direct
+supported reference, an ordinary scalar local, or a direct
 dereference such as ``set(*p, value)``. Local references may bind those direct
 forms and chain through other local aliases; a pointer-derived binding
 snapshots the address.
@@ -247,8 +248,14 @@ objects/bindings are also rejected; outer automatic locals and loop-local aliase
 are supported. Pointer leaves may retain abstract pointer values, but storing a
 provenance-bearing local dynamic pointer fails closed until pointer provenance is
 represented in a parallel heap.
-The initialized-entry rule excludes output-only references to indeterminate
-storage. Reference reads participate in the existing argument-order safety
+A function is verified as reading its reference and pointer parameters'
+storage, and its callers a returned pointer's, as initialized. C++ requires
+neither, so a call that passes storage not yet initialized (an out-parameter,
+``int a; init(a);``) and a function that returns a pointer to such storage are
+``Unresolved`` with reason ``construct.unsupported``, not failures, until a
+function can state that it writes a parameter before it reads it. A local
+reference may bind storage not yet initialized: a read through it checks that
+the object is initialized, as C++ does. Reference reads participate in the existing argument-order safety
 check.
 
 Local scalar dynamic storage
