@@ -1819,6 +1819,13 @@ code:
   its own line, the body's brace below. In a clause, the colon of a range
   footprint `p[lo : n]` is a range separator (`TT_ArraySectionColon`), never
   an Objective-C message's.
+- Clang's own analyses meet the constructs by their meaning. The CFG leaves
+  out ghost code and contract statements, which emit no code, so the static
+  analyzer and the CFG-based warnings continue past them. A contract
+  expression cannot throw (`noexcept`), is not an integral constant
+  expression, has its operands' side effects, and is reported as not yet
+  mangled where a mangled name would contain it. CI fails when a `switch` over
+  statement classes misses one of the contract classes.
 
 ## IR Debugging (`--dump-ir`)
 
