@@ -310,7 +310,7 @@ class Z3VerifyBackend : public VerifyBackend {
   std::optional<unsigned> CollectionTimeoutMs;
   unsigned ResourceLimit;
   unsigned Jobs;
-  llvm::ThreadPoolInterface *Pool;
+  llvm::StdThreadPool *Pool;
   uint64_t MaxQueryNodes;
   MachineIntegerEncoding IntegerEncoding;
   bool SkipWholeModuleRetry;

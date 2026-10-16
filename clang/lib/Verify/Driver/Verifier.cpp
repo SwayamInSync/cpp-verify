@@ -11,6 +11,7 @@
 #include "../Backend/ObligationSimplify.h"
 #include "../Backend/ProofCache.h"
 #include "../Backend/SpecAxioms.h"
+#include "../Backend/TaskGroup.h"
 #include "../Frontend/ASTConverter.h"
 #include "../IR/VStmt.h"
 #include "../Transform/LoopUnroll.h"
@@ -3044,7 +3045,7 @@ public:
       DumpStream.flush();
     };
     if (Parallel) {
-      llvm::ThreadPoolTaskGroup Group(*Pool);
+      TaskGroup Group(*Pool);
       for (size_t I = 0; I != Functions.size(); ++I)
         Group.async([&verifyFunction, I] { verifyFunction(I); });
       Group.wait();
@@ -3484,7 +3485,7 @@ public:
             Checked, Pending.Result, InterfaceMap, *Pending.Fn, Lemmas, *By);
       };
       if (Parallel) {
-        llvm::ThreadPoolTaskGroup Group(*Pool);
+        TaskGroup Group(*Pool);
         for (size_t I = 0; I != Confirmations.size(); ++I)
           Group.async([&confirm, I] { confirm(I); });
         Group.wait();

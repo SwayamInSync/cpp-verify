@@ -3,6 +3,7 @@
 #include "ExtremeSearch.h"
 #include "ObligationSerialization.h"
 #include "ObligationSimplify.h"
+#include "TaskGroup.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
@@ -3505,7 +3506,7 @@ Z3VerifyBackend::verifyObligations(const ObligationModule &Module,
     std::optional<llvm::StdThreadPool> OwnPool;
     if (!Pool)
       OwnPool.emplace(llvm::heavyweight_hardware_concurrency(Jobs));
-    llvm::ThreadPoolTaskGroup Group(Pool ? *Pool : *OwnPool);
+    TaskGroup Group(Pool ? *Pool : *OwnPool);
     std::vector<std::shared_future<VerifyResult>> Futures;
     Futures.reserve(Module.Obligations.size());
     for (size_t I = 0; I != Module.Obligations.size(); ++I) {
@@ -3628,7 +3629,7 @@ VerifyResult Z3VerifyBackend::solveQuery(
   std::optional<llvm::StdThreadPool> OwnPool;
   if (!Pool)
     OwnPool.emplace(llvm::heavyweight_hardware_concurrency(2));
-  llvm::ThreadPoolTaskGroup Group(Pool ? *Pool : *OwnPool);
+  TaskGroup Group(Pool ? *Pool : *OwnPool);
   VerifyResult Plain;
   Group.async([&] {
     Plain = solve(false, &Pair);
@@ -3850,7 +3851,7 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
   Race Rivals;
   Race WholeRace;
   std::optional<llvm::StdThreadPool> OwnPool;
-  std::optional<llvm::ThreadPoolTaskGroup> Group;
+  std::optional<TaskGroup> Group;
   std::shared_future<std::vector<VerifyResult>> Ordered;
   if (Racing) {
     // Without the driver's pool, one of its own serves both strategies.

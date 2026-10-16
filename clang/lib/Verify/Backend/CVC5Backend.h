@@ -31,7 +31,7 @@ class CVC5VerifyBackend : public VerifyBackend {
   std::atomic<bool> Cancelled{false};
   unsigned ResourceLimit;
   unsigned Jobs;
-  llvm::ThreadPoolInterface *Pool;
+  llvm::StdThreadPool *Pool;
   std::optional<std::chrono::steady_clock::time_point> Deadline;
   uint64_t MaxQueryNodes;
   MachineIntegerEncoding IntegerEncoding;
