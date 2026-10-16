@@ -242,7 +242,9 @@ private:
   void beginInitializationTracking(const FunctionDecl *FD);
   bool requireInitialized(const ValueDecl *D, const FieldDecl *Field = nullptr);
   void markInitialized(const ValueDecl *D, const FieldDecl *Field = nullptr);
-  bool referencesDynamicPointer(const Expr *E) const;
+  /// Whether \p E's value is an address computed from a dynamic-storage
+  /// pointer. A value read through one is not: dynamic objects are scalars.
+  bool isDynamicAddress(const Expr *E) const;
   const VarDecl *directDynamicPointer(const Expr *E) const;
   bool dynamicPointerSourceTypesMatch(const VarDecl *Target,
                                       const Expr *Source) const;
