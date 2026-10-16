@@ -229,6 +229,14 @@ CXCursor cxcursor::MakeCXCursor(const Stmt *S, const Decl *Parent,
     K = CXCursor_UnexposedStmt;
     break;
 
+  case Stmt::ContractAssertStmtClass:
+  case Stmt::GhostBlockStmtClass:
+  case Stmt::HideSpecStmtClass:
+  case Stmt::RevealSpecStmtClass:
+  case Stmt::RevealWithFuelStmtClass:
+    K = CXCursor_UnexposedStmt;
+    break;
+
   case Stmt::GCCAsmStmtClass:
     K = CXCursor_GCCAsmStmt;
     break;
@@ -348,6 +356,11 @@ CXCursor cxcursor::MakeCXCursor(const Stmt *S, const Decl *Parent,
   case Stmt::HLSLOutArgExprClass:
   case Stmt::OpenACCAsteriskSizeExprClass:
   case Stmt::CXXExpansionSelectExprClass:
+  case Stmt::ForallExprClass:
+  case Stmt::ExistsExprClass:
+  case Stmt::ContractChooseExprClass:
+  case Stmt::OldExprClass:
+  case Stmt::ResultExprClass:
     K = CXCursor_UnexposedExpr;
     break;
 
