@@ -39,8 +39,9 @@ parameters for boolean, integral, and enum referents:
 
 The VCR parameter is an immutable address. Reading ``left`` loads the heap,
 assignment stores through the address, and ``cppverify::old(left)`` reads the entry heap.
-CppVerify adds a non-null, live, and initialized entry precondition for each
-reference. Mutable pointer/reference parameter pairs are object-range disjoint
+CppVerify adds a non-null and live entry precondition for each reference, and
+verifies the body as reading the referent initialized; a call that passes
+storage not yet initialized is ``Unresolved`` (``construct.unsupported``). Mutable pointer/reference parameter pairs are object-range disjoint
 by default (over whole ``valid(p, n)`` extents);
 ``cppverify::aliases(left, right)`` permits same-object aliasing.
 

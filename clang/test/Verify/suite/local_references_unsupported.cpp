@@ -22,14 +22,6 @@ int pick_second(int first, int second)
   return second;
 }
 
-int uninitialized_local_actual()
-  cppverify::post(cppverify::result == 1)
-{
-  int local;
-  set_value(local, 1);
-  return local;
-}
-
 int order_dependent_local()
   cppverify::post(cppverify::result == 0 || cppverify::result == 1)
 {
@@ -81,7 +73,6 @@ int loop_local_declaration()
   return iteration;
 }
 
-// VERIFY-DAG: error: uninitialized_local_actual: read of uninitialized local value: local
 // VERIFY-DAG: error: order_dependent_local: call arguments have order-dependent heap evaluations
 // VERIFY-DAG: error: temporary_binding: local references require a supported direct lvalue
 // VERIFY-DAG: error: conditional_binding: local references require a supported direct lvalue

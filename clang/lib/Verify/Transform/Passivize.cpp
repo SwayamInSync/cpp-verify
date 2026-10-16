@@ -1565,6 +1565,70 @@ static constexpr const char *DifferentObjectsNote =
 static constexpr const char *UnknownOriginNote =
     "an operand of this pointer difference was loaded from memory or "
     "returned by a call, so the object it addresses is not known";
+static constexpr const char *OutParameterNote =
+    "binding a reference or pointer parameter to storage that is not "
+    "initialized, since the callee is verified as reading initialized "
+    "storage";
+static constexpr const char *UninitializedResultNote =
+    "returning a pointer to storage that is not initialized, since callers "
+    "read a returned pointer's storage as initialized";
+
+/// \p E with every application of \p Op taken to hold.
+static std::unique_ptr<VExpr> assumingHolds(const VExpr *E, VUnaryOp Op) {
+  auto Out = cloneVExpr(E);
+  std::function<void(std::unique_ptr<VExpr> &)> Replace =
+      [&](std::unique_ptr<VExpr> &Slot) {
+        if (Slot->K == VExpr::UnaryOp &&
+            static_cast<const VUnaryOpExpr &>(*Slot).Op == Op) {
+          Slot = makeBoolLiteral(true, Slot->Loc);
+          return;
+        }
+        forEachVExprChildSlot(Slot.get(), Replace);
+      };
+  Replace(Out);
+  return Out;
+}
+
+static bool mentionsUnary(const VExpr *E, VUnaryOp Op) {
+  if (!E)
+    return false;
+  if (E->K == VExpr::UnaryOp &&
+      static_cast<const VUnaryOpExpr *>(E)->Op == Op)
+    return true;
+  bool Found = false;
+  forEachVExprChild(E, [&](const VExpr *Child) {
+    Found = Found || mentionsUnary(Child, Op);
+  });
+  return Found;
+}
+
+/// A generated validity clause asks for valid and initialized storage. C++
+/// asks for the first; a function is verified as reading its pointer
+/// parameters' storage, and its callers its pointer result's, as
+/// initialized, which C++ does not require. Where such a clause is checked,
+/// the two are separate obligations, and failing the second stands for a
+/// construct the verifier does not model. Both predicates occur positively,
+/// so the two parts together are the clause.
+static std::vector<std::tuple<ProofObligationKind, std::unique_ptr<VExpr>,
+                              std::string>>
+checkedClause(ProofObligationKind Kind, std::unique_ptr<VExpr> Clause,
+              const char *InitializationNote) {
+  std::vector<std::tuple<ProofObligationKind, std::unique_ptr<VExpr>,
+                         std::string>>
+      Parts;
+  if (Kind != ProofObligationKind::PointerValidity ||
+      !mentionsUnary(Clause.get(), VUnaryOp::InitializedPtr)) {
+    Parts.emplace_back(Kind, std::move(Clause), "");
+    return Parts;
+  }
+  Parts.emplace_back(ProofObligationKind::PointerValidity,
+                     assumingHolds(Clause.get(), VUnaryOp::InitializedPtr),
+                     "");
+  Parts.emplace_back(ProofObligationKind::Unsupported,
+                     assumingHolds(Clause.get(), VUnaryOp::ValidPtr),
+                     InitializationNote);
+  return Parts;
+}
 
 static std::pair<ProofObligationKind, std::unique_ptr<VExpr>>
 samePointerDifferenceOrigin(const VExpr *L, const VExpr *R,
@@ -4489,7 +4553,10 @@ public:
         Cond->EndLoc = Post->EndLoc;
         P.ExitAsserts.push_back({Check.Kind, std::move(Cond)});
       }
-      P.ExitAsserts.push_back({postconditionKind(Fn, I), std::move(BoundPost)});
+      for (auto &[Kind, Part, Note] :
+           checkedClause(postconditionKind(Fn, I), std::move(BoundPost),
+                         UninitializedResultNote))
+        P.ExitAsserts.push_back({Kind, std::move(Part), std::move(Note)});
     }
     if (Fn.IsProof && !Fn.IsSpec)
       for (const auto &[Name, Entry] : OldState)
@@ -4786,8 +4853,11 @@ public:
                     substParams(Check.Cond.get(), ParamMap, Ctx, EntryHeap),
                     nullptr, C.Loc, Check.Kind);
       emitMathBridge(P, BoundPre.get(), nullptr, C.Loc);
-      emitPassive(P, PassiveStmt::Assert, std::move(BoundPre), nullptr, C.Loc,
-                  preconditionKind(*Callee, I));
+      for (auto &[Kind, Part, Note] :
+           checkedClause(preconditionKind(*Callee, I), std::move(BoundPre),
+                         OutParameterNote))
+        emitPassive(P, PassiveStmt::Assert, std::move(Part), nullptr, C.Loc,
+                    Kind, std::move(Note));
     }
 
     // A call within the caller's recursion cycle lowers the measure below its
