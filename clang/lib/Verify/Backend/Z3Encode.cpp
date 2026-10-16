@@ -130,7 +130,52 @@ void collectModelVariables(const VCExpr *Expression,
 
 } // namespace
 
-Z3Encoder::Z3Encoder() : Ctx(), Solver(Ctx) {}
+namespace {
+/// The encoder of each live Z3 context, for its error handler.
+std::mutex APIErrorLock;
+std::map<Z3_context, Z3Encoder *> APIErrorEncoders;
+} // namespace
+
+Z3Encoder::Z3Encoder() : Ctx(), Solver(Ctx) {
+  {
+    std::lock_guard<std::mutex> Guard(APIErrorLock);
+    APIErrorEncoders[Ctx] = this;
+  }
+  Z3_set_error_handler(Ctx, &Z3Encoder::recordAPIError);
+}
+
+Z3Encoder::~Z3Encoder() {
+  std::lock_guard<std::mutex> Guard(APIErrorLock);
+  APIErrorEncoders.erase(Ctx);
+}
+
+void Z3Encoder::recordAPIError(Z3_context Context, Z3_error_code Code) {
+  Z3Encoder *Encoder = nullptr;
+  {
+    std::lock_guard<std::mutex> Guard(APIErrorLock);
+    if (auto It = APIErrorEncoders.find(Context); It != APIErrorEncoders.end())
+      Encoder = It->second;
+  }
+  if (!Encoder || Encoder->Checking || !Encoder->APIError.empty())
+    return;
+  Encoder->APIError = Z3_get_error_msg(Context, Code);
+  Encoder->markEncodingFailure("Z3 reported an error: " + Encoder->APIError);
+}
+
+VerifyResult Z3Encoder::withAPIError(VerifyResult Result) {
+  if (APIError.empty())
+    return Result;
+  {
+    std::lock_guard<std::mutex> Guard(CheckLock);
+    if (Stopped)
+      return Result;
+  }
+  VerifyResult Failed;
+  Failed.Status = VerifyStatus::Unresolved;
+  Failed.Reason = VerifyReason::EncodingFailure;
+  Failed.Message = "Z3 reported an error: " + APIError;
+  return Failed;
+}
 
 z3::sort Z3Encoder::intSort() { return Ctx.int_sort(); }
 z3::sort Z3Encoder::bvSort(unsigned BitWidth) { return Ctx.bv_sort(BitWidth); }
@@ -1743,6 +1788,7 @@ z3::check_result Z3Encoder::check(z3::solver &S, unsigned Ms) {
       return z3::unknown;
     CheckFinished = false;
   }
+  Checking = true;
   // Z3 forgets a cancellation that arrives inside one of its nested resource
   // scopes (leaving the scope clears it), whether from its own timeout or
   // from interrupt(). A check past its time, or stopped, is therefore
@@ -1780,6 +1826,7 @@ z3::check_result Z3Encoder::check(z3::solver &S, unsigned Ms) {
       z3::solver Reset(Ctx);
       (void)Reset.check();
     }
+    Checking = false;
   });
   return S.check();
 }
@@ -3108,6 +3155,12 @@ z3::check_result Z3Encoder::certifyModels(const ObligationModule &Module,
 VerifyResult Z3Encoder::verifyModule(const ObligationModule &Module,
                                      const LogicExpr *Query,
                                      std::optional<uint64_t> TraceEventCount) {
+  return withAPIError(decideModule(Module, Query, TraceEventCount));
+}
+
+VerifyResult Z3Encoder::decideModule(const ObligationModule &Module,
+                                     const LogicExpr *Query,
+                                     std::optional<uint64_t> TraceEventCount) {
   VerifyResult Out;
   QueryStart = std::chrono::steady_clock::now();
   // A step toward settling another module wants a proof or a certified
@@ -3354,7 +3407,7 @@ VerifyResult Z3Encoder::lowerModule(const ObligationModule &Module,
   auto EncodedGoal =
       encodeModule(Module, Module.CounterexampleQuery.get(), Out);
   if (!EncodedGoal)
-    return Out;
+    return withAPIError(std::move(Out));
   if (OS) {
     z3::expr_vector Facts = rangeFacts();
     for (unsigned I = 0; I != Facts.size(); ++I)
@@ -3371,7 +3424,7 @@ VerifyResult Z3Encoder::lowerModule(const ObligationModule &Module,
     *OS << EncodedGoal->to_string() << "\n";
   }
   Out.Status = VerifyStatus::Lowered;
-  return Out;
+  return withAPIError(std::move(Out));
 }
 
 VerifyResult

@@ -53,6 +53,16 @@ class Z3Encoder {
   bool UsedBitLevelOperation = false;
   bool EncodingFailed = false;
   std::string EncodingError;
+  /// The first error a Z3 call reported outside a check, which a check
+  /// reports itself as unknown. Z3 returns a null term and goes on.
+  std::string APIError;
+  bool Checking = false;
+  static void recordAPIError(Z3_context Context, Z3_error_code Code);
+  /// \p Result, unless a Z3 call failed in this unstopped encoder.
+  VerifyResult withAPIError(VerifyResult Result);
+  VerifyResult decideModule(const ObligationModule &Module,
+                            const LogicExpr *Query,
+                            std::optional<uint64_t> TraceEventCount);
   std::chrono::steady_clock::time_point QueryStart;
   std::optional<unsigned> CertifyTimeoutMs;
   bool QuantifiedQuery = false;
@@ -272,6 +282,7 @@ class Z3Encoder {
 
 public:
   Z3Encoder();
+  ~Z3Encoder();
   void setTimeoutMs(unsigned Ms) { TimeoutMs = Ms; }
   /// The time one counterexample check may take; unset, half the timeout;
   /// 0, the query's own time.
