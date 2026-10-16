@@ -1804,7 +1804,10 @@ code:
 - libIndex indexes the contract expressions and construct references of each
   function and record, and loop contracts inside bodies, which gives clangd's
   find references, cross-file rename, and call hierarchy.
-- libclang exposes them as child cursors of the function and the loop.
+- libclang exposes them as child cursors of the function and the loop:
+  each construct is an unexposed expression or statement
+  (`CXCursor_UnexposedExpr`, `CXCursor_UnexposedStmt`) with its operands as
+  children.
 - `DeclPrinter` prints a function's clauses, one per line, after its
   declarator, and `cppverify::spec`/`cppverify::proof` as its specifier;
   `StmtPrinter` prints loop clauses and the constructs qualified. clangd's
