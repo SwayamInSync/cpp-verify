@@ -824,7 +824,9 @@ metadata.
 
 **Heap-reading specs:** a spec that reads memory, directly or through another
 spec, becomes a logical function with a leading `__spec_heap` parameter of sort
-`Heap`; its definitions read through that parameter. Each call site passes the
+`Heap`; its definitions read through that parameter, and a value read is the
+exact value of the machine cell, as the spec's integers are mathematical
+(a `bitvector32` sum of two reads wrapped before). Each call site passes the
 heap version passivization resolves for it, exactly as for a load, and
 modules containing such functions require the `heap-functions` logic feature.
 A spec with `cppverify::reads(p, n)` clauses is checked in its own module (`spec reads:`,

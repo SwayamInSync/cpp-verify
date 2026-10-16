@@ -365,6 +365,8 @@ cppverify::spec int fibo(int n)
   pointer parameters but never write it; each call is evaluated in the heap
   state a load at that point would read (the current state, the entry state
   inside `cppverify::old(...)`, or the call-site state of a callee contract).
+  A value read is the exact value of the cell, so arithmetic on it is
+  mathematical, like the spec's other integers.
 - Can be recursive (with `cppverify::decreases`). Its termination is proved without its
   own definition, so every recursive call must lower the measure whatever the
   spec's other calls return; a call inside `cppverify::forall`, `cppverify::exists`, or
