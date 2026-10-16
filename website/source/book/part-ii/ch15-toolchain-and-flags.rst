@@ -54,7 +54,7 @@ Other flags
 - ``cpp-verify --profile-quantifiers`` — for an unresolved quantified query,
   report how often each quantifier was instantiated (see
   :doc:`ch16-when-verification-fails`)
-- ``cpp-verify --unroll=N`` — loop bound for BMC
+- ``cpp-verify --unroll=N`` — loop bound for BMC, which it selects
 - ``cpp-verify --timeout=N`` — per-query solver timeout in ms (default 30000)
 - ``cpp-verify --collection-timeout=N`` — per-query timeout for queries over
   sequences, sets, multisets, or maps (default twice ``--timeout``)
@@ -74,10 +74,10 @@ Other flags
   runs (``--proof-cache-max-mb``, ``--proof-cache-max-entries`` bound it)
 - ``cpp-verify --diagnostics-format=json`` — emit versioned
   ``cppverify.diagnostic/1`` JSON Lines for verification results
-- ``cpp-verify --lean-out=FILE`` — with ``--backend=lean``, write a standalone
-  Lean scratch-pad
-- ``cpp-verify --backend=lean --lean-project=DIR`` — generate a preserved, pinned
-  Lean project
+- ``cpp-verify --lean-out=FILE`` — write a standalone Lean scratch-pad
+  (``--backend=lean``, which it selects)
+- ``cpp-verify --lean-project=DIR`` — generate a preserved, pinned Lean project
+  (``--backend=lean``, which it selects)
 - ``cpp-verify --lean-fallback=DIR`` — export the obligations Z3 left unproved
   in unresolved functions to Lean (``--lean-fallback-scope=all`` exports every
   obligation of those functions)

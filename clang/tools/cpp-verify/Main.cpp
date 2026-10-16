@@ -541,6 +541,53 @@ static void printReplayJSON(const verify::ObligationModule &Module,
   llvm::outs() << llvm::formatv("{0}\n", llvm::json::Value(std::move(Record)));
 }
 
+/// Selects the backend that the only backend an option applies to, when no
+/// backend is named, and rejects an option the run would not use.
+static bool resolveOptions(bool Replay) {
+  auto given = [](const cl::Option &Option) {
+    return Option.getNumOccurrences() > 0;
+  };
+  if (!given(BackendOpt)) {
+    if (!LeanOut.empty() || !LeanProject.empty())
+      BackendOpt.setValue("lean");
+    else if (given(BMCUnroll) && !Replay)
+      BackendOpt.setValue("bmc");
+  }
+  const StringRef Backend = BackendOpt.getValue();
+  std::string Error;
+  if (Backend != "z3" && Backend != "cvc5" && Backend != "portfolio" &&
+      Backend != "race" && Backend != "lean" && Backend != "bmc")
+    Error = "unknown verification backend '" + Backend.str() +
+            "'; expected z3, cvc5, portfolio, race, lean, or bmc";
+  else if (!CVC5Path.empty() && Backend != "cvc5" && Backend != "portfolio" &&
+           Backend != "race")
+    Error = "--cvc5-path requires --backend=cvc5, --backend=portfolio, or "
+            "--backend=race";
+  else if (given(BMCUnroll) && !Replay && Backend != "bmc")
+    Error = "--unroll requires --backend=bmc";
+  else if (given(LeanFallbackScope) && LeanFallback.empty())
+    Error = "--lean-fallback-scope requires --lean-fallback";
+  else if ((given(ProofCacheMaxMB) || given(ProofCacheMaxEntries)) &&
+           ProofCache.empty())
+    Error = "--proof-cache-max-mb and --proof-cache-max-entries require "
+            "--proof-cache";
+  else if (ProfileQuantifiers && Replay)
+    Error = "--profile-quantifiers applies to source verification, not to "
+            "archive replay";
+  else if (ProfileQuantifiers && (Backend == "cvc5" || Backend == "lean"))
+    Error = "--profile-quantifiers requires a backend that runs Z3: z3, "
+            "portfolio, race, or bmc";
+  else if (given(IntEncoding) && Backend == "lean")
+    Error = "--int-encoding requires a backend that runs an SMT solver";
+  else if ((given(CheckUB) || given(NoCheckUB)) && Replay)
+    Error = "--check-ub and --no-check-ub apply to source verification; an "
+            "archive keeps the checks it was written with";
+  if (Error.empty())
+    return true;
+  llvm::errs() << "error: " << Error << "\n";
+  return false;
+}
+
 static int replayObligationArchive() {
   if (!ObligationOut.empty()) {
     llvm::errs() << "error: --obligation-in and --obligation-out are mutually "
@@ -615,6 +662,10 @@ static int replayObligationArchive() {
         Module.BMCTransform) {
       llvm::errs() << "error: cvc5, portfolio, and race replay do not yet "
                       "aggregate BMC-transformed archives; use --backend=bmc\n";
+      return 1;
+    }
+    if (!Module.BMCTransform && BMCUnroll.getNumOccurrences() > 0) {
+      llvm::errs() << "error: --unroll requires a BMC-transformed archive\n";
       return 1;
     }
     if (Module.BMCTransform && BMCUnroll.getNumOccurrences() > 0 &&
@@ -827,19 +878,8 @@ int main(int argc, const char **argv) {
     return 1;
   }
   CommonOptionsParser &OptionsParser = ExpectedParser.get();
-  StringRef Backend = BackendOpt.getValue();
-  if (Backend != "z3" && Backend != "cvc5" && Backend != "portfolio" &&
-      Backend != "race" && Backend != "lean" && Backend != "bmc") {
-    llvm::errs() << "error: unknown verification backend '" << Backend
-                 << "'; expected z3, cvc5, portfolio, race, lean, or bmc\n";
+  if (!resolveOptions(!ObligationIn.empty()))
     return 1;
-  }
-  if (!CVC5Path.empty() && Backend != "cvc5" && Backend != "portfolio" &&
-      Backend != "race") {
-    llvm::errs() << "error: --cvc5-path requires --backend=cvc5, "
-                    "--backend=portfolio, or --backend=race\n";
-    return 1;
-  }
   if (!ObligationIn.empty()) {
     const std::vector<std::string> &Sources = OptionsParser.getSourcePathList();
     if (Sources.size() != 1 || Sources.front() != ReplayPlaceholder) {

@@ -42,6 +42,11 @@ release it is built on, and each backend: the Z3 linked into it, and the cvc5 an
 (``lake``) it finds on ``PATH`` with their versions. cvc5 is tested with 1.1.2, and every
 Lean project pins ``leanprover/lean4:v4.32.2``.
 
+Every option must take effect in the run it is given to. An option that one backend alone
+uses selects that backend when ``--backend`` is not given (``--lean-out`` and
+``--lean-project`` select ``lean``, ``--unroll`` selects ``bmc``), and an option the run
+would ignore is an error.
+
 Backends
 --------
 
@@ -87,7 +92,7 @@ Backends
        not run Z3 and reports ``Exported``, never ``Verified``. Multi-function
        output uses one shared preamble and identity-qualified theorem names.
    * - ``--lean-project=DIR``
-     - With ``--backend=lean``, generate a pinned editable project. Generated
+     - With ``--backend=lean``, which it selects, generate a pinned editable project. Generated
        semantics live in ``CppVerify/Generated.lean``; reusable lemmas and
        per-obligation proof files are preserved across regeneration.
    * - ``--lean-certify``
@@ -108,10 +113,11 @@ Backends
      - ``unproved`` (default) exports only the obligations the solver did not
        prove individually; each keeps the goal name it has in a complete
        export. ``all`` exports every obligation of the function, so success
-       is ``Certified``.
+       is ``Certified``. Requires ``--lean-fallback``.
    * - ``--unroll=N``
-     - Maximum BMC loop bound. Source verification explores ``0..N``;
-       lower-only and archive replay retain one exact recorded bound.
+     - Maximum BMC loop bound, which selects ``--backend=bmc``. Source verification
+       explores ``0..N``; lower-only and archive replay retain one exact recorded bound,
+       which a replayed ``--unroll`` must match, and only a BMC archive has one.
    * - ``--check-ub``
      - The default. On every backend, prove each memory access lies in an
        object: a ``valid(p, n)`` precondition declares a buffer extent, and a
@@ -124,14 +130,16 @@ Backends
      - Turn memory checking off. Core expression definedness (overflow,
        division, shifts, and dereferences of null or dead storage) is always
        checked. Region ``cppverify::modifies`` footprints then forget the whole heap at
-       a call.
+       a call. Neither flag applies to archive replay: an archive keeps the checks
+       it was written with.
    * - ``--profile-quantifiers``
      - For a quantified Z3 query left unresolved, rerun it counting each
        quantifier's instantiations and report the busiest, by the source
        location of the quantifier (``note: the quantifier at L:C was
        instantiated N times, up to generation G``; JSON
        ``quantifier_profile``). Use it to find matching loops and poor
-       triggers. Needs a POSIX host.
+       triggers. Needs a POSIX host, source verification, and a backend that
+       runs Z3: ``z3``, ``portfolio``, ``race``, or ``bmc``.
    * - ``--timeout=N``
      - Per-query solver timeout in milliseconds (default 30000; ``0`` disables).
        A query that exceeds it is reported as unresolved instead of hanging.
@@ -160,7 +168,7 @@ Backends
        BMC: ``auto`` (default; integers reduced modulo ``2^N`` unless a query
        needs the bits of a non-constant operand, then bit-vectors),
        ``integer``, or ``bitvector``. Every mode is exact; only solver
-       performance differs. See :doc:`integers`.
+       performance differs. Not accepted with ``--backend=lean``. See :doc:`integers`.
    * - ``--jobs=N``
      - Solver workers, shared by every function and obligation: functions
        are verified at once, a function's obligations run on the same
@@ -178,10 +186,10 @@ Backends
        Corrupt or incompatible entries are rejected rather than treated as hits.
    * - ``--proof-cache-max-mb=N``
      - Bound proof-cache storage in MiB (default 1024; ``0`` disables the byte
-       limit).
+       limit). Requires ``--proof-cache``.
    * - ``--proof-cache-max-entries=N``
      - Bound the number of proof-cache records (default 100000; ``0`` disables
-       the entry limit).
+       the entry limit). Requires ``--proof-cache``.
    * - ``--diagnostics-format={text,json}``
      - Select Clang-style text (default) or versioned JSON Lines for verification
        results. JSON records use schema ``cppverify.diagnostic/1``.
