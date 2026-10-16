@@ -1324,6 +1324,71 @@ TEST(CertifyTest, UndecidedApplicationsAreKeptByTheModule) {
             CertifyOutcome::Certified);
 }
 
+// A choice is a value its axioms allow, whether or not the query assumes them.
+TEST(CertifyTest, ChoiceValuesMeetTheirAxioms) {
+  LogicFunctionDecl Zero;
+  Zero.Identity = "zero_id";
+  Zero.DisplayName = "zero";
+  Zero.Parameters.push_back({"n", math()});
+  Zero.ResultSort = math();
+  Zero.Choice = true;
+  Zero.Postconditions.push_back(boolean(
+      LogicExpr::Eq, variable(LogicFunctionDecl::ResultVariable, math()),
+      mathLiteral(0)));
+  ObligationModule Module = withFunction(std::move(Zero));
+  std::vector<Expr> Args;
+  Args.push_back(variable("x", math()));
+  Expr Query = negation(boolean(
+      LogicExpr::Eq, call(Module.LogicFunctions.at("zero_id"), std::move(Args)),
+      mathLiteral(0)));
+  TableModel Model;
+  Model.Constants["x"] = integerValue(5);
+
+  // A model choosing 1 breaks the axiom, which settles the choice there.
+  Model.DefaultApplication = integerValue(1);
+  CertifyResult Broken = certifyCounterexample(Module, *Query, Model);
+  EXPECT_EQ(Broken.Outcome, CertifyOutcome::Disputed);
+  ASSERT_EQ(Broken.Disputes.size(), 1u);
+  ASSERT_EQ(Broken.Disputes[0].Justification.size(), 1u);
+  EXPECT_EQ(Broken.Disputes[0].Justification[0].Of,
+            DefinitionInstance::Kind::Postcondition);
+  EXPECT_TRUE(Broken.Disputes[0].Violated);
+
+  // With the value the axiom allows, the claim holds.
+  Model.DefaultApplication = integerValue(0);
+  EXPECT_EQ(certifyCounterexample(Module, *Query, Model).Outcome,
+            CertifyOutcome::Inconsistent);
+
+  // A value whose axiom cannot be decided leaves the claim unchecked.
+  LogicFunctionDecl Open;
+  Open.Identity = "open_id";
+  Open.DisplayName = "open";
+  Open.Parameters.push_back({"n", math()});
+  Open.ResultSort = math();
+  LogicFunctionDecl Some;
+  Some.Identity = "some_id";
+  Some.DisplayName = "some";
+  Some.Parameters.push_back({"n", math()});
+  Some.ResultSort = math();
+  Some.Choice = true;
+  std::vector<Expr> OpenArgs;
+  OpenArgs.push_back(variable("n", math()));
+  Some.Postconditions.push_back(boolean(
+      LogicExpr::Eq, variable(LogicFunctionDecl::ResultVariable, math()),
+      call(Open, std::move(OpenArgs))));
+  ObligationModule Undecided = withFunction(std::move(Open));
+  Undecided.LogicFunctions.emplace("some_id", std::move(Some));
+  std::vector<Expr> SomeArgs;
+  SomeArgs.push_back(variable("x", math()));
+  Expr Unknown = negation(
+      boolean(LogicExpr::Eq,
+              call(Undecided.LogicFunctions.at("some_id"), std::move(SomeArgs)),
+              mathLiteral(0)));
+  Model.DefaultApplication = integerValue(1);
+  EXPECT_EQ(certifyCounterexample(Undecided, *Unknown, Model).Outcome,
+            CertifyOutcome::Undetermined);
+}
+
 TEST(CertifyTest, MutualRecursionAndMachineResults) {
   // even(n) = n == 0 || odd(n - 1); odd(n) = n != 0 && even(n - 1), over u8.
   const LogicSort U8 = LogicSort::bitVector(8, false);

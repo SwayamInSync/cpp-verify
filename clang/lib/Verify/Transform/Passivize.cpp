@@ -2649,6 +2649,45 @@ struct FramedApplication {
 using ApplicationFilter =
     llvm::function_ref<bool(const VSpecCallExpr &, const VFunction &)>;
 
+/// A structural key of \p C under the quantifiers \p Enclosing, or false.
+static bool
+applicationKey(const VSpecCallExpr &C,
+               const std::vector<const VQuantifiedExpr *> &Enclosing,
+               std::string &Key) {
+  for (const VQuantifiedExpr *Q : Enclosing) {
+    Key += "forall " + Q->Binder;
+    if (!Q->Lo)
+      Key += " unbounded";
+    else if (!expressionKey(Q->Lo.get(), Key) ||
+             !expressionKey(Q->Hi.get(), Key))
+      return false;
+  }
+  // Applications in different memory states are different values.
+  Key += C.CalleeIdentity + '@' + C.HeapVar;
+  for (const auto &Arg : C.Args)
+    if (!expressionKey(Arg.get(), Key))
+      return false;
+  return true;
+}
+
+/// Whether \p E mentions the variable \p Name free.
+static bool mentionsFree(const VExpr *E, const std::string &Name) {
+  if (!E)
+    return false;
+  if (E->K == VExpr::Var)
+    return static_cast<const VVarExpr *>(E)->Name == Name;
+  if (E->K == VExpr::Forall || E->K == VExpr::Exists) {
+    const auto *Q = static_cast<const VQuantifiedExpr *>(E);
+    if (Q->Binder == Name)
+      return mentionsFree(Q->Lo.get(), Name) || mentionsFree(Q->Hi.get(), Name);
+  }
+  bool Found = false;
+  forEachVExprChild(E, [&](const VExpr *Child) {
+    Found = Found || mentionsFree(Child, Name);
+  });
+  return Found;
+}
+
 static void
 collectFramedApplications(const VExpr *E, const FunctionMap &FnMap,
                           std::vector<const VQuantifiedExpr *> &Enclosing,
@@ -2727,26 +2766,64 @@ collectFramedApplications(const VExpr *E, const FunctionMap &FnMap,
     if (It == FnMap.end() || !It->second || !Wanted(*C, *It->second))
       return;
     std::string Key;
-    for (const VQuantifiedExpr *Q : Enclosing) {
-      Key += "forall " + Q->Binder;
-      if (!Q->Lo)
-        Key += " unbounded";
-      else if (!expressionKey(Q->Lo.get(), Key) ||
-               !expressionKey(Q->Hi.get(), Key))
-        return;
-    }
-    // Applications in different memory states are different values.
-    Key += C->CalleeIdentity + '@' + C->HeapVar;
-    for (const auto &Arg : C->Args)
-      if (!expressionKey(Arg.get(), Key))
-        return;
-    Out.emplace(std::move(Key), FramedApplication{C, Enclosing});
+    if (applicationKey(*C, Enclosing, Key))
+      Out.emplace(std::move(Key), FramedApplication{C, Enclosing});
     return;
   }
   case VExpr::Literal:
   case VExpr::Var:
   case VExpr::Result:
     return;
+  }
+}
+
+void verify::addChoiceAxioms(std::vector<std::unique_ptr<PassiveStmt>> &Facts,
+                             size_t From, const FunctionMap &FnMap,
+                             std::set<std::string> &Seen, bool Theorem,
+                             ChoiceGuard Guard) {
+  auto Chosen = [](const VSpecCallExpr &, const VFunction &Spec) {
+    return Spec.IsChoice;
+  };
+  for (size_t I = From; I < Facts.size(); ++I) {
+    std::map<std::string, FramedApplication> Choices;
+    std::vector<const VQuantifiedExpr *> Outside;
+    collectFramedApplications(Facts[I]->Cond.get(), FnMap, Outside, Choices,
+                              Chosen);
+    for (const auto &[Found, Application] : Choices) {
+      const VSpecCallExpr &Call = *Application.Call;
+      // Its axiom holds outside the quantifiers it does not depend on, such
+      // as those of an axiom that applies the choice itself.
+      std::vector<const VQuantifiedExpr *> Binding;
+      for (auto Q = Application.Enclosing.rbegin();
+           Q != Application.Enclosing.rend(); ++Q)
+        if (mentionsFree(&Call, (*Q)->Binder) ||
+            llvm::any_of(Binding, [&](const VQuantifiedExpr *Inner) {
+              return mentionsFree(Inner->Lo.get(), (*Q)->Binder) ||
+                     mentionsFree(Inner->Hi.get(), (*Q)->Binder);
+            }))
+          Binding.insert(Binding.begin(), *Q);
+      std::string Key;
+      if (!applicationKey(Call, Binding, Key) || !Seen.insert(Key).second)
+        continue;
+      const VFunction &Choice = *FnMap.at(Call.CalleeIdentity);
+      std::unique_ptr<VExpr> Fact =
+          specApplicationFacts(Choice, Call.Args, &Call, Call.Loc,
+                               Call.ReadsHeap ? Call.HeapVar : std::string());
+      if (Fact && Guard)
+        Fact = Guard(std::move(Fact), Choice, Call);
+      if (!Fact)
+        continue;
+      for (auto Q = Binding.rbegin(); Q != Binding.rend(); ++Q)
+        Fact = std::make_unique<VForallExpr>(
+            (*Q)->Binder, cloneVExpr((*Q)->Lo.get()),
+            cloneVExpr((*Q)->Hi.get()), std::move(Fact), Call.Loc,
+            (*Q)->BinderType);
+      auto Instance = std::make_unique<PassiveStmt>();
+      Instance->K = PassiveStmt::Assume;
+      Instance->Theorem = Theorem;
+      Instance->Cond = std::move(Fact);
+      Facts.push_back(std::move(Instance));
+    }
   }
 }
 
@@ -3045,6 +3122,7 @@ addSpecPostInstances(PassiveProgram &P, const FunctionMap &FnMap,
     Instance->Cond = std::move(Fact);
     Facts.push_back(std::move(Instance));
   }
+  addChoiceAxioms(Facts, 0, FnMap, Seen, true);
   P.Stmts.insert(P.Stmts.begin(), std::make_move_iterator(Facts.begin()),
                  std::make_move_iterator(Facts.end()));
 }

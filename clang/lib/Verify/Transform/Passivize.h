@@ -3,6 +3,7 @@
 #define LLVM_CLANG_VERIFY_TRANSFORM_PASSIVIZE_H
 
 #include "../IR/VStmt.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include <map>
 #include <set>
 
@@ -112,6 +113,21 @@ struct PassiveProgram {
 };
 
 std::unique_ptr<VExpr> cloneAtEntryState(const VExpr *E);
+
+/// Restricts the axiom of a choice at an application to where a module may
+/// assume it.
+using ChoiceGuard = llvm::function_ref<std::unique_ptr<VExpr>(
+    std::unique_ptr<VExpr> Axiom, const VFunction &Choice,
+    const VSpecCallExpr &Call)>;
+
+/// Appends to \p Facts the axioms of every choice a fact from \p From on
+/// applies, read in the application's memory and quantified as it is, and
+/// so on for the choices those axioms apply: a choice is a value its axioms
+/// allow. \p Seen keys the applications that already have them.
+void addChoiceAxioms(std::vector<std::unique_ptr<PassiveStmt>> &Facts,
+                     size_t From, const FunctionMap &FnMap,
+                     std::set<std::string> &Seen, bool Theorem,
+                     ChoiceGuard Guard = nullptr);
 
 class Passivizer {
   FunctionMap FnMap;

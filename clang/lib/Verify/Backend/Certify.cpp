@@ -462,6 +462,14 @@ class Evaluator {
   std::map<std::string, Computed> Applications;
   std::vector<SpecDispute> Disputes;
   std::set<std::string> DisputeKeys;
+  /// The choice applications read from the model, whose values are
+  /// evidence only once checked against their axioms, and whether the
+  /// axioms excluded one of them.
+  std::vector<std::tuple<const LogicFunctionDecl *, std::vector<LogicValue>,
+                         LogicValue>>
+      ChoicesRead;
+  std::set<std::string> ChoiceKeys;
+  bool ExcludedChoice = false;
   std::vector<DefinitionInstance> Evaluated;
   /// The specs whose postconditions decided a value.
   std::set<std::string> Evidence;
@@ -2772,8 +2780,8 @@ class Evaluator {
       return coerce(LogicValue::boolean(F.Values[Node]), Function.ResultSort,
                     E->Sort, isSigned(Function.ResultSort));
     }
-    // A choice function means any interpretation that satisfies its axioms,
-    // which the query assumes: the model's is one.
+    // A choice function means any interpretation that satisfies its axioms:
+    // the model's value is evidence only where it does.
     if (!Function.Choice &&
         (Mode == View::Definitions || Model.defined(Function))) {
       const bool Closed = Scope.empty() && Active.empty();
@@ -2788,6 +2796,13 @@ class Evaluator {
       if (!Value && Failure.empty()) {
         return fail("the model gives no value for an application of " +
                     Function.DisplayName);
+      }
+      if (Value && Function.Choice && Mode == View::Definitions) {
+        std::string Key = Function.Identity;
+        for (const LogicValue &Argument : Args)
+          Key += "\x1f" + Argument.key();
+        if (ChoiceKeys.insert(Key).second)
+          ChoicesRead.push_back({&Function, Args, *Value});
       }
     }
     return coerce(std::move(Value), Function.ResultSort, E->Sort,
@@ -3356,8 +3371,55 @@ public:
     return Kept;
   }
 
+  /// Checks the model's value of each choice the evaluation read, and of
+  /// those the checks read in turn, against its axioms. A value they
+  /// exclude is no evidence, and its axioms there are a dispute. False when
+  /// they cannot be decided.
+  bool checkChoices() {
+    for (size_t I = 0; I < ChoicesRead.size(); ++I) {
+      const auto [Function, Args, Value] = ChoicesRead[I];
+      const std::string SavedFailure = Failure;
+      const bool SavedLimit = LimitInDefinition;
+      const size_t SavedBase = ScopeBase;
+      const size_t SavedSize = Scope.size();
+      ScopeBase = SavedSize;
+      for (unsigned J = 0; J != Args.size(); ++J)
+        Scope.emplace_back(Function->Parameters[J].Name, Args[J]);
+      Scope.emplace_back(LogicFunctionDecl::ResultVariable, Value);
+      Active.push_back(Function);
+      std::optional<bool> Allowed = true;
+      for (const auto &Axiom : Function->Postconditions) {
+        Allowed = truthOf(Axiom.get());
+        if (!Allowed || !*Allowed)
+          break;
+      }
+      Active.pop_back();
+      Scope.resize(SavedSize);
+      ScopeBase = SavedBase;
+      if (!Allowed) {
+        Failure = "whether the value " + Value.key() + " of " +
+                  shown(*Function, Args) + " meets its axiom: " + Failure;
+        return false;
+      }
+      Failure = SavedFailure;
+      LimitInDefinition = SavedLimit;
+      if (*Allowed)
+        continue;
+      ExcludedChoice = true;
+      Disputes.push_back(
+          {Function,
+           Args,
+           {{Function, Args, DefinitionInstance::Kind::Postcondition}},
+           false,
+           Value});
+    }
+    return true;
+  }
+
   const std::string &failure() const { return Failure; }
   bool limitInDefinition() const { return LimitInDefinition; }
+  /// A choice the model gives a value its axioms exclude.
+  bool excludedChoice() const { return ExcludedChoice; }
   const LogicExpr *wideQuantifier() const { return Wide; }
   const LogicExpr *deepApplication() const { return Deep; }
   std::vector<SpecDispute> takeDisputes() { return std::move(Disputes); }
@@ -3418,6 +3480,8 @@ CertifyResult verify::certifyCounterexample(const ObligationModule &Module,
   auto Run = [&] {
     Evaluator Definitions(Module, Model, Limits, View::Definitions);
     std::optional<LogicValue> Holds = Definitions.eval(&Query);
+    if (Holds && !Definitions.checkChoices())
+      Holds.reset();
     if (!Holds || Holds->K != LogicValue::Kind::Bool) {
       Result.Outcome = CertifyOutcome::Undetermined;
       Result.Detail =
@@ -3428,7 +3492,7 @@ CertifyResult verify::certifyCounterexample(const ObligationModule &Module,
         Result.DeepApplication = Definitions.deepApplication();
       return;
     }
-    if (Holds->Truth) {
+    if (Holds->Truth && !Definitions.excludedChoice()) {
       Result.Outcome = CertifyOutcome::Certified;
       Result.Evidence = Definitions.evidence();
       return;
@@ -3486,6 +3550,14 @@ std::optional<LogicValue> verify::evaluateTerm(const ObligationModule &Module,
   auto Run = [&] {
     Evaluator Definitions(Module, Model, Limits, View::Definitions);
     Value = Definitions.eval(&Term);
+    if (Value && !Definitions.checkChoices()) {
+      Value.reset();
+    } else if (Value && Definitions.excludedChoice()) {
+      Value.reset();
+      if (Failure)
+        *Failure = "the model gives a choice a value its axioms exclude";
+      return;
+    }
     if (!Value && Failure)
       *Failure = Definitions.failure();
   };

@@ -806,8 +806,12 @@ cppverify::spec int index_of(const int *a, int n, int x) { return cppverify::cho
   and otherwise an unspecified integer (Hilbert ε); `cppverify::choose(k, lo, hi, body)`
   chooses in `[lo, hi)`. Each `cppverify::choose` is a function of the values its body
   mentions, so it is the same for the same values.
-- The verifier knows only that: a claim true for some choices but not all
-  fails with a certified counterexample for another choice.
+- The verifier knows only that, and knows it wherever a proof meets a
+  choose, inside the unfoldings, postconditions, and induction hypotheses
+  it assumes too. A claim true for some choices but not all fails with a
+  certified counterexample for another choice, one that meets its body
+  where some value does. A counterexample whose choice cannot be checked
+  against its body is `counterexample.unchecked`.
 - `cppverify::choose` exists only for verification; Sema rejects it in executable code.
 
 ## Pointers and Memory
