@@ -28,7 +28,8 @@ int old_name(int x) {
 
 int with_using(int n) {
   using namespace cppverify;
-  return forall(k, 0, n, k >= 0); // expected-error {{'forall' is a cpp-verify construct only when qualified: write 'cppverify::forall'}}
+  cv::check(forall(k, 0, n, k >= 0)); // expected-error {{'forall' is a cpp-verify construct only when qualified: write 'cppverify::forall'}}
+  return n;
 }
 
 int clause_in_body(int x) {
