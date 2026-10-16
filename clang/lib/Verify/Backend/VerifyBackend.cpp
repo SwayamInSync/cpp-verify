@@ -6,6 +6,7 @@
 #include "ObligationSimplify.h"
 #include "Z3Encode.h"
 #include "llvm/ADT/ScopeExit.h"
+#include <atomic>
 #include <set>
 #include <thread>
 
@@ -453,9 +454,19 @@ llvm::StringRef verify::verifyReasonCode(VerifyReason Reason) {
     return "callee.contract";
   case VerifyReason::DecreasesMissing:
     return "decreases.missing";
+  case VerifyReason::Interrupted:
+    return "interrupted";
   }
   llvm_unreachable("unknown verification reason");
 }
+
+static std::atomic<bool> InterruptFlag{false};
+static_assert(std::atomic<bool>::is_always_lock_free,
+              "a signal handler sets the interrupt flag");
+
+void verify::requestInterrupt() { InterruptFlag.store(true); }
+
+bool verify::interruptRequested() { return InterruptFlag.load(); }
 
 VerifyResult VerifyBackend::verify(const ObligationModule &Module) {
   VerifyResult Result = verifyDirect(Module);
