@@ -524,7 +524,7 @@ void Parser::ParseFunctionContractClauses(ParsingDeclarator &D,
         ExprResult E = finishCppVerifyExpression(ParseAssignmentExpression());
         if (E.isInvalid())
           break;
-        if (!E.get()->getType()->isIntegerType())
+        if (!E.get()->isTypeDependent() && !E.get()->getType()->isIntegerType())
           Diag(E.get()->getExprLoc(), diag::err_contract_decreases_not_int);
         else
           I.Decreases.push_back(E.get());
@@ -660,6 +660,13 @@ void Parser::attachFunctionContract(Decl *Result,
               I.MayDiverge.isInvalid() && I.Inductive.isInvalid() &&
               I.BehaviorChecks.empty() && !I.IsSpec && !I.IsProof))
     return;
+  // Templates are not verified yet: their clauses are ignored, as a member
+  // function's are.
+  if (FD->isTemplated() && !I.IsSpec && !I.IsProof) {
+    Diag(FD->getLocation(), diag::warn_contract_template_unsupported)
+        << 0 << FD;
+    return;
+  }
   FunctionContractInfo &FCI = Ctx.getOrCreateFunctionContract(FD);
   if (FCI.ContractDecl && FCI.ContractDecl != FD) {
     Diag(FD->getLocation(), diag::err_contract_redeclaration);
@@ -814,7 +821,8 @@ void Parser::ParseLoopContractClauses(LoopContractInfo &Contract) {
           SkipUntil(tok::r_paren, StopAtSemi);
           return;
         }
-        if (!D.get()->getType()->isIntegerType()) {
+        if (!D.get()->isTypeDependent() &&
+            !D.get()->getType()->isIntegerType()) {
           Diag(D.get()->getExprLoc(), diag::err_contract_decreases_not_int);
           SkipUntil(tok::r_paren, StopAtSemi);
           return;
@@ -836,17 +844,27 @@ void Parser::ParseLoopContractClauses(LoopContractInfo &Contract) {
 }
 
 void Parser::attachLoopContract(StmtResult &Loop, LoopContractInfo &Contract) {
-  if (Loop.isUsable() &&
-      (!Contract.Invariants.empty() || !Contract.Decreases.empty() ||
-       Contract.MayDiverge.isValid() || !Contract.Modifies.empty()))
-    Actions.getASTContext().getOrCreateLoopContract(Loop.get()) =
-        std::move(Contract);
+  if (!Loop.isUsable() ||
+      (Contract.Invariants.empty() && Contract.Decreases.empty() &&
+       Contract.MayDiverge.isInvalid() && Contract.Modifies.empty()))
+    return;
+  if (const FunctionDecl *FD = Actions.getCurFunctionDecl();
+      FD && FD->isTemplated()) {
+    Diag(Loop.get()->getBeginLoc(), diag::warn_contract_template_unsupported)
+        << 0 << FD;
+    return;
+  }
+  Actions.getASTContext().getOrCreateLoopContract(Loop.get()) =
+      std::move(Contract);
 }
 
 /// Parse cppverify::type_invariant(expr); inside a class or struct body.
 void Parser::ParseTypeInvariant(Decl *TagDecl) {
   assert(isCppVerify(CppVerifyConstruct::TypeInvariant));
-  auto *RD = dyn_cast<CXXRecordDecl>(TagDecl);
+  auto *RD = dyn_cast_or_null<CXXRecordDecl>(TagDecl);
+  if (auto *Template = dyn_cast_or_null<ClassTemplateDecl>(TagDecl))
+    RD = Template->getTemplatedDecl();
+  const SourceLocation InvariantLoc = Tok.getLocation();
   ConsumeCppVerify();
   auto Finish = [&] {
     takePendingReferences(Actions.getASTContext(), RD,
@@ -882,7 +900,9 @@ void Parser::ParseTypeInvariant(Decl *TagDecl) {
     return Finish();
   }
   ConsumeParen();
-  if (!E.isInvalid()) {
+  if (!E.isInvalid() && RD->isDependentContext()) {
+    Diag(InvariantLoc, diag::warn_contract_template_unsupported) << 1 << RD;
+  } else if (!E.isInvalid()) {
     E = Actions.ActOnTypeInvariantExpr(E, RD);
     if (!E.isInvalid())
       Actions.getASTContext().getOrCreateTypeContract(RD).Invariants.push_back(
@@ -1342,7 +1362,8 @@ ExprResult Parser::ParseQuantifierExpr() {
 
   // Validate bound types: lo and hi must be integer.
   for (const ExprResult &Bound : {Lo, Hi})
-    if (Bound.isUsable() && !Bound.get()->getType()->isIntegerType()) {
+    if (Bound.isUsable() && !Bound.get()->isTypeDependent() &&
+        !Bound.get()->getType()->isIntegerType()) {
       Diag(Bound.get()->getExprLoc(),
            diag::err_contract_quantifier_bound_not_int);
       SkipUntil(tok::r_paren, StopAtSemi);

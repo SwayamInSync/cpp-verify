@@ -131,8 +131,11 @@ C++ feature boundaries
        recursion among functions of one kind (spec, proof, or executable).
      - Member functions (their contracts are ignored with a warning),
        templates (one without contracts stops nothing unless verified code
-       calls it), variadics, indirect calls, recursion through a function
-       that allocates or frees storage, and general link-time summaries.
+       calls it; the contracts of a function or class template compile,
+       instantiate, and are ignored with a warning, and one with contract
+       statements is reported), variadics, indirect calls, recursion through a
+       function that allocates or frees storage, and general link-time
+       summaries.
    * - Storage
      - Supported locals, constrained scalar dynamic storage, and inferred
        acyclic fresh-owned scalar factory results.
