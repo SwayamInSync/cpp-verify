@@ -502,29 +502,42 @@ static std::unique_ptr<VExpr> mathValueFits(const VCastExpr *C) {
 
 static std::unique_ptr<VExpr> mathCast(const VExpr *E);
 
-/// The converted value lies in the target enumeration's value range.
-static std::unique_ptr<VExpr> enumValueInRange(const VCastExpr *C) {
-  const VExpr *Inner = C->Inner.get();
+/// Whether a value of type \p Ty lies in its enumeration's value range: a
+/// machine value does, since only a conversion can produce one outside it and
+/// executable and proof code check every conversion. A spec converts without
+/// a check.
+static bool keepsEnumRange(const VType &Ty) {
+  return !Ty.EnumMin.empty() && Ty.IntMode == VIntMode::Machine;
+}
+
+/// \p Value, of an integer type or bool, lies in \p Enum's value range.
+static std::unique_ptr<VExpr> inEnumRange(const VExpr *Value, const VType &Enum,
+                                          SourceLocation Loc) {
   VType MathTy = VType::makeInt(VIntMode::Math, 64, true);
-  std::unique_ptr<VExpr> Value;
-  if (Inner->Ty.Kind == VTypeKind::Bool) {
-    Value = std::make_unique<VConditionalExpr>(
-        cloneVExpr(Inner), std::make_unique<VLiteralExpr>(1, MathTy, C->Loc),
-        std::make_unique<VLiteralExpr>(0, MathTy, C->Loc), MathTy, C->Loc);
-  } else if (Inner->Ty.IntMode == VIntMode::Math) {
-    Value = cloneVExpr(Inner);
+  std::unique_ptr<VExpr> Exact;
+  if (Value->Ty.Kind == VTypeKind::Bool) {
+    Exact = std::make_unique<VConditionalExpr>(
+        cloneVExpr(Value), std::make_unique<VLiteralExpr>(1, MathTy, Loc),
+        std::make_unique<VLiteralExpr>(0, MathTy, Loc), MathTy, Loc);
+  } else if (Value->Ty.IntMode == VIntMode::Math) {
+    Exact = cloneVExpr(Value);
   } else {
-    Value = mathCast(Inner);
+    Exact = mathCast(Value);
   }
   auto AtLeast = std::make_unique<VBinOpExpr>(
-      VBinOp::Ge, cloneVExpr(Value.get()),
-      std::make_unique<VLiteralExpr>(C->Ty.EnumMin, MathTy, C->Loc),
-      VType::makeBool(), C->Loc);
+      VBinOp::Ge, cloneVExpr(Exact.get()),
+      std::make_unique<VLiteralExpr>(Enum.EnumMin, MathTy, Loc),
+      VType::makeBool(), Loc);
   auto Below = std::make_unique<VBinOpExpr>(
-      VBinOp::Lt, std::move(Value),
-      std::make_unique<VLiteralExpr>(C->Ty.EnumMax, MathTy, C->Loc),
-      VType::makeBool(), C->Loc);
-  return makeAnd(std::move(AtLeast), std::move(Below), C->Loc);
+      VBinOp::Lt, std::move(Exact),
+      std::make_unique<VLiteralExpr>(Enum.EnumMax, MathTy, Loc),
+      VType::makeBool(), Loc);
+  return makeAnd(std::move(AtLeast), std::move(Below), Loc);
+}
+
+/// The converted value lies in the target enumeration's value range.
+static std::unique_ptr<VExpr> enumValueInRange(const VCastExpr *C) {
+  return inEnumRange(C->Inner.get(), C->Ty, C->Loc);
 }
 
 static std::unique_ptr<VExpr>
@@ -2124,9 +2137,11 @@ machineMathBridgeForExpr(const VExpr *E, const FunctionMap *FnMap,
 
   switch (E->K) {
   case VExpr::Literal:
+    return makeBoolLiteral(true, E->Loc);
   case VExpr::Var:
   case VExpr::Result:
-    return makeBoolLiteral(true, E->Loc);
+    return keepsEnumRange(E->Ty) ? inEnumRange(E, E->Ty, E->Loc)
+                                 : makeBoolLiteral(true, E->Loc);
   case VExpr::BinOp: {
     const auto *B = static_cast<const VBinOpExpr *>(E);
     bool BridgeLeft = BridgeMachineValue;
@@ -2200,10 +2215,14 @@ machineMathBridgeForExpr(const VExpr *E, const FunctionMap *FnMap,
   }
   case VExpr::Load: {
     const auto *Load = static_cast<const VLoadExpr *>(E);
-    return combineSafety(
+    auto Bridge = combineSafety(
         machineMathBridgeForExpr(Load->Ptr.get(), FnMap, false),
         machineMathBridgeForExpr(Load->AccessCondition.get(), FnMap, false),
         Load->Loc);
+    if (!keepsEnumRange(Load->Ty))
+      return Bridge;
+    return combineSafety(std::move(Bridge),
+                         inEnumRange(Load, Load->Ty, Load->Loc), Load->Loc);
   }
   case VExpr::Old:
     return machineMathBridgeForExpr(

@@ -440,7 +440,9 @@ C++ definedness coverage
 Always-on obligations currently cover signed arithmetic overflow, invalid
 division/remainder, invalid shifts, conversions to an enumeration outside its
 value range, non-null/live represented dereferences, supported local definite
-initialization, and local scalar dynamic lifetime errors.
+initialization, and local scalar dynamic lifetime errors. Since a conversion
+into an enumeration is checked, every executable or proof value of one,
+parameters and reads from memory included, is assumed to lie in its range.
 
 Memory checking (the default, off with ``--no-check-ub``) adds object
 bounds: an access or pointer step stays in the ``valid(p, n)`` extent or the
