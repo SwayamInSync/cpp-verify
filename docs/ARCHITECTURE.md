@@ -1795,7 +1795,9 @@ code:
   renaming a namespace alias updates every construct.
 - clang-format (`lib/Format/CppVerifyClauses.cpp`) lays out each clause after
   a function declarator or a loop head like a trailing `requires` clause: on
-  its own line, the body's brace below.
+  its own line, the body's brace below. In a clause, the colon of a range
+  footprint `p[lo : n]` is a range separator (`TT_ArraySectionColon`), never
+  an Objective-C message's.
 
 ## IR Debugging (`--dump-ir`)
 

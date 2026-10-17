@@ -592,7 +592,7 @@ sees contracts exactly as the compiler does. With them:
 - completion after ``cv::`` lists the constructs with their documentation, and the
   ``<cppverify.h>`` collections;
 - ``clang-format`` puts each clause on its own line and the body's brace below them, as it
-  does for a trailing ``requires`` clause.
+  does for a trailing ``requires`` clause, and writes a range footprint as ``p[lo : n]``.
 
 clangd needs ``-fverify-contracts`` in each file's compile command. A
 ``compile_commands.json`` from a build that uses the flag provides it; otherwise add it in a
