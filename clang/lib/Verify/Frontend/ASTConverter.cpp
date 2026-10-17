@@ -2501,6 +2501,43 @@ void ASTConverter::collectLayouts(const FunctionDecl *FD, VFunction &Fn) {
     registerLayoutType(T, Fn);
 }
 
+bool ASTConverter::exceedsNestingLimit(const FunctionDecl *FD,
+                                       const FunctionContractInfo *FCI) {
+  constexpr unsigned Limit = 256;
+  std::vector<std::pair<const Stmt *, unsigned>> Work;
+  Work.emplace_back(FD->getBody(), 0);
+  if (FCI)
+    for (const Stmt *Clause : FCI->children())
+      Work.emplace_back(Clause, 0);
+  while (!Work.empty()) {
+    auto [S, Depth] = Work.back();
+    Work.pop_back();
+    if (!S)
+      continue;
+    if (!isa<ImplicitCastExpr, ParenExpr, FullExpr>(S))
+      ++Depth;
+    if (Depth > Limit) {
+      const PresumedLoc Where =
+          Ctx.getSourceManager().getPresumedLoc(S->getBeginLoc());
+      Errors.push_back(
+          FD->getNameAsString() + ": the expression at " +
+          (Where.isValid() ? std::to_string(Where.getLine()) + ":" +
+                                 std::to_string(Where.getColumn())
+                           : std::string("an unknown location")) +
+          " nests more than " + std::to_string(Limit) +
+          " operations deep, which the verifier does not support; split it "
+          "into intermediate variables");
+      return true;
+    }
+    for (const Stmt *Child : S->children())
+      Work.emplace_back(Child, Depth);
+    if (const LoopContractInfo *Loop = Ctx.getLoopContract(S))
+      for (const Stmt *Clause : Loop->children())
+        Work.emplace_back(Clause, Depth);
+  }
+  return false;
+}
+
 std::unique_ptr<VFunction>
 ASTConverter::convertFunction(const FunctionDecl *FD) {
   const FunctionContractInfo *FCI = functionContract(FD);
@@ -2512,6 +2549,8 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
       return nullptr;
     FCI = &NoClauses;
   }
+  if (exceedsNestingLimit(FD, FCI))
+    return nullptr;
   ParameterNames.clear();
   const FunctionDecl *ContractDecl = FCI->ContractDecl ? FCI->ContractDecl : FD;
   if (ContractDecl->getNumParams() != FD->getNumParams()) {
@@ -3114,7 +3153,8 @@ bool ASTConverter::checkLoopTermination(const Stmt *Loop, bool HasMeasure) {
 std::unique_ptr<VFunction>
 ASTConverter::convertConstexprSpec(const FunctionDecl *FD) {
   ParameterNames.clear();
-  if (hasIndirectMemoryAccess(FD))
+  if (exceedsNestingLimit(FD, functionContract(FD)) ||
+      hasIndirectMemoryAccess(FD))
     return nullptr;
   if (!FD->isConstexpr() || !FD->hasBody())
     return nullptr;

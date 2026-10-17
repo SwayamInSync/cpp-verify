@@ -1,0 +1,13 @@
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: %python %S/Inputs/deep_sum.py 60 %t/sum60.cpp
+# RUN: %cpp-verify --max-query-nodes=200000 %t/sum60.cpp -- 2>&1 | FileCheck %s --check-prefix=SIXTY
+# RUN: %python %S/Inputs/deep_sum.py 20000 %t/sum20000.cpp
+# RUN: not %cpp-verify %t/sum20000.cpp -- 2>&1 | FileCheck %s --check-prefix=DEEP
+#
+# The definedness facts of an expression grow with its size times its depth,
+# not its size times its depth squared: a 60-term sum fits in 200000 nodes.
+# An expression nested deeper than every pass, which recurses, can take is
+# reported where it is, before any of them runs.
+
+SIXTY: Verified: deep_sum
+DEEP: error: deep_sum: the expression at 5:{{[0-9]+}} nests more than 256 operations deep, which the verifier does not support; split it into intermediate variables
