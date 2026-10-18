@@ -1503,7 +1503,12 @@ pure JSON stream.
      Under BMC the passive program is the one unrolled to the final bound,
      so the same checks apply there, and a `BoundedSafe` result whose end
      no execution reaches within the bound is `[vacuous]` with a warning
-     naming the bound;
+     naming the bound. Each finding records its verdict
+     (`VerifyDiagnostic::FindingOf`) and whether its query was of the entry
+     state alone (`FoundAtEntry`); when a fixpoint demotes the verdict, a
+     finding is withdrawn unless its query cannot contain the missing fact:
+     a callee contract enters only after the entry state, a spec fact may
+     enter any query;
 
 ## Verification Backends (`VerifyBackend`)
 
