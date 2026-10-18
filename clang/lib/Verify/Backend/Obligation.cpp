@@ -2025,6 +2025,9 @@ public:
       setHeapSort(*H);
       N->Children.push_back(std::move(H));
       N->Children.push_back(fromVExpr(L->Ptr.get()));
+      // A spec body reads the exact value.
+      if (L->Ty.isInt() && L->Ty.IntMode == VIntMode::Math)
+        return toMode(std::move(N), VIntMode::Math);
       return N;
     }
     case VExpr::Forall:

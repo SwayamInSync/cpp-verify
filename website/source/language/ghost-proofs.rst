@@ -95,7 +95,8 @@ Spec and proof functions
   ``cppverify::proof`` functions. Clang rejects a reference from executable code (a function body, an
   initializer, a default argument, and a lambda written in one, generic or not), which would otherwise
   fail to link.
-- ``cppverify::spec`` integers are **mathematical** (unbounded ``Int``); ``cppverify::proof`` integers are machine.
+- ``cppverify::spec`` integers are **mathematical** (unbounded ``Int``), the values a spec reads from
+  memory included; ``cppverify::proof`` integers are machine.
   Storing a spec result in a ghost or ``cppverify::proof`` variable converts it to that machine type, and
   the value must fit (see :doc:`integers`).
 - ``cppverify::recommends(expr)`` (``cppverify::spec`` only) is a **soft** precondition: it does not generate call-site
