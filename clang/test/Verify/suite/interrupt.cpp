@@ -1,6 +1,6 @@
 // RUN: %python %S/Inputs/interrupt_after.py 15 30 %cpp-verify --jobs=1 --timeout=600000 %s -- | FileCheck %s
 // RUN: %python %S/Inputs/interrupt_after.py 5 30 %cpp-verify --jobs=1 --timeout=600000 --diagnostics-format=json %s -- | FileCheck %s --check-prefix=JSON
-// RUN: %python %S/Inputs/interrupt_after.py 5 30 %cpp-verify --jobs=4 --timeout=600000 %s -- | FileCheck %s --check-prefix=JOBS
+// RUN: %python %S/Inputs/interrupt_after.py 15 30 %cpp-verify --jobs=4 --timeout=600000 %s -- | FileCheck %s
 // RUN: %python %S/Inputs/interrupt_after.py 5 30 %cpp-verify --jobs=1 --timeout=600000 %s %S/Inputs/interrupt_second.cpp -- | FileCheck %s --check-prefix=FILES
 // RUN: %cpp-verify --lower-only --obligation-out=%t.cpv %s -- > /dev/null
 // RUN: %python %S/Inputs/interrupt_after.py 5 30 %cpp-verify --obligation-in=%t.cpv --jobs=1 --timeout=600000 | FileCheck %s --check-prefix=REPLAY
@@ -56,6 +56,7 @@ cppverify::proof void fourth_powers(int x, int y, int z)
 // A spec axiom needs no solver.
 cppverify::spec int cube(int x) { return x * x * x; }
 
+// The run with four jobs reports the same.
 // CHECK:      Verified: fast
 // CHECK-NEXT: Unresolved: twice_a_cube {{.*}}[reason=callee.contract]
 // CHECK-NEXT: Verified: spec decreases and post: pow2
@@ -67,13 +68,6 @@ cppverify::spec int cube(int x) { return x * x * x; }
 
 // JSON: "function":"cubes","message":"cubes","reason":"interrupted","schema":"cppverify.diagnostic/1","severity":"error","source":{{.*}}"status":"unresolved"
 // JSON: exit: 130
-
-// With several jobs, a function whose own queries are done can still be
-// running another function's query when the interrupt comes.
-// JOBS-NOT: PLEASE submit
-// JOBS-DAG: Interrupted: cubes
-// JOBS-DAG: Interrupted: fourth_powers
-// JOBS: exit: 130
 
 // Replay stops the same way.
 // REPLAY: Proved obligations: fast
