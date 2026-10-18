@@ -33,4 +33,17 @@ bool nested(int n) {
 }
 
 bool global_quantifier = cppverify::exists(k, 0, 2, k == 1); // expected-error {{cppverify::exists exists only for verification}}
+
+// A template is reported where it is written, once, whether or not it is
+// instantiated.
+template <typename T>
+bool never_instantiated(T n) {
+  return cppverify::forall(k, 0, 3, k < n); // expected-error {{cppverify::forall exists only for verification}}
+}
+
+template <typename T>
+bool instantiated(T n) {
+  return cppverify::exists(k, 0, 3, k == n); // expected-error {{cppverify::exists exists only for verification}}
+}
+bool uses_template() { return instantiated(5) && instantiated(6L); }
 #endif
