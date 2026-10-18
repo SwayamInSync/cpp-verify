@@ -1539,7 +1539,14 @@ smoke backend, passivizer, and buffers for diagnostics, dumps, and archive
 records) on one `llvm::StdThreadPool` of exactly `--jobs` workers, which the
 Z3 and cvc5 backends also receive (`BackendExecutionOptions::Pool`) for their
 obligations: a task waiting on its obligation group runs those tasks itself,
-so nesting never exceeds the pool. With more than one job and obligation, Z3
+so nesting never exceeds the pool. Every group is a `TaskGroup`
+(`Backend/TaskGroup.h`): a worker that waits for it runs only its tasks not
+yet started, then waits for those running, and a thread outside the pool
+only waits, so exactly `--jobs` run at once. Waits follow the creation of
+groups, so none can wait for itself. `llvm::ThreadPoolTaskGroup`'s wait runs
+whatever task the pool has next instead: a function whose own queries were
+done ran another function's query in its wait, and its next check found its
+`--function-timeout` spent. With more than one job and obligation, Z3
 solves the obligations beside the whole query (`Z3VerifyBackend::Race`): a
 proved whole query interrupts the obligation encoders, and a complete set of
 proved obligations interrupts the whole query. Otherwise
