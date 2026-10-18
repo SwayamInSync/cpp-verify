@@ -1216,6 +1216,7 @@ def UnusedMemberFunction : DiagGroup<"unused-member-function",
                                      [UnneededMemberFunction]>;
 def UnusedLabel : DiagGroup<"unused-label">;
 def UnusedLambdaCapture : DiagGroup<"unused-lambda-capture">;
+def ContractUnsupported : DiagGroup<"contract-unsupported">;
 def UnusedParameter : DiagGroup<"unused-parameter">;
 def UnusedButSetParameter : DiagGroup<"unused-but-set-parameter">;
 def UnusedResult : DiagGroup<"unused-result">;

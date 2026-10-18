@@ -242,7 +242,8 @@ void Sema::CheckSpecFunctionUses(const FunctionDecl *FD, Stmt *Code) {
 /// ForallExpr and ExistsExpr already carry type BoolTy so the conversion is
 /// a no-op; plain integer/pointer expressions receive the standard bool cast.
 ExprResult Sema::ActOnContractCondition(ExprResult E) {
-  if (E.isInvalid())
+  // A dependent condition is converted where it is instantiated.
+  if (E.isInvalid() || E.get()->isTypeDependent())
     return E;
   return PerformContextuallyConvertToBool(E.get());
 }
@@ -250,6 +251,11 @@ ExprResult Sema::ActOnContractCondition(ExprResult E) {
 ExprResult Sema::ActOnContractRange(Expr *Base, Expr *Lower,
                                     SourceLocation ColonLoc, Expr *Length,
                                     SourceLocation RBLoc) {
+  if (Base->isTypeDependent() || (Lower && Lower->isTypeDependent()) ||
+      (Length && Length->isTypeDependent()))
+    return new (Context)
+        ArraySectionExpr(Base, Lower, Length, Context.DependentTy, VK_LValue,
+                         OK_Ordinary, ColonLoc, RBLoc);
   ExprResult BaseResult = DefaultFunctionArrayLvalueConversion(Base);
   if (BaseResult.isInvalid())
     return ExprError();

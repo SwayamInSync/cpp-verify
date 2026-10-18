@@ -567,6 +567,9 @@ public:
     return getDerived().TransformDecl(Loc, D);
   }
 
+  /// Transform the variable a quantifier or a choice binds.
+  VarDecl *TransformContractBinder(VarDecl *Binder);
+
   /// Transform the given declaration, which was the first part of a
   /// nested-name-specifier in a member access expression.
   ///
@@ -18395,7 +18398,21 @@ StmtResult TreeTransform<Derived>::TransformRevealSpecStmt(RevealSpecStmt *S) {
 }
 
 template <typename Derived>
+VarDecl *TreeTransform<Derived>::TransformContractBinder(VarDecl *Binder) {
+  // Declared as the parser declares it, in the context being built.
+  if (Binder->getDeclContext() == SemaRef.CurContext)
+    return Binder;
+  VarDecl *New = VarDecl::Create(
+      SemaRef.Context, SemaRef.CurContext, Binder->getBeginLoc(),
+      Binder->getLocation(), Binder->getIdentifier(), Binder->getType(),
+      Binder->getTypeSourceInfo(), SC_None);
+  getDerived().transformedLocalDecl(Binder, {New});
+  return New;
+}
+
+template <typename Derived>
 ExprResult TreeTransform<Derived>::TransformForallExpr(ForallExpr *E) {
+  VarDecl *Var = getDerived().TransformContractBinder(E->getBoundVar());
   ExprResult Lo = E->getLo() ? getDerived().TransformExpr(E->getLo())
                              : ExprResult((Expr *)nullptr);
   if (Lo.isInvalid()) return ExprError();
@@ -18404,17 +18421,19 @@ ExprResult TreeTransform<Derived>::TransformForallExpr(ForallExpr *E) {
   if (Hi.isInvalid()) return ExprError();
   ExprResult Body = getDerived().TransformExpr(E->getBody());
   if (Body.isInvalid()) return ExprError();
-  if (!getDerived().AlwaysRebuild() && Lo.get() == E->getLo() &&
-      Hi.get() == E->getHi() && Body.get() == E->getBody())
+  if (!getDerived().AlwaysRebuild() && Var == E->getBoundVar() &&
+      Lo.get() == E->getLo() && Hi.get() == E->getHi() &&
+      Body.get() == E->getBody())
     return E;
   return new (SemaRef.Context)
       ForallExpr(E->getForallLoc(), E->getLParenLoc(), E->getRParenLoc(),
-                 E->getBoundVar(), Lo.getAs<Expr>(), Hi.getAs<Expr>(),
+                 Var, Lo.getAs<Expr>(), Hi.getAs<Expr>(),
                  Body.getAs<Expr>(), SemaRef.Context.BoolTy);
 }
 
 template <typename Derived>
 ExprResult TreeTransform<Derived>::TransformContractChooseExpr(ContractChooseExpr *E) {
+  VarDecl *Var = getDerived().TransformContractBinder(E->getBoundVar());
   ExprResult Lo = E->getLo() ? getDerived().TransformExpr(E->getLo())
                              : ExprResult((Expr *)nullptr);
   if (Lo.isInvalid()) return ExprError();
@@ -18423,17 +18442,19 @@ ExprResult TreeTransform<Derived>::TransformContractChooseExpr(ContractChooseExp
   if (Hi.isInvalid()) return ExprError();
   ExprResult Body = getDerived().TransformExpr(E->getBody());
   if (Body.isInvalid()) return ExprError();
-  if (!getDerived().AlwaysRebuild() && Lo.get() == E->getLo() &&
-      Hi.get() == E->getHi() && Body.get() == E->getBody())
+  if (!getDerived().AlwaysRebuild() && Var == E->getBoundVar() &&
+      Lo.get() == E->getLo() && Hi.get() == E->getHi() &&
+      Body.get() == E->getBody())
     return E;
   return new (SemaRef.Context)
       ContractChooseExpr(E->getChooseLoc(), E->getLParenLoc(), E->getRParenLoc(),
-                 E->getBoundVar(), Lo.getAs<Expr>(), Hi.getAs<Expr>(),
+                 Var, Lo.getAs<Expr>(), Hi.getAs<Expr>(),
                  Body.getAs<Expr>(), E->getType());
 }
 
 template <typename Derived>
 ExprResult TreeTransform<Derived>::TransformExistsExpr(ExistsExpr *E) {
+  VarDecl *Var = getDerived().TransformContractBinder(E->getBoundVar());
   ExprResult Lo = E->getLo() ? getDerived().TransformExpr(E->getLo())
                              : ExprResult((Expr *)nullptr);
   if (Lo.isInvalid()) return ExprError();
@@ -18442,12 +18463,13 @@ ExprResult TreeTransform<Derived>::TransformExistsExpr(ExistsExpr *E) {
   if (Hi.isInvalid()) return ExprError();
   ExprResult Body = getDerived().TransformExpr(E->getBody());
   if (Body.isInvalid()) return ExprError();
-  if (!getDerived().AlwaysRebuild() && Lo.get() == E->getLo() &&
-      Hi.get() == E->getHi() && Body.get() == E->getBody())
+  if (!getDerived().AlwaysRebuild() && Var == E->getBoundVar() &&
+      Lo.get() == E->getLo() && Hi.get() == E->getHi() &&
+      Body.get() == E->getBody())
     return E;
   return new (SemaRef.Context)
       ExistsExpr(E->getExistsLoc(), E->getLParenLoc(), E->getRParenLoc(),
-                 E->getBoundVar(), Lo.getAs<Expr>(), Hi.getAs<Expr>(),
+                 Var, Lo.getAs<Expr>(), Hi.getAs<Expr>(),
                  Body.getAs<Expr>(), SemaRef.Context.BoolTy);
 }
 
