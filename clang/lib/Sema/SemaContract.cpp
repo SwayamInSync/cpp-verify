@@ -133,6 +133,18 @@ public:
     return TraverseStmt(E->getExpr());
   }
 
+  // A generic lambda's body as written is dependent; its specializations,
+  // instantiated before or after this walk, are executable where it is.
+  bool TraverseLambdaExpr(LambdaExpr *E) {
+    CXXRecordDecl *Class = E->getLambdaClass();
+    if (!GhostDepth && Class->isGenericLambda() &&
+        S.ExecutableGenericLambdas.insert(Class).second)
+      for (FunctionDecl *Spec :
+           Class->getDependentLambdaCallOperator()->specializations())
+        TraverseStmt(Spec->getBody());
+    return Base::TraverseLambdaExpr(E);
+  }
+
   bool VisitDeclRefExpr(DeclRefExpr *E) {
     if (GhostDepth)
       return true;
@@ -195,8 +207,12 @@ void Sema::CheckSpecFunctionUses(const FunctionDecl *FD, Stmt *Code) {
   if (FD) {
     // The enclosing function's walk covers a lambda body in its context.
     if (const auto *Method = dyn_cast<CXXMethodDecl>(FD);
-        Method && isLambdaCallOperator(Method))
+        Method && isLambdaCallOperator(Method)) {
+      if (isGenericLambdaCallOperatorSpecialization(Method) &&
+          ExecutableGenericLambdas.contains(Method->getParent()))
+        Finder.TraverseStmt(Code);
       return;
+    }
     if (const FunctionContractInfo *FCI = contractOf(Context, FD);
         FCI && (FCI->IsSpec || FCI->IsProof))
       return;

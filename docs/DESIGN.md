@@ -359,7 +359,8 @@ cppverify::spec int fibo(int n)
 - Pure mathematical functions used in contracts.
 - Usable only in contracts, ghost code, and other `cppverify::spec` or `cppverify::proof`
   functions. A spec is never compiled, so Sema rejects a reference from
-  executable code (a body, initializer, or default argument).
+  executable code (a body, initializer, or default argument, and a lambda
+  written in one, generic or not).
 - Must be total (all paths return, termination proven via `cppverify::decreases`).
 - No side effects, no mutation, no I/O. A spec may read memory through its
   pointer parameters but never write it; each call is evaluated in the heap
