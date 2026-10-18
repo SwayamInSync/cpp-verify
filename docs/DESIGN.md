@@ -143,7 +143,14 @@ whose contract contradicts the state of the call. Unreachable code alone
 is not flagged. Under BMC the same checks run on the program unrolled to
 the bound, as Kani reports an unreachable check, and a `BoundedSafe`
 result that no execution finishes within the bound is `[vacuous]` too
-(`no execution finishes within N loop iterations`).
+(`no execution finishes within N loop iterations`). A finding rests on the
+facts of its query, as a proof does: when a verdict is demoted because a
+fact it relies on is not established, each finding whose query may contain
+that fact is dropped, since a definition that does not terminate can
+contradict itself, and a solver's finding so says nothing about the program.
+A callee contract enters only after the entry state, so an unsatisfiable
+precondition and a behavior that never applies are still reported when what
+is missing is a callee contract.
 
 A proof never rests on itself. Every fact a proof assumes (a callee's
 contract, a spec's definition, frame, or postcondition, an inductive
