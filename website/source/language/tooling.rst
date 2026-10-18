@@ -413,7 +413,10 @@ A verified result may carry qualifiers that say what the proof assumed:
   ``Trusted: f (contract assumed, not verified)`` (JSON ``"status":
   "trusted"``). See :doc:`functions-loops`.
 - ``[vacuous]``: no execution reaches the claim, so it holds for no reason
-  (JSON ``"vacuous": true``), with a warning naming the cause.
+  (JSON ``"vacuous": true``), with a warning naming the cause. A result that
+  is ``Unresolved`` because it relies on a fact that is not established keeps
+  it only where that fact cannot be the cause: an unsatisfiable precondition
+  is still reported when the missing fact is a callee's contract.
 
 A proof can only hold vacuously when an assumption excludes every execution,
 and assumptions enter a function in a few places: its preconditions and type
