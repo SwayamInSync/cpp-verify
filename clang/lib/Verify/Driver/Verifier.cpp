@@ -1052,6 +1052,12 @@ struct VerifyDiagnostic {
   std::optional<VerifyResult> Result;
   /// No execution reaches the claim, so it holds vacuously.
   bool Vacuous = false;
+  /// For a vacuity warning: the verdict it is about, and whether its query
+  /// was of the entry state alone, which callee contracts do not enter.
+  std::optional<size_t> FindingOf;
+  bool FoundAtEntry = false;
+  /// For a vacuous verdict: whether the entry state alone is unreachable.
+  bool VacuousAtEntry = false;
   /// Proved only for executions that terminate.
   bool Partial = false;
   /// Trusted contracts the proof relies on.
@@ -1065,8 +1071,9 @@ struct VerifyDiagnostic {
   /// Kept for the steps that relate verdicts, but not printed: a proof the
   /// verifier generated, which is reported only if it fails.
   bool Quiet = false;
-  /// A verdict of an interrupted function, which its Interrupted line
-  /// replaces: kept for the steps that relate verdicts, never printed.
+  /// Kept for the steps that relate verdicts, never printed: a verdict of an
+  /// interrupted function, which its Interrupted line replaces, or a vacuity
+  /// finding that rests on a fact that is not established.
   bool Hidden = false;
 };
 
@@ -2944,23 +2951,27 @@ public:
           if (Smoke && unreachable(PP, /*EntryOnly=*/false)) {
             WhollyVacuous = true;
             const size_t Verdict = Diags.size() - 1;
+            const bool AtEntry = unreachable(PP, /*EntryOnly=*/true);
             Diags[Verdict].Message += " [vacuous]";
             Diags[Verdict].Vacuous = true;
+            Diags[Verdict].VacuousAtEntry = AtEntry;
             Diags.push_back(
                 {VerifyDiagnostic::Warning,
-                 unreachable(PP, /*EntryOnly=*/true)
+                 AtEntry
                      ? Fn->Name + ": the precondition is unsatisfiable, so "
                                   "every claim about it holds vacuously"
                      : Fn->Name + ": no execution reaches the end, so its "
                                   "postcondition holds vacuously; check the "
                                   "contracts it calls and its assumptions",
                  R.Location, Fn->Name});
+            Diags.back().FindingOf = Verdict;
+            Diags.back().FoundAtEntry = AtEntry;
           }
           if (Smoke && !WhollyVacuous) {
             const size_t Verdict = Diags.size() - 1;
             // A behavior that never applies has its postconditions unchecked.
             for (const auto &[Name, Assumes] : PP.BehaviorAssumes)
-              if (proves(smokeProgram(PP, 0, falseGoal(), Assumes.get())))
+              if (proves(smokeProgram(PP, 0, falseGoal(), Assumes.get()))) {
                 Diags.push_back(
                     {VerifyDiagnostic::Warning,
                      Fn->Name + ": behavior " + Name +
@@ -2968,6 +2979,9 @@ public:
                          "preconditions, so its postconditions are never "
                          "checked",
                      Assumes->Loc, Fn->Name});
+                Diags.back().FindingOf = Verdict;
+                Diags.back().FoundAtEntry = true;
+              }
             // A trusted contract that contradicts the state of a call makes
             // everything after the call hold vacuously.
             for (size_t I = 0; I < PP.Stmts.size(); ++I) {
@@ -2994,6 +3008,7 @@ public:
                        " contradicts the state of this call, so everything "
                        "after it holds vacuously",
                    Post.CallLoc, Fn->Name});
+              Diags.back().FindingOf = Verdict;
             }
           }
         } else if (R.Status == VerifyStatus::Exported) {
@@ -3087,8 +3102,11 @@ public:
       if (Run.Interrupted)
         interrupted(Run, *Functions[I]);
       const size_t Base = Diags.size();
-      for (VerifyDiagnostic &D : Run.Diags)
+      for (VerifyDiagnostic &D : Run.Diags) {
+        if (D.FindingOf)
+          *D.FindingOf += Base;
         Diags.push_back(std::move(D));
+      }
       AllOk &= Run.AllOk;
       AnyFailed |= Run.AnyFailed;
       FailedCallers.insert(Run.FailedCallers.begin(), Run.FailedCallers.end());
@@ -3171,6 +3189,19 @@ public:
       VerifyDiagnostic &Diagnostic = Diags[Index];
       AllOk = false;
       Diagnostic.K = VerifyDiagnostic::Unresolved;
+      // A vacuity finding rests on the facts of its query. No callee
+      // contract enters the entry state, but a spec fact may enter any query.
+      const bool EntryStands = Reason == VerifyReason::CalleeContract;
+      for (VerifyDiagnostic &Finding : Diags)
+        if (Finding.FindingOf == Index &&
+            !(Finding.FoundAtEntry && EntryStands))
+          Finding.Hidden = true;
+      if (Diagnostic.Vacuous && !(Diagnostic.VacuousAtEntry && EntryStands)) {
+        Diagnostic.Vacuous = false;
+        if (size_t At = Diagnostic.Message.find(" [vacuous]");
+            At != std::string::npos)
+          Diagnostic.Message.erase(At, std::strlen(" [vacuous]"));
+      }
       Diagnostic.Message +=
           " [reason=" + verifyReasonCode(Reason).str() + "] (" + Why + ")";
       if (Diagnostic.Result) {
