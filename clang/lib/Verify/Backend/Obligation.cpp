@@ -7,6 +7,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
 #include <algorithm>
+#include <tuple>
 
 using namespace clang;
 using namespace verify;
@@ -2238,10 +2239,12 @@ public:
                        Stmt->Note, Stmt->Theorem});
     }
 
-    std::vector<std::pair<ObligationKind, std::unique_ptr<VCExpr>>> ExitAsserts;
+    std::vector<
+        std::tuple<ObligationKind, std::unique_ptr<VCExpr>, std::string>>
+        ExitAsserts;
     for (const PassiveExitAssert &Exit : P.ExitAsserts)
       ExitAsserts.emplace_back(obligationKind(Exit.ProofKind),
-                               fromVExpr(Exit.Cond.get()));
+                               fromVExpr(Exit.Cond.get()), Exit.Note);
 
     // A theorem only where it speaks of the entry state alone: the body's
     // later states are not part of it.
@@ -2313,8 +2316,8 @@ public:
       appendObligation(Stmt.ProofKind, Stmt.Cond.get(), Stmt.TraceEventCount,
                        Stmt.Note);
     }
-    for (const auto &[Kind, Exit] : ExitAsserts)
-      appendObligation(Kind, Exit.get(), M.TraceEvents.size());
+    for (const auto &[Kind, Exit, Note] : ExitAsserts)
+      appendObligation(Kind, Exit.get(), M.TraceEvents.size(), Note);
 
     M.CorrectnessGoal = buildCompleteGoal(M.Obligations);
     M.CounterexampleQuery = vcNot(cloneVCExpr(M.CorrectnessGoal.get()));

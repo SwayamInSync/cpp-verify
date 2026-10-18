@@ -126,15 +126,13 @@ private:
   convertLValueAddress(const Expr *E,
                        std::unique_ptr<VExpr> *AccessCondition = nullptr);
   std::unique_ptr<VExpr>
-  convertAutomaticLocalAddress(const VarDecl *VD, SourceLocation Loc,
-                               bool RequireInitialized = true);
+  convertAutomaticLocalAddress(const VarDecl *VD, SourceLocation Loc);
   /// Typed VPlace builders. The `convert*Address` helpers above are thin
   /// wrappers that lower these places to plain VLoad/VStore address
   /// expressions.
   std::optional<VPlace> lvaluePlace(const Expr *E);
   std::optional<VPlace> automaticLocalPlace(const VarDecl *VD,
-                                            SourceLocation Loc,
-                                            bool RequireInitialized = true);
+                                            SourceLocation Loc);
   std::optional<VPlace> derefPlace(const Expr *PointerExpr, SourceLocation Loc);
   std::optional<VPlace> arrowFieldPlace(const MemberExpr *M);
   std::optional<VPlace> subscriptPlace(const ArraySubscriptExpr *AS);
@@ -144,8 +142,7 @@ private:
   /// byte-addressed object.
   const VarDecl *promotedRootLocal(const Expr *E) const;
   /// Build the exact byte-offset place of a subobject of a promoted local.
-  std::optional<VPlace> promotedObjectPlace(const Expr *E,
-                                            bool RequireInitialized = true);
+  std::optional<VPlace> promotedObjectPlace(const Expr *E);
   std::optional<uint64_t> recordFieldOffset(const FieldDecl *FD) const;
   /// Visit every scalar/pointer leaf of a promoted object type in offset order.
   bool forEachObjectLeaf(QualType Ty, uint64_t Offset,

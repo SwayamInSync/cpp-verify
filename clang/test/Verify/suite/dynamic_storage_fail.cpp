@@ -420,7 +420,9 @@ int modular_discarded_pointer_forwarding()
 // VERIFY-DAG: error: verification failed: alias_use_after_delete
 // VERIFY-DAG: error: verification failed: alias_double_delete
 // VERIFY-DAG: error: verification failed: aliases_are_distinct
-// VERIFY-DAG: error: verification failed: modular_uninitialized_read
+// The callee reads the storage before anything writes it, which is undefined,
+// but its verification cannot yet say that it reads before it writes.
+// VERIFY-DAG: Unresolved: modular_uninitialized_read {{.*}}[reason=construct.unsupported]
 // VERIFY-DAG: error: verification failed: modular_use_after_delete
 // VERIFY-DAG: error: verification failed: modular_nonalias_violation
 // VERIFY-DAG: Unresolved: modular_scalar_extent_violation {{.*}}[reason=construct.unsupported]

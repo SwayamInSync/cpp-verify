@@ -3348,8 +3348,7 @@ ASTConverter::convertSubscriptAddress(const ArraySubscriptExpr *AS) {
 }
 
 std::optional<VPlace>
-ASTConverter::automaticLocalPlace(const VarDecl *VD, SourceLocation Loc,
-                                  bool RequireInitialized) {
+ASTConverter::automaticLocalPlace(const VarDecl *VD, SourceLocation Loc) {
   auto Provenance = AutomaticLocalProvenanceVariables.find(VD);
   if (!VD || !AddressableLocals.count(VD) ||
       Provenance == AutomaticLocalProvenanceVariables.end())
@@ -3359,8 +3358,8 @@ ASTConverter::automaticLocalPlace(const VarDecl *VD, SourceLocation Loc,
                      ": automatic local storage has no function-entry value");
     return std::nullopt;
   }
-  if (RequireInitialized && !isPromotableAggregateType(VD->getType(), Ctx))
-    requireInitialized(VD);
+  // Its initialization is the storage's, checked where it is read: a write
+  // through a reference or pointer initializes it too.
   const uint64_t Size = Ctx.getTypeSizeInChars(VD->getType()).getQuantity();
   auto Base = std::make_unique<VVarExpr>(valueName(VD), VType::makePtr(Size),
                                          Loc, Provenance->second);
@@ -3466,7 +3465,7 @@ ASTConverter::recordFixedArrayBoundsCheck(const Expr *Index,
 }
 
 std::optional<VPlace>
-ASTConverter::promotedObjectPlace(const Expr *E, bool RequireInitialized) {
+ASTConverter::promotedObjectPlace(const Expr *E) {
   E = peelObjectExpr(E);
   if (!E)
     return std::nullopt;
@@ -3475,7 +3474,7 @@ ASTConverter::promotedObjectPlace(const Expr *E, bool RequireInitialized) {
     const auto *VD = dyn_cast<VarDecl>(DRE->getDecl());
     if (!VD || !AddressableLocals.count(VD))
       return std::nullopt;
-    return automaticLocalPlace(VD, E->getExprLoc(), RequireInitialized);
+    return automaticLocalPlace(VD, E->getExprLoc());
   }
 
   if (const auto *M = dyn_cast<MemberExpr>(E)) {
@@ -3483,7 +3482,7 @@ ASTConverter::promotedObjectPlace(const Expr *E, bool RequireInitialized) {
       return std::nullopt;
     const auto *FD = dyn_cast<FieldDecl>(M->getMemberDecl());
     auto Offset = recordFieldOffset(FD);
-    auto Base = promotedObjectPlace(M->getBase(), RequireInitialized);
+    auto Base = promotedObjectPlace(M->getBase());
     if (!Base)
       return std::nullopt;
     if (!Offset) {
@@ -3501,7 +3500,7 @@ ASTConverter::promotedObjectPlace(const Expr *E, bool RequireInitialized) {
     const Expr *ArrayExpr = peelObjectExpr(AS->getBase());
     const ConstantArrayType *CAT =
         ArrayExpr ? Ctx.getAsConstantArrayType(ArrayExpr->getType()) : nullptr;
-    auto Base = promotedObjectPlace(ArrayExpr, RequireInitialized);
+    auto Base = promotedObjectPlace(ArrayExpr);
     if (!Base)
       return std::nullopt;
     if (!CAT) {
@@ -3582,8 +3581,8 @@ bool ASTConverter::forEachObjectLeaf(
 }
 
 std::unique_ptr<VExpr> ASTConverter::convertAutomaticLocalAddress(
-    const VarDecl *VD, SourceLocation Loc, bool RequireInitialized) {
-  if (auto Place = automaticLocalPlace(VD, Loc, RequireInitialized))
+    const VarDecl *VD, SourceLocation Loc) {
+  if (auto Place = automaticLocalPlace(VD, Loc))
     return Place->takeAddress();
   return nullptr;
 }
@@ -3630,6 +3629,12 @@ void ASTConverter::appendReferenceBindingCheck(
         Accessible(CheckedAddress), Loc, ProofObligationKind::Dereference));
     Out.push_back(std::make_unique<VAssertStmt>(
         Initialized(CheckedAddress), Loc, ProofObligationKind::Initialization));
+  };
+  // Binding a reference reads nothing ([dcl.init.ref]); a read through it
+  // checks that the object is initialized.
+  auto AssertAccessible = [&](const VExpr *CheckedAddress) {
+    Out.push_back(std::make_unique<VAssertStmt>(
+        Accessible(CheckedAddress), Loc, ProofObligationKind::Dereference));
   };
 
   Source = Source ? Source->IgnoreParenImpCasts() : nullptr;
@@ -3711,7 +3716,7 @@ void ASTConverter::appendReferenceBindingCheck(
                                      Loc),
         Loc));
   }
-  AssertBinding(Address);
+  AssertAccessible(Address);
 }
 
 std::optional<VPlace> ASTConverter::derefPlace(const Expr *PointerExpr,
@@ -4514,7 +4519,6 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
         return std::make_unique<VLoadExpr>(std::move(Address), Ty,
                                            E->getExprLoc());
       }
-      requireInitialized(VD);
       if (AddressableLocals.count(VD)) {
         VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
         if (Ty.isAggregate() || Ty.Kind == VTypeKind::Unsupported) {
@@ -4524,12 +4528,13 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
                            VD->getNameAsString());
           return nullptr;
         }
-        auto Address = convertAutomaticLocalAddress(VD, E->getExprLoc(), false);
+        auto Address = convertAutomaticLocalAddress(VD, E->getExprLoc());
         if (!Address)
           return nullptr;
         return std::make_unique<VLoadExpr>(std::move(Address), Ty,
                                            E->getExprLoc());
       }
+      requireInitialized(VD);
       if (VD->getType()->isReferenceType()) {
         auto Address = convertLValueAddress(E);
         if (!Address) {
@@ -5410,7 +5415,7 @@ void ASTConverter::appendAssignment(const Expr *LHS,
       return;
     }
     const size_t ErrorCount = Errors.size();
-    auto Place = promotedObjectPlace(LHS, /*RequireInitialized=*/false);
+    auto Place = promotedObjectPlace(LHS);
     if (!Place) {
       if (Errors.size() == ErrorCount)
         Errors.push_back(CurrentFn->Name + ": unsupported assignment target");
@@ -5469,7 +5474,7 @@ void ASTConverter::appendAssignment(const Expr *LHS,
                            ": proof functions cannot modify executable memory");
           return;
         }
-        auto Address = convertAutomaticLocalAddress(VD, Loc, false);
+        auto Address = convertAutomaticLocalAddress(VD, Loc);
         if (!Address)
           return;
         Out.push_back(std::make_unique<VStoreStmt>(std::move(Address),
@@ -6383,8 +6388,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
                            ": proof functions cannot modify executable memory");
           return Out;
         }
-        auto Place = promotedObjectPlace(TargetExpr,
-                                         /*RequireInitialized=*/false);
+        auto Place = promotedObjectPlace(TargetExpr);
         if (!Place)
           return Out;
         if (auto AccessCondition = Place->takeAccessCondition())

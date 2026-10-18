@@ -1022,18 +1022,24 @@ when `T` is `bool`, integral, or enum. The reference binding lowers to an
 immutable VCR address. A value use is a heap load, assignment is a heap store,
 and `cppverify::old(ref)` reads through the same address in the entry heap.
 
-Every reference receives a generated non-null, live, and initialized entry
-precondition. Distinct address parameters are object-range disjoint by default
+Every reference receives a generated non-null and live entry precondition,
+and its body is verified as reading the referent initialized. C++ does not
+require that of an out-parameter, so a call that passes storage not yet
+initialized (`int a; init(a);`) is `Unresolved` with reason
+`construct.unsupported`, not a failure; so is a function that returns a
+pointer to such storage. Distinct address parameters are object-range disjoint by default
 when at least one is mutable; `cppverify::aliases` permits the same complete object.
 `cppverify::modifies(ref)` is an open region rooted at the referent, matching
 `cppverify::modifies(*p)`.
 
-A reference formal may bind to another supported reference, an initialized
-ordinary scalar local, a field or fixed-array element of a local, a direct
+A reference formal may bind to another supported reference, an ordinary
+scalar local, a field or fixed-array element of a local, a direct
 pointer dereference, or a pointer subscript. Local `T&`/`const T&`
 declarations may bind the same direct forms, may chain through other local
 references, and snapshot a raw pointer's address at the declaration. Reassigning
-that pointer therefore does not rebind the reference.
+that pointer therefore does not rebind the reference. Binding reads nothing: a
+local reference may bind storage not yet initialized, and a read through it
+checks that the object is initialized.
 
 Only locals whose addresses are needed are spilled out of scalar SSA. Each such
 local becomes an automatic `VAllocateStmt` with a fresh lifetime identity,
