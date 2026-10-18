@@ -37,6 +37,11 @@ alone. Flags after ``--`` replace the database, and ``--extra-arg=FLAG`` adds on
 way. A ``.h`` file given as input is a C++ header. A compiler error, in a command line or in
 the file, stops that file without verifying it, and ``cpp-verify`` then exits with status 1.
 
+Ctrl-C stops the run: the solvers stop at once, each function whose verification had not
+finished is reported as ``Interrupted: f`` (JSON reason ``interrupted``), a proof that rests on
+its contract is not established, the input files not yet read are skipped, and ``cpp-verify``
+exits with status 130. A second Ctrl-C ends it at once.
+
 ``cpp-verify --version`` shows the cpp-verify release and repository revision, the LLVM
 release it is built on, and each backend: the Z3 linked into it, and the cvc5 and Lean
 (``lake``) it finds on ``PATH`` with their versions. cvc5 is tested with 1.1.2, and every
@@ -375,7 +380,7 @@ codes include ``counterexample``, ``solver.timeout``, ``solver.unknown``,
 ``spec.post``, ``spec.inductive``, ``proof.cycle``,
 ``counterexample.unchecked``,
 ``callee.contract``,
-``decreases.missing``, and ``construct.unsupported``.
+``decreases.missing``, ``construct.unsupported``, and ``interrupted``.
 
 A result settled by an automatic induction says which, as ``[by induction
 following fibo]`` (JSON ``induction``); an unresolved one lists the
