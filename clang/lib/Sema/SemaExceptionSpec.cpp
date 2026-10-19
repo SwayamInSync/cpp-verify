@@ -1433,6 +1433,20 @@ CanThrowResult Sema::canThrow(const Stmt *S) {
     // These expressions can never throw.
     return CT_Cannot;
 
+  // cpp-verify: contract expressions are never evaluated, and ghost
+  // statements emit no code.
+  case Expr::ForallExprClass:
+  case Expr::ExistsExprClass:
+  case Expr::ContractChooseExprClass:
+  case Expr::OldExprClass:
+  case Expr::ResultExprClass:
+  case Stmt::ContractAssertStmtClass:
+  case Stmt::GhostBlockStmtClass:
+  case Stmt::RevealWithFuelStmtClass:
+  case Stmt::HideSpecStmtClass:
+  case Stmt::RevealSpecStmtClass:
+    return CT_Cannot;
+
   case Expr::MSPropertyRefExprClass:
   case Expr::MSPropertySubscriptExprClass:
     llvm_unreachable("Invalid class for expression");

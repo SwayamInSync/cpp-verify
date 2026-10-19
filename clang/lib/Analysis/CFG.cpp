@@ -2357,6 +2357,14 @@ CFGBlock *CFGBuilder::Visit(Stmt * S, AddStmtChoice asc,
     case Stmt::InitListExprClass:
       return VisitInitListExpr(cast<InitListExpr>(S), asc);
 
+    // cpp-verify: ghost code and contract statements emit no code.
+    case Stmt::ContractAssertStmtClass:
+    case Stmt::GhostBlockStmtClass:
+    case Stmt::RevealWithFuelStmtClass:
+    case Stmt::HideSpecStmtClass:
+    case Stmt::RevealSpecStmtClass:
+      return Block;
+
     case Stmt::AttributedStmtClass:
       return VisitAttributedStmt(cast<AttributedStmt>(S), asc);
 

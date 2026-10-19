@@ -3822,6 +3822,13 @@ bool Expr::HasSideEffects(const ASTContext &Ctx,
         return true;
     break;
 
+  // cpp-verify: a contract expression has its operands' effects, as if it
+  // were evaluated.
+  case ForallExprClass:
+  case ExistsExprClass:
+  case ContractChooseExprClass:
+  case OldExprClass:
+  case ResultExprClass:
   case ParenExprClass:
   case ArraySubscriptExprClass:
   case MatrixSingleSubscriptExprClass:
