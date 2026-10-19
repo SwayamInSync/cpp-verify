@@ -768,6 +768,8 @@ cppverify::post(cppverify::forall(k, sq(k) >= 0))
 ```
 
 - `binder` is a fresh mathematical integer, scoped to `body`.
+- A quantifier exists only for verification: Sema rejects one in executable
+  code, as it rejects `cppverify::choose`, except as an unevaluated operand.
 - `lo` and `hi` must be integer; `body` must be bool.
 - Without bounds the quantifier ranges over all mathematical integers. A
   counterexample to one is certified exactly when its body depends on its
@@ -1604,8 +1606,8 @@ a one-line hook.
     `cppverify::spec` or `cppverify::proof` functions; executable code, including initializers and
     default arguments, may not reference one. Unevaluated operands
     (`sizeof`, `decltype`) are exempt.
-11. The same holds for ghost variables, `cppverify::choose`, and the `cppverify`
-    collections (their types as executable declarations, parameters, or
+11. The same holds for ghost variables, `cppverify::forall`, `cppverify::exists`,
+    `cppverify::choose`, and the `cppverify` collections (their types as executable declarations, parameters, or
     results, and every operation).
 12. A range `p[lo : n]` needs a pointer to a complete object type and
     integer bounds, and is valid only as a whole `cppverify::modifies` footprint.

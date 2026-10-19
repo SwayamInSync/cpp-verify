@@ -190,10 +190,27 @@ public:
       S.Diag(Loc, diag::err_collection_in_executable_code) << 0 << D;
   }
 
-  bool VisitContractChooseExpr(ContractChooseExpr *E) {
-    if (!GhostDepth &&
-        S.DiagnosedSpecFunctionUses.insert(E->getExprLoc()).second)
-      S.Diag(E->getExprLoc(), diag::err_choose_in_executable_code);
+  // A quantifier or a choice has no value at run time: it is reported once,
+  // and what it contains with it.
+  bool TraverseForallExpr(ForallExpr *E) {
+    return diagnoseConstruct(E, "forall") || Base::TraverseForallExpr(E);
+  }
+  bool TraverseExistsExpr(ExistsExpr *E) {
+    return diagnoseConstruct(E, "exists") || Base::TraverseExistsExpr(E);
+  }
+  bool TraverseContractChooseExpr(ContractChooseExpr *E) {
+    return diagnoseConstruct(E, "choose") ||
+           Base::TraverseContractChooseExpr(E);
+  }
+
+  /// Whether \p E is in executable code, which is then reported.
+  bool diagnoseConstruct(Expr *E, llvm::StringRef Name) {
+    if (GhostDepth)
+      return false;
+    if (S.DiagnosedSpecFunctionUses.insert(E->getExprLoc()).second)
+      S.Diag(E->getExprLoc(),
+             diag::err_verification_construct_in_executable_code)
+          << Name;
     return true;
   }
 };
