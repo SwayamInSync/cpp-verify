@@ -50,4 +50,6 @@ int relies_on_force_zero(int value)
 // VERIFY-DAG: Verified: doubled
 // VERIFY-DAG: Verified: valid_after_rebinding
 // VERIFY-DAG: error: verification failed: invalid_after_rebinding
-// VERIFY-DAG: Unresolved: relies_on_force_zero {{.*}}[vacuous] [reason=callee.contract] (relies on the contract of force_zero, which is not established)
+// Its end is unreachable only by force_zero's contract, which is not
+// established, so that is not reported either.
+// VERIFY-DAG: Unresolved: relies_on_force_zero [backend=z3] [reason=callee.contract] (relies on the contract of force_zero, which is not established)
