@@ -209,7 +209,9 @@ precondition declares an abstract extent. It remains a caller promise rather tha
 derived from a concrete caller allocation; it does not supply general lifetime,
 alignment, provenance, or initialization. Bounds follow exact conditional and
 short-circuit evaluation, and fresh represented storage is kept disjoint from
-the complete declared incoming extent.
+the complete declared incoming extent. Outside a precondition the marker
+means nothing and is rejected (:doc:`pointers`), so an extent cannot yet be
+stated for a returned pointer.
 
 For pairs involving mutable pointees, CppVerify adds a generated
 complete-object disjointness precondition. ``cppverify::aliases(p, q)`` opts a pair into
