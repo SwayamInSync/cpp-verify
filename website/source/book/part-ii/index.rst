@@ -9,8 +9,9 @@ The examples in these chapters write the constructs through the alias ``cv``
 (``cv::pre``, ``cv::check``, ...) and use the names of ``<cppverify.h>`` (``valid``,
 ``seq``, ``set``, ``multiset``, ``map``, ...) unqualified, as a file does after
 ``namespace cv = cppverify;`` and ``using namespace cppverify;``. The header itself needs
-no ``#include``. Each example is compiled and verified by the test suite, and where a
-chapter shows verdicts, the example must give them.
+no ``#include``. Each complete example is compiled and verified by the test suite, and
+where a chapter shows verdicts, the example must give them; a few snippets that are part of
+a larger program are not run.
 
 .. figure:: /_static/diagrams/cppverify-workflow.svg
    :align: center
