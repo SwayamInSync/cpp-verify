@@ -100,6 +100,13 @@ say that a function writes its parameter first (:doc:`language/pointers`).
 Every choice a counterexample uses is now checked against its body
 (:doc:`book/part-ii/ch13-spec-and-proof-functions`).
 
+**Reads clauses over a choice.** A spec whose body applies ``cv::choose`` to
+memory failed its ``cppverify::reads`` check (``calls choose, which reads the
+heap without a reads clause``), although its frame held every cell the choice
+reads. The check now follows the loads of the choice's body, and the facts a
+spec's checks assume, its induction hypothesis included, reach the
+applications inside a choice too (:doc:`language/ghost-proofs`).
+
 **Vacuity findings of downgraded results.** A result that is ``Unresolved``
 because a fact it relies on is not established could still be marked
 ``[vacuous]``, from that very fact, and whether it was depended on the
