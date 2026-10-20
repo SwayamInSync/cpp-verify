@@ -1,6 +1,18 @@
 # CppVerify documentation site
 
-Published at [swayaminsync.github.io/cpp-verify](https://swayaminsync.github.io/cpp-verify/).
+Published at [swayaminsync.github.io/cpp-verify](https://swayaminsync.github.io/cpp-verify/):
+
+| Path | Documents | Built from |
+|------|-----------|------------|
+| `/` | The latest release | Its tag |
+| `/X.Y/` | Release series X.Y (`/0.1/`) | The series' latest tag; before its release, its latest candidate |
+| `/dev/` | The development version | `main` |
+
+A banner on every page names the version and links to the others.
+`scripts/build-site.sh` builds all of them into `website/site/` (each tag from
+`git archive`, so tags must be fetched), and `cppverify-docs.yml` publishes
+it whenever `main` changes. Only `main` may deploy, so publishing a release
+(`cppverify-release.yml`) runs that workflow on `main` to add the new tag.
 
 ## Outputs
 
@@ -17,6 +29,13 @@ Doxygen is required for the C++ API (`brew install doxygen` or `apt install doxy
 ./website/scripts/build-docs.sh
 open website/build/index.html
 open website/build/doxygen/index.html
+```
+
+The whole site, every version:
+
+```bash
+./website/scripts/build-site.sh
+open website/site/index.html
 ```
 
 Auto-install Doxygen when possible:
