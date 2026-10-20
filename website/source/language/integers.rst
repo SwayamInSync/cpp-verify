@@ -61,8 +61,10 @@ combine far better with quantifiers and the heap, for example a 64-bit
 ``cppverify::forall`` over a buffer. The default ``auto`` uses integers for a query unless
 it needs the bits of a non-constant operand (``a & b``, ``x << s``); masks such as
 ``x & 0xff`` and constant shifts are arithmetic and keep integers. Every mode
-gives the same verdicts and counterexamples, so the flag is purely a
-performance choice.
+is exact, so none can turn a true claim into a failure or a false one into a
+proof; the solver's speed differs, though, and a query one mode settles may
+stay ``Unresolved`` within the timeout in another. Counterexample values are
+the solver's choice and may differ between modes.
 
 Mandatory C++ definedness
 -------------------------
