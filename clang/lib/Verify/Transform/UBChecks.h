@@ -70,6 +70,11 @@ bool hasRepresentedRoot(const VExpr *Address);
 /// The driver uses this to warn instead of letting that happen silently.
 bool usesValidMarker(const VFunction &Fn);
 
+/// An error when valid(p, n) occurs anywhere but a precondition, where it is
+/// a spec whose body is `true`: a postcondition, a loop invariant, a check,
+/// ghost code, or a spec function.
+std::optional<std::string> misplacedValidMarker(const VFunction &Fn);
+
 } // namespace verify
 } // namespace clang
 
