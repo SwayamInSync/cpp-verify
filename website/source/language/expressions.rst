@@ -12,9 +12,75 @@ Contract expressions
 - collection operations of ``<cppverify.h>`` (``s.len()``, ``s[i]``,
   ``a.contains(x)``, ``m[k]``, ...)
 
-Must be contextually ``bool`` where used as conditions. They exist only for
-verification: a quantifier or a ``cppverify::choose`` in executable code is an
-error, outside an unevaluated operand such as ``sizeof``.
+Must be contextually ``bool`` where used as conditions.
+
+Quantifiers exist only for verification
+---------------------------------------
+
+A quantifier or a ``cppverify::choose`` has no value at run time: the compiler
+cannot evaluate ``cv::forall(k, 0, n, a[k] >= 0)`` without running a loop the
+program never wrote. So these expressions may appear only where the verifier
+reads them and the compiler does not: in a contract clause, a
+``cv::check``, a ghost block or ghost variable, a spec or proof function, and
+an unevaluated operand such as ``sizeof``. Every use below is allowed:
+
+.. code-block:: cpp
+
+   bool first_is_zero(const int *a, int n)
+     cv::pre(valid(a, n) && n > 0)
+     cv::post(cv::result == (a[0] == 0))
+     cv::post(!cv::result || cv::exists(k, 0, n, a[k] == 0))
+   {
+     cv::check(cv::forall(k, 0, 1, k == 0));
+     cv::ghost { bool any_zero = cv::exists(k, 0, n, a[k] == 0); }
+     return a[0] == 0;
+   }
+
+In executable code (a function body outside a ghost block, an initializer, a
+default argument that a call uses, a lambda, or a template's body) the same
+expression is an error, reported once where it is written, for the outermost
+quantifier:
+
+.. cppverify-example: rejects
+
+.. code-block:: cpp
+
+   bool all_nonnegative(const int *a, int n)
+     cv::pre(valid(a, n))
+   {
+     return cv::forall(k, 0, n, a[k] >= 0);
+   }
+
+.. code-block:: text
+
+   quantifiers.cpp:4:10: error: cppverify::forall exists only for verification and cannot be used in executable code; use it in a contract, ghost block, or spec or proof function
+       4 |   return cv::forall(k, 0, n, a[k] >= 0);
+         |          ^
+
+To compute such a value at run time, write the loop, and state what it
+computes in the postcondition with the quantifier:
+
+.. code-block:: cpp
+
+   bool all_nonnegative(const int *a, int n)
+     cv::pre(valid(a, n) && n >= 0)
+     cv::post(cv::result == cv::forall(k, 0, n, a[k] >= 0))
+   {
+     for (int i = 0; i < n; i = i + 1)
+       cv::invariant(0 <= i && i <= n)
+       cv::invariant(cv::forall(k, 0, i, a[k] >= 0))
+       cv::decreases(n - i)
+     {
+       if (a[i] < 0)
+         return false;
+     }
+     return true;
+   }
+
+Before 0.2, ``cv::forall`` and ``cv::exists`` in executable code compiled
+without a diagnostic to an undefined value (LLVM's ``poison``), while the
+verifier read them as quantifiers, so a function could verify and still
+behave arbitrarily when run. ``cv::choose`` was already rejected there.
 
 The range ``[lo, hi)`` may be **symbolic** (e.g. ``cppverify::forall(i, 0, n, ...)``).
 A bounded quantifier reaches the solver as a quantifier, whatever its range:
