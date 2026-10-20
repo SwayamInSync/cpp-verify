@@ -1071,9 +1071,9 @@ Addressable local declarations inside loops, `cppverify::old(local)`, `cppverify
 conditional bindings, temporaries, reference returns,
 address-taking, rvalue references, and non-scalar referents remain fail-closed.
 An outer automatic local and a local reference declaration may be used inside a
-loop. Recursive executable bodies that allocate an automatic object or store
-through references fail closed until the termination collector models heap
-state updates.
+loop. Recursive executable bodies may store through pointer and reference
+parameters and use automatic objects; recursion through a function that
+allocates or frees storage is `Unresolved` (`construct.unsupported`).
 
 ### 4. `cppverify::modifies(...)` frame condition
 
@@ -1151,7 +1151,8 @@ int compute() {
 
 `swap(x, x)` from a verified function fails the call's `aliasing` check.
 Binding a reference to a local is supported; taking a local's raw address
-(`&x`) is not, until lexical lifetimes and escapes are modeled.
+(`&x`) is not yet: lexical lifetimes are modeled, but where a pointer to a
+local goes is not.
 
 ## Type Invariants
 
@@ -1192,7 +1193,6 @@ For by-value parameters this is purely an optimization — correctness is identi
 
 ### Status
 
-- Parser: implemented in Weeks 4.5 (after Weeks 3-4 core IR).
 - Written `cppverify::type_invariant(...)` in the class body (see Construct
   recognition below).
 - `TypeContractInfo` side table on `RecordDecl` in `ASTContext`.
@@ -1754,11 +1754,14 @@ The optional cvc5 adapter independently serializes canonical obligations to
 standalone SMT-LIB2. It explicitly reproduces C++ truncate-toward-zero
 mathematical division/remainder (including the total zero-divisor extension),
 signed/unsigned bit-vector operations and conversions, overflow predicates,
-`Array Int Int` heap cells, bounded quantifiers, and only the finite ground spec
-equations owned by the module. It runs an installed executable with deterministic
+`Array Int Int` heap cells, bounded and unbounded quantifiers (marked triggers
+become `:pattern`), heap frames, sequences, sets, multisets, and maps (as
+arrays over all integers), `define-fun` for visible non-recursive specs, and
+the finite ground equations of recursive ones. It runs an installed executable with deterministic
 seed/resource options and bounded output; missing tools, invocation failures,
 timeouts, `unknown`, extra diagnostics, and malformed tokens are unresolved.
-The model cvc5 prints after `sat` is checked by the same certifier as Z3's, and
+The model cvc5 prints after `sat`, and often after `unknown`, is checked by the
+same certifier as Z3's, and
 refinement re-runs cvc5 with definition instances. Once a hidden instance has
 been given, non-recursive definitions are given whole; recursive ones never
 are, because cvc5 does not decide queries over them.
@@ -1815,7 +1818,7 @@ stable theorem/proof-module identities, compares source and replay exports, and
 requires source-identical failed obligations across every automated backend.
 
 The default remains Z3 alone. `--lean-fallback=DIR` is an explicit opt-in that
-exports only Z3 `Unresolved` modules; SAT counterexamples remain failures. It
+exports only the `Unresolved` modules of Z3 or strict portfolio; SAT counterexamples remain failures. It
 exports only the obligations the solver did not prove individually, reporting
 the split (`[z3: 18 of 20 proved; lean: 2 exported]`);
 `--lean-fallback-scope=all` exports every obligation. A rerun with
