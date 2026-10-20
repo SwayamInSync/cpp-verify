@@ -921,7 +921,8 @@ simplification node, rewrite, and dead-declaration counts.
 Testing and coverage
 --------------------
 
-Regression tests live under ``clang/test/Verify/``. From the **repository root**:
+Regression tests live under ``clang/test/Verify/``, and lit runs them as
+written: ``build/bin/llvm-lit clang/test/Verify``. From the **repository root**:
 
 .. list-table::
    :header-rows: 1
@@ -930,8 +931,12 @@ Regression tests live under ``clang/test/Verify/``. From the **repository root**
    * - Script
      - Purpose
    * - ``./scripts/run-verify-tests.sh``
-     - Lower every solver-positive executable example first, then run its
-       ordinary pass / expected-fail solver check.
+     - A quick check without lit: run ``cpp-verify`` once on each test file,
+       with only the backend and ``--no-check-ub`` of its RUN lines, for at
+       most 60 s a file (``CPPVERIFY_TEST_TIMEOUT``). A file passes when it
+       verifies, or reports an error where a RUN line expects one with
+       ``not``; its FileCheck lines are not compared, and a long case study
+       such as ``llvm_uleb128.cpp`` needs lit.
    * - ``./scripts/coverage-sweep.sh``
      - Fast profile merge after a normal build (from repo root).
    * - ``./scripts/coverage-verify.sh``
