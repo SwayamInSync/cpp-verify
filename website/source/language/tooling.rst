@@ -34,23 +34,148 @@ Other compiler flags come from the ``compile_commands.json`` beside the file or 
 above it, or in the directory ``-p DIR`` names; a file the database does not list gets the
 flags of a listed neighbour. Without a database the file is compiled with those two flags
 alone. Flags after ``--`` replace the database, and ``--extra-arg=FLAG`` adds one flag either
-way. A ``.h`` file given as input is a C++ header. A compiler error, in a command line or in
-the file, stops that file without verifying it, and ``cpp-verify`` then exits with status 1.
+way.
 
-Ctrl-C stops the run: the solvers stop at once, each function whose verification had not
-finished is reported as ``Interrupted: f`` (JSON reason ``interrupted``), a proof that rests on
-its contract is not established, the input files not yet read are skipped, and ``cpp-verify``
-exits with status 130. A second Ctrl-C ends it at once.
+Input files and compiler errors
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Every input is compiled as C++, a header too: a ``.h`` file given as input is
+a C++ header, and its functions are verified like those of a ``.cpp`` file.
+
+.. code-block:: cpp
+
+   inline int clamp100(int x)
+     cv::post(cv::result <= 100)
+   {
+     return x > 100 ? 100 : x;
+   }
+
+.. code-block:: text
+
+   $ cpp-verify mathx.h --
+   Verified: clamp100 [backend=z3]
+
+A compiler error stops the file it belongs to, whether it is in the file or
+in its command line: the file is not verified, the next input files are, and
+``cpp-verify`` exits with status 1.
+
+.. code-block:: text
+
+   $ cpp-verify abs.cpp -- -fbogus-flag
+   error: unknown argument: '-fbogus-flag'
+   Error while processing abs.cpp.
+
+Before 0.2, an error in a command line was printed and then ignored: the
+file was verified anyway, under other options than the ones given, and
+``cpp-verify`` exited with status 0. A ``.h`` input was compiled as C, which
+printed ``error: invalid argument '-std=c++17' not allowed with 'C'``.
+
+Stopping a run with Ctrl-C
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Ctrl-C (``SIGINT``) stops the run at once, however long its queries are:
+
+- every solver stops, Z3 and cvc5 alike, and so does a counterexample check
+  in progress;
+- each function whose verification had not finished is reported as
+  ``Interrupted: f`` (JSON ``"status":"unresolved"`` with reason
+  ``interrupted``), and its partial results are not printed;
+- a proof that rests on the contract of an interrupted function is not
+  established, so its caller is ``Unresolved`` with reason
+  ``callee.contract``; a proof that rests only on finished functions keeps
+  its verdict;
+- the input files not yet read are skipped, and ``cpp-verify`` exits with
+  status 130, as a shell expects after Ctrl-C;
+- a second Ctrl-C ends the process at once, without a report.
+
+.. cppverify-example: fragment
+
+.. code-block:: cpp
+
+   int fast(int x)
+     cv::pre(0 <= x && x < 100)
+     cv::post(cv::result == x + 1)
+   {
+     return x + 1;
+   }
+
+   cv::proof void cubes(int x, int y, int z)   // no solver settles this
+     cv::pre(x > 0 && y > 0 && z > 0)
+     cv::post(x * x * x + y * y * y != z * z * z)
+   {
+   }
+
+.. code-block:: text
+
+   $ cpp-verify --timeout=600000 slow.cpp --
+   ^C
+   Verified: fast [backend=z3]
+   slow.cpp:8:16: Interrupted: cubes
+   $ echo $?
+   130
+
+Before 0.2, Ctrl-C printed an LLVM crash report and the run went on, or the
+process crashed, because each Z3 check installed its own signal handler.
+
+Versions
+~~~~~~~~
 
 ``cpp-verify --version`` shows the cpp-verify release and repository revision, the LLVM
 release it is built on, and each backend: the Z3 linked into it, and the cvc5 and Lean
-(``lake``) it finds on ``PATH`` with their versions. cvc5 is tested with 1.1.2, and every
-Lean project pins ``leanprover/lean4:v4.32.2``.
+(``lake``) it finds on ``PATH`` with their versions. cvc5 is tested with 1.1.2 and also
+works with 1.4: a query that needs a constant array, as every one over sets, multisets,
+and maps does, sets cvc5's ``arrays-exp`` option itself, which 1.4 requires. Every Lean
+project pins ``leanprover/lean4:v4.32.2``.
 
-Every option must take effect in the run it is given to. An option that one backend alone
-uses selects that backend when ``--backend`` is not given (``--lean-out`` and
-``--lean-project`` select ``lean``, ``--unroll`` selects ``bmc``), and an option the run
-would ignore is an error.
+Options that select a backend, and options a run would not use
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+An option that only one backend uses selects that backend when ``--backend``
+is not given:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 60
+
+   * - Option
+     - Selects
+   * - ``--unroll=N``
+     - ``--backend=bmc``
+   * - ``--lean-out=FILE``, ``--lean-project=DIR``
+     - ``--backend=lean``
+
+So ``cpp-verify --unroll=4 file.cpp`` runs bounded model checking and prints
+results such as ``Verified: swapped_difference [backend=bmc, bound=0]``.
+
+An option that the run would not use is an error naming what it needs, and
+nothing is verified:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 45 55
+
+   * - Command
+     - Error
+   * - ``--backend=z3 --unroll=3``
+     - ``error: --unroll requires --backend=bmc``
+   * - ``--backend=z3 --cvc5-path=PATH``
+     - ``error: --cvc5-path requires --backend=cvc5, --backend=portfolio, or --backend=race``
+   * - ``--backend=cvc5 --profile-quantifiers``
+     - ``error: --profile-quantifiers requires a backend that runs Z3: z3, portfolio, race, or bmc``
+   * - ``--lean-out=FILE --int-encoding=bitvector``
+     - ``error: --int-encoding requires a backend that runs an SMT solver``
+   * - ``--proof-cache-max-mb=N`` without ``--proof-cache``
+     - ``error: --proof-cache-max-mb and --proof-cache-max-entries require --proof-cache``
+   * - ``--lean-fallback-scope=all`` without ``--lean-fallback``
+     - ``error: --lean-fallback-scope requires --lean-fallback``
+
+The same rules hold when replaying an archive: ``--check-ub`` and
+``--profile-quantifiers`` are errors there, since an archive keeps the checks
+it was written with, and ``--unroll`` must match the bound a BMC archive
+records. Before 0.2, ``--lean-out`` and ``--lean-project`` needed an explicit
+``--backend=lean``, ``--unroll`` without ``--backend=bmc`` ran Z3 and reported
+an unbounded ``Verified``, and the other options above were ignored without a
+word.
 
 Backends
 --------
@@ -289,7 +414,9 @@ Parallel solving and proof caching
 
 ``--jobs`` sets one pool of exactly that many workers. Each function is a
 task on it, with its own backends; its obligations are tasks on the same
-pool (a task waiting for them runs them itself, so the pool never grows), and
+pool (a task waiting for them runs its own unstarted ones itself, never
+another function's, so the pool never grows and a function whose queries
+are done reports at once), and
 with workers to spare its whole query races the obligations solved one by
 one: both are exact, so a proof by either decides the function and
 interrupts the other. A query over sequences is also solved without the
@@ -371,7 +498,9 @@ Each non-success verification result also carries a stable reason code. Current
 codes include ``counterexample``, ``solver.timeout``, ``solver.unknown``,
 ``solver.resource-limit``, ``solver.unavailable``,
 ``solver.invocation-failed``, ``solver.malformed-output``,
-``query.size-limit``, ``encoding.failed``,
+``query.size-limit``, ``encoding.failed`` (the obligations could not be
+encoded for the solver; when Z3 rejected a call, the message quotes it:
+``Z3 reported an error: ...``),
 ``obligation.invalid``, ``logic.unsupported``, ``query.missing``,
 ``backend.invalid-result``,
 ``backend.inconsistent-results``, ``bmc.incomplete-bound``,
@@ -457,6 +586,48 @@ replacement character, so every emitted JSON record remains valid UTF-8.
 
 Portable obligation archives
 ----------------------------
+
+An archive holds the verification conditions of a file's functions, so they
+can be checked again, by another solver or on another machine, without the
+C++ source:
+
+.. code-block:: cpp
+
+   int abs_value(int x)
+     cv::pre(x > -2147483647 - 1)
+     cv::post(cv::result == (x < 0 ? -x : x))
+   {
+     return x < 0 ? -x : x;
+   }
+
+   int twice_abs(int x)
+     cv::pre(-1000 < x && x < 1000)
+     cv::post(cv::result >= 0)
+   {
+     int a = abs_value(x);
+     return 2 * a;
+   }
+
+.. code-block:: text
+
+   $ cpp-verify --obligation-out=abs.cpv abs.cpp --
+   Verified: abs_value [backend=z3]
+   Verified: twice_abs [backend=z3]
+   $ cpp-verify --obligation-in=abs.cpv
+   Proved obligations: abs_value (dependencies not checked in replay) [backend=z3] [semantic-hash=sha256:...]
+   Proved obligations: twice_abs (dependencies not checked in replay) [backend=z3] [semantic-hash=sha256:...]
+
+Replay proves each function's obligations, but a verdict also rests on
+facts outside them: ``twice_abs`` is ``Verified`` only because
+``abs_value``'s contract is, and an archive does not record that. Replay
+therefore reports ``Proved obligations``, JSON status
+``proved-obligations``, never ``Verified``. The same holds for what spec
+facts, trusted contracts, ``[partial]``, and the vacuity checks add to a
+source verdict. A counterexample in replay is still a failure: it is checked
+against the definitions the archive carries. Before 0.2, replay printed
+``Verified`` for each module whose obligations held, even when the source
+run did not verify the function, for example when a callee's verification
+failed.
 
 ``--obligation-out`` writes ``cppverify.obligation/2`` records only after exact
 serialize/deserialize/validate/reserialize checks. Stable wire tags make the
@@ -600,7 +771,24 @@ sees contracts exactly as the compiler does. With them:
 - completion after ``cv::`` lists the constructs with their documentation, and the
   ``<cppverify.h>`` collections;
 - ``clang-format`` puts each clause on its own line and the body's brace below them, as it
-  does for a trailing ``requires`` clause, and writes a range footprint as ``p[lo : n]``.
+  does for a trailing ``requires`` clause, and writes a range footprint as ``p[lo : n]``
+  (before 0.2 it wrote ``p [0:n]``, as if the brackets began an Objective-C message):
+
+  .. code-block:: text
+
+     void fill(int *p, int n, int v)
+       cv::pre(valid(p, n) && n >= 0)
+       cv::modifies(p[0 : n])
+       cv::post(cv::forall(k, 0, n, p[k] == v))
+     {
+       for (int i = 0; i < n; i = i + 1)
+         cv::invariant(0 <= i && i <= n)
+         cv::modifies(p[0 : n])
+         cv::decreases(n - i)
+       {
+         p[i] = v;
+       }
+     }
 
 clangd needs ``-fverify-contracts`` in each file's compile command. A
 ``compile_commands.json`` from a build that uses the flag provides it; otherwise add it in a
@@ -624,6 +812,41 @@ Then point the editor at this clangd:
 A tool that does not use this build's parser (a stock clangd, Visual Studio's IntelliSense)
 reports the constructs as errors; a stock ``clang-format`` keeps every clause on the
 declarator's line. Tools built on this build's libclang see the contracts as well.
+
+Contracts in Clang's other tools
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The contract constructs have a meaning for Clang's own analyses too: a
+contract expression is never evaluated, and ghost code emits no code.
+
+- A contract expression cannot throw, so ``noexcept`` of one is ``true``. It
+  is not a constant expression either: a ``static_assert`` or an enumerator
+  cannot use its value (``error: expression is not an integral constant
+  expression``).
+
+  .. code-block:: cpp
+
+     static_assert(noexcept(cv::exists(k, 0, 3, k == 1)), "contracts do not throw");
+
+- The static analyzer (``clang++ --analyze -fverify-contracts``) and the
+  warnings computed from the control-flow graph skip ghost code and contract
+  statements, so they analyze the code after them: a null dereference after a
+  ``cv::ghost`` block or a ``cv::check`` is reported as it would be without them.
+- libclang, and the tools built on it (``c-index-test``, the Python bindings,
+  IDE indexers), shows each construct as an unexposed expression or statement
+  (``CXCursor_UnexposedExpr``, ``CXCursor_UnexposedStmt``), with its operands
+  as child cursors.
+- A contract expression cannot appear in a mangled name yet: a template whose
+  signature contains one, such as
+  ``int (&)[sizeof(cv::exists(k, 0, 3, k == T()), T())]``, is reported when it is
+  instantiated, with ``error: cannot yet mangle ExistsExpr expression``, as
+  Clang reports other expressions without a mangling.
+
+Before 0.2, ``noexcept`` of a contract expression crashed the compiler or
+made it hang, as did a contract expression in a C++98 constant; the analyzer
+ended every path at a ghost block, so it reported nothing after one; libclang
+hid the constructs and, in a precondition, their operands; and a contract
+expression in a template's signature was mangled to a malformed symbol.
 
 Migrating from the keyword syntax
 ---------------------------------

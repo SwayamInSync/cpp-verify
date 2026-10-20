@@ -111,6 +111,74 @@ Proof functions may update their own local values and call other proof
 functions, but cannot write executable memory/global state or call executable
 functions. Their loops require ``cppverify::decreases`` just like recursive proof calls.
 
+Spec functions stay out of executable code
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A spec function is never compiled, so a call from code that runs would have
+nothing to call. Clang reports such a use where it is written, also inside a
+lambda, generic or not:
+
+.. cppverify-example: rejects
+
+.. code-block:: cpp
+
+   cv::spec int twice(int x) { return 2 * x; }
+
+   int apply(int v)
+   {
+     auto f = [](auto x) { return twice(x); };
+     return f(v);
+   }
+
+.. code-block:: text
+
+   lambda.cpp:5:32: error: spec function 'twice' exists only for verification and cannot be used in executable code; use it in a contract, ghost block, or spec or proof function
+       5 |   auto f = [](auto x) { return twice(x); };
+         |                                ^
+
+A generic lambda's body is checked for each type it is called with. Before
+0.2, a spec function called from a generic lambda compiled, and the program
+then failed to link (``undefined reference to `twice(int)'``). In a contract,
+a ghost block, or another spec or proof function the same call is fine.
+
+Values a spec reads are exact
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Arithmetic in a spec body is mathematical, and that includes the values the
+spec reads through a pointer: an ``int`` read from memory is its value as an
+integer, and adding to it never wraps.
+
+.. cppverify-example: fails wraps
+
+.. code-block:: cpp
+
+   cv::spec int pair_sum(const int *p) { return p[0] + p[1]; }
+
+   cv::proof void large(const int *p)
+     cv::pre(valid(p, 2))
+     cv::pre(p[0] == 2147483647 && p[1] == 1)
+     cv::post(pair_sum(p) == 2147483648)
+   {
+   }
+
+   cv::proof void wraps(const int *p)
+     cv::pre(valid(p, 2))
+     cv::pre(p[0] == 2147483647 && p[1] == 1)
+     cv::post(pair_sum(p) < 0)
+   {
+   }
+
+.. code-block:: text
+
+   Verified: spec axiom: pair_sum
+   Verified: large [backend=z3]
+   reads.cpp:13:24: error: verification failed: wraps [...::postcondition@13:24] (counterexample: ...) [backend=z3] [reason=counterexample]
+
+Before 0.2, a value read in a spec body kept its machine type, so the sum
+above wrapped to a negative ``int``: ``wraps`` verified, and ``large`` could
+not even be lowered (``equality operands have different logic sorts``).
+Machine values that come from calls were already exact.
+
 .. code-block:: cpp
 
    cv::spec int safe_div(int a, int b)

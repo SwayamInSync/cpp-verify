@@ -311,6 +311,44 @@ problem, and those are exactly the places checked above: a verified callee
 returns, so ordinary calls cannot cut paths (a callee with
 ``cppverify::decreases(*)`` may not, and its callers are reported ``[partial]``).
 
+A finding that no execution reaches a claim rests on the facts its query
+uses, as a proof does. When a result is ``Unresolved`` because one of those
+facts is not established, the finding is dropped where the missing fact may
+be its cause:
+
+.. cppverify-example: fails contradictory
+.. cppverify-example: unresolved relies_on_it
+
+.. code-block:: cpp
+
+   int contradictory(int x)
+     cv::post(cv::result == x && cv::result == x + 1)   // no result satisfies this
+   {
+     return x;
+   }
+
+   int relies_on_it(int x)
+     cv::post(cv::result == 7)
+   {
+     return contradictory(x);
+   }
+
+.. code-block:: text
+
+   vacuity.cpp:2:28: error: verification failed: contradictory [...::postcondition@2:28] (...) [backend=z3] [reason=counterexample]
+   Unresolved: relies_on_it [backend=z3] [reason=callee.contract] (relies on the contract of contradictory, which is not established)
+
+``relies_on_it`` proves its postcondition only because the contract of
+``contradictory`` cannot hold, which is the problem to fix, and the reason
+names it. Whether no execution reaches its end is a question about that
+contract too, so it is not reported. A spec whose termination fails can
+contradict itself the same way, and whether the solver notices is not a fact
+about the program. A finding about the entry state alone is kept when what is
+missing is a callee's contract, since no callee contract enters the entry
+state: an unsatisfiable precondition is still reported, with ``[vacuous]``.
+Before 0.2, ``relies_on_it`` was also reported ``[vacuous]``, with the warning
+that no execution reaches its end.
+
 Quantifiers that run away
 -------------------------
 

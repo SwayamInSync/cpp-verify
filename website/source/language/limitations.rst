@@ -149,8 +149,11 @@ C++ feature boundaries
      - ``switch``, range-``for``, ``goto``, labels, conditionless ``for``,
        loop condition declarations, and ``break``/``continue`` in ``do``
        loops. An expression or statement nested more than 256 operations
-       deep (a sum of 300 terms, say) is reported where it is; split it into
-       intermediate variables.
+       deep (a sum of 300 terms, say) is reported where it is, and the file
+       stops: ``error: total: the expression at 4:276 nests more than 256
+       operations deep, which the verifier does not support; split it into
+       intermediate variables``. Before 0.2, such an expression could crash
+       the verifier.
    * - Advanced C++
      - Not in the verified core.
      - Exceptions, lambdas, coroutines, RTTI, virtual dispatch, multiple

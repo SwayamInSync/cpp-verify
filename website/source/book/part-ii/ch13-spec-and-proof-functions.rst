@@ -154,7 +154,41 @@ measure whatever the spec's other calls return:
    }
 
 A recursive call inside ``cppverify::forall``, ``cppverify::exists``, or ``cppverify::choose`` must
-decrease the measure for every value of the bound variable. Spec functions may
+decrease the measure for every value of the bound variable. A call in the body
+of a ``cppverify::choose`` is a call of the function the choose is written in, so it
+is checked like any other:
+
+.. cppverify-example: fails stuck
+.. cppverify-example: unresolved forty_two
+
+.. code-block:: cpp
+
+   cv::spec int stuck(int n)
+     cv::decreases(n)
+   {
+     return n <= 0 ? 0 : cv::choose(k, k == stuck(n) + 1);
+   }
+
+   int forty_two(int x)
+     cv::post(cv::result == 42)
+   {
+     cv::check(stuck(x) >= 0 || stuck(x) < 0);
+     if (x == 1)
+       return 0;
+     return 42;
+   }
+
+.. code-block:: text
+
+   stuck.cpp:4:42: error: spec decreases failed: stuck [backend=z3] [reason=counterexample] (n [type=math-i32] = 1)
+   Unresolved: forty_two [backend=z3] [reason=spec.termination] (relies on the definition of stuck, whose termination is not established)
+
+At ``n = 1`` the definition says that ``stuck(1)`` equals ``stuck(1) + 1``, a
+contradiction, and a proof that used it could prove anything. Before 0.2 the
+call inside the choose was not seen as a recursive call: ``stuck`` was
+accepted, and ``forty_two`` verified although it returns ``0`` at ``x = 1``.
+
+Spec functions may
 call each other in a cycle when they share a measure of the same length and
 every call within the cycle lowers it; the termination proof treats all of them
 as opaque:

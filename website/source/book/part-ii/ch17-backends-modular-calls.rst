@@ -215,7 +215,8 @@ uses, ``[partial]``, and the vacuity checks. Where the source run reports
 ``Verified``, replay therefore reports ``Proved obligations: f (dependencies
 not checked in replay)``, with JSON status ``proved-obligations``. A
 counterexample is checked against the definitions alone and is still a
-failure.
+failure. The archive section of :doc:`../../language/tooling` shows a source run
+and its replay side by side.
 
 Source-built and replayed records pass through the same conservative
 canonicalizer before hashing and dispatch. It folds only trivial Boolean

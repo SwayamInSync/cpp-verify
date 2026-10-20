@@ -162,6 +162,41 @@ This permits constructing the sign bit (for example, ``1 << 31`` for a 32-bit
 ``E1 * 2^E2`` modulo ``2^N``, as the standard defines, so ``-1 << 1`` is
 ``-2``; only the shift count must be in range.
 
+The same function shows both rules. As C++17, doubling a negative value by a
+shift is undefined, and the verifier finds the input:
+
+.. cppverify-example: label doubled
+.. cppverify-example: fails doubled
+
+.. code-block:: cpp
+
+   int doubled(int x)
+     cv::pre(-1000 <= x && x <= 1000)
+     cv::post(cv::result == 2 * x)
+   {
+     return x << 1;
+   }
+
+.. code-block:: text
+
+   shift.cpp:5:3: error: verification failed: doubled [...::shift@5:3] (counterexample: x [ssa=x_0] [type=i32] = -1; trace: return.return@5:3 value=-2) [backend=z3] [reason=counterexample]
+
+Compiled as C++20, with ``cpp-verify shift.cpp -- -std=c++20``, the same
+function verifies:
+
+.. cppverify-example: with doubled
+.. cppverify-example: flags --extra-arg=-std=c++20
+
+.. code-block:: cpp
+
+   // doubled, as above
+
+.. code-block:: text
+
+   Verified: doubled [backend=z3]
+
+Before 0.2 the C++17 rule applied in every language mode.
+
 Calls crossing between mathematical ``cppverify::spec`` code and lifted machine
 ``constexpr`` code convert at each parameter and return boundary. A machine
 result converts exactly to an unbounded integer; an unsigned result has already
@@ -204,6 +239,83 @@ Executable modular calls likewise apply Clang's formal-parameter and destination
 conversions. Signedness, widening, and narrowing therefore occur before a
 callee contract is instantiated and before a returned value is used by the
 caller.
+
+Enumerations
+------------
+
+A value of an enumeration type has the values C++ gives that type
+([dcl.enum]/8), which are not just its enumerators:
+
+- With a fixed underlying type (every ``enum class``, which is ``int`` unless
+  it says otherwise, and every ``enum E : T``), the values are those of the
+  underlying type.
+- Without one (``enum E { ... }``), the values are those of the smallest
+  bit-field that holds every enumerator. For ``{ Red, Green, Blue }`` that is
+  ``0`` to ``3``; with a negative enumerator the range is signed.
+
+Every executable or proof value of an enumeration type, wherever it comes
+from (a parameter, a read from memory, a call's result, a variable after a
+loop), is assumed to lie in that range. Converting an integer into an
+enumeration without a fixed type is undefined behavior when the value is out
+of range, so the conversion is an ``overflow`` obligation:
+
+.. cppverify-example: fails unchecked
+
+.. code-block:: cpp
+
+   enum Color { Red, Green, Blue };
+
+   int code(Color c)
+     cv::post(0 <= cv::result && cv::result <= 3)
+   {
+     return c;
+   }
+
+   Color from_code(int v)
+     cv::pre(0 <= v && v <= 3)
+   {
+     return static_cast<Color>(v);
+   }
+
+   Color unchecked(int v)
+     cv::pre(-10 <= v && v <= 10)
+   {
+     return static_cast<Color>(v);
+   }
+
+.. code-block:: text
+
+   Verified: code [backend=z3]
+   Verified: from_code [backend=z3]
+   colors.cpp:18:3: error: verification failed: unchecked [...::overflow@18:3] (counterexample: v [ssa=v_0] [type=i32] = -1; ...) [backend=z3] [reason=counterexample]
+
+``code`` may return ``3``: no enumerator has that value, but ``Color`` does.
+With a fixed underlying type, every value of that type is possible:
+
+.. cppverify-example: fails level
+
+.. code-block:: cpp
+
+   enum class Level : unsigned char { Low, Mid, High };
+
+   int level(Level l)
+     cv::post(0 <= cv::result && cv::result <= 2)
+   {
+     return static_cast<int>(l);
+   }
+
+.. code-block:: text
+
+   levels.cpp:4:28: error: verification failed: level [...::postcondition@4:28] (counterexample: result [ssa=__result_1] [type=i32] = 3, l [ssa=l_0] [type=u8] = 3; ...) [backend=z3] [reason=counterexample]
+
+The range is a fact about machine values. In a ``cv::spec``, a parameter of an
+enumeration type is a mathematical integer like any other, so a spec's claim
+about it is proved without the range: ``cv::spec bool small(Color c)
+cv::post(cv::result) { return c < 4; }`` fails at ``c = 4``.
+
+Before 0.2 the range was not assumed where a value comes in, so a true
+claim such as ``code``'s failed with a value no ``Color`` can hold (for
+example ``c = 4294967295``).
 
 Exact ``int`` boundaries
 ------------------------
