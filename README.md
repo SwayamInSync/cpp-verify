@@ -77,7 +77,7 @@ int abs(int x)
 ./build/bin/clang++ -std=c++17 -fverify-contracts -c abs.cpp -o abs.o
 ```
 
-Use `-fverify-contracts` on `clang++` so the constructs (`cppverify::pre`, `cppverify::post`, ...) are recognized; `cpp-verify` enables that flag automatically. Every construct is written qualified by the namespace `cppverify`, directly or through an alias such as `namespace cv = cppverify;`, so no word is reserved and C++26 `pre`/`post` stay the compiler's. `<cppverify.h>` needs no `#include`.
+Use `-fverify-contracts` on `clang++` so the constructs (`cppverify::pre`, `cppverify::post`, ...) are recognized; `cpp-verify` enables that flag automatically. Every construct is written qualified by the namespace `cppverify`, directly or through an alias such as `namespace cv = cppverify;`, so no word is reserved. This compiler does not implement C++26 contracts: with the flag, a bare `pre(...)` is an error whose fix-it writes `cppverify::pre(...)`. `<cppverify.h>` needs no `#include`.
 
 ### Editors
 
