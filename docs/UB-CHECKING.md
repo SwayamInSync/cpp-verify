@@ -75,8 +75,9 @@ passivization emits *before* the statement that consumes the value:
   folds the ordered passive program once, so each obligation is checked
   against exactly the assumes that precede it.
 
-So the UB layer is *purely additive*: it inserts asserts; the Tier-0 soundness
-machinery discharges them.
+So the UB layer is *purely additive*: it inserts asserts, and the same
+passivization, obligation, and backend machinery as every other check
+discharges them.
 
 ## The extensible checker framework
 
