@@ -3903,6 +3903,135 @@ static std::unique_ptr<VExpr> replaceVariable(const VExpr *E,
   return Out;
 }
 
+static void typeKey(const VType &Ty, std::string &Key) {
+  Key += '<';
+  for (uint64_t Field :
+       {static_cast<uint64_t>(Ty.Kind), static_cast<uint64_t>(Ty.IntMode),
+        static_cast<uint64_t>(Ty.IsSigned), static_cast<uint64_t>(Ty.BitWidth),
+        Ty.PointeeSizeBytes, Ty.ObjectSizeBytes, Ty.ObjectAlignBytes,
+        Ty.ArrayCount, Ty.ArrayStrideBytes})
+    Key += std::to_string(Field) + ',';
+  Key += Ty.TypeIdentity + ',' + Ty.EnumMin + ',' + Ty.EnumMax + '>';
+}
+
+/// A key two expressions share exactly when they are equal up to the names
+/// of their bound variables, or false.
+static bool structuralKey(const VExpr *E,
+                          std::map<std::string, std::string> &Bound,
+                          std::string &Key) {
+  if (!E) {
+    Key += '_';
+    return true;
+  }
+  Key += '(' + std::to_string(static_cast<int>(E->K));
+  typeKey(E->Ty, Key);
+  auto sub = [&](const VExpr *Child) {
+    return structuralKey(Child, Bound, Key);
+  };
+  switch (E->K) {
+  case VExpr::Literal:
+    Key += static_cast<const VLiteralExpr *>(E)->Value;
+    break;
+  case VExpr::Var: {
+    const auto *V = static_cast<const VVarExpr *>(E);
+    if (!V->ProvenanceVariable.empty() || V->Origins ||
+        !V->OriginCompanion.empty())
+      return false;
+    auto It = Bound.find(V->Name);
+    Key += It != Bound.end() ? It->second : V->Name;
+    break;
+  }
+  case VExpr::BinOp: {
+    const auto *B = static_cast<const VBinOpExpr *>(E);
+    Key += std::to_string(static_cast<int>(B->Op));
+    if (!sub(B->Lhs.get()) || !sub(B->Rhs.get()))
+      return false;
+    break;
+  }
+  case VExpr::UnaryOp: {
+    const auto *U = static_cast<const VUnaryOpExpr *>(E);
+    Key += std::to_string(static_cast<int>(U->Op)) + U->AllocationHeapVar +
+           ',' + U->LivenessHeapVar + ',' + U->InitializationHeapVar;
+    if (!sub(U->Operand.get()))
+      return false;
+    break;
+  }
+  case VExpr::Cast: {
+    const auto *Cast = static_cast<const VCastExpr *>(E);
+    typeKey(Cast->FromTy, Key);
+    Key += Cast->IsTrigger ? 't' : 'c';
+    if (!sub(Cast->Inner.get()))
+      return false;
+    break;
+  }
+  case VExpr::Load: {
+    const auto *L = static_cast<const VLoadExpr *>(E);
+    Key += L->HeapVar;
+    if (!sub(L->Ptr.get()) || !sub(L->AccessCondition.get()))
+      return false;
+    break;
+  }
+  case VExpr::Result:
+    break;
+  case VExpr::Old:
+    if (!sub(static_cast<const VOldExpr *>(E)->Inner.get()))
+      return false;
+    break;
+  case VExpr::Conditional: {
+    const auto *C = static_cast<const VConditionalExpr *>(E);
+    if (!sub(C->Cond.get()) || !sub(C->Then.get()) || !sub(C->Else.get()))
+      return false;
+    break;
+  }
+  case VExpr::Forall:
+  case VExpr::Exists: {
+    const auto *Q = static_cast<const VQuantifiedExpr *>(E);
+    typeKey(Q->BinderType, Key);
+    if (!sub(Q->Lo.get()) || !sub(Q->Hi.get()))
+      return false;
+    std::optional<std::string> Outer;
+    if (auto It = Bound.find(Q->Binder); It != Bound.end())
+      Outer = It->second;
+    Bound[Q->Binder] = '#' + std::to_string(Bound.size());
+    const bool Keyed = sub(Q->Body.get());
+    if (Outer)
+      Bound[Q->Binder] = *Outer;
+    else
+      Bound.erase(Q->Binder);
+    if (!Keyed)
+      return false;
+    break;
+  }
+  case VExpr::FieldAccess: {
+    const auto *F = static_cast<const VFieldAccessExpr *>(E);
+    Key += F->Field;
+    if (!sub(F->Base.get()))
+      return false;
+    break;
+  }
+  case VExpr::SpecCall: {
+    const auto *S = static_cast<const VSpecCallExpr *>(E);
+    Key += S->CalleeIdentity + (S->ReadsHeap ? "@" : "") + S->HeapVar;
+    for (const auto &Arg : S->Args)
+      if (!sub(Arg.get()))
+        return false;
+    break;
+  }
+  case VExpr::OverflowCheck: {
+    const auto *O = static_cast<const VOverflowCheckExpr *>(E);
+    Key += std::to_string(static_cast<int>(O->Op));
+    if (!sub(O->Lhs.get()) || !sub(O->Rhs.get()))
+      return false;
+    break;
+  }
+  case VExpr::HeapStore:
+  case VExpr::HeapFrame:
+    return false;
+  }
+  Key += ')';
+  return true;
+}
+
 std::unique_ptr<VExpr>
 ASTConverter::convertChoose(const ContractChooseExpr *C) {
   const VarDecl *BoundVar = C->getBoundVar();
@@ -3966,6 +4095,24 @@ ASTConverter::convertChoose(const ContractChooseExpr *C) {
   if (Hi)
     abstract(Hi);
 
+  // A choose with the same condition, up to the names of its bound
+  // variables, is the same choice, as Verus shares one closure function.
+  std::string Condition;
+  typeKey(ValueType, Condition);
+  Condition += Unbounded ? 'u' : 'b';
+  std::map<std::string, std::string> Canonical{{Binder, "#"}};
+  const bool Keyed = structuralKey(Lo.get(), Canonical, Condition) &&
+                     structuralKey(Hi.get(), Canonical, Condition) &&
+                     structuralKey(Body.get(), Canonical, Condition);
+  if (auto It = Keyed ? ChoiceByCondition.find(Condition)
+                      : ChoiceByCondition.end();
+      It != ChoiceByCondition.end())
+    return choiceApplication(C, It->second, std::move(Args), ValueType,
+                             expressionReadsHeap(Body.get()) ||
+                                 expressionReadsHeap(Lo.get()) ||
+                                 expressionReadsHeap(Hi.get()),
+                             Loc);
+
   auto Fn = std::make_unique<VFunction>();
   Fn->Name = "choose";
   Fn->Identity = "__cppverify_choose_" + std::to_string(ChoiceFunctions.size()) +
@@ -4010,7 +4157,19 @@ ASTConverter::convertChoose(const ContractChooseExpr *C) {
       std::move(Holds), VType::makeBool(), Loc));
   const std::string Identity = Fn->Identity;
   const bool ReadsHeap = Fn->ReadsHeap;
+  if (Keyed)
+    ChoiceByCondition.emplace(std::move(Condition), Identity);
   ChoiceFunctions.push_back(std::move(Fn));
+  return choiceApplication(C, Identity, std::move(Args), ValueType, ReadsHeap,
+                           Loc);
+}
+
+std::unique_ptr<VExpr>
+ASTConverter::choiceApplication(const ContractChooseExpr *C,
+                                const std::string &Identity,
+                                std::vector<std::unique_ptr<VExpr>> Args,
+                                const VType &ValueType, bool ReadsHeap,
+                                SourceLocation Loc) {
   auto Call = std::make_unique<VSpecCallExpr>("choose", Identity,
                                               std::move(Args), ValueType, Loc,
                                               ReadsHeap);
