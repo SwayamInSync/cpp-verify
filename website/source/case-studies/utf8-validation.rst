@@ -75,9 +75,10 @@ Reproduce
 
 .. code-block:: bash
 
-   ./build/bin/cpp-verify clang/test/Verify/suite/utf8_validate_pass.cpp
-   ./build/bin/cpp-verify clang/test/Verify/suite/utf8_overlong_fail.cpp
-   ./build/bin/cpp-verify clang/test/Verify/suite/utf8_surrogate_fail.cpp
+   ./build/bin/cpp-verify --jobs=4 --timeout=120000 clang/test/Verify/suite/utf8_validate_pass.cpp
+   ./build/bin/cpp-verify --jobs=4 --timeout=120000 clang/test/Verify/suite/utf8_overlong_fail.cpp
+   ./build/bin/cpp-verify --jobs=4 --timeout=120000 clang/test/Verify/suite/utf8_surrogate_fail.cpp
 
-All three are lit tests; the latter two are expected to fail with a checked
-counterexample.
+All three are lit tests, run with these options; the latter two are expected
+to fail with a checked counterexample. The longer timeout leaves room on a
+slow or busy machine.
