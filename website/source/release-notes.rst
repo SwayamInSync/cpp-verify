@@ -95,6 +95,14 @@ that writes it (``int a; init(a);``) was a failure, or stopped the file; it is
 now ``Unresolved`` with reason ``construct.unsupported``, until a contract can
 say that a function writes its parameter first (:doc:`language/pointers`).
 
+**One condition, one choice.** Every ``cv::choose`` was a choice of its own, so
+``cv::choose(k, k > n) == cv::choose(k, k > n)`` failed with a counterexample,
+and so did a choice over memory compared across a write to another object.
+Chooses whose conditions are written alike are now one choice, a choice
+keeps its value across a write that leaves what its condition reads as it
+was, and a counterexample may give one choice two values only where
+something it reads differs (:doc:`book/part-ii/ch13-spec-and-proof-functions`).
+
 **Choices in counterexamples.** A counterexample could use a value of
 ``cv::choose`` that its body excludes, so true claims about a choice failed.
 Every choice a counterexample uses is now checked against its body
