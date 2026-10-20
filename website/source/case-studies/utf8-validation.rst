@@ -79,4 +79,5 @@ Reproduce
    ./build/bin/cpp-verify clang/test/Verify/suite/utf8_overlong_fail.cpp
    ./build/bin/cpp-verify clang/test/Verify/suite/utf8_surrogate_fail.cpp
 
-All three are lit tests; the latter two are expected to fail closed.
+All three are lit tests; the latter two are expected to fail with a checked
+counterexample.
