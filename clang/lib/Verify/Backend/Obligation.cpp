@@ -1,11 +1,13 @@
 //===--- Obligation.cpp ---------------------------------------------------===//
 #include "LogicTerms.h"
 #include "ObligationLowering.h"
+#include "ObligationSimplify.h"
 #include "SpecAxioms.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/MathExtras.h"
 #include <algorithm>
 #include <tuple>
 
@@ -2159,7 +2161,8 @@ public:
     return std::move(Result);
   }
 
-  llvm::Expected<ObligationModule> buildPassive(const PassiveProgram &P) {
+  llvm::Expected<ObligationModule> buildPassive(const PassiveProgram &P,
+                                                uint64_t MaxNodes) {
     ObligationModule M;
     M.FunctionName = P.FunctionName;
     M.FunctionIdentity = P.FunctionIdentity;
@@ -2272,6 +2275,37 @@ public:
       return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                      ConstructionError.c_str());
 
+    // The goals' size is known before any is built: each is its condition
+    // under a negated copy of every assumption before it (a Not and an Or
+    // each), each query is its goal negated, and the complete goal joins the
+    // goals by And, with its query.
+    uint64_t Prefix = 0, Goals = 0, GoalCount = 0;
+    auto assumed = [&](const VCExpr *Assumption) {
+      Prefix =
+          llvm::SaturatingAdd(Prefix, logicNodeCount(Assumption), uint64_t(2));
+    };
+    auto goal = [&](const VCExpr *Condition) {
+      Goals = llvm::SaturatingAdd(Goals, Prefix, logicNodeCount(Condition));
+      ++GoalCount;
+    };
+    for (const auto &Entry : EntryAssumes)
+      assumed(Entry.get());
+    for (const LoweredStmt &Stmt : Stmts) {
+      if (Stmt.Kind == PassiveStmt::Assume)
+        assumed(Stmt.Cond.get());
+      else
+        goal(Stmt.Cond.get());
+    }
+    for (const auto &Exit : ExitAsserts)
+      goal(std::get<1>(Exit).get());
+    const uint64_t GoalNodes =
+        GoalCount == 0
+            ? 3
+            : llvm::SaturatingAdd(llvm::SaturatingMultiply(Goals, uint64_t(4)),
+                                  3 * GoalCount - 1);
+    if (MaxNodes != 0 && GoalNodes > MaxNodes)
+      return ObligationSizeError::obligations(GoalNodes, MaxNodes);
+
     std::vector<const VCExpr *> Assumptions;
     for (const auto &Entry : EntryAssumes)
       Assumptions.push_back(Entry.get());
@@ -2324,10 +2358,13 @@ public:
 
     M.CorrectnessGoal = buildCompleteGoal(M.Obligations);
     M.CounterexampleQuery = vcNot(cloneVCExpr(M.CorrectnessGoal.get()));
+    assert(GoalNodes == obligationModuleNodeCount(M) &&
+           "the goals' size was not predicted exactly");
 
     SpecAxiomContext AxiomContext{P.SpecFunctions, P.SpecFuel, P.HiddenSpecs,
                                   P.RevealedSpecs};
-    if (llvm::Error Error = materializeLogicFunctions(M, AxiomContext))
+    if (llvm::Error Error =
+            materializeLogicFunctions(M, AxiomContext, MaxNodes, GoalNodes))
       return std::move(Error);
 
     auto RequiredFeatures = validateObligationModule(M);
@@ -2588,14 +2625,32 @@ verify::validateObligationModule(const ObligationModule &M) {
   return RequiredFeatures;
 }
 
+char ObligationSizeError::ID = 0;
+
+llvm::Error ObligationSizeError::obligations(uint64_t Nodes, uint64_t Limit) {
+  return llvm::make_error<ObligationSizeError>(
+      "the proof obligations", Nodes, Limit,
+      "each check repeats every assumption before it, so split the function "
+      "or raise the limit");
+}
+
+void ObligationSizeError::log(llvm::raw_ostream &OS) const {
+  OS << What << " would take at least " << Nodes
+     << " expression nodes, more than the limit of " << Limit
+     << " (--max-query-nodes): " << Advice;
+}
+
 llvm::Expected<ObligationModule>
-verify::buildObligationModule(const PassiveProgram &P) {
+verify::buildObligationModule(const PassiveProgram &P, uint64_t MaxNodes) {
   ObligationBuilder B(P.ResultVarName,
                       P.OldHeapName.empty() ? std::string(VHeapName) + "_0"
                                             : P.OldHeapName,
                       P.CallerIntMode, P.HeapVariables,
                       /*ForceCallerMode=*/false, &P.SpecFunctions);
-  auto Module = B.buildPassive(P);
+  if (const auto &Over = P.TooLarge)
+    return llvm::make_error<ObligationSizeError>(Over->What, Over->Nodes,
+                                                 Over->Limit, Over->Advice);
+  auto Module = B.buildPassive(P, MaxNodes);
   if (Module) {
     Module->AssumedPosts = P.AssumedPosts;
     Module->AssumedUnfoldings = P.AssumedUnfoldings;
