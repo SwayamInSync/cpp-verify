@@ -17,6 +17,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <functional>
@@ -1204,31 +1205,28 @@ bool ASTConverter::appendDynamicPointerAssignment(
     const VarDecl *Target, const Expr *Source, SourceLocation Loc,
     std::vector<std::unique_ptr<VStmt>> &Out) {
   if (LoopDepth != 0) {
-    Errors.push_back(CurrentFn->Name +
-                     ": dynamic-storage pointer reassignment inside loops is "
-                     "unsupported");
+    error(CurrentFn->Name +
+          ": dynamic-storage pointer reassignment inside loops is "
+          "unsupported");
     return true;
   }
   if (!Target || !Source || !Target->getType()->isPointerType() ||
       !Source->getType()->isPointerType()) {
-    Errors.push_back(CurrentFn->Name +
-                     ": dynamic-storage pointer copies require matching "
-                     "pointee types");
+    error(CurrentFn->Name + ": dynamic-storage pointer copies require matching "
+                            "pointee types");
     return true;
   }
 
   auto Provenance = convertDynamicPointerProvenance(Source);
   if (!Provenance) {
-    Errors.push_back(
-        CurrentFn->Name +
-        ": dynamic-storage pointer copies require direct, conditional, or "
-        "null local sources");
+    error(CurrentFn->Name +
+          ": dynamic-storage pointer copies require direct, conditional, or "
+          "null local sources");
     return true;
   }
   if (!dynamicPointerSourceTypesMatch(Target, Source)) {
-    Errors.push_back(CurrentFn->Name +
-                     ": dynamic-storage pointer copies require matching "
-                     "pointee types");
+    error(CurrentFn->Name + ": dynamic-storage pointer copies require matching "
+                            "pointee types");
     return true;
   }
   auto Value = convertExpr(Source);
@@ -1549,8 +1547,7 @@ bool ASTConverter::requireInitialized(const ValueDecl *D,
       continue;
     AllInitialized = false;
     if (ReportedUninitializedValues.insert(Name).second)
-      Errors.push_back(CurrentFn->Name +
-                       ": read of uninitialized local value: " + Name);
+      error(CurrentFn->Name + ": read of uninitialized local value: " + Name);
   }
   return AllInitialized;
 }
@@ -1904,8 +1901,9 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
   for (const FunctionDecl *FD : Definitions) {
     if (isa<CXXMethodDecl>(FD)) {
       if (functionContract(FD) || hasContractStatements(FD, Ctx))
-        Errors.push_back(FD->getNameAsString() +
-                         ": member function verification is unsupported");
+        error(FD->getLocation(),
+              FD->getNameAsString() +
+                  ": member function verification is unsupported");
       continue;
     }
     // Only a template with contracts is reported here: one without matters
@@ -1914,8 +1912,9 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
       if (!FD->isInStdNamespace() &&
           Ctx.getSourceManager().isWrittenInMainFile(FD->getLocation()) &&
           (functionContract(FD) || hasContractStatements(FD, Ctx)))
-        Errors.push_back(FD->getNameAsString() +
-                         ": function template verification is unsupported");
+        error(FD->getLocation(),
+              FD->getNameAsString() +
+                  ": function template verification is unsupported");
       continue;
     }
     if (FD->isInStdNamespace())
@@ -2029,7 +2028,9 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
   }
   for (auto &Fn : Unspecified)
     Out.push_back(std::move(Fn));
-  expandInductivePredicates(Out, Errors);
+  expandInductivePredicates(Out, [&](SourceLocation Loc, std::string Message) {
+    error(Loc, std::move(Message));
+  });
   for (auto &Fn : ChoiceFunctions)
     Out.push_back(std::move(Fn));
   ChoiceFunctions.clear();
@@ -2120,13 +2121,14 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
           llvm::any_of(Reach[Fn->Identity], [&](const std::string &Id) {
             return ChoiceIdentities.count(Id) && Reach[Id].count(Fn->Identity);
           });
-      Errors.push_back(
-          Fn->Name +
-          (InChoice ? ": an inductive predicate occurs in the bodies of its "
-                      "group only positively, never inside cppverify::choose"
-                    : ": an inductive predicate applies itself only in its "
-                      "body or through inductive predicates, not through "
-                      "another spec"));
+      error(Fn->DeclLoc,
+            Fn->Name +
+                (InChoice
+                     ? ": an inductive predicate occurs in the bodies of its "
+                       "group only positively, never inside cppverify::choose"
+                     : ": an inductive predicate applies itself only in its "
+                       "body or through inductive predicates, not through "
+                       "another spec"));
       for (const std::string &Other : Reach[Fn->Identity])
         if (Reach[Other].count(Fn->Identity))
           InductiveCycles.insert(Other);
@@ -2187,8 +2189,8 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
             return kindOf(*ByIdentity[Id]) == kindOf(*Fn);
           });
       if (!SameKind) {
-        Errors.push_back(Fn->Name +
-                         ": mutual recursion is supported only among "
+        error(Fn->DeclLoc,
+              Fn->Name + ": mutual recursion is supported only among "
                          "functions of one kind: spec, proof, or executable");
         continue;
       }
@@ -2209,15 +2211,16 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
                    !ByIdentity[Id]->DivergenceDeclared;
           });
       if (!SameMeasure) {
-        Errors.push_back(Fn->Name + ": mutually recursive " +
-                         (Fn->IsSpec    ? "spec"
-                          : Fn->IsProof ? "proof"
-                                        : "executable") +
-                         " functions require decreases clauses, all of the "
-                         "same length" +
-                         (Fn->IsSpec || Fn->IsProof
-                              ? ""
-                              : ", or all cppverify::decreases(*)"));
+        error(Fn->DeclLoc,
+              Fn->Name + ": mutually recursive " +
+                  (Fn->IsSpec    ? "spec"
+                   : Fn->IsProof ? "proof"
+                                 : "executable") +
+                  " functions require decreases clauses, all of the "
+                  "same length" +
+                  (Fn->IsSpec || Fn->IsProof
+                       ? ""
+                       : ", or all cppverify::decreases(*)"));
         continue;
       }
       Fn->RecursionGroup = std::move(Group);
@@ -2228,12 +2231,12 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
     if (Recursive && Fn->Decreases.empty() && Fn->DivergenceDeclared)
       continue;
     if (Recursive && Fn->Decreases.empty()) {
-      Errors.push_back(
-          Fn->Name +
-          (Fn->IsSpec || Fn->IsProof
-               ? ": recursive spec and proof functions require decreases"
-               : ": recursive executable functions require decreases, or "
-                 "cppverify::decreases(*) to allow divergence"));
+      error(Fn->DeclLoc,
+            Fn->Name +
+                (Fn->IsSpec || Fn->IsProof
+                     ? ": recursive spec and proof functions require decreases"
+                     : ": recursive executable functions require decreases, or "
+                       "cppverify::decreases(*) to allow divergence"));
       continue;
     }
     Fn->NeedsDecreasesCheck = Recursive;
@@ -2519,14 +2522,13 @@ bool ASTConverter::exceedsNestingLimit(const FunctionDecl *FD,
     if (Depth > Limit) {
       const PresumedLoc Where =
           Ctx.getSourceManager().getPresumedLoc(S->getBeginLoc());
-      Errors.push_back(
-          FD->getNameAsString() + ": the expression at " +
-          (Where.isValid() ? std::to_string(Where.getLine()) + ":" +
-                                 std::to_string(Where.getColumn())
-                           : std::string("an unknown location")) +
-          " nests more than " + std::to_string(Limit) +
-          " operations deep, which the verifier does not support; split it "
-          "into intermediate variables");
+      error(FD->getNameAsString() + ": the expression at " +
+            (Where.isValid() ? std::to_string(Where.getLine()) + ":" +
+                                   std::to_string(Where.getColumn())
+                             : std::string("an unknown location")) +
+            " nests more than " + std::to_string(Limit) +
+            " operations deep, which the verifier does not support; split it "
+            "into intermediate variables");
       return true;
     }
     for (const Stmt *Child : S->children())
@@ -2540,6 +2542,7 @@ bool ASTConverter::exceedsNestingLimit(const FunctionDecl *FD,
 
 std::unique_ptr<VFunction>
 ASTConverter::convertFunction(const FunctionDecl *FD) {
+  llvm::SaveAndRestore At(CurrentRange, SourceRange(FD->getLocation()));
   const FunctionContractInfo *FCI = functionContract(FD);
   if (!FCI) {
     // Assertions and ghost code are obligations even without a contract
@@ -2554,8 +2557,7 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   ParameterNames.clear();
   const FunctionDecl *ContractDecl = FCI->ContractDecl ? FCI->ContractDecl : FD;
   if (ContractDecl->getNumParams() != FD->getNumParams()) {
-    Errors.push_back(FD->getNameAsString() +
-                     ": contract declaration parameter mismatch");
+    error(FD->getNameAsString() + ": contract declaration parameter mismatch");
     return nullptr;
   }
   for (unsigned I = 0; I < FD->getNumParams(); ++I) {
@@ -2570,33 +2572,31 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     ParameterNames[DefinitionParam] = Name;
   }
   if (FD->isVariadic()) {
-    Errors.push_back(FD->getNameAsString() +
-                     ": variadic functions are unsupported");
+    error(FD->getNameAsString() + ": variadic functions are unsupported");
     return nullptr;
   }
   if (FCI->IsSpec && writesIndirectMemory(FD)) {
-    Errors.push_back(FD->getNameAsString() +
-                     ": spec functions must not write memory");
+    error(FD->getNameAsString() + ": spec functions must not write memory");
     return nullptr;
   }
   if (FCI->IsSpec && (!FCI->Preconditions.empty() || !FCI->Modifies.empty() ||
                       !FCI->Aliases.empty())) {
-    Errors.push_back(FD->getNameAsString() +
-                     ": a spec function is defined for every argument and "
-                     "its body is its meaning, so pre, modifies, and aliases "
-                     "do not apply; use recommends for a soft precondition");
+    error(FD->getNameAsString() +
+          ": a spec function is defined for every argument and "
+          "its body is its meaning, so pre, modifies, and aliases "
+          "do not apply; use recommends for a soft precondition");
     return nullptr;
   }
   if (FCI->IsSpec && FD->getReturnType()->isRecordType() &&
       !VType::collectionKind(FD->getReturnType())) {
-    Errors.push_back(FD->getNameAsString() +
-                     ": aggregate-returning spec functions are unsupported");
+    error(FD->getNameAsString() +
+          ": aggregate-returning spec functions are unsupported");
     return nullptr;
   }
   if (auto Unsupported =
           findUnsupportedType(FD, !FCI->IsSpec && !FCI->IsProof)) {
-    Errors.push_back(FD->getNameAsString() +
-                     ": unsupported C++ type in verification: " + *Unsupported);
+    error(FD->getNameAsString() +
+          ": unsupported C++ type in verification: " + *Unsupported);
     return nullptr;
   }
 
@@ -2615,17 +2615,16 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     return D->hasAttr<CppVerifyTrustedAttr>();
   });
   if (Fn->IsTrusted && Fn->IsSpec) {
-    Errors.push_back(Fn->Name + ": [[cppverify::trusted]] does not apply to a "
-                                "spec function, whose definition is its "
-                                "meaning");
+    error(Fn->Name + ": [[cppverify::trusted]] does not apply to a "
+                     "spec function, whose definition is its "
+                     "meaning");
     CurrentFn = nullptr;
     return nullptr;
   }
   Fn->IsExternalContract = !FD->hasBody() || Fn->IsTrusted;
   if (Fn->IsExternalContract && !Fn->IsTrusted &&
       (Fn->IsSpec || Fn->IsProof)) {
-    Errors.push_back(Fn->Name +
-                     (Fn->IsSpec
+    error(Fn->Name + (Fn->IsSpec
                           ? ": a spec declaration requires a definition"
                           : ": a proof declaration requires a definition; "
                             "mark it [[cppverify::trusted]] to assume its "
@@ -2689,7 +2688,7 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     Out = convertExpr(E);
     InContractExpression = SavedContract;
     if (!Out)
-      Errors.push_back(Fn->Name + ": unsupported expression in " + Clause);
+      error(Fn->Name + ": unsupported expression in " + Clause);
   };
 
   InPost = false;
@@ -2706,8 +2705,8 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     std::unique_ptr<VExpr> PE;
     recordContractExpr("post", E, PE);
     if (PE && Fn->IsSpec && mentionsOld(PE.get())) {
-      Errors.push_back(Fn->Name + ": a spec changes no state, so its post "
-                                  "cannot use old");
+      error(Fn->Name + ": a spec changes no state, so its post "
+                       "cannot use old");
       continue;
     }
     if (PE)
@@ -2724,7 +2723,7 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     if (std::optional<VFootprint> Footprint = convertFootprint(E))
       Fn->Modifies.push_back(std::move(*Footprint));
     else
-      Errors.push_back(Fn->Name + ": unsupported expression in modifies");
+      error(Fn->Name + ": unsupported expression in modifies");
   }
   for (const auto &[Pointer, Count] : FCI->Reads) {
     const PointerType *PT =
@@ -2732,8 +2731,7 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     if (!Fn->IsSpec || !PT || PT->getPointeeType()->isIncompleteType() ||
         !Count || !Count->getType()->isIntegerType() ||
         Count->getType()->isBooleanType()) {
-      Errors.push_back(Fn->Name +
-                       ": reads takes a pointer and an integer count, and "
+      error(Fn->Name + ": reads takes a pointer and an integer count, and "
                        "only on a spec function");
       continue;
     }
@@ -2744,7 +2742,7 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
         Ctx.getTypeSizeInChars(PT->getPointeeType()).getQuantity());
     if (expressionReadsHeap(Range.Base.get(), true) ||
         expressionReadsHeap(Range.Count.get(), true)) {
-      Errors.push_back(Fn->Name + ": a reads range cannot depend on the heap");
+      error(Fn->Name + ": a reads range cannot depend on the heap");
       continue;
     }
     if (Range.Base && Range.Count)
@@ -2752,8 +2750,8 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   }
   for (const Expr *Condition : FCI->When) {
     if (!Fn->IsSpec) {
-      Errors.push_back(Fn->Name + ": when restricts the domain of a spec "
-                                  "function only");
+      error(Fn->Name + ": when restricts the domain of a spec "
+                       "function only");
       break;
     }
     std::unique_ptr<VExpr> Domain;
@@ -2854,9 +2852,8 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
       QualType PointeeI = addressedType(AddressParams[I]).getUnqualifiedType();
       QualType PointeeJ = addressedType(AddressParams[J]).getUnqualifiedType();
       if (MayAlias && !Ctx.hasSameType(PointeeI, PointeeJ)) {
-        Errors.push_back(
-            Fn->Name +
-            ": aliases between different pointee types are unsupported");
+        error(Fn->Name +
+              ": aliases between different pointee types are unsupported");
         continue;
       }
       auto Ptr = [&](const ParmVarDecl *P) {
@@ -2968,15 +2965,13 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     if (std::any_of(Fn->Body.begin(), Fn->Body.end(), [&](const auto &S) {
           return usesHeapBackedLocalAsScalar(S.get(), HeapBackedLocals);
         })) {
-      Errors.push_back(Fn->Name +
-                       ": internal lowering failure for a byte-addressed "
+      error(Fn->Name + ": internal lowering failure for a byte-addressed "
                        "object");
       CurrentFn = nullptr;
       return nullptr;
     }
     if (Fn->IsSpec && !specBodyCanBeAxiomatized(Fn->Body)) {
-      Errors.push_back(Fn->Name +
-                       ": spec function body is unsupported by axiomatic "
+      error(Fn->Name + ": spec function body is unsupported by axiomatic "
                        "lowering");
       CurrentFn = nullptr;
       return nullptr;
@@ -3032,9 +3027,9 @@ std::unique_ptr<VExpr> ASTConverter::globalAddress(const VarDecl *VD,
   if (!VD->hasGlobalStorage() || VD->isStaticLocal() ||
       VD->getTLSKind() != VarDecl::TLS_None || Type.isVolatileQualified() ||
       !(Type->isIntegralOrEnumerationType() || Type->isBooleanType())) {
-    Errors.push_back(CurrentFn->Name +
-                     ": only scalar integral global variables are supported: " +
-                     VD->getNameAsString());
+    error(CurrentFn->Name +
+          ": only scalar integral global variables are supported: " +
+          VD->getNameAsString());
     return nullptr;
   }
   const uint64_t Size = Ctx.getTypeSizeInChars(Type).getQuantity();
@@ -3089,9 +3084,8 @@ ASTConverter::convertLoopFootprints(const LoopContractInfo &LCI) {
   for (const Expr *E : LCI.Modifies) {
     std::optional<VFootprint> Footprint = convertFootprint(E);
     if (!Footprint || Footprint->Target->K != VExpr::Load) {
-      Errors.push_back(CurrentFn->Name +
-                       ": a loop's modifies names memory: *p, p[i], "
-                       "p[lo : n], p->f, or a reference");
+      error(CurrentFn->Name + ": a loop's modifies names memory: *p, p[i], "
+                              "p[lo : n], p->f, or a reference");
       continue;
     }
     Out.push_back(std::move(*Footprint));
@@ -3128,14 +3122,12 @@ bool ASTConverter::checkLoopTermination(const Stmt *Loop, bool HasMeasure) {
   const bool Terminates = HasMeasure || neverRepeats(Loop, Ctx);
   if (InGhost || CurrentFn->IsProof) {
     if (MayDiverge) {
-      Errors.push_back(CurrentFn->Name +
-                       ": proof-only loops must terminate; "
-                       "cppverify::decreases(*) is not allowed");
+      error(CurrentFn->Name + ": proof-only loops must terminate; "
+                              "cppverify::decreases(*) is not allowed");
       return false;
     }
     if (!Terminates) {
-      Errors.push_back(CurrentFn->Name +
-                       ": proof-only loops require a decreases clause");
+      error(CurrentFn->Name + ": proof-only loops require a decreases clause");
       return false;
     }
     return true;
@@ -3159,13 +3151,13 @@ ASTConverter::convertConstexprSpec(const FunctionDecl *FD) {
   if (!FD->isConstexpr() || !FD->hasBody())
     return nullptr;
   if (FD->getReturnType()->isRecordType()) {
-    Errors.push_back(FD->getNameAsString() +
-                     ": aggregate-returning constexpr specs are unsupported");
+    error(FD->getNameAsString() +
+          ": aggregate-returning constexpr specs are unsupported");
     return nullptr;
   }
   if (auto Unsupported = findUnsupportedType(FD, false)) {
-    Errors.push_back(FD->getNameAsString() +
-                     ": unsupported C++ type in verification: " + *Unsupported);
+    error(FD->getNameAsString() +
+          ": unsupported C++ type in verification: " + *Unsupported);
     return nullptr;
   }
 
@@ -3271,8 +3263,8 @@ std::optional<VPlace> ASTConverter::arrowFieldPlace(const MemberExpr *M) {
   if (!Pointer)
     return std::nullopt;
   if (isDynamicAddress(Pointer)) {
-    Errors.push_back(CurrentFn->Name +
-                     ": dynamic-storage pointers cannot select record fields");
+    error(CurrentFn->Name +
+          ": dynamic-storage pointers cannot select record fields");
     return std::nullopt;
   }
   auto Base = convertExpr(Pointer);
@@ -3314,8 +3306,8 @@ ASTConverter::subscriptPlace(const ArraySubscriptExpr *AS) {
   if (promotedRootLocal(AS))
     return promotedObjectPlace(AS);
   if (isDynamicAddress(AS->getBase())) {
-    Errors.push_back(CurrentFn->Name +
-                     ": subscripting dynamic-storage pointers is unsupported");
+    error(CurrentFn->Name +
+          ": subscripting dynamic-storage pointers is unsupported");
     return std::nullopt;
   }
   auto Base = convertExpr(AS->getBase());
@@ -3325,8 +3317,8 @@ ASTConverter::subscriptPlace(const ArraySubscriptExpr *AS) {
   const uint64_t PointeeSize = Base->Ty.PointeeSizeBytes;
   Index = scalePointerOffset(std::move(Index), PointeeSize, AS->getExprLoc());
   if (!Index) {
-    Errors.push_back(CurrentFn->Name +
-                     ": pointer arithmetic requires a complete pointee type");
+    error(CurrentFn->Name +
+          ": pointer arithmetic requires a complete pointee type");
     return std::nullopt;
   }
   VPlace Place(std::move(Base),
@@ -3354,8 +3346,8 @@ ASTConverter::automaticLocalPlace(const VarDecl *VD, SourceLocation Loc) {
       Provenance == AutomaticLocalProvenanceVariables.end())
     return std::nullopt;
   if (InOld) {
-    Errors.push_back(CurrentFn->Name +
-                     ": automatic local storage has no function-entry value");
+    error(CurrentFn->Name +
+          ": automatic local storage has no function-entry value");
     return std::nullopt;
   }
   // Its initialization is the storage's, checked where it is read: a write
@@ -3442,8 +3434,7 @@ ASTConverter::recordFixedArrayBoundsCheck(const Expr *Index,
       const bool OutOfBounds = (Value->isSigned() && Value->isNegative()) ||
                                IndexMagnitude.uge(ArrayCount);
       if (OutOfBounds)
-        Errors.push_back(CurrentFn->Name +
-                         ": fixed-array index is out of bounds");
+        error(CurrentFn->Name + ": fixed-array index is out of bounds");
       return nullptr;
     }
   }
@@ -3486,8 +3477,8 @@ ASTConverter::promotedObjectPlace(const Expr *E) {
     if (!Base)
       return std::nullopt;
     if (!Offset) {
-      Errors.push_back(CurrentFn->Name +
-                       ": unsupported field selection on an automatic object");
+      error(CurrentFn->Name +
+            ": unsupported field selection on an automatic object");
       return std::nullopt;
     }
     Base->applyField(FD->getNameAsString(), *Offset, M->getExprLoc());
@@ -3504,8 +3495,7 @@ ASTConverter::promotedObjectPlace(const Expr *E) {
     if (!Base)
       return std::nullopt;
     if (!CAT) {
-      Errors.push_back(CurrentFn->Name +
-                       ": unsupported indexing of an automatic object");
+      error(CurrentFn->Name + ": unsupported indexing of an automatic object");
       return std::nullopt;
     }
     const uint64_t Count = CAT->getSize().getZExtValue();
@@ -3519,9 +3509,9 @@ ASTConverter::promotedObjectPlace(const Expr *E) {
     auto Scaled =
         scalePointerOffset(std::move(Index), Stride, AS->getExprLoc());
     if (!Scaled) {
-      Errors.push_back(CurrentFn->Name +
-                       ": fixed-array indexing requires a complete element "
-                       "type and integral index");
+      error(CurrentFn->Name +
+            ": fixed-array indexing requires a complete element "
+            "type and integral index");
       return std::nullopt;
     }
     Base->applyElement(std::move(Scaled), Stride, AS->getExprLoc());
@@ -3761,9 +3751,8 @@ std::optional<VPlace> ASTConverter::lvaluePlace(const Expr *E) {
     if (VD->getType()->isLValueReferenceType() &&
         (isa<ParmVarDecl>(VD) || VD->isLocalVarDecl())) {
       if (InOld && VD->isLocalVarDecl()) {
-        Errors.push_back(
-            CurrentFn->Name +
-            ": local reference bindings have no function-entry value");
+        error(CurrentFn->Name +
+              ": local reference bindings have no function-entry value");
         return std::nullopt;
       }
       requireInitialized(VD);
@@ -3792,9 +3781,9 @@ std::optional<VPlace> ASTConverter::lvaluePlace(const Expr *E) {
       return std::nullopt;
     if (isDynamicAddress(U->getSubExpr()) &&
         !directDynamicPointer(U->getSubExpr())) {
-      Errors.push_back(CurrentFn->Name +
-                       ": dynamic-storage reference binding requires its "
-                       "direct allocation pointer");
+      error(CurrentFn->Name +
+            ": dynamic-storage reference binding requires its "
+            "direct allocation pointer");
       return std::nullopt;
     }
     return derefPlace(U->getSubExpr(), E->getExprLoc());
@@ -3871,12 +3860,14 @@ ASTConverter::convertRecordField(std::unique_ptr<VExpr> Base,
       return nullptr;
     return std::make_unique<VOldExpr>(std::move(Inner), Ty, Loc);
   }
-  Errors.push_back(CurrentFn->Name +
-                   ": unsupported aggregate field base expression");
+  error(CurrentFn->Name + ": unsupported aggregate field base expression");
   return nullptr;
 }
 
 std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
+  llvm::SaveAndRestore At(CurrentRange, E && E->getSourceRange().isValid()
+                                            ? E->getSourceRange()
+                                            : CurrentRange);
   auto Result = convertExprImpl(E);
   if (Result && E)
     Result->EndLoc = E->getEndLoc();
@@ -4376,34 +4367,33 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     return convertExpr(MTE->getSubExpr());
   if (const auto *Decay = dyn_cast<CastExpr>(E);
       Decay && Decay->getCastKind() == CK_ArrayToPointerDecay) {
-    Errors.push_back(
-        CurrentFn->Name +
-        ": array-to-pointer decay of automatic storage is unsupported until "
-        "lexical lifetime and escape effects are modeled");
+    error(CurrentFn->Name +
+          ": array-to-pointer decay of automatic storage is unsupported until "
+          "lexical lifetime and escape effects are modeled");
     return nullptr;
   }
   if (isa<CXXNewExpr>(E)) {
-    Errors.push_back(CurrentFn->Name +
-                     ": new-expressions are only supported as direct local "
-                     "pointer initializers");
+    error(CurrentFn->Name +
+          ": new-expressions are only supported as direct local "
+          "pointer initializers");
     return nullptr;
   }
   if (isa<CXXDeleteExpr>(E)) {
-    Errors.push_back(CurrentFn->Name +
-                     ": delete-expressions are only supported as statements");
+    error(CurrentFn->Name +
+          ": delete-expressions are only supported as statements");
     return nullptr;
   }
   if (const auto *IL = dyn_cast<InitListExpr>(E)) {
     if (E->getType()->isRecordType()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": aggregate initializer used as a scalar expression");
+      error(CurrentFn->Name +
+            ": aggregate initializer used as a scalar expression");
       return nullptr;
     }
     if (IL->getNumInits() == 1)
       return convertExpr(IL->getInit(0));
     if (IL->getNumInits() != 0) {
-      Errors.push_back(CurrentFn->Name +
-                       ": scalar initializer must contain at most one value");
+      error(CurrentFn->Name +
+            ": scalar initializer must contain at most one value");
       return nullptr;
     }
     VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
@@ -4412,8 +4402,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     if (Ty.Kind == VTypeKind::Int32 || Ty.Kind == VTypeKind::Int64 ||
         Ty.Kind == VTypeKind::Ptr)
       return std::make_unique<VLiteralExpr>(0, Ty, E->getExprLoc());
-    Errors.push_back(CurrentFn->Name +
-                     ": unsupported empty scalar initializer");
+    error(CurrentFn->Name + ": unsupported empty scalar initializer");
     return nullptr;
   }
   if (const auto *ValueInit = dyn_cast<CXXScalarValueInitExpr>(E)) {
@@ -4423,14 +4412,13 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     if (Ty.Kind == VTypeKind::Int32 || Ty.Kind == VTypeKind::Int64 ||
         Ty.Kind == VTypeKind::Ptr)
       return std::make_unique<VLiteralExpr>(0, Ty, E->getExprLoc());
-    Errors.push_back(CurrentFn->Name +
-                     ": unsupported scalar value initialization");
+    error(CurrentFn->Name + ": unsupported scalar value initialization");
     return nullptr;
   }
   if (const auto *CE = dyn_cast<CXXConstructExpr>(E)) {
     if (CE->getNumArgs() == 1 && CE->getConstructor()->isTrivial())
       return convertExpr(CE->getArg(0));
-    Errors.push_back(CurrentFn->Name + ": unsupported constructor expression");
+    error(CurrentFn->Name + ": unsupported constructor expression");
     return nullptr;
   }
   if (const auto *IL = dyn_cast<IntegerLiteral>(E)) {
@@ -4452,8 +4440,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     if (Ty.Kind == VTypeKind::Int32 || Ty.Kind == VTypeKind::Int64 ||
         Ty.Kind == VTypeKind::Ptr)
       return std::make_unique<VLiteralExpr>(0, Ty, E->getExprLoc());
-    Errors.push_back(CurrentFn->Name +
-                     ": unsupported implicit aggregate initialization");
+    error(CurrentFn->Name + ": unsupported implicit aggregate initialization");
     return nullptr;
   }
   if (const auto *Trait = dyn_cast<UnaryExprOrTypeTraitExpr>(E)) {
@@ -4469,8 +4456,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
       Value = Ctx.getTypeAlignInChars(ArgumentType);
       break;
     default:
-      Errors.push_back(CurrentFn->Name +
-                       ": unsupported unary type trait expression");
+      error(CurrentFn->Name + ": unsupported unary type trait expression");
       return nullptr;
     }
     VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
@@ -4494,11 +4480,10 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
       auto Bound = BoundValues.find(VD);
       if (InOld && VD->isLocalVarDecl() && Bound == BoundValues.end()) {
-        Errors.push_back(
-            CurrentFn->Name +
-            ": cppverify::old(...) cannot refer to local variable without a "
-            "function-entry state: " +
-            VD->getNameAsString());
+        error(CurrentFn->Name +
+              ": cppverify::old(...) cannot refer to local variable without a "
+              "function-entry state: " +
+              VD->getNameAsString());
         return nullptr;
       }
       if (!VD->isLocalVarDeclOrParm() && Bound == BoundValues.end()) {
@@ -4507,10 +4492,9 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
           return std::make_unique<VLiteralExpr>(integerValueString(*Value), Ty,
                                                 E->getExprLoc());
         if (CurrentFn->IsSpec) {
-          Errors.push_back(CurrentFn->Name +
-                           ": a spec function cannot read the mutable global " +
-                           VD->getNameAsString() +
-                           "; pass its value as a parameter");
+          error(CurrentFn->Name +
+                ": a spec function cannot read the mutable global " +
+                VD->getNameAsString() + "; pass its value as a parameter");
           return nullptr;
         }
         auto Address = globalAddress(VD, E->getExprLoc());
@@ -4522,10 +4506,10 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
       if (AddressableLocals.count(VD)) {
         VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
         if (Ty.isAggregate() || Ty.Kind == VTypeKind::Unsupported) {
-          Errors.push_back(CurrentFn->Name +
-                           ": aggregate value use of an automatic object is "
-                           "unsupported: " +
-                           VD->getNameAsString());
+          error(CurrentFn->Name +
+                ": aggregate value use of an automatic object is "
+                "unsupported: " +
+                VD->getNameAsString());
           return nullptr;
         }
         auto Address = convertAutomaticLocalAddress(VD, E->getExprLoc());
@@ -4538,8 +4522,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
       if (VD->getType()->isReferenceType()) {
         auto Address = convertLValueAddress(E);
         if (!Address) {
-          Errors.push_back(CurrentFn->Name +
-                           ": unsupported reference value expression");
+          error(CurrentFn->Name + ": unsupported reference value expression");
           return nullptr;
         }
         VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
@@ -4564,18 +4547,17 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
   }
   if (const auto *U = dyn_cast<UnaryOperator>(E)) {
     if (U->getOpcode() == UO_AddrOf) {
-      Errors.push_back(
-          CurrentFn->Name +
-          ": raw address-of is unsupported until lexical lifetime and escape "
-          "effects are modeled");
+      error(CurrentFn->Name +
+            ": raw address-of is unsupported until lexical lifetime and escape "
+            "effects are modeled");
       return nullptr;
     }
     if (U->getOpcode() == UO_Deref) {
       if (isDynamicAddress(U->getSubExpr()) &&
           !directDynamicPointer(U->getSubExpr())) {
-        Errors.push_back(CurrentFn->Name +
-                         ": dynamic-storage dereference requires its direct "
-                         "allocation pointer");
+        error(CurrentFn->Name +
+              ": dynamic-storage dereference requires its direct "
+              "allocation pointer");
         return nullptr;
       }
       auto Place = derefPlace(U->getSubExpr(), E->getExprLoc());
@@ -4598,9 +4580,8 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
                                             E->getExprLoc());
     if (U->getOpcode() == UO_Not) {
       if (IntMode == VIntMode::Math) {
-        Errors.push_back(CurrentFn->Name +
-                         ": bitwise operators are unsupported in "
-                         "mathematical spec functions");
+        error(CurrentFn->Name + ": bitwise operators are unsupported in "
+                                "mathematical spec functions");
         return nullptr;
       }
       return std::make_unique<VUnaryOpExpr>(
@@ -4608,7 +4589,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
           machineOperand(std::move(Op), U->getSubExpr()->getType(), Ctx), Ty,
           E->getExprLoc());
     }
-    Errors.push_back(CurrentFn->Name + ": unsupported unary operator");
+    error(CurrentFn->Name + ": unsupported unary operator");
     return nullptr;
   }
   if (const auto *AS = dyn_cast<ArraySubscriptExpr>(E)) {
@@ -4623,25 +4604,24 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
   if (const auto *B = dyn_cast<BinaryOperator>(E)) {
     std::optional<VBinOp> Op = convertBinOpcode(B->getOpcode());
     if (!Op) {
-      Errors.push_back(CurrentFn->Name + ": unsupported binary operator");
+      error(CurrentFn->Name + ": unsupported binary operator");
       return nullptr;
     }
     if (IntMode == VIntMode::Math &&
         (*Op == VBinOp::BitAnd || *Op == VBinOp::BitOr ||
          *Op == VBinOp::BitXor || *Op == VBinOp::Shl || *Op == VBinOp::Shr)) {
-      Errors.push_back(CurrentFn->Name +
-                       ": bitwise operators are unsupported in mathematical "
-                       "spec functions");
+      error(CurrentFn->Name +
+            ": bitwise operators are unsupported in mathematical "
+            "spec functions");
       return nullptr;
     }
     const bool LeftPointer = B->getLHS()->getType()->isPointerType();
     const bool RightPointer = B->getRHS()->getType()->isPointerType();
     if (B->getOpcode() == BO_Sub && LeftPointer && RightPointer) {
       if (CurrentFn->IsSpec) {
-        Errors.push_back(
-            CurrentFn->Name +
-            ": pointer difference in spec or lifted constexpr functions is "
-            "unsupported");
+        error(CurrentFn->Name +
+              ": pointer difference in spec or lifted constexpr functions is "
+              "unsupported");
         return nullptr;
       }
       QualType LeftPointee =
@@ -4650,9 +4630,9 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
           B->getRHS()->getType()->getPointeeType().getUnqualifiedType();
       if (!Ctx.hasSameType(LeftPointee, RightPointee) ||
           LeftPointee->isIncompleteType()) {
-        Errors.push_back(CurrentFn->Name +
-                         ": pointer difference requires matching complete "
-                         "pointee types");
+        error(CurrentFn->Name +
+              ": pointer difference requires matching complete "
+              "pointee types");
         return nullptr;
       }
       const uint64_t PointeeSize =
@@ -4660,10 +4640,9 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
       auto L = convertPointerDifferenceOperand(B->getLHS(), PointeeSize);
       auto R = convertPointerDifferenceOperand(B->getRHS(), PointeeSize);
       if (!L || !R) {
-        Errors.push_back(
-            CurrentFn->Name +
-            ": pointer difference operands must be direct pointers or "
-            "compositional pointer-arithmetic positions");
+        error(CurrentFn->Name +
+              ": pointer difference operands must be direct pointers or "
+              "compositional pointer-arithmetic positions");
         return nullptr;
       }
       VType AddressType = VType::makePtr(PointeeSize);
@@ -4684,16 +4663,15 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
         isDynamicAddress(B->getLHS()) || isDynamicAddress(B->getRHS());
     if ((B->getOpcode() == BO_Add || B->getOpcode() == BO_Sub) &&
         DynamicOperand) {
-      Errors.push_back(CurrentFn->Name +
-                       ": arithmetic on dynamic-storage pointers is "
-                       "unsupported");
+      error(CurrentFn->Name + ": arithmetic on dynamic-storage pointers is "
+                              "unsupported");
       return nullptr;
     }
     if ((B->getOpcode() == BO_LT || B->getOpcode() == BO_LE ||
          B->getOpcode() == BO_GT || B->getOpcode() == BO_GE) &&
         DynamicOperand) {
-      Errors.push_back(CurrentFn->Name +
-                       ": ordering dynamic-storage pointers is unsupported");
+      error(CurrentFn->Name +
+            ": ordering dynamic-storage pointers is unsupported");
       return nullptr;
     }
     auto L = convertExpr(B->getLHS());
@@ -4721,9 +4699,8 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
         R = scalePointerOffset(std::move(R), Ty.PointeeSizeBytes,
                                E->getExprLoc());
       if (!L || !R) {
-        Errors.push_back(
-            CurrentFn->Name +
-            ": pointer arithmetic requires a complete pointee type");
+        error(CurrentFn->Name +
+              ": pointer arithmetic requires a complete pointee type");
         return nullptr;
       }
     }
@@ -4749,8 +4726,8 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     const bool PointerToBool =
         From.Kind == VTypeKind::Ptr && To.Kind == VTypeKind::Bool;
     if (!IntegralCast && !PointerToBool) {
-      Errors.push_back(CurrentFn->Name +
-                       ": unsupported implicit pointer or aggregate cast");
+      error(CurrentFn->Name +
+            ": unsupported implicit pointer or aggregate cast");
       return nullptr;
     }
     // In a contract an implicit integral conversion keeps the value. One
@@ -4802,8 +4779,8 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     const bool PointerToBool =
         From.Kind == VTypeKind::Ptr && To.Kind == VTypeKind::Bool;
     if (!IntegralCast && !PointerToBool) {
-      Errors.push_back(CurrentFn->Name +
-                       ": unsupported explicit pointer or aggregate cast");
+      error(CurrentFn->Name +
+            ": unsupported explicit pointer or aggregate cast");
       return nullptr;
     }
     // A conversion into an enumeration's value range is checked.
@@ -4825,11 +4802,10 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
         BoundVars.insert(VD);
     if (const VarDecl *Local =
             findOldLocalWithoutEntryState(O->getInner(), BoundVars)) {
-      Errors.push_back(
-          CurrentFn->Name +
-          ": cppverify::old(...) cannot refer to local variable without a "
-          "function-entry state: " +
-          Local->getNameAsString());
+      error(CurrentFn->Name +
+            ": cppverify::old(...) cannot refer to local variable without a "
+            "function-entry state: " +
+            Local->getNameAsString());
       return nullptr;
     }
     bool Saved = InOld;
@@ -4871,9 +4847,8 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     if (!M->isArrow() && promotedRootLocal(M)) {
       VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
       if (Ty.isAggregate() || Ty.Kind == VTypeKind::Unsupported) {
-        Errors.push_back(CurrentFn->Name +
-                         ": aggregate value use of an automatic object "
-                         "subobject is unsupported");
+        error(CurrentFn->Name + ": aggregate value use of an automatic object "
+                                "subobject is unsupported");
         return nullptr;
       }
       auto Place = promotedObjectPlace(M);
@@ -4887,17 +4862,16 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
             dyn_cast<DeclRefExpr>(M->getBase()->IgnoreParenImpCasts())) {
       if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
         if (!VD->isLocalVarDeclOrParm()) {
-          Errors.push_back(CurrentFn->Name +
-                           ": global aggregate access is unsupported");
+          error(CurrentFn->Name + ": global aggregate access is unsupported");
           return nullptr;
         }
         if (const auto *FD = dyn_cast<FieldDecl>(M->getMemberDecl())) {
           requireInitialized(VD, FD);
           VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
           if (Ty.isAggregate() || Ty.Kind == VTypeKind::Unsupported) {
-            Errors.push_back(CurrentFn->Name +
-                             ": aggregate field of a flattened record value is "
-                             "unsupported");
+            error(CurrentFn->Name +
+                  ": aggregate field of a flattened record value is "
+                  "unsupported");
             return nullptr;
           }
           std::string Name = valueName(VD) + "." + FD->getNameAsString();
@@ -4908,9 +4882,9 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
         if (const auto *FD = dyn_cast<FieldDecl>(M->getMemberDecl())) {
           VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
           if (Ty.isAggregate() || Ty.Kind == VTypeKind::Unsupported) {
-            Errors.push_back(CurrentFn->Name +
-                             ": aggregate field of a flattened record value is "
-                             "unsupported");
+            error(CurrentFn->Name +
+                  ": aggregate field of a flattened record value is "
+                  "unsupported");
             return nullptr;
           }
           std::string Name = valueName(PD) + "." + FD->getNameAsString();
@@ -4933,13 +4907,12 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
   }
   if (dyn_cast<ResultExpr>(E)) {
     if (!InPost) {
-      Errors.push_back(CurrentFn->Name +
-                       ": cppverify::result outside a postcondition");
+      error(CurrentFn->Name + ": cppverify::result outside a postcondition");
       return nullptr;
     }
     if (InOld) {
-      Errors.push_back(CurrentFn->Name +
-                       ": result has no value in the function pre-state");
+      error(CurrentFn->Name +
+            ": result has no value in the function pre-state");
       return nullptr;
     }
     return std::make_unique<VResultExpr>(
@@ -5019,17 +4992,16 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
         const FunctionContractInfo *CalleeContract = functionContract(Callee);
         if (CalleeContract && CalleeContract->IsSpec && !InContractExpression &&
             !InGhost && !CurrentFn->IsSpec && !CurrentFn->IsProof) {
-          Errors.push_back(CurrentFn->Name + ": spec function " +
-                           Callee->getNameAsString() +
-                           " cannot be used in executable code");
+          error(CurrentFn->Name + ": spec function " +
+                Callee->getNameAsString() +
+                " cannot be used in executable code");
           return nullptr;
         }
         for (const Expr *A : CE->arguments())
           if (isDynamicAddress(A)) {
-            Errors.push_back(
-                CurrentFn->Name +
-                ": dynamic-storage pointers cannot cross a function-call "
-                "boundary");
+            error(CurrentFn->Name +
+                  ": dynamic-storage pointers cannot cross a function-call "
+                  "boundary");
             return nullptr;
           }
         std::vector<std::unique_ptr<VExpr>> Args;
@@ -5067,19 +5039,17 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
             std::move(Args), Ty, E->getExprLoc(), specReadsHeap(Callee));
       }
       if (functionContract(Callee))
-        Errors.push_back(CurrentFn->Name +
-                         ": executable call is unsupported in this expression "
-                         "context: " +
-                         Callee->getNameAsString());
+        error(CurrentFn->Name +
+              ": executable call is unsupported in this expression "
+              "context: " +
+              Callee->getNameAsString());
       else
-        Errors.push_back(
-            CurrentFn->Name +
-            ": call to function without a verification contract: " +
-            Callee->getNameAsString());
+        error(CurrentFn->Name +
+              ": call to function without a verification contract: " +
+              Callee->getNameAsString());
     }
   }
-  Errors.push_back(CurrentFn->Name +
-                   ": unsupported expression: " + E->getStmtClassName());
+  error(CurrentFn->Name + ": unsupported expression: " + E->getStmtClassName());
   return nullptr;
 }
 
@@ -5092,8 +5062,7 @@ void ASTConverter::convertExecCallArg(
   }
   if (Formal && Formal->getType()->isReferenceType()) {
     if (!Formal->getType()->isLValueReferenceType()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": rvalue-reference arguments are unsupported");
+      error(CurrentFn->Name + ": rvalue-reference arguments are unsupported");
       Out = nullptr;
       return;
     }
@@ -5108,10 +5077,9 @@ void ASTConverter::convertExecCallArg(
     if (Out && (isa<MemberExpr>(Binding) || isa<ArraySubscriptExpr>(Binding)))
       appendReferenceBindingCheck(E, Out.get(), E->getExprLoc(), Prelude);
     if (!Out && Errors.size() == ErrorCount)
-      Errors.push_back(
-          CurrentFn->Name +
-          ": reference arguments require a supported reference, addressable "
-          "local, or direct pointer dereference");
+      error(CurrentFn->Name +
+            ": reference arguments require a supported reference, addressable "
+            "local, or direct pointer dereference");
     return;
   }
   const VarDecl *Source = directDynamicPointer(E);
@@ -5119,7 +5087,7 @@ void ASTConverter::convertExecCallArg(
     if (!Source || !Formal || !Formal->getType()->isPointerType() ||
         !Ctx.hasSameUnqualifiedType(Formal->getType()->getPointeeType(),
                                     Source->getType()->getPointeeType())) {
-      Errors.push_back(
+      error(
           CurrentFn->Name +
           ": dynamic-storage pointer arguments require matching direct pointer "
           "parameters");
@@ -5181,8 +5149,7 @@ std::unique_ptr<VExpr> ASTConverter::convertCallResultValue(
       (Source.Kind == VTypeKind::Ptr && TargetType.Kind == VTypeKind::Bool))
     return std::make_unique<VCastExpr>(std::move(Value), Source, TargetType,
                                        Loc);
-  Errors.push_back(CurrentFn->Name +
-                   ": unsupported executable call result conversion");
+  error(CurrentFn->Name + ": unsupported executable call result conversion");
   return nullptr;
 }
 
@@ -5194,8 +5161,8 @@ void ASTConverter::convertExecCallArgs(
   const FunctionDecl *Callee = CE->getDirectCallee();
 
   if ((InGhost || CurrentFn->IsProof) && Callee && !calleeIsProof(Callee)) {
-    Errors.push_back(CurrentFn->Name +
-                     ": proof-only code cannot call executable functions");
+    error(CurrentFn->Name +
+          ": proof-only code cannot call executable functions");
     return;
   }
 
@@ -5247,9 +5214,8 @@ void ASTConverter::convertExecCallArgs(
       continue;
     for (unsigned J = 0; J < CE->getNumArgs(); ++J) {
       if (I != J && IsHeapSensitive(CE->getArg(J))) {
-        Errors.push_back(
-            CurrentFn->Name +
-            ": call arguments have order-dependent heap evaluations");
+        error(CurrentFn->Name +
+              ": call arguments have order-dependent heap evaluations");
         return;
       }
     }
@@ -5296,8 +5262,7 @@ std::unique_ptr<VExpr>
 ASTConverter::convertAssignmentValue(const BinaryOperator *Assignment) {
   if (Assignment->getOpcode() != BO_Assign &&
       Assignment->getLHS()->getType()->isPointerType()) {
-    Errors.push_back(CurrentFn->Name +
-                     ": pointer compound assignment is unsupported");
+    error(CurrentFn->Name + ": pointer compound assignment is unsupported");
     return nullptr;
   }
   auto RHS = convertExpr(Assignment->getRHS());
@@ -5339,8 +5304,7 @@ ASTConverter::convertAssignmentValue(const BinaryOperator *Assignment) {
     Op = VBinOp::Shr;
     break;
   default:
-    Errors.push_back(CurrentFn->Name +
-                     ": unsupported compound assignment operator");
+    error(CurrentFn->Name + ": unsupported compound assignment operator");
     return nullptr;
   }
 
@@ -5383,8 +5347,7 @@ void ASTConverter::appendAssignment(const Expr *LHS,
     return;
   Value = materialize(std::move(Value), LHS->getType());
   if (!ghostAssignmentAllowed(LHS)) {
-    Errors.push_back(CurrentFn->Name +
-                     ": ghost code cannot modify executable state");
+    error(CurrentFn->Name + ": ghost code cannot modify executable state");
     return;
   }
   LHS = LHS->IgnoreParenImpCasts();
@@ -5393,32 +5356,29 @@ void ASTConverter::appendAssignment(const Expr *LHS,
   // its single automatic object: there is no flattened SSA companion.
   if (const VarDecl *Root = promotedRootLocal(LHS)) {
     if (CurrentFn->IsProof) {
-      Errors.push_back(CurrentFn->Name +
-                       ": proof functions cannot modify executable memory");
+      error(CurrentFn->Name +
+            ": proof functions cannot modify executable memory");
       return;
     }
     if (isPromotableAggregateType(LHS->getType(), Ctx)) {
-      Errors.push_back(CurrentFn->Name +
-                       ": aggregate assignment is unsupported");
+      error(CurrentFn->Name + ": aggregate assignment is unsupported");
       return;
     }
     if (Value->Ty.isAggregate()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": aggregate assignment is unsupported");
+      error(CurrentFn->Name + ": aggregate assignment is unsupported");
       return;
     }
     if (carriesPointerProvenance(Value.get())) {
-      Errors.push_back(
-          CurrentFn->Name +
-          ": storing a provenance-bearing pointer in an automatic object is "
-          "unsupported");
+      error(CurrentFn->Name +
+            ": storing a provenance-bearing pointer in an automatic object is "
+            "unsupported");
       return;
     }
     const size_t ErrorCount = Errors.size();
     auto Place = promotedObjectPlace(LHS);
     if (!Place) {
       if (Errors.size() == ErrorCount)
-        Errors.push_back(CurrentFn->Name + ": unsupported assignment target");
+        error(CurrentFn->Name + ": unsupported assignment target");
       return;
     }
     Out.push_back(std::make_unique<VStoreStmt>(Place->takeAddress(),
@@ -5433,9 +5393,9 @@ void ASTConverter::appendAssignment(const Expr *LHS,
     if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
       if (!VD->isLocalVarDeclOrParm()) {
         if (InGhost || CurrentFn->IsProof || CurrentFn->IsSpec) {
-          Errors.push_back(CurrentFn->Name +
-                           ": ghost and proof code cannot modify the global " +
-                           VD->getNameAsString());
+          error(CurrentFn->Name +
+                ": ghost and proof code cannot modify the global " +
+                VD->getNameAsString());
           return;
         }
         auto Address = globalAddress(VD, Loc);
@@ -5448,20 +5408,18 @@ void ASTConverter::appendAssignment(const Expr *LHS,
       }
       if (VD->getType()->isReferenceType()) {
         if (VD->getType().getNonReferenceType().isConstQualified()) {
-          Errors.push_back(CurrentFn->Name +
-                           ": assignment through a const reference is "
-                           "unsupported");
+          error(CurrentFn->Name + ": assignment through a const reference is "
+                                  "unsupported");
           return;
         }
         if (CurrentFn->IsProof) {
-          Errors.push_back(CurrentFn->Name +
-                           ": proof functions cannot modify executable memory");
+          error(CurrentFn->Name +
+                ": proof functions cannot modify executable memory");
           return;
         }
         auto Address = convertLValueAddress(LHS);
         if (!Address) {
-          Errors.push_back(CurrentFn->Name +
-                           ": unsupported reference assignment target");
+          error(CurrentFn->Name + ": unsupported reference assignment target");
           return;
         }
         Out.push_back(std::make_unique<VStoreStmt>(std::move(Address),
@@ -5470,8 +5428,8 @@ void ASTConverter::appendAssignment(const Expr *LHS,
       }
       if (AddressableLocals.count(VD)) {
         if (CurrentFn->IsProof) {
-          Errors.push_back(CurrentFn->Name +
-                           ": proof functions cannot modify executable memory");
+          error(CurrentFn->Name +
+                ": proof functions cannot modify executable memory");
           return;
         }
         auto Address = convertAutomaticLocalAddress(VD, Loc);
@@ -5483,8 +5441,7 @@ void ASTConverter::appendAssignment(const Expr *LHS,
         return;
       }
       if (VD->getType()->isRecordType()) {
-        Errors.push_back(CurrentFn->Name +
-                         ": aggregate assignment is unsupported");
+        error(CurrentFn->Name + ": aggregate assignment is unsupported");
         return;
       }
       Out.push_back(
@@ -5497,8 +5454,8 @@ void ASTConverter::appendAssignment(const Expr *LHS,
   if (const auto *ME = dyn_cast<MemberExpr>(LHS)) {
     if (auto Address = convertArrowFieldAddress(ME)) {
       if (CurrentFn->IsProof) {
-        Errors.push_back(CurrentFn->Name +
-                         ": proof functions cannot modify executable memory");
+        error(CurrentFn->Name +
+              ": proof functions cannot modify executable memory");
         return;
       }
       Out.push_back(std::make_unique<VStoreStmt>(std::move(Address),
@@ -5511,14 +5468,12 @@ void ASTConverter::appendAssignment(const Expr *LHS,
     const auto *VD = DRE ? dyn_cast<VarDecl>(DRE->getDecl()) : nullptr;
     if (FD && VD) {
       if (!VD->isLocalVarDeclOrParm()) {
-        Errors.push_back(CurrentFn->Name +
-                         ": global aggregate assignment is unsupported");
+        error(CurrentFn->Name + ": global aggregate assignment is unsupported");
         return;
       }
       if (Value->Ty.isAggregate() ||
           VType::fromQualType(FD->getType(), IntMode, Ctx).isAggregate()) {
-        Errors.push_back(CurrentFn->Name +
-                         ": aggregate assignment is unsupported");
+        error(CurrentFn->Name + ": aggregate assignment is unsupported");
         return;
       }
       Out.push_back(std::make_unique<VAssignStmt>(
@@ -5531,15 +5486,15 @@ void ASTConverter::appendAssignment(const Expr *LHS,
   if (const auto *U = dyn_cast<UnaryOperator>(LHS)) {
     if (U->getOpcode() == UO_Deref) {
       if (CurrentFn->IsProof) {
-        Errors.push_back(CurrentFn->Name +
-                         ": proof functions cannot modify executable memory");
+        error(CurrentFn->Name +
+              ": proof functions cannot modify executable memory");
         return;
       }
       if (isDynamicAddress(U->getSubExpr()) &&
           !directDynamicPointer(U->getSubExpr())) {
-        Errors.push_back(CurrentFn->Name +
-                         ": dynamic-storage dereference requires its direct "
-                         "allocation pointer");
+        error(CurrentFn->Name +
+              ": dynamic-storage dereference requires its direct "
+              "allocation pointer");
         return;
       }
       auto Place = derefPlace(U->getSubExpr(), Loc);
@@ -5553,8 +5508,8 @@ void ASTConverter::appendAssignment(const Expr *LHS,
 
   if (const auto *AS = dyn_cast<ArraySubscriptExpr>(LHS)) {
     if (CurrentFn->IsProof) {
-      Errors.push_back(CurrentFn->Name +
-                       ": proof functions cannot modify executable memory");
+      error(CurrentFn->Name +
+            ": proof functions cannot modify executable memory");
       return;
     }
     const size_t ErrorCount = Errors.size();
@@ -5567,7 +5522,7 @@ void ASTConverter::appendAssignment(const Expr *LHS,
       return;
   }
 
-  Errors.push_back(CurrentFn->Name + ": unsupported assignment target");
+  error(CurrentFn->Name + ": unsupported assignment target");
 }
 
 bool ASTConverter::appendRecordCopy(const Expr *Source, const VarDecl *Target,
@@ -5603,9 +5558,9 @@ bool ASTConverter::appendRecordCopy(const Expr *Source, const VarDecl *Target,
       VType FieldType = VType::fromQualType(Field->getType(), IntMode, Ctx);
       if (!FieldOffset || FieldType.isAggregate() ||
           FieldType.Kind == VTypeKind::Unsupported) {
-        Errors.push_back(CurrentFn->Name +
-                         ": unsupported aggregate copy out of an automatic "
-                         "object");
+        error(CurrentFn->Name +
+              ": unsupported aggregate copy out of an automatic "
+              "object");
         return true;
       }
       Out.push_back(std::make_unique<VAssignStmt>(
@@ -5685,9 +5640,9 @@ bool ASTConverter::appendObjectZeroInitialization(
         return true;
       });
   if (!Ok)
-    Errors.push_back(CurrentFn->Name +
-                     ": unsupported value initialization of an automatic "
-                     "object");
+    error(CurrentFn->Name +
+          ": unsupported value initialization of an automatic "
+          "object");
   return Ok;
 }
 
@@ -5700,9 +5655,9 @@ bool ASTConverter::appendObjectCopy(const Expr *Source, QualType Ty,
       Cast && Cast->getCastKind() == CK_LValueToRValue)
     Lvalue = peelObjectExpr(Cast->getSubExpr());
   if (!Lvalue || !Ctx.hasSameUnqualifiedType(Lvalue->getType(), Ty)) {
-    Errors.push_back(CurrentFn->Name +
-                     ": unsupported aggregate initializer for an automatic "
-                     "object");
+    error(CurrentFn->Name +
+          ": unsupported aggregate initializer for an automatic "
+          "object");
     return false;
   }
 
@@ -5729,9 +5684,8 @@ bool ASTConverter::appendObjectCopy(const Expr *Source, QualType Ty,
           return true;
         });
     if (!Ok)
-      Errors.push_back(CurrentFn->Name +
-                       ": unsupported aggregate copy between automatic "
-                       "objects");
+      error(CurrentFn->Name + ": unsupported aggregate copy between automatic "
+                              "objects");
     return Ok;
   }
 
@@ -5742,15 +5696,15 @@ bool ASTConverter::appendObjectCopy(const Expr *Source, QualType Ty,
   const RecordDecl *Definition = Record ? Record->getDefinition() : nullptr;
   if (!SourceVar || !SourceVar->isLocalVarDeclOrParm() || !Definition ||
       !isFlatScalarRecordType(Ty)) {
-    Errors.push_back(CurrentFn->Name +
-                     ": unsupported aggregate initializer for an automatic "
-                     "object");
+    error(CurrentFn->Name +
+          ": unsupported aggregate initializer for an automatic "
+          "object");
     return false;
   }
   for (const FieldDecl *Field : Definition->fields()) {
     auto FieldOffset = recordFieldOffset(Field);
     if (!FieldOffset) {
-      Errors.push_back(CurrentFn->Name + ": unsupported aggregate copy layout");
+      error(CurrentFn->Name + ": unsupported aggregate copy layout");
       return false;
     }
     requireInitialized(SourceVar, Field);
@@ -5787,9 +5741,8 @@ bool ASTConverter::appendObjectInitialization(
         (Ctor->isCopyConstructor() || Ctor->isMoveConstructor())) {
       Init = Construct->getArg(0)->IgnoreParens();
     } else {
-      Errors.push_back(CurrentFn->Name +
-                       ": unsupported constructor initialization of an "
-                       "automatic object");
+      error(CurrentFn->Name + ": unsupported constructor initialization of an "
+                              "automatic object");
       return false;
     }
   }
@@ -5798,8 +5751,7 @@ bool ASTConverter::appendObjectInitialization(
 
   if (const auto *ILE = dyn_cast<InitListExpr>(Init)) {
     if (ILE->isStringLiteralInit() || ILE->hasDesignatedInit()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": unsupported aggregate initializer form");
+      error(CurrentFn->Name + ": unsupported aggregate initializer form");
       return false;
     }
     if (const auto *CAT = Ctx.getAsConstantArrayType(Ty)) {
@@ -5807,8 +5759,7 @@ bool ASTConverter::appendObjectInitialization(
       const uint64_t Count = CAT->getSize().getZExtValue();
       const uint64_t Stride = Ctx.getTypeSizeInChars(Element).getQuantity();
       if (ILE->getNumInits() > Count) {
-        Errors.push_back(CurrentFn->Name +
-                         ": unsupported aggregate initializer form");
+        error(CurrentFn->Name + ": unsupported aggregate initializer form");
         return false;
       }
       for (uint64_t I = 0; I < Count; ++I) {
@@ -5828,16 +5779,14 @@ bool ASTConverter::appendObjectInitialization(
     if (const RecordDecl *Record = getRecordFromType(Ty)) {
       const RecordDecl *Definition = Record->getDefinition();
       if (!Definition) {
-        Errors.push_back(CurrentFn->Name +
-                         ": unsupported aggregate initializer form");
+        error(CurrentFn->Name + ": unsupported aggregate initializer form");
         return false;
       }
       unsigned Index = 0;
       for (const FieldDecl *Field : Definition->fields()) {
         auto FieldOffset = recordFieldOffset(Field);
         if (!FieldOffset) {
-          Errors.push_back(CurrentFn->Name +
-                           ": unsupported aggregate initializer layout");
+          error(CurrentFn->Name + ": unsupported aggregate initializer layout");
           return false;
         }
         const Expr *FieldInit =
@@ -5854,8 +5803,7 @@ bool ASTConverter::appendObjectInitialization(
           return false;
       }
       if (Index < ILE->getNumInits()) {
-        Errors.push_back(CurrentFn->Name +
-                         ": unsupported aggregate initializer form");
+        error(CurrentFn->Name + ": unsupported aggregate initializer form");
         return false;
       }
       return true;
@@ -5865,8 +5813,7 @@ bool ASTConverter::appendObjectInitialization(
     if (ILE->getNumInits() == 1)
       return appendObjectInitialization(ILE->getInit(0), Ty, Base, Offset, Loc,
                                         Out);
-    Errors.push_back(CurrentFn->Name +
-                     ": unsupported aggregate initializer form");
+    error(CurrentFn->Name + ": unsupported aggregate initializer form");
     return false;
   }
 
@@ -5875,18 +5822,17 @@ bool ASTConverter::appendObjectInitialization(
 
   VType LeafType = VType::fromQualType(Ty, IntMode, Ctx);
   if (LeafType.Kind == VTypeKind::Unsupported || LeafType.isAggregate()) {
-    Errors.push_back(CurrentFn->Name +
-                     ": unsupported automatic object leaf initialization");
+    error(CurrentFn->Name +
+          ": unsupported automatic object leaf initialization");
     return false;
   }
   auto Value = convertExpr(Init);
   if (!Value)
     return false;
   if (carriesPointerProvenance(Value.get())) {
-    Errors.push_back(
-        CurrentFn->Name +
-        ": storing a provenance-bearing pointer in an automatic object is "
-        "unsupported");
+    error(CurrentFn->Name +
+          ": storing a provenance-bearing pointer in an automatic object is "
+          "unsupported");
     return false;
   }
   Out.push_back(std::make_unique<VStoreStmt>(
@@ -5895,6 +5841,9 @@ bool ASTConverter::appendObjectInitialization(
 }
 
 std::vector<std::unique_ptr<VStmt>> ASTConverter::convertStmt(const Stmt *S) {
+  llvm::SaveAndRestore At(CurrentRange, S && S->getSourceRange().isValid()
+                                            ? S->getSourceRange()
+                                            : CurrentRange);
   return convertStmtBody(S);
 }
 
@@ -5904,8 +5853,7 @@ void ASTConverter::registerAutomaticLocal(const VarDecl *VD) {
   if (!VD)
     return;
   if (AutomaticScopeStack.empty()) {
-    Errors.push_back(CurrentFn->Name +
-                     ": automatic object has no lexical lifetime scope");
+    error(CurrentFn->Name + ": automatic object has no lexical lifetime scope");
     return;
   }
   AutomaticScopeStack.back().push_back(VD);
@@ -5918,9 +5866,8 @@ void ASTConverter::appendActiveLifetimeEnds(
        It != ActiveAutomaticLocals.rend(); ++It) {
     auto Provenance = AutomaticLocalProvenanceVariables.find(*It);
     if (Provenance == AutomaticLocalProvenanceVariables.end()) {
-      Errors.push_back(
-          CurrentFn->Name +
-          ": missing automatic-storage provenance at lifetime end");
+      error(CurrentFn->Name +
+            ": missing automatic-storage provenance at lifetime end");
       continue;
     }
     Out.push_back(std::make_unique<VEndLifetimeStmt>(valueName(*It),
@@ -5932,8 +5879,7 @@ void ASTConverter::appendActiveLifetimeEnds(
 void ASTConverter::leaveAutomaticScope(std::vector<std::unique_ptr<VStmt>> &Out,
                                        SourceLocation Loc) {
   if (AutomaticScopeStack.empty()) {
-    Errors.push_back(CurrentFn->Name +
-                     ": mismatched automatic-object lexical scope");
+    error(CurrentFn->Name + ": mismatched automatic-object lexical scope");
     return;
   }
   auto Scope = std::move(AutomaticScopeStack.back());
@@ -5943,9 +5889,8 @@ void ASTConverter::leaveAutomaticScope(std::vector<std::unique_ptr<VStmt>> &Out,
     for (auto It = Scope.rbegin(); It != Scope.rend(); ++It) {
       auto Provenance = AutomaticLocalProvenanceVariables.find(*It);
       if (Provenance == AutomaticLocalProvenanceVariables.end()) {
-        Errors.push_back(
-            CurrentFn->Name +
-            ": missing automatic-storage provenance at lifetime end");
+        error(CurrentFn->Name +
+              ": missing automatic-storage provenance at lifetime end");
         continue;
       }
       Out.push_back(std::make_unique<VEndLifetimeStmt>(
@@ -5954,8 +5899,8 @@ void ASTConverter::leaveAutomaticScope(std::vector<std::unique_ptr<VStmt>> &Out,
   }
   for (auto It = Scope.rbegin(); It != Scope.rend(); ++It) {
     if (ActiveAutomaticLocals.empty() || ActiveAutomaticLocals.back() != *It) {
-      Errors.push_back(CurrentFn->Name +
-                       ": automatic-object lifetime nesting is inconsistent");
+      error(CurrentFn->Name +
+            ": automatic-object lifetime nesting is inconsistent");
       auto ActiveIt = std::find(ActiveAutomaticLocals.begin(),
                                 ActiveAutomaticLocals.end(), *It);
       if (ActiveIt != ActiveAutomaticLocals.end())
@@ -6013,8 +5958,8 @@ ASTConverter::convertStmtBody(const Stmt *S) {
   }
   if (S->getStmtClass() == Stmt::ReturnStmtClass) {
     if (InGhost) {
-      Errors.push_back(CurrentFn->Name +
-                       ": ghost code cannot alter executable control flow");
+      error(CurrentFn->Name +
+            ": ghost code cannot alter executable control flow");
       return Out;
     }
     const auto *RS = cast<ReturnStmt>(S);
@@ -6064,8 +6009,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         const RecordDecl *Definition =
             Record ? Record->getDefinition() : nullptr;
         if (!Definition) {
-          Errors.push_back(CurrentFn->Name +
-                           ": unsupported aggregate return expression");
+          error(CurrentFn->Name + ": unsupported aggregate return expression");
           return Out;
         }
         const std::string Tmp =
@@ -6144,20 +6088,18 @@ ASTConverter::convertStmtBody(const Stmt *S) {
   if (isa<BreakStmt>(S) || isa<ContinueStmt>(S)) {
     const bool IsBreak = isa<BreakStmt>(S);
     if (EnclosingLoops.empty()) {
-      Errors.push_back(CurrentFn->Name + ": " +
-                       (IsBreak ? "break" : "continue") +
-                       " outside a loop is unsupported");
+      error(CurrentFn->Name + ": " + (IsBreak ? "break" : "continue") +
+            " outside a loop is unsupported");
       return Out;
     }
     if (EnclosingLoops.back().IsDo) {
-      Errors.push_back(CurrentFn->Name +
-                       ": break and continue in do loops are unsupported");
+      error(CurrentFn->Name +
+            ": break and continue in do loops are unsupported");
       return Out;
     }
     // Ghost code is erased, so it cannot change executable control flow.
     if (InGhost && !EnclosingLoops.back().IsGhost) {
-      Errors.push_back(CurrentFn->Name +
-                       ": ghost code cannot leave an executable loop");
+      error(CurrentFn->Name + ": ghost code cannot leave an executable loop");
       return Out;
     }
     if (IsBreak) {
@@ -6175,8 +6117,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
   }
   if (const auto *WS = dyn_cast<WhileStmt>(S)) {
     if (WS->getConditionVariable()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": while condition declarations are unsupported");
+      error(CurrentFn->Name + ": while condition declarations are unsupported");
       return Out;
     }
     auto Cond = convertLoopCondition(WS, WS->getCond());
@@ -6271,8 +6212,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
   if (const auto *FS = dyn_cast<ForStmt>(S)) {
     enterAutomaticScope();
     if (FS->getConditionVariable()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": for condition declarations are unsupported");
+      error(CurrentFn->Name + ": for condition declarations are unsupported");
       leaveAutomaticScope(Out, FS->getEndLoc());
       return Out;
     }
@@ -6282,8 +6222,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
                  std::make_move_iterator(Init.end()));
     }
     if (!FS->getCond()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": conditionless for loops are unsupported");
+      error(CurrentFn->Name + ": conditionless for loops are unsupported");
       leaveAutomaticScope(Out, FS->getEndLoc());
       return Out;
     }
@@ -6342,8 +6281,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       OperatorCall->getNumArgs() == 2 &&
       VType::collectionKind(OperatorCall->getArg(0)->getType())) {
     if (!ghostAssignmentAllowed(OperatorCall->getArg(0))) {
-      Errors.push_back(CurrentFn->Name +
-                       ": ghost code cannot modify executable state");
+      error(CurrentFn->Name + ": ghost code cannot modify executable state");
       return Out;
     }
     const auto *Target = dyn_cast<DeclRefExpr>(
@@ -6351,8 +6289,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     const auto *TargetVar =
         Target ? dyn_cast<VarDecl>(Target->getDecl()) : nullptr;
     if (!TargetVar || !TargetVar->hasLocalStorage()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": only a local collection can be assigned");
+      error(CurrentFn->Name + ": only a local collection can be assigned");
       return Out;
     }
     if (auto Value = convertExpr(OperatorCall->getArg(1))) {
@@ -6372,20 +6309,19 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           (!Assignment->isCopyAssignmentOperator() &&
            !Assignment->isMoveAssignmentOperator()) ||
           !Assignment->isTrivial()) {
-        Errors.push_back(CurrentFn->Name +
-                         ": user-defined aggregate assignment is unsupported");
+        error(CurrentFn->Name +
+              ": user-defined aggregate assignment is unsupported");
         return Out;
       }
       if (!ghostAssignmentAllowed(OperatorCall->getArg(0))) {
-        Errors.push_back(CurrentFn->Name +
-                         ": ghost code cannot modify executable state");
+        error(CurrentFn->Name + ": ghost code cannot modify executable state");
         return Out;
       }
       const Expr *TargetExpr = OperatorCall->getArg(0)->IgnoreParenImpCasts();
       if (promotedRootLocal(TargetExpr)) {
         if (CurrentFn->IsProof) {
-          Errors.push_back(CurrentFn->Name +
-                           ": proof functions cannot modify executable memory");
+          error(CurrentFn->Name +
+                ": proof functions cannot modify executable memory");
           return Out;
         }
         auto Place = promotedObjectPlace(TargetExpr);
@@ -6405,20 +6341,19 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       if (Target && appendRecordCopy(OperatorCall->getArg(1), Target,
                                      OperatorCall->getExprLoc(), Out))
         return Out;
-      Errors.push_back(CurrentFn->Name + ": unsupported aggregate assignment");
+      error(CurrentFn->Name + ": unsupported aggregate assignment");
       return Out;
     }
   }
   if (const auto *CE = dyn_cast<CallExpr>(S)) {
     if (const FunctionDecl *Callee = CE->getDirectCallee()) {
       if ((InGhost || CurrentFn->IsProof) && !calleeIsProof(Callee)) {
-        Errors.push_back(CurrentFn->Name +
-                         ": proof-only code cannot call executable functions");
+        error(CurrentFn->Name +
+              ": proof-only code cannot call executable functions");
         return Out;
       }
       if (calleeIsSpec(Callee)) {
-        Errors.push_back(CurrentFn->Name +
-                         ": bare spec-call statement is unsupported");
+        error(CurrentFn->Name + ": bare spec-call statement is unsupported");
         return Out;
       }
       if (functionContract(Callee)) {
@@ -6429,14 +6364,12 @@ ASTConverter::convertStmtBody(const Stmt *S) {
             Callee->getNameAsString(), functionIdentity(Callee),
             std::move(Args), "", CE->getExprLoc(), IsProof));
       } else {
-        Errors.push_back(
-            CurrentFn->Name +
-            ": call to function without a verification contract: " +
-            Callee->getNameAsString());
+        error(CurrentFn->Name +
+              ": call to function without a verification contract: " +
+              Callee->getNameAsString());
       }
     } else {
-      Errors.push_back(CurrentFn->Name +
-                       ": indirect function calls are unsupported");
+      error(CurrentFn->Name + ": indirect function calls are unsupported");
     }
     return Out;
   }
@@ -6452,9 +6385,9 @@ ASTConverter::convertStmtBody(const Stmt *S) {
   if (const auto *RW = dyn_cast<RevealWithFuelStmt>(S)) {
     std::string SpecIdentity = specIdentityFromExpr(RW->getFunction());
     if (SpecIdentity.empty()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": reveal_with_fuel target must resolve to exactly one "
-                       "spec function");
+      error(CurrentFn->Name +
+            ": reveal_with_fuel target must resolve to exactly one "
+            "spec function");
       return Out;
     }
     unsigned FuelVal = 1;
@@ -6472,9 +6405,8 @@ ASTConverter::convertStmtBody(const Stmt *S) {
   if (const auto *H = dyn_cast<HideSpecStmt>(S)) {
     std::string SpecIdentity = specIdentityFromExpr(H->getFunction());
     if (SpecIdentity.empty()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": hide target must resolve to exactly one spec "
-                       "function");
+      error(CurrentFn->Name + ": hide target must resolve to exactly one spec "
+                              "function");
       return Out;
     }
     if (CurrentFn)
@@ -6486,9 +6418,9 @@ ASTConverter::convertStmtBody(const Stmt *S) {
   if (const auto *R = dyn_cast<RevealSpecStmt>(S)) {
     std::string SpecIdentity = specIdentityFromExpr(R->getFunction());
     if (SpecIdentity.empty()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": reveal target must resolve to exactly one spec "
-                       "function");
+      error(CurrentFn->Name +
+            ": reveal target must resolve to exactly one spec "
+            "function");
       return Out;
     }
     if (CurrentFn) {
@@ -6579,24 +6511,24 @@ ASTConverter::convertStmtBody(const Stmt *S) {
   }
   if (const auto *Delete = dyn_cast<CXXDeleteExpr>(S)) {
     if (LoopDepth != 0) {
-      Errors.push_back(CurrentFn->Name +
-                       ": dynamic deallocation inside loops is unsupported");
+      error(CurrentFn->Name +
+            ": dynamic deallocation inside loops is unsupported");
       return Out;
     }
     if (InGhost || CurrentFn->IsSpec || CurrentFn->IsProof) {
-      Errors.push_back(CurrentFn->Name +
-                       ": dynamic deallocation requires executable code");
+      error(CurrentFn->Name +
+            ": dynamic deallocation requires executable code");
       return Out;
     }
     if (Delete->isArrayForm()) {
-      Errors.push_back(CurrentFn->Name + ": delete[] is unsupported");
+      error(CurrentFn->Name + ": delete[] is unsupported");
       return Out;
     }
     const FunctionDecl *OperatorDelete = Delete->getOperatorDelete();
     if (!OperatorDelete ||
         !OperatorDelete->isReplaceableGlobalAllocationFunction()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": custom or placement deallocation is unsupported");
+      error(CurrentFn->Name +
+            ": custom or placement deallocation is unsupported");
       return Out;
     }
     const Expr *Argument = Delete->getArgument()->IgnoreParenImpCasts();
@@ -6605,8 +6537,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         PointerRef ? dyn_cast<VarDecl>(PointerRef->getDecl()) : nullptr;
     if (!PointerDecl || !PointerDecl->isLocalVarDecl() ||
         !PointerDecl->getType()->isPointerType()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": delete requires a direct local pointer");
+      error(CurrentFn->Name + ": delete requires a direct local pointer");
       return Out;
     }
     auto Pointer = convertExpr(Delete->getArgument());
@@ -6622,15 +6553,13 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       if (const auto *Target =
               dyn_cast<DeclRefExpr>(BO->getLHS()->IgnoreParenImpCasts());
           Target && ArbitraryValues.count(Target->getDecl())) {
-        Errors.push_back(CurrentFn->Name + ": " +
-                         Target->getDecl()->getNameAsString() +
-                         " stands for every value of its forall and cannot "
-                         "be assigned");
+        error(CurrentFn->Name + ": " + Target->getDecl()->getNameAsString() +
+              " stands for every value of its forall and cannot "
+              "be assigned");
         return Out;
       }
       if (!ghostAssignmentAllowed(BO->getLHS())) {
-        Errors.push_back(CurrentFn->Name +
-                         ": ghost code cannot modify executable state");
+        error(CurrentFn->Name + ": ghost code cannot modify executable state");
         return Out;
       }
       const auto *DirectLHS =
@@ -6674,8 +6603,8 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       }
       if (BO->getRHS()->getType()->isPointerType() &&
           isDynamicAddress(BO->getRHS())) {
-        Errors.push_back(CurrentFn->Name +
-                         ": copying a dynamic-storage pointer is unsupported");
+        error(CurrentFn->Name +
+              ": copying a dynamic-storage pointer is unsupported");
         return Out;
       }
       if (BO->getOpcode() == BO_Assign &&
@@ -6704,8 +6633,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           if (appendRecordCopy(RHS, Target, BO->getExprLoc(), Out))
             return Out;
         }
-        Errors.push_back(CurrentFn->Name +
-                         ": unsupported aggregate assignment");
+        error(CurrentFn->Name + ": unsupported aggregate assignment");
         return Out;
       }
       if (BO->getOpcode() == BO_Assign) {
@@ -6733,14 +6661,13 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       auto Value = convertAssignmentValue(BO);
       appendAssignment(BO->getLHS(), std::move(Value), BO->getExprLoc(), Out);
     } else
-      Errors.push_back(CurrentFn->Name + ": unsupported expression statement");
+      error(CurrentFn->Name + ": unsupported expression statement");
     return Out;
   }
   if (const auto *U = dyn_cast<UnaryOperator>(S)) {
     if (U->isIncrementDecrementOp()) {
       if (!U->getSubExpr()->getType()->isIntegerType()) {
-        Errors.push_back(CurrentFn->Name +
-                         ": pointer increment/decrement is unsupported");
+        error(CurrentFn->Name + ": pointer increment/decrement is unsupported");
         return Out;
       }
       auto Current = convertExpr(U->getSubExpr());
@@ -6769,8 +6696,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
                                             TargetTy, U->getExprLoc());
       appendAssignment(U->getSubExpr(), std::move(Value), U->getExprLoc(), Out);
     } else
-      Errors.push_back(CurrentFn->Name +
-                       ": unsupported unary expression statement");
+      error(CurrentFn->Name + ": unsupported unary expression statement");
     return Out;
   }
   if (const auto *CE = dyn_cast<CStyleCastExpr>(S)) {
@@ -6778,27 +6704,23 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     if (CE->getCastKind() == CK_ToVoid && isa<DeclRefExpr>(Sub) &&
         !Sub->getType().isVolatileQualified())
       return Out;
-    Errors.push_back(CurrentFn->Name +
-                     ": unsupported discarded-value expression");
+    error(CurrentFn->Name + ": unsupported discarded-value expression");
     return Out;
   }
   if (const auto *DS = dyn_cast<DeclStmt>(S)) {
     for (const Decl *D : DS->decls()) {
       const auto *VD = dyn_cast<VarDecl>(D);
       if (!VD) {
-        Errors.push_back(CurrentFn->Name +
-                         ": unsupported declaration statement");
+        error(CurrentFn->Name + ": unsupported declaration statement");
         continue;
       }
       if (!VD->hasLocalStorage()) {
-        Errors.push_back(CurrentFn->Name +
-                         ": static local variables are unsupported");
+        error(CurrentFn->Name + ": static local variables are unsupported");
         continue;
       }
       if (!DeclaredValueNames.insert(VD->getNameAsString()).second) {
-        Errors.push_back(CurrentFn->Name +
-                         ": local variable shadowing is unsupported: " +
-                         VD->getNameAsString());
+        error(CurrentFn->Name + ": local variable shadowing is unsupported: " +
+              VD->getNameAsString());
         continue;
       }
       if (InGhost)
@@ -6808,22 +6730,21 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       if (!AddressableLocals.count(VD) &&
           isPromotableAggregateType(VD->getType(), Ctx) &&
           !isFlatScalarRecordType(VD->getType())) {
-        Errors.push_back(
-            CurrentFn->Name +
-            ": unsupported aggregate local variable: " + VD->getNameAsString());
+        error(CurrentFn->Name + ": unsupported aggregate local variable: " +
+              VD->getNameAsString());
         continue;
       }
       recordSourceVariable(VD);
       if (AddressableLocals.count(VD)) {
         if (LoopDepth != 0) {
-          Errors.push_back(
+          error(
               CurrentFn->Name +
               ": addressable local declarations inside loops are unsupported");
           continue;
         }
         if (InGhost || CurrentFn->IsSpec || CurrentFn->IsProof) {
-          Errors.push_back(CurrentFn->Name +
-                           ": addressable locals require executable code");
+          error(CurrentFn->Name +
+                ": addressable locals require executable code");
           continue;
         }
         const uint64_t Size =
@@ -6831,23 +6752,21 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         const uint64_t Align =
             Ctx.getTypeAlignInChars(VD->getType()).getQuantity();
         if (Size == 0 || Align == 0) {
-          Errors.push_back(CurrentFn->Name +
-                           ": unsupported automatic object size or alignment");
+          error(CurrentFn->Name +
+                ": unsupported automatic object size or alignment");
           continue;
         }
         // Byte-granular allocation metadata is emitted per target byte, so an
         // oversized object is rejected outright rather than truncated.
         if (Size > MaxAutomaticObjectBytes) {
-          Errors.push_back(
-              CurrentFn->Name + ": automatic object exceeds the " +
-              std::to_string(MaxAutomaticObjectBytes) +
-              "-byte byte-addressed object limit: " + VD->getNameAsString());
+          error(CurrentFn->Name + ": automatic object exceeds the " +
+                std::to_string(MaxAutomaticObjectBytes) +
+                "-byte byte-addressed object limit: " + VD->getNameAsString());
           continue;
         }
         auto ProvenanceIt = AutomaticLocalProvenanceVariables.find(VD);
         if (ProvenanceIt == AutomaticLocalProvenanceVariables.end()) {
-          Errors.push_back(CurrentFn->Name +
-                           ": missing automatic-storage provenance");
+          error(CurrentFn->Name + ": missing automatic-storage provenance");
           continue;
         }
         if (isPromotableAggregateType(VD->getType(), Ctx)) {
@@ -6906,13 +6825,11 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       }
       if (VD->getType()->isReferenceType()) {
         if (InGhost || CurrentFn->IsSpec || CurrentFn->IsProof) {
-          Errors.push_back(CurrentFn->Name +
-                           ": local references require executable code");
+          error(CurrentFn->Name + ": local references require executable code");
           continue;
         }
         if (!VD->getType()->isLValueReferenceType() || !VD->hasInit()) {
-          Errors.push_back(CurrentFn->Name +
-                           ": unsupported local reference binding");
+          error(CurrentFn->Name + ": unsupported local reference binding");
           continue;
         }
         const size_t ErrorCount = Errors.size();
@@ -6920,9 +6837,8 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         auto Address = convertLValueAddress(VD->getInit(), &AccessCondition);
         if (!Address) {
           if (Errors.size() == ErrorCount)
-            Errors.push_back(
-                CurrentFn->Name +
-                ": local references require a supported direct lvalue");
+            error(CurrentFn->Name +
+                  ": local references require a supported direct lvalue");
           continue;
         }
         if (AccessCondition)
@@ -6950,23 +6866,22 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       if (const auto *New =
               dyn_cast<CXXNewExpr>(VD->getInit()->IgnoreParenImpCasts())) {
         if (LoopDepth != 0) {
-          Errors.push_back(CurrentFn->Name +
-                           ": dynamic allocation inside loops is unsupported");
+          error(CurrentFn->Name +
+                ": dynamic allocation inside loops is unsupported");
           continue;
         }
         if (InGhost || CurrentFn->IsSpec || CurrentFn->IsProof) {
-          Errors.push_back(CurrentFn->Name +
-                           ": dynamic allocation requires executable code");
+          error(CurrentFn->Name +
+                ": dynamic allocation requires executable code");
           continue;
         }
         bool HasPointerParam = false;
         for (const auto &Param : CurrentFn->Params)
           HasPointerParam |= Param.second.Kind == VTypeKind::Ptr;
         if (HasPointerParam) {
-          Errors.push_back(
-              CurrentFn->Name +
-              ": dynamic allocation in functions with pointer parameters is "
-              "not yet supported");
+          error(CurrentFn->Name +
+                ": dynamic allocation in functions with pointer parameters is "
+                "not yet supported");
           continue;
         }
         bool IsNothrow = false;
@@ -6975,15 +6890,15 @@ ASTConverter::convertStmtBody(const Stmt *S) {
             !OperatorNew->isReplaceableGlobalAllocationFunction(nullptr,
                                                                 &IsNothrow) ||
             IsNothrow || New->shouldNullCheckAllocation()) {
-          Errors.push_back(CurrentFn->Name +
-                           ": only ordinary throwing scalar new is supported");
+          error(CurrentFn->Name +
+                ": only ordinary throwing scalar new is supported");
           continue;
         }
         QualType Allocated = New->getAllocatedType();
         if (!VD->getType()->isPointerType() ||
             !Ctx.hasSameUnqualifiedType(VD->getType()->getPointeeType(),
                                         Allocated)) {
-          Errors.push_back(
+          error(
               CurrentFn->Name +
               ": new result must directly initialize a matching typed pointer");
           continue;
@@ -6991,17 +6906,16 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         if ((!Allocated->isIntegerType() && !Allocated->isEnumeralType()) ||
             Allocated.isVolatileQualified() || Allocated->isAtomicType() ||
             Allocated->isIncompleteType()) {
-          Errors.push_back(
-              CurrentFn->Name +
-              ": new currently supports only complete non-volatile scalar "
-              "integer objects");
+          error(CurrentFn->Name +
+                ": new currently supports only complete non-volatile scalar "
+                "integer objects");
           continue;
         }
         const uint64_t Size = Ctx.getTypeSizeInChars(Allocated).getQuantity();
         const uint64_t Align = Ctx.getTypeAlignInChars(Allocated).getQuantity();
         if (Size == 0 || Size > 256 || Align == 0) {
-          Errors.push_back(CurrentFn->Name +
-                           ": unsupported dynamic object size or alignment");
+          error(CurrentFn->Name +
+                ": unsupported dynamic object size or alignment");
           continue;
         }
         std::unique_ptr<VExpr> Initializer;
@@ -7058,8 +6972,8 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       if (VType::collectionKind(VD->getType())) {
         const auto *Ctor = dyn_cast<CXXConstructExpr>(VD->getInit());
         if (Ctor && Ctor->getNumArgs() == 0) {
-          Errors.push_back(CurrentFn->Name +
-                           ": a collection declaration needs an initializer");
+          error(CurrentFn->Name +
+                ": a collection declaration needs an initializer");
           continue;
         }
         if (auto Value = convertExpr(VD->getInit())) {
@@ -7119,9 +7033,8 @@ ASTConverter::convertStmtBody(const Stmt *S) {
             continue;
         if (appendRecordCopy(Init, VD, VD->getBeginLoc(), Out))
           continue;
-        Errors.push_back(CurrentFn->Name +
-                         ": aggregate initialization and copying are "
-                         "unsupported");
+        error(CurrentFn->Name + ": aggregate initialization and copying are "
+                                "unsupported");
         continue;
       }
       auto Val = materialize(convertExpr(VD->getInit()), VD->getType());
@@ -7133,7 +7046,6 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     }
     return Out;
   }
-  Errors.push_back(CurrentFn->Name +
-                   ": unsupported statement: " + S->getStmtClassName());
+  error(CurrentFn->Name + ": unsupported statement: " + S->getStmtClassName());
   return Out;
 }
