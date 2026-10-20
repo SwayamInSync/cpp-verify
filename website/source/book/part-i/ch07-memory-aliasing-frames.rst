@@ -15,19 +15,31 @@ Why aliasing matters
      int t = *a; *a = *b; *b = t;
    }
 
-If ``a`` and ``b`` alias (same address), the “swap” fails. Callers must know whether ``&x`` and ``&y`` are distinct.
+If ``a`` and ``b`` alias (the same address), this swap still leaves the value as it was, which is
+what swapping a value with itself means. Code that combines the two values is less forgiving, as
+the swap by sums at the end of this chapter shows. Callers must know whether ``&x`` and ``&y`` are
+distinct.
 
 Frame conditions (``cppverify::modifies``)
 ------------------------------------------
 
 A **frame** lists what a function may change. Anything **not** listed should be unchanged (in the model).
 
-Example contract shape:
+The swap with its contract:
+
+.. code-block:: cpp
+
+   void swap(int *a, int *b)
+     cv::pre(a != nullptr && b != nullptr)
+     cv::modifies(*a, *b)
+     cv::post(*a == cv::old(*b) && *b == cv::old(*a))
+   {
+     int t = *a; *a = *b; *b = t;
+   }
 
 .. code-block:: text
 
-   modifies(*a, *b)
-   post(*a == old(*b) && *b == old(*a))
+   Verified: swap [backend=z3]
 
 ``cppverify::old`` refers to the pre-call heap/value. The frame tells callers ``*c`` for unrelated ``c`` is untouched.
 
@@ -44,5 +56,30 @@ CppVerify uses array theory in Z3 internally (Part II). You write normal C++; th
 Default non-aliasing
 --------------------
 
-To keep call-site proofs tractable, CppVerify assumes distinct **mutable** pointer parameters do not alias unless you opt out with ``cppverify::aliases(p, q)``.
+To keep call-site proofs tractable, CppVerify assumes that two pointer or reference parameters
+address different objects when at least one of them is mutable, and each caller must show it; a
+caller of ``swap`` above that passes one pointer twice, ``swap(p, p)``, fails its call's
+``aliasing`` check.
+``cppverify::aliases(p, q)`` opts a pair out, and the body must then be correct when they are the
+same. The swap by sums is not:
+
+.. cppverify-example: fails swap_by_sums
+
+.. code-block:: cpp
+
+   void swap_by_sums(int *a, int *b)
+     cv::aliases(a, b)
+     cv::pre(a != nullptr && b != nullptr)
+     cv::pre(0 <= *a && *a <= 1000 && 0 <= *b && *b <= 1000)
+     cv::modifies(*a, *b)
+     cv::post(*a == cv::old(*b) && *b == cv::old(*a))
+   {
+     *a = *a + *b; *b = *a - *b; *a = *a - *b;
+   }
+
+.. code-block:: text
+
+   sums.cpp:6:30: error: verification failed: swap_by_sums [...] (counterexample: a [ssa=a_0] [type=pointer] = 1, b [ssa=b_0] [type=pointer] = 1; ...)
+
+With ``a == b`` the first statement doubles the value and the second sets it to 0.
 
