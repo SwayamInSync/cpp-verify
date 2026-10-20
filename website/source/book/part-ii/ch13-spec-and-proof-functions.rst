@@ -922,6 +922,68 @@ counterexample. A checked counterexample uses only choices that satisfy
 their bodies wherever some value does, including the chooses inside the
 definitions and postconditions a proof unfolds.
 
+"The same" is meant exactly. Two chooses whose conditions are written the
+same way, up to the names of their variables, are one choice, as Verus
+shares one function between them. The values a condition mentions include
+the cells it reads, so a choice over memory keeps its value across a write
+that leaves those cells as they were:
+
+.. code-block:: cpp
+
+   cv::proof void written_alike(int n)
+     cv::post(cv::choose(k, k > n) == cv::choose(j, j > n))
+   {
+   }
+
+   void write_other(const int *a, int n, int *b, int x)
+     cv::pre(valid(a, n) && n >= 1 && n <= 100 && valid(b, 1))
+     cv::modifies(*b)
+     cv::post(cv::choose(k, 0, n, a[k] == x) ==
+              cv::old(cv::choose(k, 0, n, a[k] == x)))
+   {
+     *b = 5;
+   }
+
+.. code-block:: text
+
+   Verified: written_alike [backend=z3]
+   Verified: write_other [backend=z3]
+
+The condition of ``write_other``'s choice reads ``a[0]`` to ``a[n - 1]``,
+and ``b`` is another object. A write to one of those cells may change the
+choice, and a condition written another way is another choice, even when
+it means the same:
+
+.. cppverify-example: fails write_inside written_differently
+
+.. code-block:: cpp
+
+   void write_inside(int *a, int n, int x)
+     cv::pre(valid(a, n) && n >= 1 && n <= 100)
+     cv::modifies(a[0])
+     cv::post(cv::choose(k, 0, n, a[k] == x) ==
+              cv::old(cv::choose(k, 0, n, a[k] == x)))
+   {
+     a[0] = x == 0 ? 1 : 0;
+   }
+
+   cv::proof void written_differently(int n)
+     cv::post(cv::choose(k, k > n) == cv::choose(k, n < k))
+   {
+   }
+
+.. code-block:: text
+
+   choose.cpp:5:43: error: verification failed: write_inside [...] (counterexample: a [ssa=a_0] [type=pointer] = ..., n [ssa=n_0] [type=i32] = 1, ...)
+   choose.cpp:12:33: error: verification failed: written_differently [...] (counterexample: n [ssa=n_0] [type=i32] = <unknown>)
+
+In every counterexample to ``write_inside`` the write changes ``a[0]``, a
+cell the condition reads, so the choice may move. When a proof needs equivalent conditions to choose alike, write
+them the same way, or put the choice in one spec function and apply it in
+both places. A counterexample is checked against this too: it may give one
+choice two values only in memories where its condition reads some
+different value.
+
 Spec collections
 ----------------
 
