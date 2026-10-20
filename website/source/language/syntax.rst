@@ -189,5 +189,5 @@ Full table:
      - ``<cppverify.h>``, included implicitly
      - Spec collections
    * - ``cppverify::valid(p, n)``
-     - In ``cppverify::pre``
+     - A top-level condition of ``cppverify::pre``; an error anywhere else
      - ``p`` points to ``n`` objects
