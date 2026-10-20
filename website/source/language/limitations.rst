@@ -135,7 +135,11 @@ C++ feature boundaries
        instantiate, and are ignored with a warning, and one with contract
        statements is reported), variadics, indirect calls, recursion through a
        function that allocates or frees storage, and general link-time
-       summaries.
+       summaries. A function whose proof obligations would take more than
+       ``--max-query-nodes`` expression nodes (32 million by default) is
+       ``Unresolved`` with reason ``query.size-limit``: each check repeats
+       every assumption before it, so a long function with many checks grows
+       fastest. See the memory limits of :doc:`tooling`.
    * - Storage
      - Supported locals, constrained scalar dynamic storage, and inferred
        acyclic fresh-owned scalar factory results.
