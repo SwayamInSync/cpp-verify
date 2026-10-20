@@ -286,8 +286,9 @@ also forgets the whole heap. The whole-heap fallback can lose a true fact
 about an unrelated object, but it cannot prove a false one.
 
 To reason about a whole range, use a bounded quantifier in the loop invariant and
-postcondition (the half-open bound ``[lo, hi)`` is the implicit trigger). A
-fill/zero loop verifies end-to-end:
+postcondition. The solver chooses the terms that instantiate it, unless a
+``cppverify::trigger`` names one (see :doc:`expressions`). A fill/zero loop
+verifies end-to-end:
 
 .. code-block:: cpp
 
