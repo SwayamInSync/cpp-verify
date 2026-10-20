@@ -115,8 +115,8 @@ might invalidate. An explicit caller frame cannot contain that implicit
 effect; an unframed caller may still make the call.
 
 To state a property of a whole range, put a **bounded quantifier** in the loop
-invariant and the postcondition — the half-open bound ``[lo, hi)`` is the trigger.
-A buffer-zeroing loop proves its full postcondition this way:
+invariant and the postcondition, over the half-open range ``[lo, hi)``. A
+buffer-zeroing loop proves its full postcondition this way:
 
 .. cppverify-example: label zero
 
