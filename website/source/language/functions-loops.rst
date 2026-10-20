@@ -127,6 +127,55 @@ all denote the argument's entry value, as in ACSL, even when the callee
 reassigns its by-value parameter; a caller can therefore use the
 postcondition directly.
 
+Templates and member functions
+------------------------------
+
+Templates and member functions compile with contracts, but they are not
+verified yet:
+
+- The contracts of a function template, of a class template's members, and a
+  class template's type invariants compile, instantiate with the template,
+  and are ignored, with a ``-Wcontract-unsupported`` warning that names the
+  template. Contracts on a member function are ignored the same way.
+- A template without contracts changes nothing for the rest of the file, as
+  long as verified code does not call it.
+
+.. code-block:: cpp
+
+   template <typename T>
+   T clamp_low(T v, T lo)
+     cv::post(cv::result >= lo)
+   {
+     return v < lo ? lo : v;
+   }
+
+   int clamp_int(int v)
+     cv::post(cv::result >= 0)
+   {
+     return v < 0 ? 0 : v;
+   }
+
+.. code-block:: text
+
+   templates.cpp:2:3: warning: contracts in function template 'clamp_low' are not yet supported and are ignored [-Wcontract-unsupported]
+       2 | T clamp_low(T v, T lo)
+         |   ^
+   Verified: clamp_int [backend=z3]
+
+Two uses still stop the file with an error, and no function in it gets a
+verdict:
+
+- a call to a template from verified code, such as ``return clamp_low(v,
+  0);`` in a function with a contract: ``error: use: call to function
+  without a verification contract: clamp_low``;
+- a template whose body has a contract statement (``cv::check``, a ghost
+  block): ``error: twice: function template verification is unsupported``.
+
+Before 0.2, a template whose contract depends on its parameters did not
+compile (``value of type '<dependent type>' is not contextually convertible to
+'bool'``), and a template without any contract, even one nothing calls,
+stopped the file with ``function template verification is unsupported``.
+
 Behaviors
 ---------
 
@@ -228,6 +277,31 @@ are then reported ``Verified ... [partial]``, proved only for the executions
 that terminate. Ghost-block and proof-function loops are erased at runtime and
 must have a real measure, unless their condition is the constant false;
 ``cppverify::decreases(*)`` is rejected there.
+
+A loop whose condition is the constant false runs its body at most once (a
+``do`` loop exactly once), so it needs no invariant or measure, and the state
+after it is the one its body leaves. This is the shape of the usual
+statement-like macro:
+
+.. code-block:: cpp
+
+   #define SWAP(a, b) do { int t = a; a = b; b = t; } while (0)
+
+   int swapped_difference(int a, int b)
+     cv::pre(0 <= a && a <= 1000 && 0 <= b && b <= 1000)
+     cv::post(cv::result == b - a)
+   {
+     SWAP(a, b);
+     return a - b;
+   }
+
+.. code-block:: text
+
+   Verified: swapped_difference [backend=z3]
+
+Before 0.2, such a loop was treated like any other: what it might change was
+forgotten after it, so ``a - b`` failed with an ``overflow`` counterexample
+for values the swap never produces.
 
 Nobody knows whether this loop ends for every start, so it has no measure:
 
