@@ -82,4 +82,4 @@ Reproduce
    ./build/bin/cpp-verify clang/test/Verify/suite/binary_search_overflow_fail.cpp
 
 Both are lit tests in ``clang/test/Verify/suite/``; the second is expected to
-fail closed.
+fail with a checked counterexample.
