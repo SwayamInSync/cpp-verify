@@ -986,7 +986,10 @@ relate it to the condition that chose, as in `s ? q == a + i : q == b + i`.
 The marker must be a positive top-level conjunction clause on a bare pointer to
 a complete object type. At most one marker may describe each pointer. Shifted,
 disjunctive, conditional, or duplicate markers fail closed rather than creating
-unconditional extent assumptions.
+unconditional extent assumptions. Anywhere else (a postcondition, a loop
+invariant, a `cppverify::check`, ghost code, a spec function) the marker is its
+builtin spec, whose body is `true`, so a claim made with it would hold without
+meaning anything: under `--check-ub` it is an error for that function.
 
 ### 2. Implicit non-aliasing default
 
