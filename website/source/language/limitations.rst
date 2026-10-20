@@ -28,6 +28,13 @@ This page separates four different situations:
      - The semantics are represented soundly, but Z3 may need user lemmas or
        return ``unknown``.
 
+Outside the supported subset the verifier *fails closed*: it never reports a
+proof for what it does not model. Depending on the construct, the run stops
+with an error that names it, and no function of the file gets a verdict, or
+the function is ``Unresolved`` with reason ``construct.unsupported``. A
+counterexample is never a way of failing closed: ``Failed`` always means a
+checked counterexample.
+
 Meaning of a result
 -------------------
 
