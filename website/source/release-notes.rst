@@ -132,6 +132,10 @@ line was printed and then ignored, and a ``.h`` input was compiled as C. Now
 the file with the error is not verified and ``cpp-verify`` exits with status 1,
 and a header is C++ (:doc:`language/tooling`).
 
+**Crash reports go to cpp-verify.** A crash asked for a report on LLVM's issue
+tracker. It now names https://github.com/SwayamInSync/cpp-verify/issues/, in
+``cpp-verify`` and in the ``clang++`` it is built with (:doc:`language/tooling`).
+
 **Long expressions.** An expression with hundreds of operations used memory
 with the cube of its depth, and one with thousands crashed. The cost is now
 quadratic (a 250-term sum lowers in about 5 s instead of 120 s), and an
