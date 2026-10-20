@@ -127,6 +127,24 @@ works with 1.4: a query that needs a constant array, as every one over sets, mul
 and maps does, sets cvc5's ``arrays-exp`` option itself, which 1.4 requires. Every Lean
 project pins ``leanprover/lean4:v4.32.2``.
 
+When cpp-verify crashes
+~~~~~~~~~~~~~~~~~~~~~~~
+
+A crash is a bug in cpp-verify, never a verdict about the program. The process
+stops with a stack dump that starts like this:
+
+.. code-block:: text
+
+   PLEASE submit a bug report to https://github.com/SwayamInSync/cpp-verify/issues/ and include the crash backtrace and instructions to reproduce the bug.
+   Stack dump:
+   0.	Program arguments: cpp-verify crash.cpp --
+
+Report it there with the whole output, the command, the output of
+``cpp-verify --version``, and the smallest source that reproduces it. ``clang++``
+from the same build names the same address. A build directory configured before
+0.2 keeps LLVM's address in its CMake cache; configure it again with
+``-UBUG_REPORT_URL``, or use a new one.
+
 Options that select a backend, and options a run would not use
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
