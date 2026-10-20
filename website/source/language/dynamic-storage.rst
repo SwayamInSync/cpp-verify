@@ -282,7 +282,41 @@ type permits, compared for equality, converted to ``bool``, deleted, passed
 through the checked verified scalar interfaces above, or returned by the
 inferred fresh-owned factory boundary. These limits apply to the pointer, not
 to the value read through it: ``*p + 1``, ``*p < 50``, ``*p + *q``, and
-``sq(*p)`` in a spec call are ordinary integer expressions.
+``sq(*p)`` in a spec call are ordinary integer expressions. Both functions
+below verify:
+
+.. code-block:: cpp
+
+   cv::spec int sq(int x) { return x * x; }
+
+   int next_value(int v)
+     cv::pre(v < 100)
+     cv::post(cv::result == v + 1)
+   {
+     int *p = new int(v);
+     int r = *p + 1;
+     delete p;
+     return r;
+   }
+
+   int square_stored(int v)
+     cv::pre(0 <= v && v <= 100)
+     cv::post(cv::result == sq(v))
+   {
+     int *p = new int(v);
+     int *q = new int(v);
+     int r = *p * *q;
+     cv::check(r == sq(*p));
+     delete p;
+     delete q;
+     return r;
+   }
+
+Before 0.2, such expressions were rejected as if they computed with the
+pointer itself, and the file stopped: ``error: next_value: arithmetic on
+dynamic-storage pointers is unsupported``, and for the spec call ``error:
+square_stored: dynamic-storage pointers cannot cross a function-call
+boundary``.
 
 Type-erasing or indirect copies, ownership-taking pointer parameters,
 arithmetic-derived ownership, uninitialized/freed/multiple/escaped results,
