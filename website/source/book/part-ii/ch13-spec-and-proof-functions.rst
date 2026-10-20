@@ -90,8 +90,8 @@ Opacity: fuel, ``cppverify::reveal``, ``cppverify::hide``
 A recursive ``cppverify::spec`` is finitely transparent by default (fuel 1), so its
 defining equation cannot send Z3 into a matching loop.
 ``cppverify::reveal_with_fuel(f, n)`` raises the depth when a proof needs more.
-``cppverify::reveal`` / ``cppverify::hide`` toggle a spec's
-transparency for the rest of a function:
+``cppverify::reveal`` / ``cppverify::hide`` make a spec transparent / opaque in the
+whole function, wherever the statement appears:
 
 .. code-block:: cpp
 
@@ -101,7 +101,7 @@ transparency for the rest of a function:
      cv::pre(x >= 0 && x <= 10)
      cv::post(cv::result == triple(x))
    {
-     cv::ghost { cv::reveal(triple); }            // reveal_with_fuel(f, n) for recursive specs
+     cv::ghost { cv::reveal(triple); }            // cv::reveal_with_fuel(f, n) for recursive specs
      return x + x + x;
    }
 
@@ -898,7 +898,7 @@ culprit (see :doc:`ch16-when-verification-fails`).
 ---------------------
 
 ``cppverify::choose(k, body)`` is an integer for which ``body`` holds, when there is one,
-and otherwise some unspecified integer (Hilbert's ε). ``choose(k, lo, hi,
+and otherwise some unspecified integer (Hilbert's ε). ``cppverify::choose(k, lo, hi,
 body)`` chooses in ``[lo, hi)``:
 
 .. code-block:: cpp
