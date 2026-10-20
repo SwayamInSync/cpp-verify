@@ -57,6 +57,13 @@ already was (:doc:`language/expressions`).
 generic lambda compiled, and the program failed to link. It is now reported
 where it is written (:doc:`language/ghost-proofs`).
 
+**Extent markers outside a precondition are errors.** ``valid(p, n)`` declares
+an extent only as a top-level condition of a precondition. Anywhere else it
+meant ``true``, so ``cv::post(valid(cv::result, 4))`` verified for a function
+that returns ``nullptr``. In a postcondition, a loop invariant, a
+``cppverify::check``, ghost code, or a spec function it is now an error for
+that function (:doc:`language/pointers`).
+
 **Clang's own analyses.** ``noexcept`` of a contract expression crashed or hung
 the compiler, as did a contract expression in a C++98 constant; the static
 analyzer reported nothing after a ghost block; libclang hid the constructs;
