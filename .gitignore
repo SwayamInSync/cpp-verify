@@ -33,6 +33,7 @@
 
 # CppVerify Sphinx site output
 /website/build/
+/website/site/
 /website/source/_build/
 
 #==============================================================================#
