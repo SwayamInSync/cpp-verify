@@ -184,10 +184,12 @@ otherwise supported code:
   aggregate assignment``): assign its fields; assigning one local record to
   another is supported;
 - ``cppverify::aliases`` between pointers to different types (``aliases
-  between different pointee types are unsupported``). Contracts on member functions are
-instead ignored with a warning (``-Wcontract-unsupported``: "contracts on
-member functions are not yet supported and are ignored ..."), and the run
-continues with the other functions.
+  between different pointee types are unsupported``).
+
+Contracts on member functions are instead ignored with a warning
+(``-Wcontract-unsupported``: "contracts on member functions are not yet
+supported and are ignored ..."), and the run continues with the other
+functions.
 
 Objects, classes, and RAII
 --------------------------
