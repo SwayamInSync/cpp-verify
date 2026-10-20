@@ -13,6 +13,155 @@ next release with ``-dev``.
 
 The data formats keep versions of their own, listed with each release.
 
+0.2.0 (in development)
+----------------------
+
+The changes on ``main`` since 0.1.1, which 0.2.0 will ship. Each entry says
+what 0.1.1 did and what happens now; the page it links shows an example with
+the verifier's output.
+
+Wrong results fixed
+~~~~~~~~~~~~~~~~~~~
+
+These made 0.1.1 report ``Verified`` for a claim that is false, or compile a
+program that cannot work.
+
+**A clause takes one expression.** ``cv::post(cv::result >= 0 cv::result <= 10)``,
+with its ``&&`` missing, kept the first condition and dropped the rest without
+a word, so the clause checked less than it said. Anything after a clause's
+expression is now an error (:doc:`language/syntax`).
+
+**Recursion through** ``cppverify::choose``. A call inside a choose's body was not
+seen as a call of the function the choose is in, so a spec that applied
+itself there skipped its termination check, and its contradictory definition
+let a false claim verify. The call is now checked like any other recursive
+call (:doc:`book/part-ii/ch13-spec-and-proof-functions`).
+
+**Archive replay reports proved obligations, not** ``Verified``. Replay printed
+``Verified`` for every module whose obligations held, although a source
+verdict also rests on facts an archive does not carry, such as a callee's
+contract. It now prints ``Proved obligations: f (dependencies not checked in
+replay)``, JSON status ``proved-obligations`` (:doc:`language/tooling`).
+
+**A spec reads exact values.** A value a spec body read through a pointer kept
+its machine type, so ``p[0] + p[1]`` wrapped: a proof that the sum of
+``2147483647`` and ``1`` is negative verified. Such reads are now mathematical
+integers, as the rest of a spec is (:doc:`language/ghost-proofs`).
+
+**Quantifiers in executable code are errors.** ``cv::forall`` and ``cv::exists``
+outside contracts and ghost code compiled to an undefined value while the
+verifier read them as quantifiers. They are now an error, as ``cv::choose``
+already was (:doc:`language/expressions`).
+
+**Spec functions in generic lambdas are errors.** A spec function called in a
+generic lambda compiled, and the program failed to link. It is now reported
+where it is written (:doc:`language/ghost-proofs`).
+
+**Clang's own analyses.** ``noexcept`` of a contract expression crashed or hung
+the compiler, as did a contract expression in a C++98 constant; the static
+analyzer reported nothing after a ghost block; libclang hid the constructs;
+and a contract expression in a template's signature produced a malformed
+symbol. Each now behaves by the construct's meaning (:doc:`language/tooling`).
+
+Failures that were not real
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+These made 0.1.1 report a failure, or reject a function, for C++ that is
+correct.
+
+**Loops that never repeat.** A loop whose condition is the constant false, as in
+``do { ... } while (0)`` macros, forgot the state it changed, and the code
+after it could fail for values it never produces. Its state now carries over
+(:doc:`language/functions-loops`).
+
+**Null minus null.** The difference of two null pointers failed its
+``pointer-difference`` check; it is 0, as C++ defines (:doc:`language/pointers`).
+
+**C++20 shifts.** A signed left shift followed the C++17 rule in every mode, so
+``-1 << 1`` failed under ``-std=c++20``. From C++20 it is the value C++20
+defines (:doc:`language/integers`).
+
+**Enumeration ranges.** A value of an enumeration without a fixed underlying
+type could take values outside its range, so true claims failed with values
+such as ``c = 4294967295``. Every such value is now assumed to be in the
+range C++ gives it (:doc:`language/integers`).
+
+**Values read through** ``new`` **pointers.** ``*p + 1`` on a pointer from ``new``
+was rejected as arithmetic on the pointer; values read through such a
+pointer are now ordinary integers (:doc:`language/dynamic-storage`).
+
+**Out-parameters.** Passing storage that is not initialized yet to a function
+that writes it (``int a; init(a);``) was a failure, or stopped the file; it is
+now ``Unresolved`` with reason ``construct.unsupported``, until a contract can
+say that a function writes its parameter first (:doc:`language/pointers`).
+
+**Choices in counterexamples.** A counterexample could use a value of
+``cv::choose`` that its body excludes, so true claims about a choice failed.
+Every choice a counterexample uses is now checked against its body
+(:doc:`book/part-ii/ch13-spec-and-proof-functions`).
+
+**Vacuity findings of downgraded results.** A result that is ``Unresolved``
+because a fact it relies on is not established could still be marked
+``[vacuous]``, from that very fact, and whether it was depended on the
+solver's search. Such findings are now dropped
+(:doc:`book/part-ii/ch16-when-verification-fails`).
+
+C++ that compiles now
+~~~~~~~~~~~~~~~~~~~~~
+
+**Contracts in templates.** A template whose contract depends on its
+parameters did not compile. Its contracts now compile and instantiate, and
+are ignored with a ``-Wcontract-unsupported`` warning; a template without
+contracts no longer stops the file (:doc:`language/functions-loops`).
+
+Running cpp-verify
+~~~~~~~~~~~~~~~~~~
+
+**Ctrl-C stops the run.** Ctrl-C printed an LLVM crash report and the run went
+on, or crashed. It now stops every solver at once, reports each unfinished
+function as ``Interrupted``, and exits with status 130
+(:doc:`language/tooling`).
+
+**Options select their backend, and unused options are errors.**
+``--lean-out`` and ``--lean-project`` select Lean and ``--unroll`` selects BMC;
+an option the run would not use, such as ``--unroll`` with ``--backend=z3``, is
+an error that names what it needs, where it was ignored (:doc:`language/tooling`).
+
+**Compiler errors stop their file, and headers are C++.** An error in a command
+line was printed and then ignored, and a ``.h`` input was compiled as C. Now
+the file with the error is not verified and ``cpp-verify`` exits with status 1,
+and a header is C++ (:doc:`language/tooling`).
+
+**Long expressions.** An expression with hundreds of operations used memory
+with the cube of its depth, and one with thousands crashed. The cost is now
+quadratic (a 250-term sum lowers in about 5 s instead of 120 s), and an
+expression nested more than 256 operations deep is reported where it is
+(:doc:`language/limitations`).
+
+**Z3 errors.** A Z3 call that failed went unnoticed, and a later step could
+report something unrelated. The query now ends ``Unresolved`` with reason
+``encoding.failed`` and Z3's message (:doc:`language/tooling`).
+
+**Parallel runs.** With more than one job, a function waiting for its own
+queries could run another function's long query, delaying its result and
+spending its ``--function-timeout``. A waiting function now runs only its own
+queries (:doc:`language/tooling`).
+
+**cvc5 1.4.** Every query over sets, multisets, and maps failed with cvc5 1.4,
+which requires extended arrays for constant arrays; such a query now enables
+them itself (:doc:`language/tooling`).
+
+**clang-format.** A range footprint is written ``p[lo : n]``, not ``p [lo:n]``
+(:doc:`language/tooling`).
+
+Data formats
+~~~~~~~~~~~~
+
+Archives stay ``cppverify.obligation/2`` and JSON diagnostics
+``cppverify.diagnostic/1``. JSON records may carry the status
+``proved-obligations`` (archive replay) and the reason ``interrupted``
+(Ctrl-C).
+
 0.1.1
 -----
 
