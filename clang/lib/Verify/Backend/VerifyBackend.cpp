@@ -230,17 +230,8 @@ protected:
     CVC5->setDeadline(D);
   }
   VerifyResult verifyModule(const ObligationModule &Module) override {
-    if (MaxQueryNodes != 0 &&
-        obligationModuleNodeCount(Module) > MaxQueryNodes) {
-      VerifyResult Result;
-      Result.Status = VerifyStatus::Unresolved;
-      Result.Reason = VerifyReason::QuerySizeLimit;
-      Result.Message =
-          "canonical obligation module exceeds query node budget " +
-          std::to_string(MaxQueryNodes);
-      Result.BackendName = "portfolio";
-      return Result;
-    }
+    if (auto Limited = moduleSizeLimit(Module, MaxQueryNodes, "portfolio"))
+      return std::move(*Limited);
 
     std::vector<VerifyResult> Z3Results;
     std::vector<VerifyResult> CVC5Results;
@@ -392,6 +383,24 @@ verify::parseMachineIntegerEncoding(llvm::StringRef Name) {
   return std::nullopt;
 }
 
+std::optional<VerifyResult>
+verify::moduleSizeLimit(const ObligationModule &Module, uint64_t MaxNodes,
+                        llvm::StringRef BackendName) {
+  if (MaxNodes == 0)
+    return std::nullopt;
+  const uint64_t Nodes = obligationModuleNodeCount(Module);
+  if (Nodes <= MaxNodes)
+    return std::nullopt;
+  VerifyResult Result;
+  Result.Status = VerifyStatus::Unresolved;
+  Result.Reason = VerifyReason::QuerySizeLimit;
+  Result.Message = "the obligation module has " + std::to_string(Nodes) +
+                   " expression nodes, more than the limit of " +
+                   std::to_string(MaxNodes) + " (--max-query-nodes)";
+  Result.BackendName = BackendName.str();
+  return Result;
+}
+
 llvm::StringRef verify::verifyReasonCode(VerifyReason Reason) {
   switch (Reason) {
   case VerifyReason::None:
@@ -402,6 +411,8 @@ llvm::StringRef verify::verifyReasonCode(VerifyReason Reason) {
     return "solver.timeout";
   case VerifyReason::SolverResourceLimit:
     return "solver.resource-limit";
+  case VerifyReason::SolverMemoryLimit:
+    return "solver.memory-limit";
   case VerifyReason::SolverUnknown:
     return "solver.unknown";
   case VerifyReason::SolverUnavailable:
@@ -681,17 +692,8 @@ protected:
     CVC5->setDeadline(D);
   }
   VerifyResult verifyModule(const ObligationModule &Module) override {
-    if (MaxQueryNodes != 0 &&
-        obligationModuleNodeCount(Module) > MaxQueryNodes) {
-      VerifyResult Result;
-      Result.Status = VerifyStatus::Unresolved;
-      Result.Reason = VerifyReason::QuerySizeLimit;
-      Result.Message =
-          "canonical obligation module exceeds query node budget " +
-          std::to_string(MaxQueryNodes);
-      Result.BackendName = "race";
-      return Result;
-    }
+    if (auto Limited = moduleSizeLimit(Module, MaxQueryNodes, "race"))
+      return std::move(*Limited);
     resume();
     VerifyResult Z3Result;
     VerifyResult CVC5Result;
