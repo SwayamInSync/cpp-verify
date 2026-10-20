@@ -173,7 +173,18 @@ effects, backend encoding, and false-proof coverage.
 
 A contracted free function that uses an unsupported construct (a ``switch``,
 say) fails closed: the construct is reported as an error, and then no
-function of the file gets a verdict. Contracts on member functions are
+function of the file gets a verdict. A few forms are rejected this way inside
+otherwise supported code:
+
+- a local that shadows another (``local variable shadowing is unsupported:
+  x``): rename one of them;
+- ``++`` and ``--`` on a pointer (``pointer increment/decrement is
+  unsupported``): write ``q = q + 1``;
+- storing a whole record through a pointer, ``*p = r`` (``unsupported
+  aggregate assignment``): assign its fields; assigning one local record to
+  another is supported;
+- ``cppverify::aliases`` between pointers to different types (``aliases
+  between different pointee types are unsupported``). Contracts on member functions are
 instead ignored with a warning (``-Wcontract-unsupported``: "contracts on
 member functions are not yet supported and are ignored ..."), and the run
 continues with the other functions.
