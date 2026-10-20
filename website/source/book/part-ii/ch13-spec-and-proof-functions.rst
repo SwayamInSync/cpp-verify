@@ -390,8 +390,9 @@ substituted first, so ``return n * (n + 1);`` with
 ``cppverify::post(cppverify::result == 2 * sum(n))`` is proved the same way.
 
 Inductions cost time only where a claim would otherwise stay unresolved:
-verified and failed claims never try one. Each attempt gets a sixth of
-``--timeout``, but at least two seconds (all of ``--timeout`` when that is
+verified and failed claims never try one. Each attempt gets a sixth of the
+query's timeout (``--timeout``, or ``--collection-timeout`` for a query over
+collections), but at least two seconds (all of the timeout when that is
 shorter, and five seconds when there is no timeout), and the attempts for
 one claim stop after two such shares. With the default 30-second timeout an
 unresolved claim takes at most 10 seconds more.
