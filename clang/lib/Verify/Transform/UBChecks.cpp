@@ -1069,15 +1069,112 @@ bool verify::hasRepresentedRoot(const VExpr *E) {
 }
 
 bool verify::usesValidMarker(const VFunction &Fn) {
-  if (Fn.IsSpec)
-    return false;
   for (const auto &Pre : Fn.Preconditions)
     if (containsValidCall(Pre.get()))
       return true;
-  for (const auto &Post : Fn.Postconditions)
-    if (containsValidCall(Post.get()))
-      return true;
-  return false;
+  return misplacedValidMarker(Fn).has_value();
+}
+
+namespace {
+/// Finds the first valid(p, n) outside the preconditions, where it would be a
+/// spec whose body is `true`.
+struct MisplacedValidFinder {
+  const char *Where = nullptr;
+
+  void expr(const VExpr *E, const char *Position) {
+    if (!Where && containsValidCall(E))
+      Where = Position;
+  }
+
+  void stmts(const std::vector<std::unique_ptr<VStmt>> &Stmts, bool Ghost) {
+    for (const auto &S : Stmts) {
+      const char *Code = Ghost ? "ghost code" : "a function body";
+      switch (S->K) {
+      case VStmt::Assign:
+        expr(static_cast<const VAssignStmt &>(*S).Value.get(), Code);
+        break;
+      case VStmt::Store: {
+        const auto &St = static_cast<const VStoreStmt &>(*S);
+        expr(St.Ptr.get(), Code);
+        expr(St.Value.get(), Code);
+        break;
+      }
+      case VStmt::If: {
+        const auto &I = static_cast<const VIfStmt &>(*S);
+        expr(I.Cond.get(), Code);
+        stmts(I.Then, Ghost);
+        stmts(I.Else, Ghost);
+        break;
+      }
+      case VStmt::Assert:
+        expr(static_cast<const VAssertStmt &>(*S).Cond.get(),
+             "a cppverify::check");
+        break;
+      case VStmt::Assume:
+        expr(static_cast<const VAssumeStmt &>(*S).Cond.get(), Code);
+        break;
+      case VStmt::ContractAssert:
+        expr(static_cast<const VContractAssertStmt &>(*S).Cond.get(),
+             "a cppverify::check");
+        break;
+      case VStmt::Return:
+        expr(static_cast<const VReturnStmt &>(*S).Value.get(), Code);
+        break;
+      case VStmt::While: {
+        const auto &W = static_cast<const VWhileStmt &>(*S);
+        expr(W.Cond.get(), Code);
+        for (const auto &Inv : W.Invariants)
+          expr(Inv.get(), "a loop invariant");
+        for (const auto &Dec : W.Decreases)
+          expr(Dec.get(), "a cppverify::decreases");
+        for (const VFootprint &F : W.Modifies) {
+          expr(F.Target.get(), "a cppverify::modifies");
+          expr(F.Count.get(), "a cppverify::modifies");
+        }
+        stmts(W.Body, Ghost);
+        break;
+      }
+      case VStmt::Call:
+        for (const auto &Arg : static_cast<const VCallStmt &>(*S).Args)
+          expr(Arg.get(), Code);
+        break;
+      case VStmt::Seq:
+        stmts(static_cast<const VSeqStmt &>(*S).Stmts, Ghost);
+        break;
+      case VStmt::GhostBlock:
+        stmts(static_cast<const VGhostBlockStmt &>(*S).Body, true);
+        break;
+      default:
+        break;
+      }
+    }
+  }
+
+  void function(const VFunction &Fn) {
+    for (const auto &Post : Fn.Postconditions)
+      expr(Post.get(), "a postcondition");
+    for (const auto &Rec : Fn.Recommends)
+      expr(Rec.get(), "a cppverify::recommends");
+    for (const auto &Dec : Fn.Decreases)
+      expr(Dec.get(), "a cppverify::decreases");
+    expr(Fn.Domain.get(), "a cppverify::when");
+    for (const VFunction::ClauseProof &Proof : Fn.ClauseProofs)
+      stmts(Proof.Body, true);
+    stmts(Fn.Body, Fn.IsSpec || Fn.IsProof);
+    if (Fn.IsSpec && Where)
+      Where = "a spec function";
+  }
+};
+} // namespace
+
+std::optional<std::string> verify::misplacedValidMarker(const VFunction &Fn) {
+  MisplacedValidFinder Finder;
+  Finder.function(Fn);
+  if (!Finder.Where)
+    return std::nullopt;
+  return std::string("valid(p, n) declares an extent only as a top-level "
+                     "condition of a cppverify::pre, and has no meaning in ") +
+         Finder.Where;
 }
 
 std::optional<std::string> verify::instrumentUBChecks(VFunction &Fn) {
@@ -1088,6 +1185,8 @@ std::optional<std::string> verify::instrumentUBChecks(VFunction &Fn) {
     UB.scanValid(Pre.get());
   if (UB.Error)
     return UB.Error;
+  if (auto Misplaced = misplacedValidMarker(Fn))
+    return Misplaced;
   UB.appendValidSemantics(Fn);
   UB.appendExtentSeparation(Fn);
   if (!Fn.IsProof) {
