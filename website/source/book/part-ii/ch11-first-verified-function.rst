@@ -17,7 +17,7 @@ The program
 
 - ``cppverify::pre(x >= -2147483647)`` — the precondition the caller must satisfy. It admits
   every ``int`` except ``INT_MIN``: CppVerify uses honest machine integers, and
-  ``-INT_MIN`` overflows (see :doc:`ch16-when-verification-fails`). With ``cppverify::pre(true)``
+  ``-INT_MIN`` overflows (see :doc:`ch18-undefined-behavior`). With ``cppverify::pre(true)``
   the verifier correctly *rejects* this function and reports ``x = INT_MIN`` as a
   counterexample — a real bug it just caught for you.
 - ``cppverify::post(cppverify::result >= 0)`` — ``cppverify::result`` is the return value (Part I: postcondition).
@@ -35,7 +35,7 @@ What the verifier did (conceptually)
 ------------------------------------
 
 1. Built a VC: the precondition and path facts about ``x`` imply ``cppverify::result >= 0``.
-2. Asked Z3: is ``(facts ∧ ¬(result >= 0))`` unsatisfiable?
+2. Asked Z3: is ``(facts ∧ ¬(cppverify::result >= 0))`` unsatisfiable?
 3. **Unsat** ⇒ verified.
 
 If you return ``x`` unchanged, Z3 finds a model with a negative ``x`` — counterexample.
