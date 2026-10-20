@@ -922,7 +922,14 @@ Testing and coverage
 --------------------
 
 Regression tests live under ``clang/test/Verify/``, and lit runs them as
-written: ``build/bin/llvm-lit clang/test/Verify``. From the **repository root**:
+written, once the test tools that ``setup.sh`` does not build exist:
+
+.. code-block:: bash
+
+   ninja -C build FileCheck not count split-file llvm-config
+   build/bin/llvm-lit clang/test/Verify
+
+From the **repository root**:
 
 .. list-table::
    :header-rows: 1
