@@ -12,6 +12,12 @@
 namespace clang {
 namespace verify {
 
+/// A construct the converter cannot represent, and where it is written.
+struct ConversionError {
+  SourceRange Range;
+  std::string Message;
+};
+
 class ASTConverter {
   ASTContext &Ctx;
   VIntMode IntMode = VIntMode::Machine;
@@ -22,7 +28,14 @@ class ASTConverter {
   std::string ResultName = "result";
   VFunction *CurrentFn = nullptr;
   unsigned NestedCallId = 0;
-  std::vector<std::string> Errors;
+  std::vector<ConversionError> Errors;
+  /// The innermost declaration, statement, or expression being converted,
+  /// where an error is reported unless it names a place of its own.
+  SourceRange CurrentRange;
+  void error(std::string Message) { error(CurrentRange, std::move(Message)); }
+  void error(SourceRange Range, std::string Message) {
+    Errors.push_back({Range, std::move(Message)});
+  }
   std::vector<std::pair<SourceLocation, std::string>> Warnings;
   /// Maps unqualified field name -> "param." for type_invariant lowering.
   std::map<std::string, std::string> FieldSubstPrefix;
@@ -73,7 +86,7 @@ public:
       : Ctx(Ctx), FreshOwnedCalleeIdentities(FreshOwnedCalleeIdentities) {}
 
   std::vector<std::unique_ptr<VFunction>> convertTranslationUnit();
-  const std::vector<std::string> &getErrors() const { return Errors; }
+  const std::vector<ConversionError> &getErrors() const { return Errors; }
   /// For each contracted function, the functions not verified whose bodies
   /// call it: its precondition is assumed there, not checked.
   const std::map<std::string, std::set<std::string>> &
