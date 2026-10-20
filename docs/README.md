@@ -2,7 +2,7 @@
 
 Internal design documents for CppVerify development:
 
-- [DESIGN.md](DESIGN.md) — contract syntax and language semantics (source of truth for the reference)
+- [DESIGN.md](DESIGN.md) — contract syntax and language semantics, for developers; the user-facing reference is the website (`website/source/language/`), which these notes must agree with
 - [ARCHITECTURE.md](ARCHITECTURE.md) — verification pipeline and IR layers
 - [ROADMAP.md](ROADMAP.md) — implementation milestones
 - [COMPETITIVE.md](COMPETITIVE.md) — landscape vs other tools
