@@ -188,6 +188,30 @@ contradiction, and a proof that used it could prove anything. Before 0.2 the
 call inside the choose was not seen as a recursive call: ``stuck`` was
 accepted, and ``forty_two`` verified although it returns ``0`` at ``x = 1``.
 
+A choice's body counts where the choice is written in a spec's other checks
+too: the applications inside a choose get the same facts as the others, so a
+postcondition proved by induction may use the hypothesis at a call written
+inside a choose:
+
+.. code-block:: cpp
+
+   cv::spec int bit(int n)
+     cv::decreases(n)
+     cv::post(n < 0 || cv::result == cv::choose(k, 0, 2, k == n % 2))
+   {
+     return n <= 1 ? n : cv::choose(j, 0, 2, j == bit(n - 2));
+   }
+
+.. code-block:: text
+
+   Verified: spec decreases and post: bit
+
+For ``n > 1``, the hypothesis at ``bit(n - 2)`` says that it is the parity of
+``n - 2``, ``0`` or ``1``. So the outer choice has a witness and is that
+value, which is also the parity of ``n``. A ``cppverify::reads`` check
+follows the loads of a choose's body in the same way
+(:doc:`../../language/ghost-proofs`).
+
 Spec functions may
 call each other in a cycle when they share a measure of the same length and
 every call within the cycle lowers it; the termination proof treats all of them
