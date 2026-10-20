@@ -158,6 +158,17 @@ expression nested more than 256 operations deep is reported where it is
 report something unrelated. The query now ends ``Unresolved`` with reason
 ``encoding.failed`` and Z3's message (:doc:`language/tooling`).
 
+**Memory limits.** Nothing bounded the memory a run took: a function whose
+proof obligations, which repeat every assumption before each check, came to
+hundreds of millions of nodes, or ``cppverify::reveal_with_fuel(fibo, 24)``,
+took tens of gigabytes until the system stopped the run. ``--max-query-nodes``
+now has a default, 32 million expression nodes, and bounds what is built for
+one function before it is built; a function over it is ``Unresolved`` with
+reason ``query.size-limit``, which names what was too large. The new
+``--memory-limit`` (default 8192 MB) bounds Z3's queries together and each
+cvc5 process; a query that reaches it is ``Unresolved`` with reason
+``solver.memory-limit`` (:doc:`language/tooling`).
+
 **Parallel runs.** With more than one job, a function waiting for its own
 queries could run another function's long query, delaying its result and
 spending its ``--function-timeout``. A waiting function now runs only its own
@@ -175,8 +186,8 @@ Data formats
 
 Archives stay ``cppverify.obligation/2`` and JSON diagnostics
 ``cppverify.diagnostic/1``. JSON records may carry the status
-``proved-obligations`` (archive replay) and the reason ``interrupted``
-(Ctrl-C).
+``proved-obligations`` (archive replay) and the reasons ``interrupted``
+(Ctrl-C) and ``solver.memory-limit`` (``--memory-limit``).
 
 0.1.1
 -----
