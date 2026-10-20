@@ -3414,7 +3414,225 @@ public:
            false,
            Value});
     }
+    // A choice is a function of the values its condition reads: in two
+    // memories where its condition reads the same values, it is one value.
+    // Two values are evidence only where some value read differs.
+    for (size_t I = 0; I < ChoicesRead.size(); ++I)
+      for (size_t J = I + 1; J < ChoicesRead.size(); ++J) {
+        const auto &[Function, First, FirstValue] = ChoicesRead[I];
+        const auto &[Other, Second, SecondValue] = ChoicesRead[J];
+        if (Function != Other || FirstValue == SecondValue)
+          continue;
+        bool OnlyMemory = true;
+        for (size_t K = 0; K != First.size() && OnlyMemory; ++K)
+          OnlyMemory = Function->Parameters[K].Sort.Kind ==
+                           LogicSortKind::Heap ||
+                       First[K] == Second[K];
+        if (!OnlyMemory)
+          continue;
+        const std::string SavedFailure = Failure;
+        std::optional<bool> Apart = readsApart(*Function, First, Second);
+        if (!Apart) {
+          Failure = "whether " + shown(*Function, First) + " and " +
+                    shown(*Function, Second) +
+                    " read different values: " + Failure;
+          return false;
+        }
+        if (!*Apart) {
+          Failure = "the model gives " + shown(*Function, First) + " and " +
+                    shown(*Function, Second) +
+                    " different values, but its condition reads the same "
+                    "values in both memories";
+          return false;
+        }
+        Failure = SavedFailure;
+      }
     return true;
+  }
+
+  /// The condition of a choice: the quantifier of its axiom
+  /// `!exists(k, [lo, hi,] body) || ...`.
+  static const LogicExpr *choiceCondition(const LogicFunctionDecl &Choice) {
+    if (Choice.Postconditions.empty())
+      return nullptr;
+    const LogicExpr *Axiom = Choice.Postconditions.front().get();
+    if (Axiom->K != LogicExpr::Or || Axiom->Children.empty())
+      return nullptr;
+    const LogicExpr *Not = Axiom->Children.front().get();
+    if (Not->K != LogicExpr::Not || Not->Children.size() != 1 ||
+        Not->Children.front()->K != LogicExpr::Exists)
+      return nullptr;
+    return Not->Children.front().get();
+  }
+
+  static bool readsMemory(const LogicExpr &E) {
+    if (E.K == LogicExpr::Select)
+      return true;
+    for (const auto &Child : E.Children)
+      if ((E.K == LogicExpr::SpecCall &&
+           Child->Sort.Kind == LogicSortKind::Heap) ||
+          readsMemory(*Child))
+        return true;
+    return false;
+  }
+
+  static std::unique_ptr<LogicExpr>
+  connective(LogicExpr::Kind K, std::unique_ptr<LogicExpr> L,
+             std::unique_ptr<LogicExpr> R) {
+    auto E = std::make_unique<LogicExpr>(K);
+    E->Sort = LogicSort::boolSort();
+    E->Children.push_back(std::move(L));
+    if (R)
+      E->Children.push_back(std::move(R));
+    return E;
+  }
+
+  static std::unique_ptr<LogicExpr> either(std::unique_ptr<LogicExpr> L,
+                                           std::unique_ptr<LogicExpr> R) {
+    if (!L)
+      return R;
+    if (!R)
+      return L;
+    return connective(LogicExpr::Or, std::move(L), std::move(R));
+  }
+
+  /// A formula that holds where evaluating \p E reads a different value in
+  /// the two memories, \p Second giving the term in the second: the first
+  /// such read in evaluation order, each read under the condition that
+  /// reaches it. Null when \p E reads no memory.
+  static std::unique_ptr<LogicExpr> readsDiffer(
+      const LogicExpr &E,
+      const std::function<std::unique_ptr<LogicExpr>(const LogicExpr &)>
+          &Second) {
+    if (!readsMemory(E))
+      return nullptr;
+    auto differ = [&](const LogicExpr &Child) {
+      return readsDiffer(Child, Second);
+    };
+    switch (E.K) {
+    case LogicExpr::Select:
+    case LogicExpr::SpecCall: {
+      std::unique_ptr<LogicExpr> Differ;
+      for (const auto &Child : E.Children)
+        Differ = either(std::move(Differ), differ(*Child));
+      if (E.K == LogicExpr::Select ||
+          llvm::any_of(E.Children, [](const auto &Child) {
+            return Child->Sort.Kind == LogicSortKind::Heap;
+          }))
+        Differ = either(std::move(Differ),
+                        connective(LogicExpr::Ne, cloneLogicExpr(&E),
+                                   Second(E)));
+      return Differ;
+    }
+    case LogicExpr::And:
+    case LogicExpr::Or: {
+      // An operand is evaluated where those before it did not decide.
+      std::unique_ptr<LogicExpr> Differ, Reached;
+      for (const auto &Child : E.Children) {
+        std::unique_ptr<LogicExpr> Here = differ(*Child);
+        if (Here && Reached)
+          Here = connective(LogicExpr::And, cloneLogicExpr(Reached.get()),
+                            std::move(Here));
+        Differ = either(std::move(Differ), std::move(Here));
+        std::unique_ptr<LogicExpr> Continues =
+            E.K == LogicExpr::And
+                ? cloneLogicExpr(Child.get())
+                : connective(LogicExpr::Not, cloneLogicExpr(Child.get()),
+                             nullptr);
+        Reached = Reached ? connective(LogicExpr::And, std::move(Reached),
+                                       std::move(Continues))
+                          : std::move(Continues);
+      }
+      return Differ;
+    }
+    case LogicExpr::Ite: {
+      auto orFalse = [](std::unique_ptr<LogicExpr> F) {
+        if (F)
+          return F;
+        auto False = std::make_unique<LogicExpr>(LogicExpr::False);
+        False->Sort = LogicSort::boolSort();
+        return False;
+      };
+      std::unique_ptr<LogicExpr> Branches;
+      std::unique_ptr<LogicExpr> Then = differ(*E.Children[1]);
+      std::unique_ptr<LogicExpr> Else = differ(*E.Children[2]);
+      if (Then || Else) {
+        Branches = std::make_unique<LogicExpr>(LogicExpr::Ite);
+        Branches->Sort = LogicSort::boolSort();
+        Branches->Children.push_back(cloneLogicExpr(E.Children[0].get()));
+        Branches->Children.push_back(orFalse(std::move(Then)));
+        Branches->Children.push_back(orFalse(std::move(Else)));
+      }
+      return either(differ(*E.Children[0]), std::move(Branches));
+    }
+    case LogicExpr::Forall:
+    case LogicExpr::Exists: {
+      std::unique_ptr<LogicExpr> Differ;
+      for (size_t I = 0; I + 1 < E.Children.size(); ++I)
+        Differ = either(std::move(Differ), differ(*E.Children[I]));
+      if (std::unique_ptr<LogicExpr> Body = differ(*E.Children.back())) {
+        auto Some = std::make_unique<LogicExpr>(LogicExpr::Exists);
+        Some->Sort = LogicSort::boolSort();
+        Some->Binder = E.Binder;
+        for (size_t I = 0; I + 1 < E.Children.size(); ++I)
+          Some->Children.push_back(cloneLogicExpr(E.Children[I].get()));
+        Some->Children.push_back(std::move(Body));
+        Differ = either(std::move(Differ), std::move(Some));
+      }
+      return Differ;
+    }
+    default: {
+      std::unique_ptr<LogicExpr> Differ;
+      for (const auto &Child : E.Children)
+        Differ = either(std::move(Differ), differ(*Child));
+      return Differ;
+    }
+    }
+  }
+
+  /// Whether the condition of \p Choice reads a different value at \p First
+  /// and at \p Second; nullopt when it cannot be told.
+  std::optional<bool> readsApart(const LogicFunctionDecl &Choice,
+                                 const std::vector<LogicValue> &First,
+                                 const std::vector<LogicValue> &Second) {
+    const LogicExpr *Condition = choiceCondition(Choice);
+    if (!Condition) {
+      Failure = "the axiom of " + displayName(Choice) + " has no condition";
+      return std::nullopt;
+    }
+    std::set<std::string> Names;
+    for (const LogicFunctionParameter &Parameter : Choice.Parameters)
+      Names.insert(Parameter.Name);
+    const std::string Suffix = "\x1f" "second";
+    std::function<void(LogicExpr &)> rename = [&](LogicExpr &E) {
+      if (E.K == LogicExpr::Var && Names.count(E.Name))
+        E.Name += Suffix;
+      for (auto &Child : E.Children)
+        rename(*Child);
+    };
+    auto second = [&](const LogicExpr &E) {
+      std::unique_ptr<LogicExpr> Copy = cloneLogicExpr(&E);
+      rename(*Copy);
+      return Copy;
+    };
+    // The choice's own quantifier: its bounds, then its body at every value
+    // in range.
+    std::unique_ptr<LogicExpr> Differ = readsDiffer(*Condition, second);
+    if (!Differ)
+      return false;
+    const size_t SavedBase = ScopeBase;
+    const size_t SavedSize = Scope.size();
+    ScopeBase = SavedSize;
+    for (unsigned K = 0; K != First.size(); ++K) {
+      Scope.emplace_back(Choice.Parameters[K].Name, First[K]);
+      Scope.emplace_back(Choice.Parameters[K].Name + Suffix, Second[K]);
+    }
+    Active.push_back(&Choice);
+    std::optional<bool> Apart = truthOf(Differ.get());
+    Active.pop_back();
+    Scope.resize(SavedSize);
+    ScopeBase = SavedBase;
+    return Apart;
   }
 
   const std::string &failure() const { return Failure; }
