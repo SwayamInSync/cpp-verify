@@ -147,6 +147,13 @@ queries could run another function's long query, delaying its result and
 spending its ``--function-timeout``. A waiting function now runs only its own
 queries (:doc:`language/tooling`).
 
+**Documentation for each version.** The site showed only ``main``, so a user
+of a release read about features their binary did not have. Its root now
+documents the latest release, ``/X.Y/`` each release series (``/0.1/`` is
+0.1.1), and ``/dev/`` the development version on ``main``. A banner on every
+page names its version, and each release's archive and notes link to its own
+series.
+
 **cvc5 1.4.** Every query over sets, multisets, and maps failed with cvc5 1.4,
 which requires extended arrays for constant arrays; such a query now enables
 them itself (:doc:`language/tooling`).
