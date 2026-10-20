@@ -55,6 +55,8 @@ C++ source with contracts
 │ Stage 5: Backend adapter │
 │ - Validate capabilities  │
 │ - Z3: encode + solve     │
+│ - cvc5: SMT-LIB2 process │
+│ - portfolio, race: both  │
 │ - BMC: VCR unroll, then  │
 │   the same obligation/Z3 │
 │ - Lean: export / certify │
