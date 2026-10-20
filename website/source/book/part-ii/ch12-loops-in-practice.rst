@@ -247,8 +247,9 @@ Quantified properties
 ---------------------
 
 A loop usually establishes a property over a *range*. Express that with the bounded quantifiers
-``cppverify::forall(i, lo, hi, e)`` and ``cppverify::exists(i, lo, hi, e)`` — ``i`` ranges over ``[lo, hi)`` and the
-half-open bound is the implicit trigger:
+``cppverify::forall(i, lo, hi, e)`` and ``cppverify::exists(i, lo, hi, e)`` — ``i`` ranges over ``[lo, hi)``, and the
+solver chooses the terms that instantiate the quantifier unless a ``cppverify::trigger``
+names one (:doc:`ch13-spec-and-proof-functions`):
 
 .. code-block:: cpp
 
