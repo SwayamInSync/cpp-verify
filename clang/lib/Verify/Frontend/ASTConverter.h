@@ -96,9 +96,15 @@ private:
   unsigned NextAssertBy = 0;
   /// The functions choose(...) expressions are lifted to.
   std::vector<std::unique_ptr<VFunction>> ChoiceFunctions;
+  /// The lifted choice of each condition, by its structural key.
+  std::map<std::string, std::string> ChoiceByCondition;
   /// Specs of <cppverify.h> the translation unit calls, such as valid.
   std::vector<std::unique_ptr<VFunction>> BuiltinFunctions;
   std::unique_ptr<VExpr> convertChoose(const ContractChooseExpr *C);
+  std::unique_ptr<VExpr>
+  choiceApplication(const ContractChooseExpr *C, const std::string &Identity,
+                    std::vector<std::unique_ptr<VExpr>> Args,
+                    const VType &ValueType, bool ReadsHeap, SourceLocation Loc);
   /// A cppverify collection operation or copy, with Handled set; null and
   /// Handled clear for anything else.
   std::unique_ptr<VExpr> convertCollection(const Expr *E, bool &Handled);
