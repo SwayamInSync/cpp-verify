@@ -45,6 +45,79 @@ storage not yet initialized is ``Unresolved`` (``construct.unsupported``). Mutab
 by default (over whole ``valid(p, n)`` extents);
 ``cppverify::aliases(left, right)`` permits same-object aliasing.
 
+Out-parameters
+~~~~~~~~~~~~~~
+
+A function is verified as if it read its reference and pointer parameters'
+storage, so every such parameter must refer to initialized storage at a call.
+C++ requires less: a function that writes its parameter before reading it,
+an out-parameter, may receive storage that is not initialized yet. Until a
+contract can say that a function writes a parameter first, such a call is
+``Unresolved`` with reason ``construct.unsupported``: neither proved nor
+reported as a failure.
+
+.. cppverify-example: unresolved seven
+.. cppverify-example: fails read_too_early
+
+.. code-block:: cpp
+
+   void init(int &out)
+     cv::modifies(out)
+     cv::post(out == 7)
+   {
+     out = 7;
+   }
+
+   int seven()
+     cv::post(cv::result == 7)
+   {
+     int a;
+     init(a);
+     return a;
+   }
+
+   int seven_initialized()
+     cv::post(cv::result == 7)
+   {
+     int a = 0;
+     init(a);
+     return a;
+   }
+
+   int read_too_early()
+     cv::post(cv::result == 3)
+   {
+     int a;
+     int &r = a;
+     int copy = r;
+     r = 3;
+     return copy;
+   }
+
+.. code-block:: text
+
+   Verified: init [backend=z3]
+   out.cpp:12:3: Unresolved: seven [backend=z3] [reason=construct.unsupported] (the verifier cannot model a construct here: binding a reference or pointer parameter to storage that is not initialized, since the callee is verified as reading initialized storage)
+   Verified: seven_initialized [backend=z3]
+   out.cpp:29:3: error: verification failed: read_too_early [...::initialization@29:3] (...) [backend=z3] [reason=counterexample]
+
+- Initializing the storage before the call, as ``seven_initialized`` does, is
+  the way to verify such code today.
+- The same holds for an element of a local array (``init(arr[0])``), for
+  storage from ``new int`` passed to a pointer parameter before anything
+  writes it (``int *p = new int; init_ptr(p);``), and for a function that
+  returns a pointer to storage not initialized yet.
+- A local reference may bind storage that is not initialized, as C++ allows,
+  and a write through it initializes the object. A read before the first
+  write is a real error, reported where it happens, as in ``read_too_early``.
+
+Before 0.2 each of these calls was a reported failure (``verification failed:
+... initialization``), and ``int a; init(a);`` stopped the whole file with
+``error: seven: read of uninitialized local value: a``.
+
+Aliasing between parameters
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 The default is a precondition every caller must establish. A function that
 works when its parameters share storage says so with ``cppverify::aliases``, and its
 body is then verified for both cases:
@@ -355,10 +428,40 @@ between pointers that may come from either) is ``construct.unsupported``:
 neither proved nor reported as an error. Proving ``left == right`` does not
 change that.
 
-Pointers loaded from memory, null or dangling operands, out-of-range
-positions, unrepresentable distances, pointer compound assignment, and
-pointer difference inside explicit ``cppverify::spec`` or lifted ``constexpr`` functions
-fail closed.
+Two null pointers differ by 0, as C++ defines ([expr.add]/5); a difference
+with one null operand is undefined and fails:
+
+.. cppverify-example: fails one_null
+
+.. code-block:: cpp
+
+   long two_nulls(const int *p, const int *q)
+     cv::pre(p == nullptr && q == nullptr)
+     cv::post(cv::result == 0)
+   {
+     return p - q;
+   }
+
+   long one_null(const int *p, const int *q)
+     cv::pre(p == nullptr && q != nullptr)
+   {
+     return p - q;
+   }
+
+.. code-block:: text
+
+   Verified: two_nulls [backend=z3]
+   nulls.cpp:11:3: error: verification failed: one_null [...::pointer-difference@11:3] (counterexample: p [ssa=p_0] [type=pointer] = 0, q [ssa=q_0] [type=pointer] = 1; ...) [backend=z3] [reason=counterexample]
+
+Before 0.2, ``two_nulls`` failed the same way.
+
+A difference with one null operand, a dangling operand, a position outside
+its object, or a distance that does not fit ``ptrdiff_t`` fails with a
+counterexample. A difference of pointers loaded from memory, pointer compound
+assignment (``p += k``), and a pointer difference inside a ``cv::spec`` or
+lifted ``constexpr`` function are rejected: the run stops with an error naming
+the construct, for example ``error: gap: pointer difference in spec or lifted
+constexpr functions is unsupported``.
 
 Local scalar dynamic storage
 ----------------------------
