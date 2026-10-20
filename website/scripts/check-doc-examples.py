@@ -4,7 +4,8 @@
 Every ``.. code-block:: cpp`` block (a ```` ```cpp ```` fence in Markdown) must
 compile with cpp-verify, and when the next code block on the page is a
 ``text`` block that shows verdicts, verifying the example must give those
-verdicts. A comment right before a block changes how it is checked; several
+verdicts. The errors and warnings that block shows must be among those the
+verifier prints, apart from the location before each. A comment right before a block changes how it is checked; several
 may be stacked (in Markdown, ``<!-- cppverify-example: ... -->``):
 
     .. cppverify-example: fragment         part of a larger program: not run
@@ -17,6 +18,8 @@ may be stacked (in Markdown, ``<!-- cppverify-example: ... -->``):
                                            counterexample
     .. cppverify-example: unresolved NAME ...
                                            these stay unresolved
+    .. cppverify-example: rejects          the example is an error: cpp-verify
+                                           reports one and exits non-zero
 
 An example whose page shows no verdicts is verified too: every function
 must verify, unless a comment says it fails or stays unresolved. Comments
@@ -44,6 +47,8 @@ VERDICT = re.compile(
     r" (.+?)(?=\s+\[|\s+\(|$)")
 FAILED = re.compile(r"error: (verification failed|spec [\w ]+? failed): "
                     r"(.+?)(?=\s+\[|\s+\(|$)")
+LOCATION = re.compile(r"^\S+\.(?:cpp|h):\d+:\d+: ")
+DIAGNOSTIC = re.compile(r"^(?:error|warning): ")
 
 
 class Block:
@@ -119,10 +124,28 @@ def blocks(page):
     return found
 
 
+def diagnostics(text):
+    """The errors and warnings a text block shows, without their locations;
+    failures are compared as verdicts."""
+    shown = []
+    for line in text.splitlines():
+        line = LOCATION.sub("", line.strip())
+        if DIAGNOSTIC.match(line) and not FAILED.match(line):
+            shown.append(" ".join(line.split()))
+    return shown
+
+
+def missing_diagnostics(shown, output):
+    printed = [" ".join(LOCATION.sub("", line.strip()).split())
+               for line in output.splitlines()]
+    return [line for line in shown
+            if not any(line in candidate for candidate in printed)]
+
+
 def verdicts(text):
     shown = set()
     for line in text.splitlines():
-        line = re.sub(r"^\S+\.cpp:\d+:\d+: ", "", line.strip())
+        line = LOCATION.sub("", line.strip())
         match = VERDICT.match(line)
         if match:
             shown.add((match.group(1), match.group(2).strip()))
@@ -169,8 +192,19 @@ def check(cpp_verify, job):
     """Returns None, or a failure message and whether every mismatch is a
     function left unresolved where a proof was expected, which only the
     wall-clock budgets of a loaded machine can cause."""
-    block, source, arguments, expected, fails, unresolved = job
+    block, source, arguments, expected, fails, unresolved, shown, rejects = job
     where = f"{block.page}:{block.line}"
+    if rejects:
+        code, output = run(cpp_verify, source, arguments, 300)
+        if code is None or code == 0 or "error:" not in output:
+            return (f"{where}: the example should be an error, but cpp-verify "
+                    f"accepts it:\n{(output or '').strip()[:1500]}"), False
+        missing = missing_diagnostics(shown, output)
+        if missing:
+            return (f"{where}: the page shows diagnostics cpp-verify does not "
+                    f"print:\n" + "\n".join(f"  {line}" for line in missing) +
+                    f"\nactual output:\n{output.strip()[:2500]}"), False
+        return None
     code, output = run(cpp_verify, source, ["--lower-only", *arguments], 300)
     if code is None or code != 0 or "error:" in output:
         return f"{where}: the example does not compile:\n{output.strip()[:1500]}", False
@@ -180,6 +214,10 @@ def check(cpp_verify, job):
         return f"{where}: verifying the example timed out", False
     given = verdicts(output)
     unproved = {name_of(verdict) for verdict in given if verdict[0] == "Unresolved"}
+    if missing := missing_diagnostics(shown, output):
+        return (f"{where}: the page shows diagnostics cpp-verify does not "
+                f"print:\n" + "\n".join(f"  {line}" for line in missing) +
+                f"\nactual output:\n{output.strip()[:2500]}"), False
     if not expected:
         wrong = []
         for verdict in sorted(given):
@@ -237,17 +275,21 @@ def main():
                     print(f"{page}:{block.line}: unknown example label {name}")
                     return 1
                 context.append(labels[name])
-            text = "".join(context) + block.text
+            # Locations in messages count from the block's first line.
+            text = "".join(context) + "#line 1\n" + block.text
             for name in modes.get("label", []):
                 labels[name] = block.text
             compiled.append(block.text)
             expected = set()
+            shown = []
             following = page_blocks[position + 1:position + 2]
             if following and following[0].language == "text":
                 expected = verdicts(following[0].text)
+                shown = diagnostics(following[0].text)
             jobs.append((block, PRELUDE + text, modes.get("flags", []),
                          expected, set(modes.get("fails", [])),
-                         set(modes.get("unresolved", []))))
+                         set(modes.get("unresolved", [])), shown,
+                         "rejects" in modes))
 
     failures = []
     alone = []
@@ -271,7 +313,7 @@ def main():
             failures.append(result[0])
     for failure in failures:
         print(failure, end="\n\n")
-    shown = sum(1 for job in jobs if job[3])
+    shown = sum(1 for job in jobs if job[3] or job[6])
     print(f"{len(jobs)} examples checked ({shown} against the verdicts their "
           f"pages show), {len(failures)} failed")
     return 1 if failures else 0
