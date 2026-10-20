@@ -18,6 +18,13 @@ inline constexpr unsigned DefaultCollectionTimeoutMs =
 /// and their retries, so it legitimately takes several query timeouts.
 inline constexpr unsigned DefaultFunctionTimeoutMs =
     10 * DefaultSolverTimeoutMs;
+/// The expression nodes the proof obligations of one function may take, as
+/// built: building a module takes up to about 450 bytes a node at once, and
+/// the largest of the test suite (the ULEB128 case study's) has 22.6
+/// million.
+inline constexpr uint64_t DefaultMaxQueryNodes = 32000000;
+/// The megabytes Z3's queries may allocate together, and each cvc5 process.
+inline constexpr uint64_t DefaultMemoryLimitMB = 8192;
 
 enum class DiagnosticFormat { Text, Json };
 
@@ -55,8 +62,12 @@ struct VerifyOptions {
   unsigned SolverResourceLimit = 0;
   /// Number of isolated solver jobs. 0 selects available physical cores.
   unsigned Jobs = 1;
-  /// Maximum canonical expression nodes per backend module; 0 disables it.
-  uint64_t MaxQueryNodes = 0;
+  /// Maximum canonical expression nodes per module, checked as it is built
+  /// and before a backend runs it; 0 disables it.
+  uint64_t MaxQueryNodes = DefaultMaxQueryNodes;
+  /// The megabytes Z3's queries may allocate together, and each cvc5
+  /// process; 0 disables the limit.
+  uint64_t MemoryLimitMB = DefaultMemoryLimitMB;
   /// Solver representation of machine integers (Z3, cvc5, portfolio, BMC).
   MachineIntegerEncoding IntegerEncoding = MachineIntegerEncoding::Auto;
   /// Optional cvc5 executable for cvc5 and strict portfolio verification.
