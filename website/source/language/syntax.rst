@@ -35,6 +35,54 @@ does after ``namespace cv = cppverify;`` and ``using namespace cppverify;``:
   qualifier) belong to the compiler; cpp-verify neither parses nor verifies
   them.
 
+One condition per clause
+------------------------
+
+Each clause takes exactly one expression. To state two conditions, join them
+with ``&&`` or write two clauses, which mean the same: every ``cv::pre`` must
+hold, and so must every ``cv::post``.
+
+.. code-block:: cpp
+
+   int clamp(int x)
+     cv::post(cv::result >= 0 && cv::result <= 10)
+   {
+     return x < 0 ? 0 : x > 10 ? 10 : x;
+   }
+
+   int clamp_again(int x)
+     cv::post(cv::result >= 0)
+     cv::post(cv::result <= 10)
+   {
+     return x < 0 ? 0 : x > 10 ? 10 : x;
+   }
+
+Anything written after the expression, inside the parentheses, is an error.
+A missing ``&&`` is the usual cause:
+
+.. cppverify-example: rejects
+
+.. code-block:: cpp
+
+   int clamp(int x)
+     cv::post(cv::result >= 0 cv::result <= 10)
+   {
+     return x < 0 ? 0 : x > 10 ? 10 : x;
+   }
+
+.. code-block:: text
+
+   clauses.cpp:2:28: error: expected ')' after cppverify::post expression
+       2 |   cv::post(cv::result >= 0 cv::result <= 10)
+         |                            ^
+   clauses.cpp:2:11: note: to match this '('
+       2 |   cv::post(cv::result >= 0 cv::result <= 10)
+         |           ^
+
+Before 0.2, the parser kept the first condition and dropped the rest without
+a word, so a clause with a missing ``&&`` checked less than it said: the
+example above verified ``cv::result >= 0`` alone.
+
 Full table:
 
 .. list-table::
