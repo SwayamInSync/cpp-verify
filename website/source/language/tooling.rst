@@ -589,6 +589,11 @@ what the obligation checks:
 - ``unwinding`` for a BMC bound, and ``unsupported`` for a construct the
   verifier rejects fail-closed.
 
+The check that a function's contract is defined (see :doc:`functions-loops`)
+is reported only when it fails, as ``contract of f``. Its obligations are
+named ``function-identity::contract::kind@line:column`` with the definedness
+kinds above, and JSON records give ``f`` as the function.
+
 The local suffix only disambiguates obligations of one kind at the same anchor,
 so inserting or reordering an unrelated obligation does not renumber later IDs
 unless its source anchor moves. JSON records carry the kind as
