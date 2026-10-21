@@ -31,6 +31,7 @@ add_clang_library(clangVerify
   Transform/Ownership.cpp
   Transform/LoopUnroll.cpp
   Transform/SpecInline.cpp
+  Transform/SubobjectBounds.cpp
   Transform/UBChecks.cpp
   Backend/Certify.cpp
   Backend/Presburger.cpp
