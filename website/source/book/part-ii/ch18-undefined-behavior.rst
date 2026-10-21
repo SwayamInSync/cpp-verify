@@ -164,9 +164,10 @@ clause, ``p`` must be the bare complete-object pointer, and each pointer may
 have only one marker. Shifted, disjunctive, conditional, or duplicate markers
 are rejected instead of being interpreted as unconditional extents.
 
-At a modular call, a callee extent ``valid(q, length)`` may be instantiated by
-``q = p + offset`` only after proving the subrange is nonnegative and contained
-in the caller's extent. The same inclusive ``[0, n]`` position proof governs
+At a modular call, a callee extent ``valid(q, length)`` is instantiated by an
+argument only after proving that its ``length`` elements are contained in one
+of the caller's objects; for ``q = p + offset``, that the subrange is
+nonnegative and contained in the caller's extent. The same inclusive ``[0, n]`` position proof governs
 same-array pointer subtraction, while dereferences keep the half-open
 ``[0, n)`` access rule. Pointer differences additionally prove that the element
 distance is representable by target ``ptrdiff_t``.
