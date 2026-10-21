@@ -72,7 +72,8 @@ Mandatory C++ definedness
 Executable and ``cppverify::proof`` code must be well-defined C++. CppVerify therefore
 generates path-sensitive safety obligations automatically; these checks are not
 optional because a functional proof about an undefined execution would be
-meaningless.
+meaningless. Contracts get the same obligations, each clause where it is
+evaluated (see :doc:`functions-loops`).
 
 Core checks include:
 
