@@ -127,6 +127,94 @@ all denote the argument's entry value, as in ACSL, even when the callee
 reassigns its by-value parameter; a caller can therefore use the
 postcondition directly.
 
+Contracts must be defined
+-------------------------
+
+A contract is C++, evaluated where the function is called and where it
+returns. A clause that divides by zero or reads outside an object there says
+nothing, so CppVerify checks that each clause is defined where it is
+evaluated, as Dafny checks a method's well-formedness, and reports a clause
+that may not be as ``contract of f``, at the operation:
+
+- each precondition where the preconditions written before it hold, so a
+  clause may rely on the ones before it, and each operand of ``&&``, ``||``,
+  and ``?:`` where the operands before it allow its evaluation;
+- each postcondition in the state the function returns in, where the
+  postconditions before it hold. For a trusted function or one without a
+  definition, that is every state its frame allows (only its
+  ``cppverify::modifies`` footprints change), with any result;
+- the checks an operation gets in a body: divisors, shifts, a mathematical
+  value converted to a machine type, dereferences, and, with memory checking,
+  every access inside its extent or object (see :doc:`pointers`). Loop
+  invariants and ``cppverify::check`` get the same checks.
+
+.. code-block:: cpp
+
+   int average(int total, int count)
+     cv::pre(total / count >= 0 && count > 0)
+     cv::post(cv::result >= 0)
+   {
+     return total / count;
+   }
+
+   int average_checked(int total, int count)
+     cv::pre(count > 0 && total / count >= 0)
+     cv::post(cv::result >= 0)
+   {
+     return total / count;
+   }
+
+   int pick(const int *p, int i)
+     cv::pre(cv::valid(p, 8) && p[i] > 0 && 0 <= i && i < 8)
+     cv::post(cv::result > 0)
+   {
+     return p[i];
+   }
+
+   [[cppverify::trusted]] int read_sensor(int channel)
+     cv::post(1000 / cv::result > 0);
+
+   int scaled(int channel)
+     cv::post(cv::result > 0)
+   {
+     int r = read_sensor(channel);
+     return 1000 / r;
+   }
+
+.. code-block:: text
+
+   defined.cpp:2:17: error: verification failed: contract of average
+     [...::contract::division-by-zero@2:17] (counterexample: count [type=i32] = 0)
+   Verified: average [backend=z3]
+   Verified: average_checked [backend=z3]
+   defined.cpp:16:30: error: verification failed: contract of pick
+     [...::contract::bounds@16:30] (counterexample: i [type=i32] = -1, ...)
+   Verified: pick [backend=z3]
+   defined.cpp:22:28: Trusted: read_sensor (contract assumed, not verified)
+   defined.cpp:23:17: error: verification failed: contract of read_sensor
+     [...::contract::division-by-zero@23:17] (counterexample: result [type=i32] = 0)
+   Unresolved: scaled [backend=z3] [reason=callee.contract] (relies on the
+     contract of read_sensor (its clauses are not shown to be defined), which is
+     not established)
+
+``average`` divides before it tests ``count``, so its precondition is undefined
+at ``count == 0``; written the other way round, as in ``average_checked``, it
+is defined. ``pick`` reads ``p[i]`` before it bounds ``i``. Both bodies still
+verify: their proofs assume the preconditions, and a body's own operations
+are checked whatever its contract says. The trusted contract of
+``read_sensor`` divides by its result, which may be 0.
+
+A contract that may be undefined establishes nothing: every caller that relies
+on it is ``Unresolved`` with reason ``callee.contract``, as ``scaled`` is. Its
+proof read ``1000 / r > 0`` as excluding ``r == 0``, since the logic defines a
+division by zero, but C++ does not, so nothing excludes it. The function's own
+verdict is about its body and does not change. The check prints nothing when it
+holds.
+
+Spec functions stay total, as in Verus and ACSL: a spec's division by zero is
+0, so applying a spec in a contract adds no check, and
+``cppverify::recommends`` remains a warning (see :doc:`ghost-proofs`).
+
 Templates and member functions
 ------------------------------
 
