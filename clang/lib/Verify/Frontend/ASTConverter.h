@@ -28,6 +28,11 @@ class ASTConverter {
   std::string ResultName = "result";
   VFunction *CurrentFn = nullptr;
   unsigned NestedCallId = 0;
+  /// Where the statement being lowered puts what forming a pointer to a
+  /// subobject needs (its checks and its bounds); null where the pointer is
+  /// only a value, as in a condition or a contract.
+  std::vector<std::unique_ptr<VStmt>> *SubobjectSink = nullptr;
+  unsigned SubobjectPointerId = 0;
   std::vector<ConversionError> Errors;
   /// The innermost declaration, statement, or expression being converted,
   /// where an error is reported unless it names a place of its own.
@@ -166,6 +171,12 @@ private:
   /// Why the decay of \p Array to a pointer is unsupported, in the terms of
   /// what the array is.
   std::string arrayDecayError(const Expr *Array) const;
+  /// A pointer to \p Object, a subobject of the object a pointer addresses:
+  /// the array \p E decays (AddressOf false) or the lvalue \p E takes the
+  /// address of. Bounded by the array it decays from or whose element it
+  /// addresses, else by the field or record it addresses.
+  std::unique_ptr<VExpr> subobjectPointer(const Expr *E, const Expr *Object,
+                                          bool AddressOf);
   /// The exact byte-offset place of a subobject, reached by field and
   /// fixed-array element selections from a promoted local or from the
   /// object a pointer addresses; each fixed-array index is bounded by its
