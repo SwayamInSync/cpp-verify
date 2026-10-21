@@ -263,6 +263,10 @@ VFunction LoopUnroller::unroll(const VFunction &Fn, unsigned K) {
     Out.Preconditions.push_back(cloneVExpr(P.get()));
   for (const auto &P : Fn.Postconditions)
     Out.Postconditions.push_back(cloneVExpr(P.get()));
+  for (const auto &Checks : Fn.PreconditionChecks)
+    Out.PreconditionChecks.push_back(cloneMemoryChecks(Checks));
+  for (const auto &Checks : Fn.PostconditionChecks)
+    Out.PostconditionChecks.push_back(cloneMemoryChecks(Checks));
   Out.PreconditionKinds = Fn.PreconditionKinds;
   Out.PostconditionKinds = Fn.PostconditionKinds;
   for (const auto &R : Fn.Recommends)
