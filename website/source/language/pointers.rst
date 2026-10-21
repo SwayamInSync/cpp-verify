@@ -281,7 +281,56 @@ A callee writing a range or a whole slice frames the rest of the buffer:
      zero_middle(p, n, 1, 2);
    }
 
-Each callee footprint must lie within the caller's own frame. A pointer-taking
+Each callee footprint must lie within the caller's own frame, cell by cell,
+whichever pointer reaches it. A callee that writes its one object
+(``cv::modifies(*p)``) may be passed a cell the caller may write, or a copy of
+a pointer into an object the caller may write:
+
+.. cppverify-example: fails set_fourth
+
+.. code-block:: cpp
+
+   void put(int *p, int v)
+     cv::pre(p != nullptr)
+     cv::modifies(*p)
+     cv::post(*p == v)
+   {
+     *p = v;
+   }
+
+   void set_third(int *a)
+     cv::pre(cv::valid(a, 4))
+     cv::modifies(a[2])
+     cv::post(a[2] == 5 && a[1] == cv::old(a[1]))
+   {
+     put(a + 2, 5);
+   }
+
+   void set_through_copy(int *a)
+     cv::pre(cv::valid(a, 4))
+     cv::modifies(*a)
+     cv::post(a[2] == 5)
+   {
+     int *q = a + 2;
+     put(q, 5);
+   }
+
+   void set_fourth(int *a)
+     cv::pre(cv::valid(a, 4))
+     cv::modifies(a[2])
+   {
+     put(a + 3, 5);
+   }
+
+.. code-block:: text
+
+   Verified: put [backend=z3]
+   Verified: set_third [backend=z3]
+   Verified: set_through_copy [backend=z3]
+   frames.cpp:30:3: error: verification failed: set_fourth [...::frame@30:3] (counterexample: a [ssa=a_0] [type=pointer] = 1; trace: call.put@30:3 arg0=13 arg1=5) [backend=z3] [reason=counterexample]
+
+``set_fourth`` may write only ``a[2]``, at address 9 when ``a`` is 1, but
+passes ``a + 3``, address 13. A pointer-taking
 callee with no explicit ``cppverify::modifies`` that may write memory is treated as
 writing the whole heap, which cannot fit inside an explicit caller frame; an
 unframed caller may still call it. Under ``--no-check-ub`` a region footprint
