@@ -1109,11 +1109,22 @@ void put(Ring *r, int v)
   rejects `r->buf[8]`, whose address is `r->head`, inside `*r`; in
   `p->grid[i][j]` it bounds `j` by the row, so `grid[0][4]` is rejected
   although it is `grid[1][0]` in memory.
-- A whole record or array read through a pointer (`Ring copy = *r;`) and a
-  pointer to an array member (`const int *q = r->buf;`) are rejected. Such a
-  pointer would have to carry the member's extent, as a Rust slice carries
-  its length: the planned design gives a decayed member array an origin
-  whose object is the member, so its accesses are bounded by the array.
+- A whole record or array read through a pointer (`Ring copy = *r;`) is
+  rejected.
+- A pointer into the object, a decayed member array (`r->buf`) or the
+  address of an element, a field, or a nested record (`&r->buf[i]`,
+  `&r->head`, `&r->inner`), addresses only that subobject: the array it comes
+  from, else the field or record, as CHERI narrows a capability to a
+  subobject and as a Rust slice carries its length. Forming it requires the
+  object it points into (non-null root, every index of its path inside its
+  array, strictly). Every access through it lies in the subobject, every
+  step in its closure, a pointer difference needs both operands in one
+  subobject, and a callee's extent or object formed from it lies in it.
+  The bounds are proved, not checked at run time: two ghost companions of
+  the pointer hold the subobject's first byte and end, assigned where it is
+  formed and wherever a pointer variable takes its value, kept by steps.
+  Returning such a pointer or storing it in memory would lose the bounds
+  and is rejected.
 
 ### 4. `cppverify::modifies(...)` frame condition
 
