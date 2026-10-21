@@ -25,6 +25,10 @@ namespace verify {
 /// companion keeps it among the possible origins by a generated invariant.
 void annotatePointerOrigins(VFunction &Fn);
 
+/// The pointer operand of a step `p + n`, `n + p`, or `p - n`; null for
+/// anything else, such as a difference of two pointers.
+const VExpr *steppedPointer(const VBinOpExpr &B);
+
 /// The origin term of a pointer expression in an annotated function: an
 /// identity equal for two pointers exactly when they have one origin. Null
 /// when the origin is not known.
