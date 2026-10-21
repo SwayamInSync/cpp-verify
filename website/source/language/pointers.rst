@@ -243,9 +243,12 @@ a *different* base pointer that is not in ``cppverify::modifies`` is still rejec
 
 A ``cppverify::modifies`` footprint is one of:
 
-- a **cell**: ``p[i]``, ``p->field``, or a reference, at its exact address;
+- a **cell**: ``p[i]``, ``p->field``, a field or array element inside the
+  record ``p`` addresses (``p->inner.x``, ``p->buf[i]``), or a reference, at
+  its exact address;
 - a **range** ``p[lo : n]``: the ``n`` elements from ``p[lo]``, half-open
-  ``[lo, lo + n)`` (Clang's array-section syntax);
+  ``[lo, lo + n)`` (Clang's array-section syntax), and likewise
+  ``p->buf[lo : n]`` for an array member (:doc:`structs`);
 - a **region** ``*p``: the object ``p`` addresses, which is its
   ``valid(p, n)`` extent when it has one and otherwise one object.
 
