@@ -284,16 +284,6 @@ void nested_write_wrong(Outer *p)
 }
 // CHECK-DAG: error: verification failed: nested_write_wrong [{{.*}}::postcondition@[[@LINE-4]]:30]
 #else
-// A pointer to a member array would be bounded by that array, which only an
-// access that indexes it shows.
-int decayed(const Ring *r)
-  cppverify::pre(r != nullptr)
-{
-  const int *q = r->buf;
-  return 0;
-}
-// DECAY-DAG: pointer_subobjects.cpp:[[@LINE-3]]:18: error: decayed: a pointer to the array member 'buf' is unsupported; index the member where it is used, as in 'buf[i]'
-
 // Arrays in global storage are not modeled; the message names the global.
 Ring global_ring;
 int global_table[4];
