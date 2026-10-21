@@ -106,7 +106,10 @@ There are three frame granularities:
 Inside the function, every store must lie in a footprint read in the entry
 state. At a modular call, the caller's heap changes only inside the callee's
 footprints instantiated with the arguments, and every other cell keeps its
-value. A callee footprint must lie within the caller's own frame.
+value. A callee footprint must lie within the caller's own frame, cell by
+cell, however its pointer was computed: a callee that writes its one object
+may receive a cell the caller may write, or a copy of a pointer into an
+object the caller may write.
 
 A pointer-taking callee with no explicit ``cppverify::modifies`` that may write memory is
 treated as writing the whole heap: a caller may lose a true fact about an

@@ -3342,6 +3342,10 @@ class PassivizerImpl {
         return makeEq(cloneVExpr(OuterPtr), cloneVExpr(InnerPtr), Loc);
       if (InnerIsRange && InnerBytes)
         return Empty(*InnerBytes);
+      // A region of one scalar object is one cell.
+      if (InnerIsRegion && InnerBytes && InnerBytes->Cell)
+        return makeEq(cloneVExpr(OuterPtr), cloneVExpr(InnerBytes->Lo.get()),
+                      Loc);
       return makeBoolLiteral(false, Loc);
     }
     if (!InnerIsRegion && !InnerIsRange)
@@ -5041,14 +5045,51 @@ public:
           if (CallerCounts[J])
             OuterBytes = rangeBytes(CallerLoad->Ptr.get(), CallerCounts[J].get(),
                                     Fn.Modifies[J].ElementSize, C.Loc);
+          const bool OuterIsRegion =
+              isRegionFootprint(Fn.Modifies[J], Fn.ReferenceParams);
           Allowed = makeOr(
               std::move(Allowed),
-              footprintWithin(CallerLoad->Ptr.get(),
-                              isRegionFootprint(Fn.Modifies[J],
-                                                Fn.ReferenceParams),
-                              OuterBytes, ActualLoad->Ptr.get(), ActualIsRegion,
+              footprintWithin(CallerLoad->Ptr.get(), OuterIsRegion, OuterBytes,
+                              ActualLoad->Ptr.get(), ActualIsRegion,
                               ActualCounts[I] != nullptr, InnerBytes, C.Loc),
               C.Loc);
+          // A region is its parameter's object, as for a store: a callee
+          // footprint through another pointer (a copy of a pointer into the
+          // object) is inside where its cells lie in that object.
+          const VExpr *OuterBase = pointerBase(CallerLoad->Ptr.get());
+          const VExpr *InnerBase = pointerBase(ActualLoad->Ptr.get());
+          const auto *DeclaredLoad =
+              Fn.Modifies[J].Target && Fn.Modifies[J].Target->K == VExpr::Load
+                  ? static_cast<const VLoadExpr *>(Fn.Modifies[J].Target.get())
+                  : nullptr;
+          const VExpr *Root =
+              DeclaredLoad ? addressRoot(DeclaredLoad->Ptr.get()) : nullptr;
+          const bool SameBase =
+              OuterBase && InnerBase && OuterBase->K == VExpr::Var &&
+              InnerBase->K == VExpr::Var &&
+              static_cast<const VVarExpr *>(OuterBase)->Name ==
+                  static_cast<const VVarExpr *>(InnerBase)->Name;
+          if (Fn.ObjectModel && OuterIsRegion && !SameBase && Root &&
+              Root->K == VExpr::Var)
+            if (auto Object =
+                    parameterRegion(static_cast<const VVarExpr *>(Root)->Name,
+                                    Renames, C.Loc)) {
+              Region Inner = InnerBytes
+                                 ? Region{cloneVExpr(InnerBytes->Lo.get()),
+                                          cloneVExpr(InnerBytes->Hi.get()),
+                                          InnerBytes->Cell}
+                                 : cellRegion(ActualLoad->Ptr.get(),
+                                              ActualLoad->Ty, C.Loc);
+              auto Inside =
+                  makeAnd(std::make_unique<VBinOpExpr>(
+                              VBinOp::Le, std::move(Object->Lo),
+                              std::move(Inner.Lo), VType::makeBool(), C.Loc),
+                          std::make_unique<VBinOpExpr>(
+                              VBinOp::Le, std::move(Inner.Hi),
+                              std::move(Object->Hi), VType::makeBool(), C.Loc),
+                          C.Loc);
+              Allowed = makeOr(std::move(Allowed), std::move(Inside), C.Loc);
+            }
         }
       }
       emitPassive(P, PassiveStmt::Assert, std::move(Allowed), nullptr, C.Loc,

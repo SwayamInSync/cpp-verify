@@ -1150,8 +1150,11 @@ void incr_first(int* a, int* b)
     scalar object is one cell.
 - Inside the callee every store must lie in a footprint, read in the entry
   state, so reassigning a pointer cannot widen the frame; a footprint of a
-  callee must lie within the caller's own frame (index-based containment of
-  ranges and extents).
+  callee must lie within the caller's own frame, cell by cell: a region of
+  one scalar object is one cell, ranges and extents compare by their cells,
+  and a footprint reached through another pointer than a caller region's
+  (a copy of a pointer into the object) lies in that region when its cells
+  lie in the region's object, as a store does.
 - At a call, the caller's heap changes only inside the callee's footprints
   instantiated with the arguments: a cell or range is exactly those cells, a
   region is the argument's extent (or one object). Every other cell keeps its

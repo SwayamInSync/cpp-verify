@@ -133,6 +133,17 @@ when the program was correct:
 Such an argument is now accepted when its elements lie in one of the caller's
 objects (:doc:`language/pointers`).
 
+**Callee frames inside the caller's.** A call could fail its ``frame`` check
+although the callee writes only cells the caller may write, in two cases:
+
+- a callee that writes its one object (``modifies(*p)``) passed a cell the
+  caller may write, as in ``set(a + 2, 5)`` under ``modifies(a[2])``;
+- a pointer copied into an object the caller may write, as in
+  ``int *q = a + 2; set(q, 5);`` under ``modifies(*a)``.
+
+The callee's footprint is now compared with the caller's frame cell by cell
+(:doc:`language/pointers`).
+
 C++ that compiles now
 ~~~~~~~~~~~~~~~~~~~~~
 
