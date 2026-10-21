@@ -2013,6 +2013,8 @@ struct SpecBodyCollector {
   const FunctionMap &FnMap;
   std::vector<BodySite> Sites;
   std::vector<BodyReturn> Returns;
+  /// The witness bodies of the choices walked, which sites point into.
+  std::vector<std::unique_ptr<VExpr>> Witnesses;
   bool Unsupported = false;
 
   void site(BodySite Site,
@@ -2043,9 +2045,21 @@ struct SpecBodyCollector {
       for (const auto &Arg : C->Args)
         Site.Args.push_back(substParamsInExpr(Arg.get(), Env));
       Site.Loc = C->Loc;
+      const VFunction *Callee = Site.Callee;
       site(std::move(Site), Env, Guard, Quantifiers);
       for (const auto &A : C->Args)
         expr(A.get(), Env, Guard, Quantifiers);
+      // A choose is evaluated where it is written: the loads and
+      // applications of its body, at every value of its binder, are the
+      // caller's.
+      if (Callee && Callee->IsChoice) {
+        if (std::unique_ptr<VExpr> Witness = choiceWitness(*Callee, *C)) {
+          Witnesses.push_back(std::move(Witness));
+          expr(Witnesses.back().get(), Env, Guard, Quantifiers);
+        } else {
+          Unsupported = true;
+        }
+      }
       return;
     }
     case VExpr::Load: {
@@ -2285,6 +2299,9 @@ PassiveProgram verify::buildReadsChecks(const VFunction &Fn,
 
   for (BodySite &Site : Collector.Sites) {
     if (!Site.Address && !Site.Call->ReadsHeap)
+      continue;
+    // The loads of a choice's body are sites of their own.
+    if (!Site.Address && Site.Callee && Site.Callee->IsChoice)
       continue;
     if (!Site.Address && (!Site.Callee || Site.Callee->Reads.empty())) {
       if (Missing.empty())
