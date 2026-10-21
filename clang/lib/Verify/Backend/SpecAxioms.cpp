@@ -1,8 +1,10 @@
 //===--- SpecAxioms.cpp - Verus-style spec defining axioms ----------------===//
 #include "SpecAxioms.h"
 #include "../Transform/SpecInline.h"
+#include "LogicTerms.h"
 #include "ObligationLowering.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/MathExtras.h"
 
 using namespace clang;
 using namespace verify;
@@ -114,7 +116,9 @@ static const VFunction *findSpecFunction(const FunctionMap &Functions,
 }
 
 llvm::Error verify::materializeLogicFunctions(ObligationModule &Module,
-                                              const SpecAxiomContext &Ctx) {
+                                              const SpecAxiomContext &Ctx,
+                                              uint64_t MaxNodes,
+                                              uint64_t Nodes) {
   // The functions the query reaches; then, for a counterexample check only,
   // those their unfoldings and postconditions apply, where a failure leaves
   // the function out instead of failing the module.
@@ -153,6 +157,20 @@ llvm::Error verify::materializeLogicFunctions(ObligationModule &Module,
         Module.LogicFunctions.try_emplace(Identity, std::move(Declaration));
     (void)Inserted;
     LogicFunctionDecl &Owned = It->second;
+    // Its definitions join the module's nodes once all are lowered.
+    uint64_t Own = 0;
+    auto count = [&](const LogicExpr *Definition) -> llvm::Error {
+      Own = llvm::SaturatingAdd(Own, logicNodeCount(Definition));
+      const uint64_t Total = llvm::SaturatingAdd(Nodes, Own);
+      if (MaxNodes != 0 && Total > MaxNodes)
+        return llvm::make_error<ObligationSizeError>(
+            "the proof obligations with the definitions of the specs they "
+            "apply",
+            Total, MaxNodes,
+            "lower the fuel cppverify::reveal_with_fuel gives, split the "
+            "function, or raise the limit");
+      return llvm::Error::success();
+    };
     const std::string DefinitionHeap = Spec->ReadsHeap
                                            ? std::string(VSpecHeapName)
                                            : std::string(VHeapName) + "_0";
@@ -223,13 +241,26 @@ llvm::Error verify::materializeLogicFunctions(ObligationModule &Module,
       return llvm::createStringError(
           llvm::inconvertibleErrorCode(),
           "spec step definition result sort mismatch: %s", Spec->Name.c_str());
+    if (llvm::Error Error = count(Owned.StepDefinition.get()))
+      return Error;
     collectReferencedLogicFunctions(Owned.StepDefinition.get(), Pending);
 
     const unsigned MaxDepth =
         Spec->NeedsDecreasesCheck ? Fuel : std::min(Fuel, 1U);
     Owned.DefinitionFuel = MaxDepth;
     for (unsigned Depth = 1; Depth <= MaxDepth; ++Depth) {
-      std::unique_ptr<VExpr> Body = unfoldSpecDefinition(*Spec, Ctx, Depth);
+      std::unique_ptr<VExpr> Body;
+      {
+        NodeBudget Unfolding;
+        Body = unfoldSpecDefinition(*Spec, Ctx, Depth);
+        if (Unfolding.exceeded())
+          return llvm::make_error<ObligationSizeError>(
+              "the definition of " + Spec->Name + " unfolded " +
+                  std::to_string(Depth) + " levels deep",
+              Unfolding.built(), Unfolding.limit(),
+              "lower its fuel (cppverify::reveal_with_fuel), or raise the "
+              "limit");
+      }
       if (!Body)
         continue;
       auto Lowered = lowerLogicExpr(Body.get(), "", DefinitionHeap,
@@ -245,6 +276,8 @@ llvm::Error verify::materializeLogicFunctions(ObligationModule &Module,
         return llvm::createStringError(
             llvm::inconvertibleErrorCode(),
             "spec definition result sort mismatch: %s", Spec->Name.c_str());
+      if (llvm::Error Error = count(Definition.get()))
+        return Error;
       collectReferencedLogicFunctions(Definition.get(), Pending);
       Owned.DefinitionLevels.push_back(std::move(Definition));
     }
@@ -262,6 +295,7 @@ llvm::Error verify::materializeLogicFunctions(ObligationModule &Module,
         Owned.Decreases.push_back(std::move(*Lowered));
       }
     }
+    Nodes = llvm::SaturatingAdd(Nodes, Own);
     return llvm::Error::success();
   };
   std::set<std::string> Pending;

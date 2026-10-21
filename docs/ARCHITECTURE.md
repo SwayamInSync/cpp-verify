@@ -505,6 +505,25 @@ Construction returns `llvm::Expected`. A null, unhandled, malformed, or
 untyped term prevents publication of the module and is reported as `unknown`;
 it is never replaced by `true`.
 
+**Size.** Each obligation's goal is its condition under a negated copy of
+every assumption before it, so a module grows with its obligations times
+the assumptions before them. Its node count, as `obligationModuleNodeCount`
+counts it, is computed from the lowered statements before any goal is built
+(four times the goals' nodes, for the goals, their queries, the complete
+goal, and its query, plus three per obligation less one; an assertion
+checks the count against the built module); over `--max-query-nodes` the
+build returns `ObligationSizeError`. Constructions whose size the program
+does not bound are counted as they go: `NodeBudget` (`IR/NodeBudget.h`)
+counts the `VExpr` and `LogicExpr` nodes built on its thread against the
+limit the driver sets for the function, and the spec inliner unfolds
+nothing more once it is spent. The definitions `SpecAxioms` materializes,
+each spec unfolded as deep as its fuel, are counted level by level into the
+module's count; the facts the passivizer adds at each spec application are
+counted in a budget, and a spent one leaves `PassiveProgram::TooLarge`, which
+makes the build an `ObligationSizeError`; so does a spent budget while specs
+are inlined for BMC. The driver reports the error as the function's verdict,
+`Unresolved` with `query.size-limit`, and never uses the partial result.
+
 Every source-built or replayed module then passes through one fail-closed
 canonicalization step before hashing or backend dispatch. The pass folds only
 sort-preserving Boolean constants, double negation, constant conditionals, and
@@ -1563,7 +1582,19 @@ split; `Certified` still means Lean checked every obligation. SAT
 counterexamples are never fallback successes.
 
 Z3-backed execution accepts explicit timeout, deterministic solver-resource,
-canonical query-node, job-count, and proof-cache budgets. A module that
+canonical query-node, memory, job-count, and proof-cache budgets. Z3 runs in
+the process, so its memory limit is for its queries together: the watchdog
+of every check, which already interrupts it at its time, polls Z3's
+allocation every 10 ms while a limit is set and interrupts the check past
+it, and the encoder's result is then `solver.memory-limit`. Z3's own limits
+are not used: `memory_max_size` fails whichever allocation passes it in any
+context, `Z3_mk_context`'s included, which then returns no context, and the
+high watermark stops a search reporting only `canceled` and frees what it
+took before the check returns. Each cvc5 process gets the limit as its
+`RLIMIT_DATA`, set with `prlimit` once it is spawned (on Windows, the job
+object of `ExecuteNoWait`): a limit makes `ExecuteNoWait` fork rather than
+spawn on POSIX hosts, and fork runs Z3's fork handlers, which wait for the
+timers of every check in the process. A module that
 requires the `sequences` or `collections` feature gets the collection
 timeout (`--collection-timeout`, by default twice `--timeout`) on every
 solver backend. The driver verifies each function as a task (its own backend,

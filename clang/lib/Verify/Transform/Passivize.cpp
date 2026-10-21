@@ -3073,6 +3073,15 @@ static void addFrameInstances(PassiveProgram &P, const FunctionMap &FnMap) {
   P.Stmts = std::move(Stmts);
 }
 
+PassiveOversize verify::specFactsOversize(const NodeBudget &Budget) {
+  return {"the facts about the specs it applies (at each application, their "
+          "definitions unfolded as deep as their fuel, and their "
+          "postconditions)",
+          Budget.built(), Budget.limit(),
+          "lower the fuel cppverify::reveal_with_fuel gives, or raise the "
+          "limit"};
+}
+
 /// A spec's proved postcondition, and an inductive predicate's unfolding,
 /// hold at every application of it. An inductive predicate is unfolded
 /// \p Depth levels deep, or as deep as reveal_with_fuel asks when \p WithFuel:
@@ -4651,8 +4660,11 @@ public:
       for (const auto &Decrease : Fn.Decreases)
         EntryMeasure.push_back(cloneExpr(Decrease.get(), MeasureCtx));
     }
+    NodeBudget Facts;
     addSpecPostInstances(P, FnMap, Fn, UnfoldingDepth, UnfoldingFuel,
                          EntryMeasure);
+    if (Facts.exceeded())
+      P.TooLarge = specFactsOversize(Facts);
     return P;
   }
 

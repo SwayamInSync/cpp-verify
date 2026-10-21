@@ -3,6 +3,7 @@
 #ifndef LLVM_CLANG_VERIFY_BACKEND_OBLIGATION_H
 #define LLVM_CLANG_VERIFY_BACKEND_OBLIGATION_H
 
+#include "../IR/NodeBudget.h"
 #include "clang/Basic/SourceLocation.h"
 #include "llvm/Support/Error.h"
 #include <cstdint>
@@ -217,7 +218,7 @@ public:
   /// archives.
   std::vector<std::unique_ptr<LogicExpr>> Patterns;
 
-  explicit LogicExpr(Kind K) : K(K) {}
+  explicit LogicExpr(Kind K) : K(K) { NodeBudget::count(); }
 };
 
 // Compatibility name for the Z3/spec adapters while they migrate internally.
