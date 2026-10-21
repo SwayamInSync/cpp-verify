@@ -151,6 +151,11 @@ public:
     UnfoldingFuel = WithFuel;
   }
   PassiveProgram run(const VFunction &Fn);
+  /// The well-formedness check of Fn's contract: its written preconditions,
+  /// in order, are defined where those before them hold, and so are its
+  /// postconditions in every state it may return in when its body is not
+  /// verified. It asserts nothing when every clause is total.
+  PassiveProgram contract(const VFunction &Fn);
 };
 
 } // namespace verify
