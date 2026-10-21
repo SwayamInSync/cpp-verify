@@ -246,9 +246,12 @@ may be one caller array, which contracts cannot state, so their difference is
 explicit specs or lifted ``constexpr`` functions remain fail-closed.
 
 Extents also compose at modular calls. If a callee requires
-``valid(q, length)`` and receives ``p + offset``, the caller must prove one
-origin and ``0 <= offset``, ``0 <= length``, and
-``offset + length <= n``. Empty one-past slices are legal. Read-only slice
+``valid(q, length)``, the caller must prove that the ``length`` elements from
+its argument lie in one of its objects: for ``p + offset`` from
+``valid(p, n)``, that ``0 <= offset``, ``0 <= length``, and
+``offset + length <= n``. The argument may also be a local copy, a choice
+between pointers, or a pointer stepped in a loop; its elements must then lie
+in the objects it may address. Empty one-past slices are legal. Read-only slice
 chains preserve the heap, while exact-cell effects such as
 ``cppverify::modifies(q[0])`` update only the corresponding caller cell, and a range or
 a whole-slice ``cppverify::modifies(*q)`` updates only the slice:
