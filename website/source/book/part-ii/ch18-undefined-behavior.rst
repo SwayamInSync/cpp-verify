@@ -267,6 +267,36 @@ iteration is caught even though the first few iterations are fine. (The fix is
 the same as for any loop: an invariant that bounds the accumulator. See
 :doc:`ch12-loops-in-practice`.)
 
+Contracts are C++ too
+---------------------
+
+A contract is evaluated as C++ where the function is called and where it
+returns, so it must be defined there, just as the body must. A precondition
+that divides by ``items`` before it says ``items > 0`` is undefined for the
+very input it means to exclude:
+
+.. code-block:: cpp
+
+   int per_item(int total, int items)
+     cv::pre(total / items <= 100 && items > 0)
+     cv::post(cv::result <= 100)
+   {
+     return total / items;
+   }
+
+.. code-block:: text
+
+   per.cpp:2:17: error: verification failed: contract of per_item
+     [...::contract::division-by-zero@2:17] (counterexample: items [type=i32] = 0)
+   Verified: per_item [backend=z3]
+
+The body verifies, since its proof assumes the precondition. The contract does
+not: a clause is checked where the clauses and operands before it hold, so
+``cv::pre(items > 0 && total / items <= 100)`` is defined. A postcondition is
+checked the same way in the state the function returns in, and a trusted
+contract in every state it allows. Callers do not rely on a contract that may
+be undefined; see :doc:`../../language/functions-loops`.
+
 What is not covered yet
 -----------------------
 
