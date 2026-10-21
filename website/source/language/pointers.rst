@@ -717,6 +717,12 @@ from ``a`` and moved one past its end is rejected there even when another
 object happens to start at that address, as C++ requires. A pointer
 difference needs one origin, and a loop writes only its stores' origins.
 
+A pointer into a record, such as ``r->buf`` or ``&r->head``, has the
+record's origin and, in addition, the bounds of the array, field, or nested
+record it points into. Its accesses, steps, and differences must stay inside
+those bounds, so ``q = r->buf; q[8]`` is rejected although it lies in ``*r``
+(see :doc:`structs`).
+
 Inside a loop, the verifier proves two facts for you: a pointer the loop
 moves stays a whole number of elements from its origin's start, and a pointer
 that may have either of two origins keeps one of them. An invariant still
