@@ -142,7 +142,7 @@ VExpr =
   | InitializedPtr(ptr, initializationHeap?)
   | Cast(inner: VExpr, fromType: VType, toType: VType)
   | FieldAccess(base: VExpr, field: string, type)
-  | Load(ptr: VExpr, type)                       // *p in an expression context
+  | Load(ptr: VExpr, type, accessCondition?)     // *p in an expression context
   | HeapStore(before, after, ptr, value)          // passive heap relation
   | HeapFrame(before, after, [(lo, hi)])          // passive frame relation
   | SpecCall(identity, args: [VExpr], type)
@@ -162,6 +162,19 @@ All carry `SourceLocation` for diagnostics.
 `Load(p, T)` where `T` is the pointee type. The Z3 encoder maps this to
 `(select mem p)`. For `p[i]`, the selected address is
 `p + mathematical_value(i) * pointeeSizeBytes`.
+
+**Places inside objects:** a field or fixed-array element inside an object is
+a `VPlace`: the object's address plus Clang's layout offset for each field and
+`index * stride` for each element, at any depth, with an access condition,
+the conjunction of `0 <= index < count` over the fixed-array indices of the
+path. A `Load` or `Store` of the place carries the condition, and
+passivization asserts it, kind `bounds`, where the access is evaluated. The
+object is a promoted local (`ASTConverter::objectPlace` on its allocation) or
+the object a pointer addresses: `pointeeRootPointer` walks the place down to
+`p->`, `(*p).`, or `p[k].`, and `pointeePlace` takes that pointer as the base,
+whose own access UB instrumentation checks against the pointer's extent or
+object as before. `p->buf[i]` therefore has both checks, and the array's is
+what rejects `p->buf[8]`, the address of the next field.
 
 **Quantifiers, triggers, choices, collections:** a quantifier without bounds
 ranges over all mathematical integers. A `cppverify::trigger(term)` mark is an identity
@@ -196,7 +209,7 @@ every address outside the half-open regions.
 VStmt =
   | VarDecl(name, type, init: VExpr?)
   | Assign(target, value: VExpr)                          // local variable
-  | Store(ptr: VExpr, value: VExpr)                       // *p = value
+  | Store(ptr: VExpr, value: VExpr, accessCondition?)     // *p = value
   | Allocate(target, allocatedType, init?, sizeBytes, alignBytes)
   | Free(ptr: VExpr)
   | If(cond: VExpr, then: [VStmt], else: [VStmt])
@@ -1724,7 +1737,8 @@ lexical closing brace and on each supported early return in reverse construction
 order, after materializing any heap-reading return value. Scalar references may
 bind fields and fixed-array elements with access-local nested bounds. General
 escape, raw array decay/address-taking, aggregate references, and addressable
-declarations inside loops remain fail-closed. Automatic metadata transitions
+declarations inside loops remain fail-closed; so does the decay of an array
+member through a pointer (`ASTConverter::arrayDecayError` names which). Automatic metadata transitions
 are private and a modular caller may frame them away.
 
 Local reference declarations snapshot their VCR address in a marked
