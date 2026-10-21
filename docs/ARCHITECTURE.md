@@ -464,8 +464,11 @@ assume(Q[Result := y, Old(params) := args]);
   Cell footprints become stores of fresh values (no quantifier). In the
   object model, ranges and regions (the actual's `valid` extent, else one
   object) become `HeapFrame(mem_k, mem_{k+1}, regions)`; each footprint of
-  the callee must lie inside the caller's own frame (index-based
-  containment).
+  the callee must lie inside the caller's own frame, by its cells
+  (`footprintWithin`): a region of one scalar object is one cell, and a
+  footprint through a pointer of another base than a caller region's lies in
+  it where its cells lie in the region parameter's entry object, the rule a
+  store already follows.
 - If `cppverify::modifies` is the conservative default (all reachable through mut params), the entire heap is havocked.
 - A `freshOwnedReturn` call is not a whole-heap havoc. It preserves every old
   cell, materializes one disjoint initialized scalar object, then assumes the
