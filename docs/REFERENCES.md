@@ -9,7 +9,7 @@
 
 ### 2. "Program Proofs" — K. Rustan M. Leino (MIT Press, 2023)
 - **Why**: Textbook by the creator of Dafny/Boogie. Covers Hoare logic, wp calculus, loop invariants, termination proofs, quantifier reasoning with full rigor and worked examples. The single most relevant book.
-- **Read during**: weeks 1-4, while building VCGen.
+- **Read for**: the verification-condition generator (`Transform/Passivize.cpp` and the Obligation IR).
 
 ### 3. "The Calculus of Computation" — Bradley & Manna
 - **Why**: Covers propositional logic, first-order logic, program verification, and SMT encoding. Reference for when stuck on specific VC generation problems.
@@ -18,19 +18,19 @@
 ### 4. Z3 Guide
 - **URL**: https://microsoft.github.io/z3guide/
 - **Why**: Official tutorial for the Z3 C++ API. Covers sorts, solvers, tactics, model extraction.
-- **Read when**: wiring up Z3 (weeks 3-5).
+- **Read when**: working on the Z3 adapter (`Backend/Z3Encode.cpp`).
 
 ### 5. "Crafting Interpreters" — Bob Nystrom (free online)
 - **URL**: https://craftinginterpreters.com/
 - **Why**: Chapters 1-6 give you vocabulary for tokens, AST, visitors, tree-walking. Makes Clang's parser code readable.
-- **Read**: skim chapters 1-6 in week 1.
+- **Read**: skim chapters 1-6 before reading Clang's parser.
 
 ### 6. Clang AST Tutorial (LLVM Dev Meeting 2019)
 - **Search**: "The Clang AST - a Tutorial" on YouTube, ~45 min
 - **Why**: Explains QualType, canonical types, type sugar, AST traversal. Watch before modifying Sema.
 
 ### 7. TAPL — "Types and Programming Languages" by Benjamin Pierce
-- **Why**: Chapters 1-11 for operational semantics, type systems, inference rules. Reference for designing type-checking rules for forall, old(), result.
+- **Why**: Chapters 1-11 for operational semantics, type systems, inference rules. Reference for designing type-checking rules for `cppverify::forall`, `cppverify::old`, and `cppverify::result`.
 - **Read**: as needed, not cover-to-cover.
 
 ## Secondary References
@@ -52,7 +52,7 @@
 
 ### VCC (dead, but architecturally relevant)
 - Was built at MSR for verifying concurrent C via Boogie/Z3.
-- Papers describe memory model encoding for C — useful when adding pointer support.
+- Papers describe memory model encoding for C — useful when extending the object model.
 
 ### CBMC
 - URL: https://www.cprover.org/cbmc/

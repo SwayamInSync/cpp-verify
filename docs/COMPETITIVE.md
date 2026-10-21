@@ -10,7 +10,7 @@
 | CBMC | Bounded model checking | Partial | Custom (goto-cc) | User assertions only | Active |
 | Kani | Bounded model checking | No (Rust only) | Rust MIR | Rust macros | Active |
 | Verus | Deductive (SMT) | No (Rust only) | Rust compiler | First-class syntax | Active |
-| **CppVerify** | **Deductive (wp + Z3)** | **Native, first-class** | **Clang (modified)** | **First-class syntax** | **0.1.1** |
+| **CppVerify** | **Deductive (wp + Z3, cvc5, Lean), plus BMC** | **A documented subset, natively** | **Clang (modified)** | **First-class syntax** | **0.1.1** |
 
 ## Current Differentiators and Research Hypotheses
 
@@ -33,8 +33,9 @@
    symbolically is rejected, so Clang's evaluation step limit is never taken
    as a termination proof.
 7. **Explicit evidence modes** — unbounded deductive proof, strict
-   solver-portfolio proof, bounded safety, export, certification, timeout, and
-   solver `unknown` remain distinct results.
+   solver-portfolio proof, a race of two solvers, bounded safety, trusted
+   contracts, export, certification, timeout, and solver `unknown` remain
+   distinct results.
 8. **Incremental source adoption** — unannotated C++ remains ordinary C++ and
    individual supported functions can be contracted. First-class annotations
    themselves require the modified Clang frontend and
@@ -53,15 +54,17 @@ the other.
 | Host frontend | Rust compiler integration | Modified Clang frontend |
 | Verification language | Rust-oriented exec/proof/spec modes | C++ contracts plus proof/spec/ghost constructs |
 | Integer modeling | Explicit mathematical and machine-oriented types | Mathematical explicit specs; machine executable/proof and lifted `constexpr` |
-| Recursive specifications | Checked termination measures | Explicit spec recursion requires `cppverify::decreases`; automatic `constexpr` lifting accepts only non-recursive, loop-free helpers |
+| Recursive specifications | Checked termination measures | Explicit spec recursion requires `cppverify::decreases`, except an inductive predicate (`cppverify::inductive`), the least fixpoint of its body; automatic `constexpr` lifting accepts only non-recursive, loop-free helpers |
 | Executable helper reuse | Uses Verus's mode and specification mechanisms | Experiments with selected `constexpr` helpers and Clang constant evaluation |
 | Current maturity | Evaluated research verifier with substantial examples and formal core | Research prototype (0.1.1) with three case studies (an extraction of LLVM's ULEB128 codec, UTF-8 validation, binary search); broader evaluation and formalization remain open |
 
 ## Honest Assessment
 
-- Frama-C has 15+ years of engineering maturity. Our MVP won't match its proof automation.
-- VeriFast's separation logic gives it heap reasoning we won't have initially.
-- CBMC handles full C semantics including pointers, casts, unions — our initial fragment is tiny.
+- Frama-C has 15+ years of engineering maturity, and CppVerify does not match its proof
+  automation or its coverage of C.
+- VeriFast's separation logic gives it heap reasoning that CppVerify's object model does not have.
+- CBMC handles full C semantics including pointers, casts, unions; CppVerify's supported subset is
+  much smaller (see the website's limitations page).
 - Verus has a richer standard library, broader evaluation, and a published
   formal core. CppVerify does not currently match that evidence.
 - CppVerify's hypothesis is structural: sharing Clang's typed frontend may

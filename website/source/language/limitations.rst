@@ -28,6 +28,13 @@ This page separates four different situations:
      - The semantics are represented soundly, but Z3 may need user lemmas or
        return ``unknown``.
 
+Outside the supported subset the verifier *fails closed*: it never reports a
+proof for what it does not model. Depending on the construct, the run stops
+with an error that names it, and no function of the file gets a verdict, or
+the function is ``Unresolved`` with reason ``construct.unsupported``. A
+counterexample is never a way of failing closed: ``Failed`` always means a
+checked counterexample.
+
 Meaning of a result
 -------------------
 
@@ -68,7 +75,7 @@ The most mature current fragment includes:
 - ``if``, conventional ``while``/``for``, contracted ``do`` loops, loop
   invariants, loop ``cppverify::modifies``, and ``cppverify::decreases`` (required on executable
   loops; ``cppverify::decreases(*)`` opts out);
-- direct recursion with a well-founded termination measure;
+- direct and mutual recursion with a well-founded termination measure;
 - ``cppverify::pre``, ``cppverify::post``, ``cppverify::old``, ``cppverify::result``, ``cppverify::modifies`` (cells, ranges
   ``p[lo : n]``, and regions), ``cppverify::aliases``, and ACSL-style behaviors;
 - scalar ``T&``/``const T&`` parameters with address-preserving reads, writes,
@@ -107,7 +114,8 @@ C++ feature boundaries
      - Scalar ``T&``/``const T&`` parameters on contracted executable free
        functions, initialized ordinary scalar local actuals, local aliases for
        boolean, integral, and enum referents, and bindings to a field or fixed
-       array element of a promoted local object.
+       array element of a promoted local object, or to a field or element of
+       a parameter's buffer (``int &alias = p->second;``, ``p[i]``).
      - Conditional bindings, reference returns, non-scalar referents, rvalue
        references, temporaries/lifetime extension, reference members, and
        forwarding.
@@ -165,10 +173,23 @@ effects, backend encoding, and false-proof coverage.
 
 A contracted free function that uses an unsupported construct (a ``switch``,
 say) fails closed: the construct is reported as an error, and then no
-function of the file gets a verdict. Contracts on member functions are
-instead ignored with a warning (``-Wcontract-unsupported``: "contracts on
-member functions are not yet supported and are ignored ..."), and the run
-continues with the other functions.
+function of the file gets a verdict. A few forms are rejected this way inside
+otherwise supported code:
+
+- a local that shadows another (``local variable shadowing is unsupported:
+  x``): rename one of them;
+- ``++`` and ``--`` on a pointer (``pointer increment/decrement is
+  unsupported``): write ``q = q + 1``;
+- storing a whole record through a pointer, ``*p = r`` (``unsupported
+  aggregate assignment``): assign its fields; assigning one local record to
+  another is supported;
+- ``cppverify::aliases`` between pointers to different types (``aliases
+  between different pointee types are unsupported``).
+
+Contracts on member functions are instead ignored with a warning
+(``-Wcontract-unsupported``: "contracts on member functions are not yet
+supported and are ignored ..."), and the run continues with the other
+functions.
 
 Objects, classes, and RAII
 --------------------------
@@ -406,7 +427,8 @@ Current proof-language limitations include:
   integer variables, since canonical quantifiers range over integers; over a
   sequence the hypothesis is given at the values its recursion reaches. The
   inductions for one claim share the time of two attempts (each a sixth of
-  ``--timeout``, see :doc:`../book/part-ii/ch13-spec-and-proof-functions`),
+  the query's timeout, ``--timeout`` or, over collections,
+  ``--collection-timeout``; see :doc:`../book/part-ii/ch13-spec-and-proof-functions`),
   so an induction that needs longer is not found: raise ``--timeout`` or
   state the lemma;
 - a counterexample whose spec values cannot be computed is confirmed only by

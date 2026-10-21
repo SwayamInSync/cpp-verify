@@ -64,7 +64,8 @@ never stops (a *matching loop*). The remedy is to unfold a recursive spec only a
 times: once by default (fuel 1), and deeper only where a proof asks for it:
 
 - **fuel** *n* — unfold the definition *n* times along this obligation;
-- **reveal / hide** — turn a spec transparent or opaque for a region of a proof.
+- **reveal / hide** — turn a spec transparent or opaque in a whole function.
 
-This is a knob on *automation*, not on truth: revealing more never changes what is provable, only how
-hard the solver works. Part II maps these to ``cppverify::reveal_with_fuel``, ``cppverify::reveal``, and ``cppverify::hide``.
+This is a knob on *automation*, not on truth: no setting makes a false claim verify or a true one
+fail. It does change what a proof can reach: with a definition hidden, or unfolded too few times, a
+claim may stay unresolved, and more fuel can settle it. Part II maps these to ``cppverify::reveal_with_fuel``, ``cppverify::reveal``, and ``cppverify::hide``.

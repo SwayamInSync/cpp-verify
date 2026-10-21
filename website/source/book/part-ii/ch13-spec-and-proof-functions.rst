@@ -90,8 +90,8 @@ Opacity: fuel, ``cppverify::reveal``, ``cppverify::hide``
 A recursive ``cppverify::spec`` is finitely transparent by default (fuel 1), so its
 defining equation cannot send Z3 into a matching loop.
 ``cppverify::reveal_with_fuel(f, n)`` raises the depth when a proof needs more.
-``cppverify::reveal`` / ``cppverify::hide`` toggle a spec's
-transparency for the rest of a function:
+``cppverify::reveal`` / ``cppverify::hide`` make a spec transparent / opaque in the
+whole function, wherever the statement appears:
 
 .. code-block:: cpp
 
@@ -101,7 +101,7 @@ transparency for the rest of a function:
      cv::pre(x >= 0 && x <= 10)
      cv::post(cv::result == triple(x))
    {
-     cv::ghost { cv::reveal(triple); }            // reveal_with_fuel(f, n) for recursive specs
+     cv::ghost { cv::reveal(triple); }            // cv::reveal_with_fuel(f, n) for recursive specs
      return x + x + x;
    }
 
@@ -390,8 +390,9 @@ substituted first, so ``return n * (n + 1);`` with
 ``cppverify::post(cppverify::result == 2 * sum(n))`` is proved the same way.
 
 Inductions cost time only where a claim would otherwise stay unresolved:
-verified and failed claims never try one. Each attempt gets a sixth of
-``--timeout``, but at least two seconds (all of ``--timeout`` when that is
+verified and failed claims never try one. Each attempt gets a sixth of the
+query's timeout (``--timeout``, or ``--collection-timeout`` for a query over
+collections), but at least two seconds (all of the timeout when that is
 shorter, and five seconds when there is no timeout), and the attempts for
 one claim stop after two such shares. With the default 30-second timeout an
 unresolved claim takes at most 10 seconds more.
@@ -897,7 +898,7 @@ culprit (see :doc:`ch16-when-verification-fails`).
 ---------------------
 
 ``cppverify::choose(k, body)`` is an integer for which ``body`` holds, when there is one,
-and otherwise some unspecified integer (Hilbert's ε). ``choose(k, lo, hi,
+and otherwise some unspecified integer (Hilbert's ε). ``cppverify::choose(k, lo, hi,
 body)`` chooses in ``[lo, hi)``:
 
 .. code-block:: cpp

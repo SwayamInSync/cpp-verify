@@ -72,7 +72,7 @@ if [[ -x "$BUILD/bin/clang" ]]; then
       -o "$COV_DIR/$(basename "$f" .cpp).o" >/dev/null 2>&1 || true
   done
   FAIL_SRC="$COV_DIR/cov_verify_fail.cpp"
-  printf '%s\n' 'int bad() pre(false) post(result == 0) { return 1; }' >"$FAIL_SRC"
+  printf '%s\n' 'int bad() cppverify::post(cppverify::result == 0) { return 1; }' >"$FAIL_SRC"
   "$BUILD/bin/clang" -std=c++17 -fverify-contracts -c "$FAIL_SRC" -o "$COV_DIR/cov_verify_fail.o" \
     >/dev/null 2>&1 || true
   "$BUILD/bin/clang" -std=c++17 -fverify-contracts -fno-verify -c \

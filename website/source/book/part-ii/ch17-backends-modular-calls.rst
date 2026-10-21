@@ -87,10 +87,12 @@ Backend release fidelity
 ------------------------
 
 Contributors can run the repeatable cross-backend release gate as a lit test
-from the repository root:
+from the repository root, once the test tools that ``setup.sh`` does not build
+exist:
 
 .. code-block:: bash
 
+   ninja -C build FileCheck not count split-file llvm-config
    ./build/bin/llvm-lit -sv clang/test/Verify/suite/backend_fidelity_gate.test
 
 It requires cvc5 and Lean 4.32.2. The gate checks every canonical feature
@@ -174,14 +176,15 @@ To keep Z3 as the fast path and export only unresolved functions:
    cpp-verify --lean-fallback=proof file.cpp
    cpp-verify --lean-fallback=proof --lean-certify file.cpp
 
-The first run still exits as unresolved. By default only the obligations the
+The first run reports ``Exported: lean fallback: f [z3: 18 of 20 proved; lean:
+2 exported]``, which is not a proof. By default only the obligations the
 solver did not prove individually are exported, under the goal names they have
 in a complete export; each remaining obligation already has its own solver
 proof. When every exported goal kernel-checks the function is
 ``Proved (z3+lean)``, or ``Proved (portfolio+lean)``, and JSON reports
-``"status":"mixed-proof"`` with the per-obligation split. Only
-``--lean-fallback-scope=all``, which exports every obligation, can make a
-fallback function ``Certified``. SAT counterexamples are failures, not
+``"status":"mixed-proof"`` with the per-obligation split. When Lean checked
+every obligation, because ``--lean-fallback-scope=all`` exported them all or
+the solver proved none on its own, the function is ``Certified``. SAT counterexamples are failures, not
 fallback candidates. Regeneration may leave old proof files on disk, but only
 the current source obligations are imported and certified; a stale active proof
 must type-check against the regenerated goal.

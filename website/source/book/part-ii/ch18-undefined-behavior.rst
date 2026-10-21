@@ -10,7 +10,7 @@ memory checking is on by default (``--no-check-ub`` turns it off).
 Two obligations, not one
 ------------------------
 
-For an ``exec`` function with ``cppverify::pre``/``cppverify::post`` there are really two things to
+For an executable function with ``cppverify::pre``/``cppverify::post`` there are really two things to
 prove:
 
 #. **Safety** — every operation is well-defined (no UB).
@@ -54,7 +54,10 @@ Core safety and memory checking
 
 Always-on checks cover signed arithmetic and negation overflow, zero divisors,
 the signed-minimum divided by minus one case, invalid shifts, conversions to an
-enumeration outside its value range, and non-null abstract-valid dereferences.
+enumeration outside its value range, non-null abstract-valid dereferences,
+uses of storage after its lifetime ends (a read through a pointer after
+``delete``), and reads of a local before it is written: a local that some path
+may read uninitialized is an error (``read of uninitialized local value: x``).
 They also follow operations executed inside lifted ``constexpr`` functions.
 
 Memory checking, the default on every backend (``--check-ub``), proves that
@@ -79,11 +82,13 @@ What is always checked
    * - signed ``/`` ``%``
      - not ``INT_MIN / -1``
    * - ``<<`` / ``>>``
-     - valid count; signed left operand/range follows C++17 rules
+     - valid count; before C++20, a signed left shift also follows the C++17
+       rule (see :doc:`../../language/integers`)
    * - conversion to an enumeration without a fixed underlying type
      - the value lies in the enumeration's range
    * - ``*p``, ``p[i]``, ``p->field``
-     - base is non-null and satisfies the abstract validity predicate
+     - base is non-null and satisfies the abstract validity predicate; storage
+       from ``new`` or an addressed local is live and initialized
 
 The classic example — the tool tells you the precondition you forgot:
 

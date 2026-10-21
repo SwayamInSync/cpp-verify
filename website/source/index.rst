@@ -6,7 +6,9 @@ program itself — and reports whether those properties always hold, or shows yo
 
 Formal verification lets you treat correctness as an engineering artifact: you state what should
 be true, and the tool either proves it or gives you a precise reason it does not. CppVerify
-brings that discipline to everyday C++ without a separate language or annotation dialect.
+brings that discipline to a documented subset of C++ (:doc:`language/limitations`): the
+contracts are C++ expressions in qualified constructs that this Clang reads, not comments
+in a separate annotation language.
 
 .. figure:: /_static/diagrams/cppverify-workflow.svg
    :align: center
@@ -63,7 +65,8 @@ source:
          cd cpp-verify
          .\setup.ps1
 
-      → ``build\bin\cpp-verify.exe``, ``build\bin\clang++.exe``, ``build\bin\clangd.exe``, ``build\bin\clang-format.exe``
+      → ``build\bin\cpp-verify.exe``, ``build\bin\clang++.exe``, ``build\bin\clangd.exe``, ``build\bin\clang-format.exe``;
+      with ``-Generator "Visual Studio 17 2022"`` they are in ``build\Release\bin`` instead
 
 Manual build (from repository root; same flags as ``setup.sh``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -111,6 +114,9 @@ built ``clang++`` finds the SDK without ``SDKROOT``.
 
 Quick start
 -----------
+
+The commands below use a build from source; from an unpacked release archive,
+run its ``bin/cpp-verify`` and ``bin/clang++`` instead.
 
 .. code-block:: cpp
 

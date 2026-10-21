@@ -78,8 +78,8 @@ Reproduce
 
 .. code-block:: bash
 
-   ./build/bin/cpp-verify clang/test/Verify/suite/binary_search_pass.cpp
+   ./build/bin/cpp-verify --timeout=60000 clang/test/Verify/suite/binary_search_pass.cpp
    ./build/bin/cpp-verify clang/test/Verify/suite/binary_search_overflow_fail.cpp
 
-Both are lit tests in ``clang/test/Verify/suite/``; the second is expected to
-fail closed.
+Both are lit tests in ``clang/test/Verify/suite/``, run with these options; the
+second is expected to fail with a checked counterexample.

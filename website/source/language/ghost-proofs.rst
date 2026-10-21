@@ -264,7 +264,7 @@ relied on the frame is ``Unresolved`` with reason ``spec.reads``.
 Opacity and fuel
 ----------------
 
-A recursive ``cppverify::spec`` is **opaque** by default (unfolded with fuel 1) so its defining axiom does not
+A recursive ``cppverify::spec`` is unfolded one level by default (fuel 1), so its defining axiom does not
 send Z3 into a matching loop; ``cppverify::reveal_with_fuel(f, n)`` raises the depth when a proof needs more.
 ``cppverify::reveal`` / ``cppverify::hide`` make a spec transparent / opaque in the whole function,
 wherever the statement appears:
