@@ -300,9 +300,12 @@ factory (see "Returning fresh ownership" in :doc:`ch19-dynamic-storage`); a
 call to a function that deallocates, or that has any other lifetime effect,
 fails closed (``Unresolved`` with reason ``construct.unsupported``).
 
-``valid(p, n)`` extents also cross calls as checked sub-slices. Passing
-``p + offset`` to a ``valid(q, length)`` formal asserts one root, nonnegative
-offset and length, and ``offset + length <= n``. Empty one-past slices,
+``valid(p, n)`` extents also cross calls as checked sub-slices. Passing an
+argument to a ``valid(q, length)`` formal asserts that its ``length``
+elements lie in one of the caller's objects: for ``p + offset``, a
+nonnegative offset and length and ``offset + length <= n``. A copy, a choice,
+or a pointer stepped in a loop is checked against the objects it may
+address. Empty one-past slices,
 exact-cell writes, ranges ``cppverify::modifies(q[lo : n])``, and whole-slice
 ``cppverify::modifies(*q)`` are supported; the call changes only the written cells of
 the slice.

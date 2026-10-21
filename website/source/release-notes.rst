@@ -113,6 +113,19 @@ because a fact it relies on is not established could still be marked
 solver's search. Such findings are now dropped
 (:doc:`book/part-ii/ch16-when-verification-fails`).
 
+**Slices passed through a copy.** A function that requires ``valid(p, n)``
+accepted an argument only when it was written as a parameter plus an offset,
+as in ``first(a + 1, 3)``. Other arguments failed with a counterexample, even
+when the program was correct:
+
+- a copy of such a pointer (``const int *q = a + 1; first(q, 3);``);
+- a choice between pointers (``c ? a + 1 : b``);
+- a pointer stepped in a loop;
+- a result whose contract says where it points.
+
+Such an argument is now accepted when its elements lie in one of the caller's
+objects (:doc:`language/pointers`).
+
 C++ that compiles now
 ~~~~~~~~~~~~~~~~~~~~~
 

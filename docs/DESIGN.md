@@ -859,8 +859,12 @@ memory (no known origin), subtraction inside explicit specs or lifted
 casts remain rejected.
 
 At modular calls, a callee `valid(q, length)` extent can be instantiated from
-`q = p + offset` only after proving a same-root nonnegative subrange with
-`offset + length <= n`. Empty one-past slices, acyclic read-only forwarding,
+an argument only after proving that its `length` elements lie in one of the
+caller's objects: for `q = p + offset`, a nonnegative subrange with
+`offset + length <= n`. A copy, a choice, a pointer stepped in a loop, or a
+callee's result is contained through the objects its origins name, or any
+caller object when they are unknown; validity is a property of storage, so
+any object containing the elements establishes it. Empty one-past slices, acyclic read-only forwarding,
 exact-cell slice writes, and writes to a whole sub-slice or a symbolic range
 are supported; the call frames every cell outside the written region.
 

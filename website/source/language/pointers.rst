@@ -695,10 +695,49 @@ With only ``q == a + i || q == b + i``, the invariant would allow ``q`` one
 past the end of ``a`` at the start of ``b`` while it came from ``a``, and the
 store there would be rejected.
 
-The same marker composes across modular calls. Passing ``p + offset`` to a
-callee with ``valid(q, length)`` requires a same-root proof of
+The same marker composes across modular calls. An argument for a parameter
+with ``valid(q, length)`` must have its ``length`` elements in one of the
+caller's objects: passing ``p + offset`` from ``valid(p, n)`` requires
 ``0 <= offset``, ``0 <= length``, and ``offset + length <= n``. An empty slice
-may start at ``p + n``. Read-only slice calls preserve the heap, including
+may start at ``p + n``. The argument may be computed in any way, as a copy, a
+choice, a pointer stepped in a loop, or a callee's result whose contract says
+where it points; the elements must lie in the objects it may address:
+
+.. cppverify-example: fails third
+
+.. code-block:: cpp
+
+   int first(const int *p, int n)
+     cv::pre(cv::valid(p, n) && n >= 1)
+     cv::post(cv::result == p[0])
+   {
+     return p[0];
+   }
+
+   int second(const int *a, const int *b, bool from_a)
+     cv::pre(cv::valid(a, 4) && cv::valid(b, 3))
+     cv::post(cv::result == (from_a ? a[1] : b[0]))
+   {
+     const int *q = from_a ? a + 1 : b;
+     return first(q, 3);
+   }
+
+   int third(const int *a)
+     cv::pre(cv::valid(a, 4))
+   {
+     const int *q = a + 2;
+     return first(q, 3);
+   }
+
+.. code-block:: text
+
+   Verified: first [backend=z3]
+   Verified: second [backend=z3]
+   slices.cpp:20:3: error: verification failed: third [...::bounds@20:3] (counterexample: a [ssa=a_0] [type=pointer] = 1, q [ssa=q_1] [type=pointer] = 9; trace: call.first@20:3 arg0=9 arg1=3) [backend=z3] [reason=counterexample]
+
+``third`` passes three elements from ``a + 2``, of which only two are in
+``a``: with ``a`` at address 1, ``q`` is 9, and the call would read up to
+address 21, past ``a``'s end at 17. Read-only slice calls preserve the heap, including
 acyclic chains of read-only callees; exact-cell effects such as
 ``cppverify::modifies(q[0])``, ranges, and a whole-slice ``cppverify::modifies(*q)`` are also
 supported, and frame every cell of ``p`` outside the slice.
