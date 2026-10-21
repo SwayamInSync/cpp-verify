@@ -1778,8 +1778,14 @@ position must lie in its origin's entry object, one past the end included
 
 The driver builds a UB-instrumented interface map before passivization so
 callee `VValidExtent` summaries are available at call sites. A slice actual is
-lowered only after proving structural same-origin containment, including
-nonnegative offset/length and the one-past empty case. A conservative transitive
+lowered only after proving containment, including nonnegative offset/length
+and the one-past empty case: structurally when it is written as a caller
+parameter plus an offset (`sliceContainment`), and otherwise, in the object
+model, by `[actual, actual + n * S]` lying in an entry object its origins name,
+or in any of the caller's objects when they are unknown
+(`Passivizer::objectContainment`). The callee's validity precondition for such
+an argument is then discharged by the same membership (`abstractValidity`)
+instead of a parameter's validity at entry. A conservative transitive
 body scan distinguishes acyclic read-only callees from unknown, recursive, or
 writing effects. Exact-cell writes reuse ordinary frame substitution; writes to
 a symbolic range or a whole sub-slice are supported, framed by a `HeapFrame`
