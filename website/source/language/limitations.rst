@@ -499,8 +499,9 @@ parameters and reads from memory included, is assumed to lie in its range.
 Memory checking (the default, off with ``--no-check-ub``) adds object
 bounds: an access or pointer step stays in the ``valid(p, n)`` extent or the
 single object a pointer addresses, across modular sub-slices and same-array
-pointer positions. Together they are not yet comprehensive C++
-undefined-behavior checking.
+pointer positions. Contracts get both kinds of obligation, each clause where
+it is evaluated (see :doc:`functions-loops`). Together they are not yet
+comprehensive C++ undefined-behavior checking.
 
 Missing general UB semantics include object provenance outside the represented
 fragment, strict aliasing, arbitrary alignment, unsequenced side effects and
