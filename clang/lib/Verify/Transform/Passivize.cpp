@@ -3435,6 +3435,51 @@ class PassivizerImpl {
     return std::nullopt;
   }
 
+  /// In the object model a slice argument is valid storage where its bytes
+  /// [Actual, Actual + Bytes] lie in one of the caller's objects: those its
+  /// origins name when they are known, else any of them. Arg is the
+  /// argument as written, which carries the origins.
+  std::unique_ptr<VExpr> objectContainment(
+      const VExpr *Arg, const VExpr *Actual, std::unique_ptr<VExpr> Bytes,
+      const std::map<std::string, std::string> &Renames, SourceLocation Loc) {
+    std::vector<Region> Objects;
+    auto Origins = pointerOrigins(Arg);
+    if (Origins && !Origins->empty() && !hasPointerProvenance(Arg)) {
+      for (const std::string &Origin : *Origins) {
+        if (isGlobalOrigin(Origin)) {
+          auto [Address, Size] = globalOriginExtent(Origin);
+          auto Start =
+              std::make_unique<VLiteralExpr>(Address, VType::makePtr(), Loc);
+          auto End =
+              addBytes(cloneVExpr(Start.get()),
+                       std::make_unique<VLiteralExpr>(std::to_string(Size),
+                                                      pointerOffsetType(), Loc),
+                       Loc);
+          Objects.push_back(Region{std::move(Start), std::move(End)});
+        } else if (auto Object = entryObjectRegion(Origin, Renames, Loc)) {
+          Objects.push_back(std::move(*Object));
+        }
+      }
+    } else if (!hasPointerProvenance(Arg)) {
+      for (const AbstractObject &Object : abstractObjects(Fn))
+        if (auto Region = entryObjectRegion(Object.Name, Renames, Loc))
+          Objects.push_back(std::move(*Region));
+    }
+    auto End = addBytes(cloneVExpr(Actual), std::move(Bytes), Loc);
+    std::unique_ptr<VExpr> Any = makeBoolLiteral(false, Loc);
+    for (Region &Object : Objects)
+      Any = makeOr(std::move(Any),
+                   makeAnd(std::make_unique<VBinOpExpr>(
+                               VBinOp::Le, std::move(Object.Lo),
+                               cloneVExpr(Actual), VType::makeBool(), Loc),
+                           std::make_unique<VBinOpExpr>(
+                               VBinOp::Le, cloneVExpr(End.get()),
+                               std::move(Object.Hi), VType::makeBool(), Loc),
+                           Loc),
+                   Loc);
+    return Any;
+  }
+
   /// The region a write rooted at Root may reach, or nullopt when it cannot
   /// be bounded: a parameter's object or a global's cell.
   std::optional<Region>
@@ -4751,6 +4796,25 @@ public:
       auto Contained = sliceContainment(Actual->second.get(), Length.get(),
                                         Extent.PointerType.PointeeSizeBytes,
                                         CallerExtents, C.Loc);
+      // A slice argument the syntactic rule cannot place (a copy, a choice,
+      // a callee's result) is contained through the objects it may address.
+      const VExpr *Arg = nullptr;
+      for (unsigned I = 0; I < Callee->Params.size() && I < C.Args.size(); ++I)
+        if (Callee->Params[I].first == Extent.Base)
+          Arg = C.Args[I].get();
+      auto Bytes = scaledExtent(Length.get(),
+                                Extent.PointerType.PointeeSizeBytes, C.Loc);
+      auto NonNegative = asPointerOffset(Length.get());
+      if (Fn.ObjectModel && Arg && Bytes && NonNegative &&
+          isFalseLiteral(Contained.get()))
+        Contained = makeAnd(
+            std::make_unique<VBinOpExpr>(
+                VBinOp::Ge, std::move(NonNegative),
+                std::make_unique<VLiteralExpr>(0, pointerOffsetType(), C.Loc),
+                VType::makeBool(), C.Loc),
+            objectContainment(Arg, Actual->second.get(), std::move(Bytes),
+                              Renames, C.Loc),
+            C.Loc);
       emitPassive(P, PassiveStmt::Assert, std::move(Contained), nullptr, C.Loc,
                   ProofObligationKind::Bounds);
       // A region write through an extent is framed by the extent itself
@@ -4852,6 +4916,21 @@ public:
     std::set<std::string> ContainedPointerParams;
     for (const VValidExtent &Extent : Callee->ValidExtents)
       ContainedPointerParams.insert(Extent.Base);
+    // Extent arguments not written from one of the caller's parameters: their
+    // validity follows from their containment in the caller's objects, not
+    // from a parameter's validity at entry.
+    std::set<std::string> ObjectContainedParams;
+    for (unsigned I = 0; I < Callee->Params.size() && I < C.Args.size(); ++I) {
+      const VExpr *Base = pointerBase(C.Args[I].get());
+      const bool FromParameter =
+          Base && Base->K == VExpr::Var &&
+          llvm::any_of(Fn.Params, [&](const auto &Param) {
+            return Param.first == static_cast<const VVarExpr *>(Base)->Name;
+          });
+      if (ContainedPointerParams.count(Callee->Params[I].first) &&
+          !FromParameter)
+        ObjectContainedParams.insert(Callee->Params[I].first);
+    }
     for (size_t I = 0; I != Callee->Preconditions.size(); ++I) {
       const VExpr *Pre = Callee->Preconditions[I].get();
       auto BoundPre = substParams(Pre, ParamMap, Ctx, EntryHeap, "", {},
@@ -4862,7 +4941,11 @@ public:
       // validity, which that membership gives.
       if (Fn.ObjectModel &&
           (!Callee->ObjectModel ||
-           llvm::none_of(ContainedPointerParams, [&](const std::string &Name) {
+           llvm::none_of(ContainedPointerParams,
+                         [&](const std::string &Name) {
+                           return referencesVar(Pre, Name);
+                         }) ||
+           llvm::any_of(ObjectContainedParams, [&](const std::string &Name) {
              return referencesVar(Pre, Name);
            })))
         BoundPre = abstractValidity(std::move(BoundPre), Renames);
