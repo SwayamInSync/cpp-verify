@@ -592,6 +592,13 @@ top-level conjunction clause of a ``cppverify::pre`` with a bare complete-object
 and each pointer may have only one marker; ambiguous forms (under ``||``,
 ``!``, or a conditional, or a second marker for one pointer) fail closed.
 
+Contracts read under the same rule. An access in a precondition, a
+postcondition, a loop invariant, or a ``cppverify::check`` must lie in its
+extent or object where the clause is evaluated, so a precondition reads
+``p[i]`` only after the clauses that bound ``i``: ``cv::pre(valid(p, n) && 0 <=
+i && i < n && p[i] > 0)``, not ``cv::pre(valid(p, n) && p[i] > 0 && 0 <= i &&
+i < n)`` (see :doc:`functions-loops`).
+
 Where the marker may appear
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
