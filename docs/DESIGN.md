@@ -98,6 +98,33 @@ int abs_value(int x)
   the behaviors it relates, e.g. `cppverify::disjoint_behaviors(low, high)`. Both are
   checked at function entry.
 
+### Contracts must be defined
+
+A contract is C++ evaluated where the function is called and where it returns
+(as C++26 contracts are), so each clause must be defined there. Every
+contracted function except a spec gets a well-formedness check, as Dafny
+builds one per method (`CheckWellFormed$$f`):
+
+- each written precondition, in order, is checked where the ones before it
+  hold, and then assumed; within a clause, `&&`, `||`, `?:`, and a
+  quantifier's range guard the operands after them;
+- each postcondition is checked in the state the function returns in, where
+  the postconditions before it hold. For a verified body that is its own final
+  state (the body's module checks it, as Verus does); for a trusted function or
+  one without a definition it is every state the frame allows, with any
+  result, which is what callers assume;
+- a clause gets the checks an operation gets in a body: the core definedness
+  checks and, with memory checking, every access in its extent or object.
+  Loop invariants and `cppverify::check` get the same memory checks.
+
+The check is reported only when it fails, as `contract of f`, at the operation
+(a lifted helper's checks at its call). A contract that may be undefined
+establishes nothing: callers that rely on it are `Unresolved` with
+`callee.contract`. Without the check, the logic's total semantics would give
+meaning to what C++ leaves undefined: a trusted `post(1000 / result > 0)`
+excluded `result == 0`. Spec functions stay total (Verus, ACSL), so a spec in
+a contract adds no check, and `cppverify::recommends` stays a warning.
+
 ### Verdicts that rest on other contracts
 
 A caller's proof uses its callees' contracts. When a callee's own
