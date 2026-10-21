@@ -162,12 +162,19 @@ nothing is verified:
      - ``error: --cvc5-path requires --backend=cvc5, --backend=portfolio, or --backend=race``
    * - ``--backend=cvc5 --profile-quantifiers``
      - ``error: --profile-quantifiers requires a backend that runs Z3: z3, portfolio, race, or bmc``
-   * - ``--lean-out=FILE --int-encoding=bitvector``
-     - ``error: --int-encoding requires a backend that runs an SMT solver``
+   * - ``--lean-out=FILE --timeout=60000``
+     - ``error: --timeout requires a backend that runs an SMT solver``
    * - ``--proof-cache-max-mb=N`` without ``--proof-cache``
      - ``error: --proof-cache-max-mb and --proof-cache-max-entries require --proof-cache``
    * - ``--lean-fallback-scope=all`` without ``--lean-fallback``
      - ``error: --lean-fallback-scope requires --lean-fallback``
+
+Lean export runs no solver, so every solver option is an error with
+``--backend=lean``, ``--lean-out``, or ``--lean-project``, the same way as
+``--timeout`` above: ``--timeout``, ``--collection-timeout``,
+``--certify-timeout``, ``--function-timeout``, ``--solver-rlimit``,
+``--max-query-nodes``, and ``--int-encoding``. ``--lean-fallback`` runs Z3
+first, and accepts all of them.
 
 The same rules hold when replaying an archive: ``--check-ub`` and
 ``--profile-quantifiers`` are errors there, since an archive keeps the checks
@@ -273,6 +280,7 @@ Backends
    * - ``--timeout=N``
      - Per-query solver timeout in milliseconds (default 30000; ``0`` disables).
        A query that exceeds it is reported as unresolved instead of hanging.
+       Not accepted with ``--backend=lean``, which runs no solver.
    * - ``--certify-timeout=N``
      - The milliseconds checking one counterexample against the true
        definitions may take (default half of the query timeout; ``0`` lets
@@ -280,19 +288,23 @@ Backends
        query's time to other models and later stages; when it is reached the
        reason says so (``the time one counterexample check may take (N ms,
        --certify-timeout) was spent``).
+       Not accepted with ``--backend=lean``, which runs no solver.
    * - ``--collection-timeout=N``
      - Per-query timeout for a function whose queries involve sequences,
        sets, multisets, or maps, whose theories need more search (default
        twice ``--timeout``; ``0`` disables).
+       Not accepted with ``--backend=lean``, which runs no solver.
    * - ``--solver-rlimit=N``
      - Deterministic per-query Z3/cvc5 resource budget (default ``0``, disabled).
        Exhaustion is ``Unresolved``. Z3 reports ``solver.resource-limit``;
        cvc5 may report the conservative ``solver.unknown``.
+       Not accepted with ``--backend=lean``, which runs no solver.
    * - ``--max-query-nodes=N``
      - Reject a solver-backed canonical obligation module larger than ``N``
        expression nodes before verification, lower-only encoding, or a requested
        Z3 dump (default ``0``, disabled). Exhaustion is fail-closed with reason
        ``query.size-limit``.
+       Not accepted with ``--backend=lean``, which runs no solver.
    * - ``--int-encoding=MODE``
      - Solver representation of machine integers for Z3, cvc5, portfolio, and
        BMC: ``auto`` (default; integers reduced modulo ``2^N`` unless a query
@@ -308,6 +320,7 @@ Backends
    * - ``--function-timeout=N``
      - Milliseconds all queries of one function may take together (default
        ten times ``--timeout``; ``0`` disables). See `Time limits`_.
+       Not accepted with ``--backend=lean``, which runs no solver.
    * - ``--proof-cache=DIR``
      - Persist successful dependency-scoped Z3 or BMC proofs. In portfolio mode
        this caches only the Z3 component and cvc5 still runs on every query.
@@ -408,6 +421,13 @@ Choosing the limits:
 The limits are wall-clock times and depend on the machine. For results that
 must repeat exactly across machines, use ``--solver-rlimit``, a
 deterministic per-query budget of solver steps.
+
+None of these limits applies to Lean, which runs no solver. Lean
+certification (``--lean-certify``) gives each ``lake`` step 300 seconds:
+building the generated module, compiling your module, compiling each proof,
+and the final check. A step that takes longer leaves every result
+``Unresolved`` with reason ``lean.export-failed``, and its message gives the
+command's error.
 
 Parallel solving and proof caching
 ----------------------------------

@@ -558,6 +558,13 @@ static bool resolveOptions(bool Replay) {
       BackendOpt.setValue("bmc");
   }
   const StringRef Backend = BackendOpt.getValue();
+  const cl::Option *SolverOption = nullptr;
+  for (const cl::Option *Option : std::initializer_list<const cl::Option *>{
+           &SolverTimeout, &CollectionTimeout, &CertifyTimeout,
+           &FunctionTimeout, &SolverResourceLimit, &MaxQueryNodes,
+           &IntEncoding})
+    if (!SolverOption && given(*Option))
+      SolverOption = Option;
   std::string Error;
   if (Backend != "z3" && Backend != "cvc5" && Backend != "portfolio" &&
       Backend != "race" && Backend != "lean" && Backend != "bmc")
@@ -581,8 +588,9 @@ static bool resolveOptions(bool Replay) {
   else if (ProfileQuantifiers && (Backend == "cvc5" || Backend == "lean"))
     Error = "--profile-quantifiers requires a backend that runs Z3: z3, "
             "portfolio, race, or bmc";
-  else if (given(IntEncoding) && Backend == "lean")
-    Error = "--int-encoding requires a backend that runs an SMT solver";
+  else if (SolverOption && Backend == "lean")
+    Error = "--" + SolverOption->ArgStr.str() +
+            " requires a backend that runs an SMT solver";
   else if ((given(CheckUB) || given(NoCheckUB)) && Replay)
     Error = "--check-ub and --no-check-ub apply to source verification; an "
             "archive keeps the checks it was written with";

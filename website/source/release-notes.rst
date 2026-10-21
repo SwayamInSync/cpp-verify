@@ -131,8 +131,10 @@ function as ``Interrupted``, and exits with status 130
 
 **Options select their backend, and unused options are errors.**
 ``--lean-out`` and ``--lean-project`` select Lean and ``--unroll`` selects BMC;
-an option the run would not use, such as ``--unroll`` with ``--backend=z3``, is
-an error that names what it needs, where it was ignored (:doc:`language/tooling`).
+an option the run would not use, such as ``--unroll`` with ``--backend=z3``, or
+``--timeout`` and the other solver budgets with Lean export, which runs no
+solver, is an error that names what it needs, where it was ignored
+(:doc:`language/tooling`).
 
 **Compiler errors stop their file, and headers are C++.** An error in a command
 line was printed and then ignored, and a ``.h`` input was compiled as C. Now
