@@ -3303,8 +3303,25 @@ std::optional<VPlace>
 ASTConverter::subscriptPlace(const ArraySubscriptExpr *AS) {
   if (!AS)
     return std::nullopt;
-  if (promotedRootLocal(AS))
-    return promotedObjectPlace(AS);
+  // An element of a fixed array inside a represented object: a promoted
+  // local, or the object a pointer addresses (r->buf[i], p[k].grid[i][j]).
+  if (promotedRootLocal(AS) || pointeeRootPointer(AS->getBase()))
+    return objectPlace(AS);
+  return pointerElementPlace(AS);
+}
+
+std::optional<VPlace> ASTConverter::pointeePlace(const Expr *PointerExpr,
+                                                 SourceLocation Loc) {
+  if (isDynamicAddress(PointerExpr)) {
+    error(CurrentFn->Name +
+          ": dynamic-storage pointers cannot select record fields");
+    return std::nullopt;
+  }
+  return derefPlace(PointerExpr, Loc);
+}
+
+std::optional<VPlace>
+ASTConverter::pointerElementPlace(const ArraySubscriptExpr *AS) {
   if (isDynamicAddress(AS->getBase())) {
     error(CurrentFn->Name +
           ": subscripting dynamic-storage pointers is unsupported");
@@ -3373,7 +3390,9 @@ static const Expr *peelObjectExpr(const Expr *E) {
   return E;
 }
 
-const VarDecl *ASTConverter::promotedRootLocal(const Expr *E) const {
+/// The variable a chain of dot member and fixed-array element selections
+/// starts at (a in a.b[i].c), or null.
+static const VarDecl *selectionRootVar(const Expr *E) {
   while (true) {
     E = peelObjectExpr(E);
     if (!E)
@@ -3394,8 +3413,59 @@ const VarDecl *ASTConverter::promotedRootLocal(const Expr *E) const {
     break;
   }
   const auto *DRE = dyn_cast<DeclRefExpr>(E);
-  const auto *VD = DRE ? dyn_cast<VarDecl>(DRE->getDecl()) : nullptr;
+  return DRE ? dyn_cast<VarDecl>(DRE->getDecl()) : nullptr;
+}
+
+const VarDecl *ASTConverter::promotedRootLocal(const Expr *E) const {
+  const VarDecl *VD = selectionRootVar(E);
   return VD && AddressableLocals.count(VD) ? VD : nullptr;
+}
+
+std::string ASTConverter::arrayDecayError(const Expr *Array) const {
+  const auto *M = dyn_cast_or_null<MemberExpr>(peelObjectExpr(Array));
+  const std::string Member =
+      M ? M->getMemberDecl()->getNameAsString() : std::string();
+  if (M && pointeeRootPointer(M))
+    return "a pointer to the array member '" + Member +
+           "' is unsupported; index the member where it is used, as in '" +
+           Member + "[i]'";
+  if (const VarDecl *Root = selectionRootVar(Array);
+      Root && Root->hasGlobalStorage()) {
+    const std::string Kind = Root->isStaticLocal() ? "static local" : "global";
+    const std::string Name = "'" + Root->getNameAsString() + "'";
+    return M ? "the array member '" + Member + "' of the " + Kind + " " + Name +
+                   " is unsupported"
+             : "the " + Kind + " array " + Name + " is unsupported";
+  }
+  return "array-to-pointer decay of automatic storage is unsupported until "
+         "lexical lifetime and escape effects are modeled";
+}
+
+const Expr *ASTConverter::pointeeRootPointer(const Expr *E) const {
+  while (true) {
+    E = peelObjectExpr(E);
+    if (!E)
+      return nullptr;
+    if (const auto *M = dyn_cast<MemberExpr>(E)) {
+      if (M->isArrow())
+        return M->getBase();
+      E = M->getBase();
+      continue;
+    }
+    if (const auto *AS = dyn_cast<ArraySubscriptExpr>(E)) {
+      const Expr *Base = peelObjectExpr(AS->getBase());
+      if (Base && Base->getType()->isArrayType()) {
+        E = Base;
+        continue;
+      }
+      return AS->getBase()->getType()->isPointerType() ? AS->getBase()
+                                                       : nullptr;
+    }
+    if (const auto *U = dyn_cast<UnaryOperator>(E);
+        U && U->getOpcode() == UO_Deref)
+      return U->getSubExpr();
+    return nullptr;
+  }
 }
 
 std::optional<uint64_t>
@@ -3455,8 +3525,7 @@ ASTConverter::recordFixedArrayBoundsCheck(const Expr *Index,
   return Bound;
 }
 
-std::optional<VPlace>
-ASTConverter::promotedObjectPlace(const Expr *E) {
+std::optional<VPlace> ASTConverter::objectPlace(const Expr *E) {
   E = peelObjectExpr(E);
   if (!E)
     return std::nullopt;
@@ -3468,17 +3537,19 @@ ASTConverter::promotedObjectPlace(const Expr *E) {
     return automaticLocalPlace(VD, E->getExprLoc());
   }
 
+  if (const auto *U = dyn_cast<UnaryOperator>(E);
+      U && U->getOpcode() == UO_Deref)
+    return pointeePlace(U->getSubExpr(), E->getExprLoc());
+
   if (const auto *M = dyn_cast<MemberExpr>(E)) {
-    if (M->isArrow())
-      return std::nullopt;
     const auto *FD = dyn_cast<FieldDecl>(M->getMemberDecl());
     auto Offset = recordFieldOffset(FD);
-    auto Base = promotedObjectPlace(M->getBase());
+    auto Base = M->isArrow() ? pointeePlace(M->getBase(), M->getExprLoc())
+                             : objectPlace(M->getBase());
     if (!Base)
       return std::nullopt;
     if (!Offset) {
-      error(CurrentFn->Name +
-            ": unsupported field selection on an automatic object");
+      error(CurrentFn->Name + ": unsupported field selection");
       return std::nullopt;
     }
     Base->applyField(FD->getNameAsString(), *Offset, M->getExprLoc());
@@ -3491,11 +3562,14 @@ ASTConverter::promotedObjectPlace(const Expr *E) {
     const Expr *ArrayExpr = peelObjectExpr(AS->getBase());
     const ConstantArrayType *CAT =
         ArrayExpr ? Ctx.getAsConstantArrayType(ArrayExpr->getType()) : nullptr;
-    auto Base = promotedObjectPlace(ArrayExpr);
+    // p[k] selects an element of the objects p addresses.
+    if (!CAT && AS->getBase()->getType()->isPointerType())
+      return pointerElementPlace(AS);
+    auto Base = objectPlace(ArrayExpr);
     if (!Base)
       return std::nullopt;
     if (!CAT) {
-      error(CurrentFn->Name + ": unsupported indexing of an automatic object");
+      error(CurrentFn->Name + ": unsupported indexing");
       return std::nullopt;
     }
     const uint64_t Count = CAT->getSize().getZExtValue();
@@ -3742,7 +3816,7 @@ std::optional<VPlace> ASTConverter::lvaluePlace(const Expr *E) {
   // A promoted local has exactly one representation: every subobject lvalue
   // rooted in it is an exact byte offset from its single automatic object.
   if (promotedRootLocal(E))
-    return promotedObjectPlace(E);
+    return objectPlace(E);
 
   if (const auto *DRE = dyn_cast<DeclRefExpr>(E)) {
     const auto *VD = dyn_cast<VarDecl>(DRE->getDecl());
@@ -3789,33 +3863,16 @@ std::optional<VPlace> ASTConverter::lvaluePlace(const Expr *E) {
     return derefPlace(U->getSubExpr(), E->getExprLoc());
   }
 
-  if (const auto *M = dyn_cast<MemberExpr>(E)) {
-    const Expr *Pointer = nullptr;
-    if (M->isArrow()) {
-      Pointer = M->getBase();
-    } else if (const auto *Deref =
-                   dyn_cast<UnaryOperator>(M->getBase()->IgnoreParenImpCasts());
-               Deref && Deref->getOpcode() == UO_Deref) {
-      Pointer = Deref->getSubExpr();
-    }
+  // A subobject of the object a pointer variable addresses: p->f, p[i],
+  // p->inner.x, p->buf[i], p[k].grid[i][j].
+  if (const Expr *Pointer = pointeeRootPointer(E)) {
     const auto *PointerRef =
-        Pointer ? dyn_cast<DeclRefExpr>(Pointer->IgnoreParenImpCasts())
-                : nullptr;
+        dyn_cast<DeclRefExpr>(Pointer->IgnoreParenImpCasts());
     const auto *PointerVar =
         PointerRef ? dyn_cast<VarDecl>(PointerRef->getDecl()) : nullptr;
     if (!PointerVar || !PointerVar->getType()->isPointerType())
       return std::nullopt;
-    return arrowFieldPlace(M);
-  }
-
-  if (const auto *AS = dyn_cast<ArraySubscriptExpr>(E)) {
-    const auto *PointerRef =
-        dyn_cast<DeclRefExpr>(AS->getBase()->IgnoreParenImpCasts());
-    const auto *PointerVar =
-        PointerRef ? dyn_cast<VarDecl>(PointerRef->getDecl()) : nullptr;
-    if (!PointerVar || !PointerVar->getType()->isPointerType())
-      return std::nullopt;
-    return subscriptPlace(AS);
+    return objectPlace(E);
   }
 
   return std::nullopt;
@@ -4367,9 +4424,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     return convertExpr(MTE->getSubExpr());
   if (const auto *Decay = dyn_cast<CastExpr>(E);
       Decay && Decay->getCastKind() == CK_ArrayToPointerDecay) {
-    error(CurrentFn->Name +
-          ": array-to-pointer decay of automatic storage is unsupported until "
-          "lexical lifetime and escape effects are modeled");
+    error(CurrentFn->Name + ": " + arrayDecayError(Decay->getSubExpr()));
     return nullptr;
   }
   if (isa<CXXNewExpr>(E)) {
@@ -4844,14 +4899,18 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
       return std::make_unique<VLoadExpr>(std::move(Address), Ty,
                                          E->getExprLoc());
     }
-    if (!M->isArrow() && promotedRootLocal(M)) {
+    if (!M->isArrow() && (promotedRootLocal(M) || pointeeRootPointer(M))) {
       VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
       if (Ty.isAggregate() || Ty.Kind == VTypeKind::Unsupported) {
-        error(CurrentFn->Name + ": aggregate value use of an automatic object "
-                                "subobject is unsupported");
+        error(CurrentFn->Name +
+              (promotedRootLocal(M)
+                   ? ": aggregate value use of an automatic object "
+                     "subobject is unsupported"
+                   : ": a record or array read as a whole through a "
+                     "pointer is unsupported; read its fields"));
         return nullptr;
       }
-      auto Place = promotedObjectPlace(M);
+      auto Place = objectPlace(M);
       if (!Place)
         return nullptr;
       return std::make_unique<VLoadExpr>(Place->takeAddress(), Ty,
@@ -5375,7 +5434,7 @@ void ASTConverter::appendAssignment(const Expr *LHS,
       return;
     }
     const size_t ErrorCount = Errors.size();
-    auto Place = promotedObjectPlace(LHS);
+    auto Place = objectPlace(LHS);
     if (!Place) {
       if (Errors.size() == ErrorCount)
         error(CurrentFn->Name + ": unsupported assignment target");
@@ -5462,6 +5521,11 @@ void ASTConverter::appendAssignment(const Expr *LHS,
                                                  std::move(Value), Loc));
       return;
     }
+    // A field inside the object a pointer addresses: p->inner.x, p[k].f.
+    if (!ME->isArrow() && pointeeRootPointer(ME)) {
+      appendPointeeStore(LHS, std::move(Value), Loc, Out);
+      return;
+    }
     const auto *FD = dyn_cast<FieldDecl>(ME->getMemberDecl());
     const auto *DRE =
         dyn_cast<DeclRefExpr>(ME->getBase()->IgnoreParenImpCasts());
@@ -5512,6 +5576,10 @@ void ASTConverter::appendAssignment(const Expr *LHS,
             ": proof functions cannot modify executable memory");
       return;
     }
+    if (pointeeRootPointer(AS->getBase())) {
+      appendPointeeStore(LHS, std::move(Value), Loc, Out);
+      return;
+    }
     const size_t ErrorCount = Errors.size();
     if (auto Address = convertSubscriptAddress(AS)) {
       Out.push_back(std::make_unique<VStoreStmt>(std::move(Address),
@@ -5523,6 +5591,31 @@ void ASTConverter::appendAssignment(const Expr *LHS,
   }
 
   error(CurrentFn->Name + ": unsupported assignment target");
+}
+
+void ASTConverter::appendPointeeStore(
+    const Expr *LHS, std::unique_ptr<VExpr> Value, SourceLocation Loc,
+    std::vector<std::unique_ptr<VStmt>> &Out) {
+  if (CurrentFn->IsProof) {
+    error(CurrentFn->Name +
+          ": proof functions cannot modify executable memory");
+    return;
+  }
+  if (Value->Ty.isAggregate() ||
+      isPromotableAggregateType(LHS->getType(), Ctx)) {
+    error(CurrentFn->Name + ": aggregate assignment is unsupported");
+    return;
+  }
+  const size_t ErrorCount = Errors.size();
+  auto Place = objectPlace(LHS);
+  if (!Place) {
+    if (Errors.size() == ErrorCount)
+      error(CurrentFn->Name + ": unsupported assignment target");
+    return;
+  }
+  Out.push_back(std::make_unique<VStoreStmt>(Place->takeAddress(),
+                                             std::move(Value), Loc,
+                                             Place->takeAccessCondition()));
 }
 
 bool ASTConverter::appendRecordCopy(const Expr *Source, const VarDecl *Target,
@@ -5546,7 +5639,7 @@ bool ASTConverter::appendRecordCopy(const Expr *Source, const VarDecl *Target,
   if (promotedRootLocal(Source) && Target->isLocalVarDeclOrParm() &&
       TargetRecord && TargetRecord->getDefinition() &&
       Ctx.hasSameUnqualifiedType(Target->getType(), Source->getType())) {
-    auto SourcePlace = promotedObjectPlace(Source);
+    auto SourcePlace = objectPlace(Source);
     if (!SourcePlace)
       return true;
     if (auto AccessCondition = SourcePlace->takeAccessCondition())
@@ -5663,7 +5756,7 @@ bool ASTConverter::appendObjectCopy(const Expr *Source, QualType Ty,
 
   // Copy from another promoted object: read every leaf out of its storage.
   if (promotedRootLocal(Lvalue)) {
-    auto SourcePlace = promotedObjectPlace(Lvalue);
+    auto SourcePlace = objectPlace(Lvalue);
     if (!SourcePlace)
       return false;
     if (auto AccessCondition = SourcePlace->takeAccessCondition())
@@ -6324,7 +6417,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
                 ": proof functions cannot modify executable memory");
           return Out;
         }
-        auto Place = promotedObjectPlace(TargetExpr);
+        auto Place = objectPlace(TargetExpr);
         if (!Place)
           return Out;
         if (auto AccessCondition = Place->takeAccessCondition())

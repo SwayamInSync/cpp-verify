@@ -128,6 +128,16 @@ it into ``error: expected unqualified-id``. ``-fverify-contracts`` now defines
 targets unless the command line defines it, so the header defines only its
 ``__Check``, ``__Require``, and ``__Verify`` names (:doc:`language/syntax`).
 
+**Records through pointers.** Through a pointer, 0.1.1 reached only a record's
+direct fields (``p->x``). A nested field (``p->inner.y``), a field of an
+element (``p[k].x``), and an element of an array member (``r->buf[i]``) were
+errors, so a ring buffer, a fixed-capacity stack, or any record that holds its
+storage inline could not be verified. Each of them is now a heap cell, at any
+depth: code can read and write it, contracts and ``cppverify::modifies`` can
+name it, and a reference can bind to it. Each index is checked against its own
+array, so ``r->buf[8]``, which has the address of the next field, is still an
+error (:doc:`language/structs`).
+
 Running cpp-verify
 ~~~~~~~~~~~~~~~~~~
 

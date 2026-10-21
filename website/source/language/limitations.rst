@@ -88,6 +88,8 @@ The most mature current fragment includes:
 - flat trivial standard-layout records with scalar fields;
 - fixed local arrays and promoted trivial local records with nested record,
   pointer, and fixed-array members;
+- the fields and fixed-array elements of a record a pointer addresses, at any
+  depth (``p->buf[i]``, ``p->inner.arr[j]``, ``p[k].items[i].v``);
 - one-level typed pointers, abstract indexed buffers, and heap framing;
 - constrained direct scalar ``new``/``delete`` with liveness, initialization,
   and provenance.
@@ -115,23 +117,28 @@ C++ feature boundaries
        functions, initialized ordinary scalar local actuals, local aliases for
        boolean, integral, and enum referents, and bindings to a field or fixed
        array element of a promoted local object, or to a field or element of
-       a parameter's buffer (``int &alias = p->second;``, ``p[i]``).
+       a parameter's buffer or of a record a pointer addresses
+       (``int &alias = p->second;``, ``p[i]``, ``p->buf[i]``).
      - Conditional bindings, reference returns, non-scalar referents, rvalue
        references, temporaries/lifetime extension, reference members, and
        forwarding.
    * - Arrays
-     - Pointer-parameter indexing, quantified abstract buffers, and fixed
+     - Pointer-parameter indexing, quantified abstract buffers, fixed
        local arrays (including arrays of records and multidimensional arrays)
-       modelled as byte-addressed automatic objects up to 256 bytes.
+       modelled as byte-addressed automatic objects up to 256 bytes, and the
+       fixed-array members of a record a pointer addresses, each index
+       checked against its own array.
      - Array parameters/fields carried by value, array references,
        ``new[]``/``delete[]``, loop-local arrays, and raw pointers derived from
-       a local array.
+       a local array or from an array member (``int *q = p->buf;``).
    * - Records
      - Flat trivial standard-layout values with scalar fields; trivial
        standard-layout records with nested record, pointer, and fixed-array
-       members as promoted local objects.
-     - Non-trivial, inherited, polymorphic, union, and bit-field records, and
-       nested/pointer/array-bearing records used by value.
+       members as promoted local objects, and through pointers, where each
+       scalar field and element is a heap cell.
+     - Non-trivial, inherited, polymorphic, union, and bit-field records,
+       nested/pointer/array-bearing records used by value, and a whole record
+       or array read through a pointer (``Ring copy = *r;``).
    * - Functions
      - Free functions, overloads, namespaces, contracts, direct calls, and
        direct and mutual recursion, also through stores to pointer and

@@ -201,6 +201,80 @@ which the verifier derives from the non-overlap as plain integer arithmetic
 (``d + j < d + n <= s <= s + i``), because addresses are modeled as mathematical
 integers rather than wrapping machine words.
 
+Records through pointers
+------------------------
+
+A record often holds its storage inline: a fixed-capacity stack keeps its
+items in an array member next to its size. Through a pointer to such a
+record, every field and every array element is a heap cell of its own, at
+the address the record layout gives it. Code reads and writes it, contracts
+and footprints name it, and the same frame reasoning as for a buffer applies:
+
+.. cppverify-example: fails push_full
+
+.. code-block:: cpp
+
+   struct Stack {
+     int items[16];
+     int size;
+   };
+
+   void push(Stack *s, int v)
+     cv::pre(s != nullptr && 0 <= s->size && s->size < 16)
+     cv::modifies(s->items[s->size], s->size)
+     cv::post(s->size == cv::old(s->size) + 1)
+     cv::post(s->items[cv::old(s->size)] == v)
+     cv::post(cv::forall(k, 0, cv::old(s->size), s->items[k] == cv::old(s->items[k])))
+   {
+     s->items[s->size] = v;
+     s->size = s->size + 1;
+   }
+
+   void clear(Stack *s)
+     cv::pre(s != nullptr)
+     cv::modifies(s->items[0 : 16], s->size)
+     cv::post(s->size == 0 && cv::forall(k, 0, 16, s->items[k] == 0))
+   {
+     for (int i = 0; i < 16; i = i + 1)
+       cv::invariant(0 <= i && i <= 16 && cv::forall(k, 0, i, s->items[k] == 0))
+       cv::modifies(s->items[0 : 16])
+       cv::decreases(16 - i)
+     {
+       s->items[i] = 0;
+     }
+     s->size = 0;
+   }
+
+   void push_full(Stack *s, int v)
+     cv::pre(s != nullptr && 0 <= s->size && s->size <= 16)
+     cv::modifies(*s)
+   {
+     s->items[s->size] = v;
+     s->size = s->size + 1;
+   }
+
+.. code-block:: text
+
+   Verified: push [backend=z3]
+   Verified: clear [backend=z3]
+   stack.cpp:36:21: error: verification failed: push_full [...::bounds@36:21] (counterexample: s [ssa=s_0] [type=pointer] = 1; trace: heap-write.store@36:21 address=65 value=<unknown>) [backend=z3] [reason=counterexample]
+
+``push`` writes exactly two cells, so its postcondition can promise that every
+item below the old size is unchanged. ``clear`` writes a range of the member
+array and the size; ``s->items[0 : 16]`` is a range footprint like
+``p[0 : n]``.
+
+``push_full`` admits a full stack. The store ``s->items[16]`` would land on
+``s->size``, which is inside ``*s`` and inside the frame, so a check against
+the object alone would accept it. Each index is checked against its own
+array, as Frama-C's RTE guards are, and the counterexample is the full stack:
+the store's address is 65, which is ``s + 16 * 4`` with ``s = 1``.
+
+A pointer to the member array itself (``int *q = s->items;``) is not
+supported yet, because the pointer would have to carry the array's bounds.
+Index the member where it is used. :doc:`../../language/structs` lists the
+forms that are supported.
+
 Declaring a checked extent
 --------------------------
 
@@ -326,6 +400,7 @@ parameters — a frame condition on *values* rather than memory. Declare it afte
 It is injected as a precondition at the first use of an invariant field for
 supported by-value flat records, so callers must establish it. Record
 references are not yet in the verified subset; current references have scalar
-referents only. See :doc:`../../language/structs`.
+referents only, such as a field or an element reached through a pointer. See
+:doc:`../../language/structs`.
 
 See :doc:`../../language/limitations` for the supported pointer and heap feature set.
