@@ -1078,6 +1078,39 @@ loop. Recursive executable bodies may store through pointer and reference
 parameters and use automatic objects; recursion through a function that
 allocates or frees storage is `Unresolved` (`construct.unsupported`).
 
+### 3b. Records through pointers
+
+```cpp
+struct Ring { int buf[8]; int head; int count; };
+
+void put(Ring *r, int v)
+  cppverify::pre(r != nullptr && 0 <= r->head && r->head < 8)
+  cppverify::modifies(r->buf[r->head])
+  cppverify::post(r->buf[r->head] == v && r->count == cppverify::old(r->count))
+{
+  r->buf[r->head] = v;
+}
+```
+
+- A field or fixed-array element of the object a pointer addresses, at any
+  depth (`p->f`, `p->inner.arr[j]`, `p->grid[i][j]`, `(*p).items[k].v`,
+  `p[k].buf[i]`), is one heap cell: the pointer plus the record layout's
+  byte offsets and each index times its element size. Reads, writes,
+  contracts, `cppverify::modifies` footprints, reference bindings, and
+  reference arguments use it like any other cell.
+- Each access has two checks, as Frama-C's RTE plugin generates
+  `index_bound` beside `\valid`: every fixed-array index lies in its own
+  array (`0 <= i < 8`, kind `bounds`), and the address lies in the pointer's
+  object, its `valid(p, n)` extent or one object (`--check-ub`). The first
+  rejects `r->buf[8]`, whose address is `r->head`, inside `*r`; in
+  `p->grid[i][j]` it bounds `j` by the row, so `grid[0][4]` is rejected
+  although it is `grid[1][0]` in memory.
+- A whole record or array read through a pointer (`Ring copy = *r;`) and a
+  pointer to an array member (`const int *q = r->buf;`) are rejected. Such a
+  pointer would have to carry the member's extent, as a Rust slice carries
+  its length: the planned design gives a decayed member array an origin
+  whose object is the member, so its accesses are bounded by the array.
+
 ### 4. `cppverify::modifies(...)` frame condition
 
 ```cpp
@@ -1102,9 +1135,12 @@ void incr_first(int* a, int* b)
   `cppverify::modifies` cannot call it, and a caller without one forgets every cell.
   With a `valid` extent on such a callee the call is not supported.
 - Footprints:
-  - a cell: scalar `ref`, `p->field`, or `p[i]`, at its exact address;
+  - a cell: scalar `ref`, `p->field`, `p[i]`, or a field or array element
+    inside the record `p` addresses (`p->inner.x`, `p->buf[i]`), at its exact
+    address;
   - a range `p[lo : n]`: the `n` elements from `p[lo]`, half-open
-    `[lo, lo + n)` (Clang's array-section syntax);
+    `[lo, lo + n)` (Clang's array-section syntax), and likewise
+    `p->buf[lo : n]` for an array member;
   - a region `*p`: the object `p` addresses, which is its `valid(p, n)`
     extent when it has one and otherwise one object. A region of a single
     scalar object is one cell.
@@ -1255,9 +1291,12 @@ Interval shift(Interval r, int d)
 - No new syntax. `cppverify::spec` functions named `view()`, `elem()`, `size()`, etc. are a documented convention.
 - The verifier treats these spec function bodies as axioms (definitions), not as code to execute.
 - This is Verus's main abstraction idiom and the recommended style for non-trivial data structures.
-- Records are passed by value with scalar fields; a record holding an array
-  or a pointer is not yet in the verified subset, so a view of a buffer is a
-  spec over the pointer and its length (`cppverify::spec int sum(const int *p, int n)`).
+- A record passed by value has scalar fields. One that holds an array is
+  reached through a pointer, field by field and element by element, so its
+  view is a spec over that pointer
+  (`cppverify::spec int total(const Ring *r, int n)` reading `r->buf[n - 1]`),
+  as a view of a buffer is a spec over the pointer and its length
+  (`cppverify::spec int sum(const int *p, int n)`).
 
 ## Integer Semantics — summary
 
@@ -1868,7 +1907,8 @@ Subsequent bounded lifetime checkpoints added scalar `new`/`delete`,
 initialized-storage checks, aligned disjoint allocation,
 use-after-delete/double-delete rejection, first-class local provenance, and
 inferred fresh-owned scalar factory returns. Bounded promoted local objects,
-fixed arrays, scalar subobject references, modular slices, and general
+fixed arrays, scalar subobject references, the fields and fixed-array
+elements of a record a pointer addresses, modular slices, and general
 same-array pointer difference under `valid(p, n)` are also supported.
 Provenance across ownership-taking or recursive interfaces, pointer
 reinterpretation/cross-object arithmetic, aggregate/rvalue references,
