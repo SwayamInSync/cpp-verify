@@ -149,13 +149,28 @@ private:
   std::optional<VPlace> derefPlace(const Expr *PointerExpr, SourceLocation Loc);
   std::optional<VPlace> arrowFieldPlace(const MemberExpr *M);
   std::optional<VPlace> subscriptPlace(const ArraySubscriptExpr *AS);
+  /// The object \p PointerExpr addresses, as the root of a selection.
+  std::optional<VPlace> pointeePlace(const Expr *PointerExpr,
+                                     SourceLocation Loc);
+  /// p[k]: the element of the objects p addresses, bounded by their extent.
+  std::optional<VPlace> pointerElementPlace(const ArraySubscriptExpr *AS);
   /// Root-object discovery: peel no-op casts, array-to-pointer decays, dot
   /// member chains and fixed-array subscripts down to the enclosing local
   /// object. Returns the root only when it was promoted to one automatic
   /// byte-addressed object.
   const VarDecl *promotedRootLocal(const Expr *E) const;
-  /// Build the exact byte-offset place of a subobject of a promoted local.
-  std::optional<VPlace> promotedObjectPlace(const Expr *E);
+  /// The pointer whose pointee a chain of field and fixed-array element
+  /// selections starts at (p in *p, p->m, p[k], (*p).a.b[i]); null when the
+  /// chain does not start at a pointee.
+  const Expr *pointeeRootPointer(const Expr *E) const;
+  /// Why the decay of \p Array to a pointer is unsupported, in the terms of
+  /// what the array is.
+  std::string arrayDecayError(const Expr *Array) const;
+  /// The exact byte-offset place of a subobject, reached by field and
+  /// fixed-array element selections from a promoted local or from the
+  /// object a pointer addresses; each fixed-array index is bounded by its
+  /// array in the place's access condition.
+  std::optional<VPlace> objectPlace(const Expr *E);
   std::optional<uint64_t> recordFieldOffset(const FieldDecl *FD) const;
   /// Visit every scalar/pointer leaf of a promoted object type in offset order.
   bool forEachObjectLeaf(QualType Ty, uint64_t Offset,
@@ -226,6 +241,11 @@ private:
   void appendAssignment(const Expr *LHS, std::unique_ptr<VExpr> Value,
                         SourceLocation Loc,
                         std::vector<std::unique_ptr<VStmt>> &Out);
+  /// A store to a field or fixed-array element inside the object a pointer
+  /// addresses, with the element bounds of the place.
+  void appendPointeeStore(const Expr *LHS, std::unique_ptr<VExpr> Value,
+                          SourceLocation Loc,
+                          std::vector<std::unique_ptr<VStmt>> &Out);
   bool appendRecordCopy(const Expr *Source, const VarDecl *Target,
                         SourceLocation Loc,
                         std::vector<std::unique_ptr<VStmt>> &Out);
