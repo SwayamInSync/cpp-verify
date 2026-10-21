@@ -291,7 +291,8 @@ the object the argument addresses, its ``valid`` extent or else one object.
 Every other cell keeps its value, and the postcondition then re-establishes
 whatever the caller may rely on inside the footprints. Each footprint must
 also lie within the caller's own ``cppverify::modifies``, read in the caller's entry
-state. A callee without ``cppverify::modifies`` whose body (or a callee of it) may write
+state: its cells must be cells the caller may write, whichever pointer reaches
+them. A callee without ``cppverify::modifies`` whose body (or a callee of it) may write
 is treated as writing the whole heap; a conservative body scan keeps the heap
 for verified, acyclic read-only callees.
 A function that allocates or deallocates storage is verified as a standalone
