@@ -356,9 +356,11 @@ such as ``cppverify::modifies(p[i])`` and ``cppverify::modifies(p->field)``, ran
 that may write memory forgets the whole value heap, as does a region
 footprint under ``--no-check-ub``.
 
-A callee ``valid(q, length)`` extent can be instantiated from a caller
-``valid(p, n)`` extent only after proving a same-root, nonnegative subrange
-contained in ``[0, n]``. Empty one-past slices, transitive read-only
+A callee ``valid(q, length)`` extent can be instantiated from an argument
+only after proving that its elements lie in one of the caller's objects, such
+as a nonnegative subrange of a ``valid(p, n)`` extent contained in
+``[0, n]``; the argument may be a copy, a choice, a stepped pointer, or a
+callee's result whose contract places it. Empty one-past slices, transitive read-only
 forwarding, exact-cell and range writes, and region writes through a
 sub-slice are supported; every cell outside the written slice keeps its
 value.
