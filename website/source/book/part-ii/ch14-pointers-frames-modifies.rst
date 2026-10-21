@@ -273,10 +273,60 @@ the object alone would accept it. Each index is checked against its own
 array, as Frama-C's RTE guards are, and the counterexample is the full stack:
 the store's address is 65, which is ``s + 16 * 4`` with ``s = 1``.
 
-A pointer to the member array itself (``int *q = s->items;``) is not
-supported yet, because the pointer would have to carry the array's bounds.
-Index the member where it is used. :doc:`../../language/structs` lists the
-forms that are supported.
+A pointer into the member array can also walk it. The pointer may address
+only the array it comes from: ``s->items``, not the whole record, so a walk
+that runs one element too far reads ``s->size`` and fails:
+
+.. cppverify-example: fails count_past
+
+.. code-block:: cpp
+
+   struct Stack {
+     int items[16];
+     int size;
+   };
+
+   int count_zero(const Stack *s)
+     cv::pre(s != nullptr && 0 <= s->size && s->size <= 16)
+     cv::post(0 <= cv::result && cv::result <= s->size)
+   {
+     int n = 0;
+     for (const int *q = s->items; q != s->items + s->size; q = q + 1)
+       cv::invariant(s->items <= q && q <= s->items + s->size)
+       cv::invariant(0 <= n && n <= q - s->items)
+       cv::decreases(s->items + s->size - q)
+     {
+       if (*q == 0)
+         n = n + 1;
+     }
+     return n;
+   }
+
+   int count_past(const Stack *s)
+     cv::pre(s != nullptr && 0 <= s->size && s->size <= 16)
+   {
+     int n = 0;
+     for (const int *q = s->items; q != s->items + s->size + 1; q = q + 1)
+       cv::invariant(s->items <= q && q <= s->items + s->size + 1)
+       cv::invariant(0 <= n && n <= q - s->items)
+       cv::decreases(s->items + s->size + 1 - q)
+     {
+       if (*q == 0)
+         n = n + 1;
+     }
+     return n;
+   }
+
+.. code-block:: text
+
+   Verified: count_zero [backend=z3]
+   stack.cpp:31:10: error: verification failed: count_past [...::bounds@31:10#2] (counterexample: n [ssa=n_1] [type=i32] = 0, n [ssa=n_2] [type=i32] = 0, q [ssa=q_1] [type=pointer] = 1, q [ssa=q_2] [type=pointer] = 65, s [ssa=s_0] [type=pointer] = 1; trace: loop.entry@26:3 -> loop.inductive iteration@26:3 condition=true) [backend=z3] [reason=counterexample]
+
+In ``count_past`` the solver chooses a full stack, and ``q`` reaches 65, the
+address of ``s->size`` with ``s`` at 1. The verifier itself states that a
+pointer stepped through the array stays a whole number of elements from its
+start, as a generated invariant it proves, so the walk never lands between
+elements. :doc:`../../language/structs` lists the forms that are supported.
 
 Declaring a checked extent
 --------------------------
