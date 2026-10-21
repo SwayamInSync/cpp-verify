@@ -121,6 +121,13 @@ parameters did not compile. Its contracts now compile and instantiate, and
 are ignored with a ``-Wcontract-unsupported`` warning; a template without
 contracts no longer stops the file (:doc:`language/functions-loops`).
 
+**Apple's assertion macros.** On Apple targets ``<AssertMacros.h>`` defines a
+``check(assertion)`` macro, which turned every ``cppverify::check(...)`` after
+it into ``error: expected unqualified-id``. ``-fverify-contracts`` now defines
+``__ASSERT_MACROS_DEFINE_VERSIONS_WITHOUT_UNDERSCORES`` to ``0`` on Apple
+targets unless the command line defines it, so the header defines only its
+``__Check``, ``__Require``, and ``__Verify`` names (:doc:`language/syntax`).
+
 Running cpp-verify
 ~~~~~~~~~~~~~~~~~~
 

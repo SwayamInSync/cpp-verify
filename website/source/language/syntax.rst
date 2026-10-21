@@ -191,3 +191,62 @@ Full table:
    * - ``cppverify::valid(p, n)``
      - A top-level condition of ``cppverify::pre``; an error anywhere else
      - ``p`` points to ``n`` objects
+
+Macros named like a construct
+-----------------------------
+
+The preprocessor runs before the parser sees a construct, so a function-like
+macro named like a construct expands inside the qualified name. A header that
+defines ``check(condition)`` breaks every ``cppverify::check`` after it:
+
+.. cppverify-example: rejects
+
+.. code-block:: cpp
+
+   #define check(condition) ((void)0)
+
+   int positive(int x)
+     cv::pre(x > 0)
+   {
+     cv::check(x > 0);
+     return x;
+   }
+
+.. code-block:: text
+
+   macros.cpp:6:7: error: expected unqualified-id
+
+``#undef check`` after the header's ``#include`` restores the construct:
+
+.. code-block:: cpp
+
+   #define check(condition) ((void)0)
+   #undef check
+
+   int positive(int x)
+     cv::pre(x > 0)
+   {
+     cv::check(x > 0);
+     return x;
+   }
+
+.. code-block:: text
+
+   Verified: positive [backend=z3]
+
+An object-like macro has the same effect on a construct written without
+parentheses, such as ``cv::result``.
+
+On Apple platforms (macOS, iOS, and the others), ``<AssertMacros.h>``, which
+some of Apple's framework headers include, defines ``check(assertion)`` unless
+``__ASSERT_MACROS_DEFINE_VERSIONS_WITHOUT_UNDERSCORES`` is ``0``. With
+``-fverify-contracts`` on an Apple target, the compiler therefore defines it
+to ``0`` before any header, unless the command line defines it, and
+``cppverify::check`` works next to that header. The header then defines only
+its ``__Check``, ``__Require``, and ``__Verify`` macros, the names Apple
+recommends. A file that uses the old names (``check``, ``require``,
+``verify``, and their variants) can switch to the ``__`` names, or keep the
+old ones with ``-D__ASSERT_MACROS_DEFINE_VERSIONS_WITHOUT_UNDERSCORES=1`` on
+the command line; ``cppverify::check`` then works only after an ``#undef
+check``. Defining it to ``1`` with ``#define`` in the source also works, with
+a ``-Wmacro-redefined`` warning.

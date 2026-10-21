@@ -1533,6 +1533,11 @@ deleted functions (`void pre(bool condition) = delete;`) and the others as
 unavailable enumerators (`result`, `inductive`, `spec`, ...), so any use the
 parser does not take as a construct is an error. `InitPreprocessor` includes
 the header in every C++ translation unit compiled with `-fverify-contracts`.
+On Darwin targets it first defines
+`__ASSERT_MACROS_DEFINE_VERSIONS_WITHOUT_UNDERSCORES` to 0 unless the command
+line defines it: otherwise Apple's `<AssertMacros.h>` defines
+`check(assertion)`, and a function-like macro expands inside
+`cppverify::check(...)` before the parser can recognize the construct.
 
 Misuse is diagnosed where the parser would otherwise fail: a construct in the
 wrong position (`'cppverify::pre' follows a function's parameter list`), an

@@ -1659,10 +1659,18 @@ void clang::InitializePreprocessor(Preprocessor &PP,
                           InitOpts.ImplicitPCHInclude);
 
   // CppVerify: the namespace cppverify needs no #include.
-  if (PP.getLangOpts().VerifyContracts && PP.getLangOpts().CPlusPlus)
+  if (PP.getLangOpts().VerifyContracts && PP.getLangOpts().CPlusPlus) {
+    // Apple's <AssertMacros.h> defines check(assertion) unless this is 0,
+    // which would expand cppverify::check.
+    if (PP.getTargetInfo().getTriple().isOSDarwin())
+      Builder.append(
+          "#ifndef __ASSERT_MACROS_DEFINE_VERSIONS_WITHOUT_UNDERSCORES\n"
+          "#define __ASSERT_MACROS_DEFINE_VERSIONS_WITHOUT_UNDERSCORES 0\n"
+          "#endif");
     Builder.append("#if __has_include(<cppverify.h>)\n"
                    "#include <cppverify.h>\n"
                    "#endif");
+  }
 
   // Process -include directives.
   for (unsigned i = 0, e = InitOpts.Includes.size(); i != e; ++i) {
