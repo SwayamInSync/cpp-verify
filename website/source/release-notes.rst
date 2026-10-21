@@ -154,6 +154,12 @@ quadratic (a 250-term sum lowers in about 5 s instead of 120 s), and an
 expression nested more than 256 operations deep is reported where it is
 (:doc:`language/limitations`).
 
+**Errors point at the code.** An error about a construct the verifier does not
+represent named only the function, as in ``error: pick: unsupported statement:
+SwitchStmt``. It now gives the file, line, and column, and shows the line with
+a caret under the construct, as a compiler error does; its JSON record carries
+the range (:doc:`language/tooling`).
+
 **Z3 errors.** A Z3 call that failed went unnoticed, and a later step could
 report something unrelated. The query now ends ``Unresolved`` with reason
 ``encoding.failed`` and Z3's message (:doc:`language/tooling`).

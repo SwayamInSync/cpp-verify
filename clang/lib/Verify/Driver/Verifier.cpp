@@ -24,6 +24,7 @@
 #include "DumpIR.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/Basic/SourceManager.h"
+#include "clang/Frontend/TextDiagnostic.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
@@ -1075,6 +1076,9 @@ struct VerifyDiagnostic {
   /// interrupted function, which its Interrupted line replaces, or a vacuity
   /// finding that rests on a fact that is not established.
   bool Hidden = false;
+  /// For an error about source the verifier cannot represent: that source,
+  /// shown with its line as a compiler error is.
+  SourceRange Span;
 };
 
 static std::string backendSuffix(const VerifyResult &Result) {
@@ -1730,8 +1734,12 @@ public:
         Converter.getUnverifiedCallers();
     for (const auto &[Loc, Message] : Converter.getWarnings())
       Diags.push_back({VerifyDiagnostic::Warning, Message, Loc});
-    for (const std::string &Err : Converter.getErrors())
-      Diags.push_back({VerifyDiagnostic::Error, Err});
+    for (const ConversionError &Err : Converter.getErrors()) {
+      VerifyDiagnostic D{VerifyDiagnostic::Error, Err.Message,
+                         Err.Range.getBegin()};
+      D.Span = Err.Range;
+      Diags.push_back(std::move(D));
+    }
     if (!Converter.getErrors().empty())
       return false;
     if (Functions.empty()) {
@@ -3836,6 +3844,13 @@ public:
         Source.Column = Location.getColumn();
         Source.EndLine = Source.Line;
         Source.EndColumn = Source.Column;
+        if (D.Span.isValid())
+          if (PresumedLoc End =
+                  Ctx.getSourceManager().getPresumedLoc(D.Span.getEnd());
+              End.isValid()) {
+            Source.EndLine = End.getLine();
+            Source.EndColumn = End.getColumn();
+          }
       }
     }
     if (Source.isValid())
@@ -4006,6 +4021,16 @@ public:
         continue;
       if (Opts.Diagnostics == DiagnosticFormat::Json) {
         printJSONDiagnostic(D, OS);
+        continue;
+      }
+      if (D.K == VerifyDiagnostic::Error && D.Span.isValid()) {
+        DiagnosticOptions DiagOpts;
+        DiagOpts.ShowPresumedLoc = true;
+        TextDiagnostic Text(OS, Ctx.getLangOpts(), DiagOpts);
+        Text.emitDiagnostic(
+            FullSourceLoc(D.Span.getBegin(), Ctx.getSourceManager()),
+            DiagnosticsEngine::Error, D.Message,
+            CharSourceRange::getTokenRange(D.Span), {});
         continue;
       }
       if (D.Loc.isValid()) {

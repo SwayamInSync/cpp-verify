@@ -1436,7 +1436,12 @@ Clang-style text; `--diagnostics-format=json` emits one
 `cppverify.diagnostic/1` JSON object per verification result, including source
 ranges, typed model values, trace events, backend/bound, and a stable reason
 code. Command-line/frontend errors and output combined with IR dumps are not a
-pure JSON stream.
+pure JSON stream. A construct the converter cannot represent is a
+`ConversionError` at a source range: the innermost declaration, statement, or
+expression being converted (`ASTConverter::CurrentRange`), unless the site
+names a place of its own, such as a function for the checks made after every
+function is converted. It is printed with Clang's `TextDiagnostic`, line and
+caret included, as a compiler error is, and its JSON record carries the range.
 
 ## Modular Verification Protocol
 

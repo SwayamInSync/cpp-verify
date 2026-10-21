@@ -70,6 +70,33 @@ file was verified anyway, under other options than the ones given, and
 ``cpp-verify`` exited with status 0. A ``.h`` input was compiled as C, which
 printed ``error: invalid argument '-std=c++17' not allowed with 'C'``.
 
+A construct that cpp-verify does not represent yet, in a function it
+verifies, is an error at that construct, shown with its line and a caret as a
+compiler error is. Like a compiler error it stops the file: no function of
+the file gets a verdict (:doc:`limitations` lists what is not represented).
+
+.. cppverify-example: rejects
+
+.. code-block:: cpp
+
+   int pick(int x)
+     cv::post(cv::result >= 0)
+   {
+     switch (x) { case 1: return 1; default: return 0; }
+   }
+
+.. code-block:: text
+
+   pick.cpp:4:3: error: pick: unsupported statement: SwitchStmt
+       4 |   switch (x) { case 1: return 1; default: return 0; }
+         |   ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+An error about the function as a whole, such as a recursion without a
+measure, points at its name. With ``--diagnostics-format=json`` the record
+carries the range, here ``"source":{"column":3,"end_column":53,"end_line":4,
+"file":"pick.cpp","line":4}``. Before 0.2 such an error named only the
+function: ``error: pick: unsupported statement: SwitchStmt``.
+
 Stopping a run with Ctrl-C
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
