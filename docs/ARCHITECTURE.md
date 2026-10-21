@@ -173,7 +173,9 @@ operation is a `SpecCall` whose identity is `__cppverify.<op>`, such as
 `cppverify::valid(p, n)` becomes a call of the synthesized builtin spec
 `__cppverify_valid(p, n)` (body `true`, marked `IsBuiltin` and never
 reported), so the extent marker scan treats it exactly like a user-declared
-`valid`.
+`valid`. A function that applies either anywhere but as a top-level condition
+of a precondition, where it would mean `true`, is rejected under `--check-ub`
+(`misplacedValidMarker`, `Transform/UBChecks.cpp`).
 
 **Mathematical values in ghost and proof code:** a spec result or a
 collection length, element, or count keeps its mathematical type wherever

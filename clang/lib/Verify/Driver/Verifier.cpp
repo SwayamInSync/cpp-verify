@@ -2157,6 +2157,8 @@ public:
             UnrolledFn = LoopUnroller::unroll(*PreparedFn, Opts.BMCUnroll);
             WorkFn = &*UnrolledFn;
           }
+        } else if (Opts.CheckUB && !Fn->IsBuiltin) {
+          UBError = misplacedValidMarker(*Fn);
         }
 
         if (UBError) {

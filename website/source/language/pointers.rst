@@ -539,6 +539,90 @@ top-level conjunction clause of a ``cppverify::pre`` with a bare complete-object
 and each pointer may have only one marker; ambiguous forms (under ``||``,
 ``!``, or a conditional, or a second marker for one pointer) fail closed.
 
+Where the marker may appear
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``valid(p, n)`` is not a condition that a state satisfies or violates. In a
+precondition it declares the extent the caller provides, and the verifier
+checks every access against that extent; that is its whole meaning. Written
+anywhere else (a ``cppverify::post``, a loop invariant, a ``cppverify::check``,
+ghost code, or a spec function) it would be a condition that always holds, so
+a claim made with it would verify without saying anything. That is an error
+for the function, which is then not verified; the other functions of the file
+still are:
+
+.. cppverify-example: rejects
+
+.. code-block:: cpp
+
+   int *start_of(int *buf)
+     cv::pre(valid(buf, 4))
+     cv::post(valid(cv::result, 4))
+   {
+     return buf;
+   }
+
+.. code-block:: text
+
+   error: start_of: valid(p, n) declares an extent only as a top-level condition of a cppverify::pre, and has no meaning in a postcondition
+
+The message ends with the place it found the marker: a postcondition, a loop
+invariant, a ``cppverify::check``, ghost code, or a spec function. The same
+holds for a marker you declare yourself as a spec named ``valid``.
+
+To tell callers where a result points, relate it to a parameter whose extent
+they know; their own precondition then covers the accesses through it:
+
+.. code-block:: cpp
+
+   int *start_of(int *buf)
+     cv::pre(valid(buf, 4))
+     cv::post(cv::result == buf)
+   {
+     return buf;
+   }
+
+   int fourth(int *a)
+     cv::pre(valid(a, 4) && a[3] == 7)
+     cv::post(cv::result == 7)
+   {
+     int *q = start_of(a);
+     return q[3];
+   }
+
+.. code-block:: text
+
+   Verified: start_of [backend=z3]
+   Verified: fourth [backend=z3]
+
+An extent declared by the precondition holds for the whole function, so a
+loop invariant does not repeat it. The invariant bounds the index, and each
+access is checked against the extent:
+
+.. code-block:: cpp
+
+   int sum4(const int *a, int n)
+     cv::pre(valid(a, n) && n >= 0 && n <= 4)
+     cv::pre(cv::forall(k, 0, n, 0 <= a[k] && a[k] <= 100))
+     cv::post(0 <= cv::result && cv::result <= 100 * n)
+   {
+     int s = 0;
+     for (int i = 0; i < n; i = i + 1)
+       cv::invariant(0 <= i && i <= n && 0 <= s && s <= 100 * i)
+       cv::decreases(n - i)
+     {
+       s = s + a[i];
+     }
+     return s;
+   }
+
+.. code-block:: text
+
+   Verified: sum4 [backend=z3]
+
+With ``--no-check-ub`` every marker, in a precondition too, folds to ``true``
+with a warning, and a misplaced one is not an error.
+
 ``valid`` exists only for verification, like the spec collections of the same
 header; Sema rejects it in executable code. Write ``cppverify::valid`` or add
 ``using cppverify::valid;``. Programs written before the header may declare
