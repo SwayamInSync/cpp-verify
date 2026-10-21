@@ -503,6 +503,37 @@ assume(Q[Result := y, Old(params) := args]);
   cell, materializes one disjoint initialized scalar object, then assumes the
   ordinary postconditions against that new heap.
 
+**Contract well-formedness.** Every contract clause must be defined where it is
+evaluated, as Dafny's per-method `CheckWellFormed$$f` procedure requires. Its
+definedness checks are the core ones (`collectSafety`) and, under
+`--check-ub`, the memory checks of the clause as written: `instrumentUBChecks`
+records them before spec inlining, as it checks the body's accesses, beside
+each written precondition and postcondition (`VFunction::PreconditionChecks`,
+`PostconditionChecks`), each loop invariant (`VWhileStmt::InvariantChecks`),
+and each `cppverify::check` (`VContractAssertStmt::MemoryChecks`). A read under
+`old` is checked in the entry state, a quantifier's body at every value of
+its range, and in a pre- or postcondition every parameter is its entry value.
+Checking the inlined clause instead would check a spec's own reads, though a
+spec is total, and repeat a lifted helper's argument reads for every use in
+its body. Cloning and loop unrolling copy the records; passivization joins
+each clause's memory checks to its core checks, one obligation per kind.
+
+`Passivizer::contract` builds a separate passive program, `f.contract`
+(identity `f::contract`), on the interface version of `f` (UB-instrumented,
+not spec-inlined: the one call sites use), so a lifted helper's checks are
+reported at its call. `enter` assumes only the generated preconditions
+(validity, separation, type invariants) and the entry facts; each written
+precondition then gets its definedness asserts and is assumed, in order, so
+each clause is checked where the ones before it hold. For an external
+contract (trusted, or without a definition, `IsExternalContract`)
+`returnAnywhere` makes the state callers assume: `havocFootprints`, the frame
+code `emitCallStmt` uses, over its own footprints, and a fresh result. The
+generated result validity is assumed, and each written postcondition is
+checked and assumed in turn. The postconditions of a verified body are
+checked in `run()` instead, in its final state, each clause's checks guarded
+by the clauses before it. Loop invariants and `cppverify::check` get their
+memory checks where they are checked.
+
 ## Layer 3: Canonical Obligation IR
 
 `buildObligationModule` is the only passive-to-logic lowering path. It folds the
@@ -1687,6 +1718,9 @@ caret included, as a compiler error is, and its JSON record carries the range.
       at once, and with a proof cache only the ordered queries run.
    f. Report verified / counterexample / unresolved / bounded-safe / exported,
       or kernel-certified.
+   g. Check that its contract is defined (`Passivizer::contract`) when that
+      program asserts anything, on the spec backend (Z3 under BMC); only a
+      failure is reported, as `contract of f`.
 3. For each failure, run a second pass with `cppverify::recommends` checks → warnings.
 4. Qualify each verdict by what it rests on:
    - a trusted function reports `Trusted`; an unmarked contract without a
@@ -1701,10 +1735,12 @@ caret included, as a compiler error is, and its JSON record carries the range.
      that is not, is demoted (`spec.termination`, `spec.reads`,
      `spec.post`, `spec.inductive`, `callee.contract`), and a demoted check
      of a spec stops establishing its facts (`SpecReliance::Establishes`), a
-     demoted function its contract, until nothing changes;
+     demoted function its contract, until nothing changes; a contract whose
+     well-formedness check is not settled is not established either;
    - a least fixpoint then rejects circles: starting from no established
      fact, a verdict is sound once every fact it needs is, and a fact once
-     every verdict producing it is sound. It needs its callees' contracts
+     every verdict producing it is sound (a contract is produced by its
+     function's verdict and by its well-formedness check). It needs its callees' contracts
      and its proof blocks' callees, the definitions and frames of the specs
      it mentions, and the postconditions and unfoldings its module assumes
      (`PassiveProgram`/`ObligationModule::AssumedPosts` and
