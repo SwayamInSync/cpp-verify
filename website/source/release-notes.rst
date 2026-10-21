@@ -77,6 +77,21 @@ that returns ``nullptr``. In a postcondition, a loop invariant, a
 ``cppverify::check``, ghost code, or a spec function it is now an error for
 that function (:doc:`language/pointers`).
 
+**Contracts must be defined.** A contract is C++, evaluated where the function
+is called and where it returns, but 0.1.1 never checked that it was defined
+there: a precondition was only assumed, and the reads of a postcondition, a
+loop invariant, or a ``cppverify::check`` were not checked against extents. The
+logic defines what C++ does not, so a trusted ``cv::post(1000 / cv::result >
+0)`` excluded a result of 0, and a caller that divided by that result
+verified. Each clause is now checked where it is evaluated: preconditions in
+order, each where the ones before it hold; postconditions in the state the
+function returns in, or for a trusted function or one without a definition in
+every state its frame allows; and every clause with the memory checks of the
+body. A clause that may be undefined fails as ``contract of f``, and callers
+that rely on it are ``Unresolved`` with reason ``callee.contract``. A contract
+that tests a condition after using it, as ``cv::pre(a / b > 0 && b != 0)``
+does, needs the test first (:doc:`language/functions-loops`).
+
 **Clang's own analyses.** ``noexcept`` of a contract expression crashed or hung
 the compiler, as did a contract expression in a C++98 constant; the static
 analyzer reported nothing after a ghost block; libclang hid the constructs;
