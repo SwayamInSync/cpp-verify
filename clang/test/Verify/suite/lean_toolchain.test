@@ -1,0 +1,24 @@
+# Certification runs the Lean the project pins. Through elan, which picks a
+# toolchain by the working directory, every step names the pin; a lake
+# outside elan must report the pinned Lean.
+#
+# UNSUPPORTED: system-windows
+# RUN: rm -rf %t %t.project && mkdir -p %t/elan %t/plain
+# RUN: %cpp-verify --backend=lean --lean-project=%t.project %S/Inputs/lean_toolchain.cpp --
+#
+# A fake elan, with lake as its proxy, records what it is asked.
+# RUN: printf '#!/bin/sh\necho "$*" >> %t/elan.log\ncase "$*" in *--version*) echo "Lake version 5.0.0 (Lean version 4.35.0)";; *) exit 1;; esac\n' > %t/elan/elan
+# RUN: chmod +x %t/elan/elan && ln -s elan %t/elan/lake
+# RUN: not env PATH=%t/elan %cpp-verify --backend=lean --lean-project=%t.project --lean-certify %S/Inputs/lean_toolchain.cpp -- 2>&1 | FileCheck %s --check-prefix=ELAN
+# RUN: FileCheck %s --input-file=%t/elan.log --check-prefix=ELAN-LOG
+#
+# RUN: printf '#!/bin/sh\necho "Lake version 5.0.0 (Lean version 4.1.0)"\n' > %t/plain/lake
+# RUN: chmod +x %t/plain/lake
+# RUN: not env PATH=%t/plain %cpp-verify --backend=lean --lean-project=%t.project --lean-certify %S/Inputs/lean_toolchain.cpp -- 2>&1 | FileCheck %s --check-prefix=PLAIN -DDIR=%t/plain
+
+# ELAN: Unresolved: lean obligation: trivial (Lean certification failed: command failed with exit code 1
+
+# ELAN-LOG: {{^}}+leanprover/lean4:v4.35.0 --version{{$}}
+# ELAN-LOG-NEXT: {{^}}+leanprover/lean4:v4.35.0 --dir={{.*}}.project build CppVerify.Generated CppVerify.User{{$}}
+
+# PLAIN: Unresolved: lean obligation: trivial (Lean certification failed: the project pins leanprover/lean4:v4.35.0, but [[DIR]]/lake runs Lean 4.1.0; install elan (https://github.com/leanprover/elan), which runs the pinned toolchain)

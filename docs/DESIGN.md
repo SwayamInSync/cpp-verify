@@ -1877,14 +1877,16 @@ type, a Boolean is a proposition, and machine division by zero is SMT-LIB's, as 
 the certifier (ARCHITECTURE.md, "Lean Encoding"). A unit test checks that
 Lean's evaluation agrees with the certifier on random ground terms and on
 every operator at its extreme operands. Standalone output is an unchecked scratch-pad.
-Editable project mode pins Lean 4.32.2, overwrites only generated semantics and
+Editable project mode pins Lean 4.35.0 (`LeanToolchain`), overwrites only generated semantics and
 the active check module, and preserves reusable user lemmas and one proof file
 per stable obligation goal. Initial generation is `Exported`. Certification
 compiles the user module and every active proof with `sorry` as an error, then
 checks aggregate theorem types and axiom dependencies. Only foundational Lean
 axioms are permitted; user `axiom`/`opaque` proof shortcuts, stale proof types,
 missing proofs, malformed output, and toolchain failures remain `Unresolved`.
-Only complete success is `Certified`.
+Only complete success is `Certified`. Certification runs the pinned toolchain
+whatever elan's default is, and a project pinned by an earlier release moves to
+the current pin with a warning; any other pin is an error.
 
 `--check-ub` extent instrumentation is applied before all Z3, cvc5, portfolio,
 BMC, and Lean obligation construction. Direct Lean export and canonical archive

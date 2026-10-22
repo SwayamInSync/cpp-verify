@@ -279,6 +279,14 @@ queries (:doc:`language/tooling`).
 which requires extended arrays for constant arrays; such a query now enables
 them itself (:doc:`language/tooling`).
 
+**Lean 4.35.0.** Lean projects pin ``leanprover/lean4:v4.35.0``. A project 0.1
+generated, pinned to ``v4.32.2``, moves to the new pin the next time cpp-verify
+writes it, with a warning; a proof that no longer builds needs updating for that
+Lean. Certification ran elan's default toolchain, which need not be the pin,
+since elan picks one by the working directory. It now names the pin, and
+refuses a ``lake`` outside elan that reports another Lean
+(:doc:`language/tooling`).
+
 **clang-format.** A range footprint is written ``p[lo : n]``, not ``p [lo:n]``
 (:doc:`language/tooling`).
 
@@ -288,7 +296,7 @@ Data formats
 Archives stay ``cppverify.obligation/2`` and JSON diagnostics
 ``cppverify.diagnostic/1``. JSON records may carry the status
 ``proved-obligations`` (archive replay) and the reason ``interrupted``
-(Ctrl-C).
+(Ctrl-C). Lean projects pin ``leanprover/lean4:v4.35.0``.
 
 0.1.1
 -----

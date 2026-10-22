@@ -6,7 +6,7 @@
 // RUN: test -f %t.project/CppVerify/User.lean
 // RUN: test -f %t.project/CppVerify/Check.lean
 // RUN: test -f %t.project/CppVerify/Proofs/Goal_583ed320b83a75f8.lean
-// RUN: grep -Fxq 'leanprover/lean4:v4.32.2' %t.project/lean-toolchain
+// RUN: grep -Fxq 'leanprover/lean4:v4.35.0' %t.project/lean-toolchain
 // RUN: FileCheck %s --input-file=%t.project/CppVerify/Generated.lean --check-prefix=GENERATED
 // RUN: grep -Fq 'import CppVerify.Proofs.Goal_583ed320b83a75f8' %t.project/CppVerify/Check.lean
 // RUN: echo '/- USER_KEEP -/' >> %t.project/CppVerify/User.lean
@@ -14,6 +14,13 @@
 // RUN: %cpp-verify --backend=lean --lean-project=%t.project %s -- 2>&1 | FileCheck %s --check-prefix=EXPORT
 // RUN: grep -Fq 'USER_KEEP' %t.project/CppVerify/User.lean
 // RUN: grep -Fq 'PROOF_KEEP' %t.project/CppVerify/Proofs/Goal_583ed320b83a75f8.lean
+// A project an earlier release generated moves to the current pin, and keeps
+// its proofs; a pin no release wrote is the user's, and an error.
+// RUN: echo 'leanprover/lean4:v4.32.2' > %t.project/lean-toolchain
+// RUN: %cpp-verify --backend=lean --lean-project=%t.project %s -- 2>&1 | FileCheck %s --check-prefix=MOVED
+// RUN: grep -Fxq 'leanprover/lean4:v4.35.0' %t.project/lean-toolchain
+// RUN: grep -Fq 'PROOF_KEEP' %t.project/CppVerify/Proofs/Goal_583ed320b83a75f8.lean
+// RUN: %cpp-verify --backend=lean --lean-project=%t.project %s -- 2>&1 | FileCheck %s --check-prefix=EXPORT --implicit-check-not=warning
 // RUN: echo 'leanprover/lean4:v4.31.0' > %t.project/lean-toolchain
 // RUN: not %cpp-verify --backend=lean --lean-project=%t.project %s -- 2>&1 | FileCheck %s --check-prefix=PIN
 // RUN: not %cpp-verify --backend=lean --lean-project=%t.empty --lean-certify %S/Inputs/lean_no_obligations.cpp -- 2>&1 | FileCheck %s --check-prefix=EMPTY
@@ -27,5 +34,7 @@ void trivial()
 // GENERATED-NOT: unchecked Lean scratch-pad
 // GENERATED: function: trivial
 // GENERATED: source: {{.*}}lean_project.cpp:{{[0-9]+:[0-9]+}}
-// PIN: Lean project uses toolchain 'leanprover/lean4:v4.31.0'; expected 'leanprover/lean4:v4.32.2'
+// MOVED: warning: the Lean project {{.*}}.project pinned leanprover/lean4:v4.32.2, which an earlier release of cpp-verify wrote; it now pins leanprover/lean4:v4.35.0, so a proof that no longer builds needs updating for that Lean
+// MOVED-NEXT: Exported: lean obligation: trivial
+// PIN: Lean project uses toolchain 'leanprover/lean4:v4.31.0'; expected 'leanprover/lean4:v4.35.0'
 // EMPTY: Unresolved: Lean certification requires at least one proof obligation

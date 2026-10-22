@@ -1430,13 +1430,26 @@ class Verifier {
       if (!Existing)
         return llvm::createStringError(Existing.getError(),
                                        "cannot read Lean toolchain pin");
-      if (Existing.get()->getBuffer().trim() !=
-          llvm::StringRef(Toolchain).trim())
-        return llvm::createStringError(
-            llvm::inconvertibleErrorCode(),
-            "Lean project uses toolchain '%s'; expected '%s'",
-            Existing.get()->getBuffer().trim().str().c_str(),
-            llvm::StringRef(Toolchain).trim().str().c_str());
+      const std::string Pin = Existing.get()->getBuffer().trim().str();
+      if (Pin != LeanToolchain) {
+        // A pin an earlier release wrote is moved with the release; any
+        // other is the user's, and the generated semantics need ours.
+        if (!llvm::is_contained(EarlierLeanToolchains, Pin))
+          return llvm::createStringError(
+              llvm::inconvertibleErrorCode(),
+              "Lean project uses toolchain '%s'; expected '%s'", Pin.c_str(),
+              LeanToolchain.str().c_str());
+        if (llvm::Error Error = writeTextFile(ToolchainPath, Toolchain))
+          return std::move(Error);
+        Diags.push_back(
+            {VerifyDiagnostic::Warning,
+             "the Lean project " + Root + " pinned " + Pin +
+                 ", which an earlier release of cpp-verify wrote; it now "
+                 "pins " +
+                 LeanToolchain.str() +
+                 ", so a proof that no longer builds needs updating for "
+                 "that Lean"});
+      }
     } else if (llvm::Error Error = writeTextFile(ToolchainPath, Toolchain)) {
       return std::move(Error);
     }
@@ -1500,13 +1513,48 @@ class Verifier {
     const std::string &Root = leanProjectRoot();
     const std::string LogBase =
         leanProjectPath(Root, {".cppverify-certification"});
+    // Every step runs the Lean the project pins. elan picks a toolchain by
+    // the working directory, not by --dir, so its proxy is given the pin;
+    // and whatever runs, lake must report the pinned Lean.
+    std::vector<std::string> Launcher = {"lake"};
+    auto Elan = llvm::sys::findProgramByName("elan");
+    bool ViaElan = false;
+    if (!Elan || llvm::sys::fs::equivalent(*Lake, *Elan, ViaElan))
+      ViaElan = false;
+    if (ViaElan)
+      Launcher.push_back(("+" + LeanToolchain).str());
     auto runLake = [&](std::vector<std::string> Arguments,
                        llvm::StringRef Stage) -> llvm::Expected<std::string> {
-      std::vector<std::string> Command = {"lake", "--dir=" + Root};
+      std::vector<std::string> Command = Launcher;
+      Command.push_back("--dir=" + Root);
       Command.insert(Command.end(), std::make_move_iterator(Arguments.begin()),
                      std::make_move_iterator(Arguments.end()));
       return executeWithLogs(*Lake, Command, LogBase + "-" + Stage.str());
     };
+
+    // lake takes --version alone.
+    std::vector<std::string> Query = Launcher;
+    Query.push_back("--version");
+    auto Reported = executeWithLogs(*Lake, Query, LogBase + "-version");
+    if (!Reported)
+      return Reported.takeError();
+    const llvm::StringRef Pinned =
+        LeanToolchain.substr(LeanToolchain.find(":v") + 2);
+    llvm::StringRef Version = *Reported;
+    if (size_t At = Version.find("Lean version "); At != llvm::StringRef::npos)
+      Version =
+          Version.substr(At + std::strlen("Lean version "))
+              .take_while([](char C) { return llvm::isDigit(C) || C == '.'; });
+    else
+      Version = "";
+    if (Version != Pinned)
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "the project pins %s, but %s runs Lean %s; install elan "
+          "(https://github.com/leanprover/elan), which runs the pinned "
+          "toolchain",
+          LeanToolchain.str().c_str(), Lake->c_str(),
+          Version.empty() ? "of an unknown version" : Version.str().c_str());
 
     if (auto Build = runLake({"build", "CppVerify.Generated", "CppVerify.User"},
                              "build");
