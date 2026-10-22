@@ -2,6 +2,7 @@
 #include "Verifier.h"
 #include "../Backend/CVC5Backend.h"
 #include "../Backend/Certify.h"
+#include "../Backend/ChildProcess.h"
 #include "../Backend/Induction.h"
 #include "../Backend/LeanBackend.h"
 #include "../Backend/LogicTerms.h"
@@ -22,6 +23,7 @@
 #include "../Transform/UBChecks.h"
 #include "CppVerifyVersion.h"
 #include "DumpIR.h"
+#include "LeanAutomation.h"
 #include "LeanCertifier.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/Basic/SourceManager.h"
@@ -39,11 +41,14 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/ThreadPool.h"
+#include "llvm/Support/Threading.h"
 #include "llvm/Support/raw_ostream.h"
+#include <atomic>
 #include <chrono>
 #include <iterator>
 #include <mutex>
 #include <optional>
+#include <thread>
 #include <tuple>
 
 using namespace clang;
@@ -1052,6 +1057,9 @@ struct VerifyDiagnostic {
   SourceLocation Loc;
   std::string FunctionName;
   std::optional<VerifyResult> Result;
+  /// For an export to a Lean project: of its goals, how many cppverify_auto
+  /// proves.
+  unsigned LeanAutomatic = 0;
   /// A proof by a solver, by Lean, or by both, which establishes what it
   /// proves.
   bool isProof() const {
@@ -1295,40 +1303,78 @@ struct LeanProofRecord {
   std::string Hash;
   std::string StableId;
   std::string BodyPrefix;
-  /// The stub cpp-verify wrote, never edited: nothing in it is the user's.
+  /// The file cpp-verify wrote, never edited: a stub, or the proof
+  /// cppverify_auto found. Nothing in it is the user's.
   bool Pristine = false;
+  /// The proof cppverify_auto found.
+  bool Automatic = false;
+  /// What the header says automation made of the goal, and which revision
+  /// of it.
+  std::string Automation;
 };
 
-// A stub proves the goal through its readable form, its names introduced.
-static std::string leanProofStubHead(llvm::StringRef Goal) {
-  return "import CppVerify.User\n\ntheorem " + Goal.str() +
-         "_proof : " + Goal.str() + " := by\n  apply " + Goal.str() +
-         ".of_readable\n";
+// A proof starts from the goal's readable form, its names introduced. Stubs
+// before cppverify_auto did not import it.
+static std::string leanProofHead(llvm::StringRef Goal, bool Automation = true) {
+  return "import CppVerify.User\n" +
+         std::string(Automation ? "import CppVerify.Auto\n" : "") +
+         "\ntheorem " + Goal.str() + "_proof : " + Goal.str() +
+         " := by\n  apply " + Goal.str() + ".of_readable\n";
 }
 
-static std::string leanProofStub(llvm::StringRef Goal, llvm::StringRef Intros) {
-  std::string Stub = leanProofStubHead(Goal);
+static std::string leanProof(llvm::StringRef Goal, llvm::StringRef Intros,
+                             llvm::StringRef Last) {
+  std::string Proof = leanProofHead(Goal);
   if (!Intros.empty())
-    Stub += "  intro " + Intros.str() + "\n";
-  return Stub + "  sorry\n";
+    Proof += "  intro " + Intros.str() + "\n";
+  return Proof + "  " + Last.str() + "\n";
 }
 
-static bool isLeanProofStub(llvm::StringRef Body, llvm::StringRef Goal) {
-  if (!Body.consume_front(leanProofStubHead(Goal)) ||
-      !Body.consume_back("  sorry\n"))
+// Whether a proof is one cpp-verify wrote and nobody edited, and if so,
+// whether cppverify_auto proves it: its last line is a stub's `sorry` or a
+// step of cppverify_auto.
+static std::optional<bool> leanGeneratedProof(llvm::StringRef Body,
+                                              llvm::StringRef Goal) {
+  if (!Body.consume_front(leanProofHead(Goal)) &&
+      !Body.consume_front(leanProofHead(Goal, /*Automation=*/false)))
+    return std::nullopt;
+  if (Body.consume_front("  intro ")) {
+    const size_t End = Body.find('\n');
+    if (End == llvm::StringRef::npos)
+      return std::nullopt;
+    Body = Body.drop_front(End + 1);
+  }
+  if (Body == "  sorry\n")
     return false;
-  return Body.empty() || (Body.consume_front("  intro ") &&
-                          Body.consume_back("\n") && !Body.contains('\n'));
+  for (llvm::StringRef Step : LeanAutomationSteps)
+    if (Body == ("  " + Step + "\n").str())
+      return true;
+  return std::nullopt;
 }
 
-static std::string leanProofHeader(const LeanProjectGoal &Goal) {
-  return LeanProofMark.str() + "   goal: " + Goal.Name +
-         "\n   obligation: " + Goal.StableId + "\n   hash: " + Goal.Hash +
-         "\n   bodies: " + Goal.BodyPrefix +
-         "\n   source: " + (Goal.Source.empty() ? "unknown" : Goal.Source) +
-         "\n   Complete this proof. cpp-verify never rewrites it: it moves it "
-         "with its goal,\n   and keeps it in Stale/ when no goal has its "
-         "statement. -/\n";
+// The revision of cppverify_auto that an automation note was written by.
+static std::string leanAutomationTag() {
+  return ("cppverify_auto " + LeanAutomationRevision + " ").str();
+}
+
+static std::string leanProofHeader(const LeanProjectGoal &Goal,
+                                   llvm::StringRef Automation = "",
+                                   bool Automatic = false) {
+  std::string Header =
+      LeanProofMark.str() + "   goal: " + Goal.Name +
+      "\n   obligation: " + Goal.StableId + "\n   hash: " + Goal.Hash +
+      "\n   bodies: " + Goal.BodyPrefix +
+      "\n   source: " + (Goal.Source.empty() ? "unknown" : Goal.Source);
+  if (!Automation.empty())
+    Header += "\n   automation: " + Automation.str();
+  return Header +
+         (Automatic
+              ? "\n   cppverify_auto proves this goal. cpp-verify rewrites "
+                "this file only while it\n   is unedited; a proof you write "
+                "here is yours, kept as any other. -/\n"
+              : "\n   Complete this proof. Once you edit it, cpp-verify never "
+                "rewrites it: it moves\n   it with its goal, and keeps it in "
+                "Stale/ when no goal has its statement. -/\n");
 }
 
 static std::optional<LeanProofRecord> readLeanProof(llvm::StringRef Path) {
@@ -1353,12 +1399,18 @@ static std::optional<LeanProofRecord> readLeanProof(llvm::StringRef Path) {
       Record.Hash = Line.str();
     else if (Line.consume_front("bodies: "))
       Record.BodyPrefix = Line.str();
+    else if (Line.consume_front("automation: "))
+      Record.Automation = Line.str();
   }
   if (Record.Goal.empty() || Record.Hash.empty())
     return std::nullopt;
   const size_t End = Text.find("-/\n");
-  Record.Pristine = End != llvm::StringRef::npos &&
-                    isLeanProofStub(Text.substr(End + 3), Record.Goal);
+  if (End != llvm::StringRef::npos)
+    if (std::optional<bool> Automatic =
+            leanGeneratedProof(Text.substr(End + 3), Record.Goal)) {
+      Record.Pristine = true;
+      Record.Automatic = *Automatic;
+    }
   return Record;
 }
 
@@ -1614,6 +1666,10 @@ class Verifier {
     if (llvm::Error Error = writeTextFileIfMissing(
             leanProjectPath(Root, {"CppVerify", "User.lean"}), UserFile))
       return std::move(Error);
+    if (llvm::Error Error =
+            writeTextFile(leanProjectPath(Root, {"CppVerify", "Auto.lean"}),
+                          LeanAutomationSource))
+      return std::move(Error);
 
     return leanProjectPath(Root, {"CppVerify", "Generated.lean"});
   }
@@ -1775,7 +1831,7 @@ class Verifier {
                                          ProofPath.c_str());
         if (llvm::Error Error = writeTextFile(
                 ProofPath, leanProofHeader(*Goal) +
-                               leanProofStub(Goal->Name, Goal->Intros)))
+                               leanProof(Goal->Name, Goal->Intros, "sorry")))
           return Error;
         Taken.insert(ProofPath);
       }
@@ -1871,42 +1927,53 @@ class Verifier {
   // goals whose proofs fail, each with why. A proof's own module must build
   // without `sorry`; then the certifier (LeanCertifier.h) checks the compiled
   // modules, which nothing in the user's source can change.
-  llvm::Expected<std::map<std::string, std::string>>
-  certifyLeanProject(const std::vector<LeanProjectGoal> &ProjectGoals) {
-    if (ProjectGoals.empty())
-      return llvm::createStringError(llvm::inconvertibleErrorCode(),
-                                     "the project has no proof obligations");
+  // How many Lean processes to run at once for Tasks of them.
+  unsigned leanJobs(size_t Tasks) const {
+    const unsigned Jobs =
+        Opts.LeanJobs
+            ? Opts.LeanJobs
+            : llvm::heavyweight_hardware_concurrency().compute_thread_count();
+    return std::max<size_t>(1, std::min<size_t>(Tasks, Jobs));
+  }
+
+  // How lake runs the Lean the project pins. elan picks a toolchain by the
+  // working directory, not by --dir, so its proxy is given the pin; and
+  // whatever runs, lake must report the pinned Lean.
+  struct LeanLauncher {
+    std::string Lake;
+    std::vector<std::string> Prefix;
+    std::string LogBase;
+
+    llvm::Expected<std::string> run(std::vector<std::string> Arguments,
+                                    llvm::StringRef Stage,
+                                    llvm::StringRef Root) const {
+      std::vector<std::string> Command = Prefix;
+      Command.push_back("--dir=" + Root.str());
+      Command.insert(Command.end(), std::make_move_iterator(Arguments.begin()),
+                     std::make_move_iterator(Arguments.end()));
+      return executeWithLogs(Lake, Command, LogBase + "-" + Stage.str());
+    }
+  };
+
+  llvm::Expected<LeanLauncher> leanLauncher(llvm::StringRef Purpose) {
     auto Lake = llvm::sys::findProgramByName("lake");
     if (!Lake)
       return llvm::createStringError(Lake.getError(),
                                      "cannot find the Lean project launcher");
-
-    const std::string &Root = leanProjectRoot();
-    const std::string LogBase =
-        leanProjectPath(Root, {".cppverify-certification"});
-    // Every step runs the Lean the project pins. elan picks a toolchain by
-    // the working directory, not by --dir, so its proxy is given the pin;
-    // and whatever runs, lake must report the pinned Lean.
-    std::vector<std::string> Launcher = {"lake"};
+    LeanLauncher Launcher{
+        *Lake, {"lake"}, leanProjectPath(leanProjectRoot(), {Purpose})};
     auto Elan = llvm::sys::findProgramByName("elan");
     bool ViaElan = false;
     if (!Elan || llvm::sys::fs::equivalent(*Lake, *Elan, ViaElan))
       ViaElan = false;
     if (ViaElan)
-      Launcher.push_back(("+" + LeanToolchain).str());
-    auto runLake = [&](std::vector<std::string> Arguments,
-                       llvm::StringRef Stage) -> llvm::Expected<std::string> {
-      std::vector<std::string> Command = Launcher;
-      Command.push_back("--dir=" + Root);
-      Command.insert(Command.end(), std::make_move_iterator(Arguments.begin()),
-                     std::make_move_iterator(Arguments.end()));
-      return executeWithLogs(*Lake, Command, LogBase + "-" + Stage.str());
-    };
+      Launcher.Prefix.push_back(("+" + LeanToolchain).str());
 
     // lake takes --version alone.
-    std::vector<std::string> Query = Launcher;
+    std::vector<std::string> Query = Launcher.Prefix;
     Query.push_back("--version");
-    auto Reported = executeWithLogs(*Lake, Query, LogBase + "-version");
+    auto Reported =
+        executeWithLogs(*Lake, Query, Launcher.LogBase + "-version");
     if (!Reported)
       return Reported.takeError();
     const llvm::StringRef Pinned =
@@ -1926,8 +1993,25 @@ class Verifier {
           "toolchain",
           LeanToolchain.str().c_str(), Lake->c_str(),
           Version.empty() ? "of an unknown version" : Version.str().c_str());
+    return Launcher;
+  }
 
-    if (auto Build = runLake({"build", "CppVerify.Generated", "CppVerify.User"},
+  llvm::Expected<std::map<std::string, std::string>>
+  certifyLeanProject(const std::vector<LeanProjectGoal> &ProjectGoals) {
+    if (ProjectGoals.empty())
+      return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                     "the project has no proof obligations");
+    auto Launcher = leanLauncher(".cppverify-certification");
+    if (!Launcher)
+      return Launcher.takeError();
+    const std::string &Root = leanProjectRoot();
+    auto runLake = [&](std::vector<std::string> Arguments,
+                       llvm::StringRef Stage) {
+      return Launcher->run(std::move(Arguments), Stage, Root);
+    };
+
+    if (auto Build = runLake({"build", "CppVerify.Generated", "CppVerify.User",
+                              "CppVerify.Auto"},
                              "build");
         !Build)
       return Build.takeError();
@@ -1950,26 +2034,46 @@ class Verifier {
     std::map<std::string, const LeanProjectGoal *> UniqueGoals;
     for (const LeanProjectGoal &Goal : ProjectGoals)
       UniqueGoals.emplace(Goal.Name, &Goal);
-    std::map<std::string, std::string> Failures;
-    std::string Built;
-    for (const auto &[Name, Goal] : UniqueGoals) {
-      std::string File;
-      const std::string ProofSource =
-          leanProjectPath(Root, leanProofComponents(*Goal, File));
-      const std::string ObjectDir =
-          leanProjectPath(ProofBuildDir, {Goal->Group});
-      if (std::error_code EC = llvm::sys::fs::create_directories(ObjectDir))
+    std::vector<std::pair<std::string, const LeanProjectGoal *>> Proofs(
+        UniqueGoals.begin(), UniqueGoals.end());
+    for (const auto &[Name, Goal] : Proofs)
+      if (std::error_code EC = llvm::sys::fs::create_directories(
+              leanProjectPath(ProofBuildDir, {Goal->Group})))
         return llvm::createStringError(
             EC, "cannot create Lean proof build directory");
-      const std::string ProofObject =
-          leanProjectPath(ObjectDir, {Name + ".olean"});
-      llvm::sys::fs::remove(ProofObject);
-      if (auto Proof = runLake({"env", "lean", "-EhasSorry", "-R", Root, "-o",
-                                ProofObject, ProofSource},
-                               Name);
-          !Proof) {
-        Failures[Name] =
-            llvm::StringRef(llvm::toString(Proof.takeError())).rtrim().str();
+    // Each proof builds by itself, several at once.
+    std::vector<std::optional<std::string>> BuildErrors(Proofs.size());
+    std::atomic<size_t> NextProof{0};
+    auto buildProofs = [&] {
+      for (size_t I; (I = NextProof++) < Proofs.size();) {
+        const auto &[Name, Goal] = Proofs[I];
+        std::string File;
+        const std::string ProofSource =
+            leanProjectPath(Root, leanProofComponents(*Goal, File));
+        const std::string ProofObject = leanProjectPath(
+            leanProjectPath(ProofBuildDir, {Goal->Group}), {Name + ".olean"});
+        llvm::sys::fs::remove(ProofObject);
+        if (auto Proof = runLake({"env", "lean", "-EhasSorry", "-R", Root, "-o",
+                                  ProofObject, ProofSource},
+                                 Name);
+            !Proof)
+          BuildErrors[I] =
+              llvm::StringRef(llvm::toString(Proof.takeError())).rtrim().str();
+      }
+    };
+    {
+      std::vector<std::thread> Builders;
+      for (unsigned J = 0, E = leanJobs(Proofs.size()); J != E; ++J)
+        Builders.emplace_back(buildProofs);
+      for (std::thread &Builder : Builders)
+        Builder.join();
+    }
+    std::map<std::string, std::string> Failures;
+    std::string Built;
+    for (size_t I = 0; I != Proofs.size(); ++I) {
+      const auto &[Name, Goal] = Proofs[I];
+      if (BuildErrors[I]) {
+        Failures[Name] = *BuildErrors[I];
         continue;
       }
       Built += Name + "\tCppVerify.Proofs." + Goal->Group + "." + Name + "\n";
@@ -2009,6 +2113,320 @@ class Verifier {
       if (!Failures.count(Name) && !Checks.count(Name))
         Failures[Name] = "the certifier did not check it";
     return Failures;
+  }
+
+  // What cppverify_auto made of a goal: the step that proves it, or why it
+  // did not.
+  struct LeanTrial {
+    std::string Step;
+    std::string Why;
+  };
+
+  // Runs cppverify_auto on each goal in one Lean process, in order, and keeps
+  // a proof only when the kernel accepted it with Lean's foundational axioms
+  // alone: a probe of the suite saw a step claim a false goal with a term the
+  // kernel rejected. Lean reports to a file, line by line (its messages come
+  // from a thread of its own, buffered, and are lost when it is stopped): the
+  // step that proved each goal, then the axioms of its theorem, or that the
+  // kernel rejected it. A goal with an error is elaborated with sorryAx. A
+  // goal that takes longer than Limit, or stops Lean, is not proved, and the
+  // goals after it start again in a new process; heartbeats bound no kernel
+  // check. Goals Lean cannot start on are left out.
+  std::map<std::string, LeanTrial>
+  tryLeanGoals(const std::vector<const LeanProjectGoal *> &Goals,
+               const std::string &Lean,
+               const std::vector<std::string> &Environment, unsigned Chunk,
+               std::optional<std::chrono::milliseconds> Limit,
+               std::string &Failure) {
+    std::map<std::string, LeanTrial> Trials;
+    const std::string Dir =
+        leanProjectPath(leanProjectRoot(), {".cppverify", "automation"});
+    if (std::error_code EC = llvm::sys::fs::create_directories(Dir)) {
+      Failure = "cannot create " + Dir + ": " + EC.message();
+      return Trials;
+    }
+    const std::string Base =
+        leanProjectPath(Dir, {"try-" + std::to_string(Chunk)});
+    const std::string Source = Base + ".lean", Report = Base + ".report",
+                      Log = Base + ".log";
+    auto leanString = [](llvm::StringRef Text) {
+      std::string Quoted = "\"";
+      for (char C : Text) {
+        if (C == '\\' || C == '"')
+          Quoted += '\\';
+        Quoted += C;
+      }
+      return Quoted + "\"";
+    };
+    const std::string ReportName = leanString(Report);
+    static const llvm::StringRef Foundations[] = {"propext", "Quot.sound",
+                                                  "Classical.choice"};
+    const std::string Limited =
+        Limit
+            ? " within " + std::to_string((Limit->count() + 999) / 1000) + " s"
+            : "";
+
+    for (size_t Next = 0; Next < Goals.size() && !interruptRequested();) {
+      std::string Text = "import CppVerify.User\nimport CppVerify.Auto\n\n"
+                         "set_option cppverify.autoReport " +
+                         ReportName + "\n#eval CppVerify.Auto.report " +
+                         ReportName + " \"ready\"\n";
+      for (size_t I = Next; I != Goals.size(); ++I) {
+        const LeanProjectGoal &Goal = *Goals[I];
+        const std::string Name = "cppverify_try_" + std::to_string(I);
+        Text += "\ntheorem " + Name + " : " + Goal.Name + " := by\n  apply " +
+                Goal.Name + ".of_readable\n";
+        if (!Goal.Intros.empty())
+          Text += "  intro " + Goal.Intros + "\n";
+        Text += "  cppverify_auto\n#cppverify_axioms " + ReportName + " " +
+                Name + "\n";
+      }
+      llvm::sys::fs::remove(Report);
+      if (llvm::Error Error = writeTextFile(Source, Text)) {
+        Failure = llvm::toString(std::move(Error));
+        return Trials;
+      }
+
+      std::vector<llvm::StringRef> Args = {Lean, "-DmaxErrors=1000000",
+                                           "-DElab.async=false", Source};
+      std::vector<llvm::StringRef> Env(Environment.begin(), Environment.end());
+      std::optional<llvm::StringRef> Redirects[] = {
+          llvm::StringRef(""), llvm::StringRef(Log), llvm::StringRef(Log)};
+      std::string StartError;
+      bool StartFailed = false;
+      llvm::sys::ProcessInfo Process = llvm::sys::ExecuteNoWait(
+          Lean, Args, Env, Redirects, 0, &StartError, &StartFailed);
+      if (StartFailed || Process.Pid == llvm::sys::ProcessInfo::InvalidPid) {
+        Failure = "cannot start Lean: " + StartError;
+        return Trials;
+      }
+
+      bool Started = false;
+      std::map<size_t, std::string> Steps, Axioms;
+      size_t Parsed = 0;
+      auto readReport = [&] {
+        auto Buffer = llvm::MemoryBuffer::getFile(Report, /*IsText=*/false,
+                                                  /*RequiresNullTerminator=*/
+                                                  false);
+        if (!Buffer)
+          return;
+        llvm::StringRef All = (*Buffer)->getBuffer();
+        while (Parsed < All.size()) {
+          const size_t End = All.find('\n', Parsed);
+          if (End == llvm::StringRef::npos)
+            break;
+          llvm::StringRef Line = All.slice(Parsed, End).rtrim('\r');
+          Parsed = End + 1;
+          if (Line == "ready") {
+            Started = true;
+            continue;
+          }
+          llvm::SmallVector<llvm::StringRef, 3> Fields;
+          Line.split(Fields, '\t', 2);
+          size_t I;
+          if (Fields.size() != 3 ||
+              !Fields[1].consume_front("cppverify_try_") ||
+              Fields[1].getAsInteger(10, I))
+            continue;
+          (Fields[0] == "step" ? Steps : Axioms)[I] = Fields[2].str();
+        }
+      };
+
+      auto Progress = std::chrono::steady_clock::now();
+      size_t Finished = 0;
+      std::optional<std::string> Stopped;
+      bool TimedOut = false;
+      while (true) {
+        ChildPoll Poll = pollChild(Process, "Lean");
+        readReport();
+        if (Axioms.size() != Finished) {
+          Finished = Axioms.size();
+          Progress = std::chrono::steady_clock::now();
+        }
+        if (Poll.State != ChildState::Running) {
+          if (Poll.State == ChildState::Failed || Poll.ExitCode < 0)
+            Stopped = Poll.Error;
+          break;
+        }
+        std::string KillError;
+        if (interruptRequested()) {
+          terminateChild(Process, "Lean", KillError);
+          return Trials;
+        }
+        const auto Elapsed = std::chrono::steady_clock::now() - Progress;
+        if (!Started && Elapsed > std::chrono::minutes(2)) {
+          terminateChild(Process, "Lean", KillError);
+          Failure = "Lean did not load the project's modules within 2 minutes";
+          return Trials;
+        }
+        if (Started && Limit && Elapsed > *Limit) {
+          terminateChild(Process, "Lean", KillError);
+          TimedOut = true;
+          break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      }
+      if (!Started) {
+        auto Output = llvm::MemoryBuffer::getFile(Log);
+        Failure =
+            "Lean could not start on the goals" +
+            (Output && !(*Output)->getBuffer().trim().empty()
+                 ? ": " + (*Output)->getBuffer().trim().take_front(300).str()
+                 : std::string());
+        return Trials;
+      }
+
+      size_t I = Next;
+      for (; I != Goals.size() && Axioms.count(I); ++I) {
+        LeanTrial &Trial = Trials[Goals[I]->Name];
+        llvm::SmallVector<llvm::StringRef, 4> Used;
+        llvm::StringRef(Axioms[I]).split(Used, ',', -1, false);
+        const bool Foundational =
+            Axioms[I] != "missing" &&
+            llvm::all_of(Used, [&](llvm::StringRef Axiom) {
+              return llvm::is_contained(Foundations, Axiom.trim());
+            });
+        auto Step = Steps.find(I);
+        if (Foundational && Step != Steps.end() &&
+            llvm::is_contained(LeanAutomationSteps, Step->second))
+          Trial.Step = Step->second;
+        else
+          Trial.Why = "did not prove it";
+      }
+      if (I == Goals.size())
+        break;
+      // The goal Lean was on when it stopped, or ran out of time.
+      Trials[Goals[I]->Name].Why =
+          TimedOut ? "did not prove it" + Limited
+                   : "did not prove it: Lean stopped" +
+                         (Stopped && !Stopped->empty() ? " (" + *Stopped + ")"
+                                                       : std::string());
+      Next = I + 1;
+    }
+    return Trials;
+  }
+
+  // Each export's count of the goals cppverify_auto proves, from the proof
+  // files as they are now.
+  void countLeanAutomation(const std::vector<LeanProjectGoal> &ProjectGoals) {
+    std::set<std::string> Automatic;
+    for (const LeanProjectGoal &Goal : ProjectGoals) {
+      std::string File;
+      if (!Goal.Exported || Automatic.count(Goal.Name))
+        continue;
+      if (std::optional<LeanProofRecord> Record = readLeanProof(leanProjectPath(
+              leanProjectRoot(), leanProofComponents(Goal, File))))
+        if (Record->Automatic)
+          Automatic.insert(Goal.Name);
+    }
+    for (VerifyDiagnostic &Diagnostic : Diags)
+      if (Diagnostic.K == VerifyDiagnostic::Exported && Diagnostic.Result)
+        Diagnostic.LeanAutomatic = llvm::count_if(
+            std::set<std::string>(Diagnostic.Result->LeanGoals.begin(),
+                                  Diagnostic.Result->LeanGoals.end()),
+            [&](const std::string &Goal) { return Automatic.count(Goal); });
+  }
+
+  // Tries cppverify_auto on each goal whose proof file is still the one
+  // cpp-verify wrote and that this revision has not tried, as Vermilion and
+  // Why3 run their automation when they generate goals, and writes what it
+  // finds: the step that proves the goal, or a stub that says it was tried.
+  // It runs the pinned toolchain; without it the stubs stay as they are.
+  void automateLeanProject(const std::vector<LeanProjectGoal> &ProjectGoals) {
+    const std::string &Root = leanProjectRoot();
+    std::map<std::string, const LeanProjectGoal *> Unique;
+    for (const LeanProjectGoal &Goal : ProjectGoals)
+      if (Goal.Exported)
+        Unique.emplace(Goal.Name, &Goal);
+    auto pathOf = [&](const LeanProjectGoal &Goal) {
+      std::string File;
+      return leanProjectPath(Root, leanProofComponents(Goal, File));
+    };
+    std::vector<const LeanProjectGoal *> Candidates;
+    for (const auto &[Name, Goal] : Unique)
+      if (std::optional<LeanProofRecord> Record = readLeanProof(pathOf(*Goal)))
+        if (Record->Pristine && !llvm::StringRef(Record->Automation)
+                                     .starts_with(leanAutomationTag()))
+          Candidates.push_back(Goal);
+    if (Candidates.empty() || interruptRequested())
+      return;
+
+    auto Launcher = leanLauncher(".cppverify-automation");
+    if (!Launcher) {
+      llvm::consumeError(Launcher.takeError());
+      return;
+    }
+    auto skipped = [&](const std::string &Why) {
+      Diags.push_back(
+          {VerifyDiagnostic::Warning,
+           "cppverify_auto was not tried on the new Lean goals: " + Why});
+    };
+    if (auto Build = Launcher->run(
+            {"build", "CppVerify.User", "CppVerify.Auto"}, "build", Root);
+        !Build)
+      return skipped(
+          "the project does not build (" +
+          llvm::StringRef(llvm::toString(Build.takeError())).rtrim().str() +
+          ")");
+    auto Variables = Launcher->run({"env"}, "env", Root);
+    if (!Variables)
+      return skipped(llvm::toString(Variables.takeError()));
+    std::string Lean, LeanPath;
+    for (llvm::StringRef Rest = *Variables; !Rest.empty();) {
+      auto [Line, Next] = Rest.split('\n');
+      Rest = Next;
+      Line = Line.rtrim("\r");
+      if (Line.consume_front("LEAN="))
+        Lean = Line.str();
+      else if (Line.consume_front("LEAN_PATH="))
+        LeanPath = Line.str();
+    }
+    if (Lean.empty() || LeanPath.empty())
+      return skipped("lake env names no Lean or LEAN_PATH");
+    const std::vector<std::string> Environment =
+        childEnvironment("LEAN_PATH", LeanPath);
+
+    const unsigned Jobs = leanJobs(Candidates.size());
+    std::vector<std::vector<const LeanProjectGoal *>> Chunks(Jobs);
+    for (size_t I = 0; I != Candidates.size(); ++I)
+      Chunks[I % Jobs].push_back(Candidates[I]);
+    std::optional<std::chrono::milliseconds> Limit;
+    if (Opts.LeanAutoTimeoutMs)
+      Limit = std::chrono::milliseconds(Opts.LeanAutoTimeoutMs);
+    std::vector<std::map<std::string, LeanTrial>> Results(Jobs);
+    std::vector<std::string> Failures(Jobs);
+    {
+      std::vector<std::thread> Threads;
+      for (unsigned C = 0; C != Jobs; ++C)
+        Threads.emplace_back([&, C] {
+          Results[C] =
+              tryLeanGoals(Chunks[C], Lean, Environment, C, Limit, Failures[C]);
+        });
+      for (std::thread &Thread : Threads)
+        Thread.join();
+    }
+
+    const std::string Tag = leanAutomationTag();
+    for (const std::map<std::string, LeanTrial> &Result : Results)
+      for (const auto &[Name, Trial] : Result) {
+        const LeanProjectGoal &Goal = *Unique.at(Name);
+        const std::string Text =
+            Trial.Step.empty()
+                ? leanProofHeader(Goal, Tag + Trial.Why) +
+                      leanProof(Goal.Name, Goal.Intros, "sorry")
+                : leanProofHeader(Goal, Tag + "proves it with " + Trial.Step,
+                                  /*Automatic=*/true) +
+                      leanProof(Goal.Name, Goal.Intros, Trial.Step);
+        if (llvm::Error Error = writeTextFile(pathOf(Goal), Text))
+          Failures.push_back(llvm::toString(std::move(Error)));
+      }
+    std::set<std::string> Reported;
+    for (const std::string &Failure : Failures)
+      if (!Failure.empty() && Reported.insert(Failure).second)
+        Diags.push_back({VerifyDiagnostic::Warning,
+                         "cppverify_auto stopped before every new Lean goal "
+                         "was tried: " +
+                             Failure});
   }
 
   void checkCalleeRecommendsOnFailure(const VFunction &Caller,
@@ -2114,6 +2532,13 @@ public:
                        "--lean-fallback"});
       return false;
     }
+    if (!Opts.LeanAuto && Opts.LeanProjectPath.empty() &&
+        Opts.LeanFallbackProjectPath.empty()) {
+      Diags.push_back({VerifyDiagnostic::Error,
+                       "--no-lean-auto requires --lean-project or "
+                       "--lean-fallback"});
+      return false;
+    }
     if (Opts.LowerOnly && Opts.Backend == BackendKind::Lean) {
       Diags.push_back(
           {VerifyDiagnostic::Error,
@@ -2121,11 +2546,15 @@ public:
            "--backend=lean to validate Lean export"});
       return false;
     }
-    if (Opts.Backend == BackendKind::Lean &&
-        (Opts.Jobs != 1 || !Opts.ProofCachePath.empty())) {
-      Diags.push_back(
-          {VerifyDiagnostic::Error,
-           "--jobs and --proof-cache are not supported by the Lean backend"});
+    if (Opts.Backend == BackendKind::Lean && !Opts.ProofCachePath.empty()) {
+      Diags.push_back({VerifyDiagnostic::Error,
+                       "--proof-cache is not supported by the Lean backend"});
+      return false;
+    }
+    if (Opts.Backend == BackendKind::Lean && Opts.Jobs != 1) {
+      Diags.push_back({VerifyDiagnostic::Error,
+                       "the Lean backend exports one function at a time; "
+                       "LeanJobs sets its Lean processes"});
       return false;
     }
     if (Opts.Backend == BackendKind::CVC5 && !Opts.ProofCachePath.empty()) {
@@ -3726,14 +4155,18 @@ public:
       std::vector<LeanProjectGoal> ExportedGoals;
       llvm::copy_if(LeanProjectGoals, std::back_inserter(ExportedGoals),
                     [](const LeanProjectGoal &Goal) { return Goal.Exported; });
-      if (llvm::Error Error = finalizeLeanProject(
-              LeanProjectGoals,
-              LeanFallbackBackend ? &LeanRunGroups : nullptr)) {
+      llvm::Error Finalized = finalizeLeanProject(
+          LeanProjectGoals, LeanFallbackBackend ? &LeanRunGroups : nullptr);
+      if (!Finalized && Opts.LeanAuto)
+        automateLeanProject(LeanProjectGoals);
+      if (!Finalized)
+        countLeanAutomation(LeanProjectGoals);
+      if (Finalized) {
         AllOk = false;
         AnyFailed = true;
         Diags.push_back({VerifyDiagnostic::Error,
                          "cannot finalize Lean project (" +
-                             llvm::toString(std::move(Error)) + ")"});
+                             llvm::toString(std::move(Finalized)) + ")"});
       } else if (Opts.LeanCertify && !interruptRequested() &&
                  (!ExportedGoals.empty() ||
                   Opts.LeanFallbackProjectPath.empty())) {
@@ -4507,6 +4940,8 @@ public:
         Callers.push_back(jsonText(Name));
       Record["unverified_callers"] = std::move(Callers);
     }
+    if (D.K == VerifyDiagnostic::Exported && D.LeanAutomatic)
+      Record["lean_automatic"] = static_cast<int64_t>(D.LeanAutomatic);
     if (D.Result) {
       const VerifyResult &Result = *D.Result;
       if (!Result.BackendName.empty())
@@ -4699,7 +5134,14 @@ public:
         OS << "BoundedSafe: " << D.Message << "\n";
         break;
       case VerifyDiagnostic::Exported:
-        OS << "Exported: " << D.Message << "\n";
+        OS << "Exported: " << D.Message;
+        if (D.LeanAutomatic && D.Result)
+          OS << " (cppverify_auto proved " << D.LeanAutomatic << " of "
+             << std::set<std::string>(D.Result->LeanGoals.begin(),
+                                      D.Result->LeanGoals.end())
+                    .size()
+             << " goals)";
+        OS << "\n";
         break;
       case VerifyDiagnostic::Certified:
         OS << "Certified: " << D.Message << "\n";
