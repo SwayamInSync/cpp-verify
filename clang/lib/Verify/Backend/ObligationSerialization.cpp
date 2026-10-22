@@ -606,10 +606,12 @@ public:
       const ObligationModule &Module, const Obligation &Item,
       bool IncludeBMCTransform = true,
       llvm::StringRef Domain = "cppverify-obligation-semantic",
-      uint32_t Version = ObligationSemanticHashVersion) {
+      uint32_t Version = ObligationSemanticHashVersion,
+      bool IncludeIdentity = true) {
     writeString(Domain);
     writeU32(Version);
-    writeString(Module.FunctionIdentity);
+    if (IncludeIdentity)
+      writeString(Module.FunctionIdentity);
     writeString(Module.ResultVarName);
     writeString(Module.HeapPrefix);
     if (IncludeBMCTransform && Module.BMCTransform) {
@@ -1014,6 +1016,15 @@ std::string verify::obligationSemanticHash(const ObligationModule &Module,
                                            const Obligation &Item) {
   ArchiveWriter Writer(false);
   Writer.writeObligationSemantics(Module, Item);
+  return sha256(Writer.take());
+}
+
+std::string verify::obligationStatementHash(const ObligationModule &Module,
+                                            const Obligation &Item) {
+  ArchiveWriter Writer(false);
+  Writer.writeObligationSemantics(Module, Item, /*IncludeBMCTransform=*/true,
+                                  "cppverify-obligation-statement", 1,
+                                  /*IncludeIdentity=*/false);
   return sha256(Writer.take());
 }
 
