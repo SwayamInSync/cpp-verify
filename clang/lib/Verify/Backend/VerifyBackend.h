@@ -152,6 +152,9 @@ struct VerifyResult {
   /// individually; absent when the backend did not check each one.
   std::optional<std::vector<std::string>> UnprovedObligations;
   std::optional<ProofEvidence> Evidence;
+  /// For a module exported to a Lean project: the goals whose proofs prove
+  /// it, which certification checks.
+  std::vector<std::string> LeanGoals;
   /// For a counterexample: the specs whose postconditions decided a value
   /// its check needed, so that it rests on them.
   std::set<std::string> CertifiedWith;
