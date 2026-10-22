@@ -402,7 +402,7 @@ For automation that remains unresolved, use:
 .. code-block:: bash
 
    cpp-verify --lean-fallback=proof file.cpp
-   # edit proof/CppVerify/User.lean and proof/CppVerify/Proofs/*.lean
+   # edit proof/CppVerify/User.lean and proof/CppVerify/Proofs/*/*.lean
    cpp-verify --lean-fallback=proof --lean-certify file.cpp
 
 The first command remains non-success because export is not proof. It exports
