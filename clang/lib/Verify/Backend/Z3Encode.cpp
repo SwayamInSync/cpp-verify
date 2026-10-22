@@ -3938,22 +3938,51 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
     Ordered = Group->async([this, &Module, &Rivals, &WholeRace] {
       std::vector<VerifyResult> Results =
           verifyObligations(Module, /*StopAtFailure=*/true, &Rivals);
-      if (Results.size() == Module.Obligations.size() &&
-          llvm::all_of(Results, [](const VerifyResult &R) {
-            return R.Status == VerifyStatus::Verified;
-          }))
+      // The obligations settle the module when they prove all of it or one
+      // fails, and the whole query, or its retry, is then stopped.
+      if (llvm::any_of(Results,
+                       [](const VerifyResult &R) {
+                         return R.Status == VerifyStatus::Failed;
+                       }) ||
+          (Results.size() == Module.Obligations.size() &&
+           llvm::all_of(Results, [](const VerifyResult &R) {
+             return R.Status == VerifyStatus::Verified;
+           })))
         WholeRace.cancel();
       return Results;
     });
   }
   VerifyResult Whole;
+  auto retryable = [&](const VerifyResult &Result) {
+    return Result.Status == VerifyStatus::Unresolved && !WholeUsedFullBudget &&
+           !SkipWholeModuleRetry && !spent();
+  };
+  bool RetriedWhole = false;
   if (Racing) {
     Whole = solveQuery(Module, nullptr, std::nullopt, WholeTimeout, &WholeRace,
                        WholeSlice);
+    // A whole query its slice leaves unresolved is retried with the full
+    // budget as one more task of the race, after the obligations: a free
+    // worker runs it beside them, so that an obligation whose search does
+    // not end cannot hold it back; without one, it runs after them, as alone.
+    std::shared_future<VerifyResult> Retry;
+    if (retryable(Whole) && !WholeRace.Cancelled) {
+      RetriedWhole = true;
+      Retry = Group->async([this, &Module, &WholeRace, &Rivals] {
+        VerifyResult Result = solveQuery(Module, nullptr, std::nullopt,
+                                         budget(TimeoutMs), &WholeRace);
+        if (Result.Status == VerifyStatus::Verified ||
+            Result.Status == VerifyStatus::Failed)
+          Rivals.cancel();
+        return Result;
+      });
+    }
     if (Whole.Status == VerifyStatus::Verified ||
         Whole.Status == VerifyStatus::Failed)
       Rivals.cancel();
     Group->wait();
+    if (RetriedWhole)
+      Whole = Retry.get();
     if (OwnPool)
       Pool = nullptr;
   } else {
@@ -3998,7 +4027,7 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
   }
 
   auto retryWhole = [&](VerifyResult SplitResult) {
-    if (WholeUsedFullBudget || SkipWholeModuleRetry || spent())
+    if (RetriedWhole || !retryable(SplitResult))
       return finishZ3Result(std::move(SplitResult));
     VerifyResult Retry =
         solveQuery(Module, nullptr, std::nullopt, budget(TimeoutMs), nullptr);
