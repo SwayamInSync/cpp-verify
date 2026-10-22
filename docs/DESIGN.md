@@ -1930,7 +1930,21 @@ Vermilion names its hypotheses), and a bridge `G.of_readable : G.readable →
 G`, generated and kernel-checked with the generated file: the canonical goal
 stays what certification checks and identity hashes, and a printer bug in
 the readable form cannot certify anything. A stub applies the bridge and
-introduces every name. Initial generation is `Exported`. Certification
+introduces every name. Each new goal is first given to `cppverify_auto`, a
+tactic of the generated `CppVerify/Auto.lean`, with the pinned toolchain when
+it is installed, as Vermilion, Why3, and Frama-C's WP run their automation
+before a goal reaches the user: a ladder of steps (`grind`; memory stores as
+the functions they define and machine arithmetic as integers, then `grind`;
+`decide`; `simp_all`), each with a heartbeat budget of its own and a
+wall-clock limit per goal (`--lean-auto-timeout`), since heartbeats do not
+bound a kernel check. A step counts only when it closes the goal with a proof
+whose axioms are Lean's foundations, so the user's unfinished lemma never
+proves a goal, and a goal counts as proved only when the kernel accepted its
+theorem. A goal it proves gets that proof, which certification checks like
+any other; any other gets a stub that records the attempt and the revision of
+`cppverify_auto` that made it. A file is tried again only when no attempt by
+the current revision is recorded, and only while nobody has edited it.
+Initial generation is `Exported`. Certification
 holds against a proof author in bad faith. It compiles the user module and each
 proof file on its own with `sorry` as an error, then runs a checker
 (`LeanCertifier.h`) on the compiled modules, which elaborates none of the
