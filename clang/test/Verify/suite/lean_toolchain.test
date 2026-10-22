@@ -19,6 +19,6 @@
 # ELAN: Unresolved: lean obligation: trivial (Lean certification failed: command failed with exit code 1
 
 # ELAN-LOG: {{^}}+leanprover/lean4:v4.35.0 --version{{$}}
-# ELAN-LOG-NEXT: {{^}}+leanprover/lean4:v4.35.0 --dir={{.*}}.project build CppVerify.Generated CppVerify.User{{$}}
+# ELAN-LOG-NEXT: {{^}}+leanprover/lean4:v4.35.0 --dir={{.*}}.project build CppVerify.Generated CppVerify.User CppVerify.Auto{{$}}
 
 # PLAIN: Unresolved: lean obligation: trivial (Lean certification failed: the project pins leanprover/lean4:v4.35.0, but [[DIR]]/lake runs Lean 4.1.0; install elan (https://github.com/leanprover/elan), which runs the pinned toolchain)
