@@ -209,7 +209,10 @@ on it is ``Unresolved`` with reason ``callee.contract``, as ``scaled`` is. Its
 proof read ``1000 / r > 0`` as excluding ``r == 0``, since the logic defines a
 division by zero, but C++ does not, so nothing excludes it. The function's own
 verdict is about its body and does not change. The check prints nothing when it
-holds.
+holds. With ``--backend=lean`` it is exported as goals of its own,
+``Exported: lean obligation: contract of f``; once their proofs certify,
+``Certified: contract of f`` establishes the contract, and until then the
+callers that rely on it are ``Unresolved`` with reason ``callee.contract``.
 
 Spec functions stay total, as in Verus and ACSL: a spec's division by zero is
 0, so applying a spec in a contract adds no check, and
