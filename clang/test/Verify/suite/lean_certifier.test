@@ -47,7 +47,7 @@
 # EXPORT-NEXT: Exported: lean obligation: one
 
 # SORRY: Certified: fine [backend=Lean]
-# SORRY-NEXT: Unresolved: lean obligation: one (Lean certification failed: the proof of fn_5f5a336f6e6576::postcondition@8:37: command failed with exit code 1: {{.*}}cppverify_one_99bcee_postcondition_646d2761.lean:11:8: error: declaration uses `sorry`)
+# SORRY-NEXT: Unresolved: lean obligation: one (Lean certification failed: the proof of fn_5f5a336f6e6576::postcondition@8:37: command failed with exit code 1: {{.*}}cppverify_one_99bcee_postcondition_646d2761.lean:{{[0-9]+}}:8: error: declaration uses `sorry`)
 
 # REWRITTEN: Certified: fine [backend=Lean]
 # REWRITTEN-NEXT: Unresolved: lean obligation: one (Lean certification failed: the proof of fn_5f5a336f6e6576::postcondition@8:37: cppverify_one_99bcee_postcondition_646d2761_proof proves True, not cppverify_one_99bcee_postcondition_646d2761)
