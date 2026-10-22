@@ -1562,6 +1562,27 @@ obligation). Once they kernel-check, the result is `MixedProof`
 split; `Certified` still means Lean checked every obligation. SAT
 counterexamples are never fallback successes.
 
+A verdict left to Lean (a Lean-backend export, or a fallback export under
+`--lean-certify`) rests on what its module uses, as a solver's does. At export
+it records its dependencies as a verified verdict does (`recordDependencies`,
+`CallDependencies`, and for a spec check the facts it `Establishes`), and a
+spec check pending in Lean leaves its spec in `UndefinedSpecs` and
+`UnprovenPosts`. Certification (`certifyLeanProject`) runs after every
+function and before the fixpoint, whenever `--lean-certify` is given and
+whatever else failed. It turns each pending verdict into `Certified`,
+`MixedProof`, or `Unresolved`. The facts of the certified checks are then
+established, and the fixpoint and the qualifiers (`[trusts=...]`,
+`[partial]`, unverified callers, `decreases.missing`) treat `Certified` and
+`MixedProof` as proofs (`VerifyDiagnostic::isProof`). A generated check that
+is quiet when proved is reported when certification does not make it one. The vacuity checks of a
+pending verdict run with the Z3 smoke backend at export. Certification marks
+a proof `[vacuous]` from them, and hides the findings of a verdict it does
+not certify. Before 0.2, a fallback spec check established its facts at
+export and certification ran after the fixpoint and only when nothing else
+had failed: callers relying on a spec whose Lean termination proof failed, or
+was never checked, stayed `Verified`, and a Lean verdict was `Certified`
+whatever its callees' contracts.
+
 Z3-backed execution accepts explicit timeout, deterministic solver-resource,
 canonical query-node, job-count, and proof-cache budgets. A module that
 requires the `sequences` or `collections` feature gets the collection
