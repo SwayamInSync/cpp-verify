@@ -20,22 +20,22 @@
 // A proof that reads `(a ^ b) + 1` as `a ^ (b + 1)` must not certify the
 // false check of mix.
 // RUN: %cpp-verify --backend=lean --lean-project=%t.mix %S/Inputs/lean_semantics_mix.cpp --
-// RUN: cp %S/Inputs/lean_semantics_mix.lean %t.mix/CppVerify/Proofs/Goal_13438fdb5d10430a.lean
-// RUN: sed -i.orig 's/  sorry/  trivial/' %t.mix/CppVerify/Proofs/Goal_24c3837769b840de.lean %t.mix/CppVerify/Proofs/Goal_c8f03b2a3781f844.lean
+// RUN: cp %S/Inputs/lean_semantics_mix.lean %t.mix/CppVerify/Proofs/cppverify_mix_b839ab/cppverify_mix_b839ab_assertion_255467f3.lean
+// RUN: sed -i.orig 's/  sorry/  trivial/' %t.mix/CppVerify/Proofs/cppverify_mix_b839ab/cppverify_mix_b839ab_postcondition_54ae7c80.lean %t.mix/CppVerify/Proofs/cppverify_mix_b839ab/cppverify_mix_b839ab_missing_return_54ae7c80.lean
 // RUN: not %cpp-verify --backend=lean --lean-project=%t.mix --lean-certify %S/Inputs/lean_semantics_mix.cpp -- 2>&1 | FileCheck %s --check-prefix=MIX
 //
 // A proof that reads `2 - 3` in Nat, where it is 0, must not certify the false
 // check of difference.
 // RUN: %cpp-verify --backend=lean --lean-project=%t.numerals %S/Inputs/lean_semantics_numerals.cpp --
-// RUN: cp %S/Inputs/lean_semantics_numerals.lean %t.numerals/CppVerify/Proofs/Goal_e9944f7458f737aa.lean
-// RUN: sed -i.orig 's/  sorry/  trivial/' %t.numerals/CppVerify/Proofs/Goal_513ce39aed6c9e5f.lean %t.numerals/CppVerify/Proofs/Goal_83df1560b7290408.lean
+// RUN: cp %S/Inputs/lean_semantics_numerals.lean %t.numerals/CppVerify/Proofs/cppverify_difference_465d5b/cppverify_difference_465d5b_assertion_d7e0e821.lean
+// RUN: sed -i.orig 's/  sorry/  trivial/' %t.numerals/CppVerify/Proofs/cppverify_difference_465d5b/cppverify_difference_465d5b_missing_return_ba8abb90.lean %t.numerals/CppVerify/Proofs/cppverify_difference_465d5b/cppverify_difference_465d5b_postcondition_ba8abb90.lean
 // RUN: not %cpp-verify --backend=lean --lean-project=%t.numerals --lean-certify %S/Inputs/lean_semantics_numerals.cpp -- 2>&1 | FileCheck %s --check-prefix=NUMERALS
 //
 // A precondition with a quantifier, checked at a call, is certified with
 // `decide` on the machine comparison.
 // RUN: %cpp-verify --backend=lean --lean-project=%t.call %S/Inputs/lean_semantics_call.cpp --
-// RUN: cp %S/Inputs/lean_semantics_call.lean %t.call/CppVerify/Proofs/Goal_7b984a9483ff5c2f.lean
-// RUN: sed -i.orig 's/  sorry/  trivial/' %t.call/CppVerify/Proofs/Goal_ac931ca361dbea89.lean %t.call/CppVerify/Proofs/Goal_e35ba922f1f42a39.lean %t.call/CppVerify/Proofs/Goal_33c547cfb1e2a227.lean
+// RUN: cp %S/Inputs/lean_semantics_call.lean %t.call/CppVerify/Proofs/cppverify_small_74ff94/cppverify_small_74ff94_precondition_4e324fa2.lean
+// RUN: sed -i.orig 's/  sorry/  trivial/' %t.call/CppVerify/Proofs/cppverify_nonnegative_5bd01c/cppverify_nonnegative_5bd01c_missing_return_ba8abb90.lean %t.call/CppVerify/Proofs/cppverify_small_74ff94/cppverify_small_74ff94_missing_return_ba8abb90.lean %t.call/CppVerify/Proofs/cppverify_small_74ff94/cppverify_small_74ff94_postcondition_ba8abb90.lean
 // RUN: %cpp-verify --backend=lean --lean-project=%t.call --lean-certify %S/Inputs/lean_semantics_call.cpp -- 2>&1 | FileCheck %s --check-prefix=CALL
 
 unsigned mix(unsigned a, unsigned b)
@@ -148,7 +148,7 @@ int totals(int n)
 // LEAN: ∃ ([[K:__quant_[a-z0-9_]+]] : Int), {{.*}} ∧ ((heapSelectBv 32 __heap_0 (p_0 + [[K]] * (4 : Int))) = (BitVec.ofInt 32 (1)) ∨ [[K]] = (2 : Int))
 // LEAN: ¬((∀ ({{__quant_[a-z0-9_]+}} : Int), {{.*}} = (BitVec.ofInt 32 (0))) ∧ (cppBvSlt n_0 (BitVec.ofInt 32 (100))))
 // LEAN: ∨ (2 : Int) - (3 : Int) < (0 : Int)
-// LEAN: (cppverify_spec_axiom_1_1 : ∀ ([[T:__quant_[a-z0-9_]+]] : Int), (cppSpec_fn_{{[0-9a-f]+}} [[T]]) = (cppSpecBody_m{{[0-9]+}}_fn_{{[0-9a-f]+}}_1 [[T]]))
+// LEAN: (cppverify_spec_axiom_1_1 : ∀ ([[T:__quant_[a-z0-9_]+]] : Int), (cppSpec_fn_{{[0-9a-f]+}} [[T]]) = (cppSpecBody_{{[0-9a-f]+}}_fn_{{[0-9a-f]+}}_1 [[T]]))
 
 // MIX: Unresolved: lean obligation: mix (Lean certification failed:
 // MIX-NOT: Certified
