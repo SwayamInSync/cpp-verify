@@ -189,6 +189,41 @@ fallback candidates. Regeneration may leave old proof files on disk, but only
 the current source obligations are imported and certified; a stale active proof
 must type-check against the regenerated goal.
 
+A Lean proof proves the goals it covers, and the verdict built from it rests
+on the same facts as a solver's: the contracts of the functions it calls and
+the definitions and postconditions of the specs it uses. Certification runs
+first, whatever else in the file failed, and those facts are then settled as
+for every verdict. A contract that nothing establishes leaves its caller
+unresolved, whoever proves the caller:
+
+.. code-block:: cpp
+
+   int next(int x)
+     cppverify::post(cppverify::result == 7);
+
+   int seven(int x)
+     cppverify::post(cppverify::result == 7)
+   {
+     return next(x);
+   }
+
+With both of ``seven``'s goals proved in Lean, ``cpp-verify --backend=lean
+--lean-project=proof --lean-certify file.cpp`` reports:
+
+.. code-block:: text
+
+   warning: next has a contract but no definition, so its callers are not verified; mark the declaration [[cppverify::trusted]] to assume the contract
+   Unresolved: seven [backend=Lean] [reason=callee.contract] (relies on the contract of next (no definition; mark it [[cppverify::trusted]] to assume it), which is not established)
+
+In the same way, a spec whose termination is proved in Lean is defined only
+once that proof is certified: until then, and when it fails, every proof that
+uses the spec's definition is ``Unresolved`` with reason ``spec.termination``.
+A function proved by Lean, or by Z3 and Lean together, establishes its
+contract for its callers, and its result carries the qualifiers a verified
+one does (``[trusts=f]``, ``[partial]``). It also gets the same vacuity
+checks, run with Z3: a goal that holds only because no execution reaches it
+is ``Certified: f [backend=Lean] [vacuous]``, with a warning.
+
 Portable obligation archives
 ----------------------------
 
