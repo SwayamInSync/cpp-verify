@@ -152,7 +152,12 @@ release it is built on, and each backend: the Z3 linked into it, and the cvc5 an
 (``lake``) it finds on ``PATH`` with their versions. cvc5 is tested with 1.1.2 and also
 works with 1.4: a query that needs a constant array, as every one over sets, multisets,
 and maps does, sets cvc5's ``arrays-exp`` option itself, which 1.4 requires. Every Lean
-project pins ``leanprover/lean4:v4.32.2``.
+project pins ``leanprover/lean4:v4.35.0``, and certification runs that toolchain whatever
+elan's default is: through elan it names the pin, since elan otherwise picks a toolchain
+by the working directory, and a ``lake`` outside elan must report the pinned Lean. A
+project an earlier release generated, pinned to ``leanprover/lean4:v4.32.2`` by 0.1, is
+moved to the current pin the next time cpp-verify writes it, with a warning; a proof that
+no longer builds needs updating for the new Lean. Any other pin is an error.
 
 Options that select a backend, and options a run would not use
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -267,7 +272,7 @@ Backends
        ``decide`` evaluates the machine comparisons at constants
        (:doc:`../book/part-ii/ch17-backends-modular-calls`).
    * - ``--lean-certify``
-     - Build the active project with Lean 4.32.2, reject ``sorry`` and
+     - Build the active project with the pinned Lean 4.35.0, reject ``sorry`` and
        undocumented proof axioms, and report ``Certified`` only after every
        active proof kernel-checks. Certification runs whatever else failed,
        before the facts verdicts rest on are settled: a result proved in
