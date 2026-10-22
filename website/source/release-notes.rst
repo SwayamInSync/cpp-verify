@@ -83,6 +83,19 @@ analyzer reported nothing after a ghost block; libclang hid the constructs;
 and a contract expression in a template's signature produced a malformed
 symbol. Each now behaves by the construct's meaning (:doc:`language/tooling`).
 
+**Lean certification against proofs in bad faith.** Certification compiled
+``Check.lean``, which imports the user's modules, and read the text that its
+``example : G := G_proof`` and ``#print axioms`` printed. So a few macros in
+``User.lean`` that rewrote those two commands certified proofs of ``True`` for
+a false postcondition, and so did a theorem of the goal added by a command
+with ``debug.skipKernelTC`` and checked by no kernel, in the proof file or in a
+module it imports. Certification now checks the compiled modules with a
+program that elaborates none of the user's source: the kernel replays every
+module of the project a proof imports, the proof's type must be exactly its
+goal, and its axioms are collected from the constants it uses. A failing
+proof also no longer fails every function of the project: each function is
+certified on its own goals (:doc:`book/part-ii/ch17-backends-modular-calls`).
+
 **Lean goals keep their grouping.** The Lean export placed parentheses by a
 precedence table of its own, not Lean's, so ``(a ^ b) + 1`` became
 ``a_0 ^^^ b_0 + 1``, which Lean reads as ``a ^^^ (b + 1)``. With

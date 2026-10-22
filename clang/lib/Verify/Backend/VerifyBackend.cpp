@@ -21,10 +21,15 @@ VerifyResult LeanVerifyBackend::verifyModule(const ObligationModule &Module) {
     R.Message = "no lean output stream";
     return R;
   }
+  const size_t Before = ProjectGoals ? ProjectGoals->size() : 0;
   VerifyResult Result = exportLeanScratchPad(
       Module, *Out, !PreambleEmitted, EmittedFunctions, EmittedTheorems,
       ++ModuleIndex, ProjectGoals, Selection ? &*Selection : nullptr);
   PreambleEmitted = true;
+  if (ProjectGoals)
+    for (size_t I = Before; I < ProjectGoals->size(); ++I)
+      if ((*ProjectGoals)[I].Exported)
+        Result.LeanGoals.push_back((*ProjectGoals)[I].Name);
   return Result;
 }
 

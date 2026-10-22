@@ -1904,11 +1904,18 @@ G`, generated and kernel-checked with the generated file: the canonical goal
 stays what certification checks and identity hashes, and a printer bug in
 the readable form cannot certify anything. A stub applies the bridge and
 introduces every name. Initial generation is `Exported`. Certification
-compiles the user module and every active proof with `sorry` as an error, then
-checks aggregate theorem types and axiom dependencies. Only foundational Lean
-axioms are permitted; user `axiom`/`opaque` proof shortcuts, stale proof types,
-missing proofs, malformed output, and toolchain failures remain `Unresolved`.
-Only complete success is `Certified`. Certification runs the pinned toolchain
+holds against a proof author in bad faith. It compiles the user module and each
+proof file on its own with `sorry` as an error, then runs a checker
+(`LeanCertifier.h`) on the compiled modules, which elaborates none of the
+user's source, so no macro, notation, or command of theirs changes what it
+checks: the kernel replays every module of the project a proof imports (only
+the pinned toolchain's own modules are trusted), as `leanchecker` does, so no
+declaration escaped the kernel; the proof's type is exactly the constant of its
+goal, which `CppVerify.Generated` defines; and the axioms it depends on,
+collected from the constants it uses, are among `propext`, `Quot.sound`, and
+`Classical.choice`. A function is `Certified` when every one of its goals
+passes, and a failing goal leaves only its own function `Unresolved`, with the
+obligation and the reason. Certification runs the pinned toolchain
 whatever elan's default is, and a project pinned by an earlier release moves to
 the current pin with a warning; any other pin is an error.
 

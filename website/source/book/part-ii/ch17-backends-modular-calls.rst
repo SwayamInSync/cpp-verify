@@ -156,16 +156,16 @@ For an explicit interactive proof:
    # complete proof/CppVerify/Proofs/*/*.lean; put shared lemmas in User.lean
    cpp-verify --backend=lean --lean-project=proof --lean-certify file.cpp
 
-``Generated.lean`` and ``Check.lean`` are machine-owned.
+``Generated.lean`` and ``Check.lean`` are machine-owned; ``Check.lean`` imports
+every proof, so ``lake build CppVerify.Check`` builds them all at once.
 ``User.lean`` is never overwritten, and each goal has a proof file of its own,
 which cpp-verify never rewrites but moves with its goal (see `Proofs that
 follow their goals`_ below).
 The project pins ``leanprover/lean4:v4.35.0``, which certification runs whatever
 elan's default toolchain is; a project 0.1 generated, pinned to ``v4.32.2``, moves to
 it with a warning. Certification compiles the user
-module and every active proof with admissions promoted to errors, checks the
-aggregate module, and rejects proof dependencies other than Lean's documented
-foundational axioms.
+module and each proof file with admissions promoted to errors, then checks the
+compiled modules as described in `What certification checks`_ below.
 
 Each goal in ``Generated.lean`` is a Lean proposition that means what the
 obligation means, so a proof of it is a proof of the obligation:
@@ -467,6 +467,66 @@ such as ``warning: the Lean proof CppVerify/Proofs/Goal_b054b023e3576f6e.lean
 that cpp-verify 0.1 wrote for fn_5f5a3373697876::postcondition@8:37 is now
 CppVerify/Proofs/cppverify_six_6a2cf3/cppverify_six_6a2cf3_postcondition_198bc076.lean``.
 A 0.1 proof of a goal the source no longer has is kept in ``Stale/``.
+
+What certification checks
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``Certified`` holds against a proof author in bad faith, so it cannot rest on
+anything the user's Lean source does. After the build, a checker that
+cpp-verify ships runs on the compiled modules and elaborates none of the
+user's source. For each goal:
+
+- the kernel replays every declaration of every module of the project the
+  proof imports, as ``leanchecker`` does, so nothing escaped the kernel; only
+  the pinned toolchain's own modules are trusted;
+- the proof ``G_proof`` must be a theorem whose type is exactly the goal
+  ``G`` that ``CppVerify.Generated`` defines;
+- the axioms it depends on, collected from the constants it uses, must be
+  among ``propext``, ``Quot.sound``, and ``Classical.choice``.
+
+Each function is certified on its own goals. For this file, where ``one``
+claims a false postcondition:
+
+.. cppverify-example: fails one
+
+.. code-block:: cpp
+
+   int fine()
+     cppverify::post(cppverify::result == 1)
+   {
+     return 1;
+   }
+
+   int one()
+     cppverify::post(cppverify::result == 2)
+   {
+     return 1;
+   }
+
+a ``User.lean`` that rewrites what a check file would print,
+
+.. code-block:: lean4
+
+   import CppVerify.Generated
+
+   macro_rules
+     | `(command| example : $_ := $_) => `(command| #eval pure ())
+   macro_rules
+     | `(command| #print axioms $_) => `(command| #eval IO.println "does not depend on any axioms")
+
+with a proof of ``True`` for the postcondition of ``one`` and true proofs
+for the rest, gives:
+
+.. code-block:: text
+
+   Certified: fine [backend=Lean]
+   Unresolved: lean obligation: one (Lean certification failed: the proof of fn_5f5a336f6e6576::postcondition@8:37: cppverify_one_99bcee_postcondition_646d2761_proof proves True, not cppverify_one_99bcee_postcondition_646d2761)
+
+A theorem of the goal added by a command with ``debug.skipKernelTC``, which
+skips the kernel, is rejected at its replay (``the kernel rejects
+CppVerify.Lemmas: while replaying declaration 'cheat': (kernel) declaration
+type mismatch``), and a user axiom behind a lemma by its name (``depends on
+the axiom escape, which is not one of Lean's foundations``).
 
 Portable obligation archives
 ----------------------------
