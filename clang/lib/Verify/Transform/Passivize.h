@@ -31,6 +31,9 @@ struct PassiveStmt {
   /// postcondition or unfolding, a frame of a spec's reads), not a premise
   /// of the function's claim. Unmarked assumptions are premises.
   bool Theorem = false;
+  /// For an assumption: where it comes from (`pre`, `call:f`, `inv`, ...),
+  /// which names its hypothesis in a readable goal.
+  std::string Origin;
 };
 
 /// A goal checked in the final state.
@@ -80,6 +83,8 @@ struct PassiveProgram {
   std::vector<std::unique_ptr<VExpr>> EntryAssumes;
   /// How many leading EntryAssumes are the function's own preconditions.
   size_t PreconditionCount = 0;
+  /// Where each of EntryAssumes comes from, as PassiveStmt::Origin.
+  std::vector<std::string> EntryOrigins;
   /// Each behavior's assumption in the entry state.
   std::vector<std::pair<std::string, std::unique_ptr<VExpr>>> BehaviorAssumes;
   std::vector<PassiveExitAssert> ExitAsserts;
