@@ -1,8 +1,8 @@
 import CppVerify.User
 
-theorem cppverify_fibo_step_fn_5f5a396669626f5f7374657069_obligation_2_goal_proof :
-    cppverify_fibo_step_fn_5f5a396669626f5f7374657069_obligation_2_goal := by
-  unfold cppverify_fibo_step_fn_5f5a396669626f5f7374657069_obligation_2_goal
+theorem cppverify_fibo_step_624f01_postcondition_559cb60a_proof :
+    cppverify_fibo_step_624f01_postcondition_559cb60a := by
+  unfold cppverify_fibo_step_624f01_postcondition_559cb60a
   intro __heap_alloc_0 __heap_live_0 i_0 spec1 spec2 spec3
   by_cases h :
       cppBvSle (BitVec.ofInt 32 1) i_0 ∧
@@ -17,7 +17,7 @@ theorem cppverify_fibo_step_fn_5f5a396669626f5f7374657069_obligation_2_goal_proo
     have minusTwo : i_0.toInt + 1 - 2 = i_0.toInt - 1 := by omega
     have minusOne : i_0.toInt + 1 - 1 = i_0.toInt := by omega
     rw [spec1]
-    unfold cppSpecBody_m1_fn_5f5a346669626f69_1
+    unfold cppSpecBody_624f0147_fn_5f5a346669626f69_1
     rw [if_neg positive, if_neg notOne, minusTwo, minusOne]
     exact Int.add_comm _ _
   · exact Or.inl h
