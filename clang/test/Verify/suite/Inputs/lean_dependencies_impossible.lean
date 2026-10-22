@@ -1,7 +1,7 @@
 import CppVerify.User
 
-theorem cppverify_impossible_fn_5f5a3130696d706f737369626c6569_obligation_2_goal_proof : cppverify_impossible_fn_5f5a3130696d706f737369626c6569_obligation_2_goal := by
-  unfold cppverify_impossible_fn_5f5a3130696d706f737369626c6569_obligation_2_goal
+theorem cppverify_impossible_9d6c7c_postcondition_1cd35301_proof : cppverify_impossible_9d6c7c_postcondition_1cd35301 := by
+  unfold cppverify_impossible_9d6c7c_postcondition_1cd35301
   intro _ _ _ x
   left
   intro ⟨above, below⟩
