@@ -1,0 +1,95 @@
+# REQUIRES: lean
+#
+# cppverify_auto is tried once on each new goal of a Lean project: a goal it
+# proves gets that proof, any other a stub that says it was tried. Its proofs
+# are certified like any other, and a file cpp-verify wrote is rewritten only
+# while nobody edited it.
+#
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p --lean-auto-timeout=3000 --jobs=1 %S/Inputs/lean_automation.cpp -- 2>&1 | FileCheck %s --check-prefix=EXPORT
+# RUN: FileCheck %s --input-file=%t/p/CppVerify/Proofs/cppverify_next_e1e917/cppverify_next_e1e917_postcondition_506f384e.lean --check-prefix=PROVED
+# RUN: FileCheck %s --input-file=%t/p/CppVerify/Proofs/cppverify_square_934e38/cppverify_square_934e38_overflow_f86973f7.lean --check-prefix=STUB
+# The goal after one that takes too long is still tried.
+# RUN: FileCheck %s --input-file=%t/p/CppVerify/Proofs/cppverify_a_slow_989093/cppverify_a_slow_989093_postcondition_1555cfbf.lean --check-prefix=SLOW
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p --diagnostics-format=json %S/Inputs/lean_automation.cpp -- 2>&1 | FileCheck %s --check-prefix=JSON
+#
+# Certification checks the automatic proofs like any other.
+# RUN: not %cpp-verify --backend=lean --lean-project=%t/p --lean-certify %S/Inputs/lean_automation.cpp -- 2>&1 | FileCheck %s --check-prefix=CERTIFY
+#
+# No goal is new, so nothing is tried again.
+# RUN: rm -rf %t/p/.cppverify/automation
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p %S/Inputs/lean_automation.cpp -- 2>&1 | FileCheck %s --check-prefix=EXPORT
+# RUN: not test -e %t/p/.cppverify/automation
+#
+# An edited proof is the user's, kept as it is; it may use cppverify_auto.
+# RUN: sed -i 's/^  cppverify_auto_grind$/  cppverify_auto/' %t/p/CppVerify/Proofs/cppverify_next_e1e917/cppverify_next_e1e917_postcondition_506f384e.lean
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p %S/Inputs/lean_automation.cpp -- 2>&1 | FileCheck %s --check-prefix=EDITED
+# RUN: grep -qx '  cppverify_auto' %t/p/CppVerify/Proofs/cppverify_next_e1e917/cppverify_next_e1e917_postcondition_506f384e.lean
+#
+# A stub that no revision of cppverify_auto tried, as before automation, and
+# one an earlier revision tried, are tried.
+# RUN: sed -i -e '/^   automation:/d' -e '/^import CppVerify.Auto$/d' -e 's/^  cppverify_auto_grind$/  sorry/' %t/p/CppVerify/Proofs/cppverify_next_e1e917/cppverify_next_e1e917_missing_return_54ae7c80.lean
+# RUN: sed -i 's/cppverify_auto 1 did not prove it/cppverify_auto 0 did not prove it/' %t/p/CppVerify/Proofs/cppverify_square_934e38/cppverify_square_934e38_overflow_f86973f7.lean
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p %S/Inputs/lean_automation.cpp -- 2>&1 | FileCheck %s --check-prefix=EDITED
+# RUN: FileCheck %s --input-file=%t/p/CppVerify/Proofs/cppverify_next_e1e917/cppverify_next_e1e917_missing_return_54ae7c80.lean --check-prefix=TRIED
+# RUN: FileCheck %s --input-file=%t/p/CppVerify/Proofs/cppverify_square_934e38/cppverify_square_934e38_overflow_f86973f7.lean --check-prefix=STUB
+# RUN: not %cpp-verify --backend=lean --lean-project=%t/p --lean-certify %S/Inputs/lean_automation.cpp -- 2>&1 | FileCheck %s --check-prefix=CERTIFY
+#
+# A step that proves a goal with a lemma the user has not proved does not
+# count; the next step, which proves it honestly, does.
+# RUN: mkdir -p %t/u/CppVerify && cp %S/Inputs/lean_automation_user.lean %t/u/CppVerify/User.lean
+# RUN: %cpp-verify --backend=lean --lean-project=%t/u --lean-auto-timeout=3000 --jobs=2 %S/Inputs/lean_automation.cpp -- 2>&1 | FileCheck %s --check-prefix=EXPORT
+# RUN: FileCheck %s --input-file=%t/u/CppVerify/Proofs/cppverify_next_e1e917/cppverify_next_e1e917_overflow_fd7a6390.lean --check-prefix=HONEST
+#
+# Without automation every new goal gets a stub.
+# RUN: %cpp-verify --backend=lean --no-lean-auto --lean-project=%t/q %S/Inputs/lean_automation.cpp -- 2>&1 | FileCheck %s --check-prefix=PLAIN --implicit-check-not=cppverify_auto
+# RUN: not grep -r -l 'automation:' %t/q/CppVerify/Proofs
+# RUN: grep -c -x '  sorry' %t/q/CppVerify/Proofs/cppverify_next_e1e917/cppverify_next_e1e917_postcondition_506f384e.lean
+#
+# Both options belong to a Lean project.
+# RUN: not %cpp-verify --no-lean-auto %S/Inputs/lean_automation.cpp -- 2>&1 | FileCheck %s --check-prefix=NO-PROJECT
+# RUN: not %cpp-verify --lean-auto-timeout=1000 %S/Inputs/lean_automation.cpp -- 2>&1 | FileCheck %s --check-prefix=NO-PROJECT-TIMEOUT
+
+# EXPORT: Exported: lean obligation: a_slow (cppverify_auto proved 2 of 3 goals)
+# EXPORT-NEXT: Exported: lean obligation: next (cppverify_auto proved 3 of 3 goals)
+# EXPORT-NEXT: Exported: lean obligation: square (cppverify_auto proved 1 of 3 goals)
+
+# PROVED: automation: cppverify_auto 1 proves it with cppverify_auto_grind
+# PROVED-NEXT: cppverify_auto proves this goal. cpp-verify rewrites this file only while it
+# PROVED-NEXT: is unedited; a proof you write here is yours, kept as any other. -/
+# PROVED-NEXT: import CppVerify.User
+# PROVED-NEXT: import CppVerify.Auto
+# PROVED-EMPTY:
+# PROVED-NEXT: theorem cppverify_next_e1e917_postcondition_506f384e_proof : cppverify_next_e1e917_postcondition_506f384e := by
+# PROVED-NEXT:   apply cppverify_next_e1e917_postcondition_506f384e.of_readable
+# PROVED-NEXT:   intro __heap_alloc_0 __heap_live_0 __result_1 x_0 h_pre_1 h_null_1 h_null_2 h_exact_1 h_exact_2 h_result_1
+# PROVED-NEXT:   cppverify_auto_grind
+# PROVED-EMPTY:
+
+# STUB: automation: cppverify_auto 1 did not prove it{{$}}
+# STUB-NEXT: Complete this proof.
+# STUB: {{^}}  sorry{{$}}
+
+# SLOW: automation: cppverify_auto 1 did not prove it within 3 s
+# SLOW: {{^}}  sorry{{$}}
+
+# JSON: "function":"next","lean_automatic":3,{{.*}}"status":"exported"
+
+# CERTIFY: Unresolved: lean obligation: a_slow (Lean certification failed: the proof of {{.*}}::postcondition@2:37: {{.*}}declaration uses `sorry`
+# CERTIFY-NEXT: Certified: next [backend=Lean]
+# CERTIFY-NEXT: Unresolved: lean obligation: square (Lean certification failed: the proof of {{.*}}::overflow@19:3: {{.*}}declaration uses `sorry`
+
+# EDITED: Exported: lean obligation: next (cppverify_auto proved 2 of 3 goals)
+
+# TRIED: automation: cppverify_auto 1 proves it with cppverify_auto_grind
+# TRIED: {{^}}  cppverify_auto_grind{{$}}
+
+# HONEST: automation: cppverify_auto 1 proves it with cppverify_auto_heap
+# HONEST: {{^}}  cppverify_auto_heap{{$}}
+
+# PLAIN: Exported: lean obligation: a_slow{{$}}
+# PLAIN-NEXT: Exported: lean obligation: next{{$}}
+# PLAIN-NEXT: Exported: lean obligation: square{{$}}
+
+# NO-PROJECT: --no-lean-auto requires --lean-project or --lean-fallback
+# NO-PROJECT-TIMEOUT: --lean-auto-timeout requires --lean-project or --lean-fallback
