@@ -69,13 +69,23 @@ hold, so ``grid[0][4]`` is rejected even though it has the address of
 the body, and in postconditions and assertions, where a division by zero is
 checked too.
 
-Two forms are not supported yet. Reading a whole record or array through a
-pointer (``Ring copy = *r;``) is an error; read its fields instead. Forming a
-pointer to an array member, as passing ``r->buf`` to a buffer parameter does,
-is also an error, because the pointer would have to carry the member's
-bounds; index the member where it is used:
+Reading a whole record or array through a pointer (``Ring copy = *r;``) is
+not supported yet; read its fields instead.
 
-.. cppverify-example: rejects
+Pointers into a record
+----------------------
+
+A pointer can also point into the object a pointer addresses. A member array
+decays to a pointer to its first element (``r->buf``), and ``&`` gives the
+address of an element, a field, or a nested record (``&r->buf[2]``,
+``&r->head``, ``&r->inner``). Such a pointer may address only that
+subobject: the array it comes from, or else the field or record. Every access
+and step through it must stay there, however the pointer is copied, chosen,
+or stepped, and so must the elements of every argument formed from it.
+``q[8]`` below has the address of ``r->head``, inside ``*r``, and is still out
+of bounds:
+
+.. cppverify-example: fails past
 
 .. code-block:: cpp
 
@@ -94,15 +104,76 @@ bounds; index the member where it is used:
 
    int oldest(const Ring *r)
      cv::pre(r != nullptr)
+     cv::post(cv::result == r->buf[0])
    {
      return first(r->buf, 8);
    }
 
+   int total(const Ring *r)
+     cv::pre(r != nullptr)
+     cv::pre(cv::forall(k, 0, 8, 0 <= r->buf[k] && r->buf[k] <= 100))
+     cv::post(cv::result >= 0 && cv::result <= 800)
+   {
+     int s = 0;
+     for (const int *q = r->buf; q != r->buf + 8; q = q + 1)
+       cv::invariant(r->buf <= q && q <= r->buf + 8)
+       cv::invariant(0 <= s && s <= 100 * (q - r->buf))
+       cv::decreases(r->buf + 8 - q)
+     {
+       s = s + *q;
+     }
+     return s;
+   }
+
+   int past(const Ring *r)
+     cv::pre(r != nullptr)
+   {
+     const int *q = r->buf;
+     return q[8];
+   }
+
 .. code-block:: text
 
-   ring.cpp:17:16: error: oldest: a pointer to the array member 'buf' is unsupported; index the member where it is used, as in 'buf[i]'
-      17 |   return first(r->buf, 8);
-         |                ^~~~~~
+   Verified: first [backend=z3]
+   Verified: oldest [backend=z3]
+   Verified: total [backend=z3]
+   ring.cpp:41:10: error: verification failed: past [...::bounds@41:10#2] (counterexample: q [ssa=q_1] [type=pointer] = 1, r [ssa=r_0] [type=pointer] = 1) [backend=z3] [reason=counterexample]
+
+The rules follow C++:
+
+- forming the pointer requires the object it points into: ``r`` non-null, and
+  each index inside its array, so ``&r->buf[i]`` with ``i == 8`` is an error
+  even though ``r->buf + 8`` is not;
+- a step may reach one past the end of the array, and an access may not;
+- a pointer difference such as ``q - r->buf`` requires both pointers in one
+  array, so ``&r->head - r->buf`` is an error;
+- as a bare value, in a condition or a contract (``q != r->buf + 8``), the
+  pointer only compares.
+
+Such a pointer cannot yet leave the function, because the bounds it carries
+would be lost there: returning it, or storing it in memory, is an error.
+
+.. cppverify-example: rejects
+
+.. code-block:: cpp
+
+   struct Ring {
+     int buf[8];
+     int head;
+     int count;
+   };
+
+   const int *slot(const Ring *r, int i)
+     cv::pre(r != nullptr && 0 <= i && i < 8)
+   {
+     return &r->buf[i];
+   }
+
+.. code-block:: text
+
+   ring.cpp:10:3: error: slot: returning a pointer into a member array or field is unsupported
+      10 |   return &r->buf[i];
+         |   ^~~~~~
 
 ``cppverify::type_invariant``
 -----------------------------
@@ -162,6 +233,7 @@ fields. A local object whose address is needed (it holds a fixed array, or a
 reference binds to one of its members) is promoted to an automatic object and
 may also have nested record, pointer, and fixed-array members. A record
 reached through a pointer may have the same members, and its scalar fields and
-elements are reached one at a time (see `Records through pointers`_). Reference
+elements are reached one at a time (see `Records through pointers`_), or
+through a pointer into it (see `Pointers into a record`_). Reference
 members, unions, bases, virtual dispatch, and non-trivial
 construction/destruction are rejected rather than approximated.

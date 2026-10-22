@@ -2,6 +2,7 @@
 #include "Passivize.h"
 #include "Origins.h"
 #include "SpecInline.h"
+#include "SubobjectBounds.h"
 #include "UBChecks.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/STLExtras.h"
@@ -862,8 +863,9 @@ scaledExtent(const VExpr *Length, uint64_t PointeeSize, SourceLocation Loc) {
 }
 
 /// Pointer lies in the closed byte range of the object its origin names:
-/// a parameter's entry object (its declared extent, else one element) or a
-/// global. Null when an origin is not such an object.
+/// a parameter's entry object (its declared extent, else one object of its
+/// pointee type, an entry with no length in Extents) or a global. Null when
+/// an origin is not such an object.
 static std::unique_ptr<VExpr>
 originPositionSafety(const VExpr *Pointer,
                      const std::vector<VValidExtent> &Extents,
@@ -894,12 +896,17 @@ originPositionSafety(const VExpr *Pointer,
       for (const VValidExtent &Candidate : Extents)
         if (Candidate.Base == Origin)
           Extent = &Candidate;
-      if (Extent && Extent->PointerType.PointeeSizeBytes != Stride)
-        return nullptr;
-      if (Extent) {
+      // The object is measured in its own elements: a pointer into a
+      // subobject (a member array) has a smaller type than its origin's.
+      const uint64_t ObjectStride =
+          Extent ? Extent->PointerType.PointeeSizeBytes : Stride;
+      if (Extent && Extent->Length) {
         VOldExpr Length(cloneVExpr(Extent->Length.get()), Extent->Length->Ty,
                         Loc);
-        Bytes = scaledExtent(&Length, Stride, Loc);
+        Bytes = scaledExtent(&Length, ObjectStride, Loc);
+      } else if (Extent && ObjectStride > 0) {
+        Bytes = std::make_unique<VLiteralExpr>(std::to_string(ObjectStride),
+                                               pointerOffsetType(), Loc);
       } else {
         Bytes = std::make_unique<VLiteralExpr>(std::to_string(Stride),
                                                pointerOffsetType(), Loc);
@@ -3258,6 +3265,10 @@ class PassivizerImpl {
   std::vector<VValidExtent> ActiveValidExtents;
   std::set<std::string> PointerParameterNames;
   std::set<std::string> SourcePointerParameterNames;
+  /// The objects of the pointer parameters, for origins: the declared
+  /// extents, and one object of its pointee type (no length) for a
+  /// parameter without one.
+  std::vector<VValidExtent> OriginObjects;
   std::set<std::string> RepresentedAllocationPointers;
   std::vector<StoredPointerCell> StoredPointerCells;
   std::set<std::string> HeapBases;
@@ -4216,7 +4227,7 @@ class PassivizerImpl {
         SafetySource ? SafetySource : E, &FnMap,
         SafetySource ? &Fn.ValidExtents : &ActiveValidExtents,
         SafetySource ? &SourcePointerParameterNames : &PointerParameterNames,
-        Checks, Fn.ObjectModel, SafetySource ? &Fn.ValidExtents : nullptr);
+        Checks, Fn.ObjectModel, SafetySource ? &OriginObjects : nullptr);
     groupByKind(Checks);
     CloneCtx Ctx{Renames, OldState, false};
     for (const SafetyCheck &Check : Checks)
@@ -4535,6 +4546,15 @@ public:
         SourcePointerParameterNames.insert(Param.first);
       }
     }
+    for (const VValidExtent &Extent : Fn.ValidExtents)
+      OriginObjects.emplace_back(Extent.Base, Extent.PointerType,
+                                 cloneVExpr(Extent.Length.get()));
+    for (const auto &[Name, Ty] : Fn.Params)
+      if (Ty.Kind == VTypeKind::Ptr &&
+          llvm::none_of(Fn.ValidExtents, [&, &Name = Name](const auto &E) {
+            return E.Base == Name;
+          }))
+        OriginObjects.emplace_back(Name, Ty, nullptr);
     CloneCtx EntryCtx{Renames, OldState, true};
     for (const VValidExtent &Extent : Fn.ValidExtents)
       ActiveValidExtents.emplace_back(stateVariableName(EntryCtx, Extent.Base),
@@ -4618,7 +4638,7 @@ public:
       SafetyChecks Checks;
       collectSafety(Post, &FnMap, &Fn.ValidExtents,
                     &SourcePointerParameterNames, Checks, Fn.ObjectModel,
-                    &Fn.ValidExtents);
+                    &OriginObjects);
       groupByKind(Checks);
       for (const SafetyCheck &Check : Checks) {
         if (Fn.TotalExpressions && isDefinedness(Check.Kind))
@@ -4860,6 +4880,52 @@ public:
                   makeOr(std::move(Empty), std::move(NonNull), C.Loc), nullptr,
                   C.Loc);
     }
+
+    // An argument that addresses a subobject passes only the bytes its
+    // bounds name: the callee's extent, or its one object, lies in them.
+    if (Fn.ObjectModel)
+      for (unsigned I = 0; I < Callee->Params.size() && I < C.Args.size();
+           ++I) {
+        const auto &[Name, Ty] = Callee->Params[I];
+        const VExpr *Arg = C.Args[I].get();
+        if (Ty.Kind != VTypeKind::Ptr ||
+            !hasBoundedRoot(Arg, Fn.BoundedPointers))
+          continue;
+        std::unique_ptr<VExpr> Bytes;
+        for (const VValidExtent &Extent : Callee->ValidExtents)
+          if (Extent.Base == Name) {
+            auto Length =
+                substParams(Extent.Length.get(), ParamMap, Ctx, EntryHeap);
+            Bytes = scaledExtent(Length.get(),
+                                 Extent.PointerType.PointeeSizeBytes, C.Loc);
+          }
+        if (!Bytes && Ty.PointeeSizeBytes > 0)
+          Bytes = std::make_unique<VLiteralExpr>(
+              std::to_string(Ty.PointeeSizeBytes), pointerOffsetType(), C.Loc);
+        if (!Bytes)
+          continue;
+        auto Lo = cloneExpr(
+            pointerBound(Arg, /*Upper=*/false, Fn.BoundedPointers).get(), Ctx);
+        auto Hi = cloneExpr(
+            pointerBound(Arg, /*Upper=*/true, Fn.BoundedPointers).get(), Ctx);
+        const VExpr *Actual = ParamMap[Name].get();
+        auto Within =
+            makeAnd(std::make_unique<VBinOpExpr>(VBinOp::Le, std::move(Lo),
+                                                 cloneVExpr(Actual),
+                                                 VType::makeBool(), C.Loc),
+                    std::make_unique<VBinOpExpr>(
+                        VBinOp::Le,
+                        addBytes(cloneVExpr(Actual), std::move(Bytes), C.Loc),
+                        std::move(Hi), VType::makeBool(), C.Loc),
+                    C.Loc);
+        emitPassive(P, PassiveStmt::Assert,
+                    makeOr(makeEq(cloneVExpr(Actual),
+                                  std::make_unique<VLiteralExpr>(
+                                      0, VType::makePtr(), C.Loc),
+                                  C.Loc),
+                           std::move(Within), C.Loc),
+                    nullptr, C.Loc, ProofObligationKind::Bounds);
+      }
 
     std::vector<std::unique_ptr<VExpr>> ActualModifies;
     std::vector<std::unique_ptr<VExpr>> ActualCounts;

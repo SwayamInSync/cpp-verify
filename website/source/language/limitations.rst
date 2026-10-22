@@ -89,7 +89,9 @@ The most mature current fragment includes:
 - fixed local arrays and promoted trivial local records with nested record,
   pointer, and fixed-array members;
 - the fields and fixed-array elements of a record a pointer addresses, at any
-  depth (``p->buf[i]``, ``p->inner.arr[j]``, ``p[k].items[i].v``);
+  depth (``p->buf[i]``, ``p->inner.arr[j]``, ``p[k].items[i].v``), and
+  pointers into them, each bounded by the array, field, or record it points
+  into;
 - one-level typed pointers, abstract indexed buffers, and heap framing;
 - constrained direct scalar ``new``/``delete`` with liveness, initialization,
   and provenance.
@@ -127,10 +129,12 @@ C++ feature boundaries
        local arrays (including arrays of records and multidimensional arrays)
        modelled as byte-addressed automatic objects up to 256 bytes, and the
        fixed-array members of a record a pointer addresses, each index
-       checked against its own array.
+       checked against its own array, and pointers into them
+       (``int *q = p->buf;``, ``&p->buf[i]``), bounded by the array.
      - Array parameters/fields carried by value, array references,
        ``new[]``/``delete[]``, loop-local arrays, and raw pointers derived from
-       a local array or from an array member (``int *q = p->buf;``).
+       a local array; a pointer into a record a pointer addresses that leaves
+       the function (returned or stored in memory).
    * - Records
      - Flat trivial standard-layout values with scalar fields; trivial
        standard-layout records with nested record, pointer, and fixed-array

@@ -2,6 +2,7 @@
 #include "UBChecks.h"
 #include "../IR/VExpr.h"
 #include "Origins.h"
+#include "SubobjectBounds.h"
 #include "llvm/ADT/STLExtras.h"
 #include <map>
 #include <set>
@@ -253,6 +254,47 @@ struct UBInstrumenter {
   // Parameters the body assigns, whose current value may address another
   // object than their entry value.
   std::set<std::string> Reassigned;
+  // Pointers to subobjects, which address only their companions' bytes.
+  std::set<std::string> Bounded;
+
+  // Other lies in the closed bounds of Bounded, a pointer into a subobject.
+  std::unique_ptr<VExpr> sameSubobject(const VExpr *Bounded,
+                                       const VExpr *Other) const {
+    if (!ObjectModel)
+      return nullptr;
+    auto Lo = pointerBound(Bounded, /*Upper=*/false, this->Bounded);
+    auto Hi = pointerBound(Bounded, /*Upper=*/true, this->Bounded);
+    if (!Lo || !Hi)
+      return nullptr;
+    const SourceLocation Loc = Other->Loc;
+    return std::make_unique<VBinOpExpr>(
+        VBinOp::And,
+        std::make_unique<VBinOpExpr>(VBinOp::Le, std::move(Lo),
+                                     cloneVExpr(Other), VType::makeBool(), Loc),
+        std::make_unique<VBinOpExpr>(VBinOp::Le, cloneVExpr(Other),
+                                     std::move(Hi), VType::makeBool(), Loc),
+        VType::makeBool(), Loc);
+  }
+
+  // A pointer to a subobject addresses only the bytes [lo, hi) its bounds
+  // name: an access lies there, a step in their closure.
+  std::unique_ptr<VExpr> subobjectObligation(const VExpr *Addr,
+                                             bool Closed) const {
+    if (!ObjectModel || !Addr || Addr->Ty.Kind != VTypeKind::Ptr)
+      return nullptr;
+    auto Lo = pointerBound(Addr, /*Upper=*/false, Bounded);
+    auto Hi = pointerBound(Addr, /*Upper=*/true, Bounded);
+    if (!Lo || !Hi)
+      return nullptr;
+    const SourceLocation Loc = Addr->Loc;
+    auto Low = std::make_unique<VBinOpExpr>(
+        VBinOp::Le, std::move(Lo), cloneVExpr(Addr), VType::makeBool(), Loc);
+    auto High = std::make_unique<VBinOpExpr>(Closed ? VBinOp::Le : VBinOp::Lt,
+                                             cloneVExpr(Addr), std::move(Hi),
+                                             VType::makeBool(), Loc);
+    return std::make_unique<VBinOpExpr>(
+        VBinOp::And, std::move(Low), std::move(High), VType::makeBool(), Loc);
+  }
 
   // The object of a parameter that keeps its entry value, when Root is one.
   const AbstractObject *parameterObject(const VExpr *Root) const {
@@ -719,10 +761,23 @@ struct UBInstrumenter {
     switch (E->K) {
     case VExpr::BinOp: {
       const auto *B = static_cast<const VBinOpExpr *>(E);
-      if (E != AccessAddress)
+      if (E != AccessAddress) {
         if (auto Arithmetic = arithmeticObligation(B))
           appendObligation(ProofObligationKind::Bounds, std::move(Arithmetic),
                            Guard, Out);
+        if (auto Within = subobjectObligation(B, /*Closed=*/true))
+          appendObligation(ProofObligationKind::Bounds, std::move(Within),
+                           Guard, Out);
+      }
+      // Pointers into a subobject differ only from pointers into the same
+      // array ([expr.add]): each lies in the other's bounds.
+      if (B->Op == VBinOp::Sub && B->Lhs->Ty.Kind == VTypeKind::Ptr &&
+          B->Rhs->Ty.Kind == VTypeKind::Ptr)
+        for (auto [Bounded, Other] : {std::pair{B->Lhs.get(), B->Rhs.get()},
+                                      std::pair{B->Rhs.get(), B->Lhs.get()}})
+          if (auto Within = sameSubobject(Bounded, Other))
+            appendObligation(ProofObligationKind::PointerDifference,
+                             std::move(Within), Guard, Out);
       collectObligations(B->Lhs.get(), Out, Guard);
       if (B->Op == VBinOp::And || B->Op == VBinOp::Or) {
         std::unique_ptr<VExpr> RhsCondition = cloneVExpr(B->Lhs.get());
@@ -770,6 +825,9 @@ struct UBInstrumenter {
                          Out);
       if (auto Access = accessObligation(L->Ptr.get()))
         appendObligation(ProofObligationKind::Bounds, std::move(Access), Guard,
+                         Out);
+      if (auto Within = subobjectObligation(L->Ptr.get(), /*Closed=*/false))
+        appendObligation(ProofObligationKind::Bounds, std::move(Within), Guard,
                          Out);
       break;
     }
@@ -821,6 +879,11 @@ struct UBInstrumenter {
           SourceLocation L = Access->Loc;
           New.push_back(std::make_unique<VAssertStmt>(
               std::move(Access), L, ProofObligationKind::Bounds));
+        }
+        if (auto Within = subobjectObligation(St.Ptr.get(), /*Closed=*/false)) {
+          SourceLocation L = Within->Loc;
+          New.push_back(std::make_unique<VAssertStmt>(
+              std::move(Within), L, ProofObligationKind::Bounds));
         }
         const VExpr *SavedAccess = AccessAddress;
         AccessAddress = St.Ptr.get();
@@ -1194,6 +1257,7 @@ std::optional<std::string> verify::instrumentUBChecks(VFunction &Fn) {
     UB.ObjectModel = true;
     UB.Objects = abstractObjects(Fn);
     UB.Reassigned = assignedNames(Fn.Body);
+    UB.Bounded = Fn.BoundedPointers;
     UB.dropSingleObjectValidity(Fn);
   }
   UB.instrumentStmts(Fn.Body);

@@ -177,6 +177,17 @@ name it, and a reference can bind to it. Each index is checked against its own
 array, so ``r->buf[8]``, which has the address of the next field, is still an
 error (:doc:`language/structs`).
 
+**Pointers into records.** A pointer into the object a pointer addresses was an
+error: a member array passed to a buffer function (``first(r->buf, 8)``), a
+pointer walking it (``for (const int *q = r->buf; q != r->buf + 8; ++q)``),
+and the address of an element, a field, or a nested record (``&r->buf[i]``,
+``&r->head``, ``&r->inner``). The address of an element of a parameter's own
+buffer (``&a[2]``) was an error too. These are supported now. A pointer into
+a record may address only the array, field, or record it points into:
+accesses, steps, pointer differences, and call arguments through it are
+checked against that subobject, so ``q[8]`` past ``r->buf`` is an error,
+though it lies in ``*r`` (:doc:`language/structs`).
+
 Running cpp-verify
 ~~~~~~~~~~~~~~~~~~
 

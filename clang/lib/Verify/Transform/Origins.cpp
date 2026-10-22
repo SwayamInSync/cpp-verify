@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Origins.h"
+#include "SubobjectBounds.h"
 #include "UBChecks.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallString.h"
@@ -149,14 +150,8 @@ private:
     }
     case VExpr::BinOp: {
       const auto *B = static_cast<const VBinOpExpr *>(E);
-      if (B->Op != VBinOp::Add && B->Op != VBinOp::Sub)
-        return std::nullopt;
-      const bool Left = B->Lhs->Ty.Kind == VTypeKind::Ptr;
-      const bool Right = B->Rhs->Ty.Kind == VTypeKind::Ptr;
-      if (Left && !Right)
-        return originsOf(B->Lhs.get(), S);
-      if (Right && !Left && B->Op == VBinOp::Add)
-        return originsOf(B->Rhs.get(), S);
+      if (const VExpr *Pointer = steppedPointer(*B))
+        return originsOf(Pointer, S);
       return std::nullopt;
     }
     case VExpr::Conditional: {
@@ -215,8 +210,10 @@ private:
     case VStmt::Assign: {
       auto &A = static_cast<VAssignStmt &>(Stmt);
       annotateIn(A.Value.get(), S);
+      // A bound companion holds an address no access goes through.
       if (S)
-        (*S)[A.Target] = A.Value && A.Value->Ty.Kind == VTypeKind::Ptr
+        (*S)[A.Target] = A.Value && A.Value->Ty.Kind == VTypeKind::Ptr &&
+                                 !isBoundCompanion(A.Target)
                              ? originsOf(A.Value.get(), *S)
                              : std::nullopt;
       return S;
@@ -551,6 +548,24 @@ std::unique_ptr<VExpr> verify::originIdentity(const std::string &Origin,
                                         identityType(), Loc);
 }
 
+const VExpr *verify::steppedPointer(const VBinOpExpr &B) {
+  if (B.Op != VBinOp::Add && B.Op != VBinOp::Sub)
+    return nullptr;
+  bool Left = B.Lhs->Ty.Kind == VTypeKind::Ptr;
+  bool Right = B.Rhs->Ty.Kind == VTypeKind::Ptr;
+  // A field offset is a constant of pointer type: in a sum of two pointers
+  // the constant is the offset.
+  if (Left && Right) {
+    Left = B.Rhs->K == VExpr::Literal;
+    Right = !Left && B.Lhs->K == VExpr::Literal;
+  }
+  if (Left && !Right)
+    return B.Lhs.get();
+  if (Right && !Left && B.Op == VBinOp::Add)
+    return B.Rhs.get();
+  return nullptr;
+}
+
 std::optional<std::vector<std::string>> verify::pointerOrigins(const VExpr *E) {
   if (!E)
     return std::nullopt;
@@ -568,15 +583,9 @@ std::optional<std::vector<std::string>> verify::pointerOrigins(const VExpr *E) {
   case VExpr::Cast:
     return pointerOrigins(static_cast<const VCastExpr *>(E)->Inner.get());
   case VExpr::BinOp: {
-    const auto *B = static_cast<const VBinOpExpr *>(E);
-    if (B->Op != VBinOp::Add && B->Op != VBinOp::Sub)
-      return std::nullopt;
-    const bool Left = B->Lhs->Ty.Kind == VTypeKind::Ptr;
-    const bool Right = B->Rhs->Ty.Kind == VTypeKind::Ptr;
-    if (Left && !Right)
-      return pointerOrigins(B->Lhs.get());
-    if (Right && !Left && B->Op == VBinOp::Add)
-      return pointerOrigins(B->Rhs.get());
+    if (const VExpr *Pointer =
+            steppedPointer(*static_cast<const VBinOpExpr *>(E)))
+      return pointerOrigins(Pointer);
     return std::nullopt;
   }
   case VExpr::Conditional: {
@@ -622,15 +631,9 @@ std::unique_ptr<VExpr> verify::pointerOriginTerm(const VExpr *E) {
   case VExpr::Cast:
     return pointerOriginTerm(static_cast<const VCastExpr *>(E)->Inner.get());
   case VExpr::BinOp: {
-    const auto *B = static_cast<const VBinOpExpr *>(E);
-    if (B->Op != VBinOp::Add && B->Op != VBinOp::Sub)
-      return nullptr;
-    const bool Left = B->Lhs->Ty.Kind == VTypeKind::Ptr;
-    const bool Right = B->Rhs->Ty.Kind == VTypeKind::Ptr;
-    if (Left && !Right)
-      return pointerOriginTerm(B->Lhs.get());
-    if (Right && !Left && B->Op == VBinOp::Add)
-      return pointerOriginTerm(B->Rhs.get());
+    if (const VExpr *Pointer =
+            steppedPointer(*static_cast<const VBinOpExpr *>(E)))
+      return pointerOriginTerm(Pointer);
     return nullptr;
   }
   case VExpr::Conditional: {

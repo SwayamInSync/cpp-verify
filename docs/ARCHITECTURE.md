@@ -176,6 +176,32 @@ whose own access UB instrumentation checks against the pointer's extent or
 object as before. `p->buf[i]` therefore has both checks, and the array's is
 what rejects `p->buf[8]`, the address of the next field.
 
+**Pointers into objects:** `ASTConverter::subobjectPointer` lowers a decayed
+member array of a pointee and the address of a pointee's element, field, or
+nested record. In a statement (`SubobjectSink`) it asserts the place's access
+condition and its accessibility (`appendReferenceBindingCheck`) and binds the
+address to a fresh pointer `__subobject_N` with two companions,
+`__subobject_N.__lo` and `.__hi`, the bytes of the array it comes from or
+else of the field or record; elsewhere, as in a condition or a contract, it
+is the address alone. `VFunction::BoundedPointers` names the pointers with
+companions. `propagateSubobjectBounds` (`Transform/SubobjectBounds.cpp`) runs
+on the converted body: every pointer variable assigned a value rooted at a
+bounded pointer (through steps, casts, and conditionals, `pointerBound`) is
+bounded too; before each such assignment its companions take the value's
+bounds (a root without bounds may address any byte, `[0, 2^64)`), a step
+keeps them, every bounded variable starts with any byte at entry, and a loop
+that moves one gets the generated invariant `q == 0 || q.__lo == 0 ||
+q % S == q.__lo % S`. Storing a bounded value in memory or returning it is a
+conversion error. UB instrumentation (`subobjectObligation`, `sameSubobject`)
+adds `lo <= addr < hi` at each access, `lo <= p <= hi` at each step, and each
+operand in the other's closed bounds at a pointer difference; a call asserts
+that the bytes a callee's extent or object takes from a bounded argument lie
+in its bounds. Origins treat the companions as no pointers, and a constant of
+pointer type in a sum of two pointers is the field offset
+(`steppedPointer`). Pointer-difference positions measure an origin's object
+in its own elements (`PassivizerImpl::OriginObjects`), since a pointer into a
+member has a smaller type than its origin.
+
 **Quantifiers, triggers, choices, collections:** a quantifier without bounds
 ranges over all mathematical integers. A `cppverify::trigger(term)` mark is an identity
 `Cast` flagged `IsTrigger` around the term. Each `cppverify::choose` is lifted to a

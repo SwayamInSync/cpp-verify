@@ -402,6 +402,10 @@ struct VFunction {
   /// Pointer and reference parameters to const objects: the function
   /// writes nothing through them.
   std::set<std::string> ConstAddressParams;
+  /// Pointer variables that may address a subobject (a member array, a
+  /// field): each has companions `name.__lo` and `name.__hi`, the bytes it
+  /// may address, which every access and step through it must stay in.
+  std::set<std::string> BoundedPointers;
   std::vector<std::pair<std::string, VType>> ReturnFields;
   /// Number of leading preconditions originating from explicit pre clauses.
   unsigned ExplicitPreconditionCount = 0;

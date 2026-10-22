@@ -186,6 +186,7 @@ VFunction verify::cloneVFunction(const VFunction &Fn) {
   Out.SourceVariables = Fn.SourceVariables;
   Out.ReferenceParams = Fn.ReferenceParams;
   Out.ConstAddressParams = Fn.ConstAddressParams;
+  Out.BoundedPointers = Fn.BoundedPointers;
   Out.ReturnFields = Fn.ReturnFields;
   Out.ExplicitPreconditionCount = Fn.ExplicitPreconditionCount;
   for (const auto &P : Fn.Preconditions)

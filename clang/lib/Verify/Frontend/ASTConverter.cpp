@@ -1,6 +1,7 @@
 //===--- ASTConverter.cpp -------------------------------------------------===//
 #include "ASTConverter.h"
 #include "../Transform/Inductive.h"
+#include "../Transform/SubobjectBounds.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
@@ -1164,6 +1165,16 @@ ASTConverter::convertPointerDifferenceOperand(const Expr *E,
                                               uint64_t PointeeSize) {
   if (!E || PointeeSize == 0)
     return nullptr;
+  // A pointer into a member array, or to a subobject, of the object a
+  // pointer addresses.
+  const Expr *Peeled = E->IgnoreParens();
+  if (const auto *Decay = dyn_cast<ImplicitCastExpr>(Peeled);
+      Decay && Decay->getCastKind() == CK_ArrayToPointerDecay &&
+      pointeeRootPointer(Decay->getSubExpr()))
+    return convertExpr(Peeled);
+  if (const auto *U = dyn_cast<UnaryOperator>(Peeled);
+      U && U->getOpcode() == UO_AddrOf && pointeeRootPointer(U->getSubExpr()))
+    return convertExpr(Peeled);
   E = E->IgnoreParenImpCasts();
   if (const auto *DRE = dyn_cast<DeclRefExpr>(E))
     if (isa<VarDecl>(DRE->getDecl()) && E->getType()->isPointerType())
@@ -2940,6 +2951,8 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     for (auto &S : convertStmt(Body))
       Fn->Body.push_back(std::move(S));
     TrackInitialization = false;
+    for (const auto &[Loc, Message] : propagateSubobjectBounds(*Fn))
+      error(SourceRange(Loc), Fn->Name + ": " + Message);
     if (!DynamicPointerProvenanceVariables.empty()) {
       std::vector<std::pair<std::string, SourceLocation>> InitialProvenance;
       InitialProvenance.reserve(DynamicPointerProvenanceVariables.size());
@@ -3425,10 +3438,6 @@ std::string ASTConverter::arrayDecayError(const Expr *Array) const {
   const auto *M = dyn_cast_or_null<MemberExpr>(peelObjectExpr(Array));
   const std::string Member =
       M ? M->getMemberDecl()->getNameAsString() : std::string();
-  if (M && pointeeRootPointer(M))
-    return "a pointer to the array member '" + Member +
-           "' is unsupported; index the member where it is used, as in '" +
-           Member + "[i]'";
   if (const VarDecl *Root = selectionRootVar(Array);
       Root && Root->hasGlobalStorage()) {
     const std::string Kind = Root->isStaticLocal() ? "static local" : "global";
@@ -3439,6 +3448,63 @@ std::string ASTConverter::arrayDecayError(const Expr *Array) const {
   }
   return "array-to-pointer decay of automatic storage is unsupported until "
          "lexical lifetime and escape effects are modeled";
+}
+
+std::unique_ptr<VExpr> ASTConverter::subobjectPointer(const Expr *E,
+                                                      const Expr *Object,
+                                                      bool AddressOf) {
+  const SourceLocation Loc = E->getExprLoc();
+  auto Place = objectPlace(Object);
+  if (!Place)
+    return nullptr;
+  auto AccessCondition = Place->takeAccessCondition();
+  auto Address = Place->takeAddress();
+  const VType PointerType = VType::fromQualType(E->getType(), IntMode, Ctx);
+  Address->Ty = PointerType;
+  // The bytes the pointer may address: the array it decays from or whose
+  // element it addresses, else the field or record it addresses. An element
+  // of the objects a pointer addresses (&p[i], &*p) is bounded by them.
+  const Expr *Bounding = nullptr;
+  const Expr *Peeled = peelObjectExpr(Object);
+  if (!AddressOf || isa<MemberExpr>(Peeled)) {
+    Bounding = Object;
+  } else if (const auto *AS = dyn_cast<ArraySubscriptExpr>(Peeled)) {
+    const Expr *Base = peelObjectExpr(AS->getBase());
+    if (Base && Base->getType()->isArrayType())
+      Bounding = Base;
+  }
+  std::unique_ptr<VExpr> Lo;
+  if (Bounding == Object) {
+    Lo = cloneVExpr(Address.get());
+  } else if (Bounding) {
+    auto Enclosing = objectPlace(Bounding);
+    if (!Enclosing)
+      return nullptr;
+    Lo = Enclosing->takeAddress();
+  }
+  // Only a statement can check the pointer and give it bounds; elsewhere,
+  // as in a condition or a contract, it is a value nothing reads through.
+  if (!SubobjectSink)
+    return Address;
+  if (AccessCondition)
+    SubobjectSink->push_back(std::make_unique<VAssertStmt>(
+        std::move(AccessCondition), Loc, ProofObligationKind::Bounds));
+  appendReferenceBindingCheck(Object, Address.get(), Loc, *SubobjectSink);
+  if (!Bounding)
+    return Address;
+  const uint64_t Size =
+      Ctx.getTypeSizeInChars(Bounding->getType()).getQuantity();
+  auto Hi = objectLeafAddress(Lo.get(), Size, Loc);
+  const std::string Name =
+      FormedSubobjectPrefix + std::to_string(++SubobjectPointerId);
+  SubobjectSink->push_back(
+      std::make_unique<VAssignStmt>(Name, std::move(Address), Loc));
+  SubobjectSink->push_back(
+      std::make_unique<VAssignStmt>(lowerBoundName(Name), std::move(Lo), Loc));
+  SubobjectSink->push_back(
+      std::make_unique<VAssignStmt>(upperBoundName(Name), std::move(Hi), Loc));
+  CurrentFn->BoundedPointers.insert(Name);
+  return std::make_unique<VVarExpr>(Name, PointerType, Loc);
 }
 
 const Expr *ASTConverter::pointeeRootPointer(const Expr *E) const {
@@ -4583,6 +4649,8 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     return convertExpr(MTE->getSubExpr());
   if (const auto *Decay = dyn_cast<CastExpr>(E);
       Decay && Decay->getCastKind() == CK_ArrayToPointerDecay) {
+    if (pointeeRootPointer(Decay->getSubExpr()))
+      return subobjectPointer(E, Decay->getSubExpr(), /*AddressOf=*/false);
     error(CurrentFn->Name + ": " + arrayDecayError(Decay->getSubExpr()));
     return nullptr;
   }
@@ -4761,6 +4829,8 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
   }
   if (const auto *U = dyn_cast<UnaryOperator>(E)) {
     if (U->getOpcode() == UO_AddrOf) {
+      if (pointeeRootPointer(U->getSubExpr()))
+        return subobjectPointer(E, U->getSubExpr(), /*AddressOf=*/true);
       error(CurrentFn->Name +
             ": raw address-of is unsupported until lexical lifetime and escape "
             "effects are modeled");
@@ -6208,6 +6278,14 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     leaveAutomaticScope(Out, CS->getRBracLoc());
     return Out;
   }
+  // A pointer to a subobject formed by this statement is checked and bounded
+  // before it; a condition only compares one.
+  llvm::SaveAndRestore Sink(SubobjectSink,
+                            (isa<DeclStmt, ReturnStmt>(S) || isa<Expr>(S)) &&
+                                    !InGhost && !CurrentFn->IsSpec &&
+                                    !CurrentFn->IsProof
+                                ? &Out
+                                : nullptr);
   if (S->getStmtClass() == Stmt::ReturnStmtClass) {
     if (InGhost) {
       error(CurrentFn->Name +
