@@ -1884,8 +1884,17 @@ not with what is left of the slice (`Z3Encoder::setSearchSlice`): on one
 loaded core its search took 460 ms of the 500, the check had 41 ms, the model
 was left unchecked, the race went on, and the postcondition of
 `certified_failure_attribution.cpp`, whose own search does not end, ran to
-the 60 s timeout. A proof cache stores proofs of single obligations, so with
-one only the obligations are solved.
+the 60 s timeout. Racing, a whole query its slice leaves unresolved is
+retried with the full budget as one more task of the race, queued after the
+obligations: a free worker runs it beside them, and without one the
+function's own thread runs it after them, as with one job. Before, the retry
+always waited for the obligations, so an obligation whose search does not end
+held it back until that obligation's timeout: on two loaded cores the whole
+query of that test needs about 600 ms, more than its slice, and the test took
+61 s with `--jobs=3`; it now takes 1.2 s. The obligations stop the whole
+query, or its retry, whenever they settle the module: when one fails, as
+when they prove all of it. A proof cache stores proofs of single
+obligations, so with one only the obligations are solved.
 
 Every query runs in an encoder of its own (`Z3VerifyBackend::solveQuery`):
 a Z3 context keeps the state of the queries solved in it, as far as an
