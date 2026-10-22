@@ -1874,8 +1874,15 @@ failing obligation's query does not finish within it, the whole query's
 counterexample stands. Before, that query could run to the timeout although
 the whole query had refuted the function in milliseconds: model search over
 quantified heap queries depends on the solver's search order, and 16 of 40
-random seeds took the full 30 s. A proof cache stores proofs of single
-obligations, so with one only the obligations are solved.
+random seeds took the full 30 s. A whole query given only a slice of the
+budget (500 ms for a module without logic functions) checks a model it finds
+with a check's own time (half the module's timeout, or `--certify-timeout`),
+not with what is left of the slice (`Z3Encoder::setSearchSlice`): on one
+loaded core its search took 460 ms of the 500, the check had 41 ms, the model
+was left unchecked, the race went on, and the postcondition of
+`certified_failure_attribution.cpp`, whose own search does not end, ran to
+the 60 s timeout. A proof cache stores proofs of single obligations, so with
+one only the obligations are solved.
 
 Every query runs in an encoder of its own (`Z3VerifyBackend::solveQuery`):
 a Z3 context keeps the state of the queries solved in it, as far as an
