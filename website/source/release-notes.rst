@@ -70,6 +70,19 @@ analyzer reported nothing after a ghost block; libclang hid the constructs;
 and a contract expression in a template's signature produced a malformed
 symbol. Each now behaves by the construct's meaning (:doc:`language/tooling`).
 
+**Lean goals keep their grouping.** The Lean export placed parentheses by a
+precedence table of its own, not Lean's, so ``(a ^ b) + 1`` became
+``a_0 ^^^ b_0 + 1``, which Lean reads as ``a ^^^ (b + 1)``. With
+``r = (a ^ b) + 1`` and ``s = a ^ (b + 1)``, a Lean proof certified the false
+``cppverify::check(r == s)``. A term of numerals alone was read in Lean's
+``Nat``, so a proof certified ``cppverify::check(2 - 3 == 0)`` too, ``2 - 3``
+being 0 there. Machine division by zero meant Lean's 0, not the value the
+solvers and the counterexample checker give. Every operator now keeps its
+grouping under Lean's precedence, every numeral has its type
+(``(3 : Int)``), and division by zero is SMT-LIB's (``BitVec.smtUDiv``,
+``BitVec.smtSDiv``)
+(:doc:`book/part-ii/ch17-backends-modular-calls`).
+
 Failures that were not real
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -143,6 +156,20 @@ although the callee writes only cells the caller may write, in two cases:
 
 The callee's footprint is now compared with the caller's frame cell by cell
 (:doc:`language/pointers`).
+
+**Lean goals that could not be proved.** In a Lean goal a quantifier took
+everything after it into its body, which made a goal with a quantified fact
+before its conclusion say more than its obligation: the goal of a call that
+must establish ``cv::pre(cv::forall(k, 0, n, k >= 0) && n < 8)`` had no
+proof. A signed right shift of a signed right shift lost its parentheses, and
+a spec applied under a quantifier, as in
+``cv::forall(k, 0, n, total(k) >= 0)``, had its definition stated with ``k``
+outside the quantifier: neither project built. ``decide`` could not evaluate
+a machine comparison such as ``cppBvSlt``. Quantifiers are now closed before
+what follows them, every operator keeps its grouping, a definition under a
+quantifier is stated for every value of its variable, and ``decide``
+evaluates the machine comparisons at constants
+(:doc:`book/part-ii/ch17-backends-modular-calls`).
 
 C++ that compiles now
 ~~~~~~~~~~~~~~~~~~~~~
