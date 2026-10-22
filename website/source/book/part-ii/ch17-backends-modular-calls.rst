@@ -153,11 +153,13 @@ For an explicit interactive proof:
 .. code-block:: bash
 
    cpp-verify --backend=lean --lean-project=proof file.cpp
-   # complete proof/CppVerify/Proofs/*.lean; put shared lemmas in User.lean
+   # complete proof/CppVerify/Proofs/*/*.lean; put shared lemmas in User.lean
    cpp-verify --backend=lean --lean-project=proof --lean-certify file.cpp
 
 ``Generated.lean`` and ``Check.lean`` are machine-owned.
-``User.lean`` and existing per-obligation proof files are never overwritten.
+``User.lean`` is never overwritten, and each goal has a proof file of its own,
+which cpp-verify never rewrites but moves with its goal (see `Proofs that
+follow their goals`_ below).
 The project pins ``leanprover/lean4:v4.35.0``, which certification runs whatever
 elan's default toolchain is; a project 0.1 generated, pinned to ``v4.32.2``, moves to
 it with a warning. Certification compiles the user
@@ -212,7 +214,7 @@ goals, three of them ``True``. The one for the call reads:
 
 .. code-block:: lean4
 
-   def cppverify_small_fn_5f5a35736d616c6c76_obligation_1_goal : Prop :=
+   def cppverify_small_74ff94_precondition_4e324fa2 : Prop :=
      ∀
        (__heap_alloc_0 : CppHeap)
        (__heap_live_0 : CppHeap),
@@ -223,15 +225,16 @@ show. The first two facts describe the null pointer (no object owns address
 0, and none is live with identity 0); the third is that evaluating the
 precondition at ``n = 3`` is defined; the last disjunct is the precondition
 there, the quantifier for every ``k`` in ``[0, 3)`` and ``3 < 8``. Its proof file,
-``proof/CppVerify/Proofs/Goal_7b984a9483ff5c2f.lean``, proves that disjunct:
+``proof/CppVerify/Proofs/cppverify_small_74ff94/cppverify_small_74ff94_precondition_4e324fa2.lean``,
+proves that disjunct:
 
 .. code-block:: lean4
 
    import CppVerify.User
 
-   theorem cppverify_small_fn_5f5a35736d616c6c76_obligation_1_goal_proof :
-       cppverify_small_fn_5f5a35736d616c6c76_obligation_1_goal := by
-     unfold cppverify_small_fn_5f5a35736d616c6c76_obligation_1_goal
+   theorem cppverify_small_74ff94_precondition_4e324fa2_proof :
+       cppverify_small_74ff94_precondition_4e324fa2 := by
+     unfold cppverify_small_74ff94_precondition_4e324fa2
      intro _ _
      have zero : (BitVec.ofInt 32 0).toInt = 0 := by decide
      exact Or.inr (Or.inr (Or.inr ⟨fun _ range => by rw [zero] at range; omega, by decide⟩))
@@ -267,9 +270,9 @@ proof. When every exported goal kernel-checks the function is
 ``"status":"mixed-proof"`` with the per-obligation split. When Lean checked
 every obligation, because ``--lean-fallback-scope=all`` exported them all or
 the solver proved none on its own, the function is ``Certified``. SAT counterexamples are failures, not
-fallback candidates. Regeneration may leave old proof files on disk, but only
-the current source obligations are imported and certified; a stale active proof
-must type-check against the regenerated goal.
+fallback candidates. A fallback run examines in Lean only what its solver
+leaves unresolved, so the proofs of the obligations and functions the solver
+settles stay where they are until Lean needs them again.
 
 A Lean proof proves the goals it covers, and the verdict built from it rests
 on the same facts as a solver's: the contracts of the functions it calls and
@@ -305,6 +308,57 @@ contract for its callers, and its result carries the qualifiers a verified
 one does (``[trusts=f]``, ``[partial]``). It also gets the same vacuity
 checks, run with Z3: a goal that holds only because no execution reaches it
 is ``Certified: f [backend=Lean] [vacuous]``, with a warning.
+
+Proofs that follow their goals
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A goal is named by its function and its statement, never by its position:
+``cppverify_small_74ff94_precondition_4e324fa2`` is the ``precondition``
+obligation of ``small``, ``74ff94`` from the function's identity (which tells
+overloads apart), and ``4e324fa2`` the first digits of the hash of what the
+goal states, with the definitions it uses. A goal identical to another of
+its function gets ``_2``. Its proof lives in a directory per function,
+``CppVerify/Proofs/cppverify_small_74ff94/``, and starts with a header that
+records the goal, the obligation, and the full hash. Reordering clauses or
+adding functions changes no statement, so every proof stays where it is.
+
+Each run puts every proof with the goal of its statement. Renaming ``small``
+of the example above to ``tiny`` moves its proofs, with the names they use,
+and they certify again:
+
+.. code-block:: text
+
+   Certified: nonnegative [backend=Lean]
+   Certified: tiny [backend=Lean]
+   warning: the Lean proof of fn_5f5a3474696e7976::missing-return@synthetic moved from CppVerify/Proofs/cppverify_small_74ff94/cppverify_small_74ff94_missing_return_ba8abb90.lean to CppVerify/Proofs/cppverify_tiny_de8a22/cppverify_tiny_de8a22_missing_return_ba8abb90.lean, the file of the goal with its statement
+   warning: the Lean proof of fn_5f5a3474696e7976::postcondition@7:19 moved from CppVerify/Proofs/cppverify_small_74ff94/cppverify_small_74ff94_postcondition_ba8abb90.lean to CppVerify/Proofs/cppverify_tiny_de8a22/cppverify_tiny_de8a22_postcondition_ba8abb90.lean, the file of the goal with its statement
+   warning: the Lean proof of fn_5f5a3474696e7976::precondition@9:3 moved from CppVerify/Proofs/cppverify_small_74ff94/cppverify_small_74ff94_precondition_4e324fa2.lean to CppVerify/Proofs/cppverify_tiny_de8a22/cppverify_tiny_de8a22_precondition_4e324fa2.lean, the file of the goal with its statement
+
+A changed statement never gets the old proof. With ``nonnegative(4)`` in
+place of ``nonnegative(3)``, the precondition's goal is a new one, which gets
+a stub, and the old proof is kept:
+
+.. code-block:: text
+
+   Exported: lean obligation: nonnegative
+   Exported: lean obligation: tiny
+   warning: the Lean proof CppVerify/Proofs/cppverify_tiny_de8a22/cppverify_tiny_de8a22_precondition_4e324fa2.lean is kept in Stale/Proofs/cppverify_tiny_de8a22/cppverify_tiny_de8a22_precondition_4e324fa2.lean: the statement of fn_5f5a3474696e7976::precondition@9:3 changed; its goal is now cppverify_tiny_de8a22_precondition_2596f63f
+
+The kept file ends with that note. The proof comes back by itself once a goal
+has its statement again, as it would if the call were ``nonnegative(3)``
+again, and so do the proofs of a function that is removed and later
+restored. A stub nobody edited is simply removed. Nothing else is ever
+deleted: ``--lean-prune-stale`` deletes what ``Stale/`` keeps, once the run
+has taken back what it needs (``warning: removed the 4 Lean proofs kept in
+Stale/, as --lean-prune-stale asks``).
+
+A project 0.1 generated, with its ``Proofs/Goal_*.lean`` files, moves to these
+names the next time cpp-verify writes it: each proof moves to the file of its
+goal, with the goal and the spec definitions it names renamed, and a warning
+such as ``warning: the Lean proof CppVerify/Proofs/Goal_b054b023e3576f6e.lean
+that cpp-verify 0.1 wrote for fn_5f5a3373697876::postcondition@8:37 is now
+CppVerify/Proofs/cppverify_six_6a2cf3/cppverify_six_6a2cf3_postcondition_198bc076.lean``.
+A 0.1 proof of a goal the source no longer has is kept in ``Stale/``.
 
 Portable obligation archives
 ----------------------------
