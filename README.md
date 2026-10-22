@@ -4,7 +4,7 @@
 
 Formal verification lets you treat correctness as an engineering artifact: you state what should be true, and the tool either proves it or gives you a precise reason it does not. CppVerify brings that discipline to everyday C++ without a separate language or annotation dialect.
 
-📖 **[Documentation](https://swayaminsync.github.io/cpp-verify/)** — install guide, the book (Part I–II), language reference, and Doxygen API.
+📖 **[Documentation](https://swayaminsync.github.io/cpp-verify/)** — install guide, the book (Part I–II), language reference, and Doxygen API, for the latest release; [the development version](https://swayaminsync.github.io/cpp-verify/dev/) documents `main`.
 
 This repository is an [LLVM/Clang](https://github.com/llvm/llvm-project) fork (base `llvmorg-23.1.3`) with a verification engine in `clang/lib/Verify`, discharged by Z3, cvc5, or Lean.
 

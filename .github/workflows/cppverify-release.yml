@@ -86,6 +86,7 @@ jobs:
           esac
           llvm="$(dist/cpp-verify/bin/cpp-verify --version | sed -n 's/^  based on LLVM \([0-9.]*\).*/\1/p')"
           name="cpp-verify-$version-llvm$llvm-${{ matrix.platform }}"
+          series="$(echo "$version" | cut -d. -f1,2)"
           mv dist/cpp-verify "dist/$name"
           cp LICENSE.TXT "dist/$name/LICENSE.TXT"
           cp third_party/z3/LICENSE.txt "dist/$name/LICENSE-Z3.txt"
@@ -98,7 +99,7 @@ jobs:
 
           cvc5 (--backend=cvc5, portfolio, race) and Lean (--lean-certify) are
           found on PATH; cpp-verify --version shows what it finds.
-          Documentation: https://swayaminsync.github.io/cpp-verify/
+          Documentation: https://swayaminsync.github.io/cpp-verify/$series/
           EOF
           tar -C dist -cJf "$name.tar.xz" "$name"
           shasum -a 256 "$name.tar.xz" > "$name.tar.xz.sha256"
@@ -147,6 +148,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -157,11 +159,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${TAG#v}"
+          series="$(echo "$version" | cut -d. -f1,2)"
           flags=()
           case "$version" in *-*) flags+=(--prerelease) ;; esac
           cat > notes.md <<EOF
           cpp-verify $version. What changed, what is supported, and what is not yet:
-          https://swayaminsync.github.io/cpp-verify/release-notes.html
+          https://swayaminsync.github.io/cpp-verify/$series/release-notes.html
 
           Unpack an archive and run \`bin/cpp-verify --version\`. Each archive
           has a \`.sha256\` file to check it with \`shasum -a 256 -c\`.
@@ -169,3 +172,10 @@ jobs:
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
             --title "cpp-verify $version" --notes-file notes.md "${flags[@]}" \
             ./*.tar.xz ./*.tar.xz.sha256
+
+      # The site documents each release series at /X.Y/, built from its tags;
+      # only main may deploy it.
+      - name: Publish the release's documentation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run cppverify-docs.yml --repo "$GITHUB_REPOSITORY" --ref main
