@@ -1,8 +1,8 @@
 import CppVerify.User
 
-theorem cppverify_product_fn_5f5a3770726f647563746a6a_obligation_2_goal_proof :
-    cppverify_product_fn_5f5a3770726f647563746a6a_obligation_2_goal := by
-  unfold cppverify_product_fn_5f5a3770726f647563746a6a_obligation_2_goal
+theorem cppverify_product_4751c3_postcondition_c4d4674b_proof :
+    cppverify_product_4751c3_postcondition_c4d4674b := by
+  unfold cppverify_product_4751c3_postcondition_c4d4674b
   intro _ _ r c a b
   have thousand : (BitVec.ofInt 32 1000).toNat = 1000 := by decide
   rcases Classical.em (cppBvUlt a (BitVec.ofInt 32 1000) ∧
