@@ -1880,6 +1880,10 @@ the split (`[z3: 18 of 20 proved; lean: 2 exported]`);
 Lean proofs pass the kernel gate: a split result becomes `Proved (z3+lean)`
 (JSON `mixed-proof`, with per-obligation evidence), never `Verified`, and only
 a complete Lean export becomes `Certified`.
+A result proved in Lean, alone or with the solver, rests on the callee
+contracts and spec facts its module uses, as a solver's does: certification
+runs before those are settled, whatever else failed, and a Lean result gets
+the same qualifiers and vacuity checks as a verified one.
 
 ## MVP Acceptance Programs
 
