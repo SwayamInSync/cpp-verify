@@ -1,5 +1,6 @@
 //===--- LeanBackend.cpp --------------------------------------------------===//
 #include "LeanBackend.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cctype>
 #include <map>
@@ -132,6 +133,26 @@ static bool sameLeanSort(const LogicSort &Left, const LogicSort &Right) {
   return Left.BitWidth == Right.BitWidth && Left.Signedness == Right.Signedness;
 }
 
+// Lean 4's notation levels (Init/Notation.lean, Init/Core.lean). A context
+// needs an operand of at least its level, and one that binds looser is
+// parenthesized; a function argument needs an atom.
+enum : unsigned {
+  LeanTop = 0,
+  LeanIff = 20,
+  LeanArrow = 25,
+  LeanOr = 30,
+  LeanAnd = 35,
+  LeanNot = 40,
+  LeanCompare = 50,
+  LeanBitOr = 55,
+  LeanBitXor = 58,
+  LeanBitAnd = 60,
+  LeanAdd = 65,
+  LeanMul = 70,
+  LeanShift = 75,
+  LeanArgument = 1024
+};
+
 static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
                             unsigned Prec);
 
@@ -139,14 +160,14 @@ static void printLeanCoerced(const LogicExpr *Expression,
                              const LogicSort &Target, bool IsSigned,
                              llvm::raw_ostream &OS) {
   if (sameLeanSort(Expression->Sort, Target)) {
-    printVCExprLean(Expression, OS, 10);
+    printVCExprLean(Expression, OS, LeanArgument);
     return;
   }
   if (Target.Kind == LogicSortKind::BitVector &&
       (Expression->Sort.Kind == LogicSortKind::MathematicalInteger ||
        Expression->Sort.Kind == LogicSortKind::Pointer)) {
     OS << "(BitVec.ofInt " << Target.BitWidth << " (";
-    printVCExprLean(Expression, OS, 0);
+    printVCExprLean(Expression, OS, LeanTop);
     OS << "))";
     return;
   }
@@ -155,17 +176,17 @@ static void printLeanCoerced(const LogicExpr *Expression,
       Expression->Sort.Kind == LogicSortKind::BitVector) {
     if (IsSigned) {
       OS << "(";
-      printVCExprLean(Expression, OS, 0);
+      printVCExprLean(Expression, OS, LeanTop);
       OS << ").toInt";
     } else {
       OS << "(Int.ofNat (";
-      printVCExprLean(Expression, OS, 0);
+      printVCExprLean(Expression, OS, LeanTop);
       OS << ").toNat)";
     }
     return;
   }
   LeanEmissionFailed = true;
-  printVCExprLean(Expression, OS, 10);
+  printVCExprLean(Expression, OS, LeanArgument);
 }
 
 static void printLeanSpecName(llvm::StringRef Identity, llvm::raw_ostream &OS) {
@@ -243,59 +264,84 @@ static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
   case VCExpr::BoolLit:
     OS << (E->BoolVal ? "True" : "False");
     break;
+  // Typed: Lean reads a term of numerals alone, such as `2 - 3`, in Nat.
   case VCExpr::IntLit:
     if (E->Sort.Kind == LogicSortKind::BitVector)
       OS << "(BitVec.ofInt " << E->Sort.BitWidth << " (" << E->IntVal << "))";
     else
-      OS << "(" << E->IntVal << ")";
+      OS << "(" << E->IntVal << " : Int)";
     break;
   case VCExpr::Var:
     printLeanName(E->Name, OS);
     break;
   case VCExpr::Not:
-    OS << "¬";
-    printVCExprLean(E->Children[0].get(), OS, 10);
+    paren(LeanNot, [&] {
+      OS << "¬";
+      printVCExprLean(E->Children[0].get(), OS, LeanArgument);
+    });
     break;
+  // Right-associative: only the last operand may be of the same level.
   case VCExpr::And:
-    paren(3, [&] {
+    paren(LeanAnd, [&] {
       for (unsigned I = 0; I < E->Children.size(); ++I) {
         if (I)
           OS << " ∧ ";
-        printVCExprLean(E->Children[I].get(), OS, 3);
+        printVCExprLean(E->Children[I].get(), OS,
+                        I + 1 == E->Children.size() ? LeanAnd : LeanAnd + 1);
       }
     });
     break;
   case VCExpr::Or:
-    paren(2, [&] {
+    paren(LeanOr, [&] {
       for (unsigned I = 0; I < E->Children.size(); ++I) {
         if (I)
           OS << " ∨ ";
-        printVCExprLean(E->Children[I].get(), OS, 2);
+        printVCExprLean(E->Children[I].get(), OS,
+                        I + 1 == E->Children.size() ? LeanOr : LeanOr + 1);
       }
     });
     break;
   case VCExpr::Ite:
-    paren(1, [&] {
+    paren(LeanTop, [&] {
       OS << "if ";
-      printVCExprLean(E->Children[0].get(), OS, 0);
+      printVCExprLean(E->Children[0].get(), OS, LeanTop);
       OS << " then ";
-      printVCExprLean(E->Children[1].get(), OS, 0);
+      printVCExprLean(E->Children[1].get(), OS, LeanTop);
       OS << " else ";
-      printVCExprLean(E->Children[2].get(), OS, 0);
+      printVCExprLean(E->Children[2].get(), OS, LeanTop);
     });
     break;
+  // Booleans are propositions, equal when equivalent.
   case VCExpr::Eq:
-    paren(5, [&] {
-      printVCExprLean(E->Children[0].get(), OS, 5);
+    if (E->Children[0]->Sort.Kind == LogicSortKind::Bool) {
+      paren(LeanIff, [&] {
+        printVCExprLean(E->Children[0].get(), OS, LeanIff + 1);
+        OS << " ↔ ";
+        printVCExprLean(E->Children[1].get(), OS, LeanIff + 1);
+      });
+      break;
+    }
+    paren(LeanCompare, [&] {
+      printVCExprLean(E->Children[0].get(), OS, LeanCompare + 1);
       OS << " = ";
-      printVCExprLean(E->Children[1].get(), OS, 5);
+      printVCExprLean(E->Children[1].get(), OS, LeanCompare + 1);
     });
     break;
   case VCExpr::Ne:
-    paren(5, [&] {
-      printVCExprLean(E->Children[0].get(), OS, 5);
+    if (E->Children[0]->Sort.Kind == LogicSortKind::Bool) {
+      paren(LeanNot, [&] {
+        OS << "¬(";
+        printVCExprLean(E->Children[0].get(), OS, LeanIff + 1);
+        OS << " ↔ ";
+        printVCExprLean(E->Children[1].get(), OS, LeanIff + 1);
+        OS << ")";
+      });
+      break;
+    }
+    paren(LeanCompare, [&] {
+      printVCExprLean(E->Children[0].get(), OS, LeanCompare + 1);
       OS << " ≠ ";
-      printVCExprLean(E->Children[1].get(), OS, 5);
+      printVCExprLean(E->Children[1].get(), OS, LeanCompare + 1);
     });
     break;
   case VCExpr::Lt:
@@ -310,52 +356,56 @@ static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
                  ? "cppBvS"
                  : "cppBvU")
          << (Inclusive ? "le " : "lt ");
-      printVCExprLean(E->Children[Reverse ? 1 : 0].get(), OS, 10);
+      printVCExprLean(E->Children[Reverse ? 1 : 0].get(), OS, LeanArgument);
       OS << " ";
-      printVCExprLean(E->Children[Reverse ? 0 : 1].get(), OS, 10);
+      printVCExprLean(E->Children[Reverse ? 0 : 1].get(), OS, LeanArgument);
       OS << ")";
       break;
     }
-    paren(6, [&] {
-      printVCExprLean(E->Children[0].get(), OS, 6);
+    paren(LeanCompare, [&] {
+      printVCExprLean(E->Children[0].get(), OS, LeanCompare + 1);
       OS << (E->K == VCExpr::Lt   ? " < "
              : E->K == VCExpr::Le ? " ≤ "
              : E->K == VCExpr::Gt ? " > "
                                   : " ≥ ");
-      printVCExprLean(E->Children[1].get(), OS, 6);
+      printVCExprLean(E->Children[1].get(), OS, LeanCompare + 1);
     });
     break;
+  // Left-associative: a right operand of the same level is parenthesized.
   case VCExpr::Add:
-    paren(7, [&] {
-      printVCExprLean(E->Children[0].get(), OS, 7);
+    paren(LeanAdd, [&] {
+      printVCExprLean(E->Children[0].get(), OS, LeanAdd);
       OS << " + ";
-      printVCExprLean(E->Children[1].get(), OS, 7);
+      printVCExprLean(E->Children[1].get(), OS, LeanAdd + 1);
     });
     break;
   case VCExpr::Sub:
-    paren(7, [&] {
-      printVCExprLean(E->Children[0].get(), OS, 7);
+    paren(LeanAdd, [&] {
+      printVCExprLean(E->Children[0].get(), OS, LeanAdd);
       OS << " - ";
-      printVCExprLean(E->Children[1].get(), OS, 7);
+      printVCExprLean(E->Children[1].get(), OS, LeanAdd + 1);
     });
     break;
   case VCExpr::Mul:
-    paren(8, [&] {
-      printVCExprLean(E->Children[0].get(), OS, 8);
+    paren(LeanMul, [&] {
+      printVCExprLean(E->Children[0].get(), OS, LeanMul);
       OS << " * ";
-      printVCExprLean(E->Children[1].get(), OS, 8);
+      printVCExprLean(E->Children[1].get(), OS, LeanMul + 1);
     });
     break;
+  // SMT-LIB's quotient, which the certifier and the solvers use: at a zero
+  // divisor all ones unsigned, and -1 or 1 by the dividend's sign signed;
+  // Lean's own udiv and sdiv give 0 there.
   case VCExpr::Div:
     OS << "("
        << (E->Sort.Kind == LogicSortKind::BitVector
                ? (E->Sort.Signedness == LogicSignedness::Signed
-                      ? "BitVec.sdiv "
-                      : "BitVec.udiv ")
+                      ? "BitVec.smtSDiv "
+                      : "BitVec.smtUDiv ")
                : "cppIntDiv ");
-    printVCExprLean(E->Children[0].get(), OS, 9);
+    printVCExprLean(E->Children[0].get(), OS, LeanArgument);
     OS << " ";
-    printVCExprLean(E->Children[1].get(), OS, 9);
+    printVCExprLean(E->Children[1].get(), OS, LeanArgument);
     OS << ")";
     break;
   case VCExpr::Rem:
@@ -365,59 +415,65 @@ static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
                       ? "BitVec.srem "
                       : "BitVec.umod ")
                : "cppIntRem ");
-    printVCExprLean(E->Children[0].get(), OS, 9);
+    printVCExprLean(E->Children[0].get(), OS, LeanArgument);
     OS << " ";
-    printVCExprLean(E->Children[1].get(), OS, 9);
+    printVCExprLean(E->Children[1].get(), OS, LeanArgument);
     OS << ")";
     break;
   case VCExpr::BitAnd:
   case VCExpr::BitOr:
   case VCExpr::BitXor: {
-    paren(7, [&] {
-      printVCExprLean(E->Children[0].get(), OS, 7);
+    const unsigned Level = E->K == VCExpr::BitAnd  ? LeanBitAnd
+                           : E->K == VCExpr::BitOr ? LeanBitOr
+                                                   : LeanBitXor;
+    paren(Level, [&] {
+      printVCExprLean(E->Children[0].get(), OS, Level);
       OS << (E->K == VCExpr::BitAnd  ? " &&& "
              : E->K == VCExpr::BitOr ? " ||| "
                                      : " ^^^ ");
-      printVCExprLean(E->Children[1].get(), OS, 7);
+      printVCExprLean(E->Children[1].get(), OS, Level + 1);
     });
     break;
   }
+  // The amount is capped at the width, which already gives 0: Lean's
+  // evaluation computes 2^amount and panics on a 64-bit amount.
   case VCExpr::Shl:
-    paren(7, [&] {
-      printVCExprLean(E->Children[0].get(), OS, 7);
-      OS << " <<< ";
-      printVCExprLean(E->Children[1].get(), OS, 7);
+    paren(LeanShift, [&] {
+      printVCExprLean(E->Children[0].get(), OS, LeanShift);
+      OS << " <<< min (";
+      printVCExprLean(E->Children[1].get(), OS, LeanTop);
+      OS << ").toNat " << E->Sort.BitWidth;
     });
     break;
   case VCExpr::Shr:
     if (E->Sort.Signedness == LogicSignedness::Signed) {
-      OS << "BitVec.sshiftRight ";
-      printVCExprLean(E->Children[0].get(), OS, 9);
+      OS << "(BitVec.sshiftRight ";
+      printVCExprLean(E->Children[0].get(), OS, LeanArgument);
       OS << " (";
-      printVCExprLean(E->Children[1].get(), OS, 0);
-      OS << ").toNat";
+      printVCExprLean(E->Children[1].get(), OS, LeanTop);
+      OS << ").toNat)";
     } else {
-      paren(7, [&] {
-        printVCExprLean(E->Children[0].get(), OS, 7);
+      paren(LeanShift, [&] {
+        printVCExprLean(E->Children[0].get(), OS, LeanShift);
         OS << " >>> ";
-        printVCExprLean(E->Children[1].get(), OS, 7);
+        printVCExprLean(E->Children[1].get(), OS, LeanShift + 1);
       });
     }
     break;
   // Parenthesized: `f -x y` would parse as a subtraction.
   case VCExpr::Neg:
     OS << "(-";
-    printVCExprLean(E->Children[0].get(), OS, 9);
+    printVCExprLean(E->Children[0].get(), OS, LeanArgument);
     OS << ")";
     break;
   case VCExpr::BitNot:
     OS << "(~~~";
-    printVCExprLean(E->Children[0].get(), OS, 9);
+    printVCExprLean(E->Children[0].get(), OS, LeanArgument);
     OS << ")";
     break;
   case VCExpr::ValidPtr:
     OS << "(validPtr ";
-    printVCExprLean(E->Children[0].get(), OS, 10);
+    printVCExprLean(E->Children[0].get(), OS, LeanArgument);
     OS << ")";
     break;
   case VCExpr::Select:
@@ -428,9 +484,9 @@ static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
       OS << "heapSelectBv " << E->Sort.BitWidth << " ";
     else
       OS << "heapSelectInt ";
-    printVCExprLean(E->Children[0].get(), OS, 10);
+    printVCExprLean(E->Children[0].get(), OS, LeanArgument);
     OS << " ";
-    printVCExprLean(E->Children[1].get(), OS, 10);
+    printVCExprLean(E->Children[1].get(), OS, LeanArgument);
     OS << ")";
     break;
   case VCExpr::Store:
@@ -441,13 +497,13 @@ static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
       OS << "heapStoreBv ";
     else
       OS << "heapStoreInt ";
-    printVCExprLean(E->Children[0].get(), OS, 10);
+    printVCExprLean(E->Children[0].get(), OS, LeanArgument);
     OS << " ";
-    printVCExprLean(E->Children[1].get(), OS, 10);
+    printVCExprLean(E->Children[1].get(), OS, LeanArgument);
     OS << " ";
-    printVCExprLean(E->Children[2].get(), OS, 10);
+    printVCExprLean(E->Children[2].get(), OS, LeanArgument);
     OS << " ";
-    printVCExprLean(E->Children[3].get(), OS, 10);
+    printVCExprLean(E->Children[3].get(), OS, LeanArgument);
     OS << ")";
     break;
   case VCExpr::Collection:
@@ -460,57 +516,61 @@ static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
     OS << " : Int), ";
     for (unsigned I = 2; I + 1 < E->Children.size(); I += 2) {
       OS << "(";
-      printVCExprLean(E->Children[I].get(), OS, 6);
+      printVCExprLean(E->Children[I].get(), OS, LeanCompare + 1);
       OS << " ≤ ";
       printLeanName("__frame_address", OS);
       OS << " ∧ ";
       printLeanName("__frame_address", OS);
       OS << " < ";
-      printVCExprLean(E->Children[I + 1].get(), OS, 6);
+      printVCExprLean(E->Children[I + 1].get(), OS, LeanCompare + 1);
       OS << ") ∨ ";
     }
     OS << "heapSelectInt ";
-    printVCExprLean(E->Children[1].get(), OS, 10);
+    printVCExprLean(E->Children[1].get(), OS, LeanArgument);
     OS << " ";
     printLeanName("__frame_address", OS);
     OS << " = heapSelectInt ";
-    printVCExprLean(E->Children[0].get(), OS, 10);
+    printVCExprLean(E->Children[0].get(), OS, LeanArgument);
     OS << " ";
     printLeanName("__frame_address", OS);
     OS << ")";
     break;
+  // A binder extends as far right as it can.
   case VCExpr::Forall:
   case VCExpr::Exists:
-    OS << (E->K == VCExpr::Forall ? "∀ (" : "∃ (");
-    printLeanName(E->Binder, OS);
-    OS << " : Int), ";
-    if (E->Children.size() == 1) {
-      printVCExprLean(E->Children[0].get(), OS, 2);
-      break;
-    }
-    printVCExprLean(E->Children[0].get(), OS, 6);
-    OS << " ≤ ";
-    printLeanName(E->Binder, OS);
-    OS << " ∧ ";
-    printLeanName(E->Binder, OS);
-    OS << " < ";
-    printVCExprLean(E->Children[1].get(), OS, 6);
-    OS << (E->K == VCExpr::Forall ? " → " : " ∧ ");
-    printVCExprLean(E->Children[2].get(), OS, 2);
+    paren(LeanTop, [&] {
+      OS << (E->K == VCExpr::Forall ? "∀ (" : "∃ (");
+      printLeanName(E->Binder, OS);
+      OS << " : Int), ";
+      if (E->Children.size() == 1) {
+        printVCExprLean(E->Children[0].get(), OS, LeanTop);
+        return;
+      }
+      printVCExprLean(E->Children[0].get(), OS, LeanCompare + 1);
+      OS << " ≤ ";
+      printLeanName(E->Binder, OS);
+      OS << " ∧ ";
+      printLeanName(E->Binder, OS);
+      OS << " < ";
+      printVCExprLean(E->Children[1].get(), OS, LeanCompare + 1);
+      OS << (E->K == VCExpr::Forall ? " → " : " ∧ ");
+      printVCExprLean(E->Children[2].get(), OS,
+                      E->K == VCExpr::Forall ? LeanArrow : LeanAnd);
+    });
     break;
   case VCExpr::IntToBv:
     OS << "(BitVec.ofInt " << E->Sort.BitWidth << " (";
-    printVCExprLean(E->Children[0].get(), OS, 0);
+    printVCExprLean(E->Children[0].get(), OS, LeanTop);
     OS << "))";
     break;
   case VCExpr::BvToInt:
     if (E->Children[0]->Sort.Signedness == LogicSignedness::Signed) {
       OS << "(";
-      printVCExprLean(E->Children[0].get(), OS, 0);
+      printVCExprLean(E->Children[0].get(), OS, LeanTop);
       OS << ").toInt";
     } else {
       OS << "(Int.ofNat (";
-      printVCExprLean(E->Children[0].get(), OS, 0);
+      printVCExprLean(E->Children[0].get(), OS, LeanTop);
       OS << ").toNat)";
     }
     break;
@@ -520,7 +580,7 @@ static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
                ? "BitVec.signExtend "
                : "BitVec.zeroExtend ")
        << E->Sort.BitWidth << " ";
-    printVCExprLean(E->Children[0].get(), OS, 10);
+    printVCExprLean(E->Children[0].get(), OS, LeanArgument);
     OS << ")";
     break;
   case VCExpr::NoOverflow: {
@@ -540,7 +600,7 @@ static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
                  ? "BitVec.signExtend "
                  : "BitVec.zeroExtend ")
          << BitWidth << " (";
-      printVCExprLean(E->Children[I].get(), OS, 0);
+      printVCExprLean(E->Children[I].get(), OS, LeanTop);
       OS << "))";
     }
     OS << " = false)";
@@ -611,7 +671,7 @@ static void printLeanFlattened(const LogicExpr *Expression,
   std::vector<const LogicExpr *> Nodes;
   collectLeanTemporaries(Expression, Nodes, true);
   if (Nodes.empty()) {
-    printVCExprLean(Expression, OS, 0);
+    printVCExprLean(Expression, OS, LeanTop);
     return;
   }
 
@@ -628,32 +688,66 @@ static void printLeanFlattened(const LogicExpr *Expression,
     printLeanSort(Node->Sort, OS);
     OS << " := ";
     LeanTemporaryRoot = Node;
-    printVCExprLean(Node, OS, 0);
+    printVCExprLean(Node, OS, LeanTop);
     OS << ";\n  ";
   }
   LeanTemporaryRoot = nullptr;
-  printVCExprLean(Expression, OS, 0);
+  printVCExprLean(Expression, OS, LeanTop);
   OS << ")";
   LeanTemporaryNames.clear();
 }
 
-static void collectLeanSpecCalls(const LogicExpr *Expression,
-                                 std::vector<const LogicExpr *> &Calls) {
+static bool mentionsLeanVariable(const LogicExpr *Expression,
+                                 llvm::StringRef Name) {
   if (!Expression)
-    return;
-  if (Expression->K == LogicExpr::SpecCall)
-    Calls.push_back(Expression);
-  for (const auto &Child : Expression->Children)
-    collectLeanSpecCalls(Child.get(), Calls);
+    return false;
+  if (Expression->K == LogicExpr::Var && Expression->Name == Name)
+    return true;
+  return llvm::any_of(Expression->Children, [&](const auto &Child) {
+    return mentionsLeanVariable(Child.get(), Name);
+  });
 }
 
+/// A spec application with the quantifier binders around it that it
+/// mentions, outermost first.
+struct LeanSpecCall {
+  const LogicExpr *Call;
+  std::vector<std::string> Binders;
+};
+
+static void collectLeanSpecCalls(const LogicExpr *Expression,
+                                 std::vector<std::string> &Binders,
+                                 std::vector<LeanSpecCall> &Calls) {
+  if (!Expression)
+    return;
+  if (Expression->K == LogicExpr::SpecCall) {
+    LeanSpecCall Found{Expression, {}};
+    for (const std::string &Binder : Binders)
+      if (!llvm::is_contained(Found.Binders, Binder) &&
+          mentionsLeanVariable(Expression, Binder))
+        Found.Binders.push_back(Binder);
+    Calls.push_back(std::move(Found));
+  }
+  const bool Binds =
+      Expression->K == LogicExpr::Forall || Expression->K == LogicExpr::Exists;
+  if (Binds)
+    Binders.push_back(Expression->Binder);
+  for (const auto &Child : Expression->Children)
+    collectLeanSpecCalls(Child.get(), Binders, Calls);
+  if (Binds)
+    Binders.pop_back();
+}
+
+// A definition holds at every argument, so the instance at an application
+// under quantifiers is stated for every value of their binders.
 static unsigned emitLeanSpecAxiomBinders(const LogicExpr *Goal,
                                          llvm::raw_ostream &OS) {
-  std::vector<const LogicExpr *> Calls;
-  collectLeanSpecCalls(Goal, Calls);
+  std::vector<std::string> Binders;
+  std::vector<LeanSpecCall> Calls;
+  collectLeanSpecCalls(Goal, Binders, Calls);
   unsigned CallIndex = 0;
   unsigned BinderCount = 0;
-  for (const LogicExpr *Call : Calls) {
+  for (const auto &[Call, Around] : Calls) {
     const LogicFunctionDecl *Function = findLeanFunction(Call->SpecCallee);
     if (!Function || Call->Children.size() != Function->Parameters.size()) {
       LeanEmissionFailed = true;
@@ -664,6 +758,15 @@ static unsigned emitLeanSpecAxiomBinders(const LogicExpr *Goal,
       ++BinderCount;
       OS << "\n    (cppverify_spec_axiom_" << CallIndex << "_" << Level + 1
          << " : ";
+      if (!Around.empty()) {
+        OS << "∀";
+        for (const std::string &Binder : Around) {
+          OS << " (";
+          printLeanName(Binder, OS);
+          OS << " : Int)";
+        }
+        OS << ", ";
+      }
       printLeanNativeSpecCall(Call, *Function, OS);
       OS << " = (";
       for (unsigned I = 0; I < Function->Parameters.size(); ++I) {
@@ -714,10 +817,11 @@ static void emitLeanGoalDefinition(llvm::StringRef Name, const LogicExpr *Goal,
   LeanEmitBudget = 500000;
   std::map<std::string, LogicSort> Variables;
   collectLeanVariables(Goal, {}, Variables);
-  std::vector<const LogicExpr *> Calls;
-  collectLeanSpecCalls(Goal, Calls);
+  std::vector<std::string> Binders;
+  std::vector<LeanSpecCall> Calls;
+  collectLeanSpecCalls(Goal, Binders, Calls);
   bool HasSpecAxioms = false;
-  for (const LogicExpr *Call : Calls)
+  for (const auto &[Call, Around] : Calls)
     if (const LogicFunctionDecl *Function = findLeanFunction(Call->SpecCallee);
         Function && Function->DefinitionFuel > 0) {
       HasSpecAxioms = true;
@@ -825,7 +929,7 @@ VerifyResult verify::exportLeanScratchPad(
     OS << "  Classical.propDecidable p\n\n";
     OS << "abbrev CppHeap := Int -> Int\n\n";
     OS << "def heapSelectInt (h : CppHeap) (p : Int) : Int := h p\n";
-    OS << "def heapSelectBool (h : CppHeap) (p : Int) : Prop := h p ≠ 0\n";
+    OS << "abbrev heapSelectBool (h : CppHeap) (p : Int) : Prop := h p ≠ 0\n";
     OS << "def heapSelectBv (w : Nat) (h : CppHeap) (p : Int) : BitVec w :=\n";
     OS << "  BitVec.ofInt w (h p)\n\n";
     OS << "def heapStoreInt (h : CppHeap) (p v : Int) (h' : CppHeap) : "
@@ -839,10 +943,14 @@ VerifyResult verify::exportLeanScratchPad(
     OS << "    (h' : CppHeap) : Prop :=\n";
     OS << "  h' = fun q => if q = p then Int.ofNat v.toNat else h q\n\n";
     OS << "opaque validPtr : Int -> Prop\n\n";
-    OS << "def cppBvUlt {w : Nat} (x y : BitVec w) : Prop := x.ult y = true\n";
-    OS << "def cppBvUle {w : Nat} (x y : BitVec w) : Prop := x.ule y = true\n";
-    OS << "def cppBvSlt {w : Nat} (x y : BitVec w) : Prop := x.slt y = true\n";
-    OS << "def cppBvSle {w : Nat} (x y : BitVec w) : Prop := x.sle y = "
+    // Reducible, so instance search sees the Bool comparison and decides it.
+    OS << "abbrev cppBvUlt {w : Nat} (x y : BitVec w) : Prop := x.ult y = "
+          "true\n";
+    OS << "abbrev cppBvUle {w : Nat} (x y : BitVec w) : Prop := x.ule y = "
+          "true\n";
+    OS << "abbrev cppBvSlt {w : Nat} (x y : BitVec w) : Prop := x.slt y = "
+          "true\n";
+    OS << "abbrev cppBvSle {w : Nat} (x y : BitVec w) : Prop := x.sle y = "
           "true\n\n";
     OS << "def cppIntDiv (x y : Int) : Int :=\n";
     OS << "  if y = 0 then 0 else\n";
