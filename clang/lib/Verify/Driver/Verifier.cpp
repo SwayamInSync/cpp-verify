@@ -22,6 +22,7 @@
 #include "../Transform/UBChecks.h"
 #include "CppVerifyVersion.h"
 #include "DumpIR.h"
+#include "LeanCertifier.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Frontend/TextDiagnostic.h"
@@ -1866,7 +1867,11 @@ class Verifier {
                          CheckFile);
   }
 
-  llvm::Error
+  // Certifies each goal's proof: an error fails every goal; otherwise the
+  // goals whose proofs fail, each with why. A proof's own module must build
+  // without `sorry`; then the certifier (LeanCertifier.h) checks the compiled
+  // modules, which nothing in the user's source can change.
+  llvm::Expected<std::map<std::string, std::string>>
   certifyLeanProject(const std::vector<LeanProjectGoal> &ProjectGoals) {
     if (ProjectGoals.empty())
       return llvm::createStringError(llvm::inconvertibleErrorCode(),
@@ -1945,6 +1950,8 @@ class Verifier {
     std::map<std::string, const LeanProjectGoal *> UniqueGoals;
     for (const LeanProjectGoal &Goal : ProjectGoals)
       UniqueGoals.emplace(Goal.Name, &Goal);
+    std::map<std::string, std::string> Failures;
+    std::string Built;
     for (const auto &[Name, Goal] : UniqueGoals) {
       std::string File;
       const std::string ProofSource =
@@ -1956,54 +1963,52 @@ class Verifier {
             EC, "cannot create Lean proof build directory");
       const std::string ProofObject =
           leanProjectPath(ObjectDir, {Name + ".olean"});
+      llvm::sys::fs::remove(ProofObject);
       if (auto Proof = runLake({"env", "lean", "-EhasSorry", "-R", Root, "-o",
                                 ProofObject, ProofSource},
                                Name);
-          !Proof)
-        return Proof.takeError();
-    }
-
-    auto Check = runLake({"env", "lean", "-R", Root,
-                          leanProjectPath(Root, {"CppVerify", "Check.lean"})},
-                         "check");
-    if (!Check)
-      return Check.takeError();
-
-    const std::set<llvm::StringRef> AllowedAxioms = {"propext", "Quot.sound",
-                                                     "Classical.choice"};
-    unsigned Reports = 0;
-    llvm::StringRef Report = *Check;
-    llvm::StringRef NoAxioms = "does not depend on any axioms";
-    for (size_t Pos = Report.find(NoAxioms); Pos != llvm::StringRef::npos;
-         Pos = Report.find(NoAxioms, Pos + NoAxioms.size()))
-      ++Reports;
-    llvm::StringRef HasAxioms = "depends on axioms:";
-    for (size_t Pos = Report.find(HasAxioms); Pos != llvm::StringRef::npos;
-         Pos = Report.find(HasAxioms, Pos + HasAxioms.size())) {
-      ++Reports;
-      const size_t Open = Report.find('[', Pos + HasAxioms.size());
-      const size_t Close = Open == llvm::StringRef::npos
-                               ? llvm::StringRef::npos
-                               : Report.find(']', Open + 1);
-      if (Open == llvm::StringRef::npos || Close == llvm::StringRef::npos)
-        return llvm::createStringError(
-            llvm::inconvertibleErrorCode(),
-            "malformed Lean axiom-dependency report");
-      llvm::SmallVector<llvm::StringRef> Axioms;
-      Report.slice(Open + 1, Close).split(Axioms, ',', -1, false);
-      for (llvm::StringRef Axiom : Axioms) {
-        Axiom = Axiom.trim();
-        if (!Axiom.empty() && !AllowedAxioms.count(Axiom))
-          return llvm::createStringError(
-              llvm::inconvertibleErrorCode(),
-              "proof depends on undocumented axiom %s", Axiom.str().c_str());
+          !Proof) {
+        Failures[Name] =
+            llvm::StringRef(llvm::toString(Proof.takeError())).rtrim().str();
+        continue;
       }
+      Built += Name + "\tCppVerify.Proofs." + Goal->Group + "." + Name + "\n";
     }
-    if (Reports != UniqueGoals.size())
-      return llvm::createStringError(
-          llvm::inconvertibleErrorCode(),
-          "Lean did not report axiom dependencies for every proof");
-    return llvm::Error::success();
+    if (Built.empty())
+      return Failures;
+
+    const std::string Certifier =
+        leanProjectPath(Root, {".cppverify", "Certify.lean"});
+    const std::string GoalList = leanProjectPath(Root, {".cppverify", "goals"});
+    if (std::error_code EC = llvm::sys::fs::create_directories(
+            llvm::sys::path::parent_path(Certifier)))
+      return llvm::createStringError(EC, "cannot create %s", Certifier.c_str());
+    if (llvm::Error Error = writeTextFile(Certifier, LeanCertifierSource))
+      return std::move(Error);
+    if (llvm::Error Error = writeTextFile(GoalList, Built))
+      return std::move(Error);
+    auto Checked = runLake({"env", "lean", "--run", Certifier, GoalList,
+                            "propext,Quot.sound,Classical.choice"},
+                           "certify");
+    if (!Checked)
+      return Checked.takeError();
+    std::set<std::string> Checks;
+    for (llvm::StringRef Rest = *Checked; !Rest.empty();) {
+      auto [Line, Next] = Rest.split('\n');
+      Rest = Next;
+      llvm::SmallVector<llvm::StringRef, 3> Fields;
+      Line.split(Fields, '\t', 2);
+      if (Fields.size() < 2 || (Fields[0] != "ok" && Fields[0] != "fail"))
+        continue;
+      Checks.insert(Fields[1].str());
+      if (Fields[0] == "fail")
+        Failures[Fields[1].str()] =
+            Fields.size() == 3 ? Fields[2].str() : "the certifier failed";
+    }
+    for (const auto &[Name, Goal] : UniqueGoals)
+      if (!Failures.count(Name) && !Checks.count(Name))
+        Failures[Name] = "the certifier did not check it";
+    return Failures;
   }
 
   void checkCalleeRecommendsOnFailure(const VFunction &Caller,
@@ -3630,28 +3635,50 @@ public:
             if (Finding.FindingOf == Index)
               Finding.Hidden = true;
         };
-        if (llvm::Error Error = certifyLeanProject(ExportedGoals)) {
+        auto failed = [&](size_t Index, const std::string &Reason) {
           AllOk = false;
           AnyFailed = true;
-          const std::string Reason = llvm::toString(std::move(Error));
-          for (size_t Index = 0; Index != Diags.size(); ++Index) {
-            VerifyDiagnostic &Diagnostic = Diags[Index];
-            if (Diagnostic.K != VerifyDiagnostic::Exported)
-              continue;
-            unproved(Index);
-            Diagnostic.Message +=
-                " (Lean certification failed: " + Reason + ")";
-            if (Diagnostic.Result) {
-              Diagnostic.Result->Status = VerifyStatus::Unresolved;
-              Diagnostic.Result->Reason = VerifyReason::LeanExportFailure;
-              Diagnostic.Result->Message = Reason;
-            }
+          VerifyDiagnostic &Diagnostic = Diags[Index];
+          unproved(Index);
+          Diagnostic.Message += " (Lean certification failed: " + Reason + ")";
+          if (Diagnostic.Result) {
+            Diagnostic.Result->Status = VerifyStatus::Unresolved;
+            Diagnostic.Result->Reason = VerifyReason::LeanExportFailure;
+            Diagnostic.Result->Message = Reason;
           }
+        };
+        auto Certified = certifyLeanProject(ExportedGoals);
+        std::map<std::string, const LeanProjectGoal *> GoalsByName;
+        for (const LeanProjectGoal &Goal : ExportedGoals)
+          GoalsByName.emplace(Goal.Name, &Goal);
+        if (!Certified) {
+          const std::string Reason = llvm::toString(Certified.takeError());
+          for (size_t Index = 0; Index != Diags.size(); ++Index)
+            if (Diags[Index].K == VerifyDiagnostic::Exported)
+              failed(Index, Reason);
         } else {
           for (size_t Index = 0; Index != Diags.size(); ++Index) {
             VerifyDiagnostic &Diagnostic = Diags[Index];
             if (Diagnostic.K != VerifyDiagnostic::Exported)
               continue;
+            // Each goal of the function is certified, or it is not.
+            std::string Reason;
+            if (Diagnostic.Result)
+              for (const std::string &Goal : Diagnostic.Result->LeanGoals)
+                if (auto Failure = Certified->find(Goal);
+                    Failure != Certified->end()) {
+                  auto Known = GoalsByName.find(Goal);
+                  Reason +=
+                      (Reason.empty() ? "" : "; ") +
+                      std::string("the proof of ") +
+                      (Known != GoalsByName.end() ? Known->second->StableId
+                                                  : Goal) +
+                      ": " + Failure->second;
+                }
+            if (!Reason.empty()) {
+              failed(Index, Reason);
+              continue;
+            }
             const ProofEvidence *Evidence =
                 Diagnostic.Result && Diagnostic.Result->Evidence
                     ? &*Diagnostic.Result->Evidence
