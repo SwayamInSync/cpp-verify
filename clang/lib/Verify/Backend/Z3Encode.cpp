@@ -3011,7 +3011,8 @@ z3::check_result Z3Encoder::certifyModels(const ObligationModule &Module,
     z3::model Current = Solver.get_model();
     Z3CandidateModel Candidate(*this, Current);
     CertifyLimits Limits;
-    Limits.Deadline = QueryDeadline;
+    if (!SearchSlice)
+      Limits.Deadline = QueryDeadline;
     CertifyResult Certified = certifyModel(Candidate, Limits);
     bool BoundedDomain = false;
     if (Certified.Outcome == CertifyOutcome::Disputed && !Probed &&
@@ -3650,9 +3651,11 @@ bool Z3VerifyBackend::racesEncodings(const ObligationModule &Module) const {
          (Module.RequiredFeatures & logicFeature(LogicFeature::Sequences));
 }
 
-VerifyResult Z3VerifyBackend::solveQuery(
-    const ObligationModule &Module, const LogicExpr *Query,
-    std::optional<uint64_t> TraceEventCount, unsigned Timeout, Race *Racing) {
+VerifyResult
+Z3VerifyBackend::solveQuery(const ObligationModule &Module,
+                            const LogicExpr *Query,
+                            std::optional<uint64_t> TraceEventCount,
+                            unsigned Timeout, Race *Racing, bool Slice) {
   // Every query gets an encoder of its own. A Z3 context keeps the state of
   // the queries solved in it, as far as an interrupted one got, and that
   // state steers the search of the next: a query refuted in 5 ms timed out
@@ -3661,7 +3664,11 @@ VerifyResult Z3VerifyBackend::solveQuery(
     Z3Encoder Encoder;
     Encoder.setTimeoutMs(Timeout);
     Encoder.setResourceLimit(ResourceLimit);
-    Encoder.setCertifyTimeoutMs(CertifyTimeoutMs);
+    // A check gets the time a check of the module's queries gets.
+    Encoder.setCertifyTimeoutMs(Slice && !CertifyTimeoutMs
+                                    ? std::optional<unsigned>(TimeoutMs / 2)
+                                    : CertifyTimeoutMs);
+    Encoder.setSearchSlice(Slice);
     Encoder.setIntegerEncoding(IntegerEncoding);
     Encoder.setProfileQuantifiers(ProfileQuantifiers && Facts);
     Encoder.setSequenceFacts(Facts);
@@ -3906,6 +3913,10 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
   const bool WholeUsedFullBudget =
       TimeoutMs == 0 ? !Module.LogicFunctions.empty()
                      : WholeBudget >= TimeoutMs;
+  // A whole query on a slice of the budget still checks a model it finds:
+  // under load the search can take most of the slice, and the model, which
+  // settles the module, was then lost for want of time to check it.
+  const bool WholeSlice = !WholeUsedFullBudget;
   // With workers to spare, the obligations are solved one by one beside the
   // whole query. Both are exact, so whichever settles the module first
   // decides it and interrupts the other.
@@ -3937,7 +3948,8 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
   }
   VerifyResult Whole;
   if (Racing) {
-    Whole = solveQuery(Module, nullptr, std::nullopt, WholeTimeout, &WholeRace);
+    Whole = solveQuery(Module, nullptr, std::nullopt, WholeTimeout, &WholeRace,
+                       WholeSlice);
     if (Whole.Status == VerifyStatus::Verified ||
         Whole.Status == VerifyStatus::Failed)
       Rivals.cancel();
@@ -3945,7 +3957,8 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
     if (OwnPool)
       Pool = nullptr;
   } else {
-    Whole = solveQuery(Module, nullptr, std::nullopt, WholeTimeout, nullptr);
+    Whole = solveQuery(Module, nullptr, std::nullopt, WholeTimeout, nullptr,
+                       WholeSlice);
   }
   if (Whole.Status == VerifyStatus::Verified)
     return finishZ3Result(std::move(Whole));
