@@ -1879,7 +1879,25 @@ Lean's evaluation agrees with the certifier on random ground terms and on
 every operator at its extreme operands. Standalone output is an unchecked scratch-pad.
 Editable project mode pins Lean 4.35.0 (`LeanToolchain`), overwrites only generated semantics and
 the active check module, and preserves reusable user lemmas and one proof file
-per stable obligation goal. Initial generation is `Exported`. Certification
+per goal. A goal is named by its function and its statement, never by a
+position: `cppverify_<function>_<h6>_<kind>_<h8>`, where `h6` hashes the
+function's identity (overloads) and `h8` begins the SHA-256 hash of the
+obligation's statement, its goal with the logical declarations it uses and
+without the function's identity; identical goals of one function get `_2`,
+`_3` in source order. Spec bodies are named by the function too. A proof file,
+`CppVerify/Proofs/<function>/<goal>.lean`, records the goal, its obligation,
+the full hash, and the prefix of the spec bodies, and every regeneration
+gives each goal the proof of its statement, as Frama-C's WP keeps one script
+per goal and Vermilion keys a proof by the hash of its statement: the file at
+its path; else a proof recorded with its name, from `Stale/` too; else one of
+a goal that is gone, from the function with proofs of the most of this one's
+goals (a rename), moved with the generated names it uses; else a 0.1 file
+`Goal_<md5>.lean` of its 0.1 name, migrated the same way; else a stub. A
+proof no goal takes is kept in `Stale/` with a note naming why, and an
+unedited stub is removed; nothing else is ever deleted unless
+`--lean-prune-stale` asks. A fallback run examines only what its solver
+leaves unresolved and leaves every other proof where it is. Initial
+generation is `Exported`. Certification
 compiles the user module and every active proof with `sorry` as an error, then
 checks aggregate theorem types and axiom dependencies. Only foundational Lean
 axioms are permitted; user `axiom`/`opaque` proof shortcuts, stale proof types,
