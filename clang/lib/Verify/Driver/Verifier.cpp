@@ -1298,9 +1298,26 @@ struct LeanProofRecord {
   bool Pristine = false;
 };
 
-static std::string leanProofStub(llvm::StringRef Goal) {
+// A stub proves the goal through its readable form, its names introduced.
+static std::string leanProofStubHead(llvm::StringRef Goal) {
   return "import CppVerify.User\n\ntheorem " + Goal.str() +
-         "_proof : " + Goal.str() + " := by\n  sorry\n";
+         "_proof : " + Goal.str() + " := by\n  apply " + Goal.str() +
+         ".of_readable\n";
+}
+
+static std::string leanProofStub(llvm::StringRef Goal, llvm::StringRef Intros) {
+  std::string Stub = leanProofStubHead(Goal);
+  if (!Intros.empty())
+    Stub += "  intro " + Intros.str() + "\n";
+  return Stub + "  sorry\n";
+}
+
+static bool isLeanProofStub(llvm::StringRef Body, llvm::StringRef Goal) {
+  if (!Body.consume_front(leanProofStubHead(Goal)) ||
+      !Body.consume_back("  sorry\n"))
+    return false;
+  return Body.empty() || (Body.consume_front("  intro ") &&
+                          Body.consume_back("\n") && !Body.contains('\n'));
 }
 
 static std::string leanProofHeader(const LeanProjectGoal &Goal) {
@@ -1340,7 +1357,7 @@ static std::optional<LeanProofRecord> readLeanProof(llvm::StringRef Path) {
     return std::nullopt;
   const size_t End = Text.find("-/\n");
   Record.Pristine = End != llvm::StringRef::npos &&
-                    Text.substr(End + 3) == leanProofStub(Record.Goal);
+                    isLeanProofStub(Text.substr(End + 3), Record.Goal);
   return Record;
 }
 
@@ -1756,7 +1773,8 @@ class Verifier {
           return llvm::createStringError(EC, "cannot create %s",
                                          ProofPath.c_str());
         if (llvm::Error Error = writeTextFile(
-                ProofPath, leanProofHeader(*Goal) + leanProofStub(Goal->Name)))
+                ProofPath, leanProofHeader(*Goal) +
+                               leanProofStub(Goal->Name, Goal->Intros)))
           return Error;
         Taken.insert(ProofPath);
       }
