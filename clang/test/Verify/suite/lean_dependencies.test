@@ -9,24 +9,24 @@
 #
 # The Lean backend, with every goal proved. An export proves nothing, so it
 # runs no vacuity check.
-# RUN: %cpp-verify --backend=lean --lean-project=%t.backend %S/Inputs/lean_dependencies_backend.cpp -- 2>&1 | FileCheck %s --check-prefix=BACKEND-EXPORT
+# RUN: %cpp-verify --backend=lean --no-lean-auto --lean-project=%t.backend %S/Inputs/lean_dependencies_backend.cpp -- 2>&1 | FileCheck %s --check-prefix=BACKEND-EXPORT
 # RUN: sed -i.orig 's/^  sorry$/  trivial/' %t.backend/CppVerify/Proofs/*/*.lean
 # RUN: cp %S/Inputs/lean_dependencies_seven.lean %t.backend/CppVerify/Proofs/cppverify_seven_634ea3/cppverify_seven_634ea3_postcondition_f0d135e6.lean
 # RUN: cp %S/Inputs/lean_dependencies_trusting.lean %t.backend/CppVerify/Proofs/cppverify_trusting_b6301a/cppverify_trusting_b6301a_postcondition_bafafdfb.lean
 # RUN: cp %S/Inputs/lean_dependencies_impossible.lean %t.backend/CppVerify/Proofs/cppverify_impossible_9d6c7c/cppverify_impossible_9d6c7c_postcondition_1cd35301.lean
 # RUN: cp %S/Inputs/lean_dependencies_same.lean %t.backend/CppVerify/Proofs/cppverify_same_9601c2/cppverify_same_9601c2_postcondition_ce92acf8.lean
 # RUN: cp %S/Inputs/lean_dependencies_positive.lean %t.backend/CppVerify/Proofs/cppverify_positive_fb6abf/cppverify_positive_fb6abf_postcondition_78bdd643.lean
-# RUN: not %cpp-verify --backend=lean --lean-project=%t.backend --lean-certify %S/Inputs/lean_dependencies_backend.cpp -- 2>&1 | FileCheck %s --check-prefix=BACKEND
-# RUN: not %cpp-verify --backend=lean --lean-project=%t.backend --lean-certify --diagnostics-format=json %S/Inputs/lean_dependencies_backend.cpp -- 2>&1 | FileCheck %s --check-prefix=BACKEND-JSON
+# RUN: not %cpp-verify --backend=lean --no-lean-auto --lean-project=%t.backend --lean-certify %S/Inputs/lean_dependencies_backend.cpp -- 2>&1 | FileCheck %s --check-prefix=BACKEND
+# RUN: not %cpp-verify --backend=lean --no-lean-auto --lean-project=%t.backend --lean-certify --diagnostics-format=json %S/Inputs/lean_dependencies_backend.cpp -- 2>&1 | FileCheck %s --check-prefix=BACKEND-JSON
 #
 # The same project with an admitted lemma: nothing is certified, and what the
 # vacuity checks found goes with the verdicts.
 # RUN: echo 'theorem admitted : True := by sorry' >> %t.backend/CppVerify/User.lean
-# RUN: not %cpp-verify --backend=lean --lean-project=%t.backend --lean-certify %S/Inputs/lean_dependencies_backend.cpp -- 2>&1 | FileCheck %s --check-prefix=BROKEN
+# RUN: not %cpp-verify --backend=lean --no-lean-auto --lean-project=%t.backend --lean-certify %S/Inputs/lean_dependencies_backend.cpp -- 2>&1 | FileCheck %s --check-prefix=BROKEN
 #
 # A generated check that is quiet when proved is reported when certification
 # fails.
-# RUN: not %cpp-verify --backend=lean --lean-project=%t.inductive --lean-certify %S/Inputs/inductive_unproved.cpp -- 2>&1 | FileCheck %s --check-prefix=INDUCTIVE
+# RUN: not %cpp-verify --backend=lean --no-lean-auto --lean-project=%t.inductive --lean-certify %S/Inputs/inductive_unproved.cpp -- 2>&1 | FileCheck %s --check-prefix=INDUCTIVE
 #
 # A spec's termination proved in Lean, beside a function that fails: first
 # with the proof left as sorry, then completed.
