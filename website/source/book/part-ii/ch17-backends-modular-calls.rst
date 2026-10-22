@@ -163,6 +163,86 @@ module and every active proof with admissions promoted to errors, checks the
 aggregate module, and rejects proof dependencies other than Lean's documented
 foundational axioms.
 
+Each goal in ``Generated.lean`` is a Lean proposition that means what the
+obligation means, so a proof of it is a proof of the obligation:
+
+- every operator keeps its grouping under Lean's own precedence:
+  ``(a ^ b) + 1`` is ``(a_0 ^^^ b_0) + 1``, since Lean reads
+  ``a_0 ^^^ b_0 + 1`` as ``a_0 ^^^ (b_0 + 1)``, and a quantifier is closed
+  before whatever follows it;
+- a numeral has its type, as in ``(3 : Int)`` and ``(BitVec.ofInt 32 (3))``,
+  since Lean reads a term of untyped numerals in ``Nat``, where ``2 - 3`` is
+  0;
+- a C++ ``int`` or ``unsigned`` is a ``BitVec 32``, a mathematical integer
+  an ``Int``, and a Boolean a proposition, so ``return x < 5;`` in a
+  function returning ``bool`` gives
+  ``__result_1 ↔ (cppBvSlt x_0 (BitVec.ofInt 32 (5)))``;
+- machine division by zero is SMT-LIB's, as in the solvers and the
+  counterexample checker: ``BitVec.smtUDiv`` gives all ones and
+  ``BitVec.smtSDiv`` gives ``-1`` or ``1``, where Lean's own ``/`` gives 0.
+  Wherever C++ divides, another obligation proves the divisor nonzero, but
+  each goal is read on its own, and Lean reads it as the solvers do;
+- a spec application's definition is a hypothesis of the goal; under a
+  quantifier it is stated for every value of the quantified variable, as in
+  ``∀ (k : Int), total k = …``;
+- a machine comparison is ``cppBvSlt``, ``cppBvSle``, ``cppBvUlt``, or
+  ``cppBvUle``, which unfold to the Boolean comparison of ``BitVec``, so
+  ``decide`` evaluates one at constants.
+
+For example, the call in ``small`` must establish the precondition of
+``nonnegative``:
+
+.. code-block:: cpp
+
+   void nonnegative(int n)
+     cppverify::pre(cppverify::forall(k, 0, n, k >= 0) && n < 8)
+   {
+   }
+
+   void small()
+     cppverify::post(true)
+   {
+     nonnegative(3);
+   }
+
+``cpp-verify --backend=lean --lean-project=proof file.cpp`` exports four
+goals, three of them ``True``. The one for the call reads:
+
+.. code-block:: lean4
+
+   def cppverify_small_fn_5f5a35736d616c6c76_obligation_1_goal : Prop :=
+     ∀
+       (__heap_alloc_0 : CppHeap)
+       (__heap_live_0 : CppHeap),
+       ¬((heapSelectInt __heap_alloc_0 (0 : Int)) = (0 : Int)) ∨ (heapSelectBool __heap_live_0 (0 : Int)) ∨ ¬(∀ (__quant_0___cppverify_bound_0_k : Int), ((BitVec.ofInt 32 (0))).toInt ≤ __quant_0___cppverify_bound_0_k ∧ __quant_0___cppverify_bound_0_k < ((BitVec.ofInt 32 (3))).toInt → True) ∨ (∀ (__quant_2___cppverify_bound_0_k : Int), ((BitVec.ofInt 32 (0))).toInt ≤ __quant_2___cppverify_bound_0_k ∧ __quant_2___cppverify_bound_0_k < ((BitVec.ofInt 32 (3))).toInt → __quant_2___cppverify_bound_0_k ≥ (0 : Int)) ∧ (cppBvSlt (BitVec.ofInt 32 (3)) (BitVec.ofInt 32 (8)))
+
+A goal is a disjunction: the negated facts it may assume, then what it must
+show. The first two facts describe the null pointer (no object owns address
+0, and none is live with identity 0); the third is that evaluating the
+precondition at ``n = 3`` is defined; the last disjunct is the precondition
+there, the quantifier for every ``k`` in ``[0, 3)`` and ``3 < 8``. Its proof file,
+``proof/CppVerify/Proofs/Goal_7b984a9483ff5c2f.lean``, proves that disjunct:
+
+.. code-block:: lean4
+
+   import CppVerify.User
+
+   theorem cppverify_small_fn_5f5a35736d616c6c76_obligation_1_goal_proof :
+       cppverify_small_fn_5f5a35736d616c6c76_obligation_1_goal := by
+     unfold cppverify_small_fn_5f5a35736d616c6c76_obligation_1_goal
+     intro _ _
+     have zero : (BitVec.ofInt 32 0).toInt = 0 := by decide
+     exact Or.inr (Or.inr (Or.inr ⟨fun _ range => by rw [zero] at range; omega, by decide⟩))
+
+With ``trivial`` for the three ``True`` goals,
+``cpp-verify --backend=lean --lean-project=proof --lean-certify file.cpp``
+prints:
+
+.. code-block:: text
+
+   Certified: nonnegative [backend=Lean]
+   Certified: small [backend=Lean]
+
 The Lean backend does not yet translate the spec collections of
 ``<cppverify.h>`` (``seq``, ``set``, ``multiset``, ``map``): a function whose
 obligations use one is ``Unresolved`` with reason ``logic.unsupported`` on
