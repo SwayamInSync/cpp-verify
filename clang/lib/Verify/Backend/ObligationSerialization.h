@@ -34,6 +34,12 @@ std::string obligationSemanticHash(const ObligationModule &Module);
 std::string obligationSemanticHash(const ObligationModule &Module,
                                    const Obligation &Item);
 
+/// SHA-256 for what a proof of an individual goal proves: its semantics
+/// without the identity of the function it comes from, so that a Lean proof
+/// follows its goal when the function is renamed.
+std::string obligationStatementHash(const ObligationModule &Module,
+                                    const Obligation &Item);
+
 /// SHA-256 for exact dependency-scoped query semantics. Unlike the persistent
 /// proof-cache identity, transformed query contents rather than the enclosing
 /// BMC frontier distinguish bounds, permitting in-process prefix-proof reuse.
