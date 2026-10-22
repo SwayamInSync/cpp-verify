@@ -11,6 +11,7 @@
 #include "Backend/LeanBackend.h"
 #include "Backend/Presburger.h"
 #include "Backend/VerifyBackend.h"
+#include "Driver/CppVerifyVersion.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/FileSystem.h"
@@ -1910,8 +1911,16 @@ TEST(CertifyTest, AgreesWithLeanEvaluation) {
   }
   const std::optional<llvm::StringRef> Redirects[] = {
       std::nullopt, llvm::StringRef(Output), llvm::StringRef(Output)};
+  // The pinned Lean: elan's proxy runs its default toolchain unless told.
+  std::vector<llvm::StringRef> Command = {*Lean};
+  const std::string Pin = ("+" + LeanToolchain).str();
+  llvm::ErrorOr<std::string> Elan = llvm::sys::findProgramByName("elan");
+  bool ViaElan = false;
+  if (Elan && !llvm::sys::fs::equivalent(*Lean, *Elan, ViaElan) && ViaElan)
+    Command.push_back(Pin);
+  Command.push_back(File);
   std::string Message;
-  const int Exit = llvm::sys::ExecuteAndWait(*Lean, {*Lean, File}, std::nullopt,
+  const int Exit = llvm::sys::ExecuteAndWait(*Lean, Command, std::nullopt,
                                              Redirects, 600, 0, &Message);
   auto Printed = llvm::MemoryBuffer::getFile(Output);
   const std::string Log = Printed ? (*Printed)->getBuffer().str() : "";
