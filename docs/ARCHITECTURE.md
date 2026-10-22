@@ -1624,7 +1624,10 @@ uses when the source around it changes.
   `def`, `call:f`, `inv`, `cond`, `exit`, `keep`, `exact`, `check`,
   `spec:f`, ...) and of each entry assumption (`PassiveProgram::EntryOrigins`:
   `pre` for a written precondition, `entry` for a generated one, `null`,
-  `object`); spec checks built elsewhere default to `fact`. The Lean adapter
+  `object`); a contract's check that it is defined (`Passivizer::contract`)
+  labels each clause it assumes once shown defined `pre` or `post`, and the
+  state a function without a verified body returns in `ret`; spec checks
+  built elsewhere default to `fact`. The Lean adapter
   peels the marked chain into `G.readable`: `∀ vars axioms, let …; (h_pre_1
   : A1) → … → C`, a hypothesis being the operand its `Or` negates (or `¬B`
   where simplification folded `¬¬B` to `B`), named `h_<origin>_<n>`, a
