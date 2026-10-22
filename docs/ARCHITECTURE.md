@@ -1537,6 +1537,59 @@ as `a ^ (b + 1)` or `2 - 3` in `Nat`, and its probe file
 (`Inputs/lean_semantics_probe.lean`) states the prelude's values where C++,
 SMT-LIB, and Lean's own operators differ.
 
+### Project goals and their proofs
+
+A project names nothing by position, so that a proof keeps every name it
+uses when the source around it changes.
+
+- **Names.** A module's goals form a group, `cppverify_<function>_<h6>`
+  (`leanProjectGroup`), `h6` from the MD5 of the function identity, which
+  tells overloads apart. A goal is `<group>_<kind>_<h8>`, `h8` the first
+  eight digits of `obligationStatementHash`: SHA-256 over the obligation's
+  semantics and the logical declarations it reaches, in the domain
+  `cppverify-obligation-statement` version 1, without the function identity
+  that the semantic hash includes, so a renamed function's goals keep their
+  hashes. Goals of one group with one hash get `_2`, `_3` in source order,
+  numbered over every obligation of the module whichever are exported. Spec
+  bodies are `cppSpecBody_<h8 of the identity>_...`. Before 0.2 a goal was
+  `..._obligation_<N>`, its position among the function's obligations, a
+  body `cppSpecBody_m<module index>_...`, and its proof
+  `Proofs/Goal_<md5 of the name>.lean`: reordering two postconditions gave
+  each proof the other's goal, and inserting a function renamed the bodies
+  every later proof used.
+- **Records.** The exporter returns a `LeanProjectGoal` for every
+  obligation of each module it exports, those a fallback selection leaves to
+  the solver marked `Exported = false`, with the 0.1 names of the goal and
+  its bodies. A proof file starts with a header the driver reads back
+  (`readLeanProof`): the goal, the stable obligation id, the full hash, the
+  body prefix, and the source, escaped as a Lean comment must be.
+- **Regeneration** (`finalizeLeanProject`) reads the records of
+  `CppVerify/Proofs/` and `Stale/` and gives each exported goal, in name
+  order: the file at its path; else a record with its name, wherever it is
+  kept; else a record of the same hash whose goal is gone, from the group
+  with records of the most of this group's hashes (a renamed function's goals
+  move together), in path order; else the 0.1 file of its 0.1 name; else a
+  stub. A move strips the header, the notes, and the 0.1 comment, renames
+  the goal and the bodies throughout the text, and writes a new header. A
+  headerless file at a goal's path, a proof written over its stub, gets the
+  header. A stub never edited (`Pristine`) is never moved and is removed
+  when its goal is gone, as are unedited 0.1 stubs; any other record no goal
+  took is renamed into `Stale/` with a note: its statement changed (a goal
+  has its stable id), its function has no obligation with its statement, or
+  its function is gone. `--lean-prune-stale` then removes `Stale/`. Emptied
+  directories are removed, and `Check.lean` imports the exported goals.
+- **Fallback runs** examine only the modules their solver leaves
+  unresolved. The driver records the group of every function and
+  termination module it gives the solver (`LeanRunGroups`); a record whose
+  group is among them but has no goal this run, or whose goal the run knows
+  but does not export, is left where it is and never moved.
+
+`lean_identity.test` walks one project through each case (insertion and
+reordering, renames of two functions at once, a changed statement, a removed
+function and its return, fallback runs, pruning, and a 0.1 project with
+proofs, stubs, and a proof of a goal that is gone) and certifies it after
+the renames and the migration.
+
 ## Counterexample Extraction
 
 When Z3 returns SAT, CppVerify evaluates source-attributed SSA variables without
@@ -2074,7 +2127,7 @@ an unchecked support table:
 | Quantifiers and finite-fuel specs | Both quantifier kinds, recursive spec calls, and conservative `unknown` rather than false proof |
 | Frontend-derived semantics | Type invariants and complete-loop Z3/BMC parity |
 | Portable artifacts | Source-stable obligation IDs, canonical/BMC archive replay, and deterministic parallel results |
-| Lean | Source/archive theorem identity, stable proof-module hashes, generated-file kernel build, and bounds instrumentation |
+| Lean | Source/archive obligation identity, one proof file per project goal recording its statement hash, generated-file kernel build, and bounds instrumentation |
 | Advisory checks | `cppverify::recommends` warnings stay source-only and never enter BMC or Lean replay artifacts |
 
 An approved valid quantified or inductive query may remain
