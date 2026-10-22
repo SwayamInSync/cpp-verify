@@ -1607,7 +1607,29 @@ uses when the source around it changes.
   stub its `intro` list. On the 375 suite exports, the 351 that built
   before still build, with every bridge.
 
-`lean_readable.cpp` checks the readable form of each kind of assumption,
+- **Certification** (`certifyLeanProject`) builds `Generated` and `User`,
+  then each proof file with `lean -EhasSorry`, recording the goals whose
+  proofs do not build, and runs the checker of `LeanCertifier.h`, written
+  into the project as `.cppverify/Certify.lean`, with `lake env lean --run`
+  over the goals that built. The checker elaborates none of the user's
+  source, so their macros and commands cannot change what it checks. For each
+  goal it imports the proof module (never freeing imported data, which a
+  later import in the process reads), checks that `G_proof` is a theorem of
+  type exactly `.const G []` with `G` a definition of `CppVerify.Generated`,
+  collects its axioms by walking the kernel constants it uses, and replays
+  through the kernel (as `leanchecker`'s `replayFromImports`) every module of
+  the import closure whose `.olean` lies outside the toolchain, each once in
+  a run. It prints `ok` or `fail` with the reason per goal. Each Lean result
+  records its goals (`VerifyResult::LeanGoals`), and a function is
+  `Certified` only when all of them pass; a failure names the obligation.
+  Before 0.2 certification parsed what `Check.lean` printed, which imports
+  the user's modules: macros there certified proofs of `True`, and so did a
+  theorem added with `debug.skipKernelTC`.
+
+`lean_certifier.test` checks each of those attacks, a proof file that defines
+a goal of the same name of its own (the type check alone would take it), a
+proof that does not build, and an axiom behind a lemma, with a function whose
+proofs are sound certified beside each. `lean_readable.cpp` checks the readable form of each kind of assumption,
 the bridge, the stubs (every one builds), a proof by hypothesis names that
 certifies, and a readable form that says less than its goal, which fails at
 its bridge. `lean_identity.test` walks one project through each case (insertion and
