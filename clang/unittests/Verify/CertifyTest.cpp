@@ -1389,6 +1389,77 @@ TEST(CertifyTest, ChoiceValuesMeetTheirAxioms) {
             CertifyOutcome::Undetermined);
 }
 
+TEST(CertifyTest, ChoicesAreFunctionsOfTheValuesTheyRead) {
+  // pick(h, a) = choose(k, 0, 2, h[a + k] == 7).
+  const LogicSort I32 = LogicSort::bitVector(32, true);
+  auto read = [&](Expr Offset) {
+    return node(LogicExpr::Select, I32, variable("h", LogicSort::heap()),
+                node(LogicExpr::Add, LogicSort::pointer(),
+                     variable("a", LogicSort::pointer()), std::move(Offset)));
+  };
+  auto seven = [&](Expr Offset) {
+    return boolean(LogicExpr::Eq, read(std::move(Offset)), literal("7", I32));
+  };
+  auto result = [] {
+    return variable(LogicFunctionDecl::ResultVariable, math());
+  };
+  LogicFunctionDecl Pick;
+  Pick.Identity = "pick_id";
+  Pick.DisplayName = "pick";
+  Pick.Parameters.push_back({"h", LogicSort::heap()});
+  Pick.Parameters.push_back({"a", LogicSort::pointer()});
+  Pick.ResultSort = math();
+  Pick.Choice = true;
+  Expr Witnessed = node(LogicExpr::Exists, LogicSort::boolSort(),
+                        mathLiteral(0), mathLiteral(2),
+                        seven(variable("k", math())));
+  Witnessed->Binder = "k";
+  Pick.Postconditions.push_back(boolean(
+      LogicExpr::Or, negation(std::move(Witnessed)),
+      boolean(LogicExpr::And,
+              boolean(LogicExpr::And,
+                      boolean(LogicExpr::Le, mathLiteral(0), result()),
+                      boolean(LogicExpr::Lt, result(), mathLiteral(2))),
+              seven(result()))));
+  ObligationModule Module = withFunction(std::move(Pick));
+  const LogicFunctionDecl &Choice = Module.LogicFunctions.at("pick_id");
+  auto pick = [&](const char *Heap) {
+    std::vector<Expr> Args;
+    Args.push_back(variable(Heap, LogicSort::heap()));
+    Args.push_back(variable("a", LogicSort::pointer()));
+    return call(Choice, std::move(Args));
+  };
+  Expr Query = boolean(LogicExpr::Ne, pick("h1"), pick("h2"));
+  TableModel Model;
+  Model.Constants["a"] = integerValue(100);
+  auto choose = [&](const LogicValue &Heap, int64_t Value) {
+    Model.Applications[TableModel::key("pick_id", {Heap, integerValue(100)})] =
+        integerValue(Value);
+  };
+
+  // The memories differ only at a cell the condition does not read, so the
+  // two values break the choice's meaning: no counterexample.
+  const LogicValue Both = heapOf({{100, 7}, {101, 7}}, 0);
+  const LogicValue Elsewhere = heapOf({{100, 7}, {101, 7}, {300, 1}}, 0);
+  Model.Constants["h1"] = Both;
+  Model.Constants["h2"] = Elsewhere;
+  choose(Both, 0);
+  choose(Elsewhere, 1);
+  CertifyResult Same = certifyCounterexample(Module, *Query, Model);
+  EXPECT_EQ(Same.Outcome, CertifyOutcome::Undetermined);
+  EXPECT_NE(Same.Detail.find("reads the same values in both memories"),
+            std::string::npos)
+      << Same.Detail;
+
+  // The condition reads h[101], which differs: two choices are allowed.
+  const LogicValue First = heapOf({{100, 7}, {101, 3}}, 0);
+  Model.Constants["h2"] = First;
+  choose(Both, 1);
+  choose(First, 0);
+  EXPECT_EQ(certifyCounterexample(Module, *Query, Model).Outcome,
+            CertifyOutcome::Certified);
+}
+
 TEST(CertifyTest, MutualRecursionAndMachineResults) {
   // even(n) = n == 0 || odd(n - 1); odd(n) = n != 0 && even(n - 1), over u8.
   const LogicSort U8 = LogicSort::bitVector(8, false);

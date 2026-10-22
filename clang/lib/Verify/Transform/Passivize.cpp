@@ -2914,11 +2914,14 @@ void verify::addChoiceAxioms(std::vector<std::unique_ptr<PassiveStmt>> &Facts,
   }
 }
 
-/// A store outside the reads ranges of a spec leaves its value unchanged. For
-/// each application, relate it across every store back from its heap state.
+/// A store outside the reads ranges of a spec leaves its value unchanged, and
+/// a step that keeps every value a choice's condition reads keeps the choice.
+/// For each application, relate it across every store back from its heap
+/// state.
 static void addFrameInstances(PassiveProgram &P, const FunctionMap &FnMap) {
   auto Framed = [](const VSpecCallExpr &Call, const VFunction &Spec) {
-    return Call.ReadsHeap && !Call.HeapVar.empty() && !Spec.Reads.empty();
+    return Call.ReadsHeap && !Call.HeapVar.empty() &&
+           (!Spec.Reads.empty() || Spec.IsChoice);
   };
   std::map<std::string, FramedApplication> Applications;
   std::vector<const VQuantifiedExpr *> Enclosing;
@@ -3020,7 +3023,9 @@ static void addFrameInstances(PassiveProgram &P, const FunctionMap &FnMap) {
       const Store &S = It->second;
       const SourceLocation Loc = S.Loc;
       std::unique_ptr<VExpr> Outside;
-      if (S.Address) {
+      if (Spec.IsChoice) {
+        Outside = choiceReadsAgree(Spec, *Call, S.Before, S.After, FnMap, Loc);
+      } else if (S.Address) {
         Outside = addressOutsideReads(Spec, Call->Args, S.Address, Loc);
       } else {
         Outside = makeBoolLiteral(true, Loc);

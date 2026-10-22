@@ -105,6 +105,17 @@ regionOutsideReads(const VFunction &Spec,
                    const std::vector<std::unique_ptr<VExpr>> &Args,
                    const VExpr *Lo, const VExpr *Hi, SourceLocation Loc);
 
+/// Every value the condition of the choice applied by \p Call reads, at
+/// every value of its binder where it is evaluated, is the same in the
+/// memories \p Before and \p After: then so is the choice. Null when the
+/// body cannot be followed.
+std::unique_ptr<VExpr> choiceReadsAgree(const VFunction &Choice,
+                                        const VSpecCallExpr &Call,
+                                        const std::string &Before,
+                                        const std::string &After,
+                                        const FunctionMap &FnMap,
+                                        SourceLocation Loc);
+
 /// \p Check, a check of \p Spec, with the user's proof blocks of the kinds
 /// \p Kinds run after its assumptions and before its obligations. Within a
 /// block, result is the value the body returns, and an application of the

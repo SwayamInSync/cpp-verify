@@ -181,7 +181,10 @@ ranges over all mathematical integers. A `cppverify::trigger(term)` mark is an i
 `Cast` flagged `IsTrigger` around the term. Each `cppverify::choose` is lifted to a
 synthesized uninterpreted spec function (`IsChoice`) of the values its body
 mentions, whose postcondition is the Hilbert axiom `!cppverify::exists(k, P) || P(cppverify::result)`
-(with the range for a bounded choose). The calls in its body are calls of the
+(with the range for a bounded choose). Chooses with the same condition, compared
+by a structural key of its range and body that names bound variables by
+position, are lifted once (as Verus's `choose_map` shares closure functions), so
+they are one function. The calls in its body are calls of the
 function it is written in, for recursion and termination. A collection
 operation is a `SpecCall` whose identity is `__cppverify.<op>`, such as
 `__cppverify.seq.push`.
@@ -554,6 +557,18 @@ Terms added for the R3 language features:
   broke the axiom of a choice applied only inside an unfolding certified
   false counterexamples. A claim true only for some choices still fails
   certified, with choices the axioms allow.
+  A choice is a function of the values its condition reads, so the same
+  choice in two memories is one value where those values agree: for each
+  application of a choice that reads memory and each step back from its
+  memory, `addFrameInstances` assumes `agree -> c(after) == c(before)`, where
+  `agree` (`choiceReadsAgree`) says that every load of the condition, at
+  every binder value where it is evaluated and with its address read in
+  each memory, and every application in it that reads memory, has the same
+  value on both sides. The certifier holds a model to the same rule: two
+  values of one choice with the same other arguments are evidence only when
+  some value the condition reads differs between the memories
+  (`readsApart`, a formula that follows the condition's evaluation order),
+  and otherwise the counterexample is unchecked.
 - A comparison between a machine and a mathematical operand is lifted to
   the integers when the mathematical side mentions a quantifier binder or a
   collection, and otherwise split by range so the machine side keeps its

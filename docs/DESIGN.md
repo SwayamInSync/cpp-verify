@@ -817,7 +817,13 @@ cppverify::spec int index_of(const int *a, int n, int x) { return cppverify::cho
 - `cppverify::choose(k, body)` is an integer for which `body` holds, when one exists,
   and otherwise an unspecified integer (Hilbert ε); `cppverify::choose(k, lo, hi, body)`
   chooses in `[lo, hi)`. Each `cppverify::choose` is a function of the values its body
-  mentions, so it is the same for the same values.
+  mentions, so it is the same for the same values. Two chooses whose
+  conditions are written the same way, up to the names of their variables,
+  are one choice (as Verus shares one closure function); one whose condition
+  is written differently is another, even when the conditions are
+  equivalent. The values a condition mentions include the cells it reads:
+  across a write that leaves every value it reads as it was, a choice keeps
+  its value.
 - The verifier knows only that, and knows it wherever a proof meets a
   choose, inside the unfoldings, postconditions, and induction hypotheses
   it assumes too. A claim true for some choices but not all fails with a
