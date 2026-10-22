@@ -1252,7 +1252,8 @@ static llvm::Error writeTextFileIfMissing(llvm::StringRef Path,
   return writeTextFile(Path, Contents);
 }
 
-static std::string leanGoalModuleName(llvm::StringRef Goal) {
+// The proof file 0.1 wrote for a goal it named so.
+static std::string leanLegacyProofModule(llvm::StringRef Goal) {
   llvm::MD5 Hasher;
   llvm::MD5::MD5Result Hash;
   Hasher.update(Goal);
@@ -1260,6 +1261,131 @@ static std::string leanGoalModuleName(llvm::StringRef Goal) {
   llvm::SmallString<32> Hex;
   llvm::MD5::stringifyResult(Hash, Hex);
   return "Goal_" + llvm::StringRef(Hex).take_front(16).str();
+}
+
+static constexpr llvm::StringLiteral LeanLegacyStubNote =
+    "/- Complete this proof; this file is never regenerated. -/";
+
+// Whether a proof file of 0.1 is still the stub 0.1 wrote.
+static bool isLeanLegacyStub(llvm::StringRef Path) {
+  auto Buffer = llvm::MemoryBuffer::getFile(Path);
+  if (!Buffer)
+    return false;
+  llvm::StringRef Text = (*Buffer)->getBuffer();
+  const llvm::StringRef Head =
+      "import CppVerify.User\n\n/- Complete this proof; this file is never "
+      "regenerated. -/\ntheorem ";
+  if (!Text.consume_front(Head))
+    return false;
+  llvm::StringRef Goal = Text.take_until([](char C) { return C == ' '; });
+  return Goal.consume_back("_proof") &&
+         Text == Goal.str() + "_proof : " + Goal.str() + " := by\n  sorry\n";
+}
+
+static constexpr llvm::StringLiteral LeanProofMark = "/- cppverify proof\n";
+static constexpr llvm::StringLiteral LeanQuarantineNote =
+    "-- cpp-verify kept this proof here: ";
+
+// What a proof file proves, from its header: a regeneration finds a proof
+// by its goal's semantic hash wherever its function moved.
+struct LeanProofRecord {
+  std::string Path;
+  std::string Goal;
+  std::string Hash;
+  std::string StableId;
+  std::string BodyPrefix;
+  /// The stub cpp-verify wrote, never edited: nothing in it is the user's.
+  bool Pristine = false;
+};
+
+static std::string leanProofStub(llvm::StringRef Goal) {
+  return "import CppVerify.User\n\ntheorem " + Goal.str() +
+         "_proof : " + Goal.str() + " := by\n  sorry\n";
+}
+
+static std::string leanProofHeader(const LeanProjectGoal &Goal) {
+  return LeanProofMark.str() + "   goal: " + Goal.Name +
+         "\n   obligation: " + Goal.StableId + "\n   hash: " + Goal.Hash +
+         "\n   bodies: " + Goal.BodyPrefix +
+         "\n   source: " + (Goal.Source.empty() ? "unknown" : Goal.Source) +
+         "\n   Complete this proof. cpp-verify never rewrites it: it moves it "
+         "with its goal,\n   and keeps it in Stale/ when no goal has its "
+         "statement. -/\n";
+}
+
+static std::optional<LeanProofRecord> readLeanProof(llvm::StringRef Path) {
+  auto Buffer = llvm::MemoryBuffer::getFile(Path);
+  if (!Buffer)
+    return std::nullopt;
+  llvm::StringRef Text = (*Buffer)->getBuffer();
+  if (!Text.consume_front(LeanProofMark))
+    return std::nullopt;
+  LeanProofRecord Record;
+  Record.Path = Path.str();
+  for (llvm::StringRef Rest = Text.take_front(Text.find("-/"));
+       !Rest.empty();) {
+    auto [Line, Next] = Rest.split('\n');
+    Rest = Next;
+    Line = Line.trim();
+    if (Line.consume_front("goal: "))
+      Record.Goal = Line.str();
+    else if (Line.consume_front("obligation: "))
+      Record.StableId = Line.str();
+    else if (Line.consume_front("hash: "))
+      Record.Hash = Line.str();
+    else if (Line.consume_front("bodies: "))
+      Record.BodyPrefix = Line.str();
+  }
+  if (Record.Goal.empty() || Record.Hash.empty())
+    return std::nullopt;
+  const size_t End = Text.find("-/\n");
+  Record.Pristine = End != llvm::StringRef::npos &&
+                    Text.substr(End + 3) == leanProofStub(Record.Goal);
+  return Record;
+}
+
+static void replaceAllIn(std::string &Text, llvm::StringRef From,
+                         llvm::StringRef To) {
+  if (From.empty() || From == To)
+    return;
+  for (size_t At = Text.find(From); At != std::string::npos;
+       At = Text.find(From, At + To.size()))
+    Text.replace(At, From.size(), To.str());
+}
+
+// Moves a proof to its goal's file, its generated names renamed with it.
+static llvm::Error moveLeanProof(llvm::StringRef From, llvm::StringRef To,
+                                 const LeanProjectGoal &Goal,
+                                 llvm::StringRef OldGoal,
+                                 llvm::StringRef OldBodies) {
+  auto Buffer = llvm::MemoryBuffer::getFile(From);
+  if (!Buffer)
+    return llvm::createStringError(
+        Buffer.getError(), "cannot read Lean proof %s", From.str().c_str());
+  llvm::StringRef Text = (*Buffer)->getBuffer();
+  if (Text.consume_front(LeanProofMark)) {
+    const size_t End = Text.find("-/\n");
+    Text =
+        End == llvm::StringRef::npos ? llvm::StringRef() : Text.substr(End + 3);
+  }
+  std::string Body;
+  for (llvm::StringRef Rest = Text; !Rest.empty();) {
+    auto [Line, Next] = Rest.split('\n');
+    Rest = Next;
+    if (Line.starts_with(LeanQuarantineNote) || Line == LeanLegacyStubNote)
+      continue;
+    Body += Line.str() + "\n";
+  }
+  replaceAllIn(Body, OldGoal, Goal.Name);
+  replaceAllIn(Body, OldBodies, Goal.BodyPrefix);
+  if (std::error_code EC =
+          llvm::sys::fs::create_directories(llvm::sys::path::parent_path(To)))
+    return llvm::createStringError(EC, "cannot create %s", To.str().c_str());
+  if (llvm::Error Error = writeTextFile(To, leanProofHeader(Goal) + Body))
+    return Error;
+  if (From != To)
+    llvm::sys::fs::remove(From);
+  return llvm::Error::success();
 }
 
 static llvm::Expected<std::string>
@@ -1474,34 +1600,256 @@ class Verifier {
     return leanProjectPath(Root, {"CppVerify", "Generated.lean"});
   }
 
+  static std::vector<llvm::StringRef>
+  leanProofComponents(const LeanProjectGoal &Goal, std::string &File) {
+    File = Goal.Name + ".lean";
+    return {"CppVerify", "Proofs", Goal.Group, File};
+  }
+
+  // Each goal gets its proof file: the one recorded with its semantic hash,
+  // which follows it when its function is renamed or moved; else the one
+  // 0.1 wrote for it; else a stub. A proof no goal takes is kept in Stale/,
+  // where a goal with its statement takes it back. A fallback run examines
+  // only the functions its solver leaves unresolved (RunGroups names the
+  // groups it gave the solver), so it leaves the proofs of the others alone.
   llvm::Error
-  finalizeLeanProject(const std::vector<std::string> &ProjectGoals) {
+  finalizeLeanProject(const std::vector<LeanProjectGoal> &ProjectGoals,
+                      const std::set<std::string> *RunGroups) {
     const std::string &Root = leanProjectRoot();
-    std::set<std::string> UniqueGoals(ProjectGoals.begin(), ProjectGoals.end());
-    std::string CheckFile;
-    for (const std::string &Goal : UniqueGoals) {
-      const std::string Module = leanGoalModuleName(Goal);
-      const std::string ProofPath =
-          leanProjectPath(Root, {"CppVerify", "Proofs", Module + ".lean"});
-      std::string Proof =
-          "import CppVerify.User\n\n"
-          "/- Complete this proof; this file is never regenerated. -/\n"
-          "theorem " +
-          Goal + "_proof : " + Goal + " := by\n  sorry\n";
-      if (llvm::Error Error = writeTextFileIfMissing(ProofPath, Proof))
-        return Error;
-      CheckFile += "import CppVerify.Proofs." + Module + "\n";
+    const std::string ProofsDir =
+        leanProjectPath(Root, {"CppVerify", "Proofs"});
+    const std::string StaleDir = leanProjectPath(Root, {"Stale"});
+    std::map<std::string, const LeanProjectGoal *> Goals, Known;
+    std::set<std::string> Examined;
+    std::map<std::string, std::string> StableGoal;
+    for (const LeanProjectGoal &Goal : ProjectGoals) {
+      (Goal.Exported ? Goals : Known).emplace(Goal.Name, &Goal);
+      Examined.insert(Goal.Group);
+      if (Goal.Exported)
+        StableGoal.emplace(Goal.StableId, Goal.Name);
     }
+
+    // Recorded proofs, live first, then kept ones, each in path order.
+    std::vector<LeanProofRecord> Records;
+    std::set<std::string> Legacy;
+    for (const std::string &Dir : {ProofsDir, StaleDir}) {
+      std::error_code EC;
+      std::vector<std::string> Paths;
+      for (llvm::sys::fs::recursive_directory_iterator It(Dir, EC), End;
+           It != End && !EC; It.increment(EC))
+        if (llvm::sys::path::extension(It->path()) == ".lean")
+          Paths.push_back(It->path());
+      llvm::sort(Paths);
+      for (const std::string &Path : Paths)
+        if (std::optional<LeanProofRecord> Record = readLeanProof(Path))
+          Records.push_back(std::move(*Record));
+        else if (Dir == ProofsDir &&
+                 llvm::sys::path::parent_path(Path) == ProofsDir &&
+                 llvm::sys::path::filename(Path).starts_with("Goal_"))
+          Legacy.insert(Path);
+    }
+    auto groupOf = [](const LeanProofRecord &Record) {
+      return llvm::sys::path::filename(
+                 llvm::sys::path::parent_path(Record.Path))
+          .str();
+    };
+    // A proof of a goal this run knows but does not export, or of a
+    // function it left to the solver, stays where it is.
+    auto unexamined = [&](const LeanProofRecord &Record) {
+      auto Goal = Known.find(Record.Goal);
+      if (Goal != Known.end() && Goal->second->Hash == Record.Hash)
+        return true;
+      const std::string Group = groupOf(Record);
+      return RunGroups && RunGroups->count(Group) && !Examined.count(Group);
+    };
+    std::set<std::string> Taken;
+    // Directories a proof left, removed at the end if nothing is left in them.
+    std::set<std::string> Emptied;
+    auto relative = [&](llvm::StringRef Path) {
+      llvm::StringRef Rel = Path;
+      Rel.consume_front(Root);
+      return Rel.ltrim("/\\").str();
+    };
+    // A renamed function's goals move together: for each goal's group, how
+    // many of its goals a group that is gone has a proof of.
+    auto gone = [&](const LeanProofRecord &Record) {
+      return !Goals.count(Record.Goal) && !unexamined(Record) &&
+             !Record.Pristine;
+    };
+    std::map<std::pair<std::string, std::string>, unsigned> Affinity;
+    for (const auto &[Name, Goal] : Goals) {
+      std::set<std::string> From;
+      for (const LeanProofRecord &Record : Records)
+        if (Record.Hash == Goal->Hash && gone(Record) &&
+            From.insert(groupOf(Record)).second)
+          ++Affinity[{Goal->Group, groupOf(Record)}];
+    }
+    std::string CheckFile;
+    for (const auto &[Name, Goal] : Goals) {
+      std::string File;
+      const std::string ProofPath =
+          leanProjectPath(Root, leanProofComponents(*Goal, File));
+      auto Here = llvm::find_if(Records, [&](const LeanProofRecord &Record) {
+        return Record.Path == ProofPath && Record.Hash == Goal->Hash;
+      });
+      // Its own proof first, wherever it is kept; then one written for a
+      // goal that is gone, from the group with proofs of the most goals of
+      // this one (the function renamed), in path order within it.
+      auto Moving = llvm::find_if(Records, [&](const LeanProofRecord &Record) {
+        return Record.Hash == Goal->Hash && !Taken.count(Record.Path) &&
+               Record.Goal == Name && !Record.Pristine;
+      });
+      auto affinity = [&](const LeanProofRecord &Record) {
+        return Affinity[{Goal->Group, groupOf(Record)}];
+      };
+      if (Moving == Records.end())
+        for (auto It = Records.begin(); It != Records.end(); ++It)
+          if (It->Hash == Goal->Hash && !Taken.count(It->Path) && gone(*It) &&
+              (Moving == Records.end() || affinity(*It) > affinity(*Moving)))
+            Moving = It;
+      const std::string LegacyPath = leanProjectPath(
+          Root, {"CppVerify", "Proofs",
+                 leanLegacyProofModule(Goal->LegacyName) + ".lean"});
+      if (Here != Records.end()) {
+        Taken.insert(Here->Path);
+      } else if (Moving != Records.end() &&
+                 (Moving->Path != ProofPath || !Taken.count(ProofPath))) {
+        const bool WasKept =
+            llvm::StringRef(Moving->Path).starts_with(StaleDir);
+        if (llvm::Error Error = moveLeanProof(Moving->Path, ProofPath, *Goal,
+                                              Moving->Goal, Moving->BodyPrefix))
+          return Error;
+        Diags.push_back({VerifyDiagnostic::Warning,
+                         "the Lean proof of " + Goal->StableId +
+                             (WasKept ? " came back from " : " moved from ") +
+                             relative(Moving->Path) + " to " +
+                             relative(ProofPath) +
+                             ", the file of the goal with its statement"});
+        Taken.insert(Moving->Path);
+        Taken.insert(ProofPath);
+        Emptied.insert(llvm::sys::path::parent_path(Moving->Path).str());
+      } else if (Legacy.count(LegacyPath)) {
+        const bool Stub = isLeanLegacyStub(LegacyPath);
+        if (llvm::Error Error =
+                moveLeanProof(LegacyPath, ProofPath, *Goal, Goal->LegacyName,
+                              Goal->LegacyBodyPrefix))
+          return Error;
+        if (!Stub)
+          Diags.push_back({VerifyDiagnostic::Warning,
+                           "the Lean proof " + relative(LegacyPath) +
+                               " that cpp-verify 0.1 wrote for " +
+                               Goal->StableId + " is now " +
+                               relative(ProofPath)});
+        Legacy.erase(LegacyPath);
+        Taken.insert(ProofPath);
+      } else if (llvm::sys::fs::exists(ProofPath)) {
+        // A proof written over its stub: its header lets it follow its
+        // goal from now on.
+        if (!readLeanProof(ProofPath))
+          if (llvm::Error Error =
+                  moveLeanProof(ProofPath, ProofPath, *Goal, Name, ""))
+            return Error;
+        Taken.insert(ProofPath);
+      } else {
+        if (std::error_code EC = llvm::sys::fs::create_directories(
+                llvm::sys::path::parent_path(ProofPath)))
+          return llvm::createStringError(EC, "cannot create %s",
+                                         ProofPath.c_str());
+        if (llvm::Error Error = writeTextFile(
+                ProofPath, leanProofHeader(*Goal) + leanProofStub(Goal->Name)))
+          return Error;
+        Taken.insert(ProofPath);
+      }
+      CheckFile +=
+          "import CppVerify.Proofs." + Goal->Group + "." + Goal->Name + "\n";
+    }
+
+    // What no goal took is kept, with why.
+    auto keep = [&](llvm::StringRef Path,
+                    const std::string &Why) -> llvm::Error {
+      llvm::SmallString<256> Kept(StaleDir);
+      llvm::sys::path::append(Kept, llvm::StringRef(relative(Path))
+                                        .drop_front(std::strlen("CppVerify/")));
+      std::string Target = std::string(Kept);
+      for (unsigned Copy = 2; llvm::sys::fs::exists(Target); ++Copy)
+        Target = std::string(Kept) + "." + std::to_string(Copy);
+      if (std::error_code EC = llvm::sys::fs::create_directories(
+              llvm::sys::path::parent_path(Target)))
+        return llvm::createStringError(EC, "cannot create %s", Target.c_str());
+      if (std::error_code EC = llvm::sys::fs::rename(Path, Target))
+        return llvm::createStringError(EC, "cannot keep %s",
+                                       Path.str().c_str());
+      std::error_code EC;
+      llvm::raw_fd_ostream Note(Target, EC, llvm::sys::fs::OF_Append);
+      if (!EC)
+        Note << "\n" << LeanQuarantineNote << Why << "\n";
+      Diags.push_back({VerifyDiagnostic::Warning,
+                       "the Lean proof " + relative(Path) + " is kept in " +
+                           relative(Target) + ": " + Why});
+      return llvm::Error::success();
+    };
+    for (const LeanProofRecord &Record : Records) {
+      if (Taken.count(Record.Path) ||
+          llvm::StringRef(Record.Path).starts_with(StaleDir) ||
+          unexamined(Record))
+        continue;
+      Emptied.insert(llvm::sys::path::parent_path(Record.Path).str());
+      if (Record.Pristine) {
+        llvm::sys::fs::remove(Record.Path);
+        continue;
+      }
+      auto Same = StableGoal.find(Record.StableId);
+      std::string Why =
+          Same != StableGoal.end()
+              ? "the statement of " + Record.StableId +
+                    " changed; its goal is now " + Same->second
+          : Examined.count(groupOf(Record))
+              ? "its function has no obligation with this statement any more"
+              : "its function is gone, and no goal has its statement";
+      if (llvm::Error Error = keep(Record.Path, Why))
+        return Error;
+    }
+    for (const std::string &Path : Legacy)
+      if (isLeanLegacyStub(Path))
+        llvm::sys::fs::remove(Path);
+      else if (llvm::Error Error =
+                   keep(Path, "a proof cpp-verify 0.1 wrote for a goal this "
+                              "source no longer has"))
+        return Error;
+    for (std::string Dir : Emptied)
+      while (Dir != ProofsDir && Dir != Root && !llvm::sys::fs::remove(Dir))
+        Dir = llvm::sys::path::parent_path(Dir).str();
+
+    if (Opts.LeanPruneStale && llvm::sys::fs::exists(StaleDir)) {
+      unsigned Pruned = 0;
+      std::error_code EC;
+      for (llvm::sys::fs::recursive_directory_iterator It(StaleDir, EC), End;
+           It != End && !EC; It.increment(EC))
+        if (llvm::sys::path::extension(It->path()) == ".lean" ||
+            llvm::StringRef(It->path()).contains(".lean."))
+          ++Pruned;
+      if (std::error_code EC = llvm::sys::fs::remove_directories(StaleDir))
+        return llvm::createStringError(EC, "cannot remove %s",
+                                       StaleDir.c_str());
+      Diags.push_back({VerifyDiagnostic::Warning,
+                       "removed " +
+                           (Pruned == 1 ? std::string("the Lean proof")
+                                        : "the " + std::to_string(Pruned) +
+                                              " Lean proofs") +
+                           " kept in Stale/, as --lean-prune-stale asks"});
+    }
+
     CheckFile += "\n";
-    for (const std::string &Goal : UniqueGoals) {
-      CheckFile += "example : " + Goal + " := " + Goal + "_proof\n";
-      CheckFile += "#print axioms " + Goal + "_proof\n";
+    for (const auto &[Name, Goal] : Goals) {
+      CheckFile += "example : " + Name + " := " + Name + "_proof\n";
+      CheckFile += "#print axioms " + Name + "_proof\n";
     }
     return writeTextFile(leanProjectPath(Root, {"CppVerify", "Check.lean"}),
                          CheckFile);
   }
 
-  llvm::Error certifyLeanProject(const std::vector<std::string> &ProjectGoals) {
+  llvm::Error
+  certifyLeanProject(const std::vector<LeanProjectGoal> &ProjectGoals) {
     if (ProjectGoals.empty())
       return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                      "the project has no proof obligations");
@@ -1576,16 +1924,23 @@ class Verifier {
       return llvm::createStringError(
           EC, "cannot create Lean proof build directory");
 
-    std::set<std::string> UniqueGoals(ProjectGoals.begin(), ProjectGoals.end());
-    for (const std::string &Goal : UniqueGoals) {
-      const std::string Module = leanGoalModuleName(Goal);
+    std::map<std::string, const LeanProjectGoal *> UniqueGoals;
+    for (const LeanProjectGoal &Goal : ProjectGoals)
+      UniqueGoals.emplace(Goal.Name, &Goal);
+    for (const auto &[Name, Goal] : UniqueGoals) {
+      std::string File;
       const std::string ProofSource =
-          leanProjectPath(Root, {"CppVerify", "Proofs", Module + ".lean"});
+          leanProjectPath(Root, leanProofComponents(*Goal, File));
+      const std::string ObjectDir =
+          leanProjectPath(ProofBuildDir, {Goal->Group});
+      if (std::error_code EC = llvm::sys::fs::create_directories(ObjectDir))
+        return llvm::createStringError(
+            EC, "cannot create Lean proof build directory");
       const std::string ProofObject =
-          leanProjectPath(ProofBuildDir, {Module + ".olean"});
+          leanProjectPath(ObjectDir, {Name + ".olean"});
       if (auto Proof = runLake({"env", "lean", "-EhasSorry", "-R", Root, "-o",
                                 ProofObject, ProofSource},
-                               Module);
+                               Name);
           !Proof)
         return Proof.takeError();
     }
@@ -1729,6 +2084,13 @@ public:
                        "--lean-fallback"});
       return false;
     }
+    if (Opts.LeanPruneStale && Opts.LeanProjectPath.empty() &&
+        Opts.LeanFallbackProjectPath.empty()) {
+      Diags.push_back({VerifyDiagnostic::Error,
+                       "--lean-prune-stale requires --lean-project or "
+                       "--lean-fallback"});
+      return false;
+    }
     if (Opts.LowerOnly && Opts.Backend == BackendKind::Lean) {
       Diags.push_back(
           {VerifyDiagnostic::Error,
@@ -1826,7 +2188,10 @@ public:
       InterfaceFunctions.push_back(std::move(Interface));
     }
 
-    std::vector<std::string> LeanProjectGoals;
+    std::vector<LeanProjectGoal> LeanProjectGoals;
+    // The goal groups of the modules a fallback run gave its solver, which
+    // it examines in Lean only when the solver leaves them unresolved.
+    std::set<std::string> LeanRunGroups;
     std::unique_ptr<llvm::raw_fd_ostream> LeanFile;
     llvm::raw_ostream *LeanOut = DumpOS;
     std::string LeanOutputPath = Opts.LeanOutPath;
@@ -2633,6 +2998,8 @@ public:
               continue;
             }
           } else {
+            if (LeanFallbackBackend)
+              LeanRunGroups.insert(leanProjectGroup(DecModule));
             VerifyResult R = SpecBackend->verify(DecModule);
             if (Fn->IsSpec && (R.Reason == VerifyReason::SpecHidden ||
                                R.Reason == VerifyReason::SpecFuel)) {
@@ -2906,6 +3273,8 @@ public:
           continue;
         }
 
+        if (LeanFallbackBackend)
+          LeanRunGroups.insert(leanProjectGroup(Module));
         VerifyResult R =
             BMCResult ? std::move(*BMCResult) : Backend->verify(Module);
         // Every unfolding depth gives the solver only proved facts, so the
@@ -3218,14 +3587,19 @@ public:
         LeanFile->flush();
         LeanFile.reset();
       }
-      if (llvm::Error Error = finalizeLeanProject(LeanProjectGoals)) {
+      std::vector<LeanProjectGoal> ExportedGoals;
+      llvm::copy_if(LeanProjectGoals, std::back_inserter(ExportedGoals),
+                    [](const LeanProjectGoal &Goal) { return Goal.Exported; });
+      if (llvm::Error Error = finalizeLeanProject(
+              LeanProjectGoals,
+              LeanFallbackBackend ? &LeanRunGroups : nullptr)) {
         AllOk = false;
         AnyFailed = true;
         Diags.push_back({VerifyDiagnostic::Error,
                          "cannot finalize Lean project (" +
                              llvm::toString(std::move(Error)) + ")"});
       } else if (Opts.LeanCertify && !interruptRequested() &&
-                 (!LeanProjectGoals.empty() ||
+                 (!ExportedGoals.empty() ||
                   Opts.LeanFallbackProjectPath.empty())) {
         // A verdict certification does not make a proof is reported, and
         // what its vacuity checks found is not.
@@ -3238,7 +3612,7 @@ public:
             if (Finding.FindingOf == Index)
               Finding.Hidden = true;
         };
-        if (llvm::Error Error = certifyLeanProject(LeanProjectGoals)) {
+        if (llvm::Error Error = certifyLeanProject(ExportedGoals)) {
           AllOk = false;
           AnyFailed = true;
           const std::string Reason = llvm::toString(std::move(Error));

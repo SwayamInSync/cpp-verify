@@ -303,11 +303,13 @@ inline unsigned moduleTimeoutMs(const ObligationModule &Module,
                                                 : SolverTimeoutMs;
 }
 
+struct LeanProjectGoal;
+
 std::unique_ptr<VerifyBackend>
 createVerifyBackend(BackendKind K, llvm::raw_ostream *LeanOut = nullptr,
                     unsigned BMCUnroll = 10,
                     const BackendExecutionOptions &Execution = {},
-                    std::vector<std::string> *LeanProjectGoals = nullptr);
+                    std::vector<LeanProjectGoal> *LeanProjectGoals = nullptr);
 
 VerifyResult
 lowerObligationModule(const ObligationModule &Module,

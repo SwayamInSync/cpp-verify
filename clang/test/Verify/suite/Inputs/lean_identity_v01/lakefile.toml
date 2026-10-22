@@ -1,0 +1,6 @@
+name = "cppverify_proof"
+version = "0.1.0"
+defaultTargets = ["CppVerify"]
+
+[[lean_lib]]
+name = "CppVerify"

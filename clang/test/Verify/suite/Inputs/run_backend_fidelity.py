@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import argparse
-import hashlib
 import json
 import pathlib
 import re
@@ -399,18 +398,28 @@ def check_archive_matrix(cpp_verify, source, work, source_records):
     return canonical
 
 
-def goal_names(lean_text):
-    names = set(
+def project_goals(lean_text):
+    goals = {}
+    for match in re.finditer(
+        r"^/- obligation: (\S+)\n   kind: (\S+)\n   source: ([^\n]*) -/\n"
+        r"def (cppverify_[A-Za-z0-9_]+) : Prop :=$",
+        lean_text,
+        re.MULTILINE,
+    ):
+        goals[match.group(4)] = match.group(1, 2, 3)
+    if not goals:
+        fail("Lean export contains no named obligation goals")
+    return goals
+
+
+def obligation_records(lean_text):
+    return sorted(
         re.findall(
-            r"^def ((?:cppverify_[A-Za-z0-9_]+_goal)|"
-            r"(?:cppEncoded_[0-9a-f]+)) : Prop :=$",
+            r"^/- obligation: (\S+)\n   kind: (\S+)\n   source: ([^\n]*) -/$",
             lean_text,
             re.MULTILINE,
         )
     )
-    if not names:
-        fail("Lean export contains no named obligation goals")
-    return names
 
 
 def scratch_theorem_names(lean_text):
@@ -425,12 +434,6 @@ def scratch_theorem_names(lean_text):
     if not names:
         fail("Lean scratch export contains no named theorems")
     return names
-
-
-def decode_lean_name(name):
-    if not name.startswith("cppEncoded_"):
-        return name
-    return bytes.fromhex(name.removeprefix("cppEncoded_")).decode("utf-8")
 
 
 def check_lean_identity(cpp_verify, source, canonical, work):
@@ -460,7 +463,7 @@ def check_lean_identity(cpp_verify, source, canonical, work):
     )
     if source_lean.read_bytes() != replay_lean.read_bytes():
         fail("source and archive replay produced different Lean semantics")
-    scratch_goals = scratch_theorem_names(source_lean.read_text())
+    scratch_theorem_names(source_lean.read_text())
 
     run(
         [
@@ -478,37 +481,42 @@ def check_lean_identity(cpp_verify, source, canonical, work):
     if "sorry" in text:
         fail("generated Lean semantics contains an admitted proof")
 
-    goals = goal_names(text)
-    decoded_scratch_goals = {decode_lean_name(goal) for goal in scratch_goals}
-    if {
-        decode_lean_name(goal).removesuffix("_goal") for goal in goals
-    } - decoded_scratch_goals:
+    goals = project_goals(text)
+    if sorted(goals.values()) != obligation_records(source_lean.read_text()):
         fail("Lean project goal identities differ from scratch/archive export")
-    proof_files = list((project / "CppVerify" / "Proofs").glob("Goal_*.lean"))
+    proofs = project / "CppVerify" / "Proofs"
+    proof_files = sorted(proofs.glob("*/*.lean"))
     if len(proof_files) != len(goals):
         fail("Lean project proof-module count does not match generated goals")
     proof_goals = set()
     for proof_file in proof_files:
-        match = re.search(
-            r"^theorem ((?:cppverify_[A-Za-z0-9_]+_goal)|"
-            r"(?:cppEncoded_[0-9a-f]+))_proof :",
-            proof_file.read_text(),
-            re.MULTILINE,
+        text = proof_file.read_text()
+        header = re.match(
+            r"/- cppverify proof\n   goal: (\S+)\n   obligation: (\S+)\n"
+            r"   hash: ([0-9a-f]{64})\n",
+            text,
         )
-        if not match:
+        if not header:
             fail("malformed Lean proof module {}".format(proof_file.name))
-        goal = match.group(1)
-        expected_name = "Goal_{}.lean".format(
-            hashlib.md5(goal.encode("utf-8")).hexdigest()[:16]
+        goal, obligation, digest = header.groups()
+        group = proof_file.parent.name
+        name = re.fullmatch(
+            re.escape(group) + r"_[a-z0-9_]+_([0-9a-f]{8})(?:_[0-9]+)?", goal
         )
-        if proof_file.name != expected_name:
-            fail(
-                "Lean goal hash mismatch: {} should be {}".format(
-                    proof_file.name, expected_name
-                )
-            )
+        if proof_file.name != goal + ".lean" or not name:
+            fail("Lean proof module {} is not named by its goal".format(
+                proof_file.relative_to(proofs)
+            ))
+        if not digest.startswith(name.group(1)):
+            fail("Lean goal hash mismatch: {} records {}".format(goal, digest))
+        if goals.get(goal, (None,))[0] != obligation:
+            fail("Lean proof module {} names obligation {}".format(
+                goal, obligation
+            ))
+        if "theorem {}_proof :".format(goal) not in text:
+            fail("malformed Lean proof module {}".format(proof_file.name))
         proof_goals.add(goal)
-    if proof_goals != goals:
+    if proof_goals != set(goals):
         fail("Lean proof modules do not cover the generated theorem identities")
 
     run(["lake", "--dir={}".format(project), "build", "CppVerify.Generated"], {0})

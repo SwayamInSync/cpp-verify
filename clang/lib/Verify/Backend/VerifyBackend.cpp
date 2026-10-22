@@ -749,7 +749,7 @@ std::unique_ptr<VerifyBackend>
 verify::createVerifyBackend(BackendKind K, llvm::raw_ostream *LeanOut,
                             unsigned BMCUnroll,
                             const BackendExecutionOptions &Execution,
-                            std::vector<std::string> *LeanProjectGoals) {
+                            std::vector<LeanProjectGoal> *LeanProjectGoals) {
   switch (K) {
   case BackendKind::Z3:
     return std::make_unique<Z3VerifyBackend>(Execution, "z3");

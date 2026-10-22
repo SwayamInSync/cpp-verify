@@ -92,6 +92,12 @@ static cl::opt<bool> LeanCertify(
     cl::desc("Kernel-check every proof in --lean-project without admissions"),
     cl::init(false), cl::cat(CppVerifyCategory));
 
+static cl::opt<bool> LeanPruneStale(
+    "lean-prune-stale",
+    cl::desc("Delete the proofs a Lean project keeps in Stale/ because no "
+             "goal has their statement"),
+    cl::init(false), cl::cat(CppVerifyCategory));
+
 static cl::opt<unsigned>
     BMCUnroll("unroll", cl::desc("Maximum loop unroll bound for --backend=bmc"),
               cl::init(10), cl::cat(CppVerifyCategory));
@@ -333,6 +339,7 @@ public:
       VOpts.LeanFallbackProjectPath = LeanFallback.getValue();
       VOpts.LeanScope = LeanFallbackScope.getValue();
       VOpts.LeanCertify = LeanCertify.getValue();
+      VOpts.LeanPruneStale = LeanPruneStale.getValue();
       VOpts.BMCUnroll = BMCUnroll.getValue();
       VOpts.SolverTimeoutMs = SolverTimeout.getValue();
       VOpts.CollectionTimeoutMs = collectionTimeoutMs();
@@ -606,7 +613,8 @@ static int replayObligationArchive() {
                     "exclusive\n";
     return 1;
   }
-  if (!LeanProject.empty() || !LeanFallback.empty() || LeanCertify) {
+  if (!LeanProject.empty() || !LeanFallback.empty() || LeanCertify ||
+      LeanPruneStale) {
     llvm::errs() << "error: archive replay supports Lean scratch-pad export "
                     "with --lean-out, not Lean project generation or "
                     "certification\n";

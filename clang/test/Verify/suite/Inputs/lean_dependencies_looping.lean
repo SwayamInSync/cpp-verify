@@ -1,7 +1,7 @@
 import CppVerify.User
 
-theorem cppverify_looping_fn_5f5a376c6f6f70696e676a6a_obligation_2_goal_proof : cppverify_looping_fn_5f5a376c6f6f70696e676a6a_obligation_2_goal := by
-  unfold cppverify_looping_fn_5f5a376c6f6f70696e676a6a_obligation_2_goal
+theorem cppverify_looping_3f4bd4_postcondition_d06fccd0_proof : cppverify_looping_3f4bd4_postcondition_d06fccd0 := by
+  unfold cppverify_looping_3f4bd4_postcondition_d06fccd0
   intro _ _ _ r a b _ _ _
   have thousand : (BitVec.ofInt 32 1000).toNat = 1000 := by decide
   rcases Classical.em (cppBvUlt a (BitVec.ofInt 32 1000) ∧

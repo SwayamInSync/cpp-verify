@@ -1,0 +1,198 @@
+# REQUIRES: lean
+#
+# A Lean project names a goal by its function and the hash of its statement,
+# and each proof file records that hash, so a proof stays with its statement
+# as the source around it changes. The sources sit in a directory whose path
+# holds `/-`, which a Lean comment must not take as a nested comment.
+#
+# RUN: rm -rf %t && mkdir -p %t/-src
+# RUN: cp %S/Inputs/lean_identity_base.cpp %t/-src/base.cpp
+# RUN: cp %S/Inputs/lean_identity_inserted.cpp %t/-src/inserted.cpp
+# RUN: cp %S/Inputs/lean_identity_renamed.cpp %t/-src/renamed.cpp
+# RUN: cp %S/Inputs/lean_identity_changed.cpp %t/-src/changed.cpp
+# RUN: cp %S/Inputs/lean_identity_removed.cpp %t/-src/removed.cpp
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p %t/-src/base.cpp -- 2>&1 | FileCheck %s --check-prefix=EXPORT --implicit-check-not=warning
+# RUN: FileCheck %s --input-file=%t/p/CppVerify/Check.lean --check-prefix=IMPORTS
+#
+# Proofs written over their stubs get the header that lets them follow their
+# goals.
+# RUN: cp %S/Inputs/lean_identity_proofs/cppverify_tri_* %t/p/CppVerify/Proofs/cppverify_tri_decreases_f55d4c/
+# RUN: cp %S/Inputs/lean_identity_proofs/cppverify_six_* %t/p/CppVerify/Proofs/cppverify_six_6a2cf3/
+# RUN: cp %S/Inputs/lean_identity_proofs/cppverify_one_* %t/p/CppVerify/Proofs/cppverify_one_99bcee/
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p %t/-src/base.cpp -- 2>&1 | FileCheck %s --check-prefix=EXPORT --implicit-check-not=warning
+# RUN: FileCheck %s --input-file=%t/p/CppVerify/Proofs/cppverify_six_6a2cf3/cppverify_six_6a2cf3_postcondition_198bc076.lean --check-prefix=HEADER
+#
+# A function inserted before and postconditions reordered change no
+# statement: every proof stays, and so do the spec bodies the proofs unfold.
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p %t/-src/inserted.cpp -- 2>&1 | FileCheck %s --check-prefix=INSERTED --implicit-check-not=warning
+# RUN: grep -q 'cppSpecBody_6a2cf351_fn_5f5a3374726969_4,' %t/p/CppVerify/Proofs/cppverify_six_6a2cf3/cppverify_six_6a2cf3_postcondition_198bc076.lean
+# RUN: grep -q '^def cppSpecBody_6a2cf351_fn_5f5a3374726969_4$' %t/p/CppVerify/Generated.lean
+# RUN: test -f %t/p/CppVerify/Proofs/cppverify_zero_5ece85/cppverify_zero_5ece85_postcondition_36923ed0.lean
+#
+# Renamed functions take their proofs along, each its own, with the names
+# they use; the stubs of the function that is gone are removed.
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p --lean-certify %t/-src/renamed.cpp -- 2>&1 | FileCheck %s --check-prefix=RENAMED --implicit-check-not=warning
+# RUN: grep -q 'cppSpecBody_1480fe52_fn_5f5a3374726969_4,' %t/p/CppVerify/Proofs/cppverify_six_again_1480fe/cppverify_six_again_1480fe_postcondition_198bc076.lean
+# RUN: not test -e %t/p/CppVerify/Proofs/cppverify_six_6a2cf3
+# RUN: not test -e %t/p/CppVerify/Proofs/cppverify_one_99bcee
+# RUN: not test -e %t/p/CppVerify/Proofs/cppverify_zero_5ece85
+#
+# A changed statement never gets the old proof: it is kept in Stale/, with
+# a note naming the goal of the changed obligation.
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p %t/-src/changed.cpp -- 2>&1 | FileCheck %s --check-prefix=CHANGED --implicit-check-not=warning
+# RUN: FileCheck %s --input-file=%t/p/Stale/Proofs/cppverify_one_again_52815a/cppverify_one_again_52815a_postcondition_ebbe6a6a.lean --check-prefix=NOTE
+#
+# Reverted, the statement takes its proof back, and the stub of the changed
+# one is removed.
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p %t/-src/renamed.cpp -- 2>&1 | FileCheck %s --check-prefix=REVERTED --implicit-check-not=warning
+# RUN: not test -e %t/p/CppVerify/Proofs/cppverify_one_again_52815a/cppverify_one_again_52815a_postcondition_34c13fbe.lean
+# RUN: not grep -q 'cpp-verify kept this proof here' %t/p/CppVerify/Proofs/cppverify_one_again_52815a/cppverify_one_again_52815a_postcondition_ebbe6a6a.lean
+#
+# A removed function's proofs are kept; an unedited stub is removed.
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p %t/-src/removed.cpp -- 2>&1 | FileCheck %s --check-prefix=REMOVED --implicit-check-not=warning
+# RUN: not test -e %t/p/CppVerify/Proofs/cppverify_one_again_52815a
+#
+# Back under their first names, every proof returns, from Stale/ too, and
+# all of them check.
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p --lean-certify %t/-src/base.cpp -- 2>&1 | FileCheck %s --check-prefix=BACK --implicit-check-not=warning
+# RUN: not test -e %t/p/Stale
+#
+# A fallback run examines only what its solver leaves unresolved: the proofs
+# of the functions the solver settles stay where they are.
+# RUN: %cpp-verify --lean-fallback=%t/p %t/-src/base.cpp -- 2>&1 | FileCheck %s --check-prefix=FALLBACK --implicit-check-not=warning
+# RUN: test -f %t/p/CppVerify/Proofs/cppverify_one_99bcee/cppverify_one_99bcee_postcondition_ebbe6a6a.lean
+# RUN: sed '/^int one()/,$d' %t/-src/base.cpp > %t/-src/without_one.cpp
+# RUN: %cpp-verify --lean-fallback=%t/p %t/-src/without_one.cpp -- 2>&1 | FileCheck %s --check-prefix=FALLBACK-REMOVED --implicit-check-not=warning
+# RUN: test -f %t/p/CppVerify/Proofs/cppverify_six_6a2cf3/cppverify_six_6a2cf3_postcondition_198bc076.lean
+#
+# Kept proofs are deleted only on request.
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p --lean-prune-stale %t/-src/without_one.cpp -- 2>&1 | FileCheck %s --check-prefix=PRUNE --implicit-check-not=warning
+# RUN: not test -e %t/p/Stale
+# RUN: not %cpp-verify --lean-prune-stale %t/-src/without_one.cpp -- 2>&1 | FileCheck %s --check-prefix=PRUNE-ALONE
+#
+# The goals of a partly exported function that the solver proved keep their
+# proofs.
+# RUN: not %cpp-verify --solver-rlimit=100 --lean-fallback=%t/q --lean-fallback-scope=all %S/Inputs/lean_fallback_partial.cpp -- 2>&1 | FileCheck %s --check-prefix=PARTIAL-ALL
+# RUN: cp %S/Inputs/lean_identity_proofs/cppverify_bump_* %t/q/CppVerify/Proofs/cppverify_bump_ce87d1/
+# RUN: not %cpp-verify --solver-rlimit=100 --lean-fallback=%t/q --lean-fallback-scope=all %S/Inputs/lean_fallback_partial.cpp -- 2>&1 | FileCheck %s --check-prefix=PARTIAL-ALL --implicit-check-not=warning
+# RUN: grep -q 'hash: ba8abb90' %t/q/CppVerify/Proofs/cppverify_bump_ce87d1/cppverify_bump_ce87d1_missing_return_ba8abb90.lean
+# RUN: not %cpp-verify --solver-rlimit=100 --lean-fallback=%t/q %S/Inputs/lean_fallback_partial.cpp -- 2>&1 | FileCheck %s --check-prefix=PARTIAL --implicit-check-not=warning
+# RUN: grep -q trivial %t/q/CppVerify/Proofs/cppverify_bump_ce87d1/cppverify_bump_ce87d1_missing_return_ba8abb90.lean
+# RUN: not grep -q missing_return %t/q/CppVerify/Check.lean
+#
+# Stubs are not proofs: a function with nothing but stubs, renamed, gets new
+# stubs, with no move to report.
+# RUN: %cpp-verify --backend=lean --lean-project=%t/s %t/-src/base.cpp -- 2>&1 | FileCheck %s --check-prefix=EXPORT --implicit-check-not=warning
+# RUN: %cpp-verify --backend=lean --lean-project=%t/s %t/-src/renamed.cpp -- 2>&1 | FileCheck %s --check-prefix=STUBS --implicit-check-not=warning
+# RUN: not test -e %t/s/Stale
+#
+# A project of 0.1 moves to its pin and to these names: its proofs move to
+# the files of their goals with every generated name they use, its unedited
+# stubs silently, and a proof of a goal that is gone is kept.
+# RUN: cp -r %S/Inputs/lean_identity_v01 %t/m
+# RUN: %cpp-verify --backend=lean --lean-project=%t/m %t/-src/base.cpp -- 2>&1 | FileCheck %s --check-prefix=MIGRATE --implicit-check-not=warning -DPROJECT=%t/m
+# RUN: grep -q 'cppSpecBody_6a2cf351_fn_5f5a3374726969_4,' %t/m/CppVerify/Proofs/cppverify_six_6a2cf3/cppverify_six_6a2cf3_postcondition_198bc076.lean
+# RUN: grep -q 'cppverify_gone_fn_5f5a34676f6e6576_obligation_1_goal_proof' %t/m/Stale/Proofs/Goal_00000000deadbeef.lean
+# RUN: not test -e %t/m/CppVerify/Proofs/Goal_00000000feedface.lean
+# RUN: cp %S/Inputs/lean_identity_proofs/cppverify_one_99bcee_missing_return_54ae7c80.lean %t/m/CppVerify/Proofs/cppverify_one_99bcee/
+# RUN: %cpp-verify --backend=lean --lean-project=%t/m --lean-certify %t/-src/base.cpp -- 2>&1 | FileCheck %s --check-prefix=CERTIFIED --implicit-check-not=warning
+
+# EXPORT: Exported: decreases: tri
+# EXPORT-NEXT: Exported: lean obligation: six
+# EXPORT-NEXT: Exported: lean obligation: one
+
+# IMPORTS: import CppVerify.Proofs.cppverify_one_99bcee.cppverify_one_99bcee_missing_return_54ae7c80
+# IMPORTS-NEXT: import CppVerify.Proofs.cppverify_one_99bcee.cppverify_one_99bcee_postcondition_cd6bdfcd
+# IMPORTS-NEXT: import CppVerify.Proofs.cppverify_one_99bcee.cppverify_one_99bcee_postcondition_cd6bdfcd_2
+# IMPORTS-NEXT: import CppVerify.Proofs.cppverify_one_99bcee.cppverify_one_99bcee_postcondition_ebbe6a6a
+# IMPORTS-NEXT: import CppVerify.Proofs.cppverify_six_6a2cf3.cppverify_six_6a2cf3_missing_return_54ae7c80
+# IMPORTS-NEXT: import CppVerify.Proofs.cppverify_six_6a2cf3.cppverify_six_6a2cf3_postcondition_198bc076
+# IMPORTS-NEXT: import CppVerify.Proofs.cppverify_tri_decreases_f55d4c.cppverify_tri_decreases_f55d4c_termination_3c6bb93f
+# IMPORTS-EMPTY:
+
+# HEADER: /- cppverify proof
+# HEADER-NEXT: goal: cppverify_six_6a2cf3_postcondition_198bc076
+# HEADER-NEXT: obligation: fn_5f5a3373697876::postcondition@8:37
+# HEADER-NEXT: hash: 198bc0762967df1bfb4e7851125ba87e9761e99c4b6b075ff2d3b06dea679fbe
+# HEADER-NEXT: bodies: cppSpecBody_6a2cf351_
+# HEADER-NEXT: source: {{.*}}/ -src/base.cpp:8:37
+# HEADER: -/
+# HEADER-NEXT: import CppVerify.User
+# HEADER-EMPTY:
+# HEADER-NEXT: theorem cppverify_six_6a2cf3_postcondition_198bc076_proof :
+
+# INSERTED: Exported: decreases: tri
+# INSERTED-NEXT: Exported: lean obligation: zero
+# INSERTED-NEXT: Exported: lean obligation: six
+# INSERTED-NEXT: Exported: lean obligation: one
+
+# RENAMED: Certified: decreases: tri [backend=Lean]
+# RENAMED-NEXT: Certified: six_again [backend=Lean]
+# RENAMED-NEXT: Certified: one_again [backend=Lean]
+# RENAMED-NEXT: warning: the Lean proof of fn_5f5a396f6e655f616761696e76::missing-return@synthetic moved from CppVerify/Proofs/cppverify_one_99bcee/cppverify_one_99bcee_missing_return_54ae7c80.lean to CppVerify/Proofs/cppverify_one_again_52815a/cppverify_one_again_52815a_missing_return_54ae7c80.lean, the file of the goal with its statement
+# RENAMED-NEXT: warning: the Lean proof of fn_5f5a396f6e655f616761696e76::postcondition@15:37 moved from CppVerify/Proofs/cppverify_one_99bcee/cppverify_one_99bcee_postcondition_cd6bdfcd.lean to CppVerify/Proofs/cppverify_one_again_52815a/cppverify_one_again_52815a_postcondition_cd6bdfcd.lean, the file of the goal with its statement
+# RENAMED-NEXT: warning: the Lean proof of fn_5f5a396f6e655f616761696e76::postcondition@17:37 moved from CppVerify/Proofs/cppverify_one_99bcee/cppverify_one_99bcee_postcondition_cd6bdfcd_2.lean to CppVerify/Proofs/cppverify_one_again_52815a/cppverify_one_again_52815a_postcondition_cd6bdfcd_2.lean, the file of the goal with its statement
+# RENAMED-NEXT: warning: the Lean proof of fn_5f5a396f6e655f616761696e76::postcondition@16:37 moved from CppVerify/Proofs/cppverify_one_99bcee/cppverify_one_99bcee_postcondition_ebbe6a6a.lean to CppVerify/Proofs/cppverify_one_again_52815a/cppverify_one_again_52815a_postcondition_ebbe6a6a.lean, the file of the goal with its statement
+# RENAMED-NEXT: warning: the Lean proof of fn_5f5a397369785f616761696e76::missing-return@synthetic moved from CppVerify/Proofs/cppverify_six_6a2cf3/cppverify_six_6a2cf3_missing_return_54ae7c80.lean to CppVerify/Proofs/cppverify_six_again_1480fe/cppverify_six_again_1480fe_missing_return_54ae7c80.lean, the file of the goal with its statement
+# RENAMED-NEXT: warning: the Lean proof of fn_5f5a397369785f616761696e76::postcondition@8:37 moved from CppVerify/Proofs/cppverify_six_6a2cf3/cppverify_six_6a2cf3_postcondition_198bc076.lean to CppVerify/Proofs/cppverify_six_again_1480fe/cppverify_six_again_1480fe_postcondition_198bc076.lean, the file of the goal with its statement
+
+# CHANGED: Exported: lean obligation: one_again
+# CHANGED-NEXT: warning: the Lean proof CppVerify/Proofs/cppverify_one_again_52815a/cppverify_one_again_52815a_postcondition_ebbe6a6a.lean is kept in Stale/Proofs/cppverify_one_again_52815a/cppverify_one_again_52815a_postcondition_ebbe6a6a.lean: the statement of fn_5f5a396f6e655f616761696e76::postcondition@16:37 changed; its goal is now cppverify_one_again_52815a_postcondition_34c13fbe
+
+# NOTE: theorem cppverify_one_again_52815a_postcondition_ebbe6a6a_proof :
+# NOTE: -- cpp-verify kept this proof here: the statement of fn_5f5a396f6e655f616761696e76::postcondition@16:37 changed; its goal is now cppverify_one_again_52815a_postcondition_34c13fbe
+
+# REVERTED: Exported: lean obligation: one_again
+# REVERTED-NEXT: warning: the Lean proof of fn_5f5a396f6e655f616761696e76::postcondition@16:37 came back from Stale/Proofs/cppverify_one_again_52815a/cppverify_one_again_52815a_postcondition_ebbe6a6a.lean to CppVerify/Proofs/cppverify_one_again_52815a/cppverify_one_again_52815a_postcondition_ebbe6a6a.lean, the file of the goal with its statement
+
+# REMOVED: Exported: lean obligation: six_again
+# REMOVED-NEXT: warning: the Lean proof CppVerify/Proofs/cppverify_one_again_52815a/cppverify_one_again_52815a_missing_return_54ae7c80.lean is kept in Stale/Proofs/cppverify_one_again_52815a/cppverify_one_again_52815a_missing_return_54ae7c80.lean: its function is gone, and no goal has its statement
+# REMOVED-NEXT: warning: the Lean proof CppVerify/Proofs/cppverify_one_again_52815a/cppverify_one_again_52815a_postcondition_cd6bdfcd.lean is kept in Stale/Proofs/cppverify_one_again_52815a/cppverify_one_again_52815a_postcondition_cd6bdfcd.lean: its function is gone, and no goal has its statement
+# REMOVED-NEXT: warning: the Lean proof CppVerify/Proofs/cppverify_one_again_52815a/cppverify_one_again_52815a_postcondition_cd6bdfcd_2.lean is kept in Stale/Proofs/cppverify_one_again_52815a/cppverify_one_again_52815a_postcondition_cd6bdfcd_2.lean: its function is gone, and no goal has its statement
+# REMOVED-NEXT: warning: the Lean proof CppVerify/Proofs/cppverify_one_again_52815a/cppverify_one_again_52815a_postcondition_ebbe6a6a.lean is kept in Stale/Proofs/cppverify_one_again_52815a/cppverify_one_again_52815a_postcondition_ebbe6a6a.lean: its function is gone, and no goal has its statement
+
+# BACK: Certified: decreases: tri [backend=Lean]
+# BACK-NEXT: Certified: six [backend=Lean]
+# BACK-NEXT: Certified: one [backend=Lean]
+# BACK-NEXT: warning: the Lean proof of fn_5f5a336f6e6576::missing-return@synthetic came back from Stale/Proofs/cppverify_one_again_52815a/cppverify_one_again_52815a_missing_return_54ae7c80.lean to CppVerify/Proofs/cppverify_one_99bcee/cppverify_one_99bcee_missing_return_54ae7c80.lean, the file of the goal with its statement
+# BACK-NEXT: warning: the Lean proof of fn_5f5a336f6e6576::postcondition@15:37 came back from Stale/Proofs/cppverify_one_again_52815a/cppverify_one_again_52815a_postcondition_cd6bdfcd.lean to CppVerify/Proofs/cppverify_one_99bcee/cppverify_one_99bcee_postcondition_cd6bdfcd.lean, the file of the goal with its statement
+# BACK-NEXT: warning: the Lean proof of fn_5f5a336f6e6576::postcondition@17:37 came back from Stale/Proofs/cppverify_one_again_52815a/cppverify_one_again_52815a_postcondition_cd6bdfcd_2.lean to CppVerify/Proofs/cppverify_one_99bcee/cppverify_one_99bcee_postcondition_cd6bdfcd_2.lean, the file of the goal with its statement
+# BACK-NEXT: warning: the Lean proof of fn_5f5a336f6e6576::postcondition@16:37 came back from Stale/Proofs/cppverify_one_again_52815a/cppverify_one_again_52815a_postcondition_ebbe6a6a.lean to CppVerify/Proofs/cppverify_one_99bcee/cppverify_one_99bcee_postcondition_ebbe6a6a.lean, the file of the goal with its statement
+# BACK-NEXT: warning: the Lean proof of fn_5f5a3373697876::missing-return@synthetic moved from CppVerify/Proofs/cppverify_six_again_1480fe/cppverify_six_again_1480fe_missing_return_54ae7c80.lean to CppVerify/Proofs/cppverify_six_6a2cf3/cppverify_six_6a2cf3_missing_return_54ae7c80.lean, the file of the goal with its statement
+# BACK-NEXT: warning: the Lean proof of fn_5f5a3373697876::postcondition@8:37 moved from CppVerify/Proofs/cppverify_six_again_1480fe/cppverify_six_again_1480fe_postcondition_198bc076.lean to CppVerify/Proofs/cppverify_six_6a2cf3/cppverify_six_6a2cf3_postcondition_198bc076.lean, the file of the goal with its statement
+
+# FALLBACK: Verified: spec decreases: tri
+# FALLBACK-NEXT: Verified: six [backend=z3]
+# FALLBACK-NEXT: Verified: one [backend=z3]
+
+# FALLBACK-REMOVED: Verified: six [backend=z3]
+# FALLBACK-REMOVED-NEXT: warning: the Lean proof CppVerify/Proofs/cppverify_one_99bcee/cppverify_one_99bcee_missing_return_54ae7c80.lean is kept in Stale/Proofs/cppverify_one_99bcee/cppverify_one_99bcee_missing_return_54ae7c80.lean: its function is gone, and no goal has its statement
+# FALLBACK-REMOVED-NEXT: warning: the Lean proof CppVerify/Proofs/cppverify_one_99bcee/cppverify_one_99bcee_postcondition_cd6bdfcd.lean is kept in Stale/Proofs/cppverify_one_99bcee/cppverify_one_99bcee_postcondition_cd6bdfcd.lean: its function is gone, and no goal has its statement
+# FALLBACK-REMOVED-NEXT: warning: the Lean proof CppVerify/Proofs/cppverify_one_99bcee/cppverify_one_99bcee_postcondition_cd6bdfcd_2.lean is kept in Stale/Proofs/cppverify_one_99bcee/cppverify_one_99bcee_postcondition_cd6bdfcd_2.lean: its function is gone, and no goal has its statement
+# FALLBACK-REMOVED-NEXT: warning: the Lean proof CppVerify/Proofs/cppverify_one_99bcee/cppverify_one_99bcee_postcondition_ebbe6a6a.lean is kept in Stale/Proofs/cppverify_one_99bcee/cppverify_one_99bcee_postcondition_ebbe6a6a.lean: its function is gone, and no goal has its statement
+
+# PRUNE: warning: removed the 4 Lean proofs kept in Stale/, as --lean-prune-stale asks
+# PRUNE-ALONE: error: --lean-prune-stale requires --lean-project or --lean-fallback
+
+# PARTIAL-ALL: Exported: lean fallback: bump [z3: 1 of 3 proved; lean: 3 exported]
+
+# STUBS: Exported: decreases: tri
+# STUBS-NEXT: Exported: lean obligation: six_again
+# STUBS-NEXT: Exported: lean obligation: one_again
+# PARTIAL: Exported: lean fallback: bump [z3: 1 of 3 proved; lean: 2 exported]
+
+# MIGRATE: warning: the Lean project [[PROJECT]] pinned leanprover/lean4:v4.32.2, which an earlier release of cpp-verify wrote; it now pins leanprover/lean4:v4.35.0, so a proof that no longer builds needs updating for that Lean
+# MIGRATE-NEXT: Exported: decreases: tri
+# MIGRATE-NEXT: Exported: lean obligation: six
+# MIGRATE-NEXT: Exported: lean obligation: one
+# MIGRATE-NEXT: warning: the Lean proof CppVerify/Proofs/Goal_14843fe605ca0dfc.lean that cpp-verify 0.1 wrote for fn_5f5a336f6e6576::postcondition@15:37 is now CppVerify/Proofs/cppverify_one_99bcee/cppverify_one_99bcee_postcondition_cd6bdfcd.lean
+# MIGRATE-NEXT: warning: the Lean proof CppVerify/Proofs/Goal_9b7aec03175825c9.lean that cpp-verify 0.1 wrote for fn_5f5a336f6e6576::postcondition@17:37 is now CppVerify/Proofs/cppverify_one_99bcee/cppverify_one_99bcee_postcondition_cd6bdfcd_2.lean
+# MIGRATE-NEXT: warning: the Lean proof CppVerify/Proofs/Goal_b95e8b7f774dddd4.lean that cpp-verify 0.1 wrote for fn_5f5a336f6e6576::postcondition@16:37 is now CppVerify/Proofs/cppverify_one_99bcee/cppverify_one_99bcee_postcondition_ebbe6a6a.lean
+# MIGRATE-NEXT: warning: the Lean proof CppVerify/Proofs/Goal_1272763fe029af5c.lean that cpp-verify 0.1 wrote for fn_5f5a3373697876::missing-return@synthetic is now CppVerify/Proofs/cppverify_six_6a2cf3/cppverify_six_6a2cf3_missing_return_54ae7c80.lean
+# MIGRATE-NEXT: warning: the Lean proof CppVerify/Proofs/Goal_b054b023e3576f6e.lean that cpp-verify 0.1 wrote for fn_5f5a3373697876::postcondition@8:37 is now CppVerify/Proofs/cppverify_six_6a2cf3/cppverify_six_6a2cf3_postcondition_198bc076.lean
+# MIGRATE-NEXT: warning: the Lean proof CppVerify/Proofs/Goal_959f92a07e95a169.lean that cpp-verify 0.1 wrote for fn_5f5a3374726969::decreases::termination@4:23 is now CppVerify/Proofs/cppverify_tri_decreases_f55d4c/cppverify_tri_decreases_f55d4c_termination_3c6bb93f.lean
+# MIGRATE-NEXT: warning: the Lean proof CppVerify/Proofs/Goal_00000000deadbeef.lean is kept in Stale/Proofs/Goal_00000000deadbeef.lean: a proof cpp-verify 0.1 wrote for a goal this source no longer has
+
+# CERTIFIED: Certified: decreases: tri [backend=Lean]
+# CERTIFIED-NEXT: Certified: six [backend=Lean]
+# CERTIFIED-NEXT: Certified: one [backend=Lean]

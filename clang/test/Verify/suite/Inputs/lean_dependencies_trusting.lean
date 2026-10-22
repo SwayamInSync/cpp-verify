@@ -1,7 +1,7 @@
 import CppVerify.User
 
-theorem cppverify_trusting_fn_5f5a387472757374696e6769_obligation_2_goal_proof : cppverify_trusting_fn_5f5a387472757374696e6769_obligation_2_goal := by
-  unfold cppverify_trusting_fn_5f5a387472757374696e6769_obligation_2_goal
+theorem cppverify_trusting_b6301a_postcondition_bafafdfb_proof : cppverify_trusting_b6301a_postcondition_bafafdfb := by
+  unfold cppverify_trusting_b6301a_postcondition_bafafdfb
   intro _ _ r c
   by_cases hc : c = BitVec.ofInt 32 7
   · by_cases hr : r = c

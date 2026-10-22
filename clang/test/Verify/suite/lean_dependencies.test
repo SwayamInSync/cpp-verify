@@ -10,12 +10,12 @@
 # The Lean backend, with every goal proved. An export proves nothing, so it
 # runs no vacuity check.
 # RUN: %cpp-verify --backend=lean --lean-project=%t.backend %S/Inputs/lean_dependencies_backend.cpp -- 2>&1 | FileCheck %s --check-prefix=BACKEND-EXPORT
-# RUN: sed -i.orig 's/^  sorry$/  trivial/' %t.backend/CppVerify/Proofs/Goal_*.lean
-# RUN: cp %S/Inputs/lean_dependencies_seven.lean %t.backend/CppVerify/Proofs/Goal_dbfc9c3cab47bb98.lean
-# RUN: cp %S/Inputs/lean_dependencies_trusting.lean %t.backend/CppVerify/Proofs/Goal_9597ad7a35f15bda.lean
-# RUN: cp %S/Inputs/lean_dependencies_impossible.lean %t.backend/CppVerify/Proofs/Goal_5ee9cbcb4bd4ca4c.lean
-# RUN: cp %S/Inputs/lean_dependencies_same.lean %t.backend/CppVerify/Proofs/Goal_8f4b3a6a5ff5a52f.lean
-# RUN: cp %S/Inputs/lean_dependencies_positive.lean %t.backend/CppVerify/Proofs/Goal_4091f113f9bfaf75.lean
+# RUN: sed -i.orig 's/^  sorry$/  trivial/' %t.backend/CppVerify/Proofs/*/*.lean
+# RUN: cp %S/Inputs/lean_dependencies_seven.lean %t.backend/CppVerify/Proofs/cppverify_seven_634ea3/cppverify_seven_634ea3_postcondition_f0d135e6.lean
+# RUN: cp %S/Inputs/lean_dependencies_trusting.lean %t.backend/CppVerify/Proofs/cppverify_trusting_b6301a/cppverify_trusting_b6301a_postcondition_bafafdfb.lean
+# RUN: cp %S/Inputs/lean_dependencies_impossible.lean %t.backend/CppVerify/Proofs/cppverify_impossible_9d6c7c/cppverify_impossible_9d6c7c_postcondition_1cd35301.lean
+# RUN: cp %S/Inputs/lean_dependencies_same.lean %t.backend/CppVerify/Proofs/cppverify_same_9601c2/cppverify_same_9601c2_postcondition_ce92acf8.lean
+# RUN: cp %S/Inputs/lean_dependencies_positive.lean %t.backend/CppVerify/Proofs/cppverify_positive_fb6abf/cppverify_positive_fb6abf_postcondition_78bdd643.lean
 # RUN: not %cpp-verify --backend=lean --lean-project=%t.backend --lean-certify %S/Inputs/lean_dependencies_backend.cpp -- 2>&1 | FileCheck %s --check-prefix=BACKEND
 # RUN: not %cpp-verify --backend=lean --lean-project=%t.backend --lean-certify --diagnostics-format=json %S/Inputs/lean_dependencies_backend.cpp -- 2>&1 | FileCheck %s --check-prefix=BACKEND-JSON
 #
@@ -32,14 +32,14 @@
 # with the proof left as sorry, then completed.
 # RUN: not %cpp-verify --solver-rlimit=1000 --lean-fallback=%t.termination %S/Inputs/lean_dependencies_termination.cpp -- 2>&1 | FileCheck %s --check-prefix=EXPORT
 # RUN: not %cpp-verify --solver-rlimit=1000 --lean-fallback=%t.termination --lean-certify %S/Inputs/lean_dependencies_termination.cpp -- 2>&1 | FileCheck %s --check-prefix=SORRY
-# RUN: cp %S/Inputs/lean_dependencies_termination.lean %t.termination/CppVerify/Proofs/Goal_5225f06eaadb3197.lean
+# RUN: cp %S/Inputs/lean_dependencies_termination.lean %t.termination/CppVerify/Proofs/cppverify_scaled_decreases_52d363/cppverify_scaled_decreases_52d363_termination_3164b050.lean
 # RUN: not %cpp-verify --solver-rlimit=1000 --lean-fallback=%t.termination --lean-certify %S/Inputs/lean_dependencies_termination.cpp -- 2>&1 | FileCheck %s --check-prefix=PROVED
 #
 # A function proved by Z3 and Lean together establishes its contract, and
 # its result is qualified as a solver's is.
 # RUN: not %cpp-verify --solver-rlimit=300 --lean-fallback=%t.mixed %S/Inputs/lean_dependencies_mixed.cpp --
-# RUN: cp %S/Inputs/lean_dependencies_mixed.lean %t.mixed/CppVerify/Proofs/Goal_7f9f727f06e4d358.lean
-# RUN: cp %S/Inputs/lean_dependencies_looping.lean %t.mixed/CppVerify/Proofs/Goal_2f3026c9b1466449.lean
+# RUN: cp %S/Inputs/lean_dependencies_mixed.lean %t.mixed/CppVerify/Proofs/cppverify_product_4751c3/cppverify_product_4751c3_postcondition_c4d4674b.lean
+# RUN: cp %S/Inputs/lean_dependencies_looping.lean %t.mixed/CppVerify/Proofs/cppverify_looping_3f4bd4/cppverify_looping_3f4bd4_postcondition_d06fccd0.lean
 # RUN: not %cpp-verify --solver-rlimit=300 --lean-fallback=%t.mixed --lean-certify %S/Inputs/lean_dependencies_mixed.cpp -- 2>&1 | FileCheck %s --check-prefix=MIXED
 
 # A contract without a definition establishes nothing, whoever proves the
