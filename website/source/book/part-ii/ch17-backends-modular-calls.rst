@@ -156,11 +156,13 @@ For an explicit interactive proof:
    # complete proof/CppVerify/Proofs/*/*.lean; put shared lemmas in User.lean
    cpp-verify --backend=lean --lean-project=proof --lean-certify file.cpp
 
-``Generated.lean`` and ``Check.lean`` are machine-owned; ``Check.lean`` imports
-every proof, so ``lake build CppVerify.Check`` builds them all at once.
-``User.lean`` is never overwritten, and each goal has a proof file of its own,
-which cpp-verify never rewrites but moves with its goal (see `Proofs that
-follow their goals`_ below).
+``Generated.lean``, ``Auto.lean``, and ``Check.lean`` are machine-owned;
+``Check.lean`` imports every proof, so ``lake build CppVerify.Check`` builds
+them all at once. ``User.lean`` is never overwritten, and each goal has a proof
+file of its own: the proof ``cppverify_auto`` finds for it, or a stub (see
+`Proofs cppverify_auto finds`_ below). cpp-verify rewrites that file only while
+nobody has edited it; an edited one it never rewrites, but moves with its goal
+(see `Proofs that follow their goals`_ below).
 The project pins ``leanprover/lean4:v4.35.0``, which certification runs whatever
 elan's default toolchain is; a project 0.1 generated, pinned to ``v4.32.2``, moves to
 it with a warning. Certification compiles the user
@@ -196,6 +198,8 @@ obligation means, so a proof of it is a proof of the obligation:
 For example, the call in ``small`` must establish the precondition of
 ``nonnegative``:
 
+.. cppverify-example: flags --backend=lean --lean-project={dir}/proof
+
 .. code-block:: cpp
 
    void nonnegative(int n)
@@ -210,7 +214,14 @@ For example, the call in ``small`` must establish the precondition of
    }
 
 ``cpp-verify --backend=lean --lean-project=proof file.cpp`` exports four
-goals, three of them ``True``. The one for the call reads:
+goals, three of them ``True``, and ``cppverify_auto`` proves all four:
+
+.. code-block:: text
+
+   Exported: lean obligation: nonnegative (cppverify_auto proved 1 of 1 goals)
+   Exported: lean obligation: small (cppverify_auto proved 3 of 3 goals)
+
+The one for the call reads:
 
 .. code-block:: lean4
 
@@ -224,9 +235,10 @@ A goal is a disjunction: the negated facts it may assume, then what it must
 show. The first two facts describe the null pointer (no object owns address
 0, and none is live with identity 0); the third is that evaluating the
 precondition at ``n = 3`` is defined; the last disjunct is the precondition
-there, the quantifier for every ``k`` in ``[0, 3)`` and ``3 < 8``. Its proof file,
-``proof/CppVerify/Proofs/cppverify_small_74ff94/cppverify_small_74ff94_precondition_4e324fa2.lean``,
-proves that disjunct:
+there, the quantifier for every ``k`` in ``[0, 3)`` and ``3 < 8``. A proof
+by hand, written over the automatic one in its file,
+``proof/CppVerify/Proofs/cppverify_small_74ff94/cppverify_small_74ff94_precondition_4e324fa2.lean``
+(below its header), proves that disjunct:
 
 .. code-block:: lean4
 
@@ -384,11 +396,13 @@ conclusion. The bridge,
 ``cppverify_twice_edf933_postcondition_28de726e.of_readable``, proves the goal
 from this form; Lean checks it when it builds the generated file, so a
 readable form that said less than its goal would fail there, not certify. A
-new proof file starts from it, with every name introduced:
+stub, the file of a goal ``cppverify_auto`` does not prove (and of every goal
+with ``--no-lean-auto``), starts from it, with every name introduced:
 
 .. code-block:: lean4
 
    import CppVerify.User
+   import CppVerify.Auto
 
    theorem cppverify_twice_edf933_postcondition_28de726e_proof : cppverify_twice_edf933_postcondition_28de726e := by
      apply cppverify_twice_edf933_postcondition_28de726e.of_readable
@@ -409,8 +423,8 @@ and a proof uses the hypotheses by name:
      rw [BitVec.add_assoc]
      rfl
 
-With the two calls' preconditions proved the same way and ``trivial`` for
-the return check,
+``cppverify_auto`` proves all four goals of ``twice`` itself. With its
+proofs, or with proofs by hand like this one,
 ``cpp-verify --backend=lean --lean-project=proof --lean-certify file.cpp``
 prints:
 
@@ -420,6 +434,93 @@ prints:
    Certified: twice [backend=Lean] [trusts=next]
 
 A proof of the goal itself, as the one for ``small`` above, checks as well.
+
+Proofs cppverify_auto finds
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Each new goal is first given to ``cppverify_auto``, a tactic the project
+carries in ``CppVerify/Auto.lean``, with the pinned Lean if it is installed.
+For this file:
+
+.. cppverify-example: flags --backend=lean --lean-project={dir}/proof
+
+.. code-block:: cpp
+
+   int next(int x)
+     cppverify::pre(x >= 0 && x < 100)
+     cppverify::post(cppverify::result == x + 1)
+   {
+     return x + 1;
+   }
+
+   int square(int x)
+     cppverify::pre(x >= 0 && x < 1000)
+     cppverify::post(cppverify::result >= 0)
+   {
+     return x * x;
+   }
+
+``cpp-verify --backend=lean --lean-project=proof file.cpp`` prints:
+
+.. code-block:: text
+
+   Exported: lean obligation: next (cppverify_auto proved 3 of 3 goals)
+   Exported: lean obligation: square (cppverify_auto proved 1 of 3 goals)
+
+A goal it proves gets that proof, with a header that says so:
+
+.. code-block:: lean4
+
+      automation: cppverify_auto 1 proves it with cppverify_auto_grind
+      cppverify_auto proves this goal. cpp-verify rewrites this file only while it
+      is unedited; a proof you write here is yours, kept as any other. -/
+   import CppVerify.User
+   import CppVerify.Auto
+
+   theorem cppverify_next_e1e917_postcondition_506f384e_proof : cppverify_next_e1e917_postcondition_506f384e := by
+     apply cppverify_next_e1e917_postcondition_506f384e.of_readable
+     intro __heap_alloc_0 __heap_live_0 __result_1 x_0 h_pre_1 h_null_1 h_null_2 h_exact_1 h_exact_2 h_result_1
+     cppverify_auto_grind
+
+Any other goal gets a stub, whose header says it was tried
+(``automation: cppverify_auto 1 did not prove it``). Here those are the two
+goals of ``square`` that need ``x * x`` bounded: nonlinear arithmetic, which
+core Lean does not decide. Certification checks the automatic proofs like any
+other, so ``--lean-certify`` prints ``Certified: next [backend=Lean]``, and
+``square`` stays ``Unresolved`` until its two stubs are proved.
+
+``cppverify_auto`` tries these steps in order, each with a budget of 50000
+heartbeats of its own (``set_option cppverify.autoBudget``), and keeps the
+first that proves the goal:
+
+- ``cppverify_auto_grind``: ``grind``;
+- ``cppverify_auto_heap``: every store of memory is turned into the function
+  it defines, then as below;
+- ``cppverify_auto_bv``: machine comparisons, constants, and overflow
+  conditions are stated as facts about integers, then ``grind``;
+- ``cppverify_auto_decide``: ``decide``;
+- ``cppverify_auto_simp``: ``simp_all``.
+
+A step counts only when it proves the goal with Lean's foundations alone, so
+an unfinished lemma of yours (proved by ``sorry``) never proves a goal, and a
+goal counts as proved only when the kernel accepted its proof. A goal it
+spends more than 20 seconds on, its kernel check included, gets a stub
+(``did not prove it within 20 s``; ``--lean-auto-timeout`` sets the limit).
+The steps and their order were chosen by trying candidates on every goal the
+test suite exports: of the goals Z3 proves, ``cppverify_auto`` proves 90%;
+most of the rest need nonlinear arithmetic, induction over a spec, or a
+quantified frame.
+
+A goal is tried once: a later export tries a stub again only if a later
+release of cpp-verify brings a new revision of ``cppverify_auto`` (the ``1``
+in the header), and never once you edit it. You can help it: a lemma in
+``User.lean`` tagged ``@[grind]`` or ``@[simp]`` is used by its steps, since
+the proof files import ``User.lean``; delete a stub to have it tried again.
+Your own proofs may use ``cppverify_auto``, any of its steps, and the parts
+they are made of (``cppverify_norm``, ``cppverify_heap``). What it writes is not taken on trust: a file it
+calls proved is still certified like any other, and a ``User.lean`` that
+fooled it would only change what the file holds. ``--no-lean-auto`` writes
+stubs only.
 
 Proofs that follow their goals
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -435,32 +536,31 @@ records the goal, the obligation, and the full hash. Reordering clauses or
 adding functions changes no statement, so every proof stays where it is.
 
 Each run puts every proof with the goal of its statement. Renaming ``small``
-of the example above to ``tiny`` moves its proofs, with the names they use,
-and they certify again:
+of the example above to ``tiny`` moves the proof written by hand, with the
+names it uses; the automatic proofs are simply written again for the new
+goals, and everything certifies again:
 
 .. code-block:: text
 
    Certified: nonnegative [backend=Lean]
    Certified: tiny [backend=Lean]
-   warning: the Lean proof of fn_5f5a3474696e7976::missing-return@synthetic moved from CppVerify/Proofs/cppverify_small_74ff94/cppverify_small_74ff94_missing_return_ba8abb90.lean to CppVerify/Proofs/cppverify_tiny_de8a22/cppverify_tiny_de8a22_missing_return_ba8abb90.lean, the file of the goal with its statement
-   warning: the Lean proof of fn_5f5a3474696e7976::postcondition@7:19 moved from CppVerify/Proofs/cppverify_small_74ff94/cppverify_small_74ff94_postcondition_ba8abb90.lean to CppVerify/Proofs/cppverify_tiny_de8a22/cppverify_tiny_de8a22_postcondition_ba8abb90.lean, the file of the goal with its statement
    warning: the Lean proof of fn_5f5a3474696e7976::precondition@9:3 moved from CppVerify/Proofs/cppverify_small_74ff94/cppverify_small_74ff94_precondition_4e324fa2.lean to CppVerify/Proofs/cppverify_tiny_de8a22/cppverify_tiny_de8a22_precondition_4e324fa2.lean, the file of the goal with its statement
 
 A changed statement never gets the old proof. With ``nonnegative(4)`` in
-place of ``nonnegative(3)``, the precondition's goal is a new one, which gets
-a stub, and the old proof is kept:
+place of ``nonnegative(3)``, the precondition's goal is a new one, which
+``cppverify_auto`` proves, and the old proof is kept:
 
 .. code-block:: text
 
-   Exported: lean obligation: nonnegative
-   Exported: lean obligation: tiny
+   Exported: lean obligation: nonnegative (cppverify_auto proved 1 of 1 goals)
+   Exported: lean obligation: tiny (cppverify_auto proved 3 of 3 goals)
    warning: the Lean proof CppVerify/Proofs/cppverify_tiny_de8a22/cppverify_tiny_de8a22_precondition_4e324fa2.lean is kept in Stale/Proofs/cppverify_tiny_de8a22/cppverify_tiny_de8a22_precondition_4e324fa2.lean: the statement of fn_5f5a3474696e7976::precondition@9:3 changed; its goal is now cppverify_tiny_de8a22_precondition_2596f63f
 
 The kept file ends with that note. The proof comes back by itself once a goal
 has its statement again, as it would if the call were ``nonnegative(3)``
 again, and so do the proofs of a function that is removed and later
-restored. A stub nobody edited is simply removed. Nothing else is ever
-deleted: ``--lean-prune-stale`` deletes what ``Stale/`` keeps, once the run
+restored. A file nobody edited, a stub or an automatic proof, is simply
+removed. Nothing else is ever deleted: ``--lean-prune-stale`` deletes what ``Stale/`` keeps, once the run
 has taken back what it needs (``warning: removed the 4 Lean proofs kept in
 Stale/, as --lean-prune-stale asks``).
 
