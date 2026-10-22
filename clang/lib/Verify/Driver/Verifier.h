@@ -38,6 +38,8 @@ struct VerifyOptions {
   std::string LeanFallbackProjectPath;
   LeanFallbackScope LeanScope = LeanFallbackScope::Unproved;
   bool LeanCertify = false;
+  /// Delete the proofs a Lean project keeps in Stale/ once regenerated.
+  bool LeanPruneStale = false;
   unsigned BMCUnroll = 10;
   /// Per-query solver timeout in milliseconds; 0 disables it. Non-terminating
   /// queries return Unknown instead of hanging the tool.
