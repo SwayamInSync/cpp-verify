@@ -274,7 +274,13 @@ Backends
        ``Stale/`` with a note, and it comes back when a goal has its
        statement again. A warning names every move. A project 0.1 generated
        is moved to these names, with the names its proofs use
-       (:doc:`../book/part-ii/ch17-backends-modular-calls`). Each
+       (:doc:`../book/part-ii/ch17-backends-modular-calls`). Each goal
+       ``G`` also has a readable form, ``G.readable``, its assumptions as
+       hypotheses named by where they come from (``h_pre_1``,
+       ``h_call_next_2``, ``h_x_1`` for the definition of ``x_1``), and a
+       bridge ``G.of_readable : G.readable → G`` that the kernel checks with
+       the generated file, so a proof of either form proves ``G``. A stub
+       applies the bridge and introduces every name. Each
        goal means what its obligation means: every operator keeps its
        grouping under Lean's precedence, a numeral has its type (``Nat``
        would read ``2 - 3`` as 0), a Boolean is a proposition
