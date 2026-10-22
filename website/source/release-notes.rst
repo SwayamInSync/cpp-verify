@@ -296,6 +296,17 @@ what its solver settles alone. ``--lean-prune-stale`` deletes what
 ``Stale/`` keeps. A project 0.1 generated is moved to the new names with
 its proofs (:doc:`book/part-ii/ch17-backends-modular-calls`).
 
+**Lean goals as hypotheses.** A Lean goal was one disjunction, the negation of
+every assumption before what it must show, and a proof picked its way to the
+conclusion by counting disjuncts (``right; right; right``) with nothing to
+say which was the precondition and which a callee's postcondition. Each goal
+now also has a readable form, its assumptions as hypotheses named by where
+they come from, such as ``h_pre_1``, ``h_call_next_2``, ``h_inv_1``, or
+``h_x_1`` for the definition of ``x_1``, and a bridge from that form to the
+goal, which the kernel checks with the generated file. A new proof file
+starts from the readable form with every name introduced; a proof of the
+goal itself still checks (:doc:`book/part-ii/ch17-backends-modular-calls`).
+
 **Lean 4.35.0.** Lean projects pin ``leanprover/lean4:v4.35.0``. A project 0.1
 generated, pinned to ``v4.32.2``, moves to the new pin the next time cpp-verify
 writes it, with a warning; a proof that no longer builds needs updating for that
