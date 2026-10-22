@@ -289,9 +289,16 @@ Backends
        ``decide`` evaluates the machine comparisons at constants
        (:doc:`../book/part-ii/ch17-backends-modular-calls`).
    * - ``--lean-certify``
-     - Build the active project with the pinned Lean 4.35.0, reject ``sorry`` and
-       undocumented proof axioms, and report ``Certified`` only after every
-       active proof kernel-checks. Certification runs whatever else failed,
+     - Build the active project with the pinned Lean 4.35.0, each proof file on
+       its own and without ``sorry``, then check the compiled modules with a
+       program that elaborates none of the user's source: the kernel replays
+       every module of the project a proof imports, the proof must state
+       exactly its goal, and it may depend on no axiom but ``propext``,
+       ``Quot.sound``, and ``Classical.choice``. A function whose goals all
+       pass is ``Certified``; one that has a goal that fails is ``Unresolved``,
+       with the obligation and why, such as ``the proof of
+       fn_…::postcondition@8:37: …_proof proves True, not …``, whatever the
+       other functions' proofs are. Certification runs whatever else failed,
        before the facts verdicts rest on are settled: a result proved in
        Lean rests on the callee contracts and spec facts its module uses, as
        a solver's does, and gets the same qualifiers and vacuity checks (run
