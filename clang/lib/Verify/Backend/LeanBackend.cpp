@@ -1,6 +1,9 @@
 //===--- LeanBackend.cpp --------------------------------------------------===//
 #include "LeanBackend.h"
+#include "ObligationSerialization.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallString.h"
+#include "llvm/Support/MD5.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cctype>
 #include <map>
@@ -57,6 +60,32 @@ static std::string encodeLeanName(llvm::StringRef Name) {
   for (unsigned char C : Name)
     Encoded.append({Hex[C >> 4], Hex[C & 0xf]});
   return Encoded;
+}
+
+// The characters a Lean identifier takes; the others become `_`.
+static std::string leanIdentifierPart(llvm::StringRef Text) {
+  std::string Part;
+  for (char C : Text)
+    Part += std::isalnum(static_cast<unsigned char>(C)) ? C : '_';
+  return Part;
+}
+
+static std::string leanShortHash(llvm::StringRef Text, unsigned Digits) {
+  llvm::MD5 Hasher;
+  llvm::MD5::MD5Result Hash;
+  Hasher.update(Text);
+  Hasher.final(Hash);
+  llvm::SmallString<32> Hex;
+  llvm::MD5::stringifyResult(Hash, Hex);
+  return llvm::StringRef(Hex).take_front(Digits).str();
+}
+
+std::string verify::leanProjectGroup(const ObligationModule &Module) {
+  return "cppverify_" +
+         leanIdentifierPart(Module.FunctionName.empty()
+                                ? llvm::StringRef("goal")
+                                : llvm::StringRef(Module.FunctionName)) +
+         "_" + leanShortHash(Module.FunctionIdentity, 6);
 }
 
 static void printLeanName(llvm::StringRef Name, llvm::raw_ostream &OS) {
@@ -899,7 +928,7 @@ VerifyResult verify::exportLeanScratchPad(
     const ObligationModule &Module, llvm::raw_ostream &OS, bool EmitPreamble,
     std::set<std::string> &EmittedFunctions,
     std::set<std::string> &EmittedTheorems, unsigned ModuleIndex,
-    std::vector<std::string> *ProjectGoals,
+    std::vector<LeanProjectGoal> *ProjectGoals,
     const std::set<std::string> *Selection) {
   VerifyResult Result;
   if (!Module.CorrectnessGoal || !Module.CounterexampleQuery) {
@@ -911,7 +940,23 @@ VerifyResult verify::exportLeanScratchPad(
 
   LeanEmissionFailed = false;
   LeanLogicFunctions = &Module.LogicFunctions;
-  LeanBodyPrefix = "cppSpecBody_m" + std::to_string(ModuleIndex) + "_";
+  // A project names everything by identity, never by position, so that a
+  // proof keeps the names it uses when the source around it changes.
+  const std::string LegacyBodyPrefix =
+      "cppSpecBody_m" + std::to_string(ModuleIndex) + "_";
+  LeanBodyPrefix = LegacyBodyPrefix;
+  std::string Group;
+  if (ProjectGoals) {
+    Group = leanProjectGroup(Module);
+    LeanBodyPrefix =
+        "cppSpecBody_" + leanShortHash(Module.FunctionIdentity, 8) + "_";
+    // Modules of one identity (an archive's) are told apart in order.
+    for (unsigned Copy = 2; !EmittedTheorems.insert(LeanBodyPrefix).second;
+         ++Copy)
+      LeanBodyPrefix = "cppSpecBody_" +
+                       leanShortHash(Module.FunctionIdentity, 8) + "_" +
+                       std::to_string(Copy) + "_";
+  }
 
   if (EmitPreamble) {
     if (ProjectGoals) {
@@ -988,8 +1033,38 @@ VerifyResult verify::exportLeanScratchPad(
   unsigned Index = 0;
   for (const Obligation &Item : Module.Obligations) {
     ++Index;
-    if (Selection && !Selection->count(Item.Id))
+    const bool Selected = !Selection || Selection->count(Item.Id);
+    if (!Selected && !ProjectGoals)
       continue;
+    std::string ObligationName =
+        TheoremName + "_obligation_" + std::to_string(Index);
+    LeanProjectGoal Goal;
+    if (ProjectGoals) {
+      Goal.Hash = obligationStatementHash(Module, Item);
+      Goal.Name = Group + "_" +
+                  leanIdentifierPart(obligationKindName(Item.Kind)) + "_" +
+                  Goal.Hash.substr(0, 8);
+      // Identical obligations of one function, in source order, whichever
+      // of them are exported.
+      const std::string Base = Goal.Name;
+      for (unsigned Copy = 2; !EmittedTheorems.insert(Goal.Name).second; ++Copy)
+        Goal.Name = Base + "_" + std::to_string(Copy);
+      Goal.Group = Group;
+      Goal.StableId = Item.StableId.empty() ? Item.Id : Item.StableId;
+      if (Item.Source.isValid()) {
+        llvm::raw_string_ostream SourceOS(Goal.Source);
+        printLeanCommentText(Item.Source.File, SourceOS);
+        SourceOS << ":" << Item.Source.Line << ":" << Item.Source.Column;
+      }
+      Goal.BodyPrefix = LeanBodyPrefix;
+      Goal.LegacyName = encodeLeanName(ObligationName + "_goal");
+      Goal.LegacyBodyPrefix = LegacyBodyPrefix;
+      Goal.Exported = Selected;
+      if (!Selected) {
+        ProjectGoals->push_back(std::move(Goal));
+        continue;
+      }
+    }
     OS << "/- obligation: ";
     printLeanCommentText(Item.StableId.empty() ? Item.Id : Item.StableId, OS);
     OS << "\n";
@@ -1004,12 +1079,9 @@ VerifyResult verify::exportLeanScratchPad(
       OS << "unknown";
     }
     OS << " -/\n";
-    std::string ObligationName =
-        TheoremName + "_obligation_" + std::to_string(Index);
     if (ProjectGoals) {
-      ObligationName += "_goal";
-      emitLeanGoalDefinition(ObligationName, Item.Goal.get(), OS);
-      ProjectGoals->push_back(encodeLeanName(ObligationName));
+      emitLeanGoalDefinition(Goal.Name, Item.Goal.get(), OS);
+      ProjectGoals->push_back(std::move(Goal));
     } else {
       emitLeanTheorem(ObligationName, Item.Goal.get(), OS);
     }
