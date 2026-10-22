@@ -98,6 +98,18 @@ static cl::opt<bool> LeanPruneStale(
              "goal has their statement"),
     cl::init(false), cl::cat(CppVerifyCategory));
 
+static cl::opt<bool>
+    NoLeanAuto("no-lean-auto",
+               cl::desc("Write a stub for each new Lean goal without trying "
+                        "cppverify_auto on it"),
+               cl::init(false), cl::cat(CppVerifyCategory));
+
+static cl::opt<unsigned> LeanAutoTimeout(
+    "lean-auto-timeout",
+    cl::desc("Wall-clock milliseconds cppverify_auto may spend on one new "
+             "Lean goal (0 = no limit)"),
+    cl::init(verify::DefaultLeanAutoTimeoutMs), cl::cat(CppVerifyCategory));
+
 static cl::opt<unsigned>
     BMCUnroll("unroll", cl::desc("Maximum loop unroll bound for --backend=bmc"),
               cl::init(10), cl::cat(CppVerifyCategory));
@@ -340,13 +352,17 @@ public:
       VOpts.LeanScope = LeanFallbackScope.getValue();
       VOpts.LeanCertify = LeanCertify.getValue();
       VOpts.LeanPruneStale = LeanPruneStale.getValue();
+      VOpts.LeanAuto = !NoLeanAuto.getValue();
+      VOpts.LeanAutoTimeoutMs = LeanAutoTimeout.getValue();
+      VOpts.LeanJobs = Jobs.getNumOccurrences() ? Jobs.getValue() : 0;
       VOpts.BMCUnroll = BMCUnroll.getValue();
       VOpts.SolverTimeoutMs = SolverTimeout.getValue();
       VOpts.CollectionTimeoutMs = collectionTimeoutMs();
       VOpts.CertifyTimeoutMs = certifyTimeoutMs();
       VOpts.FunctionTimeoutMs = functionTimeoutMs();
       VOpts.SolverResourceLimit = SolverResourceLimit.getValue();
-      VOpts.Jobs = jobs();
+      // Lean exports one function at a time; --jobs sets its Lean processes.
+      VOpts.Jobs = VOpts.Backend == verify::BackendKind::Lean ? 1 : jobs();
       VOpts.MaxQueryNodes = MaxQueryNodes.getValue();
       VOpts.IntegerEncoding = IntEncoding.getValue();
       VOpts.CVC5Path = CVC5Path.getValue();
@@ -585,6 +601,9 @@ static bool resolveOptions(bool Replay) {
     Error = "--unroll requires --backend=bmc";
   else if (given(LeanFallbackScope) && LeanFallback.empty())
     Error = "--lean-fallback-scope requires --lean-fallback";
+  else if (given(LeanAutoTimeout) && LeanProject.empty() &&
+           LeanFallback.empty())
+    Error = "--lean-auto-timeout requires --lean-project or --lean-fallback";
   else if ((given(ProofCacheMaxMB) || given(ProofCacheMaxEntries)) &&
            ProofCache.empty())
     Error = "--proof-cache-max-mb and --proof-cache-max-entries require "
@@ -614,7 +633,7 @@ static int replayObligationArchive() {
     return 1;
   }
   if (!LeanProject.empty() || !LeanFallback.empty() || LeanCertify ||
-      LeanPruneStale) {
+      LeanPruneStale || NoLeanAuto || LeanAutoTimeout.getNumOccurrences()) {
     llvm::errs() << "error: archive replay supports Lean scratch-pad export "
                     "with --lean-out, not Lean project generation or "
                     "certification\n";
