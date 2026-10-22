@@ -279,6 +279,23 @@ queries (:doc:`language/tooling`).
 which requires extended arrays for constant arrays; such a query now enables
 them itself (:doc:`language/tooling`).
 
+**Lean proofs stay with their goals.** A goal of a Lean project was named by
+its function and its position among the function's obligations, and a spec
+body by the position of its module in the file. Reordering two
+postconditions gave each proof the other's goal, which the kernel rejected,
+and a function inserted earlier in the file renamed the spec bodies every
+later proof unfolds. A renamed function lost its proofs, and proofs of goals
+that were gone stayed among the proof files. A goal is now named by its
+function and the hash of its statement, its proof file lives in the
+function's directory and records that hash, and every regeneration puts
+each proof with the goal of its statement: a renamed function takes its
+proofs along with the names they use, a proof whose statement changed or
+whose function is gone is kept in ``Stale/`` with a note, and it comes back
+when a goal has its statement again. A fallback run leaves the proofs of
+what its solver settles alone. ``--lean-prune-stale`` deletes what
+``Stale/`` keeps. A project 0.1 generated is moved to the new names with
+its proofs (:doc:`book/part-ii/ch17-backends-modular-calls`).
+
 **Lean 4.35.0.** Lean projects pin ``leanprover/lean4:v4.35.0``. A project 0.1
 generated, pinned to ``v4.32.2``, moves to the new pin the next time cpp-verify
 writes it, with a warning; a proof that no longer builds needs updating for that
@@ -296,7 +313,9 @@ Data formats
 Archives stay ``cppverify.obligation/2`` and JSON diagnostics
 ``cppverify.diagnostic/1``. JSON records may carry the status
 ``proved-obligations`` (archive replay) and the reason ``interrupted``
-(Ctrl-C). Lean projects pin ``leanprover/lean4:v4.35.0``.
+(Ctrl-C). Lean projects pin ``leanprover/lean4:v4.35.0``, and each proof
+file records the hash of its goal's statement (``cppverify-obligation-statement``
+version 1, which leaves out the function's identity).
 
 0.1.1
 -----
