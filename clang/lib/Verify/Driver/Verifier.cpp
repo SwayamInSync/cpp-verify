@@ -1051,6 +1051,11 @@ struct VerifyDiagnostic {
   SourceLocation Loc;
   std::string FunctionName;
   std::optional<VerifyResult> Result;
+  /// A proof by a solver, by Lean, or by both, which establishes what it
+  /// proves.
+  bool isProof() const {
+    return K == Verified || K == Certified || K == MixedProof;
+  }
   /// No execution reaches the claim, so it holds vacuously.
   bool Vacuous = false;
   /// For a vacuity warning: the verdict it is about, and whether its query
@@ -2593,15 +2598,28 @@ public:
                               ? std::move(Rule)
                               : Rule + " (" + R.Message + ")";
             }
+            // What the check establishes once proved: by the solver now, or
+            // by Lean when certification settles its verdict, which until
+            // then leaves the spec undefined.
+            auto establishSpec = [&] {
+              recordDependencies(*Fn, DecModule);
+              SpecReliance &Reliance = ProofDependencies.back();
+              Reliance.Establishes = Fn->Identity;
+              Reliance.Facts =
+                  DefinitionFact | (Step ? 0U : unsigned(PostFact));
+              Reliance.Callees =
+                  Step ? clauseProofCallees(*Fn,
+                                            {VFunction::ClauseProof::Decreases})
+                       : clauseProofCallees(*Fn,
+                                            {VFunction::ClauseProof::Decreases,
+                                             VFunction::ClauseProof::Post});
+            };
             if (R.Status == VerifyStatus::Exported) {
-              if (!Quiet)
-                Diags.push_back({VerifyDiagnostic::Exported,
-                                 "decreases: " + Shown, R.Location, Fn->Name,
-                                 R});
+              Diags.push_back({VerifyDiagnostic::Exported,
+                               "decreases: " + Shown, R.Location, Fn->Name, R});
+              Diags.back().Quiet = Quiet;
               if (Fn->IsSpec) {
-                UndefinedSpecs.erase(Fn->Identity);
-                if (!Step)
-                  UnprovenPosts.erase(Fn->Identity);
+                establishSpec();
                 runInduction();
                 continue;
               }
@@ -2613,17 +2631,7 @@ public:
                 Diags.push_back({VerifyDiagnostic::Verified, DecLabel + Shown,
                                  R.Location, Fn->Name, R});
                 Diags.back().Quiet = Quiet;
-                recordDependencies(*Fn, DecModule);
-                SpecReliance &Reliance = ProofDependencies.back();
-                Reliance.Establishes = Fn->Identity;
-                Reliance.Facts =
-                    DefinitionFact | (Step ? 0U : unsigned(PostFact));
-                Reliance.Callees =
-                    Step ? clauseProofCallees(
-                               *Fn, {VFunction::ClauseProof::Decreases})
-                         : clauseProofCallees(
-                               *Fn, {VFunction::ClauseProof::Decreases,
-                                     VFunction::ClauseProof::Post});
+                establishSpec();
                 runInduction();
                 continue;
               }
@@ -2634,8 +2642,7 @@ public:
                   exportLeanFallback(DecModule, "decreases: " + Fn->Name, R);
               if (Opts.LeanCertify && FallbackExported) {
                 if (Fn->IsSpec) {
-                  UndefinedSpecs.erase(Fn->Identity);
-                  UnprovenPosts.erase(Fn->Identity);
+                  establishSpec();
                   runInduction();
                   continue;
                 }
@@ -2938,32 +2945,37 @@ public:
           }
         }
         settle(R, Module, *Fn, "verification", Opts.Backend);
-        if (R.Status == VerifyStatus::Verified ||
-            R.Status == VerifyStatus::Certified) {
-          Diags.push_back(
-              {R.Status == VerifyStatus::Verified ? VerifyDiagnostic::Verified
-                                                  : VerifyDiagnostic::Certified,
-               Fn->Name + backendSuffix(R), R.Location, Fn->Name, R});
+        // A proof rests on what its module uses: callee contracts and spec
+        // facts. So does a Lean proof, which certification checks after
+        // every function, and whose verdict waits for it (Pending).
+        auto establish = [&](bool Pending) {
           // The module verified, the bounded one under BMC (moved into it).
+          const size_t Verdict = Diags.size() - 1;
           recordDependencies(*Fn, Module);
           if (Fn->IsProof && !Fn->IsSpec)
             Run.Contract = Module.Contract;
           std::set<std::string> Callees;
           collectCallees(Fn->Body, Callees);
-          CallDependencies.emplace_back(Diags.size() - 1, Fn->Identity,
+          CallDependencies.emplace_back(Verdict, Fn->Identity,
                                         std::move(Callees));
           const bool Rule = !Fn->InductiveRuleOf.empty();
-          Diags.back().Quiet = Rule;
+          if (!Pending)
+            Diags[Verdict].Quiet = Rule;
           // A proof that no execution reaches the end says nothing. Under BMC
-          // the program is unrolled to the bound that was proved complete.
-          const bool Smoke = Opts.Backend != BackendKind::Lean && !Rule;
-          bool WhollyVacuous = false;
-          if (Smoke && unreachable(PP, /*EntryOnly=*/false)) {
-            WhollyVacuous = true;
-            const size_t Verdict = Diags.size() - 1;
-            const bool AtEntry = unreachable(PP, /*EntryOnly=*/true);
-            Diags[Verdict].Message += " [vacuous]";
+          // the program is unrolled to the bound that was proved complete. A
+          // pending verdict is marked once certification makes it a proof.
+          if (Rule || (Pending && !Opts.LeanCertify))
+            return;
+          auto markVacuous = [&] {
+            if (!Pending && !Diags[Verdict].Vacuous)
+              Diags[Verdict].Message += " [vacuous]";
             Diags[Verdict].Vacuous = true;
+          };
+          bool WhollyVacuous = false;
+          if (unreachable(PP, /*EntryOnly=*/false)) {
+            WhollyVacuous = true;
+            const bool AtEntry = unreachable(PP, /*EntryOnly=*/true);
+            markVacuous();
             Diags[Verdict].VacuousAtEntry = AtEntry;
             Diags.push_back(
                 {VerifyDiagnostic::Warning,
@@ -2977,8 +2989,7 @@ public:
             Diags.back().FindingOf = Verdict;
             Diags.back().FoundAtEntry = AtEntry;
           }
-          if (Smoke && !WhollyVacuous) {
-            const size_t Verdict = Diags.size() - 1;
+          if (!WhollyVacuous) {
             // A behavior that never applies has its postconditions unchecked.
             for (const auto &[Name, Assumes] : PP.BehaviorAssumes)
               if (proves(smokeProgram(PP, 0, falseGoal(), Assumes.get()))) {
@@ -3007,10 +3018,7 @@ public:
               };
               if (!unreached(I + Post.PostClauses) || unreached(I))
                 continue;
-              if (!Diags[Verdict].Vacuous) {
-                Diags[Verdict].Message += " [vacuous]";
-                Diags[Verdict].Vacuous = true;
-              }
+              markVacuous();
               Diags.push_back(
                   {VerifyDiagnostic::Warning,
                    Fn->Name + ": the trusted contract of " +
@@ -3021,10 +3029,19 @@ public:
               Diags.back().FindingOf = Verdict;
             }
           }
+        };
+        if (R.Status == VerifyStatus::Verified ||
+            R.Status == VerifyStatus::Certified) {
+          Diags.push_back(
+              {R.Status == VerifyStatus::Verified ? VerifyDiagnostic::Verified
+                                                  : VerifyDiagnostic::Certified,
+               Fn->Name + backendSuffix(R), R.Location, Fn->Name, R});
+          establish(/*Pending=*/false);
         } else if (R.Status == VerifyStatus::Exported) {
           Diags.push_back({VerifyDiagnostic::Exported,
                            "lean obligation: " + Fn->Name, R.Location, Fn->Name,
                            R});
+          establish(/*Pending=*/true);
         } else if (R.Status == VerifyStatus::BoundedSafe) {
           AllOk = false;
           std::string Message = Fn->Name + backendSuffix(R);
@@ -3067,7 +3084,9 @@ public:
         } else {
           const bool FallbackExported = R.Status == VerifyStatus::Unresolved &&
                                         exportLeanFallback(Module, Fn->Name, R);
-          if (!(Opts.LeanCertify && FallbackExported)) {
+          if (Opts.LeanCertify && FallbackExported) {
+            establish(/*Pending=*/true);
+          } else {
             AllOk = false;
             AnyFailed = true;
             if (!Fn->IsProof)
@@ -3143,14 +3162,117 @@ public:
         *Opts.ObligationOut << Run.Archive;
     }
 
+    // Lean proofs are checked before what verdicts rest on is settled: a
+    // certified one is a proof like a solver's, and one that fails, or that
+    // certification does not check, establishes nothing.
+    if (HasLeanProject) {
+      if (LeanFile) {
+        LeanFile->flush();
+        LeanFile.reset();
+      }
+      if (llvm::Error Error = finalizeLeanProject(LeanProjectGoals)) {
+        AllOk = false;
+        AnyFailed = true;
+        Diags.push_back({VerifyDiagnostic::Error,
+                         "cannot finalize Lean project (" +
+                             llvm::toString(std::move(Error)) + ")"});
+      } else if (Opts.LeanCertify && !interruptRequested() &&
+                 (!LeanProjectGoals.empty() ||
+                  Opts.LeanFallbackProjectPath.empty())) {
+        // A verdict certification does not make a proof is reported, and
+        // what its vacuity checks found is not.
+        auto unproved = [&](size_t Index) {
+          VerifyDiagnostic &Diagnostic = Diags[Index];
+          AllOk = false;
+          Diagnostic.K = VerifyDiagnostic::Unresolved;
+          Diagnostic.Vacuous = false;
+          for (VerifyDiagnostic &Finding : Diags)
+            if (Finding.FindingOf == Index)
+              Finding.Hidden = true;
+        };
+        if (llvm::Error Error = certifyLeanProject(LeanProjectGoals)) {
+          AllOk = false;
+          AnyFailed = true;
+          const std::string Reason = llvm::toString(std::move(Error));
+          for (size_t Index = 0; Index != Diags.size(); ++Index) {
+            VerifyDiagnostic &Diagnostic = Diags[Index];
+            if (Diagnostic.K != VerifyDiagnostic::Exported)
+              continue;
+            unproved(Index);
+            Diagnostic.Message +=
+                " (Lean certification failed: " + Reason + ")";
+            if (Diagnostic.Result) {
+              Diagnostic.Result->Status = VerifyStatus::Unresolved;
+              Diagnostic.Result->Reason = VerifyReason::LeanExportFailure;
+              Diagnostic.Result->Message = Reason;
+            }
+          }
+        } else {
+          for (size_t Index = 0; Index != Diags.size(); ++Index) {
+            VerifyDiagnostic &Diagnostic = Diags[Index];
+            if (Diagnostic.K != VerifyDiagnostic::Exported)
+              continue;
+            const ProofEvidence *Evidence =
+                Diagnostic.Result && Diagnostic.Result->Evidence
+                    ? &*Diagnostic.Result->Evidence
+                    : nullptr;
+            if (Evidence &&
+                Evidence->LeanObligations.size() < Evidence->Total) {
+              // Only a complete split of the obligations is a proof.
+              if (!Evidence->SolverProved ||
+                  *Evidence->SolverProved + Evidence->LeanObligations.size() !=
+                      Evidence->Total) {
+                unproved(Index);
+                Diagnostic.Message += " (inconsistent proof evidence)";
+                Diagnostic.Result->Status = VerifyStatus::Unresolved;
+                Diagnostic.Result->Reason = VerifyReason::InvalidBackendResult;
+                continue;
+              }
+              Diagnostic.K = VerifyDiagnostic::MixedProof;
+              Diagnostic.Message = Diagnostic.FunctionName +
+                                   evidenceSuffix(*Evidence, "certified");
+              Diagnostic.Result->Status = VerifyStatus::MixedProof;
+              Diagnostic.Result->BackendName = Evidence->Solver + "+lean";
+              Diagnostic.Result->Reason = VerifyReason::None;
+            } else {
+              Diagnostic.K = VerifyDiagnostic::Certified;
+              llvm::StringRef Name = Diagnostic.Message;
+              if (!Name.consume_front("lean obligation: ")) {
+                Name.consume_front("lean fallback: ");
+                Name = Name.substr(0, Name.find(" ["));
+              }
+              Diagnostic.Message = Name.str() + " [backend=Lean]";
+              if (Diagnostic.Result) {
+                Diagnostic.Result->Status = VerifyStatus::Certified;
+                Diagnostic.Result->BackendName = "lean";
+                Diagnostic.Result->Reason = VerifyReason::None;
+              }
+            }
+            if (Diagnostic.Vacuous)
+              Diagnostic.Message += " [vacuous]";
+          }
+        }
+      }
+    }
+    for (const SpecReliance &Check : ProofDependencies)
+      if (!Check.Establishes.empty() &&
+          (Diags[Check.Index].K == VerifyDiagnostic::Certified ||
+           Diags[Check.Index].K == VerifyDiagnostic::MixedProof)) {
+        if (Check.Facts & DefinitionFact)
+          UndefinedSpecs.erase(Check.Establishes);
+        if (Check.Facts & ReadsFact)
+          UnframedSpecs.erase(Check.Establishes);
+        if (Check.Facts & PostFact)
+          UnprovenPosts.erase(Check.Establishes);
+      }
+
     // Total correctness needs every loop to terminate. A bounded proof
     // proves its unwinding, so every loop there exits within the bound.
     for (const auto &[Index, Identity, Callees] : CallDependencies) {
       VerifyDiagnostic &Diagnostic = Diags[Index];
       auto It = FnMap.find(Identity);
       if (It == FnMap.end() || It->second->UnmeasuredLoop.isInvalid() ||
-          (Diagnostic.K != VerifyDiagnostic::Verified &&
-           Diagnostic.K != VerifyDiagnostic::Certified) ||
+          !Diagnostic.isProof() ||
           (Diagnostic.Result && Diagnostic.Result->Bound))
         continue;
       AllOk = false;
@@ -3180,10 +3302,7 @@ public:
     for (const auto &Fn : Functions)
       if (!Fn->IsSpec && !Fn->Uninterpreted && !Fn->IsTrusted)
         Unestablished.insert(Fn->Identity);
-    auto settled = [&](size_t Index) {
-      return Diags[Index].K == VerifyDiagnostic::Verified ||
-             Diags[Index].K == VerifyDiagnostic::Certified;
-    };
+    auto settled = [&](size_t Index) { return Diags[Index].isProof(); };
     for (const auto &[Index, Identity, Callees] : CallDependencies)
       if (settled(Index))
         Unestablished.erase(Identity);
@@ -3635,8 +3754,7 @@ public:
     }
     for (const auto &[Index, Identity, Callees] : CallDependencies) {
       VerifyDiagnostic &Diagnostic = Diags[Index];
-      if (Diagnostic.K != VerifyDiagnostic::Verified &&
-          Diagnostic.K != VerifyDiagnostic::Certified)
+      if (!Diagnostic.isProof())
         continue;
       std::string Trusted;
       for (const std::string &Name : Trusts[Identity]) {
@@ -3659,8 +3777,7 @@ public:
                 return Pre->K != VExpr::Literal ||
                        static_cast<const VLiteralExpr &>(*Pre).Value != "1";
               }) ||
-          (Diagnostic.K != VerifyDiagnostic::Verified &&
-           Diagnostic.K != VerifyDiagnostic::Certified))
+          !Diagnostic.isProof())
         continue;
       std::string Names;
       for (const std::string &Name : Callers->second) {
@@ -3708,9 +3825,7 @@ public:
     for (const auto &[Index, Identity, Callees] : CallDependencies) {
       VerifyDiagnostic &Diagnostic = Diags[Index];
       auto It = Diverges.find(Identity);
-      if (It == Diverges.end() ||
-          (Diagnostic.K != VerifyDiagnostic::Verified &&
-           Diagnostic.K != VerifyDiagnostic::Certified))
+      if (It == Diverges.end() || !Diagnostic.isProof())
         continue;
       Diagnostic.Message += " [partial]";
       Diagnostic.Partial = true;
@@ -3719,82 +3834,6 @@ public:
                            ": proved only for executions that terminate: " +
                            It->second,
                        SourceLocation(), Diagnostic.FunctionName});
-    }
-
-    if (HasLeanProject) {
-      if (LeanFile) {
-        LeanFile->flush();
-        LeanFile.reset();
-      }
-      if (llvm::Error Error = finalizeLeanProject(LeanProjectGoals)) {
-        AllOk = false;
-        AnyFailed = true;
-        Diags.push_back({VerifyDiagnostic::Error,
-                         "cannot finalize Lean project (" +
-                             llvm::toString(std::move(Error)) + ")"});
-      } else if (Opts.LeanCertify && !AnyFailed && !interruptRequested() &&
-                 (!LeanProjectGoals.empty() ||
-                  Opts.LeanFallbackProjectPath.empty())) {
-        if (llvm::Error Error = certifyLeanProject(LeanProjectGoals)) {
-          AllOk = false;
-          AnyFailed = true;
-          const std::string Reason = llvm::toString(std::move(Error));
-          for (VerifyDiagnostic &Diagnostic : Diags) {
-            if (Diagnostic.K != VerifyDiagnostic::Exported)
-              continue;
-            Diagnostic.K = VerifyDiagnostic::Unresolved;
-            Diagnostic.Message +=
-                " (Lean certification failed: " + Reason + ")";
-            if (Diagnostic.Result) {
-              Diagnostic.Result->Status = VerifyStatus::Unresolved;
-              Diagnostic.Result->Reason = VerifyReason::LeanExportFailure;
-              Diagnostic.Result->Message = Reason;
-            }
-          }
-        } else {
-          for (VerifyDiagnostic &Diagnostic : Diags) {
-            if (Diagnostic.K != VerifyDiagnostic::Exported)
-              continue;
-            const ProofEvidence *Evidence =
-                Diagnostic.Result && Diagnostic.Result->Evidence
-                    ? &*Diagnostic.Result->Evidence
-                    : nullptr;
-            if (Evidence &&
-                Evidence->LeanObligations.size() < Evidence->Total) {
-              // Only a complete split of the obligations is a proof.
-              if (!Evidence->SolverProved ||
-                  *Evidence->SolverProved + Evidence->LeanObligations.size() !=
-                      Evidence->Total) {
-                AllOk = false;
-                Diagnostic.K = VerifyDiagnostic::Unresolved;
-                Diagnostic.Message += " (inconsistent proof evidence)";
-                Diagnostic.Result->Status = VerifyStatus::Unresolved;
-                Diagnostic.Result->Reason = VerifyReason::InvalidBackendResult;
-                continue;
-              }
-              Diagnostic.K = VerifyDiagnostic::MixedProof;
-              Diagnostic.Message = Diagnostic.FunctionName +
-                                   evidenceSuffix(*Evidence, "certified");
-              Diagnostic.Result->Status = VerifyStatus::MixedProof;
-              Diagnostic.Result->BackendName = Evidence->Solver + "+lean";
-              Diagnostic.Result->Reason = VerifyReason::None;
-              continue;
-            }
-            Diagnostic.K = VerifyDiagnostic::Certified;
-            llvm::StringRef Name = Diagnostic.Message;
-            if (!Name.consume_front("lean obligation: ")) {
-              Name.consume_front("lean fallback: ");
-              Name = Name.substr(0, Name.find(" ["));
-            }
-            Diagnostic.Message = Name.str() + " [backend=Lean]";
-            if (Diagnostic.Result) {
-              Diagnostic.Result->Status = VerifyStatus::Certified;
-              Diagnostic.Result->BackendName = "lean";
-              Diagnostic.Result->Reason = VerifyReason::None;
-            }
-          }
-        }
-      }
     }
 
     if (AnyFailed && !Opts.LowerOnly && isDeductiveBackend(Opts.Backend) &&

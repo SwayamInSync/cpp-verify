@@ -269,8 +269,11 @@ Backends
    * - ``--lean-certify``
      - Build the active project with Lean 4.32.2, reject ``sorry`` and
        undocumented proof axioms, and report ``Certified`` only after every
-       active proof kernel-checks. Requires ``--lean-project`` or
-       ``--lean-fallback``.
+       active proof kernel-checks. Certification runs whatever else failed,
+       before the facts verdicts rest on are settled: a result proved in
+       Lean rests on the callee contracts and spec facts its module uses, as
+       a solver's does, and gets the same qualifiers and vacuity checks (run
+       with Z3). Requires ``--lean-project`` or ``--lean-fallback``.
    * - ``--lean-fallback=DIR``
      - On the Z3 or strict-portfolio path, export functions that remain
        ``Unresolved`` to an editable Lean project, for example

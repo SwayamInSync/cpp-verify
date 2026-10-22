@@ -1,0 +1,83 @@
+# REQUIRES: lean
+#
+# A verdict that rests on a Lean proof rests on what its module uses, as a
+# solver's does: callee contracts and spec facts. Certification runs before
+# those are settled, whatever else failed, and a certified result gets the
+# qualifiers and vacuity checks of a verified one.
+#
+# RUN: rm -rf %t.backend %t.termination %t.mixed %t.inductive
+#
+# The Lean backend, with every goal proved. An export proves nothing, so it
+# runs no vacuity check.
+# RUN: %cpp-verify --backend=lean --lean-project=%t.backend %S/Inputs/lean_dependencies_backend.cpp -- 2>&1 | FileCheck %s --check-prefix=BACKEND-EXPORT
+# RUN: sed -i.orig 's/^  sorry$/  trivial/' %t.backend/CppVerify/Proofs/Goal_*.lean
+# RUN: cp %S/Inputs/lean_dependencies_seven.lean %t.backend/CppVerify/Proofs/Goal_dbfc9c3cab47bb98.lean
+# RUN: cp %S/Inputs/lean_dependencies_trusting.lean %t.backend/CppVerify/Proofs/Goal_9597ad7a35f15bda.lean
+# RUN: cp %S/Inputs/lean_dependencies_impossible.lean %t.backend/CppVerify/Proofs/Goal_5ee9cbcb4bd4ca4c.lean
+# RUN: cp %S/Inputs/lean_dependencies_same.lean %t.backend/CppVerify/Proofs/Goal_8f4b3a6a5ff5a52f.lean
+# RUN: cp %S/Inputs/lean_dependencies_positive.lean %t.backend/CppVerify/Proofs/Goal_4091f113f9bfaf75.lean
+# RUN: not %cpp-verify --backend=lean --lean-project=%t.backend --lean-certify %S/Inputs/lean_dependencies_backend.cpp -- 2>&1 | FileCheck %s --check-prefix=BACKEND
+# RUN: not %cpp-verify --backend=lean --lean-project=%t.backend --lean-certify --diagnostics-format=json %S/Inputs/lean_dependencies_backend.cpp -- 2>&1 | FileCheck %s --check-prefix=BACKEND-JSON
+#
+# The same project with an admitted lemma: nothing is certified, and what the
+# vacuity checks found goes with the verdicts.
+# RUN: echo 'theorem admitted : True := by sorry' >> %t.backend/CppVerify/User.lean
+# RUN: not %cpp-verify --backend=lean --lean-project=%t.backend --lean-certify %S/Inputs/lean_dependencies_backend.cpp -- 2>&1 | FileCheck %s --check-prefix=BROKEN
+#
+# A generated check that is quiet when proved is reported when certification
+# fails.
+# RUN: not %cpp-verify --backend=lean --lean-project=%t.inductive --lean-certify %S/Inputs/inductive_unproved.cpp -- 2>&1 | FileCheck %s --check-prefix=INDUCTIVE
+#
+# A spec's termination proved in Lean, beside a function that fails: first
+# with the proof left as sorry, then completed.
+# RUN: not %cpp-verify --solver-rlimit=1000 --lean-fallback=%t.termination %S/Inputs/lean_dependencies_termination.cpp -- 2>&1 | FileCheck %s --check-prefix=EXPORT
+# RUN: not %cpp-verify --solver-rlimit=1000 --lean-fallback=%t.termination --lean-certify %S/Inputs/lean_dependencies_termination.cpp -- 2>&1 | FileCheck %s --check-prefix=SORRY
+# RUN: cp %S/Inputs/lean_dependencies_termination.lean %t.termination/CppVerify/Proofs/Goal_5225f06eaadb3197.lean
+# RUN: not %cpp-verify --solver-rlimit=1000 --lean-fallback=%t.termination --lean-certify %S/Inputs/lean_dependencies_termination.cpp -- 2>&1 | FileCheck %s --check-prefix=PROVED
+#
+# A function proved by Z3 and Lean together establishes its contract, and
+# its result is qualified as a solver's is.
+# RUN: not %cpp-verify --solver-rlimit=300 --lean-fallback=%t.mixed %S/Inputs/lean_dependencies_mixed.cpp --
+# RUN: cp %S/Inputs/lean_dependencies_mixed.lean %t.mixed/CppVerify/Proofs/Goal_7f9f727f06e4d358.lean
+# RUN: cp %S/Inputs/lean_dependencies_looping.lean %t.mixed/CppVerify/Proofs/Goal_2f3026c9b1466449.lean
+# RUN: not %cpp-verify --solver-rlimit=300 --lean-fallback=%t.mixed --lean-certify %S/Inputs/lean_dependencies_mixed.cpp -- 2>&1 | FileCheck %s --check-prefix=MIXED
+
+# A contract without a definition establishes nothing, whoever proves the
+# caller.
+# BACKEND: Unresolved: seven [backend=Lean] [reason=callee.contract] (relies on the contract of next (no definition;
+# BACKEND: Certified: trusting [backend=Lean] [trusts=assumed]
+# BACKEND-NEXT: Certified: impossible [backend=Lean] [vacuous]
+# BACKEND-NEXT: warning: impossible: the precondition is unsatisfiable, so every claim about it holds vacuously
+# BACKEND-NEXT: Certified: same [backend=Lean] [partial]
+# BACKEND-NEXT: Certified: positive [backend=Lean] (its precondition is assumed, not checked, at calls from unverified unchecked)
+# BACKEND-NEXT: {{.*}}lean_dependencies_backend.cpp:45:3: Unresolved: countdown [backend=Lean] [reason=decreases.missing] (the loop at 45:3 has no decreases clause
+# BACKEND: warning: same: proved only for executions that terminate
+
+# BACKEND-EXPORT: Exported: lean obligation: impossible
+# BACKEND-EXPORT-NOT: warning: impossible
+
+# BROKEN: Unresolved: lean obligation: impossible (Lean certification failed:
+# BROKEN-NOT: warning: impossible
+
+# INDUCTIVE: Unresolved: decreases: reach (Lean certification failed:
+
+# BACKEND-JSON: "function":"seven"{{.*}}"reason":"callee.contract"{{.*}}"status":"unresolved"
+# BACKEND-JSON: "function":"impossible"{{.*}}"status":"certified"{{.*}}"vacuous":true
+
+# EXPORT: Exported: lean fallback: decreases: scaled [z3: 0 of 1 proved; lean: 1 exported]
+# EXPORT: Unresolved: user [backend=z3] [reason=spec.termination]
+
+# The termination proof does not certify, so the definition of scaled is
+# not established, though another function failed.
+# SORRY: Unresolved: lean fallback: decreases: scaled [z3: 0 of 1 proved; lean: 1 exported] (Lean certification failed:
+# SORRY: Unresolved: user [backend=z3] [reason=spec.termination] (relies on the definition of scaled, whose termination is not established)
+# SORRY: error: verification failed: wrong
+
+# PROVED: Certified: decreases: scaled [backend=Lean]
+# PROVED-NEXT: Verified: user [backend=z3]
+# PROVED-NEXT: {{.*}}error: verification failed: wrong
+
+# MIXED: Proved (z3+lean): product [z3: 1 of 2 proved; lean: 1 certified] [trusts=kept] (its precondition is assumed, not checked, at calls from unverified unchecked) [partial]
+# MIXED-NEXT: Verified: six [backend=z3] [trusts=kept] [partial]
+# MIXED-NEXT: {{.*}}lean_dependencies_mixed.cpp:25:3: Unresolved: looping [z3: 1 of 2 proved; lean: 1 certified] [reason=decreases.missing] (the loop at 25:3 has no decreases clause
+# MIXED-NEXT: warning: product: proved only for executions that terminate
