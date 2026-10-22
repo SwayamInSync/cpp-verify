@@ -1,6 +1,7 @@
 //===--- CVC5Backend.cpp --------------------------------------------------===//
 #include "CVC5Backend.h"
 #include "Certify.h"
+#include "ChildProcess.h"
 #include "ObligationSerialization.h"
 #include "ObligationSimplify.h"
 #include "TaskGroup.h"
@@ -24,14 +25,6 @@
 #include <optional>
 #include <set>
 #include <thread>
-
-#if defined(_WIN32)
-#include "llvm/Support/Windows/WindowsSupport.h"
-#else
-#include <cerrno>
-#include <csignal>
-#include <sys/wait.h>
-#endif
 
 using namespace clang;
 using namespace verify;
@@ -1542,84 +1535,6 @@ static std::string diagnosticText(llvm::StringRef Text) {
   return Text.str();
 }
 
-enum class ProcessPollState { Running, Exited, Failed };
-
-struct ProcessPollResult {
-  ProcessPollState State = ProcessPollState::Running;
-  int ExitCode = -1;
-  std::string Error;
-};
-
-static ProcessPollResult pollProcess(const llvm::sys::ProcessInfo &Process) {
-#if defined(_WIN32)
-  std::string Error;
-  llvm::sys::ProcessInfo Waited =
-      llvm::sys::Wait(Process, 0, &Error, nullptr, true);
-  if (Waited.Pid == llvm::sys::ProcessInfo::InvalidPid)
-    return {ProcessPollState::Running, -1, {}};
-  if (Waited.Pid != Process.Pid)
-    return {ProcessPollState::Failed, -1,
-            Error.empty() ? "cannot poll cvc5 process" : std::move(Error)};
-  return {ProcessPollState::Exited, Waited.ReturnCode, std::move(Error)};
-#else
-  int Status = 0;
-  pid_t Waited;
-  do {
-    Waited = ::waitpid(Process.Pid, &Status, WNOHANG);
-  } while (Waited == -1 && errno == EINTR);
-  if (Waited == 0)
-    return {};
-  if (Waited == -1)
-    return {ProcessPollState::Failed, -1,
-            "cannot poll cvc5 process: " +
-                std::error_code(errno, std::generic_category()).message()};
-  if (WIFEXITED(Status))
-    return {ProcessPollState::Exited, WEXITSTATUS(Status), {}};
-  if (WIFSIGNALED(Status))
-    return {ProcessPollState::Exited, -2,
-            "cvc5 terminated by signal " + std::to_string(WTERMSIG(Status))};
-  return {ProcessPollState::Failed, -1,
-          "cvc5 changed to an unsupported process state"};
-#endif
-}
-
-static bool terminateAndReap(const llvm::sys::ProcessInfo &Process,
-                             std::string &Error) {
-#if defined(_WIN32)
-  if (!::TerminateProcess(static_cast<HANDLE>(Process.Process), 1) &&
-      ::GetLastError() != ERROR_ACCESS_DENIED) {
-    Error = "cannot terminate cvc5 process";
-    return false;
-  }
-  std::string WaitError;
-  llvm::sys::ProcessInfo Waited =
-      llvm::sys::Wait(Process, std::nullopt, &WaitError);
-  if (Waited.Pid != Process.Pid) {
-    Error =
-        WaitError.empty() ? "cannot reap cvc5 process" : std::move(WaitError);
-    return false;
-  }
-  return true;
-#else
-  if (::kill(Process.Pid, SIGKILL) == -1 && errno != ESRCH) {
-    Error = "cannot terminate cvc5 process: " +
-            std::error_code(errno, std::generic_category()).message();
-    return false;
-  }
-  int Status = 0;
-  pid_t Waited;
-  do {
-    Waited = ::waitpid(Process.Pid, &Status, 0);
-  } while (Waited == -1 && errno == EINTR);
-  if (Waited == -1 && errno != ECHILD) {
-    Error = "cannot reap cvc5 process: " +
-            std::error_code(errno, std::generic_category()).message();
-    return false;
-  }
-  return true;
-#endif
-}
-
 static bool startsWithSat(llvm::StringRef OutputPath) {
   auto Buffer = llvm::MemoryBuffer::getFileSlice(OutputPath, 4, 0, false);
   return Buffer && (*Buffer)->getBuffer() == "sat\n";
@@ -2548,16 +2463,16 @@ static SolverRun runCVC5(const std::string &SolverPath, llvm::StringRef Script,
   bool Stopped = false;
   bool OutputLimitExceeded = false;
   while (true) {
-    ProcessPollResult Poll = pollProcess(Process);
-    if (Poll.State == ProcessPollState::Exited) {
+    ChildPoll Poll = pollChild(Process, "cvc5");
+    if (Poll.State == ChildState::Exited) {
       ExitCode = Poll.ExitCode;
       InvocationError = std::move(Poll.Error);
       break;
     }
-    if (Poll.State == ProcessPollState::Failed) {
+    if (Poll.State == ChildState::Failed) {
       InvocationError = std::move(Poll.Error);
       std::string TerminationError;
-      if (!terminateAndReap(Process, TerminationError) &&
+      if (!terminateChild(Process, "cvc5", TerminationError) &&
           !TerminationError.empty())
         InvocationError += ": " + TerminationError;
       break;
@@ -2568,7 +2483,7 @@ static SolverRun runCVC5(const std::string &SolverPath, llvm::StringRef Script,
                                  OutputLimitExceeded)) {
       InvocationError = std::move(OutputError);
       std::string TerminationError;
-      if (!terminateAndReap(Process, TerminationError) &&
+      if (!terminateChild(Process, "cvc5", TerminationError) &&
           !TerminationError.empty())
         InvocationError += ": " + TerminationError;
       break;
@@ -2576,14 +2491,14 @@ static SolverRun runCVC5(const std::string &SolverPath, llvm::StringRef Script,
     if ((Cancelled && *Cancelled) || interruptRequested()) {
       Stopped = true;
       std::string TerminationError;
-      if (!terminateAndReap(Process, TerminationError))
+      if (!terminateChild(Process, "cvc5", TerminationError))
         InvocationError = std::move(TerminationError);
       break;
     }
     if (TimeoutMs != 0 && std::chrono::steady_clock::now() >= Deadline) {
       TimedOut = true;
       std::string TerminationError;
-      if (!terminateAndReap(Process, TerminationError))
+      if (!terminateChild(Process, "cvc5", TerminationError))
         InvocationError = std::move(TerminationError);
       break;
     }
