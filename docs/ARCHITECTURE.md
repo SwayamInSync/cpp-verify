@@ -1662,6 +1662,16 @@ The driver selects a backend via `VerifyOptions` (`Verifier.h` / `cpp-verify --b
 | **BMC** | `LoopUnroll` on VCR, then shared obligation/Z3 path | Source verification grows bounds from zero through `--unroll=N`, stopping on a counterexample, complete unwinding, unresolved query, or the maximum frontier. Safety with failed unwinding is `BoundedSafe(N)`; only proved unwinding is `Verified`. A spec's checks have no loops: the driver solves them with a Z3 backend (`SpecBackend`), as on the default path, and keeps the bound on their archived modules for replay. |
 | **Lean** | `exportLeanScratchPad` / project certification | Standalone mode emits unchecked theorem stubs. Project mode emits direct source goals, total functional heaps, typed bit-vector/integer operations, and compact finite-fuel spec bodies into generated files while preserving user proofs. Export is `Exported`; only the pinned admission-free kernel/axiom check is `Certified`. Collections are `logic.unsupported` (planned for a future release). |
 
+A Lean project pins `LeanToolchain` (`Driver/CppVerifyVersion.h`) in its
+`lean-toolchain` file. A pin in `EarlierLeanToolchains`, which an earlier
+release wrote, is rewritten to the current one with a warning; any other pin is
+an error, since the generated semantics are written for one Lean. elan picks a
+toolchain by the working directory, not by `--dir`, so through elan's proxy
+every certification step names the pin (`lake +leanprover/lean4:v4.35.0
+--dir=DIR ...`). Certification first asks `lake --version`, alone, since lake
+takes it alone, and refuses a `lake` that reports another Lean. Before 0.2,
+certification ran elan's default toolchain.
+
 Each backend declares supported `LogicFeature`s. Central dispatch rejects a
 module requiring an unavailable feature before backend execution. Spec
 inlining runs before passivization: `SpecInliner::prepareFunctionAxiomatic`
@@ -2034,7 +2044,7 @@ stops before VCR conversion.
   `CPPVERIFY_PARITY_ARCHIVES` it also compares encodings per archived obligation.
 - Runner: `scripts/run-verify-tests.sh`.
 - Backend fidelity gate: `clang/test/Verify/suite/backend_fidelity_gate.test`
-  requires cvc5 and pinned Lean 4.32.2 and runs the permanent differential
+  requires cvc5 and pinned Lean 4.35.0 and runs the permanent differential
   matrix under every machine-integer encoding.
 - Instrumented coverage: `scripts/coverage-verify.sh` (region target on `clang/lib/Verify`).
 
