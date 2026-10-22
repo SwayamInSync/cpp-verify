@@ -43,6 +43,19 @@ verdict also rests on facts an archive does not carry, such as a callee's
 contract. It now prints ``Proved obligations: f (dependencies not checked in
 replay)``, JSON status ``proved-obligations`` (:doc:`language/tooling`).
 
+**Results that rest on Lean proofs.** With ``--lean-fallback`` and
+``--lean-certify``, a spec whose termination check was sent to Lean counted
+as terminating before Lean checked it. So a caller that used the spec's
+definition stayed ``Verified`` when the Lean proof failed, and when another
+function failed, which skipped certification. A function proved in Lean was
+``Certified`` although it relied on a contract nothing establishes, such as
+one without a definition. No result proved in Lean got the vacuity checks,
+so a goal that held only because no execution reached it was ``Certified``
+too. Certification now runs whatever else failed, before the facts verdicts
+rest on are settled: a Lean result rests on the callee contracts and spec
+facts its module uses, as a solver's does, and gets the same qualifiers and
+vacuity checks (:doc:`book/part-ii/ch17-backends-modular-calls`).
+
 **A spec reads exact values.** A value a spec body read through a pointer kept
 its machine type, so ``p[0] + p[1]`` wrapped: a proof that the sum of
 ``2147483647`` and ``1`` is negative verified. Such reads are now mathematical
@@ -119,6 +132,12 @@ because a fact it relies on is not established could still be marked
 ``[vacuous]``, from that very fact, and whether it was depended on the
 solver's search. Such findings are now dropped
 (:doc:`book/part-ii/ch16-when-verification-fails`).
+
+**Callers of functions proved in Lean.** With ``--lean-fallback``, a function
+proved by Lean, or by Z3 and Lean together (``Proved (z3+lean)``), did not
+establish its contract, so the callers Z3 proved were ``Unresolved`` with
+reason ``callee.contract``. Its contract now holds for them as a verified
+function's does (:doc:`book/part-ii/ch17-backends-modular-calls`).
 
 **Slices passed through a copy.** A function that requires ``valid(p, n)``
 accepted an argument only when it was written as a parameter plus an offset,
