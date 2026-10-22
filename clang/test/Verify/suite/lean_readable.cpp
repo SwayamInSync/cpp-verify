@@ -102,6 +102,12 @@ int poly(int x)
   return ((x + 1) * (x + 2) + (x + 3) * (x + 4)) * ((x + 5) * (x + 6) + (x + 7) * (x + 8));
 }
 
+[[cppverify::trusted]] int *pick(int *p)
+  cppverify::pre(cppverify::valid(p, 1) && *p > 0)
+  cppverify::modifies(*p)
+  cppverify::post(cppverify::result == p)
+  cppverify::post(100 / *p > 0);
+
 // EXPORT: Exported: lean obligation: next
 // EXPORT: Exported: lean obligation: twice
 // EXPORT: Exported: lean obligation: count_up
@@ -112,6 +118,7 @@ int poly(int x)
 // EXPORT: Exported: lean obligation: read
 // EXPORT: Exported: lean obligation: named
 // EXPORT: Exported: lean obligation: poly
+// EXPORT: Exported: lean obligation: contract of pick
 
 // CHECK: theorem cppverify_imp_or {a b : Prop} (h : a → b) : ¬a ∨ b :=
 // CHECK-NEXT:   (Classical.em a).elim (fun ha => Or.inr (h ha)) Or.inl
@@ -186,6 +193,20 @@ int poly(int x)
 // CHECK: (h_x_1 : BitVec 32)
 // CHECK: (h_h_x_1 : h_x_1 = x_0 + (BitVec.ofInt 32 (1))) →
 // CHECK: (h_x_1_1 : x_1 = x_0 + h_x_1) →
+
+// A contract's check that it is defined: each clause shown defined is
+// assumed for the next, in the state a function without a verified body may
+// return in, its frame and its result.
+// CHECK: def cppverify_pick_contract_{{[0-9a-f]+}}_division_by_zero_{{[0-9a-f]+}}.readable : Prop :=
+// CHECK: (h_entry_1 : {{.*}}) →
+// CHECK-NEXT: (h_null_1 : {{.*}}) →
+// CHECK-NEXT: (h_null_2 : {{.*}}) →
+// CHECK-NEXT: (h_object_1 : {{.*}}) →
+// CHECK-NEXT: (h_pre_1 : {{.*}}) →
+// CHECK-NEXT: (h_ret_1 : (∀ (__frame_address : Int), {{.*}})) →
+// CHECK-NEXT: (h_ret_2 : __result_1 = (0 : Int) ∨ {{.*}}) →
+// CHECK-NEXT: (h_post_1 : __result_1 = p_0) →
+// CHECK-NEXT: ((heapSelectBv 32 __heap_1 p_0)).toInt ≠ (0 : Int)
 
 // STUB: theorem cppverify_twice_edf933_postcondition_28de726e_proof : cppverify_twice_edf933_postcondition_28de726e := by
 // STUB-NEXT:   apply cppverify_twice_edf933_postcondition_28de726e.of_readable
