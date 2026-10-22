@@ -200,6 +200,8 @@ nothing is verified:
      - ``error: --proof-cache-max-mb and --proof-cache-max-entries require --proof-cache``
    * - ``--lean-fallback-scope=all`` without ``--lean-fallback``
      - ``error: --lean-fallback-scope requires --lean-fallback``
+   * - ``--lean-prune-stale`` without ``--lean-project`` or ``--lean-fallback``
+     - ``error: --lean-prune-stale requires --lean-project or --lean-fallback``
 
 Lean export runs no solver, so every solver option is an error with
 ``--backend=lean``, ``--lean-out``, or ``--lean-project``, the same way as
@@ -263,7 +265,16 @@ Backends
    * - ``--lean-project=DIR``
      - With ``--backend=lean``, which it selects, generate a pinned editable project. Generated
        semantics live in ``CppVerify/Generated.lean``; reusable lemmas and
-       per-obligation proof files are preserved across regeneration. Each
+       per-obligation proof files are preserved across regeneration. A goal
+       is named by its function and the hash of its statement
+       (``cppverify_one_99bcee_postcondition_cd6bdfcd``), and its proof file,
+       ``CppVerify/Proofs/<function>/<goal>.lean``, records that hash, so a
+       proof stays with its statement: it moves with a renamed function,
+       a proof whose statement changed or whose function is gone is kept in
+       ``Stale/`` with a note, and it comes back when a goal has its
+       statement again. A warning names every move. A project 0.1 generated
+       is moved to these names, with the names its proofs use
+       (:doc:`../book/part-ii/ch17-backends-modular-calls`). Each
        goal means what its obligation means: every operator keeps its
        grouping under Lean's precedence, a numeral has its type (``Nat``
        would read ``2 - 3`` as 0), a Boolean is a proposition
@@ -292,7 +303,15 @@ Backends
      - ``unproved`` (default) exports only the obligations the solver did not
        prove individually; each keeps the goal name it has in a complete
        export. ``all`` exports every obligation of the function, so success
-       is ``Certified``. Requires ``--lean-fallback``.
+       is ``Certified``. Requires ``--lean-fallback``. A fallback run
+       examines in Lean only what its solver leaves unresolved, so it leaves
+       the proofs of the other obligations and functions where they are.
+   * - ``--lean-prune-stale``
+     - Delete the proofs a Lean project keeps in ``Stale/``, after the
+       regeneration has taken back those a goal has the statement of:
+       ``warning: removed the 4 Lean proofs kept in Stale/, as
+       --lean-prune-stale asks``. Without it, nothing is ever deleted but an
+       unedited stub. Requires ``--lean-project`` or ``--lean-fallback``.
    * - ``--unroll=N``
      - Maximum BMC loop bound, which selects ``--backend=bmc``. Source verification
        explores ``0..N``; lower-only and archive replay retain one exact recorded bound,
