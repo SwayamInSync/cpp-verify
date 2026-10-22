@@ -95,7 +95,7 @@ exist:
    ninja -C build FileCheck not count split-file llvm-config
    ./build/bin/llvm-lit -sv clang/test/Verify/suite/backend_fidelity_gate.test
 
-It requires cvc5 and Lean 4.32.2. The gate checks every canonical feature
+It requires cvc5 and Lean 4.35.0. The gate checks every canonical feature
 family through Layer 3 and Z3/cvc5/portfolio/BMC, source-identical failures,
 deterministic parallel execution, canonical and bounded archive replay, Lean
 theorem/proof-module identity and generated-file compilation, and that
@@ -158,7 +158,9 @@ For an explicit interactive proof:
 
 ``Generated.lean`` and ``Check.lean`` are machine-owned.
 ``User.lean`` and existing per-obligation proof files are never overwritten.
-The project pins ``leanprover/lean4:v4.32.2``. Certification compiles the user
+The project pins ``leanprover/lean4:v4.35.0``, which certification runs whatever
+elan's default toolchain is; a project 0.1 generated, pinned to ``v4.32.2``, moves to
+it with a warning. Certification compiles the user
 module and every active proof with admissions promoted to errors, checks the
 aggregate module, and rejects proof dependencies other than Lean's documented
 foundational axioms.
