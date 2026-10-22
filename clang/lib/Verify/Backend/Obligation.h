@@ -216,6 +216,10 @@ public:
   /// quantifier, a solver hint outside the term's meaning, its identity, and
   /// archives.
   std::vector<std::unique_ptr<LogicExpr>> Patterns;
+  /// For an Or that states one assumption of a goal (`!A || rest`): where A
+  /// comes from (`pre`, `call:f`, `def:x_1`), so a goal can be shown as
+  /// named hypotheses. Outside the term's meaning, identity, and archives.
+  std::string Premise;
 
   explicit LogicExpr(Kind K) : K(K) {}
 };

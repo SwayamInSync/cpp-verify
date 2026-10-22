@@ -309,6 +309,114 @@ one does (``[trusts=f]``, ``[partial]``). It also gets the same vacuity
 checks, run with Z3: a goal that holds only because no execution reaches it
 is ``Certified: f [backend=Lean] [vacuous]``, with a warning.
 
+Goals as hypotheses
+~~~~~~~~~~~~~~~~~~~
+
+Next to each goal, ``Generated.lean`` states it as hypotheses and a
+conclusion. Each hypothesis is an assumption the goal makes, named by where
+it comes from, and a bridge from that form to the goal is proved in the same
+file. For this file:
+
+.. code-block:: cpp
+
+   [[cppverify::trusted]] int next(int x)
+     cppverify::pre(x < 100)
+     cppverify::post(cppverify::result == x + 1);
+
+   int twice(int x)
+     cppverify::pre(x >= 0 && x < 50)
+     cppverify::post(cppverify::result == x + 2)
+   {
+     int a = next(x);
+     int b = next(a);
+     return b;
+   }
+
+the postcondition of ``twice`` reads:
+
+.. code-block:: lean4
+
+   def cppverify_twice_edf933_postcondition_28de726e.readable : Prop :=
+     ∀
+       (__heap_alloc_0 : CppHeap)
+       (__heap_live_0 : CppHeap)
+       (__local_call_1_1 : BitVec 32)
+       (__local_call_2_1 : BitVec 32)
+       (__result_1 : BitVec 32)
+       (a_1 : BitVec 32)
+       (b_1 : BitVec 32)
+       (x_0 : BitVec 32),
+       (h_pre_1 : (cppBvSle (BitVec.ofInt 32 (0)) x_0) ∧ (cppBvSlt x_0 (BitVec.ofInt 32 (50)))) →
+       (h_null_1 : (heapSelectInt __heap_alloc_0 (0 : Int)) = (0 : Int)) →
+       (h_null_2 : ¬(heapSelectBool __heap_live_0 (0 : Int))) →
+       (h_call_next_1 : ((x_0).toInt + (1 : Int) ≥ (-2147483648 : Int) ∧ (x_0).toInt + (1 : Int) ≤ (2147483647 : Int)) ∧ __local_call_1_1 = x_0 + (BitVec.ofInt 32 (1))) →
+       (h_a_1 : a_1 = __local_call_1_1) →
+       (h_call_next_2 : ((a_1).toInt + (1 : Int) ≥ (-2147483648 : Int) ∧ (a_1).toInt + (1 : Int) ≤ (2147483647 : Int)) ∧ __local_call_2_1 = a_1 + (BitVec.ofInt 32 (1))) →
+       (h_b_1 : b_1 = __local_call_2_1) →
+       (h_result_1 : __result_1 = b_1) →
+       ((x_0).toInt + (2 : Int) ≥ (-2147483648 : Int) ∧ (x_0).toInt + (2 : Int) ≤ (2147483647 : Int)) ∧ __result_1 = x_0 + (BitVec.ofInt 32 (2))
+
+The names say where each assumption comes from:
+
+- ``h_pre_<n>``: a precondition the function states; ``h_entry_<n>``: one
+  the verifier adds, such as an extent's; ``h_null_<n>`` and
+  ``h_object_<n>``: the null object and where an object lies;
+- ``h_<variable>``: the definition of that variable, here ``a_1`` and
+  ``b_1`` and the value returned, ``__result_1``;
+- ``h_call_<callee>_<n>``: what a call of the callee gives, numbered in
+  order, here both calls of ``next``;
+- ``h_inv_<n>``, ``h_cond_<n>``, ``h_exit_<n>``: a loop's invariant, the
+  condition of an iteration, and how it ended;
+- ``h_exact_<n>``: the exact value of a machine operation that does not
+  overflow; ``h_keep_<n>``: the value of a variable on a path that skips its
+  assignment;
+- ``h_check_<n>``: a ``cppverify::check`` proved before;
+  ``h_spec_<spec>_<n>``: a spec's proved postcondition at an application.
+
+The numbers count within the goal, so a line added to the source renames no
+hypothesis. A disjunction the program wrote, such as
+``cppverify::post(!(x > 0) || cppverify::result > 0)``, stays in the
+conclusion. The bridge,
+``cppverify_twice_edf933_postcondition_28de726e.of_readable``, proves the goal
+from this form; Lean checks it when it builds the generated file, so a
+readable form that said less than its goal would fail there, not certify. A
+new proof file starts from it, with every name introduced:
+
+.. code-block:: lean4
+
+   import CppVerify.User
+
+   theorem cppverify_twice_edf933_postcondition_28de726e_proof : cppverify_twice_edf933_postcondition_28de726e := by
+     apply cppverify_twice_edf933_postcondition_28de726e.of_readable
+     intro __heap_alloc_0 __heap_live_0 __local_call_1_1 __local_call_2_1 __result_1 a_1 b_1 x_0 h_pre_1 h_null_1 h_null_2 h_call_next_1 h_a_1 h_call_next_2 h_b_1 h_result_1
+     sorry
+
+and a proof uses the hypotheses by name:
+
+.. code-block:: lean4
+
+     obtain ⟨_, first⟩ := h_call_next_1
+     obtain ⟨_, second⟩ := h_call_next_2
+     subst h_result_1 h_b_1 second h_a_1 first
+     simp only [cppBvSle, cppBvSlt, BitVec.sle, BitVec.slt, decide_eq_true_eq] at h_pre_1
+     have : (BitVec.ofInt 32 0).toInt = 0 := rfl
+     have : (BitVec.ofInt 32 50).toInt = 50 := rfl
+     refine ⟨by omega, ?_⟩
+     rw [BitVec.add_assoc]
+     rfl
+
+With the two calls' preconditions proved the same way and ``trivial`` for
+the return check,
+``cpp-verify --backend=lean --lean-project=proof --lean-certify file.cpp``
+prints:
+
+.. code-block:: text
+
+   file.cpp:1:28: Trusted: next (contract assumed, not verified)
+   Certified: twice [backend=Lean] [trusts=next]
+
+A proof of the goal itself, as the one for ``small`` above, checks as well.
+
 Proofs that follow their goals
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

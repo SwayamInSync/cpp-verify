@@ -23,6 +23,9 @@ struct LeanProjectGoal {
   std::string Source;
   /// The prefix of the spec bodies its goal may unfold.
   std::string BodyPrefix;
+  /// What a proof of its readable form introduces, in order: the goal's
+  /// variables, definitions, and named hypotheses.
+  std::string Intros;
   /// The names 0.1 gave the goal and its spec bodies, which a project 0.1
   /// generated still uses.
   std::string LegacyName;

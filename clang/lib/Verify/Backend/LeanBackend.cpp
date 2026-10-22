@@ -769,8 +769,9 @@ static void collectLeanSpecCalls(const LogicExpr *Expression,
 
 // A definition holds at every argument, so the instance at an application
 // under quantifiers is stated for every value of their binders.
-static unsigned emitLeanSpecAxiomBinders(const LogicExpr *Goal,
-                                         llvm::raw_ostream &OS) {
+static unsigned
+emitLeanSpecAxiomBinders(const LogicExpr *Goal, llvm::raw_ostream &OS,
+                         std::vector<std::string> *Names = nullptr) {
   std::vector<std::string> Binders;
   std::vector<LeanSpecCall> Calls;
   collectLeanSpecCalls(Goal, Binders, Calls);
@@ -785,8 +786,12 @@ static unsigned emitLeanSpecAxiomBinders(const LogicExpr *Goal,
     ++CallIndex;
     for (unsigned Level = 0; Level < Function->DefinitionFuel; ++Level) {
       ++BinderCount;
-      OS << "\n    (cppverify_spec_axiom_" << CallIndex << "_" << Level + 1
-         << " : ";
+      const std::string Axiom = "cppverify_spec_axiom_" +
+                                std::to_string(CallIndex) + "_" +
+                                std::to_string(Level + 1);
+      if (Names)
+        Names->push_back(Axiom);
+      OS << "\n    (" << Axiom << " : ";
       if (!Around.empty()) {
         OS << "∀";
         for (const std::string &Binder : Around) {
@@ -841,8 +846,162 @@ static void emitLeanTheorem(llvm::StringRef Name, const LogicExpr *Goal,
   OS << " := by\n  sorry\n\n";
 }
 
+// A hypothesis of a readable goal: an Or that makeGoal joined to the goal,
+// whose left operand negates the assumption.
+static const LogicExpr *leanHypothesis(const LogicExpr &Premise) {
+  const LogicExpr *Left = Premise.Children[0].get();
+  return Left->K == LogicExpr::Not && Left->Children.size() == 1
+             ? Left->Children[0].get()
+             : Left;
+}
+
+// Named by where the assumption comes from; a definition by what it defines.
+static std::string leanHypothesisName(const LogicExpr &Premise,
+                                      std::map<std::string, unsigned> &Counts,
+                                      std::set<std::string> &Used) {
+  auto [Category, Detail] = llvm::StringRef(Premise.Premise).split(':');
+  std::string Base = "h_" + leanIdentifierPart(Category);
+  if (!Detail.empty())
+    Base += "_" + leanIdentifierPart(Detail);
+  bool Numbered = true;
+  if (llvm::is_contained({"def", "ret", "branch", "loop", "exit", "fact"},
+                         Category)) {
+    const LogicExpr *Fact = leanHypothesis(Premise);
+    if (Fact != Premise.Children[0].get())
+      while (Fact->K == LogicExpr::Or && Fact->Children.size() == 2 &&
+             Fact->Children[0]->K == LogicExpr::Not)
+        Fact = Fact->Children[1].get();
+    if (Fact->K == LogicExpr::Eq && Fact->Children.size() == 2 &&
+        Fact->Children[0]->K == LogicExpr::Var) {
+      Base = "h_" + llvm::StringRef(leanIdentifierPart(Fact->Children[0]->Name))
+                        .ltrim('_')
+                        .str();
+      Numbered = false;
+    }
+  }
+  std::string Name =
+      Numbered ? Base + "_" + std::to_string(++Counts[Base]) : Base;
+  while (!Used.insert(Name).second)
+    Name = Base + "_" + std::to_string(++Counts[Base]);
+  return Name;
+}
+
+// The goal as named hypotheses and what remains to be shown, and a proof that
+// it implies the goal: the bridge the kernel checks, so a proof of this form
+// proves the goal whatever this printer did. Intros receives the names a
+// proof of it introduces.
+static void emitLeanReadableGoal(llvm::StringRef Name, const LogicExpr *Goal,
+                                 const std::map<std::string, LogicSort> &Vars,
+                                 bool HasSpecAxioms, std::string &Intros,
+                                 llvm::raw_ostream &OS) {
+  LeanEmitBudget = 500000;
+  std::vector<const LogicExpr *> Premises;
+  const LogicExpr *Rest = Goal;
+  while (Rest && Rest->K == LogicExpr::Or && !Rest->Premise.empty() &&
+         Rest->Children.size() == 2) {
+    Premises.push_back(Rest);
+    Rest = Rest->Children[1].get();
+  }
+
+  std::vector<std::string> Binders;
+  for (const auto &[Variable, Sort] : Vars)
+    Binders.push_back(encodeLeanName(Variable));
+  std::string AxiomText;
+  llvm::raw_string_ostream AxiomOS(AxiomText);
+  std::vector<std::string> Axioms;
+  emitLeanSpecAxiomBinders(Goal, AxiomOS, &Axioms);
+  Binders.insert(Binders.end(), Axioms.begin(), Axioms.end());
+
+  LeanTemporaryNames.clear();
+  LeanTemporaryRoot = nullptr;
+  std::vector<const LogicExpr *> Temporaries;
+  for (const LogicExpr *Premise : Premises)
+    collectLeanTemporaries(Premise->Children[0].get(), Temporaries, true);
+  collectLeanTemporaries(Rest, Temporaries, true);
+  std::vector<std::string> Lets;
+  for (const LogicExpr *Node : Temporaries) {
+    LeanTemporaryNames.emplace(Node, Lets.size() + 1);
+    Lets.push_back("__cppverify_term_" + std::to_string(Lets.size() + 1));
+  }
+
+  std::set<std::string> Used(Binders.begin(), Binders.end());
+  Used.insert(Lets.begin(), Lets.end());
+  std::map<std::string, unsigned> Counts;
+  std::vector<std::string> Hypotheses;
+  for (const LogicExpr *Premise : Premises)
+    Hypotheses.push_back(leanHypothesisName(*Premise, Counts, Used));
+
+  OS << "def ";
+  printLeanName(Name.str(), OS);
+  OS << ".readable";
+  OS << " : Prop :=\n  ";
+  if (!Vars.empty() || HasSpecAxioms) {
+    OS << "∀";
+    emitLeanVariableBinders(Vars, OS);
+    OS << AxiomText << ",\n    ";
+  }
+  if (!Lets.empty())
+    OS << "(";
+  for (const LogicExpr *Node : Temporaries) {
+    OS << "let __cppverify_term_" << LeanTemporaryNames.at(Node) << " : ";
+    printLeanSort(Node->Sort, OS);
+    OS << " := ";
+    LeanTemporaryRoot = Node;
+    printVCExprLean(Node, OS, LeanTop);
+    OS << ";\n    ";
+  }
+  LeanTemporaryRoot = nullptr;
+  for (size_t I = 0; I != Premises.size(); ++I) {
+    const LogicExpr *Left = Premises[I]->Children[0].get();
+    OS << "(" << Hypotheses[I] << " : ";
+    if (leanHypothesis(*Premises[I]) != Left) {
+      printVCExprLean(leanHypothesis(*Premises[I]), OS, LeanTop);
+    } else {
+      OS << "¬";
+      printVCExprLean(Left, OS, LeanArgument);
+    }
+    OS << ") →\n    ";
+  }
+  printVCExprLean(Rest, OS, Premises.empty() ? LeanTop : LeanArrow);
+  if (!Lets.empty())
+    OS << ")";
+  OS << "\n\n";
+  LeanTemporaryNames.clear();
+
+  OS << "theorem ";
+  printLeanName(Name.str(), OS);
+  OS << ".of_readable (h : ";
+  printLeanName(Name.str(), OS);
+  OS << ".readable) : ";
+  printLeanName(Name.str(), OS);
+  OS << " :=\n  ";
+  if (!Binders.empty()) {
+    OS << "fun";
+    for (const std::string &Binder : Binders)
+      OS << " " << Binder;
+    OS << " =>\n  ";
+  }
+  for (size_t I = 0; I != Premises.size(); ++I)
+    OS << (leanHypothesis(*Premises[I]) != Premises[I]->Children[0].get()
+               ? "cppverify_imp_or fun "
+               : "cppverify_not_imp_or fun ")
+       << Hypotheses[I] << " =>\n  ";
+  OS << "h";
+  for (const std::string &Binder : Binders)
+    OS << " " << Binder;
+  for (const std::string &Hypothesis : Hypotheses)
+    OS << " " << Hypothesis;
+  OS << "\n\n";
+
+  Intros.clear();
+  for (const auto *Part : {&Binders, &Lets, &Hypotheses})
+    for (const std::string &Introduced : *Part)
+      Intros += (Intros.empty() ? "" : " ") + Introduced;
+}
+
 static void emitLeanGoalDefinition(llvm::StringRef Name, const LogicExpr *Goal,
-                                   llvm::raw_ostream &OS) {
+                                   llvm::raw_ostream &OS,
+                                   std::string *Intros = nullptr) {
   LeanEmitBudget = 500000;
   std::map<std::string, LogicSort> Variables;
   collectLeanVariables(Goal, {}, Variables);
@@ -868,6 +1027,8 @@ static void emitLeanGoalDefinition(llvm::StringRef Name, const LogicExpr *Goal,
   }
   printLeanFlattened(Goal, OS);
   OS << "\n\n";
+  if (Intros)
+    emitLeanReadableGoal(Name, Goal, Variables, HasSpecAxioms, *Intros, OS);
 }
 
 static void
@@ -1004,6 +1165,14 @@ VerifyResult verify::exportLeanScratchPad(
     OS << "    if (x < 0) ≠ (y < 0) then -q else q\n";
     OS << "def cppIntRem (x y : Int) : Int :=\n";
     OS << "  if y = 0 then x else x - cppIntDiv x y * y\n\n";
+    if (ProjectGoals) {
+      // What the bridges from readable goals use.
+      OS << "theorem cppverify_imp_or {a b : Prop} (h : a → b) : ¬a ∨ b :=\n";
+      OS << "  (Classical.em a).elim (fun ha => Or.inr (h ha)) Or.inl\n";
+      OS << "theorem cppverify_not_imp_or {a b : Prop} (h : ¬a → b) : a ∨ b "
+            ":=\n";
+      OS << "  (Classical.em a).elim Or.inl (fun ha => Or.inr (h ha))\n\n";
+    }
   }
 
   emitLeanFunctionDeclarations(Module, OS, EmittedFunctions);
@@ -1080,7 +1249,7 @@ VerifyResult verify::exportLeanScratchPad(
     }
     OS << " -/\n";
     if (ProjectGoals) {
-      emitLeanGoalDefinition(Goal.Name, Item.Goal.get(), OS);
+      emitLeanGoalDefinition(Goal.Name, Item.Goal.get(), OS, &Goal.Intros);
       ProjectGoals->push_back(std::move(Goal));
     } else {
       emitLeanTheorem(ObligationName, Item.Goal.get(), OS);

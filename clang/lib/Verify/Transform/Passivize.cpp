@@ -9,6 +9,7 @@
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/SaveAndRestore.h"
 #include <limits>
 #include <map>
 #include <set>
@@ -2915,6 +2916,7 @@ void verify::addChoiceAxioms(std::vector<std::unique_ptr<PassiveStmt>> &Facts,
       auto Instance = std::make_unique<PassiveStmt>();
       Instance->K = PassiveStmt::Assume;
       Instance->Theorem = Theorem;
+      Instance->Origin = "choose";
       Instance->Cond = std::move(Fact);
       Facts.push_back(std::move(Instance));
     }
@@ -3068,6 +3070,7 @@ static void addFrameInstances(PassiveProgram &P, const FunctionMap &FnMap) {
       Instance->K = PassiveStmt::Assume;
       Instance->TraceEventCount = P.Stmts[S.Index]->TraceEventCount;
       Instance->Theorem = true;
+      Instance->Origin = "reads:" + Spec.Name;
       Instance->Cond = std::move(Fact);
       After[S.Index].push_back(std::move(Instance));
       Work.push_back(S.Before);
@@ -3141,6 +3144,7 @@ addSpecPostInstances(PassiveProgram &P, const FunctionMap &FnMap,
       auto Instance = std::make_unique<PassiveStmt>();
       Instance->K = PassiveStmt::Assume;
       Instance->Theorem = true;
+      Instance->Origin = "spec:" + Spec.Name;
       Instance->Cond = std::move(Fact);
       if (Spec.Unfolding)
         Unfolded.push_back(Instance->Cond.get());
@@ -3218,6 +3222,7 @@ addSpecPostInstances(PassiveProgram &P, const FunctionMap &FnMap,
           std::move(Fact), Call.Loc, (*Q)->BinderType);
     auto Instance = std::make_unique<PassiveStmt>();
     Instance->K = PassiveStmt::Assume;
+    Instance->Origin = "spec:" + Spec.Name;
     Instance->Cond = std::move(Fact);
     Facts.push_back(std::move(Instance));
   }
@@ -3257,6 +3262,8 @@ class PassivizerImpl {
     std::string EntryHeap;
   };
   std::vector<LoopFrame> LoopFrames;
+  /// Where the assumptions being emitted come from (PassiveStmt::Origin).
+  std::string Origin;
   std::vector<std::unique_ptr<VExpr>> ReturnGuards;
   std::vector<std::string> OwnedAllocationIdentities;
   std::map<std::string, std::unique_ptr<VExpr>> ReferenceBindings;
@@ -3999,6 +4006,8 @@ class PassivizerImpl {
     PS->K = K;
     PS->ProofKind = ProofKind;
     PS->Note = std::move(Note);
+    if (K == PassiveStmt::Assume)
+      PS->Origin = Origin;
     PS->TraceEventCount = TraceEvents.size();
     if (Guard)
       Cond = makeImplies(cloneVExpr(Guard), std::move(Cond), Loc);
@@ -4038,6 +4047,7 @@ class PassivizerImpl {
         !needsInactiveFrame(Guard))
       return;
     auto Inactive = makeNot(cloneVExpr(Guard), Loc);
+    llvm::SaveAndRestore<std::string> Kept(Origin, "keep");
     emitPassive(P, PassiveStmt::Assume,
                 makeEq(std::make_unique<VVarExpr>(After.str(), Ty, Loc),
                        std::make_unique<VVarExpr>(Before.str(), Ty, Loc), Loc),
@@ -4109,6 +4119,7 @@ class PassivizerImpl {
     }
     std::string ResultName = bump(ResultVar);
     Renames["result"] = ResultName;
+    llvm::SaveAndRestore<std::string> Returned(Origin, "ret");
     emitMathBridge(P, Result.get(), nullptr, SourceLocation(), true);
     emitPassive(P, PassiveStmt::Assume,
                 makeEq(std::make_unique<VVarExpr>(ResultName, Fn.ReturnType,
@@ -4233,13 +4244,12 @@ class PassivizerImpl {
     for (const SafetyCheck &Check : Checks)
       emitPassive(P, PassiveStmt::Assert, cloneExpr(Check.Cond.get(), Ctx),
                   Guard, Loc, Check.Kind, Check.Note);
-    emitPassive(P, PassiveStmt::Assume,
-                machineMathBridgeForExpr(E, &FnMap, BridgeMachineValue), Guard,
-                Loc);
+    emitMathBridge(P, E, Guard, Loc, BridgeMachineValue);
   }
 
   void emitMathBridge(PassiveProgram &P, const VExpr *E, const VExpr *Guard,
                       SourceLocation Loc, bool BridgeMachineValue = false) {
+    llvm::SaveAndRestore<std::string> Exact(Origin, "exact");
     emitPassive(P, PassiveStmt::Assume,
                 machineMathBridgeForExpr(E, &FnMap, BridgeMachineValue), Guard,
                 Loc);
@@ -4577,6 +4587,9 @@ public:
 
     for (const auto &Pre : Fn.Preconditions) {
       CloneCtx PCtx{Renames, OldState, false};
+      P.EntryOrigins.push_back(
+          P.EntryAssumes.size() < Fn.ExplicitPreconditionCount ? "pre"
+                                                               : "entry");
       P.EntryAssumes.push_back(cloneExpr(Pre.get(), PCtx));
     }
     P.PreconditionCount = P.EntryAssumes.size();
@@ -4596,12 +4609,15 @@ public:
           std::move(Null), VType::makeBool(), SourceLocation(),
           Renames[VLivenessHeapName]);
       P.EntryAssumes.push_back(makeNot(std::move(NullLive), SourceLocation()));
+      P.EntryOrigins.insert(P.EntryOrigins.end(), 2, "null");
     }
     if (Fn.ObjectModel) {
       CloneCtx PCtx{Renames, OldState, false};
-      for (const AbstractObject &Object : abstractObjects(Fn))
+      for (const AbstractObject &Object : abstractObjects(Fn)) {
         P.EntryAssumes.push_back(cloneExpr(
             objectPlacement(Object, SourceLocation()).get(), PCtx));
+        P.EntryOrigins.push_back("object");
+      }
     }
 
     std::unique_ptr<VExpr> Active = makeBoolLiteral(true, SourceLocation());
@@ -5298,6 +5314,7 @@ public:
     for (const auto &Post : Callee->Postconditions) {
       auto PS = std::make_unique<PassiveStmt>();
       PS->K = PassiveStmt::Assume;
+      PS->Origin = "call:" + Callee->Name;
       PS->Cond = rebaseSliceBinders(substParams(Post.get(), PostParamMap, Ctx,
                                                 EntryHeap, "", {}, &ParamMap));
       P.Stmts.push_back(std::move(PS));
@@ -5309,9 +5326,41 @@ public:
     }
   }
 
+  // The origin of the assumptions a statement makes, before its parts name
+  // their own.
+  static std::string statementOrigin(const VStmt &S) {
+    switch (S.K) {
+    case VStmt::Assign:
+      return "def";
+    case VStmt::Store:
+      return "store";
+    case VStmt::Allocate:
+    case VStmt::EndLifetime:
+    case VStmt::Free:
+      return "alloc";
+    case VStmt::If:
+      return "branch";
+    case VStmt::Return:
+      return "ret";
+    case VStmt::While:
+      return "loop";
+    case VStmt::Call:
+      return "call:" + static_cast<const VCallStmt &>(S).Callee;
+    case VStmt::ContractAssert:
+      return "check";
+    case VStmt::Havoc:
+      return "havoc";
+    default:
+      return "fact";
+    }
+  }
+
   void processStmt(const VStmt &S, PassiveProgram &P,
                    std::map<std::string, std::string> &Renames,
                    std::unique_ptr<VExpr> &Active) {
+    std::optional<llvm::SaveAndRestore<std::string>> Named;
+    if (S.K != VStmt::Seq && S.K != VStmt::GhostBlock)
+      Named.emplace(Origin, statementOrigin(S));
     switch (S.K) {
     case VStmt::Assign: {
       const auto &A = static_cast<const VAssignStmt &>(S);
@@ -6009,6 +6058,7 @@ public:
       }
 
       CloneCtx HeadCtx{Renames, OldState, false};
+      llvm::SaveAndRestore<std::string> Head(Origin, "frame");
       if (!LoopEntryHeap.empty()) {
         // Every iteration starts with the cells outside the declared
         // footprints unchanged since the loop began.
@@ -6018,11 +6068,13 @@ public:
                                 W.Loc),
                       Active.get(), W.Loc);
       }
+      Origin = "inv";
       for (const auto &Inv : W.Invariants) {
         auto BoundInv = cloneExpr(Inv.get(), HeadCtx);
         emitPassive(P, PassiveStmt::Assume, std::move(BoundInv), Active.get(),
                     W.Loc);
       }
+      Origin = "cond";
 
       std::string ChoiceName = bump("__loop_choice");
       auto Choice =
@@ -6084,6 +6136,7 @@ public:
       }
 
       emitTrace(PassiveTraceKind::Loop, "exit", Active.get(), W.Loc);
+      Origin = "exit";
       std::vector<const VExpr *> Returns;
       for (size_t I = ReturnsBefore; I != ReturnGuards.size(); ++I)
         Returns.push_back(ReturnGuards[I].get());

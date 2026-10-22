@@ -416,6 +416,7 @@ static std::unique_ptr<VCExpr> cloneVCExpr(const VCExpr *E) {
   Copy->OverflowOp = E->OverflowOp;
   Copy->CollectionOp = E->CollectionOp;
   Copy->SpecCallee = E->SpecCallee;
+  Copy->Premise = E->Premise;
   for (const auto &Child : E->Children)
     Copy->Children.push_back(cloneVCExpr(Child.get()));
   for (const auto &Pattern : E->Patterns)
@@ -2230,6 +2231,7 @@ public:
       std::unique_ptr<VCExpr> Cond;
       std::string Note;
       bool Theorem;
+      std::string Origin;
     };
     std::vector<LoweredStmt> Stmts;
     for (const auto &Stmt : P.Stmts) {
@@ -2239,7 +2241,7 @@ public:
       }
       Stmts.push_back({Stmt->K, obligationKind(Stmt->ProofKind),
                        Stmt->TraceEventCount, fromVExpr(Stmt->Cond.get()),
-                       Stmt->Note, Stmt->Theorem});
+                       Stmt->Note, Stmt->Theorem, Stmt->Origin});
     }
 
     std::vector<
@@ -2272,16 +2274,23 @@ public:
       return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                      ConstructionError.c_str());
 
-    std::vector<const VCExpr *> Assumptions;
-    for (const auto &Entry : EntryAssumes)
-      Assumptions.push_back(Entry.get());
+    // Each assumption with where it comes from, which names its hypothesis.
+    std::vector<std::pair<const VCExpr *, std::string>> Assumptions;
+    for (size_t I = 0; I != EntryAssumes.size(); ++I)
+      Assumptions.emplace_back(EntryAssumes[I].get(), I < P.EntryOrigins.size()
+                                                          ? P.EntryOrigins[I]
+                                                          : "entry");
     for (size_t I = 0; I < P.PreconditionCount && I < EntryAssumes.size(); ++I)
       M.Preconditions.push_back(cloneVCExpr(EntryAssumes[I].get()));
 
     auto makeGoal = [&](const VCExpr *Condition) -> std::unique_ptr<VCExpr> {
       std::unique_ptr<VCExpr> ConditionWP = cloneVCExpr(Condition);
-      for (auto It = Assumptions.rbegin(); It != Assumptions.rend(); ++It)
-        ConditionWP = vcOr(vcNot(cloneVCExpr(*It)), std::move(ConditionWP));
+      for (auto It = Assumptions.rbegin(); It != Assumptions.rend(); ++It) {
+        ConditionWP =
+            vcOr(vcNot(cloneVCExpr(It->first)), std::move(ConditionWP));
+        if (ConditionWP->K == VCExpr::Or)
+          ConditionWP->Premise = It->second.empty() ? "fact" : It->second;
+      }
       ConditionWP->Loc = Condition->Loc;
       ConditionWP->EndLoc = Condition->EndLoc;
       return ConditionWP;
@@ -2311,7 +2320,7 @@ public:
 
     for (const LoweredStmt &Stmt : Stmts) {
       if (Stmt.Kind == PassiveStmt::Assume) {
-        Assumptions.push_back(Stmt.Cond.get());
+        Assumptions.emplace_back(Stmt.Cond.get(), Stmt.Origin);
         if (Stmt.Theorem)
           M.Theorems.push_back(cloneVCExpr(Stmt.Cond.get()));
         continue;

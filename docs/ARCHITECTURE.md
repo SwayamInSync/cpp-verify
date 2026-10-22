@@ -1584,7 +1584,33 @@ uses when the source around it changes.
   group is among them but has no goal this run, or whose goal the run knows
   but does not export, is left where it is and never moved.
 
-`lean_identity.test` walks one project through each case (insertion and
+- **Readable goals.** `makeGoal` (`Obligation.cpp`) marks each `Or` it
+  builds, `!A || rest`, with where `A` comes from (`LogicExpr::Premise`,
+  like `Patterns` outside the term's meaning, its hash, and archives, and
+  kept by the clones and the in-place simplifier). The passivizer records
+  the origin of every assumption it emits (`PassiveStmt::Origin`, from a
+  current origin each statement kind sets and its parts refine:
+  `def`, `call:f`, `inv`, `cond`, `exit`, `keep`, `exact`, `check`,
+  `spec:f`, ...) and of each entry assumption (`PassiveProgram::EntryOrigins`:
+  `pre` for a written precondition, `entry` for a generated one, `null`,
+  `object`); spec checks built elsewhere default to `fact`. The Lean adapter
+  peels the marked chain into `G.readable`: `∀ vars axioms, let …; (h_pre_1
+  : A1) → … → C`, a hypothesis being the operand its `Or` negates (or `¬B`
+  where simplification folded `¬¬B` to `B`), named `h_<origin>_<n>`, a
+  definition `h_<variable>`, never a binder's name; its `let`s are the large
+  subterms of the hypotheses and the conclusion. The bridge
+  `G.of_readable : G.readable → G` is a term, one prelude lemma per
+  hypothesis (`cppverify_imp_or : (a → b) → ¬a ∨ b`, or
+  `cppverify_not_imp_or : (¬a → b) → a ∨ b`), so the kernel checks with
+  `Generated.lean` that the readable form implies the goal: a printer bug in
+  it fails the build, never certifies. `LeanProjectGoal::Intros` gives the
+  stub its `intro` list. On the 375 suite exports, the 351 that built
+  before still build, with every bridge.
+
+`lean_readable.cpp` checks the readable form of each kind of assumption,
+the bridge, the stubs (every one builds), a proof by hypothesis names that
+certifies, and a readable form that says less than its goal, which fails at
+its bridge. `lean_identity.test` walks one project through each case (insertion and
 reordering, renames of two functions at once, a changed statement, a removed
 function and its return, fallback runs, pruning, and a 0.1 project with
 proofs, stubs, and a proof of a goal that is gone) and certifies it after
