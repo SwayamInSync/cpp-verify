@@ -28,6 +28,7 @@ std::unique_ptr<LogicExpr> cloneLogicExpr(const LogicExpr *Expr) {
   Copy->OverflowOp = Expr->OverflowOp;
   Copy->CollectionOp = Expr->CollectionOp;
   Copy->SpecCallee = Expr->SpecCallee;
+  Copy->Premise = Expr->Premise;
   for (const auto &Child : Expr->Children)
     Copy->Children.push_back(cloneLogicExpr(Child.get()));
   for (const auto &Pattern : Expr->Patterns)
@@ -383,6 +384,7 @@ std::unique_ptr<LogicExpr> substituteVariable(const LogicExpr *Expr,
   Copy->OverflowOp = Expr->OverflowOp;
   Copy->CollectionOp = Expr->CollectionOp;
   Copy->SpecCallee = Expr->SpecCallee;
+  Copy->Premise = Expr->Premise;
   for (const auto &Child : Expr->Children)
     Copy->Children.push_back(substituteVariable(Child.get(), Name, Value));
   for (const auto &Pattern : Expr->Patterns)
