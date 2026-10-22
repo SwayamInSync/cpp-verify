@@ -1464,6 +1464,79 @@ unsound; they decide only where the module's facts can meet the premises.
 The tests `depth_below_zero` and `total_of_negatives` are true claims that a
 lemma used without such a premise would refute: they stay unresolved.
 
+## Lean Encoding
+
+The Lean adapter (`Backend/LeanBackend.cpp`) prints the canonical module as
+Lean 4 propositions that mean what the module means, so a kernel-checked
+proof of a printed goal is a proof of its obligation.
+
+| Logic sort | Lean type |
+|---|---|
+| `Bool` | `Prop` |
+| `MathematicalInteger`, `Pointer` | `Int` |
+| `BitVector(N)` | `BitVec N` |
+| `Heap` | `CppHeap` (`Int -> Int`) |
+
+- **Precedence.** Each operator is printed at its Lean notation level
+  (`Init/Notation.lean`, `Init/Core.lean`), and an operand that binds looser
+  than its position is parenthesized: `↔` 20, `→` 25, `∨` 30 and `∧` 35
+  (right-associative), `¬` 40, comparisons 50, `|||` 55, `^^^` 58, `&&&`
+  60, `+` and `-` 65, `*` 70, `<<<` and `>>>` 75 (left-associative), and a
+  function argument an atom. A quantifier or `if` extends as far right as it
+  can, so it is parenthesized everywhere but at the top of its context.
+  Before 0.2 the adapter used a table of its own: `(a ^ b) + 1` printed as
+  `a_0 ^^^ b_0 + 1`, which Lean reads as `a ^^^ (b + 1)`, and a Lean proof
+  certified a false check; a quantifier took the rest of the goal into its
+  body.
+- **Numerals** have their types: `(3 : Int)` for a mathematical integer or
+  a pointer, `(BitVec.ofInt 32 (3))` for a machine value. Lean elaborates a
+  term of untyped numerals in `Nat`, where `2 - 3` is 0: before 0.2 a Lean
+  proof certified `cppverify::check(2 - 3 == 0)`.
+- **Booleans** are propositions: equality is `↔` and inequality `¬(a ↔ b)`,
+  the form `simp` normalizes an equality of propositions to (`eq_iff_iff`),
+  which a proof can use without `propext`.
+- **Division.** Machine division is SMT-LIB's, as in the solvers and the
+  certifier: `BitVec.smtUDiv` (all ones at a zero divisor) and
+  `BitVec.smtSDiv` (`-1` or `1` by the dividend's sign); Lean's `udiv` and
+  `sdiv` give 0 there. The remainders `BitVec.umod` and `BitVec.srem` agree
+  with SMT-LIB. Mathematical division and remainder are the prelude's
+  `cppIntDiv` and `cppIntRem`: truncating, with quotient 0 and remainder the
+  dividend at a zero divisor.
+- **Shifts.** A left shift is `x <<< min (s).toNat N`, which has the value of
+  `x <<< (s).toNat`: Lean's evaluator computes `2^amount` and panics on a
+  64-bit amount. A signed right shift is the application
+  `(BitVec.sshiftRight x (s).toNat)`.
+- **Definition instances.** A goal's hypotheses state the definition levels
+  of each spec application it makes, as the solvers receive them. One under
+  quantifiers is stated for every value of the binders it mentions,
+  `∀ (k : Int), f k = body k`, a theorem since the definition holds at every
+  argument; before 0.2 it named the binder outside its quantifier, and the
+  export did not build.
+- **Evaluation.** The prelude's comparison wrappers (`cppBvUlt`, `cppBvUle`,
+  `cppBvSlt`, `cppBvSle`) and `heapSelectBool` are `abbrev`s, so instance
+  search sees the Boolean comparison beneath them and `decide` evaluates them
+  at constants; as `def`s they had no `Decidable` instance outside the
+  generated file. Its `local instance` of `Classical.propDecidable` serves
+  only the `if`s of generated definitions whose condition has no decision
+  procedure; Lean's instance search already tries a specific instance before
+  it.
+
+`CertifyTest.AgreesWithLeanEvaluation` checks the agreement in the pinned
+Lean. The value the certifier computes for each ground term is a theorem Lean
+proves by `decide`, and a corrupted value one whose negation it proves, for:
+240 random terms (machine, mathematical, Boolean, and Boolean equalities);
+every machine operator and `if` inside every other, on either side, at 8
+bits signed and unsigned, every mathematical operator inside every other, and
+every connective inside every other at all eight assignments of its operands,
+so that a lost parenthesis changes a value; and every operator at the extreme
+operands of widths 1, 8, and 64 (a zero divisor, `INT_MIN / -1`, a shift past
+the width, each overflow predicate). `lean_semantics.cpp` checks the printed
+forms, builds an export, certifies a goal whose proof needs the quantifier
+closed and `decide` on a comparison, refuses proofs that read `(a ^ b) + 1`
+as `a ^ (b + 1)` or `2 - 3` in `Nat`, and its probe file
+(`Inputs/lean_semantics_probe.lean`) states the prelude's values where C++,
+SMT-LIB, and Lean's own operators differ.
+
 ## Counterexample Extraction
 
 When Z3 returns SAT, CppVerify evaluates source-attributed SSA variables without

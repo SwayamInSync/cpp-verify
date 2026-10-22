@@ -1871,7 +1871,12 @@ publish explored bounds, reuse counts, and numbered loop-iteration traces.
 Archives contain only each function's terminal bounded module and replay that
 exact bound without pretending to rerun source-level incremental exploration.
 
-Lean consumes the same module. Standalone output is an unchecked scratch-pad.
+Lean consumes the same module, and its goals mean what the module means:
+every operator keeps its grouping under Lean's precedence, a numeral has its
+type, a Boolean is a proposition, and machine division by zero is SMT-LIB's, as in the solvers and
+the certifier (ARCHITECTURE.md, "Lean Encoding"). A unit test checks that
+Lean's evaluation agrees with the certifier on random ground terms and on
+every operator at its extreme operands. Standalone output is an unchecked scratch-pad.
 Editable project mode pins Lean 4.32.2, overwrites only generated semantics and
 the active check module, and preserves reusable user lemmas and one proof file
 per stable obligation goal. Initial generation is `Exported`. Certification

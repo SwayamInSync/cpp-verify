@@ -8,10 +8,14 @@
 #include "Backend/Certify.h"
 #include "Backend/ExtremeSearch.h"
 #include "Backend/Induction.h"
+#include "Backend/LeanBackend.h"
 #include "Backend/Presburger.h"
 #include "Backend/VerifyBackend.h"
+#include "Driver/CppVerifyVersion.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Program.h"
 #include "gtest/gtest.h"
 #include <cstdlib>
@@ -1713,6 +1717,315 @@ TEST(CertifyTest, AgreesWithCVC5Encodings) {
   if (!haveCVC5())
     GTEST_SKIP() << "cvc5 is not installed";
   expectAgreement(BackendKind::CVC5, 60, 29);
+}
+
+/// Ground facts, each with what it states, for the Lean check below.
+class GroundFacts {
+public:
+  ObligationModule Module;
+  std::vector<std::string> What;
+
+  /// The certifier confirms the fact before Lean is asked to prove it.
+  void add(Expr Fact, std::string Description) {
+    EXPECT_EQ(certifyGround(*Fact), CertifyOutcome::Certified) << Description;
+    Obligation Item;
+    Item.Id = "obligation:" + std::to_string(What.size() + 1);
+    Item.CounterexampleQuery = negation(clone(*Fact));
+    Item.Goal = std::move(Fact);
+    Module.Obligations.push_back(std::move(Item));
+    What.push_back(std::move(Description));
+  }
+
+  void equal(Expr Applied, Expr Expected, std::string Description) {
+    add(boolean(LogicExpr::Eq, std::move(Applied), std::move(Expected)),
+        std::move(Description));
+  }
+
+  void truth(Expr Applied, bool Holds, std::string Description) {
+    add(Holds ? std::move(Applied) : negation(std::move(Applied)),
+        std::move(Description));
+  }
+};
+
+/// The Lean export means what the canonical module means: evaluation in the
+/// pinned Lean (`decide`) proves the value the certifier computes for each
+/// random term and each operator nested in each other, refutes its corrupted
+/// value, and agrees on every operator at its extreme operands (a zero
+/// divisor, INT_MIN / -1, a shift past the width, each overflow predicate).
+TEST(CertifyTest, AgreesWithLeanEvaluation) {
+  llvm::ErrorOr<std::string> Lean = llvm::sys::findProgramByName("lean");
+  if (!Lean)
+    GTEST_SKIP() << "lean is not installed";
+  GroundFacts Facts;
+  // The certifier's value of a ground term is a theorem, and a corrupted
+  // value a refuted one.
+  auto evaluated = [&Facts](Expr Term, const std::string &Name) {
+    ObligationModule Empty;
+    TableModel Model;
+    std::string Failure;
+    std::optional<LogicValue> Value =
+        evaluateTerm(Empty, *Term, Model, {}, &Failure);
+    ASSERT_TRUE(Value) << Name << ": " << Failure;
+    Expr Corrupted = valueLiteral(*Value, Term->Sort, true);
+    Facts.equal(clone(*Term), valueLiteral(*Value, Term->Sort, false), Name);
+    Facts.add(
+        negation(boolean(LogicExpr::Eq, std::move(Term), std::move(Corrupted))),
+        Name + " corrupted");
+  };
+  std::mt19937_64 Random(37);
+  TermGenerator Generate(Random);
+  for (unsigned I = 0; I != 240; ++I) {
+    // Booleans compared with each other are propositions compared.
+    Expr Term = I % 4 == 0   ? Generate.machine(Generate.machineSort(), 3)
+                : I % 4 == 1 ? Generate.mathematical(3)
+                : I % 4 == 2
+                    ? Generate.formula(3)
+                    : boolean(I % 8 == 3 ? LogicExpr::Eq : LogicExpr::Ne,
+                              Generate.formula(2), Generate.formula(2));
+    evaluated(std::move(Term), "term " + std::to_string(I));
+  }
+  // Each operator inside each other, on either side, at operands where a
+  // lost parenthesis changes the value.
+  auto nested = [&](LogicExpr::Kind Outer, LogicSort Sort, Expr Inside,
+                    Expr Other, bool Left, const std::string &Name) {
+    evaluated(Left ? node(Outer, Sort, std::move(Inside), std::move(Other))
+                   : node(Outer, Sort, std::move(Other), std::move(Inside)),
+              Name + (Left ? " left" : " right"));
+  };
+  const LogicExpr::Kind MachineOps[] = {
+      LogicExpr::Add, LogicExpr::Sub,    LogicExpr::Mul,   LogicExpr::Div,
+      LogicExpr::Rem, LogicExpr::BitAnd, LogicExpr::BitOr, LogicExpr::BitXor,
+      LogicExpr::Shl, LogicExpr::Shr,    LogicExpr::Ite};
+  for (bool Signed : {true, false}) {
+    const LogicSort Sort = LogicSort::bitVector(8, Signed);
+    auto leaf = [&] { return literal(APInt(8, Random() % 256), Sort); };
+    for (LogicExpr::Kind Outer : MachineOps)
+      for (LogicExpr::Kind Inner : MachineOps)
+        for (bool Left : {true, false}) {
+          if (Outer == LogicExpr::Ite)
+            continue;
+          Expr A = leaf();
+          Expr B = leaf();
+          Expr Inside = Inner == LogicExpr::Ite
+                            ? node(Inner, Sort, boolLiteral(Random() % 2 == 0),
+                                   std::move(A), std::move(B))
+                            : node(Inner, Sort, std::move(A), std::move(B));
+          nested(Outer, Sort, std::move(Inside), leaf(), Left,
+                 "nested " + std::to_string(static_cast<unsigned>(Outer)) +
+                     " " + std::to_string(static_cast<unsigned>(Inner)) +
+                     (Signed ? " signed" : ""));
+        }
+  }
+  const LogicExpr::Kind MathOps[] = {LogicExpr::Add, LogicExpr::Sub,
+                                     LogicExpr::Mul, LogicExpr::Div,
+                                     LogicExpr::Rem};
+  auto mathLeaf = [&] {
+    return mathLiteral(static_cast<int64_t>(Random() % 2001) - 1000);
+  };
+  for (LogicExpr::Kind Outer : MathOps)
+    for (LogicExpr::Kind Inner : MathOps)
+      for (bool Left : {true, false}) {
+        Expr A = mathLeaf();
+        Expr B = mathLeaf();
+        nested(Outer, math(), node(Inner, math(), std::move(A), std::move(B)),
+               mathLeaf(), Left,
+               "nested math " + std::to_string(static_cast<unsigned>(Outer)) +
+                   " " + std::to_string(static_cast<unsigned>(Inner)));
+      }
+  // Every assignment of the three operands.
+  const LogicExpr::Kind Connectives[] = {LogicExpr::And, LogicExpr::Or,
+                                         LogicExpr::Eq, LogicExpr::Ne,
+                                         LogicExpr::Not};
+  for (LogicExpr::Kind Outer : Connectives)
+    for (LogicExpr::Kind Inner : Connectives)
+      for (bool Left : {true, false})
+        for (unsigned Bits = 0; Bits != 8; ++Bits) {
+          if (Outer == LogicExpr::Not)
+            continue;
+          Expr Inside = Inner == LogicExpr::Not
+                            ? negation(boolLiteral(Bits & 1))
+                            : boolean(Inner, boolLiteral(Bits & 1),
+                                      boolLiteral(Bits & 2));
+          nested(Outer, LogicSort::boolSort(), std::move(Inside),
+                 boolLiteral(Bits & 4), Left,
+                 "nested formula " +
+                     std::to_string(static_cast<unsigned>(Outer)) + " " +
+                     std::to_string(static_cast<unsigned>(Inner)) + " " +
+                     std::to_string(Bits));
+        }
+  for (unsigned W : {1U, 8U, 64U})
+    for (bool Signed : {true, false}) {
+      const LogicSort Sort = LogicSort::bitVector(W, Signed);
+      const std::string Of = " w" + std::to_string(W) + (Signed ? "s " : "u ");
+      const APInt Extremes[] = {APInt(W, 0), APInt(W, 1), APInt::getAllOnes(W),
+                                APInt::getSignedMinValue(W),
+                                APInt::getSignedMaxValue(W)};
+      for (const APInt &A : Extremes) {
+        for (const APInt &B : Extremes) {
+          const std::string Operands =
+              Of + decimal(A, false) + ", " + decimal(B, false);
+          for (Binary Op : AllBinary) {
+            const APInt Expected = reference(Op, A, B, Signed);
+            const std::string Name =
+                "op " + std::to_string(static_cast<unsigned>(Op)) + Operands;
+            Expr Applied = node(kindOf(Op),
+                                isComparison(Op) ? LogicSort::boolSort() : Sort,
+                                literal(A, Sort), literal(B, Sort));
+            if (isComparison(Op))
+              Facts.truth(std::move(Applied), Expected.isOne(), Name);
+            else
+              Facts.equal(std::move(Applied), literal(Expected, Sort), Name);
+          }
+          const APInt SA = A.sext(2 * W + 2);
+          const APInt SB = B.sext(2 * W + 2);
+          auto fits = [&](const APInt &Exact) {
+            return Exact.sge(APInt::getSignedMinValue(W).sext(2 * W + 2)) &&
+                   Exact.sle(APInt::getSignedMaxValue(W).sext(2 * W + 2));
+          };
+          const std::pair<LogicOverflowOp, bool> Cases[] = {
+              {LogicOverflowOp::Add, fits(SA + SB)},
+              {LogicOverflowOp::Sub, fits(SA - SB)},
+              {LogicOverflowOp::Mul, fits(SA * SB)},
+              {LogicOverflowOp::SignedDiv,
+               !(A.isMinSignedValue() && B.isAllOnes())},
+              {LogicOverflowOp::Neg, fits(-SA)}};
+          for (const auto &[Op, Holds] : Cases) {
+            std::vector<Expr> Arguments;
+            Arguments.push_back(literal(A, Sort));
+            if (Op != LogicOverflowOp::Neg)
+              Arguments.push_back(literal(B, Sort));
+            Expr Check = node(LogicExpr::NoOverflow, LogicSort::boolSort(),
+                              std::move(Arguments));
+            Check->OverflowOp = Op;
+            Facts.truth(std::move(Check), Holds,
+                        "overflow " + std::to_string(static_cast<int>(Op)) +
+                            Operands);
+          }
+        }
+        const std::string Operand = Of + decimal(A, false);
+        Facts.equal(node(LogicExpr::Neg, Sort, literal(A, Sort)),
+                    literal(-A, Sort), "neg" + Operand);
+        Facts.equal(node(LogicExpr::BitNot, Sort, literal(A, Sort)),
+                    literal(~A, Sort), "not" + Operand);
+        const APInt Value = Signed ? A.sext(W + 1) : A.zext(W + 1);
+        Facts.equal(node(LogicExpr::BvToInt, math(), literal(A, Sort)),
+                    literal(decimal(Value, true), math()), "bv2int" + Operand);
+        for (unsigned To : {1U, 8U, 64U})
+          for (bool ToSigned : {true, false}) {
+            const LogicSort Target = LogicSort::bitVector(To, ToSigned);
+            const APInt Resized =
+                Signed ? A.sextOrTrunc(To) : A.zextOrTrunc(To);
+            Facts.equal(node(LogicExpr::BvResize, Target, literal(A, Sort)),
+                        literal(Resized, Target),
+                        "resize" + Operand + " to " + std::to_string(To));
+          }
+      }
+    }
+  for (int64_t A : {int64_t(-7), int64_t(7), int64_t(0), INT64_MAX})
+    for (int64_t B : {int64_t(2), int64_t(-2), int64_t(0), int64_t(-1)}) {
+      const __int128 Q = B == 0 ? 0 : static_cast<__int128>(A) / B;
+      const __int128 R = B == 0 ? A : static_cast<__int128>(A) % B;
+      const std::string Operands =
+          " " + std::to_string(A) + ", " + std::to_string(B);
+      Facts.equal(node(LogicExpr::Div, math(), mathLiteral(A), mathLiteral(B)),
+                  literal(std::to_string(static_cast<int64_t>(Q)), math()),
+                  "div" + Operands);
+      Facts.equal(node(LogicExpr::Rem, math(), mathLiteral(A), mathLiteral(B)),
+                  literal(std::to_string(static_cast<int64_t>(R)), math()),
+                  "rem" + Operands);
+    }
+
+  ObligationModule &Module = Facts.Module;
+  Module.FunctionName = "certify_lean";
+  Module.FunctionIdentity = "certify_lean";
+  // Each fact is its own theorem; the whole module's is not needed.
+  Module.CorrectnessGoal = boolLiteral(true);
+  Module.CounterexampleQuery = boolLiteral(false);
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  std::set<std::string> Functions, Theorems;
+  VerifyResult Exported = exportLeanScratchPad(
+      Module, OS, /*EmitPreamble=*/true, Functions, Theorems, 0, nullptr);
+  ASSERT_EQ(Exported.Status, VerifyStatus::Exported) << Exported.Message;
+  // Every theorem is closed: evaluation decides it.
+  std::string Source;
+  std::vector<llvm::StringRef> Lines;
+  std::vector<std::pair<unsigned, size_t>> TheoremLines;
+  unsigned Line = 0;
+  for (llvm::StringRef Rest = Text; !Rest.empty();) {
+    auto [Current, Next] = Rest.split('\n');
+    ++Line;
+    size_t At = Current.find("_obligation_");
+    if (Current.starts_with("theorem ") && At != llvm::StringRef::npos)
+      TheoremLines.emplace_back(Line, std::stoul(Current.substr(At + 12)
+                                                     .take_while([](char C) {
+                                                       return C >= '0' &&
+                                                              C <= '9';
+                                                     })
+                                                     .str()) -
+                                          1);
+    Lines.push_back(Current);
+    Source += Current == "  sorry" ? "  decide" : Current.str();
+    Source += "\n";
+    Rest = Next;
+  }
+  ASSERT_EQ(TheoremLines.size(), Facts.What.size());
+
+  llvm::SmallString<128> File, Output;
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("certify", "lean", File));
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("certify", "out", Output));
+  {
+    std::error_code Error;
+    llvm::raw_fd_ostream Out(File, Error);
+    ASSERT_FALSE(Error);
+    Out << Source;
+  }
+  const std::optional<llvm::StringRef> Redirects[] = {
+      std::nullopt, llvm::StringRef(Output), llvm::StringRef(Output)};
+  // The pinned Lean: elan's proxy runs its default toolchain unless told.
+  std::vector<llvm::StringRef> Command = {*Lean};
+  const std::string Pin = ("+" + LeanToolchain).str();
+  llvm::ErrorOr<std::string> Elan = llvm::sys::findProgramByName("elan");
+  bool ViaElan = false;
+  if (Elan && !llvm::sys::fs::equivalent(*Lean, *Elan, ViaElan) && ViaElan)
+    Command.push_back(Pin);
+  Command.push_back(File);
+  std::string Message;
+  const int Exit = llvm::sys::ExecuteAndWait(*Lean, Command, std::nullopt,
+                                             Redirects, 600, 0, &Message);
+  auto Printed = llvm::MemoryBuffer::getFile(Output);
+  const std::string Log = Printed ? (*Printed)->getBuffer().str() : "";
+  llvm::sys::fs::remove(File);
+  llvm::sys::fs::remove(Output);
+  EXPECT_EQ(Exit, 0) << Message << "\n" << Log.substr(0, 4000);
+  // Name the fact behind each error.
+  for (llvm::StringRef Rest = Log; !Rest.empty();) {
+    auto [Current, Next] = Rest.split('\n');
+    Rest = Next;
+    size_t At = Current.find(": error:");
+    if (At == llvm::StringRef::npos)
+      continue;
+    llvm::StringRef Position = Current.take_front(At).rsplit(':').first;
+    unsigned ErrorLine = 0;
+    if (Position.rsplit(':').second.getAsInteger(10, ErrorLine))
+      continue;
+    std::string Fact = "the preamble";
+    unsigned Statement = 0;
+    for (const auto &[Start, Index] : TheoremLines)
+      if (Start <= ErrorLine) {
+        Fact = Facts.What[Index];
+        Statement = Start;
+      }
+    std::string Theorem;
+    for (unsigned I = Statement; I && I <= Lines.size(); ++I) {
+      Theorem += Lines[I - 1].str() + "\n";
+      if (Lines[I - 1].ends_with(":= by"))
+        break;
+    }
+    ADD_FAILURE() << "Lean disagrees on " << Fact << ": " << Current.str()
+                  << "\n"
+                  << Theorem;
+  }
 }
 
 } // namespace

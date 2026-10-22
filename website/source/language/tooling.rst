@@ -258,7 +258,14 @@ Backends
    * - ``--lean-project=DIR``
      - With ``--backend=lean``, which it selects, generate a pinned editable project. Generated
        semantics live in ``CppVerify/Generated.lean``; reusable lemmas and
-       per-obligation proof files are preserved across regeneration.
+       per-obligation proof files are preserved across regeneration. Each
+       goal means what its obligation means: every operator keeps its
+       grouping under Lean's precedence, a numeral has its type (``Nat``
+       would read ``2 - 3`` as 0), a Boolean is a proposition
+       (``↔``), machine division by zero is SMT-LIB's
+       (``BitVec.smtUDiv``, ``BitVec.smtSDiv``), as in the solvers, and
+       ``decide`` evaluates the machine comparisons at constants
+       (:doc:`../book/part-ii/ch17-backends-modular-calls`).
    * - ``--lean-certify``
      - Build the active project with Lean 4.32.2, reject ``sorry`` and
        undocumented proof axioms, and report ``Certified`` only after every
