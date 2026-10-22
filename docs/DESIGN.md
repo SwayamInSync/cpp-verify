@@ -1896,8 +1896,14 @@ goals (a rename), moved with the generated names it uses; else a 0.1 file
 proof no goal takes is kept in `Stale/` with a note naming why, and an
 unedited stub is removed; nothing else is ever deleted unless
 `--lean-prune-stale` asks. A fallback run examines only what its solver
-leaves unresolved and leaves every other proof where it is. Initial
-generation is `Exported`. Certification
+leaves unresolved and leaves every other proof where it is. Each goal `G`
+also has a readable form `G.readable`, its assumptions as hypotheses named
+by where they come from (as Frama-C's WP labels the steps of a sequent and
+Vermilion names its hypotheses), and a bridge `G.of_readable : G.readable →
+G`, generated and kernel-checked with the generated file: the canonical goal
+stays what certification checks and identity hashes, and a printer bug in
+the readable form cannot certify anything. A stub applies the bridge and
+introduces every name. Initial generation is `Exported`. Certification
 compiles the user module and every active proof with `sorry` as an error, then
 checks aggregate theorem types and axiom dependencies. Only foundational Lean
 axioms are permitted; user `axiom`/`opaque` proof shortcuts, stale proof types,
