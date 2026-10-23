@@ -426,8 +426,7 @@ Current proof-language limitations include:
   sharing ``cppverify::decreases`` clauses of one length); otherwise they are
   ``proof.cycle``;
 - spec collections hold mathematical integers only (no nested collections or
-  records), and Lean does not support them yet (planned for a future
-  release);
+  records);
 - user-written loop invariants, with no candidate-invariant/Houdini pass;
 - no automatic termination-measure or lemma discovery. Inductions over a goal
   are tried automatically (by the measure of a recursive spec it applies, with
@@ -580,9 +579,10 @@ goal per ordered obligation. Generated files are separated from preserved user
 lemmas/proofs. The pinned admission-free kernel path reports ``Certified`` only
 after every active proof checks and rejects user axiom/opaque shortcuts.
 Memory checks are lowered on this path as well as on Z3/cvc5/portfolio/BMC.
-Spec collections are not yet supported on Lean (``logic.unsupported``); Lean
-support for them is planned for a future release, and Z3 and cvc5 decide them
-today.
+Spec collections are Lean values of core types (a sequence a ``List Int``, a
+set its membership test, a multiset its counts, a map the value at each key),
+with a lemma for each operation; a goal over them that needs induction, as
+over a recursive spec of a sequence, takes a proof by hand.
 Automation, proof ergonomics, semantic simplification, dependency-aware
 caching, and broader future C++ theories remain incomplete.
 
