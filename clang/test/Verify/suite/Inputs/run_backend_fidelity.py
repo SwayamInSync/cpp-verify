@@ -476,8 +476,14 @@ def check_lean_identity(cpp_verify, source, canonical, work):
         ],
         {0},
     )
-    generated = project / "CppVerify" / "Generated.lean"
-    text = generated.read_text()
+    # The project's generated text: its prelude, specs, and each goal module.
+    root = project / "CppVerify"
+    modules = [root / "Prelude.lean", root / "Specs.lean"] + [
+        root / "Goals" / (line[len("import CppVerify.Goals."):] + ".lean")
+        for line in (root / "Generated.lean").read_text().splitlines()
+        if line.startswith("import CppVerify.Goals.")
+    ]
+    text = "".join(module.read_text() for module in modules)
     if "sorry" in text:
         fail("generated Lean semantics contains an admitted proof")
 
