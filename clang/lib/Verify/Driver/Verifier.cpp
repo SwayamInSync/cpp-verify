@@ -1548,129 +1548,23 @@ executeWithLogs(llvm::StringRef Program,
   return Stdout;
 }
 
-class Verifier {
-  ASTContext &Ctx;
-  VerifyOptions Opts;
-  llvm::raw_ostream *DumpOS = nullptr;
-  std::vector<VerifyDiagnostic> Diags;
+// A Lean project: its generated modules, the proof file of each goal, the
+// trial of cppverify_auto, and certification. Source verification and
+// archive replay both write one through it; what it warns of is kept for
+// the caller to report.
+class LeanProject {
+  const VerifyOptions &Opts;
+  std::vector<std::string> Warnings;
 
   const std::string &leanProjectRoot() const {
     return Opts.LeanProjectPath.empty() ? Opts.LeanFallbackProjectPath
                                         : Opts.LeanProjectPath;
   }
 
-  /// The archive record of Module, empty without --obligation-out.
-  llvm::Expected<std::string> archiveRecord(const ObligationModule &Module) {
-    if (!Opts.ObligationOut)
-      return std::string();
+public:
+  explicit LeanProject(const VerifyOptions &Opts) : Opts(Opts) {}
 
-    std::string Serialized = serializeObligationModule(Module);
-    auto RoundTrip = deserializeObligationModules(Serialized);
-    if (!RoundTrip)
-      return RoundTrip.takeError();
-    if (RoundTrip->size() != 1 ||
-        serializeObligationModule(RoundTrip->front()) != Serialized ||
-        obligationSemanticHash(RoundTrip->front()) !=
-            obligationSemanticHash(Module))
-      return llvm::createStringError(
-          llvm::inconvertibleErrorCode(),
-          "canonical obligation serialization did not round-trip");
-    return Serialized;
-  }
-
-  llvm::Error emitObligationArchive(const ObligationModule &Module) {
-    llvm::Expected<std::string> Record = archiveRecord(Module);
-    if (!Record)
-      return Record.takeError();
-    if (Opts.ObligationOut)
-      *Opts.ObligationOut << *Record;
-    return llvm::Error::success();
-  }
-
-  void annotateObligationSources(ObligationModule &Module) {
-    const SourceManager &SourceMgr = Ctx.getSourceManager();
-    auto annotateSource = [&](SourceLocation Loc, SourceLocation EndLoc,
-                              ObligationSource &Source) {
-      if (!Loc.isValid())
-        return;
-      PresumedLoc Location = SourceMgr.getPresumedLoc(Loc);
-      if (!Location.isValid())
-        return;
-      ObligationSource Found;
-      Found.File = Location.getFilename();
-      Found.Line = Location.getLine();
-      Found.Column = Location.getColumn();
-      PresumedLoc End =
-          SourceMgr.getPresumedLoc(EndLoc.isValid() ? EndLoc : Loc);
-      if (End.isValid() && Found.File == End.getFilename() &&
-          (End.getLine() > Found.Line ||
-           (End.getLine() == Found.Line && End.getColumn() >= Found.Column))) {
-        Found.EndLine = End.getLine();
-        Found.EndColumn = End.getColumn();
-      } else {
-        Found.EndLine = Found.Line;
-        Found.EndColumn = Found.Column;
-      }
-      // A term shared with a module annotated before, which other threads
-      // may be reading, is read and not written.
-      if (Source.File != Found.File || Source.Line != Found.Line ||
-          Source.Column != Found.Column || Source.EndLine != Found.EndLine ||
-          Source.EndColumn != Found.EndColumn)
-        Source = std::move(Found);
-    };
-    // Terms share subterms: each node once.
-    llvm::DenseSet<const LogicExpr *> Annotated;
-    auto annotateExpr = [&](const LogicExpr *Root) {
-      if (!Root)
-        return;
-      std::vector<const LogicExpr *> Pending = {Root};
-      while (!Pending.empty()) {
-        const LogicExpr *Expr = Pending.back();
-        Pending.pop_back();
-        if (!Annotated.insert(Expr).second)
-          continue;
-        annotateSource(Expr->Loc, Expr->EndLoc, Expr->Source);
-        for (const auto &Child : Expr->Children)
-          if (Child)
-            Pending.push_back(Child.get());
-      }
-    };
-
-    annotateExpr(Module.CorrectnessGoal.get());
-    annotateExpr(Module.CounterexampleQuery.get());
-    std::map<std::string, unsigned> StableIdCounts;
-    for (Obligation &Item : Module.Obligations) {
-      annotateSource(Item.Loc, Item.EndLoc, Item.Source);
-      std::string StableId =
-          Module.FunctionIdentity + "::" + obligationKindName(Item.Kind) + "@";
-      StableId += Item.Source.isValid()
-                      ? std::to_string(Item.Source.Line) + ":" +
-                            std::to_string(Item.Source.Column)
-                      : "synthetic";
-      unsigned &Count = StableIdCounts[StableId];
-      if (++Count > 1)
-        StableId += "#" + std::to_string(Count);
-      Item.StableId = std::move(StableId);
-      annotateExpr(Item.Goal.get());
-      annotateExpr(Item.CounterexampleQuery.get());
-    }
-    for (auto &[InternalName, Variable] : Module.DiagnosticVariables) {
-      (void)InternalName;
-      annotateSource(Variable.Loc, Variable.EndLoc, Variable.Source);
-    }
-    for (DiagnosticTraceEvent &Event : Module.TraceEvents) {
-      annotateSource(Event.Loc, Event.EndLoc, Event.Source);
-      annotateExpr(Event.Guard.get());
-      for (DiagnosticTraceValue &Value : Event.Values)
-        annotateExpr(Value.Value.get());
-    }
-    for (auto &[Identity, Function] : Module.LogicFunctions) {
-      (void)Identity;
-      annotateExpr(Function.StepDefinition.get());
-      for (auto &Definition : Function.DefinitionLevels)
-        annotateExpr(Definition.get());
-    }
-  }
+  std::vector<std::string> takeWarnings() { return std::move(Warnings); }
 
   llvm::Error initializeLeanProject() {
     const std::string &Root = leanProjectRoot();
@@ -1698,14 +1592,12 @@ class Verifier {
               LeanToolchain.str().c_str());
         if (llvm::Error Error = writeTextFile(ToolchainPath, Toolchain))
           return std::move(Error);
-        Diags.push_back(
-            {VerifyDiagnostic::Warning,
-             "the Lean project " + Root + " pinned " + Pin +
-                 ", which an earlier release of cpp-verify wrote; it now "
-                 "pins " +
-                 LeanToolchain.str() +
-                 ", so a proof that no longer builds needs updating for "
-                 "that Lean"});
+        Warnings.push_back("the Lean project " + Root + " pinned " + Pin +
+                           ", which an earlier release of cpp-verify wrote; "
+                           "it now pins " +
+                           LeanToolchain.str() +
+                           ", so a proof that no longer builds needs "
+                           "updating for that Lean");
       }
     } else if (llvm::Error Error = writeTextFile(ToolchainPath, Toolchain)) {
       return std::move(Error);
@@ -1906,12 +1798,11 @@ class Verifier {
                 moveLeanProof(Moving->Path, ProofPath, *Goal, Moving->Goal,
                               Moving->BodyPrefix, groupOf(*Moving)))
           return Error;
-        Diags.push_back({VerifyDiagnostic::Warning,
-                         "the Lean proof of " + Goal->StableId +
-                             (WasKept ? " came back from " : " moved from ") +
-                             relative(Moving->Path) + " to " +
-                             relative(ProofPath) +
-                             ", the file of the goal with its statement"});
+        Warnings.push_back("the Lean proof of " + Goal->StableId +
+                           (WasKept ? " came back from " : " moved from ") +
+                           relative(Moving->Path) + " to " +
+                           relative(ProofPath) +
+                           ", the file of the goal with its statement");
         Taken.insert(Moving->Path);
         Taken.insert(ProofPath);
         Emptied.insert(llvm::sys::path::parent_path(Moving->Path).str());
@@ -1922,11 +1813,9 @@ class Verifier {
                               Goal->LegacyBodyPrefix))
           return Error;
         if (!Stub)
-          Diags.push_back({VerifyDiagnostic::Warning,
-                           "the Lean proof " + relative(LegacyPath) +
-                               " that cpp-verify 0.1 wrote for " +
-                               Goal->StableId + " is now " +
-                               relative(ProofPath)});
+          Warnings.push_back("the Lean proof " + relative(LegacyPath) +
+                             " that cpp-verify 0.1 wrote for " +
+                             Goal->StableId + " is now " + relative(ProofPath));
         Legacy.erase(LegacyPath);
         Taken.insert(ProofPath);
       } else if (llvm::sys::fs::exists(ProofPath)) {
@@ -1972,9 +1861,8 @@ class Verifier {
       llvm::raw_fd_ostream Note(Target, EC, llvm::sys::fs::OF_Append);
       if (!EC)
         Note << "\n" << LeanQuarantineNote << Why << "\n";
-      Diags.push_back({VerifyDiagnostic::Warning,
-                       "the Lean proof " + relative(Path) + " is kept in " +
-                           relative(Target) + ": " + Why});
+      Warnings.push_back("the Lean proof " + relative(Path) + " is kept in " +
+                         relative(Target) + ": " + Why);
       return llvm::Error::success();
     };
     for (const LeanProofRecord &Record : Records) {
@@ -2020,12 +1908,11 @@ class Verifier {
       if (std::error_code EC = llvm::sys::fs::remove_directories(StaleDir))
         return llvm::createStringError(EC, "cannot remove %s",
                                        StaleDir.c_str());
-      Diags.push_back({VerifyDiagnostic::Warning,
-                       "removed " +
-                           (Pruned == 1 ? std::string("the Lean proof")
-                                        : "the " + std::to_string(Pruned) +
-                                              " Lean proofs") +
-                           " kept in Stale/, as --lean-prune-stale asks"});
+      Warnings.push_back(
+          "removed " +
+          (Pruned == 1 ? std::string("the Lean proof")
+                       : "the " + std::to_string(Pruned) + " Lean proofs") +
+          " kept in Stale/, as --lean-prune-stale asks");
     }
 
     CheckFile += "\n";
@@ -2720,9 +2607,9 @@ class Verifier {
     return Trials;
   }
 
-  // Each export's count of the goals cppverify_auto proves, from the proof
-  // files as they are now.
-  void countLeanAutomation(const std::vector<LeanProjectGoal> &ProjectGoals) {
+  // The goals cppverify_auto proves, from the proof files as they are now.
+  std::set<std::string>
+  automaticLeanGoals(const std::vector<LeanProjectGoal> &ProjectGoals) const {
     std::set<std::string> Automatic;
     for (const LeanProjectGoal &Goal : ProjectGoals) {
       std::string File;
@@ -2733,12 +2620,7 @@ class Verifier {
         if (Record->Automatic)
           Automatic.insert(Goal.Name);
     }
-    for (VerifyDiagnostic &Diagnostic : Diags)
-      if (Diagnostic.K == VerifyDiagnostic::Exported && Diagnostic.Result)
-        Diagnostic.LeanAutomatic = llvm::count_if(
-            std::set<std::string>(Diagnostic.Result->LeanGoals.begin(),
-                                  Diagnostic.Result->LeanGoals.end()),
-            [&](const std::string &Goal) { return Automatic.count(Goal); });
+    return Automatic;
   }
 
   // Tries cppverify_auto on each goal whose proof file is still the one
@@ -2771,9 +2653,8 @@ class Verifier {
       return;
     }
     auto skipped = [&](const std::string &Why) {
-      Diags.push_back(
-          {VerifyDiagnostic::Warning,
-           "cppverify_auto was not tried on the new Lean goals: " + Why});
+      Warnings.push_back(
+          "cppverify_auto was not tried on the new Lean goals: " + Why);
     };
     if (auto Build = Launcher->run({"build", "CppVerify.Generated",
                                     "CppVerify.User", "CppVerify.Auto"},
@@ -2838,10 +2719,135 @@ class Verifier {
     std::set<std::string> Reported;
     for (const std::string &Failure : Failures)
       if (!Failure.empty() && Reported.insert(Failure).second)
-        Diags.push_back({VerifyDiagnostic::Warning,
-                         "cppverify_auto stopped before every new Lean goal "
-                         "was tried: " +
-                             Failure});
+        Warnings.push_back("cppverify_auto stopped before every new Lean goal "
+                           "was tried: " +
+                           Failure);
+  }
+};
+
+class Verifier {
+  ASTContext &Ctx;
+  VerifyOptions Opts;
+  llvm::raw_ostream *DumpOS = nullptr;
+  std::vector<VerifyDiagnostic> Diags;
+  std::optional<LeanProject> Lean;
+
+  void reportLeanWarnings() {
+    for (std::string &Warning : Lean->takeWarnings())
+      Diags.push_back({VerifyDiagnostic::Warning, std::move(Warning)});
+  }
+
+  /// The archive record of Module, empty without --obligation-out.
+  llvm::Expected<std::string> archiveRecord(const ObligationModule &Module) {
+    if (!Opts.ObligationOut)
+      return std::string();
+
+    std::string Serialized = serializeObligationModule(Module);
+    auto RoundTrip = deserializeObligationModules(Serialized);
+    if (!RoundTrip)
+      return RoundTrip.takeError();
+    if (RoundTrip->size() != 1 ||
+        serializeObligationModule(RoundTrip->front()) != Serialized ||
+        obligationSemanticHash(RoundTrip->front()) !=
+            obligationSemanticHash(Module))
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "canonical obligation serialization did not round-trip");
+    return Serialized;
+  }
+
+  llvm::Error emitObligationArchive(const ObligationModule &Module) {
+    llvm::Expected<std::string> Record = archiveRecord(Module);
+    if (!Record)
+      return Record.takeError();
+    if (Opts.ObligationOut)
+      *Opts.ObligationOut << *Record;
+    return llvm::Error::success();
+  }
+
+  void annotateObligationSources(ObligationModule &Module) {
+    const SourceManager &SourceMgr = Ctx.getSourceManager();
+    auto annotateSource = [&](SourceLocation Loc, SourceLocation EndLoc,
+                              ObligationSource &Source) {
+      if (!Loc.isValid())
+        return;
+      PresumedLoc Location = SourceMgr.getPresumedLoc(Loc);
+      if (!Location.isValid())
+        return;
+      ObligationSource Found;
+      Found.File = Location.getFilename();
+      Found.Line = Location.getLine();
+      Found.Column = Location.getColumn();
+      PresumedLoc End =
+          SourceMgr.getPresumedLoc(EndLoc.isValid() ? EndLoc : Loc);
+      if (End.isValid() && Found.File == End.getFilename() &&
+          (End.getLine() > Found.Line ||
+           (End.getLine() == Found.Line && End.getColumn() >= Found.Column))) {
+        Found.EndLine = End.getLine();
+        Found.EndColumn = End.getColumn();
+      } else {
+        Found.EndLine = Found.Line;
+        Found.EndColumn = Found.Column;
+      }
+      // A term shared with a module annotated before, which other threads
+      // may be reading, is read and not written.
+      if (Source.File != Found.File || Source.Line != Found.Line ||
+          Source.Column != Found.Column || Source.EndLine != Found.EndLine ||
+          Source.EndColumn != Found.EndColumn)
+        Source = std::move(Found);
+    };
+    // Terms share subterms: each node once.
+    llvm::DenseSet<const LogicExpr *> Annotated;
+    auto annotateExpr = [&](const LogicExpr *Root) {
+      if (!Root)
+        return;
+      std::vector<const LogicExpr *> Pending = {Root};
+      while (!Pending.empty()) {
+        const LogicExpr *Expr = Pending.back();
+        Pending.pop_back();
+        if (!Annotated.insert(Expr).second)
+          continue;
+        annotateSource(Expr->Loc, Expr->EndLoc, Expr->Source);
+        for (const auto &Child : Expr->Children)
+          if (Child)
+            Pending.push_back(Child.get());
+      }
+    };
+
+    annotateExpr(Module.CorrectnessGoal.get());
+    annotateExpr(Module.CounterexampleQuery.get());
+    std::map<std::string, unsigned> StableIdCounts;
+    for (Obligation &Item : Module.Obligations) {
+      annotateSource(Item.Loc, Item.EndLoc, Item.Source);
+      std::string StableId =
+          Module.FunctionIdentity + "::" + obligationKindName(Item.Kind) + "@";
+      StableId += Item.Source.isValid()
+                      ? std::to_string(Item.Source.Line) + ":" +
+                            std::to_string(Item.Source.Column)
+                      : "synthetic";
+      unsigned &Count = StableIdCounts[StableId];
+      if (++Count > 1)
+        StableId += "#" + std::to_string(Count);
+      Item.StableId = std::move(StableId);
+      annotateExpr(Item.Goal.get());
+      annotateExpr(Item.CounterexampleQuery.get());
+    }
+    for (auto &[InternalName, Variable] : Module.DiagnosticVariables) {
+      (void)InternalName;
+      annotateSource(Variable.Loc, Variable.EndLoc, Variable.Source);
+    }
+    for (DiagnosticTraceEvent &Event : Module.TraceEvents) {
+      annotateSource(Event.Loc, Event.EndLoc, Event.Source);
+      annotateExpr(Event.Guard.get());
+      for (DiagnosticTraceValue &Value : Event.Values)
+        annotateExpr(Value.Value.get());
+    }
+    for (auto &[Identity, Function] : Module.LogicFunctions) {
+      (void)Identity;
+      annotateExpr(Function.StepDefinition.get());
+      for (auto &Definition : Function.DefinitionLevels)
+        annotateExpr(Definition.get());
+    }
   }
 
   void checkCalleeRecommendsOnFailure(const VFunction &Caller,
@@ -3070,7 +3076,10 @@ public:
     // A project's goals go to modules, one per function.
     LeanProjectModules LeanModules;
     if (HasLeanProject) {
-      if (llvm::Error Error = initializeLeanProject()) {
+      Lean.emplace(Opts);
+      llvm::Error Error = Lean->initializeLeanProject();
+      reportLeanWarnings();
+      if (Error) {
         Diags.push_back({VerifyDiagnostic::Error,
                          "cannot initialize Lean project (" +
                              llvm::toString(std::move(Error)) + ")"});
@@ -4566,13 +4575,23 @@ public:
                     [](const LeanProjectGoal &Goal) { return Goal.Exported; });
       const std::set<std::string> *RunGroups =
           LeanFallbackBackend ? &LeanRunGroups : nullptr;
-      llvm::Error Finalized = writeLeanProjectModules(LeanModules);
+      llvm::Error Finalized = Lean->writeLeanProjectModules(LeanModules);
       if (!Finalized)
-        Finalized = finalizeLeanProject(LeanProjectGoals, RunGroups);
+        Finalized = Lean->finalizeLeanProject(LeanProjectGoals, RunGroups);
       if (!Finalized && Opts.LeanAuto)
-        automateLeanProject(LeanProjectGoals);
-      if (!Finalized)
-        countLeanAutomation(LeanProjectGoals);
+        Lean->automateLeanProject(LeanProjectGoals);
+      reportLeanWarnings();
+      if (!Finalized) {
+        // Each export's count of the goals cppverify_auto proves.
+        const std::set<std::string> Automatic =
+            Lean->automaticLeanGoals(LeanProjectGoals);
+        for (VerifyDiagnostic &Diagnostic : Diags)
+          if (Diagnostic.K == VerifyDiagnostic::Exported && Diagnostic.Result)
+            Diagnostic.LeanAutomatic = llvm::count_if(
+                std::set<std::string>(Diagnostic.Result->LeanGoals.begin(),
+                                      Diagnostic.Result->LeanGoals.end()),
+                [&](const std::string &Goal) { return Automatic.count(Goal); });
+      }
       if (Finalized) {
         AllOk = false;
         AnyFailed = true;
@@ -4605,7 +4624,7 @@ public:
             Diagnostic.Result->Message = Reason;
           }
         };
-        auto Certified = certifyLeanProject(ExportedGoals);
+        auto Certified = Lean->certifyLeanProject(ExportedGoals);
         std::map<std::string, const LeanProjectGoal *> GoalsByName;
         for (const LeanProjectGoal &Goal : ExportedGoals)
           GoalsByName.emplace(Goal.Name, &Goal);
@@ -5580,4 +5599,98 @@ bool verify::verifyTranslationUnit(ASTContext &Ctx, llvm::raw_ostream &OS,
   bool Ok = V.run();
   V.printDiagnostics(OS);
   return Ok;
+}
+
+LeanProjectReplay
+verify::replayLeanProject(const std::vector<ObligationModule> &Modules,
+                          const VerifyOptions &Opts) {
+  LeanProjectReplay Replay;
+  LeanProject Project(Opts);
+  auto report = [&] {
+    for (std::string &Warning : Project.takeWarnings())
+      Replay.Warnings.push_back(std::move(Warning));
+  };
+  llvm::Error Error = Project.initializeLeanProject();
+  report();
+  if (Error) {
+    Replay.Error = "cannot initialize Lean project (" +
+                   llvm::toString(std::move(Error)) + ")";
+    return Replay;
+  }
+
+  // The goals have the names, files, and proofs a source run gives the
+  // same obligations, since both name them by their statements.
+  std::vector<LeanProjectGoal> Goals;
+  LeanProjectModules Generated;
+  LeanVerifyBackend Backend(&Generated, &Goals);
+  for (const ObligationModule &Module : Modules) {
+    VerifyResult Result = Backend.verify(Module);
+    if (Module.BMCTransform)
+      Result.Bound = Module.BMCTransform->UnrollBound;
+    Replay.Results.push_back(std::move(Result));
+  }
+  Error = Project.writeLeanProjectModules(Generated);
+  if (!Error)
+    Error = Project.finalizeLeanProject(Goals, nullptr);
+  if (!Error && Opts.LeanAuto)
+    Project.automateLeanProject(Goals);
+  report();
+  if (Error) {
+    Replay.Error = "cannot finalize Lean project (" +
+                   llvm::toString(std::move(Error)) + ")";
+    return Replay;
+  }
+  const std::set<std::string> Automatic = Project.automaticLeanGoals(Goals);
+  for (const VerifyResult &Result : Replay.Results)
+    Replay.Automatic.push_back(llvm::count_if(
+        std::set<std::string>(Result.LeanGoals.begin(), Result.LeanGoals.end()),
+        [&](const std::string &Goal) { return Automatic.count(Goal); }));
+  if (!Opts.LeanCertify || interruptRequested())
+    return Replay;
+
+  // A module is proved when each of its goals is certified. A bounded one
+  // whose unwinding goals alone are not is safe within its bound: Lean
+  // proves goals, and never refutes one.
+  auto Certified = Project.certifyLeanProject(Goals);
+  std::string Failed;
+  if (!Certified)
+    Failed = llvm::toString(Certified.takeError());
+  std::map<std::string, const LeanProjectGoal *> GoalsByName;
+  for (const LeanProjectGoal &Goal : Goals)
+    GoalsByName.emplace(Goal.Name, &Goal);
+  for (VerifyResult &Result : Replay.Results) {
+    if (Result.Status != VerifyStatus::Exported)
+      continue;
+    std::string Reason = Failed;
+    bool OnlyUnwinding = Failed.empty();
+    if (Certified)
+      for (const std::string &Goal : std::set<std::string>(
+               Result.LeanGoals.begin(), Result.LeanGoals.end()))
+        if (auto Failure = Certified->find(Goal); Failure != Certified->end()) {
+          const LeanProjectGoal *Known = GoalsByName.at(Goal);
+          OnlyUnwinding = OnlyUnwinding && Known->Unwinding;
+          if (Result.ObligationId.empty())
+            Result.ObligationId = Known->StableId;
+          Reason += (Reason.empty() ? "" : "; ") +
+                    std::string("the proof of ") + Known->StableId + ": " +
+                    Failure->second;
+        }
+    if (Reason.empty()) {
+      Result.Status = VerifyStatus::Verified;
+      Result.Reason = VerifyReason::None;
+      Result.Message.clear();
+    } else if (Result.Bound && OnlyUnwinding) {
+      Result.Status = VerifyStatus::BoundedSafe;
+      Result.Reason = VerifyReason::IncompleteBound;
+      Result.Message = "every goal is certified but the unwinding: no "
+                       "execution within " +
+                       std::to_string(*Result.Bound) +
+                       " loop iterations fails (" + Reason + ")";
+    } else {
+      Result.Status = VerifyStatus::Unresolved;
+      Result.Reason = VerifyReason::LeanExportFailure;
+      Result.Message = "Lean certification failed: " + Reason;
+    }
+  }
+  return Replay;
 }
