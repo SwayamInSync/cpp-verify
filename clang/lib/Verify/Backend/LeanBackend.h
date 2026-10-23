@@ -81,6 +81,26 @@ VerifyResult exportLeanScratchPad(
     const std::set<std::string> *Selection = nullptr,
     std::map<std::string, LeanSpecDeclaration> *Specs = nullptr);
 
+/// A certified counterexample shown in Lean: a module of the project's
+/// group directory, Refutations/<Group>/<Goal>.lean, that states the goal as
+/// the project would and proves `<Goal>_refuted : ¬ <Goal>` at the values.
+struct LeanRefutation {
+  std::string Group;
+  std::string Goal;
+  std::string StableId;
+  std::string Text;
+};
+
+/// The refutation of Item's goal at Assignment, the values a certified
+/// counterexample gives its variables. Specs receives the specs it applies,
+/// as a project's export does. None, with Why, when a value has no Lean
+/// form.
+std::optional<LeanRefutation>
+exportLeanRefutation(const ObligationModule &Module, const Obligation &Item,
+                     const CounterexampleAssignment &Assignment,
+                     std::map<std::string, LeanSpecDeclaration> &Specs,
+                     std::string &Why);
+
 class LeanVerifyBackend : public VerifyBackend {
   llvm::raw_ostream *Out = nullptr;
   LeanProjectModules *Modules = nullptr;
