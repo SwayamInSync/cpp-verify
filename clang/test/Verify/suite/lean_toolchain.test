@@ -22,7 +22,7 @@
 
 # The trial of cppverify_auto, then certification, each with the pin.
 # ELAN-LOG: {{^}}+leanprover/lean4:v4.35.0 --version{{$}}
-# ELAN-LOG-NEXT: {{^}}+leanprover/lean4:v4.35.0 --dir={{.*}}.project build CppVerify.User CppVerify.Auto{{$}}
+# ELAN-LOG-NEXT: {{^}}+leanprover/lean4:v4.35.0 --dir={{.*}}.project build CppVerify.Generated CppVerify.User CppVerify.Auto{{$}}
 # ELAN-LOG-NEXT: {{^}}+leanprover/lean4:v4.35.0 --version{{$}}
 # ELAN-LOG-NEXT: {{^}}+leanprover/lean4:v4.35.0 --dir={{.*}}.project build CppVerify.Generated CppVerify.User CppVerify.Auto{{$}}
 
