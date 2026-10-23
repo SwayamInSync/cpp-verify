@@ -2028,6 +2028,18 @@ A result proved in Lean, alone or with the solver, rests on the callee
 contracts and spec facts its module uses, as a solver's does: certification
 runs before those are settled, whatever else failed, and a Lean result gets
 the same qualifiers and vacuity checks as a verified one.
+A certified counterexample is shown false in Lean too: the fallback project
+gets its refutation, the failing goal stated as the project states it and a
+theorem `¬ goal` proved at the values the model gives its variables
+(`cppverify_refute`: decided, or evaluated by the spec definitions, a store
+by `grind`, a quantifier over a range of integers by trying each one, each
+attempt within the heartbeats of a step of `cppverify_auto`), which
+`--lean-certify` checks as it checks a proof. Of the failures that stand once
+the verdicts settle, a refutation that checks marks
+the failure `(confirmed in Lean)`; one Lean cannot decide leaves it a failure
+with a warning; one Lean decides true is a disagreement between two
+evaluators of one goal and makes the function `Unresolved`
+(`backend.inconsistent-results`), never `Failed`.
 
 ## MVP Acceptance Programs
 
