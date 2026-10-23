@@ -1,0 +1,20 @@
+# REQUIRES: lean
+#
+# cppverify_auto reads C++ division and remainder by their definitions in
+# its last step, so a contract that divides by a constant is proved in a
+# project whose specs Lean does not define.
+#
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p %S/Inputs/lean_division.cpp -- 2>&1 | FileCheck %s --check-prefix=EXPORT
+# RUN: FileCheck %s --input-file=%t/p/CppVerify/Proofs/cppverify_half_bound_186b9f/cppverify_half_bound_186b9f_postcondition_40c34bea.lean --check-prefix=DIV
+# RUN: FileCheck %s --input-file=%t/p/CppVerify/Proofs/cppverify_negative_division_a7749a/cppverify_negative_division_a7749a_postcondition_212234d0.lean --check-prefix=DIV
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p --lean-certify %S/Inputs/lean_division.cpp -- 2>&1 | FileCheck %s --check-prefix=CERTIFY
+
+# EXPORT: Exported: lean obligation: half_bound (cppverify_auto proved 3 of 3 goals)
+# EXPORT-NEXT: Exported: lean obligation: negative_division (cppverify_auto proved 3 of 3 goals)
+
+# DIV: automation: cppverify_auto 3 proves it with cppverify_auto_div
+# DIV: {{^}}  cppverify_auto_div{{$}}
+
+# CERTIFY: Certified: half_bound [backend=Lean]
+# CERTIFY-NEXT: Certified: negative_division [backend=Lean]
