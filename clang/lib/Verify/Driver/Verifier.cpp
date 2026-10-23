@@ -1394,6 +1394,10 @@ static std::optional<bool> leanGeneratedProof(llvm::StringRef Body,
 }
 
 // The revision of cppverify_auto that an automation note was written by.
+// Names the printing of spec definitions and the prelude's tactic for their
+// measures: a verdict an earlier revision kept is not used.
+static constexpr llvm::StringLiteral LeanSpecRevision = "1";
+
 static std::string leanAutomationTag() {
   return ("cppverify_auto " + LeanAutomationRevision + " ").str();
 }
@@ -1751,8 +1755,10 @@ class Verifier {
     const std::string Header = std::string(LeanGeneratedNote) + "\n";
     if (llvm::Error Error = writeTextFileIfChanged(
             leanProjectPath(Root, {"CppVerify", "Specs.lean"}),
-            Header + "import CppVerify.Prelude\n\nnoncomputable section\n\n" +
-                Modules.Specs))
+            Header +
+                "import CppVerify.Prelude\n\nnoncomputable section\n\n"
+                "attribute [local instance] cppVerifyPropDecidable\n\n" +
+                leanSpecsText(Modules)))
       return Error;
     const std::string GoalsDir = leanProjectPath(Root, {"CppVerify", "Goals"});
     if (std::error_code EC = llvm::sys::fs::create_directories(GoalsDir))
@@ -2102,6 +2108,245 @@ class Verifier {
           LeanToolchain.str().c_str(), Lake->c_str(),
           Version.empty() ? "of an unknown version" : Version.str().c_str());
     return Launcher;
+  }
+
+  // The specs of a project as Specs.lean declares them: each recursion group
+  // by its real definitions where Lean accepts them, callees first, and
+  // opaque where it does not, where a member has no definition, or where no
+  // Lean is installed to try them. Lean's verdict on a group's text, with
+  // what its callees are, is kept in .cppverify/specs, so that the file is
+  // the same on every run. A group is tried with its undecided callees real
+  // and keeps its verdict only if they are; else it is tried again with the
+  // rejected callees opaque.
+  std::string leanSpecsText(const LeanProjectModules &Modules) {
+    const auto &Specs = Modules.Specs;
+    // Strongly connected components of the calls, callees first (Tarjan).
+    std::vector<std::vector<std::string>> Groups;
+    std::map<std::string, size_t> GroupOf;
+    {
+      std::map<std::string, unsigned> Index, Low;
+      std::set<std::string> OnStack;
+      std::vector<std::string> Stack;
+      unsigned Counter = 0;
+      std::function<void(const std::string &)> visit =
+          [&](const std::string &V) {
+            Index[V] = Low[V] = Counter++;
+            Stack.push_back(V);
+            OnStack.insert(V);
+            for (const std::string &W : Specs.at(V).Applies) {
+              if (!Specs.count(W))
+                continue;
+              if (!Index.count(W)) {
+                visit(W);
+                Low[V] = std::min(Low[V], Low[W]);
+              } else if (OnStack.count(W)) {
+                Low[V] = std::min(Low[V], Index[W]);
+              }
+            }
+            if (Low[V] != Index[V])
+              return;
+            std::vector<std::string> Group;
+            std::string W;
+            do {
+              W = Stack.back();
+              Stack.pop_back();
+              OnStack.erase(W);
+              Group.push_back(W);
+              GroupOf[W] = Groups.size();
+            } while (W != V);
+            std::sort(Group.begin(), Group.end());
+            Groups.push_back(std::move(Group));
+          };
+      for (const auto &[Identity, Declaration] : Specs)
+        if (!Index.count(Identity))
+          visit(Identity);
+    }
+    std::vector<std::set<size_t>> Callees(Groups.size());
+    std::vector<std::string> Definition(Groups.size());
+    // 1 real, 0 opaque, -1 undecided.
+    std::vector<int> Verdict(Groups.size(), -1);
+    for (size_t G = 0; G != Groups.size(); ++G) {
+      for (const std::string &Member : Groups[G]) {
+        const LeanSpecDeclaration &Declaration = Specs.at(Member);
+        if (Declaration.Definition.empty())
+          Verdict[G] = 0;
+        Definition[G] += Declaration.Definition;
+        for (const std::string &Callee : Declaration.Applies)
+          if (Specs.count(Callee) && GroupOf.at(Callee) != G)
+            Callees[G].insert(GroupOf.at(Callee));
+      }
+      if (Groups[G].size() > 1)
+        Definition[G] = "mutual\n" + Definition[G] + "end\n\n";
+    }
+    auto opaque = [&](size_t G) {
+      std::string Text;
+      for (const std::string &Member : Groups[G])
+        Text += Specs.at(Member).Opaque;
+      return Text;
+    };
+    // What a group's verdict rests on: the toolchain, this revision of the
+    // printer and the prelude's tactic, its text, and what its callees are.
+    auto keyOf = [&](size_t G, const std::set<size_t> &Assumed) {
+      llvm::SHA256 Hasher;
+      Hasher.update(LeanToolchain);
+      Hasher.update(LeanSpecRevision);
+      Hasher.update(Definition[G]);
+      for (size_t C : Callees[G])
+        Hasher.update(Groups[C].front() + (Verdict[C] == 1 || Assumed.count(C)
+                                               ? "=real"
+                                               : "=opaque"));
+      return llvm::toHex(Hasher.final());
+    };
+    const std::string &Root = leanProjectRoot();
+    const std::string Dir = leanProjectPath(Root, {".cppverify", "specs"});
+    std::optional<LeanLauncher> Launcher;
+    bool LeanUnavailable = false;
+    for (size_t Round = 0; Round <= Groups.size(); ++Round) {
+      std::set<size_t> Trying;
+      std::map<size_t, std::string> Keys;
+      for (size_t G = 0; G != Groups.size(); ++G) {
+        if (Verdict[G] >= 0)
+          continue;
+        const bool CalleesDecided =
+            llvm::all_of(Callees[G], [&](size_t C) { return Verdict[C] >= 0; });
+        const std::string Key = keyOf(G, Trying);
+        if (CalleesDecided)
+          if (auto Kept =
+                  llvm::MemoryBuffer::getFile(leanProjectPath(Dir, {Key}))) {
+            Verdict[G] = (*Kept)->getBuffer().trim() == "real" ? 1 : 0;
+            continue;
+          }
+        if (LeanUnavailable) {
+          Verdict[G] = 0;
+          continue;
+        }
+        Trying.insert(G);
+        Keys[G] = Key;
+      }
+      if (Trying.empty())
+        break;
+      std::map<std::string, std::string> Axioms;
+      if (!tryLeanSpecs(Specs, Groups, Definition, Verdict, Trying, Launcher,
+                        opaque, Axioms)) {
+        LeanUnavailable = true;
+        for (size_t G : Trying)
+          Verdict[G] = 0;
+        break;
+      }
+      std::map<size_t, bool> Accepted;
+      for (size_t G : Trying)
+        Accepted[G] = llvm::all_of(Groups[G], [&](const std::string &Member) {
+          auto It = Axioms.find(Specs.at(Member).Name);
+          if (It == Axioms.end() || It->second == "missing")
+            return false;
+          llvm::SmallVector<llvm::StringRef, 4> Used;
+          llvm::StringRef(It->second).split(Used, ',', -1, false);
+          return llvm::all_of(Used, [](llvm::StringRef Axiom) {
+            return Axiom == "propext" || Axiom == "Quot.sound" ||
+                   Axiom == "Classical.choice";
+          });
+        });
+      // A callee decided before this round was what the trial assumed; one
+      // tried in it was assumed real.
+      for (size_t G : Trying) {
+        if (!llvm::all_of(Callees[G], [&](size_t C) {
+              return !Trying.count(C) || Accepted[C];
+            }))
+          continue;
+        Verdict[G] = Accepted[G] ? 1 : 0;
+        if (!llvm::sys::fs::create_directories(Dir))
+          llvm::consumeError(
+              writeTextFile(leanProjectPath(Dir, {Keys[G]}),
+                            Accepted[G] ? "real\n" : "opaque\n"));
+      }
+    }
+    std::string Text;
+    for (size_t G = 0; G != Groups.size(); ++G)
+      Text += Verdict[G] == 1 ? Definition[G] : opaque(G);
+    return Text;
+  }
+
+  // Elaborates the spec groups of Trying with the others as decided, in a
+  // file of their own, and reports the axioms of each member of Trying: a
+  // definition Lean rejects is added with sorryAx, or not at all. False when
+  // no pinned Lean can run it.
+  bool tryLeanSpecs(const std::map<std::string, LeanSpecDeclaration> &Specs,
+                    const std::vector<std::vector<std::string>> &Groups,
+                    const std::vector<std::string> &Definition,
+                    const std::vector<int> &Verdict,
+                    const std::set<size_t> &Trying,
+                    std::optional<LeanLauncher> &Launcher,
+                    llvm::function_ref<std::string(size_t)> Opaque,
+                    std::map<std::string, std::string> &Axioms) {
+    const std::string &Root = leanProjectRoot();
+    if (!Launcher) {
+      auto Found = leanLauncher(".cppverify-specs");
+      if (!Found) {
+        llvm::consumeError(Found.takeError());
+        return false;
+      }
+      if (auto Build = Found->run({"build", "CppVerify.Auto"}, "build", Root);
+          !Build) {
+        llvm::consumeError(Build.takeError());
+        return false;
+      }
+      Launcher = std::move(*Found);
+    }
+    const std::string Dir = leanProjectPath(Root, {".cppverify", "specs"});
+    if (llvm::sys::fs::create_directories(Dir))
+      return false;
+    const std::string Source = leanProjectPath(Dir, {"trial.lean"});
+    const std::string Report = leanProjectPath(Dir, {"trial.report"});
+    std::string Quoted = "\"";
+    for (char C : Report) {
+      if (C == '\\' || C == '"')
+        Quoted += '\\';
+      Quoted += C;
+    }
+    Quoted += "\"";
+    std::string Text = "import CppVerify.Auto\n\n#eval CppVerify.Auto.report " +
+                       Quoted +
+                       " \"ready\"\n\nnoncomputable section\n\n"
+                       "attribute [local instance] cppVerifyPropDecidable\n\n";
+    for (size_t G = 0; G != Groups.size(); ++G) {
+      if (Verdict[G] == 1 || Trying.count(G))
+        Text += Definition[G];
+      else
+        Text += Opaque(G);
+      if (Trying.count(G))
+        for (const std::string &Member : Groups[G])
+          Text += "#cppverify_axioms " + Quoted + " " + Specs.at(Member).Name +
+                  "\n\n";
+    }
+    llvm::sys::fs::remove(Report);
+    if (llvm::Error Error = writeTextFile(Source, Text)) {
+      llvm::consumeError(std::move(Error));
+      return false;
+    }
+    // Lean exits with an error status when a definition fails; the report
+    // says which.
+    if (auto Run = Launcher->run({"env", "lean", "-DmaxErrors=1000000", Source},
+                                 "specs", Root);
+        !Run)
+      llvm::consumeError(Run.takeError());
+    auto Buffer = llvm::MemoryBuffer::getFile(Report);
+    if (!Buffer)
+      return false;
+    bool Ready = false;
+    for (llvm::StringRef Rest = (*Buffer)->getBuffer(); !Rest.empty();) {
+      auto [Line, Next] = Rest.split('\n');
+      Rest = Next;
+      Line = Line.rtrim("\r");
+      if (Line == "ready") {
+        Ready = true;
+        continue;
+      }
+      llvm::SmallVector<llvm::StringRef, 3> Fields;
+      Line.split(Fields, '\t', 2);
+      if (Fields.size() == 3 && Fields[0] == "axioms")
+        Axioms[Fields[1].str()] = Fields[2].str();
+    }
+    return Ready;
   }
 
   // What a proof is built from: the pinned toolchain, its source, and the
