@@ -4150,6 +4150,22 @@ void sourceVariables(const LogicExpr *Expr, std::set<std::string> &Bound,
 }
 } // namespace
 
+std::shared_ptr<const CounterexampleAssignment>
+verify::counterexampleAssignment(const Obligation &Item,
+                                 CandidateModel &Model) {
+  std::vector<std::pair<std::string, LogicSort>> Variables;
+  std::set<std::string> Bound;
+  sourceVariables(Item.Goal.get(), Bound, Variables);
+  auto Assignment = std::make_shared<CounterexampleAssignment>();
+  for (const auto &[Name, Sort] : Variables) {
+    std::optional<LogicValue> Given = Model.constant(Name, Sort);
+    if (!Given)
+      return nullptr;
+    Assignment->Values.emplace(Name, std::move(*Given));
+  }
+  return Assignment;
+}
+
 std::vector<VerifyModelValue>
 verify::candidateValues(const ObligationModule &Module, const LogicExpr &Query,
                         CandidateModel &Model) {
