@@ -4,6 +4,7 @@ import argparse
 import json
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 
@@ -528,6 +529,64 @@ def check_lean_identity(cpp_verify, source, canonical, work):
     run(["lake", "--dir={}".format(project), "build", "CppVerify.Generated"], {0})
 
 
+def check_lean_verdicts(cpp_verify, source, proofs, work):
+    # Lean decides every case: a project certifies each valid one, with the
+    # proof by hand of the one goal cppverify_auto does not prove, and the
+    # one only a hidden definition proves, which Lean sees; a fallback
+    # project confirms the counterexample of each invalid one in Lean.
+    project = work / "lean-verdicts"
+    command = [
+        str(cpp_verify),
+        "--backend=lean",
+        "--lean-project={}".format(project),
+        "--diagnostics-format=json",
+        str(source),
+        "--",
+    ]
+    run(command, {0, 1})
+    for proof in proofs.glob("*.lean"):
+        group = re.match(r"(cppverify_.+?_[0-9a-f]{6})_", proof.name).group(1)
+        shutil.copy(proof, project / "CppVerify" / "Proofs" / group / proof.name)
+    # Every verdict on a function: its obligations, and the check of its
+    # contract when it has one.
+    certified = {}
+    for record in parse_json_lines(
+        run(command[:4] + ["--lean-certify"] + command[4:], {0, 1})
+    ):
+        certified.setdefault(record.get("function"), []).append(record)
+    for name in sorted(VALID_FUNCTIONS | set(UNRESOLVED_REASONS)):
+        for record in certified.get(name) or [{}]:
+            if record.get("status") != "certified":
+                fail(
+                    "Lean returned {} ({}) instead of certified for {}".format(
+                        record.get("status"), record.get("message"), name
+                    )
+                )
+    refuted = function_records(
+        parse_json_lines(
+            run(
+                [
+                    str(cpp_verify),
+                    "--lean-fallback={}".format(work / "lean-refutations"),
+                    "--lean-certify",
+                    "--diagnostics-format=json",
+                    str(source),
+                    "--",
+                ],
+                {1},
+            )
+        )
+    )
+    for name in sorted(INVALID_FUNCTIONS):
+        record = refuted[name]
+        if record.get("status") != "failed" or record.get("lean_refuted") is not True:
+            fail(
+                "Lean did not confirm the counterexample of {} ({}, {})".format(
+                    name, record.get("status"), record.get("message")
+                )
+            )
+
+
 def warning_messages(records):
     return [
         record.get("message", "")
@@ -617,10 +676,12 @@ def main():
     parser.add_argument("--cpp-verify", required=True, type=pathlib.Path)
     parser.add_argument("--source", required=True, type=pathlib.Path)
     parser.add_argument("--recommends", required=True, type=pathlib.Path)
+    parser.add_argument("--lean-proofs", required=True, type=pathlib.Path)
     parser.add_argument("--work-dir", required=True, type=pathlib.Path)
     arguments = parser.parse_args()
 
-    for path in (arguments.cpp_verify, arguments.source, arguments.recommends):
+    for path in (arguments.cpp_verify, arguments.source, arguments.recommends,
+                 arguments.lean_proofs):
         if not path.exists():
             fail("required path does not exist: {}".format(path))
     arguments.work_dir.mkdir(parents=True, exist_ok=False)
@@ -641,6 +702,12 @@ def main():
         arguments.cpp_verify, arguments.source, canonical, arguments.work_dir
     )
     print("PASS: Lean theorem, hash, replay, and kernel-export identity")
+
+    check_lean_verdicts(
+        arguments.cpp_verify, arguments.source, arguments.lean_proofs,
+        arguments.work_dir
+    )
+    print("PASS: decisive Lean verdicts: valid cases certified, counterexamples refuted")
 
     check_recommends_exclusion(
         arguments.cpp_verify, arguments.recommends, arguments.work_dir
