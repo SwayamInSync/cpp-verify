@@ -1,3 +1,4 @@
+import CppVerify.Goals.cppverify_fine_52006a
 import CppVerify.User
 
 theorem cppverify_fine_52006a_postcondition_cd6bdfcd_proof : cppverify_fine_52006a_postcondition_cd6bdfcd := by
