@@ -1775,8 +1775,9 @@ replay both drive it.
 
 - **Readable goals.** `makeGoal` (`Obligation.cpp`) marks each `Or` it
   builds, `!A || rest`, with where `A` comes from (`LogicExpr::Premise`,
-  like `Patterns` outside the term's meaning, its hash, and archives, and
-  kept by the clones and the in-place simplifier). The passivizer records
+  like `Patterns` outside the term's meaning and its hash, kept by the
+  clones, the in-place simplifier, and archives of schema 3, so a replayed
+  goal names the same hypotheses). The passivizer records
   the origin of every assumption it emits (`PassiveStmt::Origin`, from a
   current origin each statement kind sets and its parts refine:
   `def`, `call:f`, `inv`, `cond`, `exit`, `keep`, `exact`, `check`,
