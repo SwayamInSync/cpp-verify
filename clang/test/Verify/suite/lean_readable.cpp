@@ -6,7 +6,7 @@
 // it.
 //
 // RUN: rm -rf %t && mkdir -p %t
-// RUN: %cpp-verify --backend=lean --lean-project=%t/p %s -- 2>&1 | FileCheck %s --check-prefix=EXPORT
+// RUN: %cpp-verify --backend=lean --no-lean-auto --lean-project=%t/p %s -- 2>&1 | FileCheck %s --check-prefix=EXPORT
 // RUN: FileCheck %s --input-file=%t/p/CppVerify/Generated.lean
 // RUN: FileCheck %s --input-file=%t/p/CppVerify/Proofs/cppverify_twice_edf933/cppverify_twice_edf933_postcondition_28de726e.lean --check-prefix=STUB
 // RUN: FileCheck %s --input-file=%t/p/CppVerify/Proofs/cppverify_poly_c94108/cppverify_poly_c94108_postcondition_fde367c1.lean --check-prefix=LETS

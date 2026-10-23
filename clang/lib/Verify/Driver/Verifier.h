@@ -11,6 +11,8 @@ class ASTContext;
 
 namespace verify {
 inline constexpr unsigned DefaultSolverTimeoutMs = 30000;
+/// cppverify_auto proves 99.8% of the suite's goals it proves within 5 s.
+inline constexpr unsigned DefaultLeanAutoTimeoutMs = 20000;
 /// Twice the default: collection theories need more search.
 inline constexpr unsigned DefaultCollectionTimeoutMs =
     2 * DefaultSolverTimeoutMs;
@@ -40,6 +42,13 @@ struct VerifyOptions {
   bool LeanCertify = false;
   /// Delete the proofs a Lean project keeps in Stale/ once regenerated.
   bool LeanPruneStale = false;
+  /// Try cppverify_auto on each new goal of a Lean project, each for at most
+  /// LeanAutoTimeoutMs of wall-clock time (0: no limit).
+  bool LeanAuto = true;
+  unsigned LeanAutoTimeoutMs = DefaultLeanAutoTimeoutMs;
+  /// The Lean processes automation and certification run at once (0: the
+  /// available physical cores).
+  unsigned LeanJobs = 0;
   unsigned BMCUnroll = 10;
   /// Per-query solver timeout in milliseconds; 0 disables it. Non-terminating
   /// queries return Unknown instead of hanging the tool.

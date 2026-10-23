@@ -11,7 +11,7 @@
 # RUN: cp %S/Inputs/lean_fallback_partial_goal_2.lean %t.project/CppVerify/Proofs/cppverify_bump_ce87d1/cppverify_bump_ce87d1_assertion_06404a7a.lean
 # RUN: %cpp-verify --solver-rlimit=100 --lean-fallback=%t.project --lean-certify %S/Inputs/lean_fallback_partial.cpp -- 2>&1 | FileCheck %s --check-prefix=MIXED
 # RUN: %cpp-verify --solver-rlimit=100 --lean-fallback=%t.project --lean-certify --diagnostics-format=json %S/Inputs/lean_fallback_partial.cpp -- 2>&1 | FileCheck %s --check-prefix=MIXED-JSON
-# RUN: not %cpp-verify --solver-rlimit=100 --lean-fallback=%t.project --lean-fallback-scope=all --lean-certify %S/Inputs/lean_fallback_partial.cpp -- 2>&1 | FileCheck %s --check-prefix=ALL
+# RUN: %cpp-verify --solver-rlimit=100 --lean-fallback=%t.project --lean-fallback-scope=all --lean-certify %S/Inputs/lean_fallback_partial.cpp -- 2>&1 | FileCheck %s --check-prefix=ALL
 
 # EXPORT: Exported: lean fallback: bump [z3: 1 of 3 proved; lean: 2 exported]
 # EXPORT: Unresolved: bump [backend=z3] [reason=solver.resource-limit]
@@ -26,6 +26,6 @@
 # MIXED-JSON-SAME: "evidence":{"lean":["{{.*}}::overflow@5:3","{{.*}}::assertion@6:3"],"solver":"z3","solver_proved":1,"total":3}
 # MIXED-JSON-SAME: "status":"mixed-proof"
 
-# The complete export includes the return check, whose proof is still `sorry`.
-# ALL: Unresolved: lean fallback: bump [z3: 1 of 3 proved; lean: 3 exported] (Lean certification failed:
-# ALL-SAME: declaration uses `sorry`
+# The complete export includes the return check, which cppverify_auto proves, so
+# Lean checks every obligation.
+# ALL: Certified: bump [backend=Lean]

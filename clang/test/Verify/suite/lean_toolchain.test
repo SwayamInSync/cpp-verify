@@ -4,7 +4,9 @@
 #
 # UNSUPPORTED: system-windows
 # RUN: rm -rf %t %t.project && mkdir -p %t/elan %t/plain
-# RUN: %cpp-verify --backend=lean --lean-project=%t.project %S/Inputs/lean_toolchain.cpp --
+# Without automation at export, the goal is new to cppverify_auto whether or
+# not Lean is installed, so the certification run below tries it first.
+# RUN: %cpp-verify --backend=lean --no-lean-auto --lean-project=%t.project %S/Inputs/lean_toolchain.cpp --
 #
 # A fake elan, with lake as its proxy, records what it is asked.
 # RUN: printf '#!/bin/sh\necho "$*" >> %t/elan.log\ncase "$*" in *--version*) echo "Lake version 5.0.0 (Lean version 4.35.0)";; *) exit 1;; esac\n' > %t/elan/elan
@@ -18,7 +20,10 @@
 
 # ELAN: Unresolved: lean obligation: trivial (Lean certification failed: command failed with exit code 1
 
+# The trial of cppverify_auto, then certification, each with the pin.
 # ELAN-LOG: {{^}}+leanprover/lean4:v4.35.0 --version{{$}}
-# ELAN-LOG-NEXT: {{^}}+leanprover/lean4:v4.35.0 --dir={{.*}}.project build CppVerify.Generated CppVerify.User{{$}}
+# ELAN-LOG-NEXT: {{^}}+leanprover/lean4:v4.35.0 --dir={{.*}}.project build CppVerify.User CppVerify.Auto{{$}}
+# ELAN-LOG-NEXT: {{^}}+leanprover/lean4:v4.35.0 --version{{$}}
+# ELAN-LOG-NEXT: {{^}}+leanprover/lean4:v4.35.0 --dir={{.*}}.project build CppVerify.Generated CppVerify.User CppVerify.Auto{{$}}
 
 # PLAIN: Unresolved: lean obligation: trivial (Lean certification failed: the project pins leanprover/lean4:v4.35.0, but [[DIR]]/lake runs Lean 4.1.0; install elan (https://github.com/leanprover/elan), which runs the pinned toolchain)

@@ -356,6 +356,25 @@ goal, which the kernel checks with the generated file. A new proof file
 starts from the readable form with every name introduced; a proof of the
 goal itself still checks (:doc:`book/part-ii/ch17-backends-modular-calls`).
 
+**Lean proofs cppverify_auto finds.** Every goal of a Lean project was a stub,
+each ``True`` included, so a project of a few functions needed tens of proofs
+before it certified. Each new goal is now first given to ``cppverify_auto``, a
+tactic the project carries in ``CppVerify/Auto.lean``: it tries ``grind``; then
+memory stores as the functions they define and machine arithmetic as integers,
+before ``grind``; then ``decide`` and ``simp_all``, each with a budget of its
+own, and it keeps a step only when its proof uses Lean's foundations alone. A
+goal it proves gets that proof, and the export counts them, as in
+``Exported: lean obligation: next (cppverify_auto proved 3 of 3 goals)``;
+certification checks those proofs like any other. Any other goal gets a stub
+that says it was tried, and it is tried again only by a later revision of
+``cppverify_auto``. Of the goals of the test suite that Z3 proves, it proves
+90%. ``--no-lean-auto`` writes stubs only, and with ``--backend=lean``,
+``--jobs``, which was an error there, sets how many Lean processes automation
+and certification run at once. Certification also builds the
+proofs side by side and checks them in one Lean environment: the 33 goals of
+one test took 204 s and now take 12 s
+(:doc:`book/part-ii/ch17-backends-modular-calls`).
+
 **Lean 4.35.0.** Lean projects pin ``leanprover/lean4:v4.35.0``. A project 0.1
 generated, pinned to ``v4.32.2``, moves to the new pin the next time cpp-verify
 writes it, with a warning; a proof that no longer builds needs updating for that

@@ -220,6 +220,10 @@ nothing is verified:
      - ``error: --lean-fallback-scope requires --lean-fallback``
    * - ``--lean-prune-stale`` without ``--lean-project`` or ``--lean-fallback``
      - ``error: --lean-prune-stale requires --lean-project or --lean-fallback``
+   * - ``--no-lean-auto`` without ``--lean-project`` or ``--lean-fallback``
+     - ``error: --no-lean-auto requires --lean-project or --lean-fallback``
+   * - ``--lean-auto-timeout=N`` without ``--lean-project`` or ``--lean-fallback``
+     - ``error: --lean-auto-timeout requires --lean-project or --lean-fallback``
 
 Lean export runs no solver, so every solver option is an error with
 ``--backend=lean``, ``--lean-out``, or ``--lean-project``, the same way as
@@ -298,7 +302,13 @@ Backends
        ``h_call_next_2``, ``h_x_1`` for the definition of ``x_1``), and a
        bridge ``G.of_readable : G.readable → G`` that the kernel checks with
        the generated file, so a proof of either form proves ``G``. A stub
-       applies the bridge and introduces every name. Each
+       applies the bridge and introduces every name. Each new goal is first
+       given to ``cppverify_auto`` (``CppVerify/Auto.lean``), with the pinned
+       Lean if it is installed: a goal it proves gets that proof, and the
+       export says how many, as in ``Exported: lean obligation: next
+       (cppverify_auto proved 3 of 3 goals)``; any other goal gets a stub that
+       says it was tried (:doc:`../book/part-ii/ch17-backends-modular-calls`).
+       Each
        goal means what its obligation means: every operator keeps its
        grouping under Lean's precedence, a numeral has its type (``Nat``
        would read ``2 - 3`` as 0), a Boolean is a proposition
@@ -308,7 +318,8 @@ Backends
        (:doc:`../book/part-ii/ch17-backends-modular-calls`).
    * - ``--lean-certify``
      - Build the active project with the pinned Lean 4.35.0, each proof file on
-       its own and without ``sorry``, then check the compiled modules with a
+       its own and without ``sorry`` (``--jobs`` of them at once), then check
+       the compiled modules with a
        program that elaborates none of the user's source: the kernel replays
        every module of the project a proof imports, the proof must state
        exactly its goal, and it may depend on no axiom but ``propext``,
@@ -343,6 +354,15 @@ Backends
        ``warning: removed the 4 Lean proofs kept in Stale/, as
        --lean-prune-stale asks``. Without it, nothing is ever deleted but an
        unedited stub. Requires ``--lean-project`` or ``--lean-fallback``.
+   * - ``--no-lean-auto``
+     - Write a stub for each new Lean goal without trying ``cppverify_auto``
+       on it. Requires ``--lean-project`` or ``--lean-fallback``.
+   * - ``--lean-auto-timeout=N``
+     - Milliseconds of wall-clock time ``cppverify_auto`` may spend on one
+       new goal, its kernel check included (default 20000; ``0`` disables). A
+       goal that takes longer gets a stub, as in ``automation:
+       cppverify_auto 1 did not prove it within 20 s``. Requires
+       ``--lean-project`` or ``--lean-fallback``.
    * - ``--unroll=N``
      - Maximum BMC loop bound, which selects ``--backend=bmc``. Source verification
        explores ``0..N``; lower-only and archive replay retain one exact recorded bound,
@@ -408,7 +428,9 @@ Backends
        are verified at once, a function's obligations run on the same
        workers, and its whole query races them. Results are published in
        source order (default: every physical core, or ``CPPVERIFY_JOBS``;
-       ``0`` selects every core). Lean export remains serial.
+       ``0`` selects every core). Lean export remains serial; ``cppverify_auto``
+       and certification run this many Lean processes at once (default: every
+       physical core).
    * - ``--function-timeout=N``
      - Milliseconds all queries of one function may take together (default
        ten times ``--timeout``; ``0`` disables). See `Time limits`_.
@@ -514,7 +536,8 @@ The limits are wall-clock times and depend on the machine. For results that
 must repeat exactly across machines, use ``--solver-rlimit``, a
 deterministic per-query budget of solver steps.
 
-None of these limits applies to Lean, which runs no solver. Lean
+None of these limits applies to Lean, which runs no solver; ``cppverify_auto``
+has a limit of its own, ``--lean-auto-timeout``. Lean
 certification (``--lean-certify``) gives each ``lake`` step 300 seconds:
 building the generated module, compiling your module, compiling each proof,
 and the final check. A step that takes longer leaves every result
@@ -544,7 +567,10 @@ a fixed amount of solver work (Z3 resource units), with the query timeout
 only as a bound in time, so on a loaded machine it stops where it stops on
 an idle one, unless the timeout passes first; once it has found a
 counterexample, the obligations that choose the failure to report get the
-same work each. Lean generation and certification stay serial. The compile-time
+same work each. Lean generation stays serial; ``cppverify_auto`` and
+certification run Lean processes side by side; what they find does not depend
+on how many, but a goal whose automation is near ``--lean-auto-timeout`` may
+finish in time under one load and not under another. The compile-time
 verifier (``clang++ -fverify-contracts``) always uses one job and the default
 limits; use ``cpp-verify`` for ``--jobs`` and the other options.
 

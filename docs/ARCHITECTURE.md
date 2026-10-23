@@ -1641,19 +1641,60 @@ uses when the source around it changes.
   stub its `intro` list. On the 375 suite exports, the 351 that built
   before still build, with every bridge.
 
-- **Certification** (`certifyLeanProject`) builds `Generated` and `User`,
-  then each proof file with `lean -EhasSorry`, recording the goals whose
-  proofs do not build, and runs the checker of `LeanCertifier.h`, written
-  into the project as `.cppverify/Certify.lean`, with `lake env lean --run`
-  over the goals that built. The checker elaborates none of the user's
-  source, so their macros and commands cannot change what it checks. For each
-  goal it imports the proof module (never freeing imported data, which a
-  later import in the process reads), checks that `G_proof` is a theorem of
-  type exactly `.const G []` with `G` a definition of `CppVerify.Generated`,
-  collects its axioms by walking the kernel constants it uses, and replays
-  through the kernel (as `leanchecker`'s `replayFromImports`) every module of
-  the import closure whose `.olean` lies outside the toolchain, each once in
-  a run. It prints `ok` or `fail` with the reason per goal. Each Lean result
+- **Automation** (`automateLeanProject`, after `finalizeLeanProject`). Every
+  export writes `CppVerify/Auto.lean` (`LeanAutomation.h`): the tactic
+  `cppverify_auto`, a ladder of steps (`cppverify_auto_grind`, `_heap`,
+  `_bv`, `_decide`, `_simp`) as Vermilion's discharger is, each run with a
+  fresh heartbeat budget (`cppverify.autoBudget`, 50000), counting only when
+  it closes the goal with a proof whose axioms are Lean's foundations
+  (`collectAxioms` of every constant it uses), and rolled back otherwise,
+  runtime exceptions included. Each step first unfolds a goal left as its
+  readable form (one without binders); `_heap` turns every `heapStore*`
+  equation into the function it defines and substitutes it; `_bv` and
+  `_heap` rewrite the machine comparisons, constants, and overflow
+  predicates into integer facts before `grind`. The steps and their order
+  come from a probe of every goal the suite exports (9830): of the 5740 that
+  Z3 proves, they prove 90.2%. Stating the range of every `BitVec.toInt`
+  term first proved nothing more (`grind` knows the ranges), and removing
+  `Int.bmod` with an `omega` discharger proved 32 fewer and took longer, so
+  neither is a step. Heartbeats alone did not bound the time, since a kernel
+  check is not counted. The trial takes every exported goal whose proof file
+  is pristine and whose header (`automation:`) names no attempt by the
+  current `LeanAutomationRevision`, builds `User` and `Auto` with the pinned
+  toolchain, and runs `lean` itself (with the `LEAN_PATH` of `lake env`, so a
+  stopped process leaves no child) on a file of one theorem per goal, in
+  `--jobs` chunks. Lean reports to a file, line by line: the step that
+  proved each goal, then the axioms of its theorem or that the kernel
+  rejected it (its messages, written by a thread of its own, are buffered and
+  lost when it is stopped). A goal that takes longer than
+  `--lean-auto-timeout`, or stops Lean, is not proved, and the goals after it
+  start again in a new process. Each goal then gets the step that proved it
+  (an automatic proof, pristine like a stub) or a stub whose header records
+  the attempt. An export's `LeanAutomatic` counts its goals with automatic
+  proofs. Without the toolchain nothing is tried.
+- **Certification** (`certifyLeanProject`) builds `Generated`, `User`, and
+  `Auto`, then each proof file with `lean -EhasSorry`, `--jobs` at once,
+  recording the goals whose proofs do not build, and runs the checker of
+  `LeanCertifier.h`, written into the project as `.cppverify/Certify.lean`,
+  with `lake env lean --run` over the goals that built. The checker
+  elaborates none of the user's source, so their macros and commands cannot
+  change what it checks. It first checks every goal in one environment: all
+  proof modules imported at once, and the constants of every module of the
+  project replayed together through the kernel into the environment of the
+  toolchain modules they import (a constant two modules declare, as an
+  equation lemma derived in each, must be the same). A check reads only
+  kernel constants, so proofs imported together cannot change each other's
+  checks; an automatic proof imports `Lean`, whose import each goal would
+  repeat (33 goals took 161 s, now 8 s). If that import or replay fails, as a
+  proof file that declares a goal's name or a module the kernel rejects
+  makes it, each goal is checked on its own: it imports the proof module
+  (never freeing imported data, which a later import in the process reads),
+  and every module of the import closure whose `.olean` lies outside the
+  toolchain is replayed (as `leanchecker`'s `replayFromImports`), each once
+  in a run. Either way it checks that `G_proof` is a theorem of type exactly
+  `.const G []` with `G` a definition of `CppVerify.Generated`, collects its
+  axioms by walking the kernel constants it uses, and prints `ok` or `fail`
+  with the reason per goal. Each Lean result
   records its goals (`VerifyResult::LeanGoals`), and a function is
   `Certified` only when all of them pass; a failure names the obligation.
   Before 0.2 certification parsed what `Check.lean` printed, which imports
@@ -1666,7 +1707,12 @@ proof that does not build, and an axiom behind a lemma, with a function whose
 proofs are sound certified beside each. `lean_readable.cpp` checks the readable form of each kind of assumption,
 the bridge, the stubs (every one builds), a proof by hypothesis names that
 certifies, and a readable form that says less than its goal, which fails at
-its bridge. `lean_identity.test` walks one project through each case (insertion and
+its bridge. `lean_automation.test` checks what an export writes (an automatic
+proof, a stub that records the attempt, a goal stopped at the time limit with
+the goals after it still tried), certification of both, that nothing is
+tried again, that an edited proof is kept, that a stub of no attempt or an
+earlier revision's is tried, that a step proving a goal with the user's
+unfinished lemma does not count, and `--no-lean-auto`. `lean_identity.test` walks one project through each case (insertion and
 reordering, renames of two functions at once, a changed statement, a removed
 function and its return, fallback runs, pruning, and a 0.1 project with
 proofs, stubs, and a proof of a goal that is gone) and certifies it after
