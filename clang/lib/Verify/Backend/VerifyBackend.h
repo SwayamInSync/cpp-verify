@@ -128,6 +128,8 @@ struct QuantifierProfileEntry {
   unsigned MaxGeneration = 0;
 };
 
+struct CounterexampleAssignment;
+
 struct VerifyResult {
   VerifyStatus Status = VerifyStatus::Unresolved;
   VerifyReason Reason = VerifyReason::None;
@@ -138,6 +140,9 @@ struct VerifyResult {
   std::vector<VerifyTraceEvent> Trace;
   std::string ObligationId;
   std::optional<ObligationKind> ObligationType;
+  /// For a certified counterexample: the value of every free variable of the
+  /// goal of the obligation it fails, when the model gives each one.
+  std::shared_ptr<const CounterexampleAssignment> Assignment;
   SourceLocation Location;
   ObligationSource Source;
   uint64_t CacheHits = 0;
