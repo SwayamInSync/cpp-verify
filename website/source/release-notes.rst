@@ -399,6 +399,23 @@ library's root module, builds every proof. A ``User.lean`` that 0.1 wrote,
 which imports ``CppVerify.Generated``, keeps working
 (:doc:`book/part-ii/ch17-backends-modular-calls`).
 
+**Collections in Lean.** A function whose obligations use a ``seq``, ``set``,
+``multiset``, or ``map`` was ``Unresolved`` with reason ``logic.unsupported``
+under ``--backend=lean`` and ``--lean-fallback``. They are now Lean values of
+core types: a sequence is a ``List Int``, a set its membership test
+(``Int → Bool``, since a set may be infinite), a multiset its counts, and a
+map the value at each key it holds. Each operation is a function of the
+generated prelude with the total meaning of ``<cppverify.h>``, and lemmas
+state what each means for ``simp``, ``grind``, and proofs by hand.
+``cppverify_auto`` revision 2 adds three steps after the others: machine
+equalities as integer facts, collection equality element by element, and the
+definition instances a goal states, by the bodies they name. Of the 112 goals
+over collections in the test suite that Z3 proves, it proves 104, and
+revision 1 86; most of the rest need induction over a recursive spec. Of
+every goal the suite exports that Z3 proves, it proves 93.3%, where revision 1
+proves 90.4%, and none fewer. Stubs that revision 1 wrote are tried again
+(:doc:`book/part-ii/ch17-backends-modular-calls`).
+
 **Lean 4.35.0.** Lean projects pin ``leanprover/lean4:v4.35.0``. A project 0.1
 generated, pinned to ``v4.32.2``, moves to the new pin the next time cpp-verify
 writes it, with a warning; a proof that no longer builds needs updating for that
