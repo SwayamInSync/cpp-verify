@@ -922,10 +922,9 @@ class Evaluator {
   static bool mentions(const LogicExpr *E, const std::string &Binder) {
     if (E->K == LogicExpr::Var)
       return E->Name == Binder;
-    return llvm::any_of(E->Children,
-                        [&](const std::unique_ptr<LogicExpr> &Child) {
-                          return mentions(Child.get(), Binder);
-                        });
+    return llvm::any_of(E->Children, [&](const LogicExprRef &Child) {
+      return mentions(Child.get(), Binder);
+    });
   }
 
   /// Built from the binder by exact integer +, -, negation, and scaling.
@@ -1215,10 +1214,9 @@ class Evaluator {
         E->K == LogicExpr::Exists || E->K == LogicExpr::SpecCall ||
         E->K == LogicExpr::Store || E->K == LogicExpr::HeapFrame)
       return false;
-    return llvm::all_of(
-        E->Children, [&](const std::unique_ptr<LogicExpr> &Child) {
-          return binderReads(Child.get(), Binder, Loads, Comparisons);
-        });
+    return llvm::all_of(E->Children, [&](const LogicExprRef &Child) {
+      return binderReads(Child.get(), Binder, Loads, Comparisons);
+    });
   }
 
   /// The binder values in [Low, High) at which some load of the body reads a
@@ -1416,7 +1414,7 @@ class Evaluator {
   bool mentionsSymbolic(const LogicExpr *E) const {
     if (E->K == LogicExpr::Var && symbolicName(E->Name))
       return true;
-    return llvm::any_of(E->Children, [&](const std::unique_ptr<LogicExpr> &C) {
+    return llvm::any_of(E->Children, [&](const LogicExprRef &C) {
       return mentionsSymbolic(C.get());
     });
   }
@@ -1780,7 +1778,7 @@ class Evaluator {
   /// The binder values around which a comparison of \p E's body, affine in
   /// the binder once applications at it are unfolded, changes.
   std::set<CertInt> candidateWitnesses(const LogicExpr *E) {
-    std::vector<std::unique_ptr<LogicExpr>> Unfolded;
+    std::vector<LogicExprRef> Unfolded;
     std::vector<const LogicExpr *> Comparisons;
     std::function<void(const LogicExpr *)> collect = [&](const LogicExpr *C) {
       switch (C->K) {
@@ -2208,41 +2206,73 @@ class Evaluator {
       namesIn(Child.get(), Out);
   }
 
+  /// Calls \p Rewrite with the index and a slot for each child of \p E, or
+  /// each pattern when \p Patterns. E's children are shared with other
+  /// terms, so E is copied, once, only if a slot changes.
+  template <typename Fn>
+  static void rewriteSlots(LogicExprRef &E, bool Patterns, Fn Rewrite) {
+    const std::vector<LogicExprRef> &Slots =
+        Patterns ? E->Patterns : E->Children;
+    std::unique_ptr<LogicExpr> Copy;
+    for (size_t I = 0, N = Slots.size(); I != N; ++I) {
+      LogicExprRef Slot = Slots[I];
+      Rewrite(I, Slot);
+      if (Slot == Slots[I])
+        continue;
+      if (!Copy)
+        Copy = cloneLogicExpr(E.get());
+      (Patterns ? Copy->Patterns : Copy->Children)[I] = std::move(Slot);
+    }
+    if (Copy)
+      E = LogicExprRef(std::move(Copy));
+  }
+
   /// Renames the occurrences of \p From in \p E that are not bound below
   /// it to \p To.
-  static void rename(LogicExpr *E, const std::string &From,
+  static void rename(LogicExprRef &E, const std::string &From,
                      const std::string &To) {
-    if (E->K == LogicExpr::Var && E->Name == From) {
-      E->Name = To;
+    if (E->K == LogicExpr::Var) {
+      if (E->Name == From) {
+        std::unique_ptr<LogicExpr> Copy = cloneLogicExpr(E.get());
+        Copy->Name = To;
+        E = LogicExprRef(std::move(Copy));
+      }
       return;
     }
     const bool Binds =
         (E->K == LogicExpr::Forall || E->K == LogicExpr::Exists) &&
         E->Binder == From;
-    for (size_t I = 0; I != E->Children.size(); ++I)
-      if (!Binds || I + 1 != E->Children.size())
-        rename(E->Children[I].get(), From, To);
+    const size_t Body = E->Children.size() - 1;
+    rewriteSlots(E, false, [&](size_t I, LogicExprRef &Child) {
+      if (!Binds || I != Body)
+        rename(Child, From, To);
+    });
     if (!Binds)
-      for (auto &Pattern : E->Patterns)
-        rename(Pattern.get(), From, To);
+      rewriteSlots(E, true, [&](size_t, LogicExprRef &Pattern) {
+        rename(Pattern, From, To);
+      });
   }
 
   /// Substitutes \p Map in \p E. A binder that a substituted value mentions
   /// is renamed apart first, since the value would be captured otherwise.
-  static void substitute(std::unique_ptr<LogicExpr> &E,
+  static void substitute(LogicExprRef &E,
                          const std::map<std::string, const LogicExpr *> &Map) {
     if (E->K == LogicExpr::Var)
       if (auto It = Map.find(E->Name); It != Map.end()) {
-        E = cloneLogicExpr(It->second);
+        E = LogicExprRef(cloneLogicExpr(It->second));
         return;
       }
+    const size_t Body = E->Children.size() - 1;
     if (E->K != LogicExpr::Forall && E->K != LogicExpr::Exists) {
-      for (auto &Child : E->Children)
+      rewriteSlots(E, false, [&](size_t, LogicExprRef &Child) {
         substitute(Child, Map);
+      });
       return;
     }
-    for (size_t I = 0; I + 1 < E->Children.size(); ++I)
-      substitute(E->Children[I], Map);
+    rewriteSlots(E, false, [&](size_t I, LogicExprRef &Child) {
+      if (I != Body)
+        substitute(Child, Map);
+    });
     std::map<std::string, const LogicExpr *> Inner = Map;
     Inner.erase(E->Binder);
     std::set<std::string> Taken;
@@ -2253,12 +2283,17 @@ class Evaluator {
       std::string Binder = E->Binder;
       for (unsigned N = 1; Taken.count(Binder); ++N)
         Binder = E->Binder + "." + std::to_string(N);
-      rename(E->Children.back().get(), E->Binder, Binder);
-      for (auto &Pattern : E->Patterns)
-        rename(Pattern.get(), E->Binder, Binder);
-      E->Binder = Binder;
+      std::unique_ptr<LogicExpr> Copy = cloneLogicExpr(E.get());
+      rename(Copy->Children.back(), E->Binder, Binder);
+      for (auto &Pattern : Copy->Patterns)
+        rename(Pattern, E->Binder, Binder);
+      Copy->Binder = Binder;
+      E = LogicExprRef(std::move(Copy));
     }
-    substitute(E->Children.back(), Inner);
+    rewriteSlots(E, false, [&](size_t I, LogicExprRef &Child) {
+      if (I == Body)
+        substitute(Child, Inner);
+    });
   }
 
   static std::unique_ptr<LogicExpr> falseTerm() {
@@ -2271,7 +2306,7 @@ class Evaluator {
   static bool appliesAt(const LogicExpr *E, const std::string &Binder) {
     if (E->K == LogicExpr::SpecCall && mentions(E, Binder))
       return true;
-    return llvm::any_of(E->Children, [&](const std::unique_ptr<LogicExpr> &C) {
+    return llvm::any_of(E->Children, [&](const LogicExprRef &C) {
       return appliesAt(C.get(), Binder);
     });
   }
@@ -2280,8 +2315,8 @@ class Evaluator {
   /// definition, an equation: \p Depth levels deep, of which \p Recursive
   /// may unfold recursive functions, while the term stays within \p Budget
   /// nodes.
-  void inlineAt(std::unique_ptr<LogicExpr> &E, const std::string &Binder,
-                unsigned Depth, unsigned Recursive, uint64_t &Budget) {
+  void inlineAt(LogicExprRef &E, const std::string &Binder, unsigned Depth,
+                unsigned Recursive, uint64_t &Budget) {
     if (E->K == LogicExpr::SpecCall && Depth && mentions(E.get(), Binder))
       if (const LogicFunctionDecl *Function = function(E->SpecCallee);
           Function && Function->StepDefinition && !Function->Choice &&
@@ -2291,8 +2326,7 @@ class Evaluator {
         Budget -= countTerms(Function->StepDefinition.get());
         if (!nonRecursive().count(Function->Identity))
           --Recursive;
-        std::unique_ptr<LogicExpr> Body =
-            cloneLogicExpr(Function->StepDefinition.get());
+        LogicExprRef Body(cloneLogicExpr(Function->StepDefinition.get()));
         std::map<std::string, const LogicExpr *> Map;
         for (size_t I = 0; I != E->Children.size(); ++I)
           Map[Function->Parameters[I].Name] = E->Children[I].get();
@@ -2301,8 +2335,9 @@ class Evaluator {
         inlineAt(E, Binder, Depth - 1, Recursive, Budget);
         return;
       }
-    for (auto &Child : E->Children)
+    rewriteSlots(E, false, [&](size_t, LogicExprRef &Child) {
       inlineAt(Child, Binder, Depth, Recursive, Budget);
+    });
   }
 
   const std::set<std::string> &nonRecursive() {
@@ -2322,7 +2357,7 @@ class Evaluator {
   /// where \p E is monotone in it (\p Positive) and false where antitone,
   /// so that E implies the result. False when one occurs where E is
   /// neither.
-  static bool approximate(std::unique_ptr<LogicExpr> &E, bool Positive,
+  static bool approximate(LogicExprRef &E, bool Positive,
                           const std::string &Binder) {
     if (!appliesAt(E.get(), Binder))
       return true;
@@ -2330,26 +2365,35 @@ class Evaluator {
     case LogicExpr::SpecCall:
       if (E->Sort.Kind != LogicSortKind::Bool)
         return false;
-      E = Positive ? trueTerm() : falseTerm();
+      E = LogicExprRef(Positive ? trueTerm() : falseTerm());
       return true;
     case LogicExpr::Not:
-      return approximate(E->Children[0], !Positive, Binder);
     case LogicExpr::And:
-    case LogicExpr::Or:
-      return llvm::all_of(E->Children, [&](std::unique_ptr<LogicExpr> &C) {
-        return approximate(C, Positive, Binder);
+    case LogicExpr::Or: {
+      const bool Inner = E->K == LogicExpr::Not ? !Positive : Positive;
+      bool Approximated = true;
+      rewriteSlots(E, false, [&](size_t, LogicExprRef &C) {
+        Approximated = Approximated && approximate(C, Inner, Binder);
       });
-    case LogicExpr::Ite:
-      return E->Sort.Kind == LogicSortKind::Bool &&
-             !appliesAt(E->Children[0].get(), Binder) &&
-             approximate(E->Children[1], Positive, Binder) &&
-             approximate(E->Children[2], Positive, Binder);
+      return Approximated;
+    }
+    case LogicExpr::Ite: {
+      if (E->Sort.Kind != LogicSortKind::Bool ||
+          appliesAt(E->Children[0].get(), Binder))
+        return false;
+      bool Approximated = true;
+      rewriteSlots(E, false, [&](size_t I, LogicExprRef &C) {
+        Approximated =
+            Approximated && (I == 0 || approximate(C, Positive, Binder));
+      });
+      return Approximated;
+    }
     case LogicExpr::Forall:
     case LogicExpr::Exists:
       // A condition in a monotone position may become true, in an antitone
       // one false: a quantifier over the binder is one the analysis below
       // cannot read.
-      E = Positive ? trueTerm() : falseTerm();
+      E = LogicExprRef(Positive ? trueTerm() : falseTerm());
       return true;
     default:
       return false;
@@ -2358,7 +2402,7 @@ class Evaluator {
 
   /// Replaces each condition of \p E that does not mention \p Binder by its
   /// value, and simplifies the connectives over them.
-  void fold(std::unique_ptr<LogicExpr> &E, const std::string &Binder) {
+  void fold(LogicExprRef &E, const std::string &Binder) {
     if (E->Sort.Kind != LogicSortKind::Bool)
       return;
     if (!mentions(E.get(), Binder)) {
@@ -2373,38 +2417,40 @@ class Evaluator {
         }
         return;
       }
-      E = *Holds ? trueTerm() : falseTerm();
+      E = LogicExprRef(*Holds ? trueTerm() : falseTerm());
       return;
     }
     switch (E->K) {
     case LogicExpr::Not:
-      fold(E->Children[0], Binder);
+      rewriteSlots(E, false,
+                   [&](size_t, LogicExprRef &Child) { fold(Child, Binder); });
       if (E->Children[0]->K == LogicExpr::True)
-        E = falseTerm();
+        E = LogicExprRef(falseTerm());
       else if (E->Children[0]->K == LogicExpr::False)
-        E = trueTerm();
+        E = LogicExprRef(trueTerm());
       return;
     case LogicExpr::And:
     case LogicExpr::Or: {
       const bool And = E->K == LogicExpr::And;
-      for (auto &Child : E->Children) {
-        fold(Child, Binder);
-        if (Child->K == (And ? LogicExpr::False : LogicExpr::True)) {
-          E = And ? falseTerm() : trueTerm();
+      bool Decided = false;
+      rewriteSlots(E, false, [&](size_t, LogicExprRef &Child) {
+        if (Decided)
           return;
-        }
-      }
+        fold(Child, Binder);
+        Decided = Child->K == (And ? LogicExpr::False : LogicExpr::True);
+      });
+      if (Decided)
+        E = LogicExprRef(And ? falseTerm() : trueTerm());
       return;
     }
     case LogicExpr::Ite:
-      fold(E->Children[0], Binder);
-      fold(E->Children[1], Binder);
-      fold(E->Children[2], Binder);
+      rewriteSlots(E, false,
+                   [&](size_t, LogicExprRef &Child) { fold(Child, Binder); });
       if (E->Children[0]->K == LogicExpr::True) {
-        std::unique_ptr<LogicExpr> Then = std::move(E->Children[1]);
+        LogicExprRef Then = E->Children[1];
         E = std::move(Then);
       } else if (E->Children[0]->K == LogicExpr::False) {
-        std::unique_ptr<LogicExpr> Else = std::move(E->Children[2]);
+        LogicExprRef Else = E->Children[2];
         E = std::move(Else);
       }
       return;
@@ -2436,7 +2482,7 @@ class Evaluator {
     if (!Failure.empty())
       return std::nullopt;
     std::unique_ptr<LogicExpr> Probe = cloneLogicExpr(Q);
-    std::unique_ptr<LogicExpr> &Body = Probe->Children.back();
+    LogicExprRef &Body = Probe->Children.back();
     if (Negated) {
       auto Not = std::make_unique<LogicExpr>(LogicExpr::Not);
       Not->Sort = LogicSort::boolSort();
@@ -2518,7 +2564,7 @@ class Evaluator {
       return false;
     if (E->K == LogicExpr::SpecCall && Group.count(E->SpecCallee))
       return true;
-    return llvm::any_of(E->Children, [&](const std::unique_ptr<LogicExpr> &C) {
+    return llvm::any_of(E->Children, [&](const LogicExprRef &C) {
       return appliesAny(C.get(), Group);
     });
   }
@@ -3604,16 +3650,19 @@ public:
     for (const LogicFunctionParameter &Parameter : Choice.Parameters)
       Names.insert(Parameter.Name);
     const std::string Suffix = "\x1f" "second";
-    std::function<void(LogicExpr &)> rename = [&](LogicExpr &E) {
-      if (E.K == LogicExpr::Var && Names.count(E.Name))
-        E.Name += Suffix;
-      for (auto &Child : E.Children)
-        rename(*Child);
+    std::function<void(LogicExprRef &)> rename = [&](LogicExprRef &E) {
+      if (E->K == LogicExpr::Var && Names.count(E->Name)) {
+        std::unique_ptr<LogicExpr> Copy = cloneLogicExpr(E.get());
+        Copy->Name += Suffix;
+        E = LogicExprRef(std::move(Copy));
+      }
+      rewriteSlots(E, false,
+                   [&](size_t, LogicExprRef &Child) { rename(Child); });
     };
     auto second = [&](const LogicExpr &E) {
-      std::unique_ptr<LogicExpr> Copy = cloneLogicExpr(&E);
-      rename(*Copy);
-      return Copy;
+      LogicExprRef Renamed(cloneLogicExpr(&E));
+      rename(Renamed);
+      return cloneLogicExpr(Renamed.get());
     };
     // The choice's own quantifier: its bounds, then its body at every value
     // in range.
