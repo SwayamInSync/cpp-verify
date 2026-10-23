@@ -956,8 +956,9 @@ The canonical backend boundary can be persisted and replayed:
    cpp-verify --obligation-in=goals.cpv --backend=portfolio
    cpp-verify --obligation-in=goals.cpv --lower-only --dump-ir=3,4
    cpp-verify --obligation-in=goals.cpv --backend=lean --lean-out=goals.lean
+   cpp-verify --obligation-in=goals.cpv --lean-project=proof --lean-certify
 
-Each ``cppverify.obligation/2`` record uses stable wire tags, defensive bounds,
+Each ``cppverify.obligation/3`` record uses stable wire tags, defensive bounds,
 portable source points, and path-independent SHA-256 semantic hashes. Replay
 revalidates every sort, expression, logical declaration, call signature,
 feature declaration, and identity before backend dispatch. Multiple records may
@@ -979,26 +980,118 @@ and its replay side by side.
 Source-built and replayed records pass through the same conservative
 canonicalizer before hashing and dispatch. It folds only trivial Boolean
 structure and reflexive equality/inequality, removes transitively unreachable
-logical declarations, rebuilds exact ordered and complete queries plus feature
+logical declarations (a declaration reaches what its definition and its
+termination measures apply), rebuilds exact ordered and complete queries plus feature
 metadata, and revalidates. It does not rewrite arithmetic, quantifiers,
 pointers, heaps, or assumptions. Canonicalization introduced semantic-hash
 format v2; format v3 removed diagnostic obligation identities from the
 preimage, and format v4 removes every obligation kind except ``unwinding``.
-Schema v2 adds precise obligation kinds; schema v1 records remain readable.
+Schema v2 adds precise obligation kinds, and schema v3 each spec function's
+termination measures and where each assumption of a goal comes from (what a
+Lean project needs to define a spec and to name a goal's hypotheses); none
+of these is hashed, and records of schemas v1 and v2 remain readable.
 
 BMC source verification archives only the terminal module for each function.
 Those records retain their exact explored unroll bound. Replay is fixed-bound
 and uses BMC unwinding aggregation, so an incomplete frontier remains
 ``BoundedSafe(N)`` rather than rerunning the incremental source strategy. BMC
 cannot be applied to an untransformed record because loop unrolling is a VCR
-transformation that occurs before canonical obligation construction. Lean
-scratch replay of bounded records is rejected until the generated theorem
-format carries the same transform provenance.
+transformation that occurs before canonical obligation construction.
 Failure-only ``cppverify::recommends`` checks are not archived, so bytes do not depend on
 whether a prior solver run succeeded or failed.
 The dependency-scoped proof cache is shared by direct verification and replay,
 so identical canonical goals reuse proofs without trusting source paths or
 diagnostic identities.
+
+Archives in a Lean project
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``--lean-project`` with ``--obligation-in`` writes the archive's modules to a
+Lean project as a source run writes its functions: each goal has the name,
+module, and proof file the same obligation has from source, since both name
+it by its statement, and the specs are the same Lean definitions. A proof
+written for the source certifies the archive's goal. For the specs of
+`Spec functions in Lean`_,
+
+.. code-block:: bash
+
+   cpp-verify --lower-only --obligation-out=goals.cpv file.cpp
+   cpp-verify --obligation-in=goals.cpv --lean-project=replay
+
+prints
+
+.. code-block:: text
+
+   Exported: lean obligation: tri.decreases (cppverify_auto proved 1 of 1 goals) [backend=lean] [semantic-hash=sha256:...]
+   Exported: lean obligation: tri_nonneg (cppverify_auto proved 1 of 2 goals) [backend=lean] [semantic-hash=sha256:...]
+
+and ``replay`` has the goals, ``Specs.lean``, and proof files of
+``cpp-verify --backend=lean --lean-project=proof file.cpp``. With the proof of
+``tri_nonneg`` by induction in its file, ``--lean-certify`` prints
+
+.. code-block:: text
+
+   Proved obligations: tri.decreases (dependencies not checked in replay) [backend=lean] [semantic-hash=sha256:...]
+   Proved obligations: tri_nonneg (dependencies not checked in replay) [backend=lean] [semantic-hash=sha256:...]
+
+As with a solver, replay checks each module alone, so a module whose goals
+all certify has its obligations proved, never ``Certified``, which would
+also say that what the verdict rests on is established. Automation, moving
+and keeping proofs in ``Stale/``, ``--lean-prune-stale``, and ``--jobs`` work
+as for a source project; ``--lean-fallback`` is for source verification
+only.
+
+A bounded record of BMC exports too, to a project or to the scratch-pad.
+The goals of each bounded module say its bound:
+
+.. code-block:: lean4
+
+   /- function: count_up -/
+   /- required logic: mathematical-integers, bit-vectors, pointers, heap-arrays -/
+   /- bound: 3 loop iterations, by unrolling: these goals speak only of the
+      executions within them, and an unwinding goal says that every loop
+      ends within them -/
+
+Its result is read as BMC reads one: every goal certified, its unwinding
+goals included, proves the obligations, and every goal but some unwinding
+goal certified is ``BoundedSafe``: no execution within the bound fails. Lean
+proves goals and never refutes one, so a Lean ``BoundedSafe`` says that the
+unwinding goals are not certified, not that they fail. For two loops
+archived by ``cpp-verify --backend=bmc --unroll=3``,
+
+.. cppverify-example: flags --backend=bmc --unroll=3
+
+.. code-block:: cpp
+
+   int sum_small(int n)
+     cppverify::pre(0 <= n && n <= 2)
+     cppverify::post(cppverify::result >= 0)
+   {
+     int s = 0;
+     for (int i = 0; i < n; i = i + 1)
+       s = s + i;
+     return s;
+   }
+
+   int count_up(int n)
+     cppverify::pre(0 <= n && n <= 1000)
+     cppverify::post(cppverify::result == n)
+   {
+     int c = 0;
+     while (c < n)
+       c = c + 1;
+     return c;
+   }
+
+``--lean-certify`` prints
+
+.. code-block:: text
+
+   Proved obligations: sum_small (dependencies not checked in replay) [backend=lean, bound=2] [semantic-hash=sha256:...]
+   loops.cpp:16:3: BoundedSafe: count_up (every goal is certified but the unwinding: no execution within 3 loop iterations fails (the proof of fn_5f5a38636f756e745f757069::unwinding@16:3: ...)) [backend=lean, bound=3] [reason=bmc.incomplete-bound] [semantic-hash=sha256:...]
+
+``count_up`` loops up to 1000 times, so its unwinding goal at the bound 3 is
+false, as BMC finds (``BoundedSafe: count_up [backend=bmc, bound=3]``).
 
 Modular function calls
 ----------------------
