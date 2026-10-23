@@ -2578,6 +2578,26 @@ verify::validateObligationModule(const ObligationModule &M) {
                                        ValidationError.c_str());
       collectRequiredFeatures(Definition.get(), RequiredFeatures);
     }
+    // A measure only chooses an induction or Lean's termination argument,
+    // so it adds no feature; it must still be an integer over the
+    // parameters.
+    for (const auto &Measure : Declaration.Decreases) {
+      if (!validateLogicExpr(Measure.get(), ValidationError))
+        return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                       ValidationError.c_str());
+      if (Measure->Sort.Kind != LogicSortKind::MathematicalInteger &&
+          Measure->Sort.Kind != LogicSortKind::BitVector)
+        return llvm::createStringError(
+            llvm::inconvertibleErrorCode(),
+            "logical function termination measure is not an integer");
+      if (!validateLogicCalls(Measure.get(), M.LogicFunctions,
+                              ValidationError) ||
+          !validateVariableScopes(Measure.get(), ValidationError) ||
+          !validateDefinitionVariables(Measure.get(), Parameters, {},
+                                       ValidationError))
+        return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                       ValidationError.c_str());
+    }
   }
   return RequiredFeatures;
 }
