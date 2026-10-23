@@ -501,17 +501,24 @@ public:
       writeU8(collectionTag(Expr->CollectionOp));
     writeString(Expr->SpecCallee);
     writeSource(Expr->Source);
+    // Where an assumption comes from names its hypothesis in a readable
+    // Lean goal, as source points name a diagnostic's place.
+    if (IncludeSource && Expr->K == LogicExpr::Or)
+      writeString(Expr->Premise);
     writeU64(Expr->Children.size());
     for (const auto &Child : Expr->Children)
       writeExpr(Child.get());
   }
 
+  // A record keeps what a hash leaves out: the display name, and the
+  // termination measures, which change no meaning (Lean checks termination
+  // itself, and an induction descends by a well-founded relation whatever
+  // the measure).
   void writeFunction(const std::string &MapIdentity,
-                     const LogicFunctionDecl &Function,
-                     bool IncludeDisplayName) {
+                     const LogicFunctionDecl &Function, bool Archived) {
     writeString(MapIdentity);
     writeString(Function.Identity);
-    writeString(IncludeDisplayName ? Function.DisplayName : "");
+    writeString(Archived ? Function.DisplayName : "");
     writeU64(Function.Parameters.size());
     for (const LogicFunctionParameter &Parameter : Function.Parameters) {
       writeString(Parameter.Name);
@@ -523,6 +530,11 @@ public:
     writeU64(Function.DefinitionLevels.size());
     for (const auto &Definition : Function.DefinitionLevels)
       writeExpr(Definition.get());
+    if (!Archived)
+      return;
+    writeU64(Function.Decreases.size());
+    for (const auto &Measure : Function.Decreases)
+      writeExpr(Measure.get());
   }
 
   void writeFunctionSignature(const std::string &MapIdentity,
@@ -536,10 +548,10 @@ public:
   }
 
   void writeFunctions(const std::map<std::string, LogicFunctionDecl> &Functions,
-                      bool IncludeDisplayNames) {
+                      bool Archived) {
     writeU64(Functions.size());
     for (const auto &[Identity, Function] : Functions)
-      writeFunction(Identity, Function, IncludeDisplayNames);
+      writeFunction(Identity, Function, Archived);
   }
 
   void writeModule(const ObligationModule &Module,
@@ -804,6 +816,8 @@ class ArchiveReader {
     }
     Expr->SpecCallee = readString();
     Expr->Source = readSource(IncludeSource);
+    if (Version >= 3 && IncludeSource && Expr->K == LogicExpr::Or)
+      Expr->Premise = readString();
 
     uint64_t Children = readCount();
     if (!Failure.empty())
@@ -839,6 +853,12 @@ class ArchiveReader {
     Function.DefinitionLevels.reserve(Levels);
     for (uint64_t I = 0; I != Levels && Failure.empty(); ++I)
       Function.DefinitionLevels.push_back(readExpr());
+    if (Version >= 3) {
+      uint64_t Measures = readCount();
+      Function.Decreases.reserve(Measures);
+      for (uint64_t I = 0; I != Measures && Failure.empty(); ++I)
+        Function.Decreases.push_back(readExpr());
+    }
     return Function;
   }
 
