@@ -582,7 +582,11 @@ user's source. For each goal:
 
 - the kernel replays every declaration of every module of the project the
   proof imports, as ``leanchecker`` does, so nothing escaped the kernel; only
-  the pinned toolchain's own modules are trusted;
+  the pinned toolchain's own modules are trusted, and they are imported once
+  for all the goals, however many of their proofs import ``Lean``;
+- no module may declare a name that an earlier one declares otherwise, and
+  ``CppVerify.Generated`` comes first, so a proof file that defines a goal
+  of its own under the goal's name is rejected;
 - the proof ``G_proof`` must be a theorem whose type is exactly the goal
   ``G`` that ``CppVerify.Generated`` defines;
 - the axioms it depends on, collected from the constants it uses, must be
@@ -629,8 +633,11 @@ for the rest, gives:
 A theorem of the goal added by a command with ``debug.skipKernelTC``, which
 skips the kernel, is rejected at its replay (``the kernel rejects
 CppVerify.Lemmas: while replaying declaration 'cheat': (kernel) declaration
-type mismatch``), and a user axiom behind a lemma by its name (``depends on
-the axiom escape, which is not one of Lean's foundations``).
+type mismatch``), a proof file that defines a goal of its own under the
+goal's name at its replay too (``...cppverify_one_99bcee_postcondition_646d2761 declares
+cppverify_one_99bcee_postcondition_646d2761, which CppVerify.Generated
+declares``), and a user axiom behind a lemma by its name (``depends on the
+axiom escape, which is not one of Lean's foundations``).
 
 Portable obligation archives
 ----------------------------
