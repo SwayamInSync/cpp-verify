@@ -1676,6 +1676,40 @@ uses when the source around it changes.
   write: a fallback run rewrites `Specs` with the specs of the modules it
   exports, and a module it kept from an earlier run failed (`Unknown
   identifier cppSpec_...`).
+- **Spec definitions** (`leanSpecDefinition`, `leanSpecsText`,
+  `tryLeanSpecs`). The adapter gives each logical function of a project its
+  opaque declaration and, unless it is a choice, has no step definition, or
+  recurses without `Decreases` (an archive's), a candidate definition: the
+  step definition printed with the recursion's applications by name and no
+  temporaries (a hoisted application would lose its guard), in definition
+  mode (`LeanDefinitionMode`), where each `ite` is `if _h : c`, a
+  conjunction or disjunction whose later operand applies a spec is a
+  dependent `if` (`a ∧ b` -> `if _h : a then b else False`, `a ∨ b` -> `if
+  _h : a then True else b`, `¬a ∨ b` -> `if _h : a then b else True`), and
+  a bounded existential over one guards its body by its range, each a
+  classical equivalence; then `termination_by ((m1 + 1).toNat, ...)` and
+  `decreasing_by all_goals cppverify_decreasing` (a prelude macro: `simp_wf;
+  omega`, then with the collection and comparison wrappers unfolded, then
+  with `cppIntDiv` and `cppIntRem` unfolded and their conditions split, so
+  that a measure falling by a constant divisor is linear (`log2(n / 2)`),
+  then `simp_all; omega`, then `decreasing_tactic`). `(m + 1).toNat` decreases
+  exactly where the termination check's relation does (`upper >= 0 &&
+  lower < upper`, lower possibly -1); Vermilion instead guards the whole
+  body by `0 ≤ measure`, which changes the value where the measure is
+  negative and the body does not recurse. The driver groups the functions
+  by the strongly connected components of their applications (Tarjan,
+  callees first), each group one `mutual` block, and decides each from
+  `.cppverify/specs/<key>`, the key the SHA-256 of the toolchain,
+  `LeanSpecRevision`, the group's text, and what each callee group is. The
+  rest it tries in one Lean file importing `Auto`, the others as decided,
+  undecided callees as definitions, `#cppverify_axioms` after each member:
+  a definition Lean rejects is added with `sorryAx`, or not at all. A
+  group's verdict is kept only when each callee tried in the same round was
+  accepted; else it is tried again with the rejected callee opaque, until
+  nothing changes. No Lean: undecided groups are opaque and nothing is kept.
+  `Specs.lean` has the groups in that order, and its definitions use the
+  classical decidability instance locally. Statements do not change: a goal
+  states the same definition instances, which a definition makes theorems.
 - **Records.** The exporter returns a `LeanProjectGoal` for every
   obligation of each module it exports, those a fallback selection leaves to
   the solver marked `Exported = false`, with the 0.1 names of the goal and
@@ -1761,7 +1795,28 @@ uses when the source around it changes.
   proves them. Over the same exports (375 sources, 9259 goals), of the 5582
   that Z3 proves revision 1 proves 5044 (90.4%) and revision 2 5210
   (93.3%), none fewer; of the 112 over collections, 86 and 104. A goal
-  neither proves now takes 2.8 s on average instead of 1.4 s.
+  neither proves now takes 2.8 s on average instead of 1.4 s. Revision 3
+  appends `_eval`, which rewrites with the equations of every spec that
+  `CppVerify.Specs` defines (`cppverify_eval_specs`, from that module's
+  constant names), and with `cppIntDiv` and `cppIntRem`, and closes goals
+  at known arguments; on unknown ones it unfolds until its budget is spent.
+  It then appends `_div`, `grind` given the definitions of `cppIntDiv` and
+  `cppIntRem`, which decides a mathematical division or remainder by a
+  constant once their conditions are split; `_eval` fails without a spec
+  definition, and a contract such as `a / 2 >= 2` needs no spec.
+  Over the same exports, of the 5582 goals Z3 proves revision 2 proves
+  5210 (93.3%) and revision 3 5301 (95.0%), none fewer, and of all 9259
+  goals 8078 and 8194; in the five sources with the most new proofs, 48 of
+  their 61 are `_div`'s (pointer differences divide by the element size,
+  and binary search halves an interval) and 13 `_eval`'s (the factorial
+  constants of `mvp_factorial.cpp`). A goal neither proves takes 4.4 s on
+  average instead of 3.1 s. The trial makes 213 of the suite's 293 spec
+  functions definitions; of the 80 opaque, 69 have no definition to try
+  (20 choices, 47 heights and witnesses of inductive predicates, 2
+  `unspecified` functions), and 11 do not terminate, or terminate only by
+  their own postcondition or a choice's axiom. Its first ladder missed
+  three that terminate by C++ division (`log2(n / 2)`), since `omega` does
+  not see through `cppIntDiv`.
   Heartbeats alone did not bound the time, since a kernel check is not
   counted. The trial takes every exported goal whose proof file
   is pristine and whose header (`automation:`) names no attempt by the
