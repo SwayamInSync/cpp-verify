@@ -1752,6 +1752,13 @@ signedness and the originating C++ width needed by explicit
 machine/mathematical conversions; backend adapters derive all representation
 choices from those sorts.
 
+Terms share their subterms, and no code changes a subterm: an obligation's
+goal states every assumption before it, its query negates the goal, and the
+complete goal conjoins the goals, none of them by copying. A module's memory
+therefore grows with what its terms say rather than with how often its
+obligations repeat it; with copies, verifying the ULEB128 case study took
+14.9 GB, and now takes 0.9 GB.
+
 Module construction is fail-closed. Null, unsupported, malformed, or untyped
 terms return an error before backend dispatch. Every free symbol, including
 diagnostic model and trace expressions, has one module-wide logic sort.
