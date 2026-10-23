@@ -106,8 +106,8 @@ a false postcondition, and so did a theorem of the goal added by a command
 with ``debug.skipKernelTC`` and checked by no kernel, in the proof file or in a
 module it imports. Certification now checks the compiled modules with a
 program that elaborates none of the user's source: the kernel replays every
-module of the project a proof imports, the proof's type must be exactly its
-goal, and its axioms are collected from the constants it uses. A failing
+module of the project a proof imports, into one environment with the
+toolchain's modules imported once, the proof's type must be exactly its goal, and its axioms are collected from the constants it uses. A failing
 proof also no longer fails every function of the project: each function is
 certified on its own goals (:doc:`book/part-ii/ch17-backends-modular-calls`).
 
