@@ -429,6 +429,21 @@ proves goals such as ``a / 2 >= 2`` for ``a >= 4``. Lean's verdict on each
 spec is kept in the project, so a later export tries nothing
 (:doc:`book/part-ii/ch17-backends-modular-calls`).
 
+**Lean projects from archives.** An obligation archive could reach Lean only
+as the unchecked scratch-pad, and a bounded archive of BMC not at all.
+``--obligation-in`` with ``--lean-project`` now writes a Lean project as a
+source run of the same program does, with the same goals, specs, and proof
+files, so a proof written for the source certifies the archive's goal;
+``--lean-certify`` reports each module whose goals all certify as ``Proved
+obligations`` ``[backend=lean]``, since replay checks a module alone. A
+bounded module states its bound with its goals, in a project and in the
+scratch-pad, and its result is read as BMC reads one: it is ``BoundedSafe``
+when every goal but some unwinding goal certifies. Archives record each spec
+function's termination measures and the source of each assumption of a goal,
+which a project needs to define the spec and to name the goal's hypotheses;
+a module keeps the specs its specs' measures apply
+(:doc:`book/part-ii/ch17-backends-modular-calls`).
+
 **Lean 4.35.0.** Lean projects pin ``leanprover/lean4:v4.35.0``. A project 0.1
 generated, pinned to ``v4.32.2``, moves to the new pin the next time cpp-verify
 writes it, with a warning; a proof that no longer builds needs updating for that
@@ -443,8 +458,11 @@ refuses a ``lake`` outside elan that reports another Lean
 Data formats
 ~~~~~~~~~~~~
 
-Archives stay ``cppverify.obligation/2`` and JSON diagnostics
-``cppverify.diagnostic/1``. JSON records may carry the status
+Archives are ``cppverify.obligation/3``, which adds measures and the
+sources of assumptions and reads ``/2`` and ``/1``; JSON diagnostics stay
+``cppverify.diagnostic/1``. A module whose specs' measures apply other specs
+keeps them, so its module hash changes; per-obligation hashes, and the proof
+cache keyed by them, do not. JSON records may carry the status
 ``proved-obligations`` (archive replay) and the reason ``interrupted``
 (Ctrl-C). Lean projects pin ``leanprover/lean4:v4.35.0``, and each proof
 file records the hash of its goal's statement (``cppverify-obligation-statement``
