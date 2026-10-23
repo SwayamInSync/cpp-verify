@@ -401,32 +401,11 @@ static bool containsHeapSelect(const VCExpr *E) {
   return false;
 }
 
-static std::unique_ptr<VCExpr> cloneVCExpr(const VCExpr *E) {
-  if (!E)
-    return nullptr;
-  auto Copy = std::make_unique<VCExpr>(E->K);
-  Copy->Sort = E->Sort;
-  Copy->Loc = E->Loc;
-  Copy->EndLoc = E->EndLoc;
-  Copy->Source = E->Source;
-  Copy->IntVal = E->IntVal;
-  Copy->BoolVal = E->BoolVal;
-  Copy->Name = E->Name;
-  Copy->Binder = E->Binder;
-  Copy->OverflowOp = E->OverflowOp;
-  Copy->CollectionOp = E->CollectionOp;
-  Copy->SpecCallee = E->SpecCallee;
-  Copy->Premise = E->Premise;
-  for (const auto &Child : E->Children)
-    Copy->Children.push_back(cloneVCExpr(Child.get()));
-  for (const auto &Pattern : E->Patterns)
-    Copy->Patterns.push_back(cloneVCExpr(Pattern.get()));
-  return Copy;
-}
-
 static bool equalLogicExpr(const LogicExpr *Left, const LogicExpr *Right) {
+  if (Left == Right)
+    return true;
   if (!Left || !Right)
-    return Left == Right;
+    return false;
   if (Left->K != Right->K || Left->Sort.Kind != Right->Sort.Kind ||
       Left->Sort.BitWidth != Right->Sort.BitWidth ||
       Left->Sort.Signedness != Right->Sort.Signedness ||
@@ -447,10 +426,10 @@ static std::unique_ptr<VCExpr>
 buildCompleteGoal(const std::vector<Obligation> &Obligations) {
   if (Obligations.empty())
     return vcTrue();
-  auto Complete = cloneVCExpr(Obligations.front().Goal.get());
+  auto Complete = cloneLogicExpr(Obligations.front().Goal.get());
   for (unsigned I = 1; I != Obligations.size(); ++I)
     Complete =
-        vcAnd(std::move(Complete), cloneVCExpr(Obligations[I].Goal.get()));
+        vcAnd(std::move(Complete), cloneLogicExpr(Obligations[I].Goal.get()));
   return Complete;
 }
 
@@ -1235,7 +1214,7 @@ class ObligationBuilder {
     if (isActiveBoundVariable(Expr) || Expr->K == VCExpr::Collection)
       return true;
     return std::any_of(Expr->Children.begin(), Expr->Children.end(),
-                       [&](const std::unique_ptr<VCExpr> &Child) {
+                       [&](const LogicExprRef &Child) {
                          return liftsComparison(Child.get());
                        });
   }
@@ -1269,7 +1248,7 @@ class ObligationBuilder {
       return E;
     if (E->K == VCExpr::BvToInt && E->Children.size() == 1 && E->Children[0] &&
         E->Children[0]->Sort.Kind == LogicSortKind::BitVector)
-      E = std::move(E->Children[0]);
+      E = cloneLogicExpr(E->Children[0].get());
     if (E->Sort.Kind == LogicSortKind::BitVector) {
       if (E->Sort.BitWidth == TargetSort.BitWidth &&
           E->Sort.Signedness == TargetSort.Signedness)
@@ -1307,21 +1286,26 @@ class ObligationBuilder {
     case VCExpr::Mul:
       if (!Mathematical)
         break;
-      E->Children[0] = mathToMachine(std::move(E->Children[0]), TargetSort);
-      E->Children[1] = mathToMachine(std::move(E->Children[1]), TargetSort);
+      E->Children[0] =
+          mathToMachine(cloneLogicExpr(E->Children[0].get()), TargetSort);
+      E->Children[1] =
+          mathToMachine(cloneLogicExpr(E->Children[1].get()), TargetSort);
       E->Sort = TargetSort;
       return E;
     case VCExpr::Neg:
       if (!Mathematical)
         break;
-      E->Children[0] = mathToMachine(std::move(E->Children[0]), TargetSort);
+      E->Children[0] =
+          mathToMachine(cloneLogicExpr(E->Children[0].get()), TargetSort);
       E->Sort = TargetSort;
       return E;
     case VCExpr::Ite:
       if (!Mathematical)
         break;
-      E->Children[1] = mathToMachine(std::move(E->Children[1]), TargetSort);
-      E->Children[2] = mathToMachine(std::move(E->Children[2]), TargetSort);
+      E->Children[1] =
+          mathToMachine(cloneLogicExpr(E->Children[1].get()), TargetSort);
+      E->Children[2] =
+          mathToMachine(cloneLogicExpr(E->Children[2].get()), TargetSort);
       E->Sort = TargetSort;
       return E;
     default:
@@ -1339,7 +1323,7 @@ class ObligationBuilder {
       return E;
     if (Target == VIntMode::Math && E->K == VCExpr::IntToBv &&
         E->Children.size() == 1 && isActiveBoundVariable(E->Children[0].get()))
-      return std::move(E->Children[0]);
+      return cloneLogicExpr(E->Children[0].get());
     if (Target == VIntMode::Machine) {
       const LogicSort TargetSort =
           LogicSort::bitVector(E->Sort.BitWidth ? E->Sort.BitWidth : 32,
@@ -1373,9 +1357,9 @@ class ObligationBuilder {
                          std::unique_ptr<VCExpr> Math) {
     const unsigned BitWidth = Machine->Sort.BitWidth;
     const bool IsSigned = Machine->Sort.Signedness == LogicSignedness::Signed;
-    auto InRange = vcAnd(vcBinary(VCExpr::Ge, cloneVCExpr(Math.get()),
+    auto InRange = vcAnd(vcBinary(VCExpr::Ge, cloneLogicExpr(Math.get()),
                                   mathLimit(BitWidth, IsSigned, true)),
-                         vcBinary(VCExpr::Le, cloneVCExpr(Math.get()),
+                         vcBinary(VCExpr::Le, cloneLogicExpr(Math.get()),
                                   mathLimit(BitWidth, IsSigned, false)));
 
     const LogicSort MachineSort = Machine->Sort;
@@ -1397,13 +1381,13 @@ class ObligationBuilder {
     const unsigned BitWidth = Machine->Sort.BitWidth;
     const bool IsSigned = Machine->Sort.Signedness == LogicSignedness::Signed;
     const bool BelowMax = Kind == VCExpr::Lt || Kind == VCExpr::Le;
-    auto Outside = BelowMax ? vcBinary(VCExpr::Gt, cloneVCExpr(Math.get()),
+    auto Outside = BelowMax ? vcBinary(VCExpr::Gt, cloneLogicExpr(Math.get()),
                                        mathLimit(BitWidth, IsSigned, false))
-                            : vcBinary(VCExpr::Lt, cloneVCExpr(Math.get()),
+                            : vcBinary(VCExpr::Lt, cloneLogicExpr(Math.get()),
                                        mathLimit(BitWidth, IsSigned, true));
-    auto InRange = vcAnd(vcBinary(VCExpr::Ge, cloneVCExpr(Math.get()),
+    auto InRange = vcAnd(vcBinary(VCExpr::Ge, cloneLogicExpr(Math.get()),
                                   mathLimit(BitWidth, IsSigned, true)),
-                         vcBinary(VCExpr::Le, cloneVCExpr(Math.get()),
+                         vcBinary(VCExpr::Le, cloneLogicExpr(Math.get()),
                                   mathLimit(BitWidth, IsSigned, false)));
     const LogicSort MachineSort = Machine->Sort;
     auto Converted = mathToMachine(std::move(Math), MachineSort);
@@ -1610,7 +1594,7 @@ class ObligationBuilder {
     case VOverflowOp::SDiv:
       break;
     }
-    auto AboveMinimum = vcBinary(VCExpr::Ge, cloneVCExpr(Exact.get()),
+    auto AboveMinimum = vcBinary(VCExpr::Ge, cloneLogicExpr(Exact.get()),
                                  mathLimit(Width, true, true));
     auto BelowMaximum =
         vcBinary(VCExpr::Le, std::move(Exact), mathLimit(Width, true, false));
@@ -1671,7 +1655,7 @@ class ObligationBuilder {
       return;
     for (auto It = OpenQuantifiers.rbegin(); It != OpenQuantifiers.rend(); ++It)
       if (mentionsName(&Term, It->Binder)) {
-        It->Patterns.push_back(cloneVCExpr(&Term));
+        It->Patterns.push_back(cloneLogicExpr(&Term));
         return;
       }
   }
@@ -1713,7 +1697,8 @@ class ObligationBuilder {
       OpenQuantifiers.back().Patterns.clear();
       Body = fromVExpr(Q->Body.get());
     }
-    N->Patterns = std::move(OpenQuantifiers.back().Patterns);
+    for (auto &Pattern : OpenQuantifiers.back().Patterns)
+      N->Patterns.push_back(std::move(Pattern));
     OpenQuantifiers.pop_back();
     N->Children.push_back(std::move(Body));
     if (HadPrevious)
@@ -1915,8 +1900,8 @@ public:
       };
       if (IsInteger(N->Children[1]->Sort) && IsInteger(N->Children[2]->Sort) &&
           N->Children[1]->Sort.Kind != N->Children[2]->Sort.Kind) {
-        auto Unified =
-            unifyIntModes(std::move(N->Children[1]), std::move(N->Children[2]));
+        auto Unified = unifyIntModes(cloneLogicExpr(N->Children[1].get()),
+                                     cloneLogicExpr(N->Children[2].get()));
         N->Children[1] = std::move(Unified.first);
         N->Children[2] = std::move(Unified.second);
       }
@@ -2256,7 +2241,7 @@ public:
     if (!P.ContractConclusions.empty()) {
       auto Contract = std::make_shared<ContractTheorem>();
       for (const auto &Entry : EntryAssumes)
-        Contract->Premises.push_back(cloneVCExpr(Entry.get()));
+        Contract->Premises.push_back(cloneLogicExpr(Entry.get()));
       for (const auto &Conclusion : P.ContractConclusions)
         Contract->Conclusions.push_back(fromVExpr(Conclusion.get()));
       std::set<std::string> Bound;
@@ -2281,13 +2266,13 @@ public:
                                                           ? P.EntryOrigins[I]
                                                           : "entry");
     for (size_t I = 0; I < P.PreconditionCount && I < EntryAssumes.size(); ++I)
-      M.Preconditions.push_back(cloneVCExpr(EntryAssumes[I].get()));
+      M.Preconditions.push_back(cloneLogicExpr(EntryAssumes[I].get()));
 
     auto makeGoal = [&](const VCExpr *Condition) -> std::unique_ptr<VCExpr> {
-      std::unique_ptr<VCExpr> ConditionWP = cloneVCExpr(Condition);
+      std::unique_ptr<VCExpr> ConditionWP = cloneLogicExpr(Condition);
       for (auto It = Assumptions.rbegin(); It != Assumptions.rend(); ++It) {
         ConditionWP =
-            vcOr(vcNot(cloneVCExpr(It->first)), std::move(ConditionWP));
+            vcOr(vcNot(cloneLogicExpr(It->first)), std::move(ConditionWP));
         if (ConditionWP->K == VCExpr::Or)
           ConditionWP->Premise = It->second.empty() ? "fact" : It->second;
       }
@@ -2312,7 +2297,7 @@ public:
       Item.TraceEventCount = TraceEventCount;
       Item.Id = Identity + "::obligation:" + std::to_string(++ObligationIndex);
       Item.Goal = makeGoal(Condition);
-      Item.CounterexampleQuery = vcNot(cloneVCExpr(Item.Goal.get()));
+      Item.CounterexampleQuery = vcNot(cloneLogicExpr(Item.Goal.get()));
       Item.CounterexampleQuery->Loc = Condition->Loc;
       Item.CounterexampleQuery->EndLoc = Condition->EndLoc;
       M.Obligations.push_back(std::move(Item));
@@ -2322,7 +2307,7 @@ public:
       if (Stmt.Kind == PassiveStmt::Assume) {
         Assumptions.emplace_back(Stmt.Cond.get(), Stmt.Origin);
         if (Stmt.Theorem)
-          M.Theorems.push_back(cloneVCExpr(Stmt.Cond.get()));
+          M.Theorems.push_back(cloneLogicExpr(Stmt.Cond.get()));
         continue;
       }
       appendObligation(Stmt.ProofKind, Stmt.Cond.get(), Stmt.TraceEventCount,
@@ -2332,7 +2317,7 @@ public:
       appendObligation(Kind, Exit.get(), M.TraceEvents.size(), Note);
 
     M.CorrectnessGoal = buildCompleteGoal(M.Obligations);
-    M.CounterexampleQuery = vcNot(cloneVCExpr(M.CorrectnessGoal.get()));
+    M.CounterexampleQuery = vcNot(cloneLogicExpr(M.CorrectnessGoal.get()));
 
     SpecAxiomContext AxiomContext{P.SpecFunctions, P.SpecFuel, P.HiddenSpecs,
                                   P.RevealedSpecs};
