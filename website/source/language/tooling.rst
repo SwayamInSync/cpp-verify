@@ -287,7 +287,9 @@ Backends
    * - ``--lean-project=DIR``
      - With ``--backend=lean``, which it selects, generate a pinned editable project. Generated
        semantics live in a module per function, ``CppVerify/Goals/<function>.lean``,
-       with each spec they apply declared once in ``CppVerify/Specs.lean``; a
+       with each spec they apply declared once in ``CppVerify/Specs.lean``: by
+       its definition when the pinned Lean proves that it terminates, the
+       verdict kept in ``.cppverify/specs``, and opaque otherwise; a
        proof imports its function's module, so certification compiles again
        only the proofs of a function whose goals changed, and a generated
        file is written only when its text changes. Reusable lemmas and
@@ -365,7 +367,7 @@ Backends
      - Milliseconds of wall-clock time ``cppverify_auto`` may spend on one
        new goal, its kernel check included (default 20000; ``0`` disables). A
        goal that takes longer gets a stub, as in ``automation:
-       cppverify_auto 2 did not prove it within 20 s``. Requires
+       cppverify_auto 3 did not prove it within 20 s``. Requires
        ``--lean-project`` or ``--lean-fallback``.
    * - ``--unroll=N``
      - Maximum BMC loop bound, which selects ``--backend=bmc``. Source verification
