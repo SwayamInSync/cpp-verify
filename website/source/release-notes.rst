@@ -314,6 +314,16 @@ documents the latest release, ``/X.Y/`` each release series (``/0.1/`` is
 page names its version, and each release's archive and notes link to its own
 series.
 
+**Results that depended on load.** The complete query of a function without
+spec functions had 500 ms before its obligations were solved one by one. On a
+loaded machine, or in a slower build, it could give up on a counterexample
+that an idle machine found in that time, and an obligation whose search does
+not end then ran to the timeout: a false claim took minutes and ended
+``Unresolved`` with ``solver.timeout``. That query now gets a fixed amount of
+solver work (6 million Z3 resource units), with the timeout only as a bound
+in time, so it stops where it would on an idle machine
+(:doc:`language/tooling`).
+
 **cvc5 1.4.** Every query over sets, multisets, and maps failed with cvc5 1.4,
 which requires extended arrays for constant arrays; such a query now enables
 them itself (:doc:`language/tooling`).
