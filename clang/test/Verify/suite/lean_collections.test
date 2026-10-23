@@ -1,0 +1,76 @@
+# REQUIRES: lean
+#
+# The spec collections in Lean: a sequence is a List Int, a set its
+# membership test, a multiset its counts, and a map the value at each key it
+# holds, with each operation of <cppverify.h> defined in the prelude, total
+# as it is there, and lemmas for each.
+#
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p %S/Inputs/lean_collections.cpp -- 2>&1 | FileCheck %s --check-prefix=EXPORT
+# RUN: FileCheck %s --input-file=%t/p/CppVerify/Specs.lean --check-prefix=SPECS
+# RUN: FileCheck %s --input-file=%t/p/CppVerify/Prelude.lean --check-prefix=PRELUDE
+# RUN: cat %t/p/CppVerify/Goals/cppverify_sets_d46b53.lean %t/p/CppVerify/Goals/cppverify_multisets_68c3c1.lean %t/p/CppVerify/Goals/cppverify_maps_289bf4.lean %t/p/CppVerify/Goals/cppverify_sequences_b14fed.lean | FileCheck %s --check-prefix=GOALS
+#
+# Each step that revision 2 of cppverify_auto adds proves a goal here first:
+# machine equalities as integers (x != y), a collection equality element by
+# element, and a definition instance by the body it names.
+# RUN: grep -h 'automation:' %t/p/CppVerify/Proofs/cppverify_sets_d46b53/cppverify_sets_d46b53_assertion_a932edd2.lean %t/p/CppVerify/Proofs/cppverify_multisets_68c3c1/cppverify_multisets_68c3c1_assertion_962b234c.lean %t/p/CppVerify/Proofs/cppverify_total_push_cdfd2d/cppverify_total_push_cdfd2d_postcondition_3a9fac6f.lean | FileCheck %s --check-prefix=STEPS
+#
+# cppverify_auto proves the goals over each kind, those that unfold a spec
+# too. A proof by hand may use the lemmas, as this one of total_push does in
+# place of the automatic one; the false claim stays unproved.
+# RUN: cp %S/Inputs/lean_collections_total_push.lean %t/p/CppVerify/Proofs/cppverify_total_push_cdfd2d/cppverify_total_push_cdfd2d_postcondition_3a9fac6f.lean
+# RUN: not %cpp-verify --backend=lean --lean-project=%t/p --lean-certify %S/Inputs/lean_collections.cpp -- 2>&1 | FileCheck %s --check-prefix=CERTIFY
+#
+# The scratch-pad states the same goals.
+# RUN: %cpp-verify --backend=lean --lean-out=%t/scratch.lean %S/Inputs/lean_collections.cpp -- 2>&1 | FileCheck %s --check-prefix=SCRATCH
+# RUN: FileCheck %s --input-file=%t/scratch.lean --check-prefix=SCRATCH-TEXT
+
+# EXPORT: Exported: decreases: total (cppverify_auto proved 1 of 1 goals)
+# EXPORT-NEXT: Exported: lean obligation: sequences (cppverify_auto proved 5 of 5 goals)
+# EXPORT-NEXT: Exported: lean obligation: sets (cppverify_auto proved 3 of 3 goals)
+# EXPORT-NEXT: Exported: lean obligation: multisets (cppverify_auto proved 3 of 3 goals)
+# EXPORT-NEXT: Exported: lean obligation: maps (cppverify_auto proved 3 of 3 goals)
+# EXPORT-NEXT: Exported: lean obligation: total_push (cppverify_auto proved 2 of 2 goals)
+# EXPORT-NEXT: Exported: lean obligation: wrong (cppverify_auto proved 1 of 2 goals)
+# EXPORT-NEXT: Exported: decreases: members (cppverify_auto proved 1 of 1 goals)
+# EXPORT-NEXT: Exported: lean obligation: no_members (cppverify_auto proved 2 of 2 goals)
+
+# STEPS: automation: cppverify_auto 2 proves it with cppverify_auto_bveq
+# STEPS-NEXT: automation: cppverify_auto 2 proves it with cppverify_auto_ext
+# STEPS-NEXT: automation: cppverify_auto 2 proves it with cppverify_auto_unfold
+
+# SPECS: /- spec function: total -/
+# SPECS-NEXT: {{^}}opaque cppSpec_fn_5f5a35746f74616c4e396370707665726966793373657145 : List Int -> Int{{$}}
+# SPECS: /- spec function: members -/
+# SPECS-NEXT: {{^}}opaque cppSpec_fn_5f5a376d656d626572734e39637070766572696679337365744569 : (Int → Bool) -> Int -> Int{{$}}
+
+# PRELUDE: {{^}}def cppSeqAt (s : List Int) (i : Int) : Int :={{$}}
+# PRELUDE-NEXT: {{^}}  if i < 0 then 0 else s[i.toNat]?.getD 0{{$}}
+# PRELUDE: {{^}}def cppSetContains (s : Int → Bool) (x : Int) : Prop := s x = true{{$}}
+# PRELUDE: {{^}}def cppMultisetRemove (m : Int → Nat) (x : Int) : Int → Nat :={{$}}
+# PRELUDE: {{^}}def cppMapGet (m : Int → Option Int) (k : Int) : Int := (m k).getD 0{{$}}
+# PRELUDE: {{^}}theorem cppSeq_ext (s t : List Int)
+
+# GOALS: (a_0 : (Int → Bool))
+# GOALS: (cppSetSubset a_0 (cppSetUnion a_0 (cppSetInsert cppSetEmpty ((BitVec.signExtend 64 y_0)).toInt)))
+# GOALS: (m_0 : (Int → Nat))
+# GOALS: (cppMultisetRemove (cppMultisetInsert m_0 ((BitVec.signExtend 64 x_0)).toInt) ((BitVec.signExtend 64 x_0)).toInt) = m_0
+# GOALS: (m_0 : (Int → Option Int))
+# GOALS: (cppMapGet (cppMapInsert m_0
+# GOALS: (s_0 : List Int)
+# GOALS: (cppSeqContains (cppSeqConcat s_0 (cppSeqUnit ((BitVec.signExtend 64 x_0)).toInt)) ((BitVec.signExtend 64 x_0)).toInt)
+
+# CERTIFY: Certified: decreases: total [backend=Lean]
+# CERTIFY-NEXT: Certified: sequences [backend=Lean]
+# CERTIFY-NEXT: Certified: sets [backend=Lean]
+# CERTIFY-NEXT: Certified: multisets [backend=Lean]
+# CERTIFY-NEXT: Certified: maps [backend=Lean]
+# CERTIFY-NEXT: Certified: total_push [backend=Lean]
+# CERTIFY-NEXT: Unresolved: lean obligation: wrong (Lean certification failed: the proof of {{.*}}::assertion@48:3: {{.*}}declaration uses `sorry`
+# CERTIFY-NEXT: Certified: decreases: members [backend=Lean]
+# CERTIFY-NEXT: Certified: no_members [backend=Lean]
+
+# SCRATCH: Exported: lean obligation: sets
+# SCRATCH-TEXT: {{^}}def cppSetInsert (s : Int → Bool) (x : Int) : Int → Bool :={{$}}
+# SCRATCH-TEXT: (cppSetContains (cppSetRemove (cppSetInsert a_0
