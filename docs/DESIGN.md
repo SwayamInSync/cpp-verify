@@ -1595,9 +1595,14 @@ cppverify::proof void sum_concat(seq s, seq t)
   values: `[1, 2]`, `{1, 3..5}` (a run), `{2: 3}` (counts), `{1 -> 7}`, and
   `{..}` (every integer).
 - Backends: Z3 and cvc5 decide all four (cvc5 settles fewer goals that
-  need an infinite set or ghost collections in loops). Lean does not
-  support them yet (`logic.unsupported`); that is planned for a future
-  release.
+  need an infinite set or ghost collections in loops). Lean states them with
+  core types: a sequence is a `List Int`, a set its membership test
+  `Int → Bool` (a set may be infinite, so not a finite set), a multiset its
+  counts `Int → Nat`, and a map `Int → Option Int`. Each operation is a
+  function of the generated prelude with the total meaning above, and
+  lemmas state what each means for `simp` and `grind`, as Vermilion's
+  mirror of vstd states each operation for its ladder; Lean's evaluation of
+  every operation agrees with the certifier's.
 
 ## Clang Modification Details
 
@@ -1951,7 +1956,9 @@ tactic of the generated `CppVerify/Auto.lean`, with the pinned toolchain when
 it is installed, as Vermilion, Why3, and Frama-C's WP run their automation
 before a goal reaches the user: a ladder of steps (`grind`; memory stores as
 the functions they define and machine arithmetic as integers, then `grind`;
-`decide`; `simp_all`), each with a heartbeat budget of its own and a
+`decide`; `simp_all`; machine equalities and sign extensions as integers;
+collection equality element by element; the definition instances a goal
+states, by the bodies they name), each with a heartbeat budget of its own and a
 wall-clock limit per goal (`--lean-auto-timeout`), since heartbeats do not
 bound a kernel check. A step counts only when it closes the goal with a proof
 whose axioms are Lean's foundations, so the user's unfinished lemma never
