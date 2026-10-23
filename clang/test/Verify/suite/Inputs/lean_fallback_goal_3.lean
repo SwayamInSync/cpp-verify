@@ -1,3 +1,4 @@
+import CppVerify.Goals.cppverify_fibo_six_ec829a
 import CppVerify.User
 
 theorem cppverify_fibo_six_ec829a_missing_return_ba8abb90_proof :
