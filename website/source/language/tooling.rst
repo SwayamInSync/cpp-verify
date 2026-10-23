@@ -539,7 +539,12 @@ contracts, spec termination, trust) run after every function. Each worker
 owns a fresh Z3 context/solver or a separate cvc5 process; no solver state is
 shared between workers. The first failing source obligation is therefore
 identical for ``--jobs=1`` and ``--jobs=N`` even if worker completion order
-differs. Lean generation and certification stay serial. The compile-time
+differs. The complete query of a function without spec functions first gets
+a fixed amount of solver work (Z3 resource units), with the query timeout
+only as a bound in time, so on a loaded machine it stops where it stops on
+an idle one, unless the timeout passes first; once it has found a
+counterexample, the obligations that choose the failure to report get the
+same work each. Lean generation and certification stay serial. The compile-time
 verifier (``clang++ -fverify-contracts``) always uses one job and the default
 limits; use ``cpp-verify`` for ``--jobs`` and the other options.
 
@@ -588,6 +593,11 @@ what the obligation checks:
   ``cppverify::modifies``), and ``missing-return``;
 - ``unwinding`` for a BMC bound, and ``unsupported`` for a construct the
   verifier rejects fail-closed.
+
+The check that a function's contract is defined (see :doc:`functions-loops`)
+is reported only when it fails, as ``contract of f``. Its obligations are
+named ``function-identity::contract::kind@line:column`` with the definedness
+kinds above, and JSON records give ``f`` as the function.
 
 The local suffix only disambiguates obligations of one kind at the same anchor,
 so inserting or reordering an unrelated obligation does not renumber later IDs

@@ -46,6 +46,21 @@ names. `cpp-verify --no-check-ub` turns memory checking off; the core checks
 initialization, the lifetimes of bounded `new`/`delete` and automatic
 objects, and lifted-`constexpr` definedness) stay.
 
+### Contracts
+
+A contract of an exec or proof function is evaluated as C++, so it gets the
+same checks, each clause where it is evaluated: preconditions in order, each
+where the ones before it hold, and postconditions in the state the function
+returns in (for a trusted or bodiless function, every state its frame
+allows). `Passivizer::contract` builds this check as a module of its own,
+`contract of f`, reported only when it fails, and a contract that may be
+undefined establishes nothing for callers. The memory checks of a clause, a
+loop invariant, or a `cppverify::check` come from the instrumenter below, run
+on the expression as written before spec inlining and recorded beside it
+(`VMemoryCheck`): a read under `old` is checked in the entry state and a
+quantifier's body at every value of its range. Spec functions stay total and
+are never checked, whether applied or inlined; their division by zero is 0.
+
 ## How the two obligations combine
 
 They interleave in one weakest-precondition pass rather than being generated as

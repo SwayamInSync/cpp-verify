@@ -9,7 +9,7 @@
 // Whatever length the solver first picks, a counterexample with a range small
 // enough to check exists and is the one reported.
 int first_positive(const int *p, int n)
-  cppverify::pre(n >= 1 && p != nullptr)
+  cppverify::pre(n >= 1 && cppverify::valid(p, n))
   cppverify::pre(cppverify::forall(i, 0, n, p[i] >= 0))
   cppverify::post(cppverify::result > 0)
 {
@@ -19,7 +19,7 @@ int first_positive(const int *p, int n)
 // Two million elements, but the body reads the binder only through p[i]: the
 // model sets a few cells and the rest share one value, so it is checked.
 int first_positive_long(const int *p, int n)
-  cppverify::pre(n >= 2000000 && p != nullptr)
+  cppverify::pre(n >= 2000000 && cppverify::valid(p, n))
   cppverify::pre(cppverify::forall(i, 0, n, p[i] >= 0))
   cppverify::post(cppverify::result > 0)
 {
@@ -28,7 +28,7 @@ int first_positive_long(const int *p, int n)
 
 // The instance at i == 0 decides the postcondition without expanding it.
 void writes_first(int *p, int n)
-  cppverify::pre(n >= 2000000 && p != nullptr)
+  cppverify::pre(n >= 2000000 && cppverify::valid(p, n))
   cppverify::pre(p[0] == 0)
   cppverify::modifies(*p)
   cppverify::post(cppverify::forall(i, 0, n, i < 0 || p[i] == cppverify::old(p[i])))
@@ -39,7 +39,7 @@ void writes_first(int *p, int n)
 // The body also compares the index itself. The comparison is affine, so its
 // truth changes only at its root and the range splits into a few intervals.
 int first_positive_indexed(const int *p, int n)
-  cppverify::pre(n >= 2000000 && p != nullptr)
+  cppverify::pre(n >= 2000000 && cppverify::valid(p, n))
   cppverify::pre(cppverify::forall(i, 0, n, i < 0 || p[i] >= 0))
   cppverify::post(cppverify::result > 0)
 {
@@ -49,7 +49,7 @@ int first_positive_indexed(const int *p, int n)
 // Contract arithmetic is exact, so a nonlinear comparison is a polynomial
 // whose sign changes are found exactly.
 int first_positive_squared(const int *p, int n)
-  cppverify::pre(n >= 2000000 && n <= 3000000 && p != nullptr)
+  cppverify::pre(n >= 2000000 && n <= 3000000 && cppverify::valid(p, n))
   cppverify::pre(cppverify::forall(i, 0, n, i * i < 0 || p[i] >= 0))
   cppverify::post(cppverify::result > 0)
 {
@@ -58,7 +58,7 @@ int first_positive_squared(const int *p, int n)
 
 // So is one through a conversion to a machine type the value fits.
 int first_positive_squared_wide(const int *p, int n)
-  cppverify::pre(n >= 2000000 && n <= 3000000 && p != nullptr)
+  cppverify::pre(n >= 2000000 && n <= 3000000 && cppverify::valid(p, n))
   cppverify::pre(cppverify::forall(i, 0, n, (long long)i * i < 0 || p[i] >= 0))
   cppverify::post(cppverify::result > 0)
 {
@@ -68,7 +68,7 @@ int first_positive_squared_wide(const int *p, int n)
 // A bitwise use of the index would need two million instances checked one by
 // one, and no shorter counterexample exists.
 int first_positive_bitwise(const int *p, int n)
-  cppverify::pre(n >= 2000000 && n <= 3000000 && p != nullptr)
+  cppverify::pre(n >= 2000000 && n <= 3000000 && cppverify::valid(p, n))
   cppverify::pre(cppverify::forall(i, 0, n, (i ^ 1431655765) < 0 || p[i] >= 0))
   cppverify::post(cppverify::result > 0)
 {

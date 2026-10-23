@@ -24,6 +24,16 @@ namespace verify {
 /// Insert valid(p, n) bounds obligations into an exec/proof function. No-op
 /// for spec functions (the spec world uses unbounded math integers). Returns an
 /// error when a recognized marker cannot be interpreted soundly.
+///
+/// The contract expressions (written preconditions, postconditions, loop
+/// invariants, cppverify::check conditions) get their memory checks recorded
+/// beside them (VMemoryCheck), as the body's accesses get theirs: each access
+/// in an object it may address and inside a declared extent or a subobject's
+/// bounds, each step in its object's closure. A read under `old` is checked
+/// in the entry state, and a quantifier's body at every value of its range;
+/// each check is guarded by the short-circuit conditions under which its
+/// operand is evaluated. In a pre- or postcondition every parameter is its
+/// value at entry, whatever the body assigns.
 std::optional<std::string> instrumentUBChecks(VFunction &Fn);
 
 /// The object a pointer or reference parameter addresses at entry: its

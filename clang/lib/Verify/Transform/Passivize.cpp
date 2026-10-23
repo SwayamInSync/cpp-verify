@@ -2186,7 +2186,15 @@ collectSafety(const VExpr *E, const FunctionMap *FnMap,
                     " could not be unfolded to check its C++ definedness");
       return;
     }
-    Collect(Expanded.get(), Out);
+    // Reported at the call, which is what the caller wrote: the helper's
+    // operators may lie in another file.
+    SafetyChecks Inside;
+    Collect(Expanded.get(), Inside);
+    for (SafetyCheck &Check : Inside) {
+      Check.Cond->Loc = C->Loc;
+      Check.Cond->EndLoc = C->EndLoc;
+      Out.push_back(std::move(Check));
+    }
     return;
   }
   }
@@ -3251,6 +3259,8 @@ class PassivizerImpl {
   std::map<std::string, int> Versions;
   std::map<std::string, VType> Types;
   std::map<std::string, std::unique_ptr<VExpr>> OldState;
+  /// The value heap at entry.
+  std::string EntryHeapVersion;
   std::vector<ReturnCase> ReturnCases;
   std::vector<FieldReturnCase> FieldReturnCases;
   /// Loops being passivized, innermost last.
@@ -4228,17 +4238,34 @@ class PassivizerImpl {
     return VType::makeInt32(Fn.IntMode);
   }
 
+  /// The memory checks of invariant Inv of W, as memory checking recorded
+  /// them.
+  static const std::vector<VMemoryCheck> *invariantChecks(const VWhileStmt &W,
+                                                          const VExpr *Inv) {
+    for (size_t I = 0;
+         I != W.Invariants.size() && I != W.InvariantChecks.size(); ++I)
+      if (W.Invariants[I].get() == Inv)
+        return &W.InvariantChecks[I];
+    return nullptr;
+  }
+
+  /// A contract expression's memory checks, recorded before spec inlining,
+  /// join its other checks, one obligation per kind.
   void emitExprSafety(PassiveProgram &P, const VExpr *E, const VExpr *Guard,
                       SourceLocation Loc,
                       const std::map<std::string, std::string> &Renames,
                       bool BridgeMachineValue = false,
-                      const VExpr *SafetySource = nullptr) {
+                      const VExpr *SafetySource = nullptr,
+                      const std::vector<VMemoryCheck> *MemoryChecks = nullptr) {
     SafetyChecks Checks;
     collectSafety(
         SafetySource ? SafetySource : E, &FnMap,
         SafetySource ? &Fn.ValidExtents : &ActiveValidExtents,
         SafetySource ? &SourcePointerParameterNames : &PointerParameterNames,
         Checks, Fn.ObjectModel, SafetySource ? &OriginObjects : nullptr);
+    if (MemoryChecks && !Fn.TotalExpressions)
+      for (const VMemoryCheck &Check : *MemoryChecks)
+        Checks.push_back({Check.Kind, cloneVExpr(Check.Cond.get())});
     groupByKind(Checks);
     CloneCtx Ctx{Renames, OldState, false};
     for (const SafetyCheck &Check : Checks)
@@ -4510,12 +4537,12 @@ public:
       : Fn(Fn), FnMap(std::move(FnMap)), UnfoldingDepth(UnfoldingDepth),
         UnfoldingFuel(UnfoldingFuel) {}
 
-  PassiveProgram run() {
-    PassiveProgram P;
-    P.FunctionName = Fn.Name;
-    P.FunctionIdentity = Fn.Identity;
+  /// The entry state: the parameters and heaps at their first versions, and
+  /// the facts that hold there, among them the preconditions (only the
+  /// generated ones unless WrittenPreconditions).
+  std::map<std::string, std::string> enter(PassiveProgram &P,
+                                           bool WrittenPreconditions) {
     AssignedNames = assignedNames(Fn.Body);
-    CloneCtx Ctx{{}, OldState, false};
 
     const char *StateHeaps[] = {VHeapName,
                                 VAllocationHeapName,
@@ -4536,7 +4563,7 @@ public:
       if (Param.second.Kind == VTypeKind::Ptr)
         PointerValueVariables.insert(Param.first);
     }
-    std::string Heap0 = versionedName(VHeapName);
+    EntryHeapVersion = versionedName(VHeapName);
 
     std::map<std::string, std::string> Renames;
     for (const char *Heap : StateHeaps) {
@@ -4585,18 +4612,15 @@ public:
       Renames[FV] = V0;
     }
 
-    for (const auto &Pre : Fn.Preconditions) {
+    for (size_t I = 0; I != Fn.Preconditions.size(); ++I) {
+      if (!WrittenPreconditions && I < Fn.ExplicitPreconditionCount)
+        continue;
       CloneCtx PCtx{Renames, OldState, false};
-      P.EntryOrigins.push_back(
-          P.EntryAssumes.size() < Fn.ExplicitPreconditionCount ? "pre"
-                                                               : "entry");
-      P.EntryAssumes.push_back(cloneExpr(Pre.get(), PCtx));
+      P.EntryOrigins.push_back(I < Fn.ExplicitPreconditionCount ? "pre"
+                                                                : "entry");
+      P.EntryAssumes.push_back(cloneExpr(Fn.Preconditions[I].get(), PCtx));
     }
     P.PreconditionCount = P.EntryAssumes.size();
-    for (const auto &[Name, Assumes] : Fn.Behaviors) {
-      CloneCtx PCtx{Renames, OldState, false};
-      P.BehaviorAssumes.emplace_back(Name, cloneExpr(Assumes.get(), PCtx));
-    }
     {
       auto Null =
           std::make_unique<VLiteralExpr>(0, VType::makePtr(), SourceLocation());
@@ -4619,6 +4643,19 @@ public:
         P.EntryOrigins.push_back("object");
       }
     }
+    return Renames;
+  }
+
+  PassiveProgram run() {
+    PassiveProgram P;
+    P.FunctionName = Fn.Name;
+    P.FunctionIdentity = Fn.Identity;
+    std::map<std::string, std::string> Renames =
+        enter(P, /*WrittenPreconditions=*/true);
+    for (const auto &[Name, Assumes] : Fn.Behaviors) {
+      CloneCtx PCtx{Renames, OldState, false};
+      P.BehaviorAssumes.emplace_back(Name, cloneExpr(Assumes.get(), PCtx));
+    }
 
     std::unique_ptr<VExpr> Active = makeBoolLiteral(true, SourceLocation());
     for (const auto &S : Fn.Body)
@@ -4639,6 +4676,18 @@ public:
       if (OfParameter)
         PostRenames[Name] = static_cast<const VVarExpr &>(*Entry).Name;
     }
+    // Postconditions are evaluated in order: a clause is evaluated where the
+    // clauses before it hold.
+    std::unique_ptr<VExpr> EarlierPosts;
+    auto afterEarlier = [&](std::unique_ptr<VExpr> Cond) {
+      if (!EarlierPosts)
+        return Cond;
+      const SourceLocation Loc = Cond->Loc, End = Cond->EndLoc;
+      auto Guarded = makeOr(makeNot(cloneVExpr(EarlierPosts.get()), Loc),
+                            std::move(Cond), Loc);
+      Guarded->EndLoc = End;
+      return Guarded;
+    };
     for (size_t I = 0; I != Fn.Postconditions.size(); ++I) {
       const VExpr *Post = Fn.Postconditions[I].get();
       CloneCtx PCtx{PostRenames, OldState, false};
@@ -4655,6 +4704,9 @@ public:
       collectSafety(Post, &FnMap, &Fn.ValidExtents,
                     &SourcePointerParameterNames, Checks, Fn.ObjectModel,
                     &OriginObjects);
+      if (!Fn.TotalExpressions && I < Fn.PostconditionChecks.size())
+        for (const VMemoryCheck &Check : Fn.PostconditionChecks[I])
+          Checks.push_back({Check.Kind, cloneVExpr(Check.Cond.get())});
       groupByKind(Checks);
       for (const SafetyCheck &Check : Checks) {
         if (Fn.TotalExpressions && isDefinedness(Check.Kind))
@@ -4664,8 +4716,12 @@ public:
         auto Cond = cloneExpr(Check.Cond.get(), PCtx);
         Cond->Loc = Post->Loc;
         Cond->EndLoc = Post->EndLoc;
-        P.ExitAsserts.push_back({Check.Kind, std::move(Cond)});
+        P.ExitAsserts.push_back({Check.Kind, afterEarlier(std::move(Cond))});
       }
+      auto Clause = cloneVExpr(BoundPost.get());
+      EarlierPosts = EarlierPosts ? makeAnd(std::move(EarlierPosts),
+                                            std::move(Clause), Post->Loc)
+                                  : std::move(Clause);
       for (auto &[Kind, Part, Note] :
            checkedClause(postconditionKind(Fn, I), std::move(BoundPost),
                          UninitializedResultNote))
@@ -4675,7 +4731,99 @@ public:
       for (const auto &[Name, Entry] : OldState)
         if (Entry->K == VExpr::Var)
           P.EntryVariables.insert(static_cast<const VVarExpr &>(*Entry).Name);
-    P.OldHeapName = Heap0;
+    finish(P, PostRenames);
+    return P;
+  }
+
+  /// The contract's own definedness, as Dafny checks a method's
+  /// well-formedness: each written precondition is defined where the ones
+  /// before it hold, and is then assumed. For a function whose body is not
+  /// verified, each written postcondition is checked the same way in every
+  /// state the function may return in: within its frame, with any result.
+  /// A body's own final state checks its postconditions in run().
+  PassiveProgram contract() {
+    PassiveProgram P;
+    P.FunctionName = Fn.Name + ".contract";
+    P.FunctionIdentity = Fn.Identity + "::contract";
+    std::map<std::string, std::string> Renames =
+        enter(P, /*WrittenPreconditions=*/false);
+    auto checkThenAssume =
+        [&](const VExpr *Clause,
+            const std::vector<std::vector<VMemoryCheck>> &Recorded, size_t I) {
+          CloneCtx Ctx{Renames, OldState, false};
+          auto Bound = cloneExpr(Clause, Ctx);
+          emitExprSafety(P, Bound.get(), nullptr, Clause->Loc, Renames, false,
+                         Clause, I < Recorded.size() ? &Recorded[I] : nullptr);
+          emitPassive(P, PassiveStmt::Assume, std::move(Bound), nullptr,
+                      Clause->Loc);
+        };
+    for (unsigned I = 0;
+         I < Fn.ExplicitPreconditionCount && I < Fn.Preconditions.size(); ++I) {
+      llvm::SaveAndRestore<std::string> Stated(Origin, "pre");
+      checkThenAssume(Fn.Preconditions[I].get(), Fn.PreconditionChecks, I);
+    }
+    // Storage the function allocates or frees is not modeled at a call, so
+    // no caller relies on its postconditions.
+    if (Fn.IsExternalContract && !Fn.UsesDynamicStorage) {
+      llvm::SaveAndRestore<std::string> Returned(Origin, "ret");
+      returnAnywhere(P, Renames);
+      // What the calling convention says of the result holds first.
+      for (size_t I = 0; I != Fn.Postconditions.size(); ++I)
+        if (postconditionKind(Fn, I) != ProofObligationKind::Postcondition) {
+          CloneCtx Ctx{Renames, OldState, false};
+          emitPassive(P, PassiveStmt::Assume,
+                      cloneExpr(Fn.Postconditions[I].get(), Ctx), nullptr,
+                      Fn.Postconditions[I]->Loc);
+        }
+      for (size_t I = 0; I != Fn.Postconditions.size(); ++I)
+        if (postconditionKind(Fn, I) == ProofObligationKind::Postcondition) {
+          llvm::SaveAndRestore<std::string> Stated(Origin, "post");
+          checkThenAssume(Fn.Postconditions[I].get(), Fn.PostconditionChecks,
+                          I);
+        }
+    }
+    finish(P, Renames);
+    return P;
+  }
+
+  /// A return in any state the function's frame allows, as its callers see
+  /// it: its footprints hold unknown values, and so does its result.
+  void returnAnywhere(PassiveProgram &P,
+                      std::map<std::string, std::string> &Renames) {
+    const std::string EntryHeap = Renames[VHeapName];
+    CloneCtx Ctx{Renames, OldState, false};
+    std::map<std::string, std::unique_ptr<VExpr>> ParamMap;
+    for (const auto &[Name, Ty] : Fn.Params)
+      ParamMap[Name] =
+          std::make_unique<VVarExpr>(Renames[Name], Ty, Fn.DeclLoc);
+    std::vector<std::unique_ptr<VExpr>> Footprints;
+    std::vector<std::unique_ptr<VExpr>> Counts;
+    for (const VFootprint &M : Fn.Modifies) {
+      Footprints.push_back(
+          substParams(M.Target.get(), ParamMap, Ctx, EntryHeap, EntryHeap));
+      Counts.push_back(M.Count ? substParams(M.Count.get(), ParamMap, Ctx,
+                                             EntryHeap, EntryHeap)
+                               : nullptr);
+    }
+    havocFootprints(P, Renames, Fn, Footprints, Counts, ParamMap, Ctx,
+                    EntryHeap, hasImplicitHeapEffect(Fn, FnMap), Fn.DeclLoc);
+    if (Fn.ReturnType.Kind == VTypeKind::Struct) {
+      for (const auto &[Field, Ty] : Fn.ReturnFields) {
+        const std::string Name = "result." + Field;
+        Renames[Name] = bump(Name);
+        Types[Name] = Ty;
+      }
+    } else if (Fn.ReturnType.Kind != VTypeKind::Void) {
+      Renames["result"] = bump(ResultVar);
+      P.ResultVarName = Renames["result"];
+    }
+  }
+
+  /// What every program of the function carries: its state variables, the
+  /// specs it may use, and their facts. PostRenames names the final state.
+  void finish(PassiveProgram &P,
+              const std::map<std::string, std::string> &PostRenames) {
+    P.OldHeapName = EntryHeapVersion;
     P.HeapVariables = HeapVariables;
     P.ModelVariables = std::move(ModelVariables);
     P.TraceEvents = std::move(TraceEvents);
@@ -4694,7 +4842,6 @@ public:
     }
     addSpecPostInstances(P, FnMap, Fn, UnfoldingDepth, UnfoldingFuel,
                          EntryMeasure);
-    return P;
   }
 
   /// In the object model a pointer without provenance is valid where it lies
@@ -4737,6 +4884,135 @@ public:
     }
     default:
       return E;
+    }
+  }
+
+  /// The cells footprint I of Callee covers at a call, its Target and Count
+  /// in the caller's state, where they are known: a range, a cell, or in
+  /// the object model the object its region names.
+  std::optional<Region>
+  footprintBytes(const VFunction &Callee, size_t I, const VExpr *Target,
+                 const VExpr *Count,
+                 const std::map<std::string, std::unique_ptr<VExpr>> &ParamMap,
+                 const CloneCtx &Ctx, const std::string &EntryHeap,
+                 SourceLocation Loc) {
+    const auto *Actual = Target && Target->K == VExpr::Load
+                             ? static_cast<const VLoadExpr *>(Target)
+                             : nullptr;
+    if (!Actual)
+      return std::nullopt;
+    const VFootprint &Declared = Callee.Modifies[I];
+    if (Count)
+      return rangeBytes(Actual->Ptr.get(), Count, Declared.ElementSize, Loc);
+    if (!isRegionFootprint(Declared, Callee.ReferenceParams))
+      return cellRegion(Actual->Ptr.get(), Actual->Ty, Loc);
+    if (!Callee.ObjectModel)
+      return std::nullopt;
+    const VExpr *Base = addressRoot(
+        static_cast<const VLoadExpr *>(Declared.Target.get())->Ptr.get());
+    if (!Base || Base->K != VExpr::Var)
+      return std::nullopt;
+    const uint64_t Stride = std::max<uint64_t>(Base->Ty.PointeeSizeBytes, 1);
+    for (const VValidExtent &Extent : Callee.ValidExtents)
+      if (Extent.Base == static_cast<const VVarExpr *>(Base)->Name) {
+        auto Length =
+            substParams(Extent.Length.get(), ParamMap, Ctx, EntryHeap);
+        return rangeBytes(Actual->Ptr.get(), Length.get(), Stride, Loc);
+      }
+    // A single scalar object is one heap cell.
+    if (Actual->Ty.isInt() || Actual->Ty.Kind == VTypeKind::Bool ||
+        Actual->Ty.Kind == VTypeKind::Ptr)
+      return cellRegion(Actual->Ptr.get(), Actual->Ty, Loc);
+    return Region{
+        cloneVExpr(Actual->Ptr.get()),
+        addBytes(cloneVExpr(Actual->Ptr.get()),
+                 std::make_unique<VLiteralExpr>(std::to_string(Stride),
+                                                pointerOffsetType(), Loc),
+                 Loc)};
+  }
+
+  /// The heap after a call of Callee whose footprints are ActualModifies
+  /// (with ActualCounts) in the caller's state: each one it may write gets
+  /// unknown contents, as a chain of stores when all are cells, and every
+  /// other cell keeps its value; a callee whose writes are not stated, or
+  /// not known, may write the whole heap.
+  void
+  havocFootprints(PassiveProgram &P,
+                  std::map<std::string, std::string> &Renames,
+                  const VFunction &Callee,
+                  const std::vector<std::unique_ptr<VExpr>> &ActualModifies,
+                  const std::vector<std::unique_ptr<VExpr>> &ActualCounts,
+                  const std::map<std::string, std::unique_ptr<VExpr>> &ParamMap,
+                  const CloneCtx &Ctx, const std::string &EntryHeap,
+                  bool HasImplicitHeapEffect, SourceLocation Loc) {
+    bool CanFrameExactly = !ActualModifies.empty();
+    for (size_t I = 0; I < ActualModifies.size(); ++I)
+      if (!ActualModifies[I] || ActualModifies[I]->K != VExpr::Load ||
+          ActualCounts[I] ||
+          (isRegionFootprint(Callee.Modifies[I], Callee.ReferenceParams) &&
+           !hasPointerProvenance(
+               static_cast<const VLoadExpr *>(ActualModifies[I].get())
+                   ->Ptr.get())))
+        CanFrameExactly = false;
+    // A region footprint is its actual's object: the callee's extent, or one
+    // object; in the object model the callee writes nowhere else.
+    std::vector<Region> CallRegions;
+    bool CanFrameRegions = Fn.ObjectModel && Callee.ObjectModel &&
+                           !CanFrameExactly && !ActualModifies.empty() &&
+                           !HasImplicitHeapEffect;
+    for (size_t I = 0; CanFrameRegions && I < ActualModifies.size(); ++I) {
+      std::optional<Region> Bytes;
+      if (ActualModifies[I] && ActualModifies[I]->K == VExpr::Load &&
+          !hasPointerProvenance(
+              static_cast<const VLoadExpr *>(ActualModifies[I].get())
+                  ->Ptr.get()))
+        Bytes = footprintBytes(Callee, I, ActualModifies[I].get(),
+                               ActualCounts[I].get(), ParamMap, Ctx, EntryHeap,
+                               Loc);
+      if (!Bytes) {
+        CanFrameRegions = false;
+        break;
+      }
+      CallRegions.push_back(std::move(*Bytes));
+    }
+    const bool OnlyCells =
+        llvm::all_of(CallRegions, [](const Region &R) { return R.Cell; });
+    if (CanFrameRegions && OnlyCells) {
+      // Each cell gets an unknown value and every other cell keeps its own.
+      std::string PreviousHeap = EntryHeap;
+      for (const Region &R : CallRegions) {
+        std::string NextHeap = bump(VHeapName);
+        auto Fresh =
+            std::make_unique<VVarExpr>(bump("__call_heap_value"), *R.Cell, Loc);
+        emitPassive(P, PassiveStmt::Assume,
+                    std::make_unique<VHeapStoreExpr>(PreviousHeap, NextHeap,
+                                                     cloneVExpr(R.Lo.get()),
+                                                     std::move(Fresh), Loc));
+        PreviousHeap = NextHeap;
+      }
+      Renames[VHeapName] = PreviousHeap;
+    } else if (CanFrameRegions) {
+      std::string NextHeap = bump(VHeapName);
+      emitPassive(P, PassiveStmt::Assume,
+                  heapFrame(EntryHeap, NextHeap, CallRegions, Loc));
+      Renames[VHeapName] = NextHeap;
+    } else if ((!ActualModifies.empty() && !CanFrameExactly) ||
+               HasImplicitHeapEffect) {
+      Renames[VHeapName] = bump(VHeapName);
+    } else if (CanFrameExactly) {
+      std::string PreviousHeap = EntryHeap;
+      for (const auto &M : ActualModifies) {
+        const auto *L = static_cast<const VLoadExpr *>(M.get());
+        std::string NextHeap = bump(VHeapName);
+        auto Fresh =
+            std::make_unique<VVarExpr>(bump("__call_heap_value"), L->Ty, Loc);
+        emitPassive(P, PassiveStmt::Assume,
+                    std::make_unique<VHeapStoreExpr>(PreviousHeap, NextHeap,
+                                                     cloneVExpr(L->Ptr.get()),
+                                                     std::move(Fresh), Loc));
+        PreviousHeap = NextHeap;
+      }
+      Renames[VHeapName] = PreviousHeap;
     }
   }
 
@@ -4960,44 +5236,10 @@ public:
       CallerCounts.push_back(
           M.Count ? cloneExpr(M.Count.get(), CallerEntryCtx) : nullptr);
     }
-    // The cells a callee footprint covers, where they are known: a range, a
-    // cell, or in the object model the object its region names.
-    auto calleeFootprintBytes = [&](size_t I) -> std::optional<Region> {
-      const auto *Actual = ActualModifies[I] && ActualModifies[I]->K == VExpr::Load
-                               ? static_cast<const VLoadExpr *>(
-                                     ActualModifies[I].get())
-                               : nullptr;
-      if (!Actual)
-        return std::nullopt;
-      const VFootprint &Declared = Callee->Modifies[I];
-      if (ActualCounts[I])
-        return rangeBytes(Actual->Ptr.get(), ActualCounts[I].get(),
-                          Declared.ElementSize, C.Loc);
-      if (!isRegionFootprint(Declared, Callee->ReferenceParams))
-        return cellRegion(Actual->Ptr.get(), Actual->Ty, C.Loc);
-      if (!Callee->ObjectModel)
-        return std::nullopt;
-      const VExpr *Base = addressRoot(
-          static_cast<const VLoadExpr *>(Declared.Target.get())->Ptr.get());
-      if (!Base || Base->K != VExpr::Var)
-        return std::nullopt;
-      const uint64_t Stride = std::max<uint64_t>(Base->Ty.PointeeSizeBytes, 1);
-      for (const VValidExtent &Extent : Callee->ValidExtents)
-        if (Extent.Base == static_cast<const VVarExpr *>(Base)->Name) {
-          auto Length =
-              substParams(Extent.Length.get(), ParamMap, Ctx, EntryHeap);
-          return rangeBytes(Actual->Ptr.get(), Length.get(), Stride, C.Loc);
-        }
-      // A single scalar object is one heap cell.
-      if (Actual->Ty.isInt() || Actual->Ty.Kind == VTypeKind::Bool ||
-          Actual->Ty.Kind == VTypeKind::Ptr)
-        return cellRegion(Actual->Ptr.get(), Actual->Ty, C.Loc);
-      return Region{cloneVExpr(Actual->Ptr.get()),
-                    addBytes(cloneVExpr(Actual->Ptr.get()),
-                             std::make_unique<VLiteralExpr>(
-                                 std::to_string(Stride), pointerOffsetType(),
-                                 C.Loc),
-                             C.Loc)};
+    auto calleeFootprintBytes = [&](size_t I) {
+      return footprintBytes(*Callee, I, ActualModifies[I].get(),
+                            ActualCounts[I].get(), ParamMap, Ctx, EntryHeap,
+                            C.Loc);
     };
 
     std::set<std::string> CalleePointerParams;
@@ -5238,73 +5480,8 @@ public:
       }
     }
 
-    bool CanFrameExactly = !ActualModifies.empty();
-    for (size_t I = 0; I < ActualModifies.size(); ++I)
-      if (!ActualModifies[I] || ActualModifies[I]->K != VExpr::Load ||
-          ActualCounts[I] ||
-          (isRegionFootprint(Callee->Modifies[I], Callee->ReferenceParams) &&
-           !hasPointerProvenance(
-               static_cast<const VLoadExpr *>(ActualModifies[I].get())
-                   ->Ptr.get())))
-        CanFrameExactly = false;
-    // A region footprint is its actual's object: the callee's extent, or one
-    // object; in the object model the callee writes nowhere else.
-    std::vector<Region> CallRegions;
-    bool CanFrameRegions = Fn.ObjectModel && Callee->ObjectModel &&
-                           !CanFrameExactly && !ActualModifies.empty() &&
-                           !HasImplicitHeapEffect;
-    for (size_t I = 0; CanFrameRegions && I < ActualModifies.size(); ++I) {
-      std::optional<Region> Bytes;
-      if (ActualModifies[I] && ActualModifies[I]->K == VExpr::Load &&
-          !hasPointerProvenance(
-              static_cast<const VLoadExpr *>(ActualModifies[I].get())
-                  ->Ptr.get()))
-        Bytes = calleeFootprintBytes(I);
-      if (!Bytes) {
-        CanFrameRegions = false;
-        break;
-      }
-      CallRegions.push_back(std::move(*Bytes));
-    }
-    const bool OnlyCells =
-        llvm::all_of(CallRegions, [](const Region &R) { return R.Cell; });
-    if (CanFrameRegions && OnlyCells) {
-      // Each cell gets an unknown value and every other cell keeps its own.
-      std::string PreviousHeap = EntryHeap;
-      for (const Region &R : CallRegions) {
-        std::string NextHeap = bump(VHeapName);
-        auto Fresh = std::make_unique<VVarExpr>(bump("__call_heap_value"),
-                                                *R.Cell, C.Loc);
-        emitPassive(P, PassiveStmt::Assume,
-                    std::make_unique<VHeapStoreExpr>(PreviousHeap, NextHeap,
-                                                     cloneVExpr(R.Lo.get()),
-                                                     std::move(Fresh), C.Loc));
-        PreviousHeap = NextHeap;
-      }
-      Renames[VHeapName] = PreviousHeap;
-    } else if (CanFrameRegions) {
-      std::string NextHeap = bump(VHeapName);
-      emitPassive(P, PassiveStmt::Assume,
-                  heapFrame(EntryHeap, NextHeap, CallRegions, C.Loc));
-      Renames[VHeapName] = NextHeap;
-    } else if ((!ActualModifies.empty() && !CanFrameExactly) ||
-               HasImplicitHeapEffect) {
-      Renames[VHeapName] = bump(VHeapName);
-    } else if (CanFrameExactly) {
-      std::string PreviousHeap = EntryHeap;
-      for (const auto &M : ActualModifies) {
-        const auto *L = static_cast<const VLoadExpr *>(M.get());
-        std::string NextHeap = bump(VHeapName);
-        auto Fresh =
-            std::make_unique<VVarExpr>(bump("__call_heap_value"), L->Ty, C.Loc);
-        emitPassive(P, PassiveStmt::Assume,
-                    std::make_unique<VHeapStoreExpr>(PreviousHeap, NextHeap,
-                                                     cloneVExpr(L->Ptr.get()),
-                                                     std::move(Fresh), C.Loc));
-        PreviousHeap = NextHeap;
-      }
-      Renames[VHeapName] = PreviousHeap;
-    }
+    havocFootprints(P, Renames, *Callee, ActualModifies, ActualCounts, ParamMap,
+                    Ctx, EntryHeap, HasImplicitHeapEffect, C.Loc);
 
     std::map<std::string, std::unique_ptr<VExpr>> PostParamMap;
     for (const auto &[Name, Value] : ParamMap)
@@ -5983,7 +6160,7 @@ public:
       for (const auto &Inv : W.Invariants) {
         auto BoundInv = cloneExpr(Inv.get(), EntryCtx);
         emitExprSafety(P, BoundInv.get(), Active.get(), Inv->Loc, Renames,
-                       false, Inv.get());
+                       false, Inv.get(), invariantChecks(W, Inv.get()));
         emitPassive(P, PassiveStmt::Assert, std::move(BoundInv), Active.get(),
                     Inv->Loc, ProofObligationKind::InvariantEntry);
       }
@@ -6114,7 +6291,8 @@ public:
         CloneCtx ACtx{BodyRenames, OldState, false};
         auto BoundInv = cloneExpr(Inv.get(), ACtx);
         emitExprSafety(P, BoundInv.get(), BodyActive.get(), Inv->Loc,
-                       BodyRenames, false, Inv.get());
+                       BodyRenames, false, Inv.get(),
+                       invariantChecks(W, Inv.get()));
         emitPassive(P, PassiveStmt::Assert, std::move(BoundInv),
                     BodyActive.get(), Inv->Loc,
                     ProofObligationKind::InvariantPreserved);
@@ -6211,7 +6389,8 @@ public:
       for (const auto &Inv : Frame.Loop->Invariants) {
         auto BoundInv = cloneExpr(Inv.get(), ContinueCtx);
         emitExprSafety(P, BoundInv.get(), Active.get(), Inv->Loc, Renames,
-                       false, Inv.get());
+                       false, Inv.get(),
+                       invariantChecks(*Frame.Loop, Inv.get()));
         emitPassive(P, PassiveStmt::Assert, std::move(BoundInv), Active.get(),
                     Inv->Loc, ProofObligationKind::InvariantPreserved);
       }
@@ -6243,7 +6422,7 @@ public:
       CloneCtx Ctx{Renames, OldState, false};
       auto Cond = cloneExpr(A.Cond.get(), Ctx);
       emitExprSafety(P, Cond.get(), Active.get(), A.Loc, Renames, false,
-                     A.Cond.get());
+                     A.Cond.get(), &A.MemoryChecks);
       // Proved here, a fact from here on: that is what makes it a proof step.
       auto Fact = cloneVExpr(Cond.get());
       emitPassive(P, PassiveStmt::Assert, std::move(Cond), Active.get(), A.Loc,
@@ -6327,4 +6506,9 @@ public:
 PassiveProgram Passivizer::run(const VFunction &Fn) {
   PassivizerImpl Impl(Fn, FnMap, UnfoldingDepth, UnfoldingFuel);
   return Impl.run();
+}
+
+PassiveProgram Passivizer::contract(const VFunction &Fn) {
+  PassivizerImpl Impl(Fn, FnMap, UnfoldingDepth, UnfoldingFuel);
+  return Impl.contract();
 }

@@ -77,6 +77,21 @@ that returns ``nullptr``. In a postcondition, a loop invariant, a
 ``cppverify::check``, ghost code, or a spec function it is now an error for
 that function (:doc:`language/pointers`).
 
+**Contracts must be defined.** A contract is C++, evaluated where the function
+is called and where it returns, but 0.1.1 never checked that it was defined
+there: a precondition was only assumed, and the reads of a postcondition, a
+loop invariant, or a ``cppverify::check`` were not checked against extents. The
+logic defines what C++ does not, so a trusted ``cv::post(1000 / cv::result >
+0)`` excluded a result of 0, and a caller that divided by that result
+verified. Each clause is now checked where it is evaluated: preconditions in
+order, each where the ones before it hold; postconditions in the state the
+function returns in, or for a trusted function or one without a definition in
+every state its frame allows; and every clause with the memory checks of the
+body. A clause that may be undefined fails as ``contract of f``, and callers
+that rely on it are ``Unresolved`` with reason ``callee.contract``. A contract
+that tests a condition after using it, as ``cv::pre(a / b > 0 && b != 0)``
+does, needs the test first (:doc:`language/functions-loops`).
+
 **Clang's own analyses.** ``noexcept`` of a contract expression crashed or hung
 the compiler, as did a contract expression in a C++98 constant; the static
 analyzer reported nothing after a ghost block; libclang hid the constructs;
@@ -298,6 +313,16 @@ documents the latest release, ``/X.Y/`` each release series (``/0.1/`` is
 0.1.1), and ``/dev/`` the development version on ``main``. A banner on every
 page names its version, and each release's archive and notes link to its own
 series.
+
+**Results that depended on load.** The complete query of a function without
+spec functions had 500 ms before its obligations were solved one by one. On a
+loaded machine, or in a slower build, it could give up on a counterexample
+that an idle machine found in that time, and an obligation whose search does
+not end then ran to the timeout: a false claim took minutes and ended
+``Unresolved`` with ``solver.timeout``. That query now gets a fixed amount of
+solver work (6 million Z3 resource units), with the timeout only as a bound
+in time, so it stops where it would on an idle machine
+(:doc:`language/tooling`).
 
 **cvc5 1.4.** Every query over sets, multisets, and maps failed with cvc5 1.4,
 which requires extended arrays for constant arrays; such a query now enables

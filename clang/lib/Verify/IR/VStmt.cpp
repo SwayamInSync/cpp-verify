@@ -4,6 +4,14 @@
 using namespace clang;
 using namespace verify;
 
+std::vector<VMemoryCheck>
+verify::cloneMemoryChecks(const std::vector<VMemoryCheck> &Checks) {
+  std::vector<VMemoryCheck> Out;
+  for (const VMemoryCheck &Check : Checks)
+    Out.push_back({Check.Kind, cloneVExpr(Check.Cond.get())});
+  return Out;
+}
+
 VFootprint verify::cloneFootprint(const VFootprint &F) {
   return {cloneVExpr(F.Target.get()), cloneVExpr(F.Count.get()),
           F.ElementSize};
@@ -67,6 +75,8 @@ std::unique_ptr<VStmt> verify::cloneVStmt(const VStmt *S) {
                                             std::move(Body), W.Loc);
     for (const VFootprint &M : W.Modifies)
       Out->Modifies.push_back(cloneFootprint(M));
+    for (const auto &Checks : W.InvariantChecks)
+      Out->InvariantChecks.push_back(cloneMemoryChecks(Checks));
     return Out;
   }
   case VStmt::Call: {
@@ -123,8 +133,10 @@ std::unique_ptr<VStmt> verify::cloneVStmt(const VStmt *S) {
   }
   case VStmt::ContractAssert: {
     const auto &A = static_cast<const VContractAssertStmt &>(*S);
-    return std::make_unique<VContractAssertStmt>(cloneVExpr(A.Cond.get()),
-                                                 A.Loc);
+    auto Out =
+        std::make_unique<VContractAssertStmt>(cloneVExpr(A.Cond.get()), A.Loc);
+    Out->MemoryChecks = cloneMemoryChecks(A.MemoryChecks);
+    return Out;
   }
   case VStmt::Break:
     return std::make_unique<VBreakStmt>(S->Loc);
@@ -193,6 +205,10 @@ VFunction verify::cloneVFunction(const VFunction &Fn) {
     Out.Preconditions.push_back(cloneVExpr(P.get()));
   for (const auto &P : Fn.Postconditions)
     Out.Postconditions.push_back(cloneVExpr(P.get()));
+  for (const auto &Checks : Fn.PreconditionChecks)
+    Out.PreconditionChecks.push_back(cloneMemoryChecks(Checks));
+  for (const auto &Checks : Fn.PostconditionChecks)
+    Out.PostconditionChecks.push_back(cloneMemoryChecks(Checks));
   Out.PreconditionKinds = Fn.PreconditionKinds;
   Out.PostconditionKinds = Fn.PostconditionKinds;
   for (const auto &R : Fn.Recommends)

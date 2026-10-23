@@ -144,6 +144,18 @@ struct VIfStmt : VStmt {
         LoopUnrollIteration(LoopUnrollIteration) {}
 };
 
+/// A memory check of a contract expression: an access in its object or
+/// extent, a step in its object's closure. It is computed from the expression
+/// as written, before spec inlining, as a body's accesses are checked: an
+/// inlined spec is total, and an inlined helper repeats its arguments' reads.
+struct VMemoryCheck {
+  ProofObligationKind Kind;
+  std::unique_ptr<VExpr> Cond;
+};
+
+std::vector<VMemoryCheck>
+cloneMemoryChecks(const std::vector<VMemoryCheck> &Checks);
+
 struct VAssertStmt : VStmt {
   std::unique_ptr<VExpr> Cond;
   ProofObligationKind ProofKind;
@@ -205,6 +217,9 @@ struct VWhileStmt : VStmt {
   /// The memory the loop may write, read in each iteration's state; empty
   /// means none was declared.
   std::vector<VFootprint> Modifies;
+  /// The memory checks of each invariant, by index; an invariant added after
+  /// memory checking was set up (a generated one) reads no memory.
+  std::vector<std::vector<VMemoryCheck>> InvariantChecks;
   std::vector<std::unique_ptr<VStmt>> Body;
   VWhileStmt(std::unique_ptr<VExpr> C, std::vector<std::unique_ptr<VExpr>> Inv,
              std::vector<std::unique_ptr<VExpr>> Dec,
@@ -261,6 +276,8 @@ struct VRevealSpecStmt : VStmt {
 
 struct VContractAssertStmt : VStmt {
   std::unique_ptr<VExpr> Cond;
+  /// The memory checks of the condition.
+  std::vector<VMemoryCheck> MemoryChecks;
   VContractAssertStmt(std::unique_ptr<VExpr> C, SourceLocation Loc)
       : VStmt(ContractAssert, Loc), Cond(std::move(C)) {}
 };
@@ -411,6 +428,9 @@ struct VFunction {
   unsigned ExplicitPreconditionCount = 0;
   std::vector<std::unique_ptr<VExpr>> Preconditions;
   std::vector<std::unique_ptr<VExpr>> Postconditions;
+  /// The memory checks of each precondition and postcondition, by index.
+  std::vector<std::vector<VMemoryCheck>> PreconditionChecks;
+  std::vector<std::vector<VMemoryCheck>> PostconditionChecks;
   /// Kinds of generated clauses by index; see preconditionKind().
   std::vector<ProofObligationKind> PreconditionKinds;
   std::vector<ProofObligationKind> PostconditionKinds;

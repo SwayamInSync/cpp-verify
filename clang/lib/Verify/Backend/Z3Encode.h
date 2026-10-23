@@ -65,6 +65,7 @@ class Z3Encoder {
                             std::optional<uint64_t> TraceEventCount);
   std::chrono::steady_clock::time_point QueryStart;
   std::optional<unsigned> CertifyTimeoutMs;
+  bool SearchSlice = false;
   bool QuantifiedQuery = false;
   z3::solver freshSolver();
   /// \p S.check() within \p Ms milliseconds (0: no limit), unknown at once
@@ -289,6 +290,9 @@ public:
   void setCertifyTimeoutMs(std::optional<unsigned> Ms) {
     CertifyTimeoutMs = Ms;
   }
+  /// The timeout is a slice of the query's time, for the search only: a model
+  /// found is checked with the check's own time, not what is left of it.
+  void setSearchSlice(bool Slice) { SearchSlice = Slice; }
   /// Stops the check running in this encoder, from any thread.
   void interrupt();
   /// Lets checks run again after interrupt().
@@ -320,6 +324,9 @@ class Z3VerifyBackend : public VerifyBackend {
   unsigned SolverTimeoutMs;
   std::optional<unsigned> CollectionTimeoutMs;
   unsigned ResourceLimit;
+  /// While the obligations only choose the failure to report, the work each
+  /// of their queries may do: the work the complete query's probe had, or 0.
+  unsigned UnitsCap = 0;
   unsigned Jobs;
   llvm::StdThreadPool *Pool;
   uint64_t MaxQueryNodes;
@@ -362,7 +369,8 @@ class Z3VerifyBackend : public VerifyBackend {
   VerifyResult solveQuery(const ObligationModule &Module,
                           const LogicExpr *Query,
                           std::optional<uint64_t> TraceEventCount,
-                          unsigned Timeout, Race *Racing);
+                          unsigned Timeout, Race *Racing, bool Slice = false,
+                          unsigned Units = 0);
   VerifyResult verifyObligation(const ObligationModule &Module,
                                 const Obligation &Item,
                                 llvm::StringRef SemanticHash = {},

@@ -371,7 +371,11 @@ The names say where each assumption comes from:
   overflow; ``h_keep_<n>``: the value of a variable on a path that skips its
   assignment;
 - ``h_check_<n>``: a ``cppverify::check`` proved before;
-  ``h_spec_<spec>_<n>``: a spec's proved postcondition at an application.
+  ``h_spec_<spec>_<n>``: a spec's proved postcondition at an application;
+- in a goal that checks a contract is defined (``contract of f``),
+  ``h_pre_<n>`` and ``h_post_<n>``: the clauses before the one checked, each
+  shown defined first; ``h_ret_<n>``: what holds of the state a function
+  without a verified body may return in, its frame and its result.
 
 The numbers count within the goal, so a line added to the source renames no
 hypothesis. A disjunction the program wrote, such as

@@ -2199,6 +2199,8 @@ public:
 
     std::vector<std::unique_ptr<VFunction>> InterfaceFunctions;
     FunctionMap InterfaceMap;
+    // A contract whose extent markers cannot be read, by function identity.
+    std::map<std::string, std::string> InterfaceErrors;
     InterfaceFunctions.reserve(Functions.size());
     for (const auto &Fn : Functions) {
       auto Interface = std::make_unique<VFunction>(cloneVFunction(*Fn));
@@ -2206,7 +2208,8 @@ public:
           (isDeductiveBackend(Opts.Backend) ||
            Opts.Backend == BackendKind::BMC ||
            Opts.Backend == BackendKind::Lean))
-        (void)instrumentUBChecks(*Interface);
+        if (auto Error = instrumentUBChecks(*Interface))
+          InterfaceErrors[Interface->Identity] = *Error;
       InterfaceMap[Interface->Identity] = Interface.get();
       InterfaceFunctions.push_back(std::move(Interface));
     }
@@ -2309,6 +2312,8 @@ public:
     // Verdicts that assume callee contracts, and the callees they assume.
     std::vector<std::tuple<size_t, std::string, std::set<std::string>>>
         CallDependencies;
+    // The verdict on each contract's definedness, by function identity.
+    std::map<std::string, size_t> ContractChecks;
     // Frame facts of a spec whose reads clause is not established.
     std::set<std::string> UnframedSpecs;
     // Specs whose postcondition is not established.
@@ -2404,6 +2409,9 @@ public:
       std::vector<Confirmation> Confirmations;
       /// For a verified proof function: what its verification proves.
       std::shared_ptr<const ContractTheorem> Contract;
+      /// The verdict on the definedness of the function's contract, when it
+      /// has clauses that may be undefined; its place in Diags.
+      std::optional<size_t> ContractCheck;
       std::string Dump;
       std::string Archive;
       /// Ctrl-C came before the verification ended.
@@ -2539,6 +2547,96 @@ public:
         std::lock_guard<std::mutex> Guard(SourceLock);
         this->annotateObligationSources(Module);
       };
+      // A contract must be defined where it is evaluated (Dafny's
+      // well-formedness check): its preconditions in order, and the
+      // postconditions of a function whose body is not verified in every
+      // state it may return in. It is checked as callers see it, so a lifted
+      // helper's checks are reported at its call. The check is reported only
+      // when it does not hold, and then the contract establishes nothing.
+      auto checkContract = [&](const VFunction &Interface) {
+        PassiveProgram Checks = P.contract(Interface);
+        if (llvm::none_of(Checks.Stmts, [](const auto &S) {
+              return S->K == PassiveStmt::Assert;
+            }))
+          return;
+        const std::string Label = "contract of " + Interface.Name;
+        auto unsettled = [&](VerifyDiagnostic::Kind Kind, std::string Message,
+                             std::optional<VerifyResult> R = std::nullopt) {
+          AllOk = false;
+          AnyFailed = true;
+          const SourceLocation Loc = R ? R->Location : Interface.DeclLoc;
+          Diags.push_back(
+              {Kind, std::move(Message), Loc, Interface.Name, std::move(R)});
+          Run.ContractCheck = Diags.size() - 1;
+        };
+        auto Lowered = buildObligationModule(Checks);
+        if (!Lowered)
+          return unsettled(VerifyDiagnostic::Unresolved,
+                           "obligation lowering failed for " + Label + " (" +
+                               llvm::toString(Lowered.takeError()) + ")");
+        auto Simplified = simplifyObligationModule(std::move(*Lowered));
+        if (!Simplified)
+          return unsettled(VerifyDiagnostic::Unresolved,
+                           "obligation simplification failed for " + Label +
+                               " (" + llvm::toString(Simplified.takeError()) +
+                               ")");
+        ObligationModule Module = std::move(*Simplified);
+        if (Opts.Backend == BackendKind::BMC)
+          Module.BMCTransform = BMCTransformProvenance{Opts.BMCUnroll};
+        annotateObligationSources(Module);
+        if (llvm::Error Error = emitObligationArchive(Module))
+          return unsettled(VerifyDiagnostic::Error,
+                           "cannot serialize obligation: " + Label + " (" +
+                               llvm::toString(std::move(Error)) + ")");
+        if (Opts.LowerOnly) {
+          VerifyResult Result = lowerForBackend(Module, SpecKind, Execution);
+          if (Result.Status != VerifyStatus::Lowered) {
+            std::string Message =
+                std::string(SpecKind == BackendKind::Z3 ? "Z3" : "backend") +
+                " lowering failed for " + Label + backendSuffix(Result);
+            if (!Result.Message.empty())
+              Message += " (" + Result.Message + ")";
+            unsettled(VerifyDiagnostic::Error, std::move(Message), Result);
+          }
+          return;
+        }
+        VerifyResult R = SpecBackend->verify(Module);
+        settle(R, Module, Interface, Label, SpecKind);
+        if (R.Status == VerifyStatus::Verified ||
+            R.Status == VerifyStatus::Certified) {
+          Diags.push_back(
+              {R.Status == VerifyStatus::Verified ? VerifyDiagnostic::Verified
+                                                  : VerifyDiagnostic::Certified,
+               Label + backendSuffix(R), R.Location, Interface.Name, R});
+          Diags.back().Quiet = true;
+          recordDependencies(Interface, Module);
+          Run.ContractCheck = Diags.size() - 1;
+        } else if (R.Status == VerifyStatus::Exported) {
+          Diags.push_back({VerifyDiagnostic::Exported,
+                           "lean obligation: " + Label, R.Location,
+                           Interface.Name, R});
+          Run.ContractCheck = Diags.size() - 1;
+        } else if (R.Status == VerifyStatus::Failed) {
+          std::string Message = "verification failed: " + Label;
+          if (!R.ObligationId.empty())
+            Message += " [" + R.ObligationId + "]";
+          if (!R.Message.empty())
+            Message += " (counterexample: " + R.Message + ")";
+          Message += backendSuffix(R);
+          unsettled(VerifyDiagnostic::Error, std::move(Message), R);
+        } else {
+          const bool FallbackExported = R.Status == VerifyStatus::Unresolved &&
+                                        exportLeanFallback(Module, Label, R);
+          if (Opts.LeanCertify && FallbackExported) {
+            Run.ContractCheck = Diags.size() - 1;
+            return;
+          }
+          std::string Message = Label + backendSuffix(R);
+          if (!R.Message.empty())
+            Message += " (" + R.Message + ")";
+          unsettled(VerifyDiagnostic::Unresolved, std::move(Message), R);
+        }
+      };
       for (const auto &Fn :
            llvm::ArrayRef<std::unique_ptr<VFunction>>(&Functions[Index], 1)) {
         // The value of a spec outside its when domain, or a spec of
@@ -2558,6 +2656,16 @@ public:
                             "are not verified; mark the declaration "
                             "[[cppverify::trusted]] to assume the contract",
                  Fn->DeclLoc, Fn->Name});
+          if (auto Error = InterfaceErrors.find(Fn->Identity);
+              Error != InterfaceErrors.end()) {
+            AllOk = false;
+            AnyFailed = true;
+            Diags.push_back(
+                {VerifyDiagnostic::Error, Fn->Name + ": " + Error->second});
+            Run.ContractCheck = Diags.size() - 1;
+          } else if (!Fn->IsSpec) {
+            checkContract(*InterfaceMap.at(Fn->Identity));
+          }
           continue;
         }
         llvm::scope_exit MarkInterrupted(
@@ -3108,6 +3216,9 @@ public:
           }
         }
 
+        if (!Fn->IsSpec && !Fn->TotalExpressions)
+          checkContract(*InterfaceMap.at(Fn->Identity));
+
         std::optional<PassiveProgram> BMCProgram;
         std::optional<ObligationModule> BMCModule;
         std::optional<VerifyResult> BMCResult;
@@ -3596,6 +3707,8 @@ public:
         Pending.Index += Base;
         Confirmations.push_back(std::move(Pending));
       }
+      if (Run.ContractCheck)
+        ContractChecks[Functions[I]->Identity] = Base + *Run.ContractCheck;
       if (DumpOS)
         *DumpOS << Run.Dump;
       if (Opts.ObligationOut)
@@ -3773,8 +3886,14 @@ public:
     for (const auto &[Index, Identity, Callees] : CallDependencies)
       if (settled(Index))
         Unestablished.erase(Identity);
+    // A contract that may be undefined establishes nothing.
+    for (const auto &[Identity, Index] : ContractChecks)
+      if (!settled(Index))
+        Unestablished.insert(Identity);
     std::map<size_t, std::string> VerdictOf;
     for (const auto &[Index, Identity, Callees] : CallDependencies)
+      VerdictOf[Index] = Identity;
+    for (const auto &[Identity, Index] : ContractChecks)
       VerdictOf[Index] = Identity;
     std::map<size_t, const SpecReliance *> CheckOf;
     for (const SpecReliance &Reliance : ProofDependencies)
@@ -3830,7 +3949,11 @@ public:
         if (Callee != Self && Unestablished.count(Callee)) {
           list(Names, nameOf(Callee));
           auto It = FnMap.find(Callee);
-          if (It != FnMap.end() && It->second->IsExternalContract)
+          auto Check = ContractChecks.find(Callee);
+          if (Check != ContractChecks.end() && !settled(Check->second))
+            Names += " (its clauses are not shown to be defined)";
+          else if (It != FnMap.end() && It->second->IsExternalContract &&
+                   !It->second->IsTrusted)
             Names += " (no definition; mark it [[cppverify::trusted]] to "
                      "assume it)";
         }
@@ -3972,6 +4095,12 @@ public:
       };
       std::map<std::string, std::vector<size_t>> Producers;
       std::set<size_t> Verdicts;
+      // A contract is established by its function's proof and by the
+      // check that it is defined.
+      for (const auto &[Identity, Index] : ContractChecks) {
+        Verdicts.insert(Index);
+        Producers[fact('C', Identity)].push_back(Index);
+      }
       for (const auto &[Index, Identity, Callees] : CallDependencies) {
         Verdicts.insert(Index);
         Producers[fact('C', Identity)].push_back(Index);
