@@ -1,3 +1,4 @@
+import CppVerify.Goals.cppverify_fibo_six_ec829a
 import CppVerify.User
 
 theorem cppverify_fibo_six_ec829a_postcondition_30cd1b97_proof :
