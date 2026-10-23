@@ -7,12 +7,13 @@
 // RUN: lake --dir=%t.quant build CppVerify.Generated
 // RUN: %cpp-verify --backend=lean --lean-project=%t.recursive %S/spec_fuel_recursive_pass.cpp --
 // RUN: lake --dir=%t.recursive build CppVerify.Generated
-// RUN: %python -c "import os, sys; sys.exit(os.path.getsize(r'%t.recursive/CppVerify/Generated.lean') >= 100000)"
+// RUN: %python %S/Inputs/lean_project_text.py %t.recursive > %t.recursive.lean
+// RUN: %python -c "import os, sys; sys.exit(os.path.getsize(r'%t.recursive.lean') >= 100000)"
 // RUN: %cpp-verify --backend=lean --lean-project=%t.names %S/Inputs/lean_name_encoding.cpp --
-// RUN: grep -Eq 'cppEncoded_[0-9a-f]+' %t.names/CppVerify/Generated.lean
+// RUN: %python %S/Inputs/lean_project_text.py %t.names | grep -Eq 'cppEncoded_[0-9a-f]+'
 // RUN: lake --dir=%t.names build CppVerify.Generated
 // RUN: lake --dir=%t.names build CppVerify.Check
 // Heap-reading specs take the heap state as a CppHeap argument.
 // RUN: %cpp-verify --check-ub --backend=lean --lean-project=%t.heapspec %S/heap_reading_spec.cpp --
-// RUN: grep -q '(__spec_heap : CppHeap)' %t.heapspec/CppVerify/Generated.lean
+// RUN: %python %S/Inputs/lean_project_text.py %t.heapspec | grep -q '(__spec_heap : CppHeap)'
 // RUN: lake --dir=%t.heapspec build CppVerify.Generated
