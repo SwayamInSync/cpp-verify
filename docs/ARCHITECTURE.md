@@ -1871,30 +1871,51 @@ the obligations decide, exactly as after a whole query alone, so the verdict
 does not depend on the jobs. When the whole query yields a certified
 counterexample, the obligations only choose which failure is reported, the
 first in source order: the ones solved beside it are stopped, and they are
-solved in order with every query's timeout at most the whole query's own,
-with any number of jobs, so the choice does not depend on them either. If the
-failing obligation's query does not finish within it, the whole query's
+solved in order within the whole query's own budget, its timeout and, for a
+probe (below), its work, with any number of jobs, so the choice does not
+depend on them either (`Z3VerifyBackend::UnitsCap`). If the failing
+obligation's query does not finish within it, the whole query's
 counterexample stands. Before, that query could run to the timeout although
 the whole query had refuted the function in milliseconds: model search over
 quantified heap queries depends on the solver's search order, and 16 of 40
-random seeds took the full 30 s. A whole query given only a slice of the
-budget (500 ms for a module without logic functions) checks a model it finds
-with a check's own time (half the module's timeout, or `--certify-timeout`),
-not with what is left of the slice (`Z3Encoder::setSearchSlice`): on one
-loaded core its search took 460 ms of the 500, the check had 41 ms, the model
-was left unchecked, the race went on, and the postcondition of
-`certified_failure_attribution.cpp`, whose own search does not end, ran to
-the 60 s timeout. Racing, a whole query its slice leaves unresolved is
-retried with the full budget as one more task of the race, queued after the
-obligations: a free worker runs it beside them, and without one the
-function's own thread runs it after them, as with one job. Before, the retry
-always waited for the obligations, so an obligation whose search does not end
-held it back until that obligation's timeout: on two loaded cores the whole
-query of that test needs about 600 ms, more than its slice, and the test took
-61 s with `--jobs=3`; it now takes 1.2 s. The obligations stop the whole
-query, or its retry, whenever they settle the module: when one fails, as
-when they prove all of it. A proof cache stores proofs of single
-obligations, so with one only the obligations are solved.
+random seeds took the full 30 s.
+
+The whole query of a module without logic functions is a probe of a fixed
+amount of work, `WholeProbeUnits` (6 million) Z3 resource units, with the
+module's timeout as its bound in time, so where it stops depends neither on
+the load nor on the build. It had 500 ms before. In an assertions build, or
+on a loaded core, the whole query of `certified_failure_attribution.cpp`
+(about 700 thousand units) did not finish in that time; with one job its
+obligations then ran, the postcondition among them, whose own search does
+not end, and the function ended `Unresolved` with `solver.timeout` after
+121 s on one core shared with two busy loops. The assertions build now
+reports the test's counterexample there in 7 s, with one job or three. Every
+probe of the test suite that an idle release build decided within 500 ms
+took at most 5.2 million units (99% of the 2622 took less than 200
+thousand); the three that took 5.2 million are those of the UTF-8 case
+study. A probe that does not decide costs more than before: the suite has 18,
+which do 1,900 to 13,000 units a millisecond, so 0.5 to 3 s each instead of
+0.5 s. With one job the suite takes 1331 s instead of 1321 s on an assertions
+build, most of it in `loop_frames.cpp` (3.6 s, now 8.8 s), whose five failing
+functions each spend 1.4 s on a probe that never decides; with more jobs the
+obligations solved beside the probe stop it once they settle the module. A
+probe that its work bound stops is retried with the full budget; one that
+its timeout stops already had it. A whole
+query given only a slice of the budget (a sixth of it over collections)
+checks a model it finds with a check's own time (half the module's timeout,
+or `--certify-timeout`), not with what is left of the slice
+(`Z3Encoder::setSearchSlice`): on one loaded core the search of a 500 ms
+probe took 460 ms, the check had 41 ms, and the model was left unchecked.
+Racing, a whole query its probe or slice leaves unresolved is retried with
+the full budget as one more task of the race, queued after the obligations:
+a free worker runs it beside them, and without one the function's own thread
+runs it after them, as with one job. Before, the retry always waited for the
+obligations, so an obligation whose search does not end held it back until
+that obligation's timeout: with the 500 ms probe, that test took 61 s with
+`--jobs=3` on two loaded cores. The obligations stop the whole query, or its
+retry, whenever they settle the module: when one fails, as when they prove
+all of it. A proof cache stores proofs of single obligations, so with one
+only the obligations are solved.
 
 Every query runs in an encoder of its own (`Z3VerifyBackend::solveQuery`):
 a Z3 context keeps the state of the queries solved in it, as far as an
