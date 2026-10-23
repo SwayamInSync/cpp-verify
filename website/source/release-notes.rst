@@ -444,6 +444,19 @@ which a project needs to define the spec and to name the goal's hypotheses;
 a module keeps the specs its specs' measures apply
 (:doc:`book/part-ii/ch17-backends-modular-calls`).
 
+**Counterexamples confirmed in Lean.** A counterexample the solver found was
+checked by cpp-verify's own evaluator only. A fallback project now holds the
+refutation of each certified failure, the failing goal stated as the project
+states it and proved false at the model's values; ``--lean-certify`` checks it
+with the kernel, and a failure it shows reads ``(confirmed in Lean)``. A
+counterexample Lean cannot decide, as one that applies a ``cppverify::choose``,
+stays a failure with a warning, and one Lean decides the other way would be
+``Unresolved``, a disagreement, never a failure. Lean decides a quantifier
+over a range of integers by trying each one, within the heartbeats of a step
+of ``cppverify_auto``. The release gate's Lean row now
+decides every case of its matrix: each valid one certified, each invalid one
+refuted (:doc:`book/part-ii/ch17-backends-modular-calls`).
+
 **Lean 4.35.0.** Lean projects pin ``leanprover/lean4:v4.35.0``. A project 0.1
 generated, pinned to ``v4.32.2``, moves to the new pin the next time cpp-verify
 writes it, with a warning; a proof that no longer builds needs updating for that
