@@ -3322,6 +3322,12 @@ VerifyResult Z3Encoder::decideModule(const ObligationModule &Module,
       EncodingError = std::move(SavedError);
       return sourceValue(Evaluated, Expr->Sort);
     };
+    // Completing a model adds the values it chooses to it, and the model
+    // reported keeps the solver's alone: an assignment reads a copy.
+    auto assignment = [&](const Obligation &Item) {
+      Z3CandidateModel Copy(*this, z3::model(Mod, Ctx, z3::model::translate()));
+      return counterexampleAssignment(Item, Copy);
+    };
     if (IsCompleteQuery && !TraceEventCount) {
       // The certified model is the completed one; the certifier evaluates
       // what the solver's evaluator leaves open, such as quantifiers.
@@ -3346,9 +3352,18 @@ VerifyResult Z3Encoder::decideModule(const ObligationModule &Module,
         Out.ObligationType = Item.Kind;
         Out.Location = Item.Loc;
         Out.Source = Item.Source;
+        Out.Assignment = assignment(Item);
         TraceEventCount = Item.TraceEventCount;
         break;
       }
+    } else {
+      // A refutation of the goal of the obligation this query is the
+      // counterexample of applies the goal to the model's values.
+      for (const Obligation &Item : Module.Obligations)
+        if (Item.CounterexampleQuery.get() == Query) {
+          Out.Assignment = assignment(Item);
+          break;
+        }
     }
     for (const auto &[Name, Sort] : ModelVariables) {
       auto Metadata = Module.DiagnosticVariables.find(Name);
