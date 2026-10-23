@@ -1,3 +1,4 @@
+import CppVerify.Goals.cppverify_six_6a2cf3
 import CppVerify.User
 
 theorem cppverify_six_6a2cf3_missing_return_54ae7c80_proof :
