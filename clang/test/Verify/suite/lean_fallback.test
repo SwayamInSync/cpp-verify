@@ -23,9 +23,12 @@
 // CHECK-DAG: Unresolved: fibo_step [backend=z3] [reason=solver.resource-limit]
 // CHECK-DAG: Exported: lean fallback: fibo_six [z3: 1 of 2 proved; lean: 2 exported]
 
-// CERTIFY: Unresolved: lean fallback: fibo_step [z3: 1 of 2 proved; lean: 2 exported] (Lean certification failed:
+// cppverify_auto proves the goals of fibo_step, the postcondition by the
+// definition instances it states; that of fibo_six needs a proof.
+// CERTIFY: Certified: fibo_step [backend=Lean]
+// CERTIFY-NEXT: Unresolved: lean fallback: fibo_six [z3: 1 of 2 proved; lean: 2 exported] (Lean certification failed:
 // CERTIFY-SAME: declaration uses `sorry`
-// CERTIFY-NOT: Unresolved: fibo_step (proof obligation
+// CERTIFY-NOT: Unresolved: fibo_six (proof obligation
 
 // CERTIFIED: Certified: fibo_step [backend=Lean]
 // CERTIFIED: Certified: fibo_six [backend=Lean]
@@ -33,7 +36,7 @@
 // CERTIFIED-JSON: "backend":"lean"
 // CERTIFIED-JSON-SAME: "function":"fibo_step"
 // CERTIFIED-JSON-SAME: "status":"certified"
-// FAILED-JSON: {"backend":"lean","evidence":{"lean":[{{.*}}],"solver":"z3","solver_proved":1,"total":2},"function":"fibo_step"
+// FAILED-JSON: {"backend":"lean","evidence":{"lean":[{{.*}}],"solver":"z3","solver_proved":1,"total":2},"function":"fibo_six"
 // FAILED-JSON-SAME: "reason":"lean.export-failed"
 // FAILED-JSON-SAME: "status":"unresolved"
 
