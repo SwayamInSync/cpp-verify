@@ -1063,6 +1063,8 @@ struct VerifyDiagnostic {
   /// For an export to a Lean project: of its goals, how many cppverify_auto
   /// proves.
   unsigned LeanAutomatic = 0;
+  /// A certified failure that its refutation shows in Lean too.
+  bool LeanRefuted = false;
   /// A proof by a solver, by Lean, or by both, which establishes what it
   /// proves.
   bool isProof() const {
@@ -1678,6 +1680,41 @@ public:
     return llvm::Error::success();
   }
 
+  // The refutation of each certified failure of the run,
+  // Refutations/<group>/<goal>.lean. Any other is removed: its failure is
+  // gone, or its program is not this one.
+  llvm::Error
+  writeLeanRefutations(const std::vector<LeanRefutation> &Refutations) {
+    const std::string Dir =
+        leanProjectPath(leanProjectRoot(), {"CppVerify", "Refutations"});
+    std::set<std::string> Written;
+    for (const LeanRefutation &Refutation : Refutations) {
+      const std::string Path =
+          leanProjectPath(Dir, {Refutation.Group, Refutation.Goal + ".lean"});
+      if (std::error_code EC = llvm::sys::fs::create_directories(
+              llvm::sys::path::parent_path(Path)))
+        return llvm::createStringError(EC, "cannot create %s", Path.c_str());
+      if (llvm::Error Error = writeTextFileIfChanged(
+              Path, std::string(LeanGeneratedNote) + "\n" + Refutation.Text))
+        return Error;
+      Written.insert(Path);
+    }
+    std::error_code EC;
+    std::vector<std::string> Gone;
+    for (llvm::sys::fs::recursive_directory_iterator It(Dir, EC), End;
+         It != End && !EC; It.increment(EC))
+      if (llvm::sys::path::extension(It->path()) == ".lean" &&
+          !Written.count(It->path()))
+        Gone.push_back(It->path());
+    for (const std::string &Path : Gone) {
+      llvm::sys::fs::remove(Path);
+      llvm::sys::fs::remove(llvm::sys::path::parent_path(Path));
+    }
+    if (Written.empty())
+      llvm::sys::fs::remove(Dir);
+    return llvm::Error::success();
+  }
+
   static std::vector<llvm::StringRef>
   leanProofComponents(const LeanProjectGoal &Goal, std::string &File) {
     File = Goal.Name + ".lean";
@@ -2289,8 +2326,9 @@ public:
   }
 
   llvm::Expected<std::map<std::string, std::string>>
-  certifyLeanProject(const std::vector<LeanProjectGoal> &ProjectGoals) {
-    if (ProjectGoals.empty())
+  certifyLeanProject(const std::vector<LeanProjectGoal> &ProjectGoals,
+                     const std::vector<LeanRefutation> &Refutations = {}) {
+    if (ProjectGoals.empty() && Refutations.empty())
       return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                      "the project has no proof obligations");
     auto Launcher = leanLauncher(".cppverify-certification");
@@ -2317,11 +2355,37 @@ public:
     std::map<std::string, const LeanProjectGoal *> UniqueGoals;
     for (const LeanProjectGoal &Goal : ProjectGoals)
       UniqueGoals.emplace(Goal.Name, &Goal);
-    std::vector<std::pair<std::string, const LeanProjectGoal *>> Proofs(
-        UniqueGoals.begin(), UniqueGoals.end());
-    for (const auto &[Name, Goal] : Proofs)
+    // What is built: each goal's proof, and each refutation, which is its
+    // goal's module too; with the certifier's line for each, and the name
+    // it reports.
+    struct Build {
+      std::string Name, Source, Object, Entry;
+    };
+    std::vector<Build> Proofs;
+    for (const auto &[Name, Goal] : UniqueGoals) {
+      std::string File;
+      Proofs.push_back(
+          {Name, leanProjectPath(Root, leanProofComponents(*Goal, File)),
+           leanProjectPath(leanProjectPath(ProofBuildDir, {Goal->Group}),
+                           {Name + ".olean"}),
+           Name + "\tCppVerify.Proofs." + Goal->Group + "." + Name +
+               "\tCppVerify.Goals." + Goal->Group + "\n"});
+    }
+    for (const LeanRefutation &Refutation : Refutations) {
+      const std::string Module =
+          "CppVerify.Refutations." + Refutation.Group + "." + Refutation.Goal;
+      Proofs.push_back(
+          {Refutation.Goal + "_refuted",
+           leanProjectPath(Root, {"CppVerify", "Refutations", Refutation.Group,
+                                  Refutation.Goal + ".lean"}),
+           leanProjectPath(Root, {".lake", "build", "lib", "lean", "CppVerify",
+                                  "Refutations", Refutation.Group,
+                                  Refutation.Goal + ".olean"}),
+           Refutation.Goal + "\t" + Module + "\t" + Module + "\trefutation\n"});
+    }
+    for (const Build &Proof : Proofs)
       if (std::error_code EC = llvm::sys::fs::create_directories(
-              leanProjectPath(ProofBuildDir, {Goal->Group})))
+              llvm::sys::path::parent_path(Proof.Object)))
         return llvm::createStringError(
             EC, "cannot create Lean proof build directory");
     // Each proof builds by itself, several at once, unless nothing it is
@@ -2336,12 +2400,9 @@ public:
     std::atomic<size_t> NextProof{0};
     auto buildProofs = [&] {
       for (size_t I; (I = NextProof++) < Proofs.size();) {
-        const auto &[Name, Goal] = Proofs[I];
-        std::string File;
-        const std::string ProofSource =
-            leanProjectPath(Root, leanProofComponents(*Goal, File));
-        const std::string ProofObject = leanProjectPath(
-            leanProjectPath(ProofBuildDir, {Goal->Group}), {Name + ".olean"});
+        const std::string &Name = Proofs[I].Name;
+        const std::string &ProofSource = Proofs[I].Source;
+        const std::string &ProofObject = Proofs[I].Object;
         const std::string KeyFile = leanProjectPath(KeyDir, {Name});
         const std::optional<std::string> Key = leanProofKey(ProofSource);
         if (Key && llvm::sys::fs::exists(ProofObject))
@@ -2370,13 +2431,11 @@ public:
     std::map<std::string, std::string> Failures;
     std::string Built;
     for (size_t I = 0; I != Proofs.size(); ++I) {
-      const auto &[Name, Goal] = Proofs[I];
       if (BuildErrors[I]) {
-        Failures[Name] = *BuildErrors[I];
+        Failures[Proofs[I].Name] = *BuildErrors[I];
         continue;
       }
-      Built += Name + "\tCppVerify.Proofs." + Goal->Group + "." + Name +
-               "\tCppVerify.Goals." + Goal->Group + "\n";
+      Built += Proofs[I].Entry;
     }
     if (Built.empty())
       return Failures;
@@ -2409,9 +2468,9 @@ public:
         Failures[Fields[1].str()] =
             Fields.size() == 3 ? Fields[2].str() : "the certifier failed";
     }
-    for (const auto &[Name, Goal] : UniqueGoals)
-      if (!Failures.count(Name) && !Checks.count(Name))
-        Failures[Name] = "the certifier did not check it";
+    for (const Build &Proof : Proofs)
+      if (!Failures.count(Proof.Name) && !Checks.count(Proof.Name))
+        Failures[Proof.Name] = "the certifier did not check it";
     return Failures;
   }
 
@@ -3258,6 +3317,14 @@ public:
         BackendKind Kind;
       };
       std::vector<Confirmation> Confirmations;
+      /// Certified failures a fallback project shows in Lean: each one's
+      /// place in Diags and its refutation, or why it has none.
+      struct Refutation {
+        size_t Index;
+        std::optional<LeanRefutation> Lean;
+        std::string Why;
+      };
+      std::vector<Refutation> Refutations;
       /// For a verified proof function: what its verification proves.
       std::shared_ptr<const ContractTheorem> Contract;
       /// The verdict on the definedness of the function's contract, when it
@@ -4475,6 +4542,21 @@ public:
           AnyFailed = true;
           if (!Fn->IsProof)
             FailedCallers.insert(Fn->Identity);
+          // A fallback project shows a certified counterexample in Lean too.
+          if (LeanFallbackBackend && R.Reason == VerifyReason::Counterexample) {
+            FunctionRun::Refutation Pending{Diags.size(), std::nullopt,
+                                            "the solver's model gives the "
+                                            "goal's variables no values"};
+            auto Item =
+                llvm::find_if(Module.Obligations, [&](const Obligation &Item) {
+                  return (Item.StableId.empty() ? Item.Id : Item.StableId) ==
+                         R.ObligationId;
+                });
+            if (R.Assignment && Item != Module.Obligations.end())
+              Pending.Lean = exportLeanRefutation(
+                  Module, *Item, *R.Assignment, LeanModules.Specs, Pending.Why);
+            Run.Refutations.push_back(std::move(Pending));
+          }
           std::string Msg = "verification failed: " + Fn->Name;
           if (!R.ObligationId.empty())
             Msg += " [" + R.ObligationId + "]";
@@ -4521,6 +4603,7 @@ public:
         D.Hidden = true;
       Run.AllOk = false;
       Run.Confirmations.clear();
+      Run.Refutations.clear();
       VerifyResult Result;
       Result.Status = VerifyStatus::Unresolved;
       Result.Reason = VerifyReason::Interrupted;
@@ -4528,6 +4611,10 @@ public:
                            Fn.Name, std::move(Result)});
     };
     std::vector<FunctionRun::Confirmation> Confirmations;
+    std::vector<FunctionRun::Refutation> Refutations;
+    // What certification found of the refutations, or why it checked none.
+    std::optional<std::map<std::string, std::string>> RefutationChecks;
+    std::string RefutationsUnchecked;
     for (size_t I = 0; I != Runs.size(); ++I) {
       FunctionRun &Run = Runs[I];
       if (Run.Interrupted)
@@ -4558,6 +4645,10 @@ public:
         Pending.Index += Base;
         Confirmations.push_back(std::move(Pending));
       }
+      for (FunctionRun::Refutation &Pending : Run.Refutations) {
+        Pending.Index += Base;
+        Refutations.push_back(std::move(Pending));
+      }
       if (Run.ContractCheck)
         ContractChecks[Functions[I]->Identity] = Base + *Run.ContractCheck;
       if (DumpOS)
@@ -4575,9 +4666,15 @@ public:
                     [](const LeanProjectGoal &Goal) { return Goal.Exported; });
       const std::set<std::string> *RunGroups =
           LeanFallbackBackend ? &LeanRunGroups : nullptr;
+      std::vector<LeanRefutation> LeanRefutations;
+      for (const FunctionRun::Refutation &Pending : Refutations)
+        if (Pending.Lean)
+          LeanRefutations.push_back(*Pending.Lean);
       llvm::Error Finalized = Lean->writeLeanProjectModules(LeanModules);
       if (!Finalized)
         Finalized = Lean->finalizeLeanProject(LeanProjectGoals, RunGroups);
+      if (!Finalized && LeanFallbackBackend)
+        Finalized = Lean->writeLeanRefutations(LeanRefutations);
       if (!Finalized && Opts.LeanAuto)
         Lean->automateLeanProject(LeanProjectGoals);
       reportLeanWarnings();
@@ -4599,7 +4696,7 @@ public:
                          "cannot finalize Lean project (" +
                              llvm::toString(std::move(Finalized)) + ")"});
       } else if (Opts.LeanCertify && !interruptRequested() &&
-                 (!ExportedGoals.empty() ||
+                 (!ExportedGoals.empty() || !Refutations.empty() ||
                   Opts.LeanFallbackProjectPath.empty())) {
         // A verdict certification does not make a proof is reported, and
         // what its vacuity checks found is not.
@@ -4624,12 +4721,15 @@ public:
             Diagnostic.Result->Message = Reason;
           }
         };
-        auto Certified = Lean->certifyLeanProject(ExportedGoals);
+        auto Certified =
+            Lean->certifyLeanProject(ExportedGoals, LeanRefutations);
         std::map<std::string, const LeanProjectGoal *> GoalsByName;
         for (const LeanProjectGoal &Goal : ExportedGoals)
           GoalsByName.emplace(Goal.Name, &Goal);
+        std::string NotCertified;
         if (!Certified) {
           const std::string Reason = llvm::toString(Certified.takeError());
+          NotCertified = Reason;
           for (size_t Index = 0; Index != Diags.size(); ++Index)
             if (Diags[Index].K == VerifyDiagnostic::Exported)
               failed(Index, Reason);
@@ -4696,6 +4796,11 @@ public:
               Diagnostic.Message += " [vacuous]";
           }
         }
+
+        if (Certified)
+          RefutationChecks = *Certified;
+        else
+          RefutationsUnchecked = NotCertified;
       }
     }
     for (const SpecReliance &Check : ProofDependencies)
@@ -5224,6 +5329,54 @@ public:
       if (!Trusted.empty())
         Diagnostic.Message += " [trusts=" + Trusted + "]";
     }
+    // A certified failure stands on the certifier's evaluation. Its
+    // refutation shows it in Lean too; one Lean decides the other way is a
+    // disagreement between two evaluators of one goal, never a failure. Only
+    // the failures that stand once the verdicts settle are reported.
+    for (const FunctionRun::Refutation &Pending : Refutations) {
+      if ((!RefutationChecks && RefutationsUnchecked.empty()) ||
+          Diags[Pending.Index].K != VerifyDiagnostic::Error)
+        continue;
+      const std::string Function = Diags[Pending.Index].FunctionName;
+      std::string Why = Pending.Why;
+      if (Pending.Lean && !RefutationChecks) {
+        Why = RefutationsUnchecked;
+      } else if (Pending.Lean) {
+        auto Outcome = RefutationChecks->find(Pending.Lean->Goal + "_refuted");
+        if (Outcome == RefutationChecks->end()) {
+          Diags[Pending.Index].Message += " (confirmed in Lean)";
+          Diags[Pending.Index].LeanRefuted = true;
+          continue;
+        }
+        Why = Outcome->second;
+        if (llvm::StringRef(Why).contains(
+                "Lean decides the goal true at the counterexample")) {
+          VerifyDiagnostic &Failure = Diags[Pending.Index];
+          const std::string Detail =
+              "Lean decides the goal of " + Pending.Lean->StableId +
+              " true at the solver's counterexample, which the certifier "
+              "found false";
+          Failure.K = VerifyDiagnostic::Unresolved;
+          Failure.Message = Function + " (" + Detail + ")";
+          if (Failure.Result) {
+            Failure.Result->Status = VerifyStatus::Unresolved;
+            Failure.Result->Reason = VerifyReason::InconsistentBackendResults;
+            Failure.Result->Message = Detail;
+            Failure.Message += backendSuffix(*Failure.Result);
+          }
+          continue;
+        }
+      }
+      // What the refutation tactic says, else the first line.
+      llvm::StringRef Said = Why;
+      if (size_t At = Said.find("cppverify: "); At != llvm::StringRef::npos)
+        Said = Said.substr(At + std::strlen("cppverify: "));
+      Said = Said.take_until([](char C) { return C == '\n'; });
+      Diags.push_back({VerifyDiagnostic::Warning,
+                       "the counterexample of " + Function +
+                           " is not confirmed in Lean: " + Said.str()});
+    }
+
     // Calls from code that is not verified rely on the precondition without
     // checking it, so the proof holds only where they establish it.
     for (const auto &[Index, Identity, Callees] : CallDependencies) {
@@ -5373,6 +5526,8 @@ public:
     }
     if (D.K == VerifyDiagnostic::Exported && D.LeanAutomatic)
       Record["lean_automatic"] = static_cast<int64_t>(D.LeanAutomatic);
+    if (D.LeanRefuted)
+      Record["lean_refuted"] = true;
     if (D.Result) {
       const VerifyResult &Result = *D.Result;
       if (!Result.BackendName.empty())
