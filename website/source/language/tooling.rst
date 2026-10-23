@@ -467,11 +467,13 @@ Backends
        concatenated in one archive.
    * - ``--obligation-in=FILE``
      - Validate and replay an archive without reparsing C++. Supports Z3, cvc5,
-       strict portfolio, ``--lower-only``/Layer 3-4 dumps, and Lean scratch
-       export. Archives
+       strict portfolio, ``--lower-only``/Layer 3-4 dumps, Lean scratch
+       export, and Lean projects (``--lean-project``, with certification).
+       Archives
        produced after BMC unrolling retain their bound and replay with BMC
-       unwinding semantics; applying BMC to an untransformed archive is
-       rejected because unrolling must run before obligation lowering.
+       unwinding semantics, in Lean too; applying BMC to an untransformed
+       archive is rejected because unrolling must run before obligation
+       lowering.
        Each module is replayed on its own, without the callee and trusted
        contracts, spec facts, partiality, and vacuity its source verdict
        rests on: a module whose obligations all hold reports ``Proved
@@ -783,13 +785,26 @@ against the definitions the archive carries. Before 0.2, replay printed
 run did not verify the function, for example when a callee's verification
 failed.
 
-``--obligation-out`` writes ``cppverify.obligation/2`` records only after exact
+An archive replays into a Lean project with ``--lean-project``, optionally
+with ``--lean-certify``, ``--lean-prune-stale``, ``--no-lean-auto``,
+``--lean-auto-timeout``, and ``--jobs``: the project gets the goals, specs,
+and proof files a source run of the same program gives, and a module whose
+goals all certify is ``Proved obligations`` ``[backend=lean]``. A bounded
+record of BMC goes to Lean too, its bound stated with its goals; its
+module is ``BoundedSafe`` when every goal but some unwinding goal
+certifies (:doc:`../book/part-ii/ch17-backends-modular-calls`).
+``--lean-fallback`` applies to source verification only.
+
+``--obligation-out`` writes ``cppverify.obligation/3`` records only after exact
 serialize/deserialize/validate/reserialize checks. Stable wire tags make the
 format independent of C++ enum ordinals. The reader rejects malformed magic,
 unsupported versions, truncation, invalid tags, inconsistent feature
 declarations, duplicate identities, and oversized/deep expressions.
-Schema v2 adds the precise obligation kinds; schema v1 records, which name
-only assertions, postconditions, and unwinding checks, are still read.
+Schema v2 adds the precise obligation kinds; schema v3 each spec function's
+termination measures, read like its definition, and, with source metadata,
+where each assumption of a goal comes from, which names a hypothesis of a
+readable Lean goal. Records of schema v2, and of schema v1, which name only
+assertions, postconditions, and unwinding checks, are still read.
 Records cap integer widths at 4096 bits, expression depth at 4096, and
 collections plus expression nodes/edges at 100,000 per record. It also rejects
 embedded NULs, non-canonical numerals, inactive payload fields, ill-scoped
@@ -799,7 +814,8 @@ backend dispatch.
 
 Module and per-obligation SHA-256 hashes omit source paths and display-only
 names, source ranges, internal positional and public source-anchored IDs,
-obligation kinds other than ``unwinding``, and traces, so moving unchanged
+obligation kinds other than ``unwinding``, traces, measures, and where
+assumptions come from, so moving unchanged
 source, inserting an unrelated earlier obligation, or changing display metadata
 preserves an individual goal's semantic identity.
 Archives still
