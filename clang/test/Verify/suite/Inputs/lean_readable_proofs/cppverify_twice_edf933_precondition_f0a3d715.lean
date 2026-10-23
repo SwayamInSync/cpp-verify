@@ -1,3 +1,4 @@
+import CppVerify.Goals.cppverify_twice_edf933
 import CppVerify.User
 
 theorem cppverify_twice_edf933_precondition_f0a3d715_proof : cppverify_twice_edf933_precondition_f0a3d715 := by
