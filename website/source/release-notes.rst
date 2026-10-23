@@ -385,6 +385,20 @@ proofs side by side and checks them in one Lean environment: the 33 goals of
 one test took 204 s and now take 12 s
 (:doc:`book/part-ii/ch17-backends-modular-calls`).
 
+**A Lean module per function.** A Lean project kept every goal of every
+function in ``CppVerify/Generated.lean``, which every proof imported, so a
+change to one function built every proof again, and certification compiled
+every proof on every run. Each function's goals now have a module of their
+own, ``CppVerify/Goals/<function>.lean``, the specs they apply are declared
+once, in ``CppVerify/Specs.lean``, and a proof imports its function's goals,
+``User``, and ``Auto``. A generated file is written only when its text
+changes, and certification compiles a proof again only when it or a module
+it imports changed: after a change to one of five functions, it compiles
+that function's three proofs. ``lake build``, which failed for want of the
+library's root module, builds every proof. A ``User.lean`` that 0.1 wrote,
+which imports ``CppVerify.Generated``, keeps working
+(:doc:`book/part-ii/ch17-backends-modular-calls`).
+
 **Lean 4.35.0.** Lean projects pin ``leanprover/lean4:v4.35.0``. A project 0.1
 generated, pinned to ``v4.32.2``, moves to the new pin the next time cpp-verify
 writes it, with a warning; a proof that no longer builds needs updating for that
