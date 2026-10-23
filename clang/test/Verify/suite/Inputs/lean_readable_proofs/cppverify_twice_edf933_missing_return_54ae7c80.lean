@@ -1,3 +1,4 @@
+import CppVerify.Goals.cppverify_twice_edf933
 import CppVerify.User
 
 theorem cppverify_twice_edf933_missing_return_54ae7c80_proof : cppverify_twice_edf933_missing_return_54ae7c80 := by
