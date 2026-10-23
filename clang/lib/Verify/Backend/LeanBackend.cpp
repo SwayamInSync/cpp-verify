@@ -687,7 +687,9 @@ static unsigned collectLeanTemporaries(const LogicExpr *Expression,
     for (const auto &Child : Expression->Children)
       Size += collectLeanTemporaries(Child.get(), Nodes);
   if (!IsRoot && Size >= 128) {
-    Nodes.push_back(Expression);
+    // A subterm shared by several places is named once.
+    if (!llvm::is_contained(Nodes, Expression))
+      Nodes.push_back(Expression);
     return 1;
   }
   return Size;
