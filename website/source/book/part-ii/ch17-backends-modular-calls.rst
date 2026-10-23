@@ -433,6 +433,95 @@ prints:
 
 A proof of the goal itself, as the one for ``small`` above, checks as well.
 
+Spec functions in Lean
+~~~~~~~~~~~~~~~~~~~~~~
+
+A spec function that a goal applies is a Lean definition when Lean proves
+that it terminates, and opaque otherwise, when a goal knows it only through
+the definition instances it states. For this file:
+
+.. cppverify-example: flags --backend=lean --lean-project={dir}/proof
+
+.. code-block:: cpp
+
+   cppverify::spec int tri(int n)
+     cppverify::decreases(n)
+   {
+     return n <= 0 ? 0 : tri(n - 1) + n;
+   }
+
+   cppverify::proof void tri_nonneg(int n)
+     cppverify::post(tri(n) >= 0)
+   {
+   }
+
+   cppverify::proof void tri_four()
+     cppverify::post(tri(4) == 10)
+   {
+   }
+
+``cpp-verify --backend=lean --lean-project=proof file.cpp`` prints:
+
+.. code-block:: text
+
+   Exported: decreases: tri (cppverify_auto proved 1 of 1 goals)
+   Exported: lean obligation: tri_nonneg (cppverify_auto proved 1 of 2 goals)
+   Exported: lean obligation: tri_four (cppverify_auto proved 2 of 2 goals)
+
+and ``Specs.lean`` defines ``tri`` by its body:
+
+.. code-block:: lean4
+
+   def cppSpec_fn_5f5a3374726969 (n : Int) : Int :=
+     if _h : n ≤ (0 : Int) then (0 : Int) else (cppSpec_fn_5f5a3374726969 (n - (1 : Int))) + n
+   termination_by ((n) + 1).toNat
+   decreasing_by all_goals cppverify_decreasing
+
+The definition is the spec's body, with each condition that reaches a
+recursive application a hypothesis there, ``if _h : c`` (a ``&&``, ``||``,
+or bounded ``cppverify::exists`` whose later part applies the recursion
+becomes such an ``if``), so that Lean can prove the decrease from it. Its
+measure is its ``cppverify::decreases``, each ``m`` as ``(m + 1).toNat`` and
+lexicographic over several: exactly the relation cpp-verify's termination
+check proves, where a call's measure may be -1 below a caller's 0. Specs
+that apply each other are one ``mutual`` block. The body is never guarded by
+the measure as a whole, so the definition has the spec's value at every
+argument.
+
+Lean proves each decrease with ``cppverify_decreasing``, a prelude tactic:
+``omega``, after unfolding the comparison and collection wrappers, or the
+division and remainder of a measure that falls by a constant divisor
+(``log2(n / 2)``), then ``simp_all`` and Lean's own ``decreasing_tactic``.
+
+The export tries the definitions with the pinned Lean. One that Lean rejects
+stays opaque, as when the decrease rests on another spec's postcondition,
+and one that applies it is tried again against that opaque declaration.
+Lean's verdict on each is kept in ``.cppverify/specs``, so a later export
+tries nothing; without Lean every spec is opaque.
+
+The goals are the same either way, since they state the same definition
+instances. With the definition, ``cppverify_auto`` evaluates ``tri(4)``
+(``cppverify_auto_eval``, below), and a proof may unfold ``tri`` or argue by
+induction over its recursion, with the principle Lean generates for it:
+
+.. code-block:: lean4
+
+   theorem tri_nonneg (m : Int) : 0 ≤ cppSpec_fn_5f5a3374726969 m := by
+     induction m using cppSpec_fn_5f5a3374726969.induct with
+     | case1 x h => rw [cppSpec_fn_5f5a3374726969]; simp [h]
+     | case2 x h ih => rw [cppSpec_fn_5f5a3374726969]; simp [h]; omega
+
+   theorem cppverify_tri_nonneg_42a030_postcondition_053b1980_proof :
+       cppverify_tri_nonneg_42a030_postcondition_053b1980 := by
+     apply cppverify_tri_nonneg_42a030_postcondition_053b1980.of_readable
+     intro _ _ n _ _ _
+     exact tri_nonneg _
+
+With that proof, ``--lean-certify`` prints ``Certified`` for ``tri``,
+``tri_nonneg``, and ``tri_four``. A verdict still rests on the termination
+cpp-verify itself establishes: a spec whose own check is unresolved leaves
+the goals that rely on it ``spec.termination``, whatever Lean defines.
+
 Collections in Lean
 ~~~~~~~~~~~~~~~~~~~
 
@@ -531,9 +620,9 @@ The postcondition of ``total_push`` needs the definition of ``total`` at
      omega
 
 Either way, ``--lean-certify`` prints ``Certified`` for ``total``, ``last``,
-and ``total_push``. A goal that needs induction over a recursive spec, as
-``total(s + t) == total(s) + total(t)`` does, cannot be proved in Lean yet:
-Lean knows ``total`` only through the definition instances its goals state.
+and ``total_push``. ``total`` is a definition (`Spec functions in Lean`_), so
+a goal that needs induction over it, as ``total(s + t) == total(s) +
+total(t)`` does, takes a proof by induction over ``total``'s recursion.
 
 Proofs cppverify_auto finds
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -571,7 +660,7 @@ A goal it proves gets that proof, with a header that says so:
 
 .. code-block:: lean4
 
-      automation: cppverify_auto 2 proves it with cppverify_auto_grind
+      automation: cppverify_auto 3 proves it with cppverify_auto_grind
       cppverify_auto proves this goal. cpp-verify rewrites this file only while it
       is unedited; a proof you write here is yours, kept as any other. -/
    import CppVerify.Goals.cppverify_next_e1e917
@@ -584,7 +673,7 @@ A goal it proves gets that proof, with a header that says so:
      cppverify_auto_grind
 
 Any other goal gets a stub, whose header says it was tried
-(``automation: cppverify_auto 2 did not prove it``). Here those are the two
+(``automation: cppverify_auto 3 did not prove it``). Here those are the two
 goals of ``square`` that need ``x * x`` bounded: nonlinear arithmetic, which
 core Lean does not decide. Certification checks the automatic proofs like any
 other, so ``--lean-certify`` prints ``Certified: next [backend=Lean]``, and
@@ -607,7 +696,14 @@ first that proves the goal:
 - ``cppverify_auto_ext``: an equality of two collections, element by
   element (`Collections in Lean`_), then as ``cppverify_auto_bv``;
 - ``cppverify_auto_unfold``: each definition instance the goal states, by
-  the body it names, then as ``cppverify_auto_bveq``.
+  the body it names, then as ``cppverify_auto_bveq``;
+- ``cppverify_auto_eval``: the spec functions that are Lean definitions
+  (`Spec functions in Lean`_), by their equations, and the division and
+  remainder of contracts and specs by their definitions, so that an
+  application at known arguments becomes its value;
+- ``cppverify_auto_div``: the division and remainder of contracts and specs
+  by their definitions, then ``grind``, which decides them by a constant
+  divisor once their signs are split (``a / 2 >= 2`` for ``a >= 4``).
 
 A step counts only when it proves the goal with Lean's foundations alone, so
 an unfinished lemma of yours (proved by ``sorry``) never proves a goal, and a
@@ -620,10 +716,10 @@ most of the rest need nonlinear arithmetic, induction over a spec, or a
 quantified frame.
 
 A goal is tried once: a later export tries a stub again only if a later
-release of cpp-verify brings a new revision of ``cppverify_auto`` (the ``2``
-in the header), and never once you edit it. Revision 2 added the last three
-steps, after the others, so that a goal an earlier step proves keeps its
-proof; a stub that revision 1 wrote is tried again. You can help it: a lemma in
+release of cpp-verify brings a new revision of ``cppverify_auto`` (the ``3``
+in the header), and never once you edit it. Revisions 2 and 3 added the last
+five steps, after the others, so that a goal an earlier step proves keeps its
+proof; a stub that an earlier revision wrote is tried again. You can help it: a lemma in
 ``User.lean`` tagged ``@[grind]`` or ``@[simp]`` is used by its steps, since
 the proof files import ``User.lean``; delete a stub to have it tried again.
 Your own proofs may use ``cppverify_auto``, any of its steps, and the parts
@@ -744,8 +840,7 @@ and writes:
        Check.lean             imports every proof
 
 ``Specs.lean`` declares each spec function the goals apply once, ``tri``
-here, as a function of which nothing is known
-(``opaque cppSpec_fn_5f5a3374726969 : Int -> Int``). Each goal module imports
+here, by its definition (`Spec functions in Lean`_). Each goal module imports
 it and defines the bodies its goals unfold under its own prefix, as in
 ``cppSpecBody_e086e9ab_fn_5f5a3374726969_1``, so any goal modules can be
 imported together. A proof imports its function's goals, your lemmas, and
