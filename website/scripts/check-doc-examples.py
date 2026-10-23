@@ -209,8 +209,10 @@ def check(cpp_verify, job):
                     f"\nactual output:\n{output.strip()[:2500]}"), False
         return None
     # A Lean export compiles the example itself; it has no lowering of its own.
+    # Lowering takes no Lean output.
     if "--backend=lean" not in arguments:
-        code, output = run(cpp_verify, source, ["--lower-only", *arguments], 300)
+        lowering = [a for a in arguments if not a.startswith("--lean-")]
+        code, output = run(cpp_verify, source, ["--lower-only", *lowering], 300)
         if code is None or code != 0 or "error:" in output:
             return f"{where}: the example does not compile:\n{output.strip()[:1500]}", False
     code, output = run(cpp_verify, source,
