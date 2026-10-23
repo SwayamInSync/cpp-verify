@@ -1,6 +1,6 @@
-// Five functions for lean_modules.test: inc and dbl, which cppverify_auto
-// proves, and two that apply the recursive spec tri, whose postconditions
-// Inputs/lean_modules_*.lean prove.
+// Five functions for lean_modules.test: inc and dbl, and two that apply the
+// recursive spec tri, whose postconditions Inputs/lean_modules_*.lean also
+// prove by hand.
 
 cppverify::spec int tri(int n)
   cppverify::decreases(n)
