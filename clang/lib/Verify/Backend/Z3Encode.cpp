@@ -82,7 +82,7 @@ bool containsQuantifier(const VCExpr *E) {
       E->K == VCExpr::HeapFrame)
     return true;
   return std::any_of(E->Children.begin(), E->Children.end(),
-                     [](const std::unique_ptr<VCExpr> &Child) {
+                     [](const LogicExprRef &Child) {
                        return containsQuantifier(Child.get());
                      });
 }
@@ -2600,7 +2600,7 @@ bool appliesDefined(const LogicExpr *E,
   if (!IntoQuantifiers &&
       (E->K == LogicExpr::Forall || E->K == LogicExpr::Exists))
     return false;
-  return llvm::any_of(E->Children, [&](const std::unique_ptr<LogicExpr> &C) {
+  return llvm::any_of(E->Children, [&](const LogicExprRef &C) {
     return appliesDefined(C.get(), Defined, IntoQuantifiers);
   });
 }
@@ -2636,8 +2636,9 @@ guardRecursion(const LogicExpr *E,
     Tail->Sort = E->Sort;
     for (size_t I = From; I != E->Children.size(); ++I)
       Tail->Children.push_back(cloneLogicExpr(E->Children[I].get()));
-    return Tail->Children.size() == 1 ? std::move(Tail->Children.front())
-                                      : std::move(Tail);
+    if (Tail->Children.size() == 1)
+      return cloneLogicExpr(Tail->Children.front().get());
+    return Tail;
   };
   switch (E->K) {
   case LogicExpr::And:
@@ -2685,7 +2686,7 @@ bool recursionGuarded(const LogicExpr *E, bool InBranch,
     return InBranch || !appliesDefined(E, Defined);
   if (E->K == LogicExpr::SpecCall && Defined(E->SpecCallee) && !InBranch)
     return false;
-  return llvm::all_of(E->Children, [&](const std::unique_ptr<LogicExpr> &C) {
+  return llvm::all_of(E->Children, [&](const LogicExprRef &C) {
     return recursionGuarded(C.get(), InBranch, Defined);
   });
 }
