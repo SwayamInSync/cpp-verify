@@ -1772,6 +1772,43 @@ replay both drive it.
   termination module it gives the solver (`LeanRunGroups`); a record whose
   group is among them but has no goal this run, or whose goal the run knows
   but does not export, is left where it is and never moved.
+- **Refutations.** Where the adapter attributes a certified counterexample
+  to an obligation, it keeps the model's value of every free variable of
+  that obligation's goal (`counterexampleAssignment`, read through the
+  certifier's `CandidateModel::constant`, so the values are the ones it
+  evaluated; `VerifyResult::Assignment`). A fallback run turns each such
+  failure into `exportLeanRefutation`'s module, which states the goal and
+  the bodies it unfolds as the project would (its specs added to `Specs`,
+  so the trial may define them), then `theorem <goal>_refuted : ¬ <goal>`:
+  the goal applied to the values in the order it binds its variables
+  (machine integers as `BitVec.ofInt`, a heap or collection by its runs of
+  equal cells as nested `if`s), and closed by `cppverify_refute`, an
+  `Auto.lean` tactic that tries `decide`, then evaluation by the bodies,
+  the spec equations (which prove the definition instances the goal states),
+  memory reads, and machine comparisons, closed by `decide` or, for a store
+  relation, which quantifies over every address, `grind`. When both fail it
+  tries to show the instance true, in a context without the goal (which
+  would prove any instance of itself): Lean deciding it true fails with
+  `Lean decides the goal true at the counterexample`, else with `Lean cannot
+  decide the goal`. Each attempt, and that probe, has `cppverify.autoBudget`
+  heartbeats of its own (`withinBudget`, as a step of `cppverify_auto`), and
+  the module lifts the heartbeat limit for the goal's definitions only, so
+  the theorem keeps Lean's limit, which bounds the kernel's check of it too:
+  with no limit, the refutation of an inductive predicate applied at -5000
+  ran for over an hour. The prelude decides a quantifier over a
+  range of integers by trying each one (`cppIntBallDecidable`,
+  `cppIntBexDecidable`, through core's `Nat` ones). `writeLeanRefutations`
+  writes `Refutations/<group>/<goal>.lean` and removes every other, and
+  certification builds them beside the proofs and gives the checker each as
+  a `refutation` entry, whose theorem must state exactly `Not <goal>` of the
+  goal its module defines, with Lean's foundations alone. Once the verdicts
+  settle (a failure checked with a spec postcondition that is not
+  established is `spec.post`), the driver marks each failure that stands and
+  was confirmed (`LeanRefuted`, JSON `lean_refuted`), warns of one Lean
+  cannot decide, and makes one Lean decides true `Unresolved`
+  (`InconsistentBackendResults`): two evaluators of one goal disagree, so
+  the failure is not a fact. On the gate's matrix every certified failure is
+  refuted; a goal applying an opaque function (a choice, `validPtr`) is not.
 
 - **Readable goals.** `makeGoal` (`Obligation.cpp`) marks each `Or` it
   builds, `!A || rest`, with where `A` comes from (`LogicExpr::Premise`,
@@ -2091,8 +2128,9 @@ prove individually, and by default only those are exported, under their
 complete-export goal names (`--lean-fallback-scope=all` exports every
 obligation). Once they kernel-check, the result is `MixedProof`
 (`Proved (z3+lean)`, JSON `mixed-proof`) with `ProofEvidence` recording the
-split; `Certified` still means Lean checked every obligation. SAT
-counterexamples are never fallback successes.
+split; `Certified` still means Lean checked every obligation. A certified
+counterexample is never a fallback success; its refutation shows it in
+Lean.
 
 A verdict left to Lean (a Lean-backend export, or a fallback export under
 `--lean-certify`) rests on what its module uses, as a solver's does. At export
@@ -2519,7 +2557,7 @@ an unchecked support table:
 | Quantifiers and finite-fuel specs | Both quantifier kinds, recursive spec calls, and conservative `unknown` rather than false proof |
 | Frontend-derived semantics | Type invariants and complete-loop Z3/BMC parity |
 | Portable artifacts | Source-stable obligation IDs, canonical/BMC archive replay, and deterministic parallel results |
-| Lean | Source/archive obligation identity, one proof file per project goal recording its statement hash, generated-file kernel build, and bounds instrumentation |
+| Lean | Source/archive obligation identity, one proof file per project goal recording its statement hash, generated-file kernel build, bounds instrumentation, and decisive verdicts: every valid case certified (one with a proof by hand, `Inputs/backend_fidelity_proofs`), every counterexample refuted |
 | Advisory checks | `cppverify::recommends` warnings stay source-only and never enter BMC or Lean replay artifacts |
 
 An approved valid quantified or inductive query may remain
