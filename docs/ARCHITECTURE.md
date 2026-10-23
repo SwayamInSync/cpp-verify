@@ -609,7 +609,8 @@ canonicalization step before hashing or backend dispatch. The pass folds only
 sort-preserving Boolean constants, double negation, constant conditionals, and
 reflexive equality/inequality. It simplifies owned finite-fuel definitions and
 removes logical declarations unreachable transitively from every ordered
-obligation. It then rebuilds each exact counterexample negation, the complete
+obligation, a declaration reaching what its definition and its termination
+measures apply. It then rebuilds each exact counterexample negation, the complete
 ordered goal/query, and required feature set before revalidation. Arithmetic,
 quantifiers, pointer/heap terms, and assumptions are not rewritten. Layer 3
 reports before/after node counts, rewrite count, and removed declarations for
@@ -678,7 +679,7 @@ and obligation kinds.
 ### Canonical archives and semantic identity
 
 `--obligation-out=FILE` writes one or more deterministic
-`cppverify.obligation/2` records after source attribution. The binary format has
+`cppverify.obligation/3` records after source attribution. The binary format has
 the `CPVOBL\r\n` magic, an explicit schema version, little-endian fixed-width
 integers, length-delimited strings/collections, and stable hand-assigned wire
 tags rather than C++ enum ordinals. The reader bounds strings, collections,
@@ -691,10 +692,20 @@ which tag 6, the former sequence update, is reserved); the collection sorts
 `seq`, `set`, `multiset`, and `map` have sort tags 6 to 9. Trigger patterns
 and the `Choice` marker of a logical function are not archived, so a
 replayed module instantiates quantifiers by the solver's own patterns and
-treats a choice as an ordinary uninterpreted function.
+treats a choice as an ordinary uninterpreted function. A logical function's
+`Decreases` follow its definition levels, and with source metadata the
+`Premise` of each `Or` follows its source point; neither is hashed. A
+measure is validated like a definition (an integer over the parameters,
+every call resolved): it changes no meaning, since Lean proves a
+definition's termination itself and an induction descends by a
+well-founded relation whatever the measure, and canonicalization keeps the
+functions a measure applies, so a module never names one it does not
+declare. Before, a spec only a measure applied was removed, and the
+measure could not be printed.
 
-Schema v2 adds the precise obligation kinds and still reads schema v1, whose
-records name only assertions, postconditions, and unwinding checks. Records
+Schema v2 adds the precise obligation kinds, and schema v3 the measures and
+premises; readers still read schema v2 and schema v1, whose records name
+only assertions, postconditions, and unwinding checks. Records
 limit strings to 64 MiB, collections and expression
 nodes/edges to 100,000 per record, expression nesting to 4096, canonical
 integer numerals to 4096 decimal characters, and integer sorts to 4096 bits.
@@ -706,8 +717,9 @@ that are not the conjunction of their ordered obligations.
 
 Every module and individual obligation has a SHA-256 semantic hash. Semantic
 hashes omit source paths, display-only function names, internal positional
-or public source-anchored obligation IDs, and every obligation kind except
-`unwinding` (the only kind that changes result semantics), so moving identical
+or public source-anchored obligation IDs, measures, premises, and every
+obligation kind except `unwinding` (the only kind that changes result
+semantics), so moving identical
 C++ source or
 inserting an unrelated earlier obligation does not invalidate an individual
 goal's proof identity. Per-obligation hashes include only the transitive
@@ -728,6 +740,7 @@ cpp-verify --obligation-in=goals.cpv --backend=z3
 cpp-verify --obligation-in=goals.cpv --backend=portfolio
 cpp-verify --obligation-in=goals.cpv --lower-only --dump-ir=3,4
 cpp-verify --obligation-in=goals.cpv --backend=lean --lean-out=goals.lean
+cpp-verify --obligation-in=goals.cpv --lean-project=proof --lean-certify
 ```
 
 Replay treats decoded records as untrusted input: validation happens before
@@ -743,13 +756,33 @@ f (dependencies not checked in replay)` (JSON status `proved-obligations`),
 never `Verified`. A counterexample is still a failure: postconditions are not
 archived either, so replay certifies it by the definitions alone.
 
+With `--lean-project`, `replayLeanProject` (`Verifier.h`) exports every
+module through the project adapter and drives the same `LeanProject` a
+source run does: the modules and the spec trial, regeneration with moves
+and quarantine, automation, and with `--lean-certify` certification. The
+goals have the names, files, and proofs the same obligations have from
+source (both name a goal by its statement), and `Specs.lean` the same
+definitions, since the measures are archived; a readable goal names the
+same hypotheses, since the premises are. A module whose goals all certify
+is `Verified` there, printed `Proved obligations ... [backend=lean]`, never
+`Certified`, which claims the dependency fixpoint.
+
 BMC-produced modules retain the unroll bound as semantic transform provenance.
 Replay aggregates those modules with BMC unwinding semantics even when Z3 is
 the selected solver, so an exhausted frontier remains `BoundedSafe(N)` rather
 than becoming an ordinary program failure or an unbounded proof. Applying BMC
 to an untransformed archive is rejected because loop unrolling must precede
-obligation construction. Lean scratch export of a bounded archive is also
-rejected until bounded theorem provenance is represented in generated Lean.
+obligation construction. Lean exports a bounded module, to the scratch-pad
+or a project, with its bound stated over its goals (`/- bound: N loop
+iterations, by unrolling: ... -/`), and `LeanProjectGoal::Unwinding` marks
+its unwinding goals: every goal certified is `Verified` (`Proved
+obligations`, `bound=N`), every goal but some unwinding goal certified is
+`BoundedSafe` (`bmc.incomplete-bound`), else `Unresolved`. Lean proves and
+never refutes, so its `BoundedSafe` says that the unwinding goals are not
+certified, where BMC's says that they fail; both claim what the safety
+goals state, no failure in an execution within the bound, and reporting
+the unproved unwinding unresolved would leave Lean no bounded verdict for
+a module whose unwinding fails, the case BMC is for.
 Failure-triggered `cppverify::recommends` diagnostics are excluded from archives, keeping
 archive contents independent of solver outcomes.
 
@@ -1640,7 +1673,10 @@ SMT-LIB, and Lean's own operators differ.
 ### Project goals and their proofs
 
 A project names nothing by position, so that a proof keeps every name it
-uses when the source around it changes.
+uses when the source around it changes. `LeanProject` (`Verifier.cpp`) owns
+a project: its modules, its proof files, automation, and certification,
+reporting what it warns of to its caller; a source run and an archive's
+replay both drive it.
 
 - **Names.** A module's goals form a group, `cppverify_<function>_<h6>`
   (`leanProjectGroup`), `h6` from the MD5 of the function identity, which
