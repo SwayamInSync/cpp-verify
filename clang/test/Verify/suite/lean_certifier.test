@@ -67,9 +67,9 @@
 # IMPORTED-NEXT: Unresolved: lean obligation: one (Lean certification failed: the proof of fn_5f5a336f6e6576::postcondition@8:37: the kernel rejects CppVerify.Lemmas: while replaying declaration 'cheat': (kernel) declaration type mismatch, 'cheat' has type True but it is expected to have type cppverify_one_99bcee_postcondition_646d2761)
 
 # SHADOWED: Certified: fine [backend=Lean]
-# SHADOWED-NEXT: Unresolved: lean obligation: one (Lean certification failed: the proof of fn_5f5a336f6e6576::postcondition@8:37: CppVerify.Proofs.cppverify_one_99bcee.cppverify_one_99bcee_postcondition_646d2761 declares cppverify_one_99bcee_postcondition_646d2761, which CppVerify.Generated declares)
+# SHADOWED-NEXT: Unresolved: lean obligation: one (Lean certification failed: the proof of fn_5f5a336f6e6576::postcondition@8:37: CppVerify.Proofs.cppverify_one_99bcee.cppverify_one_99bcee_postcondition_646d2761 declares cppverify_one_99bcee_postcondition_646d2761, which CppVerify.Goals.cppverify_one_99bcee declares)
 
-# FIRST: Unresolved: lean obligation: early (Lean certification failed: {{.*}}; the proof of fn_5f5a356561726c7976::postcondition@2:37: CppVerify.Proofs.cppverify_early_103f65.cppverify_early_103f65_postcondition_646d2761 declares cppverify_early_103f65_postcondition_646d2761, which CppVerify.Generated declares)
+# FIRST: Unresolved: lean obligation: early (Lean certification failed: {{.*}}; the proof of fn_5f5a356561726c7976::postcondition@2:37: CppVerify.Proofs.cppverify_early_103f65.cppverify_early_103f65_postcondition_646d2761 declares cppverify_early_103f65_postcondition_646d2761, which CppVerify.Goals.cppverify_early_103f65 declares)
 # FIRST-NEXT: Certified: fine [backend=Lean]
 
 # HIDDEN: Certified: fine [backend=Lean]
