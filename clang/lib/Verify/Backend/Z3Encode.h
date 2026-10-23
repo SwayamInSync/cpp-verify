@@ -324,6 +324,9 @@ class Z3VerifyBackend : public VerifyBackend {
   unsigned SolverTimeoutMs;
   std::optional<unsigned> CollectionTimeoutMs;
   unsigned ResourceLimit;
+  /// While the obligations only choose the failure to report, the work each
+  /// of their queries may do: the work the complete query's probe had, or 0.
+  unsigned UnitsCap = 0;
   unsigned Jobs;
   llvm::StdThreadPool *Pool;
   uint64_t MaxQueryNodes;
@@ -366,7 +369,8 @@ class Z3VerifyBackend : public VerifyBackend {
   VerifyResult solveQuery(const ObligationModule &Module,
                           const LogicExpr *Query,
                           std::optional<uint64_t> TraceEventCount,
-                          unsigned Timeout, Race *Racing, bool Slice = false);
+                          unsigned Timeout, Race *Racing, bool Slice = false,
+                          unsigned Units = 0);
   VerifyResult verifyObligation(const ObligationModule &Module,
                                 const Obligation &Item,
                                 llvm::StringRef SemanticHash = {},
