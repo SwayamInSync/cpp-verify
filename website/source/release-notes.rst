@@ -416,6 +416,19 @@ every goal the suite exports that Z3 proves, it proves 93.3%, where revision 1
 proves 90.4%, and none fewer. Stubs that revision 1 wrote are tried again
 (:doc:`book/part-ii/ch17-backends-modular-calls`).
 
+**Spec functions as Lean definitions.** Every spec function of a Lean project
+was opaque, known to a goal only through the definition instances it states,
+so a goal that needed a spec at another argument, or induction over it, could
+not be proved. A spec is now a Lean definition when the pinned Lean proves
+that it terminates by its ``cppverify::decreases`` measures, with exactly the
+spec's value at every argument, and stays opaque otherwise. A proof may unfold
+it or argue by induction over its recursion, and ``cppverify_auto`` revision 3
+evaluates its applications at known arguments. Revision 3 also reads the
+division and remainder of contracts and specs by their definitions, which
+proves goals such as ``a / 2 >= 2`` for ``a >= 4``. Lean's verdict on each
+spec is kept in the project, so a later export tries nothing
+(:doc:`book/part-ii/ch17-backends-modular-calls`).
+
 **Lean 4.35.0.** Lean projects pin ``leanprover/lean4:v4.35.0``. A project 0.1
 generated, pinned to ``v4.32.2``, moves to the new pin the next time cpp-verify
 writes it, with a warning; a proof that no longer builds needs updating for that
