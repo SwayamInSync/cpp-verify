@@ -38,9 +38,10 @@ def axiomsOf (env : Kernel.Environment) (root : Name) : Except String NameSet :=
     | none => return .error s!"{c} is not in the environment"
   return .ok axioms
 
-/-- A module's imports and its own constants, read from its compiled files. -/
+/-- A module's imports and its own constants, in the order it declares them,
+read from its compiled files. -/
 unsafe def moduleConstants (module : Name) :
-    IO (Array Import × Std.HashMap Name ConstantInfo) := do
+    IO (Array Import × Array Name × Std.HashMap Name ConstantInfo) := do
   let file ← findOLean module
   let mut files := #[file]
   let server := OLeanLevel.server.adjustFileName file
@@ -54,12 +55,13 @@ unsafe def moduleConstants (module : Name) :
   let mut constants := {}
   for name in parts[parts.size - 1].1.constNames, info in parts[parts.size - 1].1.constants do
     constants := constants.insert name info
-  return (parts[0].1.imports, constants)
+  return (parts[0].1.imports, parts[parts.size - 1].1.constNames, constants)
 
 /-- A module of the project, read from its compiled files. -/
 structure ProjectModule where
   name : Name
   imports : Array Import
+  declared : Array Name
   constants : Std.HashMap Name ConstantInfo
 
 /-- The modules of the project some modules import, each after the modules it
@@ -75,10 +77,10 @@ unsafe def Closure.visit (toolchain : String) (module : Name) : StateT Closure I
   if (← findOLean module).toString.startsWith toolchain then
     modify fun c => { c with toolchain := c.toolchain.push { module } }
     return
-  let (imports, constants) ← moduleConstants module
+  let (imports, declared, constants) ← moduleConstants module
   for i in imports do
     Closure.visit toolchain i.module
-  modify fun c => { c with modules := c.modules.push { name := module, imports, constants } }
+  modify fun c => { c with modules := c.modules.push { name := module, imports, declared, constants } }
 
 /-- The kernel's environment of the project: the toolchain's modules the
 project imports, imported once, then every module of the project replayed
@@ -127,11 +129,10 @@ unsafe def replayProject (closure : Closure) : IO Replayed := do
       owner := owner.insert name m.name
   return { env, rejected, owner }
 
-/-- Whether the proof of a goal states exactly the goal the generated module
+/-- Whether the proof of a goal states exactly the goal its generated module
 defines and depends on no axiom outside the allowed ones. -/
-def checkStatement (project : Replayed) (goal module : Name) (allowed : NameSet) :
-    Option String := Id.run do
-  let generated := `CppVerify.Generated
+def checkStatement (project : Replayed) (goal module generated : Name)
+    (allowed : NameSet) : Option String := Id.run do
   let env := project.env
   let proof := goal.appendAfter "_proof"
   match env.find? goal with
@@ -157,31 +158,43 @@ def checkStatement (project : Replayed) (goal module : Name) (allowed : NameSet)
   | some _ => return some s!"{proof} is not a theorem"
   | none => return some s!"{module} declares no {proof}"
 
-/-- Usage: Certify GOALS ALLOWED, where each line of GOALS is a goal and its
-proof module, separated by a tab, and ALLOWED lists the axioms a proof may
-use, separated by commas. Prints one line per goal: `ok` or `fail`, the goal,
-and why it failed. A goal is proved when its proof module and the generated
-module pass the kernel, with every module of the project they import, and
-its proof states exactly the goal and uses only the allowed axioms. The
-generated module is replayed first, so that a proof file that declares a
-name it declares is the one left out. -/
+/-- The declaration of the user's lemmas that uses `sorry`, if one does: an
+admitted lemma fails every goal, as when the module was compiled with `sorry`
+an error. -/
+def userSorry (closure : Closure) (project : Replayed) : Option String := Id.run do
+  let some user := closure.modules.find? (·.name == `CppVerify.User) | return none
+  for name in user.declared do
+    if let .ok axioms := axiomsOf project.env name then
+      if axioms.contains ``sorryAx then
+        return some s!"{name} of CppVerify.User uses sorry"
+  return none
+
+/-- Usage: Certify GOALS ALLOWED, where each line of GOALS is a goal, its
+proof module, and the module that defines it, separated by tabs, and ALLOWED
+lists the axioms a proof may use, separated by commas. Prints one line per
+goal: `ok` or `fail`, the goal, and why it failed. A goal is proved when its
+proof module and its generated module pass the kernel, with every module of
+the project they import, and its proof states exactly the goal and uses only
+the allowed axioms. The generated modules are replayed first, so that a
+proof file that declares a name one declares is the one left out. -/
 unsafe def main (args : List String) : IO UInt32 := do
   let [goals, allowed] := args | throw <| IO.userError "usage: Certify GOALS ALLOWED"
   let sysroot ← findSysroot
   initSearchPath sysroot
   let toolchain := (sysroot / "lib" / "lean").toString
   let allowed := (allowed.splitOn ",").foldl (fun s a => s.insert a.toName) ({} : NameSet)
-  let mut entries : Array (Name × Name) := #[]
+  let mut entries : Array (Name × Name × Name) := #[]
   for line in ← IO.FS.lines goals do
-    let [goal, module] := line.splitOn "\t" | continue
-    entries := entries.push (goal.toName, module.toName)
-  let roots := #[`CppVerify.Generated] ++ entries.map (·.2)
+    let [goal, module, generated] := line.splitOn "\t" | continue
+    entries := entries.push (goal.toName, module.toName, generated.toName)
+  let roots := entries.map (·.2.2) ++ entries.map (·.2.1)
   let (_, closure) ← (roots.forM (Closure.visit toolchain)).run {}
   let project ← replayProject closure
-  for (goal, module) in entries do
+  let user := userSorry closure project
+  for (goal, module, generated) in entries do
     let why := (project.rejected[module]?).orElse fun _ =>
-      (project.rejected[`CppVerify.Generated]?).orElse fun _ =>
-        checkStatement project goal module allowed
+      (project.rejected[generated]?).orElse fun _ => user.orElse fun _ =>
+        checkStatement project goal module generated allowed
     match why with
     | none => IO.println s!"ok\t{goal}"
     | some why => IO.println s!"fail\t{goal}\t{why.replace "\n" " "}"
