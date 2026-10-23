@@ -365,7 +365,7 @@ Backends
      - Milliseconds of wall-clock time ``cppverify_auto`` may spend on one
        new goal, its kernel check included (default 20000; ``0`` disables). A
        goal that takes longer gets a stub, as in ``automation:
-       cppverify_auto 1 did not prove it within 20 s``. Requires
+       cppverify_auto 2 did not prove it within 20 s``. Requires
        ``--lean-project`` or ``--lean-fallback``.
    * - ``--unroll=N``
      - Maximum BMC loop bound, which selects ``--backend=bmc``. Source verification
