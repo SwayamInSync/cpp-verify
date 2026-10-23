@@ -1123,7 +1123,9 @@ there changes nothing, ``subrange`` clamps its bounds, and a key outside a
 map's domain maps to 0. Sequences are finite; sets, multisets, and maps range
 over all integers and may be infinite. Counterexamples show their values, such
 as ``s = [4, 3]`` or ``m = {1 -> 7, 4.. -> 2}``. Z3 and cvc5 decide all
-four; Lean support for them is planned for a future release.
+four, and a Lean project states them with core Lean types (a sequence is a
+``List Int``, a set its membership test) and lemmas for each operation
+(:doc:`ch17-backends-modular-calls`).
 
 Inductive predicates
 --------------------
