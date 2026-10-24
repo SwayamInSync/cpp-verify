@@ -19173,6 +19173,12 @@ void Sema::MarkFunctionReferenced(SourceLocation Loc, FunctionDecl *Func,
   if (FPT && isUnresolvedExceptionSpec(FPT->getExceptionSpecType()))
     ResolveExceptionSpec(Loc, FPT);
 
+  // A contract of a template specialization is needed where the
+  // specialization is used, as its callers rely on it, whether or not its
+  // definition is instantiated here.
+  if (OdrUse != OdrUseContext::None)
+    InstantiateFunctionContract(Loc, Func);
+
   // A callee could be called by a host function then by a device function.
   // If we only try recording once, we will miss recording the use on device
   // side. Therefore keep trying until it is recorded.
