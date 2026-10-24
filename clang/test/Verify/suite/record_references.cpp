@@ -385,6 +385,8 @@ int local_decay()
 }
 // CHECK-DAG: error: local_decay: array-to-pointer decay of automatic storage is unsupported until lexical lifetime and escape effects are modeled
 
+// A record through a reference passed by value is its fields, read where
+// they are.
 int by_copy(Counter c)
   cppverify::post(cppverify::result == c.n)
 {
@@ -396,7 +398,7 @@ int whole_read(const Pair &p)
 {
   return by_copy(p.left);
 }
-// CHECK-DAG: error: whole_read: a record or array read as a whole through a pointer or reference is unsupported; read its fields
+// CHECK-DAG: Verified: whole_read [backend=z3]
 
 cppverify::proof void proof_reference(Counter &c)
   cppverify::post(true)
