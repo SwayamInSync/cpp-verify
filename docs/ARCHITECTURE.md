@@ -290,6 +290,24 @@ layout at the actual's address), so the call stays a chain of stores; as one
 byte range, a `HeapFrame`, a falsified claim after a constructor and a
 member call took 60 s and ended `solver.timeout`, and fails in 0.3 s as cells.
 
+**Member operators and parameters' invariants:** `convertExecCallArgs` takes
+the object of a `CXXOperatorCallExpr` whose callee is an instance member
+function from its first argument, and the parameters from the second.
+`returnsOwnObject` recognizes a member function returning a reference to its
+class whose every return is `*this` (`isOwnObject`): its `VFunction` returns
+void, `findUnsupportedType` accepts its return type, its returns carry no
+value, and a call using the reference as an argument, a copy's source, or an
+assignment's source is an error (`rejectOwnObjectUse`, in
+`convertExecCallArgs`, `appendRecordCopy`, and `appendObjectCopy`). For each
+parameter that refers to or points to a record with type invariants (and has
+no `valid` extent, `hasExtentMarker`), `convertFunction` converts the
+invariants with `ThisSubstitute` set to the parameter, which `CXXThisExpr`
+then converts to, and `DropExtentMarkers` set, and adds them as generated
+preconditions (guarded by non-null for a pointer) and, unless the pointee is
+const, postconditions. The record escape scan accepts a callee's own
+automatic allocation unless it is initialized with an address it must not
+keep.
+
 **Records in memory by value:** `recordFieldsInMemory` reads a record value
 kept in memory, a promoted local or one in a pointee or record reference
 (`promotedRootLocal`, `inPointeeObject`), through implicit copies and
