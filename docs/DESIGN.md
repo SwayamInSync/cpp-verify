@@ -1927,7 +1927,14 @@ goal module, the user's lemmas (`User.lean`, which a new project starts by
 importing `Specs`), and `Auto`, so a change to one function builds again
 only what imports its module. A file is written only when its text changes,
 and a run writes the goal modules of the functions it exports and removes
-every other, so that every module of the project builds. A goal is named by its function and its statement, never by a
+every other, so that every module of the project builds. A spec function is a
+Lean definition, by its step definition with every condition that reaches a
+recursive application a hypothesis there and its `decreases` measures as
+`termination_by`, when the pinned Lean accepts it at export, and opaque
+otherwise; Lean's verdict is kept in the project. The definition has the
+spec's value at every argument (it is never guarded by the measure as a
+whole), so a proof may unfold it or use its induction principle, and goals
+do not change. A goal is named by its function and its statement, never by a
 position: `cppverify_<function>_<h6>_<kind>_<h8>`, where `h6` hashes the
 function's identity (overloads) and `h8` begins the SHA-256 hash of the
 obligation's statement, its goal with the logical declarations it uses and
@@ -1958,7 +1965,9 @@ before a goal reaches the user: a ladder of steps (`grind`; memory stores as
 the functions they define and machine arithmetic as integers, then `grind`;
 `decide`; `simp_all`; machine equalities and sign extensions as integers;
 collection equality element by element; the definition instances a goal
-states, by the bodies they name), each with a heartbeat budget of its own and a
+states, by the bodies they name; the spec definitions by their equations;
+mathematical division and remainder by their definitions),
+each with a heartbeat budget of its own and a
 wall-clock limit per goal (`--lean-auto-timeout`), since heartbeats do not
 bound a kernel check. A step counts only when it closes the goal with a proof
 whose axioms are Lean's foundations, so the user's unfinished lemma never

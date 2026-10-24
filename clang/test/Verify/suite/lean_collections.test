@@ -36,14 +36,14 @@
 # EXPORT-NEXT: Exported: decreases: members (cppverify_auto proved 1 of 1 goals)
 # EXPORT-NEXT: Exported: lean obligation: no_members (cppverify_auto proved 2 of 2 goals)
 
-# STEPS: automation: cppverify_auto 2 proves it with cppverify_auto_bveq
-# STEPS-NEXT: automation: cppverify_auto 2 proves it with cppverify_auto_ext
-# STEPS-NEXT: automation: cppverify_auto 2 proves it with cppverify_auto_unfold
+# STEPS: automation: cppverify_auto 3 proves it with cppverify_auto_bveq
+# STEPS-NEXT: automation: cppverify_auto 3 proves it with cppverify_auto_ext
+# STEPS-NEXT: automation: cppverify_auto 3 proves it with cppverify_auto_unfold
 
 # SPECS: /- spec function: total -/
-# SPECS-NEXT: {{^}}opaque cppSpec_fn_5f5a35746f74616c4e396370707665726966793373657145 : List Int -> Int{{$}}
+# SPECS-NEXT: {{^}}def cppSpec_fn_5f5a35746f74616c4e396370707665726966793373657145 (s : List Int) : Int :={{$}}
 # SPECS: /- spec function: members -/
-# SPECS-NEXT: {{^}}opaque cppSpec_fn_5f5a376d656d626572734e39637070766572696679337365744569 : (Int → Bool) -> Int -> Int{{$}}
+# SPECS-NEXT: {{^}}def cppSpec_fn_5f5a376d656d626572734e39637070766572696679337365744569 (a : (Int → Bool)) (n : Int) : Int :={{$}}
 
 # PRELUDE: {{^}}def cppSeqAt (s : List Int) (i : Int) : Int :={{$}}
 # PRELUDE-NEXT: {{^}}  if i < 0 then 0 else s[i.toNat]?.getD 0{{$}}

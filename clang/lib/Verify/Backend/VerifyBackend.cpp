@@ -30,11 +30,10 @@ VerifyResult LeanVerifyBackend::verifyModule(const ObligationModule &Module) {
     if (!Modules->Goals.count(Group))
       Modules->Order.push_back(Group);
     llvm::raw_string_ostream Goals(Modules->Goals[Group]);
-    llvm::raw_string_ostream Specs(Modules->Specs);
-    Result = exportLeanScratchPad(Module, Goals, /*EmitPreamble=*/false,
-                                  EmittedFunctions, EmittedTheorems,
-                                  ++ModuleIndex, ProjectGoals,
-                                  Selection ? &*Selection : nullptr, &Specs);
+    Result = exportLeanScratchPad(
+        Module, Goals, /*EmitPreamble=*/false, EmittedFunctions,
+        EmittedTheorems, ++ModuleIndex, ProjectGoals,
+        Selection ? &*Selection : nullptr, &Modules->Specs);
   } else {
     Result = exportLeanScratchPad(
         Module, *Out, !PreambleEmitted, EmittedFunctions, EmittedTheorems,

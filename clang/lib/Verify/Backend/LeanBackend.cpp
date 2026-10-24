@@ -25,6 +25,10 @@ static thread_local std::map<const LogicExpr *, unsigned> LeanTemporaryNames;
 static thread_local const LogicExpr *LeanTemporaryRoot = nullptr;
 static thread_local const LogicFunctionDecl *LeanActiveDefinition = nullptr;
 static thread_local unsigned LeanActiveDefinitionDepth = 0;
+// Printing a spec's own definition for Lean to accept by well-founded
+// recursion: every condition that reaches an application is a hypothesis
+// there (`if _h : c`), so that the decrease can be proved from it.
+static thread_local bool LeanDefinitionMode = false;
 
 static bool needsLeanNameEncoding(llvm::StringRef Name) {
   static const std::set<llvm::StringRef> Keywords = {
@@ -305,6 +309,16 @@ static const LogicFunctionDecl *findLeanFunction(llvm::StringRef Identity) {
   return It == LeanLogicFunctions->end() ? nullptr : &It->second;
 }
 
+static bool leanAppliesSpec(const LogicExpr *E) {
+  if (!E)
+    return false;
+  if (E->K == VCExpr::SpecCall)
+    return true;
+  return llvm::any_of(E->Children, [](const auto &Child) {
+    return leanAppliesSpec(Child.get());
+  });
+}
+
 static void printLeanNativeSpecCall(const LogicExpr *Call,
                                     const LogicFunctionDecl &Function,
                                     llvm::raw_ostream &OS) {
@@ -377,8 +391,33 @@ static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
       printVCExprLean(E->Children[0].get(), OS, LeanArgument);
     });
     break;
-  // Right-associative: only the last operand may be of the same level.
+  // Right-associative: only the last operand may be of the same level. In a
+  // definition, the operands before an application are its condition:
+  // `a ∧ b` is `if _h : a then b else False`.
   case VCExpr::And:
+    if (LeanDefinitionMode)
+      for (unsigned I = 1; I < E->Children.size(); ++I)
+        if (leanAppliesSpec(E->Children[I].get())) {
+          paren(LeanTop, [&] {
+            OS << "if _h : ";
+            for (unsigned J = 0; J < I; ++J) {
+              if (J)
+                OS << " ∧ ";
+              printVCExprLean(E->Children[J].get(), OS,
+                              J + 1 == I ? LeanAnd : LeanAnd + 1);
+            }
+            OS << " then ";
+            for (unsigned J = I; J < E->Children.size(); ++J) {
+              if (J != I)
+                OS << " ∧ ";
+              printVCExprLean(E->Children[J].get(), OS,
+                              J + 1 == E->Children.size() ? LeanAnd
+                                                          : LeanAnd + 1);
+            }
+            OS << " else False";
+          });
+          return;
+        }
     paren(LeanAnd, [&] {
       for (unsigned I = 0; I < E->Children.size(); ++I) {
         if (I)
@@ -388,7 +427,31 @@ static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
       }
     });
     break;
+  // `a ∨ b` is `if _h : a then True else b`, and `¬a ∨ b` is `if _h : a then b
+  // else True`.
   case VCExpr::Or:
+    if (LeanDefinitionMode && E->Children.size() > 1 &&
+        llvm::any_of(llvm::drop_begin(E->Children), [](const auto &Child) {
+          return leanAppliesSpec(Child.get());
+        })) {
+      paren(LeanTop, [&] {
+        const LogicExpr *First = E->Children[0].get();
+        const bool Negated = First->K == VCExpr::Not;
+        OS << "if _h : ";
+        printVCExprLean(Negated ? First->Children[0].get() : First, OS,
+                        LeanTop);
+        OS << (Negated ? " then " : " then True else ");
+        for (unsigned J = 1; J < E->Children.size(); ++J) {
+          if (J != 1)
+            OS << " ∨ ";
+          printVCExprLean(E->Children[J].get(), OS,
+                          J + 1 == E->Children.size() ? LeanOr : LeanOr + 1);
+        }
+        if (Negated)
+          OS << " else True";
+      });
+      break;
+    }
     paren(LeanOr, [&] {
       for (unsigned I = 0; I < E->Children.size(); ++I) {
         if (I)
@@ -400,7 +463,7 @@ static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
     break;
   case VCExpr::Ite:
     paren(LeanTop, [&] {
-      OS << "if ";
+      OS << (LeanDefinitionMode ? "if _h : " : "if ");
       printVCExprLean(E->Children[0].get(), OS, LeanTop);
       OS << " then ";
       printVCExprLean(E->Children[1].get(), OS, LeanTop);
@@ -658,6 +721,12 @@ static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
         printVCExprLean(E->Children[0].get(), OS, LeanTop);
         return;
       }
+      // In a definition, the range of an existential that applies a spec
+      // is its condition, as a universal's is its antecedent.
+      const bool Guarded = E->K == VCExpr::Exists && LeanDefinitionMode &&
+                           leanAppliesSpec(E->Children[2].get());
+      if (Guarded)
+        OS << "if _h : ";
       printVCExprLean(E->Children[0].get(), OS, LeanCompare + 1);
       OS << " ≤ ";
       printLeanName(E->Binder, OS);
@@ -665,6 +734,12 @@ static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
       printLeanName(E->Binder, OS);
       OS << " < ";
       printVCExprLean(E->Children[1].get(), OS, LeanCompare + 1);
+      if (Guarded) {
+        OS << " then ";
+        printVCExprLean(E->Children[2].get(), OS, LeanTop);
+        OS << " else False";
+        return;
+      }
       OS << (E->K == VCExpr::Forall ? " → " : " ∧ ");
       printVCExprLean(E->Children[2].get(), OS,
                       E->K == VCExpr::Forall ? LeanArrow : LeanAnd);
@@ -1116,25 +1191,130 @@ static void emitLeanGoalDefinition(llvm::StringRef Name, const LogicExpr *Goal,
     emitLeanReadableGoal(Name, Goal, Variables, HasSpecAxioms, *Intros, OS);
 }
 
-static void
-emitLeanFunctionDeclarations(const ObligationModule &Module,
-                             llvm::raw_ostream &OS,
-                             std::set<std::string> &EmittedFunctions) {
-  for (const auto &[Identity, Function] : Module.LogicFunctions) {
-    if (!EmittedFunctions.insert(Identity).second)
+static void collectLeanApplied(const LogicExpr *E,
+                               std::set<std::string> &Applied) {
+  if (!E)
+    return;
+  if (E->K == VCExpr::SpecCall)
+    Applied.insert(E->SpecCallee);
+  for (const auto &Child : E->Children)
+    collectLeanApplied(Child.get(), Applied);
+}
+
+static std::string leanOpaqueSpec(const LogicFunctionDecl &Function) {
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  OS << "/- spec function: ";
+  printLeanCommentText(Function.DisplayName, OS);
+  OS << " -/\n";
+  OS << "opaque ";
+  printLeanSpecName(Function.Identity, OS);
+  OS << " : ";
+  for (const LogicFunctionParameter &Parameter : Function.Parameters) {
+    printLeanSort(Parameter.Sort, OS);
+    OS << " -> ";
+  }
+  printLeanSort(Function.ResultSort, OS);
+  OS << "\n\n";
+  return Text;
+}
+
+// A spec's own definition, for Lean to accept by well-founded recursion: its
+// step definition, applying its recursion group by name, every condition
+// that reaches an application a hypothesis there, and its termination
+// measures, each m as `(m + 1).toNat`: for a caller's m at least 0 and a
+// call's below it (it may be -1), the call's is below the caller's, the
+// relation the termination check proves, lexicographic over a tuple. None
+// for a choice, a function without a definition, or a recursive one without
+// measures (an archive's).
+static std::string leanSpecDefinition(const ObligationModule &Module,
+                                      const LogicFunctionDecl &Function) {
+  if (Function.Choice || !Function.StepDefinition)
+    return "";
+  std::set<std::string> Reached, Pending;
+  collectLeanApplied(Function.StepDefinition.get(), Pending);
+  while (!Pending.empty()) {
+    std::string Next = *Pending.begin();
+    Pending.erase(Pending.begin());
+    if (!Reached.insert(Next).second)
       continue;
-    OS << "/- spec function: ";
-    printLeanCommentText(Function.DisplayName, OS);
-    OS << " -/\n";
-    OS << "opaque ";
-    printLeanSpecName(Identity, OS);
+    auto It = Module.LogicFunctions.find(Next);
+    if (It != Module.LogicFunctions.end() && It->second.StepDefinition)
+      collectLeanApplied(It->second.StepDefinition.get(), Pending);
+  }
+  const bool Recursive = Reached.count(Function.Identity);
+  if (Recursive && Function.Decreases.empty())
+    return "";
+
+  const bool FailedBefore = LeanEmissionFailed;
+  LeanEmissionFailed = false;
+  auto Temporaries = std::move(LeanTemporaryNames);
+  LeanTemporaryNames.clear();
+  LeanDefinitionMode = true;
+  LeanEmitBudget = 1000000;
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  OS << "/- spec function: ";
+  printLeanCommentText(Function.DisplayName, OS);
+  OS << " -/\n";
+  OS << "def ";
+  printLeanSpecName(Function.Identity, OS);
+  for (const LogicFunctionParameter &Parameter : Function.Parameters) {
+    OS << " (";
+    printLeanName(Parameter.Name, OS);
     OS << " : ";
-    for (const LogicFunctionParameter &Parameter : Function.Parameters) {
-      printLeanSort(Parameter.Sort, OS);
-      OS << " -> ";
+    printLeanSort(Parameter.Sort, OS);
+    OS << ")";
+  }
+  OS << " : ";
+  printLeanSort(Function.ResultSort, OS);
+  OS << " :=\n  ";
+  printVCExprLean(Function.StepDefinition.get(), OS, LeanTop);
+  if (Recursive) {
+    OS << "\ntermination_by ";
+    if (Function.Decreases.size() > 1)
+      OS << "(";
+    for (unsigned I = 0; I < Function.Decreases.size(); ++I) {
+      if (I)
+        OS << ", ";
+      OS << "((";
+      printVCExprLean(Function.Decreases[I].get(), OS, LeanTop);
+      OS << ") + 1).toNat";
     }
-    printLeanSort(Function.ResultSort, OS);
-    OS << "\n\n";
+    if (Function.Decreases.size() > 1)
+      OS << ")";
+    OS << "\ndecreasing_by all_goals cppverify_decreasing";
+  }
+  OS << "\n\n";
+  LeanDefinitionMode = false;
+  LeanTemporaryNames = std::move(Temporaries);
+  const bool Failed = LeanEmissionFailed;
+  LeanEmissionFailed = FailedBefore;
+  return Failed ? "" : Text;
+}
+
+static void emitLeanFunctionDeclarations(
+    const ObligationModule &Module, llvm::raw_ostream &OS,
+    std::set<std::string> &EmittedFunctions,
+    std::map<std::string, LeanSpecDeclaration> *Specs) {
+  for (const auto &[Identity, Function] : Module.LogicFunctions) {
+    if (Specs) {
+      auto [It, Inserted] = Specs->try_emplace(Identity);
+      LeanSpecDeclaration &Declaration = It->second;
+      if (Inserted) {
+        llvm::raw_string_ostream Name(Declaration.Name);
+        printLeanSpecName(Identity, Name);
+        Declaration.Opaque = leanOpaqueSpec(Function);
+      }
+      if (Declaration.Definition.empty()) {
+        Declaration.Definition = leanSpecDefinition(Module, Function);
+        Declaration.Applies.clear();
+        collectLeanApplied(Function.StepDefinition.get(), Declaration.Applies);
+      }
+      continue;
+    }
+    if (EmittedFunctions.insert(Identity).second)
+      OS << leanOpaqueSpec(Function);
   }
 }
 
@@ -1501,6 +1681,19 @@ void verify::emitLeanPrelude(llvm::raw_ostream &OS, bool Project) {
   OS << "def cppIntRem (x y : Int) : Int :=\n";
   OS << "  if y = 0 then x else x - cppIntDiv x y * y\n\n";
   OS << LeanCollectionPrelude;
+  OS << "/- Proves that an application in a spec's definition lowers its "
+        "measure. -/\n";
+  OS << "macro \"cppverify_decreasing\" : tactic => `(tactic| first\n";
+  OS << "  | (simp_wf; omega)\n";
+  OS << "  | (simp_wf; simp only [cppSeqLength, cppMultisetCount, cppBvSlt, "
+        "cppBvSle,\n";
+  OS << "      cppBvUlt, cppBvUle] at *; omega)\n";
+  // C++ division and remainder by a constant, which omega reads once the
+  // signs are split.
+  OS << "  | (simp_wf; simp only [cppIntDiv, cppIntRem] at *;\n";
+  OS << "      (repeat' split) <;> simp_all <;> omega)\n";
+  OS << "  | (simp_wf; simp_all; omega)\n";
+  OS << "  | decreasing_tactic)\n\n";
   if (Project) {
     // What the bridges from readable goals use.
     OS << "theorem cppverify_imp_or {a b : Prop} (h : a → b) : ¬a ∨ b :=\n";
@@ -1516,7 +1709,8 @@ VerifyResult verify::exportLeanScratchPad(
     std::set<std::string> &EmittedFunctions,
     std::set<std::string> &EmittedTheorems, unsigned ModuleIndex,
     std::vector<LeanProjectGoal> *ProjectGoals,
-    const std::set<std::string> *Selection, llvm::raw_ostream *Declarations) {
+    const std::set<std::string> *Selection,
+    std::map<std::string, LeanSpecDeclaration> *Specs) {
   VerifyResult Result;
   if (!Module.CorrectnessGoal || !Module.CounterexampleQuery) {
     Result.Status = VerifyStatus::Unresolved;
@@ -1557,8 +1751,7 @@ VerifyResult verify::exportLeanScratchPad(
     emitLeanPrelude(OS, ProjectGoals != nullptr);
   }
 
-  emitLeanFunctionDeclarations(Module, Declarations ? *Declarations : OS,
-                               EmittedFunctions);
+  emitLeanFunctionDeclarations(Module, OS, EmittedFunctions, Specs);
   emitLeanFunctionBodies(Module, OS);
   OS << "/- function: ";
   printLeanCommentText(Module.FunctionName, OS);

@@ -9,7 +9,7 @@
 # RUN: rm -rf %t && mkdir -p %t && cp %S/Inputs/lean_modules.cpp %t/m.cpp
 # RUN: %cpp-verify --backend=lean --lean-project=%t/p %t/m.cpp -- 2>&1 | FileCheck %s --check-prefix=EXPORT
 # RUN: FileCheck %s --input-file=%t/p/CppVerify/Generated.lean --check-prefix=GENERATED
-# RUN: FileCheck %s --input-file=%t/p/CppVerify/Specs.lean --check-prefix=SPECS --implicit-check-not=opaque
+# RUN: FileCheck %s --input-file=%t/p/CppVerify/Specs.lean --check-prefix=SPECS '--implicit-check-not=spec function:'
 # RUN: FileCheck %s --input-file=%t/p/CppVerify/Goals/cppverify_tri_zero_e086e9.lean --check-prefix=GOALS
 # RUN: FileCheck %s --input-file=%t/p/CppVerify/Goals/cppverify_plus_tri_zero_10bb8a.lean --check-prefix=GOALS-PLUS
 # RUN: FileCheck %s --input-file=%t/p/CppVerify/Proofs/cppverify_inc_c0810e/cppverify_inc_c0810e_postcondition_e4ef4574.lean --check-prefix=IMPORTS
@@ -77,7 +77,7 @@
 
 # SPECS: {{^}}import CppVerify.Prelude{{$}}
 # SPECS: /- spec function: tri -/
-# SPECS-NEXT: {{^}}opaque cppSpec_fn_5f5a3374726969 : Int -> Int{{$}}
+# SPECS-NEXT: {{^}}def cppSpec_fn_5f5a3374726969 (n : Int) : Int :={{$}}
 
 # Each goal module defines the spec bodies it uses under its own prefix.
 # GOALS: {{^}}import CppVerify.Specs{{$}}

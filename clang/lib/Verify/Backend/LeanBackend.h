@@ -40,11 +40,22 @@ struct LeanProjectGoal {
 /// The group of a module's goals in a project: its function's directory.
 std::string leanProjectGroup(const ObligationModule &Module);
 
-/// The generated modules of a Lean project: the declarations of the specs
-/// its goals apply, which every goal module imports, and each group's spec
+/// A logical function of a Lean project: its opaque declaration and, when it
+/// has a definition Lean may accept, that definition, recursion measured by
+/// its termination measures, with the functions it applies.
+struct LeanSpecDeclaration {
+  /// Its Lean constant.
+  std::string Name;
+  std::string Opaque;
+  std::string Definition;
+  std::set<std::string> Applies;
+};
+
+/// The generated modules of a Lean project: the specs its goals apply, by
+/// identity, which every goal module imports, and each group's spec
 /// definitions and goals.
 struct LeanProjectModules {
-  std::string Specs;
+  std::map<std::string, LeanSpecDeclaration> Specs;
   std::map<std::string, std::string> Goals;
   /// The groups in the order their functions were exported: the source's.
   std::vector<std::string> Order;
@@ -57,16 +68,15 @@ void emitLeanPrelude(llvm::raw_ostream &OS, bool Project);
 /// its function and semantic hash, so it keeps its name whatever else is
 /// exported, and a scratch-pad goal keeps the positional name it has when
 /// every obligation is exported. A project records every goal of the module,
-/// the ones left out as not exported. Declarations, when given, receives
-/// the declarations of the specs, each once.
-VerifyResult
-exportLeanScratchPad(const ObligationModule &Module, llvm::raw_ostream &OS,
-                     bool EmitPreamble, std::set<std::string> &EmittedFunctions,
-                     std::set<std::string> &EmittedTheorems,
-                     unsigned ModuleIndex,
-                     std::vector<LeanProjectGoal> *ProjectGoals,
-                     const std::set<std::string> *Selection = nullptr,
-                     llvm::raw_ostream *Declarations = nullptr);
+/// the ones left out as not exported. Specs, when given, receives each spec
+/// once, as its project declares it, instead of OS.
+VerifyResult exportLeanScratchPad(
+    const ObligationModule &Module, llvm::raw_ostream &OS, bool EmitPreamble,
+    std::set<std::string> &EmittedFunctions,
+    std::set<std::string> &EmittedTheorems, unsigned ModuleIndex,
+    std::vector<LeanProjectGoal> *ProjectGoals,
+    const std::set<std::string> *Selection = nullptr,
+    std::map<std::string, LeanSpecDeclaration> *Specs = nullptr);
 
 class LeanVerifyBackend : public VerifyBackend {
   llvm::raw_ostream *Out = nullptr;
