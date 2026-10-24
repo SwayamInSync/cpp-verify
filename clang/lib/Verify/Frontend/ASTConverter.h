@@ -324,6 +324,9 @@ private:
   bool appendRecordCopy(const Expr *Source, const VarDecl *Target,
                         SourceLocation Loc,
                         std::vector<std::unique_ptr<VStmt>> &Out);
+  /// Reports a use of the reference a member function returns to its own
+  /// object, which is no value.
+  bool rejectOwnObjectUse(const Expr *E);
   bool appendRecordInitializer(const InitListExpr *Init, const VarDecl *Target,
                                SourceLocation Loc,
                                std::vector<std::unique_ptr<VStmt>> &Out);
