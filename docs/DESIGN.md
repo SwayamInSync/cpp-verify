@@ -231,6 +231,13 @@ while (i < n)
 - `cppverify::invariant(expr)`: must hold on entry and be preserved by each iteration.
   A loop whose condition is the constant false keeps every value it would
   change: after `while (false) { ... }` the state is the one before it.
+- An invariant holds at the head of every iteration with its definedness,
+  since both are checked on entry and at the end of each iteration: the
+  reads it makes are in bounds and initialized there. A loop that fills a
+  local array states what it has written,
+  `cppverify::forall(k, 0, i, a[k] == 0)`, and that is what shows `a[k]`
+  initialized for `k < i`. No lifetime begins or ends in a loop, so what was
+  initialized before it stays initialized.
 - `cppverify::decreases(expr [, expr...])`: termination measure. Single expression must be non-negative and strictly decreasing. Tuple form is lex-ordered: `cppverify::decreases(a, b)` means `(a, b)` strictly decreases lexicographically, and only the first component that changes must stay non-negative.
 - Verification is total correctness, as in Verus: every executable loop needs
   `cppverify::decreases`, unless its condition is the constant false, so that
