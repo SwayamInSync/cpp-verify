@@ -345,6 +345,9 @@ struct VFunction {
   /// [[cppverify::trusted]]: its contract is assumed and its body, if any,
   /// is not verified.
   bool IsTrusted = false;
+  /// A constructor: its object's lifetime begins at `this`, uninitialized,
+  /// and the body initializes every leaf of it.
+  bool IsConstructor = false;
   /// The declaration, for diagnostics about the function itself.
   SourceLocation DeclLoc;
   bool NeedsDecreasesCheck = false;
