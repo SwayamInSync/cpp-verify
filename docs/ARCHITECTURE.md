@@ -516,6 +516,21 @@ origin is unknown the function's frame alone bounds the loop, since every
 store is checked against it. When every written region is a single cell the
 frame is a chain of stores of fresh values; otherwise it is a
 `HeapFrame(mem_entry, mem_head, regions)` relation.
+Local and dynamic storage has no origin, so its writes are bounded by its
+lifetime companion's pointer instead, when the loop assigns neither that
+pointer nor its companion: a store whose address is such a pointer, a
+reference to a local say, writes that one cell (`representedCell`); one
+rooted at the pointer an allocation defined (`RepresentedObjects`: the
+allocated type and size, recorded at `VAllocateStmt` and at a fresh-owned
+call) writes that object (`representedRegions`), since its fields lie in the
+layout and its fixed-array indices are checked. The object is its scalar
+leaves from `VFunction::Layouts`, each a cell, so the frame stays a chain of
+stores; with a byte range instead, Z3 found no counterexample to a claim the
+loop falsifies within the timeout, and the leaves bound the same bytes. Without
+a layout the object is its bytes. The function's own frame is never used
+here, since a store to its own storage is not checked against it. Before
+0.2 any store to local or dynamic storage left the loop unframed, so it
+forgot every object.
 An explicit loop `cppverify::modifies` is also asserted at the end of each iteration and
 at each `continue` (obligation kind `frame`, located at the footprint).
 

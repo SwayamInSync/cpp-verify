@@ -454,6 +454,54 @@ increment, so ``a[0 : i]`` then covers the cell just written; the function's
 ``cppverify::modifies(a[0 : k])`` is the range ``[0, k)``, and the cells from ``k`` on
 keep their values without an invariant saying so.
 
+Local and dynamic objects follow the same rule. A store through a local
+array, a local record, or a ``new`` pointer writes that object, a store or a
+call through a reference to a local writes the cell it binds, and every
+other object keeps its value:
+
+.. cppverify-example: fails overwritten
+
+.. code-block:: cpp
+
+   int other_array()
+     cv::post(cv::result == 7)
+   {
+     int a[3];
+     int b[2];
+     b[0] = 3;
+     b[1] = 4;
+     for (int i = 0; i < 3; i = i + 1)
+       cv::invariant(0 <= i && i <= 3)
+       cv::decreases(3 - i)
+     {
+       a[i] = 0;
+     }
+     return b[0] + b[1];
+   }
+
+   int overwritten()
+     cv::post(cv::result == 7)
+   {
+     int a[4];
+     a[3] = 7;
+     for (int i = 0; i < 4; i = i + 1)
+       cv::invariant(0 <= i && i <= 4)
+       cv::decreases(4 - i)
+     {
+       a[i] = 0;
+     }
+     return a[3];
+   }
+
+.. code-block:: text
+
+   Verified: other_array [backend=z3]
+   frames.cpp:18:23: error: verification failed: overwritten [...::postcondition@18:23] (counterexample: ...) [backend=z3] [reason=counterexample]
+
+``overwritten`` fails because the loop writes ``a[3]``, which no invariant
+describes. Before 0.2 a loop that wrote local or dynamic storage forgot the
+value of every object, so ``other_array`` failed its postcondition.
+
 After a normal exit the verifier knows ``I && !c`` about what the loop may
 change; variables the loop does not assign and memory outside its write set
 keep their values. A ``break`` or ``return`` leaves in its own state instead.

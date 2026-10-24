@@ -3517,6 +3517,9 @@ class PassivizerImpl {
   /// parameter without one.
   std::vector<VValidExtent> OriginObjects;
   std::set<std::string> RepresentedAllocationPointers;
+  /// The type and size of the object each of those pointers was defined to
+  /// address.
+  std::map<std::string, std::pair<VType, uint64_t>> RepresentedObjects;
   std::vector<StoredPointerCell> StoredPointerCells;
   std::set<std::string> HeapBases;
   std::set<std::string> HeapVariables;
@@ -3890,19 +3893,107 @@ class PassivizerImpl {
     return true;
   }
 
+  /// The one cell a store through \p Address writes, when the address is a
+  /// pointer into local or dynamic storage (a reference to a local, say) that
+  /// the loop assigns neither nor its lifetime companion.
+  std::optional<Region>
+  representedCell(const VExpr *Address, const VType &CellType,
+                  const std::map<std::string, std::string> &Renames,
+                  const std::set<std::string> &Assigned, SourceLocation Loc) {
+    while (Address && Address->K == VExpr::Cast)
+      Address = static_cast<const VCastExpr *>(Address)->Inner.get();
+    if (!Address || Address->K != VExpr::Var)
+      return std::nullopt;
+    const auto *Pointer = static_cast<const VVarExpr *>(Address);
+    if (Pointer->ProvenanceVariable.empty() || Assigned.count(Pointer->Name) ||
+        Assigned.count(Pointer->ProvenanceVariable))
+      return std::nullopt;
+    CloneCtx Ctx{Renames, OldState, false};
+    auto Cell = cloneExpr(Address, Ctx);
+    return cellRegion(Cell.get(), CellType, Loc);
+  }
+
+  /// The local or dynamic object that the pointer its allocation defined
+  /// addresses, when the loop assigns neither the pointer nor its lifetime
+  /// companion: every access through it lies in the object, at a field of
+  /// its layout and an index its fixed array bounds (a dynamic object is one
+  /// scalar). The object is its scalar leaves, each one cell, so the loop's
+  /// frame stays a chain of stores; without a layout it is its bytes.
+  bool representedRegions(const VExpr *Root,
+                          const std::map<std::string, std::string> &Renames,
+                          const std::set<std::string> &Assigned,
+                          SourceLocation Loc, std::vector<Region> &Out) {
+    if (!Root || Root->K != VExpr::Var)
+      return false;
+    const auto *Pointer = static_cast<const VVarExpr *>(Root);
+    auto Object = RepresentedObjects.find(Pointer->Name);
+    if (Object == RepresentedObjects.end() ||
+        Pointer->ProvenanceVariable.empty() || Assigned.count(Pointer->Name) ||
+        Assigned.count(Pointer->ProvenanceVariable))
+      return false;
+    const auto &[Type, Bytes] = Object->second;
+    CloneCtx Ctx{Renames, OldState, false};
+    auto Base = cloneExpr(Root, Ctx);
+    auto At = [&](uint64_t Offset) {
+      return addBytes(cloneVExpr(Base.get()),
+                      std::make_unique<VLiteralExpr>(std::to_string(Offset),
+                                                     pointerOffsetType(), Loc),
+                      Loc);
+    };
+    if (Type.isInt() || Type.Kind == VTypeKind::Bool ||
+        Type.Kind == VTypeKind::Ptr) {
+      Out.push_back(cellRegion(Base.get(), Type, Loc));
+      return true;
+    }
+    const auto Layout = llvm::find_if(Fn.Layouts, [&](const VObjectLayout &L) {
+      return L.TypeIdentity == Type.TypeIdentity;
+    });
+    std::vector<Region> Cells;
+    if (Layout != Fn.Layouts.end() && Layout->SizeBytes == Bytes) {
+      for (const VObjectLeaf &Leaf : Layout->Leaves) {
+        std::vector<uint64_t> Offsets = {Leaf.OffsetBytes};
+        for (const VObjectRepeat &Repeat : Leaf.Repeats) {
+          std::vector<uint64_t> Next;
+          for (uint64_t Start : Offsets)
+            for (uint64_t K = 0; K < Repeat.Count && Next.size() <= Bytes; ++K)
+              Next.push_back(Start + K * Repeat.StrideBytes);
+          Offsets = std::move(Next);
+        }
+        for (uint64_t Offset : Offsets)
+          if (Cells.size() <= Bytes)
+            Cells.push_back(cellRegion(At(Offset).get(), Leaf.Ty, Loc));
+      }
+      if (!Cells.empty() && Cells.size() <= Bytes) {
+        for (Region &Cell : Cells)
+          Out.push_back(std::move(Cell));
+        return true;
+      }
+    }
+    Out.push_back(
+        Region{cloneVExpr(Base.get()), At(std::max<uint64_t>(Bytes, 1))});
+    return true;
+  }
+
   bool loopWriteRegions(const std::vector<std::unique_ptr<VStmt>> &Stmts,
                         const std::map<std::string, std::string> &Renames,
+                        const std::set<std::string> &Assigned,
                         std::vector<Region> &Out) {
     for (const auto &S : Stmts) {
       switch (S->K) {
       case VStmt::Store: {
         const auto &St = static_cast<const VStoreStmt &>(*S);
         auto R = parameterCell(St.Ptr.get(), St.Value->Ty, Renames, St.Loc);
+        if (!R)
+          R = representedCell(St.Ptr.get(), St.Value->Ty, Renames, Assigned,
+                              St.Loc);
         if (!R &&
             originRegions(addressRoot(St.Ptr.get()), Renames, St.Loc, Out))
           break;
         if (!R)
           R = rootRegion(addressRoot(St.Ptr.get()), Renames, St.Loc);
+        if (!R && representedRegions(addressRoot(St.Ptr.get()), Renames,
+                                     Assigned, St.Loc, Out))
+          break;
         if (!R)
           return false;
         Out.push_back(std::move(*R));
@@ -3953,14 +4044,22 @@ class PassivizerImpl {
                               [&](const VValidExtent &Extent) {
                                 return Extent.Base == Param;
                               })));
-          if (OneCell)
-            if (auto Cell = parameterCell(Actual, Target->Ty, Renames, C.Loc)) {
+          if (OneCell) {
+            auto Cell = parameterCell(Actual, Target->Ty, Renames, C.Loc);
+            if (!Cell)
+              Cell =
+                  representedCell(Actual, Target->Ty, Renames, Assigned, C.Loc);
+            if (Cell) {
               Out.push_back(std::move(*Cell));
               continue;
             }
+          }
           if (originRegions(addressRoot(Actual), Renames, C.Loc, Out))
             continue;
           auto R = rootRegion(addressRoot(Actual), Renames, C.Loc);
+          if (!R && representedRegions(addressRoot(Actual), Renames, Assigned,
+                                       C.Loc, Out))
+            continue;
           if (!R)
             return false;
           Out.push_back(std::move(*R));
@@ -3972,19 +4071,19 @@ class PassivizerImpl {
         return false;
       case VStmt::If: {
         const auto &I = static_cast<const VIfStmt &>(*S);
-        if (!loopWriteRegions(I.Then, Renames, Out) ||
-            !loopWriteRegions(I.Else, Renames, Out))
+        if (!loopWriteRegions(I.Then, Renames, Assigned, Out) ||
+            !loopWriteRegions(I.Else, Renames, Assigned, Out))
           return false;
         break;
       }
       case VStmt::While:
-        if (!loopWriteRegions(static_cast<const VWhileStmt &>(*S).Body,
-                              Renames, Out))
+        if (!loopWriteRegions(static_cast<const VWhileStmt &>(*S).Body, Renames,
+                              Assigned, Out))
           return false;
         break;
       case VStmt::Seq:
-        if (!loopWriteRegions(static_cast<const VSeqStmt &>(*S).Stmts,
-                              Renames, Out))
+        if (!loopWriteRegions(static_cast<const VSeqStmt &>(*S).Stmts, Renames,
+                              Assigned, Out))
           return false;
         break;
       default:
@@ -4636,6 +4735,8 @@ class PassivizerImpl {
 
     OwnedAllocationIdentities.push_back(ProvenanceName.str());
     RepresentedAllocationPointers.insert(ResultTarget.str());
+    RepresentedObjects[ResultTarget.str()] = {Summary.AllocatedType,
+                                              Summary.SizeBytes};
     auto NonzeroProvenance = std::make_unique<VBinOpExpr>(
         VBinOp::Ne, cloneVExpr(Provenance.get()),
         std::make_unique<VLiteralExpr>(0, VType::makePtr(), Loc),
@@ -6321,6 +6422,7 @@ public:
       }
       PointerValueVariables.insert(A.Target);
       RepresentedAllocationPointers.insert(A.Target);
+      RepresentedObjects[A.Target] = {A.AllocatedType, A.SizeBytes};
 
       const std::string AllocationBefore = Renames[VAllocationHeapName];
       const std::string LivenessBefore = Renames[VLivenessHeapName];
@@ -6600,7 +6702,7 @@ public:
       // calls reach; the rest of the heap keeps its values.
       std::vector<Region> WriteRegions;
       bool Framed = Fn.ObjectModel && Modified.count(VHeapName) &&
-                    loopWriteRegions(W.Body, Renames, WriteRegions);
+                    loopWriteRegions(W.Body, Renames, Modified, WriteRegions);
       // Every store and call in the loop is checked against the function's
       // own frame, so that frame bounds what the loop writes too; with both,
       // only cells in both may change.

@@ -268,7 +268,9 @@ for (int i = 0; i < n; i = i + 1)
 
   Without `cppverify::modifies`, a loop writes only the objects its stores and calls
   reach, inferred from the body: every other object keeps its value without
-  an invariant saying so.
+  an invariant saying so. Local and dynamic objects count alike: a store
+  through a local array, a local record, or a `new` pointer writes that
+  object, and one through a reference to a local writes the cell it binds.
 
 `do` loops place the clauses between the trailing condition and its semicolon:
 
