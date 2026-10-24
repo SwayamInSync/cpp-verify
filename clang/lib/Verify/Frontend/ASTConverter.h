@@ -298,6 +298,13 @@ private:
                                                 std::string Provenance = "");
   bool appendRecordCallArgument(const Expr *E, const ParmVarDecl *Formal,
                                 std::vector<std::unique_ptr<VExpr>> &Args);
+  /// The fields of a record value that is kept in memory, a local object or
+  /// one a pointer or reference addresses, each read where it is: nothing
+  /// when E is no such record, false after an error.
+  std::optional<bool> recordFieldsInMemory(
+      const Expr *E, SourceLocation Loc,
+      std::vector<std::pair<const FieldDecl *, std::unique_ptr<VExpr>>>
+          &Fields);
   std::unique_ptr<VExpr>
   convertAssignmentValue(const BinaryOperator *Assignment);
   void appendAssignment(const Expr *LHS, std::unique_ptr<VExpr> Value,
