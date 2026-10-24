@@ -31,6 +31,11 @@ inline constexpr const char *VInitializationHeapName = "__heap_init";
 inline constexpr const char *VAllocationSizeHeapName = "__heap_alloc_size";
 /// Allocation identity -> required alignment in target bytes.
 inline constexpr const char *VAllocationAlignHeapName = "__heap_alloc_align";
+/// The lifetime companion of a constructor's object, whose lifetime begins
+/// at `this` when the constructor is entered: every `this` of a constructor
+/// carries it.
+inline constexpr const char *VConstructedObjectLifetime =
+    "__cppverify_constructed_lifetime";
 
 enum class VBinOp {
   Add,
