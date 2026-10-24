@@ -38,16 +38,19 @@ public:
   ExprResult TransformDeclRefExpr(DeclRefExpr *E) {
     if (FieldDecl *FD = dyn_cast<FieldDecl>(E->getDecl())) {
       if (FD->getParent() == Record) {
+        // this->field, as a member function reads it, so that a class
+        // template's instantiation rebuilds it with its own `this`.
         SourceLocation Loc = E->getBeginLoc();
-        QualType ThisTy =
-            getSema().Context.getTypeDeclType(cast<TypeDecl>(Record));
+        QualType ThisTy = getSema().getCurrentThisType();
+        if (ThisTy.isNull())
+          return Base::TransformDeclRefExpr(E);
         ExprResult This =
             getSema().BuildCXXThisExpr(Loc, ThisTy, /*IsImplicit=*/true);
         if (This.isInvalid())
           return ExprError();
         DeclarationNameInfo NameInfo(FD->getDeclName(), Loc);
         return getSema().BuildMemberExpr(
-            This.get(), /*IsArrow=*/false, Loc, NestedNameSpecifierLoc(),
+            This.get(), /*IsArrow=*/true, Loc, NestedNameSpecifierLoc(),
             SourceLocation(), FD, DeclAccessPair::make(FD, FD->getAccess()),
             /*HadMultipleCandidates=*/false, NameInfo, FD->getType(),
             VK_LValue, OK_Ordinary, /*TemplateArgs=*/nullptr);
