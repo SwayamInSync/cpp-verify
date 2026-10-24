@@ -745,6 +745,22 @@ exact, while `int x = s[0];` must show that the element fits in an `int`.
 
 This is genuinely a CppVerify advantage over Verus — Verus forces users to maintain two separate bodies; we let one body do double duty *or* let users opt into a clean math-integer spec.
 
+A lifted function's reference to a `const` integer, as a parameter or the
+result, stands for the value it refers to, which it only reads: `constexpr
+const T &larger(const T &a, const T &b)` is a spec of two values. One that
+cannot be lifted (it reads memory through a pointer, or its type is not
+supported) is kept as a declaration that uses an unsupported construct, so
+the verdicts that rely on it are `Unresolved` with `construct.unsupported`
+and name it.
+
+The standard library's functions are not lifted, since each library writes
+them its own way and a verdict would depend on which one. `std::min` and
+`std::max` of two integers, enumerations, or `bool` are modeled as the
+standard defines them ([alg.min.max]): `max(a, b)` is `a < b ? b : a` and
+`min(a, b)` is `b < a ? b : a`, read once each, in contracts and in code.
+Any other function of the standard library that is not a constant is an
+error naming it.
+
 **Compile-time partial evaluation:** When a contract contains a `constexpr` call whose arguments are all constants, Clang evaluates it at compile time before the verifier sees it. A callee precondition instantiated at a call site is not such a call: there the argument is substituted for the parameter, and the solver settles the application from the lifted definition:
 
 <!-- cppverify-example: fragment -->
