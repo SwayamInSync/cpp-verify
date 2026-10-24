@@ -458,6 +458,56 @@ After a normal exit the verifier knows ``I && !c`` about what the loop may
 change; variables the loop does not assign and memory outside its write set
 keep their values. A ``break`` or ``return`` leaves in its own state instead.
 
+An invariant holds together with its definedness: establishment and
+preservation check that what it reads is in bounds and initialized, and that
+its shifts and divisions are defined, so the head of every iteration knows
+both. A loop that fills a local array states what it has written, and the
+reads that state it are what show those elements initialized, which no
+contract can say directly:
+
+.. cppverify-example: fails partially_filled
+
+.. code-block:: cpp
+
+   int filled()
+     cv::post(cv::result == 0)
+   {
+     int a[4];
+     for (int i = 0; i < 4; i = i + 1)
+       cv::invariant(0 <= i && i <= 4)
+       cv::invariant(cv::forall(k, 0, i, a[k] == 0))
+       cv::decreases(4 - i)
+     {
+       a[i] = 0;
+     }
+     return a[3];
+   }
+
+   int partially_filled()
+   {
+     int a[4];
+     for (int i = 0; i < 3; i = i + 1)
+       cv::invariant(0 <= i && i <= 3)
+       cv::invariant(cv::forall(k, 0, i, a[k] == 0))
+       cv::decreases(3 - i)
+     {
+       a[i] = 0;
+     }
+     return a[3];
+   }
+
+.. code-block:: text
+
+   Verified: filled [backend=z3]
+   fill.cpp:26:3: error: verification failed: partially_filled [...::initialization@26:3] (counterexample: ...) [backend=z3] [reason=counterexample]
+
+No lifetime begins or ends inside a loop, so what was initialized before it
+stays initialized in every iteration and after it; an element the loop may
+write is initialized at its head only where an invariant reads it. Before
+0.2 the head kept the initialization of the state before the loop: every
+iteration after the first saw the elements the earlier ones wrote as
+uninitialized, and ``filled`` failed its ``initialization`` check.
+
 .. note::
 
    Contracts are mathematical, but the loop body runs on machine integers.
