@@ -1823,8 +1823,16 @@ replay both drive it.
   the theorem keeps Lean's limit, which bounds the kernel's check of it too:
   with no limit, the refutation of an inductive predicate applied at -5000
   ran for over an hour. The prelude decides a quantifier over a
-  range of integers by trying each one (`cppIntBallDecidable`,
-  `cppIntBexDecidable`, through core's `Nat` ones). `writeLeanRefutations`
+  range of at most 4096 integers, as many as the certifier expands
+  (`CertifyLimits::DirectExpansion`), by trying each one
+  (`cppIntBallDecidable`, `cppIntBexDecidable`, through core's `Nat` ones),
+  and a larger range has the classical instance, which `decide` cannot
+  evaluate. Each integer is a level of recursion whose memory heartbeats do
+  not count, and the generated files allow a depth of 100000: before the
+  bound, refuting `forall(i, 0, 1000000000, i < 999999999)` took one Lean
+  process 58 GB (16 GB for a range of 16000, which also spent the step's
+  heartbeats; 1.9 GB for one of 1000), and CI's 16 GB runners were shut down
+  (`lean_refutation_memory.test`, Linux, keeps it below 4 GB). `writeLeanRefutations`
   writes `Refutations/<group>/<goal>.lean` and removes every other, and
   certification builds them beside the proofs and gives the checker each as
   a `refutation` entry, whose theorem must state exactly `Not <goal>` of the
