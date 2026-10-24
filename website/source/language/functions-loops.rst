@@ -218,16 +218,16 @@ Spec functions stay total, as in Verus and ACSL: a spec's division by zero is
 0, so applying a spec in a contract adds no check, and
 ``cppverify::recommends`` remains a warning (see :doc:`ghost-proofs`).
 
-Templates and member functions
-------------------------------
+Templates
+---------
 
-Templates and member functions compile with contracts, but they are not
-verified yet:
+Templates compile with contracts, but they are not verified yet (member
+functions of ordinary classes are; see :doc:`structs`):
 
 - The contracts of a function template, of a class template's members, and a
   class template's type invariants compile, instantiate with the template,
   and are ignored, with a ``-Wcontract-unsupported`` warning that names the
-  template. Contracts on a member function are ignored the same way.
+  template.
 - A template without contracts changes nothing for the rest of the file, as
   long as verified code does not call it.
 
