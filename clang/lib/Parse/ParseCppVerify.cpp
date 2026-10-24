@@ -672,16 +672,8 @@ void Parser::attachFunctionContract(Decl *Result,
               I.MayDiverge.isInvalid() && I.Inductive.isInvalid() &&
               I.BehaviorChecks.empty() && !I.IsSpec && !I.IsProof))
     return;
-  // A function template's clauses are instantiated with each of its
-  // specializations. Members of class templates are not verified yet: their
-  // clauses are ignored.
-  if (const auto *Method = dyn_cast<CXXMethodDecl>(FD);
-      Method && Method->getParent()->isTemplated() && !I.IsSpec &&
-      !I.IsProof) {
-    Diag(FD->getLocation(), diag::warn_contract_template_unsupported)
-        << 1 << Method->getParent();
-    return;
-  }
+  // A template's clauses are instantiated with each of its specializations,
+  // a class template's members' with the members.
   FunctionContractInfo &FCI = Ctx.getOrCreateFunctionContract(FD);
   if (FCI.ContractDecl && FCI.ContractDecl != FD) {
     Diag(FD->getLocation(), diag::err_contract_redeclaration);
@@ -859,13 +851,6 @@ void Parser::attachLoopContract(StmtResult &Loop, LoopContractInfo &Contract) {
       (Contract.Invariants.empty() && Contract.Decreases.empty() &&
        Contract.MayDiverge.isInvalid() && Contract.Modifies.empty()))
     return;
-  if (const auto *Method =
-          dyn_cast_or_null<CXXMethodDecl>(Actions.getCurFunctionDecl());
-      Method && Method->getParent()->isTemplated()) {
-    Diag(Loop.get()->getBeginLoc(), diag::warn_contract_template_unsupported)
-        << 1 << Method->getParent();
-    return;
-  }
   Actions.getASTContext().getOrCreateLoopContract(Loop.get()) =
       std::move(Contract);
 }
@@ -876,7 +861,6 @@ void Parser::ParseTypeInvariant(Decl *TagDecl) {
   auto *RD = dyn_cast_or_null<CXXRecordDecl>(TagDecl);
   if (auto *Template = dyn_cast_or_null<ClassTemplateDecl>(TagDecl))
     RD = Template->getTemplatedDecl();
-  const SourceLocation InvariantLoc = Tok.getLocation();
   ConsumeCppVerify();
   auto Finish = [&] {
     takePendingReferences(Actions.getASTContext(), RD,
@@ -912,9 +896,9 @@ void Parser::ParseTypeInvariant(Decl *TagDecl) {
     return Finish();
   }
   ConsumeParen();
-  if (!E.isInvalid() && RD->isDependentContext()) {
-    Diag(InvariantLoc, diag::warn_contract_template_unsupported) << 1 << RD;
-  } else if (!E.isInvalid()) {
+  // A class template's invariants are instantiated with each of its
+  // specializations.
+  if (!E.isInvalid()) {
     E = Actions.ActOnTypeInvariantExpr(E, RD);
     if (!E.isInvalid())
       Actions.getASTContext().getOrCreateTypeContract(RD).Invariants.push_back(
