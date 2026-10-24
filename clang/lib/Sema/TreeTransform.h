@@ -570,6 +570,25 @@ public:
   /// Transform the variable a quantifier or a choice binds.
   VarDecl *TransformContractBinder(VarDecl *Binder);
 
+  /// Transform a contract clause's expression and check it as the parser
+  /// does: a condition, a component of a decreases clause, a footprint of a
+  /// modifies clause, or a term (an argument of aliases or reads).
+  ExprResult TransformContractCondition(Expr *E);
+  ExprResult TransformContractMeasure(Expr *E);
+  ExprResult TransformContractFootprint(Expr *E);
+  ExprResult TransformContractTerm(Expr *E);
+
+  /// Transform the contract of a function, from \p From into \p To.
+  /// Returns true on error.
+  bool TransformFunctionContract(const FunctionContractInfo &From,
+                                 FunctionContractInfo &To);
+
+  /// Transform the contract of the loop \p S, if it has one, into \p To;
+  /// \p Changed says whether any of its clauses changed. Returns true on
+  /// error.
+  bool TransformLoopContract(Stmt *S, std::optional<LoopContractInfo> &To,
+                             bool &Changed);
+
   /// Transform the given declaration, which was the first part of a
   /// nested-name-specifier in a member access expression.
   ///
@@ -4451,16 +4470,23 @@ ExprResult TreeTransform<Derived>::TransformExpr(Expr *E) {
   if (!E)
     return E;
 
+  ExprResult Result = E;
   switch (E->getStmtClass()) {
     case Stmt::NoStmtClass: break;
 #define STMT(Node, Parent) case Stmt::Node##Class: break;
 #define ABSTRACT_STMT(Stmt)
 #define EXPR(Node, Parent)                                              \
-    case Stmt::Node##Class: return getDerived().Transform##Node(cast<Node>(E));
+    case Stmt::Node##Class:                                             \
+      Result = getDerived().Transform##Node(cast<Node>(E));             \
+      break;
 #include "clang/AST/StmtNodes.inc"
   }
 
-  return E;
+  // A quantifier's trigger term is one in what it becomes too.
+  if (Result.isUsable() && Result.get() != E &&
+      SemaRef.Context.isTriggerTerm(E))
+    SemaRef.Context.markTriggerTerm(Result.get());
+  return Result;
 }
 
 template<typename Derived>
@@ -8492,13 +8518,21 @@ TreeTransform<Derived>::TransformWhileStmt(WhileStmt *S) {
   if (Body.isInvalid())
     return StmtError();
 
-  if (!getDerived().AlwaysRebuild() &&
+  std::optional<LoopContractInfo> Contract;
+  bool ContractChanged = false;
+  if (getDerived().TransformLoopContract(S, Contract, ContractChanged))
+    return StmtError();
+
+  if (!getDerived().AlwaysRebuild() && !ContractChanged &&
       Cond.get() == std::make_pair(S->getConditionVariable(), S->getCond()) &&
       Body.get() == S->getBody())
     return Owned(S);
 
-  return getDerived().RebuildWhileStmt(S->getWhileLoc(), S->getLParenLoc(),
-                                       Cond, S->getRParenLoc(), Body.get());
+  StmtResult Result = getDerived().RebuildWhileStmt(
+      S->getWhileLoc(), S->getLParenLoc(), Cond, S->getRParenLoc(), Body.get());
+  if (Contract && Result.isUsable())
+    SemaRef.Context.getOrCreateLoopContract(Result.get()) = std::move(*Contract);
+  return Result;
 }
 
 template<typename Derived>
@@ -8519,14 +8553,22 @@ TreeTransform<Derived>::TransformDoStmt(DoStmt *S) {
   if (Cond.isInvalid())
     return StmtError();
 
-  if (!getDerived().AlwaysRebuild() &&
+  std::optional<LoopContractInfo> Contract;
+  bool ContractChanged = false;
+  if (getDerived().TransformLoopContract(S, Contract, ContractChanged))
+    return StmtError();
+
+  if (!getDerived().AlwaysRebuild() && !ContractChanged &&
       Cond.get() == S->getCond() &&
       Body.get() == S->getBody())
     return S;
 
-  return getDerived().RebuildDoStmt(S->getDoLoc(), Body.get(), S->getWhileLoc(),
-                                    /*FIXME:*/S->getWhileLoc(), Cond.get(),
-                                    S->getRParenLoc());
+  StmtResult Result = getDerived().RebuildDoStmt(
+      S->getDoLoc(), Body.get(), S->getWhileLoc(),
+      /*FIXME:*/ S->getWhileLoc(), Cond.get(), S->getRParenLoc());
+  if (Contract && Result.isUsable())
+    SemaRef.Context.getOrCreateLoopContract(Result.get()) = std::move(*Contract);
+  return Result;
 }
 
 template<typename Derived>
@@ -8576,16 +8618,24 @@ TreeTransform<Derived>::TransformForStmt(ForStmt *S) {
 
   SemaRef.OpenACC().ActOnForStmtEnd(S->getBeginLoc(), Body);
 
-  if (!getDerived().AlwaysRebuild() &&
+  std::optional<LoopContractInfo> Contract;
+  bool ContractChanged = false;
+  if (getDerived().TransformLoopContract(S, Contract, ContractChanged))
+    return StmtError();
+
+  if (!getDerived().AlwaysRebuild() && !ContractChanged &&
       Init.get() == S->getInit() &&
       Cond.get() == std::make_pair(S->getConditionVariable(), S->getCond()) &&
       Inc.get() == S->getInc() &&
       Body.get() == S->getBody())
     return S;
 
-  return getDerived().RebuildForStmt(S->getForLoc(), S->getLParenLoc(),
-                                     Init.get(), Cond, FullInc,
-                                     S->getRParenLoc(), Body.get());
+  StmtResult Result = getDerived().RebuildForStmt(
+      S->getForLoc(), S->getLParenLoc(), Init.get(), Cond, FullInc,
+      S->getRParenLoc(), Body.get());
+  if (Contract && Result.isUsable())
+    SemaRef.Context.getOrCreateLoopContract(Result.get()) = std::move(*Contract);
+  return Result;
 }
 
 template<typename Derived>
@@ -18326,16 +18376,23 @@ ExprResult TreeTransform<Derived>::TransformHLSLOutArgExpr(HLSLOutArgExpr *E) {
 //===----------------------------------------------------------------------===//
 
 // Contract nodes are ghost/spec constructs that are stripped before codegen.
-// Template instantiation just rebuilds them unchanged by transforming children.
+// They are rebuilt from their transformed children with the checks the parser
+// applies, so a dependent condition is converted where it is instantiated.
 
 template <typename Derived>
 StmtResult
 TreeTransform<Derived>::TransformContractAssertStmt(ContractAssertStmt *S) {
-  ExprResult Cond = getDerived().TransformExpr(S->getCond());
+  ExprResult Cond = getDerived().TransformContractCondition(S->getCond());
   if (Cond.isInvalid())
     return StmtError();
   StmtResult By = S->getBy();
   if (S->getBy()) {
+    // check(forall(k, ...)) by { ... }: the block is in the scope of k.
+    if (const auto *Old = dyn_cast<ForallExpr>(S->getCond()->IgnoreImplicit()))
+      if (const auto *New = dyn_cast<ForallExpr>(Cond.get()->IgnoreImplicit());
+          New && New->getBoundVar() != Old->getBoundVar())
+        getDerived().transformedLocalDecl(Old->getBoundVar(),
+                                          {New->getBoundVar()});
     By = getDerived().TransformStmt(S->getBy());
     if (By.isInvalid())
       return StmtError();
@@ -18411,6 +18468,145 @@ VarDecl *TreeTransform<Derived>::TransformContractBinder(VarDecl *Binder) {
 }
 
 template <typename Derived>
+ExprResult TreeTransform<Derived>::TransformContractCondition(Expr *E) {
+  ExprResult Result = getDerived().TransformExpr(E);
+  if (Result.isInvalid())
+    return ExprError();
+  return SemaRef.MaybeCreateExprWithCleanups(
+      SemaRef.ActOnContractCondition(Result));
+}
+
+template <typename Derived>
+ExprResult TreeTransform<Derived>::TransformContractMeasure(Expr *E) {
+  ExprResult Result = getDerived().TransformExpr(E);
+  if (Result.isInvalid())
+    return ExprError();
+  return SemaRef.MaybeCreateExprWithCleanups(
+      SemaRef.ActOnContractMeasure(Result));
+}
+
+template <typename Derived>
+ExprResult TreeTransform<Derived>::TransformContractTerm(Expr *E) {
+  ExprResult Result = getDerived().TransformExpr(E);
+  if (Result.isInvalid())
+    return ExprError();
+  return SemaRef.MaybeCreateExprWithCleanups(Result);
+}
+
+template <typename Derived>
+ExprResult TreeTransform<Derived>::TransformContractFootprint(Expr *E) {
+  // A range p[lo : n] is a footprint as a whole, never an operand.
+  Expr *Footprint = E;
+  if (auto *Full = dyn_cast<FullExpr>(Footprint))
+    Footprint = Full->getSubExpr();
+  auto *Range = dyn_cast<ArraySectionExpr>(Footprint->IgnoreParens());
+  if (!Range)
+    return getDerived().TransformContractTerm(E);
+  ExprResult Base = getDerived().TransformExpr(Range->getBase());
+  if (Base.isInvalid())
+    return ExprError();
+  ExprResult Lower;
+  if (Range->getLowerBound()) {
+    Lower = getDerived().TransformExpr(Range->getLowerBound());
+    if (Lower.isInvalid())
+      return ExprError();
+  }
+  ExprResult Length;
+  if (Range->getLength()) {
+    Length = getDerived().TransformExpr(Range->getLength());
+    if (Length.isInvalid())
+      return ExprError();
+  }
+  return SemaRef.MaybeCreateExprWithCleanups(SemaRef.ActOnContractRange(
+      Base.get(), Lower.get(), Range->getColonLocFirst(), Length.get(),
+      Range->getRBracketLoc()));
+}
+
+template <typename Derived>
+bool TreeTransform<Derived>::TransformFunctionContract(
+    const FunctionContractInfo &From, FunctionContractInfo &To) {
+  bool Invalid = false;
+  auto Keep = [&](ExprResult Result, SmallVectorImpl<Expr *> &Out) {
+    if (Result.isUsable())
+      Out.push_back(Result.get());
+    else
+      Invalid = true;
+  };
+  auto KeepPairs = [&](ArrayRef<std::pair<Expr *, Expr *>> Pairs,
+                       SmallVectorImpl<std::pair<Expr *, Expr *>> &Out) {
+    for (const auto &[First, Second] : Pairs) {
+      ExprResult A = getDerived().TransformContractTerm(First);
+      ExprResult B = getDerived().TransformContractTerm(Second);
+      if (A.isUsable() && B.isUsable())
+        Out.push_back({A.get(), B.get()});
+      else
+        Invalid = true;
+    }
+  };
+  for (Expr *E : From.Preconditions)
+    Keep(getDerived().TransformContractCondition(E), To.Preconditions);
+  for (Expr *E : From.Postconditions)
+    Keep(getDerived().TransformContractCondition(E), To.Postconditions);
+  for (Expr *E : From.Modifies)
+    Keep(getDerived().TransformContractFootprint(E), To.Modifies);
+  KeepPairs(From.Aliases, To.Aliases);
+  for (Expr *E : From.Recommends)
+    Keep(getDerived().TransformContractCondition(E), To.Recommends);
+  KeepPairs(From.Reads, To.Reads);
+  for (Expr *E : From.When)
+    Keep(getDerived().TransformContractCondition(E), To.When);
+  for (Expr *E : From.Decreases)
+    Keep(getDerived().TransformContractMeasure(E), To.Decreases);
+  To.MayDiverge = From.MayDiverge;
+  To.Inductive = From.Inductive;
+  for (Expr *E : From.BehaviorChecks)
+    Keep(getDerived().TransformContractCondition(E), To.BehaviorChecks);
+  for (const auto &[Name, Assumes] : From.Behaviors) {
+    ExprResult Result = getDerived().TransformContractCondition(Assumes);
+    if (Result.isUsable())
+      To.Behaviors.push_back({Name, Result.get()});
+    else
+      Invalid = true;
+  }
+  for (const FunctionContractInfo::ClauseProof &Proof : From.ClauseProofs) {
+    StmtResult Body = getDerived().TransformStmt(Proof.Body);
+    if (Body.isUsable())
+      To.ClauseProofs.push_back({Proof.K, Body.get(), Proof.Loc});
+    else
+      Invalid = true;
+  }
+  To.IsSpec = From.IsSpec;
+  To.IsProof = From.IsProof;
+  return Invalid;
+}
+
+template <typename Derived>
+bool TreeTransform<Derived>::TransformLoopContract(
+    Stmt *S, std::optional<LoopContractInfo> &To, bool &Changed) {
+  const LoopContractInfo *From = SemaRef.Context.getLoopContract(S);
+  if (!From)
+    return false;
+  To.emplace();
+  bool Invalid = false;
+  auto Keep = [&](Expr *Old, ExprResult New, SmallVectorImpl<Expr *> &Out) {
+    if (!New.isUsable()) {
+      Invalid = true;
+      return;
+    }
+    Changed |= New.get() != Old;
+    Out.push_back(New.get());
+  };
+  for (Expr *E : From->Invariants)
+    Keep(E, getDerived().TransformContractCondition(E), To->Invariants);
+  for (Expr *E : From->Decreases)
+    Keep(E, getDerived().TransformContractMeasure(E), To->Decreases);
+  for (Expr *E : From->Modifies)
+    Keep(E, getDerived().TransformContractFootprint(E), To->Modifies);
+  To->MayDiverge = From->MayDiverge;
+  return Invalid;
+}
+
+template <typename Derived>
 ExprResult TreeTransform<Derived>::TransformForallExpr(ForallExpr *E) {
   VarDecl *Var = getDerived().TransformContractBinder(E->getBoundVar());
   ExprResult Lo = E->getLo() ? getDerived().TransformExpr(E->getLo())
@@ -18425,10 +18621,10 @@ ExprResult TreeTransform<Derived>::TransformForallExpr(ForallExpr *E) {
       Lo.get() == E->getLo() && Hi.get() == E->getHi() &&
       Body.get() == E->getBody())
     return E;
-  return new (SemaRef.Context)
-      ForallExpr(E->getForallLoc(), E->getLParenLoc(), E->getRParenLoc(),
-                 Var, Lo.getAs<Expr>(), Hi.getAs<Expr>(),
-                 Body.getAs<Expr>(), SemaRef.Context.BoolTy);
+  return SemaRef.BuildContractBinderExpr(
+      Stmt::ForallExprClass, E->getForallLoc(), E->getLParenLoc(),
+      E->getRParenLoc(), Var, Lo.getAs<Expr>(), Hi.getAs<Expr>(),
+      Body.getAs<Expr>());
 }
 
 template <typename Derived>
@@ -18446,10 +18642,10 @@ ExprResult TreeTransform<Derived>::TransformContractChooseExpr(ContractChooseExp
       Lo.get() == E->getLo() && Hi.get() == E->getHi() &&
       Body.get() == E->getBody())
     return E;
-  return new (SemaRef.Context)
-      ContractChooseExpr(E->getChooseLoc(), E->getLParenLoc(), E->getRParenLoc(),
-                 Var, Lo.getAs<Expr>(), Hi.getAs<Expr>(),
-                 Body.getAs<Expr>(), E->getType());
+  return SemaRef.BuildContractBinderExpr(
+      Stmt::ContractChooseExprClass, E->getChooseLoc(), E->getLParenLoc(),
+      E->getRParenLoc(), Var, Lo.getAs<Expr>(), Hi.getAs<Expr>(),
+      Body.getAs<Expr>());
 }
 
 template <typename Derived>
@@ -18467,10 +18663,10 @@ ExprResult TreeTransform<Derived>::TransformExistsExpr(ExistsExpr *E) {
       Lo.get() == E->getLo() && Hi.get() == E->getHi() &&
       Body.get() == E->getBody())
     return E;
-  return new (SemaRef.Context)
-      ExistsExpr(E->getExistsLoc(), E->getLParenLoc(), E->getRParenLoc(),
-                 Var, Lo.getAs<Expr>(), Hi.getAs<Expr>(),
-                 Body.getAs<Expr>(), SemaRef.Context.BoolTy);
+  return SemaRef.BuildContractBinderExpr(
+      Stmt::ExistsExprClass, E->getExistsLoc(), E->getLParenLoc(),
+      E->getRParenLoc(), Var, Lo.getAs<Expr>(), Hi.getAs<Expr>(),
+      Body.getAs<Expr>());
 }
 
 template <typename Derived>
@@ -18486,8 +18682,14 @@ ExprResult TreeTransform<Derived>::TransformOldExpr(OldExpr *E) {
 
 template <typename Derived>
 ExprResult TreeTransform<Derived>::TransformResultExpr(ResultExpr *E) {
-  // ResultExpr has no children to transform.
-  return E;
+  // The function's return type, which may depend on template parameters.
+  QualType Type = getDerived().TransformType(E->getType());
+  if (Type.isNull())
+    return ExprError();
+  if (!getDerived().AlwaysRebuild() && Type == E->getType())
+    return E;
+  return new (SemaRef.Context)
+      ResultExpr(E->getResultLoc(), E->getEndLoc(), Type);
 }
 
 } // end namespace clang

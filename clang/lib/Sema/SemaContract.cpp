@@ -309,6 +309,44 @@ ExprResult Sema::ActOnContractRange(Expr *Base, Expr *Lower,
                        OK_Ordinary, ColonLoc, RBLoc);
 }
 
+ExprResult Sema::ActOnContractMeasure(ExprResult E) {
+  if (E.isInvalid() || E.get()->isTypeDependent() ||
+      E.get()->getType()->isIntegerType())
+    return E;
+  Diag(E.get()->getExprLoc(), diag::err_contract_decreases_not_int);
+  return ExprError();
+}
+
+ExprResult Sema::BuildContractBinderExpr(Stmt::StmtClass Kind,
+                                         SourceLocation KeywordLoc,
+                                         SourceLocation LParenLoc,
+                                         SourceLocation RParenLoc,
+                                         VarDecl *Binder, Expr *Lo, Expr *Hi,
+                                         Expr *Body) {
+  for (Expr *Bound : {Lo, Hi})
+    if (Bound && !Bound->isTypeDependent() &&
+        !Bound->getType()->isIntegerType()) {
+      Diag(Bound->getExprLoc(), diag::err_contract_quantifier_bound_not_int);
+      return ExprError();
+    }
+  ExprResult Condition = ActOnContractCondition(Body);
+  if (Condition.isInvalid())
+    return ExprError();
+  switch (Kind) {
+  case Stmt::ContractChooseExprClass:
+    return new (Context) ContractChooseExpr(KeywordLoc, LParenLoc, RParenLoc,
+                                            Binder, Lo, Hi, Condition.get(),
+                                            Binder->getType());
+  case Stmt::ForallExprClass:
+    return new (Context) ForallExpr(KeywordLoc, LParenLoc, RParenLoc, Binder,
+                                    Lo, Hi, Condition.get(), Context.BoolTy);
+  default:
+    assert(Kind == Stmt::ExistsExprClass && "not a quantifier or a choice");
+    return new (Context) ExistsExpr(KeywordLoc, LParenLoc, RParenLoc, Binder,
+                                    Lo, Hi, Condition.get(), Context.BoolTy);
+  }
+}
+
 ExprResult Sema::ActOnTypeInvariantExpr(ExprResult E, CXXRecordDecl *Record) {
   if (E.isInvalid() || !Record)
     return E;

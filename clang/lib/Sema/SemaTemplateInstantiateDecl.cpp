@@ -5436,6 +5436,50 @@ void Sema::InstantiateExceptionSpec(SourceLocation PointOfInstantiation,
                      TemplateArgs);
 }
 
+void Sema::InstantiateFunctionContract(SourceLocation PointOfInstantiation,
+                                       FunctionDecl *Function) {
+  if (!getLangOpts().VerifyContracts || Function->isInvalidDecl() ||
+      !Function->isTemplateInstantiation())
+    return;
+  const FunctionDecl *Pattern =
+      Function->getTemplateInstantiationPattern(/*ForDefinition=*/false);
+  const FunctionContractInfo *PatternContract =
+      Pattern ? Context.getFunctionContract(Pattern) : nullptr;
+  if (!PatternContract || Context.getFunctionContract(Function))
+    return;
+
+  // Recorded first, so that a use of the specialization in its own contract
+  // finds it and stops.
+  FunctionContractInfo &Contract = Context.getOrCreateFunctionContract(Function);
+  Contract.ContractDecl = Function;
+  Contract.IsSpec = PatternContract->IsSpec;
+  Contract.IsProof = PatternContract->IsProof;
+
+  NonSFINAEContext _(*this);
+  InstantiatingTemplate Inst(*this, PointOfInstantiation, Function);
+  if (Inst.isInvalid())
+    return;
+  Sema::ContextRAII SavedContext(*this, Function);
+  // The contract is a full expression of its own, whatever the use that
+  // asks for it, and the specs it applies are used.
+  EnterExpressionEvaluationContext Evaluated(
+      *this, ExpressionEvaluationContext::PotentiallyEvaluated);
+  LocalInstantiationScope Scope(*this);
+  MultiLevelTemplateArgumentList TemplateArgs = getTemplateInstantiationArgs(
+      Function, Function->getLexicalDeclContext(), /*Final=*/false,
+      /*Innermost=*/std::nullopt, /*RelativeToPrimary=*/true);
+  // A member's `this` is the specialization's, the current context. The
+  // scope identifies the parameters of every redeclaration of the pattern,
+  // so the clauses may name those of the declaration they are written on.
+  if (addInstantiatedParametersToScope(Function, Pattern, Scope, TemplateArgs))
+    return;
+  FunctionContractInfo Instantiated;
+  if (SubstFunctionContract(*PatternContract, Instantiated, TemplateArgs))
+    return;
+  Instantiated.ContractDecl = Function;
+  Contract = std::move(Instantiated);
+}
+
 /// Initializes the common fields of an instantiation function
 /// declaration (New) from the corresponding fields of its template (Tmpl).
 ///
@@ -5765,6 +5809,9 @@ void Sema::InstantiateFunctionDefinition(SourceLocation PointOfInstantiation,
         break;
     }
   }
+
+  // The definition is verified against its own contract.
+  InstantiateFunctionContract(PointOfInstantiation, Function);
 
   NonSFINAEContext _(*this);
   InstantiatingTemplate Inst(*this, PointOfInstantiation, Function);

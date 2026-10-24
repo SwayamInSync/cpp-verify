@@ -1817,6 +1817,31 @@ cppverify::proof void sum_concat(seq s, seq t)
   mirror of vstd states each operation for its ladder; Lean's evaluation of
   every operation agrees with the certifier's.
 
+## Templates
+
+- A function template is verified in each specialization the translation
+  unit instantiates, by a use or by an explicit instantiation, as a function
+  of its own named with its arguments (`maxv<int>`). What a template means
+  depends on the types and overloads its arguments bring, which C++ fixes
+  only at instantiation, so an uninstantiated template is not verified (the
+  position of Kani and CBMC; Creusot and Prusti verify generic Rust once,
+  since trait bounds fix its meaning there). A contracted template that
+  nothing instantiates is reported.
+- Its contract is instantiated as its body is, and lazily, as an exception
+  specification is: where a specialization is used or its definition
+  instantiated, never for a specialization nothing uses. Each clause gets
+  the checks the parser gives it (a condition converts to `bool`, a measure
+  is an integer, a range has integer bounds), so a clause that does not fit
+  the arguments is a compiler error with Clang's instantiation note.
+- Loop contracts, assertions, ghost code, quantifiers, and triggers are
+  instantiated with the body. A contract written on a declaration names its
+  parameters; a trusted template without a definition is trusted in each
+  specialization.
+- A diagnostic about a specialization notes where it is instantiated, as a
+  compiler's does.
+- Not yet: the members and type invariants of class templates, ignored with
+  `-Wcontract-unsupported`.
+
 ## Clang Modification Details
 
 ### Construct recognition
@@ -1927,6 +1952,8 @@ a one-line hook.
     results, and every operation).
 12. A range `p[lo : n]` needs a pointer to a complete object type and
     integer bounds, and is valid only as a whole `cppverify::modifies` footprint.
+13. In a template, a clause that depends on its parameters is checked where
+    it is instantiated, with the same rules.
 
 ### CodeGen Rules
 

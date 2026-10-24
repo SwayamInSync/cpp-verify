@@ -534,12 +534,11 @@ void Parser::ParseFunctionContractClauseList(FunctionContractClauses &Clauses) {
       // expressions. Parse each with ParseAssignmentExpression so the comma is
       // a tuple separator, not the C comma operator.
       do {
-        ExprResult E = finishCppVerifyExpression(ParseAssignmentExpression());
+        ExprResult E = ParseAssignmentExpression();
         if (E.isInvalid())
           break;
-        if (!E.get()->isTypeDependent() && !E.get()->getType()->isIntegerType())
-          Diag(E.get()->getExprLoc(), diag::err_contract_decreases_not_int);
-        else
+        E = finishCppVerifyExpression(Actions.ActOnContractMeasure(E));
+        if (E.isUsable())
           I.Decreases.push_back(E.get());
         if (Tok.is(tok::comma))
           ConsumeToken();
@@ -673,17 +672,14 @@ void Parser::attachFunctionContract(Decl *Result,
               I.MayDiverge.isInvalid() && I.Inductive.isInvalid() &&
               I.BehaviorChecks.empty() && !I.IsSpec && !I.IsProof))
     return;
-  // Templates are not verified yet: their clauses are ignored, as a member
-  // function's are.
-  if (FD->isTemplated() && !I.IsSpec && !I.IsProof) {
-    // A member of a class template is named by its class.
-    const auto *Method = dyn_cast<CXXMethodDecl>(FD);
-    if (Method && Method->getParent()->isTemplated())
-      Diag(FD->getLocation(), diag::warn_contract_template_unsupported)
-          << 1 << Method->getParent();
-    else
-      Diag(FD->getLocation(), diag::warn_contract_template_unsupported)
-          << 0 << FD;
+  // A function template's clauses are instantiated with each of its
+  // specializations. Members of class templates are not verified yet: their
+  // clauses are ignored.
+  if (const auto *Method = dyn_cast<CXXMethodDecl>(FD);
+      Method && Method->getParent()->isTemplated() && !I.IsSpec &&
+      !I.IsProof) {
+    Diag(FD->getLocation(), diag::warn_contract_template_unsupported)
+        << 1 << Method->getParent();
     return;
   }
   FunctionContractInfo &FCI = Ctx.getOrCreateFunctionContract(FD);
@@ -835,14 +831,10 @@ void Parser::ParseLoopContractClauses(LoopContractInfo &Contract) {
       // Parse each component with ParseAssignmentExpression so the comma is a
       // tuple separator, not the C comma operator.
       while (true) {
-        ExprResult D = finishCppVerifyExpression(ParseAssignmentExpression());
+        ExprResult D = ParseAssignmentExpression();
+        if (D.isUsable())
+          D = finishCppVerifyExpression(Actions.ActOnContractMeasure(D));
         if (D.isInvalid()) {
-          SkipUntil(tok::r_paren, StopAtSemi);
-          return;
-        }
-        if (!D.get()->isTypeDependent() &&
-            !D.get()->getType()->isIntegerType()) {
-          Diag(D.get()->getExprLoc(), diag::err_contract_decreases_not_int);
           SkipUntil(tok::r_paren, StopAtSemi);
           return;
         }
@@ -867,10 +859,11 @@ void Parser::attachLoopContract(StmtResult &Loop, LoopContractInfo &Contract) {
       (Contract.Invariants.empty() && Contract.Decreases.empty() &&
        Contract.MayDiverge.isInvalid() && Contract.Modifies.empty()))
     return;
-  if (const FunctionDecl *FD = Actions.getCurFunctionDecl();
-      FD && FD->isTemplated()) {
+  if (const auto *Method =
+          dyn_cast_or_null<CXXMethodDecl>(Actions.getCurFunctionDecl());
+      Method && Method->getParent()->isTemplated()) {
     Diag(Loop.get()->getBeginLoc(), diag::warn_contract_template_unsupported)
-        << 0 << FD;
+        << 1 << Method->getParent();
     return;
   }
   Actions.getASTContext().getOrCreateLoopContract(Loop.get()) =
@@ -1379,23 +1372,6 @@ ExprResult Parser::ParseQuantifierExpr() {
     return ExprError();
   }
 
-  // Validate bound types: lo and hi must be integer.
-  for (const ExprResult &Bound : {Lo, Hi})
-    if (Bound.isUsable() && !Bound.get()->isTypeDependent() &&
-        !Bound.get()->getType()->isIntegerType()) {
-      Diag(Bound.get()->getExprLoc(),
-           diag::err_contract_quantifier_bound_not_int);
-      SkipUntil(tok::r_paren, StopAtSemi);
-      return ExprError();
-    }
-
-  // Validate body: must be contextually convertible to bool.
-  ExprResult BodyBool = Actions.ActOnContractCondition(Body);
-  if (BodyBool.isInvalid()) {
-    SkipUntil(tok::r_paren, StopAtSemi);
-    return ExprError();
-  }
-
   if (Tok.isNot(tok::r_paren)) {
     Diag(Tok, diag::err_contract_expected_rparen) << Keyword;
     SkipUntil(tok::r_paren, StopAtSemi);
@@ -1403,16 +1379,12 @@ ExprResult Parser::ParseQuantifierExpr() {
   }
   SourceLocation RParenLoc = ConsumeParen();
 
-  Expr *LoE = Lo.isUsable() ? Lo.get() : nullptr;
-  Expr *HiE = Hi.isUsable() ? Hi.get() : nullptr;
-  if (IsChoose)
-    return new (Ctx) ContractChooseExpr(KwLoc, LParenLoc, RParenLoc, BoundVar,
-                                        LoE, HiE, BodyBool.get(), Ctx.IntTy);
-  if (IsForall)
-    return new (Ctx) ForallExpr(KwLoc, LParenLoc, RParenLoc, BoundVar, LoE, HiE,
-                                BodyBool.get(), Ctx.BoolTy);
-  return new (Ctx) ExistsExpr(KwLoc, LParenLoc, RParenLoc, BoundVar, LoE, HiE,
-                              BodyBool.get(), Ctx.BoolTy);
+  return Actions.BuildContractBinderExpr(
+      IsChoose   ? Stmt::ContractChooseExprClass
+      : IsForall ? Stmt::ForallExprClass
+                 : Stmt::ExistsExprClass,
+      KwLoc, LParenLoc, RParenLoc, BoundVar, Lo.isUsable() ? Lo.get() : nullptr,
+      Hi.isUsable() ? Hi.get() : nullptr, Body.get());
 }
 
 /// Parse cppverify::old(expr)

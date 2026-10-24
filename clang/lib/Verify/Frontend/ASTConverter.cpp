@@ -915,6 +915,17 @@ VIntMode ASTConverter::specCallIntMode(const FunctionDecl *FD) const {
   return VIntMode::Math;
 }
 
+/// A function as the verifier's messages name it, a template specialization
+/// with its arguments (`maxv<int>`).
+static std::string functionName(const FunctionDecl *FD,
+                                bool Qualified = false) {
+  std::string Name;
+  llvm::raw_string_ostream OS(Name);
+  FD->getNameForDiagnostic(OS, FD->getASTContext().getPrintingPolicy(),
+                           Qualified);
+  return Name;
+}
+
 std::string ASTConverter::functionIdentity(const FunctionDecl *FD) {
   if (!FD)
     return {};
@@ -1125,6 +1136,33 @@ ASTConverter::trackedValueNames(const ValueDecl *D) const {
   return Names;
 }
 
+void ASTConverter::nameParameters(const FunctionDecl *ContractDecl,
+                                  const FunctionDecl *FD) {
+  ParameterNames.clear();
+  PackElements.clear();
+  // The parameters a pack expands to share its name, which no others can:
+  // each is named as C++26 indexes a pack, `ns...[1]`.
+  std::map<std::string, unsigned> Occurrences, Elements;
+  for (const ParmVarDecl *P : ContractDecl->parameters())
+    ++Occurrences[P->getNameAsString()];
+  for (unsigned I = 0; I < FD->getNumParams(); ++I) {
+    const ParmVarDecl *ContractParam = ContractDecl->getParamDecl(I);
+    const ParmVarDecl *DefinitionParam = FD->getParamDecl(I);
+    std::string Name = ContractParam->getNameAsString();
+    std::string Element;
+    if (!Name.empty() && Occurrences[Name] > 1)
+      Element = "...[" + std::to_string(Elements[Name]++) + "]";
+    if (Name.empty())
+      Name = DefinitionParam->getNameAsString();
+    if (Name.empty())
+      Name = "__cppverify_param_" + std::to_string(I);
+    ParameterNames[ContractParam] = Name + Element;
+    ParameterNames[DefinitionParam] = Name + Element;
+    if (!Element.empty())
+      PackElements[DefinitionParam] = Element;
+  }
+}
+
 std::string ASTConverter::valueName(const ValueDecl *D) const {
   if (const auto *P = dyn_cast_or_null<ParmVarDecl>(D))
     if (auto It = ParameterNames.find(P); It != ParameterNames.end())
@@ -1137,6 +1175,9 @@ void ASTConverter::recordSourceVariable(const ValueDecl *D) {
     return;
   const std::string InternalBase = valueName(D);
   std::string DisplayBase = D->getNameAsString();
+  if (const auto *P = dyn_cast<ParmVarDecl>(D))
+    if (auto It = PackElements.find(P); It != PackElements.end())
+      DisplayBase += It->second;
   if (DisplayBase.empty())
     DisplayBase = InternalBase;
   auto Record = [&](std::string InternalName, std::string DisplayName,
@@ -1994,6 +2035,17 @@ static void collectFunctionCandidates(const DeclContext *DC, ASTContext &Ctx,
       const FunctionDecl *FD = FTD->getTemplatedDecl();
       if (FD->isThisDeclarationADefinition())
         Out.push_back(FD);
+      // Each specialization this translation unit instantiates is a function
+      // of its own, with its definition or else its contract. An explicit
+      // specialization is a declaration of its own, and the redeclarations
+      // of a template share its specializations.
+      if (!FTD->isCanonicalDecl())
+        continue;
+      for (const FunctionDecl *Spec : FTD->specializations())
+        if (Spec->isTemplateInstantiation() &&
+            (Spec->isThisDeclarationADefinition() ||
+             (Ctx.getFunctionContract(Spec) && !Spec->hasBody())))
+          Out.push_back(Spec);
       continue;
     }
     if (const auto *FD = dyn_cast<FunctionDecl>(D)) {
@@ -2154,23 +2206,47 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
       // verified code calls it, which reports the call.
       if (!functionContract(FD) && !hasContractStatements(FD, Ctx))
         continue;
-      llvm::SaveAndRestore Owner(ErrorFunction, functionIdentity(FD));
-      llvm::SaveAndRestore OwnerName(ErrorFunctionName, FD->getNameAsString());
-      llvm::SaveAndRestore InContract(ErrorInContract, true);
-      if (UnsupportedMember) {
-        error(FD->getLocation(),
-              FD->getQualifiedNameAsString() + ": " + *UnsupportedMember);
+      // A function template is verified in each of its specializations,
+      // which follow it: what it means depends on its arguments.
+      if (!UnsupportedMember) {
+        const FunctionTemplateDecl *Template =
+            FD->getDescribedFunctionTemplate();
+        if (Template && !FD->isInStdNamespace() &&
+            Ctx.getSourceManager().isWrittenInMainFile(FD->getLocation()) &&
+            llvm::none_of(Template->specializations(),
+                          [](const FunctionDecl *Spec) {
+                            return Spec->isTemplateInstantiation();
+                          }))
+          Warnings.emplace_back(
+              FD->getLocation(),
+              functionName(FD) + ": function template is not verified: this "
+                                 "translation unit instantiates none of its "
+                                 "specializations");
         continue;
       }
-      if (!FD->isInStdNamespace() &&
-          Ctx.getSourceManager().isWrittenInMainFile(FD->getLocation()))
-        error(FD->getLocation(),
-              FD->getNameAsString() +
-                  ": function template verification is unsupported");
+      llvm::SaveAndRestore Owner(ErrorFunction, functionIdentity(FD));
+      llvm::SaveAndRestore OwnerName(ErrorFunctionName, functionName(FD));
+      llvm::SaveAndRestore InContract(ErrorInContract, true);
+      error(FD->getLocation(),
+            FD->getQualifiedNameAsString() + ": " + *UnsupportedMember);
       continue;
     }
     if (FD->isInStdNamespace())
       continue;
+    if (FD->isTemplateInstantiation()) {
+      // Its diagnostics note where it is instantiated, as a compiler's do,
+      // under the names they give its function.
+      const SourceLocation Point = FD->getPointOfInstantiation();
+      const char *What = FD->getPrimaryTemplate()
+                             ? "function template specialization"
+                             : "member function";
+      for (const std::string &Name :
+           {functionName(FD), functionName(FD, isa<CXXMethodDecl>(FD))})
+        if (auto [It, New] = InstantiationPoints.emplace(
+                Name, std::make_pair(Point, std::string(What)));
+            !New && It->second.first != Point)
+          It->second.first = SourceLocation();
+    }
     const size_t ErrorsBefore = Errors.size();
     auto Fn = convertFunction(FD);
     if (Fn && Errors.size() == ErrorsBefore) {
@@ -2203,7 +2279,7 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
           if (const FunctionContractInfo *FCI = functionContract(Callee);
               FCI && !FCI->IsSpec && !FCI->IsProof)
             UnverifiedCallers[functionIdentity(Callee)].insert(
-                FD->getNameAsString());
+                functionName(FD));
       for (const Stmt *Child : S->children())
         Calls(Child);
     };
@@ -2803,7 +2879,7 @@ bool ASTConverter::exceedsNestingLimit(const FunctionDecl *FD,
     if (Depth > Limit) {
       const PresumedLoc Where =
           Ctx.getSourceManager().getPresumedLoc(S->getBeginLoc());
-      error(FD->getNameAsString() + ": the expression at " +
+      error(functionName(FD) + ": the expression at " +
             (Where.isValid() ? std::to_string(Where.getLine()) + ":" +
                                    std::to_string(Where.getColumn())
                              : std::string("an unknown location")) +
@@ -2960,7 +3036,7 @@ std::unique_ptr<VFunction>
 ASTConverter::convertFunction(const FunctionDecl *FD) {
   llvm::SaveAndRestore At(CurrentRange, SourceRange(FD->getLocation()));
   llvm::SaveAndRestore Owner(ErrorFunction, functionIdentity(FD));
-  llvm::SaveAndRestore OwnerName(ErrorFunctionName, FD->getNameAsString());
+  llvm::SaveAndRestore OwnerName(ErrorFunctionName, functionName(FD));
   llvm::SaveAndRestore InContract(ErrorInContract, true);
   const size_t ErrorsAtStart = Errors.size();
   const FunctionContractInfo *FCI = functionContract(FD);
@@ -2974,34 +3050,23 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   }
   if (exceedsNestingLimit(FD, FCI))
     return nullptr;
-  ParameterNames.clear();
   const FunctionDecl *ContractDecl = FCI->ContractDecl ? FCI->ContractDecl : FD;
   if (ContractDecl->getNumParams() != FD->getNumParams()) {
-    error(FD->getNameAsString() + ": contract declaration parameter mismatch");
+    error(functionName(FD) + ": contract declaration parameter mismatch");
     return nullptr;
   }
-  for (unsigned I = 0; I < FD->getNumParams(); ++I) {
-    const ParmVarDecl *ContractParam = ContractDecl->getParamDecl(I);
-    const ParmVarDecl *DefinitionParam = FD->getParamDecl(I);
-    std::string Name = ContractParam->getNameAsString();
-    if (Name.empty())
-      Name = DefinitionParam->getNameAsString();
-    if (Name.empty())
-      Name = "__cppverify_param_" + std::to_string(I);
-    ParameterNames[ContractParam] = Name;
-    ParameterNames[DefinitionParam] = Name;
-  }
+  nameParameters(ContractDecl, FD);
   if (FD->isVariadic()) {
-    error(FD->getNameAsString() + ": variadic functions are unsupported");
+    error(functionName(FD) + ": variadic functions are unsupported");
     return nullptr;
   }
   if (FCI->IsSpec && writesIndirectMemory(FD)) {
-    error(FD->getNameAsString() + ": spec functions must not write memory");
+    error(functionName(FD) + ": spec functions must not write memory");
     return nullptr;
   }
   if (FCI->IsSpec && (!FCI->Preconditions.empty() || !FCI->Modifies.empty() ||
                       !FCI->Aliases.empty())) {
-    error(FD->getNameAsString() +
+    error(functionName(FD) +
           ": a spec function is defined for every argument and "
           "its body is its meaning, so pre, modifies, and aliases "
           "do not apply; use recommends for a soft precondition");
@@ -3009,13 +3074,13 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   }
   if (FCI->IsSpec && FD->getReturnType()->isRecordType() &&
       !VType::collectionKind(FD->getReturnType())) {
-    error(FD->getNameAsString() +
+    error(functionName(FD) +
           ": aggregate-returning spec functions are unsupported");
     return nullptr;
   }
   if (auto Unsupported =
           findUnsupportedType(FD, !FCI->IsSpec && !FCI->IsProof)) {
-    error(FD->getNameAsString() +
+    error(functionName(FD) +
           ": unsupported C++ type in verification: " + *Unsupported);
     return nullptr;
   }
@@ -3027,7 +3092,7 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   const bool HasThis = Method && Method->isInstance();
   const auto *Constructor = dyn_cast<CXXConstructorDecl>(FD);
   Fn->IsConstructor = Constructor != nullptr;
-  Fn->Name = Method ? FD->getQualifiedNameAsString() : FD->getNameAsString();
+  Fn->Name = functionName(FD, /*Qualified=*/Method != nullptr);
   Fn->Identity = functionIdentity(FD);
   Fn->IsSpec = FCI->IsSpec;
   Fn->IsProof = FCI->IsProof;
@@ -3795,28 +3860,28 @@ bool ASTConverter::checkLoopTermination(const Stmt *Loop, bool HasMeasure) {
 std::unique_ptr<VFunction>
 ASTConverter::convertConstexprSpec(const FunctionDecl *FD) {
   llvm::SaveAndRestore Owner(ErrorFunction, functionIdentity(FD));
-  llvm::SaveAndRestore OwnerName(ErrorFunctionName, FD->getNameAsString());
+  llvm::SaveAndRestore OwnerName(ErrorFunctionName, functionName(FD));
   llvm::SaveAndRestore InContract(ErrorInContract, true);
   const size_t ErrorsAtStart = Errors.size();
-  ParameterNames.clear();
+  nameParameters(FD, FD);
   if (exceedsNestingLimit(FD, functionContract(FD)) ||
       hasIndirectMemoryAccess(FD))
     return nullptr;
   if (!FD->isConstexpr() || !FD->hasBody())
     return nullptr;
   if (FD->getReturnType()->isRecordType()) {
-    error(FD->getNameAsString() +
+    error(functionName(FD) +
           ": aggregate-returning constexpr specs are unsupported");
     return nullptr;
   }
   if (auto Unsupported = findUnsupportedType(FD, false)) {
-    error(FD->getNameAsString() +
+    error(functionName(FD) +
           ": unsupported C++ type in verification: " + *Unsupported);
     return nullptr;
   }
 
   auto Fn = std::make_unique<VFunction>();
-  Fn->Name = FD->getNameAsString();
+  Fn->Name = functionName(FD);
   Fn->Identity = functionIdentity(FD);
   Fn->IsSpec = true;
   Fn->IsConstexprSpec = true;
@@ -5982,7 +6047,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
         if (CalleeContract && CalleeContract->IsSpec && !InContractExpression &&
             !InGhost && !CurrentFn->IsSpec && !CurrentFn->IsProof) {
           error(CurrentFn->Name + ": spec function " +
-                Callee->getNameAsString() +
+                functionName(Callee) +
                 " cannot be used in executable code");
           return nullptr;
         }
@@ -6024,18 +6089,18 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
             Ctx);
         noteSpecUse(Callee);
         return std::make_unique<VSpecCallExpr>(
-            Callee->getNameAsString(), functionIdentity(Callee),
+            functionName(Callee), functionIdentity(Callee),
             std::move(Args), Ty, E->getExprLoc(), specReadsHeap(Callee));
       }
       if (functionContract(Callee))
         error(CurrentFn->Name +
               ": executable call is unsupported in this expression "
               "context: " +
-              Callee->getNameAsString());
+              functionName(Callee));
       else
         error(CurrentFn->Name +
               ": call to function without a verification contract: " +
-              Callee->getNameAsString());
+              functionName(Callee));
     }
   }
   error(CurrentFn->Name + ": unsupported expression: " + E->getStmtClassName());
@@ -6112,7 +6177,7 @@ void ASTConverter::convertExecCallArg(
         convertExecCallArgs(CE, Prelude, InnerArgs);
         std::string Tmp = "__nested_" + std::to_string(++NestedCallId);
         Prelude.push_back(std::make_unique<VCallStmt>(
-            Callee->getNameAsString(), functionIdentity(Callee),
+            functionName(Callee), functionIdentity(Callee),
             std::move(InnerArgs), Tmp, E->getExprLoc(), false));
         Out = convertCallResultValue(
             Tmp, Callee->getReturnType(),
@@ -6678,7 +6743,7 @@ bool ASTConverter::rejectOwnObjectUse(const Expr *E) {
   const FunctionDecl *Callee = ownObjectCallee(E);
   if (!Callee)
     return false;
-  error(CurrentFn->Name + ": the reference " + Callee->getNameAsString() +
+  error(CurrentFn->Name + ": the reference " + functionName(Callee) +
         " returns is not used yet; call it as a statement of its own");
   return true;
 }
@@ -7230,7 +7295,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
                     : "";
             CurrentFn->UsesDynamicStorage |= TrackOwnedResult;
             Out.push_back(std::make_unique<VCallStmt>(
-                Callee->getNameAsString(), functionIdentity(Callee),
+                functionName(Callee), functionIdentity(Callee),
                 std::move(Args), ReturnsVoid ? "" : Tmp, RS->getBeginLoc(),
                 false, Provenance));
             auto Result = convertCallResultValue(Tmp, Callee->getReturnType(),
@@ -7627,12 +7692,12 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         convertExecCallArgs(CE, Out, Args);
         bool IsProof = calleeIsProof(Callee);
         Out.push_back(std::make_unique<VCallStmt>(
-            Callee->getNameAsString(), functionIdentity(Callee),
+            functionName(Callee), functionIdentity(Callee),
             std::move(Args), "", CE->getExprLoc(), IsProof));
       } else {
         error(CurrentFn->Name +
               ": call to function without a verification contract: " +
-              Callee->getNameAsString());
+              functionName(Callee));
       }
     } else {
       error(CurrentFn->Name + ": indirect function calls are unsupported");
@@ -7852,7 +7917,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         const std::string &Provenance =
             DynamicPointerProvenanceVariables.at(DirectTarget);
         Out.push_back(std::make_unique<VCallStmt>(
-            PointerCallee->getNameAsString(), functionIdentity(PointerCallee),
+            functionName(PointerCallee), functionIdentity(PointerCallee),
             std::move(Args), valueName(DirectTarget), BO->getExprLoc(), false,
             Provenance));
         CurrentFn->UsesDynamicStorage = true;
@@ -7887,7 +7952,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
               std::vector<std::unique_ptr<VExpr>> Args;
               convertExecCallArgs(Call, Out, Args);
               Out.push_back(std::make_unique<VCallStmt>(
-                  Callee->getNameAsString(), functionIdentity(Callee),
+                  functionName(Callee), functionIdentity(Callee),
                   std::move(Args), valueName(Target), BO->getExprLoc(), false));
               markInitialized(Target);
               return Out;
@@ -7913,7 +7978,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           const std::string Tmp =
               "__assignment_call_" + std::to_string(++NestedCallId);
           Out.push_back(std::make_unique<VCallStmt>(
-              Callee->getNameAsString(), functionIdentity(Callee),
+              functionName(Callee), functionIdentity(Callee),
               std::move(Args), Tmp, BO->getExprLoc(), false));
           VType Target =
               VType::fromQualType(BO->getLHS()->getType(), IntMode, Ctx);
@@ -8067,7 +8132,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
             const std::string ResultTarget =
                 "__local_call_" + std::to_string(++NestedCallId);
             Out.push_back(std::make_unique<VCallStmt>(
-                Callee->getNameAsString(), functionIdentity(Callee),
+                functionName(Callee), functionIdentity(Callee),
                 std::move(Args), ResultTarget, VD->getBeginLoc(),
                 calleeIsProof(Callee)));
             Initializer = convertCallResultValue(
@@ -8222,7 +8287,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           const std::string &Provenance =
               DynamicPointerProvenanceVariables.at(VD);
           Out.push_back(std::make_unique<VCallStmt>(
-              Callee->getNameAsString(), functionIdentity(Callee),
+              functionName(Callee), functionIdentity(Callee),
               std::move(Args), valueName(VD), VD->getBeginLoc(), false,
               Provenance));
           CurrentFn->UsesDynamicStorage = true;
@@ -8275,7 +8340,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
                 RecordResult ? VD->getNameAsString()
                              : "__local_call_" + std::to_string(++NestedCallId);
             Out.push_back(std::make_unique<VCallStmt>(
-                Callee->getNameAsString(), functionIdentity(Callee),
+                functionName(Callee), functionIdentity(Callee),
                 std::move(Args), ResultTarget, VD->getBeginLoc(),
                 calleeIsProof(Callee)));
             if (!RecordResult) {
