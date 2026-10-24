@@ -77,8 +77,10 @@ liveness, initialization, and a non-escaping lifetime identity. A local
 binding snapshots its address, so changing a source pointer later does not
 rebind the reference.
 
-Conditional bindings, temporaries, reference returns, address-taking, rvalue
-references, and non-scalar referents remain rejected.
+Conditional bindings, temporaries, reference returns, the address of a
+scalar reference, and rvalue references remain rejected. A reference to a
+record names an object in memory, as a pointer to it does (see `Records
+through pointers`_ below).
 Addressable declarations inside loops and ``cppverify::old`` of automatic locals or local
 bindings are also fail-closed; outer automatic locals and loop-local reference
 aliases are supported.
@@ -101,7 +103,10 @@ There are three frame granularities:
 - a **range**, ``cppverify::modifies(p[lo : n])``, names the ``n`` elements from
   ``p[lo]``, half-open ``[lo, lo + n)`` (Clang's array-section syntax);
 - a **region**, ``cppverify::modifies(*p)``, names the object ``p`` addresses: its
-  ``valid(p, n)`` extent, or one object.
+  ``valid(p, n)`` extent, or one object. ``cppverify::modifies(c)`` for a
+  reference ``c`` to a record names the object ``c`` names, and a record or
+  array member named whole (``cppverify::modifies(s->inner)``,
+  ``cppverify::modifies(s->items)``) names the bytes of that member.
 
 Inside the function, every store must lie in a footprint read in the entry
 state. At a modular call, the caller's heap changes only inside the callee's
@@ -327,6 +332,12 @@ address of ``s->size`` with ``s`` at 1. The verifier itself states that a
 pointer stepped through the array stays a whole number of elements from its
 start, as a generated invariant it proves, so the walk never lands between
 elements. :doc:`../../language/structs` lists the forms that are supported.
+
+All of this holds through a reference to a record too, which is a pointer
+that is never null and never reseated: ``void push(Stack &s, int v)`` reads
+and writes ``s.items[s.size]`` and ``s.size`` as the version above does
+through ``s->``, ``cppverify::modifies(s)`` is the whole stack, and
+``&s.size`` and ``s.items`` are pointers into it.
 
 Declaring a checked extent
 --------------------------
