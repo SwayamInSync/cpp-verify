@@ -4,7 +4,7 @@
 //
 // An error about source the verifier cannot represent points at that source,
 // with its line and a caret, as a compiler error does, and its JSON record
-// carries the range.
+// carries the range and the verdict of the function it is in.
 
 namespace cv = cppverify;
 
@@ -16,7 +16,7 @@ int pick(int x)
 // CHECK:      {{.*}}located_errors.cpp:[[@LINE-2]]:3: error: pick: unsupported statement: SwitchStmt
 // CHECK-NEXT: {{^ +}}[[@LINE-3]] |   switch (x) { case 1: return 1; default: return 0; }
 // CHECK-NEXT: {{^ +}}|   ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-// JSON: {"message":"pick: unsupported statement: SwitchStmt","schema":"cppverify.diagnostic/1","severity":"error","source":{"column":3,"end_column":53,"end_line":[[#@LINE-5]],"file":"{{.*}}located_errors.cpp","line":[[#@LINE-5]]},"status":"error"}
+// JSON: {"function":"pick","message":"pick: unsupported statement: SwitchStmt","reason":"construct.unsupported","schema":"cppverify.diagnostic/1","severity":"error","source":{"column":3,"end_column":53,"end_line":[[#@LINE-5]],"file":"{{.*}}located_errors.cpp","line":[[#@LINE-5]]},"status":"unresolved"}
 
 struct Counter {
   int get(int x) { cv::check(x >= 0 || x < 0); return x; }
@@ -50,3 +50,4 @@ int down(int n)
 // CHECK:      {{.*}}located_errors.cpp:[[@LINE-8]]:5: error: down: recursive executable functions require decreases, or cppverify::decreases(*) to allow divergence
 // CHECK-NEXT: {{^ +}}[[@LINE-9]] | int down(int n)
 // CHECK-NEXT: {{^ +}}|     ^~~~
+// JSON: {"function":"down","message":"down: recursive executable functions require decreases, or cppverify::decreases(*) to allow divergence","reason":"construct.unsupported",{{.*}}"status":"unresolved"}
