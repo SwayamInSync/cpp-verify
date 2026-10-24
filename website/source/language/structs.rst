@@ -651,8 +651,8 @@ array initialized (:doc:`functions-loops`).
   constructor, with reference or bit-field members, or larger than 256
   bytes; arrays of objects with constructors; ``new`` of a record.
 - A constructed object is kept in memory, and is passed, returned, and
-  copied by value as its fields, each read where it is (`Records by
-  value`_).
+  copied by value as its fields, each read where it is (see `Records
+  through pointers`_).
 
 ``cppverify::type_invariant``
 -----------------------------
