@@ -1109,7 +1109,8 @@ identity.
 
 Addressable local declarations inside loops, `cppverify::old(local)`, `cppverify::old(local_ref)`,
 conditional bindings, temporaries, reference returns,
-address-taking, rvalue references, and non-scalar referents remain fail-closed.
+address-taking, and rvalue references remain fail-closed. A reference to a
+record is the address of an object (3c).
 An outer automatic local and a local reference declaration may be used inside a
 loop. Recursive executable bodies may store through pointer and reference
 parameters and use automatic objects; recursion through a function that
@@ -1159,6 +1160,56 @@ void put(Ring *r, int v)
   Returning such a pointer or storing it in memory would lose the bounds
   and is rejected.
 
+### 3c. Records through references
+
+```cpp
+struct Counter { int n; int limit; };
+struct Pair { Counter left; Counter right; };
+
+void reset(Counter &c)
+  cppverify::modifies(c)
+  cppverify::post(c.n == 0 && c.limit == 10)
+{
+  c.n = 0;
+  c.limit = 10;
+}
+
+void reset_left(Pair &p)
+  cppverify::modifies(p.left)
+  cppverify::post(p.left.n == 0 && p.right.n == cppverify::old(p.right.n))
+{
+  reset(p.left);
+}
+```
+
+- A reference to a record (`T &`, `const T &`, a parameter or a local) is a
+  pointer to it that is never null and never reseated, so everything 3b
+  says holds of it: `c.f`, `c.buf[i]`, and `c.inner.x` are cells of the
+  object `c` names, with the same two checks, and `&c.f` and `c.buf` are
+  pointers into it with subobject bounds. A record by value stays its
+  fields; only a reference or a pointer names an object.
+- A reference parameter gets the generated preconditions of a scalar
+  reference: its object is non-null, live, and initialized, and it takes
+  part in the default non-aliasing of address parameters over its whole
+  object (`cppverify::aliases` opts out). A record's type invariant is not
+  injected for it, as for a pointer: its fields are read from memory.
+- `cppverify::modifies(c)` is the object, as `cppverify::modifies(*p)` is,
+  and as Dafny's `modifies c` is every field of the object `c` references;
+  `cppverify::modifies(c.n)` is one cell, as Dafny's ``modifies c`n``. A
+  scalar reference's `modifies(r)` stays one cell, since it may bind a field
+  of a larger object.
+- A reference argument or a local reference binds a place: another
+  reference, `*p`, a field (`p->left`), an element (`a[i]`), checked where it
+  is bound. A local reference may also bind a promoted local record; reads
+  and writes through it carry that object's lifetime and initialization
+  checks, but a pointer formed through it would not, and is rejected (as
+  `&local` is).
+- Not yet: a local record passed to a reference or pointer parameter. The
+  non-escape scan that admits a local scalar actual does not cover records,
+  so the call is `Unresolved` (`construct.unsupported`). Also rejected: a
+  whole record read through a reference, reference returns, rvalue and
+  `volatile` references, and references in spec and proof functions.
+
 ### 4. `cppverify::modifies(...)` frame condition
 
 ```cpp
@@ -1191,14 +1242,20 @@ void incr_first(int* a, int* b)
     `p->buf[lo : n]` for an array member;
   - a region `*p`: the object `p` addresses, which is its `valid(p, n)`
     extent when it has one and otherwise one object. A region of a single
-    scalar object is one cell.
+    scalar object is one cell. `c` for a reference to a record is the object
+    it names;
+  - the bytes of a record or array inside an object, named whole
+    (`p->inner`, `c.buf`, `p[k]` of a record extent): a range of one element
+    of its size.
 - Inside the callee every store must lie in a footprint, read in the entry
   state, so reassigning a pointer cannot widen the frame; a footprint of a
   callee must lie within the caller's own frame, cell by cell: a region of
   one scalar object is one cell, ranges and extents compare by their cells,
   and a footprint reached through another pointer than a caller region's
   (a copy of a pointer into the object) lies in that region when its cells
-  lie in the region's object, as a store does.
+  lie in the region's object, as a store does. A region or range lies in
+  one footprint of the caller: the heap holds a cell at every address, so
+  footprints of a record's fields one by one do not contain the record.
 - At a call, the caller's heap changes only inside the callee's footprints
   instantiated with the arguments: a cell or range is exactly those cells, a
   region is the argument's extent (or one object). Every other cell keeps its
@@ -1209,8 +1266,7 @@ void incr_first(int* a, int* b)
   forgets the whole heap.
 - Preconditions and `cppverify::old(parameter)` use entry actual arguments, and so does
   a parameter named in a postcondition.
-- General reference binding and member-function effects are not yet in the
-  verified subset.
+- Member-function effects are not yet in the verified subset.
 
 ### Worked example
 
@@ -1267,7 +1323,8 @@ int dist_sq(Coordinate p, Coordinate q)
 ```
 
 - `cppverify::type_invariant(expr)`: holds at function boundaries for by-value
-  records of the type; pointer-to-record parameters get no injection.
+  records of the type; pointer-to-record and reference-to-record parameters
+  get no injection.
 - `expr` may reference any field of the enclosing type by name.
 - Must be contextually convertible to bool.
 
@@ -2087,5 +2144,5 @@ fixed arrays, scalar subobject references, the fields and fixed-array
 elements of a record a pointer addresses, modular slices, and general
 same-array pointer difference under `valid(p, n)` are also supported.
 Provenance across ownership-taking or recursive interfaces, pointer
-reinterpretation/cross-object arithmetic, aggregate/rvalue references,
+reinterpretation/cross-object arithmetic, rvalue references,
 by-value pointer-bearing records, and general arrays remains unsupported.
