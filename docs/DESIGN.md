@@ -1956,10 +1956,12 @@ holds against a proof author in bad faith. It compiles the user module and each
 proof file on its own with `sorry` as an error, then runs a checker
 (`LeanCertifier.h`) on the compiled modules, which elaborates none of the
 user's source, so no macro, notation, or command of theirs changes what it
-checks: the kernel replays every module of the project a proof imports (only
-the pinned toolchain's own modules are trusted), as `leanchecker` does, so no
-declaration escaped the kernel; the proof's type is exactly the constant of its
-goal, which `CppVerify.Generated` defines; and the axioms it depends on,
+checks: the kernel replays every module of the project a proof imports into
+one environment, after the toolchain's modules, imported once (only those are
+trusted), as `leanchecker` does, so no declaration escaped the kernel, and a
+module that declares a name an earlier one declares otherwise is rejected,
+the generated module being replayed first; the proof's type is exactly the
+constant of its goal, which `CppVerify.Generated` defines; and the axioms it depends on,
 collected from the constants it uses, are among `propext`, `Quot.sound`, and
 `Classical.choice`. A function is `Certified` when every one of its goals
 passes, and a failing goal leaves only its own function `Unresolved`, with the

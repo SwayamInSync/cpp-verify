@@ -1717,23 +1717,30 @@ uses when the source around it changes.
   `LeanCertifier.h`, written into the project as `.cppverify/Certify.lean`,
   with `lake env lean --run` over the goals that built. The checker
   elaborates none of the user's source, so their macros and commands cannot
-  change what it checks. It first checks every goal in one environment: all
-  proof modules imported at once, and the constants of every module of the
-  project replayed together through the kernel into the environment of the
-  toolchain modules they import (a constant two modules declare, as an
-  equation lemma derived in each, must be the same). A check reads only
-  kernel constants, so proofs imported together cannot change each other's
-  checks; an automatic proof imports `Lean`, whose import each goal would
-  repeat (33 goals took 161 s, now 8 s). If that import or replay fails, as a
-  proof file that declares a goal's name or a module the kernel rejects
-  makes it, each goal is checked on its own: it imports the proof module
-  (never freeing imported data, which a later import in the process reads),
-  and every module of the import closure whose `.olean` lies outside the
-  toolchain is replayed (as `leanchecker`'s `replayFromImports`), each once
-  in a run. Either way it checks that `G_proof` is a theorem of type exactly
-  `.const G []` with `G` a definition of `CppVerify.Generated`, collects its
-  axioms by walking the kernel constants it uses, and prints `ok` or `fail`
-  with the reason per goal. Each Lean result
+  change what it checks. It reads, from their compiled files, the generated
+  module, every proof module, and every module of the project they import
+  (its `.olean` lies outside the toolchain), imports the toolchain modules
+  among their imports once, and replays the project's modules through the
+  kernel into that one environment, each after the modules it imports and
+  the generated module first, as `leanchecker` does. A module the kernel
+  rejects, a module that imports one, and a module that declares a constant
+  an earlier module or the toolchain declares otherwise are left out, each
+  with why; a constant two modules declare alike (an equation lemma Lean
+  derives in each, a theorem stated the same, which the kernel's replay
+  takes twice) is the same. So a proof file that declares a goal's name is
+  the one left out (`... declares G, which CppVerify.Generated declares`),
+  and a bad module fails only the goals whose proofs import it. Every check
+  reads the kernel's constants and the module that declared each, so proofs
+  cannot change each other's checks: a goal passes when its proof module and
+  the generated module were replayed, `G_proof` is a theorem of type exactly
+  `.const G []` with `G` a definition of `CppVerify.Generated`, and the
+  axioms its kernel constants reach are allowed; it prints `ok` or `fail`
+  with the reason per goal. One import matters because an automatic proof
+  imports `Lean`: a check per goal took 161 s for 33 goals (now 8 s), and the
+  first 0.2 checker, which fell back to it when one module failed, imported
+  each proof module and the imports of each module it replayed again, never
+  freeing imported data, which took 13 GB for one proof through a rejected
+  module (now 3.6 GB, `lean_certifier_memory.test`) and stopped CI runners. Each Lean result
   records its goals (`VerifyResult::LeanGoals`), and a function is
   `Certified` only when all of them pass; a failure names the obligation.
   Before 0.2 certification parsed what `Check.lean` printed, which imports
@@ -1743,7 +1750,9 @@ uses when the source around it changes.
 `lean_certifier.test` checks each of those attacks, a proof file that defines
 a goal of the same name of its own (the type check alone would take it), a
 proof that does not build, and an axiom behind a lemma, with a function whose
-proofs are sound certified beside each. `lean_readable.cpp` checks the readable form of each kind of assumption,
+proofs are sound certified beside each; `lean_certifier_memory.test` bounds
+the checker's memory where a proof imports `Lean` through a module the kernel
+rejects. `lean_readable.cpp` checks the readable form of each kind of assumption,
 the bridge, the stubs (every one builds), a proof by hypothesis names that
 certifies, and a readable form that says less than its goal, which fails at
 its bridge. `lean_automation.test` checks what an export writes (an automatic

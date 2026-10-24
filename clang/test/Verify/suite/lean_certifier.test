@@ -38,6 +38,14 @@
 # RUN: cp %S/Inputs/lean_certifier_proofs/shadowed/cppverify_one_* %t/shadowed/CppVerify/Proofs/cppverify_one_99bcee/
 # RUN: not %cpp-verify --backend=lean --lean-project=%t/shadowed --lean-certify %S/Inputs/lean_certifier.cpp -- 2>&1 | FileCheck %s --check-prefix=SHADOWED
 #
+# The same in the proof of the goal that comes first, which imports nothing
+# of the project: the generated module is replayed first all the same, so the
+# proof file is the module left out, and the next function is certified.
+# RUN: %cpp-verify --backend=lean --no-lean-auto --lean-project=%t/first %S/Inputs/lean_certifier_first.cpp -- > /dev/null
+# RUN: cp %S/Inputs/lean_certifier_proofs/cppverify_fine_* %t/first/CppVerify/Proofs/cppverify_fine_52006a/
+# RUN: cp %S/Inputs/lean_certifier_proofs/first/* %t/first/CppVerify/Proofs/cppverify_early_103f65/
+# RUN: not %cpp-verify --backend=lean --no-lean-auto --lean-project=%t/first --lean-certify %S/Inputs/lean_certifier_first.cpp -- 2>&1 | FileCheck %s --check-prefix=FIRST
+#
 # An axiom behind a lemma.
 # RUN: cp -r %t/base %t/hidden
 # RUN: cp %S/Inputs/lean_certifier_proofs/hidden/cppverify_one_* %t/hidden/CppVerify/Proofs/cppverify_one_99bcee/
@@ -59,7 +67,10 @@
 # IMPORTED-NEXT: Unresolved: lean obligation: one (Lean certification failed: the proof of fn_5f5a336f6e6576::postcondition@8:37: the kernel rejects CppVerify.Lemmas: while replaying declaration 'cheat': (kernel) declaration type mismatch, 'cheat' has type True but it is expected to have type cppverify_one_99bcee_postcondition_646d2761)
 
 # SHADOWED: Certified: fine [backend=Lean]
-# SHADOWED-NEXT: Unresolved: lean obligation: one (Lean certification failed: the proof of fn_5f5a336f6e6576::postcondition@8:37: cppverify_one_99bcee_postcondition_646d2761 is not the goal CppVerify.Generated defines)
+# SHADOWED-NEXT: Unresolved: lean obligation: one (Lean certification failed: the proof of fn_5f5a336f6e6576::postcondition@8:37: CppVerify.Proofs.cppverify_one_99bcee.cppverify_one_99bcee_postcondition_646d2761 declares cppverify_one_99bcee_postcondition_646d2761, which CppVerify.Generated declares)
+
+# FIRST: Unresolved: lean obligation: early (Lean certification failed: {{.*}}; the proof of fn_5f5a356561726c7976::postcondition@2:37: CppVerify.Proofs.cppverify_early_103f65.cppverify_early_103f65_postcondition_646d2761 declares cppverify_early_103f65_postcondition_646d2761, which CppVerify.Generated declares)
+# FIRST-NEXT: Certified: fine [backend=Lean]
 
 # HIDDEN: Certified: fine [backend=Lean]
 # HIDDEN-NEXT: Unresolved: lean obligation: one (Lean certification failed: the proof of fn_5f5a336f6e6576::postcondition@8:37: cppverify_one_99bcee_postcondition_646d2761_proof depends on the axiom escape, which is not one of Lean's foundations)
