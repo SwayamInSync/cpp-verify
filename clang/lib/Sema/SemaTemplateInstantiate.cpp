@@ -1793,6 +1793,21 @@ namespace {
       return AC;
     }
 
+    // A quantifier's or a choice's binder is its own local, as a lambda's
+    // are: each element of a pack expansion binds a variable of its own.
+    ExprResult TransformForallExpr(ForallExpr *E) {
+      LocalInstantiationScope Scope(SemaRef, /*CombineWithOuterScope=*/true);
+      return inherited::TransformForallExpr(E);
+    }
+    ExprResult TransformExistsExpr(ExistsExpr *E) {
+      LocalInstantiationScope Scope(SemaRef, /*CombineWithOuterScope=*/true);
+      return inherited::TransformExistsExpr(E);
+    }
+    ExprResult TransformContractChooseExpr(ContractChooseExpr *E) {
+      LocalInstantiationScope Scope(SemaRef, /*CombineWithOuterScope=*/true);
+      return inherited::TransformContractChooseExpr(E);
+    }
+
     ExprResult TransformLambdaExpr(LambdaExpr *E) {
       // Do not rebuild lambdas to avoid creating a new type.
       // Lambdas have already been processed inside their eval contexts.
