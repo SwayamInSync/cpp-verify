@@ -278,8 +278,18 @@ A reference to a record is now a pointer to it that is never null and never
 reseated: ``c.n`` and ``c.buf[i]`` are cells of the object, ``&c.n`` and
 ``c.buf`` point into it, ``cppverify::modifies(c)`` is the whole object, and
 a reference can be bound to ``*p``, ``p->left``, ``a[i]``, or another
-reference. Passing a local record to a reference parameter is still
-``construct.unsupported`` (:doc:`language/structs`).
+reference (:doc:`language/structs`).
+
+**Local objects passed to callees.** A local record passed to a reference
+parameter (``bump(c)``), and the address of any local passed to a pointer
+parameter (``reset(&c)``, ``inc(&x)``, ``inc(&c.n)``), were
+``construct.unsupported`` or errors (``raw address-of is unsupported until
+lexical lifetime and escape effects are modeled``). They are verified now
+when the callee keeps no address of the local, which the call checks: it
+stores none in memory, returns none, frees none, and passes one only to
+callees that keep none. The callee writes only its footprints in the local,
+and every field of a record must be initialized, since the callee reads it as
+initialized (:doc:`language/structs`).
 
 Running cpp-verify
 ~~~~~~~~~~~~~~~~~~
