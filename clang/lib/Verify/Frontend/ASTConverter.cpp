@@ -642,6 +642,39 @@ static bool isSupportedRecordLValueReference(QualType Ty, ASTContext &Ctx) {
              Ctx.getPointerType(Ty.getNonReferenceType()));
 }
 
+static bool isOwnObject(const Expr *E) {
+  const auto *U =
+      E ? dyn_cast<UnaryOperator>(E->IgnoreParenImpCasts()) : nullptr;
+  return U && U->getOpcode() == UO_Deref &&
+         isa<CXXThisExpr>(U->getSubExpr()->IgnoreParenImpCasts());
+}
+
+/// A member function that returns a reference to its own object, every
+/// return being `return *this;` (as an assignment operator's is): the
+/// reference says nothing the caller does not hold, so it returns nothing.
+static bool returnsOwnObject(const FunctionDecl *FD) {
+  const auto *Method = dyn_cast<CXXMethodDecl>(FD);
+  if (!Method || !Method->isInstance() || !FD->hasBody() ||
+      !FD->getReturnType()->isLValueReferenceType())
+    return false;
+  const ASTContext &Ctx = FD->getASTContext();
+  if (!Ctx.hasSameUnqualifiedType(FD->getReturnType().getNonReferenceType(),
+                                  Method->getFunctionObjectParameterType()))
+    return false;
+  struct Returns : RecursiveASTVisitor<Returns> {
+    bool Any = false;
+    bool All = true;
+    bool TraverseLambdaExpr(LambdaExpr *) { return true; }
+    bool VisitReturnStmt(ReturnStmt *R) {
+      Any = true;
+      All = All && isOwnObject(R->getRetValue());
+      return true;
+    }
+  } Finder;
+  Finder.TraverseStmt(const_cast<Stmt *>(FD->getBody()));
+  return Finder.Any && Finder.All;
+}
+
 static std::optional<std::string>
 findUnsupportedType(const FunctionDecl *FD, bool AllowScalarReferences) {
   // By-value records keep their flattened SSA representation, so only records
@@ -652,7 +685,7 @@ findUnsupportedType(const FunctionDecl *FD, bool AllowScalarReferences) {
     return Ty->isRecordType() && !isFlatScalarRecordType(Ty) &&
            !VType::collectionKind(Ty);
   };
-  if (UnsupportedValueType(FD->getReturnType()))
+  if (UnsupportedValueType(FD->getReturnType()) && !returnsOwnObject(FD))
     return FD->getReturnType().getAsString();
   for (const ParmVarDecl *Param : FD->parameters()) {
     QualType Ty = Param->getType();
@@ -2029,6 +2062,28 @@ unsupportedConstructor(const CXXConstructorDecl *Ctor) {
   return std::nullopt;
 }
 
+/// Whether a precondition gives the parameter an extent, valid(P, n).
+static bool hasExtentMarker(const FunctionContractInfo &FCI,
+                            const ParmVarDecl *P) {
+  struct Finder : RecursiveASTVisitor<Finder> {
+    const ParmVarDecl *Parameter;
+    bool Found = false;
+    bool VisitCallExpr(CallExpr *Call) {
+      const FunctionDecl *Callee = Call->getDirectCallee();
+      if (Callee && Callee->getDeclName().isIdentifier() &&
+          Callee->getName() == "valid" && Call->getNumArgs() == 2)
+        if (const auto *Ref =
+                dyn_cast<DeclRefExpr>(Call->getArg(0)->IgnoreParenImpCasts()))
+          Found = Found || Ref->getDecl() == Parameter;
+      return !Found;
+    }
+  } F;
+  F.Parameter = P;
+  for (const Expr *Pre : FCI.Preconditions)
+    F.TraverseStmt(const_cast<Expr *>(Pre));
+  return F.Found;
+}
+
 static bool mentionsThis(const Stmt *S) {
   if (!S)
     return false;
@@ -2994,7 +3049,9 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   }
   IntMode = FCI->IsSpec ? VIntMode::Math : VIntMode::Machine;
   Fn->IntMode = IntMode;
-  Fn->ReturnType = VType::fromQualType(FD->getReturnType(), IntMode, Ctx);
+  Fn->ReturnType = returnsOwnObject(FD)
+                       ? VType::makeVoid()
+                       : VType::fromQualType(FD->getReturnType(), IntMode, Ctx);
   if (const RecordDecl *RD = getRecordFromType(FD->getReturnType()))
     if (const RecordDecl *Definition = RD->getDefinition())
       for (const FieldDecl *Field : Definition->fields())
@@ -3253,6 +3310,48 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
         if (auto Post = convertTypeInvariantExpr(Invariant))
           addPostcondition(*Fn, std::move(Post),
                            ProofObligationKind::TypeInvariant);
+    }
+    // An object a parameter refers to or points to satisfies its class
+    // invariant on entry, as a caller shows at the call, and through a
+    // mutable reference or pointer at exit too: every function boundary is
+    // one at which the invariant holds. A pointer may be null; one with an
+    // extent addresses several objects, which is not covered yet. An extent
+    // marker in the invariant is `this`'s, so it is true here.
+    for (const ParmVarDecl *P : FD->parameters()) {
+      QualType Ty = P->getType();
+      if (!Ty->isLValueReferenceType() && !Ty->isPointerType())
+        continue;
+      QualType Object = Ty->getPointeeType();
+      const RecordDecl *Record = getRecordFromType(Object);
+      const TypeContractInfo *TCI =
+          Record ? Ctx.getTypeContract(Record) : nullptr;
+      if (!TCI || TCI->Invariants.empty() || hasExtentMarker(*FCI, P))
+        continue;
+      VVarExpr Pointer(valueName(P), VType::makePtr(), P->getLocation());
+      llvm::SaveAndRestore<const VExpr *> Substitute(ThisSubstitute, &Pointer);
+      llvm::SaveAndRestore DropMarkers(DropExtentMarkers, true);
+      FieldSubstPrefix.clear();
+      auto Guarded = [&](std::unique_ptr<VExpr> Invariant) {
+        if (!Ty->isPointerType())
+          return Invariant;
+        return std::unique_ptr<VExpr>(std::make_unique<VBinOpExpr>(
+            VBinOp::Or,
+            std::make_unique<VBinOpExpr>(
+                VBinOp::Eq, cloneVExpr(&Pointer),
+                std::make_unique<VLiteralExpr>(0, VType::makePtr(),
+                                               P->getLocation()),
+                VType::makeBool(), P->getLocation()),
+            std::move(Invariant), VType::makeBool(), P->getLocation()));
+      };
+      for (const Expr *Invariant : TCI->Invariants) {
+        if (auto Pre = convertTypeInvariantExpr(Invariant))
+          addPrecondition(*Fn, Guarded(std::move(Pre)),
+                          ProofObligationKind::TypeInvariant);
+        if (!Object.isConstQualified())
+          if (auto Post = convertTypeInvariantExpr(Invariant))
+            addPostcondition(*Fn, Guarded(std::move(Post)),
+                             ProofObligationKind::TypeInvariant);
+      }
     }
     for (const ParmVarDecl *P : AddressParams) {
       auto Pointer = std::make_unique<VVarExpr>(valueName(P), VType::makePtr(),
@@ -4561,7 +4660,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
                                               E->getExprLoc());
     }
   // An extent marker's pointer field is its entry value's parameter.
-  if (E && !FieldExtentParameters.empty())
+  if (E && !FieldExtentParameters.empty() && !ThisSubstitute)
     if (auto It = FieldExtentParameters.find(E->IgnoreParenImpCasts());
         It != FieldExtentParameters.end())
       return std::make_unique<VVarExpr>(
@@ -5225,6 +5324,8 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     return convertExpr(MTE->getSubExpr());
   // `this`, the parameter of a member function's object.
   if (isa<CXXThisExpr>(E)) {
+    if (ThisSubstitute)
+      return cloneVExpr(ThisSubstitute);
     if (!CurrentFn || CurrentFn->Params.empty() ||
         CurrentFn->Params.front().first != "this") {
       error(CurrentFn ? CurrentFn->Name + ": unsupported use of this"
@@ -6105,6 +6206,16 @@ void ASTConverter::convertExecCallArgs(
     return false;
   };
 
+  // The reference a member function returns to its own object is no value.
+  for (const Expr *A : CE->arguments())
+    if (const auto *Nested = dyn_cast<CallExpr>(A->IgnoreParenImpCasts());
+        Nested && Nested->getDirectCallee() &&
+        returnsOwnObject(Nested->getDirectCallee())) {
+      error(CurrentFn->Name + ": the reference " +
+            Nested->getDirectCallee()->getNameAsString() +
+            " returns is not used yet; call it as a statement of its own");
+      return;
+    }
   for (unsigned I = 0; I < CE->getNumArgs(); ++I) {
     if (!IsModifyingCall(CE->getArg(I)))
       continue;
@@ -6119,11 +6230,21 @@ void ASTConverter::convertExecCallArgs(
 
   // A member call passes its object first, as the callee's `this`: the
   // object a pointer addresses (p->m(), this->m()), or the object itself,
-  // bound as a reference argument is (obj.m()).
+  // bound as a reference argument is (obj.m()). A member operator's object
+  // is its first operand (a == b is a.operator==(b)).
+  const Expr *Object = nullptr;
+  unsigned FirstArgument = 0;
   if (const auto *Member = dyn_cast<CXXMemberCallExpr>(CE);
       Member && Member->getMethodDecl() &&
-      Member->getMethodDecl()->isInstance()) {
-    const Expr *Object = Member->getImplicitObjectArgument();
+      Member->getMethodDecl()->isInstance())
+    Object = Member->getImplicitObjectArgument();
+  else if (const auto *Method = dyn_cast_or_null<CXXMethodDecl>(Callee);
+           Method && Method->isInstance() && isa<CXXOperatorCallExpr>(CE) &&
+           CE->getNumArgs() > 0) {
+    Object = CE->getArg(0);
+    FirstArgument = 1;
+  }
+  if (Object) {
     std::unique_ptr<VExpr> This;
     if (Object->getType()->isPointerType()) {
       This = convertExpr(Object);
@@ -6150,8 +6271,9 @@ void ASTConverter::convertExecCallArgs(
     Args.push_back(std::move(This));
   }
 
-  unsigned ArgIndex = 0;
-  for (const Expr *A : CE->arguments()) {
+  for (unsigned I = FirstArgument; I < CE->getNumArgs(); ++I) {
+    const Expr *A = CE->getArg(I);
+    const unsigned ArgIndex = I - FirstArgument;
     const ParmVarDecl *Formal = Callee && ArgIndex < Callee->getNumParams()
                                     ? Callee->getParamDecl(ArgIndex)
                                     : nullptr;
@@ -6163,7 +6285,6 @@ void ASTConverter::convertExecCallArgs(
       if (Arg)
         Args.push_back(std::move(Arg));
     }
-    ++ArgIndex;
   }
 }
 
@@ -6554,6 +6675,17 @@ bool ASTConverter::appendRecordCopy(const Expr *Source, const VarDecl *Target,
                                     std::vector<std::unique_ptr<VStmt>> &Out) {
   if (!Source || !Target)
     return false;
+  if (const CXXConstructExpr *Copy = constructionOf(Source);
+      Copy && Copy->getNumArgs() == 1)
+    if (const auto *Call =
+            dyn_cast<CallExpr>(Copy->getArg(0)->IgnoreParenImpCasts());
+        Call && Call->getDirectCallee() &&
+        returnsOwnObject(Call->getDirectCallee())) {
+      error(CurrentFn->Name + ": the reference " +
+            Call->getDirectCallee()->getNameAsString() +
+            " returns is not used yet; call it as a statement of its own");
+      return true;
+    }
   Source = Source->IgnoreParenImpCasts();
   if (const auto *Construct = dyn_cast<CXXConstructExpr>(Source)) {
     if (Construct->getNumArgs() != 1 ||
@@ -7064,6 +7196,13 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       return Out;
     }
     const auto *RS = cast<ReturnStmt>(S);
+    // A member function that returns its own object returns nothing.
+    if (CurrentFn->ReturnType.Kind == VTypeKind::Void &&
+        isOwnObject(RS->getRetValue())) {
+      appendReturn(nullptr, Out, RS->getBeginLoc());
+      InitializationPathReachable = false;
+      return Out;
+    }
     if (const Expr *RetE = RS->getRetValue()) {
       emitReturnInvariantAssert(RetE, Out, RS->getBeginLoc());
       const auto *CE = dyn_cast<CallExpr>(RetE->IgnoreParenImpCasts());
