@@ -282,7 +282,9 @@ named with its arguments.
   contract fits are no error.
 - Loop contracts, assertions, ghost code, quantifiers, and triggers are
   instantiated with the body, and so are spec function templates and member
-  function templates of ordinary classes. A contract written on a
+  function templates of ordinary classes. An uncontracted ``constexpr``
+  template that a contract applies is a spec in each specialization, as a
+  ``constexpr`` function is (see Functions above). A contract written on a
   declaration holds for the definition after it, and a
   ``[[cppverify::trusted]]`` template without a definition holds at every
   call of its specializations.
