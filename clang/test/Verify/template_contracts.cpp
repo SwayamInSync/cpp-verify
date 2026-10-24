@@ -41,8 +41,8 @@ struct Box {
   T value;
   cppverify::type_invariant(value == value); // expected-warning {{contracts in class template 'Box' are not yet supported and are ignored}}
 
-  T get() const
-    cppverify::post(cppverify::result == value) // expected-warning {{contracts on member functions are not yet supported and are ignored}}
+  T get() const // expected-warning {{contracts in class template 'Box' are not yet supported and are ignored}}
+    cppverify::post(cppverify::result == value)
   {
     return value;
   }
