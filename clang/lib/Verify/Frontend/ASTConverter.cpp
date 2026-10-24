@@ -1903,6 +1903,28 @@ static void collectFunctionCandidates(const DeclContext *DC, ASTContext &Ctx,
   }
 }
 
+/// What remains of a function that uses a construct the verifier does not
+/// represent: an executable or proof function becomes the contract its
+/// callers assume, not verified; a spec, a declaration without the
+/// definition, postconditions, and reads that its body would establish.
+static void markUnsupported(VFunction &Fn) {
+  Fn.UnsupportedConstruct = true;
+  Fn.Body.clear();
+  Fn.ClauseProofs.clear();
+  if (!Fn.IsSpec) {
+    Fn.IsExternalContract = true;
+    return;
+  }
+  Fn.Uninterpreted = true;
+  Fn.Postconditions.clear();
+  Fn.Decreases.clear();
+  Fn.Recommends.clear();
+  Fn.Reads.clear();
+  Fn.Domain.reset();
+  Fn.Unfolding.reset();
+  Fn.InductiveLoc = SourceLocation();
+}
+
 std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
   std::vector<std::unique_ptr<VFunction>> Out;
   llvm::StringSet<> Identities;
@@ -1910,16 +1932,19 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
   collectFunctionCandidates(Ctx.getTranslationUnitDecl(), Ctx, Definitions);
   UsedConstexprSpecs.clear();
   for (const FunctionDecl *FD : Definitions) {
-    if (isa<CXXMethodDecl>(FD)) {
-      if (functionContract(FD) || hasContractStatements(FD, Ctx))
-        error(FD->getLocation(),
-              FD->getNameAsString() +
-                  ": member function verification is unsupported");
-      continue;
-    }
-    // Only a template with contracts is reported here: one without matters
-    // where verified code calls it, which reports the call.
-    if (FD->isTemplated()) {
+    if (isa<CXXMethodDecl>(FD) || FD->isTemplated()) {
+      llvm::SaveAndRestore Owner(ErrorFunction, functionIdentity(FD));
+      llvm::SaveAndRestore OwnerName(ErrorFunctionName, FD->getNameAsString());
+      llvm::SaveAndRestore InContract(ErrorInContract, true);
+      if (isa<CXXMethodDecl>(FD)) {
+        if (functionContract(FD) || hasContractStatements(FD, Ctx))
+          error(FD->getLocation(),
+                FD->getNameAsString() +
+                    ": member function verification is unsupported");
+        continue;
+      }
+      // Only a template with contracts is reported here: one without
+      // matters where verified code calls it, which reports the call.
       if (!FD->isInStdNamespace() &&
           Ctx.getSourceManager().isWrittenInMainFile(FD->getLocation()) &&
           (functionContract(FD) || hasContractStatements(FD, Ctx)))
@@ -1930,11 +1955,23 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
     }
     if (FD->isInStdNamespace())
       continue;
+    const size_t ErrorsBefore = Errors.size();
     auto Fn = convertFunction(FD);
-    if (Fn) {
+    if (Fn && Errors.size() == ErrorsBefore) {
       Identities.insert(Fn->Identity);
       Out.push_back(std::move(Fn));
       continue;
+    }
+    // A construct the verifier does not represent costs its function alone.
+    // What remains is what others may rely on: the contract, when it
+    // converted, of an executable or proof function; a spec's declaration.
+    if (Fn &&
+        (Fn->IsSpec ||
+         std::none_of(Errors.begin() + ErrorsBefore, Errors.end(),
+                      [](const ConversionError &E) { return E.InContract; }))) {
+      markUnsupported(*Fn);
+      Identities.insert(Fn->Identity);
+      Out.push_back(std::move(Fn));
     }
     // A body the verifier does not verify still calls contracted functions,
     // whose preconditions it then assumes without checking (Frama-C reports
@@ -1979,7 +2016,10 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
       Changed = true;
       if (Identities.contains(functionIdentity(FD)))
         continue;
+      const size_t ErrorsBefore = Errors.size();
       if (auto Fn = convertConstexprSpec(FD)) {
+        if (Errors.size() != ErrorsBefore)
+          markUnsupported(*Fn);
         Identities.insert(Fn->Identity);
         Lifted.push_back({I, std::move(Fn)});
       }
@@ -2039,9 +2079,10 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
   }
   for (auto &Fn : Unspecified)
     Out.push_back(std::move(Fn));
-  expandInductivePredicates(Out, [&](SourceLocation Loc, std::string Message) {
-    error(Loc, std::move(Message));
-  });
+  expandInductivePredicates(
+      Out, [&](const VFunction &Fn, SourceLocation Loc, std::string Message) {
+        errorOf(Fn, Loc, std::move(Message));
+      });
   for (auto &Fn : ChoiceFunctions)
     Out.push_back(std::move(Fn));
   ChoiceFunctions.clear();
@@ -2132,14 +2173,14 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
           llvm::any_of(Reach[Fn->Identity], [&](const std::string &Id) {
             return ChoiceIdentities.count(Id) && Reach[Id].count(Fn->Identity);
           });
-      error(Fn->DeclLoc,
-            Fn->Name +
-                (InChoice
-                     ? ": an inductive predicate occurs in the bodies of its "
-                       "group only positively, never inside cppverify::choose"
-                     : ": an inductive predicate applies itself only in its "
-                       "body or through inductive predicates, not through "
-                       "another spec"));
+      errorOf(*Fn, Fn->DeclLoc,
+              Fn->Name +
+                  (InChoice
+                       ? ": an inductive predicate occurs in the bodies of its "
+                         "group only positively, never inside cppverify::choose"
+                       : ": an inductive predicate applies itself only in its "
+                         "body or through inductive predicates, not through "
+                         "another spec"));
       for (const std::string &Other : Reach[Fn->Identity])
         if (Reach[Other].count(Fn->Identity))
           InductiveCycles.insert(Other);
@@ -2200,9 +2241,9 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
             return kindOf(*ByIdentity[Id]) == kindOf(*Fn);
           });
       if (!SameKind) {
-        error(Fn->DeclLoc,
-              Fn->Name + ": mutual recursion is supported only among "
-                         "functions of one kind: spec, proof, or executable");
+        errorOf(*Fn, Fn->DeclLoc,
+                Fn->Name + ": mutual recursion is supported only among "
+                           "functions of one kind: spec, proof, or executable");
         continue;
       }
       const bool AllDiverge =
@@ -2222,16 +2263,16 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
                    !ByIdentity[Id]->DivergenceDeclared;
           });
       if (!SameMeasure) {
-        error(Fn->DeclLoc,
-              Fn->Name + ": mutually recursive " +
-                  (Fn->IsSpec    ? "spec"
-                   : Fn->IsProof ? "proof"
-                                 : "executable") +
-                  " functions require decreases clauses, all of the "
-                  "same length" +
-                  (Fn->IsSpec || Fn->IsProof
-                       ? ""
-                       : ", or all cppverify::decreases(*)"));
+        errorOf(*Fn, Fn->DeclLoc,
+                Fn->Name + ": mutually recursive " +
+                    (Fn->IsSpec    ? "spec"
+                     : Fn->IsProof ? "proof"
+                                   : "executable") +
+                    " functions require decreases clauses, all of the "
+                    "same length" +
+                    (Fn->IsSpec || Fn->IsProof
+                         ? ""
+                         : ", or all cppverify::decreases(*)"));
         continue;
       }
       Fn->RecursionGroup = std::move(Group);
@@ -2242,12 +2283,13 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
     if (Recursive && Fn->Decreases.empty() && Fn->DivergenceDeclared)
       continue;
     if (Recursive && Fn->Decreases.empty()) {
-      error(Fn->DeclLoc,
-            Fn->Name +
-                (Fn->IsSpec || Fn->IsProof
-                     ? ": recursive spec and proof functions require decreases"
-                     : ": recursive executable functions require decreases, or "
-                       "cppverify::decreases(*) to allow divergence"));
+      errorOf(
+          *Fn, Fn->DeclLoc,
+          Fn->Name +
+              (Fn->IsSpec || Fn->IsProof
+                   ? ": recursive spec and proof functions require decreases"
+                   : ": recursive executable functions require decreases, or "
+                     "cppverify::decreases(*) to allow divergence"));
       continue;
     }
     Fn->NeedsDecreasesCheck = Recursive;
@@ -2307,6 +2349,15 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
         Fn->SpecFuel.erase(Identity);
       }
   }
+  // A function an error after conversion is about (a recursion without a
+  // measure, a malformed inductive predicate) costs its function alone, as
+  // an error in its body does.
+  std::set<std::string> Faulty;
+  for (const ConversionError &Err : Errors)
+    Faulty.insert(Err.Function);
+  for (auto &Fn : Out)
+    if (Faulty.count(Fn->Identity) && !Fn->UnsupportedConstruct)
+      markUnsupported(*Fn);
   return Out;
 }
 
@@ -2554,6 +2605,10 @@ bool ASTConverter::exceedsNestingLimit(const FunctionDecl *FD,
 std::unique_ptr<VFunction>
 ASTConverter::convertFunction(const FunctionDecl *FD) {
   llvm::SaveAndRestore At(CurrentRange, SourceRange(FD->getLocation()));
+  llvm::SaveAndRestore Owner(ErrorFunction, functionIdentity(FD));
+  llvm::SaveAndRestore OwnerName(ErrorFunctionName, FD->getNameAsString());
+  llvm::SaveAndRestore InContract(ErrorInContract, true);
+  const size_t ErrorsAtStart = Errors.size();
   const FunctionContractInfo *FCI = functionContract(FD);
   if (!FCI) {
     // Assertions and ghost code are obligations even without a contract
@@ -2948,6 +3003,7 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
           Fn->Body.push_back(std::make_unique<VContractAssertStmt>(
               std::move(Condition), Check->getExprLoc()));
       }
+    ErrorInContract = false;
     for (auto &S : convertStmt(Body))
       Fn->Body.push_back(std::move(S));
     TrackInitialization = false;
@@ -2983,11 +3039,13 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
       CurrentFn = nullptr;
       return nullptr;
     }
+    // A spec whose body the verifier does not represent remains a
+    // declaration (markUnsupported), which its users apply.
     if (Fn->IsSpec && !specBodyCanBeAxiomatized(Fn->Body)) {
       error(Fn->Name + ": spec function body is unsupported by axiomatic "
                        "lowering");
       CurrentFn = nullptr;
-      return nullptr;
+      return Fn;
     }
     if (!Fn->IsSpec && Fn->Body.empty() && Fn->Postconditions.empty() &&
         !functionContract(FD)) {
@@ -3010,7 +3068,8 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
       InPost = SavedPost;
       Fn->ClauseProofs.push_back(std::move(Converted));
     }
-  if (Fn->IsSpec && Fn->Body.empty() && Fn->Decreases.empty()) {
+  if (Fn->IsSpec && Fn->Body.empty() && Fn->Decreases.empty() &&
+      Errors.size() == ErrorsAtStart) {
     CurrentFn = nullptr;
     return nullptr;
   }
@@ -3157,6 +3216,10 @@ bool ASTConverter::checkLoopTermination(const Stmt *Loop, bool HasMeasure) {
 
 std::unique_ptr<VFunction>
 ASTConverter::convertConstexprSpec(const FunctionDecl *FD) {
+  llvm::SaveAndRestore Owner(ErrorFunction, functionIdentity(FD));
+  llvm::SaveAndRestore OwnerName(ErrorFunctionName, FD->getNameAsString());
+  llvm::SaveAndRestore InContract(ErrorInContract, true);
+  const size_t ErrorsAtStart = Errors.size();
   ParameterNames.clear();
   if (exceedsNestingLimit(FD, functionContract(FD)) ||
       hasIndirectMemoryAccess(FD))
@@ -3203,10 +3266,11 @@ ASTConverter::convertConstexprSpec(const FunctionDecl *FD) {
 
   if (const Stmt *Body = FD->getBody()) {
     beginInitializationTracking(FD);
+    ErrorInContract = false;
     Fn->Body = convertStmt(Body);
     TrackInitialization = false;
   }
-  if (Fn->Body.empty()) {
+  if (Fn->Body.empty() && Errors.size() == ErrorsAtStart) {
     CurrentFn = nullptr;
     return nullptr;
   }
