@@ -173,9 +173,15 @@ was rejected as arithmetic on the pointer; values read through such a
 pointer are now ordinary integers (:doc:`language/dynamic-storage`).
 
 **Out-parameters.** Passing storage that is not initialized yet to a function
-that writes it (``int a; init(a);``) was a failure, or stopped the file; it is
-now ``Unresolved`` with reason ``construct.unsupported``, until a contract can
-say that a function writes its parameter first (:doc:`language/pointers`).
+that writes it (``int a; init(a);``) was a failure, or stopped the file. A
+reference or pointer parameter whose storage the body writes before it reads
+it is now an out-parameter: callers may pass storage not yet initialized,
+the function's reads of it are checked against what it wrote, and the parts
+it writes on every path, and those its postconditions read, are initialized
+after a call. A call that passes such storage to a parameter the callee may
+read first is ``Unresolved`` with reason ``construct.unsupported``
+(:doc:`language/pointers`). A constructor that calls a member function
+writing its object no longer fails its frame check.
 
 **One condition, one choice.** Every ``cv::choose`` was a choice of its own, so
 ``cv::choose(k, k > n) == cv::choose(k, k > n)`` failed with a counterexample,
