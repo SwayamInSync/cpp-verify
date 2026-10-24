@@ -124,10 +124,14 @@ C++ feature boundaries
        boolean, integral, and enum referents, and bindings to a field or fixed
        array element of a promoted local object, or to a field or element of
        a parameter's buffer or of a record a pointer addresses
-       (``int &alias = p->second;``, ``p[i]``, ``p->buf[i]``).
-     - Conditional bindings, reference returns, non-scalar referents, rvalue
-       references, temporaries/lifetime extension, reference members, and
-       forwarding.
+       (``int &alias = p->second;``, ``p[i]``, ``p->buf[i]``). References to
+       records (``Counter &``, ``const Counter &``) as parameters and locals:
+       a pointer never null or reseated, whose fields and elements are cells
+       of the object it names (:doc:`structs`).
+     - Conditional bindings, reference returns, rvalue references,
+       temporaries/lifetime extension, reference members, and forwarding; a
+       local record passed to a reference parameter (``construct.unsupported``)
+       and a pointer formed through a local reference to a local record.
    * - Arrays
      - Pointer-parameter indexing, quantified abstract buffers, fixed
        local arrays (including arrays of records and multidimensional arrays)
@@ -287,9 +291,10 @@ the lexical closing brace or on each early return, in reverse construction
 order; heap-reading return values are materialized before teardown.
 
 Scalar references may bind supported fields and fixed-array elements of these
-promoted objects. Conditional bindings, temporaries, reference returns, general
-raw address-taking/array decay, rvalue references, and non-scalar referents
-remain fail-closed. Addressable declarations inside loops and ``cppverify::old`` of local
+promoted objects, and a local reference to a record may bind a promoted
+record. Conditional bindings, temporaries, reference returns, general raw
+address-taking/array decay (through such a reference too), rvalue references,
+and passing a promoted record to a callee by reference remain fail-closed. Addressable declarations inside loops and ``cppverify::old`` of local
 objects/bindings are also rejected; outer automatic locals and loop-local aliases
 are supported. Pointer leaves may retain abstract pointer values, but storing a
 provenance-bearing local dynamic pointer fails closed until pointer provenance is
