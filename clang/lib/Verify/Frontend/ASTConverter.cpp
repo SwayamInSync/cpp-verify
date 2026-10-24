@@ -1318,6 +1318,7 @@ void ASTConverter::beginInitializationTracking(const FunctionDecl *FD) {
   AutomaticScopeStack.clear();
   ActiveAutomaticLocals.clear();
   LocalReferenceProvenanceVariables.clear();
+  FieldExtentParameters.clear();
   GhostLocals.clear();
   DynamicProvenanceId = 0;
   DynamicPointerAssignmentId = 0;
@@ -2616,6 +2617,106 @@ bool ASTConverter::exceedsNestingLimit(const FunctionDecl *FD,
   return false;
 }
 
+/// The address parameter and the fields of a pointer field of the object it
+/// addresses (s->data, s.data for a reference s, s->inner.data, (*s).data),
+/// whose pointee is a complete object type.
+static std::optional<
+    std::pair<const ParmVarDecl *, std::vector<const FieldDecl *>>>
+pointerFieldOfParameter(const Expr *E) {
+  const auto *Outer = dyn_cast<MemberExpr>(E->IgnoreParenImpCasts());
+  if (!Outer || !Outer->getType()->isPointerType() ||
+      Outer->getType()->getPointeeType()->isIncompleteType() ||
+      Outer->getType()->getPointeeType()->isVoidType())
+    return std::nullopt;
+  auto Parameter = [](const Expr *Base) -> const ParmVarDecl * {
+    const auto *Ref = dyn_cast<DeclRefExpr>(Base->IgnoreParenImpCasts());
+    return Ref ? dyn_cast<ParmVarDecl>(Ref->getDecl()) : nullptr;
+  };
+  std::vector<const FieldDecl *> Fields;
+  const Expr *Object = Outer;
+  while (const auto *M = dyn_cast<MemberExpr>(Object->IgnoreParenImpCasts())) {
+    const auto *Field = dyn_cast<FieldDecl>(M->getMemberDecl());
+    if (!Field)
+      return std::nullopt;
+    Fields.insert(Fields.begin(), Field);
+    if (M->isArrow()) {
+      // p->f: the object p, a pointer parameter, addresses.
+      const ParmVarDecl *P = Parameter(M->getBase());
+      if (!P || !P->getType()->isPointerType())
+        return std::nullopt;
+      return std::make_pair(P, std::move(Fields));
+    }
+    Object = M->getBase();
+  }
+  Object = Object->IgnoreParenImpCasts();
+  // (*p).f, or r.f for a reference parameter r.
+  if (const auto *U = dyn_cast<UnaryOperator>(Object);
+      U && U->getOpcode() == UO_Deref) {
+    const ParmVarDecl *P = Parameter(U->getSubExpr());
+    if (!P || !P->getType()->isPointerType())
+      return std::nullopt;
+    return std::make_pair(P, std::move(Fields));
+  }
+  const ParmVarDecl *P = Parameter(Object);
+  if (!P || !P->getType()->isLValueReferenceType())
+    return std::nullopt;
+  return std::make_pair(P, std::move(Fields));
+}
+
+std::vector<ASTConverter::AddressEntry>
+ASTConverter::collectFieldExtents(const FunctionContractInfo &FCI,
+                                  VFunction &Fn) {
+  struct MarkerFinder : RecursiveASTVisitor<MarkerFinder> {
+    std::vector<const Expr *> Pointers;
+    bool VisitCallExpr(CallExpr *Call) {
+      const FunctionDecl *Callee = Call->getDirectCallee();
+      if (Callee && Callee->getDeclName().isIdentifier() &&
+          Callee->getName() == "valid" && Call->getNumArgs() == 2)
+        Pointers.push_back(Call->getArg(0));
+      return true;
+    }
+  } Finder;
+  for (const Expr *Pre : FCI.Preconditions)
+    Finder.TraverseStmt(const_cast<Expr *>(Pre));
+  std::vector<AddressEntry> Out;
+  for (const Expr *Pointer : Finder.Pointers) {
+    auto Field = pointerFieldOfParameter(Pointer);
+    if (!Field)
+      continue;
+    const auto &[Param, Fields] = *Field;
+    std::string Name = valueName(Param);
+    std::string Display = Param->getNameAsString();
+    for (size_t I = 0; I != Fields.size(); ++I) {
+      Name += "->" + Fields[I]->getNameAsString();
+      Display += (I == 0 && Param->getType()->isPointerType() ? "->" : ".") +
+                 Fields[I]->getNameAsString();
+    }
+    const Expr *Key = Pointer->IgnoreParenImpCasts();
+    if (llvm::any_of(Fn.FieldParams,
+                     [&](const auto &Entry) { return Entry.first == Name; })) {
+      FieldExtentParameters[Key] = Name;
+      continue;
+    }
+    bool SavedContract = InContractExpression;
+    InContractExpression = true;
+    std::unique_ptr<VExpr> Value = convertExpr(Pointer);
+    InContractExpression = SavedContract;
+    if (!Value)
+      continue;
+    // The field's own type: the marker's parameter converts it to a pointer
+    // to const.
+    VType Ty = VType::fromQualType(Key->getType(), IntMode, Ctx);
+    Fn.Params.emplace_back(Name, Ty);
+    Fn.SourceVariables[Name] = {Display, Ty, Pointer->getBeginLoc(),
+                                Pointer->getEndLoc()};
+    Fn.FieldParams.emplace_back(Name, std::move(Value));
+    FieldExtentParameters[Key] = Name;
+    QualType Addressed = Key->getType()->getPointeeType();
+    Out.push_back({Name, Addressed, !Addressed.isConstQualified()});
+  }
+  return Out;
+}
+
 std::unique_ptr<VFunction>
 ASTConverter::convertFunction(const FunctionDecl *FD) {
   llvm::SaveAndRestore At(CurrentRange, SourceRange(FD->getLocation()));
@@ -2750,6 +2851,18 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
       AddressParams.push_back(P);
     recordSourceVariable(P);
   }
+  // The entry value of a pointer field whose extent a precondition states
+  // (valid(s->data, s->len)) is an input of the function, as a parameter's
+  // value is: a synthetic parameter after the declared ones, bound to the
+  // field at entry and by each call at its arguments, takes the extent, its
+  // validity, and the default separation.
+  std::vector<AddressEntry> Addresses;
+  for (const ParmVarDecl *P : AddressParams)
+    Addresses.push_back(
+        {valueName(P), addressedType(P), isMutableAddressParam(P)});
+  if (FCI && !Fn->IsSpec)
+    for (AddressEntry &Field : collectFieldExtents(*FCI, *Fn))
+      Addresses.push_back(std::move(Field));
   if (Fn->ReturnType.Kind == VTypeKind::Struct) {
     for (const auto &[Field, Type] : Fn->ReturnFields)
       Fn->SourceVariables["result." + Field] = {
@@ -2922,39 +3035,38 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   }
 
   // A mutable address parameter has exclusive access to its complete object.
-  for (unsigned I = 0; I < AddressParams.size(); ++I) {
-    for (unsigned J = I + 1; J < AddressParams.size(); ++J) {
-      if (!isMutableAddressParam(AddressParams[I]) &&
-          !isMutableAddressParam(AddressParams[J]))
+  for (unsigned I = 0; I < Addresses.size(); ++I) {
+    for (unsigned J = I + 1; J < Addresses.size(); ++J) {
+      if (!Addresses[I].Mutable && !Addresses[J].Mutable)
         continue;
-      const bool MayAlias = aliasesListed(*FCI, valueName(AddressParams[I]),
-                                          valueName(AddressParams[J]));
-      QualType PointeeI = addressedType(AddressParams[I]).getUnqualifiedType();
-      QualType PointeeJ = addressedType(AddressParams[J]).getUnqualifiedType();
+      const bool MayAlias =
+          aliasesListed(*FCI, Addresses[I].Name, Addresses[J].Name);
+      QualType PointeeI = Addresses[I].Addressed.getUnqualifiedType();
+      QualType PointeeJ = Addresses[J].Addressed.getUnqualifiedType();
       if (MayAlias && !Ctx.hasSameType(PointeeI, PointeeJ)) {
         error(Fn->Name +
               ": aliases between different pointee types are unsupported");
         continue;
       }
-      auto Ptr = [&](const ParmVarDecl *P) {
-        return std::make_unique<VVarExpr>(valueName(P), VType::makePtr(),
+      auto Ptr = [&](const AddressEntry &A) {
+        return std::make_unique<VVarExpr>(A.Name, VType::makePtr(),
                                           SourceLocation());
       };
       auto Null = [] {
         return std::make_unique<VLiteralExpr>(0, VType::makePtr(),
                                               SourceLocation());
       };
-      auto ANull = std::make_unique<VBinOpExpr>(
-          VBinOp::Eq, Ptr(AddressParams[I]), Null(), VType::makeBool(),
-          SourceLocation());
-      auto BNull = std::make_unique<VBinOpExpr>(
-          VBinOp::Eq, Ptr(AddressParams[J]), Null(), VType::makeBool(),
-          SourceLocation());
+      auto ANull =
+          std::make_unique<VBinOpExpr>(VBinOp::Eq, Ptr(Addresses[I]), Null(),
+                                       VType::makeBool(), SourceLocation());
+      auto BNull =
+          std::make_unique<VBinOpExpr>(VBinOp::Eq, Ptr(Addresses[J]), Null(),
+                                       VType::makeBool(), SourceLocation());
       auto EitherNull = std::make_unique<VBinOpExpr>(
           VBinOp::Or, std::move(ANull), std::move(BNull), VType::makeBool(),
           SourceLocation());
 
-      auto End = [&](const ParmVarDecl *P, QualType Pointee) {
+      auto End = [&](const AddressEntry &P, QualType Pointee) {
         auto Size = std::make_unique<VLiteralExpr>(
             std::to_string(Ctx.getTypeSizeInChars(Pointee).getQuantity()),
             VType::makePtr(), SourceLocation());
@@ -2963,18 +3075,18 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
                                             SourceLocation());
       };
       auto IBeforeJ = std::make_unique<VBinOpExpr>(
-          VBinOp::Le, End(AddressParams[I], PointeeI), Ptr(AddressParams[J]),
+          VBinOp::Le, End(Addresses[I], PointeeI), Ptr(Addresses[J]),
           VType::makeBool(), SourceLocation());
       auto JBeforeI = std::make_unique<VBinOpExpr>(
-          VBinOp::Le, End(AddressParams[J], PointeeJ), Ptr(AddressParams[I]),
+          VBinOp::Le, End(Addresses[J], PointeeJ), Ptr(Addresses[I]),
           VType::makeBool(), SourceLocation());
       std::unique_ptr<VExpr> Relation = std::make_unique<VBinOpExpr>(
           VBinOp::Or, std::move(IBeforeJ), std::move(JBeforeI),
           VType::makeBool(), SourceLocation());
       if (MayAlias) {
         auto Same = std::make_unique<VBinOpExpr>(
-            VBinOp::Eq, Ptr(AddressParams[I]), Ptr(AddressParams[J]),
-            VType::makeBool(), SourceLocation());
+            VBinOp::Eq, Ptr(Addresses[I]), Ptr(Addresses[J]), VType::makeBool(),
+            SourceLocation());
         Relation = std::make_unique<VBinOpExpr>(
             VBinOp::Or, std::move(Same), std::move(Relation), VType::makeBool(),
             SourceLocation());
@@ -2987,7 +3099,7 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
           ProofObligationKind::Aliasing);
       if (!MayAlias)
         Fn->DisjointAddresses.push_back(
-            {valueName(AddressParams[I]), valueName(AddressParams[J]),
+            {Addresses[I].Name, Addresses[J].Name,
              static_cast<uint64_t>(
                  Ctx.getTypeSizeInChars(PointeeI).getQuantity()),
              static_cast<uint64_t>(
@@ -4128,6 +4240,13 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
   llvm::SaveAndRestore At(CurrentRange, E && E->getSourceRange().isValid()
                                             ? E->getSourceRange()
                                             : CurrentRange);
+  // An extent marker's pointer field is its entry value's parameter.
+  if (E && !FieldExtentParameters.empty())
+    if (auto It = FieldExtentParameters.find(E->IgnoreParenImpCasts());
+        It != FieldExtentParameters.end())
+      return std::make_unique<VVarExpr>(
+          It->second, VType::fromQualType(E->getType(), IntMode, Ctx),
+          E->getExprLoc());
   auto Result = convertExprImpl(E);
   if (Result && E)
     Result->EndLoc = E->getEndLoc();
