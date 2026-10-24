@@ -288,6 +288,9 @@ named with its arguments.
   declaration holds for the definition after it, and a
   ``[[cppverify::trusted]]`` template without a definition holds at every
   call of its specializations.
+- In a variadic template, the parameters a pack expands to are named as
+  C++26 indexes a pack, ``ns...[1]``, in counterexamples too, and a fold
+  over a quantifier binds a variable of its own in each element.
 - A specialization the verifier cannot represent (``maxv<double>``) costs
   that specialization alone, as a construct in any function does.
 - The contracts of a class template's members and its type invariants are
