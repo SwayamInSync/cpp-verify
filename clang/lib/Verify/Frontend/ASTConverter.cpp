@@ -933,17 +933,23 @@ static bool isMutableAddressParam(const ParmVarDecl *P) {
 
 static bool aliasesListed(const FunctionContractInfo &FCI, StringRef A,
                           StringRef B) {
+  // A parameter of the pair, or `this`.
+  auto NameOf = [](const Expr *E) -> std::optional<StringRef> {
+    E = E->IgnoreParenImpCasts();
+    if (isa<CXXThisExpr>(E))
+      return StringRef("this");
+    const auto *Ref = dyn_cast<DeclRefExpr>(E);
+    const auto *Param = Ref ? dyn_cast<ParmVarDecl>(Ref->getDecl()) : nullptr;
+    if (!Param)
+      return std::nullopt;
+    return Param->getName();
+  };
   for (const auto &Pair : FCI.Aliases) {
-    const auto *L = dyn_cast<DeclRefExpr>(Pair.first->IgnoreParenImpCasts());
-    const auto *R = dyn_cast<DeclRefExpr>(Pair.second->IgnoreParenImpCasts());
+    std::optional<StringRef> L = NameOf(Pair.first);
+    std::optional<StringRef> R = NameOf(Pair.second);
     if (!L || !R)
       continue;
-    const auto *LD = dyn_cast<ParmVarDecl>(L->getDecl());
-    const auto *RD = dyn_cast<ParmVarDecl>(R->getDecl());
-    if (!LD || !RD)
-      continue;
-    if ((LD->getName() == A && RD->getName() == B) ||
-        (LD->getName() == B && RD->getName() == A))
+    if ((*L == A && *R == B) || (*L == B && *R == A))
       return true;
   }
   return false;
@@ -1415,6 +1421,11 @@ void ASTConverter::beginInitializationTracking(const FunctionDecl *FD) {
                 ->getType()
                 ->isLValueReferenceType())
           addRoot(Call->getArg(I));
+      // A member call binds `this` to its object.
+      if (const auto *Member = dyn_cast<CXXMemberCallExpr>(Call))
+        if (const Expr *Object = Member->getImplicitObjectArgument();
+            Object && !Object->getType()->isPointerType())
+          addRoot(Object);
       return true;
     }
 
@@ -1946,6 +1957,39 @@ static void markUnsupported(VFunction &Fn) {
   Fn.InductiveLoc = SourceLocation();
 }
 
+/// Why a member function is not verified yet, or nothing for one that is: a
+/// static member is a free function, and a non-static one of a class without
+/// bases or virtual functions is a function of `this`, a pointer to its
+/// object.
+static std::optional<std::string>
+unsupportedMemberFunction(const CXXMethodDecl *Method) {
+  if (Method->getParent()->isLambda())
+    return std::string("lambdas are unsupported");
+  if (isa<CXXConstructorDecl>(Method))
+    return std::string("constructors are not verified yet");
+  if (isa<CXXDestructorDecl>(Method))
+    return std::string("destructors are not verified yet");
+  if (isa<CXXConversionDecl>(Method))
+    return std::string("conversion functions are unsupported");
+  if (Method->isStatic())
+    return std::nullopt;
+  if (Method->isVirtual())
+    return std::string("virtual functions are unsupported, since a call "
+                       "may run an override");
+  const CXXRecordDecl *Class = Method->getParent();
+  if (!Class->hasDefinition() || Class->getNumBases() != 0 ||
+      Class->isPolymorphic())
+    return std::string("member functions of a class with bases or virtual "
+                       "functions are unsupported");
+  if (Method->isExplicitObjectMemberFunction())
+    return std::string("explicit object parameters are unsupported");
+  if (Method->getRefQualifier() == RQ_RValue)
+    return std::string("rvalue-qualified member functions are unsupported");
+  if (Method->getMethodQualifiers().hasVolatile())
+    return std::string("volatile member functions are unsupported");
+  return std::nullopt;
+}
+
 std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
   std::vector<std::unique_ptr<VFunction>> Out;
   llvm::StringSet<> Identities;
@@ -1953,15 +1997,18 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
   collectFunctionCandidates(Ctx.getTranslationUnitDecl(), Ctx, Definitions);
   UsedConstexprSpecs.clear();
   for (const FunctionDecl *FD : Definitions) {
-    if (isa<CXXMethodDecl>(FD) || FD->isTemplated()) {
+    const auto *Method = dyn_cast<CXXMethodDecl>(FD);
+    const std::optional<std::string> UnsupportedMember =
+        Method && !FD->isTemplated() ? unsupportedMemberFunction(Method)
+                                     : std::nullopt;
+    if (UnsupportedMember || FD->isTemplated()) {
       llvm::SaveAndRestore Owner(ErrorFunction, functionIdentity(FD));
       llvm::SaveAndRestore OwnerName(ErrorFunctionName, FD->getNameAsString());
       llvm::SaveAndRestore InContract(ErrorInContract, true);
-      if (isa<CXXMethodDecl>(FD)) {
+      if (UnsupportedMember) {
         if (functionContract(FD) || hasContractStatements(FD, Ctx))
           error(FD->getLocation(),
-                FD->getNameAsString() +
-                    ": member function verification is unsupported");
+                FD->getQualifiedNameAsString() + ": " + *UnsupportedMember);
         continue;
       }
       // Only a template with contracts is reported here: one without
@@ -2561,6 +2608,9 @@ void ASTConverter::registerLayoutType(QualType QT, VFunction &Fn) {
 void ASTConverter::collectLayouts(const FunctionDecl *FD, VFunction &Fn) {
   KnownLayoutIdentities.clear();
   registerLayoutType(FD->getReturnType(), Fn);
+  if (const auto *Method = dyn_cast<CXXMethodDecl>(FD);
+      Method && Method->isInstance())
+    registerLayoutType(Method->getFunctionObjectParameterType(), Fn);
   for (const ParmVarDecl *P : FD->parameters())
     registerLayoutType(P->getType(), Fn);
 
@@ -2788,7 +2838,11 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   }
 
   auto Fn = std::make_unique<VFunction>();
-  Fn->Name = FD->getNameAsString();
+  // A member function is named with its class, and a non-static one is a
+  // function of `this`, the pointer to its object.
+  const auto *Method = dyn_cast<CXXMethodDecl>(FD);
+  const bool HasThis = Method && Method->isInstance();
+  Fn->Name = Method ? FD->getQualifiedNameAsString() : FD->getNameAsString();
   Fn->Identity = functionIdentity(FD);
   Fn->IsSpec = FCI->IsSpec;
   Fn->IsProof = FCI->IsProof;
@@ -2836,6 +2890,19 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   InContractExpression = false;
 
   SmallVector<const ParmVarDecl *, 8> AddressParams;
+  // `this` addresses a live object, as a reference does: non-null, valid,
+  // and initialized at entry; in a const member function it points to const.
+  QualType ThisObject =
+      HasThis ? Method->getFunctionObjectParameterType() : QualType();
+  if (HasThis) {
+    const VType ThisTy =
+        VType::fromQualType(Ctx.getPointerType(ThisObject), IntMode, Ctx);
+    Fn->Params.emplace_back("this", ThisTy);
+    if (ThisObject.isConstQualified())
+      Fn->ConstAddressParams.insert("this");
+    Fn->SourceVariables["this"] = {"this", ThisTy, FD->getLocation(),
+                                   FD->getLocation()};
+  }
   for (const ParmVarDecl *P : FD->parameters()) {
     if (isSupportedScalarLValueReference(P->getType()))
       Fn->ScalarReferenceParams.insert(valueName(P));
@@ -2863,6 +2930,8 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   // field at entry and by each call at its arguments, takes the extent, its
   // validity, and the default separation.
   std::vector<AddressEntry> Addresses;
+  if (HasThis)
+    Addresses.push_back({"this", ThisObject, !ThisObject.isConstQualified()});
   for (const ParmVarDecl *P : AddressParams)
     Addresses.push_back(
         {valueName(P), addressedType(P), isMutableAddressParam(P)});
@@ -2924,6 +2993,19 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     else
       error(Fn->Name + ": unsupported expression in modifies");
   }
+  // Decision Q8: a verified non-const member function without modifies may
+  // write its object; a const one only its own storage. An explicit modifies
+  // replaces the default, and a trusted or bodiless one keeps the rule of a
+  // trusted contract.
+  if (HasThis && !ThisObject.isConstQualified() && FCI->Modifies.empty() &&
+      FD->hasBody() && !Fn->IsTrusted) {
+    VFootprint Object;
+    Object.Target = std::make_unique<VLoadExpr>(
+        std::make_unique<VVarExpr>("this", Fn->Params.front().second,
+                                   FD->getLocation()),
+        VType::fromQualType(ThisObject, IntMode, Ctx), FD->getLocation());
+    Fn->Modifies.push_back(std::move(Object));
+  }
   for (const auto &[Pointer, Count] : FCI->Reads) {
     const PointerType *PT =
         Pointer ? Pointer->getType()->getAs<PointerType>() : nullptr;
@@ -2977,6 +3059,28 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   InPost = false;
 
   if (!Fn->IsSpec) {
+    if (HasThis) {
+      auto This = [] {
+        return std::make_unique<VVarExpr>("this", VType::makePtr(),
+                                          SourceLocation());
+      };
+      auto NonNull = std::make_unique<VBinOpExpr>(
+          VBinOp::Ne, This(),
+          std::make_unique<VLiteralExpr>(0, VType::makePtr(), SourceLocation()),
+          VType::makeBool(), SourceLocation());
+      auto Readable = std::make_unique<VBinOpExpr>(
+          VBinOp::And,
+          std::make_unique<VUnaryOpExpr>(VUnaryOp::ValidPtr, This(),
+                                         VType::makeBool(), SourceLocation()),
+          std::make_unique<VUnaryOpExpr>(VUnaryOp::InitializedPtr, This(),
+                                         VType::makeBool(), SourceLocation()),
+          VType::makeBool(), SourceLocation());
+      addPrecondition(*Fn,
+                      std::make_unique<VBinOpExpr>(
+                          VBinOp::And, std::move(NonNull), std::move(Readable),
+                          VType::makeBool(), SourceLocation()),
+                      ProofObligationKind::PointerValidity);
+    }
     for (const ParmVarDecl *P : AddressParams) {
       auto Pointer = std::make_unique<VVarExpr>(valueName(P), VType::makePtr(),
                                                 SourceLocation());
@@ -3206,6 +3310,20 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     return nullptr;
   }
   collectLayouts(FD, *Fn);
+  auto RecordLayout = [&](QualType Object) -> std::optional<std::string> {
+    const std::string Identity = canonicalTypeIdentity(
+        Object.getCanonicalType().getUnqualifiedType(), Ctx);
+    if (!Object->isRecordType() ||
+        llvm::none_of(Fn->Layouts, [&](const VObjectLayout &Layout) {
+          return Layout.Kind == VObjectKind::Record &&
+                 Layout.TypeIdentity == Identity;
+        }))
+      return std::nullopt;
+    return Identity;
+  };
+  if (HasThis)
+    if (auto Identity = RecordLayout(ThisObject))
+      Fn->RecordParams["this"] = *Identity;
   for (const ParmVarDecl *P : FD->parameters()) {
     QualType Ty = P->getType();
     if (!Ty->isPointerType() && !Ty->isReferenceType())
@@ -4909,6 +5027,17 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
 
   if (const auto *MTE = dyn_cast<MaterializeTemporaryExpr>(E))
     return convertExpr(MTE->getSubExpr());
+  // `this`, the parameter of a member function's object.
+  if (isa<CXXThisExpr>(E)) {
+    if (!CurrentFn || CurrentFn->Params.empty() ||
+        CurrentFn->Params.front().first != "this") {
+      error(CurrentFn ? CurrentFn->Name + ": unsupported use of this"
+                      : std::string("unsupported use of this"));
+      return nullptr;
+    }
+    return std::make_unique<VVarExpr>("this", CurrentFn->Params.front().second,
+                                      E->getExprLoc());
+  }
   if (const auto *Decay = dyn_cast<CastExpr>(E);
       Decay && Decay->getCastKind() == CK_ArrayToPointerDecay) {
     if (subobjectPointerRoot(Decay->getSubExpr()))
@@ -5789,6 +5918,39 @@ void ASTConverter::convertExecCallArgs(
         return;
       }
     }
+  }
+
+  // A member call passes its object first, as the callee's `this`: the
+  // object a pointer addresses (p->m(), this->m()), or the object itself,
+  // bound as a reference argument is (obj.m()).
+  if (const auto *Member = dyn_cast<CXXMemberCallExpr>(CE);
+      Member && Member->getMethodDecl() &&
+      Member->getMethodDecl()->isInstance()) {
+    const Expr *Object = Member->getImplicitObjectArgument();
+    std::unique_ptr<VExpr> This;
+    if (Object->getType()->isPointerType()) {
+      This = convertExpr(Object);
+    } else {
+      const size_t ErrorCount = Errors.size();
+      std::unique_ptr<VExpr> AccessCondition;
+      This = convertLValueAddress(Object, &AccessCondition);
+      if (AccessCondition)
+        Prelude.push_back(std::make_unique<VAssertStmt>(
+            std::move(AccessCondition), Object->getExprLoc(),
+            ProofObligationKind::Bounds));
+      const Expr *Binding = Object->IgnoreParenImpCasts();
+      if (This &&
+          (isa<MemberExpr>(Binding) || isa<ArraySubscriptExpr>(Binding)))
+        appendReferenceBindingCheck(Object, This.get(), Object->getExprLoc(),
+                                    Prelude);
+      if (!This && Errors.size() == ErrorCount)
+        error(CurrentFn->Name +
+              ": a member call's object must be a supported reference, "
+              "addressable local, or direct pointer dereference");
+    }
+    if (!This)
+      return;
+    Args.push_back(std::move(This));
   }
 
   unsigned ArgIndex = 0;
