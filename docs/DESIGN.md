@@ -1021,7 +1021,9 @@ where a pointer came from: when a walker may be in either of two objects,
 relate it to the condition that chose, as in `s ? q == a + i : q == b + i`.
 
 The marker must be a positive top-level conjunction clause on a bare pointer to
-a complete object type. At most one marker may describe each pointer. Shifted,
+a complete object type, or on a pointer field of the object a pointer or
+reference parameter addresses (`valid(s->data, s->len)`, 3e). At most one
+marker may describe each pointer. Shifted,
 disjunctive, conditional, or duplicate markers fail closed rather than creating
 unconditional extent assumptions. Anywhere else (a postcondition, a loop
 invariant, a `cppverify::check`, ghost code, a spec function) the marker is its
@@ -1042,9 +1044,11 @@ cppverify::pre(p != q && p != r && q != r && ...)   // every distinct ptr/ref pa
 - The caller's verification must establish these inequalities. Calling `swap(p, p)` fails the call's `aliasing` check.
 - A pointer carrying a `valid(p, n)` extent contributes the
   whole extent (`n * sizeof(T)` bytes) as its complete object, so the pair is
-  disjoint unless either pointer is null or either extent is empty. Callers
-  prove disjointness of the extents they pass. An `cppverify::aliases` pair keeps the
-  single-object rule and may share storage, as `memmove` does.
+  disjoint unless either pointer is null or either extent is empty; the pair's
+  single-object separation is replaced by it, since a pointer with an empty
+  extent reaches nothing. Callers prove disjointness of the extents they
+  pass. An `cppverify::aliases` pair keeps the single-object rule and may
+  share storage, as `memmove` does.
 - **This is NOT the C++ `__restrict__` keyword.** `__restrict__` is a compiler optimization hint affecting codegen; the implicit assumption above is a verification-level precondition affecting correctness. The keyword `__restrict__`, if present, is a no-op for verification.
 
 ### 3. `cppverify::aliases(p, q)` opt-out
@@ -1241,6 +1245,29 @@ void reset_left(Pair &p)
   rejected, as is a pointer formed through a local reference to a local. In
   `--no-check-ub` nothing proves the callee's accesses inside its object, so
   a record local passed to a callee is `construct.unsupported`.
+
+### 3e. Extents of pointer fields
+
+- `cppverify::valid(s->data, s->len)` states the extent of the buffer a
+  pointer field addresses at entry, for a field of the object a pointer or
+  reference parameter addresses (`s->f`, `r.f`, `(*s).f`, `s->inner.f`). The
+  field's entry value is an input of the function, as Frama-C's
+  `\at(s->data, Pre)` is: a synthetic parameter `s->data` follows the
+  declared ones (`VFunction::FieldParams`), equal to the field at entry by
+  definition (an entry fact, without definedness, which no caller
+  establishes, since a call binds the parameter to the field at its
+  arguments). The extent, its validity, and the default separation then
+  apply to it as to a parameter: a buffer through a pointer to non-const is
+  disjoint from the other address parameters' objects, its record's
+  included; two through pointers to const may share.
+- In the body an access through the field lies in the extent where the field
+  still holds its entry value (the solver relates the two through the
+  heap); a field given another pointer addresses that pointer's object.
+- At a call the field's value at the arguments must have the extent in one
+  of the caller's objects, as a pointer argument must.
+- Not yet: a field of an array element (`s->items[k].data`), a field
+  extent in a type invariant (B3's class invariants), and `reads` over a
+  field.
 
 ### 4. `cppverify::modifies(...)` frame condition
 
