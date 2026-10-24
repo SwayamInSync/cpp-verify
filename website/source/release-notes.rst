@@ -336,6 +336,17 @@ on entry. An object passed by reference or pointer satisfies it on entry and,
 when mutable, at exit, where before only a record passed by value did
 (:doc:`language/structs`).
 
+**Function templates.** A function template's contracts were ignored with
+a warning, so no specialization was verified, and a call to one from
+verified code was an error. Each specialization a translation unit
+instantiates is now verified as a function of its own, named with its
+arguments (``twice<int>``), with its contract instantiated as its body is,
+loop contracts, assertions, and ghost code included; a diagnostic about it
+notes where it is instantiated, and a contracted template that nothing
+instantiates is reported. ``cv::post(cv::result > 0)`` and ``cv::old(x) > 0``
+of a template's type did not compile (``invalid operands to binary
+expression ('T' and 'int')``) (:doc:`language/functions-loops`).
+
 **Member operators.** For a member ``operator==``, ``a == b`` passed ``a``
 for the operator's parameter and ``b`` as an argument beyond it, an error,
 and an operator returning ``*this`` by reference (``Money &operator+=``) was
