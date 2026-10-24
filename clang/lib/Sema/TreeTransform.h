@@ -18387,6 +18387,12 @@ TreeTransform<Derived>::TransformContractAssertStmt(ContractAssertStmt *S) {
     return StmtError();
   StmtResult By = S->getBy();
   if (S->getBy()) {
+    // check(forall(k, ...)) by { ... }: the block is in the scope of k.
+    if (const auto *Old = dyn_cast<ForallExpr>(S->getCond()->IgnoreImplicit()))
+      if (const auto *New = dyn_cast<ForallExpr>(Cond.get()->IgnoreImplicit());
+          New && New->getBoundVar() != Old->getBoundVar())
+        getDerived().transformedLocalDecl(Old->getBoundVar(),
+                                          {New->getBoundVar()});
     By = getDerived().TransformStmt(S->getBy());
     if (By.isInvalid())
       return StmtError();
