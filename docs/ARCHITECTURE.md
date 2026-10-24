@@ -491,13 +491,14 @@ y_0 = x_3 + 1;
 ```
 // while (cond) invariant(I) decreases(D) { body }
 
-assert(I);                         // 1. invariant on entry
+assert(defined(I)); assert(I);     // 1. invariant on entry
 havoc(modified_vars + mem);        // 2. forget loop-modified state + heap
 assume(frame(mem_entry, mem));     //    cells outside the loop's write set kept
-assume(I);                         // 3. inductive hypothesis
+assume(init_entry => init);        //    initialization kept
+assume(defined(I)); assume(I);     // 3. inductive hypothesis
 if (cond) {                        // 4. if loop continues:
     [body in SSA]                  //    execute one iteration
-    assert(I);                     //    invariant preserved
+    assert(defined(I)); assert(I); //    invariant preserved
     assert(D_new < D_old);         //    termination measure decreases
     assert(frame(mem_entry, mem)); //    explicit loop modifies respected
     assume(false);                 //    cut path
@@ -517,6 +518,28 @@ frame is a chain of stores of fresh values; otherwise it is a
 `HeapFrame(mem_entry, mem_head, regions)` relation.
 An explicit loop `cppverify::modifies` is also asserted at the end of each iteration and
 at each `continue` (obligation kind `frame`, located at the footprint).
+
+**Definedness and initialization at the head.** Entry, the end of an
+iteration, and each `continue` assert an invariant's definedness before the
+invariant (`emitExprSafety`: its core checks and the memory checks
+`instrumentUBChecks` recorded in `VWhileStmt::InvariantChecks`), so the head
+assumes both (`assumeInvariantSafety`, over the same `exprSafetyChecks`):
+what an invariant reads is in bounds and initialized there. Initialization
+cannot be stated in a contract, so this is how a loop that fills local
+storage knows what it has written. A store through local or dynamic storage
+sets its cell's initialization bit, so it modifies the initialization heap
+(`collectModified`), whose head version only grows: no lifetime begins or
+ends in a loop (the converter rejects addressable declarations, allocation,
+and deallocation there, and `startsLifetime` withholds the fact from a loop
+that starts one), so the head assumes `forall a. init_entry[a] ->
+init_head[a]`, triggered by reads of the head version
+(`initializationKept`). Nothing frames the rest, since no claim needs a cell
+to be uninitialized. Before 0.2 the head kept the initialization heap from
+before the loop, and every iteration after the first saw the storage the
+earlier ones wrote as uninitialized. Dafny checks an invariant's
+well-formedness once, in the head's arbitrary state, from the invariants
+before it, which suffices where storage is always initialized; here it is
+proved where the invariant is.
 
 **Termination.** An executable loop without `cppverify::decreases` contributes no
 measure obligation, and the driver reports the function `Unresolved` with
