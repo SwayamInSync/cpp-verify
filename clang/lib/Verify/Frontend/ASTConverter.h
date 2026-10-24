@@ -74,6 +74,9 @@ class ASTConverter {
   std::map<std::string, std::pair<SourceLocation, std::string>>
       InstantiationPoints;
   std::map<const ParmVarDecl *, std::string> ParameterNames;
+  /// The parameters of a lifted spec that refer to const scalars, which
+  /// stand for the values they refer to.
+  std::set<const VarDecl *> ValueReferences;
   /// For a parameter a pack expands to, its index in the pack, `...[1]`.
   std::map<const ParmVarDecl *, std::string> PackElements;
   /// Names each parameter of \p FD after the declaration \p ContractDecl
@@ -185,6 +188,9 @@ private:
   /// The address of a supported mutable global, or null after an error.
   std::unique_ptr<VExpr> globalAddress(const VarDecl *VD, SourceLocation Loc);
   std::unique_ptr<VFunction> convertConstexprSpec(const FunctionDecl *FD);
+  /// std::max(a, b), or std::min(a, b), of two integers, as the standard
+  /// defines it.
+  std::unique_ptr<VExpr> convertMinOrMax(const CallExpr *CE, bool IsMax);
   void noteSpecUse(const FunctionDecl *FD);
   std::unique_ptr<VExpr> convertExpr(const Expr *E);
   std::unique_ptr<VExpr> convertExprImpl(const Expr *E);
