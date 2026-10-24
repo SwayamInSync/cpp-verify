@@ -10394,6 +10394,17 @@ public:
   ExprResult ActOnContractRange(Expr *Base, Expr *Lower, SourceLocation ColonLoc,
                                 Expr *Length, SourceLocation RBLoc);
 
+  /// A component of a decreases clause, which must be an integer.
+  ExprResult ActOnContractMeasure(ExprResult E);
+
+  /// forall, exists, or choose (\p Kind) over \p Binder: its bounds must be
+  /// integers and its body a condition.
+  ExprResult BuildContractBinderExpr(Stmt::StmtClass Kind,
+                                     SourceLocation KeywordLoc,
+                                     SourceLocation LParenLoc,
+                                     SourceLocation RParenLoc, VarDecl *Binder,
+                                     Expr *Lo, Expr *Hi, Expr *Body);
+
   /// Rewrite unqualified field names to this->field for type_invariant(expr).
   ExprResult ActOnTypeInvariantExpr(ExprResult E, CXXRecordDecl *Record);
 
@@ -14335,6 +14346,20 @@ public:
                                   ParmVarDecl *Param);
   void InstantiateExceptionSpec(SourceLocation PointOfInstantiation,
                                 FunctionDecl *Function);
+
+  /// Instantiate the contract of a function template specialization, or of
+  /// a member of a class template specialization, from its pattern's, when
+  /// it is used or defined and has none yet. (Contracts are instantiated
+  /// lazily, as exception specifications are: an unused member's contract is
+  /// never instantiated.)
+  void InstantiateFunctionContract(SourceLocation PointOfInstantiation,
+                                   FunctionDecl *Function);
+
+  /// The contract \p From of a template, with \p TemplateArgs substituted,
+  /// in \p To. Returns true on error.
+  bool SubstFunctionContract(const FunctionContractInfo &From,
+                             FunctionContractInfo &To,
+                             const MultiLevelTemplateArgumentList &TemplateArgs);
 
   /// Instantiate (or find existing instantiation of) a function template with a
   /// given set of template arguments.
