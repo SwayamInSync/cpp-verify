@@ -2364,6 +2364,10 @@ void Parser::HandleMemberFunctionDeclDelays(Declarator &DeclaratorInfo,
   // If there was a late-parsed exception-specification, we'll need a
   // late parse
   bool NeedLateParse = FTI.getExceptionSpecType() == EST_Unparsed;
+  // So do contract clauses (CppVerify).
+  std::unique_ptr<CachedTokens> ContractTokens =
+      std::move(MemberContractTokens);
+  NeedLateParse = NeedLateParse || ContractTokens;
 
   if (!NeedLateParse) {
     // Look ahead to see if there are any default args
@@ -2396,6 +2400,9 @@ void Parser::HandleMemberFunctionDeclDelays(Declarator &DeclaratorInfo,
       LateMethod->ExceptionSpecTokens = FTI.ExceptionSpecTokens;
       FTI.ExceptionSpecTokens = nullptr;
     }
+    LateMethod->ContractTokens = std::move(ContractTokens);
+    LateMethod->ContractIsSpec = MemberContractIsSpec;
+    LateMethod->ContractIsProof = MemberContractIsProof;
   }
 }
 
@@ -2980,19 +2987,27 @@ Parser::DeclGroupPtrTy Parser::ParseCXXClassMemberDeclaration(
     return nullptr;
   }
 
-  // CppVerify: contract clauses (pre/post/...) on in-class member functions are
-  // not yet modeled by the verifier, which handles free functions. Rather than
-  // emit a confusing "expected ';'", diagnose once and skip the clauses so the
-  // rest of the class still parses and the function is treated as uncontracted.
+  // CppVerify: the contract clauses of an in-class member function are parsed
+  // in the complete-class context, as a function contract specifier is (C++26
+  // [class.mem.general]), with the exception-specification and default
+  // arguments of its late-parsed declaration: their tokens are kept until
+  // then.
+  MemberContractTokens.reset();
   if (getLangOpts().VerifyContracts && DeclaratorInfo.isFunctionDeclarator() &&
       isFunctionContractClause()) {
-    Diag(Tok, diag::warn_contract_member_function_unsupported);
+    MemberContractTokens = std::make_unique<CachedTokens>();
+    MemberContractIsSpec =
+        DeclaratorInfo.getDeclSpec().isSpecFunctionSpecified();
+    MemberContractIsProof =
+        DeclaratorInfo.getDeclSpec().isProofFunctionSpecified();
     while (isFunctionContractClause()) {
+      MemberContractTokens->push_back(Tok);
       ConsumeCppVerify();
       if (Tok.is(tok::l_paren)) {
-        BalancedDelimiterTracker T(*this, tok::l_paren);
-        if (!T.consumeOpen())
-          T.skipToEnd();
+        MemberContractTokens->push_back(Tok);
+        ConsumeParen();
+        ConsumeAndStoreUntil(tok::r_paren, *MemberContractTokens,
+                             /*StopAtSemi=*/false, /*ConsumeFinalToken=*/true);
       }
     }
   }
