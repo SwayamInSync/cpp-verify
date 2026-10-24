@@ -1296,27 +1296,36 @@ static std::string leanSpecDefinition(const ObligationModule &Module,
 
 // A quantifier over a range of integers, as a goal states one, is decided by
 // trying each integer of the range, as core Lean decides one over a range of
-// naturals.
+// naturals, when the range has at most 4096 integers, as many as the
+// certifier expands (CertifyLimits::DirectExpansion). Each integer is a level
+// of recursion whose memory heartbeats do not count: under the generated
+// files' recursion depth a range of 64000 took 58 GB before failing, and one
+// of 4000 already spent a step's heartbeats. A larger range has the classical
+// instance, which decide cannot evaluate.
 static constexpr llvm::StringLiteral LeanBoundedQuantifierPrelude =
     R"lean(instance cppIntBallDecidable (lo hi : Int) (p : Int → Prop) [DecidablePred p] :
     Decidable (∀ x : Int, lo ≤ x ∧ x < hi → p x) :=
-  decidable_of_iff (∀ k : Nat, k < (hi - lo).toNat → p (lo + k)) (by
-    constructor
-    · intro h x hx
-      have := h (x - lo).toNat (by omega)
-      rwa [show lo + ((x - lo).toNat : Int) = x by omega] at this
-    · intro h k hk
-      exact h _ ⟨by omega, by omega⟩)
+  if (hi - lo).toNat ≤ 4096 then
+    decidable_of_iff (∀ k : Nat, k < (hi - lo).toNat → p (lo + k)) (by
+      constructor
+      · intro h x hx
+        have := h (x - lo).toNat (by omega)
+        rwa [show lo + ((x - lo).toNat : Int) = x by omega] at this
+      · intro h k hk
+        exact h _ ⟨by omega, by omega⟩)
+  else Classical.propDecidable _
 
 instance cppIntBexDecidable (lo hi : Int) (p : Int → Prop) [DecidablePred p] :
     Decidable (∃ x : Int, lo ≤ x ∧ x < hi ∧ p x) :=
-  decidable_of_iff (∃ k : Nat, k < (hi - lo).toNat ∧ p (lo + k)) (by
-    constructor
-    · rintro ⟨k, hk, hp⟩
-      exact ⟨lo + k, by omega, by omega, hp⟩
-    · rintro ⟨x, h1, h2, hp⟩
-      refine ⟨(x - lo).toNat, by omega, ?_⟩
-      rwa [show lo + ((x - lo).toNat : Int) = x by omega])
+  if (hi - lo).toNat ≤ 4096 then
+    decidable_of_iff (∃ k : Nat, k < (hi - lo).toNat ∧ p (lo + k)) (by
+      constructor
+      · rintro ⟨k, hk, hp⟩
+        exact ⟨lo + k, by omega, by omega, hp⟩
+      · rintro ⟨x, h1, h2, hp⟩
+        refine ⟨(x - lo).toNat, by omega, ?_⟩
+        rwa [show lo + ((x - lo).toNat : Int) = x by omega])
+  else Classical.propDecidable _
 
 )lean";
 

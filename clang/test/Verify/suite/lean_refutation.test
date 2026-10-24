@@ -82,6 +82,7 @@
 # TACTIC: lean_refutation_tactic.lean:7:2: error: cppverify: Lean decides the goal true at the counterexample
 # TACTIC: lean_refutation_tactic.lean:16:2: error: cppverify: Lean cannot decide the goal at the counterexample
 
+# BUDGET: error: verification failed: below_a_thousand {{.*}}[reason=counterexample] (confirmed in Lean)
 # BUDGET: error: verification failed: below_a_billion {{.*}}[reason=counterexample]{{$}}
 # BUDGET: Unresolved: verification unresolved: far {{.*}}[reason=spec.post] (its counterexample is checked with the postcondition of ge, which is not established){{$}}
 # BUDGET: warning: the counterexample of below_a_billion is not confirmed in Lean: Lean cannot decide the goal at the counterexample
