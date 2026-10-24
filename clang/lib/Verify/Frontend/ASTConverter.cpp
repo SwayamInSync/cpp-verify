@@ -845,9 +845,15 @@ std::string ASTConverter::functionIdentity(const FunctionDecl *FD) {
   std::string Mangled;
   llvm::raw_string_ostream OS(Mangled);
   std::unique_ptr<MangleContext> MC(Ctx.createMangleContext());
-  if (MC->shouldMangleDeclName(FD))
-    MC->mangleName(GlobalDecl(FD), OS);
-  else
+  // A constructor or destructor is mangled as its complete-object variant.
+  if (MC->shouldMangleDeclName(FD)) {
+    if (const auto *Ctor = dyn_cast<CXXConstructorDecl>(FD))
+      MC->mangleName(GlobalDecl(Ctor, Ctor_Complete), OS);
+    else if (const auto *Dtor = dyn_cast<CXXDestructorDecl>(FD))
+      MC->mangleName(GlobalDecl(Dtor, Dtor_Complete), OS);
+    else
+      MC->mangleName(GlobalDecl(FD), OS);
+  } else
     OS << FD->getQualifiedNameAsString() << '\0'
        << FD->getType().getCanonicalType().getAsString();
   OS.flush();
