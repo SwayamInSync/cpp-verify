@@ -348,6 +348,15 @@ that nothing instantiates is reported. ``cv::post(cv::result > 0)`` and ``cv::ol
 of a template's type did not compile (``invalid operands to binary
 expression ('T' and 'int')``) (:doc:`language/functions-loops`).
 
+**std::min and std::max.** In a contract they ended ``Unresolved:
+obligation lowering failed: f (missing spec definition: fn_...)``, as did
+any function using a ``constexpr`` helper that could not be lifted. Of two
+integers they now mean what the standard says, whatever the library, in
+contracts and in code; any other function of the standard library is an
+error naming it, a helper that cannot be lifted is named in the verdicts
+that rely on it, and a lifted helper's references to ``const`` integers
+stand for their values (:doc:`language/functions-loops`).
+
 **Member operators.** For a member ``operator==``, ``a == b`` passed ``a``
 for the operator's parameter and ``b`` as an argument beyond it, an error,
 and an operator returning ``*this`` by reference (``Money &operator+=``) was
