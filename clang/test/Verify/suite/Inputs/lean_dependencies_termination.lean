@@ -1,3 +1,4 @@
+import CppVerify.Goals.cppverify_scaled_decreases_52d363
 import CppVerify.User
 
 theorem cppverify_scaled_decreases_52d363_termination_3164b050_proof : cppverify_scaled_decreases_52d363_termination_3164b050 := by

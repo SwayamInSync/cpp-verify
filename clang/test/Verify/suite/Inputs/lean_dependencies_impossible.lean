@@ -1,3 +1,4 @@
+import CppVerify.Goals.cppverify_impossible_9d6c7c
 import CppVerify.User
 
 theorem cppverify_impossible_9d6c7c_postcondition_1cd35301_proof : cppverify_impossible_9d6c7c_postcondition_1cd35301 := by

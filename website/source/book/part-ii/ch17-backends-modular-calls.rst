@@ -156,21 +156,22 @@ For an explicit interactive proof:
    # complete proof/CppVerify/Proofs/*/*.lean; put shared lemmas in User.lean
    cpp-verify --backend=lean --lean-project=proof --lean-certify file.cpp
 
-``Generated.lean``, ``Auto.lean``, and ``Check.lean`` are machine-owned;
-``Check.lean`` imports every proof, so ``lake build CppVerify.Check`` builds
-them all at once. ``User.lean`` is never overwritten, and each goal has a proof
+The generated modules (``Prelude.lean``, ``Specs.lean``, ``Goals/``,
+``Generated.lean``, ``Auto.lean``, and ``Check.lean``) are machine-owned;
+``Check.lean`` imports every proof, so ``lake build``, run in the project,
+builds them all (see `One module of goals per function`_ below).
+``User.lean`` is never overwritten, and each goal has a proof
 file of its own: the proof ``cppverify_auto`` finds for it, or a stub (see
 `Proofs cppverify_auto finds`_ below). cpp-verify rewrites that file only while
 nobody has edited it; an edited one it never rewrites, but moves with its goal
 (see `Proofs that follow their goals`_ below).
 The project pins ``leanprover/lean4:v4.35.0``, which certification runs whatever
 elan's default toolchain is; a project 0.1 generated, pinned to ``v4.32.2``, moves to
-it with a warning. Certification compiles the user
-module and each proof file with admissions promoted to errors, then checks the
-compiled modules as described in `What certification checks`_ below.
+it with a warning. Certification builds the project
+and compiles each proof file with admissions promoted to errors, then checks
+the compiled modules as described in `What certification checks`_ below.
 
-Each goal in ``Generated.lean`` is a Lean proposition that means what the
-obligation means, so a proof of it is a proof of the obligation:
+Each goal is a Lean proposition that means what the obligation means, so a proof of it is a proof of the obligation:
 
 - every operator keeps its grouping under Lean's own precedence:
   ``(a ^ b) + 1`` is ``(a_0 ^^^ b_0) + 1``, since Lean reads
@@ -324,7 +325,7 @@ is ``Certified: f [backend=Lean] [vacuous]``, with a warning.
 Goals as hypotheses
 ~~~~~~~~~~~~~~~~~~~
 
-Next to each goal, ``Generated.lean`` states it as hypotheses and a
+Next to each goal, its module states it as hypotheses and a
 conclusion. Each hypothesis is an assumption the goal makes, named by where
 it comes from, and a bridge from that form to the goal is proved in the same
 file. For this file:
@@ -474,6 +475,7 @@ A goal it proves gets that proof, with a header that says so:
       automation: cppverify_auto 1 proves it with cppverify_auto_grind
       cppverify_auto proves this goal. cpp-verify rewrites this file only while it
       is unedited; a proof you write here is yours, kept as any other. -/
+   import CppVerify.Goals.cppverify_next_e1e917
    import CppVerify.User
    import CppVerify.Auto
 
@@ -572,6 +574,104 @@ that cpp-verify 0.1 wrote for fn_5f5a3373697876::postcondition@8:37 is now
 CppVerify/Proofs/cppverify_six_6a2cf3/cppverify_six_6a2cf3_postcondition_198bc076.lean``.
 A 0.1 proof of a goal the source no longer has is kept in ``Stale/``.
 
+One module of goals per function
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Each function's goals have a Lean module of their own, so that a change to
+one function builds again only what depends on it. For this file:
+
+.. cppverify-example: flags --backend=lean --lean-project={dir}/proof
+
+.. code-block:: cpp
+
+   cppverify::spec int tri(int n)
+     cppverify::decreases(n)
+   {
+     return n <= 0 ? 0 : tri(n - 1) + n;
+   }
+
+   int inc(int x)
+     cppverify::pre(0 <= x && x < 1000)
+     cppverify::post(cppverify::result == x + 1)
+   {
+     return x + 1;
+   }
+
+   int tri_zero()
+     cppverify::post(cppverify::result == tri(0))
+   {
+     return 0;
+   }
+
+``cpp-verify --backend=lean --lean-project=proof file.cpp`` prints:
+
+.. code-block:: text
+
+   Exported: decreases: tri (cppverify_auto proved 1 of 1 goals)
+   Exported: lean obligation: inc (cppverify_auto proved 3 of 3 goals)
+   Exported: lean obligation: tri_zero (cppverify_auto proved 1 of 2 goals)
+
+and writes:
+
+.. code-block:: text
+
+   proof/
+     lakefile.toml
+     lean-toolchain
+     CppVerify.lean           the library's root, which imports Check
+     CppVerify/
+       Prelude.lean           the heap model, the comparisons, the bridge lemmas
+       Specs.lean             each spec the goals apply, declared once
+       Goals/
+         cppverify_tri_decreases_f55d4c.lean
+         cppverify_inc_c0810e.lean
+         cppverify_tri_zero_e086e9.lean
+       Generated.lean         imports every goal module
+       Auto.lean              cppverify_auto
+       User.lean              your lemmas, never rewritten
+       Proofs/
+         cppverify_inc_c0810e/
+           cppverify_inc_c0810e_postcondition_e4ef4574.lean
+           ...
+       Check.lean             imports every proof
+
+``Specs.lean`` declares each spec function the goals apply once, ``tri``
+here, as a function of which nothing is known
+(``opaque cppSpec_fn_5f5a3374726969 : Int -> Int``). Each goal module imports
+it and defines the bodies its goals unfold under its own prefix, as in
+``cppSpecBody_e086e9ab_fn_5f5a3374726969_1``, so any goal modules can be
+imported together. A proof imports its function's goals, your lemmas, and
+the automation:
+
+.. code-block:: lean4
+
+   import CppVerify.Goals.cppverify_inc_c0810e
+   import CppVerify.User
+   import CppVerify.Auto
+
+A new ``User.lean`` imports ``CppVerify.Specs``, so a lemma there may speak
+of the specs and of the prelude; a lemma about one function's goals belongs
+in a module of yours that imports that function's goals. A ``User.lean`` of
+an earlier release imports ``CppVerify.Generated``, which still imports every
+goal module: its proofs keep working, but each then depends on every goal.
+
+A generated file is written only when its text changes, so exporting an
+unchanged source writes nothing, and ``lake build`` or your editor builds
+again only what a change reaches. Certification builds the generated
+modules, ``User.lean``, and ``Auto.lean`` with Lake, then compiles each proof
+file with admissions promoted to errors, unless nothing it is built from
+changed since it last passed: its text and the compiled modules of the
+project it imports. After a change to the postcondition of ``inc``, it
+compiles again the goal module of ``inc``, ``Generated.lean``, and the three
+proofs of ``inc``, and none of the others.
+
+A run writes the goal module of each function it exports, and removes any
+other: a function you delete takes its module with it, and so does a
+function that a ``--lean-fallback`` run leaves to its solver, since
+``Specs.lean`` then declares only what the exported functions apply. The
+proofs of such a function stay where they are, and build again once its
+goals are exported again.
+
 What certification checks
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -585,12 +685,14 @@ user's source. For each goal:
   the pinned toolchain's own modules are trusted, and they are imported once
   for all the goals, however many of their proofs import ``Lean``;
 - no module may declare a name that an earlier one declares otherwise, and
-  ``CppVerify.Generated`` comes first, so a proof file that defines a goal
-  of its own under the goal's name is rejected;
+  the goal modules come first, so a proof file that defines a goal of its
+  own under the goal's name is rejected;
 - the proof ``G_proof`` must be a theorem whose type is exactly the goal
-  ``G`` that ``CppVerify.Generated`` defines;
+  ``G`` that its function's goal module defines;
 - the axioms it depends on, collected from the constants it uses, must be
-  among ``propext``, ``Quot.sound``, and ``Classical.choice``.
+  among ``propext``, ``Quot.sound``, and ``Classical.choice``;
+- no declaration of ``User.lean`` may use ``sorry``: an admitted lemma there
+  fails every goal.
 
 Each function is certified on its own goals. For this file, where ``one``
 claims a false postcondition:
@@ -635,8 +737,8 @@ skips the kernel, is rejected at its replay (``the kernel rejects
 CppVerify.Lemmas: while replaying declaration 'cheat': (kernel) declaration
 type mismatch``), a proof file that defines a goal of its own under the
 goal's name at its replay too (``...cppverify_one_99bcee_postcondition_646d2761 declares
-cppverify_one_99bcee_postcondition_646d2761, which CppVerify.Generated
-declares``), and a user axiom behind a lemma by its name (``depends on the
+cppverify_one_99bcee_postcondition_646d2761, which
+CppVerify.Goals.cppverify_one_99bcee declares``), and a user axiom behind a lemma by its name (``depends on the
 axiom escape, which is not one of Lean's foundations``).
 
 Portable obligation archives

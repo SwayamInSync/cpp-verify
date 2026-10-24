@@ -1627,6 +1627,25 @@ uses when the source around it changes.
   `Proofs/Goal_<md5 of the name>.lean`: reordering two postconditions gave
   each proof the other's goal, and inserting a function renamed the bodies
   every later proof used.
+- **Modules.** The adapter writes a project's goals by group
+  (`LeanProjectModules`): the goals, readable forms, bridges, and spec
+  bodies of each function go to `CppVerify/Goals/<group>.lean`, which
+  imports `CppVerify/Specs.lean`, where `emitLeanFunctionDeclarations`
+  declares each spec the run's modules apply once (`opaque
+  cppSpec_<identity>`). Two goal modules that declared one spec would clash
+  when imported together, and Lean 4.35's import keeps one of two differing
+  declarations without a word. The prelude is `CppVerify/Prelude.lean`, and
+  `CppVerify/Generated.lean` imports every goal module, so a `User.lean` of
+  0.1, which imports it, still sees every goal. A proof imports its goal
+  module, `User` (which a new project starts with `import CppVerify.Specs`),
+  and `Auto` (which imports `Prelude`); `CppVerify.lean`, the library's
+  root, imports `Check`, so `lake build` builds every proof (before, the
+  library had no root and `lake build` failed). Every file is written only
+  when its text changes (`writeTextFileIfChanged`), and
+  `writeLeanProjectModules` removes every goal module the run did not
+  write: a fallback run rewrites `Specs` with the specs of the modules it
+  exports, and a module it kept from an earlier run failed (`Unknown
+  identifier cppSpec_...`).
 - **Records.** The exporter returns a `LeanProjectGoal` for every
   obligation of each module it exports, those a fallback selection leaves to
   the solver marked `Exported = false`, with the 0.1 names of the goal and
@@ -1675,7 +1694,7 @@ uses when the source around it changes.
   `G.of_readable : G.readable → G` is a term, one prelude lemma per
   hypothesis (`cppverify_imp_or : (a → b) → ¬a ∨ b`, or
   `cppverify_not_imp_or : (¬a → b) → a ∨ b`), so the kernel checks with
-  `Generated.lean` that the readable form implies the goal: a printer bug in
+  the goal module that the readable form implies the goal: a printer bug in
   it fails the build, never certifies. `LeanProjectGoal::Intros` gives the
   stub its `intro` list. On the 375 suite exports, the 351 that built
   before still build, with every bridge.
@@ -1699,8 +1718,8 @@ uses when the source around it changes.
   neither is a step. Heartbeats alone did not bound the time, since a kernel
   check is not counted. The trial takes every exported goal whose proof file
   is pristine and whose header (`automation:`) names no attempt by the
-  current `LeanAutomationRevision`, builds `User` and `Auto` with the pinned
-  toolchain, and runs `lean` itself (with the `LEAN_PATH` of `lake env`, so a
+  current `LeanAutomationRevision`, builds `Generated`, `User`, and `Auto`
+  with the pinned toolchain, and runs `lean` itself (with the `LEAN_PATH` of `lake env`, so a
   stopped process leaves no child) on a file of one theorem per goal, in
   `--jobs` chunks. Lean reports to a file, line by line: the step that
   proved each goal, then the axioms of its theorem or that the kernel
@@ -1712,35 +1731,46 @@ uses when the source around it changes.
   the attempt. An export's `LeanAutomatic` counts its goals with automatic
   proofs. Without the toolchain nothing is tried.
 - **Certification** (`certifyLeanProject`) builds `Generated`, `User`, and
-  `Auto`, then each proof file with `lean -EhasSorry`, `--jobs` at once,
-  recording the goals whose proofs do not build, and runs the checker of
+  `Auto` with Lake, then each proof file with `lean -EhasSorry`, `--jobs` at
+  once, unless its key is unchanged (`leanProofKey`: SHA-256 of the
+  toolchain, the proof's text, and the bytes of the `.olean` of every project
+  module in its import closure, read from the `import` lines of their
+  sources; written to `.cppverify/built/<goal>` after a build, and removed
+  with the `.olean` before one). Lake cannot tell this itself: when a
+  dependency fails it names only the dependency, and a dependent's `.olean`
+  of an earlier build stays, so a proof the user broke would certify from
+  its old `.olean`. It records the goals whose proofs do not build and runs
+  the checker of
   `LeanCertifier.h`, written into the project as `.cppverify/Certify.lean`,
   with `lake env lean --run` over the goals that built. The checker
   elaborates none of the user's source, so their macros and commands cannot
-  change what it checks. It reads, from their compiled files, the generated
-  module, every proof module, and every module of the project they import
-  (its `.olean` lies outside the toolchain), imports the toolchain modules
-  among their imports once, and replays the project's modules through the
-  kernel into that one environment, each after the modules it imports and
-  the generated module first, as `leanchecker` does. A module the kernel
-  rejects, a module that imports one, and a module that declares a constant
-  an earlier module or the toolchain declares otherwise are left out, each
-  with why; a constant two modules declare alike (an equation lemma Lean
-  derives in each, a theorem stated the same, which the kernel's replay
-  takes twice) is the same. So a proof file that declares a goal's name is
-  the one left out (`... declares G, which CppVerify.Generated declares`),
-  and a bad module fails only the goals whose proofs import it. Every check
-  reads the kernel's constants and the module that declared each, so proofs
-  cannot change each other's checks: a goal passes when its proof module and
-  the generated module were replayed, `G_proof` is a theorem of type exactly
-  `.const G []` with `G` a definition of `CppVerify.Generated`, and the
-  axioms its kernel constants reach are allowed; it prints `ok` or `fail`
-  with the reason per goal. One import matters because an automatic proof
-  imports `Lean`: a check per goal took 161 s for 33 goals (now 8 s), and the
-  first 0.2 checker, which fell back to it when one module failed, imported
-  each proof module and the imports of each module it replayed again, never
-  freeing imported data, which took 13 GB for one proof through a rejected
-  module (now 3.6 GB, `lean_certifier_memory.test`) and stopped CI runners. Each Lean result
+  change what it checks. It reads, from their compiled files, the goal
+  modules the goal list names, every proof module, and every module of the
+  project they import (its `.olean` lies outside the toolchain), imports the
+  toolchain modules among their imports once, and replays the project's
+  modules through the kernel into that one environment, each after the
+  modules it imports and the goal modules first, as `leanchecker` does. A
+  module the kernel rejects, a module that imports one, and a module that
+  declares a constant an earlier module or the toolchain declares otherwise
+  are left out, each with why; a constant two modules declare alike (an
+  equation lemma Lean derives in each, a theorem stated the same, which the
+  kernel's replay takes twice) is the same. So a proof file that declares a
+  goal's name is the one left out (`... declares G, which
+  CppVerify.Goals.<function> declares`), and a bad module fails only the
+  goals whose proofs import it. Every check reads the kernel's constants and
+  the module that declared each, so proofs cannot change each other's
+  checks: a goal passes when its proof module and its goal module were
+  replayed, `G_proof` is a theorem of type exactly `.const G []` with `G` a
+  definition of its goal module, and the axioms its kernel constants reach
+  are allowed; every goal fails when a declaration of `CppVerify.User`
+  depends on `sorryAx` (`userSorry`; before, `User` was compiled with `sorry`
+  an error); it prints `ok` or `fail` with the reason per goal. One import
+  matters because an automatic proof imports `Lean`: a check per goal took
+  161 s for 33 goals (now 8 s), and the first 0.2 checker, which fell back to
+  it when one module failed, imported each proof module and the imports of
+  each module it replayed again, never freeing imported data, which took
+  13 GB for one proof through a rejected module (now 3.6 GB,
+  `lean_certifier_memory.test`) and stopped CI runners. Each Lean result
   records its goals (`VerifyResult::LeanGoals`), and a function is
   `Certified` only when all of them pass; a failure names the obligation.
   Before 0.2 certification parsed what `Check.lean` printed, which imports
@@ -1764,7 +1794,12 @@ unfinished lemma does not count, and `--no-lean-auto`. `lean_identity.test` walk
 reordering, renames of two functions at once, a changed statement, a removed
 function and its return, fallback runs, pruning, and a 0.1 project with
 proofs, stubs, and a proof of a goal that is gone) and certifies it after
-the renames and the migration.
+the renames and the migration. `lean_modules.test` checks the layout (a
+spec declared once for two goal modules certified together, a proof's
+imports, a new `User`), that a rerun writes no file, that a change to one
+function compiles only its goal module, `Generated`, and its proofs again,
+`lake build`, that a deleted function takes its module, a 0.1 `User.lean`,
+and a fallback run that keeps no goal module.
 
 ## Counterexample Extraction
 

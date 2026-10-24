@@ -7,7 +7,7 @@
 //
 // RUN: rm -rf %t && mkdir -p %t
 // RUN: %cpp-verify --backend=lean --no-lean-auto --lean-project=%t/p %s -- 2>&1 | FileCheck %s --check-prefix=EXPORT
-// RUN: FileCheck %s --input-file=%t/p/CppVerify/Generated.lean
+// RUN: %python %S/Inputs/lean_project_text.py %t/p | FileCheck %s
 // RUN: FileCheck %s --input-file=%t/p/CppVerify/Proofs/cppverify_twice_edf933/cppverify_twice_edf933_postcondition_28de726e.lean --check-prefix=STUB
 // RUN: FileCheck %s --input-file=%t/p/CppVerify/Proofs/cppverify_poly_c94108/cppverify_poly_c94108_postcondition_fde367c1.lean --check-prefix=LETS
 // Every stub's names match its readable form: the project builds, with
@@ -21,7 +21,7 @@
 //
 // A readable form that says less than its goal does not build: here the
 // definition of b is replaced by the conclusion it should lead to.
-// RUN: sed -i 's/(h_b_1 : b_1 = __local_call_2_1)/(h_b_1 : b_1 = x_0 + (BitVec.ofInt 32 (2)))/' %t/p/CppVerify/Generated.lean
+// RUN: sed -i 's/(h_b_1 : b_1 = __local_call_2_1)/(h_b_1 : b_1 = x_0 + (BitVec.ofInt 32 (2)))/' %t/p/CppVerify/Goals/cppverify_twice_edf933.lean
 // RUN: cd %t/p && not lake build CppVerify.Generated 2>&1 | FileCheck %s --check-prefix=BRIDGE
 
 int next(int x)
@@ -222,4 +222,4 @@ int poly(int x)
 // TRUSTED: Exported: lean obligation: twice
 // CERTIFIED: Certified: twice [backend=Lean] [trusts=next]
 
-// BRIDGE: Generated.lean:{{[0-9]+}}:{{[0-9]+}}: Application type mismatch: The argument
+// BRIDGE: cppverify_twice_edf933.lean:{{[0-9]+}}:{{[0-9]+}}: Application type mismatch: The argument

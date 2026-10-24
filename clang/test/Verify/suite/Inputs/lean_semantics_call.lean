@@ -1,3 +1,4 @@
+import CppVerify.Goals.cppverify_small_74ff94
 import CppVerify.User
 
 theorem cppverify_small_74ff94_precondition_4e324fa2_proof :

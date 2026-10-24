@@ -1913,7 +1913,16 @@ Lean's evaluation agrees with the certifier on random ground terms and on
 every operator at its extreme operands. Standalone output is an unchecked scratch-pad.
 Editable project mode pins Lean 4.35.0 (`LeanToolchain`), overwrites only generated semantics and
 the active check module, and preserves reusable user lemmas and one proof file
-per goal. A goal is named by its function and its statement, never by a
+per goal. The generated semantics are a module per function,
+`CppVerify/Goals/<function>.lean`, over one `CppVerify/Specs.lean` that
+declares each spec the goals apply once, as Vermilion emits a unit per
+function over one `Specs` file; each goal module defines the spec bodies its
+goals unfold under the function's prefix. A proof imports its function's
+goal module, the user's lemmas (`User.lean`, which a new project starts by
+importing `Specs`), and `Auto`, so a change to one function builds again
+only what imports its module. A file is written only when its text changes,
+and a run writes the goal modules of the functions it exports and removes
+every other, so that every module of the project builds. A goal is named by its function and its statement, never by a
 position: `cppverify_<function>_<h6>_<kind>_<h8>`, where `h6` hashes the
 function's identity (overloads) and `h8` begins the SHA-256 hash of the
 obligation's statement, its goal with the logical declarations it uses and
@@ -1952,18 +1961,22 @@ any other; any other gets a stub that records the attempt and the revision of
 `cppverify_auto` that made it. A file is tried again only when no attempt by
 the current revision is recorded, and only while nobody has edited it.
 Initial generation is `Exported`. Certification
-holds against a proof author in bad faith. It compiles the user module and each
-proof file on its own with `sorry` as an error, then runs a checker
+holds against a proof author in bad faith. It builds the generated modules,
+`User`, and `Auto` with Lake and compiles each proof file on its own with
+`sorry` as an error, unless nothing it is built from changed since it last
+built: its text and the compiled project modules it imports, by hash, since
+Lake does not say which modules of a failed build are current. It then runs a checker
 (`LeanCertifier.h`) on the compiled modules, which elaborates none of the
 user's source, so no macro, notation, or command of theirs changes what it
 checks: the kernel replays every module of the project a proof imports into
 one environment, after the toolchain's modules, imported once (only those are
 trusted), as `leanchecker` does, so no declaration escaped the kernel, and a
 module that declares a name an earlier one declares otherwise is rejected,
-the generated module being replayed first; the proof's type is exactly the
-constant of its goal, which `CppVerify.Generated` defines; and the axioms it depends on,
+the goal modules being replayed first; the proof's type is exactly the
+constant of its goal, which its function's goal module defines; and the axioms it depends on,
 collected from the constants it uses, are among `propext`, `Quot.sound`, and
-`Classical.choice`. A function is `Certified` when every one of its goals
+`Classical.choice`. A declaration of `User.lean` that uses `sorry` fails
+every goal. A function is `Certified` when every one of its goals
 passes, and a failing goal leaves only its own function `Unresolved`, with the
 obligation and the reason. Certification runs the pinned toolchain
 whatever elan's default is, and a project pinned by an earlier release moves to

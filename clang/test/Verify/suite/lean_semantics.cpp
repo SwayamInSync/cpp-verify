@@ -9,8 +9,8 @@
 //
 // RUN: rm -rf %t.export %t.mix %t.numerals %t.call
 // RUN: %cpp-verify --backend=lean --lean-project=%t.export %s -- 2>&1 | FileCheck %s --check-prefix=EXPORT
-// RUN: FileCheck %s --input-file=%t.export/CppVerify/Generated.lean --check-prefix=LEAN
-// RUN: not grep -E 'BitVec\.(udiv|sdiv) ' %t.export/CppVerify/Generated.lean
+// RUN: %python %S/Inputs/lean_project_text.py %t.export | FileCheck %s --check-prefix=LEAN
+// RUN: %python %S/Inputs/lean_project_text.py %t.export | not grep -E 'BitVec\.(udiv|sdiv) '
 // RUN: lake --dir=%t.export build CppVerify.Generated
 //
 // The prelude's values where C++, SMT-LIB, and Lean's own operators differ.

@@ -28,7 +28,7 @@
 #
 # A stub that no revision of cppverify_auto tried, as before automation, and
 # one an earlier revision tried, are tried.
-# RUN: sed -i -e '/^   automation:/d' -e '/^import CppVerify.Auto$/d' -e 's/^  cppverify_auto_grind$/  sorry/' %t/p/CppVerify/Proofs/cppverify_next_e1e917/cppverify_next_e1e917_missing_return_54ae7c80.lean
+# RUN: sed -i -e '/^   automation:/d' -e '/^import CppVerify.Goals\./d' -e '/^import CppVerify.Auto$/d' -e 's/^  cppverify_auto_grind$/  sorry/' %t/p/CppVerify/Proofs/cppverify_next_e1e917/cppverify_next_e1e917_missing_return_54ae7c80.lean
 # RUN: sed -i 's/cppverify_auto 1 did not prove it/cppverify_auto 0 did not prove it/' %t/p/CppVerify/Proofs/cppverify_square_934e38/cppverify_square_934e38_overflow_f86973f7.lean
 # RUN: %cpp-verify --backend=lean --lean-project=%t/p %S/Inputs/lean_automation.cpp -- 2>&1 | FileCheck %s --check-prefix=EDITED
 # RUN: FileCheck %s --input-file=%t/p/CppVerify/Proofs/cppverify_next_e1e917/cppverify_next_e1e917_missing_return_54ae7c80.lean --check-prefix=TRIED
@@ -57,6 +57,7 @@
 # PROVED: automation: cppverify_auto 1 proves it with cppverify_auto_grind
 # PROVED-NEXT: cppverify_auto proves this goal. cpp-verify rewrites this file only while it
 # PROVED-NEXT: is unedited; a proof you write here is yours, kept as any other. -/
+# PROVED-NEXT: import CppVerify.Goals.cppverify_next_e1e917
 # PROVED-NEXT: import CppVerify.User
 # PROVED-NEXT: import CppVerify.Auto
 # PROVED-EMPTY:

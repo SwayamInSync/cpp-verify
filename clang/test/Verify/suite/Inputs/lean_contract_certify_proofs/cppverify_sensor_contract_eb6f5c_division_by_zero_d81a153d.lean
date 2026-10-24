@@ -1,3 +1,4 @@
+import CppVerify.Goals.cppverify_sensor_contract_eb6f5c
 import CppVerify.User
 
 theorem cppverify_sensor_contract_eb6f5c_division_by_zero_d81a153d_proof : cppverify_sensor_contract_eb6f5c_division_by_zero_d81a153d := by

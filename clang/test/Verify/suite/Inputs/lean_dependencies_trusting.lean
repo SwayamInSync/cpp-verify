@@ -1,3 +1,4 @@
+import CppVerify.Goals.cppverify_trusting_b6301a
 import CppVerify.User
 
 theorem cppverify_trusting_b6301a_postcondition_bafafdfb_proof : cppverify_trusting_b6301a_postcondition_bafafdfb := by

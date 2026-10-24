@@ -28,7 +28,6 @@ void trivial()
 // ADMITTED-SAME: declaration uses `sorry`
 // CERTIFIED: Certified: trivial [backend=Lean]
 // USER-ADMITTED: Unresolved: lean obligation: trivial (Lean certification failed:
-// USER-ADMITTED-SAME: User.lean
-// USER-ADMITTED-SAME: declaration uses `sorry`
+// USER-ADMITTED-SAME: unfinished of CppVerify.User uses sorry
 // AXIOM: Unresolved: lean obligation: trivial (Lean certification failed: the proof of {{.*}}::missing-return@synthetic: cppverify_trivial_3e4f5a_missing_return_ba8abb90_proof depends on the axiom escape, which is not one of Lean's foundations; the proof of {{.*}}::postcondition@{{[0-9]+}}:{{[0-9]+}}: cppverify_trivial_3e4f5a_postcondition_ba8abb90_proof depends on the axiom escape, which is not one of Lean's foundations)
 // STALE: Unresolved: lean obligation: trivial (Lean certification failed:

@@ -1087,12 +1087,63 @@ static void emitLeanFunctionBodies(const ObligationModule &Module,
   }
 }
 
+// The definitions every exported goal is stated with: the heap model, the
+// machine comparisons, and C++ division; a project's goals also have the
+// lemmas their readable forms' bridges use.
+void verify::emitLeanPrelude(llvm::raw_ostream &OS, bool Project) {
+  OS << "noncomputable section\n\n";
+  OS << "set_option maxRecDepth 100000\n";
+  OS << "set_option maxHeartbeats 0\n\n";
+  OS << "local instance cppVerifyPropDecidable (p : Prop) : Decidable p :=\n";
+  OS << "  Classical.propDecidable p\n\n";
+  OS << "abbrev CppHeap := Int -> Int\n\n";
+  OS << "def heapSelectInt (h : CppHeap) (p : Int) : Int := h p\n";
+  OS << "abbrev heapSelectBool (h : CppHeap) (p : Int) : Prop := h p ≠ 0\n";
+  OS << "def heapSelectBv (w : Nat) (h : CppHeap) (p : Int) : BitVec w :=\n";
+  OS << "  BitVec.ofInt w (h p)\n\n";
+  OS << "def heapStoreInt (h : CppHeap) (p v : Int) (h' : CppHeap) : "
+        "Prop :=\n";
+  OS << "  h' = fun q => if q = p then v else h q\n";
+  OS << "def heapStoreBool (h : CppHeap) (p : Int) (v : Prop)\n";
+  OS << "    (h' : CppHeap) : Prop :=\n";
+  OS << "  h' = fun q => if q = p then\n";
+  OS << "    @ite Int v (Classical.propDecidable v) 1 0 else h q\n";
+  OS << "def heapStoreBv {w : Nat} (h : CppHeap) (p : Int) (v : BitVec w)\n";
+  OS << "    (h' : CppHeap) : Prop :=\n";
+  OS << "  h' = fun q => if q = p then Int.ofNat v.toNat else h q\n\n";
+  OS << "opaque validPtr : Int -> Prop\n\n";
+  // Reducible, so instance search sees the Bool comparison and decides it.
+  OS << "abbrev cppBvUlt {w : Nat} (x y : BitVec w) : Prop := x.ult y = "
+        "true\n";
+  OS << "abbrev cppBvUle {w : Nat} (x y : BitVec w) : Prop := x.ule y = "
+        "true\n";
+  OS << "abbrev cppBvSlt {w : Nat} (x y : BitVec w) : Prop := x.slt y = "
+        "true\n";
+  OS << "abbrev cppBvSle {w : Nat} (x y : BitVec w) : Prop := x.sle y = "
+        "true\n\n";
+  OS << "def cppIntDiv (x y : Int) : Int :=\n";
+  OS << "  if y = 0 then 0 else\n";
+  OS << "    let q := (if x < 0 then -x else x) / "
+        "(if y < 0 then -y else y)\n";
+  OS << "    if (x < 0) ≠ (y < 0) then -q else q\n";
+  OS << "def cppIntRem (x y : Int) : Int :=\n";
+  OS << "  if y = 0 then x else x - cppIntDiv x y * y\n\n";
+  if (Project) {
+    // What the bridges from readable goals use.
+    OS << "theorem cppverify_imp_or {a b : Prop} (h : a → b) : ¬a ∨ b :=\n";
+    OS << "  (Classical.em a).elim (fun ha => Or.inr (h ha)) Or.inl\n";
+    OS << "theorem cppverify_not_imp_or {a b : Prop} (h : ¬a → b) : a ∨ b "
+          ":=\n";
+    OS << "  (Classical.em a).elim Or.inl (fun ha => Or.inr (h ha))\n\n";
+  }
+}
+
 VerifyResult verify::exportLeanScratchPad(
     const ObligationModule &Module, llvm::raw_ostream &OS, bool EmitPreamble,
     std::set<std::string> &EmittedFunctions,
     std::set<std::string> &EmittedTheorems, unsigned ModuleIndex,
     std::vector<LeanProjectGoal> *ProjectGoals,
-    const std::set<std::string> *Selection) {
+    const std::set<std::string> *Selection, llvm::raw_ostream *Declarations) {
   VerifyResult Result;
   if (!Module.CorrectnessGoal || !Module.CounterexampleQuery) {
     Result.Status = VerifyStatus::Unresolved;
@@ -1130,54 +1181,11 @@ VerifyResult verify::exportLeanScratchPad(
       OS << "   This file exports canonical obligations but does not certify "
             "them. -/\n\n";
     }
-    OS << "noncomputable section\n\n";
-    OS << "set_option maxRecDepth 100000\n";
-    OS << "set_option maxHeartbeats 0\n\n";
-    OS << "local instance cppVerifyPropDecidable (p : Prop) : Decidable p :=\n";
-    OS << "  Classical.propDecidable p\n\n";
-    OS << "abbrev CppHeap := Int -> Int\n\n";
-    OS << "def heapSelectInt (h : CppHeap) (p : Int) : Int := h p\n";
-    OS << "abbrev heapSelectBool (h : CppHeap) (p : Int) : Prop := h p ≠ 0\n";
-    OS << "def heapSelectBv (w : Nat) (h : CppHeap) (p : Int) : BitVec w :=\n";
-    OS << "  BitVec.ofInt w (h p)\n\n";
-    OS << "def heapStoreInt (h : CppHeap) (p v : Int) (h' : CppHeap) : "
-          "Prop :=\n";
-    OS << "  h' = fun q => if q = p then v else h q\n";
-    OS << "def heapStoreBool (h : CppHeap) (p : Int) (v : Prop)\n";
-    OS << "    (h' : CppHeap) : Prop :=\n";
-    OS << "  h' = fun q => if q = p then\n";
-    OS << "    @ite Int v (Classical.propDecidable v) 1 0 else h q\n";
-    OS << "def heapStoreBv {w : Nat} (h : CppHeap) (p : Int) (v : BitVec w)\n";
-    OS << "    (h' : CppHeap) : Prop :=\n";
-    OS << "  h' = fun q => if q = p then Int.ofNat v.toNat else h q\n\n";
-    OS << "opaque validPtr : Int -> Prop\n\n";
-    // Reducible, so instance search sees the Bool comparison and decides it.
-    OS << "abbrev cppBvUlt {w : Nat} (x y : BitVec w) : Prop := x.ult y = "
-          "true\n";
-    OS << "abbrev cppBvUle {w : Nat} (x y : BitVec w) : Prop := x.ule y = "
-          "true\n";
-    OS << "abbrev cppBvSlt {w : Nat} (x y : BitVec w) : Prop := x.slt y = "
-          "true\n";
-    OS << "abbrev cppBvSle {w : Nat} (x y : BitVec w) : Prop := x.sle y = "
-          "true\n\n";
-    OS << "def cppIntDiv (x y : Int) : Int :=\n";
-    OS << "  if y = 0 then 0 else\n";
-    OS << "    let q := (if x < 0 then -x else x) / "
-          "(if y < 0 then -y else y)\n";
-    OS << "    if (x < 0) ≠ (y < 0) then -q else q\n";
-    OS << "def cppIntRem (x y : Int) : Int :=\n";
-    OS << "  if y = 0 then x else x - cppIntDiv x y * y\n\n";
-    if (ProjectGoals) {
-      // What the bridges from readable goals use.
-      OS << "theorem cppverify_imp_or {a b : Prop} (h : a → b) : ¬a ∨ b :=\n";
-      OS << "  (Classical.em a).elim (fun ha => Or.inr (h ha)) Or.inl\n";
-      OS << "theorem cppverify_not_imp_or {a b : Prop} (h : ¬a → b) : a ∨ b "
-            ":=\n";
-      OS << "  (Classical.em a).elim Or.inl (fun ha => Or.inr (h ha))\n\n";
-    }
+    emitLeanPrelude(OS, ProjectGoals != nullptr);
   }
 
-  emitLeanFunctionDeclarations(Module, OS, EmittedFunctions);
+  emitLeanFunctionDeclarations(Module, Declarations ? *Declarations : OS,
+                               EmittedFunctions);
   emitLeanFunctionBodies(Module, OS);
   OS << "/- function: ";
   printLeanCommentText(Module.FunctionName, OS);

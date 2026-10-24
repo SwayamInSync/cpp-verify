@@ -286,7 +286,11 @@ Backends
        output uses one shared preamble and identity-qualified theorem names.
    * - ``--lean-project=DIR``
      - With ``--backend=lean``, which it selects, generate a pinned editable project. Generated
-       semantics live in ``CppVerify/Generated.lean``; reusable lemmas and
+       semantics live in a module per function, ``CppVerify/Goals/<function>.lean``,
+       with each spec they apply declared once in ``CppVerify/Specs.lean``; a
+       proof imports its function's module, so certification compiles again
+       only the proofs of a function whose goals changed, and a generated
+       file is written only when its text changes. Reusable lemmas and
        per-obligation proof files are preserved across regeneration. A goal
        is named by its function and the hash of its statement
        (``cppverify_one_99bcee_postcondition_cd6bdfcd``), and its proof file,

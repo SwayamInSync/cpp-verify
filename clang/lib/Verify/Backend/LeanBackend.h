@@ -4,8 +4,10 @@
 
 #include "VerifyBackend.h"
 #include "llvm/Support/raw_ostream.h"
+#include <map>
 #include <optional>
 #include <set>
+#include <string>
 #include <vector>
 
 namespace clang {
@@ -38,21 +40,37 @@ struct LeanProjectGoal {
 /// The group of a module's goals in a project: its function's directory.
 std::string leanProjectGroup(const ObligationModule &Module);
 
+/// The generated modules of a Lean project: the declarations of the specs
+/// its goals apply, which every goal module imports, and each group's spec
+/// definitions and goals.
+struct LeanProjectModules {
+  std::string Specs;
+  std::map<std::string, std::string> Goals;
+  /// The groups in the order their functions were exported: the source's.
+  std::vector<std::string> Order;
+};
+
+/// The definitions every exported goal is stated with.
+void emitLeanPrelude(llvm::raw_ostream &OS, bool Project);
+
 /// Selection names the internal IDs to export; a project goal is named by
 /// its function and semantic hash, so it keeps its name whatever else is
 /// exported, and a scratch-pad goal keeps the positional name it has when
 /// every obligation is exported. A project records every goal of the module,
-/// the ones left out as not exported.
+/// the ones left out as not exported. Declarations, when given, receives
+/// the declarations of the specs, each once.
 VerifyResult
 exportLeanScratchPad(const ObligationModule &Module, llvm::raw_ostream &OS,
                      bool EmitPreamble, std::set<std::string> &EmittedFunctions,
                      std::set<std::string> &EmittedTheorems,
                      unsigned ModuleIndex,
                      std::vector<LeanProjectGoal> *ProjectGoals,
-                     const std::set<std::string> *Selection = nullptr);
+                     const std::set<std::string> *Selection = nullptr,
+                     llvm::raw_ostream *Declarations = nullptr);
 
 class LeanVerifyBackend : public VerifyBackend {
-  llvm::raw_ostream *Out;
+  llvm::raw_ostream *Out = nullptr;
+  LeanProjectModules *Modules = nullptr;
   bool PreambleEmitted = false;
   std::set<std::string> EmittedFunctions;
   std::set<std::string> EmittedTheorems;
@@ -64,6 +82,10 @@ public:
   LeanVerifyBackend(llvm::raw_ostream *OS,
                     std::vector<LeanProjectGoal> *ProjectGoals)
       : Out(OS), ProjectGoals(ProjectGoals) {}
+  /// A project's export, into its modules.
+  LeanVerifyBackend(LeanProjectModules *Modules,
+                    std::vector<LeanProjectGoal> *ProjectGoals)
+      : Modules(Modules), ProjectGoals(ProjectGoals) {}
   llvm::StringRef getName() const override { return "lean"; }
   BackendCapabilities getCapabilities() const override {
     // Collections have no Lean semantics yet.
