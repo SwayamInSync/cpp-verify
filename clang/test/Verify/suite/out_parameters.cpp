@@ -394,6 +394,27 @@ int made_by_parts()
 }
 // CHECK: Verified: made_by_parts
 
+// One field written, then the record passed to a callee that reads both:
+// an input.
+int second_of(const Pair &q)
+  cv::post(cv::result == q.b)
+{
+  return q.b;
+}
+// CHECK: Verified: second_of
+
+void write_a_then_read(Pair &p)
+  cv::modifies(p)
+  cv::post(p.a == 1 && p.b == 2)
+{
+  p.a = 1;
+  int b = second_of(p);
+  p.b = 2;
+}
+// CHECK: Verified: write_a_then_read
+// VCR-LABEL: fn write_a_then_read
+// VCR-NEXT: param p{{$}}
+
 void make_first(Pair &p)
   cv::modifies(p)
   cv::post(p.a == 1)
@@ -477,6 +498,25 @@ int init_in_loop()
 }
 // CHECK: Verified: init_in_loop
 
+// What a call in one iteration initializes, the next reads.
+int init_once_in_loop()
+  cv::post(cv::result == 0)
+{
+  int a[1];
+  int s = 0;
+  for (int i = 0; i < 3; i = i + 1)
+    cv::invariant(0 <= i && i <= 3 && s == 0)
+    cv::invariant(i == 0 || a[0] == 0)
+    cv::decreases(3 - i)
+  {
+    if (i == 0)
+      init_ref(a[0]);
+    s = s + a[0];
+  }
+  return s;
+}
+// CHECK: Verified: init_once_in_loop
+
 int init_in_loop_only(int n)
   cv::pre(0 <= n && n <= 3)
   cv::post(cv::result == 0)
@@ -543,6 +583,31 @@ void through_copy(int *p)
 // CHECK: Verified: through_copy
 // VCR-LABEL: fn through_copy
 // VCR-NEXT: param p{{$}}
+
+// Through a copy of the pointer, a read is not seen as one: an input, so a
+// caller cannot pass a record that is not initialized.
+void through_alias(Pair *p)
+  cv::pre(p != nullptr)
+  cv::modifies(*p)
+  cv::post(p->a == 1)
+{
+  Pair *q = p;
+  int seen = q->b;
+  p->a = 1;
+  p->b = 2;
+}
+// CHECK: Verified: through_alias
+// VCR-LABEL: fn through_alias
+// VCR-NEXT: param p{{$}}
+
+int alias_reads_garbage()
+  cv::post(cv::result == 1)
+{
+  Pair x;
+  through_alias(&x);
+  return x.a;
+}
+// CHECK: Unresolved: alias_reads_garbage {{.*}}[reason=construct.unsupported]
 
 // A loop that fills an array, and a function that passes its array on.
 void fill(int *p, int n)
