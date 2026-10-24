@@ -2756,7 +2756,8 @@ bool ASTConverter::exceedsNestingLimit(const FunctionDecl *FD,
 }
 
 /// The address parameter and the fields of a pointer field of the object it
-/// addresses (s->data, s.data for a reference s, s->inner.data, (*s).data),
+/// addresses (s->data, s.data for a reference s, s->inner.data, (*s).data,
+/// and this->data in a member function, with no parameter declaration),
 /// whose pointee is a complete object type.
 static std::optional<
     std::pair<const ParmVarDecl *, std::vector<const FieldDecl *>>>
@@ -2778,6 +2779,8 @@ pointerFieldOfParameter(const Expr *E) {
       return std::nullopt;
     Fields.insert(Fields.begin(), Field);
     if (M->isArrow()) {
+      if (isa<CXXThisExpr>(M->getBase()->IgnoreParenImpCasts()))
+        return std::make_pair(nullptr, std::move(Fields));
       // p->f: the object p, a pointer parameter, addresses.
       const ParmVarDecl *P = Parameter(M->getBase());
       if (!P || !P->getType()->isPointerType())
@@ -2803,6 +2806,7 @@ pointerFieldOfParameter(const Expr *E) {
 
 std::vector<ASTConverter::AddressEntry>
 ASTConverter::collectFieldExtents(const FunctionContractInfo &FCI,
+                                  llvm::ArrayRef<const Expr *> Invariants,
                                   VFunction &Fn) {
   struct MarkerFinder : RecursiveASTVisitor<MarkerFinder> {
     std::vector<const Expr *> Pointers;
@@ -2816,17 +2820,20 @@ ASTConverter::collectFieldExtents(const FunctionContractInfo &FCI,
   } Finder;
   for (const Expr *Pre : FCI.Preconditions)
     Finder.TraverseStmt(const_cast<Expr *>(Pre));
+  for (const Expr *Invariant : Invariants)
+    Finder.TraverseStmt(const_cast<Expr *>(Invariant));
   std::vector<AddressEntry> Out;
   for (const Expr *Pointer : Finder.Pointers) {
     auto Field = pointerFieldOfParameter(Pointer);
     if (!Field)
       continue;
     const auto &[Param, Fields] = *Field;
-    std::string Name = valueName(Param);
-    std::string Display = Param->getNameAsString();
+    std::string Name = Param ? valueName(Param) : "this";
+    std::string Display = Param ? Param->getNameAsString() : "this";
+    const bool ThroughPointer = !Param || Param->getType()->isPointerType();
     for (size_t I = 0; I != Fields.size(); ++I) {
       Name += "->" + Fields[I]->getNameAsString();
-      Display += (I == 0 && Param->getType()->isPointerType() ? "->" : ".") +
+      Display += (I == 0 && ThroughPointer ? "->" : ".") +
                  Fields[I]->getNameAsString();
     }
     const Expr *Key = Pointer->IgnoreParenImpCasts();
@@ -2853,6 +2860,34 @@ ASTConverter::collectFieldExtents(const FunctionContractInfo &FCI,
     Out.push_back({Name, Addressed, !Addressed.isConstQualified()});
   }
   return Out;
+}
+
+/// The class invariants a member function assumes on entry: a public one's,
+/// unless it is a constructor.
+std::vector<const Expr *>
+ASTConverter::entryClassInvariants(const CXXMethodDecl *Method,
+                                   bool Constructor) const {
+  if (!Method || !Method->isInstance() || Constructor ||
+      Method->getAccess() != AS_public)
+    return {};
+  const TypeContractInfo *TCI = Ctx.getTypeContract(Method->getParent());
+  return TCI ? std::vector<const Expr *>(TCI->Invariants.begin(),
+                                         TCI->Invariants.end())
+             : std::vector<const Expr *>();
+}
+
+/// The class invariants a member function must hold at exit: a public
+/// one's, and every constructor's.
+std::vector<const Expr *>
+ASTConverter::exitClassInvariants(const CXXMethodDecl *Method,
+                                  bool Constructor) const {
+  if (!Method || !Method->isInstance() ||
+      (!Constructor && Method->getAccess() != AS_public))
+    return {};
+  const TypeContractInfo *TCI = Ctx.getTypeContract(Method->getParent());
+  return TCI ? std::vector<const Expr *>(TCI->Invariants.begin(),
+                                         TCI->Invariants.end())
+             : std::vector<const Expr *>();
 }
 
 std::unique_ptr<VFunction>
@@ -3020,7 +3055,8 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     Addresses.push_back(
         {valueName(P), addressedType(P), isMutableAddressParam(P)});
   if (FCI && !Fn->IsSpec)
-    for (AddressEntry &Field : collectFieldExtents(*FCI, *Fn))
+    for (AddressEntry &Field : collectFieldExtents(
+             *FCI, entryClassInvariants(Method, Constructor), *Fn))
       Addresses.push_back(std::move(Field));
   if (Fn->ReturnType.Kind == VTypeKind::Struct) {
     for (const auto &[Field, Type] : Fn->ReturnFields)
@@ -3201,6 +3237,22 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
                           VBinOp::And, std::move(NonNull), std::move(Readable),
                           VType::makeBool(), SourceLocation()),
                       ProofObligationKind::PointerValidity);
+      // A class invariant holds at the boundary of every public member
+      // function and is established by every constructor. It is checked at
+      // every call, internal ones included, so no call can observe the
+      // object while a member function breaks it.
+      FieldSubstPrefix.clear();
+      for (const Expr *Invariant : entryClassInvariants(Method, Constructor))
+        if (auto Pre = convertTypeInvariantExpr(Invariant))
+          addPrecondition(*Fn, std::move(Pre),
+                          ProofObligationKind::TypeInvariant);
+      // At exit an extent marker states nothing, and the next call checks
+      // the extent from what its caller knows.
+      llvm::SaveAndRestore DropMarkers(DropExtentMarkers, true);
+      for (const Expr *Invariant : exitClassInvariants(Method, Constructor))
+        if (auto Post = convertTypeInvariantExpr(Invariant))
+          addPostcondition(*Fn, std::move(Post),
+                           ProofObligationKind::TypeInvariant);
     }
     for (const ParmVarDecl *P : AddressParams) {
       auto Pointer = std::make_unique<VVarExpr>(valueName(P), VType::makePtr(),
@@ -4499,6 +4551,15 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
   llvm::SaveAndRestore At(CurrentRange, E && E->getSourceRange().isValid()
                                             ? E->getSourceRange()
                                             : CurrentRange);
+  if (DropExtentMarkers)
+    if (const auto *Call = dyn_cast_or_null<CallExpr>(
+            E ? E->IgnoreParenImpCasts() : nullptr)) {
+      const FunctionDecl *Callee = Call->getDirectCallee();
+      if (Callee && Callee->getDeclName().isIdentifier() &&
+          Callee->getName() == "valid" && Call->getNumArgs() == 2)
+        return std::make_unique<VLiteralExpr>(1, VType::makeBool(),
+                                              E->getExprLoc());
+    }
   // An extent marker's pointer field is its entry value's parameter.
   if (E && !FieldExtentParameters.empty())
     if (auto It = FieldExtentParameters.find(E->IgnoreParenImpCasts());
