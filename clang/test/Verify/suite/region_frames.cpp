@@ -37,6 +37,9 @@ void zero_tail(int *p, int n, int lo, const int *other)
 }
 // CHECK-DAG: Verified: zero_tail
 
+// The call writes only the slice; p, read nowhere but by the
+// postcondition, is an out-parameter, so the cell before the slice may hold
+// no value at all.
 void claims_too_much(int *p, int n, int lo)
   cppverify::pre(valid(p, n) && n >= 2 && n <= 1000 && 1 <= lo && lo < n)
   cppverify::modifies(*p)
@@ -44,7 +47,7 @@ void claims_too_much(int *p, int n, int lo)
 {
   zero(p + lo, n - lo);
 }
-// CHECK-DAG: error: verification failed: claims_too_much [{{.*}}::postcondition@
+// CHECK-DAG: error: verification failed: claims_too_much [{{.*}}::initialization@
 
 // A function writing a range of its buffer.
 void zero_from(int *p, int n, int lo)
