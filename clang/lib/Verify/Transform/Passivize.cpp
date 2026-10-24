@@ -4292,6 +4292,57 @@ class PassivizerImpl {
     P.ResultVarName = ResultName;
   }
 
+  /// Whether S starts a lifetime, whose storage is then uninitialized.
+  static bool startsLifetime(const VStmt &S) {
+    switch (S.K) {
+    case VStmt::Allocate:
+      return true;
+    case VStmt::If: {
+      const auto &I = static_cast<const VIfStmt &>(S);
+      return llvm::any_of(I.Then,
+                          [](const auto &T) { return startsLifetime(*T); }) ||
+             llvm::any_of(I.Else,
+                          [](const auto &E) { return startsLifetime(*E); });
+    }
+    case VStmt::While:
+      return llvm::any_of(static_cast<const VWhileStmt &>(S).Body,
+                          [](const auto &B) { return startsLifetime(*B); });
+    case VStmt::GhostBlock:
+      return llvm::any_of(static_cast<const VGhostBlockStmt &>(S).Body,
+                          [](const auto &B) { return startsLifetime(*B); });
+    case VStmt::Seq:
+      return llvm::any_of(static_cast<const VSeqStmt &>(S).Stmts,
+                          [](const auto &B) { return startsLifetime(*B); });
+    default:
+      return false;
+    }
+  }
+
+  /// `forall a. initialized_before[a] -> initialized_after[a]`, triggered by
+  /// reads of the later state.
+  static std::unique_ptr<VExpr> initializationKept(const std::string &Before,
+                                                   const std::string &After,
+                                                   SourceLocation Loc) {
+    const std::string Binder = "__init_address";
+    auto Address = [&] {
+      return std::make_unique<VBinOpExpr>(
+          VBinOp::Add, std::make_unique<VLiteralExpr>(0, VType::makePtr(), Loc),
+          std::make_unique<VVarExpr>(Binder, VType::makeInt32(VIntMode::Math),
+                                     Loc),
+          VType::makePtr(), Loc);
+    };
+    auto WasInitialized =
+        std::make_unique<VLoadExpr>(Address(), VType::makeBool(), Loc, Before);
+    auto IsInitialized = std::make_unique<VCastExpr>(
+        std::make_unique<VLoadExpr>(Address(), VType::makeBool(), Loc, After),
+        VType::makeBool(), VType::makeBool(), Loc, /*IsTrigger=*/true);
+    return std::make_unique<VForallExpr>(
+        Binder, nullptr, nullptr,
+        makeOr(makeNot(std::move(WasInitialized), Loc),
+               std::move(IsInitialized), Loc),
+        Loc, VType::makeInt32(VIntMode::Math));
+  }
+
   void collectModified(const VStmt &S, std::set<std::string> &Out) const {
     switch (S.K) {
     case VStmt::Assign:
@@ -4299,6 +4350,9 @@ class PassivizerImpl {
       break;
     case VStmt::Store:
       Out.insert(VHeapName);
+      // A store to local or dynamic storage initializes the cell.
+      if (hasPointerProvenance(static_cast<const VStoreStmt &>(S).Ptr.get()))
+        Out.insert(VInitializationHeapName);
       break;
     case VStmt::Allocate: {
       const auto &A = static_cast<const VAllocateStmt &>(S);
@@ -4405,12 +4459,10 @@ class PassivizerImpl {
 
   /// A contract expression's memory checks, recorded before spec inlining,
   /// join its other checks, one obligation per kind.
-  void emitExprSafety(PassiveProgram &P, const VExpr *E, const VExpr *Guard,
-                      SourceLocation Loc,
-                      const std::map<std::string, std::string> &Renames,
-                      bool BridgeMachineValue = false,
-                      const VExpr *SafetySource = nullptr,
-                      const std::vector<VMemoryCheck> *MemoryChecks = nullptr) {
+  /// The definedness checks of E, or of SafetySource, the clause as written
+  /// that E instantiates, with the memory checks recorded for it.
+  SafetyChecks exprSafetyChecks(const VExpr *E, const VExpr *SafetySource,
+                                const std::vector<VMemoryCheck> *MemoryChecks) {
     SafetyChecks Checks;
     collectSafety(
         SafetySource ? SafetySource : E, &FnMap,
@@ -4420,12 +4472,38 @@ class PassivizerImpl {
     if (MemoryChecks && !Fn.TotalExpressions)
       for (const VMemoryCheck &Check : *MemoryChecks)
         Checks.push_back({Check.Kind, cloneVExpr(Check.Cond.get())});
+    return Checks;
+  }
+
+  void emitExprSafety(PassiveProgram &P, const VExpr *E, const VExpr *Guard,
+                      SourceLocation Loc,
+                      const std::map<std::string, std::string> &Renames,
+                      bool BridgeMachineValue = false,
+                      const VExpr *SafetySource = nullptr,
+                      const std::vector<VMemoryCheck> *MemoryChecks = nullptr) {
+    SafetyChecks Checks = exprSafetyChecks(E, SafetySource, MemoryChecks);
     groupByKind(Checks);
     CloneCtx Ctx{Renames, OldState, false};
     for (const SafetyCheck &Check : Checks)
       emitPassive(P, PassiveStmt::Assert, cloneExpr(Check.Cond.get(), Ctx),
                   Guard, Loc, Check.Kind, Check.Note);
     emitMathBridge(P, E, Guard, Loc, BridgeMachineValue);
+  }
+
+  /// The definedness of an invariant, assumed at its loop's head: every
+  /// path into the head (entry, the end of an iteration, a continue) asserts
+  /// it with the invariant, so at the head it holds by the same induction,
+  /// and the reads it makes, of memory written in the loop included, are
+  /// initialized and in bounds there.
+  void
+  assumeInvariantSafety(PassiveProgram &P, const VWhileStmt &W,
+                        const VExpr *Inv, const VExpr *Guard,
+                        const std::map<std::string, std::string> &Renames) {
+    CloneCtx Ctx{Renames, OldState, false};
+    for (const SafetyCheck &Check :
+         exprSafetyChecks(Inv, Inv, invariantChecks(W, Inv)))
+      emitPassive(P, PassiveStmt::Assume, cloneExpr(Check.Cond.get(), Ctx),
+                  Guard, Inv->Loc);
   }
 
   void emitMathBridge(PassiveProgram &P, const VExpr *E, const VExpr *Guard,
@@ -6436,6 +6514,8 @@ public:
       std::set<std::string> Modified;
       for (const auto &Body : W.Body)
         collectModified(*Body, Modified);
+      const bool StartsLifetime = llvm::any_of(
+          W.Body, [](const auto &Body) { return startsLifetime(*Body); });
       // A loop in the object model writes only the objects its stores and
       // calls reach; the rest of the heap keeps its values.
       std::vector<Region> WriteRegions;
@@ -6468,6 +6548,12 @@ public:
         Renames[Name] = HeadName;
         emitInactiveFrame(P, PreviousName, HeadName, typeForName(Name),
                           Enters.get(), W.Loc);
+        // Without a lifetime starting in it, a loop only initializes
+        // storage: what was initialized before it still is at its head.
+        if (Name == VInitializationHeapName && !StartsLifetime)
+          emitPassive(P, PassiveStmt::Assume,
+                      initializationKept(PreviousName, HeadName, W.Loc),
+                      Active.get(), W.Loc);
         if (Framed && Name == VHeapName) {
           const bool OnlyCells =
               !WriteRegions.empty() &&
@@ -6515,6 +6601,7 @@ public:
       }
       Origin = "inv";
       for (const auto &Inv : W.Invariants) {
+        assumeInvariantSafety(P, W, Inv.get(), Active.get(), Renames);
         auto BoundInv = cloneExpr(Inv.get(), HeadCtx);
         emitPassive(P, PassiveStmt::Assume, std::move(BoundInv), Active.get(),
                     W.Loc);
