@@ -5471,14 +5471,9 @@ void Sema::InstantiateFunctionContract(SourceLocation PointOfInstantiation,
   MultiLevelTemplateArgumentList TemplateArgs = getTemplateInstantiationArgs(
       Function, Function->getLexicalDeclContext(), /*Final=*/false,
       /*Innermost=*/std::nullopt, /*RelativeToPrimary=*/true);
+  // A member's `this` is the specialization's, the current context.
   if (addInstantiatedParametersToScope(Function, Written, Scope, TemplateArgs))
     return;
-  std::optional<CXXThisScopeRAII> ThisScope;
-  if (auto *Method = dyn_cast<CXXMethodDecl>(Function);
-      Method && Method->isImplicitObjectMemberFunction())
-    ThisScope.emplace(*this, Method->getParent(),
-                      Method->getMethodQualifiers(),
-                      static_cast<bool>(getLangOpts().CPlusPlus11));
   FunctionContractInfo Instantiated;
   if (SubstFunctionContract(*PatternContract, Instantiated, TemplateArgs))
     return;
@@ -6227,10 +6222,6 @@ void Sema::BuildVariableInstantiation(
   }
 
   InstantiateAttrs(TemplateArgs, OldVar, NewVar, LateAttrs, StartingScope);
-
-  // A ghost variable is one in every instantiation.
-  if (Context.isGhostVariable(OldVar))
-    Context.markGhostVariable(NewVar);
 
   LookupResult Previous(
       *this, NewVar->getDeclName(), NewVar->getLocation(),
