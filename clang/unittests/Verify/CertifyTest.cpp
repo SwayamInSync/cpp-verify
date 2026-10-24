@@ -102,6 +102,7 @@ Expr clone(const LogicExpr &E) {
   Copy->Binder = E.Binder;
   Copy->OverflowOp = E.OverflowOp;
   Copy->SpecCallee = E.SpecCallee;
+  Copy->CollectionOp = E.CollectionOp;
   for (const auto &Child : E.Children)
     Copy->Children.push_back(clone(*Child));
   return Copy;
@@ -1935,6 +1936,213 @@ TEST(CertifyTest, AgreesWithLeanEvaluation) {
                   literal(std::to_string(static_cast<int64_t>(R)), math()),
                   "rem" + Operands);
     }
+
+  // Collections: what reads a random chain of operations gives, and when two
+  // sequences are equal. Lean decides each with the prelude's definitions.
+  using CollectionOp = LogicCollectionOp;
+  auto collection = [](CollectionOp Op, LogicSort Sort, auto... Operands) {
+    Expr E = node(LogicExpr::Collection, Sort, std::move(Operands)...);
+    E->CollectionOp = Op;
+    return E;
+  };
+  const LogicSort Seq = LogicSort::collection(LogicSortKind::Seq);
+  const LogicSort Set = LogicSort::collection(LogicSortKind::Set);
+  const LogicSort Multiset = LogicSort::collection(LogicSortKind::Multiset);
+  const LogicSort Map = LogicSort::collection(LogicSortKind::Map);
+  auto small = [&] {
+    return mathLiteral(static_cast<int64_t>(Random() % 8) - 2);
+  };
+  std::function<Expr(unsigned)> sequence = [&](unsigned Depth) -> Expr {
+    switch (Depth == 0 ? Random() % 2 : Random() % 5) {
+    case 0:
+      return collection(CollectionOp::SeqEmpty, Seq);
+    case 1:
+      return collection(CollectionOp::SeqUnit, Seq, small());
+    case 2:
+      return collection(CollectionOp::SeqPush, Seq, sequence(Depth - 1),
+                        small());
+    case 3:
+      return collection(CollectionOp::SeqConcat, Seq, sequence(Depth - 1),
+                        sequence(Depth - 1));
+    default:
+      return collection(CollectionOp::SeqSubrange, Seq, sequence(Depth - 1),
+                        small(), small());
+    }
+  };
+  std::function<Expr(unsigned)> set = [&](unsigned Depth) -> Expr {
+    const CollectionOp Combined[] = {CollectionOp::SetUnion,
+                                     CollectionOp::SetIntersect,
+                                     CollectionOp::SetDifference};
+    switch (Depth == 0 ? 0 : Random() % 4) {
+    case 0:
+      return collection(CollectionOp::SetEmpty, Set);
+    case 1:
+      return collection(CollectionOp::SetInsert, Set, set(Depth - 1), small());
+    case 2:
+      return collection(CollectionOp::SetRemove, Set, set(Depth - 1), small());
+    default:
+      return collection(Combined[Random() % 3], Set, set(Depth - 1),
+                        set(Depth - 1));
+    }
+  };
+  std::function<Expr(unsigned)> multiset = [&](unsigned Depth) -> Expr {
+    if (Depth == 0)
+      return collection(CollectionOp::MultisetEmpty, Multiset);
+    return collection(Random() % 3 == 0 ? CollectionOp::MultisetRemove
+                                        : CollectionOp::MultisetInsert,
+                      Multiset, multiset(Depth - 1), small());
+  };
+  std::function<Expr(unsigned)> map = [&](unsigned Depth) -> Expr {
+    if (Depth == 0)
+      return collection(CollectionOp::MapEmpty, Map);
+    if (Random() % 3 == 0)
+      return collection(CollectionOp::MapRemove, Map, map(Depth - 1), small());
+    return collection(CollectionOp::MapInsert, Map, map(Depth - 1), small(),
+                      small());
+  };
+  for (unsigned I = 0; I != 60; ++I) {
+    const std::string Name = "collection " + std::to_string(I);
+    switch (I % 6) {
+    case 0:
+      evaluated(collection(CollectionOp::SeqLength, math(), sequence(3)), Name);
+      break;
+    case 1:
+      evaluated(
+          collection(CollectionOp::SeqIndex, math(), sequence(3), small()),
+          Name);
+      break;
+    case 2:
+      evaluated(collection(CollectionOp::SeqContains, LogicSort::boolSort(),
+                           sequence(3), small()),
+                Name);
+      break;
+    case 3:
+      evaluated(collection(CollectionOp::SetContains, LogicSort::boolSort(),
+                           set(4), small()),
+                Name);
+      break;
+    case 4:
+      evaluated(
+          collection(CollectionOp::MultisetCount, math(), multiset(5), small()),
+          Name);
+      break;
+    default:
+      evaluated(collection(I % 12 == 5 ? CollectionOp::MapGet
+                                       : CollectionOp::MapContains,
+                           I % 12 == 5 ? math() : LogicSort::boolSort(), map(4),
+                           small()),
+                Name);
+      break;
+    }
+  }
+  for (unsigned I = 0; I != 20; ++I)
+    evaluated(boolean(LogicExpr::Eq, sequence(2), sequence(2)),
+              "sequence equality " + std::to_string(I));
+  // Each operation at operands where it matters: reads in and out of range,
+  // every clamp of a subrange, an element inserted and removed, each
+  // combination of membership, a count removed that is there and one that
+  // is not, and a key written over and removed.
+  auto number = [](int64_t Value) { return mathLiteral(Value); };
+  auto list = [&](std::initializer_list<int64_t> Elements) {
+    Expr S = collection(CollectionOp::SeqEmpty, Seq);
+    for (int64_t Element : Elements)
+      S = collection(CollectionOp::SeqPush, Seq, std::move(S), number(Element));
+    return S;
+  };
+  auto read = [&](CollectionOp Op, LogicSort Sort, Expr Of, int64_t At,
+                  const std::string &Name) {
+    evaluated(collection(Op, Sort, std::move(Of), number(At)), Name);
+  };
+  for (int64_t I = -1; I <= 3; ++I)
+    read(CollectionOp::SeqIndex, math(), list({1, 2, 3}), I,
+         "index " + std::to_string(I));
+  for (int64_t X = 0; X <= 3; ++X)
+    read(CollectionOp::SeqContains, LogicSort::boolSort(), list({1, 2, 3}), X,
+         "sequence contains " + std::to_string(X));
+  evaluated(collection(CollectionOp::SeqLength, math(),
+                       collection(CollectionOp::SeqUnit, Seq, number(5))),
+            "unit length");
+  for (int64_t I = 0; I <= 2; ++I)
+    read(CollectionOp::SeqIndex, math(),
+         collection(CollectionOp::SeqConcat, Seq, list({1}), list({2})), I,
+         "concat index " + std::to_string(I));
+  for (int64_t Lo = -1; Lo <= 4; ++Lo)
+    for (int64_t Hi = -1; Hi <= 4; ++Hi) {
+      auto subrange = [&] {
+        return collection(CollectionOp::SeqSubrange, Seq, list({1, 2, 3}),
+                          number(Lo), number(Hi));
+      };
+      const std::string Name =
+          "subrange " + std::to_string(Lo) + " " + std::to_string(Hi);
+      evaluated(collection(CollectionOp::SeqLength, math(), subrange()),
+                Name + " length");
+      for (int64_t I = 0; I <= 2; ++I)
+        read(CollectionOp::SeqIndex, math(), subrange(), I,
+             Name + " index " + std::to_string(I));
+    }
+  auto members = [&](std::initializer_list<int64_t> Elements) {
+    Expr S = collection(CollectionOp::SetEmpty, Set);
+    for (int64_t Element : Elements)
+      S = collection(CollectionOp::SetInsert, Set, std::move(S),
+                     number(Element));
+    return S;
+  };
+  for (int64_t X = 1; X <= 2; ++X) {
+    read(CollectionOp::SetContains, LogicSort::boolSort(), members({1}), X,
+         "set insert " + std::to_string(X));
+    read(CollectionOp::SetContains, LogicSort::boolSort(),
+         collection(CollectionOp::SetRemove, Set, members({1, 2}), number(1)),
+         X, "set remove " + std::to_string(X));
+  }
+  for (CollectionOp Op : {CollectionOp::SetUnion, CollectionOp::SetIntersect,
+                          CollectionOp::SetDifference})
+    for (int64_t X = 1; X <= 4; ++X)
+      read(CollectionOp::SetContains, LogicSort::boolSort(),
+           collection(Op, Set, members({1, 2}), members({2, 3})), X,
+           std::string(logicCollectionOpName(Op)) + " " + std::to_string(X));
+  auto counts = [&](std::initializer_list<int64_t> Elements) {
+    Expr M = collection(CollectionOp::MultisetEmpty, Multiset);
+    for (int64_t Element : Elements)
+      M = collection(CollectionOp::MultisetInsert, Multiset, std::move(M),
+                     number(Element));
+    return M;
+  };
+  for (int64_t X = 3; X <= 4; ++X) {
+    read(CollectionOp::MultisetCount, math(), counts({3, 3}), X,
+         "count " + std::to_string(X));
+    for (std::initializer_list<int64_t> Before :
+         {std::initializer_list<int64_t>{}, std::initializer_list<int64_t>{3},
+          std::initializer_list<int64_t>{3, 3}})
+      read(CollectionOp::MultisetCount, math(),
+           collection(CollectionOp::MultisetRemove, Multiset, counts(Before),
+                      number(3)),
+           X,
+           "count after remove of " + std::to_string(Before.size()) + " at " +
+               std::to_string(X));
+  }
+  auto entries = [&] {
+    return collection(CollectionOp::MapInsert, Map,
+                      collection(CollectionOp::MapInsert, Map,
+                                 collection(CollectionOp::MapEmpty, Map),
+                                 number(1), number(10)),
+                      number(2), number(20));
+  };
+  for (int64_t K = 1; K <= 3; ++K) {
+    const std::string At = " " + std::to_string(K);
+    read(CollectionOp::MapContains, LogicSort::boolSort(), entries(), K,
+         "map contains" + At);
+    read(CollectionOp::MapGet, math(), entries(), K, "map get" + At);
+    read(CollectionOp::MapGet, math(),
+         collection(CollectionOp::MapInsert, Map, entries(), number(1),
+                    number(11)),
+         K, "map overwrite" + At);
+    read(CollectionOp::MapContains, LogicSort::boolSort(),
+         collection(CollectionOp::MapRemove, Map, entries(), number(1)), K,
+         "map remove contains" + At);
+    read(CollectionOp::MapGet, math(),
+         collection(CollectionOp::MapRemove, Map, entries(), number(1)), K,
+         "map remove get" + At);
+  }
 
   ObligationModule &Module = Facts.Module;
   Module.FunctionName = "certify_lean";

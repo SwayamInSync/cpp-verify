@@ -1546,6 +1546,10 @@ proof of a printed goal is a proof of its obligation.
 | `MathematicalInteger`, `Pointer` | `Int` |
 | `BitVector(N)` | `BitVec N` |
 | `Heap` | `CppHeap` (`Int -> Int`) |
+| `Seq` | `List Int` |
+| `Set` | `Int → Bool`, its membership test |
+| `Multiset` | `Int → Nat`, its counts |
+| `Map` | `Int → Option Int`, the value at each key it holds |
 
 - **Precedence.** Each operator is printed at its Lean notation level
   (`Init/Notation.lean`, `Init/Core.lean`), and an operand that binds looser
@@ -1590,6 +1594,24 @@ proof of a printed goal is a proof of its obligation.
   only the `if`s of generated definitions whose condition has no decision
   procedure; Lean's instance search already tries a specific instance before
   it.
+- **Collections.** Each operation is a prelude function
+  (`LeanCollectionPrelude`), `cppSeqAt`, `cppSetInsert`, `cppMapGet`, ..., with
+  the total meaning of `<cppverify.h>`: a read outside a sequence or a map's
+  domain is 0, a subrange clamps `lo` into `[0, len]` and `hi` into
+  `[lo', len]`, a multiset removal of a count of 0 leaves 0 (`Nat`
+  subtraction). A set is its membership test rather than a finite set, since
+  a set may be infinite (Vermilion's mirror of vstd uses Mathlib's `Finset`,
+  for finite sets only). The three membership predicates are `def`s with
+  `Decidable` instances, not `abbrev`s: as `abbrev`s, the Boolean lemmas of
+  `cppverify_norm` rewrote `cppSetContains s x` to `s x = true`, and the
+  lemmas stated on `cppSetContains` no longer matched. As Vermilion states
+  its vstd operations, the prelude states each operation's meaning in
+  `@[simp, grind =]` lemmas (`cppSeqAt_push`, `cppSetContains_remove`,
+  `cppMultisetCount_remove`, ...), with `grind_pattern`s for the facts that
+  lengths and counts are not negative (grind's own pattern for `0 ≤ count m
+  x` is the inequality, which no goal contains), and extensionality lemmas
+  (`cppSeq_ext`, `cppSet_ext`, `cppMultiset_ext`, `cppMap_ext`); all of them
+  are theorems of the definitions, so no goal rests on them.
 
 `CertifyTest.AgreesWithLeanEvaluation` checks the agreement in the pinned
 Lean. The value the certifier computes for each ground term is a theorem Lean
@@ -1600,7 +1622,15 @@ bits signed and unsigned, every mathematical operator inside every other, and
 every connective inside every other at all eight assignments of its operands,
 so that a lost parenthesis changes a value; and every operator at the extreme
 operands of widths 1, 8, and 64 (a zero divisor, `INT_MIN / -1`, a shift past
-the width, each overflow predicate). `lean_semantics.cpp` checks the printed
+the width, each overflow predicate); and for collections, 80 random chains of
+operations read by length, index, membership, count, and key, 20 equalities
+of sequences, and each operation where it matters (every clamp of a
+subrange of `[1, 2, 3]`, membership of an element inserted and removed, each
+combination of two sets, a multiset removal of a count of 0, 1, and 2, a key
+written over and removed). Printing set removal as insertion fails it.
+`lean_collections.test` exports a function over each kind, certifies their
+automatic proofs and a proof by hand of `total(s.push(x)) == total(s) + x`,
+and keeps a false claim unproved. `lean_semantics.cpp` checks the printed
 forms, builds an export, certifies a goal whose proof needs the quantifier
 closed and `decide` on a comparison, refuses proofs that read `(a ^ b) + 1`
 as `a ^ (b + 1)` or `2 - 3` in `Nat`, and its probe file
@@ -1715,8 +1745,25 @@ uses when the source around it changes.
   Z3 proves, they prove 90.2%. Stating the range of every `BitVec.toInt`
   term first proved nothing more (`grind` knows the ranges), and removing
   `Int.bmod` with an `omega` discharger proved 32 fewer and took longer, so
-  neither is a step. Heartbeats alone did not bound the time, since a kernel
-  check is not counted. The trial takes every exported goal whose proof file
+  neither is a step. Revision 2 (`LeanAutomationRevision`) appends three
+  steps after the others, so that every goal an earlier step proves keeps
+  its proof: `_bveq` states equalities of machine values and sign extensions
+  as integer facts too (`← BitVec.toInt_inj`, `toInt_signExtend_of_le` with
+  `omega` for its side condition); `_ext` applies a collection's
+  extensionality lemma; `_unfold` delta-expands the generated spec bodies
+  (`cppverify_unfold_bodies`, every constant named `cppSpecBody_…`, to a
+  fixed point, since a body names only lower levels of its definition) in
+  the goal and its hypotheses, so each definition instance says what the
+  body does, then as `_bveq`. Tagging the bodies for `grind` instead would
+  have changed what every earlier step does. `_bveq` is not subsumed by
+  `_unfold`: on the 37 goals of `roundtrip_uleb128` (`llvm_uleb128.cpp`)
+  unfolding the lifted helpers' bodies exhausts the heartbeats, and `_bveq`
+  proves them. Over the same exports (375 sources, 9259 goals), of the 5582
+  that Z3 proves revision 1 proves 5044 (90.4%) and revision 2 5210
+  (93.3%), none fewer; of the 112 over collections, 86 and 104. A goal
+  neither proves now takes 2.8 s on average instead of 1.4 s.
+  Heartbeats alone did not bound the time, since a kernel check is not
+  counted. The trial takes every exported goal whose proof file
   is pristine and whose header (`automation:`) names no attempt by the
   current `LeanAutomationRevision`, builds `Generated`, `User`, and `Auto`
   with the pinned toolchain, and runs `lean` itself (with the `LEAN_PATH` of `lake env`, so a
@@ -1929,7 +1976,7 @@ The driver selects a backend via `VerifyOptions` (`Verifier.h` / `cpp-verify --b
 | **Strict portfolio** | `PortfolioVerifyBackend` | Runs ordered Z3 and cvc5 queries. Matching UNSAT proves; matching certified counterexamples fail and retain the Z3 model; disagreement or an unresolved side is unresolved. |
 | **Race** | `RaceVerifyBackend` | Runs the Z3 and cvc5 backends at once; the first proof or certified counterexample stands and cancels the other (`cancel`/`resume`: a backend-wide `Race` of Z3 encoders, each forwarding an interrupt to the pass it runs, and a flag the cvc5 process loop polls). Otherwise the obligations either proved are joined, `Verified` (`z3+cvc5`) when they cover the module. |
 | **BMC** | `LoopUnroll` on VCR, then shared obligation/Z3 path | Source verification grows bounds from zero through `--unroll=N`, stopping on a counterexample, complete unwinding, unresolved query, or the maximum frontier. Safety with failed unwinding is `BoundedSafe(N)`; only proved unwinding is `Verified`. A spec's checks have no loops: the driver solves them with a Z3 backend (`SpecBackend`), as on the default path, and keeps the bound on their archived modules for replay. |
-| **Lean** | `exportLeanScratchPad` / project certification | Standalone mode emits unchecked theorem stubs. Project mode emits direct source goals, total functional heaps, typed bit-vector/integer operations, and compact finite-fuel spec bodies into generated files while preserving user proofs. Export is `Exported`; only the pinned admission-free kernel/axiom check is `Certified`. Collections are `logic.unsupported` (planned for a future release). |
+| **Lean** | `exportLeanScratchPad` / project certification | Standalone mode emits unchecked theorem stubs. Project mode emits direct source goals, total functional heaps, typed bit-vector/integer operations, and compact finite-fuel spec bodies into generated files while preserving user proofs. Export is `Exported`; only the pinned admission-free kernel/axiom check is `Certified`. Collections are core Lean values (`List Int`, `Int → Bool`, `Int → Nat`, `Int → Option Int`) with prelude operations and lemmas. |
 
 A Lean project pins `LeanToolchain` (`Driver/CppVerifyVersion.h`) in its
 `lean-toolchain` file. A pin in `EarlierLeanToolchains`, which an earlier

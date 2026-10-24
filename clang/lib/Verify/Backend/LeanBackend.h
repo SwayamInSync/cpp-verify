@@ -88,10 +88,7 @@ public:
       : Modules(Modules), ProjectGoals(ProjectGoals) {}
   llvm::StringRef getName() const override { return "lean"; }
   BackendCapabilities getCapabilities() const override {
-    // Collections have no Lean semantics yet.
-    return {allLogicFeatures() & ~logicFeature(LogicFeature::Sequences) &
-                ~logicFeature(LogicFeature::Collections),
-            false};
+    return {allLogicFeatures(), false};
   }
   /// Restrict later exports to these internal obligation IDs.
   void selectObligations(std::optional<std::set<std::string>> Ids) {

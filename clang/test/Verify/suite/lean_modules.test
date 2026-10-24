@@ -16,14 +16,16 @@
 # RUN: FileCheck %s --input-file=%t/p/CppVerify/User.lean --check-prefix=USER
 # RUN: FileCheck %s --input-file=%t/p/CppVerify.lean --check-prefix=ROOT
 #
-# The two goal modules that apply tri are certified together.
+# The two goal modules that apply tri are certified together, with proofs
+# by hand of their postconditions in place of the automatic ones.
 # RUN: cp %S/Inputs/lean_modules_tri_zero.lean %t/p/CppVerify/Proofs/cppverify_tri_zero_e086e9/cppverify_tri_zero_e086e9_postcondition_44e49d34.lean
 # RUN: cp %S/Inputs/lean_modules_plus_tri_zero.lean %t/p/CppVerify/Proofs/cppverify_plus_tri_zero_10bb8a/cppverify_plus_tri_zero_10bb8a_postcondition_8b45419c.lean
 # RUN: %cpp-verify --backend=lean --lean-project=%t/p --lean-certify %t/m.cpp -- 2>&1 | FileCheck %s --check-prefix=CERTIFY
 #
-# A run of the same source writes no file.
+# A run of the same source writes no file. The two proofs by hand are not
+# cppverify_auto's.
 # RUN: touch %t/same
-# RUN: %cpp-verify --backend=lean --lean-project=%t/p %t/m.cpp -- 2>&1 | FileCheck %s --check-prefix=EXPORT
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p %t/m.cpp -- 2>&1 | FileCheck %s --check-prefix=EXPORT-AGAIN
 # RUN: find %t/p -newer %t/same -type f -not -path '*/.lake/*' | count 0
 #
 # A change to dbl builds dbl's goal module and proofs again, and the module
@@ -58,8 +60,11 @@
 # EXPORT: Exported: decreases: tri (cppverify_auto proved 1 of 1 goals)
 # EXPORT-NEXT: Exported: lean obligation: inc (cppverify_auto proved 3 of 3 goals)
 # EXPORT-NEXT: Exported: lean obligation: dbl (cppverify_auto proved 3 of 3 goals)
-# EXPORT-NEXT: Exported: lean obligation: tri_zero (cppverify_auto proved 1 of 2 goals)
-# EXPORT-NEXT: Exported: lean obligation: plus_tri_zero (cppverify_auto proved 1 of 2 goals)
+# EXPORT-NEXT: Exported: lean obligation: tri_zero (cppverify_auto proved 2 of 2 goals)
+# EXPORT-NEXT: Exported: lean obligation: plus_tri_zero (cppverify_auto proved 2 of 2 goals)
+
+# EXPORT-AGAIN: Exported: lean obligation: tri_zero (cppverify_auto proved 1 of 2 goals)
+# EXPORT-AGAIN-NEXT: Exported: lean obligation: plus_tri_zero (cppverify_auto proved 1 of 2 goals)
 
 # GENERATED: {{^}}import CppVerify.Prelude{{$}}
 # GENERATED-NEXT: {{^}}import CppVerify.Specs{{$}}

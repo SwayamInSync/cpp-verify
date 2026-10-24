@@ -108,6 +108,8 @@ static void printLeanCommentText(llvm::StringRef Text, llvm::raw_ostream &OS) {
   }
 }
 
+// A sequence is a list, a set its membership test, a multiset its counts,
+// and a map the value at each key it holds (CppVerify/Prelude.lean).
 static void printLeanSort(const LogicSort &Sort, llvm::raw_ostream &OS) {
   switch (Sort.Kind) {
   case LogicSortKind::Bool:
@@ -123,15 +125,81 @@ static void printLeanSort(const LogicSort &Sort, llvm::raw_ostream &OS) {
   case LogicSortKind::Heap:
     OS << "CppHeap";
     return;
-  case LogicSortKind::Invalid:
   case LogicSortKind::Seq:
+    OS << "List Int";
+    return;
   case LogicSortKind::Set:
+    OS << "(Int → Bool)";
+    return;
   case LogicSortKind::Multiset:
+    OS << "(Int → Nat)";
+    return;
   case LogicSortKind::Map:
+    OS << "(Int → Option Int)";
+    return;
+  case LogicSortKind::Invalid:
     LeanEmissionFailed = true;
     OS << "False";
     return;
   }
+}
+
+// The prelude's function for each collection operation.
+static const char *leanCollectionName(LogicCollectionOp Operation) {
+  using Op = LogicCollectionOp;
+  switch (Operation) {
+  case Op::SeqEmpty:
+    return "cppSeqEmpty";
+  case Op::SeqUnit:
+    return "cppSeqUnit";
+  case Op::SeqLength:
+    return "cppSeqLength";
+  case Op::SeqIndex:
+    return "cppSeqAt";
+  case Op::SeqPush:
+    return "cppSeqPush";
+  case Op::SeqSubrange:
+    return "cppSeqSubrange";
+  case Op::SeqConcat:
+    return "cppSeqConcat";
+  case Op::SeqContains:
+    return "cppSeqContains";
+  case Op::SetEmpty:
+    return "cppSetEmpty";
+  case Op::SetInsert:
+    return "cppSetInsert";
+  case Op::SetRemove:
+    return "cppSetRemove";
+  case Op::SetContains:
+    return "cppSetContains";
+  case Op::SetUnion:
+    return "cppSetUnion";
+  case Op::SetIntersect:
+    return "cppSetIntersect";
+  case Op::SetDifference:
+    return "cppSetDifference";
+  case Op::SetSubset:
+    return "cppSetSubset";
+  case Op::MultisetEmpty:
+    return "cppMultisetEmpty";
+  case Op::MultisetInsert:
+    return "cppMultisetInsert";
+  case Op::MultisetRemove:
+    return "cppMultisetRemove";
+  case Op::MultisetCount:
+    return "cppMultisetCount";
+  case Op::MapEmpty:
+    return "cppMapEmpty";
+  case Op::MapInsert:
+    return "cppMapInsert";
+  case Op::MapRemove:
+    return "cppMapRemove";
+  case Op::MapContains:
+    return "cppMapContains";
+  case Op::MapGet:
+    return "cppMapGet";
+  }
+  return nullptr;
 }
 
 static void collectLeanVariables(const LogicExpr *E,
@@ -535,10 +603,25 @@ static void printVCExprLean(const VCExpr *E, llvm::raw_ostream &OS,
     printVCExprLean(E->Children[3].get(), OS, LeanArgument);
     OS << ")";
     break;
-  case VCExpr::Collection:
-    LeanEmissionFailed = true;
-    OS << "False";
+  case VCExpr::Collection: {
+    const char *Name = leanCollectionName(E->CollectionOp);
+    if (!Name) {
+      LeanEmissionFailed = true;
+      OS << "False";
+      break;
+    }
+    if (E->Children.empty()) {
+      OS << Name;
+      break;
+    }
+    OS << "(" << Name;
+    for (const auto &Child : E->Children) {
+      OS << " ";
+      printVCExprLean(Child.get(), OS, LeanArgument);
+    }
+    OS << ")";
     break;
+  }
   case VCExpr::HeapFrame:
     OS << "(∀ (";
     printLeanName("__frame_address", OS);
@@ -1087,9 +1170,298 @@ static void emitLeanFunctionBodies(const ObligationModule &Module,
   }
 }
 
+// Collections of mathematical integers, with the total meaning <cppverify.h>
+// gives each operation, and lemmas that state it for simp, grind, and proofs
+// by hand. Checking a goal never needs them: they are theorems of the
+// definitions.
+static constexpr llvm::StringLiteral LeanCollectionPrelude =
+    R"lean(/- Collections of mathematical integers, total as <cppverify.h> defines
+   them: a sequence is a list, a set its membership test, a multiset its
+   counts, and a map the value at each key it holds. -/
+
+def cppSeqEmpty : List Int := []
+def cppSeqUnit (x : Int) : List Int := [x]
+def cppSeqLength (s : List Int) : Int := s.length
+def cppSeqAt (s : List Int) (i : Int) : Int :=
+  if i < 0 then 0 else s[i.toNat]?.getD 0
+def cppSeqPush (s : List Int) (x : Int) : List Int := s ++ [x]
+def cppSeqConcat (s t : List Int) : List Int := s ++ t
+def cppSeqSubrange (s : List Int) (lo hi : Int) : List Int :=
+  (s.drop (max 0 (min lo s.length)).toNat).take
+    (max (max 0 (min lo s.length)) (min hi s.length) -
+      max 0 (min lo s.length)).toNat
+def cppSeqContains (s : List Int) (x : Int) : Prop := x ∈ s
+instance (s : List Int) (x : Int) : Decidable (cppSeqContains s x) :=
+  inferInstanceAs (Decidable (x ∈ s))
+
+def cppSetEmpty : Int → Bool := fun _ => false
+def cppSetInsert (s : Int → Bool) (x : Int) : Int → Bool :=
+  fun y => y == x || s y
+def cppSetRemove (s : Int → Bool) (x : Int) : Int → Bool :=
+  fun y => y != x && s y
+def cppSetContains (s : Int → Bool) (x : Int) : Prop := s x = true
+instance (s : Int → Bool) (x : Int) : Decidable (cppSetContains s x) :=
+  inferInstanceAs (Decidable (s x = true))
+def cppSetUnion (s t : Int → Bool) : Int → Bool := fun y => s y || t y
+def cppSetIntersect (s t : Int → Bool) : Int → Bool := fun y => s y && t y
+def cppSetDifference (s t : Int → Bool) : Int → Bool :=
+  fun y => s y && !t y
+def cppSetSubset (s t : Int → Bool) : Prop := ∀ y, s y = true → t y = true
+
+def cppMultisetEmpty : Int → Nat := fun _ => 0
+def cppMultisetInsert (m : Int → Nat) (x : Int) : Int → Nat :=
+  fun y => if y = x then m y + 1 else m y
+def cppMultisetRemove (m : Int → Nat) (x : Int) : Int → Nat :=
+  fun y => if y = x then m y - 1 else m y
+def cppMultisetCount (m : Int → Nat) (x : Int) : Int := m x
+
+def cppMapEmpty : Int → Option Int := fun _ => none
+def cppMapInsert (m : Int → Option Int) (k v : Int) : Int → Option Int :=
+  fun y => if y = k then some v else m y
+def cppMapRemove (m : Int → Option Int) (k : Int) : Int → Option Int :=
+  fun y => if y = k then none else m y
+def cppMapContains (m : Int → Option Int) (k : Int) : Prop :=
+  (m k).isSome = true
+instance (m : Int → Option Int) (k : Int) : Decidable (cppMapContains m k) :=
+  inferInstanceAs (Decidable ((m k).isSome = true))
+def cppMapGet (m : Int → Option Int) (k : Int) : Int := (m k).getD 0
+
+/- What each operation means, for simp, grind, and proofs by hand. -/
+
+private theorem cppverify_ite_pos {c : Prop} [Decidable c] {α : Sort _}
+    {a b : α} (h : c) : (if c then a else b) = a := by simp [h]
+private theorem cppverify_ite_neg {c : Prop} [Decidable c] {α : Sort _}
+    {a b : α} (h : ¬c) : (if c then a else b) = b := by simp [h]
+
+@[simp, grind =] theorem cppSeqLength_empty : cppSeqLength cppSeqEmpty = 0 := rfl
+@[simp, grind =] theorem cppSeqLength_unit (x : Int) :
+    cppSeqLength (cppSeqUnit x) = 1 := rfl
+@[simp, grind =] theorem cppSeqLength_push (s : List Int) (x : Int) :
+    cppSeqLength (cppSeqPush s x) = cppSeqLength s + 1 := by
+  simp [cppSeqLength, cppSeqPush]
+@[simp, grind =] theorem cppSeqLength_concat (s t : List Int) :
+    cppSeqLength (cppSeqConcat s t) = cppSeqLength s + cppSeqLength t := by
+  simp [cppSeqLength, cppSeqConcat]
+theorem cppSeqLength_nonneg (s : List Int) : 0 ≤ cppSeqLength s := by
+  simp [cppSeqLength]
+grind_pattern cppSeqLength_nonneg => cppSeqLength s
+@[simp, grind =] theorem cppSeqLength_subrange (s : List Int) (lo hi : Int) :
+    cppSeqLength (cppSeqSubrange s lo hi) =
+      max (max 0 (min lo (cppSeqLength s))) (min hi (cppSeqLength s)) -
+        max 0 (min lo (cppSeqLength s)) := by
+  simp only [cppSeqLength, cppSeqSubrange, List.length_take, List.length_drop]
+  omega
+
+theorem cppSeqAt_out (s : List Int) (i : Int)
+    (h : i < 0 ∨ cppSeqLength s ≤ i) : cppSeqAt s i = 0 := by
+  unfold cppSeqAt cppSeqLength at *
+  split
+  · rfl
+  · rw [List.getElem?_eq_none (by omega)]; rfl
+@[simp, grind =] theorem cppSeqAt_empty (i : Int) : cppSeqAt cppSeqEmpty i = 0 :=
+  cppSeqAt_out [] i (by simp [cppSeqLength]; omega)
+@[simp, grind =] theorem cppSeqAt_push (s : List Int) (x i : Int) :
+    cppSeqAt (cppSeqPush s x) i =
+      if i = cppSeqLength s then x else cppSeqAt s i := by
+  unfold cppSeqAt cppSeqPush cppSeqLength
+  by_cases h0 : i < 0
+  · simp only [h0, ↓reduceIte, show ¬ i = (s.length : Int) by omega]
+  · by_cases he : i = s.length
+    · subst he; simp only [h0, ↓reduceIte]; simp
+    · simp only [h0, he, ↓reduceIte]
+      by_cases hl : i.toNat < s.length
+      · rw [List.getElem?_append_left hl]
+      · rw [List.getElem?_append_right (by omega),
+          List.getElem?_eq_none (show s.length ≤ i.toNat by omega),
+          List.getElem?_eq_none (by simp; omega)]
+@[simp, grind =] theorem cppSeqAt_concat (s t : List Int) (i : Int) :
+    cppSeqAt (cppSeqConcat s t) i =
+      if i < cppSeqLength s then cppSeqAt s i
+      else cppSeqAt t (i - cppSeqLength s) := by
+  unfold cppSeqAt cppSeqLength cppSeqConcat
+  by_cases h0 : i < 0
+  · simp only [h0, ↓reduceIte, show i < (s.length : Int) by omega]
+  · by_cases hl : i < s.length
+    · simp only [h0, hl, ↓reduceIte]
+      rw [List.getElem?_append_left (by omega)]
+    · simp only [h0, hl, ↓reduceIte, show ¬ (i - s.length < 0) by omega]
+      rw [List.getElem?_append_right (by omega)]
+      congr 3; omega
+@[simp, grind =] theorem cppSeqAt_unit (x i : Int) :
+    cppSeqAt (cppSeqUnit x) i = if i = 0 then x else 0 := by
+  unfold cppSeqAt cppSeqUnit
+  by_cases h0 : i < 0
+  · simp only [h0, ↓reduceIte, show ¬ i = 0 by omega]
+  · by_cases h : i = 0
+    · subst h; simp
+    · simp only [h0, h, ↓reduceIte]
+      rw [List.getElem?_eq_none (by simp; omega)]; rfl
+@[simp, grind =] theorem cppSeqAt_subrange (s : List Int) (lo hi i : Int) :
+    cppSeqAt (cppSeqSubrange s lo hi) i =
+      if 0 ≤ i ∧ i < cppSeqLength (cppSeqSubrange s lo hi)
+      then cppSeqAt s (max 0 (min lo (cppSeqLength s)) + i) else 0 := by
+  rw [cppSeqLength_subrange]
+  unfold cppSeqAt cppSeqSubrange cppSeqLength
+  by_cases h0 : i < 0
+  · simp only [h0, ↓reduceIte, show ¬ (0 ≤ i) by omega, false_and]
+  · simp only [h0, ↓reduceIte]
+    split
+    · rw [List.getElem?_take, cppverify_ite_pos (by omega), List.getElem?_drop,
+        cppverify_ite_neg (show ¬ (max 0 (min lo (s.length : Int)) + i < 0) by omega)]
+      congr 3; omega
+    · rw [List.getElem?_take, cppverify_ite_neg (by omega)]; rfl
+@[simp, grind =] theorem cppSeqContains_empty (x : Int) :
+    cppSeqContains cppSeqEmpty x ↔ False := by
+  simp [cppSeqContains, cppSeqEmpty]
+@[simp, grind =] theorem cppSeqContains_unit (y x : Int) :
+    cppSeqContains (cppSeqUnit y) x ↔ x = y := by
+  simp [cppSeqContains, cppSeqUnit]
+@[simp, grind =] theorem cppSeqContains_push (s : List Int) (y x : Int) :
+    cppSeqContains (cppSeqPush s y) x ↔ cppSeqContains s x ∨ x = y := by
+  simp [cppSeqContains, cppSeqPush]
+@[simp, grind =] theorem cppSeqContains_concat (s t : List Int) (x : Int) :
+    cppSeqContains (cppSeqConcat s t) x ↔
+      cppSeqContains s x ∨ cppSeqContains t x := by
+  simp [cppSeqContains, cppSeqConcat]
+@[simp, grind =] theorem cppSeqSubrange_all (s : List Int) :
+    cppSeqSubrange s 0 (cppSeqLength s) = s := by
+  unfold cppSeqSubrange cppSeqLength
+  rw [show (max 0 (min (0 : Int) (s.length : Int))).toNat = 0 by omega,
+    show (max (max 0 (min (0 : Int) (s.length : Int)))
+        (min (s.length : Int) (s.length : Int)) -
+        max 0 (min (0 : Int) (s.length : Int))).toNat = s.length by omega]
+  simp
+@[simp, grind =] theorem cppSeqSubrange_concat_left (s t : List Int) :
+    cppSeqSubrange (cppSeqConcat s t) 0 (cppSeqLength s) = s := by
+  unfold cppSeqSubrange cppSeqConcat cppSeqLength
+  have hl : (s ++ t).length = s.length + t.length := List.length_append
+  rw [show (max 0 (min (0 : Int) ((s ++ t).length : Int))).toNat = 0 by omega,
+    show (max (max 0 (min (0 : Int) ((s ++ t).length : Int)))
+        (min (s.length : Int) ((s ++ t).length : Int)) -
+        max 0 (min (0 : Int) ((s ++ t).length : Int))).toNat = s.length by
+      omega]
+  simp
+@[simp, grind =] theorem cppSeqSubrange_concat_right (s t : List Int) :
+    cppSeqSubrange (cppSeqConcat s t) (cppSeqLength s)
+      (cppSeqLength s + cppSeqLength t) = t := by
+  unfold cppSeqSubrange cppSeqConcat cppSeqLength
+  have hl : (s ++ t).length = s.length + t.length := List.length_append
+  rw [show (max 0 (min (s.length : Int) ((s ++ t).length : Int))).toNat =
+      s.length by omega,
+    show (max (max 0 (min (s.length : Int) ((s ++ t).length : Int)))
+        (min ((s.length : Int) + (t.length : Int)) ((s ++ t).length : Int)) -
+        max 0 (min (s.length : Int) ((s ++ t).length : Int))).toNat =
+      t.length by omega]
+  simp
+@[simp, grind =] theorem cppSeqSubrange_push (s : List Int) (x : Int) :
+    cppSeqSubrange (cppSeqPush s x) 0 (cppSeqLength s) = s :=
+  cppSeqSubrange_concat_left s [x]
+theorem cppSeqContains_iff (s : List Int) (x : Int) :
+    cppSeqContains s x ↔
+      ∃ i, 0 ≤ i ∧ i < cppSeqLength s ∧ cppSeqAt s i = x := by
+  unfold cppSeqContains cppSeqLength cppSeqAt
+  rw [List.mem_iff_getElem]
+  constructor
+  · rintro ⟨i, hi, he⟩
+    refine ⟨i, by omega, by omega, ?_⟩
+    rw [cppverify_ite_neg (by omega), Int.toNat_natCast, List.getElem?_eq_getElem hi]
+    simpa using he
+  · rintro ⟨i, h0, hl, he⟩
+    refine ⟨i.toNat, by omega, ?_⟩
+    rw [cppverify_ite_neg (by omega), List.getElem?_eq_getElem (by omega)] at he
+    simpa using he
+theorem cppSeq_ext (s t : List Int) (hl : cppSeqLength s = cppSeqLength t)
+    (h : ∀ i, 0 ≤ i → i < cppSeqLength s → cppSeqAt s i = cppSeqAt t i) :
+    s = t := by
+  unfold cppSeqLength at hl
+  apply List.ext_getElem (by omega)
+  intro i h1 h2
+  have := h i (by omega) (by unfold cppSeqLength; omega)
+  unfold cppSeqAt at this
+  simp only [show ¬ ((i : Int) < 0) by omega, ↓reduceIte, Int.toNat_natCast,
+    List.getElem?_eq_getElem h1, List.getElem?_eq_getElem h2,
+    Option.getD_some] at this
+  exact this
+
+@[simp, grind =] theorem cppSetContains_empty (x : Int) :
+    cppSetContains cppSetEmpty x ↔ False := by simp [cppSetContains, cppSetEmpty]
+@[simp, grind =] theorem cppSetContains_insert (s : Int → Bool) (x y : Int) :
+    cppSetContains (cppSetInsert s x) y ↔ y = x ∨ cppSetContains s y := by
+  simp [cppSetContains, cppSetInsert]
+@[simp, grind =] theorem cppSetContains_remove (s : Int → Bool) (x y : Int) :
+    cppSetContains (cppSetRemove s x) y ↔ y ≠ x ∧ cppSetContains s y := by
+  simp [cppSetContains, cppSetRemove]
+@[simp, grind =] theorem cppSetContains_union (s t : Int → Bool) (y : Int) :
+    cppSetContains (cppSetUnion s t) y ↔
+      cppSetContains s y ∨ cppSetContains t y := by
+  simp [cppSetContains, cppSetUnion]
+@[simp, grind =] theorem cppSetContains_intersect (s t : Int → Bool) (y : Int) :
+    cppSetContains (cppSetIntersect s t) y ↔
+      cppSetContains s y ∧ cppSetContains t y := by
+  simp [cppSetContains, cppSetIntersect]
+@[simp, grind =] theorem cppSetContains_difference (s t : Int → Bool) (y : Int) :
+    cppSetContains (cppSetDifference s t) y ↔
+      cppSetContains s y ∧ ¬ cppSetContains t y := by
+  simp [cppSetContains, cppSetDifference]
+@[simp, grind =] theorem cppSetSubset_iff (s t : Int → Bool) :
+    cppSetSubset s t ↔ ∀ y, cppSetContains s y → cppSetContains t y := Iff.rfl
+theorem cppSet_ext (s t : Int → Bool)
+    (h : ∀ y, cppSetContains s y ↔ cppSetContains t y) : s = t := by
+  funext y
+  have := h y
+  unfold cppSetContains at this
+  cases hs : s y <;> cases ht : t y <;> simp_all
+
+@[simp, grind =] theorem cppMultisetCount_empty (x : Int) :
+    cppMultisetCount cppMultisetEmpty x = 0 := rfl
+@[simp, grind =] theorem cppMultisetCount_insert (m : Int → Nat) (x y : Int) :
+    cppMultisetCount (cppMultisetInsert m x) y =
+      if y = x then cppMultisetCount m y + 1 else cppMultisetCount m y := by
+  unfold cppMultisetCount cppMultisetInsert; split <;> simp
+@[simp, grind =] theorem cppMultisetCount_remove (m : Int → Nat) (x y : Int) :
+    cppMultisetCount (cppMultisetRemove m x) y =
+      if y = x then max 0 (cppMultisetCount m y - 1)
+      else cppMultisetCount m y := by
+  unfold cppMultisetCount cppMultisetRemove; split <;> omega
+theorem cppMultisetCount_nonneg (m : Int → Nat) (x : Int) :
+    0 ≤ cppMultisetCount m x := by simp [cppMultisetCount]
+grind_pattern cppMultisetCount_nonneg => cppMultisetCount m x
+theorem cppMultiset_ext (m n : Int → Nat)
+    (h : ∀ y, cppMultisetCount m y = cppMultisetCount n y) : m = n := by
+  funext y; have := h y; unfold cppMultisetCount at this; omega
+
+@[simp, grind =] theorem cppMapContains_empty (k : Int) :
+    cppMapContains cppMapEmpty k ↔ False := by simp [cppMapContains, cppMapEmpty]
+@[simp, grind =] theorem cppMapContains_insert (m : Int → Option Int) (k v y : Int) :
+    cppMapContains (cppMapInsert m k v) y ↔ y = k ∨ cppMapContains m y := by
+  unfold cppMapContains cppMapInsert; by_cases h : y = k <;> simp [h]
+@[simp, grind =] theorem cppMapContains_remove (m : Int → Option Int) (k y : Int) :
+    cppMapContains (cppMapRemove m k) y ↔ y ≠ k ∧ cppMapContains m y := by
+  unfold cppMapContains cppMapRemove; by_cases h : y = k <;> simp [h]
+@[simp, grind =] theorem cppMapGet_empty (k : Int) : cppMapGet cppMapEmpty k = 0 := rfl
+@[simp, grind =] theorem cppMapGet_insert (m : Int → Option Int) (k v y : Int) :
+    cppMapGet (cppMapInsert m k v) y = if y = k then v else cppMapGet m y := by
+  unfold cppMapGet cppMapInsert; split <;> simp
+@[simp, grind =] theorem cppMapGet_remove (m : Int → Option Int) (k y : Int) :
+    cppMapGet (cppMapRemove m k) y = if y = k then 0 else cppMapGet m y := by
+  unfold cppMapGet cppMapRemove; split <;> simp
+theorem cppMapGet_out (m : Int → Option Int) (k : Int)
+    (h : ¬ cppMapContains m k) : cppMapGet m k = 0 := by
+  unfold cppMapGet; unfold cppMapContains at h; cases hm : m k <;> simp_all
+theorem cppMap_ext (m n : Int → Option Int)
+    (hc : ∀ y, cppMapContains m y ↔ cppMapContains n y)
+    (hg : ∀ y, cppMapGet m y = cppMapGet n y) : m = n := by
+  funext y
+  have c := hc y; have g := hg y
+  unfold cppMapGet at g
+  unfold cppMapContains at c
+  cases hm : m y <;> cases hn : n y <;> simp_all
+
+)lean";
+
 // The definitions every exported goal is stated with: the heap model, the
-// machine comparisons, and C++ division; a project's goals also have the
-// lemmas their readable forms' bridges use.
+// machine comparisons, C++ division, and the collections; a project's goals
+// also have the lemmas their readable forms' bridges use.
 void verify::emitLeanPrelude(llvm::raw_ostream &OS, bool Project) {
   OS << "noncomputable section\n\n";
   OS << "set_option maxRecDepth 100000\n";
@@ -1128,6 +1500,7 @@ void verify::emitLeanPrelude(llvm::raw_ostream &OS, bool Project) {
   OS << "    if (x < 0) ≠ (y < 0) then -q else q\n";
   OS << "def cppIntRem (x y : Int) : Int :=\n";
   OS << "  if y = 0 then x else x - cppIntDiv x y * y\n\n";
+  OS << LeanCollectionPrelude;
   if (Project) {
     // What the bridges from readable goals use.
     OS << "theorem cppverify_imp_or {a b : Prop} (h : a → b) : ¬a ∨ b :=\n";

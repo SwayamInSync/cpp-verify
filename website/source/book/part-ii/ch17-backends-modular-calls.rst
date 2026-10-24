@@ -261,11 +261,8 @@ prints:
    Certified: nonnegative [backend=Lean]
    Certified: small [backend=Lean]
 
-The Lean backend does not yet translate the spec collections of
-``<cppverify.h>`` (``seq``, ``set``, ``multiset``, ``map``): a function whose
-obligations use one is ``Unresolved`` with reason ``logic.unsupported`` on
-it. Lean support for them is planned for a future release; until then such
-functions are verified with Z3 (the default) or cvc5.
+The spec collections of ``<cppverify.h>`` reach Lean too (see
+`Collections in Lean`_ below).
 
 To keep Z3 as the fast path and export only unresolved functions:
 
@@ -436,6 +433,108 @@ prints:
 
 A proof of the goal itself, as the one for ``small`` above, checks as well.
 
+Collections in Lean
+~~~~~~~~~~~~~~~~~~~
+
+The spec collections of ``<cppverify.h>`` reach Lean as values of core Lean
+types, and each operation is a function of the generated prelude, total as
+``<cppverify.h>`` defines it:
+
+.. list-table::
+   :header-rows: 1
+
+   * - C++
+     - Lean
+     - Operations
+   * - ``seq``
+     - ``List Int``
+     - ``cppSeqEmpty``, ``cppSeqUnit``, ``cppSeqLength``, ``cppSeqAt`` (0
+       outside the sequence), ``cppSeqPush``, ``cppSeqConcat``,
+       ``cppSeqSubrange`` (bounds clamped), ``cppSeqContains``
+   * - ``set``
+     - ``Int → Bool``, its membership test
+     - ``cppSetEmpty``, ``cppSetInsert``, ``cppSetRemove``,
+       ``cppSetContains``, ``cppSetUnion``, ``cppSetIntersect``,
+       ``cppSetDifference``, ``cppSetSubset``
+   * - ``multiset``
+     - ``Int → Nat``, its counts
+     - ``cppMultisetEmpty``, ``cppMultisetInsert``, ``cppMultisetRemove``,
+       ``cppMultisetCount``
+   * - ``map``
+     - ``Int → Option Int``, the value at each key it holds
+     - ``cppMapEmpty``, ``cppMapInsert``, ``cppMapRemove``,
+       ``cppMapContains``, ``cppMapGet`` (0 outside the domain)
+
+A set is its membership test, not a finite set, since a set of
+``<cppverify.h>`` may hold infinitely many integers; ``decide`` still
+evaluates a membership of a set built from constants, as it evaluates a read
+of a list. ``update`` and ``reverse`` are specs over these operations, as for
+the solvers.
+
+The prelude also states what each operation means, in lemmas that ``simp``
+and ``grind`` use: ``cppSeqAt_push`` (``s.push(x)[i]`` is ``x`` at
+``s.len()`` and ``s[i]`` elsewhere), ``cppSeqAt_concat``,
+``cppSeqAt_subrange``, ``cppSeqLength_push``, ``cppSeqContains_push``,
+``cppSeqSubrange_push`` (the subrange that drops a pushed element is the
+sequence), ``cppSetContains_insert``, ``cppMultisetCount_remove``,
+``cppMapGet_insert``, and the others for each operation. Two collections are
+equal when they agree everywhere: ``cppSeq_ext`` (equal lengths and reads),
+``cppSet_ext``, ``cppMultiset_ext``, and ``cppMap_ext``. For this file:
+
+.. cppverify-example: flags --backend=lean --lean-project={dir}/proof
+
+.. code-block:: cpp
+
+   using cppverify::seq;
+
+   cppverify::spec int total(seq s)
+     cppverify::decreases(s.len())
+   {
+     return s.len() <= 0 ? 0 : total(s.subrange(0, s.len() - 1)) + s[s.len() - 1];
+   }
+
+   cppverify::proof void last(seq s, int x)
+   {
+     cppverify::check(s.push(x)[s.len()] == x);
+     cppverify::check(s.push(x).subrange(0, s.len()) == s);
+   }
+
+   cppverify::proof void total_push(seq s, int x)
+     cppverify::post(total(s.push(x)) == total(s) + x)
+   {
+   }
+
+``cpp-verify --backend=lean --lean-project=proof file.cpp`` prints:
+
+.. code-block:: text
+
+   Exported: decreases: total (cppverify_auto proved 1 of 1 goals)
+   Exported: lean obligation: last (cppverify_auto proved 3 of 3 goals)
+   Exported: lean obligation: total_push (cppverify_auto proved 2 of 2 goals)
+
+The postcondition of ``total_push`` needs the definition of ``total`` at
+``s.push(x)``, which its goal states as the hypothesis
+``cppverify_spec_axiom_1_1``; ``cppverify_auto`` unfolds it
+(``cppverify_auto_unfold``, below), and the lemmas about ``push`` and
+``subrange`` finish it. A proof by hand uses the same lemmas:
+
+.. code-block:: lean4
+
+   theorem cppverify_total_push_cdfd2d_postcondition_3a9fac6f_proof :
+       cppverify_total_push_cdfd2d_postcondition_3a9fac6f := by
+     apply cppverify_total_push_cdfd2d_postcondition_3a9fac6f.of_readable
+     intro _ _ s x pushed _ _ _
+     rw [pushed]
+     unfold cppSpecBody_cdfd2da1_fn_5f5a35746f74616c4e396370707665726966793373657145_1
+     have := cppSeqLength_nonneg s
+     simp [BitVec.toInt_signExtend_of_le]
+     omega
+
+Either way, ``--lean-certify`` prints ``Certified`` for ``total``, ``last``,
+and ``total_push``. A goal that needs induction over a recursive spec, as
+``total(s + t) == total(s) + total(t)`` does, cannot be proved in Lean yet:
+Lean knows ``total`` only through the definition instances its goals state.
+
 Proofs cppverify_auto finds
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -472,7 +571,7 @@ A goal it proves gets that proof, with a header that says so:
 
 .. code-block:: lean4
 
-      automation: cppverify_auto 1 proves it with cppverify_auto_grind
+      automation: cppverify_auto 2 proves it with cppverify_auto_grind
       cppverify_auto proves this goal. cpp-verify rewrites this file only while it
       is unedited; a proof you write here is yours, kept as any other. -/
    import CppVerify.Goals.cppverify_next_e1e917
@@ -485,7 +584,7 @@ A goal it proves gets that proof, with a header that says so:
      cppverify_auto_grind
 
 Any other goal gets a stub, whose header says it was tried
-(``automation: cppverify_auto 1 did not prove it``). Here those are the two
+(``automation: cppverify_auto 2 did not prove it``). Here those are the two
 goals of ``square`` that need ``x * x`` bounded: nonlinear arithmetic, which
 core Lean does not decide. Certification checks the automatic proofs like any
 other, so ``--lean-certify`` prints ``Certified: next [backend=Lean]``, and
@@ -501,7 +600,14 @@ first that proves the goal:
 - ``cppverify_auto_bv``: machine comparisons, constants, and overflow
   conditions are stated as facts about integers, then ``grind``;
 - ``cppverify_auto_decide``: ``decide``;
-- ``cppverify_auto_simp``: ``simp_all``.
+- ``cppverify_auto_simp``: ``simp_all``;
+- ``cppverify_auto_bveq``: equalities of machine values, such as the
+  precondition ``x != y`` of two keys, and sign extensions are stated as
+  facts about integers too, then as ``cppverify_auto_bv``;
+- ``cppverify_auto_ext``: an equality of two collections, element by
+  element (`Collections in Lean`_), then as ``cppverify_auto_bv``;
+- ``cppverify_auto_unfold``: each definition instance the goal states, by
+  the body it names, then as ``cppverify_auto_bveq``.
 
 A step counts only when it proves the goal with Lean's foundations alone, so
 an unfinished lemma of yours (proved by ``sorry``) never proves a goal, and a
@@ -509,13 +615,15 @@ goal counts as proved only when the kernel accepted its proof. A goal it
 spends more than 20 seconds on, its kernel check included, gets a stub
 (``did not prove it within 20 s``; ``--lean-auto-timeout`` sets the limit).
 The steps and their order were chosen by trying candidates on every goal the
-test suite exports: of the goals Z3 proves, ``cppverify_auto`` proves 90%;
+test suite exports: of the goals Z3 proves, ``cppverify_auto`` proves 93%;
 most of the rest need nonlinear arithmetic, induction over a spec, or a
 quantified frame.
 
 A goal is tried once: a later export tries a stub again only if a later
-release of cpp-verify brings a new revision of ``cppverify_auto`` (the ``1``
-in the header), and never once you edit it. You can help it: a lemma in
+release of cpp-verify brings a new revision of ``cppverify_auto`` (the ``2``
+in the header), and never once you edit it. Revision 2 added the last three
+steps, after the others, so that a goal an earlier step proves keeps its
+proof; a stub that revision 1 wrote is tried again. You can help it: a lemma in
 ``User.lean`` tagged ``@[grind]`` or ``@[simp]`` is used by its steps, since
 the proof files import ``User.lean``; delete a stub to have it tried again.
 Your own proofs may use ``cppverify_auto``, any of its steps, and the parts
@@ -609,7 +717,7 @@ one function builds again only what depends on it. For this file:
 
    Exported: decreases: tri (cppverify_auto proved 1 of 1 goals)
    Exported: lean obligation: inc (cppverify_auto proved 3 of 3 goals)
-   Exported: lean obligation: tri_zero (cppverify_auto proved 1 of 2 goals)
+   Exported: lean obligation: tri_zero (cppverify_auto proved 2 of 2 goals)
 
 and writes:
 
