@@ -609,6 +609,16 @@ static bool isSupportedScalarLValueReference(QualType Ty) {
          Referent->isEnumeralType();
 }
 
+/// A reference to a record is a pointer that is never null and never
+/// reseated, so it is supported where a pointer to the record is (not to a
+/// volatile one): its fields and elements are places in the object it names.
+static bool isSupportedRecordLValueReference(QualType Ty, ASTContext &Ctx) {
+  return !Ty.isNull() && Ty->isLValueReferenceType() &&
+         Ty.getNonReferenceType()->isRecordType() &&
+         isSupportedVerificationType(
+             Ctx.getPointerType(Ty.getNonReferenceType()));
+}
+
 static std::optional<std::string>
 findUnsupportedType(const FunctionDecl *FD, bool AllowScalarReferences) {
   // By-value records keep their flattened SSA representation, so only records
@@ -624,7 +634,9 @@ findUnsupportedType(const FunctionDecl *FD, bool AllowScalarReferences) {
   for (const ParmVarDecl *Param : FD->parameters()) {
     QualType Ty = Param->getType();
     if (Ty->isReferenceType()) {
-      if (!AllowScalarReferences || !isSupportedScalarLValueReference(Ty))
+      if (!AllowScalarReferences ||
+          !(isSupportedScalarLValueReference(Ty) ||
+            isSupportedRecordLValueReference(Ty, FD->getASTContext())))
         return Ty.getAsString();
     } else if (UnsupportedValueType(Ty)) {
       return Param->getType().getAsString();
@@ -653,7 +665,8 @@ findUnsupportedType(const FunctionDecl *FD, bool AllowScalarReferences) {
         return false;
       QualType Ty = D->getType();
       if (Ty->isReferenceType() && AllowScalarReferences &&
-          isSupportedScalarLValueReference(Ty) &&
+          (isSupportedScalarLValueReference(Ty) ||
+           isSupportedRecordLValueReference(Ty, D->getASTContext())) &&
           (isa<ParmVarDecl>(D) || D->hasLocalStorage()))
         return true;
       if (!isSupportedVerificationType(Ty))
@@ -1003,11 +1016,12 @@ static bool exprReferencesSpecCall(const VExpr *E, const std::string &Name) {
 }
 
 static const RecordDecl *getRecordFromType(QualType T) {
-  // See through references: a `C&`/`const C&` parameter's field access lowers
-  // to the same "param.field" variable as a by-value `C`, so type_invariant
-  // injection applies. Pointers are intentionally excluded: `p->field` lowers
-  // to a heap Load, which the "param.field" substitution does not model.
-  T = T.getNonReferenceType().getUnqualifiedType();
+  // A record by value, whose fields are values of its own ("param.field").
+  // A reference to a record is an address, as a pointer is: its fields are
+  // places in the object it names.
+  if (T->isReferenceType())
+    return nullptr;
+  T = T.getUnqualifiedType();
   // A cppverify collection is one mathematical value, not a record of fields.
   if (VType::collectionKind(T))
     return nullptr;
@@ -1170,10 +1184,10 @@ ASTConverter::convertPointerDifferenceOperand(const Expr *E,
   const Expr *Peeled = E->IgnoreParens();
   if (const auto *Decay = dyn_cast<ImplicitCastExpr>(Peeled);
       Decay && Decay->getCastKind() == CK_ArrayToPointerDecay &&
-      pointeeRootPointer(Decay->getSubExpr()))
+      subobjectPointerRoot(Decay->getSubExpr()))
     return convertExpr(Peeled);
   if (const auto *U = dyn_cast<UnaryOperator>(Peeled);
-      U && U->getOpcode() == UO_AddrOf && pointeeRootPointer(U->getSubExpr()))
+      U && U->getOpcode() == UO_AddrOf && subobjectPointerRoot(U->getSubExpr()))
     return convertExpr(Peeled);
   E = E->IgnoreParenImpCasts();
   if (const auto *DRE = dyn_cast<DeclRefExpr>(E))
@@ -2716,8 +2730,8 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
 
   SmallVector<const ParmVarDecl *, 8> AddressParams;
   for (const ParmVarDecl *P : FD->parameters()) {
-    if (P->getType()->isReferenceType())
-      Fn->ReferenceParams.insert(valueName(P));
+    if (isSupportedScalarLValueReference(P->getType()))
+      Fn->ScalarReferenceParams.insert(valueName(P));
     if ((P->getType()->isPointerType() || P->getType()->isReferenceType()) &&
         !isMutableAddressParam(P))
       Fn->ConstAddressParams.insert(valueName(P));
@@ -3141,6 +3155,24 @@ std::optional<VFootprint> ASTConverter::convertFootprint(const Expr *E) {
       if (!Out.Count)
         Out.Target.reset();
     }
+  } else if (const Expr *Inner = E->IgnoreParens();
+             (isa<MemberExpr>(Inner) || isa<ArraySubscriptExpr>(Inner)) &&
+             (Inner->getType()->isRecordType() ||
+              Inner->getType()->isConstantArrayType()) &&
+             inPointeeObject(Inner)) {
+    // A record or array inside an object (p->inner, r.buf, p[k]) is its
+    // bytes, a range of one element of its size; *p and a reference to a
+    // record name their whole object.
+    if (auto Place = objectPlace(Inner)) {
+      Out.Target = std::make_unique<VLoadExpr>(
+          Place->takeAddress(),
+          VType::fromQualType(Inner->getType(), IntMode, Ctx),
+          Inner->getExprLoc(), "", Place->takeAccessCondition());
+      Out.Count = std::make_unique<VLiteralExpr>(
+          1, VType::fromQualType(Ctx.IntTy, IntMode, Ctx), Inner->getExprLoc());
+      Out.ElementSize = static_cast<uint64_t>(
+          Ctx.getTypeSizeInChars(Inner->getType()).getQuantity());
+    }
   } else {
     Out.Target = convertExpr(E);
   }
@@ -3382,7 +3414,7 @@ ASTConverter::subscriptPlace(const ArraySubscriptExpr *AS) {
     return std::nullopt;
   // An element of a fixed array inside a represented object: a promoted
   // local, or the object a pointer addresses (r->buf[i], p[k].grid[i][j]).
-  if (promotedRootLocal(AS) || pointeeRootPointer(AS->getBase()))
+  if (promotedRootLocal(AS) || inPointeeObject(AS->getBase()))
     return objectPlace(AS);
   return pointerElementPlace(AS);
 }
@@ -3496,6 +3528,28 @@ static const VarDecl *selectionRootVar(const Expr *E) {
 const VarDecl *ASTConverter::promotedRootLocal(const Expr *E) const {
   const VarDecl *VD = selectionRootVar(E);
   return VD && AddressableLocals.count(VD) ? VD : nullptr;
+}
+
+const VarDecl *ASTConverter::recordReferenceRoot(const Expr *E) const {
+  const VarDecl *VD = selectionRootVar(E);
+  return VD && (isa<ParmVarDecl>(VD) || VD->hasLocalStorage()) &&
+                 VD->getType()->isLValueReferenceType() &&
+                 VD->getType().getNonReferenceType()->isRecordType()
+             ? VD
+             : nullptr;
+}
+
+bool ASTConverter::inPointeeObject(const Expr *E) const {
+  return pointeeRootPointer(E) || recordReferenceRoot(E);
+}
+
+bool ASTConverter::subobjectPointerRoot(const Expr *E) const {
+  if (pointeeRootPointer(E))
+    return true;
+  // A local reference bound to local or dynamic storage names an object
+  // whose lifetime a pointer formed from it would not carry.
+  const VarDecl *VD = recordReferenceRoot(E);
+  return VD && !LocalReferenceProvenanceVariables.count(VD);
 }
 
 std::string ASTConverter::arrayDecayError(const Expr *Array) const {
@@ -3662,6 +3716,9 @@ std::optional<VPlace> ASTConverter::objectPlace(const Expr *E) {
 
   if (const auto *DRE = dyn_cast<DeclRefExpr>(E)) {
     const auto *VD = dyn_cast<VarDecl>(DRE->getDecl());
+    // The object a reference to a record names, as *p for a pointer.
+    if (VD && recordReferenceRoot(E))
+      return lvaluePlace(E);
     if (!VD || !AddressableLocals.count(VD))
       return std::nullopt;
     return automaticLocalPlace(VD, E->getExprLoc());
@@ -3946,6 +4003,9 @@ std::optional<VPlace> ASTConverter::lvaluePlace(const Expr *E) {
   // A promoted local has exactly one representation: every subobject lvalue
   // rooted in it is an exact byte offset from its single automatic object.
   if (promotedRootLocal(E))
+    return objectPlace(E);
+  // A subobject of the record a reference names: c.f, c.buf[i].
+  if (recordReferenceRoot(E) && !isa<DeclRefExpr>(E))
     return objectPlace(E);
 
   if (const auto *DRE = dyn_cast<DeclRefExpr>(E)) {
@@ -4713,7 +4773,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     return convertExpr(MTE->getSubExpr());
   if (const auto *Decay = dyn_cast<CastExpr>(E);
       Decay && Decay->getCastKind() == CK_ArrayToPointerDecay) {
-    if (pointeeRootPointer(Decay->getSubExpr()))
+    if (subobjectPointerRoot(Decay->getSubExpr()))
       return subobjectPointer(E, Decay->getSubExpr(), /*AddressOf=*/false);
     error(CurrentFn->Name + ": " + arrayDecayError(Decay->getSubExpr()));
     return nullptr;
@@ -4893,7 +4953,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
   }
   if (const auto *U = dyn_cast<UnaryOperator>(E)) {
     if (U->getOpcode() == UO_AddrOf) {
-      if (pointeeRootPointer(U->getSubExpr()))
+      if (subobjectPointerRoot(U->getSubExpr()))
         return subobjectPointer(E, U->getSubExpr(), /*AddressOf=*/true);
       error(CurrentFn->Name +
             ": raw address-of is unsupported until lexical lifetime and escape "
@@ -5192,7 +5252,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
       return std::make_unique<VLoadExpr>(std::move(Address), Ty,
                                          E->getExprLoc());
     }
-    if (!M->isArrow() && (promotedRootLocal(M) || pointeeRootPointer(M))) {
+    if (!M->isArrow() && (promotedRootLocal(M) || inPointeeObject(M))) {
       VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
       if (Ty.isAggregate() || Ty.Kind == VTypeKind::Unsupported) {
         error(CurrentFn->Name +
@@ -5200,7 +5260,8 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
                    ? ": aggregate value use of an automatic object "
                      "subobject is unsupported"
                    : ": a record or array read as a whole through a "
-                     "pointer is unsupported; read its fields"));
+                     "pointer or reference is unsupported; read its "
+                     "fields"));
         return nullptr;
       }
       auto Place = objectPlace(M);
@@ -5815,7 +5876,7 @@ void ASTConverter::appendAssignment(const Expr *LHS,
       return;
     }
     // A field inside the object a pointer addresses: p->inner.x, p[k].f.
-    if (!ME->isArrow() && pointeeRootPointer(ME)) {
+    if (!ME->isArrow() && inPointeeObject(ME)) {
       appendPointeeStore(LHS, std::move(Value), Loc, Out);
       return;
     }
@@ -5869,7 +5930,7 @@ void ASTConverter::appendAssignment(const Expr *LHS,
             ": proof functions cannot modify executable memory");
       return;
     }
-    if (pointeeRootPointer(AS->getBase())) {
+    if (inPointeeObject(AS->getBase())) {
       appendPointeeStore(LHS, std::move(Value), Loc, Out);
       return;
     }
