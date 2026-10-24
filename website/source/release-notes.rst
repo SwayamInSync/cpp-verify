@@ -452,8 +452,8 @@ with the kernel, and a failure it shows reads ``(confirmed in Lean)``. A
 counterexample Lean cannot decide, as one that applies a ``cppverify::choose``,
 stays a failure with a warning, and one Lean decides the other way would be
 ``Unresolved``, a disagreement, never a failure. Lean decides a quantifier
-over a range of integers by trying each one, within the heartbeats of a step
-of ``cppverify_auto``. The release gate's Lean row now
+over a range of at most 4096 integers by trying each one, within the
+heartbeats of a step of ``cppverify_auto``. The release gate's Lean row now
 decides every case of its matrix: each valid one certified, each invalid one
 refuted (:doc:`book/part-ii/ch17-backends-modular-calls`).
 
