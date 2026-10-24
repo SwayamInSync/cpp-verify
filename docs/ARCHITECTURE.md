@@ -308,6 +308,31 @@ const, postconditions. The record escape scan accepts a callee's own
 automatic allocation unless it is initialized with an address it must not
 keep.
 
+**Function templates:** Sema keeps a function template's contract on its
+pattern and instantiates it lazily, as an exception specification:
+`Sema::InstantiateFunctionContract` runs where a specialization is odr-used
+(`MarkFunctionReferenced`) and where its definition is instantiated, once
+per specialization (its `FunctionContractInfo` is recorded first, so a use
+in its own contract stops there), in a `LocalInstantiationScope` that maps
+the parameters of the declaration the clauses are written on
+(`ContractDecl`), with `this` for a member, in an evaluation context of its
+own. `SubstFunctionContract` runs `TreeTransform::TransformFunctionContract`,
+which rebuilds each clause with the checks the parser applies
+(`TransformContractCondition`, `TransformContractMeasure`,
+`TransformContractFootprint`; quantifiers and choices through
+`Sema::BuildContractBinderExpr`). `TreeTransform` gives `cppverify::result` the
+instantiated return type, transforms a loop's contract with the loop and
+rebuilds a loop whose clauses changed even when its condition and body did
+not, and keeps trigger marks; `BuildVariableInstantiation` keeps ghost
+variables. `ResultExpr`, `OldExpr`, and the quantifiers take the dependence
+of their type or operands. `collectFunctionCandidates` adds, after each
+function template, the specializations the translation unit instantiates
+(from its canonical declaration, whose redeclarations share them), with
+their definition or, without one, their contract. The converter names them
+with their arguments (`functionName`) and records where each is
+instantiated (`getInstantiationPoints`), which the driver prints as a note
+after each error or warning of the specialization (JSON `instantiated_at`).
+
 **Records in memory by value:** `recordFieldsInMemory` reads a record value
 kept in memory, a promoted local or one in a pointee or record reference
 (`promotedRootLocal`, `inPointeeObject`), through implicit copies and
