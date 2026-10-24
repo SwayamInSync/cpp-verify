@@ -427,6 +427,11 @@ struct VFunction {
   /// record's entry in Layouts: an object whose leaves lie at offsets inside
   /// it.
   std::map<std::string, std::string> RecordParams;
+  /// Parameters for the entry values of pointer fields whose extents the
+  /// preconditions state (valid(s->data, s->len)), each with its field as an
+  /// expression over the function's parameters, which a call evaluates at
+  /// its arguments. They follow the declared parameters in Params.
+  std::vector<std::pair<std::string, std::unique_ptr<VExpr>>> FieldParams;
   /// Pointer and reference parameters to const objects: the function
   /// writes nothing through them.
   std::set<std::string> ConstAddressParams;
