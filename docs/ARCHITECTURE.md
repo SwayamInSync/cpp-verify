@@ -2375,6 +2375,32 @@ rejects offset/subscript access, pointer copies/rebinding, recursive scan
 cycles, borrowed pointer-result intermediates without an owned summary, ghost
 access, proof/external contracts, and deallocation.
 
+A record in local or dynamic storage takes a second scan, for a parameter in
+`VFunction::RecordParams` (a pointer or reference to a record, with its
+layout's identity) of a callee in the object model, whose own checks prove
+that every access through the parameter lies in its object.
+`keepsNoAddress` (`Transform/Passivize.cpp`) closes the parameter's aliases
+over the pointer variables assigned an address derived from one, to a
+fixpoint, and rejects a store of such an address, a return of one, a free, a
+call that passes one to a callee that keeps one (scanned the same way, its
+extent allowed, since the function passing it proved the extent inside its
+own object) or that returns a pointer, and any callee without a verified
+body; re-entering a scan through recursion assumes it holds. Offsets, steps,
+comparisons, conversions to integers, spec arguments, and ghost reads are
+admitted. At the call `emitRecordActualChecks` asserts the validity of the
+record's last byte (with the generated clause's first, the record lies in
+one live allocation) and the initialization of every leaf of the callee's
+layout, enumerated (an automatic object has at most 256 bytes), as an
+`unsupported` obligation with the out-parameter note. `havocFootprints`
+frames a footprint rooted at such a parameter by its bytes through
+`footprintBytes`, never as the exact first cell the scalar rule uses. The
+frame check of the caller accepts the callee's footprints in its own
+allocations; its empty-range alternative was joined to them (it replaced
+them before, so a range in the caller's own object failed `frame`).
+`ASTConverter::convertExecCallArg` lowers `&place` rooted at a promoted local
+(not an array) passed to a pointer parameter as a reference binding: the
+address with its provenance, the access condition, and the binding check.
+
 A pointer-returning callee may return a direct dynamic formal, null, or a
 conditional selection of direct dynamic formals. `VCallStmt` carries a
 `ResultProvenanceTarget` alongside `ResultTarget`; passivization freshens both
@@ -2419,8 +2445,9 @@ order, after materializing any heap-reading return value. Scalar references may
 bind fields and fixed-array elements with access-local nested bounds, and a
 local reference to a record may bind a promoted record, its provenance
 companion carried like a scalar reference's. General escape, raw array
-decay/address-taking (through such a reference too), passing a promoted record
-to a callee, and addressable declarations inside loops remain fail-closed; so does the decay of an array
+decay/address-taking (through such a reference too, and `&x` other than as a
+call argument, above), and addressable declarations inside loops remain
+fail-closed; so does the decay of an array
 member through a pointer (`ASTConverter::arrayDecayError` names which). Automatic metadata transitions
 are private and a modular caller may frame them away.
 

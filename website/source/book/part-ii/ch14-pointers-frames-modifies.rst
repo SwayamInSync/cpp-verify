@@ -54,7 +54,9 @@ is present.
 Reference formals can be forwarded from another reference, bound to a direct
 dereference such as ``set_value(*p, value)``, bound to a field or element of a
 local object or of a parameter's buffer (``set_value(pt.x, 7)``,
-``set_value(a[1], 9)``), or passed an initialized ordinary scalar local. Local
+``set_value(a[1], 9)``), or passed an initialized local, scalar or record,
+as can the address of one to a pointer parameter (``inc(&x)``), when the
+callee keeps no address of it (see :doc:`../../language/structs`). Local
 references may bind those same forms and chain:
 
 .. cppverify-example: with swap

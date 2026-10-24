@@ -120,7 +120,9 @@ C++ feature boundaries
        reinterpretation.
    * - References
      - Scalar ``T&``/``const T&`` parameters on contracted executable free
-       functions, initialized ordinary scalar local actuals, local aliases for
+       functions, initialized local actuals (scalars and records, and
+       ``&x`` of one passed to a pointer parameter, when the callee keeps no
+       address of it), local aliases for
        boolean, integral, and enum referents, and bindings to a field or fixed
        array element of a promoted local object, or to a field or element of
        a parameter's buffer or of a record a pointer addresses
@@ -130,8 +132,10 @@ C++ feature boundaries
        of the object it names (:doc:`structs`).
      - Conditional bindings, reference returns, rvalue references,
        temporaries/lifetime extension, reference members, and forwarding; a
-       local record passed to a reference parameter (``construct.unsupported``)
-       and a pointer formed through a local reference to a local record.
+       local not fully initialized passed to a callee
+       (``construct.unsupported``), the address of a local stored in a
+       variable, and a pointer formed through a local reference to a local
+       record.
    * - Arrays
      - Pointer-parameter indexing, quantified abstract buffers, fixed
        local arrays (including arrays of records and multidimensional arrays)
@@ -293,8 +297,10 @@ order; heap-reading return values are materialized before teardown.
 Scalar references may bind supported fields and fixed-array elements of these
 promoted objects, and a local reference to a record may bind a promoted
 record. Conditional bindings, temporaries, reference returns, general raw
-address-taking/array decay (through such a reference too), rvalue references,
-and passing a promoted record to a callee by reference remain fail-closed. Addressable declarations inside loops and ``cppverify::old`` of local
+address-taking/array decay (through such a reference too, and ``&x`` but as
+a call argument), and rvalue references remain fail-closed. A promoted object
+passed to a callee, by reference or ``&x``, keeps its lifetime: the callee
+must keep no address of it, and every field must be initialized. Addressable declarations inside loops and ``cppverify::old`` of local
 objects/bindings are also rejected; outer automatic locals and loop-local aliases
 are supported. Pointer leaves may retain abstract pointer values, but storing a
 provenance-bearing local dynamic pointer fails closed until pointer provenance is

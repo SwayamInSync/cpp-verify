@@ -259,15 +259,106 @@ may write, so ``p.right`` keeps its value. ``reset_count`` may write only
 footprint is every byte of the record, which only a footprint naming the
 record, or an object around it, contains.
 
+Local records passed to callees
+-------------------------------
+
+A local record may be passed to a reference parameter (``bump(c)``), and
+the address of a local, of one of its fields, or of an element of a local
+array (``&c``, ``&c.n``, ``&a[1]``) to a pointer parameter. The callee is
+verified for an object it does not own, so every access it makes through
+the parameter, at whatever field or element, is proved to lie in that
+object. The call checks the rest:
+
+- the callee keeps no address of the local: it stores none in memory,
+  returns none, frees none, and passes one only to callees that keep none
+  themselves (recursion included). A callee without a verified body, or one
+  that may keep the address, makes the call ``Unresolved`` with reason
+  ``construct.unsupported`` (``the address of local or dynamic storage is
+  passed to f, which may keep or free it, or has no verified body``);
+- the whole record lies in the live local;
+- every field is initialized, since the callee reads its parameter's object
+  as initialized storage. C++ allows an out-parameter that is only written,
+  but the verifier does not model one yet: the call is ``Unresolved`` with
+  reason ``construct.unsupported``.
+
+The callee then writes only its footprints inside the local, by their bytes,
+and every other local keeps its value. The caller's own
+``cppverify::modifies`` need not name its locals.
+
+.. cppverify-example: unresolved half_initialized
+
+.. code-block:: cpp
+
+   struct Counter {
+     int n;
+     int limit;
+   };
+
+   void bump(Counter &c)
+     cv::pre(c.n < c.limit)
+     cv::modifies(c.n)
+     cv::post(c.n == cv::old(c.n) + 1)
+     cv::post(c.limit == cv::old(c.limit))
+   {
+     c.n = c.n + 1;
+   }
+
+   void reset(Counter *c)
+     cv::pre(c != nullptr)
+     cv::modifies(*c)
+     cv::post(c->n == 0 && c->limit == 10)
+   {
+     c->n = 0;
+     c->limit = 10;
+   }
+
+   void set_n(Counter &c)
+     cv::modifies(c.n)
+     cv::post(c.n == 1)
+   {
+     c.n = 1;
+   }
+
+   int counted()
+     cv::post(cv::result == 11)
+   {
+     Counter c;
+     c.n = 0;
+     c.limit = 5;
+     bump(c);
+     int k = c.n;
+     reset(&c);
+     return k + c.limit;
+   }
+
+   int half_initialized()
+     cv::post(cv::result == 1)
+   {
+     Counter c;
+     c.n = 0;
+     set_n(c);
+     return c.n;
+   }
+
+.. code-block:: text
+
+   Verified: bump [backend=z3]
+   Verified: reset [backend=z3]
+   Verified: set_n [backend=z3]
+   Verified: counted [backend=z3]
+   counter.cpp:48:3: Unresolved: half_initialized [backend=z3] [reason=construct.unsupported] (the verifier cannot model a construct here: binding a reference or pointer parameter to storage that is not initialized, since the callee is verified as reading initialized storage)
+
+``half_initialized`` leaves ``c.limit`` uninitialized, and ``set_n`` would
+read it as initialized.
+
+The address of a local is supported as a call argument only. Stored in a
+pointer variable (``Counter *q = &c;``), or formed through a local reference
+to a local (``&r.n``, ``r.buf``), it is still an error. Under
+``--no-check-ub`` the callee's accesses are not proved to lie in its object,
+so a call that passes a local record is ``construct.unsupported``.
+
 Not yet supported:
 
-- a local record passed to a reference or pointer parameter (``bump(c)`` with
-  ``Counter c;``): the verifier does not yet show that the callee keeps no
-  pointer to it, and the call is ``Unresolved`` with reason
-  ``construct.unsupported``. A local reference may bind a local record, and
-  reads and writes through it are checked against that object's lifetime and
-  initialization, but forming a pointer through such a reference (``&r.n``,
-  ``r.buf``) is an error;
 - reading a whole record through a reference, as through a pointer;
 - reference returns, rvalue and ``volatile`` references, and references in
   spec and proof functions.

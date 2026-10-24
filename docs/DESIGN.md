@@ -1204,11 +1204,43 @@ void reset_left(Pair &p)
   and writes through it carry that object's lifetime and initialization
   checks, but a pointer formed through it would not, and is rejected (as
   `&local` is).
-- Not yet: a local record passed to a reference or pointer parameter. The
-  non-escape scan that admits a local scalar actual does not cover records,
-  so the call is `Unresolved` (`construct.unsupported`). Also rejected: a
-  whole record read through a reference, reference returns, rvalue and
-  `volatile` references, and references in spec and proof functions.
+- A local record may be passed to a reference parameter, and the address
+  of a local, a field, or an element (`&c`, `&c.n`, `&a[1]`) to a pointer
+  parameter: see 3d. Rejected: a whole record read through a reference,
+  reference returns, rvalue and `volatile` references, and references in
+  spec and proof functions.
+
+### 3d. Local objects passed to callees
+
+- A callee verified in the object model proves that every access through
+  its parameter, at any field or element, lies in the parameter's object (its
+  one object; its `valid` extent is not offered to a local). So a local can
+  be lent to it as long as no address of the local outlives the call, which
+  is a property of the callee's body: the call checks (`keepsNoAddress`) that
+  it stores no address derived from the parameter in memory, returns none,
+  frees none, and passes one only to callees that keep none, with a verified
+  body (not an external contract, a proof, or a function that allocates).
+  The addresses derived from the parameter are the variables assigned one,
+  closed to a fixpoint (copies, steps, subobject pointers, local references).
+  A scan that reaches itself again through recursion assumes the callee keeps
+  none, since an escape is a finite path to a statement that keeps one. An
+  address converted to an integer is no escape: no integer becomes a pointer
+  again.
+- The generated validity clause of a reference or pointer parameter names
+  its first byte; for a record the call also checks that its last byte lies
+  in the same live allocation (an allocation's bytes are contiguous) and that
+  every leaf is initialized, since the callee reads it as initialized storage.
+  An out-parameter, which C++ allows uninitialized, is
+  `construct.unsupported`, as for a scalar.
+- The callee's footprints inside the record are framed by their bytes
+  (`HeapFrame`), a region as the whole record and never only its first cell;
+  its writes need no footprint of the caller's, since the local is the
+  caller's own. A scalar local keeps the exact one-cell rule and its
+  stricter scan (direct accesses only), since its region is one cell.
+- `&x` is admitted only as a call argument; stored in a variable it is still
+  rejected, as is a pointer formed through a local reference to a local. In
+  `--no-check-ub` nothing proves the callee's accesses inside its object, so
+  a record local passed to a callee is `construct.unsupported`.
 
 ### 4. `cppverify::modifies(...)` frame condition
 
@@ -1296,9 +1328,10 @@ int compute() {
 ```
 
 `swap(x, x)` from a verified function fails the call's `aliasing` check.
-Binding a reference to a local is supported; taking a local's raw address
-(`&x`) is not yet: lexical lifetimes are modeled, but where a pointer to a
-local goes is not.
+Binding a reference to a local is supported, and so is passing a local's
+address to a callee that keeps none (3d); storing a local's raw address
+(`int *q = &x;`) is not yet: lexical lifetimes are modeled, but where a
+pointer variable holding it goes is not.
 
 ## Type Invariants
 

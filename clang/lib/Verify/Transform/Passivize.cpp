@@ -1487,6 +1487,159 @@ static bool scalarDynamicCalleeSafe(
   return Safe;
 }
 
+/// Whether a pointer-typed expression may hold an address derived from one
+/// of the aliases.
+static bool pointerFromAliases(const VExpr *E,
+                               const std::set<std::string> &Aliases) {
+  return E && E->Ty.Kind == VTypeKind::Ptr && referencesAnyAlias(E, Aliases);
+}
+
+/// The pointer variables of a body that may hold an address derived from
+/// the aliases: those assigned one, to a fixpoint.
+static void
+collectRecordAliases(const std::vector<std::unique_ptr<VStmt>> &Body,
+                     std::set<std::string> &Aliases, bool &Changed) {
+  for (const auto &S : Body) {
+    switch (S->K) {
+    case VStmt::Assign: {
+      const auto &A = static_cast<const VAssignStmt &>(*S);
+      if (pointerFromAliases(A.Value.get(), Aliases) &&
+          Aliases.insert(A.Target).second)
+        Changed = true;
+      break;
+    }
+    case VStmt::If: {
+      const auto &I = static_cast<const VIfStmt &>(*S);
+      collectRecordAliases(I.Then, Aliases, Changed);
+      collectRecordAliases(I.Else, Aliases, Changed);
+      break;
+    }
+    case VStmt::While:
+      collectRecordAliases(static_cast<const VWhileStmt &>(*S).Body, Aliases,
+                           Changed);
+      break;
+    case VStmt::Seq:
+      collectRecordAliases(static_cast<const VSeqStmt &>(*S).Stmts, Aliases,
+                           Changed);
+      break;
+    case VStmt::GhostBlock:
+      collectRecordAliases(static_cast<const VGhostBlockStmt &>(*S).Body,
+                           Aliases, Changed);
+      break;
+    default:
+      break;
+    }
+  }
+}
+
+static bool
+keepsNoAddress(const VFunction &Fn, const std::string &Param, bool AllowExtent,
+               const FunctionMap &FnMap,
+               std::set<std::pair<std::string, std::string>> &ActiveScans);
+
+/// Whether a statement keeps no address derived from the aliases beyond the
+/// call: none is stored in memory, returned, freed, or passed to a callee
+/// that keeps it. An address converted to an integer is no escape, since no
+/// integer becomes a pointer again (the frontend rejects those casts).
+static bool
+recordStmtSafe(const VStmt &S, const std::set<std::string> &Aliases,
+               const FunctionMap &FnMap,
+               std::set<std::pair<std::string, std::string>> &ActiveScans) {
+  auto Each = [&](const std::vector<std::unique_ptr<VStmt>> &Body) {
+    return llvm::all_of(Body, [&](const std::unique_ptr<VStmt> &Nested) {
+      return recordStmtSafe(*Nested, Aliases, FnMap, ActiveScans);
+    });
+  };
+  switch (S.K) {
+  case VStmt::Store:
+    return !pointerFromAliases(static_cast<const VStoreStmt &>(S).Value.get(),
+                               Aliases);
+  case VStmt::Allocate:
+  case VStmt::Free:
+    // A function that allocates or frees is UsesDynamicStorage, which
+    // keepsNoAddress rejects before it looks at a statement.
+    return false;
+  case VStmt::If: {
+    const auto &I = static_cast<const VIfStmt &>(S);
+    return Each(I.Then) && Each(I.Else);
+  }
+  case VStmt::While:
+    return Each(static_cast<const VWhileStmt &>(S).Body);
+  case VStmt::Call: {
+    const auto &C = static_cast<const VCallStmt &>(S);
+    auto CalleeIt = FnMap.find(C.CalleeIdentity);
+    if (CalleeIt == FnMap.end())
+      return false;
+    const VFunction &Callee = *CalleeIt->second;
+    // The function passing an address proved that the callee's object or
+    // extent lies in its own, so the callee need only keep none, returning
+    // one included.
+    for (unsigned I = 0; I < C.Args.size(); ++I)
+      if (pointerFromAliases(C.Args[I].get(), Aliases) &&
+          (I >= Callee.Params.size() ||
+           Callee.Params[I].second.Kind != VTypeKind::Ptr ||
+           !keepsNoAddress(Callee, Callee.Params[I].first,
+                           /*AllowExtent=*/true, FnMap, ActiveScans)))
+        return false;
+    return true;
+  }
+  case VStmt::Return:
+    return !pointerFromAliases(static_cast<const VReturnStmt &>(S).Value.get(),
+                               Aliases);
+  case VStmt::Seq:
+    return Each(static_cast<const VSeqStmt &>(S).Stmts);
+  case VStmt::GhostBlock:
+    return Each(static_cast<const VGhostBlockStmt &>(S).Body);
+  case VStmt::Assign:
+  case VStmt::Assert:
+  case VStmt::Assume:
+  case VStmt::ContractAssert:
+  case VStmt::EndLifetime:
+  case VStmt::Havoc:
+  case VStmt::RevealWithFuel:
+  case VStmt::HideSpec:
+  case VStmt::RevealSpec:
+  case VStmt::Break:
+  case VStmt::Continue:
+    return true;
+  }
+  return false;
+}
+
+/// Whether Fn keeps no pointer into the object its parameter Param addresses
+/// beyond the call. Fn is verified in the object model, so every access
+/// through Param, at whatever field or element, is proved to lie in its
+/// object (or its extent, which only a caller that proved the extent inside
+/// its own object may give, AllowExtent); what remains is that no address
+/// derived from it escapes.
+static bool
+keepsNoAddress(const VFunction &Fn, const std::string &Param, bool AllowExtent,
+               const FunctionMap &FnMap,
+               std::set<std::pair<std::string, std::string>> &ActiveScans) {
+  if (Fn.IsSpec || Fn.IsProof || Fn.IsExternalContract ||
+      Fn.UsesDynamicStorage || !Fn.ObjectModel ||
+      (!AllowExtent &&
+       llvm::any_of(Fn.ValidExtents, [&](const VValidExtent &Extent) {
+         return Extent.Base == Param;
+       })))
+    return false;
+  // An escape is a finite path to a statement that keeps an address, so a
+  // scan that reaches itself again, through recursion, may assume none.
+  const auto Key = std::make_pair(Fn.Identity, Param);
+  if (!ActiveScans.insert(Key).second)
+    return true;
+  std::set<std::string> Aliases = {Param};
+  for (bool Changed = true; Changed;) {
+    Changed = false;
+    collectRecordAliases(Fn.Body, Aliases, Changed);
+  }
+  bool Safe = true;
+  for (const auto &S : Fn.Body)
+    Safe = Safe && recordStmtSafe(*S, Aliases, FnMap, ActiveScans);
+  ActiveScans.erase(Key);
+  return Safe;
+}
+
 static bool pointerResultComesFrom(const VExpr *E,
                                    const std::set<std::string> &Params) {
   if (!E)
@@ -4932,6 +5085,72 @@ public:
                  Loc)};
   }
 
+  /// A record in local or dynamic storage passed to a parameter that
+  /// addresses one: the generated validity clause names its first byte, and
+  /// the callee reads every leaf as valid and initialized storage. Each byte
+  /// up to its last belongs to the live allocation of its first when the
+  /// last does (an allocation's bytes are contiguous), and each leaf must be
+  /// initialized, which C++ does not require of an out-parameter.
+  void emitRecordActualChecks(
+      PassiveProgram &P, const VFunction &Callee,
+      const std::set<std::string> &DynamicParams,
+      const std::map<std::string, std::unique_ptr<VExpr>> &ParamMap,
+      const CloneCtx &Ctx, SourceLocation Loc) {
+    if (!Fn.ObjectModel)
+      return;
+    for (const auto &[Name, Identity] : Callee.RecordParams) {
+      auto Actual = ParamMap.find(Name);
+      if (!DynamicParams.count(Name) || Actual == ParamMap.end())
+        continue;
+      const auto Layout =
+          llvm::find_if(Callee.Layouts, [&](const VObjectLayout &L) {
+            return L.TypeIdentity == Identity;
+          });
+      if (Layout == Callee.Layouts.end() || Layout->SizeBytes == 0)
+        continue;
+      auto Offset = [&](uint64_t Bytes) {
+        return addBytes(cloneVExpr(Actual->second.get()),
+                        std::make_unique<VLiteralExpr>(
+                            std::to_string(Bytes), pointerOffsetType(), Loc),
+                        Loc);
+      };
+      emitPassive(P, PassiveStmt::Assert,
+                  std::make_unique<VUnaryOpExpr>(
+                      VUnaryOp::ValidPtr, Offset(Layout->SizeBytes - 1),
+                      VType::makeBool(), Loc,
+                      stateHeapName(Ctx, VAllocationHeapName, ""),
+                      stateHeapName(Ctx, VLivenessHeapName, "")),
+                  nullptr, Loc, ProofObligationKind::PointerValidity);
+      std::vector<uint64_t> Leaves;
+      for (const VObjectLeaf &Leaf : Layout->Leaves) {
+        std::vector<uint64_t> Offsets = {Leaf.OffsetBytes};
+        for (const VObjectRepeat &Repeat : Leaf.Repeats) {
+          std::vector<uint64_t> Next;
+          for (uint64_t Base : Offsets)
+            for (uint64_t K = 0; K < Repeat.Count && Next.size() <= 4096; ++K)
+              Next.push_back(Base + K * Repeat.StrideBytes);
+          Offsets = std::move(Next);
+        }
+        Leaves.insert(Leaves.end(), Offsets.begin(), Offsets.end());
+      }
+      std::unique_ptr<VExpr> Initialized;
+      if (Leaves.size() <= 4096)
+        for (uint64_t Leaf : Leaves) {
+          auto One = std::make_unique<VUnaryOpExpr>(
+              VUnaryOp::InitializedPtr, Offset(Leaf), VType::makeBool(), Loc,
+              "", "", stateHeapName(Ctx, VInitializationHeapName, ""));
+          Initialized =
+              Initialized ? makeAnd(std::move(Initialized), std::move(One), Loc)
+                          : std::move(One);
+        }
+      emitPassive(P, PassiveStmt::Assert,
+                  Initialized ? std::move(Initialized)
+                              : makeBoolLiteral(Leaves.empty(), Loc),
+                  nullptr, Loc, ProofObligationKind::Unsupported,
+                  OutParameterNote);
+    }
+  }
+
   /// The heap after a call of Callee whose footprints are ActualModifies
   /// (with ActualCounts) in the caller's state: each one it may write gets
   /// unknown contents, as a chain of stores when all are cells, and every
@@ -4946,15 +5165,28 @@ public:
                   const std::map<std::string, std::unique_ptr<VExpr>> &ParamMap,
                   const CloneCtx &Ctx, const std::string &EntryHeap,
                   bool HasImplicitHeapEffect, SourceLocation Loc) {
+    // A footprint in a record that a parameter addresses is its bytes there,
+    // in local or dynamic storage too, and never the one cell at its start.
+    auto InRecordParam = [&](size_t I) {
+      const VExpr *Target = Callee.Modifies[I].Target.get();
+      const VExpr *Root =
+          Target && Target->K == VExpr::Load
+              ? addressRoot(static_cast<const VLoadExpr *>(Target)->Ptr.get())
+              : nullptr;
+      return Root && Root->K == VExpr::Var &&
+             Callee.RecordParams.count(
+                 static_cast<const VVarExpr *>(Root)->Name);
+    };
     bool CanFrameExactly = !ActualModifies.empty();
     for (size_t I = 0; I < ActualModifies.size(); ++I)
       if (!ActualModifies[I] || ActualModifies[I]->K != VExpr::Load ||
           ActualCounts[I] ||
           (isRegionFootprint(Callee.Modifies[I],
                              Callee.ScalarReferenceParams) &&
-           !hasPointerProvenance(
-               static_cast<const VLoadExpr *>(ActualModifies[I].get())
-                   ->Ptr.get())))
+           (!hasPointerProvenance(
+                static_cast<const VLoadExpr *>(ActualModifies[I].get())
+                    ->Ptr.get()) ||
+            InRecordParam(I))))
         CanFrameExactly = false;
     // A region footprint is its actual's object: the callee's extent, or one
     // object; in the object model the callee writes nowhere else.
@@ -4965,9 +5197,10 @@ public:
     for (size_t I = 0; CanFrameRegions && I < ActualModifies.size(); ++I) {
       std::optional<Region> Bytes;
       if (ActualModifies[I] && ActualModifies[I]->K == VExpr::Load &&
-          !hasPointerProvenance(
-              static_cast<const VLoadExpr *>(ActualModifies[I].get())
-                  ->Ptr.get()))
+          (!hasPointerProvenance(
+               static_cast<const VLoadExpr *>(ActualModifies[I].get())
+                   ->Ptr.get()) ||
+           InRecordParam(I)))
         Bytes = footprintBytes(Callee, I, ActualModifies[I].get(),
                                ActualCounts[I].get(), ParamMap, Ctx, EntryHeap,
                                Loc);
@@ -5052,15 +5285,24 @@ public:
       if (auto It = ParamMap.find(Param.first);
           It != ParamMap.end() && hasPointerProvenance(It->second.get())) {
         DynamicParams.insert(Param.first);
+        // A record a function in the object model reaches through the
+        // parameter is accessed only inside it, at any field or element.
+        const bool RecordObject =
+            Fn.ObjectModel && Callee->RecordParams.count(Param.first);
         if (Callee->IsProof || Callee->IsExternalContract ||
-            !scalarDynamicCalleeSafe(*Callee, Param.first, FnMap,
-                                     ActiveScans)) {
+            !(RecordObject
+                  ? keepsNoAddress(*Callee, Param.first, /*AllowExtent=*/false,
+                                   FnMap, ActiveScans)
+                  : scalarDynamicCalleeSafe(*Callee, Param.first, FnMap,
+                                            ActiveScans))) {
           emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, C.Loc),
                       nullptr, C.Loc, ProofObligationKind::Unsupported,
                       "the address of local or dynamic storage is passed to " +
                           C.Callee +
-                          ", which may keep, offset, or free it, or has no "
-                          "verified body");
+                          (RecordObject
+                               ? ", which may keep or free it"
+                               : ", which may keep, offset, or free it") +
+                          ", or has no verified body");
           return;
         }
       }
@@ -5300,6 +5542,7 @@ public:
         emitPassive(P, PassiveStmt::Assert, std::move(Part), nullptr, C.Loc,
                     Kind, std::move(Note));
     }
+    emitRecordActualChecks(P, *Callee, DynamicParams, ParamMap, Ctx, C.Loc);
 
     // A call within the caller's recursion cycle lowers the measure below its
     // value at the caller's entry, so assuming the callee's contract there is
@@ -5361,9 +5604,12 @@ public:
           InnerBytes = calleeFootprintBytes(I);
         // An empty range writes nothing.
         if (ActualCounts[I] && InnerBytes)
-          Allowed = std::make_unique<VBinOpExpr>(
-              VBinOp::Le, cloneVExpr(InnerBytes->Hi.get()),
-              cloneVExpr(InnerBytes->Lo.get()), VType::makeBool(), C.Loc);
+          Allowed = makeOr(std::move(Allowed),
+                           std::make_unique<VBinOpExpr>(
+                               VBinOp::Le, cloneVExpr(InnerBytes->Hi.get()),
+                               cloneVExpr(InnerBytes->Lo.get()),
+                               VType::makeBool(), C.Loc),
+                           C.Loc);
         for (size_t J = 0; J < CallerModifies.size(); ++J) {
           const auto &CallerM = CallerModifies[J];
           const auto *CallerLoad =

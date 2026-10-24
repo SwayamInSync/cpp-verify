@@ -423,6 +423,10 @@ struct VFunction {
   /// they bind (perhaps a field of a larger object). A reference to a record
   /// is a pointer to it, and `modifies(r)` its object.
   std::set<std::string> ScalarReferenceParams;
+  /// Pointer and reference parameters to a record, with the identity of the
+  /// record's entry in Layouts: an object whose leaves lie at offsets inside
+  /// it.
+  std::map<std::string, std::string> RecordParams;
   /// Pointer and reference parameters to const objects: the function
   /// writes nothing through them.
   std::set<std::string> ConstAddressParams;
