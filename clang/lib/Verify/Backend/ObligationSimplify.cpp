@@ -363,10 +363,14 @@ void simplifyFunctions(ObligationModule &Module,
     auto Function = Module.LogicFunctions.find(Pending[I]);
     if (Function == Module.LogicFunctions.end())
       continue;
+    // A function's declaration depends on what its definition and its
+    // measures apply.
     std::set<std::string> Dependencies;
     collectCalledFunctions(Function->second.StepDefinition.get(), Dependencies);
     for (const auto &Definition : Function->second.DefinitionLevels)
       collectCalledFunctions(Definition.get(), Dependencies);
+    for (const auto &Measure : Function->second.Decreases)
+      collectCalledFunctions(Measure.get(), Dependencies);
     for (const std::string &Dependency : Dependencies)
       if (Reachable.insert(Dependency).second)
         Pending.push_back(Dependency);

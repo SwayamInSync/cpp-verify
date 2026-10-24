@@ -91,6 +91,25 @@ struct VerifyOptions {
 
 bool verifyTranslationUnit(ASTContext &Ctx, llvm::raw_ostream &OS,
                            const VerifyOptions &Opts = VerifyOptions());
+
+/// What exporting the modules of an archive to a Lean project gives: a
+/// result for each module, in order, with the goals cppverify_auto proves of
+/// it, and what the project warns of; or why the project was not written.
+struct LeanProjectReplay {
+  std::vector<VerifyResult> Results;
+  std::vector<unsigned> Automatic;
+  std::vector<std::string> Warnings;
+  std::string Error;
+};
+
+/// Exports Modules to the Lean project of Opts as a source run exports its
+/// functions, with their proofs and cppverify_auto, and with LeanCertify
+/// certifies them. A module alone is all that is checked: one whose goals
+/// all certify is Verified, its obligations proved; a bounded one is
+/// BoundedSafe when only unwinding goals do not.
+LeanProjectReplay
+replayLeanProject(const std::vector<ObligationModule> &Modules,
+                  const VerifyOptions &Opts);
 } // namespace verify
 } // namespace clang
 

@@ -1757,7 +1757,13 @@ VerifyResult verify::exportLeanScratchPad(
   printLeanCommentText(Module.FunctionName, OS);
   OS << " -/\n";
   OS << "/- required logic: " << formatLogicFeatures(Module.RequiredFeatures)
-     << " -/\n\n";
+     << " -/\n";
+  if (Module.BMCTransform)
+    OS << "/- bound: " << Module.BMCTransform->UnrollBound
+       << " loop iterations, by unrolling: these goals speak only of the\n"
+          "   executions within them, and an unwinding goal says that every "
+          "loop\n   ends within them -/\n";
+  OS << "\n";
 
   std::string TheoremName =
       "cppverify_" +
@@ -1805,6 +1811,7 @@ VerifyResult verify::exportLeanScratchPad(
       Goal.LegacyName = encodeLeanName(ObligationName + "_goal");
       Goal.LegacyBodyPrefix = LegacyBodyPrefix;
       Goal.Exported = Selected;
+      Goal.Unwinding = Item.Kind == ObligationKind::Unwinding;
       if (!Selected) {
         ProjectGoals->push_back(std::move(Goal));
         continue;

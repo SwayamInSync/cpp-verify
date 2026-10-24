@@ -12,7 +12,10 @@
 namespace clang {
 namespace verify {
 
-inline constexpr uint32_t ObligationSerializationVersion = 2;
+/// Version 2 adds the precise obligation kinds; version 3 each logical
+/// function's termination measures and, with source metadata, where each
+/// assumption of a goal comes from. Readers read every earlier version.
+inline constexpr uint32_t ObligationSerializationVersion = 3;
 inline constexpr uint32_t ObligationSemanticHashVersion = 4;
 
 /// Serialize one module as a deterministic, versioned binary record. Records

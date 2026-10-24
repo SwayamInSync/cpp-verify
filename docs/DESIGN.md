@@ -1775,15 +1775,18 @@ Before publication or dispatch, a shared fail-closed canonicalizer applies a
 deliberately narrow set of semantics-preserving rewrites: Boolean constants,
 double negation, constant conditionals, and reflexive equality/inequality. It
 simplifies logical definitions, removes declarations unreachable transitively
-from the ordered goals, rebuilds exact per-obligation and complete
+from the ordered goals (through definitions and termination measures, since
+a declaration depends on what both apply), rebuilds exact per-obligation and complete
 goal/counterexample pairs, recomputes features, and revalidates. The same step
 runs after archive decoding, so adapters never depend on producer-specific
 dead declarations or trivial Boolean structure. It does not rewrite
 arithmetic, quantifiers, pointer/heap expressions, or assumptions.
 
 `--obligation-out=FILE` publishes deterministic, concatenable
-`cppverify.obligation/2` binary records with stable wire tags and portable
-source attribution; schema v1 records remain readable. Publication includes an
+`cppverify.obligation/3` binary records with stable wire tags and portable
+source attribution; schema v3 adds each logical function's termination
+measures and, with source attribution, where each assumption of a goal comes
+from, neither hashed, and records of schemas v1 and v2 remain readable. Publication includes an
 exact serialize/deserialize/validate/reserialize check. SHA-256 module and
 per-obligation semantic hashes exclude source paths, display-only names, both
 positional and source-anchored obligation IDs, and every obligation kind except
@@ -1793,14 +1796,21 @@ wire version. Canonicalization introduced semantic-hash format v2, excluding
 diagnostic identities advanced it to v3, and excluding diagnostic kinds
 advances it to v4.
 `--obligation-in=FILE` validates and replays the records through Z3, cvc5,
-strict Z3+cvc5 portfolio, lower-only/Layer 3-4 dumps, or Lean scratch export
-without reparsing C++. Each module is replayed alone, without the contracts,
+strict Z3+cvc5 portfolio, lower-only/Layer 3-4 dumps, Lean scratch export, or
+a Lean project (`--lean-project`, with certification) without reparsing C++.
+A project gets the goals, specs, and proof files a source run gives the same
+obligations, which are named by their statements, so a proof certifies from
+either. Each module is replayed alone, without the contracts,
 spec facts, partiality, and vacuity checks its source verdict rests on, so a
 module whose obligations hold reports `Proved obligations` (JSON
 `proved-obligations`), never `Verified`.
 BMC-produced records carry their unroll bound in semantics and replay through
 the BMC result aggregator; untransformed records cannot acquire BMC semantics
-after this boundary. Lean scratch replay of bounded records is rejected.
+after this boundary. In Lean the goals of a bounded module state its bound,
+and its result aggregates the same way: every goal certified proves its
+obligations, and every goal but some unwinding goal certified is
+`BoundedSafe`, which in Lean says that the unwinding is not certified (Lean
+never refutes a goal).
 Failure-only `cppverify::recommends` diagnostics do not alter archive contents.
 Imported records are untrusted input: bounded parsing precedes structural,
 scope, sort, signature, feature, canonical-payload, exact-negation, and

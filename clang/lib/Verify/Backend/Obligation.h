@@ -230,7 +230,8 @@ public:
   std::vector<LogicExprRef> Patterns;
   /// For an Or that states one assumption of a goal (`!A || rest`): where A
   /// comes from (`pre`, `call:f`, `def:x_1`), so a goal can be shown as
-  /// named hypotheses. Outside the term's meaning, identity, and archives.
+  /// named hypotheses. Outside the term's meaning and identity; archives
+  /// keep it with their source metadata.
   std::string Premise;
 
   explicit LogicExpr(Kind K) : K(K) {}
@@ -355,7 +356,8 @@ struct LogicFunctionDecl {
   /// value; a verdict that does rests on them. Not archived.
   std::vector<std::unique_ptr<LogicExpr>> Postconditions;
   /// A recursive function's termination measure over the parameters, by
-  /// which an induction over its applications descends. Not archived.
+  /// which an induction over its applications descends and Lean proves its
+  /// definition terminates. Archived, never hashed.
   std::vector<std::unique_ptr<LogicExpr>> Decreases;
   static constexpr const char *ResultVariable = "cppverify.result";
 };

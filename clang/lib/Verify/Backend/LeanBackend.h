@@ -35,6 +35,9 @@ struct LeanProjectGoal {
   /// False for an obligation of an exported function that a selection left
   /// to the solver: its goal is known, but has no definition or proof file.
   bool Exported = true;
+  /// An unwinding goal of a bounded module: that its loops end within the
+  /// bound.
+  bool Unwinding = false;
 };
 
 /// The group of a module's goals in a project: its function's directory.
