@@ -212,6 +212,14 @@ although the callee writes only cells the caller may write, in two cases:
 The callee's footprint is now compared with the caller's frame cell by cell
 (:doc:`language/pointers`).
 
+**A record member named whole in** ``cppverify::modifies``.
+``cppverify::modifies(p->left)``, for a member that is a record or an array,
+was taken for one cell holding the whole member. A call ``reset(&p->left)``
+of a function that may write its object failed its ``frame`` check, and a
+call of the function itself could not be verified (``obligation lowering
+failed: ... (invalid sort in obligation IR)``). The footprint is now the
+bytes of the member (:doc:`language/structs`).
+
 **Lean goals that could not be proved.** In a Lean goal a quantifier took
 everything after it into its body, which made a goal with a quantified fact
 before its conclusion say more than its obligation: the goal of a call that
@@ -261,6 +269,17 @@ a record may address only the array, field, or record it points into:
 accesses, steps, pointer differences, and call arguments through it are
 checked against that subobject, so ``q[8]`` past ``r->buf`` is an error,
 though it lies in ``*r`` (:doc:`language/structs`).
+
+**Records through references.** A reference to a record (``Counter &c``,
+``const Counter &c``), as a parameter or a local, was an error
+(``unsupported C++ type in verification: Counter &``), so the free function
+form of a method on an object, ``bump(Counter &c)``, could not be verified.
+A reference to a record is now a pointer to it that is never null and never
+reseated: ``c.n`` and ``c.buf[i]`` are cells of the object, ``&c.n`` and
+``c.buf`` point into it, ``cppverify::modifies(c)`` is the whole object, and
+a reference can be bound to ``*p``, ``p->left``, ``a[i]``, or another
+reference. Passing a local record to a reference parameter is still
+``construct.unsupported`` (:doc:`language/structs`).
 
 Running cpp-verify
 ~~~~~~~~~~~~~~~~~~

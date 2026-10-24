@@ -189,8 +189,8 @@ Reference values lower to heap loads, writes lower to stores, and ``cppverify::o
 the entry heap. The bounded scalar slice supports direct forwarding, direct
 ``*p`` bindings, fields and elements of local objects and of parameter buffers,
 ordinary initialized scalar local actuals, and chained local reference aliases.
-Conditional bindings, temporaries, reference returns, and non-scalar referents
-remain fail-closed. See
+A reference to a record is a pointer to it that is never null or reseated.
+Conditional bindings, temporaries, and reference returns remain fail-closed. See
 :doc:`language/pointers`.
 
 Backends and modular calls

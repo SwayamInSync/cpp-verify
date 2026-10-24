@@ -1680,8 +1680,9 @@ samePointerDifferenceOrigin(const VExpr *L, const VExpr *R,
 
 /// Whether a footprint is the whole object its pointer addresses, rather
 /// than one cell or a range of cells.
-static bool isRegionFootprint(const VFootprint &F,
-                              const std::set<std::string> &ReferenceParams) {
+static bool
+isRegionFootprint(const VFootprint &F,
+                  const std::set<std::string> &ScalarReferenceParams) {
   if (F.Count)
     return false;
   const VExpr *E = F.Target.get();
@@ -1691,7 +1692,7 @@ static bool isRegionFootprint(const VFootprint &F,
   while (Ptr && Ptr->K == VExpr::Cast)
     Ptr = static_cast<const VCastExpr *>(Ptr)->Inner.get();
   if (Ptr && Ptr->K == VExpr::Var &&
-      ReferenceParams.count(static_cast<const VVarExpr *>(Ptr)->Name))
+      ScalarReferenceParams.count(static_cast<const VVarExpr *>(Ptr)->Name))
     return false;
   return !Ptr || Ptr->K == VExpr::Var;
 }
@@ -1700,7 +1701,7 @@ static bool hasUnboundedExtentWrite(const VFunction &Fn,
                                     const std::string &Base) {
   for (const VFootprint &Modify : Fn.Modifies) {
     if (!Modify.Target || Modify.Target->K != VExpr::Load ||
-        !isRegionFootprint(Modify, Fn.ReferenceParams))
+        !isRegionFootprint(Modify, Fn.ScalarReferenceParams))
       continue;
     const VExpr *Ptr = pointerBase(
         static_cast<const VLoadExpr *>(Modify.Target.get())->Ptr.get());
@@ -3548,7 +3549,7 @@ class PassivizerImpl {
     std::vector<Region> Out;
     for (const VFootprint &F : W.Modifies) {
       const auto *Load = static_cast<const VLoadExpr *>(F.Target.get());
-      if (isRegionFootprint(F, Fn.ReferenceParams)) {
+      if (isRegionFootprint(F, Fn.ScalarReferenceParams)) {
         auto R = rootRegion(addressRoot(Load->Ptr.get()), Renames, Load->Loc);
         if (!R)
           return std::nullopt;
@@ -3648,7 +3649,7 @@ class PassivizerImpl {
         Out.push_back(rangeBytes(Ptr.get(), Count.get(), M.ElementSize, Loc));
         continue;
       }
-      if (isRegionFootprint(M, Fn.ReferenceParams)) {
+      if (isRegionFootprint(M, Fn.ScalarReferenceParams)) {
         auto R = rootRegion(addressRoot(Load->Ptr.get()), Renames, Loc);
         if (!R)
           return false;
@@ -3715,7 +3716,7 @@ class PassivizerImpl {
             TargetPtr = static_cast<const VCastExpr *>(TargetPtr)->Inner.get();
           const bool OneCell =
               !M.Count && TargetPtr == CalleeRoot &&
-              (!isRegionFootprint(M, Callee->ReferenceParams) ||
+              (!isRegionFootprint(M, Callee->ScalarReferenceParams) ||
                (Callee->ObjectModel &&
                 (Target->Ty.isInt() || Target->Ty.Kind == VTypeKind::Bool ||
                  Target->Ty.Kind == VTypeKind::Ptr) &&
@@ -4904,7 +4905,7 @@ public:
     const VFootprint &Declared = Callee.Modifies[I];
     if (Count)
       return rangeBytes(Actual->Ptr.get(), Count, Declared.ElementSize, Loc);
-    if (!isRegionFootprint(Declared, Callee.ReferenceParams))
+    if (!isRegionFootprint(Declared, Callee.ScalarReferenceParams))
       return cellRegion(Actual->Ptr.get(), Actual->Ty, Loc);
     if (!Callee.ObjectModel)
       return std::nullopt;
@@ -4949,7 +4950,8 @@ public:
     for (size_t I = 0; I < ActualModifies.size(); ++I)
       if (!ActualModifies[I] || ActualModifies[I]->K != VExpr::Load ||
           ActualCounts[I] ||
-          (isRegionFootprint(Callee.Modifies[I], Callee.ReferenceParams) &&
+          (isRegionFootprint(Callee.Modifies[I],
+                             Callee.ScalarReferenceParams) &&
            !hasPointerProvenance(
                static_cast<const VLoadExpr *>(ActualModifies[I].get())
                    ->Ptr.get())))
@@ -5055,7 +5057,7 @@ public:
                                      ActiveScans)) {
           emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, C.Loc),
                       nullptr, C.Loc, ProofObligationKind::Unsupported,
-                      "a pointer to local or dynamic storage is passed to " +
+                      "the address of local or dynamic storage is passed to " +
                           C.Callee +
                           ", which may keep, offset, or free it, or has no "
                           "verified body");
@@ -5344,8 +5346,8 @@ public:
                                    ? static_cast<const VLoadExpr *>(M.get())
                                    : nullptr;
       if (ActualLoad) {
-        const bool ActualIsRegion =
-            isRegionFootprint(Callee->Modifies[I], Callee->ReferenceParams);
+        const bool ActualIsRegion = isRegionFootprint(
+            Callee->Modifies[I], Callee->ScalarReferenceParams);
         if (auto Provenance = pointerProvenance(ActualLoad->Ptr.get()))
           for (const std::string &Identity : OwnedAllocationIdentities)
             Allowed = makeOr(std::move(Allowed),
@@ -5375,7 +5377,7 @@ public:
             OuterBytes = rangeBytes(CallerLoad->Ptr.get(), CallerCounts[J].get(),
                                     Fn.Modifies[J].ElementSize, C.Loc);
           const bool OuterIsRegion =
-              isRegionFootprint(Fn.Modifies[J], Fn.ReferenceParams);
+              isRegionFootprint(Fn.Modifies[J], Fn.ScalarReferenceParams);
           Allowed = makeOr(
               std::move(Allowed),
               footprintWithin(CallerLoad->Ptr.get(), OuterIsRegion, OuterBytes,
@@ -5624,7 +5626,7 @@ public:
                                St.Loc);
           }
           auto EffectivePtr = resolveReferenceAddress(Ptr.get());
-          const bool Region = isRegionFootprint(M, Fn.ReferenceParams);
+          const bool Region = isRegionFootprint(M, Fn.ScalarReferenceParams);
           Allowed = makeOr(
               std::move(Allowed),
               footprintWithin(DeclaredPtr.get(), Region, Bytes,

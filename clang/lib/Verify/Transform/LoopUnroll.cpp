@@ -255,7 +255,7 @@ VFunction LoopUnroller::unroll(const VFunction &Fn, unsigned K) {
   Out.FreshOwnedReturn = Fn.FreshOwnedReturn;
   Out.Params = Fn.Params;
   Out.SourceVariables = Fn.SourceVariables;
-  Out.ReferenceParams = Fn.ReferenceParams;
+  Out.ScalarReferenceParams = Fn.ScalarReferenceParams;
   Out.ConstAddressParams = Fn.ConstAddressParams;
   Out.BoundedPointers = Fn.BoundedPointers;
   Out.ReturnFields = Fn.ReturnFields;

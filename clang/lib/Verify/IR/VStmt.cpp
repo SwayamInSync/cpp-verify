@@ -197,7 +197,7 @@ VFunction verify::cloneVFunction(const VFunction &Fn) {
   Out.RevealedSpecs = Fn.RevealedSpecs;
   Out.Params = Fn.Params;
   Out.SourceVariables = Fn.SourceVariables;
-  Out.ReferenceParams = Fn.ReferenceParams;
+  Out.ScalarReferenceParams = Fn.ScalarReferenceParams;
   Out.ConstAddressParams = Fn.ConstAddressParams;
   Out.BoundedPointers = Fn.BoundedPointers;
   Out.ReturnFields = Fn.ReturnFields;

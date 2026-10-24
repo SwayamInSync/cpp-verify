@@ -176,6 +176,31 @@ whose own access UB instrumentation checks against the pointer's extent or
 object as before. `p->buf[i]` therefore has both checks, and the array's is
 what rejects `p->buf[8]`, the address of the next field.
 
+**Records through references:** a reference to a record, a parameter or a
+local, is a pointer-typed VCR variable holding the object's address
+(`VType::Ptr` of the record's size), never flattened: `getRecordFromType`
+stops at references, so only a record by value becomes `param.field`
+values, and so do source variables, type-invariant injection, and call
+arguments. `recordReferenceRoot` finds the reference a selection chain
+starts at (`c.f`, `c.buf[i]`), and `inPointeeObject` (it, or
+`pointeeRootPointer`) admits the place wherever a place through a pointer is
+admitted: loads, stores, subscripts, reference bindings, footprints.
+`objectPlace` of the bare reference is the place at its address, as `*p`.
+Pointers into the object (`&c.f`, `c.buf`) are formed only where
+`subobjectPointerRoot` holds: through a pointer, or a reference whose object
+outlives the function (a parameter, or a local not bound to represented
+storage, which `LocalReferenceProvenanceVariables` records), since a
+subobject pointer does not carry a promoted object's lifetime.
+`VFunction::ScalarReferenceParams` holds only scalar references, whose
+`modifies(r)` is the one cell they bind; a record reference's is a region,
+its parameter's entry object (`entryObjectRegion`), as for `*p`.
+`convertFootprint` lowers a record or array named whole inside an object
+(`p->inner`, `c.buf`, `p[k]`) to a range of one element of its size, so
+every frame path (own stores, call havoc, containment, loop frames) treats it
+as its bytes; before, it was a cell holding the record, which held no
+callee's footprint inside the member and whose havoc at a call had no logic
+sort.
+
 **Pointers into objects:** `ASTConverter::subobjectPointer` lowers a decayed
 member array of a pointee and the address of a pointee's element, field, or
 nested record. In a statement (`SubobjectSink`) it asserts the place's access
@@ -300,8 +325,10 @@ VFunction =
   source spelling remain distinct through modular calls and SMT symbols.
 - `cppverify::aliases` empty means the implicit non-aliasing precondition applies to every pair of distinct pointer/reference parameters of which at least one is mutable.
 - A `VFootprint` is a target lvalue with an optional element count and
-  element size: a cell (`p[i]`, `p->f`, a reference), a range `p[lo : n]`
-  (target `p[lo]`, count `n`), or a region `*p` (the object `p` addresses).
+  element size: a cell (`p[i]`, `p->f`, a scalar reference), a range
+  `p[lo : n]` (target `p[lo]`, count `n`; a record or array named whole
+  inside an object, `p->inner`, is a range of one element of its size), or a
+  region `*p` (the object `p` addresses, or a reference to a record names).
 - Behaviors are desugared in the frontend: each scoped `cppverify::pre` becomes
   `!assumes || pre`, each scoped `cppverify::post` `!old(assumes) || post`, and
   `cppverify::complete_behaviors`/`cppverify::disjoint_behaviors` become assertions at body entry.
@@ -2389,9 +2416,11 @@ disjoint from incoming address parameters, complete declared extents, stored
 pointer cells, and every live represented object. Their lifetimes end at the
 lexical closing brace and on each supported early return in reverse construction
 order, after materializing any heap-reading return value. Scalar references may
-bind fields and fixed-array elements with access-local nested bounds. General
-escape, raw array decay/address-taking, aggregate references, and addressable
-declarations inside loops remain fail-closed; so does the decay of an array
+bind fields and fixed-array elements with access-local nested bounds, and a
+local reference to a record may bind a promoted record, its provenance
+companion carried like a scalar reference's. General escape, raw array
+decay/address-taking (through such a reference too), passing a promoted record
+to a callee, and addressable declarations inside loops remain fail-closed; so does the decay of an array
 member through a pointer (`ASTConverter::arrayDecayError` names which). Automatic metadata transitions
 are private and a modular caller may frame them away.
 

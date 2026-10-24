@@ -419,7 +419,10 @@ struct VFunction {
   std::set<std::string> RevealedSpecs;
   std::vector<std::pair<std::string, VType>> Params;
   std::map<std::string, VSourceVariable> SourceVariables;
-  std::set<std::string> ReferenceParams;
+  /// Reference parameters to a scalar, whose `modifies(r)` is the one cell
+  /// they bind (perhaps a field of a larger object). A reference to a record
+  /// is a pointer to it, and `modifies(r)` its object.
+  std::set<std::string> ScalarReferenceParams;
   /// Pointer and reference parameters to const objects: the function
   /// writes nothing through them.
   std::set<std::string> ConstAddressParams;

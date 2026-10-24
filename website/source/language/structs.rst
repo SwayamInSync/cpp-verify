@@ -175,6 +175,103 @@ would be lost there: returning it, or storing it in memory, is an error.
       10 |   return &r->buf[i];
          |   ^~~~~~
 
+Records through references
+--------------------------
+
+A reference to a record (``Counter &``, ``const Counter &``) is a pointer to
+it that is never null and never reseated, so everything above holds of it:
+``c.n``, ``c.buf[i]``, and ``c.inner.x`` are cells of the object ``c`` names,
+and ``&c.n`` and ``c.buf`` are pointers into it. The verifier requires the
+object to be live and initialized at entry, as for a scalar reference, and
+two references of which one is mutable name distinct objects unless
+``cppverify::aliases`` allows them to name one. ``cppverify::modifies(c)`` is the
+whole object, as ``cppverify::modifies(*p)`` is for a pointer, and a record
+or array member named whole, ``cppverify::modifies(p.left)`` or
+``cppverify::modifies(r.buf)``, is the bytes of that member. A reference
+parameter may be bound to a reference, to ``*p``, to a field such as
+``p->left``, or to an element ``a[i]``, and so may a local reference:
+
+.. cppverify-example: fails reset_count
+
+.. code-block:: cpp
+
+   struct Counter {
+     int n;
+     int limit;
+   };
+
+   struct Pair {
+     Counter left;
+     Counter right;
+   };
+
+   void bump(Counter &c)
+     cv::pre(c.n < c.limit)
+     cv::modifies(c.n)
+     cv::post(c.n == cv::old(c.n) + 1)
+   {
+     c.n = c.n + 1;
+   }
+
+   void reset(Counter &c)
+     cv::modifies(c)
+     cv::post(c.n == 0 && c.limit == 10)
+   {
+     c.n = 0;
+     c.limit = 10;
+   }
+
+   void reset_left(Pair &p)
+     cv::modifies(p.left)
+     cv::post(p.left.n == 0 && p.right.n == cv::old(p.right.n))
+   {
+     reset(p.left);
+   }
+
+   void bump_left(Pair *p)
+     cv::pre(p != nullptr && p->left.n < p->left.limit)
+     cv::modifies(p->left.n)
+     cv::post(p->left.n == cv::old(p->left.n) + 1)
+   {
+     Counter &c = p->left;
+     bump(c);
+   }
+
+   void reset_count(Pair &p)
+     cv::modifies(p.left.n)
+   {
+     reset(p.left);
+   }
+
+.. code-block:: text
+
+   Verified: bump [backend=z3]
+   Verified: reset [backend=z3]
+   Verified: reset_left [backend=z3]
+   Verified: bump_left [backend=z3]
+   pair.cpp:46:3: error: verification failed: reset_count [...::frame@46:3] (counterexample: p [ssa=p_0] [type=pointer] = 1; trace: call.reset@46:3 arg0=1) [backend=z3] [reason=counterexample]
+
+``reset_left`` may write ``p.left``, which holds the whole object ``reset``
+may write, so ``p.right`` keeps its value. ``reset_count`` may write only
+``p.left.n``, and ``reset`` writes ``p.left.limit`` too: the call fails its
+``frame`` check. A caller that may write both fields one by one,
+``cppverify::modifies(p.left.n, p.left.limit)``, still fails it: the callee's
+footprint is every byte of the record, which only a footprint naming the
+record, or an object around it, contains.
+
+Not yet supported:
+
+- a local record passed to a reference or pointer parameter (``bump(c)`` with
+  ``Counter c;``): the verifier does not yet show that the callee keeps no
+  pointer to it, and the call is ``Unresolved`` with reason
+  ``construct.unsupported``. A local reference may bind a local record, and
+  reads and writes through it are checked against that object's lifetime and
+  initialization, but forming a pointer through such a reference (``&r.n``,
+  ``r.buf``) is an error;
+- reading a whole record through a reference, as through a pointer;
+- reference returns, rvalue and ``volatile`` references, and references in
+  spec and proof functions.
+
 ``cppverify::type_invariant``
 -----------------------------
 
@@ -198,7 +295,8 @@ Semantics:
 - The invariant is injected as a **precondition** at the first use of an
   invariant field for by-value parameters. Because it is a precondition,
   callers must establish it when they pass such a value.
-- It is **not** injected for raw pointer-to-struct parameters (their fields are heap loads).
+- It is **not** injected for pointer-to-struct or reference-to-struct
+  parameters: their fields are heap loads of an object in memory.
 - **Returns are checked**: when a function returns a struct value of an invariant-bearing type,
   the verifier asserts the invariant holds for the returned value. Building and returning a struct
   whose fields violate the invariant is a verification error.
@@ -232,8 +330,9 @@ returned by value must be trivial, standard-layout, and flat, with scalar
 fields. A local object whose address is needed (it holds a fixed array, or a
 reference binds to one of its members) is promoted to an automatic object and
 may also have nested record, pointer, and fixed-array members. A record
-reached through a pointer may have the same members, and its scalar fields and
-elements are reached one at a time (see `Records through pointers`_), or
-through a pointer into it (see `Pointers into a record`_). Reference
+reached through a pointer or a reference may have the same members, and its
+scalar fields and elements are reached one at a time (see `Records through
+pointers`_ and `Records through references`_), or through a pointer into it
+(see `Pointers into a record`_). Reference
 members, unions, bases, virtual dispatch, and non-trivial
 construction/destruction are rejected rather than approximated.

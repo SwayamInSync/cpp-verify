@@ -150,7 +150,8 @@ private:
                                               const Expr *Cond);
   bool isTriggerMarked(const Expr *E) const;
   void markTrigger(std::unique_ptr<VExpr> &Result, const Expr *E);
-  /// A modifies footprint: an lvalue, or the cells p[lo : n].
+  /// A modifies footprint: an lvalue, the cells p[lo : n], or the bytes of a
+  /// record or array inside an object.
   std::optional<VFootprint> convertFootprint(const Expr *E);
   /// A loop's declared footprints, each naming memory.
   std::vector<VFootprint> convertLoopFootprints(const LoopContractInfo &LCI);
@@ -188,6 +189,16 @@ private:
   /// object. Returns the root only when it was promoted to one automatic
   /// byte-addressed object.
   const VarDecl *promotedRootLocal(const Expr *E) const;
+  /// The reference parameter or local whose record \p E selects a field or
+  /// element of (or is), if any.
+  const VarDecl *recordReferenceRoot(const Expr *E) const;
+  /// Whether \p E is a place in an object reached through a pointer or a
+  /// reference, rather than a value of the function's own.
+  bool inPointeeObject(const Expr *E) const;
+  /// Whether a pointer may be formed into the place \p E (its address, or a
+  /// decayed member array): a place in an object that outlives the function,
+  /// reached through a pointer or a reference to a record.
+  bool subobjectPointerRoot(const Expr *E) const;
   /// The pointer whose pointee a chain of field and fixed-array element
   /// selections starts at (p in *p, p->m, p[k], (*p).a.b[i]); null when the
   /// chain does not start at a pointee.
