@@ -358,12 +358,19 @@ void Parser::ParseFunctionContractClauses(ParsingDeclarator &D,
     return;
 
   // Re-enter function parameters into scope so contract conditions can
-  // reference them. This mirrors ParseTrailingRequiresClause in
-  // ParseDeclCXX.cpp: create a FunctionPrototypeScope and push params.
+  // reference them. This mirrors ParseTrailingRequiresClauseWithScope in
+  // ParseDeclCXX.cpp: an out-of-line member's clauses are in its class's
+  // scope, with `this`, and a FunctionPrototypeScope holds the parameters.
+  CXXScopeSpec &SS = D.getCXXScopeSpec();
+  DeclaratorScopeObj DeclScopeObj(*this, SS);
+  if (SS.isValid() && Actions.ShouldEnterDeclaratorScope(getCurScope(), SS))
+    DeclScopeObj.EnterDeclaratorScope();
   ParseScope ContractParamScope(this, Scope::DeclScope |
                                           Scope::FunctionDeclarationScope |
                                           Scope::FunctionPrototypeScope);
   Actions.ActOnStartTrailingRequiresClause(getCurScope(), D);
+  std::optional<Sema::CXXThisScopeRAII> ThisScope;
+  InitCXXThisScopeForDeclaratorIfRelevant(D, D.getDeclSpec(), ThisScope);
 
   // Compute the return type from the full Declarator (not just the DeclSpec)
   // so that result in postconditions gets the correct type: pointers,
@@ -376,7 +383,13 @@ void Parser::ParseFunctionContractClauses(ParsingDeclarator &D,
     else
       CurrentContractReturnType = Actions.getASTContext().IntTy;
   }
+  ParseFunctionContractClauseList(Clauses);
+}
 
+void Parser::ParseFunctionContractClauseList(FunctionContractClauses &Clauses) {
+  FunctionContractInfo &I = Clauses.Info;
+  const bool IsSpecFn = I.IsSpec;
+  const bool IsProofFn = I.IsProof;
   llvm::SaveAndRestore<unsigned> ContextRAII(CppVerifyContextDepth,
                                              CppVerifyContextDepth + 1);
   // ACSL behaviors: pre and post clauses after behavior(name, assumes)
@@ -663,8 +676,14 @@ void Parser::attachFunctionContract(Decl *Result,
   // Templates are not verified yet: their clauses are ignored, as a member
   // function's are.
   if (FD->isTemplated() && !I.IsSpec && !I.IsProof) {
-    Diag(FD->getLocation(), diag::warn_contract_template_unsupported)
-        << 0 << FD;
+    // A member of a class template is named by its class.
+    const auto *Method = dyn_cast<CXXMethodDecl>(FD);
+    if (Method && Method->getParent()->isTemplated())
+      Diag(FD->getLocation(), diag::warn_contract_template_unsupported)
+          << 1 << Method->getParent();
+    else
+      Diag(FD->getLocation(), diag::warn_contract_template_unsupported)
+          << 0 << FD;
     return;
   }
   FunctionContractInfo &FCI = Ctx.getOrCreateFunctionContract(FD);

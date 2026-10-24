@@ -223,6 +223,32 @@ removes a pair's single-object separation where one of the pair has an
 extent, so the extent separation (`appendExtentSeparation`) alone states
 it.
 
+**Member functions:** `unsupportedMemberFunction` decides which member
+functions `convertTranslationUnit` converts: static ones, as free functions,
+and non-static ones of a class without bases or virtual functions (not
+constructors, destructors, conversion functions, explicit object, rvalue- or
+volatile-qualified ones; a contracted one of these is an error of its
+function). `convertFunction` names a member function with its class and
+puts `this` first in `Params`, a pointer to `getFunctionObjectParameterType()`
+(const in a const member function, `ConstAddressParams`), with the generated
+validity of a reference (non-null, valid, initialized), an `AddressEntry` in
+the separation, a `RecordParams` entry for its class (so a local object is
+lent as 3d lends one), and, for a verified non-const one without
+`cppverify::modifies`, the region footprint `*this` (decision Q8).
+`CXXThisExpr` converts to the `this` variable, so `this->f` and an implicit
+`f` are places through a pointer as `p->f` is. `convertExecCallArgs`
+prepends the object of a `CXXMemberCallExpr`: the pointer of `p->m()` and
+`this->m()`, else the address of the object, bound as a reference argument
+is; address discovery promotes a local whose member function is called. The
+parser keeps an in-class member function's clause tokens
+(`Parser::MemberContractTokens`, then
+`LateParsedMethodDeclaration::ContractTokens`) and parses them in
+`ParseLexedMethodDeclaration` after the exception specification, with the
+parameters and `this` in scope (`ParseFunctionContractClauseList`, the part
+of `ParseFunctionContractClauses` after the declarator's scopes), before the
+late-parsed body; an out-of-line definition's clauses enter its class's
+scope and `this`, as its trailing requires-clause does.
+
 **Pointers into objects:** `ASTConverter::subobjectPointer` lowers a decayed
 member array of a pointee and the address of a pointee's element, field, or
 nested record. In a statement (`SubobjectSink`) it asserts the place's access

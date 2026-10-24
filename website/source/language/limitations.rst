@@ -156,11 +156,13 @@ C++ feature boundaries
        nested/pointer/array-bearing records used by value, and a whole record
        or array read through a pointer (``Ring copy = *r;``).
    * - Functions
-     - Free functions, overloads, namespaces, contracts, direct calls, and
+     - Free functions, member functions of classes without bases or virtual
+       functions (:doc:`structs`), overloads, namespaces, contracts, direct calls, and
        direct and mutual recursion, also through stores to pointer and
        reference parameters and through automatic objects, with mutual
        recursion among functions of one kind (spec, proof, or executable).
-     - Member functions (their contracts are ignored with a warning),
+     - Virtual functions, member functions of classes with bases,
+       constructors, destructors, conversion functions,
        templates (one without contracts stops nothing unless verified code
        calls it; the contracts of a function or class template compile,
        instantiate, and are ignored with a warning, and one with contract
@@ -209,9 +211,9 @@ otherwise supported code:
 - ``cppverify::aliases`` between pointers to different types (``aliases
   between different pointee types are unsupported``).
 
-Contracts on member functions are instead ignored with a warning
-(``-Wcontract-unsupported``: "contracts on member functions are not yet
-supported and are ignored ..."), and the run continues with the other
+A member function of a class template has its contracts ignored with a
+warning (``-Wcontract-unsupported``: "contracts in class template ... are
+not yet supported and are ignored"), and the run continues with the other
 functions.
 
 Objects, classes, and RAII

@@ -1269,6 +1269,35 @@ void reset_left(Pair &p)
   extent in a type invariant (B3's class invariants), and `reads` over a
   field.
 
+### 3f. Member functions
+
+- A non-static member function of a class without bases or virtual
+  functions is a function whose first parameter is `this`, a pointer to its
+  object with the validity of a reference parameter (non-null, live,
+  initialized at entry), to const in a `const` member function, as Dafny's
+  methods take `this` and Verus's `&self`/`&mut self`. It takes part in the
+  default separation of address parameters; `cppverify::aliases(this, p)`
+  opts out. Fields, written `f` or `this->f`, are places through `this`.
+- Clauses are parsed in the complete-class context, as a C++26 function
+  contract specifier is: an in-class declaration's tokens are kept with its
+  late-parsed declaration (as its exception specification is) and parsed
+  with its parameters and `this` once the class is complete; an out-of-line
+  definition's clauses are in its class's scope.
+- Frame (decision Q8): a verified non-const member function without
+  `cppverify::modifies` may write `*this`; a `const` one only its own storage,
+  `mutable` fields only when listed; an explicit `cppverify::modifies`
+  replaces the default; a trusted or bodiless one keeps the trusted-contract
+  rule.
+- A call passes the object's address first: `p->m()` passes `p`, `obj.m()`
+  binds `obj` as a reference argument does (a local object is lent to the
+  callee under 3d's rules), and `m()` in a member function passes `this`. A
+  static member function is a free function.
+- Not yet, each an error naming the function: virtual functions (dispatch
+  needs behavioral subtyping), member functions of classes with bases,
+  constructors and destructors, conversion functions, explicit object
+  parameters, rvalue- and volatile-qualified member functions; members of
+  class templates keep the template rule.
+
 ### 4. `cppverify::modifies(...)` frame condition
 
 ```cpp

@@ -286,6 +286,16 @@ reseated: ``c.n`` and ``c.buf[i]`` are cells of the object, ``&c.n`` and
 a reference can be bound to ``*p``, ``p->left``, ``a[i]``, or another
 reference (:doc:`language/structs`).
 
+**Member functions.** Contracts on a member function written in its class
+were ignored with a warning, and one defined outside its class was an error
+(``member function verification is unsupported``). A member function of a
+class without bases or virtual functions is verified now, as a function of
+``this``: fields are cells of the object, ``c.bump()`` passes ``&c``, its
+clauses may name members declared after them (the complete-class context of
+C++26 contracts), and a non-const one without ``cppverify::modifies`` may
+write its object. Virtual functions, constructors, destructors, and
+conversion functions are errors naming the function (:doc:`language/structs`).
+
 **Extents of pointer fields.** ``cv::valid(s->data, s->len)`` was an error
 (``valid marker requires a bare complete-object pointer and an integer element
 count``), so a record that describes a buffer by a pointer and a length (a

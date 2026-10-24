@@ -436,6 +436,110 @@ A field given another pointer in the body (``b.data = q;``) addresses that
 pointer's object from then on, not the extent. A field of an array element
 (``s->items[k].data``) cannot take an extent yet.
 
+Member functions
+----------------
+
+A member function of a class without bases or virtual functions is verified
+as a function of ``this``, a pointer to its object that is never null, as a
+reference is: a field, written ``n`` or ``this->n``, is a cell of the object,
+``cppverify::modifies(n)`` names it and ``cppverify::modifies(*this)`` the
+object, and a call passes the object's address (``c.bump()`` passes ``&c``,
+``p->bump()`` passes ``p``, and ``bump()`` in a member function passes
+``this``). Its clauses are parsed once the class is complete, so they may
+name members declared after them, as in C++26 contracts. ``this`` and the
+other address parameters name distinct objects by default;
+``cppverify::aliases(this, o)`` allows them to name one.
+
+A non-const member function without ``cppverify::modifies`` may write its
+object, which is the C++ reading of a method that changes ``*this``; a
+``const`` one writes only its own storage, its ``mutable`` fields included
+unless its ``cppverify::modifies`` lists them. An explicit
+``cppverify::modifies`` replaces the default. A static member function is a
+free function.
+
+.. cppverify-example: fails reset_count self_copy
+
+.. code-block:: cpp
+
+   struct Counter {
+     void bump()
+       cv::pre(n < limit)
+       cv::modifies(n)
+       cv::post(n == cv::old(n) + 1 && limit == cv::old(limit))
+     {
+       n = n + 1;
+     }
+
+     int get() const
+       cv::post(cv::result == n)
+     {
+       return n;
+     }
+
+     void reset()
+       cv::post(n == 0 && limit == 10)
+     {
+       n = 0;
+       limit = 10;
+     }
+
+     void copy_from(const Counter &o)
+       cv::modifies(n)
+       cv::post(n == o.n)
+     {
+       n = o.n;
+     }
+
+     int n;
+     int limit;
+   };
+
+   int counted()
+     cv::post(cv::result == 11)
+   {
+     Counter c;
+     c.n = 0;
+     c.limit = 5;
+     c.bump();
+     int k = c.get();
+     c.reset();
+     return k + c.limit;
+   }
+
+   void reset_count(Counter &c)
+     cv::modifies(c.n)
+   {
+     c.reset();
+   }
+
+   void self_copy(Counter &c)
+     cv::modifies(c.n)
+   {
+     c.copy_from(c);
+   }
+
+.. code-block:: text
+
+   Verified: Counter::bump [backend=z3]
+   Verified: Counter::get [backend=z3]
+   Verified: Counter::reset [backend=z3]
+   Verified: Counter::copy_from [backend=z3]
+   Verified: counted [backend=z3]
+   counter.cpp:49:5: error: verification failed: reset_count [...::frame@49:5] (counterexample: c [ssa=c_0] [type=pointer] = 1; trace: call.reset@49:5 arg0=1) [backend=z3] [reason=counterexample]
+   counter.cpp:55:5: error: verification failed: self_copy [...::aliasing@55:5] (counterexample: c [ssa=c_0] [type=pointer] = 1; trace: call.copy_from@55:5 arg0=1 arg1=1) [backend=z3] [reason=counterexample]
+
+``reset`` states no ``cppverify::modifies``, so it may write all of ``c``,
+which ``reset_count`` may not. ``copy_from`` writes ``this->n`` and reads
+``o``, which by default are distinct objects; ``c.copy_from(c)`` is the same
+object twice.
+
+Not yet supported, each an error naming the function: virtual functions,
+member functions of a class with bases, constructors and destructors,
+conversion functions, and member functions of a class template (whose
+contracts are ignored with a warning). A member call inside an expression
+(``return n + get();``) is unsupported as a free function's is; assign its
+result first.
+
 ``cppverify::type_invariant``
 -----------------------------
 
