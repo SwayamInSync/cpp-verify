@@ -2927,6 +2927,82 @@ applicationKey(const VSpecCallExpr &C,
   return true;
 }
 
+/// The condition a definedness check asks for, without the guards it holds
+/// under: `!g || c` as built by makeImplies, and the range of a quantified
+/// check.
+static const VExpr *checkedCondition(const VExpr *E) {
+  while (E) {
+    if (E->K == VExpr::BinOp) {
+      const auto *B = static_cast<const VBinOpExpr *>(E);
+      if (B->Op == VBinOp::Or && B->Lhs->K == VExpr::UnaryOp &&
+          static_cast<const VUnaryOpExpr *>(B->Lhs.get())->Op ==
+              VUnaryOp::Not) {
+        E = B->Rhs.get();
+        continue;
+      }
+    }
+    if (E->K == VExpr::Forall) {
+      E = static_cast<const VQuantifiedExpr *>(E)->Body.get();
+      continue;
+    }
+    return E;
+  }
+  return E;
+}
+
+/// Whether \p E may have another value at a loop's head than before the
+/// loop: it reads a variable, a field, or a heap the loop modifies, outside
+/// cppverify::old, which reads the entry state.
+static bool readsLoopState(const VExpr *E,
+                           const std::set<std::string> &Modified) {
+  if (!E)
+    return false;
+  switch (E->K) {
+  case VExpr::Old:
+    return false;
+  case VExpr::Var: {
+    const auto *V = static_cast<const VVarExpr *>(E);
+    return Modified.count(V->Name) || Modified.count(V->ProvenanceVariable);
+  }
+  case VExpr::FieldAccess: {
+    const auto *F = static_cast<const VFieldAccessExpr *>(E);
+    if (F->Base->K == VExpr::Var) {
+      const std::string Prefix =
+          static_cast<const VVarExpr *>(F->Base.get())->Name + ".";
+      for (const std::string &Name : Modified)
+        if (llvm::StringRef(Name).starts_with(Prefix))
+          return true;
+    }
+    break;
+  }
+  case VExpr::Load:
+    if (Modified.count(VHeapName))
+      return true;
+    break;
+  case VExpr::SpecCall:
+    if (static_cast<const VSpecCallExpr *>(E)->ReadsHeap &&
+        Modified.count(VHeapName))
+      return true;
+    break;
+  case VExpr::UnaryOp: {
+    const auto *U = static_cast<const VUnaryOpExpr *>(E);
+    if ((U->Op == VUnaryOp::ValidPtr && (Modified.count(VAllocationHeapName) ||
+                                         Modified.count(VLivenessHeapName))) ||
+        (U->Op == VUnaryOp::InitializedPtr &&
+         Modified.count(VInitializationHeapName)))
+      return true;
+    break;
+  }
+  default:
+    break;
+  }
+  bool Found = false;
+  forEachVExprChild(E, [&](const VExpr *Child) {
+    Found = Found || readsLoopState(Child, Modified);
+  });
+  return Found;
+}
+
 /// Whether \p E mentions the variable \p Name free.
 static bool mentionsFree(const VExpr *E, const std::string &Name) {
   if (!E)
@@ -4494,16 +4570,20 @@ class PassivizerImpl {
   /// path into the head (entry, the end of an iteration, a continue) asserts
   /// it with the invariant, so at the head it holds by the same induction,
   /// and the reads it makes, of memory written in the loop included, are
-  /// initialized and in bounds there.
-  void
-  assumeInvariantSafety(PassiveProgram &P, const VWhileStmt &W,
-                        const VExpr *Inv, const VExpr *Guard,
-                        const std::map<std::string, std::string> &Renames) {
+  /// initialized and in bounds there. A check whose condition reads nothing
+  /// the loop modifies is left out: what it asks for holds at the head as it
+  /// did before the loop, and its guards alone, of state the loop changes,
+  /// are what an invariant states itself.
+  void assumeInvariantSafety(PassiveProgram &P, const VWhileStmt &W,
+                             const VExpr *Inv, const VExpr *Guard,
+                             const std::map<std::string, std::string> &Renames,
+                             const std::set<std::string> &Modified) {
     CloneCtx Ctx{Renames, OldState, false};
     for (const SafetyCheck &Check :
          exprSafetyChecks(Inv, Inv, invariantChecks(W, Inv)))
-      emitPassive(P, PassiveStmt::Assume, cloneExpr(Check.Cond.get(), Ctx),
-                  Guard, Inv->Loc);
+      if (readsLoopState(checkedCondition(Check.Cond.get()), Modified))
+        emitPassive(P, PassiveStmt::Assume, cloneExpr(Check.Cond.get(), Ctx),
+                    Guard, Inv->Loc);
   }
 
   void emitMathBridge(PassiveProgram &P, const VExpr *E, const VExpr *Guard,
@@ -6601,7 +6681,7 @@ public:
       }
       Origin = "inv";
       for (const auto &Inv : W.Invariants) {
-        assumeInvariantSafety(P, W, Inv.get(), Active.get(), Renames);
+        assumeInvariantSafety(P, W, Inv.get(), Active.get(), Renames, Modified);
         auto BoundInv = cloneExpr(Inv.get(), HeadCtx);
         emitPassive(P, PassiveStmt::Assume, std::move(BoundInv), Active.get(),
                     W.Loc);
