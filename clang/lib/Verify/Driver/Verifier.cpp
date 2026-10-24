@@ -2790,6 +2790,23 @@ class Verifier {
   llvm::raw_ostream *DumpOS = nullptr;
   std::vector<VerifyDiagnostic> Diags;
   std::optional<LeanProject> Lean;
+  /// Where each template specialization verified is instantiated, and what
+  /// it is, by its function's name.
+  std::map<std::string, std::pair<SourceLocation, std::string>>
+      InstantiationPoints;
+
+  /// The instantiation a diagnostic about a template specialization is
+  /// about, which a compiler notes after an error or a warning.
+  const std::pair<SourceLocation, std::string> *
+  instantiationOf(const VerifyDiagnostic &D) const {
+    if ((D.K != VerifyDiagnostic::Error && D.K != VerifyDiagnostic::Warning) ||
+        (D.Loc.isInvalid() && D.Span.isInvalid()))
+      return nullptr;
+    auto It = InstantiationPoints.find(D.FunctionName);
+    if (It == InstantiationPoints.end() || It->second.first.isInvalid())
+      return nullptr;
+    return &It->second;
+  }
 
   void reportLeanWarnings() {
     for (std::string &Warning : Lean->takeWarnings())
@@ -3081,6 +3098,7 @@ public:
         Converter.getUnverifiedCallers();
     for (const auto &[Loc, Message] : Converter.getWarnings())
       Diags.push_back({VerifyDiagnostic::Warning, Message, Loc});
+    InstantiationPoints = Converter.getInstantiationPoints();
     // A construct the verifier does not represent costs its function alone:
     // the function is Unresolved, its first error carrying the verdict, and
     // the rest of the translation unit is verified. An error outside every
@@ -5564,6 +5582,17 @@ public:
     }
     if (Source.isValid())
       Record["source"] = sourceJSON(Source);
+    if (const std::pair<SourceLocation, std::string> *Instantiation =
+            instantiationOf(D))
+      if (PresumedLoc Point =
+              Ctx.getSourceManager().getPresumedLoc(Instantiation->first);
+          Point.isValid()) {
+        ObligationSource At;
+        At.File = Point.getFilename();
+        At.Line = At.EndLine = Point.getLine();
+        At.Column = At.EndColumn = Point.getColumn();
+        Record["instantiated_at"] = sourceJSON(At);
+      }
 
     if (D.Vacuous)
       Record["vacuous"] = true;
@@ -5736,6 +5765,12 @@ public:
         printJSONDiagnostic(D, OS);
         continue;
       }
+      const std::pair<SourceLocation, std::string> *Instantiation =
+          instantiationOf(D);
+      const std::string InstantiationNote =
+          Instantiation ? "in instantiation of " + Instantiation->second +
+                              " '" + D.FunctionName + "' requested here"
+                        : std::string();
       if (D.K == VerifyDiagnostic::Error && D.Span.isValid()) {
         DiagnosticOptions DiagOpts;
         DiagOpts.ShowPresumedLoc = true;
@@ -5744,6 +5779,10 @@ public:
             FullSourceLoc(D.Span.getBegin(), Ctx.getSourceManager()),
             DiagnosticsEngine::Error, D.Message,
             CharSourceRange::getTokenRange(D.Span), {});
+        if (Instantiation)
+          Text.emitDiagnostic(
+              FullSourceLoc(Instantiation->first, Ctx.getSourceManager()),
+              DiagnosticsEngine::Note, InstantiationNote, {}, {});
         continue;
       }
       if (D.Loc.isValid()) {
@@ -5798,6 +5837,14 @@ public:
       case VerifyDiagnostic::Warning:
         OS << "warning: " << D.Message << "\n";
         break;
+      }
+      if (Instantiation) {
+        PresumedLoc PLoc =
+            Ctx.getSourceManager().getPresumedLoc(Instantiation->first);
+        if (PLoc.isValid())
+          OS << PLoc.getFilename() << ":" << PLoc.getLine() << ":"
+             << PLoc.getColumn() << ": ";
+        OS << "note: " << InstantiationNote << "\n";
       }
     }
   }
