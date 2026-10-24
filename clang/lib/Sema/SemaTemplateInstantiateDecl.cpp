@@ -5447,9 +5447,6 @@ void Sema::InstantiateFunctionContract(SourceLocation PointOfInstantiation,
       Pattern ? Context.getFunctionContract(Pattern) : nullptr;
   if (!PatternContract || Context.getFunctionContract(Function))
     return;
-  // The clauses name the parameters of the declaration they are written on.
-  const FunctionDecl *Written =
-      PatternContract->ContractDecl ? PatternContract->ContractDecl : Pattern;
 
   // Recorded first, so that a use of the specialization in its own contract
   // finds it and stops.
@@ -5471,8 +5468,10 @@ void Sema::InstantiateFunctionContract(SourceLocation PointOfInstantiation,
   MultiLevelTemplateArgumentList TemplateArgs = getTemplateInstantiationArgs(
       Function, Function->getLexicalDeclContext(), /*Final=*/false,
       /*Innermost=*/std::nullopt, /*RelativeToPrimary=*/true);
-  // A member's `this` is the specialization's, the current context.
-  if (addInstantiatedParametersToScope(Function, Written, Scope, TemplateArgs))
+  // A member's `this` is the specialization's, the current context. The
+  // scope identifies the parameters of every redeclaration of the pattern,
+  // so the clauses may name those of the declaration they are written on.
+  if (addInstantiatedParametersToScope(Function, Pattern, Scope, TemplateArgs))
     return;
   FunctionContractInfo Instantiated;
   if (SubstFunctionContract(*PatternContract, Instantiated, TemplateArgs))
