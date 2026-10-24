@@ -4493,6 +4493,14 @@ Sema::SubstExpr(Expr *E, const MultiLevelTemplateArgumentList &TemplateArgs) {
   return Instantiator.TransformExpr(E);
 }
 
+bool Sema::SubstFunctionContract(
+    const FunctionContractInfo &From, FunctionContractInfo &To,
+    const MultiLevelTemplateArgumentList &TemplateArgs) {
+  TemplateInstantiator Instantiator(*this, TemplateArgs, SourceLocation(),
+                                    DeclarationName());
+  return Instantiator.TransformFunctionContract(From, To);
+}
+
 ExprResult
 Sema::SubstCXXIdExpr(Expr *E,
                      const MultiLevelTemplateArgumentList &TemplateArgs) {
