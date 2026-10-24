@@ -675,6 +675,17 @@ static bool returnsOwnObject(const FunctionDecl *FD) {
   return Finder.Any && Finder.All;
 }
 
+/// The member function returning its own object that E calls, read or
+/// copied (`(a += b) += c`, `Bits c = (a |= b);`).
+static const FunctionDecl *ownObjectCallee(const Expr *E) {
+  if (const CXXConstructExpr *Copy = constructionOf(E);
+      Copy && Copy->getNumArgs() == 1)
+    E = Copy->getArg(0);
+  const auto *Call = E ? dyn_cast<CallExpr>(E->IgnoreParenImpCasts()) : nullptr;
+  const FunctionDecl *Callee = Call ? Call->getDirectCallee() : nullptr;
+  return Callee && returnsOwnObject(Callee) ? Callee : nullptr;
+}
+
 static std::optional<std::string>
 findUnsupportedType(const FunctionDecl *FD, bool AllowScalarReferences) {
   // By-value records keep their flattened SSA representation, so only records
@@ -6206,16 +6217,9 @@ void ASTConverter::convertExecCallArgs(
     return false;
   };
 
-  // The reference a member function returns to its own object is no value.
   for (const Expr *A : CE->arguments())
-    if (const auto *Nested = dyn_cast<CallExpr>(A->IgnoreParenImpCasts());
-        Nested && Nested->getDirectCallee() &&
-        returnsOwnObject(Nested->getDirectCallee())) {
-      error(CurrentFn->Name + ": the reference " +
-            Nested->getDirectCallee()->getNameAsString() +
-            " returns is not used yet; call it as a statement of its own");
+    if (rejectOwnObjectUse(A))
       return;
-    }
   for (unsigned I = 0; I < CE->getNumArgs(); ++I) {
     if (!IsModifyingCall(CE->getArg(I)))
       continue;
@@ -6670,22 +6674,22 @@ void ASTConverter::appendPointeeStore(
                                              Place->takeAccessCondition()));
 }
 
+bool ASTConverter::rejectOwnObjectUse(const Expr *E) {
+  const FunctionDecl *Callee = ownObjectCallee(E);
+  if (!Callee)
+    return false;
+  error(CurrentFn->Name + ": the reference " + Callee->getNameAsString() +
+        " returns is not used yet; call it as a statement of its own");
+  return true;
+}
+
 bool ASTConverter::appendRecordCopy(const Expr *Source, const VarDecl *Target,
                                     SourceLocation Loc,
                                     std::vector<std::unique_ptr<VStmt>> &Out) {
   if (!Source || !Target)
     return false;
-  if (const CXXConstructExpr *Copy = constructionOf(Source);
-      Copy && Copy->getNumArgs() == 1)
-    if (const auto *Call =
-            dyn_cast<CallExpr>(Copy->getArg(0)->IgnoreParenImpCasts());
-        Call && Call->getDirectCallee() &&
-        returnsOwnObject(Call->getDirectCallee())) {
-      error(CurrentFn->Name + ": the reference " +
-            Call->getDirectCallee()->getNameAsString() +
-            " returns is not used yet; call it as a statement of its own");
-      return true;
-    }
+  if (rejectOwnObjectUse(Source))
+    return true;
   Source = Source->IgnoreParenImpCasts();
   if (const auto *Construct = dyn_cast<CXXConstructExpr>(Source)) {
     if (Construct->getNumArgs() != 1 ||
@@ -6790,6 +6794,8 @@ bool ASTConverter::appendObjectCopy(const Expr *Source, QualType Ty,
                                     const VExpr *Base, uint64_t Offset,
                                     SourceLocation Loc,
                                     std::vector<std::unique_ptr<VStmt>> &Out) {
+  if (rejectOwnObjectUse(Source))
+    return false;
   const Expr *Lvalue = peelObjectExpr(Source);
   if (const auto *Cast = dyn_cast<CastExpr>(Lvalue);
       Cast && Cast->getCastKind() == CK_LValueToRValue)
