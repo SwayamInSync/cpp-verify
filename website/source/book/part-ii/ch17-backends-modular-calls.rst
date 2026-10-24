@@ -365,7 +365,9 @@ of the spec functions Lean defines:
 ``cppverify_refute`` decides the instance, or evaluates it first, the spec
 functions that are Lean definitions (`Spec functions in Lean`_) by their
 equations, a store to memory with ``grind``, since it relates two heaps at
-every address, and a quantifier over a range of integers by trying each one.
+every address, and a quantifier over a range of at most 4096 integers by
+trying each one (a larger range is not decided: each integer is a level of
+recursion, and a billion of them took Lean 58 GB).
 A goal that applies a spec Lean leaves opaque, such as a ``cppverify::choose``,
 cannot be decided there: the failure stands, and a warning says so (``the
 counterexample of pick_one is not confirmed in Lean: Lean cannot decide the
