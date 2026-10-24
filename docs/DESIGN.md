@@ -1303,9 +1303,36 @@ void reset_left(Pair &p)
   static member function is a free function.
 - Not yet, each an error naming the function: virtual functions (dispatch
   needs behavioral subtyping), member functions of classes with bases,
-  constructors and destructors, conversion functions, explicit object
-  parameters, rvalue- and volatile-qualified member functions; members of
-  class templates keep the template rule.
+  destructors, conversion functions, explicit object parameters, rvalue- and
+  volatile-qualified member functions; members of class templates keep the
+  template rule.
+
+### 3g. Constructors
+
+- A constructor runs on storage its caller allocated, as a Dafny
+  constructor's first phase assigns the fields of an object that exists but
+  is not yet initialized. At entry `this` is one live allocation at every
+  leaf (a generated precondition, which the caller shows for its object),
+  nothing is assumed about the initialization of its object, so a member
+  reads as initialized only once the constructor has written it, and every
+  leaf must be initialized by the constructor's end (`initialization`,
+  located at the member). Its precondition cannot read the object, and `aliases` cannot
+  name `this`. Its frame is `*this` and its own footprints.
+- Member initializers run first, in declaration order (C++'s order, whatever
+  the written one): the member's initializer, else its in-class initializer,
+  else the default construction of its type. An implicit or defaulted
+  default constructor is exactly those initializers, run in place where the
+  object is defined; a constructor the class provides is a call, which needs
+  a contract.
+- A caller passes the object's address as `this`, need not have initialized
+  it, and holds every leaf initialized after the call, with the
+  postcondition describing the values. A local constructed this way is kept
+  in memory.
+- The class must be trivially copyable (copies are member-wise, and nothing
+  runs at the end of its lifetime). Not yet: delegating constructors,
+  members whose class provides a constructor, reference and bit-field
+  members, arrays of such objects, `new` of a record, and passing or
+  returning a constructed object by value.
 
 ### 4. `cppverify::modifies(...)` frame condition
 

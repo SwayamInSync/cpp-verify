@@ -534,11 +534,91 @@ which ``reset_count`` may not. ``copy_from`` writes ``this->n`` and reads
 object twice.
 
 Not yet supported, each an error naming the function: virtual functions,
-member functions of a class with bases, constructors and destructors,
-conversion functions, and member functions of a class template (whose
-contracts are ignored with a warning). A member call inside an expression
-(``return n + get();``) is unsupported as a free function's is; assign its
-result first.
+member functions of a class with bases, destructors, conversion functions,
+and member functions of a class template (whose contracts are ignored with a
+warning). A member call inside an expression (``return n + get();``) is
+unsupported as a free function's is; assign its result first.
+
+Constructors
+------------
+
+A constructor runs on storage its caller allocated. When it is entered,
+every member of its object is uninitialized; its member initializers run
+first, in declaration order whatever order they are written in, a member it
+does not name taking its in-class initializer; and by its end it must have
+initialized every member. Its postcondition describes the new object. A
+caller passes the object's address as ``this`` and holds an initialized
+object after the call:
+
+.. cppverify-example: fails Ring::Ring
+
+.. code-block:: cpp
+
+   struct Ring {
+     Ring()
+       cv::post(head == 0 && count == 0)
+       cv::post(cv::forall(k, 0, 8, buf[k] == 0))
+       : head(0), count(0)
+     {
+       for (int i = 0; i < 8; i = i + 1)
+         cv::invariant(0 <= i && i <= 8)
+         cv::invariant(head == 0 && count == 0)
+         cv::invariant(cv::forall(k, 0, i, buf[k] == 0))
+         cv::decreases(8 - i)
+       {
+         buf[i] = 0;
+       }
+     }
+
+     Ring(int first)
+       cv::post(head == 0 && count == 1 && buf[0] == first)
+       : head(0), count(1)
+     {
+       buf[0] = first;
+     }
+
+     int buf[8];
+     int head;
+     int count;
+   };
+
+   int fresh()
+     cv::post(cv::result == 0)
+   {
+     Ring r;
+     return r.count + r.buf[7];
+   }
+
+.. code-block:: text
+
+   Verified: Ring::Ring [backend=z3]
+   ring.cpp:24:7: error: verification failed: Ring::Ring [...::initialization@24:7#2] (counterexample: ...) [backend=z3] [reason=counterexample]
+   Verified: fresh [backend=z3]
+
+The second constructor initializes ``buf[0]`` alone, and the failure is
+located at the member it leaves uninitialized, at its second element. The
+loop of the first states what it has written, which is also what shows the
+array initialized (:doc:`functions-loops`).
+
+- An implicit or defaulted default constructor is its members'
+  initializers, run where the object is defined: ``struct Point { int x = 3;
+  int y = 4; };`` then ``Point p;`` gives ``p.x == 3``. A constructor the
+  class provides needs a contract, as any function a verified one calls.
+- A constructor's precondition cannot read its object, whose lifetime has
+  not begun, and ``cppverify::aliases`` cannot name ``this``: the object is
+  new. Its frame is its object and the footprints it lists.
+- A member function called on the object before every member is
+  initialized reads them as initialized, which C++ does not require, so the
+  call is ``construct.unsupported``, as an out-parameter's is.
+- Copies of such an object are its members' copies: its class must be
+  trivially copyable.
+- Not yet, each an error naming the function: delegating constructors,
+  constructors of a class that is not trivially copyable (a destructor or a
+  copy operation of its own), of a class with members whose class provides a
+  constructor, with reference or bit-field members, or larger than 256
+  bytes; arrays of objects with constructors; ``new`` of a record. A
+  constructed object is kept in memory, and passing or returning it by value
+  is not supported yet.
 
 ``cppverify::type_invariant``
 -----------------------------

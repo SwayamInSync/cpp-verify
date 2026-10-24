@@ -231,6 +231,18 @@ private:
                                   const VExpr *Base, uint64_t Offset,
                                   SourceLocation Loc,
                                   std::vector<std::unique_ptr<VStmt>> &Out);
+  /// The member initializers of a constructor, in the order they run, on
+  /// the object at Base + Offset.
+  bool appendMemberInitializers(const CXXConstructorDecl *Ctor,
+                                const VExpr *Base, uint64_t Offset,
+                                SourceLocation Loc,
+                                std::vector<std::unique_ptr<VStmt>> &Out);
+  /// Runs a constructor on the object at Base + Offset: a call of one the
+  /// class provides, else its members' initializers.
+  bool appendConstruction(const CXXConstructExpr *Construct, QualType Ty,
+                          const VExpr *Base, uint64_t Offset,
+                          SourceLocation Loc,
+                          std::vector<std::unique_ptr<VStmt>> &Out);
   bool appendObjectZeroInitialization(QualType Ty, const VExpr *Base,
                                       uint64_t Offset, SourceLocation Loc,
                                       std::vector<std::unique_ptr<VStmt>> &Out);

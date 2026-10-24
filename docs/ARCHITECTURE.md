@@ -249,6 +249,31 @@ of `ParseFunctionContractClauses` after the declarator's scopes), before the
 late-parsed body; an out-of-line definition's clauses enter its class's
 scope and `this`, as its trailing requires-clause does.
 
+**Constructors:** `unsupportedConstructor` admits a constructor of a
+trivially copyable class without bases that does not delegate and whose
+members are scalars, pointers, and aggregates of them whose classes provide
+no constructor. `convertFunction` marks it `VFunction::IsConstructor`, gives
+`this` the lifetime companion `__cppverify_constructed_lifetime` (every
+`CXXThisExpr`), so its accesses are those of local storage, initialization
+checked, and generates the precondition that each leaf of `*this` is valid
+with that identity, one live allocation, instead of a reference's
+initialized object; nothing is assumed about the object's initialization.
+Its body starts with its member initializers (`appendMemberInitializers`,
+over `inits()`, which Sema keeps in execution order). `run()` checks every
+leaf initialized in the final state (`emitConstructedChecks`, anchored at
+the member); a loop in the body is framed by `this`'s origin, its entry
+object, as a parameter's is. A local whose
+initializer runs a non-trivial constructor is promoted (address discovery,
+through `constructionOf`'s wrappers), and `appendObjectInitialization` runs
+the construction there (`appendConstruction`): a provided constructor is a
+`VCallStmt` with the object's address first; an implicit or defaulted
+default constructor is its member initializers in place, recursively. At a
+call of a constructor, `emitRecordActualChecks` checks the object's
+validity but not its initialization, and `emitCallStmt` sets every leaf's
+initialization bit after the frame. Records count as
+supported types and layouts when trivially copyable rather than trivial,
+since constructors no longer stop them.
+
 **Pointers into objects:** `ASTConverter::subobjectPointer` lowers a decayed
 member array of a pointee and the address of a pointee's element, field, or
 nested record. In a statement (`SubobjectSink`) it asserts the place's access

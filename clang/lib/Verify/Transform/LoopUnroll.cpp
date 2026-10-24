@@ -257,6 +257,7 @@ VFunction LoopUnroller::unroll(const VFunction &Fn, unsigned K) {
   Out.SourceVariables = Fn.SourceVariables;
   Out.ScalarReferenceParams = Fn.ScalarReferenceParams;
   Out.RecordParams = Fn.RecordParams;
+  Out.IsConstructor = Fn.IsConstructor;
   for (const auto &[Name, Field] : Fn.FieldParams)
     Out.FieldParams.emplace_back(Name, cloneVExpr(Field.get()));
   Out.ConstAddressParams = Fn.ConstAddressParams;

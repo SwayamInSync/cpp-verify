@@ -234,8 +234,8 @@ void self_copy_aliased(Counter &c)
 // CHECK-DAG: Verified: self_copy_aliased [backend=z3]
 
 // Not yet, each with its function's located error: virtual functions,
-// members of classes with bases, constructors, destructors, and conversion
-// functions.
+// members of classes with bases, destructors (and the constructors of a
+// class with one), and conversion functions.
 struct Shape {
   virtual int area() const
     cppverify::post(cppverify::result >= 0)
@@ -272,6 +272,6 @@ struct Made {
     return v;
   }
 };
-// CHECK-DAG: error: Made::Made: constructors are not verified yet
+// CHECK-DAG: error: Made::Made: constructors of a class that is not trivially copyable, whose copies or destruction run code, are not supported yet
 // CHECK-DAG: error: Made::~Made: destructors are not verified yet
 // CHECK-DAG: error: Made::operator int: conversion functions are unsupported

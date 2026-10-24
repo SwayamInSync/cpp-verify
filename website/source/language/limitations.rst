@@ -162,7 +162,8 @@ C++ feature boundaries
        reference parameters and through automatic objects, with mutual
        recursion among functions of one kind (spec, proof, or executable).
      - Virtual functions, member functions of classes with bases,
-       constructors, destructors, conversion functions,
+       destructors, delegating constructors and the other constructors
+       :doc:`structs` lists, conversion functions,
        templates (one without contracts stops nothing unless verified code
        calls it; the contracts of a function or class template compile,
        instantiate, and are ignored with a warning, and one with contract
@@ -222,7 +223,8 @@ Objects, classes, and RAII
 Flat records are currently value aggregates, not a general C++ object model.
 CppVerify does not yet model:
 
-- constructors, destructors, copy/move special members, or RAII cleanup;
+- destructors, copy/move special members of their own, or RAII cleanup
+  (constructors are verified, :doc:`structs`);
 - ``this`` and member-function cv/ref qualifiers;
 - class invariants over aliased mutable objects;
 - base subobjects, vtables, or virtual dispatch;

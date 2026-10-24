@@ -307,8 +307,18 @@ class without bases or virtual functions is verified now, as a function of
 ``this``: fields are cells of the object, ``c.bump()`` passes ``&c``, its
 clauses may name members declared after them (the complete-class context of
 C++26 contracts), and a non-const one without ``cppverify::modifies`` may
-write its object. Virtual functions, constructors, destructors, and
-conversion functions are errors naming the function (:doc:`language/structs`).
+write its object. Virtual functions, destructors, and conversion functions
+are errors naming the function (:doc:`language/structs`).
+
+**Constructors.** A constructor was an error (``constructors are not
+verified yet``), and a class with one was not a supported type, so a local
+of it could not be declared. A constructor of a trivially copyable class
+without bases is verified now: its object is the caller's storage, every
+member uninitialized at entry, its member initializers run in declaration
+order with in-class initializers for the members it does not name, and it
+must initialize every member by its end. ``Counter c(5);`` passes ``&c`` and
+leaves an initialized object; an implicit or defaulted default constructor
+runs its members' initializers in place (:doc:`language/structs`).
 
 **Extents of pointer fields.** ``cv::valid(s->data, s->len)`` was an error
 (``valid marker requires a bare complete-object pointer and an integer element
