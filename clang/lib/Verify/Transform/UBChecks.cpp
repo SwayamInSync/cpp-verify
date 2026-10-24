@@ -493,6 +493,65 @@ struct UBInstrumenter {
         VType::makeBool(), Loc);
   }
 
+  // A pair with a declared extent is separated over its extents
+  // (appendExtentSeparation), not over one object each: where the extent is
+  // empty its pointer reaches nothing, so the one-object separation said
+  // only that p's first element, which no access reads, lies elsewhere, and
+  // a caller with an empty extent (n == 0) into another object failed it.
+  void dropSingleObjectSeparation(VFunction &Fn) const {
+    auto IsNullTest = [](const VExpr *E, std::string &Name) {
+      if (!E || E->K != VExpr::BinOp)
+        return false;
+      const auto *Eq = static_cast<const VBinOpExpr *>(E);
+      if (Eq->Op != VBinOp::Eq || Eq->Lhs->K != VExpr::Var)
+        return false;
+      Name = static_cast<const VVarExpr *>(Eq->Lhs.get())->Name;
+      return true;
+    };
+    auto PairOf = [&](const VExpr *Pre)
+        -> std::optional<std::pair<std::string, std::string>> {
+      if (Pre->K != VExpr::BinOp ||
+          static_cast<const VBinOpExpr *>(Pre)->Op != VBinOp::Or)
+        return std::nullopt;
+      const VExpr *Nulls = static_cast<const VBinOpExpr *>(Pre)->Lhs.get();
+      if (Nulls->K != VExpr::BinOp ||
+          static_cast<const VBinOpExpr *>(Nulls)->Op != VBinOp::Or)
+        return std::nullopt;
+      std::string A, B;
+      if (!IsNullTest(static_cast<const VBinOpExpr *>(Nulls)->Lhs.get(), A) ||
+          !IsNullTest(static_cast<const VBinOpExpr *>(Nulls)->Rhs.get(), B))
+        return std::nullopt;
+      return std::make_pair(A, B);
+    };
+    std::vector<std::unique_ptr<VExpr>> Kept;
+    std::vector<ProofObligationKind> KeptKinds;
+    for (size_t I = 0; I != Fn.Preconditions.size(); ++I) {
+      bool Drop = false;
+      if (I >= Fn.ExplicitPreconditionCount &&
+          preconditionKind(Fn, I) == ProofObligationKind::Aliasing)
+        if (auto Pair = PairOf(Fn.Preconditions[I].get()))
+          Drop = llvm::any_of(
+              Fn.DisjointAddresses, [&](const VDisjointAddresses &D) {
+                return ((D.First == Pair->first && D.Second == Pair->second) ||
+                        (D.First == Pair->second && D.Second == Pair->first)) &&
+                       (ValidLen.count(D.First) || ValidLen.count(D.Second));
+              });
+      if (Drop)
+        continue;
+      Kept.push_back(std::move(Fn.Preconditions[I]));
+      KeptKinds.push_back(preconditionKind(Fn, I));
+    }
+    Fn.Preconditions.clear();
+    Fn.PreconditionKinds.clear();
+    const unsigned Explicit = Fn.ExplicitPreconditionCount;
+    for (size_t I = 0; I != Kept.size(); ++I) {
+      if (I < Explicit)
+        Fn.Preconditions.push_back(std::move(Kept[I]));
+      else
+        addPrecondition(Fn, std::move(Kept[I]), KeptKinds[I]);
+    }
+  }
+
   // A parameter with a declared extent addresses that extent, not a single
   // object: its validity is the extent's to state.
   void dropSingleObjectValidity(VFunction &Fn) const {
@@ -1353,6 +1412,7 @@ std::optional<std::string> verify::instrumentUBChecks(VFunction &Fn) {
   if (auto Misplaced = misplacedValidMarker(Fn))
     return Misplaced;
   UB.appendValidSemantics(Fn);
+  UB.dropSingleObjectSeparation(Fn);
   UB.appendExtentSeparation(Fn);
   if (!Fn.IsProof) {
     Fn.ObjectModel = true;
