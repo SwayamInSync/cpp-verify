@@ -173,9 +173,15 @@ was rejected as arithmetic on the pointer; values read through such a
 pointer are now ordinary integers (:doc:`language/dynamic-storage`).
 
 **Out-parameters.** Passing storage that is not initialized yet to a function
-that writes it (``int a; init(a);``) was a failure, or stopped the file; it is
-now ``Unresolved`` with reason ``construct.unsupported``, until a contract can
-say that a function writes its parameter first (:doc:`language/pointers`).
+that writes it (``int a; init(a);``) was a failure, or stopped the file. A
+reference or pointer parameter whose storage the body writes before it reads
+it is now an out-parameter: callers may pass storage not yet initialized,
+the function's reads of it are checked against what it wrote, and the parts
+it writes on every path, and those its postconditions read, are initialized
+after a call. A call that passes such storage to a parameter the callee may
+read first is ``Unresolved`` with reason ``construct.unsupported``
+(:doc:`language/pointers`). A constructor that calls a member function
+writing its object no longer fails its frame check.
 
 **One condition, one choice.** Every ``cv::choose`` was a choice of its own, so
 ``cv::choose(k, k > n) == cv::choose(k, k > n)`` failed with a counterexample,
@@ -347,6 +353,15 @@ instantiated, and a contracted template, or member of a class template,
 that nothing instantiates is reported. ``cv::post(cv::result > 0)`` and ``cv::old(x) > 0``
 of a template's type did not compile (``invalid operands to binary
 expression ('T' and 'int')``) (:doc:`language/functions-loops`).
+
+**std::min and std::max.** In a contract they ended ``Unresolved:
+obligation lowering failed: f (missing spec definition: fn_...)``, as did
+any function using a ``constexpr`` helper that could not be lifted. Of two
+integers they now mean what the standard says, whatever the library, in
+contracts and in code; any other function of the standard library is an
+error naming it, a helper that cannot be lifted is named in the verdicts
+that rely on it, and a lifted helper's references to ``const`` integers
+stand for their values (:doc:`language/functions-loops`).
 
 **Member operators.** For a member ``operator==``, ``a == b`` passed ``a``
 for the operator's parameter and ``b`` as an argument beyond it, an error,

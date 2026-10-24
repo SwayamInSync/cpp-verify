@@ -284,8 +284,8 @@ Contracted executable free functions may accept ``T&`` and ``const T&`` when
 ``T`` is ``bool``, integral, or enum. VCR retains the binding as an immutable
 address: reading loads the referent, assignment stores through that address,
 and ``cppverify::old(ref)`` selects the entry heap. Every reference receives an implicit
-non-null and live precondition, and the body is verified as reading the
-referent initialized.
+non-null and live precondition, and an initialized referent unless the body
+writes it before reading it (an out-parameter, below).
 
 ``cppverify::modifies(ref)`` is an open region rooted at the referent, like
 ``cppverify::modifies(*p)``. Default object-range disjointness and ``cppverify::aliases`` apply across
@@ -309,17 +309,22 @@ record. Conditional bindings, temporaries, reference returns, general raw
 address-taking/array decay (through such a reference too, and ``&x`` but as
 a call argument), and rvalue references remain fail-closed. A promoted object
 passed to a callee, by reference or ``&x``, keeps its lifetime: the callee
-must keep no address of it, and every field must be initialized. Addressable declarations inside loops and ``cppverify::old`` of local
+must keep no address of it, and every field must be initialized unless the
+callee writes it before reading it. Addressable declarations inside loops and ``cppverify::old`` of local
 objects/bindings are also rejected; outer automatic locals and loop-local aliases
 are supported. Pointer leaves may retain abstract pointer values, but storing a
 provenance-bearing local dynamic pointer fails closed until pointer provenance is
 represented in a parallel heap.
-A function is verified as reading its reference and pointer parameters'
-storage, and its callers a returned pointer's, as initialized. C++ requires
-neither, so a call that passes storage not yet initialized (an out-parameter,
-``int a; init(a);``) and a function that returns a pointer to such storage are
-``Unresolved`` with reason ``construct.unsupported``, not failures, until a
-function can state that it writes a parameter before it reads it. A local
+A reference or pointer parameter whose storage the body writes before it
+reads it, an out-parameter, may receive storage not yet initialized
+(``int a; init(a);``), as C++ allows (:doc:`pointers`). The rule is
+syntactic: a read at a computed index (``p[i]``), a copy of the pointer, and
+a callee that may read the storage first or has no verified body make the
+parameter an input, and a call that passes storage not yet initialized to
+an input is ``Unresolved`` with reason ``construct.unsupported``, not a
+failure. Callers read a returned pointer's storage as initialized, so a
+function that returns a pointer to storage not yet initialized is
+``Unresolved`` the same way. A local
 reference may bind storage not yet initialized: a read through it checks that
 the object is initialized, as C++ does. Reference reads participate in the existing argument-order safety
 check.
@@ -630,9 +635,11 @@ allocation from an archive.
 Libraries and real programs
 ---------------------------
 
-CppVerify does not yet ship comprehensive libc or C++ standard-library models.
-An uncontracted call fails closed; a contract is assumed only when it is
-marked ``[[cppverify::trusted]]``. Contracts are not saved in precompiled
+CppVerify does not yet ship comprehensive libc or C++ standard-library models:
+of the standard library it knows ``std::min`` and ``std::max`` of two
+integers (:doc:`functions-loops`), and any other of its functions is an
+error naming it. An uncontracted call fails closed; a contract is assumed
+only when it is marked ``[[cppverify::trusted]]``. Contracts are not saved in precompiled
 headers: a function declared in a PCH has no contract for the verifier, so a
 contracted function that calls it fails closed (``call to function without a
 verification contract``).

@@ -139,9 +139,9 @@ int holder_sum()
 }
 // CHECK-DAG: Verified: holder_sum [backend=z3]
 
-// A member function called on the object before every member is
-// initialized reads it as initialized, which C++ does not require: such a
-// call is construct.unsupported, as an out-parameter's is.
+// A member function that writes its object before reading it may be called
+// before any member is initialized: its object is an out-parameter, written
+// on every path, so the call initializes it.
 struct Resets {
   Resets()
     cppverify::post(v == 0)
@@ -158,7 +158,28 @@ struct Resets {
 
   int v;
 };
-// CHECK-DAG: Unresolved: Resets::Resets [backend=z3] [reason=construct.unsupported]
+// CHECK-DAG: Verified: Resets::Resets [backend=z3]
+
+// One that may read its object first is unsupported there, as any callee
+// that may read storage not initialized yet.
+struct Keeps {
+  Keeps()
+    cppverify::post(v == 1)
+  {
+    keep();
+    v = 1;
+  }
+
+  void keep()
+    cppverify::modifies(v)
+    cppverify::post(v == cppverify::old(v))
+  {
+    v = v + 0;
+  }
+
+  int v;
+};
+// CHECK-DAG: Unresolved: Keeps::Keeps [backend=z3] [reason=construct.unsupported]
 
 // A loop initializes an array member, as an invariant states.
 struct Ring {

@@ -17,6 +17,7 @@
 #include "../IR/VStmt.h"
 #include "../Transform/LoopUnroll.h"
 #include "../Transform/Origins.h"
+#include "../Transform/OutParameters.h"
 #include "../Transform/Ownership.h"
 #include "../Transform/Passivize.h"
 #include "../Transform/SpecInline.h"
@@ -3139,6 +3140,7 @@ public:
       return true;
     }
     inferFreshOwnedReturns(Functions);
+    inferOutParameters(Functions);
 
     FunctionMap FnMap;
     for (const auto &Fn : Functions)

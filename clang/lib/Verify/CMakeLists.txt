@@ -29,6 +29,7 @@ add_clang_library(clangVerify
   Transform/Inductive.cpp
   Transform/Origins.cpp
   Transform/Ownership.cpp
+  Transform/OutParameters.cpp
   Transform/LoopUnroll.cpp
   Transform/SpecInline.cpp
   Transform/SubobjectBounds.cpp

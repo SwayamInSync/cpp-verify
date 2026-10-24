@@ -686,8 +686,20 @@ static const FunctionDecl *ownObjectCallee(const Expr *E) {
   return Callee && returnsOwnObject(Callee) ? Callee : nullptr;
 }
 
+/// A reference to a const scalar, which a spec function reads as the value it
+/// refers to: that value's type, else the type itself.
+static QualType constScalarReferent(QualType Ty) {
+  const QualType Referent = Ty.getNonReferenceType();
+  return Ty->isLValueReferenceType() && Referent.isConstQualified() &&
+                 !Referent.isVolatileQualified() &&
+                 Referent->isIntegralOrEnumerationType()
+             ? Referent.getUnqualifiedType()
+             : Ty;
+}
+
 static std::optional<std::string>
-findUnsupportedType(const FunctionDecl *FD, bool AllowScalarReferences) {
+findUnsupportedType(const FunctionDecl *FD, bool AllowScalarReferences,
+                    bool ConstScalarReferencesAreValues = false) {
   // By-value records keep their flattened SSA representation, so only records
   // whose direct fields are scalars may cross a function boundary.
   auto UnsupportedValueType = [](QualType Ty) {
@@ -696,10 +708,14 @@ findUnsupportedType(const FunctionDecl *FD, bool AllowScalarReferences) {
     return Ty->isRecordType() && !isFlatScalarRecordType(Ty) &&
            !VType::collectionKind(Ty);
   };
-  if (UnsupportedValueType(FD->getReturnType()) && !returnsOwnObject(FD))
+  auto Viewed = [&](QualType Ty) {
+    return ConstScalarReferencesAreValues ? constScalarReferent(Ty) : Ty;
+  };
+  if (UnsupportedValueType(Viewed(FD->getReturnType())) &&
+      !returnsOwnObject(FD))
     return FD->getReturnType().getAsString();
   for (const ParmVarDecl *Param : FD->parameters()) {
-    QualType Ty = Param->getType();
+    QualType Ty = Viewed(Param->getType());
     if (Ty->isReferenceType()) {
       if (!AllowScalarReferences ||
           !(isSupportedScalarLValueReference(Ty) ||
@@ -913,6 +929,28 @@ VIntMode ASTConverter::specCallIntMode(const FunctionDecl *FD) const {
   if (FD->isConstexpr())
     return VIntMode::Machine;
   return VIntMode::Math;
+}
+
+/// For std::min(a, b) and std::max(a, b) of two integers, enumerations, or
+/// bools: whether it is max. Nothing for any other function, such as the
+/// overloads with a comparison or an initializer list.
+static std::optional<bool> stdMinOrMax(const FunctionDecl *Callee,
+                                       const ASTContext &Ctx) {
+  if (!Callee || !Callee->isInStdNamespace() || !Callee->getIdentifier() ||
+      !Callee->getPrimaryTemplate() || Callee->getNumParams() != 2)
+    return std::nullopt;
+  const bool IsMax = Callee->getName() == "max";
+  if (!IsMax && Callee->getName() != "min")
+    return std::nullopt;
+  const QualType Result = Callee->getReturnType();
+  const QualType T = Result.getNonReferenceType();
+  if (!Result->isLValueReferenceType() || !T.isConstQualified() ||
+      T.isVolatileQualified() || !T->isIntegralOrEnumerationType())
+    return std::nullopt;
+  for (const ParmVarDecl *P : Callee->parameters())
+    if (!Ctx.hasSameType(P->getType(), Result))
+      return std::nullopt;
+  return IsMax;
 }
 
 /// A function as the verifier's messages name it, a template specialization
@@ -2215,11 +2253,6 @@ static bool mentionsThis(const Stmt *S) {
                       [](const Stmt *Child) { return mentionsThis(Child); });
 }
 
-/// The lifetime companion of a constructor's object, whose lifetime begins
-/// at `this` when the constructor is entered.
-static constexpr const char *ConstructedObjectLifetime =
-    "__cppverify_constructed_lifetime";
-
 static std::optional<std::string>
 unsupportedMemberFunction(const CXXMethodDecl *Method) {
   if (Method->getParent()->isLambda())
@@ -3419,7 +3452,7 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
       // carries that allocation's identity.
       if (Constructor) {
         VVarExpr Object("this", VType::makePtr(), SourceLocation(),
-                        ConstructedObjectLifetime);
+                        VConstructedObjectLifetime);
         Readable = nullptr;
         forEachObjectLeaf(ThisObject, 0, [&](QualType, uint64_t Offset) {
           auto Leaf = std::make_unique<VUnaryOpExpr>(
@@ -3434,6 +3467,17 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
             Readable = std::move(Leaf);
           return true;
         });
+        // So is its last byte, which a call lending the object checks: the
+        // caller's at the constructor, the constructor's at a member call.
+        const uint64_t Size = Ctx.getTypeSizeInChars(ThisObject).getQuantity();
+        if (Readable && Size > 1)
+          Readable = std::make_unique<VBinOpExpr>(
+              VBinOp::And, std::move(Readable),
+              std::make_unique<VUnaryOpExpr>(
+                  VUnaryOp::ValidPtr,
+                  objectLeafAddress(&Object, Size - 1, SourceLocation()),
+                  VType::makeBool(), SourceLocation()),
+              VType::makeBool(), SourceLocation());
         if (!Readable)
           Readable = std::make_unique<VLiteralExpr>(1, VType::makeBool(),
                                                     SourceLocation());
@@ -3671,7 +3715,7 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
                                      std::to_string(MaxAutomaticObjectBytes) +
                                      " bytes are not supported yet");
       VVarExpr This("this", Fn->Params.front().second, FD->getLocation(),
-                    ConstructedObjectLifetime);
+                    VConstructedObjectLifetime);
       appendMemberInitializers(Constructor, &This, 0, FD->getLocation(),
                                Fn->Body);
     }
@@ -3930,6 +3974,27 @@ bool ASTConverter::checkLoopTermination(const Stmt *Loop, bool HasMeasure) {
   return true;
 }
 
+std::unique_ptr<VExpr> ASTConverter::convertMinOrMax(const CallExpr *CE,
+                                                     bool IsMax) {
+  // The standard's meaning ([alg.min.max]), whatever the library: the first
+  // argument unless the other is less (max) or greater (min) than it, which
+  // reads each argument once and has no definedness condition of its own.
+  auto A = convertExpr(CE->getArg(0));
+  auto B = convertExpr(CE->getArg(1));
+  if (!A || !B)
+    return nullptr;
+  const SourceLocation Loc = CE->getExprLoc();
+  const VType Ty = A->Ty;
+  auto Less = IsMax ? std::make_unique<VBinOpExpr>(VBinOp::Lt, cloneVExpr(A.get()),
+                                                   cloneVExpr(B.get()),
+                                                   VType::makeBool(), Loc)
+                    : std::make_unique<VBinOpExpr>(VBinOp::Lt, cloneVExpr(B.get()),
+                                                   cloneVExpr(A.get()),
+                                                   VType::makeBool(), Loc);
+  return std::make_unique<VConditionalExpr>(std::move(Less), std::move(B),
+                                            std::move(A), Ty, Loc);
+}
+
 std::unique_ptr<VFunction>
 ASTConverter::convertConstexprSpec(const FunctionDecl *FD) {
   llvm::SaveAndRestore Owner(ErrorFunction, functionIdentity(FD));
@@ -3937,21 +4002,35 @@ ASTConverter::convertConstexprSpec(const FunctionDecl *FD) {
   llvm::SaveAndRestore InContract(ErrorInContract, true);
   const size_t ErrorsAtStart = Errors.size();
   nameParameters(FD, FD);
-  if (exceedsNestingLimit(FD, functionContract(FD)) ||
-      hasIndirectMemoryAccess(FD))
-    return nullptr;
   if (!FD->isConstexpr() || !FD->hasBody())
     return nullptr;
-  if (FD->getReturnType()->isRecordType()) {
-    error(functionName(FD) +
-          ": aggregate-returning constexpr specs are unsupported");
-    return nullptr;
-  }
-  if (auto Unsupported = findUnsupportedType(FD, false)) {
-    error(functionName(FD) +
-          ": unsupported C++ type in verification: " + *Unsupported);
-    return nullptr;
-  }
+  // One the verifier cannot lift is kept as a declaration that uses an
+  // unsupported construct, so that its users' verdicts name it.
+  auto Unlifted = [&](std::optional<std::string> Message) {
+    if (Message)
+      error(FD->getLocation(), functionName(FD) + ": " + *Message);
+    auto Fn = std::make_unique<VFunction>();
+    Fn->Name = functionName(FD);
+    Fn->Identity = functionIdentity(FD);
+    Fn->DeclLoc = FD->getLocation();
+    Fn->IsSpec = true;
+    Fn->IsConstexprSpec = true;
+    return Fn;
+  };
+  if (exceedsNestingLimit(FD, functionContract(FD)))
+    return Unlifted(std::nullopt);
+  if (hasIndirectMemoryAccess(FD))
+    return Unlifted("a constexpr function read as a spec cannot read memory "
+                    "through a pointer or an array");
+  if (FD->getReturnType()->isRecordType())
+    return Unlifted("aggregate-returning constexpr specs are unsupported");
+  // A spec is a function of values: a reference to a const scalar, which it
+  // only reads, stands for the value it refers to, as an argument and as the
+  // result (std::max's `const T &`).
+  if (auto Unsupported =
+          findUnsupportedType(FD, /*AllowScalarReferences=*/false,
+                              /*ConstScalarReferencesAreValues=*/true))
+    return Unlifted("unsupported C++ type in verification: " + *Unsupported);
 
   auto Fn = std::make_unique<VFunction>();
   Fn->Name = functionName(FD);
@@ -3960,9 +4039,11 @@ ASTConverter::convertConstexprSpec(const FunctionDecl *FD) {
   Fn->IsConstexprSpec = true;
   IntMode = VIntMode::Machine;
   Fn->IntMode = IntMode;
-  Fn->ReturnType = VType::fromQualType(FD->getReturnType(), IntMode, Ctx);
+  Fn->ReturnType =
+      VType::fromQualType(constScalarReferent(FD->getReturnType()), IntMode, Ctx);
   CurrentFn = Fn.get();
 
+  ValueReferences.clear();
   for (const ParmVarDecl *P : FD->parameters()) {
     if (const RecordDecl *RD = getRecordFromType(P->getType())) {
       if (const RecordDecl *Definition = RD->getDefinition())
@@ -3971,8 +4052,11 @@ ASTConverter::convertConstexprSpec(const FunctionDecl *FD) {
               P->getNameAsString() + "." + Field->getNameAsString(),
               VType::fromQualType(Field->getType(), IntMode, Ctx));
     } else {
-      Fn->Params.emplace_back(P->getNameAsString(),
-                              VType::fromQualType(P->getType(), IntMode, Ctx));
+      Fn->Params.emplace_back(
+          P->getNameAsString(),
+          VType::fromQualType(constScalarReferent(P->getType()), IntMode, Ctx));
+      if (P->getType()->isReferenceType())
+        ValueReferences.insert(P);
     }
     recordSourceVariable(P);
   }
@@ -3988,10 +4072,12 @@ ASTConverter::convertConstexprSpec(const FunctionDecl *FD) {
   }
   if (Fn->Body.empty() && Errors.size() == ErrorsAtStart) {
     CurrentFn = nullptr;
+    ValueReferences.clear();
     return nullptr;
   }
   collectLayouts(FD, *Fn);
   CurrentFn = nullptr;
+  ValueReferences.clear();
   return Fn;
 }
 
@@ -5483,7 +5569,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     }
     return std::make_unique<VVarExpr>(
         "this", CurrentFn->Params.front().second, E->getExprLoc(),
-        CurrentFn->IsConstructor ? ConstructedObjectLifetime : "");
+        CurrentFn->IsConstructor ? VConstructedObjectLifetime : "");
   }
   if (const auto *Decay = dyn_cast<CastExpr>(E);
       Decay && Decay->getCastKind() == CK_ArrayToPointerDecay) {
@@ -5639,7 +5725,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
                                            E->getExprLoc());
       }
       requireInitialized(VD);
-      if (VD->getType()->isReferenceType()) {
+      if (VD->getType()->isReferenceType() && !ValueReferences.count(VD)) {
         auto Address = convertLValueAddress(E);
         if (!Address) {
           error(CurrentFn->Name + ": unsupported reference value expression");
@@ -6113,6 +6199,17 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
           return std::make_unique<VLiteralExpr>(
               integerValueString(EV.Val.getInt()), Ty, E->getExprLoc());
         }
+      }
+      if (std::optional<bool> IsMax = stdMinOrMax(Callee, Ctx))
+        return convertMinOrMax(CE, *IsMax);
+      // The standard library's functions are not lifted: each library
+      // writes them its own way, so a proof would depend on which one.
+      if (Callee->isInStdNamespace() && calleeIsSpec(Callee) &&
+          !functionContract(Callee)) {
+        error(CurrentFn->Name + ": " + Callee->getQualifiedNameAsString() +
+              " is not modeled: of the standard library, the verifier knows "
+              "std::min and std::max of two integers");
+        return nullptr;
       }
       if (calleeIsSpec(Callee)) {
         const VIntMode CalleeMode = specCallIntMode(Callee);
