@@ -1311,6 +1311,12 @@ private:
     /// The set of tokens that make up an exception-specification that
     /// has not yet been parsed.
     CachedTokens *ExceptionSpecTokens;
+
+    /// CppVerify: the contract clauses of the declarator, parsed in the
+    /// complete-class context as a function contract specifier is.
+    std::unique_ptr<CachedTokens> ContractTokens;
+    bool ContractIsSpec = false;
+    bool ContractIsProof = false;
   };
 
   /// LateParsedMemberInitializer - An initializer for a non-static class data
@@ -7592,6 +7598,14 @@ public:
   bool isFunctionContractClause();
   void ParseFunctionContractClauses(ParsingDeclarator &D,
                                     FunctionContractClauses &Clauses);
+  /// The clauses at Tok, with the parameters and CurrentContractReturnType
+  /// already in place, and Clauses.Info.IsSpec and IsProof set.
+  void ParseFunctionContractClauseList(FunctionContractClauses &Clauses);
+  /// The clauses of an in-class member function declarator, cached for its
+  /// late-parsed declaration, where the class is complete.
+  std::unique_ptr<CachedTokens> MemberContractTokens;
+  bool MemberContractIsSpec = false;
+  bool MemberContractIsProof = false;
   void attachFunctionContract(Decl *Function, FunctionContractClauses &Clauses);
   /// A declaration ending in ';' after its clauses.
   Decl *
