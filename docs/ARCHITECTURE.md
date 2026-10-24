@@ -308,6 +308,69 @@ const, postconditions. The record escape scan accepts a callee's own
 automatic allocation unless it is initialized with an address it must not
 keep.
 
+**Function templates:** Sema keeps a function template's contract on its
+pattern and instantiates it lazily, as an exception specification:
+`Sema::InstantiateFunctionContract` runs where a specialization is odr-used
+(`MarkFunctionReferenced`) and where its definition is instantiated, once
+per specialization (its `FunctionContractInfo` is recorded first, so a use
+in its own contract stops there), in a `LocalInstantiationScope` that maps
+the pattern's parameters, which identifies those of every redeclaration (so
+the clauses may be written on any, `ContractDecl`), in the specialization's
+context (its `this`, for a member) and an evaluation context of its own, so
+that a caller whose full expression is being built keeps its temporaries'
+cleanups. `SubstFunctionContract` runs
+`TreeTransform::TransformFunctionContract`, which rebuilds each clause with
+the checks the parser applies (`TransformContractCondition`,
+`TransformContractMeasure`, `TransformContractFootprint`; quantifiers and
+choices through `Sema::BuildContractBinderExpr`). `TreeTransform` gives
+`cppverify::result` the instantiated return type, transforms a loop's
+contract with the loop and rebuilds a loop whose clauses changed even when
+its condition and body did not, and keeps trigger marks; each quantifier and
+choice binds in a `LocalInstantiationScope` of its own
+(`TemplateInstantiator`), so each element of a pack expansion binds its own
+variable, and the block of a `check(forall(k, ...)) by` is given the
+instantiated `k`. `ResultExpr`, `OldExpr`, and the quantifiers take the
+dependence of their type or operands. `collectFunctionCandidates` adds,
+after each function template, the specializations the translation unit
+instantiates (from its canonical declaration, whose redeclarations share
+them), with their definition or, without one, their contract. The converter
+names them with their arguments (`functionName`), and the parameters a pack
+expands to as C++26 indexes it, `ns...[1]` (`nameParameters`), and records
+where each is instantiated (`getInstantiationPoints`), which the driver
+prints as a note after each error or warning of the specialization (JSON
+`instantiated_at`).
+
+**Class templates:** the parser keeps the contracts of a class template's
+members, whose instantiation is a function template's
+(`InstantiateFunctionContract`, where the member is used or defined), and
+its type invariants, which `InstantiateClassImpl` instantiates once the
+specialization is complete, with its `this` (`CXXThisScopeRAII`), into the
+specialization's `TypeContractInfo`. An invariant is parsed with its class's
+`this` in scope, so Sema writes a field it names bare as `this->field`,
+which the instantiation rebuilds with the specialization's `this`. A
+quantifier's binder in it belongs to the context around the class
+(`Sema::getContractBinderContext`): a variable of a class is a member, and
+an assertions build stopped at the first lookup of one without an access
+specifier. `collectFunctionCandidates` visits the pattern's members (for the
+warning) and the members of each specialization the translation unit
+instantiates (an instantiated specialization in a declaration context is
+collected from its template only); `isInstantiated` decides the warning,
+from a function template's specializations or the instantiated members of
+the class's.
+
+**std::min and std::max:** `stdMinOrMax` recognizes the two-argument
+`std::min` and `std::max` of a const integer, enumeration, or `bool`
+reference (not the overloads with a comparison or an initializer list), and
+`convertMinOrMax` lowers a call to a `VConditionalExpr` over the converted
+arguments, before a call becomes a spec application; any other non-constant
+call of a `constexpr` function of `std` is a conversion error. In
+`convertConstexprSpec`, `findUnsupportedType`'s
+`ConstScalarReferencesAreValues` makes a reference to a const integer its
+referent (`constScalarReferent`), as the parameter's and the result's
+types, and the parameters in `ValueReferences` are read as values; a
+function that cannot be lifted returns a placeholder that the lifting loop
+marks unsupported, so `SpecDependencies` name it.
+
 **Records in memory by value:** `recordFieldsInMemory` reads a record value
 kept in memory, a promoted local or one in a pointee or record reference
 (`promotedRootLocal`, `inPointeeObject`), through implicit copies and

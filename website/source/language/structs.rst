@@ -567,10 +567,11 @@ which ``reset_count`` may not. ``copy_from`` writes ``this->n`` and reads
 object twice.
 
 Not yet supported, each an error naming the function: virtual functions,
-member functions of a class with bases, destructors, conversion functions,
-and member functions of a class template (whose contracts are ignored with a
-warning). A member call inside an expression (``return n + get();``) is
-unsupported as a free function's is; assign its result first.
+member functions of a class with bases, destructors, and conversion
+functions. A member call inside an expression (``return n + get();``) is
+unsupported as a free function's is; assign its result first. A class
+template's member functions are verified in each specialization (`Class
+templates`_).
 
 Member operators
 ~~~~~~~~~~~~~~~~
@@ -844,6 +845,78 @@ internal calls included, so no call observes the object while it is broken:
   entry as in a precondition (`Extents of pointer fields`_). At exit it
   states nothing; the next call checks it from what its caller knows, so a
   member function that changes ``len`` states how.
+
+Class templates
+---------------
+
+A class template is verified in each specialization the translation unit
+instantiates, as a function template is (:doc:`functions-loops`): a member's
+contract is instantiated with the member, in each specialization that uses
+it, and the class's type invariants with the class.
+
+.. cppverify-example: fails Box<short>::twice
+
+.. code-block:: cpp
+
+   template <typename T>
+   class Box {
+   public:
+     Box(T v)
+       cv::pre(0 <= v && v <= 20000)
+       cv::post(value == v)
+       : value(v) {}
+
+     T twice() const
+       cv::post(cv::result == 2 * value)
+     {
+       return value + value;
+     }
+
+     T value;
+
+     cv::type_invariant(0 <= value && value <= 20000);
+   };
+
+   int doubled(int v)
+     cv::pre(0 <= v && v <= 20000)
+     cv::post(cv::result == 2 * v)
+   {
+     Box<int> b(v);
+     int d = b.twice();
+     return d;
+   }
+
+   short doubled_short(short v)
+     cv::pre(0 <= v && v <= 20000)
+   {
+     Box<short> b(v);
+     short d = b.twice();
+     return d;
+   }
+
+.. code-block:: text
+
+   Verified: Box<int>::Box [backend=z3]
+   Verified: Box<int>::twice [backend=z3]
+   Verified: Box<short>::Box [backend=z3]
+   box.cpp:10:25: error: verification failed: Box<short>::twice [...::postcondition@10:25] (counterexample: ...) [backend=z3] [reason=counterexample]
+   box.cpp:33:15: note: in instantiation of member function 'Box<short>::twice' requested here
+   Verified: doubled [backend=z3]
+   Unresolved: doubled_short [backend=z3] [reason=callee.contract] (relies on the contract of Box<short>::twice, which is not established)
+
+``value + value`` is an ``int``, which a ``short`` holds only up to 32767.
+
+- A member is verified in the specializations that use it, or that an
+  explicit instantiation (``template class Box<long>;``) defines whole. One
+  that no specialization uses is reported, not verified: ``warning:
+  Box<T>::reset: member of a class template is not verified: this
+  translation unit instantiates it in none of the class's specializations``.
+- A clause that does not fit the arguments is a compiler error with Clang's
+  instantiation note: an invariant where the class is instantiated, a
+  member's contract where the member is used.
+- Member function templates of a class template, member definitions outside
+  the class, and specs that the invariant applies are instantiated as the
+  rest is.
 
 View functions
 --------------

@@ -122,6 +122,50 @@ examined. Once a ``constexpr`` function has executable ``cppverify::pre``/``cppv
 clauses, it remains a modular executable function: calls must satisfy its
 preconditions and cannot be used as pure contract expressions.
 
+A lifted function's parameter or result that is a reference to a ``const``
+integer stands for the value it refers to, as in ``constexpr const T
+&larger(const T &a, const T &b)``. One that cannot be lifted (it reads memory
+through a pointer, say) is reported, and a function that applies it is
+``Unresolved`` with reason ``construct.unsupported``, naming it.
+
+The standard library's functions are not lifted: each library writes them
+its own way, and a proof would depend on which one. ``std::min`` and
+``std::max`` of two integers, enumerations, or ``bool`` mean what the
+standard says they mean, in contracts and in code alike: ``std::max(a, b)``
+is ``a`` unless ``a < b``, and ``std::min(a, b)`` is ``a`` unless ``b < a``.
+
+.. code-block:: cpp
+
+   #include <algorithm>
+
+   int lower(int a, int b)
+     cv::post(cv::result == std::min(a, b))
+     cv::post(cv::result <= a && cv::result <= b)
+   {
+     int m = std::min(a, b);
+     return m;
+   }
+
+   long widened(int x)
+     cv::post(cv::result >= 3)
+   {
+     long w = std::max<long>(x, 3L);
+     return w;
+   }
+
+.. code-block:: text
+
+   Verified: lower [backend=z3]
+   Verified: widened [backend=z3]
+
+Any other function of the standard library, such as ``std::clamp``, is an
+error naming it (``std::clamp is not modeled: of the standard library, the
+verifier knows std::min and std::max of two integers``), as is a reference
+bound to the result of ``std::max``. Before 0.2, ``std::min`` and
+``std::max`` in a contract, and every ``constexpr`` helper that could not be
+lifted, ended ``Unresolved: obligation lowering failed: f (missing spec
+definition: fn_...)``.
+
 Preconditions, ``cppverify::old(parameter)``, and a parameter named in a postcondition
 all denote the argument's entry value, as in ACSL, even when the callee
 reassigns its by-value parameter; a caller can therefore use the
@@ -221,50 +265,93 @@ Spec functions stay total, as in Verus and ACSL: a spec's division by zero is
 Templates
 ---------
 
-Templates compile with contracts, but they are not verified yet (member
-functions of ordinary classes are; see :doc:`structs`):
+A function template is verified in each of its specializations, as Kani and
+CBMC verify the code a program instantiates: its contract is instantiated
+with its body, so the contract and every check of the body are about the
+template's arguments, and each specialization gets a verdict of its own,
+named with its arguments.
 
-- The contracts of a function template, of a class template's members, and a
-  class template's type invariants compile, instantiate with the template,
-  and are ignored, with a ``-Wcontract-unsupported`` warning that names the
-  template.
-- A template without contracts changes nothing for the rest of the file, as
-  long as verified code does not call it.
+.. cppverify-example: fails twice<short>
 
 .. code-block:: cpp
 
    template <typename T>
-   T clamp_low(T v, T lo)
-     cv::post(cv::result >= lo)
+   T twice(T x)
+     cv::pre(0 <= x && x <= 30000)
+     cv::post(cv::result == 2 * x)
    {
-     return v < lo ? lo : v;
+     return x + x;
    }
 
-   int clamp_int(int v)
-     cv::post(cv::result >= 0)
+   int twice_int(int x)
+     cv::pre(0 <= x && x <= 30000)
+     cv::post(cv::result == 2 * x)
    {
-     return v < 0 ? 0 : v;
+     int r = twice(x);
+     return r;
+   }
+
+   short twice_short(short x)
+     cv::pre(0 <= x && x <= 30000)
+   {
+     short r = twice(x);
+     return r;
    }
 
 .. code-block:: text
 
-   templates.cpp:2:3: warning: contracts in function template 'clamp_low' are not yet supported and are ignored [-Wcontract-unsupported]
-       2 | T clamp_low(T v, T lo)
-         |   ^
-   Verified: clamp_int [backend=z3]
+   Verified: twice<int> [backend=z3]
+   templates.cpp:4:23: error: verification failed: twice<short> [...::postcondition@4:23] (counterexample: ...) [backend=z3] [reason=counterexample]
+   templates.cpp:20:13: note: in instantiation of function template specialization 'twice<short>' requested here
+   Verified: twice_int [backend=z3]
+   Unresolved: twice_short [backend=z3] [reason=callee.contract] (relies on the contract of twice<short>, which is not established)
 
-Two uses still stop the file with an error, and no function in it gets a
-verdict:
+``x + x`` is an ``int``, which a ``short`` result holds only up to 32767:
+``twice<short>`` fails, and the function that relies on it is unresolved.
 
-- a call to a template from verified code, such as ``return clamp_low(v,
-  0);`` in a function with a contract: ``error: use: call to function
-  without a verification contract: clamp_low``;
-- a template whose body has a contract statement (``cv::check``, a ghost
-  block): ``error: twice: function template verification is unsupported``.
+- A specialization is verified where the translation unit instantiates it,
+  by a call or by an explicit instantiation (``template long
+  twice<long>(long);``). A function template with a contract that nothing
+  instantiates is reported, not verified: ``warning: f: function template is
+  not verified: this translation unit instantiates none of its
+  specializations``. What a template means depends on the types and
+  overloads its arguments bring, which C++ fixes only where it is
+  instantiated.
+- A diagnostic about a specialization notes where it is instantiated, as a
+  compiler's does (JSON ``instantiated_at``).
+- The contract is checked where it is instantiated, as a C++ condition is: a
+  clause that does not fit the arguments, such as ``cv::post(cv::result ==
+  v.first)`` for an ``int``, is a compiler error there, with Clang's ``in
+  instantiation of function template specialization`` note. Arguments the
+  contract fits are no error.
+- Loop contracts, assertions, ghost code, quantifiers, and triggers are
+  instantiated with the body, and so are spec function templates and member
+  function templates of ordinary classes. An uncontracted ``constexpr``
+  template that a contract applies is a spec in each specialization, as a
+  ``constexpr`` function is (see Functions above). A contract written on a
+  declaration holds for the definition after it, and a
+  ``[[cppverify::trusted]]`` template without a definition holds at every
+  call of its specializations.
+- In a variadic template, the parameters a pack expands to are named as
+  C++26 indexes a pack, ``ns...[1]``, in counterexamples too, and a fold
+  over a quantifier binds a variable of its own in each element.
+- A specialization the verifier cannot represent (``maxv<double>``) costs
+  that specialization alone, as a construct in any function does.
+- A class template is verified in each specialization too: its members'
+  contracts are instantiated with the members, and its type invariants with
+  the class (:doc:`structs`).
+- A template without contracts changes nothing for the rest of the file, as
+  long as verified code does not call it.
 
-Before 0.2, a template whose contract depends on its parameters did not
-compile (``value of type '<dependent type>' is not contextually convertible to
-'bool'``), and a template without any contract, even one nothing calls,
+Before 0.2, the contracts of templates were ignored with a warning
+(``-Wcontract-unsupported``, which no longer reports anything), and a call to
+one from verified code was ``call to function without a verification
+contract``. A template whose contract depended on its
+parameters did not compile (``value of type '<dependent type>' is not
+contextually convertible to 'bool'``), nor did ``cv::result`` or
+``cv::old(x)`` of the template's type compared with a constant
+(``cv::post(cv::result > 0)``: ``invalid operands to binary expression ('T'
+and 'int')``). A template without any contract, even one nothing calls,
 stopped the file with ``function template verification is unsupported``.
 
 Behaviors

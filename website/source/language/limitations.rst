@@ -158,17 +158,19 @@ C++ feature boundaries
        through a pointer (``Ring copy = *r;``).
    * - Functions
      - Free functions, member functions of classes without bases or virtual
-       functions (:doc:`structs`), overloads, namespaces, contracts, direct calls, and
+       functions (:doc:`structs`), function and class templates in each
+       specialization the translation unit instantiates
+       (:doc:`functions-loops`, :doc:`structs`),
+       overloads, namespaces, contracts, direct calls, and
        direct and mutual recursion, also through stores to pointer and
        reference parameters and through automatic objects, with mutual
        recursion among functions of one kind (spec, proof, or executable).
      - Virtual functions, member functions of classes with bases,
        destructors, delegating constructors and the other constructors
        :doc:`structs` lists, conversion functions,
-       templates (one without contracts stops nothing unless verified code
-       calls it; the contracts of a function or class template compile,
-       instantiate, and are ignored with a warning, and one with contract
-       statements is reported), variadics, indirect calls, recursion through a
+       templates and members of class templates that nothing instantiates
+       (reported), variadics, indirect calls,
+       recursion through a
        function that allocates or frees storage, and general link-time
        summaries.
    * - Storage
@@ -213,10 +215,10 @@ otherwise supported code:
 - ``cppverify::aliases`` between pointers to different types (``aliases
   between different pointee types are unsupported``).
 
-A member function of a class template has its contracts ignored with a
-warning (``-Wcontract-unsupported``: "contracts in class template ... are
-not yet supported and are ignored"), and the run continues with the other
-functions.
+A template is verified in each specialization the translation unit
+instantiates; one that nothing instantiates, and a member of a class
+template that no specialization uses, is reported with a warning and not
+verified, and the run continues with the other functions.
 
 Objects, classes, and RAII
 --------------------------
@@ -628,9 +630,11 @@ allocation from an archive.
 Libraries and real programs
 ---------------------------
 
-CppVerify does not yet ship comprehensive libc or C++ standard-library models.
-An uncontracted call fails closed; a contract is assumed only when it is
-marked ``[[cppverify::trusted]]``. Contracts are not saved in precompiled
+CppVerify does not yet ship comprehensive libc or C++ standard-library models:
+of the standard library it knows ``std::min`` and ``std::max`` of two
+integers (:doc:`functions-loops`), and any other of its functions is an
+error naming it. An uncontracted call fails closed; a contract is assumed
+only when it is marked ``[[cppverify::trusted]]``. Contracts are not saved in precompiled
 headers: a function declared in a PCH has no contract for the verifier, so a
 contracted function that calls it fails closed (``call to function without a
 verification contract``).

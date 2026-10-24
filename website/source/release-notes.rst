@@ -265,9 +265,9 @@ C++ that compiles now
 ~~~~~~~~~~~~~~~~~~~~~
 
 **Contracts in templates.** A template whose contract depends on its
-parameters did not compile. Its contracts now compile and instantiate, and
-are ignored with a ``-Wcontract-unsupported`` warning; a template without
-contracts no longer stops the file (:doc:`language/functions-loops`).
+parameters did not compile. Its contracts now compile and are instantiated
+with it (Templates, below), and a template without contracts no longer stops
+the file (:doc:`language/functions-loops`).
 
 **Apple's assertion macros.** On Apple targets ``<AssertMacros.h>`` defines a
 ``check(assertion)`` macro, which turned every ``cppverify::check(...)`` after
@@ -335,6 +335,27 @@ call, internal ones included; an extent of a pointer field in it is assumed
 on entry. An object passed by reference or pointer satisfies it on entry and,
 when mutable, at exit, where before only a record passed by value did
 (:doc:`language/structs`).
+
+**Templates.** The contracts of templates were ignored with a warning, so
+no specialization was verified, and a call to one from verified code was an
+error. Each specialization a translation unit instantiates is now verified
+as a function of its own, named with its arguments (``twice<int>``,
+``Box<int>::get``), with its contract instantiated as its body is, loop
+contracts, assertions, and ghost code included, and a class template's type
+invariants with the class; a diagnostic about it notes where it is
+instantiated, and a contracted template, or member of a class template,
+that nothing instantiates is reported. ``cv::post(cv::result > 0)`` and ``cv::old(x) > 0``
+of a template's type did not compile (``invalid operands to binary
+expression ('T' and 'int')``) (:doc:`language/functions-loops`).
+
+**std::min and std::max.** In a contract they ended ``Unresolved:
+obligation lowering failed: f (missing spec definition: fn_...)``, as did
+any function using a ``constexpr`` helper that could not be lifted. Of two
+integers they now mean what the standard says, whatever the library, in
+contracts and in code; any other function of the standard library is an
+error naming it, a helper that cannot be lifted is named in the verdicts
+that rely on it, and a lifted helper's references to ``const`` integers
+stand for their values (:doc:`language/functions-loops`).
 
 **Member operators.** For a member ``operator==``, ``a == b`` passed ``a``
 for the operator's parameter and ``b`` as an argument beyond it, an error,

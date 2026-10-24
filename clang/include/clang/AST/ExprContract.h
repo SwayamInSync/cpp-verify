@@ -23,6 +23,19 @@ namespace clang {
 // Forward declaration for serialization friend access.
 class ASTStmtReader;
 
+/// The dependence of a quantifier or a choice: its operands', with its own
+/// type fixed. In a template, `forall(k, 0, n, p[k] > 0)` over a `T *p` is
+/// value-dependent, though it is a bool.
+inline ExprDependence binderExprDependence(const Expr *Lo, const Expr *Hi,
+                                           const Expr *Body) {
+  ExprDependence D = Body ? Body->getDependence() : ExprDependence::None;
+  if (Lo)
+    D |= Lo->getDependence();
+  if (Hi)
+    D |= Hi->getDependence();
+  return turnTypeToValueDependence(D);
+}
+
 /// ForallExpr - Represents a universal quantifier:
 ///   forall(binder, lo, hi, body)
 /// means: for all binder in [lo, hi), body holds; forall(binder, body)
@@ -46,7 +59,7 @@ public:
     SubExprs[LO] = Lo;
     SubExprs[HI] = Hi;
     SubExprs[BODY] = Body;
-    setDependence(ExprDependence::None);
+    setDependence(binderExprDependence(Lo, Hi, Body));
   }
 
   explicit ForallExpr(EmptyShell Empty) : Expr(ForallExprClass, Empty) {}
@@ -101,7 +114,7 @@ public:
     SubExprs[LO] = Lo;
     SubExprs[HI] = Hi;
     SubExprs[BODY] = Body;
-    setDependence(ExprDependence::None);
+    setDependence(binderExprDependence(Lo, Hi, Body));
   }
 
   explicit ExistsExpr(EmptyShell Empty) : Expr(ExistsExprClass, Empty) {}
@@ -156,7 +169,7 @@ public:
     SubExprs[LO] = Lo;
     SubExprs[HI] = Hi;
     SubExprs[BODY] = Body;
-    setDependence(ExprDependence::None);
+    setDependence(binderExprDependence(Lo, Hi, Body));
   }
 
   explicit ContractChooseExpr(EmptyShell Empty) : Expr(ContractChooseExprClass, Empty) {}
@@ -202,7 +215,7 @@ public:
       : Expr(OldExprClass, Inner->getType(), VK_PRValue, OK_Ordinary),
         OldLoc(OldLoc), LParenLoc(LParenLoc), RParenLoc(RParenLoc),
         Inner(Inner) {
-    setDependence(ExprDependence::None);
+    setDependence(Inner->getDependence());
   }
 
   explicit OldExpr(EmptyShell Empty) : Expr(OldExprClass, Empty) {}
@@ -237,7 +250,9 @@ public:
              QualType ReturnType)
       : Expr(ResultExprClass, ReturnType, VK_PRValue, OK_Ordinary),
         ResultLoc(ResultLoc), EndLoc(EndLoc) {
-    setDependence(ExprDependence::None);
+    // In a template, the return type may depend on its parameters.
+    setDependence(
+        toExprDependenceForImpliedType(ReturnType->getDependence()));
   }
 
   explicit ResultExpr(EmptyShell Empty) : Expr(ResultExprClass, Empty) {}

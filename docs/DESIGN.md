@@ -745,6 +745,22 @@ exact, while `int x = s[0];` must show that the element fits in an `int`.
 
 This is genuinely a CppVerify advantage over Verus — Verus forces users to maintain two separate bodies; we let one body do double duty *or* let users opt into a clean math-integer spec.
 
+A lifted function's reference to a `const` integer, as a parameter or the
+result, stands for the value it refers to, which it only reads: `constexpr
+const T &larger(const T &a, const T &b)` is a spec of two values. One that
+cannot be lifted (it reads memory through a pointer, or its type is not
+supported) is kept as a declaration that uses an unsupported construct, so
+the verdicts that rely on it are `Unresolved` with `construct.unsupported`
+and name it.
+
+The standard library's functions are not lifted, since each library writes
+them its own way and a verdict would depend on which one. `std::min` and
+`std::max` of two integers, enumerations, or `bool` are modeled as the
+standard defines them ([alg.min.max]): `max(a, b)` is `a < b ? b : a` and
+`min(a, b)` is `b < a ? b : a`, read once each, in contracts and in code.
+Any other function of the standard library that is not a constant is an
+error naming it.
+
 **Compile-time partial evaluation:** When a contract contains a `constexpr` call whose arguments are all constants, Clang evaluates it at compile time before the verifier sees it. A callee precondition instantiated at a call site is not such a call: there the argument is substituted for the parameter, and the solver settles the application from the lifted definition:
 
 <!-- cppverify-example: fragment -->
@@ -1311,8 +1327,8 @@ void reset_left(Pair &p)
 - Not yet, each an error naming the function: virtual functions (dispatch
   needs behavioral subtyping), member functions of classes with bases,
   destructors, conversion functions, explicit object parameters, rvalue- and
-  volatile-qualified member functions; members of class templates keep the
-  template rule.
+  volatile-qualified member functions. A class template's members are
+  verified in each specialization (see Templates).
 
 ### 3g. Constructors
 
@@ -1817,6 +1833,34 @@ cppverify::proof void sum_concat(seq s, seq t)
   mirror of vstd states each operation for its ladder; Lean's evaluation of
   every operation agrees with the certifier's.
 
+## Templates
+
+- A function template is verified in each specialization the translation
+  unit instantiates, by a use or by an explicit instantiation, as a function
+  of its own named with its arguments (`maxv<int>`). What a template means
+  depends on the types and overloads its arguments bring, which C++ fixes
+  only at instantiation, so an uninstantiated template is not verified (the
+  position of Kani and CBMC; Creusot and Prusti verify generic Rust once,
+  since trait bounds fix its meaning there). A contracted template that
+  nothing instantiates is reported.
+- Its contract is instantiated as its body is, and lazily, as an exception
+  specification is: where a specialization is used or its definition
+  instantiated, never for a specialization nothing uses. Each clause gets
+  the checks the parser gives it (a condition converts to `bool`, a measure
+  is an integer, a range has integer bounds), so a clause that does not fit
+  the arguments is a compiler error with Clang's instantiation note.
+- Loop contracts, assertions, ghost code, quantifiers, and triggers are
+  instantiated with the body. A contract written on a declaration names its
+  parameters; a trusted template without a definition is trusted in each
+  specialization.
+- A diagnostic about a specialization notes where it is instantiated, as a
+  compiler's does.
+- A class template is verified in each specialization too: a member's
+  contract is instantiated with the member, lazily as a function template's
+  is, so a member no specialization uses is not verified (it is reported),
+  and the class's type invariants with the class, eagerly, as a member
+  `static_assert` is, with the specialization's `this`.
+
 ## Clang Modification Details
 
 ### Construct recognition
@@ -1927,6 +1971,8 @@ a one-line hook.
     results, and every operation).
 12. A range `p[lo : n]` needs a pointer to a complete object type and
     integer bounds, and is valid only as a whole `cppverify::modifies` footprint.
+13. In a template, a clause that depends on its parameters is checked where
+    it is instantiated, with the same rules.
 
 ### CodeGen Rules
 

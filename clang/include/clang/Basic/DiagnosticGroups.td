@@ -1216,6 +1216,8 @@ def UnusedMemberFunction : DiagGroup<"unused-member-function",
                                      [UnneededMemberFunction]>;
 def UnusedLabel : DiagGroup<"unused-label">;
 def UnusedLambdaCapture : DiagGroup<"unused-lambda-capture">;
+// Contracts of templates were ignored with a warning in this group before
+// templates were verified; it stays, so a build that names it still builds.
 def ContractUnsupported : DiagGroup<"contract-unsupported">;
 def UnusedParameter : DiagGroup<"unused-parameter">;
 def UnusedButSetParameter : DiagGroup<"unused-but-set-parameter">;

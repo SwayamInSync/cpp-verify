@@ -71,7 +71,17 @@ class ASTConverter {
   /// Binders of a forall being introduced by contract_assert(...) by.
   std::set<const ValueDecl *> ArbitraryValues;
   std::map<std::string, std::set<std::string>> UnverifiedCallers;
+  std::map<std::string, std::pair<SourceLocation, std::string>>
+      InstantiationPoints;
   std::map<const ParmVarDecl *, std::string> ParameterNames;
+  /// The parameters of a lifted spec that refer to const scalars, which
+  /// stand for the values they refer to.
+  std::set<const VarDecl *> ValueReferences;
+  /// For a parameter a pack expands to, its index in the pack, `...[1]`.
+  std::map<const ParmVarDecl *, std::string> PackElements;
+  /// Names each parameter of \p FD after the declaration \p ContractDecl
+  /// whose contract names them.
+  void nameParameters(const FunctionDecl *ContractDecl, const FunctionDecl *FD);
   unsigned BoundValueId = 0;
   std::map<const FunctionDecl *, std::string> FunctionIdentities;
   std::map<const FunctionDecl *, bool> SpecHeapReads;
@@ -130,6 +140,14 @@ public:
   getWarnings() const {
     return Warnings;
   }
+  /// For each template specialization converted, by its name: where it is
+  /// instantiated and what it is ("function template specialization"),
+  /// which its diagnostics note as a compiler's do. A name two
+  /// specializations share has no location.
+  const std::map<std::string, std::pair<SourceLocation, std::string>> &
+  getInstantiationPoints() const {
+    return InstantiationPoints;
+  }
 
 private:
   /// Contract arithmetic is mathematical, as in ACSL and Verus spec code: an
@@ -170,6 +188,9 @@ private:
   /// The address of a supported mutable global, or null after an error.
   std::unique_ptr<VExpr> globalAddress(const VarDecl *VD, SourceLocation Loc);
   std::unique_ptr<VFunction> convertConstexprSpec(const FunctionDecl *FD);
+  /// std::max(a, b), or std::min(a, b), of two integers, as the standard
+  /// defines it.
+  std::unique_ptr<VExpr> convertMinOrMax(const CallExpr *CE, bool IsMax);
   void noteSpecUse(const FunctionDecl *FD);
   std::unique_ptr<VExpr> convertExpr(const Expr *E);
   std::unique_ptr<VExpr> convertExprImpl(const Expr *E);

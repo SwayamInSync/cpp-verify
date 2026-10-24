@@ -10394,8 +10394,22 @@ public:
   ExprResult ActOnContractRange(Expr *Base, Expr *Lower, SourceLocation ColonLoc,
                                 Expr *Length, SourceLocation RBLoc);
 
-  /// Rewrite unqualified field names to this->field for type_invariant(expr).
-  ExprResult ActOnTypeInvariantExpr(ExprResult E, CXXRecordDecl *Record);
+  /// A component of a decreases clause, which must be an integer.
+  ExprResult ActOnContractMeasure(ExprResult E);
+
+  /// The context of a quantifier's or a choice's binder: the current one,
+  /// or, in a class (a type invariant), the nearest one around it, since a
+  /// variable of a class is a member and a binder is not.
+  DeclContext *getContractBinderContext() const;
+
+  /// forall, exists, or choose (\p Kind) over \p Binder: its bounds must be
+  /// integers and its body a condition.
+  ExprResult BuildContractBinderExpr(Stmt::StmtClass Kind,
+                                     SourceLocation KeywordLoc,
+                                     SourceLocation LParenLoc,
+                                     SourceLocation RParenLoc, VarDecl *Binder,
+                                     Expr *Lo, Expr *Hi, Expr *Body);
+
 
   /// Diagnose references to spec functions in executable code of \p FD
   /// (or in a global initializer when \p FD is null). Spec functions are
@@ -14335,6 +14349,20 @@ public:
                                   ParmVarDecl *Param);
   void InstantiateExceptionSpec(SourceLocation PointOfInstantiation,
                                 FunctionDecl *Function);
+
+  /// Instantiate the contract of a function template specialization, or of
+  /// a member of a class template specialization, from its pattern's, when
+  /// it is used or defined and has none yet. (Contracts are instantiated
+  /// lazily, as exception specifications are: an unused member's contract is
+  /// never instantiated.)
+  void InstantiateFunctionContract(SourceLocation PointOfInstantiation,
+                                   FunctionDecl *Function);
+
+  /// The contract \p From of a template, with \p TemplateArgs substituted,
+  /// in \p To. Returns true on error.
+  bool SubstFunctionContract(const FunctionContractInfo &From,
+                             FunctionContractInfo &To,
+                             const MultiLevelTemplateArgumentList &TemplateArgs);
 
   /// Instantiate (or find existing instantiation of) a function template with a
   /// given set of template arguments.
