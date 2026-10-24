@@ -349,10 +349,10 @@ int by_reference(const Bounded &b)
 }
 // CHECK-DAG: error: verification failed: by_reference [{{.*}}::postcondition@[[@LINE-4]]:37]
 
-// Not yet: a local passed to a callee by reference, whose non-escape is not
-// established for records (B3a-4), a pointer formed from a local through a
-// reference, a whole record read through one, a proof function's reference,
-// and rvalue and volatile references.
+// A local passed to a callee by reference is checked at the call (see
+// local_record_arguments.cpp). Not yet: a pointer formed from a local through
+// a reference, a whole record read through one, a proof function's
+// reference, and rvalue and volatile references.
 int local_to_callee()
   cppverify::post(cppverify::result == 1)
 {
@@ -362,7 +362,7 @@ int local_to_callee()
   bump(c);
   return c.n;
 }
-// CHECK-DAG: [[@LINE-3]]:3: Unresolved: local_to_callee [backend=z3] [reason=construct.unsupported] (the verifier cannot model a construct here: the address of local or dynamic storage is passed to bump, which may keep, offset, or free it, or has no verified body)
+// CHECK-DAG: Verified: local_to_callee [backend=z3]
 
 int local_address()
   cppverify::post(cppverify::result == 0)
