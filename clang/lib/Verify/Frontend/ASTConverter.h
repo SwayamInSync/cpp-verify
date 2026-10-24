@@ -89,6 +89,9 @@ class ASTConverter {
   /// address parameter, by the synthetic parameter of the field's entry value
   /// (VFunction::FieldParams).
   std::map<const Expr *, std::string> FieldExtentParameters;
+  /// Converting a clause where an extent marker states nothing (a class
+  /// invariant at exit): each marker is true.
+  bool DropExtentMarkers = false;
   std::set<const VarDecl *> GhostLocals;
   unsigned DynamicProvenanceId = 0;
   unsigned DynamicPointerAssignmentId = 0;
@@ -370,8 +373,13 @@ private:
   /// of FCI's preconditions names a synthetic parameter for its entry value
   /// (VFunction::FieldParams), and returns them for the default
   /// separation.
-  std::vector<AddressEntry> collectFieldExtents(const FunctionContractInfo &FCI,
-                                                VFunction &Fn);
+  std::vector<AddressEntry>
+  collectFieldExtents(const FunctionContractInfo &FCI,
+                      llvm::ArrayRef<const Expr *> Invariants, VFunction &Fn);
+  std::vector<const Expr *> entryClassInvariants(const CXXMethodDecl *Method,
+                                                 bool Constructor) const;
+  std::vector<const Expr *> exitClassInvariants(const CXXMethodDecl *Method,
+                                                bool Constructor) const;
   void registerLayoutType(QualType QT, VFunction &Fn);
   void buildRecordLayout(QualType QT, VFunction &Fn);
   void buildArrayLayout(QualType QT, const ConstantArrayType *CAT,
