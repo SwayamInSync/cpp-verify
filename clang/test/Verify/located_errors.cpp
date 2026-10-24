@@ -18,12 +18,12 @@ int pick(int x)
 // CHECK-NEXT: {{^ +}}|   ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 // JSON: {"function":"pick","message":"pick: unsupported statement: SwitchStmt","reason":"construct.unsupported","schema":"cppverify.diagnostic/1","severity":"error","source":{"column":3,"end_column":53,"end_line":[[#@LINE-5]],"file":"{{.*}}located_errors.cpp","line":[[#@LINE-5]]},"status":"unresolved"}
 
-struct Counter {
-  int get(int x) { cv::check(x >= 0 || x < 0); return x; }
+struct Shape {
+  virtual int get(int x) { cv::check(x >= 0 || x < 0); return x; }
 };
-// CHECK:      {{.*}}located_errors.cpp:[[@LINE-2]]:7: error: get: member function verification is unsupported
-// CHECK-NEXT: {{^ +}}[[@LINE-3]] |   int get(int x) { cv::check(x >= 0 || x < 0); return x; }
-// CHECK-NEXT: {{^ +}}|       ^~~
+// CHECK:      {{.*}}located_errors.cpp:[[@LINE-2]]:15: error: Shape::get: virtual functions are unsupported, since a call may run an override
+// CHECK-NEXT: {{^ +}}[[@LINE-3]] |   virtual int get(int x) { cv::check(x >= 0 || x < 0); return x; }
+// CHECK-NEXT: {{^ +}}|               ^~~
 
 [[cppverify::trusted]] cv::spec int trusted_spec(int x) { return x; }
 // CHECK:      {{.*}}located_errors.cpp:[[@LINE-1]]:37: error: trusted_spec: {{\[\[}}cppverify::trusted]] does not apply to a spec function, whose definition is its meaning
