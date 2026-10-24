@@ -2,6 +2,7 @@
 // RUN: FileCheck %s < %t
 // RUN: FileCheck %s --check-prefix=NOTE < %t
 // RUN: FileCheck %s --check-prefix=SOUND < %t
+// RUN: grep -c "Verified: Pair<long>::larger" %t | FileCheck %s --check-prefix=ONCE
 //
 // A class template is verified in each specialization the translation unit
 // instantiates: its members' contracts are instantiated with the members
@@ -102,6 +103,7 @@ T Pair<T>::larger() const
 
 template struct Pair<long>;
 // CHECK-DAG: Verified: Pair<long>::larger [backend=z3]
+// ONCE: 1
 
 // A member function template of a class template.
 template <typename T>
@@ -178,3 +180,41 @@ int digit()
 // CHECK-DAG: Verified: Digit<int>::Digit [backend=z3]
 // CHECK-DAG: Verified: Digit<int>::get [backend=z3]
 // CHECK-DAG: Verified: digit [backend=z3]
+
+// A quantifier in a type invariant binds a variable of its own, not a
+// member of the class.
+struct Quad {
+  int cells[4];
+
+  int first() const
+    cppverify::post(cppverify::result >= 0)
+  {
+    return cells[0];
+  }
+
+  cppverify::type_invariant(cppverify::forall(k, 0, 4, cells[k] >= 0));
+};
+
+template <typename T>
+struct Cells {
+  T cells[4];
+
+  T last() const
+    cppverify::post(cppverify::result >= 0)
+  {
+    return cells[3];
+  }
+
+  cppverify::type_invariant(cppverify::forall(k, 0, 4, cells[k] >= 0));
+};
+
+int quad(const Quad &q, const Cells<int> &c)
+  cppverify::post(cppverify::result >= 0)
+{
+  int a = q.first();
+  int b = c.last();
+  return a < b ? a : b;
+}
+// CHECK-DAG: Verified: Quad::first [backend=z3]
+// CHECK-DAG: Verified: Cells<int>::last [backend=z3]
+// CHECK-DAG: Verified: quad [backend=z3]
