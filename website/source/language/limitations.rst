@@ -152,9 +152,10 @@ C++ feature boundaries
        standard-layout records with nested record, pointer, and fixed-array
        members as promoted local objects, and through pointers, where each
        scalar field and element is a heap cell.
-     - Non-trivial, inherited, polymorphic, union, and bit-field records,
-       nested/pointer/array-bearing records used by value, and a whole record
-       or array read through a pointer (``Ring copy = *r;``).
+     - Records that are not trivially copyable, inherited, polymorphic,
+       union, and bit-field records, nested/pointer/array-bearing records
+       used by value, and a whole record holding an array or a record read
+       through a pointer (``Ring copy = *r;``).
    * - Functions
      - Free functions, member functions of classes without bases or virtual
        functions (:doc:`structs`), overloads, namespaces, contracts, direct calls, and
