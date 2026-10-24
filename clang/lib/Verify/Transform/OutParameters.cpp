@@ -279,18 +279,26 @@ class Analysis {
         Reads = true;
       return;
     }
-    case VExpr::Cast:
+    case VExpr::Cast: {
       // A null test reads nothing.
-      if (E->Ty.Kind == VTypeKind::Bool &&
-          isVar(static_cast<const VCastExpr *>(E)->Inner.get(), Param))
+      const VExpr *Inner = static_cast<const VCastExpr *>(E)->Inner.get();
+      if (E->Ty.Kind == VTypeKind::Bool && Inner->Ty.Kind == VTypeKind::Ptr &&
+          mentions(Inner, Param)) {
+        address(Inner, W);
         return;
+      }
       break;
+    }
     case VExpr::BinOp: {
       const auto *B = static_cast<const VBinOpExpr *>(E);
-      if ((B->Op == VBinOp::Eq || B->Op == VBinOp::Ne) &&
-          ((isVar(B->Lhs.get(), Param) && constantValue(B->Rhs.get()) == 0) ||
-           (isVar(B->Rhs.get(), Param) && constantValue(B->Lhs.get()) == 0)))
-        return;
+      if (B->Op == VBinOp::Eq || B->Op == VBinOp::Ne)
+        for (auto [Pointer, Other] : {std::pair(B->Lhs.get(), B->Rhs.get()),
+                                      std::pair(B->Rhs.get(), B->Lhs.get())})
+          if (Pointer->Ty.Kind == VTypeKind::Ptr && mentions(Pointer, Param) &&
+              constantValue(Other) == 0) {
+            address(Pointer, W);
+            return;
+          }
       break;
     }
     case VExpr::UnaryOp: {
