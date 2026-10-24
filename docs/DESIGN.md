@@ -1156,8 +1156,11 @@ void put(Ring *r, int v)
   rejects `r->buf[8]`, whose address is `r->head`, inside `*r`; in
   `p->grid[i][j]` it bounds `j` by the row, so `grid[0][4]` is rejected
   although it is `grid[1][0]` in memory.
-- A whole record or array read through a pointer (`Ring copy = *r;`) is
-  rejected.
+- A record with scalar fields read as a whole through a pointer or a
+  reference, or kept in memory as a local object, is its fields, each read
+  where it is with that read's checks (bounds of the place, validity,
+  initialization): it may be passed, returned, and copied by value. A whole
+  record holding an array or a record (`Ring copy = *r;`) is rejected.
 - A pointer into the object, a decayed member array (`r->buf`) or the
   address of an element, a field, or a nested record (`&r->buf[i]`,
   `&r->head`, `&r->inner`), addresses only that subobject: the array it comes
@@ -1331,8 +1334,8 @@ void reset_left(Pair &p)
 - The class must be trivially copyable (copies are member-wise, and nothing
   runs at the end of its lifetime). Not yet: delegating constructors,
   members whose class provides a constructor, reference and bit-field
-  members, arrays of such objects, `new` of a record, and passing or
-  returning a constructed object by value.
+  members, arrays of such objects, and `new` of a record. A constructed
+  object is passed and returned by value as 3b's records in memory are.
 
 ### 4. `cppverify::modifies(...)` frame condition
 

@@ -274,6 +274,18 @@ initialization bit after the frame. Records count as
 supported types and layouts when trivially copyable rather than trivial,
 since constructors no longer stop them.
 
+**Records in memory by value:** `recordFieldsInMemory` reads a record value
+kept in memory, a promoted local or one in a pointee or record reference
+(`promotedRootLocal`, `inPointeeObject`), through implicit copies and
+temporaries, as one `VLoadExpr` per field at its offset from the place's
+address (`objectPlace`), each carrying the place's access condition, which
+passivization asserts where the load is evaluated, and getting the load's
+memory checks from UB instrumentation. A by-value argument
+(`appendRecordCallArgument`), a record return (through a flattened
+`__aggregate_return_N`, assigned before the lifetimes of the locals end), and
+a copy into a flattened local (`appendRecordCopy`) use it; a record with a
+member that is a record or an array is an error there.
+
 **Pointers into objects:** `ASTConverter::subobjectPointer` lowers a decayed
 member array of a pointee and the address of a pointee's element, field, or
 nested record. In a statement (`SubobjectSink`) it asserts the place's access

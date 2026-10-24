@@ -69,8 +69,41 @@ hold, so ``grid[0][4]`` is rejected even though it has the address of
 the body, and in postconditions and assertions, where a division by zero is
 checked too.
 
-Reading a whole record or array through a pointer (``Ring copy = *r;``) is
-not supported yet; read its fields instead.
+A record with scalar fields is read as a whole through a pointer or a
+reference field by field, each read checked where it is: ``Pair copy = *p;``,
+``sum(*p)``, and ``return *p;`` read ``p->first`` and ``p->second``.
+
+.. code-block:: cpp
+
+   struct Pair {
+     int first;
+     int second;
+   };
+
+   int sum(Pair p)
+     cv::pre(-1000 < p.first && p.first < 1000)
+     cv::pre(-1000 < p.second && p.second < 1000)
+     cv::post(cv::result == p.first + p.second)
+   {
+     return p.first + p.second;
+   }
+
+   int sum_at(const Pair *p)
+     cv::pre(p != nullptr)
+     cv::pre(-1000 < p->first && p->first < 1000)
+     cv::pre(-1000 < p->second && p->second < 1000)
+     cv::post(cv::result == p->first + p->second)
+   {
+     return sum(*p);
+   }
+
+.. code-block:: text
+
+   Verified: sum [backend=z3]
+   Verified: sum_at [backend=z3]
+
+A record holding an array or another record (``Ring copy = *r;``) is not
+read as a whole yet; read its fields instead.
 
 Pointers into a record
 ----------------------
@@ -616,9 +649,10 @@ array initialized (:doc:`functions-loops`).
   constructors of a class that is not trivially copyable (a destructor or a
   copy operation of its own), of a class with members whose class provides a
   constructor, with reference or bit-field members, or larger than 256
-  bytes; arrays of objects with constructors; ``new`` of a record. A
-  constructed object is kept in memory, and passing or returning it by value
-  is not supported yet.
+  bytes; arrays of objects with constructors; ``new`` of a record.
+- A constructed object is kept in memory, and is passed, returned, and
+  copied by value as its fields, each read where it is (see `Records
+  through pointers`_).
 
 ``cppverify::type_invariant``
 -----------------------------
@@ -674,8 +708,11 @@ the view rather than the layout:
    cv::spec int total(Pair p) { return p.first + p.second; }
 
 The current aggregate model is intentionally narrow. A record passed or
-returned by value must be trivial, standard-layout, and flat, with scalar
-fields. A local object whose address is needed (it holds a fixed array, or a
+returned by value must be trivially copyable, standard-layout, and flat, with
+scalar fields; when the value is kept in memory (a local object, or a record
+a pointer or reference addresses), each field is read where it is, with the
+checks of that read, so a copy of a record with a field never written fails
+its ``initialization`` check. A local object whose address is needed (it holds a fixed array, or a
 reference binds to one of its members) is promoted to an automatic object and
 may also have nested record, pointer, and fixed-array members. A record
 reached through a pointer or a reference may have the same members, and its

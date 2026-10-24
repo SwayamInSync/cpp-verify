@@ -6106,9 +6106,70 @@ void ASTConverter::convertExecCallArgs(
   }
 }
 
+std::optional<bool> ASTConverter::recordFieldsInMemory(
+    const Expr *E, SourceLocation Loc,
+    std::vector<std::pair<const FieldDecl *, std::unique_ptr<VExpr>>> &Fields) {
+  // A copy of the record, implicit or defaulted, is its fields.
+  while (E) {
+    E = E->IgnoreParens();
+    if (const auto *Cast = dyn_cast<ImplicitCastExpr>(E);
+        Cast && (Cast->getCastKind() == CK_NoOp ||
+                 Cast->getCastKind() == CK_LValueToRValue)) {
+      E = Cast->getSubExpr();
+      continue;
+    }
+    if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(E)) {
+      E = Temporary->getSubExpr();
+      continue;
+    }
+    if (const auto *Construct = dyn_cast<CXXConstructExpr>(E);
+        Construct && Construct->getNumArgs() == 1 &&
+        Construct->getConstructor() &&
+        !Construct->getConstructor()->isUserProvided() &&
+        (Construct->getConstructor()->isCopyConstructor() ||
+         Construct->getConstructor()->isMoveConstructor())) {
+      E = Construct->getArg(0);
+      continue;
+    }
+    break;
+  }
+  if (!E || (!promotedRootLocal(E) && !inPointeeObject(E)))
+    return std::nullopt;
+  const RecordDecl *Record = getRecordFromType(E->getType());
+  const RecordDecl *Definition = Record ? Record->getDefinition() : nullptr;
+  if (!Definition)
+    return std::nullopt;
+  auto Place = objectPlace(E);
+  if (!Place)
+    return false;
+  std::unique_ptr<VExpr> AccessCondition = Place->takeAccessCondition();
+  std::unique_ptr<VExpr> Base = Place->takeAddress();
+  for (const FieldDecl *Field : Definition->fields()) {
+    auto Offset = recordFieldOffset(Field);
+    VType FieldType = VType::fromQualType(Field->getType(), IntMode, Ctx);
+    if (!Offset || FieldType.isAggregate() ||
+        FieldType.Kind == VTypeKind::Unsupported) {
+      error(CurrentFn->Name + ": a record value read from memory must have "
+                              "scalar fields");
+      return false;
+    }
+    Fields.emplace_back(Field, std::make_unique<VLoadExpr>(
+                                   objectLeafAddress(Base.get(), *Offset, Loc),
+                                   FieldType, Loc, "",
+                                   cloneVExpr(AccessCondition.get())));
+  }
+  return true;
+}
+
 bool ASTConverter::appendRecordCallArgument(
     const Expr *E, const ParmVarDecl *Formal,
     std::vector<std::unique_ptr<VExpr>> &Args) {
+  std::vector<std::pair<const FieldDecl *, std::unique_ptr<VExpr>>> Fields;
+  if (auto InMemory = recordFieldsInMemory(E, E->getExprLoc(), Fields)) {
+    for (auto &Field : Fields)
+      Args.push_back(std::move(Field.second));
+    return *InMemory;
+  }
   auto Base = convertExpr(E);
   if (!Base)
     return false;
@@ -6443,37 +6504,21 @@ bool ASTConverter::appendRecordCopy(const Expr *Source, const VarDecl *Target,
   const auto *DRE = dyn_cast<DeclRefExpr>(Source);
   const auto *SourceVar = DRE ? dyn_cast<VarDecl>(DRE->getDecl()) : nullptr;
   const RecordDecl *TargetRecord = getRecordFromType(Target->getType());
-  // Copying out of a promoted object reads each leaf from its storage; the
-  // promoted source has no flattened companion to read instead.
-  if (promotedRootLocal(Source) && Target->isLocalVarDeclOrParm() &&
-      TargetRecord && TargetRecord->getDefinition() &&
+  // Copying out of a record kept in memory, a local object or one a
+  // pointer or reference addresses, reads each field where it is.
+  if (Target->isLocalVarDeclOrParm() && TargetRecord &&
+      TargetRecord->getDefinition() &&
       Ctx.hasSameUnqualifiedType(Target->getType(), Source->getType())) {
-    auto SourcePlace = objectPlace(Source);
-    if (!SourcePlace)
-      return true;
-    if (auto AccessCondition = SourcePlace->takeAccessCondition())
-      Out.push_back(std::make_unique<VAssertStmt>(
-          std::move(AccessCondition), Loc, ProofObligationKind::Bounds));
-    std::unique_ptr<VExpr> SourceBase = SourcePlace->takeAddress();
-    for (const FieldDecl *Field : TargetRecord->getDefinition()->fields()) {
-      auto FieldOffset = recordFieldOffset(Field);
-      VType FieldType = VType::fromQualType(Field->getType(), IntMode, Ctx);
-      if (!FieldOffset || FieldType.isAggregate() ||
-          FieldType.Kind == VTypeKind::Unsupported) {
-        error(CurrentFn->Name +
-              ": unsupported aggregate copy out of an automatic "
-              "object");
-        return true;
+    std::vector<std::pair<const FieldDecl *, std::unique_ptr<VExpr>>> Fields;
+    if (recordFieldsInMemory(Source, Loc, Fields)) {
+      for (auto &[Field, Value] : Fields) {
+        Out.push_back(std::make_unique<VAssignStmt>(
+            valueName(Target) + "." + Field->getNameAsString(),
+            std::move(Value), Loc));
+        markInitialized(Target, Field);
       }
-      Out.push_back(std::make_unique<VAssignStmt>(
-          valueName(Target) + "." + Field->getNameAsString(),
-          std::make_unique<VLoadExpr>(
-              objectLeafAddress(SourceBase.get(), *FieldOffset, Loc), FieldType,
-              Loc),
-          Loc));
-      markInitialized(Target, Field);
+      return true;
     }
-    return true;
   }
   const RecordDecl *SourceRecord =
       SourceVar ? getRecordFromType(SourceVar->getType()) : nullptr;
@@ -6992,6 +7037,26 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         }
       }
       if (CurrentFn->ReturnType.Kind == VTypeKind::Struct) {
+        // A record kept in memory is returned as its fields, read before
+        // the lifetimes of the locals end.
+        std::vector<std::pair<const FieldDecl *, std::unique_ptr<VExpr>>>
+            Fields;
+        if (auto InMemory =
+                recordFieldsInMemory(RetE, RS->getBeginLoc(), Fields)) {
+          if (!*InMemory)
+            return Out;
+          const std::string Tmp =
+              "__aggregate_return_" + std::to_string(++NestedCallId);
+          for (auto &[Field, Value] : Fields)
+            Out.push_back(std::make_unique<VAssignStmt>(
+                Tmp + "." + Field->getNameAsString(), std::move(Value),
+                RS->getBeginLoc()));
+          appendReturn(std::make_unique<VVarExpr>(Tmp, CurrentFn->ReturnType,
+                                                  RS->getBeginLoc()),
+                       Out, RS->getBeginLoc());
+          InitializationPathReachable = false;
+          return Out;
+        }
         auto RecordValue = convertExpr(RetE);
         if (!RecordValue)
           return Out;
