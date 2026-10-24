@@ -60,7 +60,8 @@ T positive(T v)
 }
 
 // A contract instantiated while a caller's full expression is built leaves
-// the caller its temporaries, whose destructors run at its end.
+// the caller its temporaries, whose destructors run at its end: an argument
+// passed by value is one before the call is resolved.
 struct Noisy {
   int v;
   Noisy(int x) : v(x) {}
@@ -68,7 +69,7 @@ struct Noisy {
 };
 
 template <typename T>
-int value_of(const T &t)
+int value_of(T t)
   cppverify::post(cppverify::result == t.v)
 {
   return t.v;
