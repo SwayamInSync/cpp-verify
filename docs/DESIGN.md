@@ -1482,6 +1482,15 @@ For by-value parameters this is purely an optimization — correctness is identi
   fields just before the return, so a function that constructs and returns a
   struct violating its invariant is rejected. Struct construction/mutation/return
   is modelled by the backend (field stores become `var.field` SSA assignments).
+- On a class with member functions (3f, 3g), the invariant is a generated
+  precondition of every public member function and a generated
+  postcondition of every public member function and constructor, checked
+  at every call, internal calls included: no call observes the object while
+  a member function breaks it, which is sound without pack/unpack. Private
+  and protected member functions take neither, so they may work on a broken
+  object. An extent marker in it, `valid(data, len)`, is a field extent
+  (3e) of `this` on entry; at exit it is `true`, since a postcondition
+  cannot carry a marker, and the next call checks the extent at its caller.
 - By design, the invariant is **not** asserted after each individual field write.
   Asserting the whole invariant mid-construction would spuriously fail while a
   multi-field struct is being initialised one field at a time (the other fields
