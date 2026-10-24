@@ -373,6 +373,27 @@ int made()
 }
 // CHECK: Verified: made
 
+// Its fields bound to a callee's out-parameter, one after the other.
+void make_by_parts(Pair &p)
+  cv::modifies(p)
+  cv::post(p.a == 0 && p.b == 0)
+{
+  init_ref(p.a);
+  init_ref(p.b);
+}
+// CHECK: Verified: make_by_parts
+// VCR-LABEL: fn make_by_parts
+// VCR-NEXT: param p out
+
+int made_by_parts()
+  cv::post(cv::result == 0)
+{
+  Pair p;
+  make_by_parts(p);
+  return p.a + p.b;
+}
+// CHECK: Verified: made_by_parts
+
 void make_first(Pair &p)
   cv::modifies(p)
   cv::post(p.a == 1)
@@ -439,6 +460,37 @@ int maybe_zeroed()
   return a[0];
 }
 // CHECK: error: verification failed: maybe_zeroed {{.*}}initialization@[[@LINE-2]]:3
+
+// Calls in a loop: each keeps what was initialized before it.
+int init_in_loop()
+  cv::post(cv::result == 0)
+{
+  int a[1];
+  init_ref(a[0]);
+  for (int i = 0; i < 3; i = i + 1)
+    cv::invariant(0 <= i && i <= 3 && a[0] == 0)
+    cv::decreases(3 - i)
+  {
+    init_ref(a[0]);
+  }
+  return a[0];
+}
+// CHECK: Verified: init_in_loop
+
+int init_in_loop_only(int n)
+  cv::pre(0 <= n && n <= 3)
+  cv::post(cv::result == 0)
+{
+  int a[1];
+  for (int i = 0; i < n; i = i + 1)
+    cv::invariant(0 <= i && i <= n)
+    cv::decreases(n - i)
+  {
+    init_ref(a[0]);
+  }
+  return a[0];
+}
+// CHECK: error: verification failed: init_in_loop_only {{.*}}initialization@[[@LINE-2]]:3
 
 void zero_rec(int &x, int n)
   cv::pre(n >= 0)
