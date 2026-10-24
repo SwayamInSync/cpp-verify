@@ -29,11 +29,15 @@ This page separates four different situations:
        return ``unknown``.
 
 Outside the supported subset the verifier *fails closed*: it never reports a
-proof for what it does not model. Depending on the construct, the run stops
-with an error that names it, and no function of the file gets a verdict, or
-the function is ``Unresolved`` with reason ``construct.unsupported``. A
-counterexample is never a way of failing closed: ``Failed`` always means a
-checked counterexample.
+proof for what it does not model. A construct it does not represent is an
+error at the construct, and its function is ``Unresolved`` with reason
+``construct.unsupported`` while every other function of the file is verified
+(callers that rely on its contract are ``callee.contract``, and functions
+that reach a spec it cannot represent are ``construct.unsupported`` too); one
+it represents but does not model, such as a pointer difference between two
+parameters' objects, makes the obligation that stands for it unsupported, and
+the function is ``Unresolved`` with the same reason. A counterexample is never
+a way of failing closed: ``Failed`` always means a checked counterexample.
 
 Meaning of a result
 -------------------
