@@ -292,6 +292,16 @@ quadratic (a 250-term sum lowers in about 5 s instead of 120 s), and an
 expression nested more than 256 operations deep is reported where it is
 (:doc:`language/limitations`).
 
+**Large functions take far less memory.** Each check of a function restated
+every assumption before it as a copy, and the check's query, the function's
+complete goal, and that goal's query copied them again, so memory grew with
+the number of checks times the length of what came before them: verifying the
+ULEB128 case study took 14.9 GB, and lowering it 53 s. Terms now share what
+they repeat: the case study verifies within 0.9 GB and lowers in 10 s, and
+``safe_fib.cpp`` lowers in 7 s within 0.35 GB instead of 16 s and 4.7 GB.
+Verdicts, archives, hashes, and IR dumps are unchanged; a Lean export names a
+large subterm that one statement repeats once (:doc:`case-studies/llvm-uleb128`).
+
 **Errors point at the code.** An error about a construct the verifier does not
 represent named only the function, as in ``error: pick: unsupported statement:
 SwitchStmt``. It now gives the file, line, and column, and shows the line with

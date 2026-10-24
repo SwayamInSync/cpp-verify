@@ -28,6 +28,7 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Frontend/TextDiagnostic.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
@@ -1546,30 +1547,41 @@ class Verifier {
       PresumedLoc Location = SourceMgr.getPresumedLoc(Loc);
       if (!Location.isValid())
         return;
-      Source.File = Location.getFilename();
-      Source.Line = Location.getLine();
-      Source.Column = Location.getColumn();
+      ObligationSource Found;
+      Found.File = Location.getFilename();
+      Found.Line = Location.getLine();
+      Found.Column = Location.getColumn();
       PresumedLoc End =
           SourceMgr.getPresumedLoc(EndLoc.isValid() ? EndLoc : Loc);
-      if (End.isValid() && Source.File == End.getFilename() &&
-          (End.getLine() > Source.Line || (End.getLine() == Source.Line &&
-                                           End.getColumn() >= Source.Column))) {
-        Source.EndLine = End.getLine();
-        Source.EndColumn = End.getColumn();
+      if (End.isValid() && Found.File == End.getFilename() &&
+          (End.getLine() > Found.Line ||
+           (End.getLine() == Found.Line && End.getColumn() >= Found.Column))) {
+        Found.EndLine = End.getLine();
+        Found.EndColumn = End.getColumn();
       } else {
-        Source.EndLine = Source.Line;
-        Source.EndColumn = Source.Column;
+        Found.EndLine = Found.Line;
+        Found.EndColumn = Found.Column;
       }
+      // A term shared with a module annotated before, which other threads
+      // may be reading, is read and not written.
+      if (Source.File != Found.File || Source.Line != Found.Line ||
+          Source.Column != Found.Column || Source.EndLine != Found.EndLine ||
+          Source.EndColumn != Found.EndColumn)
+        Source = std::move(Found);
     };
-    auto annotateExpr = [&](LogicExpr *Root) {
+    // Terms share subterms: each node once.
+    llvm::DenseSet<const LogicExpr *> Annotated;
+    auto annotateExpr = [&](const LogicExpr *Root) {
       if (!Root)
         return;
-      std::vector<LogicExpr *> Pending = {Root};
+      std::vector<const LogicExpr *> Pending = {Root};
       while (!Pending.empty()) {
-        LogicExpr *Expr = Pending.back();
+        const LogicExpr *Expr = Pending.back();
         Pending.pop_back();
+        if (!Annotated.insert(Expr).second)
+          continue;
         annotateSource(Expr->Loc, Expr->EndLoc, Expr->Source);
-        for (auto &Child : Expr->Children)
+        for (const auto &Child : Expr->Children)
           if (Child)
             Pending.push_back(Child.get());
       }

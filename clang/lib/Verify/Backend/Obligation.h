@@ -4,6 +4,7 @@
 #define LLVM_CLANG_VERIFY_BACKEND_OBLIGATION_H
 
 #include "clang/Basic/SourceLocation.h"
+#include "llvm/ADT/IntrusiveRefCntPtr.h"
 #include "llvm/Support/Error.h"
 #include <cstdint>
 #include <map>
@@ -149,8 +150,16 @@ struct ObligationSource {
   bool hasRange() const { return isValid() && EndLine != 0; }
 };
 
+class LogicExpr;
+
+/// A subterm, shared and immutable: a goal states each assumption before it
+/// and a query its goal without copying them, so a module grows with what
+/// its terms say rather than with how often they repeat it (as Verus's AIR
+/// shares `Arc<ExprX>` and Frama-C's Qed hash-conses its terms).
+using LogicExprRef = llvm::IntrusiveRefCntPtr<const LogicExpr>;
+
 /// A typed logical term shared by every proof backend and IR dump.
-class LogicExpr {
+class LogicExpr : public llvm::ThreadSafeRefCountedBase<LogicExpr> {
 public:
   enum Kind {
     True,
@@ -201,9 +210,12 @@ public:
   LogicSort Sort;
   SourceLocation Loc;
   SourceLocation EndLoc;
-  ObligationSource Source;
+  /// Where Loc lies, filled in by the driver once the term is built
+  /// (annotateObligationSources): the one field written after a term is
+  /// shared, a function of Loc alone.
+  mutable ObligationSource Source;
 
-  std::vector<std::unique_ptr<LogicExpr>> Children;
+  std::vector<LogicExprRef> Children;
   std::string IntVal = "0";
   bool BoolVal = false;
   std::string Name;
@@ -215,7 +227,7 @@ public:
   /// For Forall and Exists: one multi-pattern for instantiating the
   /// quantifier, a solver hint outside the term's meaning, its identity, and
   /// archives.
-  std::vector<std::unique_ptr<LogicExpr>> Patterns;
+  std::vector<LogicExprRef> Patterns;
   /// For an Or that states one assumption of a goal (`!A || rest`): where A
   /// comes from (`pre`, `call:f`, `def:x_1`), so a goal can be shown as
   /// named hypotheses. Outside the term's meaning, identity, and archives.
@@ -231,7 +243,8 @@ using VCExpr = LogicExpr;
 /// trigger a quantifier.
 bool isCollectionRead(const LogicExpr &E);
 
-/// A deep copy of \p Expr, patterns included.
+/// A copy of \p Expr that may be changed: its own fields copied, its
+/// children and patterns shared, since no term changes a subterm.
 std::unique_ptr<LogicExpr> cloneLogicExpr(const LogicExpr *Expr);
 
 /// What an obligation establishes. Only Unwinding changes result semantics;

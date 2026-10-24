@@ -539,7 +539,8 @@ memory checks where they are checked.
 `buildObligationModule` is the only passive-to-logic lowering path. It folds the
 ordered `PassiveProgram` once and publishes:
 
-- a typed `LogicExpr` tree with explicit `Bool`, mathematical integer,
+- typed `LogicExpr` terms, whose subterms are shared (below), with explicit
+  `Bool`, mathematical integer,
   width-indexed bit-vector, pointer, heap-array, and collection (`seq`, `set`,
   `multiset`, `map`) sorts; integer sorts retain
   canonical signedness and originating C++ width for explicit mode conversion,
@@ -564,6 +565,44 @@ ordered `PassiveProgram` once and publishes:
 Construction returns `llvm::Expected`. A null, unhandled, malformed, or
 untyped term prevents publication of the module and is reported as `unknown`;
 it is never replaced by `true`.
+
+**Shared subterms.** A term owns its root and shares its subterms: the
+children and patterns of a `LogicExpr` are `LogicExprRef`s
+(`llvm::IntrusiveRefCntPtr<const LogicExpr>`, the count in the node), and no
+code changes a node once it is a subterm, which the type enforces. A copy
+(`cloneLogicExpr`) copies the root's fields and shares its children. So each
+obligation's goal states every assumption before it, its query negates the
+goal, and the complete goal conjoins the goals, all without copying them, as
+Verus's AIR shares `Arc<ExprX>`, Frama-C's Qed hash-conses its terms, and
+Lean shares `Expr`. A change below a root rebuilds only the path to it. The
+simplifier is copy-on-write and memoizes each subterm per module, so a
+subterm that many goals share is simplified once and stays shared; a reuse
+adds the rewrites its first simplification counted, so the reported
+statistics are those of the tree. The certifier's substitution, renaming,
+and witness analysis rewrite children the same way (`rewriteSlots`), copying
+a node only when a child changes. The one field written after a term is
+shared is a node's `Source`, a function of its `Loc` alone: annotation visits
+each node once and writes only a value that differs, so it never writes a
+node that an earlier, annotated module shares, which other threads may be
+reading. The caches keyed by a node's address hold what depends on the node
+alone, so sharing cannot make them answer for another place: the Z3
+encoding (a variable is encoded by its name, and the traversal keeps no
+scope), the certifier's cost estimate, and the Lean printer's `let`s, which
+name a shared subterm of a statement once. Every hash, archive, and Layer 3
+and 4 dump is what it was with copies (checked on every Verify source), and
+the Lean exports state definitionally equal goals.
+
+Before 0.2 every copy copied the whole term. Each obligation's goal repeated
+its assumptions, and its query, the complete goal, and the complete query
+repeated those, so memory grew with the number of obligations times what
+came before them: lowering the ULEB128 case study took 12.8 GB of address
+space and 53 s, verifying it 14.9 GB with eight jobs (`--jobs=8`, more than
+a 16 GB CI runner holds beside the tests running with it), and lowering
+`safe_fib.cpp` 4.7 GB and 16 s. They now take 0.43 GB and 10 s, 0.9 GB, and
+0.35 GB and 7 s. The goals still repeat their assumptions as trees, so a
+traversal that does not memoize (validation, hashing, serialization) still
+takes time quadratic in a function's length; hash-consing the terms and
+memoizing those traversals would make it linear.
 
 Every source-built or replayed module then passes through one fail-closed
 canonicalization step before hashing or backend dispatch. The pass folds only
