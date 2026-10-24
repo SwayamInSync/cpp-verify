@@ -1055,7 +1055,8 @@ public:
 
 void verify::expandInductivePredicates(
     std::vector<std::unique_ptr<VFunction>> &Functions,
-    llvm::function_ref<void(SourceLocation, std::string)> Report) {
+    llvm::function_ref<void(const VFunction &, SourceLocation, std::string)>
+        Report) {
   std::map<std::string, VFunction *> Inductive;
   for (auto &Fn : Functions)
     if (Fn->InductiveLoc.isValid())
@@ -1067,7 +1068,7 @@ void verify::expandInductivePredicates(
   std::map<std::string, ExprPtr> Unfoldings;
   for (auto &[Identity, Fn] : Inductive) {
     auto reject = [&, &Identity = Identity, Fn = Fn](const std::string &Why) {
-      Report(Fn->InductiveLoc, Fn->Name + ": " + Why);
+      Report(*Fn, Fn->InductiveLoc, Fn->Name + ": " + Why);
       Rejected.insert(Identity);
     };
     if (!Fn->IsSpec || Fn->ReturnType.Kind != VTypeKind::Bool) {
@@ -1142,7 +1143,7 @@ void verify::expandInductivePredicates(
               nonPositiveOccurrence(Unfoldings.at(Member).get(), Group);
           !Where.empty()) {
         Report(
-            Fn.InductiveLoc,
+            Fn, Fn.InductiveLoc,
             Fn.Name + ": " +
                 (Group.size() == 1 ? Fn.Name
                                    : std::string("a predicate it is "

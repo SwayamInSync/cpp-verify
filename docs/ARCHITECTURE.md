@@ -2023,7 +2023,22 @@ caret included, as a compiler error is, and its JSON record carries the range.
 
 ## Modular Verification Protocol
 
-1. Build VFunction for each function in source order.
+1. Build VFunction for each function in source order. An error of the
+   converter belongs to the function it is raised in (`ConversionError::
+   Function`), and to its signature or contract (`InContract`) or its body;
+   the errors that passes after conversion find about a function (a recursion
+   without a measure, a malformed inductive predicate) belong to it too
+   (`errorOf`). Such a function keeps what others may rely on
+   (`markUnsupported`, `VFunction::UnsupportedConstruct`): an executable or
+   proof function whose contract converted becomes an external contract, its
+   body not verified, and one whose contract did not is left out, so a call
+   of it is an `unsupported` obligation; a spec becomes a declaration without
+   definition, postconditions, reads, or domain. The driver prints every
+   error, gives the first of each function its verdict (`Unresolved`,
+   `construct.unsupported`), reports a function whose `SpecDependencies`
+   reach an unsupported spec the same way without verifying it, and verifies
+   the rest; the fixpoint demotes callers of the external contracts
+   (`callee.contract`). Only an error of no function stops the run.
 2. For each VFunction:
    a. Build Layer 1 IR.
    b. Passivize to Layer 2 (SSA + havoc/assume/assert + heap versioning).

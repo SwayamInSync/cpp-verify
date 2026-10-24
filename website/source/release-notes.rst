@@ -308,6 +308,16 @@ SwitchStmt``. It now gives the file, line, and column, and shows the line with
 a caret under the construct, as a compiler error does; its JSON record carries
 the range (:doc:`language/tooling`).
 
+**An unsupported construct costs its function alone.** One construct the
+verifier does not represent, such as a ``switch``, stopped the file: no
+function of it was verified. Now that function is ``Unresolved`` with reason
+``construct.unsupported``, its first error's JSON record carrying the verdict,
+and every other function is verified. A caller that relies on its contract is
+``callee.contract``; a function whose contract is not represented leaves a
+call of it ``construct.unsupported``; a function that reaches a spec the
+verifier does not represent is ``construct.unsupported``. The exit status is 1
+as before (:doc:`language/tooling`).
+
 **Z3 errors.** A Z3 call that failed went unnoticed, and a later step could
 report something unrelated. The query now ends ``Unresolved`` with reason
 ``encoding.failed`` and Z3's message (:doc:`language/tooling`).

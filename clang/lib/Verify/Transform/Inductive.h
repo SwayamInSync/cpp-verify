@@ -21,10 +21,11 @@ namespace verify {
 /// Defines every predicate marked inductive in \p Functions as the least
 /// fixpoint of its body, and appends the specs and proof functions that
 /// establish its rules. A malformed predicate is reported through \p Report,
-/// at its inductive marker, and left as it is.
+/// with the predicate and at its inductive marker, and left as it is.
 void expandInductivePredicates(
     std::vector<std::unique_ptr<VFunction>> &Functions,
-    llvm::function_ref<void(SourceLocation, std::string)> Report);
+    llvm::function_ref<void(const VFunction &, SourceLocation, std::string)>
+        Report);
 
 } // namespace verify
 } // namespace clang

@@ -72,8 +72,10 @@ printed ``error: invalid argument '-std=c++17' not allowed with 'C'``.
 
 A construct that cpp-verify does not represent yet, in a function it
 verifies, is an error at that construct, shown with its line and a caret as a
-compiler error is. Like a compiler error it stops the file: no function of
-the file gets a verdict (:doc:`limitations` lists what is not represented).
+compiler error is. It costs that function alone: the function is
+``Unresolved`` with reason ``construct.unsupported``, every other function of
+the file is verified, and ``cpp-verify`` exits with status 1
+(:doc:`limitations` lists what is not represented).
 
 .. cppverify-example: rejects
 
@@ -85,17 +87,51 @@ the file gets a verdict (:doc:`limitations` lists what is not represented).
      switch (x) { case 1: return 1; default: return 0; }
    }
 
+   int bump(int x)
+     cv::pre(x < 100)
+     cv::post(cv::result == x + 1)
+   {
+     return x + 1;
+   }
+
+   int picked(int x)
+     cv::post(cv::result >= 0)
+   {
+     int r = pick(x);
+     return r;
+   }
+
 .. code-block:: text
 
    pick.cpp:4:3: error: pick: unsupported statement: SwitchStmt
        4 |   switch (x) { case 1: return 1; default: return 0; }
          |   ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   Verified: bump [backend=z3]
+   Unresolved: picked [backend=z3] [reason=callee.contract] (relies on the contract of pick (it uses a construct the verifier does not support), which is not established)
+
+What others may rely on stays:
+
+- a caller of an executable or proof function whose body is not represented
+  is verified against its contract, which nothing establishes, so it is
+  ``Unresolved`` with reason ``callee.contract``, as ``picked`` above;
+- a function whose contract is not represented leaves nothing to rely on: a
+  call of it is ``construct.unsupported`` where it is (``a call of lookup,
+  whose contract is not available``);
+- a spec whose body or contract is not represented has no definition, and a
+  function that reaches it, through its body, its contract, or a callee's
+  contract, is not verified: ``Unresolved`` with reason
+  ``construct.unsupported`` (``relies on choice, which uses a construct the
+  verifier does not support``). An uncontracted ``constexpr`` helper that
+  verified code calls is such a spec.
 
 An error about the function as a whole, such as a recursion without a
-measure, points at its name. With ``--diagnostics-format=json`` the record
-carries the range, here ``"source":{"column":3,"end_column":53,"end_line":4,
-"file":"pick.cpp","line":4}``. Before 0.2 such an error named only the
-function: ``error: pick: unsupported statement: SwitchStmt``.
+measure, points at its name. With ``--diagnostics-format=json`` the record of
+a function's first error carries its verdict and the range, here
+``"function":"pick"``, ``"status":"unresolved"``,
+``"reason":"construct.unsupported"``, and ``"source":{"column":3,
+"end_column":53,"end_line":4,"file":"pick.cpp","line":4}``. Before 0.2 such an
+error stopped the file, so that no function of it got a verdict, and named
+only the function: ``error: pick: unsupported statement: SwitchStmt``.
 
 Stopping a run with Ctrl-C
 ~~~~~~~~~~~~~~~~~~~~~~~~~~

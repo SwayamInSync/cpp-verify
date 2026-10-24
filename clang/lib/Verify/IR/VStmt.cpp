@@ -188,6 +188,7 @@ VFunction verify::cloneVFunction(const VFunction &Fn) {
         {cloneVExpr(R.Base.get()), cloneVExpr(R.Count.get()), R.ElementSize});
   Out.Domain = cloneVExpr(Fn.Domain.get());
   Out.Uninterpreted = Fn.Uninterpreted;
+  Out.UnsupportedConstruct = Fn.UnsupportedConstruct;
   Out.IsChoice = Fn.IsChoice;
   Out.UsesDynamicStorage = Fn.UsesDynamicStorage;
   Out.FreshOwnedReturn = Fn.FreshOwnedReturn;

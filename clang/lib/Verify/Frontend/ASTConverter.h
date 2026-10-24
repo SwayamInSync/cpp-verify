@@ -16,6 +16,13 @@ namespace verify {
 struct ConversionError {
   SourceRange Range;
   std::string Message;
+  /// The function it is written in (its identity and name), whose verdict it
+  /// decides; empty for an error of the translation unit.
+  std::string Function;
+  std::string FunctionName;
+  /// In the function's signature or contract, rather than its body: then
+  /// its callers cannot use the contract either.
+  bool InContract = false;
 };
 
 class ASTConverter {
@@ -37,9 +44,20 @@ class ASTConverter {
   /// The innermost declaration, statement, or expression being converted,
   /// where an error is reported unless it names a place of its own.
   SourceRange CurrentRange;
+  /// The function whose conversion an error belongs to, and whether the
+  /// converter is in its signature and contract or in its body.
+  std::string ErrorFunction;
+  std::string ErrorFunctionName;
+  bool ErrorInContract = false;
   void error(std::string Message) { error(CurrentRange, std::move(Message)); }
   void error(SourceRange Range, std::string Message) {
-    Errors.push_back({Range, std::move(Message)});
+    Errors.push_back({Range, std::move(Message), ErrorFunction,
+                      ErrorFunctionName, ErrorInContract});
+  }
+  /// An error about \p Fn found once every function is converted.
+  void errorOf(const VFunction &Fn, SourceLocation Loc, std::string Message) {
+    Errors.push_back(
+        {SourceRange(Loc), std::move(Message), Fn.Identity, Fn.Name, false});
   }
   std::vector<std::pair<SourceLocation, std::string>> Warnings;
   /// Maps unqualified field name -> "param." for type_invariant lowering.

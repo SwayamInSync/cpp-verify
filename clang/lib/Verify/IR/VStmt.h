@@ -374,6 +374,10 @@ struct VFunction {
   std::unique_ptr<VExpr> Domain;
   /// A spec without a definition: the value of another outside its domain.
   bool Uninterpreted = false;
+  /// Its body or contract uses a construct the verifier does not represent,
+  /// so the function is not verified: an executable or proof function keeps
+  /// its contract for its callers, a spec only its declaration.
+  bool UnsupportedConstruct = false;
   /// A choose(...) lifted to a function of what its body mentions: its post
   /// is the defining axiom (a witness when one exists), assumed, not proved.
   bool IsChoice = false;

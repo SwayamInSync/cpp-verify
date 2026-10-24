@@ -146,8 +146,10 @@ Every result that is not a proof carries one stable reason code (text
      - A loop has no termination measure. Add ``cppverify::decreases``, or
        ``cppverify::decreases(*)``.
    * - ``construct.unsupported``
-     - The failed obligation stands for a construct the verifier does not
-       model; the message names it.
+     - The function uses a construct the verifier does not represent (an
+       error points at it), relies on a spec that does, or the failed
+       obligation stands for a construct it does not model; the message
+       names it.
    * - ``solver.timeout``
      - A query, or the function's whole budget, ran out of time. Raise
        ``--timeout`` or ``--function-timeout``, or help the proof.
@@ -214,7 +216,12 @@ Other results that are not counterexamples:
 - ``construct.unsupported``: the failed obligation stands for a construct the
   verifier does not model, so it says nothing about the program. The message
   names the construct, such as a pointer difference between two parameters'
-  objects or a call that keeps a pointer to local storage.
+  objects or a call that keeps a pointer to local storage. A function whose
+  body or contract the verifier does not represent at all gets this reason
+  too, with an error at the construct, and so does a function that relies on
+  a spec it does not represent (``relies on choice, which uses a construct
+  the verifier does not support``); the other functions of the file are
+  verified (see :doc:`../../language/tooling`).
 - ``[trusts=f]`` on a verified result: the proof relies on the contract of
   ``f``, marked ``[[cppverify::trusted]]`` (see
   :doc:`ch17-backends-modular-calls`).

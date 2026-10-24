@@ -1497,7 +1497,16 @@ int safe_fib(int n) cppverify::pre(...) cppverify::post(cppverify::result == fib
   the verifier does not model, so its counterexample says nothing about the
   program; the message names the construct (for example "the operands of
   this pointer difference may address the objects of different parameters
-  or globals, which may be one caller array").
+  or globals, which may be one caller array"). A function whose body or
+  contract uses a construct the verifier does not represent at all has this
+  verdict too, with the error at the construct, and costs that function
+  alone, as Prusti reports an unsupported feature and Kani a construct it
+  does not translate: every other function is verified. What others may
+  rely on stays: a caller verifies against the function's contract, which
+  nothing establishes (`callee.contract`); a call of a function whose
+  contract is not represented is unsupported where it is; a function that
+  reaches a spec the verifier does not represent, which keeps only its
+  declaration, is not verified (`construct.unsupported`).
 - Qualifiers: `[partial]` (proved for terminating executions only, after
   `cppverify::decreases(*)`), `[trusts=f]` (relies on the contract of `f`, marked
   `[[cppverify::trusted]]`), `[vacuous]` (no execution reaches the claim).
