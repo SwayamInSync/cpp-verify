@@ -158,17 +158,19 @@ C++ feature boundaries
        through a pointer (``Ring copy = *r;``).
    * - Functions
      - Free functions, member functions of classes without bases or virtual
-       functions (:doc:`structs`), overloads, namespaces, contracts, direct calls, and
+       functions (:doc:`structs`), function templates in each specialization
+       the translation unit instantiates (:doc:`functions-loops`),
+       overloads, namespaces, contracts, direct calls, and
        direct and mutual recursion, also through stores to pointer and
        reference parameters and through automatic objects, with mutual
        recursion among functions of one kind (spec, proof, or executable).
      - Virtual functions, member functions of classes with bases,
        destructors, delegating constructors and the other constructors
        :doc:`structs` lists, conversion functions,
-       templates (one without contracts stops nothing unless verified code
-       calls it; the contracts of a function or class template compile,
-       instantiate, and are ignored with a warning, and one with contract
-       statements is reported), variadics, indirect calls, recursion through a
+       members and type invariants of class templates (they compile,
+       instantiate, and are ignored with a warning), function templates
+       that nothing instantiates (reported), variadics, indirect calls,
+       recursion through a
        function that allocates or frees storage, and general link-time
        summaries.
    * - Storage
