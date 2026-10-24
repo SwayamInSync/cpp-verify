@@ -896,10 +896,10 @@ void Parser::ParseTypeInvariant(Decl *TagDecl) {
     return Finish();
   }
   ConsumeParen();
-  // A class template's invariants are instantiated with each of its
-  // specializations.
+  // With the class's `this` in scope, a field named bare is this->field. A
+  // class template's invariants are instantiated with each specialization.
   if (!E.isInvalid()) {
-    E = Actions.ActOnTypeInvariantExpr(E, RD);
+    E = Actions.ActOnContractCondition(E);
     if (!E.isInvalid())
       Actions.getASTContext().getOrCreateTypeContract(RD).Invariants.push_back(
           E.get());
@@ -1343,8 +1343,8 @@ ExprResult Parser::ParseQuantifierExpr() {
 
   // Create the bound variable and push it into scope for the body.
   VarDecl *BoundVar = VarDecl::Create(
-      Ctx, Actions.CurContext, BinderLoc, BinderLoc, BinderII, Ctx.IntTy,
-      Ctx.getTrivialTypeSourceInfo(Ctx.IntTy, BinderLoc), SC_None);
+      Ctx, Actions.getContractBinderContext(), BinderLoc, BinderLoc, BinderII,
+      Ctx.IntTy, Ctx.getTrivialTypeSourceInfo(Ctx.IntTy, BinderLoc), SC_None);
   ParseScope QuantifierScope(this, Scope::DeclScope);
   Actions.PushOnScopeChains(BoundVar, getCurScope(), /*AddToContext=*/false);
   ++QuantifierBodyDepth;
