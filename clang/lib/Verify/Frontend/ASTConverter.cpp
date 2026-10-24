@@ -1136,6 +1136,33 @@ ASTConverter::trackedValueNames(const ValueDecl *D) const {
   return Names;
 }
 
+void ASTConverter::nameParameters(const FunctionDecl *ContractDecl,
+                                  const FunctionDecl *FD) {
+  ParameterNames.clear();
+  PackElements.clear();
+  // The parameters a pack expands to share its name, which no others can:
+  // each is named as C++26 indexes a pack, `ns...[1]`.
+  std::map<std::string, unsigned> Occurrences, Elements;
+  for (const ParmVarDecl *P : ContractDecl->parameters())
+    ++Occurrences[P->getNameAsString()];
+  for (unsigned I = 0; I < FD->getNumParams(); ++I) {
+    const ParmVarDecl *ContractParam = ContractDecl->getParamDecl(I);
+    const ParmVarDecl *DefinitionParam = FD->getParamDecl(I);
+    std::string Name = ContractParam->getNameAsString();
+    std::string Element;
+    if (!Name.empty() && Occurrences[Name] > 1)
+      Element = "...[" + std::to_string(Elements[Name]++) + "]";
+    if (Name.empty())
+      Name = DefinitionParam->getNameAsString();
+    if (Name.empty())
+      Name = "__cppverify_param_" + std::to_string(I);
+    ParameterNames[ContractParam] = Name + Element;
+    ParameterNames[DefinitionParam] = Name + Element;
+    if (!Element.empty())
+      PackElements[DefinitionParam] = Element;
+  }
+}
+
 std::string ASTConverter::valueName(const ValueDecl *D) const {
   if (const auto *P = dyn_cast_or_null<ParmVarDecl>(D))
     if (auto It = ParameterNames.find(P); It != ParameterNames.end())
@@ -1148,6 +1175,9 @@ void ASTConverter::recordSourceVariable(const ValueDecl *D) {
     return;
   const std::string InternalBase = valueName(D);
   std::string DisplayBase = D->getNameAsString();
+  if (const auto *P = dyn_cast<ParmVarDecl>(D))
+    if (auto It = PackElements.find(P); It != PackElements.end())
+      DisplayBase += It->second;
   if (DisplayBase.empty())
     DisplayBase = InternalBase;
   auto Record = [&](std::string InternalName, std::string DisplayName,
@@ -3020,23 +3050,12 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   }
   if (exceedsNestingLimit(FD, FCI))
     return nullptr;
-  ParameterNames.clear();
   const FunctionDecl *ContractDecl = FCI->ContractDecl ? FCI->ContractDecl : FD;
   if (ContractDecl->getNumParams() != FD->getNumParams()) {
     error(functionName(FD) + ": contract declaration parameter mismatch");
     return nullptr;
   }
-  for (unsigned I = 0; I < FD->getNumParams(); ++I) {
-    const ParmVarDecl *ContractParam = ContractDecl->getParamDecl(I);
-    const ParmVarDecl *DefinitionParam = FD->getParamDecl(I);
-    std::string Name = ContractParam->getNameAsString();
-    if (Name.empty())
-      Name = DefinitionParam->getNameAsString();
-    if (Name.empty())
-      Name = "__cppverify_param_" + std::to_string(I);
-    ParameterNames[ContractParam] = Name;
-    ParameterNames[DefinitionParam] = Name;
-  }
+  nameParameters(ContractDecl, FD);
   if (FD->isVariadic()) {
     error(functionName(FD) + ": variadic functions are unsupported");
     return nullptr;
@@ -3844,7 +3863,7 @@ ASTConverter::convertConstexprSpec(const FunctionDecl *FD) {
   llvm::SaveAndRestore OwnerName(ErrorFunctionName, functionName(FD));
   llvm::SaveAndRestore InContract(ErrorInContract, true);
   const size_t ErrorsAtStart = Errors.size();
-  ParameterNames.clear();
+  nameParameters(FD, FD);
   if (exceedsNestingLimit(FD, functionContract(FD)) ||
       hasIndirectMemoryAccess(FD))
     return nullptr;
