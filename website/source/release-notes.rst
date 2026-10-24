@@ -135,6 +135,14 @@ correct.
 after it could fail for values it never produces. Its state now carries over
 (:doc:`language/functions-loops`).
 
+**Loops that initialize local storage.** Every iteration of a loop after the
+first saw the local storage the earlier ones wrote as uninitialized, so a
+loop filling a local array failed its ``initialization`` check, at the
+invariant that stated what it had written or at a read after the loop. What
+was initialized before a loop now stays initialized, and an invariant holds
+at the head of each iteration with its definedness, which shows the elements
+it reads initialized and in bounds (:doc:`language/functions-loops`).
+
 **Null minus null.** The difference of two null pointers failed its
 ``pointer-difference`` check; it is 0, as C++ defines (:doc:`language/pointers`).
 
