@@ -2002,20 +2002,20 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
         Method && !FD->isTemplated() ? unsupportedMemberFunction(Method)
                                      : std::nullopt;
     if (UnsupportedMember || FD->isTemplated()) {
+      // Only one with contracts is reported here: one without matters where
+      // verified code calls it, which reports the call.
+      if (!functionContract(FD) && !hasContractStatements(FD, Ctx))
+        continue;
       llvm::SaveAndRestore Owner(ErrorFunction, functionIdentity(FD));
       llvm::SaveAndRestore OwnerName(ErrorFunctionName, FD->getNameAsString());
       llvm::SaveAndRestore InContract(ErrorInContract, true);
       if (UnsupportedMember) {
-        if (functionContract(FD) || hasContractStatements(FD, Ctx))
-          error(FD->getLocation(),
-                FD->getQualifiedNameAsString() + ": " + *UnsupportedMember);
+        error(FD->getLocation(),
+              FD->getQualifiedNameAsString() + ": " + *UnsupportedMember);
         continue;
       }
-      // Only a template with contracts is reported here: one without
-      // matters where verified code calls it, which reports the call.
       if (!FD->isInStdNamespace() &&
-          Ctx.getSourceManager().isWrittenInMainFile(FD->getLocation()) &&
-          (functionContract(FD) || hasContractStatements(FD, Ctx)))
+          Ctx.getSourceManager().isWrittenInMainFile(FD->getLocation()))
         error(FD->getLocation(),
               FD->getNameAsString() +
                   ": function template verification is unsupported");
