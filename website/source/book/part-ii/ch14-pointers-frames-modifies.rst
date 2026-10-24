@@ -361,8 +361,9 @@ user-declared ``cppverify::spec bool valid(int* p, int n)`` is the same marker; 
 ``valid(p, n)`` entails ``n >= 0``. If ``n > 0``, ``p`` must be non-null and
 abstractly valid; ``n == 0`` permits null. Every access based on ``p`` must prove
 that its index lies in ``[0, n)``. The marker must be a positive top-level
-conjunction clause on the bare complete-object pointer, with at most one marker
-per pointer. A pointer without a marker addresses one object. With
+conjunction clause on the bare complete-object pointer, or on a pointer field
+of a parameter's object (``valid(s->data, s->len)``, see
+:doc:`../../language/structs`), with at most one marker per pointer. A pointer without a marker addresses one object. With
 ``--no-check-ub``, dereference definedness is still mandatory, but accesses
 are not checked against objects.
 
