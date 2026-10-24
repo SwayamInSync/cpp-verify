@@ -630,9 +630,11 @@ allocation from an archive.
 Libraries and real programs
 ---------------------------
 
-CppVerify does not yet ship comprehensive libc or C++ standard-library models.
-An uncontracted call fails closed; a contract is assumed only when it is
-marked ``[[cppverify::trusted]]``. Contracts are not saved in precompiled
+CppVerify does not yet ship comprehensive libc or C++ standard-library models:
+of the standard library it knows ``std::min`` and ``std::max`` of two
+integers (:doc:`functions-loops`), and any other of its functions is an
+error naming it. An uncontracted call fails closed; a contract is assumed
+only when it is marked ``[[cppverify::trusted]]``. Contracts are not saved in precompiled
 headers: a function declared in a PCH has no contract for the verifier, so a
 contracted function that calls it fails closed (``call to function without a
 verification contract``).
