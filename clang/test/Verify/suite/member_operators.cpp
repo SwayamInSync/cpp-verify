@@ -195,3 +195,42 @@ int spoiled_argument()
   return v;
 }
 // CHECK-DAG: error: verification failed: spoiled_argument [{{.*}}::type-invariant@[[@LINE-3]]
+
+// A null pointer addresses no object, whose invariant would be due.
+int none()
+  cppverify::post(true)
+{
+  int v = peek(nullptr);
+  return v;
+}
+// CHECK-DAG: Verified: none [backend=z3]
+
+// An extent in a class invariant is `this`'s: an object passed by
+// reference does not carry it yet, so a member function that needs it
+// cannot be called there.
+class Span {
+public:
+  Span(const int *p, int n)
+    cppverify::pre(cppverify::valid(p, n) && 0 < n && n < 1000)
+    cppverify::post(data == p && len == n)
+    : data(p), len(n) {}
+
+  int first() const
+    cppverify::post(cppverify::result == data[0])
+  {
+    return data[0];
+  }
+
+  const int *data;
+  int len;
+
+  cppverify::type_invariant(cppverify::valid(data, len) && 0 < len && len < 1000);
+};
+
+int first_through(const Span &s)
+  cppverify::post(true)
+{
+  int v = s.first();
+  return v;
+}
+// CHECK-DAG: error: verification failed: first_through [{{.*}}::bounds@[[@LINE-3]]
