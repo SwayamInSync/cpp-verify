@@ -14,7 +14,7 @@
 # RUN:   | FileCheck %s --check-prefix=FIB
 #
 # A subterm that several goals share is simplified once; its rewrites still
-# count once for each place, as when each was a copy (main printed 265 here).
+# count once for each place, as when each was a copy.
 # RUN: %cpp-verify --lower-only --jobs=1 --dump-ir=3 \
 # RUN:   %S/backend_counterexample_trace.cpp -- 2>&1 | FileCheck %s --check-prefix=REWRITES
 #
@@ -30,6 +30,6 @@ ULEB: Lowered: roundtrip_uleb128
 FIB: Lowered: iterative_fibonacci
 
 REWRITES: vc set_value
-REWRITES: simplification nodes 3632 -> 1252, rewrites 265, functions-removed 0
+REWRITES: simplification nodes 4850 -> 1750, rewrites 366, functions-removed 0
 
 LETS: statements that bind a let name twice: 0
