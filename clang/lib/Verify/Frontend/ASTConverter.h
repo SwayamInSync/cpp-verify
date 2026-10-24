@@ -92,6 +92,9 @@ class ASTConverter {
   /// Converting a clause where an extent marker states nothing (a class
   /// invariant at exit): each marker is true.
   bool DropExtentMarkers = false;
+  /// The object `this` stands for while a class invariant is instantiated
+  /// for a parameter: the pointer or reference that addresses it.
+  const VExpr *ThisSubstitute = nullptr;
   std::set<const VarDecl *> GhostLocals;
   unsigned DynamicProvenanceId = 0;
   unsigned DynamicPointerAssignmentId = 0;
@@ -321,6 +324,9 @@ private:
   bool appendRecordCopy(const Expr *Source, const VarDecl *Target,
                         SourceLocation Loc,
                         std::vector<std::unique_ptr<VStmt>> &Out);
+  /// Reports a use of the reference a member function returns to its own
+  /// object, which is no value.
+  bool rejectOwnObjectUse(const Expr *E);
   bool appendRecordInitializer(const InitListExpr *Init, const VarDecl *Target,
                                SourceLocation Loc,
                                std::vector<std::unique_ptr<VStmt>> &Out);

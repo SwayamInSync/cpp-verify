@@ -1303,7 +1303,11 @@ void reset_left(Pair &p)
 - A call passes the object's address first: `p->m()` passes `p`, `obj.m()`
   binds `obj` as a reference argument does (a local object is lent to the
   callee under 3d's rules), and `m()` in a member function passes `this`. A
-  static member function is a free function.
+  static member function is a free function. A member operator's object is
+  its first operand (`a == b` is `a.operator==(b)`). A member function whose
+  every return is `return *this;` returns a reference to its own object,
+  which the caller holds: it is verified as returning nothing, and using the
+  reference (`(a += b) += c`) is an error.
 - Not yet, each an error naming the function: virtual functions (dispatch
   needs behavioral subtyping), member functions of classes with bases,
   destructors, conversion functions, explicit object parameters, rvalue- and
@@ -1491,6 +1495,12 @@ For by-value parameters this is purely an optimization — correctness is identi
   object. An extent marker in it, `valid(data, len)`, is a field extent
   (3e) of `this` on entry; at exit it is `true`, since a postcondition
   cannot carry a marker, and the next call checks the extent at its caller.
+- An object a parameter refers to or points to satisfies its type
+  invariant at every function boundary: a generated precondition (for a
+  pointer, `p == nullptr ||` it) and, through a mutable reference or
+  pointer, a generated postcondition, as ACSL's weak type invariants and
+  Verus's do. A pointer with an extent is not covered yet, and an extent
+  marker in such an instance is `true`.
 - By design, the invariant is **not** asserted after each individual field write.
   Asserting the whole invariant mid-construction would spuriously fail while a
   multi-field struct is being initialised one field at a time (the other fields

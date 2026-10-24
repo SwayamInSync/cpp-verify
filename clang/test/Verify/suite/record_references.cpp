@@ -328,8 +328,8 @@ int local_object_uninitialized()
 }
 // CHECK-DAG: error: verification failed: local_object_uninitialized [{{.*}}::initialization@[[@LINE-2]]:3]
 
-// A type invariant is a fact about records by value; one a reference names is
-// an object whose fields the function reads from memory.
+// A type invariant holds for a record by value and for one a reference or a
+// pointer names, at every function boundary.
 struct Bounded {
   int v;
   cppverify::type_invariant(v >= 0);
@@ -347,7 +347,7 @@ int by_reference(const Bounded &b)
 {
   return b.v;
 }
-// CHECK-DAG: error: verification failed: by_reference [{{.*}}::postcondition@[[@LINE-4]]:37]
+// CHECK-DAG: Verified: by_reference [backend=z3]
 
 // A local passed to a callee by reference is checked at the call (see
 // local_record_arguments.cpp). Not yet: a pointer formed from a local through

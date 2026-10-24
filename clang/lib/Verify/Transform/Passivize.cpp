@@ -1554,10 +1554,14 @@ recordStmtSafe(const VStmt &S, const std::set<std::string> &Aliases,
   case VStmt::Store:
     return !pointerFromAliases(static_cast<const VStoreStmt &>(S).Value.get(),
                                Aliases);
-  case VStmt::Allocate:
-  case VStmt::Free:
-    // A function that allocates or frees is UsesDynamicStorage, which
+  case VStmt::Allocate: {
+    // A local object of the callee's own keeps no address unless it is
+    // initialized with one; one from new makes it UsesDynamicStorage, which
     // keepsNoAddress rejects before it looks at a statement.
+    const auto &A = static_cast<const VAllocateStmt &>(S);
+    return A.IsAutomatic && !pointerFromAliases(A.Initializer.get(), Aliases);
+  }
+  case VStmt::Free:
     return false;
   case VStmt::If: {
     const auto &I = static_cast<const VIfStmt &>(S);

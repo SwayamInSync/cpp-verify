@@ -332,7 +332,17 @@ passed and returned by value; member functions and constructors ignored it.
 On a class now, every public member function assumes it on entry and must
 restore it, every constructor must establish it, and it is checked at every
 call, internal ones included; an extent of a pointer field in it is assumed
-on entry (:doc:`language/structs`).
+on entry. An object passed by reference or pointer satisfies it on entry and,
+when mutable, at exit, where before only a record passed by value did
+(:doc:`language/structs`).
+
+**Member operators.** For a member ``operator==``, ``a == b`` passed ``a``
+for the operator's parameter and ``b`` as an argument beyond it, an error,
+and an operator returning ``*this`` by reference (``Money &operator+=``) was
+an unsupported type. A member operator now takes its first operand as its
+object, and one returning its own object is verified as returning nothing. A
+callee with local objects of its own can now also be lent the caller's local
+objects (:doc:`language/structs`).
 
 **Records in memory by value.** A record kept in memory, a local object or
 one a pointer or reference addresses, could not be passed, returned, or
