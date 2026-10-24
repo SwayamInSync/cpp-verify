@@ -3088,6 +3088,19 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     return nullptr;
   }
   collectLayouts(FD, *Fn);
+  for (const ParmVarDecl *P : FD->parameters()) {
+    QualType Ty = P->getType();
+    if (!Ty->isPointerType() && !Ty->isReferenceType())
+      continue;
+    const std::string Identity = canonicalTypeIdentity(
+        Ty->getPointeeType().getCanonicalType().getUnqualifiedType(), Ctx);
+    if (Ty->getPointeeType()->isRecordType() &&
+        llvm::any_of(Fn->Layouts, [&](const VObjectLayout &Layout) {
+          return Layout.Kind == VObjectKind::Record &&
+                 Layout.TypeIdentity == Identity;
+        }))
+      Fn->RecordParams[valueName(P)] = Identity;
+  }
   CurrentFn = nullptr;
   return Fn;
 }
@@ -5495,6 +5508,25 @@ void ASTConverter::convertExecCallArg(
             "local, or direct pointer dereference");
     return;
   }
+  // The address of a local object, or of a field or element of one, binds a
+  // pointer parameter as a reference argument binds a reference: the call
+  // checks that the callee keeps no pointer into it.
+  if (Formal && Formal->getType()->isPointerType())
+    if (const auto *U = dyn_cast<UnaryOperator>(E->IgnoreParenImpCasts());
+        U && U->getOpcode() == UO_AddrOf &&
+        !U->getSubExpr()->getType()->isArrayType() &&
+        promotedRootLocal(U->getSubExpr())) {
+      std::unique_ptr<VExpr> AccessCondition;
+      Out = convertLValueAddress(U->getSubExpr(), &AccessCondition);
+      if (AccessCondition)
+        Prelude.push_back(std::make_unique<VAssertStmt>(
+            std::move(AccessCondition), E->getExprLoc(),
+            ProofObligationKind::Bounds));
+      if (Out)
+        appendReferenceBindingCheck(U->getSubExpr(), Out.get(), E->getExprLoc(),
+                                    Prelude);
+      return;
+    }
   const VarDecl *Source = directDynamicPointer(E);
   if (Source || isDynamicAddress(E)) {
     if (!Source || !Formal || !Formal->getType()->isPointerType() ||
