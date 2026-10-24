@@ -18457,10 +18457,11 @@ StmtResult TreeTransform<Derived>::TransformRevealSpecStmt(RevealSpecStmt *S) {
 template <typename Derived>
 VarDecl *TreeTransform<Derived>::TransformContractBinder(VarDecl *Binder) {
   // Declared as the parser declares it, in the context being built.
-  if (Binder->getDeclContext() == SemaRef.CurContext)
+  DeclContext *Context = SemaRef.getContractBinderContext();
+  if (Binder->getDeclContext() == Context)
     return Binder;
   VarDecl *New = VarDecl::Create(
-      SemaRef.Context, SemaRef.CurContext, Binder->getBeginLoc(),
+      SemaRef.Context, Context, Binder->getBeginLoc(),
       Binder->getLocation(), Binder->getIdentifier(), Binder->getType(),
       Binder->getTypeSourceInfo(), SC_None);
   getDerived().transformedLocalDecl(Binder, {New});

@@ -10397,6 +10397,11 @@ public:
   /// A component of a decreases clause, which must be an integer.
   ExprResult ActOnContractMeasure(ExprResult E);
 
+  /// The context of a quantifier's or a choice's binder: the current one,
+  /// or, in a class (a type invariant), the nearest one around it, since a
+  /// variable of a class is a member and a binder is not.
+  DeclContext *getContractBinderContext() const;
+
   /// forall, exists, or choose (\p Kind) over \p Binder: its bounds must be
   /// integers and its body a condition.
   ExprResult BuildContractBinderExpr(Stmt::StmtClass Kind,
@@ -10405,8 +10410,6 @@ public:
                                      SourceLocation RParenLoc, VarDecl *Binder,
                                      Expr *Lo, Expr *Hi, Expr *Body);
 
-  /// Rewrite unqualified field names to this->field for type_invariant(expr).
-  ExprResult ActOnTypeInvariantExpr(ExprResult E, CXXRecordDecl *Record);
 
   /// Diagnose references to spec functions in executable code of \p FD
   /// (or in a global initializer when \p FD is null). Spec functions are

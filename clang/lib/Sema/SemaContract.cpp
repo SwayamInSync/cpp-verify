@@ -13,7 +13,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "TreeTransform.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ASTLambda.h"
 #include "clang/AST/DeclCXX.h"
@@ -26,36 +25,6 @@
 using namespace clang;
 
 namespace {
-
-class TypeInvariantFieldRewriter : public TreeTransform<TypeInvariantFieldRewriter> {
-  typedef TreeTransform<TypeInvariantFieldRewriter> Base;
-  CXXRecordDecl *Record;
-
-public:
-  TypeInvariantFieldRewriter(Sema &S, CXXRecordDecl *RD)
-      : Base(S), Record(RD) {}
-
-  ExprResult TransformDeclRefExpr(DeclRefExpr *E) {
-    if (FieldDecl *FD = dyn_cast<FieldDecl>(E->getDecl())) {
-      if (FD->getParent() == Record) {
-        SourceLocation Loc = E->getBeginLoc();
-        QualType ThisTy =
-            getSema().Context.getTypeDeclType(cast<TypeDecl>(Record));
-        ExprResult This =
-            getSema().BuildCXXThisExpr(Loc, ThisTy, /*IsImplicit=*/true);
-        if (This.isInvalid())
-          return ExprError();
-        DeclarationNameInfo NameInfo(FD->getDeclName(), Loc);
-        return getSema().BuildMemberExpr(
-            This.get(), /*IsArrow=*/false, Loc, NestedNameSpecifierLoc(),
-            SourceLocation(), FD, DeclAccessPair::make(FD, FD->getAccess()),
-            /*HadMultipleCandidates=*/false, NameInfo, FD->getType(),
-            VK_LValue, OK_Ordinary, /*TemplateArgs=*/nullptr);
-      }
-    }
-    return Base::TransformDeclRefExpr(E);
-  }
-};
 
 const FunctionContractInfo *contractOf(const ASTContext &Ctx,
                                        const FunctionDecl *FD) {
@@ -317,6 +286,13 @@ ExprResult Sema::ActOnContractMeasure(ExprResult E) {
   return ExprError();
 }
 
+DeclContext *Sema::getContractBinderContext() const {
+  DeclContext *DC = CurContext;
+  while (DC->isRecord())
+    DC = DC->getParent();
+  return DC;
+}
+
 ExprResult Sema::BuildContractBinderExpr(Stmt::StmtClass Kind,
                                          SourceLocation KeywordLoc,
                                          SourceLocation LParenLoc,
@@ -345,14 +321,4 @@ ExprResult Sema::BuildContractBinderExpr(Stmt::StmtClass Kind,
     return new (Context) ExistsExpr(KeywordLoc, LParenLoc, RParenLoc, Binder,
                                     Lo, Hi, Condition.get(), Context.BoolTy);
   }
-}
-
-ExprResult Sema::ActOnTypeInvariantExpr(ExprResult E, CXXRecordDecl *Record) {
-  if (E.isInvalid() || !Record)
-    return E;
-  TypeInvariantFieldRewriter Rewriter(*this, Record);
-  ExprResult Transformed = Rewriter.TransformExpr(E.get());
-  if (Transformed.isInvalid())
-    return Transformed;
-  return ActOnContractCondition(Transformed.get());
 }

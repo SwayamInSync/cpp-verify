@@ -158,8 +158,9 @@ C++ feature boundaries
        through a pointer (``Ring copy = *r;``).
    * - Functions
      - Free functions, member functions of classes without bases or virtual
-       functions (:doc:`structs`), function templates in each specialization
-       the translation unit instantiates (:doc:`functions-loops`),
+       functions (:doc:`structs`), function and class templates in each
+       specialization the translation unit instantiates
+       (:doc:`functions-loops`, :doc:`structs`),
        overloads, namespaces, contracts, direct calls, and
        direct and mutual recursion, also through stores to pointer and
        reference parameters and through automatic objects, with mutual
@@ -167,9 +168,8 @@ C++ feature boundaries
      - Virtual functions, member functions of classes with bases,
        destructors, delegating constructors and the other constructors
        :doc:`structs` lists, conversion functions,
-       members and type invariants of class templates (they compile,
-       instantiate, and are ignored with a warning), function templates
-       that nothing instantiates (reported), variadics, indirect calls,
+       templates and members of class templates that nothing instantiates
+       (reported), variadics, indirect calls,
        recursion through a
        function that allocates or frees storage, and general link-time
        summaries.
@@ -215,10 +215,10 @@ otherwise supported code:
 - ``cppverify::aliases`` between pointers to different types (``aliases
   between different pointee types are unsupported``).
 
-A member function of a class template has its contracts ignored with a
-warning (``-Wcontract-unsupported``: "contracts in class template ... are
-not yet supported and are ignored"), and the run continues with the other
-functions.
+A template is verified in each specialization the translation unit
+instantiates; one that nothing instantiates, and a member of a class
+template that no specialization uses, is reported with a warning and not
+verified, and the run continues with the other functions.
 
 Objects, classes, and RAII
 --------------------------

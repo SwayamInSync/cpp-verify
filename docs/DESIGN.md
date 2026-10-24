@@ -1311,8 +1311,8 @@ void reset_left(Pair &p)
 - Not yet, each an error naming the function: virtual functions (dispatch
   needs behavioral subtyping), member functions of classes with bases,
   destructors, conversion functions, explicit object parameters, rvalue- and
-  volatile-qualified member functions; members of class templates keep the
-  template rule.
+  volatile-qualified member functions. A class template's members are
+  verified in each specialization (see Templates).
 
 ### 3g. Constructors
 
@@ -1839,8 +1839,11 @@ cppverify::proof void sum_concat(seq s, seq t)
   specialization.
 - A diagnostic about a specialization notes where it is instantiated, as a
   compiler's does.
-- Not yet: the members and type invariants of class templates, ignored with
-  `-Wcontract-unsupported`.
+- A class template is verified in each specialization too: a member's
+  contract is instantiated with the member, lazily as a function template's
+  is, so a member no specialization uses is not verified (it is reported),
+  and the class's type invariants with the class, eagerly, as a member
+  `static_assert` is, with the specialization's `this`.
 
 ## Clang Modification Details
 

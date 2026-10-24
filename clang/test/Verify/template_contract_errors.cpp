@@ -88,6 +88,27 @@ void uses_body() {
   loops(Pair{1, 2}); // expected-note {{in instantiation of function template specialization 'loops<Pair>' requested here}}
 }
 
+// A class template's invariant is checked where the class is instantiated,
+// and a member's contract where the member is used.
+template <typename T>
+struct Holder {
+  T held;
+
+  int first() const
+    cppverify::post(cppverify::result == held.first) // expected-error {{member reference base type 'const int' is not a structure or union}}
+  {
+    return 0;
+  }
+
+  cppverify::type_invariant(held); // expected-error {{value of type 'Pair' is not contextually convertible to 'bool'}}
+};
+
+int uses_holder() {
+  Holder<int> h{1};
+  Holder<Pair> q{{1, 2}}; // expected-note {{in instantiation of template class 'Holder<Pair>' requested here}}
+  return h.first() + q.first(); // expected-note {{in instantiation of member function 'Holder<int>::first' requested here}}
+}
+
 // Used only with arguments its contract fits.
 template <typename T>
 int only_records(T v)

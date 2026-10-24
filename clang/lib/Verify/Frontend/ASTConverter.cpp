@@ -2026,7 +2026,27 @@ static void collectFunctionCandidates(const DeclContext *DC, ASTContext &Ctx,
       collectFunctionCandidates(LS, Ctx, Out);
       continue;
     }
+    if (const auto *CTD = dyn_cast<ClassTemplateDecl>(D)) {
+      // A class template's members are functions of each specialization
+      // this translation unit instantiates; its pattern's members are
+      // reported where none of their instantiations is verified. The
+      // redeclarations of a template share its specializations.
+      if (const CXXRecordDecl *Pattern = CTD->getTemplatedDecl();
+          Pattern->isCompleteDefinition())
+        collectFunctionCandidates(Pattern, Ctx, Out);
+      if (CTD->isCanonicalDecl())
+        for (const ClassTemplateSpecializationDecl *Spec :
+             CTD->specializations())
+          if (Spec->getSpecializationKind() != TSK_ExplicitSpecialization &&
+              Spec->isCompleteDefinition())
+            collectFunctionCandidates(Spec, Ctx, Out);
+      continue;
+    }
     if (const auto *RD = dyn_cast<RecordDecl>(D)) {
+      // An instantiated specialization is collected from its template.
+      if (const auto *Spec = dyn_cast<ClassTemplateSpecializationDecl>(RD);
+          Spec && Spec->getSpecializationKind() != TSK_ExplicitSpecialization)
+        continue;
       if (RD->isCompleteDefinition())
         collectFunctionCandidates(RD, Ctx, Out);
       continue;
@@ -2058,6 +2078,45 @@ static void collectFunctionCandidates(const DeclContext *DC, ASTContext &Ctx,
         Out.push_back(FD);
     }
   }
+}
+
+/// Whether a function template or a member of a class template, as
+/// written, has a specialization this translation unit instantiates, with a
+/// definition or a contract: nothing for a member of a class nested in a
+/// template, which is not looked for.
+static std::optional<bool> isInstantiated(const FunctionDecl *FD,
+                                          const ASTContext &Ctx) {
+  auto Instantiated = [&](const FunctionDecl *Spec) {
+    return Spec->isTemplateInstantiation() &&
+           (Spec->isThisDeclarationADefinition() ||
+            Ctx.getFunctionContract(Spec));
+  };
+  const FunctionTemplateDecl *Template = FD->getDescribedFunctionTemplate();
+  const auto *Class = dyn_cast<CXXRecordDecl>(FD->getDeclContext());
+  if (!Class || !Class->isDependentContext())
+    return Template && llvm::any_of(Template->specializations(), Instantiated);
+  const ClassTemplateDecl *ClassTemplate = Class->getDescribedClassTemplate();
+  if (!ClassTemplate)
+    return std::nullopt;
+  for (const ClassTemplateSpecializationDecl *Spec :
+       ClassTemplate->specializations())
+    for (const Decl *Member : Spec->decls()) {
+      if (const auto *M = dyn_cast<CXXMethodDecl>(Member)) {
+        const FunctionDecl *From = M->getInstantiatedFromMemberFunction();
+        if (From && From->getCanonicalDecl() == FD->getCanonicalDecl() &&
+            Instantiated(M))
+          return true;
+      }
+      if (const auto *MT = dyn_cast<FunctionTemplateDecl>(Member)) {
+        const FunctionTemplateDecl *From =
+            MT->getInstantiatedFromMemberTemplate();
+        if (From && Template &&
+            From->getCanonicalDecl() == Template->getCanonicalDecl() &&
+            llvm::any_of(MT->specializations(), Instantiated))
+          return true;
+      }
+    }
+  return false;
 }
 
 /// What remains of a function that uses a construct the verifier does not
@@ -2206,22 +2265,36 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
       // verified code calls it, which reports the call.
       if (!functionContract(FD) && !hasContractStatements(FD, Ctx))
         continue;
-      // A function template is verified in each of its specializations,
-      // which follow it: what it means depends on its arguments.
+      // A template is verified in each of its specializations, which follow
+      // it: what it means depends on its arguments.
       if (!UnsupportedMember) {
-        const FunctionTemplateDecl *Template =
-            FD->getDescribedFunctionTemplate();
-        if (Template && !FD->isInStdNamespace() &&
+        // A member of a class template is named with its parameters,
+        // Box<T>::get, as the class's own type names it.
+        std::string Name = functionName(FD, isa<CXXMethodDecl>(FD));
+        if (const auto *Class = dyn_cast<CXXRecordDecl>(FD->getDeclContext()))
+          if (const ClassTemplateDecl *ClassTemplate =
+                  Class->getDescribedClassTemplate()) {
+            Name.clear();
+            llvm::raw_string_ostream OS(Name);
+            OS << ClassTemplate->getQualifiedNameAsString();
+            printTemplateArgumentList(
+                OS, ClassTemplate->getInjectedTemplateArgs(Ctx),
+                Ctx.getPrintingPolicy());
+            OS << "::" << functionName(FD);
+          }
+        if (!FD->isInStdNamespace() &&
             Ctx.getSourceManager().isWrittenInMainFile(FD->getLocation()) &&
-            llvm::none_of(Template->specializations(),
-                          [](const FunctionDecl *Spec) {
-                            return Spec->isTemplateInstantiation();
-                          }))
+            isInstantiated(FD, Ctx) == false)
           Warnings.emplace_back(
               FD->getLocation(),
-              functionName(FD) + ": function template is not verified: this "
-                                 "translation unit instantiates none of its "
-                                 "specializations");
+              Name +
+                  (FD->getDescribedFunctionTemplate()
+                       ? ": function template is not verified: this "
+                         "translation unit instantiates none of its "
+                         "specializations"
+                       : ": member of a class template is not verified: this "
+                         "translation unit instantiates it in none of the "
+                         "class's specializations"));
         continue;
       }
       llvm::SaveAndRestore Owner(ErrorFunction, functionIdentity(FD));

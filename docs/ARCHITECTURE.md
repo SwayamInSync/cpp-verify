@@ -340,6 +340,24 @@ where each is instantiated (`getInstantiationPoints`), which the driver
 prints as a note after each error or warning of the specialization (JSON
 `instantiated_at`).
 
+**Class templates:** the parser keeps the contracts of a class template's
+members, whose instantiation is a function template's
+(`InstantiateFunctionContract`, where the member is used or defined), and
+its type invariants, which `InstantiateClassImpl` instantiates once the
+specialization is complete, with its `this` (`CXXThisScopeRAII`), into the
+specialization's `TypeContractInfo`. An invariant is parsed with its class's
+`this` in scope, so Sema writes a field it names bare as `this->field`,
+which the instantiation rebuilds with the specialization's `this`. A
+quantifier's binder in it belongs to the context around the class
+(`Sema::getContractBinderContext`): a variable of a class is a member, and
+an assertions build stopped at the first lookup of one without an access
+specifier. `collectFunctionCandidates` visits the pattern's members (for the
+warning) and the members of each specialization the translation unit
+instantiates (an instantiated specialization in a declaration context is
+collected from its template only); `isInstantiated` decides the warning,
+from a function template's specializations or the instantiated members of
+the class's.
+
 **Records in memory by value:** `recordFieldsInMemory` reads a record value
 kept in memory, a promoted local or one in a pointee or record reference
 (`promotedRootLocal`, `inPointeeObject`), through implicit copies and
