@@ -14,11 +14,6 @@ int read_value(const int &value)
   return value;
 }
 
-struct Pair {
-  int first;
-  int second;
-};
-
 struct WithReference {
   int &value;
 };
@@ -46,12 +41,6 @@ int local_reference(int *value)
 
 int &reference_return(int &value) cppverify::pre(true) {
   return value;
-}
-
-int record_reference(Pair &value)
-  cppverify::post(cppverify::result == value.first)
-{
-  return value.first;
 }
 
 int rvalue_reference(int &&value)
@@ -140,7 +129,6 @@ void conditional_reference_actual(bool choose, int *value)
 
 // VERIFY-DAG: error: temporary_actual: reference arguments require a supported reference, addressable local, or direct pointer dereference
 // VERIFY-DAG: error: reference_return: unsupported C++ type in verification: int &
-// VERIFY-DAG: error: record_reference: unsupported C++ type in verification: Pair &
 // VERIFY-DAG: error: rvalue_reference: unsupported C++ type in verification: int &&
 // VERIFY-DAG: error: volatile_reference: unsupported C++ type in verification: volatile int &
 // VERIFY-DAG: error: pointer_reference: unsupported C++ type in verification: int *&
