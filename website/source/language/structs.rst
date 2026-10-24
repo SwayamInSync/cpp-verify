@@ -572,6 +572,79 @@ and member functions of a class template (whose contracts are ignored with a
 warning). A member call inside an expression (``return n + get();``) is
 unsupported as a free function's is; assign its result first.
 
+Member operators
+~~~~~~~~~~~~~~~~
+
+A member operator is a member function whose object is its first operand:
+``a == b`` is ``a.operator==(b)`` and ``a |= b`` is ``a.operator|=(b)``. One
+that returns a reference to its own object (every return being ``return
+*this;``, as an assignment operator's is) returns nothing the caller does not
+already hold, so it is verified as returning nothing, and is called as a
+statement of its own:
+
+.. code-block:: cpp
+
+   class Bits {
+   public:
+     Bits()
+       cv::post(word == 0)
+       : word(0) {}
+
+     void set(int i)
+       cv::pre(0 <= i && i < 16)
+       cv::modifies(word)
+       cv::post(word == (cv::old(word) | (1u << i)))
+     {
+       word = word | (1u << i);
+     }
+
+     bool operator==(const Bits &o) const
+       cv::post(cv::result == (word == o.word))
+     {
+       return word == o.word;
+     }
+
+     Bits &operator|=(const Bits &o)
+       cv::modifies(word)
+       cv::post(word == (cv::old(word) | o.word))
+     {
+       word = word | o.word;
+       return *this;
+     }
+
+     unsigned word;
+
+     cv::type_invariant(word < 65536);
+   };
+
+   bool merged()
+     cv::post(cv::result)
+   {
+     Bits a;
+     Bits b;
+     a.set(3);
+     b.set(5);
+     a |= b;
+     b |= a;
+     bool same = a == b;
+     return same;
+   }
+
+.. code-block:: text
+
+   Verified: Bits::Bits [backend=z3]
+   Verified: Bits::set [backend=z3]
+   Verified: Bits::operator== [backend=z3]
+   Verified: Bits::operator|= [backend=z3]
+   Verified: merged [backend=z3]
+
+``operator|=`` keeps the invariant because its operand ``o`` satisfies it
+too: an object passed by reference does (`Class invariants`_). ``a |= a``
+passes one object as both ``this`` and ``o``, which are distinct by default,
+and fails ``aliasing``. Using the reference such an operator returns, as in
+``(a |= b) |= b``, ``Bits c = (a |= b);``, or ``c = (a |= b);``, is an error;
+a free operator is a free function and returns its value as one does.
+
 Constructors
 ------------
 
@@ -761,9 +834,12 @@ internal calls included, so no call observes the object while it is broken:
   it calls then fails, at that call.
 - A caller that writes a public field holds the invariant only if it keeps
   it: the next public call checks it there.
-- A function that takes the object by reference or pointer assumes nothing
-  of its invariant; to call a public member function on it, it states the
-  invariant in its own precondition.
+- An object a parameter refers to or points to satisfies its invariant on
+  entry, as the caller shows at the call, and through a mutable reference or
+  pointer it must at exit: every function boundary is one where it holds. A
+  null pointer needs none, and a pointer with an extent is not covered yet.
+  An extent in the invariant is ``this``'s, so an object passed by reference
+  does not carry it yet.
 - An extent of a pointer field, ``cv::valid(data, len)``, is assumed on
   entry as in a precondition (`Extents of pointer fields`_). At exit it
   states nothing; the next call checks it from what its caller knows, so a
