@@ -4721,18 +4721,22 @@ public:
             Diagnostic.Result->Message = Reason;
           }
         };
-        auto Certified =
-            Lean->certifyLeanProject(ExportedGoals, LeanRefutations);
+        // The goals that failed, by name, once; testing an Expected that
+        // holds an error again would leave it unchecked.
+        std::optional<std::map<std::string, std::string>> Certified;
+        std::string NotCertified;
+        if (auto Checked =
+                Lean->certifyLeanProject(ExportedGoals, LeanRefutations))
+          Certified = std::move(*Checked);
+        else
+          NotCertified = llvm::toString(Checked.takeError());
         std::map<std::string, const LeanProjectGoal *> GoalsByName;
         for (const LeanProjectGoal &Goal : ExportedGoals)
           GoalsByName.emplace(Goal.Name, &Goal);
-        std::string NotCertified;
         if (!Certified) {
-          const std::string Reason = llvm::toString(Certified.takeError());
-          NotCertified = Reason;
           for (size_t Index = 0; Index != Diags.size(); ++Index)
             if (Diags[Index].K == VerifyDiagnostic::Exported)
-              failed(Index, Reason);
+              failed(Index, NotCertified);
         } else {
           for (size_t Index = 0; Index != Diags.size(); ++Index) {
             VerifyDiagnostic &Diagnostic = Diags[Index];
@@ -5806,10 +5810,13 @@ verify::replayLeanProject(const std::vector<ObligationModule> &Modules,
   // A module is proved when each of its goals is certified. A bounded one
   // whose unwinding goals alone are not is safe within its bound: Lean
   // proves goals, and never refutes one.
-  auto Certified = Project.certifyLeanProject(Goals);
+  // As for source certification: the Expected is tested once.
+  std::optional<std::map<std::string, std::string>> Certified;
   std::string Failed;
-  if (!Certified)
-    Failed = llvm::toString(Certified.takeError());
+  if (auto Checked = Project.certifyLeanProject(Goals))
+    Certified = std::move(*Checked);
+  else
+    Failed = llvm::toString(Checked.takeError());
   std::map<std::string, const LeanProjectGoal *> GoalsByName;
   for (const LeanProjectGoal &Goal : Goals)
     GoalsByName.emplace(Goal.Name, &Goal);
