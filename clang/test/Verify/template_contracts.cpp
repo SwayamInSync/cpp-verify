@@ -1,11 +1,12 @@
 // RUN: %clang_cc1 -std=c++17 -fverify-contracts -fno-verify -verify %s
 // RUN: %clang_cc1 -std=c++17 -fverify-contracts -fno-verify -emit-llvm -o - %s | FileCheck %s
 // RUN: %clang_cc1 -std=c++17 -fverify-contracts -fno-verify -ast-dump -ast-dump-filter temporaries %s | FileCheck %s --check-prefix=CLEANUPS
+// expected-no-diagnostics
 //
 // A contract may depend on a template parameter: it is checked where it is
 // instantiated, as C++ conditions are. A function template's contract is
-// instantiated with each specialization; the contracts of a class template
-// are not verified yet and are ignored with a warning. Either compiles and
+// instantiated with each specialization, and a class template's members'
+// contracts and type invariants with the class. Either compiles and
 // instantiates like any other template.
 
 template <typename T>
@@ -41,9 +42,9 @@ void fill(T *p, T n, T v)
 template <typename T>
 struct Box {
   T value;
-  cppverify::type_invariant(value == value); // expected-warning {{contracts in class template 'Box' are not yet supported and are ignored}}
+  cppverify::type_invariant(value == value);
 
-  T get() const // expected-warning {{contracts in class template 'Box' are not yet supported and are ignored}}
+  T get() const
     cppverify::post(cppverify::result == value)
   {
     return value;
