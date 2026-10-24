@@ -3779,6 +3779,21 @@ bool Sema::InstantiateClassImpl(
 
   ActOnFinishDelayedMemberInitializers(Instantiation);
 
+  // The class's type invariants, of the specialization's `this`, checked as
+  // the parser checks them; a spec they apply is used, as in the members.
+  if (const TypeContractInfo *Invariants = Context.getTypeContract(Pattern);
+      Invariants && !Instantiation->isInvalidDecl()) {
+    CXXThisScopeRAII ThisScope(*this, Instantiation, Qualifiers());
+    TypeContractInfo &Instantiated =
+        Context.getOrCreateTypeContract(Instantiation);
+    for (Expr *Invariant : Invariants->Invariants) {
+      ExprResult Condition =
+          ActOnContractCondition(SubstExpr(Invariant, TemplateArgs));
+      if (Condition.isUsable())
+        Instantiated.Invariants.push_back(Condition.get());
+    }
+  }
+
   // FIXME: We should do something similar for explicit instantiations so they
   // end up in the right module.
   if (TSK == TSK_ImplicitInstantiation) {
