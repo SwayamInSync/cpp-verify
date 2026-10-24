@@ -589,8 +589,11 @@ access rooted at that parameter must then prove ``0 <= i < n``, and pointer
 arithmetic must stay in ``[0, n]``: ``p + n`` is the one-past position, which
 may be formed and compared but not read. The marker must occur as a positive
 top-level conjunction clause of a ``cppverify::pre`` with a bare complete-object pointer,
-and each pointer may have only one marker; ambiguous forms (under ``||``,
-``!``, or a conditional, or a second marker for one pointer) fail closed.
+or a pointer field of the object a parameter addresses (``valid(s->data,
+s->len)``, see :doc:`structs`), and each pointer may have only one marker;
+ambiguous forms (under ``||``, ``!``, or a conditional, or a second marker for
+one pointer) fail closed. Two address parameters of which one has an extent
+are disjoint over their extents, so an empty extent may lie anywhere.
 
 Contracts read under the same rule. An access in a precondition, a
 postcondition, a loop invariant, or a ``cppverify::check`` must lie in its

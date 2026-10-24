@@ -255,7 +255,9 @@ alignment, provenance, or initialization. Bounds follow exact conditional and
 short-circuit evaluation, and fresh represented storage is kept disjoint from
 the complete declared incoming extent. Outside a precondition the marker
 means nothing and is rejected (:doc:`pointers`), so an extent cannot yet be
-stated for a returned pointer.
+stated for a returned pointer. A pointer field of a parameter's object may
+take an extent (``valid(s->data, s->len)``, :doc:`structs`); a field of an
+array element (``s->items[k].data``) may not yet.
 
 For pairs involving mutable pointees, CppVerify adds a generated
 complete-object disjointness precondition. ``cppverify::aliases(p, q)`` opts a pair into

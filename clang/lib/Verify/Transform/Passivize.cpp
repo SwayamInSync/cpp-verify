@@ -4789,6 +4789,18 @@ public:
       P.EntryAssumes.push_back(makeNot(std::move(NullLive), SourceLocation()));
       P.EntryOrigins.insert(P.EntryOrigins.end(), 2, "null");
     }
+    // A field parameter is its field's value at entry, by definition: a fact
+    // without definedness, since it says nothing where the field cannot be
+    // read, and which a call needs not establish, as it binds the parameter
+    // to the field itself.
+    for (const auto &[Name, Field] : Fn.FieldParams) {
+      CloneCtx PCtx{Renames, OldState, false};
+      VVarExpr Parameter(Name, Field->Ty, Field->Loc);
+      P.EntryAssumes.push_back(makeEq(cloneExpr(&Parameter, PCtx),
+                                      cloneExpr(Field.get(), PCtx),
+                                      Field->Loc));
+      P.EntryOrigins.push_back("field");
+    }
     if (Fn.ObjectModel) {
       CloneCtx PCtx{Renames, OldState, false};
       for (const AbstractObject &Object : abstractObjects(Fn)) {
@@ -5279,6 +5291,9 @@ public:
     std::map<std::string, std::unique_ptr<VExpr>> ParamMap;
     for (unsigned I = 0; I < Callee->Params.size() && I < C.Args.size(); ++I)
       ParamMap[Callee->Params[I].first] = cloneExpr(C.Args[I].get(), Ctx);
+    // A field's entry value is the field at the arguments, before the call.
+    for (const auto &[Name, Field] : Callee->FieldParams)
+      ParamMap[Name] = substParams(Field.get(), ParamMap, Ctx, EntryHeap);
     std::set<std::string> DynamicParams;
     std::set<std::pair<std::string, std::string>> ActiveScans;
     for (const auto &Param : Callee->Params)
@@ -5367,6 +5382,11 @@ public:
       for (unsigned I = 0; I < Callee->Params.size() && I < C.Args.size(); ++I)
         if (Callee->Params[I].first == Extent.Base)
           Arg = C.Args[I].get();
+      // A field's value, read from memory, may address any caller object.
+      if (!Arg && llvm::any_of(Callee->FieldParams, [&](const auto &Entry) {
+            return Entry.first == Extent.Base;
+          }))
+        Arg = Actual->second.get();
       auto Bytes = scaledExtent(Length.get(),
                                 Extent.PointerType.PointeeSizeBytes, C.Loc);
       auto NonNegative = asPointerOffset(Length.get());

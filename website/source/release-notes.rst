@@ -212,6 +212,12 @@ although the callee writes only cells the caller may write, in two cases:
 The callee's footprint is now compared with the caller's frame cell by cell
 (:doc:`language/pointers`).
 
+**An empty extent inside another object.** Two address parameters of which
+one has a ``valid`` extent are disjoint over their extents, which allows an
+empty extent anywhere; the check of the pair over one object each was made as
+well, so ``touch(b, &b->len, 0)``, an empty extent into ``*b``, failed its
+``aliasing`` check. Only the extents are compared now (:doc:`language/pointers`).
+
 **A record member named whole in** ``cppverify::modifies``.
 ``cppverify::modifies(p->left)``, for a member that is a record or an array,
 was taken for one cell holding the whole member. A call ``reset(&p->left)``
@@ -279,6 +285,15 @@ reseated: ``c.n`` and ``c.buf[i]`` are cells of the object, ``&c.n`` and
 ``c.buf`` point into it, ``cppverify::modifies(c)`` is the whole object, and
 a reference can be bound to ``*p``, ``p->left``, ``a[i]``, or another
 reference (:doc:`language/structs`).
+
+**Extents of pointer fields.** ``cv::valid(s->data, s->len)`` was an error
+(``valid marker requires a bare complete-object pointer and an integer element
+count``), so a record that describes a buffer by a pointer and a length (a
+string view, a span) could not be verified. A pointer field of the object a
+pointer or reference parameter addresses now takes an extent as a pointer
+parameter does: accesses through it are checked against the extent, a call
+checks the extent at its arguments, and the buffer is disjoint from the other
+parameters' objects by default (:doc:`language/structs`).
 
 **Local objects passed to callees.** A local record passed to a reference
 parameter (``bump(c)``), and the address of any local passed to a pointer

@@ -363,6 +363,79 @@ Not yet supported:
 - reference returns, rvalue and ``volatile`` references, and references in
   spec and proof functions.
 
+Extents of pointer fields
+-------------------------
+
+A record often describes a buffer it does not hold: a pointer and a length.
+A precondition states its extent as for a pointer parameter,
+``cppverify::valid(b.data, b.len)``, for a pointer field of the object a
+pointer or reference parameter addresses (``s->data``, ``s.data``,
+``(*s).data``, ``s->inner.data``). The extent describes the buffer the field
+addresses when the function is entered. That value is an input of the
+function as a parameter's value is, and the verifier treats it so: an
+access through ``b.data`` must lie in the extent while the field still
+holds it, and at a call the field's value at the arguments must have the
+extent in the caller's objects, as a pointer argument must. A buffer through
+a pointer to non-const is disjoint from the other address parameters'
+objects by default, its own record's included, so writing ``b.data[i]``
+leaves ``b.len`` alone; two buffers through pointers to const may be one.
+
+.. cppverify-example: fails zero_more
+
+.. code-block:: cpp
+
+   struct Buf {
+     int *data;
+     int len;
+   };
+
+   void zero(Buf &b)
+     cv::pre(cv::valid(b.data, b.len) && 0 <= b.len)
+     cv::modifies(b.data[0 : b.len])
+     cv::post(cv::forall(k, 0, b.len, b.data[k] == 0))
+   {
+     for (int i = 0; i < b.len; i = i + 1)
+       cv::invariant(0 <= i && i <= b.len)
+       cv::invariant(cv::forall(k, 0, i, b.data[k] == 0))
+       cv::modifies(b.data[0 : b.len])
+       cv::decreases(b.len - i)
+     {
+       b.data[i] = 0;
+     }
+   }
+
+   void zero_prefix(int *p, int n, int k)
+     cv::pre(cv::valid(p, n) && 0 <= k && k <= n)
+     cv::modifies(p[0 : n])
+     cv::post(cv::forall(j, 0, k, p[j] == 0))
+   {
+     Buf b;
+     b.data = p;
+     b.len = k;
+     zero(b);
+   }
+
+   void zero_more(int *p, int n)
+     cv::pre(cv::valid(p, n) && 0 <= n && n < 100)
+     cv::modifies(p[0 : n])
+   {
+     Buf b;
+     b.data = p;
+     b.len = n + 1;
+     zero(b);
+   }
+
+.. code-block:: text
+
+   Verified: zero [backend=z3]
+   Verified: zero_prefix [backend=z3]
+   buf.cpp:39:3: error: verification failed: zero_more [...::bounds@39:3] (counterexample: n [ssa=n_0] [type=i32] = 0, p [ssa=p_0] [type=pointer] = 1; trace: allocation.automatic allocation@36:3 address=231056 provenance=18 -> heap-write.store@37:10 address=231056 value=1 -> heap-write.store@38:9 address=231064 value=1 -> call.zero@39:3 arg0=231056) [backend=z3] [reason=counterexample]
+
+``zero_more`` passes a buffer one element longer than the extent of ``p``.
+A field given another pointer in the body (``b.data = q;``) addresses that
+pointer's object from then on, not the extent. A field of an array element
+(``s->items[k].data``) cannot take an extent yet.
+
 ``cppverify::type_invariant``
 -----------------------------
 

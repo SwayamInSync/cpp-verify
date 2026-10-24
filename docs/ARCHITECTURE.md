@@ -201,6 +201,28 @@ as its bytes; before, it was a cell holding the record, which held no
 callee's footprint inside the member and whose havoc at a call had no logic
 sort.
 
+**Extents of pointer fields:** `ASTConverter::collectFieldExtents` finds
+each extent marker of the preconditions whose pointer is a field of the
+object a pointer or reference parameter addresses (`pointerFieldOfParameter`:
+`s->f`, `r.f`, `(*s).f`, nested fields), and gives the field's entry value a
+synthetic parameter after the declared ones, named `s->f` (fields joined by
+`->`, so no name splits at a `.`), displayed as written, with the field's own
+pointer type (the marker's parameter converts it to a pointer to const).
+`VFunction::FieldParams` keeps each with its field as an expression over the
+parameters; the marker's argument converts to the parameter
+(`FieldExtentParameters`), so `instrumentUBChecks` sees a bare pointer and
+records the extent as for any parameter. The passivizer's `enter` assumes
+`s->f_0 == load(s + offset)` in the entry heap, an entry fact (origin
+`field`, after the preconditions), and a call binds the parameter in
+`ParamMap` to the field at its arguments in the call's state, which also
+serves as the argument whose origins place the extent in the caller's
+objects. The default separation takes the synthetic entries
+(`AddressEntry`, mutable unless the field points to const) with the
+declared address parameters. `UBInstrumenter::dropSingleObjectSeparation`
+removes a pair's single-object separation where one of the pair has an
+extent, so the extent separation (`appendExtentSeparation`) alone states
+it.
+
 **Pointers into objects:** `ASTConverter::subobjectPointer` lowers a decayed
 member array of a pointee and the address of a pointee's element, field, or
 nested record. In a statement (`SubobjectSink`) it asserts the place's access

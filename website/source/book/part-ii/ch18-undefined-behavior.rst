@@ -160,8 +160,9 @@ Typed pointer offsets are scaled to target bytes using ``sizeof(T)`` while this
 obligation remains the half-open element bound ``0 <= i < n``.
 
 For sound discovery, ``valid(p, n)`` must be a positive top-level conjunction
-clause, ``p`` must be the bare complete-object pointer, and each pointer may
-have only one marker. Shifted, disjunctive, conditional, or duplicate markers
+clause, ``p`` must be the bare complete-object pointer or a pointer field of
+a parameter's object (``s->data``), and each pointer may have only one
+marker. Shifted, disjunctive, conditional, or duplicate markers
 are rejected instead of being interpreted as unconditional extents.
 
 At a modular call, a callee extent ``valid(q, length)`` is instantiated by an
