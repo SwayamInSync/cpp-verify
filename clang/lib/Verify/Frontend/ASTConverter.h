@@ -85,6 +85,10 @@ class ASTConverter {
   std::vector<std::vector<const VarDecl *>> AutomaticScopeStack;
   std::vector<const VarDecl *> ActiveAutomaticLocals;
   std::map<const VarDecl *, std::string> LocalReferenceProvenanceVariables;
+  /// The first arguments of extent markers that name a pointer field of an
+  /// address parameter, by the synthetic parameter of the field's entry value
+  /// (VFunction::FieldParams).
+  std::map<const Expr *, std::string> FieldExtentParameters;
   std::set<const VarDecl *> GhostLocals;
   unsigned DynamicProvenanceId = 0;
   unsigned DynamicPointerAssignmentId = 0;
@@ -336,6 +340,19 @@ private:
   /// Populate `Fn.Layouts` with canonical, deduplicated layouts for the record
   /// and constant-array types encountered in `FD`'s signature and body.
   void collectLayouts(const FunctionDecl *FD, VFunction &Fn);
+  /// An address the default separation covers: a pointer or reference
+  /// parameter, or the entry value of a pointer field with an extent.
+  struct AddressEntry {
+    std::string Name;
+    QualType Addressed;
+    bool Mutable;
+  };
+  /// Gives each pointer field of an address parameter that an extent marker
+  /// of FCI's preconditions names a synthetic parameter for its entry value
+  /// (VFunction::FieldParams), and returns them for the default
+  /// separation.
+  std::vector<AddressEntry> collectFieldExtents(const FunctionContractInfo &FCI,
+                                                VFunction &Fn);
   void registerLayoutType(QualType QT, VFunction &Fn);
   void buildRecordLayout(QualType QT, VFunction &Fn);
   void buildArrayLayout(QualType QT, const ConstantArrayType *CAT,
