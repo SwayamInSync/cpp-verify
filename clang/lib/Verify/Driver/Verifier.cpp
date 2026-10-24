@@ -3081,13 +3081,33 @@ public:
         Converter.getUnverifiedCallers();
     for (const auto &[Loc, Message] : Converter.getWarnings())
       Diags.push_back({VerifyDiagnostic::Warning, Message, Loc});
+    // A construct the verifier does not represent costs its function alone:
+    // the function is Unresolved, its first error carrying the verdict, and
+    // the rest of the translation unit is verified. An error outside every
+    // function stops the run.
+    bool OutsideFunctions = false;
+    std::map<std::string, std::string> UnsupportedConstructs;
     for (const ConversionError &Err : Converter.getErrors()) {
       VerifyDiagnostic D{VerifyDiagnostic::Error, Err.Message,
                          Err.Range.getBegin()};
       D.Span = Err.Range;
+      if (Err.Function.empty())
+        OutsideFunctions = true;
+      else
+        D.FunctionName = Err.FunctionName;
+      if (!Err.Function.empty() &&
+          UnsupportedConstructs.emplace(Err.Function, Err.Message).second) {
+        VerifyResult R;
+        R.Status = VerifyStatus::Unresolved;
+        R.Reason = VerifyReason::UnsupportedConstruct;
+        R.Message = Err.Message;
+        D.Result = std::move(R);
+      }
       Diags.push_back(std::move(D));
     }
-    if (!Converter.getErrors().empty())
+    if (OutsideFunctions)
+      return false;
+    if (Functions.empty() && !UnsupportedConstructs.empty())
       return false;
     if (Functions.empty()) {
       if (Opts.LeanCertify) {
@@ -3213,7 +3233,7 @@ public:
     };
     const unsigned DumpLayers = Opts.DumpIRLayers;
     const bool MultiLayerDump = llvm::popcount(DumpLayers) > 1;
-    bool AllOk = true;
+    bool AllOk = UnsupportedConstructs.empty();
     bool AnyFailed = false;
     std::set<std::string> FailedCallers;
     // A spec whose termination is not established has no definition, so a
@@ -3562,12 +3582,35 @@ public:
         // which is reported only if it fails.
         if (Fn->Uninterpreted || (Fn->IsBuiltin && !Fn->NeedsDecreasesCheck))
           continue;
+        // What a function says depends on the definitions of the specs it
+        // reaches, so one that reaches a spec the verifier does not
+        // represent is not verified.
+        std::string ReliesOn;
+        for (const std::string &Spec : Fn->SpecDependencies)
+          if (auto It = FnMap.find(Spec);
+              It != FnMap.end() && It->second->UnsupportedConstruct)
+            ReliesOn += (ReliesOn.empty() ? "" : ", ") + It->second->Name;
+        if (!ReliesOn.empty()) {
+          AllOk = false;
+          VerifyResult R;
+          R.Status = VerifyStatus::Unresolved;
+          R.Reason = VerifyReason::UnsupportedConstruct;
+          R.Message = "relies on " + ReliesOn +
+                      ", which uses a construct the verifier does not support";
+          VerifyDiagnostic D{VerifyDiagnostic::Unresolved,
+                             Fn->Name + " [reason=construct.unsupported] (" +
+                                 R.Message + ")",
+                             Fn->DeclLoc, Fn->Name};
+          D.Result = std::move(R);
+          Diags.push_back(std::move(D));
+          continue;
+        }
         if (Fn->IsExternalContract) {
           if (Fn->IsTrusted)
             Diags.push_back({VerifyDiagnostic::Trusted,
                              Fn->Name + " (contract assumed, not verified)",
                              Fn->DeclLoc, Fn->Name});
-          else
+          else if (!Fn->UnsupportedConstruct)
             Diags.push_back(
                 {VerifyDiagnostic::Warning,
                  Fn->Name + " has a contract but no definition, so its callers "
@@ -4921,6 +4964,8 @@ public:
           auto Check = ContractChecks.find(Callee);
           if (Check != ContractChecks.end() && !settled(Check->second))
             Names += " (its clauses are not shown to be defined)";
+          else if (It != FnMap.end() && It->second->UnsupportedConstruct)
+            Names += " (it uses a construct the verifier does not support)";
           else if (It != FnMap.end() && It->second->IsExternalContract &&
                    !It->second->IsTrusted)
             Names += " (no definition; mark it [[cppverify::trusted]] to "
@@ -4955,9 +5000,12 @@ public:
             continue;
           // Definitions and frames of what the proof may reach;
           // postconditions and unfoldings where its module assumes them.
-          std::string Undefined, Unframed, Unproven, Unruled;
+          std::string Unsupported, Undefined, Unframed, Unproven, Unruled;
           for (const std::string &Identity : Reliance.Specs) {
-            if (UndefinedSpecs.count(Identity))
+            if (auto It = FnMap.find(Identity);
+                It != FnMap.end() && It->second->UnsupportedConstruct)
+              list(Unsupported, nameOf(Identity));
+            else if (UndefinedSpecs.count(Identity))
               list(Undefined, nameOf(Identity));
             else if (UnframedSpecs.count(Identity))
               list(Unframed, nameOf(Identity));
@@ -4974,7 +5022,12 @@ public:
           for (const std::string &Identity : Reliance.AssumedUnfoldings)
             if (Unproved.count(Identity) && !Reliance.Withheld.count(Identity))
               list(Unruled, nameOf(Identity));
-          if (!Undefined.empty())
+          if (!Unsupported.empty())
+            demote(Reliance.Index, VerifyReason::UnsupportedConstruct,
+                   "relies on " + Unsupported +
+                       ", which uses a construct the verifier does not "
+                       "support");
+          else if (!Undefined.empty())
             demote(Reliance.Index, VerifyReason::SpecTermination,
                    "relies on the definition of " + Undefined +
                        ", whose termination is not established");
