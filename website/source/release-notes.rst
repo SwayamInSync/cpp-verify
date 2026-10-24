@@ -149,6 +149,13 @@ every object, so a claim about a local the loop never touches failed after
 it. Such a loop now writes only the objects it stores to, as a loop over
 parameters always did (:doc:`language/functions-loops`).
 
+**Calls that write a record.** A call whose footprint is a record
+parameter's object, as a member function's default ``modifies(*this)`` is,
+framed its bytes with a quantified relation, and a claim the call
+falsifies often ended ``solver.timeout`` instead of a counterexample. The
+object is now its leaves, each one cell, and such a claim fails in a few
+seconds (:doc:`language/structs`).
+
 **Null minus null.** The difference of two null pointers failed its
 ``pointer-difference`` check; it is 0, as C++ defines (:doc:`language/pointers`).
 
@@ -319,6 +326,13 @@ order with in-class initializers for the members it does not name, and it
 must initialize every member by its end. ``Counter c(5);`` passes ``&c`` and
 leaves an initialized object; an implicit or defaulted default constructor
 runs its members' initializers in place (:doc:`language/structs`).
+
+**Class invariants.** A ``cppverify::type_invariant`` held only for records
+passed and returned by value; member functions and constructors ignored it.
+On a class now, every public member function assumes it on entry and must
+restore it, every constructor must establish it, and it is checked at every
+call, internal ones included; an extent of a pointer field in it is assumed
+on entry (:doc:`language/structs`).
 
 **Records in memory by value.** A record kept in memory, a local object or
 one a pointer or reference addresses, could not be passed, returned, or

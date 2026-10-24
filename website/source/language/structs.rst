@@ -695,6 +695,80 @@ The invariant may be temporarily broken **inside** the function while you assign
 time — it is only required to hold at the return (the encapsulation boundary), not after each
 individual field write.
 
+Class invariants
+~~~~~~~~~~~~~~~~
+
+On a class with member functions, the invariant holds at the boundary of
+every public member function, which assumes it on entry and must restore it,
+and every constructor must establish it. It is checked at every call,
+internal calls included, so no call observes the object while it is broken:
+
+.. cppverify-example: fails Meter::overflow
+
+.. code-block:: cpp
+
+   class Meter {
+   public:
+     Meter()
+       cv::post(level == 0)
+       : level(0) {}
+
+     void add(int d)
+       cv::pre(0 <= d && level + d <= 100)
+       cv::post(level == cv::old(level) + d)
+     {
+       level = level + d;
+     }
+
+     void overflow()
+       cv::post(true)
+     {
+       level = 101;
+     }
+
+     int get() const
+       cv::post(cv::result == level)
+     {
+       return level;
+     }
+
+     int level;
+
+     cv::type_invariant(0 <= level && level <= 100);
+   };
+
+   int filled()
+     cv::post(0 <= cv::result && cv::result <= 100)
+   {
+     Meter m;
+     m.add(30);
+     int v = m.get();
+     return v;
+   }
+
+.. code-block:: text
+
+   Verified: Meter::Meter [backend=z3]
+   Verified: Meter::add [backend=z3]
+   meter.cpp:28:33: error: verification failed: Meter::overflow [...::type-invariant@28:33] (counterexample: ...) [backend=z3] [reason=counterexample]
+   Verified: Meter::get [backend=z3]
+   Verified: filled [backend=z3]
+
+``filled`` knows ``0 <= v <= 100`` from the invariant ``get`` returns with.
+
+- A private or protected member function neither assumes nor restores it,
+  so it may work on the object while the invariant is broken; a public one
+  it calls then fails, at that call.
+- A caller that writes a public field holds the invariant only if it keeps
+  it: the next public call checks it there.
+- A function that takes the object by reference or pointer assumes nothing
+  of its invariant; to call a public member function on it, it states the
+  invariant in its own precondition.
+- An extent of a pointer field, ``cv::valid(data, len)``, is assumed on
+  entry as in a precondition (`Extents of pointer fields`_). At exit it
+  states nothing; the next call checks it from what its caller knows, so a
+  member function that changes ``len`` states how.
+
 View functions
 --------------
 

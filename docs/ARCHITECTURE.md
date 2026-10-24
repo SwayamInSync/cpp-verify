@@ -274,6 +274,22 @@ initialization bit after the frame. Records count as
 supported types and layouts when trivially copyable rather than trivial,
 since constructors no longer stop them.
 
+**Class invariants:** `entryClassInvariants` (a public, non-constructor
+member function's) and `exitClassInvariants` (a public member function's and
+every constructor's) give the class's `TypeContractInfo` invariants, which
+`convertFunction` converts in its context (`this->f` loads) and adds as
+generated pre- and postconditions of kind `type-invariant`; at exit
+`DropExtentMarkers` makes each `valid(p, n)` the literal `true`.
+`collectFieldExtents` scans the entry invariants with the written
+preconditions, and `pointerFieldOfParameter` takes `this->f` (no parameter
+declaration, named `this->f`), so an extent in an invariant is a synthetic
+parameter of the member function, bound at its calls (3e). At a call,
+`havocFootprints` frames a region footprint of a record parameter without an
+extent as the cells of the record's leaves (`RecordCells`, from the callee's
+layout at the actual's address), so the call stays a chain of stores; as one
+byte range, a `HeapFrame`, a falsified claim after a constructor and a
+member call took 60 s and ended `solver.timeout`, and fails in 0.3 s as cells.
+
 **Records in memory by value:** `recordFieldsInMemory` reads a record value
 kept in memory, a promoted local or one in a pointee or record reference
 (`promotedRootLocal`, `inPointeeObject`), through implicit copies and

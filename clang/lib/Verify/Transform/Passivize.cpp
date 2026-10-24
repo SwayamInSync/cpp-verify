@@ -5524,7 +5524,50 @@ public:
     bool CanFrameRegions = Fn.ObjectModel && Callee.ObjectModel &&
                            !CanFrameExactly && !ActualModifies.empty() &&
                            !HasImplicitHeapEffect;
+    // The object of a record parameter is its leaves, each one cell, so the
+    // frame stays a chain of stores: the callee's stores are at its leaves.
+    auto RecordCells = [&](size_t I) -> std::optional<std::vector<Region>> {
+      if (!InRecordParam(I) ||
+          !isRegionFootprint(Callee.Modifies[I],
+                             Callee.ScalarReferenceParams) ||
+          !ActualModifies[I] || ActualModifies[I]->K != VExpr::Load ||
+          ActualCounts[I])
+        return std::nullopt;
+      const auto *Root = static_cast<const VVarExpr *>(addressRoot(
+          static_cast<const VLoadExpr *>(Callee.Modifies[I].Target.get())
+              ->Ptr.get()));
+      if (llvm::any_of(Callee.ValidExtents, [&](const VValidExtent &Extent) {
+            return Extent.Base == Root->Name;
+          }))
+        return std::nullopt;
+      const std::string &Identity = Callee.RecordParams.at(Root->Name);
+      auto Layout = llvm::find_if(Callee.Layouts, [&](const VObjectLayout &L) {
+        return L.TypeIdentity == Identity;
+      });
+      if (Layout == Callee.Layouts.end())
+        return std::nullopt;
+      auto Leaves = expandedLeaves(*Layout, 4096);
+      if (!Leaves || Leaves->empty())
+        return std::nullopt;
+      const VExpr *Object =
+          static_cast<const VLoadExpr *>(ActualModifies[I].get())->Ptr.get();
+      std::vector<Region> Cells;
+      for (const auto &[Offset, Leaf] : *Leaves) {
+        auto Address =
+            addBytes(cloneVExpr(Object),
+                     std::make_unique<VLiteralExpr>(std::to_string(Offset),
+                                                    pointerOffsetType(), Loc),
+                     Loc);
+        Cells.push_back(cellRegion(Address.get(), Leaf->Ty, Loc));
+      }
+      return Cells;
+    };
     for (size_t I = 0; CanFrameRegions && I < ActualModifies.size(); ++I) {
+      if (auto Cells = RecordCells(I)) {
+        for (Region &Cell : *Cells)
+          CallRegions.push_back(std::move(Cell));
+        continue;
+      }
       std::optional<Region> Bytes;
       if (ActualModifies[I] && ActualModifies[I]->K == VExpr::Load &&
           (!hasPointerProvenance(
