@@ -314,10 +314,11 @@ pattern and instantiates it lazily, as an exception specification:
 (`MarkFunctionReferenced`) and where its definition is instantiated, once
 per specialization (its `FunctionContractInfo` is recorded first, so a use
 in its own contract stops there), in a `LocalInstantiationScope` that maps
-the parameters of the declaration the clauses are written on
-(`ContractDecl`), in the specialization's context (its `this`, for a member)
-and an evaluation context of its own, so that a caller whose full expression
-is being built keeps its temporaries' cleanups. `SubstFunctionContract` runs
+the pattern's parameters, which identifies those of every redeclaration (so
+the clauses may be written on any, `ContractDecl`), in the specialization's
+context (its `this`, for a member) and an evaluation context of its own, so
+that a caller whose full expression is being built keeps its temporaries'
+cleanups. `SubstFunctionContract` runs
 `TreeTransform::TransformFunctionContract`, which rebuilds each clause with
 the checks the parser applies (`TransformContractCondition`,
 `TransformContractMeasure`, `TransformContractFootprint`; quantifiers and
