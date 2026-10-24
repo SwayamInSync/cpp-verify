@@ -347,3 +347,16 @@ int first_int(const int *a, int n)
 // VC: trigger
 // VC-NEXT: heap_select
 // VC-LABEL: vc first_int
+
+// An uncontracted constexpr template in a contract is a spec in each
+// specialization, as a constexpr function is.
+template <typename T>
+constexpr T bigger_of(T a, T b) { return a < b ? b : a; }
+
+int clamp3(int x)
+  cppverify::post(cppverify::result == bigger_of(x, 3))
+{
+  return x < 3 ? 3 : x;
+}
+// CHECK-DAG: Verified: clamp3 [backend=z3]
+// CHECK-DAG: Verified: constexpr spec axiom: bigger_of<int>
