@@ -1,5 +1,6 @@
 // RUN: %clang_cc1 -std=c++17 -fverify-contracts -fno-verify -verify %s
 // RUN: %clang_cc1 -std=c++17 -fverify-contracts -fno-verify -emit-llvm -o - %s | FileCheck %s
+// RUN: %clang_cc1 -std=c++17 -fverify-contracts -fno-verify -ast-dump -ast-dump-filter temporaries %s | FileCheck %s --check-prefix=CLEANUPS
 //
 // A contract may depend on a template parameter: it is checked where it is
 // instantiated, as C++ conditions are. A function template's contract is
@@ -57,6 +58,26 @@ T positive(T v)
 {
   return v;
 }
+
+// A contract instantiated while a caller's full expression is built leaves
+// the caller its temporaries, whose destructors run at its end.
+struct Noisy {
+  int v;
+  Noisy(int x) : v(x) {}
+  ~Noisy();
+};
+
+template <typename T>
+int value_of(const T &t)
+  cppverify::post(cppverify::result == t.v)
+{
+  return t.v;
+}
+
+int temporaries() { return value_of(Noisy(3)); }
+// CLEANUPS-LABEL: FunctionDecl {{.*}} temporaries 'int ()'
+// CLEANUPS: ReturnStmt
+// CLEANUPS-NEXT: ExprWithCleanups
 
 template <typename T>
 T checked(T n)
