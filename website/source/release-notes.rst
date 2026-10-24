@@ -320,6 +320,13 @@ must initialize every member by its end. ``Counter c(5);`` passes ``&c`` and
 leaves an initialized object; an implicit or defaulted default constructor
 runs its members' initializers in place (:doc:`language/structs`).
 
+**Records in memory by value.** A record kept in memory, a local object or
+one a pointer or reference addresses, could not be passed, returned, or
+(through a pointer) copied by value (``aggregate value use of an automatic
+object is unsupported``, ``unsupported aggregate field base expression``).
+Such a value is now its fields, each read where it is, with the bounds,
+validity, and initialization checks of that read (:doc:`language/structs`).
+
 **Extents of pointer fields.** ``cv::valid(s->data, s->len)`` was an error
 (``valid marker requires a bare complete-object pointer and an integer element
 count``), so a record that describes a buffer by a pointer and a length (a
