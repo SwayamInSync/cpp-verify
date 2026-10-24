@@ -293,16 +293,16 @@ named with its arguments.
   over a quantifier binds a variable of its own in each element.
 - A specialization the verifier cannot represent (``maxv<double>``) costs
   that specialization alone, as a construct in any function does.
-- The contracts of a class template's members and its type invariants are
-  not verified yet: they compile, instantiate with the template, and are
-  ignored, with a ``-Wcontract-unsupported`` warning that names the class
-  template.
+- A class template is verified in each specialization too: its members'
+  contracts are instantiated with the members, and its type invariants with
+  the class (:doc:`structs`).
 - A template without contracts changes nothing for the rest of the file, as
   long as verified code does not call it.
 
-Before 0.2, a function template's contracts were ignored with a warning, and
-a call to one from verified code was ``call to function without a
-verification contract``. A template whose contract depended on its
+Before 0.2, the contracts of templates were ignored with a warning
+(``-Wcontract-unsupported``, which no longer reports anything), and a call to
+one from verified code was ``call to function without a verification
+contract``. A template whose contract depended on its
 parameters did not compile (``value of type '<dependent type>' is not
 contextually convertible to 'bool'``), nor did ``cv::result`` or
 ``cv::old(x)`` of the template's type compared with a constant
