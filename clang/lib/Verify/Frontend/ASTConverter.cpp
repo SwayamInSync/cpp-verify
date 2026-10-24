@@ -519,9 +519,11 @@ isSupportedVerificationTypeImpl(QualType Ty,
   const RecordDecl *RD = RT->getDecl()->getDefinition();
   if (!RD || RD->isUnion())
     return false;
+  // Copies of the object are its bytes and its lifetime ends without a
+  // destructor; its constructors run as calls or as their initializers.
   if (const auto *CXXRD = dyn_cast<CXXRecordDecl>(RD))
     if (CXXRD->getNumBases() != 0 || CXXRD->isPolymorphic() ||
-        !CXXRD->isTrivial() || !CXXRD->isStandardLayout())
+        !CXXRD->isTriviallyCopyable() || !CXXRD->isStandardLayout())
       return false;
   if (!Visiting.insert(Ty.getTypePtr()).second)
     return true;
@@ -593,6 +595,27 @@ static bool isPromotableAggregateType(QualType Ty, const ASTContext &Ctx) {
   QualType Canonical = Ty.getCanonicalType().getUnqualifiedType();
   return Ctx.getAsConstantArrayType(Canonical) != nullptr ||
          isFlattenedRecordType(Canonical);
+}
+
+/// The constructor call an initializer is, through the wrappers that do
+/// not change the object: parentheses, cleanups, and a conversion by a
+/// constructor (`T x = T(5);`).
+static const CXXConstructExpr *constructionOf(const Expr *Init) {
+  while (Init) {
+    Init = Init->IgnoreParens();
+    if (const auto *Cleanups = dyn_cast<ExprWithCleanups>(Init)) {
+      Init = Cleanups->getSubExpr();
+      continue;
+    }
+    if (const auto *Cast = dyn_cast<CastExpr>(Init);
+        Cast && (Cast->getCastKind() == CK_ConstructorConversion ||
+                 Cast->getCastKind() == CK_NoOp)) {
+      Init = Cast->getSubExpr();
+      continue;
+    }
+    return dyn_cast<CXXConstructExpr>(Init);
+  }
+  return nullptr;
 }
 
 /// Largest automatic object the byte-granular allocation metadata can describe.
@@ -1441,6 +1464,12 @@ void ASTConverter::beginInitializationTracking(const FunctionDecl *FD) {
       // flattened SSA representation at all.
       if (VD->hasLocalStorage() && VD->getType()->isArrayType())
         addObject(VD);
+      // A constructor that is not trivial runs on the object's address.
+      if (const auto *Construct =
+              VD->hasInit() ? constructionOf(VD->getInit()) : nullptr;
+          Construct && Construct->getConstructor() &&
+          !Construct->getConstructor()->isTrivial())
+        addObject(VD);
       return true;
     }
 
@@ -1961,12 +1990,65 @@ static void markUnsupported(VFunction &Fn) {
 /// static member is a free function, and a non-static one of a class without
 /// bases or virtual functions is a function of `this`, a pointer to its
 /// object.
+/// Why a constructor is not verified, or nothing: its class has no bases
+/// or virtual functions, it does not delegate, and each member is a scalar,
+/// a pointer, or an aggregate of them, initialized by expressions or by
+/// constructors the class does not provide itself.
+static std::optional<std::string>
+unsupportedConstructor(const CXXConstructorDecl *Ctor) {
+  const CXXRecordDecl *Class = Ctor->getParent();
+  if (!Class->hasDefinition() || Class->getNumBases() != 0 ||
+      Class->isPolymorphic())
+    return std::string("member functions of a class with bases or virtual "
+                       "functions are unsupported");
+  if (!Class->isTriviallyCopyable())
+    return std::string("constructors of a class that is not trivially "
+                       "copyable, whose copies or destruction run code, are "
+                       "not supported yet");
+  if (Ctor->isDelegatingConstructor())
+    return std::string("delegating constructors are not verified yet");
+  for (const FieldDecl *Field : Class->fields()) {
+    if (Field->getType()->isReferenceType())
+      return std::string("constructors of a class with reference members are "
+                         "unsupported");
+    if (Field->isBitField())
+      return std::string("constructors of a class with bit-field members are "
+                         "unsupported");
+    if (const CXXRecordDecl *Member =
+            Field->getType()->getBaseElementTypeUnsafe()->getAsCXXRecordDecl())
+      if (llvm::any_of(Member->ctors(), [](const CXXConstructorDecl *C) {
+            return C->isUserProvided();
+          }))
+        return std::string("members whose class provides a constructor are "
+                           "not supported yet");
+  }
+  for (const CXXCtorInitializer *Init : Ctor->inits())
+    if (!Init->isMemberInitializer())
+      return std::string("constructors of a class with anonymous members are "
+                         "unsupported");
+  return std::nullopt;
+}
+
+static bool mentionsThis(const Stmt *S) {
+  if (!S)
+    return false;
+  if (isa<CXXThisExpr>(S))
+    return true;
+  return llvm::any_of(S->children(),
+                      [](const Stmt *Child) { return mentionsThis(Child); });
+}
+
+/// The lifetime companion of a constructor's object, whose lifetime begins
+/// at `this` when the constructor is entered.
+static constexpr const char *ConstructedObjectLifetime =
+    "__cppverify_constructed_lifetime";
+
 static std::optional<std::string>
 unsupportedMemberFunction(const CXXMethodDecl *Method) {
   if (Method->getParent()->isLambda())
     return std::string("lambdas are unsupported");
-  if (isa<CXXConstructorDecl>(Method))
-    return std::string("constructors are not verified yet");
+  if (const auto *Ctor = dyn_cast<CXXConstructorDecl>(Method))
+    return unsupportedConstructor(Ctor);
   if (isa<CXXDestructorDecl>(Method))
     return std::string("destructors are not verified yet");
   if (isa<CXXConversionDecl>(Method))
@@ -2439,8 +2521,8 @@ bool ASTConverter::flattenRecordInto(const RecordDecl *RD,
   if (!Definition || Definition->isUnion())
     return false;
   if (const auto *CXX = dyn_cast<CXXRecordDecl>(Definition))
-    if (CXX->getNumBases() != 0 || CXX->isPolymorphic() || !CXX->isTrivial() ||
-        !CXX->isStandardLayout())
+    if (CXX->getNumBases() != 0 || CXX->isPolymorphic() ||
+        !CXX->isTriviallyCopyable() || !CXX->isStandardLayout())
       return false;
   const ASTRecordLayout &RL = Ctx.getASTRecordLayout(Definition);
   unsigned Index = 0;
@@ -2842,6 +2924,8 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   // function of `this`, the pointer to its object.
   const auto *Method = dyn_cast<CXXMethodDecl>(FD);
   const bool HasThis = Method && Method->isInstance();
+  const auto *Constructor = dyn_cast<CXXConstructorDecl>(FD);
+  Fn->IsConstructor = Constructor != nullptr;
   Fn->Name = Method ? FD->getQualifiedNameAsString() : FD->getNameAsString();
   Fn->Identity = functionIdentity(FD);
   Fn->IsSpec = FCI->IsSpec;
@@ -2960,6 +3044,13 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   };
 
   InPost = false;
+  // A constructor's precondition is evaluated before its object exists.
+  if (Constructor)
+    for (const Expr *E : FCI->Preconditions)
+      if (mentionsThis(E))
+        error(E->getExprLoc(),
+              Fn->Name + ": a constructor's precondition cannot read its "
+                         "object, whose lifetime has not begun");
   for (const Expr *E : FCI->Preconditions) {
     std::unique_ptr<VExpr> PE;
     recordContractExpr("pre", E, PE);
@@ -2997,8 +3088,10 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   // write its object; a const one only its own storage. An explicit modifies
   // replaces the default, and a trusted or bodiless one keeps the rule of a
   // trusted contract.
-  if (HasThis && !ThisObject.isConstQualified() && FCI->Modifies.empty() &&
-      FD->hasBody() && !Fn->IsTrusted) {
+  // A constructor always writes its object.
+  if (HasThis && !ThisObject.isConstQualified() &&
+      ((FCI->Modifies.empty() && FD->hasBody() && !Fn->IsTrusted) ||
+       Constructor)) {
     VFootprint Object;
     Object.Target = std::make_unique<VLoadExpr>(
         std::make_unique<VVarExpr>("this", Fn->Params.front().second,
@@ -3049,6 +3142,10 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   }
   Fn->InductiveLoc = FCI->Inductive;
   for (const auto &Pair : FCI->Aliases) {
+    if (Constructor && (mentionsThis(Pair.first) || mentionsThis(Pair.second)))
+      error(Pair.first->getExprLoc(),
+            Fn->Name + ": a constructor's object is new, so aliases cannot "
+                       "name this");
     std::unique_ptr<VExpr> L;
     std::unique_ptr<VExpr> R;
     recordContractExpr("aliases", Pair.first, L);
@@ -3068,13 +3165,37 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
           VBinOp::Ne, This(),
           std::make_unique<VLiteralExpr>(0, VType::makePtr(), SourceLocation()),
           VType::makeBool(), SourceLocation());
-      auto Readable = std::make_unique<VBinOpExpr>(
+      std::unique_ptr<VExpr> Readable = std::make_unique<VBinOpExpr>(
           VBinOp::And,
           std::make_unique<VUnaryOpExpr>(VUnaryOp::ValidPtr, This(),
                                          VType::makeBool(), SourceLocation()),
           std::make_unique<VUnaryOpExpr>(VUnaryOp::InitializedPtr, This(),
                                          VType::makeBool(), SourceLocation()),
           VType::makeBool(), SourceLocation());
+      // A constructor's object is storage the caller allocated, one live
+      // allocation at every leaf, which the constructor initializes: `this`
+      // carries that allocation's identity.
+      if (Constructor) {
+        VVarExpr Object("this", VType::makePtr(), SourceLocation(),
+                        ConstructedObjectLifetime);
+        Readable = nullptr;
+        forEachObjectLeaf(ThisObject, 0, [&](QualType, uint64_t Offset) {
+          auto Leaf = std::make_unique<VUnaryOpExpr>(
+              VUnaryOp::ValidPtr,
+              objectLeafAddress(&Object, Offset, SourceLocation()),
+              VType::makeBool(), SourceLocation());
+          if (Readable)
+            Readable = std::make_unique<VBinOpExpr>(
+                VBinOp::And, std::move(Readable), std::move(Leaf),
+                VType::makeBool(), SourceLocation());
+          else
+            Readable = std::move(Leaf);
+          return true;
+        });
+        if (!Readable)
+          Readable = std::make_unique<VLiteralExpr>(1, VType::makeBool(),
+                                                    SourceLocation());
+      }
       addPrecondition(*Fn,
                       std::make_unique<VBinOpExpr>(
                           VBinOp::And, std::move(NonNull), std::move(Readable),
@@ -3240,6 +3361,20 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
               std::move(Condition), Check->getExprLoc()));
       }
     ErrorInContract = false;
+    // A constructor's member initializers run before its body, on an object
+    // of which nothing is known to be initialized.
+    if (Constructor) {
+      if (Ctx.getTypeSizeInChars(ThisObject).getQuantity() >
+          static_cast<int64_t>(MaxAutomaticObjectBytes))
+        error(FD->getLocation(), Fn->Name +
+                                     ": constructors of a class larger than " +
+                                     std::to_string(MaxAutomaticObjectBytes) +
+                                     " bytes are not supported yet");
+      VVarExpr This("this", Fn->Params.front().second, FD->getLocation(),
+                    ConstructedObjectLifetime);
+      appendMemberInitializers(Constructor, &This, 0, FD->getLocation(),
+                               Fn->Body);
+    }
     for (auto &S : convertStmt(Body))
       Fn->Body.push_back(std::move(S));
     TrackInitialization = false;
@@ -5035,8 +5170,9 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
                       : std::string("unsupported use of this"));
       return nullptr;
     }
-    return std::make_unique<VVarExpr>("this", CurrentFn->Params.front().second,
-                                      E->getExprLoc());
+    return std::make_unique<VVarExpr>(
+        "this", CurrentFn->Params.front().second, E->getExprLoc(),
+        CurrentFn->IsConstructor ? ConstructedObjectLifetime : "");
   }
   if (const auto *Decay = dyn_cast<CastExpr>(E);
       Decay && Decay->getCastKind() == CK_ArrayToPointerDecay) {
@@ -6484,12 +6620,98 @@ bool ASTConverter::appendObjectCopy(const Expr *Source, QualType Ty,
   return true;
 }
 
+bool ASTConverter::appendMemberInitializers(
+    const CXXConstructorDecl *Ctor, const VExpr *Base, uint64_t Offset,
+    SourceLocation Loc, std::vector<std::unique_ptr<VStmt>> &Out) {
+  for (const CXXCtorInitializer *Init : Ctor->inits()) {
+    const FieldDecl *Field = Init->getMember();
+    auto FieldOffset = Field ? recordFieldOffset(Field) : std::nullopt;
+    if (!FieldOffset) {
+      error(CurrentFn->Name + ": unsupported constructor initializer");
+      return false;
+    }
+    const SourceLocation At =
+        Init->isWritten() ? Init->getSourceLocation() : Loc;
+    if (!appendObjectInitialization(Init->getInit(), Field->getType(), Base,
+                                    Offset + *FieldOffset, At, Out))
+      return false;
+  }
+  return true;
+}
+
+bool ASTConverter::appendConstruction(
+    const CXXConstructExpr *Construct, QualType Ty, const VExpr *Base,
+    uint64_t Offset, SourceLocation Loc,
+    std::vector<std::unique_ptr<VStmt>> &Out) {
+  const CXXConstructorDecl *Ctor = Construct->getConstructor();
+  if (!Ctor || Ty->isArrayType() || !Ty->getAsCXXRecordDecl()) {
+    error(CurrentFn->Name +
+          ": arrays of objects with constructors are not supported yet");
+    return false;
+  }
+  if (auto Reason = unsupportedConstructor(Ctor)) {
+    error(CurrentFn->Name + ": " + Ctor->getQualifiedNameAsString() + ": " +
+          *Reason);
+    return false;
+  }
+  // An implicit or defaulted default constructor initializes each member as
+  // its declaration says, which is all it does.
+  if (!Ctor->isUserProvided()) {
+    if (!Ctor->isDefaultConstructor()) {
+      error(CurrentFn->Name + ": unsupported constructor initialization of an "
+                              "automatic object");
+      return false;
+    }
+    if (Construct->requiresZeroInitialization() &&
+        !appendObjectZeroInitialization(Ty, Base, Offset, Loc, Out))
+      return false;
+    const auto *Definition =
+        dyn_cast_or_null<CXXConstructorDecl>(Ctor->getDefinition());
+    return appendMemberInitializers(Definition ? Definition : Ctor, Base,
+                                    Offset, Loc, Out);
+  }
+  // A constructor the class provides is a call, passing the object's
+  // address as `this`.
+  if (!functionContract(Ctor)) {
+    error(CurrentFn->Name +
+          ": call to function without a verification "
+          "contract: " +
+          Ctor->getQualifiedNameAsString());
+    return false;
+  }
+  std::vector<std::unique_ptr<VExpr>> Args;
+  Args.push_back(objectLeafAddress(Base, Offset, Loc));
+  for (unsigned I = 0; I < Construct->getNumArgs(); ++I) {
+    const ParmVarDecl *Formal =
+        I < Ctor->getNumParams() ? Ctor->getParamDecl(I) : nullptr;
+    if (Formal && isFlattenedRecordType(Formal->getType())) {
+      if (!appendRecordCallArgument(Construct->getArg(I), Formal, Args))
+        return false;
+      continue;
+    }
+    std::unique_ptr<VExpr> Arg;
+    convertExecCallArg(Construct->getArg(I), Formal, Out, Arg);
+    if (!Arg)
+      return false;
+    Args.push_back(std::move(Arg));
+  }
+  Out.push_back(std::make_unique<VCallStmt>(Ctor->getNameAsString(),
+                                            functionIdentity(Ctor),
+                                            std::move(Args), "", Loc, false));
+  return true;
+}
+
 bool ASTConverter::appendObjectInitialization(
     const Expr *Init, QualType Ty, const VExpr *Base, uint64_t Offset,
     SourceLocation Loc, std::vector<std::unique_ptr<VStmt>> &Out) {
   if (!Init)
     return true;
   Init = Init->IgnoreParens();
+  if (const auto *Default = dyn_cast<CXXDefaultInitExpr>(Init))
+    return appendObjectInitialization(Default->getExpr(), Ty, Base, Offset, Loc,
+                                      Out);
+  if (const CXXConstructExpr *Construct = constructionOf(Init))
+    Init = Construct;
   if (const auto *Cast = dyn_cast<ImplicitCastExpr>(Init);
       Cast && Cast->getCastKind() == CK_NoOp)
     Init = Cast->getSubExpr()->IgnoreParens();
@@ -6503,14 +6725,13 @@ bool ASTConverter::appendObjectInitialization(
         return true;
       return appendObjectZeroInitialization(Ty, Base, Offset, Loc, Out);
     }
-    if (Construct->getNumArgs() == 1 && Ctor &&
-        (Ctor->isCopyConstructor() || Ctor->isMoveConstructor())) {
+    // An implicit or defaulted copy copies the members; one the class
+    // provides runs its body.
+    if (Construct->getNumArgs() == 1 && Ctor && !Ctor->isUserProvided() &&
+        (Ctor->isCopyConstructor() || Ctor->isMoveConstructor()))
       Init = Construct->getArg(0)->IgnoreParens();
-    } else {
-      error(CurrentFn->Name + ": unsupported constructor initialization of an "
-                              "automatic object");
-      return false;
-    }
+    else
+      return appendConstruction(Construct, Ty, Base, Offset, Loc, Out);
   }
   if (isa<ImplicitValueInitExpr>(Init) || isa<CXXScalarValueInitExpr>(Init))
     return appendObjectZeroInitialization(Ty, Base, Offset, Loc, Out);
