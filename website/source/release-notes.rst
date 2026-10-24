@@ -143,6 +143,12 @@ was initialized before a loop now stays initialized, and an invariant holds
 at the head of each iteration with its definedness, which shows the elements
 it reads initialized and in bounds (:doc:`language/functions-loops`).
 
+**Loops that write local storage.** A loop that wrote a local array, a local
+record, a ``new`` object, or a local through a reference forgot the value of
+every object, so a claim about a local the loop never touches failed after
+it. Such a loop now writes only the objects it stores to, as a loop over
+parameters always did (:doc:`language/functions-loops`).
+
 **Null minus null.** The difference of two null pointers failed its
 ``pointer-difference`` check; it is 0, as C++ defines (:doc:`language/pointers`).
 
