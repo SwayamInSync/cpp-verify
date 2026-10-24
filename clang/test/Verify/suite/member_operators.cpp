@@ -132,6 +132,27 @@ int chained()
 }
 // CHECK-DAG: error: chained: the reference operator+= returns is not used yet; call it as a statement of its own
 
+int copied()
+  cppverify::post(true)
+{
+  Money a(5);
+  Money b(6);
+  Money c = (a += b);
+  return c.cents;
+}
+// CHECK-DAG: error: copied: the reference operator+= returns is not used yet; call it as a statement of its own
+
+int assigned()
+  cppverify::post(true)
+{
+  Money a(5);
+  Money b(6);
+  Money c(0);
+  c = (a += b);
+  return c.cents;
+}
+// CHECK-DAG: error: assigned: the reference operator+= returns is not used yet; call it as a statement of its own
+
 // An object a parameter refers to or points to satisfies its class
 // invariant on entry, as the caller shows, and through a mutable reference
 // or pointer it must at exit: so does every operand of an operator.
