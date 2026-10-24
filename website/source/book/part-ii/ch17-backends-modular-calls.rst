@@ -279,8 +279,9 @@ proof. When every exported goal kernel-checks the function is
 ``Proved (z3+lean)``, or ``Proved (portfolio+lean)``, and JSON reports
 ``"status":"mixed-proof"`` with the per-obligation split. When Lean checked
 every obligation, because ``--lean-fallback-scope=all`` exported them all or
-the solver proved none on its own, the function is ``Certified``. SAT counterexamples are failures, not
-fallback candidates. A fallback run examines in Lean only what its solver
+the solver proved none on its own, the function is ``Certified``. A certified
+counterexample stays a failure, and the project shows it false in Lean too
+(`Counterexamples in Lean`_). A fallback run examines in Lean only what its solver
 leaves unresolved, so the proofs of the obligations and functions the solver
 settles stay where they are until Lean needs them again.
 
@@ -318,6 +319,69 @@ contract for its callers, and its result carries the qualifiers a verified
 one does (``[trusts=f]``, ``[partial]``). It also gets the same vacuity
 checks, run with Z3: a goal that holds only because no execution reaches it
 is ``Certified: f [backend=Lean] [vacuous]``, with a warning.
+
+Counterexamples in Lean
+~~~~~~~~~~~~~~~~~~~~~~~
+
+A counterexample the solver finds is a failure once the certifier has
+evaluated the program's goal at it, with every spec at its true definition. A
+fallback project shows each such failure false in Lean as well: its
+refutation, ``CppVerify/Refutations/<function>/<goal>.lean``, states the
+failing goal as the project would and proves it false at the values the
+model gives its variables, machine integers as bit-vectors, memory as a
+function of its runs of equal cells. ``--lean-certify`` checks it as it
+checks a proof, with the kernel and Lean's foundations alone, and says so:
+
+.. cppverify-example: flags --lean-fallback={dir}/proof --lean-certify
+
+.. code-block:: cpp
+
+   int add_one(int x)
+     cppverify::pre(x == 4)
+     cppverify::post(cppverify::result == x + 1)
+   {
+     return x + 2;
+   }
+
+.. code-block:: text
+
+   error: verification failed: add_one [fn_5f5a376164645f6f6e6569::postcondition@3:37] (counterexample: result [ssa=__result_1] [type=i32] = 6, x [ssa=x_0] [type=i32] = 4; trace: return.return@5:3 value=6) [backend=z3] [reason=counterexample] (confirmed in Lean)
+
+The refutation applies the goal to the model's values and decides what is
+left false, the definition instances the goal states with it, since they hold
+of the spec functions Lean defines:
+
+.. code-block:: lean4
+
+   theorem cppverify_add_one_fc20c3_postcondition_8876761e_refuted : ¬ cppverify_add_one_fc20c3_postcondition_8876761e := by
+     intro h
+     have h₁ := h
+       (fun (a : Int) => (0 : Int))
+       (fun (a : Int) => (0 : Int))
+       (BitVec.ofInt 32 (6))
+       (BitVec.ofInt 32 (4))
+     cppverify_refute h₁
+
+``cppverify_refute`` decides the instance, or evaluates it first, the spec
+functions that are Lean definitions (`Spec functions in Lean`_) by their
+equations, a store to memory with ``grind``, since it relates two heaps at
+every address, and a quantifier over a range of at most 4096 integers by
+trying each one (a larger range is not decided: each integer is a level of
+recursion, and a billion of them took Lean 58 GB).
+A goal that applies a spec Lean leaves opaque, such as a ``cppverify::choose``,
+cannot be decided there: the failure stands, and a warning says so (``the
+counterexample of pick_one is not confirmed in Lean: Lean cannot decide the
+goal at the counterexample``). Should Lean decide the goal true at the
+values, the solver's counterexample and Lean would disagree about one goal;
+the function is then ``Unresolved`` with reason
+``backend.inconsistent-results``, as when two solvers disagree, never
+``Failed``. Each attempt of ``cppverify_refute`` has the heartbeats of a step
+of ``cppverify_auto``, so a goal Lean could decide only by trying a billion
+integers is not decided rather than tried for hours. Only failures that stand
+once every verdict is settled report their refutations: a counterexample
+checked with a spec's postcondition that is not established is no failure
+(``spec.post``), and nothing is said of its refutation. A refutation is the
+project's, rewritten by every run and removed with its failure.
 
 Goals as hypotheses
 ~~~~~~~~~~~~~~~~~~~

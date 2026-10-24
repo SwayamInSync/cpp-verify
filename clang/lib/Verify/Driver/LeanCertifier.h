@@ -130,11 +130,13 @@ unsafe def replayProject (closure : Closure) : IO Replayed := do
   return { env, rejected, owner }
 
 /-- Whether the proof of a goal states exactly the goal its generated module
-defines and depends on no axiom outside the allowed ones. -/
+defines, or a refutation exactly its negation, and depends on no axiom
+outside the allowed ones. -/
 def checkStatement (project : Replayed) (goal module generated : Name)
-    (allowed : NameSet) : Option String := Id.run do
+    (refutes : Bool) (allowed : NameSet) : Option String := Id.run do
   let env := project.env
-  let proof := goal.appendAfter "_proof"
+  let proof := goal.appendAfter (if refutes then "_refuted" else "_proof")
+  let stated := if refutes then mkApp (mkConst ``Not) (mkConst goal) else mkConst goal
   match env.find? goal with
   | some (.defnInfo _) =>
     if project.owner[goal]? != some generated then
@@ -144,8 +146,8 @@ def checkStatement (project : Replayed) (goal module generated : Name)
   | some (.thmInfo v) =>
     if project.owner[proof]? != some module then
       return some s!"{proof} is not declared in {module}"
-    if v.type != .const goal [] then
-      return some s!"{proof} proves {v.type}, not {goal}"
+    if v.type != stated then
+      return some s!"{proof} proves {v.type}, not {stated}"
     match axiomsOf env proof with
     | .error e => return some e
     | .ok axioms =>
@@ -169,35 +171,45 @@ def userSorry (closure : Closure) (project : Replayed) : Option String := Id.run
         return some s!"{name} of CppVerify.User uses sorry"
   return none
 
+/-- What a check reports: the goal, or the theorem that refutes it. -/
+def shown (goal : Name) (refutes : Bool) : Name :=
+  if refutes then goal.appendAfter "_refuted" else goal
+
 /-- Usage: Certify GOALS ALLOWED, where each line of GOALS is a goal, its
-proof module, and the module that defines it, separated by tabs, and ALLOWED
-lists the axioms a proof may use, separated by commas. Prints one line per
-goal: `ok` or `fail`, the goal, and why it failed. A goal is proved when its
-proof module and its generated module pass the kernel, with every module of
-the project they import, and its proof states exactly the goal and uses only
-the allowed axioms. The generated modules are replayed first, so that a
-proof file that declares a name one declares is the one left out. -/
+proof module, and the module that defines it, separated by tabs, then
+`refutation` for a module that refutes the goal it defines, and ALLOWED lists
+the axioms a proof may use, separated by commas. Prints one line per goal:
+`ok` or `fail`, the goal (a refutation's theorem for a refutation), and why it
+failed. A goal is proved when its proof module and its generated module pass
+the kernel, with every module of the project they import, and its proof
+states exactly the goal (a refutation, its negation) and uses only the
+allowed axioms. The generated modules are replayed first, so that a proof
+file that declares a name one declares is the one left out. -/
 unsafe def main (args : List String) : IO UInt32 := do
   let [goals, allowed] := args | throw <| IO.userError "usage: Certify GOALS ALLOWED"
   let sysroot ← findSysroot
   initSearchPath sysroot
   let toolchain := (sysroot / "lib" / "lean").toString
   let allowed := (allowed.splitOn ",").foldl (fun s a => s.insert a.toName) ({} : NameSet)
-  let mut entries : Array (Name × Name × Name) := #[]
+  let mut entries : Array (Name × Name × Name × Bool) := #[]
   for line in ← IO.FS.lines goals do
-    let [goal, module, generated] := line.splitOn "\t" | continue
-    entries := entries.push (goal.toName, module.toName, generated.toName)
-  let roots := entries.map (·.2.2) ++ entries.map (·.2.1)
+    match line.splitOn "\t" with
+    | [goal, module, generated] =>
+      entries := entries.push (goal.toName, module.toName, generated.toName, false)
+    | [goal, module, generated, "refutation"] =>
+      entries := entries.push (goal.toName, module.toName, generated.toName, true)
+    | _ => continue
+  let roots := entries.map (·.2.2.1) ++ entries.map (·.2.1)
   let (_, closure) ← (roots.forM (Closure.visit toolchain)).run {}
   let project ← replayProject closure
   let user := userSorry closure project
-  for (goal, module, generated) in entries do
+  for (goal, module, generated, refutes) in entries do
     let why := (project.rejected[module]?).orElse fun _ =>
       (project.rejected[generated]?).orElse fun _ => user.orElse fun _ =>
-        checkStatement project goal module generated allowed
+        checkStatement project goal module generated refutes allowed
     match why with
-    | none => IO.println s!"ok\t{goal}"
-    | some why => IO.println s!"fail\t{goal}\t{why.replace "\n" " "}"
+    | none => IO.println s!"ok\t{shown goal refutes}"
+    | some why => IO.println s!"fail\t{shown goal refutes}\t{why.replace "\n" " "}"
   return 0
 )lean";
 

@@ -3,7 +3,7 @@
 # outside elan must report the pinned Lean.
 #
 # UNSUPPORTED: system-windows
-# RUN: rm -rf %t %t.project && mkdir -p %t/elan %t/plain
+# RUN: rm -rf %t %t.project %t.replay && mkdir -p %t/elan %t/plain
 # Without automation at export, the goal is new to cppverify_auto whether or
 # not Lean is installed, so the certification run below tries it first.
 # RUN: %cpp-verify --backend=lean --no-lean-auto --lean-project=%t.project %S/Inputs/lean_toolchain.cpp --
@@ -14,11 +14,18 @@
 # RUN: not env PATH=%t/elan %cpp-verify --backend=lean --lean-project=%t.project --lean-certify %S/Inputs/lean_toolchain.cpp -- 2>&1 | FileCheck %s --check-prefix=ELAN
 # RUN: FileCheck %s --input-file=%t/elan.log --check-prefix=ELAN-LOG
 #
+# Replaying an archive certifies with the same steps; the failure is a
+# verdict, which an assertions build once turned into an abort (an Expected
+# tested again after its error was taken).
+# RUN: %cpp-verify --obligation-out=%t/a.cpv %S/Inputs/lean_toolchain.cpp -- > /dev/null
+# RUN: not env PATH=%t/elan %cpp-verify --obligation-in=%t/a.cpv --lean-project=%t.replay --lean-certify 2>&1 | FileCheck %s --check-prefix=REPLAY
+#
 # RUN: printf '#!/bin/sh\necho "Lake version 5.0.0 (Lean version 4.1.0)"\n' > %t/plain/lake
 # RUN: chmod +x %t/plain/lake
 # RUN: not env PATH=%t/plain %cpp-verify --backend=lean --lean-project=%t.project --lean-certify %S/Inputs/lean_toolchain.cpp -- 2>&1 | FileCheck %s --check-prefix=PLAIN -DDIR=%t/plain
 
 # ELAN: Unresolved: lean obligation: trivial (Lean certification failed: command failed with exit code 1
+# REPLAY: Unresolved: trivial (Lean certification failed: command failed with exit code 1
 
 # The trial of cppverify_auto, then certification, each with the pin.
 # ELAN-LOG: {{^}}+leanprover/lean4:v4.35.0 --version{{$}}

@@ -347,6 +347,12 @@ Backends
        function whose exported goals all kernel-check reports
        ``Proved (z3+lean)`` (JSON ``"status":"mixed-proof"`` with an
        ``evidence`` record), or ``Certified`` when Lean checked every goal.
+       A certified counterexample stays a failure, and the project gets its
+       refutation, ``CppVerify/Refutations/<function>/<goal>.lean``; with
+       ``--lean-certify`` a refutation that checks adds ``(confirmed in
+       Lean)`` to the failure (JSON ``"lean_refuted": true``), one Lean
+       cannot decide a warning, and one Lean decides the other way makes the
+       function ``Unresolved`` (``backend.inconsistent-results``).
    * - ``--lean-fallback-scope=unproved|all``
      - ``unproved`` (default) exports only the obligations the solver did not
        prove individually; each keeps the goal name it has in a complete

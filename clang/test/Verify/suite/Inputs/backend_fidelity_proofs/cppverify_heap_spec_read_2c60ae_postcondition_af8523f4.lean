@@ -1,0 +1,12 @@
+import CppVerify.Goals.cppverify_heap_spec_read_2c60ae
+import CppVerify.User
+import CppVerify.Auto
+
+theorem cppverify_heap_spec_read_2c60ae_postcondition_af8523f4_proof : cppverify_heap_spec_read_2c60ae_postcondition_af8523f4 := by
+  apply cppverify_heap_spec_read_2c60ae_postcondition_af8523f4.of_readable
+  intro __heap_0 __heap_1 __heap_alloc_0 __heap_live_0 pointer_0 cppverify_spec_axiom_1_1 cppverify_spec_axiom_1_2 cppverify_spec_axiom_1_3 cppverify_spec_axiom_2_1 cppverify_spec_axiom_2_2 cppverify_spec_axiom_2_3 h_pre_1 h_pre_2 h_entry_1 h_null_1 h_null_2 h_object_1 h_store_1
+  rw [cppverify_spec_axiom_1_2, cppverify_spec_axiom_2_2]
+  cppverify_unfold_bodies
+  cppverify_heap
+  simp
+  grind

@@ -1,5 +1,6 @@
 //===--- LeanBackend.cpp --------------------------------------------------===//
 #include "LeanBackend.h"
+#include "Certify.h"
 #include "ObligationSerialization.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
@@ -1293,6 +1294,41 @@ static std::string leanSpecDefinition(const ObligationModule &Module,
   return Failed ? "" : Text;
 }
 
+// A quantifier over a range of integers, as a goal states one, is decided by
+// trying each integer of the range, as core Lean decides one over a range of
+// naturals, when the range has at most 4096 integers, as many as the
+// certifier expands (CertifyLimits::DirectExpansion). Each integer is a level
+// of recursion whose memory heartbeats do not count: under the generated
+// files' recursion depth a range of 64000 took 58 GB before failing, and one
+// of 4000 already spent a step's heartbeats. A larger range has the classical
+// instance, which decide cannot evaluate.
+static constexpr llvm::StringLiteral LeanBoundedQuantifierPrelude =
+    R"lean(instance cppIntBallDecidable (lo hi : Int) (p : Int → Prop) [DecidablePred p] :
+    Decidable (∀ x : Int, lo ≤ x ∧ x < hi → p x) :=
+  if (hi - lo).toNat ≤ 4096 then
+    decidable_of_iff (∀ k : Nat, k < (hi - lo).toNat → p (lo + k)) (by
+      constructor
+      · intro h x hx
+        have := h (x - lo).toNat (by omega)
+        rwa [show lo + ((x - lo).toNat : Int) = x by omega] at this
+      · intro h k hk
+        exact h _ ⟨by omega, by omega⟩)
+  else Classical.propDecidable _
+
+instance cppIntBexDecidable (lo hi : Int) (p : Int → Prop) [DecidablePred p] :
+    Decidable (∃ x : Int, lo ≤ x ∧ x < hi ∧ p x) :=
+  if (hi - lo).toNat ≤ 4096 then
+    decidable_of_iff (∃ k : Nat, k < (hi - lo).toNat ∧ p (lo + k)) (by
+      constructor
+      · rintro ⟨k, hk, hp⟩
+        exact ⟨lo + k, by omega, by omega, hp⟩
+      · rintro ⟨x, h1, h2, hp⟩
+        refine ⟨(x - lo).toNat, by omega, ?_⟩
+        rwa [show lo + ((x - lo).toNat : Int) = x by omega])
+  else Classical.propDecidable _
+
+)lean";
+
 static void emitLeanFunctionDeclarations(
     const ObligationModule &Module, llvm::raw_ostream &OS,
     std::set<std::string> &EmittedFunctions,
@@ -1680,6 +1716,7 @@ void verify::emitLeanPrelude(llvm::raw_ostream &OS, bool Project) {
   OS << "    if (x < 0) ≠ (y < 0) then -q else q\n";
   OS << "def cppIntRem (x y : Int) : Int :=\n";
   OS << "  if y = 0 then x else x - cppIntDiv x y * y\n\n";
+  OS << LeanBoundedQuantifierPrelude;
   OS << LeanCollectionPrelude;
   OS << "/- Proves that an application in a spec's definition lowers its "
         "measure. -/\n";
@@ -1702,6 +1739,77 @@ void verify::emitLeanPrelude(llvm::raw_ostream &OS, bool Project) {
           ":=\n";
     OS << "  (Classical.em a).elim Or.inl (fun ha => Or.inr (h ha))\n\n";
   }
+}
+
+// A piecewise-constant function of the integers as a Lean term: the cell
+// of each address, from the run it lies in.
+static void printLeanRuns(const HeapValue &Runs, llvm::StringRef Before,
+                          llvm::StringRef After, llvm::raw_ostream &OS) {
+  OS << "(fun (a : Int) => ";
+  for (auto It = Runs.Breaks.rbegin(); It != Runs.Breaks.rend(); ++It)
+    OS << "if a ≥ (" << It->first.toDecimal() << " : Int) then " << Before
+       << It->second.toDecimal() << After << " else ";
+  OS << Before << Runs.Default.toDecimal() << After << ")";
+}
+
+// A model's value as a Lean term of its sort; false when it has none.
+static bool printLeanValue(const LogicValue &Value, const LogicSort &Sort,
+                           llvm::raw_ostream &OS) {
+  switch (Sort.Kind) {
+  case LogicSortKind::Bool:
+    if (Value.K != LogicValue::Kind::Bool)
+      return false;
+    OS << (Value.Truth ? "True" : "False");
+    return true;
+  case LogicSortKind::MathematicalInteger:
+  case LogicSortKind::Pointer:
+    if (Value.K != LogicValue::Kind::Integer)
+      return false;
+    OS << "(" << Value.Integer.toDecimal() << " : Int)";
+    return true;
+  case LogicSortKind::BitVector:
+    if (Value.K != LogicValue::Kind::Integer)
+      return false;
+    OS << "(BitVec.ofInt " << Sort.BitWidth << " (" << Value.Integer.toDecimal()
+       << "))";
+    return true;
+  case LogicSortKind::Heap:
+    if (Value.K != LogicValue::Kind::Heap || !Value.Heap)
+      return false;
+    printLeanRuns(*Value.Heap, "(", " : Int)", OS);
+    return true;
+  case LogicSortKind::Seq:
+    if (Value.K != LogicValue::Kind::Seq || !Value.Elements)
+      return false;
+    OS << "([";
+    for (size_t I = 0; I != Value.Elements->size(); ++I)
+      OS << (I ? ", " : "") << "(" << (*Value.Elements)[I].toDecimal()
+         << " : Int)";
+    OS << "] : List Int)";
+    return true;
+  case LogicSortKind::Set:
+    if (Value.K != LogicValue::Kind::Set || !Value.Heap)
+      return false;
+    printLeanRuns(*Value.Heap, "decide ((", " : Int) ≠ 0)", OS);
+    return true;
+  case LogicSortKind::Multiset:
+    if (Value.K != LogicValue::Kind::Multiset || !Value.Heap)
+      return false;
+    printLeanRuns(*Value.Heap, "((", " : Int).toNat)", OS);
+    return true;
+  case LogicSortKind::Map:
+    if (Value.K != LogicValue::Kind::Map || !Value.Heap || !Value.Values)
+      return false;
+    OS << "(fun (k : Int) => if ";
+    printLeanRuns(*Value.Heap, "(", " : Int)", OS);
+    OS << " k ≠ 0 then some (";
+    printLeanRuns(*Value.Values, "(", " : Int)", OS);
+    OS << " k) else none)";
+    return true;
+  case LogicSortKind::Invalid:
+    return false;
+  }
+  return false;
 }
 
 VerifyResult verify::exportLeanScratchPad(
@@ -1854,4 +1962,60 @@ VerifyResult verify::exportLeanScratchPad(
   Result.Message = ProjectGoals ? "editable Lean project obligation export"
                                 : "unchecked Lean obligation export";
   return Result;
+}
+
+std::optional<LeanRefutation> verify::exportLeanRefutation(
+    const ObligationModule &Module, const Obligation &Item,
+    const CounterexampleAssignment &Assignment,
+    std::map<std::string, LeanSpecDeclaration> &Specs, std::string &Why) {
+  // The goal, its bodies, and its specs as its project states them.
+  std::string Goals;
+  llvm::raw_string_ostream GoalsOS(Goals);
+  std::set<std::string> Functions, Theorems;
+  std::vector<LeanProjectGoal> Stated;
+  const std::set<std::string> Selection = {Item.Id};
+  VerifyResult Exported = exportLeanScratchPad(
+      Module, GoalsOS, /*EmitPreamble=*/false, Functions, Theorems,
+      /*ModuleIndex=*/1, &Stated, &Selection, &Specs);
+  auto Goal = llvm::find_if(
+      Stated, [](const LeanProjectGoal &Goal) { return Goal.Exported; });
+  if (Exported.Status != VerifyStatus::Exported || Goal == Stated.end()) {
+    Why = Exported.Message.empty() ? "the goal has no Lean statement"
+                                   : Exported.Message;
+    return std::nullopt;
+  }
+
+  // The goal applied to the values of its variables, in the order it binds
+  // them; the definition instances it states then hold by evaluation.
+  std::string Application;
+  llvm::raw_string_ostream ApplicationOS(Application);
+  std::map<std::string, LogicSort> Variables;
+  collectLeanVariables(Item.Goal.get(), {}, Variables);
+  for (const auto &[Name, Sort] : Variables) {
+    auto Value = Assignment.Values.find(Name);
+    ApplicationOS << "\n    ";
+    if (Value == Assignment.Values.end() ||
+        !printLeanValue(Value->second, Sort, ApplicationOS)) {
+      Why = "the counterexample gives " + Name + " no value Lean can state";
+      return std::nullopt;
+    }
+  }
+
+  LeanRefutation Refutation;
+  Refutation.Group = Goal->Group;
+  Refutation.Goal = Goal->Name;
+  Refutation.StableId = Goal->StableId;
+  llvm::raw_string_ostream OS(Refutation.Text);
+  OS << "import CppVerify.Specs\nimport CppVerify.Auto\n\n"
+     << "noncomputable section\n\nset_option maxRecDepth 100000\n"
+     << "set_option linter.unusedVariables false\n\n"
+     << "section Goal\n\nset_option maxHeartbeats 0\n\n"
+     << "attribute [local instance] cppVerifyPropDecidable\n\n"
+     << Goals << "end Goal\n\n"
+     << "/- The goal is false at the counterexample of "
+     << (Item.StableId.empty() ? Item.Id : Item.StableId) << ". -/\n"
+     << "theorem " << Goal->Name << "_refuted : ¬ " << Goal->Name
+     << " := by\n  intro h\n  have h₁ := h" << Application
+     << "\n  cppverify_refute h₁\n";
+  return Refutation;
 }

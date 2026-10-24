@@ -213,6 +213,67 @@ macro "cppverify_auto_div" : tactic => `(tactic| (
     cppverify_norm
     all_goals grind [cppIntDiv, cppIntRem]))
 
+/-- Memory reads and machine comparisons by their definitions, so that a
+closed instance decides. -/
+macro "cppverify_reads" : tactic => `(tactic| (try simp only [heapSelectInt,
+  heapSelectBv, cppBvSle, cppBvSlt, cppBvUle, cppBvUlt]))
+
+/-- An instance of a goal at known values, evaluated: the bodies it names,
+the spec definitions of `CppVerify.Specs` by their equations (which proves
+the definition instances it states), memory reads and machine comparisons
+by their definitions; then decided, or shown by `grind`, since a store
+relates two heaps at every address. -/
+macro "cppverify_evaluate" : tactic => `(tactic| (
+    cppverify_unfold_bodies
+    try cppverify_eval_specs
+    all_goals cppverify_reads
+    all_goals first
+      | decide
+      | grind [heapSelectInt, heapSelectBv, heapStoreInt, heapStoreBool,
+          heapStoreBv]))
+
+open Lean Elab Tactic in
+/-- Whether a tactic closes every goal within `cppverify.autoBudget`
+heartbeats of its own, as each step of cppverify_auto; running out of them
+is a no, as any other error is. -/
+def CppVerify.Auto.withinBudget (tactic : TacticM Unit) : TacticM Bool := do
+  let budget := cppverify.autoBudget.get (← getOptions)
+  let saved ← saveState
+  tryCatchRuntimeEx
+    (do
+      let heartbeats ← IO.getNumHeartbeats
+      withTheReader Core.Context
+          (fun ctx => { ctx with initHeartbeats := heartbeats,
+                                 maxHeartbeats := budget * 1000 }) tactic
+      return (← getUnsolvedGoals).isEmpty)
+    fun _ => do saved.restore; return false
+
+open Lean Elab Tactic Meta in
+/-- Shows that the instance of a goal that `h` states is false, or fails
+saying why not: that Lean decides it true, which contradicts the
+counterexample, or that it cannot decide it. Each attempt has the heartbeats
+of a step of cppverify_auto. -/
+elab "cppverify_refute " h:ident : tactic => withMainContext do
+  let saved ← saveState
+  let attempts : List Syntax.Tactic := [
+    ← `(tactic| (revert $h:ident; decide)),
+    ← `(tactic| (revert $h:ident; cppverify_evaluate))]
+  for attempt in attempts do
+    if ← CppVerify.Auto.withinBudget (evalTactic attempt) then return
+    saved.restore
+  let some decl := (← getLCtx).findFromUserName? h.getId
+    | throwError "cppverify: no hypothesis {h.getId}"
+  -- Whether the instance holds of itself: in a context without the goal,
+  -- which would prove any instance.
+  let probe ← mkFreshExprMVarAt {} {} decl.type
+  setGoals [probe.mvarId!]
+  let holds ← CppVerify.Auto.withinBudget
+    (evalTactic (← `(tactic| first | decide | cppverify_evaluate)))
+  saved.restore
+  if holds then
+    throwError "cppverify: Lean decides the goal true at the counterexample"
+  throwError "cppverify: Lean cannot decide the goal at the counterexample"
+
 open Lean Elab Tactic in
 /-- Tries each step on the goal, each with `cppverify.autoBudget` heartbeats
 of its own, and keeps the first that proves it. A step that runs out of

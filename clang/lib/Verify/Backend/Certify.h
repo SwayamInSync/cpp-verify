@@ -232,6 +232,18 @@ std::optional<LogicValue> evaluateTerm(const ObligationModule &Module,
                                        const CertifyLimits &Limits = {},
                                        std::string *Failure = nullptr);
 
+/// The values a certified counterexample gives the free variables of the goal
+/// of the obligation it fails, by name: what a refutation of that goal
+/// applies it to.
+struct CounterexampleAssignment {
+  std::map<std::string, LogicValue> Values;
+};
+
+/// The assignment \p Model gives the free variables of \p Item's goal, or
+/// null when it gives one no value.
+std::shared_ptr<const CounterexampleAssignment>
+counterexampleAssignment(const Obligation &Item, CandidateModel &Model);
+
 /// The source variables of \p Query with the values \p Model gives them, as
 /// a counterexample shows them; no value where the model gives none.
 std::vector<VerifyModelValue> candidateValues(const ObligationModule &Module,
