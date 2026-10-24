@@ -148,7 +148,8 @@ short total_short(const short *p, int n)
 // NOTE: error: verification failed: total<short>
 // NOTE-NEXT: function_templates.cpp:[[@LINE-8]]:13: note: in instantiation of function template specialization 'total<short>' requested here
 
-// Ghost code of a template's types: the ghost variable stays one.
+// Ghost code of a template's types, a ghost variable assigned in a ghost
+// block.
 template <typename T>
 T bump(T x)
   cppverify::pre(0 <= x && x < 100)
@@ -360,3 +361,60 @@ int clamp3(int x)
 }
 // CHECK-DAG: Verified: clamp3 [backend=z3]
 // CHECK-DAG: Verified: constexpr spec axiom: bigger_of<int>
+
+// A contract written on the definition, after a declaration that names its
+// parameter otherwise and before which the template is used.
+template <typename T>
+T third(T x);
+
+int thirds(int x)
+  cppverify::pre(x >= 0)
+  cppverify::post(cppverify::result <= x)
+{
+  int t = third(x);
+  return t;
+}
+
+template <typename T>
+T third(T y)
+  cppverify::pre(y >= 0)
+  cppverify::post(3 * cppverify::result <= y)
+{
+  return y / 3;
+}
+// CHECK-DAG: Verified: third<int> [backend=z3]
+// CHECK-DAG: Verified: thirds [backend=z3]
+
+// A variadic template: a fold over a quantifier binds a variable in each
+// element, and the parameters the pack expands to are named apart.
+template <typename... Ns>
+int first_small(const int *p, Ns... ns)
+  cppverify::pre(cppverify::valid(p, 10))
+  cppverify::pre(((0 < ns && ns <= 10) && ...))
+  cppverify::pre((cppverify::forall(k, 0, ns, p[k] < 10) && ...))
+  cppverify::post(cppverify::result < 10)
+{
+  return p[0];
+}
+
+int uses_first_small(const int *p)
+  cppverify::pre(cppverify::valid(p, 10))
+  cppverify::pre(cppverify::forall(k, 0, 10, p[k] < 10))
+  cppverify::post(cppverify::result < 10)
+{
+  int v = first_small(p, 3, 5);
+  return v;
+}
+// CHECK-DAG: Verified: first_small<int, int> [backend=z3]
+// CHECK-DAG: Verified: uses_first_small [backend=z3]
+
+template <typename... Ns>
+int product_of(Ns... ns)
+  cppverify::pre(((0 <= ns && ns <= 10) && ...))
+  cppverify::post(cppverify::result == (ns * ...))
+{
+  return (ns + ...);
+}
+
+int products() { return product_of(2, 3); }
+// CHECK-DAG: error: verification failed: product_of<int, int> [{{.*}}::postcondition@[[@LINE-6]]:{{.*}} ns...[0] [ssa=ns...[0]_0] [type=i32] = {{.*}} ns...[1] [ssa=ns...[1]_0] [type=i32] =
