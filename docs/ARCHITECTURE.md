@@ -358,6 +358,19 @@ collected from its template only); `isInstantiated` decides the warning,
 from a function template's specializations or the instantiated members of
 the class's.
 
+**std::min and std::max:** `stdMinOrMax` recognizes the two-argument
+`std::min` and `std::max` of a const integer, enumeration, or `bool`
+reference (not the overloads with a comparison or an initializer list), and
+`convertMinOrMax` lowers a call to a `VConditionalExpr` over the converted
+arguments, before a call becomes a spec application; any other non-constant
+call of a `constexpr` function of `std` is a conversion error. In
+`convertConstexprSpec`, `findUnsupportedType`'s
+`ConstScalarReferencesAreValues` makes a reference to a const integer its
+referent (`constScalarReferent`), as the parameter's and the result's
+types, and the parameters in `ValueReferences` are read as values; a
+function that cannot be lifted returns a placeholder that the lifting loop
+marks unsupported, so `SpecDependencies` name it.
+
 **Records in memory by value:** `recordFieldsInMemory` reads a record value
 kept in memory, a promoted local or one in a pointee or record reference
 (`promotedRootLocal`, `inPointeeObject`), through implicit copies and
