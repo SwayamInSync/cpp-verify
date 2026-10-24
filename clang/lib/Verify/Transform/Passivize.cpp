@@ -2927,6 +2927,43 @@ applicationKey(const VSpecCallExpr &C,
   return true;
 }
 
+/// Every scalar leaf of a layout at its offset, its array repetitions
+/// expanded; nothing when there are more than Limit.
+static std::optional<std::vector<std::pair<uint64_t, const VObjectLeaf *>>>
+expandedLeaves(const VObjectLayout &Layout, size_t Limit) {
+  std::vector<std::pair<uint64_t, const VObjectLeaf *>> Out;
+  for (const VObjectLeaf &Leaf : Layout.Leaves) {
+    std::vector<uint64_t> Offsets = {Leaf.OffsetBytes};
+    for (const VObjectRepeat &Repeat : Leaf.Repeats) {
+      std::vector<uint64_t> Next;
+      for (uint64_t Start : Offsets)
+        for (uint64_t K = 0; K < Repeat.Count; ++K) {
+          if (Out.size() + Next.size() >= Limit)
+            return std::nullopt;
+          Next.push_back(Start + K * Repeat.StrideBytes);
+        }
+      Offsets = std::move(Next);
+    }
+    for (uint64_t Offset : Offsets) {
+      if (Out.size() >= Limit)
+        return std::nullopt;
+      Out.push_back({Offset, &Leaf});
+    }
+  }
+  return Out;
+}
+
+/// The layout of the object a constructor constructs.
+static const VObjectLayout *constructedLayout(const VFunction &Fn) {
+  auto Identity = Fn.RecordParams.find("this");
+  if (!Fn.IsConstructor || Identity == Fn.RecordParams.end())
+    return nullptr;
+  auto Layout = llvm::find_if(Fn.Layouts, [&](const VObjectLayout &L) {
+    return L.TypeIdentity == Identity->second;
+  });
+  return Layout == Fn.Layouts.end() ? nullptr : &*Layout;
+}
+
 /// The condition a definedness check asks for, without the guards it holds
 /// under: `!g || c` as built by makeImplies, and the range of a quantified
 /// check.
@@ -3948,27 +3985,13 @@ class PassivizerImpl {
     const auto Layout = llvm::find_if(Fn.Layouts, [&](const VObjectLayout &L) {
       return L.TypeIdentity == Type.TypeIdentity;
     });
-    std::vector<Region> Cells;
-    if (Layout != Fn.Layouts.end() && Layout->SizeBytes == Bytes) {
-      for (const VObjectLeaf &Leaf : Layout->Leaves) {
-        std::vector<uint64_t> Offsets = {Leaf.OffsetBytes};
-        for (const VObjectRepeat &Repeat : Leaf.Repeats) {
-          std::vector<uint64_t> Next;
-          for (uint64_t Start : Offsets)
-            for (uint64_t K = 0; K < Repeat.Count && Next.size() <= Bytes; ++K)
-              Next.push_back(Start + K * Repeat.StrideBytes);
-          Offsets = std::move(Next);
-        }
-        for (uint64_t Offset : Offsets)
-          if (Cells.size() <= Bytes)
-            Cells.push_back(cellRegion(At(Offset).get(), Leaf.Ty, Loc));
-      }
-      if (!Cells.empty() && Cells.size() <= Bytes) {
-        for (Region &Cell : Cells)
-          Out.push_back(std::move(Cell));
+    if (Layout != Fn.Layouts.end() && Layout->SizeBytes == Bytes)
+      if (auto Leaves = expandedLeaves(*Layout, Bytes);
+          Leaves && !Leaves->empty()) {
+        for (const auto &[Offset, Leaf] : *Leaves)
+          Out.push_back(cellRegion(At(Offset).get(), Leaf->Ty, Loc));
         return true;
       }
-    }
     Out.push_back(
         Region{cloneVExpr(Base.get()), At(std::max<uint64_t>(Bytes, 1))});
     return true;
@@ -5071,6 +5094,37 @@ public:
     return Renames;
   }
 
+  /// A constructor's object at its end: every leaf initialized, each a check
+  /// at its member's declaration.
+  void
+  emitConstructedChecks(PassiveProgram &P,
+                        const std::map<std::string, std::string> &Renames) {
+    const VObjectLayout *Layout = constructedLayout(Fn);
+    auto Leaves = Layout ? expandedLeaves(*Layout, 4096) : std::nullopt;
+    if (!Leaves) {
+      P.ExitAsserts.push_back({ProofObligationKind::Unsupported,
+                               makeBoolLiteral(false, Fn.DeclLoc),
+                               "a constructor whose object has no known "
+                               "layout"});
+      return;
+    }
+    CloneCtx Ctx{Renames, OldState, false};
+    for (const auto &[Offset, Leaf] : *Leaves) {
+      const SourceLocation At = Leaf->Loc.isValid() ? Leaf->Loc : Fn.DeclLoc;
+      VVarExpr This("this", VType::makePtr(), At);
+      P.ExitAsserts.push_back(
+          {ProofObligationKind::Initialization,
+           std::make_unique<VUnaryOpExpr>(
+               VUnaryOp::InitializedPtr,
+               addBytes(cloneExpr(&This, Ctx),
+                        std::make_unique<VLiteralExpr>(std::to_string(Offset),
+                                                       pointerOffsetType(), At),
+                        At),
+               VType::makeBool(), At, "", "",
+               stateHeapName(Ctx, VInitializationHeapName, ""))});
+    }
+  }
+
   PassiveProgram run() {
     PassiveProgram P;
     P.FunctionName = Fn.Name;
@@ -5101,6 +5155,8 @@ public:
       if (OfParameter)
         PostRenames[Name] = static_cast<const VVarExpr &>(*Entry).Name;
     }
+    if (Fn.IsConstructor)
+      emitConstructedChecks(P, Renames);
     // Postconditions are evaluated in order: a clause is evaluated where the
     // clauses before it hold.
     std::unique_ptr<VExpr> EarlierPosts;
@@ -5392,6 +5448,9 @@ public:
                       stateHeapName(Ctx, VAllocationHeapName, ""),
                       stateHeapName(Ctx, VLivenessHeapName, "")),
                   nullptr, Loc, ProofObligationKind::PointerValidity);
+      // A constructor's object is what it initializes.
+      if (Callee.IsConstructor && Name == "this")
+        continue;
       std::vector<uint64_t> Leaves;
       for (const VObjectLeaf &Leaf : Layout->Leaves) {
         std::vector<uint64_t> Offsets = {Leaf.OffsetBytes};
@@ -6009,6 +6068,26 @@ public:
 
     havocFootprints(P, Renames, *Callee, ActualModifies, ActualCounts, ParamMap,
                     Ctx, EntryHeap, HasImplicitHeapEffect, C.Loc);
+    // A constructor initializes every leaf of its object, as its exit checks
+    // show, so the caller's storage holds an initialized object after it.
+    if (Callee->IsConstructor) {
+      const VObjectLayout *Layout = constructedLayout(*Callee);
+      auto Leaves = Layout ? expandedLeaves(*Layout, 4096) : std::nullopt;
+      auto This = ParamMap.find("this");
+      if (!Leaves || This == ParamMap.end())
+        emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, C.Loc),
+                    nullptr, C.Loc, ProofObligationKind::Unsupported,
+                    "a constructor whose object has no known layout");
+      else
+        for (const auto &[Offset, Leaf] : *Leaves)
+          updateHeap(
+              P, Renames, VInitializationHeapName,
+              addBytes(cloneVExpr(This->second.get()),
+                       std::make_unique<VLiteralExpr>(
+                           std::to_string(Offset), pointerOffsetType(), C.Loc),
+                       C.Loc),
+              makeBoolLiteral(true, C.Loc), nullptr, C.Loc);
+    }
 
     std::map<std::string, std::unique_ptr<VExpr>> PostParamMap;
     for (const auto &[Name, Value] : ParamMap)
