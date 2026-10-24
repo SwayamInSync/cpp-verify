@@ -5436,6 +5436,56 @@ void Sema::InstantiateExceptionSpec(SourceLocation PointOfInstantiation,
                      TemplateArgs);
 }
 
+void Sema::InstantiateFunctionContract(SourceLocation PointOfInstantiation,
+                                       FunctionDecl *Function) {
+  if (!getLangOpts().VerifyContracts || Function->isInvalidDecl() ||
+      !Function->isTemplateInstantiation())
+    return;
+  const FunctionDecl *Pattern =
+      Function->getTemplateInstantiationPattern(/*ForDefinition=*/false);
+  const FunctionContractInfo *PatternContract =
+      Pattern ? Context.getFunctionContract(Pattern) : nullptr;
+  if (!PatternContract || Context.getFunctionContract(Function))
+    return;
+  // The clauses name the parameters of the declaration they are written on.
+  const FunctionDecl *Written =
+      PatternContract->ContractDecl ? PatternContract->ContractDecl : Pattern;
+
+  // Recorded first, so that a use of the specialization in its own contract
+  // finds it and stops.
+  FunctionContractInfo &Contract = Context.getOrCreateFunctionContract(Function);
+  Contract.ContractDecl = Function;
+  Contract.IsSpec = PatternContract->IsSpec;
+  Contract.IsProof = PatternContract->IsProof;
+
+  NonSFINAEContext _(*this);
+  InstantiatingTemplate Inst(*this, PointOfInstantiation, Function);
+  if (Inst.isInvalid())
+    return;
+  Sema::ContextRAII SavedContext(*this, Function);
+  // The contract is a full expression of its own, whatever the use that
+  // asks for it, and the specs it applies are used.
+  EnterExpressionEvaluationContext Evaluated(
+      *this, ExpressionEvaluationContext::PotentiallyEvaluated);
+  LocalInstantiationScope Scope(*this);
+  MultiLevelTemplateArgumentList TemplateArgs = getTemplateInstantiationArgs(
+      Function, Function->getLexicalDeclContext(), /*Final=*/false,
+      /*Innermost=*/std::nullopt, /*RelativeToPrimary=*/true);
+  if (addInstantiatedParametersToScope(Function, Written, Scope, TemplateArgs))
+    return;
+  std::optional<CXXThisScopeRAII> ThisScope;
+  if (auto *Method = dyn_cast<CXXMethodDecl>(Function);
+      Method && Method->isImplicitObjectMemberFunction())
+    ThisScope.emplace(*this, Method->getParent(),
+                      Method->getMethodQualifiers(),
+                      static_cast<bool>(getLangOpts().CPlusPlus11));
+  FunctionContractInfo Instantiated;
+  if (SubstFunctionContract(*PatternContract, Instantiated, TemplateArgs))
+    return;
+  Instantiated.ContractDecl = Function;
+  Contract = std::move(Instantiated);
+}
+
 /// Initializes the common fields of an instantiation function
 /// declaration (New) from the corresponding fields of its template (Tmpl).
 ///
@@ -5765,6 +5815,9 @@ void Sema::InstantiateFunctionDefinition(SourceLocation PointOfInstantiation,
         break;
     }
   }
+
+  // The definition is verified against its own contract.
+  InstantiateFunctionContract(PointOfInstantiation, Function);
 
   NonSFINAEContext _(*this);
   InstantiatingTemplate Inst(*this, PointOfInstantiation, Function);
@@ -6174,6 +6227,10 @@ void Sema::BuildVariableInstantiation(
   }
 
   InstantiateAttrs(TemplateArgs, OldVar, NewVar, LateAttrs, StartingScope);
+
+  // A ghost variable is one in every instantiation.
+  if (Context.isGhostVariable(OldVar))
+    Context.markGhostVariable(NewVar);
 
   LookupResult Previous(
       *this, NewVar->getDeclName(), NewVar->getLocation(),
