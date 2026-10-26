@@ -3940,12 +3940,36 @@ static bool neverRepeats(const Stmt *Loop, const ASTContext &Ctx) {
   return Value && Value->isZero();
 }
 
-std::unique_ptr<VExpr> ASTConverter::convertLoopCondition(const Stmt *Loop,
-                                                          const Expr *Cond) {
+std::unique_ptr<VExpr>
+ASTConverter::convertLoopCondition(const Stmt *Loop, const Expr *Cond,
+                                   std::vector<std::unique_ptr<VStmt>> *Calls) {
   if (neverRepeats(Loop, Ctx))
     return std::make_unique<VLiteralExpr>(false, VType::makeBool(),
                                           Cond->getExprLoc());
+  llvm::SaveAndRestore Sink(CallSink, Calls);
+  llvm::SaveAndRestore Hoisted(HoistedCalls,
+                               std::map<const CallExpr *, std::string>());
   return convertExpr(Cond);
+}
+
+void ASTConverter::testAtEveryIteration(
+    std::vector<std::unique_ptr<VStmt>> Calls, std::unique_ptr<VExpr> &Cond,
+    std::vector<std::unique_ptr<VStmt>> &Body) {
+  if (Calls.empty())
+    return;
+  // while (true) { calls; if (!cond) break; body }: the calls run at every
+  // test, after the invariants at the head.
+  const SourceLocation Loc = Cond->Loc;
+  std::vector<std::unique_ptr<VStmt>> Exit;
+  Exit.push_back(std::make_unique<VBreakStmt>(Loc));
+  Calls.push_back(std::make_unique<VIfStmt>(
+      std::make_unique<VUnaryOpExpr>(VUnaryOp::Not, std::move(Cond),
+                                     VType::makeBool(), Loc),
+      std::move(Exit), std::vector<std::unique_ptr<VStmt>>(), Loc));
+  for (auto &S : Body)
+    Calls.push_back(std::move(S));
+  Body = std::move(Calls);
+  Cond = std::make_unique<VLiteralExpr>(1, VType::makeBool(), Loc);
 }
 
 bool ASTConverter::checkLoopTermination(const Stmt *Loop, bool HasMeasure) {
@@ -4182,6 +4206,23 @@ std::optional<VPlace>
 ASTConverter::subscriptPlace(const ArraySubscriptExpr *AS) {
   if (!AS)
     return std::nullopt;
+  // The base and the index are unsequenced; an array's own name reads
+  // nothing.
+  if (CallSink) {
+    const Expr *Base = AS->getBase()->IgnoreParenImpCasts();
+    const bool BaseReads =
+        !(isa<DeclRefExpr>(Base) && Base->getType()->isArrayType()) &&
+        isHeapSensitive(AS->getBase());
+    if ((containsModifyingCall(AS->getIdx()) && BaseReads) ||
+        (containsModifyingCall(AS->getBase()) &&
+         isHeapSensitive(AS->getIdx()))) {
+      error(CurrentFn->Name +
+            ": C++ leaves the order of these operands open, and a call in "
+            "one may write what the other reads; make the call in a statement "
+            "of its own first");
+      return std::nullopt;
+    }
+  }
   // An element of a fixed array inside a represented object: a promoted
   // local, or the object a pointer addresses (r->buf[i], p[k].grid[i][j]).
   if (promotedRootLocal(AS) || inPointeeObject(AS->getBase()))
@@ -5815,6 +5856,17 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
       error(CurrentFn->Name + ": unsupported binary operator");
       return nullptr;
     }
+    if ((CallSink || SubobjectSink) && B->isLogicalOp())
+      return convertOnPaths(B);
+    // The operands are unsequenced: any order must give the same values.
+    if (CallSink && !B->isLogicalOp() &&
+        orderDependent(B->getLHS(), B->getRHS())) {
+      error(CurrentFn->Name +
+            ": C++ leaves the order of these operands open, and a call in "
+            "one may write what the other reads; make the call in a statement "
+            "of its own first");
+      return nullptr;
+    }
     if (IntMode == VIntMode::Math &&
         (*Op == VBinOp::BitAnd || *Op == VBinOp::BitOr ||
          *Op == VBinOp::BitXor || *Op == VBinOp::Shl || *Op == VBinOp::Shr)) {
@@ -6026,6 +6078,8 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     return std::make_unique<VOldExpr>(std::move(Inner), Ty, E->getExprLoc());
   }
   if (const auto *C = dyn_cast<ConditionalOperator>(E)) {
+    if (CallSink || SubobjectSink)
+      return convertOnPaths(C);
     auto Cond = convertExpr(C->getCond());
     auto T = convertExpr(C->getTrueExpr());
     auto F = convertExpr(C->getFalseExpr());
@@ -6262,6 +6316,14 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
             functionName(Callee), functionIdentity(Callee),
             std::move(Args), Ty, E->getExprLoc(), specReadsHeap(Callee));
       }
+      // Executable code calls where the expression is evaluated, before
+      // what reads the result.
+      if (CallSink && isExecCall(CE) && !InContractExpression && !InGhost &&
+          !CurrentFn->IsSpec && !CurrentFn->IsProof) {
+        if (rejectOwnObjectUse(CE))
+          return nullptr;
+        return hoistExecCall(CE, Callee);
+      }
       if (functionContract(Callee))
         error(CurrentFn->Name +
               ": executable call is unsupported in this expression "
@@ -6409,63 +6471,18 @@ void ASTConverter::convertExecCallArgs(
     return;
   }
 
-  auto IsModifyingCall = [&](const Expr *E) {
-    const auto *Nested = dyn_cast<CallExpr>(E->IgnoreParenImpCasts());
-    const FunctionDecl *NestedCallee =
-        Nested ? Nested->getDirectCallee() : nullptr;
-    const FunctionContractInfo *FCI =
-        NestedCallee ? functionContract(NestedCallee) : nullptr;
-    if (!FCI || calleeIsSpec(NestedCallee) || calleeIsProof(NestedCallee))
-      return false;
-    if (!FCI->Modifies.empty())
-      return true;
-    for (const ParmVarDecl *Param : NestedCallee->parameters())
-      if (Param->getType()->isPointerType() ||
-          Param->getType()->isReferenceType())
-        return true;
-    return false;
-  };
-  std::function<bool(const Stmt *)> IsHeapSensitive = [&](const Stmt *S) {
-    if (!S)
-      return false;
-    if (const auto *DRE = dyn_cast<DeclRefExpr>(S))
-      if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl()))
-        if (VD->getType()->isReferenceType() || AddressableLocals.count(VD))
-          return true;
-    if (const auto *U = dyn_cast<UnaryOperator>(S))
-      if (U->getOpcode() == UO_Deref)
-        return true;
-    if (const auto *M = dyn_cast<MemberExpr>(S))
-      if (M->isArrow())
-        return true;
-    if (isa<ArraySubscriptExpr>(S))
-      return true;
-    if (const auto *Nested = dyn_cast<CallExpr>(S)) {
-      const FunctionDecl *NestedCallee = Nested->getDirectCallee();
-      if (NestedCallee && functionContract(NestedCallee) &&
-          !calleeIsSpec(NestedCallee) && !calleeIsProof(NestedCallee))
-        return true;
-    }
-    for (const Stmt *Child : S->children())
-      if (IsHeapSensitive(Child))
-        return true;
-    return false;
-  };
-
   for (const Expr *A : CE->arguments())
     if (rejectOwnObjectUse(A))
       return;
-  for (unsigned I = 0; I < CE->getNumArgs(); ++I) {
-    if (!IsModifyingCall(CE->getArg(I)))
-      continue;
-    for (unsigned J = 0; J < CE->getNumArgs(); ++J) {
-      if (I != J && IsHeapSensitive(CE->getArg(J))) {
+  for (unsigned I = 0; I < CE->getNumArgs(); ++I)
+    for (unsigned J = I + 1; J < CE->getNumArgs(); ++J)
+      if (orderDependent(CE->getArg(I), CE->getArg(J))) {
         error(CurrentFn->Name +
-              ": call arguments have order-dependent heap evaluations");
+              ": C++ leaves the order of these call arguments open, and a "
+              "call in one may write what another reads; make the call in a "
+              "statement of its own first");
         return;
       }
-    }
-  }
 
   // A member call passes its object first, as the callee's `this`: the
   // object a pointer addresses (p->m(), this->m()), or the object itself,
@@ -6525,6 +6542,182 @@ void ASTConverter::convertExecCallArgs(
         Args.push_back(std::move(Arg));
     }
   }
+}
+
+bool ASTConverter::isExecCall(const Stmt *S) const {
+  const auto *Call = dyn_cast_or_null<CallExpr>(S);
+  const FunctionDecl *Callee = Call ? Call->getDirectCallee() : nullptr;
+  return Callee && functionContract(Callee) && !calleeIsSpec(Callee) &&
+         !calleeIsProof(Callee);
+}
+
+bool ASTConverter::containsExecCall(const Stmt *S) const {
+  if (!S)
+    return false;
+  if (isExecCall(S))
+    return true;
+  return llvm::any_of(S->children(), [&](const Stmt *Child) {
+    return containsExecCall(Child);
+  });
+}
+
+bool ASTConverter::containsModifyingCall(const Stmt *S) const {
+  if (!S)
+    return false;
+  if (isExecCall(S)) {
+    const auto *Call = cast<CallExpr>(S);
+    const FunctionDecl *Callee = Call->getDirectCallee();
+    if (!functionContract(Callee)->Modifies.empty())
+      return true;
+    // A member function that is not const may write its object.
+    if (const auto *Method = dyn_cast<CXXMethodDecl>(Callee);
+        Method && Method->isInstance() && !Method->isConst())
+      return true;
+    if (llvm::any_of(Callee->parameters(), [](const ParmVarDecl *Param) {
+          return Param->getType()->isPointerType() ||
+                 Param->getType()->isReferenceType();
+        }))
+      return true;
+  }
+  return llvm::any_of(S->children(), [&](const Stmt *Child) {
+    return containsModifyingCall(Child);
+  });
+}
+
+bool ASTConverter::isHeapSensitive(const Stmt *S) const {
+  if (!S)
+    return false;
+  if (const auto *DRE = dyn_cast<DeclRefExpr>(S))
+    if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl()))
+      if (VD->getType()->isReferenceType() || AddressableLocals.count(VD))
+        return true;
+  if (const auto *U = dyn_cast<UnaryOperator>(S))
+    if (U->getOpcode() == UO_Deref)
+      return true;
+  if (const auto *M = dyn_cast<MemberExpr>(S))
+    if (M->isArrow())
+      return true;
+  if (isa<ArraySubscriptExpr>(S) || isExecCall(S))
+    return true;
+  return llvm::any_of(
+      S->children(), [&](const Stmt *Child) { return isHeapSensitive(Child); });
+}
+
+bool ASTConverter::orderDependent(const Expr *A, const Expr *B) const {
+  return (containsModifyingCall(A) && isHeapSensitive(B)) ||
+         (containsModifyingCall(B) && isHeapSensitive(A));
+}
+
+bool ASTConverter::locatingIsHeapSensitive(const Expr *E) const {
+  E = E->IgnoreParens();
+  if (isa<DeclRefExpr>(E))
+    return false;
+  if (const auto *U = dyn_cast<UnaryOperator>(E);
+      U && U->getOpcode() == UO_Deref)
+    return isHeapSensitive(U->getSubExpr());
+  if (const auto *M = dyn_cast<MemberExpr>(E))
+    return M->isArrow() ? isHeapSensitive(M->getBase())
+                        : locatingIsHeapSensitive(M->getBase());
+  if (const auto *AS = dyn_cast<ArraySubscriptExpr>(E)) {
+    const Expr *Base = AS->getBase()->IgnoreParenImpCasts();
+    const bool BaseReads = Base->getType()->isArrayType()
+                               ? locatingIsHeapSensitive(Base)
+                               : isHeapSensitive(AS->getBase());
+    return BaseReads || isHeapSensitive(AS->getIdx());
+  }
+  return isHeapSensitive(E);
+}
+
+std::unique_ptr<VExpr> ASTConverter::hoistExecCall(const CallExpr *CE,
+                                                   const FunctionDecl *Callee) {
+  const VType Result = VType::fromQualType(CE->getType(), IntMode, Ctx);
+  if (auto Hoisted = HoistedCalls.find(CE); Hoisted != HoistedCalls.end())
+    return convertCallResultValue(Hoisted->second, Callee->getReturnType(),
+                                  Result, CE->getExprLoc());
+  const QualType Returned = Callee->getReturnType();
+  if (Returned->isVoidType() || Returned->isReferenceType() ||
+      Returned->isRecordType()) {
+    error(CurrentFn->Name +
+          ": executable call is unsupported in this expression context: " +
+          functionName(Callee));
+    return nullptr;
+  }
+  const size_t ErrorCount = Errors.size();
+  std::vector<std::unique_ptr<VExpr>> Args;
+  convertExecCallArgs(CE, *CallSink, Args);
+  if (Errors.size() != ErrorCount)
+    return nullptr;
+  std::string Temporary = "__call_" + std::to_string(++NestedCallId);
+  CallSink->push_back(std::make_unique<VCallStmt>(
+      functionName(Callee), functionIdentity(Callee), std::move(Args),
+      Temporary, CE->getExprLoc(), false));
+  HoistedCalls[CE] = Temporary;
+  return convertCallResultValue(std::move(Temporary), Returned, Result,
+                                CE->getExprLoc());
+}
+
+std::unique_ptr<VExpr> ASTConverter::convertOnPaths(const Expr *E) {
+  const SourceLocation Loc = E->getExprLoc();
+  const VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
+  std::vector<std::unique_ptr<VStmt>> &Outer =
+      CallSink ? *CallSink : *SubobjectSink;
+  auto OnPath = [&](const Expr *Operand,
+                    std::vector<std::unique_ptr<VStmt>> &Into) {
+    llvm::SaveAndRestore Calls(CallSink, CallSink ? &Into : nullptr);
+    llvm::SaveAndRestore Subobjects(SubobjectSink,
+                                    SubobjectSink ? &Into : nullptr);
+    return convertExpr(Operand);
+  };
+  const auto *B = dyn_cast<BinaryOperator>(E);
+  const auto *C = dyn_cast<ConditionalOperator>(E);
+  // The first operand, or the condition, is evaluated on every path.
+  auto First = convertExpr(B ? B->getLHS() : C->getCond());
+  if (!First)
+    return nullptr;
+  std::vector<std::unique_ptr<VStmt>> Then, Else;
+  auto ThenValue = OnPath(B ? B->getRHS() : C->getTrueExpr(), Then);
+  auto ElseValue = C ? OnPath(C->getFalseExpr(), Else) : nullptr;
+  if (!ThenValue || (C && !ElseValue))
+    return nullptr;
+  if (Then.empty() && Else.empty()) {
+    if (C)
+      return std::make_unique<VConditionalExpr>(std::move(First),
+                                                std::move(ThenValue),
+                                                std::move(ElseValue), Ty, Loc);
+    return std::make_unique<VBinOpExpr>(
+        B->getOpcode() == BO_LAnd ? VBinOp::And : VBinOp::Or, std::move(First),
+        std::move(ThenValue), Ty, Loc);
+  }
+  if (!Ty.isInt() && Ty.Kind != VTypeKind::Bool &&
+      (Ty.Kind != VTypeKind::Ptr || isDynamicAddress(E))) {
+    error(CurrentFn->Name +
+          ": a conditional expression of this type whose paths need "
+          "statements of their own is unsupported");
+    return nullptr;
+  }
+  const std::string Result = "__path_" + std::to_string(++NestedCallId);
+  Then.push_back(
+      std::make_unique<VAssignStmt>(Result, std::move(ThenValue), Loc));
+  std::unique_ptr<VExpr> Taken;
+  if (B) {
+    // The first operand is saved before the second's statements run.
+    Outer.push_back(
+        std::make_unique<VAssignStmt>(Result, std::move(First), Loc));
+    Taken = std::make_unique<VVarExpr>(Result, Ty, Loc);
+    if (B->getOpcode() == BO_LOr)
+      Taken = std::make_unique<VUnaryOpExpr>(VUnaryOp::Not, std::move(Taken),
+                                             VType::makeBool(), Loc);
+  } else {
+    const std::string Choice = "__path_" + std::to_string(++NestedCallId);
+    Outer.push_back(
+        std::make_unique<VAssignStmt>(Choice, std::move(First), Loc));
+    Taken = std::make_unique<VVarExpr>(Choice, VType::makeBool(), Loc);
+    Else.push_back(
+        std::make_unique<VAssignStmt>(Result, std::move(ElseValue), Loc));
+  }
+  Outer.push_back(std::make_unique<VIfStmt>(std::move(Taken), std::move(Then),
+                                            std::move(Else), Loc));
+  return std::make_unique<VVarExpr>(Result, Ty, Loc);
 }
 
 std::optional<bool> ASTConverter::recordFieldsInMemory(
@@ -6618,6 +6811,15 @@ ASTConverter::convertAssignmentValue(const BinaryOperator *Assignment) {
   auto RHS = convertExpr(Assignment->getRHS());
   if (!RHS)
     return nullptr;
+  // The right operand is evaluated before the left one, whose calls follow.
+  if (CallSink && containsExecCall(Assignment->getLHS())) {
+    const SourceLocation Loc = Assignment->getRHS()->getExprLoc();
+    const std::string Value = "__value_" + std::to_string(++NestedCallId);
+    const VType Ty = RHS->Ty;
+    CallSink->push_back(
+        std::make_unique<VAssignStmt>(Value, std::move(RHS), Loc));
+    RHS = std::make_unique<VVarExpr>(Value, Ty, Loc);
+  }
   if (Assignment->getOpcode() == BO_Assign)
     return RHS;
 
@@ -7424,12 +7626,18 @@ ASTConverter::convertStmtBody(const Stmt *S) {
   }
   // A pointer to a subobject formed by this statement is checked and bounded
   // before it; a condition only compares one.
-  llvm::SaveAndRestore Sink(SubobjectSink,
-                            (isa<DeclStmt, ReturnStmt>(S) || isa<Expr>(S)) &&
-                                    !InGhost && !CurrentFn->IsSpec &&
-                                    !CurrentFn->IsProof
-                                ? &Out
-                                : nullptr);
+  const bool Executable = !InGhost && !CurrentFn->IsSpec && !CurrentFn->IsProof;
+  llvm::SaveAndRestore Sink(
+      SubobjectSink,
+      (isa<DeclStmt, ReturnStmt>(S) || isa<Expr>(S)) && Executable ? &Out
+                                                                   : nullptr);
+  // So are the calls its expressions make; a condition's, before it.
+  llvm::SaveAndRestore Calls(
+      CallSink, (isa<DeclStmt, ReturnStmt>(S) || isa<Expr>(S)) && Executable
+                    ? &Out
+                    : nullptr);
+  llvm::SaveAndRestore Hoisted(HoistedCalls,
+                               std::map<const CallExpr *, std::string>());
   if (S->getStmtClass() == Stmt::ReturnStmtClass) {
     if (InGhost) {
       error(CurrentFn->Name +
@@ -7550,7 +7758,11 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       Out.insert(Out.end(), std::make_move_iterator(Init.begin()),
                  std::make_move_iterator(Init.end()));
     }
-    auto Cond = convertExpr(IS->getCond());
+    std::unique_ptr<VExpr> Cond;
+    {
+      llvm::SaveAndRestore Calls(CallSink, Executable ? &Out : nullptr);
+      Cond = convertExpr(IS->getCond());
+    }
     if (!Cond) {
       leaveAutomaticScope(Out, IS->getEndLoc());
       return Out;
@@ -7621,7 +7833,9 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       error(CurrentFn->Name + ": while condition declarations are unsupported");
       return Out;
     }
-    auto Cond = convertLoopCondition(WS, WS->getCond());
+    std::vector<std::unique_ptr<VStmt>> CondCalls;
+    auto Cond = convertLoopCondition(WS, WS->getCond(),
+                                     Executable ? &CondCalls : nullptr);
     if (!Cond)
       return Out;
     std::vector<std::unique_ptr<VExpr>> Invariants;
@@ -7648,6 +7862,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     --LoopDepth;
     InitializedValues = Before;
     InitializationPathReachable = BeforeReachable;
+    testAtEveryIteration(std::move(CondCalls), Cond, Body);
     auto Loop = std::make_unique<VWhileStmt>(
         std::move(Cond), std::move(Invariants), std::move(Decreases),
         std::move(Body), WS->getBeginLoc());
@@ -7669,7 +7884,9 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     // observed. Preserve definite initialization from that mandatory pass.
     const std::set<std::string> AfterFirst = InitializedValues;
     const bool AfterFirstReachable = InitializationPathReachable;
-    auto Cond = convertLoopCondition(DS, DS->getCond());
+    std::vector<std::unique_ptr<VStmt>> CondCalls;
+    auto Cond = convertLoopCondition(DS, DS->getCond(),
+                                     Executable ? &CondCalls : nullptr);
     if (!Cond) {
       InitializedValues = Before;
       InitializationPathReachable = BeforeReachable;
@@ -7700,6 +7917,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     // after the mandatory first iteration.
     for (const auto &Stmt : Body)
       Out.push_back(cloneVStmt(Stmt.get()));
+    testAtEveryIteration(std::move(CondCalls), Cond, Body);
     auto Loop = std::make_unique<VWhileStmt>(
         std::move(Cond), std::move(Invariants), std::move(Decreases),
         std::move(Body), DS->getBeginLoc());
@@ -7727,7 +7945,9 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       leaveAutomaticScope(Out, FS->getEndLoc());
       return Out;
     }
-    auto Cond = convertLoopCondition(FS, FS->getCond());
+    std::vector<std::unique_ptr<VStmt>> CondCalls;
+    auto Cond = convertLoopCondition(FS, FS->getCond(),
+                                     Executable ? &CondCalls : nullptr);
     if (!Cond) {
       leaveAutomaticScope(Out, FS->getEndLoc());
       return Out;
@@ -7765,6 +7985,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     --LoopDepth;
     InitializedValues = BeforeLoop;
     InitializationPathReachable = BeforeLoopReachable;
+    testAtEveryIteration(std::move(CondCalls), Cond, Body);
     auto Loop = std::make_unique<VWhileStmt>(
         std::move(Cond), std::move(Invariants), std::move(Decreases),
         std::move(Body), FS->getBeginLoc());
@@ -8062,6 +8283,21 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       if (!ghostAssignmentAllowed(BO->getLHS())) {
         error(CurrentFn->Name + ": ghost code cannot modify executable state");
         return Out;
+      }
+      // Before C++17 the operands are unsequenced.
+      if (CallSink && !Ctx.getLangOpts().CPlusPlus17) {
+        const bool TargetReads = BO->getOpcode() == BO_Assign
+                                     ? locatingIsHeapSensitive(BO->getLHS())
+                                     : isHeapSensitive(BO->getLHS());
+        if ((containsModifyingCall(BO->getRHS()) && TargetReads) ||
+            (containsModifyingCall(BO->getLHS()) &&
+             isHeapSensitive(BO->getRHS()))) {
+          error(CurrentFn->Name +
+                ": before C++17 the order of an assignment's operands is "
+                "open, and a call in one may write what the other reads; "
+                "make the call in a statement of its own first");
+          return Out;
+        }
       }
       const auto *DirectLHS =
           dyn_cast<DeclRefExpr>(BO->getLHS()->IgnoreParenImpCasts());
