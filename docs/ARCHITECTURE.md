@@ -393,7 +393,10 @@ condition and its accessibility (`appendReferenceBindingCheck`) and binds the
 address to a fresh pointer `__subobject_N` with two companions,
 `__subobject_N.__lo` and `.__hi`, the bytes of the array it comes from or
 else of the field or record; elsewhere, as in a condition or a contract, it
-is the address alone. `VFunction::BoundedPointers` names the pointers with
+is the address alone. In an operand that `&&`, `||`, or `?:` evaluates only
+on its own path, these statements are that path's (`convertOnPaths`, under
+Modular Exec Calls), so `i < 8 && &r->buf[i] == q` asserts nothing of `i`
+where `i >= 8`. `VFunction::BoundedPointers` names the pointers with
 companions. `propagateSubobjectBounds` (`Transform/SubobjectBounds.cpp`) runs
 on the converted body: every pointer variable assigned a value rooted at a
 bounded pointer (through steps, casts, and conditionals, `pointerBound`) is
@@ -2629,7 +2632,52 @@ carry one-based iteration numbers at the original source location.
 
 ## Modular Exec Calls
 
-`ASTConverter` lowers contracted **exec** calls to `VCallStmt` nodes. Nested calls in expressions (e.g. `return f(g(x))`) are flattened into a sequence of calls with temporaries (`__nested_N`) so `Passivize::emitCallStmt` can apply callee `cppverify::pre`/`cppverify::post` at each site.
+`ASTConverter` lowers contracted **exec** calls to `VCallStmt` nodes, in every
+expression position. While a statement or a condition of executable code is
+converted, its calls go to a call sink (`CallSink`, beside `SubobjectSink`):
+each becomes a `VCallStmt` into a fresh temporary `__call_N` before the
+statement (a condition's before the `VIfStmt`), its arguments lowered as a
+call statement's are (`convertExecCallArgs`, nested calls into `__nested_N`),
+and the expression reads the temporary; a `CallExpr` converted twice within a
+statement, as an index the binding check reads again, calls once
+(`HoistedCalls`). So `Passivize::emitCallStmt` applies callee
+`cppverify::pre`/`cppverify::post` at each site.
+
+- **Paths.** An operand that `&&`, `||`, or `?:` evaluates only on its own
+  path is converted with both sinks pointed at a list of its own
+  (`convertOnPaths`). When that list stays empty the operator is the
+  expression it always was; otherwise it becomes statements, `t = A; if (t)
+  { stmts; t = B; }` (`if (!t)` for `||`) or `c = C; if (c) { stmts; r = T; }
+  else { stmts; r = F; }`, for an integer, Boolean, or pointer result (one
+  with dynamic provenance excepted), and the expression reads `t` or `r`.
+  The first operand or condition is saved before the path's statements run.
+- **Loop conditions.** A loop whose condition makes calls becomes `while
+  (true) { calls; if (!cond) break; body }`, as CIL normalizes loops for
+  Frama-C, so the calls run at every test, after the invariants hold at the
+  head and before the condition; a `do` loop's first iteration stays before
+  it, and a `continue` re-enters at the head (a `for` runs its increment
+  first).
+- **Order.** Hoisting runs each call before the rest of its full-expression,
+  one of the orders C++ allows, so every allowed order must give the same
+  result. Where C++ leaves the order open (the operands of a binary operator
+  other than `&&`, `||`, `,`, and assignment; a subscript's base and index;
+  call arguments; before C++17 an assignment's two sides), a modifying call
+  in one operand (`containsModifyingCall`: its callee has
+  `cppverify::modifies`, a pointer or reference parameter, or is a non-const
+  member function) beside an evaluation a call may change in the other
+  (`isHeapSensitive`: a load, a reference, an addressable local, another
+  call; for an assignment's target only what locating it reads,
+  `locatingIsHeapSensitive`) is a conversion error at the expression. An
+  assignment whose target makes a call saves its right operand in
+  `__value_N` before converting the target, so the value is read, and
+  checked, before the target's calls run, as C++17 sequences them. Frama-C
+  keeps such orders as CIL `UnspecifiedSequence` statements with the reads
+  and writes of each part and checks them access by access under
+  `-unspecified-access`; the rule here is per call, coarser but needing no
+  read sets.
+- A call whose result is a record is lowered only as a statement, a whole
+  initializer, assignment, or return value; one that returns nothing only
+  as a statement.
 
 At each call the passivizer:
 
