@@ -134,7 +134,7 @@ int Counter::doubled() const
 {
   return n + get();
 }
-// CHECK-DAG: error: Counter::doubled: executable call is unsupported in this expression context: get
+// CHECK-DAG: Verified: Counter::doubled [backend=z3]
 
 // Calls on a local object, through a pointer, through a reference, and on
 // a member of an object.
