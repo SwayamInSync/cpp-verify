@@ -704,13 +704,17 @@ what an invariant reads is in bounds and initialized there. Initialization
 cannot be stated in a contract, so this is how a loop that fills local
 storage knows what it has written. A store through local or dynamic storage
 sets its cell's initialization bit, so it modifies the initialization heap
-(`collectModified`), whose head version only grows: no lifetime begins or
-ends in a loop (the converter rejects addressable declarations, allocation,
-and deallocation there, and `startsLifetime` withholds the fact from a loop
-that starts one), so the head assumes `forall a. init_entry[a] ->
-init_head[a]`, triggered by reads of the head version
-(`initializationKept`). Nothing frames the rest, since no claim needs a cell
-to be uninitialized. Before 0.2 the head kept the initialization heap from
+(`collectModified`), whose head version only grows, and only where the
+loop writes: no lifetime begins or ends in a loop (the converter rejects
+addressable declarations, allocation, and deallocation there, and
+`startsLifetime` withholds the fact from a loop that starts one). When the
+loop's write regions are all single cells, the frame that makes the value
+heap a chain of stores, the head's initialization heap is the same chain
+(`initializeCells`): each cell's bit becomes `init_entry[c] || w` for a
+fresh `w`, and every other address keeps its bit. Otherwise the head
+assumes `forall a. init_entry[a] -> init_head[a]`, triggered by reads of the
+head version (`initializationKept`), and nothing frames the rest, since no
+claim needs a cell to be uninitialized. Before 0.2 the head kept the initialization heap from
 before the loop, and every iteration after the first saw the storage the
 earlier ones wrote as uninitialized. Dafny checks an invariant's
 well-formedness once, in the head's arbitrary state, from the invariants
@@ -789,9 +793,18 @@ out-parameter with `initialized_ptr` at its exact address
 model), and `abstractValidity` keeps `initialized_ptr` on tracked storage
 instead of taking it as true. At a call, `initializesActuals` asks whether
 an out-parameter's argument is tracked in the caller; then, after the
-footprints are havocked, the initialization heap gets a fresh version that
-keeps every initialized address, the postconditions are assumed (with the
-generated `initialized_ptr` ones), and each postcondition's `initialization`
+footprints are havocked, the initialization heap changes where the value
+heap does. A callee initializes storage only by storing to it, and each of
+its stores lies in its footprints, so when those are single cells
+(`havocFootprints` returns them) each cell's bit becomes `before[c] || w`
+for a fresh `w` (`initializeCells`) and every other address keeps its bit;
+a callee that writes nothing changes none. One whose footprints are ranges,
+regions, or the whole heap gives the heap a fresh version that keeps every
+initialized address (`initializationKept`), a quantifier: in the ULEB128
+case study, the postcondition query of `roundtrip_uleb128`, after a call
+that initializes `*consumed`, took 41 s with it instead of 3.3 s on Linux,
+and timed out on a three-core macOS runner. The postconditions are then
+assumed (with the generated `initialized_ptr` ones), and each postcondition's `initialization`
 checks, built with the callee's out-parameters and substituted at the
 arguments, are assumed after them with the call's origin. `collectModified`
 counts such a call in a loop as modifying the initialization heap.
