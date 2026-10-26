@@ -5536,8 +5536,9 @@ public:
   /// (with ActualCounts) in the caller's state: each one it may write gets
   /// unknown contents, as a chain of stores when all are cells, and every
   /// other cell keeps its value; a callee whose writes are not stated, or
-  /// not known, may write the whole heap.
-  void
+  /// not known, may write the whole heap. Returns the cells it writes when
+  /// those are all it writes.
+  std::optional<std::vector<std::unique_ptr<VExpr>>>
   havocFootprints(PassiveProgram &P,
                   std::map<std::string, std::string> &Renames,
                   const VFunction &Callee,
@@ -5636,10 +5637,12 @@ public:
     }
     const bool OnlyCells =
         llvm::all_of(CallRegions, [](const Region &R) { return R.Cell; });
+    std::vector<std::unique_ptr<VExpr>> Cells;
     if (CanFrameRegions && OnlyCells) {
       // Each cell gets an unknown value and every other cell keeps its own.
       std::string PreviousHeap = EntryHeap;
       for (const Region &R : CallRegions) {
+        Cells.push_back(cloneVExpr(R.Lo.get()));
         std::string NextHeap = bump(VHeapName);
         auto Fresh =
             std::make_unique<VVarExpr>(bump("__call_heap_value"), *R.Cell, Loc);
@@ -5655,13 +5658,16 @@ public:
       emitPassive(P, PassiveStmt::Assume,
                   heapFrame(EntryHeap, NextHeap, CallRegions, Loc));
       Renames[VHeapName] = NextHeap;
+      return std::nullopt;
     } else if ((!ActualModifies.empty() && !CanFrameExactly) ||
                HasImplicitHeapEffect) {
       Renames[VHeapName] = bump(VHeapName);
+      return std::nullopt;
     } else if (CanFrameExactly) {
       std::string PreviousHeap = EntryHeap;
       for (const auto &M : ActualModifies) {
         const auto *L = static_cast<const VLoadExpr *>(M.get());
+        Cells.push_back(cloneVExpr(L->Ptr.get()));
         std::string NextHeap = bump(VHeapName);
         auto Fresh =
             std::make_unique<VVarExpr>(bump("__call_heap_value"), L->Ty, Loc);
@@ -5672,6 +5678,31 @@ public:
         PreviousHeap = NextHeap;
       }
       Renames[VHeapName] = PreviousHeap;
+    }
+    return Cells;
+  }
+
+  /// The initialization heap Final after writes to Cells alone, from
+  /// Previous: each may become initialized, none stops being, and every
+  /// other address keeps its state.
+  void initializeCells(PassiveProgram &P, std::string Previous,
+                       const std::string &Final,
+                       const std::vector<const VExpr *> &Cells,
+                       const char *Written, const VExpr *Guard,
+                       SourceLocation Loc) {
+    for (size_t I = 0; I != Cells.size(); ++I) {
+      const std::string Next =
+          I + 1 == Cells.size() ? Final : bump(VInitializationHeapName);
+      auto Was = std::make_unique<VLoadExpr>(cloneVExpr(Cells[I]),
+                                             VType::makeBool(), Loc, Previous);
+      auto Wrote =
+          std::make_unique<VVarExpr>(bump(Written), VType::makeBool(), Loc);
+      emitPassive(P, PassiveStmt::Assume,
+                  std::make_unique<VHeapStoreExpr>(
+                      Previous, Next, cloneVExpr(Cells[I]),
+                      makeOr(std::move(Was), std::move(Wrote), Loc), Loc),
+                  Guard, Loc);
+      Previous = Next;
     }
   }
 
@@ -6160,17 +6191,27 @@ public:
       }
     }
 
-    havocFootprints(P, Renames, *Callee, ActualModifies, ActualCounts, ParamMap,
-                    Ctx, EntryHeap, HasImplicitHeapEffect, C.Loc);
+    auto WrittenCells =
+        havocFootprints(P, Renames, *Callee, ActualModifies, ActualCounts,
+                        ParamMap, Ctx, EntryHeap, HasImplicitHeapEffect, C.Loc);
     // Storage the caller tracks, passed to an out-parameter, may be
-    // initialized by the call; what was initialized stays so.
+    // initialized by the call, only where it writes; what was initialized
+    // stays so.
     const bool InitializesActuals = initializesActuals(*Callee, ParamMap);
-    if (InitializesActuals) {
+    if (InitializesActuals && (!WrittenCells || !WrittenCells->empty())) {
       const std::string Before = Renames[VInitializationHeapName];
       const std::string After = bump(VInitializationHeapName);
       Renames[VInitializationHeapName] = After;
-      emitPassive(P, PassiveStmt::Assume,
-                  initializationKept(Before, After, C.Loc), nullptr, C.Loc);
+      if (WrittenCells) {
+        std::vector<const VExpr *> Cells;
+        for (const auto &Cell : *WrittenCells)
+          Cells.push_back(Cell.get());
+        initializeCells(P, Before, After, Cells, "__call_initialized", nullptr,
+                        C.Loc);
+      } else {
+        emitPassive(P, PassiveStmt::Assume,
+                    initializationKept(Before, After, C.Loc), nullptr, C.Loc);
+      }
     }
     // A constructor initializes every leaf of its object, as its exit checks
     // show, so the caller's storage holds an initialized object after it.
@@ -6948,11 +6989,24 @@ public:
         emitInactiveFrame(P, PreviousName, HeadName, typeForName(Name),
                           Enters.get(), W.Loc);
         // Without a lifetime starting in it, a loop only initializes
-        // storage: what was initialized before it still is at its head.
-        if (Name == VInitializationHeapName && !StartsLifetime)
-          emitPassive(P, PassiveStmt::Assume,
-                      initializationKept(PreviousName, HeadName, W.Loc),
-                      Active.get(), W.Loc);
+        // storage, where it writes: what was initialized before it still is
+        // at its head.
+        if (Name == VInitializationHeapName && !StartsLifetime) {
+          if (Framed && !WriteRegions.empty() &&
+              llvm::all_of(WriteRegions, [](const Region &R) {
+                return R.Cell.has_value();
+              })) {
+            std::vector<const VExpr *> Cells;
+            for (const Region &R : WriteRegions)
+              Cells.push_back(R.Lo.get());
+            initializeCells(P, PreviousName, HeadName, Cells,
+                            "__loop_initialized", Active.get(), W.Loc);
+          } else {
+            emitPassive(P, PassiveStmt::Assume,
+                        initializationKept(PreviousName, HeadName, W.Loc),
+                        Active.get(), W.Loc);
+          }
+        }
         if (Framed && Name == VHeapName) {
           const bool OnlyCells =
               !WriteRegions.empty() &&
