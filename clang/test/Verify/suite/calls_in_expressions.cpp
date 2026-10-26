@@ -525,4 +525,38 @@ int order_index(int *a, int *p)
   return a[*p + add_one(p)];
 }
 // ORDER-DAG: error: order_index: C++ leaves the order of these operands open
+
+// The array a subscript reads, beside a call in its index.
+struct Buf {
+  int *data;
+};
+
+int order_base(Buf *b, int *p)
+  cv::pre(b != nullptr && cv::valid(b->data, 4))
+  cv::pre(p != nullptr && 0 <= *p && *p < 3)
+  cv::modifies(*p)
+{
+  return b->data[add_one(p)];
+}
+// ORDER-DAG: error: order_base: C++ leaves the order of these operands open
+
+struct Tally {
+  int n;
+
+  // Without cppverify::modifies, it may write its object.
+  int bump()
+    cv::pre(n < 1000)
+  {
+    n = n + 1;
+    return n;
+  }
+};
+
+int order_default_member(Tally &t)
+  cv::pre(0 <= t.n && t.n < 100)
+  cv::modifies(t.n)
+{
+  return pair(t.bump(), t.n);
+}
+// ORDER-DAG: error: order_default_member: C++ leaves the order of these call arguments open
 #endif
