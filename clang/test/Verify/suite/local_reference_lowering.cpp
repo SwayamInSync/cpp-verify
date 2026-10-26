@@ -46,8 +46,13 @@ int local_reference_lowering(int value)
 // PASSIVE: alias_1
 // PASSIVE: __cppverify_reference_provenance_1_1
 // PASSIVE: __cppverify_stack_provenance_1_1
-// PASSIVE: heap_store
-// PASSIVE: forall __init_address
+// PASSIVE: heap_store __heap_1 -> __heap_2
+// PASSIVE: heap_store __heap_init_1 -> __heap_init_2
+// PASSIVE-NEXT: alias_1
+// PASSIVE-NEXT: ||
+// PASSIVE-NEXT: load
+// PASSIVE-NEXT: alias_1
+// PASSIVE-NEXT: __call_initialized_1
 // PASSIVE: initialized_ptr
 // PASSIVE-NEXT: alias_1
 // PASSIVE: load
