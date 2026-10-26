@@ -3,6 +3,7 @@
 // RUN: FileCheck %s --check-prefix=SOUND < %t
 // RUN: %cpp-verify --lower-only --dump-ir=1 %s -- -Wno-tautological-compare 2>&1 | FileCheck %s --check-prefix=VCR
 // RUN: not %cpp-verify --jobs=1 --no-check-ub %s -- -Wno-tautological-compare 2>&1 | FileCheck %s --check-prefix=NOUB
+// RUN: %cpp-verify --lower-only --dump-ir=2 %s -- -Wno-tautological-compare 2>&1 | FileCheck %s --check-prefix=PASSIVE
 
 // Binding a reference or passing a pointer reads nothing ([dcl.init.ref],
 // [conv.lval]); only reading an indeterminate value is undefined
@@ -481,6 +482,60 @@ int maybe_zeroed()
   return a[0];
 }
 // CHECK: error: verification failed: maybe_zeroed {{.*}}initialization@[[@LINE-2]]:3
+
+// A call that may write a cell keeps it initialized.
+int kept_through_call(int n)
+  cv::pre(n >= 0)
+{
+  int a[1];
+  a[0] = 7;
+  zero_each(a[0], n);
+  return a[0];
+}
+// CHECK: Verified: kept_through_call
+
+// One that writes nothing changes no initialization.
+void leave(int &x)
+  cv::post(true)
+{
+}
+// CHECK: Verified: leave
+
+int kept_by_leave()
+  cv::post(cv::result == 3)
+{
+  int a[1];
+  a[0] = 3;
+  leave(a[0]);
+  return a[0];
+}
+// CHECK: Verified: kept_by_leave
+
+// So does a loop that writes it.
+void count_up_into(int &out, int n)
+  cv::pre(0 <= n && n < 100)
+  cv::modifies(out)
+  cv::post(out == n)
+{
+  out = 0;
+  for (int i = 0; i < n; i = i + 1)
+    cv::invariant(0 <= i && i <= n && out == i)
+    cv::decreases(n - i)
+  {
+    out = out + 1;
+  }
+}
+// CHECK: Verified: count_up_into
+// VCR-LABEL: fn count_up_into
+// VCR-NEXT: param out out
+// Only the cell the loop writes may become initialized at its head.
+// PASSIVE-LABEL: passive count_up_into
+// PASSIVE: heap_store __heap_init_1 -> __heap_init_2
+// PASSIVE-NEXT: out_0
+// PASSIVE-NEXT: ||
+// PASSIVE-NEXT: load
+// PASSIVE-NEXT: out_0
+// PASSIVE-NEXT: __loop_initialized_1
 
 // Calls in a loop: each keeps what was initialized before it.
 int init_in_loop()
