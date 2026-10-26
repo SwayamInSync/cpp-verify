@@ -25,4 +25,4 @@ int unsupported_order_dependent_arguments(int *p)
   return add_values(*p, set_and_return(p, 7));
 }
 
-// VERIFY-DAG: error: unsupported_order_dependent_arguments: call arguments have order-dependent heap evaluations
+// VERIFY-DAG: error: unsupported_order_dependent_arguments: C++ leaves the order of these call arguments open
