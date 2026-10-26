@@ -122,6 +122,50 @@ examined. Once a ``constexpr`` function has executable ``cppverify::pre``/``cppv
 clauses, it remains a modular executable function: calls must satisfy its
 preconditions and cannot be used as pure contract expressions.
 
+A lifted function's parameter or result that is a reference to a ``const``
+integer stands for the value it refers to, as in ``constexpr const T
+&larger(const T &a, const T &b)``. One that cannot be lifted (it reads memory
+through a pointer, say) is reported, and a function that applies it is
+``Unresolved`` with reason ``construct.unsupported``, naming it.
+
+The standard library's functions are not lifted: each library writes them
+its own way, and a proof would depend on which one. ``std::min`` and
+``std::max`` of two integers, enumerations, or ``bool`` mean what the
+standard says they mean, in contracts and in code alike: ``std::max(a, b)``
+is ``a`` unless ``a < b``, and ``std::min(a, b)`` is ``a`` unless ``b < a``.
+
+.. code-block:: cpp
+
+   #include <algorithm>
+
+   int lower(int a, int b)
+     cv::post(cv::result == std::min(a, b))
+     cv::post(cv::result <= a && cv::result <= b)
+   {
+     int m = std::min(a, b);
+     return m;
+   }
+
+   long widened(int x)
+     cv::post(cv::result >= 3)
+   {
+     long w = std::max<long>(x, 3L);
+     return w;
+   }
+
+.. code-block:: text
+
+   Verified: lower [backend=z3]
+   Verified: widened [backend=z3]
+
+Any other function of the standard library, such as ``std::clamp``, is an
+error naming it (``std::clamp is not modeled: of the standard library, the
+verifier knows std::min and std::max of two integers``), as is a reference
+bound to the result of ``std::max``. Before 0.2, ``std::min`` and
+``std::max`` in a contract, and every ``constexpr`` helper that could not be
+lifted, ended ``Unresolved: obligation lowering failed: f (missing spec
+definition: fn_...)``.
+
 Preconditions, ``cppverify::old(parameter)``, and a parameter named in a postcondition
 all denote the argument's entry value, as in ACSL, even when the callee
 reassigns its by-value parameter; a caller can therefore use the
