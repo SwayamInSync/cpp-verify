@@ -174,8 +174,8 @@ C++ feature boundaries
        recursion through a
        function that allocates or frees storage, and general link-time
        summaries. A function whose proof obligations would take more than
-       ``--max-query-nodes`` expression nodes (32 million by default) is
-       ``Unresolved`` with reason ``query.size-limit``: each check repeats
+       ``--max-query-nodes`` expression nodes (4 million by default) is
+       ``Unresolved`` with reason ``query.size-limit``: each check restates
        every assumption before it, so a long function with many checks grows
        fastest. See the memory limits of :doc:`tooling`.
    * - Storage
