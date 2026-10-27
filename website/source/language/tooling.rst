@@ -202,9 +202,10 @@ Versions
 
 ``cpp-verify --version`` shows the cpp-verify release and repository revision, the LLVM
 release it is built on, and each backend: the Z3 linked into it, and the cvc5 and Lean
-(``lake``) it finds on ``PATH`` with their versions. cvc5 is tested with 1.1.2 and also
-works with 1.4: a query that needs a constant array, as every one over sets, multisets,
-and maps does, sets cvc5's ``arrays-exp`` option itself, which 1.4 requires. Every Lean
+(``lake``) it finds on ``PATH`` with their versions. cvc5 is tested with 1.1.2, the
+release Ubuntu 24.04 packages, and 1.4.2, the newest: CI runs the test suite with each.
+A query that needs a constant array, as every one over sets, multisets, and maps does,
+sets cvc5's ``arrays-exp`` option itself, which 1.4 requires. Every Lean
 project pins ``leanprover/lean4:v4.35.0``, and certification runs that toolchain whatever
 elan's default is: through elan it names the pin, since elan otherwise picks a toolchain
 by the working directory, and a ``lake`` outside elan must report the pinned Lean. A

@@ -587,7 +587,9 @@ in time, so it stops where it would on an idle machine
 
 **cvc5 1.4.** Every query over sets, multisets, and maps failed with cvc5 1.4,
 which requires extended arrays for constant arrays; such a query now enables
-them itself (:doc:`language/tooling`).
+them itself. CI now runs the test suite with cvc5 1.1.2 and 1.4.2, and
+``cpp-verify --version`` names that range and reads the version of cvc5 1.4,
+which it showed as ``unknown`` (:doc:`language/tooling`).
 
 **Lean proofs stay with their goals.** A goal of a Lean project was named by
 its function and its position among the function's obligations, and a spec
