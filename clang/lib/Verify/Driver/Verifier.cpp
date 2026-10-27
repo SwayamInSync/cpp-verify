@@ -2886,6 +2886,9 @@ class Verifier {
     std::set<std::string> Assumes;
   };
   std::map<std::string, DefinedContract> DefinedContracts;
+  /// Where each function is declared, by its name, for the records of
+  /// --contracts-out.
+  std::map<std::string, SourceLocation> DeclLocOf;
   /// Where the verification of each reported function spent its time, in
   /// nanoseconds, and of the run, for --time-report.
   struct FunctionTime {
@@ -3977,7 +3980,7 @@ public:
             Diags.push_back({VerifyDiagnostic::Trusted,
                              Fn->Name + " (contract assumed, not verified)",
                              Fn->DeclLoc, Fn->Name});
-          else if (!Fn->UnsupportedConstruct) {
+          else if (!Fn->UnsupportedConstruct && Opts.ContractsOut.empty()) {
             Diags.push_back(
                 {VerifyDiagnostic::Warning,
                  Fn->Name + " has a contract but no definition, so its callers "
@@ -5370,7 +5373,7 @@ public:
         continue;
       // In a run over several files, a contract declared here without a
       // definition holds for now: another file may verify it.
-      if (Opts.CrossFile && Fn->IsExternalContract &&
+      if (deferredContracts() && Fn->IsExternalContract &&
           !Fn->UnsupportedConstruct && !Fn->IsProof) {
         Externals.emplace(Fn->Identity, Fn->Name);
         continue;
@@ -5747,7 +5750,7 @@ public:
     // declared here without a definition that its callees' contracts rest
     // on, through the contracts verified here; each contract verified here
     // is offered to the other files with what it rests on.
-    if (Opts.CrossFile) {
+    if (deferredContracts()) {
       std::map<std::string, std::vector<size_t>> VerdictsOf;
       for (const auto &[Index, Identity, Callees] : CallDependencies)
         VerdictsOf[Identity].push_back(Index);
@@ -5769,6 +5772,7 @@ public:
         }
       }
       for (const auto &Fn : Functions) {
+        DeclLocOf.emplace(Fn->Name, Fn->DeclLoc);
         if (Fn->IsSpec || Fn->IsProof || Fn->IsExternalContract ||
             Fn->Uninterpreted || !ContractTexts.count(Fn->Identity))
           continue;
@@ -6394,6 +6398,76 @@ public:
                                       D.K == VerifyDiagnostic::Exported));
   }
 
+  /// A contract declared without a definition waits for the files verified
+  /// with this one, in one run or by checkContracts.
+  bool deferredContracts() const {
+    return Opts.CrossFile || !Opts.ContractsOut.empty();
+  }
+
+  /// For checkContracts: tags each proof that rests on contracts declared
+  /// without a definition ([assumes=...]), and writes what this file
+  /// verifies and assumes to Opts.ContractsOut.
+  bool recordContracts() {
+    auto key = [&](const std::string &Identity) {
+      auto It = ContractTexts.find(Identity);
+      return Identity + "\n" + (It != ContractTexts.end() ? It->second : "");
+    };
+    const SourceManager &SM = Ctx.getSourceManager();
+    const std::string File =
+        std::string(SM.getFileEntryRefForID(SM.getMainFileID())->getName());
+    llvm::json::Array Defined;
+    for (const auto &[Identity, Contract] : DefinedContracts) {
+      llvm::json::Array Assumes;
+      for (const std::string &Assumed : Contract.Assumes)
+        Assumes.push_back(key(Assumed));
+      Defined.push_back(
+          llvm::json::Object{{"key", key(Identity)},
+                             {"name", Contract.Name},
+                             {"established", Contract.Established},
+                             {"assumes", std::move(Assumes)}});
+    }
+    llvm::json::Array Proofs;
+    for (const auto &[Index, Assumed] : ExternalOf) {
+      VerifyDiagnostic &D = Diags[Index];
+      if (Assumed.empty() || !D.isProof())
+        continue;
+      llvm::json::Array Assumes;
+      std::string Names;
+      for (const std::string &Identity : Assumed) {
+        Assumes.push_back(llvm::json::Object{{"key", key(Identity)},
+                                             {"name", Externals.at(Identity)}});
+        Names += (Names.empty() ? "" : ",") + Externals.at(Identity);
+      }
+      D.Message += " [assumes=" + Names + "]";
+      std::string Location;
+      SourceLocation Loc = D.Loc;
+      if (Loc.isInvalid())
+        if (auto It = DeclLocOf.find(D.FunctionName); It != DeclLocOf.end())
+          Loc = It->second;
+      if (const PresumedLoc Where = SM.getPresumedLoc(Loc); Where.isValid())
+        Location = std::string(Where.getFilename()) + ":" +
+                   std::to_string(Where.getLine()) + ":" +
+                   std::to_string(Where.getColumn());
+      Proofs.push_back(llvm::json::Object{{"function", D.FunctionName},
+                                          {"location", Location},
+                                          {"assumes", std::move(Assumes)}});
+    }
+    llvm::json::Object Record{{"schema", "cppverify.contracts/1"},
+                              {"file", File},
+                              {"defined", std::move(Defined)},
+                              {"proofs", std::move(Proofs)}};
+    std::error_code EC;
+    llvm::raw_fd_ostream Out(Opts.ContractsOut, EC, llvm::sys::fs::OF_Text);
+    if (EC) {
+      Diags.push_back(
+          {VerifyDiagnostic::Error,
+           "cannot write " + Opts.ContractsOut + ": " + EC.message()});
+      return false;
+    }
+    Out << llvm::json::Value(std::move(Record)) << "\n";
+    return true;
+  }
+
   /// Whether --quiet leaves \p D out: what needs no attention.
   bool quieted(const VerifyDiagnostic &D) const {
     return Opts.Quiet && (D.isProof() || D.K == VerifyDiagnostic::Lowered ||
@@ -6596,82 +6670,200 @@ bool verify::verifyTranslationUnit(ASTContext &Ctx, llvm::raw_ostream &OS,
     Opts.CrossFile->State->Files.push_back(std::move(Report));
     return Ok;
   }
+  if (!Opts.ContractsOut.empty())
+    Ok = V.recordContracts() && Ok;
   V.printDiagnostics(OS);
   if (Opts.TimeReport)
     V.printTimeReport(OS);
   return Ok;
 }
 
-unsigned CrossFileRun::finish(llvm::raw_ostream &OS, VerifySummary *Summary) {
-  // A contract is established by its definitions' proofs once the contracts
-  // they rest on are, starting from none: one that rests on itself through
-  // other files is not. A contract defined in several files (inline in a
-  // header) must hold in each.
-  std::map<std::string, std::vector<const CrossFileContract *>> Definitions;
-  for (const CrossFileReport &File : State->Files)
-    for (const auto &[Key, Contract] : File.Defined)
-      Definitions[Key].push_back(&Contract);
+/// The contracts verified in the files of a run, or in files verified apart,
+/// settled together. A contract is established by its definitions' proofs
+/// once the contracts they rest on are, starting from none, so one that rests
+/// on itself through other files is not; a contract defined in several files
+/// (inline in a header) must hold in each.
+class ContractSettlement {
+  std::map<std::string, std::vector<CrossFileContract>> Definitions;
   std::set<std::string> Established;
-  for (bool Changed = true; Changed;) {
-    Changed = false;
-    for (const auto &[Key, Contracts] : Definitions)
-      if (!Established.count(Key) &&
-          llvm::all_of(Contracts, [&](const CrossFileContract *Contract) {
-            return Contract->Established &&
-                   llvm::all_of(Contract->Assumes, [&](const std::string &K) {
-                     return Established.count(K) != 0;
-                   });
-          })) {
-        Established.insert(Key);
-        Changed = true;
-      }
+
+  static std::string identityOf(const std::string &Key) {
+    return Key.substr(0, Key.find('\n') + 1);
   }
-  auto describe = [&](const CrossFileReport &File, const std::string &Key) {
-    auto Name = File.Names.find(Key);
-    std::string Text =
-        "the contract of " + (Name != File.Names.end()
-                                  ? Name->second
-                                  : Key.substr(0, Key.find('\n')));
+
+public:
+  void define(const std::string &Key, const CrossFileContract &Contract) {
+    Definitions[Key].push_back(Contract);
+  }
+
+  void settle() {
+    for (bool Changed = true; Changed;) {
+      Changed = false;
+      for (const auto &[Key, Contracts] : Definitions)
+        if (!Established.count(Key) &&
+            llvm::all_of(Contracts, [&](const CrossFileContract &Contract) {
+              return Contract.Established &&
+                     llvm::all_of(Contract.Assumes, [&](const std::string &K) {
+                       return Established.count(K) != 0;
+                     });
+            })) {
+          Established.insert(Key);
+          Changed = true;
+        }
+    }
+  }
+
+  bool established(const std::string &Key) const {
+    return Established.count(Key) != 0;
+  }
+
+  /// Whether some file defines the function of \p Key, whatever contract its
+  /// definition is verified against.
+  bool defined(const std::string &Key) const {
+    auto It = Definitions.lower_bound(identityOf(Key));
+    return It != Definitions.end() &&
+           llvm::StringRef(It->first).starts_with(identityOf(Key));
+  }
+
+  /// What a proof that rests on the contract of \p Key, the function \p Name,
+  /// relies on, when it is not established.
+  std::string describe(const std::string &Key, const std::string &Name) const {
+    const std::string Text = "the contract of " + Name;
     auto Defined = Definitions.find(Key);
     if (Defined == Definitions.end()) {
       // A definition verified against another contract does not match.
-      const std::string Identity = Key.substr(0, Key.find('\n') + 1);
       for (const auto &[Other, Contracts] : Definitions)
-        if (llvm::StringRef(Other).starts_with(Identity))
+        if (llvm::StringRef(Other).starts_with(identityOf(Key)))
           return Text + ", which is not established: its definition in " +
-                 Contracts.front()->File +
+                 Contracts.front().File +
                  " is verified against another contract";
       return Text + " (no definition; mark it [[cppverify::trusted]] to "
                     "assume it), which is not established";
     }
-    for (const CrossFileContract *Contract : Defined->second)
-      if (!Contract->Established)
-        return Text + ", which its verification in " + Contract->File +
+    for (const CrossFileContract &Contract : Defined->second)
+      if (!Contract.Established)
+        return Text + ", which its verification in " + Contract.File +
                " does not establish";
-    return Text + ", whose proof in " + Defined->second.front()->File +
+    return Text + ", whose proof in " + Defined->second.front().File +
            " rests in turn on contracts not established";
+  }
+};
+
+unsigned verify::checkContracts(const std::vector<std::string> &Paths,
+                                llvm::raw_ostream &OS) {
+  struct Proof {
+    std::string Function;
+    std::string Location;
+    std::vector<std::pair<std::string, std::string>> Assumes;
   };
-  // Whether some file defines the function of a contract's key, whatever
-  // contract its definition is verified against.
-  auto defined = [&](const std::string &Key) {
-    const std::string Identity = Key.substr(0, Key.find('\n') + 1);
-    auto It = Definitions.lower_bound(Identity);
-    return It != Definitions.end() &&
-           llvm::StringRef(It->first).starts_with(Identity);
+  ContractSettlement Contracts;
+  std::vector<Proof> Proofs;
+  unsigned Errors = 0;
+  auto strings = [](const llvm::json::Array *Array) {
+    std::set<std::string> Strings;
+    if (Array)
+      for (const llvm::json::Value &Value : *Array)
+        if (std::optional<llvm::StringRef> String = Value.getAsString())
+          Strings.insert(String->str());
+    return Strings;
+  };
+  for (const std::string &Path : Paths) {
+    auto Buffer = llvm::MemoryBuffer::getFile(Path);
+    if (!Buffer) {
+      OS << "error: cannot read " << Path << ": " << Buffer.getError().message()
+         << "\n";
+      ++Errors;
+      continue;
+    }
+    llvm::Expected<llvm::json::Value> Parsed =
+        llvm::json::parse((*Buffer)->getBuffer());
+    const llvm::json::Object *Record = Parsed ? Parsed->getAsObject() : nullptr;
+    if (!Record || Record->getString("schema") != "cppverify.contracts/1") {
+      if (!Parsed)
+        llvm::consumeError(Parsed.takeError());
+      OS << "error: " << Path
+         << " is not a contracts record (cppverify.contracts/1)\n";
+      ++Errors;
+      continue;
+    }
+    const std::string File =
+        Record->getString("file").value_or(llvm::StringRef(Path)).str();
+    if (const llvm::json::Array *Defined = Record->getArray("defined"))
+      for (const llvm::json::Value &Value : *Defined) {
+        const llvm::json::Object *Entry = Value.getAsObject();
+        if (!Entry || !Entry->getString("key"))
+          continue;
+        CrossFileContract Contract;
+        Contract.Name = Entry->getString("name").value_or("").str();
+        Contract.File = File;
+        Contract.Established = Entry->getBoolean("established").value_or(false);
+        Contract.Assumes = strings(Entry->getArray("assumes"));
+        Contracts.define(Entry->getString("key")->str(), Contract);
+      }
+    if (const llvm::json::Array *Rests = Record->getArray("proofs"))
+      for (const llvm::json::Value &Value : *Rests) {
+        const llvm::json::Object *Entry = Value.getAsObject();
+        if (!Entry)
+          continue;
+        Proof &P = Proofs.emplace_back();
+        P.Function = Entry->getString("function").value_or("").str();
+        P.Location = Entry->getString("location").value_or("").str();
+        if (const llvm::json::Array *Assumes = Entry->getArray("assumes"))
+          for (const llvm::json::Value &Assumed : *Assumes)
+            if (const llvm::json::Object *Contract = Assumed.getAsObject())
+              P.Assumes.emplace_back(
+                  Contract->getString("key").value_or("").str(),
+                  Contract->getString("name").value_or("").str());
+      }
+  }
+  Contracts.settle();
+  unsigned Unsettled = 0;
+  for (const Proof &P : Proofs) {
+    std::string Missing;
+    for (const auto &[Key, Name] : P.Assumes)
+      if (!Contracts.established(Key))
+        Missing +=
+            (Missing.empty() ? "" : "; ") + Contracts.describe(Key, Name);
+    if (Missing.empty())
+      continue;
+    ++Unsettled;
+    if (!P.Location.empty())
+      OS << P.Location << ": ";
+    OS << "error: the proof of " << P.Function << " relies on " << Missing
+       << "\n";
+  }
+  OS << "Contracts: " << Proofs.size()
+     << (Proofs.size() == 1 ? " proof rests" : " proofs rest")
+     << " on contracts of other files, " << Unsettled << " on one not "
+     << "established\n";
+  return Errors + Unsettled;
+}
+
+unsigned CrossFileRun::finish(llvm::raw_ostream &OS, VerifySummary *Summary) {
+  ContractSettlement Contracts;
+  for (const CrossFileReport &File : State->Files)
+    for (const auto &[Key, Contract] : File.Defined)
+      Contracts.define(Key, Contract);
+  Contracts.settle();
+  auto describe = [&](const CrossFileReport &File, const std::string &Key) {
+    auto Name = File.Names.find(Key);
+    return Contracts.describe(Key, Name != File.Names.end()
+                                       ? Name->second
+                                       : Key.substr(0, Key.find('\n')));
   };
   unsigned Failures = 0;
   for (const CrossFileReport &File : State->Files) {
     std::vector<bool> Demoted(File.Lines.size());
     for (size_t I = 0; I != File.Lines.size(); ++I)
       for (const std::string &Key : File.Lines[I].Assumes)
-        if (!Established.count(Key)) {
+        if (!Contracts.established(Key)) {
           Demoted[I] = true;
           break;
         }
     bool Ok = File.Ok;
     for (size_t I = 0; I != File.Lines.size(); ++I) {
       const CrossFileLine &Line = File.Lines[I];
-      if (!Line.UnlessDefined.empty() && defined(Line.UnlessDefined))
+      if (!Line.UnlessDefined.empty() && Contracts.defined(Line.UnlessDefined))
         continue;
       // A finding rests on the facts of its query, as its proof does.
       if (Line.FindingOf && Demoted[*Line.FindingOf] && !Line.FoundAtEntry)
@@ -6685,7 +6877,7 @@ unsigned CrossFileRun::finish(llvm::raw_ostream &OS, VerifySummary *Summary) {
       Ok = false;
       std::string Missing;
       for (const std::string &Key : Line.Assumes)
-        if (!Established.count(Key))
+        if (!Contracts.established(Key))
           Missing += (Missing.empty() ? "" : "; ") + describe(File, Key);
       std::string Text = Line.Demoted;
       for (size_t At = Text.find(ContractPlaceholder); At != std::string::npos;
