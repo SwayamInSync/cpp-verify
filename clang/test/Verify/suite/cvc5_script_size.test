@@ -1,0 +1,8 @@
+# REQUIRES: cvc5
+# An SMT-LIB script states each term in full, a subterm that goals share at
+# each of its places, so cvc5 refuses at 3000 nodes a module that Z3, which
+# shares terms as the verifier does, proves (obligation_size_limit.cpp).
+# RUN: not %cpp-verify --jobs=1 --backend=cvc5 --max-query-nodes=3000 \
+# RUN:   %S/obligation_size_limit.cpp -- 2>&1 | FileCheck %s
+# CHECK: Unresolved: steps [backend=cvc5] [reason=query.size-limit] (its SMT-LIB script would state more than 3000 expression nodes, the limit (--max-query-nodes): a script states a subterm that goals share at each of its places)
+# CHECK: Verified: small [backend=cvc5]

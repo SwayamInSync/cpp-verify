@@ -19,7 +19,9 @@ may be stacked (in Markdown, ``<!-- cppverify-example: ... -->``):
     .. cppverify-example: fails NAME ...   these functions fail with a
                                            counterexample
     .. cppverify-example: unresolved NAME ...
-                                           these stay unresolved
+                                           these stay unresolved; one too
+                                           large to build (query.size-limit)
+                                           fails to lower too
     .. cppverify-example: rejects          the example is an error: cpp-verify
                                            reports one and exits non-zero
 
@@ -49,6 +51,8 @@ VERDICT = re.compile(
     r" (.+?)(?=\s+\[|\s+\(|$)")
 FAILED = re.compile(r"error: (verification failed|spec [\w ]+? failed): "
                     r"(.+?)(?=\s+\[|\s+\(|$)")
+TOO_LARGE = re.compile(r"error: \w+ lowering failed: (\S+) .*"
+                       r"\[reason=query\.size-limit\]")
 LOCATION = re.compile(r"^\S+\.(?:cpp|h):\d+:\d+: ")
 DIAGNOSTIC = re.compile(r"^(?:error|warning): ")
 
@@ -213,7 +217,15 @@ def check(cpp_verify, job):
     if "--backend=lean" not in arguments:
         lowering = [a for a in arguments if not a.startswith("--lean-")]
         code, output = run(cpp_verify, source, ["--lower-only", *lowering], 300)
-        if code is None or code != 0 or "error:" in output:
+        # A function refused for its size builds no obligations to lower.
+        refused, errors = set(), []
+        for line in output.splitlines():
+            match = TOO_LARGE.search(line)
+            if match and match.group(1) in unresolved:
+                refused.add(match.group(1))
+            elif "error:" in line:
+                errors.append(line)
+        if code is None or errors or (code != 0 and not refused):
             return f"{where}: the example does not compile:\n{output.strip()[:1500]}", False
     code, output = run(cpp_verify, source,
                        [f"--jobs={SOLVER_JOBS}", *arguments], 900)
