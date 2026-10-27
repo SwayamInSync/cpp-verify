@@ -157,6 +157,7 @@ and `docs/UB-CHECKING.md`.
 ./build/bin/cpp-verify --timeout=10000 --solver-rlimit=2000000 file.cpp
 ./build/bin/cpp-verify --int-encoding=bitvector file.cpp         # auto (default) | integer | bitvector
 ./build/bin/cpp-verify --diagnostics-format=json file.cpp        # JSON Lines, for editors/CI
+./build/bin/cpp-verify --diagnostics-format=sarif file.cpp       # SARIF 2.1.0, for code scanning
 ./build/bin/cpp-verify --obligation-out=goals.cpv file.cpp       # backend-neutral archive
 ./build/bin/cpp-verify --dump-ir=1,2,3,4 file.cpp                # VCR, passive, Obligation IR, Z3
 ```
