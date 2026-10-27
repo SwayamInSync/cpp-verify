@@ -176,7 +176,10 @@ The rules follow C++:
 
 - forming the pointer requires the object it points into: ``r`` non-null, and
   each index inside its array, so ``&r->buf[i]`` with ``i == 8`` is an error
-  even though ``r->buf + 8`` is not;
+  even though ``r->buf + 8`` is not. A pointer formed in an operand that
+  ``&&``, ``||``, or ``?:`` evaluates only on its own path is formed, and
+  checked, only there: ``i < 8 && &r->buf[i] == q`` and ``i < 8 ? &r->buf[i]
+  : nullptr`` need nothing of ``i`` when ``i >= 8``;
 - a step may reach one past the end of the array, and an access may not;
 - a pointer difference such as ``q - r->buf`` requires both pointers in one
   array, so ``&r->head - r->buf`` is an error;
@@ -586,8 +589,10 @@ object twice.
 
 Not yet supported, each an error naming the function: virtual functions,
 member functions of a class with bases, destructors, and conversion
-functions. A member call inside an expression (``return n + get();``) is
-unsupported as a free function's is; assign its result first. A class
+functions. A member call may stand inside an expression (``return n +
+get();``), as any call may (:doc:`functions-loops`, "Calls in expressions");
+one that is not ``const`` may write its object, so it cannot share an
+expression with a read of that object, whose order C++ leaves open. A class
 template's member functions are verified in each specialization (`Class
 templates`_).
 

@@ -262,6 +262,177 @@ Spec functions stay total, as in Verus and ACSL: a spec's division by zero is
 0, so applying a spec in a contract adds no check, and
 ``cppverify::recommends`` remains a warning (see :doc:`ghost-proofs`).
 
+Calls in expressions
+--------------------
+
+A call of a function with a contract may stand anywhere an expression may:
+an operand, a condition, an index, an argument of another call, a return
+value, a loop condition. It is checked as a call statement is: its
+preconditions are asserted with its arguments, it changes only its
+``cppverify::modifies`` footprints, and its postconditions describe its
+result. Each call runs where C++ evaluates it:
+
+- before whatever reads its result, and a condition's calls before the
+  branch the condition chooses;
+- the second operand of ``&&`` and ``||``, and each branch of ``?:``, only
+  on its own path, after the first operand or the condition is evaluated, so
+  a callee's precondition needs to hold only where the call is made;
+- a loop condition's calls at every test of the condition, the last one
+  included, after the invariants hold at the head.
+
+.. code-block:: cpp
+
+   int inc(int x)
+     cv::pre(x < 1000)
+     cv::post(cv::result == x + 1)
+   {
+     return x + 1;
+   }
+
+   int sq(int x)
+     cv::pre(-1000 <= x && x <= 1000)
+     cv::post(cv::result == x * x)
+   {
+     return x * x;
+   }
+
+   int sum_sq(int a, int b)
+     cv::pre(-100 <= a && a <= 100 && -100 <= b && b <= 100)
+     cv::post(cv::result == a * a + b * b)
+   {
+     return sq(a) + sq(b);
+   }
+
+   int guarded(int x)
+     cv::pre(-2000 <= x && x <= 2000)
+     cv::post(cv::result == (-1000 <= x && x <= 1000 && x * x > 4))
+   {
+     if (-1000 <= x && x <= 1000 && sq(x) > 4)
+       return 1;
+     return 0;
+   }
+
+   int unguarded(int x)
+     cv::pre(-2000 <= x && x <= 2000)
+   {
+     if (sq(x) > 4 && x <= 1000)
+       return 1;
+     return 0;
+   }
+
+   int count_up(int n)
+     cv::pre(0 <= n && n < 2000)
+     cv::post(cv::result == n)
+   {
+     int i = 0;
+     while (inc(i) <= n)
+       cv::invariant(0 <= i && i <= n)
+       cv::decreases(n - i)
+     {
+       i = i + 1;
+     }
+     return i;
+   }
+
+.. code-block:: text
+
+   Verified: inc [backend=z3]
+   Verified: sq [backend=z3]
+   Verified: sum_sq [backend=z3]
+   Verified: guarded [backend=z3]
+   calls.cpp:38:7: error: verification failed: unguarded [...::precondition@38:7]
+     (counterexample: x [type=i32] = -1001; trace: call.sq@38:7 arg0=-1001)
+   calls.cpp:48:10: error: verification failed: count_up [...::precondition@48:10]
+     (counterexample: ..., i [type=i32] = 1000, n [type=i32] = 1000;
+     trace: loop.entry@48:3 -> loop.inductive iteration@48:3 condition=true
+     -> call.inc@48:10 arg0=1000)
+
+``guarded`` calls ``sq`` only where ``-1000 <= x && x <= 1000`` holds, so
+``sq``'s precondition holds at every call it makes. ``unguarded`` calls
+``sq`` before it tests ``x``, at ``x = -1001`` among others. ``count_up``
+calls ``inc`` at every test of its condition: with ``n = 1000``, the test
+that would end the loop calls ``inc(1000)``, which ``inc``'s precondition
+excludes. A ``for`` loop's increment and a ``continue`` behave the same way:
+the increment's calls run at the end of each iteration, and the condition's
+again after a ``continue``.
+
+C++ leaves the order of most operands open: the two operands of ``+`` or
+``<``, a subscript's array and index, the arguments of a call. The verifier
+runs calls first, in one order, so that order must not matter. A call that
+may write memory (its callee has a ``cppverify::modifies``, a pointer or
+reference parameter, or is a member function that is not ``const``) next to
+an operand that reads memory, or makes another call, is an error:
+
+.. cppverify-example: label add_one
+
+.. code-block:: cpp
+
+   int add_one(int *p)
+     cv::pre(p != nullptr && *p < 1000)
+     cv::modifies(*p)
+     cv::post(*p == cv::old(*p) + 1 && cv::result == *p)
+   {
+     *p = *p + 1;
+     return *p;
+   }
+
+.. cppverify-example: with add_one
+.. cppverify-example: rejects
+
+.. code-block:: cpp
+
+   int sum_with(int *p)
+     cv::pre(p != nullptr && 0 <= *p && *p < 100)
+     cv::modifies(*p)
+   {
+     return add_one(p) + *p;
+   }
+
+.. code-block:: text
+
+   order.cpp:18:10: error: sum_with: C++ leaves the order of these operands open, and a call in one may write what the other reads; make the call in a statement of its own first
+      18 |   return add_one(p) + *p;
+         |          ^~~~~~~~~~~~~~~
+
+Where ``*p`` is ``v`` before it, ``add_one(p) + *p`` is ``2 * v + 2`` when a
+compiler evaluates the call first and ``2 * v + 1`` when it reads ``*p``
+first. Write ``int a = add_one(p);`` first and use ``a + *p``, which says
+which one is meant.
+
+An assignment evaluates its right operand first (C++17), so a call in the
+target runs after the value is read, and a call in the value runs before
+the target is located:
+
+.. cppverify-example: with add_one
+
+.. code-block:: cpp
+
+   void store_old(int *a, int *p)
+     cv::pre(cv::valid(a, 4) && p != nullptr && 0 <= *p && *p < 2)
+     cv::modifies(*p, a[0 : 4])
+     cv::post(a[cv::old(*p) + 1] == cv::old(*p))
+   {
+     a[add_one(p)] = *p;
+   }
+
+.. code-block:: text
+
+   Verified: store_old [backend=z3]
+
+Before C++17 an assignment's operands are unsequenced too: with
+``--extra-arg=-std=c++14``, ``store_old`` is ``error: store_old: before
+C++17 the order of an assignment's operands is open, and a call in one may
+write what the other reads; make the call in a statement of its own
+first``.
+
+A call that returns nothing is made as a statement of its own
+(``note(x);``), and one that returns a record as a statement or a whole
+initializer, assignment, or return value (``Pt p = make(x);``,
+``return make(x);``): a record result read in a larger expression
+(``make(x).y``) is still ``executable call is unsupported in this expression
+context``. Before 0.2, every call inside a larger expression was that error,
+and the file stopped.
+
 Templates
 ---------
 

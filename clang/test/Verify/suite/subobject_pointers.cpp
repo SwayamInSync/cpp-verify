@@ -404,6 +404,39 @@ void write_frame(Ring *r)
   q[0] = 7;
 }
 // CHECK-DAG: error: verification failed: write_frame [{{.*}}::frame@[[@LINE-2]]:8]
+
+// An operand that `&&`, `||`, or `?:` evaluates only on a path of its own
+// forms its pointer, and checks it, only there.
+bool same_slot(const Ring *r, int i, const int *q)
+  cppverify::pre(r != nullptr && 0 <= i)
+  cppverify::post(!cppverify::result || i < 8)
+{
+  bool same = i < 8 && &r->buf[i] == q;
+  bool other = i >= 8 || &r->buf[i] != q;
+  return same && !other;
+}
+// CHECK-DAG: Verified: same_slot [backend=z3]
+
+void put_slot(Ring *r, int i, int v)
+  cppverify::pre(r != nullptr && 0 <= i)
+  cppverify::modifies(r->buf[0 : 8])
+  cppverify::post(i >= 8 || r->buf[i] == v)
+{
+  int *q = i < 8 ? &r->buf[i] : nullptr;
+  if (q != nullptr)
+    *q = v;
+}
+// CHECK-DAG: Verified: put_slot [backend=z3]
+
+// The pointer chosen keeps the bounds of its own path.
+void put_past_slot(Ring *r, int i, int v)
+  cppverify::pre(r != nullptr && 0 <= i && i < 8)
+  cppverify::modifies(r->buf[0 : 8])
+{
+  int *q = i < 4 ? &r->buf[i] : &r->buf[7];
+  q[1] = v;
+}
+// CHECK-DAG: error: verification failed: put_past_slot [{{.*}}::bounds@[[@LINE-2]]:3
 #else
 // A pointer that left the function would lose its bounds.
 struct Holder {

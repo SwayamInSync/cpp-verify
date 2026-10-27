@@ -216,6 +216,50 @@ Without a shared measure such proofs are a circle, and every verdict on it
 is `Unresolved` with reason `proof.cycle`. Frames (`cppverify::reads`) are never used
 this way.
 
+### Calls in expressions
+
+A call of a function with a contract may stand anywhere an expression may
+(an operand, a condition, an index, an argument, a return value, a loop
+condition) and is checked as a call statement is: preconditions asserted,
+footprints changed, postconditions assumed of its result. It runs where C++
+evaluates it: before what reads its result, a condition's calls before the
+branch they choose, the second operand of `&&` and `||` and each branch of
+`?:` only on its own path, and a loop condition's calls at every test, the
+last one included, after the invariants hold at the head (the loop is
+`while (true) { calls; if (!cond) break; body }`, as CIL normalizes it for
+Frama-C). An operand on a path of its own also forms its pointers into
+objects, and checks them, only there.
+
+```cpp
+int sq(int x)
+  cppverify::pre(-1000 <= x && x <= 1000)
+  cppverify::post(cppverify::result == x * x)
+{
+  return x * x;
+}
+
+int guarded(int x)
+  cppverify::pre(-2000 <= x && x <= 2000)
+  cppverify::post(cppverify::result == (-1000 <= x && x <= 1000 && x * x > 4))
+{
+  if (-1000 <= x && x <= 1000 && sq(x) > 4)   // sq's precondition holds
+    return 1;
+  return 0;
+}
+```
+
+C++ leaves the order of most operands open (a binary operator's, a
+subscript's array and index, a call's arguments, and before C++17 an
+assignment's two sides), and the verifier checks one order, so a call that
+may write memory (a callee with `cppverify::modifies`, a pointer or
+reference parameter, or a non-const member function) beside an operand
+that reads memory or makes a call is an error: `add_one(p) + *p` is one,
+with a different value in each order. An assignment evaluates its right
+operand first, as C++17 sequences it, so `a[add_one(p)] = *p` stores the
+old `*p`. A call returning a record is made only as a statement or a whole
+initializer, assignment, or return value, and one returning nothing only as
+a statement.
+
 ## Loop Contracts: invariant / decreases
 
 <!-- cppverify-example: fragment -->

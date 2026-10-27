@@ -40,6 +40,13 @@ class ASTConverter {
   /// only a value, as in a condition or a contract.
   std::vector<std::unique_ptr<VStmt>> *SubobjectSink = nullptr;
   unsigned SubobjectPointerId = 0;
+  /// Where the statement or condition being lowered in executable code puts
+  /// the calls its expressions make, each into a temporary, in evaluation
+  /// order; null where no executable call can be made.
+  std::vector<std::unique_ptr<VStmt>> *CallSink = nullptr;
+  /// The temporary of each call already put there, so converting an
+  /// expression twice calls once.
+  std::map<const CallExpr *, std::string> HoistedCalls;
   std::vector<ConversionError> Errors;
   /// The innermost declaration, statement, or expression being converted,
   /// where an error is reported unless it names a place of its own.
@@ -174,8 +181,15 @@ private:
   std::unique_ptr<VExpr> convertCollection(const Expr *E, bool &Handled);
   bool checkLoopTermination(const Stmt *Loop, bool HasMeasure);
   /// The condition of \p Loop: the constant false when it never repeats.
-  std::unique_ptr<VExpr> convertLoopCondition(const Stmt *Loop,
-                                              const Expr *Cond);
+  /// Its calls go to Calls, which is null where none can be made.
+  std::unique_ptr<VExpr>
+  convertLoopCondition(const Stmt *Loop, const Expr *Cond,
+                       std::vector<std::unique_ptr<VStmt>> *Calls = nullptr);
+  /// A loop whose condition makes calls tests it inside its body, so they
+  /// run at every test.
+  void testAtEveryIteration(std::vector<std::unique_ptr<VStmt>> Calls,
+                            std::unique_ptr<VExpr> &Cond,
+                            std::vector<std::unique_ptr<VStmt>> &Body);
   bool isTriggerMarked(const Expr *E) const;
   void markTrigger(std::unique_ptr<VExpr> &Result, const Expr *E);
   /// A modifies footprint: an lvalue, the cells p[lo : n], or the bytes of a
@@ -304,6 +318,30 @@ private:
   void convertExecCallArgs(const CallExpr *CE,
                            std::vector<std::unique_ptr<VStmt>> &Prelude,
                            std::vector<std::unique_ptr<VExpr>> &Args);
+  /// An executable call in an expression: a call statement into a temporary
+  /// in the call sink, and a read of the temporary.
+  std::unique_ptr<VExpr> hoistExecCall(const CallExpr *CE,
+                                       const FunctionDecl *Callee);
+  /// A call of a contracted executable function, which may be hoisted.
+  bool isExecCall(const Stmt *S) const;
+  bool containsExecCall(const Stmt *S) const;
+  /// A call that may write memory: its callee states a frame or takes a
+  /// pointer or reference.
+  bool containsModifyingCall(const Stmt *S) const;
+  /// An evaluation a call's writes may change: a load, a reference, an
+  /// addressable local, or another executable call.
+  bool isHeapSensitive(const Stmt *S) const;
+  /// Two unsequenced operands of which one may write what the other reads,
+  /// so that their order, which C++ leaves open, matters.
+  bool orderDependent(const Expr *A, const Expr *B) const;
+  /// Whether locating the object \p E designates reads memory: the pointers
+  /// and indices on the way are read, the object itself is not.
+  bool locatingIsHeapSensitive(const Expr *E) const;
+  /// `&&`, `||`, and `?:` in a statement. An operand evaluated only on a
+  /// path of its own whose calls or checks need statements gets them on that
+  /// path: the operator becomes statements, and the value a read of their
+  /// result.
+  std::unique_ptr<VExpr> convertOnPaths(const Expr *E);
   void convertExecCallArg(const Expr *E, const ParmVarDecl *Formal,
                           std::vector<std::unique_ptr<VStmt>> &Prelude,
                           std::unique_ptr<VExpr> &Out);

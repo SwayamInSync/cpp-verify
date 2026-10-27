@@ -161,7 +161,8 @@ C++ feature boundaries
        functions (:doc:`structs`), function and class templates in each
        specialization the translation unit instantiates
        (:doc:`functions-loops`, :doc:`structs`),
-       overloads, namespaces, contracts, direct calls, and
+       overloads, namespaces, contracts, direct calls anywhere in an
+       expression or condition (:doc:`functions-loops`), and
        direct and mutual recursion, also through stores to pointer and
        reference parameters and through automatic objects, with mutual
        recursion among functions of one kind (spec, proof, or executable).
@@ -395,6 +396,16 @@ such as ``cppverify::modifies(p[i])`` and ``cppverify::modifies(p->field)``, ran
 ``valid`` extent or one object. A pointer-taking callee without ``cppverify::modifies``
 that may write memory forgets the whole value heap, as does a region
 footprint under ``--no-check-ub``.
+
+A call inside an expression runs where C++ evaluates it: a short-circuit
+operand's or a ``?:`` branch's call only on its path, and a loop
+condition's call at every test. Where C++ leaves the order of operands open
+(the operands of most operators, a subscript's array and index, a call's
+arguments, and, before C++17, an assignment's two sides), a call that may
+write memory beside an operand that reads memory or makes a call is an
+error, since the verifier checks one order. Calls returning records are
+made as statements, whole initializers, assignments, or return values
+only.
 
 A callee ``valid(q, length)`` extent can be instantiated from an argument
 only after proving that its elements lie in one of the caller's objects, such

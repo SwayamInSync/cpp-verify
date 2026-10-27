@@ -301,7 +301,10 @@ buffer (``&a[2]``) was an error too. These are supported now. A pointer into
 a record may address only the array, field, or record it points into:
 accesses, steps, pointer differences, and call arguments through it are
 checked against that subobject, so ``q[8]`` past ``r->buf`` is an error,
-though it lies in ``*r`` (:doc:`language/structs`).
+though it lies in ``*r``. One formed in an operand that ``&&``, ``||``, or
+``?:`` evaluates only on its own path is checked only there, so ``i < 8 &&
+&r->buf[i] == q`` needs nothing of ``i`` when ``i >= 8``
+(:doc:`language/structs`).
 
 **Records through references.** A reference to a record (``Counter &c``,
 ``const Counter &c``), as a parameter or a local, was an error
@@ -397,6 +400,18 @@ stores none in memory, returns none, frees none, and passes one only to
 callees that keep none. The callee writes only its footprints in the local,
 and every field of a record must be initialized, since the callee reads it as
 initialized (:doc:`language/structs`).
+
+**Calls in expressions.** A call was supported only as a statement or a whole
+initializer, assignment, return value, or argument; ``return inc(x) * 2;``,
+``if (try_get(out, ok))``, ``while (next(i) < n)``, and ``sq(a) + sq(b)``
+stopped the file with ``executable call is unsupported in this expression
+context``. A call of a function whose result is a scalar or a pointer may now
+stand anywhere in an expression or condition, and runs where C++ evaluates
+it: a ``&&``, ``||``, or ``?:`` operand's call only on its path, a loop
+condition's at every test. Where C++ leaves the order of operands open, a call
+that may write what another operand reads is an error at the expression,
+and an assignment's right operand is evaluated before its target, as C++17
+says (:doc:`language/functions-loops`).
 
 Running cpp-verify
 ~~~~~~~~~~~~~~~~~~
