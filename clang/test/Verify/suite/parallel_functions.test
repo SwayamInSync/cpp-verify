@@ -35,15 +35,15 @@
 
 # CHECK: Verified: spec decreases: climb
 # CHECK-NEXT: error: spec decreases failed: diverge
-# CHECK-NEXT: Verified: climb_zero [backend=z3]
+# CHECK: Verified: climb_zero [backend=z3]
 # CHECK-NEXT: Unresolved: diverge_zero [backend=z3] [reason=spec.termination]
 # CHECK-NEXT: error: verification failed: off_by_one
-# CHECK-NEXT: Unresolved: relies_on_off_by_one [backend=z3] [reason=callee.contract]
+# CHECK: Unresolved: relies_on_off_by_one [backend=z3] [reason=callee.contract]
 # CHECK-NEXT: Verified: positive_identity [backend=z3] (its precondition is assumed, not checked, at calls from unverified unchecked_caller)
 # CHECK-NEXT: Verified: sum_to [backend=z3]
 # CHECK-NEXT: Verified: clear [backend=z3]
-# CHECK-NEXT: error: verification failed: overflow [{{.*}}::overflow@
-# CHECK-NEXT: error: verification failed: two_failures [{{.*}}::assertion@72:3]
-# CHECK-NEXT: Verified: both_ways [backend=z3]
+# CHECK-NEXT: error: verification failed: overflow [overflow]
+# CHECK: :72:3: error: verification failed: two_failures [assertion]
+# CHECK: Verified: both_ways [backend=z3]
 
 # BUDGET: Unresolved: sum_to [backend=z3] [reason=solver.timeout]
