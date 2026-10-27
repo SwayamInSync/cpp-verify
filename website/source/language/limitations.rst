@@ -202,10 +202,13 @@ C++ feature boundaries
      - ``if`` (including C++17 initializer), ``while``, ``for`` (with or
        without a condition), contracted ``do`` loops, condition declarations,
        ``switch`` (fallthrough, a ``default`` anywhere, GNU case ranges, an
-       init statement), blocks, ``return``, ``break``, and ``continue``
+       init statement), range-based ``for`` over an array (with
+       ``cppverify::index``), blocks, ``return``, ``break``, and ``continue``
        anywhere, and comma expressions as statements.
-     - Range-``for``, ``goto``, labels, and a ``case`` label inside another
-       statement of its switch (Duff's device). An
+     - A range-based ``for`` over a class (through ``begin`` and ``end``),
+       over an array of arrays, or over a global array that is not a constant
+       table, ``goto``, labels, and a ``case`` label inside another statement of its
+       switch (Duff's device). An
        expression or statement nested more than 256 operations
        deep (a sum of 300 terms, say) is reported where it is, and the file
        stops: ``error: total: the expression at 4:276 nests more than 256
