@@ -464,10 +464,12 @@ Backends
        Not accepted with ``--backend=lean``, which runs no solver.
    * - ``--max-query-nodes=N``
      - The expression nodes the verifier may build for one function (default
-       32000000; ``0`` disables): its proof obligations, counted before they
-       are built, and the facts about the specs they apply, counted as they
-       are built. A function over it is ``Unresolved`` with reason
-       ``query.size-limit``, under every backend. See `Memory limits`_.
+       4000000; ``0`` disables): its proof obligations and the facts about the
+       specs they apply, counted as they are built, a shared node once. A
+       function over it is ``Unresolved`` with reason ``query.size-limit``,
+       under every backend; cvc5's scripts and archive records, which state
+       shared terms in full, are checked against it too. See
+       `Memory limits`_.
    * - ``--memory-limit=MB``
      - The megabytes the solvers may use (default 8192; ``0`` disables): Z3's
        queries together, and each cvc5 process. A query that reaches it is
@@ -608,10 +610,10 @@ Memory limits
 Two limits bound the memory verification takes:
 
 - ``--max-query-nodes`` bounds what the verifier builds for **one** function
-  (default 32,000,000 expression nodes): its proof obligations, and the facts
-  about the specs they apply. The obligations are counted before they are
-  built, so a function over the limit is refused before it takes the memory;
-  the facts are counted as they are built and stop at the limit.
+  (default 4,000,000 expression nodes): its proof obligations, and the facts
+  about the specs they apply. Both are counted as they are built and stop at
+  the limit, so a function over it ends before it takes the memory. A node
+  that several terms share is counted once, as it takes memory once.
 - ``--memory-limit`` bounds the solvers (default 8192 MB): Z3's queries
   together, since Z3 runs inside cpp-verify, and each cvc5 process on its
   own.
@@ -622,12 +624,13 @@ counterexample, and every function whose proof relies on its contract is
 
 The proof obligations of a function grow faster than its code. Each check is
 proved from everything before it (the preconditions, the statements, and the
-earlier checks), and its obligation repeats all of it, so a function whose
-checks follow many statements takes about their product. With two, four, and
-eight checks like the four below, the obligations take 3,405, 8,505, and
-25,425 nodes. With a limit of 2,000:
+earlier checks): its obligation states each as an assumption, sharing its
+terms with the other obligations, so a function whose checks follow many
+statements takes about their number times its checks' (not times their
+sizes). With two, four, and eight checks like the four below, the
+obligations take 259, 523, and 1,375 nodes. With a limit of 400:
 
-.. cppverify-example: flags --max-query-nodes=2000
+.. cppverify-example: flags --max-query-nodes=400
 .. cppverify-example: unresolved steps
 .. code-block:: cpp
 
@@ -649,19 +652,33 @@ eight checks like the four below, the obligations take 3,405, 8,505, and
 
 .. code-block:: text
 
-   steps.cpp:1:5: Unresolved: steps [backend=z3] [reason=query.size-limit] (the proof obligations would take at least 8505 expression nodes, more than the limit of 2000 (--max-query-nodes): each check repeats every assumption before it, so split the function or raise the limit)
+   steps.cpp:1:5: Unresolved: steps [backend=z3] [reason=query.size-limit] (the proof obligations would take at least 427 expression nodes, more than the limit of 400 (--max-query-nodes): each check repeats every assumption before it, so split the function or raise the limit)
 
-The count is exact: with ``--max-query-nodes=8505`` the function verifies.
-Under ``--lower-only`` the same is an error, ``Z3 lowering failed: steps``,
-since no obligations were built. A function split into functions with
+The count is where building stopped, so the function needs at least that
+many. Its obligations take 523 nodes, and the checks that a proof is not
+vacuous build programs of their own, the largest with 901: with
+``--max-query-nodes=901`` the function verifies. Under ``--lower-only`` the
+same is an error, ``Z3 lowering failed: steps``, since no obligations were
+built. A function split into functions with
 contracts keeps each one's obligations small: a call repeats the callee's
 contract, not its body.
 
-The default admits the largest function of the test suite, in the ULEB128
-case study (:doc:`../case-studies/llvm-uleb128`), whose obligations have 22.6
-million nodes. While obligations are built and checked, a node takes about
-400 bytes, so the default lets one function take up to about 13 GB; with more
-than one job, each job builds the obligations of its own function at once.
+The default admits the largest function of the test suite,
+``iterative_fibonacci`` in ``safe_fib.cpp`` (375,000 nodes, with the
+definitions of the specs it applies), ten times over; the ULEB128 case study
+(:doc:`../case-studies/llvm-uleb128`) takes under 200,000 a function. A node
+takes about 600 bytes, and Z3's encoding of it about five times that, so the
+default lets one function take up to about 12 GB; with more than one job,
+each job builds the obligations of its own function at once.
+
+An SMT-LIB script, which the cvc5 backend writes, and an archive record
+(``--obligation-out``) state each term in full: a subterm that several
+obligations share is written at each of its places, so they are larger than
+what is built. Each is checked against the same limit, as the nodes it
+would state: a module whose script would be larger is ``Unresolved`` with
+``query.size-limit`` under cvc5 (``its SMT-LIB script would state more than
+N expression nodes``), and one whose record would be larger is an error with
+``--obligation-out``.
 
 The facts about the specs a function applies include each spec's definition,
 unfolded as deep as its fuel. A spec that applies itself twice doubles with
@@ -753,7 +770,7 @@ Choosing the limits:
   builds one function's obligations at once, then the two limits.
 - Continuous integration with a memory allowance: give ``--memory-limit``
   the solvers' share, and ``--max-query-nodes`` the rest divided by
-  ``--jobs`` and by 400 bytes.
+  ``--jobs`` and by 3,000 bytes.
 
 Parallel solving and proof caching
 ----------------------------------
