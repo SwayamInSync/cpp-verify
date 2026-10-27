@@ -40,7 +40,6 @@ cppverify::proof void lemma_fact_base(int n)
   cppverify::ghost { cppverify::reveal_with_fuel(fact, 2); }
 }
 
-// VERIFY-DAG: spec axiom: triple
 // VERIFY-DAG: Verified: lemma_triple
 // VERIFY-DAG: Verified: client_reveal
 // VERIFY-DAG: Verified: client_hide
