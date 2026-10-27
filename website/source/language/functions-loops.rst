@@ -636,6 +636,55 @@ rest of the loop, and a ``continue`` goes to the condition, where the
 invariant must first hold. ``cppverify::ghost`` code cannot leave an
 executable loop.
 
+A range-based ``for`` loop over an array (a local array, an array member,
+a constant table) visits its elements in order. Its contract names the
+position, ``cppverify::index``, the number of elements before the current
+one, from 0 to the size; without a ``cppverify::decreases`` its measure is
+the number of elements left, since such a loop ends. The loop variable is a
+copy of the element or a reference to it:
+
+.. code-block:: cpp
+
+   struct Ring {
+     int buf[8];
+     int head;
+   };
+
+   int total(const Ring *r)
+     cv::pre(r != nullptr)
+     cv::pre(cv::forall(k, 0, 8, 0 <= r->buf[k] && r->buf[k] <= 10))
+     cv::post(0 <= cv::result && cv::result <= 80)
+   {
+     int s = 0;
+     for (const int &v : r->buf)
+       cv::invariant(0 <= s && s <= 10 * cv::index)
+       s = s + v;
+     return s;
+   }
+
+   void clear(Ring *r)
+     cv::pre(r != nullptr)
+     cv::modifies(r->buf[0 : 8])
+     cv::post(cv::forall(k, 0, 8, r->buf[k] == 0))
+   {
+     for (int &x : r->buf)
+       cv::invariant(cv::forall(k, 0, cv::index, r->buf[k] == 0))
+       x = 0;
+   }
+
+.. code-block:: text
+
+   Verified: total [backend=z3]
+   Verified: clear [backend=z3]
+
+C++ evaluates the range once and the verifier locates each element again, so
+a range located through a call, a pointer read from memory, or a variable
+the body may change is rejected: copy the pointer or index into a variable
+the body does not change. The contract holds at the head, where the loop
+variable is not declared, so it cannot name it. A range over a class,
+through its ``begin`` and ``end``, an array of arrays, and a global array
+that is not a constant table are not supported yet.
+
 A condition may declare a variable, ``while (int k = next(i))``: it is
 declared, and its value tested, at every test, so a loop's contract cannot
 name it. A ``for`` loop without a condition repeats until a ``break`` or
