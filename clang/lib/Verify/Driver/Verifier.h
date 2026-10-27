@@ -25,7 +25,9 @@ inline constexpr unsigned DefaultCollectionTimeoutMs =
 inline constexpr unsigned DefaultFunctionTimeoutMs =
     10 * DefaultSolverTimeoutMs;
 
-enum class DiagnosticFormat { Text, Json };
+/// How results are printed: text, JSON Lines (cppverify.diagnostic/2), or
+/// text with a GitHub workflow annotation after each error and warning.
+enum class DiagnosticFormat { Text, Json, GitHub };
 
 /// Which obligations of an unresolved module --lean-fallback exports.
 enum class LeanFallbackScope {
