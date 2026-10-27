@@ -746,6 +746,21 @@ state and ends the path; the frontend emits a `for` increment before it. BMC
 unrolling lowers `break` and `continue` to flag assignments that guard the
 remaining statements and the next iteration.
 
+**Exits the frontend lowers.** VCR's `break` and `continue` leave a
+`VWhileStmt`. Two exits have no loop to leave and are lowered to flags by
+`lowerExits` (`ASTConverter.cpp`), BMC's rule applied once: a `do` loop's
+first iteration, emitted before its `VWhileStmt` (`__do_break_N`,
+`__do_continue_N`; the loop runs under `!__do_break_N`), and a `switch`
+(`ASTConverter::convertSwitch`). A switch becomes its value
+`__switch_N`, a flag `__switch_entered_N` set once a label matches
+(`entered = entered || match`, `default` matching where no case does), and
+`__switch_break_N`; each label's statements run under `entered && !break`,
+the last under `!break` alone when there is a `default` label. The loops and
+switches a statement may leave form one stack (`EnclosingLoops`): a break
+leaves the innermost of either, a continue the innermost loop, and each
+records the values initialized on its paths, which the definite
+initialization after a `do` loop and a switch joins.
+
 **Enumeration ranges.** A machine value of an enumeration type without a
 fixed underlying type (`VType::EnumMin`, `EnumMax`) lies in its range, since
 a conversion into it is asserted. Each expression's definedness checks are
