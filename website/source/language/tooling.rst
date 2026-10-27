@@ -26,6 +26,7 @@ Standalone verifier
    cpp-verify --profile-quantifiers file.cpp
    cpp-verify --timeout=20000 file.cpp
    cpp-verify --confirm-bound=4 file.cpp
+   cpp-verify --max-failures=0 file.cpp
    cpp-verify --jobs=4 --proof-cache=.cppverify-cache file.cpp
    cpp-verify --solver-rlimit=500000 --max-query-nodes=50000 file.cpp
    cpp-verify --diagnostics-format=json file.cpp
@@ -803,6 +804,44 @@ skips it; only with the solver backends, since BMC unrolls already and Lean
 runs no solver): an execution that fails it, a proof that none does, or no
 failure within the bound. The search takes at most one query timeout. A loop without
 ``cppverify::decreases`` is noted too (see :doc:`functions-loops`).
+
+A function reports one failure: the first check that fails, in the order an
+execution meets them. ``--max-failures=N`` reports the first ``N``, and
+``--max-failures=0`` every one, each with its own counterexample and notes,
+as Dafny reports every failing assertion of a method (only with
+``--backend=z3``). A check after the first failure is solved in the
+executions that pass the failing checks before it, as Boogie assumes an
+assertion once it has checked it: its counterexample reaches it without
+failing an earlier check, and a check that fails only where an earlier one
+fails is not reported, since fixing that one fixes it. The summary still
+counts each function once:
+
+.. cppverify-example: flags --max-failures=0
+.. code-block:: cpp
+
+   namespace cv = cppverify;
+
+   int three_bugs(int x, int y)
+     cv::pre(x < 1000 && y < 1000)
+     cv::post(cv::result > 0)
+   {
+     int q = 10 / y;
+     int r = x + q;
+     return r;
+   }
+
+.. code-block:: text
+
+   $ cpp-verify --max-failures=0 three_bugs.cpp
+   three_bugs.cpp:7:3: error: verification failed: three_bugs [fn_...::division-by-zero@7:3] (counterexample: x [ssa=x_0] [type=i32] = 0, y [ssa=y_0] [type=i32] = 0) [backend=z3] [reason=counterexample]
+   three_bugs.cpp:8:3: error: verification failed: three_bugs [fn_...::overflow@8:3] (counterexample: q [ssa=q_1] [type=i32] = -1, x [ssa=x_0] [type=i32] = -2147483648, y [ssa=y_0] [type=i32] = -9) [backend=z3] [reason=counterexample]
+   three_bugs.cpp:5:23: error: verification failed: three_bugs [fn_...::postcondition@5:23] (counterexample: result [ssa=__result_1] [type=i32] = 0, q [ssa=q_1] [type=i32] = 0, r [ssa=r_1] [type=i32] = 0, x [ssa=x_0] [type=i32] = 0, y [ssa=y_0] [type=i32] = 11; trace: return.return@9:3 value=0) [backend=z3] [reason=counterexample]
+   Summary: 1 failed in 0.0 s
+
+Without the option only the first line is printed. The overflow's
+counterexample divides by ``y = -9``, not by zero, and the postcondition's
+returns from an execution with no undefined operation. In JSON each failure
+is a record of its own.
 
 Each non-success verification result also carries a stable reason code. Current
 codes include ``counterexample``, ``solver.timeout``, ``solver.unknown``,
