@@ -4,6 +4,7 @@
 #include "ChildProcess.h"
 #include "ObligationSerialization.h"
 #include "ObligationSimplify.h"
+#include "QueryDump.h"
 #include "TaskGroup.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
@@ -2406,6 +2407,18 @@ static bool printsSequencesReversed(const std::string &SolverPath) {
   return Reversed;
 }
 
+/// The options cvc5 runs with, as names and values; a flag has no value.
+static std::vector<std::pair<std::string, std::string>>
+cvc5Options(unsigned TimeoutMs, unsigned ResourceLimit) {
+  std::vector<std::pair<std::string, std::string>> Options = {
+      {"seed", "0"}, {"sat-random-seed", "0"}, {"dump-models", ""}};
+  if (TimeoutMs != 0)
+    Options.push_back({"tlimit-per", std::to_string(TimeoutMs)});
+  if (ResourceLimit != 0)
+    Options.push_back({"rlimit-per", std::to_string(ResourceLimit)});
+  return Options;
+}
+
 static SolverRun runCVC5(const std::string &SolverPath, llvm::StringRef Script,
                          unsigned TimeoutMs, unsigned ResourceLimit,
                          uint64_t MemoryLimitMB,
@@ -2452,12 +2465,9 @@ static SolverRun runCVC5(const std::string &SolverPath, llvm::StringRef Script,
   }
   llvm::FileRemover RemoveError(ErrorPath);
 
-  std::vector<std::string> OwnedArgs = {SolverPath, "--lang=smt2", "--seed=0",
-                                        "--sat-random-seed=0", "--dump-models"};
-  if (TimeoutMs != 0)
-    OwnedArgs.push_back("--tlimit-per=" + std::to_string(TimeoutMs));
-  if (ResourceLimit != 0)
-    OwnedArgs.push_back("--rlimit-per=" + std::to_string(ResourceLimit));
+  std::vector<std::string> OwnedArgs = {SolverPath, "--lang=smt2"};
+  for (const auto &[Name, Value] : cvc5Options(TimeoutMs, ResourceLimit))
+    OwnedArgs.push_back("--" + Name + (Value.empty() ? "" : "=" + Value));
   OwnedArgs.push_back(InputPath.str().str());
   llvm::SmallVector<llvm::StringRef, 8> Args;
   for (const std::string &Argument : OwnedArgs)
@@ -2774,8 +2784,21 @@ CVC5VerifyBackend::verifyQuery(const ObligationModule &Module,
       }
       Budget = static_cast<unsigned>(Remaining);
     }
+    QueryDump Dump;
+    if (queryDumpEnabled()) {
+      // The command line's options as commands, so that `cvc5 FILE` runs
+      // the query as cpp-verify did.
+      std::string Options;
+      for (const auto &[Name, Value] : cvc5Options(Budget, ResourceLimit))
+        Options += "(set-option :" + Name + " " +
+                   (Value.empty() ? "true" : Value) + ")\n";
+      Dump.start(&Module, Query, "cvc5", "at " + SolverPath, Options, *Script);
+    }
     SolverRun Run = runCVC5(SolverPath, *Script, Budget, ResourceLimit,
                             MemoryLimitMB, &Cancelled);
+    Dump.finish(
+        Run.Output ? llvm::StringRef(*Run.Output).split('\n').first.trim().str()
+                   : "no answer (" + Run.Failure.Message + ")");
     auto giveUp = [&](llvm::StringRef Outcome) {
       RefinementDecision Exhausted = Refinement.exhausted(Outcome);
       Result.Reason = Exhausted.Reason;
