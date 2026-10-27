@@ -203,6 +203,9 @@ Full table:
    * - ``cppverify::result``
      - In ``cppverify::post``
      - Return value
+   * - ``cppverify::index``
+     - In a range-based ``for`` loop's contract
+     - Number of elements before the current one
    * - ``cppverify::spec T f(...)``
      - Decl
      - Spec function
