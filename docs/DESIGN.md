@@ -1160,6 +1160,19 @@ invariant, a `cppverify::check`, ghost code, a spec function) the marker is its
 builtin spec, whose body is `true`, so a claim made with it would hold without
 meaning anything: under `--check-ub` it is an error for that function.
 
+### 1a. Constant tables
+
+A `const` or `constexpr` array with a constant initializer (global, `static`
+local, or `static` member, of integer, enumeration, or `bool` elements) and
+a string literal are values, not memory: nothing may write them, so an
+element read `t[i][j]` is the application of a spec of the linear index,
+synthesized from Clang's evaluation of the initializer (`APValue`), and each
+index must lie in its array (kind `bounds`). The spec's body is a balanced
+tree of comparisons of the index, whose depth is the logarithm of the size
+and whose leaves merge runs of equal values. A pointer into a table would
+need the table as an object at an address; it fails closed with a located
+message. Mutable static storage stays B6's.
+
 ### 2. Implicit non-aliasing default
 
 For every pair of distinct address parameters of which at least one is
