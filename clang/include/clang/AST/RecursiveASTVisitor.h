@@ -2667,6 +2667,7 @@ DEF_TRAVERSE_STMT(ObjCForCollectionStmt, {})
 DEF_TRAVERSE_STMT(ObjCAutoreleasePoolStmt, {})
 
 DEF_TRAVERSE_STMT(CXXForRangeStmt, {
+  TRY_TO(TraverseLoopContract(S));
   if (!getDerived().shouldVisitImplicitCode()) {
     if (S->getInit())
       TRY_TO_TRAVERSE_OR_ENQUEUE_STMT(S->getInit());
