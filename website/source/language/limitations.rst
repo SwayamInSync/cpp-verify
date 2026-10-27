@@ -614,8 +614,8 @@ remain future work.
 
 **cvc5 and strict portfolio** consume the same canonical obligations as Z3
 through an independent SMT-LIB2 emitter. cvc5 is optional and system-installed;
-its models are checked against the definitions like Z3's but are not yet shown
-as source-level values. Strict portfolio mode requires matching decisive
+its models are checked against the definitions like Z3's and shown like Z3's,
+in source names with the steps of the failing path. Strict portfolio mode requires matching decisive
 results and preserves Z3's model only after both solvers produce checked
 counterexamples. cvc5 may return ``unknown`` on quantified or heap-heavy
 formulas that Z3 solves; strict mode then remains ``Unresolved``. Recursive
