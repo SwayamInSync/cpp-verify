@@ -79,7 +79,19 @@ same. The swap by sums is not:
 
 .. code-block:: text
 
-   sums.cpp:6:30: error: verification failed: swap_by_sums [...] (counterexample: a [ssa=a_0] [type=pointer] = 1, b [ssa=b_0] [type=pointer] = 1; ...)
+   sums.cpp:6:30: error: verification failed: swap_by_sums [postcondition] [backend=z3] [reason=counterexample]
+       6 |   cv::post(*a == cv::old(*b) && *b == cv::old(*a))
+         |            ~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~
+   sums.cpp:6:30: note: counterexample: a = 1, b = 1
+   sums.cpp:8:6: note: stores 2000 at address 1
+       8 |   *a = *a + *b; *b = *a - *b; *a = *a - *b;
+         |      ^
+   sums.cpp:8:20: note: stores 0 at address 1
+       8 |   *a = *a + *b; *b = *a - *b; *a = *a - *b;
+         |                    ^
+   sums.cpp:8:34: note: stores 0 at address 1
+       8 |   *a = *a + *b; *b = *a - *b; *a = *a - *b;
+         |                                  ^
 
 With ``a == b`` the first statement doubles the value and the second sets it to 0.
 
