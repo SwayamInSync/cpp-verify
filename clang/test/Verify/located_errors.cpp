@@ -16,7 +16,7 @@ int pick(int x)
 // CHECK:      {{.*}}located_errors.cpp:[[@LINE-2]]:14: error: pick: throw is unsupported: exceptions are not modeled
 // CHECK-NEXT: {{^ +}}[[@LINE-3]] |   if (x < 0) throw x; return 0;
 // CHECK-NEXT: {{^ +}}|              ^~~~~~~
-// JSON: {"function":"pick","message":"pick: throw is unsupported: exceptions are not modeled","reason":"construct.unsupported","schema":"cppverify.diagnostic/1","severity":"error","source":{"column":14,"end_column":20,"end_line":[[#@LINE-5]],"file":"{{.*}}located_errors.cpp","line":[[#@LINE-5]]},"status":"unresolved"}
+// JSON: {"function":"pick","function_source":{"column":5,"end_column":9,"end_line":[[#@LINE-8]],"file":"{{.*}}located_errors.cpp","line":[[#@LINE-8]]},"message":"pick: throw is unsupported: exceptions are not modeled","reason":"construct.unsupported","schema":"cppverify.diagnostic/2","severity":"error","source":{"column":14,"end_column":21,"end_line":[[#@LINE-5]],"file":"{{.*}}located_errors.cpp","line":[[#@LINE-5]]},"status":"unresolved"}
 
 struct Shape {
   virtual int get(int x) { cv::check(x >= 0 || x < 0); return x; }
@@ -50,4 +50,4 @@ int down(int n)
 // CHECK:      {{.*}}located_errors.cpp:[[@LINE-8]]:5: error: down: recursive executable functions require decreases, or cppverify::decreases(*) to allow divergence
 // CHECK-NEXT: {{^ +}}[[@LINE-9]] | int down(int n)
 // CHECK-NEXT: {{^ +}}|     ^~~~
-// JSON: {"function":"down","message":"down: recursive executable functions require decreases, or cppverify::decreases(*) to allow divergence","reason":"construct.unsupported",{{.*}}"status":"unresolved"}
+// JSON: {"function":"down",{{.*}}"message":"down: recursive executable functions require decreases, or cppverify::decreases(*) to allow divergence","reason":"construct.unsupported",{{.*}}"status":"unresolved"}
