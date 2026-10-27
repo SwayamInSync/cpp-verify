@@ -75,12 +75,13 @@ int first_positive_bitwise(const int *p, int n)
   return p[0];
 }
 
-// CHECK-DAG: verification failed: first_positive_squared_wide [{{.*}}::postcondition@
-// CHECK-DAG: verification failed: first_positive [{{.*}}::postcondition@
-// CHECK-DAG: verification failed: first_positive_long [{{.*}}::postcondition@{{.*}}n [ssa=n_0] [type=i32] = 2000000
-// CHECK-DAG: verification failed: writes_first [{{.*}}::postcondition@
-// CHECK-DAG: verification failed: first_positive_indexed [{{.*}}::postcondition@
-// CHECK-DAG: verification failed: first_positive_squared [{{.*}}::postcondition@
+// CHECK-DAG: verification failed: first_positive_squared_wide [postcondition]
+// CHECK-DAG: verification failed: first_positive [postcondition]
+// CHECK-DAG: verification failed: first_positive_long [postcondition]
+// CHECK-DAG: note: counterexample: {{.*}}n = 2000000{{( ->|,|$)}}
+// CHECK-DAG: verification failed: writes_first [postcondition]
+// CHECK-DAG: verification failed: first_positive_indexed [postcondition]
+// CHECK-DAG: verification failed: first_positive_squared [postcondition]
 // CHECK-DAG: Unresolved: first_positive_bitwise [backend=z3] [reason=counterexample.unchecked]
 // CHECK-DAG: a quantifier range of {{[0-9]+}} values is too wide to expand
 
