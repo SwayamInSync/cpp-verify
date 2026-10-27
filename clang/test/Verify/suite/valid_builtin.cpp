@@ -55,7 +55,7 @@ int past_end(const int *a, int n)
 {
   return a[n];
 }
-// CHECK-DAG: error: verification failed: past_end [{{.*}}::bounds@[[@LINE-2]]:10]
+// CHECK-DAG: :[[@LINE-2]]:10: error: verification failed: past_end [bounds]
 
 // A user-declared valid works the same way.
 cppverify::spec bool valid(const long *p, int n) { return true; }
