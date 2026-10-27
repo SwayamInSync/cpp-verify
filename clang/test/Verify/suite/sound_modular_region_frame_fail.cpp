@@ -21,4 +21,4 @@ void invalid_region_frame(int *p)
 }
 
 // VERIFY-DAG: Verified: clobber_offset
-// VERIFY-DAG: error: verification failed: invalid_region_frame [{{.*}}::postcondition@
+// VERIFY-DAG: error: verification failed: invalid_region_frame [postcondition]
