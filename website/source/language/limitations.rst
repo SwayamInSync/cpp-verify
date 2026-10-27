@@ -113,6 +113,18 @@ C++ feature boundaries
    * - Scalar types
      - ``bool``, integral types, and enums preserve target width and signedness.
      - Floating point, ``volatile``, and other non-integral scalar semantics.
+   * - Expressions and declarations
+     - Character literals (``'0'``, ``L'A'``), constants Clang evaluates (a
+       ``consteval`` call, an ``if constexpr`` condition), template value
+       parameters, default arguments and default member initializers,
+       ``__builtin_expect``, a record returned from an initializer list
+       (``return Pt{a, b};``), structured bindings that copy a record, and
+       declarations that do nothing (``static_assert``, type aliases,
+       using-declarations, local classes and enumerations).
+     - The value of an assignment, an increment, or a comma expression
+       inside an expression (``a = b = 0``, ``*p++``); string literals;
+       other builtins; structured bindings of an array, of a tuple-like type,
+       or by reference.
    * - Pointers
      - One pointer level to supported complete objects. The type gate admits
        ``void*``, but no general erasure/ownership model is claimed.
