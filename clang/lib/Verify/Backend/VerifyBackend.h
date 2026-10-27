@@ -3,6 +3,7 @@
 #define LLVM_CLANG_VERIFY_BACKEND_VERIFYBACKEND_H
 
 #include "Obligation.h"
+#include "Timing.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/ThreadPool.h"
 #include <chrono>
@@ -212,6 +213,10 @@ public:
     FunctionDeadline = D;
     applyDeadline(D);
   }
+  /// Counts the time this backend spends into \p T, for --time-report.
+  virtual void setTimes(std::shared_ptr<BackendTimes> T) {
+    Times = std::move(T);
+  }
   /// Stops the work in progress, from any thread: queries running end
   /// unresolved and no further one starts, until resume().
   virtual void cancel() {}
@@ -227,9 +232,11 @@ protected:
   /// Limits the queries that start from now on to \p D.
   virtual void
   applyDeadline(std::optional<std::chrono::steady_clock::time_point> D) {}
+  BackendTimes *times() const { return Times.get(); }
 
 private:
   std::optional<std::chrono::steady_clock::time_point> FunctionDeadline;
+  std::shared_ptr<BackendTimes> Times;
 };
 
 /// Race: Z3 and cvc5 at once, the first proof or certified counterexample
