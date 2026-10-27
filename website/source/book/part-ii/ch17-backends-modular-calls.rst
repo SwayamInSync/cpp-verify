@@ -345,7 +345,13 @@ checks a proof, with the kernel and Lean's foundations alone, and says so:
 
 .. code-block:: text
 
-   error: verification failed: add_one [fn_5f5a376164645f6f6e6569::postcondition@3:37] (counterexample: result [ssa=__result_1] [type=i32] = 6, x [ssa=x_0] [type=i32] = 4; trace: return.return@5:3 value=6) [backend=z3] [reason=counterexample] (confirmed in Lean)
+   example.cpp:3:37: error: verification failed: add_one [postcondition] [backend=z3] [reason=counterexample] (confirmed in Lean)
+       3 |   cppverify::post(cppverify::result == x + 1)
+         |                   ~~~~~~~~~~~~~~~~~~^~~~~~~~
+   example.cpp:3:37: note: counterexample: x = 4, result = 6
+   example.cpp:5:3: note: returns 6
+       5 |   return x + 2;
+         |   ^
 
 The refutation applies the goal to the model's values and decides what is
 left false, the definition instances the goal states with it, since they hold
@@ -1022,7 +1028,7 @@ The canonical backend boundary can be persisted and replayed:
    cpp-verify --obligation-in=goals.cpv --backend=lean --lean-out=goals.lean
    cpp-verify --obligation-in=goals.cpv --lean-project=proof --lean-certify
 
-Each ``cppverify.obligation/3`` record uses stable wire tags, defensive bounds,
+Each ``cppverify.obligation/4`` record uses stable wire tags, defensive bounds,
 portable source points, and path-independent SHA-256 semantic hashes. Replay
 revalidates every sort, expression, logical declaration, call signature,
 feature declaration, and identity before backend dispatch. Multiple records may
