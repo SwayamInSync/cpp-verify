@@ -155,6 +155,10 @@ struct LoopContractInfo {
   SourceLocation MayDiverge;
   /// The heap the loop may write, read in each iteration's state.
   SmallVector<Expr *, 2> Modifies;
+  /// A range-based for loop's position, cppverify::index, which its clauses
+  /// may name: an implicit variable, the number of elements before the
+  /// current one.
+  VarDecl *Index = nullptr;
 
   /// The clauses' expressions, as written.
   SmallVector<Stmt *, 8> children() const {
