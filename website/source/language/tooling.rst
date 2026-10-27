@@ -104,7 +104,7 @@ the file is verified, and ``cpp-verify`` exits with status 1
 
 .. code-block:: text
 
-   pick.cpp:4:14: error: pick: unsupported statement: CXXThrowExpr
+   pick.cpp:4:14: error: pick: throw is unsupported: exceptions are not modeled
        4 |   if (x < 0) throw x;
          |              ^~~~~~~
    Verified: bump [backend=z3]
@@ -133,6 +133,21 @@ a function's first error carries its verdict and the range, here
 "end_column":20,"end_line":4,"file":"pick.cpp","line":4}``. Before 0.2 such an
 error stopped the file, so that no function of it got a verdict, and named
 only the function: ``error: pick: unsupported statement: CXXThrowExpr``.
+
+The message names the construct as C++ does: ``goto``, labels, a computed
+``goto``, ``throw`` and ``try``, inline assembly, a statement expression, a
+compound literal, a lambda, a pointer into a string literal or to
+``__func__``. A construct without a name of its own is ``this expression is
+unsupported`` or ``this statement is unsupported``, with Clang's class name
+in parentheses for a bug report: an OpenMP directive is ``this statement is
+unsupported (OMPSimdDirective)``. Each is reported once: a variable whose
+initializer was rejected, and a call that was, report nothing more where
+they are used. Before 0.2 the message gave Clang's class name alone
+(``unsupported expression: StmtExpr``), a lambda was ``aggregate
+initialization and copying are unsupported``, a string literal used as a
+pointer was ``array-to-pointer decay of automatic storage is unsupported``,
+and each use of a variable whose initializer was rejected added ``read of
+uninitialized local value``.
 
 Stopping a run with Ctrl-C
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
