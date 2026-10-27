@@ -518,6 +518,16 @@ a warning belongs to ``-Wcppverify`` (so ``-Wno-cppverify`` and
 and ``-fdiagnostics-format=sarif`` carries them all. In JSON Lines a record's
 ``message`` is the new error text (:doc:`language/tooling`).
 
+**cvc5's counterexamples.** A failure cvc5 found (``--backend=cvc5``, or a race
+cvc5 won) gave no values and no path: the certifier checked its model and the
+verifier then dropped it, so the JSON record had no ``model`` or ``trace``,
+and under ``--lean-fallback`` a race cvc5 won wrote no Lean refutation (``the
+solver's model gives the goal's variables no values``). It now shows the
+counterexample and the steps of its path exactly as a failure Z3 finds does,
+in text, JSON, SARIF, GitHub annotations, and archive replay, evaluated by the
+certifier in the checked model; the race's refutation states its values
+(:doc:`book/part-ii/ch17-backends-modular-calls`).
+
 **Counterexamples after a loop.** A failure whose counterexample passed
 through a loop looked like any other, though its state there came from the
 loop's invariants and no execution need reach it: the first loop most users
