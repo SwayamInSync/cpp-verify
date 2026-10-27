@@ -65,6 +65,7 @@ class Z3Encoder {
                             std::optional<uint64_t> TraceEventCount);
   std::chrono::steady_clock::time_point QueryStart;
   std::optional<unsigned> CertifyTimeoutMs;
+  BackendTimes *Times = nullptr;
   bool SearchSlice = false;
   bool QuantifiedQuery = false;
   z3::solver freshSolver();
@@ -290,6 +291,8 @@ public:
   void setCertifyTimeoutMs(std::optional<unsigned> Ms) {
     CertifyTimeoutMs = Ms;
   }
+  /// Where the counterexample checks' time is counted.
+  void setTimes(BackendTimes *T) { Times = T; }
   /// The timeout is a slice of the query's time, for the search only: a model
   /// found is checked with the check's own time, not what is left of it.
   void setSearchSlice(bool Slice) { SearchSlice = Slice; }

@@ -1779,6 +1779,8 @@ void Z3Encoder::resume() {
 
 Z3Encoder::PassScope::PassScope(Z3Encoder &Outer, Z3Encoder &Inner)
     : Outer(Outer) {
+  // The inner pass's checks are the outer query's.
+  Inner.Times = Outer.Times;
   std::lock_guard<std::mutex> Guard(Outer.CheckLock);
   Outer.Pass = &Inner;
   if (Outer.Stopped)
@@ -2230,6 +2232,7 @@ z3::expr Z3Encoder::evaluated(const z3::model &Model, const z3::expr &E,
 }
 
 CertifyLimits Z3Encoder::checkLimits(CertifyLimits Limits) const {
+  Limits.Times = Times;
   // One check may not spend the whole query: a slow one leaves time for the
   // others and for the later stages.
   const unsigned CapMs = CertifyTimeoutMs ? *CertifyTimeoutMs : TimeoutMs / 2;
@@ -3726,6 +3729,7 @@ VerifyResult Z3VerifyBackend::solveQuery(
                                     ? std::optional<unsigned>(TimeoutMs / 2)
                                     : CertifyTimeoutMs);
     Encoder.setSearchSlice(Slice);
+    Encoder.setTimes(times());
     Encoder.setIntegerEncoding(IntegerEncoding);
     Encoder.setProfileQuantifiers(ProfileQuantifiers && Facts);
     Encoder.setSequenceFacts(Facts);
