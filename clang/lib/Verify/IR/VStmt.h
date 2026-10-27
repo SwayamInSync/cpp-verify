@@ -319,6 +319,8 @@ struct VSourceVariable {
   VType Type;
   SourceLocation Loc;
   SourceLocation EndLoc;
+  /// A reference, whose value is the address of what it refers to.
+  bool Reference = false;
 };
 
 /// reads(Base, Count) on a spec: the cells Base[0..Count), ElementSize bytes
