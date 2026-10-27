@@ -768,7 +768,13 @@ nothing is noted). A copy that fails at bound `b` is an execution within `b`
 iterations of each loop (callees still by their contracts), and its
 counterexample is noted; copies that all hold where every loop's unwinding
 is proved hold for every execution; copies that hold short of that go on to
-the next bound; anything unresolved ends the search without a note. A function with an unmeasured loop (`UnmeasuredLoop`) also
+the next bound; anything unresolved ends the search without a note. Every
+failure of the unrolled module is reported, so each copy, and each loop's
+unwinding, is solved past the failing obligations before it (see
+`--max-failures` below): the execution noted fails no earlier check, and a
+copy that holds there, when another check fails before it, is noted as
+holding in every execution that does not fail that check first, named by its
+kind and place. A function with an unmeasured loop (`UnmeasuredLoop`) also
 gets a note naming it on any failure.
 
 **Loop exits.** A `break` or `return` inside the body leaves from the
@@ -2611,6 +2617,24 @@ counterexample stands. Before, that query could run to the timeout although
 the whole query had refuted the function in milliseconds: model search over
 quantified heap queries depends on the solver's search order, and 16 of 40
 random seeds took the full 30 s.
+
+With `--max-failures=N` (`BackendExecutionOptions::MaxFailures`, Z3 only)
+the obligations report up to `N` failures (0: all), and the result of the
+first carries the others (`VerifyResult::MoreFailures`), which the driver
+prints after it, each with its notes, as diagnostics marked `Additional` that
+the summary does not count. `verifyObligations` given a number of failures to
+report solves each obligation after the first failure in the executions that
+pass every earlier failing one, as Boogie's subsumption assumes an assertion
+after checking it (`verifyPastEarlier`: the obligation's counterexample query
+conjoined with those obligations' goals, never cached): alone, its
+counterexample could start where an earlier check already fails, and a check
+that fails only there would be reported though fixing the earlier one fixes
+it. Checks not settled are not assumed, so nothing proved past the failures
+rests on a check that may not hold. A serial run stops after the `N`th
+failure; a parallel one solves every obligation alone and then solves each
+failure after the first again, in order. Without a number, every obligation
+is solved alone, as the portfolio's comparison of Z3's and cvc5's results
+needs.
 
 The whole query of a module without logic functions is a probe of a fixed
 amount of work, `WholeProbeUnits` (6 million) Z3 resource units, with the
