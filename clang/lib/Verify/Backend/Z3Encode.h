@@ -328,6 +328,8 @@ class Z3VerifyBackend : public VerifyBackend {
   /// of their queries may do: the work the complete query's probe had, or 0.
   unsigned UnitsCap = 0;
   unsigned Jobs;
+  /// How many failing obligations a module reports; 0: every one.
+  unsigned MaxFailures;
   llvm::StdThreadPool *Pool;
   uint64_t MaxQueryNodes;
   MachineIntegerEncoding IntegerEncoding;
@@ -340,6 +342,10 @@ class Z3VerifyBackend : public VerifyBackend {
 
   std::optional<std::chrono::steady_clock::time_point> Deadline;
   unsigned budget(unsigned Ms) const { return withinDeadline(Ms, Deadline); }
+  /// The failure at First of the results of verifyObligations, carrying the
+  /// failures after it, as many as MaxFailures allows.
+  VerifyResult withMoreFailures(std::vector<VerifyResult> &Results,
+                                size_t First);
   /// The function's time is spent, so no further query starts.
   bool spent() const {
     return Cancellation.Cancelled ||
@@ -376,6 +382,12 @@ class Z3VerifyBackend : public VerifyBackend {
                                 llvm::StringRef SemanticHash = {},
                                 const ProofCacheLookup *Lookup = nullptr,
                                 bool Reused = false, Race *Racing = nullptr);
+  /// Obligation \p I of \p Module in the executions that pass every one of
+  /// \p Earlier, failing obligations before it. No cache holds it, since it
+  /// asks less than the obligation.
+  VerifyResult verifyPastEarlier(const ObligationModule &Module, size_t I,
+                                 const std::vector<size_t> &Earlier,
+                                 Race *Racing);
 
 public:
   explicit Z3VerifyBackend(const BackendExecutionOptions &Execution = {},
@@ -385,13 +397,15 @@ public:
   BackendCapabilities getCapabilities() const override {
     return {allLogicFeatures(), true};
   }
-  /// One result per obligation in order. With StopAtFailure a serial run ends
-  /// after the first failure, since later results cannot change it. A nonzero
-  /// TimeoutCapMs bounds every query's timeout.
-  std::vector<VerifyResult> verifyObligations(const ObligationModule &Module,
-                                              bool StopAtFailure = false,
-                                              Race *Racing = nullptr,
-                                              unsigned TimeoutCapMs = 0);
+  /// One result per obligation in order, each solved alone. With
+  /// ReportedFailures, a serial run ends after that many failures (0: never),
+  /// since later results are not reported, and each obligation after the
+  /// first failure is solved in the executions that pass every earlier one
+  /// that fails. A nonzero TimeoutCapMs bounds every query's timeout.
+  std::vector<VerifyResult>
+  verifyObligations(const ObligationModule &Module,
+                    std::optional<unsigned> ReportedFailures = std::nullopt,
+                    Race *Racing = nullptr, unsigned TimeoutCapMs = 0);
   void cancel() override { Cancellation.cancel(); }
   void resume() override { Cancellation.reset(); }
   std::optional<unsigned>
