@@ -668,6 +668,9 @@ what the obligation checks:
   ``valid(p, n)`` extent must denote valid storage), ``aliasing`` (implicit
   non-aliasing), ``frame`` (writes and callee effects stay within
   ``cppverify::modifies``), and ``missing-return``;
+- ``unreachable``: a failed ``assert`` or a call that does not return
+  (``abort``, ``exit``, ``std::terminate``, ``__builtin_unreachable``,
+  ``__builtin_trap``) is reached;
 - ``unwinding`` for a BMC bound, and ``unsupported`` for a construct the
   verifier rejects fail-closed.
 
