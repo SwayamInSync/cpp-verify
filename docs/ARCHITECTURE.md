@@ -764,6 +764,21 @@ state and ends the path; the frontend emits a `for` increment before it. BMC
 unrolling lowers `break` and `continue` to flag assignments that guard the
 remaining statements and the next iteration.
 
+**Range-based for loops** (`ASTConverter::convertRangeFor`) lower a loop
+over an array to a counter, `__index_N = 0; while (__index_N < N)
+invariant(0 <= __index_N <= N, ...) { var = element; body; __index_N += 1
+}`, the increment also before each `continue`
+(`EnclosingLoop::IncrementStmt`). `cppverify::index` names the counter while
+the contract is converted: the parser declares it as an implicit variable
+with the contract (`LoopContractInfo::Index`), so its uses are ordinary
+`DeclRefExpr`s, and template instantiation maps it like a quantifier's
+binder (`TransformContractBinder`). The
+element is the place of the range (`objectPlace`) stepped by the counter,
+or the read of a constant table; `rangeMayMove` rejects a range whose
+location the body may change, and a contract that names the loop variable
+is rejected, since it holds at the head, where the variable is not
+declared.
+
 **Exits the frontend lowers.** VCR's `break` and `continue` leave a
 `VWhileStmt`. Two exits have no loop to leave and are lowered to flags by
 `lowerExits` (`ASTConverter.cpp`), BMC's rule applied once: a `do` loop's
@@ -2903,7 +2918,7 @@ code:
 - `RecursiveASTVisitor` (and `DynamicRecursiveASTVisitor`) visits function
   contracts and the construct references written in a function from
   `TraverseFunctionHelper`, loop contracts from the `while`/`for`/`do`
-  traversals (found through the `ASTContext` the function's traversal sets),
+  and range-based `for` traversals (found through the `ASTContext` the function's traversal sets),
   and type invariants from the `CXXRecordDecl` traversal. clangd's hover,
   go-to-definition, rename, document highlights, semantic highlighting, and
   inlay hints, clang-tidy's matchers, and the parent map all build on it.
@@ -2923,7 +2938,8 @@ code:
   children.
 - `DeclPrinter` prints a function's clauses, one per line, after its
   declarator, and `cppverify::spec`/`cppverify::proof` as its specifier;
-  `StmtPrinter` prints loop clauses and the constructs qualified. clangd's
+  `StmtPrinter` prints loop clauses and the constructs qualified, a range-based
+  `for` loop's position as `cppverify::index`. clangd's
   hover on a function therefore shows its contract, and `-ast-print` output
   parses again.
 - Each construct written in a function is recorded as a `DeclRefExpr` to its
