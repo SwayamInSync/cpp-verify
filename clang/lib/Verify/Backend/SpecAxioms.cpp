@@ -160,7 +160,7 @@ llvm::Error verify::materializeLogicFunctions(ObligationModule &Module,
     // Its definitions join the module's nodes once all are lowered.
     uint64_t Own = 0;
     auto count = [&](const LogicExpr *Definition) -> llvm::Error {
-      Own = llvm::SaturatingAdd(Own, logicNodeCount(Definition));
+      Own = llvm::SaturatingAdd(Own, logicDistinctNodes({Definition}));
       const uint64_t Total = llvm::SaturatingAdd(Nodes, Own);
       if (MaxNodes != 0 && Total > MaxNodes)
         return llvm::make_error<ObligationSizeError>(
