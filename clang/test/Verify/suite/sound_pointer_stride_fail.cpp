@@ -87,4 +87,4 @@ bool past_object_record(const Pair *p, const Pair *q)
 // VERIFY-DAG: error: verification failed: invalid_adjacent_inequality
 // VERIFY-DAG: error: verification failed: invalid_char_adjacent_inequality
 // VERIFY-DAG: error: verification failed: invalid_record_stride
-// VERIFY-DAG: error: verification failed: past_object_record [{{.*}}::bounds@
+// VERIFY-DAG: error: verification failed: past_object_record [bounds]
