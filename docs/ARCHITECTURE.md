@@ -2397,7 +2397,20 @@ Passivization also records guarded branch, modular-call, loop, heap-write,
 allocation, lifetime-end, deletion, and return events. Each obligation owns the
 event prefix that existed when it was emitted. The Z3 model removes events with
 false guards, retains true events, and marks undetermined guards explicitly
-unknown. Addresses, stored values, allocation identities, and return values use
+unknown.
+
+cvc5's models are read by the adapter, not by a solver API, so the certifier
+describes them (`describeCounterexample`, `Certify.cpp`) once it has certified
+one: in the model it checked, `evaluateTerm` gives each source variable of the
+obligation's query (`candidateValues`, listed by internal name, the order of
+Z3's models), the guard of each version (`OnPath`), each of the obligation's
+trace events up to its `TraceEventCount` (dropped when the guard is false,
+marked undetermined when the model does not decide it) and its values, and
+the assignment of the goal's variables that a Lean refutation states. The
+evaluation is the certifier's own, the semantics the counterexample was
+certified in, so a value shown is one the check used; it never completes the
+model. cvc5 solves each obligation alone, so the query is always one
+obligation's. Addresses, stored values, allocation identities, and return values use
 the same typed, non-completing evaluation. A complete-query counterexample is
 attributed to a specific ordered obligation whenever its model evaluates that
 obligation's counterexample query to true.
@@ -2637,7 +2650,7 @@ The driver selects a backend via `VerifyOptions` (`Verifier.h` / `cpp-verify --b
 | Backend | Implementation | Notes |
 |---------|----------------|-------|
 | **Z3** | `Z3VerifyBackend` | Default. Consumes `ObligationModule`; counterexamples come from models. |
-| **cvc5** | `CVC5VerifyBackend` + standalone SMT-LIB2 | Encodes the same canonical sorts, C++ truncating math division/remainder, bit-vectors, signed overflow, total heap, bounded and unbounded quantifiers (marked triggers as `:pattern`), heap frames, sequences (`full-saturate-quant` when sequences meet quantifiers), and finite ground spec equations. Sets, multisets, and maps are arrays over all integers, as for Z3 (cvc5's own set theory is finite, which would prove facts false of an infinite set): `(Array Int Bool)`, `(Array Int Int)` with a count of `max(0, cell)` and equality count by count, and `(Array Int cppverify.option)` over a declared `none | some(value)` datatype; union, intersection, and difference are declared functions each defined pointwise by one quantified axiom, exact by array extensionality, and subset is a quantified formula. A model cvc5 prints with `unknown` is certified like one after `sat`. Solver process failures and malformed output are unresolved. |
+| **cvc5** | `CVC5VerifyBackend` + standalone SMT-LIB2 | Encodes the same canonical sorts, C++ truncating math division/remainder, bit-vectors, signed overflow, total heap, bounded and unbounded quantifiers (marked triggers as `:pattern`), heap frames, sequences (`full-saturate-quant` when sequences meet quantifiers), and finite ground spec equations. Sets, multisets, and maps are arrays over all integers, as for Z3 (cvc5's own set theory is finite, which would prove facts false of an infinite set): `(Array Int Bool)`, `(Array Int Int)` with a count of `max(0, cell)` and equality count by count, and `(Array Int cppverify.option)` over a declared `none | some(value)` datatype; union, intersection, and difference are declared functions each defined pointwise by one quantified axiom, exact by array extensionality, and subset is a quantified formula. A model cvc5 prints with `unknown` is certified like one after `sat`, and a certified one is described in source terms as Z3's is (`describeCounterexample`). Solver process failures and malformed output are unresolved. |
 | **Strict portfolio** | `PortfolioVerifyBackend` | Runs ordered Z3 and cvc5 queries. Matching UNSAT proves; matching certified counterexamples fail and retain the Z3 model; disagreement or an unresolved side is unresolved. |
 | **Race** | `RaceVerifyBackend` | Runs the Z3 and cvc5 backends at once; the first proof or certified counterexample stands and cancels the other (`cancel`/`resume`: a backend-wide `Race` of Z3 encoders, each forwarding an interrupt to the pass it runs, and a flag the cvc5 process loop polls). Otherwise the obligations either proved are joined, `Verified` (`z3+cvc5`) when they cover the module. |
 | **BMC** | `LoopUnroll` on VCR, then shared obligation/Z3 path | Source verification grows bounds from zero through `--unroll=N`, stopping on a counterexample, complete unwinding, unresolved query, or the maximum frontier. Safety with failed unwinding is `BoundedSafe(N)`; only proved unwinding is `Verified`. A spec's checks have no loops: the driver solves them with a Z3 backend (`SpecBackend`), as on the default path, and keeps the bound on their archived modules for replay. |
