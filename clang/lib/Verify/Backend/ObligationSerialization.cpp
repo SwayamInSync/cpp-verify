@@ -444,6 +444,7 @@ std::optional<DiagnosticTraceKind> traceFromTag(uint8_t Tag) {
 
 class ArchiveWriter {
   std::string Data;
+  uint32_t FormatVersion = ObligationSerializationVersion;
   bool IncludeSource;
   bool IncludeSourceRanges;
   bool IncludeDiagnostics;
@@ -487,6 +488,10 @@ public:
     if (IncludeSourceRanges) {
       writeU32(Source.EndLine);
       writeU32(Source.EndColumn);
+      if (FormatVersion >= 5) {
+        writeU32(Source.BeginLine);
+        writeU32(Source.BeginColumn);
+      }
     }
   }
 
@@ -560,6 +565,7 @@ public:
 
   void writeModule(const ObligationModule &Module,
                    uint32_t FormatVersion = ObligationSerializationVersion) {
+    this->FormatVersion = FormatVersion;
     Data.append(ArchiveMagic.data(), ArchiveMagic.size());
     writeU32(FormatVersion);
     uint32_t Flags = IncludeSource ? HasSourceMetadata : 0;
@@ -788,6 +794,10 @@ class ArchiveReader {
     if (IncludeSourceRanges) {
       Source.EndLine = readU32();
       Source.EndColumn = readU32();
+      if (Version >= 5) {
+        Source.BeginLine = readU32();
+        Source.BeginColumn = readU32();
+      }
     }
     return Source;
   }
