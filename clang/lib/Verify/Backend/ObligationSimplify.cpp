@@ -46,17 +46,33 @@ uint64_t countNodes(const LogicExpr *Expr) {
   return Count;
 }
 
+/// countNodes, with the count of each term kept in \p Counts: the goals
+/// share the terms of their assumptions.
+uint64_t countNodes(const LogicExpr *Expr,
+                    llvm::DenseMap<const LogicExpr *, uint64_t> &Counts) {
+  if (!Expr)
+    return 0;
+  if (auto It = Counts.find(Expr); It != Counts.end())
+    return It->second;
+  uint64_t Count = 1;
+  for (const auto &Child : Expr->Children)
+    Count += countNodes(Child.get(), Counts);
+  Counts[Expr] = Count;
+  return Count;
+}
+
 uint64_t countModuleNodes(const ObligationModule &Module) {
-  uint64_t Count = countNodes(Module.CorrectnessGoal.get()) +
-                   countNodes(Module.CounterexampleQuery.get());
+  llvm::DenseMap<const LogicExpr *, uint64_t> Counts;
+  uint64_t Count = countNodes(Module.CorrectnessGoal.get(), Counts) +
+                   countNodes(Module.CounterexampleQuery.get(), Counts);
   for (const Obligation &Item : Module.Obligations)
-    Count += countNodes(Item.Goal.get()) +
-             countNodes(Item.CounterexampleQuery.get());
+    Count += countNodes(Item.Goal.get(), Counts) +
+             countNodes(Item.CounterexampleQuery.get(), Counts);
   for (const auto &[Identity, Function] : Module.LogicFunctions) {
     (void)Identity;
-    Count += countNodes(Function.StepDefinition.get());
+    Count += countNodes(Function.StepDefinition.get(), Counts);
     for (const auto &Definition : Function.DefinitionLevels)
-      Count += countNodes(Definition.get());
+      Count += countNodes(Definition.get(), Counts);
   }
   return Count;
 }
