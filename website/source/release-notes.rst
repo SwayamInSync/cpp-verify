@@ -471,10 +471,11 @@ every assumption before it as a copy, and the check's query, the function's
 complete goal, and that goal's query copied them again, so memory grew with
 the number of checks times the length of what came before them: verifying the
 ULEB128 case study took 14.9 GB, and lowering it 53 s. Terms now share what
-they repeat: the case study verifies within 0.9 GB and lowers in 10 s, and
-``safe_fib.cpp`` lowers in 7 s within 0.35 GB instead of 16 s and 4.7 GB.
-Verdicts, archives, hashes, and IR dumps are unchanged; a Lean export names a
-large subterm that one statement repeats once (:doc:`case-studies/llvm-uleb128`).
+they repeat, and the checks of a module visit a shared term once: the case
+study verifies within 0.9 GB and lowers in 2.5 s, and ``safe_fib.cpp`` lowers
+in 1.9 s within 0.35 GB instead of 16 s and 4.7 GB. Verdicts, archives, hashes,
+and IR dumps are unchanged; a Lean export names a large subterm that one
+statement repeats once (:doc:`case-studies/llvm-uleb128`).
 
 **Errors point at the code.** An error about a construct the verifier does not
 represent named only the function, as in ``error: pick: unsupported statement:
