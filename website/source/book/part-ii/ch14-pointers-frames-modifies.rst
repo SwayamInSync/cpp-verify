@@ -242,6 +242,27 @@ included; the invariant ties the pointer to a position:
 The value of a step inside an expression, as in ``*q++``, is not supported
 yet: read ``*q``, then step ``q`` in a statement of its own.
 
+A ``const`` or ``constexpr`` array with a constant initializer, such as the
+lookup tables of CRC or base64 code, is a value, not memory: reading
+``table[i]`` gives the value its initializer sets, and ``i`` must lie in the
+array. A string literal is such a table of its characters:
+
+.. code-block:: cpp
+
+   static const unsigned char HexValue[16] = {0, 1, 2, 3, 4, 5, 6, 7,
+                                              8, 9, 10, 11, 12, 13, 14, 15};
+
+   int digit_at(int d)
+     cv::pre(0 <= d && d < 16)
+     cv::post(0 <= cv::result && cv::result < 16)
+   {
+     return HexValue["0123456789abcdef"[d] % 16 == 0 ? 0 : d];
+   }
+
+.. code-block:: text
+
+   Verified: digit_at [backend=z3]
+
 Records through pointers
 ------------------------
 
