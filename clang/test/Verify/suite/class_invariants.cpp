@@ -103,8 +103,8 @@ public:
 // CHECK-DAG: Verified: Ring::size [backend=z3]
 // CHECK-DAG: Verified: Ring::rotate [backend=z3]
 // CHECK-DAG: Verified: Ring::set_head [backend=z3]
-// CHECK-DAG: error: verification failed: Ring::skip [{{.*}}::type-invariant@
-// CHECK-DAG: error: verification failed: Ring::peek_broken [{{.*}}::type-invariant@
+// CHECK-DAG: error: verification failed: Ring::skip [type-invariant]
+// CHECK-DAG: error: verification failed: Ring::peek_broken [type-invariant]
 
 // A constructor that does not establish the invariant.
 class Window {
@@ -117,7 +117,7 @@ public:
 
   cppverify::type_invariant(0 <= first && first < 100);
 };
-// CHECK-DAG: error: verification failed: Window::Window [{{.*}}::type-invariant@
+// CHECK-DAG: error: verification failed: Window::Window [type-invariant]
 
 class Bounded {
 public:
@@ -170,7 +170,7 @@ int ring_value()
   int v = r.pop();
   return v;
 }
-// CHECK-DAG: error: verification failed: ring_value [{{.*}}::postcondition@
+// CHECK-DAG: error: verification failed: ring_value [postcondition]
 
 int broken_by_caller()
   cppverify::post(true)
@@ -179,7 +179,7 @@ int broken_by_caller()
   b.first = 500;
   return b.get();
 }
-// CHECK-DAG: error: verification failed: broken_by_caller [{{.*}}::type-invariant@[[@LINE-2]]
+// CHECK-DAG: :[[@LINE-2]]:{{[0-9]+}}: error: verification failed: broken_by_caller [type-invariant]
 
 // An extent in a class invariant: on entry `this->data` points to `len`
 // elements, as a pointer field's extent in a precondition does. At exit the
@@ -234,4 +234,4 @@ int grown(const int *p, int n)
   int x = v.first();
   return x;
 }
-// CHECK-DAG: error: verification failed: grown [{{.*}}::bounds@[[@LINE-3]]
+// CHECK-DAG: :[[@LINE-3]]:{{[0-9]+}}: error: verification failed: grown [bounds]
