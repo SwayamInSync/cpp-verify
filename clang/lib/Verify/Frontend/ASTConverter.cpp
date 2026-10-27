@@ -2276,6 +2276,37 @@ static bool hasExtentMarker(const FunctionContractInfo &FCI,
   return F.Found;
 }
 
+/// What a statement or expression the verifier does not represent is, in
+/// C++'s terms.
+static std::string unsupportedConstruct(const Stmt *S) {
+  switch (S->getStmtClass()) {
+  case Stmt::GotoStmtClass:
+    return "goto is unsupported";
+  case Stmt::IndirectGotoStmtClass:
+    return "a computed goto is unsupported";
+  case Stmt::LabelStmtClass:
+    return "labels are unsupported";
+  case Stmt::AddrLabelExprClass:
+    return "the address of a label is unsupported";
+  case Stmt::CXXThrowExprClass:
+    return "throw is unsupported: exceptions are not modeled";
+  case Stmt::CXXTryStmtClass:
+    return "try is unsupported: exceptions are not modeled";
+  case Stmt::GCCAsmStmtClass:
+  case Stmt::MSAsmStmtClass:
+    return "inline assembly is unsupported";
+  case Stmt::StmtExprClass:
+    return "a statement expression is unsupported";
+  case Stmt::CompoundLiteralExprClass:
+    return "a compound literal is unsupported";
+  case Stmt::LambdaExprClass:
+    return "lambdas are unsupported";
+  default:
+    return std::string(isa<Expr>(S) ? "this expression" : "this statement") +
+           " is unsupported (" + S->getStmtClassName() + ")";
+  }
+}
+
 static bool mentionsThis(const Stmt *S) {
   if (!S)
     return false;
@@ -4733,6 +4764,12 @@ ASTConverter::convertTableRead(const ArraySubscriptExpr *AS) {
 }
 
 std::string ASTConverter::arrayDecayError(const Expr *Array) const {
+  if (isa<StringLiteral>(Array->IgnoreParens()))
+    return "a pointer into a string literal is unsupported; read its "
+           "characters by index";
+  if (const auto *Name = dyn_cast<PredefinedExpr>(Array->IgnoreParens()))
+    return std::string(Name->getIdentKindName()) +
+           " as a pointer is unsupported";
   const auto *M = dyn_cast_or_null<MemberExpr>(peelObjectExpr(Array));
   const std::string Member =
       M ? M->getMemberDecl()->getNameAsString() : std::string();
@@ -5986,8 +6023,12 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
   if (const auto *Default = dyn_cast<CXXDefaultInitExpr>(E))
     return convertExpr(Default->getExpr());
   // A constant Clang evaluates (a consteval call, an if constexpr
-  // condition) and a character literal are their values.
-  if (isa<ConstantExpr, CharacterLiteral>(E) &&
+  // condition), a character literal, and an expression that evaluates
+  // nothing at run time (noexcept, a requires-expression, a concept, a type
+  // trait, offsetof, __builtin_LINE) are their values.
+  if (isa<ConstantExpr, CharacterLiteral, CXXNoexceptExpr, RequiresExpr,
+          ConceptSpecializationExpr, TypeTraitExpr, ArrayTypeTraitExpr,
+          ExpressionTraitExpr, OffsetOfExpr, SourceLocExpr>(E) &&
       E->getType()->isIntegralOrEnumerationType()) {
     Expr::EvalResult Result;
     if (E->EvaluateAsInt(Result, Ctx)) {
@@ -6761,9 +6802,10 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
         error(CurrentFn->Name +
               ": call to function without a verification contract: " +
               functionName(Callee));
+      return nullptr;
     }
   }
-  error(CurrentFn->Name + ": unsupported expression: " + E->getStmtClassName());
+  error(CurrentFn->Name + ": " + unsupportedConstruct(E));
   return nullptr;
 }
 
@@ -10005,16 +10047,20 @@ ASTConverter::convertStmtBody(const Stmt *S) {
             continue;
         if (appendRecordCopy(Init, VD, VD->getBeginLoc(), Out))
           continue;
-        error(CurrentFn->Name + ": aggregate initialization and copying are "
-                                "unsupported");
+        if (isa<LambdaExpr>(Init))
+          error(Init->getSourceRange(),
+                CurrentFn->Name + ": lambdas are unsupported");
+        else
+          error(CurrentFn->Name + ": aggregate initialization and copying are "
+                                  "unsupported");
+        markInitialized(VD);
         continue;
       }
-      auto Val = materialize(convertExpr(VD->getInit()), VD->getType());
-      if (Val) {
+      // A rejected initializer is reported once, not again at each use.
+      if (auto Val = materialize(convertExpr(VD->getInit()), VD->getType()))
         Out.push_back(std::make_unique<VAssignStmt>(
             valueName(VD), std::move(Val), VD->getBeginLoc()));
-        markInitialized(VD);
-      }
+      markInitialized(VD);
     }
     return Out;
   }
@@ -10022,6 +10068,6 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     appendDiscarded(E, Out);
     return Out;
   }
-  error(CurrentFn->Name + ": unsupported statement: " + S->getStmtClassName());
+  error(CurrentFn->Name + ": " + unsupportedConstruct(S));
   return Out;
 }
