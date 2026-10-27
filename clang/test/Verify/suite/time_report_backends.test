@@ -1,0 +1,10 @@
+# REQUIRES: cvc5
+# The solvers of every backend count their counterexample checks for
+# --time-report, through a portfolio's and a race's components too.
+# RUN: not %cpp-verify --backend=cvc5 --time-report --diagnostics-format=json %S/Inputs/time_report_wrong.cpp -- 2>/dev/null \
+# RUN:   | %python %S/Inputs/time_report_phases.py | FileCheck %s
+# RUN: not %cpp-verify --backend=portfolio --time-report --diagnostics-format=json %S/Inputs/time_report_wrong.cpp -- 2>/dev/null \
+# RUN:   | %python %S/Inputs/time_report_phases.py | FileCheck %s
+# RUN: not %cpp-verify --backend=race --time-report --diagnostics-format=json %S/Inputs/time_report_wrong.cpp -- 2>/dev/null \
+# RUN:   | %python %S/Inputs/time_report_phases.py | FileCheck %s
+# CHECK: wrong solving=1 induction=0 certification=1 confirmation=0 adds up
