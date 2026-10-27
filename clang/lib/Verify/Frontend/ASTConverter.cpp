@@ -3952,6 +3952,136 @@ ASTConverter::convertLoopCondition(const Stmt *Loop, const Expr *Cond,
   return convertExpr(Cond);
 }
 
+static bool mentionsVariable(const VExpr *E, const std::string &Name);
+
+/// Whether S leaves the switch or loop that contains it: a break, or with
+/// \p Continues a continue, outside the loops nested in S.
+static bool leaves(const VStmt &S, bool Continues) {
+  auto Any = [&](const std::vector<std::unique_ptr<VStmt>> &Stmts) {
+    return llvm::any_of(Stmts, [&](const std::unique_ptr<VStmt> &Nested) {
+      return leaves(*Nested, Continues);
+    });
+  };
+  switch (S.K) {
+  case VStmt::Break:
+    return true;
+  case VStmt::Continue:
+    return Continues;
+  case VStmt::If: {
+    const auto &I = static_cast<const VIfStmt &>(S);
+    return Any(I.Then) || Any(I.Else);
+  }
+  case VStmt::Seq:
+    return Any(static_cast<const VSeqStmt &>(S).Stmts);
+  case VStmt::GhostBlock:
+    return Any(static_cast<const VGhostBlockStmt &>(S).Body);
+  default:
+    return false;
+  }
+}
+
+/// The exits of a switch, or of a `do` loop's first iteration, as flags: a
+/// break (and, given \p Continue, a continue) outside the loops nested in
+/// \p Stmts sets its flag, and the statements after it run only while no
+/// flag is set, as BMC unrolling lowers a loop's exits.
+static std::vector<std::unique_ptr<VStmt>>
+lowerExits(std::vector<std::unique_ptr<VStmt>> Stmts, const std::string &Break,
+           const std::string &Continue) {
+  std::vector<std::unique_ptr<VStmt>> Out;
+  for (size_t Index = 0; Index < Stmts.size(); ++Index) {
+    std::unique_ptr<VStmt> &S = Stmts[Index];
+    const SourceLocation Loc = S->Loc;
+    if (S->K == VStmt::Break ||
+        (S->K == VStmt::Continue && !Continue.empty())) {
+      Out.push_back(std::make_unique<VAssignStmt>(
+          S->K == VStmt::Break ? Break : Continue,
+          std::make_unique<VLiteralExpr>(1, VType::makeBool(), Loc), Loc));
+      return Out;
+    }
+    const bool Leaves = leaves(*S, !Continue.empty());
+    if (Leaves) {
+      if (S->K == VStmt::If) {
+        auto &I = static_cast<VIfStmt &>(*S);
+        I.Then = lowerExits(std::move(I.Then), Break, Continue);
+        I.Else = lowerExits(std::move(I.Else), Break, Continue);
+      } else if (S->K == VStmt::Seq) {
+        auto &Seq = static_cast<VSeqStmt &>(*S);
+        Seq.Stmts = lowerExits(std::move(Seq.Stmts), Break, Continue);
+      } else if (S->K == VStmt::GhostBlock) {
+        auto &Ghost = static_cast<VGhostBlockStmt &>(*S);
+        Ghost.Body = lowerExits(std::move(Ghost.Body), Break, Continue);
+      }
+    }
+    Out.push_back(std::move(S));
+    if (!Leaves || Index + 1 == Stmts.size())
+      continue;
+    std::vector<std::unique_ptr<VStmt>> Rest(
+        std::make_move_iterator(Stmts.begin() + Index + 1),
+        std::make_move_iterator(Stmts.end()));
+    std::unique_ptr<VExpr> Left =
+        std::make_unique<VVarExpr>(Break, VType::makeBool(), Loc);
+    if (!Continue.empty())
+      Left = std::make_unique<VBinOpExpr>(
+          VBinOp::Or, std::move(Left),
+          std::make_unique<VVarExpr>(Continue, VType::makeBool(), Loc),
+          VType::makeBool(), Loc);
+    Out.push_back(std::make_unique<VIfStmt>(
+        std::make_unique<VUnaryOpExpr>(VUnaryOp::Not, std::move(Left),
+                                       VType::makeBool(), Loc),
+        lowerExits(std::move(Rest), Break, Continue),
+        std::vector<std::unique_ptr<VStmt>>(), Loc));
+    return Out;
+  }
+  return Out;
+}
+
+static std::unique_ptr<VStmt> assignFlag(const std::string &Name, bool Value,
+                                         SourceLocation Loc) {
+  return std::make_unique<VAssignStmt>(
+      Name,
+      std::make_unique<VLiteralExpr>(Value ? 1 : 0, VType::makeBool(), Loc),
+      Loc);
+}
+
+static void joinInitialized(std::optional<std::set<std::string>> &Joined,
+                            const std::set<std::string> &State) {
+  if (!Joined) {
+    Joined = State;
+    return;
+  }
+  std::set<std::string> Both;
+  std::set_intersection(Joined->begin(), Joined->end(), State.begin(),
+                        State.end(), std::inserter(Both, Both.end()));
+  Joined = std::move(Both);
+}
+
+void ASTConverter::declareConditionVariable(
+    const DeclStmt *Decl, std::vector<std::unique_ptr<VStmt>> &Out) {
+  // It is declared at every test, inside the loop.
+  llvm::SaveAndRestore Depth(LoopDepth, LoopDepth + 1);
+  auto Declared = convertStmt(Decl);
+  Out.insert(Out.end(), std::make_move_iterator(Declared.begin()),
+             std::make_move_iterator(Declared.end()));
+}
+
+bool ASTConverter::checkConditionVariableUnnamed(
+    const VarDecl *Var, const std::vector<std::unique_ptr<VExpr>> &Invariants,
+    const std::vector<std::unique_ptr<VExpr>> &Decreases) {
+  if (!Var)
+    return true;
+  const std::string Name = valueName(Var);
+  auto Names = [&](const std::unique_ptr<VExpr> &E) {
+    return mentionsVariable(E.get(), Name);
+  };
+  if (llvm::none_of(Invariants, Names) && llvm::none_of(Decreases, Names))
+    return true;
+  error(CurrentFn->Name +
+        ": a loop's contract cannot name its condition "
+        "variable '" +
+        Var->getNameAsString() + "', which is declared at each test");
+  return false;
+}
+
 void ASTConverter::testAtEveryIteration(
     std::vector<std::unique_ptr<VStmt>> Calls, std::unique_ptr<VExpr> &Cond,
     std::vector<std::unique_ptr<VStmt>> &Body) {
@@ -7529,18 +7659,18 @@ void ASTConverter::registerAutomaticLocal(const VarDecl *VD) {
 }
 
 void ASTConverter::appendActiveLifetimeEnds(
-    std::vector<std::unique_ptr<VStmt>> &Out, SourceLocation Loc) {
+    std::vector<std::unique_ptr<VStmt>> &Out, SourceLocation Loc, size_t From,
+    bool IsFunctionExit) {
   for (auto It = ActiveAutomaticLocals.rbegin();
-       It != ActiveAutomaticLocals.rend(); ++It) {
+       It != ActiveAutomaticLocals.rend() - From; ++It) {
     auto Provenance = AutomaticLocalProvenanceVariables.find(*It);
     if (Provenance == AutomaticLocalProvenanceVariables.end()) {
       error(CurrentFn->Name +
             ": missing automatic-storage provenance at lifetime end");
       continue;
     }
-    Out.push_back(std::make_unique<VEndLifetimeStmt>(valueName(*It),
-                                                     Provenance->second, Loc,
-                                                     /*IsFunctionExit=*/true));
+    Out.push_back(std::make_unique<VEndLifetimeStmt>(
+        valueName(*It), Provenance->second, Loc, IsFunctionExit));
   }
 }
 
@@ -7586,6 +7716,235 @@ ASTConverter::convertScopedSubstatement(const Stmt *S) {
   enterAutomaticScope();
   auto Out = convertStmt(S);
   leaveAutomaticScope(Out, S ? S->getEndLoc() : SourceLocation());
+  return Out;
+}
+
+std::vector<std::unique_ptr<VStmt>>
+ASTConverter::convertSwitch(const SwitchStmt *SS) {
+  std::vector<std::unique_ptr<VStmt>> Out;
+  const bool Executable = !InGhost && !CurrentFn->IsSpec && !CurrentFn->IsProof;
+  const SourceLocation Loc = SS->getBeginLoc();
+  enterAutomaticScope();
+  for (const Stmt *Declared :
+       {SS->getInit(),
+        static_cast<const Stmt *>(SS->getConditionVariableDeclStmt())}) {
+    if (!Declared)
+      continue;
+    auto Part = convertStmt(Declared);
+    Out.insert(Out.end(), std::make_move_iterator(Part.begin()),
+               std::make_move_iterator(Part.end()));
+  }
+  std::unique_ptr<VExpr> Value;
+  {
+    llvm::SaveAndRestore Calls(CallSink, Executable ? &Out : nullptr);
+    Value = convertExpr(SS->getCond());
+  }
+  if (!Value) {
+    leaveAutomaticScope(Out, SS->getEndLoc());
+    return Out;
+  }
+
+  // The statements of the body, split where its labels are: a label
+  // starts a segment, which runs when it matches or when the segment before
+  // it falls through.
+  struct Segment {
+    std::vector<const SwitchCase *> Labels;
+    std::vector<const Stmt *> Stmts;
+  };
+  std::vector<Segment> Segments;
+  std::vector<const Stmt *> Leading;
+  std::vector<const Stmt *> Children;
+  if (const auto *Body = dyn_cast<CompoundStmt>(SS->getBody()))
+    Children.assign(Body->body_begin(), Body->body_end());
+  else
+    Children.push_back(SS->getBody());
+  std::set<const SwitchCase *> TopLevel;
+  for (const Stmt *Child : Children) {
+    const Stmt *Rest = Child;
+    bool Labeled = false;
+    while (true) {
+      const Stmt *Label = Rest;
+      while (const auto *AS = dyn_cast<AttributedStmt>(Label))
+        if (isa<SwitchCase>(AS->getSubStmt()))
+          Label = AS->getSubStmt();
+        else
+          break;
+      const auto *SC = dyn_cast<SwitchCase>(Label);
+      if (!SC)
+        break;
+      if (!Labeled)
+        Segments.emplace_back();
+      Labeled = true;
+      Segments.back().Labels.push_back(SC);
+      TopLevel.insert(SC);
+      Rest = SC->getSubStmt();
+    }
+    if (!Labeled && Segments.empty())
+      Leading.push_back(Child);
+    else
+      Segments.back().Stmts.push_back(Rest);
+  }
+  for (const SwitchCase *SC = SS->getSwitchCaseList(); SC;
+       SC = SC->getNextSwitchCase())
+    if (!TopLevel.count(SC)) {
+      error(SC->getSourceRange(),
+            CurrentFn->Name + ": a case label inside another statement of "
+                              "its switch is unsupported");
+      leaveAutomaticScope(Out, SS->getEndLoc());
+      return Out;
+    }
+
+  const std::string Id = std::to_string(++NestedCallId);
+  const std::string Selector = "__switch_" + Id;
+  const std::string Entered = "__switch_entered_" + Id;
+  const std::string Break = "__switch_break_" + Id;
+  const VType Ty = Value->Ty;
+  auto Read = [&](const std::string &Name, VType Type) {
+    return std::make_unique<VVarExpr>(Name, Type, Loc);
+  };
+  auto Matches = [&](const CaseStmt *CS) -> std::unique_ptr<VExpr> {
+    auto Constant = [&](const Expr *E) {
+      return std::make_unique<VLiteralExpr>(
+          integerValueString(E->EvaluateKnownConstInt(Ctx), Ty.IsSigned), Ty,
+          E->getExprLoc());
+    };
+    if (!CS->getRHS())
+      return std::make_unique<VBinOpExpr>(VBinOp::Eq, Read(Selector, Ty),
+                                          Constant(CS->getLHS()),
+                                          VType::makeBool(), Loc);
+    return std::make_unique<VBinOpExpr>(
+        VBinOp::And,
+        std::make_unique<VBinOpExpr>(VBinOp::Le, Constant(CS->getLHS()),
+                                     Read(Selector, Ty), VType::makeBool(),
+                                     Loc),
+        std::make_unique<VBinOpExpr>(VBinOp::Le, Read(Selector, Ty),
+                                     Constant(CS->getRHS()), VType::makeBool(),
+                                     Loc),
+        VType::makeBool(), Loc);
+  };
+  auto AnyOf = [&](std::unique_ptr<VExpr> Left, std::unique_ptr<VExpr> Right) {
+    if (!Left)
+      return Right;
+    return std::unique_ptr<VExpr>(std::make_unique<VBinOpExpr>(
+        VBinOp::Or, std::move(Left), std::move(Right), VType::makeBool(), Loc));
+  };
+  // The default label matches when no case does.
+  std::unique_ptr<VExpr> AnyCase;
+  bool HasDefault = false;
+  for (const SwitchCase *SC = SS->getSwitchCaseList(); SC;
+       SC = SC->getNextSwitchCase()) {
+    if (const auto *CS = dyn_cast<CaseStmt>(SC))
+      AnyCase = AnyOf(std::move(AnyCase), Matches(CS));
+    else
+      HasDefault = true;
+  }
+
+  Out.push_back(std::make_unique<VAssignStmt>(Selector, std::move(Value), Loc));
+  // Statements before the first label never run; declarations there are
+  // in scope after it.
+  for (const Stmt *Child : Leading)
+    if (isa<DeclStmt>(Child)) {
+      auto Part = convertStmt(Child);
+      Out.insert(Out.end(), std::make_move_iterator(Part.begin()),
+                 std::make_move_iterator(Part.end()));
+    }
+
+  const std::set<std::string> Before = InitializedValues;
+  const bool BeforeReachable = InitializationPathReachable;
+  enterAutomaticScope();
+  EnclosingLoop Target;
+  Target.IsSwitch = true;
+  Target.IsGhost = InGhost;
+  Target.ActiveLocals = ActiveAutomaticLocals.size();
+  Target.Scope = AutomaticScopeStack.size();
+  EnclosingLoops.push_back(std::move(Target));
+  struct LoweredSegment {
+    SourceLocation Loc;
+    std::unique_ptr<VExpr> Match;
+    std::vector<std::unique_ptr<VStmt>> Stmts;
+  };
+  std::vector<LoweredSegment> Lowered;
+  std::optional<std::set<std::string>> Left;
+  for (const Segment &Seg : Segments) {
+    std::unique_ptr<VExpr> Match;
+    for (const SwitchCase *SC : Seg.Labels) {
+      if (const auto *CS = dyn_cast<CaseStmt>(SC))
+        Match = AnyOf(std::move(Match), Matches(CS));
+      else
+        Match = AnyOf(
+            std::move(Match),
+            AnyCase ? std::make_unique<VUnaryOpExpr>(VUnaryOp::Not,
+                                                     cloneVExpr(AnyCase.get()),
+                                                     VType::makeBool(), Loc)
+                    : std::unique_ptr<VExpr>(std::make_unique<VLiteralExpr>(
+                          1, VType::makeBool(), Loc)));
+    }
+    // Entered by a jump to its label, it has only what was initialized
+    // before the switch; what falls through has more.
+    InitializedValues = Before;
+    InitializationPathReachable = BeforeReachable;
+    std::vector<std::unique_ptr<VStmt>> Stmts;
+    for (const Stmt *St : Seg.Stmts) {
+      auto Part = convertStmt(St);
+      Stmts.insert(Stmts.end(), std::make_move_iterator(Part.begin()),
+                   std::make_move_iterator(Part.end()));
+    }
+    Lowered.push_back({Seg.Labels.front()->getBeginLoc(), std::move(Match),
+                       std::move(Stmts)});
+  }
+  if (InitializationPathReachable)
+    joinInitialized(Left, InitializedValues);
+  std::vector<std::unique_ptr<VStmt>> BodyEnd;
+  leaveAutomaticScope(BodyEnd, SS->getEndLoc());
+  const EnclosingLoop Exits = std::move(EnclosingLoops.back());
+  EnclosingLoops.pop_back();
+
+  // entered = entered || matches; if (entered && !break) { segment }
+  if (!Lowered.empty())
+    Out.push_back(assignFlag(Entered, false, Loc));
+  if (Exits.Breaks)
+    Out.push_back(assignFlag(Break, false, Loc));
+  for (size_t Index = 0; Index < Lowered.size(); ++Index) {
+    LoweredSegment &Seg = Lowered[Index];
+    auto Flag = [&](const std::string &Name) {
+      return std::make_unique<VVarExpr>(Name, VType::makeBool(), Seg.Loc);
+    };
+    // With a default label, every label has matched by the last segment.
+    std::unique_ptr<VExpr> Runs;
+    if (!HasDefault || Index + 1 < Lowered.size()) {
+      Out.push_back(std::make_unique<VAssignStmt>(
+          Entered, AnyOf(Flag(Entered), std::move(Seg.Match)), Seg.Loc));
+      Runs = Flag(Entered);
+    }
+    if (Exits.Breaks) {
+      Seg.Stmts = lowerExits(std::move(Seg.Stmts), Break, "");
+      std::unique_ptr<VExpr> Running = std::make_unique<VUnaryOpExpr>(
+          VUnaryOp::Not, Flag(Break), VType::makeBool(), Seg.Loc);
+      Runs = Runs ? std::make_unique<VBinOpExpr>(VBinOp::And, std::move(Runs),
+                                                 std::move(Running),
+                                                 VType::makeBool(), Seg.Loc)
+                  : std::move(Running);
+    }
+    if (!Runs) {
+      Out.insert(Out.end(), std::make_move_iterator(Seg.Stmts.begin()),
+                 std::make_move_iterator(Seg.Stmts.end()));
+      continue;
+    }
+    Out.push_back(std::make_unique<VIfStmt>(
+        std::move(Runs), std::move(Seg.Stmts),
+        std::vector<std::unique_ptr<VStmt>>(), Seg.Loc));
+  }
+  Out.insert(Out.end(), std::make_move_iterator(BodyEnd.begin()),
+             std::make_move_iterator(BodyEnd.end()));
+  // It ends after the last segment, at each break, and, without a default
+  // label, where no case matches.
+  if (Exits.BreakInitialized)
+    joinInitialized(Left, *Exits.BreakInitialized);
+  if (!HasDefault && BeforeReachable)
+    joinInitialized(Left, Before);
+  InitializedValues = Left ? *Left : Before;
+  InitializationPathReachable = Left.has_value();
+  leaveAutomaticScope(Out, SS->getEndLoc());
   return Out;
 }
 
@@ -7800,25 +8159,35 @@ ASTConverter::convertStmtBody(const Stmt *S) {
   }
   if (isa<BreakStmt>(S) || isa<ContinueStmt>(S)) {
     const bool IsBreak = isa<BreakStmt>(S);
-    if (EnclosingLoops.empty()) {
+    // A break leaves the innermost loop or switch, a continue the innermost
+    // loop.
+    auto Target = std::find_if(
+        EnclosingLoops.rbegin(), EnclosingLoops.rend(),
+        [&](const EnclosingLoop &L) { return IsBreak || !L.IsSwitch; });
+    if (Target == EnclosingLoops.rend()) {
       error(CurrentFn->Name + ": " + (IsBreak ? "break" : "continue") +
             " outside a loop is unsupported");
       return Out;
     }
-    if (EnclosingLoops.back().IsDo) {
-      error(CurrentFn->Name +
-            ": break and continue in do loops are unsupported");
-      return Out;
-    }
     // Ghost code is erased, so it cannot change executable control flow.
-    if (InGhost && !EnclosingLoops.back().IsGhost) {
-      error(CurrentFn->Name + ": ghost code cannot leave an executable loop");
+    if (InGhost && !Target->IsGhost) {
+      error(CurrentFn->Name + ": ghost code cannot leave an executable " +
+            (Target->IsSwitch ? "switch" : "loop"));
       return Out;
     }
+    if (InitializationPathReachable)
+      joinInitialized(IsBreak ? Target->BreakInitialized
+                              : Target->ContinueInitialized,
+                      InitializedValues);
+    (IsBreak ? Target->Breaks : Target->Continues) = true;
     if (IsBreak) {
+      // The objects declared in the switch end where the break leaves it.
+      if (Target->IsSwitch)
+        appendActiveLifetimeEnds(Out, S->getBeginLoc(), Target->ActiveLocals,
+                                 /*IsFunctionExit=*/false);
       Out.push_back(std::make_unique<VBreakStmt>(S->getBeginLoc()));
     } else {
-      if (const Expr *Inc = EnclosingLoops.back().Increment) {
+      if (const Expr *Inc = Target->Increment) {
         auto IncPart = convertStmt(Inc);
         Out.insert(Out.end(), std::make_move_iterator(IncPart.begin()),
                    std::make_move_iterator(IncPart.end()));
@@ -7829,15 +8198,16 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     return Out;
   }
   if (const auto *WS = dyn_cast<WhileStmt>(S)) {
-    if (WS->getConditionVariable()) {
-      error(CurrentFn->Name + ": while condition declarations are unsupported");
-      return Out;
-    }
+    const std::set<std::string> Before = InitializedValues;
     std::vector<std::unique_ptr<VStmt>> CondCalls;
+    if (WS->getConditionVariable())
+      declareConditionVariable(WS->getConditionVariableDeclStmt(), CondCalls);
     auto Cond = convertLoopCondition(WS, WS->getCond(),
                                      Executable ? &CondCalls : nullptr);
-    if (!Cond)
+    if (!Cond) {
+      InitializedValues = Before;
       return Out;
+    }
     std::vector<std::unique_ptr<VExpr>> Invariants;
     std::vector<std::unique_ptr<VExpr>> Decreases;
     if (const LoopContractInfo *LCI = Ctx.getLoopContract(WS)) {
@@ -7851,9 +8221,12 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           Decreases.push_back(std::move(E));
       InContractExpression = SavedContract;
     }
-    if (!checkLoopTermination(WS, !Decreases.empty()))
+    if (!checkConditionVariableUnnamed(WS->getConditionVariable(), Invariants,
+                                       Decreases) ||
+        !checkLoopTermination(WS, !Decreases.empty())) {
+      InitializedValues = Before;
       return Out;
-    const std::set<std::string> Before = InitializedValues;
+    }
     const bool BeforeReachable = InitializationPathReachable;
     ++LoopDepth;
     EnclosingLoops.push_back({nullptr, false, InGhost});
@@ -7877,13 +8250,20 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     ++LoopDepth;
     EnclosingLoops.push_back({nullptr, /*IsDo=*/true, InGhost});
     auto Body = convertScopedSubstatement(DS->getBody());
+    const EnclosingLoop Exits = std::move(EnclosingLoops.back());
     EnclosingLoops.pop_back();
     --LoopDepth;
 
     // A do-while body executes once before its condition and contracts are
-    // observed. Preserve definite initialization from that mandatory pass.
-    const std::set<std::string> AfterFirst = InitializedValues;
-    const bool AfterFirstReachable = InitializationPathReachable;
+    // observed. Preserve definite initialization from that mandatory pass,
+    // which reaches the condition at its end and at each continue.
+    std::optional<std::set<std::string>> Tested = Exits.ContinueInitialized;
+    if (InitializationPathReachable)
+      joinInitialized(Tested, InitializedValues);
+    const std::set<std::string> AfterFirst = Tested ? *Tested : Before;
+    const bool AfterFirstReachable = Tested.has_value();
+    InitializedValues = AfterFirst;
+    InitializationPathReachable = AfterFirstReachable;
     std::vector<std::unique_ptr<VStmt>> CondCalls;
     auto Cond = convertLoopCondition(DS, DS->getCond(),
                                      Executable ? &CondCalls : nullptr);
@@ -7914,41 +8294,68 @@ ASTConverter::convertStmtBody(const Stmt *S) {
 
     // body; while (cond) invariant(...) decreases(...) { body; }
     // Existing VWhile passivization proves invariant establishment exactly
-    // after the mandatory first iteration.
+    // after the mandatory first iteration, whose break and continue are
+    // flags.
+    std::vector<std::unique_ptr<VStmt>> First;
     for (const auto &Stmt : Body)
-      Out.push_back(cloneVStmt(Stmt.get()));
+      First.push_back(cloneVStmt(Stmt.get()));
+    std::string BreakFlag;
+    if (Exits.Breaks || Exits.Continues) {
+      const std::string Id = std::to_string(++NestedCallId);
+      BreakFlag = "__do_break_" + Id;
+      const std::string ContinueFlag = "__do_continue_" + Id;
+      Out.push_back(assignFlag(BreakFlag, false, DS->getBeginLoc()));
+      Out.push_back(assignFlag(ContinueFlag, false, DS->getBeginLoc()));
+      First = lowerExits(std::move(First), BreakFlag, ContinueFlag);
+    }
+    Out.insert(Out.end(), std::make_move_iterator(First.begin()),
+               std::make_move_iterator(First.end()));
     testAtEveryIteration(std::move(CondCalls), Cond, Body);
-    auto Loop = std::make_unique<VWhileStmt>(
+    std::unique_ptr<VStmt> Loop = std::make_unique<VWhileStmt>(
         std::move(Cond), std::move(Invariants), std::move(Decreases),
         std::move(Body), DS->getBeginLoc());
     if (const LoopContractInfo *LCI = Ctx.getLoopContract(DS))
-      Loop->Modifies = convertLoopFootprints(*LCI);
+      static_cast<VWhileStmt &>(*Loop).Modifies = convertLoopFootprints(*LCI);
+    if (Exits.Breaks) {
+      std::vector<std::unique_ptr<VStmt>> Repeated;
+      Repeated.push_back(std::move(Loop));
+      Loop = std::make_unique<VIfStmt>(
+          std::make_unique<VUnaryOpExpr>(
+              VUnaryOp::Not,
+              std::make_unique<VVarExpr>(BreakFlag, VType::makeBool(),
+                                         DS->getBeginLoc()),
+              VType::makeBool(), DS->getBeginLoc()),
+          std::move(Repeated), std::vector<std::unique_ptr<VStmt>>(),
+          DS->getBeginLoc());
+    }
     Out.push_back(std::move(Loop));
-    InitializedValues = AfterFirst;
-    InitializationPathReachable = AfterFirstReachable;
+    // It ends where the condition fails and at each break.
+    std::optional<std::set<std::string>> Left = Exits.BreakInitialized;
+    if (AfterFirstReachable)
+      joinInitialized(Left, AfterFirst);
+    InitializedValues = Left ? *Left : Before;
+    InitializationPathReachable = Left.has_value();
     return Out;
   }
   if (const auto *FS = dyn_cast<ForStmt>(S)) {
     enterAutomaticScope();
-    if (FS->getConditionVariable()) {
-      error(CurrentFn->Name + ": for condition declarations are unsupported");
-      leaveAutomaticScope(Out, FS->getEndLoc());
-      return Out;
-    }
     if (FS->getInit()) {
       auto Init = convertStmt(FS->getInit());
       Out.insert(Out.end(), std::make_move_iterator(Init.begin()),
                  std::make_move_iterator(Init.end()));
     }
-    if (!FS->getCond()) {
-      error(CurrentFn->Name + ": conditionless for loops are unsupported");
-      leaveAutomaticScope(Out, FS->getEndLoc());
-      return Out;
-    }
+    const std::set<std::string> BeforeCondition = InitializedValues;
     std::vector<std::unique_ptr<VStmt>> CondCalls;
-    auto Cond = convertLoopCondition(FS, FS->getCond(),
-                                     Executable ? &CondCalls : nullptr);
+    if (FS->getConditionVariable())
+      declareConditionVariable(FS->getConditionVariableDeclStmt(), CondCalls);
+    // Without a condition, the loop repeats until it is left.
+    auto Cond = FS->getCond()
+                    ? convertLoopCondition(FS, FS->getCond(),
+                                           Executable ? &CondCalls : nullptr)
+                    : std::make_unique<VLiteralExpr>(1, VType::makeBool(),
+                                                     FS->getBeginLoc());
     if (!Cond) {
+      InitializedValues = BeforeCondition;
       leaveAutomaticScope(Out, FS->getEndLoc());
       return Out;
     }
@@ -7965,11 +8372,14 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           Decreases.push_back(std::move(E));
       InContractExpression = SavedContract;
     }
-    if (!checkLoopTermination(FS, !Decreases.empty())) {
+    if (!checkConditionVariableUnnamed(FS->getConditionVariable(), Invariants,
+                                       Decreases) ||
+        !checkLoopTermination(FS, !Decreases.empty())) {
+      InitializedValues = BeforeCondition;
       leaveAutomaticScope(Out, FS->getEndLoc());
       return Out;
     }
-    const std::set<std::string> BeforeLoop = InitializedValues;
+    const std::set<std::string> BeforeLoop = BeforeCondition;
     const bool BeforeLoopReachable = InitializationPathReachable;
     ++LoopDepth;
     EnclosingLoops.push_back({FS->getInc(), false, InGhost});
@@ -7994,6 +8404,18 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     Out.push_back(std::move(Loop));
     leaveAutomaticScope(Out, FS->getEndLoc());
     return Out;
+  }
+  if (const auto *SS = dyn_cast<SwitchStmt>(S))
+    return convertSwitch(SS);
+  if (const auto *AS = dyn_cast<AttributedStmt>(S)) {
+    // [[fallthrough]], [[likely]], and the like do not change what a
+    // statement does; [[assume(e)]] makes e false undefined.
+    if (llvm::any_of(AS->getAttrs(),
+                     [](const Attr *A) { return isa<CXXAssumeAttr>(A); })) {
+      error(CurrentFn->Name + ": [[assume]] is unsupported");
+      return Out;
+    }
+    return convertStmt(AS->getSubStmt());
   }
   if (const auto *Cleanups = dyn_cast<ExprWithCleanups>(S);
       Cleanups && onlyCollectionTemporaries(Cleanups))
@@ -8271,6 +8693,15 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     return Out;
   }
   if (const auto *BO = dyn_cast<BinaryOperator>(S)) {
+    // A discarded comma expression is its operands' statements, in order.
+    if (BO->getOpcode() == BO_Comma) {
+      for (const Expr *Operand : {BO->getLHS(), BO->getRHS()}) {
+        auto Part = convertStmt(Operand);
+        Out.insert(Out.end(), std::make_move_iterator(Part.begin()),
+                   std::make_move_iterator(Part.end()));
+      }
+      return Out;
+    }
     if (BO->isAssignmentOp()) {
       if (const auto *Target =
               dyn_cast<DeclRefExpr>(BO->getLHS()->IgnoreParenImpCasts());
@@ -8477,6 +8908,14 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           error(
               CurrentFn->Name +
               ": addressable local declarations inside loops are unsupported");
+          continue;
+        }
+        // A label after it may enter the switch without declaring it.
+        if (!EnclosingLoops.empty() && EnclosingLoops.back().IsSwitch &&
+            AutomaticScopeStack.size() == EnclosingLoops.back().Scope) {
+          error(CurrentFn->Name + ": a local whose address is used, declared "
+                                  "directly in a switch, is unsupported; "
+                                  "declare it in a block after its label");
           continue;
         }
         if (InGhost || CurrentFn->IsSpec || CurrentFn->IsProof) {
