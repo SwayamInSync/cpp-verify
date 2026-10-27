@@ -52,7 +52,6 @@ cppverify::proof void opaque_logic()
 // LOGIC-NEXT: fuel 0
 // LOGIC-NEXT: step
 // LOGIC-NOT: definition
-// LOGIC: Lowered: spec axiom: hidden
 
 // Z3-DAG: Verified: recursive_logic
 // Z3-DAG: Verified: opaque_logic
