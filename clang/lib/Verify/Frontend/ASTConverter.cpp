@@ -243,6 +243,8 @@ static bool mentionsOld(const VExpr *E) {
     const auto *O = static_cast<const VOverflowCheckExpr *>(E);
     return mentionsOld(O->Lhs.get()) || mentionsOld(O->Rhs.get());
   }
+  case VExpr::Require:
+    return mentionsOld(static_cast<const VRequireExpr *>(E)->Cond.get());
   }
   llvm_unreachable("unknown VCR expression kind");
 }
@@ -326,6 +328,9 @@ usesHeapBackedLocalAsScalar(const VExpr *E,
     return usesHeapBackedLocalAsScalar(Check->Lhs.get(), HeapBackedLocals) ||
            usesHeapBackedLocalAsScalar(Check->Rhs.get(), HeapBackedLocals);
   }
+  case VExpr::Require:
+    return usesHeapBackedLocalAsScalar(
+        static_cast<const VRequireExpr *>(E)->Cond.get(), HeapBackedLocals);
   }
   llvm_unreachable("unknown VCR expression kind");
 }
@@ -385,6 +390,9 @@ static bool expressionReadsHeap(const VExpr *E, bool SpecReads = false) {
     return expressionReadsHeap(O->Lhs.get(), SpecReads) ||
            expressionReadsHeap(O->Rhs.get(), SpecReads);
   }
+  case VExpr::Require:
+    return expressionReadsHeap(static_cast<const VRequireExpr *>(E)->Cond.get(),
+                               SpecReads);
   }
   llvm_unreachable("unknown VCR expression kind");
 }
@@ -1140,6 +1148,9 @@ static bool exprReferencesSpecCall(const VExpr *E, const std::string &Name) {
     return exprReferencesSpecCall(O->Lhs.get(), Name) ||
            exprReferencesSpecCall(O->Rhs.get(), Name);
   }
+  case VExpr::Require:
+    return exprReferencesSpecCall(
+        static_cast<const VRequireExpr *>(E)->Cond.get(), Name);
   case VExpr::Literal:
   case VExpr::Var:
   case VExpr::Result:
@@ -5240,6 +5251,13 @@ static bool structuralKey(const VExpr *E,
       return false;
     break;
   }
+  case VExpr::Require: {
+    const auto *R = static_cast<const VRequireExpr *>(E);
+    Key += std::to_string(R->ProofKind);
+    if (!sub(R->Cond.get()))
+      return false;
+    break;
+  }
   case VExpr::HeapStore:
   case VExpr::HeapFrame:
     return false;
@@ -6154,6 +6172,12 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
   if (const auto *ICE = dyn_cast<ImplicitCastExpr>(E)) {
     if (ICE->getCastKind() == CK_NullToPointer)
       return std::make_unique<VLiteralExpr>(0, VType::makePtr(),
+                                            E->getExprLoc());
+    // A string literal is an object, so its address is never null:
+    // assert(c && "message").
+    if (ICE->getCastKind() == CK_PointerToBoolean &&
+        isa<StringLiteral>(ICE->getSubExpr()->IgnoreParenImpCasts()))
+      return std::make_unique<VLiteralExpr>(1, VType::makeBool(),
                                             E->getExprLoc());
     auto Inner = convertExpr(ICE->getSubExpr());
     if (!Inner)
@@ -7789,6 +7813,39 @@ void ASTConverter::leaveAutomaticScope(std::vector<std::unique_ptr<VStmt>> &Out,
   }
 }
 
+void ASTConverter::appendBranches(std::unique_ptr<VExpr> Cond, const Stmt *Then,
+                                  const Stmt *Else, SourceLocation Loc,
+                                  std::vector<std::unique_ptr<VStmt>> &Out) {
+  const std::set<std::string> Before = InitializedValues;
+  const bool BeforeReachable = InitializationPathReachable;
+  auto ThenStmts = convertScopedSubstatement(Then);
+  const std::set<std::string> ThenInitialized = InitializedValues;
+  const bool ThenReachable = InitializationPathReachable;
+  InitializedValues = Before;
+  InitializationPathReachable = BeforeReachable;
+  std::vector<std::unique_ptr<VStmt>> ElseStmts;
+  if (Else)
+    ElseStmts = convertScopedSubstatement(Else);
+  const std::set<std::string> ElseInitialized = InitializedValues;
+  const bool ElseReachable = InitializationPathReachable;
+  if (ThenReachable && ElseReachable) {
+    std::set<std::string> Merged;
+    std::set_intersection(ThenInitialized.begin(), ThenInitialized.end(),
+                          ElseInitialized.begin(), ElseInitialized.end(),
+                          std::inserter(Merged, Merged.end()));
+    InitializedValues = std::move(Merged);
+  } else if (ThenReachable) {
+    InitializedValues = ThenInitialized;
+  } else if (ElseReachable) {
+    InitializedValues = ElseInitialized;
+  } else {
+    InitializedValues = Before;
+  }
+  InitializationPathReachable = ThenReachable || ElseReachable;
+  Out.push_back(std::make_unique<VIfStmt>(std::move(Cond), std::move(ThenStmts),
+                                          std::move(ElseStmts), Loc));
+}
+
 std::vector<std::unique_ptr<VStmt>>
 ASTConverter::convertScopedSubstatement(const Stmt *S) {
   if (isa_and_nonnull<CompoundStmt>(S))
@@ -8028,6 +8085,47 @@ ASTConverter::convertSwitch(const SwitchStmt *SS) {
   return Out;
 }
 
+void ASTConverter::appendAssumption(const Expr *Assumption, SourceLocation Loc,
+                                    std::vector<std::unique_ptr<VStmt>> &Out) {
+  const bool Executable = !InGhost && !CurrentFn->IsSpec && !CurrentFn->IsProof;
+  llvm::SaveAndRestore Calls(CallSink, Executable ? &Out : nullptr);
+  auto Holds = convertExpr(Assumption);
+  if (!Holds)
+    return;
+  Out.push_back(std::make_unique<VAssertStmt>(cloneVExpr(Holds.get()), Loc,
+                                              ProofObligationKind::Assertion));
+  Out.push_back(std::make_unique<VAssumeStmt>(std::move(Holds), Loc));
+}
+
+void ASTConverter::appendDiscarded(const Expr *E,
+                                   std::vector<std::unique_ptr<VStmt>> &Out) {
+  // A discarded value is computed, with its checks, when it is a prvalue; a
+  // glvalue that is not volatile is not even read ([expr.context]).
+  if (E->HasSideEffects(Ctx)) {
+    error(CurrentFn->Name + ": unsupported expression statement");
+    return;
+  }
+  if (E->isGLValue() || E->getType()->isVoidType())
+    return;
+  auto Value = convertExpr(E);
+  if (!Value)
+    return;
+  Out.push_back(std::make_unique<VAssignStmt>(
+      "__discarded_" + std::to_string(++NestedCallId), std::move(Value),
+      E->getExprLoc()));
+}
+
+/// abort, exit, std::terminate, __builtin_unreachable, __builtin_trap, the
+/// failure of assert(), and every other [[noreturn]] function. MSVC's
+/// _wassert and _assert, which assert() calls when it fails, are not marked.
+static bool doesNotReturn(const FunctionDecl *Callee) {
+  if (Callee->isNoReturn())
+    return true;
+  const IdentifierInfo *Name = Callee->getIdentifier();
+  return Name && Callee->isExternC() &&
+         (Name->isStr("_wassert") || Name->isStr("_assert"));
+}
+
 void ASTConverter::appendReturn(std::unique_ptr<VExpr> Value,
                                 std::vector<std::unique_ptr<VStmt>> &Out,
                                 SourceLocation Loc) {
@@ -8238,35 +8336,45 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       leaveAutomaticScope(Out, IS->getEndLoc());
       return Out;
     }
-    const std::set<std::string> Before = InitializedValues;
-    const bool BeforeReachable = InitializationPathReachable;
-    auto Then = convertScopedSubstatement(IS->getThen());
-    const std::set<std::string> ThenInitialized = InitializedValues;
-    const bool ThenReachable = InitializationPathReachable;
-    InitializedValues = Before;
-    InitializationPathReachable = BeforeReachable;
-    std::vector<std::unique_ptr<VStmt>> Else;
-    if (IS->getElse())
-      Else = convertScopedSubstatement(IS->getElse());
-    const std::set<std::string> ElseInitialized = InitializedValues;
-    const bool ElseReachable = InitializationPathReachable;
-    if (ThenReachable && ElseReachable) {
-      std::set<std::string> Merged;
-      std::set_intersection(ThenInitialized.begin(), ThenInitialized.end(),
-                            ElseInitialized.begin(), ElseInitialized.end(),
-                            std::inserter(Merged, Merged.end()));
-      InitializedValues = std::move(Merged);
-    } else if (ThenReachable) {
-      InitializedValues = ThenInitialized;
-    } else if (ElseReachable) {
-      InitializedValues = ElseInitialized;
-    } else {
-      InitializedValues = Before;
-    }
-    InitializationPathReachable = ThenReachable || ElseReachable;
-    Out.push_back(std::make_unique<VIfStmt>(
-        std::move(Cond), std::move(Then), std::move(Else), IS->getBeginLoc()));
+    appendBranches(std::move(Cond), IS->getThen(), IS->getElse(),
+                   IS->getBeginLoc(), Out);
     leaveAutomaticScope(Out, IS->getEndLoc());
+    return Out;
+  }
+  // A discarded ?:, &&, or || runs its operands on their paths, as an if
+  // does; assert(e) expands to one. A discarded operand's implicit
+  // conversion only evaluates it.
+  if (const auto *Paren = dyn_cast<ParenExpr>(S))
+    return convertStmt(Paren->getSubExpr());
+  if (const auto *Implicit = dyn_cast<ImplicitCastExpr>(S);
+      Implicit && !Implicit->getType().isVolatileQualified())
+    return convertStmt(Implicit->getSubExpr());
+  if (const auto *Choice = dyn_cast<ConditionalOperator>(S)) {
+    std::unique_ptr<VExpr> Cond;
+    {
+      llvm::SaveAndRestore Calls(CallSink, Executable ? &Out : nullptr);
+      Cond = convertExpr(Choice->getCond());
+    }
+    if (Cond)
+      appendBranches(std::move(Cond), Choice->getTrueExpr(),
+                     Choice->getFalseExpr(), Choice->getExprLoc(), Out);
+    return Out;
+  }
+  if (const auto *Logical = dyn_cast<BinaryOperator>(S);
+      Logical && Logical->isLogicalOp()) {
+    std::unique_ptr<VExpr> Cond;
+    {
+      llvm::SaveAndRestore Calls(CallSink, Executable ? &Out : nullptr);
+      Cond = convertExpr(Logical->getLHS());
+    }
+    if (!Cond)
+      return Out;
+    if (Logical->getOpcode() == BO_LOr)
+      Cond = std::make_unique<VUnaryOpExpr>(VUnaryOp::Not, std::move(Cond),
+                                            VType::makeBool(),
+                                            Logical->getExprLoc());
+    appendBranches(std::move(Cond), Logical->getRHS(), nullptr,
+                   Logical->getExprLoc(), Out);
     return Out;
   }
   if (isa<BreakStmt>(S) || isa<ContinueStmt>(S)) {
@@ -8521,13 +8629,15 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     return convertSwitch(SS);
   if (const auto *AS = dyn_cast<AttributedStmt>(S)) {
     // [[fallthrough]], [[likely]], and the like do not change what a
-    // statement does; [[assume(e)]] makes e false undefined.
-    if (llvm::any_of(AS->getAttrs(),
-                     [](const Attr *A) { return isa<CXXAssumeAttr>(A); })) {
-      error(CurrentFn->Name + ": [[assume]] is unsupported");
-      return Out;
-    }
-    return convertStmt(AS->getSubStmt());
+    // statement does; [[assume(e)]] makes e false undefined, so e is proved,
+    // then assumed.
+    for (const Attr *A : AS->getAttrs())
+      if (const auto *Assume = dyn_cast<CXXAssumeAttr>(A))
+        appendAssumption(Assume->getAssumption(), Assume->getLocation(), Out);
+    auto Rest = convertStmt(AS->getSubStmt());
+    Out.insert(Out.end(), std::make_move_iterator(Rest.begin()),
+               std::make_move_iterator(Rest.end()));
+    return Out;
   }
   if (const auto *Cleanups = dyn_cast<ExprWithCleanups>(S);
       Cleanups && onlyCollectionTemporaries(Cleanups))
@@ -8602,7 +8712,27 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     }
   }
   if (const auto *CE = dyn_cast<CallExpr>(S)) {
+    // __builtin_assume(e): e false is undefined, so e is proved, then
+    // assumed.
+    if (CE->getBuiltinCallee() == Builtin::BI__builtin_assume) {
+      appendAssumption(CE->getArg(0), CE->getExprLoc(), Out);
+      return Out;
+    }
     if (const FunctionDecl *Callee = CE->getDirectCallee()) {
+      // A call that does not return (abort, exit, a failed assert,
+      // __builtin_unreachable) must not be reached: the path ends there.
+      if (doesNotReturn(Callee)) {
+        Out.push_back(std::make_unique<VAssertStmt>(
+            std::make_unique<VLiteralExpr>(0, VType::makeBool(),
+                                           CE->getExprLoc()),
+            CE->getExprLoc(), ProofObligationKind::Unreachable));
+        Out.push_back(std::make_unique<VAssumeStmt>(
+            std::make_unique<VLiteralExpr>(0, VType::makeBool(),
+                                           CE->getExprLoc()),
+            CE->getExprLoc()));
+        InitializationPathReachable = false;
+        return Out;
+      }
       if ((InGhost || CurrentFn->IsProof) && !calleeIsProof(Callee)) {
         error(CurrentFn->Name +
               ": proof-only code cannot call executable functions");
@@ -8941,7 +9071,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       auto Value = convertAssignmentValue(BO);
       appendAssignment(BO->getLHS(), std::move(Value), BO->getExprLoc(), Out);
     } else
-      error(CurrentFn->Name + ": unsupported expression statement");
+      appendDiscarded(BO, Out);
     return Out;
   }
   if (const auto *U = dyn_cast<UnaryOperator>(S)) {
@@ -8993,11 +9123,11 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       error(CurrentFn->Name + ": unsupported unary expression statement");
     return Out;
   }
-  if (const auto *CE = dyn_cast<CStyleCastExpr>(S)) {
-    const Expr *Sub = CE->getSubExpr()->IgnoreParenImpCasts();
-    if (CE->getCastKind() == CK_ToVoid && isa<DeclRefExpr>(Sub) &&
-        !Sub->getType().isVolatileQualified())
-      return Out;
+  // (void)e, static_cast<void>(e), and void(e) evaluate e and discard it.
+  if (const auto *CE = dyn_cast<ExplicitCastExpr>(S);
+      CE && CE->getCastKind() == CK_ToVoid)
+    return convertStmt(CE->getSubExpr());
+  if (isa<CStyleCastExpr>(S)) {
     error(CurrentFn->Name + ": unsupported discarded-value expression");
     return Out;
   }
@@ -9361,6 +9491,10 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         markInitialized(VD);
       }
     }
+    return Out;
+  }
+  if (const auto *E = dyn_cast<Expr>(S); E && !E->HasSideEffects(Ctx)) {
+    appendDiscarded(E, Out);
     return Out;
   }
   error(CurrentFn->Name + ": unsupported statement: " + S->getStmtClassName());
