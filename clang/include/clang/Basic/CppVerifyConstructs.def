@@ -53,6 +53,7 @@ CPPVERIFY_CONSTRUCT(Exists, "exists", Expression)
 CPPVERIFY_CONSTRUCT(Choose, "choose", Expression)
 CPPVERIFY_CONSTRUCT(Old, "old", Expression)
 CPPVERIFY_CONSTRUCT(Result, "result", Expression)
+CPPVERIFY_CONSTRUCT(Index, "index", Expression)
 CPPVERIFY_CONSTRUCT(Trigger, "trigger", Expression)
 
 #undef CPPVERIFY_CONSTRUCT
