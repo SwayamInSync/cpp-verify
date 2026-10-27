@@ -253,10 +253,14 @@ Both are reported with the input that shows it:
 
 .. code-block:: text
 
-   error: verification failed: clamp_overlap [...::assertion@10:3]
-     (counterexample: hi = 0, lo = 0, x = 0)
-   error: verification failed: clamp_gap [...::assertion@27:3]
-     (counterexample: hi = 0, lo = 0, x = 0)
+   example.cpp:10:3: error: verification failed: clamp_overlap [assertion] [backend=z3] [reason=counterexample]
+      10 |   cv::disjoint_behaviors
+         |   ^
+   example.cpp:10:3: note: counterexample: x = 0, lo = 0, hi = 0
+   example.cpp:27:3: error: verification failed: clamp_gap [assertion] [backend=z3] [reason=counterexample]
+      27 |   cv::complete_behaviors
+         |   ^
+   example.cpp:27:3: note: counterexample: x = 0, lo = 0, hi = 0
 
 Universal statements: sorted arrays
 -----------------------------------
@@ -434,8 +438,14 @@ fails:
 
 .. code-block:: text
 
-   error: verification failed: which [...::postcondition@3:15]
-     (counterexample: result = 0, a = 536, n = 2; trace: call.argmax ...)
+   example.cpp:3:23: error: verification failed: which [postcondition] [backend=z3] [reason=counterexample]
+       3 |   cv::post(cv::result == some_max(a, n))
+         |            ~~~~~~~~~~~^~~~~~~~~~~~~~~~~
+   example.cpp:3:23: note: counterexample: a = 536, n = 2, result = 0
+   example.cpp:5:3: note: calls argmax(536, 2)
+       5 |   return argmax(a, n);
+         |   ^
+   example.cpp:5:3: note: returns 0
 
 In the counterexample both elements are maxima, ``argmax`` returns 0, and
 ``cppverify::choose`` picks 1.
