@@ -413,6 +413,16 @@ that may write what another operand reads is an error at the expression,
 and an assignment's right operand is evaluated before its target, as C++17
 says (:doc:`language/functions-loops`).
 
+**Pointer steps and reused names.** ``++p``, ``p--``, ``p += n``, and
+``p -= n`` on a pointer were errors (``pointer increment/decrement is
+unsupported``, ``pointer compound assignment is unsupported``), and so was a
+local that took the name of a parameter or of another local, even in a later
+block, as two ``for (int i = ...)`` loops in one function do (``local variable
+shadowing is unsupported``). A pointer step as a statement is now the
+assignment it abbreviates, with the checks of that step, and each declaration
+is a variable of its own (:doc:`language/pointers`,
+:doc:`language/functions-loops`).
+
 **Switch statements and loop forms.** ``switch`` stopped its function with
 ``unsupported statement: SwitchStmt``, and so did ``break`` and ``continue``
 in a ``do`` loop, a condition declaration (``while (int k = next(i))``), a
