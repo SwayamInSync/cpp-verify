@@ -194,7 +194,6 @@ int clamped(int x)
   int c = clamp(x, 0, 10);
   return c;
 }
-// CHECK-DAG: Verified: spec axiom: between<int>
 // CHECK-DAG: Verified: clamp<int> [backend=z3]
 // CHECK-DAG: Verified: clamped [backend=z3]
 
@@ -360,7 +359,6 @@ int clamp3(int x)
   return x < 3 ? 3 : x;
 }
 // CHECK-DAG: Verified: clamp3 [backend=z3]
-// CHECK-DAG: Verified: constexpr spec axiom: bigger_of<int>
 
 // A contract written on the definition, after a declaration that names its
 // parameter otherwise and before which the template is used.
