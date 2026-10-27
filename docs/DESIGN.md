@@ -2239,13 +2239,15 @@ canonical source order, so concurrency cannot choose which failure is public.
 of one function together, in wall-clock time; once it is spent no further
 query starts and the function is `Unresolved` (`solver.timeout`). AST/VCR lowering and Lean emission remain serial.
 `--solver-rlimit` adds a deterministic per-query Z3 budget.
-`--max-query-nodes` (default 32,000,000) bounds the expression nodes built
-for one function: the size of its obligations, each of which repeats every
-assumption before it, is known exactly before they are built, so a function
-over the limit is refused before it takes the memory, and the facts about
-the specs it applies (definitions unfolded as deep as their fuel,
-postconditions at each application) are counted as they are built and stop
-at the limit. `--memory-limit` (default 8192 MB) bounds Z3's queries
+`--max-query-nodes` (default 4,000,000) bounds the distinct expression
+nodes built for one function, which is what it takes in memory: its
+obligations, each of which restates every assumption before it and shares
+its terms, and the facts about the specs it applies (definitions unfolded as
+deep as their fuel, postconditions at each application) are counted as they
+are built and stop at the limit, so a function over it ends before it takes
+the memory. What states each term in full, an SMT-LIB script for cvc5 and an
+archive record, is checked against the same limit as the tree it would
+state. `--memory-limit` (default 8192 MB) bounds Z3's queries
 together, which a check's watchdog stops once Z3's allocations pass it, and
 each cvc5 process, whose allocations past it fail. Neither limit can become
 success: a function over the first is `Unresolved` with `query.size-limit`,
