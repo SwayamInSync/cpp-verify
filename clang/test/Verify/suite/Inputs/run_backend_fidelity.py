@@ -124,7 +124,10 @@ def parse_json_lines(output):
             fail("non-JSON diagnostic on line {}: {} ({})".format(
                 line_number, line, error
             ))
-        if record.get("schema") != "cppverify.diagnostic/1":
+        # The run's counts end the stream.
+        if record.get("schema") == "cppverify.summary/1":
+            continue
+        if record.get("schema") != "cppverify.diagnostic/2":
             fail("unexpected diagnostic schema: {}".format(record))
         records.append(record)
     if not records:
