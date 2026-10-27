@@ -49,6 +49,7 @@ add_clang_library(clangVerify
   Backend/LeanBackend.cpp
   Driver/Verifier.cpp
   Driver/Counterexample.cpp
+  Driver/StructuredOutput.cpp
   Driver/DumpIR.cpp
   Driver/CppVerifyIntegration.cpp
   Driver/CppVerifyVersion.cpp
