@@ -275,14 +275,15 @@ int pass_too_long(const Ring *r)
 {
   return first(r->buf, 9);
 }
-// CHECK-DAG: error: verification failed: pass_too_long [{{.*}}::bounds@[[@LINE-2]]:3#2] (counterexample: r [ssa=r_0] [type=pointer] = {{[0-9]+}}
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: pass_too_long [bounds]
+// CHECK-DAG: note: counterexample: {{.*}}r = {{[0-9]+}}{{( ->|,|$)}}
 
 int pass_tail_too_long(const Ring *r)
   cppverify::pre(r != nullptr)
 {
   return first(r->buf + 5, 4);
 }
-// CHECK-DAG: error: verification failed: pass_tail_too_long [{{.*}}::bounds@[[@LINE-2]]:3#2]
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: pass_tail_too_long [bounds]
 
 // The end of buf is a pointer, but get reads the element there: r->head.
 int pass_end(const Ring *r)
@@ -291,7 +292,7 @@ int pass_end(const Ring *r)
   const int *q = r->buf + 8;
   return get(q);
 }
-// CHECK-DAG: error: verification failed: pass_end [{{.*}}::bounds@[[@LINE-2]]:3]
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: pass_end [bounds]
 
 // q[-1] is r->items[3].w, inside *r but before other.
 int before_member(const Ring *r)
@@ -300,7 +301,7 @@ int before_member(const Ring *r)
   const int *q = r->other;
   return q[-1];
 }
-// CHECK-DAG: error: verification failed: before_member [{{.*}}::bounds@[[@LINE-2]]:10#2]
+// CHECK-DAG: :[[@LINE-2]]:10: error: verification failed: before_member [bounds]
 
 // q[8] is r->head.
 int local_past(const Ring *r)
@@ -309,7 +310,7 @@ int local_past(const Ring *r)
   const int *q = r->buf;
   return q[8];
 }
-// CHECK-DAG: error: verification failed: local_past [{{.*}}::bounds@[[@LINE-2]]:10#2]
+// CHECK-DAG: :[[@LINE-2]]:10: error: verification failed: local_past [bounds]
 
 int element_past(const Ring *r)
   cppverify::pre(r != nullptr)
@@ -317,7 +318,7 @@ int element_past(const Ring *r)
   const int *q = &r->buf[2];
   return q[6];
 }
-// CHECK-DAG: error: verification failed: element_past [{{.*}}::bounds@[[@LINE-2]]:10#2]
+// CHECK-DAG: :[[@LINE-2]]:10: error: verification failed: element_past [bounds]
 
 // q[1] is r->inner.x, next to head.
 void field_neighbor(Ring *r)
@@ -327,7 +328,7 @@ void field_neighbor(Ring *r)
   int *q = &r->head;
   q[1] = 0;
 }
-// CHECK-DAG: error: verification failed: field_neighbor [{{.*}}::bounds@[[@LINE-2]]:3#2]
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: field_neighbor [bounds]
 
 // q[4] is grid[i + 1][0].
 int row_past(const Ring *r, int i)
@@ -336,7 +337,7 @@ int row_past(const Ring *r, int i)
   const int *q = r->grid[i];
   return q[4];
 }
-// CHECK-DAG: error: verification failed: row_past [{{.*}}::bounds@[[@LINE-2]]:10#2]
+// CHECK-DAG: :[[@LINE-2]]:10: error: verification failed: row_past [bounds]
 
 // it[1] is past items, at r->other.
 int item_past(const Ring *r)
@@ -345,7 +346,7 @@ int item_past(const Ring *r)
   const Item *it = &r->items[3];
   return it[1].v;
 }
-// CHECK-DAG: error: verification failed: item_past [{{.*}}::bounds@[[@LINE-2]]:16#2]
+// CHECK-DAG: :[[@LINE-2]]:16: error: verification failed: item_past [bounds]
 
 // When c is false, q addresses other, of two elements.
 int chosen_past(const Ring *r, bool c)
@@ -354,7 +355,8 @@ int chosen_past(const Ring *r, bool c)
   const int *q = c ? r->buf : r->other;
   return q[2];
 }
-// CHECK-DAG: error: verification failed: chosen_past [{{.*}}::bounds@[[@LINE-2]]:10] (counterexample: c [ssa=c_0] [type=bool] = false,
+// CHECK-DAG: :[[@LINE-2]]:10: error: verification failed: chosen_past [bounds]
+// CHECK-DAG: note: counterexample: {{.*}}c = false{{( ->|,|$)}}
 
 int walk_past(const Ring *r)
   cppverify::pre(r != nullptr)
@@ -368,7 +370,7 @@ int walk_past(const Ring *r)
   }
   return s;
 }
-// CHECK-DAG: error: verification failed: walk_past [{{.*}}::bounds@[[@LINE-4]]:10#2]
+// CHECK-DAG: :[[@LINE-4]]:10: error: verification failed: walk_past [bounds]
 
 // Forming the address of an element is reading nothing, but the element
 // must exist: buf[8] does not.
@@ -378,7 +380,8 @@ int element_one_past(const Ring *r, int i)
   const int *q = &r->buf[i];
   return 0;
 }
-// CHECK-DAG: error: verification failed: element_one_past [{{.*}}::bounds@[[@LINE-3]]:18] (counterexample: i [ssa=i_0] [type=i32] = 8,
+// CHECK-DAG: :[[@LINE-3]]:18: error: verification failed: element_one_past [bounds]
+// CHECK-DAG: note: counterexample: {{.*}}i = 8{{( ->|,|$)}}
 
 int null_root(const Ring *r)
   cppverify::post(cppverify::result == 0)
@@ -386,7 +389,8 @@ int null_root(const Ring *r)
   const int *q = r->buf;
   return 0;
 }
-// CHECK-DAG: error: verification failed: null_root [{{.*}}::dereference@[[@LINE-3]]:18] (counterexample: r [ssa=r_0] [type=pointer] = 0)
+// CHECK-DAG: :[[@LINE-3]]:18: error: verification failed: null_root [dereference]
+// CHECK-DAG: note: counterexample: r = 0
 
 // Pointers into different members differ by nothing C++ defines.
 int across_members(const Ring *r)
@@ -394,7 +398,7 @@ int across_members(const Ring *r)
 {
   return &r->head - r->buf;
 }
-// CHECK-DAG: error: verification failed: across_members [{{.*}}::pointer-difference@[[@LINE-2]]:21]
+// CHECK-DAG: :[[@LINE-2]]:21: error: verification failed: across_members [pointer-difference]
 
 void write_frame(Ring *r)
   cppverify::pre(r != nullptr)
@@ -403,7 +407,7 @@ void write_frame(Ring *r)
   int *q = r->other;
   q[0] = 7;
 }
-// CHECK-DAG: error: verification failed: write_frame [{{.*}}::frame@[[@LINE-2]]:8]
+// CHECK-DAG: :[[@LINE-2]]:8: error: verification failed: write_frame [frame]
 
 // An operand that `&&`, `||`, or `?:` evaluates only on a path of its own
 // forms its pointer, and checks it, only there.
@@ -436,7 +440,7 @@ void put_past_slot(Ring *r, int i, int v)
   int *q = i < 4 ? &r->buf[i] : &r->buf[7];
   q[1] = v;
 }
-// CHECK-DAG: error: verification failed: put_past_slot [{{.*}}::bounds@[[@LINE-2]]:3
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: put_past_slot [bounds]
 #else
 // A pointer that left the function would lose its bounds.
 struct Holder {
