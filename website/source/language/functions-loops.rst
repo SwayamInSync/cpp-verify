@@ -30,6 +30,12 @@ and in ``[ssa=...]`` the verifier's name for it, ``i#2`` for the second ``i``.
 Before 0.2 such a declaration was an error, ``local variable shadowing is
 unsupported``.
 
+A default argument is evaluated at the call, with the checks of its
+operations there. A ``consteval`` call, like any constant Clang evaluates, is
+its value. ``__builtin_expect(e, c)`` is ``e``. ``static_assert``, type
+aliases, using-declarations, and local classes and enumerations declare
+names and do nothing at run time.
+
 A caller's proof uses its callees' contracts, so a verdict is only as good as
 those contracts. A caller whose proof relies on a callee contract that the
 callee's own verification did not establish is ``Unresolved`` with reason
@@ -448,7 +454,33 @@ A function template is verified in each of its specializations, as Kani and
 CBMC verify the code a program instantiates: its contract is instantiated
 with its body, so the contract and every check of the body are about the
 template's arguments, and each specialization gets a verdict of its own,
-named with its arguments.
+named with its arguments. A template value parameter is its argument, and
+``if constexpr`` keeps the branch its constant condition selects:
+
+.. code-block:: cpp
+
+   template <int N> int scaled(int x)
+     cv::pre(-1000 <= x && x <= 1000)
+     cv::post(cv::result == N * x)
+   {
+     if constexpr (N == 0)
+       return 0;
+     else
+       return N * x;
+   }
+
+   int scaled_sum(int x)
+     cv::pre(-1000 <= x && x <= 1000)
+     cv::post(cv::result == 3 * x)
+   {
+     return scaled<0>(x) + scaled<3>(x);
+   }
+
+.. code-block:: text
+
+   Verified: scaled<0> [backend=z3]
+   Verified: scaled<3> [backend=z3]
+   Verified: scaled_sum [backend=z3]
 
 .. cppverify-example: fails twice<short>
 
