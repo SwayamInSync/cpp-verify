@@ -68,7 +68,8 @@ Other flags
   for Z3 and cvc5 (``0`` disables)
 - ``cpp-verify --max-query-nodes=N`` — the expression nodes the verifier may
   build for one function: its proof obligations, and the facts about the
-  specs they apply (default 32000000; ``0`` disables; ``query.size-limit``)
+  specs they apply, a shared node once (default 4000000; ``0`` disables;
+  ``query.size-limit``)
 - ``cpp-verify --memory-limit=MB`` — the megabytes the solvers may use, Z3's
   queries together and each cvc5 process (default 8192; ``0`` disables;
   ``solver.memory-limit``)
