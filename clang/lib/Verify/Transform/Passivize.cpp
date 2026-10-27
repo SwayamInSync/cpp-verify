@@ -174,8 +174,10 @@ static std::string stateVariableName(const CloneCtx &Ctx,
 
 static std::unique_ptr<VExpr> cloneExpr(const VExpr *E, const CloneCtx &Ctx) {
   auto Copy = cloneExprImpl(E, Ctx);
-  if (Copy && E)
+  if (Copy && E) {
+    Copy->BeginLoc = E->BeginLoc;
     Copy->EndLoc = E->EndLoc;
+  }
   return Copy;
 }
 
@@ -2376,6 +2378,7 @@ collectSafety(const VExpr *E, const FunctionMap *FnMap,
     Collect(Expanded.get(), Inside);
     for (SafetyCheck &Check : Inside) {
       Check.Cond->Loc = C->Loc;
+      Check.Cond->BeginLoc = C->BeginLoc;
       Check.Cond->EndLoc = C->EndLoc;
       Out.push_back(std::move(Check));
     }
@@ -3611,6 +3614,9 @@ class PassivizerImpl {
   std::set<std::string> HeapBases;
   std::set<std::string> HeapVariables;
   std::map<std::string, PassiveModelVariable> ModelVariables;
+  /// The path condition of the statement being passivized, for the versions
+  /// it defines.
+  const std::unique_ptr<VExpr> *VersionGuard = nullptr;
   std::map<std::string, std::set<std::string>> SourceVersions;
   std::set<std::string> SuppressedSourceVariables;
   std::vector<PassiveTraceEvent> TraceEvents;
@@ -4320,9 +4326,13 @@ class PassivizerImpl {
     auto Source = Fn.SourceVariables.find(Base);
     if (Source == Fn.SourceVariables.end())
       return;
-    ModelVariables[Versioned] = {Source->second.DisplayName,
-                                 Source->second.Type, Source->second.Loc,
-                                 Source->second.EndLoc};
+    std::shared_ptr<const VExpr> Guard;
+    if (VersionGuard && *VersionGuard)
+      Guard = cloneVExpr(VersionGuard->get());
+    ModelVariables[Versioned] = {
+        Source->second.DisplayName, Source->second.Type,
+        Source->second.Loc,         Source->second.EndLoc,
+        Source->second.Reference,   std::move(Guard)};
     SourceVersions[Base].insert(Versioned);
   }
 
@@ -5239,9 +5249,11 @@ public:
     auto afterEarlier = [&](std::unique_ptr<VExpr> Cond) {
       if (!EarlierPosts)
         return Cond;
-      const SourceLocation Loc = Cond->Loc, End = Cond->EndLoc;
+      const SourceLocation Loc = Cond->Loc, Begin = Cond->BeginLoc,
+                           End = Cond->EndLoc;
       auto Guarded = makeOr(makeNot(cloneVExpr(EarlierPosts.get()), Loc),
                             std::move(Cond), Loc);
+      Guarded->BeginLoc = Begin;
       Guarded->EndLoc = End;
       return Guarded;
     };
@@ -5272,6 +5284,7 @@ public:
         // another file.
         auto Cond = cloneExpr(Check.Cond.get(), PCtx);
         Cond->Loc = Post->Loc;
+        Cond->BeginLoc = Post->BeginLoc;
         Cond->EndLoc = Post->EndLoc;
         P.ExitAsserts.push_back({Check.Kind, afterEarlier(std::move(Cond))});
       }
@@ -6357,6 +6370,8 @@ public:
     std::optional<llvm::SaveAndRestore<std::string>> Named;
     if (S.K != VStmt::Seq && S.K != VStmt::GhostBlock)
       Named.emplace(Origin, statementOrigin(S));
+    llvm::SaveAndRestore<const std::unique_ptr<VExpr> *> Defining(VersionGuard,
+                                                                  &Active);
     switch (S.K) {
     case VStmt::Assign: {
       const auto &A = static_cast<const VAssignStmt &>(S);
@@ -6403,8 +6418,6 @@ public:
       std::vector<PassiveTraceValue> TraceValues;
       TraceValues.push_back({"address", cloneVExpr(Ptr.get())});
       TraceValues.push_back({"value", cloneVExpr(Val.get())});
-      emitTrace(PassiveTraceKind::HeapWrite, "store", Active.get(), St.Loc,
-                std::move(TraceValues));
       emitExprSafety(P, Ptr.get(), Active.get(), St.Loc, Renames, false,
                      St.Ptr.get());
       emitExprSafety(P, Val.get(), Active.get(), St.Loc, Renames, true,
@@ -6499,6 +6512,8 @@ public:
                            St.Loc);
       emitPassive(P, PassiveStmt::Assert, std::move(Allowed), Active.get(),
                   St.Loc, ProofObligationKind::Frame);
+      emitTrace(PassiveTraceKind::HeapWrite, "store", Active.get(), St.Loc,
+                std::move(TraceValues));
       std::string OldHeap = Renames[VHeapName];
       std::string NewHeap = bump(VHeapName);
       Renames[VHeapName] = NewHeap;
@@ -6793,8 +6808,6 @@ public:
       auto Pointer = cloneExpr(F.Ptr.get(), Ctx);
       std::vector<PassiveTraceValue> TraceValues;
       TraceValues.push_back({"address", cloneVExpr(Pointer.get())});
-      emitTrace(PassiveTraceKind::Deallocation, "delete", Active.get(), F.Loc,
-                std::move(TraceValues));
       emitExprSafety(P, Pointer.get(), Active.get(), F.Loc, Renames, false,
                      F.Ptr.get());
       auto Provenance = pointerProvenance(Pointer.get());
@@ -6805,6 +6818,8 @@ public:
                    std::make_unique<VLiteralExpr>(0, VType::makePtr(), F.Loc),
                    F.Loc),
             Active.get(), F.Loc, ProofObligationKind::Deallocation);
+        emitTrace(PassiveTraceKind::Deallocation, "delete", Active.get(), F.Loc,
+                  std::move(TraceValues));
         break;
       }
       auto IsNull = makeEq(
@@ -6840,6 +6855,8 @@ public:
                        F.Loc);
       emitPassive(P, PassiveStmt::Assert, std::move(Owned), Active.get(), F.Loc,
                   ProofObligationKind::Deallocation);
+      emitTrace(PassiveTraceKind::Deallocation, "delete", Active.get(), F.Loc,
+                std::move(TraceValues));
       auto LivenessAfterDelete = std::make_unique<VConditionalExpr>(
           cloneVExpr(IsNull.get()), cloneVExpr(Live.get()),
           makeBoolLiteral(false, F.Loc), VType::makeBool(), F.Loc);
@@ -6941,12 +6958,14 @@ public:
         break;
       }
       auto BoundReturn = cloneExpr(R.Value.get(), Ctx);
+      // A step of the path is one that happens: a check of the value comes
+      // before the return, which a failure of the check never reaches.
+      emitExprSafety(P, BoundReturn.get(), Active.get(), R.Loc, Renames, true,
+                     R.Value.get());
       std::vector<PassiveTraceValue> TraceValues;
       TraceValues.push_back({"value", cloneVExpr(BoundReturn.get())});
       emitTrace(PassiveTraceKind::Return, "return", Active.get(), R.Loc,
                 std::move(TraceValues));
-      emitExprSafety(P, BoundReturn.get(), Active.get(), R.Loc, Renames, true,
-                     R.Value.get());
       const VExpr *RetVal = R.Value.get();
       while (RetVal && RetVal->K == VExpr::Cast)
         RetVal = static_cast<const VCastExpr *>(RetVal)->Inner.get();
