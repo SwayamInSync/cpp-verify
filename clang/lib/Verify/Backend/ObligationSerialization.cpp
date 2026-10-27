@@ -584,6 +584,11 @@ public:
         writeString(Variable.DisplayName);
         writeSort(Variable.Sort);
         writeSource(Variable.Source);
+        if (FormatVersion >= 4) {
+          writeU8(Variable.Guard ? 1 : 0);
+          if (Variable.Guard)
+            writeExpr(Variable.Guard.get());
+        }
       }
       writeU64(Module.TraceEvents.size());
       for (const DiagnosticTraceEvent &Event : Module.TraceEvents) {
@@ -899,6 +904,13 @@ class ArchiveReader {
         Variable.DisplayName = readString();
         Variable.Sort = readSort();
         Variable.Source = readSource(IncludeSource);
+        if (Version >= 4) {
+          uint8_t HasGuard = readU8();
+          if (HasGuard > 1)
+            fail("invalid diagnostic variable guard in obligation archive");
+          if (HasGuard == 1)
+            Variable.Guard = LogicExprRef(readExpr());
+        }
         if (!Module.DiagnosticVariables
                  .emplace(std::move(InternalName), std::move(Variable))
                  .second)
