@@ -4,6 +4,7 @@
 #include "../../lib/Verify/Backend/ObligationSimplify.h"
 #include "../../lib/Verify/Backend/ProofCache.h"
 #include "../../lib/Verify/Backend/VerifyBackend.h"
+#include "Counterexample.h"
 #include "CppVerifyVersion.h"
 #include "DumpIR.h"
 #include "Verifier.h"
@@ -1020,11 +1021,24 @@ static int replayObligationArchive() {
       AllOk = false;
       printResultSource();
       llvm::outs() << "error: verification failed: " << Module.FunctionName;
-      if (!Result.ObligationId.empty())
+      if (Result.ObligationType)
+        llvm::outs() << " ["
+                     << verify::obligationKindName(*Result.ObligationType)
+                     << "]";
+      else if (!Result.ObligationId.empty())
         llvm::outs() << " [" << Result.ObligationId << "]";
       if (!Result.Message.empty())
-        llvm::outs() << " (counterexample: " << Result.Message << ")";
+        llvm::outs() << " (" << Result.Message << ")";
       llvm::outs() << Suffix << "\n";
+      if (std::string Values = verify::counterexampleText(Result);
+          !Values.empty())
+        llvm::outs() << "note: counterexample: " << Values << "\n";
+      for (const verify::VerifyTraceEvent &Event : Result.Trace) {
+        if (Event.Source.isValid())
+          llvm::outs() << Event.Source.File << ":" << Event.Source.Line << ":"
+                       << Event.Source.Column << ": ";
+        llvm::outs() << "note: " << verify::traceStepText(Event) << "\n";
+      }
       break;
     case verify::VerifyStatus::Unresolved:
       AllOk = false;
