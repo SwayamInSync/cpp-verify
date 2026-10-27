@@ -122,4 +122,4 @@ void not_empty(node *a)
 // UNPROVED: Summary: 5 unresolved ({{.*}}spec.inductive 1)
 // RUN: not %cpp-verify --solver-rlimit=1 --diagnostics-format=json %S/Inputs/inductive_unproved.cpp -- 2>/dev/null \
 // RUN:   | FileCheck %s --check-prefix=UNPROVED-JSON
-// UNPROVED-JSON: {"message":"inductive predicate: reach [reason=spec.inductive] {{.*}}","reason":"spec.inductive","schema":"cppverify.diagnostic/1","severity":"error","status":"unresolved"}
+// UNPROVED-JSON: {"function_source":{{.*}},"message":"inductive predicate: reach [reason=spec.inductive] {{.*}}","reason":"spec.inductive","schema":"cppverify.diagnostic/2","severity":"error","status":"unresolved"}
