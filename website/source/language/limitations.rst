@@ -674,8 +674,9 @@ integers (:doc:`functions-loops`), and any other of its functions is an
 error naming it. An uncontracted call fails closed; a contract is assumed
 only when it is marked ``[[cppverify::trusted]]``, or, in one run over
 several files, once the verification of its definition in another of them
-establishes it (:doc:`functions-loops`); files verified in separate runs do
-not settle their contracts yet. Contracts are not saved in precompiled
+establishes it, and for files verified apart once
+``cpp-verify --check-contracts`` finds it established
+(:doc:`functions-loops`). Contracts are not saved in precompiled
 headers: a function declared in a PCH has no contract for the verifier, so a
 contracted function that calls it fails closed (``call to function without a
 verification contract``).
