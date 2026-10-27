@@ -13,7 +13,8 @@ unsigned add_wraps(unsigned a, unsigned b)
 {
   return a + b;
 }
-// CHECK-DAG: error: verification failed: add_wraps [{{.*}}::postcondition@{{.*}}b [ssa=b_0] [type=u32] =
+// CHECK-DAG: error: verification failed: add_wraps [postcondition]
+// CHECK-DAG: note: counterexample: {{.*}}b =
 
 unsigned add_mod(unsigned a, unsigned b)
   cppverify::post(cppverify::result == (a + b) % 4294967296)
@@ -51,7 +52,7 @@ bool is_max(unsigned u)
   return u == 4294967295u;
 }
 // CHECK-DAG: warning: contract arithmetic is mathematical: the negative value -1 keeps its value here instead of converting to unsigned int
-// CHECK-DAG: error: verification failed: is_max [{{.*}}::postcondition@
+// CHECK-DAG: error: verification failed: is_max [postcondition]
 
 int quotient(int x, int y)
   cppverify::pre(y != 0 && !(x == -2147483647 - 1 && y == -1))
@@ -65,7 +66,7 @@ void divides_by_zero(int x, int y)
   cppverify::post(x / y == x / y)
 {
 }
-// CHECK-DAG: error: verification failed: divides_by_zero [{{.*}}::division-by-zero@
+// CHECK-DAG: error: verification failed: divides_by_zero [division-by-zero]
 
 int even(int x)
   cppverify::pre(x >= 0 && x < 1000)
@@ -89,7 +90,7 @@ int cast_overflows(int x)
 {
   return 0;
 }
-// CHECK-DAG: error: verification failed: cast_overflows [{{.*}}::overflow@
+// CHECK-DAG: error: verification failed: cast_overflows [overflow]
 
 constexpr int twice(int v) { return v + v; }
 
