@@ -43,9 +43,10 @@ The artifact is faithful but not verbatim:
    * - ``PadTo`` is fixed at zero.
      - The theorem covers canonical unpadded ULEB128.
    * - ``*p++`` becomes ``buffer[count - 1]``.
-     - Pointer increment (``p++``, ``p += 1``) is not in the verified subset,
-       so the extraction indexes from the base. A loop-carried ``p = p + 1``
-       with an invariant relating ``p`` to the base would also verify.
+     - The value of a pointer increment in an expression (``*p++``) is not
+       in the verified subset, so the extraction indexes from the base. A
+       loop that reads ``*p`` and then steps ``p++`` as a statement, with an
+       invariant relating ``p`` to the base, would also verify.
    * - The decoder receives an ``expected`` proof witness.
      - It appears only in contracts and invariants, not executable accumulator
        arithmetic.

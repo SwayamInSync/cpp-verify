@@ -28,6 +28,17 @@ This page separates four different situations:
      - The semantics are represented soundly, but Z3 may need user lemmas or
        return ``unknown``.
 
+Outside the supported subset the verifier *fails closed*: it never reports a
+proof for what it does not model. A construct it does not represent is an
+error at the construct, and its function is ``Unresolved`` with reason
+``construct.unsupported`` while every other function of the file is verified
+(callers that rely on its contract are ``callee.contract``, and functions
+that reach a spec it cannot represent are ``construct.unsupported`` too); one
+it represents but does not model, such as a pointer difference between two
+parameters' objects, makes the obligation that stands for it unsupported, and
+the function is ``Unresolved`` with the same reason. A counterexample is never
+a way of failing closed: ``Failed`` always means a checked counterexample.
+
 Meaning of a result
 -------------------
 
@@ -68,7 +79,7 @@ The most mature current fragment includes:
 - ``if``, conventional ``while``/``for``, contracted ``do`` loops, loop
   invariants, loop ``cppverify::modifies``, and ``cppverify::decreases`` (required on executable
   loops; ``cppverify::decreases(*)`` opts out);
-- direct recursion with a well-founded termination measure;
+- direct and mutual recursion with a well-founded termination measure;
 - ``cppverify::pre``, ``cppverify::post``, ``cppverify::old``, ``cppverify::result``, ``cppverify::modifies`` (cells, ranges
   ``p[lo : n]``, and regions), ``cppverify::aliases``, and ACSL-style behaviors;
 - scalar ``T&``/``const T&`` parameters with address-preserving reads, writes,
@@ -81,6 +92,10 @@ The most mature current fragment includes:
 - flat trivial standard-layout records with scalar fields;
 - fixed local arrays and promoted trivial local records with nested record,
   pointer, and fixed-array members;
+- the fields and fixed-array elements of a record a pointer addresses, at any
+  depth (``p->buf[i]``, ``p->inner.arr[j]``, ``p[k].items[i].v``), and
+  pointers into them, each bounded by the array, field, or record it points
+  into;
 - one-level typed pointers, abstract indexed buffers, and heap framing;
 - constrained direct scalar ``new``/``delete`` with liveness, initialization,
   and provenance.
@@ -105,35 +120,58 @@ C++ feature boundaries
        reinterpretation.
    * - References
      - Scalar ``T&``/``const T&`` parameters on contracted executable free
-       functions, initialized ordinary scalar local actuals, local aliases for
+       functions, initialized local actuals (scalars and records, and
+       ``&x`` of one passed to a pointer parameter, when the callee keeps no
+       address of it), local aliases for
        boolean, integral, and enum referents, and bindings to a field or fixed
-       array element of a promoted local object.
-     - Conditional bindings, reference returns, non-scalar referents, rvalue
-       references, temporaries/lifetime extension, reference members, and
-       forwarding.
+       array element of a promoted local object, or to a field or element of
+       a parameter's buffer or of a record a pointer addresses
+       (``int &alias = p->second;``, ``p[i]``, ``p->buf[i]``). References to
+       records (``Counter &``, ``const Counter &``) as parameters and locals:
+       a pointer never null or reseated, whose fields and elements are cells
+       of the object it names (:doc:`structs`).
+     - Conditional bindings, reference returns, rvalue references,
+       temporaries/lifetime extension, reference members, and forwarding; a
+       local not fully initialized passed to a callee
+       (``construct.unsupported``), the address of a local stored in a
+       variable, and a pointer formed through a local reference to a local
+       record.
    * - Arrays
-     - Pointer-parameter indexing, quantified abstract buffers, and fixed
+     - Pointer-parameter indexing, quantified abstract buffers, fixed
        local arrays (including arrays of records and multidimensional arrays)
-       modelled as byte-addressed automatic objects up to 256 bytes.
+       modelled as byte-addressed automatic objects up to 256 bytes, and the
+       fixed-array members of a record a pointer addresses, each index
+       checked against its own array, and pointers into them
+       (``int *q = p->buf;``, ``&p->buf[i]``), bounded by the array.
      - Array parameters/fields carried by value, array references,
        ``new[]``/``delete[]``, loop-local arrays, and raw pointers derived from
-       a local array.
+       a local array; a pointer into a record a pointer addresses that leaves
+       the function (returned or stored in memory).
    * - Records
      - Flat trivial standard-layout values with scalar fields; trivial
        standard-layout records with nested record, pointer, and fixed-array
-       members as promoted local objects.
-     - Non-trivial, inherited, polymorphic, union, and bit-field records, and
-       nested/pointer/array-bearing records used by value.
+       members as promoted local objects, and through pointers, where each
+       scalar field and element is a heap cell.
+     - Records that are not trivially copyable, inherited, polymorphic,
+       union, and bit-field records, nested/pointer/array-bearing records
+       used by value, and a whole record holding an array or a record read
+       through a pointer (``Ring copy = *r;``).
    * - Functions
-     - Free functions, overloads, namespaces, contracts, direct calls, and
+     - Free functions, member functions of classes without bases or virtual
+       functions (:doc:`structs`), function and class templates in each
+       specialization the translation unit instantiates
+       (:doc:`functions-loops`, :doc:`structs`),
+       overloads, namespaces, contracts, direct calls anywhere in an
+       expression or condition (:doc:`functions-loops`), and
        direct and mutual recursion, also through stores to pointer and
        reference parameters and through automatic objects, with mutual
        recursion among functions of one kind (spec, proof, or executable).
-     - Member functions (their contracts are ignored with a warning),
-       templates (one without contracts stops nothing unless verified code
-       calls it; the contracts of a function or class template compile,
-       instantiate, and are ignored with a warning, and one with contract
-       statements is reported), variadics, indirect calls, recursion through a
+     - Virtual functions, member functions of classes with bases,
+       destructors, delegating constructors and the other constructors
+       :doc:`structs` lists, conversion functions,
+       templates and members of class templates that nothing instantiates
+       (reported), variadics, indirect calls,
+       recursion through a
        function that allocates or frees storage, and general link-time
        summaries. A function whose proof obligations would take more than
        ``--max-query-nodes`` expression nodes (32 million by default) is
@@ -147,12 +185,14 @@ C++ feature boundaries
        general returned allocations, and user-declared modular allocation
        effects.
    * - Structured control flow
-     - ``if`` (including C++17 initializer), conventional ``while``/``for``,
-       contracted ``do`` loops, blocks, ``return`` (also inside loops), and
-       ``break``/``continue`` in ``while``/``for`` loops.
-     - ``switch``, range-``for``, ``goto``, labels, conditionless ``for``,
-       loop condition declarations, and ``break``/``continue`` in ``do``
-       loops. An expression or statement nested more than 256 operations
+     - ``if`` (including C++17 initializer), ``while``, ``for`` (with or
+       without a condition), contracted ``do`` loops, condition declarations,
+       ``switch`` (fallthrough, a ``default`` anywhere, GNU case ranges, an
+       init statement), blocks, ``return``, ``break``, and ``continue``
+       anywhere, and comma expressions as statements.
+     - Range-``for``, ``goto``, labels, a ``case`` label inside another
+       statement of its switch (Duff's device), and ``[[assume]]``. An
+       expression or statement nested more than 256 operations
        deep (a sum of 300 terms, say) is reported where it is, and the file
        stops: ``error: total: the expression at 4:276 nests more than 256
        operations deep, which the verifier does not support; split it into
@@ -167,12 +207,22 @@ An unsupported syntax case is not considered implemented merely because Clang
 can parse it. It also needs VCR semantics, C++ definedness rules, modular
 effects, backend encoding, and false-proof coverage.
 
-A contracted free function that uses an unsupported construct (a ``switch``,
-say) fails closed: the construct is reported as an error, and then no
-function of the file gets a verdict. Contracts on member functions are
-instead ignored with a warning (``-Wcontract-unsupported``: "contracts on
-member functions are not yet supported and are ignored ..."), and the run
-continues with the other functions.
+A contracted function that uses an unsupported construct (a ``goto``, say)
+fails closed: the construct is reported as an error where it is, and the
+function is ``Unresolved`` with reason ``construct.unsupported``, while the
+other functions of the file are verified (:doc:`tooling`). A few forms are
+rejected this way inside otherwise supported code:
+
+- storing a whole record through a pointer, ``*p = r`` (``unsupported
+  aggregate assignment``): assign its fields; assigning one local record to
+  another is supported;
+- ``cppverify::aliases`` between pointers to different types (``aliases
+  between different pointee types are unsupported``).
+
+A template is verified in each specialization the translation unit
+instantiates; one that nothing instantiates, and a member of a class
+template that no specialization uses, is reported with a warning and not
+verified, and the run continues with the other functions.
 
 Objects, classes, and RAII
 --------------------------
@@ -180,7 +230,8 @@ Objects, classes, and RAII
 Flat records are currently value aggregates, not a general C++ object model.
 CppVerify does not yet model:
 
-- constructors, destructors, copy/move special members, or RAII cleanup;
+- destructors, copy/move special members of their own, or RAII cleanup
+  (constructors are verified, :doc:`structs`);
 - ``this`` and member-function cv/ref qualifiers;
 - class invariants over aliased mutable objects;
 - base subobjects, vtables, or virtual dispatch;
@@ -215,7 +266,9 @@ alignment, provenance, or initialization. Bounds follow exact conditional and
 short-circuit evaluation, and fresh represented storage is kept disjoint from
 the complete declared incoming extent. Outside a precondition the marker
 means nothing and is rejected (:doc:`pointers`), so an extent cannot yet be
-stated for a returned pointer.
+stated for a returned pointer. A pointer field of a parameter's object may
+take an extent (``valid(s->data, s->len)``, :doc:`structs`); a field of an
+array element (``s->items[k].data``) may not yet.
 
 For pairs involving mutable pointees, CppVerify adds a generated
 complete-object disjointness precondition. ``cppverify::aliases(p, q)`` opts a pair into
@@ -235,8 +288,8 @@ Contracted executable free functions may accept ``T&`` and ``const T&`` when
 ``T`` is ``bool``, integral, or enum. VCR retains the binding as an immutable
 address: reading loads the referent, assignment stores through that address,
 and ``cppverify::old(ref)`` selects the entry heap. Every reference receives an implicit
-non-null and live precondition, and the body is verified as reading the
-referent initialized.
+non-null and live precondition, and an initialized referent unless the body
+writes it before reading it (an out-parameter, below).
 
 ``cppverify::modifies(ref)`` is an open region rooted at the referent, like
 ``cppverify::modifies(*p)``. Default object-range disjointness and ``cppverify::aliases`` apply across
@@ -255,19 +308,27 @@ the lexical closing brace or on each early return, in reverse construction
 order; heap-reading return values are materialized before teardown.
 
 Scalar references may bind supported fields and fixed-array elements of these
-promoted objects. Conditional bindings, temporaries, reference returns, general
-raw address-taking/array decay, rvalue references, and non-scalar referents
-remain fail-closed. Addressable declarations inside loops and ``cppverify::old`` of local
+promoted objects, and a local reference to a record may bind a promoted
+record. Conditional bindings, temporaries, reference returns, general raw
+address-taking/array decay (through such a reference too, and ``&x`` but as
+a call argument), and rvalue references remain fail-closed. A promoted object
+passed to a callee, by reference or ``&x``, keeps its lifetime: the callee
+must keep no address of it, and every field must be initialized unless the
+callee writes it before reading it. Addressable declarations inside loops and ``cppverify::old`` of local
 objects/bindings are also rejected; outer automatic locals and loop-local aliases
 are supported. Pointer leaves may retain abstract pointer values, but storing a
 provenance-bearing local dynamic pointer fails closed until pointer provenance is
 represented in a parallel heap.
-A function is verified as reading its reference and pointer parameters'
-storage, and its callers a returned pointer's, as initialized. C++ requires
-neither, so a call that passes storage not yet initialized (an out-parameter,
-``int a; init(a);``) and a function that returns a pointer to such storage are
-``Unresolved`` with reason ``construct.unsupported``, not failures, until a
-function can state that it writes a parameter before it reads it. A local
+A reference or pointer parameter whose storage the body writes before it
+reads it, an out-parameter, may receive storage not yet initialized
+(``int a; init(a);``), as C++ allows (:doc:`pointers`). The rule is
+syntactic: a read at a computed index (``p[i]``), a copy of the pointer, and
+a callee that may read the storage first or has no verified body make the
+parameter an input, and a call that passes storage not yet initialized to
+an input is ``Unresolved`` with reason ``construct.unsupported``, not a
+failure. Callers read a returned pointer's storage as initialized, so a
+function that returns a pointer to storage not yet initialized is
+``Unresolved`` the same way. A local
 reference may bind storage not yet initialized: a read through it checks that
 the object is initialized, as C++ does. Reference reads participate in the existing argument-order safety
 check.
@@ -339,9 +400,21 @@ such as ``cppverify::modifies(p[i])`` and ``cppverify::modifies(p->field)``, ran
 that may write memory forgets the whole value heap, as does a region
 footprint under ``--no-check-ub``.
 
-A callee ``valid(q, length)`` extent can be instantiated from a caller
-``valid(p, n)`` extent only after proving a same-root, nonnegative subrange
-contained in ``[0, n]``. Empty one-past slices, transitive read-only
+A call inside an expression runs where C++ evaluates it: a short-circuit
+operand's or a ``?:`` branch's call only on its path, and a loop
+condition's call at every test. Where C++ leaves the order of operands open
+(the operands of most operators, a subscript's array and index, a call's
+arguments, and, before C++17, an assignment's two sides), a call that may
+write memory beside an operand that reads memory or makes a call is an
+error, since the verifier checks one order. Calls returning records are
+made as statements, whole initializers, assignments, or return values
+only.
+
+A callee ``valid(q, length)`` extent can be instantiated from an argument
+only after proving that its elements lie in one of the caller's objects, such
+as a nonnegative subrange of a ``valid(p, n)`` extent contained in
+``[0, n]``; the argument may be a copy, a choice, a stepped pointer, or a
+callee's result whose contract places it. Empty one-past slices, transitive read-only
 forwarding, exact-cell and range writes, and region writes through a
 sub-slice are supported; every cell outside the written slice keeps its
 value.
@@ -396,8 +469,7 @@ Current proof-language limitations include:
   sharing ``cppverify::decreases`` clauses of one length); otherwise they are
   ``proof.cycle``;
 - spec collections hold mathematical integers only (no nested collections or
-  records), and Lean does not support them yet (planned for a future
-  release);
+  records);
 - user-written loop invariants, with no candidate-invariant/Houdini pass;
 - no automatic termination-measure or lemma discovery. Inductions over a goal
   are tried automatically (by the measure of a recursive spec it applies, with
@@ -410,7 +482,8 @@ Current proof-language limitations include:
   integer variables, since canonical quantifiers range over integers; over a
   sequence the hypothesis is given at the values its recursion reaches. The
   inductions for one claim share the time of two attempts (each a sixth of
-  ``--timeout``, see :doc:`../book/part-ii/ch13-spec-and-proof-functions`),
+  the query's timeout, ``--timeout`` or, over collections,
+  ``--collection-timeout``; see :doc:`../book/part-ii/ch13-spec-and-proof-functions`),
   so an induction that needs longer is not found: raise ``--timeout`` or
   state the lemma;
 - a counterexample whose spec values cannot be computed is confirmed only by
@@ -468,8 +541,9 @@ parameters and reads from memory included, is assumed to lie in its range.
 Memory checking (the default, off with ``--no-check-ub``) adds object
 bounds: an access or pointer step stays in the ``valid(p, n)`` extent or the
 single object a pointer addresses, across modular sub-slices and same-array
-pointer positions. Together they are not yet comprehensive C++
-undefined-behavior checking.
+pointer positions. Contracts get both kinds of obligation, each clause where
+it is evaluated (see :doc:`functions-loops`). Together they are not yet
+comprehensive C++ undefined-behavior checking.
 
 Missing general UB semantics include object provenance outside the represented
 fragment, strict aliasing, arbitrary alignment, unsequenced side effects and
@@ -548,9 +622,10 @@ goal per ordered obligation. Generated files are separated from preserved user
 lemmas/proofs. The pinned admission-free kernel path reports ``Certified`` only
 after every active proof checks and rejects user axiom/opaque shortcuts.
 Memory checks are lowered on this path as well as on Z3/cvc5/portfolio/BMC.
-Spec collections are not yet supported on Lean (``logic.unsupported``); Lean
-support for them is planned for a future release, and Z3 and cvc5 decide them
-today.
+Spec collections are Lean values of core types (a sequence a ``List Int``, a
+set its membership test, a multiset its counts, a map the value at each key),
+with a lemma for each operation; a goal over them that needs induction, as
+over a recursive spec of a sequence, takes a proof by hand.
 Automation, proof ergonomics, semantic simplification, dependency-aware
 caching, and broader future C++ theories remain incomplete.
 
@@ -574,9 +649,11 @@ allocation from an archive.
 Libraries and real programs
 ---------------------------
 
-CppVerify does not yet ship comprehensive libc or C++ standard-library models.
-An uncontracted call fails closed; a contract is assumed only when it is
-marked ``[[cppverify::trusted]]``. Contracts are not saved in precompiled
+CppVerify does not yet ship comprehensive libc or C++ standard-library models:
+of the standard library it knows ``std::min`` and ``std::max`` of two
+integers (:doc:`functions-loops`), and any other of its functions is an
+error naming it. An uncontracted call fails closed; a contract is assumed
+only when it is marked ``[[cppverify::trusted]]``. Contracts are not saved in precompiled
 headers: a function declared in a PCH has no contract for the verifier, so a
 contracted function that calls it fails closed (``call to function without a
 verification contract``).

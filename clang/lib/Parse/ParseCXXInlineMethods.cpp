@@ -566,6 +566,47 @@ void Parser::ParseLexedMethodDeclaration(LateParsedMethodDeclaration &LM) {
     LM.ExceptionSpecTokens = nullptr;
   }
 
+  // CppVerify: the contract clauses, with the parameters in scope and `this`
+  // as in the exception-specification.
+  if (std::unique_ptr<CachedTokens> Toks = std::move(LM.ContractTokens)) {
+    ParenBraceBracketBalancer BalancerRAIIObj(*this);
+    Token ContractEnd;
+    ContractEnd.startToken();
+    ContractEnd.setKind(tok::eof);
+    ContractEnd.setLocation(Toks->back().getEndLoc());
+    ContractEnd.setEofData(LM.Method);
+    Toks->push_back(ContractEnd);
+    Toks->push_back(Tok);
+    PP.EnterTokenStream(*Toks, true, /*IsReinject*/ true);
+    ConsumeAnyToken(/*ConsumeCodeCompletionTok=*/true);
+
+    FunctionDecl *Function = LM.Method->getAsFunction();
+    auto *Method = dyn_cast_or_null<CXXMethodDecl>(Function);
+    ParseScope FnScope(this, Scope::FnScope);
+    Sema::ContextRAII FnContext(Actions, Function, /*NewThisContext=*/false);
+    Sema::CXXThisScopeRAII ThisScope(
+        Actions, Method ? Method->getParent() : nullptr,
+        Method ? Method->getMethodQualifiers() : Qualifiers{},
+        Method && !Method->isStatic());
+
+    FunctionContractClauses Contract;
+    Contract.Info.IsSpec = LM.ContractIsSpec;
+    Contract.Info.IsProof = LM.ContractIsProof;
+    PendingClauseProofs.clear();
+    CurrentContractReturnType =
+        Function ? Function->getReturnType() : Actions.getASTContext().IntTy;
+    ParseFunctionContractClauseList(Contract);
+    if (Tok.isNot(tok::eof) || Tok.getEofData() != LM.Method)
+      Diag(Tok.getLocation(), diag::err_expected) << tok::semi;
+    attachFunctionContract(LM.Method, Contract);
+    PendingClauseProofs.clear();
+
+    while (Tok.isNot(tok::eof))
+      ConsumeAnyToken();
+    if (Tok.is(tok::eof) && Tok.getEofData() == LM.Method)
+      ConsumeAnyToken();
+  }
+
   InFunctionTemplateScope.Scopes.Exit();
 
   // Finish the delayed C++ method declaration.

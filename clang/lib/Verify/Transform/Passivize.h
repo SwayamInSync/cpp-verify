@@ -31,6 +31,9 @@ struct PassiveStmt {
   /// postcondition or unfolding, a frame of a spec's reads), not a premise
   /// of the function's claim. Unmarked assumptions are premises.
   bool Theorem = false;
+  /// For an assumption: where it comes from (`pre`, `call:f`, `inv`, ...),
+  /// which names its hypothesis in a readable goal.
+  std::string Origin;
 };
 
 /// A goal checked in the final state.
@@ -96,6 +99,8 @@ struct PassiveProgram {
   std::optional<PassiveOversize> TooLarge;
   /// How many leading EntryAssumes are the function's own preconditions.
   size_t PreconditionCount = 0;
+  /// Where each of EntryAssumes comes from, as PassiveStmt::Origin.
+  std::vector<std::string> EntryOrigins;
   /// Each behavior's assumption in the entry state.
   std::vector<std::pair<std::string, std::unique_ptr<VExpr>>> BehaviorAssumes;
   std::vector<PassiveExitAssert> ExitAsserts;
@@ -162,6 +167,11 @@ public:
     UnfoldingFuel = WithFuel;
   }
   PassiveProgram run(const VFunction &Fn);
+  /// The well-formedness check of Fn's contract: its written preconditions,
+  /// in order, are defined where those before them hold, and so are its
+  /// postconditions in every state it may return in when its body is not
+  /// verified. It asserts nothing when every clause is total.
+  PassiveProgram contract(const VFunction &Fn);
 };
 
 } // namespace verify

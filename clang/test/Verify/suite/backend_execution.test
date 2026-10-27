@@ -42,8 +42,8 @@
 # RUN: %python -c "from pathlib import Path; Path(r'%t.not-directory').write_text('x')"
 # RUN: not %cpp-verify --proof-cache=%t.not-directory \
 # RUN:   %S/Inputs/backend_cache_base.cpp -- 2>&1 | FileCheck %s --check-prefix=CACHE-IO
-# RUN: not %cpp-verify --backend=lean --jobs=2 \
-# RUN:   %S/Inputs/backend_cache_base.cpp -- 2>&1 | FileCheck %s --check-prefix=LEAN-JOBS
+# RUN: not %cpp-verify --backend=lean --proof-cache=%t.lean-cache \
+# RUN:   %S/Inputs/backend_cache_base.cpp -- 2>&1 | FileCheck %s --check-prefix=LEAN-CACHE
 # RUN: not %cpp-verify --lower-only --proof-cache=%t.lower-cache \
 # RUN:   %S/Inputs/backend_cache_base.cpp -- 2>&1 | FileCheck %s --check-prefix=LOWER-CACHE
 #
@@ -113,7 +113,7 @@
 # CACHE-IO-SAME: [reason=cache.io-failed]
 # CACHE-IO-SAME: proof cache path is not a directory
 
-# LEAN-JOBS: error: --jobs and --proof-cache are not supported by the Lean backend
+# LEAN-CACHE: error: --proof-cache is not supported by the Lean backend
 # LOWER-CACHE: error: --proof-cache cannot be combined with --lower-only
 
 # REPLAY: Proved obligations: cached_identity (dependencies not checked in replay) [backend=z3] [cache=[[RN:[1-9][0-9]*]]/[[RN]]]

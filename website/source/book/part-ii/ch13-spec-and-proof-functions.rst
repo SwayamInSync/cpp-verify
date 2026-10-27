@@ -90,8 +90,8 @@ Opacity: fuel, ``cppverify::reveal``, ``cppverify::hide``
 A recursive ``cppverify::spec`` is finitely transparent by default (fuel 1), so its
 defining equation cannot send Z3 into a matching loop.
 ``cppverify::reveal_with_fuel(f, n)`` raises the depth when a proof needs more.
-``cppverify::reveal`` / ``cppverify::hide`` toggle a spec's
-transparency for the rest of a function:
+``cppverify::reveal`` / ``cppverify::hide`` make a spec transparent / opaque in the
+whole function, wherever the statement appears:
 
 .. code-block:: cpp
 
@@ -101,7 +101,7 @@ transparency for the rest of a function:
      cv::pre(x >= 0 && x <= 10)
      cv::post(cv::result == triple(x))
    {
-     cv::ghost { cv::reveal(triple); }            // reveal_with_fuel(f, n) for recursive specs
+     cv::ghost { cv::reveal(triple); }            // cv::reveal_with_fuel(f, n) for recursive specs
      return x + x + x;
    }
 
@@ -187,6 +187,30 @@ At ``n = 1`` the definition says that ``stuck(1)`` equals ``stuck(1) + 1``, a
 contradiction, and a proof that used it could prove anything. Before 0.2 the
 call inside the choose was not seen as a recursive call: ``stuck`` was
 accepted, and ``forty_two`` verified although it returns ``0`` at ``x = 1``.
+
+A choice's body counts where the choice is written in a spec's other checks
+too: the applications inside a choose get the same facts as the others, so a
+postcondition proved by induction may use the hypothesis at a call written
+inside a choose:
+
+.. code-block:: cpp
+
+   cv::spec int bit(int n)
+     cv::decreases(n)
+     cv::post(n < 0 || cv::result == cv::choose(k, 0, 2, k == n % 2))
+   {
+     return n <= 1 ? n : cv::choose(j, 0, 2, j == bit(n - 2));
+   }
+
+.. code-block:: text
+
+   Verified: spec decreases and post: bit
+
+For ``n > 1``, the hypothesis at ``bit(n - 2)`` says that it is the parity of
+``n - 2``, ``0`` or ``1``. So the outer choice has a witness and is that
+value, which is also the parity of ``n``. A ``cppverify::reads`` check
+follows the loads of a choose's body in the same way
+(:doc:`../../language/ghost-proofs`).
 
 Spec functions may
 call each other in a cycle when they share a measure of the same length and
@@ -390,8 +414,9 @@ substituted first, so ``return n * (n + 1);`` with
 ``cppverify::post(cppverify::result == 2 * sum(n))`` is proved the same way.
 
 Inductions cost time only where a claim would otherwise stay unresolved:
-verified and failed claims never try one. Each attempt gets a sixth of
-``--timeout``, but at least two seconds (all of ``--timeout`` when that is
+verified and failed claims never try one. Each attempt gets a sixth of the
+query's timeout (``--timeout``, or ``--collection-timeout`` for a query over
+collections), but at least two seconds (all of the timeout when that is
 shorter, and five seconds when there is no timeout), and the attempts for
 one claim stop after two such shares. With the default 30-second timeout an
 unresolved claim takes at most 10 seconds more.
@@ -897,7 +922,7 @@ culprit (see :doc:`ch16-when-verification-fails`).
 ---------------------
 
 ``cppverify::choose(k, body)`` is an integer for which ``body`` holds, when there is one,
-and otherwise some unspecified integer (Hilbert's ε). ``choose(k, lo, hi,
+and otherwise some unspecified integer (Hilbert's ε). ``cppverify::choose(k, lo, hi,
 body)`` chooses in ``[lo, hi)``:
 
 .. code-block:: cpp
@@ -921,6 +946,68 @@ that holds for some choices but not others fails with a checked
 counterexample. A checked counterexample uses only choices that satisfy
 their bodies wherever some value does, including the chooses inside the
 definitions and postconditions a proof unfolds.
+
+"The same" is meant exactly. Two chooses whose conditions are written the
+same way, up to the names of their variables, are one choice, as Verus
+shares one function between them. The values a condition mentions include
+the cells it reads, so a choice over memory keeps its value across a write
+that leaves those cells as they were:
+
+.. code-block:: cpp
+
+   cv::proof void written_alike(int n)
+     cv::post(cv::choose(k, k > n) == cv::choose(j, j > n))
+   {
+   }
+
+   void write_other(const int *a, int n, int *b, int x)
+     cv::pre(valid(a, n) && n >= 1 && n <= 100 && valid(b, 1))
+     cv::modifies(*b)
+     cv::post(cv::choose(k, 0, n, a[k] == x) ==
+              cv::old(cv::choose(k, 0, n, a[k] == x)))
+   {
+     *b = 5;
+   }
+
+.. code-block:: text
+
+   Verified: written_alike [backend=z3]
+   Verified: write_other [backend=z3]
+
+The condition of ``write_other``'s choice reads ``a[0]`` to ``a[n - 1]``,
+and ``b`` is another object. A write to one of those cells may change the
+choice, and a condition written another way is another choice, even when
+it means the same:
+
+.. cppverify-example: fails write_inside written_differently
+
+.. code-block:: cpp
+
+   void write_inside(int *a, int n, int x)
+     cv::pre(valid(a, n) && n >= 1 && n <= 100)
+     cv::modifies(a[0])
+     cv::post(cv::choose(k, 0, n, a[k] == x) ==
+              cv::old(cv::choose(k, 0, n, a[k] == x)))
+   {
+     a[0] = x == 0 ? 1 : 0;
+   }
+
+   cv::proof void written_differently(int n)
+     cv::post(cv::choose(k, k > n) == cv::choose(k, n < k))
+   {
+   }
+
+.. code-block:: text
+
+   choose.cpp:5:43: error: verification failed: write_inside [...] (counterexample: a [ssa=a_0] [type=pointer] = ..., n [ssa=n_0] [type=i32] = 1, ...)
+   choose.cpp:12:33: error: verification failed: written_differently [...] (counterexample: n [ssa=n_0] [type=i32] = <unknown>)
+
+In every counterexample to ``write_inside`` the write changes ``a[0]``, a
+cell the condition reads, so the choice may move. When a proof needs equivalent conditions to choose alike, write
+them the same way, or put the choice in one spec function and apply it in
+both places. A counterexample is checked against this too: it may give one
+choice two values only in memories where its condition reads some
+different value.
 
 Spec collections
 ----------------
@@ -1036,7 +1123,9 @@ there changes nothing, ``subrange`` clamps its bounds, and a key outside a
 map's domain maps to 0. Sequences are finite; sets, multisets, and maps range
 over all integers and may be infinite. Counterexamples show their values, such
 as ``s = [4, 3]`` or ``m = {1 -> 7, 4.. -> 2}``. Z3 and cvc5 decide all
-four; Lean support for them is planned for a future release.
+four, and a Lean project states them with core Lean types (a sequence is a
+``List Int``, a set its membership test) and lemmas for each operation
+(:doc:`ch17-backends-modular-calls`).
 
 Inductive predicates
 --------------------

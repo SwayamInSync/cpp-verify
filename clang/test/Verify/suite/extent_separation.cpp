@@ -130,15 +130,17 @@ int aliasing_caller(int *buffer)
 // CHECK-DAG: Verified: aliasing_caller
 
 // The callee's clauses are asserted at the call under their own kinds: the
-// explicit precondition, element separation, each extent's validity, and
-// extent separation. A parameter with a declared extent has no single-object
-// validity of its own.
+// explicit precondition, each extent's validity, and the separation of the
+// two extents. A parameter with a declared extent has no single-object
+// validity of its own, and a pair with one no single-object separation:
+// the extents' separation replaces it, which an empty extent satisfies.
 // PASSIVE-LABEL: passive disjoint_caller
 // PASSIVE: assert precondition
-// PASSIVE: assert aliasing
+// PASSIVE-NOT: assert aliasing
 // PASSIVE: assert pointer-validity
 // PASSIVE: assert pointer-validity
 // PASSIVE: assert aliasing
+// PASSIVE-NOT: assert aliasing
 // PASSIVE: assert missing-return
 // PASSIVE-LABEL: passive overlapping_caller
 

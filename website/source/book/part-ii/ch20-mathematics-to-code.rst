@@ -637,6 +637,7 @@ The examples above use a handful of techniques, which cover most proofs:
   (``--backend=cvc5``). Both are exact, and a strict
   ``--backend=portfolio`` asks for agreement.
 - **Run obligations separately.** With more than one job (the default uses
-  every core), each obligation is also solved on its own, in parallel with
+  every physical core, or ``CPPVERIFY_JOBS``), each obligation is also solved
+  on its own, in parallel with
   the combined query; a function whose combined query is hard but whose
   obligations are each easy then verifies at once.

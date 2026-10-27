@@ -3,6 +3,7 @@
 #include "ObligationSimplify.h"
 #include "LogicTerms.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/CheckedArithmetic.h"
 #include <algorithm>
@@ -28,10 +29,9 @@ std::unique_ptr<LogicExpr> cloneLogicExpr(const LogicExpr *Expr) {
   Copy->OverflowOp = Expr->OverflowOp;
   Copy->CollectionOp = Expr->CollectionOp;
   Copy->SpecCallee = Expr->SpecCallee;
-  for (const auto &Child : Expr->Children)
-    Copy->Children.push_back(cloneLogicExpr(Child.get()));
-  for (const auto &Pattern : Expr->Patterns)
-    Copy->Patterns.push_back(cloneLogicExpr(Pattern.get()));
+  Copy->Premise = Expr->Premise;
+  Copy->Children = Expr->Children;
+  Copy->Patterns = Expr->Patterns;
   return Copy;
 }
 
@@ -74,8 +74,10 @@ std::optional<bool> boolConstant(const LogicExpr *Expr) {
 }
 
 bool equalLogicExpr(const LogicExpr *Left, const LogicExpr *Right) {
+  if (Left == Right)
+    return true;
   if (!Left || !Right)
-    return Left == Right;
+    return false;
   if (Left->K != Right->K || Left->Sort.Kind != Right->Sort.Kind ||
       Left->Sort.BitWidth != Right->Sort.BitWidth ||
       Left->Sort.Signedness != Right->Sort.Signedness ||
@@ -130,11 +132,10 @@ std::optional<LogicSort> unsignedMathSourceSort(const LogicExpr *Expr) {
   return SourceSort;
 }
 
-std::unique_ptr<LogicExpr>
-lowerUnsignedMathArithmetic(std::unique_ptr<LogicExpr> Expr,
-                            const LogicSort &SourceSort) {
+LogicExprRef lowerUnsignedMathArithmetic(const LogicExprRef &Expr,
+                                         const LogicSort &SourceSort) {
   if (Expr->K == LogicExpr::BvToInt)
-    return std::move(Expr->Children.front());
+    return Expr->Children.front();
 
   auto Divisor = std::make_unique<LogicExpr>(LogicExpr::IntLit);
   Divisor->Sort = SourceSort;
@@ -149,19 +150,19 @@ lowerUnsignedMathArithmetic(std::unique_ptr<LogicExpr> Expr,
   MachineArithmetic->EndLoc = Expr->EndLoc;
   MachineArithmetic->Source = Expr->Source;
   MachineArithmetic->Children.push_back(
-      lowerUnsignedMathArithmetic(std::move(Expr->Children[0]), SourceSort));
+      lowerUnsignedMathArithmetic(Expr->Children[0], SourceSort));
   MachineArithmetic->Children.push_back(std::move(Divisor));
-  return MachineArithmetic;
+  return LogicExprRef(std::move(MachineArithmetic));
 }
 
-std::unique_ptr<LogicExpr>
-simplifyUnsignedMathToBitVector(std::unique_ptr<LogicExpr> Expr,
+LogicExprRef
+simplifyUnsignedMathToBitVector(const LogicExprRef &Expr,
                                 ObligationSimplificationStats &Stats) {
   if (!Expr || Expr->K != LogicExpr::IntToBv ||
       Expr->Sort.Kind != LogicSortKind::BitVector || Expr->Children.size() != 1)
     return Expr;
 
-  LogicExpr *Arithmetic = Expr->Children.front().get();
+  const LogicExpr *Arithmetic = Expr->Children.front().get();
   if (!Arithmetic ||
       (Arithmetic->K != LogicExpr::Div && Arithmetic->K != LogicExpr::Rem) ||
       Arithmetic->Sort.Kind != LogicSortKind::MathematicalInteger ||
@@ -171,8 +172,8 @@ simplifyUnsignedMathToBitVector(std::unique_ptr<LogicExpr> Expr,
   std::optional<LogicSort> SourceSort = unsignedMathSourceSort(Arithmetic);
   if (!SourceSort)
     return Expr;
-  auto MachineArithmetic = lowerUnsignedMathArithmetic(
-      std::move(Expr->Children.front()), *SourceSort);
+  LogicExprRef MachineArithmetic =
+      lowerUnsignedMathArithmetic(Expr->Children.front(), *SourceSort);
   ++Stats.Rewrites;
   if (Expr->Sort.BitWidth == SourceSort->BitWidth &&
       Expr->Sort.Signedness == SourceSort->Signedness)
@@ -184,63 +185,111 @@ simplifyUnsignedMathToBitVector(std::unique_ptr<LogicExpr> Expr,
   Resize->EndLoc = Expr->EndLoc;
   Resize->Source = Expr->Source;
   Resize->Children.push_back(std::move(MachineArithmetic));
-  return Resize;
+  return LogicExprRef(std::move(Resize));
 }
 
-std::unique_ptr<LogicExpr> simplifyExpr(std::unique_ptr<LogicExpr> Expr,
-                                        ObligationSimplificationStats &Stats) {
-  if (!Expr)
-    return nullptr;
-  for (auto &Child : Expr->Children)
-    Child = simplifyExpr(std::move(Child), Stats);
+/// What each subterm simplified to, and the rewrites that took, so a term
+/// shared by many goals is simplified once and stays shared. The key is held
+/// too, so no node is freed and its address reused while the memo lives.
+struct SimplifiedTerm {
+  LogicExprRef Term;
+  LogicExprRef Result;
+  uint64_t Rewrites = 0;
+};
+using SimplificationMemo = llvm::DenseMap<const LogicExpr *, SimplifiedTerm>;
 
-  if ((Expr->K == LogicExpr::Eq || Expr->K == LogicExpr::Ne) &&
-      Expr->Children.size() == 2 &&
-      equalLogicExpr(Expr->Children[0].get(), Expr->Children[1].get())) {
+LogicExprRef simplifyTerm(const LogicExprRef &Expr,
+                          ObligationSimplificationStats &Stats,
+                          SimplificationMemo &Memo);
+
+LogicExprRef simplifyRules(const LogicExprRef &Expr,
+                           ObligationSimplificationStats &Stats,
+                           SimplificationMemo &Memo) {
+  // The node with its children simplified, copied only if one changed.
+  std::unique_ptr<LogicExpr> Copy;
+  for (size_t I = 0; I != Expr->Children.size(); ++I) {
+    LogicExprRef Child = simplifyTerm(Expr->Children[I], Stats, Memo);
+    if (Child == Expr->Children[I])
+      continue;
+    if (!Copy)
+      Copy = cloneLogicExpr(Expr.get());
+    Copy->Children[I] = std::move(Child);
+  }
+  const LogicExprRef Node = Copy ? LogicExprRef(std::move(Copy)) : Expr;
+
+  if ((Node->K == LogicExpr::Eq || Node->K == LogicExpr::Ne) &&
+      Node->Children.size() == 2 &&
+      equalLogicExpr(Node->Children[0].get(), Node->Children[1].get())) {
     ++Stats.Rewrites;
-    return boolLiteral(Expr->K == LogicExpr::Eq, *Expr);
+    return LogicExprRef(boolLiteral(Node->K == LogicExpr::Eq, *Node));
   }
 
-  if (Expr->K == LogicExpr::Not && Expr->Children.size() == 1) {
+  if (Node->K == LogicExpr::Not && Node->Children.size() == 1) {
     if (std::optional<bool> Value =
-            boolConstant(Expr->Children.front().get())) {
+            boolConstant(Node->Children.front().get())) {
       ++Stats.Rewrites;
-      return boolLiteral(!*Value, *Expr);
+      return LogicExprRef(boolLiteral(!*Value, *Node));
     }
-    LogicExpr *Child = Expr->Children.front().get();
+    const LogicExpr *Child = Node->Children.front().get();
     if (Child && Child->K == LogicExpr::Not && Child->Children.size() == 1 &&
         Child->Children.front() &&
         Child->Children.front()->Sort.Kind == LogicSortKind::Bool) {
       ++Stats.Rewrites;
-      return std::move(Child->Children.front());
+      return Child->Children.front();
     }
   }
 
-  if ((Expr->K == LogicExpr::And || Expr->K == LogicExpr::Or) &&
-      Expr->Children.size() == 2) {
-    std::optional<bool> Left = boolConstant(Expr->Children[0].get());
-    std::optional<bool> Right = boolConstant(Expr->Children[1].get());
+  if ((Node->K == LogicExpr::And || Node->K == LogicExpr::Or) &&
+      Node->Children.size() == 2) {
+    std::optional<bool> Left = boolConstant(Node->Children[0].get());
+    std::optional<bool> Right = boolConstant(Node->Children[1].get());
     if (Left) {
-      const bool SelectRight = Expr->K == LogicExpr::And ? *Left : !*Left;
+      const bool SelectRight = Node->K == LogicExpr::And ? *Left : !*Left;
       ++Stats.Rewrites;
-      return SelectRight ? std::move(Expr->Children[1])
-                         : boolLiteral(*Left, *Expr);
+      return SelectRight ? Node->Children[1]
+                         : LogicExprRef(boolLiteral(*Left, *Node));
     }
     if (Right) {
-      const bool SelectLeft = Expr->K == LogicExpr::And ? *Right : !*Right;
+      const bool SelectLeft = Node->K == LogicExpr::And ? *Right : !*Right;
       ++Stats.Rewrites;
-      return SelectLeft ? std::move(Expr->Children[0])
-                        : boolLiteral(*Right, *Expr);
+      return SelectLeft ? Node->Children[0]
+                        : LogicExprRef(boolLiteral(*Right, *Node));
     }
   }
 
-  if (Expr->K == LogicExpr::Ite && Expr->Children.size() == 3)
-    if (std::optional<bool> Cond = boolConstant(Expr->Children.front().get())) {
+  if (Node->K == LogicExpr::Ite && Node->Children.size() == 3)
+    if (std::optional<bool> Cond = boolConstant(Node->Children.front().get())) {
       ++Stats.Rewrites;
-      return std::move(Expr->Children[*Cond ? 1 : 2]);
+      return Node->Children[*Cond ? 1 : 2];
     }
 
-  return simplifyUnsignedMathToBitVector(std::move(Expr), Stats);
+  return simplifyUnsignedMathToBitVector(Node, Stats);
+}
+
+LogicExprRef simplifyTerm(const LogicExprRef &Expr,
+                          ObligationSimplificationStats &Stats,
+                          SimplificationMemo &Memo) {
+  if (!Expr)
+    return nullptr;
+  if (auto Known = Memo.find(Expr.get()); Known != Memo.end()) {
+    Stats.Rewrites += Known->second.Rewrites;
+    return Known->second.Result;
+  }
+  const uint64_t Before = Stats.Rewrites;
+  LogicExprRef Result = simplifyRules(Expr, Stats, Memo);
+  Memo[Expr.get()] = {Expr, Result, Stats.Rewrites - Before};
+  return Result;
+}
+
+/// \p Expr simplified, as a root its owner may change.
+std::unique_ptr<LogicExpr> simplifyExpr(std::unique_ptr<LogicExpr> Expr,
+                                        ObligationSimplificationStats &Stats,
+                                        SimplificationMemo &Memo) {
+  if (!Expr)
+    return nullptr;
+  LogicExprRef Result =
+      simplifyTerm(LogicExprRef(std::move(Expr)), Stats, Memo);
+  return cloneLogicExpr(Result.get());
 }
 
 std::unique_ptr<LogicExpr> negate(std::unique_ptr<LogicExpr> Expr) {
@@ -296,13 +345,14 @@ bool callsOnlyReachableFunctions(const LogicExpr *Expr,
 }
 
 void simplifyFunctions(ObligationModule &Module,
-                       ObligationSimplificationStats &Stats) {
+                       ObligationSimplificationStats &Stats,
+                       SimplificationMemo &Memo) {
   for (auto &[Identity, Function] : Module.LogicFunctions) {
     (void)Identity;
     Function.StepDefinition =
-        simplifyExpr(std::move(Function.StepDefinition), Stats);
+        simplifyExpr(std::move(Function.StepDefinition), Stats, Memo);
     for (auto &Definition : Function.DefinitionLevels)
-      Definition = simplifyExpr(std::move(Definition), Stats);
+      Definition = simplifyExpr(std::move(Definition), Stats, Memo);
   }
 
   std::set<std::string> Reachable;
@@ -313,10 +363,14 @@ void simplifyFunctions(ObligationModule &Module,
     auto Function = Module.LogicFunctions.find(Pending[I]);
     if (Function == Module.LogicFunctions.end())
       continue;
+    // A function's declaration depends on what its definition and its
+    // measures apply.
     std::set<std::string> Dependencies;
     collectCalledFunctions(Function->second.StepDefinition.get(), Dependencies);
     for (const auto &Definition : Function->second.DefinitionLevels)
       collectCalledFunctions(Definition.get(), Dependencies);
+    for (const auto &Measure : Function->second.Decreases)
+      collectCalledFunctions(Measure.get(), Dependencies);
     for (const std::string &Dependency : Dependencies)
       if (Reachable.insert(Dependency).second)
         Pending.push_back(Dependency);
@@ -383,6 +437,7 @@ std::unique_ptr<LogicExpr> substituteVariable(const LogicExpr *Expr,
   Copy->OverflowOp = Expr->OverflowOp;
   Copy->CollectionOp = Expr->CollectionOp;
   Copy->SpecCallee = Expr->SpecCallee;
+  Copy->Premise = Expr->Premise;
   for (const auto &Child : Expr->Children)
     Copy->Children.push_back(substituteVariable(Child.get(), Name, Value));
   for (const auto &Pattern : Expr->Patterns)
@@ -961,16 +1016,17 @@ simplifyObligationModule(ObligationModule Module,
 
   ObligationSimplificationStats Stats;
   Stats.NodesBefore = countModuleNodes(Module);
+  SimplificationMemo Memo;
   for (Obligation &Item : Module.Obligations) {
-    Item.Goal = simplifyExpr(std::move(Item.Goal), Stats);
+    Item.Goal = simplifyExpr(std::move(Item.Goal), Stats, Memo);
     Item.CounterexampleQuery = negate(cloneLogicExpr(Item.Goal.get()));
   }
   // The copies of assumptions stay equal to the assumptions in the goals.
   ObligationSimplificationStats Uncounted;
   for (auto *Copies : {&Module.Theorems, &Module.Preconditions})
     for (auto &Copy : *Copies)
-      Copy = simplifyExpr(std::move(Copy), Uncounted);
-  simplifyFunctions(Module, Stats);
+      Copy = simplifyExpr(std::move(Copy), Uncounted, Memo);
+  simplifyFunctions(Module, Stats, Memo);
   Module.CorrectnessGoal = buildCompleteGoal(Module.Obligations);
   Module.CounterexampleQuery =
       negate(cloneLogicExpr(Module.CorrectnessGoal.get()));

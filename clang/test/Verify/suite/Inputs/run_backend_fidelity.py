@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 
 import argparse
-import hashlib
 import json
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 
@@ -399,18 +399,28 @@ def check_archive_matrix(cpp_verify, source, work, source_records):
     return canonical
 
 
-def goal_names(lean_text):
-    names = set(
+def project_goals(lean_text):
+    goals = {}
+    for match in re.finditer(
+        r"^/- obligation: (\S+)\n   kind: (\S+)\n   source: ([^\n]*) -/\n"
+        r"def (cppverify_[A-Za-z0-9_]+) : Prop :=$",
+        lean_text,
+        re.MULTILINE,
+    ):
+        goals[match.group(4)] = match.group(1, 2, 3)
+    if not goals:
+        fail("Lean export contains no named obligation goals")
+    return goals
+
+
+def obligation_records(lean_text):
+    return sorted(
         re.findall(
-            r"^def ((?:cppverify_[A-Za-z0-9_]+_goal)|"
-            r"(?:cppEncoded_[0-9a-f]+)) : Prop :=$",
+            r"^/- obligation: (\S+)\n   kind: (\S+)\n   source: ([^\n]*) -/$",
             lean_text,
             re.MULTILINE,
         )
     )
-    if not names:
-        fail("Lean export contains no named obligation goals")
-    return names
 
 
 def scratch_theorem_names(lean_text):
@@ -425,12 +435,6 @@ def scratch_theorem_names(lean_text):
     if not names:
         fail("Lean scratch export contains no named theorems")
     return names
-
-
-def decode_lean_name(name):
-    if not name.startswith("cppEncoded_"):
-        return name
-    return bytes.fromhex(name.removeprefix("cppEncoded_")).decode("utf-8")
 
 
 def check_lean_identity(cpp_verify, source, canonical, work):
@@ -460,7 +464,7 @@ def check_lean_identity(cpp_verify, source, canonical, work):
     )
     if source_lean.read_bytes() != replay_lean.read_bytes():
         fail("source and archive replay produced different Lean semantics")
-    scratch_goals = scratch_theorem_names(source_lean.read_text())
+    scratch_theorem_names(source_lean.read_text())
 
     run(
         [
@@ -473,45 +477,114 @@ def check_lean_identity(cpp_verify, source, canonical, work):
         ],
         {0},
     )
-    generated = project / "CppVerify" / "Generated.lean"
-    text = generated.read_text()
+    # The project's generated text: its prelude, specs, and each goal module.
+    root = project / "CppVerify"
+    modules = [root / "Prelude.lean", root / "Specs.lean"] + [
+        root / "Goals" / (line[len("import CppVerify.Goals."):] + ".lean")
+        for line in (root / "Generated.lean").read_text().splitlines()
+        if line.startswith("import CppVerify.Goals.")
+    ]
+    text = "".join(module.read_text() for module in modules)
     if "sorry" in text:
         fail("generated Lean semantics contains an admitted proof")
 
-    goals = goal_names(text)
-    decoded_scratch_goals = {decode_lean_name(goal) for goal in scratch_goals}
-    if {
-        decode_lean_name(goal).removesuffix("_goal") for goal in goals
-    } - decoded_scratch_goals:
+    goals = project_goals(text)
+    if sorted(goals.values()) != obligation_records(source_lean.read_text()):
         fail("Lean project goal identities differ from scratch/archive export")
-    proof_files = list((project / "CppVerify" / "Proofs").glob("Goal_*.lean"))
+    proofs = project / "CppVerify" / "Proofs"
+    proof_files = sorted(proofs.glob("*/*.lean"))
     if len(proof_files) != len(goals):
         fail("Lean project proof-module count does not match generated goals")
     proof_goals = set()
     for proof_file in proof_files:
-        match = re.search(
-            r"^theorem ((?:cppverify_[A-Za-z0-9_]+_goal)|"
-            r"(?:cppEncoded_[0-9a-f]+))_proof :",
-            proof_file.read_text(),
-            re.MULTILINE,
+        text = proof_file.read_text()
+        header = re.match(
+            r"/- cppverify proof\n   goal: (\S+)\n   obligation: (\S+)\n"
+            r"   hash: ([0-9a-f]{64})\n",
+            text,
         )
-        if not match:
+        if not header:
             fail("malformed Lean proof module {}".format(proof_file.name))
-        goal = match.group(1)
-        expected_name = "Goal_{}.lean".format(
-            hashlib.md5(goal.encode("utf-8")).hexdigest()[:16]
+        goal, obligation, digest = header.groups()
+        group = proof_file.parent.name
+        name = re.fullmatch(
+            re.escape(group) + r"_[a-z0-9_]+_([0-9a-f]{8})(?:_[0-9]+)?", goal
         )
-        if proof_file.name != expected_name:
-            fail(
-                "Lean goal hash mismatch: {} should be {}".format(
-                    proof_file.name, expected_name
-                )
-            )
+        if proof_file.name != goal + ".lean" or not name:
+            fail("Lean proof module {} is not named by its goal".format(
+                proof_file.relative_to(proofs)
+            ))
+        if not digest.startswith(name.group(1)):
+            fail("Lean goal hash mismatch: {} records {}".format(goal, digest))
+        if goals.get(goal, (None,))[0] != obligation:
+            fail("Lean proof module {} names obligation {}".format(
+                goal, obligation
+            ))
+        if "theorem {}_proof :".format(goal) not in text:
+            fail("malformed Lean proof module {}".format(proof_file.name))
         proof_goals.add(goal)
-    if proof_goals != goals:
+    if proof_goals != set(goals):
         fail("Lean proof modules do not cover the generated theorem identities")
 
     run(["lake", "--dir={}".format(project), "build", "CppVerify.Generated"], {0})
+
+
+def check_lean_verdicts(cpp_verify, source, proofs, work):
+    # Lean decides every case: a project certifies each valid one, with the
+    # proof by hand of the one goal cppverify_auto does not prove, and the
+    # one only a hidden definition proves, which Lean sees; a fallback
+    # project confirms the counterexample of each invalid one in Lean.
+    project = work / "lean-verdicts"
+    command = [
+        str(cpp_verify),
+        "--backend=lean",
+        "--lean-project={}".format(project),
+        "--diagnostics-format=json",
+        str(source),
+        "--",
+    ]
+    run(command, {0, 1})
+    for proof in proofs.glob("*.lean"):
+        group = re.match(r"(cppverify_.+?_[0-9a-f]{6})_", proof.name).group(1)
+        shutil.copy(proof, project / "CppVerify" / "Proofs" / group / proof.name)
+    # Every verdict on a function: its obligations, and the check of its
+    # contract when it has one.
+    certified = {}
+    for record in parse_json_lines(
+        run(command[:4] + ["--lean-certify"] + command[4:], {0, 1})
+    ):
+        certified.setdefault(record.get("function"), []).append(record)
+    for name in sorted(VALID_FUNCTIONS | set(UNRESOLVED_REASONS)):
+        for record in certified.get(name) or [{}]:
+            if record.get("status") != "certified":
+                fail(
+                    "Lean returned {} ({}) instead of certified for {}".format(
+                        record.get("status"), record.get("message"), name
+                    )
+                )
+    refuted = function_records(
+        parse_json_lines(
+            run(
+                [
+                    str(cpp_verify),
+                    "--lean-fallback={}".format(work / "lean-refutations"),
+                    "--lean-certify",
+                    "--diagnostics-format=json",
+                    str(source),
+                    "--",
+                ],
+                {1},
+            )
+        )
+    )
+    for name in sorted(INVALID_FUNCTIONS):
+        record = refuted[name]
+        if record.get("status") != "failed" or record.get("lean_refuted") is not True:
+            fail(
+                "Lean did not confirm the counterexample of {} ({}, {})".format(
+                    name, record.get("status"), record.get("message")
+                )
+            )
 
 
 def warning_messages(records):
@@ -603,10 +676,12 @@ def main():
     parser.add_argument("--cpp-verify", required=True, type=pathlib.Path)
     parser.add_argument("--source", required=True, type=pathlib.Path)
     parser.add_argument("--recommends", required=True, type=pathlib.Path)
+    parser.add_argument("--lean-proofs", required=True, type=pathlib.Path)
     parser.add_argument("--work-dir", required=True, type=pathlib.Path)
     arguments = parser.parse_args()
 
-    for path in (arguments.cpp_verify, arguments.source, arguments.recommends):
+    for path in (arguments.cpp_verify, arguments.source, arguments.recommends,
+                 arguments.lean_proofs):
         if not path.exists():
             fail("required path does not exist: {}".format(path))
     arguments.work_dir.mkdir(parents=True, exist_ok=False)
@@ -627,6 +702,12 @@ def main():
         arguments.cpp_verify, arguments.source, canonical, arguments.work_dir
     )
     print("PASS: Lean theorem, hash, replay, and kernel-export identity")
+
+    check_lean_verdicts(
+        arguments.cpp_verify, arguments.source, arguments.lean_proofs,
+        arguments.work_dir
+    )
+    print("PASS: decisive Lean verdicts: valid cases certified, counterexamples refuted")
 
     check_recommends_exclusion(
         arguments.cpp_verify, arguments.recommends, arguments.work_dir

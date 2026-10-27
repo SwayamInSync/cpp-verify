@@ -1,0 +1,99 @@
+# REQUIRES: lean
+#
+# An archive replays into a Lean project as its source exports: the same
+# goals, specs, and proof files, so a proof written for the source certifies
+# the archive's goal. Replay checks each module alone, as with a solver.
+#
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: %cpp-verify --lower-only --obligation-out=%t/a.cpv %S/Inputs/lean_replay.cpp --
+# RUN: %cpp-verify --backend=lean --lean-project=%t/src %S/Inputs/lean_replay.cpp -- 2>&1 | FileCheck %s --check-prefix=SOURCE
+# RUN: %cpp-verify --obligation-in=%t/a.cpv --lean-project=%t/rep 2>&1 | FileCheck %s --check-prefix=REPLAY
+# RUN: diff -r %t/src/CppVerify/Goals %t/rep/CppVerify/Goals
+# RUN: diff %t/src/CppVerify/Specs.lean %t/rep/CppVerify/Specs.lean
+# RUN: diff -r %t/src/CppVerify/Proofs %t/rep/CppVerify/Proofs
+# RUN: FileCheck %s --input-file=%t/rep/CppVerify/Specs.lean --check-prefix=SPECS
+# RUN: FileCheck %s --input-file=%t/rep/CppVerify/Goals/cppverify_inc_c0810e.lean --check-prefix=READABLE
+#
+# RUN: cp %S/Inputs/lean_spec_definitions_tri_nonneg.lean %t/rep/CppVerify/Proofs/cppverify_tri_nonneg_42a030/cppverify_tri_nonneg_42a030_postcondition_053b1980.lean
+# RUN: %cpp-verify --obligation-in=%t/a.cpv --lean-project=%t/rep --lean-certify 2>&1 | FileCheck %s --check-prefix=CERTIFY
+# RUN: %cpp-verify --obligation-in=%t/a.cpv --lean-project=%t/rep --diagnostics-format=json | FileCheck %s --check-prefix=JSON
+#
+# A record of schema 2 has no measures, and no names for a goal's
+# assumptions: tri is opaque, and a readable goal names no hypothesis.
+# RUN: %python %S/Inputs/mutate_obligation_archive.py schema-v2 %t/a.cpv %t/v2.cpv
+# RUN: %cpp-verify --obligation-in=%t/v2.cpv --lean-project=%t/v2 2>&1 | FileCheck %s --check-prefix=REPLAY
+# RUN: FileCheck %s --input-file=%t/v2/CppVerify/Specs.lean --check-prefix=SPECS-V2
+# RUN: FileCheck %s --input-file=%t/v2/CppVerify/Goals/cppverify_inc_c0810e.lean --check-prefix=READABLE-V2
+#
+# A bounded module states its bound with its goals. Every goal of sum_small
+# certifies, its unwinding included; count_up's unwinding does not, since
+# its loop may run longer, and the rest shows it safe within the bound.
+# RUN: not %cpp-verify --backend=bmc --unroll=3 --obligation-out=%t/b.cpv %S/Inputs/lean_replay_loops.cpp --
+# RUN: %cpp-verify --obligation-in=%t/b.cpv --backend=lean --lean-out=%t/b.lean 2>&1 | FileCheck %s --check-prefix=BOUNDED-EXPORT
+# RUN: FileCheck %s --input-file=%t/b.lean --check-prefix=BOUND
+# RUN: not %cpp-verify --obligation-in=%t/b.cpv --lean-project=%t/b --lean-certify 2>&1 | FileCheck %s --check-prefix=BOUNDED
+#
+# A replay moves and keeps proofs as a source run does: the proof of
+# tri_nonneg, which no goal of the bounded archive has, is kept in Stale/.
+# RUN: %cpp-verify --obligation-in=%t/b.cpv --lean-project=%t/rep 2>&1 | FileCheck %s --check-prefix=STALE
+# RUN: test -f %t/rep/Stale/Proofs/cppverify_tri_nonneg_42a030/cppverify_tri_nonneg_42a030_postcondition_053b1980.lean
+# Its goal back, it takes the proof back, which a JSON run says as JSON.
+# RUN: %cpp-verify --obligation-in=%t/a.cpv --lean-project=%t/rep --diagnostics-format=json | FileCheck %s --check-prefix=BACK
+#
+# RUN: not %cpp-verify --obligation-in=%t/a.cpv --lean-certify 2>&1 | FileCheck %s --check-prefix=NO-PROJECT
+# RUN: not %cpp-verify --obligation-in=%t/a.cpv --lean-fallback=%t/f 2>&1 | FileCheck %s --check-prefix=NO-FALLBACK
+# RUN: not %cpp-verify --obligation-in=%t/a.cpv --lean-project=%t/x --lean-out=%t/x.lean 2>&1 | FileCheck %s --check-prefix=BOTH
+# RUN: not %cpp-verify --obligation-in=%t/a.cpv --backend=z3 --lean-project=%t/x 2>&1 | FileCheck %s --check-prefix=Z3
+
+# SOURCE: Exported: decreases: tri (cppverify_auto proved 1 of 1 goals)
+# SOURCE-NEXT: Exported: lean obligation: tri_nonneg (cppverify_auto proved 1 of 2 goals)
+# SOURCE: Exported: decreases: down (cppverify_auto proved 1 of 1 goals)
+# SOURCE-NEXT: Exported: lean obligation: down_zero (cppverify_auto proved 2 of 2 goals)
+# SOURCE-NEXT: Exported: lean obligation: inc (cppverify_auto proved 3 of 3 goals)
+
+# REPLAY: Exported: lean obligation: tri.decreases (cppverify_auto proved 1 of 1 goals) [backend=lean] [semantic-hash=sha256:{{[0-9a-f]+}}]
+# REPLAY-NEXT: Exported: lean obligation: tri_nonneg (cppverify_auto proved 1 of 2 goals) [backend=lean]
+# REPLAY-NEXT: Exported: lean obligation: down.decreases (cppverify_auto proved 1 of 1 goals) [backend=lean]
+# REPLAY-NEXT: Exported: lean obligation: down_zero (cppverify_auto proved 2 of 2 goals) [backend=lean]
+# REPLAY-NEXT: Exported: lean obligation: inc (cppverify_auto proved 3 of 3 goals) [backend=lean]
+
+# The archive keeps tri's measure, and, for down's, the spec it applies.
+# SPECS: {{^}}def cppSpec_fn_5f5a3374726969 (n : Int) : Int :={{$}}
+# SPECS: {{^}}termination_by ((n) + 1).toNat{{$}}
+# SPECS: {{^}}def cppSpec_fn_5f5a3473697a6569 (n : Int) : Int :={{$}}
+
+# READABLE: (h_pre_1 : (cppBvSlt x_0 (BitVec.ofInt 32 (100)))) →
+
+# CERTIFY: Proved obligations: tri.decreases (dependencies not checked in replay) [backend=lean]
+# CERTIFY-NEXT: Proved obligations: tri_nonneg (dependencies not checked in replay) [backend=lean]
+# CERTIFY-NEXT: Proved obligations: down.decreases (dependencies not checked in replay) [backend=lean]
+# CERTIFY-NEXT: Proved obligations: down_zero (dependencies not checked in replay) [backend=lean]
+# CERTIFY-NEXT: Proved obligations: inc (dependencies not checked in replay) [backend=lean]
+
+# JSON: {"backend":"lean","function":"tri.decreases","lean_automatic":1,{{.*}}"status":"exported"}
+
+# SPECS-V2: {{^}}opaque cppSpec_fn_5f5a3374726969 : Int -> Int{{$}}
+# READABLE-V2-NOT: h_pre
+
+# BOUNDED-EXPORT: Exported: lean obligation: sum_small [backend=lean, bound=2]
+# BOUNDED-EXPORT-NEXT: Exported: lean obligation: count_up [backend=lean, bound=3]
+
+# BOUND: /- function: sum_small -/
+# BOUND: /- bound: 2 loop iterations, by unrolling: these goals speak only of the
+# BOUND: kind: unwinding
+# BOUND: /- function: count_up -/
+# BOUND: /- bound: 3 loop iterations, by unrolling: these goals speak only of the
+
+# BOUNDED: Proved obligations: sum_small (dependencies not checked in replay) [backend=lean, bound=2]
+# BOUNDED-NEXT: lean_replay_loops.cpp:19:3: BoundedSafe: count_up (every goal is certified but the unwinding: no execution within 3 loop iterations fails (the proof of fn_5f5a38636f756e745f757069::unwinding@19:3: {{.*}}) [backend=lean, bound=3] [reason=bmc.incomplete-bound]
+
+# STALE: warning: the Lean proof CppVerify/Proofs/cppverify_tri_nonneg_42a030/cppverify_tri_nonneg_42a030_postcondition_053b1980.lean is kept in Stale/Proofs/cppverify_tri_nonneg_42a030/cppverify_tri_nonneg_42a030_postcondition_053b1980.lean: its function is gone, and no goal has its statement
+# STALE-NEXT: Exported: lean obligation: sum_small (cppverify_auto proved 7 of 7 goals) [backend=lean, bound=2]
+
+# BACK: {"message":"the Lean proof of fn_5f5a31307472695f6e6f6e6e656769::postcondition@{{[0-9]+}}:{{[0-9]+}} came back from Stale/Proofs/cppverify_tri_nonneg_42a030/cppverify_tri_nonneg_42a030_postcondition_053b1980.lean to CppVerify/Proofs/cppverify_tri_nonneg_42a030/cppverify_tri_nonneg_42a030_postcondition_053b1980.lean, the file of the goal with its statement","schema":"cppverify.diagnostic/1","severity":"warning","status":"warning"}
+# BACK-NEXT: {"backend":"lean","function":"tri.decreases",{{.*}}"status":"exported"}
+
+# NO-PROJECT: error: --lean-certify, --lean-prune-stale, and --no-lean-auto require --lean-project
+# NO-FALLBACK: error: --lean-fallback applies to source verification; archive replay writes a Lean project with --lean-project
+# BOTH: error: --lean-project cannot be combined with --lean-out
+# Z3: error: --lean-project requires --backend=lean

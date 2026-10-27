@@ -60,7 +60,8 @@ Expr variable(llvm::StringRef Name, LogicSort Sort) {
 
 Expr node(LogicExpr::Kind Kind, LogicSort Sort, std::vector<Expr> Children) {
   Expr E = leaf(Kind, Sort);
-  E->Children = std::move(Children);
+  for (Expr &Child : Children)
+    E->Children.push_back(std::move(Child));
   return E;
 }
 

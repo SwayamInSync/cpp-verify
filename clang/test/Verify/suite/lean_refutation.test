@@ -1,0 +1,89 @@
+# REQUIRES: lean
+#
+# A fallback project shows each certified counterexample in Lean too: its
+# refutation states the failing goal as the project would and proves it false
+# at the model's values, and certification checks it like a proof. A
+# counterexample Lean cannot decide stays a failure, with a warning; Lean
+# deciding the goal true would be a disagreement, never a failure.
+#
+# RUN: rm -rf %t && mkdir -p %t && cp %S/Inputs/lean_refutation.cpp %t/r.cpp
+# RUN: not %cpp-verify --lean-fallback=%t/p %t/r.cpp -- 2>&1 | FileCheck %s --check-prefix=EXPORT
+# RUN: FileCheck %s --input-file=%t/p/CppVerify/Refutations/cppverify_add_one_fc20c3/cppverify_add_one_fc20c3_postcondition_1b36ffe1.lean --check-prefix=REFUTATION
+# RUN: not %cpp-verify --lean-fallback=%t/p --lean-certify %t/r.cpp -- 2>&1 | FileCheck %s --check-prefix=CERTIFY
+# RUN: not %cpp-verify --lean-fallback=%t/p --lean-certify --diagnostics-format=json %t/r.cpp -- 2>&1 | FileCheck %s --check-prefix=JSON
+#
+# The checker takes a refutation only when its theorem states the negation
+# of the goal its module defines.
+# RUN: mkdir -p %t/p/CppVerify/Refutations/cppverify_fake_000000 %t/p/.lake/build/lib/lean/CppVerify/Refutations/cppverify_fake_000000
+# RUN: printf 'def cppverify_fake_000000_goal : Prop := True\ntheorem cppverify_fake_000000_goal_refuted : True := trivial\n' > %t/p/CppVerify/Refutations/cppverify_fake_000000/cppverify_fake_000000_goal.lean
+# RUN: cd %t/p && lake env lean -R %t/p -o .lake/build/lib/lean/CppVerify/Refutations/cppverify_fake_000000/cppverify_fake_000000_goal.olean CppVerify/Refutations/cppverify_fake_000000/cppverify_fake_000000_goal.lean
+# RUN: printf 'cppverify_fake_000000_goal\tCppVerify.Refutations.cppverify_fake_000000.cppverify_fake_000000_goal\tCppVerify.Refutations.cppverify_fake_000000.cppverify_fake_000000_goal\trefutation\n' > %t/goals
+# RUN: cd %t/p && lake env lean --run .cppverify/Certify.lean %t/goals propext,Quot.sound,Classical.choice | FileCheck %s --check-prefix=CHECKER
+#
+# A failure that is gone takes its refutation with it, as does a module of
+# no failure.
+# RUN: sed -i 's/return x + 2;/return x + 1;/' %t/r.cpp
+# RUN: not %cpp-verify --lean-fallback=%t/p %t/r.cpp -- 2>&1 | FileCheck %s --check-prefix=FIXED
+# RUN: not test -e %t/p/CppVerify/Refutations/cppverify_add_one_fc20c3
+# RUN: not test -e %t/p/CppVerify/Refutations/cppverify_fake_000000
+# RUN: test -f %t/p/CppVerify/Refutations/cppverify_tri_three_55daf7/cppverify_tri_three_55daf7_postcondition_ffa2cd20.lean
+#
+# The tactic says why it cannot refute: Lean decides the instance true, or
+# cannot decide it.
+#
+# Each attempt of the tactic has the heartbeats of a step of cppverify_auto,
+# so a refutation Lean could only decide by trying a billion integers ends;
+# and a counterexample that is not a failure once the verdicts settle reports
+# nothing of its refutation.
+# RUN: cd %t/p && not lake env lean %S/Inputs/lean_refutation_tactic.lean 2>&1 | FileCheck %s --check-prefix=TACTIC
+# RUN: not %cpp-verify --lean-fallback=%t/b --lean-certify %S/Inputs/lean_refutation_budget.cpp -- 2>&1 | FileCheck %s --check-prefix=BUDGET
+
+# EXPORT: error: verification failed: add_one
+# EXPORT-NOT: confirmed in Lean
+
+# The goal's definitions are elaborated without a heartbeat limit; the
+# theorem keeps Lean's, which also bounds the kernel's check of its proof.
+# REFUTATION: {{^}}import CppVerify.Specs{{$}}
+# REFUTATION-NOT: maxHeartbeats
+# REFUTATION: {{^}}section Goal{{$}}
+# REFUTATION-EMPTY:
+# REFUTATION-NEXT: {{^}}set_option maxHeartbeats 0{{$}}
+# REFUTATION-NOT: maxHeartbeats
+# REFUTATION: {{^}}def cppverify_add_one_fc20c3_postcondition_1b36ffe1 : Prop :={{$}}
+# REFUTATION-NOT: maxHeartbeats
+# REFUTATION: {{^}}end Goal{{$}}
+# REFUTATION-NOT: maxHeartbeats
+# REFUTATION: {{^}}theorem cppverify_add_one_fc20c3_postcondition_1b36ffe1_refuted : ¬ cppverify_add_one_fc20c3_postcondition_1b36ffe1 := by{{$}}
+# REFUTATION-NEXT: {{^}}  intro h{{$}}
+# REFUTATION-NEXT: {{^}}  have h₁ := h{{$}}
+# REFUTATION-NEXT: {{^}}    (fun (a : Int) => (0 : Int)){{$}}
+# REFUTATION-NEXT: {{^}}    (fun (a : Int) => (0 : Int)){{$}}
+# REFUTATION-NEXT: {{^}}    (BitVec.ofInt 32 ({{-?[0-9]+}})){{$}}
+# REFUTATION-NEXT: {{^}}    (BitVec.ofInt 32 ({{-?[0-9]+}})){{$}}
+# REFUTATION-NEXT: {{^}}  cppverify_refute h₁{{$}}
+
+# A contract, a bounded quantifier, a store to memory, and a spec Lean
+# defines; the choice is opaque in Lean.
+# CERTIFY: error: verification failed: add_one {{.*}}[reason=counterexample] (confirmed in Lean)
+# CERTIFY-NEXT: error: verification failed: below_three {{.*}}[reason=counterexample] (confirmed in Lean)
+# CERTIFY-NEXT: error: verification failed: zero_first {{.*}}[reason=counterexample] (confirmed in Lean)
+# CERTIFY-NEXT: Verified: spec decreases: tri
+# CERTIFY-NEXT: error: verification failed: tri_three {{.*}}[reason=counterexample] (confirmed in Lean)
+# CERTIFY-NEXT: error: verification failed: pick_one {{.*}}[reason=counterexample]{{$}}
+# CERTIFY-NEXT: warning: the counterexample of pick_one is not confirmed in Lean: Lean cannot decide the goal at the counterexample
+
+# JSON: {"backend":"z3","function":"add_one","lean_refuted":true,
+# JSON: {"message":"the counterexample of pick_one is not confirmed in Lean: Lean cannot decide the goal at the counterexample","schema":"cppverify.diagnostic/1","severity":"warning","status":"warning"}
+
+# CHECKER: fail	cppverify_fake_000000_goal_refuted	cppverify_fake_000000_goal_refuted proves True, not Not cppverify_fake_000000_goal
+
+# FIXED: Verified: add_one [backend=z3]
+
+# TACTIC: lean_refutation_tactic.lean:7:2: error: cppverify: Lean decides the goal true at the counterexample
+# TACTIC: lean_refutation_tactic.lean:16:2: error: cppverify: Lean cannot decide the goal at the counterexample
+
+# BUDGET: error: verification failed: below_a_thousand {{.*}}[reason=counterexample] (confirmed in Lean)
+# BUDGET: error: verification failed: below_a_billion {{.*}}[reason=counterexample]{{$}}
+# BUDGET: Unresolved: verification unresolved: far {{.*}}[reason=spec.post] (its counterexample is checked with the postcondition of ge, which is not established){{$}}
+# BUDGET: warning: the counterexample of below_a_billion is not confirmed in Lean: Lean cannot decide the goal at the counterexample
+# BUDGET-NOT: the counterexample of far

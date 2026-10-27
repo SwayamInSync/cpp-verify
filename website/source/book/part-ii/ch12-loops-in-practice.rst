@@ -66,8 +66,54 @@ later iterations. ``cppverify::old(expr)`` in a loop invariant always reads the 
 function's entry state; it is not a previous-iteration operator. A function
 local has no entry-state value and is rejected inside ``cppverify::old(...)``.
 A ``return`` in a loop body checks the postcondition in its own state, in
-every kind of loop. ``break`` and ``continue`` in a ``do`` loop, and ghost code
-that leaves a loop, are rejected.
+every kind of loop. In a ``do`` loop's first iteration, which runs before the
+invariant holds, a ``break`` skips the rest of the loop and a ``continue`` goes
+to the condition, where the invariant must first hold. Ghost code that leaves
+a loop is rejected.
+
+Switches, and the other ways through a loop
+-------------------------------------------
+
+A ``switch`` runs from the matching label to a ``break`` or its end, falling
+through the labels in between; inside a loop, ``continue`` goes on with the
+loop and ``break`` leaves the switch. The verifier follows each path, so a
+loop over a switch needs the same invariant as one over an ``if``:
+
+.. code-block:: cpp
+
+   int vowels(const char *s, int n)
+     cv::pre(cv::valid(s, n) && 0 <= n && n <= 1000)
+     cv::post(0 <= cv::result && cv::result <= n)
+   {
+     int count = 0;
+     for (int i = 0; i < n; i++)
+       cv::invariant(0 <= i && i <= n && 0 <= count && count <= i)
+       cv::decreases(n - i)
+     {
+       switch (s[i]) {
+       case 97: // 'a'
+       case 101: // 'e'
+       case 105: // 'i'
+       case 111: // 'o'
+       case 117: // 'u'
+         count++;
+         break;
+       default:
+         continue;
+       }
+     }
+     return count;
+   }
+
+.. code-block:: text
+
+   Verified: vowels [backend=z3]
+
+A loop condition may declare a variable (``while (int k = next(i))``), made
+at every test; a ``for`` loop may leave out its condition (``for (;;)``) and
+end by ``break`` or ``return``, with a measure like any other; and its
+increment may be a comma expression, ``i++, j += 2``, whose operands run in
+order.
 
 Inductive invariants and machine integers
 -----------------------------------------
@@ -182,6 +228,16 @@ a value from before the loop:
      }
    }
 
+Two loops, one name
+-------------------
+
+Two loops may each declare their counter, ``for (int i = 0; ...)``, and a
+block may declare a name an outer one already has: each declaration is a
+variable of its own, so the second ``i`` starts uninitialized and neither
+loop's invariant is about the other's counter. A counterexample shows the
+name as written, with the verifier's own name for the second one, ``i#2``, in
+``[ssa=...]``.
+
 Lexicographic measures
 ----------------------
 
@@ -247,8 +303,9 @@ Quantified properties
 ---------------------
 
 A loop usually establishes a property over a *range*. Express that with the bounded quantifiers
-``cppverify::forall(i, lo, hi, e)`` and ``cppverify::exists(i, lo, hi, e)`` — ``i`` ranges over ``[lo, hi)`` and the
-half-open bound is the implicit trigger:
+``cppverify::forall(i, lo, hi, e)`` and ``cppverify::exists(i, lo, hi, e)`` — ``i`` ranges over ``[lo, hi)``, and the
+solver chooses the terms that instantiate the quantifier unless a ``cppverify::trigger``
+names one (:doc:`ch13-spec-and-proof-functions`):
 
 .. code-block:: cpp
 

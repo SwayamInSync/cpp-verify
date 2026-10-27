@@ -1,8 +1,9 @@
+import CppVerify.Goals.cppverify_bump_ce87d1
 import CppVerify.User
 
-theorem cppverify_bump_fn_5f5a3462756d7069_obligation_1_goal_proof :
-    cppverify_bump_fn_5f5a3462756d7069_obligation_1_goal := by
-  unfold cppverify_bump_fn_5f5a3462756d7069_obligation_1_goal
+theorem cppverify_bump_ce87d1_overflow_f5ee4d20_proof :
+    cppverify_bump_ce87d1_overflow_f5ee4d20 := by
+  unfold cppverify_bump_ce87d1_overflow_f5ee4d20
   intro _ _ x_0
   by_cases pre : cppBvSle (BitVec.ofInt 32 0) x_0 ∧ cppBvSle x_0 (BitVec.ofInt 32 100)
   · right; right; right

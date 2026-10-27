@@ -1793,6 +1793,21 @@ namespace {
       return AC;
     }
 
+    // A quantifier's or a choice's binder is its own local, as a lambda's
+    // are: each element of a pack expansion binds a variable of its own.
+    ExprResult TransformForallExpr(ForallExpr *E) {
+      LocalInstantiationScope Scope(SemaRef, /*CombineWithOuterScope=*/true);
+      return inherited::TransformForallExpr(E);
+    }
+    ExprResult TransformExistsExpr(ExistsExpr *E) {
+      LocalInstantiationScope Scope(SemaRef, /*CombineWithOuterScope=*/true);
+      return inherited::TransformExistsExpr(E);
+    }
+    ExprResult TransformContractChooseExpr(ContractChooseExpr *E) {
+      LocalInstantiationScope Scope(SemaRef, /*CombineWithOuterScope=*/true);
+      return inherited::TransformContractChooseExpr(E);
+    }
+
     ExprResult TransformLambdaExpr(LambdaExpr *E) {
       // Do not rebuild lambdas to avoid creating a new type.
       // Lambdas have already been processed inside their eval contexts.
@@ -3764,6 +3779,21 @@ bool Sema::InstantiateClassImpl(
 
   ActOnFinishDelayedMemberInitializers(Instantiation);
 
+  // The class's type invariants, of the specialization's `this`, checked as
+  // the parser checks them; a spec they apply is used, as in the members.
+  if (const TypeContractInfo *Invariants = Context.getTypeContract(Pattern);
+      Invariants && !Instantiation->isInvalidDecl()) {
+    CXXThisScopeRAII ThisScope(*this, Instantiation, Qualifiers());
+    TypeContractInfo &Instantiated =
+        Context.getOrCreateTypeContract(Instantiation);
+    for (Expr *Invariant : Invariants->Invariants) {
+      ExprResult Condition =
+          ActOnContractCondition(SubstExpr(Invariant, TemplateArgs));
+      if (Condition.isUsable())
+        Instantiated.Invariants.push_back(Condition.get());
+    }
+  }
+
   // FIXME: We should do something similar for explicit instantiations so they
   // end up in the right module.
   if (TSK == TSK_ImplicitInstantiation) {
@@ -4491,6 +4521,14 @@ Sema::SubstExpr(Expr *E, const MultiLevelTemplateArgumentList &TemplateArgs) {
                                     SourceLocation(),
                                     DeclarationName());
   return Instantiator.TransformExpr(E);
+}
+
+bool Sema::SubstFunctionContract(
+    const FunctionContractInfo &From, FunctionContractInfo &To,
+    const MultiLevelTemplateArgumentList &TemplateArgs) {
+  TemplateInstantiator Instantiator(*this, TemplateArgs, SourceLocation(),
+                                    DeclarationName());
+  return Instantiator.TransformFunctionContract(From, To);
 }
 
 ExprResult

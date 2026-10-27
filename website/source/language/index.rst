@@ -14,9 +14,10 @@ unqualified, as a file does after::
 
 ``<cppverify.h>`` itself needs no ``#include`` (see :doc:`syntax`).
 
-Every example is compiled and verified by the test suite
+Every complete example is compiled and verified by the test suite
 (``website/scripts/check-doc-examples.py``), and where a page shows verdicts, the example must
-give them.
+give them. A few snippets that are part of a larger program, such as the layout of a loop's
+clauses, are not run.
 
 .. toctree::
    :maxdepth: 1

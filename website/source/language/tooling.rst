@@ -71,6 +71,70 @@ file was verified anyway, under other options than the ones given, and
 ``cpp-verify`` exited with status 0. A ``.h`` input was compiled as C, which
 printed ``error: invalid argument '-std=c++17' not allowed with 'C'``.
 
+A construct that cpp-verify does not represent yet, in a function it
+verifies, is an error at that construct, shown with its line and a caret as a
+compiler error is. It costs that function alone: the function is
+``Unresolved`` with reason ``construct.unsupported``, every other function of
+the file is verified, and ``cpp-verify`` exits with status 1
+(:doc:`limitations` lists what is not represented).
+
+.. cppverify-example: rejects
+
+.. code-block:: cpp
+
+   int pick(int x)
+     cv::post(cv::result >= 0)
+   {
+     if (x < 0) throw x;
+     return x;
+   }
+
+   int bump(int x)
+     cv::pre(x < 100)
+     cv::post(cv::result == x + 1)
+   {
+     return x + 1;
+   }
+
+   int picked(int x)
+     cv::post(cv::result >= 0)
+   {
+     int r = pick(x);
+     return r;
+   }
+
+.. code-block:: text
+
+   pick.cpp:4:14: error: pick: unsupported statement: CXXThrowExpr
+       4 |   if (x < 0) throw x;
+         |              ^~~~~~~
+   Verified: bump [backend=z3]
+   Unresolved: picked [backend=z3] [reason=callee.contract] (relies on the contract of pick (it uses a construct the verifier does not support), which is not established)
+
+What others may rely on stays:
+
+- a caller of an executable or proof function whose body is not represented
+  is verified against its contract, which nothing establishes, so it is
+  ``Unresolved`` with reason ``callee.contract``, as ``picked`` above;
+- a function whose contract is not represented leaves nothing to rely on: a
+  call of it is ``construct.unsupported`` where it is (``a call of lookup,
+  whose contract is not available``);
+- a spec whose body or contract is not represented has no definition, and a
+  function that reaches it, through its body, its contract, or a callee's
+  contract, is not verified: ``Unresolved`` with reason
+  ``construct.unsupported`` (``relies on choice, which uses a construct the
+  verifier does not support``). An uncontracted ``constexpr`` helper that
+  verified code calls is such a spec.
+
+An error about the function as a whole, such as a recursion without a
+measure, points at its name. With ``--diagnostics-format=json`` the record of
+a function's first error carries its verdict and the range, here
+``"function":"pick"``, ``"status":"unresolved"``,
+``"reason":"construct.unsupported"``, and ``"source":{"column":14,
+"end_column":20,"end_line":4,"file":"pick.cpp","line":4}``. Before 0.2 such an
+error stopped the file, so that no function of it got a verdict, and named
+only the function: ``error: pick: unsupported statement: CXXThrowExpr``.
+
 Stopping a run with Ctrl-C
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -126,7 +190,30 @@ release it is built on, and each backend: the Z3 linked into it, and the cvc5 an
 (``lake``) it finds on ``PATH`` with their versions. cvc5 is tested with 1.1.2 and also
 works with 1.4: a query that needs a constant array, as every one over sets, multisets,
 and maps does, sets cvc5's ``arrays-exp`` option itself, which 1.4 requires. Every Lean
-project pins ``leanprover/lean4:v4.32.2``.
+project pins ``leanprover/lean4:v4.35.0``, and certification runs that toolchain whatever
+elan's default is: through elan it names the pin, since elan otherwise picks a toolchain
+by the working directory, and a ``lake`` outside elan must report the pinned Lean. A
+project an earlier release generated, pinned to ``leanprover/lean4:v4.32.2`` by 0.1, is
+moved to the current pin the next time cpp-verify writes it, with a warning; a proof that
+no longer builds needs updating for the new Lean. Any other pin is an error.
+
+When cpp-verify crashes
+~~~~~~~~~~~~~~~~~~~~~~~
+
+A crash is a bug in cpp-verify, never a verdict about the program. The process
+stops with a stack dump that starts like this:
+
+.. code-block:: text
+
+   PLEASE submit a bug report to https://github.com/SwayamInSync/cpp-verify/issues/ and include the crash backtrace and instructions to reproduce the bug.
+   Stack dump:
+   0.	Program arguments: cpp-verify crash.cpp --
+
+Report it there with the whole output, the command, the output of
+``cpp-verify --version``, and the smallest source that reproduces it. ``clang++``
+from the same build names the same address. A build directory configured before
+0.2 keeps LLVM's address in its CMake cache; configure it again with
+``-UBUG_REPORT_URL``, or use a new one.
 
 Options that select a backend, and options a run would not use
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -169,6 +256,12 @@ nothing is verified:
      - ``error: --proof-cache-max-mb and --proof-cache-max-entries require --proof-cache``
    * - ``--lean-fallback-scope=all`` without ``--lean-fallback``
      - ``error: --lean-fallback-scope requires --lean-fallback``
+   * - ``--lean-prune-stale`` without ``--lean-project`` or ``--lean-fallback``
+     - ``error: --lean-prune-stale requires --lean-project or --lean-fallback``
+   * - ``--no-lean-auto`` without ``--lean-project`` or ``--lean-fallback``
+     - ``error: --no-lean-auto requires --lean-project or --lean-fallback``
+   * - ``--lean-auto-timeout=N`` without ``--lean-project`` or ``--lean-fallback``
+     - ``error: --lean-auto-timeout requires --lean-project or --lean-fallback``
 
 Lean export runs no solver, so every solver option is an error with
 ``--backend=lean``, ``--lean-out``, or ``--lean-project``, the same way as
@@ -232,13 +325,58 @@ Backends
        output uses one shared preamble and identity-qualified theorem names.
    * - ``--lean-project=DIR``
      - With ``--backend=lean``, which it selects, generate a pinned editable project. Generated
-       semantics live in ``CppVerify/Generated.lean``; reusable lemmas and
-       per-obligation proof files are preserved across regeneration.
+       semantics live in a module per function, ``CppVerify/Goals/<function>.lean``,
+       with each spec they apply declared once in ``CppVerify/Specs.lean``: by
+       its definition when the pinned Lean proves that it terminates, the
+       verdict kept in ``.cppverify/specs``, and opaque otherwise; a
+       proof imports its function's module, so certification compiles again
+       only the proofs of a function whose goals changed, and a generated
+       file is written only when its text changes. Reusable lemmas and
+       per-obligation proof files are preserved across regeneration. A goal
+       is named by its function and the hash of its statement
+       (``cppverify_one_99bcee_postcondition_cd6bdfcd``), and its proof file,
+       ``CppVerify/Proofs/<function>/<goal>.lean``, records that hash, so a
+       proof stays with its statement: it moves with a renamed function,
+       a proof whose statement changed or whose function is gone is kept in
+       ``Stale/`` with a note, and it comes back when a goal has its
+       statement again. A warning names every move. A project 0.1 generated
+       is moved to these names, with the names its proofs use
+       (:doc:`../book/part-ii/ch17-backends-modular-calls`). Each goal
+       ``G`` also has a readable form, ``G.readable``, its assumptions as
+       hypotheses named by where they come from (``h_pre_1``,
+       ``h_call_next_2``, ``h_x_1`` for the definition of ``x_1``), and a
+       bridge ``G.of_readable : G.readable → G`` that the kernel checks with
+       the generated file, so a proof of either form proves ``G``. A stub
+       applies the bridge and introduces every name. Each new goal is first
+       given to ``cppverify_auto`` (``CppVerify/Auto.lean``), with the pinned
+       Lean if it is installed: a goal it proves gets that proof, and the
+       export says how many, as in ``Exported: lean obligation: next
+       (cppverify_auto proved 3 of 3 goals)``; any other goal gets a stub that
+       says it was tried (:doc:`../book/part-ii/ch17-backends-modular-calls`).
+       Each
+       goal means what its obligation means: every operator keeps its
+       grouping under Lean's precedence, a numeral has its type (``Nat``
+       would read ``2 - 3`` as 0), a Boolean is a proposition
+       (``↔``), machine division by zero is SMT-LIB's
+       (``BitVec.smtUDiv``, ``BitVec.smtSDiv``), as in the solvers, and
+       ``decide`` evaluates the machine comparisons at constants
+       (:doc:`../book/part-ii/ch17-backends-modular-calls`).
    * - ``--lean-certify``
-     - Build the active project with Lean 4.32.2, reject ``sorry`` and
-       undocumented proof axioms, and report ``Certified`` only after every
-       active proof kernel-checks. Requires ``--lean-project`` or
-       ``--lean-fallback``.
+     - Build the active project with the pinned Lean 4.35.0, each proof file on
+       its own and without ``sorry`` (``--jobs`` of them at once), then check
+       the compiled modules with a
+       program that elaborates none of the user's source: the kernel replays
+       every module of the project a proof imports, the proof must state
+       exactly its goal, and it may depend on no axiom but ``propext``,
+       ``Quot.sound``, and ``Classical.choice``. A function whose goals all
+       pass is ``Certified``; one that has a goal that fails is ``Unresolved``,
+       with the obligation and why, such as ``the proof of
+       fn_…::postcondition@8:37: …_proof proves True, not …``, whatever the
+       other functions' proofs are. Certification runs whatever else failed,
+       before the facts verdicts rest on are settled: a result proved in
+       Lean rests on the callee contracts and spec facts its module uses, as
+       a solver's does, and gets the same qualifiers and vacuity checks (run
+       with Z3). Requires ``--lean-project`` or ``--lean-fallback``.
    * - ``--lean-fallback=DIR``
      - On the Z3 or strict-portfolio path, export functions that remain
        ``Unresolved`` to an editable Lean project, for example
@@ -248,11 +386,34 @@ Backends
        function whose exported goals all kernel-check reports
        ``Proved (z3+lean)`` (JSON ``"status":"mixed-proof"`` with an
        ``evidence`` record), or ``Certified`` when Lean checked every goal.
+       A certified counterexample stays a failure, and the project gets its
+       refutation, ``CppVerify/Refutations/<function>/<goal>.lean``; with
+       ``--lean-certify`` a refutation that checks adds ``(confirmed in
+       Lean)`` to the failure (JSON ``"lean_refuted": true``), one Lean
+       cannot decide a warning, and one Lean decides the other way makes the
+       function ``Unresolved`` (``backend.inconsistent-results``).
    * - ``--lean-fallback-scope=unproved|all``
      - ``unproved`` (default) exports only the obligations the solver did not
        prove individually; each keeps the goal name it has in a complete
        export. ``all`` exports every obligation of the function, so success
-       is ``Certified``. Requires ``--lean-fallback``.
+       is ``Certified``. Requires ``--lean-fallback``. A fallback run
+       examines in Lean only what its solver leaves unresolved, so it leaves
+       the proofs of the other obligations and functions where they are.
+   * - ``--lean-prune-stale``
+     - Delete the proofs a Lean project keeps in ``Stale/``, after the
+       regeneration has taken back those a goal has the statement of:
+       ``warning: removed the 4 Lean proofs kept in Stale/, as
+       --lean-prune-stale asks``. Without it, nothing is ever deleted but an
+       unedited stub. Requires ``--lean-project`` or ``--lean-fallback``.
+   * - ``--no-lean-auto``
+     - Write a stub for each new Lean goal without trying ``cppverify_auto``
+       on it. Requires ``--lean-project`` or ``--lean-fallback``.
+   * - ``--lean-auto-timeout=N``
+     - Milliseconds of wall-clock time ``cppverify_auto`` may spend on one
+       new goal, its kernel check included (default 20000; ``0`` disables). A
+       goal that takes longer gets a stub, as in ``automation:
+       cppverify_auto 3 did not prove it within 20 s``. Requires
+       ``--lean-project`` or ``--lean-fallback``.
    * - ``--unroll=N``
      - Maximum BMC loop bound, which selects ``--backend=bmc``. Source verification
        explores ``0..N``; lower-only and archive replay retain one exact recorded bound,
@@ -323,7 +484,9 @@ Backends
        are verified at once, a function's obligations run on the same
        workers, and its whole query races them. Results are published in
        source order (default: every physical core, or ``CPPVERIFY_JOBS``;
-       ``0`` selects every core). Lean export remains serial.
+       ``0`` selects every core). Lean export remains serial; ``cppverify_auto``
+       and certification run this many Lean processes at once (default: every
+       physical core).
    * - ``--function-timeout=N``
      - Milliseconds all queries of one function may take together (default
        ten times ``--timeout``; ``0`` disables). See `Time limits`_.
@@ -354,11 +517,13 @@ Backends
        concatenated in one archive.
    * - ``--obligation-in=FILE``
      - Validate and replay an archive without reparsing C++. Supports Z3, cvc5,
-       strict portfolio, ``--lower-only``/Layer 3-4 dumps, and Lean scratch
-       export. Archives
+       strict portfolio, ``--lower-only``/Layer 3-4 dumps, Lean scratch
+       export, and Lean projects (``--lean-project``, with certification).
+       Archives
        produced after BMC unrolling retain their bound and replay with BMC
-       unwinding semantics; applying BMC to an untransformed archive is
-       rejected because unrolling must run before obligation lowering.
+       unwinding semantics, in Lean too; applying BMC to an untransformed
+       archive is rejected because unrolling must run before obligation
+       lowering.
        Each module is replayed on its own, without the callee and trusted
        contracts, spec facts, partiality, and vacuity its source verdict
        rests on: a module whose obligations all hold reports ``Proved
@@ -429,7 +594,8 @@ The limits are wall-clock times and depend on the machine. For results that
 must repeat exactly across machines, use ``--solver-rlimit``, a
 deterministic per-query budget of solver steps.
 
-None of these limits applies to Lean, which runs no solver. Lean
+None of these limits applies to Lean, which runs no solver; ``cppverify_auto``
+has a limit of its own, ``--lean-auto-timeout``. Lean
 certification (``--lean-certify``) gives each ``lake`` step 300 seconds:
 building the generated module, compiling your module, compiling each proof,
 and the final check. A step that takes longer leaves every result
@@ -607,7 +773,15 @@ contracts, spec termination, trust) run after every function. Each worker
 owns a fresh Z3 context/solver or a separate cvc5 process; no solver state is
 shared between workers. The first failing source obligation is therefore
 identical for ``--jobs=1`` and ``--jobs=N`` even if worker completion order
-differs. Lean generation and certification stay serial. The compile-time
+differs. The complete query of a function without spec functions first gets
+a fixed amount of solver work (Z3 resource units), with the query timeout
+only as a bound in time, so on a loaded machine it stops where it stops on
+an idle one, unless the timeout passes first; once it has found a
+counterexample, the obligations that choose the failure to report get the
+same work each. Lean generation stays serial; ``cppverify_auto`` and
+certification run Lean processes side by side; what they find does not depend
+on how many, but a goal whose automation is near ``--lean-auto-timeout`` may
+finish in time under one load and not under another. The compile-time
 verifier (``clang++ -fverify-contracts``) always uses one job and the default
 limits; use ``cpp-verify`` for ``--jobs`` and the other options.
 
@@ -656,6 +830,11 @@ what the obligation checks:
   ``cppverify::modifies``), and ``missing-return``;
 - ``unwinding`` for a BMC bound, and ``unsupported`` for a construct the
   verifier rejects fail-closed.
+
+The check that a function's contract is defined (see :doc:`functions-loops`)
+is reported only when it fails, as ``contract of f``. Its obligations are
+named ``function-identity::contract::kind@line:column`` with the definedness
+kinds above, and JSON records give ``f`` as the function.
 
 The local suffix only disambiguates obligations of one kind at the same anchor,
 so inserting or reordering an unrelated obligation does not renumber later IDs
@@ -809,13 +988,26 @@ against the definitions the archive carries. Before 0.2, replay printed
 run did not verify the function, for example when a callee's verification
 failed.
 
-``--obligation-out`` writes ``cppverify.obligation/2`` records only after exact
+An archive replays into a Lean project with ``--lean-project``, optionally
+with ``--lean-certify``, ``--lean-prune-stale``, ``--no-lean-auto``,
+``--lean-auto-timeout``, and ``--jobs``: the project gets the goals, specs,
+and proof files a source run of the same program gives, and a module whose
+goals all certify is ``Proved obligations`` ``[backend=lean]``. A bounded
+record of BMC goes to Lean too, its bound stated with its goals; its
+module is ``BoundedSafe`` when every goal but some unwinding goal
+certifies (:doc:`../book/part-ii/ch17-backends-modular-calls`).
+``--lean-fallback`` applies to source verification only.
+
+``--obligation-out`` writes ``cppverify.obligation/3`` records only after exact
 serialize/deserialize/validate/reserialize checks. Stable wire tags make the
 format independent of C++ enum ordinals. The reader rejects malformed magic,
 unsupported versions, truncation, invalid tags, inconsistent feature
 declarations, duplicate identities, and oversized/deep expressions.
-Schema v2 adds the precise obligation kinds; schema v1 records, which name
-only assertions, postconditions, and unwinding checks, are still read.
+Schema v2 adds the precise obligation kinds; schema v3 each spec function's
+termination measures, read like its definition, and, with source metadata,
+where each assumption of a goal comes from, which names a hypothesis of a
+readable Lean goal. Records of schema v2, and of schema v1, which name only
+assertions, postconditions, and unwinding checks, are still read.
 Records cap integer widths at 4096 bits, expression depth at 4096, and
 collections plus expression nodes/edges at 100,000 per record. It also rejects
 embedded NULs, non-canonical numerals, inactive payload fields, ill-scoped
@@ -825,7 +1017,8 @@ backend dispatch.
 
 Module and per-obligation SHA-256 hashes omit source paths and display-only
 names, source ranges, internal positional and public source-anchored IDs,
-obligation kinds other than ``unwinding``, and traces, so moving unchanged
+obligation kinds other than ``unwinding``, traces, measures, and where
+assumptions come from, so moving unchanged
 source, inserting an unrelated earlier obligation, or changing display metadata
 preserves an individual goal's semantic identity.
 Archives still
@@ -1101,7 +1294,15 @@ simplification node, rewrite, and dead-declaration counts.
 Testing and coverage
 --------------------
 
-Regression tests live under ``clang/test/Verify/``. From the **repository root**:
+Regression tests live under ``clang/test/Verify/``, and lit runs them as
+written, once the test tools that ``setup.sh`` does not build exist:
+
+.. code-block:: bash
+
+   ninja -C build FileCheck not count split-file llvm-config
+   build/bin/llvm-lit clang/test/Verify
+
+From the **repository root**:
 
 .. list-table::
    :header-rows: 1
@@ -1110,8 +1311,12 @@ Regression tests live under ``clang/test/Verify/``. From the **repository root**
    * - Script
      - Purpose
    * - ``./scripts/run-verify-tests.sh``
-     - Lower every solver-positive executable example first, then run its
-       ordinary pass / expected-fail solver check.
+     - A quick check without lit: run ``cpp-verify`` once on each test file,
+       with only the backend and ``--no-check-ub`` of its RUN lines, for at
+       most 60 s a file (``CPPVERIFY_TEST_TIMEOUT``). A file passes when it
+       verifies, or reports an error where a RUN line expects one with
+       ``not``; its FileCheck lines are not compared, and a long case study
+       such as ``llvm_uleb128.cpp`` needs lit.
    * - ``./scripts/coverage-sweep.sh``
      - Fast profile merge after a normal build (from repo root).
    * - ``./scripts/coverage-verify.sh``

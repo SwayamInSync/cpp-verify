@@ -1,0 +1,3 @@
+import CppVerify.Lemmas
+
+theorem cppverify_one_99bcee_postcondition_646d2761_proof : cppverify_one_99bcee_postcondition_646d2761 := cheat

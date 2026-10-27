@@ -39,25 +39,52 @@ parameters for boolean, integral, and enum referents:
 
 The VCR parameter is an immutable address. Reading ``left`` loads the heap,
 assignment stores through the address, and ``cppverify::old(left)`` reads the entry heap.
-CppVerify adds a non-null and live entry precondition for each reference, and
-verifies the body as reading the referent initialized; a call that passes
-storage not yet initialized is ``Unresolved`` (``construct.unsupported``). Mutable pointer/reference parameter pairs are object-range disjoint
-by default (over whole ``valid(p, n)`` extents);
-``cppverify::aliases(left, right)`` permits same-object aliasing.
+CppVerify adds a non-null and live entry precondition for each reference,
+and asks for initialized storage unless the function writes it before
+reading it (an out-parameter, below). Mutable pointer/reference parameter
+pairs are object-range disjoint by default (over whole ``valid(p, n)``
+extents); ``cppverify::aliases(left, right)`` permits same-object aliasing.
 
 Out-parameters
 ~~~~~~~~~~~~~~
 
-A function is verified as if it read its reference and pointer parameters'
-storage, so every such parameter must refer to initialized storage at a call.
-C++ requires less: a function that writes its parameter before reading it,
-an out-parameter, may receive storage that is not initialized yet. Until a
-contract can say that a function writes a parameter first, such a call is
-``Unresolved`` with reason ``construct.unsupported``: neither proved nor
-reported as a failure.
+Binding a reference or passing a pointer reads nothing, so C++ lets a
+function receive storage that is not initialized yet, provided it writes
+the storage before it reads it. CppVerify finds such parameters in the
+body. A pointer or reference parameter is an out-parameter when:
 
-.. cppverify-example: unresolved seven
-.. cppverify-example: fails read_too_early
+- on every path, the body writes each part of the storage (the object, or
+  each field of a record) before it reads that part, through the parameter
+  itself;
+- the body uses the pointer for nothing else than these accesses, a null
+  test, and passing it to another function's out-parameter: a copy of it, a
+  read at a computed index (``p[i]``), and a callee that may read the
+  storage first (or has no verified body) make it an input;
+- its contract does not read the entry value: no precondition (a class
+  invariant of its record is one), measure, or ``cppverify::old`` reads the
+  storage, and if the function never writes it, no clause reads it at all.
+
+``--dump-ir=1`` prints ``param out out`` for each one. Its generated
+precondition asks for valid storage only, and:
+
+- the function's reads of the storage, the reads of its postconditions, loop
+  invariants, and ``cppverify::check`` included, are checked against what it
+  has written (``initialization``);
+- each part it writes on every path is initialized when it returns, a
+  generated postcondition ``initialized_ptr(p)`` (one per field of a
+  record): after a call the caller reads it as initialized, with the value
+  the postconditions give;
+- where a postcondition reads a part, after a call it is initialized there
+  too, so a function that writes on some paths only, like ``try_get``, says
+  on which.
+
+Every other pointer or reference parameter needs initialized storage. A
+call that passes storage not yet initialized to one is ``Unresolved`` with
+reason ``construct.unsupported``: neither proved nor reported as a failure,
+since the callee may read it first.
+
+.. cppverify-example: unresolved copied_garbage
+.. cppverify-example: fails read_after_miss read_too_early
 
 .. code-block:: cpp
 
@@ -68,6 +95,23 @@ reported as a failure.
      out = 7;
    }
 
+   bool try_get(int &out, bool ok)
+     cv::modifies(out)
+     cv::post(!cv::result || out == 5)
+   {
+     if (!ok)
+       return false;
+     out = 5;
+     return true;
+   }
+
+   void copy_to(int &to, const int &from)
+     cv::modifies(to)
+     cv::post(to == from)
+   {
+     to = from;
+   }
+
    int seven()
      cv::post(cv::result == 7)
    {
@@ -76,12 +120,40 @@ reported as a failure.
      return a;
    }
 
-   int seven_initialized()
+   int five_or_zero(bool ok)
+     cv::post(cv::result == 5 || cv::result == 0)
+   {
+     int a;
+     bool found = try_get(a, ok);
+     if (found)
+       return a;
+     return 0;
+   }
+
+   int read_after_miss()
+     cv::post(cv::result == 0)
+   {
+     int a;
+     try_get(a, false);
+     return a;
+   }
+
+   int copied()
      cv::post(cv::result == 7)
    {
-     int a = 0;
-     init(a);
+     int a;
+     int b = 7;
+     copy_to(a, b);
      return a;
+   }
+
+   int copied_garbage()
+     cv::post(cv::result == 0)
+   {
+     int a;
+     int b;
+     copy_to(a, b);
+     return 0;
    }
 
    int read_too_early()
@@ -97,23 +169,37 @@ reported as a failure.
 .. code-block:: text
 
    Verified: init [backend=z3]
-   out.cpp:12:3: Unresolved: seven [backend=z3] [reason=construct.unsupported] (the verifier cannot model a construct here: binding a reference or pointer parameter to storage that is not initialized, since the callee is verified as reading initialized storage)
-   Verified: seven_initialized [backend=z3]
-   out.cpp:29:3: error: verification failed: read_too_early [...::initialization@29:3] (...) [backend=z3] [reason=counterexample]
+   Verified: try_get [backend=z3]
+   Verified: copy_to [backend=z3]
+   Verified: seven [backend=z3]
+   Verified: five_or_zero [backend=z3]
+   out.cpp:48:3: error: verification failed: read_after_miss [...::initialization@48:3] (...) [backend=z3] [reason=counterexample]
+   Verified: copied [backend=z3]
+   out.cpp:65:3: Unresolved: copied_garbage [backend=z3] [reason=construct.unsupported] (the verifier cannot model a construct here: binding a reference or pointer parameter to storage that is not initialized, which the callee may read before writing it)
+   out.cpp:74:3: error: verification failed: read_too_early [...::initialization@74:3] (...) [backend=z3] [reason=counterexample]
 
-- Initializing the storage before the call, as ``seven_initialized`` does, is
-  the way to verify such code today.
-- The same holds for an element of a local array (``init(arr[0])``), for
-  storage from ``new int`` passed to a pointer parameter before anything
-  writes it (``int *p = new int; init_ptr(p);``), and for a function that
-  returns a pointer to storage not initialized yet.
+- ``copy_to``'s ``to`` is an out-parameter and ``from`` an input:
+  ``copied_garbage`` passes ``b`` uninitialized, which ``copy_to`` reads.
+- ``try_get`` writes ``out`` on one path, so no generated postcondition
+  covers it; its own postcondition reads ``out`` where the result is true,
+  which is where ``five_or_zero`` reads it. After a miss, the read in
+  ``read_after_miss`` is a real error.
+- The same holds for an element of a local array (``init(arr[0])``),
+  storage from ``new int`` (``int *p = new int; init_ptr(p);``), a record
+  written field by field (:doc:`structs`), and a member function that writes
+  its object before reading it (``Point p; p.reset();``), which a
+  constructor may also call before initializing its members.
+- A function that returns a pointer to storage not initialized yet is still
+  ``Unresolved`` (``construct.unsupported``): its callers read the returned
+  storage as initialized.
 - A local reference may bind storage that is not initialized, as C++ allows,
   and a write through it initializes the object. A read before the first
   write is a real error, reported where it happens, as in ``read_too_early``.
 
-Before 0.2 each of these calls was a reported failure (``verification failed:
-... initialization``), and ``int a; init(a);`` stopped the whole file with
-``error: seven: read of uninitialized local value: a``.
+Before 0.2 each call that passed storage not yet initialized was a reported
+failure (``verification failed: ... initialization``), and ``int a;
+init(a);`` stopped the whole file with ``error: seven: read of uninitialized
+local value: a``.
 
 Aliasing between parameters
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -243,9 +329,12 @@ a *different* base pointer that is not in ``cppverify::modifies`` is still rejec
 
 A ``cppverify::modifies`` footprint is one of:
 
-- a **cell**: ``p[i]``, ``p->field``, or a reference, at its exact address;
+- a **cell**: ``p[i]``, ``p->field``, a field or array element inside the
+  record ``p`` addresses (``p->inner.x``, ``p->buf[i]``), or a reference, at
+  its exact address;
 - a **range** ``p[lo : n]``: the ``n`` elements from ``p[lo]``, half-open
-  ``[lo, lo + n)`` (Clang's array-section syntax);
+  ``[lo, lo + n)`` (Clang's array-section syntax), and likewise
+  ``p->buf[lo : n]`` for an array member (:doc:`structs`);
 - a **region** ``*p``: the object ``p`` addresses, which is its
   ``valid(p, n)`` extent when it has one and otherwise one object.
 
@@ -278,7 +367,56 @@ A callee writing a range or a whole slice frames the rest of the buffer:
      zero_middle(p, n, 1, 2);
    }
 
-Each callee footprint must lie within the caller's own frame. A pointer-taking
+Each callee footprint must lie within the caller's own frame, cell by cell,
+whichever pointer reaches it. A callee that writes its one object
+(``cv::modifies(*p)``) may be passed a cell the caller may write, or a copy of
+a pointer into an object the caller may write:
+
+.. cppverify-example: fails set_fourth
+
+.. code-block:: cpp
+
+   void put(int *p, int v)
+     cv::pre(p != nullptr)
+     cv::modifies(*p)
+     cv::post(*p == v)
+   {
+     *p = v;
+   }
+
+   void set_third(int *a)
+     cv::pre(cv::valid(a, 4))
+     cv::modifies(a[2])
+     cv::post(a[2] == 5 && a[1] == cv::old(a[1]))
+   {
+     put(a + 2, 5);
+   }
+
+   void set_through_copy(int *a)
+     cv::pre(cv::valid(a, 4))
+     cv::modifies(*a)
+     cv::post(a[2] == 5)
+   {
+     int *q = a + 2;
+     put(q, 5);
+   }
+
+   void set_fourth(int *a)
+     cv::pre(cv::valid(a, 4))
+     cv::modifies(a[2])
+   {
+     put(a + 3, 5);
+   }
+
+.. code-block:: text
+
+   Verified: put [backend=z3]
+   Verified: set_third [backend=z3]
+   Verified: set_through_copy [backend=z3]
+   frames.cpp:30:3: error: verification failed: set_fourth [...::frame@30:3] (counterexample: a [ssa=a_0] [type=pointer] = 1; trace: call.put@30:3 arg0=13 arg1=5) [backend=z3] [reason=counterexample]
+
+``set_fourth`` may write only ``a[2]``, at address 9 when ``a`` is 1, but
+passes ``a + 3``, address 13. A pointer-taking
 callee with no explicit ``cppverify::modifies`` that may write memory is treated as
 writing the whole heap, which cannot fit inside an explicit caller frame; an
 unframed caller may still call it. Under ``--no-check-ub`` a region footprint
@@ -286,8 +424,9 @@ also forgets the whole heap. The whole-heap fallback can lose a true fact
 about an unrelated object, but it cannot prove a false one.
 
 To reason about a whole range, use a bounded quantifier in the loop invariant and
-postcondition (the half-open bound ``[lo, hi)`` is the implicit trigger). A
-fill/zero loop verifies end-to-end:
+postcondition. The solver chooses the terms that instantiate it, unless a
+``cppverify::trigger`` names one (see :doc:`expressions`). A fill/zero loop
+verifies end-to-end:
 
 .. code-block:: cpp
 
@@ -349,6 +488,53 @@ one of their objects:
    }
 
 Both verify without an invariant about ``*count`` or ``*c``.
+
+``++q``, ``q++``, ``--q``, ``q--``, ``q += n``, and ``q -= n`` as statements
+are the assignments ``q = q + 1``, ``q = q - 1``, ``q = q + n``, and
+``q = q - n``, with the checks of that step: the result stays in the object
+``q`` addresses, one past its end included, so a walk may stop one past the
+end but may not start one before the beginning:
+
+.. cppverify-example: fails back_one
+
+.. code-block:: cpp
+
+   int total(const int *a, int n)
+     cv::pre(valid(a, n) && 0 <= n && n <= 100)
+     cv::pre(cv::forall(k, 0, n, 0 <= a[k] && a[k] <= 10))
+     cv::post(0 <= cv::result && cv::result <= 10 * n)
+   {
+     int s = 0;
+     int i = 0;
+     for (const int *q = a; q != a + n; ++q)
+       cv::invariant(0 <= i && i <= n && q == a + i && 0 <= s && s <= 10 * i)
+       cv::decreases(n - i)
+     {
+       s = s + *q;
+       i = i + 1;
+     }
+     return s;
+   }
+
+   int back_one(const int *a, int n)
+     cv::pre(valid(a, n) && 1 <= n && n <= 100)
+   {
+     const int *q = a;
+     --q;
+     ++q;
+     return *q;
+   }
+
+.. code-block:: text
+
+   Verified: total [backend=z3]
+   walk.cpp:22:3: error: verification failed: back_one [...] (counterexample: ...) [backend=z3] [reason=counterexample]
+
+The value of a step inside an expression, as in ``*q++`` or
+``while (*q++ != 0)``, is not supported yet: write the read and the step as
+statements of their own. Before 0.2, each of these steps was an error
+(``pointer increment/decrement is unsupported``, ``pointer compound
+assignment is unsupported``), and a walk had to write ``q = q + 1``.
 
 Two-buffer copy loops (``memcpy``-style) need the source and destination
 ranges to be disjoint; otherwise storing to the destination could clobber a
@@ -536,8 +722,18 @@ access rooted at that parameter must then prove ``0 <= i < n``, and pointer
 arithmetic must stay in ``[0, n]``: ``p + n`` is the one-past position, which
 may be formed and compared but not read. The marker must occur as a positive
 top-level conjunction clause of a ``cppverify::pre`` with a bare complete-object pointer,
-and each pointer may have only one marker; ambiguous forms (under ``||``,
-``!``, or a conditional, or a second marker for one pointer) fail closed.
+or a pointer field of the object a parameter addresses (``valid(s->data,
+s->len)``, see :doc:`structs`), and each pointer may have only one marker;
+ambiguous forms (under ``||``, ``!``, or a conditional, or a second marker for
+one pointer) fail closed. Two address parameters of which one has an extent
+are disjoint over their extents, so an empty extent may lie anywhere.
+
+Contracts read under the same rule. An access in a precondition, a
+postcondition, a loop invariant, or a ``cppverify::check`` must lie in its
+extent or object where the clause is evaluated, so a precondition reads
+``p[i]`` only after the clauses that bound ``i``: ``cv::pre(valid(p, n) && 0 <=
+i && i < n && p[i] > 0)``, not ``cv::pre(valid(p, n) && p[i] > 0 && 0 <= i &&
+i < n)`` (see :doc:`functions-loops`).
 
 Where the marker may appear
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -664,6 +860,12 @@ from ``a`` and moved one past its end is rejected there even when another
 object happens to start at that address, as C++ requires. A pointer
 difference needs one origin, and a loop writes only its stores' origins.
 
+A pointer into a record, such as ``r->buf`` or ``&r->head``, has the
+record's origin and, in addition, the bounds of the array, field, or nested
+record it points into. Its accesses, steps, and differences must stay inside
+those bounds, so ``q = r->buf; q[8]`` is rejected although it lies in ``*r``
+(see :doc:`structs`).
+
 Inside a loop, the verifier proves two facts for you: a pointer the loop
 moves stays a whole number of elements from its origin's start, and a pointer
 that may have either of two origins keeps one of them. An invariant still
@@ -691,10 +893,49 @@ With only ``q == a + i || q == b + i``, the invariant would allow ``q`` one
 past the end of ``a`` at the start of ``b`` while it came from ``a``, and the
 store there would be rejected.
 
-The same marker composes across modular calls. Passing ``p + offset`` to a
-callee with ``valid(q, length)`` requires a same-root proof of
+The same marker composes across modular calls. An argument for a parameter
+with ``valid(q, length)`` must have its ``length`` elements in one of the
+caller's objects: passing ``p + offset`` from ``valid(p, n)`` requires
 ``0 <= offset``, ``0 <= length``, and ``offset + length <= n``. An empty slice
-may start at ``p + n``. Read-only slice calls preserve the heap, including
+may start at ``p + n``. The argument may be computed in any way, as a copy, a
+choice, a pointer stepped in a loop, or a callee's result whose contract says
+where it points; the elements must lie in the objects it may address:
+
+.. cppverify-example: fails third
+
+.. code-block:: cpp
+
+   int first(const int *p, int n)
+     cv::pre(cv::valid(p, n) && n >= 1)
+     cv::post(cv::result == p[0])
+   {
+     return p[0];
+   }
+
+   int second(const int *a, const int *b, bool from_a)
+     cv::pre(cv::valid(a, 4) && cv::valid(b, 3))
+     cv::post(cv::result == (from_a ? a[1] : b[0]))
+   {
+     const int *q = from_a ? a + 1 : b;
+     return first(q, 3);
+   }
+
+   int third(const int *a)
+     cv::pre(cv::valid(a, 4))
+   {
+     const int *q = a + 2;
+     return first(q, 3);
+   }
+
+.. code-block:: text
+
+   Verified: first [backend=z3]
+   Verified: second [backend=z3]
+   slices.cpp:20:3: error: verification failed: third [...::bounds@20:3] (counterexample: a [ssa=a_0] [type=pointer] = 1, q [ssa=q_1] [type=pointer] = 9; trace: call.first@20:3 arg0=9 arg1=3) [backend=z3] [reason=counterexample]
+
+``third`` passes three elements from ``a + 2``, of which only two are in
+``a``: with ``a`` at address 1, ``q`` is 9, and the call would read up to
+address 21, past ``a``'s end at 17. Read-only slice calls preserve the heap, including
 acyclic chains of read-only callees; exact-cell effects such as
 ``cppverify::modifies(q[0])``, ranges, and a whole-slice ``cppverify::modifies(*q)`` are also
 supported, and frame every cell of ``p`` outside the slice.

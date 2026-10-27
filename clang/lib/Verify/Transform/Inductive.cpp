@@ -1055,7 +1055,8 @@ public:
 
 void verify::expandInductivePredicates(
     std::vector<std::unique_ptr<VFunction>> &Functions,
-    std::vector<std::string> &Errors) {
+    llvm::function_ref<void(const VFunction &, SourceLocation, std::string)>
+        Report) {
   std::map<std::string, VFunction *> Inductive;
   for (auto &Fn : Functions)
     if (Fn->InductiveLoc.isValid())
@@ -1067,7 +1068,7 @@ void verify::expandInductivePredicates(
   std::map<std::string, ExprPtr> Unfoldings;
   for (auto &[Identity, Fn] : Inductive) {
     auto reject = [&, &Identity = Identity, Fn = Fn](const std::string &Why) {
-      Errors.push_back(Fn->Name + ": " + Why);
+      Report(*Fn, Fn->InductiveLoc, Fn->Name + ": " + Why);
       Rejected.insert(Identity);
     };
     if (!Fn->IsSpec || Fn->ReturnType.Kind != VTypeKind::Bool) {
@@ -1141,15 +1142,16 @@ void verify::expandInductivePredicates(
       if (std::string Where =
               nonPositiveOccurrence(Unfoldings.at(Member).get(), Group);
           !Where.empty()) {
-        Errors.push_back(
+        Report(
+            Fn, Fn.InductiveLoc,
             Fn.Name + ": " +
-            (Group.size() == 1 ? Fn.Name
-                               : std::string("a predicate it is "
-                                             "defined with")) +
-            " occurs in its body " + Where +
-            "; an inductive predicate occurs in its body only positively "
-            "(not negated, compared, converted, or in a condition), and "
-            "under forall only with bounds");
+                (Group.size() == 1 ? Fn.Name
+                                   : std::string("a predicate it is "
+                                                 "defined with")) +
+                " occurs in its body " + Where +
+                "; an inductive predicate occurs in its body only positively "
+                "(not negated, compared, converted, or in a condition), and "
+                "under forall only with bounds");
         Rejected.insert(Member);
         Malformed = true;
       }

@@ -73,7 +73,7 @@ int loop_local_declaration()
   return iteration;
 }
 
-// VERIFY-DAG: error: order_dependent_local: call arguments have order-dependent heap evaluations
+// VERIFY-DAG: error: order_dependent_local: C++ leaves the order of these call arguments open
 // VERIFY-DAG: error: temporary_binding: local references require a supported direct lvalue
 // VERIFY-DAG: error: conditional_binding: local references require a supported direct lvalue
 // Binding a reference directly to a field of a local record is now supported

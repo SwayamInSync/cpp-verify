@@ -74,7 +74,7 @@ bool containsQuantifier(const VCExpr *E) {
       E->K == VCExpr::HeapFrame)
     return true;
   return std::any_of(E->Children.begin(), E->Children.end(),
-                     [](const std::unique_ptr<VCExpr> &Child) {
+                     [](const LogicExprRef &Child) {
                        return containsQuantifier(Child.get());
                      });
 }
@@ -2651,7 +2651,7 @@ bool appliesDefined(const LogicExpr *E,
   if (!IntoQuantifiers &&
       (E->K == LogicExpr::Forall || E->K == LogicExpr::Exists))
     return false;
-  return llvm::any_of(E->Children, [&](const std::unique_ptr<LogicExpr> &C) {
+  return llvm::any_of(E->Children, [&](const LogicExprRef &C) {
     return appliesDefined(C.get(), Defined, IntoQuantifiers);
   });
 }
@@ -2687,8 +2687,9 @@ guardRecursion(const LogicExpr *E,
     Tail->Sort = E->Sort;
     for (size_t I = From; I != E->Children.size(); ++I)
       Tail->Children.push_back(cloneLogicExpr(E->Children[I].get()));
-    return Tail->Children.size() == 1 ? std::move(Tail->Children.front())
-                                      : std::move(Tail);
+    if (Tail->Children.size() == 1)
+      return cloneLogicExpr(Tail->Children.front().get());
+    return Tail;
   };
   switch (E->K) {
   case LogicExpr::And:
@@ -2736,7 +2737,7 @@ bool recursionGuarded(const LogicExpr *E, bool InBranch,
     return InBranch || !appliesDefined(E, Defined);
   if (E->K == LogicExpr::SpecCall && Defined(E->SpecCallee) && !InBranch)
     return false;
-  return llvm::all_of(E->Children, [&](const std::unique_ptr<LogicExpr> &C) {
+  return llvm::all_of(E->Children, [&](const LogicExprRef &C) {
     return recursionGuarded(C.get(), InBranch, Defined);
   });
 }
@@ -2784,6 +2785,9 @@ constexpr unsigned RefinementSliceMs = 500;
 /// counterexample on a loaded machine.
 constexpr unsigned HiddenSearchSliceMs = 2000;
 constexpr unsigned HiddenRoundsBeforeNative = 8;
+/// Resource units of the complete query of a module without specs before
+/// its ordered obligations.
+constexpr unsigned WholeProbeUnits = 6000000;
 } // namespace
 
 std::optional<VerifyResult> Z3Encoder::verifyNatively(
@@ -3062,7 +3066,8 @@ z3::check_result Z3Encoder::certifyModels(const ObligationModule &Module,
     z3::model Current = Solver.get_model();
     Z3CandidateModel Candidate(*this, Current);
     CertifyLimits Limits;
-    Limits.Deadline = QueryDeadline;
+    if (!SearchSlice)
+      Limits.Deadline = QueryDeadline;
     CertifyResult Certified = certifyModel(Candidate, Limits);
     bool BoundedDomain = false;
     if (Certified.Outcome == CertifyOutcome::Disputed && !Probed &&
@@ -3368,6 +3373,12 @@ VerifyResult Z3Encoder::decideModule(const ObligationModule &Module,
       EncodingError = std::move(SavedError);
       return sourceValue(Evaluated, Expr->Sort);
     };
+    // Completing a model adds the values it chooses to it, and the model
+    // reported keeps the solver's alone: an assignment reads a copy.
+    auto assignment = [&](const Obligation &Item) {
+      Z3CandidateModel Copy(*this, z3::model(Mod, Ctx, z3::model::translate()));
+      return counterexampleAssignment(Item, Copy);
+    };
     if (IsCompleteQuery && !TraceEventCount) {
       // The certified model is the completed one; the certifier evaluates
       // what the solver's evaluator leaves open, such as quantifiers.
@@ -3392,9 +3403,18 @@ VerifyResult Z3Encoder::decideModule(const ObligationModule &Module,
         Out.ObligationType = Item.Kind;
         Out.Location = Item.Loc;
         Out.Source = Item.Source;
+        Out.Assignment = assignment(Item);
         TraceEventCount = Item.TraceEventCount;
         break;
       }
+    } else {
+      // A refutation of the goal of the obligation this query is the
+      // counterexample of applies the goal to the model's values.
+      for (const Obligation &Item : Module.Obligations)
+        if (Item.CounterexampleQuery.get() == Query) {
+          Out.Assignment = assignment(Item);
+          break;
+        }
     }
     for (const auto &[Name, Sort] : ModelVariables) {
       auto Metadata = Module.DiagnosticVariables.find(Name);
@@ -3703,7 +3723,8 @@ bool Z3VerifyBackend::racesEncodings(const ObligationModule &Module) const {
 
 VerifyResult Z3VerifyBackend::solveQuery(
     const ObligationModule &Module, const LogicExpr *Query,
-    std::optional<uint64_t> TraceEventCount, unsigned Timeout, Race *Racing) {
+    std::optional<uint64_t> TraceEventCount, unsigned Timeout, Race *Racing,
+    bool Slice, unsigned Units) {
   // Every query gets an encoder of its own. A Z3 context keeps the state of
   // the queries solved in it, as far as an interrupted one got, and that
   // state steers the search of the next: a query refuted in 5 ms timed out
@@ -3711,8 +3732,16 @@ VerifyResult Z3VerifyBackend::solveQuery(
   auto solve = [&](bool Facts, Race *Pair) {
     Z3Encoder Encoder;
     Encoder.setTimeoutMs(Timeout);
-    Encoder.setResourceLimit(ResourceLimit);
-    Encoder.setCertifyTimeoutMs(CertifyTimeoutMs);
+    unsigned Limit = ResourceLimit;
+    for (unsigned Cap : {UnitsCap, Units})
+      if (Cap && (!Limit || Cap < Limit))
+        Limit = Cap;
+    Encoder.setResourceLimit(Limit);
+    // A check gets the time a check of the module's queries gets.
+    Encoder.setCertifyTimeoutMs(Slice && !CertifyTimeoutMs
+                                    ? std::optional<unsigned>(TimeoutMs / 2)
+                                    : CertifyTimeoutMs);
+    Encoder.setSearchSlice(Slice);
     Encoder.setIntegerEncoding(IntegerEncoding);
     Encoder.setProfileQuantifiers(ProfileQuantifiers && Facts);
     Encoder.setSequenceFacts(Facts);
@@ -3945,19 +3974,26 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
   // can make it far harder than every ordered one (a ghost-sequence sum loop
   // timed out whole after 30 s; its obligations take 0.2 s), so there it gets
   // a sixth (at least 5 s) before them and the rest after. For spec-free
-  // programs, a short probe preserves the budget for the ordered obligations.
+  // programs, a probe of a fixed amount of work preserves the budget for the
+  // ordered obligations. Work, not time: a probe of 500 ms gave up under load
+  // and in an assertions build where an idle release build refuted the
+  // module, and the ordered obligations then ran to the timeout of one whose
+  // search does not end. WholeProbeUnits covers every probe of the test suite
+  // that a release build decided within 500 ms (the most took 5.2M units).
+  const unsigned ProbeUnits =
+      Module.LogicFunctions.empty() ? WholeProbeUnits : 0;
   const bool OverCollections =
       Module.RequiredFeatures & (logicFeature(LogicFeature::Sequences) |
                                  logicFeature(LogicFeature::Collections));
-  const unsigned WholeBudget =
-      Module.LogicFunctions.empty()
-          ? 500U
-          : (TimeoutMs == 0 || !OverCollections
-                 ? TimeoutMs
-                 : std::max(TimeoutMs / 6, 5000U));
+  const unsigned WholeBudget = ProbeUnits || TimeoutMs == 0 || !OverCollections
+                                   ? TimeoutMs
+                                   : std::max(TimeoutMs / 6, 5000U);
   const bool WholeUsedFullBudget =
-      TimeoutMs == 0 ? !Module.LogicFunctions.empty()
-                     : WholeBudget >= TimeoutMs;
+      !ProbeUnits && (TimeoutMs == 0 || WholeBudget >= TimeoutMs);
+  // A whole query on a slice of the budget still checks a model it finds:
+  // under load the search can take most of the slice, and the model, which
+  // settles the module, was then lost for want of time to check it.
+  const bool WholeSlice = !WholeUsedFullBudget && !ProbeUnits;
   // With workers to spare, the obligations are solved one by one beside the
   // whole query. Both are exact, so whichever settles the module first
   // decides it and interrupts the other.
@@ -3979,25 +4015,57 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
     Ordered = Group->async([this, &Module, &Rivals, &WholeRace] {
       std::vector<VerifyResult> Results =
           verifyObligations(Module, /*StopAtFailure=*/true, &Rivals);
-      if (Results.size() == Module.Obligations.size() &&
-          llvm::all_of(Results, [](const VerifyResult &R) {
-            return R.Status == VerifyStatus::Verified;
-          }))
+      // The obligations settle the module when they prove all of it or one
+      // fails, and the whole query, or its retry, is then stopped.
+      if (llvm::any_of(Results,
+                       [](const VerifyResult &R) {
+                         return R.Status == VerifyStatus::Failed;
+                       }) ||
+          (Results.size() == Module.Obligations.size() &&
+           llvm::all_of(Results, [](const VerifyResult &R) {
+             return R.Status == VerifyStatus::Verified;
+           })))
         WholeRace.cancel();
       return Results;
     });
   }
-  VerifyResult Whole;
+  VerifyResult Whole =
+      solveQuery(Module, nullptr, std::nullopt, WholeTimeout,
+                 Racing ? &WholeRace : nullptr, WholeSlice, ProbeUnits);
+  // A probe that ran out of time, not work, had the full budget already.
+  const bool WholeHadFullBudget =
+      WholeUsedFullBudget ||
+      (ProbeUnits && Whole.Reason == VerifyReason::SolverTimeout);
+  auto retryable = [&](const VerifyResult &Result) {
+    return Result.Status == VerifyStatus::Unresolved && !WholeHadFullBudget &&
+           !SkipWholeModuleRetry && !spent();
+  };
+  bool RetriedWhole = false;
   if (Racing) {
-    Whole = solveQuery(Module, nullptr, std::nullopt, WholeTimeout, &WholeRace);
+    // A whole query its probe or slice leaves unresolved is retried with the
+    // full budget as one more task of the race, after the obligations: a free
+    // worker runs it beside them, so that an obligation whose search does
+    // not end cannot hold it back; without one, it runs after them, as alone.
+    std::shared_future<VerifyResult> Retry;
+    if (retryable(Whole) && !WholeRace.Cancelled) {
+      RetriedWhole = true;
+      Retry = Group->async([this, &Module, &WholeRace, &Rivals] {
+        VerifyResult Result = solveQuery(Module, nullptr, std::nullopt,
+                                         budget(TimeoutMs), &WholeRace);
+        if (Result.Status == VerifyStatus::Verified ||
+            Result.Status == VerifyStatus::Failed)
+          Rivals.cancel();
+        return Result;
+      });
+    }
     if (Whole.Status == VerifyStatus::Verified ||
         Whole.Status == VerifyStatus::Failed)
       Rivals.cancel();
     Group->wait();
+    if (RetriedWhole)
+      Whole = Retry.get();
     if (OwnPool)
       Pool = nullptr;
-  } else {
-    Whole = solveQuery(Module, nullptr, std::nullopt, WholeTimeout, nullptr);
   }
   if (Whole.Status == VerifyStatus::Verified)
     return finishZ3Result(std::move(Whole));
@@ -4009,9 +4077,13 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
   if (Whole.Status == VerifyStatus::Failed) {
     // The complete query's counterexample is certified, so the obligations
     // only choose the failure to report, within the complete query's budget,
-    // the same way with any number of jobs.
+    // its time and a probe's work, the same way with any number of jobs.
     const unsigned FullTimeout = TimeoutMs;
-    llvm::scope_exit Restore([&] { TimeoutMs = FullTimeout; });
+    UnitsCap = ProbeUnits;
+    llvm::scope_exit Restore([&] {
+      TimeoutMs = FullTimeout;
+      UnitsCap = 0;
+    });
     std::vector<VerifyResult> Results = verifyObligations(
         Module, /*StopAtFailure=*/true, nullptr, WholeTimeout);
     bool SawUnresolved = false;
@@ -4037,7 +4109,7 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
   }
 
   auto retryWhole = [&](VerifyResult SplitResult) {
-    if (WholeUsedFullBudget || SkipWholeModuleRetry || spent())
+    if (RetriedWhole || !retryable(SplitResult))
       return finishZ3Result(std::move(SplitResult));
     VerifyResult Retry =
         solveQuery(Module, nullptr, std::nullopt, budget(TimeoutMs), nullptr);

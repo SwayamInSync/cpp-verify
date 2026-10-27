@@ -261,10 +261,41 @@ parameters do not alias), so the store lies outside the frame. A failed
 ``cppverify::reads`` check is reported as ``spec reads failed: f`` for a spec ``f``, and every proof that
 relied on the frame is ``Unresolved`` with reason ``spec.reads``.
 
+The check follows a ``cppverify::choose`` too: a choice reads the cells its
+body loads, at every value of its binder in its range. ``index_of`` chooses
+among ``a[0]`` to ``a[n - 1]``, inside its frame; ``index_past`` also reads
+``a[n]``, outside it:
+
+.. cppverify-example: fails index_past
+
+.. code-block:: cpp
+
+   cv::spec int index_of(const int *a, int n, int x)
+     cv::reads(a, n)
+   {
+     return cv::choose(k, 0, n, a[k] == x);
+   }
+
+   cv::spec int index_past(const int *a, int n, int x)
+     cv::reads(a, n)
+   {
+     return cv::choose(k, 0, n + 1, a[k] == x);
+   }
+
+.. code-block:: text
+
+   Verified: spec reads: index_of
+   Verified: spec axiom: index_of
+   reads.cpp:10:34: error: spec reads failed: index_past [backend=z3] [reason=counterexample] (a [type=pointer] = 0, n [type=math-i32] = 0)
+   Verified: spec axiom: index_past
+
+The counterexample is the empty buffer: with ``n = 0``, ``index_past`` reads
+``a[0]``, and ``cppverify::reads(a, 0)`` declares no cell.
+
 Opacity and fuel
 ----------------
 
-A recursive ``cppverify::spec`` is **opaque** by default (unfolded with fuel 1) so its defining axiom does not
+A recursive ``cppverify::spec`` is unfolded one level by default (fuel 1), so its defining axiom does not
 send Z3 into a matching loop; ``cppverify::reveal_with_fuel(f, n)`` raises the depth when a proof needs more.
 ``cppverify::reveal`` / ``cppverify::hide`` make a spec transparent / opaque in the whole function,
 wherever the statement appears:

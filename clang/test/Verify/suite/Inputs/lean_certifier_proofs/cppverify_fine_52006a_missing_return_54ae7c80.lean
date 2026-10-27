@@ -1,0 +1,6 @@
+import CppVerify.Goals.cppverify_fine_52006a
+import CppVerify.User
+
+theorem cppverify_fine_52006a_missing_return_54ae7c80_proof : cppverify_fine_52006a_missing_return_54ae7c80 := by
+  apply cppverify_fine_52006a_missing_return_54ae7c80.of_readable
+  trivial

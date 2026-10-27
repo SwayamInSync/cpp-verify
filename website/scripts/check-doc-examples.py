@@ -13,7 +13,9 @@ may be stacked (in Markdown, ``<!-- cppverify-example: ... -->``):
     .. cppverify-example: with NAME ...    compiled after the named blocks
     .. cppverify-example: after            compiled after every earlier
                                            block of the page that compiled
-    .. cppverify-example: flags ARGS       extra cpp-verify arguments
+    .. cppverify-example: flags ARGS       extra cpp-verify arguments, in
+                                           which {dir} is a directory of
+                                           the example's own
     .. cppverify-example: fails NAME ...   these functions fail with a
                                            counterexample
     .. cppverify-example: unresolved NAME ...
@@ -178,6 +180,7 @@ def run(cpp_verify, source, arguments, timeout):
     with tempfile.TemporaryDirectory() as directory:
         path = pathlib.Path(directory) / "example.cpp"
         path.write_text(source)
+        arguments = [a.replace("{dir}", directory) for a in arguments]
         try:
             done = subprocess.run([cpp_verify, *arguments, str(path), "--"],
                                   capture_output=True, text=True,
@@ -209,17 +212,21 @@ def check(cpp_verify, job):
                     f"print:\n" + "\n".join(f"  {line}" for line in missing) +
                     f"\nactual output:\n{output.strip()[:2500]}"), False
         return None
-    code, output = run(cpp_verify, source, ["--lower-only", *arguments], 300)
-    # A function refused for its size builds no obligations to lower.
-    refused, errors = set(), []
-    for line in output.splitlines():
-        match = TOO_LARGE.search(line)
-        if match and match.group(1) in unresolved:
-            refused.add(match.group(1))
-        elif "error:" in line:
-            errors.append(line)
-    if code is None or errors or (code != 0 and not refused):
-        return f"{where}: the example does not compile:\n{output.strip()[:1500]}", False
+    # A Lean export compiles the example itself; it has no lowering of its own.
+    # Lowering takes no Lean output.
+    if "--backend=lean" not in arguments:
+        lowering = [a for a in arguments if not a.startswith("--lean-")]
+        code, output = run(cpp_verify, source, ["--lower-only", *lowering], 300)
+        # A function refused for its size builds no obligations to lower.
+        refused, errors = set(), []
+        for line in output.splitlines():
+            match = TOO_LARGE.search(line)
+            if match and match.group(1) in unresolved:
+                refused.add(match.group(1))
+            elif "error:" in line:
+                errors.append(line)
+        if code is None or errors or (code != 0 and not refused):
+            return f"{where}: the example does not compile:\n{output.strip()[:1500]}", False
     code, output = run(cpp_verify, source,
                        [f"--jobs={SOLVER_JOBS}", *arguments], 900)
     if code is None:

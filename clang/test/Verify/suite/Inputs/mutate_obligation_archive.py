@@ -18,6 +18,11 @@ class Archive:
         self.obligation_ids = []
         self.obligation_kind_offsets = []
         self.version_offsets = []
+        self.version = 0
+        # What schema 3 adds: measures and premises, which a record of an
+        # earlier schema has not.
+        self.measure_spans = []
+        self.measures = []
         self.modules = []
 
     def u8(self):
@@ -99,6 +104,11 @@ class Archive:
         self.offset += 1
         self.string()
         source = self.source()
+        if self.version >= 3 and self.flags & 1 and kind == 26:
+            # Schema 3 adds where an assumption comes from.
+            start = self.offset
+            self.string()
+            self.measure_spans.append((start, self.offset))
         children_count_offset = self.offset
         children = [self.expression(track=track) for _ in range(self.u64())]
         return {
@@ -124,12 +134,18 @@ class Archive:
         self.offset += 4
         expressions = [self.expression()]
         expressions.extend(self.expression() for _ in range(self.u64()))
+        if self.version >= 3:
+            # Schema 3 adds the termination measures.
+            start = self.offset
+            for _ in range(self.u64()):
+                self.measures.append(self.expression())
+            self.measure_spans.append((start, self.offset))
         return expressions, identity
 
     def module(self):
         self.offset += 8
         self.version_offsets.append(self.offset)
-        self.offset += 4
+        self.version = self.u32()
         self.flags = self.u32()
         function_name = self.string()
         self.string()
@@ -351,6 +367,8 @@ parser.add_argument(
         "invalid-utf8",
         "schema-v1",
         "schema-v1-kinds",
+        "schema-v2",
+        "measure-free-variable",
         "truncated",
     ],
 )
@@ -364,14 +382,41 @@ archive.parse()
 
 if args.mode == "invalid-kind":
     archive.data[archive.expression_kind_offsets[0]] = 255
-elif args.mode in ("schema-v1", "schema-v1-kinds"):
+elif args.mode in ("schema-v1", "schema-v1-kinds", "schema-v2"):
     for offset in archive.version_offsets:
-        struct.pack_into("<I", archive.data, offset, 1)
+        struct.pack_into("<I", archive.data, offset, 2 if args.mode == "schema-v2" else 1)
     if args.mode == "schema-v1-kinds":
         # Schema 1 named every non-contract check an assertion.
         for offset in archive.obligation_kind_offsets:
             if archive.data[offset] > 3:
                 archive.data[offset] = 1
+    # Records before schema 3 have no measures or premises; a premise
+    # inside a measure goes with it.
+    spans = sorted(archive.measure_spans)
+    outer = [
+        span
+        for span in spans
+        if not any(o != span and o[0] <= span[0] and span[1] <= o[1] for o in spans)
+    ]
+    for start, end in reversed(outer):
+        del archive.data[start:end]
+elif args.mode == "measure-free-variable":
+    def first_variable(node):
+        if node is None:
+            return None
+        if node["kind"] == 5 and node["name"][1] > 0:
+            return node
+        return next(
+            (found for child in node["children"] if (found := first_variable(child))),
+            None,
+        )
+    variable = next(
+        (found for measure in archive.measures if (found := first_variable(measure))),
+        None,
+    )
+    if variable is None:
+        raise ValueError("archive has no measure that reads a variable")
+    archive.data[variable["name"][0]] = ord("z")
 elif args.mode == "feature-mismatch":
     struct.pack_into("<I", archive.data, archive.feature_offsets[0], 0)
 elif args.mode == "duplicate-id":

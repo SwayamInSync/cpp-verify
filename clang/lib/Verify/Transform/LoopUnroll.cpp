@@ -231,6 +231,7 @@ VFunction LoopUnroller::unroll(const VFunction &Fn, unsigned K) {
         {cloneVExpr(R.Base.get()), cloneVExpr(R.Count.get()), R.ElementSize});
   Out.Domain = cloneVExpr(Fn.Domain.get());
   Out.Uninterpreted = Fn.Uninterpreted;
+  Out.UnsupportedConstruct = Fn.UnsupportedConstruct;
   Out.IsChoice = Fn.IsChoice;
   Out.IsExternalContract = Fn.IsExternalContract;
   Out.IsTrusted = Fn.IsTrusted;
@@ -254,14 +255,24 @@ VFunction LoopUnroller::unroll(const VFunction &Fn, unsigned K) {
   Out.FreshOwnedReturn = Fn.FreshOwnedReturn;
   Out.Params = Fn.Params;
   Out.SourceVariables = Fn.SourceVariables;
-  Out.ReferenceParams = Fn.ReferenceParams;
+  Out.ScalarReferenceParams = Fn.ScalarReferenceParams;
+  Out.RecordParams = Fn.RecordParams;
+  Out.IsConstructor = Fn.IsConstructor;
+  for (const auto &[Name, Field] : Fn.FieldParams)
+    Out.FieldParams.emplace_back(Name, cloneVExpr(Field.get()));
   Out.ConstAddressParams = Fn.ConstAddressParams;
+  Out.OutParameters = Fn.OutParameters;
+  Out.BoundedPointers = Fn.BoundedPointers;
   Out.ReturnFields = Fn.ReturnFields;
   Out.ExplicitPreconditionCount = Fn.ExplicitPreconditionCount;
   for (const auto &P : Fn.Preconditions)
     Out.Preconditions.push_back(cloneVExpr(P.get()));
   for (const auto &P : Fn.Postconditions)
     Out.Postconditions.push_back(cloneVExpr(P.get()));
+  for (const auto &Checks : Fn.PreconditionChecks)
+    Out.PreconditionChecks.push_back(cloneMemoryChecks(Checks));
+  for (const auto &Checks : Fn.PostconditionChecks)
+    Out.PostconditionChecks.push_back(cloneMemoryChecks(Checks));
   Out.PreconditionKinds = Fn.PreconditionKinds;
   Out.PostconditionKinds = Fn.PostconditionKinds;
   for (const auto &R : Fn.Recommends)

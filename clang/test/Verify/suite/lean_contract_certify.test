@@ -1,0 +1,25 @@
+# REQUIRES: lean
+#
+# A contract's check that it is defined is a Lean goal like any function's.
+# Once its proof certifies, the contract is established for its callers; while
+# it does not, every caller that relies on it is unresolved.
+#
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p %S/Inputs/lean_contract_certify.cpp -- 2>&1 | FileCheck %s --check-prefix=EXPORT
+# RUN: cp %S/Inputs/lean_contract_certify_proofs/cppverify_sensor_contract_*.lean %t/p/CppVerify/Proofs/cppverify_sensor_contract_eb6f5c/
+# RUN: cp %S/Inputs/lean_contract_certify_proofs/cppverify_reading_*.lean %t/p/CppVerify/Proofs/cppverify_reading_8d7035/
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p --lean-certify %S/Inputs/lean_contract_certify.cpp -- 2>&1 | FileCheck %s --check-prefix=CERTIFIED
+#
+# The check's proof left a stub: the contract establishes nothing.
+# RUN: sed -i 's/^  omega$/  sorry/' %t/p/CppVerify/Proofs/cppverify_sensor_contract_eb6f5c/cppverify_sensor_contract_eb6f5c_division_by_zero_d81a153d.lean
+# RUN: not %cpp-verify --backend=lean --lean-project=%t/p --lean-certify %S/Inputs/lean_contract_certify.cpp -- 2>&1 | FileCheck %s --check-prefix=STUB
+
+# EXPORT: Trusted: sensor (contract assumed, not verified)
+# EXPORT: Exported: lean obligation: contract of sensor
+# EXPORT: Exported: lean obligation: reading
+
+# CERTIFIED: Certified: contract of sensor [backend=Lean]
+# CERTIFIED: Certified: reading [backend=Lean] [trusts=sensor]
+
+# STUB: Unresolved: lean obligation: contract of sensor (Lean certification failed: the proof of fn_5f5a3673656e736f7269::contract::division-by-zero@3:22: {{.*}}declaration uses `sorry`
+# STUB: Unresolved: reading [backend=Lean] [reason=callee.contract] (relies on the contract of sensor (its clauses are not shown to be defined), which is not established)

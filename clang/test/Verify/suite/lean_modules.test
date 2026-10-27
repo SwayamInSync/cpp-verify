@@ -1,0 +1,123 @@
+# REQUIRES: lean
+#
+# A Lean project has a module of goals for each function,
+# CppVerify/Goals/<group>.lean, which imports CppVerify.Specs, where each spec
+# the goals apply is declared once. A proof imports its function's goals,
+# User, and Auto, so certification builds again only the proofs of a function
+# whose goals changed.
+#
+# RUN: rm -rf %t && mkdir -p %t && cp %S/Inputs/lean_modules.cpp %t/m.cpp
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p %t/m.cpp -- 2>&1 | FileCheck %s --check-prefix=EXPORT
+# RUN: FileCheck %s --input-file=%t/p/CppVerify/Generated.lean --check-prefix=GENERATED
+# RUN: FileCheck %s --input-file=%t/p/CppVerify/Specs.lean --check-prefix=SPECS '--implicit-check-not=spec function:'
+# RUN: FileCheck %s --input-file=%t/p/CppVerify/Goals/cppverify_tri_zero_e086e9.lean --check-prefix=GOALS
+# RUN: FileCheck %s --input-file=%t/p/CppVerify/Goals/cppverify_plus_tri_zero_10bb8a.lean --check-prefix=GOALS-PLUS
+# RUN: FileCheck %s --input-file=%t/p/CppVerify/Proofs/cppverify_inc_c0810e/cppverify_inc_c0810e_postcondition_e4ef4574.lean --check-prefix=IMPORTS
+# RUN: FileCheck %s --input-file=%t/p/CppVerify/User.lean --check-prefix=USER
+# RUN: FileCheck %s --input-file=%t/p/CppVerify.lean --check-prefix=ROOT
+#
+# The two goal modules that apply tri are certified together, with proofs
+# by hand of their postconditions in place of the automatic ones.
+# RUN: cp %S/Inputs/lean_modules_tri_zero.lean %t/p/CppVerify/Proofs/cppverify_tri_zero_e086e9/cppverify_tri_zero_e086e9_postcondition_44e49d34.lean
+# RUN: cp %S/Inputs/lean_modules_plus_tri_zero.lean %t/p/CppVerify/Proofs/cppverify_plus_tri_zero_10bb8a/cppverify_plus_tri_zero_10bb8a_postcondition_8b45419c.lean
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p --lean-certify %t/m.cpp -- 2>&1 | FileCheck %s --check-prefix=CERTIFY
+#
+# A run of the same source writes no file. The two proofs by hand are not
+# cppverify_auto's.
+# RUN: touch %t/same
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p %t/m.cpp -- 2>&1 | FileCheck %s --check-prefix=EXPORT-AGAIN
+# RUN: find %t/p -newer %t/same -type f -not -path '*/.lake/*' | count 0
+#
+# A change to dbl builds dbl's goal module and proofs again, and the module
+# that imports every goal module; nothing else.
+# RUN: touch %t/before
+# RUN: sed 's/cppverify::result == 2 \* x/cppverify::result == x + x/' %S/Inputs/lean_modules.cpp > %t/m.cpp
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p --lean-certify %t/m.cpp -- 2>&1 | FileCheck %s --check-prefix=CERTIFY
+# RUN: cd %t/p/.lake/build/lib/lean && find CppVerify -name '*.olean' -newer %t/before | env LC_ALL=C sort | FileCheck %s --check-prefix=REBUILT --implicit-check-not=olean
+#
+# `lake build` builds every proof. Run in the project, elan selects its
+# toolchain.
+# RUN: cd %t/p && lake build 2>&1 | FileCheck %s --check-prefix=LAKE
+#
+# A function that is gone takes its goal module with it.
+# RUN: sed -e 's/cppverify::result == 2 \* x/cppverify::result == x + x/' -e '/^int inc(/,/^}/d' %S/Inputs/lean_modules.cpp > %t/m.cpp
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p %t/m.cpp -- 2>&1 | FileCheck %s --check-prefix=WITHOUT-INC
+# RUN: not test -e %t/p/CppVerify/Goals/cppverify_inc_c0810e.lean
+#
+# A project of an earlier release, whose User imports Generated, still
+# certifies: each proof then depends on every goal module.
+# RUN: printf 'import CppVerify.Generated\n' > %t/p/CppVerify/User.lean
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p --lean-certify %t/m.cpp -- 2>&1 | FileCheck %s --check-prefix=OLD-USER
+#
+# A fallback run writes the goal modules of the functions it exports and no
+# other, since Specs then declares only the specs those apply. Here the
+# solver verifies every function: no goal module stays, and every proof does.
+# RUN: %cpp-verify --lean-fallback=%t/p %t/m.cpp -- 2>&1 | FileCheck %s --check-prefix=FALLBACK
+# RUN: not test -e %t/p/CppVerify/Goals/cppverify_tri_zero_e086e9.lean
+# RUN: test -f %t/p/CppVerify/Proofs/cppverify_tri_zero_e086e9/cppverify_tri_zero_e086e9_postcondition_44e49d34.lean
+# RUN: cd %t/p && lake build 2>&1 | FileCheck %s --check-prefix=LAKE
+
+# EXPORT: Exported: decreases: tri (cppverify_auto proved 1 of 1 goals)
+# EXPORT-NEXT: Exported: lean obligation: inc (cppverify_auto proved 3 of 3 goals)
+# EXPORT-NEXT: Exported: lean obligation: dbl (cppverify_auto proved 3 of 3 goals)
+# EXPORT-NEXT: Exported: lean obligation: tri_zero (cppverify_auto proved 2 of 2 goals)
+# EXPORT-NEXT: Exported: lean obligation: plus_tri_zero (cppverify_auto proved 2 of 2 goals)
+
+# EXPORT-AGAIN: Exported: lean obligation: tri_zero (cppverify_auto proved 1 of 2 goals)
+# EXPORT-AGAIN-NEXT: Exported: lean obligation: plus_tri_zero (cppverify_auto proved 1 of 2 goals)
+
+# GENERATED: {{^}}import CppVerify.Prelude{{$}}
+# GENERATED-NEXT: {{^}}import CppVerify.Specs{{$}}
+# GENERATED-NEXT: {{^}}import CppVerify.Goals.cppverify_tri_decreases_f55d4c{{$}}
+# GENERATED-NEXT: {{^}}import CppVerify.Goals.cppverify_inc_c0810e{{$}}
+# GENERATED-NEXT: {{^}}import CppVerify.Goals.cppverify_dbl_47613e{{$}}
+# GENERATED-NEXT: {{^}}import CppVerify.Goals.cppverify_tri_zero_e086e9{{$}}
+# GENERATED-NEXT: {{^}}import CppVerify.Goals.cppverify_plus_tri_zero_10bb8a{{$}}
+# GENERATED-EMPTY:
+
+# SPECS: {{^}}import CppVerify.Prelude{{$}}
+# SPECS: /- spec function: tri -/
+# SPECS-NEXT: {{^}}def cppSpec_fn_5f5a3374726969 (n : Int) : Int :={{$}}
+
+# Each goal module defines the spec bodies it uses under its own prefix.
+# GOALS: {{^}}import CppVerify.Specs{{$}}
+# GOALS-NOT: {{^}}import
+# GOALS: {{^}}attribute [local instance] cppVerifyPropDecidable{{$}}
+# GOALS: {{^}}def cppSpecBody_e086e9ab_fn_5f5a3374726969_1
+# GOALS-PLUS: {{^}}import CppVerify.Specs{{$}}
+# GOALS-PLUS: {{^}}def cppSpecBody_10bb8a86_fn_5f5a3374726969_1
+
+# IMPORTS: {{^}}import CppVerify.Goals.cppverify_inc_c0810e{{$}}
+# IMPORTS-NEXT: {{^}}import CppVerify.User{{$}}
+# IMPORTS-NEXT: {{^}}import CppVerify.Auto{{$}}
+# IMPORTS-NOT: import
+
+# USER: {{^}}import CppVerify.Specs{{$}}
+# ROOT: {{^}}import CppVerify.Check{{$}}
+
+# CERTIFY: Certified: decreases: tri [backend=Lean]
+# CERTIFY-NEXT: Certified: inc [backend=Lean]
+# CERTIFY-NEXT: Certified: dbl [backend=Lean]
+# CERTIFY-NEXT: Certified: tri_zero [backend=Lean]
+# CERTIFY-NEXT: Certified: plus_tri_zero [backend=Lean]
+
+# REBUILT: CppVerify/Generated.olean
+# REBUILT-NEXT: CppVerify/Goals/cppverify_dbl_47613e.olean
+# REBUILT-NEXT: CppVerify/Proofs/cppverify_dbl_47613e/cppverify_dbl_47613e_missing_return_54ae7c80.olean
+# REBUILT-NEXT: CppVerify/Proofs/cppverify_dbl_47613e/cppverify_dbl_47613e_overflow_fce34d13.olean
+# REBUILT-NEXT: CppVerify/Proofs/cppverify_dbl_47613e/cppverify_dbl_47613e_postcondition_ce469baa.olean
+
+# LAKE: Build completed successfully
+
+# WITHOUT-INC: Exported: decreases: tri
+# WITHOUT-INC-NEXT: Exported: lean obligation: dbl
+# WITHOUT-INC-NEXT: Exported: lean obligation: tri_zero
+
+# OLD-USER: Certified: decreases: tri [backend=Lean]
+# OLD-USER-NEXT: Certified: dbl [backend=Lean]
+# OLD-USER-NEXT: Certified: tri_zero [backend=Lean]
+# OLD-USER-NEXT: Certified: plus_tri_zero [backend=Lean]
+
+# FALLBACK: Verified: dbl [backend=z3]
+# FALLBACK-NEXT: Verified: tri_zero [backend=z3]
+# FALLBACK-NEXT: Verified: plus_tri_zero [backend=z3]

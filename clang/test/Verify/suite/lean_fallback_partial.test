@@ -1,23 +1,23 @@
 # REQUIRES: lean
 #
-# Only obligations Z3 leaves unproved are exported; they keep their positional
-# goal names, and certifying them yields a mixed Z3+Lean proof.
+# Only obligations Z3 leaves unproved are exported; they keep the goal names
+# they have in a complete export, and certifying them yields a mixed Z3+Lean
+# proof.
 #
 # RUN: rm -rf %t.project
 # RUN: not %cpp-verify --solver-rlimit=100 --lean-fallback=%t.project %S/Inputs/lean_fallback_partial.cpp -- 2>&1 | FileCheck %s --check-prefix=EXPORT
-# RUN: FileCheck %s --input-file=%t.project/CppVerify/Check.lean --check-prefix=GOALS
-# RUN: cp %S/Inputs/lean_fallback_partial_goal_1.lean %t.project/CppVerify/Proofs/Goal_ea6538a5c8cb138e.lean
-# RUN: cp %S/Inputs/lean_fallback_partial_goal_2.lean %t.project/CppVerify/Proofs/Goal_53d4e62b4037d310.lean
+# RUN: FileCheck %s --input-file=%t.project/CppVerify/Check.lean --check-prefix=GOALS --implicit-check-not=missing_return
+# RUN: cp %S/Inputs/lean_fallback_partial_goal_1.lean %t.project/CppVerify/Proofs/cppverify_bump_ce87d1/cppverify_bump_ce87d1_overflow_f5ee4d20.lean
+# RUN: cp %S/Inputs/lean_fallback_partial_goal_2.lean %t.project/CppVerify/Proofs/cppverify_bump_ce87d1/cppverify_bump_ce87d1_assertion_06404a7a.lean
 # RUN: %cpp-verify --solver-rlimit=100 --lean-fallback=%t.project --lean-certify %S/Inputs/lean_fallback_partial.cpp -- 2>&1 | FileCheck %s --check-prefix=MIXED
 # RUN: %cpp-verify --solver-rlimit=100 --lean-fallback=%t.project --lean-certify --diagnostics-format=json %S/Inputs/lean_fallback_partial.cpp -- 2>&1 | FileCheck %s --check-prefix=MIXED-JSON
-# RUN: not %cpp-verify --solver-rlimit=100 --lean-fallback=%t.project --lean-fallback-scope=all --lean-certify %S/Inputs/lean_fallback_partial.cpp -- 2>&1 | FileCheck %s --check-prefix=ALL
+# RUN: %cpp-verify --solver-rlimit=100 --lean-fallback=%t.project --lean-fallback-scope=all --lean-certify %S/Inputs/lean_fallback_partial.cpp -- 2>&1 | FileCheck %s --check-prefix=ALL
 
 # EXPORT: Exported: lean fallback: bump [z3: 1 of 3 proved; lean: 2 exported]
 # EXPORT: Unresolved: bump [backend=z3] [reason=solver.resource-limit]
 
-# GOALS: obligation_1_goal
-# GOALS: obligation_2_goal
-# GOALS-NOT: obligation_3_goal
+# GOALS: cppverify_bump_ce87d1_assertion_06404a7a
+# GOALS: cppverify_bump_ce87d1_overflow_f5ee4d20
 
 # MIXED: Proved (z3+lean): bump [z3: 1 of 3 proved; lean: 2 certified]
 # MIXED-NOT: Unresolved
@@ -26,6 +26,6 @@
 # MIXED-JSON-SAME: "evidence":{"lean":["{{.*}}::overflow@5:3","{{.*}}::assertion@6:3"],"solver":"z3","solver_proved":1,"total":3}
 # MIXED-JSON-SAME: "status":"mixed-proof"
 
-# The complete export includes the return check, whose proof is still `sorry`.
-# ALL: Unresolved: lean fallback: bump [z3: 1 of 3 proved; lean: 3 exported] (Lean certification failed:
-# ALL-SAME: declaration uses `sorry`
+# The complete export includes the return check, which cppverify_auto proves, so
+# Lean checks every obligation.
+# ALL: Certified: bump [backend=Lean]

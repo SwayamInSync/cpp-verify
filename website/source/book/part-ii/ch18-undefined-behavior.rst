@@ -10,7 +10,7 @@ memory checking is on by default (``--no-check-ub`` turns it off).
 Two obligations, not one
 ------------------------
 
-For an ``exec`` function with ``cppverify::pre``/``cppverify::post`` there are really two things to
+For an executable function with ``cppverify::pre``/``cppverify::post`` there are really two things to
 prove:
 
 #. **Safety** — every operation is well-defined (no UB).
@@ -54,7 +54,10 @@ Core safety and memory checking
 
 Always-on checks cover signed arithmetic and negation overflow, zero divisors,
 the signed-minimum divided by minus one case, invalid shifts, conversions to an
-enumeration outside its value range, and non-null abstract-valid dereferences.
+enumeration outside its value range, non-null abstract-valid dereferences,
+uses of storage after its lifetime ends (a read through a pointer after
+``delete``), and reads of a local before it is written: a local that some path
+may read uninitialized is an error (``read of uninitialized local value: x``).
 They also follow operations executed inside lifted ``constexpr`` functions.
 
 Memory checking, the default on every backend (``--check-ub``), proves that
@@ -79,11 +82,13 @@ What is always checked
    * - signed ``/`` ``%``
      - not ``INT_MIN / -1``
    * - ``<<`` / ``>>``
-     - valid count; signed left operand/range follows C++17 rules
+     - valid count; before C++20, a signed left shift also follows the C++17
+       rule (see :doc:`../../language/integers`)
    * - conversion to an enumeration without a fixed underlying type
      - the value lies in the enumeration's range
    * - ``*p``, ``p[i]``, ``p->field``
-     - base is non-null and satisfies the abstract validity predicate
+     - base is non-null and satisfies the abstract validity predicate; storage
+       from ``new`` or an addressed local is live and initialized
 
 The classic example — the tool tells you the precondition you forgot:
 
@@ -155,13 +160,15 @@ Typed pointer offsets are scaled to target bytes using ``sizeof(T)`` while this
 obligation remains the half-open element bound ``0 <= i < n``.
 
 For sound discovery, ``valid(p, n)`` must be a positive top-level conjunction
-clause, ``p`` must be the bare complete-object pointer, and each pointer may
-have only one marker. Shifted, disjunctive, conditional, or duplicate markers
+clause, ``p`` must be the bare complete-object pointer or a pointer field of
+a parameter's object (``s->data``), and each pointer may have only one
+marker. Shifted, disjunctive, conditional, or duplicate markers
 are rejected instead of being interpreted as unconditional extents.
 
-At a modular call, a callee extent ``valid(q, length)`` may be instantiated by
-``q = p + offset`` only after proving the subrange is nonnegative and contained
-in the caller's extent. The same inclusive ``[0, n]`` position proof governs
+At a modular call, a callee extent ``valid(q, length)`` is instantiated by an
+argument only after proving that its ``length`` elements are contained in one
+of the caller's objects; for ``q = p + offset``, that the subrange is
+nonnegative and contained in the caller's extent. The same inclusive ``[0, n]`` position proof governs
 same-array pointer subtraction, while dereferences keep the half-open
 ``[0, n)`` access rule. Pointer differences additionally prove that the element
 distance is representable by target ``ptrdiff_t``.
@@ -260,6 +267,36 @@ checked in the inductive step — so an accumulator that can overflow on some
 iteration is caught even though the first few iterations are fine. (The fix is
 the same as for any loop: an invariant that bounds the accumulator. See
 :doc:`ch12-loops-in-practice`.)
+
+Contracts are C++ too
+---------------------
+
+A contract is evaluated as C++ where the function is called and where it
+returns, so it must be defined there, just as the body must. A precondition
+that divides by ``items`` before it says ``items > 0`` is undefined for the
+very input it means to exclude:
+
+.. code-block:: cpp
+
+   int per_item(int total, int items)
+     cv::pre(total / items <= 100 && items > 0)
+     cv::post(cv::result <= 100)
+   {
+     return total / items;
+   }
+
+.. code-block:: text
+
+   per.cpp:2:17: error: verification failed: contract of per_item
+     [...::contract::division-by-zero@2:17] (counterexample: items [type=i32] = 0)
+   Verified: per_item [backend=z3]
+
+The body verifies, since its proof assumes the precondition. The contract does
+not: a clause is checked where the clauses and operands before it hold, so
+``cv::pre(items > 0 && total / items <= 100)`` is defined. A postcondition is
+checked the same way in the state the function returns in, and a trusted
+contract in every state it allows. Callers do not rely on a contract that may
+be undefined; see :doc:`../../language/functions-loops`.
 
 What is not covered yet
 -----------------------

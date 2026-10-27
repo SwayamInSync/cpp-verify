@@ -92,6 +92,24 @@ static cl::opt<bool> LeanCertify(
     cl::desc("Kernel-check every proof in --lean-project without admissions"),
     cl::init(false), cl::cat(CppVerifyCategory));
 
+static cl::opt<bool> LeanPruneStale(
+    "lean-prune-stale",
+    cl::desc("Delete the proofs a Lean project keeps in Stale/ because no "
+             "goal has their statement"),
+    cl::init(false), cl::cat(CppVerifyCategory));
+
+static cl::opt<bool>
+    NoLeanAuto("no-lean-auto",
+               cl::desc("Write a stub for each new Lean goal without trying "
+                        "cppverify_auto on it"),
+               cl::init(false), cl::cat(CppVerifyCategory));
+
+static cl::opt<unsigned> LeanAutoTimeout(
+    "lean-auto-timeout",
+    cl::desc("Wall-clock milliseconds cppverify_auto may spend on one new "
+             "Lean goal (0 = no limit)"),
+    cl::init(verify::DefaultLeanAutoTimeoutMs), cl::cat(CppVerifyCategory));
+
 static cl::opt<unsigned>
     BMCUnroll("unroll", cl::desc("Maximum loop unroll bound for --backend=bmc"),
               cl::init(10), cl::cat(CppVerifyCategory));
@@ -314,6 +332,20 @@ lowerForBackend(const verify::ObligationModule &Module,
   return verify::lowerObligationModule(Module, Z3Out, Execution);
 }
 
+// The options of Lean output and Lean projects, which source verification
+// and archive replay share.
+static void setLeanOptions(verify::VerifyOptions &VOpts) {
+  VOpts.LeanOutPath = LeanOut.getValue();
+  VOpts.LeanProjectPath = LeanProject.getValue();
+  VOpts.LeanFallbackProjectPath = LeanFallback.getValue();
+  VOpts.LeanScope = LeanFallbackScope.getValue();
+  VOpts.LeanCertify = LeanCertify.getValue();
+  VOpts.LeanPruneStale = LeanPruneStale.getValue();
+  VOpts.LeanAuto = !NoLeanAuto.getValue();
+  VOpts.LeanAutoTimeoutMs = LeanAutoTimeout.getValue();
+  VOpts.LeanJobs = Jobs.getNumOccurrences() ? Jobs.getValue() : 0;
+}
+
 class VerifyConsumer : public ASTConsumer {
 public:
   void HandleTranslationUnit(ASTContext &Ctx) override {
@@ -335,18 +367,15 @@ public:
         VOpts.Backend = verify::BackendKind::Race;
       else
         VOpts.Backend = verify::BackendKind::Z3;
-      VOpts.LeanOutPath = LeanOut.getValue();
-      VOpts.LeanProjectPath = LeanProject.getValue();
-      VOpts.LeanFallbackProjectPath = LeanFallback.getValue();
-      VOpts.LeanScope = LeanFallbackScope.getValue();
-      VOpts.LeanCertify = LeanCertify.getValue();
+      setLeanOptions(VOpts);
       VOpts.BMCUnroll = BMCUnroll.getValue();
       VOpts.SolverTimeoutMs = SolverTimeout.getValue();
       VOpts.CollectionTimeoutMs = collectionTimeoutMs();
       VOpts.CertifyTimeoutMs = certifyTimeoutMs();
       VOpts.FunctionTimeoutMs = functionTimeoutMs();
       VOpts.SolverResourceLimit = SolverResourceLimit.getValue();
-      VOpts.Jobs = jobs();
+      // Lean exports one function at a time; --jobs sets its Lean processes.
+      VOpts.Jobs = VOpts.Backend == verify::BackendKind::Lean ? 1 : jobs();
       VOpts.MaxQueryNodes = MaxQueryNodes.getValue();
       VOpts.MemoryLimitMB = MemoryLimit.getValue();
       VOpts.IntegerEncoding = IntEncoding.getValue();
@@ -450,7 +479,8 @@ replaySourceJSON(const verify::ObligationSource &Source) {
 
 static void printReplayJSON(const verify::ObligationModule &Module,
                             const verify::VerifyResult &Result,
-                            llvm::StringRef SemanticHash) {
+                            llvm::StringRef SemanticHash,
+                            unsigned LeanAutomatic) {
   llvm::json::Object Record;
   Record["schema"] = "cppverify.diagnostic/1";
   Record["status"] = replayStatusCode(Result.Status);
@@ -471,6 +501,8 @@ static void printReplayJSON(const verify::ObligationModule &Module,
     Record["reason"] = verify::verifyReasonCode(Result.Reason);
   if (Result.Bound)
     Record["bound"] = static_cast<int64_t>(*Result.Bound);
+  if (Result.Status == verify::VerifyStatus::Exported && LeanAutomatic)
+    Record["lean_automatic"] = static_cast<int64_t>(LeanAutomatic);
   if (!Result.ExploredBounds.empty()) {
     llvm::json::Array Bounds;
     for (unsigned Bound : Result.ExploredBounds)
@@ -586,6 +618,9 @@ static bool resolveOptions(bool Replay) {
     Error = "--unroll requires --backend=bmc";
   else if (given(LeanFallbackScope) && LeanFallback.empty())
     Error = "--lean-fallback-scope requires --lean-fallback";
+  else if (given(LeanAutoTimeout) && LeanProject.empty() &&
+           LeanFallback.empty())
+    Error = "--lean-auto-timeout requires --lean-project or --lean-fallback";
   else if ((given(ProofCacheMaxMB) || given(ProofCacheMaxEntries)) &&
            ProofCache.empty())
     Error = "--proof-cache-max-mb and --proof-cache-max-entries require "
@@ -614,15 +649,31 @@ static int replayObligationArchive() {
                     "exclusive\n";
     return 1;
   }
-  if (!LeanProject.empty() || !LeanFallback.empty() || LeanCertify) {
-    llvm::errs() << "error: archive replay supports Lean scratch-pad export "
-                    "with --lean-out, not Lean project generation or "
-                    "certification\n";
+  if (!LeanFallback.empty()) {
+    llvm::errs() << "error: --lean-fallback applies to source verification; "
+                    "archive replay writes a Lean project with "
+                    "--lean-project\n";
     return 1;
   }
-  if (BackendOpt == "lean" && (jobs() != 1 || !ProofCache.empty())) {
-    llvm::errs()
-        << "error: --jobs and --proof-cache are not supported by Lean replay\n";
+  if (LeanProject.empty() && (LeanCertify || LeanPruneStale || NoLeanAuto)) {
+    llvm::errs() << "error: --lean-certify, --lean-prune-stale, and "
+                    "--no-lean-auto require --lean-project\n";
+    return 1;
+  }
+  if (!LeanProject.empty() && BackendOpt != "lean") {
+    llvm::errs() << "error: --lean-project requires --backend=lean\n";
+    return 1;
+  }
+  if (!LeanProject.empty() && (!LeanOut.empty() || LowerOnly)) {
+    llvm::errs() << "error: --lean-project cannot be combined with "
+                 << (LowerOnly ? "--lower-only" : "--lean-out") << "\n";
+    return 1;
+  }
+  // A project's Lean processes run at once; the scratch-pad is one file.
+  if (BackendOpt == "lean" &&
+      ((LeanProject.empty() && jobs() != 1) || !ProofCache.empty())) {
+    llvm::errs() << "error: --proof-cache is not supported by Lean replay, "
+                    "nor --jobs by its scratch-pad\n";
     return 1;
   }
   if (BackendOpt == "cvc5" && !ProofCache.empty()) {
@@ -673,11 +724,6 @@ static int replayObligationArchive() {
                       "before obligation lowering\n";
       return 1;
     }
-    if (BackendOpt == "lean" && Module.BMCTransform) {
-      llvm::errs() << "error: Lean scratch export cannot replay a "
-                      "BMC-transformed obligation archive\n";
-      return 1;
-    }
     if ((BackendOpt == "cvc5" || BackendOpt == "portfolio" ||
          BackendOpt == "race") &&
         Module.BMCTransform) {
@@ -700,10 +746,10 @@ static int replayObligationArchive() {
 
   std::unique_ptr<llvm::raw_fd_ostream> LeanFile;
   llvm::raw_ostream *LeanStream = nullptr;
-  if (BackendOpt == "lean") {
+  if (BackendOpt == "lean" && LeanProject.empty()) {
     if (LeanOut.empty()) {
-      llvm::errs()
-          << "error: --backend=lean archive replay requires --lean-out\n";
+      llvm::errs() << "error: --backend=lean archive replay requires "
+                      "--lean-out or --lean-project\n";
       return 1;
     }
     std::error_code EC;
@@ -732,17 +778,47 @@ static int replayObligationArchive() {
   const unsigned DumpLayers = DumpIR.getNumOccurrences() > 0
                                   ? verify::parseDumpIRLayers(DumpIR.getValue())
                                   : 0;
+  // A Lean project takes every module before any is certified.
+  std::optional<verify::LeanProjectReplay> Project;
+  if (!LeanProject.empty() && !verify::interruptRequested()) {
+    verify::VerifyOptions VOpts;
+    VOpts.Backend = verify::BackendKind::Lean;
+    setLeanOptions(VOpts);
+    Project = verify::replayLeanProject(Modules, VOpts);
+    for (const std::string &Warning : Project->Warnings) {
+      if (DiagnosticsFormat != verify::DiagnosticFormat::Json) {
+        llvm::outs() << "warning: " << Warning << "\n";
+        continue;
+      }
+      llvm::json::Object Record;
+      Record["schema"] = "cppverify.diagnostic/1";
+      Record["status"] = "warning";
+      Record["severity"] = "warning";
+      Record["message"] = jsonText(Warning);
+      llvm::outs() << llvm::formatv("{0}\n",
+                                    llvm::json::Value(std::move(Record)));
+    }
+    if (!Project->Error.empty()) {
+      llvm::errs() << "error: " << Project->Error << "\n";
+      return 1;
+    }
+  }
   bool AllOk = true;
-  for (const verify::ObligationModule &Module : Modules) {
+  for (size_t Index = 0; Index != Modules.size(); ++Index) {
+    const verify::ObligationModule &Module = Modules[Index];
     if (DumpLayers & verify::LayerVC)
       verify::dumpVC(Module, llvm::outs());
 
     verify::VerifyResult Result;
-    if (LowerOnly) {
+    const unsigned LeanAutomatic = Project ? Project->Automatic[Index] : 0;
+    if (Project) {
+      Result = Project->Results[Index];
+    } else if (LowerOnly) {
       Result = lowerForBackend(
           Module, Kind, DumpLayers & verify::LayerZ3 ? &llvm::outs() : nullptr);
     } else if (!verify::interruptRequested()) {
-      if (Module.BMCTransform) {
+      // Lean exports a bounded module, its bound stated with its goals.
+      if (Module.BMCTransform && Kind != verify::BackendKind::Lean) {
         std::unique_ptr<verify::VerifyBackend> BMCBackend =
             verify::createVerifyBackend(verify::BackendKind::BMC, nullptr,
                                         Module.BMCTransform->UnrollBound,
@@ -750,6 +826,8 @@ static int replayObligationArchive() {
         Result = BMCBackend->verify(Module);
       } else {
         Result = Backend->verify(Module);
+        if (Module.BMCTransform)
+          Result.Bound = Module.BMCTransform->UnrollBound;
       }
     }
     // After Ctrl-C no result is final, whatever the queries returned.
@@ -761,7 +839,7 @@ static int replayObligationArchive() {
 
     const std::string Hash = verify::obligationSemanticHash(Module);
     if (DiagnosticsFormat == verify::DiagnosticFormat::Json) {
-      printReplayJSON(Module, Result, Hash);
+      printReplayJSON(Module, Result, Hash, LeanAutomatic);
       if (Result.Status != verify::VerifyStatus::Lowered &&
           Result.Status != verify::VerifyStatus::Verified &&
           Result.Status != verify::VerifyStatus::Exported)
@@ -815,8 +893,14 @@ static int replayObligationArchive() {
                    << ReplayProofNote << ")" << Suffix << "\n";
       break;
     case verify::VerifyStatus::Exported:
-      llvm::outs() << "Exported: lean obligation: " << Module.FunctionName
-                   << Suffix << "\n";
+      llvm::outs() << "Exported: lean obligation: " << Module.FunctionName;
+      if (LeanAutomatic)
+        llvm::outs() << " (cppverify_auto proved " << LeanAutomatic << " of "
+                     << std::set<std::string>(Result.LeanGoals.begin(),
+                                              Result.LeanGoals.end())
+                            .size()
+                     << " goals)";
+      llvm::outs() << Suffix << "\n";
       break;
     case verify::VerifyStatus::Failed:
       AllOk = false;

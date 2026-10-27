@@ -5,6 +5,7 @@
 # RUN:   --cpp-verify=%cpp-verify \
 # RUN:   --source=%S/Inputs/backend_fidelity_matrix.cpp \
 # RUN:   --recommends=%S/Inputs/backend_fidelity_recommends.cpp \
+# RUN:   --lean-proofs=%S/Inputs/backend_fidelity_proofs \
 # RUN:   --work-dir=%t | FileCheck %s
 #
 # CHECK: PASS: canonical feature and operator matrix
@@ -12,4 +13,5 @@
 # CHECK-NEXT: PASS: source diagnostic identity and parallel determinism
 # CHECK-NEXT: PASS: canonical and incremental-BMC archive replay
 # CHECK-NEXT: PASS: Lean theorem, hash, replay, and kernel-export identity
+# CHECK-NEXT: PASS: decisive Lean verdicts: valid cases certified, counterexamples refuted
 # CHECK-NEXT: PASS: recommends exclusion from BMC and Lean replay artifacts

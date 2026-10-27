@@ -30,8 +30,10 @@ add_clang_library(clangVerify
   Transform/Inductive.cpp
   Transform/Origins.cpp
   Transform/Ownership.cpp
+  Transform/OutParameters.cpp
   Transform/LoopUnroll.cpp
   Transform/SpecInline.cpp
+  Transform/SubobjectBounds.cpp
   Transform/UBChecks.cpp
   Backend/Certify.cpp
   Backend/Presburger.cpp
@@ -40,6 +42,7 @@ add_clang_library(clangVerify
   Backend/ObligationSimplify.cpp
   Backend/ObligationSerialization.cpp
   Backend/ProofCache.cpp
+  Backend/ChildProcess.cpp
   Backend/CVC5Backend.cpp
   Backend/Z3Encode.cpp
   Backend/SpecAxioms.cpp

@@ -57,4 +57,4 @@ Known constraints on Windows:
 
 - Full LLVM+Clang builds are slow and need ample disk (~30GB+).
 - Enable long paths if CMake hits `MAX_PATH` issues.
-- CI builds and smoke-tests Windows on every change, but the full test suite runs on Linux; report Windows-specific issues on GitHub.
+- CI builds and smoke-tests Windows on every change, but the Clang test suite runs on Linux and the Verify tests on Linux and macOS; report Windows-specific issues on GitHub.

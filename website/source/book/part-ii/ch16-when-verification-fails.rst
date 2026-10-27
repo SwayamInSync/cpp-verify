@@ -49,7 +49,7 @@ that does not settle the query, the result is not verified with reason
 tries to prove the goal by induction on its own (section "Automatic
 induction" of :doc:`ch13-spec-and-proof-functions`); the message names the
 inductions it tried, as ``induction following fibo and induction on n did not
-prove it``, and for a ``proof`` function shows a body to start a proof by
+prove it``, and for a proof function shows a body to start a proof by
 induction from. When the solver's counterexamples need the spec at ever
 larger arguments, the message says no finite unfolding settles it: the goal
 needs an induction the verifier did not find, often one over a stronger
@@ -147,8 +147,10 @@ Every result that is not a proof carries one stable reason code (text
      - A loop has no termination measure. Add ``cppverify::decreases``, or
        ``cppverify::decreases(*)``.
    * - ``construct.unsupported``
-     - The failed obligation stands for a construct the verifier does not
-       model; the message names it.
+     - The function uses a construct the verifier does not represent (an
+       error points at it), relies on a spec that does, or the failed
+       obligation stands for a construct it does not model; the message
+       names it.
    * - ``solver.timeout``
      - A query, or the function's whole budget, ran out of time. Raise
        ``--timeout`` or ``--function-timeout``, or help the proof.
@@ -222,7 +224,12 @@ Other results that are not counterexamples:
 - ``construct.unsupported``: the failed obligation stands for a construct the
   verifier does not model, so it says nothing about the program. The message
   names the construct, such as a pointer difference between two parameters'
-  objects or a call that keeps a pointer to local storage.
+  objects or a call that keeps a pointer to local storage. A function whose
+  body or contract the verifier does not represent at all gets this reason
+  too, with an error at the construct, and so does a function that relies on
+  a spec it does not represent (``relies on choice, which uses a construct
+  the verifier does not support``); the other functions of the file are
+  verified (see :doc:`../../language/tooling`).
 - ``[trusts=f]`` on a verified result: the proof relies on the contract of
   ``f``, marked ``[[cppverify::trusted]]`` (see
   :doc:`ch17-backends-modular-calls`).
@@ -312,7 +319,7 @@ postconditions are never checked.
      never checked
 
 Dead code alone is not flagged. A defensive branch such as ``if (p ==
-nullptr) return -1;`` under ``pre(p != nullptr)`` is unreachable for a good
+nullptr) return -1;`` under ``cv::pre(p != nullptr)`` is unreachable for a good
 reason, and every claim of the function is still checked on the paths that
 remain. Only an assumption that removes the paths a claim needs is a
 problem, and those are exactly the places checked above: a verified callee
@@ -377,8 +384,9 @@ recreate at a larger argument.
 A requested proof cache is also fail-closed. ``cache.corrupt`` means an entry
 did not exactly match its semantic/backend identity; ``cache.io-failed`` means a
 requested entry could not be read. Neither is treated as a cache miss or a
-proof. A post-proof write or pruning failure is instead explicit cache-error
-telemetry and does not erase the fresh solver proof. Text diagnostics report
+proof. A failure to store a fresh proof is reported as cache-error telemetry
+and does not erase that proof, and a failure to prune the cache once the run
+has finished is a warning (``cannot prune the proof cache: ...``). Text diagnostics report
 cache hits/queries, while JSON includes ``cache.hits``, ``cache.misses``, and
 ``cache.errors``.
 
@@ -389,7 +397,8 @@ For a deliberately invalid program, two outcomes are sound:
 - ``Unresolved`` (with a reason code) means the verifier conservatively
   refused to certify it.
 
-Only ``Verified``, ``Certified``, and ``Proved (z3+lean)`` are proof results.
+Only ``Verified``, ``Certified``, and ``Proved (z3+lean)`` (``Proved
+(portfolio+lean)`` after the strict portfolio) are proof results.
 
 ``Lowered`` is not a fourth solver outcome. It is emitted only by
 ``cpp-verify --lower-only`` and says that Clang AST conversion, VCR, passive
@@ -408,14 +417,16 @@ For automation that remains unresolved, use:
 .. code-block:: bash
 
    cpp-verify --lean-fallback=proof file.cpp
-   # edit proof/CppVerify/User.lean and proof/CppVerify/Proofs/*.lean
+   # edit proof/CppVerify/User.lean and proof/CppVerify/Proofs/*/*.lean
    cpp-verify --lean-fallback=proof --lean-certify file.cpp
 
 The first command remains non-success because export is not proof. It exports
 only the obligations Z3 did not prove and reports the split, for example
 ``[z3: 18 of 20 proved; lean: 2 exported]``. Once those proofs kernel-check,
-the function is ``Proved (z3+lean)``, never ``Verified`` or ``Certified``. A Z3
-counterexample is not routed through this fallback.
+the function is ``Proved (z3+lean)``, or ``Certified`` when Lean checked every
+obligation (with ``--lean-fallback-scope=all``, or when the solver proved none
+on its own); it is never ``Verified``. A Z3 counterexample is not routed
+through this fallback.
 
 Trusting a new feature
 ----------------------

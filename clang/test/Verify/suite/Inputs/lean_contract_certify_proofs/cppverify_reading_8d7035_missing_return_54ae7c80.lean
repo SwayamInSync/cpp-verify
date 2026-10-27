@@ -1,0 +1,6 @@
+import CppVerify.Goals.cppverify_reading_8d7035
+import CppVerify.User
+
+theorem cppverify_reading_8d7035_missing_return_54ae7c80_proof : cppverify_reading_8d7035_missing_return_54ae7c80 := by
+  apply cppverify_reading_8d7035_missing_return_54ae7c80.of_readable
+  trivial

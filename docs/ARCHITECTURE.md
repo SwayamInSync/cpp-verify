@@ -55,6 +55,8 @@ C++ source with contracts
 │ Stage 5: Backend adapter │
 │ - Validate capabilities  │
 │ - Z3: encode + solve     │
+│ - cvc5: SMT-LIB2 process │
+│ - portfolio, race: both  │
 │ - BMC: VCR unroll, then  │
 │   the same obligation/Z3 │
 │ - Lean: export / certify │
@@ -140,7 +142,7 @@ VExpr =
   | InitializedPtr(ptr, initializationHeap?)
   | Cast(inner: VExpr, fromType: VType, toType: VType)
   | FieldAccess(base: VExpr, field: string, type)
-  | Load(ptr: VExpr, type)                       // *p in an expression context
+  | Load(ptr: VExpr, type, accessCondition?)     // *p in an expression context
   | HeapStore(before, after, ptr, value)          // passive heap relation
   | HeapFrame(before, after, [(lo, hi)])          // passive frame relation
   | SpecCall(identity, args: [VExpr], type)
@@ -161,12 +163,267 @@ All carry `SourceLocation` for diagnostics.
 `(select mem p)`. For `p[i]`, the selected address is
 `p + mathematical_value(i) * pointeeSizeBytes`.
 
+**Places inside objects:** a field or fixed-array element inside an object is
+a `VPlace`: the object's address plus Clang's layout offset for each field and
+`index * stride` for each element, at any depth, with an access condition,
+the conjunction of `0 <= index < count` over the fixed-array indices of the
+path. A `Load` or `Store` of the place carries the condition, and
+passivization asserts it, kind `bounds`, where the access is evaluated. The
+object is a promoted local (`ASTConverter::objectPlace` on its allocation) or
+the object a pointer addresses: `pointeeRootPointer` walks the place down to
+`p->`, `(*p).`, or `p[k].`, and `pointeePlace` takes that pointer as the base,
+whose own access UB instrumentation checks against the pointer's extent or
+object as before. `p->buf[i]` therefore has both checks, and the array's is
+what rejects `p->buf[8]`, the address of the next field.
+
+**Records through references:** a reference to a record, a parameter or a
+local, is a pointer-typed VCR variable holding the object's address
+(`VType::Ptr` of the record's size), never flattened: `getRecordFromType`
+stops at references, so only a record by value becomes `param.field`
+values, and so do source variables, type-invariant injection, and call
+arguments. `recordReferenceRoot` finds the reference a selection chain
+starts at (`c.f`, `c.buf[i]`), and `inPointeeObject` (it, or
+`pointeeRootPointer`) admits the place wherever a place through a pointer is
+admitted: loads, stores, subscripts, reference bindings, footprints.
+`objectPlace` of the bare reference is the place at its address, as `*p`.
+Pointers into the object (`&c.f`, `c.buf`) are formed only where
+`subobjectPointerRoot` holds: through a pointer, or a reference whose object
+outlives the function (a parameter, or a local not bound to represented
+storage, which `LocalReferenceProvenanceVariables` records), since a
+subobject pointer does not carry a promoted object's lifetime.
+`VFunction::ScalarReferenceParams` holds only scalar references, whose
+`modifies(r)` is the one cell they bind; a record reference's is a region,
+its parameter's entry object (`entryObjectRegion`), as for `*p`.
+`convertFootprint` lowers a record or array named whole inside an object
+(`p->inner`, `c.buf`, `p[k]`) to a range of one element of its size, so
+every frame path (own stores, call havoc, containment, loop frames) treats it
+as its bytes; before, it was a cell holding the record, which held no
+callee's footprint inside the member and whose havoc at a call had no logic
+sort.
+
+**Extents of pointer fields:** `ASTConverter::collectFieldExtents` finds
+each extent marker of the preconditions whose pointer is a field of the
+object a pointer or reference parameter addresses (`pointerFieldOfParameter`:
+`s->f`, `r.f`, `(*s).f`, nested fields), and gives the field's entry value a
+synthetic parameter after the declared ones, named `s->f` (fields joined by
+`->`, so no name splits at a `.`), displayed as written, with the field's own
+pointer type (the marker's parameter converts it to a pointer to const).
+`VFunction::FieldParams` keeps each with its field as an expression over the
+parameters; the marker's argument converts to the parameter
+(`FieldExtentParameters`), so `instrumentUBChecks` sees a bare pointer and
+records the extent as for any parameter. The passivizer's `enter` assumes
+`s->f_0 == load(s + offset)` in the entry heap, an entry fact (origin
+`field`, after the preconditions), and a call binds the parameter in
+`ParamMap` to the field at its arguments in the call's state, which also
+serves as the argument whose origins place the extent in the caller's
+objects. The default separation takes the synthetic entries
+(`AddressEntry`, mutable unless the field points to const) with the
+declared address parameters. `UBInstrumenter::dropSingleObjectSeparation`
+removes a pair's single-object separation where one of the pair has an
+extent, so the extent separation (`appendExtentSeparation`) alone states
+it.
+
+**Member functions:** `unsupportedMemberFunction` decides which member
+functions `convertTranslationUnit` converts: static ones, as free functions,
+and non-static ones of a class without bases or virtual functions (not
+constructors, destructors, conversion functions, explicit object, rvalue- or
+volatile-qualified ones; a contracted one of these is an error of its
+function). `convertFunction` names a member function with its class and
+puts `this` first in `Params`, a pointer to `getFunctionObjectParameterType()`
+(const in a const member function, `ConstAddressParams`), with the generated
+validity of a reference (non-null, valid, initialized), an `AddressEntry` in
+the separation, a `RecordParams` entry for its class (so a local object is
+lent as 3d lends one), and, for a verified non-const one without
+`cppverify::modifies`, the region footprint `*this` (decision Q8).
+`CXXThisExpr` converts to the `this` variable, so `this->f` and an implicit
+`f` are places through a pointer as `p->f` is. `convertExecCallArgs`
+prepends the object of a `CXXMemberCallExpr`: the pointer of `p->m()` and
+`this->m()`, else the address of the object, bound as a reference argument
+is; address discovery promotes a local whose member function is called. The
+parser keeps an in-class member function's clause tokens
+(`Parser::MemberContractTokens`, then
+`LateParsedMethodDeclaration::ContractTokens`) and parses them in
+`ParseLexedMethodDeclaration` after the exception specification, with the
+parameters and `this` in scope (`ParseFunctionContractClauseList`, the part
+of `ParseFunctionContractClauses` after the declarator's scopes), before the
+late-parsed body; an out-of-line definition's clauses enter its class's
+scope and `this`, as its trailing requires-clause does.
+
+**Constructors:** `unsupportedConstructor` admits a constructor of a
+trivially copyable class without bases that does not delegate and whose
+members are scalars, pointers, and aggregates of them whose classes provide
+no constructor. `convertFunction` marks it `VFunction::IsConstructor`, gives
+`this` the lifetime companion `VConstructedObjectLifetime`
+(`__cppverify_constructed_lifetime`, every `CXXThisExpr`, and the entry
+state's `this` in `PassivizerImpl::enter`, so the frame `*this` and the
+`this` passed to a member function are one object), so its accesses are
+those of local storage, initialization checked, and generates the
+precondition that each leaf of `*this` and its last byte are valid with
+that identity, one live allocation, instead of a reference's initialized
+object; nothing is assumed about the object's initialization.
+Its body starts with its member initializers (`appendMemberInitializers`,
+over `inits()`, which Sema keeps in execution order). `run()` checks every
+leaf initialized in the final state (`emitConstructedChecks`, anchored at
+the member); a loop in the body is framed by `this`'s origin, its entry
+object, as a parameter's is. A local whose
+initializer runs a non-trivial constructor is promoted (address discovery,
+through `constructionOf`'s wrappers), and `appendObjectInitialization` runs
+the construction there (`appendConstruction`): a provided constructor is a
+`VCallStmt` with the object's address first; an implicit or defaulted
+default constructor is its member initializers in place, recursively. At a
+call of a constructor, `emitRecordActualChecks` checks the object's
+validity but not its initialization, and `emitCallStmt` sets every leaf's
+initialization bit after the frame. Records count as
+supported types and layouts when trivially copyable rather than trivial,
+since constructors no longer stop them.
+
+**Class invariants:** `entryClassInvariants` (a public, non-constructor
+member function's) and `exitClassInvariants` (a public member function's and
+every constructor's) give the class's `TypeContractInfo` invariants, which
+`convertFunction` converts in its context (`this->f` loads) and adds as
+generated pre- and postconditions of kind `type-invariant`; at exit
+`DropExtentMarkers` makes each `valid(p, n)` the literal `true`.
+`collectFieldExtents` scans the entry invariants with the written
+preconditions, and `pointerFieldOfParameter` takes `this->f` (no parameter
+declaration, named `this->f`), so an extent in an invariant is a synthetic
+parameter of the member function, bound at its calls (3e). At a call,
+`havocFootprints` frames a region footprint of a record parameter without an
+extent as the cells of the record's leaves (`RecordCells`, from the callee's
+layout at the actual's address), so the call stays a chain of stores; as one
+byte range, a `HeapFrame`, a falsified claim after a constructor and a
+member call took 60 s and ended `solver.timeout`, and fails in 0.3 s as cells.
+
+**Member operators and parameters' invariants:** `convertExecCallArgs` takes
+the object of a `CXXOperatorCallExpr` whose callee is an instance member
+function from its first argument, and the parameters from the second.
+`returnsOwnObject` recognizes a member function returning a reference to its
+class whose every return is `*this` (`isOwnObject`): its `VFunction` returns
+void, `findUnsupportedType` accepts its return type, its returns carry no
+value, and a call using the reference as an argument, a copy's source, or an
+assignment's source is an error (`rejectOwnObjectUse`, in
+`convertExecCallArgs`, `appendRecordCopy`, and `appendObjectCopy`). For each
+parameter that refers to or points to a record with type invariants (and has
+no `valid` extent, `hasExtentMarker`), `convertFunction` converts the
+invariants with `ThisSubstitute` set to the parameter, which `CXXThisExpr`
+then converts to, and `DropExtentMarkers` set, and adds them as generated
+preconditions (guarded by non-null for a pointer) and, unless the pointee is
+const, postconditions. The record escape scan accepts a callee's own
+automatic allocation unless it is initialized with an address it must not
+keep.
+
+**Function templates:** Sema keeps a function template's contract on its
+pattern and instantiates it lazily, as an exception specification:
+`Sema::InstantiateFunctionContract` runs where a specialization is odr-used
+(`MarkFunctionReferenced`) and where its definition is instantiated, once
+per specialization (its `FunctionContractInfo` is recorded first, so a use
+in its own contract stops there), in a `LocalInstantiationScope` that maps
+the pattern's parameters, which identifies those of every redeclaration (so
+the clauses may be written on any, `ContractDecl`), in the specialization's
+context (its `this`, for a member) and an evaluation context of its own, so
+that a caller whose full expression is being built keeps its temporaries'
+cleanups. `SubstFunctionContract` runs
+`TreeTransform::TransformFunctionContract`, which rebuilds each clause with
+the checks the parser applies (`TransformContractCondition`,
+`TransformContractMeasure`, `TransformContractFootprint`; quantifiers and
+choices through `Sema::BuildContractBinderExpr`). `TreeTransform` gives
+`cppverify::result` the instantiated return type, transforms a loop's
+contract with the loop and rebuilds a loop whose clauses changed even when
+its condition and body did not, and keeps trigger marks; each quantifier and
+choice binds in a `LocalInstantiationScope` of its own
+(`TemplateInstantiator`), so each element of a pack expansion binds its own
+variable, and the block of a `check(forall(k, ...)) by` is given the
+instantiated `k`. `ResultExpr`, `OldExpr`, and the quantifiers take the
+dependence of their type or operands. `collectFunctionCandidates` adds,
+after each function template, the specializations the translation unit
+instantiates (from its canonical declaration, whose redeclarations share
+them), with their definition or, without one, their contract. The converter
+names them with their arguments (`functionName`), and the parameters a pack
+expands to as C++26 indexes it, `ns...[1]` (`nameParameters`), and records
+where each is instantiated (`getInstantiationPoints`), which the driver
+prints as a note after each error or warning of the specialization (JSON
+`instantiated_at`).
+
+**Class templates:** the parser keeps the contracts of a class template's
+members, whose instantiation is a function template's
+(`InstantiateFunctionContract`, where the member is used or defined), and
+its type invariants, which `InstantiateClassImpl` instantiates once the
+specialization is complete, with its `this` (`CXXThisScopeRAII`), into the
+specialization's `TypeContractInfo`. An invariant is parsed with its class's
+`this` in scope, so Sema writes a field it names bare as `this->field`,
+which the instantiation rebuilds with the specialization's `this`. A
+quantifier's binder in it belongs to the context around the class
+(`Sema::getContractBinderContext`): a variable of a class is a member, and
+an assertions build stopped at the first lookup of one without an access
+specifier. `collectFunctionCandidates` visits the pattern's members (for the
+warning) and the members of each specialization the translation unit
+instantiates (an instantiated specialization in a declaration context is
+collected from its template only); `isInstantiated` decides the warning,
+from a function template's specializations or the instantiated members of
+the class's.
+
+**std::min and std::max:** `stdMinOrMax` recognizes the two-argument
+`std::min` and `std::max` of a const integer, enumeration, or `bool`
+reference (not the overloads with a comparison or an initializer list), and
+`convertMinOrMax` lowers a call to a `VConditionalExpr` over the converted
+arguments, before a call becomes a spec application; any other non-constant
+call of a `constexpr` function of `std` is a conversion error. In
+`convertConstexprSpec`, `findUnsupportedType`'s
+`ConstScalarReferencesAreValues` makes a reference to a const integer its
+referent (`constScalarReferent`), as the parameter's and the result's
+types, and the parameters in `ValueReferences` are read as values; a
+function that cannot be lifted returns a placeholder that the lifting loop
+marks unsupported, so `SpecDependencies` name it.
+
+**Records in memory by value:** `recordFieldsInMemory` reads a record value
+kept in memory, a promoted local or one in a pointee or record reference
+(`promotedRootLocal`, `inPointeeObject`), through implicit copies and
+temporaries, as one `VLoadExpr` per field at its offset from the place's
+address (`objectPlace`), each carrying the place's access condition, which
+passivization asserts where the load is evaluated, and getting the load's
+memory checks from UB instrumentation. A by-value argument
+(`appendRecordCallArgument`), a record return (through a flattened
+`__aggregate_return_N`, assigned before the lifetimes of the locals end), and
+a copy into a flattened local (`appendRecordCopy`) use it; a record with a
+member that is a record or an array is an error there.
+
+**Pointers into objects:** `ASTConverter::subobjectPointer` lowers a decayed
+member array of a pointee and the address of a pointee's element, field, or
+nested record. In a statement (`SubobjectSink`) it asserts the place's access
+condition and its accessibility (`appendReferenceBindingCheck`) and binds the
+address to a fresh pointer `__subobject_N` with two companions,
+`__subobject_N.__lo` and `.__hi`, the bytes of the array it comes from or
+else of the field or record; elsewhere, as in a condition or a contract, it
+is the address alone. In an operand that `&&`, `||`, or `?:` evaluates only
+on its own path, these statements are that path's (`convertOnPaths`, under
+Modular Exec Calls), so `i < 8 && &r->buf[i] == q` asserts nothing of `i`
+where `i >= 8`. `VFunction::BoundedPointers` names the pointers with
+companions. `propagateSubobjectBounds` (`Transform/SubobjectBounds.cpp`) runs
+on the converted body: every pointer variable assigned a value rooted at a
+bounded pointer (through steps, casts, and conditionals, `pointerBound`) is
+bounded too; before each such assignment its companions take the value's
+bounds (a root without bounds may address any byte, `[0, 2^64)`), a step
+keeps them, every bounded variable starts with any byte at entry, and a loop
+that moves one gets the generated invariant `q == 0 || q.__lo == 0 ||
+q % S == q.__lo % S`. Storing a bounded value in memory or returning it is a
+conversion error. UB instrumentation (`subobjectObligation`, `sameSubobject`)
+adds `lo <= addr < hi` at each access, `lo <= p <= hi` at each step, and each
+operand in the other's closed bounds at a pointer difference; a call asserts
+that the bytes a callee's extent or object takes from a bounded argument lie
+in its bounds. Origins treat the companions as no pointers, and a constant of
+pointer type in a sum of two pointers is the field offset
+(`steppedPointer`). Pointer-difference positions measure an origin's object
+in its own elements (`PassivizerImpl::OriginObjects`), since a pointer into a
+member has a smaller type than its origin.
+
 **Quantifiers, triggers, choices, collections:** a quantifier without bounds
 ranges over all mathematical integers. A `cppverify::trigger(term)` mark is an identity
 `Cast` flagged `IsTrigger` around the term. Each `cppverify::choose` is lifted to a
 synthesized uninterpreted spec function (`IsChoice`) of the values its body
 mentions, whose postcondition is the Hilbert axiom `!cppverify::exists(k, P) || P(cppverify::result)`
-(with the range for a bounded choose). The calls in its body are calls of the
+(with the range for a bounded choose). Chooses with the same condition, compared
+by a structural key of its range and body that names bound variables by
+position, are lifted once (as Verus's `choose_map` shares closure functions), so
+they are one function. The calls in its body are calls of the
 function it is written in, for recursion and termination. A collection
 operation is a `SpecCall` whose identity is `__cppverify.<op>`, such as
 `__cppverify.seq.push`.
@@ -194,7 +451,7 @@ every address outside the half-open regions.
 VStmt =
   | VarDecl(name, type, init: VExpr?)
   | Assign(target, value: VExpr)                          // local variable
-  | Store(ptr: VExpr, value: VExpr)                       // *p = value
+  | Store(ptr: VExpr, value: VExpr, accessCondition?)     // *p = value
   | Allocate(target, allocatedType, init?, sizeBytes, alignBytes)
   | Free(ptr: VExpr)
   | If(cond: VExpr, then: [VStmt], else: [VStmt])
@@ -252,12 +509,38 @@ VFunction =
 - `freshOwnedReturn` is a derived VCR effect, never a trusted contract claim.
   `Ownership.cpp` computes it by a conservative acyclic path analysis and
   cloning, loop unrolling, dumps, and every backend preserve it.
+- `outParameters` (`VFunction::OutParameters`, printed `param p out`) is
+  derived the same way, by `inferOutParameters`
+  (`Transform/OutParameters.cpp`), which the driver runs on the converted
+  functions after `inferFreshOwnedReturns`. Per pointer or reference
+  parameter of a function with a verified body, a walk keeps the byte
+  offsets from the parameter written on every path (`Written`: an `if`
+  joins by intersection, a loop's body starts from what was written before
+  it and adds nothing after it, a `return` records the exit state) and
+  rejects a read of an offset not written, a read at a computed offset, any
+  other use of the pointer (a null test, `valid_ptr`, and address steps
+  excepted), a call passing it to a callee parameter that is not an
+  out-parameter whose leaves (`pointeeLeaves`, the record layout's) are not
+  all written or that has an extent, and an entry-state read in a clause
+  (`readsStorage`: preconditions, recommends, decreases, behaviors, field
+  parameters, footprint counts, extents, `old`). Postconditions, invariants,
+  and checks count only when the parameter is never written
+  (`WritesSomewhere`). Writes are a least fixpoint over the call graph
+  (a call adds the callee's writes for its formal at the argument's
+  offset), out-parameters a greatest one. For each out-parameter the pass
+  drops `initialized_ptr` from the generated validity precondition
+  (`withoutInitialization`), removes the converter's subobject binding
+  pair (an `initialization` assert of the object, an assume of the part's
+  initialization), and adds `initialized_ptr(p + offset)` postconditions of
+  kind `initialization` for the leaves written at every exit.
 - `identity` includes the canonical signature, so overloads with the same
   source spelling remain distinct through modular calls and SMT symbols.
 - `cppverify::aliases` empty means the implicit non-aliasing precondition applies to every pair of distinct pointer/reference parameters of which at least one is mutable.
 - A `VFootprint` is a target lvalue with an optional element count and
-  element size: a cell (`p[i]`, `p->f`, a reference), a range `p[lo : n]`
-  (target `p[lo]`, count `n`), or a region `*p` (the object `p` addresses).
+  element size: a cell (`p[i]`, `p->f`, a scalar reference), a range
+  `p[lo : n]` (target `p[lo]`, count `n`; a record or array named whole
+  inside an object, `p->inner`, is a range of one element of its size), or a
+  region `*p` (the object `p` addresses, or a reference to a record names).
 - Behaviors are desugared in the frontend: each scoped `cppverify::pre` becomes
   `!assumes || pre`, each scoped `cppverify::post` `!old(assumes) || post`, and
   `cppverify::complete_behaviors`/`cppverify::disjoint_behaviors` become assertions at body entry.
@@ -372,13 +655,14 @@ y_0 = x_3 + 1;
 ```
 // while (cond) invariant(I) decreases(D) { body }
 
-assert(I);                         // 1. invariant on entry
+assert(defined(I)); assert(I);     // 1. invariant on entry
 havoc(modified_vars + mem);        // 2. forget loop-modified state + heap
 assume(frame(mem_entry, mem));     //    cells outside the loop's write set kept
-assume(I);                         // 3. inductive hypothesis
+assume(init_entry => init);        //    initialization kept
+assume(defined(I)); assume(I);     // 3. inductive hypothesis
 if (cond) {                        // 4. if loop continues:
     [body in SSA]                  //    execute one iteration
-    assert(I);                     //    invariant preserved
+    assert(defined(I)); assert(I); //    invariant preserved
     assert(D_new < D_old);         //    termination measure decreases
     assert(frame(mem_entry, mem)); //    explicit loop modifies respected
     assume(false);                 //    cut path
@@ -396,8 +680,49 @@ origin is unknown the function's frame alone bounds the loop, since every
 store is checked against it. When every written region is a single cell the
 frame is a chain of stores of fresh values; otherwise it is a
 `HeapFrame(mem_entry, mem_head, regions)` relation.
+Local and dynamic storage has no origin, so its writes are bounded by its
+lifetime companion's pointer instead, when the loop assigns neither that
+pointer nor its companion: a store whose address is such a pointer, a
+reference to a local say, writes that one cell (`representedCell`); one
+rooted at the pointer an allocation defined (`RepresentedObjects`: the
+allocated type and size, recorded at `VAllocateStmt` and at a fresh-owned
+call) writes that object (`representedRegions`), since its fields lie in the
+layout and its fixed-array indices are checked. The object is its scalar
+leaves from `VFunction::Layouts`, each a cell, so the frame stays a chain of
+stores; with a byte range instead, Z3 found no counterexample to a claim the
+loop falsifies within the timeout, and the leaves bound the same bytes. Without
+a layout the object is its bytes. The function's own frame is never used
+here, since a store to its own storage is not checked against it. Before
+0.2 any store to local or dynamic storage left the loop unframed, so it
+forgot every object.
 An explicit loop `cppverify::modifies` is also asserted at the end of each iteration and
 at each `continue` (obligation kind `frame`, located at the footprint).
+
+**Definedness and initialization at the head.** Entry, the end of an
+iteration, and each `continue` assert an invariant's definedness before the
+invariant (`emitExprSafety`: its core checks and the memory checks
+`instrumentUBChecks` recorded in `VWhileStmt::InvariantChecks`), so the head
+assumes both (`assumeInvariantSafety`, over the same `exprSafetyChecks`):
+what an invariant reads is in bounds and initialized there. Initialization
+cannot be stated in a contract, so this is how a loop that fills local
+storage knows what it has written. A store through local or dynamic storage
+sets its cell's initialization bit, so it modifies the initialization heap
+(`collectModified`), whose head version only grows, and only where the
+loop writes: no lifetime begins or ends in a loop (the converter rejects
+addressable declarations, allocation, and deallocation there, and
+`startsLifetime` withholds the fact from a loop that starts one). When the
+loop's write regions are all single cells, the frame that makes the value
+heap a chain of stores, the head's initialization heap is the same chain
+(`initializeCells`): each cell's bit becomes `init_entry[c] || w` for a
+fresh `w`, and every other address keeps its bit. Otherwise the head
+assumes `forall a. init_entry[a] -> init_head[a]`, triggered by reads of the
+head version (`initializationKept`), and nothing frames the rest, since no
+claim needs a cell to be uninitialized. Before 0.2 the head kept the initialization heap from
+before the loop, and every iteration after the first saw the storage the
+earlier ones wrote as uninitialized. Dafny checks an invariant's
+well-formedness once, in the head's arbitrary state, from the invariants
+before it, which suffices where storage is always initialized; here it is
+proved where the invariant is.
 
 **Termination.** An executable loop without `cppverify::decreases` contributes no
 measure obligation, and the driver reports the function `Unresolved` with
@@ -420,6 +745,21 @@ state. A `continue` asserts the invariant and the measure decrease in its own
 state and ends the path; the frontend emits a `for` increment before it. BMC
 unrolling lowers `break` and `continue` to flag assignments that guard the
 remaining statements and the next iteration.
+
+**Exits the frontend lowers.** VCR's `break` and `continue` leave a
+`VWhileStmt`. Two exits have no loop to leave and are lowered to flags by
+`lowerExits` (`ASTConverter.cpp`), BMC's rule applied once: a `do` loop's
+first iteration, emitted before its `VWhileStmt` (`__do_break_N`,
+`__do_continue_N`; the loop runs under `!__do_break_N`), and a `switch`
+(`ASTConverter::convertSwitch`). A switch becomes its value
+`__switch_N`, a flag `__switch_entered_N` set once a label matches
+(`entered = entered || match`, `default` matching where no case does), and
+`__switch_break_N`; each label's statements run under `entered && !break`,
+the last under `!break` alone when there is a `default` label. The loops and
+switches a statement may leave form one stack (`EnclosingLoops`): a break
+leaves the innermost of either, a continue the innermost loop, and each
+records the values initialized on its paths, which the definite
+initialization after a `do` loop and a switch joins.
 
 **Enumeration ranges.** A machine value of an enumeration type without a
 fixed underlying type (`VType::EnumMin`, `EnumMax`) lies in its range, since
@@ -449,19 +789,82 @@ assume(Q[Result := y, Old(params) := args]);
   Cell footprints become stores of fresh values (no quantifier). In the
   object model, ranges and regions (the actual's `valid` extent, else one
   object) become `HeapFrame(mem_k, mem_{k+1}, regions)`; each footprint of
-  the callee must lie inside the caller's own frame (index-based
-  containment).
+  the callee must lie inside the caller's own frame, by its cells
+  (`footprintWithin`): a region of one scalar object is one cell, and a
+  footprint through a pointer of another base than a caller region's lies in
+  it where its cells lie in the region parameter's entry object, the rule a
+  store already follows.
 - If `cppverify::modifies` is the conservative default (all reachable through mut params), the entire heap is havocked.
 - A `freshOwnedReturn` call is not a whole-heap havoc. It preserves every old
   cell, materializes one disjoint initialized scalar object, then assumes the
   ordinary postconditions against that new heap.
+
+**Out-parameters.** `PassivizerImpl::tracksInitialization(ptr)` holds for a
+pointer with provenance and for one based on an out-parameter, by its source
+name or its entry version (`OutParameterVersions`; an out-parameter is never
+reassigned). A store through such a pointer sets its initialization bit, a
+loop that stores through one counts the initialization heap as modified (so
+its head keeps what was initialized, `initializationKept`, and assumes the
+invariants' definedness), `collectSafety` checks a load based on an
+out-parameter with `initialized_ptr` at its exact address
+(`initializedSafety` with the out-parameters, in and outside the object
+model), and `abstractValidity` keeps `initialized_ptr` on tracked storage
+instead of taking it as true. At a call, `initializesActuals` asks whether
+an out-parameter's argument is tracked in the caller; then, after the
+footprints are havocked, the initialization heap changes where the value
+heap does. A callee initializes storage only by storing to it, and each of
+its stores lies in its footprints, so when those are single cells
+(`havocFootprints` returns them) each cell's bit becomes `before[c] || w`
+for a fresh `w` (`initializeCells`) and every other address keeps its bit;
+a callee that writes nothing changes none. One whose footprints are ranges,
+regions, or the whole heap gives the heap a fresh version that keeps every
+initialized address (`initializationKept`), a quantifier: in the ULEB128
+case study, the postcondition query of `roundtrip_uleb128`, after a call
+that initializes `*consumed`, took 41 s with it instead of 3.3 s on Linux,
+and timed out on a three-core macOS runner. The postconditions are then
+assumed (with the generated `initialized_ptr` ones), and each postcondition's `initialization`
+checks, built with the callee's out-parameters and substituted at the
+arguments, are assumed after them with the call's origin. `collectModified`
+counts such a call in a loop as modifying the initialization heap.
+
+**Contract well-formedness.** Every contract clause must be defined where it is
+evaluated, as Dafny's per-method `CheckWellFormed$$f` procedure requires. Its
+definedness checks are the core ones (`collectSafety`) and, under
+`--check-ub`, the memory checks of the clause as written: `instrumentUBChecks`
+records them before spec inlining, as it checks the body's accesses, beside
+each written precondition and postcondition (`VFunction::PreconditionChecks`,
+`PostconditionChecks`), each loop invariant (`VWhileStmt::InvariantChecks`),
+and each `cppverify::check` (`VContractAssertStmt::MemoryChecks`). A read under
+`old` is checked in the entry state, a quantifier's body at every value of
+its range, and in a pre- or postcondition every parameter is its entry value.
+Checking the inlined clause instead would check a spec's own reads, though a
+spec is total, and repeat a lifted helper's argument reads for every use in
+its body. Cloning and loop unrolling copy the records; passivization joins
+each clause's memory checks to its core checks, one obligation per kind.
+
+`Passivizer::contract` builds a separate passive program, `f.contract`
+(identity `f::contract`), on the interface version of `f` (UB-instrumented,
+not spec-inlined: the one call sites use), so a lifted helper's checks are
+reported at its call. `enter` assumes only the generated preconditions
+(validity, separation, type invariants) and the entry facts; each written
+precondition then gets its definedness asserts and is assumed, in order, so
+each clause is checked where the ones before it hold. For an external
+contract (trusted, or without a definition, `IsExternalContract`)
+`returnAnywhere` makes the state callers assume: `havocFootprints`, the frame
+code `emitCallStmt` uses, over its own footprints, and a fresh result. The
+generated result validity is assumed, and each written postcondition is
+checked and assumed in turn. The postconditions of a verified body are
+checked in `run()` instead, in its final state, each clause's checks guarded
+by the clauses before it. Loop invariants and `cppverify::check` get their
+memory checks where they are checked.
 
 ## Layer 3: Canonical Obligation IR
 
 `buildObligationModule` is the only passive-to-logic lowering path. It folds the
 ordered `PassiveProgram` once and publishes:
 
-- a typed `LogicExpr` tree with explicit `Bool`, mathematical integer,
+- typed `LogicExpr` terms, whose subterms are shared (below), with explicit
+  `Bool`, mathematical integer,
   width-indexed bit-vector, pointer, heap-array, and collection (`seq`, `set`,
   `multiset`, `map`) sorts; integer sorts retain
   canonical signedness and originating C++ width for explicit mode conversion,
@@ -487,6 +890,44 @@ Construction returns `llvm::Expected`. A null, unhandled, malformed, or
 untyped term prevents publication of the module and is reported as `unknown`;
 it is never replaced by `true`.
 
+**Shared subterms.** A term owns its root and shares its subterms: the
+children and patterns of a `LogicExpr` are `LogicExprRef`s
+(`llvm::IntrusiveRefCntPtr<const LogicExpr>`, the count in the node), and no
+code changes a node once it is a subterm, which the type enforces. A copy
+(`cloneLogicExpr`) copies the root's fields and shares its children. So each
+obligation's goal states every assumption before it, its query negates the
+goal, and the complete goal conjoins the goals, all without copying them, as
+Verus's AIR shares `Arc<ExprX>`, Frama-C's Qed hash-conses its terms, and
+Lean shares `Expr`. A change below a root rebuilds only the path to it. The
+simplifier is copy-on-write and memoizes each subterm per module, so a
+subterm that many goals share is simplified once and stays shared; a reuse
+adds the rewrites its first simplification counted, so the reported
+statistics are those of the tree. The certifier's substitution, renaming,
+and witness analysis rewrite children the same way (`rewriteSlots`), copying
+a node only when a child changes. The one field written after a term is
+shared is a node's `Source`, a function of its `Loc` alone: annotation visits
+each node once and writes only a value that differs, so it never writes a
+node that an earlier, annotated module shares, which other threads may be
+reading. The caches keyed by a node's address hold what depends on the node
+alone, so sharing cannot make them answer for another place: the Z3
+encoding (a variable is encoded by its name, and the traversal keeps no
+scope), the certifier's cost estimate, and the Lean printer's `let`s, which
+name a shared subterm of a statement once. Every hash, archive, and Layer 3
+and 4 dump is what it was with copies (checked on every Verify source), and
+the Lean exports state definitionally equal goals.
+
+Before 0.2 every copy copied the whole term. Each obligation's goal repeated
+its assumptions, and its query, the complete goal, and the complete query
+repeated those, so memory grew with the number of obligations times what
+came before them: lowering the ULEB128 case study took 12.8 GB of address
+space and 53 s, verifying it 14.9 GB with eight jobs (`--jobs=8`, more than
+a 16 GB CI runner holds beside the tests running with it), and lowering
+`safe_fib.cpp` 4.7 GB and 16 s. They now take 0.43 GB and 10 s, 0.9 GB, and
+0.35 GB and 7 s. The goals still repeat their assumptions as trees, so a
+traversal that does not memoize (validation, hashing, serialization) still
+takes time quadratic in a function's length; hash-consing the terms and
+memoizing those traversals would make it linear.
+
 **Size.** Each obligation's goal is its condition under a negated copy of
 every assumption before it, so a module grows with its obligations times
 the assumptions before them. Its node count, as `obligationModuleNodeCount`
@@ -511,7 +952,8 @@ canonicalization step before hashing or backend dispatch. The pass folds only
 sort-preserving Boolean constants, double negation, constant conditionals, and
 reflexive equality/inequality. It simplifies owned finite-fuel definitions and
 removes logical declarations unreachable transitively from every ordered
-obligation. It then rebuilds each exact counterexample negation, the complete
+obligation, a declaration reaching what its definition and its termination
+measures apply. It then rebuilds each exact counterexample negation, the complete
 ordered goal/query, and required feature set before revalidation. Arithmetic,
 quantifiers, pointer/heap terms, and assumptions are not rewritten. Layer 3
 reports before/after node counts, rewrite count, and removed declarations for
@@ -555,6 +997,18 @@ Terms added for the R3 language features:
   broke the axiom of a choice applied only inside an unfolding certified
   false counterexamples. A claim true only for some choices still fails
   certified, with choices the axioms allow.
+  A choice is a function of the values its condition reads, so the same
+  choice in two memories is one value where those values agree: for each
+  application of a choice that reads memory and each step back from its
+  memory, `addFrameInstances` assumes `agree -> c(after) == c(before)`, where
+  `agree` (`choiceReadsAgree`) says that every load of the condition, at
+  every binder value where it is evaluated and with its address read in
+  each memory, and every application in it that reads memory, has the same
+  value on both sides. The certifier holds a model to the same rule: two
+  values of one choice with the same other arguments are evidence only when
+  some value the condition reads differs between the memories
+  (`readsApart`, a formula that follows the condition's evaluation order),
+  and otherwise the counterexample is unchecked.
 - A comparison between a machine and a mathematical operand is lifted to
   the integers when the mathematical side mentions a quantifier binder or a
   collection, and otherwise split by range so the machine side keeps its
@@ -568,7 +1022,7 @@ and obligation kinds.
 ### Canonical archives and semantic identity
 
 `--obligation-out=FILE` writes one or more deterministic
-`cppverify.obligation/2` records after source attribution. The binary format has
+`cppverify.obligation/3` records after source attribution. The binary format has
 the `CPVOBL\r\n` magic, an explicit schema version, little-endian fixed-width
 integers, length-delimited strings/collections, and stable hand-assigned wire
 tags rather than C++ enum ordinals. The reader bounds strings, collections,
@@ -581,10 +1035,20 @@ which tag 6, the former sequence update, is reserved); the collection sorts
 `seq`, `set`, `multiset`, and `map` have sort tags 6 to 9. Trigger patterns
 and the `Choice` marker of a logical function are not archived, so a
 replayed module instantiates quantifiers by the solver's own patterns and
-treats a choice as an ordinary uninterpreted function.
+treats a choice as an ordinary uninterpreted function. A logical function's
+`Decreases` follow its definition levels, and with source metadata the
+`Premise` of each `Or` follows its source point; neither is hashed. A
+measure is validated like a definition (an integer over the parameters,
+every call resolved): it changes no meaning, since Lean proves a
+definition's termination itself and an induction descends by a
+well-founded relation whatever the measure, and canonicalization keeps the
+functions a measure applies, so a module never names one it does not
+declare. Before, a spec only a measure applied was removed, and the
+measure could not be printed.
 
-Schema v2 adds the precise obligation kinds and still reads schema v1, whose
-records name only assertions, postconditions, and unwinding checks. Records
+Schema v2 adds the precise obligation kinds, and schema v3 the measures and
+premises; readers still read schema v2 and schema v1, whose records name
+only assertions, postconditions, and unwinding checks. Records
 limit strings to 64 MiB, collections and expression
 nodes/edges to 100,000 per record, expression nesting to 4096, canonical
 integer numerals to 4096 decimal characters, and integer sorts to 4096 bits.
@@ -596,8 +1060,9 @@ that are not the conjunction of their ordered obligations.
 
 Every module and individual obligation has a SHA-256 semantic hash. Semantic
 hashes omit source paths, display-only function names, internal positional
-or public source-anchored obligation IDs, and every obligation kind except
-`unwinding` (the only kind that changes result semantics), so moving identical
+or public source-anchored obligation IDs, measures, premises, and every
+obligation kind except `unwinding` (the only kind that changes result
+semantics), so moving identical
 C++ source or
 inserting an unrelated earlier obligation does not invalidate an individual
 goal's proof identity. Per-obligation hashes include only the transitive
@@ -618,6 +1083,7 @@ cpp-verify --obligation-in=goals.cpv --backend=z3
 cpp-verify --obligation-in=goals.cpv --backend=portfolio
 cpp-verify --obligation-in=goals.cpv --lower-only --dump-ir=3,4
 cpp-verify --obligation-in=goals.cpv --backend=lean --lean-out=goals.lean
+cpp-verify --obligation-in=goals.cpv --lean-project=proof --lean-certify
 ```
 
 Replay treats decoded records as untrusted input: validation happens before
@@ -633,13 +1099,33 @@ f (dependencies not checked in replay)` (JSON status `proved-obligations`),
 never `Verified`. A counterexample is still a failure: postconditions are not
 archived either, so replay certifies it by the definitions alone.
 
+With `--lean-project`, `replayLeanProject` (`Verifier.h`) exports every
+module through the project adapter and drives the same `LeanProject` a
+source run does: the modules and the spec trial, regeneration with moves
+and quarantine, automation, and with `--lean-certify` certification. The
+goals have the names, files, and proofs the same obligations have from
+source (both name a goal by its statement), and `Specs.lean` the same
+definitions, since the measures are archived; a readable goal names the
+same hypotheses, since the premises are. A module whose goals all certify
+is `Verified` there, printed `Proved obligations ... [backend=lean]`, never
+`Certified`, which claims the dependency fixpoint.
+
 BMC-produced modules retain the unroll bound as semantic transform provenance.
 Replay aggregates those modules with BMC unwinding semantics even when Z3 is
 the selected solver, so an exhausted frontier remains `BoundedSafe(N)` rather
 than becoming an ordinary program failure or an unbounded proof. Applying BMC
 to an untransformed archive is rejected because loop unrolling must precede
-obligation construction. Lean scratch export of a bounded archive is also
-rejected until bounded theorem provenance is represented in generated Lean.
+obligation construction. Lean exports a bounded module, to the scratch-pad
+or a project, with its bound stated over its goals (`/- bound: N loop
+iterations, by unrolling: ... -/`), and `LeanProjectGoal::Unwinding` marks
+its unwinding goals: every goal certified is `Verified` (`Proved
+obligations`, `bound=N`), every goal but some unwinding goal certified is
+`BoundedSafe` (`bmc.incomplete-bound`), else `Unresolved`. Lean proves and
+never refutes, so its `BoundedSafe` says that the unwinding goals are not
+certified, where BMC's says that they fail; both claim what the safety
+goals state, no failure in an execution within the bound, and reporting
+the unproved unwinding unresolved would leave Lean no bounded verdict for
+a module whose unwinding fails, the case BMC is for.
 Failure-triggered `cppverify::recommends` diagnostics are excluded from archives, keeping
 archive contents independent of solver outcomes.
 
@@ -682,7 +1168,7 @@ canonical module that lower-only and the selected backend consume.
 | Cast(inner, Int32, Int64) | math mode: identity — BitVec mode: `(sign_ext 32 inner)` |
 | Cast(inner, UInt32, UInt64) | math mode: identity — BitVec mode: `(zero_ext 32 inner)` |
 | Load(p, T) | `(select mem_k p)` for the current heap version k |
-| Forall(x, lo, hi, P) | `(forall ((x Int)) (=> (and (<= lo x) (< x hi)) P))` — bound is the implicit trigger |
+| Forall(x, lo, hi, P) | `(forall ((x Int)) (=> (and (<= lo x) (< x hi)) P))`; marked triggers become `:pattern`, and otherwise Z3 chooses the patterns |
 | Forall(x, P) | `(forall ((x Int)) P)`; marked triggers become `:pattern`, and the quantifier id is `q@line:col` |
 | HeapFrame(h, h', lo, hi, ...) | `(forall ((a Int)) (or (and (<= lo a) (< a hi)) ... (= (select h' a) (select h a))))` |
 | `s[i]` | `(cppverify.seq_at s i)`, see below |
@@ -1424,10 +1910,431 @@ unsound; they decide only where the module's facts can meet the premises.
 The tests `depth_below_zero` and `total_of_negatives` are true claims that a
 lemma used without such a premise would refute: they stay unresolved.
 
+## Lean Encoding
+
+The Lean adapter (`Backend/LeanBackend.cpp`) prints the canonical module as
+Lean 4 propositions that mean what the module means, so a kernel-checked
+proof of a printed goal is a proof of its obligation.
+
+| Logic sort | Lean type |
+|---|---|
+| `Bool` | `Prop` |
+| `MathematicalInteger`, `Pointer` | `Int` |
+| `BitVector(N)` | `BitVec N` |
+| `Heap` | `CppHeap` (`Int -> Int`) |
+| `Seq` | `List Int` |
+| `Set` | `Int → Bool`, its membership test |
+| `Multiset` | `Int → Nat`, its counts |
+| `Map` | `Int → Option Int`, the value at each key it holds |
+
+- **Precedence.** Each operator is printed at its Lean notation level
+  (`Init/Notation.lean`, `Init/Core.lean`), and an operand that binds looser
+  than its position is parenthesized: `↔` 20, `→` 25, `∨` 30 and `∧` 35
+  (right-associative), `¬` 40, comparisons 50, `|||` 55, `^^^` 58, `&&&`
+  60, `+` and `-` 65, `*` 70, `<<<` and `>>>` 75 (left-associative), and a
+  function argument an atom. A quantifier or `if` extends as far right as it
+  can, so it is parenthesized everywhere but at the top of its context.
+  Before 0.2 the adapter used a table of its own: `(a ^ b) + 1` printed as
+  `a_0 ^^^ b_0 + 1`, which Lean reads as `a ^^^ (b + 1)`, and a Lean proof
+  certified a false check; a quantifier took the rest of the goal into its
+  body.
+- **Numerals** have their types: `(3 : Int)` for a mathematical integer or
+  a pointer, `(BitVec.ofInt 32 (3))` for a machine value. Lean elaborates a
+  term of untyped numerals in `Nat`, where `2 - 3` is 0: before 0.2 a Lean
+  proof certified `cppverify::check(2 - 3 == 0)`.
+- **Booleans** are propositions: equality is `↔` and inequality `¬(a ↔ b)`,
+  the form `simp` normalizes an equality of propositions to (`eq_iff_iff`),
+  which a proof can use without `propext`.
+- **Division.** Machine division is SMT-LIB's, as in the solvers and the
+  certifier: `BitVec.smtUDiv` (all ones at a zero divisor) and
+  `BitVec.smtSDiv` (`-1` or `1` by the dividend's sign); Lean's `udiv` and
+  `sdiv` give 0 there. The remainders `BitVec.umod` and `BitVec.srem` agree
+  with SMT-LIB. Mathematical division and remainder are the prelude's
+  `cppIntDiv` and `cppIntRem`: truncating, with quotient 0 and remainder the
+  dividend at a zero divisor.
+- **Shifts.** A left shift is `x <<< min (s).toNat N`, which has the value of
+  `x <<< (s).toNat`: Lean's evaluator computes `2^amount` and panics on a
+  64-bit amount. A signed right shift is the application
+  `(BitVec.sshiftRight x (s).toNat)`.
+- **Definition instances.** A goal's hypotheses state the definition levels
+  of each spec application it makes, as the solvers receive them. One under
+  quantifiers is stated for every value of the binders it mentions,
+  `∀ (k : Int), f k = body k`, a theorem since the definition holds at every
+  argument; before 0.2 it named the binder outside its quantifier, and the
+  export did not build.
+- **Evaluation.** The prelude's comparison wrappers (`cppBvUlt`, `cppBvUle`,
+  `cppBvSlt`, `cppBvSle`) and `heapSelectBool` are `abbrev`s, so instance
+  search sees the Boolean comparison beneath them and `decide` evaluates them
+  at constants; as `def`s they had no `Decidable` instance outside the
+  generated file. Its `local instance` of `Classical.propDecidable` serves
+  only the `if`s of generated definitions whose condition has no decision
+  procedure; Lean's instance search already tries a specific instance before
+  it.
+- **Collections.** Each operation is a prelude function
+  (`LeanCollectionPrelude`), `cppSeqAt`, `cppSetInsert`, `cppMapGet`, ..., with
+  the total meaning of `<cppverify.h>`: a read outside a sequence or a map's
+  domain is 0, a subrange clamps `lo` into `[0, len]` and `hi` into
+  `[lo', len]`, a multiset removal of a count of 0 leaves 0 (`Nat`
+  subtraction). A set is its membership test rather than a finite set, since
+  a set may be infinite (Vermilion's mirror of vstd uses Mathlib's `Finset`,
+  for finite sets only). The three membership predicates are `def`s with
+  `Decidable` instances, not `abbrev`s: as `abbrev`s, the Boolean lemmas of
+  `cppverify_norm` rewrote `cppSetContains s x` to `s x = true`, and the
+  lemmas stated on `cppSetContains` no longer matched. As Vermilion states
+  its vstd operations, the prelude states each operation's meaning in
+  `@[simp, grind =]` lemmas (`cppSeqAt_push`, `cppSetContains_remove`,
+  `cppMultisetCount_remove`, ...), with `grind_pattern`s for the facts that
+  lengths and counts are not negative (grind's own pattern for `0 ≤ count m
+  x` is the inequality, which no goal contains), and extensionality lemmas
+  (`cppSeq_ext`, `cppSet_ext`, `cppMultiset_ext`, `cppMap_ext`); all of them
+  are theorems of the definitions, so no goal rests on them.
+
+`CertifyTest.AgreesWithLeanEvaluation` checks the agreement in the pinned
+Lean. The value the certifier computes for each ground term is a theorem Lean
+proves by `decide`, and a corrupted value one whose negation it proves, for:
+240 random terms (machine, mathematical, Boolean, and Boolean equalities);
+every machine operator and `if` inside every other, on either side, at 8
+bits signed and unsigned, every mathematical operator inside every other, and
+every connective inside every other at all eight assignments of its operands,
+so that a lost parenthesis changes a value; and every operator at the extreme
+operands of widths 1, 8, and 64 (a zero divisor, `INT_MIN / -1`, a shift past
+the width, each overflow predicate); and for collections, 80 random chains of
+operations read by length, index, membership, count, and key, 20 equalities
+of sequences, and each operation where it matters (every clamp of a
+subrange of `[1, 2, 3]`, membership of an element inserted and removed, each
+combination of two sets, a multiset removal of a count of 0, 1, and 2, a key
+written over and removed). Printing set removal as insertion fails it.
+`lean_collections.test` exports a function over each kind, certifies their
+automatic proofs and a proof by hand of `total(s.push(x)) == total(s) + x`,
+and keeps a false claim unproved. `lean_semantics.cpp` checks the printed
+forms, builds an export, certifies a goal whose proof needs the quantifier
+closed and `decide` on a comparison, refuses proofs that read `(a ^ b) + 1`
+as `a ^ (b + 1)` or `2 - 3` in `Nat`, and its probe file
+(`Inputs/lean_semantics_probe.lean`) states the prelude's values where C++,
+SMT-LIB, and Lean's own operators differ.
+
+### Project goals and their proofs
+
+A project names nothing by position, so that a proof keeps every name it
+uses when the source around it changes. `LeanProject` (`Verifier.cpp`) owns
+a project: its modules, its proof files, automation, and certification,
+reporting what it warns of to its caller; a source run and an archive's
+replay both drive it.
+
+- **Names.** A module's goals form a group, `cppverify_<function>_<h6>`
+  (`leanProjectGroup`), `h6` from the MD5 of the function identity, which
+  tells overloads apart. A goal is `<group>_<kind>_<h8>`, `h8` the first
+  eight digits of `obligationStatementHash`: SHA-256 over the obligation's
+  semantics and the logical declarations it reaches, in the domain
+  `cppverify-obligation-statement` version 1, without the function identity
+  that the semantic hash includes, so a renamed function's goals keep their
+  hashes. Goals of one group with one hash get `_2`, `_3` in source order,
+  numbered over every obligation of the module whichever are exported. Spec
+  bodies are `cppSpecBody_<h8 of the identity>_...`. Before 0.2 a goal was
+  `..._obligation_<N>`, its position among the function's obligations, a
+  body `cppSpecBody_m<module index>_...`, and its proof
+  `Proofs/Goal_<md5 of the name>.lean`: reordering two postconditions gave
+  each proof the other's goal, and inserting a function renamed the bodies
+  every later proof used.
+- **Modules.** The adapter writes a project's goals by group
+  (`LeanProjectModules`): the goals, readable forms, bridges, and spec
+  bodies of each function go to `CppVerify/Goals/<group>.lean`, which
+  imports `CppVerify/Specs.lean`, where `emitLeanFunctionDeclarations`
+  declares each spec the run's modules apply once (`opaque
+  cppSpec_<identity>`). Two goal modules that declared one spec would clash
+  when imported together, and Lean 4.35's import keeps one of two differing
+  declarations without a word. The prelude is `CppVerify/Prelude.lean`, and
+  `CppVerify/Generated.lean` imports every goal module, so a `User.lean` of
+  0.1, which imports it, still sees every goal. A proof imports its goal
+  module, `User` (which a new project starts with `import CppVerify.Specs`),
+  and `Auto` (which imports `Prelude`); `CppVerify.lean`, the library's
+  root, imports `Check`, so `lake build` builds every proof (before, the
+  library had no root and `lake build` failed). Every file is written only
+  when its text changes (`writeTextFileIfChanged`), and
+  `writeLeanProjectModules` removes every goal module the run did not
+  write: a fallback run rewrites `Specs` with the specs of the modules it
+  exports, and a module it kept from an earlier run failed (`Unknown
+  identifier cppSpec_...`).
+- **Spec definitions** (`leanSpecDefinition`, `leanSpecsText`,
+  `tryLeanSpecs`). The adapter gives each logical function of a project its
+  opaque declaration and, unless it is a choice, has no step definition, or
+  recurses without `Decreases` (an archive's), a candidate definition: the
+  step definition printed with the recursion's applications by name and no
+  temporaries (a hoisted application would lose its guard), in definition
+  mode (`LeanDefinitionMode`), where each `ite` is `if _h : c`, a
+  conjunction or disjunction whose later operand applies a spec is a
+  dependent `if` (`a ∧ b` -> `if _h : a then b else False`, `a ∨ b` -> `if
+  _h : a then True else b`, `¬a ∨ b` -> `if _h : a then b else True`), and
+  a bounded existential over one guards its body by its range, each a
+  classical equivalence; then `termination_by ((m1 + 1).toNat, ...)` and
+  `decreasing_by all_goals cppverify_decreasing` (a prelude macro: `simp_wf;
+  omega`, then with the collection and comparison wrappers unfolded, then
+  with `cppIntDiv` and `cppIntRem` unfolded and their conditions split, so
+  that a measure falling by a constant divisor is linear (`log2(n / 2)`),
+  then `simp_all; omega`, then `decreasing_tactic`). `(m + 1).toNat` decreases
+  exactly where the termination check's relation does (`upper >= 0 &&
+  lower < upper`, lower possibly -1); Vermilion instead guards the whole
+  body by `0 ≤ measure`, which changes the value where the measure is
+  negative and the body does not recurse. The driver groups the functions
+  by the strongly connected components of their applications (Tarjan,
+  callees first), each group one `mutual` block, and decides each from
+  `.cppverify/specs/<key>`, the key the SHA-256 of the toolchain,
+  `LeanSpecRevision`, the group's text, and what each callee group is. The
+  rest it tries in one Lean file importing `Auto`, the others as decided,
+  undecided callees as definitions, `#cppverify_axioms` after each member:
+  a definition Lean rejects is added with `sorryAx`, or not at all. A
+  group's verdict is kept only when each callee tried in the same round was
+  accepted; else it is tried again with the rejected callee opaque, until
+  nothing changes. No Lean: undecided groups are opaque and nothing is kept.
+  `Specs.lean` has the groups in that order, and its definitions use the
+  classical decidability instance locally. Statements do not change: a goal
+  states the same definition instances, which a definition makes theorems.
+- **Records.** The exporter returns a `LeanProjectGoal` for every
+  obligation of each module it exports, those a fallback selection leaves to
+  the solver marked `Exported = false`, with the 0.1 names of the goal and
+  its bodies. A proof file starts with a header the driver reads back
+  (`readLeanProof`): the goal, the stable obligation id, the full hash, the
+  body prefix, and the source, escaped as a Lean comment must be.
+- **Regeneration** (`finalizeLeanProject`) reads the records of
+  `CppVerify/Proofs/` and `Stale/` and gives each exported goal, in name
+  order: the file at its path; else a record with its name, wherever it is
+  kept; else a record of the same hash whose goal is gone, from the group
+  with records of the most of this group's hashes (a renamed function's goals
+  move together), in path order; else the 0.1 file of its 0.1 name; else a
+  stub. A move strips the header, the notes, and the 0.1 comment, renames
+  the goal and the bodies throughout the text, and writes a new header. A
+  headerless file at a goal's path, a proof written over its stub, gets the
+  header. A stub never edited (`Pristine`) is never moved and is removed
+  when its goal is gone, as are unedited 0.1 stubs; any other record no goal
+  took is renamed into `Stale/` with a note: its statement changed (a goal
+  has its stable id), its function has no obligation with its statement, or
+  its function is gone. `--lean-prune-stale` then removes `Stale/`. Emptied
+  directories are removed, and `Check.lean` imports the exported goals.
+- **Fallback runs** examine only the modules their solver leaves
+  unresolved. The driver records the group of every function and
+  termination module it gives the solver (`LeanRunGroups`); a record whose
+  group is among them but has no goal this run, or whose goal the run knows
+  but does not export, is left where it is and never moved.
+- **Refutations.** Where the adapter attributes a certified counterexample
+  to an obligation, it keeps the model's value of every free variable of
+  that obligation's goal (`counterexampleAssignment`, read through the
+  certifier's `CandidateModel::constant`, so the values are the ones it
+  evaluated; `VerifyResult::Assignment`). A fallback run turns each such
+  failure into `exportLeanRefutation`'s module, which states the goal and
+  the bodies it unfolds as the project would (its specs added to `Specs`,
+  so the trial may define them), then `theorem <goal>_refuted : ¬ <goal>`:
+  the goal applied to the values in the order it binds its variables
+  (machine integers as `BitVec.ofInt`, a heap or collection by its runs of
+  equal cells as nested `if`s), and closed by `cppverify_refute`, an
+  `Auto.lean` tactic that tries `decide`, then evaluation by the bodies,
+  the spec equations (which prove the definition instances the goal states),
+  memory reads, and machine comparisons, closed by `decide` or, for a store
+  relation, which quantifies over every address, `grind`. When both fail it
+  tries to show the instance true, in a context without the goal (which
+  would prove any instance of itself): Lean deciding it true fails with
+  `Lean decides the goal true at the counterexample`, else with `Lean cannot
+  decide the goal`. Each attempt, and that probe, has `cppverify.autoBudget`
+  heartbeats of its own (`withinBudget`, as a step of `cppverify_auto`), and
+  the module lifts the heartbeat limit for the goal's definitions only, so
+  the theorem keeps Lean's limit, which bounds the kernel's check of it too:
+  with no limit, the refutation of an inductive predicate applied at -5000
+  ran for over an hour. The prelude decides a quantifier over a
+  range of at most 4096 integers, as many as the certifier expands
+  (`CertifyLimits::DirectExpansion`), by trying each one
+  (`cppIntBallDecidable`, `cppIntBexDecidable`, through core's `Nat` ones),
+  and a larger range has the classical instance, which `decide` cannot
+  evaluate. Each integer is a level of recursion whose memory heartbeats do
+  not count, and the generated files allow a depth of 100000: before the
+  bound, refuting `forall(i, 0, 1000000000, i < 999999999)` took one Lean
+  process 58 GB (16 GB for a range of 16000, which also spent the step's
+  heartbeats; 1.9 GB for one of 1000), and CI's 16 GB runners were shut down
+  (`lean_refutation_memory.test`, Linux, keeps it below 4 GB). `writeLeanRefutations`
+  writes `Refutations/<group>/<goal>.lean` and removes every other, and
+  certification builds them beside the proofs and gives the checker each as
+  a `refutation` entry, whose theorem must state exactly `Not <goal>` of the
+  goal its module defines, with Lean's foundations alone. Once the verdicts
+  settle (a failure checked with a spec postcondition that is not
+  established is `spec.post`), the driver marks each failure that stands and
+  was confirmed (`LeanRefuted`, JSON `lean_refuted`), warns of one Lean
+  cannot decide, and makes one Lean decides true `Unresolved`
+  (`InconsistentBackendResults`): two evaluators of one goal disagree, so
+  the failure is not a fact. On the gate's matrix every certified failure is
+  refuted; a goal applying an opaque function (a choice, `validPtr`) is not.
+
+- **Readable goals.** `makeGoal` (`Obligation.cpp`) marks each `Or` it
+  builds, `!A || rest`, with where `A` comes from (`LogicExpr::Premise`,
+  like `Patterns` outside the term's meaning and its hash, kept by the
+  clones, the in-place simplifier, and archives of schema 3, so a replayed
+  goal names the same hypotheses). The passivizer records
+  the origin of every assumption it emits (`PassiveStmt::Origin`, from a
+  current origin each statement kind sets and its parts refine:
+  `def`, `call:f`, `inv`, `cond`, `exit`, `keep`, `exact`, `check`,
+  `spec:f`, ...) and of each entry assumption (`PassiveProgram::EntryOrigins`:
+  `pre` for a written precondition, `entry` for a generated one, `null`,
+  `object`); a contract's check that it is defined (`Passivizer::contract`)
+  labels each clause it assumes once shown defined `pre` or `post`, and the
+  state a function without a verified body returns in `ret`; spec checks
+  built elsewhere default to `fact`. The Lean adapter
+  peels the marked chain into `G.readable`: `∀ vars axioms, let …; (h_pre_1
+  : A1) → … → C`, a hypothesis being the operand its `Or` negates (or `¬B`
+  where simplification folded `¬¬B` to `B`), named `h_<origin>_<n>`, a
+  definition `h_<variable>`, never a binder's name; its `let`s are the large
+  subterms of the hypotheses and the conclusion. The bridge
+  `G.of_readable : G.readable → G` is a term, one prelude lemma per
+  hypothesis (`cppverify_imp_or : (a → b) → ¬a ∨ b`, or
+  `cppverify_not_imp_or : (¬a → b) → a ∨ b`), so the kernel checks with
+  the goal module that the readable form implies the goal: a printer bug in
+  it fails the build, never certifies. `LeanProjectGoal::Intros` gives the
+  stub its `intro` list. On the 375 suite exports, the 351 that built
+  before still build, with every bridge.
+
+- **Automation** (`automateLeanProject`, after `finalizeLeanProject`). Every
+  export writes `CppVerify/Auto.lean` (`LeanAutomation.h`): the tactic
+  `cppverify_auto`, a ladder of steps (`cppverify_auto_grind`, `_heap`,
+  `_bv`, `_decide`, `_simp`) as Vermilion's discharger is, each run with a
+  fresh heartbeat budget (`cppverify.autoBudget`, 50000), counting only when
+  it closes the goal with a proof whose axioms are Lean's foundations
+  (`collectAxioms` of every constant it uses), and rolled back otherwise,
+  runtime exceptions included. Each step first unfolds a goal left as its
+  readable form (one without binders); `_heap` turns every `heapStore*`
+  equation into the function it defines and substitutes it; `_bv` and
+  `_heap` rewrite the machine comparisons, constants, and overflow
+  predicates into integer facts before `grind`. The steps and their order
+  come from a probe of every goal the suite exports (9830): of the 5740 that
+  Z3 proves, they prove 90.2%. Stating the range of every `BitVec.toInt`
+  term first proved nothing more (`grind` knows the ranges), and removing
+  `Int.bmod` with an `omega` discharger proved 32 fewer and took longer, so
+  neither is a step. Revision 2 (`LeanAutomationRevision`) appends three
+  steps after the others, so that every goal an earlier step proves keeps
+  its proof: `_bveq` states equalities of machine values and sign extensions
+  as integer facts too (`← BitVec.toInt_inj`, `toInt_signExtend_of_le` with
+  `omega` for its side condition); `_ext` applies a collection's
+  extensionality lemma; `_unfold` delta-expands the generated spec bodies
+  (`cppverify_unfold_bodies`, every constant named `cppSpecBody_…`, to a
+  fixed point, since a body names only lower levels of its definition) in
+  the goal and its hypotheses, so each definition instance says what the
+  body does, then as `_bveq`. Tagging the bodies for `grind` instead would
+  have changed what every earlier step does. `_bveq` is not subsumed by
+  `_unfold`: on the 37 goals of `roundtrip_uleb128` (`llvm_uleb128.cpp`)
+  unfolding the lifted helpers' bodies exhausts the heartbeats, and `_bveq`
+  proves them. Over the same exports (375 sources, 9259 goals), of the 5582
+  that Z3 proves revision 1 proves 5044 (90.4%) and revision 2 5210
+  (93.3%), none fewer; of the 112 over collections, 86 and 104. A goal
+  neither proves now takes 2.8 s on average instead of 1.4 s. Revision 3
+  appends `_eval`, which rewrites with the equations of every spec that
+  `CppVerify.Specs` defines (`cppverify_eval_specs`, from that module's
+  constant names), and with `cppIntDiv` and `cppIntRem`, and closes goals
+  at known arguments; on unknown ones it unfolds until its budget is spent.
+  It then appends `_div`, `grind` given the definitions of `cppIntDiv` and
+  `cppIntRem`, which decides a mathematical division or remainder by a
+  constant once their conditions are split; `_eval` fails without a spec
+  definition, and a contract such as `a / 2 >= 2` needs no spec.
+  Over the same exports, of the 5582 goals Z3 proves revision 2 proves
+  5210 (93.3%) and revision 3 5301 (95.0%), none fewer, and of all 9259
+  goals 8078 and 8194; in the five sources with the most new proofs, 48 of
+  their 61 are `_div`'s (pointer differences divide by the element size,
+  and binary search halves an interval) and 13 `_eval`'s (the factorial
+  constants of `mvp_factorial.cpp`). A goal neither proves takes 4.4 s on
+  average instead of 3.1 s. The trial makes 213 of the suite's 293 spec
+  functions definitions; of the 80 opaque, 69 have no definition to try
+  (20 choices, 47 heights and witnesses of inductive predicates, 2
+  `unspecified` functions), and 11 do not terminate, or terminate only by
+  their own postcondition or a choice's axiom. Its first ladder missed
+  three that terminate by C++ division (`log2(n / 2)`), since `omega` does
+  not see through `cppIntDiv`.
+  Heartbeats alone did not bound the time, since a kernel check is not
+  counted. The trial takes every exported goal whose proof file
+  is pristine and whose header (`automation:`) names no attempt by the
+  current `LeanAutomationRevision`, builds `Generated`, `User`, and `Auto`
+  with the pinned toolchain, and runs `lean` itself (with the `LEAN_PATH` of `lake env`, so a
+  stopped process leaves no child) on a file of one theorem per goal, in
+  `--jobs` chunks. Lean reports to a file, line by line: the step that
+  proved each goal, then the axioms of its theorem or that the kernel
+  rejected it (its messages, written by a thread of its own, are buffered and
+  lost when it is stopped). A goal that takes longer than
+  `--lean-auto-timeout`, or stops Lean, is not proved, and the goals after it
+  start again in a new process. Each goal then gets the step that proved it
+  (an automatic proof, pristine like a stub) or a stub whose header records
+  the attempt. An export's `LeanAutomatic` counts its goals with automatic
+  proofs. Without the toolchain nothing is tried.
+- **Certification** (`certifyLeanProject`) builds `Generated`, `User`, and
+  `Auto` with Lake, then each proof file with `lean -EhasSorry`, `--jobs` at
+  once, unless its key is unchanged (`leanProofKey`: SHA-256 of the
+  toolchain, the proof's text, and the bytes of the `.olean` of every project
+  module in its import closure, read from the `import` lines of their
+  sources; written to `.cppverify/built/<goal>` after a build, and removed
+  with the `.olean` before one). Lake cannot tell this itself: when a
+  dependency fails it names only the dependency, and a dependent's `.olean`
+  of an earlier build stays, so a proof the user broke would certify from
+  its old `.olean`. It records the goals whose proofs do not build and runs
+  the checker of
+  `LeanCertifier.h`, written into the project as `.cppverify/Certify.lean`,
+  with `lake env lean --run` over the goals that built. The checker
+  elaborates none of the user's source, so their macros and commands cannot
+  change what it checks. It reads, from their compiled files, the goal
+  modules the goal list names, every proof module, and every module of the
+  project they import (its `.olean` lies outside the toolchain), imports the
+  toolchain modules among their imports once, and replays the project's
+  modules through the kernel into that one environment, each after the
+  modules it imports and the goal modules first, as `leanchecker` does. A
+  module the kernel rejects, a module that imports one, and a module that
+  declares a constant an earlier module or the toolchain declares otherwise
+  are left out, each with why; a constant two modules declare alike (an
+  equation lemma Lean derives in each, a theorem stated the same, which the
+  kernel's replay takes twice) is the same. So a proof file that declares a
+  goal's name is the one left out (`... declares G, which
+  CppVerify.Goals.<function> declares`), and a bad module fails only the
+  goals whose proofs import it. Every check reads the kernel's constants and
+  the module that declared each, so proofs cannot change each other's
+  checks: a goal passes when its proof module and its goal module were
+  replayed, `G_proof` is a theorem of type exactly `.const G []` with `G` a
+  definition of its goal module, and the axioms its kernel constants reach
+  are allowed; every goal fails when a declaration of `CppVerify.User`
+  depends on `sorryAx` (`userSorry`; before, `User` was compiled with `sorry`
+  an error); it prints `ok` or `fail` with the reason per goal. One import
+  matters because an automatic proof imports `Lean`: a check per goal took
+  161 s for 33 goals (now 8 s), and the first 0.2 checker, which fell back to
+  it when one module failed, imported each proof module and the imports of
+  each module it replayed again, never freeing imported data, which took
+  13 GB for one proof through a rejected module (now 3.6 GB,
+  `lean_certifier_memory.test`) and stopped CI runners. Each Lean result
+  records its goals (`VerifyResult::LeanGoals`), and a function is
+  `Certified` only when all of them pass; a failure names the obligation.
+  Before 0.2 certification parsed what `Check.lean` printed, which imports
+  the user's modules: macros there certified proofs of `True`, and so did a
+  theorem added with `debug.skipKernelTC`.
+
+`lean_certifier.test` checks each of those attacks, a proof file that defines
+a goal of the same name of its own (the type check alone would take it), a
+proof that does not build, and an axiom behind a lemma, with a function whose
+proofs are sound certified beside each; `lean_certifier_memory.test` bounds
+the checker's memory where a proof imports `Lean` through a module the kernel
+rejects. `lean_readable.cpp` checks the readable form of each kind of assumption,
+the bridge, the stubs (every one builds), a proof by hypothesis names that
+certifies, and a readable form that says less than its goal, which fails at
+its bridge. `lean_automation.test` checks what an export writes (an automatic
+proof, a stub that records the attempt, a goal stopped at the time limit with
+the goals after it still tried), certification of both, that nothing is
+tried again, that an edited proof is kept, that a stub of no attempt or an
+earlier revision's is tried, that a step proving a goal with the user's
+unfinished lemma does not count, and `--no-lean-auto`. `lean_identity.test` walks one project through each case (insertion and
+reordering, renames of two functions at once, a changed statement, a removed
+function and its return, fallback runs, pruning, and a 0.1 project with
+proofs, stubs, and a proof of a goal that is gone) and certifies it after
+the renames and the migration. `lean_modules.test` checks the layout (a
+spec declared once for two goal modules certified together, a proof's
+imports, a new `User`), that a rerun writes no file, that a change to one
+function compiles only its goal module, `Generated`, and its proofs again,
+`lake build`, that a deleted function takes its module, a 0.1 `User.lean`,
+and a fallback run that keeps no goal module.
+
 ## Counterexample Extraction
 
 When Z3 returns SAT, CppVerify evaluates source-attributed SSA variables without
-model completion. Diagnostic metadata supplies the original display name,
+model completion. A local declared where its name is already taken in the
+function (by a parameter, or by a local of an enclosing or earlier scope) is
+`x#2`, `x#3`, ... in VCR (`ASTConverter::LocalNames`), so SSA keeps the
+variables apart, and its display name stays `x`. Diagnostic metadata supplies the original display name,
 exact logic sort, internal SSA identity, and declaration range. Signed and
 unsigned bit-vectors are rendered as source-level decimal values, and
 collections as their elements, members, counts, or entries in order, a run of
@@ -1453,11 +2360,31 @@ Clang-style text; `--diagnostics-format=json` emits one
 `cppverify.diagnostic/1` JSON object per verification result, including source
 ranges, typed model values, trace events, backend/bound, and a stable reason
 code. Command-line/frontend errors and output combined with IR dumps are not a
-pure JSON stream.
+pure JSON stream. A construct the converter cannot represent is a
+`ConversionError` at a source range: the innermost declaration, statement, or
+expression being converted (`ASTConverter::CurrentRange`), unless the site
+names a place of its own, such as a function for the checks made after every
+function is converted. It is printed with Clang's `TextDiagnostic`, line and
+caret included, as a compiler error is, and its JSON record carries the range.
 
 ## Modular Verification Protocol
 
-1. Build VFunction for each function in source order.
+1. Build VFunction for each function in source order. An error of the
+   converter belongs to the function it is raised in (`ConversionError::
+   Function`), and to its signature or contract (`InContract`) or its body;
+   the errors that passes after conversion find about a function (a recursion
+   without a measure, a malformed inductive predicate) belong to it too
+   (`errorOf`). Such a function keeps what others may rely on
+   (`markUnsupported`, `VFunction::UnsupportedConstruct`): an executable or
+   proof function whose contract converted becomes an external contract, its
+   body not verified, and one whose contract did not is left out, so a call
+   of it is an `unsupported` obligation; a spec becomes a declaration without
+   definition, postconditions, reads, or domain. The driver prints every
+   error, gives the first of each function its verdict (`Unresolved`,
+   `construct.unsupported`), reports a function whose `SpecDependencies`
+   reach an unsupported spec the same way without verifying it, and verifies
+   the rest; the fixpoint demotes callers of the external contracts
+   (`callee.contract`). Only an error of no function stops the run.
 2. For each VFunction:
    a. Build Layer 1 IR.
    b. Passivize to Layer 2 (SSA + havoc/assume/assert + heap versioning).
@@ -1468,6 +2395,9 @@ pure JSON stream.
       at once, and with a proof cache only the ordered queries run.
    f. Report verified / counterexample / unresolved / bounded-safe / exported,
       or kernel-certified.
+   g. Check that its contract is defined (`Passivizer::contract`) when that
+      program asserts anything, on the spec backend (Z3 under BMC); only a
+      failure is reported, as `contract of f`.
 3. For each failure, run a second pass with `cppverify::recommends` checks → warnings.
 4. Qualify each verdict by what it rests on:
    - a trusted function reports `Trusted`; an unmarked contract without a
@@ -1482,10 +2412,12 @@ pure JSON stream.
      that is not, is demoted (`spec.termination`, `spec.reads`,
      `spec.post`, `spec.inductive`, `callee.contract`), and a demoted check
      of a spec stops establishing its facts (`SpecReliance::Establishes`), a
-     demoted function its contract, until nothing changes;
+     demoted function its contract, until nothing changes; a contract whose
+     well-formedness check is not settled is not established either;
    - a least fixpoint then rejects circles: starting from no established
      fact, a verdict is sound once every fact it needs is, and a fact once
-     every verdict producing it is sound. It needs its callees' contracts
+     every verdict producing it is sound (a contract is produced by its
+     function's verdict and by its well-formedness check). It needs its callees' contracts
      and its proof blocks' callees, the definitions and frames of the specs
      it mentions, and the postconditions and unfoldings its module assumes
      (`PassiveProgram`/`ObligationModule::AssumedPosts` and
@@ -1542,7 +2474,17 @@ The driver selects a backend via `VerifyOptions` (`Verifier.h` / `cpp-verify --b
 | **Strict portfolio** | `PortfolioVerifyBackend` | Runs ordered Z3 and cvc5 queries. Matching UNSAT proves; matching certified counterexamples fail and retain the Z3 model; disagreement or an unresolved side is unresolved. |
 | **Race** | `RaceVerifyBackend` | Runs the Z3 and cvc5 backends at once; the first proof or certified counterexample stands and cancels the other (`cancel`/`resume`: a backend-wide `Race` of Z3 encoders, each forwarding an interrupt to the pass it runs, and a flag the cvc5 process loop polls). Otherwise the obligations either proved are joined, `Verified` (`z3+cvc5`) when they cover the module. |
 | **BMC** | `LoopUnroll` on VCR, then shared obligation/Z3 path | Source verification grows bounds from zero through `--unroll=N`, stopping on a counterexample, complete unwinding, unresolved query, or the maximum frontier. Safety with failed unwinding is `BoundedSafe(N)`; only proved unwinding is `Verified`. A spec's checks have no loops: the driver solves them with a Z3 backend (`SpecBackend`), as on the default path, and keeps the bound on their archived modules for replay. |
-| **Lean** | `exportLeanScratchPad` / project certification | Standalone mode emits unchecked theorem stubs. Project mode emits direct source goals, total functional heaps, typed bit-vector/integer operations, and compact finite-fuel spec bodies into generated files while preserving user proofs. Export is `Exported`; only the pinned admission-free kernel/axiom check is `Certified`. Collections are `logic.unsupported` (planned for a future release). |
+| **Lean** | `exportLeanScratchPad` / project certification | Standalone mode emits unchecked theorem stubs. Project mode emits direct source goals, total functional heaps, typed bit-vector/integer operations, and compact finite-fuel spec bodies into generated files while preserving user proofs. Export is `Exported`; only the pinned admission-free kernel/axiom check is `Certified`. Collections are core Lean values (`List Int`, `Int → Bool`, `Int → Nat`, `Int → Option Int`) with prelude operations and lemmas. |
+
+A Lean project pins `LeanToolchain` (`Driver/CppVerifyVersion.h`) in its
+`lean-toolchain` file. A pin in `EarlierLeanToolchains`, which an earlier
+release wrote, is rewritten to the current one with a warning; any other pin is
+an error, since the generated semantics are written for one Lean. elan picks a
+toolchain by the working directory, not by `--dir`, so through elan's proxy
+every certification step names the pin (`lake +leanprover/lean4:v4.35.0
+--dir=DIR ...`). Certification first asks `lake --version`, alone, since lake
+takes it alone, and refuses a `lake` that reports another Lean. Before 0.2,
+certification ran elan's default toolchain.
 
 Each backend declares supported `LogicFeature`s. Central dispatch rejects a
 module requiring an unavailable feature before backend execution. Spec
@@ -1555,8 +2497,30 @@ prove individually, and by default only those are exported, under their
 complete-export goal names (`--lean-fallback-scope=all` exports every
 obligation). Once they kernel-check, the result is `MixedProof`
 (`Proved (z3+lean)`, JSON `mixed-proof`) with `ProofEvidence` recording the
-split; `Certified` still means Lean checked every obligation. SAT
-counterexamples are never fallback successes.
+split; `Certified` still means Lean checked every obligation. A certified
+counterexample is never a fallback success; its refutation shows it in
+Lean.
+
+A verdict left to Lean (a Lean-backend export, or a fallback export under
+`--lean-certify`) rests on what its module uses, as a solver's does. At export
+it records its dependencies as a verified verdict does (`recordDependencies`,
+`CallDependencies`, and for a spec check the facts it `Establishes`), and a
+spec check pending in Lean leaves its spec in `UndefinedSpecs` and
+`UnprovenPosts`. Certification (`certifyLeanProject`) runs after every
+function and before the fixpoint, whenever `--lean-certify` is given and
+whatever else failed. It turns each pending verdict into `Certified`,
+`MixedProof`, or `Unresolved`. The facts of the certified checks are then
+established, and the fixpoint and the qualifiers (`[trusts=...]`,
+`[partial]`, unverified callers, `decreases.missing`) treat `Certified` and
+`MixedProof` as proofs (`VerifyDiagnostic::isProof`). A generated check that
+is quiet when proved is reported when certification does not make it one. The vacuity checks of a
+pending verdict run with the Z3 smoke backend at export. Certification marks
+a proof `[vacuous]` from them, and hides the findings of a verdict it does
+not certify. Before 0.2, a fallback spec check established its facts at
+export and certification ran after the fixpoint and only when nothing else
+had failed: callers relying on a spec whose Lean termination proof failed, or
+was never checked, stayed `Verified`, and a Lean verdict was `Certified`
+whatever its callees' contracts.
 
 Z3-backed execution accepts explicit timeout, deterministic solver-resource,
 canonical query-node, memory, job-count, and proof-cache budgets. Z3 runs in
@@ -1594,14 +2558,51 @@ the obligations decide, exactly as after a whole query alone, so the verdict
 does not depend on the jobs. When the whole query yields a certified
 counterexample, the obligations only choose which failure is reported, the
 first in source order: the ones solved beside it are stopped, and they are
-solved in order with every query's timeout at most the whole query's own,
-with any number of jobs, so the choice does not depend on them either. If the
-failing obligation's query does not finish within it, the whole query's
+solved in order within the whole query's own budget, its timeout and, for a
+probe (below), its work, with any number of jobs, so the choice does not
+depend on them either (`Z3VerifyBackend::UnitsCap`). If the failing
+obligation's query does not finish within it, the whole query's
 counterexample stands. Before, that query could run to the timeout although
 the whole query had refuted the function in milliseconds: model search over
 quantified heap queries depends on the solver's search order, and 16 of 40
-random seeds took the full 30 s. A proof cache stores proofs of single
-obligations, so with one only the obligations are solved.
+random seeds took the full 30 s.
+
+The whole query of a module without logic functions is a probe of a fixed
+amount of work, `WholeProbeUnits` (6 million) Z3 resource units, with the
+module's timeout as its bound in time, so where it stops depends neither on
+the load nor on the build. It had 500 ms before. In an assertions build, or
+on a loaded core, the whole query of `certified_failure_attribution.cpp`
+(about 700 thousand units) did not finish in that time; with one job its
+obligations then ran, the postcondition among them, whose own search does
+not end, and the function ended `Unresolved` with `solver.timeout` after
+121 s on one core shared with two busy loops. The assertions build now
+reports the test's counterexample there in 7 s, with one job or three. Every
+probe of the test suite that an idle release build decided within 500 ms
+took at most 5.2 million units (99% of the 2622 took less than 200
+thousand); the three that took 5.2 million are those of the UTF-8 case
+study. A probe that does not decide costs more than before: the suite has 18,
+which do 1,900 to 13,000 units a millisecond, so 0.5 to 3 s each instead of
+0.5 s. With one job the suite takes 1331 s instead of 1321 s on an assertions
+build, most of it in `loop_frames.cpp` (3.6 s, now 8.8 s), whose five failing
+functions each spend 1.4 s on a probe that never decides; with more jobs the
+obligations solved beside the probe stop it once they settle the module. A
+probe that its work bound stops is retried with the full budget; one that
+its timeout stops already had it. A whole
+query given only a slice of the budget (a sixth of it over collections)
+checks a model it finds with a check's own time (half the module's timeout,
+or `--certify-timeout`), not with what is left of the slice
+(`Z3Encoder::setSearchSlice`): on one loaded core the search of a 500 ms
+probe took 460 ms, the check had 41 ms, and the model was left unchecked.
+Racing, a whole query its probe or slice leaves unresolved is retried with
+the full budget as one more task of the race, queued after the obligations:
+a free worker runs it beside them, and without one the function's own thread
+runs it after them, as with one job. Before, the retry always waited for the
+obligations, so an obligation whose search does not end held it back until
+that obligation's timeout: with the 500 ms probe, that test took 61 s with
+`--jobs=3` on two loaded cores. The obligations stop the whole query, or its
+retry, whenever they settle the module: when one fails, as when they prove
+all of it. A proof cache stores proofs of single obligations, so with one
+only the obligations are solved.
 
 Every query runs in an encoder of its own (`Z3VerifyBackend::solveQuery`):
 a Z3 context keeps the state of the queries solved in it, as far as an
@@ -1680,7 +2681,52 @@ carry one-based iteration numbers at the original source location.
 
 ## Modular Exec Calls
 
-`ASTConverter` lowers contracted **exec** calls to `VCallStmt` nodes. Nested calls in expressions (e.g. `return f(g(x))`) are flattened into a sequence of calls with temporaries (`__nested_N`) so `Passivize::emitCallStmt` can apply callee `cppverify::pre`/`cppverify::post` at each site.
+`ASTConverter` lowers contracted **exec** calls to `VCallStmt` nodes, in every
+expression position. While a statement or a condition of executable code is
+converted, its calls go to a call sink (`CallSink`, beside `SubobjectSink`):
+each becomes a `VCallStmt` into a fresh temporary `__call_N` before the
+statement (a condition's before the `VIfStmt`), its arguments lowered as a
+call statement's are (`convertExecCallArgs`, nested calls into `__nested_N`),
+and the expression reads the temporary; a `CallExpr` converted twice within a
+statement, as an index the binding check reads again, calls once
+(`HoistedCalls`). So `Passivize::emitCallStmt` applies callee
+`cppverify::pre`/`cppverify::post` at each site.
+
+- **Paths.** An operand that `&&`, `||`, or `?:` evaluates only on its own
+  path is converted with both sinks pointed at a list of its own
+  (`convertOnPaths`). When that list stays empty the operator is the
+  expression it always was; otherwise it becomes statements, `t = A; if (t)
+  { stmts; t = B; }` (`if (!t)` for `||`) or `c = C; if (c) { stmts; r = T; }
+  else { stmts; r = F; }`, for an integer, Boolean, or pointer result (one
+  with dynamic provenance excepted), and the expression reads `t` or `r`.
+  The first operand or condition is saved before the path's statements run.
+- **Loop conditions.** A loop whose condition makes calls becomes `while
+  (true) { calls; if (!cond) break; body }`, as CIL normalizes loops for
+  Frama-C, so the calls run at every test, after the invariants hold at the
+  head and before the condition; a `do` loop's first iteration stays before
+  it, and a `continue` re-enters at the head (a `for` runs its increment
+  first).
+- **Order.** Hoisting runs each call before the rest of its full-expression,
+  one of the orders C++ allows, so every allowed order must give the same
+  result. Where C++ leaves the order open (the operands of a binary operator
+  other than `&&`, `||`, `,`, and assignment; a subscript's base and index;
+  call arguments; before C++17 an assignment's two sides), a modifying call
+  in one operand (`containsModifyingCall`: its callee has
+  `cppverify::modifies`, a pointer or reference parameter, or is a non-const
+  member function) beside an evaluation a call may change in the other
+  (`isHeapSensitive`: a load, a reference, an addressable local, another
+  call; for an assignment's target only what locating it reads,
+  `locatingIsHeapSensitive`) is a conversion error at the expression. An
+  assignment whose target makes a call saves its right operand in
+  `__value_N` before converting the target, so the value is read, and
+  checked, before the target's calls run, as C++17 sequences them. Frama-C
+  keeps such orders as CIL `UnspecifiedSequence` statements with the reads
+  and writes of each part and checks them access by access under
+  `-unspecified-access`; the rule here is per call, coarser but needing no
+  read sets.
+- A call whose result is a record is lowered only as a statement, a whole
+  initializer, assignment, or return value; one that returns nothing only
+  as a statement.
 
 At each call the passivizer:
 
@@ -1704,6 +2750,34 @@ parameters, and executable/spec calls on already loaded scalar values. It
 rejects offset/subscript access, pointer copies/rebinding, recursive scan
 cycles, borrowed pointer-result intermediates without an owned summary, ghost
 access, proof/external contracts, and deallocation.
+
+A record in local or dynamic storage takes a second scan, for a parameter in
+`VFunction::RecordParams` (a pointer or reference to a record, with its
+layout's identity) of a callee in the object model, whose own checks prove
+that every access through the parameter lies in its object.
+`keepsNoAddress` (`Transform/Passivize.cpp`) closes the parameter's aliases
+over the pointer variables assigned an address derived from one, to a
+fixpoint, and rejects a store of such an address, a return of one, a free, a
+call that passes one to a callee that keeps one (scanned the same way, its
+extent allowed, since the function passing it proved the extent inside its
+own object) or that returns a pointer, and any callee without a verified
+body; re-entering a scan through recursion assumes it holds. Offsets, steps,
+comparisons, conversions to integers, spec arguments, and ghost reads are
+admitted. At the call `emitRecordActualChecks` asserts the validity of the
+record's last byte (with the generated clause's first, the record lies in
+one live allocation) and, unless the callee's parameter is an out-parameter,
+the initialization of every leaf of the callee's layout, enumerated (an
+automatic object has at most 256 bytes), as an `unsupported` obligation with
+the out-parameter note; for the caller's own out-parameter passed to an
+input, only the leaves. `havocFootprints`
+frames a footprint rooted at such a parameter by its bytes through
+`footprintBytes`, never as the exact first cell the scalar rule uses. The
+frame check of the caller accepts the callee's footprints in its own
+allocations; its empty-range alternative was joined to them (it replaced
+them before, so a range in the caller's own object failed `frame`).
+`ASTConverter::convertExecCallArg` lowers `&place` rooted at a promoted local
+(not an array) passed to a pointer parameter as a reference binding: the
+address with its provenance, the access condition, and the binding check.
 
 A pointer-returning callee may return a direct dynamic formal, null, or a
 conditional selection of direct dynamic formals. `VCallStmt` carries a
@@ -1746,9 +2820,13 @@ disjoint from incoming address parameters, complete declared extents, stored
 pointer cells, and every live represented object. Their lifetimes end at the
 lexical closing brace and on each supported early return in reverse construction
 order, after materializing any heap-reading return value. Scalar references may
-bind fields and fixed-array elements with access-local nested bounds. General
-escape, raw array decay/address-taking, aggregate references, and addressable
-declarations inside loops remain fail-closed. Automatic metadata transitions
+bind fields and fixed-array elements with access-local nested bounds, and a
+local reference to a record may bind a promoted record, its provenance
+companion carried like a scalar reference's. General escape, raw array
+decay/address-taking (through such a reference too, and `&x` other than as a
+call argument, above), and addressable declarations inside loops remain
+fail-closed; so does the decay of an array
+member through a pointer (`ASTConverter::arrayDecayError` names which). Automatic metadata transitions
 are private and a modular caller may frame them away.
 
 Local reference declarations snapshot their VCR address in a marked
@@ -1802,8 +2880,14 @@ position must lie in its origin's entry object, one past the end included
 
 The driver builds a UB-instrumented interface map before passivization so
 callee `VValidExtent` summaries are available at call sites. A slice actual is
-lowered only after proving structural same-origin containment, including
-nonnegative offset/length and the one-past empty case. A conservative transitive
+lowered only after proving containment, including nonnegative offset/length
+and the one-past empty case: structurally when it is written as a caller
+parameter plus an offset (`sliceContainment`), and otherwise, in the object
+model, by `[actual, actual + n * S]` lying in an entry object its origins name,
+or in any of the caller's objects when they are unknown
+(`Passivizer::objectContainment`). The callee's validity precondition for such
+an argument is then discharged by the same membership (`abstractValidity`)
+instead of a parameter's validity at entry. A conservative transitive
 body scan distinguishes acyclic read-only callees from unknown, recursive, or
 writing effects. Exact-cell writes reuse ordinary frame substitution; writes to
 a symbolic range or a whole sub-slice are supported, framed by a `HeapFrame`
@@ -1900,7 +2984,7 @@ stops before VCR conversion.
   `CPPVERIFY_PARITY_ARCHIVES` it also compares encodings per archived obligation.
 - Runner: `scripts/run-verify-tests.sh`.
 - Backend fidelity gate: `clang/test/Verify/suite/backend_fidelity_gate.test`
-  requires cvc5 and pinned Lean 4.32.2 and runs the permanent differential
+  requires cvc5 and pinned Lean 4.35.0 and runs the permanent differential
   matrix under every machine-integer encoding.
 - Instrumented coverage: `scripts/coverage-verify.sh` (region target on `clang/lib/Verify`).
 
@@ -1930,7 +3014,7 @@ an unchecked support table:
 | Quantifiers and finite-fuel specs | Both quantifier kinds, recursive spec calls, and conservative `unknown` rather than false proof |
 | Frontend-derived semantics | Type invariants and complete-loop Z3/BMC parity |
 | Portable artifacts | Source-stable obligation IDs, canonical/BMC archive replay, and deterministic parallel results |
-| Lean | Source/archive theorem identity, stable proof-module hashes, generated-file kernel build, and bounds instrumentation |
+| Lean | Source/archive obligation identity, one proof file per project goal recording its statement hash, generated-file kernel build, bounds instrumentation, and decisive verdicts: every valid case certified (one with a proof by hand, `Inputs/backend_fidelity_proofs`), every counterexample refuted |
 | Advisory checks | `cppverify::recommends` warnings stay source-only and never enter BMC or Lean replay artifacts |
 
 An approved valid quantified or inductive query may remain

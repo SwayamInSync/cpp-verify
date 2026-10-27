@@ -12,7 +12,10 @@
 namespace clang {
 namespace verify {
 
-inline constexpr uint32_t ObligationSerializationVersion = 2;
+/// Version 2 adds the precise obligation kinds; version 3 each logical
+/// function's termination measures and, with source metadata, where each
+/// assumption of a goal comes from. Readers read every earlier version.
+inline constexpr uint32_t ObligationSerializationVersion = 3;
 inline constexpr uint32_t ObligationSemanticHashVersion = 4;
 
 /// Serialize one module as a deterministic, versioned binary record. Records
@@ -33,6 +36,12 @@ std::string obligationSemanticHash(const ObligationModule &Module);
 /// which it may depend. Positional and source-anchored identities are excluded.
 std::string obligationSemanticHash(const ObligationModule &Module,
                                    const Obligation &Item);
+
+/// SHA-256 for what a proof of an individual goal proves: its semantics
+/// without the identity of the function it comes from, so that a Lean proof
+/// follows its goal when the function is renamed.
+std::string obligationStatementHash(const ObligationModule &Module,
+                                    const Obligation &Item);
 
 /// SHA-256 for exact dependency-scoped query semantics. Unlike the persistent
 /// proof-cache identity, transformed query contents rather than the enclosing

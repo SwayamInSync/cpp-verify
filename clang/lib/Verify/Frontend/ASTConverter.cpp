@@ -1,6 +1,7 @@
 //===--- ASTConverter.cpp -------------------------------------------------===//
 #include "ASTConverter.h"
 #include "../Transform/Inductive.h"
+#include "../Transform/SubobjectBounds.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
@@ -17,6 +18,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <functional>
@@ -517,9 +519,11 @@ isSupportedVerificationTypeImpl(QualType Ty,
   const RecordDecl *RD = RT->getDecl()->getDefinition();
   if (!RD || RD->isUnion())
     return false;
+  // Copies of the object are its bytes and its lifetime ends without a
+  // destructor; its constructors run as calls or as their initializers.
   if (const auto *CXXRD = dyn_cast<CXXRecordDecl>(RD))
     if (CXXRD->getNumBases() != 0 || CXXRD->isPolymorphic() ||
-        !CXXRD->isTrivial() || !CXXRD->isStandardLayout())
+        !CXXRD->isTriviallyCopyable() || !CXXRD->isStandardLayout())
       return false;
   if (!Visiting.insert(Ty.getTypePtr()).second)
     return true;
@@ -593,6 +597,27 @@ static bool isPromotableAggregateType(QualType Ty, const ASTContext &Ctx) {
          isFlattenedRecordType(Canonical);
 }
 
+/// The constructor call an initializer is, through the wrappers that do
+/// not change the object: parentheses, cleanups, and a conversion by a
+/// constructor (`T x = T(5);`).
+static const CXXConstructExpr *constructionOf(const Expr *Init) {
+  while (Init) {
+    Init = Init->IgnoreParens();
+    if (const auto *Cleanups = dyn_cast<ExprWithCleanups>(Init)) {
+      Init = Cleanups->getSubExpr();
+      continue;
+    }
+    if (const auto *Cast = dyn_cast<CastExpr>(Init);
+        Cast && (Cast->getCastKind() == CK_ConstructorConversion ||
+                 Cast->getCastKind() == CK_NoOp)) {
+      Init = Cast->getSubExpr();
+      continue;
+    }
+    return dyn_cast<CXXConstructExpr>(Init);
+  }
+  return nullptr;
+}
+
 /// Largest automatic object the byte-granular allocation metadata can describe.
 static constexpr uint64_t MaxAutomaticObjectBytes = 256;
 
@@ -607,8 +632,74 @@ static bool isSupportedScalarLValueReference(QualType Ty) {
          Referent->isEnumeralType();
 }
 
+/// A reference to a record is a pointer that is never null and never
+/// reseated, so it is supported where a pointer to the record is (not to a
+/// volatile one): its fields and elements are places in the object it names.
+static bool isSupportedRecordLValueReference(QualType Ty, ASTContext &Ctx) {
+  return !Ty.isNull() && Ty->isLValueReferenceType() &&
+         Ty.getNonReferenceType()->isRecordType() &&
+         isSupportedVerificationType(
+             Ctx.getPointerType(Ty.getNonReferenceType()));
+}
+
+static bool isOwnObject(const Expr *E) {
+  const auto *U =
+      E ? dyn_cast<UnaryOperator>(E->IgnoreParenImpCasts()) : nullptr;
+  return U && U->getOpcode() == UO_Deref &&
+         isa<CXXThisExpr>(U->getSubExpr()->IgnoreParenImpCasts());
+}
+
+/// A member function that returns a reference to its own object, every
+/// return being `return *this;` (as an assignment operator's is): the
+/// reference says nothing the caller does not hold, so it returns nothing.
+static bool returnsOwnObject(const FunctionDecl *FD) {
+  const auto *Method = dyn_cast<CXXMethodDecl>(FD);
+  if (!Method || !Method->isInstance() || !FD->hasBody() ||
+      !FD->getReturnType()->isLValueReferenceType())
+    return false;
+  const ASTContext &Ctx = FD->getASTContext();
+  if (!Ctx.hasSameUnqualifiedType(FD->getReturnType().getNonReferenceType(),
+                                  Method->getFunctionObjectParameterType()))
+    return false;
+  struct Returns : RecursiveASTVisitor<Returns> {
+    bool Any = false;
+    bool All = true;
+    bool TraverseLambdaExpr(LambdaExpr *) { return true; }
+    bool VisitReturnStmt(ReturnStmt *R) {
+      Any = true;
+      All = All && isOwnObject(R->getRetValue());
+      return true;
+    }
+  } Finder;
+  Finder.TraverseStmt(const_cast<Stmt *>(FD->getBody()));
+  return Finder.Any && Finder.All;
+}
+
+/// The member function returning its own object that E calls, read or
+/// copied (`(a += b) += c`, `Bits c = (a |= b);`).
+static const FunctionDecl *ownObjectCallee(const Expr *E) {
+  if (const CXXConstructExpr *Copy = constructionOf(E);
+      Copy && Copy->getNumArgs() == 1)
+    E = Copy->getArg(0);
+  const auto *Call = E ? dyn_cast<CallExpr>(E->IgnoreParenImpCasts()) : nullptr;
+  const FunctionDecl *Callee = Call ? Call->getDirectCallee() : nullptr;
+  return Callee && returnsOwnObject(Callee) ? Callee : nullptr;
+}
+
+/// A reference to a const scalar, which a spec function reads as the value it
+/// refers to: that value's type, else the type itself.
+static QualType constScalarReferent(QualType Ty) {
+  const QualType Referent = Ty.getNonReferenceType();
+  return Ty->isLValueReferenceType() && Referent.isConstQualified() &&
+                 !Referent.isVolatileQualified() &&
+                 Referent->isIntegralOrEnumerationType()
+             ? Referent.getUnqualifiedType()
+             : Ty;
+}
+
 static std::optional<std::string>
-findUnsupportedType(const FunctionDecl *FD, bool AllowScalarReferences) {
+findUnsupportedType(const FunctionDecl *FD, bool AllowScalarReferences,
+                    bool ConstScalarReferencesAreValues = false) {
   // By-value records keep their flattened SSA representation, so only records
   // whose direct fields are scalars may cross a function boundary.
   auto UnsupportedValueType = [](QualType Ty) {
@@ -617,12 +708,18 @@ findUnsupportedType(const FunctionDecl *FD, bool AllowScalarReferences) {
     return Ty->isRecordType() && !isFlatScalarRecordType(Ty) &&
            !VType::collectionKind(Ty);
   };
-  if (UnsupportedValueType(FD->getReturnType()))
+  auto Viewed = [&](QualType Ty) {
+    return ConstScalarReferencesAreValues ? constScalarReferent(Ty) : Ty;
+  };
+  if (UnsupportedValueType(Viewed(FD->getReturnType())) &&
+      !returnsOwnObject(FD))
     return FD->getReturnType().getAsString();
   for (const ParmVarDecl *Param : FD->parameters()) {
-    QualType Ty = Param->getType();
+    QualType Ty = Viewed(Param->getType());
     if (Ty->isReferenceType()) {
-      if (!AllowScalarReferences || !isSupportedScalarLValueReference(Ty))
+      if (!AllowScalarReferences ||
+          !(isSupportedScalarLValueReference(Ty) ||
+            isSupportedRecordLValueReference(Ty, FD->getASTContext())))
         return Ty.getAsString();
     } else if (UnsupportedValueType(Ty)) {
       return Param->getType().getAsString();
@@ -651,7 +748,8 @@ findUnsupportedType(const FunctionDecl *FD, bool AllowScalarReferences) {
         return false;
       QualType Ty = D->getType();
       if (Ty->isReferenceType() && AllowScalarReferences &&
-          isSupportedScalarLValueReference(Ty) &&
+          (isSupportedScalarLValueReference(Ty) ||
+           isSupportedRecordLValueReference(Ty, D->getASTContext())) &&
           (isa<ParmVarDecl>(D) || D->hasLocalStorage()))
         return true;
       if (!isSupportedVerificationType(Ty))
@@ -833,6 +931,39 @@ VIntMode ASTConverter::specCallIntMode(const FunctionDecl *FD) const {
   return VIntMode::Math;
 }
 
+/// For std::min(a, b) and std::max(a, b) of two integers, enumerations, or
+/// bools: whether it is max. Nothing for any other function, such as the
+/// overloads with a comparison or an initializer list.
+static std::optional<bool> stdMinOrMax(const FunctionDecl *Callee,
+                                       const ASTContext &Ctx) {
+  if (!Callee || !Callee->isInStdNamespace() || !Callee->getIdentifier() ||
+      !Callee->getPrimaryTemplate() || Callee->getNumParams() != 2)
+    return std::nullopt;
+  const bool IsMax = Callee->getName() == "max";
+  if (!IsMax && Callee->getName() != "min")
+    return std::nullopt;
+  const QualType Result = Callee->getReturnType();
+  const QualType T = Result.getNonReferenceType();
+  if (!Result->isLValueReferenceType() || !T.isConstQualified() ||
+      T.isVolatileQualified() || !T->isIntegralOrEnumerationType())
+    return std::nullopt;
+  for (const ParmVarDecl *P : Callee->parameters())
+    if (!Ctx.hasSameType(P->getType(), Result))
+      return std::nullopt;
+  return IsMax;
+}
+
+/// A function as the verifier's messages name it, a template specialization
+/// with its arguments (`maxv<int>`).
+static std::string functionName(const FunctionDecl *FD,
+                                bool Qualified = false) {
+  std::string Name;
+  llvm::raw_string_ostream OS(Name);
+  FD->getNameForDiagnostic(OS, FD->getASTContext().getPrintingPolicy(),
+                           Qualified);
+  return Name;
+}
+
 std::string ASTConverter::functionIdentity(const FunctionDecl *FD) {
   if (!FD)
     return {};
@@ -843,9 +974,15 @@ std::string ASTConverter::functionIdentity(const FunctionDecl *FD) {
   std::string Mangled;
   llvm::raw_string_ostream OS(Mangled);
   std::unique_ptr<MangleContext> MC(Ctx.createMangleContext());
-  if (MC->shouldMangleDeclName(FD))
-    MC->mangleName(GlobalDecl(FD), OS);
-  else
+  // A constructor or destructor is mangled as its complete-object variant.
+  if (MC->shouldMangleDeclName(FD)) {
+    if (const auto *Ctor = dyn_cast<CXXConstructorDecl>(FD))
+      MC->mangleName(GlobalDecl(Ctor, Ctor_Complete), OS);
+    else if (const auto *Dtor = dyn_cast<CXXDestructorDecl>(FD))
+      MC->mangleName(GlobalDecl(Dtor, Dtor_Complete), OS);
+    else
+      MC->mangleName(GlobalDecl(FD), OS);
+  } else
     OS << FD->getQualifiedNameAsString() << '\0'
        << FD->getType().getCanonicalType().getAsString();
   OS.flush();
@@ -912,17 +1049,23 @@ static bool isMutableAddressParam(const ParmVarDecl *P) {
 
 static bool aliasesListed(const FunctionContractInfo &FCI, StringRef A,
                           StringRef B) {
+  // A parameter of the pair, or `this`.
+  auto NameOf = [](const Expr *E) -> std::optional<StringRef> {
+    E = E->IgnoreParenImpCasts();
+    if (isa<CXXThisExpr>(E))
+      return StringRef("this");
+    const auto *Ref = dyn_cast<DeclRefExpr>(E);
+    const auto *Param = Ref ? dyn_cast<ParmVarDecl>(Ref->getDecl()) : nullptr;
+    if (!Param)
+      return std::nullopt;
+    return Param->getName();
+  };
   for (const auto &Pair : FCI.Aliases) {
-    const auto *L = dyn_cast<DeclRefExpr>(Pair.first->IgnoreParenImpCasts());
-    const auto *R = dyn_cast<DeclRefExpr>(Pair.second->IgnoreParenImpCasts());
+    std::optional<StringRef> L = NameOf(Pair.first);
+    std::optional<StringRef> R = NameOf(Pair.second);
     if (!L || !R)
       continue;
-    const auto *LD = dyn_cast<ParmVarDecl>(L->getDecl());
-    const auto *RD = dyn_cast<ParmVarDecl>(R->getDecl());
-    if (!LD || !RD)
-      continue;
-    if ((LD->getName() == A && RD->getName() == B) ||
-        (LD->getName() == B && RD->getName() == A))
+    if ((*L == A && *R == B) || (*L == B && *R == A))
       return true;
   }
   return false;
@@ -1001,11 +1144,12 @@ static bool exprReferencesSpecCall(const VExpr *E, const std::string &Name) {
 }
 
 static const RecordDecl *getRecordFromType(QualType T) {
-  // See through references: a `C&`/`const C&` parameter's field access lowers
-  // to the same "param.field" variable as a by-value `C`, so type_invariant
-  // injection applies. Pointers are intentionally excluded: `p->field` lowers
-  // to a heap Load, which the "param.field" substitution does not model.
-  T = T.getNonReferenceType().getUnqualifiedType();
+  // A record by value, whose fields are values of its own ("param.field").
+  // A reference to a record is an address, as a pointer is: its fields are
+  // places in the object it names.
+  if (T->isReferenceType())
+    return nullptr;
+  T = T.getUnqualifiedType();
   // A cppverify collection is one mathematical value, not a record of fields.
   if (VType::collectionKind(T))
     return nullptr;
@@ -1030,9 +1174,39 @@ ASTConverter::trackedValueNames(const ValueDecl *D) const {
   return Names;
 }
 
+void ASTConverter::nameParameters(const FunctionDecl *ContractDecl,
+                                  const FunctionDecl *FD) {
+  ParameterNames.clear();
+  PackElements.clear();
+  // The parameters a pack expands to share its name, which no others can:
+  // each is named as C++26 indexes a pack, `ns...[1]`.
+  std::map<std::string, unsigned> Occurrences, Elements;
+  for (const ParmVarDecl *P : ContractDecl->parameters())
+    ++Occurrences[P->getNameAsString()];
+  for (unsigned I = 0; I < FD->getNumParams(); ++I) {
+    const ParmVarDecl *ContractParam = ContractDecl->getParamDecl(I);
+    const ParmVarDecl *DefinitionParam = FD->getParamDecl(I);
+    std::string Name = ContractParam->getNameAsString();
+    std::string Element;
+    if (!Name.empty() && Occurrences[Name] > 1)
+      Element = "...[" + std::to_string(Elements[Name]++) + "]";
+    if (Name.empty())
+      Name = DefinitionParam->getNameAsString();
+    if (Name.empty())
+      Name = "__cppverify_param_" + std::to_string(I);
+    ParameterNames[ContractParam] = Name + Element;
+    ParameterNames[DefinitionParam] = Name + Element;
+    if (!Element.empty())
+      PackElements[DefinitionParam] = Element;
+  }
+}
+
 std::string ASTConverter::valueName(const ValueDecl *D) const {
   if (const auto *P = dyn_cast_or_null<ParmVarDecl>(D))
     if (auto It = ParameterNames.find(P); It != ParameterNames.end())
+      return It->second;
+  if (const auto *VD = dyn_cast_or_null<VarDecl>(D))
+    if (auto It = LocalNames.find(VD); It != LocalNames.end())
       return It->second;
   return D ? D->getNameAsString() : std::string();
 }
@@ -1042,6 +1216,9 @@ void ASTConverter::recordSourceVariable(const ValueDecl *D) {
     return;
   const std::string InternalBase = valueName(D);
   std::string DisplayBase = D->getNameAsString();
+  if (const auto *P = dyn_cast<ParmVarDecl>(D))
+    if (auto It = PackElements.find(P); It != PackElements.end())
+      DisplayBase += It->second;
   if (DisplayBase.empty())
     DisplayBase = InternalBase;
   auto Record = [&](std::string InternalName, std::string DisplayName,
@@ -1163,6 +1340,16 @@ ASTConverter::convertPointerDifferenceOperand(const Expr *E,
                                               uint64_t PointeeSize) {
   if (!E || PointeeSize == 0)
     return nullptr;
+  // A pointer into a member array, or to a subobject, of the object a
+  // pointer addresses.
+  const Expr *Peeled = E->IgnoreParens();
+  if (const auto *Decay = dyn_cast<ImplicitCastExpr>(Peeled);
+      Decay && Decay->getCastKind() == CK_ArrayToPointerDecay &&
+      subobjectPointerRoot(Decay->getSubExpr()))
+    return convertExpr(Peeled);
+  if (const auto *U = dyn_cast<UnaryOperator>(Peeled);
+      U && U->getOpcode() == UO_AddrOf && subobjectPointerRoot(U->getSubExpr()))
+    return convertExpr(Peeled);
   E = E->IgnoreParenImpCasts();
   if (const auto *DRE = dyn_cast<DeclRefExpr>(E))
     if (isa<VarDecl>(DRE->getDecl()) && E->getType()->isPointerType())
@@ -1204,31 +1391,28 @@ bool ASTConverter::appendDynamicPointerAssignment(
     const VarDecl *Target, const Expr *Source, SourceLocation Loc,
     std::vector<std::unique_ptr<VStmt>> &Out) {
   if (LoopDepth != 0) {
-    Errors.push_back(CurrentFn->Name +
-                     ": dynamic-storage pointer reassignment inside loops is "
-                     "unsupported");
+    error(CurrentFn->Name +
+          ": dynamic-storage pointer reassignment inside loops is "
+          "unsupported");
     return true;
   }
   if (!Target || !Source || !Target->getType()->isPointerType() ||
       !Source->getType()->isPointerType()) {
-    Errors.push_back(CurrentFn->Name +
-                     ": dynamic-storage pointer copies require matching "
-                     "pointee types");
+    error(CurrentFn->Name + ": dynamic-storage pointer copies require matching "
+                            "pointee types");
     return true;
   }
 
   auto Provenance = convertDynamicPointerProvenance(Source);
   if (!Provenance) {
-    Errors.push_back(
-        CurrentFn->Name +
-        ": dynamic-storage pointer copies require direct, conditional, or "
-        "null local sources");
+    error(CurrentFn->Name +
+          ": dynamic-storage pointer copies require direct, conditional, or "
+          "null local sources");
     return true;
   }
   if (!dynamicPointerSourceTypesMatch(Target, Source)) {
-    Errors.push_back(CurrentFn->Name +
-                     ": dynamic-storage pointer copies require matching "
-                     "pointee types");
+    error(CurrentFn->Name + ": dynamic-storage pointer copies require matching "
+                            "pointee types");
     return true;
   }
   auto Value = convertExpr(Source);
@@ -1286,6 +1470,7 @@ bool ASTConverter::ghostAssignmentAllowed(const Expr *E) const {
 
 void ASTConverter::beginInitializationTracking(const FunctionDecl *FD) {
   DeclaredValueNames.clear();
+  LocalNames.clear();
   InitializedValues.clear();
   ReportedUninitializedValues.clear();
   DynamicPointers.clear();
@@ -1295,6 +1480,7 @@ void ASTConverter::beginInitializationTracking(const FunctionDecl *FD) {
   AutomaticScopeStack.clear();
   ActiveAutomaticLocals.clear();
   LocalReferenceProvenanceVariables.clear();
+  FieldExtentParameters.clear();
   GhostLocals.clear();
   DynamicProvenanceId = 0;
   DynamicPointerAssignmentId = 0;
@@ -1385,6 +1571,11 @@ void ASTConverter::beginInitializationTracking(const FunctionDecl *FD) {
                 ->getType()
                 ->isLValueReferenceType())
           addRoot(Call->getArg(I));
+      // A member call binds `this` to its object.
+      if (const auto *Member = dyn_cast<CXXMemberCallExpr>(Call))
+        if (const Expr *Object = Member->getImplicitObjectArgument();
+            Object && !Object->getType()->isPointerType())
+          addRoot(Object);
       return true;
     }
 
@@ -1399,6 +1590,12 @@ void ASTConverter::beginInitializationTracking(const FunctionDecl *FD) {
       // Every constant local array is a byte-addressed object; it has no
       // flattened SSA representation at all.
       if (VD->hasLocalStorage() && VD->getType()->isArrayType())
+        addObject(VD);
+      // A constructor that is not trivial runs on the object's address.
+      if (const auto *Construct =
+              VD->hasInit() ? constructionOf(VD->getInit()) : nullptr;
+          Construct && Construct->getConstructor() &&
+          !Construct->getConstructor()->isTrivial())
         addObject(VD);
       return true;
     }
@@ -1549,8 +1746,7 @@ bool ASTConverter::requireInitialized(const ValueDecl *D,
       continue;
     AllInitialized = false;
     if (ReportedUninitializedValues.insert(Name).second)
-      Errors.push_back(CurrentFn->Name +
-                       ": read of uninitialized local value: " + Name);
+      error(CurrentFn->Name + ": read of uninitialized local value: " + Name);
   }
   return AllInitialized;
 }
@@ -1872,7 +2068,27 @@ static void collectFunctionCandidates(const DeclContext *DC, ASTContext &Ctx,
       collectFunctionCandidates(LS, Ctx, Out);
       continue;
     }
+    if (const auto *CTD = dyn_cast<ClassTemplateDecl>(D)) {
+      // A class template's members are functions of each specialization
+      // this translation unit instantiates; its pattern's members are
+      // reported where none of their instantiations is verified. The
+      // redeclarations of a template share its specializations.
+      if (const CXXRecordDecl *Pattern = CTD->getTemplatedDecl();
+          Pattern->isCompleteDefinition())
+        collectFunctionCandidates(Pattern, Ctx, Out);
+      if (CTD->isCanonicalDecl())
+        for (const ClassTemplateSpecializationDecl *Spec :
+             CTD->specializations())
+          if (Spec->getSpecializationKind() != TSK_ExplicitSpecialization &&
+              Spec->isCompleteDefinition())
+            collectFunctionCandidates(Spec, Ctx, Out);
+      continue;
+    }
     if (const auto *RD = dyn_cast<RecordDecl>(D)) {
+      // An instantiated specialization is collected from its template.
+      if (const auto *Spec = dyn_cast<ClassTemplateSpecializationDecl>(RD);
+          Spec && Spec->getSpecializationKind() != TSK_ExplicitSpecialization)
+        continue;
       if (RD->isCompleteDefinition())
         collectFunctionCandidates(RD, Ctx, Out);
       continue;
@@ -1881,6 +2097,17 @@ static void collectFunctionCandidates(const DeclContext *DC, ASTContext &Ctx,
       const FunctionDecl *FD = FTD->getTemplatedDecl();
       if (FD->isThisDeclarationADefinition())
         Out.push_back(FD);
+      // Each specialization this translation unit instantiates is a function
+      // of its own, with its definition or else its contract. An explicit
+      // specialization is a declaration of its own, and the redeclarations
+      // of a template share its specializations.
+      if (!FTD->isCanonicalDecl())
+        continue;
+      for (const FunctionDecl *Spec : FTD->specializations())
+        if (Spec->isTemplateInstantiation() &&
+            (Spec->isThisDeclarationADefinition() ||
+             (Ctx.getFunctionContract(Spec) && !Spec->hasBody())))
+          Out.push_back(Spec);
       continue;
     }
     if (const auto *FD = dyn_cast<FunctionDecl>(D)) {
@@ -1895,6 +2122,170 @@ static void collectFunctionCandidates(const DeclContext *DC, ASTContext &Ctx,
   }
 }
 
+/// Whether a function template or a member of a class template, as
+/// written, has a specialization this translation unit instantiates, with a
+/// definition or a contract: nothing for a member of a class nested in a
+/// template, which is not looked for.
+static std::optional<bool> isInstantiated(const FunctionDecl *FD,
+                                          const ASTContext &Ctx) {
+  auto Instantiated = [&](const FunctionDecl *Spec) {
+    return Spec->isTemplateInstantiation() &&
+           (Spec->isThisDeclarationADefinition() ||
+            Ctx.getFunctionContract(Spec));
+  };
+  const FunctionTemplateDecl *Template = FD->getDescribedFunctionTemplate();
+  const auto *Class = dyn_cast<CXXRecordDecl>(FD->getDeclContext());
+  if (!Class || !Class->isDependentContext())
+    return Template && llvm::any_of(Template->specializations(), Instantiated);
+  const ClassTemplateDecl *ClassTemplate = Class->getDescribedClassTemplate();
+  if (!ClassTemplate)
+    return std::nullopt;
+  for (const ClassTemplateSpecializationDecl *Spec :
+       ClassTemplate->specializations())
+    for (const Decl *Member : Spec->decls()) {
+      if (const auto *M = dyn_cast<CXXMethodDecl>(Member)) {
+        const FunctionDecl *From = M->getInstantiatedFromMemberFunction();
+        if (From && From->getCanonicalDecl() == FD->getCanonicalDecl() &&
+            Instantiated(M))
+          return true;
+      }
+      if (const auto *MT = dyn_cast<FunctionTemplateDecl>(Member)) {
+        const FunctionTemplateDecl *From =
+            MT->getInstantiatedFromMemberTemplate();
+        if (From && Template &&
+            From->getCanonicalDecl() == Template->getCanonicalDecl() &&
+            llvm::any_of(MT->specializations(), Instantiated))
+          return true;
+      }
+    }
+  return false;
+}
+
+/// What remains of a function that uses a construct the verifier does not
+/// represent: an executable or proof function becomes the contract its
+/// callers assume, not verified; a spec, a declaration without the
+/// definition, postconditions, and reads that its body would establish.
+static void markUnsupported(VFunction &Fn) {
+  Fn.UnsupportedConstruct = true;
+  Fn.Body.clear();
+  Fn.ClauseProofs.clear();
+  if (!Fn.IsSpec) {
+    Fn.IsExternalContract = true;
+    return;
+  }
+  Fn.Uninterpreted = true;
+  Fn.Postconditions.clear();
+  Fn.Decreases.clear();
+  Fn.Recommends.clear();
+  Fn.Reads.clear();
+  Fn.Domain.reset();
+  Fn.Unfolding.reset();
+  Fn.InductiveLoc = SourceLocation();
+}
+
+/// Why a member function is not verified yet, or nothing for one that is: a
+/// static member is a free function, and a non-static one of a class without
+/// bases or virtual functions is a function of `this`, a pointer to its
+/// object.
+/// Why a constructor is not verified, or nothing: its class has no bases
+/// or virtual functions, it does not delegate, and each member is a scalar,
+/// a pointer, or an aggregate of them, initialized by expressions or by
+/// constructors the class does not provide itself.
+static std::optional<std::string>
+unsupportedConstructor(const CXXConstructorDecl *Ctor) {
+  const CXXRecordDecl *Class = Ctor->getParent();
+  if (!Class->hasDefinition() || Class->getNumBases() != 0 ||
+      Class->isPolymorphic())
+    return std::string("member functions of a class with bases or virtual "
+                       "functions are unsupported");
+  if (!Class->isTriviallyCopyable())
+    return std::string("constructors of a class that is not trivially "
+                       "copyable, whose copies or destruction run code, are "
+                       "not supported yet");
+  if (Ctor->isDelegatingConstructor())
+    return std::string("delegating constructors are not verified yet");
+  for (const FieldDecl *Field : Class->fields()) {
+    if (Field->getType()->isReferenceType())
+      return std::string("constructors of a class with reference members are "
+                         "unsupported");
+    if (Field->isBitField())
+      return std::string("constructors of a class with bit-field members are "
+                         "unsupported");
+    if (const CXXRecordDecl *Member =
+            Field->getType()->getBaseElementTypeUnsafe()->getAsCXXRecordDecl())
+      if (llvm::any_of(Member->ctors(), [](const CXXConstructorDecl *C) {
+            return C->isUserProvided();
+          }))
+        return std::string("members whose class provides a constructor are "
+                           "not supported yet");
+  }
+  for (const CXXCtorInitializer *Init : Ctor->inits())
+    if (!Init->isMemberInitializer())
+      return std::string("constructors of a class with anonymous members are "
+                         "unsupported");
+  return std::nullopt;
+}
+
+/// Whether a precondition gives the parameter an extent, valid(P, n).
+static bool hasExtentMarker(const FunctionContractInfo &FCI,
+                            const ParmVarDecl *P) {
+  struct Finder : RecursiveASTVisitor<Finder> {
+    const ParmVarDecl *Parameter;
+    bool Found = false;
+    bool VisitCallExpr(CallExpr *Call) {
+      const FunctionDecl *Callee = Call->getDirectCallee();
+      if (Callee && Callee->getDeclName().isIdentifier() &&
+          Callee->getName() == "valid" && Call->getNumArgs() == 2)
+        if (const auto *Ref =
+                dyn_cast<DeclRefExpr>(Call->getArg(0)->IgnoreParenImpCasts()))
+          Found = Found || Ref->getDecl() == Parameter;
+      return !Found;
+    }
+  } F;
+  F.Parameter = P;
+  for (const Expr *Pre : FCI.Preconditions)
+    F.TraverseStmt(const_cast<Expr *>(Pre));
+  return F.Found;
+}
+
+static bool mentionsThis(const Stmt *S) {
+  if (!S)
+    return false;
+  if (isa<CXXThisExpr>(S))
+    return true;
+  return llvm::any_of(S->children(),
+                      [](const Stmt *Child) { return mentionsThis(Child); });
+}
+
+static std::optional<std::string>
+unsupportedMemberFunction(const CXXMethodDecl *Method) {
+  if (Method->getParent()->isLambda())
+    return std::string("lambdas are unsupported");
+  if (const auto *Ctor = dyn_cast<CXXConstructorDecl>(Method))
+    return unsupportedConstructor(Ctor);
+  if (isa<CXXDestructorDecl>(Method))
+    return std::string("destructors are not verified yet");
+  if (isa<CXXConversionDecl>(Method))
+    return std::string("conversion functions are unsupported");
+  if (Method->isStatic())
+    return std::nullopt;
+  if (Method->isVirtual())
+    return std::string("virtual functions are unsupported, since a call "
+                       "may run an override");
+  const CXXRecordDecl *Class = Method->getParent();
+  if (!Class->hasDefinition() || Class->getNumBases() != 0 ||
+      Class->isPolymorphic())
+    return std::string("member functions of a class with bases or virtual "
+                       "functions are unsupported");
+  if (Method->isExplicitObjectMemberFunction())
+    return std::string("explicit object parameters are unsupported");
+  if (Method->getRefQualifier() == RQ_RValue)
+    return std::string("rvalue-qualified member functions are unsupported");
+  if (Method->getMethodQualifiers().hasVolatile())
+    return std::string("volatile member functions are unsupported");
+  return std::nullopt;
+}
+
 std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
   std::vector<std::unique_ptr<VFunction>> Out;
   llvm::StringSet<> Identities;
@@ -1902,29 +2293,87 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
   collectFunctionCandidates(Ctx.getTranslationUnitDecl(), Ctx, Definitions);
   UsedConstexprSpecs.clear();
   for (const FunctionDecl *FD : Definitions) {
-    if (isa<CXXMethodDecl>(FD)) {
-      if (functionContract(FD) || hasContractStatements(FD, Ctx))
-        Errors.push_back(FD->getNameAsString() +
-                         ": member function verification is unsupported");
-      continue;
-    }
-    // Only a template with contracts is reported here: one without matters
-    // where verified code calls it, which reports the call.
-    if (FD->isTemplated()) {
-      if (!FD->isInStdNamespace() &&
-          Ctx.getSourceManager().isWrittenInMainFile(FD->getLocation()) &&
-          (functionContract(FD) || hasContractStatements(FD, Ctx)))
-        Errors.push_back(FD->getNameAsString() +
-                         ": function template verification is unsupported");
+    const auto *Method = dyn_cast<CXXMethodDecl>(FD);
+    const std::optional<std::string> UnsupportedMember =
+        Method && !FD->isTemplated() ? unsupportedMemberFunction(Method)
+                                     : std::nullopt;
+    if (UnsupportedMember || FD->isTemplated()) {
+      // Only one with contracts is reported here: one without matters where
+      // verified code calls it, which reports the call.
+      if (!functionContract(FD) && !hasContractStatements(FD, Ctx))
+        continue;
+      // A template is verified in each of its specializations, which follow
+      // it: what it means depends on its arguments.
+      if (!UnsupportedMember) {
+        // A member of a class template is named with its parameters,
+        // Box<T>::get, as the class's own type names it.
+        std::string Name = functionName(FD, isa<CXXMethodDecl>(FD));
+        if (const auto *Class = dyn_cast<CXXRecordDecl>(FD->getDeclContext()))
+          if (const ClassTemplateDecl *ClassTemplate =
+                  Class->getDescribedClassTemplate()) {
+            Name.clear();
+            llvm::raw_string_ostream OS(Name);
+            OS << ClassTemplate->getQualifiedNameAsString();
+            printTemplateArgumentList(
+                OS, ClassTemplate->getInjectedTemplateArgs(Ctx),
+                Ctx.getPrintingPolicy());
+            OS << "::" << functionName(FD);
+          }
+        if (!FD->isInStdNamespace() &&
+            Ctx.getSourceManager().isWrittenInMainFile(FD->getLocation()) &&
+            isInstantiated(FD, Ctx) == false)
+          Warnings.emplace_back(
+              FD->getLocation(),
+              Name +
+                  (FD->getDescribedFunctionTemplate()
+                       ? ": function template is not verified: this "
+                         "translation unit instantiates none of its "
+                         "specializations"
+                       : ": member of a class template is not verified: this "
+                         "translation unit instantiates it in none of the "
+                         "class's specializations"));
+        continue;
+      }
+      llvm::SaveAndRestore Owner(ErrorFunction, functionIdentity(FD));
+      llvm::SaveAndRestore OwnerName(ErrorFunctionName, functionName(FD));
+      llvm::SaveAndRestore InContract(ErrorInContract, true);
+      error(FD->getLocation(),
+            FD->getQualifiedNameAsString() + ": " + *UnsupportedMember);
       continue;
     }
     if (FD->isInStdNamespace())
       continue;
+    if (FD->isTemplateInstantiation()) {
+      // Its diagnostics note where it is instantiated, as a compiler's do,
+      // under the names they give its function.
+      const SourceLocation Point = FD->getPointOfInstantiation();
+      const char *What = FD->getPrimaryTemplate()
+                             ? "function template specialization"
+                             : "member function";
+      for (const std::string &Name :
+           {functionName(FD), functionName(FD, isa<CXXMethodDecl>(FD))})
+        if (auto [It, New] = InstantiationPoints.emplace(
+                Name, std::make_pair(Point, std::string(What)));
+            !New && It->second.first != Point)
+          It->second.first = SourceLocation();
+    }
+    const size_t ErrorsBefore = Errors.size();
     auto Fn = convertFunction(FD);
-    if (Fn) {
+    if (Fn && Errors.size() == ErrorsBefore) {
       Identities.insert(Fn->Identity);
       Out.push_back(std::move(Fn));
       continue;
+    }
+    // A construct the verifier does not represent costs its function alone.
+    // What remains is what others may rely on: the contract, when it
+    // converted, of an executable or proof function; a spec's declaration.
+    if (Fn &&
+        (Fn->IsSpec ||
+         std::none_of(Errors.begin() + ErrorsBefore, Errors.end(),
+                      [](const ConversionError &E) { return E.InContract; }))) {
+      markUnsupported(*Fn);
+      Identities.insert(Fn->Identity);
+      Out.push_back(std::move(Fn));
     }
     // A body the verifier does not verify still calls contracted functions,
     // whose preconditions it then assumes without checking (Frama-C reports
@@ -1940,7 +2389,7 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
           if (const FunctionContractInfo *FCI = functionContract(Callee);
               FCI && !FCI->IsSpec && !FCI->IsProof)
             UnverifiedCallers[functionIdentity(Callee)].insert(
-                FD->getNameAsString());
+                functionName(FD));
       for (const Stmt *Child : S->children())
         Calls(Child);
     };
@@ -1969,7 +2418,10 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
       Changed = true;
       if (Identities.contains(functionIdentity(FD)))
         continue;
+      const size_t ErrorsBefore = Errors.size();
       if (auto Fn = convertConstexprSpec(FD)) {
+        if (Errors.size() != ErrorsBefore)
+          markUnsupported(*Fn);
         Identities.insert(Fn->Identity);
         Lifted.push_back({I, std::move(Fn)});
       }
@@ -2029,7 +2481,10 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
   }
   for (auto &Fn : Unspecified)
     Out.push_back(std::move(Fn));
-  expandInductivePredicates(Out, Errors);
+  expandInductivePredicates(
+      Out, [&](const VFunction &Fn, SourceLocation Loc, std::string Message) {
+        errorOf(Fn, Loc, std::move(Message));
+      });
   for (auto &Fn : ChoiceFunctions)
     Out.push_back(std::move(Fn));
   ChoiceFunctions.clear();
@@ -2120,13 +2575,14 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
           llvm::any_of(Reach[Fn->Identity], [&](const std::string &Id) {
             return ChoiceIdentities.count(Id) && Reach[Id].count(Fn->Identity);
           });
-      Errors.push_back(
-          Fn->Name +
-          (InChoice ? ": an inductive predicate occurs in the bodies of its "
-                      "group only positively, never inside cppverify::choose"
-                    : ": an inductive predicate applies itself only in its "
-                      "body or through inductive predicates, not through "
-                      "another spec"));
+      errorOf(*Fn, Fn->DeclLoc,
+              Fn->Name +
+                  (InChoice
+                       ? ": an inductive predicate occurs in the bodies of its "
+                         "group only positively, never inside cppverify::choose"
+                       : ": an inductive predicate applies itself only in its "
+                         "body or through inductive predicates, not through "
+                         "another spec"));
       for (const std::string &Other : Reach[Fn->Identity])
         if (Reach[Other].count(Fn->Identity))
           InductiveCycles.insert(Other);
@@ -2187,9 +2643,9 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
             return kindOf(*ByIdentity[Id]) == kindOf(*Fn);
           });
       if (!SameKind) {
-        Errors.push_back(Fn->Name +
-                         ": mutual recursion is supported only among "
-                         "functions of one kind: spec, proof, or executable");
+        errorOf(*Fn, Fn->DeclLoc,
+                Fn->Name + ": mutual recursion is supported only among "
+                           "functions of one kind: spec, proof, or executable");
         continue;
       }
       const bool AllDiverge =
@@ -2209,15 +2665,16 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
                    !ByIdentity[Id]->DivergenceDeclared;
           });
       if (!SameMeasure) {
-        Errors.push_back(Fn->Name + ": mutually recursive " +
-                         (Fn->IsSpec    ? "spec"
-                          : Fn->IsProof ? "proof"
-                                        : "executable") +
-                         " functions require decreases clauses, all of the "
-                         "same length" +
-                         (Fn->IsSpec || Fn->IsProof
-                              ? ""
-                              : ", or all cppverify::decreases(*)"));
+        errorOf(*Fn, Fn->DeclLoc,
+                Fn->Name + ": mutually recursive " +
+                    (Fn->IsSpec    ? "spec"
+                     : Fn->IsProof ? "proof"
+                                   : "executable") +
+                    " functions require decreases clauses, all of the "
+                    "same length" +
+                    (Fn->IsSpec || Fn->IsProof
+                         ? ""
+                         : ", or all cppverify::decreases(*)"));
         continue;
       }
       Fn->RecursionGroup = std::move(Group);
@@ -2228,12 +2685,13 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
     if (Recursive && Fn->Decreases.empty() && Fn->DivergenceDeclared)
       continue;
     if (Recursive && Fn->Decreases.empty()) {
-      Errors.push_back(
+      errorOf(
+          *Fn, Fn->DeclLoc,
           Fn->Name +
-          (Fn->IsSpec || Fn->IsProof
-               ? ": recursive spec and proof functions require decreases"
-               : ": recursive executable functions require decreases, or "
-                 "cppverify::decreases(*) to allow divergence"));
+              (Fn->IsSpec || Fn->IsProof
+                   ? ": recursive spec and proof functions require decreases"
+                   : ": recursive executable functions require decreases, or "
+                     "cppverify::decreases(*) to allow divergence"));
       continue;
     }
     Fn->NeedsDecreasesCheck = Recursive;
@@ -2293,6 +2751,15 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
         Fn->SpecFuel.erase(Identity);
       }
   }
+  // A function an error after conversion is about (a recursion without a
+  // measure, a malformed inductive predicate) costs its function alone, as
+  // an error in its body does.
+  std::set<std::string> Faulty;
+  for (const ConversionError &Err : Errors)
+    Faulty.insert(Err.Function);
+  for (auto &Fn : Out)
+    if (Faulty.count(Fn->Identity) && !Fn->UnsupportedConstruct)
+      markUnsupported(*Fn);
   return Out;
 }
 
@@ -2306,8 +2773,8 @@ bool ASTConverter::flattenRecordInto(const RecordDecl *RD,
   if (!Definition || Definition->isUnion())
     return false;
   if (const auto *CXX = dyn_cast<CXXRecordDecl>(Definition))
-    if (CXX->getNumBases() != 0 || CXX->isPolymorphic() || !CXX->isTrivial() ||
-        !CXX->isStandardLayout())
+    if (CXX->getNumBases() != 0 || CXX->isPolymorphic() ||
+        !CXX->isTriviallyCopyable() || !CXX->isStandardLayout())
       return false;
   const ASTRecordLayout &RL = Ctx.getASTRecordLayout(Definition);
   unsigned Index = 0;
@@ -2475,6 +2942,9 @@ void ASTConverter::registerLayoutType(QualType QT, VFunction &Fn) {
 void ASTConverter::collectLayouts(const FunctionDecl *FD, VFunction &Fn) {
   KnownLayoutIdentities.clear();
   registerLayoutType(FD->getReturnType(), Fn);
+  if (const auto *Method = dyn_cast<CXXMethodDecl>(FD);
+      Method && Method->isInstance())
+    registerLayoutType(Method->getFunctionObjectParameterType(), Fn);
   for (const ParmVarDecl *P : FD->parameters())
     registerLayoutType(P->getType(), Fn);
 
@@ -2519,14 +2989,13 @@ bool ASTConverter::exceedsNestingLimit(const FunctionDecl *FD,
     if (Depth > Limit) {
       const PresumedLoc Where =
           Ctx.getSourceManager().getPresumedLoc(S->getBeginLoc());
-      Errors.push_back(
-          FD->getNameAsString() + ": the expression at " +
-          (Where.isValid() ? std::to_string(Where.getLine()) + ":" +
-                                 std::to_string(Where.getColumn())
-                           : std::string("an unknown location")) +
-          " nests more than " + std::to_string(Limit) +
-          " operations deep, which the verifier does not support; split it "
-          "into intermediate variables");
+      error(functionName(FD) + ": the expression at " +
+            (Where.isValid() ? std::to_string(Where.getLine()) + ":" +
+                                   std::to_string(Where.getColumn())
+                             : std::string("an unknown location")) +
+            " nests more than " + std::to_string(Limit) +
+            " operations deep, which the verifier does not support; split it "
+            "into intermediate variables");
       return true;
     }
     for (const Stmt *Child : S->children())
@@ -2538,8 +3007,148 @@ bool ASTConverter::exceedsNestingLimit(const FunctionDecl *FD,
   return false;
 }
 
+/// The address parameter and the fields of a pointer field of the object it
+/// addresses (s->data, s.data for a reference s, s->inner.data, (*s).data,
+/// and this->data in a member function, with no parameter declaration),
+/// whose pointee is a complete object type.
+static std::optional<
+    std::pair<const ParmVarDecl *, std::vector<const FieldDecl *>>>
+pointerFieldOfParameter(const Expr *E) {
+  const auto *Outer = dyn_cast<MemberExpr>(E->IgnoreParenImpCasts());
+  if (!Outer || !Outer->getType()->isPointerType() ||
+      Outer->getType()->getPointeeType()->isIncompleteType() ||
+      Outer->getType()->getPointeeType()->isVoidType())
+    return std::nullopt;
+  auto Parameter = [](const Expr *Base) -> const ParmVarDecl * {
+    const auto *Ref = dyn_cast<DeclRefExpr>(Base->IgnoreParenImpCasts());
+    return Ref ? dyn_cast<ParmVarDecl>(Ref->getDecl()) : nullptr;
+  };
+  std::vector<const FieldDecl *> Fields;
+  const Expr *Object = Outer;
+  while (const auto *M = dyn_cast<MemberExpr>(Object->IgnoreParenImpCasts())) {
+    const auto *Field = dyn_cast<FieldDecl>(M->getMemberDecl());
+    if (!Field)
+      return std::nullopt;
+    Fields.insert(Fields.begin(), Field);
+    if (M->isArrow()) {
+      if (isa<CXXThisExpr>(M->getBase()->IgnoreParenImpCasts()))
+        return std::make_pair(nullptr, std::move(Fields));
+      // p->f: the object p, a pointer parameter, addresses.
+      const ParmVarDecl *P = Parameter(M->getBase());
+      if (!P || !P->getType()->isPointerType())
+        return std::nullopt;
+      return std::make_pair(P, std::move(Fields));
+    }
+    Object = M->getBase();
+  }
+  Object = Object->IgnoreParenImpCasts();
+  // (*p).f, or r.f for a reference parameter r.
+  if (const auto *U = dyn_cast<UnaryOperator>(Object);
+      U && U->getOpcode() == UO_Deref) {
+    const ParmVarDecl *P = Parameter(U->getSubExpr());
+    if (!P || !P->getType()->isPointerType())
+      return std::nullopt;
+    return std::make_pair(P, std::move(Fields));
+  }
+  const ParmVarDecl *P = Parameter(Object);
+  if (!P || !P->getType()->isLValueReferenceType())
+    return std::nullopt;
+  return std::make_pair(P, std::move(Fields));
+}
+
+std::vector<ASTConverter::AddressEntry>
+ASTConverter::collectFieldExtents(const FunctionContractInfo &FCI,
+                                  llvm::ArrayRef<const Expr *> Invariants,
+                                  VFunction &Fn) {
+  struct MarkerFinder : RecursiveASTVisitor<MarkerFinder> {
+    std::vector<const Expr *> Pointers;
+    bool VisitCallExpr(CallExpr *Call) {
+      const FunctionDecl *Callee = Call->getDirectCallee();
+      if (Callee && Callee->getDeclName().isIdentifier() &&
+          Callee->getName() == "valid" && Call->getNumArgs() == 2)
+        Pointers.push_back(Call->getArg(0));
+      return true;
+    }
+  } Finder;
+  for (const Expr *Pre : FCI.Preconditions)
+    Finder.TraverseStmt(const_cast<Expr *>(Pre));
+  for (const Expr *Invariant : Invariants)
+    Finder.TraverseStmt(const_cast<Expr *>(Invariant));
+  std::vector<AddressEntry> Out;
+  for (const Expr *Pointer : Finder.Pointers) {
+    auto Field = pointerFieldOfParameter(Pointer);
+    if (!Field)
+      continue;
+    const auto &[Param, Fields] = *Field;
+    std::string Name = Param ? valueName(Param) : "this";
+    std::string Display = Param ? Param->getNameAsString() : "this";
+    const bool ThroughPointer = !Param || Param->getType()->isPointerType();
+    for (size_t I = 0; I != Fields.size(); ++I) {
+      Name += "->" + Fields[I]->getNameAsString();
+      Display += (I == 0 && ThroughPointer ? "->" : ".") +
+                 Fields[I]->getNameAsString();
+    }
+    const Expr *Key = Pointer->IgnoreParenImpCasts();
+    if (llvm::any_of(Fn.FieldParams,
+                     [&](const auto &Entry) { return Entry.first == Name; })) {
+      FieldExtentParameters[Key] = Name;
+      continue;
+    }
+    bool SavedContract = InContractExpression;
+    InContractExpression = true;
+    std::unique_ptr<VExpr> Value = convertExpr(Pointer);
+    InContractExpression = SavedContract;
+    if (!Value)
+      continue;
+    // The field's own type: the marker's parameter converts it to a pointer
+    // to const.
+    VType Ty = VType::fromQualType(Key->getType(), IntMode, Ctx);
+    Fn.Params.emplace_back(Name, Ty);
+    Fn.SourceVariables[Name] = {Display, Ty, Pointer->getBeginLoc(),
+                                Pointer->getEndLoc()};
+    Fn.FieldParams.emplace_back(Name, std::move(Value));
+    FieldExtentParameters[Key] = Name;
+    QualType Addressed = Key->getType()->getPointeeType();
+    Out.push_back({Name, Addressed, !Addressed.isConstQualified()});
+  }
+  return Out;
+}
+
+/// The class invariants a member function assumes on entry: a public one's,
+/// unless it is a constructor.
+std::vector<const Expr *>
+ASTConverter::entryClassInvariants(const CXXMethodDecl *Method,
+                                   bool Constructor) const {
+  if (!Method || !Method->isInstance() || Constructor ||
+      Method->getAccess() != AS_public)
+    return {};
+  const TypeContractInfo *TCI = Ctx.getTypeContract(Method->getParent());
+  return TCI ? std::vector<const Expr *>(TCI->Invariants.begin(),
+                                         TCI->Invariants.end())
+             : std::vector<const Expr *>();
+}
+
+/// The class invariants a member function must hold at exit: a public
+/// one's, and every constructor's.
+std::vector<const Expr *>
+ASTConverter::exitClassInvariants(const CXXMethodDecl *Method,
+                                  bool Constructor) const {
+  if (!Method || !Method->isInstance() ||
+      (!Constructor && Method->getAccess() != AS_public))
+    return {};
+  const TypeContractInfo *TCI = Ctx.getTypeContract(Method->getParent());
+  return TCI ? std::vector<const Expr *>(TCI->Invariants.begin(),
+                                         TCI->Invariants.end())
+             : std::vector<const Expr *>();
+}
+
 std::unique_ptr<VFunction>
 ASTConverter::convertFunction(const FunctionDecl *FD) {
+  llvm::SaveAndRestore At(CurrentRange, SourceRange(FD->getLocation()));
+  llvm::SaveAndRestore Owner(ErrorFunction, functionIdentity(FD));
+  llvm::SaveAndRestore OwnerName(ErrorFunctionName, functionName(FD));
+  llvm::SaveAndRestore InContract(ErrorInContract, true);
+  const size_t ErrorsAtStart = Errors.size();
   const FunctionContractInfo *FCI = functionContract(FD);
   if (!FCI) {
     // Assertions and ghost code are obligations even without a contract
@@ -2551,57 +3160,49 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   }
   if (exceedsNestingLimit(FD, FCI))
     return nullptr;
-  ParameterNames.clear();
   const FunctionDecl *ContractDecl = FCI->ContractDecl ? FCI->ContractDecl : FD;
   if (ContractDecl->getNumParams() != FD->getNumParams()) {
-    Errors.push_back(FD->getNameAsString() +
-                     ": contract declaration parameter mismatch");
+    error(functionName(FD) + ": contract declaration parameter mismatch");
     return nullptr;
   }
-  for (unsigned I = 0; I < FD->getNumParams(); ++I) {
-    const ParmVarDecl *ContractParam = ContractDecl->getParamDecl(I);
-    const ParmVarDecl *DefinitionParam = FD->getParamDecl(I);
-    std::string Name = ContractParam->getNameAsString();
-    if (Name.empty())
-      Name = DefinitionParam->getNameAsString();
-    if (Name.empty())
-      Name = "__cppverify_param_" + std::to_string(I);
-    ParameterNames[ContractParam] = Name;
-    ParameterNames[DefinitionParam] = Name;
-  }
+  nameParameters(ContractDecl, FD);
   if (FD->isVariadic()) {
-    Errors.push_back(FD->getNameAsString() +
-                     ": variadic functions are unsupported");
+    error(functionName(FD) + ": variadic functions are unsupported");
     return nullptr;
   }
   if (FCI->IsSpec && writesIndirectMemory(FD)) {
-    Errors.push_back(FD->getNameAsString() +
-                     ": spec functions must not write memory");
+    error(functionName(FD) + ": spec functions must not write memory");
     return nullptr;
   }
   if (FCI->IsSpec && (!FCI->Preconditions.empty() || !FCI->Modifies.empty() ||
                       !FCI->Aliases.empty())) {
-    Errors.push_back(FD->getNameAsString() +
-                     ": a spec function is defined for every argument and "
-                     "its body is its meaning, so pre, modifies, and aliases "
-                     "do not apply; use recommends for a soft precondition");
+    error(functionName(FD) +
+          ": a spec function is defined for every argument and "
+          "its body is its meaning, so pre, modifies, and aliases "
+          "do not apply; use recommends for a soft precondition");
     return nullptr;
   }
   if (FCI->IsSpec && FD->getReturnType()->isRecordType() &&
       !VType::collectionKind(FD->getReturnType())) {
-    Errors.push_back(FD->getNameAsString() +
-                     ": aggregate-returning spec functions are unsupported");
+    error(functionName(FD) +
+          ": aggregate-returning spec functions are unsupported");
     return nullptr;
   }
   if (auto Unsupported =
           findUnsupportedType(FD, !FCI->IsSpec && !FCI->IsProof)) {
-    Errors.push_back(FD->getNameAsString() +
-                     ": unsupported C++ type in verification: " + *Unsupported);
+    error(functionName(FD) +
+          ": unsupported C++ type in verification: " + *Unsupported);
     return nullptr;
   }
 
   auto Fn = std::make_unique<VFunction>();
-  Fn->Name = FD->getNameAsString();
+  // A member function is named with its class, and a non-static one is a
+  // function of `this`, the pointer to its object.
+  const auto *Method = dyn_cast<CXXMethodDecl>(FD);
+  const bool HasThis = Method && Method->isInstance();
+  const auto *Constructor = dyn_cast<CXXConstructorDecl>(FD);
+  Fn->IsConstructor = Constructor != nullptr;
+  Fn->Name = functionName(FD, /*Qualified=*/Method != nullptr);
   Fn->Identity = functionIdentity(FD);
   Fn->IsSpec = FCI->IsSpec;
   Fn->IsProof = FCI->IsProof;
@@ -2615,17 +3216,16 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     return D->hasAttr<CppVerifyTrustedAttr>();
   });
   if (Fn->IsTrusted && Fn->IsSpec) {
-    Errors.push_back(Fn->Name + ": [[cppverify::trusted]] does not apply to a "
-                                "spec function, whose definition is its "
-                                "meaning");
+    error(Fn->Name + ": [[cppverify::trusted]] does not apply to a "
+                     "spec function, whose definition is its "
+                     "meaning");
     CurrentFn = nullptr;
     return nullptr;
   }
   Fn->IsExternalContract = !FD->hasBody() || Fn->IsTrusted;
   if (Fn->IsExternalContract && !Fn->IsTrusted &&
       (Fn->IsSpec || Fn->IsProof)) {
-    Errors.push_back(Fn->Name +
-                     (Fn->IsSpec
+    error(Fn->Name + (Fn->IsSpec
                           ? ": a spec declaration requires a definition"
                           : ": a proof declaration requires a definition; "
                             "mark it [[cppverify::trusted]] to assume its "
@@ -2635,7 +3235,9 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   }
   IntMode = FCI->IsSpec ? VIntMode::Math : VIntMode::Machine;
   Fn->IntMode = IntMode;
-  Fn->ReturnType = VType::fromQualType(FD->getReturnType(), IntMode, Ctx);
+  Fn->ReturnType = returnsOwnObject(FD)
+                       ? VType::makeVoid()
+                       : VType::fromQualType(FD->getReturnType(), IntMode, Ctx);
   if (const RecordDecl *RD = getRecordFromType(FD->getReturnType()))
     if (const RecordDecl *Definition = RD->getDefinition())
       for (const FieldDecl *Field : Definition->fields())
@@ -2650,9 +3252,22 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   InContractExpression = false;
 
   SmallVector<const ParmVarDecl *, 8> AddressParams;
+  // `this` addresses a live object, as a reference does: non-null, valid,
+  // and initialized at entry; in a const member function it points to const.
+  QualType ThisObject =
+      HasThis ? Method->getFunctionObjectParameterType() : QualType();
+  if (HasThis) {
+    const VType ThisTy =
+        VType::fromQualType(Ctx.getPointerType(ThisObject), IntMode, Ctx);
+    Fn->Params.emplace_back("this", ThisTy);
+    if (ThisObject.isConstQualified())
+      Fn->ConstAddressParams.insert("this");
+    Fn->SourceVariables["this"] = {"this", ThisTy, FD->getLocation(),
+                                   FD->getLocation()};
+  }
   for (const ParmVarDecl *P : FD->parameters()) {
-    if (P->getType()->isReferenceType())
-      Fn->ReferenceParams.insert(valueName(P));
+    if (isSupportedScalarLValueReference(P->getType()))
+      Fn->ScalarReferenceParams.insert(valueName(P));
     if ((P->getType()->isPointerType() || P->getType()->isReferenceType()) &&
         !isMutableAddressParam(P))
       Fn->ConstAddressParams.insert(valueName(P));
@@ -2671,6 +3286,21 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
       AddressParams.push_back(P);
     recordSourceVariable(P);
   }
+  // The entry value of a pointer field whose extent a precondition states
+  // (valid(s->data, s->len)) is an input of the function, as a parameter's
+  // value is: a synthetic parameter after the declared ones, bound to the
+  // field at entry and by each call at its arguments, takes the extent, its
+  // validity, and the default separation.
+  std::vector<AddressEntry> Addresses;
+  if (HasThis)
+    Addresses.push_back({"this", ThisObject, !ThisObject.isConstQualified()});
+  for (const ParmVarDecl *P : AddressParams)
+    Addresses.push_back(
+        {valueName(P), addressedType(P), isMutableAddressParam(P)});
+  if (FCI && !Fn->IsSpec)
+    for (AddressEntry &Field : collectFieldExtents(
+             *FCI, entryClassInvariants(Method, Constructor), *Fn))
+      Addresses.push_back(std::move(Field));
   if (Fn->ReturnType.Kind == VTypeKind::Struct) {
     for (const auto &[Field, Type] : Fn->ReturnFields)
       Fn->SourceVariables["result." + Field] = {
@@ -2689,10 +3319,17 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     Out = convertExpr(E);
     InContractExpression = SavedContract;
     if (!Out)
-      Errors.push_back(Fn->Name + ": unsupported expression in " + Clause);
+      error(Fn->Name + ": unsupported expression in " + Clause);
   };
 
   InPost = false;
+  // A constructor's precondition is evaluated before its object exists.
+  if (Constructor)
+    for (const Expr *E : FCI->Preconditions)
+      if (mentionsThis(E))
+        error(E->getExprLoc(),
+              Fn->Name + ": a constructor's precondition cannot read its "
+                         "object, whose lifetime has not begun");
   for (const Expr *E : FCI->Preconditions) {
     std::unique_ptr<VExpr> PE;
     recordContractExpr("pre", E, PE);
@@ -2706,8 +3343,8 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     std::unique_ptr<VExpr> PE;
     recordContractExpr("post", E, PE);
     if (PE && Fn->IsSpec && mentionsOld(PE.get())) {
-      Errors.push_back(Fn->Name + ": a spec changes no state, so its post "
-                                  "cannot use old");
+      error(Fn->Name + ": a spec changes no state, so its post "
+                       "cannot use old");
       continue;
     }
     if (PE)
@@ -2724,7 +3361,22 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     if (std::optional<VFootprint> Footprint = convertFootprint(E))
       Fn->Modifies.push_back(std::move(*Footprint));
     else
-      Errors.push_back(Fn->Name + ": unsupported expression in modifies");
+      error(Fn->Name + ": unsupported expression in modifies");
+  }
+  // Decision Q8: a verified non-const member function without modifies may
+  // write its object; a const one only its own storage. An explicit modifies
+  // replaces the default, and a trusted or bodiless one keeps the rule of a
+  // trusted contract.
+  // A constructor always writes its object.
+  if (HasThis && !ThisObject.isConstQualified() &&
+      ((FCI->Modifies.empty() && FD->hasBody() && !Fn->IsTrusted) ||
+       Constructor)) {
+    VFootprint Object;
+    Object.Target = std::make_unique<VLoadExpr>(
+        std::make_unique<VVarExpr>("this", Fn->Params.front().second,
+                                   FD->getLocation()),
+        VType::fromQualType(ThisObject, IntMode, Ctx), FD->getLocation());
+    Fn->Modifies.push_back(std::move(Object));
   }
   for (const auto &[Pointer, Count] : FCI->Reads) {
     const PointerType *PT =
@@ -2732,8 +3384,7 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     if (!Fn->IsSpec || !PT || PT->getPointeeType()->isIncompleteType() ||
         !Count || !Count->getType()->isIntegerType() ||
         Count->getType()->isBooleanType()) {
-      Errors.push_back(Fn->Name +
-                       ": reads takes a pointer and an integer count, and "
+      error(Fn->Name + ": reads takes a pointer and an integer count, and "
                        "only on a spec function");
       continue;
     }
@@ -2744,7 +3395,7 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
         Ctx.getTypeSizeInChars(PT->getPointeeType()).getQuantity());
     if (expressionReadsHeap(Range.Base.get(), true) ||
         expressionReadsHeap(Range.Count.get(), true)) {
-      Errors.push_back(Fn->Name + ": a reads range cannot depend on the heap");
+      error(Fn->Name + ": a reads range cannot depend on the heap");
       continue;
     }
     if (Range.Base && Range.Count)
@@ -2752,8 +3403,8 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   }
   for (const Expr *Condition : FCI->When) {
     if (!Fn->IsSpec) {
-      Errors.push_back(Fn->Name + ": when restricts the domain of a spec "
-                                  "function only");
+      error(Fn->Name + ": when restricts the domain of a spec "
+                       "function only");
       break;
     }
     std::unique_ptr<VExpr> Domain;
@@ -2770,6 +3421,10 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   }
   Fn->InductiveLoc = FCI->Inductive;
   for (const auto &Pair : FCI->Aliases) {
+    if (Constructor && (mentionsThis(Pair.first) || mentionsThis(Pair.second)))
+      error(Pair.first->getExprLoc(),
+            Fn->Name + ": a constructor's object is new, so aliases cannot "
+                       "name this");
     std::unique_ptr<VExpr> L;
     std::unique_ptr<VExpr> R;
     recordContractExpr("aliases", Pair.first, L);
@@ -2780,6 +3435,121 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   InPost = false;
 
   if (!Fn->IsSpec) {
+    if (HasThis) {
+      auto This = [] {
+        return std::make_unique<VVarExpr>("this", VType::makePtr(),
+                                          SourceLocation());
+      };
+      auto NonNull = std::make_unique<VBinOpExpr>(
+          VBinOp::Ne, This(),
+          std::make_unique<VLiteralExpr>(0, VType::makePtr(), SourceLocation()),
+          VType::makeBool(), SourceLocation());
+      std::unique_ptr<VExpr> Readable = std::make_unique<VBinOpExpr>(
+          VBinOp::And,
+          std::make_unique<VUnaryOpExpr>(VUnaryOp::ValidPtr, This(),
+                                         VType::makeBool(), SourceLocation()),
+          std::make_unique<VUnaryOpExpr>(VUnaryOp::InitializedPtr, This(),
+                                         VType::makeBool(), SourceLocation()),
+          VType::makeBool(), SourceLocation());
+      // A constructor's object is storage the caller allocated, one live
+      // allocation at every leaf, which the constructor initializes: `this`
+      // carries that allocation's identity.
+      if (Constructor) {
+        VVarExpr Object("this", VType::makePtr(), SourceLocation(),
+                        VConstructedObjectLifetime);
+        Readable = nullptr;
+        forEachObjectLeaf(ThisObject, 0, [&](QualType, uint64_t Offset) {
+          auto Leaf = std::make_unique<VUnaryOpExpr>(
+              VUnaryOp::ValidPtr,
+              objectLeafAddress(&Object, Offset, SourceLocation()),
+              VType::makeBool(), SourceLocation());
+          if (Readable)
+            Readable = std::make_unique<VBinOpExpr>(
+                VBinOp::And, std::move(Readable), std::move(Leaf),
+                VType::makeBool(), SourceLocation());
+          else
+            Readable = std::move(Leaf);
+          return true;
+        });
+        // So is its last byte, which a call lending the object checks: the
+        // caller's at the constructor, the constructor's at a member call.
+        const uint64_t Size = Ctx.getTypeSizeInChars(ThisObject).getQuantity();
+        if (Readable && Size > 1)
+          Readable = std::make_unique<VBinOpExpr>(
+              VBinOp::And, std::move(Readable),
+              std::make_unique<VUnaryOpExpr>(
+                  VUnaryOp::ValidPtr,
+                  objectLeafAddress(&Object, Size - 1, SourceLocation()),
+                  VType::makeBool(), SourceLocation()),
+              VType::makeBool(), SourceLocation());
+        if (!Readable)
+          Readable = std::make_unique<VLiteralExpr>(1, VType::makeBool(),
+                                                    SourceLocation());
+      }
+      addPrecondition(*Fn,
+                      std::make_unique<VBinOpExpr>(
+                          VBinOp::And, std::move(NonNull), std::move(Readable),
+                          VType::makeBool(), SourceLocation()),
+                      ProofObligationKind::PointerValidity);
+      // A class invariant holds at the boundary of every public member
+      // function and is established by every constructor. It is checked at
+      // every call, internal ones included, so no call can observe the
+      // object while a member function breaks it.
+      FieldSubstPrefix.clear();
+      for (const Expr *Invariant : entryClassInvariants(Method, Constructor))
+        if (auto Pre = convertTypeInvariantExpr(Invariant))
+          addPrecondition(*Fn, std::move(Pre),
+                          ProofObligationKind::TypeInvariant);
+      // At exit an extent marker states nothing, and the next call checks
+      // the extent from what its caller knows.
+      llvm::SaveAndRestore DropMarkers(DropExtentMarkers, true);
+      for (const Expr *Invariant : exitClassInvariants(Method, Constructor))
+        if (auto Post = convertTypeInvariantExpr(Invariant))
+          addPostcondition(*Fn, std::move(Post),
+                           ProofObligationKind::TypeInvariant);
+    }
+    // An object a parameter refers to or points to satisfies its class
+    // invariant on entry, as a caller shows at the call, and through a
+    // mutable reference or pointer at exit too: every function boundary is
+    // one at which the invariant holds. A pointer may be null; one with an
+    // extent addresses several objects, which is not covered yet. An extent
+    // marker in the invariant is `this`'s, so it is true here.
+    for (const ParmVarDecl *P : FD->parameters()) {
+      QualType Ty = P->getType();
+      if (!Ty->isLValueReferenceType() && !Ty->isPointerType())
+        continue;
+      QualType Object = Ty->getPointeeType();
+      const RecordDecl *Record = getRecordFromType(Object);
+      const TypeContractInfo *TCI =
+          Record ? Ctx.getTypeContract(Record) : nullptr;
+      if (!TCI || TCI->Invariants.empty() || hasExtentMarker(*FCI, P))
+        continue;
+      VVarExpr Pointer(valueName(P), VType::makePtr(), P->getLocation());
+      llvm::SaveAndRestore<const VExpr *> Substitute(ThisSubstitute, &Pointer);
+      llvm::SaveAndRestore DropMarkers(DropExtentMarkers, true);
+      FieldSubstPrefix.clear();
+      auto Guarded = [&](std::unique_ptr<VExpr> Invariant) {
+        if (!Ty->isPointerType())
+          return Invariant;
+        return std::unique_ptr<VExpr>(std::make_unique<VBinOpExpr>(
+            VBinOp::Or,
+            std::make_unique<VBinOpExpr>(
+                VBinOp::Eq, cloneVExpr(&Pointer),
+                std::make_unique<VLiteralExpr>(0, VType::makePtr(),
+                                               P->getLocation()),
+                VType::makeBool(), P->getLocation()),
+            std::move(Invariant), VType::makeBool(), P->getLocation()));
+      };
+      for (const Expr *Invariant : TCI->Invariants) {
+        if (auto Pre = convertTypeInvariantExpr(Invariant))
+          addPrecondition(*Fn, Guarded(std::move(Pre)),
+                          ProofObligationKind::TypeInvariant);
+        if (!Object.isConstQualified())
+          if (auto Post = convertTypeInvariantExpr(Invariant))
+            addPostcondition(*Fn, Guarded(std::move(Post)),
+                             ProofObligationKind::TypeInvariant);
+      }
+    }
     for (const ParmVarDecl *P : AddressParams) {
       auto Pointer = std::make_unique<VVarExpr>(valueName(P), VType::makePtr(),
                                                 SourceLocation());
@@ -2844,40 +3614,38 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   }
 
   // A mutable address parameter has exclusive access to its complete object.
-  for (unsigned I = 0; I < AddressParams.size(); ++I) {
-    for (unsigned J = I + 1; J < AddressParams.size(); ++J) {
-      if (!isMutableAddressParam(AddressParams[I]) &&
-          !isMutableAddressParam(AddressParams[J]))
+  for (unsigned I = 0; I < Addresses.size(); ++I) {
+    for (unsigned J = I + 1; J < Addresses.size(); ++J) {
+      if (!Addresses[I].Mutable && !Addresses[J].Mutable)
         continue;
-      const bool MayAlias = aliasesListed(*FCI, valueName(AddressParams[I]),
-                                          valueName(AddressParams[J]));
-      QualType PointeeI = addressedType(AddressParams[I]).getUnqualifiedType();
-      QualType PointeeJ = addressedType(AddressParams[J]).getUnqualifiedType();
+      const bool MayAlias =
+          aliasesListed(*FCI, Addresses[I].Name, Addresses[J].Name);
+      QualType PointeeI = Addresses[I].Addressed.getUnqualifiedType();
+      QualType PointeeJ = Addresses[J].Addressed.getUnqualifiedType();
       if (MayAlias && !Ctx.hasSameType(PointeeI, PointeeJ)) {
-        Errors.push_back(
-            Fn->Name +
-            ": aliases between different pointee types are unsupported");
+        error(Fn->Name +
+              ": aliases between different pointee types are unsupported");
         continue;
       }
-      auto Ptr = [&](const ParmVarDecl *P) {
-        return std::make_unique<VVarExpr>(valueName(P), VType::makePtr(),
+      auto Ptr = [&](const AddressEntry &A) {
+        return std::make_unique<VVarExpr>(A.Name, VType::makePtr(),
                                           SourceLocation());
       };
       auto Null = [] {
         return std::make_unique<VLiteralExpr>(0, VType::makePtr(),
                                               SourceLocation());
       };
-      auto ANull = std::make_unique<VBinOpExpr>(
-          VBinOp::Eq, Ptr(AddressParams[I]), Null(), VType::makeBool(),
-          SourceLocation());
-      auto BNull = std::make_unique<VBinOpExpr>(
-          VBinOp::Eq, Ptr(AddressParams[J]), Null(), VType::makeBool(),
-          SourceLocation());
+      auto ANull =
+          std::make_unique<VBinOpExpr>(VBinOp::Eq, Ptr(Addresses[I]), Null(),
+                                       VType::makeBool(), SourceLocation());
+      auto BNull =
+          std::make_unique<VBinOpExpr>(VBinOp::Eq, Ptr(Addresses[J]), Null(),
+                                       VType::makeBool(), SourceLocation());
       auto EitherNull = std::make_unique<VBinOpExpr>(
           VBinOp::Or, std::move(ANull), std::move(BNull), VType::makeBool(),
           SourceLocation());
 
-      auto End = [&](const ParmVarDecl *P, QualType Pointee) {
+      auto End = [&](const AddressEntry &P, QualType Pointee) {
         auto Size = std::make_unique<VLiteralExpr>(
             std::to_string(Ctx.getTypeSizeInChars(Pointee).getQuantity()),
             VType::makePtr(), SourceLocation());
@@ -2886,18 +3654,18 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
                                             SourceLocation());
       };
       auto IBeforeJ = std::make_unique<VBinOpExpr>(
-          VBinOp::Le, End(AddressParams[I], PointeeI), Ptr(AddressParams[J]),
+          VBinOp::Le, End(Addresses[I], PointeeI), Ptr(Addresses[J]),
           VType::makeBool(), SourceLocation());
       auto JBeforeI = std::make_unique<VBinOpExpr>(
-          VBinOp::Le, End(AddressParams[J], PointeeJ), Ptr(AddressParams[I]),
+          VBinOp::Le, End(Addresses[J], PointeeJ), Ptr(Addresses[I]),
           VType::makeBool(), SourceLocation());
       std::unique_ptr<VExpr> Relation = std::make_unique<VBinOpExpr>(
           VBinOp::Or, std::move(IBeforeJ), std::move(JBeforeI),
           VType::makeBool(), SourceLocation());
       if (MayAlias) {
         auto Same = std::make_unique<VBinOpExpr>(
-            VBinOp::Eq, Ptr(AddressParams[I]), Ptr(AddressParams[J]),
-            VType::makeBool(), SourceLocation());
+            VBinOp::Eq, Ptr(Addresses[I]), Ptr(Addresses[J]), VType::makeBool(),
+            SourceLocation());
         Relation = std::make_unique<VBinOpExpr>(
             VBinOp::Or, std::move(Same), std::move(Relation), VType::makeBool(),
             SourceLocation());
@@ -2910,7 +3678,7 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
           ProofObligationKind::Aliasing);
       if (!MayAlias)
         Fn->DisjointAddresses.push_back(
-            {valueName(AddressParams[I]), valueName(AddressParams[J]),
+            {Addresses[I].Name, Addresses[J].Name,
              static_cast<uint64_t>(
                  Ctx.getTypeSizeInChars(PointeeI).getQuantity()),
              static_cast<uint64_t>(
@@ -2940,9 +3708,26 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
           Fn->Body.push_back(std::make_unique<VContractAssertStmt>(
               std::move(Condition), Check->getExprLoc()));
       }
+    ErrorInContract = false;
+    // A constructor's member initializers run before its body, on an object
+    // of which nothing is known to be initialized.
+    if (Constructor) {
+      if (Ctx.getTypeSizeInChars(ThisObject).getQuantity() >
+          static_cast<int64_t>(MaxAutomaticObjectBytes))
+        error(FD->getLocation(), Fn->Name +
+                                     ": constructors of a class larger than " +
+                                     std::to_string(MaxAutomaticObjectBytes) +
+                                     " bytes are not supported yet");
+      VVarExpr This("this", Fn->Params.front().second, FD->getLocation(),
+                    VConstructedObjectLifetime);
+      appendMemberInitializers(Constructor, &This, 0, FD->getLocation(),
+                               Fn->Body);
+    }
     for (auto &S : convertStmt(Body))
       Fn->Body.push_back(std::move(S));
     TrackInitialization = false;
+    for (const auto &[Loc, Message] : propagateSubobjectBounds(*Fn))
+      error(SourceRange(Loc), Fn->Name + ": " + Message);
     if (!DynamicPointerProvenanceVariables.empty()) {
       std::vector<std::pair<std::string, SourceLocation>> InitialProvenance;
       InitialProvenance.reserve(DynamicPointerProvenanceVariables.size());
@@ -2968,18 +3753,18 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     if (std::any_of(Fn->Body.begin(), Fn->Body.end(), [&](const auto &S) {
           return usesHeapBackedLocalAsScalar(S.get(), HeapBackedLocals);
         })) {
-      Errors.push_back(Fn->Name +
-                       ": internal lowering failure for a byte-addressed "
+      error(Fn->Name + ": internal lowering failure for a byte-addressed "
                        "object");
       CurrentFn = nullptr;
       return nullptr;
     }
+    // A spec whose body the verifier does not represent remains a
+    // declaration (markUnsupported), which its users apply.
     if (Fn->IsSpec && !specBodyCanBeAxiomatized(Fn->Body)) {
-      Errors.push_back(Fn->Name +
-                       ": spec function body is unsupported by axiomatic "
+      error(Fn->Name + ": spec function body is unsupported by axiomatic "
                        "lowering");
       CurrentFn = nullptr;
-      return nullptr;
+      return Fn;
     }
     if (!Fn->IsSpec && Fn->Body.empty() && Fn->Postconditions.empty() &&
         !functionContract(FD)) {
@@ -3002,11 +3787,39 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
       InPost = SavedPost;
       Fn->ClauseProofs.push_back(std::move(Converted));
     }
-  if (Fn->IsSpec && Fn->Body.empty() && Fn->Decreases.empty()) {
+  if (Fn->IsSpec && Fn->Body.empty() && Fn->Decreases.empty() &&
+      Errors.size() == ErrorsAtStart) {
     CurrentFn = nullptr;
     return nullptr;
   }
   collectLayouts(FD, *Fn);
+  auto RecordLayout = [&](QualType Object) -> std::optional<std::string> {
+    const std::string Identity = canonicalTypeIdentity(
+        Object.getCanonicalType().getUnqualifiedType(), Ctx);
+    if (!Object->isRecordType() ||
+        llvm::none_of(Fn->Layouts, [&](const VObjectLayout &Layout) {
+          return Layout.Kind == VObjectKind::Record &&
+                 Layout.TypeIdentity == Identity;
+        }))
+      return std::nullopt;
+    return Identity;
+  };
+  if (HasThis)
+    if (auto Identity = RecordLayout(ThisObject))
+      Fn->RecordParams["this"] = *Identity;
+  for (const ParmVarDecl *P : FD->parameters()) {
+    QualType Ty = P->getType();
+    if (!Ty->isPointerType() && !Ty->isReferenceType())
+      continue;
+    const std::string Identity = canonicalTypeIdentity(
+        Ty->getPointeeType().getCanonicalType().getUnqualifiedType(), Ctx);
+    if (Ty->getPointeeType()->isRecordType() &&
+        llvm::any_of(Fn->Layouts, [&](const VObjectLayout &Layout) {
+          return Layout.Kind == VObjectKind::Record &&
+                 Layout.TypeIdentity == Identity;
+        }))
+      Fn->RecordParams[valueName(P)] = Identity;
+  }
   CurrentFn = nullptr;
   return Fn;
 }
@@ -3032,9 +3845,9 @@ std::unique_ptr<VExpr> ASTConverter::globalAddress(const VarDecl *VD,
   if (!VD->hasGlobalStorage() || VD->isStaticLocal() ||
       VD->getTLSKind() != VarDecl::TLS_None || Type.isVolatileQualified() ||
       !(Type->isIntegralOrEnumerationType() || Type->isBooleanType())) {
-    Errors.push_back(CurrentFn->Name +
-                     ": only scalar integral global variables are supported: " +
-                     VD->getNameAsString());
+    error(CurrentFn->Name +
+          ": only scalar integral global variables are supported: " +
+          VD->getNameAsString());
     return nullptr;
   }
   const uint64_t Size = Ctx.getTypeSizeInChars(Type).getQuantity();
@@ -3074,6 +3887,24 @@ std::optional<VFootprint> ASTConverter::convertFootprint(const Expr *E) {
       if (!Out.Count)
         Out.Target.reset();
     }
+  } else if (const Expr *Inner = E->IgnoreParens();
+             (isa<MemberExpr>(Inner) || isa<ArraySubscriptExpr>(Inner)) &&
+             (Inner->getType()->isRecordType() ||
+              Inner->getType()->isConstantArrayType()) &&
+             inPointeeObject(Inner)) {
+    // A record or array inside an object (p->inner, r.buf, p[k]) is its
+    // bytes, a range of one element of its size; *p and a reference to a
+    // record name their whole object.
+    if (auto Place = objectPlace(Inner)) {
+      Out.Target = std::make_unique<VLoadExpr>(
+          Place->takeAddress(),
+          VType::fromQualType(Inner->getType(), IntMode, Ctx),
+          Inner->getExprLoc(), "", Place->takeAccessCondition());
+      Out.Count = std::make_unique<VLiteralExpr>(
+          1, VType::fromQualType(Ctx.IntTy, IntMode, Ctx), Inner->getExprLoc());
+      Out.ElementSize = static_cast<uint64_t>(
+          Ctx.getTypeSizeInChars(Inner->getType()).getQuantity());
+    }
   } else {
     Out.Target = convertExpr(E);
   }
@@ -3089,9 +3920,8 @@ ASTConverter::convertLoopFootprints(const LoopContractInfo &LCI) {
   for (const Expr *E : LCI.Modifies) {
     std::optional<VFootprint> Footprint = convertFootprint(E);
     if (!Footprint || Footprint->Target->K != VExpr::Load) {
-      Errors.push_back(CurrentFn->Name +
-                       ": a loop's modifies names memory: *p, p[i], "
-                       "p[lo : n], p->f, or a reference");
+      error(CurrentFn->Name + ": a loop's modifies names memory: *p, p[i], "
+                              "p[lo : n], p->f, or a reference");
       continue;
     }
     Out.push_back(std::move(*Footprint));
@@ -3114,12 +3944,166 @@ static bool neverRepeats(const Stmt *Loop, const ASTContext &Ctx) {
   return Value && Value->isZero();
 }
 
-std::unique_ptr<VExpr> ASTConverter::convertLoopCondition(const Stmt *Loop,
-                                                          const Expr *Cond) {
+std::unique_ptr<VExpr>
+ASTConverter::convertLoopCondition(const Stmt *Loop, const Expr *Cond,
+                                   std::vector<std::unique_ptr<VStmt>> *Calls) {
   if (neverRepeats(Loop, Ctx))
     return std::make_unique<VLiteralExpr>(false, VType::makeBool(),
                                           Cond->getExprLoc());
+  llvm::SaveAndRestore Sink(CallSink, Calls);
+  llvm::SaveAndRestore Hoisted(HoistedCalls,
+                               std::map<const CallExpr *, std::string>());
   return convertExpr(Cond);
+}
+
+static bool mentionsVariable(const VExpr *E, const std::string &Name);
+
+/// Whether S leaves the switch or loop that contains it: a break, or with
+/// \p Continues a continue, outside the loops nested in S.
+static bool leaves(const VStmt &S, bool Continues) {
+  auto Any = [&](const std::vector<std::unique_ptr<VStmt>> &Stmts) {
+    return llvm::any_of(Stmts, [&](const std::unique_ptr<VStmt> &Nested) {
+      return leaves(*Nested, Continues);
+    });
+  };
+  switch (S.K) {
+  case VStmt::Break:
+    return true;
+  case VStmt::Continue:
+    return Continues;
+  case VStmt::If: {
+    const auto &I = static_cast<const VIfStmt &>(S);
+    return Any(I.Then) || Any(I.Else);
+  }
+  case VStmt::Seq:
+    return Any(static_cast<const VSeqStmt &>(S).Stmts);
+  case VStmt::GhostBlock:
+    return Any(static_cast<const VGhostBlockStmt &>(S).Body);
+  default:
+    return false;
+  }
+}
+
+/// The exits of a switch, or of a `do` loop's first iteration, as flags: a
+/// break (and, given \p Continue, a continue) outside the loops nested in
+/// \p Stmts sets its flag, and the statements after it run only while no
+/// flag is set, as BMC unrolling lowers a loop's exits.
+static std::vector<std::unique_ptr<VStmt>>
+lowerExits(std::vector<std::unique_ptr<VStmt>> Stmts, const std::string &Break,
+           const std::string &Continue) {
+  std::vector<std::unique_ptr<VStmt>> Out;
+  for (size_t Index = 0; Index < Stmts.size(); ++Index) {
+    std::unique_ptr<VStmt> &S = Stmts[Index];
+    const SourceLocation Loc = S->Loc;
+    if (S->K == VStmt::Break ||
+        (S->K == VStmt::Continue && !Continue.empty())) {
+      Out.push_back(std::make_unique<VAssignStmt>(
+          S->K == VStmt::Break ? Break : Continue,
+          std::make_unique<VLiteralExpr>(1, VType::makeBool(), Loc), Loc));
+      return Out;
+    }
+    const bool Leaves = leaves(*S, !Continue.empty());
+    if (Leaves) {
+      if (S->K == VStmt::If) {
+        auto &I = static_cast<VIfStmt &>(*S);
+        I.Then = lowerExits(std::move(I.Then), Break, Continue);
+        I.Else = lowerExits(std::move(I.Else), Break, Continue);
+      } else if (S->K == VStmt::Seq) {
+        auto &Seq = static_cast<VSeqStmt &>(*S);
+        Seq.Stmts = lowerExits(std::move(Seq.Stmts), Break, Continue);
+      } else if (S->K == VStmt::GhostBlock) {
+        auto &Ghost = static_cast<VGhostBlockStmt &>(*S);
+        Ghost.Body = lowerExits(std::move(Ghost.Body), Break, Continue);
+      }
+    }
+    Out.push_back(std::move(S));
+    if (!Leaves || Index + 1 == Stmts.size())
+      continue;
+    std::vector<std::unique_ptr<VStmt>> Rest(
+        std::make_move_iterator(Stmts.begin() + Index + 1),
+        std::make_move_iterator(Stmts.end()));
+    std::unique_ptr<VExpr> Left =
+        std::make_unique<VVarExpr>(Break, VType::makeBool(), Loc);
+    if (!Continue.empty())
+      Left = std::make_unique<VBinOpExpr>(
+          VBinOp::Or, std::move(Left),
+          std::make_unique<VVarExpr>(Continue, VType::makeBool(), Loc),
+          VType::makeBool(), Loc);
+    Out.push_back(std::make_unique<VIfStmt>(
+        std::make_unique<VUnaryOpExpr>(VUnaryOp::Not, std::move(Left),
+                                       VType::makeBool(), Loc),
+        lowerExits(std::move(Rest), Break, Continue),
+        std::vector<std::unique_ptr<VStmt>>(), Loc));
+    return Out;
+  }
+  return Out;
+}
+
+static std::unique_ptr<VStmt> assignFlag(const std::string &Name, bool Value,
+                                         SourceLocation Loc) {
+  return std::make_unique<VAssignStmt>(
+      Name,
+      std::make_unique<VLiteralExpr>(Value ? 1 : 0, VType::makeBool(), Loc),
+      Loc);
+}
+
+static void joinInitialized(std::optional<std::set<std::string>> &Joined,
+                            const std::set<std::string> &State) {
+  if (!Joined) {
+    Joined = State;
+    return;
+  }
+  std::set<std::string> Both;
+  std::set_intersection(Joined->begin(), Joined->end(), State.begin(),
+                        State.end(), std::inserter(Both, Both.end()));
+  Joined = std::move(Both);
+}
+
+void ASTConverter::declareConditionVariable(
+    const DeclStmt *Decl, std::vector<std::unique_ptr<VStmt>> &Out) {
+  // It is declared at every test, inside the loop.
+  llvm::SaveAndRestore Depth(LoopDepth, LoopDepth + 1);
+  auto Declared = convertStmt(Decl);
+  Out.insert(Out.end(), std::make_move_iterator(Declared.begin()),
+             std::make_move_iterator(Declared.end()));
+}
+
+bool ASTConverter::checkConditionVariableUnnamed(
+    const VarDecl *Var, const std::vector<std::unique_ptr<VExpr>> &Invariants,
+    const std::vector<std::unique_ptr<VExpr>> &Decreases) {
+  if (!Var)
+    return true;
+  const std::string Name = valueName(Var);
+  auto Names = [&](const std::unique_ptr<VExpr> &E) {
+    return mentionsVariable(E.get(), Name);
+  };
+  if (llvm::none_of(Invariants, Names) && llvm::none_of(Decreases, Names))
+    return true;
+  error(CurrentFn->Name +
+        ": a loop's contract cannot name its condition "
+        "variable '" +
+        Var->getNameAsString() + "', which is declared at each test");
+  return false;
+}
+
+void ASTConverter::testAtEveryIteration(
+    std::vector<std::unique_ptr<VStmt>> Calls, std::unique_ptr<VExpr> &Cond,
+    std::vector<std::unique_ptr<VStmt>> &Body) {
+  if (Calls.empty())
+    return;
+  // while (true) { calls; if (!cond) break; body }: the calls run at every
+  // test, after the invariants at the head.
+  const SourceLocation Loc = Cond->Loc;
+  std::vector<std::unique_ptr<VStmt>> Exit;
+  Exit.push_back(std::make_unique<VBreakStmt>(Loc));
+  Calls.push_back(std::make_unique<VIfStmt>(
+      std::make_unique<VUnaryOpExpr>(VUnaryOp::Not, std::move(Cond),
+                                     VType::makeBool(), Loc),
+      std::move(Exit), std::vector<std::unique_ptr<VStmt>>(), Loc));
+  for (auto &S : Body)
+    Calls.push_back(std::move(S));
+  Body = std::move(Calls);
+  Cond = std::make_unique<VLiteralExpr>(1, VType::makeBool(), Loc);
 }
 
 bool ASTConverter::checkLoopTermination(const Stmt *Loop, bool HasMeasure) {
@@ -3128,14 +4112,12 @@ bool ASTConverter::checkLoopTermination(const Stmt *Loop, bool HasMeasure) {
   const bool Terminates = HasMeasure || neverRepeats(Loop, Ctx);
   if (InGhost || CurrentFn->IsProof) {
     if (MayDiverge) {
-      Errors.push_back(CurrentFn->Name +
-                       ": proof-only loops must terminate; "
-                       "cppverify::decreases(*) is not allowed");
+      error(CurrentFn->Name + ": proof-only loops must terminate; "
+                              "cppverify::decreases(*) is not allowed");
       return false;
     }
     if (!Terminates) {
-      Errors.push_back(CurrentFn->Name +
-                       ": proof-only loops require a decreases clause");
+      error(CurrentFn->Name + ": proof-only loops require a decreases clause");
       return false;
     }
     return true;
@@ -3150,35 +4132,76 @@ bool ASTConverter::checkLoopTermination(const Stmt *Loop, bool HasMeasure) {
   return true;
 }
 
+std::unique_ptr<VExpr> ASTConverter::convertMinOrMax(const CallExpr *CE,
+                                                     bool IsMax) {
+  // The standard's meaning ([alg.min.max]), whatever the library: the first
+  // argument unless the other is less (max) or greater (min) than it, which
+  // reads each argument once and has no definedness condition of its own.
+  auto A = convertExpr(CE->getArg(0));
+  auto B = convertExpr(CE->getArg(1));
+  if (!A || !B)
+    return nullptr;
+  const SourceLocation Loc = CE->getExprLoc();
+  const VType Ty = A->Ty;
+  auto Less = IsMax ? std::make_unique<VBinOpExpr>(VBinOp::Lt, cloneVExpr(A.get()),
+                                                   cloneVExpr(B.get()),
+                                                   VType::makeBool(), Loc)
+                    : std::make_unique<VBinOpExpr>(VBinOp::Lt, cloneVExpr(B.get()),
+                                                   cloneVExpr(A.get()),
+                                                   VType::makeBool(), Loc);
+  return std::make_unique<VConditionalExpr>(std::move(Less), std::move(B),
+                                            std::move(A), Ty, Loc);
+}
+
 std::unique_ptr<VFunction>
 ASTConverter::convertConstexprSpec(const FunctionDecl *FD) {
-  ParameterNames.clear();
-  if (exceedsNestingLimit(FD, functionContract(FD)) ||
-      hasIndirectMemoryAccess(FD))
-    return nullptr;
+  llvm::SaveAndRestore Owner(ErrorFunction, functionIdentity(FD));
+  llvm::SaveAndRestore OwnerName(ErrorFunctionName, functionName(FD));
+  llvm::SaveAndRestore InContract(ErrorInContract, true);
+  const size_t ErrorsAtStart = Errors.size();
+  nameParameters(FD, FD);
   if (!FD->isConstexpr() || !FD->hasBody())
     return nullptr;
-  if (FD->getReturnType()->isRecordType()) {
-    Errors.push_back(FD->getNameAsString() +
-                     ": aggregate-returning constexpr specs are unsupported");
-    return nullptr;
-  }
-  if (auto Unsupported = findUnsupportedType(FD, false)) {
-    Errors.push_back(FD->getNameAsString() +
-                     ": unsupported C++ type in verification: " + *Unsupported);
-    return nullptr;
-  }
+  // One the verifier cannot lift is kept as a declaration that uses an
+  // unsupported construct, so that its users' verdicts name it.
+  auto Unlifted = [&](std::optional<std::string> Message) {
+    if (Message)
+      error(FD->getLocation(), functionName(FD) + ": " + *Message);
+    auto Fn = std::make_unique<VFunction>();
+    Fn->Name = functionName(FD);
+    Fn->Identity = functionIdentity(FD);
+    Fn->DeclLoc = FD->getLocation();
+    Fn->IsSpec = true;
+    Fn->IsConstexprSpec = true;
+    return Fn;
+  };
+  if (exceedsNestingLimit(FD, functionContract(FD)))
+    return Unlifted(std::nullopt);
+  if (hasIndirectMemoryAccess(FD))
+    return Unlifted("a constexpr function read as a spec cannot read memory "
+                    "through a pointer or an array");
+  if (FD->getReturnType()->isRecordType())
+    return Unlifted("aggregate-returning constexpr specs are unsupported");
+  // A spec is a function of values: a reference to a const scalar, which it
+  // only reads, stands for the value it refers to, as an argument and as the
+  // result (std::max's `const T &`).
+  if (auto Unsupported =
+          findUnsupportedType(FD, /*AllowScalarReferences=*/false,
+                              /*ConstScalarReferencesAreValues=*/true))
+    return Unlifted("unsupported C++ type in verification: " + *Unsupported);
 
   auto Fn = std::make_unique<VFunction>();
-  Fn->Name = FD->getNameAsString();
+  Fn->Name = functionName(FD);
   Fn->Identity = functionIdentity(FD);
   Fn->IsSpec = true;
   Fn->IsConstexprSpec = true;
   IntMode = VIntMode::Machine;
   Fn->IntMode = IntMode;
-  Fn->ReturnType = VType::fromQualType(FD->getReturnType(), IntMode, Ctx);
+  Fn->ReturnType =
+      VType::fromQualType(constScalarReferent(FD->getReturnType()), IntMode, Ctx);
   CurrentFn = Fn.get();
 
+  ValueReferences.clear();
   for (const ParmVarDecl *P : FD->parameters()) {
     if (const RecordDecl *RD = getRecordFromType(P->getType())) {
       if (const RecordDecl *Definition = RD->getDefinition())
@@ -3187,8 +4210,11 @@ ASTConverter::convertConstexprSpec(const FunctionDecl *FD) {
               P->getNameAsString() + "." + Field->getNameAsString(),
               VType::fromQualType(Field->getType(), IntMode, Ctx));
     } else {
-      Fn->Params.emplace_back(P->getNameAsString(),
-                              VType::fromQualType(P->getType(), IntMode, Ctx));
+      Fn->Params.emplace_back(
+          P->getNameAsString(),
+          VType::fromQualType(constScalarReferent(P->getType()), IntMode, Ctx));
+      if (P->getType()->isReferenceType())
+        ValueReferences.insert(P);
     }
     recordSourceVariable(P);
   }
@@ -3198,15 +4224,18 @@ ASTConverter::convertConstexprSpec(const FunctionDecl *FD) {
 
   if (const Stmt *Body = FD->getBody()) {
     beginInitializationTracking(FD);
+    ErrorInContract = false;
     Fn->Body = convertStmt(Body);
     TrackInitialization = false;
   }
-  if (Fn->Body.empty()) {
+  if (Fn->Body.empty() && Errors.size() == ErrorsAtStart) {
     CurrentFn = nullptr;
+    ValueReferences.clear();
     return nullptr;
   }
   collectLayouts(FD, *Fn);
   CurrentFn = nullptr;
+  ValueReferences.clear();
   return Fn;
 }
 
@@ -3271,8 +4300,8 @@ std::optional<VPlace> ASTConverter::arrowFieldPlace(const MemberExpr *M) {
   if (!Pointer)
     return std::nullopt;
   if (isDynamicAddress(Pointer)) {
-    Errors.push_back(CurrentFn->Name +
-                     ": dynamic-storage pointers cannot select record fields");
+    error(CurrentFn->Name +
+          ": dynamic-storage pointers cannot select record fields");
     return std::nullopt;
   }
   auto Base = convertExpr(Pointer);
@@ -3311,11 +4340,45 @@ std::optional<VPlace>
 ASTConverter::subscriptPlace(const ArraySubscriptExpr *AS) {
   if (!AS)
     return std::nullopt;
-  if (promotedRootLocal(AS))
-    return promotedObjectPlace(AS);
+  // The base and the index are unsequenced; an array's own name reads
+  // nothing.
+  if (CallSink) {
+    const Expr *Base = AS->getBase()->IgnoreParenImpCasts();
+    const bool BaseReads =
+        !(isa<DeclRefExpr>(Base) && Base->getType()->isArrayType()) &&
+        isHeapSensitive(AS->getBase());
+    if ((containsModifyingCall(AS->getIdx()) && BaseReads) ||
+        (containsModifyingCall(AS->getBase()) &&
+         isHeapSensitive(AS->getIdx()))) {
+      error(CurrentFn->Name +
+            ": C++ leaves the order of these operands open, and a call in "
+            "one may write what the other reads; make the call in a statement "
+            "of its own first");
+      return std::nullopt;
+    }
+  }
+  // An element of a fixed array inside a represented object: a promoted
+  // local, or the object a pointer addresses (r->buf[i], p[k].grid[i][j]).
+  if (promotedRootLocal(AS) || inPointeeObject(AS->getBase()))
+    return objectPlace(AS);
+  return pointerElementPlace(AS);
+}
+
+std::optional<VPlace> ASTConverter::pointeePlace(const Expr *PointerExpr,
+                                                 SourceLocation Loc) {
+  if (isDynamicAddress(PointerExpr)) {
+    error(CurrentFn->Name +
+          ": dynamic-storage pointers cannot select record fields");
+    return std::nullopt;
+  }
+  return derefPlace(PointerExpr, Loc);
+}
+
+std::optional<VPlace>
+ASTConverter::pointerElementPlace(const ArraySubscriptExpr *AS) {
   if (isDynamicAddress(AS->getBase())) {
-    Errors.push_back(CurrentFn->Name +
-                     ": subscripting dynamic-storage pointers is unsupported");
+    error(CurrentFn->Name +
+          ": subscripting dynamic-storage pointers is unsupported");
     return std::nullopt;
   }
   auto Base = convertExpr(AS->getBase());
@@ -3325,8 +4388,8 @@ ASTConverter::subscriptPlace(const ArraySubscriptExpr *AS) {
   const uint64_t PointeeSize = Base->Ty.PointeeSizeBytes;
   Index = scalePointerOffset(std::move(Index), PointeeSize, AS->getExprLoc());
   if (!Index) {
-    Errors.push_back(CurrentFn->Name +
-                     ": pointer arithmetic requires a complete pointee type");
+    error(CurrentFn->Name +
+          ": pointer arithmetic requires a complete pointee type");
     return std::nullopt;
   }
   VPlace Place(std::move(Base),
@@ -3354,8 +4417,8 @@ ASTConverter::automaticLocalPlace(const VarDecl *VD, SourceLocation Loc) {
       Provenance == AutomaticLocalProvenanceVariables.end())
     return std::nullopt;
   if (InOld) {
-    Errors.push_back(CurrentFn->Name +
-                     ": automatic local storage has no function-entry value");
+    error(CurrentFn->Name +
+          ": automatic local storage has no function-entry value");
     return std::nullopt;
   }
   // Its initialization is the storage's, checked where it is read: a write
@@ -3381,7 +4444,9 @@ static const Expr *peelObjectExpr(const Expr *E) {
   return E;
 }
 
-const VarDecl *ASTConverter::promotedRootLocal(const Expr *E) const {
+/// The variable a chain of dot member and fixed-array element selections
+/// starts at (a in a.b[i].c), or null.
+static const VarDecl *selectionRootVar(const Expr *E) {
   while (true) {
     E = peelObjectExpr(E);
     if (!E)
@@ -3402,8 +4467,134 @@ const VarDecl *ASTConverter::promotedRootLocal(const Expr *E) const {
     break;
   }
   const auto *DRE = dyn_cast<DeclRefExpr>(E);
-  const auto *VD = DRE ? dyn_cast<VarDecl>(DRE->getDecl()) : nullptr;
+  return DRE ? dyn_cast<VarDecl>(DRE->getDecl()) : nullptr;
+}
+
+const VarDecl *ASTConverter::promotedRootLocal(const Expr *E) const {
+  const VarDecl *VD = selectionRootVar(E);
   return VD && AddressableLocals.count(VD) ? VD : nullptr;
+}
+
+const VarDecl *ASTConverter::recordReferenceRoot(const Expr *E) const {
+  const VarDecl *VD = selectionRootVar(E);
+  return VD && (isa<ParmVarDecl>(VD) || VD->hasLocalStorage()) &&
+                 VD->getType()->isLValueReferenceType() &&
+                 VD->getType().getNonReferenceType()->isRecordType()
+             ? VD
+             : nullptr;
+}
+
+bool ASTConverter::inPointeeObject(const Expr *E) const {
+  return pointeeRootPointer(E) || recordReferenceRoot(E);
+}
+
+bool ASTConverter::subobjectPointerRoot(const Expr *E) const {
+  if (pointeeRootPointer(E))
+    return true;
+  // A local reference bound to local or dynamic storage names an object
+  // whose lifetime a pointer formed from it would not carry.
+  const VarDecl *VD = recordReferenceRoot(E);
+  return VD && !LocalReferenceProvenanceVariables.count(VD);
+}
+
+std::string ASTConverter::arrayDecayError(const Expr *Array) const {
+  const auto *M = dyn_cast_or_null<MemberExpr>(peelObjectExpr(Array));
+  const std::string Member =
+      M ? M->getMemberDecl()->getNameAsString() : std::string();
+  if (const VarDecl *Root = selectionRootVar(Array);
+      Root && Root->hasGlobalStorage()) {
+    const std::string Kind = Root->isStaticLocal() ? "static local" : "global";
+    const std::string Name = "'" + Root->getNameAsString() + "'";
+    return M ? "the array member '" + Member + "' of the " + Kind + " " + Name +
+                   " is unsupported"
+             : "the " + Kind + " array " + Name + " is unsupported";
+  }
+  return "array-to-pointer decay of automatic storage is unsupported until "
+         "lexical lifetime and escape effects are modeled";
+}
+
+std::unique_ptr<VExpr> ASTConverter::subobjectPointer(const Expr *E,
+                                                      const Expr *Object,
+                                                      bool AddressOf) {
+  const SourceLocation Loc = E->getExprLoc();
+  auto Place = objectPlace(Object);
+  if (!Place)
+    return nullptr;
+  auto AccessCondition = Place->takeAccessCondition();
+  auto Address = Place->takeAddress();
+  const VType PointerType = VType::fromQualType(E->getType(), IntMode, Ctx);
+  Address->Ty = PointerType;
+  // The bytes the pointer may address: the array it decays from or whose
+  // element it addresses, else the field or record it addresses. An element
+  // of the objects a pointer addresses (&p[i], &*p) is bounded by them.
+  const Expr *Bounding = nullptr;
+  const Expr *Peeled = peelObjectExpr(Object);
+  if (!AddressOf || isa<MemberExpr>(Peeled)) {
+    Bounding = Object;
+  } else if (const auto *AS = dyn_cast<ArraySubscriptExpr>(Peeled)) {
+    const Expr *Base = peelObjectExpr(AS->getBase());
+    if (Base && Base->getType()->isArrayType())
+      Bounding = Base;
+  }
+  std::unique_ptr<VExpr> Lo;
+  if (Bounding == Object) {
+    Lo = cloneVExpr(Address.get());
+  } else if (Bounding) {
+    auto Enclosing = objectPlace(Bounding);
+    if (!Enclosing)
+      return nullptr;
+    Lo = Enclosing->takeAddress();
+  }
+  // Only a statement can check the pointer and give it bounds; elsewhere,
+  // as in a condition or a contract, it is a value nothing reads through.
+  if (!SubobjectSink)
+    return Address;
+  if (AccessCondition)
+    SubobjectSink->push_back(std::make_unique<VAssertStmt>(
+        std::move(AccessCondition), Loc, ProofObligationKind::Bounds));
+  appendReferenceBindingCheck(Object, Address.get(), Loc, *SubobjectSink);
+  if (!Bounding)
+    return Address;
+  const uint64_t Size =
+      Ctx.getTypeSizeInChars(Bounding->getType()).getQuantity();
+  auto Hi = objectLeafAddress(Lo.get(), Size, Loc);
+  const std::string Name =
+      FormedSubobjectPrefix + std::to_string(++SubobjectPointerId);
+  SubobjectSink->push_back(
+      std::make_unique<VAssignStmt>(Name, std::move(Address), Loc));
+  SubobjectSink->push_back(
+      std::make_unique<VAssignStmt>(lowerBoundName(Name), std::move(Lo), Loc));
+  SubobjectSink->push_back(
+      std::make_unique<VAssignStmt>(upperBoundName(Name), std::move(Hi), Loc));
+  CurrentFn->BoundedPointers.insert(Name);
+  return std::make_unique<VVarExpr>(Name, PointerType, Loc);
+}
+
+const Expr *ASTConverter::pointeeRootPointer(const Expr *E) const {
+  while (true) {
+    E = peelObjectExpr(E);
+    if (!E)
+      return nullptr;
+    if (const auto *M = dyn_cast<MemberExpr>(E)) {
+      if (M->isArrow())
+        return M->getBase();
+      E = M->getBase();
+      continue;
+    }
+    if (const auto *AS = dyn_cast<ArraySubscriptExpr>(E)) {
+      const Expr *Base = peelObjectExpr(AS->getBase());
+      if (Base && Base->getType()->isArrayType()) {
+        E = Base;
+        continue;
+      }
+      return AS->getBase()->getType()->isPointerType() ? AS->getBase()
+                                                       : nullptr;
+    }
+    if (const auto *U = dyn_cast<UnaryOperator>(E);
+        U && U->getOpcode() == UO_Deref)
+      return U->getSubExpr();
+    return nullptr;
+  }
 }
 
 std::optional<uint64_t>
@@ -3442,8 +4633,7 @@ ASTConverter::recordFixedArrayBoundsCheck(const Expr *Index,
       const bool OutOfBounds = (Value->isSigned() && Value->isNegative()) ||
                                IndexMagnitude.uge(ArrayCount);
       if (OutOfBounds)
-        Errors.push_back(CurrentFn->Name +
-                         ": fixed-array index is out of bounds");
+        error(CurrentFn->Name + ": fixed-array index is out of bounds");
       return nullptr;
     }
   }
@@ -3464,30 +4654,34 @@ ASTConverter::recordFixedArrayBoundsCheck(const Expr *Index,
   return Bound;
 }
 
-std::optional<VPlace>
-ASTConverter::promotedObjectPlace(const Expr *E) {
+std::optional<VPlace> ASTConverter::objectPlace(const Expr *E) {
   E = peelObjectExpr(E);
   if (!E)
     return std::nullopt;
 
   if (const auto *DRE = dyn_cast<DeclRefExpr>(E)) {
     const auto *VD = dyn_cast<VarDecl>(DRE->getDecl());
+    // The object a reference to a record names, as *p for a pointer.
+    if (VD && recordReferenceRoot(E))
+      return lvaluePlace(E);
     if (!VD || !AddressableLocals.count(VD))
       return std::nullopt;
     return automaticLocalPlace(VD, E->getExprLoc());
   }
 
+  if (const auto *U = dyn_cast<UnaryOperator>(E);
+      U && U->getOpcode() == UO_Deref)
+    return pointeePlace(U->getSubExpr(), E->getExprLoc());
+
   if (const auto *M = dyn_cast<MemberExpr>(E)) {
-    if (M->isArrow())
-      return std::nullopt;
     const auto *FD = dyn_cast<FieldDecl>(M->getMemberDecl());
     auto Offset = recordFieldOffset(FD);
-    auto Base = promotedObjectPlace(M->getBase());
+    auto Base = M->isArrow() ? pointeePlace(M->getBase(), M->getExprLoc())
+                             : objectPlace(M->getBase());
     if (!Base)
       return std::nullopt;
     if (!Offset) {
-      Errors.push_back(CurrentFn->Name +
-                       ": unsupported field selection on an automatic object");
+      error(CurrentFn->Name + ": unsupported field selection");
       return std::nullopt;
     }
     Base->applyField(FD->getNameAsString(), *Offset, M->getExprLoc());
@@ -3500,12 +4694,14 @@ ASTConverter::promotedObjectPlace(const Expr *E) {
     const Expr *ArrayExpr = peelObjectExpr(AS->getBase());
     const ConstantArrayType *CAT =
         ArrayExpr ? Ctx.getAsConstantArrayType(ArrayExpr->getType()) : nullptr;
-    auto Base = promotedObjectPlace(ArrayExpr);
+    // p[k] selects an element of the objects p addresses.
+    if (!CAT && AS->getBase()->getType()->isPointerType())
+      return pointerElementPlace(AS);
+    auto Base = objectPlace(ArrayExpr);
     if (!Base)
       return std::nullopt;
     if (!CAT) {
-      Errors.push_back(CurrentFn->Name +
-                       ": unsupported indexing of an automatic object");
+      error(CurrentFn->Name + ": unsupported indexing");
       return std::nullopt;
     }
     const uint64_t Count = CAT->getSize().getZExtValue();
@@ -3519,9 +4715,9 @@ ASTConverter::promotedObjectPlace(const Expr *E) {
     auto Scaled =
         scalePointerOffset(std::move(Index), Stride, AS->getExprLoc());
     if (!Scaled) {
-      Errors.push_back(CurrentFn->Name +
-                       ": fixed-array indexing requires a complete element "
-                       "type and integral index");
+      error(CurrentFn->Name +
+            ": fixed-array indexing requires a complete element "
+            "type and integral index");
       return std::nullopt;
     }
     Base->applyElement(std::move(Scaled), Stride, AS->getExprLoc());
@@ -3752,7 +4948,10 @@ std::optional<VPlace> ASTConverter::lvaluePlace(const Expr *E) {
   // A promoted local has exactly one representation: every subobject lvalue
   // rooted in it is an exact byte offset from its single automatic object.
   if (promotedRootLocal(E))
-    return promotedObjectPlace(E);
+    return objectPlace(E);
+  // A subobject of the record a reference names: c.f, c.buf[i].
+  if (recordReferenceRoot(E) && !isa<DeclRefExpr>(E))
+    return objectPlace(E);
 
   if (const auto *DRE = dyn_cast<DeclRefExpr>(E)) {
     const auto *VD = dyn_cast<VarDecl>(DRE->getDecl());
@@ -3761,9 +4960,8 @@ std::optional<VPlace> ASTConverter::lvaluePlace(const Expr *E) {
     if (VD->getType()->isLValueReferenceType() &&
         (isa<ParmVarDecl>(VD) || VD->isLocalVarDecl())) {
       if (InOld && VD->isLocalVarDecl()) {
-        Errors.push_back(
-            CurrentFn->Name +
-            ": local reference bindings have no function-entry value");
+        error(CurrentFn->Name +
+              ": local reference bindings have no function-entry value");
         return std::nullopt;
       }
       requireInitialized(VD);
@@ -3792,41 +4990,24 @@ std::optional<VPlace> ASTConverter::lvaluePlace(const Expr *E) {
       return std::nullopt;
     if (isDynamicAddress(U->getSubExpr()) &&
         !directDynamicPointer(U->getSubExpr())) {
-      Errors.push_back(CurrentFn->Name +
-                       ": dynamic-storage reference binding requires its "
-                       "direct allocation pointer");
+      error(CurrentFn->Name +
+            ": dynamic-storage reference binding requires its "
+            "direct allocation pointer");
       return std::nullopt;
     }
     return derefPlace(U->getSubExpr(), E->getExprLoc());
   }
 
-  if (const auto *M = dyn_cast<MemberExpr>(E)) {
-    const Expr *Pointer = nullptr;
-    if (M->isArrow()) {
-      Pointer = M->getBase();
-    } else if (const auto *Deref =
-                   dyn_cast<UnaryOperator>(M->getBase()->IgnoreParenImpCasts());
-               Deref && Deref->getOpcode() == UO_Deref) {
-      Pointer = Deref->getSubExpr();
-    }
+  // A subobject of the object a pointer variable addresses: p->f, p[i],
+  // p->inner.x, p->buf[i], p[k].grid[i][j].
+  if (const Expr *Pointer = pointeeRootPointer(E)) {
     const auto *PointerRef =
-        Pointer ? dyn_cast<DeclRefExpr>(Pointer->IgnoreParenImpCasts())
-                : nullptr;
+        dyn_cast<DeclRefExpr>(Pointer->IgnoreParenImpCasts());
     const auto *PointerVar =
         PointerRef ? dyn_cast<VarDecl>(PointerRef->getDecl()) : nullptr;
     if (!PointerVar || !PointerVar->getType()->isPointerType())
       return std::nullopt;
-    return arrowFieldPlace(M);
-  }
-
-  if (const auto *AS = dyn_cast<ArraySubscriptExpr>(E)) {
-    const auto *PointerRef =
-        dyn_cast<DeclRefExpr>(AS->getBase()->IgnoreParenImpCasts());
-    const auto *PointerVar =
-        PointerRef ? dyn_cast<VarDecl>(PointerRef->getDecl()) : nullptr;
-    if (!PointerVar || !PointerVar->getType()->isPointerType())
-      return std::nullopt;
-    return subscriptPlace(AS);
+    return objectPlace(E);
   }
 
   return std::nullopt;
@@ -3871,12 +5052,30 @@ ASTConverter::convertRecordField(std::unique_ptr<VExpr> Base,
       return nullptr;
     return std::make_unique<VOldExpr>(std::move(Inner), Ty, Loc);
   }
-  Errors.push_back(CurrentFn->Name +
-                   ": unsupported aggregate field base expression");
+  error(CurrentFn->Name + ": unsupported aggregate field base expression");
   return nullptr;
 }
 
 std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
+  llvm::SaveAndRestore At(CurrentRange, E && E->getSourceRange().isValid()
+                                            ? E->getSourceRange()
+                                            : CurrentRange);
+  if (DropExtentMarkers)
+    if (const auto *Call = dyn_cast_or_null<CallExpr>(
+            E ? E->IgnoreParenImpCasts() : nullptr)) {
+      const FunctionDecl *Callee = Call->getDirectCallee();
+      if (Callee && Callee->getDeclName().isIdentifier() &&
+          Callee->getName() == "valid" && Call->getNumArgs() == 2)
+        return std::make_unique<VLiteralExpr>(1, VType::makeBool(),
+                                              E->getExprLoc());
+    }
+  // An extent marker's pointer field is its entry value's parameter.
+  if (E && !FieldExtentParameters.empty() && !ThisSubstitute)
+    if (auto It = FieldExtentParameters.find(E->IgnoreParenImpCasts());
+        It != FieldExtentParameters.end())
+      return std::make_unique<VVarExpr>(
+          It->second, VType::fromQualType(E->getType(), IntMode, Ctx),
+          E->getExprLoc());
   auto Result = convertExprImpl(E);
   if (Result && E)
     Result->EndLoc = E->getEndLoc();
@@ -3901,6 +5100,135 @@ static std::unique_ptr<VExpr> replaceVariable(const VExpr *E,
       };
   replace(Out);
   return Out;
+}
+
+static void typeKey(const VType &Ty, std::string &Key) {
+  Key += '<';
+  for (uint64_t Field :
+       {static_cast<uint64_t>(Ty.Kind), static_cast<uint64_t>(Ty.IntMode),
+        static_cast<uint64_t>(Ty.IsSigned), static_cast<uint64_t>(Ty.BitWidth),
+        Ty.PointeeSizeBytes, Ty.ObjectSizeBytes, Ty.ObjectAlignBytes,
+        Ty.ArrayCount, Ty.ArrayStrideBytes})
+    Key += std::to_string(Field) + ',';
+  Key += Ty.TypeIdentity + ',' + Ty.EnumMin + ',' + Ty.EnumMax + '>';
+}
+
+/// A key two expressions share exactly when they are equal up to the names
+/// of their bound variables, or false.
+static bool structuralKey(const VExpr *E,
+                          std::map<std::string, std::string> &Bound,
+                          std::string &Key) {
+  if (!E) {
+    Key += '_';
+    return true;
+  }
+  Key += '(' + std::to_string(static_cast<int>(E->K));
+  typeKey(E->Ty, Key);
+  auto sub = [&](const VExpr *Child) {
+    return structuralKey(Child, Bound, Key);
+  };
+  switch (E->K) {
+  case VExpr::Literal:
+    Key += static_cast<const VLiteralExpr *>(E)->Value;
+    break;
+  case VExpr::Var: {
+    const auto *V = static_cast<const VVarExpr *>(E);
+    if (!V->ProvenanceVariable.empty() || V->Origins ||
+        !V->OriginCompanion.empty())
+      return false;
+    auto It = Bound.find(V->Name);
+    Key += It != Bound.end() ? It->second : V->Name;
+    break;
+  }
+  case VExpr::BinOp: {
+    const auto *B = static_cast<const VBinOpExpr *>(E);
+    Key += std::to_string(static_cast<int>(B->Op));
+    if (!sub(B->Lhs.get()) || !sub(B->Rhs.get()))
+      return false;
+    break;
+  }
+  case VExpr::UnaryOp: {
+    const auto *U = static_cast<const VUnaryOpExpr *>(E);
+    Key += std::to_string(static_cast<int>(U->Op)) + U->AllocationHeapVar +
+           ',' + U->LivenessHeapVar + ',' + U->InitializationHeapVar;
+    if (!sub(U->Operand.get()))
+      return false;
+    break;
+  }
+  case VExpr::Cast: {
+    const auto *Cast = static_cast<const VCastExpr *>(E);
+    typeKey(Cast->FromTy, Key);
+    Key += Cast->IsTrigger ? 't' : 'c';
+    if (!sub(Cast->Inner.get()))
+      return false;
+    break;
+  }
+  case VExpr::Load: {
+    const auto *L = static_cast<const VLoadExpr *>(E);
+    Key += L->HeapVar;
+    if (!sub(L->Ptr.get()) || !sub(L->AccessCondition.get()))
+      return false;
+    break;
+  }
+  case VExpr::Result:
+    break;
+  case VExpr::Old:
+    if (!sub(static_cast<const VOldExpr *>(E)->Inner.get()))
+      return false;
+    break;
+  case VExpr::Conditional: {
+    const auto *C = static_cast<const VConditionalExpr *>(E);
+    if (!sub(C->Cond.get()) || !sub(C->Then.get()) || !sub(C->Else.get()))
+      return false;
+    break;
+  }
+  case VExpr::Forall:
+  case VExpr::Exists: {
+    const auto *Q = static_cast<const VQuantifiedExpr *>(E);
+    typeKey(Q->BinderType, Key);
+    if (!sub(Q->Lo.get()) || !sub(Q->Hi.get()))
+      return false;
+    std::optional<std::string> Outer;
+    if (auto It = Bound.find(Q->Binder); It != Bound.end())
+      Outer = It->second;
+    Bound[Q->Binder] = '#' + std::to_string(Bound.size());
+    const bool Keyed = sub(Q->Body.get());
+    if (Outer)
+      Bound[Q->Binder] = *Outer;
+    else
+      Bound.erase(Q->Binder);
+    if (!Keyed)
+      return false;
+    break;
+  }
+  case VExpr::FieldAccess: {
+    const auto *F = static_cast<const VFieldAccessExpr *>(E);
+    Key += F->Field;
+    if (!sub(F->Base.get()))
+      return false;
+    break;
+  }
+  case VExpr::SpecCall: {
+    const auto *S = static_cast<const VSpecCallExpr *>(E);
+    Key += S->CalleeIdentity + (S->ReadsHeap ? "@" : "") + S->HeapVar;
+    for (const auto &Arg : S->Args)
+      if (!sub(Arg.get()))
+        return false;
+    break;
+  }
+  case VExpr::OverflowCheck: {
+    const auto *O = static_cast<const VOverflowCheckExpr *>(E);
+    Key += std::to_string(static_cast<int>(O->Op));
+    if (!sub(O->Lhs.get()) || !sub(O->Rhs.get()))
+      return false;
+    break;
+  }
+  case VExpr::HeapStore:
+  case VExpr::HeapFrame:
+    return false;
+  }
+  Key += ')';
+  return true;
 }
 
 std::unique_ptr<VExpr>
@@ -3966,6 +5294,24 @@ ASTConverter::convertChoose(const ContractChooseExpr *C) {
   if (Hi)
     abstract(Hi);
 
+  // A choose with the same condition, up to the names of its bound
+  // variables, is the same choice, as Verus shares one closure function.
+  std::string Condition;
+  typeKey(ValueType, Condition);
+  Condition += Unbounded ? 'u' : 'b';
+  std::map<std::string, std::string> Canonical{{Binder, "#"}};
+  const bool Keyed = structuralKey(Lo.get(), Canonical, Condition) &&
+                     structuralKey(Hi.get(), Canonical, Condition) &&
+                     structuralKey(Body.get(), Canonical, Condition);
+  if (auto It = Keyed ? ChoiceByCondition.find(Condition)
+                      : ChoiceByCondition.end();
+      It != ChoiceByCondition.end())
+    return choiceApplication(C, It->second, std::move(Args), ValueType,
+                             expressionReadsHeap(Body.get()) ||
+                                 expressionReadsHeap(Lo.get()) ||
+                                 expressionReadsHeap(Hi.get()),
+                             Loc);
+
   auto Fn = std::make_unique<VFunction>();
   Fn->Name = "choose";
   Fn->Identity = "__cppverify_choose_" + std::to_string(ChoiceFunctions.size()) +
@@ -4010,7 +5356,19 @@ ASTConverter::convertChoose(const ContractChooseExpr *C) {
       std::move(Holds), VType::makeBool(), Loc));
   const std::string Identity = Fn->Identity;
   const bool ReadsHeap = Fn->ReadsHeap;
+  if (Keyed)
+    ChoiceByCondition.emplace(std::move(Condition), Identity);
   ChoiceFunctions.push_back(std::move(Fn));
+  return choiceApplication(C, Identity, std::move(Args), ValueType, ReadsHeap,
+                           Loc);
+}
+
+std::unique_ptr<VExpr>
+ASTConverter::choiceApplication(const ContractChooseExpr *C,
+                                const std::string &Identity,
+                                std::vector<std::unique_ptr<VExpr>> Args,
+                                const VType &ValueType, bool ReadsHeap,
+                                SourceLocation Loc) {
   auto Call = std::make_unique<VSpecCallExpr>("choose", Identity,
                                               std::move(Args), ValueType, Loc,
                                               ReadsHeap);
@@ -4374,36 +5732,49 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
 
   if (const auto *MTE = dyn_cast<MaterializeTemporaryExpr>(E))
     return convertExpr(MTE->getSubExpr());
+  // `this`, the parameter of a member function's object.
+  if (isa<CXXThisExpr>(E)) {
+    if (ThisSubstitute)
+      return cloneVExpr(ThisSubstitute);
+    if (!CurrentFn || CurrentFn->Params.empty() ||
+        CurrentFn->Params.front().first != "this") {
+      error(CurrentFn ? CurrentFn->Name + ": unsupported use of this"
+                      : std::string("unsupported use of this"));
+      return nullptr;
+    }
+    return std::make_unique<VVarExpr>(
+        "this", CurrentFn->Params.front().second, E->getExprLoc(),
+        CurrentFn->IsConstructor ? VConstructedObjectLifetime : "");
+  }
   if (const auto *Decay = dyn_cast<CastExpr>(E);
       Decay && Decay->getCastKind() == CK_ArrayToPointerDecay) {
-    Errors.push_back(
-        CurrentFn->Name +
-        ": array-to-pointer decay of automatic storage is unsupported until "
-        "lexical lifetime and escape effects are modeled");
+    if (subobjectPointerRoot(Decay->getSubExpr()))
+      return subobjectPointer(E, Decay->getSubExpr(), /*AddressOf=*/false);
+    error(CurrentFn->Name + ": " + arrayDecayError(Decay->getSubExpr()));
     return nullptr;
   }
   if (isa<CXXNewExpr>(E)) {
-    Errors.push_back(CurrentFn->Name +
-                     ": new-expressions are only supported as direct local "
-                     "pointer initializers");
+    error(CurrentFn->Name +
+          ": new-expressions are only supported as direct local "
+          "pointer initializers");
     return nullptr;
   }
   if (isa<CXXDeleteExpr>(E)) {
-    Errors.push_back(CurrentFn->Name +
-                     ": delete-expressions are only supported as statements");
+    error(CurrentFn->Name +
+          ": delete-expressions are only supported as statements");
     return nullptr;
   }
   if (const auto *IL = dyn_cast<InitListExpr>(E)) {
     if (E->getType()->isRecordType()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": aggregate initializer used as a scalar expression");
+      error(CurrentFn->Name +
+            ": aggregate initializer used as a scalar expression");
       return nullptr;
     }
     if (IL->getNumInits() == 1)
       return convertExpr(IL->getInit(0));
     if (IL->getNumInits() != 0) {
-      Errors.push_back(CurrentFn->Name +
-                       ": scalar initializer must contain at most one value");
+      error(CurrentFn->Name +
+            ": scalar initializer must contain at most one value");
       return nullptr;
     }
     VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
@@ -4412,8 +5783,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     if (Ty.Kind == VTypeKind::Int32 || Ty.Kind == VTypeKind::Int64 ||
         Ty.Kind == VTypeKind::Ptr)
       return std::make_unique<VLiteralExpr>(0, Ty, E->getExprLoc());
-    Errors.push_back(CurrentFn->Name +
-                     ": unsupported empty scalar initializer");
+    error(CurrentFn->Name + ": unsupported empty scalar initializer");
     return nullptr;
   }
   if (const auto *ValueInit = dyn_cast<CXXScalarValueInitExpr>(E)) {
@@ -4423,14 +5793,13 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     if (Ty.Kind == VTypeKind::Int32 || Ty.Kind == VTypeKind::Int64 ||
         Ty.Kind == VTypeKind::Ptr)
       return std::make_unique<VLiteralExpr>(0, Ty, E->getExprLoc());
-    Errors.push_back(CurrentFn->Name +
-                     ": unsupported scalar value initialization");
+    error(CurrentFn->Name + ": unsupported scalar value initialization");
     return nullptr;
   }
   if (const auto *CE = dyn_cast<CXXConstructExpr>(E)) {
     if (CE->getNumArgs() == 1 && CE->getConstructor()->isTrivial())
       return convertExpr(CE->getArg(0));
-    Errors.push_back(CurrentFn->Name + ": unsupported constructor expression");
+    error(CurrentFn->Name + ": unsupported constructor expression");
     return nullptr;
   }
   if (const auto *IL = dyn_cast<IntegerLiteral>(E)) {
@@ -4452,8 +5821,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     if (Ty.Kind == VTypeKind::Int32 || Ty.Kind == VTypeKind::Int64 ||
         Ty.Kind == VTypeKind::Ptr)
       return std::make_unique<VLiteralExpr>(0, Ty, E->getExprLoc());
-    Errors.push_back(CurrentFn->Name +
-                     ": unsupported implicit aggregate initialization");
+    error(CurrentFn->Name + ": unsupported implicit aggregate initialization");
     return nullptr;
   }
   if (const auto *Trait = dyn_cast<UnaryExprOrTypeTraitExpr>(E)) {
@@ -4469,8 +5837,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
       Value = Ctx.getTypeAlignInChars(ArgumentType);
       break;
     default:
-      Errors.push_back(CurrentFn->Name +
-                       ": unsupported unary type trait expression");
+      error(CurrentFn->Name + ": unsupported unary type trait expression");
       return nullptr;
     }
     VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
@@ -4494,11 +5861,10 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
       auto Bound = BoundValues.find(VD);
       if (InOld && VD->isLocalVarDecl() && Bound == BoundValues.end()) {
-        Errors.push_back(
-            CurrentFn->Name +
-            ": cppverify::old(...) cannot refer to local variable without a "
-            "function-entry state: " +
-            VD->getNameAsString());
+        error(CurrentFn->Name +
+              ": cppverify::old(...) cannot refer to local variable without a "
+              "function-entry state: " +
+              VD->getNameAsString());
         return nullptr;
       }
       if (!VD->isLocalVarDeclOrParm() && Bound == BoundValues.end()) {
@@ -4507,10 +5873,9 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
           return std::make_unique<VLiteralExpr>(integerValueString(*Value), Ty,
                                                 E->getExprLoc());
         if (CurrentFn->IsSpec) {
-          Errors.push_back(CurrentFn->Name +
-                           ": a spec function cannot read the mutable global " +
-                           VD->getNameAsString() +
-                           "; pass its value as a parameter");
+          error(CurrentFn->Name +
+                ": a spec function cannot read the mutable global " +
+                VD->getNameAsString() + "; pass its value as a parameter");
           return nullptr;
         }
         auto Address = globalAddress(VD, E->getExprLoc());
@@ -4522,10 +5887,10 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
       if (AddressableLocals.count(VD)) {
         VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
         if (Ty.isAggregate() || Ty.Kind == VTypeKind::Unsupported) {
-          Errors.push_back(CurrentFn->Name +
-                           ": aggregate value use of an automatic object is "
-                           "unsupported: " +
-                           VD->getNameAsString());
+          error(CurrentFn->Name +
+                ": aggregate value use of an automatic object is "
+                "unsupported: " +
+                VD->getNameAsString());
           return nullptr;
         }
         auto Address = convertAutomaticLocalAddress(VD, E->getExprLoc());
@@ -4535,11 +5900,10 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
                                            E->getExprLoc());
       }
       requireInitialized(VD);
-      if (VD->getType()->isReferenceType()) {
+      if (VD->getType()->isReferenceType() && !ValueReferences.count(VD)) {
         auto Address = convertLValueAddress(E);
         if (!Address) {
-          Errors.push_back(CurrentFn->Name +
-                           ": unsupported reference value expression");
+          error(CurrentFn->Name + ": unsupported reference value expression");
           return nullptr;
         }
         VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
@@ -4564,18 +5928,19 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
   }
   if (const auto *U = dyn_cast<UnaryOperator>(E)) {
     if (U->getOpcode() == UO_AddrOf) {
-      Errors.push_back(
-          CurrentFn->Name +
-          ": raw address-of is unsupported until lexical lifetime and escape "
-          "effects are modeled");
+      if (subobjectPointerRoot(U->getSubExpr()))
+        return subobjectPointer(E, U->getSubExpr(), /*AddressOf=*/true);
+      error(CurrentFn->Name +
+            ": raw address-of is unsupported until lexical lifetime and escape "
+            "effects are modeled");
       return nullptr;
     }
     if (U->getOpcode() == UO_Deref) {
       if (isDynamicAddress(U->getSubExpr()) &&
           !directDynamicPointer(U->getSubExpr())) {
-        Errors.push_back(CurrentFn->Name +
-                         ": dynamic-storage dereference requires its direct "
-                         "allocation pointer");
+        error(CurrentFn->Name +
+              ": dynamic-storage dereference requires its direct "
+              "allocation pointer");
         return nullptr;
       }
       auto Place = derefPlace(U->getSubExpr(), E->getExprLoc());
@@ -4598,9 +5963,8 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
                                             E->getExprLoc());
     if (U->getOpcode() == UO_Not) {
       if (IntMode == VIntMode::Math) {
-        Errors.push_back(CurrentFn->Name +
-                         ": bitwise operators are unsupported in "
-                         "mathematical spec functions");
+        error(CurrentFn->Name + ": bitwise operators are unsupported in "
+                                "mathematical spec functions");
         return nullptr;
       }
       return std::make_unique<VUnaryOpExpr>(
@@ -4608,7 +5972,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
           machineOperand(std::move(Op), U->getSubExpr()->getType(), Ctx), Ty,
           E->getExprLoc());
     }
-    Errors.push_back(CurrentFn->Name + ": unsupported unary operator");
+    error(CurrentFn->Name + ": unsupported unary operator");
     return nullptr;
   }
   if (const auto *AS = dyn_cast<ArraySubscriptExpr>(E)) {
@@ -4623,25 +5987,35 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
   if (const auto *B = dyn_cast<BinaryOperator>(E)) {
     std::optional<VBinOp> Op = convertBinOpcode(B->getOpcode());
     if (!Op) {
-      Errors.push_back(CurrentFn->Name + ": unsupported binary operator");
+      error(CurrentFn->Name + ": unsupported binary operator");
+      return nullptr;
+    }
+    if ((CallSink || SubobjectSink) && B->isLogicalOp())
+      return convertOnPaths(B);
+    // The operands are unsequenced: any order must give the same values.
+    if (CallSink && !B->isLogicalOp() &&
+        orderDependent(B->getLHS(), B->getRHS())) {
+      error(CurrentFn->Name +
+            ": C++ leaves the order of these operands open, and a call in "
+            "one may write what the other reads; make the call in a statement "
+            "of its own first");
       return nullptr;
     }
     if (IntMode == VIntMode::Math &&
         (*Op == VBinOp::BitAnd || *Op == VBinOp::BitOr ||
          *Op == VBinOp::BitXor || *Op == VBinOp::Shl || *Op == VBinOp::Shr)) {
-      Errors.push_back(CurrentFn->Name +
-                       ": bitwise operators are unsupported in mathematical "
-                       "spec functions");
+      error(CurrentFn->Name +
+            ": bitwise operators are unsupported in mathematical "
+            "spec functions");
       return nullptr;
     }
     const bool LeftPointer = B->getLHS()->getType()->isPointerType();
     const bool RightPointer = B->getRHS()->getType()->isPointerType();
     if (B->getOpcode() == BO_Sub && LeftPointer && RightPointer) {
       if (CurrentFn->IsSpec) {
-        Errors.push_back(
-            CurrentFn->Name +
-            ": pointer difference in spec or lifted constexpr functions is "
-            "unsupported");
+        error(CurrentFn->Name +
+              ": pointer difference in spec or lifted constexpr functions is "
+              "unsupported");
         return nullptr;
       }
       QualType LeftPointee =
@@ -4650,9 +6024,9 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
           B->getRHS()->getType()->getPointeeType().getUnqualifiedType();
       if (!Ctx.hasSameType(LeftPointee, RightPointee) ||
           LeftPointee->isIncompleteType()) {
-        Errors.push_back(CurrentFn->Name +
-                         ": pointer difference requires matching complete "
-                         "pointee types");
+        error(CurrentFn->Name +
+              ": pointer difference requires matching complete "
+              "pointee types");
         return nullptr;
       }
       const uint64_t PointeeSize =
@@ -4660,10 +6034,9 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
       auto L = convertPointerDifferenceOperand(B->getLHS(), PointeeSize);
       auto R = convertPointerDifferenceOperand(B->getRHS(), PointeeSize);
       if (!L || !R) {
-        Errors.push_back(
-            CurrentFn->Name +
-            ": pointer difference operands must be direct pointers or "
-            "compositional pointer-arithmetic positions");
+        error(CurrentFn->Name +
+              ": pointer difference operands must be direct pointers or "
+              "compositional pointer-arithmetic positions");
         return nullptr;
       }
       VType AddressType = VType::makePtr(PointeeSize);
@@ -4684,16 +6057,15 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
         isDynamicAddress(B->getLHS()) || isDynamicAddress(B->getRHS());
     if ((B->getOpcode() == BO_Add || B->getOpcode() == BO_Sub) &&
         DynamicOperand) {
-      Errors.push_back(CurrentFn->Name +
-                       ": arithmetic on dynamic-storage pointers is "
-                       "unsupported");
+      error(CurrentFn->Name + ": arithmetic on dynamic-storage pointers is "
+                              "unsupported");
       return nullptr;
     }
     if ((B->getOpcode() == BO_LT || B->getOpcode() == BO_LE ||
          B->getOpcode() == BO_GT || B->getOpcode() == BO_GE) &&
         DynamicOperand) {
-      Errors.push_back(CurrentFn->Name +
-                       ": ordering dynamic-storage pointers is unsupported");
+      error(CurrentFn->Name +
+            ": ordering dynamic-storage pointers is unsupported");
       return nullptr;
     }
     auto L = convertExpr(B->getLHS());
@@ -4721,9 +6093,8 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
         R = scalePointerOffset(std::move(R), Ty.PointeeSizeBytes,
                                E->getExprLoc());
       if (!L || !R) {
-        Errors.push_back(
-            CurrentFn->Name +
-            ": pointer arithmetic requires a complete pointee type");
+        error(CurrentFn->Name +
+              ": pointer arithmetic requires a complete pointee type");
         return nullptr;
       }
     }
@@ -4749,8 +6120,8 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     const bool PointerToBool =
         From.Kind == VTypeKind::Ptr && To.Kind == VTypeKind::Bool;
     if (!IntegralCast && !PointerToBool) {
-      Errors.push_back(CurrentFn->Name +
-                       ": unsupported implicit pointer or aggregate cast");
+      error(CurrentFn->Name +
+            ": unsupported implicit pointer or aggregate cast");
       return nullptr;
     }
     // In a contract an implicit integral conversion keeps the value. One
@@ -4802,8 +6173,8 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     const bool PointerToBool =
         From.Kind == VTypeKind::Ptr && To.Kind == VTypeKind::Bool;
     if (!IntegralCast && !PointerToBool) {
-      Errors.push_back(CurrentFn->Name +
-                       ": unsupported explicit pointer or aggregate cast");
+      error(CurrentFn->Name +
+            ": unsupported explicit pointer or aggregate cast");
       return nullptr;
     }
     // A conversion into an enumeration's value range is checked.
@@ -4825,11 +6196,10 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
         BoundVars.insert(VD);
     if (const VarDecl *Local =
             findOldLocalWithoutEntryState(O->getInner(), BoundVars)) {
-      Errors.push_back(
-          CurrentFn->Name +
-          ": cppverify::old(...) cannot refer to local variable without a "
-          "function-entry state: " +
-          Local->getNameAsString());
+      error(CurrentFn->Name +
+            ": cppverify::old(...) cannot refer to local variable without a "
+            "function-entry state: " +
+            Local->getNameAsString());
       return nullptr;
     }
     bool Saved = InOld;
@@ -4842,6 +6212,8 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     return std::make_unique<VOldExpr>(std::move(Inner), Ty, E->getExprLoc());
   }
   if (const auto *C = dyn_cast<ConditionalOperator>(E)) {
+    if (CallSink || SubobjectSink)
+      return convertOnPaths(C);
     auto Cond = convertExpr(C->getCond());
     auto T = convertExpr(C->getTrueExpr());
     auto F = convertExpr(C->getFalseExpr());
@@ -4868,15 +6240,19 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
       return std::make_unique<VLoadExpr>(std::move(Address), Ty,
                                          E->getExprLoc());
     }
-    if (!M->isArrow() && promotedRootLocal(M)) {
+    if (!M->isArrow() && (promotedRootLocal(M) || inPointeeObject(M))) {
       VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
       if (Ty.isAggregate() || Ty.Kind == VTypeKind::Unsupported) {
-        Errors.push_back(CurrentFn->Name +
-                         ": aggregate value use of an automatic object "
-                         "subobject is unsupported");
+        error(CurrentFn->Name +
+              (promotedRootLocal(M)
+                   ? ": aggregate value use of an automatic object "
+                     "subobject is unsupported"
+                   : ": a record or array read as a whole through a "
+                     "pointer or reference is unsupported; read its "
+                     "fields"));
         return nullptr;
       }
-      auto Place = promotedObjectPlace(M);
+      auto Place = objectPlace(M);
       if (!Place)
         return nullptr;
       return std::make_unique<VLoadExpr>(Place->takeAddress(), Ty,
@@ -4887,17 +6263,16 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
             dyn_cast<DeclRefExpr>(M->getBase()->IgnoreParenImpCasts())) {
       if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
         if (!VD->isLocalVarDeclOrParm()) {
-          Errors.push_back(CurrentFn->Name +
-                           ": global aggregate access is unsupported");
+          error(CurrentFn->Name + ": global aggregate access is unsupported");
           return nullptr;
         }
         if (const auto *FD = dyn_cast<FieldDecl>(M->getMemberDecl())) {
           requireInitialized(VD, FD);
           VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
           if (Ty.isAggregate() || Ty.Kind == VTypeKind::Unsupported) {
-            Errors.push_back(CurrentFn->Name +
-                             ": aggregate field of a flattened record value is "
-                             "unsupported");
+            error(CurrentFn->Name +
+                  ": aggregate field of a flattened record value is "
+                  "unsupported");
             return nullptr;
           }
           std::string Name = valueName(VD) + "." + FD->getNameAsString();
@@ -4908,9 +6283,9 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
         if (const auto *FD = dyn_cast<FieldDecl>(M->getMemberDecl())) {
           VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
           if (Ty.isAggregate() || Ty.Kind == VTypeKind::Unsupported) {
-            Errors.push_back(CurrentFn->Name +
-                             ": aggregate field of a flattened record value is "
-                             "unsupported");
+            error(CurrentFn->Name +
+                  ": aggregate field of a flattened record value is "
+                  "unsupported");
             return nullptr;
           }
           std::string Name = valueName(PD) + "." + FD->getNameAsString();
@@ -4933,13 +6308,12 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
   }
   if (dyn_cast<ResultExpr>(E)) {
     if (!InPost) {
-      Errors.push_back(CurrentFn->Name +
-                       ": cppverify::result outside a postcondition");
+      error(CurrentFn->Name + ": cppverify::result outside a postcondition");
       return nullptr;
     }
     if (InOld) {
-      Errors.push_back(CurrentFn->Name +
-                       ": result has no value in the function pre-state");
+      error(CurrentFn->Name +
+            ": result has no value in the function pre-state");
       return nullptr;
     }
     return std::make_unique<VResultExpr>(
@@ -5014,22 +6388,32 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
               integerValueString(EV.Val.getInt()), Ty, E->getExprLoc());
         }
       }
+      if (std::optional<bool> IsMax = stdMinOrMax(Callee, Ctx))
+        return convertMinOrMax(CE, *IsMax);
+      // The standard library's functions are not lifted: each library
+      // writes them its own way, so a proof would depend on which one.
+      if (Callee->isInStdNamespace() && calleeIsSpec(Callee) &&
+          !functionContract(Callee)) {
+        error(CurrentFn->Name + ": " + Callee->getQualifiedNameAsString() +
+              " is not modeled: of the standard library, the verifier knows "
+              "std::min and std::max of two integers");
+        return nullptr;
+      }
       if (calleeIsSpec(Callee)) {
         const VIntMode CalleeMode = specCallIntMode(Callee);
         const FunctionContractInfo *CalleeContract = functionContract(Callee);
         if (CalleeContract && CalleeContract->IsSpec && !InContractExpression &&
             !InGhost && !CurrentFn->IsSpec && !CurrentFn->IsProof) {
-          Errors.push_back(CurrentFn->Name + ": spec function " +
-                           Callee->getNameAsString() +
-                           " cannot be used in executable code");
+          error(CurrentFn->Name + ": spec function " +
+                functionName(Callee) +
+                " cannot be used in executable code");
           return nullptr;
         }
         for (const Expr *A : CE->arguments())
           if (isDynamicAddress(A)) {
-            Errors.push_back(
-                CurrentFn->Name +
-                ": dynamic-storage pointers cannot cross a function-call "
-                "boundary");
+            error(CurrentFn->Name +
+                  ": dynamic-storage pointers cannot cross a function-call "
+                  "boundary");
             return nullptr;
           }
         std::vector<std::unique_ptr<VExpr>> Args;
@@ -5063,23 +6447,29 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
             Ctx);
         noteSpecUse(Callee);
         return std::make_unique<VSpecCallExpr>(
-            Callee->getNameAsString(), functionIdentity(Callee),
+            functionName(Callee), functionIdentity(Callee),
             std::move(Args), Ty, E->getExprLoc(), specReadsHeap(Callee));
       }
+      // Executable code calls where the expression is evaluated, before
+      // what reads the result.
+      if (CallSink && isExecCall(CE) && !InContractExpression && !InGhost &&
+          !CurrentFn->IsSpec && !CurrentFn->IsProof) {
+        if (rejectOwnObjectUse(CE))
+          return nullptr;
+        return hoistExecCall(CE, Callee);
+      }
       if (functionContract(Callee))
-        Errors.push_back(CurrentFn->Name +
-                         ": executable call is unsupported in this expression "
-                         "context: " +
-                         Callee->getNameAsString());
+        error(CurrentFn->Name +
+              ": executable call is unsupported in this expression "
+              "context: " +
+              functionName(Callee));
       else
-        Errors.push_back(
-            CurrentFn->Name +
-            ": call to function without a verification contract: " +
-            Callee->getNameAsString());
+        error(CurrentFn->Name +
+              ": call to function without a verification contract: " +
+              functionName(Callee));
     }
   }
-  Errors.push_back(CurrentFn->Name +
-                   ": unsupported expression: " + E->getStmtClassName());
+  error(CurrentFn->Name + ": unsupported expression: " + E->getStmtClassName());
   return nullptr;
 }
 
@@ -5092,8 +6482,7 @@ void ASTConverter::convertExecCallArg(
   }
   if (Formal && Formal->getType()->isReferenceType()) {
     if (!Formal->getType()->isLValueReferenceType()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": rvalue-reference arguments are unsupported");
+      error(CurrentFn->Name + ": rvalue-reference arguments are unsupported");
       Out = nullptr;
       return;
     }
@@ -5108,18 +6497,36 @@ void ASTConverter::convertExecCallArg(
     if (Out && (isa<MemberExpr>(Binding) || isa<ArraySubscriptExpr>(Binding)))
       appendReferenceBindingCheck(E, Out.get(), E->getExprLoc(), Prelude);
     if (!Out && Errors.size() == ErrorCount)
-      Errors.push_back(
-          CurrentFn->Name +
-          ": reference arguments require a supported reference, addressable "
-          "local, or direct pointer dereference");
+      error(CurrentFn->Name +
+            ": reference arguments require a supported reference, addressable "
+            "local, or direct pointer dereference");
     return;
   }
+  // The address of a local object, or of a field or element of one, binds a
+  // pointer parameter as a reference argument binds a reference: the call
+  // checks that the callee keeps no pointer into it.
+  if (Formal && Formal->getType()->isPointerType())
+    if (const auto *U = dyn_cast<UnaryOperator>(E->IgnoreParenImpCasts());
+        U && U->getOpcode() == UO_AddrOf &&
+        !U->getSubExpr()->getType()->isArrayType() &&
+        promotedRootLocal(U->getSubExpr())) {
+      std::unique_ptr<VExpr> AccessCondition;
+      Out = convertLValueAddress(U->getSubExpr(), &AccessCondition);
+      if (AccessCondition)
+        Prelude.push_back(std::make_unique<VAssertStmt>(
+            std::move(AccessCondition), E->getExprLoc(),
+            ProofObligationKind::Bounds));
+      if (Out)
+        appendReferenceBindingCheck(U->getSubExpr(), Out.get(), E->getExprLoc(),
+                                    Prelude);
+      return;
+    }
   const VarDecl *Source = directDynamicPointer(E);
   if (Source || isDynamicAddress(E)) {
     if (!Source || !Formal || !Formal->getType()->isPointerType() ||
         !Ctx.hasSameUnqualifiedType(Formal->getType()->getPointeeType(),
                                     Source->getType()->getPointeeType())) {
-      Errors.push_back(
+      error(
           CurrentFn->Name +
           ": dynamic-storage pointer arguments require matching direct pointer "
           "parameters");
@@ -5136,7 +6543,7 @@ void ASTConverter::convertExecCallArg(
         convertExecCallArgs(CE, Prelude, InnerArgs);
         std::string Tmp = "__nested_" + std::to_string(++NestedCallId);
         Prelude.push_back(std::make_unique<VCallStmt>(
-            Callee->getNameAsString(), functionIdentity(Callee),
+            functionName(Callee), functionIdentity(Callee),
             std::move(InnerArgs), Tmp, E->getExprLoc(), false));
         Out = convertCallResultValue(
             Tmp, Callee->getReturnType(),
@@ -5181,8 +6588,7 @@ std::unique_ptr<VExpr> ASTConverter::convertCallResultValue(
       (Source.Kind == VTypeKind::Ptr && TargetType.Kind == VTypeKind::Bool))
     return std::make_unique<VCastExpr>(std::move(Value), Source, TargetType,
                                        Loc);
-  Errors.push_back(CurrentFn->Name +
-                   ": unsupported executable call result conversion");
+  error(CurrentFn->Name + ": unsupported executable call result conversion");
   return nullptr;
 }
 
@@ -5194,69 +6600,70 @@ void ASTConverter::convertExecCallArgs(
   const FunctionDecl *Callee = CE->getDirectCallee();
 
   if ((InGhost || CurrentFn->IsProof) && Callee && !calleeIsProof(Callee)) {
-    Errors.push_back(CurrentFn->Name +
-                     ": proof-only code cannot call executable functions");
+    error(CurrentFn->Name +
+          ": proof-only code cannot call executable functions");
     return;
   }
 
-  auto IsModifyingCall = [&](const Expr *E) {
-    const auto *Nested = dyn_cast<CallExpr>(E->IgnoreParenImpCasts());
-    const FunctionDecl *NestedCallee =
-        Nested ? Nested->getDirectCallee() : nullptr;
-    const FunctionContractInfo *FCI =
-        NestedCallee ? functionContract(NestedCallee) : nullptr;
-    if (!FCI || calleeIsSpec(NestedCallee) || calleeIsProof(NestedCallee))
-      return false;
-    if (!FCI->Modifies.empty())
-      return true;
-    for (const ParmVarDecl *Param : NestedCallee->parameters())
-      if (Param->getType()->isPointerType() ||
-          Param->getType()->isReferenceType())
-        return true;
-    return false;
-  };
-  std::function<bool(const Stmt *)> IsHeapSensitive = [&](const Stmt *S) {
-    if (!S)
-      return false;
-    if (const auto *DRE = dyn_cast<DeclRefExpr>(S))
-      if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl()))
-        if (VD->getType()->isReferenceType() || AddressableLocals.count(VD))
-          return true;
-    if (const auto *U = dyn_cast<UnaryOperator>(S))
-      if (U->getOpcode() == UO_Deref)
-        return true;
-    if (const auto *M = dyn_cast<MemberExpr>(S))
-      if (M->isArrow())
-        return true;
-    if (isa<ArraySubscriptExpr>(S))
-      return true;
-    if (const auto *Nested = dyn_cast<CallExpr>(S)) {
-      const FunctionDecl *NestedCallee = Nested->getDirectCallee();
-      if (NestedCallee && functionContract(NestedCallee) &&
-          !calleeIsSpec(NestedCallee) && !calleeIsProof(NestedCallee))
-        return true;
-    }
-    for (const Stmt *Child : S->children())
-      if (IsHeapSensitive(Child))
-        return true;
-    return false;
-  };
-
-  for (unsigned I = 0; I < CE->getNumArgs(); ++I) {
-    if (!IsModifyingCall(CE->getArg(I)))
-      continue;
-    for (unsigned J = 0; J < CE->getNumArgs(); ++J) {
-      if (I != J && IsHeapSensitive(CE->getArg(J))) {
-        Errors.push_back(
-            CurrentFn->Name +
-            ": call arguments have order-dependent heap evaluations");
+  for (const Expr *A : CE->arguments())
+    if (rejectOwnObjectUse(A))
+      return;
+  for (unsigned I = 0; I < CE->getNumArgs(); ++I)
+    for (unsigned J = I + 1; J < CE->getNumArgs(); ++J)
+      if (orderDependent(CE->getArg(I), CE->getArg(J))) {
+        error(CurrentFn->Name +
+              ": C++ leaves the order of these call arguments open, and a "
+              "call in one may write what another reads; make the call in a "
+              "statement of its own first");
         return;
       }
+
+  // A member call passes its object first, as the callee's `this`: the
+  // object a pointer addresses (p->m(), this->m()), or the object itself,
+  // bound as a reference argument is (obj.m()). A member operator's object
+  // is its first operand (a == b is a.operator==(b)).
+  const Expr *Object = nullptr;
+  unsigned FirstArgument = 0;
+  if (const auto *Member = dyn_cast<CXXMemberCallExpr>(CE);
+      Member && Member->getMethodDecl() &&
+      Member->getMethodDecl()->isInstance())
+    Object = Member->getImplicitObjectArgument();
+  else if (const auto *Method = dyn_cast_or_null<CXXMethodDecl>(Callee);
+           Method && Method->isInstance() && isa<CXXOperatorCallExpr>(CE) &&
+           CE->getNumArgs() > 0) {
+    Object = CE->getArg(0);
+    FirstArgument = 1;
+  }
+  if (Object) {
+    std::unique_ptr<VExpr> This;
+    if (Object->getType()->isPointerType()) {
+      This = convertExpr(Object);
+    } else {
+      const size_t ErrorCount = Errors.size();
+      std::unique_ptr<VExpr> AccessCondition;
+      This = convertLValueAddress(Object, &AccessCondition);
+      if (AccessCondition)
+        Prelude.push_back(std::make_unique<VAssertStmt>(
+            std::move(AccessCondition), Object->getExprLoc(),
+            ProofObligationKind::Bounds));
+      const Expr *Binding = Object->IgnoreParenImpCasts();
+      if (This &&
+          (isa<MemberExpr>(Binding) || isa<ArraySubscriptExpr>(Binding)))
+        appendReferenceBindingCheck(Object, This.get(), Object->getExprLoc(),
+                                    Prelude);
+      if (!This && Errors.size() == ErrorCount)
+        error(CurrentFn->Name +
+              ": a member call's object must be a supported reference, "
+              "addressable local, or direct pointer dereference");
     }
+    if (!This)
+      return;
+    Args.push_back(std::move(This));
   }
 
-  unsigned ArgIndex = 0;
-  for (const Expr *A : CE->arguments()) {
+  for (unsigned I = FirstArgument; I < CE->getNumArgs(); ++I) {
+    const Expr *A = CE->getArg(I);
+    const unsigned ArgIndex = I - FirstArgument;
     const ParmVarDecl *Formal = Callee && ArgIndex < Callee->getNumParams()
                                     ? Callee->getParamDecl(ArgIndex)
                                     : nullptr;
@@ -5268,13 +6675,249 @@ void ASTConverter::convertExecCallArgs(
       if (Arg)
         Args.push_back(std::move(Arg));
     }
-    ++ArgIndex;
   }
+}
+
+bool ASTConverter::isExecCall(const Stmt *S) const {
+  const auto *Call = dyn_cast_or_null<CallExpr>(S);
+  const FunctionDecl *Callee = Call ? Call->getDirectCallee() : nullptr;
+  return Callee && functionContract(Callee) && !calleeIsSpec(Callee) &&
+         !calleeIsProof(Callee);
+}
+
+bool ASTConverter::containsExecCall(const Stmt *S) const {
+  if (!S)
+    return false;
+  if (isExecCall(S))
+    return true;
+  return llvm::any_of(S->children(), [&](const Stmt *Child) {
+    return containsExecCall(Child);
+  });
+}
+
+bool ASTConverter::containsModifyingCall(const Stmt *S) const {
+  if (!S)
+    return false;
+  if (isExecCall(S)) {
+    const auto *Call = cast<CallExpr>(S);
+    const FunctionDecl *Callee = Call->getDirectCallee();
+    if (!functionContract(Callee)->Modifies.empty())
+      return true;
+    // A member function that is not const may write its object.
+    if (const auto *Method = dyn_cast<CXXMethodDecl>(Callee);
+        Method && Method->isInstance() && !Method->isConst())
+      return true;
+    if (llvm::any_of(Callee->parameters(), [](const ParmVarDecl *Param) {
+          return Param->getType()->isPointerType() ||
+                 Param->getType()->isReferenceType();
+        }))
+      return true;
+  }
+  return llvm::any_of(S->children(), [&](const Stmt *Child) {
+    return containsModifyingCall(Child);
+  });
+}
+
+bool ASTConverter::isHeapSensitive(const Stmt *S) const {
+  if (!S)
+    return false;
+  if (const auto *DRE = dyn_cast<DeclRefExpr>(S))
+    if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl()))
+      if (VD->getType()->isReferenceType() || AddressableLocals.count(VD))
+        return true;
+  if (const auto *U = dyn_cast<UnaryOperator>(S))
+    if (U->getOpcode() == UO_Deref)
+      return true;
+  if (const auto *M = dyn_cast<MemberExpr>(S))
+    if (M->isArrow())
+      return true;
+  if (isa<ArraySubscriptExpr>(S) || isExecCall(S))
+    return true;
+  return llvm::any_of(
+      S->children(), [&](const Stmt *Child) { return isHeapSensitive(Child); });
+}
+
+bool ASTConverter::orderDependent(const Expr *A, const Expr *B) const {
+  return (containsModifyingCall(A) && isHeapSensitive(B)) ||
+         (containsModifyingCall(B) && isHeapSensitive(A));
+}
+
+bool ASTConverter::locatingIsHeapSensitive(const Expr *E) const {
+  E = E->IgnoreParens();
+  if (isa<DeclRefExpr>(E))
+    return false;
+  if (const auto *U = dyn_cast<UnaryOperator>(E);
+      U && U->getOpcode() == UO_Deref)
+    return isHeapSensitive(U->getSubExpr());
+  if (const auto *M = dyn_cast<MemberExpr>(E))
+    return M->isArrow() ? isHeapSensitive(M->getBase())
+                        : locatingIsHeapSensitive(M->getBase());
+  if (const auto *AS = dyn_cast<ArraySubscriptExpr>(E)) {
+    const Expr *Base = AS->getBase()->IgnoreParenImpCasts();
+    const bool BaseReads = Base->getType()->isArrayType()
+                               ? locatingIsHeapSensitive(Base)
+                               : isHeapSensitive(AS->getBase());
+    return BaseReads || isHeapSensitive(AS->getIdx());
+  }
+  return isHeapSensitive(E);
+}
+
+std::unique_ptr<VExpr> ASTConverter::hoistExecCall(const CallExpr *CE,
+                                                   const FunctionDecl *Callee) {
+  const VType Result = VType::fromQualType(CE->getType(), IntMode, Ctx);
+  if (auto Hoisted = HoistedCalls.find(CE); Hoisted != HoistedCalls.end())
+    return convertCallResultValue(Hoisted->second, Callee->getReturnType(),
+                                  Result, CE->getExprLoc());
+  const QualType Returned = Callee->getReturnType();
+  if (Returned->isVoidType() || Returned->isReferenceType() ||
+      Returned->isRecordType()) {
+    error(CurrentFn->Name +
+          ": executable call is unsupported in this expression context: " +
+          functionName(Callee));
+    return nullptr;
+  }
+  const size_t ErrorCount = Errors.size();
+  std::vector<std::unique_ptr<VExpr>> Args;
+  convertExecCallArgs(CE, *CallSink, Args);
+  if (Errors.size() != ErrorCount)
+    return nullptr;
+  std::string Temporary = "__call_" + std::to_string(++NestedCallId);
+  CallSink->push_back(std::make_unique<VCallStmt>(
+      functionName(Callee), functionIdentity(Callee), std::move(Args),
+      Temporary, CE->getExprLoc(), false));
+  HoistedCalls[CE] = Temporary;
+  return convertCallResultValue(std::move(Temporary), Returned, Result,
+                                CE->getExprLoc());
+}
+
+std::unique_ptr<VExpr> ASTConverter::convertOnPaths(const Expr *E) {
+  const SourceLocation Loc = E->getExprLoc();
+  const VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
+  std::vector<std::unique_ptr<VStmt>> &Outer =
+      CallSink ? *CallSink : *SubobjectSink;
+  auto OnPath = [&](const Expr *Operand,
+                    std::vector<std::unique_ptr<VStmt>> &Into) {
+    llvm::SaveAndRestore Calls(CallSink, CallSink ? &Into : nullptr);
+    llvm::SaveAndRestore Subobjects(SubobjectSink,
+                                    SubobjectSink ? &Into : nullptr);
+    return convertExpr(Operand);
+  };
+  const auto *B = dyn_cast<BinaryOperator>(E);
+  const auto *C = dyn_cast<ConditionalOperator>(E);
+  // The first operand, or the condition, is evaluated on every path.
+  auto First = convertExpr(B ? B->getLHS() : C->getCond());
+  if (!First)
+    return nullptr;
+  std::vector<std::unique_ptr<VStmt>> Then, Else;
+  auto ThenValue = OnPath(B ? B->getRHS() : C->getTrueExpr(), Then);
+  auto ElseValue = C ? OnPath(C->getFalseExpr(), Else) : nullptr;
+  if (!ThenValue || (C && !ElseValue))
+    return nullptr;
+  if (Then.empty() && Else.empty()) {
+    if (C)
+      return std::make_unique<VConditionalExpr>(std::move(First),
+                                                std::move(ThenValue),
+                                                std::move(ElseValue), Ty, Loc);
+    return std::make_unique<VBinOpExpr>(
+        B->getOpcode() == BO_LAnd ? VBinOp::And : VBinOp::Or, std::move(First),
+        std::move(ThenValue), Ty, Loc);
+  }
+  if (!Ty.isInt() && Ty.Kind != VTypeKind::Bool &&
+      (Ty.Kind != VTypeKind::Ptr || isDynamicAddress(E))) {
+    error(CurrentFn->Name +
+          ": a conditional expression of this type whose paths need "
+          "statements of their own is unsupported");
+    return nullptr;
+  }
+  const std::string Result = "__path_" + std::to_string(++NestedCallId);
+  Then.push_back(
+      std::make_unique<VAssignStmt>(Result, std::move(ThenValue), Loc));
+  std::unique_ptr<VExpr> Taken;
+  if (B) {
+    // The first operand is saved before the second's statements run.
+    Outer.push_back(
+        std::make_unique<VAssignStmt>(Result, std::move(First), Loc));
+    Taken = std::make_unique<VVarExpr>(Result, Ty, Loc);
+    if (B->getOpcode() == BO_LOr)
+      Taken = std::make_unique<VUnaryOpExpr>(VUnaryOp::Not, std::move(Taken),
+                                             VType::makeBool(), Loc);
+  } else {
+    const std::string Choice = "__path_" + std::to_string(++NestedCallId);
+    Outer.push_back(
+        std::make_unique<VAssignStmt>(Choice, std::move(First), Loc));
+    Taken = std::make_unique<VVarExpr>(Choice, VType::makeBool(), Loc);
+    Else.push_back(
+        std::make_unique<VAssignStmt>(Result, std::move(ElseValue), Loc));
+  }
+  Outer.push_back(std::make_unique<VIfStmt>(std::move(Taken), std::move(Then),
+                                            std::move(Else), Loc));
+  return std::make_unique<VVarExpr>(Result, Ty, Loc);
+}
+
+std::optional<bool> ASTConverter::recordFieldsInMemory(
+    const Expr *E, SourceLocation Loc,
+    std::vector<std::pair<const FieldDecl *, std::unique_ptr<VExpr>>> &Fields) {
+  // A copy of the record, implicit or defaulted, is its fields.
+  while (E) {
+    E = E->IgnoreParens();
+    if (const auto *Cast = dyn_cast<ImplicitCastExpr>(E);
+        Cast && (Cast->getCastKind() == CK_NoOp ||
+                 Cast->getCastKind() == CK_LValueToRValue)) {
+      E = Cast->getSubExpr();
+      continue;
+    }
+    if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(E)) {
+      E = Temporary->getSubExpr();
+      continue;
+    }
+    if (const auto *Construct = dyn_cast<CXXConstructExpr>(E);
+        Construct && Construct->getNumArgs() == 1 &&
+        Construct->getConstructor() &&
+        !Construct->getConstructor()->isUserProvided() &&
+        (Construct->getConstructor()->isCopyConstructor() ||
+         Construct->getConstructor()->isMoveConstructor())) {
+      E = Construct->getArg(0);
+      continue;
+    }
+    break;
+  }
+  if (!E || (!promotedRootLocal(E) && !inPointeeObject(E)))
+    return std::nullopt;
+  const RecordDecl *Record = getRecordFromType(E->getType());
+  const RecordDecl *Definition = Record ? Record->getDefinition() : nullptr;
+  if (!Definition)
+    return std::nullopt;
+  auto Place = objectPlace(E);
+  if (!Place)
+    return false;
+  std::unique_ptr<VExpr> AccessCondition = Place->takeAccessCondition();
+  std::unique_ptr<VExpr> Base = Place->takeAddress();
+  for (const FieldDecl *Field : Definition->fields()) {
+    auto Offset = recordFieldOffset(Field);
+    VType FieldType = VType::fromQualType(Field->getType(), IntMode, Ctx);
+    if (!Offset || FieldType.isAggregate() ||
+        FieldType.Kind == VTypeKind::Unsupported) {
+      error(CurrentFn->Name + ": a record value read from memory must have "
+                              "scalar fields");
+      return false;
+    }
+    Fields.emplace_back(Field, std::make_unique<VLoadExpr>(
+                                   objectLeafAddress(Base.get(), *Offset, Loc),
+                                   FieldType, Loc, "",
+                                   cloneVExpr(AccessCondition.get())));
+  }
+  return true;
 }
 
 bool ASTConverter::appendRecordCallArgument(
     const Expr *E, const ParmVarDecl *Formal,
     std::vector<std::unique_ptr<VExpr>> &Args) {
+  std::vector<std::pair<const FieldDecl *, std::unique_ptr<VExpr>>> Fields;
+  if (auto InMemory = recordFieldsInMemory(E, E->getExprLoc(), Fields)) {
+    for (auto &Field : Fields)
+      Args.push_back(std::move(Field.second));
+    return *InMemory;
+  }
   auto Base = convertExpr(E);
   if (!Base)
     return false;
@@ -5293,18 +6936,50 @@ bool ASTConverter::appendRecordCallArgument(
 }
 
 std::unique_ptr<VExpr>
-ASTConverter::convertAssignmentValue(const BinaryOperator *Assignment) {
-  if (Assignment->getOpcode() != BO_Assign &&
-      Assignment->getLHS()->getType()->isPointerType()) {
-    Errors.push_back(CurrentFn->Name +
-                     ": pointer compound assignment is unsupported");
+ASTConverter::convertPointerStep(const Expr *Target, VBinOp Op,
+                                 std::unique_ptr<VExpr> Offset,
+                                 SourceLocation Loc) {
+  // p += n is p = p + n, and ++p is p = p + 1, with the checks of the step.
+  if (isDynamicAddress(Target)) {
+    error(CurrentFn->Name +
+          ": arithmetic on dynamic-storage pointers is unsupported");
     return nullptr;
   }
+  auto Current = convertExpr(Target);
+  if (!Current || !Offset)
+    return nullptr;
+  const VType Ty = VType::fromQualType(Target->getType(), IntMode, Ctx);
+  Offset = scalePointerOffset(std::move(Offset), Ty.PointeeSizeBytes, Loc);
+  if (!Offset) {
+    error(CurrentFn->Name +
+          ": pointer arithmetic requires a complete pointee type");
+    return nullptr;
+  }
+  return std::make_unique<VBinOpExpr>(Op, std::move(Current),
+                                      std::move(Offset), Ty, Loc);
+}
+
+std::unique_ptr<VExpr>
+ASTConverter::convertAssignmentValue(const BinaryOperator *Assignment) {
   auto RHS = convertExpr(Assignment->getRHS());
   if (!RHS)
     return nullptr;
+  // The right operand is evaluated before the left one, whose calls follow.
+  if (CallSink && containsExecCall(Assignment->getLHS())) {
+    const SourceLocation Loc = Assignment->getRHS()->getExprLoc();
+    const std::string Value = "__value_" + std::to_string(++NestedCallId);
+    const VType Ty = RHS->Ty;
+    CallSink->push_back(
+        std::make_unique<VAssignStmt>(Value, std::move(RHS), Loc));
+    RHS = std::make_unique<VVarExpr>(Value, Ty, Loc);
+  }
   if (Assignment->getOpcode() == BO_Assign)
     return RHS;
+  if (Assignment->getLHS()->getType()->isPointerType())
+    return convertPointerStep(
+        Assignment->getLHS(),
+        Assignment->getOpcode() == BO_AddAssign ? VBinOp::Add : VBinOp::Sub,
+        std::move(RHS), Assignment->getExprLoc());
 
   VBinOp Op;
   switch (Assignment->getOpcode()) {
@@ -5339,8 +7014,7 @@ ASTConverter::convertAssignmentValue(const BinaryOperator *Assignment) {
     Op = VBinOp::Shr;
     break;
   default:
-    Errors.push_back(CurrentFn->Name +
-                     ": unsupported compound assignment operator");
+    error(CurrentFn->Name + ": unsupported compound assignment operator");
     return nullptr;
   }
 
@@ -5383,8 +7057,7 @@ void ASTConverter::appendAssignment(const Expr *LHS,
     return;
   Value = materialize(std::move(Value), LHS->getType());
   if (!ghostAssignmentAllowed(LHS)) {
-    Errors.push_back(CurrentFn->Name +
-                     ": ghost code cannot modify executable state");
+    error(CurrentFn->Name + ": ghost code cannot modify executable state");
     return;
   }
   LHS = LHS->IgnoreParenImpCasts();
@@ -5393,32 +7066,29 @@ void ASTConverter::appendAssignment(const Expr *LHS,
   // its single automatic object: there is no flattened SSA companion.
   if (const VarDecl *Root = promotedRootLocal(LHS)) {
     if (CurrentFn->IsProof) {
-      Errors.push_back(CurrentFn->Name +
-                       ": proof functions cannot modify executable memory");
+      error(CurrentFn->Name +
+            ": proof functions cannot modify executable memory");
       return;
     }
     if (isPromotableAggregateType(LHS->getType(), Ctx)) {
-      Errors.push_back(CurrentFn->Name +
-                       ": aggregate assignment is unsupported");
+      error(CurrentFn->Name + ": aggregate assignment is unsupported");
       return;
     }
     if (Value->Ty.isAggregate()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": aggregate assignment is unsupported");
+      error(CurrentFn->Name + ": aggregate assignment is unsupported");
       return;
     }
     if (carriesPointerProvenance(Value.get())) {
-      Errors.push_back(
-          CurrentFn->Name +
-          ": storing a provenance-bearing pointer in an automatic object is "
-          "unsupported");
+      error(CurrentFn->Name +
+            ": storing a provenance-bearing pointer in an automatic object is "
+            "unsupported");
       return;
     }
     const size_t ErrorCount = Errors.size();
-    auto Place = promotedObjectPlace(LHS);
+    auto Place = objectPlace(LHS);
     if (!Place) {
       if (Errors.size() == ErrorCount)
-        Errors.push_back(CurrentFn->Name + ": unsupported assignment target");
+        error(CurrentFn->Name + ": unsupported assignment target");
       return;
     }
     Out.push_back(std::make_unique<VStoreStmt>(Place->takeAddress(),
@@ -5433,9 +7103,9 @@ void ASTConverter::appendAssignment(const Expr *LHS,
     if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
       if (!VD->isLocalVarDeclOrParm()) {
         if (InGhost || CurrentFn->IsProof || CurrentFn->IsSpec) {
-          Errors.push_back(CurrentFn->Name +
-                           ": ghost and proof code cannot modify the global " +
-                           VD->getNameAsString());
+          error(CurrentFn->Name +
+                ": ghost and proof code cannot modify the global " +
+                VD->getNameAsString());
           return;
         }
         auto Address = globalAddress(VD, Loc);
@@ -5448,20 +7118,18 @@ void ASTConverter::appendAssignment(const Expr *LHS,
       }
       if (VD->getType()->isReferenceType()) {
         if (VD->getType().getNonReferenceType().isConstQualified()) {
-          Errors.push_back(CurrentFn->Name +
-                           ": assignment through a const reference is "
-                           "unsupported");
+          error(CurrentFn->Name + ": assignment through a const reference is "
+                                  "unsupported");
           return;
         }
         if (CurrentFn->IsProof) {
-          Errors.push_back(CurrentFn->Name +
-                           ": proof functions cannot modify executable memory");
+          error(CurrentFn->Name +
+                ": proof functions cannot modify executable memory");
           return;
         }
         auto Address = convertLValueAddress(LHS);
         if (!Address) {
-          Errors.push_back(CurrentFn->Name +
-                           ": unsupported reference assignment target");
+          error(CurrentFn->Name + ": unsupported reference assignment target");
           return;
         }
         Out.push_back(std::make_unique<VStoreStmt>(std::move(Address),
@@ -5470,8 +7138,8 @@ void ASTConverter::appendAssignment(const Expr *LHS,
       }
       if (AddressableLocals.count(VD)) {
         if (CurrentFn->IsProof) {
-          Errors.push_back(CurrentFn->Name +
-                           ": proof functions cannot modify executable memory");
+          error(CurrentFn->Name +
+                ": proof functions cannot modify executable memory");
           return;
         }
         auto Address = convertAutomaticLocalAddress(VD, Loc);
@@ -5483,8 +7151,7 @@ void ASTConverter::appendAssignment(const Expr *LHS,
         return;
       }
       if (VD->getType()->isRecordType()) {
-        Errors.push_back(CurrentFn->Name +
-                         ": aggregate assignment is unsupported");
+        error(CurrentFn->Name + ": aggregate assignment is unsupported");
         return;
       }
       Out.push_back(
@@ -5497,12 +7164,17 @@ void ASTConverter::appendAssignment(const Expr *LHS,
   if (const auto *ME = dyn_cast<MemberExpr>(LHS)) {
     if (auto Address = convertArrowFieldAddress(ME)) {
       if (CurrentFn->IsProof) {
-        Errors.push_back(CurrentFn->Name +
-                         ": proof functions cannot modify executable memory");
+        error(CurrentFn->Name +
+              ": proof functions cannot modify executable memory");
         return;
       }
       Out.push_back(std::make_unique<VStoreStmt>(std::move(Address),
                                                  std::move(Value), Loc));
+      return;
+    }
+    // A field inside the object a pointer addresses: p->inner.x, p[k].f.
+    if (!ME->isArrow() && inPointeeObject(ME)) {
+      appendPointeeStore(LHS, std::move(Value), Loc, Out);
       return;
     }
     const auto *FD = dyn_cast<FieldDecl>(ME->getMemberDecl());
@@ -5511,14 +7183,12 @@ void ASTConverter::appendAssignment(const Expr *LHS,
     const auto *VD = DRE ? dyn_cast<VarDecl>(DRE->getDecl()) : nullptr;
     if (FD && VD) {
       if (!VD->isLocalVarDeclOrParm()) {
-        Errors.push_back(CurrentFn->Name +
-                         ": global aggregate assignment is unsupported");
+        error(CurrentFn->Name + ": global aggregate assignment is unsupported");
         return;
       }
       if (Value->Ty.isAggregate() ||
           VType::fromQualType(FD->getType(), IntMode, Ctx).isAggregate()) {
-        Errors.push_back(CurrentFn->Name +
-                         ": aggregate assignment is unsupported");
+        error(CurrentFn->Name + ": aggregate assignment is unsupported");
         return;
       }
       Out.push_back(std::make_unique<VAssignStmt>(
@@ -5531,15 +7201,15 @@ void ASTConverter::appendAssignment(const Expr *LHS,
   if (const auto *U = dyn_cast<UnaryOperator>(LHS)) {
     if (U->getOpcode() == UO_Deref) {
       if (CurrentFn->IsProof) {
-        Errors.push_back(CurrentFn->Name +
-                         ": proof functions cannot modify executable memory");
+        error(CurrentFn->Name +
+              ": proof functions cannot modify executable memory");
         return;
       }
       if (isDynamicAddress(U->getSubExpr()) &&
           !directDynamicPointer(U->getSubExpr())) {
-        Errors.push_back(CurrentFn->Name +
-                         ": dynamic-storage dereference requires its direct "
-                         "allocation pointer");
+        error(CurrentFn->Name +
+              ": dynamic-storage dereference requires its direct "
+              "allocation pointer");
         return;
       }
       auto Place = derefPlace(U->getSubExpr(), Loc);
@@ -5553,8 +7223,12 @@ void ASTConverter::appendAssignment(const Expr *LHS,
 
   if (const auto *AS = dyn_cast<ArraySubscriptExpr>(LHS)) {
     if (CurrentFn->IsProof) {
-      Errors.push_back(CurrentFn->Name +
-                       ": proof functions cannot modify executable memory");
+      error(CurrentFn->Name +
+            ": proof functions cannot modify executable memory");
+      return;
+    }
+    if (inPointeeObject(AS->getBase())) {
+      appendPointeeStore(LHS, std::move(Value), Loc, Out);
       return;
     }
     const size_t ErrorCount = Errors.size();
@@ -5567,7 +7241,41 @@ void ASTConverter::appendAssignment(const Expr *LHS,
       return;
   }
 
-  Errors.push_back(CurrentFn->Name + ": unsupported assignment target");
+  error(CurrentFn->Name + ": unsupported assignment target");
+}
+
+void ASTConverter::appendPointeeStore(
+    const Expr *LHS, std::unique_ptr<VExpr> Value, SourceLocation Loc,
+    std::vector<std::unique_ptr<VStmt>> &Out) {
+  if (CurrentFn->IsProof) {
+    error(CurrentFn->Name +
+          ": proof functions cannot modify executable memory");
+    return;
+  }
+  if (Value->Ty.isAggregate() ||
+      isPromotableAggregateType(LHS->getType(), Ctx)) {
+    error(CurrentFn->Name + ": aggregate assignment is unsupported");
+    return;
+  }
+  const size_t ErrorCount = Errors.size();
+  auto Place = objectPlace(LHS);
+  if (!Place) {
+    if (Errors.size() == ErrorCount)
+      error(CurrentFn->Name + ": unsupported assignment target");
+    return;
+  }
+  Out.push_back(std::make_unique<VStoreStmt>(Place->takeAddress(),
+                                             std::move(Value), Loc,
+                                             Place->takeAccessCondition()));
+}
+
+bool ASTConverter::rejectOwnObjectUse(const Expr *E) {
+  const FunctionDecl *Callee = ownObjectCallee(E);
+  if (!Callee)
+    return false;
+  error(CurrentFn->Name + ": the reference " + functionName(Callee) +
+        " returns is not used yet; call it as a statement of its own");
+  return true;
 }
 
 bool ASTConverter::appendRecordCopy(const Expr *Source, const VarDecl *Target,
@@ -5575,6 +7283,8 @@ bool ASTConverter::appendRecordCopy(const Expr *Source, const VarDecl *Target,
                                     std::vector<std::unique_ptr<VStmt>> &Out) {
   if (!Source || !Target)
     return false;
+  if (rejectOwnObjectUse(Source))
+    return true;
   Source = Source->IgnoreParenImpCasts();
   if (const auto *Construct = dyn_cast<CXXConstructExpr>(Source)) {
     if (Construct->getNumArgs() != 1 ||
@@ -5586,37 +7296,21 @@ bool ASTConverter::appendRecordCopy(const Expr *Source, const VarDecl *Target,
   const auto *DRE = dyn_cast<DeclRefExpr>(Source);
   const auto *SourceVar = DRE ? dyn_cast<VarDecl>(DRE->getDecl()) : nullptr;
   const RecordDecl *TargetRecord = getRecordFromType(Target->getType());
-  // Copying out of a promoted object reads each leaf from its storage; the
-  // promoted source has no flattened companion to read instead.
-  if (promotedRootLocal(Source) && Target->isLocalVarDeclOrParm() &&
-      TargetRecord && TargetRecord->getDefinition() &&
+  // Copying out of a record kept in memory, a local object or one a
+  // pointer or reference addresses, reads each field where it is.
+  if (Target->isLocalVarDeclOrParm() && TargetRecord &&
+      TargetRecord->getDefinition() &&
       Ctx.hasSameUnqualifiedType(Target->getType(), Source->getType())) {
-    auto SourcePlace = promotedObjectPlace(Source);
-    if (!SourcePlace)
-      return true;
-    if (auto AccessCondition = SourcePlace->takeAccessCondition())
-      Out.push_back(std::make_unique<VAssertStmt>(
-          std::move(AccessCondition), Loc, ProofObligationKind::Bounds));
-    std::unique_ptr<VExpr> SourceBase = SourcePlace->takeAddress();
-    for (const FieldDecl *Field : TargetRecord->getDefinition()->fields()) {
-      auto FieldOffset = recordFieldOffset(Field);
-      VType FieldType = VType::fromQualType(Field->getType(), IntMode, Ctx);
-      if (!FieldOffset || FieldType.isAggregate() ||
-          FieldType.Kind == VTypeKind::Unsupported) {
-        Errors.push_back(CurrentFn->Name +
-                         ": unsupported aggregate copy out of an automatic "
-                         "object");
-        return true;
+    std::vector<std::pair<const FieldDecl *, std::unique_ptr<VExpr>>> Fields;
+    if (recordFieldsInMemory(Source, Loc, Fields)) {
+      for (auto &[Field, Value] : Fields) {
+        Out.push_back(std::make_unique<VAssignStmt>(
+            valueName(Target) + "." + Field->getNameAsString(),
+            std::move(Value), Loc));
+        markInitialized(Target, Field);
       }
-      Out.push_back(std::make_unique<VAssignStmt>(
-          valueName(Target) + "." + Field->getNameAsString(),
-          std::make_unique<VLoadExpr>(
-              objectLeafAddress(SourceBase.get(), *FieldOffset, Loc), FieldType,
-              Loc),
-          Loc));
-      markInitialized(Target, Field);
+      return true;
     }
-    return true;
   }
   const RecordDecl *SourceRecord =
       SourceVar ? getRecordFromType(SourceVar->getType()) : nullptr;
@@ -5685,9 +7379,9 @@ bool ASTConverter::appendObjectZeroInitialization(
         return true;
       });
   if (!Ok)
-    Errors.push_back(CurrentFn->Name +
-                     ": unsupported value initialization of an automatic "
-                     "object");
+    error(CurrentFn->Name +
+          ": unsupported value initialization of an automatic "
+          "object");
   return Ok;
 }
 
@@ -5695,20 +7389,22 @@ bool ASTConverter::appendObjectCopy(const Expr *Source, QualType Ty,
                                     const VExpr *Base, uint64_t Offset,
                                     SourceLocation Loc,
                                     std::vector<std::unique_ptr<VStmt>> &Out) {
+  if (rejectOwnObjectUse(Source))
+    return false;
   const Expr *Lvalue = peelObjectExpr(Source);
   if (const auto *Cast = dyn_cast<CastExpr>(Lvalue);
       Cast && Cast->getCastKind() == CK_LValueToRValue)
     Lvalue = peelObjectExpr(Cast->getSubExpr());
   if (!Lvalue || !Ctx.hasSameUnqualifiedType(Lvalue->getType(), Ty)) {
-    Errors.push_back(CurrentFn->Name +
-                     ": unsupported aggregate initializer for an automatic "
-                     "object");
+    error(CurrentFn->Name +
+          ": unsupported aggregate initializer for an automatic "
+          "object");
     return false;
   }
 
   // Copy from another promoted object: read every leaf out of its storage.
   if (promotedRootLocal(Lvalue)) {
-    auto SourcePlace = promotedObjectPlace(Lvalue);
+    auto SourcePlace = objectPlace(Lvalue);
     if (!SourcePlace)
       return false;
     if (auto AccessCondition = SourcePlace->takeAccessCondition())
@@ -5729,9 +7425,8 @@ bool ASTConverter::appendObjectCopy(const Expr *Source, QualType Ty,
           return true;
         });
     if (!Ok)
-      Errors.push_back(CurrentFn->Name +
-                       ": unsupported aggregate copy between automatic "
-                       "objects");
+      error(CurrentFn->Name + ": unsupported aggregate copy between automatic "
+                              "objects");
     return Ok;
   }
 
@@ -5742,15 +7437,15 @@ bool ASTConverter::appendObjectCopy(const Expr *Source, QualType Ty,
   const RecordDecl *Definition = Record ? Record->getDefinition() : nullptr;
   if (!SourceVar || !SourceVar->isLocalVarDeclOrParm() || !Definition ||
       !isFlatScalarRecordType(Ty)) {
-    Errors.push_back(CurrentFn->Name +
-                     ": unsupported aggregate initializer for an automatic "
-                     "object");
+    error(CurrentFn->Name +
+          ": unsupported aggregate initializer for an automatic "
+          "object");
     return false;
   }
   for (const FieldDecl *Field : Definition->fields()) {
     auto FieldOffset = recordFieldOffset(Field);
     if (!FieldOffset) {
-      Errors.push_back(CurrentFn->Name + ": unsupported aggregate copy layout");
+      error(CurrentFn->Name + ": unsupported aggregate copy layout");
       return false;
     }
     requireInitialized(SourceVar, Field);
@@ -5764,12 +7459,98 @@ bool ASTConverter::appendObjectCopy(const Expr *Source, QualType Ty,
   return true;
 }
 
+bool ASTConverter::appendMemberInitializers(
+    const CXXConstructorDecl *Ctor, const VExpr *Base, uint64_t Offset,
+    SourceLocation Loc, std::vector<std::unique_ptr<VStmt>> &Out) {
+  for (const CXXCtorInitializer *Init : Ctor->inits()) {
+    const FieldDecl *Field = Init->getMember();
+    auto FieldOffset = Field ? recordFieldOffset(Field) : std::nullopt;
+    if (!FieldOffset) {
+      error(CurrentFn->Name + ": unsupported constructor initializer");
+      return false;
+    }
+    const SourceLocation At =
+        Init->isWritten() ? Init->getSourceLocation() : Loc;
+    if (!appendObjectInitialization(Init->getInit(), Field->getType(), Base,
+                                    Offset + *FieldOffset, At, Out))
+      return false;
+  }
+  return true;
+}
+
+bool ASTConverter::appendConstruction(
+    const CXXConstructExpr *Construct, QualType Ty, const VExpr *Base,
+    uint64_t Offset, SourceLocation Loc,
+    std::vector<std::unique_ptr<VStmt>> &Out) {
+  const CXXConstructorDecl *Ctor = Construct->getConstructor();
+  if (!Ctor || Ty->isArrayType() || !Ty->getAsCXXRecordDecl()) {
+    error(CurrentFn->Name +
+          ": arrays of objects with constructors are not supported yet");
+    return false;
+  }
+  if (auto Reason = unsupportedConstructor(Ctor)) {
+    error(CurrentFn->Name + ": " + Ctor->getQualifiedNameAsString() + ": " +
+          *Reason);
+    return false;
+  }
+  // An implicit or defaulted default constructor initializes each member as
+  // its declaration says, which is all it does.
+  if (!Ctor->isUserProvided()) {
+    if (!Ctor->isDefaultConstructor()) {
+      error(CurrentFn->Name + ": unsupported constructor initialization of an "
+                              "automatic object");
+      return false;
+    }
+    if (Construct->requiresZeroInitialization() &&
+        !appendObjectZeroInitialization(Ty, Base, Offset, Loc, Out))
+      return false;
+    const auto *Definition =
+        dyn_cast_or_null<CXXConstructorDecl>(Ctor->getDefinition());
+    return appendMemberInitializers(Definition ? Definition : Ctor, Base,
+                                    Offset, Loc, Out);
+  }
+  // A constructor the class provides is a call, passing the object's
+  // address as `this`.
+  if (!functionContract(Ctor)) {
+    error(CurrentFn->Name +
+          ": call to function without a verification "
+          "contract: " +
+          Ctor->getQualifiedNameAsString());
+    return false;
+  }
+  std::vector<std::unique_ptr<VExpr>> Args;
+  Args.push_back(objectLeafAddress(Base, Offset, Loc));
+  for (unsigned I = 0; I < Construct->getNumArgs(); ++I) {
+    const ParmVarDecl *Formal =
+        I < Ctor->getNumParams() ? Ctor->getParamDecl(I) : nullptr;
+    if (Formal && isFlattenedRecordType(Formal->getType())) {
+      if (!appendRecordCallArgument(Construct->getArg(I), Formal, Args))
+        return false;
+      continue;
+    }
+    std::unique_ptr<VExpr> Arg;
+    convertExecCallArg(Construct->getArg(I), Formal, Out, Arg);
+    if (!Arg)
+      return false;
+    Args.push_back(std::move(Arg));
+  }
+  Out.push_back(std::make_unique<VCallStmt>(Ctor->getNameAsString(),
+                                            functionIdentity(Ctor),
+                                            std::move(Args), "", Loc, false));
+  return true;
+}
+
 bool ASTConverter::appendObjectInitialization(
     const Expr *Init, QualType Ty, const VExpr *Base, uint64_t Offset,
     SourceLocation Loc, std::vector<std::unique_ptr<VStmt>> &Out) {
   if (!Init)
     return true;
   Init = Init->IgnoreParens();
+  if (const auto *Default = dyn_cast<CXXDefaultInitExpr>(Init))
+    return appendObjectInitialization(Default->getExpr(), Ty, Base, Offset, Loc,
+                                      Out);
+  if (const CXXConstructExpr *Construct = constructionOf(Init))
+    Init = Construct;
   if (const auto *Cast = dyn_cast<ImplicitCastExpr>(Init);
       Cast && Cast->getCastKind() == CK_NoOp)
     Init = Cast->getSubExpr()->IgnoreParens();
@@ -5783,23 +7564,20 @@ bool ASTConverter::appendObjectInitialization(
         return true;
       return appendObjectZeroInitialization(Ty, Base, Offset, Loc, Out);
     }
-    if (Construct->getNumArgs() == 1 && Ctor &&
-        (Ctor->isCopyConstructor() || Ctor->isMoveConstructor())) {
+    // An implicit or defaulted copy copies the members; one the class
+    // provides runs its body.
+    if (Construct->getNumArgs() == 1 && Ctor && !Ctor->isUserProvided() &&
+        (Ctor->isCopyConstructor() || Ctor->isMoveConstructor()))
       Init = Construct->getArg(0)->IgnoreParens();
-    } else {
-      Errors.push_back(CurrentFn->Name +
-                       ": unsupported constructor initialization of an "
-                       "automatic object");
-      return false;
-    }
+    else
+      return appendConstruction(Construct, Ty, Base, Offset, Loc, Out);
   }
   if (isa<ImplicitValueInitExpr>(Init) || isa<CXXScalarValueInitExpr>(Init))
     return appendObjectZeroInitialization(Ty, Base, Offset, Loc, Out);
 
   if (const auto *ILE = dyn_cast<InitListExpr>(Init)) {
     if (ILE->isStringLiteralInit() || ILE->hasDesignatedInit()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": unsupported aggregate initializer form");
+      error(CurrentFn->Name + ": unsupported aggregate initializer form");
       return false;
     }
     if (const auto *CAT = Ctx.getAsConstantArrayType(Ty)) {
@@ -5807,8 +7585,7 @@ bool ASTConverter::appendObjectInitialization(
       const uint64_t Count = CAT->getSize().getZExtValue();
       const uint64_t Stride = Ctx.getTypeSizeInChars(Element).getQuantity();
       if (ILE->getNumInits() > Count) {
-        Errors.push_back(CurrentFn->Name +
-                         ": unsupported aggregate initializer form");
+        error(CurrentFn->Name + ": unsupported aggregate initializer form");
         return false;
       }
       for (uint64_t I = 0; I < Count; ++I) {
@@ -5828,16 +7605,14 @@ bool ASTConverter::appendObjectInitialization(
     if (const RecordDecl *Record = getRecordFromType(Ty)) {
       const RecordDecl *Definition = Record->getDefinition();
       if (!Definition) {
-        Errors.push_back(CurrentFn->Name +
-                         ": unsupported aggregate initializer form");
+        error(CurrentFn->Name + ": unsupported aggregate initializer form");
         return false;
       }
       unsigned Index = 0;
       for (const FieldDecl *Field : Definition->fields()) {
         auto FieldOffset = recordFieldOffset(Field);
         if (!FieldOffset) {
-          Errors.push_back(CurrentFn->Name +
-                           ": unsupported aggregate initializer layout");
+          error(CurrentFn->Name + ": unsupported aggregate initializer layout");
           return false;
         }
         const Expr *FieldInit =
@@ -5854,8 +7629,7 @@ bool ASTConverter::appendObjectInitialization(
           return false;
       }
       if (Index < ILE->getNumInits()) {
-        Errors.push_back(CurrentFn->Name +
-                         ": unsupported aggregate initializer form");
+        error(CurrentFn->Name + ": unsupported aggregate initializer form");
         return false;
       }
       return true;
@@ -5865,8 +7639,7 @@ bool ASTConverter::appendObjectInitialization(
     if (ILE->getNumInits() == 1)
       return appendObjectInitialization(ILE->getInit(0), Ty, Base, Offset, Loc,
                                         Out);
-    Errors.push_back(CurrentFn->Name +
-                     ": unsupported aggregate initializer form");
+    error(CurrentFn->Name + ": unsupported aggregate initializer form");
     return false;
   }
 
@@ -5875,18 +7648,17 @@ bool ASTConverter::appendObjectInitialization(
 
   VType LeafType = VType::fromQualType(Ty, IntMode, Ctx);
   if (LeafType.Kind == VTypeKind::Unsupported || LeafType.isAggregate()) {
-    Errors.push_back(CurrentFn->Name +
-                     ": unsupported automatic object leaf initialization");
+    error(CurrentFn->Name +
+          ": unsupported automatic object leaf initialization");
     return false;
   }
   auto Value = convertExpr(Init);
   if (!Value)
     return false;
   if (carriesPointerProvenance(Value.get())) {
-    Errors.push_back(
-        CurrentFn->Name +
-        ": storing a provenance-bearing pointer in an automatic object is "
-        "unsupported");
+    error(CurrentFn->Name +
+          ": storing a provenance-bearing pointer in an automatic object is "
+          "unsupported");
     return false;
   }
   Out.push_back(std::make_unique<VStoreStmt>(
@@ -5895,6 +7667,9 @@ bool ASTConverter::appendObjectInitialization(
 }
 
 std::vector<std::unique_ptr<VStmt>> ASTConverter::convertStmt(const Stmt *S) {
+  llvm::SaveAndRestore At(CurrentRange, S && S->getSourceRange().isValid()
+                                            ? S->getSourceRange()
+                                            : CurrentRange);
   return convertStmtBody(S);
 }
 
@@ -5904,8 +7679,7 @@ void ASTConverter::registerAutomaticLocal(const VarDecl *VD) {
   if (!VD)
     return;
   if (AutomaticScopeStack.empty()) {
-    Errors.push_back(CurrentFn->Name +
-                     ": automatic object has no lexical lifetime scope");
+    error(CurrentFn->Name + ": automatic object has no lexical lifetime scope");
     return;
   }
   AutomaticScopeStack.back().push_back(VD);
@@ -5913,27 +7687,25 @@ void ASTConverter::registerAutomaticLocal(const VarDecl *VD) {
 }
 
 void ASTConverter::appendActiveLifetimeEnds(
-    std::vector<std::unique_ptr<VStmt>> &Out, SourceLocation Loc) {
+    std::vector<std::unique_ptr<VStmt>> &Out, SourceLocation Loc, size_t From,
+    bool IsFunctionExit) {
   for (auto It = ActiveAutomaticLocals.rbegin();
-       It != ActiveAutomaticLocals.rend(); ++It) {
+       It != ActiveAutomaticLocals.rend() - From; ++It) {
     auto Provenance = AutomaticLocalProvenanceVariables.find(*It);
     if (Provenance == AutomaticLocalProvenanceVariables.end()) {
-      Errors.push_back(
-          CurrentFn->Name +
-          ": missing automatic-storage provenance at lifetime end");
+      error(CurrentFn->Name +
+            ": missing automatic-storage provenance at lifetime end");
       continue;
     }
-    Out.push_back(std::make_unique<VEndLifetimeStmt>(valueName(*It),
-                                                     Provenance->second, Loc,
-                                                     /*IsFunctionExit=*/true));
+    Out.push_back(std::make_unique<VEndLifetimeStmt>(
+        valueName(*It), Provenance->second, Loc, IsFunctionExit));
   }
 }
 
 void ASTConverter::leaveAutomaticScope(std::vector<std::unique_ptr<VStmt>> &Out,
                                        SourceLocation Loc) {
   if (AutomaticScopeStack.empty()) {
-    Errors.push_back(CurrentFn->Name +
-                     ": mismatched automatic-object lexical scope");
+    error(CurrentFn->Name + ": mismatched automatic-object lexical scope");
     return;
   }
   auto Scope = std::move(AutomaticScopeStack.back());
@@ -5943,9 +7715,8 @@ void ASTConverter::leaveAutomaticScope(std::vector<std::unique_ptr<VStmt>> &Out,
     for (auto It = Scope.rbegin(); It != Scope.rend(); ++It) {
       auto Provenance = AutomaticLocalProvenanceVariables.find(*It);
       if (Provenance == AutomaticLocalProvenanceVariables.end()) {
-        Errors.push_back(
-            CurrentFn->Name +
-            ": missing automatic-storage provenance at lifetime end");
+        error(CurrentFn->Name +
+              ": missing automatic-storage provenance at lifetime end");
         continue;
       }
       Out.push_back(std::make_unique<VEndLifetimeStmt>(
@@ -5954,8 +7725,8 @@ void ASTConverter::leaveAutomaticScope(std::vector<std::unique_ptr<VStmt>> &Out,
   }
   for (auto It = Scope.rbegin(); It != Scope.rend(); ++It) {
     if (ActiveAutomaticLocals.empty() || ActiveAutomaticLocals.back() != *It) {
-      Errors.push_back(CurrentFn->Name +
-                       ": automatic-object lifetime nesting is inconsistent");
+      error(CurrentFn->Name +
+            ": automatic-object lifetime nesting is inconsistent");
       auto ActiveIt = std::find(ActiveAutomaticLocals.begin(),
                                 ActiveAutomaticLocals.end(), *It);
       if (ActiveIt != ActiveAutomaticLocals.end())
@@ -5973,6 +7744,235 @@ ASTConverter::convertScopedSubstatement(const Stmt *S) {
   enterAutomaticScope();
   auto Out = convertStmt(S);
   leaveAutomaticScope(Out, S ? S->getEndLoc() : SourceLocation());
+  return Out;
+}
+
+std::vector<std::unique_ptr<VStmt>>
+ASTConverter::convertSwitch(const SwitchStmt *SS) {
+  std::vector<std::unique_ptr<VStmt>> Out;
+  const bool Executable = !InGhost && !CurrentFn->IsSpec && !CurrentFn->IsProof;
+  const SourceLocation Loc = SS->getBeginLoc();
+  enterAutomaticScope();
+  for (const Stmt *Declared :
+       {SS->getInit(),
+        static_cast<const Stmt *>(SS->getConditionVariableDeclStmt())}) {
+    if (!Declared)
+      continue;
+    auto Part = convertStmt(Declared);
+    Out.insert(Out.end(), std::make_move_iterator(Part.begin()),
+               std::make_move_iterator(Part.end()));
+  }
+  std::unique_ptr<VExpr> Value;
+  {
+    llvm::SaveAndRestore Calls(CallSink, Executable ? &Out : nullptr);
+    Value = convertExpr(SS->getCond());
+  }
+  if (!Value) {
+    leaveAutomaticScope(Out, SS->getEndLoc());
+    return Out;
+  }
+
+  // The statements of the body, split where its labels are: a label
+  // starts a segment, which runs when it matches or when the segment before
+  // it falls through.
+  struct Segment {
+    std::vector<const SwitchCase *> Labels;
+    std::vector<const Stmt *> Stmts;
+  };
+  std::vector<Segment> Segments;
+  std::vector<const Stmt *> Leading;
+  std::vector<const Stmt *> Children;
+  if (const auto *Body = dyn_cast<CompoundStmt>(SS->getBody()))
+    Children.assign(Body->body_begin(), Body->body_end());
+  else
+    Children.push_back(SS->getBody());
+  std::set<const SwitchCase *> TopLevel;
+  for (const Stmt *Child : Children) {
+    const Stmt *Rest = Child;
+    bool Labeled = false;
+    while (true) {
+      const Stmt *Label = Rest;
+      while (const auto *AS = dyn_cast<AttributedStmt>(Label))
+        if (isa<SwitchCase>(AS->getSubStmt()))
+          Label = AS->getSubStmt();
+        else
+          break;
+      const auto *SC = dyn_cast<SwitchCase>(Label);
+      if (!SC)
+        break;
+      if (!Labeled)
+        Segments.emplace_back();
+      Labeled = true;
+      Segments.back().Labels.push_back(SC);
+      TopLevel.insert(SC);
+      Rest = SC->getSubStmt();
+    }
+    if (!Labeled && Segments.empty())
+      Leading.push_back(Child);
+    else
+      Segments.back().Stmts.push_back(Rest);
+  }
+  for (const SwitchCase *SC = SS->getSwitchCaseList(); SC;
+       SC = SC->getNextSwitchCase())
+    if (!TopLevel.count(SC)) {
+      error(SC->getSourceRange(),
+            CurrentFn->Name + ": a case label inside another statement of "
+                              "its switch is unsupported");
+      leaveAutomaticScope(Out, SS->getEndLoc());
+      return Out;
+    }
+
+  const std::string Id = std::to_string(++NestedCallId);
+  const std::string Selector = "__switch_" + Id;
+  const std::string Entered = "__switch_entered_" + Id;
+  const std::string Break = "__switch_break_" + Id;
+  const VType Ty = Value->Ty;
+  auto Read = [&](const std::string &Name, VType Type) {
+    return std::make_unique<VVarExpr>(Name, Type, Loc);
+  };
+  auto Matches = [&](const CaseStmt *CS) -> std::unique_ptr<VExpr> {
+    auto Constant = [&](const Expr *E) {
+      return std::make_unique<VLiteralExpr>(
+          integerValueString(E->EvaluateKnownConstInt(Ctx), Ty.IsSigned), Ty,
+          E->getExprLoc());
+    };
+    if (!CS->getRHS())
+      return std::make_unique<VBinOpExpr>(VBinOp::Eq, Read(Selector, Ty),
+                                          Constant(CS->getLHS()),
+                                          VType::makeBool(), Loc);
+    return std::make_unique<VBinOpExpr>(
+        VBinOp::And,
+        std::make_unique<VBinOpExpr>(VBinOp::Le, Constant(CS->getLHS()),
+                                     Read(Selector, Ty), VType::makeBool(),
+                                     Loc),
+        std::make_unique<VBinOpExpr>(VBinOp::Le, Read(Selector, Ty),
+                                     Constant(CS->getRHS()), VType::makeBool(),
+                                     Loc),
+        VType::makeBool(), Loc);
+  };
+  auto AnyOf = [&](std::unique_ptr<VExpr> Left, std::unique_ptr<VExpr> Right) {
+    if (!Left)
+      return Right;
+    return std::unique_ptr<VExpr>(std::make_unique<VBinOpExpr>(
+        VBinOp::Or, std::move(Left), std::move(Right), VType::makeBool(), Loc));
+  };
+  // The default label matches when no case does.
+  std::unique_ptr<VExpr> AnyCase;
+  bool HasDefault = false;
+  for (const SwitchCase *SC = SS->getSwitchCaseList(); SC;
+       SC = SC->getNextSwitchCase()) {
+    if (const auto *CS = dyn_cast<CaseStmt>(SC))
+      AnyCase = AnyOf(std::move(AnyCase), Matches(CS));
+    else
+      HasDefault = true;
+  }
+
+  Out.push_back(std::make_unique<VAssignStmt>(Selector, std::move(Value), Loc));
+  // Statements before the first label never run; declarations there are
+  // in scope after it.
+  for (const Stmt *Child : Leading)
+    if (isa<DeclStmt>(Child)) {
+      auto Part = convertStmt(Child);
+      Out.insert(Out.end(), std::make_move_iterator(Part.begin()),
+                 std::make_move_iterator(Part.end()));
+    }
+
+  const std::set<std::string> Before = InitializedValues;
+  const bool BeforeReachable = InitializationPathReachable;
+  enterAutomaticScope();
+  EnclosingLoop Target;
+  Target.IsSwitch = true;
+  Target.IsGhost = InGhost;
+  Target.ActiveLocals = ActiveAutomaticLocals.size();
+  Target.Scope = AutomaticScopeStack.size();
+  EnclosingLoops.push_back(std::move(Target));
+  struct LoweredSegment {
+    SourceLocation Loc;
+    std::unique_ptr<VExpr> Match;
+    std::vector<std::unique_ptr<VStmt>> Stmts;
+  };
+  std::vector<LoweredSegment> Lowered;
+  std::optional<std::set<std::string>> Left;
+  for (const Segment &Seg : Segments) {
+    std::unique_ptr<VExpr> Match;
+    for (const SwitchCase *SC : Seg.Labels) {
+      if (const auto *CS = dyn_cast<CaseStmt>(SC))
+        Match = AnyOf(std::move(Match), Matches(CS));
+      else
+        Match = AnyOf(
+            std::move(Match),
+            AnyCase ? std::make_unique<VUnaryOpExpr>(VUnaryOp::Not,
+                                                     cloneVExpr(AnyCase.get()),
+                                                     VType::makeBool(), Loc)
+                    : std::unique_ptr<VExpr>(std::make_unique<VLiteralExpr>(
+                          1, VType::makeBool(), Loc)));
+    }
+    // Entered by a jump to its label, it has only what was initialized
+    // before the switch; what falls through has more.
+    InitializedValues = Before;
+    InitializationPathReachable = BeforeReachable;
+    std::vector<std::unique_ptr<VStmt>> Stmts;
+    for (const Stmt *St : Seg.Stmts) {
+      auto Part = convertStmt(St);
+      Stmts.insert(Stmts.end(), std::make_move_iterator(Part.begin()),
+                   std::make_move_iterator(Part.end()));
+    }
+    Lowered.push_back({Seg.Labels.front()->getBeginLoc(), std::move(Match),
+                       std::move(Stmts)});
+  }
+  if (InitializationPathReachable)
+    joinInitialized(Left, InitializedValues);
+  std::vector<std::unique_ptr<VStmt>> BodyEnd;
+  leaveAutomaticScope(BodyEnd, SS->getEndLoc());
+  const EnclosingLoop Exits = std::move(EnclosingLoops.back());
+  EnclosingLoops.pop_back();
+
+  // entered = entered || matches; if (entered && !break) { segment }
+  if (!Lowered.empty())
+    Out.push_back(assignFlag(Entered, false, Loc));
+  if (Exits.Breaks)
+    Out.push_back(assignFlag(Break, false, Loc));
+  for (size_t Index = 0; Index < Lowered.size(); ++Index) {
+    LoweredSegment &Seg = Lowered[Index];
+    auto Flag = [&](const std::string &Name) {
+      return std::make_unique<VVarExpr>(Name, VType::makeBool(), Seg.Loc);
+    };
+    // With a default label, every label has matched by the last segment.
+    std::unique_ptr<VExpr> Runs;
+    if (!HasDefault || Index + 1 < Lowered.size()) {
+      Out.push_back(std::make_unique<VAssignStmt>(
+          Entered, AnyOf(Flag(Entered), std::move(Seg.Match)), Seg.Loc));
+      Runs = Flag(Entered);
+    }
+    if (Exits.Breaks) {
+      Seg.Stmts = lowerExits(std::move(Seg.Stmts), Break, "");
+      std::unique_ptr<VExpr> Running = std::make_unique<VUnaryOpExpr>(
+          VUnaryOp::Not, Flag(Break), VType::makeBool(), Seg.Loc);
+      Runs = Runs ? std::make_unique<VBinOpExpr>(VBinOp::And, std::move(Runs),
+                                                 std::move(Running),
+                                                 VType::makeBool(), Seg.Loc)
+                  : std::move(Running);
+    }
+    if (!Runs) {
+      Out.insert(Out.end(), std::make_move_iterator(Seg.Stmts.begin()),
+                 std::make_move_iterator(Seg.Stmts.end()));
+      continue;
+    }
+    Out.push_back(std::make_unique<VIfStmt>(
+        std::move(Runs), std::move(Seg.Stmts),
+        std::vector<std::unique_ptr<VStmt>>(), Seg.Loc));
+  }
+  Out.insert(Out.end(), std::make_move_iterator(BodyEnd.begin()),
+             std::make_move_iterator(BodyEnd.end()));
+  // It ends after the last segment, at each break, and, without a default
+  // label, where no case matches.
+  if (Exits.BreakInitialized)
+    joinInitialized(Left, *Exits.BreakInitialized);
+  if (!HasDefault && BeforeReachable)
+    joinInitialized(Left, Before);
+  InitializedValues = Left ? *Left : Before;
+  InitializationPathReachable = Left.has_value();
+  leaveAutomaticScope(Out, SS->getEndLoc());
   return Out;
 }
 
@@ -6011,13 +8011,34 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     leaveAutomaticScope(Out, CS->getRBracLoc());
     return Out;
   }
+  // A pointer to a subobject formed by this statement is checked and bounded
+  // before it; a condition only compares one.
+  const bool Executable = !InGhost && !CurrentFn->IsSpec && !CurrentFn->IsProof;
+  llvm::SaveAndRestore Sink(
+      SubobjectSink,
+      (isa<DeclStmt, ReturnStmt>(S) || isa<Expr>(S)) && Executable ? &Out
+                                                                   : nullptr);
+  // So are the calls its expressions make; a condition's, before it.
+  llvm::SaveAndRestore Calls(
+      CallSink, (isa<DeclStmt, ReturnStmt>(S) || isa<Expr>(S)) && Executable
+                    ? &Out
+                    : nullptr);
+  llvm::SaveAndRestore Hoisted(HoistedCalls,
+                               std::map<const CallExpr *, std::string>());
   if (S->getStmtClass() == Stmt::ReturnStmtClass) {
     if (InGhost) {
-      Errors.push_back(CurrentFn->Name +
-                       ": ghost code cannot alter executable control flow");
+      error(CurrentFn->Name +
+            ": ghost code cannot alter executable control flow");
       return Out;
     }
     const auto *RS = cast<ReturnStmt>(S);
+    // A member function that returns its own object returns nothing.
+    if (CurrentFn->ReturnType.Kind == VTypeKind::Void &&
+        isOwnObject(RS->getRetValue())) {
+      appendReturn(nullptr, Out, RS->getBeginLoc());
+      InitializationPathReachable = false;
+      return Out;
+    }
     if (const Expr *RetE = RS->getRetValue()) {
       emitReturnInvariantAssert(RetE, Out, RS->getBeginLoc());
       const auto *CE = dyn_cast<CallExpr>(RetE->IgnoreParenImpCasts());
@@ -6039,7 +8060,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
                     : "";
             CurrentFn->UsesDynamicStorage |= TrackOwnedResult;
             Out.push_back(std::make_unique<VCallStmt>(
-                Callee->getNameAsString(), functionIdentity(Callee),
+                functionName(Callee), functionIdentity(Callee),
                 std::move(Args), ReturnsVoid ? "" : Tmp, RS->getBeginLoc(),
                 false, Provenance));
             auto Result = convertCallResultValue(Tmp, Callee->getReturnType(),
@@ -6052,6 +8073,26 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         }
       }
       if (CurrentFn->ReturnType.Kind == VTypeKind::Struct) {
+        // A record kept in memory is returned as its fields, read before
+        // the lifetimes of the locals end.
+        std::vector<std::pair<const FieldDecl *, std::unique_ptr<VExpr>>>
+            Fields;
+        if (auto InMemory =
+                recordFieldsInMemory(RetE, RS->getBeginLoc(), Fields)) {
+          if (!*InMemory)
+            return Out;
+          const std::string Tmp =
+              "__aggregate_return_" + std::to_string(++NestedCallId);
+          for (auto &[Field, Value] : Fields)
+            Out.push_back(std::make_unique<VAssignStmt>(
+                Tmp + "." + Field->getNameAsString(), std::move(Value),
+                RS->getBeginLoc()));
+          appendReturn(std::make_unique<VVarExpr>(Tmp, CurrentFn->ReturnType,
+                                                  RS->getBeginLoc()),
+                       Out, RS->getBeginLoc());
+          InitializationPathReachable = false;
+          return Out;
+        }
         auto RecordValue = convertExpr(RetE);
         if (!RecordValue)
           return Out;
@@ -6064,8 +8105,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         const RecordDecl *Definition =
             Record ? Record->getDefinition() : nullptr;
         if (!Definition) {
-          Errors.push_back(CurrentFn->Name +
-                           ": unsupported aggregate return expression");
+          error(CurrentFn->Name + ": unsupported aggregate return expression");
           return Out;
         }
         const std::string Tmp =
@@ -6105,7 +8145,11 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       Out.insert(Out.end(), std::make_move_iterator(Init.begin()),
                  std::make_move_iterator(Init.end()));
     }
-    auto Cond = convertExpr(IS->getCond());
+    std::unique_ptr<VExpr> Cond;
+    {
+      llvm::SaveAndRestore Calls(CallSink, Executable ? &Out : nullptr);
+      Cond = convertExpr(IS->getCond());
+    }
     if (!Cond) {
       leaveAutomaticScope(Out, IS->getEndLoc());
       return Out;
@@ -6143,27 +8187,35 @@ ASTConverter::convertStmtBody(const Stmt *S) {
   }
   if (isa<BreakStmt>(S) || isa<ContinueStmt>(S)) {
     const bool IsBreak = isa<BreakStmt>(S);
-    if (EnclosingLoops.empty()) {
-      Errors.push_back(CurrentFn->Name + ": " +
-                       (IsBreak ? "break" : "continue") +
-                       " outside a loop is unsupported");
-      return Out;
-    }
-    if (EnclosingLoops.back().IsDo) {
-      Errors.push_back(CurrentFn->Name +
-                       ": break and continue in do loops are unsupported");
+    // A break leaves the innermost loop or switch, a continue the innermost
+    // loop.
+    auto Target = std::find_if(
+        EnclosingLoops.rbegin(), EnclosingLoops.rend(),
+        [&](const EnclosingLoop &L) { return IsBreak || !L.IsSwitch; });
+    if (Target == EnclosingLoops.rend()) {
+      error(CurrentFn->Name + ": " + (IsBreak ? "break" : "continue") +
+            " outside a loop is unsupported");
       return Out;
     }
     // Ghost code is erased, so it cannot change executable control flow.
-    if (InGhost && !EnclosingLoops.back().IsGhost) {
-      Errors.push_back(CurrentFn->Name +
-                       ": ghost code cannot leave an executable loop");
+    if (InGhost && !Target->IsGhost) {
+      error(CurrentFn->Name + ": ghost code cannot leave an executable " +
+            (Target->IsSwitch ? "switch" : "loop"));
       return Out;
     }
+    if (InitializationPathReachable)
+      joinInitialized(IsBreak ? Target->BreakInitialized
+                              : Target->ContinueInitialized,
+                      InitializedValues);
+    (IsBreak ? Target->Breaks : Target->Continues) = true;
     if (IsBreak) {
+      // The objects declared in the switch end where the break leaves it.
+      if (Target->IsSwitch)
+        appendActiveLifetimeEnds(Out, S->getBeginLoc(), Target->ActiveLocals,
+                                 /*IsFunctionExit=*/false);
       Out.push_back(std::make_unique<VBreakStmt>(S->getBeginLoc()));
     } else {
-      if (const Expr *Inc = EnclosingLoops.back().Increment) {
+      if (const Expr *Inc = Target->Increment) {
         auto IncPart = convertStmt(Inc);
         Out.insert(Out.end(), std::make_move_iterator(IncPart.begin()),
                    std::make_move_iterator(IncPart.end()));
@@ -6174,14 +8226,16 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     return Out;
   }
   if (const auto *WS = dyn_cast<WhileStmt>(S)) {
-    if (WS->getConditionVariable()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": while condition declarations are unsupported");
+    const std::set<std::string> Before = InitializedValues;
+    std::vector<std::unique_ptr<VStmt>> CondCalls;
+    if (WS->getConditionVariable())
+      declareConditionVariable(WS->getConditionVariableDeclStmt(), CondCalls);
+    auto Cond = convertLoopCondition(WS, WS->getCond(),
+                                     Executable ? &CondCalls : nullptr);
+    if (!Cond) {
+      InitializedValues = Before;
       return Out;
     }
-    auto Cond = convertLoopCondition(WS, WS->getCond());
-    if (!Cond)
-      return Out;
     std::vector<std::unique_ptr<VExpr>> Invariants;
     std::vector<std::unique_ptr<VExpr>> Decreases;
     if (const LoopContractInfo *LCI = Ctx.getLoopContract(WS)) {
@@ -6195,9 +8249,12 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           Decreases.push_back(std::move(E));
       InContractExpression = SavedContract;
     }
-    if (!checkLoopTermination(WS, !Decreases.empty()))
+    if (!checkConditionVariableUnnamed(WS->getConditionVariable(), Invariants,
+                                       Decreases) ||
+        !checkLoopTermination(WS, !Decreases.empty())) {
+      InitializedValues = Before;
       return Out;
-    const std::set<std::string> Before = InitializedValues;
+    }
     const bool BeforeReachable = InitializationPathReachable;
     ++LoopDepth;
     EnclosingLoops.push_back({nullptr, false, InGhost});
@@ -6206,6 +8263,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     --LoopDepth;
     InitializedValues = Before;
     InitializationPathReachable = BeforeReachable;
+    testAtEveryIteration(std::move(CondCalls), Cond, Body);
     auto Loop = std::make_unique<VWhileStmt>(
         std::move(Cond), std::move(Invariants), std::move(Decreases),
         std::move(Body), WS->getBeginLoc());
@@ -6220,14 +8278,23 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     ++LoopDepth;
     EnclosingLoops.push_back({nullptr, /*IsDo=*/true, InGhost});
     auto Body = convertScopedSubstatement(DS->getBody());
+    const EnclosingLoop Exits = std::move(EnclosingLoops.back());
     EnclosingLoops.pop_back();
     --LoopDepth;
 
     // A do-while body executes once before its condition and contracts are
-    // observed. Preserve definite initialization from that mandatory pass.
-    const std::set<std::string> AfterFirst = InitializedValues;
-    const bool AfterFirstReachable = InitializationPathReachable;
-    auto Cond = convertLoopCondition(DS, DS->getCond());
+    // observed. Preserve definite initialization from that mandatory pass,
+    // which reaches the condition at its end and at each continue.
+    std::optional<std::set<std::string>> Tested = Exits.ContinueInitialized;
+    if (InitializationPathReachable)
+      joinInitialized(Tested, InitializedValues);
+    const std::set<std::string> AfterFirst = Tested ? *Tested : Before;
+    const bool AfterFirstReachable = Tested.has_value();
+    InitializedValues = AfterFirst;
+    InitializationPathReachable = AfterFirstReachable;
+    std::vector<std::unique_ptr<VStmt>> CondCalls;
+    auto Cond = convertLoopCondition(DS, DS->getCond(),
+                                     Executable ? &CondCalls : nullptr);
     if (!Cond) {
       InitializedValues = Before;
       InitializationPathReachable = BeforeReachable;
@@ -6255,40 +8322,68 @@ ASTConverter::convertStmtBody(const Stmt *S) {
 
     // body; while (cond) invariant(...) decreases(...) { body; }
     // Existing VWhile passivization proves invariant establishment exactly
-    // after the mandatory first iteration.
+    // after the mandatory first iteration, whose break and continue are
+    // flags.
+    std::vector<std::unique_ptr<VStmt>> First;
     for (const auto &Stmt : Body)
-      Out.push_back(cloneVStmt(Stmt.get()));
-    auto Loop = std::make_unique<VWhileStmt>(
+      First.push_back(cloneVStmt(Stmt.get()));
+    std::string BreakFlag;
+    if (Exits.Breaks || Exits.Continues) {
+      const std::string Id = std::to_string(++NestedCallId);
+      BreakFlag = "__do_break_" + Id;
+      const std::string ContinueFlag = "__do_continue_" + Id;
+      Out.push_back(assignFlag(BreakFlag, false, DS->getBeginLoc()));
+      Out.push_back(assignFlag(ContinueFlag, false, DS->getBeginLoc()));
+      First = lowerExits(std::move(First), BreakFlag, ContinueFlag);
+    }
+    Out.insert(Out.end(), std::make_move_iterator(First.begin()),
+               std::make_move_iterator(First.end()));
+    testAtEveryIteration(std::move(CondCalls), Cond, Body);
+    std::unique_ptr<VStmt> Loop = std::make_unique<VWhileStmt>(
         std::move(Cond), std::move(Invariants), std::move(Decreases),
         std::move(Body), DS->getBeginLoc());
     if (const LoopContractInfo *LCI = Ctx.getLoopContract(DS))
-      Loop->Modifies = convertLoopFootprints(*LCI);
+      static_cast<VWhileStmt &>(*Loop).Modifies = convertLoopFootprints(*LCI);
+    if (Exits.Breaks) {
+      std::vector<std::unique_ptr<VStmt>> Repeated;
+      Repeated.push_back(std::move(Loop));
+      Loop = std::make_unique<VIfStmt>(
+          std::make_unique<VUnaryOpExpr>(
+              VUnaryOp::Not,
+              std::make_unique<VVarExpr>(BreakFlag, VType::makeBool(),
+                                         DS->getBeginLoc()),
+              VType::makeBool(), DS->getBeginLoc()),
+          std::move(Repeated), std::vector<std::unique_ptr<VStmt>>(),
+          DS->getBeginLoc());
+    }
     Out.push_back(std::move(Loop));
-    InitializedValues = AfterFirst;
-    InitializationPathReachable = AfterFirstReachable;
+    // It ends where the condition fails and at each break.
+    std::optional<std::set<std::string>> Left = Exits.BreakInitialized;
+    if (AfterFirstReachable)
+      joinInitialized(Left, AfterFirst);
+    InitializedValues = Left ? *Left : Before;
+    InitializationPathReachable = Left.has_value();
     return Out;
   }
   if (const auto *FS = dyn_cast<ForStmt>(S)) {
     enterAutomaticScope();
-    if (FS->getConditionVariable()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": for condition declarations are unsupported");
-      leaveAutomaticScope(Out, FS->getEndLoc());
-      return Out;
-    }
     if (FS->getInit()) {
       auto Init = convertStmt(FS->getInit());
       Out.insert(Out.end(), std::make_move_iterator(Init.begin()),
                  std::make_move_iterator(Init.end()));
     }
-    if (!FS->getCond()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": conditionless for loops are unsupported");
-      leaveAutomaticScope(Out, FS->getEndLoc());
-      return Out;
-    }
-    auto Cond = convertLoopCondition(FS, FS->getCond());
+    const std::set<std::string> BeforeCondition = InitializedValues;
+    std::vector<std::unique_ptr<VStmt>> CondCalls;
+    if (FS->getConditionVariable())
+      declareConditionVariable(FS->getConditionVariableDeclStmt(), CondCalls);
+    // Without a condition, the loop repeats until it is left.
+    auto Cond = FS->getCond()
+                    ? convertLoopCondition(FS, FS->getCond(),
+                                           Executable ? &CondCalls : nullptr)
+                    : std::make_unique<VLiteralExpr>(1, VType::makeBool(),
+                                                     FS->getBeginLoc());
     if (!Cond) {
+      InitializedValues = BeforeCondition;
       leaveAutomaticScope(Out, FS->getEndLoc());
       return Out;
     }
@@ -6305,11 +8400,14 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           Decreases.push_back(std::move(E));
       InContractExpression = SavedContract;
     }
-    if (!checkLoopTermination(FS, !Decreases.empty())) {
+    if (!checkConditionVariableUnnamed(FS->getConditionVariable(), Invariants,
+                                       Decreases) ||
+        !checkLoopTermination(FS, !Decreases.empty())) {
+      InitializedValues = BeforeCondition;
       leaveAutomaticScope(Out, FS->getEndLoc());
       return Out;
     }
-    const std::set<std::string> BeforeLoop = InitializedValues;
+    const std::set<std::string> BeforeLoop = BeforeCondition;
     const bool BeforeLoopReachable = InitializationPathReachable;
     ++LoopDepth;
     EnclosingLoops.push_back({FS->getInc(), false, InGhost});
@@ -6325,6 +8423,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     --LoopDepth;
     InitializedValues = BeforeLoop;
     InitializationPathReachable = BeforeLoopReachable;
+    testAtEveryIteration(std::move(CondCalls), Cond, Body);
     auto Loop = std::make_unique<VWhileStmt>(
         std::move(Cond), std::move(Invariants), std::move(Decreases),
         std::move(Body), FS->getBeginLoc());
@@ -6334,6 +8433,18 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     leaveAutomaticScope(Out, FS->getEndLoc());
     return Out;
   }
+  if (const auto *SS = dyn_cast<SwitchStmt>(S))
+    return convertSwitch(SS);
+  if (const auto *AS = dyn_cast<AttributedStmt>(S)) {
+    // [[fallthrough]], [[likely]], and the like do not change what a
+    // statement does; [[assume(e)]] makes e false undefined.
+    if (llvm::any_of(AS->getAttrs(),
+                     [](const Attr *A) { return isa<CXXAssumeAttr>(A); })) {
+      error(CurrentFn->Name + ": [[assume]] is unsupported");
+      return Out;
+    }
+    return convertStmt(AS->getSubStmt());
+  }
   if (const auto *Cleanups = dyn_cast<ExprWithCleanups>(S);
       Cleanups && onlyCollectionTemporaries(Cleanups))
     return convertStmt(Cleanups->getSubExpr());
@@ -6342,8 +8453,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       OperatorCall->getNumArgs() == 2 &&
       VType::collectionKind(OperatorCall->getArg(0)->getType())) {
     if (!ghostAssignmentAllowed(OperatorCall->getArg(0))) {
-      Errors.push_back(CurrentFn->Name +
-                       ": ghost code cannot modify executable state");
+      error(CurrentFn->Name + ": ghost code cannot modify executable state");
       return Out;
     }
     const auto *Target = dyn_cast<DeclRefExpr>(
@@ -6351,8 +8461,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     const auto *TargetVar =
         Target ? dyn_cast<VarDecl>(Target->getDecl()) : nullptr;
     if (!TargetVar || !TargetVar->hasLocalStorage()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": only a local collection can be assigned");
+      error(CurrentFn->Name + ": only a local collection can be assigned");
       return Out;
     }
     if (auto Value = convertExpr(OperatorCall->getArg(1))) {
@@ -6372,23 +8481,22 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           (!Assignment->isCopyAssignmentOperator() &&
            !Assignment->isMoveAssignmentOperator()) ||
           !Assignment->isTrivial()) {
-        Errors.push_back(CurrentFn->Name +
-                         ": user-defined aggregate assignment is unsupported");
+        error(CurrentFn->Name +
+              ": user-defined aggregate assignment is unsupported");
         return Out;
       }
       if (!ghostAssignmentAllowed(OperatorCall->getArg(0))) {
-        Errors.push_back(CurrentFn->Name +
-                         ": ghost code cannot modify executable state");
+        error(CurrentFn->Name + ": ghost code cannot modify executable state");
         return Out;
       }
       const Expr *TargetExpr = OperatorCall->getArg(0)->IgnoreParenImpCasts();
       if (promotedRootLocal(TargetExpr)) {
         if (CurrentFn->IsProof) {
-          Errors.push_back(CurrentFn->Name +
-                           ": proof functions cannot modify executable memory");
+          error(CurrentFn->Name +
+                ": proof functions cannot modify executable memory");
           return Out;
         }
-        auto Place = promotedObjectPlace(TargetExpr);
+        auto Place = objectPlace(TargetExpr);
         if (!Place)
           return Out;
         if (auto AccessCondition = Place->takeAccessCondition())
@@ -6405,20 +8513,19 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       if (Target && appendRecordCopy(OperatorCall->getArg(1), Target,
                                      OperatorCall->getExprLoc(), Out))
         return Out;
-      Errors.push_back(CurrentFn->Name + ": unsupported aggregate assignment");
+      error(CurrentFn->Name + ": unsupported aggregate assignment");
       return Out;
     }
   }
   if (const auto *CE = dyn_cast<CallExpr>(S)) {
     if (const FunctionDecl *Callee = CE->getDirectCallee()) {
       if ((InGhost || CurrentFn->IsProof) && !calleeIsProof(Callee)) {
-        Errors.push_back(CurrentFn->Name +
-                         ": proof-only code cannot call executable functions");
+        error(CurrentFn->Name +
+              ": proof-only code cannot call executable functions");
         return Out;
       }
       if (calleeIsSpec(Callee)) {
-        Errors.push_back(CurrentFn->Name +
-                         ": bare spec-call statement is unsupported");
+        error(CurrentFn->Name + ": bare spec-call statement is unsupported");
         return Out;
       }
       if (functionContract(Callee)) {
@@ -6426,17 +8533,15 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         convertExecCallArgs(CE, Out, Args);
         bool IsProof = calleeIsProof(Callee);
         Out.push_back(std::make_unique<VCallStmt>(
-            Callee->getNameAsString(), functionIdentity(Callee),
+            functionName(Callee), functionIdentity(Callee),
             std::move(Args), "", CE->getExprLoc(), IsProof));
       } else {
-        Errors.push_back(
-            CurrentFn->Name +
-            ": call to function without a verification contract: " +
-            Callee->getNameAsString());
+        error(CurrentFn->Name +
+              ": call to function without a verification contract: " +
+              functionName(Callee));
       }
     } else {
-      Errors.push_back(CurrentFn->Name +
-                       ": indirect function calls are unsupported");
+      error(CurrentFn->Name + ": indirect function calls are unsupported");
     }
     return Out;
   }
@@ -6452,9 +8557,9 @@ ASTConverter::convertStmtBody(const Stmt *S) {
   if (const auto *RW = dyn_cast<RevealWithFuelStmt>(S)) {
     std::string SpecIdentity = specIdentityFromExpr(RW->getFunction());
     if (SpecIdentity.empty()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": reveal_with_fuel target must resolve to exactly one "
-                       "spec function");
+      error(CurrentFn->Name +
+            ": reveal_with_fuel target must resolve to exactly one "
+            "spec function");
       return Out;
     }
     unsigned FuelVal = 1;
@@ -6472,9 +8577,8 @@ ASTConverter::convertStmtBody(const Stmt *S) {
   if (const auto *H = dyn_cast<HideSpecStmt>(S)) {
     std::string SpecIdentity = specIdentityFromExpr(H->getFunction());
     if (SpecIdentity.empty()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": hide target must resolve to exactly one spec "
-                       "function");
+      error(CurrentFn->Name + ": hide target must resolve to exactly one spec "
+                              "function");
       return Out;
     }
     if (CurrentFn)
@@ -6486,9 +8590,9 @@ ASTConverter::convertStmtBody(const Stmt *S) {
   if (const auto *R = dyn_cast<RevealSpecStmt>(S)) {
     std::string SpecIdentity = specIdentityFromExpr(R->getFunction());
     if (SpecIdentity.empty()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": reveal target must resolve to exactly one spec "
-                       "function");
+      error(CurrentFn->Name +
+            ": reveal target must resolve to exactly one spec "
+            "function");
       return Out;
     }
     if (CurrentFn) {
@@ -6579,24 +8683,24 @@ ASTConverter::convertStmtBody(const Stmt *S) {
   }
   if (const auto *Delete = dyn_cast<CXXDeleteExpr>(S)) {
     if (LoopDepth != 0) {
-      Errors.push_back(CurrentFn->Name +
-                       ": dynamic deallocation inside loops is unsupported");
+      error(CurrentFn->Name +
+            ": dynamic deallocation inside loops is unsupported");
       return Out;
     }
     if (InGhost || CurrentFn->IsSpec || CurrentFn->IsProof) {
-      Errors.push_back(CurrentFn->Name +
-                       ": dynamic deallocation requires executable code");
+      error(CurrentFn->Name +
+            ": dynamic deallocation requires executable code");
       return Out;
     }
     if (Delete->isArrayForm()) {
-      Errors.push_back(CurrentFn->Name + ": delete[] is unsupported");
+      error(CurrentFn->Name + ": delete[] is unsupported");
       return Out;
     }
     const FunctionDecl *OperatorDelete = Delete->getOperatorDelete();
     if (!OperatorDelete ||
         !OperatorDelete->isReplaceableGlobalAllocationFunction()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": custom or placement deallocation is unsupported");
+      error(CurrentFn->Name +
+            ": custom or placement deallocation is unsupported");
       return Out;
     }
     const Expr *Argument = Delete->getArgument()->IgnoreParenImpCasts();
@@ -6605,8 +8709,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         PointerRef ? dyn_cast<VarDecl>(PointerRef->getDecl()) : nullptr;
     if (!PointerDecl || !PointerDecl->isLocalVarDecl() ||
         !PointerDecl->getType()->isPointerType()) {
-      Errors.push_back(CurrentFn->Name +
-                       ": delete requires a direct local pointer");
+      error(CurrentFn->Name + ": delete requires a direct local pointer");
       return Out;
     }
     auto Pointer = convertExpr(Delete->getArgument());
@@ -6618,20 +8721,42 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     return Out;
   }
   if (const auto *BO = dyn_cast<BinaryOperator>(S)) {
+    // A discarded comma expression is its operands' statements, in order.
+    if (BO->getOpcode() == BO_Comma) {
+      for (const Expr *Operand : {BO->getLHS(), BO->getRHS()}) {
+        auto Part = convertStmt(Operand);
+        Out.insert(Out.end(), std::make_move_iterator(Part.begin()),
+                   std::make_move_iterator(Part.end()));
+      }
+      return Out;
+    }
     if (BO->isAssignmentOp()) {
       if (const auto *Target =
               dyn_cast<DeclRefExpr>(BO->getLHS()->IgnoreParenImpCasts());
           Target && ArbitraryValues.count(Target->getDecl())) {
-        Errors.push_back(CurrentFn->Name + ": " +
-                         Target->getDecl()->getNameAsString() +
-                         " stands for every value of its forall and cannot "
-                         "be assigned");
+        error(CurrentFn->Name + ": " + Target->getDecl()->getNameAsString() +
+              " stands for every value of its forall and cannot "
+              "be assigned");
         return Out;
       }
       if (!ghostAssignmentAllowed(BO->getLHS())) {
-        Errors.push_back(CurrentFn->Name +
-                         ": ghost code cannot modify executable state");
+        error(CurrentFn->Name + ": ghost code cannot modify executable state");
         return Out;
+      }
+      // Before C++17 the operands are unsequenced.
+      if (CallSink && !Ctx.getLangOpts().CPlusPlus17) {
+        const bool TargetReads = BO->getOpcode() == BO_Assign
+                                     ? locatingIsHeapSensitive(BO->getLHS())
+                                     : isHeapSensitive(BO->getLHS());
+        if ((containsModifyingCall(BO->getRHS()) && TargetReads) ||
+            (containsModifyingCall(BO->getLHS()) &&
+             isHeapSensitive(BO->getRHS()))) {
+          error(CurrentFn->Name +
+                ": before C++17 the order of an assignment's operands is "
+                "open, and a call in one may write what the other reads; "
+                "make the call in a statement of its own first");
+          return Out;
+        }
       }
       const auto *DirectLHS =
           dyn_cast<DeclRefExpr>(BO->getLHS()->IgnoreParenImpCasts());
@@ -6657,7 +8782,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         const std::string &Provenance =
             DynamicPointerProvenanceVariables.at(DirectTarget);
         Out.push_back(std::make_unique<VCallStmt>(
-            PointerCallee->getNameAsString(), functionIdentity(PointerCallee),
+            functionName(PointerCallee), functionIdentity(PointerCallee),
             std::move(Args), valueName(DirectTarget), BO->getExprLoc(), false,
             Provenance));
         CurrentFn->UsesDynamicStorage = true;
@@ -6674,8 +8799,8 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       }
       if (BO->getRHS()->getType()->isPointerType() &&
           isDynamicAddress(BO->getRHS())) {
-        Errors.push_back(CurrentFn->Name +
-                         ": copying a dynamic-storage pointer is unsupported");
+        error(CurrentFn->Name +
+              ": copying a dynamic-storage pointer is unsupported");
         return Out;
       }
       if (BO->getOpcode() == BO_Assign &&
@@ -6692,7 +8817,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
               std::vector<std::unique_ptr<VExpr>> Args;
               convertExecCallArgs(Call, Out, Args);
               Out.push_back(std::make_unique<VCallStmt>(
-                  Callee->getNameAsString(), functionIdentity(Callee),
+                  functionName(Callee), functionIdentity(Callee),
                   std::move(Args), valueName(Target), BO->getExprLoc(), false));
               markInitialized(Target);
               return Out;
@@ -6704,8 +8829,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           if (appendRecordCopy(RHS, Target, BO->getExprLoc(), Out))
             return Out;
         }
-        Errors.push_back(CurrentFn->Name +
-                         ": unsupported aggregate assignment");
+        error(CurrentFn->Name + ": unsupported aggregate assignment");
         return Out;
       }
       if (BO->getOpcode() == BO_Assign) {
@@ -6719,7 +8843,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           const std::string Tmp =
               "__assignment_call_" + std::to_string(++NestedCallId);
           Out.push_back(std::make_unique<VCallStmt>(
-              Callee->getNameAsString(), functionIdentity(Callee),
+              functionName(Callee), functionIdentity(Callee),
               std::move(Args), Tmp, BO->getExprLoc(), false));
           VType Target =
               VType::fromQualType(BO->getLHS()->getType(), IntMode, Ctx);
@@ -6733,14 +8857,27 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       auto Value = convertAssignmentValue(BO);
       appendAssignment(BO->getLHS(), std::move(Value), BO->getExprLoc(), Out);
     } else
-      Errors.push_back(CurrentFn->Name + ": unsupported expression statement");
+      error(CurrentFn->Name + ": unsupported expression statement");
     return Out;
   }
   if (const auto *U = dyn_cast<UnaryOperator>(S)) {
     if (U->isIncrementDecrementOp()) {
+      if (U->getSubExpr()->getType()->isPointerType()) {
+        auto Step = convertPointerStep(
+            U->getSubExpr(), U->isIncrementOp() ? VBinOp::Add : VBinOp::Sub,
+            std::make_unique<VLiteralExpr>(
+                1, VType::fromQualType(Ctx.getPointerDiffType(), IntMode, Ctx),
+                U->getExprLoc()),
+            U->getExprLoc());
+        if (Step)
+          appendAssignment(U->getSubExpr(), std::move(Step), U->getExprLoc(),
+                           Out);
+        return Out;
+      }
       if (!U->getSubExpr()->getType()->isIntegerType()) {
-        Errors.push_back(CurrentFn->Name +
-                         ": pointer increment/decrement is unsupported");
+        error(CurrentFn->Name + ": increment or decrement of a value that is "
+                                "neither an integer nor a pointer is "
+                                "unsupported");
         return Out;
       }
       auto Current = convertExpr(U->getSubExpr());
@@ -6769,8 +8906,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
                                             TargetTy, U->getExprLoc());
       appendAssignment(U->getSubExpr(), std::move(Value), U->getExprLoc(), Out);
     } else
-      Errors.push_back(CurrentFn->Name +
-                       ": unsupported unary expression statement");
+      error(CurrentFn->Name + ": unsupported unary expression statement");
     return Out;
   }
   if (const auto *CE = dyn_cast<CStyleCastExpr>(S)) {
@@ -6778,28 +8914,29 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     if (CE->getCastKind() == CK_ToVoid && isa<DeclRefExpr>(Sub) &&
         !Sub->getType().isVolatileQualified())
       return Out;
-    Errors.push_back(CurrentFn->Name +
-                     ": unsupported discarded-value expression");
+    error(CurrentFn->Name + ": unsupported discarded-value expression");
     return Out;
   }
   if (const auto *DS = dyn_cast<DeclStmt>(S)) {
     for (const Decl *D : DS->decls()) {
       const auto *VD = dyn_cast<VarDecl>(D);
       if (!VD) {
-        Errors.push_back(CurrentFn->Name +
-                         ": unsupported declaration statement");
+        error(CurrentFn->Name + ": unsupported declaration statement");
         continue;
       }
       if (!VD->hasLocalStorage()) {
-        Errors.push_back(CurrentFn->Name +
-                         ": static local variables are unsupported");
+        error(CurrentFn->Name + ": static local variables are unsupported");
         continue;
       }
-      if (!DeclaredValueNames.insert(VD->getNameAsString()).second) {
-        Errors.push_back(CurrentFn->Name +
-                         ": local variable shadowing is unsupported: " +
-                         VD->getNameAsString());
-        continue;
+      // A local named like a parameter or an earlier local, in an enclosing
+      // or an earlier scope, is another variable: x#2, x#3, ...
+      if (!LocalNames.count(VD)) {
+        std::string Name = VD->getNameAsString();
+        for (unsigned N = 2; DeclaredValueNames.count(Name); ++N)
+          Name = VD->getNameAsString() + "#" + std::to_string(N);
+        DeclaredValueNames.insert(Name);
+        if (Name != VD->getNameAsString())
+          LocalNames[VD] = Name;
       }
       if (InGhost)
         GhostLocals.insert(VD);
@@ -6808,22 +8945,29 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       if (!AddressableLocals.count(VD) &&
           isPromotableAggregateType(VD->getType(), Ctx) &&
           !isFlatScalarRecordType(VD->getType())) {
-        Errors.push_back(
-            CurrentFn->Name +
-            ": unsupported aggregate local variable: " + VD->getNameAsString());
+        error(CurrentFn->Name + ": unsupported aggregate local variable: " +
+              VD->getNameAsString());
         continue;
       }
       recordSourceVariable(VD);
       if (AddressableLocals.count(VD)) {
         if (LoopDepth != 0) {
-          Errors.push_back(
+          error(
               CurrentFn->Name +
               ": addressable local declarations inside loops are unsupported");
           continue;
         }
+        // A label after it may enter the switch without declaring it.
+        if (!EnclosingLoops.empty() && EnclosingLoops.back().IsSwitch &&
+            AutomaticScopeStack.size() == EnclosingLoops.back().Scope) {
+          error(CurrentFn->Name + ": a local whose address is used, declared "
+                                  "directly in a switch, is unsupported; "
+                                  "declare it in a block after its label");
+          continue;
+        }
         if (InGhost || CurrentFn->IsSpec || CurrentFn->IsProof) {
-          Errors.push_back(CurrentFn->Name +
-                           ": addressable locals require executable code");
+          error(CurrentFn->Name +
+                ": addressable locals require executable code");
           continue;
         }
         const uint64_t Size =
@@ -6831,23 +8975,21 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         const uint64_t Align =
             Ctx.getTypeAlignInChars(VD->getType()).getQuantity();
         if (Size == 0 || Align == 0) {
-          Errors.push_back(CurrentFn->Name +
-                           ": unsupported automatic object size or alignment");
+          error(CurrentFn->Name +
+                ": unsupported automatic object size or alignment");
           continue;
         }
         // Byte-granular allocation metadata is emitted per target byte, so an
         // oversized object is rejected outright rather than truncated.
         if (Size > MaxAutomaticObjectBytes) {
-          Errors.push_back(
-              CurrentFn->Name + ": automatic object exceeds the " +
-              std::to_string(MaxAutomaticObjectBytes) +
-              "-byte byte-addressed object limit: " + VD->getNameAsString());
+          error(CurrentFn->Name + ": automatic object exceeds the " +
+                std::to_string(MaxAutomaticObjectBytes) +
+                "-byte byte-addressed object limit: " + VD->getNameAsString());
           continue;
         }
         auto ProvenanceIt = AutomaticLocalProvenanceVariables.find(VD);
         if (ProvenanceIt == AutomaticLocalProvenanceVariables.end()) {
-          Errors.push_back(CurrentFn->Name +
-                           ": missing automatic-storage provenance");
+          error(CurrentFn->Name + ": missing automatic-storage provenance");
           continue;
         }
         if (isPromotableAggregateType(VD->getType(), Ctx)) {
@@ -6882,7 +9024,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
             const std::string ResultTarget =
                 "__local_call_" + std::to_string(++NestedCallId);
             Out.push_back(std::make_unique<VCallStmt>(
-                Callee->getNameAsString(), functionIdentity(Callee),
+                functionName(Callee), functionIdentity(Callee),
                 std::move(Args), ResultTarget, VD->getBeginLoc(),
                 calleeIsProof(Callee)));
             Initializer = convertCallResultValue(
@@ -6906,13 +9048,11 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       }
       if (VD->getType()->isReferenceType()) {
         if (InGhost || CurrentFn->IsSpec || CurrentFn->IsProof) {
-          Errors.push_back(CurrentFn->Name +
-                           ": local references require executable code");
+          error(CurrentFn->Name + ": local references require executable code");
           continue;
         }
         if (!VD->getType()->isLValueReferenceType() || !VD->hasInit()) {
-          Errors.push_back(CurrentFn->Name +
-                           ": unsupported local reference binding");
+          error(CurrentFn->Name + ": unsupported local reference binding");
           continue;
         }
         const size_t ErrorCount = Errors.size();
@@ -6920,9 +9060,8 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         auto Address = convertLValueAddress(VD->getInit(), &AccessCondition);
         if (!Address) {
           if (Errors.size() == ErrorCount)
-            Errors.push_back(
-                CurrentFn->Name +
-                ": local references require a supported direct lvalue");
+            error(CurrentFn->Name +
+                  ": local references require a supported direct lvalue");
           continue;
         }
         if (AccessCondition)
@@ -6950,23 +9089,22 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       if (const auto *New =
               dyn_cast<CXXNewExpr>(VD->getInit()->IgnoreParenImpCasts())) {
         if (LoopDepth != 0) {
-          Errors.push_back(CurrentFn->Name +
-                           ": dynamic allocation inside loops is unsupported");
+          error(CurrentFn->Name +
+                ": dynamic allocation inside loops is unsupported");
           continue;
         }
         if (InGhost || CurrentFn->IsSpec || CurrentFn->IsProof) {
-          Errors.push_back(CurrentFn->Name +
-                           ": dynamic allocation requires executable code");
+          error(CurrentFn->Name +
+                ": dynamic allocation requires executable code");
           continue;
         }
         bool HasPointerParam = false;
         for (const auto &Param : CurrentFn->Params)
           HasPointerParam |= Param.second.Kind == VTypeKind::Ptr;
         if (HasPointerParam) {
-          Errors.push_back(
-              CurrentFn->Name +
-              ": dynamic allocation in functions with pointer parameters is "
-              "not yet supported");
+          error(CurrentFn->Name +
+                ": dynamic allocation in functions with pointer parameters is "
+                "not yet supported");
           continue;
         }
         bool IsNothrow = false;
@@ -6975,15 +9113,15 @@ ASTConverter::convertStmtBody(const Stmt *S) {
             !OperatorNew->isReplaceableGlobalAllocationFunction(nullptr,
                                                                 &IsNothrow) ||
             IsNothrow || New->shouldNullCheckAllocation()) {
-          Errors.push_back(CurrentFn->Name +
-                           ": only ordinary throwing scalar new is supported");
+          error(CurrentFn->Name +
+                ": only ordinary throwing scalar new is supported");
           continue;
         }
         QualType Allocated = New->getAllocatedType();
         if (!VD->getType()->isPointerType() ||
             !Ctx.hasSameUnqualifiedType(VD->getType()->getPointeeType(),
                                         Allocated)) {
-          Errors.push_back(
+          error(
               CurrentFn->Name +
               ": new result must directly initialize a matching typed pointer");
           continue;
@@ -6991,17 +9129,16 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         if ((!Allocated->isIntegerType() && !Allocated->isEnumeralType()) ||
             Allocated.isVolatileQualified() || Allocated->isAtomicType() ||
             Allocated->isIncompleteType()) {
-          Errors.push_back(
-              CurrentFn->Name +
-              ": new currently supports only complete non-volatile scalar "
-              "integer objects");
+          error(CurrentFn->Name +
+                ": new currently supports only complete non-volatile scalar "
+                "integer objects");
           continue;
         }
         const uint64_t Size = Ctx.getTypeSizeInChars(Allocated).getQuantity();
         const uint64_t Align = Ctx.getTypeAlignInChars(Allocated).getQuantity();
         if (Size == 0 || Size > 256 || Align == 0) {
-          Errors.push_back(CurrentFn->Name +
-                           ": unsupported dynamic object size or alignment");
+          error(CurrentFn->Name +
+                ": unsupported dynamic object size or alignment");
           continue;
         }
         std::unique_ptr<VExpr> Initializer;
@@ -7042,7 +9179,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           const std::string &Provenance =
               DynamicPointerProvenanceVariables.at(VD);
           Out.push_back(std::make_unique<VCallStmt>(
-              Callee->getNameAsString(), functionIdentity(Callee),
+              functionName(Callee), functionIdentity(Callee),
               std::move(Args), valueName(VD), VD->getBeginLoc(), false,
               Provenance));
           CurrentFn->UsesDynamicStorage = true;
@@ -7058,13 +9195,13 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       if (VType::collectionKind(VD->getType())) {
         const auto *Ctor = dyn_cast<CXXConstructExpr>(VD->getInit());
         if (Ctor && Ctor->getNumArgs() == 0) {
-          Errors.push_back(CurrentFn->Name +
-                           ": a collection declaration needs an initializer");
+          error(CurrentFn->Name +
+                ": a collection declaration needs an initializer");
           continue;
         }
         if (auto Value = convertExpr(VD->getInit())) {
           Out.push_back(std::make_unique<VAssignStmt>(
-              VD->getNameAsString(), std::move(Value), VD->getBeginLoc()));
+              valueName(VD), std::move(Value), VD->getBeginLoc()));
           markInitialized(VD);
         }
         continue;
@@ -7082,7 +9219,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
             if (auto Val = materialize(convertExpr(VD->getInit()),
                                        VD->getType())) {
               Out.push_back(std::make_unique<VAssignStmt>(
-                  VD->getNameAsString(), std::move(Val), VD->getBeginLoc()));
+                  valueName(VD), std::move(Val), VD->getBeginLoc()));
               markInitialized(VD);
             }
             continue;
@@ -7092,10 +9229,10 @@ ASTConverter::convertStmtBody(const Stmt *S) {
             convertExecCallArgs(CE, Out, Args);
             const bool RecordResult = isFlattenedRecordType(VD->getType());
             const std::string ResultTarget =
-                RecordResult ? VD->getNameAsString()
+                RecordResult ? valueName(VD)
                              : "__local_call_" + std::to_string(++NestedCallId);
             Out.push_back(std::make_unique<VCallStmt>(
-                Callee->getNameAsString(), functionIdentity(Callee),
+                functionName(Callee), functionIdentity(Callee),
                 std::move(Args), ResultTarget, VD->getBeginLoc(),
                 calleeIsProof(Callee)));
             if (!RecordResult) {
@@ -7104,7 +9241,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
                       ResultTarget, Callee->getReturnType(), Target,
                       VD->getBeginLoc()))
                 Out.push_back(std::make_unique<VAssignStmt>(
-                    VD->getNameAsString(), std::move(Value),
+                    valueName(VD), std::move(Value),
                     VD->getBeginLoc()));
             }
             markInitialized(VD);
@@ -7119,21 +9256,19 @@ ASTConverter::convertStmtBody(const Stmt *S) {
             continue;
         if (appendRecordCopy(Init, VD, VD->getBeginLoc(), Out))
           continue;
-        Errors.push_back(CurrentFn->Name +
-                         ": aggregate initialization and copying are "
-                         "unsupported");
+        error(CurrentFn->Name + ": aggregate initialization and copying are "
+                                "unsupported");
         continue;
       }
       auto Val = materialize(convertExpr(VD->getInit()), VD->getType());
       if (Val) {
         Out.push_back(std::make_unique<VAssignStmt>(
-            VD->getNameAsString(), std::move(Val), VD->getBeginLoc()));
+            valueName(VD), std::move(Val), VD->getBeginLoc()));
         markInitialized(VD);
       }
     }
     return Out;
   }
-  Errors.push_back(CurrentFn->Name +
-                   ": unsupported statement: " + S->getStmtClassName());
+  error(CurrentFn->Name + ": unsupported statement: " + S->getStmtClassName());
   return Out;
 }

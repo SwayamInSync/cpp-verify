@@ -1,0 +1,13 @@
+# REQUIRES: lean, system-linux
+#
+# Lean decides a quantifier over a range of integers by trying each one, and
+# each integer is a level of recursion whose memory heartbeats do not bound:
+# refuting below_a_billion took 58 GB before Lean gave up. The prelude tries
+# each integer only for a range of at most 4096, so Lean gives up at once.
+#
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: not %python %S/Inputs/peak_memory.py 4096 %cpp-verify --lean-fallback=%t/b --lean-certify %S/Inputs/lean_refutation_budget.cpp -- 2>&1 | FileCheck %s
+
+# CHECK: error: verification failed: below_a_thousand {{.*}}[reason=counterexample] (confirmed in Lean)
+# CHECK: warning: the counterexample of below_a_billion is not confirmed in Lean: Lean cannot decide the goal at the counterexample
+# CHECK: peak memory below 4096 MB

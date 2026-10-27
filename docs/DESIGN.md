@@ -98,6 +98,33 @@ int abs_value(int x)
   the behaviors it relates, e.g. `cppverify::disjoint_behaviors(low, high)`. Both are
   checked at function entry.
 
+### Contracts must be defined
+
+A contract is C++ evaluated where the function is called and where it returns
+(as C++26 contracts are), so each clause must be defined there. Every
+contracted function except a spec gets a well-formedness check, as Dafny
+builds one per method (`CheckWellFormed$$f`):
+
+- each written precondition, in order, is checked where the ones before it
+  hold, and then assumed; within a clause, `&&`, `||`, `?:`, and a
+  quantifier's range guard the operands after them;
+- each postcondition is checked in the state the function returns in, where
+  the postconditions before it hold. For a verified body that is its own final
+  state (the body's module checks it, as Verus does); for a trusted function or
+  one without a definition it is every state the frame allows, with any
+  result, which is what callers assume;
+- a clause gets the checks an operation gets in a body: the core definedness
+  checks and, with memory checking, every access in its extent or object.
+  Loop invariants and `cppverify::check` get the same memory checks.
+
+The check is reported only when it fails, as `contract of f`, at the operation
+(a lifted helper's checks at its call). A contract that may be undefined
+establishes nothing: callers that rely on it are `Unresolved` with
+`callee.contract`. Without the check, the logic's total semantics would give
+meaning to what C++ leaves undefined: a trusted `post(1000 / result > 0)`
+excluded `result == 0`. Spec functions stay total (Verus, ACSL), so a spec in
+a contract adds no check, and `cppverify::recommends` stays a warning.
+
 ### Verdicts that rest on other contracts
 
 A caller's proof uses its callees' contracts. When a callee's own
@@ -189,6 +216,50 @@ Without a shared measure such proofs are a circle, and every verdict on it
 is `Unresolved` with reason `proof.cycle`. Frames (`cppverify::reads`) are never used
 this way.
 
+### Calls in expressions
+
+A call of a function with a contract may stand anywhere an expression may
+(an operand, a condition, an index, an argument, a return value, a loop
+condition) and is checked as a call statement is: preconditions asserted,
+footprints changed, postconditions assumed of its result. It runs where C++
+evaluates it: before what reads its result, a condition's calls before the
+branch they choose, the second operand of `&&` and `||` and each branch of
+`?:` only on its own path, and a loop condition's calls at every test, the
+last one included, after the invariants hold at the head (the loop is
+`while (true) { calls; if (!cond) break; body }`, as CIL normalizes it for
+Frama-C). An operand on a path of its own also forms its pointers into
+objects, and checks them, only there.
+
+```cpp
+int sq(int x)
+  cppverify::pre(-1000 <= x && x <= 1000)
+  cppverify::post(cppverify::result == x * x)
+{
+  return x * x;
+}
+
+int guarded(int x)
+  cppverify::pre(-2000 <= x && x <= 2000)
+  cppverify::post(cppverify::result == (-1000 <= x && x <= 1000 && x * x > 4))
+{
+  if (-1000 <= x && x <= 1000 && sq(x) > 4)   // sq's precondition holds
+    return 1;
+  return 0;
+}
+```
+
+C++ leaves the order of most operands open (a binary operator's, a
+subscript's array and index, a call's arguments, and before C++17 an
+assignment's two sides), and the verifier checks one order, so a call that
+may write memory (a callee with `cppverify::modifies`, a pointer or
+reference parameter, or a non-const member function) beside an operand
+that reads memory or makes a call is an error: `add_one(p) + *p` is one,
+with a different value in each order. An assignment evaluates its right
+operand first, as C++17 sequences it, so `a[add_one(p)] = *p` stores the
+old `*p`. A call returning a record is made only as a statement or a whole
+initializer, assignment, or return value, and one returning nothing only as
+a statement.
+
 ## Loop Contracts: invariant / decreases
 
 <!-- cppverify-example: fragment -->
@@ -204,6 +275,13 @@ while (i < n)
 - `cppverify::invariant(expr)`: must hold on entry and be preserved by each iteration.
   A loop whose condition is the constant false keeps every value it would
   change: after `while (false) { ... }` the state is the one before it.
+- An invariant holds at the head of every iteration with its definedness,
+  since both are checked on entry and at the end of each iteration: the
+  reads it makes are in bounds and initialized there. A loop that fills a
+  local array states what it has written,
+  `cppverify::forall(k, 0, i, a[k] == 0)`, and that is what shows `a[k]`
+  initialized for `k < i`. No lifetime begins or ends in a loop, so what was
+  initialized before it stays initialized.
 - `cppverify::decreases(expr [, expr...])`: termination measure. Single expression must be non-negative and strictly decreasing. Tuple form is lex-ordered: `cppverify::decreases(a, b)` means `(a, b)` strictly decreases lexicographically, and only the first component that changes must stay non-negative.
 - Verification is total correctness, as in Verus: every executable loop needs
   `cppverify::decreases`, unless its condition is the constant false, so that
@@ -234,7 +312,9 @@ for (int i = 0; i < n; i = i + 1)
 
   Without `cppverify::modifies`, a loop writes only the objects its stores and calls
   reach, inferred from the body: every other object keeps its value without
-  an invariant saying so.
+  an invariant saying so. Local and dynamic objects count alike: a store
+  through a local array, a local record, or a `new` pointer writes that
+  object, and one through a reference to a local writes the cell it binds.
 
 `do` loops place the clauses between the trailing condition and its semicolon:
 
@@ -256,13 +336,48 @@ entry state, not the previous iteration. A function local has no value at
 function entry and is rejected inside `cppverify::old(...)`; snapshot such a value in an
 ordinary local and refer to that snapshot without `cppverify::old`.
 
-`return`, `break`, and `continue` may leave a `while` or `for` loop from an
-arbitrary inductive iteration. A return checks the postcondition in its own
-state, a break continues after the loop in its own state, and a continue ends
-the iteration: it re-establishes the invariant and decreases the measure, after
-running a `for` increment. `break` and `continue` in a `do` loop, whose first
-iteration is lowered outside the loop, and ghost code leaving an executable
-loop fail closed.
+`return`, `break`, and `continue` may leave a loop from an arbitrary
+inductive iteration. A return checks the postcondition in its own state, a
+break continues after the loop in its own state, and a continue ends the
+iteration: it re-establishes the invariant and decreases the measure, after
+running a `for` increment. A `do` loop's first iteration is lowered outside
+the loop, so a `break` there skips the loop and a `continue` goes to the
+condition, through flags, as BMC unrolling lowers a loop's exits. Ghost code
+leaving an executable loop fails closed. A condition declaration
+(`while (int k = next(i))`) is made at every test, so the loop's contract
+cannot name it; a `for` loop without a condition has the condition `true`.
+
+### Switch
+
+A `switch` has C++'s meaning ([stmt.switch]): its value, computed once after
+the init statement and the condition variable, selects the label whose case
+value (converted to the condition's promoted type) equals it, or `default`;
+execution runs from there through the following labels' statements to a
+`break` or the end. The frontend lowers it to the structured statements the
+verifier has, since VCR has no jumps:
+
+```
+v = cond; entered = false; brk = false;
+entered = entered || v == c1;        if (entered && !brk) { segment 1 }
+entered = entered || v == c2 || ...; if (entered && !brk) { segment 2 }
+...                                                    // default: !(any case)
+```
+
+`entered` holds once a label has matched and stays set, which is
+fallthrough; a `break` (outside the loops nested in the switch) sets `brk`
+and the statements after it test it. With a `default` label every label has
+matched by the last segment, which then needs no test, so a spec's switch
+that returns in every segment keeps the shape of a spec body. Definite
+initialization follows the same paths: a segment starts with what was
+initialized before the switch, and after it a value is initialized where
+every exit (the last segment's end, each `break`, and, without `default`,
+no match) initializes it. A label nested in another statement of its switch
+(Duff's device) needs unstructured control flow and fails closed, as does an
+addressable local declared directly in the switch body, which a later label
+may enter without declaring; one declared in a block of a case ends where a
+`break` leaves the block. Boogie verifies unstructured programs, and Frama-C
+keeps CIL's `Switch` with case labels for WP's control-flow graph; a jump
+form in VCR would lift both limits.
 
 ## Assertions: cppverify::check
 
@@ -709,6 +824,22 @@ exact, while `int x = s[0];` must show that the element fits in an `int`.
 
 This is genuinely a CppVerify advantage over Verus — Verus forces users to maintain two separate bodies; we let one body do double duty *or* let users opt into a clean math-integer spec.
 
+A lifted function's reference to a `const` integer, as a parameter or the
+result, stands for the value it refers to, which it only reads: `constexpr
+const T &larger(const T &a, const T &b)` is a spec of two values. One that
+cannot be lifted (it reads memory through a pointer, or its type is not
+supported) is kept as a declaration that uses an unsupported construct, so
+the verdicts that rely on it are `Unresolved` with `construct.unsupported`
+and name it.
+
+The standard library's functions are not lifted, since each library writes
+them its own way and a verdict would depend on which one. `std::min` and
+`std::max` of two integers, enumerations, or `bool` are modeled as the
+standard defines them ([alg.min.max]): `max(a, b)` is `a < b ? b : a` and
+`min(a, b)` is `b < a ? b : a`, read once each, in contracts and in code.
+Any other function of the standard library that is not a constant is an
+error naming it.
+
 **Compile-time partial evaluation:** When a contract contains a `constexpr` call whose arguments are all constants, Clang evaluates it at compile time before the verifier sees it. A callee precondition instantiated at a call site is not such a call: there the argument is substituted for the parameter, and the solver settles the application from the lifted definition:
 
 <!-- cppverify-example: fragment -->
@@ -817,7 +948,13 @@ cppverify::spec int index_of(const int *a, int n, int x) { return cppverify::cho
 - `cppverify::choose(k, body)` is an integer for which `body` holds, when one exists,
   and otherwise an unspecified integer (Hilbert ε); `cppverify::choose(k, lo, hi, body)`
   chooses in `[lo, hi)`. Each `cppverify::choose` is a function of the values its body
-  mentions, so it is the same for the same values.
+  mentions, so it is the same for the same values. Two chooses whose
+  conditions are written the same way, up to the names of their variables,
+  are one choice (as Verus shares one closure function); one whose condition
+  is written differently is another, even when the conditions are
+  equivalent. The values a condition mentions include the cells it reads:
+  across a write that leaves every value it reads as it was, a choice keeps
+  its value.
 - The verifier knows only that, and knows it wherever a proof meets a
   choose, inside the unfoldings, postconditions, and induction hypotheses
   it assumes too. A claim true for some choices but not all fails with a
@@ -843,7 +980,9 @@ Pointer addition/subtraction and array subscripting use mathematical target-byte
 addresses, so address arithmetic itself cannot wrap. A typed `T*` step is
 multiplied by Clang's target `sizeof(T)` and record fields add their target
 byte-layout offset. The supported buffer fragment includes `p + i`, `p - i`,
-`*(p + i)`, and `p[i]`. Executable pointer-pointer subtraction is additionally
+`*(p + i)`, and `p[i]`, and the statements `++p`, `p--`, `p += n`, and
+`p -= n`, each the assignment it abbreviates, with the checks of that step
+(the value of a step inside an expression, `*p++`, is not supported yet). Executable pointer-pointer subtraction is additionally
 supported for positions in one object. Two null pointers differ by 0, as C++
 defines; otherwise both operands must have one origin (below), and each must
 lie in its origin's object, one past the end included:
@@ -859,8 +998,12 @@ memory (no known origin), subtraction inside explicit specs or lifted
 casts remain rejected.
 
 At modular calls, a callee `valid(q, length)` extent can be instantiated from
-`q = p + offset` only after proving a same-root nonnegative subrange with
-`offset + length <= n`. Empty one-past slices, acyclic read-only forwarding,
+an argument only after proving that its `length` elements lie in one of the
+caller's objects: for `q = p + offset`, a nonnegative subrange with
+`offset + length <= n`. A copy, a choice, a pointer stepped in a loop, or a
+callee's result is contained through the objects its origins name, or any
+caller object when they are unknown; validity is a property of storage, so
+any object containing the elements establishes it. Empty one-past slices, acyclic read-only forwarding,
 exact-cell slice writes, and writes to a whole sub-slice or a symbolic range
 are supported; the call frames every cell outside the written region.
 
@@ -984,7 +1127,9 @@ where a pointer came from: when a walker may be in either of two objects,
 relate it to the condition that chose, as in `s ? q == a + i : q == b + i`.
 
 The marker must be a positive top-level conjunction clause on a bare pointer to
-a complete object type. At most one marker may describe each pointer. Shifted,
+a complete object type, or on a pointer field of the object a pointer or
+reference parameter addresses (`valid(s->data, s->len)`, 3e). At most one
+marker may describe each pointer. Shifted,
 disjunctive, conditional, or duplicate markers fail closed rather than creating
 unconditional extent assumptions. Anywhere else (a postcondition, a loop
 invariant, a `cppverify::check`, ghost code, a spec function) the marker is its
@@ -1005,9 +1150,11 @@ cppverify::pre(p != q && p != r && q != r && ...)   // every distinct ptr/ref pa
 - The caller's verification must establish these inequalities. Calling `swap(p, p)` fails the call's `aliasing` check.
 - A pointer carrying a `valid(p, n)` extent contributes the
   whole extent (`n * sizeof(T)` bytes) as its complete object, so the pair is
-  disjoint unless either pointer is null or either extent is empty. Callers
-  prove disjointness of the extents they pass. An `cppverify::aliases` pair keeps the
-  single-object rule and may share storage, as `memmove` does.
+  disjoint unless either pointer is null or either extent is empty; the pair's
+  single-object separation is replaced by it, since a pointer with an empty
+  extent reaches nothing. Callers prove disjointness of the extents they
+  pass. An `cppverify::aliases` pair keeps the single-object rule and may
+  share storage, as `memmove` does.
 - **This is NOT the C++ `__restrict__` keyword.** `__restrict__` is a compiler optimization hint affecting codegen; the implicit assumption above is a verification-level precondition affecting correctness. The keyword `__restrict__`, if present, is a no-op for verification.
 
 ### 3. `cppverify::aliases(p, q)` opt-out
@@ -1037,11 +1184,8 @@ immutable VCR address. A value use is a heap load, assignment is a heap store,
 and `cppverify::old(ref)` reads through the same address in the entry heap.
 
 Every reference receives a generated non-null and live entry precondition,
-and its body is verified as reading the referent initialized. C++ does not
-require that of an out-parameter, so a call that passes storage not yet
-initialized (`int a; init(a);`) is `Unresolved` with reason
-`construct.unsupported`, not a failure; so is a function that returns a
-pointer to such storage. Distinct address parameters are object-range disjoint by default
+and an initialized referent unless it is an out-parameter (below).
+Distinct address parameters are object-range disjoint by default
 when at least one is mutable; `cppverify::aliases` permits the same complete object.
 `cppverify::modifies(ref)` is an open region rooted at the referent, matching
 `cppverify::modifies(*p)`.
@@ -1054,6 +1198,54 @@ references, and snapshot a raw pointer's address at the declaration. Reassigning
 that pointer therefore does not rebind the reference. Binding reads nothing: a
 local reference may bind storage not yet initialized, and a read through it
 checks that the object is initialized.
+
+#### Out-parameters
+
+Binding a reference or passing a pointer reads nothing ([dcl.init.ref],
+[conv.lval]); only reading an indeterminate value is undefined
+([basic.indet]). A function may therefore receive storage that is not
+initialized yet, as long as it writes it before reading it, as C#'s `out`
+parameters are definitely assigned before they are read. The contract
+follows from the body, as `freshOwnedReturn` does, and the body is verified
+against it:
+
+- **Which.** A pointer or reference parameter of a function with a verified
+  body (not a constructor's `this`, never assigned) is an out-parameter when
+  a walk of the body over every path finds each read of its storage at a
+  part (a byte offset from the parameter) written on every path before it,
+  the pointer used for nothing but accesses, null tests, validity, and calls
+  that pass it to another function's out-parameter, and no clause reading
+  the entry state reads the storage: preconditions (a class invariant
+  included), the measure, behaviors, `old`. A read at a computed offset, a
+  copy, or a callee that may read the storage (an input of a verified
+  callee, or any parameter of an external or trusted one) makes it an
+  input. Postconditions, loop invariants, and `cppverify::check` describe
+  what the body has written, so they are not reads for the walk, unless the
+  function never writes the storage: then they read the caller's values.
+  Recursion and calls between functions are settled by two fixpoints: the
+  parts each function writes on every path (least, so nothing rests on an
+  induction the walk does not do) and the out-parameters (greatest, so a
+  recursive call that passes the storage on reads nothing).
+- **Contract.** The generated precondition asks for valid storage only.
+  Each part written on every path is a generated postcondition,
+  `initialized_ptr(p + offset)`, proved at the function's end as a
+  constructor's members are.
+- **Body.** The storage's initialization is tracked as local storage's is:
+  a store initializes the part it writes, a loop that writes it starts each
+  iteration with what was initialized before it, and every read, those of
+  postconditions, invariants, and checks included, asserts `initialization`.
+  Its validity and frames stay those of any parameter.
+- **Caller.** Where the argument is storage the caller tracks (a local,
+  dynamic storage, or its own out-parameter), the call keeps what was
+  initialized (initialization only grows), assumes the postconditions, the
+  generated ones included, and assumes the initialization each
+  postcondition's reads need, where it reads them: `cppverify::post(!result
+  || out == 5)` gives initialized storage where the result is true.
+
+A call that passes storage not yet initialized to an input is `Unresolved`
+with reason `construct.unsupported`, not a failure, since the walk is
+conservative; so is a function that returns a pointer to such storage, since
+callers read a returned pointer's storage as initialized.
 
 Only locals whose addresses are needed are spilled out of scalar SSA. Each such
 local becomes an automatic `VAllocateStmt` with a fresh lifetime identity,
@@ -1072,11 +1264,230 @@ identity.
 
 Addressable local declarations inside loops, `cppverify::old(local)`, `cppverify::old(local_ref)`,
 conditional bindings, temporaries, reference returns,
-address-taking, rvalue references, and non-scalar referents remain fail-closed.
+address-taking, and rvalue references remain fail-closed. A reference to a
+record is the address of an object (3c).
 An outer automatic local and a local reference declaration may be used inside a
-loop. Recursive executable bodies that allocate an automatic object or store
-through references fail closed until the termination collector models heap
-state updates.
+loop. Recursive executable bodies may store through pointer and reference
+parameters and use automatic objects; recursion through a function that
+allocates or frees storage is `Unresolved` (`construct.unsupported`).
+
+### 3b. Records through pointers
+
+```cpp
+struct Ring { int buf[8]; int head; int count; };
+
+void put(Ring *r, int v)
+  cppverify::pre(r != nullptr && 0 <= r->head && r->head < 8)
+  cppverify::modifies(r->buf[r->head])
+  cppverify::post(r->buf[r->head] == v && r->count == cppverify::old(r->count))
+{
+  r->buf[r->head] = v;
+}
+```
+
+- A field or fixed-array element of the object a pointer addresses, at any
+  depth (`p->f`, `p->inner.arr[j]`, `p->grid[i][j]`, `(*p).items[k].v`,
+  `p[k].buf[i]`), is one heap cell: the pointer plus the record layout's
+  byte offsets and each index times its element size. Reads, writes,
+  contracts, `cppverify::modifies` footprints, reference bindings, and
+  reference arguments use it like any other cell.
+- Each access has two checks, as Frama-C's RTE plugin generates
+  `index_bound` beside `\valid`: every fixed-array index lies in its own
+  array (`0 <= i < 8`, kind `bounds`), and the address lies in the pointer's
+  object, its `valid(p, n)` extent or one object (`--check-ub`). The first
+  rejects `r->buf[8]`, whose address is `r->head`, inside `*r`; in
+  `p->grid[i][j]` it bounds `j` by the row, so `grid[0][4]` is rejected
+  although it is `grid[1][0]` in memory.
+- A record with scalar fields read as a whole through a pointer or a
+  reference, or kept in memory as a local object, is its fields, each read
+  where it is with that read's checks (bounds of the place, validity,
+  initialization): it may be passed, returned, and copied by value. A whole
+  record holding an array or a record (`Ring copy = *r;`) is rejected.
+- A pointer into the object, a decayed member array (`r->buf`) or the
+  address of an element, a field, or a nested record (`&r->buf[i]`,
+  `&r->head`, `&r->inner`), addresses only that subobject: the array it comes
+  from, else the field or record, as CHERI narrows a capability to a
+  subobject and as a Rust slice carries its length. Forming it requires the
+  object it points into (non-null root, every index of its path inside its
+  array, strictly). Every access through it lies in the subobject, every
+  step in its closure, a pointer difference needs both operands in one
+  subobject, and a callee's extent or object formed from it lies in it.
+  The bounds are proved, not checked at run time: two ghost companions of
+  the pointer hold the subobject's first byte and end, assigned where it is
+  formed and wherever a pointer variable takes its value, kept by steps.
+  Returning such a pointer or storing it in memory would lose the bounds
+  and is rejected.
+
+### 3c. Records through references
+
+```cpp
+struct Counter { int n; int limit; };
+struct Pair { Counter left; Counter right; };
+
+void reset(Counter &c)
+  cppverify::modifies(c)
+  cppverify::post(c.n == 0 && c.limit == 10)
+{
+  c.n = 0;
+  c.limit = 10;
+}
+
+void reset_left(Pair &p)
+  cppverify::modifies(p.left)
+  cppverify::post(p.left.n == 0 && p.right.n == cppverify::old(p.right.n))
+{
+  reset(p.left);
+}
+```
+
+- A reference to a record (`T &`, `const T &`, a parameter or a local) is a
+  pointer to it that is never null and never reseated, so everything 3b
+  says holds of it: `c.f`, `c.buf[i]`, and `c.inner.x` are cells of the
+  object `c` names, with the same two checks, and `&c.f` and `c.buf` are
+  pointers into it with subobject bounds. A record by value stays its
+  fields; only a reference or a pointer names an object.
+- A reference parameter gets the generated preconditions of a scalar
+  reference: its object is non-null, live, and initialized, and it takes
+  part in the default non-aliasing of address parameters over its whole
+  object (`cppverify::aliases` opts out). A record's type invariant is not
+  injected for it, as for a pointer: its fields are read from memory.
+- `cppverify::modifies(c)` is the object, as `cppverify::modifies(*p)` is,
+  and as Dafny's `modifies c` is every field of the object `c` references;
+  `cppverify::modifies(c.n)` is one cell, as Dafny's ``modifies c`n``. A
+  scalar reference's `modifies(r)` stays one cell, since it may bind a field
+  of a larger object.
+- A reference argument or a local reference binds a place: another
+  reference, `*p`, a field (`p->left`), an element (`a[i]`), checked where it
+  is bound. A local reference may also bind a promoted local record; reads
+  and writes through it carry that object's lifetime and initialization
+  checks, but a pointer formed through it would not, and is rejected (as
+  `&local` is).
+- A local record may be passed to a reference parameter, and the address
+  of a local, a field, or an element (`&c`, `&c.n`, `&a[1]`) to a pointer
+  parameter: see 3d. Rejected: a whole record read through a reference,
+  reference returns, rvalue and `volatile` references, and references in
+  spec and proof functions.
+
+### 3d. Local objects passed to callees
+
+- A callee verified in the object model proves that every access through
+  its parameter, at any field or element, lies in the parameter's object (its
+  one object; its `valid` extent is not offered to a local). So a local can
+  be lent to it as long as no address of the local outlives the call, which
+  is a property of the callee's body: the call checks (`keepsNoAddress`) that
+  it stores no address derived from the parameter in memory, returns none,
+  frees none, and passes one only to callees that keep none, with a verified
+  body (not an external contract, a proof, or a function that allocates).
+  The addresses derived from the parameter are the variables assigned one,
+  closed to a fixpoint (copies, steps, subobject pointers, local references).
+  A scan that reaches itself again through recursion assumes the callee keeps
+  none, since an escape is a finite path to a statement that keeps one. An
+  address converted to an integer is no escape: no integer becomes a pointer
+  again.
+- The generated validity clause of a reference or pointer parameter names
+  its first byte; for a record the call also checks that its last byte lies
+  in the same live allocation (an allocation's bytes are contiguous) and,
+  unless the callee's parameter is an out-parameter, that every leaf is
+  initialized, since the callee may read it as initialized storage. A
+  caller's own out-parameter passed on to an input gets the same leaf
+  checks.
+- The callee's footprints inside the record are framed by their bytes
+  (`HeapFrame`), a region as the whole record and never only its first cell;
+  its writes need no footprint of the caller's, since the local is the
+  caller's own. A scalar local keeps the exact one-cell rule and its
+  stricter scan (direct accesses only), since its region is one cell.
+- `&x` is admitted only as a call argument; stored in a variable it is still
+  rejected, as is a pointer formed through a local reference to a local. In
+  `--no-check-ub` nothing proves the callee's accesses inside its object, so
+  a record local passed to a callee is `construct.unsupported`.
+
+### 3e. Extents of pointer fields
+
+- `cppverify::valid(s->data, s->len)` states the extent of the buffer a
+  pointer field addresses at entry, for a field of the object a pointer or
+  reference parameter addresses (`s->f`, `r.f`, `(*s).f`, `s->inner.f`). The
+  field's entry value is an input of the function, as Frama-C's
+  `\at(s->data, Pre)` is: a synthetic parameter `s->data` follows the
+  declared ones (`VFunction::FieldParams`), equal to the field at entry by
+  definition (an entry fact, without definedness, which no caller
+  establishes, since a call binds the parameter to the field at its
+  arguments). The extent, its validity, and the default separation then
+  apply to it as to a parameter: a buffer through a pointer to non-const is
+  disjoint from the other address parameters' objects, its record's
+  included; two through pointers to const may share.
+- In the body an access through the field lies in the extent where the field
+  still holds its entry value (the solver relates the two through the
+  heap); a field given another pointer addresses that pointer's object.
+- At a call the field's value at the arguments must have the extent in one
+  of the caller's objects, as a pointer argument must.
+- Not yet: a field of an array element (`s->items[k].data`), a field
+  extent in a type invariant (B3's class invariants), and `reads` over a
+  field.
+
+### 3f. Member functions
+
+- A non-static member function of a class without bases or virtual
+  functions is a function whose first parameter is `this`, a pointer to its
+  object with the validity of a reference parameter (non-null, live,
+  initialized at entry), to const in a `const` member function, as Dafny's
+  methods take `this` and Verus's `&self`/`&mut self`. It takes part in the
+  default separation of address parameters; `cppverify::aliases(this, p)`
+  opts out. Fields, written `f` or `this->f`, are places through `this`.
+- Clauses are parsed in the complete-class context, as a C++26 function
+  contract specifier is: an in-class declaration's tokens are kept with its
+  late-parsed declaration (as its exception specification is) and parsed
+  with its parameters and `this` once the class is complete; an out-of-line
+  definition's clauses are in its class's scope.
+- Frame (decision Q8): a verified non-const member function without
+  `cppverify::modifies` may write `*this`; a `const` one only its own storage,
+  `mutable` fields only when listed; an explicit `cppverify::modifies`
+  replaces the default; a trusted or bodiless one keeps the trusted-contract
+  rule.
+- A call passes the object's address first: `p->m()` passes `p`, `obj.m()`
+  binds `obj` as a reference argument does (a local object is lent to the
+  callee under 3d's rules), and `m()` in a member function passes `this`. A
+  static member function is a free function. A member operator's object is
+  its first operand (`a == b` is `a.operator==(b)`). A member function whose
+  every return is `return *this;` returns a reference to its own object,
+  which the caller holds: it is verified as returning nothing, and using the
+  reference (`(a += b) += c`) is an error.
+- Not yet, each an error naming the function: virtual functions (dispatch
+  needs behavioral subtyping), member functions of classes with bases,
+  destructors, conversion functions, explicit object parameters, rvalue- and
+  volatile-qualified member functions. A class template's members are
+  verified in each specialization (see Templates).
+
+### 3g. Constructors
+
+- A constructor runs on storage its caller allocated, as a Dafny
+  constructor's first phase assigns the fields of an object that exists but
+  is not yet initialized. At entry `this` is one live allocation at every
+  leaf and at its last byte (a generated precondition, which the caller
+  shows for its object),
+  nothing is assumed about the initialization of its object, so a member
+  reads as initialized only once the constructor has written it, and every
+  leaf must be initialized by the constructor's end (`initialization`,
+  located at the member). Its precondition cannot read the object, and `aliases` cannot
+  name `this`. Its frame is `*this` and its own footprints, and `this` is
+  the object with its lifetime there, in the entry state too, so a member
+  function it calls writes inside the frame. A member function whose object
+  is an out-parameter may be called before the members are initialized;
+  one that may read them first may not (`construct.unsupported`).
+- Member initializers run first, in declaration order (C++'s order, whatever
+  the written one): the member's initializer, else its in-class initializer,
+  else the default construction of its type. An implicit or defaulted
+  default constructor is exactly those initializers, run in place where the
+  object is defined; a constructor the class provides is a call, which needs
+  a contract.
+- A caller passes the object's address as `this`, need not have initialized
+  it, and holds every leaf initialized after the call, with the
+  postcondition describing the values. A local constructed this way is kept
+  in memory.
+- The class must be trivially copyable (copies are member-wise, and nothing
+  runs at the end of its lifetime). Not yet: delegating constructors,
+  members whose class provides a constructor, reference and bit-field
+  members, arrays of such objects, and `new` of a record. A constructed
+  object is passed and returned by value as 3b's records in memory are.
 
 ### 4. `cppverify::modifies(...)` frame condition
 
@@ -1102,16 +1513,28 @@ void incr_first(int* a, int* b)
   `cppverify::modifies` cannot call it, and a caller without one forgets every cell.
   With a `valid` extent on such a callee the call is not supported.
 - Footprints:
-  - a cell: scalar `ref`, `p->field`, or `p[i]`, at its exact address;
+  - a cell: scalar `ref`, `p->field`, `p[i]`, or a field or array element
+    inside the record `p` addresses (`p->inner.x`, `p->buf[i]`), at its exact
+    address;
   - a range `p[lo : n]`: the `n` elements from `p[lo]`, half-open
-    `[lo, lo + n)` (Clang's array-section syntax);
+    `[lo, lo + n)` (Clang's array-section syntax), and likewise
+    `p->buf[lo : n]` for an array member;
   - a region `*p`: the object `p` addresses, which is its `valid(p, n)`
     extent when it has one and otherwise one object. A region of a single
-    scalar object is one cell.
+    scalar object is one cell. `c` for a reference to a record is the object
+    it names;
+  - the bytes of a record or array inside an object, named whole
+    (`p->inner`, `c.buf`, `p[k]` of a record extent): a range of one element
+    of its size.
 - Inside the callee every store must lie in a footprint, read in the entry
   state, so reassigning a pointer cannot widen the frame; a footprint of a
-  callee must lie within the caller's own frame (index-based containment of
-  ranges and extents).
+  callee must lie within the caller's own frame, cell by cell: a region of
+  one scalar object is one cell, ranges and extents compare by their cells,
+  and a footprint reached through another pointer than a caller region's
+  (a copy of a pointer into the object) lies in that region when its cells
+  lie in the region's object, as a store does. A region or range lies in
+  one footprint of the caller: the heap holds a cell at every address, so
+  footprints of a record's fields one by one do not contain the record.
 - At a call, the caller's heap changes only inside the callee's footprints
   instantiated with the arguments: a cell or range is exactly those cells, a
   region is the argument's extent (or one object). Every other cell keeps its
@@ -1122,8 +1545,7 @@ void incr_first(int* a, int* b)
   forgets the whole heap.
 - Preconditions and `cppverify::old(parameter)` use entry actual arguments, and so does
   a parameter named in a postcondition.
-- General reference binding and member-function effects are not yet in the
-  verified subset.
+- Member-function effects are not yet in the verified subset.
 
 ### Worked example
 
@@ -1153,8 +1575,10 @@ int compute() {
 ```
 
 `swap(x, x)` from a verified function fails the call's `aliasing` check.
-Binding a reference to a local is supported; taking a local's raw address
-(`&x`) is not, until lexical lifetimes and escapes are modeled.
+Binding a reference to a local is supported, and so is passing a local's
+address to a callee that keeps none (3d); storing a local's raw address
+(`int *q = &x;`) is not yet: lexical lifetimes are modeled, but where a
+pointer variable holding it goes is not.
 
 ## Type Invariants
 
@@ -1179,7 +1603,8 @@ int dist_sq(Coordinate p, Coordinate q)
 ```
 
 - `cppverify::type_invariant(expr)`: holds at function boundaries for by-value
-  records of the type; pointer-to-record parameters get no injection.
+  records of the type; pointer-to-record and reference-to-record parameters
+  get no injection.
 - `expr` may reference any field of the enclosing type by name.
 - Must be contextually convertible to bool.
 
@@ -1195,7 +1620,6 @@ For by-value parameters this is purely an optimization — correctness is identi
 
 ### Status
 
-- Parser: implemented in Weeks 4.5 (after Weeks 3-4 core IR).
 - Written `cppverify::type_invariant(...)` in the class body (see Construct
   recognition below).
 - `TypeContractInfo` side table on `RecordDecl` in `ASTContext`.
@@ -1210,6 +1634,21 @@ For by-value parameters this is purely an optimization — correctness is identi
   fields just before the return, so a function that constructs and returns a
   struct violating its invariant is rejected. Struct construction/mutation/return
   is modelled by the backend (field stores become `var.field` SSA assignments).
+- On a class with member functions (3f, 3g), the invariant is a generated
+  precondition of every public member function and a generated
+  postcondition of every public member function and constructor, checked
+  at every call, internal calls included: no call observes the object while
+  a member function breaks it, which is sound without pack/unpack. Private
+  and protected member functions take neither, so they may work on a broken
+  object. An extent marker in it, `valid(data, len)`, is a field extent
+  (3e) of `this` on entry; at exit it is `true`, since a postcondition
+  cannot carry a marker, and the next call checks the extent at its caller.
+- An object a parameter refers to or points to satisfies its type
+  invariant at every function boundary: a generated precondition (for a
+  pointer, `p == nullptr ||` it) and, through a mutable reference or
+  pointer, a generated postcondition, as ACSL's weak type invariants and
+  Verus's do. A pointer with an extent is not covered yet, and an extent
+  marker in such an instance is `true`.
 - By design, the invariant is **not** asserted after each individual field write.
   Asserting the whole invariant mid-construction would spuriously fail while a
   multi-field struct is being initialised one field at a time (the other fields
@@ -1255,9 +1694,12 @@ Interval shift(Interval r, int d)
 - No new syntax. `cppverify::spec` functions named `view()`, `elem()`, `size()`, etc. are a documented convention.
 - The verifier treats these spec function bodies as axioms (definitions), not as code to execute.
 - This is Verus's main abstraction idiom and the recommended style for non-trivial data structures.
-- Records are passed by value with scalar fields; a record holding an array
-  or a pointer is not yet in the verified subset, so a view of a buffer is a
-  spec over the pointer and its length (`cppverify::spec int sum(const int *p, int n)`).
+- A record passed by value has scalar fields. One that holds an array is
+  reached through a pointer, field by field and element by element, so its
+  view is a spec over that pointer
+  (`cppverify::spec int total(const Ring *r, int n)` reading `r->buf[n - 1]`),
+  as a view of a buffer is a spec over the pointer and its length
+  (`cppverify::spec int sum(const int *p, int n)`).
 
 ## Integer Semantics — summary
 
@@ -1407,7 +1849,16 @@ int safe_fib(int n) cppverify::pre(...) cppverify::post(cppverify::result == fib
   the verifier does not model, so its counterexample says nothing about the
   program; the message names the construct (for example "the operands of
   this pointer difference may address the objects of different parameters
-  or globals, which may be one caller array").
+  or globals, which may be one caller array"). A function whose body or
+  contract uses a construct the verifier does not represent at all has this
+  verdict too, with the error at the construct, and costs that function
+  alone, as Prusti reports an unsupported feature and Kani a construct it
+  does not translate: every other function is verified. What others may
+  rely on stays: a caller verifies against the function's contract, which
+  nothing establishes (`callee.contract`); a call of a function whose
+  contract is not represented is unsupported where it is; a function that
+  reaches a spec the verifier does not represent, which keeps only its
+  declaration, is not verified (`construct.unsupported`).
 - Qualifiers: `[partial]` (proved for terminating executions only, after
   `cppverify::decreases(*)`), `[trusts=f]` (relies on the contract of `f`, marked
   `[[cppverify::trusted]]`), `[vacuous]` (no execution reaches the claim).
@@ -1505,9 +1956,42 @@ cppverify::proof void sum_concat(seq s, seq t)
   values: `[1, 2]`, `{1, 3..5}` (a run), `{2: 3}` (counts), `{1 -> 7}`, and
   `{..}` (every integer).
 - Backends: Z3 and cvc5 decide all four (cvc5 settles fewer goals that
-  need an infinite set or ghost collections in loops). Lean does not
-  support them yet (`logic.unsupported`); that is planned for a future
-  release.
+  need an infinite set or ghost collections in loops). Lean states them with
+  core types: a sequence is a `List Int`, a set its membership test
+  `Int → Bool` (a set may be infinite, so not a finite set), a multiset its
+  counts `Int → Nat`, and a map `Int → Option Int`. Each operation is a
+  function of the generated prelude with the total meaning above, and
+  lemmas state what each means for `simp` and `grind`, as Vermilion's
+  mirror of vstd states each operation for its ladder; Lean's evaluation of
+  every operation agrees with the certifier's.
+
+## Templates
+
+- A function template is verified in each specialization the translation
+  unit instantiates, by a use or by an explicit instantiation, as a function
+  of its own named with its arguments (`maxv<int>`). What a template means
+  depends on the types and overloads its arguments bring, which C++ fixes
+  only at instantiation, so an uninstantiated template is not verified (the
+  position of Kani and CBMC; Creusot and Prusti verify generic Rust once,
+  since trait bounds fix its meaning there). A contracted template that
+  nothing instantiates is reported.
+- Its contract is instantiated as its body is, and lazily, as an exception
+  specification is: where a specialization is used or its definition
+  instantiated, never for a specialization nothing uses. Each clause gets
+  the checks the parser gives it (a condition converts to `bool`, a measure
+  is an integer, a range has integer bounds), so a clause that does not fit
+  the arguments is a compiler error with Clang's instantiation note.
+- Loop contracts, assertions, ghost code, quantifiers, and triggers are
+  instantiated with the body. A contract written on a declaration names its
+  parameters; a trusted template without a definition is trusted in each
+  specialization.
+- A diagnostic about a specialization notes where it is instantiated, as a
+  compiler's does.
+- A class template is verified in each specialization too: a member's
+  contract is instantiated with the member, lazily as a function template's
+  is, so a member no specialization uses is not verified (it is reported),
+  and the class's type invariants with the class, eagerly, as a member
+  `static_assert` is, with the specialization's `this`.
 
 ## Clang Modification Details
 
@@ -1619,6 +2103,8 @@ a one-line hook.
     results, and every operation).
 12. A range `p[lo : n]` needs a pointer to a complete object type and
     integer bounds, and is valid only as a whole `cppverify::modifies` footprint.
+13. In a template, a clause that depends on its parameters is checked where
+    it is instantiated, with the same rules.
 
 ### CodeGen Rules
 
@@ -1662,6 +2148,13 @@ signedness and the originating C++ width needed by explicit
 machine/mathematical conversions; backend adapters derive all representation
 choices from those sorts.
 
+Terms share their subterms, and no code changes a subterm: an obligation's
+goal states every assumption before it, its query negates the goal, and the
+complete goal conjoins the goals, none of them by copying. A module's memory
+therefore grows with what its terms say rather than with how often its
+obligations repeat it; with copies, verifying the ULEB128 case study took
+14.9 GB, and now takes 0.9 GB.
+
 Module construction is fail-closed. Null, unsupported, malformed, or untyped
 terms return an error before backend dispatch. Every free symbol, including
 diagnostic model and trace expressions, has one module-wide logic sort.
@@ -1673,15 +2166,18 @@ Before publication or dispatch, a shared fail-closed canonicalizer applies a
 deliberately narrow set of semantics-preserving rewrites: Boolean constants,
 double negation, constant conditionals, and reflexive equality/inequality. It
 simplifies logical definitions, removes declarations unreachable transitively
-from the ordered goals, rebuilds exact per-obligation and complete
+from the ordered goals (through definitions and termination measures, since
+a declaration depends on what both apply), rebuilds exact per-obligation and complete
 goal/counterexample pairs, recomputes features, and revalidates. The same step
 runs after archive decoding, so adapters never depend on producer-specific
 dead declarations or trivial Boolean structure. It does not rewrite
 arithmetic, quantifiers, pointer/heap expressions, or assumptions.
 
 `--obligation-out=FILE` publishes deterministic, concatenable
-`cppverify.obligation/2` binary records with stable wire tags and portable
-source attribution; schema v1 records remain readable. Publication includes an
+`cppverify.obligation/3` binary records with stable wire tags and portable
+source attribution; schema v3 adds each logical function's termination
+measures and, with source attribution, where each assumption of a goal comes
+from, neither hashed, and records of schemas v1 and v2 remain readable. Publication includes an
 exact serialize/deserialize/validate/reserialize check. SHA-256 module and
 per-obligation semantic hashes exclude source paths, display-only names, both
 positional and source-anchored obligation IDs, and every obligation kind except
@@ -1691,14 +2187,21 @@ wire version. Canonicalization introduced semantic-hash format v2, excluding
 diagnostic identities advanced it to v3, and excluding diagnostic kinds
 advances it to v4.
 `--obligation-in=FILE` validates and replays the records through Z3, cvc5,
-strict Z3+cvc5 portfolio, lower-only/Layer 3-4 dumps, or Lean scratch export
-without reparsing C++. Each module is replayed alone, without the contracts,
+strict Z3+cvc5 portfolio, lower-only/Layer 3-4 dumps, Lean scratch export, or
+a Lean project (`--lean-project`, with certification) without reparsing C++.
+A project gets the goals, specs, and proof files a source run gives the same
+obligations, which are named by their statements, so a proof certifies from
+either. Each module is replayed alone, without the contracts,
 spec facts, partiality, and vacuity checks its source verdict rests on, so a
 module whose obligations hold reports `Proved obligations` (JSON
 `proved-obligations`), never `Verified`.
 BMC-produced records carry their unroll bound in semantics and replay through
 the BMC result aggregator; untransformed records cannot acquire BMC semantics
-after this boundary. Lean scratch replay of bounded records is rejected.
+after this boundary. In Lean the goals of a bounded module state its bound,
+and its result aggregates the same way: every goal certified proves its
+obligations, and every goal but some unwinding goal certified is
+`BoundedSafe`, which in Lean says that the unwinding is not certified (Lean
+never refutes a goal).
 Failure-only `cppverify::recommends` diagnostics do not alter archive contents.
 Imported records are untrusted input: bounded parsing precedes structural,
 scope, sort, signature, feature, canonical-payload, exact-negation, and
@@ -1771,11 +2274,14 @@ The optional cvc5 adapter independently serializes canonical obligations to
 standalone SMT-LIB2. It explicitly reproduces C++ truncate-toward-zero
 mathematical division/remainder (including the total zero-divisor extension),
 signed/unsigned bit-vector operations and conversions, overflow predicates,
-`Array Int Int` heap cells, bounded quantifiers, and only the finite ground spec
-equations owned by the module. It runs an installed executable with deterministic
+`Array Int Int` heap cells, bounded and unbounded quantifiers (marked triggers
+become `:pattern`), heap frames, sequences, sets, multisets, and maps (as
+arrays over all integers), `define-fun` for visible non-recursive specs, and
+the finite ground equations of recursive ones. It runs an installed executable with deterministic
 seed/resource options and bounded output; missing tools, invocation failures,
 timeouts, `unknown`, extra diagnostics, and malformed tokens are unresolved.
-The model cvc5 prints after `sat` is checked by the same certifier as Z3's, and
+The model cvc5 prints after `sat`, and often after `unknown`, is checked by the
+same certifier as Z3's, and
 refinement re-runs cvc5 with definition instances. Once a hidden instance has
 been given, non-recursive definitions are given whole; recursive ones never
 are, because cvc5 does not decide queries over them.
@@ -1814,15 +2320,93 @@ publish explored bounds, reuse counts, and numbered loop-iteration traces.
 Archives contain only each function's terminal bounded module and replay that
 exact bound without pretending to rerun source-level incremental exploration.
 
-Lean consumes the same module. Standalone output is an unchecked scratch-pad.
-Editable project mode pins Lean 4.32.2, overwrites only generated semantics and
+Lean consumes the same module, and its goals mean what the module means:
+every operator keeps its grouping under Lean's precedence, a numeral has its
+type, a Boolean is a proposition, and machine division by zero is SMT-LIB's, as in the solvers and
+the certifier (ARCHITECTURE.md, "Lean Encoding"). A unit test checks that
+Lean's evaluation agrees with the certifier on random ground terms and on
+every operator at its extreme operands. Standalone output is an unchecked scratch-pad.
+Editable project mode pins Lean 4.35.0 (`LeanToolchain`), overwrites only generated semantics and
 the active check module, and preserves reusable user lemmas and one proof file
-per stable obligation goal. Initial generation is `Exported`. Certification
-compiles the user module and every active proof with `sorry` as an error, then
-checks aggregate theorem types and axiom dependencies. Only foundational Lean
-axioms are permitted; user `axiom`/`opaque` proof shortcuts, stale proof types,
-missing proofs, malformed output, and toolchain failures remain `Unresolved`.
-Only complete success is `Certified`.
+per goal. The generated semantics are a module per function,
+`CppVerify/Goals/<function>.lean`, over one `CppVerify/Specs.lean` that
+declares each spec the goals apply once, as Vermilion emits a unit per
+function over one `Specs` file; each goal module defines the spec bodies its
+goals unfold under the function's prefix. A proof imports its function's
+goal module, the user's lemmas (`User.lean`, which a new project starts by
+importing `Specs`), and `Auto`, so a change to one function builds again
+only what imports its module. A file is written only when its text changes,
+and a run writes the goal modules of the functions it exports and removes
+every other, so that every module of the project builds. A spec function is a
+Lean definition, by its step definition with every condition that reaches a
+recursive application a hypothesis there and its `decreases` measures as
+`termination_by`, when the pinned Lean accepts it at export, and opaque
+otherwise; Lean's verdict is kept in the project. The definition has the
+spec's value at every argument (it is never guarded by the measure as a
+whole), so a proof may unfold it or use its induction principle, and goals
+do not change. A goal is named by its function and its statement, never by a
+position: `cppverify_<function>_<h6>_<kind>_<h8>`, where `h6` hashes the
+function's identity (overloads) and `h8` begins the SHA-256 hash of the
+obligation's statement, its goal with the logical declarations it uses and
+without the function's identity; identical goals of one function get `_2`,
+`_3` in source order. Spec bodies are named by the function too. A proof file,
+`CppVerify/Proofs/<function>/<goal>.lean`, records the goal, its obligation,
+the full hash, and the prefix of the spec bodies, and every regeneration
+gives each goal the proof of its statement, as Frama-C's WP keeps one script
+per goal and Vermilion keys a proof by the hash of its statement: the file at
+its path; else a proof recorded with its name, from `Stale/` too; else one of
+a goal that is gone, from the function with proofs of the most of this one's
+goals (a rename), moved with the generated names it uses; else a 0.1 file
+`Goal_<md5>.lean` of its 0.1 name, migrated the same way; else a stub. A
+proof no goal takes is kept in `Stale/` with a note naming why, and an
+unedited stub is removed; nothing else is ever deleted unless
+`--lean-prune-stale` asks. A fallback run examines only what its solver
+leaves unresolved and leaves every other proof where it is. Each goal `G`
+also has a readable form `G.readable`, its assumptions as hypotheses named
+by where they come from (as Frama-C's WP labels the steps of a sequent and
+Vermilion names its hypotheses), and a bridge `G.of_readable : G.readable →
+G`, generated and kernel-checked with the generated file: the canonical goal
+stays what certification checks and identity hashes, and a printer bug in
+the readable form cannot certify anything. A stub applies the bridge and
+introduces every name. Each new goal is first given to `cppverify_auto`, a
+tactic of the generated `CppVerify/Auto.lean`, with the pinned toolchain when
+it is installed, as Vermilion, Why3, and Frama-C's WP run their automation
+before a goal reaches the user: a ladder of steps (`grind`; memory stores as
+the functions they define and machine arithmetic as integers, then `grind`;
+`decide`; `simp_all`; machine equalities and sign extensions as integers;
+collection equality element by element; the definition instances a goal
+states, by the bodies they name; the spec definitions by their equations;
+mathematical division and remainder by their definitions),
+each with a heartbeat budget of its own and a
+wall-clock limit per goal (`--lean-auto-timeout`), since heartbeats do not
+bound a kernel check. A step counts only when it closes the goal with a proof
+whose axioms are Lean's foundations, so the user's unfinished lemma never
+proves a goal, and a goal counts as proved only when the kernel accepted its
+theorem. A goal it proves gets that proof, which certification checks like
+any other; any other gets a stub that records the attempt and the revision of
+`cppverify_auto` that made it. A file is tried again only when no attempt by
+the current revision is recorded, and only while nobody has edited it.
+Initial generation is `Exported`. Certification
+holds against a proof author in bad faith. It builds the generated modules,
+`User`, and `Auto` with Lake and compiles each proof file on its own with
+`sorry` as an error, unless nothing it is built from changed since it last
+built: its text and the compiled project modules it imports, by hash, since
+Lake does not say which modules of a failed build are current. It then runs a checker
+(`LeanCertifier.h`) on the compiled modules, which elaborates none of the
+user's source, so no macro, notation, or command of theirs changes what it
+checks: the kernel replays every module of the project a proof imports into
+one environment, after the toolchain's modules, imported once (only those are
+trusted), as `leanchecker` does, so no declaration escaped the kernel, and a
+module that declares a name an earlier one declares otherwise is rejected,
+the goal modules being replayed first; the proof's type is exactly the
+constant of its goal, which its function's goal module defines; and the axioms it depends on,
+collected from the constants it uses, are among `propext`, `Quot.sound`, and
+`Classical.choice`. A declaration of `User.lean` that uses `sorry` fails
+every goal. A function is `Certified` when every one of its goals
+passes, and a failing goal leaves only its own function `Unresolved`, with the
+obligation and the reason. Certification runs the pinned toolchain
+whatever elan's default is, and a project pinned by an earlier release moves to
+the current pin with a warning; any other pin is an error.
 
 `--check-ub` extent instrumentation is applied before all Z3, cvc5, portfolio,
 BMC, and Lean obligation construction. Direct Lean export and canonical archive
@@ -1832,7 +2416,7 @@ stable theorem/proof-module identities, compares source and replay exports, and
 requires source-identical failed obligations across every automated backend.
 
 The default remains Z3 alone. `--lean-fallback=DIR` is an explicit opt-in that
-exports only Z3 `Unresolved` modules; SAT counterexamples remain failures. It
+exports only the `Unresolved` modules of Z3 or strict portfolio; SAT counterexamples remain failures. It
 exports only the obligations the solver did not prove individually, reporting
 the split (`[z3: 18 of 20 proved; lean: 2 exported]`);
 `--lean-fallback-scope=all` exports every obligation. A rerun with
@@ -1840,6 +2424,23 @@ the split (`[z3: 18 of 20 proved; lean: 2 exported]`);
 Lean proofs pass the kernel gate: a split result becomes `Proved (z3+lean)`
 (JSON `mixed-proof`, with per-obligation evidence), never `Verified`, and only
 a complete Lean export becomes `Certified`.
+A result proved in Lean, alone or with the solver, rests on the callee
+contracts and spec facts its module uses, as a solver's does: certification
+runs before those are settled, whatever else failed, and a Lean result gets
+the same qualifiers and vacuity checks as a verified one.
+A certified counterexample is shown false in Lean too: the fallback project
+gets its refutation, the failing goal stated as the project states it and a
+theorem `¬ goal` proved at the values the model gives its variables
+(`cppverify_refute`: decided, or evaluated by the spec definitions, a store
+by `grind`, a quantifier over a range of at most 4096 integers by trying
+each one, each
+attempt within the heartbeats of a step of `cppverify_auto`), which
+`--lean-certify` checks as it checks a proof. Of the failures that stand once
+the verdicts settle, a refutation that checks marks
+the failure `(confirmed in Lean)`; one Lean cannot decide leaves it a failure
+with a warning; one Lean decides true is a disagreement between two
+evaluators of one goal and makes the function `Unresolved`
+(`backend.inconsistent-results`), never `Failed`.
 
 ## MVP Acceptance Programs
 
@@ -1874,8 +2475,9 @@ Subsequent bounded lifetime checkpoints added scalar `new`/`delete`,
 initialized-storage checks, aligned disjoint allocation,
 use-after-delete/double-delete rejection, first-class local provenance, and
 inferred fresh-owned scalar factory returns. Bounded promoted local objects,
-fixed arrays, scalar subobject references, modular slices, and general
+fixed arrays, scalar subobject references, the fields and fixed-array
+elements of a record a pointer addresses, modular slices, and general
 same-array pointer difference under `valid(p, n)` are also supported.
 Provenance across ownership-taking or recursive interfaces, pointer
-reinterpretation/cross-object arithmetic, aggregate/rvalue references,
+reinterpretation/cross-object arithmetic, rvalue references,
 by-value pointer-bearing records, and general arrays remains unsupported.

@@ -94,5 +94,5 @@ int global_index(int a)
   delete p;
   return r;
 }
-// GLOBAL: error: global_index: array-to-pointer decay
+// GLOBAL: error: global_index: the global array 'table' is unsupported
 #endif

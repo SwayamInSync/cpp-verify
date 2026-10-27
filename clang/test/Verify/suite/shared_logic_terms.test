@@ -1,0 +1,35 @@
+# REQUIRES: system-linux
+# UNSUPPORTED: msan, asan, hwasan
+#
+# Each check of a function states every assumption before it, and its query,
+# the function's complete goal, and that goal's query state the checks again.
+# Terms share these subterms rather than copying them, so a module grows with
+# what it says, not with how often its checks repeat it: lowering the ULEB128
+# case study took 12.8 GB of address space when each was a copy, and
+# safe_fib.cpp 4.7 GB. Both now lower within 2 GB.
+# RUN: ulimit -v 2000000
+# RUN: %cpp-verify --lower-only --jobs=1 %S/llvm_uleb128.cpp -- 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=ULEB
+# RUN: %cpp-verify --lower-only --jobs=1 %S/safe_fib.cpp -- 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=FIB
+#
+# A subterm that several goals share is simplified once; its rewrites still
+# count once for each place, as when each was a copy.
+# RUN: %cpp-verify --lower-only --jobs=1 --dump-ir=3 \
+# RUN:   %S/backend_counterexample_trace.cpp -- 2>&1 | FileCheck %s --check-prefix=REWRITES
+#
+# The Lean printer names each large subterm of a statement with a let; one
+# that several places share is named once, rather than once per place.
+# RUN: %cpp-verify --backend=lean --lean-out=%t.lean %S/llvm_uleb128.cpp --
+# RUN: %python %S/Inputs/lean_let_names.py %t.lean | FileCheck %s --check-prefix=LETS
+
+ULEB: Lowered: encode_uleb128
+ULEB: Lowered: decode_uleb128_canonical
+ULEB: Lowered: roundtrip_uleb128
+
+FIB: Lowered: iterative_fibonacci
+
+REWRITES: vc set_value
+REWRITES: simplification nodes 4850 -> 1750, rewrites 366, functions-removed 0
+
+LETS: statements that bind a let name twice: 0

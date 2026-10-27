@@ -31,9 +31,33 @@ does after ``namespace cv = cppverify;`` and ``using namespace cppverify;``:
 - With ``-fverify-contracts``, the namespace and ``<cppverify.h>`` are
   available in every C++ file without an ``#include``. Without the flag the
   constructs are not recognized.
-- C++26 contracts (``pre``, ``post``, ``contract_assert`` without a
-  qualifier) belong to the compiler; cpp-verify neither parses nor verifies
-  them.
+
+C++26 contracts
+---------------
+
+This compiler does not implement C++26 contracts. With ``-fverify-contracts``,
+a bare ``pre(...)`` or ``post(...)`` after a function declarator is an error
+whose fix-it writes the cpp-verify construct, and so is a bare
+``contract_assert``:
+
+.. cppverify-example: rejects
+
+.. code-block:: cpp
+
+   int positive(int x)
+     pre(x > 0)
+   {
+     contract_assert(x > 0);
+     return x;
+   }
+
+.. code-block:: text
+
+   bare.cpp:2:3: error: C++26 contract specifiers are not supported; a cpp-verify precondition is written 'cppverify::pre'
+   bare.cpp:4:3: error: 'contract_assert' is a cpp-verify construct only when qualified: write 'cppverify::check'
+
+Without the flag, Clang reads neither as a contract: ``pre(x > 0)`` there is
+``error: expected function body after function declarator``.
 
 One condition per clause
 ------------------------

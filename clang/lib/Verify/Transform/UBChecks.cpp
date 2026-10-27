@@ -2,6 +2,7 @@
 #include "UBChecks.h"
 #include "../IR/VExpr.h"
 #include "Origins.h"
+#include "SubobjectBounds.h"
 #include "llvm/ADT/STLExtras.h"
 #include <map>
 #include <set>
@@ -253,6 +254,51 @@ struct UBInstrumenter {
   // Parameters the body assigns, whose current value may address another
   // object than their entry value.
   std::set<std::string> Reassigned;
+  // Pointers to subobjects, which address only their companions' bytes.
+  std::set<std::string> Bounded;
+  // An expression outside the body, such as a contract clause: a read under
+  // old is checked in the entry state, and a quantifier's body at every
+  // value of its range.
+  bool InContract = false;
+
+  // Other lies in the closed bounds of Bounded, a pointer into a subobject.
+  std::unique_ptr<VExpr> sameSubobject(const VExpr *Bounded,
+                                       const VExpr *Other) const {
+    if (!ObjectModel)
+      return nullptr;
+    auto Lo = pointerBound(Bounded, /*Upper=*/false, this->Bounded);
+    auto Hi = pointerBound(Bounded, /*Upper=*/true, this->Bounded);
+    if (!Lo || !Hi)
+      return nullptr;
+    const SourceLocation Loc = Other->Loc;
+    return std::make_unique<VBinOpExpr>(
+        VBinOp::And,
+        std::make_unique<VBinOpExpr>(VBinOp::Le, std::move(Lo),
+                                     cloneVExpr(Other), VType::makeBool(), Loc),
+        std::make_unique<VBinOpExpr>(VBinOp::Le, cloneVExpr(Other),
+                                     std::move(Hi), VType::makeBool(), Loc),
+        VType::makeBool(), Loc);
+  }
+
+  // A pointer to a subobject addresses only the bytes [lo, hi) its bounds
+  // name: an access lies there, a step in their closure.
+  std::unique_ptr<VExpr> subobjectObligation(const VExpr *Addr,
+                                             bool Closed) const {
+    if (!ObjectModel || !Addr || Addr->Ty.Kind != VTypeKind::Ptr)
+      return nullptr;
+    auto Lo = pointerBound(Addr, /*Upper=*/false, Bounded);
+    auto Hi = pointerBound(Addr, /*Upper=*/true, Bounded);
+    if (!Lo || !Hi)
+      return nullptr;
+    const SourceLocation Loc = Addr->Loc;
+    auto Low = std::make_unique<VBinOpExpr>(
+        VBinOp::Le, std::move(Lo), cloneVExpr(Addr), VType::makeBool(), Loc);
+    auto High = std::make_unique<VBinOpExpr>(Closed ? VBinOp::Le : VBinOp::Lt,
+                                             cloneVExpr(Addr), std::move(Hi),
+                                             VType::makeBool(), Loc);
+    return std::make_unique<VBinOpExpr>(
+        VBinOp::And, std::move(Low), std::move(High), VType::makeBool(), Loc);
+  }
 
   // The object of a parameter that keeps its entry value, when Root is one.
   const AbstractObject *parameterObject(const VExpr *Root) const {
@@ -445,6 +491,65 @@ struct UBInstrumenter {
         VBinOp::Or, std::move(Unmoved),
         sameObject(Root, {Operand, B}, /*Closed=*/true, Loc),
         VType::makeBool(), Loc);
+  }
+
+  // A pair with a declared extent is separated over its extents
+  // (appendExtentSeparation), not over one object each: where the extent is
+  // empty its pointer reaches nothing, so the one-object separation said
+  // only that p's first element, which no access reads, lies elsewhere, and
+  // a caller with an empty extent (n == 0) into another object failed it.
+  void dropSingleObjectSeparation(VFunction &Fn) const {
+    auto IsNullTest = [](const VExpr *E, std::string &Name) {
+      if (!E || E->K != VExpr::BinOp)
+        return false;
+      const auto *Eq = static_cast<const VBinOpExpr *>(E);
+      if (Eq->Op != VBinOp::Eq || Eq->Lhs->K != VExpr::Var)
+        return false;
+      Name = static_cast<const VVarExpr *>(Eq->Lhs.get())->Name;
+      return true;
+    };
+    auto PairOf = [&](const VExpr *Pre)
+        -> std::optional<std::pair<std::string, std::string>> {
+      if (Pre->K != VExpr::BinOp ||
+          static_cast<const VBinOpExpr *>(Pre)->Op != VBinOp::Or)
+        return std::nullopt;
+      const VExpr *Nulls = static_cast<const VBinOpExpr *>(Pre)->Lhs.get();
+      if (Nulls->K != VExpr::BinOp ||
+          static_cast<const VBinOpExpr *>(Nulls)->Op != VBinOp::Or)
+        return std::nullopt;
+      std::string A, B;
+      if (!IsNullTest(static_cast<const VBinOpExpr *>(Nulls)->Lhs.get(), A) ||
+          !IsNullTest(static_cast<const VBinOpExpr *>(Nulls)->Rhs.get(), B))
+        return std::nullopt;
+      return std::make_pair(A, B);
+    };
+    std::vector<std::unique_ptr<VExpr>> Kept;
+    std::vector<ProofObligationKind> KeptKinds;
+    for (size_t I = 0; I != Fn.Preconditions.size(); ++I) {
+      bool Drop = false;
+      if (I >= Fn.ExplicitPreconditionCount &&
+          preconditionKind(Fn, I) == ProofObligationKind::Aliasing)
+        if (auto Pair = PairOf(Fn.Preconditions[I].get()))
+          Drop = llvm::any_of(
+              Fn.DisjointAddresses, [&](const VDisjointAddresses &D) {
+                return ((D.First == Pair->first && D.Second == Pair->second) ||
+                        (D.First == Pair->second && D.Second == Pair->first)) &&
+                       (ValidLen.count(D.First) || ValidLen.count(D.Second));
+              });
+      if (Drop)
+        continue;
+      Kept.push_back(std::move(Fn.Preconditions[I]));
+      KeptKinds.push_back(preconditionKind(Fn, I));
+    }
+    Fn.Preconditions.clear();
+    Fn.PreconditionKinds.clear();
+    const unsigned Explicit = Fn.ExplicitPreconditionCount;
+    for (size_t I = 0; I != Kept.size(); ++I) {
+      if (I < Explicit)
+        Fn.Preconditions.push_back(std::move(Kept[I]));
+      else
+        addPrecondition(Fn, std::move(Kept[I]), KeptKinds[I]);
+    }
   }
 
   // A parameter with a declared extent addresses that extent, not a single
@@ -719,10 +824,23 @@ struct UBInstrumenter {
     switch (E->K) {
     case VExpr::BinOp: {
       const auto *B = static_cast<const VBinOpExpr *>(E);
-      if (E != AccessAddress)
+      if (E != AccessAddress) {
         if (auto Arithmetic = arithmeticObligation(B))
           appendObligation(ProofObligationKind::Bounds, std::move(Arithmetic),
                            Guard, Out);
+        if (auto Within = subobjectObligation(B, /*Closed=*/true))
+          appendObligation(ProofObligationKind::Bounds, std::move(Within),
+                           Guard, Out);
+      }
+      // Pointers into a subobject differ only from pointers into the same
+      // array ([expr.add]): each lies in the other's bounds.
+      if (B->Op == VBinOp::Sub && B->Lhs->Ty.Kind == VTypeKind::Ptr &&
+          B->Rhs->Ty.Kind == VTypeKind::Ptr)
+        for (auto [Bounded, Other] : {std::pair{B->Lhs.get(), B->Rhs.get()},
+                                      std::pair{B->Rhs.get(), B->Lhs.get()}})
+          if (auto Within = sameSubobject(Bounded, Other))
+            appendObligation(ProofObligationKind::PointerDifference,
+                             std::move(Within), Guard, Out);
       collectObligations(B->Lhs.get(), Out, Guard);
       if (B->Op == VBinOp::And || B->Op == VBinOp::Or) {
         std::unique_ptr<VExpr> RhsCondition = cloneVExpr(B->Lhs.get());
@@ -771,16 +889,50 @@ struct UBInstrumenter {
       if (auto Access = accessObligation(L->Ptr.get()))
         appendObligation(ProofObligationKind::Bounds, std::move(Access), Guard,
                          Out);
+      if (auto Within = subobjectObligation(L->Ptr.get(), /*Closed=*/false))
+        appendObligation(ProofObligationKind::Bounds, std::move(Within), Guard,
+                         Out);
       break;
     }
     case VExpr::FieldAccess:
       collectObligations(static_cast<const VFieldAccessExpr *>(E)->Base.get(),
                          Out, Guard);
       break;
-    case VExpr::Old:
-      collectObligations(static_cast<const VOldExpr *>(E)->Inner.get(), Out,
-                         Guard);
+    case VExpr::Old: {
+      const VExpr *Inner = static_cast<const VOldExpr *>(E)->Inner.get();
+      if (!InContract) {
+        collectObligations(Inner, Out, Guard);
+        break;
+      }
+      std::vector<UBObligation> InEntry;
+      collectObligations(Inner, InEntry);
+      for (UBObligation &O : InEntry) {
+        const SourceLocation Loc = O.Cond->Loc;
+        appendObligation(O.Kind,
+                         std::make_unique<VOldExpr>(std::move(O.Cond),
+                                                    VType::makeBool(), Loc),
+                         Guard, Out);
+      }
       break;
+    }
+    case VExpr::Forall:
+    case VExpr::Exists: {
+      if (!InContract)
+        break;
+      const auto *Q = static_cast<const VQuantifiedExpr *>(E);
+      collectObligations(Q->Lo.get(), Out, Guard);
+      collectObligations(Q->Hi.get(), Out, Guard);
+      std::vector<UBObligation> InBody;
+      collectObligations(Q->Body.get(), InBody);
+      for (UBObligation &O : InBody)
+        appendObligation(O.Kind,
+                         std::make_unique<VForallExpr>(
+                             Q->Binder, cloneVExpr(Q->Lo.get()),
+                             cloneVExpr(Q->Hi.get()), std::move(O.Cond), Q->Loc,
+                             Q->BinderType),
+                         Guard, Out);
+      break;
+    }
     case VExpr::SpecCall: {
       const auto *S = static_cast<const VSpecCallExpr *>(E);
       for (const auto &A : S->Args)
@@ -821,6 +973,11 @@ struct UBInstrumenter {
           SourceLocation L = Access->Loc;
           New.push_back(std::make_unique<VAssertStmt>(
               std::move(Access), L, ProofObligationKind::Bounds));
+        }
+        if (auto Within = subobjectObligation(St.Ptr.get(), /*Closed=*/false)) {
+          SourceLocation L = Within->Loc;
+          New.push_back(std::make_unique<VAssertStmt>(
+              std::move(Within), L, ProofObligationKind::Bounds));
         }
         const VExpr *SavedAccess = AccessAddress;
         AccessAddress = St.Ptr.get();
@@ -1177,6 +1334,73 @@ std::optional<std::string> verify::misplacedValidMarker(const VFunction &Fn) {
          Finder.Where;
 }
 
+// The memory checks of a contract expression of Fn: against the objects in
+// the object model, where an extent is its pointer's object, and against the
+// declared extents for a proof function, which is outside it. In a pre- or
+// postcondition (Clause) every parameter is its value at entry.
+static std::vector<VMemoryCheck> contractChecks(const VFunction &Fn,
+                                                const VExpr *E, bool Clause) {
+  std::vector<VMemoryCheck> Out;
+  if (!E)
+    return Out;
+  UBInstrumenter UB;
+  if (Fn.ObjectModel) {
+    UB.ObjectModel = true;
+    UB.Objects = abstractObjects(Fn);
+    if (!Clause)
+      UB.Reassigned = assignedNames(Fn.Body);
+    UB.Bounded = Fn.BoundedPointers;
+  } else {
+    for (const VValidExtent &Extent : Fn.ValidExtents) {
+      UB.ValidLen[Extent.Base] = Extent.Length.get();
+      UB.ValidPointeeSize[Extent.Base] = Extent.PointerType.PointeeSizeBytes;
+    }
+  }
+  UB.InContract = true;
+  std::vector<UBInstrumenter::UBObligation> Obligations;
+  UB.collectObligations(E, Obligations);
+  for (auto &O : Obligations)
+    Out.push_back({O.Kind, std::move(O.Cond)});
+  return Out;
+}
+
+// Records beside each loop invariant and cppverify::check in Stmts its
+// memory checks.
+static void recordContractChecks(const VFunction &Fn,
+                                 std::vector<std::unique_ptr<VStmt>> &Stmts) {
+  for (auto &S : Stmts)
+    switch (S->K) {
+    case VStmt::ContractAssert: {
+      auto &A = static_cast<VContractAssertStmt &>(*S);
+      A.MemoryChecks = contractChecks(Fn, A.Cond.get(), /*Clause=*/false);
+      break;
+    }
+    case VStmt::If: {
+      auto &I = static_cast<VIfStmt &>(*S);
+      recordContractChecks(Fn, I.Then);
+      recordContractChecks(Fn, I.Else);
+      break;
+    }
+    case VStmt::While: {
+      auto &W = static_cast<VWhileStmt &>(*S);
+      W.InvariantChecks.clear();
+      for (const auto &Invariant : W.Invariants)
+        W.InvariantChecks.push_back(
+            contractChecks(Fn, Invariant.get(), /*Clause=*/false));
+      recordContractChecks(Fn, W.Body);
+      break;
+    }
+    case VStmt::Seq:
+      recordContractChecks(Fn, static_cast<VSeqStmt &>(*S).Stmts);
+      break;
+    case VStmt::GhostBlock:
+      recordContractChecks(Fn, static_cast<VGhostBlockStmt &>(*S).Body);
+      break;
+    default:
+      break;
+    }
+}
+
 std::optional<std::string> verify::instrumentUBChecks(VFunction &Fn) {
   if (Fn.IsSpec)
     return std::nullopt;
@@ -1188,14 +1412,27 @@ std::optional<std::string> verify::instrumentUBChecks(VFunction &Fn) {
   if (auto Misplaced = misplacedValidMarker(Fn))
     return Misplaced;
   UB.appendValidSemantics(Fn);
+  UB.dropSingleObjectSeparation(Fn);
   UB.appendExtentSeparation(Fn);
   if (!Fn.IsProof) {
     Fn.ObjectModel = true;
     UB.ObjectModel = true;
     UB.Objects = abstractObjects(Fn);
     UB.Reassigned = assignedNames(Fn.Body);
+    UB.Bounded = Fn.BoundedPointers;
     UB.dropSingleObjectValidity(Fn);
   }
+  // Contract expressions are checked as written, before spec inlining.
+  Fn.PreconditionChecks.clear();
+  for (unsigned I = 0;
+       I < Fn.ExplicitPreconditionCount && I < Fn.Preconditions.size(); ++I)
+    Fn.PreconditionChecks.push_back(
+        contractChecks(Fn, Fn.Preconditions[I].get(), /*Clause=*/true));
+  Fn.PostconditionChecks.clear();
+  for (const auto &Post : Fn.Postconditions)
+    Fn.PostconditionChecks.push_back(
+        contractChecks(Fn, Post.get(), /*Clause=*/true));
+  recordContractChecks(Fn, Fn.Body);
   UB.instrumentStmts(Fn.Body);
   return std::nullopt;
 }

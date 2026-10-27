@@ -1994,8 +1994,9 @@ std::unique_ptr<VExpr> anyOf(std::vector<std::unique_ptr<VExpr>> Terms,
 
 /// A load or a spec call in a spec body, with the condition that reaches it.
 struct BodySite {
-  /// The address of a load.
+  /// The address of a load, and the type it reads.
   std::unique_ptr<VExpr> Address;
+  VType LoadType;
   const VSpecCallExpr *Call = nullptr;
   /// The callee of a spec call, if known.
   const VFunction *Callee = nullptr;
@@ -2017,6 +2018,8 @@ struct SpecBodyCollector {
   const FunctionMap &FnMap;
   std::vector<BodySite> Sites;
   std::vector<BodyReturn> Returns;
+  /// The witness bodies of the choices walked, which sites point into.
+  std::vector<std::unique_ptr<VExpr>> Witnesses;
   bool Unsupported = false;
 
   void site(BodySite Site,
@@ -2047,15 +2050,28 @@ struct SpecBodyCollector {
       for (const auto &Arg : C->Args)
         Site.Args.push_back(substParamsInExpr(Arg.get(), Env));
       Site.Loc = C->Loc;
+      const VFunction *Callee = Site.Callee;
       site(std::move(Site), Env, Guard, Quantifiers);
       for (const auto &A : C->Args)
         expr(A.get(), Env, Guard, Quantifiers);
+      // A choose is evaluated where it is written: the loads and
+      // applications of its body, at every value of its binder, are the
+      // caller's.
+      if (Callee && Callee->IsChoice) {
+        if (std::unique_ptr<VExpr> Witness = choiceWitness(*Callee, *C)) {
+          Witnesses.push_back(std::move(Witness));
+          expr(Witnesses.back().get(), Env, Guard, Quantifiers);
+        } else {
+          Unsupported = true;
+        }
+      }
       return;
     }
     case VExpr::Load: {
       const auto *L = static_cast<const VLoadExpr *>(E);
       BodySite Site;
       Site.Address = substParamsInExpr(L->Ptr.get(), Env);
+      Site.LoadType = L->Ty;
       Site.Loc = L->Loc;
       site(std::move(Site), Env, Guard, Quantifiers);
       expr(L->Ptr.get(), Env, Guard, Quantifiers);
@@ -2290,6 +2306,9 @@ PassiveProgram verify::buildReadsChecks(const VFunction &Fn,
   for (BodySite &Site : Collector.Sites) {
     if (!Site.Address && !Site.Call->ReadsHeap)
       continue;
+    // The loads of a choice's body are sites of their own.
+    if (!Site.Address && Site.Callee && Site.Callee->IsChoice)
+      continue;
     if (!Site.Address && (!Site.Callee || Site.Callee->Reads.empty())) {
       if (Missing.empty())
         Missing = Site.Call->Callee;
@@ -2414,6 +2433,55 @@ static void readHeapAt(VExpr *E, const std::string &Heap) {
   case VExpr::Result:
     return;
   }
+}
+
+std::unique_ptr<VExpr>
+verify::choiceReadsAgree(const VFunction &Choice, const VSpecCallExpr &Call,
+                         const std::string &Before, const std::string &After,
+                         const FunctionMap &FnMap, SourceLocation Loc) {
+  std::unique_ptr<VExpr> Witness = choiceWitness(Choice, Call);
+  if (!Witness)
+    return nullptr;
+  SpecBodyCollector Collector{FnMap};
+  const VLiteralExpr Always(true, VType::makeBool(), Loc);
+  Collector.expr(Witness.get(), {}, &Always, {});
+  if (Collector.Unsupported)
+    return nullptr;
+  auto at = [](const VExpr *E, const std::string &Heap) {
+    std::unique_ptr<VExpr> Copy = cloneVExpr(E);
+    readHeapAt(Copy.get(), Heap);
+    return Copy;
+  };
+  std::unique_ptr<VExpr> Agree =
+      std::make_unique<VLiteralExpr>(true, VType::makeBool(), Loc);
+  for (const BodySite &Site : Collector.Sites) {
+    std::unique_ptr<VExpr> Later, Earlier;
+    if (Site.Address) {
+      Later = std::make_unique<VLoadExpr>(at(Site.Address.get(), After),
+                                          Site.LoadType, Loc, After);
+      Earlier = std::make_unique<VLoadExpr>(at(Site.Address.get(), Before),
+                                            Site.LoadType, Loc, Before);
+    } else if (Site.Call->ReadsHeap) {
+      Later = at(Site.Call, After);
+      Earlier = at(Site.Call, Before);
+    } else {
+      continue;
+    }
+    std::unique_ptr<VExpr> Same = std::make_unique<VBinOpExpr>(
+        VBinOp::Eq, std::move(Later), std::move(Earlier), VType::makeBool(),
+        Loc);
+    if (Site.Guard)
+      Same = std::make_unique<VBinOpExpr>(
+          VBinOp::Or, makeDecreaseNot(at(Site.Guard.get(), Before), Loc),
+          std::move(Same), VType::makeBool(), Loc);
+    for (auto It = Site.Quantifiers.rbegin(); It != Site.Quantifiers.rend();
+         ++It)
+      Same = std::make_unique<VForallExpr>(
+          It->Binder, at(It->Lo.get(), Before), at(It->Hi.get(), Before),
+          std::move(Same), Loc, It->BinderType);
+    Agree = makeDecreaseAnd(std::move(Agree), std::move(Same), Loc);
+  }
+  return Agree;
 }
 
 std::unique_ptr<VExpr> verify::specPostcondition(

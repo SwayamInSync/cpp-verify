@@ -1,10 +1,11 @@
 // RUN: %cpp-verify %s -- 2>&1 | FileCheck %s --implicit-check-not=error:
 // RUN: not %cpp-verify %s -- -DCALL 2>&1 | FileCheck %s --check-prefix=CALL
-// RUN: not %cpp-verify %s -- -DSTATEMENT 2>&1 | FileCheck %s --check-prefix=STATEMENT
+// RUN: %cpp-verify %s -- -DSTATEMENT 2>&1 | FileCheck %s --check-prefix=STATEMENT
 //
 // A function template without contracts is not verified, and stops nothing
 // unless verified code calls it: that call is reported. One with contract
-// statements is reported, as one with contracts is.
+// statements, as one with contracts, is verified in its specializations, and
+// one that nothing instantiates is reported, not verified.
 
 template <class T> T twice(T v) { return v + v; }
 
@@ -24,7 +25,7 @@ int uses_twice(int x)
   return twice(x);
 }
 #endif
-// CALL: error: uses_twice: call to function without a verification contract: twice
+// CALL: error: uses_twice: call to function without a verification contract: twice<int>
 // CALL-NOT: function template verification
 
 #ifdef STATEMENT
@@ -34,4 +35,4 @@ template <class T> T checked(T v)
   return v;
 }
 #endif
-// STATEMENT: error: checked: function template verification is unsupported
+// STATEMENT: warning: checked: function template is not verified: this translation unit instantiates none of its specializations

@@ -1,0 +1,84 @@
+# REQUIRES: lean
+#
+# A spec function of a Lean project is a definition when Lean proves that it
+# terminates by its decreases measures, and opaque otherwise. Its goals state
+# the same definition instances as before; a proof may also unfold the
+# definition, or prove by induction over it.
+#
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p %S/Inputs/lean_spec_definitions.cpp -- 2>&1 | FileCheck %s --check-prefix=EXPORT
+# RUN: FileCheck %s --input-file=%t/p/CppVerify/Specs.lean --check-prefix=SPECS
+# RUN: FileCheck %s --input-file=%t/p/CppVerify/Specs.lean --check-prefix=REACHES
+#
+# Lean's verdict on each spec is kept: a run of the same source tries
+# nothing and writes no file.
+# RUN: touch %t/same
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p %S/Inputs/lean_spec_definitions.cpp -- 2>&1 | FileCheck %s --check-prefix=EXPORT
+# RUN: find %t/p -newer %t/same -type f -not -path '*/.lake/*' | count 0
+#
+# A proof by induction over tri, which an opaque tri did not allow.
+# RUN: cp %S/Inputs/lean_spec_definitions_tri_nonneg.lean %t/p/CppVerify/Proofs/cppverify_tri_nonneg_42a030/cppverify_tri_nonneg_42a030_postcondition_053b1980.lean
+# RUN: not %cpp-verify --backend=lean --lean-project=%t/p --lean-certify %S/Inputs/lean_spec_definitions.cpp -- 2>&1 | FileCheck %s --check-prefix=CERTIFY
+#
+# Without Lean nothing is tried, and every spec is opaque.
+# RUN: mkdir -p %t/empty
+# RUN: env PATH=%t/empty %cpp-verify --backend=lean --lean-project=%t/q %S/Inputs/lean_spec_definitions.cpp -- 2>&1 | FileCheck %s --check-prefix=WITHOUT
+# RUN: FileCheck %s --input-file=%t/q/CppVerify/Specs.lean --check-prefix=OPAQUE --implicit-check-not=def
+
+# EXPORT: Exported: decreases: tri
+# EXPORT: Exported: lean obligation: tri_nonneg (cppverify_auto proved 1 of 2 goals)
+# EXPORT-NEXT: Exported: lean obligation: tri_four (cppverify_auto proved 2 of 2 goals)
+# EXPORT-NEXT: Exported: lean obligation: even_four (cppverify_auto proved 2 of 2 goals)
+# EXPORT-NEXT: Exported: lean obligation: small_ack (cppverify_auto proved 2 of 2 goals)
+# EXPORT-NEXT: Exported: lean obligation: log2_eight (cppverify_auto proved 2 of 2 goals)
+# EXPORT: Exported: lean obligation: down_zero (cppverify_auto proved 2 of 2 goals)
+# EXPORT: Exported: lean obligation: reaches_zero (cppverify_auto proved 2 of 2 goals)
+
+# Callees come first. steps, whose termination rests on the postcondition
+# of half, stays opaque, and count_steps, which calls it, is defined against
+# it. A lexicographic measure is a tuple; a call under `||` or `&&` sees its
+# condition; a mutual recursion is one block; down's call has the measure -1
+# where its caller's is 0; log2's measure falls by C++ division.
+# SPECS: {{^}}def cppSpec_fn_5f5a3468616c6669 (n : Int) : Int :={{$}}
+# SPECS: {{^}}opaque cppSpec_fn_5f5a35737465707369 : Int -> Int{{$}}
+# SPECS: {{^}}def cppSpec_fn_5f5a3131636f756e745f737465707369 (n : Int) : Int :={{$}}
+# SPECS: {{^}}def cppSpec_fn_5f5a3361636b6969 (m : Int) (n : Int) : Int :={{$}}
+# SPECS: {{^}}termination_by (((m) + 1).toNat, ((n) + 1).toNat){{$}}
+# SPECS: {{^}}mutual{{$}}
+# SPECS: {{^}}def cppSpec_fn_5f5a336f646469 (n : Int) : Prop :={{$}}
+# SPECS-NEXT: {{^}}  if _h : n > (0 : Int) then (cppSpec_fn_5f5a346576656e69 (n - (1 : Int))) else False{{$}}
+# SPECS: {{^}}def cppSpec_fn_5f5a346576656e69 (n : Int) : Prop :={{$}}
+# SPECS-NEXT: {{^}}  if _h : n ≤ (0 : Int) then True else (cppSpec_fn_5f5a336f646469 (n - (1 : Int))){{$}}
+# SPECS: {{^}}end{{$}}
+# SPECS: {{^}}def cppSpec_fn_5f5a3374726969 (n : Int) : Int :={{$}}
+# SPECS-NEXT: {{^}}  if _h : n ≤ (0 : Int) then (0 : Int) else (cppSpec_fn_5f5a3374726969 (n - (1 : Int))) + n{{$}}
+# SPECS-NEXT: {{^}}termination_by ((n) + 1).toNat{{$}}
+# SPECS-NEXT: {{^}}decreasing_by all_goals cppverify_decreasing{{$}}
+# SPECS: {{^}}def cppSpec_fn_5f5a34646f776e69 (n : Int) : Int :={{$}}
+# SPECS: {{^}}def cppSpec_fn_5f5a346c6f673269 (n : Int) : Int :={{$}}
+# SPECS-NEXT: {{^}}  if _h : n ≤ (1 : Int) then (0 : Int) else (cppSpec_fn_5f5a346c6f673269 (cppIntDiv n (2 : Int))) + (1 : Int){{$}}
+
+# CERTIFY: Certified: decreases: tri [backend=Lean]
+# CERTIFY-NEXT: Certified: decreases: even [backend=Lean]
+# CERTIFY-NEXT: Certified: decreases: odd [backend=Lean]
+# CERTIFY-NEXT: Certified: decreases: ack [backend=Lean]
+# CERTIFY: Certified: decreases: log2 [backend=Lean]
+# CERTIFY: Certified: tri_nonneg [backend=Lean]
+# CERTIFY-NEXT: Certified: tri_four [backend=Lean]
+# CERTIFY-NEXT: Certified: even_four [backend=Lean]
+# CERTIFY-NEXT: Certified: small_ack [backend=Lean]
+# CERTIFY-NEXT: Certified: log2_eight [backend=Lean]
+# A verdict still rests on the termination cpp-verify establishes: that of
+# half is not, so neither are those that apply count_steps.
+# CERTIFY: Certified: decreases: down [backend=Lean]
+# CERTIFY-NEXT: Unresolved: decreases: count_steps [backend=Lean] [reason=spec.termination]
+# CERTIFY-NEXT: Unresolved: down_zero [backend=Lean] [reason=spec.termination]
+
+# A call under an existential sees its range.
+# REACHES: {{^}}def cppSpec_fn_5f5a377265616368657369 (n : Int) : Prop :={{$}}
+# REACHES-NEXT: {{^}}  if _h : n ≤ (0 : Int) then True else (∃ ([[K:[_a-z0-9]+]] : Int), if _h : (0 : Int) ≤ [[K]] ∧ [[K]] < n then (cppSpec_fn_5f5a377265616368657369 [[K]]) else False){{$}}
+
+# WITHOUT: Exported: lean obligation: tri_four{{$}}
+
+# OPAQUE: {{^}}opaque cppSpec_fn_5f5a3361636b6969 : Int -> Int -> Int{{$}}
+# OPAQUE: {{^}}opaque cppSpec_fn_5f5a3374726969 : Int -> Int{{$}}

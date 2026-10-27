@@ -144,6 +144,18 @@ struct VIfStmt : VStmt {
         LoopUnrollIteration(LoopUnrollIteration) {}
 };
 
+/// A memory check of a contract expression: an access in its object or
+/// extent, a step in its object's closure. It is computed from the expression
+/// as written, before spec inlining, as a body's accesses are checked: an
+/// inlined spec is total, and an inlined helper repeats its arguments' reads.
+struct VMemoryCheck {
+  ProofObligationKind Kind;
+  std::unique_ptr<VExpr> Cond;
+};
+
+std::vector<VMemoryCheck>
+cloneMemoryChecks(const std::vector<VMemoryCheck> &Checks);
+
 struct VAssertStmt : VStmt {
   std::unique_ptr<VExpr> Cond;
   ProofObligationKind ProofKind;
@@ -205,6 +217,9 @@ struct VWhileStmt : VStmt {
   /// The memory the loop may write, read in each iteration's state; empty
   /// means none was declared.
   std::vector<VFootprint> Modifies;
+  /// The memory checks of each invariant, by index; an invariant added after
+  /// memory checking was set up (a generated one) reads no memory.
+  std::vector<std::vector<VMemoryCheck>> InvariantChecks;
   std::vector<std::unique_ptr<VStmt>> Body;
   VWhileStmt(std::unique_ptr<VExpr> C, std::vector<std::unique_ptr<VExpr>> Inv,
              std::vector<std::unique_ptr<VExpr>> Dec,
@@ -261,6 +276,8 @@ struct VRevealSpecStmt : VStmt {
 
 struct VContractAssertStmt : VStmt {
   std::unique_ptr<VExpr> Cond;
+  /// The memory checks of the condition.
+  std::vector<VMemoryCheck> MemoryChecks;
   VContractAssertStmt(std::unique_ptr<VExpr> C, SourceLocation Loc)
       : VStmt(ContractAssert, Loc), Cond(std::move(C)) {}
 };
@@ -328,6 +345,9 @@ struct VFunction {
   /// [[cppverify::trusted]]: its contract is assumed and its body, if any,
   /// is not verified.
   bool IsTrusted = false;
+  /// A constructor: its object's lifetime begins at `this`, uninitialized,
+  /// and the body initializes every leaf of it.
+  bool IsConstructor = false;
   /// The declaration, for diagnostics about the function itself.
   SourceLocation DeclLoc;
   bool NeedsDecreasesCheck = false;
@@ -357,6 +377,10 @@ struct VFunction {
   std::unique_ptr<VExpr> Domain;
   /// A spec without a definition: the value of another outside its domain.
   bool Uninterpreted = false;
+  /// Its body or contract uses a construct the verifier does not represent,
+  /// so the function is not verified: an executable or proof function keeps
+  /// its contract for its callers, a spec only its declaration.
+  bool UnsupportedConstruct = false;
   /// A choose(...) lifted to a function of what its body mentions: its post
   /// is the defining axiom (a witness when one exists), assumed, not proved.
   bool IsChoice = false;
@@ -398,15 +422,39 @@ struct VFunction {
   std::set<std::string> RevealedSpecs;
   std::vector<std::pair<std::string, VType>> Params;
   std::map<std::string, VSourceVariable> SourceVariables;
-  std::set<std::string> ReferenceParams;
+  /// Reference parameters to a scalar, whose `modifies(r)` is the one cell
+  /// they bind (perhaps a field of a larger object). A reference to a record
+  /// is a pointer to it, and `modifies(r)` its object.
+  std::set<std::string> ScalarReferenceParams;
+  /// Pointer and reference parameters to a record, with the identity of the
+  /// record's entry in Layouts: an object whose leaves lie at offsets inside
+  /// it.
+  std::map<std::string, std::string> RecordParams;
+  /// Parameters for the entry values of pointer fields whose extents the
+  /// preconditions state (valid(s->data, s->len)), each with its field as an
+  /// expression over the function's parameters, which a call evaluates at
+  /// its arguments. They follow the declared parameters in Params.
+  std::vector<std::pair<std::string, std::unique_ptr<VExpr>>> FieldParams;
   /// Pointer and reference parameters to const objects: the function
   /// writes nothing through them.
   std::set<std::string> ConstAddressParams;
+  /// Pointer and reference parameters whose storage the body never reads
+  /// before writing it (inferOutParameters): a caller may pass storage that
+  /// is not initialized, and the body's reads of it are checked against what
+  /// it has written.
+  std::set<std::string> OutParameters;
+  /// Pointer variables that may address a subobject (a member array, a
+  /// field): each has companions `name.__lo` and `name.__hi`, the bytes it
+  /// may address, which every access and step through it must stay in.
+  std::set<std::string> BoundedPointers;
   std::vector<std::pair<std::string, VType>> ReturnFields;
   /// Number of leading preconditions originating from explicit pre clauses.
   unsigned ExplicitPreconditionCount = 0;
   std::vector<std::unique_ptr<VExpr>> Preconditions;
   std::vector<std::unique_ptr<VExpr>> Postconditions;
+  /// The memory checks of each precondition and postcondition, by index.
+  std::vector<std::vector<VMemoryCheck>> PreconditionChecks;
+  std::vector<std::vector<VMemoryCheck>> PostconditionChecks;
   /// Kinds of generated clauses by index; see preconditionKind().
   std::vector<ProofObligationKind> PreconditionKinds;
   std::vector<ProofObligationKind> PostconditionKinds;

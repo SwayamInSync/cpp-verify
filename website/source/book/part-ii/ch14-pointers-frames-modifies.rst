@@ -54,7 +54,9 @@ is present.
 Reference formals can be forwarded from another reference, bound to a direct
 dereference such as ``set_value(*p, value)``, bound to a field or element of a
 local object or of a parameter's buffer (``set_value(pt.x, 7)``,
-``set_value(a[1], 9)``), or passed an initialized ordinary scalar local. Local
+``set_value(a[1], 9)``), or passed an initialized local, scalar or record,
+as can the address of one to a pointer parameter (``inc(&x)``), when the
+callee keeps no address of it (see :doc:`../../language/structs`). Local
 references may bind those same forms and chain:
 
 .. cppverify-example: with swap
@@ -77,8 +79,10 @@ liveness, initialization, and a non-escaping lifetime identity. A local
 binding snapshots its address, so changing a source pointer later does not
 rebind the reference.
 
-Conditional bindings, temporaries, reference returns, address-taking, rvalue
-references, and non-scalar referents remain rejected.
+Conditional bindings, temporaries, reference returns, the address of a
+scalar reference, and rvalue references remain rejected. A reference to a
+record names an object in memory, as a pointer to it does (see `Records
+through pointers`_ below).
 Addressable declarations inside loops and ``cppverify::old`` of automatic locals or local
 bindings are also fail-closed; outer automatic locals and loop-local reference
 aliases are supported.
@@ -101,12 +105,18 @@ There are three frame granularities:
 - a **range**, ``cppverify::modifies(p[lo : n])``, names the ``n`` elements from
   ``p[lo]``, half-open ``[lo, lo + n)`` (Clang's array-section syntax);
 - a **region**, ``cppverify::modifies(*p)``, names the object ``p`` addresses: its
-  ``valid(p, n)`` extent, or one object.
+  ``valid(p, n)`` extent, or one object. ``cppverify::modifies(c)`` for a
+  reference ``c`` to a record names the object ``c`` names, and a record or
+  array member named whole (``cppverify::modifies(s->inner)``,
+  ``cppverify::modifies(s->items)``) names the bytes of that member.
 
 Inside the function, every store must lie in a footprint read in the entry
 state. At a modular call, the caller's heap changes only inside the callee's
 footprints instantiated with the arguments, and every other cell keeps its
-value. A callee footprint must lie within the caller's own frame.
+value. A callee footprint must lie within the caller's own frame, cell by
+cell, however its pointer was computed: a callee that writes its one object
+may receive a cell the caller may write, or a copy of a pointer into an
+object the caller may write.
 
 A pointer-taking callee with no explicit ``cppverify::modifies`` that may write memory is
 treated as writing the whole heap: a caller may lose a true fact about an
@@ -115,8 +125,8 @@ might invalidate. An explicit caller frame cannot contain that implicit
 effect; an unframed caller may still make the call.
 
 To state a property of a whole range, put a **bounded quantifier** in the loop
-invariant and the postcondition — the half-open bound ``[lo, hi)`` is the trigger.
-A buffer-zeroing loop proves its full postcondition this way:
+invariant and the postcondition, over the half-open range ``[lo, hi)``. A
+buffer-zeroing loop proves its full postcondition this way:
 
 .. cppverify-example: label zero
 
@@ -201,6 +211,167 @@ which the verifier derives from the non-overlap as plain integer arithmetic
 (``d + j < d + n <= s <= s + i``), because addresses are modeled as mathematical
 integers rather than wrapping machine words.
 
+A loop may also walk a pointer, as C++ code usually does. ``++q``, ``q++``,
+``q += n``, and their decrements are the assignments they abbreviate, and each
+step is checked to stay in the object ``q`` addresses, one past its end
+included; the invariant ties the pointer to a position:
+
+.. code-block:: cpp
+
+   int count_zeros(const int *a, int n)
+     cv::pre(valid(a, n) && 0 <= n && n <= 1000)
+     cv::post(0 <= cv::result && cv::result <= n)
+   {
+     int zeros = 0;
+     int i = 0;
+     for (const int *q = a; q != a + n; ++q)
+       cv::invariant(0 <= i && i <= n && q == a + i && 0 <= zeros && zeros <= i)
+       cv::decreases(n - i)
+     {
+       if (*q == 0)
+         zeros++;
+       i++;
+     }
+     return zeros;
+   }
+
+.. code-block:: text
+
+   Verified: count_zeros [backend=z3]
+
+The value of a step inside an expression, as in ``*q++``, is not supported
+yet: read ``*q``, then step ``q`` in a statement of its own.
+
+Records through pointers
+------------------------
+
+A record often holds its storage inline: a fixed-capacity stack keeps its
+items in an array member next to its size. Through a pointer to such a
+record, every field and every array element is a heap cell of its own, at
+the address the record layout gives it. Code reads and writes it, contracts
+and footprints name it, and the same frame reasoning as for a buffer applies:
+
+.. cppverify-example: fails push_full
+
+.. code-block:: cpp
+
+   struct Stack {
+     int items[16];
+     int size;
+   };
+
+   void push(Stack *s, int v)
+     cv::pre(s != nullptr && 0 <= s->size && s->size < 16)
+     cv::modifies(s->items[s->size], s->size)
+     cv::post(s->size == cv::old(s->size) + 1)
+     cv::post(s->items[cv::old(s->size)] == v)
+     cv::post(cv::forall(k, 0, cv::old(s->size), s->items[k] == cv::old(s->items[k])))
+   {
+     s->items[s->size] = v;
+     s->size = s->size + 1;
+   }
+
+   void clear(Stack *s)
+     cv::pre(s != nullptr)
+     cv::modifies(s->items[0 : 16], s->size)
+     cv::post(s->size == 0 && cv::forall(k, 0, 16, s->items[k] == 0))
+   {
+     for (int i = 0; i < 16; i = i + 1)
+       cv::invariant(0 <= i && i <= 16 && cv::forall(k, 0, i, s->items[k] == 0))
+       cv::modifies(s->items[0 : 16])
+       cv::decreases(16 - i)
+     {
+       s->items[i] = 0;
+     }
+     s->size = 0;
+   }
+
+   void push_full(Stack *s, int v)
+     cv::pre(s != nullptr && 0 <= s->size && s->size <= 16)
+     cv::modifies(*s)
+   {
+     s->items[s->size] = v;
+     s->size = s->size + 1;
+   }
+
+.. code-block:: text
+
+   Verified: push [backend=z3]
+   Verified: clear [backend=z3]
+   stack.cpp:36:21: error: verification failed: push_full [...::bounds@36:21] (counterexample: s [ssa=s_0] [type=pointer] = 1; trace: heap-write.store@36:21 address=65 value=<unknown>) [backend=z3] [reason=counterexample]
+
+``push`` writes exactly two cells, so its postcondition can promise that every
+item below the old size is unchanged. ``clear`` writes a range of the member
+array and the size; ``s->items[0 : 16]`` is a range footprint like
+``p[0 : n]``.
+
+``push_full`` admits a full stack. The store ``s->items[16]`` would land on
+``s->size``, which is inside ``*s`` and inside the frame, so a check against
+the object alone would accept it. Each index is checked against its own
+array, as Frama-C's RTE guards are, and the counterexample is the full stack:
+the store's address is 65, which is ``s + 16 * 4`` with ``s = 1``.
+
+A pointer into the member array can also walk it. The pointer may address
+only the array it comes from: ``s->items``, not the whole record, so a walk
+that runs one element too far reads ``s->size`` and fails:
+
+.. cppverify-example: fails count_past
+
+.. code-block:: cpp
+
+   struct Stack {
+     int items[16];
+     int size;
+   };
+
+   int count_zero(const Stack *s)
+     cv::pre(s != nullptr && 0 <= s->size && s->size <= 16)
+     cv::post(0 <= cv::result && cv::result <= s->size)
+   {
+     int n = 0;
+     for (const int *q = s->items; q != s->items + s->size; q = q + 1)
+       cv::invariant(s->items <= q && q <= s->items + s->size)
+       cv::invariant(0 <= n && n <= q - s->items)
+       cv::decreases(s->items + s->size - q)
+     {
+       if (*q == 0)
+         n = n + 1;
+     }
+     return n;
+   }
+
+   int count_past(const Stack *s)
+     cv::pre(s != nullptr && 0 <= s->size && s->size <= 16)
+   {
+     int n = 0;
+     for (const int *q = s->items; q != s->items + s->size + 1; q = q + 1)
+       cv::invariant(s->items <= q && q <= s->items + s->size + 1)
+       cv::invariant(0 <= n && n <= q - s->items)
+       cv::decreases(s->items + s->size + 1 - q)
+     {
+       if (*q == 0)
+         n = n + 1;
+     }
+     return n;
+   }
+
+.. code-block:: text
+
+   Verified: count_zero [backend=z3]
+   stack.cpp:31:10: error: verification failed: count_past [...::bounds@31:10#2] (counterexample: n [ssa=n_1] [type=i32] = 0, n [ssa=n_2] [type=i32] = 0, q [ssa=q_1] [type=pointer] = 1, q [ssa=q_2] [type=pointer] = 65, s [ssa=s_0] [type=pointer] = 1; trace: loop.entry@26:3 -> loop.inductive iteration@26:3 condition=true) [backend=z3] [reason=counterexample]
+
+In ``count_past`` the solver chooses a full stack, and ``q`` reaches 65, the
+address of ``s->size`` with ``s`` at 1. The verifier itself states that a
+pointer stepped through the array stays a whole number of elements from its
+start, as a generated invariant it proves, so the walk never lands between
+elements. :doc:`../../language/structs` lists the forms that are supported.
+
+All of this holds through a reference to a record too, which is a pointer
+that is never null and never reseated: ``void push(Stack &s, int v)`` reads
+and writes ``s.items[s.size]`` and ``s.size`` as the version above does
+through ``s->``, ``cppverify::modifies(s)`` is the whole stack, and
+``&s.size`` and ``s.items`` are pointers into it.
+
 Declaring a checked extent
 --------------------------
 
@@ -221,8 +392,9 @@ user-declared ``cppverify::spec bool valid(int* p, int n)`` is the same marker; 
 ``valid(p, n)`` entails ``n >= 0``. If ``n > 0``, ``p`` must be non-null and
 abstractly valid; ``n == 0`` permits null. Every access based on ``p`` must prove
 that its index lies in ``[0, n)``. The marker must be a positive top-level
-conjunction clause on the bare complete-object pointer, with at most one marker
-per pointer. A pointer without a marker addresses one object. With
+conjunction clause on the bare complete-object pointer, or on a pointer field
+of a parameter's object (``valid(s->data, s->len)``, see
+:doc:`../../language/structs`), with at most one marker per pointer. A pointer without a marker addresses one object. With
 ``--no-check-ub``, dereference definedness is still mandatory, but accesses
 are not checked against objects.
 
@@ -246,9 +418,12 @@ may be one caller array, which contracts cannot state, so their difference is
 explicit specs or lifted ``constexpr`` functions remain fail-closed.
 
 Extents also compose at modular calls. If a callee requires
-``valid(q, length)`` and receives ``p + offset``, the caller must prove one
-origin and ``0 <= offset``, ``0 <= length``, and
-``offset + length <= n``. Empty one-past slices are legal. Read-only slice
+``valid(q, length)``, the caller must prove that the ``length`` elements from
+its argument lie in one of its objects: for ``p + offset`` from
+``valid(p, n)``, that ``0 <= offset``, ``0 <= length``, and
+``offset + length <= n``. The argument may also be a local copy, a choice
+between pointers, or a pointer stepped in a loop; its elements must then lie
+in the objects it may address. Empty one-past slices are legal. Read-only slice
 chains preserve the heap, while exact-cell effects such as
 ``cppverify::modifies(q[0])`` update only the corresponding caller cell, and a range or
 a whole-slice ``cppverify::modifies(*q)`` updates only the slice:
@@ -326,6 +501,7 @@ parameters — a frame condition on *values* rather than memory. Declare it afte
 It is injected as a precondition at the first use of an invariant field for
 supported by-value flat records, so callers must establish it. Record
 references are not yet in the verified subset; current references have scalar
-referents only. See :doc:`../../language/structs`.
+referents only, such as a field or an element reached through a pointer. See
+:doc:`../../language/structs`.
 
 See :doc:`../../language/limitations` for the supported pointer and heap feature set.

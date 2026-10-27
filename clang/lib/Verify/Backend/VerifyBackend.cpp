@@ -15,16 +15,35 @@ using namespace verify;
 
 VerifyResult LeanVerifyBackend::verifyModule(const ObligationModule &Module) {
   VerifyResult R;
-  if (!Out) {
+  if (!Out && !Modules) {
     R.Status = VerifyStatus::Unresolved;
     R.Reason = VerifyReason::LeanExportFailure;
     R.Message = "no lean output stream";
     return R;
   }
-  VerifyResult Result = exportLeanScratchPad(
-      Module, *Out, !PreambleEmitted, EmittedFunctions, EmittedTheorems,
-      ++ModuleIndex, ProjectGoals, Selection ? &*Selection : nullptr);
-  PreambleEmitted = true;
+  const size_t Before = ProjectGoals ? ProjectGoals->size() : 0;
+  VerifyResult Result;
+  if (Modules) {
+    // A project's goals go to their function's module, and the specs they
+    // apply are declared once, in the module every goal module imports.
+    const std::string Group = leanProjectGroup(Module);
+    if (!Modules->Goals.count(Group))
+      Modules->Order.push_back(Group);
+    llvm::raw_string_ostream Goals(Modules->Goals[Group]);
+    Result = exportLeanScratchPad(
+        Module, Goals, /*EmitPreamble=*/false, EmittedFunctions,
+        EmittedTheorems, ++ModuleIndex, ProjectGoals,
+        Selection ? &*Selection : nullptr, &Modules->Specs);
+  } else {
+    Result = exportLeanScratchPad(
+        Module, *Out, !PreambleEmitted, EmittedFunctions, EmittedTheorems,
+        ++ModuleIndex, ProjectGoals, Selection ? &*Selection : nullptr);
+    PreambleEmitted = true;
+  }
+  if (ProjectGoals)
+    for (size_t I = Before; I < ProjectGoals->size(); ++I)
+      if ((*ProjectGoals)[I].Exported)
+        Result.LeanGoals.push_back((*ProjectGoals)[I].Name);
   return Result;
 }
 
@@ -751,11 +770,14 @@ std::unique_ptr<VerifyBackend>
 verify::createVerifyBackend(BackendKind K, llvm::raw_ostream *LeanOut,
                             unsigned BMCUnroll,
                             const BackendExecutionOptions &Execution,
-                            std::vector<std::string> *LeanProjectGoals) {
+                            std::vector<LeanProjectGoal> *LeanProjectGoals,
+                            LeanProjectModules *LeanModules) {
   switch (K) {
   case BackendKind::Z3:
     return std::make_unique<Z3VerifyBackend>(Execution, "z3");
   case BackendKind::Lean:
+    if (LeanModules)
+      return std::make_unique<LeanVerifyBackend>(LeanModules, LeanProjectGoals);
     return std::make_unique<LeanVerifyBackend>(LeanOut, LeanProjectGoals);
   case BackendKind::BMC:
     return std::make_unique<BMCVerifyBackend>(BMCUnroll, Execution);

@@ -4,7 +4,7 @@
 
 Formal verification lets you treat correctness as an engineering artifact: you state what should be true, and the tool either proves it or gives you a precise reason it does not. CppVerify brings that discipline to everyday C++ without a separate language or annotation dialect.
 
-📖 **[Documentation](https://swayaminsync.github.io/cpp-verify/)** — install guide, the book (Part I–II), language reference, and Doxygen API.
+📖 **[Documentation](https://swayaminsync.github.io/cpp-verify/)** — install guide, the book (Part I–II), language reference, and Doxygen API, for the latest release; [the development version](https://swayaminsync.github.io/cpp-verify/dev/) documents `main`.
 
 This repository is an [LLVM/Clang](https://github.com/llvm/llvm-project) fork (base `llvmorg-23.1.3`) with a verification engine in `clang/lib/Verify`, discharged by Z3, cvc5, or Lean.
 
@@ -43,7 +43,7 @@ Binaries: `build/bin/cpp-verify`, `build/bin/clang++`, `build/bin/clangd`, and `
 Z3 4.13.4 is built in: from the `third_party/z3` submodule, or, without it, cloned during the first build. See `third_party/README.md`. Two backends are optional and found on `PATH`:
 
 - cvc5, for `--backend=cvc5`, `portfolio`, and `race` (tested with 1.1.2): `apt install cvc5` on Ubuntu 24.04, or a [cvc5 release](https://github.com/cvc5/cvc5/releases/tag/cvc5-1.1.2) for Linux, macOS, or Windows; `--cvc5-path` names another executable.
-- Lean 4, for `--lean-certify` and `--lean-fallback`: install [elan](https://github.com/leanprover/elan); generated projects pin `leanprover/lean4:v4.32.2`.
+- Lean 4, for `--lean-certify` and `--lean-fallback`: install [elan](https://github.com/leanprover/elan); generated projects pin `leanprover/lean4:v4.35.0`.
 
 `cpp-verify --version` shows the cpp-verify release, the LLVM release it is built on, and the Z3, cvc5, and Lean versions it uses.
 
@@ -77,7 +77,7 @@ int abs(int x)
 ./build/bin/clang++ -std=c++17 -fverify-contracts -c abs.cpp -o abs.o
 ```
 
-Use `-fverify-contracts` on `clang++` so the constructs (`cppverify::pre`, `cppverify::post`, ...) are recognized; `cpp-verify` enables that flag automatically. Every construct is written qualified by the namespace `cppverify`, directly or through an alias such as `namespace cv = cppverify;`, so no word is reserved and C++26 `pre`/`post` stay the compiler's. `<cppverify.h>` needs no `#include`.
+Use `-fverify-contracts` on `clang++` so the constructs (`cppverify::pre`, `cppverify::post`, ...) are recognized; `cpp-verify` enables that flag automatically. Every construct is written qualified by the namespace `cppverify`, directly or through an alias such as `namespace cv = cppverify;`, so no word is reserved. This compiler does not implement C++26 contracts: with the flag, a bare `pre(...)` is an error whose fix-it writes `cppverify::pre(...)`. `<cppverify.h>` needs no `#include`.
 
 ### Editors
 

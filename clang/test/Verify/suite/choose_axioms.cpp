@@ -161,15 +161,15 @@ cppverify::spec int bit_block(int n)
 }
 // CHECK-DAG: Verified: spec decreases and post: bit_block
 
-// Without that hypothesis the claim is not proved, but no choice its axiom
-// excludes refutes it.
+// The hypothesis also holds at an application inside the body of a choose,
+// so no proof block is needed.
 cppverify::spec int bit_unblocked(int n)
   cppverify::decreases(n)
   cppverify::post(n < 0 || cppverify::result == cppverify::choose(k, 0, 2, k == n % 2))
 {
   return n <= 1 ? n : cppverify::choose(j, 0, 2, j == bit_unblocked(n - 2));
 }
-// CHECK-DAG: Unresolved: spec decreases and post unresolved: bit_unblocked
+// CHECK-DAG: Verified: spec decreases and post: bit_unblocked
 
 // In the definition instances refinement gives, where only the check of the
 // model's choices sees them.

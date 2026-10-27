@@ -136,6 +136,8 @@ struct QuantifierProfileEntry {
   unsigned MaxGeneration = 0;
 };
 
+struct CounterexampleAssignment;
+
 struct VerifyResult {
   VerifyStatus Status = VerifyStatus::Unresolved;
   VerifyReason Reason = VerifyReason::None;
@@ -146,6 +148,9 @@ struct VerifyResult {
   std::vector<VerifyTraceEvent> Trace;
   std::string ObligationId;
   std::optional<ObligationKind> ObligationType;
+  /// For a certified counterexample: the value of every free variable of the
+  /// goal of the obligation it fails, when the model gives each one.
+  std::shared_ptr<const CounterexampleAssignment> Assignment;
   SourceLocation Location;
   ObligationSource Source;
   uint64_t CacheHits = 0;
@@ -160,6 +165,9 @@ struct VerifyResult {
   /// individually; absent when the backend did not check each one.
   std::optional<std::vector<std::string>> UnprovedObligations;
   std::optional<ProofEvidence> Evidence;
+  /// For a module exported to a Lean project: the goals whose proofs prove
+  /// it, which certification checks.
+  std::vector<std::string> LeanGoals;
   /// For a counterexample: the specs whose postconditions decided a value
   /// its check needed, so that it rests on them.
   std::set<std::string> CertifiedWith;
@@ -321,11 +329,15 @@ inline unsigned moduleTimeoutMs(const ObligationModule &Module,
                                                 : SolverTimeoutMs;
 }
 
+struct LeanProjectGoal;
+struct LeanProjectModules;
+
 std::unique_ptr<VerifyBackend>
 createVerifyBackend(BackendKind K, llvm::raw_ostream *LeanOut = nullptr,
                     unsigned BMCUnroll = 10,
                     const BackendExecutionOptions &Execution = {},
-                    std::vector<std::string> *LeanProjectGoals = nullptr);
+                    std::vector<LeanProjectGoal> *LeanProjectGoals = nullptr,
+                    LeanProjectModules *LeanModules = nullptr);
 
 VerifyResult
 lowerObligationModule(const ObligationModule &Module,

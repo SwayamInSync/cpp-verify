@@ -1,5 +1,6 @@
+import CppVerify.Goals.cppverify_fibo_six_ec829a
 import CppVerify.User
 
-theorem cppverify_fibo_six_fn_5f5a386669626f5f73697876_obligation_1_goal_proof :
-    cppverify_fibo_six_fn_5f5a386669626f5f73697876_obligation_1_goal := by
-  simp [cppverify_fibo_six_fn_5f5a386669626f5f73697876_obligation_1_goal]
+theorem cppverify_fibo_six_ec829a_missing_return_ba8abb90_proof :
+    cppverify_fibo_six_ec829a_missing_return_ba8abb90 := by
+  simp [cppverify_fibo_six_ec829a_missing_return_ba8abb90]

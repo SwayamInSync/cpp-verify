@@ -22,6 +22,14 @@ inherits that declaration's contract even when its parameter names differ:
 
    int f(int x) { return x + 1; }
 
+A local may take the name of a parameter or of another local, in an inner
+block or a later one (two ``for (int i = ...)`` loops, say): each declaration
+is a variable of its own, uninitialized until it is assigned whatever an
+earlier one with its name held. A counterexample shows its name as written,
+and in ``[ssa=...]`` the verifier's name for it, ``i#2`` for the second ``i``.
+Before 0.2 such a declaration was an error, ``local variable shadowing is
+unsupported``.
+
 A caller's proof uses its callees' contracts, so a verdict is only as good as
 those contracts. A caller whose proof relies on a callee contract that the
 callee's own verification did not establish is ``Unresolved`` with reason
@@ -122,58 +130,407 @@ examined. Once a ``constexpr`` function has executable ``cppverify::pre``/``cppv
 clauses, it remains a modular executable function: calls must satisfy its
 preconditions and cannot be used as pure contract expressions.
 
+A lifted function's parameter or result that is a reference to a ``const``
+integer stands for the value it refers to, as in ``constexpr const T
+&larger(const T &a, const T &b)``. One that cannot be lifted (it reads memory
+through a pointer, say) is reported, and a function that applies it is
+``Unresolved`` with reason ``construct.unsupported``, naming it.
+
+The standard library's functions are not lifted: each library writes them
+its own way, and a proof would depend on which one. ``std::min`` and
+``std::max`` of two integers, enumerations, or ``bool`` mean what the
+standard says they mean, in contracts and in code alike: ``std::max(a, b)``
+is ``a`` unless ``a < b``, and ``std::min(a, b)`` is ``a`` unless ``b < a``.
+
+.. code-block:: cpp
+
+   #include <algorithm>
+
+   int lower(int a, int b)
+     cv::post(cv::result == std::min(a, b))
+     cv::post(cv::result <= a && cv::result <= b)
+   {
+     int m = std::min(a, b);
+     return m;
+   }
+
+   long widened(int x)
+     cv::post(cv::result >= 3)
+   {
+     long w = std::max<long>(x, 3L);
+     return w;
+   }
+
+.. code-block:: text
+
+   Verified: lower [backend=z3]
+   Verified: widened [backend=z3]
+
+Any other function of the standard library, such as ``std::clamp``, is an
+error naming it (``std::clamp is not modeled: of the standard library, the
+verifier knows std::min and std::max of two integers``), as is a reference
+bound to the result of ``std::max``. Before 0.2, ``std::min`` and
+``std::max`` in a contract, and every ``constexpr`` helper that could not be
+lifted, ended ``Unresolved: obligation lowering failed: f (missing spec
+definition: fn_...)``.
+
 Preconditions, ``cppverify::old(parameter)``, and a parameter named in a postcondition
 all denote the argument's entry value, as in ACSL, even when the callee
 reassigns its by-value parameter; a caller can therefore use the
 postcondition directly.
 
-Templates and member functions
-------------------------------
+Contracts must be defined
+-------------------------
 
-Templates and member functions compile with contracts, but they are not
-verified yet:
+A contract is C++, evaluated where the function is called and where it
+returns. A clause that divides by zero or reads outside an object there says
+nothing, so CppVerify checks that each clause is defined where it is
+evaluated, as Dafny checks a method's well-formedness, and reports a clause
+that may not be as ``contract of f``, at the operation:
 
-- The contracts of a function template, of a class template's members, and a
-  class template's type invariants compile, instantiate with the template,
-  and are ignored, with a ``-Wcontract-unsupported`` warning that names the
-  template. Contracts on a member function are ignored the same way.
-- A template without contracts changes nothing for the rest of the file, as
-  long as verified code does not call it.
+- each precondition where the preconditions written before it hold, so a
+  clause may rely on the ones before it, and each operand of ``&&``, ``||``,
+  and ``?:`` where the operands before it allow its evaluation;
+- each postcondition in the state the function returns in, where the
+  postconditions before it hold. For a trusted function or one without a
+  definition, that is every state its frame allows (only its
+  ``cppverify::modifies`` footprints change), with any result;
+- the checks an operation gets in a body: divisors, shifts, a mathematical
+  value converted to a machine type, dereferences, and, with memory checking,
+  every access inside its extent or object (see :doc:`pointers`). Loop
+  invariants and ``cppverify::check`` get the same checks.
 
 .. code-block:: cpp
 
-   template <typename T>
-   T clamp_low(T v, T lo)
-     cv::post(cv::result >= lo)
-   {
-     return v < lo ? lo : v;
-   }
-
-   int clamp_int(int v)
+   int average(int total, int count)
+     cv::pre(total / count >= 0 && count > 0)
      cv::post(cv::result >= 0)
    {
-     return v < 0 ? 0 : v;
+     return total / count;
+   }
+
+   int average_checked(int total, int count)
+     cv::pre(count > 0 && total / count >= 0)
+     cv::post(cv::result >= 0)
+   {
+     return total / count;
+   }
+
+   int pick(const int *p, int i)
+     cv::pre(cv::valid(p, 8) && p[i] > 0 && 0 <= i && i < 8)
+     cv::post(cv::result > 0)
+   {
+     return p[i];
+   }
+
+   [[cppverify::trusted]] int read_sensor(int channel)
+     cv::post(1000 / cv::result > 0);
+
+   int scaled(int channel)
+     cv::post(cv::result > 0)
+   {
+     int r = read_sensor(channel);
+     return 1000 / r;
    }
 
 .. code-block:: text
 
-   templates.cpp:2:3: warning: contracts in function template 'clamp_low' are not yet supported and are ignored [-Wcontract-unsupported]
-       2 | T clamp_low(T v, T lo)
-         |   ^
-   Verified: clamp_int [backend=z3]
+   defined.cpp:2:17: error: verification failed: contract of average
+     [...::contract::division-by-zero@2:17] (counterexample: count [type=i32] = 0)
+   Verified: average [backend=z3]
+   Verified: average_checked [backend=z3]
+   defined.cpp:16:30: error: verification failed: contract of pick
+     [...::contract::bounds@16:30] (counterexample: i [type=i32] = -1, ...)
+   Verified: pick [backend=z3]
+   defined.cpp:22:28: Trusted: read_sensor (contract assumed, not verified)
+   defined.cpp:23:17: error: verification failed: contract of read_sensor
+     [...::contract::division-by-zero@23:17] (counterexample: result [type=i32] = 0)
+   Unresolved: scaled [backend=z3] [reason=callee.contract] (relies on the
+     contract of read_sensor (its clauses are not shown to be defined), which is
+     not established)
 
-Two uses still stop the file with an error, and no function in it gets a
-verdict:
+``average`` divides before it tests ``count``, so its precondition is undefined
+at ``count == 0``; written the other way round, as in ``average_checked``, it
+is defined. ``pick`` reads ``p[i]`` before it bounds ``i``. Both bodies still
+verify: their proofs assume the preconditions, and a body's own operations
+are checked whatever its contract says. The trusted contract of
+``read_sensor`` divides by its result, which may be 0.
 
-- a call to a template from verified code, such as ``return clamp_low(v,
-  0);`` in a function with a contract: ``error: use: call to function
-  without a verification contract: clamp_low``;
-- a template whose body has a contract statement (``cv::check``, a ghost
-  block): ``error: twice: function template verification is unsupported``.
+A contract that may be undefined establishes nothing: every caller that relies
+on it is ``Unresolved`` with reason ``callee.contract``, as ``scaled`` is. Its
+proof read ``1000 / r > 0`` as excluding ``r == 0``, since the logic defines a
+division by zero, but C++ does not, so nothing excludes it. The function's own
+verdict is about its body and does not change. The check prints nothing when it
+holds. With ``--backend=lean`` it is exported as goals of its own,
+``Exported: lean obligation: contract of f``; once their proofs certify,
+``Certified: contract of f`` establishes the contract, and until then the
+callers that rely on it are ``Unresolved`` with reason ``callee.contract``.
 
-Before 0.2, a template whose contract depends on its parameters did not
-compile (``value of type '<dependent type>' is not contextually convertible to
-'bool'``), and a template without any contract, even one nothing calls,
+Spec functions stay total, as in Verus and ACSL: a spec's division by zero is
+0, so applying a spec in a contract adds no check, and
+``cppverify::recommends`` remains a warning (see :doc:`ghost-proofs`).
+
+Calls in expressions
+--------------------
+
+A call of a function with a contract may stand anywhere an expression may:
+an operand, a condition, an index, an argument of another call, a return
+value, a loop condition. It is checked as a call statement is: its
+preconditions are asserted with its arguments, it changes only its
+``cppverify::modifies`` footprints, and its postconditions describe its
+result. Each call runs where C++ evaluates it:
+
+- before whatever reads its result, and a condition's calls before the
+  branch the condition chooses;
+- the second operand of ``&&`` and ``||``, and each branch of ``?:``, only
+  on its own path, after the first operand or the condition is evaluated, so
+  a callee's precondition needs to hold only where the call is made;
+- a loop condition's calls at every test of the condition, the last one
+  included, after the invariants hold at the head.
+
+.. code-block:: cpp
+
+   int inc(int x)
+     cv::pre(x < 1000)
+     cv::post(cv::result == x + 1)
+   {
+     return x + 1;
+   }
+
+   int sq(int x)
+     cv::pre(-1000 <= x && x <= 1000)
+     cv::post(cv::result == x * x)
+   {
+     return x * x;
+   }
+
+   int sum_sq(int a, int b)
+     cv::pre(-100 <= a && a <= 100 && -100 <= b && b <= 100)
+     cv::post(cv::result == a * a + b * b)
+   {
+     return sq(a) + sq(b);
+   }
+
+   int guarded(int x)
+     cv::pre(-2000 <= x && x <= 2000)
+     cv::post(cv::result == (-1000 <= x && x <= 1000 && x * x > 4))
+   {
+     if (-1000 <= x && x <= 1000 && sq(x) > 4)
+       return 1;
+     return 0;
+   }
+
+   int unguarded(int x)
+     cv::pre(-2000 <= x && x <= 2000)
+   {
+     if (sq(x) > 4 && x <= 1000)
+       return 1;
+     return 0;
+   }
+
+   int count_up(int n)
+     cv::pre(0 <= n && n < 2000)
+     cv::post(cv::result == n)
+   {
+     int i = 0;
+     while (inc(i) <= n)
+       cv::invariant(0 <= i && i <= n)
+       cv::decreases(n - i)
+     {
+       i = i + 1;
+     }
+     return i;
+   }
+
+.. code-block:: text
+
+   Verified: inc [backend=z3]
+   Verified: sq [backend=z3]
+   Verified: sum_sq [backend=z3]
+   Verified: guarded [backend=z3]
+   calls.cpp:38:7: error: verification failed: unguarded [...::precondition@38:7]
+     (counterexample: x [type=i32] = -1001; trace: call.sq@38:7 arg0=-1001)
+   calls.cpp:48:10: error: verification failed: count_up [...::precondition@48:10]
+     (counterexample: ..., i [type=i32] = 1000, n [type=i32] = 1000;
+     trace: loop.entry@48:3 -> loop.inductive iteration@48:3 condition=true
+     -> call.inc@48:10 arg0=1000)
+
+``guarded`` calls ``sq`` only where ``-1000 <= x && x <= 1000`` holds, so
+``sq``'s precondition holds at every call it makes. ``unguarded`` calls
+``sq`` before it tests ``x``, at ``x = -1001`` among others. ``count_up``
+calls ``inc`` at every test of its condition: with ``n = 1000``, the test
+that would end the loop calls ``inc(1000)``, which ``inc``'s precondition
+excludes. A ``for`` loop's increment and a ``continue`` behave the same way:
+the increment's calls run at the end of each iteration, and the condition's
+again after a ``continue``.
+
+C++ leaves the order of most operands open: the two operands of ``+`` or
+``<``, a subscript's array and index, the arguments of a call. The verifier
+runs calls first, in one order, so that order must not matter. A call that
+may write memory (its callee has a ``cppverify::modifies``, a pointer or
+reference parameter, or is a member function that is not ``const``) next to
+an operand that reads memory, or makes another call, is an error:
+
+.. cppverify-example: label add_one
+
+.. code-block:: cpp
+
+   int add_one(int *p)
+     cv::pre(p != nullptr && *p < 1000)
+     cv::modifies(*p)
+     cv::post(*p == cv::old(*p) + 1 && cv::result == *p)
+   {
+     *p = *p + 1;
+     return *p;
+   }
+
+.. cppverify-example: with add_one
+.. cppverify-example: rejects
+
+.. code-block:: cpp
+
+   int sum_with(int *p)
+     cv::pre(p != nullptr && 0 <= *p && *p < 100)
+     cv::modifies(*p)
+   {
+     return add_one(p) + *p;
+   }
+
+.. code-block:: text
+
+   order.cpp:18:10: error: sum_with: C++ leaves the order of these operands open, and a call in one may write what the other reads; make the call in a statement of its own first
+      18 |   return add_one(p) + *p;
+         |          ^~~~~~~~~~~~~~~
+
+Where ``*p`` is ``v`` before it, ``add_one(p) + *p`` is ``2 * v + 2`` when a
+compiler evaluates the call first and ``2 * v + 1`` when it reads ``*p``
+first. Write ``int a = add_one(p);`` first and use ``a + *p``, which says
+which one is meant.
+
+An assignment evaluates its right operand first (C++17), so a call in the
+target runs after the value is read, and a call in the value runs before
+the target is located:
+
+.. cppverify-example: with add_one
+
+.. code-block:: cpp
+
+   void store_old(int *a, int *p)
+     cv::pre(cv::valid(a, 4) && p != nullptr && 0 <= *p && *p < 2)
+     cv::modifies(*p, a[0 : 4])
+     cv::post(a[cv::old(*p) + 1] == cv::old(*p))
+   {
+     a[add_one(p)] = *p;
+   }
+
+.. code-block:: text
+
+   Verified: store_old [backend=z3]
+
+Before C++17 an assignment's operands are unsequenced too: with
+``--extra-arg=-std=c++14``, ``store_old`` is ``error: store_old: before
+C++17 the order of an assignment's operands is open, and a call in one may
+write what the other reads; make the call in a statement of its own
+first``.
+
+A call that returns nothing is made as a statement of its own
+(``note(x);``), and one that returns a record as a statement or a whole
+initializer, assignment, or return value (``Pt p = make(x);``,
+``return make(x);``): a record result read in a larger expression
+(``make(x).y``) is still ``executable call is unsupported in this expression
+context``. Before 0.2, every call inside a larger expression was that error,
+and the file stopped.
+
+Templates
+---------
+
+A function template is verified in each of its specializations, as Kani and
+CBMC verify the code a program instantiates: its contract is instantiated
+with its body, so the contract and every check of the body are about the
+template's arguments, and each specialization gets a verdict of its own,
+named with its arguments.
+
+.. cppverify-example: fails twice<short>
+
+.. code-block:: cpp
+
+   template <typename T>
+   T twice(T x)
+     cv::pre(0 <= x && x <= 30000)
+     cv::post(cv::result == 2 * x)
+   {
+     return x + x;
+   }
+
+   int twice_int(int x)
+     cv::pre(0 <= x && x <= 30000)
+     cv::post(cv::result == 2 * x)
+   {
+     int r = twice(x);
+     return r;
+   }
+
+   short twice_short(short x)
+     cv::pre(0 <= x && x <= 30000)
+   {
+     short r = twice(x);
+     return r;
+   }
+
+.. code-block:: text
+
+   Verified: twice<int> [backend=z3]
+   templates.cpp:4:23: error: verification failed: twice<short> [...::postcondition@4:23] (counterexample: ...) [backend=z3] [reason=counterexample]
+   templates.cpp:20:13: note: in instantiation of function template specialization 'twice<short>' requested here
+   Verified: twice_int [backend=z3]
+   Unresolved: twice_short [backend=z3] [reason=callee.contract] (relies on the contract of twice<short>, which is not established)
+
+``x + x`` is an ``int``, which a ``short`` result holds only up to 32767:
+``twice<short>`` fails, and the function that relies on it is unresolved.
+
+- A specialization is verified where the translation unit instantiates it,
+  by a call or by an explicit instantiation (``template long
+  twice<long>(long);``). A function template with a contract that nothing
+  instantiates is reported, not verified: ``warning: f: function template is
+  not verified: this translation unit instantiates none of its
+  specializations``. What a template means depends on the types and
+  overloads its arguments bring, which C++ fixes only where it is
+  instantiated.
+- A diagnostic about a specialization notes where it is instantiated, as a
+  compiler's does (JSON ``instantiated_at``).
+- The contract is checked where it is instantiated, as a C++ condition is: a
+  clause that does not fit the arguments, such as ``cv::post(cv::result ==
+  v.first)`` for an ``int``, is a compiler error there, with Clang's ``in
+  instantiation of function template specialization`` note. Arguments the
+  contract fits are no error.
+- Loop contracts, assertions, ghost code, quantifiers, and triggers are
+  instantiated with the body, and so are spec function templates and member
+  function templates of ordinary classes. An uncontracted ``constexpr``
+  template that a contract applies is a spec in each specialization, as a
+  ``constexpr`` function is (see Functions above). A contract written on a
+  declaration holds for the definition after it, and a
+  ``[[cppverify::trusted]]`` template without a definition holds at every
+  call of its specializations.
+- In a variadic template, the parameters a pack expands to are named as
+  C++26 indexes a pack, ``ns...[1]``, in counterexamples too, and a fold
+  over a quantifier binds a variable of its own in each element.
+- A specialization the verifier cannot represent (``maxv<double>``) costs
+  that specialization alone, as a construct in any function does.
+- A class template is verified in each specialization too: its members'
+  contracts are instantiated with the members, and its type invariants with
+  the class (:doc:`structs`).
+- A template without contracts changes nothing for the rest of the file, as
+  long as verified code does not call it.
+
+Before 0.2, the contracts of templates were ignored with a warning
+(``-Wcontract-unsupported``, which no longer reports anything), and a call to
+one from verified code was ``call to function without a verification
+contract``. A template whose contract depended on its
+parameters did not compile (``value of type '<dependent type>' is not
+contextually convertible to 'bool'``), nor did ``cv::result`` or
+``cv::old(x)`` of the template's type compared with a constant
+(``cv::post(cv::result > 0)``: ``invalid operands to binary expression ('T'
+and 'int')``). A template without any contract, even one nothing calls,
 stopped the file with ``function template verification is unsupported``.
 
 Behaviors
@@ -237,13 +594,22 @@ Multiple ``cppverify::invariant`` clauses are conjoined. ``cppverify::old(expr)`
 invariant and always denotes the enclosing function's entry state, not the
 previous iteration. Function locals do not exist at function entry and are
 rejected inside ``cppverify::old(...)``; use an ordinary snapshot local directly instead.
-``return``, ``break``, and ``continue`` may leave a ``while`` or ``for`` loop
-from any iteration. A ``return`` checks the postcondition in its own state and
-a ``break`` continues after the loop in its own state. A ``continue`` ends the
-iteration: the invariant must hold again and the ``cppverify::decreases`` measure must
-drop, after a ``for`` increment has run. ``break`` and ``continue`` in a
-``do`` loop are not supported yet, and ``cppverify::ghost`` code cannot leave an
+``return``, ``break``, and ``continue`` may leave a loop from any iteration.
+A ``return`` checks the postcondition in its own state and a ``break``
+continues after the loop in its own state. A ``continue`` ends the
+iteration: the invariant must hold again and the ``cppverify::decreases``
+measure must drop, after a ``for`` increment has run. In a ``do`` loop's
+first iteration, which runs before the invariant holds, a ``break`` skips the
+rest of the loop, and a ``continue`` goes to the condition, where the
+invariant must first hold. ``cppverify::ghost`` code cannot leave an
 executable loop.
+
+A condition may declare a variable, ``while (int k = next(i))``: it is
+declared, and its value tested, at every test, so a loop's contract cannot
+name it. A ``for`` loop without a condition repeats until a ``break`` or
+``return`` leaves it, and needs a measure like any other. A comma
+expression as a statement, such as the increment ``i++, j += 2``, runs its
+operands in order.
 
 The verifier checks a loop **modularly** (no unrolling), discharging four
 obligations:
@@ -363,9 +729,107 @@ increment, so ``a[0 : i]`` then covers the cell just written; the function's
 ``cppverify::modifies(a[0 : k])`` is the range ``[0, k)``, and the cells from ``k`` on
 keep their values without an invariant saying so.
 
+Local and dynamic objects follow the same rule. A store through a local
+array, a local record, or a ``new`` pointer writes that object, a store or a
+call through a reference to a local writes the cell it binds, and every
+other object keeps its value:
+
+.. cppverify-example: fails overwritten
+
+.. code-block:: cpp
+
+   int other_array()
+     cv::post(cv::result == 7)
+   {
+     int a[3];
+     int b[2];
+     b[0] = 3;
+     b[1] = 4;
+     for (int i = 0; i < 3; i = i + 1)
+       cv::invariant(0 <= i && i <= 3)
+       cv::decreases(3 - i)
+     {
+       a[i] = 0;
+     }
+     return b[0] + b[1];
+   }
+
+   int overwritten()
+     cv::post(cv::result == 7)
+   {
+     int a[4];
+     a[3] = 7;
+     for (int i = 0; i < 4; i = i + 1)
+       cv::invariant(0 <= i && i <= 4)
+       cv::decreases(4 - i)
+     {
+       a[i] = 0;
+     }
+     return a[3];
+   }
+
+.. code-block:: text
+
+   Verified: other_array [backend=z3]
+   frames.cpp:18:23: error: verification failed: overwritten [...::postcondition@18:23] (counterexample: ...) [backend=z3] [reason=counterexample]
+
+``overwritten`` fails because the loop writes ``a[3]``, which no invariant
+describes. Before 0.2 a loop that wrote local or dynamic storage forgot the
+value of every object, so ``other_array`` failed its postcondition.
+
 After a normal exit the verifier knows ``I && !c`` about what the loop may
 change; variables the loop does not assign and memory outside its write set
 keep their values. A ``break`` or ``return`` leaves in its own state instead.
+
+An invariant holds together with its definedness: establishment and
+preservation check that what it reads is in bounds and initialized, and that
+its shifts and divisions are defined, so the head of every iteration knows
+both. A loop that fills a local array states what it has written, and the
+reads that state it are what show those elements initialized, which no
+contract can say directly:
+
+.. cppverify-example: fails partially_filled
+
+.. code-block:: cpp
+
+   int filled()
+     cv::post(cv::result == 0)
+   {
+     int a[4];
+     for (int i = 0; i < 4; i = i + 1)
+       cv::invariant(0 <= i && i <= 4)
+       cv::invariant(cv::forall(k, 0, i, a[k] == 0))
+       cv::decreases(4 - i)
+     {
+       a[i] = 0;
+     }
+     return a[3];
+   }
+
+   int partially_filled()
+   {
+     int a[4];
+     for (int i = 0; i < 3; i = i + 1)
+       cv::invariant(0 <= i && i <= 3)
+       cv::invariant(cv::forall(k, 0, i, a[k] == 0))
+       cv::decreases(3 - i)
+     {
+       a[i] = 0;
+     }
+     return a[3];
+   }
+
+.. code-block:: text
+
+   Verified: filled [backend=z3]
+   fill.cpp:26:3: error: verification failed: partially_filled [...::initialization@26:3] (counterexample: ...) [backend=z3] [reason=counterexample]
+
+No lifetime begins or ends inside a loop, so what was initialized before it
+stays initialized in every iteration and after it; an element the loop may
+write is initialized at its head only where an invariant reads it. Before
+0.2 the head kept the initialization of the state before the loop: every
+iteration after the first saw the elements the earlier ones wrote as
+uninitialized, and ``filled`` failed its ``initialization`` check.
 
 .. note::
 
@@ -391,3 +855,96 @@ checked as well.
 The end-to-end acceptance programs include recursive and iterative factorial
 and Fibonacci implementations, each proved against a mathematical recursive
 specification at the exact signed-``int`` boundary.
+
+Switch statements
+-----------------
+
+A ``switch`` runs from the label its value matches, or from ``default`` when
+no case matches, to the end of its body or to a ``break``; a label's
+statements without a ``break`` fall through to the next label's, with or
+without ``[[fallthrough]]``. The value is computed once, after the init
+statement and the condition variable when there are any, and each case value
+has the promoted type of the condition, as in C++. A case holds any
+statements, loops and nested switches included: a ``break`` in a nested loop
+leaves that loop, and a ``continue`` in a switch continues the loop around
+it. A GNU case range, ``case 1 ... 9:``, matches each value from its first to
+its last.
+
+.. code-block:: cpp
+
+   int bonus(int level)
+     cv::post(level == 0 ? cv::result == 3 : true)
+     cv::post(level == 1 ? cv::result == 1 : true)
+     cv::post(level < 0 || level > 1 ? cv::result == 0 : true)
+   {
+     int points = 0;
+     switch (level) {
+     case 0:
+       points = points + 2;
+       [[fallthrough]];
+     case 1:
+       points = points + 1;
+       break;
+     default:
+       break;
+     }
+     return points;
+   }
+
+.. code-block:: text
+
+   Verified: bonus [backend=z3]
+
+Each label's statements keep their checks, on the path that reaches them,
+and a value is initialized after a switch only where every way out of it
+initializes it: the end of the last label's statements, each ``break``, and,
+without a ``default`` label, a value no case matches. An enumeration without
+a fixed underlying type holds every value of its range ([dcl.enum]/8), so a
+switch over its enumerators may match none:
+
+.. cppverify-example: fails channel
+
+.. code-block:: cpp
+
+   enum Color { Red, Green, Blue };
+
+   int channel(Color c)
+     cv::post(cv::result >= 0)
+   {
+     switch (c) {
+     case Red:
+       return 0;
+     case Green:
+       return 1;
+     case Blue:
+       return 2;
+     }
+     return -1;
+   }
+
+.. code-block:: text
+
+   channel.cpp:4:12: error: verification failed: channel [...::postcondition@4:12] (counterexample: result [ssa=__result_1] [type=i32] = -1, c [ssa=c_0] [type=u32] = 3; ...) [backend=z3] [reason=counterexample]
+
+``Color`` holds 0 to 3, the values of the smallest bit-field that fits its
+enumerators, and ``channel(Color(3))`` is defined C++ that returns -1.
+
+A switch is lowered to the statements the verifier already has: the value
+in a variable, a flag set when a label matches and kept through the labels
+after it, and a flag for ``break`` that the statements after a ``break``
+test, as BMC lowers a loop's exits. Specs, lifted ``constexpr`` helpers,
+proof functions, and ghost code may switch too. What stays unsupported is
+reported where it is, and costs its function alone:
+
+- a label inside another statement of its switch, as in Duff's device
+  (``a case label inside another statement of its switch is unsupported``);
+- a local whose address is used, declared directly in a switch's body, which
+  a later label enters without declaring it: declare it in a block after its
+  label, ``case 1: { int t; f(&t); break; }``;
+- ``[[assume(e)]]``, whose ``e`` false is undefined. Other statement
+  attributes (``[[likely]]``, ``[[fallthrough]]``) change nothing.
+
+Before 0.2, a ``switch`` stopped verification of its function with
+``unsupported statement: SwitchStmt``, and ``break`` and ``continue`` in a
+``do`` loop, a condition declaration, a ``for`` loop without a condition, and
+a comma statement did the same.

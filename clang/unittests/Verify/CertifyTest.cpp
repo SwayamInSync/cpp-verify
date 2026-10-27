@@ -8,10 +8,14 @@
 #include "Backend/Certify.h"
 #include "Backend/ExtremeSearch.h"
 #include "Backend/Induction.h"
+#include "Backend/LeanBackend.h"
 #include "Backend/Presburger.h"
 #include "Backend/VerifyBackend.h"
+#include "Driver/CppVerifyVersion.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Program.h"
 #include "gtest/gtest.h"
 #include <cstdlib>
@@ -69,7 +73,8 @@ Expr variable(llvm::StringRef Name, LogicSort Sort) {
 
 Expr node(LogicExpr::Kind Kind, LogicSort Sort, std::vector<Expr> Children) {
   Expr E = leaf(Kind, Sort);
-  E->Children = std::move(Children);
+  for (Expr &Child : Children)
+    E->Children.push_back(std::move(Child));
   return E;
 }
 
@@ -97,6 +102,7 @@ Expr clone(const LogicExpr &E) {
   Copy->Binder = E.Binder;
   Copy->OverflowOp = E.OverflowOp;
   Copy->SpecCallee = E.SpecCallee;
+  Copy->CollectionOp = E.CollectionOp;
   for (const auto &Child : E.Children)
     Copy->Children.push_back(clone(*Child));
   return Copy;
@@ -1389,6 +1395,77 @@ TEST(CertifyTest, ChoiceValuesMeetTheirAxioms) {
             CertifyOutcome::Undetermined);
 }
 
+TEST(CertifyTest, ChoicesAreFunctionsOfTheValuesTheyRead) {
+  // pick(h, a) = choose(k, 0, 2, h[a + k] == 7).
+  const LogicSort I32 = LogicSort::bitVector(32, true);
+  auto read = [&](Expr Offset) {
+    return node(LogicExpr::Select, I32, variable("h", LogicSort::heap()),
+                node(LogicExpr::Add, LogicSort::pointer(),
+                     variable("a", LogicSort::pointer()), std::move(Offset)));
+  };
+  auto seven = [&](Expr Offset) {
+    return boolean(LogicExpr::Eq, read(std::move(Offset)), literal("7", I32));
+  };
+  auto result = [] {
+    return variable(LogicFunctionDecl::ResultVariable, math());
+  };
+  LogicFunctionDecl Pick;
+  Pick.Identity = "pick_id";
+  Pick.DisplayName = "pick";
+  Pick.Parameters.push_back({"h", LogicSort::heap()});
+  Pick.Parameters.push_back({"a", LogicSort::pointer()});
+  Pick.ResultSort = math();
+  Pick.Choice = true;
+  Expr Witnessed = node(LogicExpr::Exists, LogicSort::boolSort(),
+                        mathLiteral(0), mathLiteral(2),
+                        seven(variable("k", math())));
+  Witnessed->Binder = "k";
+  Pick.Postconditions.push_back(boolean(
+      LogicExpr::Or, negation(std::move(Witnessed)),
+      boolean(LogicExpr::And,
+              boolean(LogicExpr::And,
+                      boolean(LogicExpr::Le, mathLiteral(0), result()),
+                      boolean(LogicExpr::Lt, result(), mathLiteral(2))),
+              seven(result()))));
+  ObligationModule Module = withFunction(std::move(Pick));
+  const LogicFunctionDecl &Choice = Module.LogicFunctions.at("pick_id");
+  auto pick = [&](const char *Heap) {
+    std::vector<Expr> Args;
+    Args.push_back(variable(Heap, LogicSort::heap()));
+    Args.push_back(variable("a", LogicSort::pointer()));
+    return call(Choice, std::move(Args));
+  };
+  Expr Query = boolean(LogicExpr::Ne, pick("h1"), pick("h2"));
+  TableModel Model;
+  Model.Constants["a"] = integerValue(100);
+  auto choose = [&](const LogicValue &Heap, int64_t Value) {
+    Model.Applications[TableModel::key("pick_id", {Heap, integerValue(100)})] =
+        integerValue(Value);
+  };
+
+  // The memories differ only at a cell the condition does not read, so the
+  // two values break the choice's meaning: no counterexample.
+  const LogicValue Both = heapOf({{100, 7}, {101, 7}}, 0);
+  const LogicValue Elsewhere = heapOf({{100, 7}, {101, 7}, {300, 1}}, 0);
+  Model.Constants["h1"] = Both;
+  Model.Constants["h2"] = Elsewhere;
+  choose(Both, 0);
+  choose(Elsewhere, 1);
+  CertifyResult Same = certifyCounterexample(Module, *Query, Model);
+  EXPECT_EQ(Same.Outcome, CertifyOutcome::Undetermined);
+  EXPECT_NE(Same.Detail.find("reads the same values in both memories"),
+            std::string::npos)
+      << Same.Detail;
+
+  // The condition reads h[101], which differs: two choices are allowed.
+  const LogicValue First = heapOf({{100, 7}, {101, 3}}, 0);
+  Model.Constants["h2"] = First;
+  choose(Both, 1);
+  choose(First, 0);
+  EXPECT_EQ(certifyCounterexample(Module, *Query, Model).Outcome,
+            CertifyOutcome::Certified);
+}
+
 TEST(CertifyTest, MutualRecursionAndMachineResults) {
   // even(n) = n == 0 || odd(n - 1); odd(n) = n != 0 && even(n - 1), over u8.
   const LogicSort U8 = LogicSort::bitVector(8, false);
@@ -1642,6 +1719,522 @@ TEST(CertifyTest, AgreesWithCVC5Encodings) {
   if (!haveCVC5())
     GTEST_SKIP() << "cvc5 is not installed";
   expectAgreement(BackendKind::CVC5, 60, 29);
+}
+
+/// Ground facts, each with what it states, for the Lean check below.
+class GroundFacts {
+public:
+  ObligationModule Module;
+  std::vector<std::string> What;
+
+  /// The certifier confirms the fact before Lean is asked to prove it.
+  void add(Expr Fact, std::string Description) {
+    EXPECT_EQ(certifyGround(*Fact), CertifyOutcome::Certified) << Description;
+    Obligation Item;
+    Item.Id = "obligation:" + std::to_string(What.size() + 1);
+    Item.CounterexampleQuery = negation(clone(*Fact));
+    Item.Goal = std::move(Fact);
+    Module.Obligations.push_back(std::move(Item));
+    What.push_back(std::move(Description));
+  }
+
+  void equal(Expr Applied, Expr Expected, std::string Description) {
+    add(boolean(LogicExpr::Eq, std::move(Applied), std::move(Expected)),
+        std::move(Description));
+  }
+
+  void truth(Expr Applied, bool Holds, std::string Description) {
+    add(Holds ? std::move(Applied) : negation(std::move(Applied)),
+        std::move(Description));
+  }
+};
+
+/// The Lean export means what the canonical module means: evaluation in the
+/// pinned Lean (`decide`) proves the value the certifier computes for each
+/// random term and each operator nested in each other, refutes its corrupted
+/// value, and agrees on every operator at its extreme operands (a zero
+/// divisor, INT_MIN / -1, a shift past the width, each overflow predicate).
+TEST(CertifyTest, AgreesWithLeanEvaluation) {
+  llvm::ErrorOr<std::string> Lean = llvm::sys::findProgramByName("lean");
+  if (!Lean)
+    GTEST_SKIP() << "lean is not installed";
+  GroundFacts Facts;
+  // The certifier's value of a ground term is a theorem, and a corrupted
+  // value a refuted one.
+  auto evaluated = [&Facts](Expr Term, const std::string &Name) {
+    ObligationModule Empty;
+    TableModel Model;
+    std::string Failure;
+    std::optional<LogicValue> Value =
+        evaluateTerm(Empty, *Term, Model, {}, &Failure);
+    ASSERT_TRUE(Value) << Name << ": " << Failure;
+    Expr Corrupted = valueLiteral(*Value, Term->Sort, true);
+    Facts.equal(clone(*Term), valueLiteral(*Value, Term->Sort, false), Name);
+    Facts.add(
+        negation(boolean(LogicExpr::Eq, std::move(Term), std::move(Corrupted))),
+        Name + " corrupted");
+  };
+  std::mt19937_64 Random(37);
+  TermGenerator Generate(Random);
+  for (unsigned I = 0; I != 240; ++I) {
+    // Booleans compared with each other are propositions compared.
+    Expr Term = I % 4 == 0   ? Generate.machine(Generate.machineSort(), 3)
+                : I % 4 == 1 ? Generate.mathematical(3)
+                : I % 4 == 2
+                    ? Generate.formula(3)
+                    : boolean(I % 8 == 3 ? LogicExpr::Eq : LogicExpr::Ne,
+                              Generate.formula(2), Generate.formula(2));
+    evaluated(std::move(Term), "term " + std::to_string(I));
+  }
+  // Each operator inside each other, on either side, at operands where a
+  // lost parenthesis changes the value.
+  auto nested = [&](LogicExpr::Kind Outer, LogicSort Sort, Expr Inside,
+                    Expr Other, bool Left, const std::string &Name) {
+    evaluated(Left ? node(Outer, Sort, std::move(Inside), std::move(Other))
+                   : node(Outer, Sort, std::move(Other), std::move(Inside)),
+              Name + (Left ? " left" : " right"));
+  };
+  const LogicExpr::Kind MachineOps[] = {
+      LogicExpr::Add, LogicExpr::Sub,    LogicExpr::Mul,   LogicExpr::Div,
+      LogicExpr::Rem, LogicExpr::BitAnd, LogicExpr::BitOr, LogicExpr::BitXor,
+      LogicExpr::Shl, LogicExpr::Shr,    LogicExpr::Ite};
+  for (bool Signed : {true, false}) {
+    const LogicSort Sort = LogicSort::bitVector(8, Signed);
+    auto leaf = [&] { return literal(APInt(8, Random() % 256), Sort); };
+    for (LogicExpr::Kind Outer : MachineOps)
+      for (LogicExpr::Kind Inner : MachineOps)
+        for (bool Left : {true, false}) {
+          if (Outer == LogicExpr::Ite)
+            continue;
+          Expr A = leaf();
+          Expr B = leaf();
+          Expr Inside = Inner == LogicExpr::Ite
+                            ? node(Inner, Sort, boolLiteral(Random() % 2 == 0),
+                                   std::move(A), std::move(B))
+                            : node(Inner, Sort, std::move(A), std::move(B));
+          nested(Outer, Sort, std::move(Inside), leaf(), Left,
+                 "nested " + std::to_string(static_cast<unsigned>(Outer)) +
+                     " " + std::to_string(static_cast<unsigned>(Inner)) +
+                     (Signed ? " signed" : ""));
+        }
+  }
+  const LogicExpr::Kind MathOps[] = {LogicExpr::Add, LogicExpr::Sub,
+                                     LogicExpr::Mul, LogicExpr::Div,
+                                     LogicExpr::Rem};
+  auto mathLeaf = [&] {
+    return mathLiteral(static_cast<int64_t>(Random() % 2001) - 1000);
+  };
+  for (LogicExpr::Kind Outer : MathOps)
+    for (LogicExpr::Kind Inner : MathOps)
+      for (bool Left : {true, false}) {
+        Expr A = mathLeaf();
+        Expr B = mathLeaf();
+        nested(Outer, math(), node(Inner, math(), std::move(A), std::move(B)),
+               mathLeaf(), Left,
+               "nested math " + std::to_string(static_cast<unsigned>(Outer)) +
+                   " " + std::to_string(static_cast<unsigned>(Inner)));
+      }
+  // Every assignment of the three operands.
+  const LogicExpr::Kind Connectives[] = {LogicExpr::And, LogicExpr::Or,
+                                         LogicExpr::Eq, LogicExpr::Ne,
+                                         LogicExpr::Not};
+  for (LogicExpr::Kind Outer : Connectives)
+    for (LogicExpr::Kind Inner : Connectives)
+      for (bool Left : {true, false})
+        for (unsigned Bits = 0; Bits != 8; ++Bits) {
+          if (Outer == LogicExpr::Not)
+            continue;
+          Expr Inside = Inner == LogicExpr::Not
+                            ? negation(boolLiteral(Bits & 1))
+                            : boolean(Inner, boolLiteral(Bits & 1),
+                                      boolLiteral(Bits & 2));
+          nested(Outer, LogicSort::boolSort(), std::move(Inside),
+                 boolLiteral(Bits & 4), Left,
+                 "nested formula " +
+                     std::to_string(static_cast<unsigned>(Outer)) + " " +
+                     std::to_string(static_cast<unsigned>(Inner)) + " " +
+                     std::to_string(Bits));
+        }
+  for (unsigned W : {1U, 8U, 64U})
+    for (bool Signed : {true, false}) {
+      const LogicSort Sort = LogicSort::bitVector(W, Signed);
+      const std::string Of = " w" + std::to_string(W) + (Signed ? "s " : "u ");
+      const APInt Extremes[] = {APInt(W, 0), APInt(W, 1), APInt::getAllOnes(W),
+                                APInt::getSignedMinValue(W),
+                                APInt::getSignedMaxValue(W)};
+      for (const APInt &A : Extremes) {
+        for (const APInt &B : Extremes) {
+          const std::string Operands =
+              Of + decimal(A, false) + ", " + decimal(B, false);
+          for (Binary Op : AllBinary) {
+            const APInt Expected = reference(Op, A, B, Signed);
+            const std::string Name =
+                "op " + std::to_string(static_cast<unsigned>(Op)) + Operands;
+            Expr Applied = node(kindOf(Op),
+                                isComparison(Op) ? LogicSort::boolSort() : Sort,
+                                literal(A, Sort), literal(B, Sort));
+            if (isComparison(Op))
+              Facts.truth(std::move(Applied), Expected.isOne(), Name);
+            else
+              Facts.equal(std::move(Applied), literal(Expected, Sort), Name);
+          }
+          const APInt SA = A.sext(2 * W + 2);
+          const APInt SB = B.sext(2 * W + 2);
+          auto fits = [&](const APInt &Exact) {
+            return Exact.sge(APInt::getSignedMinValue(W).sext(2 * W + 2)) &&
+                   Exact.sle(APInt::getSignedMaxValue(W).sext(2 * W + 2));
+          };
+          const std::pair<LogicOverflowOp, bool> Cases[] = {
+              {LogicOverflowOp::Add, fits(SA + SB)},
+              {LogicOverflowOp::Sub, fits(SA - SB)},
+              {LogicOverflowOp::Mul, fits(SA * SB)},
+              {LogicOverflowOp::SignedDiv,
+               !(A.isMinSignedValue() && B.isAllOnes())},
+              {LogicOverflowOp::Neg, fits(-SA)}};
+          for (const auto &[Op, Holds] : Cases) {
+            std::vector<Expr> Arguments;
+            Arguments.push_back(literal(A, Sort));
+            if (Op != LogicOverflowOp::Neg)
+              Arguments.push_back(literal(B, Sort));
+            Expr Check = node(LogicExpr::NoOverflow, LogicSort::boolSort(),
+                              std::move(Arguments));
+            Check->OverflowOp = Op;
+            Facts.truth(std::move(Check), Holds,
+                        "overflow " + std::to_string(static_cast<int>(Op)) +
+                            Operands);
+          }
+        }
+        const std::string Operand = Of + decimal(A, false);
+        Facts.equal(node(LogicExpr::Neg, Sort, literal(A, Sort)),
+                    literal(-A, Sort), "neg" + Operand);
+        Facts.equal(node(LogicExpr::BitNot, Sort, literal(A, Sort)),
+                    literal(~A, Sort), "not" + Operand);
+        const APInt Value = Signed ? A.sext(W + 1) : A.zext(W + 1);
+        Facts.equal(node(LogicExpr::BvToInt, math(), literal(A, Sort)),
+                    literal(decimal(Value, true), math()), "bv2int" + Operand);
+        for (unsigned To : {1U, 8U, 64U})
+          for (bool ToSigned : {true, false}) {
+            const LogicSort Target = LogicSort::bitVector(To, ToSigned);
+            const APInt Resized =
+                Signed ? A.sextOrTrunc(To) : A.zextOrTrunc(To);
+            Facts.equal(node(LogicExpr::BvResize, Target, literal(A, Sort)),
+                        literal(Resized, Target),
+                        "resize" + Operand + " to " + std::to_string(To));
+          }
+      }
+    }
+  for (int64_t A : {int64_t(-7), int64_t(7), int64_t(0), INT64_MAX})
+    for (int64_t B : {int64_t(2), int64_t(-2), int64_t(0), int64_t(-1)}) {
+      const __int128 Q = B == 0 ? 0 : static_cast<__int128>(A) / B;
+      const __int128 R = B == 0 ? A : static_cast<__int128>(A) % B;
+      const std::string Operands =
+          " " + std::to_string(A) + ", " + std::to_string(B);
+      Facts.equal(node(LogicExpr::Div, math(), mathLiteral(A), mathLiteral(B)),
+                  literal(std::to_string(static_cast<int64_t>(Q)), math()),
+                  "div" + Operands);
+      Facts.equal(node(LogicExpr::Rem, math(), mathLiteral(A), mathLiteral(B)),
+                  literal(std::to_string(static_cast<int64_t>(R)), math()),
+                  "rem" + Operands);
+    }
+
+  // Collections: what reads a random chain of operations gives, and when two
+  // sequences are equal. Lean decides each with the prelude's definitions.
+  using CollectionOp = LogicCollectionOp;
+  auto collection = [](CollectionOp Op, LogicSort Sort, auto... Operands) {
+    Expr E = node(LogicExpr::Collection, Sort, std::move(Operands)...);
+    E->CollectionOp = Op;
+    return E;
+  };
+  const LogicSort Seq = LogicSort::collection(LogicSortKind::Seq);
+  const LogicSort Set = LogicSort::collection(LogicSortKind::Set);
+  const LogicSort Multiset = LogicSort::collection(LogicSortKind::Multiset);
+  const LogicSort Map = LogicSort::collection(LogicSortKind::Map);
+  auto small = [&] {
+    return mathLiteral(static_cast<int64_t>(Random() % 8) - 2);
+  };
+  std::function<Expr(unsigned)> sequence = [&](unsigned Depth) -> Expr {
+    switch (Depth == 0 ? Random() % 2 : Random() % 5) {
+    case 0:
+      return collection(CollectionOp::SeqEmpty, Seq);
+    case 1:
+      return collection(CollectionOp::SeqUnit, Seq, small());
+    case 2:
+      return collection(CollectionOp::SeqPush, Seq, sequence(Depth - 1),
+                        small());
+    case 3:
+      return collection(CollectionOp::SeqConcat, Seq, sequence(Depth - 1),
+                        sequence(Depth - 1));
+    default:
+      return collection(CollectionOp::SeqSubrange, Seq, sequence(Depth - 1),
+                        small(), small());
+    }
+  };
+  std::function<Expr(unsigned)> set = [&](unsigned Depth) -> Expr {
+    const CollectionOp Combined[] = {CollectionOp::SetUnion,
+                                     CollectionOp::SetIntersect,
+                                     CollectionOp::SetDifference};
+    switch (Depth == 0 ? 0 : Random() % 4) {
+    case 0:
+      return collection(CollectionOp::SetEmpty, Set);
+    case 1:
+      return collection(CollectionOp::SetInsert, Set, set(Depth - 1), small());
+    case 2:
+      return collection(CollectionOp::SetRemove, Set, set(Depth - 1), small());
+    default:
+      return collection(Combined[Random() % 3], Set, set(Depth - 1),
+                        set(Depth - 1));
+    }
+  };
+  std::function<Expr(unsigned)> multiset = [&](unsigned Depth) -> Expr {
+    if (Depth == 0)
+      return collection(CollectionOp::MultisetEmpty, Multiset);
+    return collection(Random() % 3 == 0 ? CollectionOp::MultisetRemove
+                                        : CollectionOp::MultisetInsert,
+                      Multiset, multiset(Depth - 1), small());
+  };
+  std::function<Expr(unsigned)> map = [&](unsigned Depth) -> Expr {
+    if (Depth == 0)
+      return collection(CollectionOp::MapEmpty, Map);
+    if (Random() % 3 == 0)
+      return collection(CollectionOp::MapRemove, Map, map(Depth - 1), small());
+    return collection(CollectionOp::MapInsert, Map, map(Depth - 1), small(),
+                      small());
+  };
+  for (unsigned I = 0; I != 60; ++I) {
+    const std::string Name = "collection " + std::to_string(I);
+    switch (I % 6) {
+    case 0:
+      evaluated(collection(CollectionOp::SeqLength, math(), sequence(3)), Name);
+      break;
+    case 1:
+      evaluated(
+          collection(CollectionOp::SeqIndex, math(), sequence(3), small()),
+          Name);
+      break;
+    case 2:
+      evaluated(collection(CollectionOp::SeqContains, LogicSort::boolSort(),
+                           sequence(3), small()),
+                Name);
+      break;
+    case 3:
+      evaluated(collection(CollectionOp::SetContains, LogicSort::boolSort(),
+                           set(4), small()),
+                Name);
+      break;
+    case 4:
+      evaluated(
+          collection(CollectionOp::MultisetCount, math(), multiset(5), small()),
+          Name);
+      break;
+    default:
+      evaluated(collection(I % 12 == 5 ? CollectionOp::MapGet
+                                       : CollectionOp::MapContains,
+                           I % 12 == 5 ? math() : LogicSort::boolSort(), map(4),
+                           small()),
+                Name);
+      break;
+    }
+  }
+  for (unsigned I = 0; I != 20; ++I)
+    evaluated(boolean(LogicExpr::Eq, sequence(2), sequence(2)),
+              "sequence equality " + std::to_string(I));
+  // Each operation at operands where it matters: reads in and out of range,
+  // every clamp of a subrange, an element inserted and removed, each
+  // combination of membership, a count removed that is there and one that
+  // is not, and a key written over and removed.
+  auto number = [](int64_t Value) { return mathLiteral(Value); };
+  auto list = [&](std::initializer_list<int64_t> Elements) {
+    Expr S = collection(CollectionOp::SeqEmpty, Seq);
+    for (int64_t Element : Elements)
+      S = collection(CollectionOp::SeqPush, Seq, std::move(S), number(Element));
+    return S;
+  };
+  auto read = [&](CollectionOp Op, LogicSort Sort, Expr Of, int64_t At,
+                  const std::string &Name) {
+    evaluated(collection(Op, Sort, std::move(Of), number(At)), Name);
+  };
+  for (int64_t I = -1; I <= 3; ++I)
+    read(CollectionOp::SeqIndex, math(), list({1, 2, 3}), I,
+         "index " + std::to_string(I));
+  for (int64_t X = 0; X <= 3; ++X)
+    read(CollectionOp::SeqContains, LogicSort::boolSort(), list({1, 2, 3}), X,
+         "sequence contains " + std::to_string(X));
+  evaluated(collection(CollectionOp::SeqLength, math(),
+                       collection(CollectionOp::SeqUnit, Seq, number(5))),
+            "unit length");
+  for (int64_t I = 0; I <= 2; ++I)
+    read(CollectionOp::SeqIndex, math(),
+         collection(CollectionOp::SeqConcat, Seq, list({1}), list({2})), I,
+         "concat index " + std::to_string(I));
+  for (int64_t Lo = -1; Lo <= 4; ++Lo)
+    for (int64_t Hi = -1; Hi <= 4; ++Hi) {
+      auto subrange = [&] {
+        return collection(CollectionOp::SeqSubrange, Seq, list({1, 2, 3}),
+                          number(Lo), number(Hi));
+      };
+      const std::string Name =
+          "subrange " + std::to_string(Lo) + " " + std::to_string(Hi);
+      evaluated(collection(CollectionOp::SeqLength, math(), subrange()),
+                Name + " length");
+      for (int64_t I = 0; I <= 2; ++I)
+        read(CollectionOp::SeqIndex, math(), subrange(), I,
+             Name + " index " + std::to_string(I));
+    }
+  auto members = [&](std::initializer_list<int64_t> Elements) {
+    Expr S = collection(CollectionOp::SetEmpty, Set);
+    for (int64_t Element : Elements)
+      S = collection(CollectionOp::SetInsert, Set, std::move(S),
+                     number(Element));
+    return S;
+  };
+  for (int64_t X = 1; X <= 2; ++X) {
+    read(CollectionOp::SetContains, LogicSort::boolSort(), members({1}), X,
+         "set insert " + std::to_string(X));
+    read(CollectionOp::SetContains, LogicSort::boolSort(),
+         collection(CollectionOp::SetRemove, Set, members({1, 2}), number(1)),
+         X, "set remove " + std::to_string(X));
+  }
+  for (CollectionOp Op : {CollectionOp::SetUnion, CollectionOp::SetIntersect,
+                          CollectionOp::SetDifference})
+    for (int64_t X = 1; X <= 4; ++X)
+      read(CollectionOp::SetContains, LogicSort::boolSort(),
+           collection(Op, Set, members({1, 2}), members({2, 3})), X,
+           std::string(logicCollectionOpName(Op)) + " " + std::to_string(X));
+  auto counts = [&](std::initializer_list<int64_t> Elements) {
+    Expr M = collection(CollectionOp::MultisetEmpty, Multiset);
+    for (int64_t Element : Elements)
+      M = collection(CollectionOp::MultisetInsert, Multiset, std::move(M),
+                     number(Element));
+    return M;
+  };
+  for (int64_t X = 3; X <= 4; ++X) {
+    read(CollectionOp::MultisetCount, math(), counts({3, 3}), X,
+         "count " + std::to_string(X));
+    for (std::initializer_list<int64_t> Before :
+         {std::initializer_list<int64_t>{}, std::initializer_list<int64_t>{3},
+          std::initializer_list<int64_t>{3, 3}})
+      read(CollectionOp::MultisetCount, math(),
+           collection(CollectionOp::MultisetRemove, Multiset, counts(Before),
+                      number(3)),
+           X,
+           "count after remove of " + std::to_string(Before.size()) + " at " +
+               std::to_string(X));
+  }
+  auto entries = [&] {
+    return collection(CollectionOp::MapInsert, Map,
+                      collection(CollectionOp::MapInsert, Map,
+                                 collection(CollectionOp::MapEmpty, Map),
+                                 number(1), number(10)),
+                      number(2), number(20));
+  };
+  for (int64_t K = 1; K <= 3; ++K) {
+    const std::string At = " " + std::to_string(K);
+    read(CollectionOp::MapContains, LogicSort::boolSort(), entries(), K,
+         "map contains" + At);
+    read(CollectionOp::MapGet, math(), entries(), K, "map get" + At);
+    read(CollectionOp::MapGet, math(),
+         collection(CollectionOp::MapInsert, Map, entries(), number(1),
+                    number(11)),
+         K, "map overwrite" + At);
+    read(CollectionOp::MapContains, LogicSort::boolSort(),
+         collection(CollectionOp::MapRemove, Map, entries(), number(1)), K,
+         "map remove contains" + At);
+    read(CollectionOp::MapGet, math(),
+         collection(CollectionOp::MapRemove, Map, entries(), number(1)), K,
+         "map remove get" + At);
+  }
+
+  ObligationModule &Module = Facts.Module;
+  Module.FunctionName = "certify_lean";
+  Module.FunctionIdentity = "certify_lean";
+  // Each fact is its own theorem; the whole module's is not needed.
+  Module.CorrectnessGoal = boolLiteral(true);
+  Module.CounterexampleQuery = boolLiteral(false);
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  std::set<std::string> Functions, Theorems;
+  VerifyResult Exported = exportLeanScratchPad(
+      Module, OS, /*EmitPreamble=*/true, Functions, Theorems, 0, nullptr);
+  ASSERT_EQ(Exported.Status, VerifyStatus::Exported) << Exported.Message;
+  // Every theorem is closed: evaluation decides it.
+  std::string Source;
+  std::vector<llvm::StringRef> Lines;
+  std::vector<std::pair<unsigned, size_t>> TheoremLines;
+  unsigned Line = 0;
+  for (llvm::StringRef Rest = Text; !Rest.empty();) {
+    auto [Current, Next] = Rest.split('\n');
+    ++Line;
+    size_t At = Current.find("_obligation_");
+    if (Current.starts_with("theorem ") && At != llvm::StringRef::npos)
+      TheoremLines.emplace_back(Line, std::stoul(Current.substr(At + 12)
+                                                     .take_while([](char C) {
+                                                       return C >= '0' &&
+                                                              C <= '9';
+                                                     })
+                                                     .str()) -
+                                          1);
+    Lines.push_back(Current);
+    Source += Current == "  sorry" ? "  decide" : Current.str();
+    Source += "\n";
+    Rest = Next;
+  }
+  ASSERT_EQ(TheoremLines.size(), Facts.What.size());
+
+  llvm::SmallString<128> File, Output;
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("certify", "lean", File));
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("certify", "out", Output));
+  {
+    std::error_code Error;
+    llvm::raw_fd_ostream Out(File, Error);
+    ASSERT_FALSE(Error);
+    Out << Source;
+  }
+  const std::optional<llvm::StringRef> Redirects[] = {
+      std::nullopt, llvm::StringRef(Output), llvm::StringRef(Output)};
+  // The pinned Lean: elan's proxy runs its default toolchain unless told.
+  std::vector<llvm::StringRef> Command = {*Lean};
+  const std::string Pin = ("+" + LeanToolchain).str();
+  llvm::ErrorOr<std::string> Elan = llvm::sys::findProgramByName("elan");
+  bool ViaElan = false;
+  if (Elan && !llvm::sys::fs::equivalent(*Lean, *Elan, ViaElan) && ViaElan)
+    Command.push_back(Pin);
+  Command.push_back(File);
+  std::string Message;
+  const int Exit = llvm::sys::ExecuteAndWait(*Lean, Command, std::nullopt,
+                                             Redirects, 600, 0, &Message);
+  auto Printed = llvm::MemoryBuffer::getFile(Output);
+  const std::string Log = Printed ? (*Printed)->getBuffer().str() : "";
+  llvm::sys::fs::remove(File);
+  llvm::sys::fs::remove(Output);
+  EXPECT_EQ(Exit, 0) << Message << "\n" << Log.substr(0, 4000);
+  // Name the fact behind each error.
+  for (llvm::StringRef Rest = Log; !Rest.empty();) {
+    auto [Current, Next] = Rest.split('\n');
+    Rest = Next;
+    size_t At = Current.find(": error:");
+    if (At == llvm::StringRef::npos)
+      continue;
+    llvm::StringRef Position = Current.take_front(At).rsplit(':').first;
+    unsigned ErrorLine = 0;
+    if (Position.rsplit(':').second.getAsInteger(10, ErrorLine))
+      continue;
+    std::string Fact = "the preamble";
+    unsigned Statement = 0;
+    for (const auto &[Start, Index] : TheoremLines)
+      if (Start <= ErrorLine) {
+        Fact = Facts.What[Index];
+        Statement = Start;
+      }
+    std::string Theorem;
+    for (unsigned I = Statement; I && I <= Lines.size(); ++I) {
+      Theorem += Lines[I - 1].str() + "\n";
+      if (Lines[I - 1].ends_with(":= by"))
+        break;
+    }
+    ADD_FAILURE() << "Lean disagrees on " << Fact << ": " << Current.str()
+                  << "\n"
+                  << Theorem;
+  }
 }
 
 } // namespace

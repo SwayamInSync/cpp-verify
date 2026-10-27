@@ -381,7 +381,8 @@ void verify::dumpVFunction(const VFunction &Fn, llvm::raw_ostream &OS) {
   if (Fn.IntMode == VIntMode::Math)
     ind(OS, 1) << "int math\n";
   for (const auto &P : Fn.Params)
-    ind(OS, 1) << "param " << P.first << "\n";
+    ind(OS, 1) << "param " << P.first
+               << (Fn.OutParameters.count(P.first) ? " out" : "") << "\n";
   ind(OS, 1) << "pre\n";
   for (const auto &Pre : Fn.Preconditions)
     dumpVExpr(Pre.get(), OS, 2);

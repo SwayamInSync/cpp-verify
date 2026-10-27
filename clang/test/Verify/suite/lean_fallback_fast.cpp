@@ -2,7 +2,7 @@
 // RUN: not %cpp-verify --solver-rlimit=1 --lean-fallback=%t.project %s -- 2>&1 \
 // RUN:   | FileCheck %s
 // RUN: test -f %t.project/CppVerify/Check.lean
-// RUN: grep -c '^import CppVerify.Proofs.Goal_' \
+// RUN: grep -c '^import CppVerify.Proofs.cppverify_' \
 // RUN:   %t.project/CppVerify/Check.lean | FileCheck %s --check-prefix=GOALS
 
 cppverify::spec int double_value(int value) {

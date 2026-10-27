@@ -26,7 +26,7 @@ concurrency:
 
 env:
   CVC5_VERSION: "1.1.2"
-  LEAN_TOOLCHAIN: "leanprover/lean4:v4.32.2"
+  LEAN_TOOLCHAIN: "leanprover/lean4:v4.35.0"
 
 jobs:
   linux:

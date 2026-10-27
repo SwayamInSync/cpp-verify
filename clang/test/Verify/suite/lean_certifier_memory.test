@@ -1,0 +1,20 @@
+# REQUIRES: lean, system-linux
+#
+# The checker imports the toolchain's modules once and replays the project's
+# into one kernel environment, so its memory does not grow with the goals or
+# with the imports of their proofs. A proof that imports Lean through a module
+# the kernel rejects made it import Lean's environment again for every goal
+# and every module it replayed, never freeing one: 13 GB here, now under 4.
+#
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: %cpp-verify --backend=lean --lean-project=%t/p %S/Inputs/lean_certifier.cpp -- > /dev/null
+# RUN: cp %S/Inputs/lean_certifier_proofs/cppverify_fine_* %t/p/CppVerify/Proofs/cppverify_fine_52006a/
+# RUN: cp %S/Inputs/lean_certifier_proofs/cppverify_one_* %t/p/CppVerify/Proofs/cppverify_one_99bcee/
+# RUN: cp %S/Inputs/lean_certifier_proofs/imported/Lemmas.lean %t/p/CppVerify/
+# RUN: cp %S/Inputs/lean_certifier_proofs/imported/cppverify_one_* %t/p/CppVerify/Proofs/cppverify_one_99bcee/
+# RUN: cd %t/p && lake build CppVerify.Lemmas
+# RUN: not %python %S/Inputs/peak_memory.py 6144 %cpp-verify --backend=lean --lean-project=%t/p --lean-certify %S/Inputs/lean_certifier.cpp -- 2>&1 | FileCheck %s
+
+# CHECK: Certified: fine [backend=Lean]
+# CHECK-NEXT: Unresolved: lean obligation: one (Lean certification failed: the proof of fn_5f5a336f6e6576::postcondition@8:37: the kernel rejects CppVerify.Lemmas: while replaying declaration 'cheat'
+# CHECK-NEXT: peak memory below 6144 MB

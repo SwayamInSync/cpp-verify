@@ -13,7 +13,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "TreeTransform.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ASTLambda.h"
 #include "clang/AST/DeclCXX.h"
@@ -26,36 +25,6 @@
 using namespace clang;
 
 namespace {
-
-class TypeInvariantFieldRewriter : public TreeTransform<TypeInvariantFieldRewriter> {
-  typedef TreeTransform<TypeInvariantFieldRewriter> Base;
-  CXXRecordDecl *Record;
-
-public:
-  TypeInvariantFieldRewriter(Sema &S, CXXRecordDecl *RD)
-      : Base(S), Record(RD) {}
-
-  ExprResult TransformDeclRefExpr(DeclRefExpr *E) {
-    if (FieldDecl *FD = dyn_cast<FieldDecl>(E->getDecl())) {
-      if (FD->getParent() == Record) {
-        SourceLocation Loc = E->getBeginLoc();
-        QualType ThisTy =
-            getSema().Context.getTypeDeclType(cast<TypeDecl>(Record));
-        ExprResult This =
-            getSema().BuildCXXThisExpr(Loc, ThisTy, /*IsImplicit=*/true);
-        if (This.isInvalid())
-          return ExprError();
-        DeclarationNameInfo NameInfo(FD->getDeclName(), Loc);
-        return getSema().BuildMemberExpr(
-            This.get(), /*IsArrow=*/false, Loc, NestedNameSpecifierLoc(),
-            SourceLocation(), FD, DeclAccessPair::make(FD, FD->getAccess()),
-            /*HadMultipleCandidates=*/false, NameInfo, FD->getType(),
-            VK_LValue, OK_Ordinary, /*TemplateArgs=*/nullptr);
-      }
-    }
-    return Base::TransformDeclRefExpr(E);
-  }
-};
 
 const FunctionContractInfo *contractOf(const ASTContext &Ctx,
                                        const FunctionDecl *FD) {
@@ -309,12 +278,47 @@ ExprResult Sema::ActOnContractRange(Expr *Base, Expr *Lower,
                        OK_Ordinary, ColonLoc, RBLoc);
 }
 
-ExprResult Sema::ActOnTypeInvariantExpr(ExprResult E, CXXRecordDecl *Record) {
-  if (E.isInvalid() || !Record)
+ExprResult Sema::ActOnContractMeasure(ExprResult E) {
+  if (E.isInvalid() || E.get()->isTypeDependent() ||
+      E.get()->getType()->isIntegerType())
     return E;
-  TypeInvariantFieldRewriter Rewriter(*this, Record);
-  ExprResult Transformed = Rewriter.TransformExpr(E.get());
-  if (Transformed.isInvalid())
-    return Transformed;
-  return ActOnContractCondition(Transformed.get());
+  Diag(E.get()->getExprLoc(), diag::err_contract_decreases_not_int);
+  return ExprError();
+}
+
+DeclContext *Sema::getContractBinderContext() const {
+  DeclContext *DC = CurContext;
+  while (DC->isRecord())
+    DC = DC->getParent();
+  return DC;
+}
+
+ExprResult Sema::BuildContractBinderExpr(Stmt::StmtClass Kind,
+                                         SourceLocation KeywordLoc,
+                                         SourceLocation LParenLoc,
+                                         SourceLocation RParenLoc,
+                                         VarDecl *Binder, Expr *Lo, Expr *Hi,
+                                         Expr *Body) {
+  for (Expr *Bound : {Lo, Hi})
+    if (Bound && !Bound->isTypeDependent() &&
+        !Bound->getType()->isIntegerType()) {
+      Diag(Bound->getExprLoc(), diag::err_contract_quantifier_bound_not_int);
+      return ExprError();
+    }
+  ExprResult Condition = ActOnContractCondition(Body);
+  if (Condition.isInvalid())
+    return ExprError();
+  switch (Kind) {
+  case Stmt::ContractChooseExprClass:
+    return new (Context) ContractChooseExpr(KeywordLoc, LParenLoc, RParenLoc,
+                                            Binder, Lo, Hi, Condition.get(),
+                                            Binder->getType());
+  case Stmt::ForallExprClass:
+    return new (Context) ForallExpr(KeywordLoc, LParenLoc, RParenLoc, Binder,
+                                    Lo, Hi, Condition.get(), Context.BoolTy);
+  default:
+    assert(Kind == Stmt::ExistsExprClass && "not a quantifier or a choice");
+    return new (Context) ExistsExpr(KeywordLoc, LParenLoc, RParenLoc, Binder,
+                                    Lo, Hi, Condition.get(), Context.BoolTy);
+  }
 }
