@@ -65,7 +65,7 @@ void wrong_copy(const int *a, int *out, int n)
     i = i + 1;
   }
 }
-// DECIDED-DAG: verification failed: wrong_copy [{{.*}}::invariant-preserved@
+// DECIDED-DAG: verification failed: wrong_copy [invariant-preserved]
 // BV-DAG: {{verification failed|Unresolved}}: wrong_copy
 
 // The separation must not make the preconditions contradictory.
@@ -113,7 +113,7 @@ int overlapping_caller(int *buffer)
 {
   return inspect(buffer + 2, buffer, 4);
 }
-// CHECK-DAG: verification failed: overlapping_caller [{{.*}}::aliasing@
+// CHECK-DAG: verification failed: overlapping_caller [aliasing]
 
 int empty_caller(int *buffer)
   cppverify::pre(valid(buffer, 8))
