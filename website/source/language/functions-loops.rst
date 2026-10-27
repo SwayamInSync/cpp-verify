@@ -586,13 +586,22 @@ Multiple ``cppverify::invariant`` clauses are conjoined. ``cppverify::old(expr)`
 invariant and always denotes the enclosing function's entry state, not the
 previous iteration. Function locals do not exist at function entry and are
 rejected inside ``cppverify::old(...)``; use an ordinary snapshot local directly instead.
-``return``, ``break``, and ``continue`` may leave a ``while`` or ``for`` loop
-from any iteration. A ``return`` checks the postcondition in its own state and
-a ``break`` continues after the loop in its own state. A ``continue`` ends the
-iteration: the invariant must hold again and the ``cppverify::decreases`` measure must
-drop, after a ``for`` increment has run. ``break`` and ``continue`` in a
-``do`` loop are not supported yet, and ``cppverify::ghost`` code cannot leave an
+``return``, ``break``, and ``continue`` may leave a loop from any iteration.
+A ``return`` checks the postcondition in its own state and a ``break``
+continues after the loop in its own state. A ``continue`` ends the
+iteration: the invariant must hold again and the ``cppverify::decreases``
+measure must drop, after a ``for`` increment has run. In a ``do`` loop's
+first iteration, which runs before the invariant holds, a ``break`` skips the
+rest of the loop, and a ``continue`` goes to the condition, where the
+invariant must first hold. ``cppverify::ghost`` code cannot leave an
 executable loop.
+
+A condition may declare a variable, ``while (int k = next(i))``: it is
+declared, and its value tested, at every test, so a loop's contract cannot
+name it. A ``for`` loop without a condition repeats until a ``break`` or
+``return`` leaves it, and needs a measure like any other. A comma
+expression as a statement, such as the increment ``i++, j += 2``, runs its
+operands in order.
 
 The verifier checks a loop **modularly** (no unrolling), discharging four
 obligations:
@@ -838,3 +847,96 @@ checked as well.
 The end-to-end acceptance programs include recursive and iterative factorial
 and Fibonacci implementations, each proved against a mathematical recursive
 specification at the exact signed-``int`` boundary.
+
+Switch statements
+-----------------
+
+A ``switch`` runs from the label its value matches, or from ``default`` when
+no case matches, to the end of its body or to a ``break``; a label's
+statements without a ``break`` fall through to the next label's, with or
+without ``[[fallthrough]]``. The value is computed once, after the init
+statement and the condition variable when there are any, and each case value
+has the promoted type of the condition, as in C++. A case holds any
+statements, loops and nested switches included: a ``break`` in a nested loop
+leaves that loop, and a ``continue`` in a switch continues the loop around
+it. A GNU case range, ``case 1 ... 9:``, matches each value from its first to
+its last.
+
+.. code-block:: cpp
+
+   int bonus(int level)
+     cv::post(level == 0 ? cv::result == 3 : true)
+     cv::post(level == 1 ? cv::result == 1 : true)
+     cv::post(level < 0 || level > 1 ? cv::result == 0 : true)
+   {
+     int points = 0;
+     switch (level) {
+     case 0:
+       points = points + 2;
+       [[fallthrough]];
+     case 1:
+       points = points + 1;
+       break;
+     default:
+       break;
+     }
+     return points;
+   }
+
+.. code-block:: text
+
+   Verified: bonus [backend=z3]
+
+Each label's statements keep their checks, on the path that reaches them,
+and a value is initialized after a switch only where every way out of it
+initializes it: the end of the last label's statements, each ``break``, and,
+without a ``default`` label, a value no case matches. An enumeration without
+a fixed underlying type holds every value of its range ([dcl.enum]/8), so a
+switch over its enumerators may match none:
+
+.. cppverify-example: fails channel
+
+.. code-block:: cpp
+
+   enum Color { Red, Green, Blue };
+
+   int channel(Color c)
+     cv::post(cv::result >= 0)
+   {
+     switch (c) {
+     case Red:
+       return 0;
+     case Green:
+       return 1;
+     case Blue:
+       return 2;
+     }
+     return -1;
+   }
+
+.. code-block:: text
+
+   channel.cpp:4:12: error: verification failed: channel [...::postcondition@4:12] (counterexample: result [ssa=__result_1] [type=i32] = -1, c [ssa=c_0] [type=u32] = 3; ...) [backend=z3] [reason=counterexample]
+
+``Color`` holds 0 to 3, the values of the smallest bit-field that fits its
+enumerators, and ``channel(Color(3))`` is defined C++ that returns -1.
+
+A switch is lowered to the statements the verifier already has: the value
+in a variable, a flag set when a label matches and kept through the labels
+after it, and a flag for ``break`` that the statements after a ``break``
+test, as BMC lowers a loop's exits. Specs, lifted ``constexpr`` helpers,
+proof functions, and ghost code may switch too. What stays unsupported is
+reported where it is, and costs its function alone:
+
+- a label inside another statement of its switch, as in Duff's device
+  (``a case label inside another statement of its switch is unsupported``);
+- a local whose address is used, declared directly in a switch's body, which
+  a later label enters without declaring it: declare it in a block after its
+  label, ``case 1: { int t; f(&t); break; }``;
+- ``[[assume(e)]]``, whose ``e`` false is undefined. Other statement
+  attributes (``[[likely]]``, ``[[fallthrough]]``) change nothing.
+
+Before 0.2, a ``switch`` stopped verification of its function with
+``unsupported statement: SwitchStmt``, and ``break`` and ``continue`` in a
+``do`` loop, a condition declaration, a ``for`` loop without a condition, and
+a comma statement did the same.
