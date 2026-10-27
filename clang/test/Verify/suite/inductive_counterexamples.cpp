@@ -196,41 +196,43 @@ int count_up_proved(int n)
   return c;
 }
 
-// CHECK:      inductive_counterexamples.cpp:16:23: error: verification failed: count_up [{{.*}}::postcondition@16:23] {{.*}}trace: loop.entry@19:3 -> loop.exit@19:3
-// CHECK-NEXT: note: the counterexample's state at the loop at 19:3 is any state its invariants allow, not necessarily one an execution reaches
+// CHECK:      inductive_counterexamples.cpp:16:23: error: verification failed: count_up [postcondition]
+// CHECK: inductive_counterexamples.cpp:19:3: note: enters the loop
+// CHECK: inductive_counterexamples.cpp:19:3: note: leaves the loop
+// CHECK: note: the counterexample's state at the loop at 19:3 is any state its invariants allow, not necessarily one an execution reaches
 // CHECK-NEXT: note: no execution fails this check: every loop ends within 5 iterations, and unrolling proves it there; the loops' invariants are too weak for an unbounded proof
-// CHECK-NEXT: inductive_counterexamples.cpp:29:23: error: verification failed: sum_wrong [{{.*}}::postcondition@29:23]
-// CHECK-NEXT: note: the counterexample's state at the loop at 32:3 is any state its invariants allow, not necessarily one an execution reaches
-// CHECK-NEXT: note: an execution fails this check within 1 iteration of each loop (counterexample: {{.*}}n [ssa=n_0] [type=i32] = 1{{.*}})
-// CHECK-NEXT: inductive_counterexamples.cpp:43:23: error: verification failed: far_wrong [{{.*}}::postcondition@43:23]
-// CHECK-NEXT: note: the counterexample's state at the loop at 46:3 is any state its invariants allow, not necessarily one an execution reaches
+// CHECK-NEXT: inductive_counterexamples.cpp:29:23: error: verification failed: sum_wrong [postcondition]
+// CHECK: note: the counterexample's state at the loop at 32:3 is any state its invariants allow, not necessarily one an execution reaches
+// CHECK-NEXT: note: an execution fails this check within 1 iteration of each loop (counterexample: {{.*}}n = 1{{.*}})
+// CHECK-NEXT: inductive_counterexamples.cpp:43:23: error: verification failed: far_wrong [postcondition]
+// CHECK: note: the counterexample's state at the loop at 46:3 is any state its invariants allow, not necessarily one an execution reaches
 // CHECK-NEXT: note: no execution fails this check within 10 iterations of each loop
-// CHECK-NEXT: inductive_counterexamples.cpp:57:23: error: verification failed: no_loop [{{.*}}::postcondition@57:23]
-// CHECK-NEXT: inductive_counterexamples.cpp:64:23: error: verification failed: unmeasured [{{.*}}::postcondition@64:23]
-// CHECK-NEXT: note: the loop at 67:3 has no cppverify::decreases: a proof would be Unresolved (decreases.missing) until it has one
+// CHECK-NEXT: inductive_counterexamples.cpp:57:23: error: verification failed: no_loop [postcondition]
+// CHECK: inductive_counterexamples.cpp:64:23: error: verification failed: unmeasured [postcondition]
+// CHECK: note: the loop at 67:3 has no cppverify::decreases: a proof would be Unresolved (decreases.missing) until it has one
 // CHECK-NEXT: note: the counterexample's state at the loop at 67:3 is any state its invariants allow, not necessarily one an execution reaches
-// CHECK-NEXT: note: an execution fails this check with no iteration of any loop (counterexample: {{.*}}n [ssa=n_0] [type=i32] = 0{{.*}})
-// CHECK-NEXT: inductive_counterexamples.cpp:87:7: error: verification failed: divides [{{.*}}::division-by-zero@87:7]
-// CHECK-NEXT: note: the counterexample's state at the loop at 83:3 is any state its invariants allow, not necessarily one an execution reaches
-// CHECK-NEXT: note: an execution fails this check within 4 iterations of each loop (counterexample: {{.*}}c [ssa=c_4] [type=i32] = 3{{.*}})
-// CHECK-NEXT: inductive_counterexamples.cpp:100:21: error: verification failed: grows [{{.*}}::invariant-preserved@100:21]
-// CHECK-NEXT: note: the counterexample's state at the loop at 99:3 is any state its invariants allow, not necessarily one an execution reaches
-// CHECK-NEXT: inductive_counterexamples.cpp:119:5: error: verification failed: two_checks [{{.*}}::assertion@119:5]
-// CHECK-NEXT: note: the counterexample's state at the loop at 115:3 is any state its invariants allow, not necessarily one an execution reaches
-// CHECK-NEXT: note: an execution fails this check within 5 iterations of each loop (counterexample: {{.*}}n [ssa=n_0] [type=i32] = 5{{.*}})
-// CHECK-NEXT: inductive_counterexamples.cpp:140:7: error: verification failed: two_kinds [{{.*}}::overflow@140:7]
-// CHECK-NEXT: note: the counterexample's state at the loop at 136:3 is any state its invariants allow, not necessarily one an execution reaches
+// CHECK-NEXT: note: an execution fails this check with no iteration of any loop (counterexample: {{.*}}n = 0{{.*}})
+// CHECK-NEXT: inductive_counterexamples.cpp:87:7: error: verification failed: divides [division-by-zero]
+// CHECK: note: the counterexample's state at the loop at 83:3 is any state its invariants allow, not necessarily one an execution reaches
+// CHECK-NEXT: note: an execution fails this check within 4 iterations of each loop (counterexample: {{.*}}c = 0 -> 1 -> 2 -> 3{{.*}})
+// CHECK-NEXT: inductive_counterexamples.cpp:100:21: error: verification failed: grows [invariant-preserved]
+// CHECK: note: the counterexample's state at the loop at 99:3 is any state its invariants allow, not necessarily one an execution reaches
+// CHECK-NEXT: inductive_counterexamples.cpp:119:5: error: verification failed: two_checks [assertion]
+// CHECK: note: the counterexample's state at the loop at 115:3 is any state its invariants allow, not necessarily one an execution reaches
+// CHECK-NEXT: note: an execution fails this check within 5 iterations of each loop (counterexample: {{.*}}n = 5{{.*}})
+// CHECK-NEXT: inductive_counterexamples.cpp:140:7: error: verification failed: two_kinds [overflow]
+// CHECK: note: the counterexample's state at the loop at 136:3 is any state its invariants allow, not necessarily one an execution reaches
 // CHECK-NEXT: note: no execution fails this check without failing an earlier one first (the division-by-zero check at 140:7 fails): those that pass the checks before it end every loop within 2 iterations, and unrolling proves it there
-// CHECK-NEXT: inductive_counterexamples.cpp:160:7: error: verification failed: past_failure [{{.*}}::division-by-zero@160:7]
-// CHECK-NEXT: note: the counterexample's state at the loop at 156:3 is any state its invariants allow, not necessarily one an execution reaches
-// CHECK-NEXT: note: an execution fails this check within 4 iterations of each loop (counterexample: {{.*}}k [ssa=k_0] [type=i32] = 3, m [ssa=m_0] [type=i32] = 100{{.*}})
-// CHECK-NEXT: inductive_counterexamples.cpp:170:23: error: verification failed: skipped [{{.*}}::postcondition@170:23]
-// CHECK-NEXT: Verified: count_up_proved [backend=z3]
+// CHECK-NEXT: inductive_counterexamples.cpp:160:7: error: verification failed: past_failure [division-by-zero]
+// CHECK: note: the counterexample's state at the loop at 156:3 is any state its invariants allow, not necessarily one an execution reaches
+// CHECK-NEXT: note: an execution fails this check within 4 iterations of each loop (counterexample: {{.*}}k = 3, m = 100{{.*}})
+// CHECK-NEXT: inductive_counterexamples.cpp:170:23: error: verification failed: skipped [postcondition]
+// CHECK: Verified: count_up_proved [backend=z3]
 // CHECK-NEXT: Summary: 1 verified, 11 failed
 
 // Without unrolling, a failure still says where its state comes from.
 // NONE:      error: verification failed: count_up
-// NONE-NEXT: note: the counterexample's state at the loop at 19:3 is any state its invariants allow, not necessarily one an execution reaches
+// NONE: note: the counterexample's state at the loop at 19:3 is any state its invariants allow, not necessarily one an execution reaches
 // NONE-NEXT: error: verification failed: sum_wrong
 
 // JSON: "function":"count_up",{{.*}}"notes":["the counterexample's state at the loop at 19:3 is any state its invariants allow, not necessarily one an execution reaches","no execution fails this check: every loop ends within 5 iterations{{.*}}"]
