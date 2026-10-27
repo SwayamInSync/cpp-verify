@@ -2312,7 +2312,10 @@ and a fallback run that keeps no goal module.
 ## Counterexample Extraction
 
 When Z3 returns SAT, CppVerify evaluates source-attributed SSA variables without
-model completion. Diagnostic metadata supplies the original display name,
+model completion. A local declared where its name is already taken in the
+function (by a parameter, or by a local of an enclosing or earlier scope) is
+`x#2`, `x#3`, ... in VCR (`ASTConverter::LocalNames`), so SSA keeps the
+variables apart, and its display name stays `x`. Diagnostic metadata supplies the original display name,
 exact logic sort, internal SSA identity, and declaration range. Signed and
 unsigned bit-vectors are rendered as source-level decimal values, and
 collections as their elements, members, counts, or entries in order, a run of
