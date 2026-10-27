@@ -500,9 +500,11 @@ report something unrelated. The query now ends ``Unresolved`` with reason
 proof obligations, which repeat every assumption before each check, came to
 hundreds of millions of nodes, or ``cppverify::reveal_with_fuel(fibo, 24)``,
 took tens of gigabytes until the system stopped the run. ``--max-query-nodes``
-now has a default, 32 million expression nodes, and bounds what is built for
-one function before it is built; a function over it is ``Unresolved`` with
-reason ``query.size-limit``, which names what was too large. The new
+now has a default, 4 million expression nodes, and bounds what is built for
+one function as it is built, a node shared by several terms once; a function
+over it is ``Unresolved`` with reason ``query.size-limit``, which names what
+was too large. cvc5's scripts and archive records, which state shared terms
+in full, are checked against it too. The new
 ``--memory-limit`` (default 8192 MB) bounds Z3's queries together and each
 cvc5 process; a query that reaches it is ``Unresolved`` with reason
 ``solver.memory-limit`` (:doc:`language/tooling`).
