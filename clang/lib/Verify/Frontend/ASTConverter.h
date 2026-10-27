@@ -321,6 +321,15 @@ private:
   std::vector<std::unique_ptr<VStmt>> convertStmtBody(const Stmt *S);
   std::vector<std::unique_ptr<VStmt>> convertScopedSubstatement(const Stmt *S);
   std::vector<std::unique_ptr<VStmt>> convertSwitch(const SwitchStmt *SS);
+  /// if (Cond) Then else Else, with what each path initializes.
+  void appendBranches(std::unique_ptr<VExpr> Cond, const Stmt *Then,
+                      const Stmt *Else, SourceLocation Loc,
+                      std::vector<std::unique_ptr<VStmt>> &Out);
+  /// A discarded-value expression statement without side effects.
+  void appendDiscarded(const Expr *E, std::vector<std::unique_ptr<VStmt>> &Out);
+  /// [[assume(e)]] and __builtin_assume(e): e is proved, then assumed.
+  void appendAssumption(const Expr *Assumption, SourceLocation Loc,
+                        std::vector<std::unique_ptr<VStmt>> &Out);
   /// The declaration of a loop's condition variable, made at every test.
   void declareConditionVariable(const DeclStmt *Decl,
                                 std::vector<std::unique_ptr<VStmt>> &Out);

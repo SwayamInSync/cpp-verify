@@ -13,6 +13,32 @@ member syntax:
      cv::post(cv::result >= 0)
    { return r.w * r.h; }
 
+A record may be returned from an initializer list, ``return Pt{a, b};`` or
+``return {a, b};``, whose fields are given in order and the rest zero, and a
+structured binding copies a record and names its fields:
+
+.. code-block:: cpp
+
+   struct Pt { int x; int y; };
+
+   Pt make(int a, int b)
+     cv::post(cv::result.x == a && cv::result.y == b)
+   {
+     return Pt{a, b};
+   }
+
+   int sum(Pt p)
+     cv::pre(-1000 <= p.x && p.x <= 1000 && -1000 <= p.y && p.y <= 1000)
+     cv::post(cv::result == p.x + p.y)
+   {
+     auto [a, b] = p;
+     return a + b;
+   }
+
+A counterexample shows a binding by its name. Structured bindings of an
+array, of a tuple-like type, or by reference (``auto &[a, b] = p;``) are not
+supported yet.
+
 Records through pointers
 ------------------------
 

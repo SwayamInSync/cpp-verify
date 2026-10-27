@@ -653,9 +653,9 @@ int lent(int x)
 // CHECK-DAG: Verified: lent [backend=z3]
 
 // Unsupported, each alone: a label inside another statement of its switch
-// (as in Duff's device), [[assume]], and a local whose address is used
-// declared directly in a switch, which a later label enters without
-// declaring.
+// (as in Duff's device), and a local whose address is used declared
+// directly in a switch, which a later label enters without declaring.
+// [[assume(e)]] is proved where it stands (assertions.cpp).
 int duff(int n)
   cv::post(true)
 {
@@ -680,7 +680,7 @@ int assumed(int x)
   [[assume(x > 0)]];
   return x;
 }
-// CHECK-DAG: switch_statements.cpp:[[@LINE-3]]:3: error: assumed: {{\[\[}}assume]] is unsupported
+// CHECK-DAG: error: verification failed: assumed [{{.*}}::assertion@[[@LINE-3]]:{{.*}}[reason=counterexample]
 
 int lent_directly(int x)
   cv::post(true)

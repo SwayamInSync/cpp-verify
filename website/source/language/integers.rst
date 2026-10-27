@@ -44,6 +44,18 @@ Each machine integer's **bit width** comes from the target's data model
 Narrow integers and extensions such as ``__int128`` retain their target widths;
 the usual integral promotions are applied before arithmetic.
 
+A character literal is an integer of its type: ``'0'`` is 48 as a ``char``,
+``'\xff'`` is -1 as a signed ``char``, and ``L'A'`` is a ``wchar_t``.
+
+.. code-block:: cpp
+
+   int digit_value(char c)
+     cv::pre('0' <= c && c <= '9')
+     cv::post(0 <= cv::result && cv::result <= 9)
+   {
+     return c - '0';
+   }
+
 **Signedness** is tracked too, and it matters: signed overflow is undefined
 behavior in C++, while unsigned overflow is *defined* modular wraparound. The
 verifier treats them differently. Heap payloads are width-neutral mathematical

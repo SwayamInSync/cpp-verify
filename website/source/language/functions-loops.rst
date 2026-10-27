@@ -30,6 +30,12 @@ and in ``[ssa=...]`` the verifier's name for it, ``i#2`` for the second ``i``.
 Before 0.2 such a declaration was an error, ``local variable shadowing is
 unsupported``.
 
+A default argument is evaluated at the call, with the checks of its
+operations there. A ``consteval`` call, like any constant Clang evaluates, is
+its value. ``__builtin_expect(e, c)`` is ``e``. ``static_assert``, type
+aliases, using-declarations, and local classes and enumerations declare
+names and do nothing at run time.
+
 A caller's proof uses its callees' contracts, so a verdict is only as good as
 those contracts. A caller whose proof relies on a callee contract that the
 callee's own verification did not establish is ``Unresolved`` with reason
@@ -448,7 +454,33 @@ A function template is verified in each of its specializations, as Kani and
 CBMC verify the code a program instantiates: its contract is instantiated
 with its body, so the contract and every check of the body are about the
 template's arguments, and each specialization gets a verdict of its own,
-named with its arguments.
+named with its arguments. A template value parameter is its argument, and
+``if constexpr`` keeps the branch its constant condition selects:
+
+.. code-block:: cpp
+
+   template <int N> int scaled(int x)
+     cv::pre(-1000 <= x && x <= 1000)
+     cv::post(cv::result == N * x)
+   {
+     if constexpr (N == 0)
+       return 0;
+     else
+       return N * x;
+   }
+
+   int scaled_sum(int x)
+     cv::pre(-1000 <= x && x <= 1000)
+     cv::post(cv::result == 3 * x)
+   {
+     return scaled<0>(x) + scaled<3>(x);
+   }
+
+.. code-block:: text
+
+   Verified: scaled<0> [backend=z3]
+   Verified: scaled<3> [backend=z3]
+   Verified: scaled_sum [backend=z3]
 
 .. cppverify-example: fails twice<short>
 
@@ -855,6 +887,56 @@ checked as well.
 The end-to-end acceptance programs include recursive and iterative factorial
 and Fibonacci implementations, each proved against a mathematical recursive
 specification at the exact signed-``int`` boundary.
+
+Assertions and calls that do not return
+---------------------------------------
+
+``assert(c)`` must not fail: reaching a failed assert, or any call that does
+not return (``abort``, ``exit``, ``std::terminate``, ``__builtin_unreachable``,
+``__builtin_trap``, a ``[[noreturn]]`` function), is a failure of kind
+``unreachable``, as Frama-C proves an ``assert`` and Kani a panic unreachable.
+The path ends there, so after ``assert(c)`` the condition holds. With
+``NDEBUG``, ``assert(c)`` is nothing, as compiled, and proves nothing.
+
+.. cppverify-example: fails aborts
+
+.. code-block:: cpp
+
+   #include <cassert>
+   #include <cstdlib>
+
+   int scaled(int x)
+     cv::pre(0 < x && x < 1000)
+     cv::post(cv::result == 2 * x)
+   {
+     assert(x > 0 && "x must be positive");
+     return x + x;
+   }
+
+   int aborts(int x)
+     cv::post(cv::result >= 0)
+   {
+     if (x < 0)
+       abort();
+     return x;
+   }
+
+.. code-block:: text
+
+   Verified: scaled [backend=z3]
+   aborts.cpp:16:5: error: verification failed: aborts [...::unreachable@16:5] (counterexample: x [ssa=x_0] [type=i32] = -1; ...) [backend=z3] [reason=counterexample]
+
+An uncontracted ``constexpr`` helper's ``assert(c)`` is a requirement of each
+call that reaches it, checked at the call as the helper's undefined
+operations are. ``[[assume(e)]]`` and ``__builtin_assume(e)`` make ``e``
+false undefined, so ``e`` is proved where it stands, then holds. A
+statement that only computes a value, ``x + 1;``, is computed, with its
+checks, and the operands of a discarded ``&&``, ``||``, or ``?:`` run on
+their paths, which is how ``assert`` expands on every platform.
+
+Before 0.2, ``assert`` stopped verification of its function (``unsupported
+statement: ParenExpr``), and so did a call to ``abort`` (``call to function
+without a verification contract``).
 
 Switch statements
 -----------------

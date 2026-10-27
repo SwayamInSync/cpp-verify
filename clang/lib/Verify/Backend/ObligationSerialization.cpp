@@ -327,6 +327,8 @@ uint8_t obligationTag(ObligationKind Kind) {
     return 20;
   case ObligationKind::MissingReturn:
     return 21;
+  case ObligationKind::Unreachable:
+    return 23;
   case ObligationKind::Unsupported:
     return 22;
   }
@@ -382,6 +384,8 @@ std::optional<ObligationKind> obligationFromTag(uint8_t Tag, uint32_t Version) {
     return ObligationKind::MissingReturn;
   case 22:
     return ObligationKind::Unsupported;
+  case 23:
+    return ObligationKind::Unreachable;
   default:
     return std::nullopt;
   }

@@ -272,6 +272,7 @@ enum class ObligationKind {
   Frame,
   Deallocation,
   MissingReturn,
+  Unreachable,
   Unsupported
 };
 
