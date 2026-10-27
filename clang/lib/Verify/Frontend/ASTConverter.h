@@ -72,6 +72,8 @@ class ASTConverter {
   bool TrackInitialization = false;
   bool InitializationPathReachable = true;
   std::set<std::string> DeclaredValueNames;
+  /// The names of locals declared where their name was already taken.
+  std::map<const VarDecl *, std::string> LocalNames;
   std::set<std::string> InitializedValues;
   std::set<std::string> ReportedUninitializedValues;
   std::map<const ValueDecl *, std::string> BoundValues;
@@ -392,6 +394,10 @@ private:
       const Expr *E, SourceLocation Loc,
       std::vector<std::pair<const FieldDecl *, std::unique_ptr<VExpr>>>
           &Fields);
+  /// The value of \p Target stepped by \p Offset elements.
+  std::unique_ptr<VExpr> convertPointerStep(const Expr *Target, VBinOp Op,
+                                            std::unique_ptr<VExpr> Offset,
+                                            SourceLocation Loc);
   std::unique_ptr<VExpr>
   convertAssignmentValue(const BinaryOperator *Assignment);
   void appendAssignment(const Expr *LHS, std::unique_ptr<VExpr> Value,

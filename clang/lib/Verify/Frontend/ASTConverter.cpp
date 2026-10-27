@@ -1205,6 +1205,9 @@ std::string ASTConverter::valueName(const ValueDecl *D) const {
   if (const auto *P = dyn_cast_or_null<ParmVarDecl>(D))
     if (auto It = ParameterNames.find(P); It != ParameterNames.end())
       return It->second;
+  if (const auto *VD = dyn_cast_or_null<VarDecl>(D))
+    if (auto It = LocalNames.find(VD); It != LocalNames.end())
+      return It->second;
   return D ? D->getNameAsString() : std::string();
 }
 
@@ -1467,6 +1470,7 @@ bool ASTConverter::ghostAssignmentAllowed(const Expr *E) const {
 
 void ASTConverter::beginInitializationTracking(const FunctionDecl *FD) {
   DeclaredValueNames.clear();
+  LocalNames.clear();
   InitializedValues.clear();
   ReportedUninitializedValues.clear();
   DynamicPointers.clear();
@@ -6932,12 +6936,31 @@ bool ASTConverter::appendRecordCallArgument(
 }
 
 std::unique_ptr<VExpr>
-ASTConverter::convertAssignmentValue(const BinaryOperator *Assignment) {
-  if (Assignment->getOpcode() != BO_Assign &&
-      Assignment->getLHS()->getType()->isPointerType()) {
-    error(CurrentFn->Name + ": pointer compound assignment is unsupported");
+ASTConverter::convertPointerStep(const Expr *Target, VBinOp Op,
+                                 std::unique_ptr<VExpr> Offset,
+                                 SourceLocation Loc) {
+  // p += n is p = p + n, and ++p is p = p + 1, with the checks of the step.
+  if (isDynamicAddress(Target)) {
+    error(CurrentFn->Name +
+          ": arithmetic on dynamic-storage pointers is unsupported");
     return nullptr;
   }
+  auto Current = convertExpr(Target);
+  if (!Current || !Offset)
+    return nullptr;
+  const VType Ty = VType::fromQualType(Target->getType(), IntMode, Ctx);
+  Offset = scalePointerOffset(std::move(Offset), Ty.PointeeSizeBytes, Loc);
+  if (!Offset) {
+    error(CurrentFn->Name +
+          ": pointer arithmetic requires a complete pointee type");
+    return nullptr;
+  }
+  return std::make_unique<VBinOpExpr>(Op, std::move(Current),
+                                      std::move(Offset), Ty, Loc);
+}
+
+std::unique_ptr<VExpr>
+ASTConverter::convertAssignmentValue(const BinaryOperator *Assignment) {
   auto RHS = convertExpr(Assignment->getRHS());
   if (!RHS)
     return nullptr;
@@ -6952,6 +6975,11 @@ ASTConverter::convertAssignmentValue(const BinaryOperator *Assignment) {
   }
   if (Assignment->getOpcode() == BO_Assign)
     return RHS;
+  if (Assignment->getLHS()->getType()->isPointerType())
+    return convertPointerStep(
+        Assignment->getLHS(),
+        Assignment->getOpcode() == BO_AddAssign ? VBinOp::Add : VBinOp::Sub,
+        std::move(RHS), Assignment->getExprLoc());
 
   VBinOp Op;
   switch (Assignment->getOpcode()) {
@@ -8834,8 +8862,22 @@ ASTConverter::convertStmtBody(const Stmt *S) {
   }
   if (const auto *U = dyn_cast<UnaryOperator>(S)) {
     if (U->isIncrementDecrementOp()) {
+      if (U->getSubExpr()->getType()->isPointerType()) {
+        auto Step = convertPointerStep(
+            U->getSubExpr(), U->isIncrementOp() ? VBinOp::Add : VBinOp::Sub,
+            std::make_unique<VLiteralExpr>(
+                1, VType::fromQualType(Ctx.getPointerDiffType(), IntMode, Ctx),
+                U->getExprLoc()),
+            U->getExprLoc());
+        if (Step)
+          appendAssignment(U->getSubExpr(), std::move(Step), U->getExprLoc(),
+                           Out);
+        return Out;
+      }
       if (!U->getSubExpr()->getType()->isIntegerType()) {
-        error(CurrentFn->Name + ": pointer increment/decrement is unsupported");
+        error(CurrentFn->Name + ": increment or decrement of a value that is "
+                                "neither an integer nor a pointer is "
+                                "unsupported");
         return Out;
       }
       auto Current = convertExpr(U->getSubExpr());
@@ -8886,10 +8928,15 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         error(CurrentFn->Name + ": static local variables are unsupported");
         continue;
       }
-      if (!DeclaredValueNames.insert(VD->getNameAsString()).second) {
-        error(CurrentFn->Name + ": local variable shadowing is unsupported: " +
-              VD->getNameAsString());
-        continue;
+      // A local named like a parameter or an earlier local, in an enclosing
+      // or an earlier scope, is another variable: x#2, x#3, ...
+      if (!LocalNames.count(VD)) {
+        std::string Name = VD->getNameAsString();
+        for (unsigned N = 2; DeclaredValueNames.count(Name); ++N)
+          Name = VD->getNameAsString() + "#" + std::to_string(N);
+        DeclaredValueNames.insert(Name);
+        if (Name != VD->getNameAsString())
+          LocalNames[VD] = Name;
       }
       if (InGhost)
         GhostLocals.insert(VD);
@@ -9154,7 +9201,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         }
         if (auto Value = convertExpr(VD->getInit())) {
           Out.push_back(std::make_unique<VAssignStmt>(
-              VD->getNameAsString(), std::move(Value), VD->getBeginLoc()));
+              valueName(VD), std::move(Value), VD->getBeginLoc()));
           markInitialized(VD);
         }
         continue;
@@ -9172,7 +9219,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
             if (auto Val = materialize(convertExpr(VD->getInit()),
                                        VD->getType())) {
               Out.push_back(std::make_unique<VAssignStmt>(
-                  VD->getNameAsString(), std::move(Val), VD->getBeginLoc()));
+                  valueName(VD), std::move(Val), VD->getBeginLoc()));
               markInitialized(VD);
             }
             continue;
@@ -9182,7 +9229,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
             convertExecCallArgs(CE, Out, Args);
             const bool RecordResult = isFlattenedRecordType(VD->getType());
             const std::string ResultTarget =
-                RecordResult ? VD->getNameAsString()
+                RecordResult ? valueName(VD)
                              : "__local_call_" + std::to_string(++NestedCallId);
             Out.push_back(std::make_unique<VCallStmt>(
                 functionName(Callee), functionIdentity(Callee),
@@ -9194,7 +9241,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
                       ResultTarget, Callee->getReturnType(), Target,
                       VD->getBeginLoc()))
                 Out.push_back(std::make_unique<VAssignStmt>(
-                    VD->getNameAsString(), std::move(Value),
+                    valueName(VD), std::move(Value),
                     VD->getBeginLoc()));
             }
             markInitialized(VD);
@@ -9216,7 +9263,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       auto Val = materialize(convertExpr(VD->getInit()), VD->getType());
       if (Val) {
         Out.push_back(std::make_unique<VAssignStmt>(
-            VD->getNameAsString(), std::move(Val), VD->getBeginLoc()));
+            valueName(VD), std::move(Val), VD->getBeginLoc()));
         markInitialized(VD);
       }
     }
