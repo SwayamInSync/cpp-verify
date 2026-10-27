@@ -489,6 +489,53 @@ one of their objects:
 
 Both verify without an invariant about ``*count`` or ``*c``.
 
+``++q``, ``q++``, ``--q``, ``q--``, ``q += n``, and ``q -= n`` as statements
+are the assignments ``q = q + 1``, ``q = q - 1``, ``q = q + n``, and
+``q = q - n``, with the checks of that step: the result stays in the object
+``q`` addresses, one past its end included, so a walk may stop one past the
+end but may not start one before the beginning:
+
+.. cppverify-example: fails back_one
+
+.. code-block:: cpp
+
+   int total(const int *a, int n)
+     cv::pre(valid(a, n) && 0 <= n && n <= 100)
+     cv::pre(cv::forall(k, 0, n, 0 <= a[k] && a[k] <= 10))
+     cv::post(0 <= cv::result && cv::result <= 10 * n)
+   {
+     int s = 0;
+     int i = 0;
+     for (const int *q = a; q != a + n; ++q)
+       cv::invariant(0 <= i && i <= n && q == a + i && 0 <= s && s <= 10 * i)
+       cv::decreases(n - i)
+     {
+       s = s + *q;
+       i = i + 1;
+     }
+     return s;
+   }
+
+   int back_one(const int *a, int n)
+     cv::pre(valid(a, n) && 1 <= n && n <= 100)
+   {
+     const int *q = a;
+     --q;
+     ++q;
+     return *q;
+   }
+
+.. code-block:: text
+
+   Verified: total [backend=z3]
+   walk.cpp:22:3: error: verification failed: back_one [...] (counterexample: ...) [backend=z3] [reason=counterexample]
+
+The value of a step inside an expression, as in ``*q++`` or
+``while (*q++ != 0)``, is not supported yet: write the read and the step as
+statements of their own. Before 0.2, each of these steps was an error
+(``pointer increment/decrement is unsupported``, ``pointer compound
+assignment is unsupported``), and a walk had to write ``q = q + 1``.
+
 Two-buffer copy loops (``memcpy``-style) need the source and destination
 ranges to be disjoint; otherwise storing to the destination could clobber a
 source cell still to be read, exactly the C ``memcpy`` vs ``memmove``
