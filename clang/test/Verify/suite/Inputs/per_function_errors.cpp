@@ -8,12 +8,12 @@ int table[4] = {1, 2, 3, 4};
 int pick(int x)
   cppverify::post(cppverify::result >= 1)
 {
-  switch (x) {
-  case 0:
+  if (x < 0) throw x;
+  if (x == 0)
     return 1;
-  default:
+  else
     return 2;
-  }
+  // An exception is not represented.
 }
 
 int uses_pick(int x)
@@ -38,12 +38,12 @@ int uses_lookup()
 
 // A spec the verifier does not represent: what reaches it is not verified.
 cppverify::spec int choice(int x) {
-  switch (x) {
-  case 0:
+  if (x < 0) throw x;
+  if (x == 0)
     return 1;
-  default:
+  else
     return 2;
-  }
+  // An exception is not represented.
 }
 
 int uses_choice(int x)
@@ -61,10 +61,10 @@ cppverify::proof void choice_lemma(int x)
 cppverify::proof void zero_lemma(int x)
   cppverify::post(x * 0 == 0)
 {
-  switch (x) {
-  default:
-    break;
-  }
+  if (x < 0) throw x;
+  // An exception is not represented.
+
+  // (nothing else)
 }
 
 int uses_zero_lemma(int x)
@@ -76,12 +76,12 @@ int uses_zero_lemma(int x)
 
 // An uncontracted constexpr helper, lifted for its caller.
 constexpr int step(int x) {
-  switch (x) {
-  case 0:
+  if (x < 0) throw x;
+  if (x == 0)
     return 1;
-  default:
+  else
     return 2;
-  }
+  // An exception is not represented.
 }
 
 int uses_step(int x)
