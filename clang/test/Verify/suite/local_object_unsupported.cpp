@@ -193,7 +193,7 @@ int flattened_nested_record()
 // VERIFY-DAG: error: unsupported_copy_source: unsupported aggregate initializer for an automatic object
 // VERIFY-DAG: error: return_local_address: raw address-of is unsupported until lexical lifetime and escape effects are modeled
 // VERIFY-DAG: error: return_local_array: array-to-pointer decay of automatic storage is unsupported until lexical lifetime and escape effects are modeled
-// FAILS-DAG: error: verification failed: dereference_escaped_local [{{.*}}::postcondition@{{.*}}[reason=counterexample]
+// FAILS-DAG: error: verification failed: dereference_escaped_local [postcondition]{{.*}}[reason=counterexample]
 // VERIFY-DAG: error: raw_pointer_into_local_array: raw address-of is unsupported until lexical lifetime and escape effects are modeled
 // VERIFY-DAG: error: whole_object_pointer_argument: raw address-of is unsupported until lexical lifetime and escape effects are modeled
 // VERIFY-DAG: error: provenance_pointer_field: storing a provenance-bearing pointer in an automatic object is unsupported
