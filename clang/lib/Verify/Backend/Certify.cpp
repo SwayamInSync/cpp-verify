@@ -4187,8 +4187,10 @@ verify::candidateValues(const ObligationModule &Module, const LogicExpr &Query,
         It != Module.DiagnosticVariables.end() ? It->second.DisplayName : Name;
     Value.InternalName = Name;
     Value.Sort = Sort;
-    if (It != Module.DiagnosticVariables.end())
+    if (It != Module.DiagnosticVariables.end()) {
       Value.Source = It->second.Source;
+      Value.Reference = It->second.Reference;
+    }
     if (std::optional<LogicValue> Given = Model.constant(Name, Sort))
       Value.Value = formatLogicValue(*Given);
     Values.push_back(std::move(Value));
