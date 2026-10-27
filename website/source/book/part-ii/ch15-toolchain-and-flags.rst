@@ -99,7 +99,10 @@ Other flags
 - ``cpp-verify --proof-cache=DIR`` — keep proofs of single obligations between
   runs (``--proof-cache-max-mb``, ``--proof-cache-max-entries`` bound it)
 - ``cpp-verify --diagnostics-format=json`` — emit versioned
-  ``cppverify.diagnostic/1`` JSON Lines for verification results
+  ``cppverify.diagnostic/2`` JSON Lines for results and compiler diagnostics,
+  ending with a summary record; ``sarif`` prints one SARIF 2.1.0 log, and
+  ``github`` the text with a GitHub Actions annotation for each error and
+  warning
 - ``cpp-verify --lean-out=FILE`` — write a standalone Lean scratch-pad
   (``--backend=lean``, which it selects)
 - ``cpp-verify --lean-project=DIR`` — generate a preserved, pinned Lean project
