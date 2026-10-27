@@ -303,6 +303,19 @@ static cl::opt<bool> ListFunctions(
              "locations, and verify none"),
     cl::cat(CppVerifyCategory));
 
+static cl::opt<std::string> ContractsOut(
+    "contracts-out",
+    cl::desc("Write the contracts the file verifies and those it assumes from "
+             "other files, for --check-contracts"),
+    cl::value_desc("file"), cl::cat(CppVerifyCategory));
+
+static cl::opt<bool> CheckContracts(
+    "check-contracts",
+    cl::desc("Check that the contracts the given records (--contracts-out, "
+             "-fverify-contracts-out) assume are established by the "
+             "verification of their definitions in others"),
+    cl::cat(CppVerifyCategory));
+
 static cl::opt<bool> TimeReport(
     "time-report",
     cl::desc("Report where the run and each function spent their time: "
@@ -472,6 +485,7 @@ public:
       VOpts.Verbose = Verbose.getValue();
       VOpts.ListFunctions = ListFunctions.getValue();
       VOpts.TimeReport = TimeReport.getValue();
+      VOpts.ContractsOut = ContractsOut.getValue();
       if (Progress != cl::boolOrDefault::BOU_UNSET)
         VOpts.Progress = Progress == cl::boolOrDefault::BOU_TRUE;
       VOpts.MaxFailures = MaxFailures.getValue();
@@ -1102,6 +1116,14 @@ int main(int argc, const char **argv) {
   CommonOptionsParser &OptionsParser = ExpectedParser.get();
   if (!resolveOptions(!ObligationIn.empty()))
     return 1;
+  if (CheckContracts)
+    return verify::checkContracts(OptionsParser.getSourcePathList(),
+                                  llvm::outs()) != 0;
+  if (!ContractsOut.empty() && OptionsParser.getSourcePathList().size() != 1) {
+    llvm::errs() << "error: --contracts-out records one file; a run over "
+                    "several files settles their contracts itself\n";
+    return 1;
+  }
   if (!ObligationIn.empty()) {
     const std::vector<std::string> &Sources = OptionsParser.getSourcePathList();
     if (Sources.size() != 1 || Sources.front() != ReplayPlaceholder) {
