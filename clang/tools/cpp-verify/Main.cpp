@@ -1248,8 +1248,10 @@ static int replayObligationArchive() {
         llvm::outs() << " (" << Result.Message << ")";
       llvm::outs() << Suffix << "\n";
       if (std::string Values = verify::counterexampleText(Result);
-          !Values.empty())
+          !Values.empty()) {
+        printResultSource();
         llvm::outs() << "note: counterexample: " << Values << "\n";
+      }
       for (const verify::VerifyTraceEvent &Event : Result.Trace) {
         if (Event.Source.isValid())
           llvm::outs() << Event.Source.File << ":" << Event.Source.Line << ":"
