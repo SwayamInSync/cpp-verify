@@ -125,7 +125,8 @@ C++ feature boundaries
        declarations that do nothing (``static_assert``, type aliases,
        using-declarations, local classes and enumerations).
      - The value of an assignment, an increment, or a comma expression
-       inside an expression (``a = b = 0``, ``*p++``); string literals;
+       inside an expression (``a = b = 0``, ``*p++``); a pointer into a
+       string literal (its characters are read by index);
        other builtins; structured bindings of an array, of a tuple-like type,
        or by reference.
    * - Pointers
@@ -192,9 +193,11 @@ C++ feature boundaries
    * - Storage
      - Supported locals, constrained scalar dynamic storage, and inferred
        acyclic fresh-owned scalar factory results.
-     - Non-integral or aggregate globals, static locals, thread-local storage,
-       general returned allocations, and user-declared modular allocation
-       effects.
+     - Mutable aggregate globals, mutable static locals, pointers into
+       constant tables, thread-local storage, general returned allocations,
+       and user-declared modular allocation effects. Constant tables
+       (``const`` and ``constexpr`` arrays with constant initializers, and
+       string literals) are read by index (:doc:`pointers`).
    * - Structured control flow
      - ``if`` (including C++17 initializer), ``while``, ``for`` (with or
        without a condition), contracted ``do`` loops, condition declarations,

@@ -4525,6 +4525,195 @@ bool ASTConverter::subobjectPointerRoot(const Expr *E) const {
   return VD && !LocalReferenceProvenanceVariables.count(VD);
 }
 
+bool ASTConverter::isConstantTable(const VarDecl *VD) const {
+  QualType Element = VD->getType();
+  bool IsArray = false;
+  while (const ConstantArrayType *Bounded =
+             Ctx.getAsConstantArrayType(Element)) {
+    IsArray = true;
+    Element = Bounded->getElementType();
+  }
+  const VarDecl *Definition = VD->getDefinition() ? VD->getDefinition() : VD;
+  const APValue *Value = IsArray ? Definition->evaluateValue() : nullptr;
+  return Value && Value->isArray() && VD->hasGlobalStorage() &&
+         VD->getTLSKind() == VarDecl::TLS_None &&
+         (Element->isIntegralOrEnumerationType() || Element->isBooleanType()) &&
+         Element.isConstQualified() && !Element.isVolatileQualified();
+}
+
+std::optional<std::unique_ptr<VExpr>>
+ASTConverter::convertTableRead(const ArraySubscriptExpr *AS) {
+  // t[i][j]: the indices, outermost first, of a whole read of an array.
+  std::vector<const Expr *> Indices;
+  const Expr *Array = AS;
+  while (const auto *Subscript = dyn_cast<ArraySubscriptExpr>(Array)) {
+    const auto *Decay = dyn_cast<ImplicitCastExpr>(Subscript->getBase());
+    if (!Decay || Decay->getCastKind() != CK_ArrayToPointerDecay)
+      return std::nullopt;
+    Indices.insert(Indices.begin(), Subscript->getIdx());
+    Array = Decay->getSubExpr()->IgnoreParens();
+  }
+  const auto *Ref = dyn_cast<DeclRefExpr>(Array);
+  const auto *VD = Ref ? dyn_cast<VarDecl>(Ref->getDecl()) : nullptr;
+  const auto *Literal = dyn_cast<StringLiteral>(Array);
+  if (!VD && !Literal)
+    return std::nullopt;
+  std::vector<uint64_t> Dims;
+  QualType Element = Array->getType();
+  while (const ConstantArrayType *Bounded =
+             Ctx.getAsConstantArrayType(Element)) {
+    Dims.push_back(Bounded->getZExtSize());
+    Element = Bounded->getElementType();
+  }
+  if (Dims.size() != Indices.size() || Dims.empty() ||
+      !(Element->isIntegralOrEnumerationType() || Element->isBooleanType()) ||
+      Element.isVolatileQualified())
+    return std::nullopt;
+
+  // Its values: a constant object's initializer, or a literal's code units
+  // and the terminating zero.
+  const VType ElementTy = VType::fromQualType(Element, VIntMode::Machine, Ctx);
+  std::vector<llvm::APSInt> Values;
+  std::string Identity;
+  if (VD) {
+    const VarDecl *Definition = VD->getDefinition() ? VD->getDefinition() : VD;
+    if (!VD->hasGlobalStorage() || VD->getTLSKind() != VarDecl::TLS_None ||
+        !Element.isConstQualified())
+      return std::nullopt;
+    const APValue *Value = Definition->evaluateValue();
+    if (!Value)
+      return std::nullopt;
+    std::function<bool(const APValue &)> Flatten = [&](const APValue &V) {
+      if (V.isInt()) {
+        Values.push_back(V.getInt());
+        return true;
+      }
+      if (!V.isArray())
+        return false;
+      for (unsigned K = 0; K < V.getArraySize(); ++K)
+        if (!Flatten(K < V.getArrayInitializedElts()
+                         ? V.getArrayInitializedElt(K)
+                         : V.getArrayFiller()))
+          return false;
+      return true;
+    };
+    if (!Flatten(*Value))
+      return std::nullopt;
+    const PresumedLoc Where =
+        Ctx.getSourceManager().getPresumedLoc(VD->getLocation());
+    Identity = "__cppverify_table." + VD->getQualifiedNameAsString();
+    if (Where.isValid())
+      Identity += "@" + std::to_string(Where.getLine()) + ":" +
+                  std::to_string(Where.getColumn());
+  } else {
+    const unsigned Width = ElementTy.BitWidth;
+    for (uint64_t K = 0; K < Dims.front(); ++K)
+      Values.push_back(llvm::APSInt(
+          llvm::APInt(Width,
+                      K < Literal->getLength() ? Literal->getCodeUnit(K) : 0),
+          !ElementTy.IsSigned));
+    const PresumedLoc Where =
+        Ctx.getSourceManager().getPresumedLoc(Literal->getBeginLoc());
+    Identity = "__cppverify_string";
+    if (Where.isValid())
+      Identity += "@" + std::to_string(Where.getLine()) + ":" +
+                  std::to_string(Where.getColumn());
+  }
+  uint64_t Count = 1;
+  for (uint64_t D : Dims)
+    Count *= D;
+  if (Values.size() != Count)
+    return std::nullopt;
+
+  const SourceLocation Loc = AS->getExprLoc();
+  const VType Index = VType::makeInt(VIntMode::Math, 64, true);
+  auto Constant = [&](const llvm::APSInt &V) -> std::unique_ptr<VExpr> {
+    if (ElementTy.Kind == VTypeKind::Bool)
+      return std::make_unique<VLiteralExpr>(!V.isZero(), ElementTy, Loc);
+    return std::make_unique<VLiteralExpr>(integerValueString(V), ElementTy,
+                                          Loc);
+  };
+  // The table as a spec of the linear index: a balanced tree of
+  // comparisons, so its depth grows with the logarithm of its size.
+  if (llvm::none_of(BuiltinFunctions,
+                    [&](const auto &Fn) { return Fn->Identity == Identity; })) {
+    std::function<std::unique_ptr<VExpr>(uint64_t, uint64_t)> Tree =
+        [&](uint64_t Lo, uint64_t Hi) -> std::unique_ptr<VExpr> {
+      if (std::all_of(Values.begin() + Lo + 1, Values.begin() + Hi,
+                      [&](const llvm::APSInt &V) {
+                        return llvm::APSInt::isSameValue(V, Values[Lo]);
+                      }))
+        return Constant(Values[Lo]);
+      const uint64_t Mid = Lo + (Hi - Lo) / 2;
+      return std::make_unique<VConditionalExpr>(
+          std::make_unique<VBinOpExpr>(
+              VBinOp::Lt, std::make_unique<VVarExpr>("i", Index, Loc),
+              std::make_unique<VLiteralExpr>(std::to_string(Mid), Index, Loc),
+              VType::makeBool(), Loc),
+          Tree(Lo, Mid), Tree(Mid, Hi), ElementTy, Loc);
+    };
+    auto Fn = std::make_unique<VFunction>();
+    Fn->Name = VD ? VD->getNameAsString() : "string literal";
+    Fn->Identity = Identity;
+    Fn->IsSpec = true;
+    Fn->IsBuiltin = true;
+    Fn->IntMode = VIntMode::Math;
+    Fn->ReturnType = ElementTy;
+    Fn->Params = {{"i", Index}};
+    Fn->Body.push_back(
+        std::make_unique<VReturnStmt>(Tree(0, Values.size()), Loc));
+    BuiltinFunctions.push_back(std::move(Fn));
+  }
+
+  // The read: its linear index, and each index inside its array.
+  std::unique_ptr<VExpr> Linear;
+  std::unique_ptr<VExpr> Inside;
+  for (size_t D = 0; D < Indices.size(); ++D) {
+    auto I = convertExpr(Indices[D]);
+    if (!I)
+      return std::unique_ptr<VExpr>();
+    if (I->Ty.IntMode != VIntMode::Math) {
+      VType Machine = I->Ty;
+      I = std::make_unique<VCastExpr>(std::move(I), Machine, Index, Loc);
+    }
+    auto Bounded = std::make_unique<VBinOpExpr>(
+        VBinOp::And,
+        std::make_unique<VBinOpExpr>(
+            VBinOp::Le, std::make_unique<VLiteralExpr>(0, Index, Loc),
+            cloneVExpr(I.get()), VType::makeBool(), Loc),
+        std::make_unique<VBinOpExpr>(
+            VBinOp::Lt, cloneVExpr(I.get()),
+            std::make_unique<VLiteralExpr>(std::to_string(Dims[D]), Index, Loc),
+            VType::makeBool(), Loc),
+        VType::makeBool(), Loc);
+    Inside = Inside
+                 ? std::make_unique<VBinOpExpr>(VBinOp::And, std::move(Inside),
+                                                std::move(Bounded),
+                                                VType::makeBool(), Loc)
+                 : std::unique_ptr<VExpr>(std::move(Bounded));
+    Linear = Linear ? std::make_unique<VBinOpExpr>(
+                          VBinOp::Add,
+                          std::make_unique<VBinOpExpr>(
+                              VBinOp::Mul, std::move(Linear),
+                              std::make_unique<VLiteralExpr>(
+                                  std::to_string(Dims[D]), Index, Loc),
+                              Index, Loc),
+                          std::move(I), Index, Loc)
+                    : std::move(I);
+  }
+  std::vector<std::unique_ptr<VExpr>> Args;
+  Args.push_back(std::move(Linear));
+  auto Read = std::make_unique<VSpecCallExpr>(
+      VD ? VD->getNameAsString() : "string literal", Identity, std::move(Args),
+      ElementTy, Loc);
+  auto Copy = cloneVExpr(Read.get());
+  return std::unique_ptr<VExpr>(std::make_unique<VConditionalExpr>(
+      std::make_unique<VRequireExpr>(
+          std::move(Inside), static_cast<unsigned>(ProofObligationKind::Bounds),
+          Loc),
+      std::move(Read), std::move(Copy), ElementTy, Loc));
+}
+
 std::string ASTConverter::arrayDecayError(const Expr *Array) const {
   const auto *M = dyn_cast_or_null<MemberExpr>(peelObjectExpr(Array));
   const std::string Member =
@@ -4533,6 +4722,9 @@ std::string ASTConverter::arrayDecayError(const Expr *Array) const {
       Root && Root->hasGlobalStorage()) {
     const std::string Kind = Root->isStaticLocal() ? "static local" : "global";
     const std::string Name = "'" + Root->getNameAsString() + "'";
+    if (!M && Ctx.getBaseElementType(Root->getType()).isConstQualified())
+      return "a pointer into the constant table " + Name +
+             " is unsupported; read its elements by index";
     return M ? "the array member '" + Member + "' of the " + Kind + " " + Name +
                    " is unsupported"
              : "the " + Kind + " array " + Name + " is unsupported";
@@ -6042,6 +6234,8 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     return nullptr;
   }
   if (const auto *AS = dyn_cast<ArraySubscriptExpr>(E)) {
+    if (std::optional<std::unique_ptr<VExpr>> Element = convertTableRead(AS))
+      return std::move(*Element);
     auto Place = subscriptPlace(AS);
     if (!Place)
       return nullptr;
@@ -9145,6 +9339,9 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         continue;
       }
       if (!VD->hasLocalStorage()) {
+        // A constant one is a value, read where it is named.
+        if (globalConstant(VD) || isConstantTable(VD))
+          continue;
         error(CurrentFn->Name + ": static local variables are unsupported");
         continue;
       }

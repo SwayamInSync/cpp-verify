@@ -317,6 +317,14 @@ private:
                                             SourceLocation Loc);
   std::unique_ptr<VExpr> convertArrowFieldAddress(const MemberExpr *M);
   std::unique_ptr<VExpr> convertSubscriptAddress(const ArraySubscriptExpr *AS);
+  /// An element of a constant table (a constant array with a constant
+  /// initializer, or a string literal): a spec of its index, which must lie
+  /// in its array. std::nullopt when \p AS reads no such table.
+  std::optional<std::unique_ptr<VExpr>>
+  convertTableRead(const ArraySubscriptExpr *AS);
+  /// A constant array with a constant initializer, of integers,
+  /// enumerations, or bools: a table, which declares no object to run.
+  bool isConstantTable(const VarDecl *VD) const;
   std::vector<std::unique_ptr<VStmt>> convertStmt(const Stmt *S);
   std::vector<std::unique_ptr<VStmt>> convertStmtBody(const Stmt *S);
   std::vector<std::unique_ptr<VStmt>> convertScopedSubstatement(const Stmt *S);

@@ -413,6 +413,13 @@ that may write what another operand reads is an error at the expression,
 and an assignment's right operand is evaluated before its target, as C++17
 says (:doc:`language/functions-loops`).
 
+**Lookup tables.** A read of a global or ``static`` array, or of a string
+literal, was an error (``the global array 'table' is unsupported``), which
+ruled out the tables at the heart of CRC, base64, and UTF-8 code. An element
+of a constant table, a ``const`` or ``constexpr`` array with a constant
+initializer or a string literal, is now the value its initializer gives it,
+and each index must lie in its array (:doc:`language/pointers`).
+
 **assert and calls that do not return.** ``assert(c)`` stopped its function
 (``unsupported statement: ParenExpr``), and a call to ``abort`` or ``exit``
 was an error (``call to function without a verification contract``).

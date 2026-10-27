@@ -446,7 +446,14 @@ call argument for a machine parameter, or a return value.
 **HeapFrame:** produced by passivization only: `after` equals `before` at
 every address outside the half-open regions.
 
-**Require:** produced by the spec inliner only, from the `assert`
+**Constant tables:** `ASTConverter::convertTableRead` lowers a whole read
+of a constant table (a constant array's initializer or a string literal) to
+`ite(Require(index in bounds, bounds), table(i), table(i))`, where `table` is
+a synthesized spec (`IsBuiltin`, identity `__cppverify_table.<name>@L:C` or
+`__cppverify_string@L:C`) whose body is a balanced comparison tree over the
+linear index.
+
+**Require:** produced by the spec inliner from the `assert`
 statements of a lifted `constexpr` helper's body (`evalBodySeq`): on the
 path `g` to `assert(c)` it adds `Require(!g || c, kind)` to the evaluation
 trace that each call's definedness check unfolds, so the passivizer's
