@@ -119,3 +119,7 @@ void not_empty(node *a)
 // A rule proof that fails is reported, and the predicate with it.
 // UNPROVED-DAG: Unresolved: inductive predicate: reach [reason=spec.inductive] (its rules are not established: {{.*}})
 // UNPROVED-DAG: Unresolved: reach (monotonicity)
+// UNPROVED: Summary: 5 unresolved ({{.*}}spec.inductive 1)
+// RUN: not %cpp-verify --solver-rlimit=1 --diagnostics-format=json %S/Inputs/inductive_unproved.cpp -- 2>/dev/null \
+// RUN:   | FileCheck %s --check-prefix=UNPROVED-JSON
+// UNPROVED-JSON: {"message":"inductive predicate: reach [reason=spec.inductive] {{.*}}","reason":"spec.inductive","schema":"cppverify.diagnostic/1","severity":"error","status":"unresolved"}
