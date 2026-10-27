@@ -2262,36 +2262,23 @@ public:
       return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                      ConstructionError.c_str());
 
-    // The goals' size is known before any is built: each is its condition
-    // under a negated copy of every assumption before it (a Not and an Or
-    // each), each query is its goal negated, and the complete goal joins the
-    // goals by And, with its query.
-    uint64_t Prefix = 0, Goals = 0, GoalCount = 0;
-    auto assumed = [&](const VCExpr *Assumption) {
-      Prefix =
-          llvm::SaturatingAdd(Prefix, logicNodeCount(Assumption), uint64_t(2));
-    };
-    auto goal = [&](const VCExpr *Condition) {
-      Goals = llvm::SaturatingAdd(Goals, Prefix, logicNodeCount(Condition));
-      ++GoalCount;
-    };
+    // Each goal is its condition under every assumption before it, sharing
+    // their terms: it adds a negation, a disjunction, and a copy of the root
+    // for each assumption. A function with many checks and assumptions still
+    // has quadratically many such nodes, so the goals are built in a budget
+    // and stop once they pass the limit.
+    std::vector<const LogicExpr *> Built;
     for (const auto &Entry : EntryAssumes)
-      assumed(Entry.get());
-    for (const LoweredStmt &Stmt : Stmts) {
-      if (Stmt.Kind == PassiveStmt::Assume)
-        assumed(Stmt.Cond.get());
-      else
-        goal(Stmt.Cond.get());
-    }
+      Built.push_back(Entry.get());
+    for (const LoweredStmt &Stmt : Stmts)
+      Built.push_back(Stmt.Cond.get());
     for (const auto &Exit : ExitAsserts)
-      goal(std::get<1>(Exit).get());
-    const uint64_t GoalNodes =
-        GoalCount == 0
-            ? 3
-            : llvm::SaturatingAdd(llvm::SaturatingMultiply(Goals, uint64_t(4)),
-                                  3 * GoalCount - 1);
-    if (MaxNodes != 0 && GoalNodes > MaxNodes)
-      return ObligationSizeError::obligations(GoalNodes, MaxNodes);
+      Built.push_back(std::get<1>(Exit).get());
+    const uint64_t Lowered = MaxNodes ? logicDistinctNodes(Built) : 0;
+    std::optional<NodeBudget> Goals;
+    Goals.emplace();
+    auto size = [&] { return Lowered + Goals->built(); };
+    auto oversize = [&] { return MaxNodes != 0 && size() > MaxNodes; };
 
     // Each assumption with where it comes from, which names its hypothesis.
     std::vector<std::pair<const VCExpr *, std::string>> Assumptions;
@@ -2346,19 +2333,26 @@ public:
       }
       appendObligation(Stmt.ProofKind, Stmt.Cond.get(), Stmt.TraceEventCount,
                        Stmt.Note);
+      if (oversize())
+        return ObligationSizeError::obligations(size(), MaxNodes);
     }
-    for (const auto &[Kind, Exit, Note] : ExitAsserts)
+    for (const auto &[Kind, Exit, Note] : ExitAsserts) {
       appendObligation(Kind, Exit.get(), M.TraceEvents.size(), Note);
+      if (oversize())
+        return ObligationSizeError::obligations(size(), MaxNodes);
+    }
 
     M.CorrectnessGoal = buildCompleteGoal(M.Obligations);
     M.CounterexampleQuery = vcNot(cloneLogicExpr(M.CorrectnessGoal.get()));
-    assert(GoalNodes == obligationModuleNodeCount(M) &&
-           "the goals' size was not predicted exactly");
+    if (oversize())
+      return ObligationSizeError::obligations(size(), MaxNodes);
+    Goals.reset();
 
     SpecAxiomContext AxiomContext{P.SpecFunctions, P.SpecFuel, P.HiddenSpecs,
                                   P.RevealedSpecs};
-    if (llvm::Error Error =
-            materializeLogicFunctions(M, AxiomContext, MaxNodes, GoalNodes))
+    if (llvm::Error Error = materializeLogicFunctions(
+            M, AxiomContext, MaxNodes,
+            MaxNodes ? obligationModuleNodeCount(M) : 0))
       return std::move(Error);
 
     auto RequiredFeatures = validateObligationModule(M);
