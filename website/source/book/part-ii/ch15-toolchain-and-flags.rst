@@ -44,6 +44,9 @@ Other flags
   check (``Verified: spec axiom: twice``), which the default leaves out
 - ``cpp-verify --list-functions`` — list the functions a run would verify,
   with their locations and kinds, and verify none
+- ``cpp-verify --function=PATTERN`` — report only the functions whose names
+  match a glob pattern (repeatable), with the same verdicts as a whole run:
+  what they rely on is verified too, and nothing else that is executable
 - ``cpp-verify --confirm-bound=N`` — for a failure whose counterexample passes
   through a loop, unroll each loop up to ``N`` iterations (default 10, ``0``
   skips it) to find an execution that fails or prove that none does (see
