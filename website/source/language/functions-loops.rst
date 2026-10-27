@@ -32,7 +32,10 @@ unsupported``.
 
 A default argument is evaluated at the call, with the checks of its
 operations there. A ``consteval`` call, like any constant Clang evaluates, is
-its value. ``__builtin_expect(e, c)`` is ``e``. ``static_assert``, type
+its value, and so is an expression that evaluates nothing at run time:
+``noexcept(e)``, a requires-expression, a concept such as ``Small<T>``, a
+type trait such as ``__is_same(T, U)``, ``offsetof``, and
+``__builtin_LINE()``. ``__builtin_expect(e, c)`` is ``e``. ``static_assert``, type
 aliases, using-declarations, and local classes and enumerations declare
 names and do nothing at run time.
 
