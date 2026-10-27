@@ -34,7 +34,8 @@ int popcount8_wrong(uint8_t x)
 {
   return NibbleBits[x & 15] + NibbleBits[x >> 4];
 }
-// CHECK-DAG: error: verification failed: popcount8_wrong [{{.*}}x [ssa=x_0] [type=u8] = 255{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: popcount8_wrong {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}x = 255{{( ->|,|$)}}
 
 // An index outside the table is undefined.
 int nibble_bits(int x)
@@ -42,7 +43,7 @@ int nibble_bits(int x)
 {
   return NibbleBits[x];
 }
-// CHECK-DAG: error: verification failed: nibble_bits [{{.*}}::bounds@[[@LINE-2]]:{{.*}}[reason=counterexample]
+// CHECK-DAG: :[[@LINE-2]]:{{[0-9]+}}: error: verification failed: nibble_bits [bounds]{{.*}}[reason=counterexample]
 
 int nibble_bits_inside(int x)
   cv::pre(0 <= x && x < 16)
@@ -58,7 +59,8 @@ int nibble_bits_before(int x)
 {
   return NibbleBits[x - 1];
 }
-// CHECK-DAG: error: verification failed: nibble_bits_before [{{.*}}::bounds@[[@LINE-2]]:{{.*}}x [ssa=x_0] [type=i32] = 0{{.*}}[reason=counterexample]
+// CHECK-DAG: :[[@LINE-2]]:{{[0-9]+}}: error: verification failed: nibble_bits_before [bounds] {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}x = 0{{( ->|,|$)}}
 
 // A table declared in a function, two-dimensional, with elements its
 // initializer leaves zero.
@@ -78,7 +80,8 @@ int add_mod3_wrong(int a, int b)
   static constexpr int Sum[3][3] = {{0, 1, 2}, {1, 2, 0}, {2, 1, 0}};
   return Sum[a][b];
 }
-// CHECK-DAG: error: verification failed: add_mod3_wrong [{{.*}}a [ssa=a_0] [type=i32] = 2, b [ssa=b_0] [type=i32] = {{1|2}}{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: add_mod3_wrong {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}a = 2{{( ->|,|$)}}{{.*}}b = {{1|2}}{{( ->|,|$)}}
 
 int row_outside(int a)
   cv::pre(0 <= a && a < 3)
@@ -87,7 +90,7 @@ int row_outside(int a)
   static constexpr int Sum[3][3] = {{0, 1, 2}, {1, 2, 0}, {2, 0, 1}};
   return Sum[a][3];
 }
-// CHECK-DAG: error: verification failed: row_outside [{{.*}}::bounds@[[@LINE-2]]:{{.*}}[reason=counterexample]
+// CHECK-DAG: :[[@LINE-2]]:{{[0-9]+}}: error: verification failed: row_outside [bounds]{{.*}}[reason=counterexample]
 
 // Rows of four: the element [r][c] is at 4 * r + c.
 static constexpr uint8_t Rows[2][4] = {{1, 2, 3, 4}, {5, 6, 7, 8}};
@@ -106,7 +109,8 @@ int row_major_wrong(int r, int c)
 {
   return Rows[r][c];
 }
-// CHECK-DAG: error: verification failed: row_major_wrong [{{.*}}r [ssa=r_0] [type=i32] = 1{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: row_major_wrong {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}r = 1{{( ->|,|$)}}
 
 constexpr int Primes[8] = {2, 3, 5, 7, 11};
 
@@ -133,7 +137,8 @@ char hex_digit_wrong(int d)
 {
   return "0123456789abcdef"[d + 1];
 }
-// CHECK-DAG: error: verification failed: hex_digit_wrong [{{.*}}::bounds@[[@LINE-2]]:{{.*}}d [ssa=d_0] [type=i32] = 16{{.*}}[reason=counterexample]
+// CHECK-DAG: :[[@LINE-2]]:{{[0-9]+}}: error: verification failed: hex_digit_wrong [bounds] {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}d = 16{{( ->|,|$)}}
 
 // The last element of a literal is its terminating zero, and each element is
 // a value of its character type: '\xff' is -1 as a signed char.
@@ -195,7 +200,8 @@ bool upper_at_wrong(int c)
 {
   return Ascii::IsUpper[c];
 }
-// CHECK-DAG: error: verification failed: upper_at_wrong [{{.*}}c [ssa=c_0] [type=i32] = 2{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: upper_at_wrong {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}c = 2{{( ->|,|$)}}
 
 // Contracts and ghost code read tables too.
 int first_prime()
