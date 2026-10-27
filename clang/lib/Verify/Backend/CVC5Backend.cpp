@@ -2671,6 +2671,7 @@ CVC5VerifyBackend::verifyQuery(const ObligationModule &Module,
   // One check may not spend the whole query.
   auto checkLimits = [&] {
     CertifyLimits Limits;
+    Limits.Times = times();
     Limits.Deadline = QueryDeadline;
     const unsigned CapMs = CertifyTimeoutMs ? *CertifyTimeoutMs : TimeoutMs / 2;
     if (CapMs > 0) {
