@@ -228,6 +228,16 @@ a value from before the loop:
      }
    }
 
+Two loops, one name
+-------------------
+
+Two loops may each declare their counter, ``for (int i = 0; ...)``, and a
+block may declare a name an outer one already has: each declaration is a
+variable of its own, so the second ``i`` starts uninitialized and neither
+loop's invariant is about the other's counter. A counterexample shows the
+name as written, with the verifier's own name for the second one, ``i#2``, in
+``[ssa=...]``.
+
 Lexicographic measures
 ----------------------
 
