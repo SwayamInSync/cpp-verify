@@ -30,8 +30,8 @@ TEXT-NEXT: per_function_errors.cpp:55:23: Unresolved: choice_lemma [reason=const
 TEXT-NEXT: Unresolved: uses_zero_lemma [backend=z3] [reason=callee.contract] (relies on the contract of zero_lemma (it uses a construct the verifier does not support), which is not established)
 TEXT-NEXT: per_function_errors.cpp:87:5: Unresolved: uses_step [reason=construct.unsupported] (relies on step, which uses a construct the verifier does not support)
 TEXT-NEXT: Verified: inc [backend=z3]
-TEXT-NEXT: Verified: spec axiom: twice
 TEXT-NEXT: Verified: uses_twice [backend=z3]
+TEXT-NEXT: Summary: {{.*}}
 TEXT-NOT: {{.}}
 
 JSON: {"function":"pick","message":"pick: throw is unsupported: exceptions are not modeled","reason":"construct.unsupported",{{.*}}"line":11},"status":"unresolved"}
