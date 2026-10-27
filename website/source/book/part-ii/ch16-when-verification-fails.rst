@@ -26,14 +26,22 @@ For editor, CI, and agent integration, run:
 
    cpp-verify --diagnostics-format=json file.cpp
 
-Each verification result is one ``cppverify.diagnostic/1`` JSON object with a
-stable reason code, backend and optional BMC bound, inclusive source range,
-obligation ID/kind, typed model values, and trace. An unknown model value is
-JSON ``null``. An undetermined path guard is ``"active": null`` rather than an
-arbitrary branch choice. Command-line and frontend parse errors may still be
-text, and IR dumps intentionally make the stream mixed. Malformed display bytes
-are replaced with the Unicode replacement character, so JSON output remains
-valid UTF-8.
+Each verification result is one ``cppverify.diagnostic/2`` JSON object with a
+stable reason code, backend and optional BMC bound, the function and where it
+is declared, the source range of the failing expression (to the column after
+its last character), obligation ID/kind, typed model values, the
+counterexample and each step of the path as the text prints them, and the
+trace. An unknown model value is JSON ``null``. An undetermined path guard is
+``"active": null`` rather than an arbitrary branch choice. The compiler's own
+errors and warnings are records too, and a summary record ends the run. IR
+dumps intentionally make the stream mixed. Malformed display bytes are
+replaced with the Unicode replacement character, so JSON output remains valid
+UTF-8.
+
+In a GitHub workflow, ``--diagnostics-format=sarif`` writes a SARIF log that
+``github/codeql-action/upload-sarif`` turns into code-scanning alerts, each
+failure with its path, and ``--diagnostics-format=github`` annotates the
+failing lines of a pull request directly (see :doc:`../../language/tooling`).
 
 A counterexample after a loop is only as real as the loop's invariants. At
 the loop, the verifier knows what the invariants say and nothing else, so a
