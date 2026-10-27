@@ -33,6 +33,7 @@ Standalone verifier
    cpp-verify --max-failures=0 file.cpp
    cpp-verify --jobs=4 --proof-cache=.cppverify-cache file.cpp
    cpp-verify --solver-rlimit=500000 --max-query-nodes=50000 file.cpp
+   cpp-verify --memory-limit=4096 file.cpp
    cpp-verify --diagnostics-format=json file.cpp
    cpp-verify --dump-ir=1,2,3,4 file.cpp
    cpp-verify --lower-only --dump-ir=1,2,3,4 file.cpp
@@ -362,9 +363,10 @@ Versions
 
 ``cpp-verify --version`` shows the cpp-verify release and repository revision, the LLVM
 release it is built on, and each backend: the Z3 linked into it, and the cvc5 and Lean
-(``lake``) it finds on ``PATH`` with their versions. cvc5 is tested with 1.1.2 and also
-works with 1.4: a query that needs a constant array, as every one over sets, multisets,
-and maps does, sets cvc5's ``arrays-exp`` option itself, which 1.4 requires. Every Lean
+(``lake``) it finds on ``PATH`` with their versions. cvc5 is tested with 1.1.2, the
+release Ubuntu 24.04 packages, and 1.4.2, the newest: CI runs the test suite with each.
+A query that needs a constant array, as every one over sets, multisets, and maps does,
+sets cvc5's ``arrays-exp`` option itself, which 1.4 requires. Every Lean
 project pins ``leanprover/lean4:v4.35.0``, and certification runs that toolchain whatever
 elan's default is: through elan it names the pin, since elan otherwise picks a toolchain
 by the working directory, and a ``lake`` outside elan must report the pinned Lean. A
@@ -442,7 +444,8 @@ Lean export runs no solver, so every solver option is an error with
 ``--backend=lean``, ``--lean-out``, or ``--lean-project``, the same way as
 ``--timeout`` above: ``--timeout``, ``--collection-timeout``,
 ``--certify-timeout``, ``--function-timeout``, ``--solver-rlimit``,
-``--max-query-nodes``, and ``--int-encoding``. ``--lean-fallback`` runs Z3
+``--memory-limit``, and ``--int-encoding``. ``--max-query-nodes`` bounds what
+is built for every backend, Lean's included. ``--lean-fallback`` runs Z3
 first, and accepts all of them.
 
 The same rules hold when replaying an archive: ``--check-ub`` and
@@ -637,11 +640,18 @@ Backends
        cvc5 may report the conservative ``solver.unknown``.
        Not accepted with ``--backend=lean``, which runs no solver.
    * - ``--max-query-nodes=N``
-     - Reject a solver-backed canonical obligation module larger than ``N``
-       expression nodes before verification, lower-only encoding, or a requested
-       Z3 dump (default ``0``, disabled). Exhaustion is fail-closed with reason
-       ``query.size-limit``.
-       Not accepted with ``--backend=lean``, which runs no solver.
+     - The expression nodes the verifier may build for one function (default
+       4000000; ``0`` disables): its proof obligations and the facts about the
+       specs they apply, counted as they are built, a shared node once. A
+       function over it is ``Unresolved`` with reason ``query.size-limit``,
+       under every backend; cvc5's scripts and archive records, which state
+       shared terms in full, are checked against it too. See
+       `Memory limits`_.
+   * - ``--memory-limit=MB``
+     - The megabytes the solvers may use (default 8192; ``0`` disables): Z3's
+       queries together, and each cvc5 process. A query that reaches it is
+       ``Unresolved`` with reason ``solver.memory-limit``. Not accepted with
+       ``--backend=lean``, which runs no solver. See `Memory limits`_.
    * - ``--int-encoding=MODE``
      - Solver representation of machine integers for Z3, cvc5, portfolio, and
        BMC: ``auto`` (default; integers reduced modulo ``2^N`` unless a query
@@ -770,6 +780,174 @@ building the generated module, compiling your module, compiling each proof,
 and the final check. A step that takes longer leaves every result
 ``Unresolved`` with reason ``lean.export-failed``, and its message gives the
 command's error.
+
+Memory limits
+-------------
+
+Two limits bound the memory verification takes:
+
+- ``--max-query-nodes`` bounds what the verifier builds for **one** function
+  (default 4,000,000 expression nodes): its proof obligations, and the facts
+  about the specs they apply. Both are counted as they are built and stop at
+  the limit, so a function over it ends before it takes the memory. A node
+  that several terms share is counted once, as it takes memory once.
+- ``--memory-limit`` bounds the solvers (default 8192 MB): Z3's queries
+  together, since Z3 runs inside cpp-verify, and each cvc5 process on its
+  own.
+
+A function that reaches either is ``Unresolved``, never a proof or a
+counterexample, and every function whose proof relies on its contract is
+``Unresolved`` with reason ``callee.contract``. Nothing else changes.
+
+The proof obligations of a function grow faster than its code. Each check is
+proved from everything before it (the preconditions, the statements, and the
+earlier checks): its obligation states each as an assumption, sharing its
+terms with the other obligations, so a function whose checks follow many
+statements takes about their number times its checks' (not times their
+sizes). With two, four, and eight checks like the four below, the
+obligations take 259, 523, and 1,375 nodes. With a limit of 400:
+
+.. cppverify-example: flags --max-query-nodes=400
+.. cppverify-example: unresolved steps
+.. code-block:: cpp
+
+   int steps(int x)
+     cppverify::pre(0 <= x && x <= 100)
+     cppverify::post(cppverify::result == x + 4)
+   {
+     int y = x;
+     y = y + 1;
+     cppverify::check(y == x + 1);
+     y = y + 1;
+     cppverify::check(y == x + 2);
+     y = y + 1;
+     cppverify::check(y == x + 3);
+     y = y + 1;
+     cppverify::check(y == x + 4);
+     return y;
+   }
+
+.. code-block:: text
+
+   steps.cpp:1:5: Unresolved: steps [backend=z3] [reason=query.size-limit] (the proof obligations would take at least 427 expression nodes, more than the limit of 400 (--max-query-nodes): each check repeats every assumption before it, so split the function or raise the limit)
+
+The count is where building stopped, so the function needs at least that
+many. Its obligations take 523 nodes, and the checks that a proof is not
+vacuous build programs of their own, the largest with 901: with
+``--max-query-nodes=901`` the function verifies. Under ``--lower-only`` the
+same is an error, ``Z3 lowering failed: steps``, since no obligations were
+built. A function split into functions with
+contracts keeps each one's obligations small: a call repeats the callee's
+contract, not its body.
+
+The default admits the largest function of the test suite,
+``iterative_fibonacci`` in ``safe_fib.cpp`` (375,000 nodes, with the
+definitions of the specs it applies), ten times over; the ULEB128 case study
+(:doc:`../case-studies/llvm-uleb128`) takes under 200,000 a function. A node
+takes about 600 bytes, and Z3's encoding of it about five times that, so the
+default lets one function take up to about 12 GB; with more than one job,
+each job builds the obligations of its own function at once.
+
+An SMT-LIB script, which the cvc5 backend writes, and an archive record
+(``--obligation-out``) state each term in full: a subterm that several
+obligations share is written at each of its places, so they are larger than
+what is built. Each is checked against the same limit, as the nodes it
+would state: a module whose script would be larger is ``Unresolved`` with
+``query.size-limit`` under cvc5 (``its SMT-LIB script would state more than
+N expression nodes``), and one whose record would be larger is an error with
+``--obligation-out``.
+
+The facts about the specs a function applies include each spec's definition,
+unfolded as deep as its fuel. A spec that applies itself twice doubles with
+every level: at fuel 40, ``fibo``'s unfolding would have about 2^40 copies of
+its body. Its unfolding stops where it passes the limit, which, at the
+default, takes a few seconds:
+
+.. cppverify-example: flags --max-query-nodes=200000
+.. cppverify-example: unresolved unfolds
+.. code-block:: cpp
+
+   cppverify::spec int fibo(int n)
+     cppverify::decreases(n)
+   {
+     return n <= 1 ? n : fibo(n - 1) + fibo(n - 2);
+   }
+
+   int unfolds(int n)
+     cppverify::pre(n == 3)
+     cppverify::post(cppverify::result == fibo(3))
+   {
+     cppverify::ghost { cppverify::reveal_with_fuel(fibo, 40); }
+     return 2;
+   }
+
+.. code-block:: text
+
+   Verified: spec decreases: fibo
+   fibo.cpp:7:5: Unresolved: unfolds [backend=z3] [reason=query.size-limit] (the facts about the specs it applies (at each application, their definitions unfolded as deep as their fuel, and their postconditions) would take at least 228066 expression nodes, more than the limit of 200000 (--max-query-nodes): lower the fuel cppverify::reveal_with_fuel gives, or raise the limit)
+
+cpp-verify enforces ``--memory-limit`` while Z3 checks a query: every 10 ms
+it compares what Z3 has allocated, all its queries together, with the limit,
+and stops the query once it is past it. A matching loop, in which every
+instance of a quantifier makes a term that matches it again, takes memory
+until something stops it; without the limit that is the timeout, at 2 GB
+after 20 s:
+
+.. cppverify-example: flags --memory-limit=100 --timeout=60000
+.. cppverify-example: unresolved matching_loop
+.. code-block:: cpp
+
+   cppverify::spec int g(int n)
+     cppverify::decreases(n)
+   {
+     return n <= 0 ? 0 : g(n - 1);
+   }
+
+   void matching_loop(int a)
+     cppverify::pre(cppverify::forall(k, cppverify::trigger(g(k)) == g(k + 1) + 1))
+   {
+     cppverify::ghost { cppverify::hide(g); }
+     cppverify::check(g(a) > 100);
+   }
+
+   int small(int x)
+     cppverify::pre(x < 100)
+     cppverify::post(cppverify::result == x + 1)
+   {
+     return x + 1;
+   }
+
+.. code-block:: text
+
+   Verified: spec decreases: g
+   loop.cpp:11:3: Unresolved: matching_loop [backend=z3] [reason=solver.memory-limit] (proof obligation fn_5f5a31336d61746368696e675f6c6f6f7069::assertion@11:3: Z3 reached the memory limit: its queries share 100 MB (--memory-limit))
+   Verified: small [backend=z3]
+
+The memory of a stopped query is freed, so the next one runs within the
+limit. Since Z3's queries share it, one that passes it stops every query
+running beside it, which, like the time limits on a loaded machine, can leave
+a function ``Unresolved`` that would verify alone; with ``--jobs=1`` a query
+has the limit to itself. Under ``--int-encoding=bitvector`` a query stopped
+for memory is retried in the integer encoding, as after a timeout.
+
+cvc5 runs as a process of its own, which may allocate up to the limit. Past
+it an allocation fails and cvc5 stops (``std::bad_alloc``, or its SAT
+solver's ``OutOfMemoryException``), and the query is ``Unresolved`` with
+reason ``solver.memory-limit``: ``cvc5 ran out of memory: each cvc5 process
+may use N MB (--memory-limit)``. The limit is applied on Linux, to the data
+the process may allocate, and on Windows, to its committed memory; on macOS,
+which applies no such limit to the memory a process maps, cvc5 is not
+bounded. With several jobs, as many cvc5 processes may run at once.
+
+Choosing the limits:
+
+- Interactive use: the defaults. A function over ``--max-query-nodes`` is
+  usually one to split into functions with contracts.
+- A machine with little memory: lower ``--jobs`` first, since each job
+  builds one function's obligations at once, then the two limits.
+- Continuous integration with a memory allowance: give ``--memory-limit``
+  the solvers' share, and ``--max-query-nodes`` the rest divided by
+  ``--jobs`` and by 3,000 bytes.
 
 Parallel solving and proof caching
 ----------------------------------
@@ -921,7 +1099,7 @@ is a record of its own.
 
 Each non-success verification result also carries a stable reason code. Current
 codes include ``counterexample``, ``solver.timeout``, ``solver.unknown``,
-``solver.resource-limit``, ``solver.unavailable``,
+``solver.resource-limit``, ``solver.memory-limit``, ``solver.unavailable``,
 ``solver.invocation-failed``, ``solver.malformed-output``,
 ``query.size-limit``, ``encoding.failed`` (the obligations could not be
 encoded for the solver; when Z3 rejected a call, the message quotes it:
