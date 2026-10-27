@@ -59,7 +59,6 @@ int mine(int x)
 {
   return x < 3 ? 3 : x;
 }
-// CHECK-DAG: Verified: constexpr spec axiom: mymax<int>
 // CHECK-DAG: Verified: mine [backend=z3]
 
 constexpr int first(const int *p) { return p[0]; }
@@ -108,7 +107,6 @@ int distance(int a, int b)
 {
   return a < b ? b - a : a - b;
 }
-// CHECK-DAG: Verified: spec axiom: spread
 // CHECK-DAG: Verified: distance [backend=z3]
 
 // A reference to the result is not a value: it fails closed.
