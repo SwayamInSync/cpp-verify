@@ -73,6 +73,15 @@ class Z3Encoder {
   BackendTimes *Times = nullptr;
   bool SearchSlice = false;
   bool QuantifiedQuery = false;
+  /// What the checks solve, for --dump-smt2.
+  const ObligationModule *DumpModule = nullptr;
+  const LogicExpr *DumpQuery = nullptr;
+  /// The check is the rerun that profiles quantifier instances.
+  bool Profiling = false;
+  /// \p S as a standalone script: the options of its solver, as commands,
+  /// for a check of \p Ms milliseconds, then its assertions and the check.
+  std::pair<std::string, std::string> dumpScript(z3::solver &S,
+                                                 unsigned Ms) const;
   z3::solver freshSolver();
   /// \p S.check() within \p Ms milliseconds (0: no limit), unknown at once
   /// after interrupt().
