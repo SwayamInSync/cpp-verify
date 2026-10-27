@@ -91,6 +91,12 @@ struct VerifyModelValue {
   /// Empty when the solver model does not determine this value. Backends must
   /// not use model completion to manufacture a diagnostic value.
   std::optional<std::string> Value;
+  /// A reference: Value is the address it refers to.
+  bool Reference = false;
+  /// Whether the counterexample's path reaches where this version is
+  /// defined: false for a version of a branch it does not take, empty when
+  /// the model does not decide it or nothing records it.
+  std::optional<bool> OnPath;
 };
 
 struct VerifyTraceValue {
@@ -102,6 +108,7 @@ struct VerifyTraceValue {
 struct VerifyTraceEvent {
   DiagnosticTraceKind Kind = DiagnosticTraceKind::Branch;
   std::string Message;
+  SourceLocation Loc;
   ObligationSource Source;
   /// Empty when the model does not determine whether this event is on the
   /// counterexample path.
@@ -148,6 +155,10 @@ struct VerifyResult {
   /// goal of the obligation it fails, when the model gives each one.
   std::shared_ptr<const CounterexampleAssignment> Assignment;
   SourceLocation Location;
+  /// The source the failing obligation's expression spans; Location lies
+  /// in it.
+  SourceLocation BeginLocation;
+  SourceLocation EndLocation;
   ObligationSource Source;
   uint64_t CacheHits = 0;
   uint64_t CacheMisses = 0;
