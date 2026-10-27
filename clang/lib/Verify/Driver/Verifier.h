@@ -3,6 +3,7 @@
 #define LLVM_CLANG_VERIFY_DRIVER_VERIFIER_H
 
 #include "../Backend/VerifyBackend.h"
+#include "DiagnosticPart.h"
 #include "llvm/Support/raw_ostream.h"
 #include <map>
 #include <memory>
@@ -128,6 +129,9 @@ struct VerifyOptions {
   unsigned ConfirmBound = 10;
   /// Where the run counts the verdicts it prints, if anywhere.
   VerifySummary *Summary = nullptr;
+  /// Where to put each result as Clang diagnostics instead of printing it,
+  /// for the compile path to report through the compiler's own engine.
+  std::vector<VerifyDiagnosticPart> *Parts = nullptr;
   /// A run over several files, which holds each file's results until every
   /// file is verified (see CrossFileRun), or null.
   class CrossFileRun *CrossFile = nullptr;
