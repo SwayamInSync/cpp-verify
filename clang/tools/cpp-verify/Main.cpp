@@ -285,6 +285,12 @@ static cl::opt<unsigned> ConfirmBound(
              "execution that fails (default 10, 0 = do not look)"),
     cl::init(10), cl::cat(CppVerifyCategory));
 
+static cl::opt<unsigned> MaxFailures(
+    "max-failures",
+    cl::desc("Report up to this many failing checks of a function, each with "
+             "its own counterexample (default 1, 0 = all; --backend=z3)"),
+    cl::init(1), cl::cat(CppVerifyCategory));
+
 static cl::list<std::string> FunctionPatterns(
     "function",
     cl::desc("Report only the functions whose names match this glob pattern "
@@ -450,6 +456,7 @@ public:
       VOpts.Quiet = Quiet.getValue();
       VOpts.Verbose = Verbose.getValue();
       VOpts.ListFunctions = ListFunctions.getValue();
+      VOpts.MaxFailures = MaxFailures.getValue();
       VOpts.FunctionPatterns.assign(FunctionPatterns.begin(),
                                     FunctionPatterns.end());
       VOpts.ConfirmBound = ConfirmBound.getValue();
@@ -687,6 +694,8 @@ static bool resolveOptions(bool Replay) {
            (Replay || Backend == "bmc" || Backend == "lean"))
     Error = "--confirm-bound requires source verification with --backend=z3, "
             "cvc5, portfolio, or race";
+  else if (given(MaxFailures) && (Replay || Backend != "z3"))
+    Error = "--max-failures requires source verification with --backend=z3";
   else if (given(LeanFallbackScope) && LeanFallback.empty())
     Error = "--lean-fallback-scope requires --lean-fallback";
   else if (given(LeanAutoTimeout) && LeanProject.empty() &&
