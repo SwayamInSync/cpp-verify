@@ -190,8 +190,27 @@ file is verified, then printed in the order the files are given.
 - A trusted declaration stays an assumption, with ``[trusts=...]`` on what
   relies on it; only its definition, where it is verified, can find a wrong
   contract.
-- Files verified in separate runs, as in a build that verifies each object,
-  do not settle their contracts yet.
+
+Files verified apart, as a build verifies each object, settle their
+contracts with a check: each file records what it verifies and what it
+assumes, and ``cpp-verify --check-contracts`` settles the records as one run
+does. A proof that rests on a contract of another file says so, as
+``[assumes=clamp100]``, and the warning that the contract has no definition
+is not printed:
+
+.. code-block:: text
+
+   $ clang++ -fverify-contracts -fverify-contracts-out=a.o.cppverify -c src/a.cpp -o a.o -Iinclude
+   Verified: scaled [backend=z3] [assumes=clamp100]
+   $ clang++ -fverify-contracts -fverify-contracts-out=mathx.o.cppverify -c src/mathx.cpp -o mathx.o -Iinclude
+   include/mathx.h:2:42: error: verification failed: clamp100 [...]
+   $ cpp-verify --check-contracts a.o.cppverify mathx.o.cppverify
+   src/a.cpp:3:5: error: the proof of scaled relies on the contract of clamp100, which its verification in src/mathx.cpp does not establish
+   Contracts: 1 proof rests on contracts of other files, 1 on one not established
+
+``cpp-verify --contracts-out=FILE`` records one file the same way. The check
+exits with a non-zero status when a proof relies on a contract not
+established: run it as a build's last step, beside the link.
 
 An uncontracted, non-recursive, loop-free ``constexpr`` definition may be
 lifted for use in contract expressions; a recursive one used with symbolic
