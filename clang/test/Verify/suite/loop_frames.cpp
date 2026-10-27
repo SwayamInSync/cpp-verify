@@ -37,7 +37,7 @@ void writes_input(int *a, int *b, int n)
     b[0] = i;
   }
 }
-// CHECK-DAG: error: verification failed: writes_input [{{.*}}::postcondition@
+// CHECK-DAG: error: verification failed: writes_input [postcondition]
 
 // The loop writes only a[0..n), so a[n] keeps its value.
 void keeps_tail(int *a, int n)
@@ -68,7 +68,7 @@ void loses_tail(int *a, int n)
     a[i] = 0;
   }
 }
-// CHECK-DAG: error: verification failed: loses_tail [{{.*}}::postcondition@
+// CHECK-DAG: error: verification failed: loses_tail [postcondition]
 
 // Read in each iteration, a[0 : i] is the prefix written so far.
 void untouched_suffix(int *a, int n)
@@ -100,7 +100,7 @@ void writes_ahead(int *a, int n)
     a[i + 1] = 0;
   }
 }
-// CHECK-DAG: error: verification failed: writes_ahead [{{.*}}::frame@[[@LINE-6]]:25]
+// CHECK-DAG: :[[@LINE-6]]:25: error: verification failed: writes_ahead [frame]
 
 // A continue ends the iteration, so the frame is checked there too.
 void writes_then_continues(int *a, int *b, int n)
@@ -119,7 +119,7 @@ void writes_then_continues(int *a, int *b, int n)
     a[i] = 0;
   }
 }
-// CHECK-DAG: error: verification failed: writes_then_continues [{{.*}}::frame@[[@LINE-10]]:25]
+// CHECK-DAG: :[[@LINE-10]]:25: error: verification failed: writes_then_continues [frame]
 
 void set(int *x)
   cppverify::pre(x != nullptr)
@@ -198,7 +198,7 @@ void counts_wrongly(int *count, int *a, int n)
     *a = i;
   }
 }
-// CHECK-DAG: error: verification failed: counts_wrongly [{{.*}}::postcondition@
+// CHECK-DAG: error: verification failed: counts_wrongly [postcondition]
 
 // A store's object is found from its address: a pointer walking through a
 // stays in a, so b keeps its value.
@@ -249,7 +249,7 @@ void chosen_writes_b(int *a, int *b, int n, bool first)
     p[i] = 0;
   }
 }
-// CHECK-DAG: error: verification failed: chosen_writes_b [{{.*}}::postcondition@
+// CHECK-DAG: error: verification failed: chosen_writes_b [postcondition]
 
 // With aliases(a, b), a may be b.
 void aliased_writes(int *a, int *b, int n)
@@ -265,7 +265,7 @@ void aliased_writes(int *a, int *b, int n)
     a[i] = 0;
   }
 }
-// CHECK-DAG: error: verification failed: aliased_writes [{{.*}}::postcondition@
+// CHECK-DAG: error: verification failed: aliased_writes [postcondition]
 
 // IR: fn untouched_suffix
 // IR: while
