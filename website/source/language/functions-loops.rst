@@ -22,6 +22,14 @@ inherits that declaration's contract even when its parameter names differ:
 
    int f(int x) { return x + 1; }
 
+A local may take the name of a parameter or of another local, in an inner
+block or a later one (two ``for (int i = ...)`` loops, say): each declaration
+is a variable of its own, uninitialized until it is assigned whatever an
+earlier one with its name held. A counterexample shows its name as written,
+and in ``[ssa=...]`` the verifier's name for it, ``i#2`` for the second ``i``.
+Before 0.2 such a declaration was an error, ``local variable shadowing is
+unsupported``.
+
 A caller's proof uses its callees' contracts, so a verdict is only as good as
 those contracts. A caller whose proof relies on a callee contract that the
 callee's own verification did not establish is ``Unresolved`` with reason
