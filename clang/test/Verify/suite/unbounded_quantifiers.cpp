@@ -25,7 +25,7 @@ void false_over_integers()
 {
   cppverify::check(cppverify::forall(k, 2 * k + 1 > 0));
 }
-// CHECK-DAG: error: verification failed: false_over_integers [{{.*}}::assertion@{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: false_over_integers [assertion]{{.*}}[reason=counterexample]
 
 void true_over_range()
 {
@@ -47,7 +47,7 @@ void cell_claim(int *p)
 {
   cppverify::check(cppverify::forall(k, k < 0 || k > 1 || p[k] == 3));
 }
-// CHECK-DAG: error: verification failed: cell_claim [{{.*}}::assertion@{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: cell_claim [assertion]{{.*}}[reason=counterexample]
 
 void cell_claim_holds(int *p)
   cppverify::pre(valid(p, 4) && p[0] == 3)
