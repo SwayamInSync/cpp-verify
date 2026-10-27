@@ -11,6 +11,7 @@ Standalone verifier
    cpp-verify --quiet file.cpp
    cpp-verify --verbose file.cpp
    cpp-verify --list-functions file.cpp
+   cpp-verify --function='parse_*' --function=encode file.cpp
    cpp-verify file.cpp -- -I include -DNDEBUG
    cpp-verify --backend=z3 file.cpp
    cpp-verify --backend=cvc5 file.cpp
@@ -212,6 +213,22 @@ whole output, of ``--list-functions``, and of archive replay
    summary.cpp:3:14: spec twice
    summary.cpp:5:5: function add_one
    summary.cpp:12:5: function add_two
+
+``--function=PATTERN`` reports only the functions whose names match the glob
+pattern (``*``, ``?``, ``[...]``; repeatable, a function matching any is
+reported), as ``Verified`` and the other lines print the name: ``Ring::push``,
+``total<short>``; an inductive predicate is reported with the checks generated
+for it (its step's termination and induction, its rule proofs). Every verdict
+it reports is the one a run of the whole file gives: the functions whose
+contracts those verdicts rely on are verified too, round by round, and so
+are all spec and proof functions, whose facts any
+proof may use; their results are not printed, and a selected function that
+relies on a callee whose verification fails is ``Unresolved`` with
+``callee.contract`` exactly as in a whole run. An executable function no
+reported verdict relies on is not verified at all. The exit status follows
+what is reported: 0 when every reported verdict is a proof. A pattern that
+matches no function is an error. With ``--list-functions`` it narrows the
+listing.
 
 ``cpp-verify --help`` shows each time limit's default (``--timeout``,
 30000 ms).
