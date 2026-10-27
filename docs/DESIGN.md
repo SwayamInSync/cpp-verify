@@ -438,6 +438,30 @@ cppverify::calc {
   every step is `==`, `<` or `>` when some step is strict, else `<=` or `>=`.
   Mixing `<`-like and `>`-like steps is rejected.
 
+### assert() and calls that do not return
+
+`assert(c)` must not fail (decision Q2 of the 0.2 plan): reaching a call that
+does not return (`__assert_fail` of a failed assert, `abort`, `exit`,
+`std::terminate`, `__builtin_unreachable`, `__builtin_trap`, any
+`[[noreturn]]` function, and MSVC's `_wassert`, which is not marked) is an
+obligation of kind `unreachable` at the call, and the path ends there
+(`assume false`), so after `assert(c)` the condition holds. Frama-C's
+`assert` and Kani's panics are the precedent; treating such calls as
+assumptions would hide the bug an assert guards against. With `NDEBUG`,
+`assert(c)` expands to `(void)0` and verifies nothing, exactly as compiled.
+The converter needs no knowledge of the macro: a discarded `?:`, `&&`, or
+`||` is an `if`, an implicit conversion or a cast to `void` of a discarded
+value evaluates the value, and a value computed for nothing (`x + 1;`) is
+computed with its checks. `[[assume(e)]]` and `__builtin_assume(e)` make `e`
+false undefined, so `e` is asserted (kind `assertion`), then assumed.
+
+An uncontracted `constexpr` helper is lifted as a spec whose definedness is
+checked at each call by unfolding its body. Its `assert(c)` becomes, during
+that unfolding, a `Require(!path || c)` expression in the evaluation, true
+as a value, whose evaluation requires its condition, so each call checks it
+with the helper's other operations; the path that does not return gives the
+helper any value, since no call returns from it.
+
 ## Ghost Blocks
 
 <!-- cppverify-example: fragment -->
