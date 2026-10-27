@@ -629,6 +629,8 @@ VerifyResult VerifyBackend::verifyDirect(const ObligationModule &Module) {
     Result.ObligationId.clear();
     Result.ObligationType.reset();
     Result.Location = SourceLocation();
+    Result.BeginLocation = SourceLocation();
+    Result.EndLocation = SourceLocation();
     Result.Source = {};
   } else if (Capabilities.ProducesVerificationVerdict &&
              (Result.Status == VerifyStatus::Exported ||
@@ -642,6 +644,8 @@ VerifyResult VerifyBackend::verifyDirect(const ObligationModule &Module) {
     Result.ObligationId.clear();
     Result.ObligationType.reset();
     Result.Location = SourceLocation();
+    Result.BeginLocation = SourceLocation();
+    Result.EndLocation = SourceLocation();
     Result.Source = {};
   }
   // A model of `false` says nothing about the program.
