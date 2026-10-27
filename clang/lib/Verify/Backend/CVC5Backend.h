@@ -30,6 +30,7 @@ class CVC5VerifyBackend : public VerifyBackend {
   /// Set by cancel(): the running process is stopped and no other starts.
   std::atomic<bool> Cancelled{false};
   unsigned ResourceLimit;
+  uint64_t MemoryLimitMB;
   unsigned Jobs;
   llvm::StdThreadPool *Pool;
   std::optional<std::chrono::steady_clock::time_point> Deadline;

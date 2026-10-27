@@ -55,7 +55,9 @@ void printRow(llvm::raw_ostream &OS, llvm::StringRef Backend,
 }
 
 void printCVC5(llvm::raw_ostream &OS) {
-  std::string Tested = ("tested with " + CVC5TestedVersion).str();
+  std::string Tested = ("tested with " + CVC5OldestTestedVersion + " to " +
+                        CVC5NewestTestedVersion)
+                           .str();
   auto Program = llvm::sys::findProgramByName("cvc5");
   if (!Program) {
     printRow(OS, "cvc5", "missing",
@@ -65,8 +67,13 @@ void printCVC5(llvm::raw_ostream &OS) {
   }
   std::optional<std::string> Output =
       runForOutput(*Program, {*Program, "--version"});
-  llvm::StringRef Version =
-      Output ? numberAfter(*Output, "cvc5 version") : llvm::StringRef();
+  // "This is cvc5 version 1.1.2", or "cvc5 1.4.2 [git ...]" in later releases.
+  llvm::StringRef Version;
+  if (Output) {
+    Version = numberAfter(*Output, "cvc5 version");
+    if (Version.empty())
+      Version = numberAfter(*Output, "cvc5");
+  }
   printRow(OS, "cvc5", Version.empty() ? "unknown" : Version,
            *Program + " (" + Tested + ")");
 }
