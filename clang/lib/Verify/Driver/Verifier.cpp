@@ -44,6 +44,7 @@
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/Process.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/SHA256.h"
 #include "llvm/Support/ThreadPool.h"
@@ -1109,6 +1110,12 @@ struct VerifyDiagnostic {
   /// verdict of its own.
   bool Additional = false;
 };
+
+static uint64_t nanosecondsSince(std::chrono::steady_clock::time_point Start) {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+             std::chrono::steady_clock::now() - Start)
+      .count();
+}
 
 static std::string backendSuffix(const VerifyResult &Result) {
   std::string Suffix;
@@ -2801,6 +2808,21 @@ class Verifier {
   std::vector<VerifyDiagnostic> Diags;
   /// What --list-functions prints: each function's location and kind.
   std::vector<std::pair<SourceLocation, std::string>> Listing;
+  /// Where the verification of each reported function spent its time, in
+  /// nanoseconds, and of the run, for --time-report.
+  struct FunctionTime {
+    std::string Name;
+    uint64_t Total = 0;
+    uint64_t Solving = 0;
+    uint64_t Induction = 0;
+    uint64_t Certification = 0;
+    uint64_t Confirmation = 0;
+  };
+  std::vector<FunctionTime> Timings;
+  std::chrono::steady_clock::time_point RunStart =
+      std::chrono::steady_clock::now();
+  std::optional<std::chrono::steady_clock::time_point> Converted, Verified,
+      Settled;
   std::optional<LeanProject> Lean;
   /// Where each template specialization verified is instantiated, and what
   /// it is, by its function's name.
@@ -3169,6 +3191,7 @@ public:
           {VerifyDiagnostic::Warning, "no verifiable functions found"});
       return true;
     }
+    Converted = std::chrono::steady_clock::now();
     // A function is selected by the name its verdicts print, which for an
     // inductive predicate's step is the predicate's; the predicate's rule
     // proofs are reported with it.
@@ -3427,6 +3450,8 @@ public:
         const VFunction *Fn;
         std::string Label;
         BackendKind Kind;
+        /// The function whose verification proposed it.
+        size_t Function;
       };
       std::vector<Confirmation> Confirmations;
       /// Certified failures a fallback project shows in Lean: each one's
@@ -3446,6 +3471,13 @@ public:
       std::string Archive;
       /// Ctrl-C came before the verification ended.
       bool Interrupted = false;
+      /// Where the verification spent its time (--time-report), in
+      /// nanoseconds: the task, its backends, the notes of its failures,
+      /// and the confirmations by proof after every task.
+      std::shared_ptr<BackendTimes> Times;
+      uint64_t Task = 0;
+      uint64_t Notes = 0;
+      uint64_t Confirmed = 0;
     };
     std::vector<FunctionRun> Runs(Functions.size());
     // The source manager caches its last line lookup.
@@ -3473,7 +3505,7 @@ public:
           Run.Confirmations.push_back({Diags.size(),
                                        std::make_shared<ObligationModule>(
                                            copyObligationModule(Checked)),
-                                       R, &In, Label, Kind});
+                                       R, &In, Label, Kind, Index});
         explainUnsettled(R, In, Checked);
       };
       llvm::raw_string_ostream DumpStream(Run.Dump);
@@ -3505,6 +3537,13 @@ public:
       }
       auto SmokeBackend = createVerifyBackend(BackendKind::Z3, nullptr, 0,
                                               SmokeExecution, nullptr);
+      if (Opts.TimeReport) {
+        Run.Times = std::make_shared<BackendTimes>();
+        Backend->setTimes(Run.Times);
+        if (OwnSpecBackend)
+          OwnSpecBackend->setTimes(Run.Times);
+        SmokeBackend->setTimes(Run.Times);
+      }
       // What else a failure shows. A counterexample that passes through a
       // loop starts from any state the loop's invariants allow, which no
       // execution need reach; unrolling the loops looks for an execution
@@ -3537,6 +3576,9 @@ public:
             "execution reaches");
         if (Opts.ConfirmBound == 0 || !Failure.ObligationType)
           return Notes;
+        const auto UnrollStart = std::chrono::steady_clock::now();
+        llvm::scope_exit CountUnrolling(
+            [&] { Run.Notes += nanosecondsSince(UnrollStart); });
         VFunction Bounded = cloneVFunction(F);
         annotatePointerOrigins(Bounded);
         if (Opts.CheckUB && !F.TotalExpressions && instrumentUBChecks(Bounded))
@@ -4907,15 +4949,34 @@ public:
     for (size_t I = 0; I != Functions.size(); ++I)
       if (Scheduled[I])
         Batch.push_back(I);
+    // On a terminal, a line on standard error says how many functions are
+    // done; the results follow once every verdict is settled.
+    const bool ShowProgress =
+        Opts.Progress.value_or(llvm::sys::Process::StandardErrIsDisplayed()) &&
+        Opts.Diagnostics != DiagnosticFormat::Json;
+    std::mutex ProgressLock;
+    size_t Done = 0;
+    size_t Queued = Batch.size();
+    auto runFunction = [&](size_t I) {
+      const auto Start = std::chrono::steady_clock::now();
+      verifyFunction(I);
+      Runs[I].Task = nanosecondsSince(Start);
+      if (!ShowProgress)
+        return;
+      std::lock_guard<std::mutex> Lock(ProgressLock);
+      llvm::errs() << "\r\x1b[K[" << ++Done << "/" << Queued << "] "
+                   << Functions[I]->Name;
+      llvm::errs().flush();
+    };
     while (!Batch.empty()) {
       if (Parallel) {
         TaskGroup Group(*Pool);
         for (size_t I : Batch)
-          Group.async([&verifyFunction, I] { verifyFunction(I); });
+          Group.async([&runFunction, I] { runFunction(I); });
         Group.wait();
       } else {
         for (size_t I : Batch)
-          verifyFunction(I);
+          runFunction(I);
       }
       std::vector<size_t> Next;
       auto need = [&](const std::string &Identity) {
@@ -4935,7 +4996,32 @@ public:
       }
       llvm::sort(Next);
       Batch = std::move(Next);
+      Queued += Batch.size();
     }
+    if (ShowProgress && Done != 0)
+      llvm::errs() << "\r\x1b[K";
+    Verified = std::chrono::steady_clock::now();
+    // The report lists the functions reported, as a run of the whole file
+    // would, with the time of the confirmations below.
+    llvm::scope_exit ReportTimes([&] {
+      if (!Opts.TimeReport)
+        return;
+      for (size_t I = 0; I != Functions.size(); ++I) {
+        const FunctionRun &Run = Runs[I];
+        const VFunction &Fn = *Functions[I];
+        if (!Scheduled[I] || !Selected[I] || !Run.Times || Fn.IsBuiltin ||
+            Fn.IsChoice)
+          continue;
+        FunctionTime Time;
+        Time.Name = Fn.Name;
+        Time.Total = Run.Task + Run.Confirmed;
+        Time.Solving = Run.Times->Solving;
+        Time.Induction = Run.Times->Induction;
+        Time.Certification = Run.Times->Certification;
+        Time.Confirmation = Run.Notes + Run.Confirmed;
+        Timings.push_back(std::move(Time));
+      }
+    });
     // A function whose verification Ctrl-C cut short is reported by one
     // line. Its verdicts stay, hidden, for what they establish: a query the
     // interrupt stopped left its verdict unresolved, and a proof found
@@ -5579,6 +5665,7 @@ public:
           Lemmas.emplace(Functions[I]->Identity, Runs[I].Contract);
       std::vector<std::optional<VerifyResult>> Outcomes(Confirmations.size());
       std::vector<char> CutShort(Confirmations.size());
+      std::vector<uint64_t> ConfirmationTimes(Confirmations.size());
       auto confirm = [&](size_t I) {
         const FunctionRun::Confirmation &Pending = Confirmations[I];
         const VerifyDiagnostic &Verdict = Diags[Pending.Index];
@@ -5601,10 +5688,12 @@ public:
           CutShort[I] = true;
           return;
         }
+        const auto Start = std::chrono::steady_clock::now();
         std::unique_ptr<VerifyBackend> By = createVerifyBackend(
             Pending.Kind, nullptr, Opts.BMCUnroll, Execution, nullptr);
         Outcomes[I] = confirmCounterexample(
             Checked, Pending.Result, InterfaceMap, *Pending.Fn, Lemmas, *By);
+        ConfirmationTimes[I] = nanosecondsSince(Start);
         CutShort[I] = !Outcomes[I] && interruptRequested();
       };
       if (Parallel) {
@@ -5616,6 +5705,8 @@ public:
         for (size_t I = 0; I != Confirmations.size(); ++I)
           confirm(I);
       }
+      for (size_t I = 0; I != Confirmations.size(); ++I)
+        Runs[Confirmations[I].Function].Confirmed += ConfirmationTimes[I];
       for (size_t I = 0; I != Confirmations.size(); ++I) {
         if (CutShort[I]) {
           VerifyDiagnostic &Verdict = Diags[Confirmations[I].Index];
@@ -6095,6 +6186,78 @@ public:
     }
   }
 
+  /// The time the run took to settle the verdicts after verifying.
+  void settled() { Settled = std::chrono::steady_clock::now(); }
+
+  /// Where the run spent its time: converting, verifying the functions (at
+  /// once, with several jobs), and settling the verdicts; and each reported
+  /// function, the busiest first. A function's solving includes its
+  /// inductions and certification; certification is summed over checks that
+  /// may run at once.
+  void printTimeReport(llvm::raw_ostream &OS) const {
+    if (!Converted || !Verified || !Settled)
+      return;
+    auto seconds = [](uint64_t Nanoseconds) {
+      return static_cast<double>(Nanoseconds) / 1e9;
+    };
+    auto between = [&](std::chrono::steady_clock::time_point From,
+                       std::chrono::steady_clock::time_point To) {
+      return seconds(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(To - From)
+              .count());
+    };
+    std::vector<const FunctionTime *> Busiest;
+    for (const FunctionTime &Time : Timings)
+      Busiest.push_back(&Time);
+    llvm::stable_sort(Busiest,
+                      [](const FunctionTime *A, const FunctionTime *B) {
+                        return A->Total > B->Total;
+                      });
+    auto lowering = [](const FunctionTime &Time) {
+      const uint64_t Rest = Time.Solving + Time.Confirmation;
+      return Time.Total > Rest ? Time.Total - Rest : 0;
+    };
+    if (Opts.Diagnostics == DiagnosticFormat::Json) {
+      llvm::json::Object Run;
+      Run["schema"] = "cppverify.time/1";
+      Run["seconds"] =
+          llvm::json::Object{{"conversion", between(RunStart, *Converted)},
+                             {"verification", between(*Converted, *Verified)},
+                             {"settling", between(*Verified, *Settled)}};
+      OS << llvm::json::Value(std::move(Run)) << "\n";
+      for (const FunctionTime *Time : Busiest) {
+        llvm::json::Object Record;
+        Record["schema"] = "cppverify.time/1";
+        Record["function"] = Time->Name;
+        Record["seconds"] =
+            llvm::json::Object{{"total", seconds(Time->Total)},
+                               {"lowering", seconds(lowering(*Time))},
+                               {"solving", seconds(Time->Solving)},
+                               {"induction", seconds(Time->Induction)},
+                               {"certification", seconds(Time->Certification)},
+                               {"confirmation", seconds(Time->Confirmation)}};
+        OS << llvm::json::Value(std::move(Record)) << "\n";
+      }
+      return;
+    }
+    OS << llvm::formatv("Time report (seconds): conversion {0:F3}, "
+                        "verification {1:F3}, settling {2:F3}\n",
+                        between(RunStart, *Converted),
+                        between(*Converted, *Verified),
+                        between(*Verified, *Settled));
+    if (Busiest.empty())
+      return;
+    OS << "     total  lowering   solving  induction  certification  "
+          "confirmation  function\n";
+    for (const FunctionTime *Time : Busiest)
+      OS << llvm::formatv("{0,10:F3}{1,10:F3}{2,10:F3}{3,11:F3}{4,15:F3}"
+                          "{5,14:F3}  {6}\n",
+                          seconds(Time->Total), seconds(lowering(*Time)),
+                          seconds(Time->Solving), seconds(Time->Induction),
+                          seconds(Time->Certification),
+                          seconds(Time->Confirmation), Time->Name);
+  }
+
   void printDiagnostics(llvm::raw_ostream &OS) const {
     for (const auto &[Loc, Line] : Listing) {
       PresumedLoc PLoc = Ctx.getSourceManager().getPresumedLoc(Loc);
@@ -6215,7 +6378,10 @@ bool verify::verifyTranslationUnit(ASTContext &Ctx, llvm::raw_ostream &OS,
                                    const VerifyOptions &Opts) {
   Verifier V(Ctx, Opts, OS);
   bool Ok = V.run();
+  V.settled();
   V.printDiagnostics(OS);
+  if (Opts.TimeReport)
+    V.printTimeReport(OS);
   return Ok;
 }
 
