@@ -2832,6 +2832,16 @@ class Verifier {
   llvm::Expected<std::string> archiveRecord(const ObligationModule &Module) {
     if (!Opts.ObligationOut)
       return std::string();
+    // A record states each term in full, a subterm that goals share at each
+    // of its places.
+    if (Opts.MaxQueryNodes != 0 &&
+        obligationModuleTreeNodesUpTo(Module, Opts.MaxQueryNodes) >
+            Opts.MaxQueryNodes)
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "its record would state more than %llu expression nodes, the limit "
+          "(--max-query-nodes)",
+          static_cast<unsigned long long>(Opts.MaxQueryNodes));
 
     std::string Serialized = serializeObligationModule(Module);
     auto RoundTrip = deserializeObligationModules(Serialized);
