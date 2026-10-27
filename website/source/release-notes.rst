@@ -483,6 +483,19 @@ are errors at the statement (:doc:`language/functions-loops`).
 Running cpp-verify
 ~~~~~~~~~~~~~~~~~~
 
+**Results as records, SARIF, and annotations.** JSON records had no source
+for a verified function, a failure's range began at its caret and ended at
+the first column of its last token, compiler errors stayed text, and nothing
+ended the run; there was no SARIF. JSON records are now
+``cppverify.diagnostic/2``: every one names its function and where it is
+declared, a failure spans its whole expression to the column after its last
+character and gives its counterexample and path as the text prints them, the
+compiler's own errors and warnings are records with their notes, and a
+``cppverify.summary/1`` record ends the run. ``--diagnostics-format=sarif``
+writes one SARIF 2.1.0 log for code scanning, each failure with its path as
+a code flow, and ``--diagnostics-format=github`` annotates errors and
+warnings in a GitHub workflow (:doc:`language/tooling`).
+
 **Failures read like compiler errors.** A failure was one line that named its
 obligation by an internal identity and listed every SSA version of every
 variable with its type (``verification failed: abs
@@ -503,8 +516,7 @@ diagnostic of its own instead of printing the verifier's text and then one
 a warning belongs to ``-Wcppverify`` (so ``-Wno-cppverify`` and
 ``-Werror=cppverify`` work), a proof is a remark shown with ``-Rcppverify``,
 and ``-fdiagnostics-format=sarif`` carries them all. In JSON Lines a record's
-``message`` is the new error text; its other fields are unchanged
-(:doc:`language/tooling`).
+``message`` is the new error text (:doc:`language/tooling`).
 
 **Counterexamples after a loop.** A failure whose counterexample passed
 through a loop looked like any other, though its state there came from the
@@ -781,10 +793,11 @@ refuses a ``lake`` outside elan that reports another Lean
 Data formats
 ~~~~~~~~~~~~
 
-Archives are ``cppverify.obligation/4``, which adds measures, the sources
-of assumptions, and where each variable version is defined, and reads ``/3``,
-``/2``, and ``/1``; JSON diagnostics stay
-``cppverify.diagnostic/1``. A module whose specs' measures apply other specs
+Archives are ``cppverify.obligation/5``, which adds measures, the sources
+of assumptions, where each variable version is defined, and where each
+source range begins, and reads ``/4`` to ``/1``; JSON diagnostics are
+``cppverify.diagnostic/2``, ending with a ``cppverify.summary/1`` record, and
+``--diagnostics-format=sarif`` writes SARIF 2.1.0. A module whose specs' measures apply other specs
 keeps them, so its module hash changes; per-obligation hashes, and the proof
 cache keyed by them, do not. JSON records may carry the status
 ``proved-obligations`` (archive replay) and the reason ``interrupted``
