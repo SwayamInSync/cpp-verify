@@ -251,6 +251,43 @@ int two_lines(int x)
 
 // JSON keeps every version, and marks those of branches the path does not
 // take.
+// A step the counterexample does not decide is marked.
+int undecided(bool choose)
+  cv::post(cv::result == 0)
+{
+  if (choose) {
+  } else {
+  }
+  return 1;
+}
+//      CHECK: {{.*}}failure_notes.cpp:[[@LINE-7]]:23: error: verification failed: undecided [postcondition] [backend=z3] [reason=counterexample]
+//      CHECK: {{.*}}failure_notes.cpp:[[@LINE-6]]:3: note: perhaps takes the true branch (the counterexample does not decide whether this step is taken)
+// CHECK-NEXT: {{^ *}}[[@LINE-7]] |   if (choose) {{{$}}
+// CHECK-NEXT: {{^}}      |   ^{{$}}
+// CHECK-NEXT: {{.*}}failure_notes.cpp:[[@LINE-9]]:3: note: perhaps takes the false branch (the counterexample does not decide whether this step is taken)
+
+// A check inside a loop fails in an arbitrary iteration of it.
+int iterate(int n)
+  cv::pre(0 <= n && n <= 5)
+  cv::post(cv::result == n)
+{
+  int i = 0;
+  while (i < n)
+    cv::invariant(0 <= i && i <= n)
+    cv::decreases(n - i)
+  {
+    cv::check(i < 4);
+    i = i + 1;
+  }
+  return i;
+}
+//      CHECK: {{.*}}failure_notes.cpp:[[@LINE-5]]:5: error: verification failed: iterate [assertion] [backend=z3] [reason=counterexample]
+//      CHECK: {{.*}}failure_notes.cpp:[[@LINE-6]]:5: note: counterexample: n = [[N:[45]]], i = 0 -> 4
+// CHECK-NEXT: {{.*}}failure_notes.cpp:[[@LINE-11]]:3: note: enters the loop
+// CHECK-NEXT: {{^ *}}[[@LINE-12]] |   while (i < n){{$}}
+// CHECK-NEXT: {{^}}      |   ^{{$}}
+// CHECK-NEXT: {{.*}}failure_notes.cpp:[[@LINE-14]]:3: note: starts an arbitrary iteration of the loop, where its condition is true
+
 // An archive keeps where each version is defined, so its replay lists the
 // same values.
 // REPLAY: error: verification failed: steps [postcondition]
