@@ -103,6 +103,7 @@ class OwnedReturnAnalyzer {
     case VExpr::FieldAccess:
     case VExpr::SpecCall:
     case VExpr::OverflowCheck:
+    case VExpr::Require:
       return PointerValue{true};
     }
     return PointerValue{true};

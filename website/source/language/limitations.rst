@@ -113,6 +113,24 @@ C++ feature boundaries
    * - Scalar types
      - ``bool``, integral types, and enums preserve target width and signedness.
      - Floating point, ``volatile``, and other non-integral scalar semantics.
+   * - Expressions and declarations
+     - ``assert``, calls that do not return (an obligation that they are
+       not reached), ``[[assume(e)]]`` and ``__builtin_assume(e)`` (proved,
+       then assumed), discarded values (``x + 1;``, ``c && f(x);``),
+       character literals (``'0'``, ``L'A'``), constants Clang evaluates (a
+       ``consteval`` call, an ``if constexpr`` condition, ``noexcept(e)``, a
+       requires-expression, a concept, a type trait, ``offsetof``,
+       ``__builtin_LINE()``), template value
+       parameters, default arguments and default member initializers,
+       ``__builtin_expect``, a record returned from an initializer list
+       (``return Pt{a, b};``), structured bindings that copy a record, and
+       declarations that do nothing (``static_assert``, type aliases,
+       using-declarations, local classes and enumerations).
+     - The value of an assignment, an increment, or a comma expression
+       inside an expression (``a = b = 0``, ``*p++``); a pointer into a
+       string literal (its characters are read by index);
+       other builtins; structured bindings of an array, of a tuple-like type,
+       or by reference.
    * - Pointers
      - One pointer level to supported complete objects. The type gate admits
        ``void*``, but no general erasure/ownership model is claimed.
@@ -173,21 +191,30 @@ C++ feature boundaries
        (reported), variadics, indirect calls,
        recursion through a
        function that allocates or frees storage, and general link-time
-       summaries.
+       summaries. A function whose proof obligations would take more than
+       ``--max-query-nodes`` expression nodes (4 million by default) is
+       ``Unresolved`` with reason ``query.size-limit``: each check restates
+       every assumption before it, so a long function with many checks grows
+       fastest. See the memory limits of :doc:`tooling`.
    * - Storage
      - Supported locals, constrained scalar dynamic storage, and inferred
        acyclic fresh-owned scalar factory results.
-     - Non-integral or aggregate globals, static locals, thread-local storage,
-       general returned allocations, and user-declared modular allocation
-       effects.
+     - Mutable aggregate globals, mutable static locals, pointers into
+       constant tables, thread-local storage, general returned allocations,
+       and user-declared modular allocation effects. Constant tables
+       (``const`` and ``constexpr`` arrays with constant initializers, and
+       string literals) are read by index (:doc:`pointers`).
    * - Structured control flow
      - ``if`` (including C++17 initializer), ``while``, ``for`` (with or
        without a condition), contracted ``do`` loops, condition declarations,
        ``switch`` (fallthrough, a ``default`` anywhere, GNU case ranges, an
-       init statement), blocks, ``return``, ``break``, and ``continue``
+       init statement), range-based ``for`` over an array (with
+       ``cppverify::index``), blocks, ``return``, ``break``, and ``continue``
        anywhere, and comma expressions as statements.
-     - Range-``for``, ``goto``, labels, a ``case`` label inside another
-       statement of its switch (Duff's device), and ``[[assume]]``. An
+     - A range-based ``for`` over a class (through ``begin`` and ``end``),
+       over an array of arrays, or over a global array that is not a constant
+       table, ``goto``, labels, and a ``case`` label inside another statement of its
+       switch (Duff's device). An
        expression or statement nested more than 256 operations
        deep (a sum of 300 terms, say) is reported where it is, and the file
        stops: ``error: total: the expression at 4:276 nests more than 256

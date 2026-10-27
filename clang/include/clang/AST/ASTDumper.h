@@ -53,6 +53,7 @@ public:
   void VisitWhileStmt(const WhileStmt *S);
   void VisitDoStmt(const DoStmt *S);
   void VisitForStmt(const ForStmt *S);
+  void VisitCXXForRangeStmt(const CXXForRangeStmt *S);
 };
 
 } // namespace clang

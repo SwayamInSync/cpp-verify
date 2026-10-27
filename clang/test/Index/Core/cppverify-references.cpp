@@ -31,3 +31,15 @@ int f(int n)
 // CHECK-DAG: [[@LINE-2]]:7 | function/C | check | {{.*}} | Ref,RelCont
   return sq(n);
 }
+
+int range(const int (&a)[3]) {
+  int s = 0;
+  for (int v : a)
+    cv::invariant(s >= 0 || cv::index > 0)
+// CHECK-DAG: [[@LINE-1]]:19 | variable(local)/C | s | {{.*}} | Ref,Read,RelCont
+// CHECK-DAG: [[@LINE-2]]:9 | function/C | invariant | {{.*}} | Ref,RelCont
+// CHECK-DAG: [[@LINE-3]]:33 | enumerator/C | index | {{.*}} | Ref,RelCont
+// CHECK-NOT: __cppverify_index
+    s = s + v;
+  return s;
+}

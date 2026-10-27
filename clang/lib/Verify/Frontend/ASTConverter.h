@@ -137,8 +137,14 @@ class ASTConverter {
     bool Continues = false;
     std::optional<std::set<std::string>> BreakInitialized;
     std::optional<std::set<std::string>> ContinueInitialized;
+    /// The increment of a loop the converter builds, which a continue runs.
+    const VStmt *IncrementStmt = nullptr;
   };
   std::vector<EnclosingLoop> EnclosingLoops;
+  /// The counter that cppverify::index, the declaration RangeIndex, names
+  /// while a range-based for loop's contract is converted.
+  std::string RangeIndexName;
+  const VarDecl *RangeIndex = nullptr;
   /// Fixed addresses of the mutable global variables, assigned on first use.
   std::map<const VarDecl *, uint64_t> GlobalAddresses;
   uint64_t NextGlobalAddress = GlobalRegionBase;
@@ -317,10 +323,51 @@ private:
                                             SourceLocation Loc);
   std::unique_ptr<VExpr> convertArrowFieldAddress(const MemberExpr *M);
   std::unique_ptr<VExpr> convertSubscriptAddress(const ArraySubscriptExpr *AS);
+  /// A constant table: a constant array with a constant initializer, or a
+  /// string literal, given to the solver as a spec of its linear index.
+  struct ConstantTable {
+    std::string Name;
+    std::string Identity;
+    std::vector<uint64_t> Dims;
+    VType ElementTy;
+    std::vector<llvm::APSInt> Values;
+  };
+  std::optional<ConstantTable> constantTable(const Expr *Array) const;
+  std::optional<ConstantTable> constantTable(const VarDecl *VD,
+                                             const StringLiteral *Literal,
+                                             QualType Element) const;
+  /// Declares the spec of \p Table once.
+  void defineTable(const ConstantTable &Table, SourceLocation Loc);
+  /// An element of \p Table: the spec at the linear index, where every index
+  /// must lie in its array.
+  std::unique_ptr<VExpr> tableRead(const ConstantTable &Table,
+                                   std::vector<std::unique_ptr<VExpr>> Indices,
+                                   SourceLocation Loc);
+  /// A whole read of a constant table, t[i][j]; std::nullopt when \p AS
+  /// reads no such table.
+  std::optional<std::unique_ptr<VExpr>>
+  convertTableRead(const ArraySubscriptExpr *AS);
+  /// A constant array with a constant initializer, of integers,
+  /// enumerations, or bools: a table, which declares no object to run.
+  bool isConstantTable(const VarDecl *VD) const;
+  std::vector<std::unique_ptr<VStmt>>
+  convertRangeFor(const CXXForRangeStmt *RF);
+  /// Gives the local \p VD its VCR name: its own, or name#N when the name is
+  /// already taken.
+  void declareLocalName(const VarDecl *VD);
   std::vector<std::unique_ptr<VStmt>> convertStmt(const Stmt *S);
   std::vector<std::unique_ptr<VStmt>> convertStmtBody(const Stmt *S);
   std::vector<std::unique_ptr<VStmt>> convertScopedSubstatement(const Stmt *S);
   std::vector<std::unique_ptr<VStmt>> convertSwitch(const SwitchStmt *SS);
+  /// if (Cond) Then else Else, with what each path initializes.
+  void appendBranches(std::unique_ptr<VExpr> Cond, const Stmt *Then,
+                      const Stmt *Else, SourceLocation Loc,
+                      std::vector<std::unique_ptr<VStmt>> &Out);
+  /// A discarded-value expression statement without side effects.
+  void appendDiscarded(const Expr *E, std::vector<std::unique_ptr<VStmt>> &Out);
+  /// [[assume(e)]] and __builtin_assume(e): e is proved, then assumed.
+  void appendAssumption(const Expr *Assumption, SourceLocation Loc,
+                        std::vector<std::unique_ptr<VStmt>> &Out);
   /// The declaration of a loop's condition variable, made at every test.
   void declareConditionVariable(const DeclStmt *Decl,
                                 std::vector<std::unique_ptr<VStmt>> &Out);

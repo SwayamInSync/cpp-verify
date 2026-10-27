@@ -536,6 +536,56 @@ statements of their own. Before 0.2, each of these steps was an error
 (``pointer increment/decrement is unsupported``, ``pointer compound
 assignment is unsupported``), and a walk had to write ``q = q + 1``.
 
+Constant tables
+~~~~~~~~~~~~~~~
+
+An element of a constant table is the value its initializer gives it: a
+``const`` or ``constexpr`` array with a constant initializer (global, a
+``static`` local, or a ``static`` member, of any number of dimensions, with
+integer, enumeration, or ``bool`` elements, and zeros where the initializer
+stops), or a string literal, whose elements are its characters and a zero.
+Each index must lie in its array, an obligation of kind ``bounds``:
+
+.. cppverify-example: fails outside
+
+.. code-block:: cpp
+
+   static const uint8_t NibbleBits[16] = {0, 1, 1, 2, 1, 2, 2, 3,
+                                          1, 2, 2, 3, 2, 3, 3, 4};
+
+   int popcount8(uint8_t x)
+     cv::post(0 <= cv::result && cv::result <= 8)
+     cv::post(x != 255 || cv::result == 8)
+   {
+     return NibbleBits[x & 15] + NibbleBits[x >> 4];
+   }
+
+   char hex_digit(int d)
+     cv::pre(0 <= d && d < 16)
+     cv::post(d < 10 ? cv::result == '0' + d : cv::result == 'a' + d - 10)
+   {
+     return "0123456789abcdef"[d];
+   }
+
+   int outside(int x)
+     cv::post(true)
+   {
+     return NibbleBits[x];
+   }
+
+.. code-block:: text
+
+   Verified: popcount8 [backend=z3]
+   Verified: hex_digit [backend=z3]
+   tables.cpp:21:3: error: verification failed: outside [...::bounds@21:3] (counterexample: x [ssa=x_0] [type=i32] = ...) [backend=z3] [reason=counterexample]
+
+The verifier gives each table to the solver as a function of the index,
+defined by a balanced tree of comparisons, so a 256-entry table is eight
+comparisons deep. A pointer into a constant table (``const int *p =
+Primes;``) is not supported yet; read the elements by index. Before 0.2, any
+read of a global or ``static`` array, or of a string literal, was an error
+(``the global array 'NibbleBits' is unsupported``).
+
 Two-buffer copy loops (``memcpy``-style) need the source and destination
 ranges to be disjoint; otherwise storing to the destination could clobber a
 source cell still to be read, exactly the C ``memcpy`` vs ``memmove``

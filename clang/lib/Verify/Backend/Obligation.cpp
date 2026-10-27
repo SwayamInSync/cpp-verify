@@ -1,6 +1,7 @@
 //===--- Obligation.cpp ---------------------------------------------------===//
 #include "LogicTerms.h"
 #include "ObligationLowering.h"
+#include "ObligationSimplify.h"
 #include "SpecAxioms.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
@@ -9,6 +10,7 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/MathExtras.h"
 #include <algorithm>
 #include <tuple>
 
@@ -272,6 +274,8 @@ ObligationKind verify::obligationKind(ProofObligationKind Kind) {
     return ObligationKind::Deallocation;
   case ProofObligationKind::MissingReturn:
     return ObligationKind::MissingReturn;
+  case ProofObligationKind::Unreachable:
+    return ObligationKind::Unreachable;
   case ProofObligationKind::Unsupported:
     return ObligationKind::Unsupported;
   }
@@ -322,6 +326,8 @@ const char *verify::obligationKindName(ObligationKind Kind) {
     return "deallocation";
   case ObligationKind::MissingReturn:
     return "missing-return";
+  case ObligationKind::Unreachable:
+    return "unreachable";
   case ObligationKind::Unsupported:
     return "unsupported";
   }
@@ -2329,6 +2335,14 @@ public:
         N->Children.push_back(std::move(Rhs));
       return N;
     }
+    // Its requirement is checked where it is evaluated; its value is true.
+    case VExpr::Require: {
+      auto N = std::make_unique<VCExpr>(VCExpr::BoolLit);
+      setBoolSort(*N);
+      N->Loc = E->Loc;
+      N->BoolVal = true;
+      return N;
+    }
     }
     return fail("unsupported VCR expression kind " +
                 std::to_string(static_cast<unsigned>(E->K)));
@@ -2358,7 +2372,8 @@ public:
     return std::move(Result);
   }
 
-  llvm::Expected<ObligationModule> buildPassive(const PassiveProgram &P) {
+  llvm::Expected<ObligationModule> buildPassive(const PassiveProgram &P,
+                                                uint64_t MaxNodes) {
     ObligationModule M;
     M.FunctionName = P.FunctionName;
     M.FunctionIdentity = P.FunctionIdentity;
@@ -2472,6 +2487,24 @@ public:
       return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                      ConstructionError.c_str());
 
+    // Each goal is its condition under every assumption before it, sharing
+    // their terms: it adds a negation, a disjunction, and a copy of the root
+    // for each assumption. A function with many checks and assumptions still
+    // has quadratically many such nodes, so the goals are built in a budget
+    // and stop once they pass the limit.
+    std::vector<const LogicExpr *> Built;
+    for (const auto &Entry : EntryAssumes)
+      Built.push_back(Entry.get());
+    for (const LoweredStmt &Stmt : Stmts)
+      Built.push_back(Stmt.Cond.get());
+    for (const auto &Exit : ExitAsserts)
+      Built.push_back(std::get<1>(Exit).get());
+    const uint64_t Lowered = MaxNodes ? logicDistinctNodes(Built) : 0;
+    std::optional<NodeBudget> Goals;
+    Goals.emplace();
+    auto size = [&] { return Lowered + Goals->built(); };
+    auto oversize = [&] { return MaxNodes != 0 && size() > MaxNodes; };
+
     // Each assumption with where it comes from, which names its hypothesis.
     std::vector<std::pair<const VCExpr *, std::string>> Assumptions;
     for (size_t I = 0; I != EntryAssumes.size(); ++I)
@@ -2525,16 +2558,26 @@ public:
       }
       appendObligation(Stmt.ProofKind, Stmt.Cond.get(), Stmt.TraceEventCount,
                        Stmt.Note);
+      if (oversize())
+        return ObligationSizeError::obligations(size(), MaxNodes);
     }
-    for (const auto &[Kind, Exit, Note] : ExitAsserts)
+    for (const auto &[Kind, Exit, Note] : ExitAsserts) {
       appendObligation(Kind, Exit.get(), M.TraceEvents.size(), Note);
+      if (oversize())
+        return ObligationSizeError::obligations(size(), MaxNodes);
+    }
 
     M.CorrectnessGoal = buildCompleteGoal(M.Obligations);
     M.CounterexampleQuery = vcNot(cloneLogicExpr(M.CorrectnessGoal.get()));
+    if (oversize())
+      return ObligationSizeError::obligations(size(), MaxNodes);
+    Goals.reset();
 
     SpecAxiomContext AxiomContext{P.SpecFunctions, P.SpecFuel, P.HiddenSpecs,
                                   P.RevealedSpecs};
-    if (llvm::Error Error = materializeLogicFunctions(M, AxiomContext))
+    if (llvm::Error Error = materializeLogicFunctions(
+            M, AxiomContext, MaxNodes,
+            MaxNodes ? obligationModuleNodeCount(M) : 0))
       return std::move(Error);
 
     auto RequiredFeatures = validateObligationModule(M);
@@ -2847,14 +2890,32 @@ verify::validateObligationModule(const ObligationModule &M) {
   return RequiredFeatures;
 }
 
+char ObligationSizeError::ID = 0;
+
+llvm::Error ObligationSizeError::obligations(uint64_t Nodes, uint64_t Limit) {
+  return llvm::make_error<ObligationSizeError>(
+      "the proof obligations", Nodes, Limit,
+      "each check repeats every assumption before it, so split the function "
+      "or raise the limit");
+}
+
+void ObligationSizeError::log(llvm::raw_ostream &OS) const {
+  OS << What << " would take at least " << Nodes
+     << " expression nodes, more than the limit of " << Limit
+     << " (--max-query-nodes): " << Advice;
+}
+
 llvm::Expected<ObligationModule>
-verify::buildObligationModule(const PassiveProgram &P) {
+verify::buildObligationModule(const PassiveProgram &P, uint64_t MaxNodes) {
   ObligationBuilder B(P.ResultVarName,
                       P.OldHeapName.empty() ? std::string(VHeapName) + "_0"
                                             : P.OldHeapName,
                       P.CallerIntMode, P.HeapVariables,
                       /*ForceCallerMode=*/false, &P.SpecFunctions);
-  auto Module = B.buildPassive(P);
+  if (const auto &Over = P.TooLarge)
+    return llvm::make_error<ObligationSizeError>(Over->What, Over->Nodes,
+                                                 Over->Limit, Over->Advice);
+  auto Module = B.buildPassive(P, MaxNodes);
   if (Module) {
     Module->AssumedPosts = P.AssumedPosts;
     Module->AssumedUnfoldings = P.AssumedUnfoldings;

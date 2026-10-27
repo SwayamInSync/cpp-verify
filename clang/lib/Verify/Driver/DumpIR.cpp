@@ -206,6 +206,15 @@ void verify::dumpVExpr(const VExpr *E, llvm::raw_ostream &OS, unsigned Depth) {
       dumpVExpr(O->Rhs.get(), OS, Depth + 1);
     break;
   }
+  case VExpr::Require: {
+    const auto *R = static_cast<const VRequireExpr *>(E);
+    OS << "require "
+       << obligationKindName(
+              obligationKind(static_cast<ProofObligationKind>(R->ProofKind)))
+       << "\n";
+    dumpVExpr(R->Cond.get(), OS, Depth + 1);
+    break;
+  }
   }
 }
 

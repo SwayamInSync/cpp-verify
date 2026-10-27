@@ -50,6 +50,7 @@ implicitly; without it, the constructs are not recognized.
 | `cppverify::choose(i, [lo, hi,] expr)` | Expression | Some integer satisfying `expr` (Hilbert ε) |
 | `cppverify::old(expr)` | Inside `cppverify::post` or `cppverify::invariant` | Value of `expr` at function entry |
 | `cppverify::result` | Inside `cppverify::post` | Return value of the enclosing function |
+| `cppverify::index` | Inside a range-based `for` loop's contract | Number of elements before the current one |
 | `cppverify::seq`, `set`, `multiset`, `map` | `<cppverify.h>` | Mathematical collections for specifications and ghost code |
 
 ## Function Contracts: pre / post / modifies / aliases / recommends
@@ -316,6 +317,37 @@ for (int i = 0; i < n; i = i + 1)
   through a local array, a local record, or a `new` pointer writes that
   object, and one through a reference to a local writes the cell it binds.
 
+A range-based `for` loop over an array (a local array, an array member, a
+constant table) visits its elements in order, and its contract names the
+position, `cppverify::index`, the number of elements before the current one,
+from 0 to the size (decision Q9 of the 0.2 plan; Verus names the same
+position `iter.index()` in the invariants of `for x in iter: v`):
+
+<!-- cppverify-example: fragment -->
+
+```cpp
+for (const int &v : r->buf)
+  cppverify::invariant(0 <= s && s <= 10 * cppverify::index)
+  s = s + v;
+```
+
+The converter lowers it to a loop over a counter, `while (i < N) { v =
+range[i]; body; i = i + 1; }`, with the invariant `0 <= i <= N` before the
+user's and, without a `cppverify::decreases`, the measure `N - i`, since a
+loop over an array ends. This is Clang's own desugaring, `for (auto __begin
+= range, __end = range + N; __begin != __end; ++__begin)`, with `__begin`
+written as `range + i`: the position is the one value an invariant needs,
+and no pointer into a local array is formed. The loop variable is the
+element (a copy, converted to its type) or bound to it (a reference). C++
+evaluates the range once; the verifier locates the element again at each
+iteration, so a range located through a call, a pointer read from memory
+(a global's value included), or a variable the body may change fails
+closed. The contract holds at the head, where the loop variable is not
+declared, so naming it there is an error. A range over a class (its `begin`
+and `end`), an array of arrays, an array parameter (`const int (&a)[4]`,
+rejected as a type), and a global array that is not a constant table are
+not supported yet.
+
 `do` loops place the clauses between the trailing condition and its semicolon:
 
 <!-- cppverify-example: fragment -->
@@ -437,6 +469,30 @@ cppverify::calc {
   as an assert-by (the block is optional) and concludes `e0 R en`: `==` when
   every step is `==`, `<` or `>` when some step is strict, else `<=` or `>=`.
   Mixing `<`-like and `>`-like steps is rejected.
+
+### assert() and calls that do not return
+
+`assert(c)` must not fail (decision Q2 of the 0.2 plan): reaching a call that
+does not return (`__assert_fail` of a failed assert, `abort`, `exit`,
+`std::terminate`, `__builtin_unreachable`, `__builtin_trap`, any
+`[[noreturn]]` function, and MSVC's `_wassert`, which is not marked) is an
+obligation of kind `unreachable` at the call, and the path ends there
+(`assume false`), so after `assert(c)` the condition holds. Frama-C's
+`assert` and Kani's panics are the precedent; treating such calls as
+assumptions would hide the bug an assert guards against. With `NDEBUG`,
+`assert(c)` expands to `(void)0` and verifies nothing, exactly as compiled.
+The converter needs no knowledge of the macro: a discarded `?:`, `&&`, or
+`||` is an `if`, an implicit conversion or a cast to `void` of a discarded
+value evaluates the value, and a value computed for nothing (`x + 1;`) is
+computed with its checks. `[[assume(e)]]` and `__builtin_assume(e)` make `e`
+false undefined, so `e` is asserted (kind `assertion`), then assumed.
+
+An uncontracted `constexpr` helper is lifted as a spec whose definedness is
+checked at each call by unfolding its body. Its `assert(c)` becomes, during
+that unfolding, a `Require(!path || c)` expression in the evaluation, true
+as a value, whose evaluation requires its condition, so each call checks it
+with the helper's other operations; the path that does not return gives the
+helper any value, since no call returns from it.
 
 ## Ghost Blocks
 
@@ -854,7 +910,11 @@ write_data(buf, 512);
 // definition.
 ```
 
-This is unique to being inside the compiler.
+This is unique to being inside the compiler. Expressions that evaluate
+nothing at run time are their values the same way: `noexcept(e)`, a
+requires-expression, a concept, a type trait, `offsetof`, and
+`__builtin_LINE()`, each an integer Clang computes for the expression as
+written.
 
 ## Proof Functions
 
@@ -1135,6 +1195,19 @@ unconditional extent assumptions. Anywhere else (a postcondition, a loop
 invariant, a `cppverify::check`, ghost code, a spec function) the marker is its
 builtin spec, whose body is `true`, so a claim made with it would hold without
 meaning anything: under `--check-ub` it is an error for that function.
+
+### 1a. Constant tables
+
+A `const` or `constexpr` array with a constant initializer (global, `static`
+local, or `static` member, of integer, enumeration, or `bool` elements) and
+a string literal are values, not memory: nothing may write them, so an
+element read `t[i][j]` is the application of a spec of the linear index,
+synthesized from Clang's evaluation of the initializer (`APValue`), and each
+index must lie in its array (kind `bounds`). The spec's body is a balanced
+tree of comparisons of the index, whose depth is the logarithm of the size
+and whose leaves merge runs of equal values. A pointer into a table would
+need the table as an object at an address; it fails closed with a located
+message. Mutable static storage stays B6's.
 
 ### 2. Implicit non-aliasing default
 
@@ -1998,7 +2071,7 @@ cppverify::proof void sum_concat(seq s, seq t)
 ### Construct recognition
 
 The lexer reserves nothing. `clang/include/clang/Basic/CppVerifyConstructs.def`
-lists the 28 construct words and the positions each may take (function
+lists the 29 construct words and the positions each may take (function
 clause, loop clause, class member, declaration specifier, statement,
 expression). At each position the parser calls `tryAnnotateCppVerify`
 (`clang/lib/Parse/ParseCppVerify.cpp`), which looks ahead for
@@ -2061,7 +2134,7 @@ in place and records it in an `ASTContext` side table.
 | Existing Node | New Data |
 |---|---|
 | FunctionDecl (via ASTContext side table) | preconditions, postconditions, modifies, aliases, recommends, isSpec, isProof, decreases, behavior checks |
-| WhileStmt / ForStmt / DoStmt | invariants, decreases, modifies |
+| WhileStmt / ForStmt / DoStmt / CXXForRangeStmt | invariants, decreases, modifies; for a range-based `for`, the implicit variable `cppverify::index` names |
 | RecordDecl | type_invariants |
 | VarDecl | ghost marker |
 
@@ -2077,7 +2150,7 @@ a one-line hook.
 | Statements (`ghost`, `check`, `calc`, `reveal_with_fuel`, `hide`, `reveal`) | `ParseCppVerifyStatement` | `ParseStatementOrDeclarationAfterAttributes` |
 | `cppverify::spec` / `cppverify::proof` | `ParseCppVerifySpecifier` | `ParseDeclarationSpecifiers` |
 | `cppverify::type_invariant(...)` | `ParseTypeInvariant` | `ParseCXXMemberSpecification` |
-| Expressions (`forall`, `exists`, `choose`, `old`, `result`, `trigger`) | `ParseCppVerifyExpression` | `ParseCastExpression` |
+| Expressions (`forall`, `exists`, `choose`, `old`, `result`, `index`, `trigger`) | `ParseCppVerifyExpression` | `ParseCastExpression` |
 
 ### Sema Rules
 
@@ -2211,8 +2284,9 @@ parameter and result signature.
 
 Backend results carry stable machine-readable reason codes independently of
 their human message: `counterexample`, `solver.timeout`, `solver.unknown`,
-`solver.resource-limit`, `solver.unavailable`, `solver.invocation-failed`,
-`solver.malformed-output`, `query.size-limit`, `encoding.failed`,
+`solver.resource-limit`, `solver.memory-limit`, `solver.unavailable`,
+`solver.invocation-failed`, `solver.malformed-output`, `query.size-limit`,
+`encoding.failed`,
 `obligation.invalid`, `logic.unsupported`, `query.missing`,
 `backend.invalid-result`, `backend.inconsistent-results`,
 `bmc.incomplete-bound`, `lean.export-failed`, `cache.corrupt`,
@@ -2237,10 +2311,20 @@ canonical source order, so concurrency cannot choose which failure is public.
 `--function-timeout` (by default ten times `--timeout`) bounds all queries
 of one function together, in wall-clock time; once it is spent no further
 query starts and the function is `Unresolved` (`solver.timeout`). AST/VCR lowering and Lean emission remain serial.
-`--solver-rlimit` adds a deterministic per-query Z3 budget, while
-`--max-query-nodes` rejects an oversized canonical module before
-verification, lower-only encoding, or a requested Z3 dump; neither limit can
-become success.
+`--solver-rlimit` adds a deterministic per-query Z3 budget.
+`--max-query-nodes` (default 4,000,000) bounds the distinct expression
+nodes built for one function, which is what it takes in memory: its
+obligations, each of which restates every assumption before it and shares
+its terms, and the facts about the specs it applies (definitions unfolded as
+deep as their fuel, postconditions at each application) are counted as they
+are built and stop at the limit, so a function over it ends before it takes
+the memory. What states each term in full, an SMT-LIB script for cvc5 and an
+archive record, is checked against the same limit as the tree it would
+state. `--memory-limit` (default 8192 MB) bounds Z3's queries
+together, which a check's watchdog stops once Z3's allocations pass it, and
+each cvc5 process, whose allocations past it fail. Neither limit can become
+success: a function over the first is `Unresolved` with `query.size-limit`,
+a query stopped by the second with `solver.memory-limit`.
 
 `--proof-cache=DIR` stores only successful individual proofs. The key binds an
 obligation's dependency-scoped semantic hash to hash format v4, the backend

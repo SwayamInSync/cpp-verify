@@ -1245,6 +1245,15 @@ ExprResult Parser::ParseCppVerifyExpression() {
     return ParseOldExpr();
   case CppVerifyConstruct::Result:
     return ParseResultExpr();
+  case CppVerifyConstruct::Index: {
+    const SourceLocation Loc = ConsumeCppVerify();
+    if (!CppVerifyRangeIndex) {
+      Diag(Loc, diag::err_cppverify_index_outside_range_for);
+      return ExprError();
+    }
+    return Actions.BuildDeclRefExpr(
+        CppVerifyRangeIndex, CppVerifyRangeIndex->getType(), VK_LValue, Loc);
+  }
   case CppVerifyConstruct::Trigger: {
     // trigger(term) in a quantifier body marks term as an instantiation
     // pattern.

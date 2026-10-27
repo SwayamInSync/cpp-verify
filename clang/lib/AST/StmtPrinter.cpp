@@ -53,6 +53,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <optional>
@@ -73,6 +74,8 @@ namespace {
     PrintingPolicy Policy;
     std::string NL;
     const ASTContext *Context;
+    /// The position of the range-based for loop whose clauses are printed.
+    const VarDecl *RangeIndex = nullptr;
 
   public:
     StmtPrinter(raw_ostream &os, PrinterHelper *helper,
@@ -490,6 +493,15 @@ void StmtPrinter::VisitCXXForRangeStmt(CXXForRangeStmt *Node) {
   OS << " : ";
   PrintExpr(Node->getRangeInit());
   OS << ")";
+  const LoopContractInfo *LCI =
+      Context ? Context->getLoopContract(Node) : nullptr;
+  {
+    llvm::SaveAndRestore<const VarDecl *> Index(RangeIndex,
+                                                LCI ? LCI->Index : nullptr);
+    printLoopContract(
+        OS, Context, Node, [&]() -> raw_ostream & { return Indent(1); },
+        [&](Expr *E) { PrintExpr(E); }, NL);
+  }
   PrintControlledStmt(Node->getBody());
 }
 
@@ -1481,6 +1493,10 @@ void StmtPrinter::VisitConstantExpr(ConstantExpr *Node) {
 
 void StmtPrinter::VisitDeclRefExpr(DeclRefExpr *Node) {
   ValueDecl *VD = Node->getDecl();
+  if (RangeIndex && VD == RangeIndex) {
+    OS << "cppverify::index";
+    return;
+  }
   if (const auto *OCED = dyn_cast<OMPCapturedExprDecl>(VD)) {
     OCED->getInit()->IgnoreImpCasts()->printPretty(OS, nullptr, Policy);
     return;

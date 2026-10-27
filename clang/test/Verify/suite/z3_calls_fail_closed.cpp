@@ -48,14 +48,6 @@ int *unsupported_forged_pointer()
   return (int *)1;
 }
 
-int unsupported_evaluated_expression(int x)
-  cppverify::pre(x == 2147483647)
-  cppverify::post(cppverify::result == 0)
-{
-  x + 1;
-  return 0;
-}
-
 void unsupported_cross_type_alias(int *value, unsigned char *byte)
   cppverify::aliases(value, byte)
   cppverify::modifies(*byte)
@@ -72,7 +64,6 @@ int unsupported_recursive_exec(int n)
 // VERIFY-DAG: error: calls_uncontracted: call to function without a verification contract: opaque_side_effect
 // VERIFY-DAG: error: reads_global_state: only scalar integral global variables are supported: global_state
 // VERIFY-DAG: error: unsupported_forged_pointer: unsupported explicit pointer or aggregate cast
-// VERIFY-DAG: error: unsupported_evaluated_expression: unsupported expression statement
 // VERIFY-DAG: error: unsupported_cross_type_alias: aliases between different pointee types are unsupported
 // VERIFY-DAG: error: unsupported_recursive_exec: recursive executable functions require decreases
 // VERIFY-DAG: warning: unsupported_template: function template is not verified: this translation unit instantiates none of its specializations

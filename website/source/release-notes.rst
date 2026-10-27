@@ -413,6 +413,50 @@ that may write what another operand reads is an error at the expression,
 and an assignment's right operand is evaluated before its target, as C++17
 says (:doc:`language/functions-loops`).
 
+**Range-based for loops.** ``for (int v : a)`` stopped its function
+(``unsupported statement: CXXForRangeStmt``). A range-based ``for`` loop over
+an array (a local array, an array member, a constant table) is now verified,
+its variable a copy of each element or a reference to it, and its contract
+names the position with the new construct ``cppverify::index``; without a
+measure it decreases the elements left (:doc:`language/functions-loops`).
+
+**Lookup tables.** A read of a global or ``static`` array, or of a string
+literal, was an error (``the global array 'table' is unsupported``), which
+ruled out the tables at the heart of CRC, base64, and UTF-8 code. An element
+of a constant table, a ``const`` or ``constexpr`` array with a constant
+initializer or a string literal, is now the value its initializer gives it,
+and each index must lie in its array (:doc:`language/pointers`).
+
+**assert and calls that do not return.** ``assert(c)`` stopped its function
+(``unsupported statement: ParenExpr``), and a call to ``abort`` or ``exit``
+was an error (``call to function without a verification contract``).
+Reaching a failed ``assert`` or a call that does not return is now a failure
+of the new kind ``unreachable``, and after ``assert(c)``, ``c`` holds; with
+``NDEBUG`` an ``assert`` is nothing. An uncontracted ``constexpr`` helper's
+``assert`` is checked at each call. ``[[assume(e)]]`` and
+``__builtin_assume(e)`` are proved, then assumed. A statement that only
+computes a value is computed, with its checks (``x + 1;`` was ``unsupported
+expression statement``). LLVM's ``alignTo``, ``maxUIntN``, and
+``SignExtend64`` verify with their asserts (:doc:`language/functions-loops`).
+
+**Small forms of everyday C++.** Each of these stopped its function:
+character literals (``'0'``, ``L'A'``), a ``consteval`` call and an ``if
+constexpr`` condition, a template value parameter used as a value, a default
+argument, ``static_assert``, a local ``typedef`` or ``using``, a local class
+or enumeration, ``__builtin_expect``, ``return Pt{a, b};``, and ``auto [a, b]
+= p;``. Each is now what C++ makes it: a literal or a constant its value, a
+default argument evaluated at the call, a declaration nothing at run time,
+``__builtin_expect(e, c)`` the value of ``e``, an initializer list the fields
+in order, and a structured binding a copy whose fields the bindings name
+(:doc:`language/integers`, :doc:`language/structs`,
+:doc:`language/functions-loops`).
+
+**Expressions that evaluate nothing at run time.** ``noexcept(e)``, a
+requires-expression, a concept, a type trait such as ``__is_same(T, U)``,
+``offsetof``, and ``__builtin_LINE()`` stopped their function
+(``unsupported expression: CXXNoexceptExpr``). Each is now the value Clang
+computes for it (:doc:`language/functions-loops`).
+
 **Pointer steps and reused names.** ``++p``, ``p--``, ``p += n``, and
 ``p -= n`` on a pointer were errors (``pointer increment/decrement is
 unsupported``, ``pointer compound assignment is unsupported``), and so was a
@@ -483,6 +527,16 @@ SwitchStmt``. It now gives the file, line, and column, and shows the line with
 a caret under the construct, as a compiler error does; its JSON record carries
 the range (:doc:`language/tooling`).
 
+**Errors name the construct, once.** The message gave Clang's class name
+(``unsupported statement: CXXThrowExpr``), called a lambda ``aggregate
+initialization and copying``, and called a string literal used as a pointer
+``array-to-pointer decay of automatic storage``; each use of a variable whose
+initializer was rejected added ``read of uninitialized local value``, and a
+call without a contract was reported twice. The message now says what C++
+calls the construct (``throw is unsupported: exceptions are not modeled``,
+``lambdas are unsupported``), and each is reported once
+(:doc:`language/tooling`).
+
 **An unsupported construct costs its function alone.** One construct the
 verifier does not represent, such as a ``switch``, stopped the file: no
 function of it was verified. Now that function is ``Unresolved`` with reason
@@ -496,6 +550,19 @@ as before (:doc:`language/tooling`).
 **Z3 errors.** A Z3 call that failed went unnoticed, and a later step could
 report something unrelated. The query now ends ``Unresolved`` with reason
 ``encoding.failed`` and Z3's message (:doc:`language/tooling`).
+
+**Memory limits.** Nothing bounded the memory a run took: a function whose
+proof obligations, which repeat every assumption before each check, came to
+hundreds of millions of nodes, or ``cppverify::reveal_with_fuel(fibo, 24)``,
+took tens of gigabytes until the system stopped the run. ``--max-query-nodes``
+now has a default, 4 million expression nodes, and bounds what is built for
+one function as it is built, a node shared by several terms once; a function
+over it is ``Unresolved`` with reason ``query.size-limit``, which names what
+was too large. cvc5's scripts and archive records, which state shared terms
+in full, are checked against it too. The new
+``--memory-limit`` (default 8192 MB) bounds Z3's queries together and each
+cvc5 process; a query that reaches it is ``Unresolved`` with reason
+``solver.memory-limit`` (:doc:`language/tooling`).
 
 **Parallel runs.** With more than one job, a function waiting for its own
 queries could run another function's long query, delaying its result and
@@ -661,8 +728,9 @@ sources of assumptions and reads ``/2`` and ``/1``; JSON diagnostics stay
 ``cppverify.diagnostic/1``. A module whose specs' measures apply other specs
 keeps them, so its module hash changes; per-obligation hashes, and the proof
 cache keyed by them, do not. JSON records may carry the status
-``proved-obligations`` (archive replay) and the reason ``interrupted``
-(Ctrl-C). Lean projects pin ``leanprover/lean4:v4.35.0``, and each proof
+``proved-obligations`` (archive replay) and the reasons ``interrupted``
+(Ctrl-C) and ``solver.memory-limit`` (``--memory-limit``). Lean projects
+pin ``leanprover/lean4:v4.35.0``, and each proof
 file records the hash of its goal's statement (``cppverify-obligation-statement``
 version 1, which leaves out the function's identity).
 

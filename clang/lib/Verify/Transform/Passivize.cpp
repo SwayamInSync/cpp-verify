@@ -325,6 +325,11 @@ static std::unique_ptr<VExpr> cloneExprImpl(const VExpr *E,
         O->Op, cloneExpr(O->Lhs.get(), Ctx),
         O->Rhs ? cloneExpr(O->Rhs.get(), Ctx) : nullptr, O->Loc);
   }
+  case VExpr::Require: {
+    const auto *R = static_cast<const VRequireExpr *>(E);
+    return std::make_unique<VRequireExpr>(cloneExpr(R->Cond.get(), Ctx),
+                                          R->ProofKind, R->Loc);
+  }
   case VExpr::Forall:
   case VExpr::Exists: {
     const auto *Q = static_cast<const VQuantifiedExpr *>(E);
@@ -1160,6 +1165,9 @@ static bool referencesVar(const VExpr *E, const std::string &Name) {
     return referencesVar(O->Lhs.get(), Name) ||
            referencesVar(O->Rhs.get(), Name);
   }
+  case VExpr::Require:
+    return referencesVar(static_cast<const VRequireExpr *>(E)->Cond.get(),
+                         Name);
   }
   return false;
 }
@@ -1287,6 +1295,9 @@ static bool scalarDynamicExprSafe(const VExpr *E, const std::string &Param) {
     return scalarDynamicExprSafe(O->Lhs.get(), Param) &&
            scalarDynamicExprSafe(O->Rhs.get(), Param);
   }
+  case VExpr::Require:
+    return scalarDynamicExprSafe(
+        static_cast<const VRequireExpr *>(E)->Cond.get(), Param);
   }
   return false;
 }
@@ -2294,6 +2305,13 @@ collectSafety(const VExpr *E, const FunctionMap *FnMap,
       Collect(O->Rhs.get(), Out);
     return;
   }
+  case VExpr::Require: {
+    const auto *R = static_cast<const VRequireExpr *>(E);
+    Collect(R->Cond.get(), Out);
+    addSafety(Out, static_cast<ProofObligationKind>(R->ProofKind),
+              cloneVExpr(R->Cond.get()), R->Loc);
+    return;
+  }
   case VExpr::Forall:
   case VExpr::Exists: {
     const auto *Q = static_cast<const VQuantifiedExpr *>(E);
@@ -2497,6 +2515,9 @@ machineMathBridgeForExpr(const VExpr *E, const FunctionMap *FnMap,
                       C->Loc);
     return Bridge;
   }
+  case VExpr::Require:
+    return machineMathBridgeForExpr(
+        static_cast<const VRequireExpr *>(E)->Cond.get(), FnMap, false);
   case VExpr::OverflowCheck: {
     const auto *O = static_cast<const VOverflowCheckExpr *>(E);
     auto Bridge =
@@ -2627,6 +2648,9 @@ static void collectDottedVars(const VExpr *E, std::set<std::string> &Out) {
     collectDottedVars(O->Rhs.get(), Out);
     return;
   }
+  case VExpr::Require:
+    collectDottedVars(static_cast<const VRequireExpr *>(E)->Cond.get(), Out);
+    return;
   case VExpr::FieldAccess: {
     const auto *F = static_cast<const VFieldAccessExpr *>(E);
     if (F->Base->K == VExpr::Var) {
@@ -2786,6 +2810,13 @@ static std::unique_ptr<VExpr> substParams(
                              BoundVars, OldMap, NormalizedPointerChecks)
                : nullptr,
         O->Loc);
+  }
+  case VExpr::Require: {
+    const auto *R = static_cast<const VRequireExpr *>(E);
+    return std::make_unique<VRequireExpr>(
+        substParams(R->Cond.get(), Map, Ctx, EntryHeap, HeapOverride, BoundVars,
+                    OldMap, NormalizedPointerChecks),
+        R->ProofKind, R->Loc);
   }
   case VExpr::Forall:
   case VExpr::Exists: {
@@ -3140,6 +3171,9 @@ collectFramedApplications(const VExpr *E, const FunctionMap &FnMap,
     visit(O->Rhs.get());
     return;
   }
+  case VExpr::Require:
+    visit(static_cast<const VRequireExpr *>(E)->Cond.get());
+    return;
   case VExpr::SpecCall: {
     const auto *C = static_cast<const VSpecCallExpr *>(E);
     for (const auto &Arg : C->Args)
@@ -3373,6 +3407,15 @@ static void addFrameInstances(PassiveProgram &P, const FunctionMap &FnMap) {
         Stmts.push_back(std::move(Instance));
   }
   P.Stmts = std::move(Stmts);
+}
+
+PassiveOversize verify::specFactsOversize(const NodeBudget &Budget) {
+  return {"the facts about the specs it applies (at each application, their "
+          "definitions unfolded as deep as their fuel, and their "
+          "postconditions)",
+          Budget.built(), Budget.limit(),
+          "lower the fuel cppverify::reveal_with_fuel gives, or raise the "
+          "limit"};
 }
 
 /// A spec's proved postcondition, and an inductive predicate's unfolding,
@@ -5363,8 +5406,11 @@ public:
       for (const auto &Decrease : Fn.Decreases)
         EntryMeasure.push_back(cloneExpr(Decrease.get(), MeasureCtx));
     }
+    NodeBudget Facts;
     addSpecPostInstances(P, FnMap, Fn, UnfoldingDepth, UnfoldingFuel,
                          EntryMeasure);
+    if (Facts.exceeded())
+      P.TooLarge = specFactsOversize(Facts);
   }
 
   /// In the object model a pointer without provenance is valid where it lies

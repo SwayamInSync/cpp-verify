@@ -2,6 +2,7 @@
 #ifndef LLVM_CLANG_VERIFY_IR_VEXPR_H
 #define LLVM_CLANG_VERIFY_IR_VEXPR_H
 
+#include "NodeBudget.h"
 #include "VType.h"
 #include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
@@ -81,7 +82,8 @@ public:
     HeapFrame,
     FieldAccess,
     SpecCall,
-    OverflowCheck
+    OverflowCheck,
+    Require
   };
 
   Kind K;
@@ -93,7 +95,9 @@ public:
 
 protected:
   VExpr(Kind K, VType Ty, SourceLocation Loc)
-      : K(K), Ty(Ty), Loc(Loc), EndLoc(Loc) {}
+      : K(K), Ty(Ty), Loc(Loc), EndLoc(Loc) {
+    NodeBudget::count();
+  }
 };
 
 class VLiteralExpr : public VExpr {
@@ -309,6 +313,18 @@ public:
                      std::unique_ptr<VExpr> R, SourceLocation Loc)
       : VExpr(OverflowCheck, VType::makeBool(), Loc), Op(Op), Lhs(std::move(L)),
         Rhs(std::move(R)) {}
+};
+
+/// True, where evaluating it requires \p Cond: a lifted constexpr helper's
+/// assert(c) is Require(c) on its path, checked at each call as the helper's
+/// undefined operations are. Its kind is a ProofObligationKind.
+class VRequireExpr : public VExpr {
+public:
+  std::unique_ptr<VExpr> Cond;
+  unsigned ProofKind;
+  VRequireExpr(std::unique_ptr<VExpr> C, unsigned ProofKind, SourceLocation Loc)
+      : VExpr(Require, VType::makeBool(), Loc), Cond(std::move(C)),
+        ProofKind(ProofKind) {}
 };
 
 std::unique_ptr<VExpr> cloneVExpr(const VExpr *E);

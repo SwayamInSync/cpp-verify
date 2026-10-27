@@ -30,6 +30,15 @@ and in ``[ssa=...]`` the verifier's name for it, ``i#2`` for the second ``i``.
 Before 0.2 such a declaration was an error, ``local variable shadowing is
 unsupported``.
 
+A default argument is evaluated at the call, with the checks of its
+operations there. A ``consteval`` call, like any constant Clang evaluates, is
+its value, and so is an expression that evaluates nothing at run time:
+``noexcept(e)``, a requires-expression, a concept such as ``Small<T>``, a
+type trait such as ``__is_same(T, U)``, ``offsetof``, and
+``__builtin_LINE()``. ``__builtin_expect(e, c)`` is ``e``. ``static_assert``, type
+aliases, using-declarations, and local classes and enumerations declare
+names and do nothing at run time.
+
 A caller's proof uses its callees' contracts, so a verdict is only as good as
 those contracts. A caller whose proof relies on a callee contract that the
 callee's own verification did not establish is ``Unresolved`` with reason
@@ -448,7 +457,33 @@ A function template is verified in each of its specializations, as Kani and
 CBMC verify the code a program instantiates: its contract is instantiated
 with its body, so the contract and every check of the body are about the
 template's arguments, and each specialization gets a verdict of its own,
-named with its arguments.
+named with its arguments. A template value parameter is its argument, and
+``if constexpr`` keeps the branch its constant condition selects:
+
+.. code-block:: cpp
+
+   template <int N> int scaled(int x)
+     cv::pre(-1000 <= x && x <= 1000)
+     cv::post(cv::result == N * x)
+   {
+     if constexpr (N == 0)
+       return 0;
+     else
+       return N * x;
+   }
+
+   int scaled_sum(int x)
+     cv::pre(-1000 <= x && x <= 1000)
+     cv::post(cv::result == 3 * x)
+   {
+     return scaled<0>(x) + scaled<3>(x);
+   }
+
+.. code-block:: text
+
+   Verified: scaled<0> [backend=z3]
+   Verified: scaled<3> [backend=z3]
+   Verified: scaled_sum [backend=z3]
 
 .. cppverify-example: fails twice<short>
 
@@ -603,6 +638,55 @@ first iteration, which runs before the invariant holds, a ``break`` skips the
 rest of the loop, and a ``continue`` goes to the condition, where the
 invariant must first hold. ``cppverify::ghost`` code cannot leave an
 executable loop.
+
+A range-based ``for`` loop over an array (a local array, an array member,
+a constant table) visits its elements in order. Its contract names the
+position, ``cppverify::index``, the number of elements before the current
+one, from 0 to the size; without a ``cppverify::decreases`` its measure is
+the number of elements left, since such a loop ends. The loop variable is a
+copy of the element or a reference to it:
+
+.. code-block:: cpp
+
+   struct Ring {
+     int buf[8];
+     int head;
+   };
+
+   int total(const Ring *r)
+     cv::pre(r != nullptr)
+     cv::pre(cv::forall(k, 0, 8, 0 <= r->buf[k] && r->buf[k] <= 10))
+     cv::post(0 <= cv::result && cv::result <= 80)
+   {
+     int s = 0;
+     for (const int &v : r->buf)
+       cv::invariant(0 <= s && s <= 10 * cv::index)
+       s = s + v;
+     return s;
+   }
+
+   void clear(Ring *r)
+     cv::pre(r != nullptr)
+     cv::modifies(r->buf[0 : 8])
+     cv::post(cv::forall(k, 0, 8, r->buf[k] == 0))
+   {
+     for (int &x : r->buf)
+       cv::invariant(cv::forall(k, 0, cv::index, r->buf[k] == 0))
+       x = 0;
+   }
+
+.. code-block:: text
+
+   Verified: total [backend=z3]
+   Verified: clear [backend=z3]
+
+C++ evaluates the range once and the verifier locates each element again, so
+a range located through a call, a pointer read from memory, or a variable
+the body may change is rejected: copy the pointer or index into a variable
+the body does not change. The contract holds at the head, where the loop
+variable is not declared, so it cannot name it. A range over a class,
+through its ``begin`` and ``end``, an array of arrays, and a global array
+that is not a constant table are not supported yet.
 
 A condition may declare a variable, ``while (int k = next(i))``: it is
 declared, and its value tested, at every test, so a loop's contract cannot
@@ -855,6 +939,56 @@ checked as well.
 The end-to-end acceptance programs include recursive and iterative factorial
 and Fibonacci implementations, each proved against a mathematical recursive
 specification at the exact signed-``int`` boundary.
+
+Assertions and calls that do not return
+---------------------------------------
+
+``assert(c)`` must not fail: reaching a failed assert, or any call that does
+not return (``abort``, ``exit``, ``std::terminate``, ``__builtin_unreachable``,
+``__builtin_trap``, a ``[[noreturn]]`` function), is a failure of kind
+``unreachable``, as Frama-C proves an ``assert`` and Kani a panic unreachable.
+The path ends there, so after ``assert(c)`` the condition holds. With
+``NDEBUG``, ``assert(c)`` is nothing, as compiled, and proves nothing.
+
+.. cppverify-example: fails aborts
+
+.. code-block:: cpp
+
+   #include <cassert>
+   #include <cstdlib>
+
+   int scaled(int x)
+     cv::pre(0 < x && x < 1000)
+     cv::post(cv::result == 2 * x)
+   {
+     assert(x > 0 && "x must be positive");
+     return x + x;
+   }
+
+   int aborts(int x)
+     cv::post(cv::result >= 0)
+   {
+     if (x < 0)
+       abort();
+     return x;
+   }
+
+.. code-block:: text
+
+   Verified: scaled [backend=z3]
+   aborts.cpp:16:5: error: verification failed: aborts [...::unreachable@16:5] (counterexample: x [ssa=x_0] [type=i32] = -1; ...) [backend=z3] [reason=counterexample]
+
+An uncontracted ``constexpr`` helper's ``assert(c)`` is a requirement of each
+call that reaches it, checked at the call as the helper's undefined
+operations are. ``[[assume(e)]]`` and ``__builtin_assume(e)`` make ``e``
+false undefined, so ``e`` is proved where it stands, then holds. A
+statement that only computes a value, ``x + 1;``, is computed, with its
+checks, and the operands of a discarded ``&&``, ``||``, or ``?:`` run on
+their paths, which is how ``assert`` expands on every platform.
+
+Before 0.2, ``assert`` stopped verification of its function (``unsupported
+statement: ParenExpr``), and so did a call to ``abort`` (``call to function
+without a verification contract``).
 
 Switch statements
 -----------------

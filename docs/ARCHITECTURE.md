@@ -147,6 +147,7 @@ VExpr =
   | HeapFrame(before, after, [(lo, hi)])          // passive frame relation
   | SpecCall(identity, args: [VExpr], type)
   | OverflowCheck(op, lhs, rhs?)
+  | Require(cond, kind)                           // true; evaluating it requires cond
   | Forall(binder: VarDecl, lo: VExpr?, hi: VExpr?, body: VExpr)
   | Exists(binder: VarDecl, lo: VExpr?, hi: VExpr?, body: VExpr)
   | Old(inner: VExpr)
@@ -444,6 +445,23 @@ call argument for a machine parameter, or a return value.
 
 **HeapFrame:** produced by passivization only: `after` equals `before` at
 every address outside the half-open regions.
+
+**Constant tables:** `ASTConverter::convertTableRead` lowers a whole read
+of a constant table (a constant array's initializer or a string literal) to
+`ite(Require(index in bounds, bounds), table(i), table(i))`, where `table` is
+a synthesized spec (`IsBuiltin`, identity `__cppverify_table.<name>@L:C` or
+`__cppverify_string@L:C`) whose body is a balanced comparison tree over the
+linear index.
+
+**Require:** produced by the spec inliner from the `assert`
+statements of a lifted `constexpr` helper's body (`evalBodySeq`): on the
+path `g` to `assert(c)` it adds `Require(!g || c, kind)` to the evaluation
+trace that each call's definedness check unfolds, so the passivizer's
+definedness collection asserts `!g || c` with the statement's kind at the
+call. Its value is `true`, so the lifted definition does not change. A
+call that does not return is `assert false` (kind `unreachable`) followed by
+`assume false` in the converter, and the unfolding gives the helper any
+value on that path.
 
 ### Statements (VStmt)
 
@@ -746,6 +764,21 @@ state and ends the path; the frontend emits a `for` increment before it. BMC
 unrolling lowers `break` and `continue` to flag assignments that guard the
 remaining statements and the next iteration.
 
+**Range-based for loops** (`ASTConverter::convertRangeFor`) lower a loop
+over an array to a counter, `__index_N = 0; while (__index_N < N)
+invariant(0 <= __index_N <= N, ...) { var = element; body; __index_N += 1
+}`, the increment also before each `continue`
+(`EnclosingLoop::IncrementStmt`). `cppverify::index` names the counter while
+the contract is converted: the parser declares it as an implicit variable
+with the contract (`LoopContractInfo::Index`), so its uses are ordinary
+`DeclRefExpr`s, and template instantiation maps it like a quantifier's
+binder (`TransformContractBinder`). The
+element is the place of the range (`objectPlace`) stepped by the counter,
+or the read of a constant table; `rangeMayMove` rejects a range whose
+location the body may change, and a contract that names the loop variable
+is rejected, since it holds at the head, where the variable is not
+declared.
+
 **Exits the frontend lowers.** VCR's `break` and `continue` leave a
 `VWhileStmt`. Two exits have no loop to leave and are lowered to flags by
 `lowerExits` (`ASTConverter.cpp`), BMC's rule applied once: a `do` loop's
@@ -961,6 +994,35 @@ checks that this walk fails too. Validation was 80% of lowering (callgrind,
 count linear, `--lower-only` takes 1.9 s instead of 10.4 s on `safe_fib.cpp`
 and 2.5 s instead of 10.3 s on the ULEB128 case study, within the same
 memory and with the same output.
+
+**Size.** Each obligation's goal is its condition under every assumption
+before it, sharing their terms (above): a goal adds, for each assumption, a
+negation, a disjunction, and a copy of the assumption's root, so a module's
+distinct nodes grow with its obligations times the assumptions before them,
+not times their sizes. `obligationModuleNodeCount` counts the distinct nodes,
+a shared one once, which is what the module takes in memory. `NodeBudget`
+(`IR/NodeBudget.h`) counts the `VExpr` and `LogicExpr` nodes built on its
+thread against the limit the driver sets for the function
+(`--max-query-nodes`): the goals are built in one, starting from the distinct
+nodes of the lowered statements, and stop with `ObligationSizeError` once
+they pass the limit; the spec inliner unfolds nothing more once its budget is
+spent. The definitions `SpecAxioms` materializes, each spec unfolded as deep
+as its fuel, are counted, each by its distinct nodes, from the module's
+count; the facts the passivizer adds at each spec application are counted in
+a budget, and a spent one leaves `PassiveProgram::TooLarge`, which makes the
+build an `ObligationSizeError`; so does a spent budget while specs are
+inlined for BMC. The driver reports the error as the function's verdict,
+`Unresolved` with `query.size-limit`, and never uses the partial result.
+What states each term in full is larger than what is built: the cvc5
+adapter's SMT-LIB script and an archive record write a shared subterm at
+each of its places. Each counts the module's complete query and definitions
+as trees, stopping once past the limit (`obligationModuleTreeNodesUpTo`):
+over it, cvc5's verdict is `Unresolved` with `query.size-limit`, and the
+record is an error. Z3 and the Lean printer share terms (Z3 by hash-consing,
+Lean by naming a shared subterm with a `let`), so the distinct count bounds
+them. Before 0.2 the size was predicted, as trees, before any goal was
+built; with shared terms that counted far more than a module takes (a
+function of 400 checks: 45 million predicted, under 2 million built).
 
 Every source-built or replayed module then passes through one fail-closed
 canonicalization step before hashing or backend dispatch. The pass folds only
@@ -2349,7 +2411,11 @@ When Z3 returns SAT, CppVerify evaluates source-attributed SSA variables without
 model completion. A local declared where its name is already taken in the
 function (by a parameter, or by a local of an enclosing or earlier scope) is
 `x#2`, `x#3`, ... in VCR (`ASTConverter::LocalNames`), so SSA keeps the
-variables apart, and its display name stays `x`. Diagnostic metadata supplies the original display name,
+variables apart, and its display name stays `x`. The object a structured
+binding copies has no name in C++; it is `__binding` (and `__binding#2`, ...),
+a reference to a binding is the member access Clang gives it
+(`BindingDecl::getBinding`), and each field is displayed by its binding's
+name. Diagnostic metadata supplies the original display name,
 exact logic sort, internal SSA identity, and declaration range. Signed and
 unsigned bit-vectors are rendered as source-level decimal values, and
 collections as their elements, members, counts, or entries in order, a run of
@@ -2381,6 +2447,12 @@ expression being converted (`ASTConverter::CurrentRange`), unless the site
 names a place of its own, such as a function for the checks made after every
 function is converted. It is printed with Clang's `TextDiagnostic`, line and
 caret included, as a compiler error is, and its JSON record carries the range.
+Its message names the construct as C++ does (`unsupportedConstruct` for the
+statements and expressions without a site of their own; Clang's class name
+only in parentheses for those it has no name for), and each error is raised
+once: a declaration whose initializer was rejected counts as initialized, and
+a rejected call returns before the generic message, so neither is reported
+again where it is used.
 
 ## Modular Verification Protocol
 
@@ -2538,7 +2610,19 @@ was never checked, stayed `Verified`, and a Lean verdict was `Certified`
 whatever its callees' contracts.
 
 Z3-backed execution accepts explicit timeout, deterministic solver-resource,
-canonical query-node, job-count, and proof-cache budgets. A module that
+canonical query-node, memory, job-count, and proof-cache budgets. Z3 runs in
+the process, so its memory limit is for its queries together: the watchdog
+of every check, which already interrupts it at its time, polls Z3's
+allocation every 10 ms while a limit is set and interrupts the check past
+it, and the encoder's result is then `solver.memory-limit`. Z3's own limits
+are not used: `memory_max_size` fails whichever allocation passes it in any
+context, `Z3_mk_context`'s included, which then returns no context, and the
+high watermark stops a search reporting only `canceled` and frees what it
+took before the check returns. Each cvc5 process gets the limit as its
+`RLIMIT_DATA`, set with `prlimit` once it is spawned (on Windows, the job
+object of `ExecuteNoWait`): a limit makes `ExecuteNoWait` fork rather than
+spawn on POSIX hosts, and fork runs Z3's fork handlers, which wait for the
+timers of every check in the process. A module that
 requires the `sequences` or `collections` feature gets the collection
 timeout (`--collection-timeout`, by default twice `--timeout`) on every
 solver backend. The driver verifies each function as a task (its own backend,
@@ -2915,7 +2999,7 @@ code:
 - `RecursiveASTVisitor` (and `DynamicRecursiveASTVisitor`) visits function
   contracts and the construct references written in a function from
   `TraverseFunctionHelper`, loop contracts from the `while`/`for`/`do`
-  traversals (found through the `ASTContext` the function's traversal sets),
+  and range-based `for` traversals (found through the `ASTContext` the function's traversal sets),
   and type invariants from the `CXXRecordDecl` traversal. clangd's hover,
   go-to-definition, rename, document highlights, semantic highlighting, and
   inlay hints, clang-tidy's matchers, and the parent map all build on it.
@@ -2935,7 +3019,8 @@ code:
   children.
 - `DeclPrinter` prints a function's clauses, one per line, after its
   declarator, and `cppverify::spec`/`cppverify::proof` as its specifier;
-  `StmtPrinter` prints loop clauses and the constructs qualified. clangd's
+  `StmtPrinter` prints loop clauses and the constructs qualified, a range-based
+  `for` loop's position as `cppverify::index`. clangd's
   hover on a function therefore shows its contract, and `-ast-print` output
   parses again.
 - Each construct written in a function is recorded as a `DeclRefExpr` to its

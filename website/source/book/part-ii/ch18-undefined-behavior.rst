@@ -298,6 +298,39 @@ checked the same way in the state the function returns in, and a trusted
 contract in every state it allows. Callers do not rely on a contract that may
 be undefined; see :doc:`../../language/functions-loops`.
 
+Asserts and calls that do not return
+------------------------------------
+
+An ``assert`` is not undefined behavior when it fails: the program aborts.
+But a verified function should never abort, so a failed ``assert``, and any
+call that does not return (``abort``, ``exit``, ``std::terminate``,
+``__builtin_unreachable``), is an obligation of its own, of kind
+``unreachable``: no execution may reach it. After ``assert(c)``, ``c``
+therefore holds, and an assert documents a fact the proof checks. With
+``NDEBUG`` an ``assert`` is nothing, as compiled:
+
+.. cppverify-example: fails ratio
+
+.. code-block:: cpp
+
+   #include <cassert>
+
+   int ratio(int total, int parts)
+     cv::pre(0 <= total && total <= 1000)
+     cv::post(cv::result >= 0)
+   {
+     assert(parts > 0 && "parts must be positive");
+     return total / parts;
+   }
+
+.. code-block:: text
+
+   ratio.cpp:7:3: error: verification failed: ratio [...::unreachable@7:3] (counterexample: parts [ssa=parts_0] [type=i32] = 0, ...) [backend=z3] [reason=counterexample]
+
+The division needs ``parts != 0``, which the assert establishes, and the
+assert can fail: a caller may pass ``parts == 0``. Adding
+``cv::pre(parts > 0)`` makes both hold.
+
 What is not covered yet
 -----------------------
 

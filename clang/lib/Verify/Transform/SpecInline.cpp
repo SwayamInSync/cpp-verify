@@ -2,6 +2,7 @@
 #include "SpecInline.h"
 #include "../Transform/Passivize.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/SaveAndRestore.h"
 #include <functional>
 #include <iterator>
 #include <map>
@@ -192,7 +193,14 @@ public:
     return evalExpr(E.get(), Env);
   }
 
+  /// The result type of the spec whose body is being evaluated.
+  VType Returned = VType::makeVoid();
+
   std::unique_ptr<VExpr> inlineSpecCall(const VSpecCallExpr &C) {
+    // Past the function's node limit nothing more is unfolded; the
+    // construction that unfolds reports it.
+    if (NodeBudget::exhausted())
+      return opaqueCall(C);
     if (InlineDepth++ >= MaxInlineDepth)
       return opaqueCall(C);
     struct DepthGuard {
@@ -205,6 +213,7 @@ public:
     if (It == FnMap.end() || !It->second->IsSpec || It->second->Uninterpreted)
       return opaqueCall(C);
     const VFunction &Spec = *It->second;
+    llvm::SaveAndRestore Returning(Returned, Spec.ReturnType);
     unsigned F = fuelFor(C.CalleeIdentity);
     if (Spec.NeedsDecreasesCheck) {
       if (F == 0)
@@ -279,6 +288,9 @@ public:
       inlineQuantifiedCalls(O.Rhs);
       return;
     }
+    case VExpr::Require:
+      inlineQuantifiedCalls(static_cast<VRequireExpr &>(*E).Cond);
+      return;
     case VExpr::HeapStore: {
       auto &H = static_cast<VHeapStoreExpr &>(*E);
       inlineQuantifiedCalls(H.Ptr);
@@ -440,6 +452,10 @@ public:
       inlineDefinednessCalls(O.Rhs, InsideQuantifier);
       return;
     }
+    case VExpr::Require:
+      inlineDefinednessCalls(static_cast<VRequireExpr &>(*E).Cond,
+                             InsideQuantifier);
+      return;
     case VExpr::Forall:
     case VExpr::Exists: {
       auto &Q = static_cast<VQuantifiedExpr &>(*E);
@@ -606,6 +622,14 @@ public:
         return nullptr;
       return std::make_unique<VOverflowCheckExpr>(O->Op, std::move(Lhs),
                                                   std::move(Rhs), O->Loc);
+    }
+    case VExpr::Require: {
+      const auto *R = static_cast<const VRequireExpr *>(E);
+      auto Cond = evalExpr(R->Cond.get(), Env);
+      if (!Cond)
+        return nullptr;
+      return std::make_unique<VRequireExpr>(std::move(Cond), R->ProofKind,
+                                            R->Loc);
     }
     case VExpr::SpecCall: {
       const auto *C = static_cast<const VSpecCallExpr *>(E);
@@ -786,6 +810,38 @@ public:
       if (auto R = evalBody(G.Body, Env, EvaluationTrace, Guard))
         return R;
       return evalBodySeq(Body, Env, Idx + 1, EvaluationTrace, Guard);
+    }
+    // A lifted helper's assert(c) (an unreachable abort when c fails) is a
+    // requirement of every call that reaches it: Require(!path || c) joins
+    // the evaluation, whose checks each call makes. An assumption ends its
+    // path; nothing after it is evaluated there.
+    case VStmt::Assert: {
+      const auto &A = static_cast<const VAssertStmt &>(S);
+      if (!EvaluationTrace)
+        return evalBodySeq(Body, Env, Idx + 1, EvaluationTrace, Guard);
+      auto Cond = evalExpr(A.Cond.get(), Env);
+      if (!Cond)
+        return nullptr;
+      if (Guard)
+        Cond = makeTraceOr(makeTraceNot(cloneVExpr(Guard), A.Loc),
+                           std::move(Cond), A.Loc);
+      EvaluationTrace->push_back(std::make_unique<VRequireExpr>(
+          std::move(Cond), static_cast<unsigned>(A.ProofKind), A.Loc));
+      return evalBodySeq(Body, Env, Idx + 1, EvaluationTrace, Guard);
+    }
+    case VStmt::Assume: {
+      // A call never returns from the path an assumption of false ends, so
+      // its value there is any value; the requirement keeps calls off it.
+      const auto &A = static_cast<const VAssumeStmt &>(S);
+      if (A.Cond->K != VExpr::Literal ||
+          static_cast<const VLiteralExpr &>(*A.Cond).Value != "0")
+        return nullptr;
+      if (Returned.Kind == VTypeKind::Bool)
+        return std::make_unique<VLiteralExpr>(false, Returned, A.Loc);
+      if (Returned.Kind == VTypeKind::Int32 ||
+          Returned.Kind == VTypeKind::Int64 || Returned.Kind == VTypeKind::Ptr)
+        return std::make_unique<VLiteralExpr>(0, Returned, A.Loc);
+      return nullptr;
     }
     default:
       return nullptr;
@@ -1035,6 +1091,9 @@ void verify::collectSpecCalls(const VExpr *E,
     collectSpecCalls(O->Rhs.get(), Out);
     return;
   }
+  case VExpr::Require:
+    collectSpecCalls(static_cast<const VRequireExpr *>(E)->Cond.get(), Out);
+    return;
   case VExpr::Forall:
   case VExpr::Exists: {
     const auto *Q = static_cast<const VQuantifiedExpr *>(E);
@@ -1254,6 +1313,11 @@ std::unique_ptr<VExpr> verify::substParamsInExpr(
     return std::make_unique<VOverflowCheckExpr>(
         O->Op, substParamsInExpr(O->Lhs.get(), Map),
         O->Rhs ? substParamsInExpr(O->Rhs.get(), Map) : nullptr, O->Loc);
+  }
+  case VExpr::Require: {
+    const auto *R = static_cast<const VRequireExpr *>(E);
+    return std::make_unique<VRequireExpr>(substParamsInExpr(R->Cond.get(), Map),
+                                          R->ProofKind, R->Loc);
   }
   case VExpr::Result:
     if (auto It = Map.find(ResultKey); It != Map.end())
@@ -1615,6 +1679,11 @@ static void collectRecursiveSpecCallsInExpr(
                                     Quantifiers, Unsupported);
     return;
   }
+  case VExpr::Require:
+    collectRecursiveSpecCallsInExpr(
+        static_cast<const VRequireExpr *>(E)->Cond.get(), Fn, FnMap, Env, Guard,
+        Sites, Quantifiers, Unsupported);
+    return;
   case VExpr::Forall:
   case VExpr::Exists: {
     const auto *Q = static_cast<const VQuantifiedExpr *>(E);
@@ -2120,6 +2189,10 @@ struct SpecBodyCollector {
       expr(O->Rhs.get(), Env, Guard, Quantifiers);
       return;
     }
+    case VExpr::Require:
+      expr(static_cast<const VRequireExpr *>(E)->Cond.get(), Env, Guard,
+           Quantifiers);
+      return;
     case VExpr::Forall:
     case VExpr::Exists: {
       const auto *Q = static_cast<const VQuantifiedExpr *>(E);
@@ -2422,6 +2495,9 @@ static void readHeapAt(VExpr *E, const std::string &Heap) {
     readHeapAt(O->Rhs.get(), Heap);
     return;
   }
+  case VExpr::Require:
+    readHeapAt(static_cast<VRequireExpr *>(E)->Cond.get(), Heap);
+    return;
   case VExpr::HeapStore:
   case VExpr::HeapFrame:
   case VExpr::Literal:
@@ -2872,7 +2948,12 @@ static void addSpecPostChecks(PassiveProgram &P, const VFunction &Fn,
     PS->Cond = cloneAtEntryState(Obligation.get());
     P.Stmts.push_back(std::move(PS));
   }
-  addPostApplicationFacts(P, Fn, FnMap);
+  {
+    NodeBudget Facts;
+    addPostApplicationFacts(P, Fn, FnMap);
+    if (Facts.exceeded())
+      P.TooLarge = specFactsOversize(Facts);
+  }
   if (Collector.Unsupported) {
     auto PS = std::make_unique<PassiveStmt>();
     PS->K = PassiveStmt::Assert;
@@ -3100,6 +3181,8 @@ verify::withClauseProofs(PassiveProgram Check, const VFunction &Spec,
   Passivizer Lowering;
   Lowering.setFunctionMap(FnMap);
   PassiveProgram P = Lowering.run(Proof);
+  if (!P.TooLarge)
+    P.TooLarge = std::move(Check.TooLarge);
   P.AssumedPosts.insert(Check.AssumedPosts.begin(), Check.AssumedPosts.end());
   P.AssumedUnfoldings.insert(Check.AssumedUnfoldings.begin(),
                              Check.AssumedUnfoldings.end());
