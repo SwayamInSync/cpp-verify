@@ -16,7 +16,10 @@
 # CVC5-DAG: verification failed: masked_wrong {{.*}}[backend=cvc5]
 
 # PORTFOLIO-DAG: Unresolved: hidden_true [backend=portfolio] [reason=spec.hidden]
-# PORTFOLIO-DAG: verification failed: hidden_false {{.*}}x [ssa=x_0]
+# PORTFOLIO-DAG: verification failed: hidden_false
+# PORTFOLIO-DAG: note: counterexample: {{.*}}x =
 # PORTFOLIO-DAG: Verified: bounded_closed_form [backend=portfolio]
-# PORTFOLIO-DAG: verification failed: scaled_wrong {{.*}}x [ssa=x_0] [type=u32] = 3000000000;
-# PORTFOLIO-DAG: verification failed: masked_wrong {{.*}}x [ssa=x_0] [type=i32] = 700;
+# PORTFOLIO-DAG: verification failed: scaled_wrong
+# PORTFOLIO-DAG: note: counterexample: {{.*}}x = 3000000000{{( ->|,|$)}}
+# PORTFOLIO-DAG: verification failed: masked_wrong
+# PORTFOLIO-DAG: note: counterexample: {{.*}}x = 700{{( ->|,|$)}}
