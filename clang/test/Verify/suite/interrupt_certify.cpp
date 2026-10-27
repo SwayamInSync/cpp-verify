@@ -18,4 +18,5 @@ cppverify::proof void large_sum()
 }
 
 // CHECK:      Interrupted: large_sum
+// CHECK-NEXT: Summary: {{.*}}
 // CHECK-NEXT: exit: 130
