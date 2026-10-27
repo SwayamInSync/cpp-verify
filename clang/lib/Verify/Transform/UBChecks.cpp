@@ -142,6 +142,8 @@ bool containsValidCall(const VExpr *E) {
     const auto *O = static_cast<const VOverflowCheckExpr *>(E);
     return containsValidCall(O->Lhs.get()) || containsValidCall(O->Rhs.get());
   }
+  case VExpr::Require:
+    return containsValidCall(static_cast<const VRequireExpr *>(E)->Cond.get());
   }
   return false;
 }
