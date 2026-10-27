@@ -977,6 +977,38 @@ static std::string functionName(const FunctionDecl *FD,
   return Name;
 }
 
+std::string ASTConverter::contractText(const FunctionContractInfo &FCI) const {
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  const PrintingPolicy Policy(Ctx.getLangOpts());
+  auto clause = [&](llvm::StringRef Kind, const Expr *E) {
+    OS << Kind << '(';
+    if (E)
+      E->printPretty(OS, nullptr, Policy);
+    OS << ')';
+  };
+  for (const Expr *Pre : FCI.Preconditions)
+    clause("pre", Pre);
+  for (const Expr *Post : FCI.Postconditions)
+    clause("post", Post);
+  for (const Expr *Footprint : FCI.Modifies)
+    clause("modifies", Footprint);
+  for (const auto &[First, Second] : FCI.Aliases) {
+    clause("aliases", First);
+    clause("with", Second);
+  }
+  for (const Expr *Measure : FCI.Decreases)
+    clause("decreases", Measure);
+  if (FCI.MayDiverge.isValid())
+    OS << "decreases(*)";
+  for (const auto &[Name, Assumes] : FCI.Behaviors)
+    clause(std::string("behavior ") + (Name ? Name->getName().str() : ""),
+           Assumes);
+  for (const Expr *Check : FCI.BehaviorChecks)
+    clause("behaviors", Check);
+  return Text;
+}
+
 std::string ASTConverter::functionIdentity(const FunctionDecl *FD) {
   if (!FD)
     return {};
@@ -3263,6 +3295,7 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   Fn->IsConstructor = Constructor != nullptr;
   Fn->Name = functionName(FD, /*Qualified=*/Method != nullptr);
   Fn->Identity = functionIdentity(FD);
+  ContractTexts[Fn->Identity] = contractText(*FCI);
   Fn->IsSpec = FCI->IsSpec;
   Fn->IsProof = FCI->IsProof;
   if (FCI->MayDiverge.isValid() && !FCI->IsSpec && !FCI->IsProof) {

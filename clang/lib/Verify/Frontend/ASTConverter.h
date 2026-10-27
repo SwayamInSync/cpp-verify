@@ -93,6 +93,7 @@ class ASTConverter {
   void nameParameters(const FunctionDecl *ContractDecl, const FunctionDecl *FD);
   unsigned BoundValueId = 0;
   std::map<const FunctionDecl *, std::string> FunctionIdentities;
+  std::map<std::string, std::string> ContractTexts;
   std::map<const FunctionDecl *, bool> SpecHeapReads;
   /// Uncontracted constexpr functions the lowered code calls or names.
   std::set<const FunctionDecl *> UsedConstexprSpecs;
@@ -174,6 +175,11 @@ public:
   const std::map<std::string, std::pair<SourceLocation, std::string>> &
   getInstantiationPoints() const {
     return InstantiationPoints;
+  }
+  /// For each contracted function, by its identity: its contract as written,
+  /// which another file's declaration of it must state the same.
+  const std::map<std::string, std::string> &getContractTexts() const {
+    return ContractTexts;
   }
 
 private:
@@ -472,6 +478,8 @@ private:
   bool calleeReturnsFreshOwned(const FunctionDecl *FD);
   VIntMode specCallIntMode(const FunctionDecl *FD) const;
   std::string functionIdentity(const FunctionDecl *FD);
+  /// The clauses of a contract as written, each kind tagged.
+  std::string contractText(const FunctionContractInfo &FCI) const;
   std::string specIdentityFromExpr(const Expr *E);
   void injectTypeInvariants(const FunctionDecl *FD, VFunction &Fn);
   std::unique_ptr<VExpr> convertTypeInvariantExpr(const Expr *E);
