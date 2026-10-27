@@ -58,7 +58,7 @@ int steps(int x)
   return y;
 }
 // LIMIT: obligation_size_limit.cpp:[[@LINE-22]]:5: Unresolved: steps [backend=z3] [reason=query.size-limit] (the proof obligations would take at least 747 expression nodes, more than the limit of 500 (--max-query-nodes): each check repeats every assumption before it, so split the function or raise the limit)
-// JSON: {"backend":"z3","function":"steps","message":"steps [backend=z3] [reason=query.size-limit] (the proof obligations would take at least 747 expression nodes, more than the limit of 500 (--max-query-nodes): each check repeats every assumption before it, so split the function or raise the limit)","reason":"query.size-limit","schema":"cppverify.diagnostic/1","severity":"error","source":{"column":5,"end_column":5,"end_line":[[@LINE-23]],"file":"{{.*}}obligation_size_limit.cpp","line":[[@LINE-23]]},"status":"unresolved"}
+// JSON: {"backend":"z3","function":"steps","function_source":{"column":5,"end_column":10,"end_line":[[@LINE-23]],"file":"{{.*}}obligation_size_limit.cpp","line":[[@LINE-23]]},"message":"steps [backend=z3] [reason=query.size-limit] (the proof obligations would take at least 747 expression nodes, more than the limit of 500 (--max-query-nodes): each check repeats every assumption before it, so split the function or raise the limit)","reason":"query.size-limit","schema":"cppverify.diagnostic/2","severity":"error","source":{"column":5,"end_column":10,"end_line":[[@LINE-23]],"file":"{{.*}}obligation_size_limit.cpp","line":[[@LINE-23]]},"status":"unresolved"}
 // LOWER: obligation_size_limit.cpp:[[@LINE-24]]:5: error: Z3 lowering failed: steps [backend=z3] [reason=query.size-limit] (the proof obligations would take at least 747 expression nodes, more than the limit of 500
 // AT: Verified: steps [backend=z3]
 // SHARED: Verified: steps [backend=z3]
@@ -74,7 +74,7 @@ int caller(int x)
   return y + 1;
 }
 // LIMIT: Unresolved: caller [backend=z3] [reason=callee.contract] (relies on the contract of steps, which is not established)
-// JSON: {"backend":"z3","function":"caller","message":"caller [backend=z3] [reason=callee.contract] (relies on the contract of steps, which is not established)","reason":"callee.contract",
+// JSON: {"backend":"z3","function":"caller","function_source":{"column":5,{{.*}}},"message":"caller [backend=z3] [reason=callee.contract] (relies on the contract of steps, which is not established)","reason":"callee.contract",
 // LOWER: Lowered: caller
 // AT: Verified: caller [backend=z3]
 // BELOW: Unresolved: caller [backend=z3] [reason=callee.contract]
