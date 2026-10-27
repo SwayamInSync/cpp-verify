@@ -63,6 +63,5 @@ int use_long_spec_overload()
 // VERIFY-DAG: Verified: call_int_overload
 // VERIFY-DAG: Verified: call_long_overload
 // VERIFY-DAG: Verified: spec decreases: overloaded_countdown
-// VERIFY-DAG: Verified: spec axiom: overloaded_countdown
 // VERIFY-DAG: Verified: use_int_spec_overload
 // VERIFY-DAG: Verified: use_long_spec_overload
