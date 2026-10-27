@@ -165,7 +165,8 @@ static void cv_alarm(int ms) {
 }
 struct cv_guard { char *base; size_t total; };
 static void *cv_galloc(size_t bytes, int layout, cv_guard *g) {
-  size_t pg = 4096; size_t dp = (bytes + pg - 1) / pg; if (dp == 0) dp = 1;
+  size_t pg = (size_t)sysconf(_SC_PAGESIZE);
+  size_t dp = (bytes + pg - 1) / pg; if (dp == 0) dp = 1;
   g->total = (dp + 2) * pg;
   g->base = (char *)mmap(nullptr, g->total, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   char *data = g->base + pg; mprotect(data, dp * pg, PROT_READ | PROT_WRITE);
