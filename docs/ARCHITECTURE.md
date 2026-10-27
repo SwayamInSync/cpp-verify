@@ -928,24 +928,34 @@ traversal that does not memoize (validation, hashing, serialization) still
 takes time quadratic in a function's length; hash-consing the terms and
 memoizing those traversals would make it linear.
 
-**Size.** Each obligation's goal is its condition under a negated copy of
-every assumption before it, so a module grows with its obligations times
-the assumptions before them. Its node count, as `obligationModuleNodeCount`
-counts it, is computed from the lowered statements before any goal is built
-(four times the goals' nodes, for the goals, their queries, the complete
-goal, and its query, plus three per obligation less one; an assertion
-checks the count against the built module); over `--max-query-nodes` the
-build returns `ObligationSizeError`. Constructions whose size the program
-does not bound are counted as they go: `NodeBudget` (`IR/NodeBudget.h`)
-counts the `VExpr` and `LogicExpr` nodes built on its thread against the
-limit the driver sets for the function, and the spec inliner unfolds
-nothing more once it is spent. The definitions `SpecAxioms` materializes,
-each spec unfolded as deep as its fuel, are counted level by level into the
-module's count; the facts the passivizer adds at each spec application are
-counted in a budget, and a spent one leaves `PassiveProgram::TooLarge`, which
-makes the build an `ObligationSizeError`; so does a spent budget while specs
-are inlined for BMC. The driver reports the error as the function's verdict,
+**Size.** Each obligation's goal is its condition under every assumption
+before it, sharing their terms (above): a goal adds, for each assumption, a
+negation, a disjunction, and a copy of the assumption's root, so a module's
+distinct nodes grow with its obligations times the assumptions before them,
+not times their sizes. `obligationModuleNodeCount` counts the distinct nodes,
+a shared one once, which is what the module takes in memory. `NodeBudget`
+(`IR/NodeBudget.h`) counts the `VExpr` and `LogicExpr` nodes built on its
+thread against the limit the driver sets for the function
+(`--max-query-nodes`): the goals are built in one, starting from the distinct
+nodes of the lowered statements, and stop with `ObligationSizeError` once
+they pass the limit; the spec inliner unfolds nothing more once its budget is
+spent. The definitions `SpecAxioms` materializes, each spec unfolded as deep
+as its fuel, are counted, each by its distinct nodes, from the module's
+count; the facts the passivizer adds at each spec application are counted in
+a budget, and a spent one leaves `PassiveProgram::TooLarge`, which makes the
+build an `ObligationSizeError`; so does a spent budget while specs are
+inlined for BMC. The driver reports the error as the function's verdict,
 `Unresolved` with `query.size-limit`, and never uses the partial result.
+What states each term in full is larger than what is built: the cvc5
+adapter's SMT-LIB script and an archive record write a shared subterm at
+each of its places. Each counts the module's complete query and definitions
+as trees, stopping once past the limit (`obligationModuleTreeNodesUpTo`):
+over it, cvc5's verdict is `Unresolved` with `query.size-limit`, and the
+record is an error. Z3 and the Lean printer share terms (Z3 by hash-consing,
+Lean by naming a shared subterm with a `let`), so the distinct count bounds
+them. Before 0.2 the size was predicted, as trees, before any goal was
+built; with shared terms that counted far more than a module takes (a
+function of 400 checks: 45 million predicted, under 2 million built).
 
 Every source-built or replayed module then passes through one fail-closed
 canonicalization step before hashing or backend dispatch. The pass folds only
