@@ -3271,10 +3271,20 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   }
   Fn->ReadsHeap = FCI->IsSpec && specReadsHeap(FD);
   Fn->DeclLoc = FD->getLocation();
-  Fn->IsTrusted = llvm::any_of(FD->redecls(), [](const FunctionDecl *D) {
-    return D->hasAttr<CppVerifyTrustedAttr>();
-  });
-  if (Fn->IsTrusted && Fn->IsSpec) {
+  // [[cppverify::trusted]] on a definition leaves its body unverified; on a
+  // declaration it says that callers which see no definition assume the
+  // contract, so a definition that only inherits it is verified.
+  const bool AnyTrusted =
+      llvm::any_of(FD->redecls(), [](const FunctionDecl *D) {
+        return D->hasAttr<CppVerifyTrustedAttr>();
+      });
+  if (const FunctionDecl *Definition = FD->getDefinition()) {
+    const auto *Trusted = Definition->getAttr<CppVerifyTrustedAttr>();
+    Fn->IsTrusted = Trusted && !Trusted->isInherited();
+  } else {
+    Fn->IsTrusted = AnyTrusted;
+  }
+  if (AnyTrusted && Fn->IsSpec) {
     error(Fn->Name + ": [[cppverify::trusted]] does not apply to a "
                      "spec function, whose definition is its "
                      "meaning");
