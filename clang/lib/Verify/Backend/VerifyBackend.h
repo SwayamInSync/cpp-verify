@@ -138,6 +138,9 @@ struct VerifyResult {
   std::string Message;
   std::vector<VerifyModelValue> Model;
   std::vector<VerifyTraceEvent> Trace;
+  /// The failing obligations after this one, in order, each with its own
+  /// counterexample, as many as the run's MaxFailures allows.
+  std::vector<VerifyResult> MoreFailures;
   std::string ObligationId;
   std::optional<ObligationKind> ObligationType;
   /// For a certified counterexample: the value of every free variable of the
@@ -269,6 +272,9 @@ struct BackendExecutionOptions {
   /// unresolved. Interactive fallback backends can consume those unresolved
   /// obligations without spending a second whole-module timeout budget.
   bool SkipWholeModuleRetry = false;
+  /// How many failing obligations of a module are reported, each with its
+  /// own counterexample; 0 reports every one.
+  unsigned MaxFailures = 1;
   /// Solve the whole-module query once, at the full budget, and report it:
   /// no per-obligation queries, refinement fallback, or induction. For small
   /// auxiliary questions such as the vacuity checks.
