@@ -20,11 +20,11 @@ inline constexpr unsigned DefaultCollectionTimeoutMs =
 /// and their retries, so it legitimately takes several query timeouts.
 inline constexpr unsigned DefaultFunctionTimeoutMs =
     10 * DefaultSolverTimeoutMs;
-/// The expression nodes the proof obligations of one function may take, as
-/// built: building a module takes up to about 450 bytes a node at once, and
-/// the largest of the test suite (the ULEB128 case study's) has 22.6
-/// million.
-inline constexpr uint64_t DefaultMaxQueryNodes = 32000000;
+/// The distinct expression nodes built for one function's proof obligations:
+/// a node takes about 600 bytes, and Z3's encoding of it about five times
+/// that, and the largest function of the test suite (safe_fib.cpp's
+/// iterative_fibonacci) has 375,000.
+inline constexpr uint64_t DefaultMaxQueryNodes = 4000000;
 /// The megabytes Z3's queries may allocate together, and each cvc5 process.
 inline constexpr uint64_t DefaultMemoryLimitMB = 8192;
 
