@@ -16,6 +16,7 @@
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Tooling.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -26,6 +27,7 @@
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/raw_ostream.h"
+#include <chrono>
 #include <cstdlib>
 #include <limits>
 #if defined(__GLIBC__)
@@ -114,12 +116,15 @@ static cl::opt<unsigned>
     BMCUnroll("unroll", cl::desc("Maximum loop unroll bound for --backend=bmc"),
               cl::init(10), cl::cat(CppVerifyCategory));
 
-static cl::opt<unsigned> SolverTimeout(
-    "timeout",
-    cl::desc(
-        "Per-query solver timeout in milliseconds (0 = no limit). A query that "
-        "exceeds it is reported as unresolved instead of hanging"),
-    cl::init(verify::DefaultSolverTimeoutMs), cl::cat(CppVerifyCategory));
+static const std::string SolverTimeoutDescription =
+    "Per-query solver timeout in milliseconds (default " +
+    std::to_string(verify::DefaultSolverTimeoutMs) +
+    ", 0 = no limit). A query that exceeds it is reported as unresolved "
+    "instead of hanging";
+static cl::opt<unsigned> SolverTimeout("timeout",
+                                       cl::desc(SolverTimeoutDescription),
+                                       cl::init(verify::DefaultSolverTimeoutMs),
+                                       cl::cat(CppVerifyCategory));
 
 static cl::opt<unsigned> CollectionTimeout(
     "collection-timeout",
@@ -261,9 +266,59 @@ static cl::opt<verify::DiagnosticFormat> DiagnosticsFormat(
                           "Versioned JSON Lines")),
     cl::init(verify::DiagnosticFormat::Text), cl::cat(CppVerifyCategory));
 
+static cl::opt<bool>
+    Quiet("quiet",
+          cl::desc("Print only what is not a proof (failures, unresolved "
+                   "results, errors, warnings) and the summary"),
+          cl::cat(CppVerifyCategory));
+
+static cl::opt<bool>
+    Verbose("verbose",
+            cl::desc("Also print each spec function that needs no check "
+                     "(spec axiom)"),
+            cl::cat(CppVerifyCategory));
+
+static cl::opt<bool> ListFunctions(
+    "list-functions",
+    cl::desc("List the functions a run would verify, with their kinds and "
+             "locations, and verify none"),
+    cl::cat(CppVerifyCategory));
+
 namespace {
 
 static int gVerifyFailures = 0;
+static verify::VerifySummary gSummary;
+
+/// One line for the run: how many verdicts of each kind it reported, the
+/// reasons of the unresolved ones, and the time it took.
+static void printSummary(std::chrono::steady_clock::time_point Start) {
+  std::vector<std::string> Parts;
+  auto add = [&](unsigned N, llvm::StringRef What) {
+    if (N)
+      Parts.push_back(std::to_string(N) + " " + What.str());
+  };
+  add(gSummary.Verified, "verified");
+  add(gSummary.Failed, "failed");
+  if (gSummary.Unresolved) {
+    std::vector<std::string> Reasons;
+    for (const auto &[Reason, N] : gSummary.Reasons)
+      Reasons.push_back(Reason + " " + std::to_string(N));
+    Parts.push_back(std::to_string(gSummary.Unresolved) + " unresolved (" +
+                    llvm::join(Reasons, ", ") + ")");
+  }
+  add(gSummary.BoundedSafe, "bounded-safe");
+  add(gSummary.Trusted, "trusted");
+  add(gSummary.Lowered, "lowered");
+  add(gSummary.Exported, "exported");
+  add(gSummary.Interrupted, "interrupted");
+  const double Seconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - Start)
+          .count();
+  llvm::outs() << "Summary: "
+               << (Parts.empty() ? std::string("no verdicts")
+                                 : llvm::join(Parts, ", "))
+               << llvm::formatv(" in {0:f1} s", Seconds) << "\n";
+}
 static llvm::raw_ostream *gObligationOut = nullptr;
 
 static uint64_t proofCacheMaxBytes() {
@@ -379,6 +434,10 @@ public:
       VOpts.ProfileQuantifiers = ProfileQuantifiers.getValue();
       VOpts.Diagnostics = DiagnosticsFormat.getValue();
       VOpts.ObligationOut = gObligationOut;
+      VOpts.Quiet = Quiet.getValue();
+      VOpts.Verbose = Verbose.getValue();
+      VOpts.ListFunctions = ListFunctions.getValue();
+      VOpts.Summary = &gSummary;
       if (!verify::verifyTranslationUnit(Ctx, llvm::outs(), VOpts))
         ++gVerifyFailures;
     }
@@ -947,6 +1006,7 @@ static int replayObligationArchive() {
 } // namespace
 
 int main(int argc, const char **argv) {
+  const auto Start = std::chrono::steady_clock::now();
   llvm::InitLLVM X(argc, argv);
   // The first Ctrl-C stops the solvers and reports what is not finished; a
   // second one ends the process.
@@ -1063,6 +1123,8 @@ int main(int argc, const char **argv) {
   Tool.setDiagnosticConsumer(&ArgumentDiagnostics);
   VerifyActionFactory Factory(ArgumentDiagnostics);
   int RC = Tool.run(&Factory);
+  if (DiagnosticsFormat == verify::DiagnosticFormat::Text && !ListFunctions)
+    printSummary(Start);
   if (verify::interruptRequested())
     return 130;
   if (RC != 0)
