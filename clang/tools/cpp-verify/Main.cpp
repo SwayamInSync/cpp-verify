@@ -319,6 +319,9 @@ namespace {
 
 static int gVerifyFailures = 0;
 static verify::VerifySummary gSummary;
+/// A run over several files settles the contracts each declares without a
+/// definition against those the others verify, before printing.
+static std::unique_ptr<verify::CrossFileRun> gCrossFile;
 
 /// One line for the run: how many verdicts of each kind it reported, the
 /// reasons of the unresolved ones, and the time it took.
@@ -476,6 +479,7 @@ public:
                                     FunctionPatterns.end());
       VOpts.ConfirmBound = ConfirmBound.getValue();
       VOpts.Summary = &gSummary;
+      VOpts.CrossFile = gCrossFile.get();
       if (!verify::verifyTranslationUnit(Ctx, llvm::outs(), VOpts))
         ++gVerifyFailures;
     }
@@ -1168,7 +1172,13 @@ int main(int argc, const char **argv) {
   TextDiagnosticPrinter ArgumentDiagnostics(llvm::errs(), *ArgumentOptions);
   Tool.setDiagnosticConsumer(&ArgumentDiagnostics);
   VerifyActionFactory Factory(ArgumentDiagnostics);
+  // Lean exports and --list-functions have no verdicts to settle.
+  if (OptionsParser.getSourcePathList().size() > 1 && BackendOpt != "lean" &&
+      LeanFallback.empty() && !ListFunctions)
+    gCrossFile = std::make_unique<verify::CrossFileRun>();
   int RC = Tool.run(&Factory);
+  if (gCrossFile)
+    gVerifyFailures += gCrossFile->finish(llvm::outs(), &gSummary);
   if (DiagnosticsFormat == verify::DiagnosticFormat::Text && !ListFunctions)
     printSummary(Start);
   if (verify::interruptRequested())
