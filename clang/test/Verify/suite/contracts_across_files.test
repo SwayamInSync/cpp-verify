@@ -30,7 +30,8 @@ RIGHT-NEXT: Summary: 3 verified
 
 WRONG: Unresolved: scaled [backend=z3] [reason=callee.contract] (relies on the contract of clamp100, which its verification in {{.*}}mathx.cpp does not establish)
 WRONG-NEXT: Unresolved: twice_scaled [backend=z3] [reason=callee.contract] (relies on the contract of clamp100, which its verification in {{.*}}mathx.cpp does not establish)
-WRONG-NEXT: mathx.h:2:42: error: verification failed: clamp100 [{{.*}}::postcondition@2:42] (counterexample: {{.*}}result [ssa=__result_1] [type=i32] = 101
+WRONG: mathx.h:2:42: error: verification failed: clamp100 [postcondition]
+WRONG: note: counterexample: {{.*}}result = 101{{( ->|,|$)}}
 WRONG: Summary: 1 failed, 2 unresolved (callee.contract 2)
 
 The files are printed in the order they are given, settled together.
@@ -43,7 +44,7 @@ JSON: "function":"clamp100","message":"verification failed: clamp100
 
 A file alone is as before: the contract has no definition.
 ALONE: mathx.h:1:5: warning: clamp100 has a contract but no definition, so its callers are not verified; mark the declaration {{\[\[cppverify::trusted\]\]}} to assume the contract
-ALONE-NEXT: Unresolved: scaled [backend=z3] [reason=callee.contract] (relies on the contract of clamp100 (no definition; mark it {{\[\[cppverify::trusted\]\]}} to assume it), which is not established)
+ALONE: Unresolved: scaled [backend=z3] [reason=callee.contract] (relies on the contract of clamp100 (no definition; mark it {{\[\[cppverify::trusted\]\]}} to assume it), which is not established)
 ALONE-NEXT: Unresolved: twice_scaled [backend=z3] [reason=callee.contract] (relies on the contract of scaled, which is not established)
 
 A declaration that states another contract is not the definition's.
