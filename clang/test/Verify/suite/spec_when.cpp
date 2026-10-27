@@ -77,4 +77,5 @@ cppverify::spec int stalls(int n)
 {
   return n <= 1 ? 0 : stalls(n - (n % 2));
 }
-// CHECK-DAG: error: spec decreases failed: stalls {{.*}}[reason=counterexample] (n [type=math-i32] = {{[0-9]*[02468]}})
+// CHECK-DAG: error: spec decreases failed: stalls {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}n = {{[0-9]*[02468]}}{{( ->|,|$)}}
