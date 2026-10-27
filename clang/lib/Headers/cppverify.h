@@ -128,6 +128,10 @@ enum __construct {
   /// The return value, in postconditions.
   result __attribute__((unavailable("cppverify::result is the return value "
                                     "in a postcondition"))),
+  /// In the contract of a range-based for loop: the number of elements
+  /// before the current one, from 0 to the size of the range.
+  index __attribute__((unavailable("cppverify::index is the position of a "
+                                   "range-based for loop in its contract"))),
   /// After a spec function returning bool: the least predicate its body
   /// defines, true exactly where a finite derivation shows it.
   inductive __attribute__((unavailable("cppverify::inductive follows a spec "
