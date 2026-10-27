@@ -413,6 +413,19 @@ that may write what another operand reads is an error at the expression,
 and an assignment's right operand is evaluated before its target, as C++17
 says (:doc:`language/functions-loops`).
 
+**Switch statements and loop forms.** ``switch`` stopped its function with
+``unsupported statement: SwitchStmt``, and so did ``break`` and ``continue``
+in a ``do`` loop, a condition declaration (``while (int k = next(i))``), a
+``for`` loop without a condition, and a comma expression as a statement (the
+increment ``i++, j += 2``). All of them are verified now, with C++'s meaning:
+a switch runs from the matching label, or from ``default``, to a ``break`` or
+its end, falling through labels, with an init statement, a condition
+variable, GNU case ranges, and nested loops and switches; a ``break`` in a
+``do`` loop's first iteration skips the loop and a ``continue`` goes to its
+condition. Specs and lifted ``constexpr`` helpers may switch too. A label
+inside another statement of its switch (Duff's device) and ``[[assume]]``
+are errors at the statement (:doc:`language/functions-loops`).
+
 Running cpp-verify
 ~~~~~~~~~~~~~~~~~~
 
