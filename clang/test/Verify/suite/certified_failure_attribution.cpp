@@ -4,7 +4,9 @@
 // The complete query refutes the postcondition at once, but the solver's
 // search for a counterexample to the postcondition's own query does not end
 // within the timeout. The complete query's certified counterexample is
-// reported without waiting for that search.
+// reported without waiting for that search. The body reads p first, so p is
+// an input whose storage is initialized, and the postcondition is the first
+// check that fails.
 
 cppverify::spec bool valid(int *p, int n) { return true; }
 
@@ -13,6 +15,7 @@ void break_heap_wrong(int *p)
   cppverify::modifies(*p)
   cppverify::post(p[2] == 1)
 {
+  int last = p[2];
   int i = 0;
   while (i < 3)
     cppverify::invariant(0 <= i && i <= 1)
@@ -25,5 +28,5 @@ void break_heap_wrong(int *p)
     i = i + 1;
   }
 }
-// CHECK: error: verification failed: break_heap_wrong [{{.*}}::postcondition@14:24] {{.*}}[reason=counterexample]
+// CHECK: error: verification failed: break_heap_wrong [{{.*}}::postcondition@16:24] {{.*}}[reason=counterexample]
 // CHECK-NOT: within_seconds
