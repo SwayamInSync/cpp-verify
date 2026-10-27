@@ -91,11 +91,11 @@ loop over a switch needs the same invariant as one over an ``if``:
        cv::decreases(n - i)
      {
        switch (s[i]) {
-       case 97: // 'a'
-       case 101: // 'e'
-       case 105: // 'i'
-       case 111: // 'o'
-       case 117: // 'u'
+       case 'a':
+       case 'e':
+       case 'i':
+       case 'o':
+       case 'u':
          count++;
          break;
        default:
@@ -108,6 +108,8 @@ loop over a switch needs the same invariant as one over an ``if``:
 .. code-block:: text
 
    Verified: vowels [backend=z3]
+
+Character literals such as ``'a'`` are integers of their type, as in C++.
 
 A loop condition may declare a variable (``while (int k = next(i))``), made
 at every test; a ``for`` loop may leave out its condition (``for (;;)``) and
