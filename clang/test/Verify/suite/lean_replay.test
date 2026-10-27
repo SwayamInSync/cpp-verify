@@ -90,7 +90,7 @@
 # STALE: warning: the Lean proof CppVerify/Proofs/cppverify_tri_nonneg_42a030/cppverify_tri_nonneg_42a030_postcondition_053b1980.lean is kept in Stale/Proofs/cppverify_tri_nonneg_42a030/cppverify_tri_nonneg_42a030_postcondition_053b1980.lean: its function is gone, and no goal has its statement
 # STALE-NEXT: Exported: lean obligation: sum_small (cppverify_auto proved 7 of 7 goals) [backend=lean, bound=2]
 
-# BACK: {"message":"the Lean proof of fn_5f5a31307472695f6e6f6e6e656769::postcondition@{{[0-9]+}}:{{[0-9]+}} came back from Stale/Proofs/cppverify_tri_nonneg_42a030/cppverify_tri_nonneg_42a030_postcondition_053b1980.lean to CppVerify/Proofs/cppverify_tri_nonneg_42a030/cppverify_tri_nonneg_42a030_postcondition_053b1980.lean, the file of the goal with its statement","schema":"cppverify.diagnostic/1","severity":"warning","status":"warning"}
+# BACK: {"message":"the Lean proof of fn_5f5a31307472695f6e6f6e6e656769::postcondition@{{[0-9]+}}:{{[0-9]+}} came back from Stale/Proofs/cppverify_tri_nonneg_42a030/cppverify_tri_nonneg_42a030_postcondition_053b1980.lean to CppVerify/Proofs/cppverify_tri_nonneg_42a030/cppverify_tri_nonneg_42a030_postcondition_053b1980.lean, the file of the goal with its statement","schema":"cppverify.diagnostic/2","severity":"warning","status":"warning"}
 # BACK-NEXT: {"backend":"lean","function":"tri.decreases",{{.*}}"status":"exported"}
 
 # NO-PROJECT: error: --lean-certify, --lean-prune-stale, and --no-lean-auto require --lean-project
