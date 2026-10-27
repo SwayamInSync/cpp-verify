@@ -29,6 +29,41 @@ text, and IR dumps intentionally make the stream mixed. Malformed display bytes
 are replaced with the Unicode replacement character, so JSON output remains
 valid UTF-8.
 
+A counterexample after a loop is only as real as the loop's invariants. At
+the loop, the verifier knows what the invariants say and nothing else, so a
+loop with too weak an invariant fails a correct function:
+
+.. code-block:: cpp
+
+   namespace cv = cppverify;
+
+   int count_up(int n)
+     cv::pre(n >= 0 && n <= 5)
+     cv::post(cv::result == n)
+   {
+     int c = 0;
+     while (c < n)
+       cv::decreases(n - c)
+     {
+       c = c + 1;
+     }
+     return c;
+   }
+
+.. code-block:: text
+
+   count_up.cpp:5:23: error: verification failed: count_up [fn_...::postcondition@5:23] (counterexample: result [ssa=__result_1] [type=i32] = 1, c [ssa=c_1] [type=i32] = 0, c [ssa=c_2] [type=i32] = 1, c [ssa=c_3] [type=i32] = 1, n [ssa=n_0] [type=i32] = 0; trace: loop.entry@8:3 -> loop.exit@8:3 -> return.return@13:3 value=1) [backend=z3] [reason=counterexample]
+   note: the counterexample's state at the loop at 8:3 is any state its invariants allow, not necessarily one an execution reaches
+   note: no execution fails this check: every loop ends within 5 iterations, and unrolling proves it there; the loops' invariants are too weak for an unbounded proof
+
+The first note says where the counterexample's state comes from; the second
+is what unrolling the loop found about the same check (``--confirm-bound``,
+10 iterations by default): here, that every execution passes it, so the
+invariant is what is missing (``cv::invariant(0 <= c && c <= n)``). When
+unrolling finds an execution that fails the check, the note gives that
+execution and the number of iterations, and the bug is in the code or the
+contract, not in the invariant.
+
 An undecided query is different from a counterexample. ``Unresolved`` with
 reason ``solver.timeout``, ``solver.resource-limit``, or ``solver.unknown``
 means Z3 timed out, exhausted an explicit resource/query budget, or entered a
