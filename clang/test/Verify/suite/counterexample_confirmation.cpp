@@ -190,7 +190,7 @@ cppverify::proof void fib5_small(int n)
 {
 }
 // CHECK-DAG: error: verification failed: fib5_small {{.*}}confirmed by a proof at this input that uses the contract of fib5_at_least_5
-// JSON-DAG: "confirmed_with":["fib5_at_least_5"],"function":"fib5_small"
+// JSON-DAG: "confirmed_with":["fib5_at_least_5"],{{.*}}"function":"fib5_small"
 
 struct Positive {
   int x;
