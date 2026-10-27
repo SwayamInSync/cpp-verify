@@ -20,6 +20,7 @@ struct ConversionError {
   /// decides; empty for an error of the translation unit.
   std::string Function;
   std::string FunctionName;
+  SourceLocation FunctionLoc;
   /// In the function's signature or contract, rather than its body: then
   /// its callers cannot use the contract either.
   bool InContract = false;
@@ -55,16 +56,17 @@ class ASTConverter {
   /// converter is in its signature and contract or in its body.
   std::string ErrorFunction;
   std::string ErrorFunctionName;
+  SourceLocation ErrorFunctionLoc;
   bool ErrorInContract = false;
   void error(std::string Message) { error(CurrentRange, std::move(Message)); }
   void error(SourceRange Range, std::string Message) {
     Errors.push_back({Range, std::move(Message), ErrorFunction,
-                      ErrorFunctionName, ErrorInContract});
+                      ErrorFunctionName, ErrorFunctionLoc, ErrorInContract});
   }
   /// An error about \p Fn found once every function is converted.
   void errorOf(const VFunction &Fn, SourceLocation Loc, std::string Message) {
-    Errors.push_back(
-        {SourceRange(Loc), std::move(Message), Fn.Identity, Fn.Name, false});
+    Errors.push_back({SourceRange(Loc), std::move(Message), Fn.Identity,
+                      Fn.Name, Fn.DeclLoc, false});
   }
   std::vector<std::pair<SourceLocation, std::string>> Warnings;
   /// Maps unqualified field name -> "param." for type_invariant lowering.
