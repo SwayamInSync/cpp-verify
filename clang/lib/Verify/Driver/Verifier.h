@@ -4,6 +4,7 @@
 
 #include "../Backend/VerifyBackend.h"
 #include "llvm/Support/raw_ostream.h"
+#include <map>
 #include <string>
 
 namespace clang {
@@ -28,6 +29,20 @@ enum class LeanFallbackScope {
   /// Only those the solver backend did not prove individually.
   Unproved,
   All
+};
+
+/// The verdicts a run reported, counted for its summary line.
+struct VerifySummary {
+  unsigned Verified = 0;
+  unsigned Failed = 0;
+  unsigned Unresolved = 0;
+  unsigned BoundedSafe = 0;
+  unsigned Trusted = 0;
+  unsigned Lowered = 0;
+  unsigned Exported = 0;
+  unsigned Interrupted = 0;
+  /// The reason code of each unresolved verdict, counted.
+  std::map<std::string, unsigned> Reasons;
 };
 
 struct VerifyOptions {
@@ -87,6 +102,15 @@ struct VerifyOptions {
   DiagnosticFormat Diagnostics = DiagnosticFormat::Text;
   /// Optional versioned binary archive for backend-neutral obligation modules.
   llvm::raw_ostream *ObligationOut = nullptr;
+  /// Print only what is not a proof: failures, unresolved results, errors,
+  /// and warnings.
+  bool Quiet = false;
+  /// Print the spec functions that need no check (`spec axiom`) too.
+  bool Verbose = false;
+  /// List the functions the run would verify, and verify none.
+  bool ListFunctions = false;
+  /// Where the run counts the verdicts it prints, if anywhere.
+  VerifySummary *Summary = nullptr;
 };
 
 bool verifyTranslationUnit(ASTContext &Ctx, llvm::raw_ostream &OS,
