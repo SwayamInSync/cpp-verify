@@ -7668,6 +7668,9 @@ public:
   /// How many quantifier bodies enclose the current expression, where
   /// trigger(term) marks a pattern.
   unsigned QuantifierBodyDepth = 0;
+  /// The cppverify::index of the range-based for loop whose contract is
+  /// being parsed.
+  VarDecl *CppVerifyRangeIndex = nullptr;
   /// True while parsing the operand of old(...).
   bool InOldExpression = false;
 
