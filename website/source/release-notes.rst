@@ -483,6 +483,15 @@ are errors at the statement (:doc:`language/functions-loops`).
 Running cpp-verify
 ~~~~~~~~~~~~~~~~~~
 
+**A summary, and what to print.** A run now ends with one line that counts
+its verdicts by kind, with the reasons of the unresolved ones and the time it
+took (``Summary: 12 verified, 1 failed, 2 unresolved (spec.fuel 1,
+solver.timeout 1) in 3.2 s``). ``--quiet`` prints only what needs attention,
+``--list-functions`` lists what a run would verify without verifying it, and
+the ``Verified: spec axiom: f`` line of a spec that needs no check is printed
+only with ``--verbose``. ``--help`` shows the default of ``--timeout``
+(:doc:`language/tooling`).
+
 **Ctrl-C stops the run.** Ctrl-C printed an LLVM crash report and the run went
 on, or crashed. It now stops every solver at once, reports each unfinished
 function as ``Interrupted``, and exits with status 130
