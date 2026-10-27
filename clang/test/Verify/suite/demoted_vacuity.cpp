@@ -96,6 +96,7 @@ int unsatisfiable(int x)
 }
 // CHECK-NEXT: Verified: unsatisfiable [backend=z3] [vacuous]
 // CHECK-NEXT: warning: unsatisfiable: the precondition is unsatisfiable, so every claim about it holds vacuously
+// CHECK-NEXT: Summary: {{.*}}
 // CHECK-NOT: {{.}}
 
 // JSON: "function":"uses_loop"
