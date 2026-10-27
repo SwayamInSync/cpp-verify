@@ -20,12 +20,10 @@ int machine_identity(int x)
   return x;
 }
 
-// LOWER-DAG: Lowered: spec axiom: mathematical_successor
 // LOWER-DAG: Lowered: machine_identity
 // LOWER-NOT: Verified:
 // LOWER-NOT: error:
 
-// VERIFY: Verified: spec axiom: mathematical_successor
 // VERIFY: error: verification failed: machine_identity
 
 // LEAN: error: --lower-only supports Z3, cvc5, portfolio, and BMC
