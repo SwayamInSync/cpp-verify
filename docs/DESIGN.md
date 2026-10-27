@@ -910,7 +910,11 @@ write_data(buf, 512);
 // definition.
 ```
 
-This is unique to being inside the compiler.
+This is unique to being inside the compiler. Expressions that evaluate
+nothing at run time are their values the same way: `noexcept(e)`, a
+requires-expression, a concept, a type trait, `offsetof`, and
+`__builtin_LINE()`, each an integer Clang computes for the expression as
+written.
 
 ## Proof Functions
 
