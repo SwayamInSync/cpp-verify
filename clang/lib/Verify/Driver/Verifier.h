@@ -109,6 +109,9 @@ struct VerifyOptions {
   bool Verbose = false;
   /// List the functions the run would verify, and verify none.
   bool ListFunctions = false;
+  /// How many failing obligations of a function are reported, each with its
+  /// own counterexample (Z3 only); 0 reports every one.
+  unsigned MaxFailures = 1;
   /// Glob patterns over function names: only the functions they match are
   /// reported. Empty: every function.
   std::vector<std::string> FunctionPatterns;
