@@ -888,6 +888,56 @@ The end-to-end acceptance programs include recursive and iterative factorial
 and Fibonacci implementations, each proved against a mathematical recursive
 specification at the exact signed-``int`` boundary.
 
+Assertions and calls that do not return
+---------------------------------------
+
+``assert(c)`` must not fail: reaching a failed assert, or any call that does
+not return (``abort``, ``exit``, ``std::terminate``, ``__builtin_unreachable``,
+``__builtin_trap``, a ``[[noreturn]]`` function), is a failure of kind
+``unreachable``, as Frama-C proves an ``assert`` and Kani a panic unreachable.
+The path ends there, so after ``assert(c)`` the condition holds. With
+``NDEBUG``, ``assert(c)`` is nothing, as compiled, and proves nothing.
+
+.. cppverify-example: fails aborts
+
+.. code-block:: cpp
+
+   #include <cassert>
+   #include <cstdlib>
+
+   int scaled(int x)
+     cv::pre(0 < x && x < 1000)
+     cv::post(cv::result == 2 * x)
+   {
+     assert(x > 0 && "x must be positive");
+     return x + x;
+   }
+
+   int aborts(int x)
+     cv::post(cv::result >= 0)
+   {
+     if (x < 0)
+       abort();
+     return x;
+   }
+
+.. code-block:: text
+
+   Verified: scaled [backend=z3]
+   aborts.cpp:16:5: error: verification failed: aborts [...::unreachable@16:5] (counterexample: x [ssa=x_0] [type=i32] = -1; ...) [backend=z3] [reason=counterexample]
+
+An uncontracted ``constexpr`` helper's ``assert(c)`` is a requirement of each
+call that reaches it, checked at the call as the helper's undefined
+operations are. ``[[assume(e)]]`` and ``__builtin_assume(e)`` make ``e``
+false undefined, so ``e`` is proved where it stands, then holds. A
+statement that only computes a value, ``x + 1;``, is computed, with its
+checks, and the operands of a discarded ``&&``, ``||``, or ``?:`` run on
+their paths, which is how ``assert`` expands on every platform.
+
+Before 0.2, ``assert`` stopped verification of its function (``unsupported
+statement: ParenExpr``), and so did a call to ``abort`` (``call to function
+without a verification contract``).
+
 Switch statements
 -----------------
 
