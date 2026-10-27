@@ -89,9 +89,11 @@ outside the verified subset, or a lemma you decide to assume.
    trusted.cpp:16:39: Trusted: sq_nonnegative (contract assumed, not verified)
    Verified: sample [backend=z3] [trusts=clamp_byte,read_sensor,sq_nonnegative]
 
-- On a declaration, the contract is assumed at every call; the preconditions
-  are still checked there.
-- On a definition, the body is compiled but not verified.
+- On a declaration, the contract is assumed at every call that sees no
+  definition; the preconditions are still checked there.
+- On a definition, the body is compiled but not verified. A definition that
+  only inherits the mark from an earlier declaration (a header's, say) is
+  verified: to leave a body unverified, mark the definition itself.
 - On a proof function, the postcondition is an axiom.
 - A spec function cannot be trusted: its definition is its meaning, so there
   is nothing to assume. The attribute is an error there.
@@ -101,9 +103,8 @@ outside the verified subset, or a lemma you decide to assume.
   ``[trusts=...]`` (JSON ``"trusts"``), transitively through verified
   callees: a caller of ``sample`` carries the same three names.
 
-The mark may appear on any declaration of the function. Without it, a
-contract with no definition is neither proved nor vouched for, so it proves
-nothing:
+Without the mark, a contract with no definition is neither proved nor
+vouched for, so it proves nothing:
 
 .. code-block:: cpp
 
@@ -128,6 +129,69 @@ A trusted contract is an assumption, and a wrong one makes proofs wrong. One
 that contradicts the state of a call (no result can satisfy it) would make
 everything after the call hold vacuously; CppVerify reports that case with
 ``[vacuous]`` and a warning at the call (see :doc:`tooling`).
+
+Contracts across files
+----------------------
+
+Real code declares a function with its contract in a header and defines it
+in one file. Verified alone, a file that sees only the declaration has no
+definition, as above. Verified together in one run, the files settle it: a
+proof that rests on the contract stands once the verification of its
+definition establishes it, and is ``Unresolved`` with ``callee.contract``
+otherwise, as within one file.
+
+.. cppverify-example: fragment
+.. code-block:: cpp
+
+   // include/mathx.h
+   int clamp100(int x)
+     cv::post(cv::result >= 0 && cv::result <= 100);
+
+   // src/mathx.cpp
+   #include "mathx.h"
+
+   int clamp100(int x)
+   {
+     if (x < 0)
+       return 0;
+     if (x > 100)
+       return 101;
+     return x;
+   }
+
+   // src/a.cpp
+   #include "mathx.h"
+
+   int scaled(int x)
+     cv::post(cv::result >= 0 && cv::result <= 200)
+   {
+     return 2 * clamp100(x);
+   }
+
+.. code-block:: text
+
+   $ cpp-verify src/a.cpp src/mathx.cpp -- -Iinclude
+   Unresolved: scaled [backend=z3] [reason=callee.contract] (relies on the contract of clamp100, which its verification in src/mathx.cpp does not establish)
+   include/mathx.h:2:42: error: verification failed: clamp100 [fn_...::postcondition@2:42] (counterexample: result [ssa=__result_1] [type=i32] = 101, x [ssa=x_0] [type=i32] = 101; ...) [backend=z3] [reason=counterexample]
+   Summary: 1 failed, 1 unresolved (callee.contract 1) in 0.0 s
+
+With ``return 100;`` both verify, and the warning that ``clamp100`` has no
+definition is not printed. The results of each file are held until every
+file is verified, then printed in the order the files are given.
+
+- A declaration matches a definition with the same function (its mangled
+  name) and the same contract as written. A file that states another
+  contract for the function does not match: its callers are unresolved, and
+  the message says that the definition is verified against another
+  contract.
+- A contract whose proof rests on contracts of other files is established
+  only once they are. Two files whose proofs rest on each other's contracts
+  establish nothing, as proofs that rest on themselves never do.
+- A trusted declaration stays an assumption, with ``[trusts=...]`` on what
+  relies on it; only its definition, where it is verified, can find a wrong
+  contract.
+- Files verified in separate runs, as in a build that verifies each object,
+  do not settle their contracts yet.
 
 An uncontracted, non-recursive, loop-free ``constexpr`` definition may be
 lifted for use in contract expressions; a recursive one used with symbolic
