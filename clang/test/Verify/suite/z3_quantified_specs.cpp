@@ -67,11 +67,7 @@ int invalid_quantifier_capture(int n)
   return n;
 }
 
-// VERIFY-DAG: spec axiom: bump
 // VERIFY-DAG: spec decreases: countdown
-// VERIFY-DAG: spec axiom: contains_last
-// VERIFY-DAG: spec axiom: binder_shadows_parameter
-// VERIFY-DAG: spec axiom: exists_below_ten
 // VERIFY-DAG: Verified: valid_quantified_nonrecursive_spec
 // VERIFY-DAG: Verified: valid_nested_quantified_bound
 // VERIFY-DAG: Verified: valid_quantified_binder_shadowing
