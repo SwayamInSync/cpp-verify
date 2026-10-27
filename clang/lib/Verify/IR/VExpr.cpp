@@ -201,6 +201,11 @@ static std::unique_ptr<VExpr> cloneVExprImpl(const VExpr *E) {
     return std::make_unique<VOverflowCheckExpr>(
         O->Op, cloneVExpr(O->Lhs.get()), cloneVExpr(O->Rhs.get()), O->Loc);
   }
+  case VExpr::Require: {
+    const auto *R = static_cast<const VRequireExpr *>(E);
+    return std::make_unique<VRequireExpr>(cloneVExpr(R->Cond.get()),
+                                          R->ProofKind, R->Loc);
+  }
   }
   return nullptr;
 }
@@ -390,6 +395,9 @@ void verify::forEachVExprChild(const VExpr *E,
     visit(O->Rhs);
     return;
   }
+  case VExpr::Require:
+    visit(static_cast<const VRequireExpr *>(E)->Cond);
+    return;
   }
 }
 
@@ -467,5 +475,8 @@ void verify::forEachVExprChildSlot(
     visit(O->Rhs);
     return;
   }
+  case VExpr::Require:
+    visit(static_cast<VRequireExpr *>(E)->Cond);
+    return;
   }
 }
