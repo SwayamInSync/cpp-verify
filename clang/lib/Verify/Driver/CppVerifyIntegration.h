@@ -19,7 +19,10 @@ bool shouldRunCppVerify(const CompilerInstance &CI);
 
 /// Start SMT verification on \p Ctx in a background thread. The AST must not be
 /// mutated while the future is pending (safe during codegen IR generation).
-std::future<CppVerifyAsyncResult> startCppVerifyAsync(ASTContext &Ctx);
+/// With \p ContractsOut, contracts declared without a definition are assumed
+/// and recorded there with those verified, for cpp-verify --check-contracts.
+std::future<CppVerifyAsyncResult>
+startCppVerifyAsync(ASTContext &Ctx, std::string ContractsOut = "");
 
 /// Join \p Future, print verifier output, and report diagnostics on failure.
 bool finishCppVerify(CompilerInstance &CI, std::future<CppVerifyAsyncResult> Future);
