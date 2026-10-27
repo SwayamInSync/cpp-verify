@@ -60,11 +60,12 @@ signed char twice_char(signed char x)
 }
 // CHECK-DAG: Verified: twice<int> [backend=z3]
 // CHECK-DAG: Verified: twice_int [backend=z3]
-// CHECK-DAG: error: verification failed: twice<signed char> [{{.*}}::postcondition@[[@LINE-20]]:{{.*}} x [ssa=x_0] [type=i8] = {{6[4-9]|[7-9][0-9]|100}}
+// CHECK-DAG: :[[@LINE-20]]:{{[0-9]+}}: error: verification failed: twice<signed char> [postcondition]
+// CHECK-DAG: note: counterexample: {{.*}}x = {{6[4-9]|[7-9][0-9]|100}}{{( ->|,|$)}}
 // CHECK-DAG: Unresolved: twice_char [backend=z3] [reason=callee.contract] (relies on the contract of twice<signed char>, which is not established)
 // NOTE: error: verification failed: twice<signed char>
-// NOTE-NEXT: function_templates.cpp:[[@LINE-8]]:19: note: in instantiation of function template specialization 'twice<signed char>' requested here
-// JSON: "function":"twice<signed char>","instantiated_at":{"column":19,"end_column":19,"end_line":[[@LINE-9]],"file":"{{.*}}function_templates.cpp","line":[[@LINE-9]]}
+// NOTE: function_templates.cpp:[[@LINE-9]]:19: note: in instantiation of function template specialization 'twice<signed char>' requested here
+// JSON: "function":"twice<signed char>","instantiated_at":{"column":19,"end_column":19,"end_line":[[@LINE-10]],"file":"{{.*}}function_templates.cpp","line":[[@LINE-10]]}
 
 // A recursive template calls its own specialization.
 template <typename T>
@@ -143,10 +144,10 @@ short total_short(const short *p, int n)
 }
 // CHECK-DAG: Verified: total<int> [backend=z3]
 // CHECK-DAG: Verified: total_int [backend=z3]
-// CHECK-DAG: error: verification failed: total<short> [{{.*}}::invariant-preserved@
+// CHECK-DAG: error: verification failed: total<short> [invariant-preserved]
 // CHECK-DAG: Unresolved: total_short [backend=z3] [reason=callee.contract]
 // NOTE: error: verification failed: total<short>
-// NOTE-NEXT: function_templates.cpp:[[@LINE-8]]:13: note: in instantiation of function template specialization 'total<short>' requested here
+// NOTE: function_templates.cpp:[[@LINE-8]]:13: note: in instantiation of function template specialization 'total<short>' requested here
 
 // Ghost code of a template's types, a ghost variable assigned in a ghost
 // block.
@@ -415,4 +416,5 @@ int product_of(Ns... ns)
 }
 
 int products() { return product_of(2, 3); }
-// CHECK-DAG: error: verification failed: product_of<int, int> [{{.*}}::postcondition@[[@LINE-6]]:{{.*}} ns...[0] [ssa=ns...[0]_0] [type=i32] = {{.*}} ns...[1] [ssa=ns...[1]_0] [type=i32] =
+// CHECK-DAG: :[[@LINE-6]]:{{[0-9]+}}: error: verification failed: product_of<int, int> [postcondition]
+// CHECK-DAG: note: counterexample: ns...[0] = {{[0-9]+}}, ns...[1] = {{[0-9]+}}, result = {{[0-9]+}}
