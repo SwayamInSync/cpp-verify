@@ -451,6 +451,12 @@ in order, and a structured binding a copy whose fields the bindings name
 (:doc:`language/integers`, :doc:`language/structs`,
 :doc:`language/functions-loops`).
 
+**Expressions that evaluate nothing at run time.** ``noexcept(e)``, a
+requires-expression, a concept, a type trait such as ``__is_same(T, U)``,
+``offsetof``, and ``__builtin_LINE()`` stopped their function
+(``unsupported expression: CXXNoexceptExpr``). Each is now the value Clang
+computes for it (:doc:`language/functions-loops`).
+
 **Pointer steps and reused names.** ``++p``, ``p--``, ``p += n``, and
 ``p -= n`` on a pointer were errors (``pointer increment/decrement is
 unsupported``, ``pointer compound assignment is unsupported``), and so was a
@@ -519,6 +525,16 @@ represent named only the function, as in ``error: pick: unsupported statement:
 SwitchStmt``. It now gives the file, line, and column, and shows the line with
 a caret under the construct, as a compiler error does; its JSON record carries
 the range (:doc:`language/tooling`).
+
+**Errors name the construct, once.** The message gave Clang's class name
+(``unsupported statement: CXXThrowExpr``), called a lambda ``aggregate
+initialization and copying``, and called a string literal used as a pointer
+``array-to-pointer decay of automatic storage``; each use of a variable whose
+initializer was rejected added ``read of uninitialized local value``, and a
+call without a contract was reported twice. The message now says what C++
+calls the construct (``throw is unsupported: exceptions are not modeled``,
+``lambdas are unsupported``), and each is reported once
+(:doc:`language/tooling`).
 
 **An unsupported construct costs its function alone.** One construct the
 verifier does not represent, such as a ``switch``, stopped the file: no
