@@ -2253,11 +2253,6 @@ static bool mentionsThis(const Stmt *S) {
                       [](const Stmt *Child) { return mentionsThis(Child); });
 }
 
-/// The lifetime companion of a constructor's object, whose lifetime begins
-/// at `this` when the constructor is entered.
-static constexpr const char *ConstructedObjectLifetime =
-    "__cppverify_constructed_lifetime";
-
 static std::optional<std::string>
 unsupportedMemberFunction(const CXXMethodDecl *Method) {
   if (Method->getParent()->isLambda())
@@ -3457,7 +3452,7 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
       // carries that allocation's identity.
       if (Constructor) {
         VVarExpr Object("this", VType::makePtr(), SourceLocation(),
-                        ConstructedObjectLifetime);
+                        VConstructedObjectLifetime);
         Readable = nullptr;
         forEachObjectLeaf(ThisObject, 0, [&](QualType, uint64_t Offset) {
           auto Leaf = std::make_unique<VUnaryOpExpr>(
@@ -3472,6 +3467,17 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
             Readable = std::move(Leaf);
           return true;
         });
+        // So is its last byte, which a call lending the object checks: the
+        // caller's at the constructor, the constructor's at a member call.
+        const uint64_t Size = Ctx.getTypeSizeInChars(ThisObject).getQuantity();
+        if (Readable && Size > 1)
+          Readable = std::make_unique<VBinOpExpr>(
+              VBinOp::And, std::move(Readable),
+              std::make_unique<VUnaryOpExpr>(
+                  VUnaryOp::ValidPtr,
+                  objectLeafAddress(&Object, Size - 1, SourceLocation()),
+                  VType::makeBool(), SourceLocation()),
+              VType::makeBool(), SourceLocation());
         if (!Readable)
           Readable = std::make_unique<VLiteralExpr>(1, VType::makeBool(),
                                                     SourceLocation());
@@ -3709,7 +3715,7 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
                                      std::to_string(MaxAutomaticObjectBytes) +
                                      " bytes are not supported yet");
       VVarExpr This("this", Fn->Params.front().second, FD->getLocation(),
-                    ConstructedObjectLifetime);
+                    VConstructedObjectLifetime);
       appendMemberInitializers(Constructor, &This, 0, FD->getLocation(),
                                Fn->Body);
     }
@@ -5563,7 +5569,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     }
     return std::make_unique<VVarExpr>(
         "this", CurrentFn->Params.front().second, E->getExprLoc(),
-        CurrentFn->IsConstructor ? ConstructedObjectLifetime : "");
+        CurrentFn->IsConstructor ? VConstructedObjectLifetime : "");
   }
   if (const auto *Decay = dyn_cast<CastExpr>(E);
       Decay && Decay->getCastKind() == CK_ArrayToPointerDecay) {

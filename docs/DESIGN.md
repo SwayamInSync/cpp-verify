@@ -1103,11 +1103,8 @@ immutable VCR address. A value use is a heap load, assignment is a heap store,
 and `cppverify::old(ref)` reads through the same address in the entry heap.
 
 Every reference receives a generated non-null and live entry precondition,
-and its body is verified as reading the referent initialized. C++ does not
-require that of an out-parameter, so a call that passes storage not yet
-initialized (`int a; init(a);`) is `Unresolved` with reason
-`construct.unsupported`, not a failure; so is a function that returns a
-pointer to such storage. Distinct address parameters are object-range disjoint by default
+and an initialized referent unless it is an out-parameter (below).
+Distinct address parameters are object-range disjoint by default
 when at least one is mutable; `cppverify::aliases` permits the same complete object.
 `cppverify::modifies(ref)` is an open region rooted at the referent, matching
 `cppverify::modifies(*p)`.
@@ -1120,6 +1117,54 @@ references, and snapshot a raw pointer's address at the declaration. Reassigning
 that pointer therefore does not rebind the reference. Binding reads nothing: a
 local reference may bind storage not yet initialized, and a read through it
 checks that the object is initialized.
+
+#### Out-parameters
+
+Binding a reference or passing a pointer reads nothing ([dcl.init.ref],
+[conv.lval]); only reading an indeterminate value is undefined
+([basic.indet]). A function may therefore receive storage that is not
+initialized yet, as long as it writes it before reading it, as C#'s `out`
+parameters are definitely assigned before they are read. The contract
+follows from the body, as `freshOwnedReturn` does, and the body is verified
+against it:
+
+- **Which.** A pointer or reference parameter of a function with a verified
+  body (not a constructor's `this`, never assigned) is an out-parameter when
+  a walk of the body over every path finds each read of its storage at a
+  part (a byte offset from the parameter) written on every path before it,
+  the pointer used for nothing but accesses, null tests, validity, and calls
+  that pass it to another function's out-parameter, and no clause reading
+  the entry state reads the storage: preconditions (a class invariant
+  included), the measure, behaviors, `old`. A read at a computed offset, a
+  copy, or a callee that may read the storage (an input of a verified
+  callee, or any parameter of an external or trusted one) makes it an
+  input. Postconditions, loop invariants, and `cppverify::check` describe
+  what the body has written, so they are not reads for the walk, unless the
+  function never writes the storage: then they read the caller's values.
+  Recursion and calls between functions are settled by two fixpoints: the
+  parts each function writes on every path (least, so nothing rests on an
+  induction the walk does not do) and the out-parameters (greatest, so a
+  recursive call that passes the storage on reads nothing).
+- **Contract.** The generated precondition asks for valid storage only.
+  Each part written on every path is a generated postcondition,
+  `initialized_ptr(p + offset)`, proved at the function's end as a
+  constructor's members are.
+- **Body.** The storage's initialization is tracked as local storage's is:
+  a store initializes the part it writes, a loop that writes it starts each
+  iteration with what was initialized before it, and every read, those of
+  postconditions, invariants, and checks included, asserts `initialization`.
+  Its validity and frames stay those of any parameter.
+- **Caller.** Where the argument is storage the caller tracks (a local,
+  dynamic storage, or its own out-parameter), the call keeps what was
+  initialized (initialization only grows), assumes the postconditions, the
+  generated ones included, and assumes the initialization each
+  postcondition's reads need, where it reads them: `cppverify::post(!result
+  || out == 5)` gives initialized storage where the result is true.
+
+A call that passes storage not yet initialized to an input is `Unresolved`
+with reason `construct.unsupported`, not a failure, since the walk is
+conservative; so is a function that returns a pointer to such storage, since
+callers read a returned pointer's storage as initialized.
 
 Only locals whose addresses are needed are spilled out of scalar SSA. Each such
 local becomes an automatic `VAllocateStmt` with a fresh lifetime identity,
@@ -1260,10 +1305,11 @@ void reset_left(Pair &p)
   again.
 - The generated validity clause of a reference or pointer parameter names
   its first byte; for a record the call also checks that its last byte lies
-  in the same live allocation (an allocation's bytes are contiguous) and that
-  every leaf is initialized, since the callee reads it as initialized storage.
-  An out-parameter, which C++ allows uninitialized, is
-  `construct.unsupported`, as for a scalar.
+  in the same live allocation (an allocation's bytes are contiguous) and,
+  unless the callee's parameter is an out-parameter, that every leaf is
+  initialized, since the callee may read it as initialized storage. A
+  caller's own out-parameter passed on to an input gets the same leaf
+  checks.
 - The callee's footprints inside the record are framed by their bytes
   (`HeapFrame`), a region as the whole record and never only its first cell;
   its writes need no footprint of the caller's, since the local is the
@@ -1335,12 +1381,17 @@ void reset_left(Pair &p)
 - A constructor runs on storage its caller allocated, as a Dafny
   constructor's first phase assigns the fields of an object that exists but
   is not yet initialized. At entry `this` is one live allocation at every
-  leaf (a generated precondition, which the caller shows for its object),
+  leaf and at its last byte (a generated precondition, which the caller
+  shows for its object),
   nothing is assumed about the initialization of its object, so a member
   reads as initialized only once the constructor has written it, and every
   leaf must be initialized by the constructor's end (`initialization`,
   located at the member). Its precondition cannot read the object, and `aliases` cannot
-  name `this`. Its frame is `*this` and its own footprints.
+  name `this`. Its frame is `*this` and its own footprints, and `this` is
+  the object with its lifetime there, in the entry state too, so a member
+  function it calls writes inside the frame. A member function whose object
+  is an out-parameter may be called before the members are initialized;
+  one that may read them first may not (`construct.unsupported`).
 - Member initializers run first, in declaration order (C++'s order, whatever
   the written one): the member's initializer, else its in-class initializer,
   else the default construction of its type. An implicit or defaulted

@@ -1740,8 +1740,7 @@ static constexpr const char *UnknownOriginNote =
     "returned by a call, so the object it addresses is not known";
 static constexpr const char *OutParameterNote =
     "binding a reference or pointer parameter to storage that is not "
-    "initialized, since the callee is verified as reading initialized "
-    "storage";
+    "initialized, which the callee may read before writing it";
 static constexpr const char *UninitializedResultNote =
     "returning a pointer to storage that is not initialized, since callers "
     "read a returned pointer's storage as initialized";
@@ -2023,14 +2022,20 @@ static std::unique_ptr<VExpr> exactPointerSafety(const VExpr *Ptr,
   return makeAnd(std::move(NonNull), std::move(Valid), Loc);
 }
 
-static std::unique_ptr<VExpr> initializedSafety(const VExpr *Ptr,
-                                                SourceLocation Loc,
-                                                bool ObjectModel = false) {
+static std::unique_ptr<VExpr>
+initializedSafety(const VExpr *Ptr, SourceLocation Loc,
+                  bool ObjectModel = false,
+                  const std::set<std::string> *OutParameters = nullptr) {
   const VExpr *Base = pointerBase(Ptr);
   if (!Base)
     return makeBoolLiteral(false, Loc);
   if (isGlobalCell(Base))
     return makeBoolLiteral(true, Loc);
+  // An out-parameter's storage is initialized where the function wrote it.
+  if (OutParameters && Base->K == VExpr::Var &&
+      OutParameters->count(static_cast<const VVarExpr *>(Base)->Name))
+    return std::make_unique<VUnaryOpExpr>(
+        VUnaryOp::InitializedPtr, cloneVExpr(Ptr), VType::makeBool(), Loc);
   // Abstract storage is initialized.
   if (ObjectModel && !hasPointerProvenance(Ptr))
     return makeBoolLiteral(true, Loc);
@@ -2152,10 +2157,11 @@ collectSafety(const VExpr *E, const FunctionMap *FnMap,
               const std::vector<VValidExtent> *ValidExtents,
               const std::set<std::string> *PointerParams, SafetyChecks &Out,
               bool ObjectModel = false,
-              const std::vector<VValidExtent> *OriginExtents = nullptr) {
+              const std::vector<VValidExtent> *OriginExtents = nullptr,
+              const std::set<std::string> *OutParameters = nullptr) {
   auto Collect = [&](const VExpr *Sub, SafetyChecks &Into) {
     collectSafety(Sub, FnMap, ValidExtents, PointerParams, Into, ObjectModel,
-                  OriginExtents);
+                  OriginExtents, OutParameters);
   };
   if (!E) {
     addSafety(Out, ProofObligationKind::Unsupported, nullptr, SourceLocation(),
@@ -2250,8 +2256,10 @@ collectSafety(const VExpr *E, const FunctionMap *FnMap,
     Collect(L->Ptr.get(), Out);
     addSafety(Out, ProofObligationKind::Dereference,
               nonNullSafety(L->Ptr.get(), L->Loc, ObjectModel), L->Loc);
-    addSafety(Out, ProofObligationKind::Initialization,
-              initializedSafety(L->Ptr.get(), L->Loc, ObjectModel), L->Loc);
+    addSafety(
+        Out, ProofObligationKind::Initialization,
+        initializedSafety(L->Ptr.get(), L->Loc, ObjectModel, OutParameters),
+        L->Loc);
     if (L->AccessCondition)
       addSafety(Out, ProofObligationKind::Bounds,
                 cloneVExpr(L->AccessCondition.get()), L->Loc);
@@ -3553,6 +3561,10 @@ class PassivizerImpl {
   std::vector<VValidExtent> ActiveValidExtents;
   std::set<std::string> PointerParameterNames;
   std::set<std::string> SourcePointerParameterNames;
+  /// The entry versions of the out-parameters, which are never reassigned:
+  /// a renamed address based on one is in storage whose initialization the
+  /// function tracks.
+  std::set<std::string> OutParameterVersions;
   /// The objects of the pointer parameters, for origins: the declared
   /// extents, and one object of its pointee type (no length) for a
   /// parameter without one.
@@ -4545,6 +4557,19 @@ class PassivizerImpl {
         Loc, VType::makeInt32(VIntMode::Math));
   }
 
+  /// Whether the function tracks the initialization of the storage Ptr
+  /// addresses, source or renamed: local or dynamic storage, or an
+  /// out-parameter's.
+  bool tracksInitialization(const VExpr *Ptr) const {
+    if (hasPointerProvenance(Ptr))
+      return true;
+    const VExpr *Base = pointerBase(Ptr);
+    if (!Base || Base->K != VExpr::Var)
+      return false;
+    const std::string &Name = static_cast<const VVarExpr *>(Base)->Name;
+    return Fn.OutParameters.count(Name) || OutParameterVersions.count(Name);
+  }
+
   void collectModified(const VStmt &S, std::set<std::string> &Out) const {
     switch (S.K) {
     case VStmt::Assign:
@@ -4552,8 +4577,9 @@ class PassivizerImpl {
       break;
     case VStmt::Store:
       Out.insert(VHeapName);
-      // A store to local or dynamic storage initializes the cell.
-      if (hasPointerProvenance(static_cast<const VStoreStmt &>(S).Ptr.get()))
+      // A store to storage whose initialization is tracked initializes the
+      // cell.
+      if (tracksInitialization(static_cast<const VStoreStmt &>(S).Ptr.get()))
         Out.insert(VInitializationHeapName);
       break;
     case VStmt::Allocate: {
@@ -4616,6 +4642,13 @@ class PassivizerImpl {
           (!Callee->second->Modifies.empty() ||
            hasImplicitHeapEffect(*Callee->second, FnMap)))
         Out.insert(VHeapName);
+      if (Callee != FnMap.end())
+        for (unsigned I = 0;
+             I < C.Args.size() && I < Callee->second->Params.size(); ++I)
+          if (Callee->second->OutParameters.count(
+                  Callee->second->Params[I].first) &&
+              tracksInitialization(C.Args[I].get()))
+            Out.insert(VInitializationHeapName);
       break;
     }
     case VStmt::GhostBlock:
@@ -4670,7 +4703,8 @@ class PassivizerImpl {
         SafetySource ? SafetySource : E, &FnMap,
         SafetySource ? &Fn.ValidExtents : &ActiveValidExtents,
         SafetySource ? &SourcePointerParameterNames : &PointerParameterNames,
-        Checks, Fn.ObjectModel, SafetySource ? &OriginObjects : nullptr);
+        Checks, Fn.ObjectModel, SafetySource ? &OriginObjects : nullptr,
+        SafetySource ? &Fn.OutParameters : &OutParameterVersions);
     if (MemoryChecks && !Fn.TotalExpressions)
       for (const VMemoryCheck &Check : *MemoryChecks)
         Checks.push_back({Check.Kind, cloneVExpr(Check.Cond.get())});
@@ -5015,13 +5049,17 @@ public:
 
     for (const auto &Param : Fn.Params) {
       std::string V0 = versionedName(Param.first);
-      OldState[Param.first] =
-          std::make_unique<VVarExpr>(V0, Param.second, SourceLocation());
+      OldState[Param.first] = std::make_unique<VVarExpr>(
+          V0, Param.second, SourceLocation(),
+          Fn.IsConstructor && Param.first == "this" ? VConstructedObjectLifetime
+                                                    : "");
       Renames[Param.first] = V0;
       if (Param.second.Kind == VTypeKind::Ptr) {
         PointerParameterNames.insert(V0);
         SourcePointerParameterNames.insert(Param.first);
       }
+      if (Fn.OutParameters.count(Param.first))
+        OutParameterVersions.insert(V0);
     }
     for (const VValidExtent &Extent : Fn.ValidExtents)
       OriginObjects.emplace_back(Extent.Base, Extent.PointerType,
@@ -5188,7 +5226,7 @@ public:
       SafetyChecks Checks;
       collectSafety(Post, &FnMap, &Fn.ValidExtents,
                     &SourcePointerParameterNames, Checks, Fn.ObjectModel,
-                    &OriginObjects);
+                    &OriginObjects, &Fn.OutParameters);
       if (!Fn.TotalExpressions && I < Fn.PostconditionChecks.size())
         for (const VMemoryCheck &Check : Fn.PostconditionChecks[I])
           Checks.push_back({Check.Kind, cloneVExpr(Check.Cond.get())});
@@ -5331,7 +5369,7 @@ public:
 
   /// In the object model a pointer without provenance is valid where it lies
   /// in one of the caller's objects or is a known valid object of its own,
-  /// and abstract storage is initialized.
+  /// and abstract storage is initialized, but for an out-parameter's.
   std::unique_ptr<VExpr>
   abstractValidity(std::unique_ptr<VExpr> E,
                    const std::map<std::string, std::string> &Renames) {
@@ -5340,6 +5378,9 @@ public:
     switch (E->K) {
     case VExpr::UnaryOp: {
       auto *U = static_cast<VUnaryOpExpr *>(E.get());
+      if (U->Op == VUnaryOp::InitializedPtr &&
+          tracksInitialization(U->Operand.get()))
+        return E;
       if ((U->Op == VUnaryOp::ValidPtr || U->Op == VUnaryOp::InitializedPtr) &&
           !hasPointerProvenance(U->Operand.get())) {
         if (U->Op == VUnaryOp::InitializedPtr)
@@ -5416,12 +5457,13 @@ public:
                  Loc)};
   }
 
-  /// A record in local or dynamic storage passed to a parameter that
-  /// addresses one: the generated validity clause names its first byte, and
-  /// the callee reads every leaf as valid and initialized storage. Each byte
-  /// up to its last belongs to the live allocation of its first when the
-  /// last does (an allocation's bytes are contiguous), and each leaf must be
-  /// initialized, which C++ does not require of an out-parameter.
+  /// A record in local or dynamic storage, or in an out-parameter's, passed
+  /// to a parameter that addresses one: the generated validity clause names
+  /// its first byte, and the callee reads every leaf as valid and
+  /// initialized storage. Each byte up to its last belongs to the live
+  /// allocation of its first when the last does (an allocation's bytes are
+  /// contiguous), and each leaf must be initialized unless the callee's
+  /// parameter is an out-parameter.
   void emitRecordActualChecks(
       PassiveProgram &P, const VFunction &Callee,
       const std::set<std::string> &DynamicParams,
@@ -5431,7 +5473,9 @@ public:
       return;
     for (const auto &[Name, Identity] : Callee.RecordParams) {
       auto Actual = ParamMap.find(Name);
-      if (!DynamicParams.count(Name) || Actual == ParamMap.end())
+      const bool Dynamic = DynamicParams.count(Name);
+      if (Actual == ParamMap.end() ||
+          !(Dynamic || tracksInitialization(Actual->second.get())))
         continue;
       const auto Layout =
           llvm::find_if(Callee.Layouts, [&](const VObjectLayout &L) {
@@ -5445,15 +5489,18 @@ public:
                             std::to_string(Bytes), pointerOffsetType(), Loc),
                         Loc);
       };
-      emitPassive(P, PassiveStmt::Assert,
-                  std::make_unique<VUnaryOpExpr>(
-                      VUnaryOp::ValidPtr, Offset(Layout->SizeBytes - 1),
-                      VType::makeBool(), Loc,
-                      stateHeapName(Ctx, VAllocationHeapName, ""),
-                      stateHeapName(Ctx, VLivenessHeapName, "")),
-                  nullptr, Loc, ProofObligationKind::PointerValidity);
-      // A constructor's object is what it initializes.
-      if (Callee.IsConstructor && Name == "this")
+      if (Dynamic)
+        emitPassive(P, PassiveStmt::Assert,
+                    std::make_unique<VUnaryOpExpr>(
+                        VUnaryOp::ValidPtr, Offset(Layout->SizeBytes - 1),
+                        VType::makeBool(), Loc,
+                        stateHeapName(Ctx, VAllocationHeapName, ""),
+                        stateHeapName(Ctx, VLivenessHeapName, "")),
+                    nullptr, Loc, ProofObligationKind::PointerValidity);
+      // A constructor's object is what it initializes, and an out-parameter
+      // is written before it is read.
+      if ((Callee.IsConstructor && Name == "this") ||
+          Callee.OutParameters.count(Name))
         continue;
       std::vector<uint64_t> Leaves;
       for (const VObjectLeaf &Leaf : Layout->Leaves) {
@@ -5489,8 +5536,9 @@ public:
   /// (with ActualCounts) in the caller's state: each one it may write gets
   /// unknown contents, as a chain of stores when all are cells, and every
   /// other cell keeps its value; a callee whose writes are not stated, or
-  /// not known, may write the whole heap.
-  void
+  /// not known, may write the whole heap. Returns the cells it writes when
+  /// those are all it writes.
+  std::optional<std::vector<std::unique_ptr<VExpr>>>
   havocFootprints(PassiveProgram &P,
                   std::map<std::string, std::string> &Renames,
                   const VFunction &Callee,
@@ -5589,10 +5637,12 @@ public:
     }
     const bool OnlyCells =
         llvm::all_of(CallRegions, [](const Region &R) { return R.Cell; });
+    std::vector<std::unique_ptr<VExpr>> Cells;
     if (CanFrameRegions && OnlyCells) {
       // Each cell gets an unknown value and every other cell keeps its own.
       std::string PreviousHeap = EntryHeap;
       for (const Region &R : CallRegions) {
+        Cells.push_back(cloneVExpr(R.Lo.get()));
         std::string NextHeap = bump(VHeapName);
         auto Fresh =
             std::make_unique<VVarExpr>(bump("__call_heap_value"), *R.Cell, Loc);
@@ -5608,13 +5658,16 @@ public:
       emitPassive(P, PassiveStmt::Assume,
                   heapFrame(EntryHeap, NextHeap, CallRegions, Loc));
       Renames[VHeapName] = NextHeap;
+      return std::nullopt;
     } else if ((!ActualModifies.empty() && !CanFrameExactly) ||
                HasImplicitHeapEffect) {
       Renames[VHeapName] = bump(VHeapName);
+      return std::nullopt;
     } else if (CanFrameExactly) {
       std::string PreviousHeap = EntryHeap;
       for (const auto &M : ActualModifies) {
         const auto *L = static_cast<const VLoadExpr *>(M.get());
+        Cells.push_back(cloneVExpr(L->Ptr.get()));
         std::string NextHeap = bump(VHeapName);
         auto Fresh =
             std::make_unique<VVarExpr>(bump("__call_heap_value"), L->Ty, Loc);
@@ -5625,6 +5678,31 @@ public:
         PreviousHeap = NextHeap;
       }
       Renames[VHeapName] = PreviousHeap;
+    }
+    return Cells;
+  }
+
+  /// The initialization heap Final after writes to Cells alone, from
+  /// Previous: each may become initialized, none stops being, and every
+  /// other address keeps its state.
+  void initializeCells(PassiveProgram &P, std::string Previous,
+                       const std::string &Final,
+                       const std::vector<const VExpr *> &Cells,
+                       const char *Written, const VExpr *Guard,
+                       SourceLocation Loc) {
+    for (size_t I = 0; I != Cells.size(); ++I) {
+      const std::string Next =
+          I + 1 == Cells.size() ? Final : bump(VInitializationHeapName);
+      auto Was = std::make_unique<VLoadExpr>(cloneVExpr(Cells[I]),
+                                             VType::makeBool(), Loc, Previous);
+      auto Wrote =
+          std::make_unique<VVarExpr>(bump(Written), VType::makeBool(), Loc);
+      emitPassive(P, PassiveStmt::Assume,
+                  std::make_unique<VHeapStoreExpr>(
+                      Previous, Next, cloneVExpr(Cells[I]),
+                      makeOr(std::move(Was), std::move(Wrote), Loc), Loc),
+                  Guard, Loc);
+      Previous = Next;
     }
   }
 
@@ -6113,8 +6191,28 @@ public:
       }
     }
 
-    havocFootprints(P, Renames, *Callee, ActualModifies, ActualCounts, ParamMap,
-                    Ctx, EntryHeap, HasImplicitHeapEffect, C.Loc);
+    auto WrittenCells =
+        havocFootprints(P, Renames, *Callee, ActualModifies, ActualCounts,
+                        ParamMap, Ctx, EntryHeap, HasImplicitHeapEffect, C.Loc);
+    // Storage the caller tracks, passed to an out-parameter, may be
+    // initialized by the call, only where it writes; what was initialized
+    // stays so.
+    const bool InitializesActuals = initializesActuals(*Callee, ParamMap);
+    if (InitializesActuals && (!WrittenCells || !WrittenCells->empty())) {
+      const std::string Before = Renames[VInitializationHeapName];
+      const std::string After = bump(VInitializationHeapName);
+      Renames[VInitializationHeapName] = After;
+      if (WrittenCells) {
+        std::vector<const VExpr *> Cells;
+        for (const auto &Cell : *WrittenCells)
+          Cells.push_back(Cell.get());
+        initializeCells(P, Before, After, Cells, "__call_initialized", nullptr,
+                        C.Loc);
+      } else {
+        emitPassive(P, PassiveStmt::Assume,
+                    initializationKept(Before, After, C.Loc), nullptr, C.Loc);
+      }
+    }
     // A constructor initializes every leaf of its object, as its exit checks
     // show, so the caller's storage holds an initialized object after it.
     if (Callee->IsConstructor) {
@@ -6154,6 +6252,40 @@ public:
       P.Stmts[FirstPost]->PostClauses = P.Stmts.size() - FirstPost;
       P.Stmts[FirstPost]->CallLoc = C.Loc;
     }
+    // The storage a postcondition reads is initialized where it reads it, as
+    // the callee's exit checks of its definedness show: that is what an
+    // out-parameter gives the caller.
+    if (InitializesActuals)
+      for (const auto &Post : Callee->Postconditions) {
+        SafetyChecks Checks;
+        collectSafety(Post.get(), &FnMap, &Callee->ValidExtents,
+                      &CalleePointerParams, Checks, Fn.ObjectModel, nullptr,
+                      &Callee->OutParameters);
+        for (const SafetyCheck &Check : Checks) {
+          if (Check.Kind != ProofObligationKind::Initialization)
+            continue;
+          auto PS = std::make_unique<PassiveStmt>();
+          PS->K = PassiveStmt::Assume;
+          PS->Origin = "call:" + Callee->Name;
+          PS->Cond = rebaseSliceBinders(
+              substParams(Check.Cond.get(), PostParamMap, Ctx, EntryHeap, "",
+                          {}, &ParamMap));
+          P.Stmts.push_back(std::move(PS));
+        }
+      }
+  }
+
+  /// Whether a call of Callee may initialize storage the caller tracks: an
+  /// out-parameter's argument is local or dynamic storage, or the caller's
+  /// own out-parameter's.
+  bool initializesActuals(
+      const VFunction &Callee,
+      const std::map<std::string, std::unique_ptr<VExpr>> &ParamMap) const {
+    return llvm::any_of(Callee.OutParameters, [&](const std::string &Name) {
+      auto Actual = ParamMap.find(Name);
+      return Actual != ParamMap.end() &&
+             tracksInitialization(Actual->second.get());
+    });
   }
 
   // The origin of the assumptions a statement makes, before its parts name
@@ -6345,7 +6477,7 @@ public:
       if (PointerCell)
         StoredPointerCells.push_back({std::move(PointerCell), StoredPointerType,
                                       cloneVExpr(Active.get())});
-      if (hasPointerProvenance(St.Ptr.get()))
+      if (tracksInitialization(St.Ptr.get()))
         updateHeap(P, Renames, VInitializationHeapName,
                    cloneExpr(St.Ptr.get(), Ctx), makeBoolLiteral(true, St.Loc),
                    Active.get(), St.Loc);
@@ -6857,11 +6989,24 @@ public:
         emitInactiveFrame(P, PreviousName, HeadName, typeForName(Name),
                           Enters.get(), W.Loc);
         // Without a lifetime starting in it, a loop only initializes
-        // storage: what was initialized before it still is at its head.
-        if (Name == VInitializationHeapName && !StartsLifetime)
-          emitPassive(P, PassiveStmt::Assume,
-                      initializationKept(PreviousName, HeadName, W.Loc),
-                      Active.get(), W.Loc);
+        // storage, where it writes: what was initialized before it still is
+        // at its head.
+        if (Name == VInitializationHeapName && !StartsLifetime) {
+          if (Framed && !WriteRegions.empty() &&
+              llvm::all_of(WriteRegions, [](const Region &R) {
+                return R.Cell.has_value();
+              })) {
+            std::vector<const VExpr *> Cells;
+            for (const Region &R : WriteRegions)
+              Cells.push_back(R.Lo.get());
+            initializeCells(P, PreviousName, HeadName, Cells,
+                            "__loop_initialized", Active.get(), W.Loc);
+          } else {
+            emitPassive(P, PassiveStmt::Assume,
+                        initializationKept(PreviousName, HeadName, W.Loc),
+                        Active.get(), W.Loc);
+          }
+        }
         if (Framed && Name == VHeapName) {
           const bool OnlyCells =
               !WriteRegions.empty() &&

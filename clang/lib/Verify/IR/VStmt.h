@@ -438,6 +438,11 @@ struct VFunction {
   /// Pointer and reference parameters to const objects: the function
   /// writes nothing through them.
   std::set<std::string> ConstAddressParams;
+  /// Pointer and reference parameters whose storage the body never reads
+  /// before writing it (inferOutParameters): a caller may pass storage that
+  /// is not initialized, and the body's reads of it are checked against what
+  /// it has written.
+  std::set<std::string> OutParameters;
   /// Pointer variables that may address a subobject (a member array, a
   /// field): each has companions `name.__lo` and `name.__hi`, the bytes it
   /// may address, which every access and step through it must stay in.

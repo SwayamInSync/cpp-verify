@@ -309,16 +309,17 @@ object. The call checks the rest:
   ``construct.unsupported`` (``the address of local or dynamic storage is
   passed to f, which may keep or free it, or has no verified body``);
 - the whole record lies in the live local;
-- every field is initialized, since the callee reads its parameter's object
-  as initialized storage. C++ allows an out-parameter that is only written,
-  but the verifier does not model one yet: the call is ``Unresolved`` with
-  reason ``construct.unsupported``.
+- every field is initialized when the callee may read its parameter's
+  object before writing it, else the call is ``Unresolved`` with reason
+  ``construct.unsupported``. A callee that writes each field it reads first
+  (an out-parameter, :doc:`pointers`) needs none of them initialized, and
+  the fields it writes on every path are initialized after the call.
 
 The callee then writes only its footprints inside the local, by their bytes,
 and every other local keeps its value. The caller's own
 ``cppverify::modifies`` need not name its locals.
 
-.. cppverify-example: unresolved half_initialized
+.. cppverify-example: unresolved no_limit
 
 .. code-block:: cpp
 
@@ -368,9 +369,23 @@ and every other local keeps its value. The caller's own
      cv::post(cv::result == 1)
    {
      Counter c;
-     c.n = 0;
      set_n(c);
      return c.n;
+   }
+
+   int limit_of(const Counter &c)
+     cv::post(cv::result == c.limit)
+   {
+     return c.limit;
+   }
+
+   int no_limit()
+     cv::post(cv::result == 0)
+   {
+     Counter c;
+     c.n = 0;
+     int l = limit_of(c);
+     return 0;
    }
 
 .. code-block:: text
@@ -379,10 +394,13 @@ and every other local keeps its value. The caller's own
    Verified: reset [backend=z3]
    Verified: set_n [backend=z3]
    Verified: counted [backend=z3]
-   counter.cpp:48:3: Unresolved: half_initialized [backend=z3] [reason=construct.unsupported] (the verifier cannot model a construct here: binding a reference or pointer parameter to storage that is not initialized, since the callee is verified as reading initialized storage)
+   Verified: half_initialized [backend=z3]
+   Verified: limit_of [backend=z3]
+   counter.cpp:62:3: Unresolved: no_limit [backend=z3] [reason=construct.unsupported] (the verifier cannot model a construct here: binding a reference or pointer parameter to storage that is not initialized, which the callee may read before writing it)
 
-``half_initialized`` leaves ``c.limit`` uninitialized, and ``set_n`` would
-read it as initialized.
+``set_n`` writes ``c.n`` before reading it, so ``half_initialized`` may
+leave ``c.limit`` uninitialized; ``limit_of`` reads ``c.limit``, which
+``no_limit`` never initializes.
 
 The address of a local is supported as a call argument only. Stored in a
 pointer variable (``Counter *q = &c;``), or formed through a local reference
@@ -715,8 +733,11 @@ array initialized (:doc:`functions-loops`).
   not begun, and ``cppverify::aliases`` cannot name ``this``: the object is
   new. Its frame is its object and the footprints it lists.
 - A member function called on the object before every member is
-  initialized reads them as initialized, which C++ does not require, so the
-  call is ``construct.unsupported``, as an out-parameter's is.
+  initialized needs initialized members only if it may read them before
+  writing them: one that writes them first (its object is an out-parameter,
+  :doc:`pointers`) may be called there, and the members it writes on every
+  path are initialized after the call. Calling one that may read them first
+  is ``construct.unsupported``.
 - Copies of such an object are its members' copies: its class must be
   trivially copyable.
 - Not yet, each an error naming the function: delegating constructors,

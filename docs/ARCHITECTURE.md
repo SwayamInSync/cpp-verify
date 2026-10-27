@@ -253,11 +253,14 @@ scope and `this`, as its trailing requires-clause does.
 trivially copyable class without bases that does not delegate and whose
 members are scalars, pointers, and aggregates of them whose classes provide
 no constructor. `convertFunction` marks it `VFunction::IsConstructor`, gives
-`this` the lifetime companion `__cppverify_constructed_lifetime` (every
-`CXXThisExpr`), so its accesses are those of local storage, initialization
-checked, and generates the precondition that each leaf of `*this` is valid
-with that identity, one live allocation, instead of a reference's
-initialized object; nothing is assumed about the object's initialization.
+`this` the lifetime companion `VConstructedObjectLifetime`
+(`__cppverify_constructed_lifetime`, every `CXXThisExpr`, and the entry
+state's `this` in `PassivizerImpl::enter`, so the frame `*this` and the
+`this` passed to a member function are one object), so its accesses are
+those of local storage, initialization checked, and generates the
+precondition that each leaf of `*this` and its last byte are valid with
+that identity, one live allocation, instead of a reference's initialized
+object; nothing is assumed about the object's initialization.
 Its body starts with its member initializers (`appendMemberInitializers`,
 over `inits()`, which Sema keeps in execution order). `run()` checks every
 leaf initialized in the final state (`emitConstructedChecks`, anchored at
@@ -503,6 +506,30 @@ VFunction =
 - `freshOwnedReturn` is a derived VCR effect, never a trusted contract claim.
   `Ownership.cpp` computes it by a conservative acyclic path analysis and
   cloning, loop unrolling, dumps, and every backend preserve it.
+- `outParameters` (`VFunction::OutParameters`, printed `param p out`) is
+  derived the same way, by `inferOutParameters`
+  (`Transform/OutParameters.cpp`), which the driver runs on the converted
+  functions after `inferFreshOwnedReturns`. Per pointer or reference
+  parameter of a function with a verified body, a walk keeps the byte
+  offsets from the parameter written on every path (`Written`: an `if`
+  joins by intersection, a loop's body starts from what was written before
+  it and adds nothing after it, a `return` records the exit state) and
+  rejects a read of an offset not written, a read at a computed offset, any
+  other use of the pointer (a null test, `valid_ptr`, and address steps
+  excepted), a call passing it to a callee parameter that is not an
+  out-parameter whose leaves (`pointeeLeaves`, the record layout's) are not
+  all written or that has an extent, and an entry-state read in a clause
+  (`readsStorage`: preconditions, recommends, decreases, behaviors, field
+  parameters, footprint counts, extents, `old`). Postconditions, invariants,
+  and checks count only when the parameter is never written
+  (`WritesSomewhere`). Writes are a least fixpoint over the call graph
+  (a call adds the callee's writes for its formal at the argument's
+  offset), out-parameters a greatest one. For each out-parameter the pass
+  drops `initialized_ptr` from the generated validity precondition
+  (`withoutInitialization`), removes the converter's subobject binding
+  pair (an `initialization` assert of the object, an assume of the part's
+  initialization), and adds `initialized_ptr(p + offset)` postconditions of
+  kind `initialization` for the leaves written at every exit.
 - `identity` includes the canonical signature, so overloads with the same
   source spelling remain distinct through modular calls and SMT symbols.
 - `cppverify::aliases` empty means the implicit non-aliasing precondition applies to every pair of distinct pointer/reference parameters of which at least one is mutable.
@@ -677,13 +704,17 @@ what an invariant reads is in bounds and initialized there. Initialization
 cannot be stated in a contract, so this is how a loop that fills local
 storage knows what it has written. A store through local or dynamic storage
 sets its cell's initialization bit, so it modifies the initialization heap
-(`collectModified`), whose head version only grows: no lifetime begins or
-ends in a loop (the converter rejects addressable declarations, allocation,
-and deallocation there, and `startsLifetime` withholds the fact from a loop
-that starts one), so the head assumes `forall a. init_entry[a] ->
-init_head[a]`, triggered by reads of the head version
-(`initializationKept`). Nothing frames the rest, since no claim needs a cell
-to be uninitialized. Before 0.2 the head kept the initialization heap from
+(`collectModified`), whose head version only grows, and only where the
+loop writes: no lifetime begins or ends in a loop (the converter rejects
+addressable declarations, allocation, and deallocation there, and
+`startsLifetime` withholds the fact from a loop that starts one). When the
+loop's write regions are all single cells, the frame that makes the value
+heap a chain of stores, the head's initialization heap is the same chain
+(`initializeCells`): each cell's bit becomes `init_entry[c] || w` for a
+fresh `w`, and every other address keeps its bit. Otherwise the head
+assumes `forall a. init_entry[a] -> init_head[a]`, triggered by reads of the
+head version (`initializationKept`), and nothing frames the rest, since no
+claim needs a cell to be uninitialized. Before 0.2 the head kept the initialization heap from
 before the loop, and every iteration after the first saw the storage the
 earlier ones wrote as uninitialized. Dafny checks an invariant's
 well-formedness once, in the head's arbitrary state, from the invariants
@@ -749,6 +780,34 @@ assume(Q[Result := y, Old(params) := args]);
 - A `freshOwnedReturn` call is not a whole-heap havoc. It preserves every old
   cell, materializes one disjoint initialized scalar object, then assumes the
   ordinary postconditions against that new heap.
+
+**Out-parameters.** `PassivizerImpl::tracksInitialization(ptr)` holds for a
+pointer with provenance and for one based on an out-parameter, by its source
+name or its entry version (`OutParameterVersions`; an out-parameter is never
+reassigned). A store through such a pointer sets its initialization bit, a
+loop that stores through one counts the initialization heap as modified (so
+its head keeps what was initialized, `initializationKept`, and assumes the
+invariants' definedness), `collectSafety` checks a load based on an
+out-parameter with `initialized_ptr` at its exact address
+(`initializedSafety` with the out-parameters, in and outside the object
+model), and `abstractValidity` keeps `initialized_ptr` on tracked storage
+instead of taking it as true. At a call, `initializesActuals` asks whether
+an out-parameter's argument is tracked in the caller; then, after the
+footprints are havocked, the initialization heap changes where the value
+heap does. A callee initializes storage only by storing to it, and each of
+its stores lies in its footprints, so when those are single cells
+(`havocFootprints` returns them) each cell's bit becomes `before[c] || w`
+for a fresh `w` (`initializeCells`) and every other address keeps its bit;
+a callee that writes nothing changes none. One whose footprints are ranges,
+regions, or the whole heap gives the heap a fresh version that keeps every
+initialized address (`initializationKept`), a quantifier: in the ULEB128
+case study, the postcondition query of `roundtrip_uleb128`, after a call
+that initializes `*consumed`, took 41 s with it instead of 3.3 s on Linux,
+and timed out on a three-core macOS runner. The postconditions are then
+assumed (with the generated `initialized_ptr` ones), and each postcondition's `initialization`
+checks, built with the callee's out-parameters and substituted at the
+arguments, are assumed after them with the call's origin. `collectModified`
+counts such a call in a loop as modifying the initialization heap.
 
 **Contract well-formedness.** Every contract clause must be defined where it is
 evaluated, as Dafny's per-method `CheckWellFormed$$f` procedure requires. Its
@@ -2609,9 +2668,11 @@ body; re-entering a scan through recursion assumes it holds. Offsets, steps,
 comparisons, conversions to integers, spec arguments, and ghost reads are
 admitted. At the call `emitRecordActualChecks` asserts the validity of the
 record's last byte (with the generated clause's first, the record lies in
-one live allocation) and the initialization of every leaf of the callee's
-layout, enumerated (an automatic object has at most 256 bytes), as an
-`unsupported` obligation with the out-parameter note. `havocFootprints`
+one live allocation) and, unless the callee's parameter is an out-parameter,
+the initialization of every leaf of the callee's layout, enumerated (an
+automatic object has at most 256 bytes), as an `unsupported` obligation with
+the out-parameter note; for the caller's own out-parameter passed to an
+input, only the leaves. `havocFootprints`
 frames a footprint rooted at such a parameter by its bytes through
 `footprintBytes`, never as the exact first cell the scalar rule uses. The
 frame check of the caller accepts the callee's footprints in its own

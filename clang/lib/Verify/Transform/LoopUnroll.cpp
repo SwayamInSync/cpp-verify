@@ -261,6 +261,7 @@ VFunction LoopUnroller::unroll(const VFunction &Fn, unsigned K) {
   for (const auto &[Name, Field] : Fn.FieldParams)
     Out.FieldParams.emplace_back(Name, cloneVExpr(Field.get()));
   Out.ConstAddressParams = Fn.ConstAddressParams;
+  Out.OutParameters = Fn.OutParameters;
   Out.BoundedPointers = Fn.BoundedPointers;
   Out.ReturnFields = Fn.ReturnFields;
   Out.ExplicitPreconditionCount = Fn.ExplicitPreconditionCount;

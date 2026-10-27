@@ -39,25 +39,52 @@ parameters for boolean, integral, and enum referents:
 
 The VCR parameter is an immutable address. Reading ``left`` loads the heap,
 assignment stores through the address, and ``cppverify::old(left)`` reads the entry heap.
-CppVerify adds a non-null and live entry precondition for each reference, and
-verifies the body as reading the referent initialized; a call that passes
-storage not yet initialized is ``Unresolved`` (``construct.unsupported``). Mutable pointer/reference parameter pairs are object-range disjoint
-by default (over whole ``valid(p, n)`` extents);
-``cppverify::aliases(left, right)`` permits same-object aliasing.
+CppVerify adds a non-null and live entry precondition for each reference,
+and asks for initialized storage unless the function writes it before
+reading it (an out-parameter, below). Mutable pointer/reference parameter
+pairs are object-range disjoint by default (over whole ``valid(p, n)``
+extents); ``cppverify::aliases(left, right)`` permits same-object aliasing.
 
 Out-parameters
 ~~~~~~~~~~~~~~
 
-A function is verified as if it read its reference and pointer parameters'
-storage, so every such parameter must refer to initialized storage at a call.
-C++ requires less: a function that writes its parameter before reading it,
-an out-parameter, may receive storage that is not initialized yet. Until a
-contract can say that a function writes a parameter first, such a call is
-``Unresolved`` with reason ``construct.unsupported``: neither proved nor
-reported as a failure.
+Binding a reference or passing a pointer reads nothing, so C++ lets a
+function receive storage that is not initialized yet, provided it writes
+the storage before it reads it. CppVerify finds such parameters in the
+body. A pointer or reference parameter is an out-parameter when:
 
-.. cppverify-example: unresolved seven
-.. cppverify-example: fails read_too_early
+- on every path, the body writes each part of the storage (the object, or
+  each field of a record) before it reads that part, through the parameter
+  itself;
+- the body uses the pointer for nothing else than these accesses, a null
+  test, and passing it to another function's out-parameter: a copy of it, a
+  read at a computed index (``p[i]``), and a callee that may read the
+  storage first (or has no verified body) make it an input;
+- its contract does not read the entry value: no precondition (a class
+  invariant of its record is one), measure, or ``cppverify::old`` reads the
+  storage, and if the function never writes it, no clause reads it at all.
+
+``--dump-ir=1`` prints ``param out out`` for each one. Its generated
+precondition asks for valid storage only, and:
+
+- the function's reads of the storage, the reads of its postconditions, loop
+  invariants, and ``cppverify::check`` included, are checked against what it
+  has written (``initialization``);
+- each part it writes on every path is initialized when it returns, a
+  generated postcondition ``initialized_ptr(p)`` (one per field of a
+  record): after a call the caller reads it as initialized, with the value
+  the postconditions give;
+- where a postcondition reads a part, after a call it is initialized there
+  too, so a function that writes on some paths only, like ``try_get``, says
+  on which.
+
+Every other pointer or reference parameter needs initialized storage. A
+call that passes storage not yet initialized to one is ``Unresolved`` with
+reason ``construct.unsupported``: neither proved nor reported as a failure,
+since the callee may read it first.
+
+.. cppverify-example: unresolved copied_garbage
+.. cppverify-example: fails read_after_miss read_too_early
 
 .. code-block:: cpp
 
@@ -68,6 +95,23 @@ reported as a failure.
      out = 7;
    }
 
+   bool try_get(int &out, bool ok)
+     cv::modifies(out)
+     cv::post(!cv::result || out == 5)
+   {
+     if (!ok)
+       return false;
+     out = 5;
+     return true;
+   }
+
+   void copy_to(int &to, const int &from)
+     cv::modifies(to)
+     cv::post(to == from)
+   {
+     to = from;
+   }
+
    int seven()
      cv::post(cv::result == 7)
    {
@@ -76,12 +120,40 @@ reported as a failure.
      return a;
    }
 
-   int seven_initialized()
+   int five_or_zero(bool ok)
+     cv::post(cv::result == 5 || cv::result == 0)
+   {
+     int a;
+     bool found = try_get(a, ok);
+     if (found)
+       return a;
+     return 0;
+   }
+
+   int read_after_miss()
+     cv::post(cv::result == 0)
+   {
+     int a;
+     try_get(a, false);
+     return a;
+   }
+
+   int copied()
      cv::post(cv::result == 7)
    {
-     int a = 0;
-     init(a);
+     int a;
+     int b = 7;
+     copy_to(a, b);
      return a;
+   }
+
+   int copied_garbage()
+     cv::post(cv::result == 0)
+   {
+     int a;
+     int b;
+     copy_to(a, b);
+     return 0;
    }
 
    int read_too_early()
@@ -97,23 +169,37 @@ reported as a failure.
 .. code-block:: text
 
    Verified: init [backend=z3]
-   out.cpp:12:3: Unresolved: seven [backend=z3] [reason=construct.unsupported] (the verifier cannot model a construct here: binding a reference or pointer parameter to storage that is not initialized, since the callee is verified as reading initialized storage)
-   Verified: seven_initialized [backend=z3]
-   out.cpp:29:3: error: verification failed: read_too_early [...::initialization@29:3] (...) [backend=z3] [reason=counterexample]
+   Verified: try_get [backend=z3]
+   Verified: copy_to [backend=z3]
+   Verified: seven [backend=z3]
+   Verified: five_or_zero [backend=z3]
+   out.cpp:48:3: error: verification failed: read_after_miss [...::initialization@48:3] (...) [backend=z3] [reason=counterexample]
+   Verified: copied [backend=z3]
+   out.cpp:65:3: Unresolved: copied_garbage [backend=z3] [reason=construct.unsupported] (the verifier cannot model a construct here: binding a reference or pointer parameter to storage that is not initialized, which the callee may read before writing it)
+   out.cpp:74:3: error: verification failed: read_too_early [...::initialization@74:3] (...) [backend=z3] [reason=counterexample]
 
-- Initializing the storage before the call, as ``seven_initialized`` does, is
-  the way to verify such code today.
-- The same holds for an element of a local array (``init(arr[0])``), for
-  storage from ``new int`` passed to a pointer parameter before anything
-  writes it (``int *p = new int; init_ptr(p);``), and for a function that
-  returns a pointer to storage not initialized yet.
+- ``copy_to``'s ``to`` is an out-parameter and ``from`` an input:
+  ``copied_garbage`` passes ``b`` uninitialized, which ``copy_to`` reads.
+- ``try_get`` writes ``out`` on one path, so no generated postcondition
+  covers it; its own postcondition reads ``out`` where the result is true,
+  which is where ``five_or_zero`` reads it. After a miss, the read in
+  ``read_after_miss`` is a real error.
+- The same holds for an element of a local array (``init(arr[0])``),
+  storage from ``new int`` (``int *p = new int; init_ptr(p);``), a record
+  written field by field (:doc:`structs`), and a member function that writes
+  its object before reading it (``Point p; p.reset();``), which a
+  constructor may also call before initializing its members.
+- A function that returns a pointer to storage not initialized yet is still
+  ``Unresolved`` (``construct.unsupported``): its callers read the returned
+  storage as initialized.
 - A local reference may bind storage that is not initialized, as C++ allows,
   and a write through it initializes the object. A read before the first
   write is a real error, reported where it happens, as in ``read_too_early``.
 
-Before 0.2 each of these calls was a reported failure (``verification failed:
-... initialization``), and ``int a; init(a);`` stopped the whole file with
-``error: seven: read of uninitialized local value: a``.
+Before 0.2 each call that passed storage not yet initialized was a reported
+failure (``verification failed: ... initialization``), and ``int a;
+init(a);`` stopped the whole file with ``error: seven: read of uninitialized
+local value: a``.
 
 Aliasing between parameters
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~

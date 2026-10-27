@@ -370,8 +370,8 @@ int same_local()
 }
 // CHECK-DAG: error: verification failed: same_local [{{.*}}::aliasing@[[@LINE-3]]:3]
 
-// Every field must be initialized: the callee reads its record as
-// initialized storage, which C++ does not require of an out-parameter.
+// A callee that writes its record before reading it needs none of it
+// initialized: c.limit never is. One that may read it needs every field.
 void set_n(Counter &c)
   cppverify::modifies(c.n)
   cppverify::post(c.n == 1)
@@ -387,7 +387,22 @@ int out_parameter()
   set_n(c);
   return c.n;
 }
-// CHECK-DAG: [[@LINE-3]]:3: Unresolved: out_parameter [backend=z3] [reason=construct.unsupported] (the verifier cannot model a construct here: binding a reference or pointer parameter to storage that is not initialized, since the callee is verified as reading initialized storage)
+// CHECK-DAG: Verified: out_parameter [backend=z3]
+
+int get_n(const Counter &c)
+  cppverify::post(cppverify::result == c.n)
+{
+  return c.n;
+}
+
+int partly_initialized()
+  cppverify::post(cppverify::result == 0)
+{
+  Counter c;
+  c.n = 0;
+  return get_n(c);
+}
+// CHECK-DAG: [[@LINE-2]]:3: Unresolved: partly_initialized [backend=z3] [reason=construct.unsupported] (the verifier cannot model a construct here: binding a reference or pointer parameter to storage that is not initialized, which the callee may read before writing it)
 
 // A callee that keeps the address: in memory, or by returning it.
 struct Node {
