@@ -5,6 +5,7 @@
 #include "../Backend/VerifyBackend.h"
 #include "llvm/Support/raw_ostream.h"
 #include <map>
+#include <memory>
 #include <string>
 
 namespace clang {
@@ -126,8 +127,37 @@ struct VerifyOptions {
   unsigned ConfirmBound = 10;
   /// Where the run counts the verdicts it prints, if anywhere.
   VerifySummary *Summary = nullptr;
+  /// A run over several files, which holds each file's results until every
+  /// file is verified (see CrossFileRun), or null.
+  class CrossFileRun *CrossFile = nullptr;
 };
 
+/// One run over several files. A contract that a file declares without a
+/// definition may be defined and verified in another file of the run, so a
+/// proof that rests on it waits: each file's results are kept, and once
+/// every file is verified, a proof stands where every such contract it rests
+/// on is established by its definition's verification, and is otherwise
+/// unresolved (callee.contract), as within one file.
+class CrossFileRun {
+public:
+  CrossFileRun();
+  ~CrossFileRun();
+  CrossFileRun(const CrossFileRun &) = delete;
+  CrossFileRun &operator=(const CrossFileRun &) = delete;
+
+  /// Settles the contracts the files assume against those they verify,
+  /// prints each file's results in the order the files were verified, and
+  /// counts them into \p Summary when it is given. Returns how many files
+  /// do not succeed.
+  unsigned finish(llvm::raw_ostream &OS, VerifySummary *Summary);
+
+  struct Impl;
+  std::unique_ptr<Impl> State;
+};
+
+/// Verifies the translation unit. In a run over several files
+/// (Opts.CrossFile), the results wait for CrossFileRun::finish, and the
+/// result is the file's as far as it alone decides.
 bool verifyTranslationUnit(ASTContext &Ctx, llvm::raw_ostream &OS,
                            const VerifyOptions &Opts = VerifyOptions());
 
