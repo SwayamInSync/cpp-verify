@@ -2281,11 +2281,12 @@ dead declarations or trivial Boolean structure. It does not rewrite
 arithmetic, quantifiers, pointer/heap expressions, or assumptions.
 
 `--obligation-out=FILE` publishes deterministic, concatenable
-`cppverify.obligation/4` binary records with stable wire tags and portable
+`cppverify.obligation/5` binary records with stable wire tags and portable
 source attribution; schema v3 adds each logical function's termination
 measures and, with source attribution, where each assumption of a goal comes
 from, schema v4 where each variable version of a counterexample is defined,
-none of them hashed, and records of schemas v1 to v3 remain readable. Publication includes an
+schema v5 where each source range begins, none of them hashed, and records of
+schemas v1 to v4 remain readable. Publication includes an
 exact serialize/deserialize/validate/reserialize check. SHA-256 module and
 per-obligation semantic hashes exclude source paths, display-only names, both
 positional and source-anchored obligation IDs, and every obligation kind except
@@ -2328,9 +2329,12 @@ their human message: `counterexample`, `solver.timeout`, `solver.unknown`,
 `spec.reads`, `spec.post`, `spec.inductive`, `proof.cycle`,
 `counterexample.unchecked`, `construct.unsupported`, `callee.contract`,
 `decreases.missing`, and `interrupted`.
-`--diagnostics-format=json` serializes verification results as versioned JSON
-Lines (`cppverify.diagnostic/1`) for both source verification and archive
-replay.
+`--diagnostics-format=json` serializes verification results and compiler
+diagnostics as versioned JSON Lines (`cppverify.diagnostic/2`, ending with a
+`cppverify.summary/1` record) for both source verification and archive
+replay; `--diagnostics-format=sarif` translates the same records into one
+SARIF 2.1.0 log, and `--diagnostics-format=github` adds a GitHub workflow
+annotation to the text for each error and warning.
 
 `--jobs=N` runs one pool of exactly `N` workers (default: the available
 physical cores, or `CPPVERIFY_JOBS`; 1 for `--backend=lean` and for the
