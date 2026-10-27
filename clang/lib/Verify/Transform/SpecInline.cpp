@@ -137,6 +137,7 @@ class SpecInlinerImpl {
                                            const VSpecCallExpr &Call) {
     if (Expr) {
       Expr->Loc = Call.Loc;
+      Expr->BeginLoc = Call.BeginLoc;
       Expr->EndLoc = Call.EndLoc;
     }
     return Expr;
@@ -559,8 +560,10 @@ public:
   evalExpr(const VExpr *E,
            const std::map<std::string, std::unique_ptr<VExpr>> &Env) {
     auto Result = evalExprImpl(E, Env);
-    if (Result && E)
+    if (Result && E) {
+      Result->BeginLoc = E->BeginLoc;
       Result->EndLoc = E->EndLoc;
+    }
     return Result;
   }
 
