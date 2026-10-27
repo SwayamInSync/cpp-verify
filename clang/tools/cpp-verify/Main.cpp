@@ -191,10 +191,13 @@ static unsigned jobs() {
   return 0;
 }
 
+static const std::string MaxQueryNodesDescription =
+    "Maximum expression nodes of one function's proof obligations, checked "
+    "as they are built (default " +
+    std::to_string(verify::DefaultMaxQueryNodes) + "; 0 = no limit)";
+
 static cl::opt<uint64_t> MaxQueryNodes(
-    "max-query-nodes",
-    cl::desc("Maximum expression nodes of one function's proof obligations, "
-             "checked as they are built (default 32000000; 0 = no limit)"),
+    "max-query-nodes", cl::desc(MaxQueryNodesDescription),
     cl::init(verify::DefaultMaxQueryNodes), cl::cat(CppVerifyCategory));
 
 static cl::opt<uint64_t> MemoryLimit(
