@@ -35,3 +35,15 @@ int f(int n)
 // CHECK: cppverify-cursors.cpp:16:3: UnexposedStmt= Extent=[16:3 - 16:39]
 // CHECK: cppverify-cursors.cpp:16:31: DeclRefExpr=down:6:21 Extent=[16:31 - 16:35]
 // CHECK: cppverify-cursors.cpp:16:37: IntegerLiteral= Extent=[16:37 - 16:38]
+
+int g(const int (&a)[2]) {
+  int s = 0;
+  for (int v : a)
+    cppverify::invariant(s >= 0)
+    s = v;
+  return s;
+}
+
+// The clauses of a range-based for loop are children of the loop.
+// CHECK: cppverify-cursors.cpp:[[@LINE-7]]:3: CXXForRangeStmt= Extent=[[[@LINE-7]]:3 - [[@LINE-5]]:10]
+// CHECK: cppverify-cursors.cpp:[[@LINE-7]]:26: BinaryOperator=>= Extent=[[[@LINE-7]]:26 - [[@LINE-7]]:32]
