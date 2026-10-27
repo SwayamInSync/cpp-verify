@@ -99,14 +99,12 @@
 # PRUNE-ONCE-SAME: [reason=cache.corrupt]
 
 # NODES: Unresolved: cached_identity [backend=z3] [reason=query.size-limit]
-# NODES-SAME: exceeds query node budget 1
-# NODES-LOWER: error: Z3 lowering failed: cached_identity
-# NODES-LOWER-SAME: [reason=query.size-limit]
-# NODES-LOWER-SAME: exceeds query node budget 1
-# NODES-DUMP: error: Z3 lowering failed: cached_identity
-# NODES-DUMP-SAME: [reason=query.size-limit]
-# NODES-DUMP-SAME: exceeds query node budget 1
-# NODES-REPLAY: Unresolved: cached_identity (canonical obligation module exceeds query node budget 1)
+# NODES-SAME: (the proof obligations would take at least {{[0-9]+}} expression nodes, more than the limit of 1 (--max-query-nodes)
+# NODES-LOWER: error: Z3 lowering failed: cached_identity [backend=z3] [reason=query.size-limit]
+# NODES-LOWER-SAME: more than the limit of 1 (--max-query-nodes)
+# NODES-DUMP: Unresolved: cached_identity [backend=z3] [reason=query.size-limit]
+# NODES-DUMP-SAME: more than the limit of 1 (--max-query-nodes)
+# NODES-REPLAY: Unresolved: cached_identity (the obligation module has {{[0-9]+}} expression nodes, more than the limit of 1 (--max-query-nodes))
 # NODES-REPLAY-SAME: [reason=query.size-limit]
 
 # RLIMIT: Unresolved: cached_identity

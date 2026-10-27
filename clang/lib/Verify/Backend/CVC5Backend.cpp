@@ -26,6 +26,15 @@
 #include <set>
 #include <thread>
 
+#if defined(_WIN32)
+#include "llvm/Support/Windows/WindowsSupport.h"
+#else
+#include <cerrno>
+#include <csignal>
+#include <sys/resource.h>
+#include <sys/wait.h>
+#endif
+
 using namespace clang;
 using namespace verify;
 
@@ -1498,13 +1507,22 @@ public:
 static VerifyResult querySizeLimitResult(const ObligationModule &Module,
                                          uint64_t MaxQueryNodes,
                                          llvm::StringRef BackendName) {
+  if (auto Limited = moduleSizeLimit(Module, MaxQueryNodes, BackendName))
+    return std::move(*Limited);
+  if (MaxQueryNodes == 0)
+    return VerifyResult();
+  // A script states each term in full, a subterm that several goals share at
+  // each of its places, so it is as large as the module's terms as trees.
+  if (obligationModuleTreeNodesUpTo(Module, MaxQueryNodes) <= MaxQueryNodes)
+    return VerifyResult();
   VerifyResult Result;
-  if (MaxQueryNodes == 0 || obligationModuleNodeCount(Module) <= MaxQueryNodes)
-    return Result;
   Result.Status = VerifyStatus::Unresolved;
   Result.Reason = VerifyReason::QuerySizeLimit;
-  Result.Message = "canonical obligation module exceeds query node budget " +
-                   std::to_string(MaxQueryNodes);
+  Result.Message = "its SMT-LIB script would state more than " +
+                   std::to_string(MaxQueryNodes) +
+                   " expression nodes, the limit (--max-query-nodes): a "
+                   "script states a subterm that goals share at each of its "
+                   "places";
   Result.BackendName = BackendName.str();
   return Result;
 }
@@ -2319,7 +2337,8 @@ CVC5VerifyBackend::CVC5VerifyBackend(const BackendExecutionOptions &Execution)
     : TimeoutMs(Execution.SolverTimeoutMs),
       CollectionTimeoutMs(Execution.CollectionTimeoutMs),
       CertifyTimeoutMs(Execution.CertifyTimeoutMs),
-      ResourceLimit(Execution.SolverResourceLimit), Jobs(Execution.Jobs),
+      ResourceLimit(Execution.SolverResourceLimit),
+      MemoryLimitMB(Execution.MemoryLimitMB), Jobs(Execution.Jobs),
       Pool(Execution.Pool), MaxQueryNodes(Execution.MaxQueryNodes),
       IntegerEncoding(Execution.IntegerEncoding) {
   llvm::StringRef Requested = Execution.CVC5Path.empty()
@@ -2346,6 +2365,7 @@ struct SolverRun {
 
 static SolverRun runCVC5(const std::string &SolverPath, llvm::StringRef Script,
                          unsigned TimeoutMs, unsigned ResourceLimit,
+                         uint64_t MemoryLimitMB = 0,
                          const std::atomic<bool> *Cancelled = nullptr);
 
 /// Whether the cvc5 at \p SolverPath prints a sequence value last element
@@ -2388,6 +2408,7 @@ static bool printsSequencesReversed(const std::string &SolverPath) {
 
 static SolverRun runCVC5(const std::string &SolverPath, llvm::StringRef Script,
                          unsigned TimeoutMs, unsigned ResourceLimit,
+                         uint64_t MemoryLimitMB,
                          const std::atomic<bool> *Cancelled) {
   SolverRun Run;
   VerifyResult &Result = Run.Failure;
@@ -2445,9 +2466,27 @@ static SolverRun runCVC5(const std::string &SolverPath, llvm::StringRef Script,
                                                 ErrorPath.str()};
   std::string InvocationError;
   bool ExecutionFailed = false;
+  // On Windows the limit bounds the process's committed memory. On POSIX
+  // hosts a limit makes ExecuteNoWait fork rather than spawn, and fork runs
+  // Z3's fork handlers, which wait for the timers of every check running in
+  // the process; the limit is set on the spawned process instead.
+#if defined(_WIN32)
+  const unsigned SpawnLimit = static_cast<unsigned>(
+      std::min<uint64_t>(MemoryLimitMB, std::numeric_limits<unsigned>::max()));
+#else
+  const unsigned SpawnLimit = 0;
+#endif
   llvm::sys::ProcessInfo Process =
-      llvm::sys::ExecuteNoWait(SolverPath, Args, std::nullopt, Redirects, 0,
-                               &InvocationError, &ExecutionFailed);
+      llvm::sys::ExecuteNoWait(SolverPath, Args, std::nullopt, Redirects,
+                               SpawnLimit, &InvocationError, &ExecutionFailed);
+#if defined(__linux__)
+  // What cvc5 allocates: its data segment and private writable mappings.
+  if (MemoryLimitMB != 0 && Process.Pid != llvm::sys::ProcessInfo::InvalidPid) {
+    struct rlimit Data;
+    Data.rlim_cur = Data.rlim_max = static_cast<rlim_t>(MemoryLimitMB) << 20;
+    (void)::prlimit(Process.Pid, RLIMIT_DATA, &Data, nullptr);
+  }
+#endif
   if (ExecutionFailed || Process.Pid == llvm::sys::ProcessInfo::InvalidPid) {
     Result.Reason = VerifyReason::SolverInvocationFailure;
     Result.Message = InvocationError.empty() ? "cannot start cvc5 process"
@@ -2530,6 +2569,25 @@ static SolverRun runCVC5(const std::string &SolverPath, llvm::StringRef Script,
     return Run;
   }
   if (ExitCode != 0) {
+    std::string OutputError;
+    std::optional<std::string> StandardOutput =
+        readSolverOutput(OutputPath, OutputError, MaxSolverOutputBytes);
+    // An allocation past the limit fails, and cvc5 reports it as an error
+    // ((error "std::bad_alloc")) or aborts on it (std::bad_alloc, or its SAT
+    // solver's Minisat::OutOfMemoryException).
+    auto outOfMemory = [](llvm::StringRef Text) {
+      return Text.contains("bad_alloc") || Text.contains("OutOfMemory");
+    };
+    if (outOfMemory(*StandardError) ||
+        (StandardOutput && outOfMemory(*StandardOutput))) {
+      Result.Reason = VerifyReason::SolverMemoryLimit;
+      Result.Message = "cvc5 ran out of memory";
+      if (MemoryLimitMB != 0)
+        Result.Message += ": each cvc5 process may use " +
+                          std::to_string(MemoryLimitMB) +
+                          " MB (--memory-limit)";
+      return Run;
+    }
     Result.Reason = VerifyReason::SolverInvocationFailure;
     Result.Message = "cvc5 exited with status " + std::to_string(ExitCode);
     if (!InvocationError.empty())
@@ -2537,9 +2595,7 @@ static SolverRun runCVC5(const std::string &SolverPath, llvm::StringRef Script,
     if (!StandardError->empty())
       Result.Message += ": " + diagnosticText(*StandardError);
     // cvc5 reports a script it rejects on standard output.
-    std::string OutputError;
-    if (std::optional<std::string> StandardOutput =
-            readSolverOutput(OutputPath, OutputError, MaxSolverOutputBytes))
+    if (StandardOutput)
       for (llvm::StringRef Rest = *StandardOutput; !Rest.empty();) {
         auto [Line, Next] = Rest.split('\n');
         if (Line.trim().starts_with("(error")) {
@@ -2718,8 +2774,8 @@ CVC5VerifyBackend::verifyQuery(const ObligationModule &Module,
       }
       Budget = static_cast<unsigned>(Remaining);
     }
-    SolverRun Run =
-        runCVC5(SolverPath, *Script, Budget, ResourceLimit, &Cancelled);
+    SolverRun Run = runCVC5(SolverPath, *Script, Budget, ResourceLimit,
+                            MemoryLimitMB, &Cancelled);
     auto giveUp = [&](llvm::StringRef Outcome) {
       RefinementDecision Exhausted = Refinement.exhausted(Outcome);
       Result.Reason = Exhausted.Reason;

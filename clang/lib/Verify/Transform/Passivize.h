@@ -81,11 +81,27 @@ struct PassiveModelVariable {
   std::shared_ptr<const VExpr> Guard;
 };
 
+/// What a construction for a program built past its function's limit
+/// (NodeBudget), where it stopped: the program is incomplete, and building
+/// its module is an ObligationSizeError with this instead.
+struct PassiveOversize {
+  std::string What;
+  uint64_t Nodes = 0;
+  uint64_t Limit = 0;
+  std::string Advice;
+};
+
+/// The facts about the specs a program applies, each spec's postconditions
+/// and definitions at its applications, passed \p Budget.
+PassiveOversize specFactsOversize(const NodeBudget &Budget);
+
 struct PassiveProgram {
   std::string FunctionName;
   std::string FunctionIdentity;
   std::vector<std::unique_ptr<PassiveStmt>> Stmts;
   std::vector<std::unique_ptr<VExpr>> EntryAssumes;
+  /// Set when a construction for the program passed the node limit.
+  std::optional<PassiveOversize> TooLarge;
   /// How many leading EntryAssumes are the function's own preconditions.
   size_t PreconditionCount = 0;
   /// Where each of EntryAssumes comes from, as PassiveStmt::Origin.

@@ -42,7 +42,7 @@ Binaries: `build/bin/cpp-verify`, `build/bin/clang++`, `build/bin/clangd`, and `
 
 Z3 4.13.4 is built in: from the `third_party/z3` submodule, or, without it, cloned during the first build. See `third_party/README.md`. Two backends are optional and found on `PATH`:
 
-- cvc5, for `--backend=cvc5`, `portfolio`, and `race` (tested with 1.1.2): `apt install cvc5` on Ubuntu 24.04, or a [cvc5 release](https://github.com/cvc5/cvc5/releases/tag/cvc5-1.1.2) for Linux, macOS, or Windows; `--cvc5-path` names another executable.
+- cvc5, for `--backend=cvc5`, `portfolio`, and `race` (tested with 1.1.2 to 1.4.2): `apt install cvc5` on Ubuntu 24.04 (1.1.2), or a [cvc5 release](https://github.com/cvc5/cvc5/releases/tag/cvc5-1.4.2) for Linux, macOS, or Windows; `--cvc5-path` names another executable.
 - Lean 4, for `--lean-certify` and `--lean-fallback`: install [elan](https://github.com/leanprover/elan); generated projects pin `leanprover/lean4:v4.35.0`.
 
 `cpp-verify --version` shows the cpp-verify release, the LLVM release it is built on, and the Z3, cvc5, and Lean versions it uses.
