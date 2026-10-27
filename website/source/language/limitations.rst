@@ -118,7 +118,9 @@ C++ feature boundaries
        not reached), ``[[assume(e)]]`` and ``__builtin_assume(e)`` (proved,
        then assumed), discarded values (``x + 1;``, ``c && f(x);``),
        character literals (``'0'``, ``L'A'``), constants Clang evaluates (a
-       ``consteval`` call, an ``if constexpr`` condition), template value
+       ``consteval`` call, an ``if constexpr`` condition, ``noexcept(e)``, a
+       requires-expression, a concept, a type trait, ``offsetof``,
+       ``__builtin_LINE()``), template value
        parameters, default arguments and default member initializers,
        ``__builtin_expect``, a record returned from an initializer list
        (``return Pt{a, b};``), structured bindings that copy a record, and

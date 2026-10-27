@@ -2384,6 +2384,12 @@ expression being converted (`ASTConverter::CurrentRange`), unless the site
 names a place of its own, such as a function for the checks made after every
 function is converted. It is printed with Clang's `TextDiagnostic`, line and
 caret included, as a compiler error is, and its JSON record carries the range.
+Its message names the construct as C++ does (`unsupportedConstruct` for the
+statements and expressions without a site of their own; Clang's class name
+only in parentheses for those it has no name for), and each error is raised
+once: a declaration whose initializer was rejected counts as initialized, and
+a rejected call returns before the generic message, so neither is reported
+again where it is used.
 
 ## Modular Verification Protocol
 
