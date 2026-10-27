@@ -30,10 +30,11 @@ are replaced with the Unicode replacement character, so JSON output remains
 valid UTF-8.
 
 An undecided query is different from a counterexample. ``Unresolved`` with
-reason ``solver.timeout``, ``solver.resource-limit``, or ``solver.unknown``
-means Z3 timed out, exhausted an explicit resource/query budget, or entered a
-fragment it could not decide, often because the VC combines quantifiers with
-heap arrays. CppVerify may retry smaller ordered obligations, but if those also
+reason ``solver.timeout``, ``solver.resource-limit``, ``solver.memory-limit``,
+or ``solver.unknown`` means Z3 timed out, exhausted an explicit resource/query
+budget, reached the memory ``--memory-limit`` gives it, or entered a fragment
+it could not decide, often because the VC combines quantifiers with heap
+arrays. CppVerify may retry smaller ordered obligations, but if those also
 remain undecided it reports the function ``Unresolved``. It never treats solver
 uncertainty as success.
 
@@ -158,6 +159,10 @@ Every result that is not a proof carries one stable reason code (text
        other solver of ``--backend=race`` settled the function.
    * - ``solver.resource-limit``
      - ``--solver-rlimit`` was reached.
+   * - ``solver.memory-limit``
+     - A solver reached ``--memory-limit``: Z3's queries, which share it, or
+       a cvc5 process. Raise the limit, run fewer ``--jobs``, or help the
+       proof (a matching loop takes memory until it is stopped).
    * - ``solver.unavailable``
      - The solver (cvc5) is not installed; pass ``--cvc5-path``.
    * - ``solver.invocation-failed``, ``solver.malformed-output``
@@ -172,7 +177,10 @@ Every result that is not a proof carries one stable reason code (text
      - ``BoundedSafe``: safe within ``--unroll`` iterations, but a loop can
        run longer. Raise the bound, or prove the loop with an invariant.
    * - ``query.size-limit``
-     - The query is larger than ``--max-query-nodes``.
+     - The function's proof obligations, or the facts about the specs they
+       apply, would be larger than ``--max-query-nodes``. Split the function
+       into functions with contracts, lower ``cppverify::reveal_with_fuel``,
+       or raise the limit.
    * - ``logic.unsupported``
      - The backend does not support a feature the query needs (Lean and
        collections, for example).

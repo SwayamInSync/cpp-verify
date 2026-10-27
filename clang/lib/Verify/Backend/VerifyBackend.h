@@ -36,6 +36,8 @@ enum class VerifyReason {
   Counterexample,
   SolverTimeout,
   SolverResourceLimit,
+  /// The solver ran out of the memory --memory-limit gives it.
+  SolverMemoryLimit,
   SolverUnknown,
   SolverUnavailable,
   SolverInvocationFailure,
@@ -76,6 +78,12 @@ enum class VerifyReason {
 };
 
 llvm::StringRef verifyReasonCode(VerifyReason Reason);
+
+/// Limits what Z3 allocates in this process to \p MegaBytes, its queries
+/// together; 0 removes the limit. A check runs until its watchdog, polling
+/// every 10 ms, finds the limit passed, and its query then ends Unresolved
+/// with SolverMemoryLimit. Call it before any query runs.
+void setZ3MemoryLimit(uint64_t MegaBytes);
 
 /// Stops verification for the rest of the process (Ctrl-C): queries running
 /// end unresolved and none starts. Safe to call from a signal handler.
@@ -246,6 +254,13 @@ llvm::StringRef machineIntegerEncodingName(MachineIntegerEncoding Encoding);
 std::optional<MachineIntegerEncoding>
 parseMachineIntegerEncoding(llvm::StringRef Name);
 
+/// Unresolved with QuerySizeLimit when \p Module has more than \p MaxNodes
+/// expression nodes, as a module from an archive or one a backend derives
+/// may; a source module is refused before it is built.
+std::optional<VerifyResult> moduleSizeLimit(const ObligationModule &Module,
+                                            uint64_t MaxNodes,
+                                            llvm::StringRef BackendName);
+
 struct BackendExecutionOptions {
   unsigned SolverTimeoutMs = 0;
   /// Per-query timeout for modules over sequences, sets, multisets, or
@@ -264,6 +279,9 @@ struct BackendExecutionOptions {
   llvm::StdThreadPool *Pool = nullptr;
   /// Maximum canonical expression nodes in a module; 0 disables it.
   uint64_t MaxQueryNodes = 0;
+  /// The megabytes each cvc5 process may allocate; 0 disables the limit.
+  /// Z3's limit is process-wide: setZ3MemoryLimit.
+  uint64_t MemoryLimitMB = 0;
   MachineIntegerEncoding IntegerEncoding = MachineIntegerEncoding::Auto;
   /// Do not retry a whole-module query after individual obligations are
   /// unresolved. Interactive fallback backends can consume those unresolved

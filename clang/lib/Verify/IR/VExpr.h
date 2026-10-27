@@ -2,6 +2,7 @@
 #ifndef LLVM_CLANG_VERIFY_IR_VEXPR_H
 #define LLVM_CLANG_VERIFY_IR_VEXPR_H
 
+#include "NodeBudget.h"
 #include "VType.h"
 #include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
@@ -94,7 +95,9 @@ public:
 
 protected:
   VExpr(Kind K, VType Ty, SourceLocation Loc)
-      : K(K), Ty(Ty), Loc(Loc), EndLoc(Loc) {}
+      : K(K), Ty(Ty), Loc(Loc), EndLoc(Loc) {
+    NodeBudget::count();
+  }
 };
 
 class VLiteralExpr : public VExpr {
