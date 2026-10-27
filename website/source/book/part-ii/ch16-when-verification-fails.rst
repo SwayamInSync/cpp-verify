@@ -7,12 +7,18 @@ that as actionable feedback on the code, the contracts, or both.
 Understanding the report
 ------------------------
 
-Diagnostics name the source-anchored obligation that failed and often include a
-**counterexample**: typed source-name values that violate the claim, followed by
-guarded branch, call, loop, heap/provenance, lifetime, and return events. Use
-those values and events to see which assumption or branch is wrong. Values that
-Z3 does not determine remain ``<unknown>``; CppVerify does not complete the
-model by inventing them.
+A failure is a compiler error at the check that fails, with its kind
+(``[postcondition]``, ``[overflow]``, ...) and the source line, the failing
+expression underlined. Its notes give the **counterexample**: first the values
+by their source names, each variable with the values it takes along the path
+(``c = 0 -> 1``), then each step of that path at its line, as Clang's static
+analyzer reports a path: the branches it takes, the calls with their
+arguments, the loops it enters and leaves, the memory it writes, the objects
+it creates and ends, and the value it returns. Use those values and steps to
+see which assumption or branch is wrong. Values that Z3 does not determine
+remain ``<unknown>``; CppVerify does not complete the model by inventing them.
+``clang++ -fverify-contracts`` reports the same errors and notes as its own
+diagnostics.
 
 For editor, CI, and agent integration, run:
 
@@ -52,7 +58,17 @@ loop with too weak an invariant fails a correct function:
 
 .. code-block:: text
 
-   count_up.cpp:5:23: error: verification failed: count_up [fn_...::postcondition@5:23] (counterexample: result [ssa=__result_1] [type=i32] = 1, c [ssa=c_1] [type=i32] = 0, c [ssa=c_2] [type=i32] = 1, c [ssa=c_3] [type=i32] = 1, n [ssa=n_0] [type=i32] = 0; trace: loop.entry@8:3 -> loop.exit@8:3 -> return.return@13:3 value=1) [backend=z3] [reason=counterexample]
+   count_up.cpp:5:23: error: verification failed: count_up [postcondition] [backend=z3] [reason=counterexample]
+       5 |   cv::post(cv::result == n)
+         |            ~~~~~~~~~~~^~~~
+   count_up.cpp:5:23: note: counterexample: n = 0, c = 0 -> 1, result = 1
+   count_up.cpp:8:3: note: enters the loop
+       8 |   while (c < n)
+         |   ^
+   count_up.cpp:8:3: note: leaves the loop
+   count_up.cpp:13:3: note: returns 1
+      13 |   return c;
+         |   ^
    note: the counterexample's state at the loop at 8:3 is any state its invariants allow, not necessarily one an execution reaches
    note: no execution fails this check: every loop ends within 5 iterations, and unrolling proves it there; the loops' invariants are too weak for an unbounded proof
 
@@ -383,7 +399,13 @@ be its cause:
 
 .. code-block:: text
 
-   vacuity.cpp:2:28: error: verification failed: contradictory [...::postcondition@2:28] (...) [backend=z3] [reason=counterexample]
+   vacuity.cpp:2:28: error: verification failed: contradictory [postcondition] [backend=z3] [reason=counterexample]
+       2 |   cv::post(cv::result == x && cv::result == x + 1)   // no result satisfies this
+         |            ~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~
+   vacuity.cpp:2:28: note: counterexample: x = 2147483647, result = 2147483647
+   vacuity.cpp:4:3: note: returns 2147483647
+       4 |   return x;
+         |   ^
    Unresolved: relies_on_it [backend=z3] [reason=callee.contract] (relies on the contract of contradictory, which is not established)
 
 ``relies_on_it`` proves its postcondition only because the contract of
