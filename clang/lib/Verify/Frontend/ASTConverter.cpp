@@ -14,6 +14,7 @@
 #include "clang/AST/Stmt.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtContract.h"
+#include "clang/Basic/Builtins.h"
 #include "clang/Basic/SourceManager.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallString.h"
@@ -735,8 +736,12 @@ findUnsupportedType(const FunctionDecl *FD, bool AllowScalarReferences,
 
     bool VisitExpr(Expr *E) {
       if (const auto *ICE = dyn_cast<ImplicitCastExpr>(E))
-        if (ICE->getCastKind() == CK_FunctionToPointerDecay)
+        if (ICE->getCastKind() == CK_FunctionToPointerDecay ||
+            ICE->getCastKind() == CK_BuiltinFnToFnPtr)
           return true;
+      // The callee of a builtin call, which the call's conversion decides.
+      if (E->getType()->isSpecificPlaceholderType(BuiltinType::BuiltinFn))
+        return true;
       if (!Found && !E->getType().isNull() &&
           !isSupportedVerificationType(E->getType()))
         Found = E->getType().getAsString();
@@ -1230,10 +1235,22 @@ void ASTConverter::recordSourceVariable(const ValueDecl *D) {
         std::move(DisplayName), Type, D->getLocation(), D->getEndLoc()};
   };
   if (const RecordDecl *RD = getRecordFromType(D->getType())) {
+    // A structured binding's field is shown by the binding's name.
+    std::map<const FieldDecl *, std::string> Bound;
+    if (const auto *Decomposition = dyn_cast<DecompositionDecl>(D))
+      for (const BindingDecl *Binding : Decomposition->bindings())
+        if (const auto *Member = dyn_cast_or_null<MemberExpr>(
+                Binding->getBinding()
+                    ? Binding->getBinding()->IgnoreParenImpCasts()
+                    : nullptr))
+          if (const auto *Field = dyn_cast<FieldDecl>(Member->getMemberDecl()))
+            Bound[Field] = Binding->getNameAsString();
     if (const RecordDecl *Definition = RD->getDefinition())
       for (const FieldDecl *Field : Definition->fields())
         Record(InternalBase + "." + Field->getNameAsString(),
-               DisplayBase + "." + Field->getNameAsString(),
+               Bound.count(Field)
+                   ? Bound[Field]
+                   : DisplayBase + "." + Field->getNameAsString(),
                VType::fromQualType(Field->getType(), IntMode, Ctx));
     return;
   }
@@ -5732,6 +5749,30 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
 
   if (const auto *MTE = dyn_cast<MaterializeTemporaryExpr>(E))
     return convertExpr(MTE->getSubExpr());
+  // A template argument, a default argument, and a default member
+  // initializer are the expressions they stand for.
+  if (const auto *Subst = dyn_cast<SubstNonTypeTemplateParmExpr>(E))
+    return convertExpr(Subst->getReplacement());
+  if (const auto *Default = dyn_cast<CXXDefaultArgExpr>(E))
+    return convertExpr(Default->getExpr());
+  if (const auto *Default = dyn_cast<CXXDefaultInitExpr>(E))
+    return convertExpr(Default->getExpr());
+  // A constant Clang evaluates (a consteval call, an if constexpr
+  // condition) and a character literal are their values.
+  if (isa<ConstantExpr, CharacterLiteral>(E) &&
+      E->getType()->isIntegralOrEnumerationType()) {
+    Expr::EvalResult Result;
+    if (E->EvaluateAsInt(Result, Ctx)) {
+      const VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
+      if (Ty.Kind == VTypeKind::Bool)
+        return std::make_unique<VLiteralExpr>(
+            !Result.Val.getInt().isZero(), Ty, E->getExprLoc());
+      return std::make_unique<VLiteralExpr>(
+          integerValueString(Result.Val.getInt()), Ty, E->getExprLoc());
+    }
+  }
+  if (const auto *Constant = dyn_cast<ConstantExpr>(E))
+    return convertExpr(Constant->getSubExpr());
   // `this`, the parameter of a member function's object.
   if (isa<CXXThisExpr>(E)) {
     if (ThisSubstitute)
@@ -5845,6 +5886,13 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
                                           Ty, E->getExprLoc());
   }
   if (const auto *DRE = dyn_cast<DeclRefExpr>(E)) {
+    // A structured binding names a member or element of its object.
+    if (const auto *Binding = dyn_cast<BindingDecl>(DRE->getDecl())) {
+      if (const Expr *Bound = Binding->getBinding())
+        return convertExpr(Bound);
+      error(CurrentFn->Name + ": unsupported structured binding");
+      return nullptr;
+    }
     if (const auto *FD = dyn_cast<FieldDecl>(DRE->getDecl())) {
       auto It = FieldSubstPrefix.find(FD->getNameAsString());
       if (It != FieldSubstPrefix.end()) {
@@ -6378,6 +6426,10 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
                                          BinderType);
   }
   if (const auto *CE = dyn_cast<CallExpr>(E)) {
+    // __builtin_expect(e, c) is e: the expectation steers code layout only.
+    if (CE->getBuiltinCallee() == Builtin::BI__builtin_expect ||
+        CE->getBuiltinCallee() == Builtin::BI__builtin_expect_with_probability)
+      return convertExpr(CE->getArg(0));
     if (const FunctionDecl *Callee = CE->getDirectCallee()) {
       if (Callee->isConstexpr() && !functionContract(Callee) &&
           CE->isEvaluatable(Ctx)) {
@@ -8073,6 +8125,38 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         }
       }
       if (CurrentFn->ReturnType.Kind == VTypeKind::Struct) {
+        // An initializer list gives the fields in order: return {a, b};
+        const Expr *Init = RetE->IgnoreParenImpCasts();
+        if (const auto *Cast = dyn_cast<CXXFunctionalCastExpr>(Init))
+          Init = Cast->getSubExpr()->IgnoreParenImpCasts();
+        const RecordDecl *Returned = getRecordFromType(RetE->getType());
+        const RecordDecl *ReturnedDefinition =
+            Returned ? Returned->getDefinition() : nullptr;
+        if (const auto *List = dyn_cast<InitListExpr>(Init);
+            List && ReturnedDefinition &&
+            isFlatScalarRecordType(RetE->getType()) &&
+            List->getNumInits() ==
+                static_cast<unsigned>(std::distance(
+                    ReturnedDefinition->field_begin(),
+                    ReturnedDefinition->field_end()))) {
+          const std::string Tmp =
+              "__aggregate_return_" + std::to_string(++NestedCallId);
+          unsigned Index = 0;
+          for (const FieldDecl *Field : ReturnedDefinition->fields()) {
+            auto Value = materialize(convertExpr(List->getInit(Index++)),
+                                     Field->getType());
+            if (!Value)
+              return Out;
+            Out.push_back(std::make_unique<VAssignStmt>(
+                Tmp + "." + Field->getNameAsString(), std::move(Value),
+                RS->getBeginLoc()));
+          }
+          appendReturn(std::make_unique<VVarExpr>(Tmp, CurrentFn->ReturnType,
+                                                  RS->getBeginLoc()),
+                       Out, RS->getBeginLoc());
+          InitializationPathReachable = false;
+          return Out;
+        }
         // A record kept in memory is returned as its fields, read before
         // the lifetimes of the locals end.
         std::vector<std::pair<const FieldDecl *, std::unique_ptr<VExpr>>>
@@ -8919,6 +9003,12 @@ ASTConverter::convertStmtBody(const Stmt *S) {
   }
   if (const auto *DS = dyn_cast<DeclStmt>(S)) {
     for (const Decl *D : DS->decls()) {
+      // static_assert, a type alias, a using-declaration, and a local
+      // class or enumeration declare, and do nothing.
+      if (isa<StaticAssertDecl, TypedefNameDecl, UsingDecl,
+              UsingDirectiveDecl, UsingEnumDecl, NamespaceAliasDecl,
+              TagDecl>(D))
+        continue;
       const auto *VD = dyn_cast<VarDecl>(D);
       if (!VD) {
         error(CurrentFn->Name + ": unsupported declaration statement");
@@ -8930,10 +9020,14 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       }
       // A local named like a parameter or an earlier local, in an enclosing
       // or an earlier scope, is another variable: x#2, x#3, ...
+      // The object of a structured binding has no name of its own.
       if (!LocalNames.count(VD)) {
-        std::string Name = VD->getNameAsString();
+        const std::string Base = isa<DecompositionDecl>(VD)
+                                     ? std::string("__binding")
+                                     : VD->getNameAsString();
+        std::string Name = Base;
         for (unsigned N = 2; DeclaredValueNames.count(Name); ++N)
-          Name = VD->getNameAsString() + "#" + std::to_string(N);
+          Name = Base + "#" + std::to_string(N);
         DeclaredValueNames.insert(Name);
         if (Name != VD->getNameAsString())
           LocalNames[VD] = Name;
