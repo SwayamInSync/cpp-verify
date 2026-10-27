@@ -37,6 +37,13 @@ CI pre-flight, and LLM/agent loops.
 Other flags
 -----------
 
+- ``cpp-verify --quiet`` — print only failures, unresolved results, errors,
+  and warnings, then the summary line that every text run ends with
+  (``Summary: 12 verified, 1 failed in 3.2 s``)
+- ``cpp-verify --verbose`` — also list each spec function that needs no
+  check (``Verified: spec axiom: twice``), which the default leaves out
+- ``cpp-verify --list-functions`` — list the functions a run would verify,
+  with their locations and kinds, and verify none
 - ``cpp-verify --backend={z3,cvc5,portfolio,race,bmc,lean}`` — verification
   engine: Z3 (the default), cvc5, both with agreement required
   (``portfolio``), both at once with the first proof or certified
