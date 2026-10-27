@@ -700,7 +700,8 @@ Diagnostics and developer tooling
 Diagnostics name each obligation they report by a stable source-anchored ID
 and range, show counterexamples with source variable names and a trace of
 branches, calls, loops, heap writes, and lifetimes, and are also emitted as
-JSON Lines (``--diagnostics-format=json``). ``--profile-quantifiers`` reports
+JSON Lines (``--diagnostics-format=json``), SARIF (``sarif``), and GitHub
+annotations (``github``). ``--profile-quantifiers`` reports
 quantifier instantiations, ``--solver-rlimit`` sets reproducible solver
 budgets, and clangd, built with the tool, provides editor integration.
 Production readiness still needs:
@@ -768,8 +769,8 @@ P4 — libraries and application ecosystem
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Add verified/conformance-tested standard-library models, mathematical views,
-build-system integration, SARIF diagnostics, and stable multi-file incremental
-verification. clangd support and JSON Lines diagnostics already ship.
+build-system integration, and stable multi-file incremental verification.
+clangd support, JSON Lines and SARIF diagnostics already ship.
 
 P5 — advanced systems C++
 ~~~~~~~~~~~~~~~~~~~~~~~~~
