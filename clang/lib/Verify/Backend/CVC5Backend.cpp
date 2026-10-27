@@ -2838,6 +2838,8 @@ VerifyResult CVC5VerifyBackend::verifyObligation(const ObligationModule &Module,
   Result.ObligationId = Item.StableId.empty() ? Item.Id : Item.StableId;
   Result.ObligationType = Item.Kind;
   Result.Location = Item.Loc;
+  Result.BeginLocation = Item.BeginLoc;
+  Result.EndLocation = Item.EndLoc;
   Result.Source = Item.Source;
   if (Result.Status == VerifyStatus::Unresolved)
     Result.Message = "proof obligation " + Result.ObligationId +
