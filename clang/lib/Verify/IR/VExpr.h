@@ -88,13 +88,16 @@ public:
   Kind K;
   VType Ty;
   SourceLocation Loc;
+  /// The source the expression spans, Loc being where in it a diagnostic
+  /// points (an operator's position, as Clang's getExprLoc).
+  SourceLocation BeginLoc;
   SourceLocation EndLoc;
 
   virtual ~VExpr() = default;
 
 protected:
   VExpr(Kind K, VType Ty, SourceLocation Loc)
-      : K(K), Ty(Ty), Loc(Loc), EndLoc(Loc) {}
+      : K(K), Ty(Ty), Loc(Loc), BeginLoc(Loc), EndLoc(Loc) {}
 };
 
 class VLiteralExpr : public VExpr {
