@@ -269,6 +269,8 @@ ObligationKind verify::obligationKind(ProofObligationKind Kind) {
     return ObligationKind::Deallocation;
   case ProofObligationKind::MissingReturn:
     return ObligationKind::MissingReturn;
+  case ProofObligationKind::Unreachable:
+    return ObligationKind::Unreachable;
   case ProofObligationKind::Unsupported:
     return ObligationKind::Unsupported;
   }
@@ -319,6 +321,8 @@ const char *verify::obligationKindName(ObligationKind Kind) {
     return "deallocation";
   case ObligationKind::MissingReturn:
     return "missing-return";
+  case ObligationKind::Unreachable:
+    return "unreachable";
   case ObligationKind::Unsupported:
     return "unsupported";
   }
@@ -2114,6 +2118,14 @@ public:
       N->Children.push_back(std::move(Lhs));
       if (Rhs)
         N->Children.push_back(std::move(Rhs));
+      return N;
+    }
+    // Its requirement is checked where it is evaluated; its value is true.
+    case VExpr::Require: {
+      auto N = std::make_unique<VCExpr>(VCExpr::BoolLit);
+      setBoolSort(*N);
+      N->Loc = E->Loc;
+      N->BoolVal = true;
       return N;
     }
     }
