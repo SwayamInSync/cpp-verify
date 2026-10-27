@@ -4,15 +4,15 @@
 # Within a 3 GB address space, functions whose obligations, or whose specs
 # unfolded as deep as their fuel, would take far more end with a verdict
 # instead of failing an allocation: what is built is counted as it is built
-# (or before, for the obligations) and stops at --max-query-nodes.
+# and stops at --max-query-nodes. 1200 checks would take about 30 GB.
 # RUN: rm -rf %t && mkdir -p %t
-# RUN: %python %S/Inputs/many_checks.py 400 %t/many.cpp
+# RUN: %python %S/Inputs/many_checks.py 1200 %t/many.cpp
 # RUN: ulimit -v 3000000
-# RUN: not %cpp-verify --jobs=1 --max-query-nodes=2000000 %t/many.cpp -- 2>&1 \
+# RUN: not %cpp-verify --jobs=1 --max-query-nodes=200000 %t/many.cpp -- 2>&1 \
 # RUN:   | FileCheck %s --check-prefix=MANY
 # RUN: not %cpp-verify --jobs=1 --max-query-nodes=2000000 \
 # RUN:   %S/obligation_size_limit.cpp -- -DFUEL 2>&1 | FileCheck %s --check-prefix=FUEL
 
-MANY: Unresolved: many_checks [backend=z3] [reason=query.size-limit] (the proof obligations would take at least {{[0-9]+}} expression nodes, more than the limit of 2000000 (--max-query-nodes)
+MANY: Unresolved: many_checks [backend=z3] [reason=query.size-limit] (the proof obligations would take at least {{[0-9]+}} expression nodes, more than the limit of 200000 (--max-query-nodes)
 FUEL: Verified: small [backend=z3]
 FUEL: Unresolved: unfolds [backend=z3] [reason=query.size-limit] (the facts about the specs it applies
