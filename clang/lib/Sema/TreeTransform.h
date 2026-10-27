@@ -9430,9 +9430,14 @@ TreeTransform<Derived>::TransformCXXForRangeStmt(CXXForRangeStmt *S) {
 
   SemaRef.OpenACC().ActOnForStmtEnd(S->getBeginLoc(), Body);
 
+  std::optional<LoopContractInfo> Contract;
+  bool ContractChanged = false;
+  if (getDerived().TransformLoopContract(S, Contract, ContractChanged))
+    return StmtError();
+
   // Body has changed but we didn't rebuild the for-range statement. Rebuild
   // it now so we have a new statement to attach the body to.
-  if (Body.get() != S->getBody() && NewStmt.get() == S) {
+  if ((Body.get() != S->getBody() || ContractChanged) && NewStmt.get() == S) {
     NewStmt = getDerived().RebuildCXXForRangeStmt(
         S->getForLoc(), S->getCoawaitLoc(), Init.get(), S->getColonLoc(),
         Range.get(), Begin.get(), End.get(), Cond.get(), Inc.get(),
@@ -9444,7 +9449,11 @@ TreeTransform<Derived>::TransformCXXForRangeStmt(CXXForRangeStmt *S) {
   if (NewStmt.get() == S)
     return S;
 
-  return FinishCXXForRangeStmt(NewStmt.get(), Body.get());
+  StmtResult Result = FinishCXXForRangeStmt(NewStmt.get(), Body.get());
+  if (Contract && Result.isUsable())
+    SemaRef.Context.getOrCreateLoopContract(Result.get()) =
+        std::move(*Contract);
+  return Result;
 }
 
 template <typename Derived>
@@ -18464,6 +18473,8 @@ VarDecl *TreeTransform<Derived>::TransformContractBinder(VarDecl *Binder) {
       SemaRef.Context, Context, Binder->getBeginLoc(),
       Binder->getLocation(), Binder->getIdentifier(), Binder->getType(),
       Binder->getTypeSourceInfo(), SC_None);
+  if (Binder->isImplicit())
+    New->setImplicit();
   getDerived().transformedLocalDecl(Binder, {New});
   return New;
 }
@@ -18588,6 +18599,9 @@ bool TreeTransform<Derived>::TransformLoopContract(
   if (!From)
     return false;
   To.emplace();
+  // A range-based for loop's cppverify::index is declared with its contract.
+  if (From->Index)
+    To->Index = getDerived().TransformContractBinder(From->Index);
   bool Invalid = false;
   auto Keep = [&](Expr *Old, ExprResult New, SmallVectorImpl<Expr *> &Out) {
     if (!New.isUsable()) {
