@@ -115,9 +115,10 @@ void steps(int n)
 }
 
 // CHECK-DAG: Verified: computed
-// CHECK-DAG: verification failed: computed_wrong [{{.*}}::assertion@
+// CHECK-DAG: verification failed: computed_wrong [assertion]
 // CHECK-DAG: Verified: bounded [backend=
-// CHECK-DAG: verification failed: bounded_wrong {{.*}}n [ssa=n_0] [type=i32] = 137
+// CHECK-DAG: verification failed: bounded_wrong
+// CHECK-DAG: note: counterexample: {{.*}}n = 137{{( ->|,|$)}}
 // CHECK-DAG: Verified: inductive
 // CHECK-DAG: Unresolved: accumulated [backend={{z3|bmc, bound=0}}] [reason=spec.fuel] {{.*}}by induction in a proof function
 // CHECK-DAG: Verified: accumulate_sum
