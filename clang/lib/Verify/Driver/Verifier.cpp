@@ -13,6 +13,7 @@
 #include "../Backend/ProofCache.h"
 #include "../Backend/SpecAxioms.h"
 #include "../Backend/TaskGroup.h"
+#include "../Backend/Z3Encode.h"
 #include "../Frontend/ASTConverter.h"
 #include "../IR/VStmt.h"
 #include "../Transform/LoopUnroll.h"
@@ -1101,6 +1102,8 @@ struct VerifyDiagnostic {
   SourceRange Span;
   /// A spec function that needs no check, listed with --verbose: no verdict.
   bool Axiom = false;
+  /// What else the verifier found about the verdict, each printed as a note.
+  std::vector<std::string> Notes;
 };
 
 static std::string backendSuffix(const VerifyResult &Result) {
@@ -3451,6 +3454,126 @@ public:
       }
       auto SmokeBackend = createVerifyBackend(BackendKind::Z3, nullptr, 0,
                                               SmokeExecution, nullptr);
+      // What else a failure shows. A counterexample that passes through a
+      // loop starts from any state the loop's invariants allow, which no
+      // execution need reach; unrolling the loops looks for an execution
+      // that fails, or proves that none does.
+      auto failureNotes = [&](const VFunction &F, const VerifyResult &Failure) {
+        std::vector<std::string> Notes;
+        auto at = [&](SourceLocation Loc) {
+          const PresumedLoc Where = Ctx.getSourceManager().getPresumedLoc(Loc);
+          return Where.isValid() ? std::to_string(Where.getLine()) + ":" +
+                                       std::to_string(Where.getColumn())
+                                 : std::string("?");
+        };
+        if (F.UnmeasuredLoop.isValid())
+          Notes.push_back("the loop at " + at(F.UnmeasuredLoop) +
+                          " has no cppverify::decreases: a proof would be "
+                          "Unresolved (decreases.missing) until it has one");
+        const auto Loop = llvm::find_if(Failure.Trace, [](const auto &Event) {
+          return Event.Kind == DiagnosticTraceKind::Loop &&
+                 Event.Active.value_or(false);
+        });
+        if (Loop == Failure.Trace.end() || !isDeductiveBackend(Opts.Backend) ||
+            Failure.Reason != VerifyReason::Counterexample)
+          return Notes;
+        Notes.push_back(
+            "the counterexample's state at the loop at " +
+            (Loop->Source.isValid() ? std::to_string(Loop->Source.Line) + ":" +
+                                          std::to_string(Loop->Source.Column)
+                                    : std::string("?")) +
+            " is any state its invariants allow, not necessarily one an "
+            "execution reaches");
+        if (Opts.ConfirmBound == 0 || !Failure.ObligationType)
+          return Notes;
+        VFunction Bounded = cloneVFunction(F);
+        annotatePointerOrigins(Bounded);
+        if (Opts.CheckUB && !F.TotalExpressions && instrumentUBChecks(Bounded))
+          return Notes;
+        SpecInliner(FnMap, Bounded.SpecFuel).prepareFunction(Bounded);
+        // The search after a failure takes at most one query's time.
+        Z3VerifyBackend Unroller(Execution, "bmc");
+        std::optional<std::chrono::steady_clock::time_point> Until = Deadline;
+        if (Opts.SolverTimeoutMs != 0) {
+          const auto Slice = std::chrono::steady_clock::now() +
+                             std::chrono::milliseconds(Opts.SolverTimeoutMs);
+          if (!Until || Slice < *Until)
+            Until = Slice;
+        }
+        Unroller.setDeadline(Until);
+        auto iterations = [](unsigned Bound) {
+          return std::to_string(Bound) +
+                 (Bound == 1 ? " iteration" : " iterations");
+        };
+        // Unrolling keeps the function's checks, each copied into every
+        // iteration it is in, but not the loops' invariants and measures:
+        // the copies of the failed check are those of its kind at its place.
+        auto copyOfFailure = [&](const VerifyResult &Result) {
+          return Result.ObligationType == Failure.ObligationType &&
+                 Result.Source.Line == Failure.Source.Line &&
+                 Result.Source.Column == Failure.Source.Column &&
+                 Result.Source.File == Failure.Source.File;
+        };
+        bool Unrolled = false;
+        for (unsigned Bound = 0; Bound <= Opts.ConfirmBound; ++Bound) {
+          VFunction Copy = LoopUnroller::unroll(Bounded, Bound);
+          Passivizer Unrolling;
+          Unrolling.setFunctionMap(InterfaceMap);
+          auto Lowered = buildObligationModule(Unrolling.run(Copy));
+          if (!Lowered) {
+            llvm::consumeError(Lowered.takeError());
+            return Notes;
+          }
+          auto Simplified = simplifyObligationModule(std::move(*Lowered));
+          if (!Simplified) {
+            llvm::consumeError(Simplified.takeError());
+            return Notes;
+          }
+          ObligationModule Module = std::move(*Simplified);
+          Module.BMCTransform = BMCTransformProvenance{Bound};
+          annotateObligationSources(Module);
+          bool Copies = false;
+          bool CopiesHold = true;
+          bool Unwound = true;
+          for (VerifyResult &Result : Unroller.verifyObligations(Module)) {
+            if (Result.ObligationType == ObligationKind::Unwinding) {
+              Unwound &= Result.Status == VerifyStatus::Verified;
+              continue;
+            }
+            if (!copyOfFailure(Result))
+              continue;
+            Copies = true;
+            if (Result.Status == VerifyStatus::Failed &&
+                Result.Reason == VerifyReason::Counterexample) {
+              Notes.push_back(
+                  "an execution fails this check " +
+                  (Bound == 0
+                       ? std::string("with no iteration of any loop")
+                       : "within " + iterations(Bound) + " of each loop") +
+                  (Result.Message.empty()
+                       ? std::string()
+                       : " (counterexample: " + Result.Message + ")"));
+              return Notes;
+            }
+            CopiesHold &= Result.Status == VerifyStatus::Verified;
+          }
+          Unrolled |= Copies;
+          if (!CopiesHold)
+            return Notes;
+          if (Copies && Unwound) {
+            Notes.push_back(
+                "no execution fails this check: every loop ends within " +
+                iterations(Bound) +
+                ", and unrolling proves it there; the "
+                "loops' invariants are too weak for an unbounded proof");
+            return Notes;
+          }
+        }
+        if (Unrolled)
+          Notes.push_back("no execution fails this check within " +
+                          iterations(Opts.ConfirmBound) + " of each loop");
+        return Notes;
+      };
       Passivizer P;
       P.setFunctionMap(InterfaceMap);
       auto proves = [&](PassiveProgram Smoke) {
@@ -4652,6 +4775,7 @@ public:
           Msg += backendSuffix(R);
           Diags.push_back(
               {VerifyDiagnostic::Error, Msg, R.Location, Fn->Name, R});
+          Diags.back().Notes = failureNotes(*Fn, R);
         } else {
           const bool FallbackExported = R.Status == VerifyStatus::Unresolved &&
                                         exportLeanFallback(Module, Fn->Name, R);
@@ -5585,6 +5709,12 @@ public:
             ? "error"
             : "note";
     Record["message"] = jsonText(D.Message);
+    if (!D.Notes.empty()) {
+      llvm::json::Array Notes;
+      for (const std::string &Note : D.Notes)
+        Notes.push_back(jsonText(Note));
+      Record["notes"] = std::move(Notes);
+    }
     if (!D.FunctionName.empty())
       Record["function"] = jsonText(D.FunctionName);
 
@@ -5931,6 +6061,8 @@ public:
              << PLoc.getColumn() << ": ";
         OS << "note: " << InstantiationNote << "\n";
       }
+      for (const std::string &Note : D.Notes)
+        OS << "note: " << Note << "\n";
     }
   }
 };
