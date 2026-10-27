@@ -173,10 +173,24 @@ since the callee may read it first.
    Verified: copy_to [backend=z3]
    Verified: seven [backend=z3]
    Verified: five_or_zero [backend=z3]
-   out.cpp:48:3: error: verification failed: read_after_miss [...::initialization@48:3] (...) [backend=z3] [reason=counterexample]
+   out.cpp:48:3: error: verification failed: read_after_miss [initialization] [backend=z3] [reason=counterexample]
+      48 |   return a;
+         |   ^
+   out.cpp:46:3: note: creates a local object at address 4
+      46 |   int a;
+         |   ^
+   out.cpp:47:3: note: calls try_get(4, false)
+      47 |   try_get(a, false);
+         |   ^
    Verified: copied [backend=z3]
    out.cpp:65:3: Unresolved: copied_garbage [backend=z3] [reason=construct.unsupported] (the verifier cannot model a construct here: binding a reference or pointer parameter to storage that is not initialized, which the callee may read before writing it)
-   out.cpp:74:3: error: verification failed: read_too_early [...::initialization@74:3] (...) [backend=z3] [reason=counterexample]
+   out.cpp:74:3: error: verification failed: read_too_early [initialization] [backend=z3] [reason=counterexample]
+      74 |   int copy = r;
+         |   ^
+   out.cpp:74:3: note: counterexample: &r = 4
+   out.cpp:72:3: note: creates a local object at address 4
+      72 |   int a;
+         |   ^
 
 - ``copy_to``'s ``to`` is an out-parameter and ``from`` an input:
   ``copied_garbage`` passes ``b`` uninitialized, which ``copy_to`` reads.
@@ -413,7 +427,11 @@ a pointer into an object the caller may write:
    Verified: put [backend=z3]
    Verified: set_third [backend=z3]
    Verified: set_through_copy [backend=z3]
-   frames.cpp:30:3: error: verification failed: set_fourth [...::frame@30:3] (counterexample: a [ssa=a_0] [type=pointer] = 1; trace: call.put@30:3 arg0=13 arg1=5) [backend=z3] [reason=counterexample]
+   frames.cpp:30:3: error: verification failed: set_fourth [frame] [backend=z3] [reason=counterexample]
+      30 |   put(a + 3, 5);
+         |   ^
+   frames.cpp:30:3: note: counterexample: a = 1
+   frames.cpp:30:3: note: calls put(13, 5)
 
 ``set_fourth`` may write only ``a[2]``, at address 9 when ``a`` is 1, but
 passes ``a + 3``, address 13. A pointer-taking
@@ -528,7 +546,10 @@ end but may not start one before the beginning:
 .. code-block:: text
 
    Verified: total [backend=z3]
-   walk.cpp:22:3: error: verification failed: back_one [...] (counterexample: ...) [backend=z3] [reason=counterexample]
+   walk.cpp:22:3: error: verification failed: back_one [bounds] [backend=z3] [reason=counterexample]
+      22 |   --q;
+         |   ^
+   walk.cpp:22:3: note: counterexample: a = 1, n = 1, q = 1
 
 The value of a step inside an expression, as in ``*q++`` or
 ``while (*q++ != 0)``, is not supported yet: write the read and the step as
@@ -577,7 +598,10 @@ Each index must lie in its array, an obligation of kind ``bounds``:
 
    Verified: popcount8 [backend=z3]
    Verified: hex_digit [backend=z3]
-   tables.cpp:21:3: error: verification failed: outside [...::bounds@21:3] (counterexample: x [ssa=x_0] [type=i32] = ...) [backend=z3] [reason=counterexample]
+   tables.cpp:21:3: error: verification failed: outside [bounds] [backend=z3] [reason=counterexample]
+      21 |   return NibbleBits[x];
+         |   ^
+   tables.cpp:21:3: note: counterexample: x = -1
 
 The verifier gives each table to the solver as a function of the index,
 defined by a balanced tree of comparisons, so a 256-entry table is eight
@@ -687,7 +711,10 @@ with one null operand is undefined and fails:
 .. code-block:: text
 
    Verified: two_nulls [backend=z3]
-   nulls.cpp:11:3: error: verification failed: one_null [...::pointer-difference@11:3] (counterexample: p [ssa=p_0] [type=pointer] = 0, q [ssa=q_0] [type=pointer] = 1; ...) [backend=z3] [reason=counterexample]
+   nulls.cpp:11:3: error: verification failed: one_null [pointer-difference] [backend=z3] [reason=counterexample]
+      11 |   return p - q;
+         |   ^
+   nulls.cpp:11:3: note: counterexample: p = 0, q = 1
 
 Before 0.2, ``two_nulls`` failed the same way.
 
@@ -764,7 +791,10 @@ type:
 .. code-block:: text
 
    Verified: get [backend=z3]
-   error: verification failed: past_end [...::bounds@10:10]
+   example.cpp:10:10: error: verification failed: past_end [bounds] [backend=z3] [reason=counterexample]
+      10 | { return p[n]; }
+         |          ^
+   example.cpp:10:10: note: counterexample: p = 1, n = 1
 
 The marker means ``n >= 0``. A positive extent also means ``p`` is non-null and
 abstractly valid; an extent of zero permits null. Every ``p[i]`` or ``*(p + i)``
@@ -981,7 +1011,11 @@ where it points; the elements must lie in the objects it may address:
 
    Verified: first [backend=z3]
    Verified: second [backend=z3]
-   slices.cpp:20:3: error: verification failed: third [...::bounds@20:3] (counterexample: a [ssa=a_0] [type=pointer] = 1, q [ssa=q_1] [type=pointer] = 9; trace: call.first@20:3 arg0=9 arg1=3) [backend=z3] [reason=counterexample]
+   slices.cpp:20:3: error: verification failed: third [bounds] [backend=z3] [reason=counterexample]
+      20 |   return first(q, 3);
+         |   ^
+   slices.cpp:20:3: note: counterexample: a = 1, q = 9
+   slices.cpp:20:3: note: calls first(9, 3)
 
 ``third`` passes three elements from ``a + 2``, of which only two are in
 ``a``: with ``a`` at address 1, ``q`` is 9, and the call would read up to
