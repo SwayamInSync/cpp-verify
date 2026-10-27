@@ -2242,6 +2242,10 @@ logical-function declarations with compact step definitions and exact finite
 fuel levels. Layer 3 dumps this exact module; Layer 4 and ordinary verification
 encode the same in-memory object. There is no separate dump-only
 weakest-precondition implementation and no backend may borrow VCR declarations.
+`--dump-smt2=DIR` writes each query a solver checks, as that solver received
+it, as a standalone SMT-LIB script with the solver's options as commands and
+the answer cpp-verify got, named by the function, the obligation, and a hash
+of the script.
 
 Diagnostic metadata is non-semantic: names, source ranges, internal positional
 and public source-anchored IDs, and trace events survive archive replay but do
