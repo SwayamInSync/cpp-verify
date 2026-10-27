@@ -17,11 +17,11 @@
 # RUN: not %cpp-verify --backend=lean --lean-out=%t.lean %S/Inputs/per_function_errors.cpp -- 2>&1 \
 # RUN:   | FileCheck %s --check-prefix=LEAN
 
-TEXT: per_function_errors.cpp:11:14: error: pick: unsupported statement: CXXThrowExpr
+TEXT: per_function_errors.cpp:11:14: error: pick: throw is unsupported: exceptions are not modeled
 TEXT: per_function_errors.cpp:27:37: error: lookup: the global array 'table' is unsupported
-TEXT: per_function_errors.cpp:41:14: error: choice: unsupported statement: CXXThrowExpr
-TEXT: per_function_errors.cpp:64:14: error: zero_lemma: unsupported statement: CXXThrowExpr
-TEXT: per_function_errors.cpp:79:14: error: step: unsupported statement: CXXThrowExpr
+TEXT: per_function_errors.cpp:41:14: error: choice: throw is unsupported: exceptions are not modeled
+TEXT: per_function_errors.cpp:64:14: error: zero_lemma: throw is unsupported: exceptions are not modeled
+TEXT: per_function_errors.cpp:79:14: error: step: throw is unsupported: exceptions are not modeled
 TEXT-NOT: {{(Verified|Unresolved): (spec [a-z]+: )?(pick|lookup|choice|zero_lemma|step) }}
 TEXT: Unresolved: uses_pick [backend=z3] [reason=callee.contract] (relies on the contract of pick (it uses a construct the verifier does not support), which is not established)
 TEXT-NEXT: per_function_errors.cpp:36:3: Unresolved: uses_lookup [backend=z3] [reason=construct.unsupported] (the verifier cannot model a construct here: a call of lookup, whose contract is not available)
@@ -34,7 +34,7 @@ TEXT-NEXT: Verified: spec axiom: twice
 TEXT-NEXT: Verified: uses_twice [backend=z3]
 TEXT-NOT: {{.}}
 
-JSON: {"function":"pick","message":"pick: unsupported statement: CXXThrowExpr","reason":"construct.unsupported",{{.*}}"line":11},"status":"unresolved"}
+JSON: {"function":"pick","message":"pick: throw is unsupported: exceptions are not modeled","reason":"construct.unsupported",{{.*}}"line":11},"status":"unresolved"}
 JSON: {"function":"lookup","message":"lookup: the global array 'table' is unsupported","reason":"construct.unsupported",{{.*}}"status":"unresolved"}
 JSON-NEXT: {"function":"lookup","message":"lookup: unsupported expression in pre",{{.*}}"status":"error"}
 JSON: {"backend":"z3","function":"uses_pick",{{.*}}"reason":"callee.contract",{{.*}}"status":"unresolved"}
@@ -44,7 +44,7 @@ BMC: Unresolved: uses_pick [backend=bmc, bound=0] [reason=callee.contract]
 BMC: Verified: inc [backend=bmc, bound=0]
 BMC: Verified: uses_twice [backend=bmc, bound=0]
 
-LEAN: per_function_errors.cpp:11:14: error: pick: unsupported statement: CXXThrowExpr
+LEAN: per_function_errors.cpp:11:14: error: pick: throw is unsupported: exceptions are not modeled
 LEAN: Exported: lean obligation: uses_pick
 LEAN: per_function_errors.cpp:49:5: Unresolved: uses_choice [reason=construct.unsupported]
 LEAN: Exported: lean obligation: inc
