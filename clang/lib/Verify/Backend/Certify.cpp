@@ -3744,6 +3744,7 @@ CertifyResult verify::certifyCounterexample(const ObligationModule &Module,
                                             const LogicExpr &Query,
                                             CandidateModel &Model,
                                             const CertifyLimits &Limits) {
+  TimeInto Checking(Limits.Times ? &Limits.Times->Certification : nullptr);
   CertifyResult Result;
   auto Run = [&] {
     Evaluator Definitions(Module, Model, Limits, View::Definitions);
