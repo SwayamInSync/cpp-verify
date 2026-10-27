@@ -21,7 +21,7 @@
 # RUN:   %S/Inputs/solver_process_valid.cpp -- 2>&1 | FileCheck %s --check-prefix=MALFORMED
 # RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.large \
 # RUN:   %S/Inputs/solver_process_valid.cpp -- 2>&1 | FileCheck %s --check-prefix=OUTPUT-LIMIT
-# RUN: %python -c "import pathlib, subprocess, time; start = time.monotonic(); p = subprocess.run([r'%cpp-verify', '--backend=cvc5', '--cvc5-path=%t.stream', '--timeout=5', r'%S/Inputs/solver_process_valid.cpp', '--'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True); pathlib.Path(r'%t.stream.out').write_text(p.stdout); assert p.returncode != 0 and time.monotonic() - start < 3"
+# RUN: %python -c "import pathlib, subprocess, time; start = time.monotonic(); p = subprocess.run([r'%cpp-verify', '--backend=cvc5', '--cvc5-path=%t.stream', '--timeout=5000', r'%S/Inputs/solver_process_valid.cpp', '--'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True); pathlib.Path(r'%t.stream.out').write_text(p.stdout); assert p.returncode != 0 and time.monotonic() - start < 5"
 # RUN: FileCheck %s --check-prefix=STREAM-LIMIT < %t.stream.out
 # RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.stderr \
 # RUN:   %S/Inputs/solver_process_valid.cpp -- 2>&1 | FileCheck %s --check-prefix=STDERR

@@ -47,6 +47,10 @@ elif mode == "trailing":
 elif mode == "large":
     print("x" * (64 * 1024 + 1))
 elif mode == "stream":
+    # Past the output limit at once, so that the limit, not the timeout,
+    # ends the process however slowly Python starts; then without end.
+    sys.stdout.write("x" * (64 * 1024 + 1))
+    sys.stdout.flush()
     while True:
         sys.stdout.write("x" * 4096)
         sys.stdout.flush()
