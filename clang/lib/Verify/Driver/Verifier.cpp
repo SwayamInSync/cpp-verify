@@ -1187,6 +1187,20 @@ static std::string obligationTag(const VerifyResult &Result) {
   return Result.ObligationId.empty() ? "" : " [" + Result.ObligationId + "]";
 }
 
+/// The backend a lowering reports, as lower-only names it.
+static std::string backendName(BackendKind Kind) {
+  return Kind == BackendKind::CVC5        ? "cvc5"
+         : Kind == BackendKind::Portfolio ? "portfolio"
+         : Kind == BackendKind::Race      ? "race"
+                                          : "z3";
+}
+
+static std::string lowerFailure(BackendKind Kind) {
+  return Kind == BackendKind::Z3 || Kind == BackendKind::BMC
+             ? "Z3 lowering failed: "
+             : "backend lowering failed: ";
+}
+
 static std::string backendSuffix(const VerifyResult &Result) {
   std::string Suffix;
   if (!Result.BackendName.empty()) {
@@ -2923,6 +2937,16 @@ class Verifier {
   llvm::Expected<std::string> archiveRecord(const ObligationModule &Module) {
     if (!Opts.ObligationOut)
       return std::string();
+    // A record states each term in full, a subterm that goals share at each
+    // of its places.
+    if (Opts.MaxQueryNodes != 0 &&
+        obligationModuleTreeNodesUpTo(Module, Opts.MaxQueryNodes) >
+            Opts.MaxQueryNodes)
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "its record would state more than %llu expression nodes, the limit "
+          "(--max-query-nodes)",
+          static_cast<unsigned long long>(Opts.MaxQueryNodes));
 
     std::string Serialized = serializeObligationModule(Module);
     auto RoundTrip = deserializeObligationModules(Serialized);
@@ -3068,6 +3092,7 @@ class Verifier {
   void checkCalleeRecommendsOnFailure(const VFunction &Caller,
                                       const FunctionMap &FnMap,
                                       VerifyBackend &Backend) {
+    NodeBudget::Limit NodeLimit(Opts.MaxQueryNodes);
     std::vector<const VSpecCallExpr *> Calls;
     collectSpecCallsInFunction(Caller, Calls);
     for (const VSpecCallExpr *C : Calls) {
@@ -3095,7 +3120,7 @@ class Verifier {
       if (PP.ExitAsserts.empty())
         continue;
       PP.CallerIntMode = Caller.IntMode;
-      auto Module = buildObligationModule(PP);
+      auto Module = buildObligationModule(PP, Opts.MaxQueryNodes);
       if (!Module) {
         Diags.push_back({VerifyDiagnostic::Unresolved,
                          "recommends lowering failed for " + Caller.Name +
@@ -3397,12 +3422,15 @@ public:
       LeanOut = LeanFile.get();
     }
 
+    // Z3 runs in this process, so its limit covers all its queries.
+    setZ3MemoryLimit(Opts.MemoryLimitMB);
     BackendExecutionOptions Execution;
     Execution.SolverTimeoutMs = Opts.SolverTimeoutMs;
     Execution.CollectionTimeoutMs = Opts.CollectionTimeoutMs;
     Execution.CertifyTimeoutMs = Opts.CertifyTimeoutMs;
     Execution.SolverResourceLimit = Opts.SolverResourceLimit;
     Execution.MaxQueryNodes = Opts.MaxQueryNodes;
+    Execution.MemoryLimitMB = Opts.MemoryLimitMB;
     Execution.IntegerEncoding = Opts.IntegerEncoding;
     Execution.SkipWholeModuleRetry = !Opts.LeanFallbackProjectPath.empty();
     Execution.MaxFailures = Opts.MaxFailures;
@@ -3615,6 +3643,29 @@ public:
                                        R, &In, Label, Kind, Index});
         explainUnsettled(R, In, Checked);
       };
+      // What the function's verification builds is bounded by the node
+      // limit. Past it the function is too large: a verdict, which the
+      // verdicts relying on its contract take into account.
+      NodeBudget::Limit NodeLimit(Opts.MaxQueryNodes);
+      auto tooLarge = [&](const VFunction &In,
+                          const ObligationSizeError &Size) {
+        VerifyResult Limited;
+        Limited.Status = VerifyStatus::Unresolved;
+        Limited.Reason = VerifyReason::QuerySizeLimit;
+        Limited.BackendName = backendName(Opts.Backend);
+        Limited.Message = Size.message();
+        AllOk = false;
+        AnyFailed = true;
+        if (!Opts.LowerOnly && !In.IsProof)
+          FailedCallers.insert(In.Identity);
+        std::string Message =
+            (Opts.LowerOnly ? lowerFailure(Opts.Backend) : std::string()) +
+            In.Name + backendSuffix(Limited) + " (" + Limited.Message + ")";
+        Diags.push_back({Opts.LowerOnly ? VerifyDiagnostic::Error
+                                        : VerifyDiagnostic::Unresolved,
+                         std::move(Message), In.DeclLoc, In.Name,
+                         std::move(Limited)});
+      };
       llvm::raw_string_ostream DumpStream(Run.Dump);
       llvm::raw_ostream *DumpOS = this->DumpOS ? &DumpStream : nullptr;
       std::unique_ptr<VerifyBackend> OwnBackend;
@@ -3812,7 +3863,7 @@ public:
       Passivizer P;
       P.setFunctionMap(InterfaceMap);
       auto proves = [&](PassiveProgram Smoke) {
-        auto Lowered = buildObligationModule(Smoke);
+        auto Lowered = buildObligationModule(Smoke, Opts.MaxQueryNodes);
         if (!Lowered) {
           llvm::consumeError(Lowered.takeError());
           return false;
@@ -3826,8 +3877,10 @@ public:
                VerifyStatus::Verified;
       };
       auto unreachable = [&](const PassiveProgram &Program, bool EntryOnly) {
-        auto Lowered = buildObligationModule(smokeProgram(
-            Program, EntryOnly ? 0 : Program.Stmts.size(), falseGoal()));
+        auto Lowered = buildObligationModule(
+            smokeProgram(Program, EntryOnly ? 0 : Program.Stmts.size(),
+                         falseGoal()),
+            Opts.MaxQueryNodes);
         if (!Lowered) {
           llvm::consumeError(Lowered.takeError());
           return false;
@@ -4062,11 +4115,20 @@ public:
                  SourceLocation(), Fn->Name});
           if (!UBError) {
             SpecInliner Inliner(FnMap, PreparedFn->SpecFuel);
+            NodeBudget Inlining;
             if (isDeductiveBackend(Opts.Backend) ||
                 Opts.Backend == BackendKind::Lean)
               Inliner.prepareFunctionAxiomatic(*PreparedFn);
             else
               Inliner.prepareFunction(*PreparedFn);
+            if (Inlining.exceeded()) {
+              tooLarge(*Fn, ObligationSizeError(
+                                "its specs inlined as deep as their fuel",
+                                Inlining.built(), Inlining.limit(),
+                                "lower the fuel cppverify::reveal_with_fuel "
+                                "gives, or raise the limit"));
+              continue;
+            }
           }
           WorkFn = &*PreparedFn;
           if (!UBError && Opts.Backend == BackendKind::BMC && Opts.LowerOnly) {
@@ -4098,7 +4160,8 @@ public:
           if (!Missing.empty()) {
             ReadsError = "calls " + Missing +
                          ", which reads the heap without a reads clause";
-          } else if (auto Lowered = buildObligationModule(ReadsPP)) {
+          } else if (auto Lowered =
+                         buildObligationModule(ReadsPP, Opts.MaxQueryNodes)) {
             if (auto Simplified = simplifyObligationModule(std::move(*Lowered)))
               ReadsModule = std::move(*Simplified);
             else
@@ -4196,7 +4259,8 @@ public:
           std::string PostError;
           if (auto Lowered = buildObligationModule(
                   withClauseProofs(buildSpecPostChecks(*Fn, FnMap), *Fn,
-                                   {VFunction::ClauseProof::Post}, FnMap))) {
+                                   {VFunction::ClauseProof::Post}, FnMap),
+                  Opts.MaxQueryNodes)) {
             if (auto Simplified = simplifyObligationModule(std::move(*Lowered)))
               PostModule = std::move(*Simplified);
             else
@@ -4317,7 +4381,8 @@ public:
           std::string Error;
           if (auto Lowered = buildObligationModule(
                   withClauseProofs(buildInductionChecks(*Fn, FnMap), *Fn,
-                                   {VFunction::ClauseProof::Post}, FnMap))) {
+                                   {VFunction::ClauseProof::Post}, FnMap),
+                  Opts.MaxQueryNodes)) {
             if (auto Simplified = simplifyObligationModule(std::move(*Lowered)))
               Induction = std::move(*Simplified);
             else
@@ -4417,7 +4482,8 @@ public:
                                   Kind>{VFunction::ClauseProof::Post,
                                         VFunction::ClauseProof::Decreases},
               FnMap);
-          auto DecModuleOrErr = buildObligationModule(DecPP);
+          auto DecModuleOrErr =
+              buildObligationModule(DecPP, Opts.MaxQueryNodes);
           // A spec's postcondition is proved with its termination.
           const std::string &Shown = Step ? Fn->InductiveStepOf : Fn->Name;
           const bool Quiet = Fn->IsBuiltin || Step;
@@ -4601,7 +4667,8 @@ public:
             Passivizer BoundPassivizer;
             BoundPassivizer.setFunctionMap(InterfaceMap);
             PassiveProgram BoundProgram = BoundPassivizer.run(*UnrolledFn);
-            auto BoundModuleOrErr = buildObligationModule(BoundProgram);
+            auto BoundModuleOrErr =
+                buildObligationModule(BoundProgram, Opts.MaxQueryNodes);
             if (!BoundModuleOrErr) {
               AllOk = false;
               AnyFailed = true;
@@ -4678,14 +4745,23 @@ public:
           Module = std::move(*BMCModule);
           Simplification = BMCSimplification;
         } else {
-          auto ModuleOrErr = buildObligationModule(PP);
+          auto ModuleOrErr = buildObligationModule(PP, Opts.MaxQueryNodes);
           if (!ModuleOrErr) {
             AllOk = false;
             AnyFailed = true;
-            Diags.push_back({VerifyDiagnostic::Unresolved,
-                             "obligation lowering failed: " + Fn->Name + " (" +
-                                 llvm::toString(ModuleOrErr.takeError()) +
-                                 ")"});
+            bool Limited = false;
+            llvm::Error Error = llvm::handleErrors(
+                ModuleOrErr.takeError(), [&](const ObligationSizeError &Size) {
+                  tooLarge(*Fn, Size);
+                  Limited = true;
+                });
+            if (Limited)
+              llvm::consumeError(std::move(Error));
+            else
+              Diags.push_back({VerifyDiagnostic::Unresolved,
+                               "obligation lowering failed: " + Fn->Name +
+                                   " (" + llvm::toString(std::move(Error)) +
+                                   ")"});
             continue;
           }
           auto SimplifiedModule = simplifyObligationModule(
@@ -4742,12 +4818,7 @@ public:
           if (Lowered.Status != VerifyStatus::Lowered) {
             AllOk = false;
             AnyFailed = true;
-            std::string Message =
-                std::string(Opts.Backend == BackendKind::Z3 ||
-                                    Opts.Backend == BackendKind::BMC
-                                ? "Z3"
-                                : "backend") +
-                " lowering failed: " + Fn->Name;
+            std::string Message = lowerFailure(Opts.Backend) + Fn->Name;
             Message += backendSuffix(Lowered);
             if (!Lowered.Message.empty())
               Message += " (" + Lowered.Message + ")";
@@ -4762,11 +4833,7 @@ public:
         if (Opts.LowerOnly) {
           VerifyResult Result;
           Result.Status = VerifyStatus::Lowered;
-          Result.BackendName = Opts.Backend == BackendKind::CVC5 ? "cvc5"
-                               : Opts.Backend == BackendKind::Portfolio
-                                   ? "portfolio"
-                               : Opts.Backend == BackendKind::Race ? "race"
-                                                                   : "z3";
+          Result.BackendName = backendName(Opts.Backend);
           Diags.push_back({VerifyDiagnostic::Lowered, Fn->Name,
                            SourceLocation(), Fn->Name, std::move(Result)});
           continue;
@@ -4783,7 +4850,8 @@ public:
           Passivizer Again;
           Again.setFunctionMap(InterfaceMap);
           Again.setUnfoldingDepth(Depth, WithFuel);
-          auto Built = buildObligationModule(Again.run(*WorkFn));
+          auto Built =
+              buildObligationModule(Again.run(*WorkFn), Opts.MaxQueryNodes);
           if (!Built) {
             llvm::consumeError(Built.takeError());
             return false;
@@ -5824,6 +5892,7 @@ public:
       std::vector<char> CutShort(Confirmations.size());
       std::vector<uint64_t> ConfirmationTimes(Confirmations.size());
       auto confirm = [&](size_t I) {
+        NodeBudget::Limit NodeLimit(Opts.MaxQueryNodes);
         const FunctionRun::Confirmation &Pending = Confirmations[I];
         const VerifyDiagnostic &Verdict = Diags[Pending.Index];
         if (Verdict.K != VerifyDiagnostic::Unresolved ||

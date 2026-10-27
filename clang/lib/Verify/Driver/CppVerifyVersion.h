@@ -16,8 +16,10 @@ inline constexpr llvm::StringLiteral LeanToolchain = "leanprover/lean4:v4.35.0";
 inline constexpr llvm::StringLiteral EarlierLeanToolchains[] = {
     "leanprover/lean4:v4.32.2"};
 
-/// The cvc5 release the test suite runs with.
-inline constexpr llvm::StringLiteral CVC5TestedVersion = "1.1.2";
+/// The oldest and newest cvc5 releases the test suite runs with: CI tests
+/// the release build with one and the assertions build with the other.
+inline constexpr llvm::StringLiteral CVC5OldestTestedVersion = "1.1.2";
+inline constexpr llvm::StringLiteral CVC5NewestTestedVersion = "1.4.2";
 
 /// Prints cpp-verify's version, the LLVM release it is built on, and each
 /// verification backend: the linked Z3, and the cvc5 and Lean programs a
