@@ -49,4 +49,4 @@ cppverify::proof void nonterminating_proof(int n)
 // VERIFY-DAG: Verified: spec decreases: terminating_after_branch
 // VERIFY-DAG: error: spec decreases failed: nonterminating_descent
 // VERIFY-DAG: error: spec decreases failed: nonterminating_after_branch
-// VERIFY-DAG: error: verification failed: nonterminating_proof [{{.*}}::termination@
+// VERIFY-DAG: error: verification failed: nonterminating_proof [termination]
