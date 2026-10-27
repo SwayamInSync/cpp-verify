@@ -49,7 +49,10 @@
 #
 # RUN: not %cpp-verify --jobs=1 %S/Inputs/backend_parallel_fail.cpp -- > %t.serial 2>&1
 # RUN: not %cpp-verify --jobs=4 %S/Inputs/backend_parallel_fail.cpp -- > %t.parallel 2>&1
-# RUN: diff %t.serial %t.parallel
+# The summary's time may differ between runs.
+# RUN: sed 's/ in [0-9.]* s$//' %t.serial > %t.serial.untimed
+# RUN: sed 's/ in [0-9.]* s$//' %t.parallel > %t.parallel.untimed
+# RUN: diff %t.serial.untimed %t.parallel.untimed
 #
 # RUN: %cpp-verify --obligation-out=%t.obligations \
 # RUN:   %S/Inputs/backend_cache_base.cpp --
