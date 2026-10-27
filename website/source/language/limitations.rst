@@ -209,10 +209,6 @@ function is ``Unresolved`` with reason ``construct.unsupported``, while the
 other functions of the file are verified (:doc:`tooling`). A few forms are
 rejected this way inside otherwise supported code:
 
-- a local that shadows another (``local variable shadowing is unsupported:
-  x``): rename one of them;
-- ``++`` and ``--`` on a pointer (``pointer increment/decrement is
-  unsupported``): write ``q = q + 1``;
 - storing a whole record through a pointer, ``*p = r`` (``unsupported
   aggregate assignment``): assign its fields; assigning one local record to
   another is supported;

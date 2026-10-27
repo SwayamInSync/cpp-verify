@@ -211,6 +211,37 @@ which the verifier derives from the non-overlap as plain integer arithmetic
 (``d + j < d + n <= s <= s + i``), because addresses are modeled as mathematical
 integers rather than wrapping machine words.
 
+A loop may also walk a pointer, as C++ code usually does. ``++q``, ``q++``,
+``q += n``, and their decrements are the assignments they abbreviate, and each
+step is checked to stay in the object ``q`` addresses, one past its end
+included; the invariant ties the pointer to a position:
+
+.. code-block:: cpp
+
+   int count_zeros(const int *a, int n)
+     cv::pre(valid(a, n) && 0 <= n && n <= 1000)
+     cv::post(0 <= cv::result && cv::result <= n)
+   {
+     int zeros = 0;
+     int i = 0;
+     for (const int *q = a; q != a + n; ++q)
+       cv::invariant(0 <= i && i <= n && q == a + i && 0 <= zeros && zeros <= i)
+       cv::decreases(n - i)
+     {
+       if (*q == 0)
+         zeros++;
+       i++;
+     }
+     return zeros;
+   }
+
+.. code-block:: text
+
+   Verified: count_zeros [backend=z3]
+
+The value of a step inside an expression, as in ``*q++``, is not supported
+yet: read ``*q``, then step ``q`` in a statement of its own.
+
 Records through pointers
 ------------------------
 

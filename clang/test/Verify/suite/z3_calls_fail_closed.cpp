@@ -36,13 +36,6 @@ int reads_global_state()
   return *global_state;
 }
 
-int *unsupported_pointer_compound(int *pointer)
-  cppverify::post(cppverify::result == cppverify::result)
-{
-  pointer += 1;
-  return pointer;
-}
-
 long unsupported_pointer_difference(int *left, int *right)
   cppverify::post(cppverify::result == cppverify::result)
 {
@@ -78,7 +71,6 @@ int unsupported_recursive_exec(int n)
 
 // VERIFY-DAG: error: calls_uncontracted: call to function without a verification contract: opaque_side_effect
 // VERIFY-DAG: error: reads_global_state: only scalar integral global variables are supported: global_state
-// VERIFY-DAG: error: unsupported_pointer_compound: pointer compound assignment is unsupported
 // VERIFY-DAG: error: unsupported_forged_pointer: unsupported explicit pointer or aggregate cast
 // VERIFY-DAG: error: unsupported_evaluated_expression: unsupported expression statement
 // VERIFY-DAG: error: unsupported_cross_type_alias: aliases between different pointee types are unsupported
