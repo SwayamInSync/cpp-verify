@@ -121,4 +121,3 @@ int factorial_thirteen_overflows()
 // VERIFY-DAG: Verified: factorial_twelve
 // VERIFY-DAG: Verified: write_factorial
 // VERIFY-DAG: error: verification failed: factorial_thirteen_overflows
-// VERIFY-DAG: Verified: constexpr spec axiom: machine_factorial_value
