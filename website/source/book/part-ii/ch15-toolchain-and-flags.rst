@@ -47,6 +47,10 @@ Other flags
 - ``cpp-verify --function=PATTERN`` — report only the functions whose names
   match a glob pattern (repeatable), with the same verdicts as a whole run:
   what they rely on is verified too, and nothing else that is executable
+- ``cpp-verify --time-report`` — after the verdicts, where the run and each
+  function spent their time (lowering, solving, induction, certification,
+  confirmation), the busiest function first; on a terminal a progress line
+  counts the functions done (``--progress`` shows it anywhere)
 - ``cpp-verify --confirm-bound=N`` — for a failure whose counterexample passes
   through a loop, unroll each loop up to ``N`` iterations (default 10, ``0``
   skips it) to find an execution that fails or prove that none does (see
