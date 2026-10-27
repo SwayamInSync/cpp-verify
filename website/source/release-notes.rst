@@ -497,6 +497,18 @@ check that fails. A failure of a function whose loop has no
 ``cppverify::decreases`` names that loop too
 (:doc:`language/functions-loops`).
 
+**Contracts across files.** A contract declared in a header and defined in
+another file left every caller ``Unresolved [callee.contract]``, even when
+one run verified both files, and the warning's advice,
+``[[cppverify::trusted]]`` on the declaration, also stopped the verification
+of the definition, which inherited the mark, so a wrong body was never
+checked. Now one run over several files settles such a contract: a proof
+that rests on it stands once the verification of its definition in another
+file establishes it, and is ``Unresolved`` with ``callee.contract``
+otherwise, naming the file. A definition is trusted only by a mark of its
+own, so a trusted header declaration no longer hides it
+(:doc:`language/functions-loops`).
+
 **Every failure of a function.** A function reported only its first failing
 check. ``--max-failures=N`` reports the first ``N`` (``0``: every one), each
 with its own counterexample and notes; a check after a failure is reported
