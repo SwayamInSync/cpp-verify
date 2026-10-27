@@ -147,6 +147,7 @@ VExpr =
   | HeapFrame(before, after, [(lo, hi)])          // passive frame relation
   | SpecCall(identity, args: [VExpr], type)
   | OverflowCheck(op, lhs, rhs?)
+  | Require(cond, kind)                           // true; evaluating it requires cond
   | Forall(binder: VarDecl, lo: VExpr?, hi: VExpr?, body: VExpr)
   | Exists(binder: VarDecl, lo: VExpr?, hi: VExpr?, body: VExpr)
   | Old(inner: VExpr)
@@ -444,6 +445,16 @@ call argument for a machine parameter, or a return value.
 
 **HeapFrame:** produced by passivization only: `after` equals `before` at
 every address outside the half-open regions.
+
+**Require:** produced by the spec inliner only, from the `assert`
+statements of a lifted `constexpr` helper's body (`evalBodySeq`): on the
+path `g` to `assert(c)` it adds `Require(!g || c, kind)` to the evaluation
+trace that each call's definedness check unfolds, so the passivizer's
+definedness collection asserts `!g || c` with the statement's kind at the
+call. Its value is `true`, so the lifted definition does not change. A
+call that does not return is `assert false` (kind `unreachable`) followed by
+`assume false` in the converter, and the unfolding gives the helper any
+value on that path.
 
 ### Statements (VStmt)
 
