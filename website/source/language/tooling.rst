@@ -34,6 +34,8 @@ Standalone verifier
    cpp-verify --jobs=4 --proof-cache=.cppverify-cache file.cpp
    cpp-verify --solver-rlimit=500000 --max-query-nodes=50000 file.cpp
    cpp-verify --diagnostics-format=json file.cpp
+   cpp-verify --diagnostics-format=sarif file.cpp > results.sarif
+   cpp-verify --diagnostics-format=github file.cpp
    cpp-verify --dump-ir=1,2,3,4 file.cpp
    cpp-verify --lower-only --dump-ir=1,2,3,4 file.cpp
    cpp-verify --lower-only --obligation-out=goals.cpv file.cpp
@@ -237,9 +239,9 @@ bounded-safe, trusted, lowered, exported, interrupted), gives the reasons of
 the unresolved ones (``2 unresolved (spec.fuel 1, solver.timeout 1)``), and
 the time the run took. A function the verifier does not represent counts as
 unresolved, ``construct.unsupported``. The summary covers every file of the
-run, and is left out of ``--diagnostics-format=json``, whose records are the
-whole output, of ``--list-functions``, and of archive replay
-(``--obligation-in``), which prints a line per module.
+run. In JSON it is the last record, and in SARIF a property of the run (see
+`Structured diagnostics`_); ``--list-functions`` and archive replay
+(``--obligation-in``), which prints a line per module, have none.
 
 - ``--quiet`` prints only what needs attention: failures, unresolved results,
   errors, warnings, bounded results, and interrupted functions, then the
@@ -695,9 +697,12 @@ Backends
    * - ``--proof-cache-max-entries=N``
      - Bound the number of proof-cache records (default 100000; ``0`` disables
        the entry limit). Requires ``--proof-cache``.
-   * - ``--diagnostics-format={text,json}``
-     - Select Clang-style text (default) or versioned JSON Lines for verification
-       results. JSON records use schema ``cppverify.diagnostic/1``.
+   * - ``--diagnostics-format={text,json,sarif,github}``
+     - Select Clang-style text (default); JSON Lines of
+       ``cppverify.diagnostic/2`` records ending with a
+       ``cppverify.summary/1`` record; one SARIF 2.1.0 log at the end of the
+       run; or the text with a GitHub workflow annotation for each error and
+       warning (see `Structured diagnostics`_).
    * - ``--lower-only``
      - Run Clang conversion, backend-specific preparation, passivization,
        canonical Obligation IR construction, spec-axiom encoding, and selected
@@ -876,19 +881,81 @@ The check that a function's contract is defined (see :doc:`functions-loops`)
 is reported only when it fails, as ``contract of f``, with the definedness
 kinds above; JSON records give ``f`` as the function.
 
-JSON records also carry each failing check's source-anchored ID, such as
-``function-identity::overflow@line:column#2``, as ``obligation.id``, and its
-kind as ``obligation.kind``. The local suffix only disambiguates checks of one
-kind at the same anchor, so inserting or reordering an unrelated check does
-not renumber later IDs unless its source anchor moves. Records include
-inclusive source ranges, and each counterexample value has its source name,
-its internal SSA name (``ssa_name``), and its exact sort, such as ``bool``,
-``i32``, ``u32``, ``math-i32``, ``pointer``, and ``heap``. Z3 model completion
-is disabled: undetermined values print as ``<unknown>`` and become JSON
-``null``. Signed and unsigned bit-vectors are decoded to source-level decimal
-values. A record's ``message`` is the text of its error line; the values and
-the path are in ``model`` and ``trace``. Before 0.2 the message also held the
-check's ID and every value with its SSA name and sort.
+JSON Lines
+~~~~~~~~~~
+
+``--diagnostics-format=json`` prints one ``cppverify.diagnostic/2`` record
+per result, and the run ends with one ``cppverify.summary/1`` record, the
+counts of the text summary by name (``verified``, ``failed``,
+``unresolved`` with its ``reasons``, ``bounded_safe``, ``trusted``,
+``lowered``, ``exported``, ``interrupted``). No record holds a time, so a
+run's records are the same at any ``--jobs``; ``--time-report`` adds
+``cppverify.time/1`` records. A record has:
+
+- ``status`` (``verified``, ``failed``, ``unresolved``, ``warning``,
+  ``frontend``, ...), ``severity`` (``error``, ``warning``, ``note``), and
+  ``message``, the text of its line; for a failure, ``reason``;
+- ``function``, and ``function_source``, the function's name where it is
+  declared;
+- ``source``, what the result is about: for a failure the expression its
+  check checks. A source is ``file``, ``line``, ``column``, ``end_line``,
+  ``end_column``: from its first character to the column after its last, as
+  SARIF and editors count, on presumed (``#line``) lines;
+- for a failure, ``obligation`` with the check's ``id`` and ``kind``;
+  ``counterexample``, the values as the note prints them; ``model``, every
+  value with its source name, its internal SSA name (``ssa_name``), its sort
+  (``bool``, ``i32``, ``u32``, ``math-i32``, ``pointer``, ``heap``, ...), and
+  ``"on_path": false`` for a version of a branch the path does not take; and
+  ``trace``, each step with its ``kind``, its ``text`` as the note prints it,
+  and ``active``;
+- ``notes``, ``backend``, ``bound``, ``trusts``, ``vacuous``, ``partial``,
+  ``instantiated_at``, and the other qualifiers of the text.
+
+The check's ID is source-anchored, such as
+``function-identity::overflow@line:column#2``: the line and column of its
+caret. The local suffix only disambiguates checks of one kind at the same
+anchor, so inserting or reordering an unrelated check does not renumber later
+IDs unless its source anchor moves. Z3 model completion is disabled:
+undetermined values print as ``<unknown>`` and become JSON ``null``. Signed
+and unsigned bit-vectors are decoded to source-level decimal values.
+
+The compiler's own diagnostics are records of status ``frontend``: a parse
+error, a warning with its ``option`` (``-Wparentheses``), each with the notes
+that follow it as ``related``, a message and a source each. They come before
+the verifier's records of their file. Only an error in ``cpp-verify``'s own
+options, which stops the run before it starts, stays text on standard error.
+
+Before 0.2 the schema was ``cppverify.diagnostic/1``: a record had no
+``function_source``, and none for a verified function at all; a source
+started at the check's caret and ended at the first column of its last token;
+the message held the check's ID and every value with its SSA name and sort;
+compiler errors were text; and no record ended the run.
+
+SARIF
+~~~~~
+
+``--diagnostics-format=sarif`` prints one SARIF 2.1.0 log when the run ends,
+made from the same records, for GitHub code scanning and SARIF viewers. Each
+record is a result, after Frama-C's mapping of property statuses: a proof
+passes (``kind: pass``), a failure fails (``fail``, level ``error``), and a
+result no verdict settles stays open (``open``). The result's rule is the
+kind of the failing check (``postcondition``, ``overflow``, ...), or
+``verified``, ``unresolved``, ``warning``, ``frontend``; its location is the
+record's source and its function, its message the text with the
+counterexample, and the path a code flow, each step at its line with its
+text. The run's properties hold the summary.
+
+GitHub annotations
+~~~~~~~~~~~~~~~~~~
+
+``--diagnostics-format=github`` prints the text, and after each error and
+warning a workflow command that GitHub Actions turns into an annotation on
+the source, its file relative to the working directory (the checkout, in a
+workflow). For ``summary.cpp`` above, after the error and its notes:
+
+.. code-block:: text
+
+   ::error file=summary.cpp,line=14,col=12,endLine=14,endColumn=34,title=cpp-verify%3A postcondition::verification failed: add_two [postcondition] [backend=z3] [reason=counterexample]%0Acounterexample: x = 3, result = 5
 
 Counterexample traces may contain guarded branch, modular-call, loop,
 heap-write, allocation/provenance, lifetime-end, deletion, and return events.
@@ -1039,11 +1106,10 @@ paths through a call. Unreachable code itself is not flagged: a defensive
 good reason, and every claim the function makes is still checked on the
 paths that remain.
 
-``--diagnostics-format=json`` covers verification-result diagnostics.
-Command-line validation and frontend parse errors may still use text. Combining
-JSON diagnostics with IR dumps intentionally creates a mixed stream. Malformed
-byte sequences in source or archive display text are rendered with the Unicode
-replacement character, so every emitted JSON record remains valid UTF-8.
+Combining JSON or SARIF with IR dumps intentionally creates a mixed stream.
+Malformed byte sequences in source or archive display text are rendered with
+the Unicode replacement character, so every emitted JSON record remains valid
+UTF-8.
 
 Portable obligation archives
 ----------------------------
@@ -1100,7 +1166,7 @@ module is ``BoundedSafe`` when every goal but some unwinding goal
 certifies (:doc:`../book/part-ii/ch17-backends-modular-calls`).
 ``--lean-fallback`` applies to source verification only.
 
-``--obligation-out`` writes ``cppverify.obligation/4`` records only after exact
+``--obligation-out`` writes ``cppverify.obligation/5`` records only after exact
 serialize/deserialize/validate/reserialize checks. Stable wire tags make the
 format independent of C++ enum ordinals. The reader rejects malformed magic,
 unsupported versions, truncation, invalid tags, inconsistent feature
@@ -1110,9 +1176,12 @@ termination measures, read like its definition, and, with source metadata,
 where each assumption of a goal comes from, which names a hypothesis of a
 readable Lean goal; schema v4, with source metadata, where each variable
 version of a counterexample is defined, so a replayed counterexample lists the
-values its path takes. Records of schemas v3 and v2, and of schema v1, which
-name only assertions, postconditions, and unwinding checks, are still read; a
-counterexample replayed from one before v4 lists the values of every version.
+values its path takes; schema v5 where each source range begins, its end
+being the column after its last character. Records of schemas v4 to v2, and
+of schema v1, which name only assertions, postconditions, and unwinding
+checks, are still read; a counterexample replayed from one before v4 lists
+the values of every version, and a range from one before v5 begins at its
+anchor and ends at the first column of its last token.
 Records cap integer widths at 4096 bits, expression depth at 4096, and
 collections plus expression nodes/edges at 100,000 per record. It also rejects
 embedded NULs, non-canonical numerals, inactive payload fields, ill-scoped
