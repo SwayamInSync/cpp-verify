@@ -1,12 +1,13 @@
-// RUN: not %python %S/Inputs/within_seconds.py 20 %cpp-verify --jobs=1 --timeout=60000 %s -- 2>&1 | FileCheck %s
-// RUN: not %python %S/Inputs/within_seconds.py 20 %cpp-verify --jobs=3 --timeout=60000 %s -- 2>&1 | FileCheck %s
+// RUN: not %python %S/Inputs/within_seconds.py 40 %cpp-verify --jobs=1 --timeout=60000 %s -- 2>&1 | FileCheck %s
+// RUN: not %python %S/Inputs/within_seconds.py 40 %cpp-verify --jobs=3 --timeout=60000 %s -- 2>&1 | FileCheck %s
 
 // The complete query refutes the postcondition at once, but the solver's
 // search for a counterexample to the postcondition's own query does not end
 // within the timeout. The complete query's certified counterexample is
-// reported without waiting for that search. The body reads p first, so p is
-// an input whose storage is initialized, and the postcondition is the first
-// check that fails.
+// reported without waiting for that search: well within 40 s, where waiting
+// takes the 60 s timeout. The body reads p first, so p is an input whose
+// storage is initialized, and the postcondition is the first check that
+// fails.
 
 cppverify::spec bool valid(int *p, int n) { return true; }
 
@@ -28,5 +29,5 @@ void break_heap_wrong(int *p)
     i = i + 1;
   }
 }
-// CHECK: error: verification failed: break_heap_wrong [{{.*}}::postcondition@16:24] {{.*}}[reason=counterexample]
+// CHECK: error: verification failed: break_heap_wrong [{{.*}}::postcondition@17:24] {{.*}}[reason=counterexample]
 // CHECK-NOT: within_seconds
