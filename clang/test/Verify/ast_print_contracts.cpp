@@ -2,6 +2,9 @@
 // RUN: %clang_cc1 -std=c++17 -fverify-contracts -ast-print -ast-dump-filter sq %s | FileCheck %s --check-prefix=SPEC
 // RUN: %clang_cc1 -std=c++17 -fverify-contracts -ast-print -ast-dump-filter max_index %s | grep -v '^Printing' > %t.cpp
 // RUN: %clang_cc1 -std=c++17 -fverify-contracts -fsyntax-only %t.cpp
+// RUN: %clang_cc1 -std=c++17 -fverify-contracts -ast-print -ast-dump-filter sum_range %s | FileCheck %s --check-prefix=RANGE
+// RUN: %clang_cc1 -std=c++17 -fverify-contracts -ast-print -ast-dump-filter sum_range %s | grep -v '^Printing' > %t.range.cpp
+// RUN: %clang_cc1 -std=c++17 -fverify-contracts -fsyntax-only %t.range.cpp
 //
 // Printed declarations carry their contracts, written qualified, as clangd's
 // hover shows them; the printed code parses back.
@@ -44,3 +47,21 @@ int max_index(const int *a, int n)
 cv::spec int sq(int x) cv::recommends(x >= 0) cv::post(cv::result >= 0) {
   return x * x;
 }
+
+// A range-based for loop's clauses, its position written as the construct.
+// RANGE:      for (T v : a)
+// RANGE-NEXT:   cppverify::invariant(0 <= s && s <= 10 * cppverify::index)
+// RANGE-NEXT:   cppverify::decreases(4 - cppverify::index)
+// RANGE:      template<> int sum_range<int>(const int (&a)[4]) {
+// RANGE:        for (int v : a)
+// RANGE-NEXT:     cppverify::invariant(0 <= s && s <= 10 * cppverify::index)
+template <typename T>
+T sum_range(const T (&a)[4]) {
+  T s = 0;
+  for (T v : a)
+    cv::invariant(0 <= s && s <= 10 * cv::index)
+    cv::decreases(4 - cv::index)
+    s = s + v;
+  return s;
+}
+int use_sum_range(const int (&a)[4]) { return sum_range(a); }

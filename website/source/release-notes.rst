@@ -413,6 +413,13 @@ that may write what another operand reads is an error at the expression,
 and an assignment's right operand is evaluated before its target, as C++17
 says (:doc:`language/functions-loops`).
 
+**Range-based for loops.** ``for (int v : a)`` stopped its function
+(``unsupported statement: CXXForRangeStmt``). A range-based ``for`` loop over
+an array (a local array, an array member, a constant table) is now verified,
+its variable a copy of each element or a reference to it, and its contract
+names the position with the new construct ``cppverify::index``; without a
+measure it decreases the elements left (:doc:`language/functions-loops`).
+
 **Lookup tables.** A read of a global or ``static`` array, or of a string
 literal, was an error (``the global array 'table' is unsupported``), which
 ruled out the tables at the heart of CRC, base64, and UTF-8 code. An element

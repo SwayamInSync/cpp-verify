@@ -4525,56 +4525,34 @@ bool ASTConverter::subobjectPointerRoot(const Expr *E) const {
   return VD && !LocalReferenceProvenanceVariables.count(VD);
 }
 
-bool ASTConverter::isConstantTable(const VarDecl *VD) const {
-  QualType Element = VD->getType();
-  bool IsArray = false;
-  while (const ConstantArrayType *Bounded =
-             Ctx.getAsConstantArrayType(Element)) {
-    IsArray = true;
-    Element = Bounded->getElementType();
-  }
-  const VarDecl *Definition = VD->getDefinition() ? VD->getDefinition() : VD;
-  const APValue *Value = IsArray ? Definition->evaluateValue() : nullptr;
-  return Value && Value->isArray() && VD->hasGlobalStorage() &&
-         VD->getTLSKind() == VarDecl::TLS_None &&
-         (Element->isIntegralOrEnumerationType() || Element->isBooleanType()) &&
-         Element.isConstQualified() && !Element.isVolatileQualified();
-}
-
-std::optional<std::unique_ptr<VExpr>>
-ASTConverter::convertTableRead(const ArraySubscriptExpr *AS) {
-  // t[i][j]: the indices, outermost first, of a whole read of an array.
-  std::vector<const Expr *> Indices;
-  const Expr *Array = AS;
-  while (const auto *Subscript = dyn_cast<ArraySubscriptExpr>(Array)) {
-    const auto *Decay = dyn_cast<ImplicitCastExpr>(Subscript->getBase());
-    if (!Decay || Decay->getCastKind() != CK_ArrayToPointerDecay)
-      return std::nullopt;
-    Indices.insert(Indices.begin(), Subscript->getIdx());
-    Array = Decay->getSubExpr()->IgnoreParens();
-  }
+std::optional<ASTConverter::ConstantTable>
+ASTConverter::constantTable(const Expr *Array) const {
+  Array = Array->IgnoreParens();
   const auto *Ref = dyn_cast<DeclRefExpr>(Array);
   const auto *VD = Ref ? dyn_cast<VarDecl>(Ref->getDecl()) : nullptr;
   const auto *Literal = dyn_cast<StringLiteral>(Array);
   if (!VD && !Literal)
     return std::nullopt;
-  std::vector<uint64_t> Dims;
-  QualType Element = Array->getType();
+  return constantTable(VD, Literal, Array->getType());
+}
+
+std::optional<ASTConverter::ConstantTable>
+ASTConverter::constantTable(const VarDecl *VD, const StringLiteral *Literal,
+                            QualType Element) const {
+  ConstantTable Table;
   while (const ConstantArrayType *Bounded =
              Ctx.getAsConstantArrayType(Element)) {
-    Dims.push_back(Bounded->getZExtSize());
+    Table.Dims.push_back(Bounded->getZExtSize());
     Element = Bounded->getElementType();
   }
-  if (Dims.size() != Indices.size() || Dims.empty() ||
+  if (Table.Dims.empty() ||
       !(Element->isIntegralOrEnumerationType() || Element->isBooleanType()) ||
       Element.isVolatileQualified())
     return std::nullopt;
 
   // Its values: a constant object's initializer, or a literal's code units
   // and the terminating zero.
-  const VType ElementTy = VType::fromQualType(Element, VIntMode::Machine, Ctx);
-  std::vector<llvm::APSInt> Values;
-  std::string Identity;
+  Table.ElementTy = VType::fromQualType(Element, VIntMode::Machine, Ctx);
   if (VD) {
     const VarDecl *Definition = VD->getDefinition() ? VD->getDefinition() : VD;
     if (!VD->hasGlobalStorage() || VD->getTLSKind() != VarDecl::TLS_None ||
@@ -4585,7 +4563,7 @@ ASTConverter::convertTableRead(const ArraySubscriptExpr *AS) {
       return std::nullopt;
     std::function<bool(const APValue &)> Flatten = [&](const APValue &V) {
       if (V.isInt()) {
-        Values.push_back(V.getInt());
+        Table.Values.push_back(V.getInt());
         return true;
       }
       if (!V.isArray())
@@ -4601,77 +4579,93 @@ ASTConverter::convertTableRead(const ArraySubscriptExpr *AS) {
       return std::nullopt;
     const PresumedLoc Where =
         Ctx.getSourceManager().getPresumedLoc(VD->getLocation());
-    Identity = "__cppverify_table." + VD->getQualifiedNameAsString();
+    Table.Name = VD->getNameAsString();
+    Table.Identity = "__cppverify_table." + VD->getQualifiedNameAsString();
     if (Where.isValid())
-      Identity += "@" + std::to_string(Where.getLine()) + ":" +
-                  std::to_string(Where.getColumn());
+      Table.Identity += "@" + std::to_string(Where.getLine()) + ":" +
+                        std::to_string(Where.getColumn());
   } else {
-    const unsigned Width = ElementTy.BitWidth;
-    for (uint64_t K = 0; K < Dims.front(); ++K)
-      Values.push_back(llvm::APSInt(
+    const unsigned Width = Table.ElementTy.BitWidth;
+    for (uint64_t K = 0; K < Table.Dims.front(); ++K)
+      Table.Values.push_back(llvm::APSInt(
           llvm::APInt(Width,
                       K < Literal->getLength() ? Literal->getCodeUnit(K) : 0),
-          !ElementTy.IsSigned));
+          !Table.ElementTy.IsSigned));
     const PresumedLoc Where =
         Ctx.getSourceManager().getPresumedLoc(Literal->getBeginLoc());
-    Identity = "__cppverify_string";
+    Table.Name = "string literal";
+    Table.Identity = "__cppverify_string";
     if (Where.isValid())
-      Identity += "@" + std::to_string(Where.getLine()) + ":" +
-                  std::to_string(Where.getColumn());
+      Table.Identity += "@" + std::to_string(Where.getLine()) + ":" +
+                        std::to_string(Where.getColumn());
   }
   uint64_t Count = 1;
-  for (uint64_t D : Dims)
+  for (uint64_t D : Table.Dims)
     Count *= D;
-  if (Values.size() != Count)
+  if (Table.Values.size() != Count)
     return std::nullopt;
 
-  const SourceLocation Loc = AS->getExprLoc();
-  const VType Index = VType::makeInt(VIntMode::Math, 64, true);
-  auto Constant = [&](const llvm::APSInt &V) -> std::unique_ptr<VExpr> {
-    if (ElementTy.Kind == VTypeKind::Bool)
-      return std::make_unique<VLiteralExpr>(!V.isZero(), ElementTy, Loc);
-    return std::make_unique<VLiteralExpr>(integerValueString(V), ElementTy,
-                                          Loc);
-  };
+  return Table;
+}
+
+bool ASTConverter::isConstantTable(const VarDecl *VD) const {
+  return constantTable(VD, nullptr, VD->getType()).has_value();
+}
+
+void ASTConverter::defineTable(const ConstantTable &Table, SourceLocation Loc) {
   // The table as a spec of the linear index: a balanced tree of
   // comparisons, so its depth grows with the logarithm of its size.
-  if (llvm::none_of(BuiltinFunctions,
-                    [&](const auto &Fn) { return Fn->Identity == Identity; })) {
+  if (llvm::none_of(BuiltinFunctions, [&](const auto &Fn) {
+        return Fn->Identity == Table.Identity;
+      })) {
+    const VType Index = VType::makeInt(VIntMode::Math, 64, true);
+    auto Constant = [&](const llvm::APSInt &V) -> std::unique_ptr<VExpr> {
+      if (Table.ElementTy.Kind == VTypeKind::Bool)
+        return std::make_unique<VLiteralExpr>(!V.isZero(), Table.ElementTy,
+                                              Loc);
+      return std::make_unique<VLiteralExpr>(integerValueString(V),
+                                            Table.ElementTy, Loc);
+    };
     std::function<std::unique_ptr<VExpr>(uint64_t, uint64_t)> Tree =
         [&](uint64_t Lo, uint64_t Hi) -> std::unique_ptr<VExpr> {
-      if (std::all_of(Values.begin() + Lo + 1, Values.begin() + Hi,
+      if (std::all_of(Table.Values.begin() + Lo + 1, Table.Values.begin() + Hi,
                       [&](const llvm::APSInt &V) {
-                        return llvm::APSInt::isSameValue(V, Values[Lo]);
+                        return llvm::APSInt::isSameValue(V, Table.Values[Lo]);
                       }))
-        return Constant(Values[Lo]);
+        return Constant(Table.Values[Lo]);
       const uint64_t Mid = Lo + (Hi - Lo) / 2;
       return std::make_unique<VConditionalExpr>(
           std::make_unique<VBinOpExpr>(
               VBinOp::Lt, std::make_unique<VVarExpr>("i", Index, Loc),
               std::make_unique<VLiteralExpr>(std::to_string(Mid), Index, Loc),
               VType::makeBool(), Loc),
-          Tree(Lo, Mid), Tree(Mid, Hi), ElementTy, Loc);
+          Tree(Lo, Mid), Tree(Mid, Hi), Table.ElementTy, Loc);
     };
     auto Fn = std::make_unique<VFunction>();
-    Fn->Name = VD ? VD->getNameAsString() : "string literal";
-    Fn->Identity = Identity;
+    Fn->Name = Table.Name;
+    Fn->Identity = Table.Identity;
     Fn->IsSpec = true;
     Fn->IsBuiltin = true;
     Fn->IntMode = VIntMode::Math;
-    Fn->ReturnType = ElementTy;
+    Fn->ReturnType = Table.ElementTy;
     Fn->Params = {{"i", Index}};
     Fn->Body.push_back(
-        std::make_unique<VReturnStmt>(Tree(0, Values.size()), Loc));
+        std::make_unique<VReturnStmt>(Tree(0, Table.Values.size()), Loc));
     BuiltinFunctions.push_back(std::move(Fn));
   }
+}
 
+std::unique_ptr<VExpr>
+ASTConverter::tableRead(const ConstantTable &Table,
+                        std::vector<std::unique_ptr<VExpr>> Indices,
+                        SourceLocation Loc) {
+  defineTable(Table, Loc);
   // The read: its linear index, and each index inside its array.
+  const VType Index = VType::makeInt(VIntMode::Math, 64, true);
   std::unique_ptr<VExpr> Linear;
   std::unique_ptr<VExpr> Inside;
   for (size_t D = 0; D < Indices.size(); ++D) {
-    auto I = convertExpr(Indices[D]);
-    if (!I)
-      return std::unique_ptr<VExpr>();
+    std::unique_ptr<VExpr> I = std::move(Indices[D]);
     if (I->Ty.IntMode != VIntMode::Math) {
       VType Machine = I->Ty;
       I = std::make_unique<VCastExpr>(std::move(I), Machine, Index, Loc);
@@ -4683,7 +4677,8 @@ ASTConverter::convertTableRead(const ArraySubscriptExpr *AS) {
             cloneVExpr(I.get()), VType::makeBool(), Loc),
         std::make_unique<VBinOpExpr>(
             VBinOp::Lt, cloneVExpr(I.get()),
-            std::make_unique<VLiteralExpr>(std::to_string(Dims[D]), Index, Loc),
+            std::make_unique<VLiteralExpr>(std::to_string(Table.Dims[D]), Index,
+                                           Loc),
             VType::makeBool(), Loc),
         VType::makeBool(), Loc);
     Inside = Inside
@@ -4696,7 +4691,7 @@ ASTConverter::convertTableRead(const ArraySubscriptExpr *AS) {
                           std::make_unique<VBinOpExpr>(
                               VBinOp::Mul, std::move(Linear),
                               std::make_unique<VLiteralExpr>(
-                                  std::to_string(Dims[D]), Index, Loc),
+                                  std::to_string(Table.Dims[D]), Index, Loc),
                               Index, Loc),
                           std::move(I), Index, Loc)
                     : std::move(I);
@@ -4704,14 +4699,37 @@ ASTConverter::convertTableRead(const ArraySubscriptExpr *AS) {
   std::vector<std::unique_ptr<VExpr>> Args;
   Args.push_back(std::move(Linear));
   auto Read = std::make_unique<VSpecCallExpr>(
-      VD ? VD->getNameAsString() : "string literal", Identity, std::move(Args),
-      ElementTy, Loc);
+      Table.Name, Table.Identity, std::move(Args), Table.ElementTy, Loc);
   auto Copy = cloneVExpr(Read.get());
-  return std::unique_ptr<VExpr>(std::make_unique<VConditionalExpr>(
+  return std::make_unique<VConditionalExpr>(
       std::make_unique<VRequireExpr>(
           std::move(Inside), static_cast<unsigned>(ProofObligationKind::Bounds),
           Loc),
-      std::move(Read), std::move(Copy), ElementTy, Loc));
+      std::move(Read), std::move(Copy), Table.ElementTy, Loc);
+}
+
+std::optional<std::unique_ptr<VExpr>>
+ASTConverter::convertTableRead(const ArraySubscriptExpr *AS) {
+  // t[i][j]: the indices, outermost first, of a whole read of an array.
+  std::vector<const Expr *> Indices;
+  const Expr *Array = AS;
+  while (const auto *Subscript = dyn_cast<ArraySubscriptExpr>(Array)) {
+    const auto *Decay = dyn_cast<ImplicitCastExpr>(Subscript->getBase());
+    if (!Decay || Decay->getCastKind() != CK_ArrayToPointerDecay)
+      return std::nullopt;
+    Indices.insert(Indices.begin(), Subscript->getIdx());
+    Array = Decay->getSubExpr()->IgnoreParens();
+  }
+  std::optional<ConstantTable> Table = constantTable(Array);
+  if (!Table || Table->Dims.size() != Indices.size())
+    return std::nullopt;
+  std::vector<std::unique_ptr<VExpr>> Converted;
+  for (const Expr *I : Indices) {
+    Converted.push_back(convertExpr(I));
+    if (!Converted.back())
+      return std::unique_ptr<VExpr>();
+  }
+  return tableRead(*Table, std::move(Converted), AS->getExprLoc());
 }
 
 std::string ASTConverter::arrayDecayError(const Expr *Array) const {
@@ -6096,6 +6114,12 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
                                           Ty, E->getExprLoc());
   }
   if (const auto *DRE = dyn_cast<DeclRefExpr>(E)) {
+    // cppverify::index in a range-based for loop's contract.
+    if (RangeIndex && DRE->getDecl() == RangeIndex)
+      return std::make_unique<VVarExpr>(
+          RangeIndexName,
+          VType::fromQualType(RangeIndex->getType(), VIntMode::Machine, Ctx),
+          E->getExprLoc());
     // A structured binding names a member or element of its object.
     if (const auto *Binding = dyn_cast<BindingDecl>(DRE->getDecl())) {
       if (const Expr *Bound = Binding->getBinding())
@@ -8007,6 +8031,303 @@ void ASTConverter::leaveAutomaticScope(std::vector<std::unique_ptr<VStmt>> &Out,
   }
 }
 
+/// Whether something a range-based for loop's range is located through may
+/// change in its body: C++ evaluates the range once, and the verifier
+/// locates its elements again at each iteration. A pointer or index
+/// variable must only be read, and the range may read no pointer from
+/// memory and make no call.
+static bool rangeMayMove(const Expr *Range, const Stmt *Body) {
+  struct Located : RecursiveASTVisitor<Located> {
+    std::set<const VarDecl *> Vars;
+    bool Unstable = false;
+    bool VisitDeclRefExpr(DeclRefExpr *Ref) {
+      if (const auto *Var = dyn_cast<VarDecl>(Ref->getDecl()))
+        if (Var->getType()->isPointerType() ||
+            Var->getType()->isIntegralOrEnumerationType()) {
+          Vars.insert(Var);
+          Unstable |=
+              Var->hasGlobalStorage() && !Var->getType().isConstQualified();
+        }
+      return true;
+    }
+    bool VisitCallExpr(CallExpr *) {
+      Unstable = true;
+      return false;
+    }
+    bool VisitMemberExpr(MemberExpr *M) {
+      const Expr *Base = M->getBase()->IgnoreParenImpCasts();
+      Unstable |= M->isArrow() && !isa<DeclRefExpr, CXXThisExpr>(Base);
+      return true;
+    }
+    bool VisitUnaryOperator(UnaryOperator *U) {
+      const Expr *Operand = U->getSubExpr()->IgnoreParenImpCasts();
+      Unstable |= U->getOpcode() == UO_Deref && !isa<DeclRefExpr>(Operand);
+      return true;
+    }
+  } Location;
+  Location.TraverseStmt(const_cast<Expr *>(Range));
+  if (Location.Unstable)
+    return true;
+  // Every use of such a variable in the body reads its value.
+  struct Uses : RecursiveASTVisitor<Uses> {
+    const std::set<const VarDecl *> &Vars;
+    std::set<const DeclRefExpr *> Read;
+    bool Changed = false;
+    explicit Uses(const std::set<const VarDecl *> &Vars) : Vars(Vars) {}
+    bool VisitImplicitCastExpr(ImplicitCastExpr *Cast) {
+      if (Cast->getCastKind() == CK_LValueToRValue)
+        if (const auto *Ref =
+                dyn_cast<DeclRefExpr>(Cast->getSubExpr()->IgnoreParens()))
+          Read.insert(Ref);
+      return true;
+    }
+    bool VisitDeclRefExpr(DeclRefExpr *Ref) {
+      const auto *Var = dyn_cast<VarDecl>(Ref->getDecl());
+      Changed |= Var && Vars.count(Var) && !Read.count(Ref);
+      return true;
+    }
+  } Body_(Location.Vars);
+  Body_.TraverseStmt(const_cast<Stmt *>(Body));
+  return Body_.Changed;
+}
+
+/// Whether \p S names \p Var, or one of its bindings.
+static bool mentionsLoopVariable(const Stmt *S, const VarDecl *Var) {
+  if (!S)
+    return false;
+  if (const auto *Ref = dyn_cast<DeclRefExpr>(S)) {
+    if (Ref->getDecl() == Var)
+      return true;
+    if (const auto *Binding = dyn_cast<BindingDecl>(Ref->getDecl()))
+      if (Binding->getDecomposedDecl() == Var)
+        return true;
+  }
+  return llvm::any_of(S->children(), [&](const Stmt *Child) {
+    return mentionsLoopVariable(Child, Var);
+  });
+}
+
+std::vector<std::unique_ptr<VStmt>>
+ASTConverter::convertRangeFor(const CXXForRangeStmt *RF) {
+  std::vector<std::unique_ptr<VStmt>> Out;
+  const SourceLocation Loc = RF->getForLoc();
+  enterAutomaticScope();
+  if (RF->getInit()) {
+    auto Init = convertStmt(RF->getInit());
+    Out.insert(Out.end(), std::make_move_iterator(Init.begin()),
+               std::make_move_iterator(Init.end()));
+  }
+  auto Fail = [&](const std::string &Message) {
+    error(CurrentFn->Name + ": " + Message);
+    leaveAutomaticScope(Out, RF->getEndLoc());
+    return std::move(Out);
+  };
+  const Expr *Range = RF->getRangeInit();
+  const ConstantArrayType *Array =
+      Range ? Ctx.getAsConstantArrayType(Range->getType()) : nullptr;
+  if (!Array)
+    return Fail("a range-based for loop over a class (through its begin and "
+                "end) is unsupported; loop over an array, or index the class");
+  if (rangeMayMove(Range, RF->getBody()))
+    return Fail("the range of this loop is located through a call, a pointer "
+                "read from memory, or a variable its body may change; locate "
+                "it through a variable the body does not change");
+  const uint64_t Count = Array->getZExtSize();
+  const QualType Element = Array->getElementType();
+  const uint64_t Stride = Ctx.getTypeSizeInChars(Element).getQuantity();
+  if (Element->isArrayType())
+    return Fail("a range-based for loop over an array of arrays is "
+                "unsupported; index it");
+  std::optional<ConstantTable> Table;
+  if (!objectPlace(Range)) {
+    Table = constantTable(Range);
+    const VarDecl *Root = selectionRootVar(Range);
+    if (!Table && Root && Root->hasGlobalStorage())
+      return Fail(
+          "a range-based for loop over an array of the " +
+          std::string(Root->isStaticLocal() ? "static local" : "global") +
+          " '" + Root->getNameAsString() + "' is unsupported");
+    if (!Table)
+      return Fail("a range-based for loop over this array is unsupported; "
+                  "index it");
+  }
+
+  // The position: cppverify::index in the contract, a counter here. The
+  // loop variable is declared in each iteration, so the contract, which
+  // holds at the head, cannot name it.
+  const LoopContractInfo *LCI = Ctx.getLoopContract(RF);
+  const VarDecl *Var = RF->getLoopVariable();
+  if (LCI && llvm::any_of(LCI->children(), [&](const Stmt *Clause) {
+        return mentionsLoopVariable(Clause, Var);
+      }))
+    return Fail("the contract of a range-based for loop cannot name its "
+                "variable, which each iteration declares; name the element "
+                "with cppverify::index");
+  const std::string Index = "__index_" + std::to_string(++NestedCallId);
+  const VType IndexTy =
+      VType::fromQualType(Ctx.getPointerDiffType(), VIntMode::Machine, Ctx);
+  llvm::SaveAndRestore Named(RangeIndexName, Index);
+  llvm::SaveAndRestore<const VarDecl *> Declared(RangeIndex,
+                                                 LCI ? LCI->Index : nullptr);
+  DeclaredValueNames.insert(Index);
+  InitializedValues.insert(Index);
+  CurrentFn->SourceVariables[Index] = {"cppverify::index", IndexTy, Loc, Loc};
+  auto Position = [&] {
+    return std::make_unique<VVarExpr>(Index, IndexTy, Loc);
+  };
+  auto Size = [&] {
+    return std::make_unique<VLiteralExpr>(std::to_string(Count), IndexTy, Loc);
+  };
+  Out.push_back(std::make_unique<VAssignStmt>(
+      Index, std::make_unique<VLiteralExpr>(0, IndexTy, Loc), Loc));
+
+  // 0 <= index <= size holds at the head; the user's clauses follow.
+  std::vector<std::unique_ptr<VExpr>> Invariants;
+  Invariants.push_back(std::make_unique<VBinOpExpr>(
+      VBinOp::And,
+      std::make_unique<VBinOpExpr>(
+          VBinOp::Le, std::make_unique<VLiteralExpr>(0, IndexTy, Loc),
+          Position(), VType::makeBool(), Loc),
+      std::make_unique<VBinOpExpr>(VBinOp::Le, Position(), Size(),
+                                   VType::makeBool(), Loc),
+      VType::makeBool(), Loc));
+  std::vector<std::unique_ptr<VExpr>> Decreases;
+  if (LCI) {
+    llvm::SaveAndRestore Contract(InContractExpression, true);
+    for (const Expr *Inv : LCI->Invariants)
+      if (auto E = convertExpr(Inv))
+        Invariants.push_back(std::move(E));
+    for (const Expr *D : LCI->Decreases)
+      if (auto E = convertExpr(D))
+        Decreases.push_back(std::move(E));
+  }
+  // Without a measure, the elements left: a range over an array ends.
+  if (Decreases.empty() && !(LCI && LCI->MayDiverge.isValid()))
+    Decreases.push_back(std::make_unique<VBinOpExpr>(VBinOp::Sub, Size(),
+                                                     Position(), IndexTy, Loc));
+  if (!checkLoopTermination(RF, !Decreases.empty())) {
+    leaveAutomaticScope(Out, RF->getEndLoc());
+    return Out;
+  }
+
+  const std::set<std::string> Before = InitializedValues;
+  const bool BeforeReachable = InitializationPathReachable;
+  ++LoopDepth;
+  auto Increment = std::make_unique<VAssignStmt>(
+      Index,
+      std::make_unique<VBinOpExpr>(
+          VBinOp::Add, Position(),
+          std::make_unique<VLiteralExpr>(1, IndexTy, Loc), IndexTy, Loc),
+      Loc);
+  EnclosingLoop Loop;
+  Loop.IsGhost = InGhost;
+  Loop.IncrementStmt = Increment.get();
+  EnclosingLoops.push_back(std::move(Loop));
+  enterAutomaticScope();
+
+  // The loop variable: the element at the position, or bound to it. A
+  // value converts from the element's type as its initialization does.
+  std::vector<std::unique_ptr<VStmt>> Body;
+  auto Converted = [&](std::unique_ptr<VExpr> Value,
+                       QualType Target) -> std::unique_ptr<VExpr> {
+    const VType To = VType::fromQualType(Target, IntMode, Ctx);
+    Value = materialize(std::move(Value), To);
+    if (!Value || sameRepresentation(Value->Ty, To))
+      return Value;
+    if (!(Value->Ty.isInt() || Value->Ty.Kind == VTypeKind::Bool) ||
+        !(To.isInt() || To.Kind == VTypeKind::Bool)) {
+      error(CurrentFn->Name +
+            ": unsupported conversion of a range's element to its loop "
+            "variable");
+      return nullptr;
+    }
+    const VType From = Value->Ty;
+    return std::make_unique<VCastExpr>(std::move(Value), From, To, Loc);
+  };
+  declareLocalName(Var);
+  recordSourceVariable(Var);
+  if (AddressableLocals.count(Var)) {
+    error(CurrentFn->Name +
+          ": addressable local declarations inside loops are unsupported");
+  } else if (Table) {
+    std::vector<std::unique_ptr<VExpr>> Indices;
+    Indices.push_back(Position());
+    auto Value = tableRead(*Table, std::move(Indices), Loc);
+    QualType VarType = Var->getType().getNonReferenceType();
+    if (Var->getType()->isReferenceType() && !VarType.isConstQualified())
+      error(CurrentFn->Name + ": a constant table's elements cannot be "
+                              "bound to a non-const reference");
+    else if (auto Stored = Converted(std::move(Value), VarType)) {
+      Body.push_back(std::make_unique<VAssignStmt>(valueName(Var),
+                                                   std::move(Stored), Loc));
+      markInitialized(Var);
+    }
+  } else if (auto Place = objectPlace(Range)) {
+    Place->addAccessCondition(std::make_unique<VBinOpExpr>(
+        VBinOp::Lt, Position(), Size(), VType::makeBool(), Loc));
+    std::unique_ptr<VExpr> Offset = Position();
+    if (Stride != 1) {
+      VType Math = IndexTy;
+      Math.IntMode = VIntMode::Math;
+      Offset = std::make_unique<VBinOpExpr>(
+          VBinOp::Mul,
+          std::make_unique<VCastExpr>(std::move(Offset), IndexTy, Math, Loc),
+          std::make_unique<VLiteralExpr>(std::to_string(Stride), Math, Loc),
+          Math, Loc);
+    }
+    Place->applyElement(std::move(Offset), Stride, Loc);
+    Place->ValueTy = VType::fromQualType(Element, IntMode, Ctx);
+    if (Var->getType()->isLValueReferenceType()) {
+      if (auto Condition = Place->takeAccessCondition())
+        Body.push_back(std::make_unique<VAssertStmt>(
+            std::move(Condition), Loc, ProofObligationKind::Bounds));
+      auto Address = Place->takeAddress();
+      appendReferenceBindingCheck(nullptr, Address.get(), Loc, Body);
+      auto Provenance = convertAddressProvenance(Address.get());
+      Body.push_back(std::make_unique<VAssignStmt>(
+          valueName(Var), std::move(Address), Loc, true));
+      if (Provenance) {
+        const std::string ProvenanceName = "__cppverify_reference_provenance_" +
+                                           std::to_string(++LocalReferenceId);
+        LocalReferenceProvenanceVariables[Var] = ProvenanceName;
+        Body.push_back(std::make_unique<VAssignStmt>(
+            ProvenanceName, std::move(Provenance), Loc));
+      }
+      markInitialized(Var);
+    } else if (Element->isRecordType()) {
+      error(CurrentFn->Name + ": a range-based for loop that copies each "
+                              "record is unsupported; bind a reference");
+    } else {
+      auto Value =
+          std::make_unique<VLoadExpr>(Place->takeAddress(), Place->ValueTy, Loc,
+                                      "", Place->takeAccessCondition());
+      if (auto Stored = Converted(std::move(Value), Var->getType())) {
+        Body.push_back(std::make_unique<VAssignStmt>(valueName(Var),
+                                                     std::move(Stored), Loc));
+        markInitialized(Var);
+      }
+    }
+  }
+  auto Statements = convertStmt(RF->getBody());
+  Body.insert(Body.end(), std::make_move_iterator(Statements.begin()),
+              std::make_move_iterator(Statements.end()));
+  leaveAutomaticScope(Body, RF->getEndLoc());
+  Body.push_back(std::move(Increment));
+  EnclosingLoops.pop_back();
+  --LoopDepth;
+  InitializedValues = Before;
+  InitializationPathReachable = BeforeReachable;
+  auto Repeat = std::make_unique<VWhileStmt>(
+      std::make_unique<VBinOpExpr>(VBinOp::Lt, Position(), Size(),
+                                   VType::makeBool(), Loc),
+      std::move(Invariants), std::move(Decreases), std::move(Body), Loc);
+  if (LCI)
+    Repeat->Modifies = convertLoopFootprints(*LCI);
+  Out.push_back(std::move(Repeat));
+  leaveAutomaticScope(Out, RF->getEndLoc());
+  return Out;
+}
+
 void ASTConverter::appendBranches(std::unique_ptr<VExpr> Cond, const Stmt *Then,
                                   const Stmt *Else, SourceLocation Loc,
                                   std::vector<std::unique_ptr<VStmt>> &Out) {
@@ -8277,6 +8598,22 @@ ASTConverter::convertSwitch(const SwitchStmt *SS) {
   InitializationPathReachable = Left.has_value();
   leaveAutomaticScope(Out, SS->getEndLoc());
   return Out;
+}
+
+void ASTConverter::declareLocalName(const VarDecl *VD) {
+  // A local named like a parameter or an earlier local, in an enclosing or
+  // an earlier scope, is another variable: x#2, x#3, ... The object of a
+  // structured binding has no name of its own.
+  if (LocalNames.count(VD))
+    return;
+  const std::string Base = isa<DecompositionDecl>(VD) ? std::string("__binding")
+                                                      : VD->getNameAsString();
+  std::string Name = Base;
+  for (unsigned N = 2; DeclaredValueNames.count(Name); ++N)
+    Name = Base + "#" + std::to_string(N);
+  DeclaredValueNames.insert(Name);
+  if (Name != VD->getNameAsString())
+    LocalNames[VD] = Name;
 }
 
 void ASTConverter::appendAssumption(const Expr *Assumption, SourceLocation Loc,
@@ -8606,6 +8943,8 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         Out.insert(Out.end(), std::make_move_iterator(IncPart.begin()),
                    std::make_move_iterator(IncPart.end()));
       }
+      if (Target->IncrementStmt)
+        Out.push_back(cloneVStmt(Target->IncrementStmt));
       Out.push_back(std::make_unique<VContinueStmt>(S->getBeginLoc()));
     }
     InitializationPathReachable = false;
@@ -8821,6 +9160,8 @@ ASTConverter::convertStmtBody(const Stmt *S) {
   }
   if (const auto *SS = dyn_cast<SwitchStmt>(S))
     return convertSwitch(SS);
+  if (const auto *RF = dyn_cast<CXXForRangeStmt>(S))
+    return convertRangeFor(RF);
   if (const auto *AS = dyn_cast<AttributedStmt>(S)) {
     // [[fallthrough]], [[likely]], and the like do not change what a
     // statement does; [[assume(e)]] makes e false undefined, so e is proved,
@@ -9345,20 +9686,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         error(CurrentFn->Name + ": static local variables are unsupported");
         continue;
       }
-      // A local named like a parameter or an earlier local, in an enclosing
-      // or an earlier scope, is another variable: x#2, x#3, ...
-      // The object of a structured binding has no name of its own.
-      if (!LocalNames.count(VD)) {
-        const std::string Base = isa<DecompositionDecl>(VD)
-                                     ? std::string("__binding")
-                                     : VD->getNameAsString();
-        std::string Name = Base;
-        for (unsigned N = 2; DeclaredValueNames.count(Name); ++N)
-          Name = Base + "#" + std::to_string(N);
-        DeclaredValueNames.insert(Name);
-        if (Name != VD->getNameAsString())
-          LocalNames[VD] = Name;
-      }
+      declareLocalName(VD);
       if (InGhost)
         GhostLocals.insert(VD);
       // A record that was not promoted keeps its flattened SSA representation,

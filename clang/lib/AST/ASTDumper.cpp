@@ -252,6 +252,19 @@ void ASTDumper::VisitForStmt(const ForStmt *S) {
     Visit(D, "decreases");
 }
 
+void ASTDumper::VisitCXXForRangeStmt(const CXXForRangeStmt *S) {
+  ASTNodeTraverser::VisitCXXForRangeStmt(S);
+  if (!Ctx)
+    return;
+  const LoopContractInfo *LCI = Ctx->getLoopContract(S);
+  if (!LCI)
+    return;
+  for (const Expr *E : LCI->Invariants)
+    Visit(E, "invariant");
+  for (const Expr *D : LCI->Decreases)
+    Visit(D, "decreases");
+}
+
 //===----------------------------------------------------------------------===//
 // Type method implementations
 //===----------------------------------------------------------------------===//

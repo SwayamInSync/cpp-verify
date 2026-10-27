@@ -50,6 +50,7 @@ implicitly; without it, the constructs are not recognized.
 | `cppverify::choose(i, [lo, hi,] expr)` | Expression | Some integer satisfying `expr` (Hilbert ε) |
 | `cppverify::old(expr)` | Inside `cppverify::post` or `cppverify::invariant` | Value of `expr` at function entry |
 | `cppverify::result` | Inside `cppverify::post` | Return value of the enclosing function |
+| `cppverify::index` | Inside a range-based `for` loop's contract | Number of elements before the current one |
 | `cppverify::seq`, `set`, `multiset`, `map` | `<cppverify.h>` | Mathematical collections for specifications and ghost code |
 
 ## Function Contracts: pre / post / modifies / aliases / recommends
@@ -315,6 +316,37 @@ for (int i = 0; i < n; i = i + 1)
   an invariant saying so. Local and dynamic objects count alike: a store
   through a local array, a local record, or a `new` pointer writes that
   object, and one through a reference to a local writes the cell it binds.
+
+A range-based `for` loop over an array (a local array, an array member, a
+constant table) visits its elements in order, and its contract names the
+position, `cppverify::index`, the number of elements before the current one,
+from 0 to the size (decision Q9 of the 0.2 plan; Verus names the same
+position `iter.index()` in the invariants of `for x in iter: v`):
+
+<!-- cppverify-example: fragment -->
+
+```cpp
+for (const int &v : r->buf)
+  cppverify::invariant(0 <= s && s <= 10 * cppverify::index)
+  s = s + v;
+```
+
+The converter lowers it to a loop over a counter, `while (i < N) { v =
+range[i]; body; i = i + 1; }`, with the invariant `0 <= i <= N` before the
+user's and, without a `cppverify::decreases`, the measure `N - i`, since a
+loop over an array ends. This is Clang's own desugaring, `for (auto __begin
+= range, __end = range + N; __begin != __end; ++__begin)`, with `__begin`
+written as `range + i`: the position is the one value an invariant needs,
+and no pointer into a local array is formed. The loop variable is the
+element (a copy, converted to its type) or bound to it (a reference). C++
+evaluates the range once; the verifier locates the element again at each
+iteration, so a range located through a call, a pointer read from memory
+(a global's value included), or a variable the body may change fails
+closed. The contract holds at the head, where the loop variable is not
+declared, so naming it there is an error. A range over a class (its `begin`
+and `end`), an array of arrays, an array parameter (`const int (&a)[4]`,
+rejected as a type), and a global array that is not a constant table are
+not supported yet.
 
 `do` loops place the clauses between the trailing condition and its semicolon:
 
@@ -2035,7 +2067,7 @@ cppverify::proof void sum_concat(seq s, seq t)
 ### Construct recognition
 
 The lexer reserves nothing. `clang/include/clang/Basic/CppVerifyConstructs.def`
-lists the 28 construct words and the positions each may take (function
+lists the 29 construct words and the positions each may take (function
 clause, loop clause, class member, declaration specifier, statement,
 expression). At each position the parser calls `tryAnnotateCppVerify`
 (`clang/lib/Parse/ParseCppVerify.cpp`), which looks ahead for
@@ -2098,7 +2130,7 @@ in place and records it in an `ASTContext` side table.
 | Existing Node | New Data |
 |---|---|
 | FunctionDecl (via ASTContext side table) | preconditions, postconditions, modifies, aliases, recommends, isSpec, isProof, decreases, behavior checks |
-| WhileStmt / ForStmt / DoStmt | invariants, decreases, modifies |
+| WhileStmt / ForStmt / DoStmt / CXXForRangeStmt | invariants, decreases, modifies; for a range-based `for`, the implicit variable `cppverify::index` names |
 | RecordDecl | type_invariants |
 | VarDecl | ghost marker |
 
@@ -2114,7 +2146,7 @@ a one-line hook.
 | Statements (`ghost`, `check`, `calc`, `reveal_with_fuel`, `hide`, `reveal`) | `ParseCppVerifyStatement` | `ParseStatementOrDeclarationAfterAttributes` |
 | `cppverify::spec` / `cppverify::proof` | `ParseCppVerifySpecifier` | `ParseDeclarationSpecifiers` |
 | `cppverify::type_invariant(...)` | `ParseTypeInvariant` | `ParseCXXMemberSpecification` |
-| Expressions (`forall`, `exists`, `choose`, `old`, `result`, `trigger`) | `ParseCppVerifyExpression` | `ParseCastExpression` |
+| Expressions (`forall`, `exists`, `choose`, `old`, `result`, `index`, `trigger`) | `ParseCppVerifyExpression` | `ParseCastExpression` |
 
 ### Sema Rules
 

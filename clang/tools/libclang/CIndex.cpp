@@ -3116,6 +3116,7 @@ void EnqueueVisitor::VisitCXXCatchStmt(const CXXCatchStmt *S) {
 
 void EnqueueVisitor::VisitCXXForRangeStmt(const CXXForRangeStmt *S) {
   AddStmt(S->getBody());
+  AddLoopContract(S);
   AddStmt(S->getRangeInit());
   AddDecl(S->getLoopVariable());
 }

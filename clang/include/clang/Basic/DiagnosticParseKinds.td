@@ -1961,6 +1961,9 @@ def err_contract_redeclaration : Error<
   "contract clauses may only be specified on one declaration of a function">;
 def err_result_outside_postcondition : Error<
   "'cppverify::result' can only be used in postconditions">;
+def err_cppverify_index_outside_range_for : Error<
+  "'cppverify::index' is the position of a range-based for loop, in its "
+  "contract">;
 def err_result_in_old_expression : Error<
   "'cppverify::result' has no value in the function pre-state">;
 def err_old_outside_postcondition : Error<
