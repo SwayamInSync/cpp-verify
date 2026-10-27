@@ -44,6 +44,10 @@ Other flags
   check (``Verified: spec axiom: twice``), which the default leaves out
 - ``cpp-verify --list-functions`` — list the functions a run would verify,
   with their locations and kinds, and verify none
+- ``cpp-verify --confirm-bound=N`` — for a failure whose counterexample passes
+  through a loop, unroll each loop up to ``N`` iterations (default 10, ``0``
+  skips it) to find an execution that fails or prove that none does (see
+  :doc:`ch16-when-verification-fails`)
 - ``cpp-verify --backend={z3,cvc5,portfolio,race,bmc,lean}`` — verification
   engine: Z3 (the default), cvc5, both with agreement required
   (``portfolio``), both at once with the first proof or certified
