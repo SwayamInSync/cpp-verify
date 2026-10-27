@@ -1061,7 +1061,7 @@ and obligation kinds.
 ### Canonical archives and semantic identity
 
 `--obligation-out=FILE` writes one or more deterministic
-`cppverify.obligation/3` records after source attribution. The binary format has
+`cppverify.obligation/4` records after source attribution. The binary format has
 the `CPVOBL\r\n` magic, an explicit schema version, little-endian fixed-width
 integers, length-delimited strings/collections, and stable hand-assigned wire
 tags rather than C++ enum ordinals. The reader bounds strings, collections,
@@ -1085,9 +1085,12 @@ functions a measure applies, so a module never names one it does not
 declare. Before, a spec only a measure applied was removed, and the
 measure could not be printed.
 
-Schema v2 adds the precise obligation kinds, and schema v3 the measures and
-premises; readers still read schema v2 and schema v1, whose records name
-only assertions, postconditions, and unwinding checks. Records
+Schema v2 adds the precise obligation kinds, schema v3 the measures and
+premises, and schema v4, with the diagnostic metadata, where each variable
+version is defined (`DiagnosticVariable::Guard`); readers still read schemas
+v3, v2, and v1, whose records name only assertions, postconditions, and
+unwinding checks. A record before v4 gives no version a guard, so its
+counterexamples list every version, as before 0.2. Records
 limit strings to 64 MiB, collections and expression
 nodes/edges to 100,000 per record, expression nesting to 4096, canonical
 integer numerals to 4096 decimal characters, and integer sorts to 4096 bits.
@@ -2398,8 +2401,42 @@ obligation's counterexample query to true.
 Public obligation identities are source anchored:
 `function-identity::kind@line:column`, with `#N` only for obligations sharing
 one anchor. This keeps later IDs stable when an unrelated obligation is inserted
-or reordered without moving the source anchor. The ordinary diagnostic is
-Clang-style text; `--diagnostics-format=json` emits one
+or reordered without moving the source anchor; JSON records carry it, and text
+names only the kind (`[overflow]`), since the location prefixes the line.
+
+Every result is described once as Clang diagnostics (`Verifier::partsOf`,
+`VerifyDiagnosticPart`): an error at the failing check, with notes; a
+warning; or a verdict's status line, an error when unresolved and otherwise
+a remark. The error's caret is the obligation's location and its range the
+expression it checks when that lies on the caret's line: every `VExpr`
+carries the start of its source (`BeginLoc`, Clang's `getBeginLoc`) beside
+`Loc` (`getExprLoc`, an operator's position) and `EndLoc`, and lowering keeps
+it to `Obligation::BeginLoc` and `VerifyResult::BeginLocation`. A failure's
+notes are its counterexample at the check (`counterexampleText`: values by
+display name, ordered by the declaration's position with `result` last, each
+variable with the values its SSA versions take in version order, `0 -> 1`, a
+version that keeps the value before it adding none, and a reference shown as
+`&r`, since its value is the address it refers to) and each trace event at
+its source location (`traceStepText`, in the static analyzer's words: "takes
+the false branch", "returns 151"; a path of more than `TraceStepLimit` steps
+keeps its first and last five, as `-ftemplate-backtrace-limit` does), then its
+own notes. A note inside a macro is placed at the macro's use: the error
+already shows the expansion. Only the versions the path defines count:
+passivization records with each version of a source variable the path
+condition active where it is defined (`PassiveModelVariable::Guard`, lowered
+to `DiagnosticVariable::Guard`, which archives do not record), Z3 evaluates
+it in the model without completion (`VerifyModelValue::OnPath`, JSON
+`"on_path": false`), and a version whose condition is false is left out: it
+equals the version before it there, so listing it showed `y = 0 -> 1 -> 0 ->
+1` for a `y` that never returned to 0. A store, a deletion, and a return are
+traced after the checks of their own operation, so a check that fails there
+does not list the operation as a step taken. A failed result's
+`Message` explains only what its model and trace do not, such as a
+confirmation by proof; the values are never rendered into it. The standalone
+tool prints errors and warnings with `TextDiagnostic`, source line and caret
+included, and verdicts as one line each; the compile path reports every part
+through the compiler's `DiagnosticsEngine` (see Compile-Time Integration).
+`--diagnostics-format=json` emits one
 `cppverify.diagnostic/1` JSON object per verification result, including source
 ranges, typed model values, trace events, backend/bound, and a stable reason
 code. Command-line/frontend errors and output combined with IR dumps are not a
@@ -3016,7 +3053,7 @@ semantics.
 
 ## Compile-Time Integration
 
-`CppVerifyIntegration` (`clang/lib/Verify/Driver/CppVerifyIntegration.cpp`) hooks **CodeGen**: when `-fverify-contracts` is on and `-fno-verify` is off, verification runs asynchronously while LLVM IR is generated. Failures surface as `diag::err_fe_cppverify_failed`. Zero ghost/spec code in the object file.
+`CppVerifyIntegration` (`clang/lib/Verify/Driver/CppVerifyIntegration.cpp`) hooks **CodeGen**: when `-fverify-contracts` is on and `-fno-verify` is off, verification runs asynchronously while LLVM IR is generated. The verifier's thread collects its results as `VerifyDiagnosticPart`s (`VerifyOptions::Parts`) instead of printing them, and `finishCppVerify` reports each through the compiler's `DiagnosticsEngine` on the main thread, which the engine requires: `err_cppverify_result` for failures and unresolved results, `warn_cppverify_result` in `-Wcppverify`, `remark_cppverify_result` in `-Rcppverify` for proofs, and `note_cppverify_result` for their notes. A result without a location of its own, as a proof has none, points at its function's declaration (`VerifyDiagnostic::FunctionLoc`). So `-Werror`, `-w`, colors, `-fdiagnostics-format=sarif`, and clangd see them as Clang's own; `err_fe_cppverify_failed` is reported only when the run fails without a result of its own. Zero ghost/spec code in the object file.
 
 ## Tooling Integration
 
