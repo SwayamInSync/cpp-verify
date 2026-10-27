@@ -2309,10 +2309,24 @@ StmtResult Parser::ParseForStatement(SourceLocation *TrailingElseLoc,
   // Match the ')'.
   T.consumeClose();
 
-  // CppVerify: loop contract clauses before the body.
+  // CppVerify: loop contract clauses before the body. A range-based for
+  // loop's contract may name its position, cppverify::index.
   LoopContractInfo ForContract;
-  if (getLangOpts().VerifyContracts)
+  if (getLangOpts().VerifyContracts) {
+    VarDecl *RangeIndex = nullptr;
+    if (ForRangeInfo.ParsedForRangeDecl()) {
+      ASTContext &Ctx = Actions.getASTContext();
+      QualType IndexType = Ctx.getPointerDiffType();
+      RangeIndex = VarDecl::Create(
+          Ctx, Actions.getContractBinderContext(), ForLoc, ForLoc,
+          &Ctx.Idents.get("__cppverify_index"), IndexType,
+          Ctx.getTrivialTypeSourceInfo(IndexType, ForLoc), SC_None);
+      RangeIndex->setImplicit();
+    }
+    llvm::SaveAndRestore<VarDecl *> Index(CppVerifyRangeIndex, RangeIndex);
     ParseLoopContractClauses(ForContract);
+    ForContract.Index = RangeIndex;
+  }
 
   // C++ Coroutines [stmt.iter]:
   //   'co_await' can only be used for a range-based for statement.
@@ -2434,8 +2448,13 @@ StmtResult Parser::ParseForStatement(SourceLocation *TrailingElseLoc,
     return Actions.FinishCXXExpansionStmt(ForRangeStmt.get(), Body.get());
   }
 
-  if (ForRangeInfo.ParsedForRangeDecl())
-    return Actions.FinishCXXForRangeStmt(ForRangeStmt.get(), Body.get());
+  if (ForRangeInfo.ParsedForRangeDecl()) {
+    StmtResult RangeResult =
+        Actions.FinishCXXForRangeStmt(ForRangeStmt.get(), Body.get());
+    if (getLangOpts().VerifyContracts)
+      attachLoopContract(RangeResult, ForContract);
+    return RangeResult;
+  }
 
   StmtResult ForResult = Actions.ActOnForStmt(
       ForLoc, T.getOpenLocation(), FirstPart.get(), SecondPart, ThirdPart,
