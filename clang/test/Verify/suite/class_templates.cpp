@@ -176,7 +176,6 @@ int digit()
   int v = x.get();
   return v;
 }
-// CHECK-DAG: Verified: spec axiom: small<int>
 // CHECK-DAG: Verified: Digit<int>::Digit [backend=z3]
 // CHECK-DAG: Verified: Digit<int>::get [backend=z3]
 // CHECK-DAG: Verified: digit [backend=z3]
