@@ -61,6 +61,66 @@
 using namespace clang;
 using namespace verify;
 
+/// One printed result of a file of a run over several files, as verified
+/// and, for a proof that rests on contracts the file declares without a
+/// definition, as unresolved for want of one of them (the contract's
+/// description in place of ContractPlaceholder); with what each counts.
+struct CrossFileLine {
+  std::string Text;
+  std::string Demoted;
+  VerifySummary Counts;
+  VerifySummary DemotedCounts;
+  /// The keys of the contracts the proof rests on; empty for any other line.
+  std::set<std::string> Assumes;
+  /// A finding about a proof (its line), and whether it holds for the entry
+  /// state alone, which no callee contract enters.
+  std::optional<size_t> FindingOf;
+  bool FoundAtEntry = false;
+  /// A warning shown only when no file of the run defines this contract.
+  std::string UnlessDefined;
+};
+
+/// A contract a file verifies, offered to the other files.
+struct CrossFileContract {
+  std::string Name;
+  std::string File;
+  bool Established = false;
+  std::set<std::string> Assumes;
+};
+
+struct CrossFileReport {
+  std::vector<CrossFileLine> Lines;
+  /// Printed after the lines (the time report).
+  std::string Trailer;
+  bool Ok = true;
+  std::map<std::string, CrossFileContract> Defined;
+  /// The names of the contracts the lines rest on, by key.
+  std::map<std::string, std::string> Names;
+};
+
+static constexpr llvm::StringLiteral ContractPlaceholder =
+    "@@cppverify-contract@@";
+
+static void addSummary(VerifySummary &To, const VerifySummary &From) {
+  To.Verified += From.Verified;
+  To.Failed += From.Failed;
+  To.Unresolved += From.Unresolved;
+  To.BoundedSafe += From.BoundedSafe;
+  To.Trusted += From.Trusted;
+  To.Lowered += From.Lowered;
+  To.Exported += From.Exported;
+  To.Interrupted += From.Interrupted;
+  for (const auto &[Reason, Count] : From.Reasons)
+    To.Reasons[Reason] += Count;
+}
+
+struct CrossFileRun::Impl {
+  std::vector<CrossFileReport> Files;
+};
+
+CrossFileRun::CrossFileRun() : State(std::make_unique<Impl>()) {}
+CrossFileRun::~CrossFileRun() = default;
+
 namespace {
 
 /// How deep the driver unfolds inductive predicates in a function, one
@@ -1109,6 +1169,9 @@ struct VerifyDiagnostic {
   /// A failing obligation after the one a function's verdict reports: no
   /// verdict of its own.
   bool Additional = false;
+  /// In a run over several files: a warning that the contract of this
+  /// function has no definition, shown only if no file of the run has one.
+  std::string UnlessDefined;
 };
 
 static uint64_t nanosecondsSince(std::chrono::steady_clock::time_point Start) {
@@ -2808,6 +2871,21 @@ class Verifier {
   std::vector<VerifyDiagnostic> Diags;
   /// What --list-functions prints: each function's location and kind.
   std::vector<std::pair<SourceLocation, std::string>> Listing;
+  /// Each contracted function's contract as written, by its identity.
+  std::map<std::string, std::string> ContractTexts;
+  /// In a run over several files: the contracts declared here without a
+  /// definition, which another file may verify, by identity, with their
+  /// names; for each proof (its place in Diags), those it rests on, through
+  /// the contracts verified here; and each contract verified here, whether
+  /// this file establishes it and on which of the others it rests.
+  std::map<std::string, std::string> Externals;
+  std::map<size_t, std::set<std::string>> ExternalOf;
+  struct DefinedContract {
+    std::string Name;
+    bool Established = false;
+    std::set<std::string> Assumes;
+  };
+  std::map<std::string, DefinedContract> DefinedContracts;
   /// Where the verification of each reported function spent its time, in
   /// nanoseconds, and of the run, for --time-report.
   struct FunctionTime {
@@ -3133,6 +3211,7 @@ public:
     for (const auto &[Loc, Message] : Converter.getWarnings())
       Diags.push_back({VerifyDiagnostic::Warning, Message, Loc});
     InstantiationPoints = Converter.getInstantiationPoints();
+    ContractTexts = Converter.getContractTexts();
     // A construct the verifier does not represent costs its function alone:
     // the function is Unresolved, its first error carrying the verdict, and
     // the rest of the translation unit is verified. An error outside every
@@ -3898,13 +3977,16 @@ public:
             Diags.push_back({VerifyDiagnostic::Trusted,
                              Fn->Name + " (contract assumed, not verified)",
                              Fn->DeclLoc, Fn->Name});
-          else if (!Fn->UnsupportedConstruct)
+          else if (!Fn->UnsupportedConstruct) {
             Diags.push_back(
                 {VerifyDiagnostic::Warning,
                  Fn->Name + " has a contract but no definition, so its callers "
                             "are not verified; mark the declaration "
                             "[[cppverify::trusted]] to assume the contract",
                  Fn->DeclLoc, Fn->Name});
+            if (Opts.CrossFile)
+              Diags.back().UnlessDefined = Fn->Identity;
+          }
           if (auto Error = InterfaceErrors.find(Fn->Identity);
               Error != InterfaceErrors.end()) {
             AllOk = false;
@@ -5283,9 +5365,18 @@ public:
     // a demoted function no longer its contract, and an inductive predicate
     // whose rule proofs are not all established has no unfolding.
     std::set<std::string> Unestablished;
-    for (const auto &Fn : Functions)
-      if (!Fn->IsSpec && !Fn->Uninterpreted && !Fn->IsTrusted)
-        Unestablished.insert(Fn->Identity);
+    for (const auto &Fn : Functions) {
+      if (Fn->IsSpec || Fn->Uninterpreted || Fn->IsTrusted)
+        continue;
+      // In a run over several files, a contract declared here without a
+      // definition holds for now: another file may verify it.
+      if (Opts.CrossFile && Fn->IsExternalContract &&
+          !Fn->UnsupportedConstruct && !Fn->IsProof) {
+        Externals.emplace(Fn->Identity, Fn->Name);
+        continue;
+      }
+      Unestablished.insert(Fn->Identity);
+    }
     auto settled = [&](size_t Index) { return Diags[Index].isProof(); };
     for (const auto &[Index, Identity, Callees] : CallDependencies)
       if (settled(Index))
@@ -5651,6 +5742,43 @@ public:
                  "its rules rest on facts whose proofs rest on them");
           Demoted = true;
         }
+    }
+    // In a run over several files, each proof rests on the contracts
+    // declared here without a definition that its callees' contracts rest
+    // on, through the contracts verified here; each contract verified here
+    // is offered to the other files with what it rests on.
+    if (Opts.CrossFile) {
+      std::map<std::string, std::vector<size_t>> VerdictsOf;
+      for (const auto &[Index, Identity, Callees] : CallDependencies)
+        VerdictsOf[Identity].push_back(Index);
+      for (bool Changed = true; Changed;) {
+        Changed = false;
+        for (const auto &[Index, Identity, Callees] : CallDependencies) {
+          std::set<std::string> Rests;
+          for (const std::string &Callee : Callees) {
+            if (Externals.count(Callee))
+              Rests.insert(Callee);
+            for (size_t Verdict : VerdictsOf[Callee])
+              if (auto It = ExternalOf.find(Verdict); It != ExternalOf.end())
+                Rests.insert(It->second.begin(), It->second.end());
+          }
+          std::set<std::string> &Mine = ExternalOf[Index];
+          const size_t Before = Mine.size();
+          Mine.insert(Rests.begin(), Rests.end());
+          Changed |= Mine.size() != Before;
+        }
+      }
+      for (const auto &Fn : Functions) {
+        if (Fn->IsSpec || Fn->IsProof || Fn->IsExternalContract ||
+            Fn->Uninterpreted || !ContractTexts.count(Fn->Identity))
+          continue;
+        DefinedContract &Defined = DefinedContracts[Fn->Identity];
+        Defined.Name = Fn->Name;
+        Defined.Established = !Unestablished.count(Fn->Identity);
+        for (size_t Verdict : VerdictsOf[Fn->Identity])
+          if (auto It = ExternalOf.find(Verdict); It != ExternalOf.end())
+            Defined.Assumes.insert(It->second.begin(), It->second.end());
+      }
     }
     // Counterexamples their checks could not evaluate are confirmed by proof
     // now that it is known which contracts are established: a confirmation
@@ -6258,6 +6386,21 @@ public:
                           seconds(Time->Confirmation), Time->Name);
   }
 
+  /// Whether \p D is reported, and so counted: a hidden one is not, nor a
+  /// generated proof that holds.
+  static bool reported(const VerifyDiagnostic &D) {
+    return !D.Hidden && !(D.Quiet && (D.K == VerifyDiagnostic::Verified ||
+                                      D.K == VerifyDiagnostic::Certified ||
+                                      D.K == VerifyDiagnostic::Exported));
+  }
+
+  /// Whether --quiet leaves \p D out: what needs no attention.
+  bool quieted(const VerifyDiagnostic &D) const {
+    return Opts.Quiet && (D.isProof() || D.K == VerifyDiagnostic::Lowered ||
+                          D.K == VerifyDiagnostic::Exported ||
+                          D.K == VerifyDiagnostic::Trusted);
+  }
+
   void printDiagnostics(llvm::raw_ostream &OS) const {
     for (const auto &[Loc, Line] : Listing) {
       PresumedLoc PLoc = Ctx.getSourceManager().getPresumedLoc(Loc);
@@ -6267,108 +6410,174 @@ public:
       OS << Line << "\n";
     }
     for (const auto &D : Diags) {
-      if (D.Hidden)
-        continue;
-      // A generated proof is reported only if it is not a proof.
-      if (D.Quiet && (D.K == VerifyDiagnostic::Verified ||
-                      D.K == VerifyDiagnostic::Certified ||
-                      D.K == VerifyDiagnostic::Exported))
+      if (!reported(D))
         continue;
       if (Opts.Summary)
         count(D, *Opts.Summary);
-      // --quiet leaves out what needs no attention.
-      if (Opts.Quiet && (D.isProof() || D.K == VerifyDiagnostic::Lowered ||
-                         D.K == VerifyDiagnostic::Exported ||
-                         D.K == VerifyDiagnostic::Trusted))
-        continue;
-      if (Opts.Diagnostics == DiagnosticFormat::Json) {
-        printJSONDiagnostic(D, OS);
-        continue;
-      }
-      const std::pair<SourceLocation, std::string> *Instantiation =
-          instantiationOf(D);
-      const std::string InstantiationNote =
-          Instantiation ? "in instantiation of " + Instantiation->second +
-                              " '" + D.FunctionName + "' requested here"
-                        : std::string();
-      if (D.K == VerifyDiagnostic::Error && D.Span.isValid()) {
-        DiagnosticOptions DiagOpts;
-        DiagOpts.ShowPresumedLoc = true;
-        TextDiagnostic Text(OS, Ctx.getLangOpts(), DiagOpts);
-        Text.emitDiagnostic(
-            FullSourceLoc(D.Span.getBegin(), Ctx.getSourceManager()),
-            DiagnosticsEngine::Error, D.Message,
-            CharSourceRange::getTokenRange(D.Span), {});
-        if (Instantiation)
-          Text.emitDiagnostic(
-              FullSourceLoc(Instantiation->first, Ctx.getSourceManager()),
-              DiagnosticsEngine::Note, InstantiationNote, {}, {});
-        continue;
-      }
-      if (D.Loc.isValid()) {
-        PresumedLoc PLoc = Ctx.getSourceManager().getPresumedLoc(D.Loc);
-        if (PLoc.isValid())
-          OS << PLoc.getFilename() << ":" << PLoc.getLine() << ":"
-             << PLoc.getColumn() << ": ";
-      }
-      switch (D.K) {
-      case VerifyDiagnostic::Lowered:
-        OS << "Lowered: " << D.Message << "\n";
-        break;
-      case VerifyDiagnostic::Verified:
-        OS << "Verified: " << D.Message << "\n";
-        break;
-      case VerifyDiagnostic::Error:
-        OS << "error: " << D.Message << "\n";
-        break;
-      case VerifyDiagnostic::Unresolved:
-        OS << "Unresolved: " << D.Message << "\n";
-        if (D.Result)
-          for (const QuantifierProfileEntry &Entry : D.Result->QuantifierProfile)
-            OS << "note: the quantifier at " << Entry.Line << ":"
-               << Entry.Column << " was instantiated " << Entry.Instances
-               << " times, up to generation " << Entry.MaxGeneration << "\n";
-        break;
-      case VerifyDiagnostic::Interrupted:
-        OS << "Interrupted: " << D.Message << "\n";
-        break;
-      case VerifyDiagnostic::BoundedSafe:
-        OS << "BoundedSafe: " << D.Message << "\n";
-        break;
-      case VerifyDiagnostic::Exported:
-        OS << "Exported: " << D.Message;
-        if (D.LeanAutomatic && D.Result)
-          OS << " (cppverify_auto proved " << D.LeanAutomatic << " of "
-             << std::set<std::string>(D.Result->LeanGoals.begin(),
-                                      D.Result->LeanGoals.end())
-                    .size()
-             << " goals)";
-        OS << "\n";
-        break;
-      case VerifyDiagnostic::Certified:
-        OS << "Certified: " << D.Message << "\n";
-        break;
-      case VerifyDiagnostic::MixedProof:
-        OS << "Proved (" << D.Result->BackendName << "): " << D.Message << "\n";
-        break;
-      case VerifyDiagnostic::Trusted:
-        OS << "Trusted: " << D.Message << "\n";
-        break;
-      case VerifyDiagnostic::Warning:
-        OS << "warning: " << D.Message << "\n";
-        break;
-      }
-      if (Instantiation) {
-        PresumedLoc PLoc =
-            Ctx.getSourceManager().getPresumedLoc(Instantiation->first);
-        if (PLoc.isValid())
-          OS << PLoc.getFilename() << ":" << PLoc.getLine() << ":"
-             << PLoc.getColumn() << ": ";
-        OS << "note: " << InstantiationNote << "\n";
-      }
-      for (const std::string &Note : D.Notes)
-        OS << "note: " << Note << "\n";
+      if (!quieted(D))
+        printDiagnostic(D, OS);
     }
+  }
+
+  /// In a run over several files, this file's results as they wait for every
+  /// file to be verified: each reported diagnostic as printed and counted,
+  /// and a proof that rests on contracts declared here without a definition
+  /// also as unresolved for want of one, as demote() makes it, with
+  /// ContractPlaceholder for the contract.
+  CrossFileReport renderReport(bool Ok) const {
+    CrossFileReport Report;
+    Report.Ok = Ok;
+    auto key = [&](const std::string &Identity) {
+      auto It = ContractTexts.find(Identity);
+      return Identity + "\n" + (It != ContractTexts.end() ? It->second : "");
+    };
+    for (const auto &[Identity, Defined] : DefinedContracts) {
+      CrossFileContract &Contract = Report.Defined[key(Identity)];
+      Contract.Name = Defined.Name;
+      Contract.File = std::string(
+          Ctx.getSourceManager()
+              .getFileEntryRefForID(Ctx.getSourceManager().getMainFileID())
+              ->getName());
+      Contract.Established = Defined.Established;
+      for (const std::string &Assumed : Defined.Assumes)
+        Contract.Assumes.insert(key(Assumed));
+    }
+    for (const auto &[Identity, Name] : Externals)
+      Report.Names[key(Identity)] = Name;
+    std::map<size_t, size_t> LineOf;
+    for (size_t Index = 0; Index != Diags.size(); ++Index) {
+      const VerifyDiagnostic &D = Diags[Index];
+      if (!reported(D))
+        continue;
+      LineOf[Index] = Report.Lines.size();
+      CrossFileLine &Line = Report.Lines.emplace_back();
+      count(D, Line.Counts);
+      llvm::raw_string_ostream Text(Line.Text);
+      if (!quieted(D))
+        printDiagnostic(D, Text);
+      if (!D.UnlessDefined.empty())
+        Line.UnlessDefined = key(D.UnlessDefined);
+      if (D.FindingOf) {
+        if (auto It = LineOf.find(*D.FindingOf); It != LineOf.end())
+          Line.FindingOf = It->second;
+        Line.FoundAtEntry = D.FoundAtEntry;
+      }
+      auto Rests = ExternalOf.find(Index);
+      if (!D.isProof() || Rests == ExternalOf.end() || Rests->second.empty())
+        continue;
+      for (const std::string &Assumed : Rests->second)
+        Line.Assumes.insert(key(Assumed));
+      VerifyDiagnostic Demoted = D;
+      Demoted.K = VerifyDiagnostic::Unresolved;
+      // A callee contract enters only after the entry state.
+      if (Demoted.Vacuous && !Demoted.VacuousAtEntry) {
+        Demoted.Vacuous = false;
+        if (size_t At = Demoted.Message.find(" [vacuous]");
+            At != std::string::npos)
+          Demoted.Message.erase(At, std::strlen(" [vacuous]"));
+      }
+      Demoted.Message +=
+          " [reason=" + verifyReasonCode(VerifyReason::CalleeContract).str() +
+          "] (relies on " + ContractPlaceholder.str() + ")";
+      if (!Demoted.Result)
+        Demoted.Result.emplace();
+      Demoted.Result->Status = VerifyStatus::Unresolved;
+      Demoted.Result->Reason = VerifyReason::CalleeContract;
+      count(Demoted, Line.DemotedCounts);
+      llvm::raw_string_ostream DemotedText(Line.Demoted);
+      printDiagnostic(Demoted, DemotedText);
+    }
+    return Report;
+  }
+
+  void printDiagnostic(const VerifyDiagnostic &D, llvm::raw_ostream &OS) const {
+    if (Opts.Diagnostics == DiagnosticFormat::Json) {
+      printJSONDiagnostic(D, OS);
+      return;
+    }
+    const std::pair<SourceLocation, std::string> *Instantiation =
+        instantiationOf(D);
+    const std::string InstantiationNote =
+        Instantiation ? "in instantiation of " + Instantiation->second + " '" +
+                            D.FunctionName + "' requested here"
+                      : std::string();
+    if (D.K == VerifyDiagnostic::Error && D.Span.isValid()) {
+      DiagnosticOptions DiagOpts;
+      DiagOpts.ShowPresumedLoc = true;
+      TextDiagnostic Text(OS, Ctx.getLangOpts(), DiagOpts);
+      Text.emitDiagnostic(
+          FullSourceLoc(D.Span.getBegin(), Ctx.getSourceManager()),
+          DiagnosticsEngine::Error, D.Message,
+          CharSourceRange::getTokenRange(D.Span), {});
+      if (Instantiation)
+        Text.emitDiagnostic(
+            FullSourceLoc(Instantiation->first, Ctx.getSourceManager()),
+            DiagnosticsEngine::Note, InstantiationNote, {}, {});
+      return;
+    }
+    if (D.Loc.isValid()) {
+      PresumedLoc PLoc = Ctx.getSourceManager().getPresumedLoc(D.Loc);
+      if (PLoc.isValid())
+        OS << PLoc.getFilename() << ":" << PLoc.getLine() << ":"
+           << PLoc.getColumn() << ": ";
+    }
+    switch (D.K) {
+    case VerifyDiagnostic::Lowered:
+      OS << "Lowered: " << D.Message << "\n";
+      break;
+    case VerifyDiagnostic::Verified:
+      OS << "Verified: " << D.Message << "\n";
+      break;
+    case VerifyDiagnostic::Error:
+      OS << "error: " << D.Message << "\n";
+      break;
+    case VerifyDiagnostic::Unresolved:
+      OS << "Unresolved: " << D.Message << "\n";
+      if (D.Result)
+        for (const QuantifierProfileEntry &Entry : D.Result->QuantifierProfile)
+          OS << "note: the quantifier at " << Entry.Line << ":" << Entry.Column
+             << " was instantiated " << Entry.Instances
+             << " times, up to generation " << Entry.MaxGeneration << "\n";
+      break;
+    case VerifyDiagnostic::Interrupted:
+      OS << "Interrupted: " << D.Message << "\n";
+      break;
+    case VerifyDiagnostic::BoundedSafe:
+      OS << "BoundedSafe: " << D.Message << "\n";
+      break;
+    case VerifyDiagnostic::Exported:
+      OS << "Exported: " << D.Message;
+      if (D.LeanAutomatic && D.Result)
+        OS << " (cppverify_auto proved " << D.LeanAutomatic << " of "
+           << std::set<std::string>(D.Result->LeanGoals.begin(),
+                                    D.Result->LeanGoals.end())
+                  .size()
+           << " goals)";
+      OS << "\n";
+      break;
+    case VerifyDiagnostic::Certified:
+      OS << "Certified: " << D.Message << "\n";
+      break;
+    case VerifyDiagnostic::MixedProof:
+      OS << "Proved (" << D.Result->BackendName << "): " << D.Message << "\n";
+      break;
+    case VerifyDiagnostic::Trusted:
+      OS << "Trusted: " << D.Message << "\n";
+      break;
+    case VerifyDiagnostic::Warning:
+      OS << "warning: " << D.Message << "\n";
+      break;
+    }
+    if (Instantiation) {
+      PresumedLoc PLoc =
+          Ctx.getSourceManager().getPresumedLoc(Instantiation->first);
+      if (PLoc.isValid())
+        OS << PLoc.getFilename() << ":" << PLoc.getLine() << ":"
+           << PLoc.getColumn() << ": ";
+      OS << "note: " << InstantiationNote << "\n";
+    }
+    for (const std::string &Note : D.Notes)
+      OS << "note: " << Note << "\n";
   }
 };
 
@@ -6379,10 +6588,117 @@ bool verify::verifyTranslationUnit(ASTContext &Ctx, llvm::raw_ostream &OS,
   Verifier V(Ctx, Opts, OS);
   bool Ok = V.run();
   V.settled();
+  if (Opts.CrossFile) {
+    CrossFileReport Report = V.renderReport(Ok);
+    llvm::raw_string_ostream Trailer(Report.Trailer);
+    if (Opts.TimeReport)
+      V.printTimeReport(Trailer);
+    Opts.CrossFile->State->Files.push_back(std::move(Report));
+    return Ok;
+  }
   V.printDiagnostics(OS);
   if (Opts.TimeReport)
     V.printTimeReport(OS);
   return Ok;
+}
+
+unsigned CrossFileRun::finish(llvm::raw_ostream &OS, VerifySummary *Summary) {
+  // A contract is established by its definitions' proofs once the contracts
+  // they rest on are, starting from none: one that rests on itself through
+  // other files is not. A contract defined in several files (inline in a
+  // header) must hold in each.
+  std::map<std::string, std::vector<const CrossFileContract *>> Definitions;
+  for (const CrossFileReport &File : State->Files)
+    for (const auto &[Key, Contract] : File.Defined)
+      Definitions[Key].push_back(&Contract);
+  std::set<std::string> Established;
+  for (bool Changed = true; Changed;) {
+    Changed = false;
+    for (const auto &[Key, Contracts] : Definitions)
+      if (!Established.count(Key) &&
+          llvm::all_of(Contracts, [&](const CrossFileContract *Contract) {
+            return Contract->Established &&
+                   llvm::all_of(Contract->Assumes, [&](const std::string &K) {
+                     return Established.count(K) != 0;
+                   });
+          })) {
+        Established.insert(Key);
+        Changed = true;
+      }
+  }
+  auto describe = [&](const CrossFileReport &File, const std::string &Key) {
+    auto Name = File.Names.find(Key);
+    std::string Text =
+        "the contract of " + (Name != File.Names.end()
+                                  ? Name->second
+                                  : Key.substr(0, Key.find('\n')));
+    auto Defined = Definitions.find(Key);
+    if (Defined == Definitions.end()) {
+      // A definition verified against another contract does not match.
+      const std::string Identity = Key.substr(0, Key.find('\n') + 1);
+      for (const auto &[Other, Contracts] : Definitions)
+        if (llvm::StringRef(Other).starts_with(Identity))
+          return Text + ", which is not established: its definition in " +
+                 Contracts.front()->File +
+                 " is verified against another contract";
+      return Text + " (no definition; mark it [[cppverify::trusted]] to "
+                    "assume it), which is not established";
+    }
+    for (const CrossFileContract *Contract : Defined->second)
+      if (!Contract->Established)
+        return Text + ", which its verification in " + Contract->File +
+               " does not establish";
+    return Text + ", whose proof in " + Defined->second.front()->File +
+           " rests in turn on contracts not established";
+  };
+  // Whether some file defines the function of a contract's key, whatever
+  // contract its definition is verified against.
+  auto defined = [&](const std::string &Key) {
+    const std::string Identity = Key.substr(0, Key.find('\n') + 1);
+    auto It = Definitions.lower_bound(Identity);
+    return It != Definitions.end() &&
+           llvm::StringRef(It->first).starts_with(Identity);
+  };
+  unsigned Failures = 0;
+  for (const CrossFileReport &File : State->Files) {
+    std::vector<bool> Demoted(File.Lines.size());
+    for (size_t I = 0; I != File.Lines.size(); ++I)
+      for (const std::string &Key : File.Lines[I].Assumes)
+        if (!Established.count(Key)) {
+          Demoted[I] = true;
+          break;
+        }
+    bool Ok = File.Ok;
+    for (size_t I = 0; I != File.Lines.size(); ++I) {
+      const CrossFileLine &Line = File.Lines[I];
+      if (!Line.UnlessDefined.empty() && defined(Line.UnlessDefined))
+        continue;
+      // A finding rests on the facts of its query, as its proof does.
+      if (Line.FindingOf && Demoted[*Line.FindingOf] && !Line.FoundAtEntry)
+        continue;
+      if (!Demoted[I]) {
+        OS << Line.Text;
+        if (Summary)
+          addSummary(*Summary, Line.Counts);
+        continue;
+      }
+      Ok = false;
+      std::string Missing;
+      for (const std::string &Key : Line.Assumes)
+        if (!Established.count(Key))
+          Missing += (Missing.empty() ? "" : "; ") + describe(File, Key);
+      std::string Text = Line.Demoted;
+      for (size_t At = Text.find(ContractPlaceholder); At != std::string::npos;
+           At = Text.find(ContractPlaceholder, At + Missing.size()))
+        Text.replace(At, ContractPlaceholder.size(), Missing);
+      OS << Text;
+      if (Summary)
+        addSummary(*Summary, Line.DemotedCounts);
+    }
+    OS << File.Trailer;
+    Failures += !Ok;
+  }
+  return Failures;
 }
 
 LeanProjectReplay
