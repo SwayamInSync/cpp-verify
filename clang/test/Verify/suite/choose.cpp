@@ -44,13 +44,13 @@ void claims_one()
   cppverify::post(pick() == 1)
 {
 }
-// CHECK-DAG: error: verification failed: claims_one [{{.*}}::postcondition@{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: claims_one [postcondition]{{.*}}[reason=counterexample]
 
 void no_witness()
 {
   cppverify::check(cppverify::choose(x, x * x == 2) == 0);
 }
-// CHECK-DAG: error: verification failed: no_witness [{{.*}}::assertion@{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: no_witness [assertion]{{.*}}[reason=counterexample]
 
 // In ghost code a choice is stored like any mathematical value: the store
 // must fit, which the range guarantees when a witness exists.
