@@ -230,6 +230,51 @@ a value from before the loop:
      }
    }
 
+Loops over an array
+-------------------
+
+A range-based ``for`` loop over an array visits its elements in order. Its
+contract holds at the loop's head, where the loop variable is not declared
+yet, so it names the position instead: ``cppverify::index``, the number of
+elements already visited, 0 at the first test and the size at the end. A
+property of the elements so far is a quantifier up to it:
+
+.. code-block:: cpp
+
+   struct Samples {
+     int values[16];
+   };
+
+   int largest(const Samples *s)
+     cv::pre(s != nullptr)
+     cv::post(cv::forall(k, 0, 16, s->values[k] <= cv::result))
+     cv::post(cv::exists(k, 0, 16, s->values[k] == cv::result))
+   {
+     int best = s->values[0];
+     for (int v : s->values)
+       cv::invariant(cv::forall(k, 0, cv::index, s->values[k] <= best))
+       cv::invariant(cv::exists(k, 0, 16, s->values[k] == best))
+     {
+       if (v > best)
+         best = v;
+     }
+     return best;
+   }
+
+.. code-block:: text
+
+   Verified: largest [backend=z3]
+
+The loop needs no ``cppverify::decreases``: without one, its measure is the
+number of elements left. Its variable may be a reference, which writes the
+element (``for (int &x : a) x = 0;``), and its range a local array, an array
+member reached through a pointer, a constant table, or a string literal,
+whose last element is the terminating zero. The verifier finds the element
+again at each iteration, where C++ evaluates the range once, so a range found
+through a call, a pointer read from memory, or a variable the body changes
+is rejected; copy the pointer into a variable the body leaves alone. A loop
+over a class, through its ``begin`` and ``end``, is not supported yet.
+
 Two loops, one name
 -------------------
 
