@@ -2531,6 +2531,12 @@ defm verify_contracts : BoolFOption<"verify-contracts",
 // default once contracts are enabled, and -fno-verify turns compilation into a
 // syntax/semantics-only "light check". It implies -fverify-contracts (handled in
 // the driver) because it is meaningless without the contract language.
+def fverify_contracts_out_EQ : Joined<["-"], "fverify-contracts-out=">,
+  Group<f_clang_Group>, Visibility<[ClangOption, CC1Option]>,
+  MetaVarName<"<file>">,
+  HelpText<"Write the contracts CppVerify verifies in this file and those it "
+           "assumes from other files, for cpp-verify --check-contracts">,
+  MarshallingInfoString<FrontendOpts<"VerifyContractsOut">>;
 def fno_verify : Flag<["-"], "fno-verify">, Group<f_clang_Group>,
   Visibility<[ClangOption, CC1Option]>,
   HelpText<"Check contract syntax and semantics but skip CppVerify SMT verification "
