@@ -1,0 +1,55 @@
+# One run over several files settles a contract that a file declares without
+# a definition against the verification of its definition in another file:
+# a proof that rests on it stands where that verification establishes it,
+# and is unresolved (callee.contract) where it does not, as within one file.
+#
+# RUN: %cpp-verify --jobs=1 %S/Inputs/across/src/a.cpp %S/Inputs/across/src/mathx.cpp \
+# RUN:   -- -I%S/Inputs/across/include -DBUG=100 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=RIGHT --implicit-check-not=warning:
+# RUN: not %cpp-verify --jobs=1 %S/Inputs/across/src/a.cpp %S/Inputs/across/src/mathx.cpp \
+# RUN:   -- -I%S/Inputs/across/include -DBUG=101 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=WRONG --implicit-check-not=warning:
+# RUN: not %cpp-verify --jobs=1 %S/Inputs/across/src/mathx.cpp %S/Inputs/across/src/a.cpp \
+# RUN:   -- -I%S/Inputs/across/include -DBUG=101 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=ORDER
+# RUN: not %cpp-verify --jobs=1 --diagnostics-format=json %S/Inputs/across/src/a.cpp \
+# RUN:   %S/Inputs/across/src/mathx.cpp -- -I%S/Inputs/across/include -DBUG=101 \
+# RUN:   2>/dev/null | FileCheck %s --check-prefix=JSON
+# RUN: not %cpp-verify --jobs=1 %S/Inputs/across/src/a.cpp -- -I%S/Inputs/across/include \
+# RUN:   2>&1 | FileCheck %s --check-prefix=ALONE
+# RUN: not %cpp-verify --jobs=1 %S/Inputs/across/src/other.cpp %S/Inputs/across/src/mathx.cpp \
+# RUN:   -- -I%S/Inputs/across/include -DBUG=100 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=OTHER --implicit-check-not=warning:
+# RUN: not %cpp-verify --jobs=1 %S/Inputs/across/src/ping.cpp %S/Inputs/across/src/pong.cpp \
+# RUN:   -- 2>&1 | FileCheck %s --check-prefix=CYCLE
+
+RIGHT: Verified: scaled [backend=z3]
+RIGHT-NEXT: Verified: twice_scaled [backend=z3]
+RIGHT-NEXT: Verified: clamp100 [backend=z3]
+RIGHT-NEXT: Summary: 3 verified
+
+WRONG: Unresolved: scaled [backend=z3] [reason=callee.contract] (relies on the contract of clamp100, which its verification in {{.*}}mathx.cpp does not establish)
+WRONG-NEXT: Unresolved: twice_scaled [backend=z3] [reason=callee.contract] (relies on the contract of clamp100, which its verification in {{.*}}mathx.cpp does not establish)
+WRONG-NEXT: mathx.h:2:42: error: verification failed: clamp100 [{{.*}}::postcondition@2:42] (counterexample: {{.*}}result [ssa=__result_1] [type=i32] = 101
+WRONG: Summary: 1 failed, 2 unresolved (callee.contract 2)
+
+The files are printed in the order they are given, settled together.
+ORDER: mathx.h:2:42: error: verification failed: clamp100
+ORDER: Unresolved: scaled [backend=z3] [reason=callee.contract] (relies on the contract of clamp100, which its verification in {{.*}}mathx.cpp does not establish)
+ORDER: Summary: 1 failed, 2 unresolved (callee.contract 2)
+
+JSON: {"backend":"z3","function":"scaled","message":"scaled [backend=z3] [reason=callee.contract] (relies on the contract of clamp100, which its verification in {{.*}}mathx.cpp does not establish)","reason":"callee.contract",{{.*}}"status":"unresolved"}
+JSON: "function":"clamp100","message":"verification failed: clamp100
+
+A file alone is as before: the contract has no definition.
+ALONE: mathx.h:1:5: warning: clamp100 has a contract but no definition, so its callers are not verified; mark the declaration {{\[\[cppverify::trusted\]\]}} to assume the contract
+ALONE-NEXT: Unresolved: scaled [backend=z3] [reason=callee.contract] (relies on the contract of clamp100 (no definition; mark it {{\[\[cppverify::trusted\]\]}} to assume it), which is not established)
+ALONE-NEXT: Unresolved: twice_scaled [backend=z3] [reason=callee.contract] (relies on the contract of scaled, which is not established)
+
+A declaration that states another contract is not the definition's.
+OTHER: Unresolved: halved [backend=z3] [reason=callee.contract] (relies on the contract of clamp100, which is not established: its definition in {{.*}}mathx.cpp is verified against another contract)
+OTHER-NEXT: Verified: clamp100 [backend=z3]
+
+Contracts whose proofs rest on each other through files establish nothing.
+CYCLE: Unresolved: ping [backend=z3] [reason=callee.contract] (relies on the contract of pong, whose proof in {{.*}}pong.cpp rests in turn on contracts not established)
+CYCLE-NEXT: Unresolved: pong [backend=z3] [reason=callee.contract] (relies on the contract of ping, whose proof in {{.*}}ping.cpp rests in turn on contracts not established)
