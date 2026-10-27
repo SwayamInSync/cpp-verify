@@ -114,7 +114,10 @@ C++ feature boundaries
      - ``bool``, integral types, and enums preserve target width and signedness.
      - Floating point, ``volatile``, and other non-integral scalar semantics.
    * - Expressions and declarations
-     - Character literals (``'0'``, ``L'A'``), constants Clang evaluates (a
+     - ``assert``, calls that do not return (an obligation that they are
+       not reached), ``[[assume(e)]]`` and ``__builtin_assume(e)`` (proved,
+       then assumed), discarded values (``x + 1;``, ``c && f(x);``),
+       character literals (``'0'``, ``L'A'``), constants Clang evaluates (a
        ``consteval`` call, an ``if constexpr`` condition), template value
        parameters, default arguments and default member initializers,
        ``__builtin_expect``, a record returned from an initializer list
@@ -198,8 +201,8 @@ C++ feature boundaries
        ``switch`` (fallthrough, a ``default`` anywhere, GNU case ranges, an
        init statement), blocks, ``return``, ``break``, and ``continue``
        anywhere, and comma expressions as statements.
-     - Range-``for``, ``goto``, labels, a ``case`` label inside another
-       statement of its switch (Duff's device), and ``[[assume]]``. An
+     - Range-``for``, ``goto``, labels, and a ``case`` label inside another
+       statement of its switch (Duff's device). An
        expression or statement nested more than 256 operations
        deep (a sum of 300 terms, say) is reported where it is, and the file
        stops: ``error: total: the expression at 4:276 nests more than 256
