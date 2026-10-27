@@ -24,6 +24,13 @@ inline constexpr unsigned DefaultCollectionTimeoutMs =
 /// and their retries, so it legitimately takes several query timeouts.
 inline constexpr unsigned DefaultFunctionTimeoutMs =
     10 * DefaultSolverTimeoutMs;
+/// The distinct expression nodes built for one function's proof obligations:
+/// a node takes about 600 bytes, and Z3's encoding of it about five times
+/// that, and the largest function of the test suite (safe_fib.cpp's
+/// iterative_fibonacci) has 375,000.
+inline constexpr uint64_t DefaultMaxQueryNodes = 4000000;
+/// The megabytes Z3's queries may allocate together, and each cvc5 process.
+inline constexpr uint64_t DefaultMemoryLimitMB = 8192;
 
 enum class DiagnosticFormat { Text, Json };
 
@@ -84,8 +91,12 @@ struct VerifyOptions {
   unsigned SolverResourceLimit = 0;
   /// Number of isolated solver jobs. 0 selects available physical cores.
   unsigned Jobs = 1;
-  /// Maximum canonical expression nodes per backend module; 0 disables it.
-  uint64_t MaxQueryNodes = 0;
+  /// Maximum canonical expression nodes per module, checked as it is built
+  /// and before a backend runs it; 0 disables it.
+  uint64_t MaxQueryNodes = DefaultMaxQueryNodes;
+  /// The megabytes Z3's queries may allocate together, and each cvc5
+  /// process; 0 disables the limit.
+  uint64_t MemoryLimitMB = DefaultMemoryLimitMB;
   /// Solver representation of machine integers (Z3, cvc5, portfolio, BMC).
   MachineIntegerEncoding IntegerEncoding = MachineIntegerEncoding::Auto;
   /// Optional cvc5 executable for cvc5 and strict portfolio verification.

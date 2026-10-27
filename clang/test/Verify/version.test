@@ -8,6 +8,9 @@
 # RUN: printf '#!/bin/sh\necho "Lake version 5.0.0 (Lean version 4.1.0)"\n' > %t/plain/lake
 # RUN: chmod +x %t/plain/cvc5 %t/plain/lake
 # RUN: env PATH=%t/plain %cpp-verify --version | FileCheck %s --check-prefixes=HEAD,PLAIN -DDIR=%t/plain
+# RUN: mkdir -p %t/later && printf '#!/bin/sh\necho "cvc5 9.8.7 [git 0123abc on branch HEAD]"\n' > %t/later/cvc5
+# RUN: chmod +x %t/later/cvc5
+# RUN: env PATH=%t/later %cpp-verify --version | FileCheck %s --check-prefixes=HEAD,LATER -DDIR=%t/later
 # RUN: mkdir -p %t/match && printf '#!/bin/sh\necho "Lake version 5.0.0 (Lean version 4.35.0)"\n' > %t/match/lake
 # RUN: chmod +x %t/match/lake
 # RUN: env PATH=%t/match %cpp-verify --version | FileCheck %s --check-prefixes=HEAD,MATCH -DDIR=%t/match
@@ -24,11 +27,15 @@
 # HEAD-NEXT: {{^}}Verification backends:
 # HEAD-NEXT: {{^}}  z3 {{[0-9]+\.[0-9]+\.[0-9]+}} built in ({{vendored|system}})
 
-# NONE-NEXT: {{^}}  cvc5 missing not on PATH; --backend=cvc5, portfolio, and race run it (tested with 1.1.2)
+# NONE-NEXT: {{^}}  cvc5 missing not on PATH; --backend=cvc5, portfolio, and race run it (tested with 1.1.2 to 1.4.2)
 # NONE-NEXT: {{^}}  lean missing lake is not on PATH; --lean-certify runs it (projects pin leanprover/lean4:v4.35.0)
 
-# PLAIN-NEXT: {{^}}  cvc5 9.8.7 [[DIR]]/cvc5 (tested with 1.1.2)
+# PLAIN-NEXT: {{^}}  cvc5 9.8.7 [[DIR]]/cvc5 (tested with 1.1.2 to 1.4.2)
 # PLAIN-NEXT: {{^}}  lean 4.1.0 [[DIR]]/lake, but projects pin leanprover/lean4:v4.35.0
+
+# A later cvc5 prints its version without "version".
+# LATER-NEXT: {{^}}  cvc5 9.8.7 [[DIR]]/cvc5 (tested with 1.1.2 to 1.4.2)
+# LATER-NEXT: {{^}}  lean missing
 
 # MATCH-NEXT: {{^}}  cvc5 missing
 # MATCH-NEXT: {{^}}  lean 4.35.0 [[DIR]]/lake (projects pin leanprover/lean4:v4.35.0)

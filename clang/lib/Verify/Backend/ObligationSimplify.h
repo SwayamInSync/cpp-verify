@@ -18,9 +18,15 @@ struct ObligationSimplificationStats {
   uint64_t FunctionsRemoved = 0;
 };
 
-/// Count canonical expression nodes across goals, queries, and reachable
-/// logical declarations. Diagnostic-only metadata is excluded.
+/// The distinct expression nodes of the goals, queries, and logical
+/// declarations, a node shared by several terms counted once: what the module
+/// takes in memory. Diagnostic-only metadata is excluded.
 uint64_t obligationModuleNodeCount(const ObligationModule &Module);
+/// The nodes of the module's complete query and logical definitions as
+/// trees, as an SMT-LIB script or an archive record states them; once past
+/// \p Limit, any count above it.
+uint64_t obligationModuleTreeNodesUpTo(const ObligationModule &Module,
+                                       uint64_t Limit);
 
 /// Apply conservative, semantics-preserving canonical rewrites and remove
 /// logical declarations unreachable from any proof obligation. The returned

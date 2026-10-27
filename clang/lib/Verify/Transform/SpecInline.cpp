@@ -198,6 +198,10 @@ public:
   VType Returned = VType::makeVoid();
 
   std::unique_ptr<VExpr> inlineSpecCall(const VSpecCallExpr &C) {
+    // Past the function's node limit nothing more is unfolded; the
+    // construction that unfolds reports it.
+    if (NodeBudget::exhausted())
+      return opaqueCall(C);
     if (InlineDepth++ >= MaxInlineDepth)
       return opaqueCall(C);
     struct DepthGuard {
@@ -2947,7 +2951,12 @@ static void addSpecPostChecks(PassiveProgram &P, const VFunction &Fn,
     PS->Cond = cloneAtEntryState(Obligation.get());
     P.Stmts.push_back(std::move(PS));
   }
-  addPostApplicationFacts(P, Fn, FnMap);
+  {
+    NodeBudget Facts;
+    addPostApplicationFacts(P, Fn, FnMap);
+    if (Facts.exceeded())
+      P.TooLarge = specFactsOversize(Facts);
+  }
   if (Collector.Unsupported) {
     auto PS = std::make_unique<PassiveStmt>();
     PS->K = PassiveStmt::Assert;
@@ -3175,6 +3184,8 @@ verify::withClauseProofs(PassiveProgram Check, const VFunction &Spec,
   Passivizer Lowering;
   Lowering.setFunctionMap(FnMap);
   PassiveProgram P = Lowering.run(Proof);
+  if (!P.TooLarge)
+    P.TooLarge = std::move(Check.TooLarge);
   P.AssumedPosts.insert(Check.AssumedPosts.begin(), Check.AssumedPosts.end());
   P.AssumedUnfoldings.insert(Check.AssumedUnfoldings.begin(),
                              Check.AssumedUnfoldings.end());
