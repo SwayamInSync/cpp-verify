@@ -1745,8 +1745,10 @@ public:
 
   std::unique_ptr<VCExpr> fromVExpr(const VExpr *E) {
     auto Result = fromVExprImpl(E);
-    if (Result && E)
+    if (Result && E) {
+      Result->BeginLoc = E->BeginLoc;
       Result->EndLoc = E->EndLoc;
+    }
     return Result;
   }
 
@@ -2173,8 +2175,9 @@ public:
         fail("invalid diagnostic variable sort in obligation lowering");
         continue;
       }
-      M.DiagnosticVariables[InternalName] = {
-          Variable.DisplayName, Sort, Variable.Loc, Variable.EndLoc, {}};
+      DiagnosticVariable &Diagnostic = M.DiagnosticVariables[InternalName];
+      Diagnostic = {Variable.DisplayName, Sort, Variable.Loc, Variable.EndLoc};
+      Diagnostic.Reference = Variable.Reference;
     }
     auto traceKind = [](PassiveTraceKind Kind) {
       switch (Kind) {
@@ -2216,6 +2219,17 @@ public:
             {Value.Label, lowerDiagnosticExpr(Value.Value.get())});
       M.TraceEvents.push_back(std::move(Lowered));
     }
+    auto Everywhere = std::make_unique<VCExpr>(VCExpr::BoolLit);
+    setBoolSort(*Everywhere);
+    Everywhere->BoolVal = true;
+    const LogicExprRef OnEveryPath(std::move(Everywhere));
+    for (const auto &[InternalName, Variable] : P.ModelVariables)
+      if (auto It = M.DiagnosticVariables.find(InternalName);
+          It != M.DiagnosticVariables.end())
+        It->second.Guard =
+            Variable.Guard
+                ? LogicExprRef(lowerDiagnosticExpr(Variable.Guard.get()))
+                : OnEveryPath;
 
     std::vector<std::unique_ptr<VCExpr>> EntryAssumes;
     for (const auto &Entry : P.EntryAssumes)
@@ -2289,6 +2303,7 @@ public:
           ConditionWP->Premise = It->second.empty() ? "fact" : It->second;
       }
       ConditionWP->Loc = Condition->Loc;
+      ConditionWP->BeginLoc = Condition->BeginLoc;
       ConditionWP->EndLoc = Condition->EndLoc;
       return ConditionWP;
     };
@@ -2305,12 +2320,14 @@ public:
       Item.Kind = Kind;
       Item.Note = Note;
       Item.Loc = Condition->Loc;
+      Item.BeginLoc = Condition->BeginLoc;
       Item.EndLoc = Condition->EndLoc;
       Item.TraceEventCount = TraceEventCount;
       Item.Id = Identity + "::obligation:" + std::to_string(++ObligationIndex);
       Item.Goal = makeGoal(Condition);
       Item.CounterexampleQuery = vcNot(cloneLogicExpr(Item.Goal.get()));
       Item.CounterexampleQuery->Loc = Condition->Loc;
+      Item.CounterexampleQuery->BeginLoc = Condition->BeginLoc;
       Item.CounterexampleQuery->EndLoc = Condition->EndLoc;
       M.Obligations.push_back(std::move(Item));
     };
@@ -2406,6 +2423,17 @@ verify::validateObligationModule(const ObligationModule &M) {
             llvm::inconvertibleErrorCode(),
             "obligation module has invalid diagnostic trace value");
   }
+  for (const auto &[InternalName, Variable] : M.DiagnosticVariables)
+    if (Variable.Guard &&
+        (!validateLogicExpr(Variable.Guard.get(), ValidationError) ||
+         !validateLogicCalls(Variable.Guard.get(), M.LogicFunctions,
+                             ValidationError) ||
+         !validateVariableScopes(Variable.Guard.get(), ModuleVariables,
+                                 ValidationError) ||
+         Variable.Guard->Sort.Kind != LogicSortKind::Bool))
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "obligation module has an invalid diagnostic variable guard");
   if (!validateLogicExpr(M.CorrectnessGoal.get(), ValidationError))
     return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                    ValidationError.c_str());
