@@ -11,8 +11,8 @@ int underdetermined_model(int value, bool take_value)
 }
 
 // CHECK: error: verification failed: underdetermined_model
-// CHECK-SAME: value [ssa=value_0] [type=i32] = <unknown>
 // CHECK-SAME: [backend=z3] [reason=counterexample]
+// CHECK: note: counterexample: value = <unknown>, take_value = false, result = 0
 
 // JSON: "model":[
 // JSON-SAME: {"name":"value","sort":"i32"
