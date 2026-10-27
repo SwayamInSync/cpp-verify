@@ -413,6 +413,18 @@ that may write what another operand reads is an error at the expression,
 and an assignment's right operand is evaluated before its target, as C++17
 says (:doc:`language/functions-loops`).
 
+**assert and calls that do not return.** ``assert(c)`` stopped its function
+(``unsupported statement: ParenExpr``), and a call to ``abort`` or ``exit``
+was an error (``call to function without a verification contract``).
+Reaching a failed ``assert`` or a call that does not return is now a failure
+of the new kind ``unreachable``, and after ``assert(c)``, ``c`` holds; with
+``NDEBUG`` an ``assert`` is nothing. An uncontracted ``constexpr`` helper's
+``assert`` is checked at each call. ``[[assume(e)]]`` and
+``__builtin_assume(e)`` are proved, then assumed. A statement that only
+computes a value is computed, with its checks (``x + 1;`` was ``unsupported
+expression statement``). LLVM's ``alignTo``, ``maxUIntN``, and
+``SignExtend64`` verify with their asserts (:doc:`language/functions-loops`).
+
 **Small forms of everyday C++.** Each of these stopped its function:
 character literals (``'0'``, ``L'A'``), a ``consteval`` call and an ``if
 constexpr`` condition, a template value parameter used as a value, a default
