@@ -2384,7 +2384,8 @@ the finite ground equations of recursive ones. It runs an installed executable w
 seed/resource options and bounded output; missing tools, invocation failures,
 timeouts, `unknown`, extra diagnostics, and malformed tokens are unresolved.
 The model cvc5 prints after `sat`, and often after `unknown`, is checked by the
-same certifier as Z3's, and
+same certifier as Z3's, which then evaluates in it the counterexample's
+source values and path, so a cvc5 failure reads like a Z3 one, and
 refinement re-runs cvc5 with definition instances. Once a hidden instance has
 been given, non-recursive definitions are given whole; recursive ones never
 are, because cvc5 does not decide queries over them.
