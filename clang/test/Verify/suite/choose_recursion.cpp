@@ -25,7 +25,8 @@ cppverify::spec int stuck(int n)
 {
   return n <= 0 ? 0 : stuck(n - 1) + cppverify::choose(k, n == 1 ? k == stuck(n) + 1 : k == 0);
 }
-// CHECK-DAG: error: spec decreases failed: stuck [backend=z3] [reason=counterexample] (n [type=math-i32] = 1)
+// CHECK-DAG: error: spec decreases failed: stuck [backend=z3] [reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}n = 1{{( ->|,|$)}}
 
 // The same with a postcondition, which is proved with termination.
 cppverify::spec int stuck_post(int n)
@@ -34,7 +35,8 @@ cppverify::spec int stuck_post(int n)
 {
   return n <= 0 ? 0 : cppverify::choose(k, n == 1 ? k == stuck_post(n) + 1 : k == 0);
 }
-// CHECK-DAG: error: spec decreases and post failed: stuck_post [backend=z3] [reason=counterexample] (n [type=math-i32] = 1)
+// CHECK-DAG: error: spec decreases and post failed: stuck_post [backend=z3] [reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}n = 1{{( ->|,|$)}}
 
 // The axiom of a choose holds where its applications lower the measure,
 // which places the choice in [0, n).
@@ -51,7 +53,8 @@ cppverify::spec int unbounded(int n)
 {
   return n <= 0 ? 0 : cppverify::choose(k, unbounded(k) == 0);
 }
-// CHECK-DAG: error: spec decreases failed: unbounded [backend=z3] [reason=counterexample] (n [type=math-i32] = {{[1-9][0-9]*}})
+// CHECK-DAG: error: spec decreases failed: unbounded [backend=z3] [reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}n = {{[1-9][0-9]*}}{{( ->|,|$)}}
 
 int forty_two(int x)
   cppverify::post(cppverify::result == 42)
