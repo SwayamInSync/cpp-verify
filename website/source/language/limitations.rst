@@ -181,12 +181,14 @@ C++ feature boundaries
        general returned allocations, and user-declared modular allocation
        effects.
    * - Structured control flow
-     - ``if`` (including C++17 initializer), conventional ``while``/``for``,
-       contracted ``do`` loops, blocks, ``return`` (also inside loops), and
-       ``break``/``continue`` in ``while``/``for`` loops.
-     - ``switch``, range-``for``, ``goto``, labels, conditionless ``for``,
-       loop condition declarations, and ``break``/``continue`` in ``do``
-       loops. An expression or statement nested more than 256 operations
+     - ``if`` (including C++17 initializer), ``while``, ``for`` (with or
+       without a condition), contracted ``do`` loops, condition declarations,
+       ``switch`` (fallthrough, a ``default`` anywhere, GNU case ranges, an
+       init statement), blocks, ``return``, ``break``, and ``continue``
+       anywhere, and comma expressions as statements.
+     - Range-``for``, ``goto``, labels, a ``case`` label inside another
+       statement of its switch (Duff's device), and ``[[assume]]``. An
+       expression or statement nested more than 256 operations
        deep (a sum of 300 terms, say) is reported where it is, and the file
        stops: ``error: total: the expression at 4:276 nests more than 256
        operations deep, which the verifier does not support; split it into
@@ -201,10 +203,11 @@ An unsupported syntax case is not considered implemented merely because Clang
 can parse it. It also needs VCR semantics, C++ definedness rules, modular
 effects, backend encoding, and false-proof coverage.
 
-A contracted free function that uses an unsupported construct (a ``switch``,
-say) fails closed: the construct is reported as an error, and then no
-function of the file gets a verdict. A few forms are rejected this way inside
-otherwise supported code:
+A contracted function that uses an unsupported construct (a ``goto``, say)
+fails closed: the construct is reported as an error where it is, and the
+function is ``Unresolved`` with reason ``construct.unsupported``, while the
+other functions of the file are verified (:doc:`tooling`). A few forms are
+rejected this way inside otherwise supported code:
 
 - a local that shadows another (``local variable shadowing is unsupported:
   x``): rename one of them;

@@ -336,13 +336,48 @@ entry state, not the previous iteration. A function local has no value at
 function entry and is rejected inside `cppverify::old(...)`; snapshot such a value in an
 ordinary local and refer to that snapshot without `cppverify::old`.
 
-`return`, `break`, and `continue` may leave a `while` or `for` loop from an
-arbitrary inductive iteration. A return checks the postcondition in its own
-state, a break continues after the loop in its own state, and a continue ends
-the iteration: it re-establishes the invariant and decreases the measure, after
-running a `for` increment. `break` and `continue` in a `do` loop, whose first
-iteration is lowered outside the loop, and ghost code leaving an executable
-loop fail closed.
+`return`, `break`, and `continue` may leave a loop from an arbitrary
+inductive iteration. A return checks the postcondition in its own state, a
+break continues after the loop in its own state, and a continue ends the
+iteration: it re-establishes the invariant and decreases the measure, after
+running a `for` increment. A `do` loop's first iteration is lowered outside
+the loop, so a `break` there skips the loop and a `continue` goes to the
+condition, through flags, as BMC unrolling lowers a loop's exits. Ghost code
+leaving an executable loop fails closed. A condition declaration
+(`while (int k = next(i))`) is made at every test, so the loop's contract
+cannot name it; a `for` loop without a condition has the condition `true`.
+
+### Switch
+
+A `switch` has C++'s meaning ([stmt.switch]): its value, computed once after
+the init statement and the condition variable, selects the label whose case
+value (converted to the condition's promoted type) equals it, or `default`;
+execution runs from there through the following labels' statements to a
+`break` or the end. The frontend lowers it to the structured statements the
+verifier has, since VCR has no jumps:
+
+```
+v = cond; entered = false; brk = false;
+entered = entered || v == c1;        if (entered && !brk) { segment 1 }
+entered = entered || v == c2 || ...; if (entered && !brk) { segment 2 }
+...                                                    // default: !(any case)
+```
+
+`entered` holds once a label has matched and stays set, which is
+fallthrough; a `break` (outside the loops nested in the switch) sets `brk`
+and the statements after it test it. With a `default` label every label has
+matched by the last segment, which then needs no test, so a spec's switch
+that returns in every segment keeps the shape of a spec body. Definite
+initialization follows the same paths: a segment starts with what was
+initialized before the switch, and after it a value is initialized where
+every exit (the last segment's end, each `break`, and, without `default`,
+no match) initializes it. A label nested in another statement of its switch
+(Duff's device) needs unstructured control flow and fails closed, as does an
+addressable local declared directly in the switch body, which a later label
+may enter without declaring; one declared in a block of a case ends where a
+`break` leaves the block. Boogie verifies unstructured programs, and Frama-C
+keeps CIL's `Switch` with case labels for WP's control-flow graph; a jump
+form in VCR would lift both limits.
 
 ## Assertions: cppverify::check
 

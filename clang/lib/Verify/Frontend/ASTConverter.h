@@ -118,11 +118,23 @@ class ASTConverter {
   unsigned AutomaticStorageId = 0;
   unsigned LocalReferenceId = 0;
   unsigned LoopDepth = 0;
-  /// Innermost last. A `do` loop's first iteration is lowered outside it.
+  /// The loops and switches a break or continue may leave, innermost last.
+  /// A `do` loop's first iteration is lowered outside it.
   struct EnclosingLoop {
     const Expr *Increment = nullptr;
     bool IsDo = false;
     bool IsGhost = false;
+    bool IsSwitch = false;
+    /// The automatic objects live where a switch begins, and the depth of
+    /// its body's scope.
+    size_t ActiveLocals = 0;
+    size_t Scope = 0;
+    /// Whether a break or continue leaves it, and the values initialized on
+    /// every path that does.
+    bool Breaks = false;
+    bool Continues = false;
+    std::optional<std::set<std::string>> BreakInitialized;
+    std::optional<std::set<std::string>> ContinueInitialized;
   };
   std::vector<EnclosingLoop> EnclosingLoops;
   /// Fixed addresses of the mutable global variables, assigned on first use.
@@ -306,10 +318,20 @@ private:
   std::vector<std::unique_ptr<VStmt>> convertStmt(const Stmt *S);
   std::vector<std::unique_ptr<VStmt>> convertStmtBody(const Stmt *S);
   std::vector<std::unique_ptr<VStmt>> convertScopedSubstatement(const Stmt *S);
+  std::vector<std::unique_ptr<VStmt>> convertSwitch(const SwitchStmt *SS);
+  /// The declaration of a loop's condition variable, made at every test.
+  void declareConditionVariable(const DeclStmt *Decl,
+                                std::vector<std::unique_ptr<VStmt>> &Out);
+  /// Rejects a loop contract that names the condition variable, which does
+  /// not exist at the loop's head.
+  bool checkConditionVariableUnnamed(
+      const VarDecl *Var, const std::vector<std::unique_ptr<VExpr>> &Invariants,
+      const std::vector<std::unique_ptr<VExpr>> &Decreases);
   void enterAutomaticScope();
   void registerAutomaticLocal(const VarDecl *VD);
   void appendActiveLifetimeEnds(std::vector<std::unique_ptr<VStmt>> &Out,
-                                SourceLocation Loc);
+                                SourceLocation Loc, size_t From = 0,
+                                bool IsFunctionExit = true);
   void leaveAutomaticScope(std::vector<std::unique_ptr<VStmt>> &Out,
                            SourceLocation Loc);
   void appendReturn(std::unique_ptr<VExpr> Value,

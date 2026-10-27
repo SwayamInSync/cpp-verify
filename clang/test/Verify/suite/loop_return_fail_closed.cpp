@@ -1,28 +1,19 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
 // RUN: not %cpp-verify %s -- 2>&1 | FileCheck %s
 
-// Supported loop exits are tested in loop_exits.cpp.
+// Supported loop exits are tested in loop_exits.cpp, and a switch's in
+// switch_statements.cpp.
 
-int reject_do_break(bool stop)
-  cppverify::post(cppverify::result == 0)
+int reject_ghost_switch_break(int x)
+  cppverify::post(cppverify::result == x)
 {
-  do {
-    if (stop)
+  switch (x) {
+  case 0:
+    cppverify::ghost {
       break;
-  } while (false)
-    cppverify::invariant(true);
-  return 0;
-}
-
-int reject_do_continue(bool stop)
-  cppverify::post(cppverify::result == 0)
-{
-  do {
-    if (stop)
-      continue;
-  } while (false)
-    cppverify::invariant(true);
-  return 0;
+    }
+  }
+  return x;
 }
 
 int reject_ghost_break(int n)
@@ -43,6 +34,5 @@ int reject_ghost_break(int n)
   return i;
 }
 
-// CHECK-DAG: error: reject_do_break: break and continue in do loops are unsupported
-// CHECK-DAG: error: reject_do_continue: break and continue in do loops are unsupported
+// CHECK-DAG: error: reject_ghost_switch_break: ghost code cannot leave an executable switch
 // CHECK-DAG: error: reject_ghost_break: ghost code cannot leave an executable loop

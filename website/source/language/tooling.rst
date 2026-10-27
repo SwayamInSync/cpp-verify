@@ -84,7 +84,8 @@ the file is verified, and ``cpp-verify`` exits with status 1
    int pick(int x)
      cv::post(cv::result >= 0)
    {
-     switch (x) { case 1: return 1; default: return 0; }
+     if (x < 0) throw x;
+     return x;
    }
 
    int bump(int x)
@@ -103,9 +104,9 @@ the file is verified, and ``cpp-verify`` exits with status 1
 
 .. code-block:: text
 
-   pick.cpp:4:3: error: pick: unsupported statement: SwitchStmt
-       4 |   switch (x) { case 1: return 1; default: return 0; }
-         |   ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   pick.cpp:4:14: error: pick: unsupported statement: CXXThrowExpr
+       4 |   if (x < 0) throw x;
+         |              ^~~~~~~
    Verified: bump [backend=z3]
    Unresolved: picked [backend=z3] [reason=callee.contract] (relies on the contract of pick (it uses a construct the verifier does not support), which is not established)
 
@@ -128,10 +129,10 @@ An error about the function as a whole, such as a recursion without a
 measure, points at its name. With ``--diagnostics-format=json`` the record of
 a function's first error carries its verdict and the range, here
 ``"function":"pick"``, ``"status":"unresolved"``,
-``"reason":"construct.unsupported"``, and ``"source":{"column":3,
-"end_column":53,"end_line":4,"file":"pick.cpp","line":4}``. Before 0.2 such an
+``"reason":"construct.unsupported"``, and ``"source":{"column":14,
+"end_column":20,"end_line":4,"file":"pick.cpp","line":4}``. Before 0.2 such an
 error stopped the file, so that no function of it got a verdict, and named
-only the function: ``error: pick: unsupported statement: SwitchStmt``.
+only the function: ``error: pick: unsupported statement: CXXThrowExpr``.
 
 Stopping a run with Ctrl-C
 ~~~~~~~~~~~~~~~~~~~~~~~~~~

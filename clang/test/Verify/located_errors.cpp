@@ -11,12 +11,12 @@ namespace cv = cppverify;
 int pick(int x)
   cv::post(cv::result >= 0)
 {
-  switch (x) { case 1: return 1; default: return 0; }
+  if (x < 0) throw x; return 0;
 }
-// CHECK:      {{.*}}located_errors.cpp:[[@LINE-2]]:3: error: pick: unsupported statement: SwitchStmt
-// CHECK-NEXT: {{^ +}}[[@LINE-3]] |   switch (x) { case 1: return 1; default: return 0; }
-// CHECK-NEXT: {{^ +}}|   ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-// JSON: {"function":"pick","message":"pick: unsupported statement: SwitchStmt","reason":"construct.unsupported","schema":"cppverify.diagnostic/1","severity":"error","source":{"column":3,"end_column":53,"end_line":[[#@LINE-5]],"file":"{{.*}}located_errors.cpp","line":[[#@LINE-5]]},"status":"unresolved"}
+// CHECK:      {{.*}}located_errors.cpp:[[@LINE-2]]:14: error: pick: unsupported statement: CXXThrowExpr
+// CHECK-NEXT: {{^ +}}[[@LINE-3]] |   if (x < 0) throw x; return 0;
+// CHECK-NEXT: {{^ +}}|              ^~~~~~~
+// JSON: {"function":"pick","message":"pick: unsupported statement: CXXThrowExpr","reason":"construct.unsupported","schema":"cppverify.diagnostic/1","severity":"error","source":{"column":14,"end_column":20,"end_line":[[#@LINE-5]],"file":"{{.*}}located_errors.cpp","line":[[#@LINE-5]]},"status":"unresolved"}
 
 struct Shape {
   virtual int get(int x) { cv::check(x >= 0 || x < 0); return x; }
