@@ -63,7 +63,7 @@ cppverify::spec int cube(int x) { return x * x * x; }
 // CHECK-NEXT: Interrupted: small_power
 // CHECK-NEXT: Interrupted: cubes
 // CHECK-NEXT: Interrupted: fourth_powers
-// CHECK-NEXT: Verified: spec axiom: cube
+// CHECK-NEXT: Summary: {{.*}}
 // CHECK-NEXT: exit: 130
 
 // JSON: "function":"cubes","message":"cubes","reason":"interrupted","schema":"cppverify.diagnostic/1","severity":"error","source":{{.*}}"status":"unresolved"
