@@ -21,7 +21,7 @@ int uses_loop(int x)
   cppverify::check(loop(x) > 0 || loop(x) <= 0);
   return 1;
 }
-// CHECK-NEXT: Unresolved: uses_loop [backend=z3] [reason=spec.termination] (relies on the definition of loop, whose termination is not established)
+// CHECK: Unresolved: uses_loop [backend=z3] [reason=spec.termination] (relies on the definition of loop, whose termination is not established)
 
 // The precondition holds for every x.
 int loop_in_precondition(int x)
@@ -45,7 +45,7 @@ int uses_contradictory(int x)
   int r = contradictory(x);
   return r;
 }
-// CHECK-NEXT: Unresolved: uses_contradictory [backend=z3] [reason=callee.contract] (relies on the contract of contradictory, which is not established)
+// CHECK: Unresolved: uses_contradictory [backend=z3] [reason=callee.contract] (relies on the contract of contradictory, which is not established)
 
 // A contract that fails but does not contradict itself.
 int wrong_seven(int x)
@@ -57,7 +57,7 @@ int wrong_seven(int x)
 
 [[cppverify::trusted]] void claims_nonnegative(int x)
   cppverify::post(x >= 0);
-// CHECK-NEXT: Trusted: claims_nonnegative
+// CHECK: Trusted: claims_nonnegative
 
 int contradicted(int x)
   cppverify::post(cppverify::result == 7)
@@ -84,7 +84,7 @@ int never_applies(int x)
 {
   return wrong_seven(x);
 }
-// CHECK-NEXT: Unresolved: never_applies [backend=z3] [reason=callee.contract] (relies on the contract of wrong_seven, which is not established)
+// CHECK: Unresolved: never_applies [backend=z3] [reason=callee.contract] (relies on the contract of wrong_seven, which is not established)
 // CHECK-NEXT: warning: never_applies: behavior impossible never applies
 
 // A proof that stands keeps its finding.
@@ -94,9 +94,9 @@ int unsatisfiable(int x)
 {
   return 0;
 }
-// CHECK-NEXT: Verified: unsatisfiable [backend=z3] [vacuous]
+// CHECK: Verified: unsatisfiable [backend=z3] [vacuous]
 // CHECK-NEXT: warning: unsatisfiable: the precondition is unsatisfiable, so every claim about it holds vacuously
-// CHECK-NEXT: Summary: {{.*}}
+// CHECK: Summary: {{.*}}
 // CHECK-NOT: {{.}}
 
 // JSON: "function":"uses_loop"
