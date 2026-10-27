@@ -1509,7 +1509,22 @@ static VerifyResult querySizeLimitResult(const ObligationModule &Module,
                                          llvm::StringRef BackendName) {
   if (auto Limited = moduleSizeLimit(Module, MaxQueryNodes, BackendName))
     return std::move(*Limited);
-  return VerifyResult();
+  if (MaxQueryNodes == 0)
+    return VerifyResult();
+  // A script states each term in full, a subterm that several goals share at
+  // each of its places, so it is as large as the module's terms as trees.
+  if (obligationModuleTreeNodesUpTo(Module, MaxQueryNodes) <= MaxQueryNodes)
+    return VerifyResult();
+  VerifyResult Result;
+  Result.Status = VerifyStatus::Unresolved;
+  Result.Reason = VerifyReason::QuerySizeLimit;
+  Result.Message = "its SMT-LIB script would state more than " +
+                   std::to_string(MaxQueryNodes) +
+                   " expression nodes, the limit (--max-query-nodes): a "
+                   "script states a subterm that goals share at each of its "
+                   "places";
+  Result.BackendName = BackendName.str();
+  return Result;
 }
 
 static std::optional<std::string>
