@@ -3203,6 +3203,30 @@ encoding error remains a hard failure; success is reported as `Lowered`, never
 `Verified`. This is intentionally distinct from Clang's `-fno-verify`, which
 stops before VCR conversion.
 
+`cpp-verify --dump-smt2=DIR` writes every query sent to a solver as a
+standalone SMT-LIB script (`Backend/QueryDump.cpp`): Z3's checks all go
+through `Z3Encoder::check`, which writes `Z3_solver_to_string` of the solver,
+after the options `freshSolver` gave it as `set-option` commands and
+followed by `(check-sat)`, or `(check-sat-using smt)` for a quantified query,
+whose solver is the `smt` tactic's; Z3's benchmark printer (`to_smt2`) is not
+used, since it leaves symbols such as the quantifier ids `q@line:col`
+unquoted, which no parser reads. cvc5's checks go through `runCVC5`, and the
+script it runs is written after its command-line options as `set-option`
+commands (`cvc5Options` builds both). The script is written before the
+check and the answer appended after it. A file is
+`<function>-<h6>/<query>.<solver>-<h8>.smt2`: the function's name made safe
+for every file system and the start of the SHA-256 of its identity, the
+obligation's stable id as `kind-line-col` (`whole` for the complete query),
+and the start of the SHA-256 of the script, so a name depends only on the
+query, as Frama-C keys its per-goal files and Verus its logs (Boogie's
+`/proverLog` names by time), and the options are in the file, which Verus's
+logs and Frama-C's files leave on the solver's command line. A replay builds
+Z3's terms in another order than the encoder did, and Z3's search on a
+quantified query depends on that order: the vacuity query of
+`constructors.cpp`'s `Copy4` is `sat` in the encoder's context, and in a
+fresh context, the API's or `z3`'s, the same assertions are `unknown`
+(incomplete quantifiers).
+
 ## Regression and Coverage
 
 - Tests: `clang/test/Verify/` (frontend) and `clang/test/Verify/suite/`
