@@ -37,6 +37,7 @@ enum class ProofObligationKind {
   Frame,
   Deallocation,
   MissingReturn,
+  Unreachable,
   Unsupported
 };
 
