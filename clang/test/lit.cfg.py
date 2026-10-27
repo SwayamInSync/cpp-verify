@@ -437,6 +437,11 @@ if lit.util.which("lake", config.environment["PATH"]):
 if lit.util.which("cvc5", config.environment["PATH"]):
     config.available_features.add("cvc5")
 
+# The Z3 shell of the Z3 cpp-verify links, for scripts cpp-verify writes.
+if config.cppverify_z3_shell and os.path.exists(config.cppverify_z3_shell):
+    config.available_features.add("z3-shell")
+    config.substitutions.append(("%cppverify-z3", config.cppverify_z3_shell))
+
 if config.enable_backtrace:
     config.available_features.add("backtrace")
 
