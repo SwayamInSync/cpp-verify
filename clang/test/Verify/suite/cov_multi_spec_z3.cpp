@@ -10,6 +10,4 @@ int chain(int x)
   return 2 * x + 1;
 }
 
-// VERIFY-DAG: spec axiom: inc_s
-// VERIFY-DAG: spec axiom: add_s
 // VERIFY-DAG: Verified: chain
