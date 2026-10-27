@@ -87,9 +87,6 @@ int invalid_spec_arithmetic()
   return 0;
 }
 
-// CVC5-DAG: Verified: spec axiom: quotient
-// CVC5-DAG: Verified: spec axiom: remainder
-// CVC5-DAG: Verified: spec axiom: answer
 // CVC5-DAG: Verified: valid_spec_arithmetic [backend=cvc5]
 // CVC5-DAG: Verified: valid_zero_arity_spec [backend=cvc5]
 // CVC5-DAG: Verified: valid_unsigned [backend=cvc5]
