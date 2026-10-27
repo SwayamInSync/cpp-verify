@@ -4198,6 +4198,68 @@ verify::candidateValues(const ObligationModule &Module, const LogicExpr &Query,
   return Values;
 }
 
+void verify::describeCounterexample(const ObligationModule &Module,
+                                    const LogicExpr &Query,
+                                    CandidateModel &Model, VerifyResult &Result,
+                                    const CertifyLimits &Limits) {
+  auto evaluated = [&](const LogicExpr *Term) -> std::optional<LogicValue> {
+    if (!Term)
+      return std::nullopt;
+    return evaluateTerm(Module, *Term, Model, Limits);
+  };
+  auto truth = [&](const LogicExpr *Term) -> std::optional<bool> {
+    std::optional<LogicValue> Value = evaluated(Term);
+    if (!Value || Value->K != LogicValue::Kind::Bool)
+      return std::nullopt;
+    return Value->Truth;
+  };
+  const Obligation *Failing = nullptr;
+  for (const Obligation &Item : Module.Obligations)
+    if (Item.CounterexampleQuery.get() == &Query) {
+      Failing = &Item;
+      break;
+    }
+  if (Failing)
+    Result.Assignment = counterexampleAssignment(*Failing, Model);
+
+  // In the order Z3's models list them, by internal name.
+  Result.Model = candidateValues(Module, Query, Model);
+  llvm::sort(Result.Model,
+             [](const VerifyModelValue &A, const VerifyModelValue &B) {
+               return A.InternalName < B.InternalName;
+             });
+  for (VerifyModelValue &Value : Result.Model)
+    if (auto It = Module.DiagnosticVariables.find(Value.InternalName);
+        It != Module.DiagnosticVariables.end() && It->second.Guard)
+      Value.OnPath = truth(It->second.Guard.get());
+
+  Result.Trace.clear();
+  const uint64_t Count =
+      Failing ? std::min<uint64_t>(Failing->TraceEventCount,
+                                   Module.TraceEvents.size())
+              : 0;
+  for (uint64_t I = 0; I != Count; ++I) {
+    const DiagnosticTraceEvent &Event = Module.TraceEvents[I];
+    std::optional<bool> Active = truth(Event.Guard.get());
+    if (Active == false)
+      continue;
+    VerifyTraceEvent Step;
+    Step.Kind = Event.Kind;
+    Step.Message = Event.Message;
+    Step.Loc = Event.Loc;
+    Step.Source = Event.Source;
+    Step.Active = Active;
+    for (const DiagnosticTraceValue &Value : Event.Values) {
+      std::optional<LogicValue> Given = evaluated(Value.Value.get());
+      Step.Values.push_back(
+          {Value.Label, Value.Value->Sort,
+           Given ? std::optional<std::string>(formatLogicValue(*Given))
+                 : std::nullopt});
+    }
+    Result.Trace.push_back(std::move(Step));
+  }
+}
+
 std::string verify::shownApplication(const ObligationModule &Module,
                                      const LogicExpr &Application,
                                      CandidateModel &Model,
