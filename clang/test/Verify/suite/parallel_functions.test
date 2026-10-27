@@ -27,7 +27,9 @@
 # RUN:   %S/Inputs/parallel_functions.cpp -- > %t.serial.ir 2>&1
 # RUN: %cpp-verify --jobs=4 --lower-only --dump-ir=all \
 # RUN:   %S/Inputs/parallel_functions.cpp -- > %t.parallel.ir 2>&1
-# RUN: cmp %t.serial.ir %t.parallel.ir
+# RUN: sed 's/ in [0-9.]* s$//' %t.serial.ir > %t.serial.ir.untimed
+# RUN: sed 's/ in [0-9.]* s$//' %t.parallel.ir > %t.parallel.ir.untimed
+# RUN: cmp %t.serial.ir.untimed %t.parallel.ir.untimed
 #
 # One budget for all queries of a function.
 # RUN: not %cpp-verify --jobs=4 --function-timeout=1 \
