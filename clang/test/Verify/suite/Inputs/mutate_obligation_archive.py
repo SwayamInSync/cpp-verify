@@ -23,6 +23,8 @@ class Archive:
         # earlier schema has not.
         self.measure_spans = []
         self.measures = []
+        # What schema 4 adds: where each diagnostic variable is defined.
+        self.guard_spans = []
         self.modules = []
 
     def u8(self):
@@ -161,6 +163,11 @@ class Archive:
                 self.string()
                 self.diagnostic_sorts.append(self.sort(track=False))
                 self.source()
+                if self.version >= 4:
+                    start = self.offset
+                    if self.u8():
+                        self.expression(track=False)
+                    self.guard_spans.append((start, self.offset))
             for _ in range(self.u64()):
                 self.trace_kind_offsets.append(self.offset)
                 self.offset += 1
@@ -368,6 +375,8 @@ parser.add_argument(
         "schema-v1",
         "schema-v1-kinds",
         "schema-v2",
+        "schema-v3",
+        "invalid-guard-flag",
         "measure-free-variable",
         "truncated",
     ],
@@ -382,6 +391,12 @@ archive.parse()
 
 if args.mode == "invalid-kind":
     archive.data[archive.expression_kind_offsets[0]] = 255
+elif args.mode == "schema-v3":
+    for offset in archive.version_offsets:
+        struct.pack_into("<I", archive.data, offset, 3)
+    # Records before schema 4 say nothing of where a variable is defined.
+    for start, end in sorted(archive.guard_spans, reverse=True):
+        del archive.data[start:end]
 elif args.mode in ("schema-v1", "schema-v1-kinds", "schema-v2"):
     for offset in archive.version_offsets:
         struct.pack_into("<I", archive.data, offset, 2 if args.mode == "schema-v2" else 1)
@@ -390,9 +405,9 @@ elif args.mode in ("schema-v1", "schema-v1-kinds", "schema-v2"):
         for offset in archive.obligation_kind_offsets:
             if archive.data[offset] > 3:
                 archive.data[offset] = 1
-    # Records before schema 3 have no measures or premises; a premise
-    # inside a measure goes with it.
-    spans = sorted(archive.measure_spans)
+    # Records before schema 3 have no measures or premises, and none before
+    # schema 4 a variable's guard; a premise inside a measure goes with it.
+    spans = sorted(archive.measure_spans + archive.guard_spans)
     outer = [
         span
         for span in spans
@@ -400,6 +415,10 @@ elif args.mode in ("schema-v1", "schema-v1-kinds", "schema-v2"):
     ]
     for start, end in reversed(outer):
         del archive.data[start:end]
+elif args.mode == "invalid-guard-flag":
+    if not archive.guard_spans:
+        raise ValueError("archive has no diagnostic variable")
+    archive.data[archive.guard_spans[0][0]] = 2
 elif args.mode == "measure-free-variable":
     def first_variable(node):
         if node is None:
