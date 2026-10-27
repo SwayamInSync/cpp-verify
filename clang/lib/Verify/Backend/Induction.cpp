@@ -21,6 +21,7 @@ std::unique_ptr<LogicExpr> node(LogicExpr::Kind K, LogicSort Sort,
   Node->Sort = Sort;
   if (At) {
     Node->Loc = At->Loc;
+    Node->BeginLoc = At->BeginLoc;
     Node->EndLoc = At->EndLoc;
     Node->Source = At->Source;
   }
@@ -722,6 +723,7 @@ ObligationModule copyObligationModule(const ObligationModule &Module) {
     Same.StableId = Item.StableId;
     Same.Kind = Item.Kind;
     Same.Loc = Item.Loc;
+    Same.BeginLoc = Item.BeginLoc;
     Same.EndLoc = Item.EndLoc;
     Same.Source = Item.Source;
     Same.TraceEventCount = Item.TraceEventCount;
