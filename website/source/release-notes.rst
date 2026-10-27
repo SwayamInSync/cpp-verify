@@ -413,6 +413,18 @@ that may write what another operand reads is an error at the expression,
 and an assignment's right operand is evaluated before its target, as C++17
 says (:doc:`language/functions-loops`).
 
+**Small forms of everyday C++.** Each of these stopped its function:
+character literals (``'0'``, ``L'A'``), a ``consteval`` call and an ``if
+constexpr`` condition, a template value parameter used as a value, a default
+argument, ``static_assert``, a local ``typedef`` or ``using``, a local class
+or enumeration, ``__builtin_expect``, ``return Pt{a, b};``, and ``auto [a, b]
+= p;``. Each is now what C++ makes it: a literal or a constant its value, a
+default argument evaluated at the call, a declaration nothing at run time,
+``__builtin_expect(e, c)`` the value of ``e``, an initializer list the fields
+in order, and a structured binding a copy whose fields the bindings name
+(:doc:`language/integers`, :doc:`language/structs`,
+:doc:`language/functions-loops`).
+
 **Pointer steps and reused names.** ``++p``, ``p--``, ``p += n``, and
 ``p -= n`` on a pointer were errors (``pointer increment/decrement is
 unsupported``, ``pointer compound assignment is unsupported``), and so was a
