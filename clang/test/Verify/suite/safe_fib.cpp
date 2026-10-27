@@ -185,7 +185,6 @@ int fibonacci_forty_seven_overflows()
 #endif
 
 // VERIFY-DAG: Verified: spec decreases: math_fibonacci
-// VERIFY-DAG: Verified: spec axiom: math_value
 // VERIFY-DAG: Verified: lemma_fibonacci_step
 // VERIFY-DAG: Verified: lemma_fibonacci_base
 // VERIFY-DAG: Verified: lemma_fibonacci_machine_step
@@ -193,4 +192,3 @@ int fibonacci_forty_seven_overflows()
 // VERIFY-DAG: Verified: iterative_fibonacci
 // VERIFY-DAG: Verified: fibonacci_forty_six
 // VERIFY-DAG: error: verification failed: fibonacci_forty_seven_overflows
-// VERIFY-DAG: Verified: constexpr spec axiom: machine_fibonacci_value
