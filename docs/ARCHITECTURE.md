@@ -411,6 +411,19 @@ memory checks from UB instrumentation. A by-value argument
 a copy into a flattened local (`appendRecordCopy`) use it; a record with a
 member that is a record or an array is an error there.
 
+**Global objects:** a mutable global of a record or array type
+(`ASTConverter::isGlobalObject`: promotable as a local object would be, no
+type invariant) is rooted at its fixed address, a pointer literal whose
+pointee size is the object's (`globalAddress`, from `GlobalRegionBase`), by
+`objectPlace`, so its fields and elements are places like a promoted
+local's, with their access conditions; an access to a global cell needs
+no other check (`isGlobalCell`). A pointer formed into it is a subobject
+pointer whose address converts the literal (a `Cast`), keeping the literal's
+type, and with it the origin `@address/size` of the whole object;
+`abstractValidity` counts the global objects a pointer's origins name as
+valid storage, which discharges the pointer's binding check and lets it be
+passed as a slice.
+
 **Pointers into objects:** `ASTConverter::subobjectPointer` lowers a decayed
 member array of a pointee and the address of a pointee's element, field, or
 nested record. In a statement (`SubobjectSink`) it asserts the place's access
