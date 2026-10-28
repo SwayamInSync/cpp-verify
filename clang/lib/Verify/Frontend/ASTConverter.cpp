@@ -968,6 +968,13 @@ static std::optional<bool> stdMinOrMax(const FunctionDecl *Callee,
   return IsMax;
 }
 
+/// \p S, a call converted from \p Call, with where the call is written.
+static std::unique_ptr<VCallStmt> atCall(std::unique_ptr<VCallStmt> S,
+                                         const Expr *Call) {
+  S->CallSite = {Call->getExprLoc(), Call->getBeginLoc(), Call->getEndLoc()};
+  return S;
+}
+
 /// A function as the verifier's messages name it, a template specialization
 /// with its arguments (`maxv<int>`).
 static std::string functionName(const FunctionDecl *FD,
@@ -3377,6 +3384,8 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   }
   Fn->ReadsHeap = FCI->IsSpec && specReadsHeap(FD);
   Fn->DeclLoc = FD->getLocation();
+  Fn->Extent = Ctx.getSourceManager().getExpansionRange(FD->getSourceRange())
+                   .getAsRange();
   // [[cppverify::trusted]] on a definition leaves its body unverified; on a
   // declaration it says that callers which see no definition assume the
   // contract, so a definition that only inherits it is verified.
@@ -4347,6 +4356,8 @@ ASTConverter::convertConstexprSpec(const FunctionDecl *FD) {
     Fn->Name = functionName(FD);
     Fn->Identity = functionIdentity(FD);
     Fn->DeclLoc = FD->getLocation();
+    Fn->Extent = Ctx.getSourceManager().getExpansionRange(FD->getSourceRange())
+                     .getAsRange();
     Fn->IsSpec = true;
     Fn->IsConstexprSpec = true;
     return Fn;
@@ -7005,9 +7016,9 @@ void ASTConverter::convertExecCallArg(
         std::vector<std::unique_ptr<VExpr>> InnerArgs;
         convertExecCallArgs(CE, Prelude, InnerArgs);
         std::string Tmp = "__nested_" + std::to_string(++NestedCallId);
-        Prelude.push_back(std::make_unique<VCallStmt>(
+        Prelude.push_back(atCall(std::make_unique<VCallStmt>(
             functionName(Callee), functionIdentity(Callee),
-            std::move(InnerArgs), Tmp, E->getExprLoc(), false));
+            std::move(InnerArgs), Tmp, E->getExprLoc(), false), CE));
         Out = convertCallResultValue(
             Tmp, Callee->getReturnType(),
             VType::fromQualType(E->getType(), IntMode, Ctx), E->getExprLoc());
@@ -7245,9 +7256,9 @@ std::unique_ptr<VExpr> ASTConverter::hoistExecCall(const CallExpr *CE,
   if (Errors.size() != ErrorCount)
     return nullptr;
   std::string Temporary = "__call_" + std::to_string(++NestedCallId);
-  CallSink->push_back(std::make_unique<VCallStmt>(
+  CallSink->push_back(atCall(std::make_unique<VCallStmt>(
       functionName(Callee), functionIdentity(Callee), std::move(Args),
-      Temporary, CE->getExprLoc(), false));
+      Temporary, CE->getExprLoc(), false), CE));
   HoistedCalls[CE] = Temporary;
   return convertCallResultValue(std::move(Temporary), Returned, Result,
                                 CE->getExprLoc());
@@ -7997,9 +8008,9 @@ bool ASTConverter::appendConstruction(
       return false;
     Args.push_back(std::move(Arg));
   }
-  Out.push_back(std::make_unique<VCallStmt>(Ctor->getNameAsString(),
+  Out.push_back(atCall(std::make_unique<VCallStmt>(Ctor->getNameAsString(),
                                             functionIdentity(Ctor),
-                                            std::move(Args), "", Loc, false));
+                                            std::move(Args), "", Loc, false), Construct));
   return true;
 }
 
@@ -8910,10 +8921,10 @@ ASTConverter::convertStmtBody(const Stmt *S) {
                     ? "__return_call_provenance_" + std::to_string(CallId)
                     : "";
             CurrentFn->UsesDynamicStorage |= TrackOwnedResult;
-            Out.push_back(std::make_unique<VCallStmt>(
+            Out.push_back(atCall(std::make_unique<VCallStmt>(
                 functionName(Callee), functionIdentity(Callee),
                 std::move(Args), ReturnsVoid ? "" : Tmp, RS->getBeginLoc(),
-                false, Provenance));
+                false, Provenance), CE));
             auto Result = convertCallResultValue(Tmp, Callee->getReturnType(),
                                                  CurrentFn->ReturnType,
                                                  RS->getBeginLoc(), Provenance);
@@ -9454,9 +9465,9 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         std::vector<std::unique_ptr<VExpr>> Args;
         convertExecCallArgs(CE, Out, Args);
         bool IsProof = calleeIsProof(Callee);
-        Out.push_back(std::make_unique<VCallStmt>(
+        Out.push_back(atCall(std::make_unique<VCallStmt>(
             functionName(Callee), functionIdentity(Callee),
-            std::move(Args), "", CE->getExprLoc(), IsProof));
+            std::move(Args), "", CE->getExprLoc(), IsProof), CE));
       } else {
         error(CurrentFn->Name +
               ": call to function without a verification contract: " +
@@ -9703,10 +9714,10 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         convertExecCallArgs(PointerCall, Out, Args);
         const std::string &Provenance =
             DynamicPointerProvenanceVariables.at(DirectTarget);
-        Out.push_back(std::make_unique<VCallStmt>(
+        Out.push_back(atCall(std::make_unique<VCallStmt>(
             functionName(PointerCallee), functionIdentity(PointerCallee),
             std::move(Args), valueName(DirectTarget), BO->getExprLoc(), false,
-            Provenance));
+            Provenance), PointerCall));
         CurrentFn->UsesDynamicStorage = true;
         markInitialized(DirectTarget);
         return Out;
@@ -9738,9 +9749,9 @@ ASTConverter::convertStmtBody(const Stmt *S) {
                 !calleeIsProof(Callee)) {
               std::vector<std::unique_ptr<VExpr>> Args;
               convertExecCallArgs(Call, Out, Args);
-              Out.push_back(std::make_unique<VCallStmt>(
+              Out.push_back(atCall(std::make_unique<VCallStmt>(
                   functionName(Callee), functionIdentity(Callee),
-                  std::move(Args), valueName(Target), BO->getExprLoc(), false));
+                  std::move(Args), valueName(Target), BO->getExprLoc(), false), Call));
               markInitialized(Target);
               return Out;
             }
@@ -9764,9 +9775,9 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           convertExecCallArgs(Call, Out, Args);
           const std::string Tmp =
               "__assignment_call_" + std::to_string(++NestedCallId);
-          Out.push_back(std::make_unique<VCallStmt>(
+          Out.push_back(atCall(std::make_unique<VCallStmt>(
               functionName(Callee), functionIdentity(Callee),
-              std::move(Args), Tmp, BO->getExprLoc(), false));
+              std::move(Args), Tmp, BO->getExprLoc(), false), Call));
           VType Target =
               VType::fromQualType(BO->getLHS()->getType(), IntMode, Ctx);
           auto Value = convertCallResultValue(Tmp, Callee->getReturnType(),
@@ -9945,10 +9956,10 @@ ASTConverter::convertStmtBody(const Stmt *S) {
             convertExecCallArgs(Call, Out, Args);
             const std::string ResultTarget =
                 "__local_call_" + std::to_string(++NestedCallId);
-            Out.push_back(std::make_unique<VCallStmt>(
+            Out.push_back(atCall(std::make_unique<VCallStmt>(
                 functionName(Callee), functionIdentity(Callee),
                 std::move(Args), ResultTarget, VD->getBeginLoc(),
-                calleeIsProof(Callee)));
+                calleeIsProof(Callee)), Call));
             Initializer = convertCallResultValue(
                 ResultTarget, Callee->getReturnType(),
                 VType::fromQualType(VD->getType(), IntMode, Ctx),
@@ -10100,10 +10111,10 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           convertExecCallArgs(Call, Out, Args);
           const std::string &Provenance =
               DynamicPointerProvenanceVariables.at(VD);
-          Out.push_back(std::make_unique<VCallStmt>(
+          Out.push_back(atCall(std::make_unique<VCallStmt>(
               functionName(Callee), functionIdentity(Callee),
               std::move(Args), valueName(VD), VD->getBeginLoc(), false,
-              Provenance));
+              Provenance), Call));
           CurrentFn->UsesDynamicStorage = true;
           markInitialized(VD);
           continue;
@@ -10153,10 +10164,10 @@ ASTConverter::convertStmtBody(const Stmt *S) {
             const std::string ResultTarget =
                 RecordResult ? valueName(VD)
                              : "__local_call_" + std::to_string(++NestedCallId);
-            Out.push_back(std::make_unique<VCallStmt>(
+            Out.push_back(atCall(std::make_unique<VCallStmt>(
                 functionName(Callee), functionIdentity(Callee),
                 std::move(Args), ResultTarget, VD->getBeginLoc(),
-                calleeIsProof(Callee)));
+                calleeIsProof(Callee)), CE));
             if (!RecordResult) {
               VType Target = VType::fromQualType(VD->getType(), IntMode, Ctx);
               if (auto Value = convertCallResultValue(

@@ -56,7 +56,7 @@ cppverify::proof void update_wrong(seq s)
 {
   cppverify::check(s.update(1, 9)[2] == 9);
 }
-// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: update_wrong [assertion] [backend=z3] [reason=counterexample]
+// CHECK-DAG: :[[@LINE-2]]:38: error: verification failed: update_wrong [assertion] [backend=z3] [reason=counterexample]
 // CHECK-DAG: note: counterexample: s = [{{-?[0-9]+}}, {{-?[0-9]+}}, {{-?[0-9]+}}]
 
 cppverify::proof void reverse_small()
@@ -72,7 +72,7 @@ cppverify::proof void reverse_wrong()
   cppverify::ghost seq s = cppverify::seq_of(1).push(2);
   cppverify::check(s.reverse()[0] == 1);
 }
-// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: reverse_wrong [assertion] [backend=z3] [reason=counterexample]
+// CHECK-DAG: :[[@LINE-2]]:35: error: verification failed: reverse_wrong [assertion] [backend=z3] [reason=counterexample]
 // CHECK-DAG: note: counterexample: s = [1, 2]
 
 // reverse states its length; its elements need induction.
@@ -101,7 +101,7 @@ cppverify::proof void elements_differ(seq s)
 {
   cppverify::check(s[0] == s[1]);
 }
-// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: elements_differ [assertion] [backend=z3] [reason=counterexample]
+// CHECK-DAG: :[[@LINE-2]]:25: error: verification failed: elements_differ [assertion] [backend=z3] [reason=counterexample]
 // CHECK-DAG: note: counterexample: s = [{{-?[0-9]+}}, {{-?[0-9]+}}]
 // JSON-DAG: "function":"elements_differ"{{.*}}"model":[{"name":"s","sort":"seq","source":{{.*}},"ssa_name":"s_0","value":"[{{-?[0-9]+}}, {{-?[0-9]+}}]"}]
 
@@ -112,7 +112,7 @@ cppverify::proof void unbounded_elements(seq s)
 {
   cppverify::check(cppverify::forall(k, s[k] >= 0));
 }
-// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: unbounded_elements [assertion] [backend=z3] [reason=counterexample]
+// CHECK-DAG: :[[@LINE-2]]:20: error: verification failed: unbounded_elements [assertion] [backend=z3] [reason=counterexample]
 // CHECK-DAG: note: counterexample: s = [{{.*}}-{{[0-9]+.*}}]
 
 cppverify::proof void unbounded_holds(seq s)
@@ -181,7 +181,7 @@ void ghost_loop_wrong(int n)
   }
   cppverify::check(s[0] == 1);
 }
-// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: ghost_loop_wrong [assertion] [backend=z3] [reason=counterexample]
+// CHECK-DAG: :[[@LINE-2]]:25: error: verification failed: ghost_loop_wrong [assertion] [backend=z3] [reason=counterexample]
 // CHECK-DAG: note: counterexample: {{.*}}s = {{.*}}[{{-?[0-9]+}}]
 
 // REPLAY-DAG: Proved obligations: basics (dependencies not checked in replay)

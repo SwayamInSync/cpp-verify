@@ -549,6 +549,18 @@ a warning belongs to ``-Wcppverify`` (so ``-Wno-cppverify`` and
 and ``-fdiagnostics-format=sarif`` carries them all. In JSON Lines a record's
 ``message`` is the new error text (:doc:`language/tooling`).
 
+**Failures at the part that fails.** A failure pointed at its whole clause
+(the top-level ``&&`` of ``cv::post(0 <= cv::result && cv::result <= 50)``),
+at the start of the statement for an operation that overflows or for a call
+whose precondition does not hold (``int y = x * x + 1;`` at ``int``), and
+never showed which of the callee's clauses fails. It now points at the part
+the counterexample makes false: a clause's first false conjunct, the
+operation itself (``x * x``) under the conditions around it, and the call
+(``half(2 * y + 1)``), with a note at the callee's clause, its conjunct that
+does not hold (``x % 2 == 0``); JSON gives that clause as ``related``, SARIF
+as a related location. A call's step on the path is at the call too. The
+check's ID keeps its anchor (:doc:`language/tooling`).
+
 **cvc5's counterexamples.** A failure cvc5 found (``--backend=cvc5``, or a race
 cvc5 won) gave no values and no path: the certifier checked its model and the
 verifier then dropped it, so the JSON record had no ``model`` or ``trace``,
@@ -873,9 +885,10 @@ reproduce, or when two backends decide differently
 Data formats
 ~~~~~~~~~~~~
 
-Archives are ``cppverify.obligation/5``, which adds measures, the sources
-of assumptions, where each variable version is defined, and where each
-source range begins, and reads ``/4`` to ``/1``; JSON diagnostics are
+Archives are ``cppverify.obligation/6``, which adds measures, the sources
+of assumptions, where each variable version is defined, where each
+source range begins, and where each check's condition and a callee's clause
+lie, and reads ``/5`` to ``/1``; JSON diagnostics are
 ``cppverify.diagnostic/2``, ending with a ``cppverify.summary/1`` record, and
 ``--diagnostics-format=sarif`` writes SARIF 2.1.0. A module whose specs' measures apply other specs
 keeps them, so its module hash changes; per-obligation hashes, and the proof

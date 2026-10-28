@@ -1140,7 +1140,7 @@ and obligation kinds.
 ### Canonical archives and semantic identity
 
 `--obligation-out=FILE` writes one or more deterministic
-`cppverify.obligation/5` records after source attribution. The binary format has
+`cppverify.obligation/6` records after source attribution. The binary format has
 the `CPVOBL\r\n` magic, an explicit schema version, little-endian fixed-width
 integers, length-delimited strings/collections, and stable hand-assigned wire
 tags rather than C++ enum ordinals. The reader bounds strings, collections,
@@ -1173,7 +1173,11 @@ counterexamples list every version, as before 0.2. Schema v5 adds, after each
 source's end, the begin of its range (`ObligationSource::BeginLine`,
 `BeginColumn`); from v5 the end is the column after the last character
 (`Lexer::getLocForEndOfToken`), where before it was the first column of the
-last token, and a record before v5 keeps its end as written. Records
+last token, and a record before v5 keeps its end as written. Schema v6
+adds, with the diagnostic metadata, the sources of each obligation's focus
+and clause (`Obligation::FocusSource`, `ClauseSource`), so replay places a
+failure as a run from source does, by matching the archived sources of the
+goal's terms; a record before v6 places it at its anchor. Records
 limit strings to 64 MiB, collections and expression
 nodes/edges to 100,000 per record, expression nesting to 4096, canonical
 integer numerals to 4096 decimal characters, and integer sorts to 4096 bits.
@@ -2499,6 +2503,47 @@ Public obligation identities are source anchored:
 one anchor. This keeps later IDs stable when an unrelated obligation is inserted
 or reordered without moving the source anchor; JSON records carry it, and text
 names only the kind (`[overflow]`), since the location prefixes the line.
+
+A failure is shown where its check fails, which may be closer than its
+anchor (`failingPlace`, `Driver/Counterexample.cpp`). Passivization records with
+each check what it checks in the source apart from the path condition
+around it (`PassiveStmt::Focus`, the condition's `Loc`, `BeginLoc`, and
+`EndLoc` before `emitPassive` wraps it in its guard), and for a callee's
+precondition at a call the call (`VCallStmt::CallSite`, the call
+expression, set by the converter's `atCall`) with the callee's clause
+(`PassiveStmt::Clause`); a call's own checks, whose conditions are anchored
+at the call statement, take the call expression as their focus. Layer 3
+keeps both on the obligation (`Obligation::Focus`, `Clause`), as
+diagnostics only: archives keep their sources from schema v6, and hashes
+neither. When the driver annotates a module's sources it drops a focus that
+lies outside the function's own source (`VFunction::Extent`, the
+definition with its contract), as the condition of a lifted helper's check
+does, so that check stays at its call as before. A definedness check made at
+an operation's operator spans the operation (`collectSafety`), and the terms
+a comparison of a machine and a mathematical operand is lowered to take the
+comparison's location and span (`asWritten`), not an operand's. For a
+failure, `failingPlace` finds the checked condition in its goal, under the
+chain of assumptions, by its location (by its source in an archive), a
+guard implication around it giving way to the condition, and evaluates its
+parts at the counterexample's values (`AssignedValues` over
+`VerifyResult::Assignment`, with the certifier's `evaluateTerm` and a
+one-second budget): a conjunction fails at its first false conjunct (the
+terms lowering builds for one construct carry its place, so a comparison is
+one part however it is lowered); a definedness check, whose conditions the
+verifier builds,
+also at the check under a short-circuit guard whose left side holds; a
+user's disjunction, as a whole. Spec substitution keeps the span of each
+node it rebuilds (`substParams`, `substParamsInExpr`), so a callee's clause
+instantiated at a call still spans its source. The error then moves there
+(`placeFailure`), and a callee's clause becomes a related place
+(`VerifyDiagnostic::Related`): a note with its range after the
+counterexample, JSON `related`, SARIF `relatedLocations`, and a line of the
+GitHub annotation. The notes that unrolling adds are computed first, since
+it looks for copies of the check at its anchor. A failure confirmed by proof
+is placed the same way, and archive replay too (`cpp-verify`'s replay
+printer). When the values decide no part, the failure stays at its anchor.
+Before 0.2 a failure was at its anchor always: a clause's top-level `&&`,
+and the start of the statement for an operation or a call.
 
 Every result is described once as Clang diagnostics (`Verifier::partsOf`,
 `VerifyDiagnosticPart`): an error at the failing check, with notes; a

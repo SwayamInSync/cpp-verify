@@ -59,9 +59,9 @@ int calls(int x)
 // CHECK-NEXT: {{^ *}}[[@LINE-5]] |   cv::post(cv::result < 10){{$}}
 // CHECK-NEXT: {{^}}      |            ~~~~~~~~~~~^~~~{{$}}
 // CHECK-NEXT: {{.*}}failure_notes.cpp:[[@LINE-7]]:23: note: counterexample: x = [[X:[0-9]+]], result = {{[0-9]+}}
-// CHECK-NEXT: {{.*}}failure_notes.cpp:[[@LINE-6]]:3: note: calls add([[X]])
+// CHECK-NEXT: {{.*}}failure_notes.cpp:[[@LINE-6]]:10: note: calls add([[X]])
 // CHECK-NEXT: {{^ *}}[[@LINE-7]] |   return add(x);{{$}}
-// CHECK-NEXT: {{^}}      |   ^{{$}}
+// CHECK-NEXT: {{^}}      |          ^{{$}}
 // CHECK-NEXT: {{.*}}failure_notes.cpp:[[@LINE-9]]:3: note: returns {{[0-9]+}}
 
 
@@ -281,8 +281,8 @@ int iterate(int n)
   }
   return i;
 }
-//      CHECK: {{.*}}failure_notes.cpp:[[@LINE-5]]:5: error: verification failed: iterate [assertion] [backend=z3] [reason=counterexample]
-//      CHECK: {{.*}}failure_notes.cpp:[[@LINE-6]]:5: note: counterexample: n = [[N:[45]]], i = 0 -> 4
+//      CHECK: {{.*}}failure_notes.cpp:[[@LINE-5]]:17: error: verification failed: iterate [assertion] [backend=z3] [reason=counterexample]
+//      CHECK: {{.*}}failure_notes.cpp:[[@LINE-6]]:17: note: counterexample: n = [[N:[45]]], i = 0 -> 4
 // CHECK-NEXT: {{.*}}failure_notes.cpp:[[@LINE-11]]:3: note: enters the loop
 // CHECK-NEXT: {{^ *}}[[@LINE-12]] |   while (i < n){{$}}
 // CHECK-NEXT: {{^}}      |   ^{{$}}
@@ -319,10 +319,10 @@ int negated(int x)
 {
   return -x;
 }
-//      CHECK: {{.*}}failure_notes.cpp:[[@LINE-2]]:3: error: verification failed: negated [overflow] [backend=z3] [reason=counterexample]
+//      CHECK: {{.*}}failure_notes.cpp:[[@LINE-2]]:10: error: verification failed: negated [overflow] [backend=z3] [reason=counterexample]
 // CHECK-NEXT: {{^ *}}[[@LINE-3]] |   return -x;{{$}}
-// CHECK-NEXT: {{^}}      |   ^{{$}}
-// CHECK-NEXT: {{.*}}failure_notes.cpp:[[@LINE-5]]:3: note: counterexample: x = -2147483648
+// CHECK-NEXT: {{^}}      |          ^~{{$}}
+// CHECK-NEXT: {{.*}}failure_notes.cpp:[[@LINE-5]]:10: note: counterexample: x = -2147483648
 // CHECK-NOT: note:
 // CHECK: error: verification failed: bump
 
@@ -332,7 +332,7 @@ void bump(int *p)
 {
   *p = *p + 1;
 }
-//      CHECK: {{.*}}failure_notes.cpp:[[@LINE-2]]:6: note: counterexample: p = {{[0-9]+}}
+//      CHECK: {{.*}}failure_notes.cpp:[[@LINE-2]]:11: note: counterexample: p = {{[0-9]+}}
 // CHECK-NOT: note:
 // CHECK: Summary:
 

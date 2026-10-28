@@ -45,7 +45,7 @@
 # CHECK-NEXT: Verified: sum_to [backend=z3]
 # CHECK-NEXT: Verified: clear [backend=z3]
 # CHECK-NEXT: error: verification failed: overflow [overflow]
-# CHECK: :72:3: error: verification failed: two_failures [assertion]
+# CHECK: :72:22: error: verification failed: two_failures [assertion]
 # CHECK: Verified: both_ways [backend=z3]
 
 # BUDGET: Unresolved: sum_to [backend=z3] [reason=solver.timeout]

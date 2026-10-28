@@ -176,10 +176,10 @@ otherwise, as within one file.
    $ cpp-verify src/a.cpp src/mathx.cpp -- -Iinclude
    Unresolved: scaled [backend=z3] [reason=callee.contract] (relies on the contract of clamp100, which its verification in src/mathx.cpp does not establish)
    In file included from src/mathx.cpp:1:
-   include/mathx.h:2:28: error: verification failed: clamp100 [postcondition] [backend=z3] [reason=counterexample]
+   include/mathx.h:2:42: error: verification failed: clamp100 [postcondition] [backend=z3] [reason=counterexample]
        2 |   cv::post(cv::result >= 0 && cv::result <= 100);
-         |            ~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~
-   include/mathx.h:2:28: note: counterexample: x = 101, result = 101
+         |                               ~~~~~~~~~~~^~~~~~
+   include/mathx.h:2:42: note: counterexample: x = 101, result = 101
    src/mathx.cpp:5:3: note: takes the false branch
        5 |   if (x < 0)
          |   ^
@@ -344,7 +344,7 @@ that may not be as ``contract of f``, at the operation:
 
    defined.cpp:2:17: error: verification failed: contract of average [division-by-zero] [backend=z3] [reason=counterexample]
        2 |   cv::pre(total / count >= 0 && count > 0)
-         |                 ^
+         |           ~~~~~~^~~~~~~
    defined.cpp:2:17: note: counterexample: count = 0
    Verified: average [backend=z3]
    Verified: average_checked [backend=z3]
@@ -356,7 +356,7 @@ that may not be as ``contract of f``, at the operation:
    defined.cpp:22:28: Trusted: read_sensor (contract assumed, not verified)
    defined.cpp:23:17: error: verification failed: contract of read_sensor [division-by-zero] [backend=z3] [reason=counterexample]
       23 |   cv::post(1000 / cv::result > 0);
-         |                 ^
+         |            ~~~~~^~~~~~~~~~~~
    defined.cpp:23:17: note: counterexample: result = 0
    Unresolved: scaled [backend=z3] [reason=callee.contract] (relies on the
      contract of read_sensor (its clauses are not shown to be defined), which is
@@ -463,13 +463,21 @@ result. Each call runs where C++ evaluates it:
    Verified: guarded [backend=z3]
    calls.cpp:34:7: error: verification failed: unguarded [precondition] [backend=z3] [reason=counterexample]
       34 |   if (sq(x) > 4 && x <= 1000)
-         |       ^
+         |       ^~~~~
    calls.cpp:34:7: note: counterexample: x = -1001
+   calls.cpp:9:17: note: this precondition does not hold at the call
+       9 |   cv::pre(-1000 <= x && x <= 1000)
+         |           ~~~~~~^~~~
    calls.cpp:34:7: note: calls sq(-1001)
+      34 |   if (sq(x) > 4 && x <= 1000)
+         |       ^
    calls.cpp:44:10: error: verification failed: count_up [precondition] [backend=z3] [reason=counterexample]
       44 |   while (inc(i) <= n)
-         |          ^
+         |          ^~~~~~
    calls.cpp:44:10: note: counterexample: n = 1000, i = 0 -> 1000
+   calls.cpp:2:13: note: this precondition does not hold at the call
+       2 |   cv::pre(x < 1000)
+         |           ~~^~~~~~
    calls.cpp:44:3: note: enters the loop
       44 |   while (inc(i) <= n)
          |   ^
@@ -837,10 +845,10 @@ counterexample, see :doc:`tooling`):
 
 .. code-block:: text
 
-   divide.cpp:13:7: error: verification failed: divide [overflow] [backend=z3] [reason=counterexample]
+   divide.cpp:13:11: error: verification failed: divide [overflow] [backend=z3] [reason=counterexample]
       13 |     q = a / (1 - c);
-         |       ^
-   divide.cpp:13:7: note: counterexample: a = -2147483648, n = 3, c = 0 -> 2, q = 0
+         |         ~~^~~~~~~~~
+   divide.cpp:13:11: note: counterexample: a = -2147483648, n = 3, c = 0 -> 2, q = 0
    divide.cpp:9:3: note: enters the loop
        9 |   while (c < n)
          |   ^
@@ -1142,10 +1150,10 @@ contract can say directly:
 .. code-block:: text
 
    Verified: filled [backend=z3]
-   fill.cpp:25:3: error: verification failed: partially_filled [initialization] [backend=z3] [reason=counterexample]
+   fill.cpp:25:10: error: verification failed: partially_filled [initialization] [backend=z3] [reason=counterexample]
       25 |   return a[3];
-         |   ^
-   fill.cpp:25:3: note: counterexample: i = 0 -> 3
+         |          ^~~~
+   fill.cpp:25:10: note: counterexample: i = 0 -> 3
    fill.cpp:17:3: note: creates a local object at address 9132
       17 |   int a[4];
          |   ^

@@ -30,12 +30,12 @@ RIGHT-NEXT: Summary: 3 verified
 
 WRONG: Unresolved: scaled [backend=z3] [reason=callee.contract] (relies on the contract of clamp100, which its verification in {{.*}}mathx.cpp does not establish)
 WRONG-NEXT: Unresolved: twice_scaled [backend=z3] [reason=callee.contract] (relies on the contract of clamp100, which its verification in {{.*}}mathx.cpp does not establish)
-WRONG: mathx.h:2:42: error: verification failed: clamp100 [postcondition]
+WRONG: mathx.h:2:63: error: verification failed: clamp100 [postcondition]
 WRONG: note: counterexample: {{.*}}result = 101{{( ->|,|$)}}
 WRONG: Summary: 1 failed, 2 unresolved (callee.contract 2)
 
 The files are printed in the order they are given, settled together.
-ORDER: mathx.h:2:42: error: verification failed: clamp100
+ORDER: mathx.h:2:63: error: verification failed: clamp100
 ORDER: Unresolved: scaled [backend=z3] [reason=callee.contract] (relies on the contract of clamp100, which its verification in {{.*}}mathx.cpp does not establish)
 ORDER: Summary: 1 failed, 2 unresolved (callee.contract 2)
 

@@ -28,7 +28,7 @@ int canonical_obligations(int x)
 }
 
 // OBLIGATION-LABEL: vc canonical_obligations
-// OBLIGATION-NEXT: schema cppverify.obligation/5
+// OBLIGATION-NEXT: schema cppverify.obligation/6
 // OBLIGATION-NEXT: simplification nodes {{[1-9][0-9]*}} -> {{[1-9][0-9]*}}, rewrites {{[1-9][0-9]*}}, functions-removed 0
 // OBLIGATION-NEXT: semantic-hash sha256:f6d09cd4e2ac5c541fa8e0e443f4c2981e5763ce9b4d94d69f9856eaa1e95f2e
 // OBLIGATION-NEXT: identity [[IDENTITY:fn_[0-9a-f]+]]

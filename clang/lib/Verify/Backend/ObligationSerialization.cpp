@@ -624,6 +624,10 @@ public:
       writeU8(IncludeDiagnostics ? obligationTag(Item.Kind)
                                  : obligationSemanticTag(Item.Kind));
       writeSource(Item.Source);
+      if (IncludeDiagnostics && FormatVersion >= 6) {
+        writeSource(Item.FocusSource);
+        writeSource(Item.ClauseSource);
+      }
       writeExpr(Item.Goal.get());
       writeExpr(Item.CounterexampleQuery.get());
     }
@@ -975,6 +979,10 @@ class ArchiveReader {
         fail("invalid obligation kind in obligation archive");
       Item.Kind = Kind.value_or(ObligationKind::Assertion);
       Item.Source = readSource(IncludeSource);
+      if (IncludeDiagnostics && Version >= 6) {
+        Item.FocusSource = readSource(IncludeSource);
+        Item.ClauseSource = readSource(IncludeSource);
+      }
       Item.Goal = readExpr();
       Item.CounterexampleQuery = readExpr();
       Module.Obligations.push_back(std::move(Item));

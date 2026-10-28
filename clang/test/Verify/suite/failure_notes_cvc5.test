@@ -24,7 +24,7 @@ CHECK:      failure_notes.cpp:29:3: note: returns 4
 
 CHECK:      failure_notes.cpp:54:23: error: verification failed: calls [postcondition] [backend=cvc5] [reason=counterexample]
 CHECK:      failure_notes.cpp:54:23: note: counterexample: x = [[X:[0-9]+]], result = {{[0-9]+}}
-CHECK:      failure_notes.cpp:56:3: note: calls add([[X]])
+CHECK:      failure_notes.cpp:56:10: note: calls add([[X]])
 
 CHECK:      failure_notes.cpp:107:23: error: verification failed: local [postcondition] [backend=cvc5] [reason=counterexample]
 CHECK:      failure_notes.cpp:107:23: note: counterexample: v = {{[0-9]+}}, &r = [[R:[0-9]+]], result = [[V:[0-9]+]]
@@ -40,7 +40,7 @@ CHECK:      note: (skipping 3 steps of the path; JSON lists every one)
 CHECK:      failure_notes.cpp:258:3: note: perhaps takes the true branch (the counterexample does not decide whether this step is taken)
 
 A check inside a loop fails in an iteration of it: its path ends there.
-CHECK:      failure_notes.cpp:279:5: error: verification failed: iterate [assertion] [backend=cvc5] [reason=counterexample]
+CHECK:      failure_notes.cpp:279:17: error: verification failed: iterate [assertion] [backend=cvc5] [reason=counterexample]
 CHECK:      failure_notes.cpp:275:3: note: enters the loop
 CHECK:      failure_notes.cpp:275:3: note: starts an arbitrary iteration of the loop, where its condition is true
 CHECK-NOT:  failure_notes.cpp:{{.*}}: note:

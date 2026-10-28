@@ -219,7 +219,8 @@ one line that counts them:
 
 A failure prints as Clang prints an error: the kind of check that fails
 (``[postcondition]``), the backend and the reason, and the source with a caret
-under the check; then a note with the counterexample's values by their source
+under the part of the check that fails (below); then a note with the
+counterexample's values by their source
 names, in the order the source declares them (``result`` last), each with
 the values it takes along the path in turn (``i = 0 -> 1``), not those of
 branches the path does not take, and a reference as the address it refers to
@@ -233,6 +234,72 @@ path before the return. A value
 the counterexample does not determine is ``<unknown>``. JSON keeps what the
 text leaves out (see `Structured diagnostics`_). Errors and warnings show their
 source line the same way; verdicts are one line each.
+
+The part of a check that fails is the one the counterexample's values make
+false:
+
+- in a clause written as a conjunction, its first conjunct that is false:
+  for ``cv::post(0 <= cv::result && cv::result <= 50)`` and a result of 51,
+  ``cv::result <= 50``. A disjunction fails only when every part of it does,
+  and is shown whole;
+- for a check that an operation is defined (``[overflow]``,
+  ``[division-by-zero]``, ``[bounds]``, ...), the operation, with the caret
+  at its operator, under the conditions around it (a branch, the left side
+  of ``&&``), not the statement it is in;
+- for a callee's precondition, the call, with the caret at the callee's
+  name. A note shows the callee's clause that does not hold there, its
+  conjunct that is false.
+
+.. code-block:: cpp
+
+   namespace cv = cppverify;
+
+   int half(int x)
+     cv::pre(0 <= x && x % 2 == 0)
+     cv::post(cv::result * 2 == x)
+   {
+     return x / 2;
+   }
+
+   int odd_half(int y)
+     cv::pre(0 <= y && y <= 100)
+   {
+     return half(2 * y + 1);
+   }
+
+   int area(int w, int h)
+     cv::pre(0 <= w && 0 <= h)
+   {
+     int a = w * h + 1;
+     return a;
+   }
+
+.. code-block:: text
+
+   Verified: half [backend=z3]
+   half.cpp:13:10: error: verification failed: odd_half [precondition] [backend=z3] [reason=counterexample]
+      13 |   return half(2 * y + 1);
+         |          ^~~~~~~~~~~~~~~
+   half.cpp:13:10: note: counterexample: y = 0
+   half.cpp:4:27: note: this precondition does not hold at the call
+       4 |   cv::pre(0 <= x && x % 2 == 0)
+         |                     ~~~~~~^~~~
+   half.cpp:13:10: note: calls half(1)
+      13 |   return half(2 * y + 1);
+         |          ^
+   half.cpp:19:17: error: verification failed: area [overflow] [backend=z3] [reason=counterexample]
+      19 |   int a = w * h + 1;
+         |           ~~~~~~^~~
+   half.cpp:19:17: note: counterexample: w = 1, h = 2147483647
+   Summary: 1 verified, 2 failed in 0.0 s
+
+At ``w = 1`` the product fits and the sum overflows, so the caret is at
+``+``. When the values do not decide which part is false (one that needs a
+spec the checker cannot evaluate), the failure is shown at the whole
+condition, or for an operation at its statement. A check inside a lifted
+``constexpr`` helper is shown at the statement that calls the helper, as
+before. Before 0.2 every failure was: the whole clause, the statement for an operation or a call, and the
+callee's clause was not shown.
 
 The summary counts each kind of verdict the run reported (verified, which
 includes ``Certified`` and ``Proved (z3+lean)``, failed, unresolved,
@@ -1176,8 +1243,8 @@ run's records are the same at any ``--jobs``; ``--time-report`` adds
   ``message``, the text of its line; for a failure, ``reason``;
 - ``function``, and ``function_source``, the function's name where it is
   declared;
-- ``source``, what the result is about: for a failure the expression its
-  check checks. A source is ``file``, ``line``, ``column``, ``end_line``,
+- ``source``, what the result is about: for a failure the part of its
+  check that fails (see `What a run prints`_). A source is ``file``, ``line``, ``column``, ``end_line``,
   ``end_column``: from its first character to the column after its last, as
   SARIF and editors count, on presumed (``#line``) lines;
 - for a failure, ``obligation`` with the check's ``id`` and ``kind``;
@@ -1187,12 +1254,16 @@ run's records are the same at any ``--jobs``; ``--time-report`` adds
   ``"on_path": false`` for a version of a branch the path does not take; and
   ``trace``, each step with its ``kind``, its ``text`` as the note prints it,
   and ``active``;
+- for a failure at a call, ``related``: the callee's clause that does not
+  hold, with its ``message`` and ``source``;
 - ``notes``, ``backend``, ``bound``, ``trusts``, ``vacuous``, ``partial``,
   ``instantiated_at``, and the other qualifiers of the text.
 
 The check's ID is source-anchored, such as
-``function-identity::overflow@line:column#2``: the line and column of its
-caret. The local suffix only disambiguates checks of one kind at the same
+``function-identity::overflow@line:column#2``: the line and column of the
+check as the verifier builds it, a clause's operator or the statement that
+an operation or a call is in. The caret may point closer, at the part that
+fails, and the ID stays. The local suffix only disambiguates checks of one kind at the same
 anchor, so inserting or reordering an unrelated check does not renumber later
 IDs unless its source anchor moves. Z3 model completion is disabled:
 undetermined values print as ``<unknown>`` and become JSON ``null``. Signed
@@ -1222,7 +1293,8 @@ kind of the failing check (``postcondition``, ``overflow``, ...), or
 ``verified``, ``unresolved``, ``warning``, ``frontend``; its location is the
 record's source and its function, its message the text with the
 counterexample, and the path a code flow, each step at its line with its
-text. The run's properties hold the summary.
+text. A failure at a call has the callee's clause as a related location.
+The run's properties hold the summary.
 
 GitHub annotations
 ~~~~~~~~~~~~~~~~~~
@@ -1236,11 +1308,15 @@ workflow). For ``summary.cpp`` above, after the error and its notes:
 
    ::error file=summary.cpp,line=14,col=12,endLine=14,endColumn=34,title=cpp-verify%3A postcondition::verification failed: add_two [postcondition] [backend=z3] [reason=counterexample]%0Acounterexample: x = 3, result = 5
 
+A failure at a call adds the callee's clause to the message, with its place:
+``%0Athis precondition does not hold at the call (half.cpp:4:27)``.
+
 Counterexample traces may contain guarded branch, modular-call, loop,
 heap-write, allocation/provenance, lifetime-end, deletion, and return events.
 False guards are omitted; a guard the model does not determine is retained with
 JSON ``"active": null`` rather than an invented path choice. Archives preserve
-the same names, ranges, IDs, and trace data during replay.
+the same names, ranges, IDs, and trace data during replay, and a replayed
+failure is shown at the same part of its check.
 
 A failure may carry notes, printed after it as ``note:`` lines and in JSON as
 ``notes``: a counterexample that passes through a loop starts from any state
@@ -1281,14 +1357,14 @@ counts each function once:
 .. code-block:: text
 
    $ cpp-verify --max-failures=0 three_bugs.cpp
-   three_bugs.cpp:7:3: error: verification failed: three_bugs [division-by-zero] [backend=z3] [reason=counterexample]
+   three_bugs.cpp:7:14: error: verification failed: three_bugs [division-by-zero] [backend=z3] [reason=counterexample]
        7 |   int q = 10 / y;
-         |   ^
-   three_bugs.cpp:7:3: note: counterexample: x = 0, y = 0
-   three_bugs.cpp:8:3: error: verification failed: three_bugs [overflow] [backend=z3] [reason=counterexample]
+         |           ~~~^~~
+   three_bugs.cpp:7:14: note: counterexample: x = 0, y = 0
+   three_bugs.cpp:8:13: error: verification failed: three_bugs [overflow] [backend=z3] [reason=counterexample]
        8 |   int r = x + q;
-         |   ^
-   three_bugs.cpp:8:3: note: counterexample: x = -2147483648, y = -9, q = -1
+         |           ~~^~~
+   three_bugs.cpp:8:13: note: counterexample: x = -2147483648, y = -9, q = -1
    three_bugs.cpp:5:23: error: verification failed: three_bugs [postcondition] [backend=z3] [reason=counterexample]
        5 |   cv::post(cv::result > 0)
          |            ~~~~~~~~~~~^~~
@@ -1447,7 +1523,7 @@ module is ``BoundedSafe`` when every goal but some unwinding goal
 certifies (:doc:`../book/part-ii/ch17-backends-modular-calls`).
 ``--lean-fallback`` applies to source verification only.
 
-``--obligation-out`` writes ``cppverify.obligation/5`` records only after exact
+``--obligation-out`` writes ``cppverify.obligation/6`` records only after exact
 serialize/deserialize/validate/reserialize checks. Stable wire tags make the
 format independent of C++ enum ordinals. The reader rejects malformed magic,
 unsupported versions, truncation, invalid tags, inconsistent feature
@@ -1458,11 +1534,14 @@ where each assumption of a goal comes from, which names a hypothesis of a
 readable Lean goal; schema v4, with source metadata, where each variable
 version of a counterexample is defined, so a replayed counterexample lists the
 values its path takes; schema v5 where each source range begins, its end
-being the column after its last character. Records of schemas v4 to v2, and
+being the column after its last character; schema v6, with source metadata,
+where each check's condition and a callee's clause lie, so a replayed failure
+is shown at the part that fails. Records of schemas v5 to v2, and
 of schema v1, which name only assertions, postconditions, and unwinding
 checks, are still read; a counterexample replayed from one before v4 lists
-the values of every version, and a range from one before v5 begins at its
-anchor and ends at the first column of its last token.
+the values of every version, a range from one before v5 begins at its
+anchor and ends at the first column of its last token, and a failure
+replayed from one before v6 is shown at its check's anchor.
 Records cap integer widths at 4096 bits, expression depth at 4096, and
 collections plus expression nodes/edges at 100,000 per record. It also rejects
 embedded NULs, non-canonical numerals, inactive payload fields, ill-scoped

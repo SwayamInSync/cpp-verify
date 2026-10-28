@@ -319,10 +319,10 @@ and footprints name it, and the same frame reasoning as for a buffer applies:
 
    Verified: push [backend=z3]
    Verified: clear [backend=z3]
-   stack.cpp:36:21: error: verification failed: push_full [bounds] [backend=z3] [reason=counterexample]
+   stack.cpp:36:3: error: verification failed: push_full [bounds] [backend=z3] [reason=counterexample]
       36 |   s->items[s->size] = v;
-         |                     ^
-   stack.cpp:36:21: note: counterexample: s = 1
+         |   ^
+   stack.cpp:36:3: note: counterexample: s = 1
 
 ``push`` writes exactly two cells, so its postcondition can promise that every
 item below the old size is unchanged. ``clear`` writes a range of the member

@@ -30,10 +30,10 @@ is always on, so the encoder generates the obligation itself and it fails:
 
 .. code-block:: text
 
-   binary_search.cpp:28:5: error: verification failed: bsearch_broken [overflow] [backend=z3] [reason=counterexample]
+   binary_search.cpp:28:19: error: verification failed: bsearch_broken [overflow] [backend=z3] [reason=counterexample]
       28 |     int mid = (lo + hi) / 2;
-         |     ^
-   binary_search.cpp:28:5: note: counterexample: a = 1, n = 1073741825, lo = 0 -> 1073741824, hi = 1073741824, res = -1 -> 1073741824
+         |               ~~~~^~~~~
+   binary_search.cpp:28:19: note: counterexample: a = 1, n = 1073741825, lo = 0 -> 1073741824, hi = 1073741824, res = -1 -> 1073741824
    binary_search.cpp:24:3: note: enters the loop
       24 |   while (lo <= hi)
          |   ^

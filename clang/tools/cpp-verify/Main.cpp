@@ -810,6 +810,7 @@ using verify::sourceJSON;
 
 static void printReplayJSON(const verify::ObligationModule &Module,
                             const verify::VerifyResult &Result,
+                            const verify::FailurePlace &Place,
                             llvm::StringRef SemanticHash,
                             unsigned LeanAutomatic) {
   llvm::json::Object Record;
@@ -837,6 +838,10 @@ static void printReplayJSON(const verify::ObligationModule &Module,
       Record["counterexample"] = jsonText(Values);
   }
   Record["message"] = jsonText(Message);
+  if (Place.ClauseSource.isValid())
+    Record["related"] = llvm::json::Array{
+        llvm::json::Object{{"message", verify::clauseNote(Result)},
+                           {"source", sourceJSON(Place.ClauseSource)}}};
   Record["semantic_hash"] = ("sha256:" + SemanticHash).str();
   if (!Result.BackendName.empty())
     Record["backend"] = Result.BackendName;
@@ -1190,9 +1195,17 @@ static int replayObligationArchive() {
       Result.Reason = verify::VerifyReason::Interrupted;
     }
 
+    // A failure is shown where its check fails, as in a run from source.
+    verify::FailurePlace Place;
+    if (Result.Status == verify::VerifyStatus::Failed) {
+      Place = verify::failingPlace(Module, Result);
+      if (Place.AtSource.isValid())
+        Result.Source = Place.AtSource;
+    }
+
     const std::string Hash = verify::obligationSemanticHash(Module);
     if (structuredOutput()) {
-      printReplayJSON(Module, Result, Hash, LeanAutomatic);
+      printReplayJSON(Module, Result, Place, Hash, LeanAutomatic);
       if (Result.Status != verify::VerifyStatus::Lowered &&
           Result.Status != verify::VerifyStatus::Verified &&
           Result.Status != verify::VerifyStatus::Exported)
@@ -1273,6 +1286,11 @@ static int replayObligationArchive() {
         printResultSource();
         llvm::outs() << "note: counterexample: " << Values << "\n";
       }
+      if (const verify::ObligationSource &Clause = Place.ClauseSource;
+          Clause.isValid())
+        llvm::outs() << Clause.File << ":" << Clause.Line << ":"
+                     << Clause.Column
+                     << ": note: " << verify::clauseNote(Result) << "\n";
       for (const verify::VerifyTraceEvent &Event : Result.Trace) {
         if (Event.Source.isValid())
           llvm::outs() << Event.Source.File << ":" << Event.Source.Line << ":"

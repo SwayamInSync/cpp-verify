@@ -2,6 +2,7 @@
 #ifndef LLVM_CLANG_VERIFY_IR_VSTMT_H
 #define LLVM_CLANG_VERIFY_IR_VSTMT_H
 
+#include "SourceSpan.h"
 #include "VExpr.h"
 #include <map>
 #include <memory>
@@ -239,6 +240,8 @@ struct VCallStmt : VStmt {
   /// SSA companion receiving the lifetime identity of a pointer result.
   std::string ResultProvenanceTarget;
   bool IsProofCall = false;
+  /// The call expression: the callee's name and the call's extent.
+  SourceSpan CallSite;
   VCallStmt(std::string Callee, std::string CalleeIdentity,
             std::vector<std::unique_ptr<VExpr>> Args, std::string ResultTarget,
             SourceLocation Loc, bool IsProofCall = false,
@@ -353,6 +356,9 @@ struct VFunction {
   bool IsConstructor = false;
   /// The declaration, for diagnostics about the function itself.
   SourceLocation DeclLoc;
+  /// The definition's source, its contract included, where a failure of
+  /// one of its checks may be shown.
+  SourceRange Extent;
   bool NeedsDecreasesCheck = false;
   /// decreases(*) on the function or one of its loops: it may diverge.
   SourceLocation DivergenceLoc;

@@ -209,10 +209,10 @@ instead of ``(head + 1) % N``. Compiled with ``-DFORGET_WRAP``:
    Verified: Ring<4>::Ring [backend=z3]
    Verified: Ring<4>::full [backend=z3]
    Verified: Ring<4>::push [backend=z3]
-   ring_buffer.cpp:74:58: error: verification failed: Ring<4>::pop [type-invariant] [backend=z3] [reason=counterexample]
+   ring_buffer.cpp:74:40: error: verification failed: Ring<4>::pop [type-invariant] [backend=z3] [reason=counterexample]
       74 |   cv::type_invariant(0 <= head && head < N && 0 <= count && count <= N);
-         |                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~
-   ring_buffer.cpp:74:58: note: counterexample: this = 1, v = -2147483648, result = -2147483648
+         |                                   ~~~~~^~~
+   ring_buffer.cpp:74:40: note: counterexample: this = 1, v = -2147483648, result = -2147483648
    ring_buffer.cpp:57:10: note: stores 4 at address 17
       57 |     head = head + 1;
          |          ^

@@ -214,7 +214,7 @@ int walk(const int *p, int n)
   }
   return 0;
 }
-// CHECK: [[@LINE-7]]:43: error: verification failed: walk [bounds]
+// CHECK: [[@LINE-7]]:46: error: verification failed: walk [bounds]
 
 int last(const int *p, int n)
   cppverify::pre(valid(p, n) && n >= 1 && n <= 100)
@@ -223,7 +223,7 @@ int last(const int *p, int n)
   cppverify::check(p[n] >= 0);
   return 0;
 }
-// CHECK: [[@LINE-3]]:3: error: verification failed: last [bounds]
+// CHECK: [[@LINE-3]]:20: error: verification failed: last [bounds]
 // BMC: error: verification failed: last [bounds]
 
 int ghost_last(const int *p, int n)
@@ -232,7 +232,7 @@ int ghost_last(const int *p, int n)
   cppverify::ghost { cppverify::check(p[n] >= 0 || p[n] < 0); }
   return 0;
 }
-// CHECK: [[@LINE-3]]:22: error: verification failed: ghost_last [bounds]
+// CHECK: [[@LINE-3]]:39: error: verification failed: ghost_last [bounds]
 
 // The postcondition before it holds, and the body's own state places the
 // result: *result lies in p.

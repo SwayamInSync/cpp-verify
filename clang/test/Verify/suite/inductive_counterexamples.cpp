@@ -212,18 +212,18 @@ int count_up_proved(int n)
 // CHECK: note: the loop at 67:3 has no cppverify::decreases: a proof would be Unresolved (decreases.missing) until it has one
 // CHECK-NEXT: note: the counterexample's state at the loop at 67:3 is any state its invariants allow, not necessarily one an execution reaches
 // CHECK-NEXT: note: an execution fails this check with no iteration of any loop (counterexample: {{.*}}n = 0{{.*}})
-// CHECK-NEXT: inductive_counterexamples.cpp:87:7: error: verification failed: divides [division-by-zero]
+// CHECK-NEXT: inductive_counterexamples.cpp:87:12: error: verification failed: divides [division-by-zero]
 // CHECK: note: the counterexample's state at the loop at 83:3 is any state its invariants allow, not necessarily one an execution reaches
 // CHECK-NEXT: note: an execution fails this check within 4 iterations of each loop (counterexample: {{.*}}c = 0 -> 1 -> 2 -> 3{{.*}})
 // CHECK-NEXT: inductive_counterexamples.cpp:100:21: error: verification failed: grows [invariant-preserved]
 // CHECK: note: the counterexample's state at the loop at 99:3 is any state its invariants allow, not necessarily one an execution reaches
-// CHECK-NEXT: inductive_counterexamples.cpp:119:5: error: verification failed: two_checks [assertion]
+// CHECK-NEXT: inductive_counterexamples.cpp:119:17: error: verification failed: two_checks [assertion]
 // CHECK: note: the counterexample's state at the loop at 115:3 is any state its invariants allow, not necessarily one an execution reaches
 // CHECK-NEXT: note: an execution fails this check within 5 iterations of each loop (counterexample: {{.*}}n = 5{{.*}})
-// CHECK-NEXT: inductive_counterexamples.cpp:140:7: error: verification failed: two_kinds [overflow]
+// CHECK-NEXT: inductive_counterexamples.cpp:140:11: error: verification failed: two_kinds [overflow]
 // CHECK: note: the counterexample's state at the loop at 136:3 is any state its invariants allow, not necessarily one an execution reaches
 // CHECK-NEXT: note: no execution fails this check without failing an earlier one first (the division-by-zero check at 140:7 fails): those that pass the checks before it end every loop within 2 iterations, and unrolling proves it there
-// CHECK-NEXT: inductive_counterexamples.cpp:160:7: error: verification failed: past_failure [division-by-zero]
+// CHECK-NEXT: inductive_counterexamples.cpp:160:13: error: verification failed: past_failure [division-by-zero]
 // CHECK: note: the counterexample's state at the loop at 156:3 is any state its invariants allow, not necessarily one an execution reaches
 // CHECK-NEXT: note: an execution fails this check within 4 iterations of each loop (counterexample: {{.*}}k = 3, m = 100{{.*}})
 // CHECK-NEXT: inductive_counterexamples.cpp:170:23: error: verification failed: skipped [postcondition]

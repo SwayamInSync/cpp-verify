@@ -40,7 +40,7 @@ cppverify::proof void strictly_below_last(const int *a, int n)
     pair_ordered(a, n, k, n - 1);
   }
 }
-// CHECK-DAG: :[[@LINE-4]]:3: error: verification failed: strictly_below_last [assertion] [backend=z3] [reason=counterexample]
+// CHECK-DAG: :[[@LINE-4]]:52: error: verification failed: strictly_below_last [assertion] [backend=z3] [reason=counterexample]
 
 // Without bounds the variable ranges over every integer.
 cppverify::proof void squares(int m)

@@ -32,7 +32,7 @@ int calls_with_minimum(int y)
 {
   return abs_value(y);
 }
-// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: calls_with_minimum [precondition]
+// CHECK-DAG: :[[@LINE-2]]:10: error: verification failed: calls_with_minimum [precondition]
 
 int sign(int x)
   cppverify::behavior(positive, x > 0)

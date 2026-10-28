@@ -144,7 +144,7 @@ int apply(Ring<4> &r, Command c, int v)
 
 // Without the wraparound, pop moves head past the array: the class
 // invariant fails at its exit, and the path shows the store that breaks it.
-// BUG: ring_buffer.cpp:{{[0-9]+}}:58: error: verification failed: Ring<4>::pop [type-invariant] [backend=z3] [reason=counterexample]
+// BUG: ring_buffer.cpp:{{[0-9]+}}:40: error: verification failed: Ring<4>::pop [type-invariant] [backend=z3] [reason=counterexample]
 // BUG: note: counterexample: this = {{[0-9]+}}
 // BUG: note: stores 4 at address {{[0-9]+}}
 // BUG-NEXT: {{.*}}head = head + 1;

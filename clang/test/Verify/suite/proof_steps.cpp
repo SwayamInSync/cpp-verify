@@ -58,7 +58,7 @@ void wrong_claim(int a, int b)
     sq_monotone(a, b);
   }
 }
-// CHECK-DAG: :[[@LINE-4]]:3: error: verification failed: wrong_claim [assertion]
+// CHECK-DAG: :[[@LINE-4]]:26: error: verification failed: wrong_claim [assertion]
 
 // A lemma's precondition is checked where the proof calls it.
 void lemma_outside_its_domain(int a, int b)
