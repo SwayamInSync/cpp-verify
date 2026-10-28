@@ -533,9 +533,9 @@ public:
   enum class CppVerifyBackend { Z3, CVC5, Portfolio, Race, BMC };
   CppVerifyBackend VerifyBackend = CppVerifyBackend::Z3;
 
-  /// The milliseconds each CppVerify solver query may take; 0 is
-  /// cpp-verify's default (-fverify-timeout=).
-  unsigned VerifyTimeoutMs = 0;
+  /// The milliseconds each CppVerify solver query may take, cpp-verify's
+  /// default unless given; 0 disables the limit (-fverify-timeout=).
+  unsigned VerifyTimeoutMs = 30000;
 
   /// The solver jobs CppVerify runs for this compilation (-fverify-jobs=).
   unsigned VerifyJobs = 1;
