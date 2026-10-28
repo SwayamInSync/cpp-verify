@@ -191,7 +191,11 @@ C++ feature boundaries
        (reported), variadics, indirect calls,
        recursion through a
        function that allocates or frees storage, and general link-time
-       summaries.
+       summaries. A function whose proof obligations would take more than
+       ``--max-query-nodes`` expression nodes (4 million by default) is
+       ``Unresolved`` with reason ``query.size-limit``: each check restates
+       every assumption before it, so a long function with many checks grows
+       fastest. See the memory limits of :doc:`tooling`.
    * - Storage
      - Supported locals, constrained scalar dynamic storage, and inferred
        acyclic fresh-owned scalar factory results.
@@ -709,11 +713,15 @@ Assurance and testing gaps
 --------------------------
 
 Every current checkpoint uses positive programs, nearby false programs, and
-layered lowering checks. Broader trust additionally requires:
+layered lowering checks. Every night, 484 contracted functions over integers,
+pointers, and records are also verified by each backend and run natively
+under UBSan on enumerated or sampled inputs, and a verdict that execution
+contradicts fails CI (:doc:`../book/part-ii/ch17-backends-modular-calls`).
+Broader trust additionally requires:
 
 - grammar-guided fuzzing of supported and neighboring unsupported C++;
 - metamorphic and AST/VCR/SMT translation-validation tests;
-- bounded differential execution against compiled Clang programs;
+- differential execution of classes, templates, and dynamic storage;
 - X86-64/AArch64 target-layout and language-mode matrices;
 - solver-time, memory, VC-size, and random-seed stability benchmarks;
 - stale-cache, timeout, quantifier, aliasing, and model-adversarial tests;

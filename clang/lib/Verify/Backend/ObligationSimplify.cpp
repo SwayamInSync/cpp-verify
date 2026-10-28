@@ -4,6 +4,7 @@
 #include "LogicTerms.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/CheckedArithmetic.h"
 #include <algorithm>
@@ -46,17 +47,33 @@ uint64_t countNodes(const LogicExpr *Expr) {
   return Count;
 }
 
+/// countNodes, with the count of each term kept in \p Counts: the goals
+/// share the terms of their assumptions.
+uint64_t countNodes(const LogicExpr *Expr,
+                    llvm::DenseMap<const LogicExpr *, uint64_t> &Counts) {
+  if (!Expr)
+    return 0;
+  if (auto It = Counts.find(Expr); It != Counts.end())
+    return It->second;
+  uint64_t Count = 1;
+  for (const auto &Child : Expr->Children)
+    Count += countNodes(Child.get(), Counts);
+  Counts[Expr] = Count;
+  return Count;
+}
+
 uint64_t countModuleNodes(const ObligationModule &Module) {
-  uint64_t Count = countNodes(Module.CorrectnessGoal.get()) +
-                   countNodes(Module.CounterexampleQuery.get());
+  llvm::DenseMap<const LogicExpr *, uint64_t> Counts;
+  uint64_t Count = countNodes(Module.CorrectnessGoal.get(), Counts) +
+                   countNodes(Module.CounterexampleQuery.get(), Counts);
   for (const Obligation &Item : Module.Obligations)
-    Count += countNodes(Item.Goal.get()) +
-             countNodes(Item.CounterexampleQuery.get());
+    Count += countNodes(Item.Goal.get(), Counts) +
+             countNodes(Item.CounterexampleQuery.get(), Counts);
   for (const auto &[Identity, Function] : Module.LogicFunctions) {
     (void)Identity;
-    Count += countNodes(Function.StepDefinition.get());
+    Count += countNodes(Function.StepDefinition.get(), Counts);
     for (const auto &Definition : Function.DefinitionLevels)
-      Count += countNodes(Definition.get());
+      Count += countNodes(Definition.get(), Counts);
   }
   return Count;
 }
@@ -1000,7 +1017,76 @@ std::unique_ptr<LogicExpr> instantiateExtensionality(const LogicExpr &Query) {
 }
 
 uint64_t obligationModuleNodeCount(const ObligationModule &Module) {
-  return countModuleNodes(Module);
+  llvm::DenseSet<const LogicExpr *> Seen;
+  std::vector<const LogicExpr *> Work;
+  auto add = [&](const LogicExpr *Root) {
+    if (Root && Seen.insert(Root).second)
+      Work.push_back(Root);
+  };
+  add(Module.CorrectnessGoal.get());
+  add(Module.CounterexampleQuery.get());
+  for (const Obligation &Item : Module.Obligations) {
+    add(Item.Goal.get());
+    add(Item.CounterexampleQuery.get());
+  }
+  for (const auto &[Identity, Function] : Module.LogicFunctions) {
+    (void)Identity;
+    add(Function.StepDefinition.get());
+    for (const auto &Definition : Function.DefinitionLevels)
+      add(Definition.get());
+  }
+  while (!Work.empty()) {
+    const LogicExpr *Node = Work.back();
+    Work.pop_back();
+    for (const auto &Child : Node->Children)
+      add(Child.get());
+  }
+  return Seen.size();
+}
+
+uint64_t obligationModuleTreeNodesUpTo(const ObligationModule &Module,
+                                       uint64_t Limit) {
+  uint64_t Tree = logicTreeNodesUpTo(Module.CounterexampleQuery.get(), Limit);
+  for (const auto &[Identity, Function] : Module.LogicFunctions) {
+    (void)Identity;
+    if (Tree > Limit)
+      break;
+    Tree += logicTreeNodesUpTo(Function.StepDefinition.get(), Limit);
+    for (const auto &Definition : Function.DefinitionLevels)
+      Tree += logicTreeNodesUpTo(Definition.get(), Limit);
+  }
+  return Tree;
+}
+
+uint64_t logicTreeNodesUpTo(const LogicExpr *Expr, uint64_t Limit) {
+  uint64_t Count = 0;
+  std::vector<const LogicExpr *> Work;
+  if (Expr)
+    Work.push_back(Expr);
+  while (!Work.empty() && Count <= Limit) {
+    const LogicExpr *Node = Work.back();
+    Work.pop_back();
+    ++Count;
+    for (const auto &Child : Node->Children)
+      Work.push_back(Child.get());
+  }
+  return Count;
+}
+
+uint64_t logicDistinctNodes(llvm::ArrayRef<const LogicExpr *> Roots) {
+  llvm::DenseSet<const LogicExpr *> Seen;
+  std::vector<const LogicExpr *> Work;
+  for (const LogicExpr *Root : Roots)
+    if (Root && Seen.insert(Root).second)
+      Work.push_back(Root);
+  while (!Work.empty()) {
+    const LogicExpr *Node = Work.back();
+    Work.pop_back();
+    for (const auto &Child : Node->Children)
+      if (Seen.insert(Child.get()).second)
+        Work.push_back(Child.get());
+  }
+  return Seen.size();
 }
 
 llvm::Expected<ObligationModule>

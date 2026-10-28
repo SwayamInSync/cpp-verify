@@ -537,10 +537,11 @@ every assumption before it as a copy, and the check's query, the function's
 complete goal, and that goal's query copied them again, so memory grew with
 the number of checks times the length of what came before them: verifying the
 ULEB128 case study took 14.9 GB, and lowering it 53 s. Terms now share what
-they repeat: the case study verifies within 0.9 GB and lowers in 10 s, and
-``safe_fib.cpp`` lowers in 7 s within 0.35 GB instead of 16 s and 4.7 GB.
-Verdicts, archives, hashes, and IR dumps are unchanged; a Lean export names a
-large subterm that one statement repeats once (:doc:`case-studies/llvm-uleb128`).
+they repeat, and the checks of a module visit a shared term once: the case
+study verifies within 0.9 GB and lowers in 2.5 s, and ``safe_fib.cpp`` lowers
+in 1.9 s within 0.35 GB instead of 16 s and 4.7 GB. Verdicts, archives, hashes,
+and IR dumps are unchanged; a Lean export names a large subterm that one
+statement repeats once (:doc:`case-studies/llvm-uleb128`).
 
 **Errors point at the code.** An error about a construct the verifier does not
 represent named only the function, as in ``error: pick: unsupported statement:
@@ -572,6 +573,19 @@ as before (:doc:`language/tooling`).
 report something unrelated. The query now ends ``Unresolved`` with reason
 ``encoding.failed`` and Z3's message (:doc:`language/tooling`).
 
+**Memory limits.** Nothing bounded the memory a run took: a function whose
+proof obligations, which repeat every assumption before each check, came to
+hundreds of millions of nodes, or ``cppverify::reveal_with_fuel(fibo, 24)``,
+took tens of gigabytes until the system stopped the run. ``--max-query-nodes``
+now has a default, 4 million expression nodes, and bounds what is built for
+one function as it is built, a node shared by several terms once; a function
+over it is ``Unresolved`` with reason ``query.size-limit``, which names what
+was too large. cvc5's scripts and archive records, which state shared terms
+in full, are checked against it too. The new
+``--memory-limit`` (default 8192 MB) bounds Z3's queries together and each
+cvc5 process; a query that reaches it is ``Unresolved`` with reason
+``solver.memory-limit`` (:doc:`language/tooling`).
+
 **Parallel runs.** With more than one job, a function waiting for its own
 queries could run another function's long query, delaying its result and
 spending its ``--function-timeout``. A waiting function now runs only its own
@@ -596,7 +610,9 @@ in time, so it stops where it would on an idle machine
 
 **cvc5 1.4.** Every query over sets, multisets, and maps failed with cvc5 1.4,
 which requires extended arrays for constant arrays; such a query now enables
-them itself (:doc:`language/tooling`).
+them itself. CI now runs the test suite with cvc5 1.1.2 and 1.4.2, and
+``cpp-verify --version`` names that range and reads the version of cvc5 1.4,
+which it showed as ``unknown`` (:doc:`language/tooling`).
 
 **Lean proofs stay with their goals.** A goal of a Lean project was named by
 its function and its position among the function's obligations, and a spec
@@ -728,6 +744,18 @@ refuses a ``lake`` outside elan that reports another Lean
 **clang-format.** A range footprint is written ``p[lo : n]``, not ``p [lo:n]``
 (:doc:`language/tooling`).
 
+Testing
+~~~~~~~
+
+**Verdicts are checked against execution every night.** 484 contracted
+functions over integers, pointers, and records are verified by Z3 in each
+integer encoding, by cvc5, and by BMC, then compiled with
+``-fsanitize=undefined`` and run on every input of small parameter types, or
+on boundary values and samples. CI fails when a ``Verified`` function
+misbehaves on an input its precondition admits, when a counterexample does not
+reproduce, or when two backends decide differently
+(:doc:`book/part-ii/ch17-backends-modular-calls`).
+
 Data formats
 ~~~~~~~~~~~~
 
@@ -736,8 +764,9 @@ sources of assumptions and reads ``/2`` and ``/1``; JSON diagnostics stay
 ``cppverify.diagnostic/1``. A module whose specs' measures apply other specs
 keeps them, so its module hash changes; per-obligation hashes, and the proof
 cache keyed by them, do not. JSON records may carry the status
-``proved-obligations`` (archive replay) and the reason ``interrupted``
-(Ctrl-C). Lean projects pin ``leanprover/lean4:v4.35.0``, and each proof
+``proved-obligations`` (archive replay) and the reasons ``interrupted``
+(Ctrl-C) and ``solver.memory-limit`` (``--memory-limit``). Lean projects
+pin ``leanprover/lean4:v4.35.0``, and each proof
 file records the hash of its goal's statement (``cppverify-obligation-statement``
 version 1, which leaves out the function's identity).
 

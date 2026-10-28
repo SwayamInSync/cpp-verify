@@ -196,11 +196,20 @@ static unsigned jobs() {
   return 0;
 }
 
-static cl::opt<uint64_t>
-    MaxQueryNodes("max-query-nodes",
-                  cl::desc("Maximum canonical expression nodes per solver "
-                           "module (0 = no limit)"),
-                  cl::init(0), cl::cat(CppVerifyCategory));
+static const std::string MaxQueryNodesDescription =
+    "Maximum expression nodes of one function's proof obligations, checked "
+    "as they are built (default " +
+    std::to_string(verify::DefaultMaxQueryNodes) + "; 0 = no limit)";
+
+static cl::opt<uint64_t> MaxQueryNodes(
+    "max-query-nodes", cl::desc(MaxQueryNodesDescription),
+    cl::init(verify::DefaultMaxQueryNodes), cl::cat(CppVerifyCategory));
+
+static cl::opt<uint64_t> MemoryLimit(
+    "memory-limit",
+    cl::desc("Megabytes Z3's queries may allocate together, and each cvc5 "
+             "process (default 8192; 0 = no limit)"),
+    cl::init(verify::DefaultMemoryLimitMB), cl::cat(CppVerifyCategory));
 
 static cl::opt<verify::MachineIntegerEncoding> IntEncoding(
     "int-encoding",
@@ -349,6 +358,7 @@ static verify::BackendExecutionOptions backendExecutionOptions() {
   Options.SolverResourceLimit = SolverResourceLimit;
   Options.Jobs = jobs();
   Options.MaxQueryNodes = MaxQueryNodes;
+  Options.MemoryLimitMB = MemoryLimit;
   Options.IntegerEncoding = IntEncoding;
   Options.CVC5Path = CVC5Path;
   Options.ProofCachePath = ProofCache;
@@ -438,6 +448,7 @@ public:
       // Lean exports one function at a time; --jobs sets its Lean processes.
       VOpts.Jobs = VOpts.Backend == verify::BackendKind::Lean ? 1 : jobs();
       VOpts.MaxQueryNodes = MaxQueryNodes.getValue();
+      VOpts.MemoryLimitMB = MemoryLimit.getValue();
       VOpts.IntegerEncoding = IntEncoding.getValue();
       VOpts.CVC5Path = CVC5Path.getValue();
       VOpts.ProofCachePath = ProofCache.getValue();
@@ -668,7 +679,7 @@ static bool resolveOptions(bool Replay) {
   const cl::Option *SolverOption = nullptr;
   for (const cl::Option *Option : std::initializer_list<const cl::Option *>{
            &SolverTimeout, &CollectionTimeout, &CertifyTimeout,
-           &FunctionTimeout, &SolverResourceLimit, &MaxQueryNodes,
+           &FunctionTimeout, &SolverResourceLimit, &MemoryLimit,
            &IntEncoding})
     if (!SolverOption && given(*Option))
       SolverOption = Option;
@@ -759,6 +770,7 @@ static int replayObligationArchive() {
     return 1;
   }
 
+  verify::setZ3MemoryLimit(MemoryLimit);
   auto Buffer = llvm::MemoryBuffer::getFile(ObligationIn);
   if (!Buffer) {
     llvm::errs() << "error: cannot read obligation archive: "

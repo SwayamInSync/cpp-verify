@@ -1,8 +1,9 @@
 name: CppVerify CI
 
 # Linux runs every Clang and clang-tools-extra test in a release and an
-# assertions build. macOS and Windows build a fresh clone the way setup.sh and
-# setup.ps1 do for a user, then verify a program with the result.
+# assertions build, with the oldest and the newest cvc5 the release supports.
+# macOS and Windows build a fresh clone the way setup.sh and setup.ps1 do for
+# a user, then verify a program with the result.
 
 on:
   # The book, the language reference, the website scripts, and DESIGN.md are
@@ -25,7 +26,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CVC5_VERSION: "1.1.2"
   LEAN_TOOLCHAIN: "leanprover/lean4:v4.35.0"
 
 jobs:
@@ -36,7 +36,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        config: [release, assertions]
+        include:
+          # Ubuntu 24.04 packages cvc5 1.1.2; from 1.2 the archive names the
+          # architecture. CppVerifyVersion.h names the range.
+          - config: release
+            cvc5: "1.1.2"
+            cvc5-archive: cvc5-Linux-static.zip
+          - config: assertions
+            cvc5: "1.4.2"
+            cvc5-archive: cvc5-Linux-x86_64-static.zip
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 4G
@@ -56,7 +64,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build ccache
           curl -sSfL -o "$RUNNER_TEMP/cvc5.zip" \
-            "https://github.com/cvc5/cvc5/releases/download/cvc5-$CVC5_VERSION/cvc5-Linux-static.zip"
+            "https://github.com/cvc5/cvc5/releases/download/cvc5-${{ matrix.cvc5 }}/${{ matrix.cvc5-archive }}"
           unzip -q "$RUNNER_TEMP/cvc5.zip" -d "$RUNNER_TEMP/cvc5"
           dirname "$(find "$RUNNER_TEMP/cvc5" -name cvc5 -type f)" >> "$GITHUB_PATH"
           curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \

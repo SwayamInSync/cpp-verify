@@ -976,9 +976,72 @@ space and 53 s, verifying it 14.9 GB with eight jobs (`--jobs=8`, more than
 a 16 GB CI runner holds beside the tests running with it), and lowering
 `safe_fib.cpp` 4.7 GB and 16 s. They now take 0.43 GB and 10 s, 0.9 GB, and
 0.35 GB and 7 s. The goals still repeat their assumptions as trees, so a
-traversal that does not memoize (validation, hashing, serialization) still
-takes time quadratic in a function's length; hash-consing the terms and
-memoizing those traversals would make it linear.
+traversal that does not memoize takes time quadratic in a function's length:
+hashing and serialization still do. The simplifier's statistics count a
+module's nodes as trees, each shared term's count computed once
+(`countModuleNodes`).
+
+**Validation visits a shared term once.** `validateObligationModule` checks
+each term of a module as a root (every trace guard and value, the complete
+goal and query, each obligation's goal and query, and each definition level,
+step, and measure): every node is well formed, every application has a
+declaration with its signature, every variable is in scope with one sort,
+and it collects the logic features the module needs. Each check keeps, for
+the module, the terms it has passed, so a term the goals share is checked
+once whichever roots reach it. Form, applications, and features depend on
+the term alone. Scope depends on where a term is, and `ScopeValidator`
+handles it in two parts:
+
+- A variable is bound or free by the quantifiers above it, so a term is
+  visited once for each set of binder names in scope at it (interned, so
+  a set is a number). A visit checks that a bound occurrence is a
+  mathematical integer and registers a free one in the map of free
+  variables, whose sort must agree with every other occurrence. The module's
+  roots share one map; each definition has its own, since its variables are
+  its parameters.
+- A free variable must not have the name of a binder anywhere in its root.
+  `BinderSummaries` gives each term, once, the set of binder names it
+  contains and the set of binder names free in it (as Frama-C's Qed caches
+  each term's bound and free variables, `bind` and `vars`, and Lean each
+  `Expr`'s loose bound-variable range), after every binder name of the
+  module is registered; a root fails where the two sets of the root meet.
+
+A root that fails either part is checked again by the tree walk that was the
+whole check before, which gives the error it always gave, and an assertion
+checks that this walk fails too. Validation was 80% of lowering (callgrind,
+`safe_fib.cpp`, 20.4 of 25.1 billion instructions); with it and the node
+count linear, `--lower-only` takes 1.9 s instead of 10.4 s on `safe_fib.cpp`
+and 2.5 s instead of 10.3 s on the ULEB128 case study, within the same
+memory and with the same output.
+
+**Size.** Each obligation's goal is its condition under every assumption
+before it, sharing their terms (above): a goal adds, for each assumption, a
+negation, a disjunction, and a copy of the assumption's root, so a module's
+distinct nodes grow with its obligations times the assumptions before them,
+not times their sizes. `obligationModuleNodeCount` counts the distinct nodes,
+a shared one once, which is what the module takes in memory. `NodeBudget`
+(`IR/NodeBudget.h`) counts the `VExpr` and `LogicExpr` nodes built on its
+thread against the limit the driver sets for the function
+(`--max-query-nodes`): the goals are built in one, starting from the distinct
+nodes of the lowered statements, and stop with `ObligationSizeError` once
+they pass the limit; the spec inliner unfolds nothing more once its budget is
+spent. The definitions `SpecAxioms` materializes, each spec unfolded as deep
+as its fuel, are counted, each by its distinct nodes, from the module's
+count; the facts the passivizer adds at each spec application are counted in
+a budget, and a spent one leaves `PassiveProgram::TooLarge`, which makes the
+build an `ObligationSizeError`; so does a spent budget while specs are
+inlined for BMC. The driver reports the error as the function's verdict,
+`Unresolved` with `query.size-limit`, and never uses the partial result.
+What states each term in full is larger than what is built: the cvc5
+adapter's SMT-LIB script and an archive record write a shared subterm at
+each of its places. Each counts the module's complete query and definitions
+as trees, stopping once past the limit (`obligationModuleTreeNodesUpTo`):
+over it, cvc5's verdict is `Unresolved` with `query.size-limit`, and the
+record is an error. Z3 and the Lean printer share terms (Z3 by hash-consing,
+Lean by naming a shared subterm with a `let`), so the distinct count bounds
+them. Before 0.2 the size was predicted, as trees, before any goal was
+built; with shared terms that counted far more than a module takes (a
+function of 400 checks: 45 million predicted, under 2 million built).
 
 Every source-built or replayed module then passes through one fail-closed
 canonicalization step before hashing or backend dispatch. The pass folds only
@@ -2580,7 +2643,19 @@ was never checked, stayed `Verified`, and a Lean verdict was `Certified`
 whatever its callees' contracts.
 
 Z3-backed execution accepts explicit timeout, deterministic solver-resource,
-canonical query-node, job-count, and proof-cache budgets. A module that
+canonical query-node, memory, job-count, and proof-cache budgets. Z3 runs in
+the process, so its memory limit is for its queries together: the watchdog
+of every check, which already interrupts it at its time, polls Z3's
+allocation every 10 ms while a limit is set and interrupts the check past
+it, and the encoder's result is then `solver.memory-limit`. Z3's own limits
+are not used: `memory_max_size` fails whichever allocation passes it in any
+context, `Z3_mk_context`'s included, which then returns no context, and the
+high watermark stops a search reporting only `canceled` and frees what it
+took before the check returns. Each cvc5 process gets the limit as its
+`RLIMIT_DATA`, set with `prlimit` once it is spawned (on Windows, the job
+object of `ExecuteNoWait`): a limit makes `ExecuteNoWait` fork rather than
+spawn on POSIX hosts, and fork runs Z3's fork handlers, which wait for the
+timers of every check in the process. A module that
 requires the `sequences` or `collections` feature gets the collection
 timeout (`--collection-timeout`, by default twice `--timeout`) on every
 solver backend. The driver verifies each function as a task (its own backend,
@@ -3032,6 +3107,24 @@ stops before VCR conversion.
 - Backend fidelity gate: `clang/test/Verify/suite/backend_fidelity_gate.test`
   requires cvc5 and pinned Lean 4.35.0 and runs the permanent differential
   matrix under every machine-integer encoding.
+- Differential execution: `clang/utils/cppverify-differential/run.py`
+  verifies 484 contracted functions (`cases/`) in each configuration their
+  suite lists (Z3 in each machine-integer encoding, cvc5, BMC at two bounds),
+  compiles the same source with `-fverify-contracts -fno-verify` and
+  `-fsanitize=undefined -fsanitize-trap=undefined`, and runs it on every input
+  of small parameter types, otherwise on boundary values and samples seeded
+  by the function's name, each buffer against an inaccessible page on one
+  side and then the other. Each case restates its pre- and postcondition in
+  Python over mathematical integers, which judge each run. A problem is a
+  `Verified` function (or one `BoundedSafe` within its bound) that
+  misbehaves on an admitted input, a counterexample whose input the
+  precondition rejects or on which the function behaves (pointer cases'
+  counterexamples are not replayed, and one against an invariant, measure,
+  or frame is relative to that abstraction), or two configurations that
+  decide differently. `.github/workflows/cppverify-differential.yml` runs
+  every case nightly; `differential.test` runs the tool's own cases, two of
+  which state their contract wrongly in Python so that the tool must report
+  them.
 - Instrumented coverage: `scripts/coverage-verify.sh` (region target on `clang/lib/Verify`).
 
 Every new semantic feature needs layered oracles rather than a solver result
