@@ -3074,6 +3074,24 @@ stops before VCR conversion.
 - Backend fidelity gate: `clang/test/Verify/suite/backend_fidelity_gate.test`
   requires cvc5 and pinned Lean 4.35.0 and runs the permanent differential
   matrix under every machine-integer encoding.
+- Differential execution: `clang/utils/cppverify-differential/run.py`
+  verifies 484 contracted functions (`cases/`) in each configuration their
+  suite lists (Z3 in each machine-integer encoding, cvc5, BMC at two bounds),
+  compiles the same source with `-fverify-contracts -fno-verify` and
+  `-fsanitize=undefined -fsanitize-trap=undefined`, and runs it on every input
+  of small parameter types, otherwise on boundary values and samples seeded
+  by the function's name, each buffer against an inaccessible page on one
+  side and then the other. Each case restates its pre- and postcondition in
+  Python over mathematical integers, which judge each run. A problem is a
+  `Verified` function (or one `BoundedSafe` within its bound) that
+  misbehaves on an admitted input, a counterexample whose input the
+  precondition rejects or on which the function behaves (pointer cases'
+  counterexamples are not replayed, and one against an invariant, measure,
+  or frame is relative to that abstraction), or two configurations that
+  decide differently. `.github/workflows/cppverify-differential.yml` runs
+  every case nightly; `differential.test` runs the tool's own cases, two of
+  which state their contract wrongly in Python so that the tool must report
+  them.
 - Instrumented coverage: `scripts/coverage-verify.sh` (region target on `clang/lib/Verify`).
 
 Every new semantic feature needs layered oracles rather than a solver result

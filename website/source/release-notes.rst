@@ -722,6 +722,18 @@ refuses a ``lake`` outside elan that reports another Lean
 **clang-format.** A range footprint is written ``p[lo : n]``, not ``p [lo:n]``
 (:doc:`language/tooling`).
 
+Testing
+~~~~~~~
+
+**Verdicts are checked against execution every night.** 484 contracted
+functions over integers, pointers, and records are verified by Z3 in each
+integer encoding, by cvc5, and by BMC, then compiled with
+``-fsanitize=undefined`` and run on every input of small parameter types, or
+on boundary values and samples. CI fails when a ``Verified`` function
+misbehaves on an input its precondition admits, when a counterexample does not
+reproduce, or when two backends decide differently
+(:doc:`book/part-ii/ch17-backends-modular-calls`).
+
 Data formats
 ~~~~~~~~~~~~
 
