@@ -2514,7 +2514,10 @@ obligation's counterexample query to true.
 
 Public obligation identities are source anchored:
 `function-identity::kind@line:column`, with `#N` only for obligations sharing
-one anchor. This keeps later IDs stable when an unrelated obligation is inserted
+one anchor. A location in a macro is where Clang's diagnostics show it
+(`SourceManager::getFileLoc`): in an argument where it is written, elsewhere
+where the macro is used; a range written in one place (one argument) is
+that place's (`Lexer::makeFileCharRange`), and any other the macro's use. This keeps later IDs stable when an unrelated obligation is inserted
 or reordered without moving the source anchor; JSON records carry it, and text
 names only the kind (`[overflow]`), since the location prefixes the line.
 

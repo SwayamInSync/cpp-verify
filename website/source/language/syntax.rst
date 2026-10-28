@@ -219,6 +219,97 @@ Full table:
      - A top-level condition of ``cppverify::pre``; an error anywhere else
      - ``p`` points to ``n`` objects
 
+Headers shared with other compilers
+-----------------------------------
+
+GCC, MSVC, upstream Clang, and the editors built on them do not know the
+constructs, nor does this compiler without ``-fverify-contracts``. With the
+flag, in C++, it predefines:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 45 55
+
+   * - Macro
+     - Value
+   * - ``__cppverify__``
+     - ``1``
+   * - ``__cppverify_major__``, ``__cppverify_minor__``,
+       ``__cppverify_patchlevel__``
+     - The release, as numbers: ``0``, ``2``, and ``0`` for 0.2.0
+   * - ``__cppverify_version__``
+     - The release, as a string, as ``cpp-verify --version`` names it
+
+They say that the constructs are recognized, as ``__cplusplus`` says the
+language is C++: ``-undef`` keeps them, and ``-U__cppverify__`` removes the
+first. Release 0.1 defines none of them. Code that other compilers also build
+can wrap each construct in a macro that is empty without them:
+
+.. code-block:: cpp
+
+   #ifdef __cppverify__
+   #define CPPVERIFY(...) __VA_ARGS__
+   #else
+   #define CPPVERIFY(...)
+   #endif
+
+   inline int clamp(int x, int lo, int hi)
+     CPPVERIFY(cppverify::pre(lo <= hi))
+     CPPVERIFY(cppverify::post(lo <= cppverify::result && cppverify::result <= hi))
+   {
+     return x < lo ? lo : x > hi ? hi : x;
+   }
+
+.. code-block:: text
+
+   Verified: clamp [backend=z3]
+
+GCC, MSVC, and any Clang without the flag read ``inline int clamp(int x, int
+lo, int hi) { ... }``. The macro takes the commas of its argument, so every
+construct written in a function wraps the same way: a loop's clauses after its
+head, a statement (``CPPVERIFY(cppverify::check(s > 0));``), a ghost block
+(``CPPVERIFY(cppverify::ghost { ... })``), and an attribute
+(``CPPVERIFY([[cppverify::trusted]])``). A declaration only verification uses,
+a spec or proof function or a namespace alias, goes in a block of its own:
+
+.. code-block:: cpp
+
+   #ifdef __cppverify__
+   #define CPPVERIFY(...) __VA_ARGS__
+   cppverify::spec int twice(int n)
+   {
+     return 2 * n;
+   }
+   #else
+   #define CPPVERIFY(...)
+   #endif
+
+   inline int double_by_steps(int n)
+     CPPVERIFY(cppverify::pre(0 <= n && n <= 1000))
+     CPPVERIFY(cppverify::post(cppverify::result == twice(n)))
+   {
+     int s = 0;
+     for (int i = 0; i < n; i = i + 1)
+       CPPVERIFY(cppverify::invariant(0 <= i && i <= n && s == twice(i)))
+       CPPVERIFY(cppverify::decreases(n - i))
+     {
+       s = s + 2;
+       CPPVERIFY(cppverify::check(s <= 2 * n));
+     }
+     return s;
+   }
+
+.. code-block:: text
+
+   Verified: double_by_steps [backend=z3]
+
+A failure is shown as Clang shows its own errors: inside a macro's argument
+where the argument is written, with a note naming the macro, and inside a
+macro's body where the macro is used; the line and column of the JSON record
+and of the obligation's ID are the same place. ``#if __cppverify_major__ > 0 ||
+__cppverify_minor__ >= 3`` selects code for a later release. The name ``CPPVERIFY`` is only an
+example: no header defines it, and a project may choose its own.
+
 Macros named like a construct
 -----------------------------
 
