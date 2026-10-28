@@ -1216,8 +1216,25 @@ void verify::collectSpecCallsInFunction(
   collectSpecCallsInStmts(Fn.Body, Out);
 }
 
+static std::unique_ptr<VExpr>
+substParamsInExprImpl(const VExpr *E,
+                      const std::map<std::string, std::unique_ptr<VExpr>> &Map);
+
 std::unique_ptr<VExpr> verify::substParamsInExpr(
     const VExpr *E, const std::map<std::string, std::unique_ptr<VExpr>> &Map) {
+  // A node rebuilt from one of E keeps the source it spans; an actual keeps
+  // its own.
+  auto Result = substParamsInExprImpl(E, Map);
+  if (Result && E && Result->K == E->K && Result->Loc == E->Loc) {
+    Result->BeginLoc = E->BeginLoc;
+    Result->EndLoc = E->EndLoc;
+  }
+  return Result;
+}
+
+static std::unique_ptr<VExpr>
+substParamsInExprImpl(const VExpr *E,
+                      const std::map<std::string, std::unique_ptr<VExpr>> &Map) {
   if (!E)
     return nullptr;
   switch (E->K) {
