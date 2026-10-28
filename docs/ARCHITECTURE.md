@@ -375,6 +375,30 @@ types, and the parameters in `ValueReferences` are read as values; a
 function that cannot be lifted returns a placeholder that the lifting loop
 marks unsupported, so `SpecDependencies` name it.
 
+**The C library's memory functions and abs:** a contract on `void *` cannot
+speak of the objects behind it, and the heap keeps one cell per object, so
+`convertLibraryCall` recognizes `memcpy`, `memmove`, `memset`, and `memcmp`
+by builtin ID, reads the objects each pointer addresses as written, before
+its conversion to `void *` (`beforeVoidPointer`; an enumeration as its
+underlying integer), and lowers the call to a `VCallStmt` of that type's
+model, a trusted declaration with a contract in `<cppverify.h>`
+(`cppverify::model`, found by `libraryModel`), with `k = n / sizeof(T)` and
+an `unsupported` assert, with its note (`VAssertStmt::Note`), that `n` is a
+multiple of `sizeof(T)`. The pointers' objects must have one size, and be
+`bool` on both sides or neither. `memset`'s byte becomes the object it
+repeats, `(unsigned char)c * 0x0101...` reinterpreted as `T`. The main
+conversion loop skips the models (`isLibraryModel`); the ones calls use
+(`UsedLibraryModels`) are converted after it and marked `IsBuiltin`, so
+they are neither verified nor reported, but stay trusted: established for
+the fixpoint, and named in every caller's `[trusts=...]`. The modular call
+then does the rest as for any callee: extents contained in the caller's
+objects, the separation of `memcpy`'s ranges (`memmove`'s model has
+`aliases`), the frame `d[0 : k]`, and the postconditions. `convertAbs`
+lowers `abs`, `labs`, `llabs`, and `std::abs` of an integer to
+`x < 0 ? -x : x` in the parameter's type in the function's integer mode:
+machine in executable and proof code, contracts included, where `-x` is
+checked for overflow, and mathematical in a spec.
+
 **Records in memory by value:** `recordFieldsInMemory` reads a record value
 kept in memory, a promoted local or one in a pointee or record reference
 (`promotedRootLocal`, `inPointeeObject`), through implicit copies and
