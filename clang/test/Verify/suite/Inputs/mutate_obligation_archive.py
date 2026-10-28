@@ -27,6 +27,9 @@ class Archive:
         self.guard_spans = []
         # What schema 5 adds: the begin of each source range.
         self.begin_spans = []
+        # What schema 6 adds: where each check's condition and a callee's
+        # clause lie.
+        self.place_spans = []
         self.modules = []
 
     def u8(self):
@@ -66,7 +69,7 @@ class Archive:
             "signedness_offset": signedness_offset,
         }
 
-    def source(self):
+    def source(self, track=True):
         result = None
         if self.flags & 1:
             self.string()
@@ -83,7 +86,8 @@ class Archive:
                     start = self.offset
                     self.u32()
                     self.u32()
-                    self.begin_spans.append((start, self.offset))
+                    if track:
+                        self.begin_spans.append((start, self.offset))
                 result = {
                     "line": line,
                     "line_offset": line_offset,
@@ -94,7 +98,8 @@ class Archive:
                     "end_column": end_column,
                     "end_column_offset": end_column_offset,
                 }
-                self.source_ranges.append(result)
+                if track:
+                    self.source_ranges.append(result)
         return result
 
     def expression(self, track=True):
@@ -216,6 +221,11 @@ class Archive:
             self.obligation_kind_offsets.append(self.offset)
             self.offset += 1
             self.source()
+            if self.version >= 6 and self.flags & 8:
+                start = self.offset
+                self.source(track=False)
+                self.source(track=False)
+                self.place_spans.append((start, self.offset))
             obligations.append((self.expression(), self.expression()))
         self.modules.append(
             {
@@ -384,6 +394,7 @@ parser.add_argument(
         "schema-v2",
         "schema-v3",
         "schema-v4",
+        "schema-v5",
         "invalid-source-begin",
         "invalid-guard-flag",
         "measure-free-variable",
@@ -400,14 +411,15 @@ archive.parse()
 
 if args.mode == "invalid-kind":
     archive.data[archive.expression_kind_offsets[0]] = 255
-elif args.mode in ("schema-v3", "schema-v4"):
-    version = 3 if args.mode == "schema-v3" else 4
+elif args.mode in ("schema-v3", "schema-v4", "schema-v5"):
+    version = {"schema-v3": 3, "schema-v4": 4, "schema-v5": 5}[args.mode]
     for offset in archive.version_offsets:
         struct.pack_into("<I", archive.data, offset, version)
-    # Records before schema 5 have no range begins, and those before schema 4
-    # nothing of where a variable is defined; a begin inside a guard goes
-    # with it.
-    spans = sorted(archive.begin_spans +
+    # Records before schema 6 have no places of checks, those before schema 5
+    # no range begins, and those before schema 4 nothing of where a variable
+    # is defined; a begin inside a guard goes with it.
+    spans = sorted(archive.place_spans +
+                   (archive.begin_spans if version < 5 else []) +
                    (archive.guard_spans if version == 3 else []))
     outer = [
         span
@@ -427,7 +439,7 @@ elif args.mode in ("schema-v1", "schema-v1-kinds", "schema-v2"):
     # Records before schema 3 have no measures or premises, and none before
     # schema 4 a variable's guard; a premise inside a measure goes with it.
     spans = sorted(archive.measure_spans + archive.guard_spans +
-                   archive.begin_spans)
+                   archive.begin_spans + archive.place_spans)
     outer = [
         span
         for span in spans
