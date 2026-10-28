@@ -2549,8 +2549,9 @@ def fverify_backend_EQ : Joined<["-"], "fverify-backend=">,
 def fverify_timeout_EQ : Joined<["-"], "fverify-timeout=">,
   Group<f_clang_Group>, Visibility<[ClangOption, CC1Option]>,
   MetaVarName<"<ms>">,
-  HelpText<"Milliseconds each CppVerify solver query may take (default 30000)">,
-  MarshallingInfoInt<FrontendOpts<"VerifyTimeoutMs">>;
+  HelpText<"Milliseconds each CppVerify solver query may take (default 30000; "
+           "0 disables)">,
+  MarshallingInfoInt<FrontendOpts<"VerifyTimeoutMs">, "30000">;
 def fverify_jobs_EQ : Joined<["-"], "fverify-jobs=">,
   Group<f_clang_Group>, Visibility<[ClangOption, CC1Option]>,
   MetaVarName<"<n>">,
