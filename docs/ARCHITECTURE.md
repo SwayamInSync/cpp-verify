@@ -2564,7 +2564,17 @@ again where it is used.
      file's lines with the demoted form where a contract a proof rests on is
      not established, drops the warning of a contract some file defines and
      the findings of a demoted proof (but those of the entry state), and
-     counts the files that do not succeed;
+     counts the files that do not succeed. The settlement is
+     `ContractSettlement`, shared with the check of files verified apart:
+     with `VerifyOptions::ContractsOut` (`--contracts-out`, and
+     `-fverify-contracts-out` through `startCppVerifyAsync` in the compile
+     path) a file's externals are provisional the same way, each proof that
+     rests on them gets `[assumes=f]`, and `recordContracts` writes a
+     `cppverify.contracts/1` JSON record of the contracts it verifies (key,
+     name, established, assumes) and of its proofs that rest on externals
+     (function, the location of its declaration, the contracts).
+     `checkContracts` (`--check-contracts`) reads the records, settles them,
+     and prints each proof whose assumed contract is not established;
    - `[trusts=...]` lists the trusted contracts a proof uses, closed
      transitively over verified callees (JSON `"trusts"`);
    - one fixpoint settles the reasons: a verdict relying on a spec whose

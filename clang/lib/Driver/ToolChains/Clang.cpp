@@ -6698,6 +6698,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   // -fno-verify skips the SMT step. It is meaningless without the contract
   // language, so when neither -f/-fno-verify-contracts was given it implies
   // -fverify-contracts, yielding a syntax/semantics-only "light check".
+  Args.AddLastArg(CmdArgs, options::OPT_fverify_contracts_out_EQ);
   if (Args.hasArg(options::OPT_fno_verify)) {
     CmdArgs.push_back("-fno-verify");
     if (!Args.hasArg(options::OPT_fverify_contracts) &&

@@ -7,6 +7,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace clang {
 class ASTContext;
@@ -141,6 +142,11 @@ struct VerifyOptions {
   /// A run over several files, which holds each file's results until every
   /// file is verified (see CrossFileRun), or null.
   class CrossFileRun *CrossFile = nullptr;
+  /// Where to write the contracts this file verifies and those it assumes
+  /// from other files, for checkContracts. With it, a contract declared
+  /// without a definition holds for now, and a proof that rests on it says
+  /// so ([assumes=...]): the check of the files together settles it.
+  std::string ContractsOut;
 };
 
 /// One run over several files. A contract that a file declares without a
@@ -165,6 +171,13 @@ public:
   struct Impl;
   std::unique_ptr<Impl> State;
 };
+
+/// The check of files verified apart (their ContractsOut records): every
+/// contract a file assumes must be established by the verification of its
+/// definition in another file. Prints each proof that rests on one that is
+/// not, and returns how many.
+unsigned checkContracts(const std::vector<std::string> &Paths,
+                        llvm::raw_ostream &OS);
 
 /// Verifies the translation unit. In a run over several files
 /// (Opts.CrossFile), the results wait for CrossFileRun::finish, and the

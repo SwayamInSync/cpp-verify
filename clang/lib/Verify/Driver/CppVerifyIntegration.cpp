@@ -20,11 +20,13 @@ bool verify::shouldRunCppVerify(const CompilerInstance &CI) {
 }
 
 std::future<CppVerifyAsyncResult>
-verify::startCppVerifyAsync(ASTContext &Ctx) {
-  return std::async(std::launch::async, [&Ctx]() {
+verify::startCppVerifyAsync(ASTContext &Ctx, std::string ContractsOut) {
+  return std::async(std::launch::async, [&Ctx, ContractsOut]() {
     std::string Buffer;
     llvm::raw_string_ostream OS(Buffer);
-    bool Ok = verifyTranslationUnit(Ctx, OS, VerifyOptions{});
+    VerifyOptions Opts;
+    Opts.ContractsOut = ContractsOut;
+    bool Ok = verifyTranslationUnit(Ctx, OS, Opts);
     OS.flush();
     return CppVerifyAsyncResult{Ok, std::move(Buffer)};
   });

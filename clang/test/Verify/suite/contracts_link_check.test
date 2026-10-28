@@ -1,0 +1,61 @@
+# Files verified apart (separate cpp-verify runs, or clang++ compiling each
+# object) record the contracts they verify and those they assume from other
+# files; --check-contracts settles them together, as one run over the files
+# does, and fails for each proof whose assumed contract is not established.
+#
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: %cpp-verify --jobs=1 --contracts-out=%t/a.json %S/Inputs/across/src/a.cpp \
+# RUN:   -- -I%S/Inputs/across/include 2>&1 | FileCheck %s --check-prefix=APART --implicit-check-not=warning:
+# RUN: not %cpp-verify --jobs=1 --contracts-out=%t/wrong.json %S/Inputs/across/src/mathx.cpp \
+# RUN:   -- -I%S/Inputs/across/include -DBUG=101 > /dev/null 2>&1
+# RUN: %cpp-verify --jobs=1 --contracts-out=%t/right.json %S/Inputs/across/src/mathx.cpp \
+# RUN:   -- -I%S/Inputs/across/include -DBUG=100 > /dev/null 2>&1
+# RUN: not %cpp-verify --check-contracts %t/a.json %t/wrong.json 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=WRONG
+# RUN: %cpp-verify --check-contracts %t/a.json %t/right.json 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=RIGHT
+# RUN: not %cpp-verify --check-contracts %t/a.json 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=MISSING
+#
+# Through the compiler, each object's record beside it.
+# RUN: %clang -std=c++17 -fverify-contracts -fverify-contracts-out=%t/a.o.cppverify \
+# RUN:   -c %S/Inputs/across/src/a.cpp -o %t/a.o -I%S/Inputs/across/include 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=APART
+# RUN: %clang -std=c++17 -fverify-contracts -fverify-contracts-out=%t/m.o.cppverify \
+# RUN:   -c %S/Inputs/across/src/mathx.cpp -o %t/m.o -I%S/Inputs/across/include -DBUG=100
+# RUN: %cpp-verify --check-contracts %t/a.o.cppverify %t/m.o.cppverify 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=RIGHT
+# RUN: not %clang -std=c++17 -fverify-contracts -fverify-contracts-out=%t/w.o.cppverify \
+# RUN:   -c %S/Inputs/across/src/mathx.cpp -o %t/w.o -I%S/Inputs/across/include -DBUG=101 > /dev/null 2>&1
+# RUN: not %cpp-verify --check-contracts %t/a.o.cppverify %t/w.o.cppverify 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=WRONG
+#
+# Contracts whose proofs rest on each other establish nothing.
+# RUN: %cpp-verify --jobs=1 --contracts-out=%t/ping.json %S/Inputs/across/src/ping.cpp -- > /dev/null 2>&1
+# RUN: %cpp-verify --jobs=1 --contracts-out=%t/pong.json %S/Inputs/across/src/pong.cpp -- > /dev/null 2>&1
+# RUN: not %cpp-verify --check-contracts %t/ping.json %t/pong.json 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=CYCLE
+#
+# RUN: not %cpp-verify --check-contracts %S/Inputs/across/src/a.cpp 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=NOT-RECORD
+# RUN: not %cpp-verify --contracts-out=%t/both.json %S/Inputs/across/src/a.cpp \
+# RUN:   %S/Inputs/across/src/mathx.cpp -- 2>&1 | FileCheck %s --check-prefix=SEVERAL
+
+A proof that rests on a contract of another file says so.
+APART: Verified: scaled [backend=z3] [assumes=clamp100]
+APART-NEXT: Verified: twice_scaled [backend=z3] [assumes=clamp100]
+
+WRONG: a.cpp:3:5: error: the proof of scaled relies on the contract of clamp100, which its verification in {{.*}}mathx.cpp does not establish
+WRONG-NEXT: a.cpp:9:5: error: the proof of twice_scaled relies on the contract of clamp100, which its verification in {{.*}}mathx.cpp does not establish
+WRONG-NEXT: Contracts: 2 proofs rest on contracts of other files, 2 on one not established
+
+RIGHT: Contracts: 2 proofs rest on contracts of other files, 0 on one not established
+
+MISSING: a.cpp:3:5: error: the proof of scaled relies on the contract of clamp100 (no definition; mark it {{\[\[cppverify::trusted\]\]}} to assume it), which is not established
+
+CYCLE: ping.cpp:5:5: error: the proof of ping relies on the contract of pong, whose proof in {{.*}}pong.cpp rests in turn on contracts not established
+CYCLE-NEXT: pong.cpp:5:5: error: the proof of pong relies on the contract of ping, whose proof in {{.*}}ping.cpp rests in turn on contracts not established
+
+NOT-RECORD: error: {{.*}}a.cpp is not a contracts record (cppverify.contracts/1)
+
+SEVERAL: error: --contracts-out records one file; a run over several files settles their contracts itself

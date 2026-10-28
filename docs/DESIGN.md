@@ -158,7 +158,13 @@ through the file's own contracts, stands once the verification of its
 definition in another file establishes it (a contract established only
 through other files' contracts once those are, starting from none), and is
 `Unresolved` with `callee.contract` otherwise. A declaration matches a
-definition with the same function and the same contract as written. A trusted contract writes only
+definition with the same function and the same contract as written. Files
+verified apart (a build verifying each object) record what they verify and
+assume (`--contracts-out`, `-fverify-contracts-out`): such a contract holds
+there for now, a proof that rests on it says so (`[assumes=f]`), and
+`cpp-verify --check-contracts` settles the records as one run does, failing
+for each proof whose assumed contract is not established, as the plan's
+link check. A trusted contract writes only
 its `cppverify::modifies` footprints; without them it writes nothing through a pointer
 or reference to const, and is taken to write the whole heap through a
 mutable one (see `cppverify::modifies` below).

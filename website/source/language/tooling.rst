@@ -15,6 +15,8 @@ Standalone verifier
    cpp-verify --time-report file.cpp
    cpp-verify file.cpp -- -I include -DNDEBUG
    cpp-verify src/a.cpp src/mathx.cpp -- -I include
+   cpp-verify --contracts-out=a.cppverify src/a.cpp -- -I include
+   cpp-verify --check-contracts a.cppverify mathx.cppverify
    cpp-verify --backend=z3 file.cpp
    cpp-verify --backend=cvc5 file.cpp
    cpp-verify --backend=portfolio file.cpp
@@ -50,6 +52,17 @@ settled together: a contract one file declares without a definition holds
 for a proof once its definition's verification in another file establishes
 it (see :doc:`functions-loops`). Their results are printed once every file
 is verified, in the order given.
+
+Files verified apart record their contracts instead:
+``--contracts-out=FILE`` (or ``clang++ -fverify-contracts
+-fverify-contracts-out=FILE``) writes a ``cppverify.contracts/1`` record of
+the contracts the file verifies, whether it establishes each and on which
+contracts of other files that rests, and of its proofs that rest on
+contracts of other files, which say so (``[assumes=f]``).
+``cpp-verify --check-contracts RECORD...`` settles the records and prints
+each proof that relies on a contract not established, at the proof's
+function, then a line that counts them; its exit status is non-zero when
+there is one.
 
 Input files and compiler errors
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

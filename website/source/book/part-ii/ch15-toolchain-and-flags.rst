@@ -51,6 +51,10 @@ Other flags
   function spent their time (lowering, solving, induction, certification,
   confirmation), the busiest function first; on a terminal a progress line
   counts the functions done (``--progress`` shows it anywhere)
+- ``cpp-verify --contracts-out=FILE`` and ``clang++ -fverify-contracts-out=FILE``
+  — record the contracts a file verifies and those it assumes from other
+  files; ``cpp-verify --check-contracts RECORD...`` checks the records
+  together (see :doc:`ch17-backends-modular-calls`)
 - ``cpp-verify --confirm-bound=N`` — for a failure whose counterexample passes
   through a loop, unroll each loop up to ``N`` iterations (default 10, ``0``
   skips it) to find an execution that fails or prove that none does (see

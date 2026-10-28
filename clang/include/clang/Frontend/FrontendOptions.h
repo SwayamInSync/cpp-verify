@@ -525,6 +525,10 @@ public:
   /// (in the format produced by -fdump-record-layouts).
   std::string OverrideRecordLayoutsFile;
 
+  /// Where CppVerify writes the contracts this file verifies and those it
+  /// assumes from other files, for cpp-verify --check-contracts.
+  std::string VerifyContractsOut;
+
   /// Auxiliary triple for CUDA/HIP/SYCL compilation.
   std::string AuxTriple;
 

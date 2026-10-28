@@ -505,7 +505,11 @@ of the definition, which inherited the mark, so a wrong body was never
 checked. Now one run over several files settles such a contract: a proof
 that rests on it stands once the verification of its definition in another
 file establishes it, and is ``Unresolved`` with ``callee.contract``
-otherwise, naming the file. A definition is trusted only by a mark of its
+otherwise, naming the file. Files verified apart, as a build verifies each
+object, record their contracts (``clang++ -fverify-contracts-out=FILE``,
+``cpp-verify --contracts-out=FILE``), and ``cpp-verify --check-contracts``
+settles the records the same way, failing for each proof whose assumed
+contract is not established. A definition is trusted only by a mark of its
 own, so a trusted header declaration no longer hides it
 (:doc:`language/functions-loops`).
 
