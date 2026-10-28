@@ -212,7 +212,7 @@ int first_prime()
 // CHECK-DAG: Verified: first_prime [backend=z3]
 
 // A global array that is not constant is an object, not a table: its
-// elements may change.
+// elements may change, so its initializer says nothing at a call.
 int Counters[4] = {0, 0, 0, 0};
 
 int counter(int i)
@@ -221,7 +221,7 @@ int counter(int i)
 {
   return Counters[i];
 }
-// CHECK-DAG: lookup_tables.cpp:[[@LINE-2]]:10: error: counter: the global array 'Counters' is unsupported
+// CHECK-DAG: error: verification failed: counter [postcondition]
 
 // A static local that is not constant is an object, not a table, and is
 // not supported yet.
