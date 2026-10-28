@@ -53,6 +53,16 @@ TEST(CompilationOptionsTest, Backends) {
   }
 }
 
+TEST(CompilationOptionsTest, NoTimeout) {
+  // 0 disables every time limit, as cpp-verify --timeout=0 does.
+  FrontendOptions Options;
+  Options.VerifyTimeoutMs = 0;
+  VerifyOptions Opts = compilationOptions(Options);
+  EXPECT_EQ(Opts.SolverTimeoutMs, 0u);
+  EXPECT_EQ(Opts.CollectionTimeoutMs, 0u);
+  EXPECT_EQ(Opts.FunctionTimeoutMs, 0u);
+}
+
 TEST(CompilationOptionsTest, ExtremeValues) {
   FrontendOptions Options;
   Options.VerifyJobs = 0;
