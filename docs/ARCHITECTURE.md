@@ -394,7 +394,8 @@ the fixpoint, and named in every caller's `[trusts=...]`. The modular call
 then does the rest as for any callee: extents contained in the caller's
 objects, the separation of `memcpy`'s ranges (`memmove`'s model has
 `aliases`), the frame `d[0 : k]`, and the postconditions. `convertAbs`
-lowers `abs`, `labs`, `llabs`, and `std::abs` of an integer to
+lowers `abs`, `labs`, `llabs`, and `std::abs` of an integer (in `std`, or a
+global `abs` of a system header, as libc++'s `<stdlib.h>` defines it) to
 `x < 0 ? -x : x` in the parameter's type in the function's integer mode:
 machine in executable and proof code, contracts included, where `-x` is
 checked for overflow, and mathematical in a spec.

@@ -4567,9 +4567,16 @@ ASTConverter::convertAbs(const CallExpr *CE) {
   case Builtin::BI__builtin_llabs:
     break;
   default: {
-    // std::abs of an integer, which a library may define inline.
+    // std::abs of an integer, which a library may define inline: in std
+    // (libstdc++), or, for long and long long, in the global namespace of
+    // its <stdlib.h>, which <cstdlib> brings into std (libc++). A global abs
+    // of the user's own is a function like any other.
     const FunctionDecl *Callee = CE->getDirectCallee();
-    if (!Callee || !Callee->isInStdNamespace() || !Callee->getIdentifier() ||
+    if (!Callee ||
+        !(Callee->isInStdNamespace() ||
+          (Callee->getDeclContext()->getRedeclContext()->isTranslationUnit() &&
+           Ctx.getSourceManager().isInSystemHeader(Callee->getLocation()))) ||
+        !Callee->getIdentifier() ||
         Callee->getName() != "abs" || Callee->getNumParams() != 1 ||
         !Callee->getParamDecl(0)->getType()->isIntegerType() ||
         !Ctx.hasSameType(Callee->getParamDecl(0)->getType(),
