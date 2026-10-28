@@ -1033,9 +1033,10 @@ clauseProofCallees(const VFunction &Fn,
 /// the precondition is kept.
 /// Whether Goal holds after the entry assumptions, Extra, and the first
 /// Count statements, every assertion among them assumed.
-static PassiveProgram smokeProgram(const PassiveProgram &P, size_t Count,
-                                   std::unique_ptr<VExpr> Goal,
-                                   const VExpr *Extra = nullptr) {
+static PassiveProgram
+smokeProgram(const PassiveProgram &P, size_t Count, std::unique_ptr<VExpr> Goal,
+             const VExpr *Extra = nullptr,
+             llvm::function_ref<bool(const PassiveStmt &)> Keep = nullptr) {
   PassiveProgram Smoke;
   Smoke.FunctionName = P.FunctionName + ".smoke";
   Smoke.FunctionIdentity = P.FunctionIdentity + "::smoke";
@@ -1044,6 +1045,8 @@ static PassiveProgram smokeProgram(const PassiveProgram &P, size_t Count,
   if (Extra)
     Smoke.EntryAssumes.push_back(cloneVExpr(Extra));
   for (size_t I = 0; I < Count && I < P.Stmts.size(); ++I) {
+    if (Keep && !Keep(*P.Stmts[I]))
+      continue;
     auto Copy = std::make_unique<PassiveStmt>();
     Copy->K = PassiveStmt::Assume;
     Copy->Cond = cloneVExpr(P.Stmts[I]->Cond.get());
@@ -1062,6 +1065,63 @@ static PassiveProgram smokeProgram(const PassiveProgram &P, size_t Count,
   Smoke.RevealedSpecs = P.RevealedSpecs;
   Smoke.CallerIntMode = P.CallerIntMode;
   return Smoke;
+}
+
+/// Whether \p E applies a spec other than the builtin ones, which are the
+/// language's (validity, a sequence's update and reverse, a constant
+/// array's values).
+static bool appliesSpec(const VExpr *E, const FunctionMap &Specs) {
+  if (!E)
+    return false;
+  if (E->K == VExpr::SpecCall) {
+    auto It =
+        Specs.find(static_cast<const VSpecCallExpr *>(E)->CalleeIdentity);
+    if (It == Specs.end() || !It->second->IsBuiltin)
+      return true;
+  }
+  bool Found = false;
+  forEachVExprChild(E, [&](const VExpr *Child) {
+    Found = Found || appliesSpec(Child, Specs);
+  });
+  return Found;
+}
+
+/// A fact the verifier adds about the specs a program applies, rather than
+/// one of the program's own code: a spec's postcondition or a cluster's
+/// induction hypothesis (origin spec:), an inductive predicate's unfolding,
+/// a reads frame (reads:), or a choice's axiom (choose). Each is meant to be
+/// a theorem of the specs' definitions. A fact about builtin specs alone is
+/// the language's.
+static bool isSpecFact(const PassiveStmt &S, const FunctionMap &Specs) {
+  const llvm::StringRef Origin(S.Origin);
+  return (Origin == "choose" || Origin.starts_with("spec:") ||
+          Origin.starts_with("reads:")) &&
+         appliesSpec(S.Cond.get(), Specs);
+}
+
+/// The specs a program applies before its statement \p Count, by name, a
+/// lifted choice as cppverify::choose.
+static std::set<std::string> specsApplied(const PassiveProgram &P,
+                                          size_t Count) {
+  std::set<std::string> Names;
+  std::function<void(const VExpr *)> Collect = [&](const VExpr *E) {
+    if (!E)
+      return;
+    if (E->K == VExpr::SpecCall) {
+      const auto *Call = static_cast<const VSpecCallExpr *>(E);
+      auto It = P.SpecFunctions.find(Call->CalleeIdentity);
+      if (It != P.SpecFunctions.end() && It->second->IsChoice)
+        Names.insert("cppverify::choose");
+      else if (It == P.SpecFunctions.end() || !It->second->IsBuiltin)
+        Names.insert(Call->Callee);
+    }
+    forEachVExprChild(E, Collect);
+  };
+  for (const auto &Assume : P.EntryAssumes)
+    Collect(Assume.get());
+  for (size_t I = 0; I < Count && I < P.Stmts.size(); ++I)
+    Collect(P.Stmts[I]->Cond.get());
+  return Names;
 }
 
 static bool isDeductiveBackend(BackendKind Kind) {
@@ -3924,19 +3984,31 @@ public:
       };
       Passivizer P;
       P.setFunctionMap(InterfaceMap);
-      auto proves = [&](PassiveProgram Smoke) {
+      auto smoke = [&](PassiveProgram Smoke) -> std::optional<VerifyResult> {
         auto Lowered = buildObligationModule(Smoke, Opts.MaxQueryNodes);
         if (!Lowered) {
           llvm::consumeError(Lowered.takeError());
-          return false;
+          return std::nullopt;
         }
         auto Simplified = simplifyObligationModule(std::move(*Lowered));
         if (!Simplified) {
           llvm::consumeError(Simplified.takeError());
-          return false;
+          return std::nullopt;
         }
-        return SmokeBackend->verify(*Simplified).Status ==
-               VerifyStatus::Verified;
+        return SmokeBackend->verify(*Simplified);
+      };
+      auto proves = [&](PassiveProgram Smoke) {
+        std::optional<VerifyResult> R = smoke(std::move(Smoke));
+        return R && R->Status == VerifyStatus::Verified;
+      };
+      // Whether the solver found a state that reaches the goal's negation: a
+      // certified one, or one that needs the values of specs that have none,
+      // which is what reaching it in the code alone means.
+      auto reaches = [&](PassiveProgram Smoke) {
+        std::optional<VerifyResult> R = smoke(std::move(Smoke));
+        return R && (R->Status == VerifyStatus::Failed ||
+                     (R->Status == VerifyStatus::Unresolved &&
+                      R->Reason == VerifyReason::UncheckedCounterexample));
       };
       auto unreachable = [&](const PassiveProgram &Program, bool EntryOnly) {
         auto Lowered = buildObligationModule(
@@ -3954,6 +4026,122 @@ public:
         }
         return SmokeBackend->verify(*Simplified).Status ==
                VerifyStatus::Verified;
+      };
+
+      // The first point of a verified program that the code reaches and the
+      // facts about its specs close: a branch taken, a return, a loop's body,
+      // or the path after a loop. Those facts are meant to be theorems of
+      // the specs' definitions, so either the point is dead code or a fact
+      // is wrong, as a definition that cannot hold was (F38), and every
+      // claim past it holds vacuously; Dafny warns of such contradictory
+      // assumptions too. The points after the first share its cause.
+      auto contradictedPath = [&](const PassiveProgram &PP,
+                                  const std::string &Name)
+          -> std::optional<std::pair<SourceLocation, std::string>> {
+        const FunctionMap &Specs = PP.SpecFunctions;
+        if (llvm::none_of(PP.EntryAssumes,
+                          [&](const auto &E) {
+                            return appliesSpec(E.get(), Specs);
+                          }) &&
+            llvm::none_of(PP.Stmts, [&](const auto &S) {
+              return appliesSpec(S->Cond.get(), Specs);
+            }))
+          return std::nullopt;
+        // A warning, not a verdict: the queries of a function share the time
+        // of one vacuity check, none starts after it, and a search cut short
+        // omits the warning.
+        const auto Deadline =
+            std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(SmokeExecution.SolverTimeoutMs);
+        // In the code alone each spec is a function of its arguments and
+        // nothing more: no definition, postcondition, unfolding, or axiom,
+        // so a counterexample that needs its value is unchecked rather than
+        // disputed. The builtin specs keep theirs.
+        std::vector<std::unique_ptr<VFunction>> Opaque;
+        FunctionMap OpaqueSpecs;
+        for (const auto &[Identity, Spec] : PP.SpecFunctions) {
+          if (Spec->IsBuiltin) {
+            OpaqueSpecs[Identity] = Spec;
+            continue;
+          }
+          auto Free = std::make_unique<VFunction>();
+          Free->Name = Spec->Name;
+          Free->Identity = Spec->Identity;
+          Free->Params = Spec->Params;
+          Free->ReturnType = Spec->ReturnType;
+          Free->IntMode = Spec->IntMode;
+          Free->ReadsHeap = Spec->ReadsHeap;
+          Free->IsSpec = true;
+          Free->Uninterpreted = true;
+          OpaqueSpecs[Identity] = Free.get();
+          Opaque.push_back(std::move(Free));
+        }
+        for (size_t E = 0, Count = 0; E != PP.TraceEvents.size(); ++E) {
+          if (std::chrono::steady_clock::now() >= Deadline)
+            return std::nullopt;
+          const PassiveTraceEvent &Event = PP.TraceEvents[E];
+          while (Count < PP.Stmts.size() &&
+                 PP.Stmts[Count]->TraceEventCount <= E)
+            ++Count;
+          const char *Point =
+              Event.Kind == PassiveTraceKind::Return ? "the return"
+              : Event.Kind == PassiveTraceKind::Branch
+                  ? (Event.Message == "then" ? "the true branch"
+                                             : "the false branch")
+              : Event.Kind == PassiveTraceKind::Loop &&
+                      Event.Message == "inductive iteration"
+                  ? "the loop's body"
+              : Event.Kind == PassiveTraceKind::Loop && Event.Message == "exit"
+                  ? "the loop's exit"
+                  : nullptr;
+          if (!Point)
+            continue;
+          // The body runs where the iteration is chosen and its condition
+          // holds, which is assumed after the event.
+          const VExpr *Condition = nullptr;
+          if (Event.Message == "inductive iteration")
+            for (const PassiveTraceValue &Value : Event.Values)
+              if (Value.Label == "condition")
+                Condition = Value.Value.get();
+          auto missed = [&]() -> std::unique_ptr<VExpr> {
+            std::unique_ptr<VExpr> Guard = cloneVExpr(Event.Guard.get());
+            if (Condition)
+              Guard = std::make_unique<VBinOpExpr>(
+                  VBinOp::And, std::move(Guard), cloneVExpr(Condition),
+                  VType::makeBool(), Event.Loc);
+            return std::make_unique<VUnaryOpExpr>(
+                VUnaryOp::Not, std::move(Guard), VType::makeBool(), Event.Loc);
+          };
+          // A point reached settles nothing; a query left undecided ends the
+          // search, since each later point's restates every fact before it.
+          std::optional<VerifyResult> All =
+              smoke(smokeProgram(PP, Count, missed()));
+          if (!All || All->Status == VerifyStatus::Unresolved)
+            return std::nullopt;
+          if (All->Status != VerifyStatus::Verified)
+            continue;
+          if (std::chrono::steady_clock::now() >= Deadline)
+            return std::nullopt;
+          PassiveProgram Code = smokeProgram(
+              PP, Count, missed(), nullptr,
+              [&](const PassiveStmt &S) { return !isSpecFact(S, Specs); });
+          Code.SpecFunctions = OpaqueSpecs;
+          if (!reaches(std::move(Code)))
+            continue;
+          const std::set<std::string> Specs = specsApplied(PP, Count);
+          const std::string Named = Specs.empty()
+                                        ? std::string("the specs it applies")
+                                        : llvm::join(Specs, ", ");
+          return std::make_pair(
+              Event.Loc,
+              Name + ": the facts about " + Named + " contradict the path to " +
+                  Point +
+                  " here, which the code alone reaches, so every claim on "
+                  "that path holds vacuously; either the path cannot happen, "
+                  "and it is dead code, or a fact about " +
+                  Named + " is wrong");
+        }
+        return std::nullopt;
       };
 
       auto recordDependencies = [&](const VFunction &Verified,
@@ -5072,6 +5260,12 @@ public:
                        " contradicts the state of this call, so everything "
                        "after it holds vacuously",
                    Post.CallLoc, Fn->Name});
+              Diags.back().FindingOf = Verdict;
+            }
+            if (std::optional<std::pair<SourceLocation, std::string>> Point =
+                    contradictedPath(PP, Fn->Name)) {
+              Diags.push_back({VerifyDiagnostic::Warning, Point->second,
+                               Point->first, Fn->Name});
               Diags.back().FindingOf = Verdict;
             }
           }
