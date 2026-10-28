@@ -3241,8 +3241,72 @@ ASTConverter::exitClassInvariants(const CXXMethodDecl *Method,
              : std::vector<const Expr *>();
 }
 
+/// Appends to a loop's invariants the class invariants of the objects the
+/// loop can reach: the local objects alive at it and the objects its
+/// function's reference and pointer parameters address. Only the class's
+/// members change what an invariant states, and a public one keeps it, so it
+/// holds at every iteration of a loop outside the class; like the user's
+/// invariants, each is proved at entry and preserved. A member function may
+/// break the invariant of another object of its class between calls, so its
+/// loops get none of its class's.
+void ASTConverter::appendObjectInvariants(
+    std::vector<std::unique_ptr<VExpr>> &Invariants) {
+  const auto *Member = dyn_cast_or_null<CXXMethodDecl>(ConvertingDecl);
+  auto invariantsOf = [&](QualType Object) -> const TypeContractInfo * {
+    const RecordDecl *Record = getRecordFromType(Object);
+    const TypeContractInfo *TCI =
+        Record ? Ctx.getTypeContract(Record) : nullptr;
+    if (!TCI || TCI->Invariants.empty() ||
+        (Member &&
+         Member->getParent()->getCanonicalDecl() == Record->getCanonicalDecl()))
+      return nullptr;
+    return TCI;
+  };
+  auto append = [&](const TypeContractInfo &TCI, const VExpr &Address,
+                    bool MayBeNull, SourceLocation Loc) {
+    llvm::SaveAndRestore<const VExpr *> Substitute(ThisSubstitute, &Address);
+    llvm::SaveAndRestore DropMarkers(DropExtentMarkers, true);
+    llvm::SaveAndRestore Contract(InContractExpression, true);
+    FieldSubstPrefix.clear();
+    for (const Expr *Invariant : TCI.Invariants) {
+      auto E = convertTypeInvariantExpr(Invariant);
+      if (!E)
+        continue;
+      if (MayBeNull)
+        E = std::make_unique<VBinOpExpr>(
+            VBinOp::Or,
+            std::make_unique<VBinOpExpr>(
+                VBinOp::Eq, cloneVExpr(&Address),
+                std::make_unique<VLiteralExpr>(0, VType::makePtr(), Loc),
+                VType::makeBool(), Loc),
+            std::move(E), VType::makeBool(), Loc);
+      Invariants.push_back(std::move(E));
+    }
+  };
+  for (const auto &Scope : AutomaticScopeStack)
+    for (const VarDecl *VD : Scope)
+      if (const TypeContractInfo *TCI = invariantsOf(VD->getType()))
+        if (auto Address = convertAutomaticLocalAddress(VD, VD->getLocation()))
+          append(*TCI, *Address, /*MayBeNull=*/false, VD->getLocation());
+  const FunctionContractInfo *FCI =
+      ConvertingDecl ? functionContract(ConvertingDecl) : nullptr;
+  if (!ConvertingDecl || !FCI)
+    return;
+  for (const ParmVarDecl *P : ConvertingDecl->parameters()) {
+    QualType Ty = P->getType();
+    if ((!Ty->isLValueReferenceType() && !Ty->isPointerType()) ||
+        hasExtentMarker(*FCI, P))
+      continue;
+    if (const TypeContractInfo *TCI = invariantsOf(Ty->getPointeeType())) {
+      VVarExpr Pointer(valueName(P), VType::makePtr(), P->getLocation());
+      append(*TCI, Pointer, Ty->isPointerType(), P->getLocation());
+    }
+  }
+}
+
 std::unique_ptr<VFunction>
 ASTConverter::convertFunction(const FunctionDecl *FD) {
+  llvm::SaveAndRestore Converting(ConvertingDecl, FD);
   llvm::SaveAndRestore At(CurrentRange, SourceRange(FD->getLocation()));
   llvm::SaveAndRestore Owner(ErrorFunction, functionIdentity(FD));
   llvm::SaveAndRestore OwnerName(ErrorFunctionName, functionName(FD));
@@ -6308,6 +6372,14 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     if (U->getOpcode() == UO_AddrOf) {
       if (subobjectPointerRoot(U->getSubExpr()))
         return subobjectPointer(E, U->getSubExpr(), /*AddressOf=*/true);
+      // In a contract the address of a local object in memory is a value:
+      // a spec it is passed to cannot keep it, and nothing else can.
+      if (InContractExpression)
+        if (const auto *Ref =
+                dyn_cast<DeclRefExpr>(U->getSubExpr()->IgnoreParens()))
+          if (const auto *VD = dyn_cast<VarDecl>(Ref->getDecl());
+              VD && AddressableLocals.count(VD))
+            return convertAutomaticLocalAddress(VD, E->getExprLoc());
       error(CurrentFn->Name +
             ": raw address-of is unsupported until lexical lifetime and escape "
             "effects are modeled");
@@ -8298,6 +8370,7 @@ ASTConverter::convertRangeFor(const CXXForRangeStmt *RF) {
       if (auto E = convertExpr(D))
         Decreases.push_back(std::move(E));
   }
+  appendObjectInvariants(Invariants);
   // Without a measure, the elements left: a range over an array ends.
   if (Decreases.empty() && !(LCI && LCI->MayDiverge.isValid()))
     Decreases.push_back(std::make_unique<VBinOpExpr>(VBinOp::Sub, Size(),
@@ -9071,6 +9144,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           Decreases.push_back(std::move(E));
       InContractExpression = SavedContract;
     }
+    appendObjectInvariants(Invariants);
     if (!checkConditionVariableUnnamed(WS->getConditionVariable(), Invariants,
                                        Decreases) ||
         !checkLoopTermination(WS, !Decreases.empty())) {
@@ -9136,6 +9210,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           Decreases.push_back(std::move(E));
       InContractExpression = SavedContract;
     }
+    appendObjectInvariants(Invariants);
     if (!checkLoopTermination(DS, !Decreases.empty())) {
       InitializedValues = Before;
       InitializationPathReachable = BeforeReachable;
@@ -9222,6 +9297,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           Decreases.push_back(std::move(E));
       InContractExpression = SavedContract;
     }
+    appendObjectInvariants(Invariants);
     if (!checkConditionVariableUnnamed(FS->getConditionVariable(), Invariants,
                                        Decreases) ||
         !checkLoopTermination(FS, !Decreases.empty())) {
