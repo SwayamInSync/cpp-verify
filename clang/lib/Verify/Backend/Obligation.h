@@ -4,6 +4,7 @@
 #define LLVM_CLANG_VERIFY_BACKEND_OBLIGATION_H
 
 #include "../IR/NodeBudget.h"
+#include "../IR/SourceSpan.h"
 #include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
 #include "llvm/Support/Error.h"
@@ -330,6 +331,16 @@ struct Obligation {
   /// For an unsupported obligation, what the verifier does not model there.
   /// Diagnostic only: neither archived nor hashed.
   std::string Note;
+  /// What the check is about where that is not its anchor: the condition
+  /// under the path condition (an operator, a clause), or the call for a
+  /// callee's clause; and for a callee's clause, the clause in the callee.
+  /// Diagnostic only: neither archived nor hashed.
+  SourceSpan Focus;
+  SourceSpan Clause;
+  /// Where they lie, filled in with Source (annotateObligationSources), and
+  /// archived from schema v6.
+  ObligationSource FocusSource;
+  ObligationSource ClauseSource;
   std::unique_ptr<LogicExpr> Goal;
   std::unique_ptr<LogicExpr> CounterexampleQuery;
 };
