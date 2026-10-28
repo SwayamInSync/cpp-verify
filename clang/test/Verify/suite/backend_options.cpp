@@ -21,8 +21,9 @@
 // RUN: not %cpp-verify --backend=lean --collection-timeout=1000 %s -- 2>&1 | FileCheck %s --check-prefix=COLLECTION
 // RUN: not %cpp-verify --lean-out=%t/budget.lean --certify-timeout=1000 %s -- 2>&1 | FileCheck %s --check-prefix=CERTIFY
 // RUN: not %cpp-verify --lean-out=%t/budget.lean --solver-rlimit=100000 %s -- 2>&1 | FileCheck %s --check-prefix=RLIMIT
-// RUN: not %cpp-verify --lean-out=%t/budget.lean --max-query-nodes=100000 %s -- 2>&1 | FileCheck %s --check-prefix=NODES
+// RUN: not %cpp-verify --lean-out=%t/budget.lean --memory-limit=4096 %s -- 2>&1 | FileCheck %s --check-prefix=MEMORY
 // RUN: not test -e %t/budget.lean
+// RUN: %cpp-verify --lean-out=%t/nodes.lean --max-query-nodes=100000 %s -- 2>&1 | FileCheck %s --check-prefix=NODES
 // RUN: not %cpp-verify --obligation-in=%t/goals.cpv --lean-out=%t/budget.lean --timeout=1000 2>&1 | FileCheck %s --check-prefix=TIMEOUT
 // RUN: %cpp-verify --timeout=20000 --function-timeout=200000 --solver-rlimit=50000000 --max-query-nodes=1000000 %s -- 2>&1 | FileCheck %s --check-prefix=SOLVER
 // RUN: %cpp-verify --lean-fallback=%t/fallback --timeout=20000 %s -- 2>&1 | FileCheck %s --check-prefix=SOLVER
@@ -62,5 +63,6 @@ int count(int n)
 // COLLECTION: error: --collection-timeout requires a backend that runs an SMT solver
 // CERTIFY: error: --certify-timeout requires a backend that runs an SMT solver
 // RLIMIT: error: --solver-rlimit requires a backend that runs an SMT solver
-// NODES: error: --max-query-nodes requires a backend that runs an SMT solver
+// MEMORY: error: --memory-limit requires a backend that runs an SMT solver
+// NODES: Exported: lean obligation: count
 // SOLVER: Verified: count [backend=z3]

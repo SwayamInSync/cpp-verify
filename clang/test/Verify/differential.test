@@ -1,0 +1,28 @@
+# The differential tool (clang/utils/cppverify-differential), which runs nightly
+# over every case, on its own cases: verdicts that execution confirms pass, and
+# a verdict that disagrees with execution is reported. Two of the cases state
+# their contract wrongly in Python on purpose, so a right verdict reads as
+# UNSOUND and a right counterexample as BADCEX. A read past a buffer traps on
+# the page after it, and a contract undefined at an input is no failure of the
+# body.
+#
+# UNSUPPORTED: system-windows
+# RUN: rm -rf %t
+# RUN: not %python %S/../../utils/cppverify-differential/run.py --suite selftest \
+# RUN:   --cpp-verify %cpp-verify --clang %clang --work %t --jobs 1 --report %t.json \
+# RUN:   | FileCheck %s
+# RUN: %python -c "import json, sys; r = {c['case']: c for c in json.load(open(sys.argv[1]))}; \
+# RUN:   print(sorted(r), r['self_overflow']['counterexamples'])" %t.json | FileCheck %s --check-prefix=REPORT
+
+# CHECK-DAG: {{^}}self_add {{ *}}z3=verified admitted=65536 violations=0{{$}}
+# CHECK-DAG: {{^}}self_overflow {{ *}}z3=failed:overflow admitted=20188 violations=21 counterexamples: z3 confirmed: undefined behavior at (2147483647,){{$}}
+# CHECK-DAG: {{^}}self_sum {{ *}}z3=verified admitted=25 violations=0{{$}}
+# CHECK-DAG: {{^}}self_read_past {{ *}}z3=failed:bounds admitted=4 violations=4 counterexamples: z3 no input values{{$}}
+# CHECK-DAG: {{^}}self_contract_div {{ *}}z3=failed:division-by-zero admitted=256 violations=0 counterexamples: z3 the contract is undefined there (division-by-zero){{$}}
+# CHECK-DAG: {{^}}self_bound {{ *}}z3=verified admitted=32768 violations=1{{$}}
+# CHECK-DAG: {{^}}  problem: UNSOUND[z3]: verified, yet 1 admitted inputs misbehave, such as [((0,), 'POST', 0)]{{$}}
+# CHECK-DAG: {{^}}self_wrong_at_5 {{ *}}z3=failed:postcondition admitted=256 violations=0{{$}}
+# CHECK-DAG: {{^}}  problem: BADCEX[z3]: (5,) returns 6 and meets the contract (verification failed: self_wrong_at_5
+# CHECK: {{^}}7 cases, 2 problems{{$}}
+
+# REPORT: ['self_add', 'self_bound', 'self_contract_div', 'self_overflow', 'self_read_past', 'self_sum', 'self_wrong_at_5'] {'z3': 'confirmed: undefined behavior at (2147483647,)'}
