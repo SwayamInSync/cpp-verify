@@ -3041,10 +3041,70 @@ terminal module, with its actual bound. Archive replay consumes that one bound
 and does not claim to repeat incremental source exploration. Loop trace events
 carry one-based iteration numbers at the original source location.
 
+## Inlined Helpers
+
+A call of a function with a body and no contract (`ASTConverter::
+isInlineHelper`: not a spec, proof, or `constexpr` function, a builtin, the
+standard library's, a system header's, a constructor, or a member the
+verifier does not support) is lowered as a contracted call is, by
+`hoistExecCall` and the call statements, so its arguments are evaluated in
+C++'s order; `atCall` marks the `VCallStmt` `InlinesHelper` and records the
+helper. After the main loop the converter converts each recorded helper once
+(`convertFunction(FD, /*AsInlineHelper=*/true)`), marked `IsInlineHelper`,
+before the library models and the lifted `constexpr` functions, whose calls a
+helper may add. A helper whose body does not convert is not reported on its
+own: its first error, with its location, is kept for its calls
+(`UnconvertedHelpers`).
+
+`inlineHelperCalls` (`Transform/InlineHelpers.cpp`) then runs in the
+converter, before the call-graph analyses (recursion groups, clusters, spec
+dependencies), so they and every pass after see the inlined bodies. For each
+marked call it clones the helper's body as converted (a helper verified on
+its own is inlined as written, not as its own calls were inlined) and renames
+every variable, binder, and target apart (`__inlineN_helper$x`). Each
+parameter becomes a local assigned its argument (a reference binding for a
+scalar reference parameter). A flag `__inlineN_helper$__returned` starts
+false, and the body's own result `__inlineN_helper$__result` starts as a zero
+of the return type, so that a value assigned on a loop's exit path has a
+version of its type at the loop's head and reaches its exit (an untyped havoc
+gave the merge at an outer loop's head no type); the call's target receives
+it after the body. Each `return e` becomes `result = e; returned = true`: outside loops the
+statements after one that may return are guarded by `!returned`, inside a
+loop it also breaks, a loop that may return is followed by `if (returned)
+break;` in an enclosing loop, and every such loop gets the invariant
+`!returned`, which holds since a path that sets it leaves the loop at once. A
+`do` loop needs nothing more, since its first iteration is lowered before its
+loop. The calls in the inlined body are inlined in turn, with the helpers
+being inlined on a stack, which detects recursion. Each caller receives the
+helper's source variables, displayed as `helper::x`, its bounded pointers,
+spec dependencies, divergence and unmeasured loops, its extent
+(`VFunction::InlinedExtents`), within which a check's focus may be shown,
+and its spec fuel and reveals (`SpecFuel`, the larger of the two, and
+`RevealedSpecs`): more unfolding only adds equations of definitions. Its
+`hide`s are not, since they would withhold a definition from the caller's
+other claims. For the order of unsequenced operands (B11), a call of a
+helper may write memory exactly when its body, or a call in it, stores
+through a pointer, a reference, or its object, or to a global, allocates,
+or makes a call the verifier cannot see into (`callMayWrite`, which applies
+the contract rule to contracted callees).
+
+A call that cannot be inlined becomes `assert false` of kind `unsupported`,
+with a note that names the helper and asks for a contract, then `assume
+false`, since nothing is known of what the call does: recursion, a record
+result (`ReturnFields`), dynamic storage, `cppverify::old` or
+`cppverify::result` in the body (its entry is not the caller's), and a body
+that did not convert. Past `MaxInlinedStatements` (2000) statements inlined
+into one function, the function's whole body becomes that obligation, at the
+call of the outermost helper, since a partly inlined body only grows the
+queries. Finally the functions converted only to be inlined are removed, and
+so is every function without a contract that some call inlines: it is
+verified where verified code calls it.
+
 ## Modular Exec Calls
 
 `ASTConverter` lowers contracted **exec** calls to `VCallStmt` nodes, in every
-expression position. While a statement or a condition of executable code is
+expression position, and calls of functions without contracts the same way
+(`lowersToCall`), marked `InlinesHelper` (see "Inlined helpers" below). While a statement or a condition of executable code is
 converted, its calls go to a call sink (`CallSink`, beside `SubobjectSink`):
 each becomes a `VCallStmt` into a fresh temporary `__call_N` before the
 statement (a condition's before the `VIfStmt`), its arguments lowered as a
