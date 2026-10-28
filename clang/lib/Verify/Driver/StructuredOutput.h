@@ -18,6 +18,10 @@ inline constexpr const char SummarySchema[] = "cppverify.summary/1";
 /// Text as JSON takes it: invalid UTF-8 replaced.
 std::string jsonText(llvm::StringRef Text);
 
+/// A path as GitHub resolves it: relative to the working directory, the
+/// checkout in a workflow, when it lies under it.
+std::string workspacePath(llvm::StringRef File);
+
 /// The source a term spans, from its first column to the one after its last.
 llvm::json::Object sourceJSON(const ObligationSource &Source);
 
