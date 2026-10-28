@@ -80,8 +80,7 @@ class Z3Encoder {
   bool Profiling = false;
   /// \p S as a standalone script: the options of its solver, as commands,
   /// for a check of \p Ms milliseconds, then its assertions and the check.
-  std::pair<std::string, std::string> dumpScript(z3::solver &S,
-                                                 unsigned Ms) const;
+  std::pair<std::string, std::string> dumpScript(z3::solver &S, unsigned Ms);
   z3::solver freshSolver();
   /// \p S.check() within \p Ms milliseconds (0: no limit), unknown at once
   /// after interrupt().
