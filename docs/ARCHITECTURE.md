@@ -3205,8 +3205,11 @@ stops before VCR conversion.
 
 `cpp-verify --dump-smt2=DIR` writes every query sent to a solver as a
 standalone SMT-LIB script (`Backend/QueryDump.cpp`): Z3's checks all go
-through `Z3Encoder::check`, which writes `Z3_solver_to_string` of the solver,
-after the options `freshSolver` gave it as `set-option` commands and
+through `Z3Encoder::check`, which writes `Z3_solver_to_string` of a solver
+holding the checked solver's assertions (a solver that has checked before
+also prints the model converter its preprocessing left, `model-add` of
+symbols it never declares), after the options `freshSolver` gave it as
+`set-option` commands and
 followed by `(check-sat)`, or `(check-sat-using smt)` for a quantified query,
 whose solver is the `smt` tactic's; Z3's benchmark printer (`to_smt2`) is not
 used, since it leaves symbols such as the quantifier ids `q@line:col`
