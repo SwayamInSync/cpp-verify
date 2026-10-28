@@ -135,6 +135,16 @@ correct.
 after it could fail for values it never produces. Its state now carries over
 (:doc:`language/functions-loops`).
 
+**Class invariants in loops.** A loop that called member functions of an
+object, outside its class, forgot the object's class invariant: at the loop
+the verifier knew only what the loop's invariants said, so the next call
+failed its ``[type-invariant]`` check, and an invariant over private fields
+could not be restated there. A loop now keeps the class invariant of every
+object it reaches, the local objects alive at it and those its function's
+reference and pointer parameters address, checked at entry and kept by
+every iteration like the user's own; a loop in a member function of the
+class keeps none of its class's (:doc:`language/structs`).
+
 **Loops that initialize local storage.** Every iteration of a loop after the
 first saw the local storage the earlier ones wrote as uninitialized, so a
 loop filling a local array failed its ``initialization`` check, at the
@@ -356,6 +366,27 @@ instantiated, and a contracted template, or member of a class template,
 that nothing instantiates is reported. ``cv::post(cv::result > 0)`` and ``cv::old(x) > 0``
 of a template's type did not compile (``invalid operands to binary
 expression ('T' and 'int')``) (:doc:`language/functions-loops`).
+
+**The address of a local in a contract.** ``size(&r)`` in a loop invariant
+or a ``cv::check``, for a local object ``r``, was an error (``raw address-of
+is unsupported until lexical lifetime and escape effects are modeled``).
+A contract may now take the address of a local object in memory, since a
+spec it is passed to cannot keep it; in ghost code, which could, it is
+still an error (:doc:`language/structs`).
+
+**Hiding a spec template's specialization.** ``cv::hide(at<4>)`` and
+``cv::reveal_with_fuel(steps<2>, 4)`` stopped the function (``unsupported C++
+type in verification: <overloaded function type>``). They now name that
+specialization, and a template's name alone is an error, as in C++
+(``reference to overloaded function could not be resolved``)
+(:doc:`language/ghost-proofs`).
+
+**A ring buffer case study.** A class template ``Ring<N>`` with private
+fields and a class invariant, specified as a FIFO queue through spec views,
+with clients that use a range-based ``for``, a ``switch``, and an object
+passed by reference: six functions verify in about 2 s, and the classic
+wraparound bug fails with the store that breaks the invariant
+(:doc:`case-studies/ring-buffer`).
 
 **std::min and std::max.** In a contract they ended ``Unresolved:
 obligation lowering failed: f (missing spec definition: fn_...)``, as did
