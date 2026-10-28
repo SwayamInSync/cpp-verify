@@ -716,11 +716,15 @@ Assurance and testing gaps
 --------------------------
 
 Every current checkpoint uses positive programs, nearby false programs, and
-layered lowering checks. Broader trust additionally requires:
+layered lowering checks. Every night, 484 contracted functions over integers,
+pointers, and records are also verified by each backend and run natively
+under UBSan on enumerated or sampled inputs, and a verdict that execution
+contradicts fails CI (:doc:`../book/part-ii/ch17-backends-modular-calls`).
+Broader trust additionally requires:
 
 - grammar-guided fuzzing of supported and neighboring unsupported C++;
 - metamorphic and AST/VCR/SMT translation-validation tests;
-- bounded differential execution against compiled Clang programs;
+- differential execution of classes, templates, and dynamic storage;
 - X86-64/AArch64 target-layout and language-mode matrices;
 - solver-time, memory, VC-size, and random-seed stability benchmarks;
 - stale-cache, timeout, quantifier, aliasing, and model-adversarial tests;
