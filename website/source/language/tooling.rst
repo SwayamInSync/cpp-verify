@@ -1149,7 +1149,9 @@ the loop's invariants allow, and what unrolling each loop then finds about
 the same check, within ``--confirm-bound`` iterations (default 10; ``0``
 skips it; only with the solver backends, since BMC unrolls already and Lean
 runs no solver): an execution that fails it, a proof that none does, or no
-failure within the bound. The search takes at most one query timeout. A loop without
+failure within the bound. The search takes at most one query timeout. Unrolling
+drops the loops' invariants and measures, so a failure of one gets no
+search: it would find no copy of the check at any bound. A loop without
 ``cppverify::decreases`` is noted too (see :doc:`functions-loops`).
 
 A function reports one failure: the first check that fails, in the order an
