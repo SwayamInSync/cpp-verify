@@ -561,6 +561,16 @@ does not hold (``x % 2 == 0``); JSON gives that clause as ``related``, SARIF
 as a related location. A call's step on the path is at the call too. The
 check's ID keeps its anchor (:doc:`language/tooling`).
 
+**Bit builtins.** A call of ``__builtin_clz``, ``__builtin_ctz``,
+``__builtin_popcount``, ``__builtin_parity``, ``__builtin_ffs`` (each with
+its ``l`` and ``ll`` forms), or ``__builtin_bswap16/32/64`` stopped its
+function (``call to function without a verification contract``). Each is now
+its exact definition over the operand's bits, and ``__builtin_clz`` and
+``__builtin_ctz`` of 0, which GCC leaves undefined, fail a check of the new
+kind ``builtin-argument`` at the call. A ``static_assert`` with a message in a
+function crashed cpp-verify; it now does nothing, as one without a message
+did (:doc:`language/functions-loops`).
+
 **cvc5's counterexamples.** A failure cvc5 found (``--backend=cvc5``, or a race
 cvc5 won) gave no values and no path: the certifier checked its model and the
 verifier then dropped it, so the JSON record had no ``model`` or ``trace``,
