@@ -34,6 +34,24 @@ is given), so a lone ``-fno-verify`` is a fast **light check**: it validates C++
 contract syntax *and* contract semantics, but not your logic — handy for editors,
 CI pre-flight, and LLM/agent loops.
 
+Verification in a build
+-----------------------
+
+The flags go to the targets whose code has contracts, as any compiler flag
+does; in CMake:
+
+.. code-block:: cmake
+
+   target_compile_options(app PRIVATE -fverify-contracts -fverify-jobs=2
+     -fverify-cache=${CMAKE_BINARY_DIR}/cppverify-cache -fverify-report)
+
+A failure stops the build and writes no object, a file without contracts
+says nothing, the proof cache spares the solver what did not change, and
+each object's results are written beside it as JSON Lines. ``-fno-verify``
+in place of ``-fverify-contracts`` keeps a development build fast. The
+reference lists every ``-fverify-*`` option
+(:doc:`../../language/tooling`, "Options of a compilation").
+
 Other flags
 -----------
 
