@@ -40,9 +40,11 @@ struct FailurePlace {
 /// checked condition is found in the obligation's goal, under its chain of
 /// assumptions, by where it is written (Obligation::Focus and Clause, or
 /// their sources in an archive). A conjunction fails at its first conjunct
-/// the values make false; a definedness check, which the verifier builds,
-/// also at the check under a short-circuit guard whose left side holds; a
-/// disjunction the user writes fails as a whole.
+/// the values make false (the terms lowering builds for one construct, such
+/// as a comparison of a machine and a mathematical value, carry its place);
+/// a definedness check, which the verifier builds, also at the check under a
+/// short-circuit guard whose left side holds; a disjunction the user writes
+/// fails as a whole.
 FailurePlace failingPlace(const ObligationModule &Module,
                           const VerifyResult &Failure);
 
