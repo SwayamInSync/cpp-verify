@@ -8,8 +8,11 @@ Understanding the report
 ------------------------
 
 A failure is a compiler error at the check that fails, with its kind
-(``[postcondition]``, ``[overflow]``, ...) and the source line, the failing
-expression underlined. Its notes give the **counterexample**: first the values
+(``[postcondition]``, ``[overflow]``, ...) and the source line, the part that
+fails underlined: the conjunct of a clause that is false, the operation that
+overflows, or for a callee's precondition the call, with a note at the
+callee's clause that does not hold there (see
+:doc:`../../language/tooling`). Its notes give the **counterexample**: first the values
 by their source names, each variable with the values it takes along the path
 (``c = 0 -> 1``), then each step of that path at its line, as Clang's static
 analyzer reports a path: the branches it takes, the calls with their
@@ -424,10 +427,10 @@ be its cause:
 
 .. code-block:: text
 
-   vacuity.cpp:2:28: error: verification failed: contradictory [postcondition] [backend=z3] [reason=counterexample]
+   vacuity.cpp:2:42: error: verification failed: contradictory [postcondition] [backend=z3] [reason=counterexample]
        2 |   cv::post(cv::result == x && cv::result == x + 1)   // no result satisfies this
-         |            ~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~
-   vacuity.cpp:2:28: note: counterexample: x = 2147483647, result = 2147483647
+         |                               ~~~~~~~~~~~^~~~~~~~
+   vacuity.cpp:2:42: note: counterexample: x = 2147483647, result = 2147483647
    vacuity.cpp:4:3: note: returns 2147483647
        4 |   return x;
          |   ^
