@@ -1914,7 +1914,7 @@ z3::check_result Z3Encoder::check(z3::solver &S, unsigned Ms) {
 }
 
 std::pair<std::string, std::string> Z3Encoder::dumpScript(z3::solver &S,
-                                                          unsigned Ms) const {
+                                                          unsigned Ms) {
   // The settings freshSolver gives a query's solver, and the profiling
   // rerun's own.
   std::string Options;
@@ -1931,8 +1931,14 @@ std::pair<std::string, std::string> Z3Encoder::dumpScript(z3::solver &S,
   }
   // The solver's own printer: unlike the benchmark printer (to_smt2), it
   // quotes symbols that are not SMT-LIB symbols, such as the ids
-  // `q@line:col` of quantifiers.
-  std::string Script = Z3_solver_to_string(Ctx, S);
+  // `q@line:col` of quantifiers. A solver that has checked before also
+  // prints the model converter its preprocessing left (`model-add` of
+  // symbols it never declares), so a solver of the assertions alone prints
+  // the query.
+  z3::solver Assertions(Ctx);
+  for (const z3::expr &Assertion : S.assertions())
+    Assertions.add(Assertion);
+  std::string Script = Z3_solver_to_string(Ctx, Assertions);
   if (!Script.empty() && Script.back() != '\n')
     Script += '\n';
   // A quantified query's solver is the smt tactic's.
