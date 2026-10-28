@@ -2493,10 +2493,10 @@ chain of assumptions, by its location (by its source in an archive), a
 guard implication around it giving way to the condition, and evaluates its
 parts at the counterexample's values (`AssignedValues` over
 `VerifyResult::Assignment`, with the certifier's `evaluateTerm` and a
-one-second budget): a conjunction fails at its first false conjunct, which
-in a clause is a `&&` the user wrote, each of its parts lying before or
-after its operator (the comparison's lowered terms span the operator and
-are not split); a definedness check, whose conditions the verifier builds,
+one-second budget): a conjunction fails at its first false conjunct (the
+terms lowering builds for one construct carry its place, so a comparison is
+one part however it is lowered); a definedness check, whose conditions the
+verifier builds,
 also at the check under a short-circuit guard whose left side holds; a
 user's disjunction, as a whole. Spec substitution keeps the span of each
 node it rebuilds (`substParams`, `substParamsInExpr`), so a callee's clause
