@@ -1064,7 +1064,7 @@ The canonical backend boundary can be persisted and replayed:
    cpp-verify --obligation-in=goals.cpv --backend=lean --lean-out=goals.lean
    cpp-verify --obligation-in=goals.cpv --lean-project=proof --lean-certify
 
-Each ``cppverify.obligation/5`` record uses stable wire tags, defensive bounds,
+Each ``cppverify.obligation/6`` record uses stable wire tags, defensive bounds,
 portable source points, and path-independent SHA-256 semantic hashes. Replay
 revalidates every sort, expression, logical declaration, call signature,
 feature declaration, and identity before backend dispatch. Multiple records may
