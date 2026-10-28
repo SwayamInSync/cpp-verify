@@ -22,7 +22,7 @@ esac
 cmake -S llvm -B stage1 "${common[@]}" -DLLVM_ENABLE_PROJECTS=clang
 ninja -C stage1 clang
 
-cmake -S llvm -B build "${common[@]}" "${stage2[@]}" \
+cmake -S llvm -B build "${common[@]}" ${stage2[@]+"${stage2[@]}"} \
   -DCMAKE_C_COMPILER="$PWD/stage1/bin/clang" \
   -DCMAKE_CXX_COMPILER="$PWD/stage1/bin/clang++" \
   -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra" \
