@@ -836,13 +836,18 @@ has the limit to itself. Under ``--int-encoding=bitvector`` a query stopped
 for memory is retried in the integer encoding, as after a timeout.
 
 cvc5 runs as a process of its own, which may allocate up to the limit. Past
-it an allocation fails and cvc5 stops (``std::bad_alloc``, or its SAT
-solver's ``OutOfMemoryException``), and the query is ``Unresolved`` with
-reason ``solver.memory-limit``: ``cvc5 ran out of memory: each cvc5 process
+it an allocation fails and cvc5 stops (``std::bad_alloc``, its SAT solver's
+``OutOfMemoryException``, or GMP's ``Cannot allocate memory``), and the query
+is ``Unresolved`` with reason ``solver.memory-limit``: ``cvc5 ran out of memory: each cvc5 process
 may use N MB (--memory-limit)``. The limit is applied on Linux, to the data
 the process may allocate, and on Windows, to its committed memory; on macOS,
 which applies no such limit to the memory a process maps, cvc5 is not
-bounded. With several jobs, as many cvc5 processes may run at once.
+bounded. With several jobs, as many cvc5 processes may run at once. An
+allocation that fails where cvc5 does not check it crashes cvc5 instead
+(``cvc5 terminated by signal 11``), which is reported as
+``solver.invocation-failed``, since a crash need not come from memory; at a
+few megabytes it happens at limits that differ between cvc5's versions and
+builds.
 
 Choosing the limits:
 
