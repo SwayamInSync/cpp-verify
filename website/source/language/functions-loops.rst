@@ -549,8 +549,10 @@ C++ leaves the order of most operands open: the two operands of ``+`` or
 ``<``, a subscript's array and index, the arguments of a call. The verifier
 runs calls first, in one order, so that order must not matter. A call that
 may write memory (its callee has a ``cppverify::modifies``, a pointer or
-reference parameter, or is a member function that is not ``const``) next to
-an operand that reads memory, or makes another call, is an error:
+reference parameter, or is a member function that is not ``const``; or it
+has no contract and its body, or a call in it, writes through a pointer, a
+reference, or its object, or to a global) next to an operand that reads
+memory, or makes another call, is an error:
 
 .. cppverify-example: label add_one
 
@@ -701,6 +703,85 @@ assign their locals in statements of their own, and a pointer to dynamic
 storage (``new``) is assigned in a statement of its own. Before 0.2, each of
 these forms was ``unsupported unary operator`` or ``unsupported binary
 operator``, and its function was not verified.
+
+Calls of functions without contracts
+------------------------------------
+
+A call of a function that has a body and no contract runs that body where
+the call is: the verifier inlines it, as Kani and CBMC inline every call and
+as SPARK's GNATprove inlines a subprogram without a contract. The caller's
+proof covers the body at the arguments the caller passes, its checks are the
+caller's, and it reads and writes the caller's objects, within the caller's
+``cppverify::modifies`` frame. A helper may hold loops with their invariants,
+returns anywhere, calls of other helpers and of contracted functions, whose
+preconditions are checked at each call; a member function is a helper too.
+Two helpers that write nothing their caller sees may stand side by side in
+one expression (``abs_diff(a, b) + abs_diff(c, d)``), and a helper's
+``cppverify::reveal_with_fuel`` unfolds its specs where it is inlined.
+
+.. code-block:: cpp
+
+   int count_zeros(const int *a, int n)
+   {
+     int c = 0;
+     for (int i = 0; i < n; i = i + 1)
+       cv::invariant(0 <= i && i <= n && 0 <= c && c <= i)
+       cv::decreases(n - i)
+     {
+       if (a[i] == 0)
+         c = c + 1;
+     }
+     return c;
+   }
+
+   int zeros(const int *a, int n)
+     cv::pre(valid(a, n) && 0 <= n && n <= 1000)
+     cv::post(0 <= cv::result && cv::result <= n)
+   {
+     return count_zeros(a, n);
+   }
+
+   int zeros_past(const int *a, int n)
+     cv::pre(valid(a, n) && 0 <= n && n <= 1000)
+   {
+     return count_zeros(a, n + 1);
+   }
+
+.. code-block:: text
+
+   Verified: zeros [backend=z3]
+   zeros.cpp:8:9: error: verification failed: zeros_past [bounds] [backend=z3] [reason=counterexample]
+       8 |     if (a[i] == 0)
+         |         ^
+   zeros.cpp:8:9: note: counterexample: count_zeros::a = 1, count_zeros::n = 2, count_zeros::c = 0, count_zeros::i = 0 -> 1, a = 1, n = 1
+
+A failure in a helper is shown at its operation, in the verdict of the
+function that calls it, and the counterexample names the helper's variables
+with its name (``count_zeros::i``). A function without a contract is verified
+where verified code calls it, at each such call, and on its own only when
+none does: ``count_zeros`` above has no verdict of its own, which without a
+precondition its reads could not have.
+
+What a contract has to state instead fails closed, ``Unresolved`` with
+reason ``construct.unsupported`` and a message that names the helper and asks
+for a contract:
+
+- recursion, directly or through other helpers;
+- a record returned by value (a record parameter is its fields, and a
+  pointer or reference to one addresses the caller's object);
+- allocation and deallocation, and a pointer to dynamic storage as the
+  result;
+- a loop invariant that uses ``cppverify::old``, whose entry would be the
+  caller's;
+- more than 2000 statements of helpers' bodies inlined into one function;
+- a body the verifier does not support, whose message the call repeats.
+
+A ``constexpr`` function without a contract is lifted as a spec instead
+(Functions, above), a constructor without a contract is not inlined, and a
+call of a function without a body in the translation unit, or of the
+standard library beyond ``std::min`` and ``std::max``, is an error naming it
+(``call to function without a verification contract``). Before 0.2 every
+call of a function without a contract was that error.
 
 Templates
 ---------
