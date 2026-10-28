@@ -195,6 +195,8 @@ A bug
 
 The classic one is to forget the wraparound when the oldest element leaves:
 
+.. cppverify-example: fragment
+
 .. code-block:: cpp
 
    head = head + 1;
