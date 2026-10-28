@@ -68,7 +68,7 @@ C++ source with contracts
 │  - Source names + types  │
 │  - Guarded event traces  │
 │  - Stable reason codes   │
-│  - Text or JSON Lines    │
+│  - Text, JSON, SARIF     │
 │  - Re-check recommends   │
 │    on failure → warnings │
 └──────────────────────────┘
@@ -1124,7 +1124,7 @@ and obligation kinds.
 ### Canonical archives and semantic identity
 
 `--obligation-out=FILE` writes one or more deterministic
-`cppverify.obligation/4` records after source attribution. The binary format has
+`cppverify.obligation/5` records after source attribution. The binary format has
 the `CPVOBL\r\n` magic, an explicit schema version, little-endian fixed-width
 integers, length-delimited strings/collections, and stable hand-assigned wire
 tags rather than C++ enum ordinals. The reader bounds strings, collections,
@@ -1153,7 +1153,11 @@ premises, and schema v4, with the diagnostic metadata, where each variable
 version is defined (`DiagnosticVariable::Guard`); readers still read schemas
 v3, v2, and v1, whose records name only assertions, postconditions, and
 unwinding checks. A record before v4 gives no version a guard, so its
-counterexamples list every version, as before 0.2. Records
+counterexamples list every version, as before 0.2. Schema v5 adds, after each
+source's end, the begin of its range (`ObligationSource::BeginLine`,
+`BeginColumn`); from v5 the end is the column after the last character
+(`Lexer::getLocForEndOfToken`), where before it was the first column of the
+last token, and a record before v5 keeps its end as written. Records
 limit strings to 64 MiB, collections and expression
 nodes/edges to 100,000 per record, expression nesting to 4096, canonical
 integer numerals to 4096 decimal characters, and integer sorts to 4096 bits.
@@ -2500,10 +2504,28 @@ tool prints errors and warnings with `TextDiagnostic`, source line and caret
 included, and verdicts as one line each; the compile path reports every part
 through the compiler's `DiagnosticsEngine` (see Compile-Time Integration).
 `--diagnostics-format=json` emits one
-`cppverify.diagnostic/1` JSON object per verification result, including source
+`cppverify.diagnostic/2` JSON object per verification result, including source
 ranges, typed model values, trace events, backend/bound, and a stable reason
-code. Command-line/frontend errors and output combined with IR dumps are not a
-pure JSON stream. A construct the converter cannot represent is a
+code. A source (`ObligationSource`, annotated by `Verifier::sourceOf`) keeps
+the anchor that stable IDs and carets use (`Line`, `Column`) and spans its
+expression from `BeginLoc` to the end of its last token; records print the
+span. Every record of a function carries its declaration
+(`VerifyDiagnostic::FunctionLoc`, also for conversion errors through
+`ConversionError::FunctionLoc`), and a failure the counterexample and step
+texts the text output prints. In `cpp-verify` the compiler's diagnostics go to
+`StructuredDiagnostics`, which writes them as records of status `frontend`
+with their notes as `related`, before the verifier's records of the file, and
+a `cppverify.summary/1` record ends the run. No record holds a time, so the
+stream is the same at any `--jobs`. `--diagnostics-format=sarif` writes the
+same records into a buffer (`out()` in `Main.cpp`) and translates them at the
+end (`sarifLog`, `Driver/StructuredOutput.cpp`): a result per record, its
+SARIF `kind` from the status as Frama-C maps property statuses (pass, fail,
+open), its rule the failing check's kind, the trace a code flow, and the
+summary a property of the run. The logs of `structured_output.test`, of
+`inductive_counterexamples.cpp`, and of a replay validate against the SARIF
+2.1.0 schema. `--diagnostics-format=github` is the text with a
+workflow command (`githubCommand`) after each error and warning. Output
+combined with IR dumps is not a pure JSON stream. A construct the converter cannot represent is a
 `ConversionError` at a source range: the innermost declaration, statement, or
 expression being converted (`ASTConverter::CurrentRange`), unless the site
 names a place of its own, such as a function for the checks made after every

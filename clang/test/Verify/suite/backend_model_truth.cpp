@@ -18,14 +18,14 @@ int underdetermined_model(int value, bool take_value)
 // JSON-SAME: {"name":"value","sort":"i32"
 // JSON-SAME: "ssa_name":"value_0","value":null}
 // JSON-SAME: "obligation":{"id":"{{.*}}::postcondition@{{[0-9]+}}:{{[0-9]+}}","kind":"postcondition"
-// JSON-SAME: "source":{"column":19,"end_column":61,"end_line":8
+// JSON-SAME: "source":{"column":19,"end_column":66,"end_line":8
 // JSON-SAME: "reason":"counterexample"
-// JSON-SAME: "schema":"cppverify.diagnostic/1"
+// JSON-SAME: "schema":"cppverify.diagnostic/2"
 // JSON-SAME: "status":"failed"
 
 // ARCHIVE: "model":[
 // ARCHIVE-SAME: {"name":"value","sort":"i32"
 // ARCHIVE-SAME: "ssa_name":"value_0","value":null}
 // ARCHIVE-SAME: "semantic_hash":"sha256:{{[0-9a-f]+}}"
-// ARCHIVE-SAME: "source":{"column":19,"end_column":61,"end_line":8
+// ARCHIVE-SAME: "source":{"column":19,"end_column":66,"end_line":8
 // ARCHIVE-SAME: "status":"failed"

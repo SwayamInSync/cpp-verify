@@ -9,7 +9,7 @@
 # CHECK: verification failed: stable_identity [postcondition]
 # INLINED: "function":"inlined_source"
 # INLINED-SAME: "id":"{{.*}}::postcondition@4:19"
-# INLINED-SAME: "end_column":37
+# INLINED-SAME: "end_column":38
 # INLINED-SAME: "line":4
 
 # The suffix separates obligations of one kind at one anchor: here both

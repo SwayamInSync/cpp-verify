@@ -140,15 +140,24 @@ std::string formatLogicFeatures(LogicFeatureSet Features);
 const char *logicSortName(LogicSortKind Kind);
 std::string formatLogicSort(const LogicSort &Sort);
 
+/// Where a term comes from: its anchor (Line, Column), where a diagnostic
+/// points and a stable ID is built, in the source it spans, from its begin to
+/// the column after its last character.
 struct ObligationSource {
   std::string File;
   unsigned Line = 0;
   unsigned Column = 0;
   unsigned EndLine = 0;
   unsigned EndColumn = 0;
+  /// The start of the span, before the anchor (an operator's operands);
+  /// zero when it is the anchor.
+  unsigned BeginLine = 0;
+  unsigned BeginColumn = 0;
 
   bool isValid() const { return !File.empty() && Line != 0; }
   bool hasRange() const { return isValid() && EndLine != 0; }
+  unsigned beginLine() const { return BeginLine ? BeginLine : Line; }
+  unsigned beginColumn() const { return BeginLine ? BeginColumn : Column; }
 };
 
 class LogicExpr;

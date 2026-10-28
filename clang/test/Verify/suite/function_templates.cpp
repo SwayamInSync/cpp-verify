@@ -65,7 +65,7 @@ signed char twice_char(signed char x)
 // CHECK-DAG: Unresolved: twice_char [backend=z3] [reason=callee.contract] (relies on the contract of twice<signed char>, which is not established)
 // NOTE: error: verification failed: twice<signed char>
 // NOTE: function_templates.cpp:[[@LINE-9]]:19: note: in instantiation of function template specialization 'twice<signed char>' requested here
-// JSON: "function":"twice<signed char>","instantiated_at":{"column":19,"end_column":19,"end_line":[[@LINE-10]],"file":"{{.*}}function_templates.cpp","line":[[@LINE-10]]}
+// JSON: "function":"twice<signed char>",{{.*}}"instantiated_at":{"column":19,"end_column":24,"end_line":[[@LINE-10]],"file":"{{.*}}function_templates.cpp","line":[[@LINE-10]]}
 
 // A recursive template calls its own specialization.
 template <typename T>

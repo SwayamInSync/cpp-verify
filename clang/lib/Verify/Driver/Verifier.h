@@ -32,7 +32,9 @@ inline constexpr uint64_t DefaultMaxQueryNodes = 4000000;
 /// The megabytes Z3's queries may allocate together, and each cvc5 process.
 inline constexpr uint64_t DefaultMemoryLimitMB = 8192;
 
-enum class DiagnosticFormat { Text, Json };
+/// How results are printed: text, JSON Lines (cppverify.diagnostic/2), or
+/// text with a GitHub workflow annotation after each error and warning.
+enum class DiagnosticFormat { Text, Json, GitHub };
 
 /// Which obligations of an unresolved module --lean-fallback exports.
 enum class LeanFallbackScope {

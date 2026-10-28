@@ -25,6 +25,8 @@ class Archive:
         self.measures = []
         # What schema 4 adds: where each diagnostic variable is defined.
         self.guard_spans = []
+        # What schema 5 adds: the begin of each source range.
+        self.begin_spans = []
         self.modules = []
 
     def u8(self):
@@ -77,6 +79,11 @@ class Archive:
                 end_line = self.u32()
                 end_column_offset = self.offset
                 end_column = self.u32()
+                if self.version >= 5:
+                    start = self.offset
+                    self.u32()
+                    self.u32()
+                    self.begin_spans.append((start, self.offset))
                 result = {
                     "line": line,
                     "line_offset": line_offset,
@@ -376,6 +383,8 @@ parser.add_argument(
         "schema-v1-kinds",
         "schema-v2",
         "schema-v3",
+        "schema-v4",
+        "invalid-source-begin",
         "invalid-guard-flag",
         "measure-free-variable",
         "truncated",
@@ -391,11 +400,21 @@ archive.parse()
 
 if args.mode == "invalid-kind":
     archive.data[archive.expression_kind_offsets[0]] = 255
-elif args.mode == "schema-v3":
+elif args.mode in ("schema-v3", "schema-v4"):
+    version = 3 if args.mode == "schema-v3" else 4
     for offset in archive.version_offsets:
-        struct.pack_into("<I", archive.data, offset, 3)
-    # Records before schema 4 say nothing of where a variable is defined.
-    for start, end in sorted(archive.guard_spans, reverse=True):
+        struct.pack_into("<I", archive.data, offset, version)
+    # Records before schema 5 have no range begins, and those before schema 4
+    # nothing of where a variable is defined; a begin inside a guard goes
+    # with it.
+    spans = sorted(archive.begin_spans +
+                   (archive.guard_spans if version == 3 else []))
+    outer = [
+        span
+        for span in spans
+        if not any(o != span and o[0] <= span[0] and span[1] <= o[1] for o in spans)
+    ]
+    for start, end in reversed(outer):
         del archive.data[start:end]
 elif args.mode in ("schema-v1", "schema-v1-kinds", "schema-v2"):
     for offset in archive.version_offsets:
@@ -407,7 +426,8 @@ elif args.mode in ("schema-v1", "schema-v1-kinds", "schema-v2"):
                 archive.data[offset] = 1
     # Records before schema 3 have no measures or premises, and none before
     # schema 4 a variable's guard; a premise inside a measure goes with it.
-    spans = sorted(archive.measure_spans + archive.guard_spans)
+    spans = sorted(archive.measure_spans + archive.guard_spans +
+                   archive.begin_spans)
     outer = [
         span
         for span in spans
@@ -415,6 +435,15 @@ elif args.mode in ("schema-v1", "schema-v1-kinds", "schema-v2"):
     ]
     for start, end in reversed(outer):
         del archive.data[start:end]
+elif args.mode == "invalid-source-begin":
+    # A range whose begin lies after its anchor.
+    begin = next(
+        (start for start, _ in archive.begin_spans), None
+    )
+    if begin is None:
+        raise ValueError("archive has no source range begin")
+    struct.pack_into("<I", archive.data, begin, 0xFFFFFFF0)
+    struct.pack_into("<I", archive.data, begin + 4, 1)
 elif args.mode == "invalid-guard-flag":
     if not archive.guard_spans:
         raise ValueError("archive has no diagnostic variable")

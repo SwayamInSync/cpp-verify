@@ -15,7 +15,7 @@
 # RUN: %python %S/Inputs/mutate_obligation_archive.py truncated %t.one %t.truncated
 # RUN: not %cpp-verify --obligation-in=%t.truncated 2>&1 | FileCheck %s --check-prefix=TRUNCATED
 # RUN: cp %t.one %t.version
-# RUN: printf '\005\000\000\000' | dd of=%t.version bs=1 seek=8 conv=notrunc 2>/dev/null
+# RUN: printf '\006\000\000\000' | dd of=%t.version bs=1 seek=8 conv=notrunc 2>/dev/null
 # RUN: not %cpp-verify --obligation-in=%t.version 2>&1 | FileCheck %s --check-prefix=VERSION
 # RUN: %python %S/Inputs/mutate_obligation_archive.py schema-v1 %t.one %t.schema-v1
 # RUN: not %cpp-verify --obligation-in=%t.schema-v1 2>&1 | FileCheck %s --check-prefix=SCHEMA-V1
@@ -25,6 +25,10 @@
 # RUN: %cpp-verify --obligation-in=%t.schema-v2 --backend=z3 | FileCheck %s --check-prefix=SCHEMA-V2
 # RUN: %python %S/Inputs/mutate_obligation_archive.py schema-v3 %t.one %t.schema-v3
 # RUN: %cpp-verify --obligation-in=%t.schema-v3 --backend=z3 | FileCheck %s --check-prefix=SCHEMA-V3
+# RUN: %python %S/Inputs/mutate_obligation_archive.py schema-v4 %t.one %t.schema-v4
+# RUN: %cpp-verify --obligation-in=%t.schema-v4 --backend=z3 | FileCheck %s --check-prefix=SCHEMA-V3
+# RUN: %python %S/Inputs/mutate_obligation_archive.py invalid-source-begin %t.one %t.source-begin
+# RUN: not %cpp-verify --obligation-in=%t.source-begin 2>&1 | FileCheck %s --check-prefix=SOURCE-BEGIN
 # RUN: %python %S/Inputs/mutate_obligation_archive.py invalid-guard-flag %t.one %t.guard-flag
 # RUN: not %cpp-verify --obligation-in=%t.guard-flag 2>&1 | FileCheck %s --check-prefix=GUARD-FLAG
 # A measure is read like a definition, over the function's parameters.
@@ -103,7 +107,7 @@
 
 # REPLAY: Proved obligations: canonical_obligations (dependencies not checked in replay) [backend=z3] [semantic-hash=sha256:{{[0-9a-f]+}}]
 # LOWER: vc canonical_obligations
-# LOWER: schema cppverify.obligation/4
+# LOWER: schema cppverify.obligation/5
 # LOWER: (let
 # LOWER: Lowered: canonical_obligations [backend=z3] [semantic-hash=sha256:{{[0-9a-f]+}}]
 # LEAN: Exported: lean obligation: canonical_obligations [backend=lean]
@@ -117,6 +121,7 @@
 # SCHEMA-V2: Proved obligations: canonical_obligations (dependencies not checked in replay) [backend=z3]
 # SCHEMA-V3: Proved obligations: canonical_obligations (dependencies not checked in replay) [backend=z3]
 # GUARD-FLAG: error: invalid obligation archive: invalid diagnostic variable guard in obligation archive
+# SOURCE-BEGIN: error: invalid obligation archive: source range begins after its anchor
 # MEASURE: error: invalid obligation archive: logical function definition has a free variable: z
 # KIND: error: invalid obligation archive: invalid expression kind in obligation archive
 # FEATURES: error: invalid obligation archive: obligation archive feature declaration does not match contents

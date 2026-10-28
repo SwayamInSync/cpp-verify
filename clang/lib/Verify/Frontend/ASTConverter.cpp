@@ -2432,6 +2432,7 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
       }
       llvm::SaveAndRestore Owner(ErrorFunction, functionIdentity(FD));
       llvm::SaveAndRestore OwnerName(ErrorFunctionName, functionName(FD));
+      llvm::SaveAndRestore OwnerLoc(ErrorFunctionLoc, FD->getLocation());
       llvm::SaveAndRestore InContract(ErrorInContract, true);
       error(FD->getLocation(),
             FD->getQualifiedNameAsString() + ": " + *UnsupportedMember);
@@ -3245,6 +3246,7 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   llvm::SaveAndRestore At(CurrentRange, SourceRange(FD->getLocation()));
   llvm::SaveAndRestore Owner(ErrorFunction, functionIdentity(FD));
   llvm::SaveAndRestore OwnerName(ErrorFunctionName, functionName(FD));
+  llvm::SaveAndRestore OwnerLoc(ErrorFunctionLoc, FD->getLocation());
   llvm::SaveAndRestore InContract(ErrorInContract, true);
   const size_t ErrorsAtStart = Errors.size();
   const FunctionContractInfo *FCI = functionContract(FD);
@@ -4266,6 +4268,7 @@ std::unique_ptr<VFunction>
 ASTConverter::convertConstexprSpec(const FunctionDecl *FD) {
   llvm::SaveAndRestore Owner(ErrorFunction, functionIdentity(FD));
   llvm::SaveAndRestore OwnerName(ErrorFunctionName, functionName(FD));
+  llvm::SaveAndRestore OwnerLoc(ErrorFunctionLoc, FD->getLocation());
   llvm::SaveAndRestore InContract(ErrorInContract, true);
   const size_t ErrorsAtStart = Errors.size();
   nameParameters(FD, FD);

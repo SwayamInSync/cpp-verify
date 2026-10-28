@@ -39,8 +39,8 @@ ORDER: mathx.h:2:42: error: verification failed: clamp100
 ORDER: Unresolved: scaled [backend=z3] [reason=callee.contract] (relies on the contract of clamp100, which its verification in {{.*}}mathx.cpp does not establish)
 ORDER: Summary: 1 failed, 2 unresolved (callee.contract 2)
 
-JSON: {"backend":"z3","function":"scaled","message":"scaled [backend=z3] [reason=callee.contract] (relies on the contract of clamp100, which its verification in {{.*}}mathx.cpp does not establish)","reason":"callee.contract",{{.*}}"status":"unresolved"}
-JSON: "function":"clamp100","message":"verification failed: clamp100
+JSON: {"backend":"z3","function":"scaled",{{.*}}"message":"scaled [backend=z3] [reason=callee.contract] (relies on the contract of clamp100, which its verification in {{.*}}mathx.cpp does not establish)","reason":"callee.contract",{{.*}}"status":"unresolved"}
+JSON: "function":"clamp100",{{.*}}"message":"verification failed: clamp100
 
 A file alone is as before: the contract has no definition.
 ALONE: mathx.h:1:5: warning: clamp100 has a contract but no definition, so its callers are not verified; mark the declaration {{\[\[cppverify::trusted\]\]}} to assume the contract

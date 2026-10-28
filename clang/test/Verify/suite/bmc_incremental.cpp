@@ -69,7 +69,7 @@ int open_frontier(int limit)
 // JSON: "bound":0,"explored_bounds":[0],"function":"loop_free"
 // JSON: "bound":2,"explored_bounds":[0,1,2],"function":"completes_at_two"
 // JSON-SAME: "reused_queries":{{[1-9][0-9]*}}
-// JSON: "bound":2,"explored_bounds":[0,1,2],"function":"bug_on_second_iteration"
+// JSON: "bound":2,{{.*}}"explored_bounds":[0,1,2],"function":"bug_on_second_iteration"
 // JSON-SAME: "message":"iteration 1"
 // JSON-SAME: "message":"iteration 2"
 // JSON: "bound":4,"explored_bounds":[0,1,2,3,4],"function":"open_frontier"

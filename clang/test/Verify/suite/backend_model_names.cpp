@@ -15,4 +15,4 @@ unsigned renamed_parameter(unsigned implementation_name) {
 // JSON: "name":"implementation_name"
 // JSON-SAME: "sort":"u32"
 // JSON-SAME: "ssa_name":"interface_name_0"
-// JSON-SAME: "schema":"cppverify.diagnostic/1"
+// JSON-SAME: "schema":"cppverify.diagnostic/2"

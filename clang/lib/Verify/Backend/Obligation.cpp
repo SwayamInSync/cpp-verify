@@ -558,6 +558,15 @@ static bool validateSource(const ObligationSource &Source, std::string &Error) {
     Error = "source range end precedes its start";
     return false;
   }
+  if ((Source.BeginLine == 0) != (Source.BeginColumn == 0)) {
+    Error = "source range has an incomplete begin";
+    return false;
+  }
+  if (Source.BeginLine > Source.Line ||
+      (Source.BeginLine == Source.Line && Source.BeginColumn > Source.Column)) {
+    Error = "source range begins after its anchor";
+    return false;
+  }
   return true;
 }
 

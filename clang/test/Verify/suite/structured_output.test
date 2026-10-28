@@ -1,0 +1,105 @@
+# Results as records: JSON Lines of cppverify.diagnostic/2, ending with a
+# cppverify.summary/1 record; one SARIF 2.1.0 log made of the same records;
+# and, in GitHub mode, the text with a workflow annotation after each error and
+# warning. The compiler's own diagnostics are records too. A record's source
+# spans its expression, from its first column to the one after its last.
+#
+# RUN: not %cpp-verify --jobs=1 --diagnostics-format=json %S/Inputs/structured_output.cpp -- 2>/dev/null \
+# RUN:   | FileCheck %s --check-prefix=JSON
+# RUN: not %cpp-verify --jobs=1 --diagnostics-format=sarif %S/Inputs/structured_output.cpp -- 2>/dev/null \
+# RUN:   | FileCheck %s --check-prefix=SARIF
+# RUN: not %cpp-verify --diagnostics-format=json %S/Inputs/structured_syntax_error.cpp -- 2>/dev/null \
+# RUN:   | FileCheck %s --check-prefix=FRONTEND
+# RUN: not %cpp-verify --jobs=1 --obligation-out=%t.cpv %S/Inputs/structured_output.cpp -- > /dev/null 2>&1
+# RUN: not %cpp-verify --obligation-in=%t.cpv --diagnostics-format=sarif 2>/dev/null \
+# RUN:   | FileCheck %s --check-prefix=REPLAY
+# RUN: cd %S/Inputs && not %cpp-verify --jobs=1 --diagnostics-format=github structured_output.cpp -- 2>/dev/null \
+# RUN:   | FileCheck %s --check-prefix=GITHUB
+
+The compiler's warning comes first, with its notes as related locations.
+JSON:      {"message":"using the result of an assignment as a condition without parentheses","option":"-Wparentheses","related":[{"message":"place parentheses around the assignment to silence this warning","source":{"column":9,"end_column":9,"end_line":26,"file":"{{.*}}structured_output.cpp","line":26}},{"message":"use '==' to turn this assignment into an equality comparison","source":{{.*}}}],"schema":"cppverify.diagnostic/2","severity":"warning","source":{"column":7,"end_column":12,"end_line":26,"file":"{{.*}}structured_output.cpp","line":26},"status":"frontend"}
+Every result names its function and where it is declared.
+JSON-NEXT: {"backend":"z3","function":"inc","function_source":{"column":5,"end_column":8,"end_line":3,"file":"{{.*}}structured_output.cpp","line":3},"message":"inc [backend=z3]","schema":"cppverify.diagnostic/2","severity":"note","status":"verified"}
+A failure spans the expression it checks, and gives its counterexample and
+the steps of its path as the text prints them.
+JSON-NEXT: {"backend":"z3","counterexample":"x = {{-[0-9]+}}, result = {{-?[0-9]+}}","function":"clamp"
+JSON-SAME: "obligation":{"id":"{{.*}}::postcondition@11:23","kind":"postcondition","source":{"column":12,"end_column":27,"end_line":11,"file":"{{.*}}structured_output.cpp","line":11}}
+JSON-SAME: "source":{"column":12,"end_column":27,"end_line":11,"file":"{{.*}}structured_output.cpp","line":11},"status":"failed"
+JSON-SAME: "text":"takes the true branch"
+JSON-SAME: "text":"returns {{-?[0-9]+}}"
+JSON-NEXT: "function":"never"{{.*}}"status":"verified","vacuous":true}
+JSON-NEXT: {"function":"never","function_source":{"column":5,"end_column":10,"end_line":18,"file":"{{.*}}structured_output.cpp","line":18},"message":"never: the precondition is unsatisfiable, so every claim about it holds vacuously","schema":"cppverify.diagnostic/2","severity":"warning","status":"warning"}
+The run ends with its counts.
+JSON-NEXT: {"bounded_safe":0,"exported":0,"failed":1,"interrupted":0,"lowered":0,"reasons":{},"schema":"cppverify.summary/1","trusted":0,"unresolved":0,"verified":2}
+JSON-NOT: {{.}}
+
+SARIF:      "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json",
+SARIF:      "uri": "file://{{.*}}/Inputs/structured_output.cpp"
+SARIF:      "executionSuccessful": true,
+SARIF-NEXT: "exitCode": 1
+SARIF:      "summary": {
+SARIF:      "failed": 1,
+SARIF:      "verified": 2
+SARIF:      "results": [
+The compiler's warning, its notes as related locations.
+SARIF:      "kind": "fail",
+SARIF-NEXT: "level": "warning",
+SARIF:      "text": "using the result of an assignment as a condition without parentheses"
+SARIF:      "option": "-Wparentheses",
+SARIF:      "relatedLocations": [
+SARIF:      "text": "place parentheses around the assignment to silence this warning"
+SARIF:      "ruleId": "frontend",
+A proof passes.
+SARIF:      "kind": "pass",
+SARIF-NEXT: "level": "none",
+SARIF:      "name": "inc"
+SARIF:      "text": "Verified: inc [backend=z3]"
+SARIF:      "ruleId": "verified",
+A failure fails, its path a code flow and its rule the kind of check.
+SARIF:      "codeFlows": [
+SARIF:      "text": "takes the true branch"
+SARIF:      "startLine": 13
+SARIF:      "text": "returns {{-?[0-9]+}}"
+SARIF:      "kind": "fail",
+SARIF-NEXT: "level": "error",
+SARIF:      "endColumn": 27,
+SARIF-NEXT: "endLine": 11,
+SARIF-NEXT: "startColumn": 12,
+SARIF-NEXT: "startLine": 11
+SARIF:      "text": "verification failed: clamp [postcondition] [backend=z3] [reason=counterexample]\ncounterexample: x = {{-[0-9]+}}, result = {{-?[0-9]+}}"
+SARIF:      "obligation": "{{.*}}::postcondition@11:23",
+SARIF:      "ruleId": "postcondition",
+SARIF:      "text": "Verified: never [backend=z3] [vacuous]"
+A warning of the verifier.
+SARIF:      "kind": "fail",
+SARIF-NEXT: "level": "warning",
+SARIF:      "ruleId": "warning",
+SARIF:      "tool": {
+SARIF:      "name": "cpp-verify",
+SARIF:      "rules": [
+SARIF:      "id": "frontend",
+SARIF:      "id": "verified",
+SARIF:      "level": "error"
+SARIF-NEXT: },
+SARIF:      "id": "postcondition",
+SARIF:      "version": "2.1.0"
+
+A compiler error is a record of its own, and nothing is verified.
+FRONTEND:      {"message":"expected ';' after return statement","schema":"cppverify.diagnostic/2","severity":"error","source":{"column":11,"end_column":11,"end_line":4,"file":"{{.*}}structured_syntax_error.cpp","line":4},"status":"frontend"}
+FRONTEND-NEXT: {{.*}}"failed":0,{{.*}}"schema":"cppverify.summary/1",{{.*}}"verified":0}
+
+An archive keeps the range a failure spans.
+REPLAY:      "kind": "fail",
+REPLAY-NEXT: "level": "error",
+REPLAY:      "endColumn": 27,
+REPLAY-NEXT: "endLine": 11,
+REPLAY-NEXT: "startColumn": 12,
+REPLAY-NEXT: "startLine": 11
+REPLAY:      "ruleId": "postcondition",
+
+GitHub's annotations name files relative to the working directory.
+GITHUB:      ::warning file=structured_output.cpp,line=26,col=7,endLine=26,endColumn=12,title=clang::using the result of an assignment as a condition without parentheses
+GITHUB:      Verified: inc [backend=z3]
+GITHUB:      ::error file=structured_output.cpp,line=11,col=12,endLine=11,endColumn=27,title=cpp-verify%3A postcondition::verification failed: clamp [postcondition] [backend=z3] [reason=counterexample]%0Acounterexample: x = {{-[0-9]+}}, result = {{-?[0-9]+}}
+GITHUB:      ::warning file=structured_output.cpp,line=18,col=5,endLine=18,endColumn=10,title=cpp-verify::never: the precondition is unsatisfiable, so every claim about it holds vacuously
+GITHUB:      Summary: 2 verified, 1 failed
