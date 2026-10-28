@@ -1746,6 +1746,12 @@ For by-value parameters this is purely an optimization — correctness is identi
   checkpoint — matching how Dafny/Verus check constructors.
 - Pointer-to-record parameters are not injected (their field access lowers to a
   heap Load).
+- On classes with member functions, a loop outside the class keeps the class
+  invariant of every object it reaches (the local objects alive at it, and
+  the objects its function's reference and pointer parameters address): it
+  is added to the loop's invariants and proved there like the user's.
+  Members of the class may break it between calls, so their loops get none
+  of their class's.
 
 ## View Functions (idiomatic spec abstraction)
 
@@ -1890,7 +1896,7 @@ int safe_fib(int n) cppverify::pre(...) cppverify::post(cppverify::result == fib
 
 ## hide / reveal
 
-- `cppverify::hide(fn_name)` and `cppverify::reveal(fn_name)` are statements, accepted anywhere in a function body or ghost block, that control whether the body of a spec function is visible to Z3 in the whole function.
+- `cppverify::hide(fn_name)` and `cppverify::reveal(fn_name)` are statements, accepted anywhere in a function body or ghost block, that control whether the body of a spec function is visible to Z3 in the whole function. A specialization of a spec template is named with its arguments (`cppverify::hide(at<4>)`), resolved as C++ resolves a template-id; the template's name alone is an error.
 - Default for non-recursive specs: visible (body inlined into queries).
 - Default for recursive specs: one finite unfolding step. Deeper unfolding
   requires `cppverify::reveal_with_fuel`.
