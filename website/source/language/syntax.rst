@@ -303,9 +303,11 @@ a spec or proof function or a namespace alias, goes in a block of its own:
 
    Verified: double_by_steps [backend=z3]
 
-A failure inside the macro's argument is reported where the clause is
-written, in the header. ``#if __cppverify_major__ > 0 || __cppverify_minor__
->= 3`` selects code for a later release. The name ``CPPVERIFY`` is only an
+A failure is shown as Clang shows its own errors: inside a macro's argument
+where the argument is written, with a note naming the macro, and inside a
+macro's body where the macro is used; the line and column of the JSON record
+and of the obligation's ID are the same place. ``#if __cppverify_major__ > 0 ||
+__cppverify_minor__ >= 3`` selects code for a later release. The name ``CPPVERIFY`` is only an
 example: no header defines it, and a project may choose its own.
 
 Macros named like a construct
