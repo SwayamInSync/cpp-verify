@@ -453,6 +453,20 @@ a synthesized spec (`IsBuiltin`, identity `__cppverify_table.<name>@L:C` or
 `__cppverify_string@L:C`) whose body is a balanced comparison tree over the
 linear index.
 
+**Bit builtins:** `ASTConverter::convertBitBuiltin` lowers a call of
+`__builtin_clz`, `ctz`, `popcount`, `parity`, `ffs` (and their `l`/`ll`
+forms) or `bswap16/32/64` to its definition over the operand, read as an
+unsigned machine value of the parameter's width (a mathematical argument
+converts to the parameter's type first, as a bitwise operand does): `clz`
+and `ctz` are a ladder of conditionals on `x & 2^k != 0` with literal
+results, `popcount` and `parity` a balanced sum of one-bit terms in a byte
+(at most 64, so its adders stay small), and `bswap` the bits moved to their
+places, combined with `|` since no two meet. None of these operations has a
+check of its own. `clz` and `ctz` are wrapped in
+`ite(Require(x != 0, builtin-argument), v, v)`, except in an explicit spec,
+which is total and counts every bit of 0. Summing the bits at the operand's
+width made `parity` of a `popcount` take 6 s; in a byte it takes 0.8 s.
+
 **Require:** produced by the spec inliner from the `assert`
 statements of a lifted `constexpr` helper's body (`evalBodySeq`): on the
 path `g` to `assert(c)` it adds `Require(!g || c, kind)` to the evaluation
@@ -2512,7 +2526,9 @@ around it (`PassiveStmt::Focus`, the condition's `Loc`, `BeginLoc`, and
 precondition at a call the call (`VCallStmt::CallSite`, the call
 expression, set by the converter's `atCall`) with the callee's clause
 (`PassiveStmt::Clause`); a call's own checks, whose conditions are anchored
-at the call statement, take the call expression as their focus. Layer 3
+at the call statement, take the call expression as their focus. A check that
+a postcondition is defined is anchored at the clause
+(`PassiveExitAssert::Anchor`), and its operation is its focus. Layer 3
 keeps both on the obligation (`Obligation::Focus`, `Clause`), as
 diagnostics only: archives keep their sources from schema v6, and hashes
 neither. When the driver annotates a module's sources it drops a focus that

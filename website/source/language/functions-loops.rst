@@ -42,6 +42,54 @@ type trait such as ``__is_same(T, U)``, ``offsetof``, and
 aliases, using-declarations, and local classes and enumerations declare
 names and do nothing at run time.
 
+GCC's bit builtins are their exact definitions over the operand's bits:
+``__builtin_clz``, ``__builtin_ctz``, ``__builtin_popcount``,
+``__builtin_parity``, and ``__builtin_ffs``, each with its ``l`` and ``ll``
+forms, and ``__builtin_bswap16``, ``__builtin_bswap32``, and
+``__builtin_bswap64``. GCC leaves the count of the leading or trailing zeros
+of 0 undefined, so ``__builtin_clz`` and ``__builtin_ctz`` check, where they
+are called, that their argument is not 0, a check of kind
+``builtin-argument``. In a spec, which is total, they count every bit of 0
+as zero, as C++20's ``std::countl_zero`` and ``std::countr_zero`` do.
+
+.. code-block:: cpp
+
+   namespace cv = cppverify;
+
+   int log2_floor(unsigned x)
+     cv::pre(x != 0)
+     cv::post(0 <= cv::result && cv::result < 32)
+     cv::post(x >= 1u << cv::result)
+   {
+     return 31 - __builtin_clz(x);
+   }
+
+   int top_bit(unsigned x)
+     cv::post(cv::result >= 0)
+   {
+     return 31 - __builtin_clz(x);
+   }
+
+   bool one_bit(unsigned x)
+     cv::post(cv::result == (x != 0 && (x & (x - 1)) == 0))
+   {
+     return __builtin_popcount(x) == 1;
+   }
+
+.. code-block:: text
+
+   Verified: log2_floor [backend=z3]
+   bits.cpp:14:15: error: verification failed: top_bit [builtin-argument] [backend=z3] [reason=counterexample]
+      14 |   return 31 - __builtin_clz(x);
+         |               ^~~~~~~~~~~~~~~~
+   bits.cpp:14:15: note: counterexample: x = 0
+   Verified: one_bit [backend=z3]
+   Summary: 2 verified, 1 failed in 0.2 s
+
+Before 0.2 a call of one of them stopped its function (``call to function
+without a verification contract: __builtin_clz``), and a ``static_assert``
+with a message stopped the run.
+
 A caller's proof uses its callees' contracts, so a verdict is only as good as
 those contracts. A caller whose proof relies on a callee contract that the
 callee's own verification did not establish is ``Unresolved`` with reason

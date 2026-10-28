@@ -504,6 +504,19 @@ value evaluates the value, and a value computed for nothing (`x + 1;`) is
 computed with its checks. `[[assume(e)]]` and `__builtin_assume(e)` make `e`
 false undefined, so `e` is asserted (kind `assertion`), then assumed.
 
+### Bit builtins
+
+`__builtin_clz`, `__builtin_ctz`, `__builtin_popcount`, `__builtin_parity`,
+`__builtin_ffs` (with their `l` and `ll` forms), and `__builtin_bswap16/32/64`
+are their exact definitions over the operand's bits, as CBMC models them
+rather than trusting a contract: comparisons with constants, conditionals,
+and sums without carries, none of which needs a check of its own. GCC leaves
+`__builtin_clz(0)` and `__builtin_ctz(0)` undefined, which is an obligation of
+the definedness kind `builtin-argument` where the call is evaluated, as
+Frama-C's libc specifies them with `requires x != 0`; in a spec, which is
+total, they count every bit of 0, as C++20's `std::countl_zero` does. Other
+builtins stay unsupported.
+
 An uncontracted `constexpr` helper is lifted as a spec whose definedness is
 checked at each call by unfolding its body. Its `assert(c)` becomes, during
 that unfolding, a `Require(!path || c)` expression in the evaluation, true

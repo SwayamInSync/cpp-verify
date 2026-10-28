@@ -49,6 +49,9 @@ struct PassiveExitAssert {
   std::unique_ptr<VExpr> Cond;
   /// What an unsupported obligation stands for.
   std::string Note = {};
+  /// Where the check is reported and identified, when that is not its
+  /// condition: the clause, for a check that the clause is defined.
+  SourceSpan Anchor = {};
 };
 
 enum class PassiveTraceKind {

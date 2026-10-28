@@ -439,7 +439,7 @@ int modular_discarded_pointer_forwarding()
 // VERIFY-DAG: Unresolved: modular_copied_pointer_return {{.*}}[reason=construct.unsupported]
 // VERIFY-DAG: Unresolved: modular_unsafe_forwarding {{.*}}[reason=construct.unsupported]
 // VERIFY-DAG: Unresolved: modular_discarded_pointer_forwarding {{.*}}[reason=construct.unsupported]
-// VERIFY-DAG: :107:37: error: verification failed: unsafe_forwarded_read [bounds]
+// VERIFY-DAG: :107:55: error: verification failed: unsafe_forwarded_read [bounds]
 // VERIFY-DAG: Verified: modular_forwarded_scalar
 // VERIFY-DAG: Verified: modular_forwarded_temporary
 // VERIFY-DAG: Verified: modular_forwarded_control

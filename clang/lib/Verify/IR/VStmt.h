@@ -39,6 +39,7 @@ enum class ProofObligationKind {
   Deallocation,
   MissingReturn,
   Unreachable,
+  BuiltinArgument,
   Unsupported
 };
 

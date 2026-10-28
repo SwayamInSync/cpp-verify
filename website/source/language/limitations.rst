@@ -122,7 +122,10 @@ C++ feature boundaries
        requires-expression, a concept, a type trait, ``offsetof``,
        ``__builtin_LINE()``), template value
        parameters, default arguments and default member initializers,
-       ``__builtin_expect``, a record returned from an initializer list
+       ``__builtin_expect``, the bit builtins (``__builtin_clz``,
+       ``__builtin_ctz``, ``__builtin_popcount``, ``__builtin_parity``,
+       ``__builtin_ffs``, their ``l`` and ``ll`` forms, and
+       ``__builtin_bswap16/32/64``), a record returned from an initializer list
        (``return Pt{a, b};``), structured bindings that copy a record, and
        declarations that do nothing (``static_assert``, type aliases,
        using-declarations, local classes and enumerations).

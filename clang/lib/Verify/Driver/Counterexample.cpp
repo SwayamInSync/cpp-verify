@@ -193,6 +193,7 @@ bool isDefinedness(ObligationKind Kind) {
   case ObligationKind::Initialization:
   case ObligationKind::PointerDifference:
   case ObligationKind::PointerValidity:
+  case ObligationKind::BuiltinArgument:
     return true;
   default:
     return false;
@@ -289,8 +290,7 @@ FailurePlace verify::failingPlace(const ObligationModule &Module,
       return nullptr;
     }
     if (Generated && E->K == LogicExpr::Or && E->Children.size() == 2 &&
-        E->Children[0]->K == LogicExpr::Not && isFalse(E->Children[0].get()) &&
-        isFalse(E->Children[1].get()))
+        isFalse(E->Children[0].get()) && isFalse(E->Children[1].get()))
       if (const LogicExpr *Part = falsePart(E->Children[1].get()))
         return Part;
     return placed(E) ? E : nullptr;
