@@ -235,6 +235,9 @@ private:
   /// std::max(a, b), or std::min(a, b), of two integers, as the standard
   /// defines it.
   std::unique_ptr<VExpr> convertMinOrMax(const CallExpr *CE, bool IsMax);
+  /// A call of a bit-counting or byte-swapping builtin, by its definition;
+  /// nullopt for any other call.
+  std::optional<std::unique_ptr<VExpr>> convertBitBuiltin(const CallExpr *CE);
   void noteSpecUse(const FunctionDecl *FD);
   std::unique_ptr<VExpr> convertExpr(const Expr *E);
   std::unique_ptr<VExpr> convertExprImpl(const Expr *E);
