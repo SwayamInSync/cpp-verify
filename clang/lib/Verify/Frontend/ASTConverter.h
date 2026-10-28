@@ -117,6 +117,8 @@ class ASTConverter {
   /// The object `this` stands for while a class invariant is instantiated
   /// for a parameter: the pointer or reference that addresses it.
   const VExpr *ThisSubstitute = nullptr;
+  /// The function whose body is being converted.
+  const FunctionDecl *ConvertingDecl = nullptr;
   std::set<const VarDecl *> GhostLocals;
   unsigned DynamicProvenanceId = 0;
   unsigned DynamicPointerAssignmentId = 0;
@@ -485,6 +487,7 @@ private:
   std::string specIdentityFromExpr(const Expr *E);
   void injectTypeInvariants(const FunctionDecl *FD, VFunction &Fn);
   std::unique_ptr<VExpr> convertTypeInvariantExpr(const Expr *E);
+  void appendObjectInvariants(std::vector<std::unique_ptr<VExpr>> &Invariants);
   void emitReturnInvariantAssert(const Expr *RetE,
                                  std::vector<std::unique_ptr<VStmt>> &Out,
                                  SourceLocation Loc);

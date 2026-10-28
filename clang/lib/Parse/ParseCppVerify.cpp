@@ -1146,6 +1146,16 @@ StmtResult Parser::ParseContractAssert() {
       ContractAssertStmt(CALoc, LParenLoc, RParenLoc, Cond.get(), By);
 }
 
+/// \p Fn, the function a hide, reveal, or reveal_with_fuel names: a spec
+/// template specialization such as `at<4>` is an overload set until it is
+/// resolved to the one specialization it names.
+static ExprResult resolveNamedFunction(Sema &Actions, ExprResult Fn) {
+  if (Fn.isUsable() &&
+      Fn.get()->getType() == Actions.getASTContext().OverloadTy)
+    return Actions.CheckPlaceholderExpr(Fn.get());
+  return Fn;
+}
+
 /// Parse cppverify::reveal_with_fuel(fn, depth);
 StmtResult Parser::ParseRevealWithFuel() {
   SourceLocation Loc = ConsumeCppVerify();
@@ -1157,7 +1167,8 @@ StmtResult Parser::ParseRevealWithFuel() {
   }
   SourceLocation LParenLoc = ConsumeParen();
 
-  ExprResult Fn = finishCppVerifyExpression(ParseAssignmentExpression());
+  ExprResult Fn = resolveNamedFunction(
+      Actions, finishCppVerifyExpression(ParseAssignmentExpression()));
   if (Fn.isInvalid() || Tok.isNot(tok::comma)) {
     if (!Fn.isInvalid())
       Diag(Tok, diag::err_contract_expected_comma)
@@ -1193,7 +1204,8 @@ StmtResult Parser::ParseHideSpec() {
     return StmtError();
   }
   SourceLocation LParenLoc = ConsumeParen();
-  ExprResult Fn = finishCppVerifyExpression(ParseAssignmentExpression());
+  ExprResult Fn = resolveNamedFunction(
+      Actions, finishCppVerifyExpression(ParseAssignmentExpression()));
   if (Fn.isInvalid()) {
     SkipUntil(tok::r_paren, StopAtSemi);
     return StmtError();
@@ -1216,7 +1228,8 @@ StmtResult Parser::ParseRevealSpec() {
     return StmtError();
   }
   SourceLocation LParenLoc = ConsumeParen();
-  ExprResult Fn = finishCppVerifyExpression(ParseAssignmentExpression());
+  ExprResult Fn = resolveNamedFunction(
+      Actions, finishCppVerifyExpression(ParseAssignmentExpression()));
   if (Fn.isInvalid()) {
     SkipUntil(tok::r_paren, StopAtSemi);
     return StmtError();

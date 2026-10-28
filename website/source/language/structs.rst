@@ -441,9 +441,13 @@ and every other local keeps its value. The caller's own
 leave ``c.limit`` uninitialized; ``limit_of`` reads ``c.limit``, which
 ``no_limit`` never initializes.
 
-The address of a local is supported as a call argument only. Stored in a
-pointer variable (``Counter *q = &c;``), or formed through a local reference
-to a local (``&r.n``, ``r.buf``), it is still an error. Under
+The address of a local is supported as a call argument, and in a contract,
+where a spec it is passed to cannot keep it: ``size(&r)`` in a loop
+invariant or a ``cv::check`` of a local object ``r`` (the case study
+:doc:`../case-studies/ring-buffer` reads its ring through such views). Stored
+in a pointer variable (``Counter *q = &c;``), or formed through a local
+reference to a local (``&r.n``, ``r.buf``), it is still an error, and so is
+an address taken in ghost code, which could keep it. Under
 ``--no-check-ub`` the callee's accesses are not proved to lie in its object,
 so a call that passes a local record is ``construct.unsupported``.
 
@@ -948,6 +952,69 @@ internal calls included, so no call observes the object while it is broken:
   entry as in a precondition (`Extents of pointer fields`_). At exit it
   states nothing; the next call checks it from what its caller knows, so a
   member function that changes ``len`` states how.
+- A loop outside the class keeps the invariant of every object it reaches:
+  the local objects alive at the loop and those its function's reference
+  and pointer parameters address. Only the class's members, and code that
+  writes a public field, change what the invariant states, and a public
+  member keeps it, so the verifier adds it to the loop's invariants, where
+  it is checked at entry and kept by every iteration like the user's own.
+  A loop in a member function of the class gets none of its class's, since
+  the member may break it between calls.
+
+.. code-block:: cpp
+
+   class Tally {
+   public:
+     Tally() cv::post(count_of(this) == 0) : count(0), last(0) {}
+
+     void add(int d)
+       cv::pre(0 <= d && d <= 10 && count_of(this) <= 1000)
+       cv::post(count_of(this) == cv::old(count_of(this)) + d)
+     {
+       last = d;
+       count = count + d;
+     }
+
+     friend cv::spec int count_of(const Tally *t);
+
+   private:
+     int count;
+     int last;
+
+   public:
+     cv::type_invariant(0 <= last && last <= count);
+   };
+
+   cv::spec int count_of(const Tally *t) { return t->count; }
+
+   int count_to(int n)
+     cv::pre(0 <= n && n <= 100)
+     cv::post(cv::result == n)
+   {
+     Tally t;
+     int i = 0;
+     while (i < n)
+       cv::invariant(0 <= i && i <= n && count_of(&t) == i)
+       cv::decreases(n - i)
+     {
+       t.add(1);
+       i = i + 1;
+     }
+     return i;
+   }
+
+.. code-block:: text
+
+   Verified: Tally::Tally [backend=z3]
+   Verified: Tally::add [backend=z3]
+   Verified: count_to [backend=z3]
+
+Before 0.2, ``count_to`` was rejected: ``&t`` could not appear in a contract
+(``raw address-of is unsupported until lexical lifetime and escape effects
+are modeled``). A loop that called ``add`` on an object a reference
+parameter names failed at that call (``[type-invariant]``): at the loop the
+verifier knew of the object only what the loop's invariants said, and an
+invariant over private fields could not be stated there.
 
 Class templates
 ---------------

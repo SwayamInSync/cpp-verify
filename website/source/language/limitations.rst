@@ -152,8 +152,8 @@ C++ feature boundaries
        temporaries/lifetime extension, reference members, and forwarding; a
        local not fully initialized passed to a callee
        (``construct.unsupported``), the address of a local stored in a
-       variable, and a pointer formed through a local reference to a local
-       record.
+       variable or taken in ghost code, and a pointer formed through a local
+       reference to a local record.
    * - Arrays
      - Pointer-parameter indexing, quantified abstract buffers, fixed
        local arrays (including arrays of records and multidimensional arrays)
@@ -260,7 +260,11 @@ CppVerify does not yet model:
 - base subobjects, vtables, or virtual dispatch;
 - temporary materialization and lifetime extension;
 - exception cleanup and exactly-once destruction;
-- placement construction, lifetime restart, or ``std::launder``.
+- placement construction, lifetime restart, or ``std::launder``;
+- spec member functions (``cv::spec int at(int i) const``), and spec
+  parameters of class reference type (``const Ring<N> &``): a view of a
+  class is a free spec function that takes a pointer, a friend when it reads
+  private fields (:doc:`../case-studies/ring-buffer`).
 
 Scalar parameter references, local scalar aliases, and scalar field/element
 bindings into promoted local objects are addressable aliases. General aggregate
