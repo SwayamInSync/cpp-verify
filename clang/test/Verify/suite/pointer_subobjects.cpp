@@ -206,7 +206,7 @@ int past_end(const Outer *p, int i)
 {
   return p->buf[i];
 }
-// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: past_end [bounds]
+// CHECK-DAG: :[[@LINE-2]]:10: error: verification failed: past_end [bounds]
 // CHECK-DAG: note: counterexample: {{.*}}i = 8{{( ->|,|$)}}
 
 int below_zero(const Outer *p, int i)
@@ -224,7 +224,7 @@ int post_past_end(const Ring *r, int i)
 {
   return 0;
 }
-// CHECK-DAG: :[[@LINE-4]]:50: error: verification failed: post_past_end [bounds]
+// CHECK-DAG: :[[@LINE-4]]:19: error: verification failed: post_past_end [bounds]
 // CHECK-DAG: note: counterexample: {{.*}}i = 8{{( ->|,|$)}}
 
 // grid[i][4] is grid[i + 1][0] in memory, but j indexes a row of 4.
@@ -233,7 +233,7 @@ int row_overflow(const Outer *p, int i, int j)
 {
   return p->grid[i][j];
 }
-// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: row_overflow [bounds]
+// CHECK-DAG: :[[@LINE-2]]:10: error: verification failed: row_overflow [bounds]
 // CHECK-DAG: note: counterexample: {{.*}}i = {{[0-2]}}{{( ->|,|$)}}{{.*}}j = 4{{( ->|,|$)}}
 
 void store_past_end(Outer *p, int i)
@@ -242,7 +242,7 @@ void store_past_end(Outer *p, int i)
 {
   p->buf[i] = 0;
 }
-// CHECK-DAG: :[[@LINE-2]]:13: error: verification failed: store_past_end [bounds]
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: store_past_end [bounds]
 // CHECK-DAG: note: counterexample: {{.*}}i = 8{{( ->|,|$)}}
 
 void slot_past_end(Ring *r, int i)
@@ -252,7 +252,7 @@ void slot_past_end(Ring *r, int i)
   int &slot = r->buf[i];
   slot = 0;
 }
-// CHECK-DAG: :[[@LINE-3]]:3: error: verification failed: slot_past_end [bounds]
+// CHECK-DAG: :[[@LINE-3]]:15: error: verification failed: slot_past_end [bounds]
 // CHECK-DAG: note: counterexample: {{.*}}i = 8{{( ->|,|$)}}
 
 void bump_past_end(Ring *r, int i)
