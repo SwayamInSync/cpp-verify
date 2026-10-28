@@ -4138,8 +4138,7 @@ ASTConverter::convertLoopCondition(const Stmt *Loop, const Expr *Cond,
     return std::make_unique<VLiteralExpr>(false, VType::makeBool(),
                                           Cond->getExprLoc());
   llvm::SaveAndRestore Sink(CallSink, Calls);
-  llvm::SaveAndRestore Hoisted(HoistedCalls,
-                               std::map<const CallExpr *, std::string>());
+  llvm::SaveAndRestore Hoisted(HoistedValues, decltype(HoistedValues)());
   return convertExpr(Cond);
 }
 
@@ -4687,6 +4686,11 @@ ASTConverter::convertArrowFieldAddress(const MemberExpr *M) {
   return nullptr;
 }
 
+static constexpr const char *OrderOpen =
+    ": C++ leaves the order of these operands open, and a call or a write in "
+    "one may change what the other reads; make it a statement of its own "
+    "first";
+
 std::optional<VPlace>
 ASTConverter::subscriptPlace(const ArraySubscriptExpr *AS) {
   if (!AS)
@@ -4698,13 +4702,12 @@ ASTConverter::subscriptPlace(const ArraySubscriptExpr *AS) {
     const bool BaseReads =
         !(isa<DeclRefExpr>(Base) && Base->getType()->isArrayType()) &&
         isHeapSensitive(AS->getBase());
+    const bool IndexReads = isHeapSensitive(AS->getIdx());
     if ((containsModifyingCall(AS->getIdx()) && BaseReads) ||
-        (containsModifyingCall(AS->getBase()) &&
-         isHeapSensitive(AS->getIdx()))) {
-      error(CurrentFn->Name +
-            ": C++ leaves the order of these operands open, and a call in "
-            "one may write what the other reads; make the call in a statement "
-            "of its own first");
+        (containsModifyingCall(AS->getBase()) && IndexReads) ||
+        writesWhatReads(AS->getIdx(), AS->getBase(), BaseReads) ||
+        writesWhatReads(AS->getBase(), AS->getIdx(), IndexReads)) {
+      error(CurrentFn->Name + OrderOpen);
       return std::nullopt;
     }
   }
@@ -6597,6 +6600,8 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
           machineOperand(std::move(Op), U->getSubExpr()->getType(), Ctx), Ty,
           E->getExprLoc());
     }
+    if (U->isIncrementDecrementOp() && CallSink && !InContractExpression)
+      return hoistSideEffect(U);
     error(CurrentFn->Name + ": unsupported unary operator");
     return nullptr;
   }
@@ -6612,6 +6617,22 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
                                        Place->takeAccessCondition());
   }
   if (const auto *B = dyn_cast<BinaryOperator>(E)) {
+    if (B->isAssignmentOp() && CallSink && !InContractExpression)
+      return hoistSideEffect(B);
+    // A comma's left operand is evaluated first, once, its value discarded.
+    if (B->getOpcode() == BO_Comma && CallSink && !InContractExpression) {
+      if (!HoistedValues.count(B)) {
+        const size_t ErrorCount = Errors.size();
+        std::vector<std::unique_ptr<VStmt>> Discarded =
+            convertStmt(B->getLHS());
+        if (Errors.size() != ErrorCount)
+          return nullptr;
+        for (auto &S : Discarded)
+          CallSink->push_back(std::move(S));
+        HoistedValues[B] = {};
+      }
+      return convertExpr(B->getRHS());
+    }
     std::optional<VBinOp> Op = convertBinOpcode(B->getOpcode());
     if (!Op) {
       error(CurrentFn->Name + ": unsupported binary operator");
@@ -6622,10 +6643,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     // The operands are unsequenced: any order must give the same values.
     if (CallSink && !B->isLogicalOp() &&
         orderDependent(B->getLHS(), B->getRHS())) {
-      error(CurrentFn->Name +
-            ": C++ leaves the order of these operands open, and a call in "
-            "one may write what the other reads; make the call in a statement "
-            "of its own first");
+      error(CurrentFn->Name + OrderOpen);
       return nullptr;
     }
     if (IntMode == VIntMode::Math &&
@@ -7253,8 +7271,8 @@ void ASTConverter::convertExecCallArgs(
       if (orderDependent(CE->getArg(I), CE->getArg(J))) {
         error(CurrentFn->Name +
               ": C++ leaves the order of these call arguments open, and a "
-              "call in one may write what another reads; make the call in a "
-              "statement of its own first");
+              "call or a write in one may change what another reads; make it "
+              "a statement of its own first");
         return;
       }
 
@@ -7377,9 +7395,105 @@ bool ASTConverter::isHeapSensitive(const Stmt *S) const {
       S->children(), [&](const Stmt *Child) { return isHeapSensitive(Child); });
 }
 
+void ASTConverter::collectWrites(const Stmt *S,
+                                 std::set<const VarDecl *> &Written,
+                                 bool &Memory) const {
+  if (!S)
+    return;
+  const Expr *Target = nullptr;
+  if (const auto *U = dyn_cast<UnaryOperator>(S);
+      U && U->isIncrementDecrementOp())
+    Target = U->getSubExpr();
+  else if (const auto *B = dyn_cast<BinaryOperator>(S);
+           B && B->isAssignmentOp())
+    Target = B->getLHS();
+  if (Target) {
+    // A field of a record held by value is part of the record's variable.
+    const Expr *Root = Target->IgnoreParenImpCasts();
+    while (const auto *Member = dyn_cast<MemberExpr>(Root)) {
+      if (Member->isArrow())
+        break;
+      Root = Member->getBase()->IgnoreParenImpCasts();
+    }
+    const auto *Ref = dyn_cast<DeclRefExpr>(Root);
+    const auto *VD = Ref ? dyn_cast<VarDecl>(Ref->getDecl()) : nullptr;
+    if (VD && !VD->getType()->isReferenceType() && !AddressableLocals.count(VD))
+      Written.insert(VD);
+    else
+      Memory = true;
+  }
+  for (const Stmt *Child : S->children())
+    collectWrites(Child, Written, Memory);
+}
+
+static bool mentionsAny(const Stmt *S,
+                        const std::set<const VarDecl *> &Written) {
+  if (!S || Written.empty())
+    return false;
+  if (const auto *Ref = dyn_cast<DeclRefExpr>(S))
+    if (const auto *VD = dyn_cast<VarDecl>(Ref->getDecl());
+        VD && Written.count(VD))
+      return true;
+  return llvm::any_of(S->children(), [&](const Stmt *Child) {
+    return mentionsAny(Child, Written);
+  });
+}
+
+bool ASTConverter::writesWhatReads(const Expr *Writer, const Expr *Reader,
+                                   bool ReaderReadsMemory) const {
+  std::set<const VarDecl *> Written;
+  bool Memory = false;
+  collectWrites(Writer, Written, Memory);
+  return mentionsAny(Reader, Written) || (Memory && ReaderReadsMemory);
+}
+
 bool ASTConverter::orderDependent(const Expr *A, const Expr *B) const {
   return (containsModifyingCall(A) && isHeapSensitive(B)) ||
-         (containsModifyingCall(B) && isHeapSensitive(A));
+         (containsModifyingCall(B) && isHeapSensitive(A)) ||
+         writesWhatReads(A, B, isHeapSensitive(B)) ||
+         writesWhatReads(B, A, isHeapSensitive(A));
+}
+
+std::unique_ptr<VExpr> ASTConverter::hoistSideEffect(const Expr *E) {
+  const SourceLocation Loc = E->getExprLoc();
+  if (auto Hoisted = HoistedValues.find(E); Hoisted != HoistedValues.end())
+    return std::make_unique<VVarExpr>(Hoisted->second.first,
+                                      Hoisted->second.second, Loc);
+  const auto *U = dyn_cast<UnaryOperator>(E);
+  const Expr *Target = U ? U->getSubExpr() : cast<BinaryOperator>(E)->getLHS();
+  if (Target->getType()->isPointerType() && isDynamicAddress(Target)) {
+    error(CurrentFn->Name + ": the value of an assignment, an increment, or a "
+                            "decrement of a pointer to dynamic storage is "
+                            "unsupported");
+    return nullptr;
+  }
+  // The value is read where the expression is evaluated: a postfix
+  // operator's before its write, any other's after it.
+  const std::string Temporary = "__value_" + std::to_string(++NestedCallId);
+  VType Ty;
+  auto Read = [&] {
+    auto Value = convertExpr(Target);
+    if (!Value)
+      return false;
+    Ty = Value->Ty;
+    CallSink->push_back(
+        std::make_unique<VAssignStmt>(Temporary, std::move(Value), Loc));
+    return true;
+  };
+  const bool Postfix = U && U->isPostfix();
+  if (Postfix && !Read())
+    return nullptr;
+  const size_t ErrorCount = Errors.size();
+  ContinuesEvaluation = true;
+  std::vector<std::unique_ptr<VStmt>> Effect = convertStmtBody(E);
+  if (Errors.size() != ErrorCount)
+    return nullptr;
+  for (auto &S : Effect)
+    CallSink->push_back(std::move(S));
+  if (!Postfix && !Read())
+    return nullptr;
+  HoistedValues[E] = {Temporary, Ty};
+  return std::make_unique<VVarExpr>(Temporary, Ty, Loc);
 }
 
 bool ASTConverter::locatingIsHeapSensitive(const Expr *E) const {
@@ -7405,9 +7519,10 @@ bool ASTConverter::locatingIsHeapSensitive(const Expr *E) const {
 std::unique_ptr<VExpr> ASTConverter::hoistExecCall(const CallExpr *CE,
                                                    const FunctionDecl *Callee) {
   const VType Result = VType::fromQualType(CE->getType(), IntMode, Ctx);
-  if (auto Hoisted = HoistedCalls.find(CE); Hoisted != HoistedCalls.end())
-    return convertCallResultValue(Hoisted->second, Callee->getReturnType(),
-                                  Result, CE->getExprLoc());
+  if (auto Hoisted = HoistedValues.find(CE); Hoisted != HoistedValues.end())
+    return convertCallResultValue(Hoisted->second.first,
+                                  Callee->getReturnType(), Result,
+                                  CE->getExprLoc());
   const QualType Returned = Callee->getReturnType();
   if (Returned->isVoidType() || Returned->isReferenceType() ||
       Returned->isRecordType()) {
@@ -7425,7 +7540,7 @@ std::unique_ptr<VExpr> ASTConverter::hoistExecCall(const CallExpr *CE,
   CallSink->push_back(atCall(std::make_unique<VCallStmt>(
       functionName(Callee), functionIdentity(Callee), std::move(Args),
       Temporary, CE->getExprLoc(), false), CE));
-  HoistedCalls[CE] = Temporary;
+  HoistedValues[CE] = {Temporary, Result};
   return convertCallResultValue(std::move(Temporary), Returned, Result,
                                 CE->getExprLoc());
 }
@@ -7604,8 +7719,13 @@ ASTConverter::convertAssignmentValue(const BinaryOperator *Assignment) {
   auto RHS = convertExpr(Assignment->getRHS());
   if (!RHS)
     return nullptr;
-  // The right operand is evaluated before the left one, whose calls follow.
-  if (CallSink && containsExecCall(Assignment->getLHS())) {
+  // The right operand is evaluated before the left one, whose calls and
+  // writes follow.
+  std::set<const VarDecl *> Written;
+  bool WritesMemory = false;
+  collectWrites(Assignment->getLHS(), Written, WritesMemory);
+  if (CallSink && (containsExecCall(Assignment->getLHS()) || !Written.empty() ||
+                   WritesMemory)) {
     const SourceLocation Loc = Assignment->getRHS()->getExprLoc();
     const std::string Value = "__value_" + std::to_string(++NestedCallId);
     const VType Ty = RHS->Ty;
@@ -9023,6 +9143,7 @@ void ASTConverter::appendReturn(std::unique_ptr<VExpr> Value,
 
 std::vector<std::unique_ptr<VStmt>>
 ASTConverter::convertStmtBody(const Stmt *S) {
+  const bool Continues = std::exchange(ContinuesEvaluation, false);
   std::vector<std::unique_ptr<VStmt>> Out;
   if (!S)
     return Out;
@@ -9051,8 +9172,11 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       CallSink, (isa<DeclStmt, ReturnStmt>(S) || isa<Expr>(S)) && Executable
                     ? &Out
                     : nullptr);
-  llvm::SaveAndRestore Hoisted(HoistedCalls,
-                               std::map<const CallExpr *, std::string>());
+  // A statement that continues an expression's evaluation keeps the values
+  // it has hoisted, and adds its own.
+  std::optional<llvm::SaveAndRestore<decltype(HoistedValues)>> Hoisted;
+  if (!Continues)
+    Hoisted.emplace(HoistedValues, decltype(HoistedValues)());
   if (S->getStmtClass() == Stmt::ReturnStmtClass) {
     if (InGhost) {
       error(CurrentFn->Name +
@@ -9847,13 +9971,15 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         const bool TargetReads = BO->getOpcode() == BO_Assign
                                      ? locatingIsHeapSensitive(BO->getLHS())
                                      : isHeapSensitive(BO->getLHS());
+        const bool ValueReads = isHeapSensitive(BO->getRHS());
         if ((containsModifyingCall(BO->getRHS()) && TargetReads) ||
-            (containsModifyingCall(BO->getLHS()) &&
-             isHeapSensitive(BO->getRHS()))) {
+            (containsModifyingCall(BO->getLHS()) && ValueReads) ||
+            writesWhatReads(BO->getRHS(), BO->getLHS(), TargetReads) ||
+            writesWhatReads(BO->getLHS(), BO->getRHS(), ValueReads)) {
           error(CurrentFn->Name +
                 ": before C++17 the order of an assignment's operands is "
-                "open, and a call in one may write what the other reads; "
-                "make the call in a statement of its own first");
+                "open, and a call or a write in one may change what the "
+                "other reads; make it a statement of its own first");
           return Out;
         }
       }

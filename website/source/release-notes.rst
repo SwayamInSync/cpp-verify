@@ -571,6 +571,18 @@ kind ``builtin-argument`` at the call. A ``static_assert`` with a message in a
 function crashed cpp-verify; it now does nothing, as one without a message
 did (:doc:`language/functions-loops`).
 
+**Writes in expressions.** The value of an increment, a decrement, an
+assignment, or a comma expression inside a larger expression (``a[i++]``,
+``*dst++ = *src++``, ``while (k-- > 0)``, ``if ((c = *p) != 0)``,
+``a = b = 0``) stopped its function (``unsupported unary operator``,
+``unsupported binary operator``). Each write now runs where C++ evaluates it,
+a ``&&``, ``||``, or ``?:`` operand's only on its path, and its value is read
+there, a postfix operator's before the write. An expression the verifier
+reads twice, as a compound assignment's target, is still evaluated once.
+Where C++ leaves the order of operands open, a write that another operand may
+read is an error at the expression, as such a call already was
+(:doc:`language/functions-loops`).
+
 **cvc5's counterexamples.** A failure cvc5 found (``--backend=cvc5``, or a race
 cvc5 won) gave no values and no path: the certifier checked its model and the
 verifier then dropped it, so the JSON record had no ``model`` or ``trace``,

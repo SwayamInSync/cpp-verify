@@ -579,7 +579,7 @@ an operand that reads memory, or makes another call, is an error:
 
 .. code-block:: text
 
-   order.cpp:18:10: error: sum_with: C++ leaves the order of these operands open, and a call in one may write what the other reads; make the call in a statement of its own first
+   order.cpp:18:10: error: sum_with: C++ leaves the order of these operands open, and a call or a write in one may change what the other reads; make it a statement of its own first
       18 |   return add_one(p) + *p;
          |          ^~~~~~~~~~~~~~~
 
@@ -610,8 +610,8 @@ the target is located:
 
 Before C++17 an assignment's operands are unsequenced too: with
 ``--extra-arg=-std=c++14``, ``store_old`` is ``error: store_old: before
-C++17 the order of an assignment's operands is open, and a call in one may
-write what the other reads; make the call in a statement of its own
+C++17 the order of an assignment's operands is open, and a call or a write
+in one may change what the other reads; make it a statement of its own
 first``.
 
 A call that returns nothing is made as a statement of its own
@@ -621,6 +621,86 @@ initializer, assignment, or return value (``Pt p = make(x);``,
 (``make(x).y``) is still ``executable call is unsupported in this expression
 context``. Before 0.2, every call inside a larger expression was that error,
 and the file stopped.
+
+Writes in expressions
+---------------------
+
+An increment, a decrement, an assignment, or a comma expression may stand
+where its value is used, as C code often writes it: ``a[i++]``,
+``*dst++ = *src++``, ``while (k-- > 0)``, ``if ((c = *p) != 0)``,
+``a = b = 0``. Its write runs where C++ evaluates it, as a call does: before
+what reads its value, and under ``&&``, ``||``, or ``?:`` only on its own
+path. Its value is read there: a postfix operator's is the value before the
+write, any other's the value after it.
+
+.. code-block:: cpp
+
+   void copy(int *dst, const int *src, int n)
+     cv::pre(cv::valid(dst, n) && cv::valid(src, n) && 0 <= n && n < 1000)
+     cv::modifies(dst[0 : n])
+     cv::post(cv::forall(k, 0, n, dst[k] == src[k]))
+   {
+     int *d = dst;
+     const int *s = src;
+     for (int i = 0; i < n; i = i + 1)
+       cv::invariant(0 <= i && i <= n && d == dst + i && s == src + i)
+       cv::invariant(cv::forall(k, 0, i, dst[k] == src[k]))
+       cv::decreases(n - i)
+     {
+       *d++ = *s++;
+     }
+   }
+
+   int countdown(int k)
+     cv::pre(0 <= k && k < 100)
+     cv::post(cv::result == 0)
+   {
+     while (k-- > 0)
+       cv::invariant(0 <= k && k < 100)
+       cv::decreases(k)
+     {
+     }
+     return k + 1;
+   }
+
+.. code-block:: text
+
+   Verified: copy [backend=z3]
+   Verified: countdown [backend=z3]
+
+The condition ``k-- > 0`` decrements ``k`` at every test, the last one
+included, so ``k`` is ``-1`` after the loop.
+
+Each expression is evaluated once, however often the verifier reads it: in
+``a[i++] += 1`` the target is read and written, and ``i`` grows by one. An
+assignment evaluates its right operand before its target (C++17), so
+``a[k++] = k`` stores the old ``k`` at the old ``k``; before C++17 the two are
+unsequenced, and a write in one that the other reads is the error above.
+
+The operands of most operators and the arguments of a call are unsequenced,
+and C++ leaves a write to an object that another of them reads undefined. As
+with a call that may write what another operand reads, that is an error at
+the expression:
+
+.. cppverify-example: rejects
+
+.. code-block:: cpp
+
+   int twice(int i)
+     cv::pre(0 <= i && i < 100)
+   {
+     return i++ + i;
+   }
+
+.. code-block:: text
+
+   twice.cpp:4:10: error: twice: C++ leaves the order of these operands open, and a call or a write in one may change what the other reads; make it a statement of its own first
+
+Writes are values in executable code only: ghost code and proof functions
+assign their locals in statements of their own, and a pointer to dynamic
+storage (``new``) is assigned in a statement of its own. Before 0.2, each of
+these forms was ``unsupported unary operator`` or ``unsupported binary
+operator``, and its function was not verified.
 
 Templates
 ---------

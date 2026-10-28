@@ -42,12 +42,16 @@ class ASTConverter {
   std::vector<std::unique_ptr<VStmt>> *SubobjectSink = nullptr;
   unsigned SubobjectPointerId = 0;
   /// Where the statement or condition being lowered in executable code puts
-  /// the calls its expressions make, each into a temporary, in evaluation
-  /// order; null where no executable call can be made.
+  /// the calls and writes its expressions make, each value into a temporary,
+  /// in evaluation order; null where no executable call can be made.
   std::vector<std::unique_ptr<VStmt>> *CallSink = nullptr;
-  /// The temporary of each call already put there, so converting an
-  /// expression twice calls once.
-  std::map<const CallExpr *, std::string> HoistedCalls;
+  /// The temporary of each call, increment, decrement, or assignment already
+  /// put there, and its type, and each comma whose first operand is (with no
+  /// temporary), so converting an expression twice evaluates it once.
+  std::map<const Expr *, std::pair<std::string, VType>> HoistedValues;
+  /// The next statement converted is a write an expression makes, which
+  /// continues its evaluation and keeps HoistedValues.
+  bool ContinuesEvaluation = false;
   std::vector<ConversionError> Errors;
   /// The innermost declaration, statement, or expression being converted,
   /// where an error is reported unless it names a place of its own.
@@ -406,6 +410,19 @@ private:
   /// in the call sink, and a read of the temporary.
   std::unique_ptr<VExpr> hoistExecCall(const CallExpr *CE,
                                        const FunctionDecl *Callee);
+  /// An increment, a decrement, or an assignment whose value an expression
+  /// uses: its statements in the call sink, and a read of the value it has,
+  /// the old one for a postfix operator, in a temporary.
+  std::unique_ptr<VExpr> hoistSideEffect(const Expr *E);
+  /// The variables that the increments, decrements, and assignments in \p S
+  /// write (a field of a record held by value as its record's), and whether
+  /// one writes memory.
+  void collectWrites(const Stmt *S, std::set<const VarDecl *> &Written,
+                     bool &Memory) const;
+  /// Whether an increment, a decrement, or an assignment in \p Writer writes
+  /// a variable \p Reader names, or memory when \p ReaderReadsMemory.
+  bool writesWhatReads(const Expr *Writer, const Expr *Reader,
+                       bool ReaderReadsMemory) const;
   /// A call of a contracted executable function, which may be hoisted.
   bool isExecCall(const Stmt *S) const;
   bool containsExecCall(const Stmt *S) const;

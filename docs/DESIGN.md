@@ -278,6 +278,15 @@ old `*p`. A call returning a record is made only as a statement or a whole
 initializer, assignment, or return value, and one returning nothing only as
 a statement.
 
+An increment, a decrement, an assignment, or a comma expression may stand
+where its value is used in executable code (`a[i++]`, `*dst++ = *src++`,
+`while (k-- > 0)`, `if ((c = *p) != 0)`, `a = b = 0`): its write runs where
+C++ evaluates it, as a call does, and its value is read there, a postfix
+operator's before the write. Each expression is evaluated once, so
+`a[i++] += 1` increments `i` once. A write in one unsequenced operand that
+another reads (`i++ + i`, which C++ leaves undefined) is an error, as is a
+write to memory beside an operand that reads memory.
+
 ## Loop Contracts: invariant / decreases
 
 <!-- cppverify-example: fragment -->
