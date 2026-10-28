@@ -18,6 +18,17 @@ a cpp-verify precondition is written 'cppverify::pre'`) with a fix-it to the
 not make bare words constructs. With the flag, `<cppverify.h>` is included
 implicitly; without it, the constructs are not recognized.
 
+With the flag, in C++, the compiler predefines `__cppverify__` (1) and the
+release in `__cppverify_major__`, `__cppverify_minor__`,
+`__cppverify_patchlevel__`, and `__cppverify_version__` (the string
+`--version` prints; the one `CPPVERIFY_VERSION` in `clang/CMakeLists.txt`
+sets all of them, through `clang/Basic/Version.inc`). Like `__cplusplus`, they
+describe the language, so `-undef` keeps them. A header that GCC, MSVC, or
+upstream Clang also reads wraps each construct in a macro that is empty when
+`__cppverify__` is not defined, as Frama-C's libc defines `__PUSH_FC_STDLIB`
+to a Frama-C pragma under its predefined `__FRAMAC__` and to nothing otherwise
+(`share/libc/features.h`).
+
 ## Contract Syntax Overview
 
 | Syntax | Where | Meaning |
