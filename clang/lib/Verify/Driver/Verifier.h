@@ -120,6 +120,9 @@ struct VerifyOptions {
   bool Verbose = false;
   /// List the functions the run would verify, and verify none.
   bool ListFunctions = false;
+  /// Glob patterns over function names: only the functions they match are
+  /// reported. Empty: every function.
+  std::vector<std::string> FunctionPatterns;
   /// For a failure whose counterexample passes through a loop, the most
   /// iterations of each loop that unrolling may try to find an execution
   /// that fails (0: do not try).

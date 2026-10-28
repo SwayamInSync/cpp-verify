@@ -294,6 +294,12 @@ static cl::opt<unsigned> ConfirmBound(
              "execution that fails (default 10, 0 = do not look)"),
     cl::init(10), cl::cat(CppVerifyCategory));
 
+static cl::list<std::string> FunctionPatterns(
+    "function",
+    cl::desc("Report only the functions whose names match this glob pattern "
+             "(repeatable); what their verdicts rely on is verified too"),
+    cl::value_desc("pattern"), cl::cat(CppVerifyCategory));
+
 static cl::opt<bool> ListFunctions(
     "list-functions",
     cl::desc("List the functions a run would verify, with their kinds and "
@@ -455,6 +461,8 @@ public:
       VOpts.Quiet = Quiet.getValue();
       VOpts.Verbose = Verbose.getValue();
       VOpts.ListFunctions = ListFunctions.getValue();
+      VOpts.FunctionPatterns.assign(FunctionPatterns.begin(),
+                                    FunctionPatterns.end());
       VOpts.ConfirmBound = ConfirmBound.getValue();
       VOpts.Summary = &gSummary;
       if (!verify::verifyTranslationUnit(Ctx, llvm::outs(), VOpts))

@@ -38,6 +38,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FormatVariadic.h"
+#include "llvm/Support/GlobPattern.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MD5.h"
 #include "llvm/Support/MathExtras.h"
@@ -3136,6 +3137,24 @@ public:
     // the function is Unresolved, its first error carrying the verdict, and
     // the rest of the translation unit is verified. An error outside every
     // function stops the run.
+    // --function: the functions the run reports, by their names.
+    std::vector<llvm::GlobPattern> Patterns;
+    for (const std::string &Text : Opts.FunctionPatterns) {
+      auto Pattern = llvm::GlobPattern::create(Text);
+      if (!Pattern) {
+        Diags.push_back(
+            {VerifyDiagnostic::Error, "--function=" + Text + ": " +
+                                          llvm::toString(Pattern.takeError())});
+        return false;
+      }
+      Patterns.push_back(std::move(*Pattern));
+    }
+    auto selects = [&](llvm::StringRef Name) {
+      return Patterns.empty() ||
+             llvm::any_of(Patterns, [&](const llvm::GlobPattern &Pattern) {
+               return Pattern.match(Name);
+             });
+    };
     bool OutsideFunctions = false;
     std::map<std::string, std::string> UnsupportedConstructs;
     for (const ConversionError &Err : Converter.getErrors()) {
@@ -3146,6 +3165,7 @@ public:
         OutsideFunctions = true;
       else
         D.FunctionName = Err.FunctionName;
+      D.Hidden = !Err.Function.empty() && !selects(Err.FunctionName);
       if (!Err.Function.empty() &&
           UnsupportedConstructs.emplace(Err.Function, Err.Message).second) {
         VerifyResult R;
@@ -3171,10 +3191,37 @@ public:
           {VerifyDiagnostic::Warning, "no verifiable functions found"});
       return true;
     }
+    // A function is selected by the name its verdicts print, which for an
+    // inductive predicate's step is the predicate's; the predicate's rule
+    // proofs are reported with it.
+    std::vector<bool> Selected(Functions.size());
+    for (size_t I = 0; I != Functions.size(); ++I) {
+      const VFunction &Fn = *Functions[I];
+      Selected[I] =
+          selects(Fn.InductiveStepOf.empty() ? Fn.Name : Fn.InductiveStepOf);
+    }
+    std::set<std::string> SelectedIdentities;
+    for (size_t I = 0; I != Functions.size(); ++I)
+      if (Selected[I])
+        SelectedIdentities.insert(Functions[I]->Identity);
+    for (size_t I = 0; I != Functions.size(); ++I)
+      Selected[I] = Selected[I] ||
+                    SelectedIdentities.count(Functions[I]->InductiveRuleOf);
+    if (!Patterns.empty() &&
+        llvm::none_of(Selected, [](bool S) { return S; }) &&
+        llvm::none_of(Converter.getErrors(), [&](const ConversionError &Err) {
+          return !Err.Function.empty() && selects(Err.FunctionName);
+        })) {
+      Diags.push_back({VerifyDiagnostic::Error,
+                       "no function matches --function=" +
+                           llvm::join(Opts.FunctionPatterns, ", --function=")});
+      return false;
+    }
     if (Opts.ListFunctions) {
-      for (const auto &Fn : Functions) {
+      for (size_t I = 0; I != Functions.size(); ++I) {
+        const auto &Fn = Functions[I];
         if (Fn->IsBuiltin || Fn->IsChoice || !Fn->InductiveStepOf.empty() ||
-            !Fn->InductiveRuleOf.empty())
+            !Fn->InductiveRuleOf.empty() || !Selected[I])
           continue;
         const char *Kind = Fn->IsConstexprSpec ? "constexpr spec"
                            : Fn->IsSpec        ? "spec"
@@ -4870,14 +4917,51 @@ public:
       }
       DumpStream.flush();
     };
-    if (Parallel) {
-      TaskGroup Group(*Pool);
+    // With --function, the executable functions run are the selected ones
+    // and, round by round, those whose contracts a verdict of the run relies
+    // on; specs, proof functions, and generated checks always run, since any
+    // verdict may rest on their facts. Every verdict reported is then the
+    // one a run of the whole file gives.
+    std::vector<bool> Scheduled(Functions.size(), true);
+    if (!Opts.FunctionPatterns.empty())
       for (size_t I = 0; I != Functions.size(); ++I)
-        Group.async([&verifyFunction, I] { verifyFunction(I); });
-      Group.wait();
-    } else {
-      for (size_t I = 0; I != Functions.size(); ++I)
-        verifyFunction(I);
+        Scheduled[I] =
+            Selected[I] || Functions[I]->IsSpec || Functions[I]->IsProof;
+    std::map<std::string, size_t> IndexOf;
+    for (size_t I = 0; I != Functions.size(); ++I)
+      IndexOf.emplace(Functions[I]->Identity, I);
+    std::vector<size_t> Batch;
+    for (size_t I = 0; I != Functions.size(); ++I)
+      if (Scheduled[I])
+        Batch.push_back(I);
+    while (!Batch.empty()) {
+      if (Parallel) {
+        TaskGroup Group(*Pool);
+        for (size_t I : Batch)
+          Group.async([&verifyFunction, I] { verifyFunction(I); });
+        Group.wait();
+      } else {
+        for (size_t I : Batch)
+          verifyFunction(I);
+      }
+      std::vector<size_t> Next;
+      auto need = [&](const std::string &Identity) {
+        auto It = IndexOf.find(Identity);
+        if (It != IndexOf.end() && !Scheduled[It->second]) {
+          Scheduled[It->second] = true;
+          Next.push_back(It->second);
+        }
+      };
+      for (size_t I : Batch) {
+        for (const auto &[Index, Identity, Callees] : Runs[I].CallDependencies)
+          for (const std::string &Callee : Callees)
+            need(Callee);
+        for (const SpecReliance &Reliance : Runs[I].ProofDependencies)
+          for (const std::string &Callee : Reliance.Callees)
+            need(Callee);
+      }
+      llvm::sort(Next);
+      Batch = std::move(Next);
     }
     // A function whose verification Ctrl-C cut short is reported by one
     // line. Its verdicts stay, hidden, for what they establish: a query the
@@ -4908,6 +4992,9 @@ public:
       for (VerifyDiagnostic &D : Run.Diags) {
         if (D.FindingOf)
           *D.FindingOf += Base;
+        // What a function --function leaves out reports stays, hidden, for
+        // what it establishes.
+        D.Hidden |= !Selected[I];
         Diags.push_back(std::move(D));
       }
       AllOk &= Run.AllOk;
@@ -5766,6 +5853,14 @@ public:
       }
     }
 
+    // A run --function narrows succeeds when what it reports does.
+    if (!Opts.FunctionPatterns.empty())
+      return llvm::none_of(Diags, [](const VerifyDiagnostic &D) {
+        return !D.Hidden && (D.K == VerifyDiagnostic::Error ||
+                             D.K == VerifyDiagnostic::Unresolved ||
+                             D.K == VerifyDiagnostic::Interrupted ||
+                             D.K == VerifyDiagnostic::BoundedSafe);
+      });
     return AllOk;
   }
 

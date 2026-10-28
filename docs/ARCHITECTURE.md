@@ -2466,7 +2466,17 @@ expression being converted (`ASTConverter::CurrentRange`), unless the site
 names a place of its own, such as a function for the checks made after every
 function is converted. It is printed with Clang's `TextDiagnostic`, line and
 caret included, as a compiler error is, and its JSON record carries the range.
-A text run ends with a summary line: `printDiagnostics` counts each verdict
+`--function` filters what a run reports, not what its verdicts mean. A
+function is selected by the name its verdicts print, which for an inductive
+predicate's step (`InductiveStepOf`) is the predicate's, and a selected
+predicate's rule proofs (`InductiveRuleOf`) with it. `Verifier::run`
+schedules the selected functions, every spec and proof
+function (any verdict may rest on their facts, and a confirmation by proof
+on any established lemma), and then, round by round, each executable
+function whose contract a run's verdicts call (`CallDependencies`, proof
+blocks' `Callees`), until none is new. The fixpoints then run as for the
+whole file over the verdicts there are; the diagnostics of functions not
+selected stay, hidden, for what they establish. A text run ends with a summary line: `printDiagnostics` counts each verdict
 it prints into the run's `VerifySummary` (a first error that carries a
 verdict counts, a `--verbose` spec axiom line does not), and the driver
 prints the counts of every file of the run with its time.
