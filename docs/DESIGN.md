@@ -185,7 +185,25 @@ checked at each: an unsatisfiable precondition, a function whose end no
 execution reaches, a behavior whose assumption contradicts the preconditions
 (its postconditions are never checked; warning only), and a trusted call
 whose contract contradicts the state of the call. Unreachable code alone
-is not flagged. Under BMC the same checks run on the program unrolled to
+is not flagged, with one exception. The facts the verifier adds about the
+specs a function applies (their postconditions, the definitions of
+recursive specs, inductive unfoldings, frames, and choices' axioms) are proved before use, so each
+should be a theorem; a wrong one could close some paths and leave the end
+reachable, as the self-contradictory definition of a spec recursive through
+`cppverify::choose` did before 0.2, and the checks above would pass. So for a
+verified function that applies a spec, each branch, `return`, loop body, and
+loop exit that all the facts close is checked again with the specs' values
+free and their facts removed, the code's own assumptions (preconditions,
+callee contracts, invariants, checks, and the builtin specs of the
+language, such as a sequence's `reverse`) kept; the first point the code alone
+reaches is reported with a warning (`the facts about tri contradict the path
+to the true branch here, which the code alone reaches ...`), as Dafny's
+`--warn-contradictory-assumptions` reports an assumption that contradicts
+its path. The result is not `[vacuous]`: the point may be dead code, kept on
+purpose, and a `cppverify::check` of the fact before it says so and silences
+the warning. Like the other vacuity checks it is a warning, not a verdict, so
+its search is bounded (a function's points share the time of one such check)
+and a search cut short omits it. Under BMC the same checks run on the program unrolled to
 the bound, as Kani reports an unreachable check, and a `BoundedSafe`
 result that no execution finishes within the bound is `[vacuous]` too
 (`no execution finishes within N loop iterations`). A finding rests on the
