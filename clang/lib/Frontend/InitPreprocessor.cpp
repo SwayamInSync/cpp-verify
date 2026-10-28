@@ -1627,6 +1627,23 @@ void clang::InitializePreprocessor(Preprocessor &PP,
   InitializeStandardPredefinedMacros(PP.getTargetInfo(), PP.getLangOpts(),
                                      FEOpts, Builder);
 
+  // CppVerify: the constructs are recognized, so headers shared with other
+  // compilers can guard them. Like __cplusplus, these describe the language,
+  // and -undef keeps them.
+  if (PP.getLangOpts().VerifyContracts && PP.getLangOpts().CPlusPlus) {
+#define TOSTR2(X) #X
+#define TOSTR(X) TOSTR2(X)
+    Builder.defineMacro("__cppverify__");
+    Builder.defineMacro("__cppverify_major__", TOSTR(CPPVERIFY_VERSION_MAJOR));
+    Builder.defineMacro("__cppverify_minor__", TOSTR(CPPVERIFY_VERSION_MINOR));
+    Builder.defineMacro("__cppverify_patchlevel__",
+                        TOSTR(CPPVERIFY_VERSION_PATCHLEVEL));
+#undef TOSTR
+#undef TOSTR2
+    Builder.defineMacro("__cppverify_version__",
+                        "\"" CPPVERIFY_VERSION_STRING "\"");
+  }
+
   // The PGO instrumentation profile macros are driven by options
   // -fprofile[-instr]-generate/-fcs-profile-generate/-fprofile[-instr]-use,
   // hence they are not guarded by InitOpts.UsePredefines.
