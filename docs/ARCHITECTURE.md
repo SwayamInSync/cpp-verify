@@ -742,6 +742,22 @@ well-formedness once, in the head's arbitrary state, from the invariants
 before it, which suffices where storage is always initialized; here it is
 proved where the invariant is.
 
+**Class invariants at loops.** The converter appends to every loop's
+invariants (`ASTConverter::appendObjectInvariants`, after the user's) the
+class invariants of the objects the loop can reach: each local object alive
+at the loop (`AutomaticScopeStack`), at its address, and each object a
+reference or pointer parameter of the function addresses, guarded by
+`p == nullptr ||` for a pointer, skipping one with an extent as the entry
+assumption does. Each is the invariant instantiated with `ThisSubstitute`,
+as for a parameter at entry, and is checked at entry and preserved like any
+other invariant, so it can make no false claim verify. Only the class's
+members and code writing a public field change what an invariant states,
+and a public member keeps it, so it holds at every iteration of a loop
+outside the class; a member function's loops get none of their class's
+invariants (`ConvertingDecl` names the function), since a member may break
+one between calls. Without them the loop havoc forgot the invariant, and
+the next public call failed its `type-invariant` check.
+
 **Termination.** An executable loop without `cppverify::decreases` contributes no
 measure obligation, and the driver reports the function `Unresolved` with
 `decreases.missing` unless BMC proved the unwinding or the loop's condition is
@@ -3055,6 +3071,11 @@ call argument, above), and addressable declarations inside loops remain
 fail-closed; so does the decay of an array
 member through a pointer (`ASTConverter::arrayDecayError` names which). Automatic metadata transitions
 are private and a modular caller may frame them away.
+
+In a contract, `&x` of a local object in memory (`AddressableLocals`) is
+its address (`convertAutomaticLocalAddress`), which a spec it is passed to
+cannot keep and which compares as a value; elsewhere, and in ghost code,
+which could keep it, the address of a local is an argument of a call only.
 
 Local reference declarations snapshot their VCR address in a marked
 `VAssignStmt`. The marker survives cloning and BMC loop unrolling and lets the
