@@ -682,10 +682,58 @@ A spec cannot read a mutable global (pass its value as a parameter), ghost
 and proof code cannot write one, and a record or array of a global is read
 field by field, never as a whole. Not supported: a global that is itself
 a pointer, a class with a ``cppverify::type_invariant`` (nothing would maintain
-it), ``thread_local`` and ``volatile`` globals, and ``static`` locals that are
-not constant tables. Before 0.2 only integral globals were supported, and a
-record or array global was an error (``global aggregate access is
-unsupported``, ``the global array 'table' is unsupported``).
+it), and ``thread_local`` and ``volatile`` globals. Before 0.2 only integral
+globals were supported, and a record or array global was an error (``global
+aggregate access is unsupported``, ``the global array 'table' is
+unsupported``).
+
+A ``static`` local with a constant initializer is such an object too, but
+only its function can name it, so it is the function's own state:
+
+- its value at entry is whatever earlier calls left, never its initializer;
+- the function writes it without naming it in ``cppverify::modifies``, which
+  could not name it anyway;
+- a call changes it when the callee may reach its function, directly or
+  through other calls (a function that calls itself, or a callee that calls
+  back); any other call keeps it.
+
+.. cppverify-example: fails first_call
+
+.. code-block:: cpp
+
+   int next_id()
+     cv::post(cv::result >= 1 && cv::result <= 1000)
+   {
+     static int last = 0;
+     if (last < 0 || last >= 1000)
+       last = 0;
+     last = last + 1;
+     return last;
+   }
+
+   int first_call()
+     cv::post(cv::result == 1)
+   {
+     static int calls = 0;
+     if (calls < 0 || calls >= 1000)
+       calls = 0;
+     calls = calls + 1;
+     return calls;
+   }
+
+.. code-block:: text
+
+   Verified: next_id [backend=z3]
+   statics.cpp:12:23: error: verification failed: first_call [postcondition] [backend=z3] [reason=counterexample]
+      12 |   cv::post(cv::result == 1)
+         |            ~~~~~~~~~~~^~~~
+   statics.cpp:12:23: note: counterexample: result = 2
+
+``first_call`` returns 1 only the first time. A static local whose
+initializer runs code (``static int first = x;``, run at the first call) is
+an error, and so is a pointer to a static local or into one, by which the
+function's state would escape. Before 0.2 every static local that was not a
+constant table was an error (``static local variables are unsupported``).
 
 Two-buffer copy loops (``memcpy``-style) need the source and destination
 ranges to be disjoint; otherwise storing to the destination could clobber a
