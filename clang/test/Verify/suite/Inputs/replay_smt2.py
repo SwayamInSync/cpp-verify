@@ -10,6 +10,7 @@ answer to a script cpp-verify answered sat or unsat), then a summary line.
 import os
 import subprocess
 import sys
+import tempfile
 
 if sys.argv[1] == "--list":
     # The files, relative to the directory, in order.
@@ -31,18 +32,23 @@ for path in scripts:
     with open(path) as f:
         recorded = [l for l in f if l.startswith("; cpp-verify: ")]
     answer = recorded[-1][len("; cpp-verify: ") :].strip() if recorded else ""
-    # A script cpp-verify did not settle is only read, for errors, not
-    # solved again to its timeout.
+    # A script cpp-verify did not settle is only read, for errors: its
+    # checks are left out, so that it is not solved again to its timeout.
+    run = path
+    if answer not in ("sat", "unsat"):
+        with open(path) as f:
+            text = "".join(l for l in f if not l.startswith(("(check-sat", "(get-model")))
+        handle, run = tempfile.mkstemp(suffix=".smt2")
+        with os.fdopen(handle, "w") as f:
+            f.write(text)
     try:
         output = subprocess.run(
-            [executable, path], stdout=subprocess.PIPE,
+            [executable, run], stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, universal_newlines=True,
-            timeout=None if answer in ("sat", "unsat") else 5,
         ).stdout
-    except subprocess.TimeoutExpired as stopped:
-        output = stopped.output or ""
-        if isinstance(output, bytes):
-            output = output.decode(errors="replace")
+    finally:
+        if run != path:
+            os.remove(run)
     lines = output.splitlines()
     first = lines[0].strip() if lines else ""
     relative = os.path.relpath(path, directory).replace(os.sep, "/")
