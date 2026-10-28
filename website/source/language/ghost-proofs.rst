@@ -323,6 +323,13 @@ wherever the statement appears:
      return x + x + x;
    }
 
+A specialization of a spec template is named with its arguments,
+``cv::hide(at<4>)`` or ``cv::reveal_with_fuel(steps<2>, 4)``. The template's
+name alone names none, which is an error (``reference to overloaded function
+could not be resolved``). Before 0.2 a specialization could not be named at
+all: the function stopped with ``unsupported C++ type in verification:
+<overloaded function type>``.
+
 With fuel 1 a proof sees one unfolding of each application it names, so
 ``pow2(3) == 8`` needs three more:
 
