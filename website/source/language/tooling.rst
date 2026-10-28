@@ -14,6 +14,7 @@ Standalone verifier
    cpp-verify --function='parse_*' --function=encode file.cpp
    cpp-verify --time-report file.cpp
    cpp-verify file.cpp -- -I include -DNDEBUG
+   cpp-verify src/a.cpp src/mathx.cpp -- -I include
    cpp-verify --backend=z3 file.cpp
    cpp-verify --backend=cvc5 file.cpp
    cpp-verify --backend=portfolio file.cpp
@@ -43,6 +44,12 @@ above it, or in the directory ``-p DIR`` names; a file the database does not lis
 flags of a listed neighbour. Without a database the file is compiled with those two flags
 alone. Flags after ``--`` replace the database, and ``--extra-arg=FLAG`` adds one flag either
 way.
+
+Several files given to one run are verified one after the other and
+settled together: a contract one file declares without a definition holds
+for a proof once its definition's verification in another file establishes
+it (see :doc:`functions-loops`). Their results are printed once every file
+is verified, in the order given.
 
 Input files and compiler errors
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

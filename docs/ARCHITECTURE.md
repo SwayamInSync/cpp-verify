@@ -2542,7 +2542,29 @@ again where it is used.
    - a trusted function reports `Trusted`; an unmarked contract without a
      definition draws a warning, and every caller whose proof relies on it
      (or on any callee contract whose verification failed) is demoted to
-     `Unresolved` with reason `callee.contract`;
+     `Unresolved` with reason `callee.contract`. A function is trusted by
+     the mark on its definition, or on any declaration when it has none
+     (`ASTConverter::convertFunction`: an inherited mark does not count);
+   - in a run over several files (`VerifyOptions::CrossFile`, a
+     `CrossFileRun` the driver creates when given more than one file), an
+     unmarked contract without a definition is provisionally established
+     instead (`Verifier::Externals`). After the fixpoints below, each proof
+     records the external contracts it rests on, through the file's own
+     contracts' verdicts (`ExternalOf`), and each contract the file
+     verifies is offered with whether the file establishes it and on which
+     external contracts that rests (`DefinedContracts`), keyed by identity
+     and the contract as written (`ASTConverter::contractText`). The file's
+     results are rendered while its AST lives (`renderReport`): each line
+     as verified and, for a proof that rests on external contracts, as
+     `demote` would make it, with a placeholder for the contracts, both
+     counted for the summary. Once every file is verified,
+     `CrossFileRun::finish` establishes contracts by a least fixpoint over
+     the files (a contract once every definition of it is established in
+     its file and the external contracts that rests on are), prints each
+     file's lines with the demoted form where a contract a proof rests on is
+     not established, drops the warning of a contract some file defines and
+     the findings of a demoted proof (but those of the entry state), and
+     counts the files that do not succeed;
    - `[trusts=...]` lists the trusted contracts a proof uses, closed
      transitively over verified callees (JSON `"trusts"`);
    - one fixpoint settles the reasons: a verdict relying on a spec whose

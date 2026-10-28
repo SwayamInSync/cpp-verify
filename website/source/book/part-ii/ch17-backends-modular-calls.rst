@@ -1371,6 +1371,14 @@ are ``Unresolved`` with reason ``callee.contract``, and a warning points at
 the declaration. A forgotten definition therefore cannot silently turn into
 an axiom.
 
+Where the definition is in another file, verify the files together:
+``cpp-verify src/a.cpp src/mathx.cpp -- -Iinclude``. The run settles the
+contract a header declares against the verification of its definition, so
+``a.cpp``'s callers of ``clamp100`` are verified when ``mathx.cpp``'s body
+meets the contract, and ``Unresolved`` when it does not. Mark a header's
+declaration trusted only for a definition outside the program: on the
+definition, which inherits the mark, the body is still verified.
+
 The same boundary exists in other verifiers. Verus assumes the specification
 of a function marked ``#[verifier::external_body]``. Frama-C assumes the
 contract of a function without a body when it proves the callers. CppVerify

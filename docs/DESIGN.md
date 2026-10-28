@@ -139,15 +139,26 @@ it is `Unresolved` with reason `callee.contract`.
 
 `[[cppverify::trusted]]` (a standard C++ attribute, like Verus's
 `#[verifier::external_body]`) marks a contract as assumed: on a declaration
-the contract holds at every call (whose preconditions are still checked); on
-a definition the body is compiled but not verified; on a proof function the
-postcondition is an axiom. A spec cannot be trusted, since its definition is
+the contract holds at every call that sees no definition (whose
+preconditions are still checked); on a definition the body is compiled but
+not verified; on a proof function the postcondition is an axiom. A
+definition that only inherits the mark from an earlier declaration, as
+Clang's attribute inheritance gives it, is verified (decision Q13 of the 0.2
+plan): before 0.2 the mark on a header's declaration stopped the
+verification of the definition, so a wrong body was never checked. A spec cannot be trusted, since its definition is
 its meaning. The mark is written on each function: `#pragma clang attribute`
 cannot apply it to a region. A trusted function reports `Trusted: f (contract assumed, not
 verified)`, and every verdict that relies on it, directly or through verified
 callees, carries `[trusts=f]`. A contract without a definition and without
 the mark is not assumed: a warning names it, and its callers are
-`Unresolved` with reason `callee.contract`. A trusted contract writes only
+`Unresolved` with reason `callee.contract`. In one run over several files,
+such a contract is settled across them, as Frama-C settles a property's
+status over the files of a project: a proof that rests on it, directly or
+through the file's own contracts, stands once the verification of its
+definition in another file establishes it (a contract established only
+through other files' contracts once those are, starting from none), and is
+`Unresolved` with `callee.contract` otherwise. A declaration matches a
+definition with the same function and the same contract as written. A trusted contract writes only
 its `cppverify::modifies` footprints; without them it writes nothing through a pointer
 or reference to const, and is taken to write the whole heap through a
 mutable one (see `cppverify::modifies` below).
