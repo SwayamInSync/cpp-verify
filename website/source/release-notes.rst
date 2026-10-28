@@ -514,6 +514,18 @@ are errors at the statement (:doc:`language/functions-loops`).
 Running cpp-verify
 ~~~~~~~~~~~~~~~~~~
 
+**Paths that the facts about specs close.** The vacuity checks asked whether
+anything reaches a verified function's end, so an assumption that removed
+only some paths went unnoticed: the contradictory definition of a spec
+recursive through ``cppverify::choose`` made one argument impossible and its
+function verified without a mark. The facts the verifier adds about specs
+are proved before use, so one that is wrong is a bug in the verifier; now,
+for every verified function that applies a spec, the first branch,
+``return``, loop body, or loop exit that those facts close but the code alone
+reaches gets a warning, which says that the code is dead or a fact is wrong.
+A ``cppverify::check`` of the fact before it keeps a dead branch on purpose
+(:doc:`book/part-ii/ch16-when-verification-fails`).
+
 **Results as records, SARIF, and annotations.** JSON records had no source
 for a verified function, a failure's range began at its caret and ended at
 the first column of its last token, compiler errors stayed text, and nothing
