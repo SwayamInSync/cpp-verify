@@ -46,4 +46,16 @@ inline int halve(int x)
   return x / 2;
 }
 
+#ifdef __cppverify__
+#define NONNEGATIVE cppverify::post(cppverify::result >= 0)
+#else
+#define NONNEGATIVE
+#endif
+
+inline int decrement(int x)
+  NONNEGATIVE
+{
+  return x > 0 ? x - 1 : x;
+}
+
 #endif
