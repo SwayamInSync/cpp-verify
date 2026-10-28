@@ -61,14 +61,22 @@ jobs:
 
       - name: Install build tools, cvc5, and Lean
         run: |
+          set -o pipefail
           sudo apt-get update
-          sudo apt-get install -y ninja-build ccache
+          sudo apt-get install -y ninja-build ccache zstd
           curl -sSfL -o "$RUNNER_TEMP/cvc5.zip" \
             "https://github.com/cvc5/cvc5/releases/download/cvc5-${{ matrix.cvc5 }}/${{ matrix.cvc5-archive }}"
           unzip -q "$RUNNER_TEMP/cvc5.zip" -d "$RUNNER_TEMP/cvc5"
           dirname "$(find "$RUNNER_TEMP/cvc5" -name cvc5 -type f)" >> "$GITHUB_PATH"
           curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
-            | sh -s -- -y --default-toolchain "$LEAN_TOOLCHAIN"
+            | sh -s -- -y --default-toolchain none
+          # From its GitHub release: elan's own source, releases.lean-lang.org, may be down.
+          version="${LEAN_TOOLCHAIN##*:v}"
+          toolchain="$HOME/.elan/toolchains/leanprover--lean4---v$version"
+          mkdir -p "$toolchain"
+          curl -sSfL "https://github.com/leanprover/lean4/releases/download/v$version/lean-$version-linux.tar.zst" \
+            | tar --zstd -x --strip-components=1 -C "$toolchain"
+          "$HOME/.elan/bin/elan" default "$LEAN_TOOLCHAIN"
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
 
       - uses: actions/cache/restore@v4
