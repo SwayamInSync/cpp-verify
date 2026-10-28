@@ -66,6 +66,10 @@ elif mode == "rejected":
     sys.exit(1)
 elif mode == "crash":
     os.kill(os.getpid(), signal.SIGTERM)
+elif mode == "gmp":
+    # GMP's allocation failing, as cvc5 1.4.2 aborts under a data limit.
+    print("GNU MP: Cannot allocate memory (size=8)", file=sys.stderr, flush=True)
+    os.abort()
 elif mode == "hang":
     time.sleep(10)
 else:
