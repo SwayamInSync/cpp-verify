@@ -4,7 +4,10 @@
 #include "ObligationSimplify.h"
 #include "SpecAxioms.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MathExtras.h"
@@ -567,7 +570,12 @@ static bool validateSource(const ObligationSource &Source, std::string &Error) {
   return true;
 }
 
-static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error) {
+static bool
+validateLogicExpr(const LogicExpr *Expr, std::string &Error,
+                  llvm::DenseSet<const LogicExpr *> *Valid = nullptr);
+
+static bool validateLogicNode(const LogicExpr *Expr, std::string &Error,
+                              llvm::DenseSet<const LogicExpr *> *Valid) {
   if (!Expr) {
     Error = "null term in obligation IR";
     return false;
@@ -600,7 +608,7 @@ static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error) {
     return false;
   }
   for (const auto &Child : Expr->Children)
-    if (!validateLogicExpr(Child.get(), Error))
+    if (!validateLogicExpr(Child.get(), Error, Valid))
       return false;
 
   auto requireArity = [&](unsigned Minimum, unsigned Maximum) {
@@ -1005,6 +1013,19 @@ static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error) {
   return false;
 }
 
+/// With \p Valid, a term in it is not checked again, and a term that passes
+/// joins it: the goals of a module share the terms of their assumptions.
+static bool validateLogicExpr(const LogicExpr *Expr, std::string &Error,
+                              llvm::DenseSet<const LogicExpr *> *Valid) {
+  if (Valid && Valid->contains(Expr))
+    return true;
+  if (!validateLogicNode(Expr, Error, Valid))
+    return false;
+  if (Valid)
+    Valid->insert(Expr);
+  return true;
+}
+
 static void collectQuantifierBinders(const LogicExpr *Expr,
                                      std::set<std::string> &Binders) {
   if (!Expr)
@@ -1057,13 +1078,6 @@ static bool validateVariableScopes(
   return true;
 }
 
-static bool validateVariableScopes(const LogicExpr *Expr, std::string &Error) {
-  std::set<std::string> Binders;
-  collectQuantifierBinders(Expr, Binders);
-  std::map<std::string, LogicSort> FreeVariables;
-  return validateVariableScopes(Expr, Binders, {}, FreeVariables, Error);
-}
-
 static bool
 validateVariableScopes(const LogicExpr *Expr,
                        std::map<std::string, LogicSort> &FreeVariables,
@@ -1072,6 +1086,181 @@ validateVariableScopes(const LogicExpr *Expr,
   collectQuantifierBinders(Expr, Binders);
   return validateVariableScopes(Expr, Binders, {}, FreeVariables, Error);
 }
+
+namespace {
+/// The quantifier binders of each term of a module, and the binder names
+/// free in it, as interned sets, computed once for each term the module's
+/// roots share. Every binder name of the module is registered before a free
+/// set is computed, so a free set holds every binder name of its term's root
+/// that occurs free in the term.
+class BinderSummaries {
+public:
+  explicit BinderSummaries(llvm::ArrayRef<const LogicExpr *> Roots) {
+    for (const LogicExpr *Root : Roots)
+      bindersOf(Root);
+    Complete = true;
+  }
+
+  bool covers(const LogicExpr *Root) const { return Binders.count(Root); }
+
+  std::optional<unsigned> nameId(llvm::StringRef Name) const {
+    auto It = Names.find(Name);
+    if (It == Names.end())
+      return std::nullopt;
+    return It->second;
+  }
+
+  unsigned bindersOf(const LogicExpr *Expr) {
+    if (!Expr)
+      return 0;
+    if (auto It = Binders.find(Expr); It != Binders.end())
+      return It->second;
+    unsigned Set = 0;
+    if (Expr->K == LogicExpr::Forall || Expr->K == LogicExpr::Exists)
+      Set =
+          with(0, Names.try_emplace(Expr->Binder, Names.size()).first->second);
+    for (const auto &Child : Expr->Children)
+      Set = unite(Set, bindersOf(Child.get()));
+    Binders[Expr] = Set;
+    return Set;
+  }
+
+  unsigned freeBindersOf(const LogicExpr *Expr) {
+    assert(Complete && "binder names are registered first");
+    if (!Expr)
+      return 0;
+    if (auto It = FreeBinders.find(Expr); It != FreeBinders.end())
+      return It->second;
+    unsigned Set = 0;
+    if (Expr->K == LogicExpr::Var)
+      if (auto Id = nameId(Expr->Name))
+        Set = with(0, *Id);
+    for (const auto &Child : Expr->Children)
+      Set = unite(Set, freeBindersOf(Child.get()));
+    if (Expr->K == LogicExpr::Forall || Expr->K == LogicExpr::Exists)
+      Set = without(Set, *nameId(Expr->Binder));
+    FreeBinders[Expr] = Set;
+    return Set;
+  }
+
+  bool contains(unsigned Set, unsigned Name) const {
+    return std::binary_search(Sets[Set].begin(), Sets[Set].end(), Name);
+  }
+
+  bool meet(unsigned Left, unsigned Right) const {
+    for (unsigned Name : Sets[Left])
+      if (contains(Right, Name))
+        return true;
+    return false;
+  }
+
+  unsigned with(unsigned Set, unsigned Name) {
+    if (contains(Set, Name))
+      return Set;
+    std::vector<unsigned> Members = Sets[Set];
+    Members.insert(llvm::lower_bound(Members, Name), Name);
+    return intern(std::move(Members));
+  }
+
+private:
+  llvm::StringMap<unsigned> Names;
+  std::vector<std::vector<unsigned>> Sets{{}};
+  std::map<std::vector<unsigned>, unsigned> SetIds{{{}, 0}};
+  llvm::DenseMap<std::pair<unsigned, unsigned>, unsigned> Unions;
+  llvm::DenseMap<const LogicExpr *, unsigned> Binders;
+  llvm::DenseMap<const LogicExpr *, unsigned> FreeBinders;
+  bool Complete = false;
+
+  unsigned intern(std::vector<unsigned> Members) {
+    auto [It, Inserted] = SetIds.try_emplace(Members, Sets.size());
+    if (Inserted)
+      Sets.push_back(std::move(Members));
+    return It->second;
+  }
+
+  unsigned unite(unsigned Left, unsigned Right) {
+    if (Left == Right || Right == 0)
+      return Left;
+    if (Left == 0)
+      return Right;
+    auto Key = std::minmax(Left, Right);
+    if (auto It = Unions.find(Key); It != Unions.end())
+      return It->second;
+    std::vector<unsigned> Members;
+    std::set_union(Sets[Left].begin(), Sets[Left].end(), Sets[Right].begin(),
+                   Sets[Right].end(), std::back_inserter(Members));
+    unsigned Set = intern(std::move(Members));
+    Unions[Key] = Set;
+    return Set;
+  }
+
+  unsigned without(unsigned Set, unsigned Name) {
+    if (!contains(Set, Name))
+      return Set;
+    std::vector<unsigned> Members = Sets[Set];
+    Members.erase(llvm::lower_bound(Members, Name));
+    return intern(std::move(Members));
+  }
+};
+
+/// validateVariableScopes for the terms of one module against one map of
+/// free variables, visiting a shared term once for each set of binders in
+/// scope at it. Every check is the reference one's: a visit checks the sort
+/// of each bound occurrence and registers each free one, and the summaries
+/// decide whether a free variable is named as a binder of its root. A root
+/// that fails either is checked again by validateVariableScopes for the
+/// reference's error. The visit registered each name new to the map with the
+/// sort of its first occurrence in the root, as the reference does, so the
+/// reference finds what it would have found without the visit.
+class ScopeValidator {
+public:
+  ScopeValidator(BinderSummaries &Summaries,
+                 std::map<std::string, LogicSort> &FreeVariables)
+      : Summaries(Summaries), FreeVariables(FreeVariables) {}
+
+  bool validate(const LogicExpr *Root, std::string &Error) {
+    const bool Covered = Summaries.covers(Root);
+    if (Covered && visit(Root, 0) &&
+        !Summaries.meet(Summaries.bindersOf(Root),
+                        Summaries.freeBindersOf(Root)))
+      return true;
+    const bool Valid = validateVariableScopes(Root, FreeVariables, Error);
+    assert((!Covered || !Valid) &&
+           "the summaries reject only what the reference rejects");
+    return Valid;
+  }
+
+private:
+  BinderSummaries &Summaries;
+  std::map<std::string, LogicSort> &FreeVariables;
+  llvm::DenseSet<std::pair<const LogicExpr *, unsigned>> Visited;
+
+  bool visit(const LogicExpr *Expr, unsigned Bound) {
+    if (!Expr)
+      return false;
+    if (Expr->K == LogicExpr::Forall || Expr->K == LogicExpr::Exists)
+      Bound = Summaries.with(Bound, *Summaries.nameId(Expr->Binder));
+    if (Visited.contains({Expr, Bound}))
+      return true;
+    if (Expr->K == LogicExpr::Var) {
+      auto Id = Summaries.nameId(Expr->Name);
+      if (Id && Summaries.contains(Bound, *Id)) {
+        if (Expr->Sort.Kind != LogicSortKind::MathematicalInteger)
+          return false;
+      } else {
+        auto [It, Inserted] = FreeVariables.emplace(Expr->Name, Expr->Sort);
+        if (!Inserted && !equivalentVariableSort(It->second, Expr->Sort))
+          return false;
+      }
+    }
+    for (const auto &Child : Expr->Children)
+      if (!visit(Child.get(), Bound))
+        return false;
+    Visited.insert({Expr, Bound});
+    return true;
+  }
+};
+} // namespace
 
 static bool canCoerceLogicSort(const LogicSort &Source,
                                const LogicSort &Target) {
@@ -1088,11 +1277,18 @@ static bool canCoerceLogicSort(const LogicSort &Source,
 static bool
 validateLogicCalls(const LogicExpr *Expr,
                    const std::map<std::string, LogicFunctionDecl> &Functions,
-                   std::string &Error) {
+                   std::string &Error,
+                   llvm::DenseSet<const LogicExpr *> *Checked = nullptr);
+
+static bool
+validateLogicCall(const LogicExpr *Expr,
+                  const std::map<std::string, LogicFunctionDecl> &Functions,
+                  std::string &Error,
+                  llvm::DenseSet<const LogicExpr *> *Checked) {
   if (!Expr)
     return false;
   for (const auto &Child : Expr->Children)
-    if (!validateLogicCalls(Child.get(), Functions, Error))
+    if (!validateLogicCalls(Child.get(), Functions, Error, Checked))
       return false;
   if (Expr->K != LogicExpr::SpecCall)
     return true;
@@ -1116,6 +1312,21 @@ validateLogicCalls(const LogicExpr *Expr,
     Error = "logical application result sort mismatch: " + Expr->SpecCallee;
     return false;
   }
+  return true;
+}
+
+/// With \p Checked, as validateLogicExpr with its set.
+static bool
+validateLogicCalls(const LogicExpr *Expr,
+                   const std::map<std::string, LogicFunctionDecl> &Functions,
+                   std::string &Error,
+                   llvm::DenseSet<const LogicExpr *> *Checked) {
+  if (Checked && Checked->contains(Expr))
+    return true;
+  if (!validateLogicCall(Expr, Functions, Error, Checked))
+    return false;
+  if (Checked)
+    Checked->insert(Expr);
   return true;
 }
 
@@ -1147,9 +1358,11 @@ validateDefinitionVariables(const LogicExpr *Expr,
   return true;
 }
 
-static void collectRequiredFeatures(const LogicExpr *Expr,
-                                    LogicFeatureSet &Features) {
-  if (!Expr)
+/// With \p Seen, the features of a term in it are already in \p Features.
+static void
+collectRequiredFeatures(const LogicExpr *Expr, LogicFeatureSet &Features,
+                        llvm::DenseSet<const LogicExpr *> *Seen = nullptr) {
+  if (!Expr || (Seen && !Seen->insert(Expr).second))
     return;
   switch (Expr->Sort.Kind) {
   case LogicSortKind::MathematicalInteger:
@@ -1190,7 +1403,7 @@ static void collectRequiredFeatures(const LogicExpr *Expr,
   if (Expr->K == VCExpr::SpecCall)
     Features |= logicFeature(LogicFeature::SpecFunctions);
   for (const auto &Child : Expr->Children)
-    collectRequiredFeatures(Child.get(), Features);
+    collectRequiredFeatures(Child.get(), Features, Seen);
 }
 
 class ObligationBuilder {
@@ -2454,6 +2667,39 @@ verify::validateObligationModule(const ObligationModule &M) {
   std::string ValidationError;
   std::set<std::string> StableObligationIds;
   std::map<std::string, LogicSort> ModuleVariables;
+  // The goals share the terms of their assumptions, so each check visits a
+  // shared term once.
+  llvm::DenseSet<const LogicExpr *> WellFormed, CallsChecked, FeaturesSeen;
+  std::vector<const LogicExpr *> Roots;
+  for (const DiagnosticTraceEvent &Event : M.TraceEvents) {
+    Roots.push_back(Event.Guard.get());
+    for (const DiagnosticTraceValue &Value : Event.Values)
+      Roots.push_back(Value.Value.get());
+  }
+  for (const auto &[InternalName, Variable] : M.DiagnosticVariables)
+    if (Variable.Guard)
+      Roots.push_back(Variable.Guard.get());
+  Roots.push_back(M.CorrectnessGoal.get());
+  Roots.push_back(M.CounterexampleQuery.get());
+  for (const Obligation &Item : M.Obligations) {
+    Roots.push_back(Item.Goal.get());
+    Roots.push_back(Item.CounterexampleQuery.get());
+  }
+  for (const auto &Entry : M.LogicFunctions) {
+    const LogicFunctionDecl &Declaration = Entry.second;
+    Roots.push_back(Declaration.StepDefinition.get());
+    for (const auto &Definition : Declaration.DefinitionLevels)
+      Roots.push_back(Definition.get());
+    for (const auto &Measure : Declaration.Decreases)
+      Roots.push_back(Measure.get());
+  }
+  BinderSummaries Binders(Roots);
+  ScopeValidator ModuleScopes(Binders, ModuleVariables);
+  auto definitionScopes = [&](const LogicExpr *Expr) {
+    std::map<std::string, LogicSort> FreeVariables;
+    return ScopeValidator(Binders, FreeVariables)
+        .validate(Expr, ValidationError);
+  };
   for (const auto &[InternalName, Variable] : M.DiagnosticVariables) {
     if (InternalName.empty() || Variable.DisplayName.empty() ||
         containsEmbeddedNul(InternalName) ||
@@ -2481,60 +2727,57 @@ verify::validateObligationModule(const ObligationModule &M) {
     if (!validateSource(Event.Source, ValidationError))
       return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                      ValidationError.c_str());
-    if (!validateLogicExpr(Event.Guard.get(), ValidationError) ||
+    if (!validateLogicExpr(Event.Guard.get(), ValidationError, &WellFormed) ||
         !validateLogicCalls(Event.Guard.get(), M.LogicFunctions,
-                            ValidationError) ||
-        !validateVariableScopes(Event.Guard.get(), ModuleVariables,
-                                ValidationError) ||
+                            ValidationError, &CallsChecked) ||
+        !ModuleScopes.validate(Event.Guard.get(), ValidationError) ||
         Event.Guard->Sort.Kind != LogicSortKind::Bool)
       return llvm::createStringError(
           llvm::inconvertibleErrorCode(),
           "obligation module has invalid diagnostic trace metadata");
     for (const DiagnosticTraceValue &Value : Event.Values)
       if (Value.Label.empty() || containsEmbeddedNul(Value.Label) ||
-          !validateLogicExpr(Value.Value.get(), ValidationError) ||
+          !validateLogicExpr(Value.Value.get(), ValidationError, &WellFormed) ||
           !validateLogicCalls(Value.Value.get(), M.LogicFunctions,
-                              ValidationError) ||
-          !validateVariableScopes(Value.Value.get(), ModuleVariables,
-                                  ValidationError))
+                              ValidationError, &CallsChecked) ||
+          !ModuleScopes.validate(Value.Value.get(), ValidationError))
         return llvm::createStringError(
             llvm::inconvertibleErrorCode(),
             "obligation module has invalid diagnostic trace value");
   }
   for (const auto &[InternalName, Variable] : M.DiagnosticVariables)
     if (Variable.Guard &&
-        (!validateLogicExpr(Variable.Guard.get(), ValidationError) ||
+        (!validateLogicExpr(Variable.Guard.get(), ValidationError,
+                            &WellFormed) ||
          !validateLogicCalls(Variable.Guard.get(), M.LogicFunctions,
-                             ValidationError) ||
-         !validateVariableScopes(Variable.Guard.get(), ModuleVariables,
-                                 ValidationError) ||
+                             ValidationError, &CallsChecked) ||
+         !ModuleScopes.validate(Variable.Guard.get(), ValidationError) ||
          Variable.Guard->Sort.Kind != LogicSortKind::Bool))
       return llvm::createStringError(
           llvm::inconvertibleErrorCode(),
           "obligation module has an invalid diagnostic variable guard");
-  if (!validateLogicExpr(M.CorrectnessGoal.get(), ValidationError))
+  if (!validateLogicExpr(M.CorrectnessGoal.get(), ValidationError, &WellFormed))
     return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                    ValidationError.c_str());
   if (!validateLogicCalls(M.CorrectnessGoal.get(), M.LogicFunctions,
-                          ValidationError))
+                          ValidationError, &CallsChecked))
     return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                    ValidationError.c_str());
-  if (!validateVariableScopes(M.CorrectnessGoal.get(), ModuleVariables,
-                              ValidationError))
+  if (!ModuleScopes.validate(M.CorrectnessGoal.get(), ValidationError))
     return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                    ValidationError.c_str());
   if (M.CorrectnessGoal->Sort.Kind != LogicSortKind::Bool)
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    "complete correctness goal is not bool");
-  if (!validateLogicExpr(M.CounterexampleQuery.get(), ValidationError))
+  if (!validateLogicExpr(M.CounterexampleQuery.get(), ValidationError,
+                         &WellFormed))
     return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                    ValidationError.c_str());
   if (!validateLogicCalls(M.CounterexampleQuery.get(), M.LogicFunctions,
-                          ValidationError))
+                          ValidationError, &CallsChecked))
     return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                    ValidationError.c_str());
-  if (!validateVariableScopes(M.CounterexampleQuery.get(), ModuleVariables,
-                              ValidationError))
+  if (!ModuleScopes.validate(M.CounterexampleQuery.get(), ValidationError))
     return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                    ValidationError.c_str());
   if (M.CounterexampleQuery->Sort.Kind != LogicSortKind::Bool)
@@ -2546,8 +2789,10 @@ verify::validateObligationModule(const ObligationModule &M) {
         "complete counterexample query is not the exact negation of its goal");
 
   LogicFeatureSet RequiredFeatures = 0;
-  collectRequiredFeatures(M.CorrectnessGoal.get(), RequiredFeatures);
-  collectRequiredFeatures(M.CounterexampleQuery.get(), RequiredFeatures);
+  collectRequiredFeatures(M.CorrectnessGoal.get(), RequiredFeatures,
+                          &FeaturesSeen);
+  collectRequiredFeatures(M.CounterexampleQuery.get(), RequiredFeatures,
+                          &FeaturesSeen);
 
   std::set<std::string> ObligationIds;
   for (const Obligation &Item : M.Obligations) {
@@ -2578,28 +2823,28 @@ verify::validateObligationModule(const ObligationModule &M) {
       return llvm::createStringError(
           llvm::inconvertibleErrorCode(),
           "obligation module has an invalid diagnostic trace prefix");
-    if (!validateLogicExpr(Item.Goal.get(), ValidationError))
+    if (!validateLogicExpr(Item.Goal.get(), ValidationError, &WellFormed))
       return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                      ValidationError.c_str());
-    if (!validateLogicCalls(Item.Goal.get(), M.LogicFunctions, ValidationError))
+    if (!validateLogicCalls(Item.Goal.get(), M.LogicFunctions, ValidationError,
+                            &CallsChecked))
       return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                      ValidationError.c_str());
-    if (!validateVariableScopes(Item.Goal.get(), ModuleVariables,
-                                ValidationError))
+    if (!ModuleScopes.validate(Item.Goal.get(), ValidationError))
       return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                      ValidationError.c_str());
     if (Item.Goal->Sort.Kind != LogicSortKind::Bool)
       return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                      "individual correctness goal is not bool");
-    if (!validateLogicExpr(Item.CounterexampleQuery.get(), ValidationError))
+    if (!validateLogicExpr(Item.CounterexampleQuery.get(), ValidationError,
+                           &WellFormed))
       return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                      ValidationError.c_str());
     if (!validateLogicCalls(Item.CounterexampleQuery.get(), M.LogicFunctions,
-                            ValidationError))
+                            ValidationError, &CallsChecked))
       return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                      ValidationError.c_str());
-    if (!validateVariableScopes(Item.CounterexampleQuery.get(), ModuleVariables,
-                                ValidationError))
+    if (!ModuleScopes.validate(Item.CounterexampleQuery.get(), ValidationError))
       return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                      ValidationError.c_str());
     if (Item.CounterexampleQuery->Sort.Kind != LogicSortKind::Bool)
@@ -2611,8 +2856,9 @@ verify::validateObligationModule(const ObligationModule &M) {
           llvm::inconvertibleErrorCode(),
           "individual counterexample query is not the exact negation of its "
           "goal");
-    collectRequiredFeatures(Item.Goal.get(), RequiredFeatures);
-    collectRequiredFeatures(Item.CounterexampleQuery.get(), RequiredFeatures);
+    collectRequiredFeatures(Item.Goal.get(), RequiredFeatures, &FeaturesSeen);
+    collectRequiredFeatures(Item.CounterexampleQuery.get(), RequiredFeatures,
+                            &FeaturesSeen);
   }
 
   std::unique_ptr<LogicExpr> CanonicalGoal = buildCompleteGoal(M.Obligations);
@@ -2661,7 +2907,8 @@ verify::validateObligationModule(const ObligationModule &M) {
             logicFeature(LogicFeature::MathematicalIntegers);
     }
     if (Declaration.StepDefinition) {
-      if (!validateLogicExpr(Declaration.StepDefinition.get(), ValidationError))
+      if (!validateLogicExpr(Declaration.StepDefinition.get(), ValidationError,
+                             &WellFormed))
         return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                        ValidationError.c_str());
       if (Declaration.StepDefinition->Sort.Kind !=
@@ -2674,18 +2921,18 @@ verify::validateObligationModule(const ObligationModule &M) {
             llvm::inconvertibleErrorCode(),
             "logical function step result sort mismatch");
       if (!validateLogicCalls(Declaration.StepDefinition.get(),
-                              M.LogicFunctions, ValidationError) ||
-          !validateVariableScopes(Declaration.StepDefinition.get(),
-                                  ValidationError) ||
+                              M.LogicFunctions, ValidationError,
+                              &CallsChecked) ||
+          !definitionScopes(Declaration.StepDefinition.get()) ||
           !validateDefinitionVariables(Declaration.StepDefinition.get(),
                                        Parameters, {}, ValidationError))
         return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                        ValidationError.c_str());
       collectRequiredFeatures(Declaration.StepDefinition.get(),
-                              RequiredFeatures);
+                              RequiredFeatures, &FeaturesSeen);
     }
     for (const auto &Definition : Declaration.DefinitionLevels) {
-      if (!validateLogicExpr(Definition.get(), ValidationError))
+      if (!validateLogicExpr(Definition.get(), ValidationError, &WellFormed))
         return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                        ValidationError.c_str());
       if (Definition->Sort.Kind != Declaration.ResultSort.Kind ||
@@ -2695,19 +2942,20 @@ verify::validateObligationModule(const ObligationModule &M) {
             llvm::inconvertibleErrorCode(),
             "logical function definition result sort mismatch");
       if (!validateLogicCalls(Definition.get(), M.LogicFunctions,
-                              ValidationError) ||
-          !validateVariableScopes(Definition.get(), ValidationError) ||
+                              ValidationError, &CallsChecked) ||
+          !definitionScopes(Definition.get()) ||
           !validateDefinitionVariables(Definition.get(), Parameters, {},
                                        ValidationError))
         return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                        ValidationError.c_str());
-      collectRequiredFeatures(Definition.get(), RequiredFeatures);
+      collectRequiredFeatures(Definition.get(), RequiredFeatures,
+                              &FeaturesSeen);
     }
     // A measure only chooses an induction or Lean's termination argument,
     // so it adds no feature; it must still be an integer over the
     // parameters.
     for (const auto &Measure : Declaration.Decreases) {
-      if (!validateLogicExpr(Measure.get(), ValidationError))
+      if (!validateLogicExpr(Measure.get(), ValidationError, &WellFormed))
         return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                        ValidationError.c_str());
       if (Measure->Sort.Kind != LogicSortKind::MathematicalInteger &&
@@ -2715,9 +2963,9 @@ verify::validateObligationModule(const ObligationModule &M) {
         return llvm::createStringError(
             llvm::inconvertibleErrorCode(),
             "logical function termination measure is not an integer");
-      if (!validateLogicCalls(Measure.get(), M.LogicFunctions,
-                              ValidationError) ||
-          !validateVariableScopes(Measure.get(), ValidationError) ||
+      if (!validateLogicCalls(Measure.get(), M.LogicFunctions, ValidationError,
+                              &CallsChecked) ||
+          !definitionScopes(Measure.get()) ||
           !validateDefinitionVariables(Measure.get(), Parameters, {},
                                        ValidationError))
         return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
