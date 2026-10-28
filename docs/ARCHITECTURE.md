@@ -998,9 +998,43 @@ space and 53 s, verifying it 14.9 GB with eight jobs (`--jobs=8`, more than
 a 16 GB CI runner holds beside the tests running with it), and lowering
 `safe_fib.cpp` 4.7 GB and 16 s. They now take 0.43 GB and 10 s, 0.9 GB, and
 0.35 GB and 7 s. The goals still repeat their assumptions as trees, so a
-traversal that does not memoize (validation, hashing, serialization) still
-takes time quadratic in a function's length; hash-consing the terms and
-memoizing those traversals would make it linear.
+traversal that does not memoize takes time quadratic in a function's length:
+hashing and serialization still do. The simplifier's statistics count a
+module's nodes as trees, each shared term's count computed once
+(`countModuleNodes`).
+
+**Validation visits a shared term once.** `validateObligationModule` checks
+each term of a module as a root (every trace guard and value, the complete
+goal and query, each obligation's goal and query, and each definition level,
+step, and measure): every node is well formed, every application has a
+declaration with its signature, every variable is in scope with one sort,
+and it collects the logic features the module needs. Each check keeps, for
+the module, the terms it has passed, so a term the goals share is checked
+once whichever roots reach it. Form, applications, and features depend on
+the term alone. Scope depends on where a term is, and `ScopeValidator`
+handles it in two parts:
+
+- A variable is bound or free by the quantifiers above it, so a term is
+  visited once for each set of binder names in scope at it (interned, so
+  a set is a number). A visit checks that a bound occurrence is a
+  mathematical integer and registers a free one in the map of free
+  variables, whose sort must agree with every other occurrence. The module's
+  roots share one map; each definition has its own, since its variables are
+  its parameters.
+- A free variable must not have the name of a binder anywhere in its root.
+  `BinderSummaries` gives each term, once, the set of binder names it
+  contains and the set of binder names free in it (as Frama-C's Qed caches
+  each term's bound and free variables, `bind` and `vars`, and Lean each
+  `Expr`'s loose bound-variable range), after every binder name of the
+  module is registered; a root fails where the two sets of the root meet.
+
+A root that fails either part is checked again by the tree walk that was the
+whole check before, which gives the error it always gave, and an assertion
+checks that this walk fails too. Validation was 80% of lowering (callgrind,
+`safe_fib.cpp`, 20.4 of 25.1 billion instructions); with it and the node
+count linear, `--lower-only` takes 1.9 s instead of 10.4 s on `safe_fib.cpp`
+and 2.5 s instead of 10.3 s on the ULEB128 case study, within the same
+memory and with the same output.
 
 **Size.** Each obligation's goal is its condition under every assumption
 before it, sharing their terms (above): a goal adds, for each assumption, a
@@ -3262,6 +3296,24 @@ fresh context, the API's or `z3`'s, the same assertions are `unknown`
 - Backend fidelity gate: `clang/test/Verify/suite/backend_fidelity_gate.test`
   requires cvc5 and pinned Lean 4.35.0 and runs the permanent differential
   matrix under every machine-integer encoding.
+- Differential execution: `clang/utils/cppverify-differential/run.py`
+  verifies 484 contracted functions (`cases/`) in each configuration their
+  suite lists (Z3 in each machine-integer encoding, cvc5, BMC at two bounds),
+  compiles the same source with `-fverify-contracts -fno-verify` and
+  `-fsanitize=undefined -fsanitize-trap=undefined`, and runs it on every input
+  of small parameter types, otherwise on boundary values and samples seeded
+  by the function's name, each buffer against an inaccessible page on one
+  side and then the other. Each case restates its pre- and postcondition in
+  Python over mathematical integers, which judge each run. A problem is a
+  `Verified` function (or one `BoundedSafe` within its bound) that
+  misbehaves on an admitted input, a counterexample whose input the
+  precondition rejects or on which the function behaves (pointer cases'
+  counterexamples are not replayed, and one against an invariant, measure,
+  or frame is relative to that abstraction), or two configurations that
+  decide differently. `.github/workflows/cppverify-differential.yml` runs
+  every case nightly; `differential.test` runs the tool's own cases, two of
+  which state their contract wrongly in Python so that the tool must report
+  them.
 - Instrumented coverage: `scripts/coverage-verify.sh` (region target on `clang/lib/Verify`).
 
 Every new semantic feature needs layered oracles rather than a solver result
