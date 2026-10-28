@@ -718,7 +718,9 @@ was too large. cvc5's scripts and archive records, which state shared terms
 in full, are checked against it too. The new
 ``--memory-limit`` (default 8192 MB) bounds Z3's queries together and each
 cvc5 process; a query that reaches it is ``Unresolved`` with reason
-``solver.memory-limit`` (:doc:`language/tooling`).
+``solver.memory-limit``, also when cvc5's arithmetic library, GMP, is the
+one that stops it (``GNU MP: Cannot allocate memory``)
+(:doc:`language/tooling`).
 
 **Parallel runs.** With more than one job, a function waiting for its own
 queries could run another function's long query, delaying its result and

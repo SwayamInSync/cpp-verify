@@ -2583,10 +2583,13 @@ static SolverRun runCVC5(const std::string &SolverPath, llvm::StringRef Script,
     std::optional<std::string> StandardOutput =
         readSolverOutput(OutputPath, OutputError, MaxSolverOutputBytes);
     // An allocation past the limit fails, and cvc5 reports it as an error
-    // ((error "std::bad_alloc")) or aborts on it (std::bad_alloc, or its SAT
-    // solver's Minisat::OutOfMemoryException).
+    // ((error "std::bad_alloc")) or aborts on it (std::bad_alloc, its SAT
+    // solver's Minisat::OutOfMemoryException, or GMP's "GNU MP: Cannot
+    // allocate memory"), as Why3's prover drivers read it. A crash says
+    // nothing of why, and stays a failed invocation.
     auto outOfMemory = [](llvm::StringRef Text) {
-      return Text.contains("bad_alloc") || Text.contains("OutOfMemory");
+      return Text.contains("bad_alloc") || Text.contains("OutOfMemory") ||
+             Text.contains("Cannot allocate memory");
     };
     if (outOfMemory(*StandardError) ||
         (StandardOutput && outOfMemory(*StandardOutput))) {
