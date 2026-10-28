@@ -84,10 +84,10 @@ footprint, bind a reference to it, and pass it to a reference parameter.
 
    Verified: peek [backend=z3]
    Verified: put [backend=z3]
-   ring.cpp:25:3: error: verification failed: slot [bounds] [backend=z3] [reason=counterexample]
+   ring.cpp:25:10: error: verification failed: slot [bounds] [backend=z3] [reason=counterexample]
       25 |   return r->buf[i];
-         |   ^
-   ring.cpp:25:3: note: counterexample: r = 1, i = 8
+         |          ^
+   ring.cpp:25:10: note: counterexample: r = 1, i = 8
 
 Each index is checked against its own array, as Frama-C's RTE guards are,
 and not only against the object. ``r->buf[8]`` has the address of
@@ -925,10 +925,10 @@ internal calls included, so no call observes the object while it is broken:
 
    Verified: Meter::Meter [backend=z3]
    Verified: Meter::add [backend=z3]
-   meter.cpp:28:33: error: verification failed: Meter::overflow [type-invariant] [backend=z3] [reason=counterexample]
+   meter.cpp:28:42: error: verification failed: Meter::overflow [type-invariant] [backend=z3] [reason=counterexample]
       28 |   cv::type_invariant(0 <= level && level <= 100);
-         |                      ~~~~~~~~~~~^~~~~~~~~~~~~~~
-   meter.cpp:28:33: note: counterexample: this = 1
+         |                                    ~~~~~~^~~~~~
+   meter.cpp:28:42: note: counterexample: this = 1
    meter.cpp:17:11: note: stores 101 at address 1
       17 |     level = 101;
          |           ^
