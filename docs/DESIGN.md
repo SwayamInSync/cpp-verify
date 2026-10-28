@@ -937,7 +937,9 @@ error naming it.
 
 Of the C library, `abs`, `labs`, `llabs`, and `std::abs` of an integer are
 their definition, undefined at the minimum, and in a spec the mathematical
-absolute value. `memcpy`, `memmove`, `memset`,
+absolute value; libc++ defines the `std::abs` of `long` and `long long` in
+the global namespace of its `<stdlib.h>`, so a global `abs` declared in a
+system header is it too, and one of the user's own is not. `memcpy`, `memmove`, `memset`,
 and `memcmp` of objects of an integer type `T` (an enumeration as its
 underlying type, `bool` only with `bool`), with a size of `k * sizeof(T)`
 bytes, are calls of their models in `<cppverify.h>`: trusted declarations
