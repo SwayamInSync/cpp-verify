@@ -124,7 +124,7 @@ void printLean(llvm::raw_ostream &OS) {
 } // namespace
 
 void verify::printVersion(llvm::raw_ostream &OS) {
-  OS << "cpp-verify " << CPPVERIFY_VERSION;
+  OS << "cpp-verify " << CPPVERIFY_VERSION_STRING;
   std::string Repository = getClangFullRepositoryVersion();
   if (!Repository.empty())
     OS << ' ' << Repository;
