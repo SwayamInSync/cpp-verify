@@ -8,6 +8,7 @@ add_distinct_clang_unittest(VerifyTests
   CertifyTest.cpp
   EncodingParityTest.cpp
   MachineIntegerEncodingTest.cpp
+  ObligationValidationTest.cpp
   CLANG_LIBS
   clangVerify
   LINK_LIBS

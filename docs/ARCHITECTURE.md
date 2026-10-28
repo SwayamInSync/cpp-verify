@@ -957,9 +957,43 @@ space and 53 s, verifying it 14.9 GB with eight jobs (`--jobs=8`, more than
 a 16 GB CI runner holds beside the tests running with it), and lowering
 `safe_fib.cpp` 4.7 GB and 16 s. They now take 0.43 GB and 10 s, 0.9 GB, and
 0.35 GB and 7 s. The goals still repeat their assumptions as trees, so a
-traversal that does not memoize (validation, hashing, serialization) still
-takes time quadratic in a function's length; hash-consing the terms and
-memoizing those traversals would make it linear.
+traversal that does not memoize takes time quadratic in a function's length:
+hashing and serialization still do. The simplifier's statistics count a
+module's nodes as trees, each shared term's count computed once
+(`countModuleNodes`).
+
+**Validation visits a shared term once.** `validateObligationModule` checks
+each term of a module as a root (every trace guard and value, the complete
+goal and query, each obligation's goal and query, and each definition level,
+step, and measure): every node is well formed, every application has a
+declaration with its signature, every variable is in scope with one sort,
+and it collects the logic features the module needs. Each check keeps, for
+the module, the terms it has passed, so a term the goals share is checked
+once whichever roots reach it. Form, applications, and features depend on
+the term alone. Scope depends on where a term is, and `ScopeValidator`
+handles it in two parts:
+
+- A variable is bound or free by the quantifiers above it, so a term is
+  visited once for each set of binder names in scope at it (interned, so
+  a set is a number). A visit checks that a bound occurrence is a
+  mathematical integer and registers a free one in the map of free
+  variables, whose sort must agree with every other occurrence. The module's
+  roots share one map; each definition has its own, since its variables are
+  its parameters.
+- A free variable must not have the name of a binder anywhere in its root.
+  `BinderSummaries` gives each term, once, the set of binder names it
+  contains and the set of binder names free in it (as Frama-C's Qed caches
+  each term's bound and free variables, `bind` and `vars`, and Lean each
+  `Expr`'s loose bound-variable range), after every binder name of the
+  module is registered; a root fails where the two sets of the root meet.
+
+A root that fails either part is checked again by the tree walk that was the
+whole check before, which gives the error it always gave, and an assertion
+checks that this walk fails too. Validation was 80% of lowering (callgrind,
+`safe_fib.cpp`, 20.4 of 25.1 billion instructions); with it and the node
+count linear, `--lower-only` takes 1.9 s instead of 10.4 s on `safe_fib.cpp`
+and 2.5 s instead of 10.3 s on the ULEB128 case study, within the same
+memory and with the same output.
 
 **Size.** Each obligation's goal is its condition under every assumption
 before it, sharing their terms (above): a goal adds, for each assumption, a
