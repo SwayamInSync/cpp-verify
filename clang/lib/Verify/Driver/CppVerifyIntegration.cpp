@@ -40,12 +40,11 @@ VerifyOptions verify::compilationOptions(const FrontendOptions &Options) {
     Opts.Backend = BackendKind::BMC;
     break;
   }
-  if (unsigned Timeout = Options.VerifyTimeoutMs) {
-    const unsigned Max = std::numeric_limits<unsigned>::max();
-    Opts.SolverTimeoutMs = Timeout;
-    Opts.CollectionTimeoutMs = Timeout > Max / 2 ? 0 : 2 * Timeout;
-    Opts.FunctionTimeoutMs = Timeout > Max / 10 ? 0 : 10 * Timeout;
-  }
+  const unsigned Timeout = Options.VerifyTimeoutMs;
+  const unsigned Max = std::numeric_limits<unsigned>::max();
+  Opts.SolverTimeoutMs = Timeout;
+  Opts.CollectionTimeoutMs = Timeout > Max / 2 ? 0 : 2 * Timeout;
+  Opts.FunctionTimeoutMs = Timeout > Max / 10 ? 0 : 10 * Timeout;
   Opts.Jobs = std::max(1u, Options.VerifyJobs);
   Opts.ProofCachePath = Options.VerifyCache;
   Opts.ReportPath = Options.VerifyReport;
