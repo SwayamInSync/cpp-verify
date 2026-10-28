@@ -1105,6 +1105,9 @@ struct VerifyDiagnostic {
   bool Axiom = false;
   /// What else the verifier found about the verdict, each printed as a note.
   std::vector<std::string> Notes;
+  /// A failing obligation after the one a function's verdict reports: no
+  /// verdict of its own.
+  bool Additional = false;
 };
 
 /// The backend a lowering reports, as lower-only names it.
@@ -3300,6 +3303,7 @@ public:
     Execution.MemoryLimitMB = Opts.MemoryLimitMB;
     Execution.IntegerEncoding = Opts.IntegerEncoding;
     Execution.SkipWholeModuleRetry = !Opts.LeanFallbackProjectPath.empty();
+    Execution.MaxFailures = Opts.MaxFailures;
     Execution.CVC5Path = Opts.CVC5Path;
     Execution.ProfileQuantifiers = Opts.ProfileQuantifiers;
     Execution.ProofCachePath = Opts.ProofCachePath;
@@ -3613,6 +3617,7 @@ public:
                  Result.Source.File == Failure.Source.File;
         };
         bool Unrolled = false;
+        std::string Earlier;
         for (unsigned Bound = 0; Bound <= Opts.ConfirmBound; ++Bound) {
           VFunction Copy = LoopUnroller::unroll(Bounded, Bound);
           Passivizer Unrolling;
@@ -3633,7 +3638,29 @@ public:
           bool Copies = false;
           bool CopiesHold = true;
           bool Unwound = true;
-          for (VerifyResult &Result : Unroller.verifyObligations(Module)) {
+          // Every failure is reported, so a copy, or a loop's unwinding, is
+          // solved in the executions that pass the failing checks before it:
+          // one that fails an earlier check never reaches it. What holds
+          // past another check that fails says so.
+          std::vector<VerifyResult> Results =
+              Unroller.verifyObligations(Module, /*ReportedFailures=*/0);
+          size_t Last = 0;
+          for (size_t I = 0; I != Results.size(); ++I)
+            if (Results[I].ObligationType == ObligationKind::Unwinding ||
+                copyOfFailure(Results[I]))
+              Last = I;
+          Earlier.clear();
+          for (size_t I = 0; I != Last && Earlier.empty(); ++I)
+            if (Results[I].Status == VerifyStatus::Failed &&
+                Results[I].ObligationType &&
+                Results[I].ObligationType != ObligationKind::Unwinding &&
+                !copyOfFailure(Results[I]))
+              Earlier = std::string(" (the ") +
+                        obligationKindName(*Results[I].ObligationType) +
+                        " check at " + std::to_string(Results[I].Source.Line) +
+                        ":" + std::to_string(Results[I].Source.Column) +
+                        " fails)";
+          for (VerifyResult &Result : Results) {
             if (Result.ObligationType == ObligationKind::Unwinding) {
               Unwound &= Result.Status == VerifyStatus::Verified;
               continue;
@@ -3666,16 +3693,27 @@ public:
             return Notes;
           if (Copies && Unwound) {
             Notes.push_back(
-                "no execution fails this check: every loop ends within " +
-                iterations(Bound) +
-                ", and unrolling proves it there; the "
-                "loops' invariants are too weak for an unbounded proof");
+                Earlier.empty()
+                    ? "no execution fails this check: every loop ends within " +
+                          iterations(Bound) +
+                          ", and unrolling proves it there; the loops' "
+                          "invariants are too weak for an unbounded proof"
+                    : "no execution fails this check without failing an "
+                      "earlier one first" +
+                          Earlier +
+                          ": those that pass the checks before it end every "
+                          "loop within " +
+                          iterations(Bound) + ", and unrolling proves it there");
             return Notes;
           }
         }
         if (Unrolled)
           Notes.push_back("no execution fails this check within " +
-                          iterations(Opts.ConfirmBound) + " of each loop");
+                          iterations(Opts.ConfirmBound) + " of each loop" +
+                          (Earlier.empty()
+                               ? std::string()
+                               : " without failing an earlier one first" +
+                                     Earlier));
         return Notes;
       };
       Passivizer P;
@@ -4888,15 +4926,24 @@ public:
                   Module, *Item, *R.Assignment, LeanModules.Specs, Pending.Why);
             Run.Refutations.push_back(std::move(Pending));
           }
-          std::string Msg = "verification failed: " + Fn->Name;
-          if (!R.ObligationId.empty())
-            Msg += " [" + R.ObligationId + "]";
-          if (!R.Message.empty())
-            Msg += " (counterexample: " + R.Message + ")";
-          Msg += backendSuffix(R);
-          Diags.push_back(
-              {VerifyDiagnostic::Error, Msg, R.Location, Fn->Name, R});
-          Diags.back().Notes = failureNotes(*Fn, R);
+          // The failure, and those after it --max-failures reports, each
+          // with its counterexample and notes.
+          auto failure = [&](const VerifyResult &Failure) {
+            std::string Msg = "verification failed: " + Fn->Name;
+            if (!Failure.ObligationId.empty())
+              Msg += " [" + Failure.ObligationId + "]";
+            if (!Failure.Message.empty())
+              Msg += " (counterexample: " + Failure.Message + ")";
+            Msg += backendSuffix(Failure);
+            Diags.push_back({VerifyDiagnostic::Error, Msg, Failure.Location,
+                             Fn->Name, Failure});
+            Diags.back().Notes = failureNotes(*Fn, Failure);
+          };
+          failure(R);
+          for (const VerifyResult &More : R.MoreFailures) {
+            failure(More);
+            Diags.back().Additional = true;
+          }
         } else {
           const bool FallbackExported = R.Status == VerifyStatus::Unresolved &&
                                         exportLeanFallback(Module, Fn->Name, R);
@@ -6084,7 +6131,7 @@ public:
   /// verdict only when it carries one, as the first error of a function the
   /// verifier does not represent does.
   static void count(const VerifyDiagnostic &D, VerifySummary &Summary) {
-    if (D.Axiom)
+    if (D.Axiom || D.Additional)
       return;
     switch (D.K) {
     case VerifyDiagnostic::Verified:

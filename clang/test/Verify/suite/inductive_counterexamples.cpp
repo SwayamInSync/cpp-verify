@@ -123,8 +123,10 @@ int two_checks(int n)
   return c;
 }
 
-// And those of its kind: the division by zero at the same place fails one
-// iteration sooner, but the failed check is the overflow of INT_MIN / -1.
+// And those of its kind: the failed check is the overflow of INT_MIN / -1,
+// and the division by zero at the same place fails one iteration sooner, in
+// every execution that would reach it. A copy is solved in the executions
+// that pass the failing checks before it, so none fails the overflow.
 int two_kinds(int a, int n)
   cv::pre(n >= 0 && n <= 5)
   cv::post(true)
@@ -136,6 +138,27 @@ int two_kinds(int a, int n)
     cv::decreases(n - c)
   {
     q = a / (1 - c);
+    c = c + 1;
+  }
+  return q;
+}
+
+// The first division fails at c == k, and the second one iteration sooner
+// when m == k - 1: the execution that fails the first within 2 iterations
+// divides by zero in the second first. The one shown passes it.
+int past_failure(int k, int m, int n)
+  cv::pre(n >= 0 && n <= 5)
+  cv::pre((k == 1 && m == 0) || (k == 3 && m == 100))
+  cv::post(true)
+{
+  int c = 0;
+  int q = 0;
+  while (c < n)
+    cv::invariant(0 <= c && c <= n)
+    cv::decreases(n - c)
+  {
+    q = 100 / (k - c);
+    q = q + 100 / (m - c);
     c = c + 1;
   }
   return q;
@@ -195,12 +218,15 @@ int count_up_proved(int n)
 // CHECK-NEXT: inductive_counterexamples.cpp:119:5: error: verification failed: two_checks [{{.*}}::assertion@119:5]
 // CHECK-NEXT: note: the counterexample's state at the loop at 115:3 is any state its invariants allow, not necessarily one an execution reaches
 // CHECK-NEXT: note: an execution fails this check within 5 iterations of each loop (counterexample: {{.*}}n [ssa=n_0] [type=i32] = 5{{.*}})
-// CHECK-NEXT: inductive_counterexamples.cpp:138:7: error: verification failed: two_kinds [{{.*}}::overflow@138:7]
-// CHECK-NEXT: note: the counterexample's state at the loop at 134:3 is any state its invariants allow, not necessarily one an execution reaches
-// CHECK-NEXT: note: an execution fails this check within 3 iterations of each loop (counterexample: {{.*}})
-// CHECK-NEXT: inductive_counterexamples.cpp:147:23: error: verification failed: skipped [{{.*}}::postcondition@147:23]
+// CHECK-NEXT: inductive_counterexamples.cpp:140:7: error: verification failed: two_kinds [{{.*}}::overflow@140:7]
+// CHECK-NEXT: note: the counterexample's state at the loop at 136:3 is any state its invariants allow, not necessarily one an execution reaches
+// CHECK-NEXT: note: no execution fails this check without failing an earlier one first (the division-by-zero check at 140:7 fails): those that pass the checks before it end every loop within 2 iterations, and unrolling proves it there
+// CHECK-NEXT: inductive_counterexamples.cpp:160:7: error: verification failed: past_failure [{{.*}}::division-by-zero@160:7]
+// CHECK-NEXT: note: the counterexample's state at the loop at 156:3 is any state its invariants allow, not necessarily one an execution reaches
+// CHECK-NEXT: note: an execution fails this check within 4 iterations of each loop (counterexample: {{.*}}k [ssa=k_0] [type=i32] = 3, m [ssa=m_0] [type=i32] = 100{{.*}})
+// CHECK-NEXT: inductive_counterexamples.cpp:170:23: error: verification failed: skipped [{{.*}}::postcondition@170:23]
 // CHECK-NEXT: Verified: count_up_proved [backend=z3]
-// CHECK-NEXT: Summary: 1 verified, 10 failed
+// CHECK-NEXT: Summary: 1 verified, 11 failed
 
 // Without unrolling, a failure still says where its state comes from.
 // NONE:      error: verification failed: count_up

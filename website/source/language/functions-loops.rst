@@ -673,9 +673,44 @@ Here the loop has no invariant, so after it ``c`` may be anything; the fix is
 fails the check (in any iteration's copy of it, for a check in the loop's
 body), the note says within how many iterations and gives that execution;
 when it finds neither a failure nor a proof within the bound, the note says
-that no execution fails the check within that many iterations. Unrolling
-keeps no invariant and no measure, so a failed invariant or measure gets the
-first note only. The verdict stays ``verification failed`` either way, since
+that no execution fails the check within that many iterations. The execution
+a note gives passes the checks before this one that fail, since one that
+fails an earlier check never reaches it. When the check holds in every
+execution that passes them, the note says so and names an earlier check that
+fails, the one to fix first (``--max-failures=0`` reports it with its own
+counterexample, see :doc:`tooling`):
+
+.. code-block:: cpp
+
+   namespace cv = cppverify;
+
+   int divide(int a, int n)
+     cv::pre(n >= 0 && n <= 5)
+     cv::post(true)
+   {
+     int c = 0;
+     int q = 0;
+     while (c < n)
+       cv::invariant(0 <= c && c <= n)
+       cv::decreases(n - c)
+     {
+       q = a / (1 - c);
+       c = c + 1;
+     }
+     return q;
+   }
+
+.. code-block:: text
+
+   divide.cpp:13:7: error: verification failed: divide [fn_...::overflow@13:7] (counterexample: a [ssa=a_0] [type=i32] = -2147483648, c [ssa=c_1] [type=i32] = 0, c [ssa=c_2] [type=i32] = 2, n [ssa=n_0] [type=i32] = 3, q [ssa=q_1] [type=i32] = 0; trace: loop.entry@9:3 -> loop.inductive iteration@9:3 condition=true) [backend=z3] [reason=counterexample]
+   note: the counterexample's state at the loop at 9:3 is any state its invariants allow, not necessarily one an execution reaches
+   note: no execution fails this check without failing an earlier one first (the division-by-zero check at 13:7 fails): those that pass the checks before it end every loop within 2 iterations, and unrolling proves it there
+
+``INT_MIN / -1`` needs ``c == 2``, and every execution that gets there
+divides by ``1 - 1`` one iteration sooner.
+
+Unrolling keeps no invariant and no measure, so a failed invariant or
+measure gets the first note only. The verdict stays ``verification failed`` either way, since
 the claim is not proved. A failure of a function
 whose loop has no ``cppverify::decreases`` also notes that loop: with a
 proof, the function would still be ``Unresolved`` (``decreases.missing``).

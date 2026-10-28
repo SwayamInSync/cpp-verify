@@ -3595,8 +3595,8 @@ static VerifyResult finishZ3Result(VerifyResult Result) {
 
 std::vector<VerifyResult>
 Z3VerifyBackend::verifyObligations(const ObligationModule &Module,
-                                   bool StopAtFailure, Race *Racing,
-                                   unsigned TimeoutCapMs) {
+                                   std::optional<unsigned> ReportedFailures,
+                                   Race *Racing, unsigned TimeoutCapMs) {
   TimeoutMs =
       budget(moduleTimeoutMs(Module, SolverTimeoutMs, CollectionTimeoutMs));
   if (TimeoutCapMs != 0)
@@ -3626,13 +3626,31 @@ Z3VerifyBackend::verifyObligations(const ObligationModule &Module,
   auto IsReused = [&](size_t I) {
     return ReuseVerifiedQueries && VerifiedQueries.count(QueryHashes[I]) != 0;
   };
+  // When failures are reported, each obligation after the first failure is
+  // solved in the executions that pass every earlier one that fails, as
+  // Boogie assumes an assertion after checking it: alone, its counterexample
+  // could start where an earlier check already fails, and fixing that one
+  // would remove it. A check not settled is not assumed, so a proof past
+  // the failures rests on no check that may not hold.
+  const unsigned StopAfterFailures = ReportedFailures.value_or(0);
+  std::vector<size_t> Failing;
+  std::vector<bool> PastEarlier(Module.Obligations.size());
   if (Jobs == 1 || Module.Obligations.size() < 2) {
+    unsigned Failures = 0;
     for (size_t I = 0; I != Module.Obligations.size(); ++I) {
-      Results.push_back(verifyObligation(
-          Module, Module.Obligations[I],
-          Cache ? llvm::StringRef(CacheHashes[I]) : llvm::StringRef(),
-          Cache ? &CacheLookups[I] : nullptr, IsReused(I), Racing));
-      if (StopAtFailure && Results.back().Status == VerifyStatus::Failed)
+      PastEarlier[I] = ReportedFailures && Failures != 0;
+      Results.push_back(
+          PastEarlier[I]
+              ? verifyPastEarlier(Module, I, Failing, Racing)
+              : verifyObligation(Module, Module.Obligations[I],
+                                 Cache ? llvm::StringRef(CacheHashes[I])
+                                       : llvm::StringRef(),
+                                 Cache ? &CacheLookups[I] : nullptr,
+                                 IsReused(I), Racing));
+      if (Results.back().Status != VerifyStatus::Failed)
+        continue;
+      Failing.push_back(I);
+      if (++Failures == StopAfterFailures)
         break;
     }
   } else {
@@ -3656,10 +3674,26 @@ Z3VerifyBackend::verifyObligations(const ObligationModule &Module,
     Group.wait();
     for (std::shared_future<VerifyResult> &Future : Futures)
       Results.push_back(Future.get());
+    // A failure after the first is solved again past the earlier checks; a
+    // proof or an unresolved result stays one there.
+    unsigned Failures = 0;
+    for (size_t I = 0;
+         ReportedFailures && I != Results.size() &&
+         (StopAfterFailures == 0 || Failures < StopAfterFailures);
+         ++I) {
+      if (Failures != 0 && Results[I].Status == VerifyStatus::Failed) {
+        PastEarlier[I] = true;
+        Results[I] = verifyPastEarlier(Module, I, Failing, Racing);
+      }
+      if (Results[I].Status == VerifyStatus::Failed) {
+        Failing.push_back(I);
+        ++Failures;
+      }
+    }
   }
   if (ReuseVerifiedQueries)
     for (size_t I = 0; I != Results.size(); ++I)
-      if (Results[I].Status == VerifyStatus::Verified)
+      if (Results[I].Status == VerifyStatus::Verified && !PastEarlier[I])
         VerifiedQueries.insert(QueryHashes[I]);
   return Results;
 }
@@ -3671,7 +3705,8 @@ Z3VerifyBackend::Z3VerifyBackend(const BackendExecutionOptions &Execution,
       SolverTimeoutMs(Execution.SolverTimeoutMs),
       CollectionTimeoutMs(Execution.CollectionTimeoutMs),
       ResourceLimit(Execution.SolverResourceLimit), Jobs(Execution.Jobs),
-      Pool(Execution.Pool), MaxQueryNodes(Execution.MaxQueryNodes),
+      MaxFailures(Execution.MaxFailures), Pool(Execution.Pool),
+      MaxQueryNodes(Execution.MaxQueryNodes),
       IntegerEncoding(Execution.IntegerEncoding),
       SkipWholeModuleRetry(Execution.SkipWholeModuleRetry),
       SingleQuery(Execution.SingleQuery),
@@ -3789,6 +3824,18 @@ VerifyResult Z3VerifyBackend::solveQuery(
   return WithFacts;
 }
 
+/// \p Result as the result of obligation \p Item.
+static VerifyResult attributed(VerifyResult Result, const Obligation &Item) {
+  Result.ObligationId = Item.StableId.empty() ? Item.Id : Item.StableId;
+  Result.ObligationType = Item.Kind;
+  Result.Location = Item.Loc;
+  Result.Source = Item.Source;
+  if (Result.Status == VerifyStatus::Unresolved)
+    Result.Message = "proof obligation " + Result.ObligationId +
+                     (Result.Message.empty() ? "" : ": " + Result.Message);
+  return finishZ3Result(std::move(Result));
+}
+
 VerifyResult Z3VerifyBackend::verifyObligation(const ObligationModule &Module,
                                                const Obligation &Item,
                                                llvm::StringRef SemanticHash,
@@ -3836,14 +3883,31 @@ VerifyResult Z3VerifyBackend::verifyObligation(const ObligationModule &Module,
     }
   }
 
-  Result.ObligationId = Item.StableId.empty() ? Item.Id : Item.StableId;
-  Result.ObligationType = Item.Kind;
-  Result.Location = Item.Loc;
-  Result.Source = Item.Source;
-  if (Result.Status == VerifyStatus::Unresolved)
-    Result.Message = "proof obligation " + Result.ObligationId +
-                     (Result.Message.empty() ? "" : ": " + Result.Message);
-  return finishZ3Result(std::move(Result));
+  return attributed(std::move(Result), Item);
+}
+
+VerifyResult
+Z3VerifyBackend::verifyPastEarlier(const ObligationModule &Module, size_t I,
+                                   const std::vector<size_t> &Earlier,
+                                   Race *Racing) {
+  const Obligation &Item = Module.Obligations[I];
+  auto Query = cloneLogicExpr(Item.CounterexampleQuery.get());
+  for (size_t J : Earlier) {
+    auto Conjunction = std::make_unique<LogicExpr>(LogicExpr::And);
+    Conjunction->Sort = LogicSort::boolSort();
+    Conjunction->Loc = Query->Loc;
+    Conjunction->EndLoc = Query->EndLoc;
+    Conjunction->Source = Query->Source;
+    Conjunction->Children.push_back(std::move(Query));
+    Conjunction->Children.push_back(
+        cloneLogicExpr(Module.Obligations[J].Goal.get()));
+    Query = std::move(Conjunction);
+  }
+  return attributed(spent() ? timeSpent()
+                            : solveQuery(Module, Query.get(),
+                                         Item.TraceEventCount,
+                                         budget(TimeoutMs), Racing),
+                    Item);
 }
 
 /// Internal IDs of the obligations that one-to-one Results did not prove.
@@ -3857,6 +3921,17 @@ unprovedObligations(const ObligationModule &Module,
     if (Results[I].Status != VerifyStatus::Verified)
       Unproved.push_back(Module.Obligations[I].Id);
   return Unproved;
+}
+
+VerifyResult
+Z3VerifyBackend::withMoreFailures(std::vector<VerifyResult> &Results,
+                                  size_t First) {
+  VerifyResult Reported = std::move(Results[First]);
+  for (size_t I = First + 1; I != Results.size(); ++I)
+    if (Results[I].Status == VerifyStatus::Failed &&
+        (MaxFailures == 0 || Reported.MoreFailures.size() + 1 < MaxFailures))
+      Reported.MoreFailures.push_back(std::move(Results[I]));
+  return Reported;
 }
 
 VerifyResult Z3VerifyBackend::verifyModule(const ObligationModule &Module) {
@@ -4014,7 +4089,7 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
     Group.emplace(*Pool);
     Ordered = Group->async([this, &Module, &Rivals, &WholeRace] {
       std::vector<VerifyResult> Results =
-          verifyObligations(Module, /*StopAtFailure=*/true, &Rivals);
+          verifyObligations(Module, MaxFailures, &Rivals);
       // The obligations settle the module when they prove all of it or one
       // fails, and the whole query, or its retry, is then stopped.
       if (llvm::any_of(Results,
@@ -4070,8 +4145,7 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
   if (Whole.Status == VerifyStatus::Verified)
     return finishZ3Result(std::move(Whole));
   auto orderedResults = [&] {
-    return Racing ? Ordered.get()
-                  : verifyObligations(Module, /*StopAtFailure=*/true);
+    return Racing ? Ordered.get() : verifyObligations(Module, MaxFailures);
   };
 
   if (Whole.Status == VerifyStatus::Failed) {
@@ -4084,18 +4158,18 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
       TimeoutMs = FullTimeout;
       UnitsCap = 0;
     });
-    std::vector<VerifyResult> Results = verifyObligations(
-        Module, /*StopAtFailure=*/true, nullptr, WholeTimeout);
+    std::vector<VerifyResult> Results =
+        verifyObligations(Module, MaxFailures, nullptr, WholeTimeout);
     bool SawUnresolved = false;
-    for (VerifyResult &Result : Results) {
-      if (Result.Status == VerifyStatus::Verified)
+    for (size_t I = 0; I != Results.size(); ++I) {
+      if (Results[I].Status == VerifyStatus::Verified)
         continue;
-      if (Result.Status == VerifyStatus::Unresolved) {
+      if (Results[I].Status == VerifyStatus::Unresolved) {
         SawUnresolved = true;
         continue;
       }
-      if (Result.Status == VerifyStatus::Failed)
-        return std::move(Result);
+      if (Results[I].Status == VerifyStatus::Failed)
+        return withMoreFailures(Results, I);
     }
     if (SawUnresolved)
       return finishZ3Result(std::move(Whole));
@@ -4122,13 +4196,16 @@ Z3VerifyBackend::verifyModuleDirect(const ObligationModule &Module) {
   std::optional<std::vector<std::string>> Unproved =
       unprovedObligations(Module, Results);
   std::optional<VerifyResult> FirstUnresolved;
-  for (VerifyResult &Result : Results) {
+  for (size_t I = 0; I != Results.size(); ++I) {
+    VerifyResult &Result = Results[I];
     if (Result.Status != VerifyStatus::Verified) {
       if (Result.Status == VerifyStatus::Unresolved) {
         if (!FirstUnresolved)
           FirstUnresolved = std::move(Result);
         continue;
       }
+      if (Result.Status == VerifyStatus::Failed)
+        return withMoreFailures(Results, I);
       return std::move(Result);
     }
   }

@@ -490,9 +490,18 @@ write, without an invariant, failed with ``c = 0`` after ``while (c < n)``.
 Such a failure now says so in a note, and unrolling each loop then looks for
 an execution that fails the same check within ``--confirm-bound`` iterations
 (default 10): it gives that execution, or says that no execution fails the
-check (when unrolling proves it) or that none fails it within the bound. A
-failure of a function whose loop has no ``cppverify::decreases`` names that
-loop too (:doc:`language/functions-loops`).
+check (when unrolling proves it) or that none fails it within the bound. The
+execution it gives passes the failing checks before this one, and a check
+that holds in every execution that passes them is noted with an earlier
+check that fails. A failure of a function whose loop has no
+``cppverify::decreases`` names that loop too
+(:doc:`language/functions-loops`).
+
+**Every failure of a function.** A function reported only its first failing
+check. ``--max-failures=N`` reports the first ``N`` (``0``: every one), each
+with its own counterexample and notes; a check after a failure is reported
+only when an execution that passes the earlier failing checks fails it, as
+Dafny reports every failing assertion (:doc:`language/tooling`).
 
 **A summary, and what to print.** A run now ends with one line that counts
 its verdicts by kind, with the reasons of the unresolved ones and the time it

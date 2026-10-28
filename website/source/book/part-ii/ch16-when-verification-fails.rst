@@ -62,7 +62,13 @@ is what unrolling the loop found about the same check (``--confirm-bound``,
 invariant is what is missing (``cv::invariant(0 <= c && c <= n)``). When
 unrolling finds an execution that fails the check, the note gives that
 execution and the number of iterations, and the bug is in the code or the
-contract, not in the invariant.
+contract, not in the invariant. When the check fails only in executions that
+fail an earlier check first, the note names that check: fix it first.
+
+A function reports its first failing check. To see every one, each with its
+own counterexample, run ``cpp-verify --max-failures=0``: a check after a
+failure is reported only when some execution that passes the earlier failing
+checks fails it, so each line is a bug of its own.
 
 An undecided query is different from a counterexample. ``Unresolved`` with
 reason ``solver.timeout``, ``solver.resource-limit``, ``solver.memory-limit``,

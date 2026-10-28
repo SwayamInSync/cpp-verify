@@ -614,6 +614,9 @@ VerifyResult VerifyBackend::verifyDirect(const ObligationModule &Module) {
   VerifyResult Result = verifyModule(Module);
   if (Result.BackendName.empty())
     Result.BackendName = getName().str();
+  for (VerifyResult &More : Result.MoreFailures)
+    if (More.BackendName.empty())
+      More.BackendName = Result.BackendName;
   if (!Capabilities.ProducesVerificationVerdict &&
       Result.Status != VerifyStatus::Exported &&
       Result.Status != VerifyStatus::Unresolved) {

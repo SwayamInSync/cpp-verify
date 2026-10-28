@@ -1899,11 +1899,19 @@ int safe_fib(int n) cppverify::pre(...) cppverify::post(cppverify::result == fib
   verifier unrolls each loop up to `--confirm-bound` iterations (default 10)
   to look for an execution that fails the same check, as G5 proposed with
   CBMC's and Kani's unrolling: it reports that execution, or that unrolling
-  proves the check, or that none fails it within the bound. Unrolling keeps
+  proves the check, or that none fails it within the bound. The execution
+  passes every failing check before this one, and a check that holds in the
+  executions that pass them says so and names one that fails. Unrolling keeps
   no loop invariant and no measure, so their failures are not confirmed. The verdict stays `Failed`
   (decision Q12 of the 0.2 plan): the claim is not proved, and the note
   carries the difference. A failure of a function whose loop has no
   `cppverify::decreases` names that loop too.
+- Several failures of one function (`--max-failures`): after the first,
+  a check is a failure only when an execution that passes the failing checks
+  before it fails it, as Boogie assumes an assertion once checked and Dafny
+  then reports each failing assertion. Each such failure is a bug of its
+  own: one that fails only after an earlier failure disappears with its fix,
+  and is not reported. Checks not settled are not assumed.
 - Anything else is `Unresolved` with a reason. `spec.fuel`: every
   counterexample found relies on a recursive spec beyond what refinement could
   unfold, the automatic inductions did not prove it, and no counterexample

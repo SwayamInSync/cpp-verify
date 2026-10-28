@@ -51,6 +51,10 @@ Other flags
   through a loop, unroll each loop up to ``N`` iterations (default 10, ``0``
   skips it) to find an execution that fails or prove that none does (see
   :doc:`ch16-when-verification-fails`)
+- ``cpp-verify --max-failures=N`` — report the first ``N`` checks of a
+  function that fail (``0``: every one), each with its own counterexample,
+  instead of the first only; a check after a failure counts only when an
+  execution that passes the failing checks before it fails it
 - ``cpp-verify --backend={z3,cvc5,portfolio,race,bmc,lean}`` — verification
   engine: Z3 (the default), cvc5, both with agreement required
   (``portfolio``), both at once with the first proof or certified
