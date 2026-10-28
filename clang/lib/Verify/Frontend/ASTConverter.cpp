@@ -745,6 +745,9 @@ findUnsupportedType(const FunctionDecl *FD, bool AllowScalarReferences,
         : AllowScalarReferences(AllowScalarReferences) {}
 
     bool VisitExpr(Expr *E) {
+      // A static_assert's message has no type.
+      if (E->getType().isNull())
+        return true;
       if (const auto *ICE = dyn_cast<ImplicitCastExpr>(E))
         if (ICE->getCastKind() == CK_FunctionToPointerDecay ||
             ICE->getCastKind() == CK_BuiltinFnToFnPtr)
@@ -4337,6 +4340,167 @@ std::unique_ptr<VExpr> ASTConverter::convertMinOrMax(const CallExpr *CE,
                                             std::move(A), Ty, Loc);
 }
 
+std::optional<std::unique_ptr<VExpr>>
+ASTConverter::convertBitBuiltin(const CallExpr *CE) {
+  enum { Clz, Ctz, Popcount, Parity, Ffs, Bswap } Op;
+  switch (CE->getBuiltinCallee()) {
+  case Builtin::BI__builtin_clz:
+  case Builtin::BI__builtin_clzl:
+  case Builtin::BI__builtin_clzll:
+    Op = Clz;
+    break;
+  case Builtin::BI__builtin_ctz:
+  case Builtin::BI__builtin_ctzl:
+  case Builtin::BI__builtin_ctzll:
+    Op = Ctz;
+    break;
+  case Builtin::BI__builtin_popcount:
+  case Builtin::BI__builtin_popcountl:
+  case Builtin::BI__builtin_popcountll:
+    Op = Popcount;
+    break;
+  case Builtin::BI__builtin_parity:
+  case Builtin::BI__builtin_parityl:
+  case Builtin::BI__builtin_parityll:
+    Op = Parity;
+    break;
+  case Builtin::BI__builtin_ffs:
+  case Builtin::BI__builtin_ffsl:
+  case Builtin::BI__builtin_ffsll:
+    Op = Ffs;
+    break;
+  case Builtin::BI__builtin_bswap16:
+  case Builtin::BI__builtin_bswap32:
+  case Builtin::BI__builtin_bswap64:
+    Op = Bswap;
+    break;
+  default:
+    return std::nullopt;
+  }
+  if (CE->getNumArgs() != 1)
+    return std::nullopt;
+  auto Arg = convertExpr(CE->getArg(0));
+  if (!Arg)
+    return nullptr;
+  const SourceLocation Loc = CE->getExprLoc();
+  // The definitions read the operand's bits as an unsigned machine value,
+  // through comparisons with constants, conditionals, and sums without
+  // carries, so that no operation of them has a definedness check of its
+  // own; a mathematical operand converts, as a bitwise operand does.
+  const VType Parameter =
+      VType::fromQualType(CE->getArg(0)->getType(), VIntMode::Machine, Ctx);
+  if ((Parameter.Kind != VTypeKind::Int32 &&
+       Parameter.Kind != VTypeKind::Int64) ||
+      Parameter.BitWidth == 0 || Parameter.BitWidth > 64)
+    return std::nullopt;
+  const VType Given = Arg->Ty;
+  if (evaluatedIntMode(Arg.get()) != Parameter.IntMode ||
+      Given.IsSigned != Parameter.IsSigned ||
+      Given.BitWidth != Parameter.BitWidth)
+    Arg = std::make_unique<VCastExpr>(std::move(Arg), Given, Parameter, Loc);
+  VType Bits = Parameter;
+  Bits.IsSigned = false;
+  if (Parameter.IsSigned)
+    Arg = std::make_unique<VCastExpr>(std::move(Arg), Parameter, Bits, Loc);
+  const unsigned Width = Bits.BitWidth;
+  const VType Result = VType::fromQualType(CE->getType(), IntMode, Ctx);
+  auto power = [&](unsigned K) {
+    return llvm::toString(llvm::APInt::getOneBitSet(Width, K), 10, false);
+  };
+  auto literal = [&](const std::string &Value, const VType &Ty) {
+    return std::make_unique<VLiteralExpr>(Value, Ty, Loc);
+  };
+  auto bitSet = [&](unsigned K) -> std::unique_ptr<VExpr> {
+    return std::make_unique<VBinOpExpr>(
+        VBinOp::Ne,
+        std::make_unique<VBinOpExpr>(VBinOp::BitAnd, cloneVExpr(Arg.get()),
+                                     literal(power(K), Bits), Bits, Loc),
+        literal("0", Bits), VType::makeBool(), Loc);
+  };
+  // Term(K) for each set bit K, of type Ty, combined by Op in a balanced
+  // tree.
+  auto overBits = [&](VBinOp Combine, const VType &Ty,
+                      llvm::function_ref<std::string(unsigned)> Term) {
+    std::vector<std::unique_ptr<VExpr>> Terms;
+    for (unsigned K = 0; K != Width; ++K)
+      Terms.push_back(std::make_unique<VConditionalExpr>(
+          bitSet(K), literal(Term(K), Ty), literal("0", Ty), Ty, Loc));
+    while (Terms.size() > 1) {
+      std::vector<std::unique_ptr<VExpr>> Pairs;
+      for (size_t I = 0; I + 1 < Terms.size(); I += 2)
+        Pairs.push_back(std::make_unique<VBinOpExpr>(
+            Combine, std::move(Terms[I]), std::move(Terms[I + 1]), Ty, Loc));
+      if (Terms.size() % 2)
+        Pairs.push_back(std::move(Terms.back()));
+      Terms = std::move(Pairs);
+    }
+    return std::move(Terms.front());
+  };
+  std::unique_ptr<VExpr> Value;
+  switch (Op) {
+  case Clz:
+    // The highest set bit decides; 0 has Width leading zeros, as C++20's
+    // std::countl_zero.
+    Value = literal(std::to_string(Width), Result);
+    for (unsigned K = 0; K != Width; ++K)
+      Value = std::make_unique<VConditionalExpr>(
+          bitSet(K), literal(std::to_string(Width - 1 - K), Result),
+          std::move(Value), Result, Loc);
+    break;
+  case Ctz:
+  case Ffs:
+    // The lowest set bit decides; 0 has Width trailing zeros, and ffs(0)
+    // is 0.
+    Value = literal(Op == Ctz ? std::to_string(Width) : "0", Result);
+    for (unsigned K = Width; K-- != 0;)
+      Value = std::make_unique<VConditionalExpr>(
+          bitSet(K), literal(std::to_string(Op == Ctz ? K : K + 1), Result),
+          std::move(Value), Result, Loc);
+    break;
+  case Popcount:
+  case Parity: {
+    // At most 64, so the count is summed in a byte, whose adders are small.
+    const VType Byte =
+        VType::fromQualType(Ctx.UnsignedCharTy, VIntMode::Machine, Ctx);
+    auto Count = overBits(VBinOp::Add, Byte,
+                          [](unsigned) { return std::string("1"); });
+    if (Op == Parity)
+      Count = std::make_unique<VBinOpExpr>(VBinOp::BitAnd, std::move(Count),
+                                           literal("1", Byte), Byte, Loc);
+    Value = std::make_unique<VCastExpr>(std::move(Count), Byte, Result, Loc);
+    break;
+  }
+  case Bswap:
+    // Each bit moves to its own place, so the bits combine without carries.
+    if (Width % 8 != 0)
+      return std::nullopt;
+    Value = overBits(VBinOp::BitOr, Bits, [&](unsigned K) {
+      return power(Width - 8 * (K / 8 + 1) + K % 8);
+    });
+    break;
+  }
+  Value->BeginLoc = CE->getBeginLoc();
+  Value->EndLoc = CE->getEndLoc();
+  // GCC leaves the count of the bits of 0 undefined; a spec is total.
+  if ((Op != Clz && Op != Ctz) ||
+      (CurrentFn && CurrentFn->IsSpec && !CurrentFn->IsConstexprSpec))
+    return Value;
+  auto NonZero = std::make_unique<VBinOpExpr>(
+      VBinOp::Ne, cloneVExpr(Arg.get()), literal("0", Bits), VType::makeBool(),
+      Loc);
+  auto Require = std::make_unique<VRequireExpr>(
+      std::move(NonZero),
+      static_cast<unsigned>(ProofObligationKind::BuiltinArgument), Loc);
+  Require->BeginLoc = CE->getBeginLoc();
+  Require->EndLoc = CE->getEndLoc();
+  auto Copy = cloneVExpr(Value.get());
+  auto Guarded = std::make_unique<VConditionalExpr>(
+      std::move(Require), std::move(Value), std::move(Copy), Result, Loc);
+  Guarded->BeginLoc = CE->getBeginLoc();
+  Guarded->EndLoc = CE->getEndLoc();
+  return Guarded;
+}
+
 std::unique_ptr<VFunction>
 ASTConverter::convertConstexprSpec(const FunctionDecl *FD) {
   llvm::SaveAndRestore Owner(ErrorFunction, functionIdentity(FD));
@@ -6851,6 +7015,8 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     if (CE->getBuiltinCallee() == Builtin::BI__builtin_expect ||
         CE->getBuiltinCallee() == Builtin::BI__builtin_expect_with_probability)
       return convertExpr(CE->getArg(0));
+    if (auto Builtin = convertBitBuiltin(CE))
+      return std::move(*Builtin);
     if (const FunctionDecl *Callee = CE->getDirectCallee()) {
       if (Callee->isConstexpr() && !functionContract(Callee) &&
           CE->isEvaluatable(Ctx)) {
