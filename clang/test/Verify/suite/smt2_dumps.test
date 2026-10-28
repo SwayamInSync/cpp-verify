@@ -24,6 +24,13 @@
 # RUN: %if cvc5 %{ cat %t/cvc5/clamp-*/postcondition-16-23.cvc5-*.smt2 | FileCheck %s --check-prefix=CVC5 %}
 # RUN: %if cvc5 %{ %python %S/Inputs/replay_smt2.py cvc5 cvc5 %t/cvc5 | FileCheck %s --check-prefix=CVC5-REPLAY %}
 #
+# A solver that has checked before prints the model converter its
+# preprocessing left, `model-add` of symbols it never declares; the dump of
+# a later check on it leaves that out.
+# RUN: not %cpp-verify --jobs=1 --dump-smt2=%t/narrowed %S/Inputs/smt2_dumps_narrowed.cpp -- > /dev/null 2>&1
+# RUN: cat %t/narrowed/first_positive_bitwise-*/postcondition-*.smt2 \
+# RUN:   | FileCheck %s --check-prefix=NARROWED --implicit-check-not=model-add
+#
 # An archive's replay writes the queries it checks.
 # RUN: not %cpp-verify --jobs=1 --obligation-out=%t/q.cpv %S/Inputs/smt2_dumps.cpp -- > /dev/null 2>&1
 # RUN: not %cpp-verify --jobs=1 --obligation-in=%t/q.cpv --dump-smt2=%t/replay > /dev/null 2>&1
@@ -104,6 +111,9 @@ CVC5-NEXT: (exit)
 CVC5-NEXT: ; cpp-verify: sat
 
 CVC5-REPLAY: cvc5: {{[0-9]+}} scripts, {{[0-9]+}} with a recorded sat or unsat, 0 differing
+
+NARROWED: (check-sat-using smt)
+NARROWED: (check-sat-using smt)
 
 REPLAY: clamp-{{[0-9a-f]+}}/whole.z3-{{[0-9a-f]+}}.smt2
 
