@@ -468,6 +468,14 @@ range such as ``history[0 : 8]``), and a pointer into it is bounded by the
 array, field, or record it is formed from, so it may be passed as a slice
 (:doc:`language/pointers`).
 
+**Static locals.** A static local that was not a constant table was an
+error (``static local variables are unsupported``). One with a constant
+initializer is now its function's own state: any value at entry, written
+without a frame, and changed by a call exactly when the callee may reach its
+function, directly or through other calls. An initializer that runs code at
+the first call, and a pointer to or into a static local, are errors
+(:doc:`language/pointers`).
+
 **assert and calls that do not return.** ``assert(c)`` stopped its function
 (``unsupported statement: ParenExpr``), and a call to ``abort`` or ``exit``
 was an error (``call to function without a verification contract``).
