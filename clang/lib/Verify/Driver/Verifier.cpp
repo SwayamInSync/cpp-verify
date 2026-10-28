@@ -1165,6 +1165,14 @@ struct VerifyDiagnostic {
   bool Axiom = false;
   /// What else the verifier found about the verdict, each printed as a note.
   std::vector<std::string> Notes;
+  /// Other source a failure is about, each printed as a note there: the
+  /// clause of a callee that a call does not establish.
+  struct RelatedPlace {
+    std::string Message;
+    SourceSpan Span;
+    ObligationSource Source;
+  };
+  std::vector<RelatedPlace> Related;
   /// A failing obligation after the one a function's verdict reports: no
   /// verdict of its own.
   bool Additional = false;
@@ -2874,6 +2882,8 @@ class Verifier {
   VerifyOptions Opts;
   llvm::raw_ostream *DumpOS = nullptr;
   std::vector<VerifyDiagnostic> Diags;
+  /// Each function's source, by identity (VFunction::Extent).
+  std::map<std::string, SourceRange> Extents;
   /// What --list-functions prints: each function's location and kind.
   std::vector<std::pair<SourceLocation, std::string>> Listing;
   /// Each contracted function's contract as written, by its identity.
@@ -2971,6 +2981,32 @@ class Verifier {
     return llvm::Error::success();
   }
 
+  /// Moves a failure to where its check fails.
+  void placeFailure(VerifyResult &Failure, const FailurePlace &Place) const {
+    if (!Place.At.isValid())
+      return;
+    Failure.Location = Place.At.Loc;
+    Failure.BeginLocation = Place.At.BeginLoc;
+    Failure.EndLocation = Place.At.EndLoc;
+    Failure.Source =
+        Place.AtSource.isValid()
+            ? Place.AtSource
+            : sourceOf(Place.At.Loc, Place.At.BeginLoc, Place.At.EndLoc);
+  }
+
+  /// A failure at a call notes the callee's clause that does not hold.
+  void relateClause(VerifyDiagnostic &D, const FailurePlace &Place) const {
+    if (!Place.Clause.isValid())
+      return;
+    D.Related.push_back(
+        {D.Result ? clauseNote(*D.Result) : "",
+         Place.Clause,
+         Place.ClauseSource.isValid()
+             ? Place.ClauseSource
+             : sourceOf(Place.Clause.Loc, Place.Clause.BeginLoc,
+                        Place.Clause.EndLoc)});
+  }
+
   /// The source from BeginLoc to the end of the token at EndLoc, anchored at
   /// Loc; in a macro, the source of its use. Empty when Loc has none.
   ObligationSource sourceOf(SourceLocation Loc, SourceLocation BeginLoc,
@@ -3054,9 +3090,27 @@ class Verifier {
 
     annotateExpr(Module.CorrectnessGoal.get());
     annotateExpr(Module.CounterexampleQuery.get());
+    // A check is shown in the function it belongs to: one whose condition is
+    // elsewhere, in the body of a lifted helper, stays at its anchor, the
+    // call.
+    SourceRange Extent;
+    llvm::StringRef Owner = Module.FunctionIdentity;
+    if (auto It = Extents.find(Owner.take_front(Owner.find("::")).str());
+        It != Extents.end())
+      Extent = It->second;
+    const SourceManager &SM = Ctx.getSourceManager();
     std::map<std::string, unsigned> StableIdCounts;
     for (Obligation &Item : Module.Obligations) {
+      if (Item.Focus.isValid() &&
+          !(Extent.isValid() &&
+            SM.isPointWithin(SM.getExpansionLoc(Item.Focus.Loc),
+                             Extent.getBegin(), Extent.getEnd())))
+        Item.Focus = {};
       annotateSource(Item.Loc, Item.BeginLoc, Item.EndLoc, Item.Source);
+      annotateSource(Item.Focus.Loc, Item.Focus.BeginLoc, Item.Focus.EndLoc,
+                     Item.FocusSource);
+      annotateSource(Item.Clause.Loc, Item.Clause.BeginLoc,
+                     Item.Clause.EndLoc, Item.ClauseSource);
       std::string StableId =
           Module.FunctionIdentity + "::" + obligationKindName(Item.Kind) + "@";
       StableId += Item.Source.isValid()
@@ -3369,8 +3423,10 @@ public:
     inferOutParameters(Functions);
 
     FunctionMap FnMap;
-    for (const auto &Fn : Functions)
+    for (const auto &Fn : Functions) {
       FnMap[Fn->Identity] = Fn.get();
+      Extents[Fn->Identity] = Fn->Extent;
+    }
 
     std::vector<std::unique_ptr<VFunction>> InterfaceFunctions;
     FunctionMap InterfaceMap;
@@ -5080,7 +5136,11 @@ public:
           }
           // The failure, and those after it --max-failures reports, each
           // with its counterexample and notes.
-          auto failure = [&](const VerifyResult &Failure) {
+          auto failure = [&](VerifyResult Failure) {
+            // Unrolling looks for copies of the check at its anchor.
+            std::vector<std::string> Notes = failureNotes(*Fn, Failure);
+            const FailurePlace Place = failingPlace(Module, Failure);
+            placeFailure(Failure, Place);
             std::string Msg =
                 "verification failed: " + Fn->Name + obligationTag(Failure);
             if (!Failure.Message.empty())
@@ -5088,7 +5148,8 @@ public:
             Msg += backendSuffix(Failure);
             Diags.push_back({VerifyDiagnostic::Error, Msg, Failure.Location,
                              Fn->Name, Failure});
-            Diags.back().Notes = failureNotes(*Fn, Failure);
+            Diags.back().Notes = std::move(Notes);
+            relateClause(Diags.back(), Place);
           };
           failure(R);
           for (const VerifyResult &More : R.MoreFailures) {
@@ -5973,6 +6034,11 @@ public:
           }
         if (!Trusted.empty())
           Message += " [trusts=" + Trusted + "]";
+        const FailurePlace Place = failingPlace(*Pending.Module, Failed);
+        placeFailure(Failed, Place);
+        if (Place.At.isValid())
+          Verdict.Loc = Failed.Location;
+        relateClause(Verdict, Place);
         Verdict.K = VerifyDiagnostic::Error;
         Verdict.Message = std::move(Message);
         Verdict.Result = std::move(Failed);
@@ -6177,6 +6243,16 @@ public:
       for (const std::string &Note : D.Notes)
         Notes.push_back(jsonText(Note));
       Record["notes"] = std::move(Notes);
+    }
+    if (!D.Related.empty()) {
+      llvm::json::Array Related;
+      for (const VerifyDiagnostic::RelatedPlace &Place : D.Related) {
+        llvm::json::Object Note{{"message", jsonText(Place.Message)}};
+        if (Place.Source.isValid())
+          Note["source"] = sourceJSON(Place.Source);
+        Related.push_back(std::move(Note));
+      }
+      Record["related"] = std::move(Related);
     }
     if (!D.FunctionName.empty())
       Record["function"] = jsonText(D.FunctionName);
@@ -6702,10 +6778,26 @@ public:
         Loc = Ctx.getSourceManager().getExpansionLoc(Loc);
       Parts.push_back({DiagnosticsEngine::Note, Loc, {}, std::move(Message)});
     };
+    if (D.Result && D.Result->Status == VerifyStatus::Failed)
+      if (std::string Values = counterexampleText(*D.Result); !Values.empty())
+        note(Error.Loc, "counterexample: " + Values);
+    for (const VerifyDiagnostic::RelatedPlace &Place : D.Related) {
+      VerifyDiagnosticPart Note;
+      Note.Loc = Place.Span.Loc;
+      Note.Message = Place.Message;
+      const SourceManager &SM = Ctx.getSourceManager();
+      auto onLine = [&](SourceLocation Loc) {
+        return Loc.isValid() && SM.isWrittenInSameFile(Note.Loc, Loc) &&
+               SM.getSpellingLineNumber(Note.Loc) ==
+                   SM.getSpellingLineNumber(Loc);
+      };
+      if (onLine(Place.Span.BeginLoc) && onLine(Place.Span.EndLoc) &&
+          (Place.Span.BeginLoc != Note.Loc || Place.Span.EndLoc != Note.Loc))
+        Note.Range = SourceRange(Place.Span.BeginLoc, Place.Span.EndLoc);
+      Parts.push_back(std::move(Note));
+    }
     if (D.Result && D.Result->Status == VerifyStatus::Failed) {
       const VerifyResult &R = *D.Result;
-      if (std::string Values = counterexampleText(R); !Values.empty())
-        note(Error.Loc, "counterexample: " + Values);
       const size_t Steps = R.Trace.size();
       for (size_t I = 0; I != Steps; ++I) {
         if (Steps > TraceStepLimit && I == TraceStepLimit / 2)
@@ -6816,6 +6908,13 @@ public:
     if (D.Result && D.Result->Status == VerifyStatus::Failed)
       if (std::string Values = counterexampleText(*D.Result); !Values.empty())
         Message += "\ncounterexample: " + Values;
+    for (const VerifyDiagnostic::RelatedPlace &Place : D.Related) {
+      Message += "\n" + Place.Message;
+      if (Place.Source.isValid())
+        Message += " (" + workspacePath(Place.Source.File) + ":" +
+                   std::to_string(Place.Source.Line) + ":" +
+                   std::to_string(Place.Source.Column) + ")";
+    }
     for (const std::string &Note : D.Notes)
       Message += "\n" + Note;
     std::string Title = "cpp-verify";
