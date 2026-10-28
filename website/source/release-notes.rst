@@ -528,6 +528,15 @@ in text, JSON, SARIF, GitHub annotations, and archive replay, evaluated by the
 certifier in the checked model; the race's refutation states its values
 (:doc:`book/part-ii/ch17-backends-modular-calls`).
 
+**Queries as SMT-LIB scripts.** The only view of a query was
+``--dump-ir=4``, Z3 terms without declarations or a check, which no solver
+reads. ``--dump-smt2=DIR`` writes every query cpp-verify sends to Z3 or cvc5
+as a script that ``z3 FILE`` or ``cvc5 FILE`` runs on its own: the options
+cpp-verify gave the solver, as commands, the query, its check, and the
+answer cpp-verify got, in a file named by the function and the obligation,
+for solver bug reports and for comparing solver versions
+(:doc:`language/tooling`).
+
 **Counterexamples after a loop.** A failure whose counterexample passed
 through a loop looked like any other, though its state there came from the
 loop's invariants and no execution need reach it: the first loop most users

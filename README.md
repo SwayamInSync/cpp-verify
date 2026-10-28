@@ -160,6 +160,7 @@ and `docs/UB-CHECKING.md`.
 ./build/bin/cpp-verify --diagnostics-format=sarif file.cpp       # SARIF 2.1.0, for code scanning
 ./build/bin/cpp-verify --obligation-out=goals.cpv file.cpp       # backend-neutral archive
 ./build/bin/cpp-verify --dump-ir=1,2,3,4 file.cpp                # VCR, passive, Obligation IR, Z3
+./build/bin/cpp-verify --dump-smt2=queries file.cpp              # each solver query as an SMT-LIB script
 ```
 
 Z3 runs support deterministic isolated solving (`--jobs`) and positive-proof reuse

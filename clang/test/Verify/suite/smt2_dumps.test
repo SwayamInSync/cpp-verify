@@ -1,0 +1,122 @@
+# --dump-smt2 writes each query a solver checks as a script the solver
+# replays on its own: the options cpp-verify sets, the query, the check, and
+# the answer cpp-verify got. Names depend on the query alone.
+#
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: not %cpp-verify --jobs=1 --dump-smt2=%t/z3 %S/Inputs/smt2_dumps.cpp -- 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=VERDICTS
+# RUN: %python %S/Inputs/replay_smt2.py --list %t/z3 > %t/z3.files
+# RUN: FileCheck %s --check-prefix=FILES --input-file=%t/z3.files
+# RUN: %python -c "import os, sys; print(sorted(len(os.listdir(os.path.join(sys.argv[1], d))) > 0 for d in os.listdir(sys.argv[1]) if d.startswith('half-')))" %t/z3 \
+# RUN:   | FileCheck %s --check-prefix=OVERLOADS
+# RUN: cat %t/z3/clamp-*/postcondition-16-23.z3-*.smt2 | FileCheck %s --check-prefix=FAILED
+# RUN: cat %t/z3/second-*/whole.z3-*.smt2 | FileCheck %s --check-prefix=QUANTIFIED
+#
+# A second run writes the same files.
+# RUN: not %cpp-verify --jobs=1 --dump-smt2=%t/again %S/Inputs/smt2_dumps.cpp -- > /dev/null 2>&1
+# RUN: %python %S/Inputs/replay_smt2.py --list %t/again > %t/again.files
+# RUN: diff %t/z3.files %t/again.files
+#
+# Each script replays in Z3's own shell with the answer cpp-verify got, and
+# in cvc5 likewise.
+# RUN: %if z3-shell %{ %python %S/Inputs/replay_smt2.py z3 %cppverify-z3 %t/z3 | FileCheck %s --check-prefix=Z3 %}
+# RUN: %if cvc5 %{ not %cpp-verify --jobs=1 --backend=cvc5 --dump-smt2=%t/cvc5 %S/Inputs/smt2_dumps.cpp -- > /dev/null 2>&1 %}
+# RUN: %if cvc5 %{ cat %t/cvc5/clamp-*/postcondition-16-23.cvc5-*.smt2 | FileCheck %s --check-prefix=CVC5 %}
+# RUN: %if cvc5 %{ %python %S/Inputs/replay_smt2.py cvc5 cvc5 %t/cvc5 | FileCheck %s --check-prefix=CVC5-REPLAY %}
+#
+# A solver that has checked before prints the model converter its
+# preprocessing left, `model-add` of symbols it never declares; the dump of
+# a later check on it leaves that out.
+# RUN: not %cpp-verify --jobs=1 --dump-smt2=%t/narrowed %S/Inputs/smt2_dumps_narrowed.cpp -- > /dev/null 2>&1
+# RUN: cat %t/narrowed/first_positive_bitwise-*/postcondition-*.smt2 \
+# RUN:   | FileCheck %s --check-prefix=NARROWED --implicit-check-not=model-add
+#
+# An archive's replay writes the queries it checks.
+# RUN: not %cpp-verify --jobs=1 --obligation-out=%t/q.cpv %S/Inputs/smt2_dumps.cpp -- > /dev/null 2>&1
+# RUN: not %cpp-verify --jobs=1 --obligation-in=%t/q.cpv --dump-smt2=%t/replay > /dev/null 2>&1
+# RUN: %python %S/Inputs/replay_smt2.py --list %t/replay | FileCheck %s --check-prefix=REPLAY
+#
+# A directory that cannot be written is a warning; the verdicts stand.
+# RUN: touch %t/plain
+# RUN: not %cpp-verify --jobs=1 --dump-smt2=%t/plain %S/Inputs/smt2_dumps.cpp -- 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=UNWRITABLE
+
+VERDICTS: Verified: inc [backend=z3]
+VERDICTS: error: verification failed: clamp [postcondition]
+VERDICTS: Verified: second [backend=z3]
+VERDICTS: error: verification failed: closed [postcondition]
+VERDICTS: Verified: half [backend=z3]
+VERDICTS: Verified: half [backend=z3]
+
+A function's queries are in a directory named by the function and its
+identity, each by its obligation and its script; the vacuity and contract
+checks have their own.
+FILES:      clamp-[[CLAMP:[0-9a-f]+]]/missing-return-18-3.z3-{{[0-9a-f]+}}.smt2
+FILES-NEXT: clamp-[[CLAMP]]/overflow-19-5.z3-{{[0-9a-f]+}}.smt2
+FILES-NEXT: clamp-[[CLAMP]]/postcondition-16-23.z3-{{[0-9a-f]+}}.smt2
+FILES-NEXT: clamp-[[CLAMP]]/whole.z3-{{[0-9a-f]+}}.smt2
+A query checked again, with the definition instances the certifier asked
+for, is a file for each check.
+FILES-NEXT: closed-[[CLOSED:[0-9a-f]+]]/missing-return-synthetic.z3-{{[0-9a-f]+}}.smt2
+FILES-NEXT: closed-[[CLOSED]]/postcondition-39-23.z3-{{[0-9a-f]+}}.smt2
+FILES-NEXT: closed-[[CLOSED]]/postcondition-39-23.z3-{{[0-9a-f]+}}.smt2
+FILES:      closed-[[CLOSED]]/whole.z3-{{[0-9a-f]+}}.smt2
+FILES-NEXT: closed-[[CLOSED]]/whole.z3-{{[0-9a-f]+}}.smt2
+FILES:      half-{{[0-9a-f]+}}/whole.z3-{{[0-9a-f]+}}.smt2
+FILES-NEXT: half-{{[0-9a-f]+}}/whole.z3-{{[0-9a-f]+}}.smt2
+FILES-NEXT: half_smoke-{{[0-9a-f]+}}/whole.z3-{{[0-9a-f]+}}.smt2
+FILES-NEXT: half_smoke-{{[0-9a-f]+}}/whole.z3-{{[0-9a-f]+}}.smt2
+FILES-NEXT: inc-{{[0-9a-f]+}}/whole.z3-{{[0-9a-f]+}}.smt2
+FILES-NEXT: inc_smoke-{{[0-9a-f]+}}/whole.z3-{{[0-9a-f]+}}.smt2
+FILES-NEXT: second-{{[0-9a-f]+}}/whole.z3-{{[0-9a-f]+}}.smt2
+FILES-NEXT: second_contract-{{[0-9a-f]+}}/whole.z3-{{[0-9a-f]+}}.smt2
+FILES-NEXT: second_smoke-{{[0-9a-f]+}}/whole.z3-{{[0-9a-f]+}}.smt2
+FILES-NEXT: tri_decreases-{{[0-9a-f]+}}/whole.z3-{{[0-9a-f]+}}.smt2
+FILES-NOT:  {{.}}
+
+FAILED:      ; cpp-verify {{.*}}, z3 {{[0-9]+\.[0-9]+\.[0-9]+}}
+FAILED-NEXT: ; clamp: the postcondition check at {{.*}}smt2_dumps.cpp:16:23 ({{.*}}::postcondition@16:23)
+FAILED-NEXT: ; replay: z3 clamp-{{[0-9a-f]+}}{{[/\\]}}postcondition-16-23.z3-{{[0-9a-f]+}}.smt2
+FAILED-NEXT: (set-option :timeout 30000)
+FAILED-NEXT: (set-option :rlimit 6000000)
+FAILED-NEXT: (set-option :smt.mbqi true)
+FAILED-NEXT: (set-option :smt.qi.eager_threshold 0.0)
+FAILED:      (declare-fun x_0 () Int)
+FAILED:      (check-sat)
+FAILED-NEXT: (get-model)
+FAILED-NEXT: ; cpp-verify: sat
+FAILED-NOT:  {{.}}
+
+Each overload has a directory of its own: the hash is of its identity.
+OVERLOADS: [True, True]
+
+A quantified query is solved by the smt tactic.
+QUANTIFIED:      ; second: every obligation at once
+QUANTIFIED:      (check-sat-using smt)
+QUANTIFIED-NEXT: ; cpp-verify: unsat
+
+Z3: z3: {{[0-9]+}} scripts, {{[0-9]+}} with a recorded sat or unsat, 0 differing
+
+cvc5's command-line options are commands of the script.
+CVC5:      ; cpp-verify {{.*}}, cvc5 at {{.*}}
+CVC5-NEXT: ; clamp: the postcondition check at {{.*}}smt2_dumps.cpp:16:23
+CVC5-NEXT: ; replay: cvc5 clamp-{{[0-9a-f]+}}{{[/\\]}}postcondition-16-23.cvc5-{{[0-9a-f]+}}.smt2
+CVC5-NEXT: (set-option :seed 0)
+CVC5-NEXT: (set-option :sat-random-seed 0)
+CVC5-NEXT: (set-option :dump-models true)
+CVC5-NEXT: (set-option :tlimit-per 30000)
+CVC5-NEXT: (set-logic ALL)
+CVC5:      (check-sat)
+CVC5-NEXT: (exit)
+CVC5-NEXT: ; cpp-verify: sat
+
+CVC5-REPLAY: cvc5: {{[0-9]+}} scripts, {{[0-9]+}} with a recorded sat or unsat, 0 differing
+
+NARROWED: (check-sat-using smt)
+NARROWED: (check-sat-using smt)
+
+REPLAY: clamp-{{[0-9a-f]+}}/whole.z3-{{[0-9a-f]+}}.smt2
+
+UNWRITABLE: Verified: inc [backend=z3]
+UNWRITABLE: warning: --dump-smt2: cannot create {{.*}}plain{{.*}}
+UNWRITABLE: Summary: 5 verified, 2 failed

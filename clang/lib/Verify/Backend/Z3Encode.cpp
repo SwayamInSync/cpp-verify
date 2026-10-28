@@ -3,6 +3,7 @@
 #include "ExtremeSearch.h"
 #include "ObligationSerialization.h"
 #include "ObligationSimplify.h"
+#include "QueryDump.h"
 #include "TaskGroup.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ScopeExit.h"
@@ -1628,7 +1629,9 @@ Z3Encoder::profileQuantifiers(const z3::expr_vector &Assertions) {
     Rerun.set(Params);
     for (unsigned I = 0; I != Assertions.size(); ++I)
       Rerun.add(Assertions[I]);
+    Profiling = true;
     (void)check(Rerun, TimeoutMs == 0 ? 10000U : std::min(TimeoutMs, 10000U));
+    Profiling = false;
   }
   std::cerr.flush();
   std::fflush(stderr);
@@ -1856,6 +1859,16 @@ z3::check_result Z3Encoder::check(z3::solver &S, unsigned Ms) {
   bool Interrupted = false;
   bool OverLimit = false;
   z3::check_result Result = z3::unknown;
+  QueryDump Dump;
+  if (queryDumpEnabled()) {
+    unsigned Major = 0, Minor = 0, Build = 0, Revision = 0;
+    Z3_get_version(&Major, &Minor, &Build, &Revision);
+    auto [Options, Script] = dumpScript(S, Ms);
+    Dump.start(DumpModule, DumpQuery, "z3",
+               std::to_string(Major) + "." + std::to_string(Minor) + "." +
+                   std::to_string(Build),
+               Options, Script);
+  }
   std::thread Watchdog([&] {
     std::unique_lock<std::mutex> Lock(CheckLock);
     const auto Limit =
@@ -1893,7 +1906,45 @@ z3::check_result Z3Encoder::check(z3::solver &S, unsigned Ms) {
       OutOfMemory = true;
   });
   Result = S.check();
+  Dump.finish(Result == z3::sat     ? "sat"
+              : Result == z3::unsat ? "unsat"
+                                    : "unknown (" + S.reason_unknown() + ")",
+              Result == z3::sat ? "(get-model)\n" : "");
   return Result;
+}
+
+std::pair<std::string, std::string> Z3Encoder::dumpScript(z3::solver &S,
+                                                          unsigned Ms) {
+  // The settings freshSolver gives a query's solver, and the profiling
+  // rerun's own.
+  std::string Options;
+  const unsigned Timeout = Ms != 0 ? Ms : TimeoutMs;
+  if (Timeout != 0)
+    Options += "(set-option :timeout " + std::to_string(Timeout) + ")\n";
+  if (Profiling) {
+    Options += "(set-option :smt.qi.profile true)\n";
+  } else {
+    if (ResourceLimit != 0)
+      Options += "(set-option :rlimit " + std::to_string(ResourceLimit) + ")\n";
+    Options += "(set-option :smt.mbqi true)\n"
+               "(set-option :smt.qi.eager_threshold 0.0)\n";
+  }
+  // The solver's own printer: unlike the benchmark printer (to_smt2), it
+  // quotes symbols that are not SMT-LIB symbols, such as the ids
+  // `q@line:col` of quantifiers. A solver that has checked before also
+  // prints the model converter its preprocessing left (`model-add` of
+  // symbols it never declares), so a solver of the assertions alone prints
+  // the query.
+  z3::solver Assertions(Ctx);
+  for (const z3::expr &Assertion : S.assertions())
+    Assertions.add(Assertion);
+  std::string Script = Z3_solver_to_string(Ctx, Assertions);
+  if (!Script.empty() && Script.back() != '\n')
+    Script += '\n';
+  // A quantified query's solver is the smt tactic's.
+  Script += QuantifiedQuery || Profiling ? "(check-sat-using smt)\n"
+                                         : "(check-sat)\n";
+  return {Options, Script};
 }
 
 std::optional<z3::expr>
@@ -3234,6 +3285,8 @@ VerifyResult Z3Encoder::decideModule(const ObligationModule &Module,
                                      std::optional<uint64_t> TraceEventCount) {
   VerifyResult Out;
   QueryStart = std::chrono::steady_clock::now();
+  DumpModule = &Module;
+  DumpQuery = Query;
   // A step toward settling another module wants a proof or a certified
   // counterexample within its slice: no domain probing, whose thousands of
   // ground instances can keep the solver from noticing its timeout.

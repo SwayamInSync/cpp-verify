@@ -163,6 +163,14 @@ true on the cycle, so no unfolding settles it, and a postcondition
 query or a fact the verifier gave it, which is a solver fault and says
 nothing about your program.
 
+To report such a fault, or a query a solver takes too long on, to the
+solver's developers, run with ``--dump-smt2=DIR``: every query is written to
+``DIR`` as a script that ``z3 FILE`` or ``cvc5 FILE`` runs on its own, named
+by the function and the obligation (``clamp-14e9c9/postcondition-5-23...``),
+and ending with the answer cpp-verify got (see
+:doc:`../../language/tooling`). The file is the report: it needs neither
+cpp-verify nor your source.
+
 Every reason code at a glance
 -----------------------------
 

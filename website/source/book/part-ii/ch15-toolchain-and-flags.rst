@@ -120,6 +120,8 @@ Other flags
 - ``cpp-verify --dump-ir[=1,2,3,4]`` — dump VCR / passive / Obligation IR / Z3 layers
 - ``cpp-verify --lower-only`` — construct and encode VCs without invoking Z3's
   satisfiability check
+- ``cpp-verify --dump-smt2=DIR`` — write every query sent to Z3 or cvc5 as a
+  script the solver runs on its own, with the answer cpp-verify got
 - ``cpp-verify --obligation-out=FILE`` — write validated, versioned canonical
   obligation records with semantic hashes
 - ``cpp-verify --obligation-in=FILE`` — validate and replay records through Z3,

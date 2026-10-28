@@ -718,6 +718,9 @@ Backends
        canonical Obligation IR construction, spec-axiom encoding, and selected
        Z3/SMT-LIB translation without calling a solver. Supported for Z3, cvc5,
        portfolio, and BMC.
+   * - ``--dump-smt2=DIR``
+     - Write every query sent to Z3 or cvc5 to ``DIR``, each as a script the
+       solver replays on its own (see `Solver queries as scripts`_).
    * - ``--obligation-out=FILE``
      - Write deterministic, versioned backend-neutral modules with portable
        source attribution and SHA-256 semantic identities. Multiple modules are
@@ -759,6 +762,97 @@ explored bound proves complete unwinding. Text diagnostics publish the terminal
 reused across prefixes. JSON uses ``bound``, ``explored_bounds``, and
 ``reused_queries``. Lean generation reports ``Exported``. Only the pinned,
 admission-free kernel workflow reports ``Certified``.
+
+Solver queries as scripts
+-------------------------
+
+``--dump-smt2=DIR`` writes each query cpp-verify sends to a solver as an
+SMT-LIB script that the solver runs on its own: ``z3 FILE`` or ``cvc5
+FILE``, with no other flags. Such a file is what a solver's bug report
+needs, what compares two solver versions on the same query, and what shows
+the exact formula behind a verdict. On ``clamp.cpp`` (from
+:doc:`../book/part-ii/ch17-backends-modular-calls`):
+
+.. code-block:: text
+
+   $ cpp-verify --dump-smt2=queries clamp.cpp
+   ...
+   $ find queries -type f | sort
+   queries/clamp-14e9c9/missing-return-7-3.z3-c326aaab.smt2
+   queries/clamp-14e9c9/overflow-8-5.z3-19b38e3e.smt2
+   queries/clamp-14e9c9/postcondition-5-23.z3-d86b7e26.smt2
+   queries/clamp-14e9c9/whole.z3-3a4644f7.smt2
+
+A function's queries are in a directory named by the function and the start
+of the SHA-256 hash of its identity, so overloads stay apart; each file is
+named by its obligation (``postcondition-5-23``, the postcondition at line 5,
+column 23), or ``whole`` for every obligation at once, then the solver and
+the start of the hash of the script itself. A name depends only on the query,
+so the same query is the same file in every run, and two checks of one
+obligation (a refinement round after the first check, say) are two files.
+A check that cpp-verify adds is named after the function and the check,
+every character but a letter, a digit, or ``_`` made ``_``: ``f_smoke``
+holds the vacuity checks of ``f``, and ``f_decreases`` the termination check
+of a spec ``f``.
+
+A file starts with comments that say what it is, then the options cpp-verify
+gives the solver, as commands, then the query and its check. After the check
+come ``(get-model)`` when the answer was ``sat``, and the answer cpp-verify
+got:
+
+.. code-block:: text
+
+   ; cpp-verify 0.2.0-dev, z3 4.13.4
+   ; clamp: the postcondition check at clamp.cpp:5:23 (fn_5f5a35636c616d7069::postcondition@5:23)
+   ; replay: z3 clamp-14e9c9/postcondition-5-23.z3-d86b7e26.smt2
+   (set-option :timeout 30000)
+   (set-option :rlimit 6000000)
+   (set-option :smt.mbqi true)
+   (set-option :smt.qi.eager_threshold 0.0)
+   (declare-fun __result_1 () Int)
+   (declare-fun x_0 () Int)
+   ...
+   (check-sat)
+   (get-model)
+   ; cpp-verify: sat
+
+.. code-block:: text
+
+   $ cd queries && z3 clamp-14e9c9/postcondition-5-23.z3-d86b7e26.smt2
+   sat
+   (
+     (define-fun __result_1 () Int
+       (- 1))
+     ...
+     (define-fun x_0 () Int
+       (- 2))
+   )
+
+- **Which queries.** Every check a solver makes: the whole query and each
+  obligation's, every refinement round, the probes of a bounded domain, the
+  native-definition pass, the inductions, the confirmations, the vacuity and
+  contract checks, and the queries of an archive's replay. A query is
+  written before its check, so one that never returns still leaves its
+  file, and the answer is appended when the check ends: ``sat``, ``unsat``,
+  ``unknown`` with Z3's reason (``unknown (timeout)``), or, for cvc5, ``no
+  answer`` with what went wrong. ``--lower-only`` checks nothing, so it
+  writes nothing, and Lean writes its own project.
+- **Options.** For Z3, the time the check was given (``:timeout``, which
+  can be less than ``--timeout`` for a check late in a query's budget), the
+  resource limit, and the quantifier settings, and ``(check-sat-using smt)``
+  where cpp-verify solves a quantified query with the ``smt`` tactic. For
+  cvc5, its command-line options (``--seed=0``, ``--tlimit-per=N``, ...) as
+  ``(set-option ...)`` commands.
+- **Replaying.** ``z3 FILE`` with the version in the first line (``z3
+  --version``; cpp-verify links Z3 4.13.4) and ``cvc5 FILE`` give the answer
+  cpp-verify got for most queries. Z3's search on a quantified query depends
+  on the order in which its terms were created, and a replay creates them
+  as it reads the file, in another order than cpp-verify did, so such a
+  query can end differently, typically ``unknown`` where cpp-verify got an
+  answer.
+- **Errors.** A directory that cannot be written is a warning at the end of
+  the run (``warning: --dump-smt2: cannot create ...``); verdicts do not
+  change.
 
 Time limits
 -----------

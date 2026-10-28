@@ -3,6 +3,7 @@
 #include "../../lib/Verify/Backend/ObligationSerialization.h"
 #include "../../lib/Verify/Backend/ObligationSimplify.h"
 #include "../../lib/Verify/Backend/ProofCache.h"
+#include "../../lib/Verify/Backend/QueryDump.h"
 #include "../../lib/Verify/Backend/VerifyBackend.h"
 #include "Counterexample.h"
 #include "CppVerifyVersion.h"
@@ -49,6 +50,12 @@ static cl::opt<std::string>
                     "comma-separated, default all)"),
            cl::value_desc("layers"), cl::ValueOptional,
            cl::cat(CppVerifyCategory));
+
+static cl::opt<std::string> DumpSMT2(
+    "dump-smt2",
+    cl::desc("Write every query sent to a solver to this directory, as a "
+             "script the solver replays on its own"),
+    cl::value_desc("directory"), cl::cat(CppVerifyCategory));
 
 static cl::opt<bool> LowerOnly(
     "lower-only",
@@ -440,6 +447,8 @@ static std::vector<std::string> gArguments;
 
 /// Ends the run's output: in SARIF mode, the log of the records collected.
 static int finishOutput(int ExitCode) {
+  if (std::string Error = verify::queryDumpError(); !Error.empty())
+    llvm::errs() << "warning: --dump-smt2: " << Error << "\n";
   if (DiagnosticsFormat != OutputFormat::Sarif)
     return ExitCode;
   gRecordStream.flush();
@@ -1362,6 +1371,9 @@ int main(int argc, const char **argv) {
   CommonOptionsParser &OptionsParser = ExpectedParser.get();
   if (!resolveOptions(!ObligationIn.empty()))
     return 1;
+  if (!DumpSMT2.empty())
+    verify::setQueryDumpDirectory(
+        DumpSMT2, ("cpp-verify " + verify::releaseVersion()).str());
   if (CheckContracts)
     return verify::checkContracts(OptionsParser.getSourcePathList(),
                                   llvm::outs()) != 0;
