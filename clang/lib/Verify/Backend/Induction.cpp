@@ -728,6 +728,10 @@ ObligationModule copyObligationModule(const ObligationModule &Module) {
     Same.Source = Item.Source;
     Same.TraceEventCount = Item.TraceEventCount;
     Same.Note = Item.Note;
+    Same.Focus = Item.Focus;
+    Same.Clause = Item.Clause;
+    Same.FocusSource = Item.FocusSource;
+    Same.ClauseSource = Item.ClauseSource;
     Same.Goal = cloneLogicExpr(Item.Goal.get());
     Same.CounterexampleQuery = cloneLogicExpr(Item.CounterexampleQuery.get());
     Copy.Obligations.push_back(std::move(Same));
