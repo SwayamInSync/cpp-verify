@@ -120,6 +120,11 @@ struct VerifyOptions {
   bool Verbose = false;
   /// List the functions the run would verify, and verify none.
   bool ListFunctions = false;
+  /// Report where each function's verification spent its time.
+  bool TimeReport = false;
+  /// Show which functions are done on standard error as they finish; unset,
+  /// when standard error is a terminal.
+  std::optional<bool> Progress;
   /// How many failing obligations of a function are reported, each with its
   /// own counterexample (Z3 only); 0 reports every one.
   unsigned MaxFailures = 1;

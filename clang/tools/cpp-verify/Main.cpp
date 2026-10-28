@@ -312,6 +312,18 @@ static cl::opt<bool> ListFunctions(
              "locations, and verify none"),
     cl::cat(CppVerifyCategory));
 
+static cl::opt<bool> TimeReport(
+    "time-report",
+    cl::desc("Report where the run and each function spent their time: "
+             "lowering, solving, induction, certification, confirmation"),
+    cl::cat(CppVerifyCategory));
+
+static cl::opt<cl::boolOrDefault> Progress(
+    "progress",
+    cl::desc("Show on standard error how many functions are done (default: "
+             "when standard error is a terminal)"),
+    cl::cat(CppVerifyCategory));
+
 namespace {
 
 static int gVerifyFailures = 0;
@@ -467,6 +479,9 @@ public:
       VOpts.Quiet = Quiet.getValue();
       VOpts.Verbose = Verbose.getValue();
       VOpts.ListFunctions = ListFunctions.getValue();
+      VOpts.TimeReport = TimeReport.getValue();
+      if (Progress != cl::boolOrDefault::BOU_UNSET)
+        VOpts.Progress = Progress == cl::boolOrDefault::BOU_TRUE;
       VOpts.MaxFailures = MaxFailures.getValue();
       VOpts.FunctionPatterns.assign(FunctionPatterns.begin(),
                                     FunctionPatterns.end());
@@ -728,6 +743,8 @@ static bool resolveOptions(bool Replay) {
   else if ((given(CheckUB) || given(NoCheckUB)) && Replay)
     Error = "--check-ub and --no-check-ub apply to source verification; an "
             "archive keeps the checks it was written with";
+  else if (given(TimeReport) && Replay)
+    Error = "--time-report requires source verification";
   if (Error.empty())
     return true;
   llvm::errs() << "error: " << Error << "\n";

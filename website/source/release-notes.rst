@@ -509,7 +509,9 @@ took (``Summary: 12 verified, 1 failed, 2 unresolved (spec.fuel 1,
 solver.timeout 1) in 3.2 s``). ``--quiet`` prints only what needs attention,
 ``--list-functions`` lists what a run would verify without verifying it,
 ``--function=PATTERN`` reports only the functions a glob pattern matches,
-with the verdicts a whole run gives, and
+with the verdicts a whole run gives, ``--time-report`` says where the run and
+each function spent their time, a line on a terminal counts the functions
+done, and
 the ``Verified: spec axiom: f`` line of a spec that needs no check is printed
 only with ``--verbose``. ``--help`` shows the default of ``--timeout``
 (:doc:`language/tooling`).

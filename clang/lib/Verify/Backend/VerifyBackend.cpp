@@ -59,6 +59,10 @@ public:
                                              /*ReuseVerifiedQueries=*/true)),
         MaxUnrollBound(UnrollBound) {}
   llvm::StringRef getName() const override { return "bmc"; }
+  void setTimes(std::shared_ptr<BackendTimes> T) override {
+    Z3->setTimes(T);
+    VerifyBackend::setTimes(std::move(T));
+  }
   std::optional<unsigned>
   queryTimeoutMs(const ObligationModule &Module) const override {
     return Z3->queryTimeoutMs(Module);
@@ -232,6 +236,11 @@ public:
         MaxQueryNodes(Execution.MaxQueryNodes) {}
 
   llvm::StringRef getName() const override { return "portfolio"; }
+  void setTimes(std::shared_ptr<BackendTimes> T) override {
+    Z3->setTimes(T);
+    CVC5->setTimes(T);
+    VerifyBackend::setTimes(std::move(T));
+  }
   std::optional<unsigned>
   queryTimeoutMs(const ObligationModule &Module) const override {
     return Z3->queryTimeoutMs(Module);
@@ -499,6 +508,7 @@ void verify::requestInterrupt() { InterruptFlag.store(true); }
 bool verify::interruptRequested() { return InterruptFlag.load(); }
 
 VerifyResult VerifyBackend::verify(const ObligationModule &Module) {
+  TimeInto Solving(Times ? &Times->Solving : nullptr);
   VerifyResult Result = verifyDirect(Module);
   if (Module.Attempt != ModuleAttempt::Primary ||
       Result.Status != VerifyStatus::Unresolved ||
@@ -522,6 +532,7 @@ VerifyResult VerifyBackend::verify(const ObligationModule &Module) {
   }
   setDeadline(Until);
   llvm::scope_exit Restore([&] { setDeadline(Saved); });
+  TimeInto Inducting(Times ? &Times->Induction : nullptr);
   std::vector<std::string> Tried;
   for (const InductionScheme &Scheme : inductionSchemes(Module)) {
     if (Until && std::chrono::steady_clock::now() >= *Until)
@@ -689,6 +700,11 @@ public:
         MaxQueryNodes(Execution.MaxQueryNodes) {}
 
   llvm::StringRef getName() const override { return "race"; }
+  void setTimes(std::shared_ptr<BackendTimes> T) override {
+    Z3->setTimes(T);
+    CVC5->setTimes(T);
+    VerifyBackend::setTimes(std::move(T));
+  }
   std::optional<unsigned>
   queryTimeoutMs(const ObligationModule &Module) const override {
     return Z3->queryTimeoutMs(Module);

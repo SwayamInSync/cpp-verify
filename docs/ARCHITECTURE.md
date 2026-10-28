@@ -2486,6 +2486,19 @@ selected stay, hidden, for what they establish. A text run ends with a summary l
 it prints into the run's `VerifySummary` (a first error that carries a
 verdict counts, a `--verbose` spec axiom line does not), and the driver
 prints the counts of every file of the run with its time.
+`--time-report` measures where that time goes. Each function's task gives
+its backends one `BackendTimes` (`Backend/Timing.h`, `VerifyBackend::setTimes`,
+which a portfolio, a race, and BMC forward to their solvers): the wall time
+in `VerifyBackend::verify` is solving and its induction loop induction, and
+`certifyCounterexample` adds each check's time through `CertifyLimits::Times`
+(summed, so with several jobs it may exceed solving). The driver times the
+task, the unrolling of `failureNotes`, and each confirmation by proof (added
+to the function that proposed it, `Confirmation::Function`); lowering is the
+task's time outside the backends and the unrolling. The run's conversion,
+verification, and settling are the times between `Verifier`'s construction,
+the converted functions, the end of the tasks, and the report. Backends
+without a sink (the unroller, those of the confirmations by proof and of the
+`cppverify::recommends` pass) count nothing, so no time is counted twice.
 Its message names the construct as C++ does (`unsupportedConstruct` for the
 statements and expressions without a site of their own; Clang's class name
 only in parentheses for those it has no name for), and each error is raised

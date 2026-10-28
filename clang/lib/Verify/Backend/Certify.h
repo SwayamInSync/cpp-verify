@@ -154,6 +154,8 @@ struct CertifyLimits {
   /// Set when Deadline is the time one counterexample check may take, not
   /// the query's: the message then says so.
   std::optional<unsigned> CheckTimeoutMs;
+  /// Where the checks' time is counted, for --time-report.
+  BackendTimes *Times = nullptr;
 };
 
 /// A logical application at concrete arguments whose model value differs from

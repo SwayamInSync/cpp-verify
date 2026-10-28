@@ -12,6 +12,7 @@ Standalone verifier
    cpp-verify --verbose file.cpp
    cpp-verify --list-functions file.cpp
    cpp-verify --function='parse_*' --function=encode file.cpp
+   cpp-verify --time-report file.cpp
    cpp-verify file.cpp -- -I include -DNDEBUG
    cpp-verify --backend=z3 file.cpp
    cpp-verify --backend=cvc5 file.cpp
@@ -231,6 +232,61 @@ reported verdict relies on is not verified at all. The exit status follows
 what is reported: 0 when every reported verdict is a proof. A pattern that
 matches no function is an error. With ``--list-functions`` it narrows the
 listing.
+
+``--time-report`` adds, after a file's verdicts, where its run spent its time,
+then each function it reported, the busiest first. Here ``small_power``'s
+counterexample is confirmed by a proof after inductions are tried, ``grows``
+is proved by induction, and ``after_loop`` fails after a loop that
+unrolling then checks:
+
+.. code-block:: text
+
+   $ cpp-verify --time-report file.cpp
+   ...
+   Time report (seconds): conversion 0.001, verification 4.412, settling 0.151
+        total  lowering   solving  induction  certification  confirmation  function
+        4.559     0.001     4.408      3.917          7.577         0.150  small_power
+        1.767     0.001     1.766      0.014          3.292         0.000  grows
+        0.062     0.002     0.022      0.000          0.000         0.038  after_loop
+        0.027     0.001     0.026      0.000          0.000         0.000  fibo
+        0.026     0.001     0.025      0.000          0.000         0.000  proved
+        0.022     0.001     0.021      0.000          0.000         0.000  pow2
+   Summary: 4 verified, 2 failed in 4.6 s
+
+For the run:
+
+- **conversion**: from the parsed file to the functions the verifier
+  verifies (Clang's parsing comes before it; the summary's time covers it);
+- **verification**: verifying every function, at once with several jobs;
+- **settling**: what follows: the verdicts that rest on other functions'
+  contracts and on spec facts, confirmations by proof, Lean certification.
+
+For a function:
+
+- **total**: its verification, and the confirmations of its counterexamples
+  by proof that run after every function is verified;
+- **lowering**: preparing its checks, and passivizing and lowering them to
+  obligations;
+- **solving**: in the backends: encoding, solving, checking counterexamples,
+  inductions, and a proof's vacuity checks;
+- **induction**: the part of solving spent on automatic inductions;
+- **certification**: checking the solvers' counterexamples against the true
+  definitions, summed over the checks; with several jobs they run at once,
+  so it can exceed solving;
+- **confirmation**: unrolling the loops after a failure (``--confirm-bound``)
+  and confirming a counterexample by proof.
+
+A function's total is its lowering, solving, and confirmation. With
+``--diagnostics-format=json`` the report is records of the schema
+``cppverify.time/1``: one for the run, whose ``seconds`` has
+``conversion``, ``verification``, and ``settling``, then one per function,
+with ``function`` and the six ``seconds`` of its row. The report needs source
+verification (not ``--obligation-in``).
+
+On a terminal, a line on standard error counts the functions done as they
+finish (``[12/40] parse_header``); the results follow once every verdict is
+settled. ``--progress`` shows the line anywhere, and ``--progress=false``
+hides it.
 
 ``cpp-verify --help`` shows each time limit's default (``--timeout``,
 30000 ms).
