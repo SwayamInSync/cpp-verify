@@ -499,6 +499,9 @@ private:
       Caller.BoundedPointers.insert(Rename.name(Pointer));
     if (!llvm::is_contained(Caller.InlinedExtents, H.Extent))
       Caller.InlinedExtents.push_back(H.Extent);
+    // Its static locals are the caller's state wherever its body runs.
+    for (const auto &Object : H.PrivateObjects)
+      addPrivateObject(Caller, *Object);
     Caller.SpecDependencies.insert(H.SpecDependencies.begin(),
                                    H.SpecDependencies.end());
     // Its reveal_with_fuel unfolds its specs where it runs; more unfolding
