@@ -1,10 +1,11 @@
 name: CppVerify release
 
-# A tag v<version> builds the distribution for Linux x86_64 and macOS arm64,
-# tests each archive with the verifier's test suite on a fresh runner of a
-# newer system than the one it was built on, and publishes both on the tag's
-# GitHub release (a pre-release for a tag with a pre-release suffix such as
-# -rc.1). Run by hand with publish off, it builds and tests any ref.
+# A tag v<version> builds the distribution for Linux x86_64 and macOS arm64
+# with a Clang built first (cppverify-release-build.sh), tests each archive
+# with the verifier's test suite on a fresh runner of a newer system than the
+# one it was built on, and publishes both on the tag's GitHub release (a
+# pre-release for a tag with a pre-release suffix such as -rc.1). Run by hand
+# with publish off, it builds and tests any ref.
 
 on:
   push:
@@ -57,28 +58,8 @@ jobs:
             brew install ninja
           fi
 
-      - name: Configure
-        run: |
-          extra=()
-          if [ "$RUNNER_OS" = Linux ]; then
-            extra+=(-DLLVM_STATIC_LINK_CXX_STDLIB=ON)
-          else
-            extra+=(-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 -DCLANG_USE_XCSELECT=ON)
-          fi
-          cmake -S llvm -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra" \
-            -DLLVM_TARGETS_TO_BUILD=Native \
-            -DCPPVERIFY_VENDOR_Z3=ON \
-            -DCPPVERIFY_PREFER_SYSTEM_Z3=OFF \
-            -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF \
-            -DLLVM_ENABLE_LIBXML2=OFF -DLLVM_ENABLE_LIBEDIT=OFF \
-            -DLLVM_DISTRIBUTION_COMPONENTS="clang;clang-resource-headers;clangd;clang-format;cpp-verify" \
-            -DCMAKE_INSTALL_PREFIX="$PWD/dist/cpp-verify" \
-            "${extra[@]}"
-
-      - name: Build and install
-        run: ninja -C build install-distribution
+      - name: Build in two stages and install
+        run: ./.github/workflows/cppverify-release-build.sh
 
       - name: Package
         id: package
