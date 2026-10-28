@@ -270,38 +270,12 @@ FailurePlace verify::failingPlace(const ObligationModule &Module,
     return E->Loc.isValid() || E->Source.isValid();
   };
   const bool Generated = isDefinedness(Item->Kind);
-  // A conjunction the verifier builds, of definedness checks, has parts of
-  // their own; one in a clause is the user's `&&` when each of its parts lies
-  // before or after its operator, and not lowering's (a comparison split by
-  // the range of its machine side is a conjunction at the comparison).
-  auto split = [&](const LogicExpr *E) {
-    if (E->K != LogicExpr::And)
-      return false;
-    if (Generated)
-      return true;
-    const ObligationSource &At = E->Source;
-    if (!At.isValid())
-      return false;
-    for (const auto &Child : E->Children) {
-      const ObligationSource &Part = Child->Source;
-      if (!Part.isValid() || !Part.EndLine || Part.File != At.File)
-        return false;
-      const bool Before = Part.EndLine < At.Line ||
-                          (Part.EndLine == At.Line && Part.EndColumn <= At.Column);
-      const bool After =
-          Part.beginLine() > At.Line ||
-          (Part.beginLine() == At.Line && Part.beginColumn() > At.Column);
-      if (!Before && !After)
-        return false;
-    }
-    return true;
-  };
   std::function<const LogicExpr *(const LogicExpr *)> falsePart =
       [&](const LogicExpr *E) -> const LogicExpr * {
-    if (split(E)) {
+    if (E->K == LogicExpr::And) {
       std::vector<const LogicExpr *> Conjuncts;
       std::function<void(const LogicExpr *)> flatten = [&](const LogicExpr *C) {
-        if (split(C))
+        if (C->K == LogicExpr::And)
           for (const auto &Child : C->Children)
             flatten(Child.get());
         else
