@@ -423,24 +423,10 @@ static void printSummary(std::chrono::steady_clock::time_point Start) {
                                  : llvm::join(Parts, ", "))
                << llvm::formatv(" in {0:f1} s", Seconds) << "\n";
 }
-/// The summary as a record: the counts of the text line, by name. It has no
-/// time, so that records do not depend on the run; --time-report gives it.
+/// The summary as a record; --time-report gives the time.
 static void printSummaryRecord() {
-  llvm::json::Object Record;
-  Record["schema"] = verify::SummarySchema;
-  Record["verified"] = gSummary.Verified;
-  Record["failed"] = gSummary.Failed;
-  Record["unresolved"] = gSummary.Unresolved;
-  llvm::json::Object Reasons;
-  for (const auto &[Reason, N] : gSummary.Reasons)
-    Reasons[Reason] = N;
-  Record["reasons"] = std::move(Reasons);
-  Record["bounded_safe"] = gSummary.BoundedSafe;
-  Record["trusted"] = gSummary.Trusted;
-  Record["lowered"] = gSummary.Lowered;
-  Record["exported"] = gSummary.Exported;
-  Record["interrupted"] = gSummary.Interrupted;
-  out() << llvm::formatv("{0}\n", llvm::json::Value(std::move(Record)));
+  out() << llvm::formatv("{0}\n",
+                         llvm::json::Value(verify::summaryRecord(gSummary)));
 }
 
 static std::vector<std::string> gArguments;
