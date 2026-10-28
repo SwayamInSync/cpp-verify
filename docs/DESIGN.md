@@ -2254,8 +2254,14 @@ the answer cpp-verify got, named by the function, the obligation, and a hash
 of the script.
 
 Diagnostic metadata is non-semantic: names, source ranges, internal positional
-and public source-anchored IDs, and trace events survive archive replay but do
-not change semantic hashes. Model and trace
+and public source-anchored IDs, where each check's condition and a callee's
+clause lie, and trace events survive archive replay but do not change semantic
+hashes. A failure is shown at the part of its check that its certified
+counterexample makes false (a clause's false conjunct, the operation that is
+undefined, the call for a callee's precondition, with a note at the callee's
+false conjunct); the part is found by evaluating the checked condition at the
+counterexample, after solving, rather than by splitting it into obligations
+of their own, as Dafny does. Model and trace
 evaluation never requests Z3 model completion. Undetermined values remain
 unknown, false-guarded events are omitted, and undetermined guards remain
 explicitly unknown rather than selecting a path.
@@ -2291,12 +2297,13 @@ dead declarations or trivial Boolean structure. It does not rewrite
 arithmetic, quantifiers, pointer/heap expressions, or assumptions.
 
 `--obligation-out=FILE` publishes deterministic, concatenable
-`cppverify.obligation/5` binary records with stable wire tags and portable
+`cppverify.obligation/6` binary records with stable wire tags and portable
 source attribution; schema v3 adds each logical function's termination
 measures and, with source attribution, where each assumption of a goal comes
 from, schema v4 where each variable version of a counterexample is defined,
-schema v5 where each source range begins, none of them hashed, and records of
-schemas v1 to v4 remain readable. Publication includes an
+schema v5 where each source range begins, schema v6 where each check's
+condition and a callee's clause lie, none of them hashed, and records of
+schemas v1 to v5 remain readable. Publication includes an
 exact serialize/deserialize/validate/reserialize check. SHA-256 module and
 per-obligation semantic hashes exclude source paths, display-only names, both
 positional and source-anchored obligation IDs, and every obligation kind except
