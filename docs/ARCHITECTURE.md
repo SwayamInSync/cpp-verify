@@ -3027,8 +3027,21 @@ statement (a condition's before the `VIfStmt`), its arguments lowered as a
 call statement's are (`convertExecCallArgs`, nested calls into `__nested_N`),
 and the expression reads the temporary; a `CallExpr` converted twice within a
 statement, as an index the binding check reads again, calls once
-(`HoistedCalls`). So `Passivize::emitCallStmt` applies callee
+(`HoistedValues`). So `Passivize::emitCallStmt` applies callee
 `cppverify::pre`/`cppverify::post` at each site.
+
+- **Writes.** An increment, a decrement, or an assignment whose value an
+  expression uses goes to the call sink the same way (`hoistSideEffect`): its
+  statement, converted as a statement of its own is, runs before the rest of
+  the expression, and its value is read into a temporary `__value_N` there,
+  a postfix operator's before the write and any other's after it. A comma's
+  first operand is converted as a discarded statement into the sink, and the
+  comma is its second operand. `HoistedValues` maps each hoisted call or
+  write to its temporary, so an expression the converter reads twice, as a
+  compound assignment's target is read and then located, is evaluated once.
+  The statement of a write continues its expression's evaluation and keeps
+  that map (`ContinuesEvaluation`), since its target is converted again in
+  it: `a[k++]++` increments `k` once.
 
 - **Paths.** An operand that `&&`, `||`, or `?:` evaluates only on its own
   path is converted with both sinks pointed at a list of its own
@@ -3054,14 +3067,20 @@ statement, as an index the binding check reads again, calls once
   member function) beside an evaluation a call may change in the other
   (`isHeapSensitive`: a load, a reference, an addressable local, another
   call; for an assignment's target only what locating it reads,
-  `locatingIsHeapSensitive`) is a conversion error at the expression. An
-  assignment whose target makes a call saves its right operand in
-  `__value_N` before converting the target, so the value is read, and
-  checked, before the target's calls run, as C++17 sequences them. Frama-C
+  `locatingIsHeapSensitive`) is a conversion error at the expression. So is
+  a write in one operand that the other may read (`writesWhatReads`): a
+  variable it writes that the other names, with the fields of a record held
+  by value counted as the record's, or memory (a field through a pointer or
+  `this`, an element, a reference) beside an evaluation a call may change.
+  C++ leaves such a write and read
+  undefined. An assignment whose target makes a call or a write saves its
+  right operand in `__value_N` before converting the target, so the value
+  is read, and checked, before the target's calls and writes run, as C++17
+  sequences them. Frama-C
   keeps such orders as CIL `UnspecifiedSequence` statements with the reads
   and writes of each part and checks them access by access under
-  `-unspecified-access`; the rule here is per call, coarser but needing no
-  read sets.
+  `-unspecified-access`; the rule here is per call and per written variable,
+  coarser but needing no read sets.
 - A call whose result is a record is lowered only as a statement, a whole
   initializer, assignment, or return value; one that returns nothing only
   as a statement.
