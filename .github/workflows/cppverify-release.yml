@@ -85,6 +85,10 @@ jobs:
             *) echo "error: the tag $TAG does not match '$first'" >&2; exit 1 ;;
           esac
           llvm="$(dist/cpp-verify/bin/cpp-verify --version | sed -n 's/^  based on LLVM \([0-9.]*\).*/\1/p')"
+          if [ -z "$llvm" ]; then
+            echo "error: --version names no LLVM release" >&2
+            exit 1
+          fi
           name="cpp-verify-$version-llvm$llvm-${{ matrix.platform }}"
           series="$(echo "$version" | cut -d. -f1,2)"
           mv dist/cpp-verify "dist/$name"
