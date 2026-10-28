@@ -282,6 +282,15 @@ it into ``error: expected unqualified-id``. ``-fverify-contracts`` now defines
 targets unless the command line defines it, so the header defines only its
 ``__Check``, ``__Require``, and ``__Verify`` names (:doc:`language/syntax`).
 
+**Headers shared with other compilers.** Contracted code compiled only with
+this Clang and ``-fverify-contracts``, and nothing told a header which
+compiler read it, so a project that GCC, MSVC, or upstream Clang also builds
+could not keep its contracts in its sources. ``-fverify-contracts`` now
+predefines ``__cppverify__``, with the release in ``__cppverify_major__``,
+``__cppverify_minor__``, ``__cppverify_patchlevel__``, and
+``__cppverify_version__``, and a macro that is empty without it keeps each
+construct out of every other compiler's way (:doc:`language/syntax`).
+
 **Records through pointers.** Through a pointer, 0.1.1 reached only a record's
 direct fields (``p->x``). A nested field (``p->inner.y``), a field of an
 element (``p[k].x``), and an element of an array member (``r->buf[i]``) were
