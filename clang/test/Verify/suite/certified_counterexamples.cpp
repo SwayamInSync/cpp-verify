@@ -95,10 +95,13 @@ int masked_wrong(int x)
 // CHECK-DAG: Unresolved: hidden_recursive [backend={{z3|bmc, bound=0}}] [reason=spec.hidden]
 // Z3-DAG: Verified: bounded_closed_form [backend=z3]
 // BMC-DAG: Verified: bounded_closed_form [backend=bmc
-// CHECK-DAG: verification failed: bounded_closed_form_wrong {{.*}}n [ssa=n_0] [type=i32] = 33;
+// CHECK-DAG: verification failed: bounded_closed_form_wrong
+// CHECK-DAG: note: counterexample: {{.*}}n = 33{{( ->|,|$)}}
 // CHECK-DAG: Unresolved: scaled_true [backend={{z3|bmc, bound=0}}] [reason=spec.hidden]
-// CHECK-DAG: verification failed: scaled_wrong {{.*}}x [ssa=x_0] [type=u32] = 3000000000;
-// CHECK-DAG: verification failed: masked_wrong {{.*}}x [ssa=x_0] [type=i32] = 700;
+// CHECK-DAG: verification failed: scaled_wrong
+// CHECK-DAG: note: counterexample: {{.*}}x = 3000000000{{( ->|,|$)}}
+// CHECK-DAG: verification failed: masked_wrong
+// CHECK-DAG: note: counterexample: {{.*}}x = 700{{( ->|,|$)}}
 
 // JSON-DAG: "function":"hidden_true"{{.*}}"reason":"spec.hidden"
 // JSON-DAG: "function":"hidden_false"{{.*}}"reason":"counterexample"

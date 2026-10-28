@@ -2,6 +2,7 @@
 #ifndef LLVM_CLANG_VERIFY_TRANSFORM_PASSIVIZE_H
 #define LLVM_CLANG_VERIFY_TRANSFORM_PASSIVIZE_H
 
+#include "../IR/SourceSpan.h"
 #include "../IR/VStmt.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include <map>
@@ -34,6 +35,12 @@ struct PassiveStmt {
   /// For an assumption: where it comes from (`pre`, `call:f`, `inv`, ...),
   /// which names its hypothesis in a readable goal.
   std::string Origin;
+  /// For a check: what it checks in the source, apart from the path
+  /// condition it is under (an operator, a clause; the call for a callee's
+  /// clause), and for a callee's clause, the clause where the callee states
+  /// it. Diagnostics only.
+  SourceSpan Focus;
+  SourceSpan Clause;
 };
 
 /// A goal checked in the final state.
@@ -74,6 +81,11 @@ struct PassiveModelVariable {
   VType Type;
   SourceLocation Loc;
   SourceLocation EndLoc;
+  bool Reference = false;
+  /// The path condition where this version is defined, null on every path.
+  /// Elsewhere it equals the version before it, so only where the condition
+  /// holds is it a value the variable takes.
+  std::shared_ptr<const VExpr> Guard;
 };
 
 /// What a construction for a program built past its function's limit

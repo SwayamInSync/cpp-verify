@@ -967,6 +967,94 @@ TEST(CertifyTest, FreeSymbolsComeFromTheModel) {
   EXPECT_NE(Missing.Detail.find("x"), std::string::npos);
 }
 
+TEST(CertifyTest, CounterexamplesAreDescribedAlongTheFailingPath) {
+  // int f(int x, bool c, bool d) { int y = 0; if (c) y = 7; else y = 3;
+  //   if (d) {} return y; } with two obligations, the second failing.
+  const LogicSort I32 = LogicSort::bitVector(32, true);
+  ObligationModule Module;
+  auto declare = [&](llvm::StringRef Name, llvm::StringRef Display,
+                     LogicSort Sort, Expr Guard) {
+    DiagnosticVariable Variable;
+    Variable.DisplayName = Display.str();
+    Variable.Sort = Sort;
+    if (Guard)
+      Variable.Guard = LogicExprRef(std::move(Guard));
+    Module.DiagnosticVariables.emplace(Name.str(), std::move(Variable));
+  };
+  auto c = [] { return variable("c_0", LogicSort::boolSort()); };
+  declare("y_2", "y", I32, negation(c()));
+  declare("x_0", "x", I32, nullptr);
+  declare("y_1", "y", I32, c());
+  declare("c_0", "c", LogicSort::boolSort(), nullptr);
+  auto event = [&](llvm::StringRef Message, Expr Guard) {
+    DiagnosticTraceEvent Event;
+    Event.Message = Message.str();
+    Event.Guard = std::move(Guard);
+    Module.TraceEvents.push_back(std::move(Event));
+  };
+  event("then", c());
+  event("else", negation(c()));
+  event("then", variable("d_0", LogicSort::boolSort()));
+  event("return", boolLiteral(true));
+  Module.TraceEvents.back().Values.push_back(
+      {"value", node(LogicExpr::Ite, I32, c(), variable("y_1", I32),
+                     variable("y_2", I32))});
+  event("after", boolLiteral(true));
+  auto query = [&] {
+    std::vector<Expr> Terms;
+    Terms.push_back(
+        boolean(LogicExpr::Ne, variable("y_2", I32), literal("0", I32)));
+    Terms.push_back(
+        boolean(LogicExpr::Eq, variable("x_0", I32), literal("5", I32)));
+    Terms.push_back(
+        boolean(LogicExpr::Ne, variable("y_1", I32), literal("0", I32)));
+    Terms.push_back(c());
+    return node(LogicExpr::And, LogicSort::boolSort(), std::move(Terms));
+  };
+  for (uint64_t Count : {1, 4}) {
+    Obligation Item;
+    Item.TraceEventCount = Count;
+    Item.Goal = negation(query());
+    Item.CounterexampleQuery = query();
+    Module.Obligations.push_back(std::move(Item));
+  }
+  TableModel Model;
+  Model.Constants["x_0"] = integerValue(5);
+  Model.Constants["y_1"] = integerValue(7);
+  Model.Constants["y_2"] = integerValue(3);
+  Model.Constants["c_0"] = LogicValue::boolean(true);
+
+  VerifyResult Result;
+  describeCounterexample(Module, *Module.Obligations[1].CounterexampleQuery,
+                         Model, Result);
+  std::vector<std::string> Names;
+  for (const VerifyModelValue &Value : Result.Model)
+    Names.push_back(Value.InternalName + "=" + Value.Value.value_or("?") +
+                    (Value.OnPath ? (*Value.OnPath ? " on" : " off") : ""));
+  EXPECT_EQ(Names, (std::vector<std::string>{"c_0=true", "x_0=5", "y_1=7 on",
+                                             "y_2=3 off"}));
+  // The path of the second obligation: its first four events, without the
+  // branch the model does not take, and one it does not decide marked so.
+  ASSERT_EQ(Result.Trace.size(), 3u);
+  EXPECT_EQ(Result.Trace[0].Message, "then");
+  EXPECT_EQ(Result.Trace[0].Active, std::optional<bool>(true));
+  EXPECT_EQ(Result.Trace[1].Message, "then");
+  EXPECT_EQ(Result.Trace[1].Active, std::nullopt);
+  EXPECT_EQ(Result.Trace[2].Message, "return");
+  ASSERT_EQ(Result.Trace[2].Values.size(), 1u);
+  EXPECT_EQ(Result.Trace[2].Values[0].Value, std::optional<std::string>("7"));
+  // The goal's variables, as a Lean refutation states them.
+  ASSERT_TRUE(Result.Assignment);
+  EXPECT_EQ(Result.Assignment->Values.size(), 4u);
+  EXPECT_EQ(Result.Assignment->Values.at("y_1").key(), integerValue(7).key());
+
+  VerifyResult First;
+  describeCounterexample(Module, *Module.Obligations[0].CounterexampleQuery,
+                         Model, First);
+  ASSERT_EQ(First.Trace.size(), 1u);
+  EXPECT_EQ(First.Trace[0].Message, "then");
+}
+
 // --- Logical functions
 // --------------------------------------------------------
 

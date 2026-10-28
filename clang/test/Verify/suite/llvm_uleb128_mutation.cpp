@@ -51,6 +51,6 @@ unsigned encode_128_missing_continuation(uint8_t *buffer)
 
 // CHECK: Verified: encode_128 [backend=bmc, bound=1]
 // CHECK: error: verification failed: encode_128_missing_continuation
-// CHECK-SAME: buffer
-// CHECK-SAME: value=0
+// CHECK: note: counterexample: buffer =
+// CHECK: note: stores 0 at address
 

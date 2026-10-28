@@ -25,10 +25,11 @@ int ratio(int a, int b)
 {
   return 0;
 }
-// CHECK: [[@LINE-4]]:20: error: verification failed: contract of ratio [{{.*}}::contract::division-by-zero@[[@LINE-4]]:20] (counterexample: b [ssa=b_0] [type=i32] = 0)
-// CHECK-NEXT: Verified: ratio [backend=z3]
-// BMC: error: verification failed: contract of ratio [{{.*}}::contract::division-by-zero@
-// NOUB: error: verification failed: contract of ratio [{{.*}}::contract::division-by-zero@
+// CHECK: [[@LINE-4]]:20: error: verification failed: contract of ratio [division-by-zero]
+// CHECK: note: counterexample: b = 0
+// CHECK: Verified: ratio [backend=z3]
+// BMC: error: verification failed: contract of ratio [division-by-zero]
+// NOUB: error: verification failed: contract of ratio [division-by-zero]
 
 int ratio_ok(int a, int b)
   cppverify::pre(b != 0 && a / b == 0)
@@ -43,8 +44,9 @@ int deref(const int *p)
 {
   return 0;
 }
-// CHECK: [[@LINE-4]]:18: error: verification failed: contract of deref [{{.*}}::contract::dereference@[[@LINE-4]]:18] (counterexample: p [ssa=p_0] [type=pointer] = 0)
-// NOUB: error: verification failed: contract of deref [{{.*}}::contract::dereference@
+// CHECK: [[@LINE-4]]:18: error: verification failed: contract of deref [dereference]
+// CHECK: note: counterexample: p = 0
+// NOUB: error: verification failed: contract of deref [dereference]
 
 int deref_ok(const int *p)
   cppverify::pre(p != nullptr && *p > 0)
@@ -59,8 +61,8 @@ int at(const int *p, int i)
 {
   return 0;
 }
-// CHECK: [[@LINE-4]]:33: error: verification failed: contract of at [{{.*}}::contract::bounds@[[@LINE-4]]:33]
-// NOUB: error: verification failed: contract of at [{{.*}}::contract::dereference@
+// CHECK: [[@LINE-4]]:33: error: verification failed: contract of at [bounds]
+// NOUB: error: verification failed: contract of at [dereference]
 
 int at_ok(const int *p, int i)
   cppverify::pre(valid(p, 8) && 0 <= i && i < 8 && p[i] == 3)
@@ -78,7 +80,7 @@ int second(const int *p)
 {
   return 0;
 }
-// CHECK: [[@LINE-4]]:34: error: verification failed: contract of second [{{.*}}::contract::bounds@[[@LINE-4]]:34]
+// CHECK: [[@LINE-4]]:34: error: verification failed: contract of second [bounds]
 // NOUB-NOT: contract of second
 
 int slot(const Ring *r, int i)
@@ -86,8 +88,8 @@ int slot(const Ring *r, int i)
 {
   return 0;
 }
-// CHECK: [[@LINE-4]]:31: error: verification failed: contract of slot [{{.*}}::contract::bounds@[[@LINE-4]]:31]
-// NOUB: error: verification failed: contract of slot [{{.*}}::contract::bounds@
+// CHECK: [[@LINE-4]]:31: error: verification failed: contract of slot [bounds]
+// NOUB: error: verification failed: contract of slot [bounds]
 
 constexpr bool positive(int v) { return v > 0; }
 
@@ -96,7 +98,8 @@ int next_positive(int x)
 {
   return 0;
 }
-// CHECK: [[@LINE-4]]:29: error: verification failed: contract of next_positive [{{.*}}::contract::overflow@[[@LINE-4]]:29] (counterexample: x [ssa=x_0] [type=i32] = 2147483647)
+// CHECK: [[@LINE-4]]:29: error: verification failed: contract of next_positive [overflow]
+// CHECK: note: counterexample: x = 2147483647
 
 constexpr int share(int v) { return 100 / v; }
 
@@ -106,7 +109,8 @@ int shared(int x)
 {
   return 0;
 }
-// CHECK: [[@LINE-4]]:18: error: verification failed: contract of shared [{{.*}}::contract::division-by-zero@[[@LINE-4]]:18] (counterexample: x [ssa=x_0] [type=i32] = 0)
+// CHECK: [[@LINE-4]]:18: error: verification failed: contract of shared [division-by-zero]
+// CHECK: note: counterexample: x = 0
 
 // Order: a clause, an operand of && or ||, a branch of ?:, and a quantifier's
 // body are evaluated where what comes before them holds.
@@ -125,7 +129,8 @@ int reversed(int a, int b)
 {
   return 0;
 }
-// CHECK: [[@LINE-5]]:20: error: verification failed: contract of reversed [{{.*}}::contract::division-by-zero@[[@LINE-5]]:20] (counterexample: b [ssa=b_0] [type=i32] = 0)
+// CHECK: [[@LINE-5]]:20: error: verification failed: contract of reversed [division-by-zero]
+// CHECK: note: counterexample: b = 0
 
 int either(int a, int b)
   cppverify::pre(b == 0 || a / b > 0)
@@ -154,7 +159,7 @@ int one_more(const int *a, int n)
 {
   return 0;
 }
-// CHECK: [[@LINE-4]]:18: error: verification failed: contract of one_more [{{.*}}::contract::bounds@[[@LINE-4]]:18]
+// CHECK: [[@LINE-4]]:18: error: verification failed: contract of one_more [bounds]
 
 int sign(int x)
   cppverify::behavior(positive, x > 0)
@@ -175,8 +180,8 @@ int read_ahead(const int *p, int i)
 {
   return p[i];
 }
-// CHECK: [[@LINE-4]]:37: error: verification failed: read_ahead [{{.*}}::bounds@[[@LINE-4]]:37]
-// BMC: error: verification failed: read_ahead [{{.*}}::bounds@
+// CHECK: [[@LINE-4]]:37: error: verification failed: read_ahead [bounds]
+// BMC: error: verification failed: read_ahead [bounds]
 
 int one(int x)
   cppverify::post(cppverify::result != 0)
@@ -192,7 +197,7 @@ int zero(int x)
 {
   return 0;
 }
-// CHECK: [[@LINE-5]]:37: error: verification failed: zero [{{.*}}::postcondition@[[@LINE-5]]:37]
+// CHECK: [[@LINE-5]]:37: error: verification failed: zero [postcondition]
 // CHECK-NOT: division-by-zero
 
 // A loop invariant and an assertion read memory as the body does.
@@ -209,7 +214,7 @@ int walk(const int *p, int n)
   }
   return 0;
 }
-// CHECK: [[@LINE-7]]:43: error: verification failed: walk [{{.*}}::bounds@[[@LINE-7]]:43
+// CHECK: [[@LINE-7]]:46: error: verification failed: walk [bounds]
 
 int last(const int *p, int n)
   cppverify::pre(valid(p, n) && n >= 1 && n <= 100)
@@ -218,8 +223,8 @@ int last(const int *p, int n)
   cppverify::check(p[n] >= 0);
   return 0;
 }
-// CHECK: [[@LINE-3]]:3: error: verification failed: last [{{.*}}::bounds@[[@LINE-3]]:3]
-// BMC: error: verification failed: last [{{.*}}::bounds@
+// CHECK: [[@LINE-3]]:20: error: verification failed: last [bounds]
+// BMC: error: verification failed: last [bounds]
 
 int ghost_last(const int *p, int n)
   cppverify::pre(valid(p, n) && n >= 1 && n <= 100)
@@ -227,7 +232,7 @@ int ghost_last(const int *p, int n)
   cppverify::ghost { cppverify::check(p[n] >= 0 || p[n] < 0); }
   return 0;
 }
-// CHECK: [[@LINE-3]]:22: error: verification failed: ghost_last [{{.*}}::bounds@[[@LINE-3]]:22]
+// CHECK: [[@LINE-3]]:39: error: verification failed: ghost_last [bounds]
 
 // The postcondition before it holds, and the body's own state places the
 // result: *result lies in p.
@@ -274,7 +279,7 @@ int next_object(const int *p, const int *q)
   p = p + 1;
   return q[0];
 }
-// CHECK: [[@LINE-5]]:37: error: verification failed: next_object [{{.*}}::bounds@[[@LINE-5]]:37]
+// CHECK: [[@LINE-5]]:37: error: verification failed: next_object [bounds]
 
 int prev_object(const int *p, const int *q)
   cppverify::pre(valid(p, 2) && valid(q, 2) && q == p + 2 && p[2] == 0)
@@ -282,13 +287,14 @@ int prev_object(const int *p, const int *q)
   p = p + 1;
   return 0;
 }
-// CHECK: [[@LINE-5]]:55: error: verification failed: contract of prev_object [{{.*}}::contract::bounds@[[@LINE-5]]:55]
+// CHECK: [[@LINE-5]]:55: error: verification failed: contract of prev_object [bounds]
 
 // A trusted contract holds in every state its frame allows, with any result.
 [[cppverify::trusted]] int inverse(int x)
   cppverify::post(10 / cppverify::result > 0);
 // CHECK: Trusted: inverse (contract assumed, not verified)
-// CHECK-NEXT: [[@LINE-2]]:22: error: verification failed: contract of inverse [{{.*}}::contract::division-by-zero@[[@LINE-2]]:22] (counterexample: result [ssa=__result_1] [type=i32] = 0)
+// CHECK-NEXT: [[@LINE-2]]:22: error: verification failed: contract of inverse [division-by-zero]
+// CHECK: note: counterexample: result = 0
 
 [[cppverify::trusted]] int nonzero(int x)
   cppverify::post(cppverify::result != 0)
@@ -305,7 +311,7 @@ int prev_object(const int *p, const int *q)
 [[cppverify::trusted]] int *find_any(int *p, int x)
   cppverify::pre(valid(p, 4))
   cppverify::post(*cppverify::result == x);
-// CHECK: [[@LINE-1]]:19: error: verification failed: contract of find_any [{{.*}}::contract::dereference@[[@LINE-1]]:19]
+// CHECK: [[@LINE-1]]:19: error: verification failed: contract of find_any [dereference]
 
 // What the frame does not name keeps its value: *q stays nonzero.
 [[cppverify::trusted]] void scale(int *p, const int *q)
@@ -319,14 +325,14 @@ int prev_object(const int *p, const int *q)
   cppverify::pre(p != nullptr && q != nullptr && *q != 0)
   cppverify::modifies(*p, *q)
   cppverify::post(*p == cppverify::old(*p) + 10 / *q);
-// CHECK: [[@LINE-1]]:49: error: verification failed: contract of scale_both [{{.*}}::contract::division-by-zero@[[@LINE-1]]:49]
+// CHECK: [[@LINE-1]]:49: error: verification failed: contract of scale_both [division-by-zero]
 
 // A contract without a definition is checked too.
 int past(const int *p, int n)
   cppverify::pre(valid(p, n) && n >= 1)
   cppverify::post(cppverify::result == p[n]);
 // CHECK: warning: past has a contract but no definition
-// CHECK-NEXT: [[@LINE-2]]:40: error: verification failed: contract of past [{{.*}}::contract::bounds@[[@LINE-2]]:40]
+// CHECK: [[@LINE-2]]:40: error: verification failed: contract of past [bounds]
 
 // A trusted contract whose extent marker cannot be read establishes nothing.
 [[cppverify::trusted]] int either_end(const int *p, int n)
@@ -373,8 +379,8 @@ cppverify::proof void lemma(const int *a, int n)
   cppverify::pre(valid(a, n) && n >= 1 && a[n] == 0)
 {
 }
-// CHECK: [[@LINE-3]]:43: error: verification failed: contract of lemma [{{.*}}::contract::bounds@[[@LINE-3]]:43]
-// CHECK-NEXT: Verified: lemma [backend=z3]
+// CHECK: [[@LINE-3]]:43: error: verification failed: contract of lemma [bounds]
+// CHECK: Verified: lemma [backend=z3]
 
 // A spec is total: division by zero is zero there, and it has no
 // precondition to check.

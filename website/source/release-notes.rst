@@ -135,6 +135,16 @@ correct.
 after it could fail for values it never produces. Its state now carries over
 (:doc:`language/functions-loops`).
 
+**Class invariants in loops.** A loop that called member functions of an
+object, outside its class, forgot the object's class invariant: at the loop
+the verifier knew only what the loop's invariants said, so the next call
+failed its ``[type-invariant]`` check, and an invariant over private fields
+could not be restated there. A loop now keeps the class invariant of every
+object it reaches, the local objects alive at it and those its function's
+reference and pointer parameters address, checked at entry and kept by
+every iteration like the user's own; a loop in a member function of the
+class keeps none of its class's (:doc:`language/structs`).
+
 **Loops that initialize local storage.** Every iteration of a loop after the
 first saw the local storage the earlier ones wrote as uninitialized, so a
 loop filling a local array failed its ``initialization`` check, at the
@@ -366,6 +376,27 @@ that nothing instantiates is reported. ``cv::post(cv::result > 0)`` and ``cv::ol
 of a template's type did not compile (``invalid operands to binary
 expression ('T' and 'int')``) (:doc:`language/functions-loops`).
 
+**The address of a local in a contract.** ``size(&r)`` in a loop invariant
+or a ``cv::check``, for a local object ``r``, was an error (``raw address-of
+is unsupported until lexical lifetime and escape effects are modeled``).
+A contract may now take the address of a local object in memory, since a
+spec it is passed to cannot keep it; in ghost code, which could, it is
+still an error (:doc:`language/structs`).
+
+**Hiding a spec template's specialization.** ``cv::hide(at<4>)`` and
+``cv::reveal_with_fuel(steps<2>, 4)`` stopped the function (``unsupported C++
+type in verification: <overloaded function type>``). They now name that
+specialization, and a template's name alone is an error, as in C++
+(``reference to overloaded function could not be resolved``)
+(:doc:`language/ghost-proofs`).
+
+**A ring buffer case study.** A class template ``Ring<N>`` with private
+fields and a class invariant, specified as a FIFO queue through spec views,
+with clients that use a range-based ``for``, a ``switch``, and an object
+passed by reference: six functions verify in about 2 s, and the classic
+wraparound bug fails with the store that breaks the invariant
+(:doc:`case-studies/ring-buffer`).
+
 **std::min and std::max.** In a contract they ended ``Unresolved:
 obligation lowering failed: f (missing spec definition: fn_...)``, as did
 any function using a ``constexpr`` helper that could not be lifted. Of two
@@ -491,6 +522,72 @@ are errors at the statement (:doc:`language/functions-loops`).
 
 Running cpp-verify
 ~~~~~~~~~~~~~~~~~~
+
+**Results as records, SARIF, and annotations.** JSON records had no source
+for a verified function, a failure's range began at its caret and ended at
+the first column of its last token, compiler errors stayed text, and nothing
+ended the run; there was no SARIF. JSON records are now
+``cppverify.diagnostic/2``: every one names its function and where it is
+declared, a failure spans its whole expression to the column after its last
+character and gives its counterexample and path as the text prints them, the
+compiler's own errors and warnings are records with their notes, and a
+``cppverify.summary/1`` record ends the run. ``--diagnostics-format=sarif``
+writes one SARIF 2.1.0 log for code scanning, each failure with its path as
+a code flow, and ``--diagnostics-format=github`` annotates errors and
+warnings in a GitHub workflow (:doc:`language/tooling`).
+
+**Failures read like compiler errors.** A failure was one line that named its
+obligation by an internal identity and listed every SSA version of every
+variable with its type (``verification failed: abs
+[fn_5f5a3361627369::overflow@5:3] (counterexample: x [ssa=x_0] [type=i32] =
+-2147483648; trace: return.return@5:3 value=-2147483648)``). It is now a Clang
+error at the failing source, with the line and a caret under the check, the
+kind of check in brackets, the counterexample as a note in source names (each
+variable once with the values it takes along the path joined by ``->``, a
+hidden local told apart by its line, a reference as ``&r``), and each step of
+the path as a note at its line, in the static analyzer's words (``takes the
+true branch``, ``calls f(3)``, ``returns -2147483648``); a long path shows its
+first and last five steps. The values no longer include those of branches the
+path does not take, which the old list gave as if they were values of the
+execution, and a check that fails at a store, a ``delete``, or a ``return`` no
+longer lists that operation as a step taken (in JSON as well). A ``clang++ -fverify-contracts`` compilation reports each result as a
+diagnostic of its own instead of printing the verifier's text and then one
+``verification failed`` error: a failure or an unresolved result is an error,
+a warning belongs to ``-Wcppverify`` (so ``-Wno-cppverify`` and
+``-Werror=cppverify`` work), a proof is a remark shown with ``-Rcppverify``,
+and ``-fdiagnostics-format=sarif`` carries them all. In JSON Lines a record's
+``message`` is the new error text (:doc:`language/tooling`).
+
+**Failures at the part that fails.** A failure pointed at its whole clause
+(the top-level ``&&`` of ``cv::post(0 <= cv::result && cv::result <= 50)``),
+at the start of the statement for an operation that overflows or for a call
+whose precondition does not hold (``int y = x * x + 1;`` at ``int``), and
+never showed which of the callee's clauses fails. It now points at the part
+the counterexample makes false: a clause's first false conjunct, the
+operation itself (``x * x``) under the conditions around it, and the call
+(``half(2 * y + 1)``), with a note at the callee's clause, its conjunct that
+does not hold (``x % 2 == 0``); JSON gives that clause as ``related``, SARIF
+as a related location. A call's step on the path is at the call too. The
+check's ID keeps its anchor (:doc:`language/tooling`).
+
+**cvc5's counterexamples.** A failure cvc5 found (``--backend=cvc5``, or a race
+cvc5 won) gave no values and no path: the certifier checked its model and the
+verifier then dropped it, so the JSON record had no ``model`` or ``trace``,
+and under ``--lean-fallback`` a race cvc5 won wrote no Lean refutation (``the
+solver's model gives the goal's variables no values``). It now shows the
+counterexample and the steps of its path exactly as a failure Z3 finds does,
+in text, JSON, SARIF, GitHub annotations, and archive replay, evaluated by the
+certifier in the checked model; the race's refutation states its values
+(:doc:`book/part-ii/ch17-backends-modular-calls`).
+
+**Queries as SMT-LIB scripts.** The only view of a query was
+``--dump-ir=4``, Z3 terms without declarations or a check, which no solver
+reads. ``--dump-smt2=DIR`` writes every query cpp-verify sends to Z3 or cvc5
+as a script that ``z3 FILE`` or ``cvc5 FILE`` runs on its own: the options
+cpp-verify gave the solver, as commands, the query, its check, and the
+answer cpp-verify got, in a file named by the function and the obligation,
+for solver bug reports and for comparing solver versions
+(:doc:`language/tooling`).
 
 **Counterexamples after a loop.** A failure whose counterexample passed
 through a loop looked like any other, though its state there came from the
@@ -797,9 +894,12 @@ reproduce, or when two backends decide differently
 Data formats
 ~~~~~~~~~~~~
 
-Archives are ``cppverify.obligation/3``, which adds measures and the
-sources of assumptions and reads ``/2`` and ``/1``; JSON diagnostics stay
-``cppverify.diagnostic/1``. A module whose specs' measures apply other specs
+Archives are ``cppverify.obligation/6``, which adds measures, the sources
+of assumptions, where each variable version is defined, where each
+source range begins, and where each check's condition and a callee's clause
+lie, and reads ``/5`` to ``/1``; JSON diagnostics are
+``cppverify.diagnostic/2``, ending with a ``cppverify.summary/1`` record, and
+``--diagnostics-format=sarif`` writes SARIF 2.1.0. A module whose specs' measures apply other specs
 keeps them, so its module hash changes; per-obligation hashes, and the proof
 cache keyed by them, do not. JSON records may carry the status
 ``proved-obligations`` (archive replay) and the reasons ``interrupted``

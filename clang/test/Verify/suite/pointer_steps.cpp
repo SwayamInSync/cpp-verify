@@ -72,7 +72,8 @@ int too_far(const int *a, int n)
   q -= 2;
   return *q;
 }
-// CHECK-DAG: error: verification failed: too_far [{{.*}}@[[@LINE-4]]:{{.*}}n [ssa=n_0] [type=i32] = 1{{[,;]}}{{.*}}[reason=counterexample]
+// CHECK-DAG: :[[@LINE-4]]:{{[0-9]+}}: error: verification failed: too_far [{{[a-z-]+}}]{{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}n = 1{{( ->|,|$)}}
 
 int before_start(const int *a, int n)
   cv::pre(cv::valid(a, n) && 1 <= n && n <= 100)
@@ -83,7 +84,7 @@ int before_start(const int *a, int n)
   ++q;
   return *q;
 }
-// CHECK-DAG: error: verification failed: before_start [{{.*}}@[[@LINE-4]]:{{.*}}[reason=counterexample]
+// CHECK-DAG: :[[@LINE-4]]:{{[0-9]+}}: error: verification failed: before_start [{{[a-z-]+}}]{{.*}}[reason=counterexample]
 
 // Stepping a null pointer is undefined.
 int *step_null(int *p)
@@ -92,7 +93,8 @@ int *step_null(int *p)
   p += 1;
   return p;
 }
-// CHECK-DAG: error: verification failed: step_null [{{.*}}::bounds@[[@LINE-3]]:{{.*}}p [ssa=p_0] [type=pointer] = 0{{.*}}[reason=counterexample]
+// CHECK-DAG: :[[@LINE-3]]:{{[0-9]+}}: error: verification failed: step_null [bounds] {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}p = 0{{( ->|,|$)}}
 
 // A parameter may be stepped too; contracts read its entry value.
 void zero(int *p, int n)
@@ -192,7 +194,7 @@ int ring_past(const Ring *r)
   ++q;
   return 0;
 }
-// CHECK-DAG: error: verification failed: ring_past [{{.*}}@[[@LINE-3]]:{{.*}}[reason=counterexample]
+// CHECK-DAG: :[[@LINE-3]]:{{[0-9]+}}: error: verification failed: ring_past [{{[a-z-]+}}]{{.*}}[reason=counterexample]
 
 // Unsupported: stepping a pointer to dynamic storage, and the value of a
 // step in an expression.

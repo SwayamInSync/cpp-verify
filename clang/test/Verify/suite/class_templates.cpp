@@ -82,9 +82,9 @@ signed char twice_char()
 // CHECK-DAG: Verified: Box<int>::twice [backend=z3]
 // CHECK-DAG: Verified: twice_int [backend=z3]
 // CHECK-DAG: Verified: Box<signed char>::Box [backend=z3]
-// CHECK-DAG: error: verification failed: Box<signed char>::twice [{{.*}}::postcondition@
+// CHECK-DAG: error: verification failed: Box<signed char>::twice [postcondition]
 // NOTE: error: verification failed: Box<signed char>::twice
-// NOTE-NEXT: class_templates.cpp:[[@LINE-8]]:21: note: in instantiation of member function 'Box<signed char>::twice' requested here
+// NOTE: class_templates.cpp:[[@LINE-8]]:21: note: in instantiation of member function 'Box<signed char>::twice' requested here
 
 // An out-of-line definition with a contract, explicitly instantiated.
 template <typename T>

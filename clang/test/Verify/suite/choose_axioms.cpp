@@ -40,7 +40,7 @@ cppverify::proof void odd_chosen_at_4()
   cppverify::post(odd_chosen(4))
 {
 }
-// CHECK-DAG: error: verification failed: odd_chosen_at_4 [{{.*}}::postcondition@{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: odd_chosen_at_4 [postcondition]{{.*}}[reason=counterexample]
 
 // In the postcondition of a hidden spec.
 cppverify::spec int parity(int n)
@@ -63,7 +63,7 @@ cppverify::proof void parity_of_7_wrong(int x)
 {
   cppverify::hide(parity);
 }
-// CHECK-DAG: error: verification failed: parity_of_7_wrong [{{.*}}::postcondition@{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: parity_of_7_wrong [postcondition]{{.*}}[reason=counterexample]
 
 // A choose that reads memory is read where its application is.
 cppverify::spec int low_bit(const int *a)
@@ -90,7 +90,7 @@ void set_one_wrong(int *a)
   cppverify::hide(low_bit);
   a[0] = 1;
 }
-// CHECK-DAG: error: verification failed: set_one_wrong [{{.*}}::postcondition@{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: set_one_wrong [postcondition]{{.*}}[reason=counterexample]
 
 cppverify::spec int low_bit_rec(const int *a, int n)
   cppverify::decreases(n)
@@ -130,7 +130,7 @@ int max_index_wrong(const int *a, int n, int m)
 {
   return m;
 }
-// CHECK-DAG: error: verification failed: max_index_wrong [{{.*}}::postcondition@{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: max_index_wrong [postcondition]{{.*}}[reason=counterexample]
 
 // In the induction hypothesis of a recursive spec.
 cppverify::spec int bit(int n)
@@ -191,4 +191,4 @@ cppverify::proof void parity_sum_5_wrong(int x)
   cppverify::post(parity_sum(x) == 2)
 {
 }
-// CHECK-DAG: error: verification failed: parity_sum_5_wrong [{{.*}}::postcondition@{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: parity_sum_5_wrong [postcondition]{{.*}}[reason=counterexample]

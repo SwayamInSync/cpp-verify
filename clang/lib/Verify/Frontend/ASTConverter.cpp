@@ -145,8 +145,10 @@ static std::unique_ptr<VExpr> mathOperand(std::unique_ptr<VExpr> V) {
   }
   VType From = V->Ty;
   SourceLocation Loc = V->Loc;
+  SourceLocation BeginLoc = V->BeginLoc;
   SourceLocation EndLoc = V->EndLoc;
   auto Cast = std::make_unique<VCastExpr>(std::move(V), From, To, Loc);
+  Cast->BeginLoc = BeginLoc;
   Cast->EndLoc = EndLoc;
   return Cast;
 }
@@ -966,6 +968,13 @@ static std::optional<bool> stdMinOrMax(const FunctionDecl *Callee,
   return IsMax;
 }
 
+/// \p S, a call converted from \p Call, with where the call is written.
+static std::unique_ptr<VCallStmt> atCall(std::unique_ptr<VCallStmt> S,
+                                         const Expr *Call) {
+  S->CallSite = {Call->getExprLoc(), Call->getBeginLoc(), Call->getEndLoc()};
+  return S;
+}
+
 /// A function as the verifier's messages name it, a template specialization
 /// with its arguments (`maxv<int>`).
 static std::string functionName(const FunctionDecl *FD,
@@ -1299,6 +1308,9 @@ void ASTConverter::recordSourceVariable(const ValueDecl *D) {
   }
   Record(InternalBase, DisplayBase,
          VType::fromQualType(D->getType(), IntMode, Ctx));
+  if (auto It = CurrentFn->SourceVariables.find(InternalBase);
+      It != CurrentFn->SourceVariables.end())
+    It->second.Reference = D->getType()->isReferenceType();
 }
 
 bool ASTConverter::isDynamicAddress(const Expr *E) const {
@@ -2427,6 +2439,7 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
       }
       llvm::SaveAndRestore Owner(ErrorFunction, functionIdentity(FD));
       llvm::SaveAndRestore OwnerName(ErrorFunctionName, functionName(FD));
+      llvm::SaveAndRestore OwnerLoc(ErrorFunctionLoc, FD->getLocation());
       llvm::SaveAndRestore InContract(ErrorInContract, true);
       error(FD->getLocation(),
             FD->getQualifiedNameAsString() + ": " + *UnsupportedMember);
@@ -2559,6 +2572,7 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
     // The post describes the spec where its body defines it.
     for (auto &Post : Fn->Postconditions) {
       const SourceLocation PostLoc = Post->Loc;
+      const SourceLocation PostBegin = Post->BeginLoc;
       const SourceLocation PostEnd = Post->EndLoc;
       Post = std::make_unique<VBinOpExpr>(
           VBinOp::Or,
@@ -2566,6 +2580,7 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
                                          cloneVExpr(Fn->Domain.get()),
                                          VType::makeBool(), PostLoc),
           std::move(Post), VType::makeBool(), PostLoc);
+      Post->BeginLoc = PostBegin;
       Post->EndLoc = PostEnd;
     }
     Unspecified.push_back(std::move(Outside));
@@ -3233,11 +3248,76 @@ ASTConverter::exitClassInvariants(const CXXMethodDecl *Method,
              : std::vector<const Expr *>();
 }
 
+/// Appends to a loop's invariants the class invariants of the objects the
+/// loop can reach: the local objects alive at it and the objects its
+/// function's reference and pointer parameters address. Only the class's
+/// members change what an invariant states, and a public one keeps it, so it
+/// holds at every iteration of a loop outside the class; like the user's
+/// invariants, each is proved at entry and preserved. A member function may
+/// break the invariant of another object of its class between calls, so its
+/// loops get none of its class's.
+void ASTConverter::appendObjectInvariants(
+    std::vector<std::unique_ptr<VExpr>> &Invariants) {
+  const auto *Member = dyn_cast_or_null<CXXMethodDecl>(ConvertingDecl);
+  auto invariantsOf = [&](QualType Object) -> const TypeContractInfo * {
+    const RecordDecl *Record = getRecordFromType(Object);
+    const TypeContractInfo *TCI =
+        Record ? Ctx.getTypeContract(Record) : nullptr;
+    if (!TCI || TCI->Invariants.empty() ||
+        (Member &&
+         Member->getParent()->getCanonicalDecl() == Record->getCanonicalDecl()))
+      return nullptr;
+    return TCI;
+  };
+  auto append = [&](const TypeContractInfo &TCI, const VExpr &Address,
+                    bool MayBeNull, SourceLocation Loc) {
+    llvm::SaveAndRestore<const VExpr *> Substitute(ThisSubstitute, &Address);
+    llvm::SaveAndRestore DropMarkers(DropExtentMarkers, true);
+    llvm::SaveAndRestore Contract(InContractExpression, true);
+    FieldSubstPrefix.clear();
+    for (const Expr *Invariant : TCI.Invariants) {
+      auto E = convertTypeInvariantExpr(Invariant);
+      if (!E)
+        continue;
+      if (MayBeNull)
+        E = std::make_unique<VBinOpExpr>(
+            VBinOp::Or,
+            std::make_unique<VBinOpExpr>(
+                VBinOp::Eq, cloneVExpr(&Address),
+                std::make_unique<VLiteralExpr>(0, VType::makePtr(), Loc),
+                VType::makeBool(), Loc),
+            std::move(E), VType::makeBool(), Loc);
+      Invariants.push_back(std::move(E));
+    }
+  };
+  for (const auto &Scope : AutomaticScopeStack)
+    for (const VarDecl *VD : Scope)
+      if (const TypeContractInfo *TCI = invariantsOf(VD->getType()))
+        if (auto Address = convertAutomaticLocalAddress(VD, VD->getLocation()))
+          append(*TCI, *Address, /*MayBeNull=*/false, VD->getLocation());
+  const FunctionContractInfo *FCI =
+      ConvertingDecl ? functionContract(ConvertingDecl) : nullptr;
+  if (!ConvertingDecl || !FCI)
+    return;
+  for (const ParmVarDecl *P : ConvertingDecl->parameters()) {
+    QualType Ty = P->getType();
+    if ((!Ty->isLValueReferenceType() && !Ty->isPointerType()) ||
+        hasExtentMarker(*FCI, P))
+      continue;
+    if (const TypeContractInfo *TCI = invariantsOf(Ty->getPointeeType())) {
+      VVarExpr Pointer(valueName(P), VType::makePtr(), P->getLocation());
+      append(*TCI, Pointer, Ty->isPointerType(), P->getLocation());
+    }
+  }
+}
+
 std::unique_ptr<VFunction>
 ASTConverter::convertFunction(const FunctionDecl *FD) {
+  llvm::SaveAndRestore Converting(ConvertingDecl, FD);
   llvm::SaveAndRestore At(CurrentRange, SourceRange(FD->getLocation()));
   llvm::SaveAndRestore Owner(ErrorFunction, functionIdentity(FD));
   llvm::SaveAndRestore OwnerName(ErrorFunctionName, functionName(FD));
+  llvm::SaveAndRestore OwnerLoc(ErrorFunctionLoc, FD->getLocation());
   llvm::SaveAndRestore InContract(ErrorInContract, true);
   const size_t ErrorsAtStart = Errors.size();
   const FunctionContractInfo *FCI = functionContract(FD);
@@ -3304,6 +3384,8 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   }
   Fn->ReadsHeap = FCI->IsSpec && specReadsHeap(FD);
   Fn->DeclLoc = FD->getLocation();
+  Fn->Extent = Ctx.getSourceManager().getExpansionRange(FD->getSourceRange())
+                   .getAsRange();
   // [[cppverify::trusted]] on a definition leaves its body unverified; on a
   // declaration it says that callers which see no definition assume the
   // contract, so a definition that only inherits it is verified.
@@ -4259,6 +4341,7 @@ std::unique_ptr<VFunction>
 ASTConverter::convertConstexprSpec(const FunctionDecl *FD) {
   llvm::SaveAndRestore Owner(ErrorFunction, functionIdentity(FD));
   llvm::SaveAndRestore OwnerName(ErrorFunctionName, functionName(FD));
+  llvm::SaveAndRestore OwnerLoc(ErrorFunctionLoc, FD->getLocation());
   llvm::SaveAndRestore InContract(ErrorInContract, true);
   const size_t ErrorsAtStart = Errors.size();
   nameParameters(FD, FD);
@@ -4273,6 +4356,8 @@ ASTConverter::convertConstexprSpec(const FunctionDecl *FD) {
     Fn->Name = functionName(FD);
     Fn->Identity = functionIdentity(FD);
     Fn->DeclLoc = FD->getLocation();
+    Fn->Extent = Ctx.getSourceManager().getExpansionRange(FD->getSourceRange())
+                     .getAsRange();
     Fn->IsSpec = true;
     Fn->IsConstexprSpec = true;
     return Fn;
@@ -5395,8 +5480,10 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
           It->second, VType::fromQualType(E->getType(), IntMode, Ctx),
           E->getExprLoc());
   auto Result = convertExprImpl(E);
-  if (Result && E)
+  if (Result && E) {
+    Result->BeginLoc = E->getBeginLoc();
     Result->EndLoc = E->getEndLoc();
+  }
   if (Result && E && isTriggerMarked(E))
     markTrigger(Result, E);
   return Result;
@@ -6296,6 +6383,14 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     if (U->getOpcode() == UO_AddrOf) {
       if (subobjectPointerRoot(U->getSubExpr()))
         return subobjectPointer(E, U->getSubExpr(), /*AddressOf=*/true);
+      // In a contract the address of a local object in memory is a value:
+      // a spec it is passed to cannot keep it, and nothing else can.
+      if (InContractExpression)
+        if (const auto *Ref =
+                dyn_cast<DeclRefExpr>(U->getSubExpr()->IgnoreParens()))
+          if (const auto *VD = dyn_cast<VarDecl>(Ref->getDecl());
+              VD && AddressableLocals.count(VD))
+            return convertAutomaticLocalAddress(VD, E->getExprLoc());
       error(CurrentFn->Name +
             ": raw address-of is unsupported until lexical lifetime and escape "
             "effects are modeled");
@@ -6921,9 +7016,9 @@ void ASTConverter::convertExecCallArg(
         std::vector<std::unique_ptr<VExpr>> InnerArgs;
         convertExecCallArgs(CE, Prelude, InnerArgs);
         std::string Tmp = "__nested_" + std::to_string(++NestedCallId);
-        Prelude.push_back(std::make_unique<VCallStmt>(
+        Prelude.push_back(atCall(std::make_unique<VCallStmt>(
             functionName(Callee), functionIdentity(Callee),
-            std::move(InnerArgs), Tmp, E->getExprLoc(), false));
+            std::move(InnerArgs), Tmp, E->getExprLoc(), false), CE));
         Out = convertCallResultValue(
             Tmp, Callee->getReturnType(),
             VType::fromQualType(E->getType(), IntMode, Ctx), E->getExprLoc());
@@ -7161,9 +7256,9 @@ std::unique_ptr<VExpr> ASTConverter::hoistExecCall(const CallExpr *CE,
   if (Errors.size() != ErrorCount)
     return nullptr;
   std::string Temporary = "__call_" + std::to_string(++NestedCallId);
-  CallSink->push_back(std::make_unique<VCallStmt>(
+  CallSink->push_back(atCall(std::make_unique<VCallStmt>(
       functionName(Callee), functionIdentity(Callee), std::move(Args),
-      Temporary, CE->getExprLoc(), false));
+      Temporary, CE->getExprLoc(), false), CE));
   HoistedCalls[CE] = Temporary;
   return convertCallResultValue(std::move(Temporary), Returned, Result,
                                 CE->getExprLoc());
@@ -7913,9 +8008,9 @@ bool ASTConverter::appendConstruction(
       return false;
     Args.push_back(std::move(Arg));
   }
-  Out.push_back(std::make_unique<VCallStmt>(Ctor->getNameAsString(),
+  Out.push_back(atCall(std::make_unique<VCallStmt>(Ctor->getNameAsString(),
                                             functionIdentity(Ctor),
-                                            std::move(Args), "", Loc, false));
+                                            std::move(Args), "", Loc, false), Construct));
   return true;
 }
 
@@ -8286,6 +8381,7 @@ ASTConverter::convertRangeFor(const CXXForRangeStmt *RF) {
       if (auto E = convertExpr(D))
         Decreases.push_back(std::move(E));
   }
+  appendObjectInvariants(Invariants);
   // Without a measure, the elements left: a range over an array ends.
   if (Decreases.empty() && !(LCI && LCI->MayDiverge.isValid()))
     Decreases.push_back(std::make_unique<VBinOpExpr>(VBinOp::Sub, Size(),
@@ -8825,10 +8921,10 @@ ASTConverter::convertStmtBody(const Stmt *S) {
                     ? "__return_call_provenance_" + std::to_string(CallId)
                     : "";
             CurrentFn->UsesDynamicStorage |= TrackOwnedResult;
-            Out.push_back(std::make_unique<VCallStmt>(
+            Out.push_back(atCall(std::make_unique<VCallStmt>(
                 functionName(Callee), functionIdentity(Callee),
                 std::move(Args), ReturnsVoid ? "" : Tmp, RS->getBeginLoc(),
-                false, Provenance));
+                false, Provenance), CE));
             auto Result = convertCallResultValue(Tmp, Callee->getReturnType(),
                                                  CurrentFn->ReturnType,
                                                  RS->getBeginLoc(), Provenance);
@@ -9059,6 +9155,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           Decreases.push_back(std::move(E));
       InContractExpression = SavedContract;
     }
+    appendObjectInvariants(Invariants);
     if (!checkConditionVariableUnnamed(WS->getConditionVariable(), Invariants,
                                        Decreases) ||
         !checkLoopTermination(WS, !Decreases.empty())) {
@@ -9124,6 +9221,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           Decreases.push_back(std::move(E));
       InContractExpression = SavedContract;
     }
+    appendObjectInvariants(Invariants);
     if (!checkLoopTermination(DS, !Decreases.empty())) {
       InitializedValues = Before;
       InitializationPathReachable = BeforeReachable;
@@ -9210,6 +9308,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           Decreases.push_back(std::move(E));
       InContractExpression = SavedContract;
     }
+    appendObjectInvariants(Invariants);
     if (!checkConditionVariableUnnamed(FS->getConditionVariable(), Invariants,
                                        Decreases) ||
         !checkLoopTermination(FS, !Decreases.empty())) {
@@ -9366,9 +9465,9 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         std::vector<std::unique_ptr<VExpr>> Args;
         convertExecCallArgs(CE, Out, Args);
         bool IsProof = calleeIsProof(Callee);
-        Out.push_back(std::make_unique<VCallStmt>(
+        Out.push_back(atCall(std::make_unique<VCallStmt>(
             functionName(Callee), functionIdentity(Callee),
-            std::move(Args), "", CE->getExprLoc(), IsProof));
+            std::move(Args), "", CE->getExprLoc(), IsProof), CE));
       } else {
         error(CurrentFn->Name +
               ": call to function without a verification contract: " +
@@ -9615,10 +9714,10 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         convertExecCallArgs(PointerCall, Out, Args);
         const std::string &Provenance =
             DynamicPointerProvenanceVariables.at(DirectTarget);
-        Out.push_back(std::make_unique<VCallStmt>(
+        Out.push_back(atCall(std::make_unique<VCallStmt>(
             functionName(PointerCallee), functionIdentity(PointerCallee),
             std::move(Args), valueName(DirectTarget), BO->getExprLoc(), false,
-            Provenance));
+            Provenance), PointerCall));
         CurrentFn->UsesDynamicStorage = true;
         markInitialized(DirectTarget);
         return Out;
@@ -9650,9 +9749,9 @@ ASTConverter::convertStmtBody(const Stmt *S) {
                 !calleeIsProof(Callee)) {
               std::vector<std::unique_ptr<VExpr>> Args;
               convertExecCallArgs(Call, Out, Args);
-              Out.push_back(std::make_unique<VCallStmt>(
+              Out.push_back(atCall(std::make_unique<VCallStmt>(
                   functionName(Callee), functionIdentity(Callee),
-                  std::move(Args), valueName(Target), BO->getExprLoc(), false));
+                  std::move(Args), valueName(Target), BO->getExprLoc(), false), Call));
               markInitialized(Target);
               return Out;
             }
@@ -9676,9 +9775,9 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           convertExecCallArgs(Call, Out, Args);
           const std::string Tmp =
               "__assignment_call_" + std::to_string(++NestedCallId);
-          Out.push_back(std::make_unique<VCallStmt>(
+          Out.push_back(atCall(std::make_unique<VCallStmt>(
               functionName(Callee), functionIdentity(Callee),
-              std::move(Args), Tmp, BO->getExprLoc(), false));
+              std::move(Args), Tmp, BO->getExprLoc(), false), Call));
           VType Target =
               VType::fromQualType(BO->getLHS()->getType(), IntMode, Ctx);
           auto Value = convertCallResultValue(Tmp, Callee->getReturnType(),
@@ -9857,10 +9956,10 @@ ASTConverter::convertStmtBody(const Stmt *S) {
             convertExecCallArgs(Call, Out, Args);
             const std::string ResultTarget =
                 "__local_call_" + std::to_string(++NestedCallId);
-            Out.push_back(std::make_unique<VCallStmt>(
+            Out.push_back(atCall(std::make_unique<VCallStmt>(
                 functionName(Callee), functionIdentity(Callee),
                 std::move(Args), ResultTarget, VD->getBeginLoc(),
-                calleeIsProof(Callee)));
+                calleeIsProof(Callee)), Call));
             Initializer = convertCallResultValue(
                 ResultTarget, Callee->getReturnType(),
                 VType::fromQualType(VD->getType(), IntMode, Ctx),
@@ -10012,10 +10111,10 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           convertExecCallArgs(Call, Out, Args);
           const std::string &Provenance =
               DynamicPointerProvenanceVariables.at(VD);
-          Out.push_back(std::make_unique<VCallStmt>(
+          Out.push_back(atCall(std::make_unique<VCallStmt>(
               functionName(Callee), functionIdentity(Callee),
               std::move(Args), valueName(VD), VD->getBeginLoc(), false,
-              Provenance));
+              Provenance), Call));
           CurrentFn->UsesDynamicStorage = true;
           markInitialized(VD);
           continue;
@@ -10065,10 +10164,10 @@ ASTConverter::convertStmtBody(const Stmt *S) {
             const std::string ResultTarget =
                 RecordResult ? valueName(VD)
                              : "__local_call_" + std::to_string(++NestedCallId);
-            Out.push_back(std::make_unique<VCallStmt>(
+            Out.push_back(atCall(std::make_unique<VCallStmt>(
                 functionName(Callee), functionIdentity(Callee),
                 std::move(Args), ResultTarget, VD->getBeginLoc(),
-                calleeIsProof(Callee)));
+                calleeIsProof(Callee)), CE));
             if (!RecordResult) {
               VType Target = VType::fromQualType(VD->getType(), IntMode, Ctx);
               if (auto Value = convertCallResultValue(

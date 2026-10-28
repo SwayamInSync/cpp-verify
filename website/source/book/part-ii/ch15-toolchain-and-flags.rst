@@ -135,7 +135,10 @@ Other flags
 - ``cpp-verify --proof-cache=DIR`` — keep proofs of single obligations between
   runs (``--proof-cache-max-mb``, ``--proof-cache-max-entries`` bound it)
 - ``cpp-verify --diagnostics-format=json`` — emit versioned
-  ``cppverify.diagnostic/1`` JSON Lines for verification results
+  ``cppverify.diagnostic/2`` JSON Lines for results and compiler diagnostics,
+  ending with a summary record; ``sarif`` prints one SARIF 2.1.0 log, and
+  ``github`` the text with a GitHub Actions annotation for each error and
+  warning
 - ``cpp-verify --lean-out=FILE`` — write a standalone Lean scratch-pad
   (``--backend=lean``, which it selects)
 - ``cpp-verify --lean-project=DIR`` — generate a preserved, pinned Lean project
@@ -148,6 +151,8 @@ Other flags
 - ``cpp-verify --dump-ir[=1,2,3,4]`` — dump VCR / passive / Obligation IR / Z3 layers
 - ``cpp-verify --lower-only`` — construct and encode VCs without invoking Z3's
   satisfiability check
+- ``cpp-verify --dump-smt2=DIR`` — write every query sent to Z3 or cvc5 as a
+  script the solver runs on its own, with the answer cpp-verify got
 - ``cpp-verify --obligation-out=FILE`` — write validated, versioned canonical
   obligation records with semantic hashes
 - ``cpp-verify --obligation-in=FILE`` — validate and replay records through Z3,

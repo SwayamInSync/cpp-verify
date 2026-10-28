@@ -42,6 +42,7 @@ add_clang_library(clangVerify
   Backend/ObligationSimplify.cpp
   Backend/ObligationSerialization.cpp
   Backend/ProofCache.cpp
+  Backend/QueryDump.cpp
   Backend/ChildProcess.cpp
   Backend/CVC5Backend.cpp
   Backend/Z3Encode.cpp
@@ -49,6 +50,8 @@ add_clang_library(clangVerify
   Backend/VerifyBackend.cpp
   Backend/LeanBackend.cpp
   Driver/Verifier.cpp
+  Driver/Counterexample.cpp
+  Driver/StructuredOutput.cpp
   Driver/DumpIR.cpp
   Driver/CppVerifyIntegration.cpp
   Driver/CppVerifyVersion.cpp

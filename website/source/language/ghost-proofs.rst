@@ -171,7 +171,10 @@ integer, and adding to it never wraps.
 .. code-block:: text
 
    Verified: large [backend=z3]
-   reads.cpp:13:24: error: verification failed: wraps [...::postcondition@13:24] (counterexample: ...) [backend=z3] [reason=counterexample]
+   reads.cpp:13:24: error: verification failed: wraps [postcondition] [backend=z3] [reason=counterexample]
+      13 |   cv::post(pair_sum(p) < 0)
+         |            ~~~~~~~~~~~~^~~
+   reads.cpp:13:24: note: counterexample: p = -1
 
 Before 0.2, a value read in a spec body kept its machine type, so the sum
 above wrapped to a negative ``int``: ``wraps`` verified, and ``large`` could
@@ -284,7 +287,10 @@ among ``a[0]`` to ``a[n - 1]``, inside its frame; ``index_past`` also reads
 .. code-block:: text
 
    Verified: spec reads: index_of
-   reads.cpp:10:34: error: spec reads failed: index_past [backend=z3] [reason=counterexample] (a [type=pointer] = 0, n [type=math-i32] = 0)
+   reads.cpp:10:34: error: spec reads failed: index_past [backend=z3] [reason=counterexample]
+      10 |   return cv::choose(k, 0, n + 1, a[k] == x);
+         |                                  ^
+   reads.cpp:10:34: note: counterexample: a = 0, n = 0
 
 The counterexample is the empty buffer: with ``n = 0``, ``index_past`` reads
 ``a[0]``, and ``cppverify::reads(a, 0)`` declares no cell.
@@ -316,6 +322,13 @@ wherever the statement appears:
      cv::ghost { cv::hide(triple); }   // this proof needs no definition of triple
      return x + x + x;
    }
+
+A specialization of a spec template is named with its arguments,
+``cv::hide(at<4>)`` or ``cv::reveal_with_fuel(steps<2>, 4)``. The template's
+name alone names none, which is an error (``reference to overloaded function
+could not be resolved``). Before 0.2 a specialization could not be named at
+all: the function stopped with ``unsupported C++ type in verification:
+<overloaded function type>``.
 
 With fuel 1 a proof sees one unfolding of each application it names, so
 ``pow2(3) == 8`` needs three more:

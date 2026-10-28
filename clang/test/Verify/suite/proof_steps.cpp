@@ -58,7 +58,7 @@ void wrong_claim(int a, int b)
     sq_monotone(a, b);
   }
 }
-// CHECK-DAG: error: verification failed: wrong_claim [{{.*}}::assertion@[[@LINE-4]]:3]
+// CHECK-DAG: :[[@LINE-4]]:26: error: verification failed: wrong_claim [assertion]
 
 // A lemma's precondition is checked where the proof calls it.
 void lemma_outside_its_domain(int a, int b)
@@ -68,7 +68,7 @@ void lemma_outside_its_domain(int a, int b)
     sq_monotone(a, b);
   }
 }
-// CHECK-DAG: error: verification failed: lemma_outside_its_domain [{{.*}}::precondition@[[@LINE-3]]:5]
+// CHECK-DAG: :[[@LINE-3]]:5: error: verification failed: lemma_outside_its_domain [precondition]
 
 void ghost_local_in_proof(int a)
   cppverify::pre(0 <= a && a <= 1000)
@@ -144,7 +144,7 @@ void wrong_step(int a, int b)
     sq(a);
   }
 }
-// CHECK-DAG: error: verification failed: wrong_step [{{.*}}::assertion@[[@LINE-4]]:5]
+// CHECK-DAG: :[[@LINE-4]]:5: error: verification failed: wrong_step [assertion]
 
 // The chain's steps are local; its conclusion is not.
 void step_is_local(int a)

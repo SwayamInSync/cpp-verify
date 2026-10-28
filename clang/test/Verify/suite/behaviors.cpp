@@ -32,7 +32,7 @@ int calls_with_minimum(int y)
 {
   return abs_value(y);
 }
-// CHECK-DAG: error: verification failed: calls_with_minimum [{{.*}}::precondition@[[@LINE-2]]:3]
+// CHECK-DAG: :[[@LINE-2]]:10: error: verification failed: calls_with_minimum [precondition]
 
 int sign(int x)
   cppverify::behavior(positive, x > 0)
@@ -43,7 +43,7 @@ int sign(int x)
 {
   return x > 0 ? 1 : (x < 0 ? -1 : 0);
 }
-// CHECK-DAG: error: verification failed: sign [{{.*}}::assertion@[[@LINE-4]]:3]
+// CHECK-DAG: :[[@LINE-4]]:3: error: verification failed: sign [assertion]
 
 int clamp(int x)
   cppverify::behavior(low, x <= 0)
@@ -54,7 +54,7 @@ int clamp(int x)
 {
   return x;
 }
-// CHECK-DAG: error: verification failed: clamp [{{.*}}::assertion@[[@LINE-4]]:3]
+// CHECK-DAG: :[[@LINE-4]]:3: error: verification failed: clamp [assertion]
 
 int small_zero(int x)
   cppverify::behavior(small, x < 10)
@@ -62,7 +62,7 @@ int small_zero(int x)
 {
   return x < 5 ? 0 : 1;
 }
-// CHECK-DAG: error: verification failed: small_zero [{{.*}}::postcondition@[[@LINE-4]]:21]
+// CHECK-DAG: :[[@LINE-4]]:21: error: verification failed: small_zero [postcondition]
 
 // A behavior's assumption reads memory at entry.
 void bump(int *p)

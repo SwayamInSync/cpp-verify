@@ -84,6 +84,6 @@ int bad_negative_shift(int x)
 // DECIDED-DAG: Verified: shift_by_signed
 // UNDECIDED-DAG: {{Verified|Unresolved}}: shift_by_signed
 // VERIFY-DAG: error: verification failed: bad_wrap
-// MODEL-DAG: x [ssa=x_0] [type=u32] = 4294967295;
+// MODEL-DAG: note: counterexample: {{.*}}x = 4294967295{{( ->|,|$)}}
 // VERIFY-DAG: error: verification failed: bad_negative_shift
-// MODEL-DAG: x [ssa=x_0] [type=i32] = 1;
+// MODEL-DAG: note: counterexample: {{.*}}x = 1{{( ->|,|$)}}

@@ -16,7 +16,7 @@ int beyond_single(const int *p)
 {
   return p[1];
 }
-// CHECK-DAG: error: verification failed: beyond_single [{{.*}}::bounds@
+// CHECK-DAG: error: verification failed: beyond_single [bounds]
 
 int through_copy(const int *p, int n)
   cppverify::pre(valid(p, n) && n >= 1 && n < 100)
@@ -24,7 +24,7 @@ int through_copy(const int *p, int n)
   const int *q = p;
   return q[n];
 }
-// CHECK-DAG: error: verification failed: through_copy [{{.*}}::bounds@
+// CHECK-DAG: error: verification failed: through_copy [bounds]
 
 int through_selection(const int *p, const int *q, bool c)
   cppverify::pre(p != nullptr && q != nullptr)
@@ -32,7 +32,7 @@ int through_selection(const int *p, const int *q, bool c)
   const int *r = c ? p : q;
   return r[1];
 }
-// CHECK-DAG: error: verification failed: through_selection [{{.*}}::bounds@
+// CHECK-DAG: error: verification failed: through_selection [bounds]
 
 int after_rebinding(const int *p, int n)
   cppverify::pre(valid(p, n) && n >= 1 && n < 100)
@@ -40,7 +40,7 @@ int after_rebinding(const int *p, int n)
   p = p + n;
   return p[0];
 }
-// CHECK-DAG: error: verification failed: after_rebinding [{{.*}}::bounds@
+// CHECK-DAG: error: verification failed: after_rebinding [bounds]
 
 void loop_overrun(int *p, int n)
   cppverify::pre(valid(p, n) && n >= 1 && n < 100)
@@ -53,14 +53,14 @@ void loop_overrun(int *p, int n)
     p[i] = 0;
   }
 }
-// CHECK-DAG: error: verification failed: loop_overrun [{{.*}}::bounds@
+// CHECK-DAG: error: verification failed: loop_overrun [bounds]
 
 int empty_extent(const int *p, int n)
   cppverify::pre(valid(p, n) && n == 0 && p != nullptr)
 {
   return p[0];
 }
-// CHECK-DAG: error: verification failed: empty_extent [{{.*}}::bounds@
+// CHECK-DAG: error: verification failed: empty_extent [bounds]
 
 bool step_too_far(const int *p)
   cppverify::pre(valid(p, 2))
@@ -68,7 +68,7 @@ bool step_too_far(const int *p)
   const int *q = p + 3;
   return q == p;
 }
-// CHECK-DAG: error: verification failed: step_too_far [{{.*}}::bounds@
+// CHECK-DAG: error: verification failed: step_too_far [bounds]
 
 bool one_past(const int *p)
   cppverify::pre(valid(p, 2))
@@ -134,7 +134,7 @@ int past_external(int value)
   int *cell = external_cell(value);
   return cell[1];
 }
-// CHECK-DAG: error: verification failed: past_external [{{.*}}::bounds@
+// CHECK-DAG: error: verification failed: past_external [bounds]
 
 struct Pair {
   int first;
@@ -147,4 +147,4 @@ int past_object(const Pair *p, const Pair *q)
 {
   return (p + 1)->second;
 }
-// CHECK-DAG: error: verification failed: past_object [{{.*}}::bounds@
+// CHECK-DAG: error: verification failed: past_object [bounds]

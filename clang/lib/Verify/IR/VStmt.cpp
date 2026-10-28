@@ -84,9 +84,11 @@ std::unique_ptr<VStmt> verify::cloneVStmt(const VStmt *S) {
     std::vector<std::unique_ptr<VExpr>> Args;
     for (const auto &A : C.Args)
       Args.push_back(cloneVExpr(A.get()));
-    return std::make_unique<VCallStmt>(C.Callee, C.CalleeIdentity,
-                                       std::move(Args), C.ResultTarget, C.Loc,
-                                       C.IsProofCall, C.ResultProvenanceTarget);
+    auto Copy = std::make_unique<VCallStmt>(
+        C.Callee, C.CalleeIdentity, std::move(Args), C.ResultTarget, C.Loc,
+        C.IsProofCall, C.ResultProvenanceTarget);
+    Copy->CallSite = C.CallSite;
+    return Copy;
   }
   case VStmt::Assert: {
     const auto &A = static_cast<const VAssertStmt &>(*S);
@@ -175,6 +177,7 @@ VFunction verify::cloneVFunction(const VFunction &Fn) {
   for (const auto &[Name, Assumes] : Fn.Behaviors)
     Out.Behaviors.emplace_back(Name, cloneVExpr(Assumes.get()));
   Out.DeclLoc = Fn.DeclLoc;
+  Out.Extent = Fn.Extent;
   Out.NeedsDecreasesCheck = Fn.NeedsDecreasesCheck;
   Out.DivergenceLoc = Fn.DivergenceLoc;
   Out.DivergenceDeclared = Fn.DivergenceDeclared;

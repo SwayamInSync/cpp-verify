@@ -1757,6 +1757,12 @@ For by-value parameters this is purely an optimization — correctness is identi
   checkpoint — matching how Dafny/Verus check constructors.
 - Pointer-to-record parameters are not injected (their field access lowers to a
   heap Load).
+- On classes with member functions, a loop outside the class keeps the class
+  invariant of every object it reaches (the local objects alive at it, and
+  the objects its function's reference and pointer parameters address): it
+  is added to the loop's invariants and proved there like the user's.
+  Members of the class may break it between calls, so their loops get none
+  of their class's.
 
 ## View Functions (idiomatic spec abstraction)
 
@@ -1901,7 +1907,7 @@ int safe_fib(int n) cppverify::pre(...) cppverify::post(cppverify::result == fib
 
 ## hide / reveal
 
-- `cppverify::hide(fn_name)` and `cppverify::reveal(fn_name)` are statements, accepted anywhere in a function body or ghost block, that control whether the body of a spec function is visible to Z3 in the whole function.
+- `cppverify::hide(fn_name)` and `cppverify::reveal(fn_name)` are statements, accepted anywhere in a function body or ghost block, that control whether the body of a spec function is visible to Z3 in the whole function. A specialization of a spec template is named with its arguments (`cppverify::hide(at<4>)`), resolved as C++ resolves a template-id; the template's name alone is an error.
 - Default for non-recursive specs: visible (body inlined into queries).
 - Default for recursive specs: one finite unfolding step. Deeper unfolding
   requires `cppverify::reveal_with_fuel`.
@@ -2253,10 +2259,20 @@ logical-function declarations with compact step definitions and exact finite
 fuel levels. Layer 3 dumps this exact module; Layer 4 and ordinary verification
 encode the same in-memory object. There is no separate dump-only
 weakest-precondition implementation and no backend may borrow VCR declarations.
+`--dump-smt2=DIR` writes each query a solver checks, as that solver received
+it, as a standalone SMT-LIB script with the solver's options as commands and
+the answer cpp-verify got, named by the function, the obligation, and a hash
+of the script.
 
 Diagnostic metadata is non-semantic: names, source ranges, internal positional
-and public source-anchored IDs, and trace events survive archive replay but do
-not change semantic hashes. Model and trace
+and public source-anchored IDs, where each check's condition and a callee's
+clause lie, and trace events survive archive replay but do not change semantic
+hashes. A failure is shown at the part of its check that its certified
+counterexample makes false (a clause's false conjunct, the operation that is
+undefined, the call for a callee's precondition, with a note at the callee's
+false conjunct); the part is found by evaluating the checked condition at the
+counterexample, after solving, rather than by splitting it into obligations
+of their own, as Dafny does. Model and trace
 evaluation never requests Z3 model completion. Undetermined values remain
 unknown, false-guarded events are omitted, and undetermined guards remain
 explicitly unknown rather than selecting a path.
@@ -2292,10 +2308,13 @@ dead declarations or trivial Boolean structure. It does not rewrite
 arithmetic, quantifiers, pointer/heap expressions, or assumptions.
 
 `--obligation-out=FILE` publishes deterministic, concatenable
-`cppverify.obligation/3` binary records with stable wire tags and portable
+`cppverify.obligation/6` binary records with stable wire tags and portable
 source attribution; schema v3 adds each logical function's termination
 measures and, with source attribution, where each assumption of a goal comes
-from, neither hashed, and records of schemas v1 and v2 remain readable. Publication includes an
+from, schema v4 where each variable version of a counterexample is defined,
+schema v5 where each source range begins, schema v6 where each check's
+condition and a callee's clause lie, none of them hashed, and records of
+schemas v1 to v5 remain readable. Publication includes an
 exact serialize/deserialize/validate/reserialize check. SHA-256 module and
 per-obligation semantic hashes exclude source paths, display-only names, both
 positional and source-anchored obligation IDs, and every obligation kind except
@@ -2339,9 +2358,12 @@ their human message: `counterexample`, `solver.timeout`, `solver.unknown`,
 `spec.reads`, `spec.post`, `spec.inductive`, `proof.cycle`,
 `counterexample.unchecked`, `construct.unsupported`, `callee.contract`,
 `decreases.missing`, and `interrupted`.
-`--diagnostics-format=json` serializes verification results as versioned JSON
-Lines (`cppverify.diagnostic/1`) for both source verification and archive
-replay.
+`--diagnostics-format=json` serializes verification results and compiler
+diagnostics as versioned JSON Lines (`cppverify.diagnostic/2`, ending with a
+`cppverify.summary/1` record) for both source verification and archive
+replay; `--diagnostics-format=sarif` translates the same records into one
+SARIF 2.1.0 log, and `--diagnostics-format=github` adds a GitHub workflow
+annotation to the text for each error and warning.
 
 `--jobs=N` runs one pool of exactly `N` workers (default: the available
 physical cores, or `CPPVERIFY_JOBS`; 1 for `--backend=lean` and for the
@@ -2401,7 +2423,8 @@ the finite ground equations of recursive ones. It runs an installed executable w
 seed/resource options and bounded output; missing tools, invocation failures,
 timeouts, `unknown`, extra diagnostics, and malformed tokens are unresolved.
 The model cvc5 prints after `sat`, and often after `unknown`, is checked by the
-same certifier as Z3's, and
+same certifier as Z3's, which then evaluates in it the counterexample's
+source values and path, so a cvc5 failure reads like a Z3 one, and
 refinement re-runs cvc5 with definition instances. Once a hidden instance has
 been given, non-recursive definitions are given whole; recursive ones never
 are, because cvc5 does not decide queries over them.

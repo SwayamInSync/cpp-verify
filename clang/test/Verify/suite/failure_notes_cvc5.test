@@ -1,0 +1,65 @@
+# REQUIRES: cvc5
+# A counterexample found by cvc5 is shown as Z3's is (failure_notes.cpp): in
+# source terms, each variable with the values it takes along the path, and
+# the steps of the path, in text, JSON, and the replay of an archive.
+#
+# RUN: not %cpp-verify --jobs=1 --backend=cvc5 %S/failure_notes.cpp -- 2>&1 \
+# RUN:   | FileCheck %s
+# RUN: not %cpp-verify --jobs=1 --backend=cvc5 --diagnostics-format=json \
+# RUN:   %S/failure_notes.cpp -- 2>/dev/null | FileCheck %s --check-prefix=JSON
+# RUN: not %cpp-verify --jobs=1 --obligation-out=%t.cpv %S/failure_notes.cpp -- > /dev/null 2>&1
+# RUN: not %cpp-verify --obligation-in=%t.cpv --backend=cvc5 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=REPLAY
+# RUN: not %cpp-verify --jobs=1 --backend=cvc5 %S/Inputs/failure_notes_quantified.cpp -- 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=UNKNOWN
+
+CHECK:      failure_notes.cpp:20:23: error: verification failed: steps [postcondition] [backend=cvc5] [reason=counterexample]
+CHECK:      failure_notes.cpp:20:23: note: counterexample: x = {{9|10}}, y = 0 -> 1 -> 4, result = 4
+CHECK-NOT:  false branch
+CHECK:      failure_notes.cpp:23:3: note: takes the true branch
+CHECK-NOT:  false branch
+CHECK:      failure_notes.cpp:27:3: note: takes the true branch
+CHECK-NOT:  false branch
+CHECK:      failure_notes.cpp:29:3: note: returns 4
+
+CHECK:      failure_notes.cpp:54:23: error: verification failed: calls [postcondition] [backend=cvc5] [reason=counterexample]
+CHECK:      failure_notes.cpp:54:23: note: counterexample: x = [[X:[0-9]+]], result = {{[0-9]+}}
+CHECK:      failure_notes.cpp:56:10: note: calls add([[X]])
+
+CHECK:      failure_notes.cpp:107:23: error: verification failed: local [postcondition] [backend=cvc5] [reason=counterexample]
+CHECK:      failure_notes.cpp:107:23: note: counterexample: v = {{[0-9]+}}, &r = [[R:[0-9]+]], result = [[V:[0-9]+]]
+CHECK:      failure_notes.cpp:109:3: note: creates a local object at address [[R]]
+CHECK:      failure_notes.cpp:111:5: note: stores [[V]] at address [[R]]
+CHECK:      failure_notes.cpp:112:3: note: returns [[V]]
+
+CHECK:      failure_notes.cpp:159:3: note: enters the loop
+CHECK:      failure_notes.cpp:159:3: note: leaves the loop
+
+CHECK:      note: (skipping 3 steps of the path; JSON lists every one)
+
+CHECK:      failure_notes.cpp:258:3: note: perhaps takes the true branch (the counterexample does not decide whether this step is taken)
+
+A check inside a loop fails in an iteration of it: its path ends there.
+CHECK:      failure_notes.cpp:279:17: error: verification failed: iterate [assertion] [backend=cvc5] [reason=counterexample]
+CHECK:      failure_notes.cpp:275:3: note: enters the loop
+CHECK:      failure_notes.cpp:275:3: note: starts an arbitrary iteration of the loop, where its condition is true
+CHECK-NOT:  failure_notes.cpp:{{.*}}: note:
+CHECK:      note: the counterexample's state at the loop at 275:3 is any state
+
+The model lists the variables in the order Z3's does, and marks a version
+of a branch the path does not take.
+JSON:      {"backend":"cvc5","counterexample":"x = {{9|10}}, y = 0 -> 1 -> 4, result = 4","function":"steps"
+JSON-SAME: "model":[{"name":"result",
+JSON-SAME: {"name":"y","on_path":false,"sort":"i32",{{.*}}"ssa_name":"y_3","value":"0"}
+JSON-SAME: "trace":[{"active":true,"kind":"branch","message":"then",{{.*}}"text":"takes the true branch"}
+
+REPLAY:      failure_notes.cpp:20:23: error: verification failed: steps [postcondition] [backend=cvc5] [reason=counterexample] [semantic-hash=
+REPLAY-NEXT: failure_notes.cpp:20:23: note: counterexample: x = {{9|10}}, y = 0 -> 1 -> 4, result = 4
+REPLAY-NEXT: failure_notes.cpp:23:3: note: takes the true branch
+
+cvc5 answers unknown where a quantifier is assumed, and prints a model: once
+certified, it is described the same way.
+UNKNOWN:      failure_notes_quantified.cpp:9:23: error: verification failed: first [postcondition] [backend=cvc5] [reason=counterexample]
+UNKNOWN:      failure_notes_quantified.cpp:9:23: note: counterexample: a = {{[0-9]+}}, n = {{[0-9]+}}, r = 0, result = 0
+UNKNOWN:      failure_notes_quantified.cpp:12:3: note: takes the false branch
+UNKNOWN:      failure_notes_quantified.cpp:14:3: note: returns 0

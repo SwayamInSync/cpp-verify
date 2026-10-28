@@ -153,7 +153,7 @@ int unguarded(int x)
     return 1;
   return 0;
 }
-// CHECK: error: verification failed: unguarded {{.*}}precondition@[[@LINE-4]]:7
+// CHECK: :[[@LINE-4]]:7: error: verification failed: unguarded [precondition]
 
 int either(int x)
   cv::pre(-2000 <= x && x <= 2000)
@@ -180,7 +180,7 @@ int choose_wrong(bool c, int x)
   int y = c ? inc(x) : sq(x);
   return y;
 }
-// CHECK: error: verification failed: choose_wrong {{.*}}precondition@[[@LINE-3]]:15
+// CHECK: :[[@LINE-3]]:15: error: verification failed: choose_wrong [precondition]
 
 int count_up(int n)
   cv::pre(0 <= n && n < 100)
@@ -250,7 +250,7 @@ int count_past(int n)
   }
   return i;
 }
-// CHECK: error: verification failed: count_past {{.*}}precondition@[[@LINE-8]]:10
+// CHECK: :[[@LINE-8]]:10: error: verification failed: count_past [precondition]
 
 // A call's result is its postcondition's, not any value.
 int wrong(int x)
@@ -395,7 +395,8 @@ int classify_wrong(int x)
     return 1;
   return 0;
 }
-// CHECK: error: verification failed: classify_wrong {{.*}}postcondition{{.*}}x [ssa=x_0] [type=i32] = 5
+// CHECK: error: verification failed: classify_wrong {{.*}}postcondition
+// CHECK: note: counterexample: {{.*}}x = 5{{( ->|,|$)}}
 
 int *first_of(int *a)
   cv::pre(cv::valid(a, 2))

@@ -35,5 +35,5 @@ void break_heap_wrong(int *p)
     i = i + 1;
   }
 }
-// CHECK: error: verification failed: break_heap_wrong [{{.*}}::postcondition@23:24] {{.*}}[reason=counterexample]
+// CHECK: :23:24: error: verification failed: break_heap_wrong [postcondition] {{.*}}[reason=counterexample]
 // CHECK-NOT: within_seconds

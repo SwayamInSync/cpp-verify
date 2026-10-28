@@ -54,7 +54,8 @@ cppverify::proof void four_after_three() cppverify::pre(od(3)) cppverify::post(e
 // A postcondition cannot assume itself: bad(0) holds, so !bad(0) fails.
 cppverify::spec bool bad(int n);
 cppverify::spec bool bad(int n) cppverify::inductive cppverify::post(!cppverify::result || !bad(n)) { return n == 0; }
-// CHECK-DAG: error: spec post by induction failed: bad [backend=z3] [reason=counterexample] (derivation.height [type=math-i64] = {{[0-9]+}}, n [type=math-i32] = 0)
+// CHECK-DAG: error: spec post by induction failed: bad [backend=z3] [reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}derivation.height = {{[0-9]+}}{{( ->|,|$)}}{{.*}}n = 0{{( ->|,|$)}}
 // CHECK-DAG: Unresolved: spec post: bad [reason=spec.post]
 
 cppverify::proof void contradiction() cppverify::post(false) { cppverify::check(bad(0)); }

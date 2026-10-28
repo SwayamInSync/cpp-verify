@@ -319,7 +319,10 @@ and footprints name it, and the same frame reasoning as for a buffer applies:
 
    Verified: push [backend=z3]
    Verified: clear [backend=z3]
-   stack.cpp:36:21: error: verification failed: push_full [...::bounds@36:21] (counterexample: s [ssa=s_0] [type=pointer] = 1; trace: heap-write.store@36:21 address=65 value=<unknown>) [backend=z3] [reason=counterexample]
+   stack.cpp:36:3: error: verification failed: push_full [bounds] [backend=z3] [reason=counterexample]
+      36 |   s->items[s->size] = v;
+         |   ^
+   stack.cpp:36:3: note: counterexample: s = 1
 
 ``push`` writes exactly two cells, so its postcondition can promise that every
 item below the old size is unchanged. ``clear`` writes a range of the member
@@ -379,7 +382,16 @@ that runs one element too far reads ``s->size`` and fails:
 .. code-block:: text
 
    Verified: count_zero [backend=z3]
-   stack.cpp:31:10: error: verification failed: count_past [...::bounds@31:10#2] (counterexample: n [ssa=n_1] [type=i32] = 0, n [ssa=n_2] [type=i32] = 0, q [ssa=q_1] [type=pointer] = 1, q [ssa=q_2] [type=pointer] = 65, s [ssa=s_0] [type=pointer] = 1; trace: loop.entry@26:3 -> loop.inductive iteration@26:3 condition=true) [backend=z3] [reason=counterexample]
+   stack.cpp:31:10: error: verification failed: count_past [bounds] [backend=z3] [reason=counterexample]
+      31 |     if (*q == 0)
+         |          ^
+   stack.cpp:31:10: note: counterexample: s = 1, n = 0, q = 1 -> 65
+   stack.cpp:26:3: note: enters the loop
+      26 |   for (const int *q = s->items; q != s->items + s->size + 1; q = q + 1)
+         |   ^
+   stack.cpp:26:3: note: starts an arbitrary iteration of the loop, where its condition is true
+   note: the counterexample's state at the loop at 26:3 is any state its invariants allow, not necessarily one an execution reaches
+   note: no execution fails this check within 10 iterations of each loop
 
 In ``count_past`` the solver chooses a full stack, and ``q`` reaches 65, the
 address of ``s->size`` with ``s`` at 1. The verifier itself states that a

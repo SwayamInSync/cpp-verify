@@ -47,7 +47,7 @@ long null_minus_object(const int *a, int n)
   const int *z = nullptr;
   return a - z;
 }
-// CHECK-DAG: error: verification failed: null_minus_object [{{.*}}::pointer-difference@{{[0-9]+:[0-9]+}}] {{.*}}[reason=counterexample]
+// CHECK-DAG: :{{[0-9]+:[0-9]+}}: error: verification failed: null_minus_object [pointer-difference] {{.*}}[reason=counterexample]
 
 // Either may be null while the other is not.
 long one_null(const int *a, const int *b)
@@ -55,4 +55,4 @@ long one_null(const int *a, const int *b)
 {
   return a - b;
 }
-// CHECK-DAG: error: verification failed: one_null [{{.*}}::pointer-difference@{{[0-9]+:[0-9]+}}] {{.*}}[reason=counterexample]
+// CHECK-DAG: :{{[0-9]+:[0-9]+}}: error: verification failed: one_null [pointer-difference] {{.*}}[reason=counterexample]

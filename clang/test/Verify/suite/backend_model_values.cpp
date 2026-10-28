@@ -13,6 +13,6 @@ unsigned maximum_result()
 }
 
 // CHECK: error: verification failed: negative_result
-// CHECK-SAME: result [ssa=__result_1] [type=i32] = -1
+// CHECK: note: counterexample: result = -1
 // CHECK: error: verification failed: maximum_result
-// CHECK-SAME: result [ssa=__result_1] [type=u32] = 4294967295
+// CHECK: note: counterexample: result = 4294967295

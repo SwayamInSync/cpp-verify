@@ -114,7 +114,7 @@ void clear_chosen_loose(int *a, int *b, int n, bool s)
     q = q + 1;
   }
 }
-// CHECK-DAG: error: verification failed: clear_chosen_loose [{{.*}}::bounds@[[@LINE-4]]:6]
+// CHECK-DAG: :[[@LINE-4]]:6: error: verification failed: clear_chosen_loose [bounds]
 
 long choice_diff(int *a, int *b, bool first)
   cppverify::pre(a != nullptr && b != nullptr && first)
@@ -140,7 +140,7 @@ void param_past(int *a)
   a = a + 2;
   a = a + 1;
 }
-// CHECK-DAG: error: verification failed: param_past [{{.*}}::bounds@[[@LINE-2]]:9]
+// CHECK-DAG: :[[@LINE-2]]:9: error: verification failed: param_past [bounds]
 
 // One past a single object, even where another object may start.
 void adjacent(int *a, int *b)
@@ -150,7 +150,7 @@ void adjacent(int *a, int *b)
   int *q = a + 1;
   *q = 0;
 }
-// CHECK-DAG: error: verification failed: adjacent [{{.*}}::bounds@[[@LINE-2]]:4]
+// CHECK-DAG: :[[@LINE-2]]:4: error: verification failed: adjacent [bounds]
 
 // The walker does change its own object.
 void walk_changes(int *a, int n)
@@ -167,7 +167,7 @@ void walk_changes(int *a, int n)
     q = q + 1;
   }
 }
-// CHECK-DAG: error: verification failed: walk_changes [{{.*}}::postcondition@{{.*}}] (counterexample: {{.*}}) [backend=z3] [reason=counterexample]
+// CHECK-DAG: error: verification failed: walk_changes [postcondition] [backend=z3] [reason=counterexample]
 
 // A chosen object may be either.
 void chosen_changes(int *a, int *b, bool first)
@@ -183,7 +183,8 @@ void chosen_changes(int *a, int *b, bool first)
     *p = 5;
   }
 }
-// CHECK-DAG: error: verification failed: chosen_changes [{{.*}}::postcondition@{{.*}}] (counterexample: {{.*}}first [ssa=first_0] [type=bool] = true{{.*}}) [backend=z3] [reason=counterexample]
+// CHECK-DAG: error: verification failed: chosen_changes [postcondition] [backend=z3] [reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}first = true{{.*}}
 
 // The companion naming q's origin, and the generated invariants.
 // VCR-LABEL: fn clear_chosen

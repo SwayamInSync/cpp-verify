@@ -50,7 +50,8 @@ int fall_wrong(int x)
   }
   return r;
 }
-// CHECK-DAG: error: verification failed: fall_wrong [{{.*}}::postcondition@[[@LINE-14]]:{{.*}}x [ssa=x_0] [type=i32] = 0{{[,;]}}{{.*}}[reason=counterexample]
+// CHECK-DAG: :[[@LINE-14]]:{{[0-9]+}}: error: verification failed: fall_wrong [postcondition] {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}x = 0{{( ->|,|$)}}
 
 // The default label may stand anywhere; it is reached only when no case
 // matches, and falls through like any other.
@@ -90,7 +91,8 @@ int middle_default_wrong(int x)
   }
   return r;
 }
-// CHECK-DAG: error: verification failed: middle_default_wrong [{{.*}}x [ssa=x_0] [type=i32] = 6{{[,;]}}{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: middle_default_wrong {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}x = 6{{( ->|,|$)}}
 
 // Without a default label, a value no case matches runs nothing.
 int no_match(int x)
@@ -157,7 +159,8 @@ int color_value_wrong(Color c)
   }
   return 0;
 }
-// CHECK-DAG: error: verification failed: color_value_wrong [{{.*}}c [ssa=c_0] [type=u32] = 3{{[,;]}}{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: color_value_wrong {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}c = 3{{( ->|,|$)}}
 
 // Case values keep the width of the condition.
 int big_case(long long x)
@@ -182,7 +185,8 @@ int big_case_wrong(long long x)
     return 0;
   }
 }
-// CHECK-DAG: error: verification failed: big_case_wrong [{{.*}}x [ssa=x_0] [type=i64] = 5000000000{{[,;]}}{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: big_case_wrong {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}x = 5000000000{{( ->|,|$)}}
 
 // A GNU case range matches every value from its first to its last.
 int digit_class(int x)
@@ -207,7 +211,8 @@ int digit_class_wrong(int x)
     return 0;
   }
 }
-// CHECK-DAG: error: verification failed: digit_class_wrong [{{.*}}x [ssa=x_0] [type=i32] = 9{{[,;]}}{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: digit_class_wrong {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}x = 9{{( ->|,|$)}}
 
 // A break in a nested statement leaves the switch; the statements after it
 // run only where it did not.
@@ -246,7 +251,8 @@ int nested_break_wrong(int x, int y)
   }
   return r;
 }
-// CHECK-DAG: error: verification failed: nested_break_wrong [{{.*}}x [ssa=x_0] [type=i32] = 1{{[,;]}}{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: nested_break_wrong {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}x = 1{{( ->|,|$)}}
 
 // A break in a loop inside a switch leaves the loop; a continue in a switch
 // inside a loop continues the loop.
@@ -406,7 +412,8 @@ int nested_wrong(int a, int b)
   }
   return r;
 }
-// CHECK-DAG: error: verification failed: nested_wrong [{{.*}}a [ssa=a_0] [type=i32] = 1{{[,;]}}{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: nested_wrong {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}a = 1{{( ->|,|$)}}
 
 // Statements before the first label never run; a declaration there is in
 // scope after it.
@@ -503,7 +510,8 @@ int overflow_in_case(int x)
     return 0;
   }
 }
-// CHECK-DAG: error: verification failed: overflow_in_case [{{.*}}::overflow@[[@LINE-5]]:{{.*}}x [ssa=x_0] [type=i32] = 1{{[,;]}}{{.*}}[reason=counterexample]
+// CHECK-DAG: :[[@LINE-5]]:{{[0-9]+}}: error: verification failed: overflow_in_case [overflow] {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}x = 1{{( ->|,|$)}}
 
 // A spec, a lifted constexpr helper, a proof function, and ghost code may
 // switch too.
@@ -542,7 +550,8 @@ int uses_select_wrong(int x)
 {
   return 6;
 }
-// CHECK-DAG: error: verification failed: uses_select_wrong [{{.*}}x [ssa=x_0] [type=i32] = 0{{[,;]}}{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: uses_select_wrong {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}x = 0{{( ->|,|$)}}
 
 constexpr int digit_value(char c) {
   switch (c) {
@@ -569,7 +578,8 @@ int uses_digit_value_wrong(char c)
 {
   return digit_value(c);
 }
-// CHECK-DAG: error: verification failed: uses_digit_value_wrong [{{.*}}c [ssa=c_0] [type=i8] = 48{{[,;]}}{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: uses_digit_value_wrong {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}c = 48{{( ->|,|$)}}
 
 cv::proof int positive_choice(int x)
   cv::post(cv::result > 0)
@@ -620,7 +630,8 @@ int ghosted_wrong(int x)
   }
   return x;
 }
-// CHECK-DAG: error: verification failed: ghosted_wrong [{{.*}}x [ssa=x_0] [type=i32] = 3{{[,;]}}{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: ghosted_wrong {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}x = 3{{( ->|,|$)}}
 
 // A local lent to a callee ends where a break leaves its block.
 void set(int *p, int v)
@@ -678,7 +689,7 @@ int assumed(int x)
   [[assume(x > 0)]];
   return x;
 }
-// CHECK-DAG: error: verification failed: assumed [{{.*}}::assertion@[[@LINE-3]]:{{.*}}[reason=counterexample]
+// CHECK-DAG: :[[@LINE-3]]:{{[0-9]+}}: error: verification failed: assumed [assertion]{{.*}}[reason=counterexample]
 
 int lent_directly(int x)
   cv::post(true)

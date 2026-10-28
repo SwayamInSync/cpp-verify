@@ -22,25 +22,45 @@ bool verify::shouldRunCppVerify(const CompilerInstance &CI) {
 std::future<CppVerifyAsyncResult>
 verify::startCppVerifyAsync(ASTContext &Ctx, std::string ContractsOut) {
   return std::async(std::launch::async, [&Ctx, ContractsOut]() {
-    std::string Buffer;
-    llvm::raw_string_ostream OS(Buffer);
+    CppVerifyAsyncResult Result;
     VerifyOptions Opts;
     Opts.ContractsOut = ContractsOut;
-    bool Ok = verifyTranslationUnit(Ctx, OS, Opts);
-    OS.flush();
-    return CppVerifyAsyncResult{Ok, std::move(Buffer)};
+    Opts.Parts = &Result.Parts;
+    Result.Ok = verifyTranslationUnit(Ctx, llvm::nulls(), Opts);
+    return Result;
   });
 }
 
 bool verify::finishCppVerify(CompilerInstance &CI,
                              std::future<CppVerifyAsyncResult> Future) {
   CppVerifyAsyncResult R = Future.get();
-  if (!R.second.empty())
-    llvm::errs() << R.second;
-  if (!R.first) {
-    CI.getDiagnostics().Report(diag::err_fe_cppverify_failed)
-        << "verification failed";
-    return false;
+  DiagnosticsEngine &Diags = CI.getDiagnostics();
+  bool Reported = false;
+  for (const VerifyDiagnosticPart &Part : R.Parts) {
+    unsigned ID = diag::note_cppverify_result;
+    switch (Part.Level) {
+    case DiagnosticsEngine::Error:
+    case DiagnosticsEngine::Fatal:
+      ID = diag::err_cppverify_result;
+      Reported = true;
+      break;
+    case DiagnosticsEngine::Warning:
+      ID = diag::warn_cppverify_result;
+      break;
+    case DiagnosticsEngine::Remark:
+      ID = diag::remark_cppverify_result;
+      break;
+    case DiagnosticsEngine::Note:
+    case DiagnosticsEngine::Ignored:
+      break;
+    }
+    DiagnosticBuilder Builder = Diags.Report(Part.Loc, ID);
+    Builder << Part.Message;
+    if (Part.Range.isValid())
+      Builder << CharSourceRange::getTokenRange(Part.Range);
   }
-  return true;
+  // A failure without a result of its own still fails the compilation.
+  if (!R.Ok && !Reported)
+    Diags.Report(diag::err_fe_cppverify_failed) << "verification failed";
+  return R.Ok;
 }

@@ -32,4 +32,5 @@ int facts_wrong(int x)
          __is_same(int, long) + (offsetof(Pair, second) == 0) +
          (__builtin_LINE() == __LINE__ + 1);
 }
-// CHECK-DAG: error: verification failed: facts_wrong [{{.*}}::postcondition@{{.*}}result [ssa=__result_1] [type=i32] = 2{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: facts_wrong [postcondition] {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}result = 2{{( ->|,|$)}}

@@ -130,12 +130,19 @@ contract that means the wrapped value says so with ``% 2^N``.
 
 .. code-block:: text
 
-   abs.cpp:2:3: error: verification failed: abs_unguarded [...::overflow@2:3]
-     (counterexample: x [type=i32] = -2147483648)
+   abs.cpp:2:18: error: verification failed: abs_unguarded [overflow] [backend=z3] [reason=counterexample]
+       2 | { return x < 0 ? -x : x; }
+         |                  ^~
+   abs.cpp:2:18: note: counterexample: x = -2147483648
    Verified: abs_guarded [backend=z3]
    Verified: mix [backend=z3]
-   abs.cpp:10:64: error: verification failed: mix_wrong [...::postcondition@10:64]
-     (counterexample: result [type=u32] = 0, a [type=u32] = 1, ...)
+   abs.cpp:10:64: error: verification failed: mix_wrong [postcondition] [backend=z3] [reason=counterexample]
+      10 | unsigned mix_wrong(unsigned a, unsigned b) cv::post(cv::result == a + b)
+         |                                                     ~~~~~~~~~~~^~~~~~~~
+   abs.cpp:10:64: note: counterexample: a = 1, b = 4294967295, result = 0
+   abs.cpp:11:3: note: returns 0
+      11 | { return a + b; }
+         |   ^
 
 Negating ``INT_MIN`` overflows, so ``abs_unguarded`` fails at the overflow
 check with that input, and the precondition the tool asks for makes
@@ -194,7 +201,10 @@ shift is undefined, and the verifier finds the input:
 
 .. code-block:: text
 
-   shift.cpp:5:3: error: verification failed: doubled [...::shift@5:3] (counterexample: x [ssa=x_0] [type=i32] = -1; trace: return.return@5:3 value=-2) [backend=z3] [reason=counterexample]
+   shift.cpp:5:12: error: verification failed: doubled [shift] [backend=z3] [reason=counterexample]
+       5 |   return x << 1;
+         |            ^
+   shift.cpp:5:12: note: counterexample: x = -1
 
 Compiled as C++20, with ``cpp-verify shift.cpp -- -std=c++20``, the same
 function verifies:
@@ -302,7 +312,10 @@ of range, so the conversion is an ``overflow`` obligation:
 
    Verified: code [backend=z3]
    Verified: from_code [backend=z3]
-   colors.cpp:18:3: error: verification failed: unchecked [...::overflow@18:3] (counterexample: v [ssa=v_0] [type=i32] = -1; ...) [backend=z3] [reason=counterexample]
+   colors.cpp:18:10: error: verification failed: unchecked [overflow] [backend=z3] [reason=counterexample]
+      18 |   return static_cast<Color>(v);
+         |          ^
+   colors.cpp:18:10: note: counterexample: v = -1
 
 ``code`` may return ``3``: no enumerator has that value, but ``Color`` does.
 With a fixed underlying type, every value of that type is possible:
@@ -321,7 +334,13 @@ With a fixed underlying type, every value of that type is possible:
 
 .. code-block:: text
 
-   levels.cpp:4:28: error: verification failed: level [...::postcondition@4:28] (counterexample: result [ssa=__result_1] [type=i32] = 3, l [ssa=l_0] [type=u8] = 3; ...) [backend=z3] [reason=counterexample]
+   levels.cpp:4:42: error: verification failed: level [postcondition] [backend=z3] [reason=counterexample]
+       4 |   cv::post(0 <= cv::result && cv::result <= 2)
+         |                               ~~~~~~~~~~~^~~~
+   levels.cpp:4:42: note: counterexample: l = 3, result = 3
+   levels.cpp:6:3: note: returns 3
+       6 |   return static_cast<int>(l);
+         |   ^
 
 The range is a fact about machine values. In a ``cv::spec``, a parameter of an
 enumeration type is a mathematical integer like any other, so a spec's claim

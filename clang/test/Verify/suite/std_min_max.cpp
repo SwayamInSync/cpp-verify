@@ -42,7 +42,7 @@ int wrong(int a, int b)
 {
   return std::min(a, b);
 }
-// CHECK-DAG: error: verification failed: wrong [{{.*}}::postcondition@[[@LINE-4]]
+// CHECK-DAG: :[[@LINE-4]]:{{[0-9]+}}: error: verification failed: wrong [postcondition]
 
 int clamped(int x)
   cppverify::post(cppverify::result == std::clamp(x, 0, 9))

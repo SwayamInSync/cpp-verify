@@ -1,5 +1,5 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: not %cpp-verify --check-ub %s -- 2>&1 | FileCheck %s --check-prefixes=CHECK,DECIDED
+// RUN: not %cpp-verify --check-ub --timeout=120000 %s -- 2>&1 | FileCheck %s --check-prefixes=CHECK,DECIDED
 // RUN: not %cpp-verify --check-ub --int-encoding=bitvector --timeout=5000 %s -- 2>&1 | FileCheck %s --check-prefixes=CHECK,BV
 // RUN: %cpp-verify --check-ub --lower-only --dump-ir=1 %s -- 2>&1 | FileCheck %s --check-prefix=VCR
 // RUN: %cpp-verify --check-ub --lower-only --dump-ir=2 %s -- 2>&1 | FileCheck %s --check-prefix=PASSIVE
@@ -51,8 +51,9 @@ void copy(const int *a, int *out, int n)
 // VCR-NEXT: post
 
 // A copy that writes zeros: its invariant fails where a holds anything else,
-// which the solver finds at once (a reversed copy took 30 to 60 s, and on a
-// slow runner timed out).
+// which the solver finds in 1.7 s (3.6 s with one job; a reversed copy took
+// 30 to 60 s). The first run's budget covers a slow runner, where the
+// default 30 s once ran out.
 void wrong_copy(const int *a, int *out, int n)
   cppverify::pre(n >= 0 && valid(a, n) && valid(out, n))
   cppverify::modifies(*out)
@@ -68,7 +69,7 @@ void wrong_copy(const int *a, int *out, int n)
     i = i + 1;
   }
 }
-// DECIDED-DAG: verification failed: wrong_copy [{{.*}}::invariant-preserved@
+// DECIDED-DAG: verification failed: wrong_copy [invariant-preserved]
 // BV-DAG: {{verification failed|Unresolved}}: wrong_copy
 
 // The separation must not make the preconditions contradictory.
@@ -116,7 +117,7 @@ int overlapping_caller(int *buffer)
 {
   return inspect(buffer + 2, buffer, 4);
 }
-// CHECK-DAG: verification failed: overlapping_caller [{{.*}}::aliasing@
+// CHECK-DAG: verification failed: overlapping_caller [aliasing]
 
 int empty_caller(int *buffer)
   cppverify::pre(valid(buffer, 8))

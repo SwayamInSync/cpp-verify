@@ -116,6 +116,10 @@ def err_fe_invalid_plugin_name : Error<
     "unable to find plugin '%0'">;
 def err_fe_cppverify_failed : Error<
     "cppverify: %0">;
+def err_cppverify_result : Error<"%0">;
+def warn_cppverify_result : Warning<"%0">, InGroup<CppVerify>;
+def remark_cppverify_result : Remark<"%0">, InGroup<CppVerify>;
+def note_cppverify_result : Note<"%0">;
 def err_fe_expected_compiler_job : Error<
     "unable to handle compilation, expected exactly one compiler job in '%0'">;
 def err_fe_expected_clang_command : Error<

@@ -130,7 +130,7 @@ int read_before_written()
   int v = r;
   return v;
 }
-// CHECK: error: verification failed: read_before_written {{.*}}initialization@[[@LINE-3]]:3
+// CHECK: :[[@LINE-3]]:11: error: verification failed: read_before_written [initialization]
 
 int *fresh()
   cv::post(cv::result != nullptr)
@@ -213,8 +213,8 @@ int reads_after_failed_get()
   try_get(a[0], false);
   return a[0];
 }
-// CHECK: error: verification failed: reads_after_failed_get {{.*}}initialization@[[@LINE-2]]:3
-// NOUB: error: verification failed: reads_after_failed_get {{.*}}initialization@[[@LINE-3]]:3
+// CHECK: :[[@LINE-2]]:10: error: verification failed: reads_after_failed_get [initialization]
+// NOUB: :[[@LINE-3]]:10: error: verification failed: reads_after_failed_get [initialization]
 
 // Written, then read: still an out-parameter.
 void write_then_update(int &x)
@@ -431,7 +431,7 @@ int reads_unmade()
   make_first(p);
   return p.b;
 }
-// CHECK: error: verification failed: reads_unmade {{.*}}initialization@[[@LINE-2]]:3
+// CHECK: :[[@LINE-2]]:12: error: verification failed: reads_unmade [initialization]
 
 // A postcondition about storage the function never writes speaks of the
 // caller's values: an input, initialized at entry.
@@ -452,8 +452,8 @@ void set_if(int &x, bool c)
   if (c)
     x = 1;
 }
-// CHECK: error: verification failed: set_if {{.*}}initialization@[[@LINE-5]]:14
-// NOUB: error: verification failed: set_if {{.*}}initialization@[[@LINE-6]]:14
+// CHECK: :[[@LINE-5]]:14: error: verification failed: set_if [initialization]
+// NOUB: :[[@LINE-6]]:14: error: verification failed: set_if [initialization]
 
 // A loop writes on no path known before it runs.
 void zero_each(int &x, int n)
@@ -481,7 +481,7 @@ int maybe_zeroed()
   zero_each(a[0], 0);
   return a[0];
 }
-// CHECK: error: verification failed: maybe_zeroed {{.*}}initialization@[[@LINE-2]]:3
+// CHECK: :[[@LINE-2]]:10: error: verification failed: maybe_zeroed [initialization]
 
 // A call that may write a cell keeps it initialized.
 int kept_through_call(int n)
@@ -585,7 +585,7 @@ int init_in_loop_only(int n)
   }
   return a[0];
 }
-// CHECK: error: verification failed: init_in_loop_only {{.*}}initialization@[[@LINE-2]]:3
+// CHECK: :[[@LINE-2]]:10: error: verification failed: init_in_loop_only [initialization]
 
 void zero_rec(int &x, int n)
   cv::pre(n >= 0)
@@ -698,7 +698,7 @@ void fill_three(int *b)
 {
   fill(b, 3);
 }
-// CHECK: error: verification failed: fill_three {{.*}}initialization@[[@LINE-4]]:12
+// CHECK: :[[@LINE-4]]:12: error: verification failed: fill_three [initialization]
 
 // A member function that writes its object.
 struct Point {

@@ -252,6 +252,16 @@ std::vector<VerifyModelValue> candidateValues(const ObligationModule &Module,
                                               const LogicExpr &Query,
                                               CandidateModel &Model);
 
+/// Describes in \p Result the counterexample \p Model gives \p Query, an
+/// obligation's counterexample query, as a failure shows it: the source
+/// variables' values, each version marked on the path or off it, and the
+/// steps of the obligation's path, each with its values. What the model
+/// leaves open stays undetermined.
+void describeCounterexample(const ObligationModule &Module,
+                            const LogicExpr &Query, CandidateModel &Model,
+                            VerifyResult &Result,
+                            const CertifyLimits &Limits = {});
+
 /// \p Application with its arguments' values under \p Model, as
 /// "fibo(1000000000)".
 std::string shownApplication(const ObligationModule &Module,

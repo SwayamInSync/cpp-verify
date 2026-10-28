@@ -172,7 +172,7 @@ int unsafe_min_remainder(int x)
 // VERIFY-DAG: error: verification failed: unsafe_overflow_after_spec_result
 // VERIFY-DAG: error: verification failed: unsafe_overflow_after_spec_initialization
 // VERIFY-DAG: error: verification failed: unsafe_overflow_after_spec_assignment
-// VERIFY-DAG: error: verification failed: invalid_out_of_range_spec_result [{{.*}}::overflow@
+// VERIFY-DAG: error: verification failed: invalid_out_of_range_spec_result [overflow]
 // VERIFY-DAG: error: verification failed: unsafe_signed_subtract
 // VERIFY-DAG: error: verification failed: unsafe_signed_multiply
 // VERIFY-DAG: error: verification failed: unsafe_signed_negation

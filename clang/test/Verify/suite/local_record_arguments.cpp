@@ -133,7 +133,8 @@ int wrong()
   bump(c);
   return c.n;
 }
-// CHECK-DAG: error: verification failed: wrong [{{.*}}::postcondition@[[@LINE-8]]:37] (counterexample: result [ssa=__result_1] [type=i32] = 1;
+// CHECK-DAG: :[[@LINE-8]]:37: error: verification failed: wrong [postcondition]
+// CHECK-DAG: note: counterexample: {{.*}}result = 1{{( ->|,|$)}}
 
 // A member and an element of a local, and the address of a field.
 int member()
@@ -368,7 +369,7 @@ int same_local()
   pair_bump(a, a);
   return a.n;
 }
-// CHECK-DAG: error: verification failed: same_local [{{.*}}::aliasing@[[@LINE-3]]:3]
+// CHECK-DAG: :[[@LINE-3]]:3: error: verification failed: same_local [aliasing]
 
 // A callee that writes its record before reading it needs none of it
 // initialized: c.limit never is. One that may read it needs every field.

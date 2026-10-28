@@ -20,6 +20,7 @@ struct ConversionError {
   /// decides; empty for an error of the translation unit.
   std::string Function;
   std::string FunctionName;
+  SourceLocation FunctionLoc;
   /// In the function's signature or contract, rather than its body: then
   /// its callers cannot use the contract either.
   bool InContract = false;
@@ -55,16 +56,17 @@ class ASTConverter {
   /// converter is in its signature and contract or in its body.
   std::string ErrorFunction;
   std::string ErrorFunctionName;
+  SourceLocation ErrorFunctionLoc;
   bool ErrorInContract = false;
   void error(std::string Message) { error(CurrentRange, std::move(Message)); }
   void error(SourceRange Range, std::string Message) {
     Errors.push_back({Range, std::move(Message), ErrorFunction,
-                      ErrorFunctionName, ErrorInContract});
+                      ErrorFunctionName, ErrorFunctionLoc, ErrorInContract});
   }
   /// An error about \p Fn found once every function is converted.
   void errorOf(const VFunction &Fn, SourceLocation Loc, std::string Message) {
-    Errors.push_back(
-        {SourceRange(Loc), std::move(Message), Fn.Identity, Fn.Name, false});
+    Errors.push_back({SourceRange(Loc), std::move(Message), Fn.Identity,
+                      Fn.Name, Fn.DeclLoc, false});
   }
   std::vector<std::pair<SourceLocation, std::string>> Warnings;
   /// Maps unqualified field name -> "param." for type_invariant lowering.
@@ -115,6 +117,8 @@ class ASTConverter {
   /// The object `this` stands for while a class invariant is instantiated
   /// for a parameter: the pointer or reference that addresses it.
   const VExpr *ThisSubstitute = nullptr;
+  /// The function whose body is being converted.
+  const FunctionDecl *ConvertingDecl = nullptr;
   std::set<const VarDecl *> GhostLocals;
   unsigned DynamicProvenanceId = 0;
   unsigned DynamicPointerAssignmentId = 0;
@@ -483,6 +487,7 @@ private:
   std::string specIdentityFromExpr(const Expr *E);
   void injectTypeInvariants(const FunctionDecl *FD, VFunction &Fn);
   std::unique_ptr<VExpr> convertTypeInvariantExpr(const Expr *E);
+  void appendObjectInvariants(std::vector<std::unique_ptr<VExpr>> &Invariants);
   void emitReturnInvariantAssert(const Expr *RetE,
                                  std::vector<std::unique_ptr<VStmt>> &Out,
                                  SourceLocation Loc);

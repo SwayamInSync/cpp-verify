@@ -26,9 +26,12 @@ A local may take the name of a parameter or of another local, in an inner
 block or a later one (two ``for (int i = ...)`` loops, say): each declaration
 is a variable of its own, uninitialized until it is assigned whatever an
 earlier one with its name held. A counterexample shows its name as written,
-and in ``[ssa=...]`` the verifier's name for it, ``i#2`` for the second ``i``.
-Before 0.2 such a declaration was an error, ``local variable shadowing is
-unsupported``.
+with the line of its declaration when another variable of the
+counterexample has that name (``i (line 8) = 0 -> 1, i (line 14) = 0 -> 1``
+for two loops that each declare ``i``); JSON records give the verifier's name
+for each version as ``ssa_name``, ``i#2_1`` for the first of the second
+``i``. Before 0.2 such a declaration was an error, ``local variable shadowing
+is unsupported``.
 
 A default argument is evaluated at the call, with the checks of its
 operations there. A ``consteval`` call, like any constant Clang evaluates, is
@@ -172,7 +175,20 @@ otherwise, as within one file.
 
    $ cpp-verify src/a.cpp src/mathx.cpp -- -Iinclude
    Unresolved: scaled [backend=z3] [reason=callee.contract] (relies on the contract of clamp100, which its verification in src/mathx.cpp does not establish)
-   include/mathx.h:2:42: error: verification failed: clamp100 [fn_...::postcondition@2:42] (counterexample: result [ssa=__result_1] [type=i32] = 101, x [ssa=x_0] [type=i32] = 101; ...) [backend=z3] [reason=counterexample]
+   In file included from src/mathx.cpp:1:
+   include/mathx.h:2:42: error: verification failed: clamp100 [postcondition] [backend=z3] [reason=counterexample]
+       2 |   cv::post(cv::result >= 0 && cv::result <= 100);
+         |                               ~~~~~~~~~~~^~~~~~
+   include/mathx.h:2:42: note: counterexample: x = 101, result = 101
+   src/mathx.cpp:5:3: note: takes the false branch
+       5 |   if (x < 0)
+         |   ^
+   src/mathx.cpp:7:3: note: takes the true branch
+       7 |   if (x > 100)
+         |   ^
+   src/mathx.cpp:8:5: note: returns 101
+       8 |     return 101;
+         |     ^
    Summary: 1 failed, 1 unresolved (callee.contract 1) in 0.0 s
 
 With ``return 100;`` both verify, and the warning that ``clamp100`` has no
@@ -326,16 +342,22 @@ that may not be as ``contract of f``, at the operation:
 
 .. code-block:: text
 
-   defined.cpp:2:17: error: verification failed: contract of average
-     [...::contract::division-by-zero@2:17] (counterexample: count [type=i32] = 0)
+   defined.cpp:2:17: error: verification failed: contract of average [division-by-zero] [backend=z3] [reason=counterexample]
+       2 |   cv::pre(total / count >= 0 && count > 0)
+         |           ~~~~~~^~~~~~~
+   defined.cpp:2:17: note: counterexample: count = 0
    Verified: average [backend=z3]
    Verified: average_checked [backend=z3]
-   defined.cpp:16:30: error: verification failed: contract of pick
-     [...::contract::bounds@16:30] (counterexample: i [type=i32] = -1, ...)
+   defined.cpp:16:30: error: verification failed: contract of pick [bounds] [backend=z3] [reason=counterexample]
+      16 |   cv::pre(cv::valid(p, 8) && p[i] > 0 && 0 <= i && i < 8)
+         |                              ^
+   defined.cpp:16:30: note: counterexample: p = 1, i = -1
    Verified: pick [backend=z3]
    defined.cpp:22:28: Trusted: read_sensor (contract assumed, not verified)
-   defined.cpp:23:17: error: verification failed: contract of read_sensor
-     [...::contract::division-by-zero@23:17] (counterexample: result [type=i32] = 0)
+   defined.cpp:23:17: error: verification failed: contract of read_sensor [division-by-zero] [backend=z3] [reason=counterexample]
+      23 |   cv::post(1000 / cv::result > 0);
+         |            ~~~~~^~~~~~~~~~~~
+   defined.cpp:23:17: note: counterexample: result = 0
    Unresolved: scaled [backend=z3] [reason=callee.contract] (relies on the
      contract of read_sensor (its clauses are not shown to be defined), which is
      not established)
@@ -439,12 +461,32 @@ result. Each call runs where C++ evaluates it:
    Verified: sq [backend=z3]
    Verified: sum_sq [backend=z3]
    Verified: guarded [backend=z3]
-   calls.cpp:38:7: error: verification failed: unguarded [...::precondition@38:7]
-     (counterexample: x [type=i32] = -1001; trace: call.sq@38:7 arg0=-1001)
-   calls.cpp:48:10: error: verification failed: count_up [...::precondition@48:10]
-     (counterexample: ..., i [type=i32] = 1000, n [type=i32] = 1000;
-     trace: loop.entry@48:3 -> loop.inductive iteration@48:3 condition=true
-     -> call.inc@48:10 arg0=1000)
+   calls.cpp:34:7: error: verification failed: unguarded [precondition] [backend=z3] [reason=counterexample]
+      34 |   if (sq(x) > 4 && x <= 1000)
+         |       ^~~~~
+   calls.cpp:34:7: note: counterexample: x = -1001
+   calls.cpp:9:17: note: this precondition does not hold at the call
+       9 |   cv::pre(-1000 <= x && x <= 1000)
+         |           ~~~~~~^~~~
+   calls.cpp:34:7: note: calls sq(-1001)
+      34 |   if (sq(x) > 4 && x <= 1000)
+         |       ^
+   calls.cpp:44:10: error: verification failed: count_up [precondition] [backend=z3] [reason=counterexample]
+      44 |   while (inc(i) <= n)
+         |          ^~~~~~
+   calls.cpp:44:10: note: counterexample: n = 1000, i = 0 -> 1000
+   calls.cpp:2:13: note: this precondition does not hold at the call
+       2 |   cv::pre(x < 1000)
+         |           ~~^~~~~~
+   calls.cpp:44:3: note: enters the loop
+      44 |   while (inc(i) <= n)
+         |   ^
+   calls.cpp:44:3: note: starts an arbitrary iteration of the loop, where its condition is true
+   calls.cpp:44:10: note: calls inc(1000)
+      44 |   while (inc(i) <= n)
+         |          ^
+   note: the counterexample's state at the loop at 44:3 is any state its invariants allow, not necessarily one an execution reaches
+   note: no execution fails this check within 10 iterations of each loop
 
 ``guarded`` calls ``sq`` only where ``-1000 <= x && x <= 1000`` holds, so
 ``sq``'s precondition holds at every call it makes. ``unguarded`` calls
@@ -597,8 +639,16 @@ named with its arguments. A template value parameter is its argument, and
 .. code-block:: text
 
    Verified: twice<int> [backend=z3]
-   templates.cpp:4:23: error: verification failed: twice<short> [...::postcondition@4:23] (counterexample: ...) [backend=z3] [reason=counterexample]
+   templates.cpp:4:23: error: verification failed: twice<short> [postcondition] [backend=z3] [reason=counterexample]
+       4 |   cv::post(cv::result == 2 * x)
+         |            ~~~~~~~~~~~^~~~~~~~
+   templates.cpp:4:23: note: counterexample: x = 16384, result = -32768
+   templates.cpp:6:3: note: returns -32768
+       6 |   return x + x;
+         |   ^
    templates.cpp:20:13: note: in instantiation of function template specialization 'twice<short>' requested here
+      20 |   short r = twice(x);
+         |             ^
    Verified: twice_int [backend=z3]
    Unresolved: twice_short [backend=z3] [reason=callee.contract] (relies on the contract of twice<short>, which is not established)
 
@@ -747,7 +797,17 @@ execution that fails the same check, with callees still by their contracts:
 
 .. code-block:: text
 
-   count_up.cpp:5:23: error: verification failed: count_up [fn_...::postcondition@5:23] (counterexample: result [ssa=__result_1] [type=i32] = 1, c [ssa=c_1] [type=i32] = 0, c [ssa=c_2] [type=i32] = 1, c [ssa=c_3] [type=i32] = 1, n [ssa=n_0] [type=i32] = 0; trace: loop.entry@8:3 -> loop.exit@8:3 -> return.return@13:3 value=1) [backend=z3] [reason=counterexample]
+   count_up.cpp:5:23: error: verification failed: count_up [postcondition] [backend=z3] [reason=counterexample]
+       5 |   cv::post(cv::result == n)
+         |            ~~~~~~~~~~~^~~~
+   count_up.cpp:5:23: note: counterexample: n = 0, c = 0 -> 1, result = 1
+   count_up.cpp:8:3: note: enters the loop
+       8 |   while (c < n)
+         |   ^
+   count_up.cpp:8:3: note: leaves the loop
+   count_up.cpp:13:3: note: returns 1
+      13 |   return c;
+         |   ^
    note: the counterexample's state at the loop at 8:3 is any state its invariants allow, not necessarily one an execution reaches
    note: no execution fails this check: every loop ends within 5 iterations, and unrolling proves it there; the loops' invariants are too weak for an unbounded proof
 
@@ -785,7 +845,14 @@ counterexample, see :doc:`tooling`):
 
 .. code-block:: text
 
-   divide.cpp:13:7: error: verification failed: divide [fn_...::overflow@13:7] (counterexample: a [ssa=a_0] [type=i32] = -2147483648, c [ssa=c_1] [type=i32] = 0, c [ssa=c_2] [type=i32] = 2, n [ssa=n_0] [type=i32] = 3, q [ssa=q_1] [type=i32] = 0; trace: loop.entry@9:3 -> loop.inductive iteration@9:3 condition=true) [backend=z3] [reason=counterexample]
+   divide.cpp:13:11: error: verification failed: divide [overflow] [backend=z3] [reason=counterexample]
+      13 |     q = a / (1 - c);
+         |         ~~^~~~~~~~~
+   divide.cpp:13:11: note: counterexample: a = -2147483648, n = 3, c = 0 -> 2, q = 0
+   divide.cpp:9:3: note: enters the loop
+       9 |   while (c < n)
+         |   ^
+   divide.cpp:9:3: note: starts an arbitrary iteration of the loop, where its condition is true
    note: the counterexample's state at the loop at 9:3 is any state its invariants allow, not necessarily one an execution reaches
    note: no execution fails this check without failing an earlier one first (the division-by-zero check at 13:7 fails): those that pass the checks before it end every loop within 2 iterations, and unrolling proves it there
 
@@ -1014,7 +1081,25 @@ other object keeps its value:
 .. code-block:: text
 
    Verified: other_array [backend=z3]
-   frames.cpp:18:23: error: verification failed: overwritten [...::postcondition@18:23] (counterexample: ...) [backend=z3] [reason=counterexample]
+   frames.cpp:18:23: error: verification failed: overwritten [postcondition] [backend=z3] [reason=counterexample]
+      18 |   cv::post(cv::result == 7)
+         |            ~~~~~~~~~~~^~~~
+   frames.cpp:18:23: note: counterexample: i = 0 -> 4, result = -2147483648
+   frames.cpp:20:3: note: creates a local object at address 4
+      20 |   int a[4];
+         |   ^
+   frames.cpp:21:8: note: stores 7 at address 16
+      21 |   a[3] = 7;
+         |        ^
+   frames.cpp:22:3: note: enters the loop
+      22 |   for (int i = 0; i < 4; i = i + 1)
+         |   ^
+   frames.cpp:22:3: note: leaves the loop
+   frames.cpp:28:3: note: returns -2147483648
+      28 |   return a[3];
+         |   ^
+   note: the counterexample's state at the loop at 22:3 is any state its invariants allow, not necessarily one an execution reaches
+   note: an execution fails this check within 4 iterations of each loop (counterexample: i = 0 -> 1 -> 2 -> 3 -> 4, result = 0)
 
 ``overwritten`` fails because the loop writes ``a[3]``, which no invariant
 describes. Before 0.2 a loop that wrote local or dynamic storage forgot the
@@ -1065,7 +1150,19 @@ contract can say directly:
 .. code-block:: text
 
    Verified: filled [backend=z3]
-   fill.cpp:26:3: error: verification failed: partially_filled [...::initialization@26:3] (counterexample: ...) [backend=z3] [reason=counterexample]
+   fill.cpp:25:10: error: verification failed: partially_filled [initialization] [backend=z3] [reason=counterexample]
+      25 |   return a[3];
+         |          ^~~~
+   fill.cpp:25:10: note: counterexample: i = 0 -> 3
+   fill.cpp:17:3: note: creates a local object at address 9132
+      17 |   int a[4];
+         |   ^
+   fill.cpp:18:3: note: enters the loop
+      18 |   for (int i = 0; i < 3; i = i + 1)
+         |   ^
+   fill.cpp:18:3: note: leaves the loop
+   note: the counterexample's state at the loop at 18:3 is any state its invariants allow, not necessarily one an execution reaches
+   note: an execution fails this check within 3 iterations of each loop (counterexample: i = 0 -> 1 -> 2 -> 3)
 
 No lifetime begins or ends inside a loop, so what was initialized before it
 stays initialized in every iteration and after it; an element the loop may
@@ -1135,7 +1232,13 @@ The path ends there, so after ``assert(c)`` the condition holds. With
 .. code-block:: text
 
    Verified: scaled [backend=z3]
-   aborts.cpp:16:5: error: verification failed: aborts [...::unreachable@16:5] (counterexample: x [ssa=x_0] [type=i32] = -1; ...) [backend=z3] [reason=counterexample]
+   aborts.cpp:16:5: error: verification failed: aborts [unreachable] [backend=z3] [reason=counterexample]
+      16 |     abort();
+         |     ^
+   aborts.cpp:16:5: note: counterexample: x = -1
+   aborts.cpp:15:3: note: takes the true branch
+      15 |   if (x < 0)
+         |   ^
 
 An uncontracted ``constexpr`` helper's ``assert(c)`` is a requirement of each
 call that reaches it, checked at the call as the helper's undefined
@@ -1217,7 +1320,22 @@ switch over its enumerators may match none:
 
 .. code-block:: text
 
-   channel.cpp:4:12: error: verification failed: channel [...::postcondition@4:12] (counterexample: result [ssa=__result_1] [type=i32] = -1, c [ssa=c_0] [type=u32] = 3; ...) [backend=z3] [reason=counterexample]
+   channel.cpp:4:23: error: verification failed: channel [postcondition] [backend=z3] [reason=counterexample]
+       4 |   cv::post(cv::result >= 0)
+         |            ~~~~~~~~~~~^~~~
+   channel.cpp:4:23: note: counterexample: c = 3, result = -1
+   channel.cpp:7:3: note: takes the false branch
+       7 |   case Red:
+         |   ^
+   channel.cpp:9:3: note: takes the false branch
+       9 |   case Green:
+         |   ^
+   channel.cpp:11:3: note: takes the false branch
+      11 |   case Blue:
+         |   ^
+   channel.cpp:14:3: note: returns -1
+      14 |   return -1;
+         |   ^
 
 ``Color`` holds 0 to 3, the values of the smallest bit-field that fits its
 enumerators, and ``channel(Color(3))`` is defined C++ that returns -1.

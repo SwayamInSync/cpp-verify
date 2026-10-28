@@ -206,14 +206,16 @@ int past_end(const Outer *p, int i)
 {
   return p->buf[i];
 }
-// CHECK-DAG: error: verification failed: past_end [{{.*}}::bounds@[[@LINE-2]]:3] (counterexample: i [ssa=i_0] [type=i32] = 8,
+// CHECK-DAG: :[[@LINE-2]]:10: error: verification failed: past_end [bounds]
+// CHECK-DAG: note: counterexample: {{.*}}i = 8{{( ->|,|$)}}
 
 int below_zero(const Outer *p, int i)
   cppverify::pre(p != nullptr && -1 <= i && i < 8)
 {
   return p->buf[i];
 }
-// CHECK-DAG: error: verification failed: below_zero [{{.*}}::bounds@[[@LINE-2]]:10] (counterexample: i [ssa=i_0] [type=i32] = -1,
+// CHECK-DAG: :[[@LINE-2]]:10: error: verification failed: below_zero [bounds]
+// CHECK-DAG: note: counterexample: {{.*}}i = -1{{( ->|,|$)}}
 
 // A postcondition's reads are checked like the body's.
 int post_past_end(const Ring *r, int i)
@@ -222,7 +224,8 @@ int post_past_end(const Ring *r, int i)
 {
   return 0;
 }
-// CHECK-DAG: error: verification failed: post_past_end [{{.*}}::bounds@[[@LINE-4]]:50] (counterexample: {{.*}}i [ssa=i_0] [type=i32] = 8,
+// CHECK-DAG: :[[@LINE-4]]:19: error: verification failed: post_past_end [bounds]
+// CHECK-DAG: note: counterexample: {{.*}}i = 8{{( ->|,|$)}}
 
 // grid[i][4] is grid[i + 1][0] in memory, but j indexes a row of 4.
 int row_overflow(const Outer *p, int i, int j)
@@ -230,7 +233,8 @@ int row_overflow(const Outer *p, int i, int j)
 {
   return p->grid[i][j];
 }
-// CHECK-DAG: error: verification failed: row_overflow [{{.*}}::bounds@[[@LINE-2]]:3] (counterexample: i [ssa=i_0] [type=i32] = {{[0-2]}}, j [ssa=j_0] [type=i32] = 4,
+// CHECK-DAG: :[[@LINE-2]]:10: error: verification failed: row_overflow [bounds]
+// CHECK-DAG: note: counterexample: {{.*}}i = {{[0-2]}}{{( ->|,|$)}}{{.*}}j = 4{{( ->|,|$)}}
 
 void store_past_end(Outer *p, int i)
   cppverify::pre(p != nullptr && 0 <= i && i <= 8)
@@ -238,7 +242,8 @@ void store_past_end(Outer *p, int i)
 {
   p->buf[i] = 0;
 }
-// CHECK-DAG: error: verification failed: store_past_end [{{.*}}::bounds@[[@LINE-2]]:13] (counterexample: i [ssa=i_0] [type=i32] = 8,
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: store_past_end [bounds]
+// CHECK-DAG: note: counterexample: {{.*}}i = 8{{( ->|,|$)}}
 
 void slot_past_end(Ring *r, int i)
   cppverify::pre(r != nullptr && 0 <= i && i <= 8)
@@ -247,7 +252,8 @@ void slot_past_end(Ring *r, int i)
   int &slot = r->buf[i];
   slot = 0;
 }
-// CHECK-DAG: error: verification failed: slot_past_end [{{.*}}::bounds@[[@LINE-3]]:3] (counterexample: i [ssa=i_0] [type=i32] = 8,
+// CHECK-DAG: :[[@LINE-3]]:15: error: verification failed: slot_past_end [bounds]
+// CHECK-DAG: note: counterexample: {{.*}}i = 8{{( ->|,|$)}}
 
 void bump_past_end(Ring *r, int i)
   cppverify::pre(r != nullptr && 0 <= i && i <= 8 && r->head < 100)
@@ -255,7 +261,8 @@ void bump_past_end(Ring *r, int i)
 {
   bump(r->buf[i]);
 }
-// CHECK-DAG: error: verification failed: bump_past_end [{{.*}}::bounds@[[@LINE-2]]:8] (counterexample: i [ssa=i_0] [type=i32] = 8,
+// CHECK-DAG: :[[@LINE-2]]:8: error: verification failed: bump_past_end [bounds]
+// CHECK-DAG: note: counterexample: {{.*}}i = 8{{( ->|,|$)}}
 
 // A write to buf[i] may be the read of buf[j].
 void write_keeps_all(Outer *p, int i, int j)
@@ -265,7 +272,8 @@ void write_keeps_all(Outer *p, int i, int j)
 {
   p->buf[i] = 7;
 }
-// CHECK-DAG: error: verification failed: write_keeps_all [{{.*}}::postcondition@[[@LINE-4]]:29] (counterexample: i [ssa=i_0] [type=i32] = [[I:[0-7]]], j [ssa=j_0] [type=i32] = [[I]],
+// CHECK-DAG: :[[@LINE-4]]:29: error: verification failed: write_keeps_all [postcondition]
+// CHECK-DAG: note: counterexample: {{.*}}i = [[I:[0-7]]]{{.*}}j = [[I]]{{( ->|,|$)}}
 
 void outside_frame(Outer *p, int i)
   cppverify::pre(p != nullptr && 0 <= i && i < 8)
@@ -273,7 +281,7 @@ void outside_frame(Outer *p, int i)
 {
   p->buf[i] = 0;
 }
-// CHECK-DAG: error: verification failed: outside_frame [{{.*}}::frame@[[@LINE-2]]:13]
+// CHECK-DAG: :[[@LINE-2]]:13: error: verification failed: outside_frame [frame]
 
 void nested_write_wrong(Outer *p)
   cppverify::pre(p != nullptr)
@@ -282,7 +290,7 @@ void nested_write_wrong(Outer *p)
 {
   p->inner.y = 3;
 }
-// CHECK-DAG: error: verification failed: nested_write_wrong [{{.*}}::postcondition@[[@LINE-4]]:30]
+// CHECK-DAG: :[[@LINE-4]]:30: error: verification failed: nested_write_wrong [postcondition]
 #else
 // Arrays in global storage are not modeled; the message names the global.
 Ring global_ring;

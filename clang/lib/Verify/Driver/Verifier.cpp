@@ -23,13 +23,16 @@
 #include "../Transform/Passivize.h"
 #include "../Transform/SpecInline.h"
 #include "../Transform/UBChecks.h"
+#include "Counterexample.h"
 #include "CppVerifyVersion.h"
 #include "DumpIR.h"
 #include "LeanAutomation.h"
 #include "LeanCertifier.h"
+#include "StructuredOutput.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Frontend/TextDiagnostic.h"
+#include "clang/Lex/Lexer.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
@@ -847,6 +850,7 @@ std::optional<VerifyResult> confirmCounterexample(
     Item.StableId = Like.StableId;
     Item.Kind = Like.Kind;
     Item.Loc = Like.Loc;
+    Item.BeginLoc = Like.BeginLoc;
     Item.EndLoc = Like.EndLoc;
     Item.Source = Like.Source;
     Item.Goal = std::move(Goal);
@@ -900,19 +904,11 @@ std::optional<VerifyResult> confirmCounterexample(
   for (const VerifyModelValue &Value : R.Unchecked)
     if (Fixed.count(Value.InternalName))
       Failed.Model.push_back(Value);
-  std::string Message;
-  for (const VerifyModelValue &Value : Failed.Model) {
-    Message += (Message.empty() ? "" : ", ") + Value.DisplayName;
-    if (Value.DisplayName != Value.InternalName)
-      Message += " [ssa=" + Value.InternalName + "]";
-    Message += " [type=" + formatLogicSort(Value.Sort) + "] = " + *Value.Value;
-  }
   std::string Using;
   for (const std::string &Identity : Contracts)
     if (auto It = Functions.find(Identity); It != Functions.end())
       Using += (Using.empty() ? "" : ", ") + It->second->Name;
   Failed.Message =
-      Message + (Message.empty() ? "" : "; ") +
       "confirmed by a proof at this input" +
       (Using.empty() ? std::string() : " that uses the contract of " + Using) +
       ", since its check could not compute " + R.UncheckedApplication;
@@ -1162,10 +1158,21 @@ struct VerifyDiagnostic {
   /// For an error about source the verifier cannot represent: that source,
   /// shown with its line as a compiler error is.
   SourceRange Span;
+  /// The declaration of the function the result is about, where a compiler
+  /// remark about a proof points.
+  SourceLocation FunctionLoc;
   /// A spec function that needs no check, listed with --verbose: no verdict.
   bool Axiom = false;
   /// What else the verifier found about the verdict, each printed as a note.
   std::vector<std::string> Notes;
+  /// Other source a failure is about, each printed as a note there: the
+  /// clause of a callee that a call does not establish.
+  struct RelatedPlace {
+    std::string Message;
+    SourceSpan Span;
+    ObligationSource Source;
+  };
+  std::vector<RelatedPlace> Related;
   /// A failing obligation after the one a function's verdict reports: no
   /// verdict of its own.
   bool Additional = false;
@@ -1178,6 +1185,14 @@ static uint64_t nanosecondsSince(std::chrono::steady_clock::time_point Start) {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
              std::chrono::steady_clock::now() - Start)
       .count();
+}
+
+/// The kind of check a failure is, "[postcondition]"; its location is the
+/// diagnostic's, and JSON keeps the stable obligation ID.
+static std::string obligationTag(const VerifyResult &Result) {
+  if (Result.ObligationType)
+    return std::string(" [") + obligationKindName(*Result.ObligationType) + "]";
+  return Result.ObligationId.empty() ? "" : " [" + Result.ObligationId + "]";
 }
 
 /// The backend a lowering reports, as lower-only names it.
@@ -1314,22 +1329,6 @@ static llvm::StringRef traceKindCode(DiagnosticTraceKind Kind) {
   return "branch";
 }
 
-static std::string jsonText(llvm::StringRef Text) {
-  return llvm::json::isUTF8(Text) ? Text.str() : llvm::json::fixUTF8(Text);
-}
-
-static llvm::json::Object sourceJSON(const ObligationSource &Source) {
-  llvm::json::Object Result;
-  if (!Source.isValid())
-    return Result;
-  Result["file"] = jsonText(Source.File);
-  Result["line"] = Source.Line;
-  Result["column"] = Source.Column;
-  Result["end_line"] = Source.EndLine != 0 ? Source.EndLine : Source.Line;
-  Result["end_column"] =
-      Source.EndColumn != 0 ? Source.EndColumn : Source.Column;
-  return Result;
-}
 
 static std::string leanProjectPath(llvm::StringRef Root,
                                    llvm::ArrayRef<llvm::StringRef> Components) {
@@ -2883,6 +2882,8 @@ class Verifier {
   VerifyOptions Opts;
   llvm::raw_ostream *DumpOS = nullptr;
   std::vector<VerifyDiagnostic> Diags;
+  /// Each function's source, by identity (VFunction::Extent).
+  std::map<std::string, SourceRange> Extents;
   /// What --list-functions prints: each function's location and kind.
   std::vector<std::pair<SourceLocation, std::string>> Listing;
   /// Each contracted function's contract as written, by its identity.
@@ -2980,35 +2981,93 @@ class Verifier {
     return llvm::Error::success();
   }
 
-  void annotateObligationSources(ObligationModule &Module) {
+  /// Moves a failure to where its check fails.
+  void placeFailure(VerifyResult &Failure, const FailurePlace &Place) const {
+    if (!Place.At.isValid())
+      return;
+    Failure.Location = Place.At.Loc;
+    Failure.BeginLocation = Place.At.BeginLoc;
+    Failure.EndLocation = Place.At.EndLoc;
+    Failure.Source =
+        Place.AtSource.isValid()
+            ? Place.AtSource
+            : sourceOf(Place.At.Loc, Place.At.BeginLoc, Place.At.EndLoc);
+  }
+
+  /// A failure at a call notes the callee's clause that does not hold.
+  void relateClause(VerifyDiagnostic &D, const FailurePlace &Place) const {
+    if (!Place.Clause.isValid())
+      return;
+    D.Related.push_back(
+        {D.Result ? clauseNote(*D.Result) : "",
+         Place.Clause,
+         Place.ClauseSource.isValid()
+             ? Place.ClauseSource
+             : sourceOf(Place.Clause.Loc, Place.Clause.BeginLoc,
+                        Place.Clause.EndLoc)});
+  }
+
+  /// The source from BeginLoc to the end of the token at EndLoc, anchored at
+  /// Loc; in a macro, the source of its use. Empty when Loc has none.
+  ObligationSource sourceOf(SourceLocation Loc, SourceLocation BeginLoc,
+                            SourceLocation EndLoc) const {
     const SourceManager &SourceMgr = Ctx.getSourceManager();
-    auto annotateSource = [&](SourceLocation Loc, SourceLocation EndLoc,
-                              ObligationSource &Source) {
-      if (!Loc.isValid())
-        return;
-      PresumedLoc Location = SourceMgr.getPresumedLoc(Loc);
-      if (!Location.isValid())
-        return;
-      ObligationSource Found;
-      Found.File = Location.getFilename();
-      Found.Line = Location.getLine();
-      Found.Column = Location.getColumn();
-      PresumedLoc End =
-          SourceMgr.getPresumedLoc(EndLoc.isValid() ? EndLoc : Loc);
-      if (End.isValid() && Found.File == End.getFilename() &&
-          (End.getLine() > Found.Line ||
-           (End.getLine() == Found.Line && End.getColumn() >= Found.Column))) {
-        Found.EndLine = End.getLine();
-        Found.EndColumn = End.getColumn();
-      } else {
-        Found.EndLine = Found.Line;
-        Found.EndColumn = Found.Column;
+    ObligationSource Found;
+    if (!Loc.isValid())
+      return Found;
+    PresumedLoc Location = SourceMgr.getPresumedLoc(Loc);
+    if (!Location.isValid())
+      return Found;
+    Found.File = Location.getFilename();
+    Found.Line = Location.getLine();
+    Found.Column = Location.getColumn();
+    auto inFile = [&](const PresumedLoc &At) {
+      return At.isValid() && Found.File == At.getFilename();
+    };
+    auto before = [](unsigned Line, unsigned Column, unsigned OtherLine,
+                     unsigned OtherColumn) {
+      return Line < OtherLine || (Line == OtherLine && Column < OtherColumn);
+    };
+    SourceLocation Last = EndLoc.isValid() ? EndLoc : Loc;
+    if (Last.isMacroID())
+      Last = SourceMgr.getExpansionRange(Last).getEnd();
+    SourceLocation After =
+        Lexer::getLocForEndOfToken(Last, 0, SourceMgr, Ctx.getLangOpts());
+    PresumedLoc End = SourceMgr.getPresumedLoc(After.isValid() ? After : Last);
+    if (inFile(End) &&
+        !before(End.getLine(), End.getColumn(), Found.Line, Found.Column)) {
+      Found.EndLine = End.getLine();
+      Found.EndColumn = End.getColumn();
+    } else {
+      Found.EndLine = Found.Line;
+      Found.EndColumn = Found.Column;
+    }
+    if (BeginLoc.isValid()) {
+      if (BeginLoc.isMacroID())
+        BeginLoc = SourceMgr.getExpansionRange(BeginLoc).getBegin();
+      PresumedLoc Begin = SourceMgr.getPresumedLoc(BeginLoc);
+      if (inFile(Begin) && before(Begin.getLine(), Begin.getColumn(),
+                                  Found.Line, Found.Column)) {
+        Found.BeginLine = Begin.getLine();
+        Found.BeginColumn = Begin.getColumn();
       }
+    }
+    return Found;
+  }
+
+  void annotateObligationSources(ObligationModule &Module) {
+    auto annotateSource = [&](SourceLocation Loc, SourceLocation BeginLoc,
+                              SourceLocation EndLoc, ObligationSource &Source) {
+      ObligationSource Found = sourceOf(Loc, BeginLoc, EndLoc);
+      if (!Found.isValid())
+        return;
       // A term shared with a module annotated before, which other threads
       // may be reading, is read and not written.
       if (Source.File != Found.File || Source.Line != Found.Line ||
           Source.Column != Found.Column || Source.EndLine != Found.EndLine ||
-          Source.EndColumn != Found.EndColumn)
+          Source.EndColumn != Found.EndColumn ||
+          Source.BeginLine != Found.BeginLine ||
+          Source.BeginColumn != Found.BeginColumn)
         Source = std::move(Found);
     };
     // Terms share subterms: each node once.
@@ -3022,7 +3081,7 @@ class Verifier {
         Pending.pop_back();
         if (!Annotated.insert(Expr).second)
           continue;
-        annotateSource(Expr->Loc, Expr->EndLoc, Expr->Source);
+        annotateSource(Expr->Loc, Expr->BeginLoc, Expr->EndLoc, Expr->Source);
         for (const auto &Child : Expr->Children)
           if (Child)
             Pending.push_back(Child.get());
@@ -3031,9 +3090,27 @@ class Verifier {
 
     annotateExpr(Module.CorrectnessGoal.get());
     annotateExpr(Module.CounterexampleQuery.get());
+    // A check is shown in the function it belongs to: one whose condition is
+    // elsewhere, in the body of a lifted helper, stays at its anchor, the
+    // call.
+    SourceRange Extent;
+    llvm::StringRef Owner = Module.FunctionIdentity;
+    if (auto It = Extents.find(Owner.take_front(Owner.find("::")).str());
+        It != Extents.end())
+      Extent = It->second;
+    const SourceManager &SM = Ctx.getSourceManager();
     std::map<std::string, unsigned> StableIdCounts;
     for (Obligation &Item : Module.Obligations) {
-      annotateSource(Item.Loc, Item.EndLoc, Item.Source);
+      if (Item.Focus.isValid() &&
+          !(Extent.isValid() &&
+            SM.isPointWithin(SM.getExpansionLoc(Item.Focus.Loc),
+                             Extent.getBegin(), Extent.getEnd())))
+        Item.Focus = {};
+      annotateSource(Item.Loc, Item.BeginLoc, Item.EndLoc, Item.Source);
+      annotateSource(Item.Focus.Loc, Item.Focus.BeginLoc, Item.Focus.EndLoc,
+                     Item.FocusSource);
+      annotateSource(Item.Clause.Loc, Item.Clause.BeginLoc,
+                     Item.Clause.EndLoc, Item.ClauseSource);
       std::string StableId =
           Module.FunctionIdentity + "::" + obligationKindName(Item.Kind) + "@";
       StableId += Item.Source.isValid()
@@ -3049,10 +3126,11 @@ class Verifier {
     }
     for (auto &[InternalName, Variable] : Module.DiagnosticVariables) {
       (void)InternalName;
-      annotateSource(Variable.Loc, Variable.EndLoc, Variable.Source);
+      annotateSource(Variable.Loc, Variable.Loc, Variable.EndLoc,
+                     Variable.Source);
     }
     for (DiagnosticTraceEvent &Event : Module.TraceEvents) {
-      annotateSource(Event.Loc, Event.EndLoc, Event.Source);
+      annotateSource(Event.Loc, Event.Loc, Event.EndLoc, Event.Source);
       annotateExpr(Event.Guard.get());
       for (DiagnosticTraceValue &Value : Event.Values)
         annotateExpr(Value.Value.get());
@@ -3272,6 +3350,7 @@ public:
         OutsideFunctions = true;
       else
         D.FunctionName = Err.FunctionName;
+      D.FunctionLoc = Err.FunctionLoc;
       D.Hidden = !Err.Function.empty() && !selects(Err.FunctionName);
       if (!Err.Function.empty() &&
           UnsupportedConstructs.emplace(Err.Function, Err.Message).second) {
@@ -3344,8 +3423,10 @@ public:
     inferOutParameters(Functions);
 
     FunctionMap FnMap;
-    for (const auto &Fn : Functions)
+    for (const auto &Fn : Functions) {
       FnMap[Fn->Identity] = Fn.get();
+      Extents[Fn->Identity] = Fn->Extent;
+    }
 
     std::vector<std::unique_ptr<VFunction>> InterfaceFunctions;
     FunctionMap InterfaceMap;
@@ -3799,9 +3880,10 @@ public:
                   (Bound == 0
                        ? std::string("with no iteration of any loop")
                        : "within " + iterations(Bound) + " of each loop") +
-                  (Result.Message.empty()
+                  (counterexampleText(Result).empty()
                        ? std::string()
-                       : " (counterexample: " + Result.Message + ")"));
+                       : " (counterexample: " + counterexampleText(Result) +
+                             ")"));
               return Notes;
             }
             CopiesHold &= Result.Status == VerifyStatus::Verified;
@@ -3984,11 +4066,10 @@ public:
                            Interface.Name, R});
           Run.ContractCheck = Diags.size() - 1;
         } else if (R.Status == VerifyStatus::Failed) {
-          std::string Message = "verification failed: " + Label;
-          if (!R.ObligationId.empty())
-            Message += " [" + R.ObligationId + "]";
+          std::string Message =
+              "verification failed: " + Label + obligationTag(R);
           if (!R.Message.empty())
-            Message += " (counterexample: " + R.Message + ")";
+            Message += " (" + R.Message + ")";
           Message += backendSuffix(R);
           unsettled(VerifyDiagnostic::Error, std::move(Message), R);
         } else {
@@ -5055,16 +5136,20 @@ public:
           }
           // The failure, and those after it --max-failures reports, each
           // with its counterexample and notes.
-          auto failure = [&](const VerifyResult &Failure) {
-            std::string Msg = "verification failed: " + Fn->Name;
-            if (!Failure.ObligationId.empty())
-              Msg += " [" + Failure.ObligationId + "]";
+          auto failure = [&](VerifyResult Failure) {
+            // Unrolling looks for copies of the check at its anchor.
+            std::vector<std::string> Notes = failureNotes(*Fn, Failure);
+            const FailurePlace Place = failingPlace(Module, Failure);
+            placeFailure(Failure, Place);
+            std::string Msg =
+                "verification failed: " + Fn->Name + obligationTag(Failure);
             if (!Failure.Message.empty())
-              Msg += " (counterexample: " + Failure.Message + ")";
+              Msg += " (" + Failure.Message + ")";
             Msg += backendSuffix(Failure);
             Diags.push_back({VerifyDiagnostic::Error, Msg, Failure.Location,
                              Fn->Name, Failure});
-            Diags.back().Notes = failureNotes(*Fn, Failure);
+            Diags.back().Notes = std::move(Notes);
+            relateClause(Diags.back(), Place);
           };
           failure(R);
           for (const VerifyResult &More : R.MoreFailures) {
@@ -5213,6 +5298,7 @@ public:
         // What a function --function leaves out reports stays, hidden, for
         // what it establishes.
         D.Hidden |= !Selected[I];
+        D.FunctionLoc = Functions[I]->DeclLoc;
         Diags.push_back(std::move(D));
       }
       AllOk &= Run.AllOk;
@@ -5930,11 +6016,9 @@ public:
         VerifyResult &Failed = *Outcomes[I];
         std::string Message;
         if (Pending.Label == "verification") {
-          Message = "verification failed: " + Pending.Fn->Name;
-          if (!Failed.ObligationId.empty())
-            Message += " [" + Failed.ObligationId + "]";
-          Message += " (counterexample: " + Failed.Message + ")" +
-                     backendSuffix(Failed);
+          Message = "verification failed: " + Pending.Fn->Name +
+                    obligationTag(Failed) + " (" + Failed.Message + ")" +
+                    backendSuffix(Failed);
         } else {
           Message = Pending.Label + " failed: " + Pending.Fn->Name +
                     backendSuffix(Failed) + " (" + Failed.Message + ")";
@@ -5950,6 +6034,11 @@ public:
           }
         if (!Trusted.empty())
           Message += " [trusts=" + Trusted + "]";
+        const FailurePlace Place = failingPlace(*Pending.Module, Failed);
+        placeFailure(Failed, Place);
+        if (Place.At.isValid())
+          Verdict.Loc = Failed.Location;
+        relateClause(Verdict, Place);
         Verdict.K = VerifyDiagnostic::Error;
         Verdict.Message = std::move(Message);
         Verdict.Result = std::move(Failed);
@@ -6137,7 +6226,7 @@ public:
   void printJSONDiagnostic(const VerifyDiagnostic &D,
                            llvm::raw_ostream &OS) const {
     llvm::json::Object Record;
-    Record["schema"] = "cppverify.diagnostic/1";
+    Record["schema"] = "cppverify.diagnostic/2";
     Record["status"] =
         D.Result ? verifyStatusCode(D.Result->Status) : diagnosticKindCode(D.K);
     Record["severity"] =
@@ -6155,42 +6244,38 @@ public:
         Notes.push_back(jsonText(Note));
       Record["notes"] = std::move(Notes);
     }
+    if (!D.Related.empty()) {
+      llvm::json::Array Related;
+      for (const VerifyDiagnostic::RelatedPlace &Place : D.Related) {
+        llvm::json::Object Note{{"message", jsonText(Place.Message)}};
+        if (Place.Source.isValid())
+          Note["source"] = sourceJSON(Place.Source);
+        Related.push_back(std::move(Note));
+      }
+      Record["related"] = std::move(Related);
+    }
     if (!D.FunctionName.empty())
       Record["function"] = jsonText(D.FunctionName);
 
     ObligationSource Source;
     if (D.Result)
       Source = D.Result->Source;
-    if (!Source.isValid() && D.Loc.isValid()) {
-      PresumedLoc Location = Ctx.getSourceManager().getPresumedLoc(D.Loc);
-      if (Location.isValid()) {
-        Source.File = Location.getFilename();
-        Source.Line = Location.getLine();
-        Source.Column = Location.getColumn();
-        Source.EndLine = Source.Line;
-        Source.EndColumn = Source.Column;
-        if (D.Span.isValid())
-          if (PresumedLoc End =
-                  Ctx.getSourceManager().getPresumedLoc(D.Span.getEnd());
-              End.isValid()) {
-            Source.EndLine = End.getLine();
-            Source.EndColumn = End.getColumn();
-          }
-      }
-    }
+    if (!Source.isValid())
+      Source = D.Span.isValid()
+                   ? sourceOf(D.Loc, D.Span.getBegin(), D.Span.getEnd())
+                   : sourceOf(D.Loc, D.Loc, D.Loc);
     if (Source.isValid())
       Record["source"] = sourceJSON(Source);
+    if (ObligationSource Function =
+            sourceOf(D.FunctionLoc, D.FunctionLoc, D.FunctionLoc);
+        Function.isValid())
+      Record["function_source"] = sourceJSON(Function);
     if (const std::pair<SourceLocation, std::string> *Instantiation =
             instantiationOf(D))
-      if (PresumedLoc Point =
-              Ctx.getSourceManager().getPresumedLoc(Instantiation->first);
-          Point.isValid()) {
-        ObligationSource At;
-        At.File = Point.getFilename();
-        At.Line = At.EndLine = Point.getLine();
-        At.Column = At.EndColumn = Point.getColumn();
+      if (ObligationSource At = sourceOf(
+              Instantiation->first, Instantiation->first, Instantiation->first);
+          At.isValid())
         Record["instantiated_at"] = sourceJSON(At);
-      }
 
     if (D.Vacuous)
       Record["vacuous"] = true;
@@ -6304,6 +6389,9 @@ public:
           Obligation["source"] = sourceJSON(Result.Source);
         Record["obligation"] = std::move(Obligation);
       }
+      if (Result.Status == VerifyStatus::Failed)
+        if (std::string Values = counterexampleText(Result); !Values.empty())
+          Record["counterexample"] = jsonText(Values);
       if (!Result.Model.empty()) {
         llvm::json::Array Model;
         for (const VerifyModelValue &Value : Result.Model) {
@@ -6316,6 +6404,8 @@ public:
                                : llvm::json::Value(nullptr);
           if (Value.Source.isValid())
             Entry["source"] = sourceJSON(Value.Source);
+          if (Value.OnPath == false)
+            Entry["on_path"] = false;
           Model.push_back(std::move(Entry));
         }
         Record["model"] = std::move(Model);
@@ -6326,6 +6416,7 @@ public:
           llvm::json::Object Entry;
           Entry["kind"] = traceKindCode(Event.Kind);
           Entry["message"] = jsonText(Event.Message);
+          Entry["text"] = jsonText(traceStepText(Event));
           Entry["active"] = Event.Active ? llvm::json::Value(*Event.Active)
                                          : llvm::json::Value(nullptr);
           if (Event.Source.isValid())
@@ -6563,8 +6654,16 @@ public:
         continue;
       if (Opts.Summary)
         count(D, *Opts.Summary);
-      if (!quieted(D))
+      if (quieted(D))
+        continue;
+      if (Opts.Parts) {
+        std::vector<VerifyDiagnosticPart> Parts = partsOf(D);
+        if (Parts.front().Loc.isInvalid())
+          Parts.front().Loc = D.FunctionLoc;
+        Opts.Parts->insert(Opts.Parts->end(), Parts.begin(), Parts.end());
+      } else {
         printDiagnostic(D, OS);
+      }
     }
   }
 
@@ -6639,94 +6738,235 @@ public:
     return Report;
   }
 
+  /// An error as Clang diagnostics: the error at the failing source, with
+  /// its range; for a counterexample, its values in source names and each
+  /// step of its path at its location; then the error's notes.
+  std::vector<VerifyDiagnosticPart>
+  errorParts(const VerifyDiagnostic &D) const {
+    std::vector<VerifyDiagnosticPart> Parts;
+    VerifyDiagnosticPart Error;
+    Error.Level = DiagnosticsEngine::Error;
+    Error.Message = D.Message;
+    if (D.Span.isValid()) {
+      Error.Loc = D.Span.getBegin();
+      Error.Range = D.Span;
+    } else {
+      Error.Loc = D.Loc;
+      // An obligation's range underlines its expression, the caret at its
+      // operator, when the expression lies on the caret's line; one that runs
+      // to another line (a spec's post through to its return) is not shown.
+      const SourceManager &SM = Ctx.getSourceManager();
+      auto onCaretLine = [&](SourceLocation Loc) {
+        return Loc.isValid() && SM.isWrittenInSameFile(D.Loc, Loc) &&
+               SM.getSpellingLineNumber(D.Loc) == SM.getSpellingLineNumber(Loc);
+      };
+      if (D.Result && D.Result->Location == D.Loc) {
+        SourceLocation Begin = D.Result->BeginLocation;
+        SourceLocation End = D.Result->EndLocation;
+        if (!onCaretLine(Begin) || SM.isBeforeInTranslationUnit(D.Loc, Begin))
+          Begin = D.Loc;
+        if (onCaretLine(End) && !SM.isBeforeInTranslationUnit(End, D.Loc) &&
+            (Begin != D.Loc || End != D.Loc))
+          Error.Range = SourceRange(Begin, End);
+      }
+    }
+    Parts.push_back(Error);
+    // A step inside a macro is shown where the macro is used: the error
+    // already shows the expansion, and each note would repeat it.
+    auto note = [&](SourceLocation Loc, std::string Message) {
+      if (Loc.isMacroID())
+        Loc = Ctx.getSourceManager().getExpansionLoc(Loc);
+      Parts.push_back({DiagnosticsEngine::Note, Loc, {}, std::move(Message)});
+    };
+    if (D.Result && D.Result->Status == VerifyStatus::Failed)
+      if (std::string Values = counterexampleText(*D.Result); !Values.empty())
+        note(Error.Loc, "counterexample: " + Values);
+    for (const VerifyDiagnostic::RelatedPlace &Place : D.Related) {
+      VerifyDiagnosticPart Note;
+      Note.Loc = Place.Span.Loc;
+      Note.Message = Place.Message;
+      const SourceManager &SM = Ctx.getSourceManager();
+      auto onLine = [&](SourceLocation Loc) {
+        return Loc.isValid() && SM.isWrittenInSameFile(Note.Loc, Loc) &&
+               SM.getSpellingLineNumber(Note.Loc) ==
+                   SM.getSpellingLineNumber(Loc);
+      };
+      if (onLine(Place.Span.BeginLoc) && onLine(Place.Span.EndLoc) &&
+          (Place.Span.BeginLoc != Note.Loc || Place.Span.EndLoc != Note.Loc))
+        Note.Range = SourceRange(Place.Span.BeginLoc, Place.Span.EndLoc);
+      Parts.push_back(std::move(Note));
+    }
+    if (D.Result && D.Result->Status == VerifyStatus::Failed) {
+      const VerifyResult &R = *D.Result;
+      const size_t Steps = R.Trace.size();
+      for (size_t I = 0; I != Steps; ++I) {
+        if (Steps > TraceStepLimit && I == TraceStepLimit / 2)
+          note({}, "(skipping " + std::to_string(Steps - TraceStepLimit) +
+                       " steps of the path; JSON lists every one)");
+        if (Steps > TraceStepLimit && I >= TraceStepLimit / 2 &&
+            I < Steps - TraceStepLimit / 2)
+          continue;
+        note(R.Trace[I].Loc, traceStepText(R.Trace[I]));
+      }
+    }
+    if (const auto *Instantiation = instantiationOf(D))
+      note(Instantiation->first, "in instantiation of " +
+                                     Instantiation->second + " '" +
+                                     D.FunctionName + "' requested here");
+    for (const std::string &Note : D.Notes)
+      note({}, Note);
+    return Parts;
+  }
+
+  /// The line a result prints, apart from its location: "Verified: f".
+  std::string statusLine(const VerifyDiagnostic &D) const {
+    switch (D.K) {
+    case VerifyDiagnostic::Lowered:
+      return "Lowered: " + D.Message;
+    case VerifyDiagnostic::Verified:
+      return "Verified: " + D.Message;
+    case VerifyDiagnostic::Error:
+    case VerifyDiagnostic::Warning:
+      return D.Message;
+    case VerifyDiagnostic::Unresolved:
+      return "Unresolved: " + D.Message;
+    case VerifyDiagnostic::Interrupted:
+      return "Interrupted: " + D.Message;
+    case VerifyDiagnostic::BoundedSafe:
+      return "BoundedSafe: " + D.Message;
+    case VerifyDiagnostic::Exported: {
+      std::string Line = "Exported: " + D.Message;
+      if (D.LeanAutomatic && D.Result)
+        Line +=
+            " (cppverify_auto proved " + std::to_string(D.LeanAutomatic) +
+            " of " +
+            std::to_string(std::set<std::string>(D.Result->LeanGoals.begin(),
+                                                 D.Result->LeanGoals.end())
+                               .size()) +
+            " goals)";
+      return Line;
+    }
+    case VerifyDiagnostic::Certified:
+      return "Certified: " + D.Message;
+    case VerifyDiagnostic::MixedProof:
+      return "Proved (" + D.Result->BackendName + "): " + D.Message;
+    case VerifyDiagnostic::Trusted:
+      return "Trusted: " + D.Message;
+    }
+    return D.Message;
+  }
+
+  /// A result as Clang diagnostics: an error with its counterexample, a
+  /// warning, or a status line (an error when unresolved, else a remark),
+  /// each followed by its notes.
+  std::vector<VerifyDiagnosticPart> partsOf(const VerifyDiagnostic &D) const {
+    if (D.K == VerifyDiagnostic::Error)
+      return errorParts(D);
+    std::vector<VerifyDiagnosticPart> Parts;
+    DiagnosticsEngine::Level Level = DiagnosticsEngine::Remark;
+    if (D.K == VerifyDiagnostic::Warning)
+      Level = DiagnosticsEngine::Warning;
+    else if (D.K == VerifyDiagnostic::Unresolved ||
+             D.K == VerifyDiagnostic::Interrupted)
+      Level = DiagnosticsEngine::Error;
+    Parts.push_back({Level, D.Loc, {}, statusLine(D)});
+    auto note = [&](SourceLocation Loc, std::string Message) {
+      Parts.push_back({DiagnosticsEngine::Note, Loc, {}, std::move(Message)});
+    };
+    if (D.K == VerifyDiagnostic::Unresolved && D.Result)
+      for (const QuantifierProfileEntry &Entry : D.Result->QuantifierProfile)
+        note({}, "the quantifier at " + std::to_string(Entry.Line) + ":" +
+                     std::to_string(Entry.Column) + " was instantiated " +
+                     std::to_string(Entry.Instances) +
+                     " times, up to generation " +
+                     std::to_string(Entry.MaxGeneration));
+    if (const auto *Instantiation = instantiationOf(D))
+      note(Instantiation->first, "in instantiation of " +
+                                     Instantiation->second + " '" +
+                                     D.FunctionName + "' requested here");
+    for (const std::string &Note : D.Notes)
+      note({}, Note);
+    return Parts;
+  }
+
+  /// A GitHub workflow command that annotates the source of an error or a
+  /// warning, or nothing for another result.
+  std::string githubAnnotation(const VerifyDiagnostic &D) const {
+    const bool Error = D.K == VerifyDiagnostic::Error ||
+                       D.K == VerifyDiagnostic::Unresolved ||
+                       D.K == VerifyDiagnostic::Interrupted;
+    if (!Error && D.K != VerifyDiagnostic::Warning &&
+        D.K != VerifyDiagnostic::BoundedSafe)
+      return "";
+    ObligationSource Source;
+    if (D.Result)
+      Source = D.Result->Source;
+    if (!Source.isValid())
+      Source = sourceOf(D.Loc.isValid() ? D.Loc : D.FunctionLoc,
+                        D.Span.getBegin(), D.Span.getEnd());
+    std::string Message = statusLine(D);
+    if (D.Result && D.Result->Status == VerifyStatus::Failed)
+      if (std::string Values = counterexampleText(*D.Result); !Values.empty())
+        Message += "\ncounterexample: " + Values;
+    for (const VerifyDiagnostic::RelatedPlace &Place : D.Related) {
+      Message += "\n" + Place.Message;
+      if (Place.Source.isValid())
+        Message += " (" + workspacePath(Place.Source.File) + ":" +
+                   std::to_string(Place.Source.Line) + ":" +
+                   std::to_string(Place.Source.Column) + ")";
+    }
+    for (const std::string &Note : D.Notes)
+      Message += "\n" + Note;
+    std::string Title = "cpp-verify";
+    if (D.K == VerifyDiagnostic::Unresolved && D.Result)
+      Title +=
+          ": unresolved (" + verifyReasonCode(D.Result->Reason).str() + ")";
+    else if (D.Result && D.Result->ObligationType)
+      Title +=
+          std::string(": ") + obligationKindName(*D.Result->ObligationType);
+    return githubCommand(Error ? "error" : "warning", Source, Title, Message);
+  }
+
+  /// Errors and warnings print as Clang prints its diagnostics, with the
+  /// source they are about; other results as their status line.
   void printDiagnostic(const VerifyDiagnostic &D, llvm::raw_ostream &OS) const {
     if (Opts.Diagnostics == DiagnosticFormat::Json) {
       printJSONDiagnostic(D, OS);
       return;
     }
-    const std::pair<SourceLocation, std::string> *Instantiation =
-        instantiationOf(D);
-    const std::string InstantiationNote =
-        Instantiation ? "in instantiation of " + Instantiation->second + " '" +
-                            D.FunctionName + "' requested here"
-                      : std::string();
-    if (D.K == VerifyDiagnostic::Error && D.Span.isValid()) {
+    printTextDiagnostic(D, OS);
+    if (Opts.Diagnostics == DiagnosticFormat::GitHub)
+      OS << githubAnnotation(D);
+  }
+
+  void printTextDiagnostic(const VerifyDiagnostic &D,
+                           llvm::raw_ostream &OS) const {
+    const std::vector<VerifyDiagnosticPart> Parts = partsOf(D);
+    if (D.K == VerifyDiagnostic::Error || D.K == VerifyDiagnostic::Warning) {
       DiagnosticOptions DiagOpts;
       DiagOpts.ShowPresumedLoc = true;
       TextDiagnostic Text(OS, Ctx.getLangOpts(), DiagOpts);
-      Text.emitDiagnostic(
-          FullSourceLoc(D.Span.getBegin(), Ctx.getSourceManager()),
-          DiagnosticsEngine::Error, D.Message,
-          CharSourceRange::getTokenRange(D.Span), {});
-      if (Instantiation)
+      for (const VerifyDiagnosticPart &Part : Parts) {
+        llvm::SmallVector<CharSourceRange, 1> Ranges;
+        if (Part.Range.isValid())
+          Ranges.push_back(CharSourceRange::getTokenRange(Part.Range));
         Text.emitDiagnostic(
-            FullSourceLoc(Instantiation->first, Ctx.getSourceManager()),
-            DiagnosticsEngine::Note, InstantiationNote, {}, {});
+            Part.Loc.isValid() ? FullSourceLoc(Part.Loc, Ctx.getSourceManager())
+                               : FullSourceLoc(),
+            Part.Level, Part.Message, Ranges, {});
+      }
       return;
     }
-    if (D.Loc.isValid()) {
-      PresumedLoc PLoc = Ctx.getSourceManager().getPresumedLoc(D.Loc);
-      if (PLoc.isValid())
-        OS << PLoc.getFilename() << ":" << PLoc.getLine() << ":"
-           << PLoc.getColumn() << ": ";
+    for (const VerifyDiagnosticPart &Part : Parts) {
+      if (Part.Loc.isValid()) {
+        PresumedLoc PLoc = Ctx.getSourceManager().getPresumedLoc(Part.Loc);
+        if (PLoc.isValid())
+          OS << PLoc.getFilename() << ":" << PLoc.getLine() << ":"
+             << PLoc.getColumn() << ": ";
+      }
+      OS << (Part.Level == DiagnosticsEngine::Note ? "note: " : "")
+         << Part.Message << "\n";
     }
-    switch (D.K) {
-    case VerifyDiagnostic::Lowered:
-      OS << "Lowered: " << D.Message << "\n";
-      break;
-    case VerifyDiagnostic::Verified:
-      OS << "Verified: " << D.Message << "\n";
-      break;
-    case VerifyDiagnostic::Error:
-      OS << "error: " << D.Message << "\n";
-      break;
-    case VerifyDiagnostic::Unresolved:
-      OS << "Unresolved: " << D.Message << "\n";
-      if (D.Result)
-        for (const QuantifierProfileEntry &Entry : D.Result->QuantifierProfile)
-          OS << "note: the quantifier at " << Entry.Line << ":" << Entry.Column
-             << " was instantiated " << Entry.Instances
-             << " times, up to generation " << Entry.MaxGeneration << "\n";
-      break;
-    case VerifyDiagnostic::Interrupted:
-      OS << "Interrupted: " << D.Message << "\n";
-      break;
-    case VerifyDiagnostic::BoundedSafe:
-      OS << "BoundedSafe: " << D.Message << "\n";
-      break;
-    case VerifyDiagnostic::Exported:
-      OS << "Exported: " << D.Message;
-      if (D.LeanAutomatic && D.Result)
-        OS << " (cppverify_auto proved " << D.LeanAutomatic << " of "
-           << std::set<std::string>(D.Result->LeanGoals.begin(),
-                                    D.Result->LeanGoals.end())
-                  .size()
-           << " goals)";
-      OS << "\n";
-      break;
-    case VerifyDiagnostic::Certified:
-      OS << "Certified: " << D.Message << "\n";
-      break;
-    case VerifyDiagnostic::MixedProof:
-      OS << "Proved (" << D.Result->BackendName << "): " << D.Message << "\n";
-      break;
-    case VerifyDiagnostic::Trusted:
-      OS << "Trusted: " << D.Message << "\n";
-      break;
-    case VerifyDiagnostic::Warning:
-      OS << "warning: " << D.Message << "\n";
-      break;
-    }
-    if (Instantiation) {
-      PresumedLoc PLoc =
-          Ctx.getSourceManager().getPresumedLoc(Instantiation->first);
-      if (PLoc.isValid())
-        OS << PLoc.getFilename() << ":" << PLoc.getLine() << ":"
-           << PLoc.getColumn() << ": ";
-      OS << "note: " << InstantiationNote << "\n";
-    }
-    for (const std::string &Note : D.Notes)
-      OS << "note: " << Note << "\n";
   }
 };
 

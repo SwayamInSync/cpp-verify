@@ -7,12 +7,22 @@ that as actionable feedback on the code, the contracts, or both.
 Understanding the report
 ------------------------
 
-Diagnostics name the source-anchored obligation that failed and often include a
-**counterexample**: typed source-name values that violate the claim, followed by
-guarded branch, call, loop, heap/provenance, lifetime, and return events. Use
-those values and events to see which assumption or branch is wrong. Values that
-Z3 does not determine remain ``<unknown>``; CppVerify does not complete the
-model by inventing them.
+A failure is a compiler error at the check that fails, with its kind
+(``[postcondition]``, ``[overflow]``, ...) and the source line, the part that
+fails underlined: the conjunct of a clause that is false, the operation that
+overflows, or for a callee's precondition the call, with a note at the
+callee's clause that does not hold there (see
+:doc:`../../language/tooling`). Its notes give the **counterexample**: first the values
+by their source names, each variable with the values it takes along the path
+(``c = 0 -> 1``), then each step of that path at its line, as Clang's static
+analyzer reports a path: the branches it takes, the calls with their
+arguments, the loops it enters and leaves, the memory it writes, the objects
+it creates and ends, and the value it returns. Use those values and steps to
+see which assumption or branch is wrong. Values that the solver's model does
+not determine remain ``<unknown>``; CppVerify does not complete the model by
+inventing them.
+``clang++ -fverify-contracts`` reports the same errors and notes as its own
+diagnostics.
 
 For editor, CI, and agent integration, run:
 
@@ -20,14 +30,22 @@ For editor, CI, and agent integration, run:
 
    cpp-verify --diagnostics-format=json file.cpp
 
-Each verification result is one ``cppverify.diagnostic/1`` JSON object with a
-stable reason code, backend and optional BMC bound, inclusive source range,
-obligation ID/kind, typed model values, and trace. An unknown model value is
-JSON ``null``. An undetermined path guard is ``"active": null`` rather than an
-arbitrary branch choice. Command-line and frontend parse errors may still be
-text, and IR dumps intentionally make the stream mixed. Malformed display bytes
-are replaced with the Unicode replacement character, so JSON output remains
-valid UTF-8.
+Each verification result is one ``cppverify.diagnostic/2`` JSON object with a
+stable reason code, backend and optional BMC bound, the function and where it
+is declared, the source range of the failing expression (to the column after
+its last character), obligation ID/kind, typed model values, the
+counterexample and each step of the path as the text prints them, and the
+trace. An unknown model value is JSON ``null``. An undetermined path guard is
+``"active": null`` rather than an arbitrary branch choice. The compiler's own
+errors and warnings are records too, and a summary record ends the run. IR
+dumps intentionally make the stream mixed. Malformed display bytes are
+replaced with the Unicode replacement character, so JSON output remains valid
+UTF-8.
+
+In a GitHub workflow, ``--diagnostics-format=sarif`` writes a SARIF log that
+``github/codeql-action/upload-sarif`` turns into code-scanning alerts, each
+failure with its path, and ``--diagnostics-format=github`` annotates the
+failing lines of a pull request directly (see :doc:`../../language/tooling`).
 
 A counterexample after a loop is only as real as the loop's invariants. At
 the loop, the verifier knows what the invariants say and nothing else, so a
@@ -52,7 +70,17 @@ loop with too weak an invariant fails a correct function:
 
 .. code-block:: text
 
-   count_up.cpp:5:23: error: verification failed: count_up [fn_...::postcondition@5:23] (counterexample: result [ssa=__result_1] [type=i32] = 1, c [ssa=c_1] [type=i32] = 0, c [ssa=c_2] [type=i32] = 1, c [ssa=c_3] [type=i32] = 1, n [ssa=n_0] [type=i32] = 0; trace: loop.entry@8:3 -> loop.exit@8:3 -> return.return@13:3 value=1) [backend=z3] [reason=counterexample]
+   count_up.cpp:5:23: error: verification failed: count_up [postcondition] [backend=z3] [reason=counterexample]
+       5 |   cv::post(cv::result == n)
+         |            ~~~~~~~~~~~^~~~
+   count_up.cpp:5:23: note: counterexample: n = 0, c = 0 -> 1, result = 1
+   count_up.cpp:8:3: note: enters the loop
+       8 |   while (c < n)
+         |   ^
+   count_up.cpp:8:3: note: leaves the loop
+   count_up.cpp:13:3: note: returns 1
+      13 |   return c;
+         |   ^
    note: the counterexample's state at the loop at 8:3 is any state its invariants allow, not necessarily one an execution reaches
    note: no execution fails this check: every loop ends within 5 iterations, and unrolling proves it there; the loops' invariants are too weak for an unbounded proof
 
@@ -137,6 +165,14 @@ true on the cycle, so no unfolding settles it, and a postcondition
 ``backend.invalid-result`` is different: the solver's answer contradicts the
 query or a fact the verifier gave it, which is a solver fault and says
 nothing about your program.
+
+To report such a fault, or a query a solver takes too long on, to the
+solver's developers, run with ``--dump-smt2=DIR``: every query is written to
+``DIR`` as a script that ``z3 FILE`` or ``cvc5 FILE`` runs on its own, named
+by the function and the obligation (``clamp-14e9c9/postcondition-5-23...``),
+and ending with the answer cpp-verify got (see
+:doc:`../../language/tooling`). The file is the report: it needs neither
+cpp-verify nor your source.
 
 Every reason code at a glance
 -----------------------------
@@ -391,7 +427,13 @@ be its cause:
 
 .. code-block:: text
 
-   vacuity.cpp:2:28: error: verification failed: contradictory [...::postcondition@2:28] (...) [backend=z3] [reason=counterexample]
+   vacuity.cpp:2:42: error: verification failed: contradictory [postcondition] [backend=z3] [reason=counterexample]
+       2 |   cv::post(cv::result == x && cv::result == x + 1)   // no result satisfies this
+         |                               ~~~~~~~~~~~^~~~~~~~
+   vacuity.cpp:2:42: note: counterexample: x = 2147483647, result = 2147483647
+   vacuity.cpp:4:3: note: returns 2147483647
+       4 |   return x;
+         |   ^
    Unresolved: relies_on_it [backend=z3] [reason=callee.contract] (relies on the contract of contradictory, which is not established)
 
 ``relies_on_it`` proves its postcondition only because the contract of

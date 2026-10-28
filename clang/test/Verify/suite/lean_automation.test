@@ -74,7 +74,7 @@
 # SLOW: automation: cppverify_auto 3 did not prove it within 3 s
 # SLOW: {{^}}  sorry{{$}}
 
-# JSON: "function":"next","lean_automatic":3,{{.*}}"status":"exported"
+# JSON: "function":"next",{{.*}}"lean_automatic":3,{{.*}}"status":"exported"
 
 # CERTIFY: Unresolved: lean obligation: a_slow (Lean certification failed: the proof of {{.*}}::postcondition@2:37: {{.*}}declaration uses `sorry`
 # CERTIFY-NEXT: Certified: next [backend=Lean]

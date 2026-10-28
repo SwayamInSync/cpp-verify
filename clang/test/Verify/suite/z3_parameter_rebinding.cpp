@@ -45,7 +45,8 @@ int relies_on_force_zero(int value)
   return 0;
 }
 
-// VERIFY-DAG: error: verification failed: force_zero {{.*}}(counterexample: value [ssa=value_0] [type=i32] = {{-?[1-9][0-9]*}}
+// VERIFY-DAG: error: verification failed: force_zero {{.*}}
+// VERIFY-DAG: note: counterexample: {{.*}}value = {{-?[1-9][0-9]*}}{{( ->|,|$)}}
 // VERIFY-DAG: error: verification failed: proof_force_zero
 // VERIFY-DAG: Verified: doubled
 // VERIFY-DAG: Verified: valid_after_rebinding

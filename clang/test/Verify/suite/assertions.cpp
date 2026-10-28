@@ -39,7 +39,8 @@ int checked_wrong(int x)
   assert(x > 0 && "x must be positive");
   return x;
 }
-// CHECK-DAG: error: verification failed: checked_wrong [{{.*}}::unreachable@[[@LINE-3]]:3] (counterexample: x [ssa=x_0] [type=i32] = {{-?[0-9]+}}{{.*}}[reason=counterexample]
+// CHECK-DAG: :[[@LINE-3]]:3: error: verification failed: checked_wrong [unreachable] {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}x = {{-?[0-9]+}}{{( ->|,|$)}}
 // NDEBUG-DAG: Verified: checked_wrong [backend=z3]
 
 // MSVC's assert expands to a || whose right operand calls _wassert, which
@@ -52,7 +53,7 @@ int msvc_assert(int x)
   (void)((!!(x > 0)) || (_wassert(L"x > 0", L"assertions.cpp", 1), 0));
   return x;
 }
-// CHECK-DAG: error: verification failed: msvc_assert [{{.*}}::unreachable@[[@LINE-3]]:{{.*}}[reason=counterexample]
+// CHECK-DAG: :[[@LINE-3]]:{{[0-9]+}}: error: verification failed: msvc_assert [unreachable]{{.*}}[reason=counterexample]
 
 // After assert(c), c holds.
 int positive_after(int x)
@@ -62,8 +63,8 @@ int positive_after(int x)
   assert(x > 0);
   return x;
 }
-// CHECK-DAG: error: verification failed: positive_after [{{.*}}::unreachable@[[@LINE-3]]:3]{{.*}}[reason=counterexample]
-// NDEBUG-DAG: error: verification failed: positive_after [{{.*}}::postcondition@{{.*}}[reason=counterexample]
+// CHECK-DAG: :[[@LINE-3]]:3: error: verification failed: positive_after [unreachable]{{.*}}[reason=counterexample]
+// NDEBUG-DAG: error: verification failed: positive_after [postcondition]{{.*}}[reason=counterexample]
 
 int positive_after_check(int x)
   cv::pre(x > 0)
@@ -81,7 +82,8 @@ int aborts(int x)
     abort();
   return x;
 }
-// CHECK-DAG: error: verification failed: aborts [{{.*}}::unreachable@[[@LINE-3]]:5] (counterexample: x [ssa=x_0] [type=i32] = {{-[0-9]+}}{{.*}}[reason=counterexample]
+// CHECK-DAG: :[[@LINE-3]]:5: error: verification failed: aborts [unreachable] {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}x = {{-[0-9]+}}{{( ->|,|$)}}
 
 int aborts_guarded(int x)
   cv::pre(x >= 0)
@@ -103,7 +105,8 @@ int exits(int code)
     std::terminate();
   return code;
 }
-// CHECK-DAG: error: verification failed: exits [{{.*}}::unreachable@[[@LINE-3]]:5] (counterexample: code [ssa=code_0] [type=i32] = {{[0-9]+}}{{.*}}[reason=counterexample]
+// CHECK-DAG: :[[@LINE-3]]:5: error: verification failed: exits [unreachable] {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}code = {{[0-9]+}}{{( ->|,|$)}}
 
 int classify(int x)
   cv::pre(0 <= x && x < 3)
@@ -131,7 +134,8 @@ int classify_wrong(int x)
     return 3;
   __builtin_trap();
 }
-// CHECK-DAG: error: verification failed: classify_wrong [{{.*}}::unreachable@[[@LINE-2]]:3] (counterexample: x [ssa=x_0] [type=i32] = 3{{.*}}[reason=counterexample]
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: classify_wrong [unreachable] {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}x = 3{{( ->|,|$)}}
 
 // An assumption is proved where it stands, then holds.
 int assumed(int x)
@@ -150,7 +154,8 @@ int assumed_wrong(int x)
   [[assume(x > 0)]];
   return x;
 }
-// CHECK-DAG: error: verification failed: assumed_wrong [{{.*}}::assertion@[[@LINE-3]]:{{.*}}x [ssa=x_0] [type=i32] = {{-?[0-9]+}}{{.*}}[reason=counterexample]
+// CHECK-DAG: :[[@LINE-3]]:{{[0-9]+}}: error: verification failed: assumed_wrong [assertion] {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}x = {{-?[0-9]+}}{{( ->|,|$)}}
 
 // A discarded value is computed, with its checks; the operands of a
 // discarded ||, &&, or ?: run on their paths.
@@ -161,7 +166,7 @@ int discarded(int x)
   x + 1;
   return 0;
 }
-// CHECK-DAG: error: verification failed: discarded [{{.*}}::overflow@[[@LINE-3]]:{{.*}}[reason=counterexample]
+// CHECK-DAG: :[[@LINE-3]]:{{[0-9]+}}: error: verification failed: discarded [overflow]{{.*}}[reason=counterexample]
 
 int or_else(int x)
   cv::post(cv::result > 0)
@@ -169,7 +174,7 @@ int or_else(int x)
   x > 0 || (abort(), 0);
   return x;
 }
-// CHECK-DAG: error: verification failed: or_else [{{.*}}::unreachable@[[@LINE-3]]:{{.*}}[reason=counterexample]
+// CHECK-DAG: :[[@LINE-3]]:{{[0-9]+}}: error: verification failed: or_else [unreachable]{{.*}}[reason=counterexample]
 
 int or_else_guarded(int x)
   cv::pre(x > 0)
@@ -205,7 +210,7 @@ int use_half_wrong(int x)
 {
   return half(x);
 }
-// CHECK-DAG: error: verification failed: use_half_wrong [{{.*}}::unreachable@[[@LINE-2]]:{{.*}}[reason=counterexample]
+// CHECK-DAG: :[[@LINE-2]]:{{[0-9]+}}: error: verification failed: use_half_wrong [unreachable]{{.*}}[reason=counterexample]
 
 int use_quarter_wrong(int x)
   cv::pre(-1000 < x && x < 1000 && x % 4 == 2)
@@ -213,7 +218,7 @@ int use_quarter_wrong(int x)
 {
   return quarter(x);
 }
-// CHECK-DAG: error: verification failed: use_quarter_wrong [{{.*}}::unreachable@[[@LINE-2]]:{{.*}}[reason=counterexample]
+// CHECK-DAG: :[[@LINE-2]]:{{[0-9]+}}: error: verification failed: use_quarter_wrong [unreachable]{{.*}}[reason=counterexample]
 // NDEBUG-DAG: Verified: use_quarter_wrong [backend=z3]
 
 // The requirement holds on the helper's path to the call that does not
@@ -244,7 +249,8 @@ int use_div_wrong(int a, int b)
 {
   return checked_div(a, b);
 }
-// CHECK-DAG: error: verification failed: use_div_wrong [{{.*}}::unreachable@[[@LINE-2]]:{{.*}}b [ssa=b_0] [type=i32] = 0{{.*}}[reason=counterexample]
+// CHECK-DAG: :[[@LINE-2]]:{{[0-9]+}}: error: verification failed: use_div_wrong [unreachable] {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}b = 0{{( ->|,|$)}}
 
 int use_positive(int x)
   cv::pre(x > 0)
@@ -277,7 +283,7 @@ uint64_t alignTo_zero(uint64_t Value)
 {
   return alignTo(Value, 0);
 }
-// CHECK-DAG: error: verification failed: alignTo_zero [{{.*}}::precondition@[[@LINE-2]]:{{.*}}[reason=counterexample]
+// CHECK-DAG: :[[@LINE-2]]:{{[0-9]+}}: error: verification failed: alignTo_zero [precondition]{{.*}}[reason=counterexample]
 
 inline constexpr uint64_t maxUIntN(uint64_t N)
   cv::pre(N <= 64)
@@ -319,12 +325,13 @@ int64_t SignExtend64_wide(uint64_t X, unsigned B)
     return 0;
   return int64_t(X << (64 - B)) >> (64 - B);
 }
-// CHECK-DAG: error: verification failed: SignExtend64_wide [{{.*}}::unreachable@[[@LINE-5]]:3] (counterexample: {{.*}}B [ssa=B_0] [type=u32] = {{[0-9]+}}{{.*}}[reason=counterexample]
-// NDEBUG-DAG: error: verification failed: SignExtend64_wide [{{.*}}::shift@{{.*}}[reason=counterexample]
+// CHECK-DAG: :[[@LINE-5]]:3: error: verification failed: SignExtend64_wide [unreachable] {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}B = {{[0-9]+}}{{( ->|,|$)}}
+// NDEBUG-DAG: error: verification failed: SignExtend64_wide [shift]{{.*}}[reason=counterexample]
 
 // BMC: Verified: checked [backend=bmc, bound=0]
-// BMC: error: verification failed: checked_wrong [{{.*}}::unreachable@
-// BMC: error: verification failed: aborts [{{.*}}::unreachable@
+// BMC: error: verification failed: checked_wrong [unreachable]
+// BMC: error: verification failed: aborts [unreachable]
 
 // VCR-LABEL: fn aborts
 // VCR:         {{^ +}}if{{$}}

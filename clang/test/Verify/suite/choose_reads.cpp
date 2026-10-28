@@ -61,4 +61,4 @@ void set_inside(int *a, int n, int x)
 {
   a[0] = x == 0 ? 1 : 0;
 }
-// CHECK-DAG: error: verification failed: set_inside [{{.*}}::postcondition@[[@LINE-4]]:30]
+// CHECK-DAG: :[[@LINE-4]]:30: error: verification failed: set_inside [postcondition]

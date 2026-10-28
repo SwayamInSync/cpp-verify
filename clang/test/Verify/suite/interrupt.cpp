@@ -66,7 +66,7 @@ cppverify::spec int cube(int x) { return x * x * x; }
 // CHECK-NEXT: Summary: {{.*}}
 // CHECK-NEXT: exit: 130
 
-// JSON: "function":"cubes","message":"cubes","reason":"interrupted","schema":"cppverify.diagnostic/1","severity":"error","source":{{.*}}"status":"unresolved"
+// JSON: "function":"cubes",{{.*}}"message":"cubes","reason":"interrupted","schema":"cppverify.diagnostic/2","severity":"error","source":{{.*}}"status":"unresolved"
 // JSON: exit: 130
 
 // Replay stops the same way.
