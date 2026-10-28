@@ -187,12 +187,17 @@ C++ feature boundaries
        specialization the translation unit instantiates
        (:doc:`functions-loops`, :doc:`structs`),
        overloads, namespaces, contracts, direct calls anywhere in an
-       expression or condition (:doc:`functions-loops`), and
+       expression or condition (:doc:`functions-loops`), calls of functions
+       without contracts, whose bodies are inlined (:doc:`functions-loops`),
+       and
        direct and mutual recursion, also through stores to pointer and
        reference parameters and through automatic objects, with mutual
        recursion among functions of one kind (spec, proof, or executable).
-     - Virtual functions, member functions of classes with bases,
-       destructors, delegating constructors and the other constructors
+     - Functions without contracts that are recursive, return a record by
+       value, allocate, or whose loop invariants use ``cppverify::old``
+       (each needs a contract), virtual functions, member functions of
+       classes with bases, destructors, delegating constructors and the
+       other constructors
        :doc:`structs` lists, conversion functions,
        templates and members of class templates that nothing instantiates
        (reported), variadics, indirect calls,
@@ -690,8 +695,10 @@ integers (:doc:`functions-loops`), and any other of its functions is an
 error naming it. Of the C library it knows ``abs`` and the memory functions
 ``memcpy``, ``memmove``, ``memset``, and ``memcmp`` over integers, through
 trusted models in ``<cppverify.h>`` that every proof using one names
-(:doc:`pointers`). An uncontracted call fails closed; a contract is assumed
-only when it is marked ``[[cppverify::trusted]]``, or, in one run over
+(:doc:`pointers`). A call of a function with a body and no contract runs
+that body, inlined (:doc:`functions-loops`); a call of one without a body
+fails closed; a contract is assumed only when it is marked
+``[[cppverify::trusted]]``, or, in one run over
 several files, once the verification of its definition in another of them
 establishes it, and for files verified apart once
 ``cpp-verify --check-contracts`` finds it established
