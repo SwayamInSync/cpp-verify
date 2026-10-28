@@ -173,9 +173,9 @@ since the callee may read it first.
    Verified: copy_to [backend=z3]
    Verified: seven [backend=z3]
    Verified: five_or_zero [backend=z3]
-   out.cpp:48:3: error: verification failed: read_after_miss [initialization] [backend=z3] [reason=counterexample]
+   out.cpp:48:10: error: verification failed: read_after_miss [initialization] [backend=z3] [reason=counterexample]
       48 |   return a;
-         |   ^
+         |          ^
    out.cpp:46:3: note: creates a local object at address 4
       46 |   int a;
          |   ^
@@ -184,10 +184,10 @@ since the callee may read it first.
          |   ^
    Verified: copied [backend=z3]
    out.cpp:65:3: Unresolved: copied_garbage [backend=z3] [reason=construct.unsupported] (the verifier cannot model a construct here: binding a reference or pointer parameter to storage that is not initialized, which the callee may read before writing it)
-   out.cpp:74:3: error: verification failed: read_too_early [initialization] [backend=z3] [reason=counterexample]
+   out.cpp:74:14: error: verification failed: read_too_early [initialization] [backend=z3] [reason=counterexample]
       74 |   int copy = r;
-         |   ^
-   out.cpp:74:3: note: counterexample: &r = 4
+         |              ^
+   out.cpp:74:14: note: counterexample: &r = 4
    out.cpp:72:3: note: creates a local object at address 4
       72 |   int a;
          |   ^
@@ -598,10 +598,10 @@ Each index must lie in its array, an obligation of kind ``bounds``:
 
    Verified: popcount8 [backend=z3]
    Verified: hex_digit [backend=z3]
-   tables.cpp:21:3: error: verification failed: outside [bounds] [backend=z3] [reason=counterexample]
+   tables.cpp:21:10: error: verification failed: outside [bounds] [backend=z3] [reason=counterexample]
       21 |   return NibbleBits[x];
-         |   ^
-   tables.cpp:21:3: note: counterexample: x = -1
+         |          ^
+   tables.cpp:21:10: note: counterexample: x = -1
 
 The verifier gives each table to the solver as a function of the index,
 defined by a balanced tree of comparisons, so a 256-entry table is eight
@@ -711,10 +711,10 @@ with one null operand is undefined and fails:
 .. code-block:: text
 
    Verified: two_nulls [backend=z3]
-   nulls.cpp:11:3: error: verification failed: one_null [pointer-difference] [backend=z3] [reason=counterexample]
+   nulls.cpp:11:12: error: verification failed: one_null [pointer-difference] [backend=z3] [reason=counterexample]
       11 |   return p - q;
-         |   ^
-   nulls.cpp:11:3: note: counterexample: p = 0, q = 1
+         |            ^
+   nulls.cpp:11:12: note: counterexample: p = 0, q = 1
 
 Before 0.2, ``two_nulls`` failed the same way.
 
@@ -1015,7 +1015,9 @@ where it points; the elements must lie in the objects it may address:
       20 |   return first(q, 3);
          |   ^
    slices.cpp:20:3: note: counterexample: a = 1, q = 9
-   slices.cpp:20:3: note: calls first(9, 3)
+   slices.cpp:20:10: note: calls first(9, 3)
+      20 |   return first(q, 3);
+         |          ^
 
 ``third`` passes three elements from ``a + 2``, of which only two are in
 ``a``: with ``a`` at address 1, ``q`` is 9, and the call would read up to
