@@ -44,6 +44,22 @@ public:
     last = 0;
   }
 
+  // Empties another meter: while its loop runs, that meter's last may
+  // exceed its total, since its loop is the class's own code too.
+  void empty(Meter &other)
+    cv::pre(reading(&other) <= 100)
+    cv::post(reading(&other) == 0)
+    cv::modifies(other)
+  {
+    while (other.total > 0)
+      cv::invariant(0 <= other.total && other.total <= 100)
+      cv::decreases(other.total)
+    {
+      other.total = other.total - 1;
+    }
+    other.last = 0;
+  }
+
   friend cv::spec int reading(const Meter *m);
 
 private:
@@ -131,6 +147,7 @@ int kept()
 
 // CHECK-DAG: Verified: idle [backend=z3]
 // CHECK-DAG: Verified: Meter::recount [backend=z3]
+// CHECK-DAG: Verified: Meter::empty [backend=z3]
 // CHECK-DAG: Verified: count_to [backend=z3]
 // CHECK-DAG: Verified: fill [backend=z3]
 // CHECK-DAG: Verified: drain [backend=z3]
