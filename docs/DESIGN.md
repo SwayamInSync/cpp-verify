@@ -1648,8 +1648,21 @@ it is formed from (as for a member of a pointee, 3b) and carries the
 global's origin, so it may be passed as a slice. A spec cannot read a
 mutable global and ghost code cannot write one. Globals that are
 themselves pointers, globals of a class with a type invariant (nothing would maintain it at
-every function's boundary), thread-local and volatile globals, and mutable
-static locals fail closed.
+every function's boundary), and thread-local and volatile globals fail
+closed.
+
+A static local with a constant initializer is such an object that only its
+function names, so it is that function's private state, which no contract
+can mention: its value at entry is whatever earlier calls left; the function
+writes it without a frame; and a call changes it exactly when the callee may
+reach the function, through the call graph (recursion, a callback) or an
+inlined helper whose static it is. Callers state nothing about it, and a
+call of any other function keeps it. Frama-C renames a static local to a
+global that no `assigns` can name, so a function that writes one cannot
+state its frame; treating it as private state keeps frames exact and
+callers unaware of it. Its address never escapes (a pointer to or into it is
+rejected), which is what makes the call graph a sound bound on who changes
+it, and an initializer that runs code at the first call is rejected.
 
 ### 4. `cppverify::modifies(...)` frame condition
 
