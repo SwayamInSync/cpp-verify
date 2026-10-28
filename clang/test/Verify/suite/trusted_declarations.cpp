@@ -44,7 +44,7 @@ int uses_above(int x)
   return above(x);
 }
 
-// CHECK: trusted_declarations.cpp:13:28: error: verification failed: clamp100 [postcondition]
+// CHECK: trusted_declarations.cpp:13:42: error: verification failed: clamp100 [postcondition]
 // CHECK: note: counterexample: {{.*}}result = 101{{( ->|,|$)}}
 // CHECK: Unresolved: scaled [backend=z3] [reason=callee.contract] (relies on the contract of clamp100, which is not established)
 // CHECK: Trusted: halved (contract assumed, not verified)
