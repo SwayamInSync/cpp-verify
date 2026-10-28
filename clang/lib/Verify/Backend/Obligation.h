@@ -285,6 +285,7 @@ enum class ObligationKind {
   Deallocation,
   MissingReturn,
   Unreachable,
+  BuiltinArgument,
   Unsupported
 };
 
