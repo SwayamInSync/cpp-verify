@@ -59,7 +59,7 @@ fi
 cat "$WORK/bad.txt"
 grep -q "verification failed: twice" "$WORK/bad.txt" ||
   fail "the incorrect program's failure is missing"
-grep -Eq "counterexample: x( \[[^]]*\])* = " "$WORK/bad.txt" ||
+grep -Eq "counterexample: (.*, )?x( \[[^]]*\])* = " "$WORK/bad.txt" ||
   fail "the incorrect program's counterexample is missing"
 
 if "$BIN/cpp-verify" --diagnostics-format=json "$WORK/bad.cpp" \
