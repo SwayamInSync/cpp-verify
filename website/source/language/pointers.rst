@@ -636,6 +636,67 @@ pointer is null or an extent is empty, and every caller must prove that. An
 Addresses are reasoned about as mathematical integers, so range conditions like
 the non-overlap above are exact (no wraparound).
 
+The C library's memory functions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``memcpy``, ``memmove``, ``memset``, and ``memcmp`` (and ``std::memcpy``
+and the others, and their ``__builtin_`` forms) work on whole objects of an
+integer, enumeration, or ``bool`` type: a call whose pointers, as written
+before their conversion to ``void *``, address objects of one size, with a
+size of ``k * sizeof(T)`` bytes, is a call of the function's model for ``T``
+with ``k``. The models are declarations in ``<cppverify.h>`` (namespace
+``cppverify::model``), with contracts:
+
+- ``memcpy(d, s, k)``: ``d`` and ``s`` each point to ``k`` objects, which do
+  not overlap (as every two pointer parameters of which one is mutable); it
+  writes ``d[0 : k]``, and each ``d[i]`` is the ``s[i]`` of before the call;
+- ``memmove``: the same, and the two may overlap;
+- ``memset(d, c, n)``: each object is the byte ``(unsigned char)c`` repeated,
+  ``-1`` for ``memset(a, 0xff, ...)`` of ``int``; of ``bool``, whose only
+  values are 0 and 1, it is not modeled;
+- ``memcmp``: 0 exactly when the objects are equal; of bytes, negative
+  exactly when the first difference is smaller, as ``unsigned char``. Of
+  wider objects that depends on the byte order, and is not modeled.
+
+The models are trusted, as the C library is: a proof that uses one names it.
+
+.. code-block:: cpp
+
+   #include <cstring>
+
+   void copy(int *dst, const int *src, int n)
+     cv::pre(cv::valid(dst, n) && cv::valid(src, n) && 0 <= n && n <= 1000)
+     cv::modifies(dst[0 : n])
+     cv::post(cv::forall(k, 0, n, dst[k] == src[k]))
+   {
+     memcpy(dst, src, n * sizeof(int));
+   }
+
+   bool same(const int *a, const int *b, int n)
+     cv::pre(cv::valid(a, n) && cv::valid(b, n) && 0 <= n && n <= 1000)
+     cv::post(cv::result == cv::forall(k, 0, n, a[k] == b[k]))
+   {
+     return memcmp(a, b, n * sizeof(int)) == 0;
+   }
+
+.. code-block:: text
+
+   Verified: copy [backend=z3] [trusts=memcpy]
+   Verified: same [backend=z3] [trusts=memcmp]
+
+A copy whose ranges overlap fails the call's ``aliasing`` check, one past the
+end of an extent its ``precondition``, and a size that splits an object
+(``memcpy(d, s, 6)`` of ``int``) is defined C++ that the verifier, which keeps
+one value per object, does not represent: ``construct.unsupported``. Records
+and pointers are not modeled yet (``memcpy of 'Pt *' and 'const Pt *' is
+unsupported``), nor are the string functions (``strlen``, ``strcmp``).
+
+``abs``, ``labs``, ``llabs``, and ``std::abs`` of an integer are their
+definition, ``x < 0 ? -x : x`` in the parameter's type: ``abs(INT_MIN)`` is
+an ``overflow``, in a contract too. In a spec, whose integers are
+mathematical, it is the absolute value, so a spec's ``abs(-2147483648)`` is
+``2147483648``.
+
 Same-array pointer difference
 -----------------------------
 
