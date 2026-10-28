@@ -3804,6 +3804,12 @@ public:
             CopiesHold &= Result.Status == VerifyStatus::Verified;
           }
           Unrolled |= Copies;
+          // Unrolled once, every loop body holds a copy of each of its
+          // checks, and a check after a loop has one from no iteration on;
+          // a failure without a copy by then is of an invariant or a
+          // measure, which unrolling drops at every bound.
+          if (Bound >= 1 && !Unrolled)
+            return Notes;
           if (!CopiesHold)
             return Notes;
           if (Copies && Unwound) {
