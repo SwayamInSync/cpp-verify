@@ -452,8 +452,8 @@ void set_if(int &x, bool c)
   if (c)
     x = 1;
 }
-// CHECK: :[[@LINE-5]]:14: error: verification failed: set_if [initialization]
-// NOUB: :[[@LINE-6]]:14: error: verification failed: set_if [initialization]
+// CHECK: :[[@LINE-5]]:12: error: verification failed: set_if [initialization]
+// NOUB: :[[@LINE-6]]:12: error: verification failed: set_if [initialization]
 
 // A loop writes on no path known before it runs.
 void zero_each(int &x, int n)
