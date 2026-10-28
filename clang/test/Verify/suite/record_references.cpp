@@ -203,7 +203,7 @@ void put_at(Ring &r, int i, int v)
 {
   r.buf[i] = v;
 }
-// CHECK-DAG: :[[@LINE-2]]:12: error: verification failed: put_at [bounds]
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: put_at [bounds]
 
 void set_first(int *q, int v)
   cppverify::pre(cppverify::valid(q, 4))
@@ -249,7 +249,7 @@ int past_head(const Ring &r)
   cppverify::check(h[1] == 0);
   return 0;
 }
-// CHECK-DAG: :[[@LINE-3]]:3: error: verification failed: past_head [bounds]
+// CHECK-DAG: :[[@LINE-3]]:20: error: verification failed: past_head [bounds]
 
 // Local references to records bind a place as a parameter does.
 void local_deref(Counter *p)
@@ -328,7 +328,7 @@ int local_object_uninitialized()
   Counter &r = c;
   return r.limit;
 }
-// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: local_object_uninitialized [initialization]
+// CHECK-DAG: :[[@LINE-2]]:12: error: verification failed: local_object_uninitialized [initialization]
 
 // A type invariant holds for a record by value and for one a reference or a
 // pointer names, at every function boundary.
