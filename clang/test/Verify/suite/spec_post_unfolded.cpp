@@ -1,4 +1,4 @@
-// RUN: not %cpp-verify --timeout=10000 %s -- 2>&1 | FileCheck %s
+// RUN: not %cpp-verify --timeout=40000 %s -- 2>&1 | FileCheck %s
 // RUN: %cpp-verify --lower-only --dump-ir=4 %s -- 2>&1 | FileCheck %s --check-prefix=DUMP
 //
 // A spec's proved postcondition holds at every application the solver sees,
@@ -30,7 +30,10 @@ cppverify::proof void fibo_monotone(int i, int j)
 // DUMP: (>= (spec${{[^ ]+}} (- j_0 2)) 0)
 
 // The facts are theorems, so a false claim still fails with a certified
-// counterexample: fibo(-2) == fibo(-1) == 0.
+// counterexample: fibo(-2) == fibo(-1) == 0. Refinement and the search for
+// the ends of a domain, which find it, get 5% of --timeout, at least 500 ms;
+// on a slow or busy core (macOS runners, or one core shared with two busy
+// loops) 500 ms was too little in 2 of 4 runs, and the RUN line gives 2 s.
 cppverify::proof void fibo_strict(int i, int j)
   cppverify::pre(i < j)
   cppverify::post(fibo(i) < fibo(j))
