@@ -73,6 +73,42 @@ malformed process output, and unsupported encoding are ``Unresolved``. cvc5 is
 not vendored because it is an optional independent implementation; install it
 through the platform package manager or select an executable explicitly.
 
+A failure cvc5 finds reads like one Z3 finds. Its model is a counterexample
+only once the certifier has checked it against the true definitions, and the
+certifier then evaluates, in that model, the values of the source variables
+along the path and each step of the path to the failing check:
+
+.. code-block:: cpp
+
+   namespace cv = cppverify;
+
+   int clamp(int x)
+     cv::pre(x > -100 && x < 100)
+     cv::post(cv::result >= 0)
+   {
+     if (x < 0)
+       return x + 1;
+     return x;
+   }
+
+.. code-block:: text
+
+   clamp.cpp:5:23: error: verification failed: clamp [postcondition] [backend=cvc5] [reason=counterexample]
+       5 |   cv::post(cv::result >= 0)
+         |            ~~~~~~~~~~~^~~~
+   clamp.cpp:5:23: note: counterexample: x = -2, result = -1
+   clamp.cpp:7:3: note: takes the true branch
+       7 |   if (x < 0)
+         |   ^
+   clamp.cpp:8:5: note: returns -1
+       8 |     return x + 1;
+         |     ^
+
+The JSON record has the same ``counterexample``, ``model``, and ``trace``
+as Z3's, its variables in the same order, and so do SARIF, GitHub
+annotations, and archive replay with ``--backend=cvc5``. The values may
+differ from Z3's: each solver picks its own counterexample.
+
 Race mode trusts each solver alone, which is sound: a proof is a proof, and
 a counterexample is reported only once the certifier has checked it against
 the true definitions, whichever solver found it. The first decisive answer

@@ -15,8 +15,9 @@ by their source names, each variable with the values it takes along the path
 analyzer reports a path: the branches it takes, the calls with their
 arguments, the loops it enters and leaves, the memory it writes, the objects
 it creates and ends, and the value it returns. Use those values and steps to
-see which assumption or branch is wrong. Values that Z3 does not determine
-remain ``<unknown>``; CppVerify does not complete the model by inventing them.
+see which assumption or branch is wrong. Values that the solver's model does
+not determine remain ``<unknown>``; CppVerify does not complete the model by
+inventing them.
 ``clang++ -fverify-contracts`` reports the same errors and notes as its own
 diagnostics.
 

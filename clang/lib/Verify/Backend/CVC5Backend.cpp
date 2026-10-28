@@ -2809,6 +2809,8 @@ CVC5VerifyBackend::verifyQuery(const ObligationModule &Module,
           Result.Status = VerifyStatus::Failed;
           Result.Reason = VerifyReason::Counterexample;
           Result.CertifiedWith = std::move(Certified.Evidence);
+          describeCounterexample(Module, *Query, Candidate, Result,
+                                 checkLimits());
           return Result;
         }
       } else {
@@ -2876,6 +2878,8 @@ CVC5VerifyBackend::verifyQuery(const ObligationModule &Module,
       Result.Status = VerifyStatus::Failed;
       Result.Reason = VerifyReason::Counterexample;
       Result.CertifiedWith = Certified.Evidence;
+      describeCounterexample(Module, *Query, Candidate, Result,
+                             checkLimits());
       return Result;
     }
     if (Decision.Next == RefinementDecision::Action::Stop) {

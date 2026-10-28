@@ -291,7 +291,7 @@ int iterate(int n)
 // An archive keeps where each version is defined, so its replay lists the
 // same values.
 // REPLAY: error: verification failed: steps [postcondition]
-// REPLAY-NEXT: note: counterexample: x = {{9|10}}, y = 0 -> 1 -> 4, result = 4
+// REPLAY-NEXT: {{.*}}failure_notes.cpp:[[@LINE-274]]:23: note: counterexample: x = {{9|10}}, y = 0 -> 1 -> 4, result = 4
 
 // JSON: "function":"steps"{{.*}}{"name":"y","on_path":false,"sort":"i32",{{.*}}"ssa_name":"y_3","value":"0"}
 

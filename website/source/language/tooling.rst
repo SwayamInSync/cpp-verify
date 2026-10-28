@@ -747,7 +747,9 @@ Backend results are intentionally distinct. Z3 ``unsat`` reports ``Verified``;
 a ``sat`` model reports a failed source obligation once it is checked against
 the true definitions (otherwise ``Unresolved`` with a reason); timeout and
 ``unknown`` report ``Unresolved``. cvc5 follows the same mapping, and its models
-are checked the same way.
+are checked the same way, then shown the same way: a failure's counterexample
+and path, in text and in JSON's ``counterexample``, ``model``, and ``trace``,
+come from the checked model.
 Portfolio mode requires agreement; an agreed ``sat`` result uses Z3's typed
 model and trace, while disagreement or incomplete secondary evidence is
 ``Unresolved``. BMC reports ``BoundedSafe: f [backend=bmc, bound=N]`` when only its unwinding
