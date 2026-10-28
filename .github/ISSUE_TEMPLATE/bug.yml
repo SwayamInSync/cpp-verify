@@ -1,0 +1,34 @@
+name: Bug
+description: A crash, a wrong message, or anything else that is not a wrong verdict.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: input
+    attributes:
+      label: Input
+      description: The smallest file that shows it.
+      render: cpp
+    validations:
+      required: true
+  - type: input
+    id: command
+    attributes:
+      label: Command
+      placeholder: cpp-verify file.cpp
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: What happens, and what you expected
+      description: The output, a crash's stack trace included.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: version
+    attributes:
+      label: cpp-verify --version
+      render: text
+    validations:
+      required: true
