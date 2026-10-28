@@ -50,6 +50,9 @@ void copy(const int *a, int *out, int n)
 // VCR-NEXT: a
 // VCR-NEXT: post
 
+// A copy that writes zeros: its invariant fails where a holds anything else,
+// which the solver finds at once (a reversed copy took 30 to 60 s, and on a
+// slow runner timed out).
 void wrong_copy(const int *a, int *out, int n)
   cppverify::pre(n >= 0 && valid(a, n) && valid(out, n))
   cppverify::modifies(*out)
@@ -61,7 +64,7 @@ void wrong_copy(const int *a, int *out, int n)
     cppverify::invariant(cppverify::forall(j, 0, i, out[j] == a[j]))
     cppverify::decreases(n - i)
   {
-    out[i] = a[n - 1 - i];
+    out[i] = 0;
     i = i + 1;
   }
 }
