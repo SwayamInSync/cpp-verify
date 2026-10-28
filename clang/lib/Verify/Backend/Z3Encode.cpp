@@ -41,15 +41,7 @@ constexpr unsigned Z3ProofCacheAdapterVersion = 2;
 
 std::optional<VerifyResult> querySizeLimitResult(const ObligationModule &Module,
                                                  uint64_t MaxQueryNodes) {
-  if (MaxQueryNodes == 0 || obligationModuleNodeCount(Module) <= MaxQueryNodes)
-    return std::nullopt;
-  VerifyResult Result;
-  Result.Status = VerifyStatus::Unresolved;
-  Result.Reason = VerifyReason::QuerySizeLimit;
-  Result.Message = "canonical obligation module exceeds query node budget " +
-                   std::to_string(MaxQueryNodes);
-  Result.BackendName = "z3";
-  return Result;
+  return moduleSizeLimit(Module, MaxQueryNodes, "z3");
 }
 
 std::optional<std::string> sourceModelValue(const z3::expr &Value,
@@ -140,6 +132,44 @@ z3::params solverParams(z3::context &Ctx) {
 } // namespace
 
 namespace {
+/// The limit setZ3MemoryLimit gave Z3, for messages.
+std::atomic<uint64_t> Z3MemoryLimitMB{0};
+
+std::string z3MemoryMessage() {
+  const uint64_t Limit = Z3MemoryLimitMB.load();
+  if (Limit == 0)
+    return "Z3 ran out of memory";
+  return "Z3 reached the memory limit: its queries share " +
+         std::to_string(Limit) + " MB (--memory-limit)";
+}
+} // namespace
+
+// Each check's watchdog enforces the limit, so a check it stops is known to
+// have stopped for memory. Z3's own limits do not say so: its hard one,
+// memory_max_size, fails whichever allocation passes it in any context of
+// the process, Z3_mk_context's included, which then returns no context; its
+// high watermark stops the search where it is checked, often reporting only
+// canceled, and frees what the check took before it returns.
+void verify::setZ3MemoryLimit(uint64_t MegaBytes) {
+  Z3MemoryLimitMB = MegaBytes;
+}
+
+/// Z3's allocations, every query's together, are over the limit.
+static bool overMemoryLimit() {
+  const uint64_t Limit = Z3MemoryLimitMB.load();
+  return Limit != 0 && Z3_get_estimated_alloc_size() > (Limit << 20);
+}
+
+/// Z3 says a check that returned unknown ran out of memory, as when an
+/// allocation fails.
+static bool memoryReason(const z3::solver &S) {
+  const std::string Reason = S.reason_unknown();
+  return llvm::StringRef(Reason).contains("memout") ||
+         llvm::StringRef(Reason).contains("max. memory") ||
+         llvm::StringRef(Reason).contains("out of memory");
+}
+
+namespace {
 /// The encoder of each live Z3 context, for its error handler.
 std::mutex APIErrorLock;
 std::map<Z3_context, Z3Encoder *> APIErrorEncoders;
@@ -166,14 +196,19 @@ void Z3Encoder::recordAPIError(Z3_context Context, Z3_error_code Code) {
     if (auto It = APIErrorEncoders.find(Context); It != APIErrorEncoders.end())
       Encoder = It->second;
   }
-  if (!Encoder || Encoder->Checking || !Encoder->APIError.empty())
+  if (!Encoder)
+    return;
+  // A check reports other errors as unknown, but not why.
+  if (Code == Z3_MEMOUT_FAIL)
+    Encoder->OutOfMemory = true;
+  if (Encoder->Checking || !Encoder->APIError.empty())
     return;
   Encoder->APIError = Z3_get_error_msg(Context, Code);
   Encoder->markEncodingFailure("Z3 reported an error: " + Encoder->APIError);
 }
 
 VerifyResult Z3Encoder::withAPIError(VerifyResult Result) {
-  if (APIError.empty())
+  if (APIError.empty() && !OutOfMemory)
     return Result;
   {
     std::lock_guard<std::mutex> Guard(CheckLock);
@@ -182,6 +217,11 @@ VerifyResult Z3Encoder::withAPIError(VerifyResult Result) {
   }
   VerifyResult Failed;
   Failed.Status = VerifyStatus::Unresolved;
+  if (OutOfMemory) {
+    Failed.Reason = VerifyReason::SolverMemoryLimit;
+    Failed.Message = z3MemoryMessage();
+    return Failed;
+  }
   Failed.Reason = VerifyReason::EncodingFailure;
   Failed.Message = "Z3 reported an error: " + APIError;
   return Failed;
@@ -1794,20 +1834,26 @@ z3::check_result Z3Encoder::check(z3::solver &S, unsigned Ms) {
   using Clock = std::chrono::steady_clock;
   {
     std::lock_guard<std::mutex> Guard(CheckLock);
-    if (Stopped || interruptRequested())
+    if (Stopped || OutOfMemory || interruptRequested())
       return z3::unknown;
     CheckFinished = false;
   }
   Checking = true;
   // Z3 forgets a cancellation that arrives inside one of its nested resource
   // scopes (leaving the scope clears it), whether from its own timeout or
-  // from interrupt(). A check past its time, stopped, or interrupted by
-  // Ctrl-C, which the watchdog polls for, is therefore interrupted again
-  // until it returns.
+  // from interrupt(). A check past its time, stopped, interrupted by Ctrl-C,
+  // or past the memory limit, which the watchdog polls for, is therefore
+  // interrupted again until it returns.
   constexpr std::chrono::milliseconds Grace(100);
   constexpr std::chrono::milliseconds Interval(50);
+  // How often the memory limit is polled: what a check allocates in this
+  // time is how far it can pass the limit.
+  constexpr std::chrono::milliseconds MemoryInterval(10);
+  const auto Poll = Z3MemoryLimitMB.load() != 0 ? MemoryInterval : Interval;
   bool TimedOut = false;
   bool Interrupted = false;
+  bool OverLimit = false;
+  z3::check_result Result = z3::unknown;
   std::thread Watchdog([&] {
     std::unique_lock<std::mutex> Lock(CheckLock);
     const auto Limit =
@@ -1815,13 +1861,15 @@ z3::check_result Z3Encoder::check(z3::solver &S, unsigned Ms) {
                 : Clock::now() + std::chrono::milliseconds(Ms) + Grace;
     auto Next = Limit;
     while (!CheckFinished) {
-      if (Stopped || interruptRequested() || Clock::now() >= Next) {
+      OverLimit = OverLimit || overMemoryLimit();
+      if (Stopped || OverLimit || interruptRequested() ||
+          Clock::now() >= Next) {
         TimedOut = TimedOut || Clock::now() >= Limit;
         Ctx.interrupt();
         Interrupted = true;
         Next = Clock::now() + Interval;
       }
-      CheckChanged.wait_until(Lock, std::min(Next, Clock::now() + Interval));
+      CheckChanged.wait_until(Lock, std::min(Next, Clock::now() + Poll));
     }
   });
   auto Join = llvm::make_scope_exit([&] {
@@ -1839,8 +1887,11 @@ z3::check_result Z3Encoder::check(z3::solver &S, unsigned Ms) {
       (void)Reset.check();
     }
     Checking = false;
+    if (Result == z3::unknown && (OverLimit || memoryReason(S)))
+      OutOfMemory = true;
   });
-  return S.check();
+  Result = S.check();
+  return Result;
 }
 
 std::optional<z3::expr>
@@ -3908,7 +3959,8 @@ VerifyResult Z3VerifyBackend::verifyModule(const ObligationModule &Module) {
       Result.Status == VerifyStatus::Unresolved &&
       (Result.Reason == VerifyReason::SolverTimeout ||
        Result.Reason == VerifyReason::SolverUnknown ||
-       Result.Reason == VerifyReason::SolverResourceLimit)) {
+       Result.Reason == VerifyReason::SolverResourceLimit ||
+       Result.Reason == VerifyReason::SolverMemoryLimit)) {
     IntegerEncoding = MachineIntegerEncoding::Auto;
     VerifyResult Retry = verifyModuleDirect(Module);
     IntegerEncoding = MachineIntegerEncoding::BitVector;

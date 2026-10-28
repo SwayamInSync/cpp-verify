@@ -56,9 +56,14 @@ class Z3Encoder {
   /// The first error a Z3 call reported outside a check, which a check
   /// reports itself as unknown. Z3 returns a null term and goes on.
   std::string APIError;
+  /// Z3 ran out of memory here, in a check or another call: its allocations,
+  /// every context's together, reached setZ3MemoryLimit. Later checks return
+  /// unknown at once.
+  bool OutOfMemory = false;
   bool Checking = false;
   static void recordAPIError(Z3_context Context, Z3_error_code Code);
-  /// \p Result, unless a Z3 call failed in this unstopped encoder.
+  /// \p Result, unless a Z3 call failed or ran out of memory in this
+  /// unstopped encoder.
   VerifyResult withAPIError(VerifyResult Result);
   VerifyResult decideModule(const ObligationModule &Module,
                             const LogicExpr *Query,
