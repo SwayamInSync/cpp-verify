@@ -583,6 +583,16 @@ Where C++ leaves the order of operands open, a write that another operand may
 read is an error at the expression, as such a call already was
 (:doc:`language/functions-loops`).
 
+**The C library's memory functions.** A call of ``memcpy``, ``memmove``,
+``memset``, ``memcmp``, or ``abs`` stopped its function (``call to function
+without a verification contract``). Over arrays of integers, enumerations,
+or ``bool``, the memory functions are now calls of their models, contracted
+declarations in ``<cppverify.h>`` for each type of object, trusted like the
+library itself, so a proof that uses one shows it (``[trusts=memcpy]``); a
+copy whose ranges overlap fails its ``aliasing`` check. ``abs`` is its
+definition, with an ``overflow`` check at the minimum. Records, pointers, and
+the string functions are not modeled yet (:doc:`language/pointers`).
+
 **cvc5's counterexamples.** A failure cvc5 found (``--backend=cvc5``, or a race
 cvc5 won) gave no values and no path: the certifier checked its model and the
 verifier then dropped it, so the JSON record had no ``model`` or ``trace``,
