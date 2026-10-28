@@ -425,6 +425,20 @@ type, and with it the origin `@address/size` of the whole object;
 valid storage, which discharges the pointer's binding check and lets it be
 passed as a slice.
 
+**Static locals:** a static local with a constant initializer
+(`ASTConverter::isStaticObject`) is a global object too, which records its
+function's private state in `VFunction::PrivateObjects`: a load of each
+scalar leaf's address (`objectLeaves`, at most `MaxPrivateCells`), or of the
+whole object's, typed. After conversion and inlining (a helper's objects
+join its caller's), each function's objects grow by those of every function
+its call graph reaches. Passivization lets a store into one of the
+function's objects pass its frame check (`inPrivateObject`), changes the
+callee's objects after a call (`havocPrivateObjects`: a fresh value in each
+cell, or a heap frame for a whole object, whose counterexamples model search
+finds slowly), and adds them to a loop's write set where the loop calls the
+callee. A pointer to or into a static local is rejected, so nothing outside
+the call graph can change one.
+
 **Pointers into objects:** `ASTConverter::subobjectPointer` lowers a decayed
 member array of a pointee and the address of a pointee's element, field, or
 nested record. In a statement (`SubobjectSink`) it asserts the place's access
