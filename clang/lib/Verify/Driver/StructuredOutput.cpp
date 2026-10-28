@@ -25,6 +25,19 @@ llvm::json::Object verify::sourceJSON(const ObligationSource &Source) {
   return Result;
 }
 
+/// A path as GitHub resolves it: relative to the working directory, the
+/// checkout in a workflow, when it lies under it.
+std::string verify::workspacePath(llvm::StringRef File) {
+  llvm::SmallString<256> Directory;
+  if (llvm::sys::path::is_absolute(File) &&
+      !llvm::sys::fs::current_path(Directory)) {
+    Directory += llvm::sys::path::get_separator();
+    if (File.starts_with(Directory))
+      return File.drop_front(Directory.size()).str();
+  }
+  return File.str();
+}
+
 namespace {
 /// The workflow command escapes of GitHub Actions: data escapes '%' and line
 /// ends, a property also ':' and ','.
@@ -54,18 +67,6 @@ std::string escapeCommand(llvm::StringRef Text, bool Property) {
   return Out;
 }
 
-/// A path as GitHub resolves it: relative to the working directory, the
-/// checkout in a workflow, when it lies under it.
-std::string workspacePath(llvm::StringRef File) {
-  llvm::SmallString<256> Directory;
-  if (llvm::sys::path::is_absolute(File) &&
-      !llvm::sys::fs::current_path(Directory)) {
-    Directory += llvm::sys::path::get_separator();
-    if (File.starts_with(Directory))
-      return File.drop_front(Directory.size()).str();
-  }
-  return File.str();
-}
 
 /// An absolute file URI, as Clang writes it in SARIF.
 std::string fileURI(llvm::StringRef File) {
