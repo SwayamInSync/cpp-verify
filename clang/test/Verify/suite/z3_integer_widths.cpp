@@ -90,8 +90,6 @@ void invalid_i64_heap_truncation(long long *p)
   *p = 4294967296LL;
 }
 
-// VERIFY-DAG: spec axiom: math_u32_max
-// VERIFY-DAG: spec axiom: math_u64_max
 // VERIFY-DAG: Verified: valid_unsigned_literals_in_math_specs
 // VERIFY-DAG: Verified: valid_u64_literal_bit_pattern
 // VERIFY-DAG: Verified: valid_i64_high_value

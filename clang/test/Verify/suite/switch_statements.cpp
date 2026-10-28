@@ -516,7 +516,6 @@ cv::spec int select(int x)
     return 6;
   }
 }
-// CHECK-DAG: Verified: spec axiom: select
 
 cv::spec int select_break(int x)
 {
@@ -530,7 +529,6 @@ cv::spec int select_break(int x)
   }
   return r;
 }
-// CHECK-DAG: Verified: spec axiom: select_break
 
 int uses_select(int x)
   cv::post(cv::result == select(x) && cv::result == select_break(x))

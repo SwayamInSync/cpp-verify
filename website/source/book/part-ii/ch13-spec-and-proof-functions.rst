@@ -1170,7 +1170,6 @@ where a finite derivation shows it.
 
 .. code-block:: text
 
-   Verified: spec axiom: edge
    Verified: inductive predicate: reach
    Verified: spec post: reach
    Verified: three_reaches_twelve [backend=z3]

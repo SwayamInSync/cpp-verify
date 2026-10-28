@@ -170,7 +170,6 @@ integer, and adding to it never wraps.
 
 .. code-block:: text
 
-   Verified: spec axiom: pair_sum
    Verified: large [backend=z3]
    reads.cpp:13:24: error: verification failed: wraps [...::postcondition@13:24] (counterexample: ...) [backend=z3] [reason=counterexample]
 
@@ -285,9 +284,7 @@ among ``a[0]`` to ``a[n - 1]``, inside its frame; ``index_past`` also reads
 .. code-block:: text
 
    Verified: spec reads: index_of
-   Verified: spec axiom: index_of
    reads.cpp:10:34: error: spec reads failed: index_past [backend=z3] [reason=counterexample] (a [type=pointer] = 0, n [type=math-i32] = 0)
-   Verified: spec axiom: index_past
 
 The counterexample is the empty buffer: with ``n = 0``, ``index_past`` reads
 ``a[0]``, and ``cppverify::reads(a, 0)`` declares no cell.

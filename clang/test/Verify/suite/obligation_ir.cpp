@@ -1,7 +1,9 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
 // RUN: %cpp-verify --lower-only --dump-ir=3 %s -- > %t.first 2>&1
 // RUN: %cpp-verify --lower-only --dump-ir=3 %s -- > %t.second 2>&1
-// RUN: diff %t.first %t.second
+// RUN: sed 's/ in [0-9.]* s$//' %t.first > %t.first.untimed
+// RUN: sed 's/ in [0-9.]* s$//' %t.second > %t.second.untimed
+// RUN: diff %t.first.untimed %t.second.untimed
 // RUN: FileCheck %s --check-prefix=OBLIGATION < %t.first
 // RUN: %cpp-verify --int-encoding=bitvector --lower-only --dump-ir=3,4 %s -- 2>&1 | FileCheck %s --check-prefix=LAYERS
 // RUN: %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=Z3

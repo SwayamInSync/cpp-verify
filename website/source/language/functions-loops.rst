@@ -86,7 +86,6 @@ outside the verified subset, or a lemma you decide to assume.
 
    trusted.cpp:2:28: Trusted: clamp_byte (contract assumed, not verified)
    trusted.cpp:6:28: Trusted: read_sensor (contract assumed, not verified)
-   Verified: spec axiom: sq
    trusted.cpp:16:39: Trusted: sq_nonnegative (contract assumed, not verified)
    Verified: sample [backend=z3] [trusts=clamp_byte,read_sensor,sq_nonnegative]
 

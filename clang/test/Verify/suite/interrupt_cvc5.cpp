@@ -19,4 +19,5 @@ cppverify::proof void cubes(int x, int y, int z)
 
 // CHECK:      Verified: fast
 // CHECK-NEXT: Interrupted: cubes
+// CHECK-NEXT: Summary: {{.*}}
 // CHECK-NEXT: exit: 130

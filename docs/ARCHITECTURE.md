@@ -2447,6 +2447,10 @@ expression being converted (`ASTConverter::CurrentRange`), unless the site
 names a place of its own, such as a function for the checks made after every
 function is converted. It is printed with Clang's `TextDiagnostic`, line and
 caret included, as a compiler error is, and its JSON record carries the range.
+A text run ends with a summary line: `printDiagnostics` counts each verdict
+it prints into the run's `VerifySummary` (a first error that carries a
+verdict counts, a `--verbose` spec axiom line does not), and the driver
+prints the counts of every file of the run with its time.
 Its message names the construct as C++ does (`unsupportedConstruct` for the
 statements and expressions without a site of their own; Clang's class name
 only in parentheses for those it has no name for), and each error is raised

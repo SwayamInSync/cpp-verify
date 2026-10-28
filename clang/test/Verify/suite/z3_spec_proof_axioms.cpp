@@ -19,7 +19,5 @@ int use_specs(int x)
   return 2 * x + 3;
 }
 
-// VERIFY-DAG: spec axiom: double_it
 // VERIFY-DAG: Verified: lemma_double
-// VERIFY-DAG: spec axiom: add_three
 // VERIFY-DAG: Verified: use_specs

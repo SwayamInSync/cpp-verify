@@ -17,4 +17,5 @@
 
 # CHECK: Certified: fine [backend=Lean]
 # CHECK-NEXT: Unresolved: lean obligation: one (Lean certification failed: the proof of fn_5f5a336f6e6576::postcondition@8:37: the kernel rejects CppVerify.Lemmas: while replaying declaration 'cheat'
+# CHECK-NEXT: Summary: {{.*}}
 # CHECK-NEXT: peak memory below 6144 MB

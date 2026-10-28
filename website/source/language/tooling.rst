@@ -8,6 +8,9 @@ Standalone verifier
 
    cpp-verify --version
    cpp-verify file.cpp
+   cpp-verify --quiet file.cpp
+   cpp-verify --verbose file.cpp
+   cpp-verify --list-functions file.cpp
    cpp-verify file.cpp -- -I include -DNDEBUG
    cpp-verify --backend=z3 file.cpp
    cpp-verify --backend=cvc5 file.cpp
@@ -149,6 +152,69 @@ initialization and copying are unsupported``, a string literal used as a
 pointer was ``array-to-pointer decay of automatic storage is unsupported``,
 and each use of a variable whose initializer was rejected added ``read of
 uninitialized local value``.
+
+What a run prints
+~~~~~~~~~~~~~~~~~
+
+A run prints a verdict for each function it verifies, in source order, then
+one line that counts them:
+
+.. code-block:: cpp
+
+   namespace cv = cppverify;
+
+   cv::spec int twice(int x) { return 2 * x; }
+
+   int add_one(int x)
+     cv::pre(x < 100)
+     cv::post(cv::result == x + 1)
+   {
+     return x + 1;
+   }
+
+   int add_two(int x)
+     cv::pre(x < 100)
+     cv::post(cv::result == twice(x))
+   {
+     return x + 2;
+   }
+
+.. code-block:: text
+
+   Verified: add_one [backend=z3]
+   summary.cpp:14:23: error: verification failed: add_two [fn_...::postcondition@14:23] (counterexample: result [ssa=__result_1] [type=i32] = 5, x [ssa=x_0] [type=i32] = 3; trace: return.return@16:3 value=5) [backend=z3] [reason=counterexample]
+   Summary: 1 verified, 1 failed in 0.1 s
+
+The summary counts each kind of verdict the run reported (verified, which
+includes ``Certified`` and ``Proved (z3+lean)``, failed, unresolved,
+bounded-safe, trusted, lowered, exported, interrupted), gives the reasons of
+the unresolved ones (``2 unresolved (spec.fuel 1, solver.timeout 1)``), and
+the time the run took. A function the verifier does not represent counts as
+unresolved, ``construct.unsupported``. The summary covers every file of the
+run, and is left out of ``--diagnostics-format=json``, whose records are the
+whole output, of ``--list-functions``, and of archive replay
+(``--obligation-in``), which prints a line per module.
+
+- ``--quiet`` prints only what needs attention: failures, unresolved results,
+  errors, warnings, bounded results, and interrupted functions, then the
+  summary. For the example, the error line and the summary.
+- ``--verbose`` also lists each spec function that needs no check, a
+  non-recursive spec without a postcondition: ``Verified: spec axiom: twice``.
+  Such a line is not a verdict and the summary does not count it. Before 0.2
+  it was printed always.
+- ``--list-functions`` lists the functions a run would verify, each with its
+  location and kind (``function``, ``spec``, ``constexpr spec``, ``proof``,
+  ``trusted``), and verifies none; errors about functions the verifier does
+  not represent are printed as a run prints them:
+
+.. code-block:: text
+
+   summary.cpp:3:14: spec twice
+   summary.cpp:5:5: function add_one
+   summary.cpp:12:5: function add_two
+
+``cpp-verify --help`` shows each time limit's default (``--timeout``,
+30000 ms).
 
 Stopping a run with Ctrl-C
 ~~~~~~~~~~~~~~~~~~~~~~~~~~

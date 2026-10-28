@@ -13,7 +13,6 @@ cv::spec int index_of(const int *a, int n, int x)
   return cv::choose(k, 0, n, a[k] == x);
 }
 // CHECK-DAG: Verified: spec reads: index_of
-// CHECK-DAG: Verified: spec axiom: index_of
 
 // a[n] lies outside the declared cells.
 cv::spec int index_past(const int *a, int n, int x)
@@ -22,7 +21,6 @@ cv::spec int index_past(const int *a, int n, int x)
   return cv::choose(k, 0, n + 1, a[k] == x);
 }
 // CHECK-DAG: error: spec reads failed: index_past [backend=z3] [reason=counterexample]
-// CHECK-DAG: Verified: spec axiom: index_past
 
 // Once the reads clause holds, a write outside it keeps the value.
 void set_other(const int *a, int n, int *b, int x)

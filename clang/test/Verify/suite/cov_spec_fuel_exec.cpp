@@ -11,5 +11,4 @@ int use_with_reveal(int x)
   return 2 * x;
 }
 
-// VERIFY-DAG: spec axiom: double_spec
 // VERIFY-DAG: Verified: use_with_reveal

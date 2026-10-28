@@ -1099,6 +1099,8 @@ struct VerifyDiagnostic {
   /// For an error about source the verifier cannot represent: that source,
   /// shown with its line as a compiler error is.
   SourceRange Span;
+  /// A spec function that needs no check, listed with --verbose: no verdict.
+  bool Axiom = false;
 };
 
 /// The backend a lowering reports, as lower-only names it.
@@ -2804,6 +2806,8 @@ class Verifier {
   VerifyOptions Opts;
   llvm::raw_ostream *DumpOS = nullptr;
   std::vector<VerifyDiagnostic> Diags;
+  /// What --list-functions prints: each function's location and kind.
+  std::vector<std::pair<SourceLocation, std::string>> Listing;
   std::optional<LeanProject> Lean;
   /// Where each template specialization verified is instantiated, and what
   /// it is, by its function's name.
@@ -3162,6 +3166,20 @@ public:
       }
       Diags.push_back(
           {VerifyDiagnostic::Warning, "no verifiable functions found"});
+      return true;
+    }
+    if (Opts.ListFunctions) {
+      for (const auto &Fn : Functions) {
+        if (Fn->IsBuiltin || Fn->IsChoice || !Fn->InductiveStepOf.empty() ||
+            !Fn->InductiveRuleOf.empty())
+          continue;
+        const char *Kind = Fn->IsConstexprSpec ? "constexpr spec"
+                           : Fn->IsSpec        ? "spec"
+                           : Fn->IsProof       ? "proof"
+                           : Fn->IsTrusted     ? "trusted"
+                                               : "function";
+        Listing.push_back({Fn->DeclLoc, std::string(Kind) + " " + Fn->Name});
+      }
       return true;
     }
     inferFreshOwnedReturns(Functions);
@@ -3967,8 +3985,11 @@ public:
         }
 
         if (Fn->IsSpec && !Fn->NeedsDecreasesCheck && !Step) {
-          // Nothing is solved for a spec axiom.
+          // Nothing is solved for a spec axiom, which is listed only with
+          // --verbose.
           MarkInterrupted.release();
+          if (!Opts.Verbose)
+            continue;
           const VerifyDiagnostic::Kind Kind =
               Opts.LowerOnly ? VerifyDiagnostic::Lowered
                              : (Opts.Backend == BackendKind::Lean
@@ -3978,6 +3999,9 @@ public:
             Diags.push_back({Kind, "constexpr spec axiom: " + Fn->Name});
           else if (!Fn->Unfolding)
             Diags.push_back({Kind, "spec axiom: " + Fn->Name});
+          else
+            continue;
+          Diags.back().Axiom = true;
           continue;
         }
 
@@ -5023,10 +5047,12 @@ public:
       }
       Diagnostic.Message +=
           " [reason=" + verifyReasonCode(Reason).str() + "] (" + Why + ")";
-      if (Diagnostic.Result) {
-        Diagnostic.Result->Status = VerifyStatus::Unresolved;
-        Diagnostic.Result->Reason = Reason;
-      }
+      // A line with no result of its own, as an inductive predicate's, gets
+      // one: the summary counts it and JSON gives its reason.
+      if (!Diagnostic.Result)
+        Diagnostic.Result.emplace();
+      Diagnostic.Result->Status = VerifyStatus::Unresolved;
+      Diagnostic.Result->Reason = Reason;
       if (auto It = CheckOf.find(Index); It != CheckOf.end()) {
         const SpecReliance &Check = *It->second;
         if (Check.Facts & DefinitionFact)
@@ -5823,7 +5849,57 @@ public:
     OS << llvm::formatv("{0}\n", llvm::json::Value(std::move(Record)));
   }
 
+  /// Counts the verdict D reports, if it reports one: an error reports a
+  /// verdict only when it carries one, as the first error of a function the
+  /// verifier does not represent does.
+  static void count(const VerifyDiagnostic &D, VerifySummary &Summary) {
+    if (D.Axiom)
+      return;
+    switch (D.K) {
+    case VerifyDiagnostic::Verified:
+    case VerifyDiagnostic::Certified:
+    case VerifyDiagnostic::MixedProof:
+      ++Summary.Verified;
+      return;
+    case VerifyDiagnostic::Error:
+    case VerifyDiagnostic::Unresolved:
+      if (!D.Result)
+        return;
+      if (D.Result->Status == VerifyStatus::Failed) {
+        ++Summary.Failed;
+        return;
+      }
+      ++Summary.Unresolved;
+      ++Summary.Reasons[verifyReasonCode(D.Result->Reason).str()];
+      return;
+    case VerifyDiagnostic::BoundedSafe:
+      ++Summary.BoundedSafe;
+      return;
+    case VerifyDiagnostic::Trusted:
+      ++Summary.Trusted;
+      return;
+    case VerifyDiagnostic::Lowered:
+      ++Summary.Lowered;
+      return;
+    case VerifyDiagnostic::Exported:
+      ++Summary.Exported;
+      return;
+    case VerifyDiagnostic::Interrupted:
+      ++Summary.Interrupted;
+      return;
+    case VerifyDiagnostic::Warning:
+      return;
+    }
+  }
+
   void printDiagnostics(llvm::raw_ostream &OS) const {
+    for (const auto &[Loc, Line] : Listing) {
+      PresumedLoc PLoc = Ctx.getSourceManager().getPresumedLoc(Loc);
+      if (PLoc.isValid())
+        OS << PLoc.getFilename() << ":" << PLoc.getLine() << ":"
+           << PLoc.getColumn() << ": ";
+      OS << Line << "\n";
+    }
     for (const auto &D : Diags) {
       if (D.Hidden)
         continue;
@@ -5831,6 +5907,13 @@ public:
       if (D.Quiet && (D.K == VerifyDiagnostic::Verified ||
                       D.K == VerifyDiagnostic::Certified ||
                       D.K == VerifyDiagnostic::Exported))
+        continue;
+      if (Opts.Summary)
+        count(D, *Opts.Summary);
+      // --quiet leaves out what needs no attention.
+      if (Opts.Quiet && (D.isProof() || D.K == VerifyDiagnostic::Lowered ||
+                         D.K == VerifyDiagnostic::Exported ||
+                         D.K == VerifyDiagnostic::Trusted))
         continue;
       if (Opts.Diagnostics == DiagnosticFormat::Json) {
         printJSONDiagnostic(D, OS);

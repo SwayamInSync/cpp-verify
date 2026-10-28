@@ -33,8 +33,6 @@ int invalid_euclidean_quotient()
   return 0;
 }
 
-// VERIFY-DAG: Verified: spec axiom: quotient
-// VERIFY-DAG: Verified: spec axiom: remainder
 // VERIFY-DAG: Verified: valid_spec_division
 // VERIFY-DAG: Verified: valid_spec_zero_extension
 // VERIFY-DAG: error: verification failed: invalid_euclidean_quotient

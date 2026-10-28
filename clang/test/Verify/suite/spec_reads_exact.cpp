@@ -68,7 +68,6 @@ unsigned next(const unsigned *p)
 // CHECK-NEXT: Verified: spec reads: negated
 // CHECK-NEXT: Verified: spec post: negated
 // CHECK-NEXT: Verified: spec reads: first
-// CHECK-NEXT: Verified: spec axiom: first
 // CHECK-NEXT: Verified: large_sum
 // CHECK-NEXT: error: verification failed: negative_sum {{.*}}[reason=counterexample]
 // CHECK-NEXT: Verified: smallest_negated

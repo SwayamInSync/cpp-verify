@@ -10,5 +10,4 @@ int use_sq(int x)
   return sq(x);
 }
 
-// VERIFY-DAG: spec axiom: sq
 // VERIFY-DAG: Verified: use_sq

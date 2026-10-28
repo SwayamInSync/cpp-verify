@@ -12,5 +12,4 @@ int use_constexpr_spec(int x)
   return x + x;
 }
 
-// VERIFY-DAG: constexpr spec axiom: double_it
 // VERIFY-DAG: Verified: use_constexpr_spec
