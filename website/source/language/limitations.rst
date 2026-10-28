@@ -126,11 +126,15 @@ C++ feature boundaries
        ``__builtin_ctz``, ``__builtin_popcount``, ``__builtin_parity``,
        ``__builtin_ffs``, their ``l`` and ``ll`` forms, and
        ``__builtin_bswap16/32/64``), a record returned from an initializer list
-       (``return Pt{a, b};``), structured bindings that copy a record, and
+       (``return Pt{a, b};``), structured bindings that copy a record,
        declarations that do nothing (``static_assert``, type aliases,
-       using-declarations, local classes and enumerations).
-     - The value of an assignment, an increment, or a comma expression
-       inside an expression (``a = b = 0``, ``*p++``); a pointer into a
+       using-declarations, local classes and enumerations), and the value of
+       an assignment, an increment or decrement, or a comma expression in
+       executable code (``a = b = 0``, ``*dst++ = *src++``,
+       ``while (k-- > 0)``), in C++'s order of evaluation.
+     - Such a value in ghost and proof code, or of an assignment of a pointer
+       to dynamic storage; a write that another unsequenced operand may read
+       (an error, as C++ leaves it undefined); a pointer into a
        string literal (its characters are read by index);
        other builtins; structured bindings of an array, of a tuple-like type,
        or by reference.
@@ -576,8 +580,9 @@ it is evaluated (see :doc:`functions-loops`). Together they are not yet
 comprehensive C++ undefined-behavior checking.
 
 Missing general UB semantics include object provenance outside the represented
-fragment, strict aliasing, arbitrary alignment, unsequenced side effects and
-all unspecified evaluation-order alternatives, object lifetime restart,
+fragment, strict aliasing, arbitrary alignment, unsequenced side effects
+(rejected where one may meet another write or read, not checked) and all
+unspecified evaluation-order alternatives, object lifetime restart,
 exception unwinding, floating-point environment, volatile/atomics, and data
 races.
 
