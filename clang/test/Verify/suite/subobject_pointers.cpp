@@ -380,7 +380,7 @@ int element_one_past(const Ring *r, int i)
   const int *q = &r->buf[i];
   return 0;
 }
-// CHECK-DAG: :[[@LINE-3]]:18: error: verification failed: element_one_past [bounds]
+// CHECK-DAG: :[[@LINE-3]]:19: error: verification failed: element_one_past [bounds]
 // CHECK-DAG: note: counterexample: {{.*}}i = 8{{( ->|,|$)}}
 
 int null_root(const Ring *r)
