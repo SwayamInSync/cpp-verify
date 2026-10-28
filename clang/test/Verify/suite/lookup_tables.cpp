@@ -223,8 +223,8 @@ int counter(int i)
 }
 // CHECK-DAG: error: verification failed: counter [postcondition]
 
-// A static local that is not constant is an object, not a table, and is
-// not supported yet.
+// A static local that is not constant is an object, not a table: its
+// function's own state.
 int seen(int i)
   cv::pre(0 <= i && i < 4)
   cv::post(true)
@@ -232,7 +232,7 @@ int seen(int i)
   static int Seen[4] = {0, 0, 0, 0};
   return Seen[i];
 }
-// CHECK-DAG: error: seen: static local variables are unsupported
+// CHECK-DAG: Verified: seen
 
 // A pointer into a constant table is not supported yet.
 int via_pointer()
