@@ -1207,7 +1207,8 @@ kind says what the check is:
 - C++ definedness: ``overflow`` (including a mathematical value converted to
   a machine type it does not fit), ``division-by-zero``, ``shift``,
   ``bounds``, ``dereference``, ``initialization``, ``pointer-difference``,
-  and ``deallocation``;
+  ``deallocation``, and ``builtin-argument`` (an argument a builtin is
+  undefined for, such as ``__builtin_clz(0)``);
 - generated interfaces: ``pointer-validity`` (a pointer parameter, result, or
   ``valid(p, n)`` extent must denote valid storage), ``aliasing`` (implicit
   non-aliasing), ``frame`` (writes and callee effects stay within
