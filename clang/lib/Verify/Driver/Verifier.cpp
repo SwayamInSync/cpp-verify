@@ -3373,8 +3373,9 @@ public:
                          "obligation"});
         return false;
       }
-      Diags.push_back(
-          {VerifyDiagnostic::Warning, "no verifiable functions found"});
+      if (!Opts.QuietWithoutFunctions)
+        Diags.push_back(
+            {VerifyDiagnostic::Warning, "no verifiable functions found"});
       return true;
     }
     Converted = std::chrono::steady_clock::now();
@@ -6641,6 +6642,27 @@ public:
                           D.K == VerifyDiagnostic::Trusted);
   }
 
+  /// Writes every result the run reports to Path as a JSON Lines record, and
+  /// then the summary record; a file that cannot be written is an error.
+  bool writeReport(const std::string &Path) {
+    std::error_code EC;
+    llvm::raw_fd_ostream Report(Path, EC, llvm::sys::fs::OF_Text);
+    if (EC) {
+      Diags.push_back({VerifyDiagnostic::Error,
+                       "cannot write the report " + Path + ": " + EC.message()});
+      return false;
+    }
+    VerifySummary Summary;
+    for (const VerifyDiagnostic &D : Diags) {
+      if (!reported(D))
+        continue;
+      count(D, Summary);
+      printJSONDiagnostic(D, Report);
+    }
+    Report << llvm::json::Value(summaryRecord(Summary)) << "\n";
+    return true;
+  }
+
   void printDiagnostics(llvm::raw_ostream &OS) const {
     for (const auto &[Loc, Line] : Listing) {
       PresumedLoc PLoc = Ctx.getSourceManager().getPresumedLoc(Loc);
@@ -6972,6 +6994,24 @@ public:
 
 } // namespace
 
+llvm::json::Object verify::summaryRecord(const VerifySummary &Summary) {
+  llvm::json::Object Record;
+  Record["schema"] = SummarySchema;
+  Record["verified"] = Summary.Verified;
+  Record["failed"] = Summary.Failed;
+  Record["unresolved"] = Summary.Unresolved;
+  llvm::json::Object Reasons;
+  for (const auto &[Reason, N] : Summary.Reasons)
+    Reasons[Reason] = N;
+  Record["reasons"] = std::move(Reasons);
+  Record["bounded_safe"] = Summary.BoundedSafe;
+  Record["trusted"] = Summary.Trusted;
+  Record["lowered"] = Summary.Lowered;
+  Record["exported"] = Summary.Exported;
+  Record["interrupted"] = Summary.Interrupted;
+  return Record;
+}
+
 bool verify::verifyTranslationUnit(ASTContext &Ctx, llvm::raw_ostream &OS,
                                    const VerifyOptions &Opts) {
   Verifier V(Ctx, Opts, OS);
@@ -6987,6 +7027,8 @@ bool verify::verifyTranslationUnit(ASTContext &Ctx, llvm::raw_ostream &OS,
   }
   if (!Opts.ContractsOut.empty())
     Ok = V.recordContracts() && Ok;
+  if (!Opts.ReportPath.empty())
+    Ok = V.writeReport(Opts.ReportPath) && Ok;
   V.printDiagnostics(OS);
   if (Opts.TimeReport)
     V.printTimeReport(OS);
