@@ -128,7 +128,8 @@ void self_frame(Counter &c)
 {
   frame(c, c);
 }
-// CHECK-DAG: error: verification failed: self_frame [{{.*}}::aliasing@[[@LINE-2]]:3] (counterexample: c [ssa=c_0] [type=pointer] =
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: self_frame [aliasing]
+// CHECK-DAG: note: counterexample: {{.*}}c =
 
 void may_alias(Counter &a, Counter &b)
   cppverify::aliases(a, b)
@@ -137,7 +138,7 @@ void may_alias(Counter &a, Counter &b)
 {
   a.n = 5;
 }
-// CHECK-DAG: error: verification failed: may_alias [{{.*}}::postcondition@[[@LINE-4]]:23]
+// CHECK-DAG: :[[@LINE-4]]:23: error: verification failed: may_alias [postcondition]
 
 int sum(const Counter &a, const Counter &b)
   cppverify::pre(-1000 < a.n && a.n < 1000 && -1000 < b.n && b.n < 1000)
@@ -160,21 +161,21 @@ void bad_frame(Counter &c)
 {
   c.limit = 3;
 }
-// CHECK-DAG: error: verification failed: bad_frame [{{.*}}::frame@[[@LINE-2]]:11]
+// CHECK-DAG: :[[@LINE-2]]:11: error: verification failed: bad_frame [frame]
 
 void narrow_caller(Counter &c)
   cppverify::modifies(c.n)
 {
   reset(c);
 }
-// CHECK-DAG: error: verification failed: narrow_caller [{{.*}}::frame@[[@LINE-2]]:3]
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: narrow_caller [frame]
 
 void narrow_member(Pair &p)
   cppverify::modifies(p.left.n)
 {
   reset(p.left);
 }
-// CHECK-DAG: error: verification failed: narrow_member [{{.*}}::frame@[[@LINE-2]]:3]
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: narrow_member [frame]
 
 // A callee's whole record is every byte of it, which only a footprint naming
 // the record, or an object around it, contains; its fields one by one do not.
@@ -183,7 +184,7 @@ void fields_one_by_one(Pair &p)
 {
   reset(p.left);
 }
-// CHECK-DAG: error: verification failed: fields_one_by_one [{{.*}}::frame@[[@LINE-2]]:3]
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: fields_one_by_one [frame]
 
 // Array members: indices bounded by their array, and pointers into them
 // bounded by it.
@@ -202,7 +203,7 @@ void put_at(Ring &r, int i, int v)
 {
   r.buf[i] = v;
 }
-// CHECK-DAG: error: verification failed: put_at [{{.*}}::bounds@[[@LINE-2]]:12]
+// CHECK-DAG: :[[@LINE-2]]:12: error: verification failed: put_at [bounds]
 
 void set_first(int *q, int v)
   cppverify::pre(cppverify::valid(q, 4))
@@ -248,7 +249,7 @@ int past_head(const Ring &r)
   cppverify::check(h[1] == 0);
   return 0;
 }
-// CHECK-DAG: error: verification failed: past_head [{{.*}}::bounds@[[@LINE-3]]:3]
+// CHECK-DAG: :[[@LINE-3]]:3: error: verification failed: past_head [bounds]
 
 // Local references to records bind a place as a parameter does.
 void local_deref(Counter *p)
@@ -279,7 +280,7 @@ void local_wrong_member(Pair *p)
   Counter &r = p->right;
   r.n = 0;
 }
-// CHECK-DAG: error: verification failed: local_wrong_member [{{.*}}::frame@[[@LINE-2]]:7]
+// CHECK-DAG: :[[@LINE-2]]:7: error: verification failed: local_wrong_member [frame]
 
 void local_elements(Counter *a, int n)
   cppverify::pre(cppverify::valid(a, n) && n >= 0)
@@ -304,7 +305,8 @@ void local_past(Counter *a, int i)
   Counter &r = a[i];
   r.n = 3;
 }
-// CHECK-DAG: error: verification failed: local_past [{{.*}}::dereference@[[@LINE-3]]:3] (counterexample: a [ssa=a_0] [type=pointer] = {{[0-9]+}}, i [ssa=i_0] [type=i32] = 4)
+// CHECK-DAG: :[[@LINE-3]]:3: error: verification failed: local_past [dereference]
+// CHECK-DAG: note: counterexample: a = {{[0-9]+}}, i = 4
 
 // A local record bound to a reference is one object in memory.
 int local_object()
@@ -326,7 +328,7 @@ int local_object_uninitialized()
   Counter &r = c;
   return r.limit;
 }
-// CHECK-DAG: error: verification failed: local_object_uninitialized [{{.*}}::initialization@[[@LINE-2]]:3]
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: local_object_uninitialized [initialization]
 
 // A type invariant holds for a record by value and for one a reference or a
 // pointer names, at every function boundary.

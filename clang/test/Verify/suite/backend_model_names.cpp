@@ -9,8 +9,8 @@ unsigned renamed_parameter(unsigned implementation_name) {
 }
 
 // CHECK: error: verification failed: renamed_parameter
-// CHECK-SAME: implementation_name [ssa=interface_name_0] [type=u32]
 // CHECK-SAME: [reason=counterexample]
+// CHECK: note: counterexample: implementation_name = 0, result = 1
 
 // JSON: "name":"implementation_name"
 // JSON-SAME: "sort":"u32"

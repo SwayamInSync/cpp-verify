@@ -483,6 +483,29 @@ are errors at the statement (:doc:`language/functions-loops`).
 Running cpp-verify
 ~~~~~~~~~~~~~~~~~~
 
+**Failures read like compiler errors.** A failure was one line that named its
+obligation by an internal identity and listed every SSA version of every
+variable with its type (``verification failed: abs
+[fn_5f5a3361627369::overflow@5:3] (counterexample: x [ssa=x_0] [type=i32] =
+-2147483648; trace: return.return@5:3 value=-2147483648)``). It is now a Clang
+error at the failing source, with the line and a caret under the check, the
+kind of check in brackets, the counterexample as a note in source names (each
+variable once with the values it takes along the path joined by ``->``, a
+hidden local told apart by its line, a reference as ``&r``), and each step of
+the path as a note at its line, in the static analyzer's words (``takes the
+true branch``, ``calls f(3)``, ``returns -2147483648``); a long path shows its
+first and last five steps. The values no longer include those of branches the
+path does not take, which the old list gave as if they were values of the
+execution, and a check that fails at a store, a ``delete``, or a ``return`` no
+longer lists that operation as a step taken (in JSON as well). A ``clang++ -fverify-contracts`` compilation reports each result as a
+diagnostic of its own instead of printing the verifier's text and then one
+``verification failed`` error: a failure or an unresolved result is an error,
+a warning belongs to ``-Wcppverify`` (so ``-Wno-cppverify`` and
+``-Werror=cppverify`` work), a proof is a remark shown with ``-Rcppverify``,
+and ``-fdiagnostics-format=sarif`` carries them all. In JSON Lines a record's
+``message`` is the new error text; its other fields are unchanged
+(:doc:`language/tooling`).
+
 **Counterexamples after a loop.** A failure whose counterexample passed
 through a loop looked like any other, though its state there came from the
 loop's invariants and no execution need reach it: the first loop most users
@@ -788,8 +811,9 @@ reproduce, or when two backends decide differently
 Data formats
 ~~~~~~~~~~~~
 
-Archives are ``cppverify.obligation/3``, which adds measures and the
-sources of assumptions and reads ``/2`` and ``/1``; JSON diagnostics stay
+Archives are ``cppverify.obligation/4``, which adds measures, the sources
+of assumptions, and where each variable version is defined, and reads ``/3``,
+``/2``, and ``/1``; JSON diagnostics stay
 ``cppverify.diagnostic/1``. A module whose specs' measures apply other specs
 keeps them, so its module hash changes; per-obligation hashes, and the proof
 cache keyed by them, do not. JSON records may carry the status

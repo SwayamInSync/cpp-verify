@@ -37,7 +37,7 @@ int sum3_wrong()
     s = s + v;
   return s;
 }
-// CHECK-DAG: error: verification failed: sum3_wrong [{{.*}}::postcondition@{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: sum3_wrong [postcondition]{{.*}}[reason=counterexample]
 
 // A reference writes the element.
 int zeroed()
@@ -60,7 +60,7 @@ int zeroed_wrong()
     x = 0;
   return a[0];
 }
-// CHECK-DAG: error: verification failed: zeroed_wrong [{{.*}}::postcondition@{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: zeroed_wrong [postcondition]{{.*}}[reason=counterexample]
 
 // An array member through a pointer, with a bound that needs the position.
 struct Ring {
@@ -92,7 +92,7 @@ int total_wrong(const Ring *r)
     s = s + v;
   return s;
 }
-// CHECK-DAG: error: verification failed: total_wrong [{{.*}}::postcondition@{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: total_wrong [postcondition]{{.*}}[reason=counterexample]
 
 void clear(Ring *r)
   cv::pre(r != nullptr)
@@ -127,7 +127,8 @@ int count_elements_wrong(Ring *r)
     n = n + 1;
   return n;
 }
-// CHECK-DAG: error: verification failed: count_elements_wrong [{{.*}}::dereference@[[@LINE-5]]:3{{.*}}r [ssa=r_0] [type=pointer] = 0{{.*}}[reason=counterexample]
+// CHECK-DAG: :[[@LINE-5]]:3: error: verification failed: count_elements_wrong [dereference] {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}r = 0{{( ->|,|$)}}
 
 // A constant table, break, continue, and a conversion to the variable's
 // type.
@@ -166,7 +167,8 @@ long first_above_wrong(int bound)
   }
   return found;
 }
-// CHECK-DAG: error: verification failed: first_above_wrong [{{.*}}bound [ssa=bound_0] [type=i32] = {{[0-9]+}}{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: first_above_wrong {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}bound = {{[0-9]+}}{{( ->|,|$)}}
 
 // The elements are read in each iteration; the range is located once.
 int doubled()
@@ -234,7 +236,7 @@ int nested_wrong()
       s = s + x * y;
   return s;
 }
-// CHECK-DAG: error: verification failed: nested_wrong [{{.*}}::postcondition@{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: nested_wrong [postcondition]{{.*}}[reason=counterexample]
 
 int with_init()
   cv::post(cv::result == 6)
@@ -269,7 +271,7 @@ int letters_wrong()
       n = n + 1;
   return n;
 }
-// CHECK-DAG: error: verification failed: letters_wrong [{{.*}}::postcondition@{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: letters_wrong [postcondition]{{.*}}[reason=counterexample]
 
 bool any_set()
   cv::post(cv::result)
@@ -293,7 +295,7 @@ bool any_set_wrong()
     r = r || b;
   return r;
 }
-// CHECK-DAG: error: verification failed: any_set_wrong [{{.*}}::postcondition@{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: any_set_wrong [postcondition]{{.*}}[reason=counterexample]
 
 // An array member of a local record, records bound by reference, and the
 // user's measure.
@@ -344,7 +346,7 @@ int sum_x_wrong()
     s = s + p.x;
   return s;
 }
-// CHECK-DAG: error: verification failed: sum_x_wrong [{{.*}}::postcondition@{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: sum_x_wrong [postcondition]{{.*}}[reason=counterexample]
 
 int measured()
   cv::post(true)
@@ -368,7 +370,7 @@ int measured_wrong()
     s = v;
   return s;
 }
-// CHECK-DAG: error: verification failed: measured_wrong [{{.*}}::termination@{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: measured_wrong [termination]{{.*}}[reason=counterexample]
 
 int may_diverge()
   cv::post(true)

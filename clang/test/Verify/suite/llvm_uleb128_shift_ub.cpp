@@ -74,6 +74,5 @@ uint64_t decode_overlong_upstream(const uint8_t *buffer)
 } // namespace cppverify_uleb128_shift
 
 // CHECK: Verified: decode_overlong_repaired
-// CHECK: error: verification failed: decode_overlong_upstream
-// CHECK-SAME: shift
-// CHECK-SAME: = 70
+// CHECK: error: verification failed: decode_overlong_upstream [shift]
+// CHECK: note: counterexample: {{.*}}shift = {{.*}}70

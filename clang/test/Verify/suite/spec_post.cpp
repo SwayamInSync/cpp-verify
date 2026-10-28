@@ -77,7 +77,8 @@ cppverify::spec int bad_clamp(int x)
 {
   return x > 100 ? 100 : x;
 }
-// CHECK-DAG: error: spec post failed: bad_clamp [backend={{.*}}] [reason=counterexample] (x [type=math-i32] = {{-[0-9]+}})
+// CHECK-DAG: error: spec post failed: bad_clamp [backend={{.*}}] [reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}x = {{-[0-9]+}}{{( ->|,|$)}}
 
 void uses_bad_clamp(int x)
 {
@@ -92,6 +93,7 @@ void unfolds_bad_clamp(int x)
 {
   cppverify::ghost { cppverify::check(bad_clamp(x) >= 0); }
 }
-// CHECK-DAG: error: verification failed: unfolds_bad_clamp {{.*}}(counterexample: x [ssa=x_0] [type=i32] = {{-[0-9]+}})
+// CHECK-DAG: error: verification failed: unfolds_bad_clamp {{.*}}
+// CHECK-DAG: note: counterexample: x = {{-[0-9]+}}
 // CHECK-DAG: Unresolved: uses_bad_clamp {{.*}}[reason=spec.post] (relies on the postcondition of bad_clamp, which is not established)
 // JSON-DAG: "function":"uses_bad_clamp"{{.*}}"reason":"spec.post"{{.*}}"status":"unresolved"

@@ -210,6 +210,7 @@ public:
   Kind K;
   LogicSort Sort;
   SourceLocation Loc;
+  SourceLocation BeginLoc;
   SourceLocation EndLoc;
   /// Where Loc lies, filled in by the driver once the term is built
   /// (annotateObligationSources): the one field written after a term is
@@ -313,6 +314,7 @@ struct Obligation {
   std::string StableId;
   ObligationKind Kind = ObligationKind::Assertion;
   SourceLocation Loc;
+  SourceLocation BeginLoc;
   SourceLocation EndLoc;
   ObligationSource Source;
   uint64_t TraceEventCount = 0;
@@ -329,6 +331,11 @@ struct DiagnosticVariable {
   SourceLocation Loc;
   SourceLocation EndLoc;
   ObligationSource Source;
+  /// A reference: its value is the address it refers to. Not archived.
+  bool Reference = false;
+  /// Where this version is defined, as PassiveModelVariable::Guard (true on
+  /// every path); null when unknown, as in an archive before version 4.
+  LogicExprRef Guard = nullptr;
 };
 
 struct LogicFunctionParameter {

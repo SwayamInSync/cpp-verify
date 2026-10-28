@@ -105,7 +105,7 @@ void neighbor_cell(int *a)
 {
   set(a + 3, 5);
 }
-// CHECK-DAG: error: verification failed: neighbor_cell [{{.*}}::frame@[[@LINE-2]]:3]
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: neighbor_cell [frame]
 
 // A copy into another parameter's object, outside the caller's region.
 void other_object(int *a, int *b)
@@ -115,7 +115,7 @@ void other_object(int *a, int *b)
   int *q = b + 1;
   set(q, 5);
 }
-// CHECK-DAG: error: verification failed: other_object [{{.*}}::frame@[[@LINE-2]]:3]
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: other_object [frame]
 
 // The copy starts inside a's object only if b lay below it.
 void other_object_above(int *a, int *b)
@@ -125,7 +125,7 @@ void other_object_above(int *a, int *b)
   int *q = b + 1;
   set(q, 5);
 }
-// CHECK-DAG: error: verification failed: other_object_above [{{.*}}::frame@[[@LINE-2]]:3]
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: other_object_above [frame]
 
 // A callee may name more cells than its extent: these run past a's object.
 void wide(int *p)
@@ -143,7 +143,7 @@ void wide_past(int *a)
   int *q = a + 3;
   wide(q);
 }
-// CHECK-DAG: error: verification failed: wide_past [{{.*}}::frame@[[@LINE-2]]:3]
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: wide_past [frame]
 
 // When c is false the cell is in b, which the caller may not write.
 void chosen_outside(int *a, int *b, bool c)
@@ -153,7 +153,8 @@ void chosen_outside(int *a, int *b, bool c)
   int *q = c ? a + 1 : b + 3;
   set(q, 5);
 }
-// CHECK-DAG: error: verification failed: chosen_outside [{{.*}}::frame@[[@LINE-2]]:3] (counterexample: {{.*}}c [ssa=c_0] [type=bool] = false,
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: chosen_outside [frame]
+// CHECK-DAG: note: counterexample: {{.*}}c = false{{( ->|,|$)}}
 
 // The cell before the object, where its end would still be inside.
 [[cppverify::trusted]] int *before(const int *a, int n)
@@ -168,7 +169,7 @@ void before_object(int *a)
   int *q = before(a, 4);
   set(q, 5);
 }
-// CHECK-DAG: error: verification failed: before_object [{{.*}}::frame@[[@LINE-2]]:3]
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: before_object [frame]
 
 // The range a[3 : 2] runs past the cell a[3] the caller may write.
 void range_past_cell(int *a)
@@ -178,4 +179,4 @@ void range_past_cell(int *a)
   int *q = a + 3;
   zero2(q, 2);
 }
-// CHECK-DAG: error: verification failed: range_past_cell [{{.*}}::frame@[[@LINE-2]]:3]
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: range_past_cell [frame]

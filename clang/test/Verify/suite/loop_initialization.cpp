@@ -77,7 +77,7 @@ int partially_filled()
   }
   return a[3];
 }
-// CHECK-DAG: error: verification failed: partially_filled [{{.*}}::initialization@[[@LINE-2]]:3]
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: partially_filled [initialization]
 
 // Nor is one it reads before writing.
 int read_first()
@@ -93,7 +93,7 @@ int read_first()
   }
   return 0;
 }
-// CHECK-DAG: error: verification failed: read_first [{{.*}}::initialization@[[@LINE-5]]:7]
+// CHECK-DAG: :[[@LINE-5]]:7: error: verification failed: read_first [initialization]
 
 // Reading p[i] in an invariant bounds i at the head.
 int last(const int *p, int n)
@@ -144,4 +144,4 @@ void overrun()
     i = i + 1;
   }
 }
-// CHECK-DAG: error: verification failed: overrun [{{.*}}::dereference@[[@LINE-6]]:31#2]
+// CHECK-DAG: :[[@LINE-6]]:31: error: verification failed: overrun [dereference]

@@ -1798,6 +1798,9 @@ Results can be filtered by function name by passing
 def : DiagGroup<"frame-larger-than=", [BackendFrameLargerThan]>;
 def BackendPlugin : DiagGroup<"backend-plugin">;
 def RemarkBackendPlugin : DiagGroup<"remark-backend-plugin">;
+// cpp-verify's results in a compilation: its warnings, and its proofs as
+// remarks.
+def CppVerify : DiagGroup<"cppverify">;
 def BackendOptimizationRemark : DiagGroup<"pass">;
 def BackendOptimizationRemarkMissed : DiagGroup<"pass-missed">;
 def BackendOptimizationRemarkAnalysis : DiagGroup<"pass-analysis">;

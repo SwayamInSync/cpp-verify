@@ -26,7 +26,8 @@ bool is_digit_wrong(char c)
 {
   return c >= '0' && c <= '9';
 }
-// CHECK-DAG: error: verification failed: is_digit_wrong [{{.*}}c [ssa=c_0] [type=i8] = 57{{[,;]}}{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: is_digit_wrong {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}c = 57{{( ->|,|$)}}
 
 int digit_value(char c)
   cv::pre('0' <= c && c <= '9')

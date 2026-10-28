@@ -102,8 +102,10 @@ The classic example — the tool tells you the precondition you forgot:
 
 .. code-block:: text
 
-   abs.cpp:2:3: error: verification failed: abs_unguarded [...::overflow@2:3]
-     (counterexample: x [type=i32] = -2147483648)
+   abs.cpp:2:3: error: verification failed: abs_unguarded [overflow] [backend=z3] [reason=counterexample]
+       2 | { return x < 0 ? -x : x; }
+         |   ^
+   abs.cpp:2:3: note: counterexample: x = -2147483648
    Verified: abs_guarded [backend=z3]
 
 Negating ``INT_MIN`` overflows, so the first version fails at that input;
@@ -135,8 +137,10 @@ base is ``p`` then carries the obligation ``0 <= i < n``:
 .. code-block:: text
 
    Verified: get [backend=z3]
-   error: verification failed: last [...::bounds@11:10] (counterexample:
-     n = 1, p = 1)
+   example.cpp:10:10: error: verification failed: last [bounds] [backend=z3] [reason=counterexample]
+      10 | { return p[n]; }   // FAILS: p[n] is one past the end
+         |          ^
+   example.cpp:10:10: note: counterexample: p = 1, n = 1
 
 ``<cppverify.h>`` declares ``valid`` for every pointee type, so the same
 marker describes an ``int`` buffer, a ``char`` buffer, or an array of
@@ -287,8 +291,10 @@ very input it means to exclude:
 
 .. code-block:: text
 
-   per.cpp:2:17: error: verification failed: contract of per_item
-     [...::contract::division-by-zero@2:17] (counterexample: items [type=i32] = 0)
+   per.cpp:2:17: error: verification failed: contract of per_item [division-by-zero] [backend=z3] [reason=counterexample]
+       2 |   cv::pre(total / items <= 100 && items > 0)
+         |                 ^
+   per.cpp:2:17: note: counterexample: items = 0
    Verified: per_item [backend=z3]
 
 The body verifies, since its proof assumes the precondition. The contract does
@@ -325,7 +331,14 @@ therefore holds, and an assert documents a fact the proof checks. With
 
 .. code-block:: text
 
-   ratio.cpp:7:3: error: verification failed: ratio [...::unreachable@7:3] (counterexample: parts [ssa=parts_0] [type=i32] = 0, ...) [backend=z3] [reason=counterexample]
+   ratio.cpp:7:3: error: verification failed: ratio [unreachable] [backend=z3] [reason=counterexample]
+       7 |   assert(parts > 0 && "parts must be positive");
+         |   ^
+   /usr/include/assert.h:105:9: note: expanded from macro 'assert'
+     105 |       : __assert_fail (#expr, __ASSERT_FILE, __ASSERT_LINE,             \
+         |         ^
+   ratio.cpp:7:3: note: counterexample: total = 0, parts = 0
+   ratio.cpp:7:3: note: takes the false branch
 
 The division needs ``parts != 0``, which the assert establishes, and the
 assert can fail: a caller may pass ``parts == 0``. Adding

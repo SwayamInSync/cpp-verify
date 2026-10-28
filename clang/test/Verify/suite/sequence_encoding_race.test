@@ -6,4 +6,4 @@
 # RUN: %python %S/Inputs/push_chain.py 200 > %t.cpp
 # RUN: not %cpp-verify --jobs=2 --timeout=10000 %t.cpp -- 2>&1 | FileCheck %s
 
-# CHECK: error: verification failed: chain_bad [{{.*}}::assertion@{{.*}}] (counterexample: {{.*}}) [backend=z3] [reason=counterexample]
+# CHECK: error: verification failed: chain_bad [assertion] [backend=z3] [reason=counterexample]

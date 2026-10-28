@@ -145,8 +145,10 @@ static std::unique_ptr<VExpr> mathOperand(std::unique_ptr<VExpr> V) {
   }
   VType From = V->Ty;
   SourceLocation Loc = V->Loc;
+  SourceLocation BeginLoc = V->BeginLoc;
   SourceLocation EndLoc = V->EndLoc;
   auto Cast = std::make_unique<VCastExpr>(std::move(V), From, To, Loc);
+  Cast->BeginLoc = BeginLoc;
   Cast->EndLoc = EndLoc;
   return Cast;
 }
@@ -1299,6 +1301,9 @@ void ASTConverter::recordSourceVariable(const ValueDecl *D) {
   }
   Record(InternalBase, DisplayBase,
          VType::fromQualType(D->getType(), IntMode, Ctx));
+  if (auto It = CurrentFn->SourceVariables.find(InternalBase);
+      It != CurrentFn->SourceVariables.end())
+    It->second.Reference = D->getType()->isReferenceType();
 }
 
 bool ASTConverter::isDynamicAddress(const Expr *E) const {
@@ -2559,6 +2564,7 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
     // The post describes the spec where its body defines it.
     for (auto &Post : Fn->Postconditions) {
       const SourceLocation PostLoc = Post->Loc;
+      const SourceLocation PostBegin = Post->BeginLoc;
       const SourceLocation PostEnd = Post->EndLoc;
       Post = std::make_unique<VBinOpExpr>(
           VBinOp::Or,
@@ -2566,6 +2572,7 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
                                          cloneVExpr(Fn->Domain.get()),
                                          VType::makeBool(), PostLoc),
           std::move(Post), VType::makeBool(), PostLoc);
+      Post->BeginLoc = PostBegin;
       Post->EndLoc = PostEnd;
     }
     Unspecified.push_back(std::move(Outside));
@@ -5395,8 +5402,10 @@ std::unique_ptr<VExpr> ASTConverter::convertExpr(const Expr *E) {
           It->second, VType::fromQualType(E->getType(), IntMode, Ctx),
           E->getExprLoc());
   auto Result = convertExprImpl(E);
-  if (Result && E)
+  if (Result && E) {
+    Result->BeginLoc = E->getBeginLoc();
     Result->EndLoc = E->getEndLoc();
+  }
   if (Result && E && isTriggerMarked(E))
     markTrigger(Result, E);
   return Result;

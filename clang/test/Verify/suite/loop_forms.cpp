@@ -45,7 +45,8 @@ int stop_at_three_wrong(int n)
     cv::decreases(n - i);
   return i;
 }
-// CHECK-DAG: error: verification failed: stop_at_three_wrong [{{.*}}n [ssa=n_0] [type=i32] = {{[4-9]|[1-9][0-9]+}}{{[,;]}}{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: stop_at_three_wrong {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}n = {{[4-9]|[1-9][0-9]+}}{{( ->|,|$)}}
 
 // A break in the first iteration skips the loop.
 int first_break(int x)
@@ -74,7 +75,8 @@ int first_break_wrong(int x)
   } while (false);
   return r;
 }
-// CHECK-DAG: error: verification failed: first_break_wrong [{{.*}}x [ssa=x_0] [type=i32] = {{[1-9][0-9]*}}{{[,;]}}{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: first_break_wrong {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}x = {{[1-9][0-9]*}}{{( ->|,|$)}}
 
 int count_odd(int n)
   cv::pre(1 <= n && n <= 100)
@@ -360,7 +362,7 @@ int pairs_wrong(int n)
   }
   return j;
 }
-// CHECK-DAG: error: verification failed: pairs_wrong [{{.*}}::postcondition@{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: pairs_wrong [postcondition]{{.*}}[reason=counterexample]
 
 int ordered(int x)
   cv::pre(0 <= x && x < 100)

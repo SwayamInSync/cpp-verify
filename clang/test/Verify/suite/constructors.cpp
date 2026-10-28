@@ -85,7 +85,7 @@ struct Partial {
   int n;
   int limit;
 };
-// CHECK-DAG: error: verification failed: Partial::Partial [{{.*}}::initialization@[[@LINE-3]]:7]
+// CHECK-DAG: :[[@LINE-3]]:7: error: verification failed: Partial::Partial [initialization]
 
 // Members are initialized in declaration order, whatever the order of the
 // initializers: `n` reads `limit` before it is initialized.
@@ -97,7 +97,7 @@ struct Early {
   int n;
   int limit;
 };
-// CHECK-DAG: error: verification failed: Early::Early [{{.*}}::initialization@
+// CHECK-DAG: error: verification failed: Early::Early [initialization]
 
 // The in-class initializers of the members a constructor does not name run
 // in their place.

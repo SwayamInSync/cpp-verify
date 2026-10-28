@@ -69,7 +69,7 @@ void too_strong(const int *p, int n)
 {
   cppverify::check(p[2] >= 1);
 }
-// Z3-DAG: error: verification failed: too_strong [{{.*}}::assertion@[[@LINE-2]]:3]
+// Z3-DAG: :[[@LINE-2]]:3: error: verification failed: too_strong [assertion]
 
 void outside_range(const int *p, int n)
   cppverify::pre(valid(p, n + 1) && n >= 3 && n <= 100)
@@ -77,11 +77,11 @@ void outside_range(const int *p, int n)
 {
   cppverify::check(p[n] >= 0);
 }
-// Z3-DAG: error: verification failed: outside_range [{{.*}}::assertion@[[@LINE-2]]:3]
+// Z3-DAG: :[[@LINE-2]]:3: error: verification failed: outside_range [assertion]
 
 void wrong_witness(const int *p, int n)
   cppverify::pre(valid(p, n) && n >= 3 && n <= 100 && p[2] == 7)
   cppverify::post(cppverify::exists(k, 3, n, p[k] == 7))
 {
 }
-// Z3-DAG: error: verification failed: wrong_witness [{{.*}}::postcondition@[[@LINE-3]]:19]
+// Z3-DAG: :[[@LINE-3]]:19: error: verification failed: wrong_witness [postcondition]

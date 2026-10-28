@@ -206,8 +206,31 @@ one line that counts them:
 .. code-block:: text
 
    Verified: add_one [backend=z3]
-   summary.cpp:14:23: error: verification failed: add_two [fn_...::postcondition@14:23] (counterexample: result [ssa=__result_1] [type=i32] = 5, x [ssa=x_0] [type=i32] = 3; trace: return.return@16:3 value=5) [backend=z3] [reason=counterexample]
-   Summary: 1 verified, 1 failed in 0.1 s
+   summary.cpp:14:23: error: verification failed: add_two [postcondition] [backend=z3] [reason=counterexample]
+      14 |   cv::post(cv::result == twice(x))
+         |            ~~~~~~~~~~~^~~~~~~~~~~
+   summary.cpp:14:23: note: counterexample: x = 3, result = 5
+   summary.cpp:16:3: note: returns 5
+      16 |   return x + 2;
+         |   ^
+   Summary: 1 verified, 1 failed in 0.0 s
+
+A failure prints as Clang prints an error: the kind of check that fails
+(``[postcondition]``), the backend and the reason, and the source with a caret
+under the check; then a note with the counterexample's values by their source
+names, in the order the source declares them (``result`` last), each with
+the values it takes along the path in turn (``i = 0 -> 1``), not those of
+branches the path does not take, and a reference as the address it refers to
+(``&r = 4``); then a note at each step
+of the path it takes: the branches, the calls with their arguments, a loop's
+entry and an arbitrary iteration of it, the memory it writes, and the value it
+returns. A path of more than ten steps shows its first and last five. A step
+inside a macro is shown where the macro is used, and an operation whose own
+check fails is no step of the path: a failing check in ``return e;`` ends the
+path before the return. A value
+the counterexample does not determine is ``<unknown>``. JSON keeps what the
+text leaves out (see `Structured diagnostics`_). Errors and warnings show their
+source line the same way; verdicts are one line each.
 
 The summary counts each kind of verdict the run reported (verified, which
 includes ``Certified`` and ``Proved (z3+lean)``, failed, unresolved,
@@ -1012,9 +1035,8 @@ kernel checking is required.
 Structured diagnostics
 ----------------------
 
-Failed Z3, cvc5, portfolio, and BMC results identify a source-anchored
-obligation such as ``function-identity::overflow@line:column#2``. The kind says
-what the obligation checks:
+A failure names the kind of the check that fails, as ``[overflow]``. The
+kind says what the check is:
 
 - contracts: ``assertion``, ``precondition``, ``postcondition``,
   ``invariant-entry``, ``invariant-preserved``, ``termination``,
@@ -1034,20 +1056,22 @@ what the obligation checks:
   verifier rejects fail-closed.
 
 The check that a function's contract is defined (see :doc:`functions-loops`)
-is reported only when it fails, as ``contract of f``. Its obligations are
-named ``function-identity::contract::kind@line:column`` with the definedness
-kinds above, and JSON records give ``f`` as the function.
+is reported only when it fails, as ``contract of f``, with the definedness
+kinds above; JSON records give ``f`` as the function.
 
-The local suffix only disambiguates obligations of one kind at the same anchor,
-so inserting or reordering an unrelated obligation does not renumber later IDs
-unless its source anchor moves. JSON records carry the kind as
-``obligation.kind``. Diagnostics include inclusive source ranges and source
-display names while retaining internal SSA names for unambiguous tooling.
-
-Counterexample values carry exact sorts such as ``bool``, ``i32``, ``u32``,
-``math-i32``, ``pointer``, and ``heap``. Z3 model completion is disabled:
-undetermined values print as ``<unknown>`` and become JSON ``null``. Signed and
-unsigned bit-vectors are decoded to source-level decimal values.
+JSON records also carry each failing check's source-anchored ID, such as
+``function-identity::overflow@line:column#2``, as ``obligation.id``, and its
+kind as ``obligation.kind``. The local suffix only disambiguates checks of one
+kind at the same anchor, so inserting or reordering an unrelated check does
+not renumber later IDs unless its source anchor moves. Records include
+inclusive source ranges, and each counterexample value has its source name,
+its internal SSA name (``ssa_name``), and its exact sort, such as ``bool``,
+``i32``, ``u32``, ``math-i32``, ``pointer``, and ``heap``. Z3 model completion
+is disabled: undetermined values print as ``<unknown>`` and become JSON
+``null``. Signed and unsigned bit-vectors are decoded to source-level decimal
+values. A record's ``message`` is the text of its error line; the values and
+the path are in ``model`` and ``trace``. Before 0.2 the message also held the
+check's ID and every value with its SSA name and sort.
 
 Counterexample traces may contain guarded branch, modular-call, loop,
 heap-write, allocation/provenance, lifetime-end, deletion, and return events.
@@ -1094,9 +1118,21 @@ counts each function once:
 .. code-block:: text
 
    $ cpp-verify --max-failures=0 three_bugs.cpp
-   three_bugs.cpp:7:3: error: verification failed: three_bugs [fn_...::division-by-zero@7:3] (counterexample: x [ssa=x_0] [type=i32] = 0, y [ssa=y_0] [type=i32] = 0) [backend=z3] [reason=counterexample]
-   three_bugs.cpp:8:3: error: verification failed: three_bugs [fn_...::overflow@8:3] (counterexample: q [ssa=q_1] [type=i32] = -1, x [ssa=x_0] [type=i32] = -2147483648, y [ssa=y_0] [type=i32] = -9) [backend=z3] [reason=counterexample]
-   three_bugs.cpp:5:23: error: verification failed: three_bugs [fn_...::postcondition@5:23] (counterexample: result [ssa=__result_1] [type=i32] = 0, q [ssa=q_1] [type=i32] = 0, r [ssa=r_1] [type=i32] = 0, x [ssa=x_0] [type=i32] = 0, y [ssa=y_0] [type=i32] = 11; trace: return.return@9:3 value=0) [backend=z3] [reason=counterexample]
+   three_bugs.cpp:7:3: error: verification failed: three_bugs [division-by-zero] [backend=z3] [reason=counterexample]
+       7 |   int q = 10 / y;
+         |   ^
+   three_bugs.cpp:7:3: note: counterexample: x = 0, y = 0
+   three_bugs.cpp:8:3: error: verification failed: three_bugs [overflow] [backend=z3] [reason=counterexample]
+       8 |   int r = x + q;
+         |   ^
+   three_bugs.cpp:8:3: note: counterexample: x = -2147483648, y = -9, q = -1
+   three_bugs.cpp:5:23: error: verification failed: three_bugs [postcondition] [backend=z3] [reason=counterexample]
+       5 |   cv::post(cv::result > 0)
+         |            ~~~~~~~~~~~^~~
+   three_bugs.cpp:5:23: note: counterexample: x = 0, y = 11, q = 0, r = 0, result = 0
+   three_bugs.cpp:9:3: note: returns 0
+       9 |   return r;
+         |   ^
    Summary: 1 failed in 0.0 s
 
 Without the option only the first line is printed. The overflow's
@@ -1249,7 +1285,7 @@ module is ``BoundedSafe`` when every goal but some unwinding goal
 certifies (:doc:`../book/part-ii/ch17-backends-modular-calls`).
 ``--lean-fallback`` applies to source verification only.
 
-``--obligation-out`` writes ``cppverify.obligation/3`` records only after exact
+``--obligation-out`` writes ``cppverify.obligation/4`` records only after exact
 serialize/deserialize/validate/reserialize checks. Stable wire tags make the
 format independent of C++ enum ordinals. The reader rejects malformed magic,
 unsupported versions, truncation, invalid tags, inconsistent feature
@@ -1257,8 +1293,11 @@ declarations, duplicate identities, and oversized/deep expressions.
 Schema v2 adds the precise obligation kinds; schema v3 each spec function's
 termination measures, read like its definition, and, with source metadata,
 where each assumption of a goal comes from, which names a hypothesis of a
-readable Lean goal. Records of schema v2, and of schema v1, which name only
-assertions, postconditions, and unwinding checks, are still read.
+readable Lean goal; schema v4, with source metadata, where each variable
+version of a counterexample is defined, so a replayed counterexample lists the
+values its path takes. Records of schemas v3 and v2, and of schema v1, which
+name only assertions, postconditions, and unwinding checks, are still read; a
+counterexample replayed from one before v4 lists the values of every version.
 Records cap integer widths at 4096 bits, expression depth at 4096, and
 collections plus expression nodes/edges at 100,000 per record. It also rejects
 embedded NULs, non-canonical numerals, inactive payload fields, ill-scoped
@@ -1340,6 +1379,37 @@ makes a lone ``-fno-verify`` a fast *light check*: it validates C++ syntax,
 contract syntax, **and** contract semantics (the ``cppverify::old``/``cppverify::result`` placement and
 bool-convertibility rules), but does **not** check your logic. Ideal for
 editors, CI pre-flight, and LLM/agent loops.
+
+Results in a compilation
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+``clang++ -fverify-contracts`` reports what it verifies as its own
+diagnostics, in the format ``cpp-verify`` prints: a failure is an error with
+its notes, an unresolved result is an error, a warning is a warning in
+``-Wcppverify`` (``-Wno-cppverify`` hides it and ``-Werror=cppverify`` makes it
+an error), and a proof is a remark at its function, shown with
+``-Rcppverify``. Colors,
+``-fdiagnostics-format=sarif``, and editors that read the compiler's
+diagnostics show them as they show Clang's:
+
+.. code-block:: text
+
+   $ clang++ -std=c++17 -fverify-contracts -Rcppverify -c summary.cpp -o summary.o
+   summary.cpp:5:5: remark: Verified: add_one [backend=z3] [-Rcppverify]
+       5 | int add_one(int x)
+         |     ^
+   summary.cpp:14:23: error: verification failed: add_two [postcondition] [backend=z3] [reason=counterexample]
+      14 |   cv::post(cv::result == twice(x))
+         |            ~~~~~~~~~~~^~~~~~~~~~~
+   summary.cpp:14:23: note: counterexample: x = 3, result = 5
+   summary.cpp:16:3: note: returns 5
+      16 |   return x + 2;
+         |   ^
+   1 error generated.
+
+Before 0.2 the compiler printed the verifier's lines as text, and then the
+one error ``cppverify: verification failed``: ``-fdiagnostics-format=sarif``
+gave a document without results, and ``-w`` and ``-Werror`` changed nothing.
 
 Quick lookup
 ~~~~~~~~~~~~

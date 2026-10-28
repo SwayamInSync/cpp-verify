@@ -2281,10 +2281,11 @@ dead declarations or trivial Boolean structure. It does not rewrite
 arithmetic, quantifiers, pointer/heap expressions, or assumptions.
 
 `--obligation-out=FILE` publishes deterministic, concatenable
-`cppverify.obligation/3` binary records with stable wire tags and portable
+`cppverify.obligation/4` binary records with stable wire tags and portable
 source attribution; schema v3 adds each logical function's termination
 measures and, with source attribution, where each assumption of a goal comes
-from, neither hashed, and records of schemas v1 and v2 remain readable. Publication includes an
+from, schema v4 where each variable version of a counterexample is defined,
+none of them hashed, and records of schemas v1 to v3 remain readable. Publication includes an
 exact serialize/deserialize/validate/reserialize check. SHA-256 module and
 per-obligation semantic hashes exclude source paths, display-only names, both
 positional and source-anchored obligation IDs, and every obligation kind except

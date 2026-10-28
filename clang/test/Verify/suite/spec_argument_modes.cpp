@@ -23,4 +23,5 @@ cppverify::proof void above_fails(int a)
 {
   cppverify::ghost { cppverify::reveal_with_fuel(above, 3); }
 }
-// CHECK-DAG: error: verification failed: above_fails {{.*}}(counterexample: a {{.*}}= 2147483647) [backend=z3] [reason=counterexample]
+// CHECK-DAG: error: verification failed: above_fails {{.*}} [backend=z3] [reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}a = 2147483647{{( ->|,|$)}}

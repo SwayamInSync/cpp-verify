@@ -26,7 +26,7 @@ cppverify::proof void stores_element(seq s)
 {
   int x = s[0];
 }
-// CHECK-DAG: error: verification failed: stores_element [{{.*}}::overflow@[[@LINE-2]]:3]
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: stores_element [overflow]
 
 cppverify::proof void stores_bounded_element(seq s)
   cppverify::pre(s.len() > 0 && 0 <= s[0] && s[0] < 100)
@@ -48,7 +48,7 @@ cppverify::proof void passes_length(seq s)
 {
   takes_int(s.len() + 2147483647);
 }
-// CHECK-DAG: error: verification failed: passes_length [{{.*}}::overflow@[[@LINE-2]]:3]
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: passes_length [overflow]
 
 cppverify::proof void passes_bounded_length(seq s)
   cppverify::pre(s.len() < 1000)
@@ -77,4 +77,4 @@ void ghost_length_too_large(int n)
     int k = s.len() + 2147483647;
   }
 }
-// CHECK-DAG: error: verification failed: ghost_length_too_large [{{.*}}::overflow@
+// CHECK-DAG: error: verification failed: ghost_length_too_large [overflow]

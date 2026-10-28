@@ -13,7 +13,7 @@ int neg_shift()
   int m = -1;
   return m << 1;
 }
-// CXX17-DAG: error: verification failed: neg_shift [{{.*}}::shift@
+// CXX17-DAG: error: verification failed: neg_shift [shift]
 // CXX20-DAG: Verified: neg_shift [backend=z3]
 
 int neg_shift_assign()
@@ -23,7 +23,7 @@ int neg_shift_assign()
   m <<= 2;
   return m;
 }
-// CXX17-DAG: error: verification failed: neg_shift_assign [{{.*}}::shift@
+// CXX17-DAG: error: verification failed: neg_shift_assign [shift]
 // CXX20-DAG: Verified: neg_shift_assign [backend=z3]
 
 // 2 * 2^31 fits neither int nor unsigned int; modulo 2^32 it is 0.
@@ -33,7 +33,7 @@ int past_unsigned(int x)
 {
   return x << 31;
 }
-// CXX17-DAG: error: verification failed: past_unsigned [{{.*}}::shift@
+// CXX17-DAG: error: verification failed: past_unsigned [shift]
 // CXX20-DAG: Verified: past_unsigned [backend=z3]
 
 // A contract is C++ too.
@@ -43,7 +43,7 @@ int doubled(int x)
 {
   return x * 2;
 }
-// CXX17-DAG: error: verification failed: doubled [{{.*}}::shift@
+// CXX17-DAG: error: verification failed: doubled [shift]
 // CXX20-DAG: Verified: doubled [backend=z3]
 
 // 2^31 fits unsigned int, so this is INT_MIN in both.
@@ -60,7 +60,7 @@ int too_far(int x, int k)
 {
   return x << k;
 }
-// CHECK-DAG: error: verification failed: too_far [{{.*}}::shift@
+// CHECK-DAG: error: verification failed: too_far [shift]
 
 int neg_right()
   cppverify::post(cppverify::result == -2)

@@ -58,39 +58,44 @@ int counted(int n)
   return c;
 }
 
-// ONE:      max_failures.cpp:23:3: error: verification failed: three_bugs [{{.*}}::division-by-zero@23:3] (counterexample: {{.*}}y [ssa=y_0] [type=i32] = 0{{.*}}) [backend=z3] [reason=counterexample]
-// ONE-NEXT: max_failures.cpp:30:23: error: verification failed: one_bug [{{.*}}::postcondition@30:23]
-// ONE-NEXT: max_failures.cpp:40:3: error: verification failed: dependent [{{.*}}::division-by-zero@40:3]
-// ONE-NEXT: max_failures.cpp:49:23: error: verification failed: counted [{{.*}}::postcondition@49:23]
-// ONE-NEXT: note: the counterexample's state at the loop at 53:3 is any state its invariants allow, not necessarily one an execution reaches
+// ONE:      max_failures.cpp:23:3: error: verification failed: three_bugs [division-by-zero] [backend=z3] [reason=counterexample]
+// ONE: note: counterexample: {{.*}}y = 0{{( ->|,|$)}}
+// ONE: max_failures.cpp:30:23: error: verification failed: one_bug [postcondition]
+// ONE: max_failures.cpp:40:3: error: verification failed: dependent [division-by-zero]
+// ONE: max_failures.cpp:49:23: error: verification failed: counted [postcondition]
+// ONE: note: the counterexample's state at the loop at 53:3 is any state its invariants allow, not necessarily one an execution reaches
 // ONE-NEXT: note: no execution fails this check: every loop ends within 3 iterations, and unrolling proves it there; the loops' invariants are too weak for an unbounded proof
 // ONE-NEXT: Summary: 4 failed
 
 // The overflow's counterexample divides by y, which is not zero.
-// TWO:      max_failures.cpp:23:3: error: verification failed: three_bugs [{{.*}}::division-by-zero@23:3]
-// TWO-NEXT: max_failures.cpp:24:3: error: verification failed: three_bugs [{{.*}}::overflow@24:3] (counterexample: {{.*}}y [ssa=y_0] [type=i32] = {{-?[1-9][0-9]*}}) [backend=z3] [reason=counterexample]
-// TWO-NEXT: max_failures.cpp:30:23: error: verification failed: one_bug [{{.*}}::postcondition@30:23]
-// TWO-NEXT: max_failures.cpp:40:3: error: verification failed: dependent [{{.*}}::division-by-zero@40:3]
-// TWO-NEXT: max_failures.cpp:49:23: error: verification failed: counted [{{.*}}::postcondition@49:23]
-// TWO-NEXT: note: the counterexample's state at the loop at 53:3 is any state its invariants allow, not necessarily one an execution reaches
+// TWO:      max_failures.cpp:23:3: error: verification failed: three_bugs [division-by-zero]
+// TWO: max_failures.cpp:24:3: error: verification failed: three_bugs [overflow] [backend=z3] [reason=counterexample]
+// TWO: note: counterexample: {{.*}}y = {{-?[1-9][0-9]*}}{{( ->|,|$)}}
+// TWO: max_failures.cpp:30:23: error: verification failed: one_bug [postcondition]
+// TWO: max_failures.cpp:40:3: error: verification failed: dependent [division-by-zero]
+// TWO: max_failures.cpp:49:23: error: verification failed: counted [postcondition]
+// TWO: note: the counterexample's state at the loop at 53:3 is any state its invariants allow, not necessarily one an execution reaches
 // TWO-NEXT: note: no execution fails this check: every loop ends within 3 iterations, and unrolling proves it there; the loops' invariants are too weak for an unbounded proof
-// TWO-NEXT: max_failures.cpp:50:23: error: verification failed: counted [{{.*}}::postcondition@50:23]
-// TWO-NEXT: note: the counterexample's state at the loop at 53:3 is any state its invariants allow, not necessarily one an execution reaches
-// TWO-NEXT: note: an execution fails this check with no iteration of any loop (counterexample: {{.*}}n [ssa=n_0] [type=i32] = 0{{.*}})
+// TWO-NEXT: max_failures.cpp:50:23: error: verification failed: counted [postcondition]
+// TWO: note: the counterexample's state at the loop at 53:3 is any state its invariants allow, not necessarily one an execution reaches
+// TWO-NEXT: note: an execution fails this check with no iteration of any loop (counterexample: {{.*}}n = 0{{.*}})
 // TWO-NEXT: Summary: 4 failed
 
-// ALL:      max_failures.cpp:23:3: error: verification failed: three_bugs [{{.*}}::division-by-zero@23:3]
-// ALL-NEXT: max_failures.cpp:24:3: error: verification failed: three_bugs [{{.*}}::overflow@24:3] (counterexample: {{.*}}y [ssa=y_0] [type=i32] = {{-?[1-9][0-9]*}})
-// ALL-NEXT: max_failures.cpp:20:23: error: verification failed: three_bugs [{{.*}}::postcondition@20:23] (counterexample: {{.*}}y [ssa=y_0] [type=i32] = {{-?[1-9][0-9]*}};
-// ALL-NEXT: max_failures.cpp:21:23: error: verification failed: three_bugs [{{.*}}::postcondition@21:23] (counterexample: {{.*}}y [ssa=y_0] [type=i32] = {{-?[1-9][0-9]*}};
-// ALL-NEXT: max_failures.cpp:30:23: error: verification failed: one_bug [{{.*}}::postcondition@30:23]
-// ALL-NEXT: max_failures.cpp:40:3: error: verification failed: dependent [{{.*}}::division-by-zero@40:3]
-// ALL-NEXT: max_failures.cpp:49:23: error: verification failed: counted [{{.*}}::postcondition@49:23]
-// ALL-NEXT: note: the counterexample's state at the loop at 53:3 is any state its invariants allow, not necessarily one an execution reaches
+// ALL:      max_failures.cpp:23:3: error: verification failed: three_bugs [division-by-zero]
+// ALL: max_failures.cpp:24:3: error: verification failed: three_bugs [overflow]
+// ALL: note: counterexample: {{.*}}y = {{-?[1-9][0-9]*}}{{( ->|,|$)}}
+// ALL: max_failures.cpp:20:23: error: verification failed: three_bugs [postcondition]
+// ALL: note: counterexample: {{.*}}y = {{-?[1-9][0-9]*}}{{( ->|,|$)}}
+// ALL: max_failures.cpp:21:23: error: verification failed: three_bugs [postcondition]
+// ALL: note: counterexample: {{.*}}y = {{-?[1-9][0-9]*}}{{( ->|,|$)}}
+// ALL: max_failures.cpp:30:23: error: verification failed: one_bug [postcondition]
+// ALL: max_failures.cpp:40:3: error: verification failed: dependent [division-by-zero]
+// ALL: max_failures.cpp:49:23: error: verification failed: counted [postcondition]
+// ALL: note: the counterexample's state at the loop at 53:3 is any state its invariants allow, not necessarily one an execution reaches
 // ALL-NEXT: note: no execution fails this check: every loop ends within 3 iterations, and unrolling proves it there; the loops' invariants are too weak for an unbounded proof
-// ALL-NEXT: max_failures.cpp:50:23: error: verification failed: counted [{{.*}}::postcondition@50:23]
-// ALL-NEXT: note: the counterexample's state at the loop at 53:3 is any state its invariants allow, not necessarily one an execution reaches
-// ALL-NEXT: note: an execution fails this check with no iteration of any loop (counterexample: {{.*}}n [ssa=n_0] [type=i32] = 0{{.*}})
+// ALL-NEXT: max_failures.cpp:50:23: error: verification failed: counted [postcondition]
+// ALL: note: the counterexample's state at the loop at 53:3 is any state its invariants allow, not necessarily one an execution reaches
+// ALL-NEXT: note: an execution fails this check with no iteration of any loop (counterexample: {{.*}}n = 0{{.*}})
 // ALL-NEXT: Summary: 4 failed
 
 // JSON-COUNT-4: "function":"three_bugs"

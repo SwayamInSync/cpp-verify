@@ -21,6 +21,7 @@ std::unique_ptr<LogicExpr> cloneLogicExpr(const LogicExpr *Expr) {
   auto Copy = std::make_unique<LogicExpr>(Expr->K);
   Copy->Sort = Expr->Sort;
   Copy->Loc = Expr->Loc;
+  Copy->BeginLoc = Expr->BeginLoc;
   Copy->EndLoc = Expr->EndLoc;
   Copy->Source = Expr->Source;
   Copy->IntVal = Expr->IntVal;
@@ -116,6 +117,7 @@ std::unique_ptr<LogicExpr> boolLiteral(bool Value, const LogicExpr &Source) {
       std::make_unique<LogicExpr>(Value ? LogicExpr::True : LogicExpr::False);
   Result->Sort = LogicSort::boolSort();
   Result->Loc = Source.Loc;
+  Result->BeginLoc = Source.BeginLoc;
   Result->EndLoc = Source.EndLoc;
   Result->Source = Source.Source;
   return Result;
@@ -157,6 +159,7 @@ LogicExprRef lowerUnsignedMathArithmetic(const LogicExprRef &Expr,
   auto Divisor = std::make_unique<LogicExpr>(LogicExpr::IntLit);
   Divisor->Sort = SourceSort;
   Divisor->Loc = Expr->Children[1]->Loc;
+  Divisor->BeginLoc = Expr->Children[1]->BeginLoc;
   Divisor->EndLoc = Expr->Children[1]->EndLoc;
   Divisor->Source = Expr->Children[1]->Source;
   Divisor->IntVal = Expr->Children[1]->IntVal;
@@ -164,6 +167,7 @@ LogicExprRef lowerUnsignedMathArithmetic(const LogicExprRef &Expr,
   auto MachineArithmetic = std::make_unique<LogicExpr>(Expr->K);
   MachineArithmetic->Sort = SourceSort;
   MachineArithmetic->Loc = Expr->Loc;
+  MachineArithmetic->BeginLoc = Expr->BeginLoc;
   MachineArithmetic->EndLoc = Expr->EndLoc;
   MachineArithmetic->Source = Expr->Source;
   MachineArithmetic->Children.push_back(
@@ -199,6 +203,7 @@ simplifyUnsignedMathToBitVector(const LogicExprRef &Expr,
   auto Resize = std::make_unique<LogicExpr>(LogicExpr::BvResize);
   Resize->Sort = Expr->Sort;
   Resize->Loc = Expr->Loc;
+  Resize->BeginLoc = Expr->BeginLoc;
   Resize->EndLoc = Expr->EndLoc;
   Resize->Source = Expr->Source;
   Resize->Children.push_back(std::move(MachineArithmetic));
@@ -314,6 +319,7 @@ std::unique_ptr<LogicExpr> negate(std::unique_ptr<LogicExpr> Expr) {
   Result->Sort = LogicSort::boolSort();
   if (Expr) {
     Result->Loc = Expr->Loc;
+    Result->BeginLoc = Expr->BeginLoc;
     Result->EndLoc = Expr->EndLoc;
     Result->Source = Expr->Source;
   }
@@ -333,6 +339,7 @@ buildCompleteGoal(const std::vector<Obligation> &Obligations) {
     auto Conjunction = std::make_unique<LogicExpr>(LogicExpr::And);
     Conjunction->Sort = LogicSort::boolSort();
     Conjunction->Loc = Complete->Loc;
+    Conjunction->BeginLoc = Complete->BeginLoc;
     Conjunction->EndLoc = Complete->EndLoc;
     Conjunction->Source = Complete->Source;
     Conjunction->Children.push_back(std::move(Complete));
@@ -406,6 +413,10 @@ void simplifyFunctions(ObligationModule &Module,
                                       }),
                        Event.Values.end());
   }
+  for (auto &[InternalName, Variable] : Module.DiagnosticVariables)
+    if (Variable.Guard &&
+        !callsOnlyReachableFunctions(Variable.Guard.get(), Reachable))
+      Variable.Guard = nullptr;
 
   for (auto It = Module.LogicFunctions.begin();
        It != Module.LogicFunctions.end();) {
@@ -445,6 +456,7 @@ std::unique_ptr<LogicExpr> substituteVariable(const LogicExpr *Expr,
   auto Copy = std::make_unique<LogicExpr>(Expr->K);
   Copy->Sort = Expr->Sort;
   Copy->Loc = Expr->Loc;
+  Copy->BeginLoc = Expr->BeginLoc;
   Copy->EndLoc = Expr->EndLoc;
   Copy->Source = Expr->Source;
   Copy->IntVal = Expr->IntVal;
@@ -467,6 +479,7 @@ std::unique_ptr<LogicExpr> logicNode(LogicExpr::Kind K, LogicSort Sort,
   auto Node = std::make_unique<LogicExpr>(K);
   Node->Sort = Sort;
   Node->Loc = At.Loc;
+  Node->BeginLoc = At.BeginLoc;
   Node->EndLoc = At.EndLoc;
   Node->Source = At.Source;
   return Node;

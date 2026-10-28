@@ -222,33 +222,33 @@ int contract_division_by_zero(int x, int y)
 }
 
 // VERIFY-DAG: Verified: ghost_in_range
-// VERIFY-DAG: error: verification failed: ghost_out_of_range [{{.*}}::overflow@
-// VERIFY-DAG: error: verification failed: ghost_no_wrap [{{.*}}::overflow@
-// VERIFY-DAG: error: verification failed: ghost_negative_unsigned [{{.*}}::overflow@
+// VERIFY-DAG: error: verification failed: ghost_out_of_range [overflow]
+// VERIFY-DAG: error: verification failed: ghost_no_wrap [overflow]
+// VERIFY-DAG: error: verification failed: ghost_negative_unsigned [overflow]
 // VERIFY-DAG: Verified: ghost_machine_arithmetic
 // VERIFY-DAG: Verified: proof_in_range
-// VERIFY-DAG: error: verification failed: proof_out_of_range [{{.*}}::overflow@
+// VERIFY-DAG: error: verification failed: proof_out_of_range [overflow]
 // VERIFY-DAG: Verified: constexpr_argument_in_range
-// VERIFY-DAG: error: verification failed: constexpr_argument_out_of_range [{{.*}}::overflow@
+// VERIFY-DAG: error: verification failed: constexpr_argument_out_of_range [overflow]
 // VERIFY-DAG: Verified: constexpr_short_parameter [
-// VERIFY-DAG: error: verification failed: constexpr_short_parameter_out_of_range [{{.*}}::overflow@
+// VERIFY-DAG: error: verification failed: constexpr_short_parameter_out_of_range [overflow]
 // VERIFY-DAG: Verified: spec_through_constexpr [
-// VERIFY-DAG: error: verification failed: spec_through_constexpr_out_of_range [{{.*}}::overflow@
+// VERIFY-DAG: error: verification failed: spec_through_constexpr_out_of_range [overflow]
 // VERIFY-DAG: Verified: contract_exact
 // VERIFY-DAG: Verified: contract_implicit_widening
 // VERIFY-DAG: Verified: contract_mixed_arithmetic
 // VERIFY-DAG: Verified: contract_mixed_widening
-// VERIFY-DAG: error: verification failed: contract_mixed_narrowing [{{.*}}::overflow@
+// VERIFY-DAG: error: verification failed: contract_mixed_narrowing [overflow]
 // VERIFY-DAG: Verified: contract_implicit_unsigned
 // VERIFY-DAG: Verified: contract_mixed_order
 // VERIFY-DAG: Verified: contract_conditional
 // VERIFY-DAG: Verified: contract_explicit_cast [
-// VERIFY-DAG: error: verification failed: contract_explicit_cast_out_of_range [{{.*}}::overflow@
+// VERIFY-DAG: error: verification failed: contract_explicit_cast_out_of_range [overflow]
 // VERIFY-DAG: Verified: contract_explicit_long
-// VERIFY-DAG: error: verification failed: contract_explicit_unsigned_negative [{{.*}}::overflow@
+// VERIFY-DAG: error: verification failed: contract_explicit_unsigned_negative [overflow]
 // VERIFY-DAG: Verified: contract_shift
-// VERIFY-DAG: error: verification failed: contract_bitwise_out_of_range [{{.*}}::overflow@
-// VERIFY-DAG: error: verification failed: contract_division_by_zero [{{.*}}::division-by-zero@
+// VERIFY-DAG: error: verification failed: contract_bitwise_out_of_range [overflow]
+// VERIFY-DAG: error: verification failed: contract_division_by_zero [division-by-zero]
 
 // Layer 1: the ghost materialization is an explicit conversion.
 // IR-LABEL: fn ghost_in_range

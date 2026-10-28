@@ -184,7 +184,7 @@ int overwritten()
   }
   return a[3];
 }
-// CHECK-DAG: error: verification failed: overwritten [{{.*}}::postcondition@
+// CHECK-DAG: error: verification failed: overwritten [postcondition]
 
 // Nor is a local written through a reference to it.
 int through_reference()
@@ -202,4 +202,4 @@ int through_reference()
   }
   return x;
 }
-// CHECK-DAG: error: verification failed: through_reference [{{.*}}::postcondition@
+// CHECK-DAG: error: verification failed: through_reference [postcondition]

@@ -118,7 +118,8 @@ int copied_past(const int *a)
   const int *q = a + 2;
   return first(q, 3);
 }
-// CHECK-DAG: error: verification failed: copied_past [{{.*}}::bounds@[[@LINE-2]]:3] (counterexample: a [ssa=a_0] [type=pointer] = {{[0-9]+}}, q [ssa=q_1] [type=pointer] = {{[0-9]+}};
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: copied_past [bounds]
+// CHECK-DAG: note: counterexample: {{.*}}a = {{[0-9]+}}{{( ->|,|$)}}{{.*}}q = {{[0-9]+}}{{( ->|,|$)}}
 
 void copied_write_past(int *a)
   cppverify::pre(cppverify::valid(a, 4))
@@ -127,7 +128,7 @@ void copied_write_past(int *a)
   int *q = a + 2;
   zero2(q, 3);
 }
-// CHECK-DAG: error: verification failed: copied_write_past [{{.*}}::bounds@[[@LINE-2]]:3]
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: copied_write_past [bounds]
 
 // When c is true, a + 2 has two elements left; b has four.
 void chosen_past(int *a, int *b, bool c)
@@ -137,7 +138,8 @@ void chosen_past(int *a, int *b, bool c)
   int *q = c ? a + 2 : b;
   zero2(q, 3);
 }
-// CHECK-DAG: error: verification failed: chosen_past [{{.*}}::bounds@[[@LINE-2]]:3] (counterexample: {{.*}}c [ssa=c_0] [type=bool] = true,
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: chosen_past [bounds]
+// CHECK-DAG: note: counterexample: {{.*}}c = true{{( ->|,|$)}}
 
 // The callee's contract does not say where its result points.
 int from_unknown(const int *a)
@@ -146,7 +148,7 @@ int from_unknown(const int *a)
   const int *q = somewhere(a, 4);
   return first(q, 3);
 }
-// CHECK-DAG: error: verification failed: from_unknown [{{.*}}::bounds@[[@LINE-2]]:3]
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: from_unknown [bounds]
 
 // The elements must start inside the object too: this result is one element
 // before a, and the slice would end inside it.
@@ -161,7 +163,8 @@ int from_before(const int *a)
   const int *q = before(a, 4);
   return first(q, 2);
 }
-// CHECK-DAG: error: verification failed: from_before [{{.*}}::bounds@[[@LINE-2]]:3] (counterexample: a [ssa=a_0] [type=pointer] = {{[0-9]+}}, q [ssa=q_1] [type=pointer] = {{[0-9]+}};
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: from_before [bounds]
+// CHECK-DAG: note: counterexample: {{.*}}a = {{[0-9]+}}{{( ->|,|$)}}{{.*}}q = {{[0-9]+}}{{( ->|,|$)}}
 
 // A shorter walk leaves fewer elements than the call needs.
 int walked_past(const int *a, int n)
@@ -178,4 +181,4 @@ int walked_past(const int *a, int n)
   }
   return first(q, 2);
 }
-// CHECK-DAG: error: verification failed: walked_past [{{.*}}::bounds@[[@LINE-2]]:3]
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: walked_past [bounds]

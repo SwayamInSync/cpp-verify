@@ -55,7 +55,9 @@ void parity_wrong(int n)
 // CHECK-DAG: Verified: spec decreases: is_even
 // CHECK-DAG: Verified: spec decreases: is_odd
 // CHECK-DAG: Unresolved: spec decreases: ping [reason=spec.termination] (relies on the definition of pong, whose termination is not established)
-// CHECK-DAG: error: spec decreases failed: pong {{.*}}[reason=counterexample] (n [type=math-i32] = {{[1-9][0-9]*}})
+// CHECK-DAG: error: spec decreases failed: pong {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}n = {{[1-9][0-9]*}}{{( ->|,|$)}}
 // CHECK-DAG: Verified: parity
 // CHECK-DAG: Verified: parity_exclusive
-// CHECK-DAG: verification failed: parity_wrong {{.*}}n [ssa=n_0] [type=i32] = {{[0-9]+}}
+// CHECK-DAG: verification failed: parity_wrong
+// CHECK-DAG: note: counterexample: {{.*}}n = {{[0-9]+}}{{( ->|,|$)}}

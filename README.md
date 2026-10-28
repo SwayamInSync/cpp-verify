@@ -165,9 +165,16 @@ Z3 runs support deterministic isolated solving (`--jobs`) and positive-proof reu
 (`--proof-cache`). A query past `--timeout` or `--solver-rlimit` is reported as
 *unresolved* rather than hanging — never as verified. `--int-encoding` only chooses
 how machine integers reach the solver; every choice is exact, so it can change speed
-but never a verdict. A failure names the function and the obligation that failed,
-`<function identity>::<kind>@line:column`, e.g.
-`verification failed: abs [fn_5f5a3361627369::overflow@5:3]`.
+but never a verdict. A failure is a compiler error at the failing source, naming
+the function and the kind of check, with its counterexample and path as notes;
+without its precondition, `abs` gives:
+
+```text
+abs.cpp:4:3: error: verification failed: abs [overflow] [backend=z3] [reason=counterexample]
+    4 |   return x < 0 ? -x : x;
+      |   ^
+abs.cpp:4:3: note: counterexample: x = -2147483648
+```
 
 Chained modular calls (e.g. `return inc(inc(x))`) are lowered to temporaries automatically.
 See [Chapter 17](https://swayaminsync.github.io/cpp-verify/book/part-ii/ch17-backends-modular-calls.html).

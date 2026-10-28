@@ -254,8 +254,10 @@ VIntMode verify::evaluatedIntMode(const VExpr *E) {
 
 std::unique_ptr<VExpr> verify::cloneVExpr(const VExpr *E) {
   auto Copy = cloneVExprImpl(E);
-  if (Copy && E)
+  if (Copy && E) {
+    Copy->BeginLoc = E->BeginLoc;
     Copy->EndLoc = E->EndLoc;
+  }
   return Copy;
 }
 

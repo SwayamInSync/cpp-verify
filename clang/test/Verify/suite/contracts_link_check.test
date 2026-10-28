@@ -18,10 +18,10 @@
 # RUN:   | FileCheck %s --check-prefix=MISSING
 #
 # Through the compiler, each object's record beside it.
-# RUN: %clang -std=c++17 -fverify-contracts -fverify-contracts-out=%t/a.o.cppverify \
+# RUN: %clang -std=c++17 -fverify-contracts -Rcppverify -fverify-contracts-out=%t/a.o.cppverify \
 # RUN:   -c %S/Inputs/across/src/a.cpp -o %t/a.o -I%S/Inputs/across/include 2>&1 \
-# RUN:   | FileCheck %s --check-prefix=APART
-# RUN: %clang -std=c++17 -fverify-contracts -fverify-contracts-out=%t/m.o.cppverify \
+# RUN:   | FileCheck %s --check-prefix=REMARK
+# RUN: %clang -std=c++17 -fverify-contracts -Rcppverify -fverify-contracts-out=%t/m.o.cppverify \
 # RUN:   -c %S/Inputs/across/src/mathx.cpp -o %t/m.o -I%S/Inputs/across/include -DBUG=100
 # RUN: %cpp-verify --check-contracts %t/a.o.cppverify %t/m.o.cppverify 2>&1 \
 # RUN:   | FileCheck %s --check-prefix=RIGHT
@@ -44,6 +44,10 @@
 A proof that rests on a contract of another file says so.
 APART: Verified: scaled [backend=z3] [assumes=clamp100]
 APART-NEXT: Verified: twice_scaled [backend=z3] [assumes=clamp100]
+
+Through the compiler each proof is a remark at its function.
+REMARK: a.cpp:3:5: remark: Verified: scaled [backend=z3] [assumes=clamp100] [-Rcppverify]
+REMARK: a.cpp:9:5: remark: Verified: twice_scaled [backend=z3] [assumes=clamp100] [-Rcppverify]
 
 WRONG: a.cpp:3:5: error: the proof of scaled relies on the contract of clamp100, which its verification in {{.*}}mathx.cpp does not establish
 WRONG-NEXT: a.cpp:9:5: error: the proof of twice_scaled relies on the contract of clamp100, which its verification in {{.*}}mathx.cpp does not establish

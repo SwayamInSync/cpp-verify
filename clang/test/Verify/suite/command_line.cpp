@@ -64,7 +64,7 @@ int first(const int *p)
 // DEFAULT-NEXT: Verified: down_zero [backend=z3]
 // DEFAULT-NEXT: Verified: add_one [backend=z3]
 // DEFAULT-NEXT: error: verification failed: add_two
-// DEFAULT-NEXT: Trusted: clamp
+// DEFAULT: Trusted: clamp
 // DEFAULT-NEXT: Verified: first [backend=z3]
 // DEFAULT-NEXT: Summary: 4 verified, 1 failed, 1 unresolved (construct.unsupported 1), 1 trusted in {{[0-9]+\.[0-9]}} s
 // DEFAULT-NOT: {{.}}
@@ -72,7 +72,7 @@ int first(const int *p)
 // QUIET: error: lookup: goto is unsupported
 // QUIET: error: lookup: labels are unsupported
 // QUIET: error: verification failed: add_two
-// QUIET-NEXT: Summary: 4 verified, 1 failed, 1 unresolved (construct.unsupported 1), 1 trusted in
+// QUIET: Summary: 4 verified, 1 failed, 1 unresolved (construct.unsupported 1), 1 trusted in
 
 // VERBOSE: Verified: spec axiom: twice
 // VERBOSE-NEXT: Verified: spec decreases: down

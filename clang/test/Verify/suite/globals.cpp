@@ -39,7 +39,7 @@ void bump_unframed()
 {
   counter = counter + 1;
 }
-// CHECK-DAG: error: verification failed: bump_unframed [{{.*}}::frame@
+// CHECK-DAG: error: verification failed: bump_unframed [frame]
 
 int twice()
   cppverify::pre(counter < 100)
@@ -67,7 +67,7 @@ void frames_wrong(int *p)
 {
   bump();
 }
-// CHECK-DAG: error: verification failed: frames_wrong [{{.*}}::frame@
+// CHECK-DAG: error: verification failed: frames_wrong [frame]
 
 void forgets_old()
   cppverify::pre(counter < 1000)
@@ -76,6 +76,6 @@ void forgets_old()
 {
   bump();
 }
-// CHECK-DAG: error: verification failed: forgets_old [{{.*}}::postcondition@
+// CHECK-DAG: error: verification failed: forgets_old [postcondition]
 
 // SPEC: error: reads_counter: a spec function cannot read the mutable global counter; pass its value as a parameter

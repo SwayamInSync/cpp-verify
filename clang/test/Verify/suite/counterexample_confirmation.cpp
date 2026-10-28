@@ -31,7 +31,8 @@ cppverify::proof void small_power(int n)
   cppverify::post(pow2(n) < 1000)
 {
 }
-// CHECK-DAG: error: verification failed: small_power {{.*}}(counterexample: n [ssa=n_0] [type=i32] = {{[0-9]+}}; confirmed by a proof at this input, since its check could not compute pow2({{[0-9]+}})) [backend=z3] [reason=counterexample]
+// CHECK-DAG: error: verification failed: small_power [postcondition] (confirmed by a proof at this input, since its check could not compute pow2({{[0-9]+}})) [backend=z3] [reason=counterexample]
+// CHECK-DAG: note: counterexample: n = {{[0-9]+}}
 
 cppverify::spec int fibo(int n)
   cppverify::decreases(n)
@@ -57,7 +58,8 @@ cppverify::proof void fibo_small(int n)
   cppverify::post(fibo(n) < 5)
 {
 }
-// CHECK-DAG: error: verification failed: fibo_small {{.*}}(counterexample: n [ssa=n_0] [type=i32] = 1000000000; confirmed by a proof at this input that uses the contract of fibo_at_least_5, since its check could not compute fibo(1000000000)) [backend=z3] [reason=counterexample]
+// CHECK-DAG: error: verification failed: fibo_small [postcondition] (confirmed by a proof at this input that uses the contract of fibo_at_least_5, since its check could not compute fibo(1000000000)) [backend=z3] [reason=counterexample]
+// CHECK-DAG: note: counterexample: n = 1000000000
 // JSON-DAG: "confirmed_with":["fibo_at_least_5"]
 
 // The same with a lemma that does not hold: a confirmation uses only the
@@ -124,7 +126,9 @@ cppverify::spec int capped(int n)
 {
   return fibo(n);
 }
-// CHECK-DAG: error: spec post failed: capped [backend=z3] [reason=counterexample] (n [type=math-i32] = 1000000000; confirmed by a proof at this input that uses the contract of fibo_at_least_5, since its check could not compute fibo(1000000000))
+// CHECK-DAG: error: spec post failed: capped [backend=z3] [reason=counterexample] (confirmed by a proof at this input that uses the contract of fibo_at_least_5, since its check could not compute fibo(1000000000))
+// CHECK-DAG: note: counterexample: n = 1000000000
+// CHECK-DAG: note: counterexample: {{.*}}n = 1000000000{{( ->|,|$)}}
 
 // A lemma is used through what its verification proved: its postconditions
 // wherever every assumption its proof started from holds. Besides its own
@@ -157,7 +161,8 @@ cppverify::proof void fib4_small(int n)
 {
 }
 // CHECK-DAG: Verified: fib4_at_least_5
-// CHECK-DAG: error: verification failed: fib4_small {{.*}}(counterexample: n [ssa=n_0] [type=i32] = 1000000000; confirmed by a proof at this input that uses the contract of fib4_at_least_5, since its check could not compute fib4(1000000000)) [backend=z3] [reason=counterexample]
+// CHECK-DAG: error: verification failed: fib4_small [postcondition] (confirmed by a proof at this input that uses the contract of fib4_at_least_5, since its check could not compute fib4(1000000000)) [backend=z3] [reason=counterexample]
+// CHECK-DAG: note: counterexample: n = 1000000000
 
 // The same through mutable pointers, which must be distinct objects (or
 // null), and through a record whose type invariant the proof assumes.

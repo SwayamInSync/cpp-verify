@@ -3405,6 +3405,8 @@ VerifyResult Z3Encoder::decideModule(const ObligationModule &Module,
         Out.ObligationId = Item.StableId.empty() ? Item.Id : Item.StableId;
         Out.ObligationType = Item.Kind;
         Out.Location = Item.Loc;
+        Out.BeginLocation = Item.BeginLoc;
+        Out.EndLocation = Item.EndLoc;
         Out.Source = Item.Source;
         Out.Assignment = assignment(Item);
         TraceEventCount = Item.TraceEventCount;
@@ -3441,6 +3443,11 @@ VerifyResult Z3Encoder::decideModule(const ObligationModule &Module,
           return Out;
         }
         Value.Source = Metadata->second.Source;
+        Value.Reference = Metadata->second.Reference;
+        if (Metadata->second.Guard)
+          if (std::optional<std::string> Guard =
+                  evaluate(Metadata->second.Guard.get()))
+            Value.OnPath = *Guard == "true";
       }
       if (auto It = Vars.find(Name); It != Vars.end()) {
         z3::expr Evaluated = modelValue(It->second);
@@ -3460,6 +3467,7 @@ VerifyResult Z3Encoder::decideModule(const ObligationModule &Module,
         VerifyTraceEvent Trace;
         Trace.Kind = Event.Kind;
         Trace.Message = Event.Message;
+        Trace.Loc = Event.Loc;
         Trace.Source = Event.Source;
         if (Guard)
           Trace.Active = *Guard == "true";
@@ -3537,62 +3545,11 @@ static VerifyResult timeSpent() {
   return Result;
 }
 
+/// A failure's values and path are its Model and Trace, which the driver
+/// prints; its Message only explains what they do not say.
 static VerifyResult finishZ3Result(VerifyResult Result) {
-  if (Result.Status != VerifyStatus::Failed)
-    return Result;
-  std::string Message;
-  for (const VerifyModelValue &Value : Result.Model) {
-    if (!Message.empty())
-      Message += ", ";
-    Message += Value.DisplayName;
-    if (Value.DisplayName != Value.InternalName)
-      Message += " [ssa=" + Value.InternalName + "]";
-    Message += " [type=" + formatLogicSort(Value.Sort) +
-               "] = " + Value.Value.value_or("<unknown>");
-  }
-  auto traceKind = [](DiagnosticTraceKind Kind) {
-    switch (Kind) {
-    case DiagnosticTraceKind::Branch:
-      return "branch";
-    case DiagnosticTraceKind::Call:
-      return "call";
-    case DiagnosticTraceKind::Loop:
-      return "loop";
-    case DiagnosticTraceKind::HeapWrite:
-      return "heap-write";
-    case DiagnosticTraceKind::Allocation:
-      return "allocation";
-    case DiagnosticTraceKind::LifetimeEnd:
-      return "lifetime-end";
-    case DiagnosticTraceKind::Deallocation:
-      return "deallocation";
-    case DiagnosticTraceKind::Return:
-      return "return";
-    }
-    return "branch";
-  };
-  if (!Result.Trace.empty()) {
-    if (!Message.empty())
-      Message += "; ";
-    Message += "trace: ";
-    bool First = true;
-    for (const VerifyTraceEvent &Event : Result.Trace) {
-      if (!First)
-        Message += " -> ";
-      First = false;
-      Message += traceKind(Event.Kind);
-      if (!Event.Message.empty())
-        Message += "." + Event.Message;
-      if (Event.Source.isValid())
-        Message += "@" + std::to_string(Event.Source.Line) + ":" +
-                   std::to_string(Event.Source.Column);
-      if (!Event.Active)
-        Message += "?";
-      for (const VerifyTraceValue &Value : Event.Values)
-        Message += " " + Value.Label + "=" + Value.Value.value_or("<unknown>");
-    }
-  }
-  Result.Message = std::move(Message);
+  if (Result.Status == VerifyStatus::Failed)
+    Result.Message.clear();
   return Result;
 }
 
@@ -3833,6 +3790,8 @@ static VerifyResult attributed(VerifyResult Result, const Obligation &Item) {
   Result.ObligationId = Item.StableId.empty() ? Item.Id : Item.StableId;
   Result.ObligationType = Item.Kind;
   Result.Location = Item.Loc;
+  Result.BeginLocation = Item.BeginLoc;
+  Result.EndLocation = Item.EndLoc;
   Result.Source = Item.Source;
   if (Result.Status == VerifyStatus::Unresolved)
     Result.Message = "proof obligation " + Result.ObligationId +
@@ -3900,6 +3859,7 @@ Z3VerifyBackend::verifyPastEarlier(const ObligationModule &Module, size_t I,
     auto Conjunction = std::make_unique<LogicExpr>(LogicExpr::And);
     Conjunction->Sort = LogicSort::boolSort();
     Conjunction->Loc = Query->Loc;
+    Conjunction->BeginLoc = Query->BeginLoc;
     Conjunction->EndLoc = Query->EndLoc;
     Conjunction->Source = Query->Source;
     Conjunction->Children.push_back(std::move(Query));

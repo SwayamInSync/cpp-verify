@@ -119,7 +119,7 @@ int self_add()
   a += a;
   return a.cents;
 }
-// CHECK-DAG: error: verification failed: self_add [{{.*}}::aliasing@[[@LINE-3]]
+// CHECK-DAG: :[[@LINE-3]]:{{[0-9]+}}: error: verification failed: self_add [aliasing]
 
 // The reference such an operator returns is no value yet.
 int chained()
@@ -205,7 +205,7 @@ void spoil(Level &l)
 {
   l.value = 500;
 }
-// CHECK-DAG: error: verification failed: spoil [{{.*}}::type-invariant@
+// CHECK-DAG: error: verification failed: spoil [type-invariant]
 
 int spoiled_argument()
   cppverify::post(true)
@@ -215,7 +215,7 @@ int spoiled_argument()
   int v = read(l);
   return v;
 }
-// CHECK-DAG: error: verification failed: spoiled_argument [{{.*}}::type-invariant@[[@LINE-3]]
+// CHECK-DAG: :[[@LINE-3]]:{{[0-9]+}}: error: verification failed: spoiled_argument [type-invariant]
 
 // A null pointer addresses no object, whose invariant would be due.
 int none()
@@ -254,4 +254,4 @@ int first_through(const Span &s)
   int v = s.first();
   return v;
 }
-// CHECK-DAG: error: verification failed: first_through [{{.*}}::bounds@[[@LINE-3]]
+// CHECK-DAG: :[[@LINE-3]]:{{[0-9]+}}: error: verification failed: first_through [bounds]

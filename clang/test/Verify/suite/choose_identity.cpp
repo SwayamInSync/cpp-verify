@@ -45,13 +45,15 @@ cv::proof void other_condition(int n)
   cv::post(cv::choose(k, k > n) == cv::choose(k, k >= n))
 {
 }
-// CHECK-DAG: error: verification failed: other_condition [{{.*}}] (counterexample:
+// CHECK-DAG: error: verification failed: other_condition [postcondition]
+// CHECK-DAG: note: counterexample:
 
 cv::proof void other_value(int n, int m)
   cv::post(cv::choose(k, k > n) == cv::choose(k, k > m))
 {
 }
-// CHECK-DAG: error: verification failed: other_value [{{.*}}] (counterexample:
+// CHECK-DAG: error: verification failed: other_value [postcondition]
+// CHECK-DAG: note: counterexample:
 
 cv::proof void other_range()
   cv::post(cv::choose(k, 0, 10, k >= 0) == cv::choose(k, 0, 11, k >= 0))
@@ -98,7 +100,8 @@ void write_inside(int *a, int n, int x)
 {
   a[0] = x == 0 ? 1 : 0;
 }
-// CHECK-DAG: error: verification failed: write_inside [{{.*}}] (counterexample:
+// CHECK-DAG: choose_identity.cpp:[[@LINE-5]]:{{[0-9]+}}: error: verification failed: write_inside [postcondition]{{.*}}[reason=counterexample]
+// CHECK-DAG: choose_identity.cpp:[[@LINE-6]]:{{[0-9]+}}: note: counterexample: a =
 
 // Which cells c[a[k]] reads depends on memory too: each read compares what it
 // reads in each memory, its address included, so the write to b keeps it.
