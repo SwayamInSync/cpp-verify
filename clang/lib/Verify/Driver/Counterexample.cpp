@@ -1,8 +1,12 @@
 //===--- Counterexample.cpp -----------------------------------------------===//
 #include "Counterexample.h"
+#include "../Backend/Certify.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include <algorithm>
+#include <chrono>
+#include <functional>
 #include <map>
 #include <tuple>
 
@@ -151,4 +155,195 @@ std::string verify::traceStepText(const VerifyTraceEvent &Event) {
            " (the counterexample does not decide whether "
            "this step is taken)";
   return Text;
+}
+
+namespace {
+/// The values a counterexample gives the variables of its obligation's goal;
+/// a logical function is evaluated by its definition.
+class AssignedValues : public CandidateModel {
+  const CounterexampleAssignment &Assignment;
+
+public:
+  explicit AssignedValues(const CounterexampleAssignment &Assignment)
+      : Assignment(Assignment) {}
+  std::optional<LogicValue> constant(const std::string &Name,
+                                     const LogicSort &) override {
+    auto It = Assignment.Values.find(Name);
+    if (It == Assignment.Values.end())
+      return std::nullopt;
+    return It->second;
+  }
+  std::optional<bool> validPointer(const CertInt &) override {
+    return std::nullopt;
+  }
+  std::optional<LogicValue>
+  application(const LogicFunctionDecl &,
+              const std::vector<LogicValue> &) override {
+    return std::nullopt;
+  }
+};
+
+bool isDefinedness(ObligationKind Kind) {
+  switch (Kind) {
+  case ObligationKind::Overflow:
+  case ObligationKind::DivisionByZero:
+  case ObligationKind::Shift:
+  case ObligationKind::Bounds:
+  case ObligationKind::Dereference:
+  case ObligationKind::Initialization:
+  case ObligationKind::PointerDifference:
+  case ObligationKind::PointerValidity:
+    return true;
+  default:
+    return false;
+  }
+}
+
+/// A place in the source: by its location in a run from source, by its
+/// file, line, and column in an archive.
+struct Anchor {
+  SourceLocation Loc;
+  ObligationSource Source;
+
+  bool isValid() const { return Loc.isValid() || Source.isValid(); }
+  bool at(const LogicExpr &E) const {
+    if (Loc.isValid())
+      return E.Loc == Loc;
+    return E.Source.isValid() && E.Source.File == Source.File &&
+           E.Source.Line == Source.Line && E.Source.Column == Source.Column;
+  }
+};
+} // namespace
+
+FailurePlace verify::failingPlace(const ObligationModule &Module,
+                                  const VerifyResult &Failure) {
+  FailurePlace Place;
+  auto Item = llvm::find_if(Module.Obligations, [&](const Obligation &O) {
+    return !Failure.ObligationId.empty() &&
+           (O.StableId == Failure.ObligationId || O.Id == Failure.ObligationId);
+  });
+  if (Item == Module.Obligations.end() || !Item->Goal)
+    return Place;
+  const bool AtCall = Item->Clause.isValid() || Item->ClauseSource.isValid();
+  Anchor Where;
+  if (AtCall)
+    Where = {Item->Clause.Loc, Item->ClauseSource};
+  else if (Item->Focus.isValid() || Item->FocusSource.isValid())
+    Where = {Item->Focus.Loc, Item->FocusSource};
+  else
+    Where = {Item->Loc, Item->Source};
+  if (!Where.isValid())
+    return Place;
+  const LogicExpr *Checked = Item->Goal.get();
+  while (Checked->K == LogicExpr::Or && !Checked->Premise.empty() &&
+         Checked->Children.size() == 2)
+    Checked = Checked->Children[1].get();
+  const LogicExpr *Condition = nullptr;
+  std::function<void(const LogicExpr *)> find = [&](const LogicExpr *E) {
+    if (Condition || !E)
+      return;
+    if (Where.at(*E)) {
+      // A path condition around the condition takes its place.
+      if (E->K == LogicExpr::Or && E->Children.size() == 2 &&
+          Where.at(*E->Children[1]))
+        find(E->Children[1].get());
+      if (!Condition)
+        Condition = E;
+      return;
+    }
+    for (const auto &Child : E->Children)
+      find(Child.get());
+  };
+  find(Checked);
+  std::optional<AssignedValues> Model;
+  if (Failure.Assignment)
+    Model.emplace(*Failure.Assignment);
+  CertifyLimits Limits;
+  Limits.Deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+  auto isFalse = [&](const LogicExpr *E) {
+    if (!Model)
+      return false;
+    std::optional<LogicValue> Value = evaluateTerm(Module, *E, *Model, Limits);
+    return Value && Value->K == LogicValue::Kind::Bool && !Value->Truth;
+  };
+  auto placed = [](const LogicExpr *E) {
+    return E->Loc.isValid() || E->Source.isValid();
+  };
+  const bool Generated = isDefinedness(Item->Kind);
+  // A conjunction the verifier builds, of definedness checks, has parts of
+  // their own; one in a clause is the user's `&&` when each of its parts lies
+  // before or after its operator, and not lowering's (a comparison split by
+  // the range of its machine side is a conjunction at the comparison).
+  auto split = [&](const LogicExpr *E) {
+    if (E->K != LogicExpr::And)
+      return false;
+    if (Generated)
+      return true;
+    const ObligationSource &At = E->Source;
+    if (!At.isValid())
+      return false;
+    for (const auto &Child : E->Children) {
+      const ObligationSource &Part = Child->Source;
+      if (!Part.isValid() || !Part.EndLine || Part.File != At.File)
+        return false;
+      const bool Before = Part.EndLine < At.Line ||
+                          (Part.EndLine == At.Line && Part.EndColumn <= At.Column);
+      const bool After =
+          Part.beginLine() > At.Line ||
+          (Part.beginLine() == At.Line && Part.beginColumn() > At.Column);
+      if (!Before && !After)
+        return false;
+    }
+    return true;
+  };
+  std::function<const LogicExpr *(const LogicExpr *)> falsePart =
+      [&](const LogicExpr *E) -> const LogicExpr * {
+    if (split(E)) {
+      std::vector<const LogicExpr *> Conjuncts;
+      std::function<void(const LogicExpr *)> flatten = [&](const LogicExpr *C) {
+        if (split(C))
+          for (const auto &Child : C->Children)
+            flatten(Child.get());
+        else
+          Conjuncts.push_back(C);
+      };
+      flatten(E);
+      for (const LogicExpr *Conjunct : Conjuncts)
+        if (isFalse(Conjunct))
+          if (const LogicExpr *Part = falsePart(Conjunct))
+            return Part;
+      return nullptr;
+    }
+    if (Generated && E->K == LogicExpr::Or && E->Children.size() == 2 &&
+        E->Children[0]->K == LogicExpr::Not && isFalse(E->Children[0].get()) &&
+        isFalse(E->Children[1].get()))
+      if (const LogicExpr *Part = falsePart(E->Children[1].get()))
+        return Part;
+    return placed(E) ? E : nullptr;
+  };
+  const LogicExpr *Part = Condition ? falsePart(Condition) : nullptr;
+  auto spanOf = [](const LogicExpr &E) -> SourceSpan {
+    if (!E.Loc.isValid())
+      return {};
+    return {E.Loc, E.BeginLoc.isValid() ? E.BeginLoc : E.Loc,
+            E.EndLoc.isValid() ? E.EndLoc : E.Loc};
+  };
+  if (AtCall) {
+    Place.At = Item->Focus;
+    Place.AtSource = Item->FocusSource;
+    Place.Clause = Part ? spanOf(*Part) : Item->Clause;
+    Place.ClauseSource = Part ? Part->Source : Item->ClauseSource;
+    return Place;
+  }
+  if (Part) {
+    Place.At = spanOf(*Part);
+    Place.AtSource = Part->Source;
+  }
+  return Place;
+}
+
+std::string verify::clauseNote(const VerifyResult &Failure) {
+  return Failure.ObligationType == ObligationKind::Precondition
+             ? "this precondition does not hold at the call"
+             : "this clause does not hold at the call";
 }
