@@ -458,6 +458,16 @@ of a constant table, a ``const`` or ``constexpr`` array with a constant
 initializer or a string literal, is now the value its initializer gives it,
 and each index must lie in its array (:doc:`language/pointers`).
 
+**Global records and arrays.** Only integral globals were supported; a
+record or array global was an error (``global aggregate access is
+unsupported``, ``the global array 'table' is unsupported``). A mutable global
+of a record or array type is now an object at a fixed address of its own:
+its fields and elements are cells, each index bounded by its array, written
+only within ``cppverify::modifies`` (the whole object, a field, an element, or a
+range such as ``history[0 : 8]``), and a pointer into it is bounded by the
+array, field, or record it is formed from, so it may be passed as a slice
+(:doc:`language/pointers`).
+
 **assert and calls that do not return.** ``assert(c)`` stopped its function
 (``unsupported statement: ParenExpr``), and a call to ``abort`` or ``exit``
 was an error (``call to function without a verification contract``).
