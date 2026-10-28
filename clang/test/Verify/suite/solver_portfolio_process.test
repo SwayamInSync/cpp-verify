@@ -7,11 +7,12 @@
 # RUN: cp %S/Inputs/fake_cvc5.py %t.exit
 # RUN: cp %S/Inputs/fake_cvc5.py %t.rejected
 # RUN: cp %S/Inputs/fake_cvc5.py %t.crash
+# RUN: cp %S/Inputs/fake_cvc5.py %t.gmp
 # RUN: cp %S/Inputs/fake_cvc5.py %t.hang
 # RUN: cp %S/Inputs/fake_cvc5.py %t.sat
 # RUN: cp %S/Inputs/fake_cvc5.py %t.unsat
 # RUN: chmod +x %t.unknown %t.comment %t.trailing %t.large %t.stderr %t.exit \
-# RUN:   %t.rejected %t.stream %t.crash %t.hang %t.sat %t.unsat
+# RUN:   %t.rejected %t.stream %t.crash %t.gmp %t.hang %t.sat %t.unsat
 #
 # RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.unknown \
 # RUN:   %S/Inputs/solver_process_valid.cpp -- 2>&1 | FileCheck %s --check-prefix=UNKNOWN
@@ -31,6 +32,8 @@
 # RUN:   %S/Inputs/solver_process_valid.cpp -- 2>&1 | FileCheck %s --check-prefix=REJECTED
 # RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.crash --timeout=5 \
 # RUN:   %S/Inputs/solver_process_valid.cpp -- 2>&1 | FileCheck %s --check-prefix=CRASH
+# RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.gmp --memory-limit=64 \
+# RUN:   %S/Inputs/solver_process_valid.cpp -- 2>&1 | FileCheck %s --check-prefix=GMP
 # RUN: not %cpp-verify --backend=cvc5 --cvc5-path=%t.hang --timeout=1 --jobs=4 \
 # RUN:   %S/Inputs/backend_cache_base.cpp -- 2>&1 | FileCheck %s --check-prefix=TIMEOUT
 #
@@ -77,6 +80,7 @@
 # EXIT: Unresolved: solver_process_valid [backend=cvc5] [reason=solver.invocation-failed]
 # REJECTED: Unresolved: solver_process_valid [backend=cvc5] [reason=solver.invocation-failed] {{.*}}cvc5 exited with status 1: (error "Parse Error: input.smt2:3.4: constant arrays need --arrays-exp")
 # CRASH: Unresolved: solver_process_valid [backend=cvc5] [reason=solver.invocation-failed]
+# GMP: Unresolved: solver_process_valid [backend=cvc5] [reason=solver.memory-limit] ({{.*}}cvc5 ran out of memory: each cvc5 process may use 64 MB (--memory-limit))
 # TIMEOUT: Unresolved: cached_identity [backend=cvc5] [reason=solver.timeout]
 
 # A sat answer counts only with a model that satisfies the query; the fake
