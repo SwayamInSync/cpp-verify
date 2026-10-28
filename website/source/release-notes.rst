@@ -299,7 +299,10 @@ could not keep its contracts in its sources. ``-fverify-contracts`` now
 predefines ``__cppverify__``, with the release in ``__cppverify_major__``,
 ``__cppverify_minor__``, ``__cppverify_patchlevel__``, and
 ``__cppverify_version__``, and a macro that is empty without it keeps each
-construct out of every other compiler's way (:doc:`language/syntax`).
+construct out of every other compiler's way. A failure inside a macro's
+argument is located where the argument is written, as Clang shows its own
+errors, in the JSON record, the obligation's ID, and the counterexample's
+notes too; before, those named the macro's use (:doc:`language/syntax`).
 
 **Records through pointers.** Through a pointer, 0.1.1 reached only a record's
 direct fields (``p->x``). A nested field (``p->inner.y``), a field of an
