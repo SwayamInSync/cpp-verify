@@ -166,20 +166,6 @@ unrollRange(const std::vector<std::unique_ptr<VStmt>> &Stmts, size_t Begin,
             cloneVExpr(
                 static_cast<const VStoreStmt &>(*S).AccessCondition.get())));
         break;
-      case VStmt::Call:
-        Out.push_back(std::make_unique<VCallStmt>(
-            static_cast<const VCallStmt &>(*S).Callee,
-            static_cast<const VCallStmt &>(*S).CalleeIdentity,
-            [&] {
-              std::vector<std::unique_ptr<VExpr>> Args;
-              for (const auto &A : static_cast<const VCallStmt &>(*S).Args)
-                Args.push_back(cloneVExpr(A.get()));
-              return Args;
-            }(),
-            static_cast<const VCallStmt &>(*S).ResultTarget, S->Loc,
-            static_cast<const VCallStmt &>(*S).IsProofCall,
-            static_cast<const VCallStmt &>(*S).ResultProvenanceTarget));
-        break;
       case VStmt::Return:
         Out.push_back(std::make_unique<VReturnStmt>(
             cloneVExpr(static_cast<const VReturnStmt &>(*S).Value.get()),
