@@ -4513,6 +4513,7 @@ class PassivizerImpl {
     case ProofObligationKind::Initialization:
     case ProofObligationKind::PointerDifference:
     case ProofObligationKind::PointerValidity:
+    case ProofObligationKind::BuiltinArgument:
       return true;
     default:
       return false;
@@ -5346,13 +5347,11 @@ public:
       for (const SafetyCheck &Check : Checks) {
         if (Fn.TotalExpressions && isDefinedness(Check.Kind))
           continue;
-        // Anchor at the clause; an unfolded helper's operators may lie in
-        // another file.
-        auto Cond = cloneExpr(Check.Cond.get(), PCtx);
-        Cond->Loc = Post->Loc;
-        Cond->BeginLoc = Post->BeginLoc;
-        Cond->EndLoc = Post->EndLoc;
-        P.ExitAsserts.push_back({Check.Kind, afterEarlier(std::move(Cond))});
+        // Anchored at the clause, the operation being its focus; an unfolded
+        // helper's operators may lie in another file.
+        P.ExitAsserts.push_back(
+            {Check.Kind, afterEarlier(cloneExpr(Check.Cond.get(), PCtx)), "",
+             {Post->Loc, Post->BeginLoc, Post->EndLoc}});
       }
       auto Clause = cloneVExpr(BoundPost.get());
       EarlierPosts = EarlierPosts ? makeAnd(std::move(EarlierPosts),
