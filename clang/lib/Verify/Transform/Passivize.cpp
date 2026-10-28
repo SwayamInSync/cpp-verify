@@ -2166,12 +2166,42 @@ static void addOperationSafety(const VExpr *E, SafetyChecks &Out) {
 }
 
 static void
+collectSafetyImpl(const VExpr *E, const FunctionMap *FnMap,
+                  const std::vector<VValidExtent> *ValidExtents,
+                  const std::set<std::string> *PointerParams, SafetyChecks &Out,
+                  bool ObjectModel, const std::vector<VValidExtent> *OriginExtents,
+                  const std::set<std::string> *OutParameters);
+
+/// The definedness checks of \p E. A check made at an operation's anchor
+/// (its operator) spans the operation, as a diagnostic underlines it.
+static void
 collectSafety(const VExpr *E, const FunctionMap *FnMap,
               const std::vector<VValidExtent> *ValidExtents,
               const std::set<std::string> *PointerParams, SafetyChecks &Out,
               bool ObjectModel = false,
               const std::vector<VValidExtent> *OriginExtents = nullptr,
               const std::set<std::string> *OutParameters = nullptr) {
+  const size_t Before = Out.size();
+  collectSafetyImpl(E, FnMap, ValidExtents, PointerParams, Out, ObjectModel,
+                    OriginExtents, OutParameters);
+  if (!E)
+    return;
+  for (size_t I = Before; I != Out.size(); ++I) {
+    VExpr *Cond = Out[I].Cond.get();
+    if (Cond && Cond->Loc == E->Loc && Cond->BeginLoc == Cond->Loc &&
+        Cond->EndLoc == Cond->Loc) {
+      Cond->BeginLoc = E->BeginLoc;
+      Cond->EndLoc = E->EndLoc;
+    }
+  }
+}
+
+static void
+collectSafetyImpl(const VExpr *E, const FunctionMap *FnMap,
+                  const std::vector<VValidExtent> *ValidExtents,
+                  const std::set<std::string> *PointerParams, SafetyChecks &Out,
+                  bool ObjectModel, const std::vector<VValidExtent> *OriginExtents,
+                  const std::set<std::string> *OutParameters) {
   auto Collect = [&](const VExpr *Sub, SafetyChecks &Into) {
     collectSafety(Sub, FnMap, ValidExtents, PointerParams, Into, ObjectModel,
                   OriginExtents, OutParameters);
@@ -2694,12 +2724,37 @@ static void collectDottedVars(const VExpr *E, std::set<std::string> &Out) {
   }
 }
 
+static std::unique_ptr<VExpr> substParamsImpl(
+    const VExpr *E, const std::map<std::string, std::unique_ptr<VExpr>> &Map,
+    const CloneCtx &Ctx, const std::string &EntryHeap,
+    const std::string &HeapOverride, std::set<std::string> BoundVars,
+    const std::map<std::string, std::unique_ptr<VExpr>> *OldMap,
+    const std::set<std::string> *NormalizedPointerChecks);
+
+/// \p E with the actuals of \p Map for its parameters. A node rebuilt from
+/// one of \p E keeps the source it spans; an actual keeps its own.
 static std::unique_ptr<VExpr> substParams(
     const VExpr *E, const std::map<std::string, std::unique_ptr<VExpr>> &Map,
     const CloneCtx &Ctx, const std::string &EntryHeap,
     const std::string &HeapOverride = "", std::set<std::string> BoundVars = {},
     const std::map<std::string, std::unique_ptr<VExpr>> *OldMap = nullptr,
     const std::set<std::string> *NormalizedPointerChecks = nullptr) {
+  auto Result = substParamsImpl(E, Map, Ctx, EntryHeap, HeapOverride,
+                                std::move(BoundVars), OldMap,
+                                NormalizedPointerChecks);
+  if (Result && E && Result->K == E->K && Result->Loc == E->Loc) {
+    Result->BeginLoc = E->BeginLoc;
+    Result->EndLoc = E->EndLoc;
+  }
+  return Result;
+}
+
+static std::unique_ptr<VExpr> substParamsImpl(
+    const VExpr *E, const std::map<std::string, std::unique_ptr<VExpr>> &Map,
+    const CloneCtx &Ctx, const std::string &EntryHeap,
+    const std::string &HeapOverride, std::set<std::string> BoundVars,
+    const std::map<std::string, std::unique_ptr<VExpr>> *OldMap,
+    const std::set<std::string> *NormalizedPointerChecks) {
   if (!E)
     return nullptr;
   switch (E->K) {
@@ -4440,6 +4495,8 @@ class PassivizerImpl {
     if (K == PassiveStmt::Assume)
       PS->Origin = Origin;
     PS->TraceEventCount = TraceEvents.size();
+    if (K == PassiveStmt::Assert && Cond)
+      PS->Focus = {Cond->Loc, Cond->BeginLoc, Cond->EndLoc};
     if (Guard)
       Cond = makeImplies(cloneVExpr(Guard), std::move(Cond), Loc);
     PS->Cond = std::move(Cond);
@@ -6060,9 +6117,16 @@ public:
       emitMathBridge(P, BoundPre.get(), nullptr, C.Loc);
       for (auto &[Kind, Part, Note] :
            checkedClause(preconditionKind(*Callee, I), std::move(BoundPre),
-                         OutParameterNote))
+                         OutParameterNote)) {
+        const size_t Emitted = P.Stmts.size();
         emitPassive(P, PassiveStmt::Assert, std::move(Part), nullptr, C.Loc,
                     Kind, std::move(Note));
+        // The check is the call's, of a clause the callee states.
+        if (P.Stmts.size() != Emitted) {
+          P.Stmts.back()->Clause = {Pre->Loc, Pre->BeginLoc, Pre->EndLoc};
+          P.Stmts.back()->Focus = {C.Loc, C.Loc, C.Loc};
+        }
+      }
     }
     emitRecordActualChecks(P, *Callee, DynamicParams, ParamMap, Ctx, C.Loc);
 
@@ -7314,7 +7378,8 @@ public:
       for (unsigned I = 0; I != Call.Args.size(); ++I)
         TraceValues.push_back({"arg" + std::to_string(I),
                                cloneExpr(Call.Args[I].get(), TraceCtx)});
-      emitTrace(PassiveTraceKind::Call, Call.Callee, Active.get(), Call.Loc,
+      emitTrace(PassiveTraceKind::Call, Call.Callee, Active.get(),
+                Call.CallSite.isValid() ? Call.CallSite.Loc : Call.Loc,
                 std::move(TraceValues));
       const auto EntryRenames = Renames;
       PassiveProgram CallP;
@@ -7323,6 +7388,10 @@ public:
         if (CallStmt->Cond)
           CallStmt->Cond = makeImplies(cloneVExpr(Active.get()),
                                        std::move(CallStmt->Cond), S.Loc);
+        // A check of the call itself (a precondition, separation, the
+        // measure) is about the call expression.
+        if (Call.CallSite.isValid() && CallStmt->Focus.Loc == Call.Loc)
+          CallStmt->Focus = Call.CallSite;
         if (!CallStmt->TrustedCallee.empty())
           CallStmt->CallGuard = cloneVExpr(Active.get());
         P.Stmts.push_back(std::move(CallStmt));
