@@ -40,3 +40,18 @@ int closed(int n)
 {
   return n;
 }
+
+// Overloads, whose queries are kept apart.
+int half(int x)
+  cv::pre(x >= 0)
+  cv::post(cv::result <= x)
+{
+  return x / 2;
+}
+
+long half(long x)
+  cv::pre(x >= 0)
+  cv::post(cv::result <= x)
+{
+  return x / 2;
+}
