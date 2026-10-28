@@ -1671,9 +1671,9 @@ given to:
    * - ``-fverify-backend=z3|cvc5|portfolio|race|bmc``
      - The solver (``--backend``). Lean projects stay with ``cpp-verify``.
    * - ``-fverify-timeout=<ms>``
-     - Each query's time (``--timeout``); a query over collections gets twice
-       it, and one function's queries together ten times it, as with
-       ``cpp-verify``.
+     - Each query's time (``--timeout``, 30000 by default, ``0`` disables);
+       a query over collections gets twice it, and one function's queries
+       together ten times it, as with ``cpp-verify``.
    * - ``-fverify-jobs=<n>``
      - Solver jobs for each compilation (``--jobs``), 1 by default, since a
        build compiles several files at once: ``make -j8`` with
