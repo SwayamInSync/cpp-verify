@@ -587,10 +587,11 @@ every assumption before it as a copy, and the check's query, the function's
 complete goal, and that goal's query copied them again, so memory grew with
 the number of checks times the length of what came before them: verifying the
 ULEB128 case study took 14.9 GB, and lowering it 53 s. Terms now share what
-they repeat: the case study verifies within 0.9 GB and lowers in 10 s, and
-``safe_fib.cpp`` lowers in 7 s within 0.35 GB instead of 16 s and 4.7 GB.
-Verdicts, archives, hashes, and IR dumps are unchanged; a Lean export names a
-large subterm that one statement repeats once (:doc:`case-studies/llvm-uleb128`).
+they repeat, and the checks of a module visit a shared term once: the case
+study verifies within 0.9 GB and lowers in 2.5 s, and ``safe_fib.cpp`` lowers
+in 1.9 s within 0.35 GB instead of 16 s and 4.7 GB. Verdicts, archives, hashes,
+and IR dumps are unchanged; a Lean export names a large subterm that one
+statement repeats once (:doc:`case-studies/llvm-uleb128`).
 
 **Errors point at the code.** An error about a construct the verifier does not
 represent named only the function, as in ``error: pick: unsupported statement:
@@ -792,6 +793,18 @@ refuses a ``lake`` outside elan that reports another Lean
 
 **clang-format.** A range footprint is written ``p[lo : n]``, not ``p [lo:n]``
 (:doc:`language/tooling`).
+
+Testing
+~~~~~~~
+
+**Verdicts are checked against execution every night.** 484 contracted
+functions over integers, pointers, and records are verified by Z3 in each
+integer encoding, by cvc5, and by BMC, then compiled with
+``-fsanitize=undefined`` and run on every input of small parameter types, or
+on boundary values and samples. CI fails when a ``Verified`` function
+misbehaves on an input its precondition admits, when a counterexample does not
+reproduce, or when two backends decide differently
+(:doc:`book/part-ii/ch17-backends-modular-calls`).
 
 Data formats
 ~~~~~~~~~~~~
