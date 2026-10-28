@@ -104,6 +104,71 @@ artifacts. cvc5 may conservatively return ``unknown`` for
 designated valid quantified or inductive goals; every false matrix goal must
 remain decisive, and any solver disagreement fails the gate.
 
+Differential execution
+----------------------
+
+A verdict is also checked against the program it is about.
+``clang/utils/cppverify-differential`` holds 484 contracted functions over
+integers, ``_BitInt``, pointers and buffers, and records, each with its
+precondition and postcondition restated in Python. For each one it:
+
+- verifies the function with Z3 in each integer encoding and with cvc5, or
+  with BMC at two bounds;
+- compiles the same source with ``-fverify-contracts -fno-verify`` (contracts
+  emit no code) and ``-fsanitize=undefined -fsanitize-trap=undefined``, and
+  runs it on every input of small parameter types, otherwise on boundary
+  values and samples seeded by the function's name, each buffer ending at an
+  inaccessible page and then starting after one;
+- judges every run the precondition admits by the Python restatement, over
+  mathematical integers as contract arithmetic is.
+
+It reports a problem when a function is ``Verified`` (or ``BoundedSafe`` for
+an input within the bound) yet an admitted input has undefined behavior or
+breaks the postcondition, when a counterexample's input is not admitted or
+runs without either, and when two configurations decide differently. CI runs
+every case each night; ``clang/test/Verify/differential.test`` runs the tool's
+own cases on every change. From the repository root:
+
+.. code-block:: bash
+
+   ninja -C build clang cpp-verify
+   python3 clang/utils/cppverify-differential/run.py \
+     --cpp-verify build/bin/cpp-verify --suite integers --suite calls
+
+Each line gives a function's verdict in each configuration, the inputs its
+precondition admits, how many of them misbehave, and what each counterexample
+showed when run:
+
+.. code-block:: text
+
+   u16mul_guard    z3=verified bv=verified int=verified cvc5=verified admitted=17225 violations=0
+   long_plus_1u    z3=failed:overflow ... admitted=20380 violations=16 counterexamples: z3 confirmed: undefined behavior at (9223372036854775807,); ...
+
+A failure is evidence relative to the contracts it uses, so not every
+counterexample reproduces when the program runs. Here ``weak`` promises less
+than it does:
+
+.. cppverify-example: fails m_weak_post
+
+.. code-block:: cpp
+
+   int weak(int x)
+     cppverify::post(cppverify::result >= x)
+   { return x < 100 ? 100 : x; }
+
+   int m_weak_post(int x)
+     cppverify::post(cppverify::result >= 100)
+   { return weak(x); }
+
+``m_weak_post`` fails at ``x = 0`` relative to the contract of ``weak``, while
+running it returns 100. The tool runs every counterexample it can read. One
+that passes a call or an arbitrary loop iteration and does not reproduce is
+reported as relative to that abstraction, and so is a failure that a run
+cannot show: a check, an invariant, a measure, a frame, a callee's
+precondition, an uninitialized read, or a contract that is undefined at the
+input (only its body runs). A counterexample of a pointer function, or one
+cvc5 found, carries no values to run.
+
 Parallel solving and persistent proofs
 --------------------------------------
 
