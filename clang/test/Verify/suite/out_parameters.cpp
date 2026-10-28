@@ -130,7 +130,7 @@ int read_before_written()
   int v = r;
   return v;
 }
-// CHECK: :[[@LINE-3]]:3: error: verification failed: read_before_written [initialization]
+// CHECK: :[[@LINE-3]]:11: error: verification failed: read_before_written [initialization]
 
 int *fresh()
   cv::post(cv::result != nullptr)
@@ -213,8 +213,8 @@ int reads_after_failed_get()
   try_get(a[0], false);
   return a[0];
 }
-// CHECK: :[[@LINE-2]]:3: error: verification failed: reads_after_failed_get [initialization]
-// NOUB: :[[@LINE-3]]:3: error: verification failed: reads_after_failed_get [initialization]
+// CHECK: :[[@LINE-2]]:10: error: verification failed: reads_after_failed_get [initialization]
+// NOUB: :[[@LINE-3]]:10: error: verification failed: reads_after_failed_get [initialization]
 
 // Written, then read: still an out-parameter.
 void write_then_update(int &x)
@@ -431,7 +431,7 @@ int reads_unmade()
   make_first(p);
   return p.b;
 }
-// CHECK: :[[@LINE-2]]:3: error: verification failed: reads_unmade [initialization]
+// CHECK: :[[@LINE-2]]:12: error: verification failed: reads_unmade [initialization]
 
 // A postcondition about storage the function never writes speaks of the
 // caller's values: an input, initialized at entry.
@@ -481,7 +481,7 @@ int maybe_zeroed()
   zero_each(a[0], 0);
   return a[0];
 }
-// CHECK: :[[@LINE-2]]:3: error: verification failed: maybe_zeroed [initialization]
+// CHECK: :[[@LINE-2]]:10: error: verification failed: maybe_zeroed [initialization]
 
 // A call that may write a cell keeps it initialized.
 int kept_through_call(int n)
@@ -585,7 +585,7 @@ int init_in_loop_only(int n)
   }
   return a[0];
 }
-// CHECK: :[[@LINE-2]]:3: error: verification failed: init_in_loop_only [initialization]
+// CHECK: :[[@LINE-2]]:10: error: verification failed: init_in_loop_only [initialization]
 
 void zero_rec(int &x, int n)
   cv::pre(n >= 0)
