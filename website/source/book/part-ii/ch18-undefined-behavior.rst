@@ -102,10 +102,10 @@ The classic example — the tool tells you the precondition you forgot:
 
 .. code-block:: text
 
-   abs.cpp:2:3: error: verification failed: abs_unguarded [overflow] [backend=z3] [reason=counterexample]
+   abs.cpp:2:18: error: verification failed: abs_unguarded [overflow] [backend=z3] [reason=counterexample]
        2 | { return x < 0 ? -x : x; }
-         |   ^
-   abs.cpp:2:3: note: counterexample: x = -2147483648
+         |                  ^~
+   abs.cpp:2:18: note: counterexample: x = -2147483648
    Verified: abs_guarded [backend=z3]
 
 Negating ``INT_MIN`` overflows, so the first version fails at that input;
@@ -293,7 +293,7 @@ very input it means to exclude:
 
    per.cpp:2:17: error: verification failed: contract of per_item [division-by-zero] [backend=z3] [reason=counterexample]
        2 |   cv::pre(total / items <= 100 && items > 0)
-         |                 ^
+         |           ~~~~~~^~~~~~~
    per.cpp:2:17: note: counterexample: items = 0
    Verified: per_item [backend=z3]
 
