@@ -752,6 +752,25 @@ function as possibly divergent: its proof, and the proof of every caller, is
 reported `[partial]`. Calls within an executable or proof recursion cycle
 assert the decrease of the shared measure at the call site.
 
+**Counterexamples after a loop.** A certified failure (on Z3, cvc5, the
+portfolio, or the race) whose trace has an active loop event passed through
+the loop's havoc, so its state there is any the invariants allow. The driver
+notes that (`VerifyDiagnostic::Notes`, printed as `note:` lines and JSON
+`notes`) and confirms it the way BMC verifies: a copy of the function
+prepared for unrolling (`SpecInliner::prepareFunction`, the UB checks), each
+bound from 0 to `--confirm-bound` unrolled (`LoopUnroller`), passivized
+against the interface map, and solved obligation by obligation
+(`Z3VerifyBackend::verifyObligations`) with one query timeout for all
+bounds. The copies of the failed check are the obligations of its kind at
+its source location: one per iteration for a check in a loop's body, none
+for a loop's invariant or measure, which unrolling does not keep (then
+nothing is noted). A copy that fails at bound `b` is an execution within `b`
+iterations of each loop (callees still by their contracts), and its
+counterexample is noted; copies that all hold where every loop's unwinding
+is proved hold for every execution; copies that hold short of that go on to
+the next bound; anything unresolved ends the search without a note. A function with an unmeasured loop (`UnmeasuredLoop`) also
+gets a note naming it on any failure.
+
 **Loop exits.** A `break` or `return` inside the body leaves from the
 inductive iteration: its path guard is recorded and the path ends. After the
 loop the continuation assumes `(¬choice ∧ ¬cond) ∨ break₁ ∨ … ∨ return₁ ∨ …`.

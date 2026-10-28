@@ -483,6 +483,17 @@ are errors at the statement (:doc:`language/functions-loops`).
 Running cpp-verify
 ~~~~~~~~~~~~~~~~~~
 
+**Counterexamples after a loop.** A failure whose counterexample passed
+through a loop looked like any other, though its state there came from the
+loop's invariants and no execution need reach it: the first loop most users
+write, without an invariant, failed with ``c = 0`` after ``while (c < n)``.
+Such a failure now says so in a note, and unrolling each loop then looks for
+an execution that fails the same check within ``--confirm-bound`` iterations
+(default 10): it gives that execution, or says that no execution fails the
+check (when unrolling proves it) or that none fails it within the bound. A
+failure of a function whose loop has no ``cppverify::decreases`` names that
+loop too (:doc:`language/functions-loops`).
+
 **A summary, and what to print.** A run now ends with one line that counts
 its verdicts by kind, with the reasons of the unresolved ones and the time it
 took (``Summary: 12 verified, 1 failed, 2 unresolved (spec.fuel 1,

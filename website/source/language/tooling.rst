@@ -24,6 +24,7 @@ Standalone verifier
    cpp-verify --no-check-ub file.cpp
    cpp-verify --profile-quantifiers file.cpp
    cpp-verify --timeout=20000 file.cpp
+   cpp-verify --confirm-bound=4 file.cpp
    cpp-verify --jobs=4 --proof-cache=.cppverify-cache file.cpp
    cpp-verify --solver-rlimit=500000 --max-query-nodes=50000 file.cpp
    cpp-verify --memory-limit=4096 file.cpp
@@ -959,6 +960,17 @@ heap-write, allocation/provenance, lifetime-end, deletion, and return events.
 False guards are omitted; a guard the model does not determine is retained with
 JSON ``"active": null`` rather than an invented path choice. Archives preserve
 the same names, ranges, IDs, and trace data during replay.
+
+A failure may carry notes, printed after it as ``note:`` lines and in JSON as
+``notes``: a counterexample that passes through a loop starts from any state
+the loop's invariants allow, and what unrolling each loop then finds about
+the same check, within ``--confirm-bound`` iterations (default 10; ``0``
+skips it; only with the solver backends, since BMC unrolls already and Lean
+runs no solver): an execution that fails it, a proof that none does, or no
+failure within the bound. The search takes at most one query timeout. Unrolling
+drops the loops' invariants and measures, so a failure of one gets no
+search: it would find no copy of the check at any bound. A loop without
+``cppverify::decreases`` is noted too (see :doc:`functions-loops`).
 
 Each non-success verification result also carries a stable reason code. Current
 codes include ``counterexample``, ``solver.timeout``, ``solver.unknown``,

@@ -287,6 +287,13 @@ static cl::opt<bool>
                      "(spec axiom)"),
             cl::cat(CppVerifyCategory));
 
+static cl::opt<unsigned> ConfirmBound(
+    "confirm-bound",
+    cl::desc("For a failure whose counterexample passes through a loop, "
+             "unroll each loop up to this many iterations to look for an "
+             "execution that fails (default 10, 0 = do not look)"),
+    cl::init(10), cl::cat(CppVerifyCategory));
+
 static cl::opt<bool> ListFunctions(
     "list-functions",
     cl::desc("List the functions a run would verify, with their kinds and "
@@ -448,6 +455,7 @@ public:
       VOpts.Quiet = Quiet.getValue();
       VOpts.Verbose = Verbose.getValue();
       VOpts.ListFunctions = ListFunctions.getValue();
+      VOpts.ConfirmBound = ConfirmBound.getValue();
       VOpts.Summary = &gSummary;
       if (!verify::verifyTranslationUnit(Ctx, llvm::outs(), VOpts))
         ++gVerifyFailures;
@@ -678,6 +686,10 @@ static bool resolveOptions(bool Replay) {
             "--backend=race";
   else if (given(BMCUnroll) && !Replay && Backend != "bmc")
     Error = "--unroll requires --backend=bmc";
+  else if (given(ConfirmBound) &&
+           (Replay || Backend == "bmc" || Backend == "lean"))
+    Error = "--confirm-bound requires source verification with --backend=z3, "
+            "cvc5, portfolio, or race";
   else if (given(LeanFallbackScope) && LeanFallback.empty())
     Error = "--lean-fallback-scope requires --lean-fallback";
   else if (given(LeanAutoTimeout) && LeanProject.empty() &&

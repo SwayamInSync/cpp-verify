@@ -638,6 +638,48 @@ rest of the loop, and a ``continue`` goes to the condition, where the
 invariant must first hold. ``cppverify::ghost`` code cannot leave an
 executable loop.
 
+A failure is relative to the loop's invariants: after the loop, and at the
+start of an iteration, the verifier knows only what they say, so a
+counterexample there may start from a state no execution reaches. Such a
+failure says so in a note, and the verifier then unrolls each loop, up to
+``--confirm-bound`` iterations (10 by default, ``0`` to skip), to look for an
+execution that fails the same check, with callees still by their contracts:
+
+.. code-block:: cpp
+
+   namespace cv = cppverify;
+
+   int count_up(int n)
+     cv::pre(n >= 0 && n <= 5)
+     cv::post(cv::result == n)
+   {
+     int c = 0;
+     while (c < n)
+       cv::decreases(n - c)
+     {
+       c = c + 1;
+     }
+     return c;
+   }
+
+.. code-block:: text
+
+   count_up.cpp:5:23: error: verification failed: count_up [fn_...::postcondition@5:23] (counterexample: result [ssa=__result_1] [type=i32] = 1, c [ssa=c_1] [type=i32] = 0, c [ssa=c_2] [type=i32] = 1, c [ssa=c_3] [type=i32] = 1, n [ssa=n_0] [type=i32] = 0; trace: loop.entry@8:3 -> loop.exit@8:3 -> return.return@13:3 value=1) [backend=z3] [reason=counterexample]
+   note: the counterexample's state at the loop at 8:3 is any state its invariants allow, not necessarily one an execution reaches
+   note: no execution fails this check: every loop ends within 5 iterations, and unrolling proves it there; the loops' invariants are too weak for an unbounded proof
+
+Here the loop has no invariant, so after it ``c`` may be anything; the fix is
+``cv::invariant(0 <= c && c <= n)``. When unrolling finds an execution that
+fails the check (in any iteration's copy of it, for a check in the loop's
+body), the note says within how many iterations and gives that execution;
+when it finds neither a failure nor a proof within the bound, the note says
+that no execution fails the check within that many iterations. Unrolling
+keeps no invariant and no measure, so a failed invariant or measure gets the
+first note only. The verdict stays ``verification failed`` either way, since
+the claim is not proved. A failure of a function
+whose loop has no ``cppverify::decreases`` also notes that loop: with a
+proof, the function would still be ``Unresolved`` (``decreases.missing``).
+
 A range-based ``for`` loop over an array (a local array, an array member,
 a constant table) visits its elements in order. Its contract names the
 position, ``cppverify::index``, the number of elements before the current
