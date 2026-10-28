@@ -2537,6 +2537,40 @@ def fverify_contracts_out_EQ : Joined<["-"], "fverify-contracts-out=">,
   HelpText<"Write the contracts CppVerify verifies in this file and those it "
            "assumes from other files, for cpp-verify --check-contracts">,
   MarshallingInfoString<FrontendOpts<"VerifyContractsOut">>;
+def fverify_backend_EQ : Joined<["-"], "fverify-backend=">,
+  Group<f_clang_Group>, Visibility<[ClangOption, CC1Option]>,
+  HelpText<"The solver CppVerify verifies with: z3 (default), cvc5, portfolio "
+           "(z3 and cvc5 must agree), race (the first decisive answer of z3 "
+           "and cvc5), or bmc">,
+  Values<"z3,cvc5,portfolio,race,bmc">,
+  NormalizedValuesScope<"FrontendOptions::CppVerifyBackend">,
+  NormalizedValues<["Z3", "CVC5", "Portfolio", "Race", "BMC"]>,
+  MarshallingInfoEnum<FrontendOpts<"VerifyBackend">, "Z3">;
+def fverify_timeout_EQ : Joined<["-"], "fverify-timeout=">,
+  Group<f_clang_Group>, Visibility<[ClangOption, CC1Option]>,
+  MetaVarName<"<ms>">,
+  HelpText<"Milliseconds each CppVerify solver query may take (default 30000)">,
+  MarshallingInfoInt<FrontendOpts<"VerifyTimeoutMs">>;
+def fverify_jobs_EQ : Joined<["-"], "fverify-jobs=">,
+  Group<f_clang_Group>, Visibility<[ClangOption, CC1Option]>,
+  MetaVarName<"<n>">,
+  HelpText<"Solver jobs CppVerify runs for each compilation (default 1)">,
+  MarshallingInfoInt<FrontendOpts<"VerifyJobs">, "1">;
+def fverify_cache_EQ : Joined<["-"], "fverify-cache=">,
+  Group<f_clang_Group>, Visibility<[ClangOption, CC1Option]>,
+  MetaVarName<"<dir>">,
+  HelpText<"Keep CppVerify's proofs in <dir>, shared by compilations, so that "
+           "an unchanged obligation is not solved again">,
+  MarshallingInfoString<FrontendOpts<"VerifyCache">>;
+def fverify_report : Flag<["-"], "fverify-report">, Group<f_clang_Group>,
+  Visibility<[ClangOption]>,
+  HelpText<"Write CppVerify's results as JSON Lines beside the object file, "
+           "in <object>.cppverify.json">;
+def fverify_report_EQ : Joined<["-"], "fverify-report=">,
+  Group<f_clang_Group>, Visibility<[ClangOption, CC1Option]>,
+  MetaVarName<"<file>">,
+  HelpText<"Write CppVerify's results as JSON Lines to <file>">,
+  MarshallingInfoString<FrontendOpts<"VerifyReport">>;
 def fno_verify : Flag<["-"], "fno-verify">, Group<f_clang_Group>,
   Visibility<[ClangOption, CC1Option]>,
   HelpText<"Check contract syntax and semantics but skip CppVerify SMT verification "
