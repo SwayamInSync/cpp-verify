@@ -3533,21 +3533,64 @@ fresh context, the API's or `z3`'s, the same assertions are `unknown`
 - Sanitizers: `-DCPPVERIFY_SANITIZER="address;undefined"` builds
   `clangVerify` and `cpp-verify` with AddressSanitizer and
   UndefinedBehaviorSanitizer beside an uninstrumented LLVM, Clang, and Z3,
-  and `.github/workflows/cppverify-sanitize.sh` runs every Verify test
-  program through it with two jobs, failing on any report;
-  `cppverify-sanitizers.yml` does it nightly. Verdicts are not compared,
-  since the sanitizers slow the verifier. Instrumented frames are many times
-  larger, and the counterexample checker's evaluation recurses (a release
-  build passes every test program on 128 KiB threads; an instrumented one
-  needed more than 64 MiB), so the script gives threads 1 GiB stacks. The
-  first run found no report in the verifier's own code. ThreadSanitizer is
-  not run: in such a build, with only the verifier instrumented, its runtime
-  crashed in its own trace lists or hung on its own trace locks in 66 of 69
-  runs of `spec_automation.cpp` with four jobs (run under gdb to see where),
-  so a run cannot tell a race from the runtime's failure. Its reports
-  otherwise named only Z3's timer pool and LLVM's list of files to remove on
-  a signal, whose synchronization is in uninstrumented code; it needs LLVM
-  and Z3 instrumented too.
+  and `.github/workflows/cppverify-sanitize.sh BUILD address` runs every
+  Verify test program that lit runs through it with two jobs, failing on
+  any report; `cppverify-sanitizers.yml` does it nightly. Verdicts are not
+  compared, since the sanitizers slow the verifier. Instrumented frames are
+  many times larger, and the counterexample checker's evaluation recurses (a
+  release build passes every test program on 128 KiB threads; an
+  instrumented one needed more than 64 MiB), so the script gives threads
+  1 GiB stacks. The first run found no report in the verifier's own code.
+- ThreadSanitizer: `-DLLVM_USE_SANITIZER=Thread` instruments LLVM, Clang,
+  the verifier, and the vendored Z3 (`CppVerifyZ3.cmake` passes the flags to
+  Z3's own build), and `cppverify-sanitize.sh BUILD thread` runs every test
+  program that lit runs with four jobs, a proof cache of its own, and the
+  race backend for the programs whose tests race Z3 against cvc5, so the
+  pool, the cache, and the races all run concurrently; the same workflow
+  does it nightly. In either mode a program without a result within 900 s
+  fails the job too, since a runtime that hangs reports nothing.
+  `cppverify-tsan.supp` suppresses three data races and a lock order inside
+  Z3 4.13.4 and the calls LLVM's crash handler makes in a signal handler,
+  each explained there. Two things make a report trustworthy:
+  - TSan records each instrumented call on a per-thread shadow stack of
+    64 Ki frames (`kShadowStackSize`), and only a debug runtime checks the
+    bound. The counterexample checker nests up to `CertifyLimits::Frames`
+    (50000) evaluations of several frames each, so it wrote past the shadow
+    stack into the runtime's own memory, which then crashed in TSan's trace
+    lists, its deadlock detector, or its own `CHECK`s, or hung on its locks.
+    That, not the partial instrumentation or the checker's thread per check,
+    is why an earlier attempt, with only the verifier instrumented, failed
+    in 66 of 69 runs of `spec_automation.cpp` with four jobs: with the
+    checker's thread per check unchanged, 44 of 50 such runs failed, and so
+    did 45 of 50 with everything instrumented; a wrapper of
+    `__tsan_func_entry` stopped 12 of 12 such runs at 65472 nested calls,
+    all in `Backend/Certify.cpp`; and a standalone program that recurses
+    65,600 calls deep beside threads that start and stop failed in 3 of 6
+    runs, while 65,000 never did (0 of 6). Under TSan, `Backend/Certify.cpp`
+    is therefore compiled with `-fno-sanitize-thread-func-entry-exit`: its
+    accesses are still checked, only its frames are missing from the stacks
+    of reports. Then 60 of 60 runs of `spec_automation.cpp` finished with
+    either instrumentation, and 100 more of the nightly's build under gdb.
+  - `cpp-verify` links `tools/cpp-verify/ShadowStackGuard.cpp` in a TSan
+    build, uninstrumented and with
+    `--wrap=__tsan_func_entry,--wrap=__tsan_func_exit`. It counts each
+    thread's nesting and stops a run that reaches the limit
+    with `cpp-verify: ThreadSanitizer shadow stack full: N nested calls` and
+    its stack, which the script reports, so a deep recursion anywhere is
+    named rather than corrupting the runtime.
+
+  The first full run found one race in the verifier, on the source
+  manager's cache of its last lookups: the notes of a failure looked up
+  sources without `Verifier::SourceLock` (see "Verification Backends"), which
+  `suite/parallel_failure_notes.cpp` exercises. Instrumenting only the
+  verifier (`-DCPPVERIFY_SANITIZER=thread`, which the build still takes)
+  hides the synchronization in LLVM and Z3: it reported a race on LLVM's
+  list of files to remove on a signal, which the full build, seeing LLVM's
+  atomics, does not report, and it cannot see a race on a Z3 object that two
+  threads share. One sweep takes about 4800 CPU seconds,
+  most of each program's time in Z3, and a program at most 3.3 GB; only
+  `llvm_uleb128_decoder_exhaustive.cpp`, which lit does not run, needed
+  17.6 GB, more than a runner has.
 
 Every new semantic feature needs layered oracles rather than a solver result
 alone:
