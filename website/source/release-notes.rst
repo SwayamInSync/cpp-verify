@@ -538,8 +538,8 @@ its end, falling through labels, with an init statement, a condition
 variable, GNU case ranges, and nested loops and switches; a ``break`` in a
 ``do`` loop's first iteration skips the loop and a ``continue`` goes to its
 condition. Specs and lifted ``constexpr`` helpers may switch too. A label
-inside another statement of its switch (Duff's device) and ``[[assume]]``
-are errors at the statement (:doc:`language/functions-loops`).
+inside another statement of its switch (Duff's device) is an error at the
+statement (:doc:`language/functions-loops`).
 
 Running cpp-verify
 ~~~~~~~~~~~~~~~~~~
@@ -1060,9 +1060,12 @@ lie, and reads ``/5`` to ``/1``; JSON diagnostics are
 ``cppverify.diagnostic/2``, ending with a ``cppverify.summary/1`` record, and
 ``--diagnostics-format=sarif`` writes SARIF 2.1.0. A module whose specs' measures apply other specs
 keeps them, so its module hash changes; per-obligation hashes, and the proof
-cache keyed by them, do not. JSON records may carry the status
-``proved-obligations`` (archive replay) and the reasons ``interrupted``
-(Ctrl-C) and ``solver.memory-limit`` (``--memory-limit``). Lean projects
+cache keyed by them, do not. JSON records may carry the statuses
+``proved-obligations`` (archive replay) and ``interrupted`` (Ctrl-C), the
+reasons ``interrupted`` and ``solver.memory-limit`` (``--memory-limit``), and
+the check kinds ``unreachable`` and ``builtin-argument``;
+``--time-report`` adds ``cppverify.time/1`` records, and ``--contracts-out``
+writes ``cppverify.contracts/1`` records. Lean projects
 pin ``leanprover/lean4:v4.35.0``, and each proof
 file records the hash of its goal's statement (``cppverify-obligation-statement``
 version 1, which leaves out the function's identity).
