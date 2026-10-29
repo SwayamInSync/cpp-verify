@@ -544,6 +544,15 @@ are errors at the statement (:doc:`language/functions-loops`).
 Running cpp-verify
 ~~~~~~~~~~~~~~~~~~
 
+**Source lookups from parallel failures.** With more than one job, a failure
+whose counterexample passes through a loop gets notes from unrolling the
+loop, and those looked up source lines without the lock that the other
+lookups take, while other functions looked up theirs; so did a failure's
+place when its source was not recorded. The source manager caches its last
+lookup, so this was a data race on that cache, which ThreadSanitizer found
+and which could misplace a note or a check. Every lookup made while functions
+are verified at once now takes the lock.
+
 **Induction for lemmas that time out.** The automatic inductions ran only
 when unfolding a recursive spec could not settle a claim, so a lemma such as
 "an order on adjacent elements is an order on all of them" ended
