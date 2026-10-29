@@ -17,6 +17,7 @@ on:
       - .github/workflows/cppverify-sanitizers.yml
       - .github/workflows/cppverify-sanitize.sh
       - .github/workflows/cppverify-tsan.supp
+      - clang/cmake/modules/CppVerifyZ3.cmake
       - clang/tools/cpp-verify/ShadowStackGuard.cpp
   workflow_dispatch:
 
@@ -124,13 +125,19 @@ jobs:
           restore-keys: ccache-linux-tsan-
 
       # LLVM, Clang, the verifier, and the vendored Z3 are all instrumented:
-      # TSan sees the synchronization of instrumented code only.
+      # TSan sees the synchronization of instrumented code only. Clang would
+      # take the libstdc++ of the image's newest GCC, 14.2, whose timed mutex
+      # cannot wait on a steady clock under TSan (GCC PR 121496), as Z3's
+      # timer does; GCC 13's waits with pthread_mutex_clocklock, which TSan
+      # intercepts.
       - name: Configure
         run: |
           cmake -S llvm -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER=clang-18 \
             -DCMAKE_CXX_COMPILER=clang++-18 \
+            -DCMAKE_C_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13 \
+            -DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13 \
             -DLLVM_ENABLE_PROJECTS=clang \
             -DLLVM_TARGETS_TO_BUILD=Native \
             -DCPPVERIFY_VENDOR_Z3=ON \
