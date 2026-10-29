@@ -2009,7 +2009,8 @@ options:
 ThreadSanitizer keeps each thread's calls on a shadow stack of 65536 frames
 and does not check its end, so a deeper nesting overwrites the runtime's own
 memory and the run crashes or hangs later, somewhere unrelated. The
-counterexample checker nests that deep, so in a ThreadSanitizer build
+counterexample checker nests that deep before it moves to a fresh stack
+(half of 256 MiB holds more frames), so in a ThreadSanitizer build
 ``clang/lib/Verify/Backend/Certify.cpp`` is compiled with
 ``-fno-sanitize-thread-func-entry-exit``: its memory accesses are still
 checked, but its frames do not appear in reported stacks. A TSan build of
@@ -2020,11 +2021,11 @@ exit status 1, naming the recursion. Built with the checker's hooks left in,
 .. code-block:: text
 
    cpp-verify: ThreadSanitizer shadow stack full: 65472 nested calls
-       #0 __sanitizer_print_stack_trace <null> (cpp-verify+0x42751f)
-       #1 __wrap___tsan_func_entry clang/tools/cpp-verify/ShadowStackGuard.cpp:29:5 (cpp-verify+0x45efeb)
-       #2 getSignificantBits llvm/include/llvm/ADT/APInt.h:1557:12 (cpp-verify+0xe34cac)
-       #3 minimal clang/lib/Verify/Backend/Certify.cpp:20:41 (cpp-verify+0xe34cac)
-       #4 clang::verify::CertInt::CertInt(llvm::APInt) clang/lib/Verify/Backend/Certify.cpp:23:45 (cpp-verify+0xe34cac)
+       #0 __sanitizer_print_stack_trace <null> (cpp-verify+0x46276f)
+       #1 __wrap___tsan_func_entry clang/tools/cpp-verify/ShadowStackGuard.cpp:29:5 (cpp-verify+0x49a23b)
+       #2 (anonymous namespace)::Evaluator::evalNodeWithStackSpace(clang::verify::LogicExpr const*) clang/lib/Verify/Backend/Certify.cpp (cpp-verify+0xef00c2)
+       #3 (anonymous namespace)::Evaluator::eval(clang::verify::LogicExpr const*) clang/lib/Verify/Backend/Certify.cpp:3386:39 (cpp-verify+0xee83eb)
+       #4 binary clang/lib/Verify/Backend/Certify.cpp:843:38 (cpp-verify+0xef0233)
        ...
 
 A recursion reported so is compiled the same way, or made iterative.
