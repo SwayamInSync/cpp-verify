@@ -6,7 +6,6 @@
 #include "clang/Frontend/FrontendOptions.h"
 #include <limits>
 #include "llvm/Support/raw_ostream.h"
-#include <thread>
 
 using namespace clang;
 using namespace verify;
@@ -53,24 +52,14 @@ VerifyOptions verify::compilationOptions(const FrontendOptions &Options) {
   return Opts;
 }
 
-std::future<CppVerifyAsyncResult>
-verify::startCppVerifyAsync(ASTContext &Ctx, const FrontendOptions &Options) {
-  return std::async(std::launch::async,
-                    [&Ctx, Opts = compilationOptions(Options)]() mutable {
-                      CppVerifyAsyncResult Result;
-                      Opts.Parts = &Result.Parts;
-                      Result.Ok =
-                          verifyTranslationUnit(Ctx, llvm::nulls(), Opts);
-                      return Result;
-                    });
-}
-
-bool verify::finishCppVerify(CompilerInstance &CI,
-                             std::future<CppVerifyAsyncResult> Future) {
-  CppVerifyAsyncResult R = Future.get();
+bool verify::runCppVerify(CompilerInstance &CI, ASTContext &Ctx) {
+  VerifyOptions Opts = compilationOptions(CI.getFrontendOpts());
+  std::vector<VerifyDiagnosticPart> Parts;
+  Opts.Parts = &Parts;
+  const bool Ok = verifyTranslationUnit(Ctx, llvm::nulls(), Opts);
   DiagnosticsEngine &Diags = CI.getDiagnostics();
   bool Reported = false;
-  for (const VerifyDiagnosticPart &Part : R.Parts) {
+  for (const VerifyDiagnosticPart &Part : Parts) {
     unsigned ID = diag::note_cppverify_result;
     switch (Part.Level) {
     case DiagnosticsEngine::Error:
@@ -94,7 +83,7 @@ bool verify::finishCppVerify(CompilerInstance &CI,
       Builder << CharSourceRange::getTokenRange(Part.Range);
   }
   // A failure without a result of its own still fails the compilation.
-  if (!R.Ok && !Reported)
+  if (!Ok && !Reported)
     Diags.Report(diag::err_fe_cppverify_failed) << "verification failed";
-  return R.Ok;
+  return Ok;
 }
