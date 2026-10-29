@@ -2583,7 +2583,8 @@ public:
   // kernel rejected it. A goal with an error is elaborated with sorryAx. A
   // goal that takes longer than Limit, or stops Lean, is not proved, and the
   // goals after it start again in a new process; heartbeats bound no kernel
-  // check. Goals Lean cannot start on are left out.
+  // check. A goal's time starts when Lean has loaded the project's modules or
+  // finished the goal before. Goals Lean cannot start on are left out.
   std::map<std::string, LeanTrial>
   tryLeanGoals(const std::vector<const LeanProjectGoal *> &Goals,
                const std::string &Lean,
@@ -2691,8 +2692,9 @@ public:
       bool TimedOut = false;
       while (true) {
         ChildPoll Poll = pollChild(Process, "Lean");
+        const bool WasStarted = Started;
         readReport();
-        if (Axioms.size() != Finished) {
+        if (Started != WasStarted || Axioms.size() != Finished) {
           Finished = Axioms.size();
           Progress = std::chrono::steady_clock::now();
         }
