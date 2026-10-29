@@ -1029,6 +1029,15 @@ misbehaves on an input its precondition admits, when a counterexample does not
 reproduce, or when two backends decide differently
 (:doc:`book/part-ii/ch17-backends-modular-calls`).
 
+**A Clang build in CI.** Linux CI built only with GCC, which accepts C++20
+features in C++17 code without a word, while Apple Clang rejects some of
+them: before 0.1.0, such code and code whose result depended on the order of
+evaluation failed 53 tests on macOS. The Linux assertions build now uses Clang
+18, which makes a C++20 extension in the verifier an error
+(``-Werror=c++20-extensions``), and checks the verifier with clang-tidy for a
+use after a move (``bugprone-use-after-move``). It found seven lambdas that
+captured structured bindings, now named variables, and no use after a move.
+
 **Sanitizers every night.** The verifier's own code is now built with
 AddressSanitizer and UndefinedBehaviorSanitizer (``-DCPPVERIFY_SANITIZER``),
 and every Verify test program runs through that build every night; a report
