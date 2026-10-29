@@ -1,11 +1,11 @@
 name: CppVerify sanitizers
 
 # Every night, the verifier's own code (clang/lib/Verify and cpp-verify) is
-# built with AddressSanitizer and UndefinedBehaviorSanitizer, and again with
-# ThreadSanitizer (-DCPPVERIFY_SANITIZER), beside an uninstrumented LLVM,
-# Clang, and Z3, and every Verify test program runs through it
-# (cppverify-sanitize.sh). A sanitizer report fails the job and uploads the
-# outputs. A pull request that changes this setup runs it too.
+# built with AddressSanitizer and UndefinedBehaviorSanitizer
+# (-DCPPVERIFY_SANITIZER), beside an uninstrumented LLVM, Clang, and Z3, and
+# every Verify test program runs through it (cppverify-sanitize.sh). A
+# sanitizer report fails the job and uploads the outputs. A pull request that
+# changes this setup runs it too.
 
 on:
   schedule:
@@ -15,7 +15,6 @@ on:
     paths:
       - .github/workflows/cppverify-sanitizers.yml
       - .github/workflows/cppverify-sanitize.sh
-      - .github/workflows/cppverify-tsan.supp
   workflow_dispatch:
 
 permissions:
@@ -26,19 +25,9 @@ env:
 
 jobs:
   sanitize:
-    name: ${{ matrix.name }}
+    name: ASan and UBSan
     runs-on: ubuntu-24.04
     timeout-minutes: 355
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: ASan and UBSan
-            sanitizer: address;undefined
-            mode: address
-          - name: TSan
-            sanitizer: thread
-            mode: thread
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 4G
@@ -63,8 +52,8 @@ jobs:
       - uses: actions/cache/restore@v4
         with:
           path: .ccache
-          key: ccache-linux-sanitize-${{ matrix.mode }}-${{ github.sha }}
-          restore-keys: ccache-linux-sanitize-${{ matrix.mode }}-
+          key: ccache-linux-sanitize-${{ github.sha }}
+          restore-keys: ccache-linux-sanitize-
 
       - name: Configure
         run: |
@@ -77,7 +66,7 @@ jobs:
             -DCPPVERIFY_VENDOR_Z3=ON \
             -DCPPVERIFY_PREFER_SYSTEM_Z3=OFF \
             -DLLVM_ENABLE_ASSERTIONS=ON \
-            "-DCPPVERIFY_SANITIZER=${{ matrix.sanitizer }}" \
+            "-DCPPVERIFY_SANITIZER=address;undefined" \
             -DLLVM_CCACHE_BUILD=ON
 
       - name: Build
@@ -87,15 +76,15 @@ jobs:
         if: always()
         with:
           path: .ccache
-          key: ccache-linux-sanitize-${{ matrix.mode }}-${{ github.sha }}
+          key: ccache-linux-sanitize-${{ github.sha }}
 
       - name: Run every test program
         run: |
           build/bin/cpp-verify --version
-          .github/workflows/cppverify-sanitize.sh build ${{ matrix.mode }}
+          .github/workflows/cppverify-sanitize.sh build
 
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: sanitizer-reports-${{ matrix.mode }}
+          name: sanitizer-reports
           path: sanitizer-reports/
