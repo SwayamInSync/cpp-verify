@@ -21,3 +21,9 @@ target_link_libraries(cpp-verify
 if(CPPVERIFY_ENABLE_COVERAGE)
   target_link_options(cpp-verify PRIVATE -fprofile-instr-generate)
 endif()
+
+get_property(_cppverify_sanitize_flags GLOBAL PROPERTY CPPVERIFY_SANITIZE_FLAGS)
+if(_cppverify_sanitize_flags)
+  target_compile_options(cpp-verify PRIVATE ${_cppverify_sanitize_flags})
+  target_link_options(cpp-verify PRIVATE ${_cppverify_sanitize_flags})
+endif()
