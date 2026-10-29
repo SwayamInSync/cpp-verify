@@ -183,7 +183,8 @@ C++ feature boundaries
        through a pointer (``Ring copy = *r;``).
    * - Functions
      - Free functions, member functions of classes without bases or virtual
-       functions (:doc:`structs`), function and class templates in each
+       functions, member operators and the C++20 comparisons rewritten in
+       terms of them (:doc:`structs`), function and class templates in each
        specialization the translation unit instantiates
        (:doc:`functions-loops`, :doc:`structs`),
        overloads, namespaces, contracts, direct calls anywhere in an
