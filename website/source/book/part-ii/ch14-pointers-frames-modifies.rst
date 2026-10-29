@@ -444,7 +444,9 @@ entry is arbitrary; contracts say what a function needs of it:
 ``lookups`` knows that ``stats.misses`` kept its value, since ``hit`` writes
 ``stats.hits`` alone. :doc:`../../language/pointers` has the rules: pointers
 into a global array are bounded by it and may be passed as slices, and a
-spec cannot read a mutable global.
+spec cannot read a mutable global. A ``static`` local is an object of the
+same kind that only its function names: that function's own state, which
+it writes without a frame and which only calls that may reach it change.
 
 Declaring a checked extent
 --------------------------

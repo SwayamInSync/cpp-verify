@@ -241,6 +241,9 @@ private:
   /// Whether \p VD is a mutable global record or array: one object at its
   /// fixed address, reached through places as a promoted local is.
   bool isGlobalObject(const VarDecl *VD) const;
+  /// Whether \p VD is a static local with a constant initializer: an object
+  /// at a fixed address that only its function names.
+  bool isStaticObject(const VarDecl *VD) const;
   /// The global object whose field or element \p E selects (or is), if any.
   const VarDecl *globalObjectRoot(const Expr *E) const;
   /// The place of the global object \p VD, or nullopt after an error.

@@ -211,10 +211,11 @@ C++ feature boundaries
        fastest. See the memory limits of :doc:`tooling`.
    * - Storage
      - Supported locals, constrained scalar dynamic storage, inferred
-       acyclic fresh-owned scalar factory results, and mutable globals of
-       integral, record, and array types (:doc:`pointers`).
+       acyclic fresh-owned scalar factory results, and mutable globals and
+       static locals of integral, record, and array types (:doc:`pointers`).
      - Globals that are themselves pointers, globals of a class with an
-       invariant, mutable static locals, pointers into constant tables,
+       invariant, static locals with an initializer that runs code or whose
+       address is taken, pointers into constant tables,
        thread-local storage, general returned allocations, and user-declared
        modular allocation effects. Constant tables (``const`` and
        ``constexpr`` arrays with constant initializers, and string literals)
