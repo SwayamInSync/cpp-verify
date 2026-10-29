@@ -61,7 +61,7 @@ jobs:
             -DLLVM_CCACHE_BUILD=ON
 
       - name: Build
-        run: ninja -C build clang cpp-verify clang-format FileCheck not count split-file llvm-config
+        run: ninja -C build clang cpp-verify clang-format FileCheck not count split-file llvm-config cpp-verify-archive-fuzzer
 
       - name: Run the suite ${{ env.RUNS }} times
         run: |
@@ -92,7 +92,8 @@ jobs:
       - name: Build with setup.sh
         run: |
           ./setup.sh
-          ninja -C build FileCheck not count split-file llvm-config
+          ninja -C build FileCheck not count split-file llvm-config \
+            cpp-verify-archive-fuzzer
 
       - name: Run the suite ${{ env.RUNS }} times
         run: |

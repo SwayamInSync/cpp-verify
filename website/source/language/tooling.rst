@@ -1168,7 +1168,10 @@ a fixed amount of solver work (Z3 resource units), with the query timeout
 only as a bound in time, so on a loaded machine it stops where it stops on
 an idle one, unless the timeout passes first; once it has found a
 counterexample, the obligations that choose the failure to report get the
-same work each. Lean generation stays serial; ``cppverify_auto`` and
+same work each. Likewise, the search for the least and greatest values of a
+spec's argument, which finds a counterexample at the end of its range, is
+bounded by solver work and by the CPU time of its own thread, which the load
+of other processes does not use up. Lean generation stays serial; ``cppverify_auto`` and
 certification run Lean processes side by side; what they find does not depend
 on how many, but a goal whose automation is near ``--lean-auto-timeout`` may
 finish in time under one load and not under another. The compile-time
@@ -1457,12 +1460,25 @@ Every ``Verified`` result is checked at each:
    * - A trusted contract cannot hold in the state of one call.
      - ``f: the trusted contract of g contradicts the state of this call, so
        everything after it holds vacuously``, at the call
+   * - The facts about the specs ``f`` applies close a branch, ``return``,
+       loop body, or loop exit that its code alone reaches.
+     - ``f: the facts about s contradict the path to the true branch here,
+       which the code alone reaches, so every claim on that path holds
+       vacuously; either the path cannot happen, and it is dead code, or a
+       fact about s is wrong``, at the first such point (the result itself
+       is not ``[vacuous]``)
 
 A verified callee always returns, so only a trusted contract can end the
 paths through a call. Unreachable code itself is not flagged: a defensive
 ``if (p == nullptr) return -1;`` under ``cppverify::pre(p != nullptr)`` is dead for a
 good reason, and every claim the function makes is still checked on the
-paths that remain.
+paths that remain. The exception is code that only the facts about specs
+make dead (a spec's postcondition, a recursive spec's definition, an
+inductive predicate's unfolding, a frame, a choice's axiom): those facts
+are proved, so the code is most likely dead, but a wrong fact would hide
+paths in exactly this way, so the first such point is reported. A
+``cppverify::check`` of the fact before the point states it in the code and
+silences the warning (see :doc:`../book/part-ii/ch16-when-verification-fails`).
 
 Combining JSON or SARIF with IR dumps intentionally creates a mixed stream.
 Malformed byte sequences in source or archive display text are rendered with
@@ -1528,7 +1544,12 @@ certifies (:doc:`../book/part-ii/ch17-backends-modular-calls`).
 serialize/deserialize/validate/reserialize checks. Stable wire tags make the
 format independent of C++ enum ordinals. The reader rejects malformed magic,
 unsupported versions, truncation, invalid tags, inconsistent feature
-declarations, duplicate identities, and oversized/deep expressions.
+declarations, duplicate identities, and oversized/deep expressions. An
+archive is untrusted input, and libFuzzer runs the reader every night under
+AddressSanitizer (``cpp-verify-archive-fuzzer``): any byte string must be
+rejected with an error or decode to modules that validate, that the writer
+states again byte for byte with the same hashes, whose canonical form is a
+fixpoint, and that the Z3, cvc5, and Lean adapters lower.
 Schema v2 adds the precise obligation kinds; schema v3 each spec function's
 termination measures, read like its definition, and, with source metadata,
 where each assumption of a goal comes from, which names a hypothesis of a
@@ -1657,6 +1678,73 @@ diagnostics show them as they show Clang's:
 Before 0.2 the compiler printed the verifier's lines as text, and then the
 one error ``cppverify: verification failed``: ``-fdiagnostics-format=sarif``
 gave a document without results, and ``-w`` and ``-Werror`` changed nothing.
+
+Options of a compilation
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+A compilation verifies with ``cpp-verify``'s defaults, Z3 and 30 seconds a
+query, and one solver job. These options change that for the files they are
+given to:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 38 62
+
+   * - Option
+     - Meaning (the ``cpp-verify`` option)
+   * - ``-fverify-backend=z3|cvc5|portfolio|race|bmc``
+     - The solver (``--backend``). Lean projects stay with ``cpp-verify``.
+   * - ``-fverify-timeout=<ms>``
+     - Each query's time (``--timeout``, 30000 by default, ``0`` disables);
+       a query over collections gets twice it, and one function's queries
+       together ten times it, as with ``cpp-verify``.
+   * - ``-fverify-jobs=<n>``
+     - Solver jobs for each compilation (``--jobs``), 1 by default, since a
+       build compiles several files at once: ``make -j8`` with
+       ``-fverify-jobs=2`` runs up to 16.
+   * - ``-fverify-cache=<dir>``
+     - Proofs kept in ``<dir>`` (``--proof-cache``), shared by every
+       compilation that names it, so an unchanged obligation is not solved
+       again.
+   * - ``-fverify-report``, ``-fverify-report=<file>``
+     - The results as JSON Lines records (``--diagnostics-format=json``),
+       ending with the summary record, in ``<object>.cppverify.json`` beside
+       the object file, or in ``<file>``.
+   * - ``-fverify-contracts-out=<file>``
+     - The contracts the file verifies and those it assumes, for
+       ``cpp-verify --check-contracts`` (Contracts across files, in
+       :doc:`functions-loops`).
+
+An invalid value is an error of the compiler
+(``error: invalid value 'lean' in '-fverify-backend=lean'``). A file without a
+function to verify says nothing, as most files of a project have none;
+``cpp-verify`` still warns ``no verifiable functions found`` for one. Before
+0.2 a compilation always verified with the defaults, and every file without
+contracts warned.
+
+Verification in a CMake build
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Configure the build with this compiler
+(``-DCMAKE_CXX_COMPILER=/path/to/build/bin/clang++``) and give the options to
+the targets whose code has contracts:
+
+.. code-block:: cmake
+
+   option(VERIFY "Verify contracts while compiling" ON)
+   if(VERIFY)
+     target_compile_options(app PRIVATE -fverify-contracts -fverify-jobs=2
+       -fverify-cache=${CMAKE_BINARY_DIR}/cppverify-cache -fverify-report)
+   else()
+     target_compile_options(app PRIVATE -fno-verify)
+   endif()
+
+A failure is an error of the compilation, so the build stops at it and
+writes no object. ``-DVERIFY=OFF`` still checks the contracts' syntax and
+meaning (``-fno-verify``), without the solver, for fast development builds,
+and the objects are the same either way, since contracts emit no code. With
+``-fverify-report`` each object's results lie beside it, for a CI step to
+collect.
 
 Quick lookup
 ~~~~~~~~~~~~

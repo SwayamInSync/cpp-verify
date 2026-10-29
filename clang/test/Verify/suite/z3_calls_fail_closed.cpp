@@ -62,7 +62,7 @@ int unsupported_recursive_exec(int n)
 }
 
 // VERIFY-DAG: error: calls_uncontracted: call to function without a verification contract: opaque_side_effect
-// VERIFY-DAG: error: reads_global_state: only scalar integral global variables are supported: global_state
+// VERIFY-DAG: error: reads_global_state: only integral, record, and array global variables are supported: global_state
 // VERIFY-DAG: error: unsupported_forged_pointer: unsupported explicit pointer or aggregate cast
 // VERIFY-DAG: error: unsupported_cross_type_alias: aliases between different pointee types are unsupported
 // VERIFY-DAG: error: unsupported_recursive_exec: recursive executable functions require decreases

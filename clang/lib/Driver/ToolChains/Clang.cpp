@@ -6699,6 +6699,24 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   // language, so when neither -f/-fno-verify-contracts was given it implies
   // -fverify-contracts, yielding a syntax/semantics-only "light check".
   Args.AddLastArg(CmdArgs, options::OPT_fverify_contracts_out_EQ);
+  for (OptSpecifier Opt :
+       {options::OPT_fverify_backend_EQ, options::OPT_fverify_timeout_EQ,
+        options::OPT_fverify_jobs_EQ, options::OPT_fverify_cache_EQ})
+    Args.AddLastArg(CmdArgs, Opt);
+  // -fverify-report writes beside the object, as -ftime-trace does.
+  if (Arg *A = Args.getLastArg(options::OPT_fverify_report,
+                               options::OPT_fverify_report_EQ)) {
+    SmallString<128> Report;
+    if (A->getOption().matches(options::OPT_fverify_report_EQ))
+      Report = A->getValue();
+    else if (Output.isFilename())
+      Report = Output.getFilename();
+    else
+      Report = llvm::sys::path::stem(Input.getBaseInput());
+    if (!A->getOption().matches(options::OPT_fverify_report_EQ))
+      Report += ".cppverify.json";
+    CmdArgs.push_back(Args.MakeArgString("-fverify-report=" + Report));
+  }
   if (Args.hasArg(options::OPT_fno_verify)) {
     CmdArgs.push_back("-fno-verify");
     if (!Args.hasArg(options::OPT_fverify_contracts) &&

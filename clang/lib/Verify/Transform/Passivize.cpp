@@ -3862,6 +3862,70 @@ class PassivizerImpl {
     return std::nullopt;
   }
 
+  /// Whether Address lies in one of the function's static locals, or in
+  /// those of a function it may call.
+  std::unique_ptr<VExpr>
+  inPrivateObject(const VExpr *Address,
+                  const std::map<std::string, std::string> &Renames,
+                  SourceLocation Loc) {
+    std::unique_ptr<VExpr> Any = makeBoolLiteral(false, Loc);
+    for (const auto &Object : Fn.PrivateObjects) {
+      Region R = privateRegion(*Object, Loc);
+      Any = makeOr(std::move(Any),
+                   makeAnd(std::make_unique<VBinOpExpr>(
+                               VBinOp::Le, std::move(R.Lo), cloneVExpr(Address),
+                               VType::makeBool(), Loc),
+                           std::make_unique<VBinOpExpr>(
+                               VBinOp::Lt, cloneVExpr(Address), std::move(R.Hi),
+                               VType::makeBool(), Loc),
+                           Loc),
+                   Loc);
+    }
+    return Any;
+  }
+
+  /// After a call, the callee's static locals hold any values: a new heap
+  /// equal to the one before outside them, as for its footprints.
+  void havocPrivateObjects(PassiveProgram &P,
+                           std::map<std::string, std::string> &Renames,
+                           const VFunction &Callee, SourceLocation Loc) {
+    // A scalar takes a fresh value, as a loop's written cell does; a record
+    // or array is framed, every byte outside it kept.
+    std::vector<Region> Objects;
+    for (const auto &Object : Callee.PrivateObjects) {
+      Region R = privateRegion(*Object, Loc);
+      const std::string Before = Renames[VHeapName];
+      const std::string After = bump(VHeapName);
+      Renames[VHeapName] = After;
+      if (R.Cell) {
+        emitPassive(P, PassiveStmt::Assume,
+                    std::make_unique<VHeapStoreExpr>(
+                        Before, After, cloneVExpr(R.Lo.get()),
+                        std::make_unique<VVarExpr>(bump("__private_value"),
+                                                   *R.Cell, Loc),
+                        Loc));
+        continue;
+      }
+      std::vector<Region> One;
+      One.push_back(std::move(R));
+      emitPassive(P, PassiveStmt::Assume, heapFrame(Before, After, One, Loc));
+    }
+  }
+
+  /// The bytes of a static local: one cell when it is a scalar.
+  static Region privateRegion(const VExpr &Object, SourceLocation Loc) {
+    const auto &Load = static_cast<const VLoadExpr &>(Object);
+    if (!Load.Ty.isAggregate())
+      return cellRegion(Load.Ptr.get(), Load.Ty, Loc);
+    return Region{cloneVExpr(Load.Ptr.get()),
+                  addBytes(cloneVExpr(Load.Ptr.get()),
+                           std::make_unique<VLiteralExpr>(
+                               std::to_string(Load.Ptr->Ty.PointeeSizeBytes),
+                               pointerOffsetType(), Loc),
+                           Loc),
+                  std::nullopt};
+  }
+
   /// In the object model a slice argument is valid storage where its bytes
   /// [Actual, Actual + Bytes] lie in one of the caller's objects: those its
   /// origins name when they are known, else any of them. Arg is the
@@ -4152,6 +4216,8 @@ class PassivizerImpl {
           break;
         if (Callee->UsesDynamicStorage || hasImplicitHeapEffect(*Callee, FnMap))
           return false;
+        for (const auto &Object : Callee->PrivateObjects)
+          Out.push_back(privateRegion(*Object, C.Loc));
         for (const VFootprint &M : Callee->Modifies) {
           if (!M.Target || M.Target->K != VExpr::Load)
             return false;
@@ -4842,6 +4908,7 @@ class PassivizerImpl {
       }
       if (Callee != FnMap.end() &&
           (!Callee->second->Modifies.empty() ||
+           !Callee->second->PrivateObjects.empty() ||
            hasImplicitHeapEffect(*Callee->second, FnMap)))
         Out.insert(VHeapName);
       if (Callee != FnMap.end())
@@ -5596,6 +5663,31 @@ public:
         auto Member = objectMembership(
             abstractObjects(Fn), U->Operand.get(), /*Closed=*/false, Loc,
             [&](const VExpr *V) { return cloneExpr(V, EntryCtx); });
+        // Or in a global object its origins name, which lives as long as the
+        // program.
+        if (auto Origins = pointerOrigins(U->Operand.get()))
+          for (const std::string &Origin : *Origins)
+            if (isGlobalOrigin(Origin)) {
+              auto [Address, Size] = globalOriginExtent(Origin);
+              auto Start =
+                  std::make_unique<VLiteralExpr>(Address, VType::makePtr(), Loc);
+              auto End = addBytes(
+                  cloneVExpr(Start.get()),
+                  std::make_unique<VLiteralExpr>(std::to_string(Size),
+                                                 pointerOffsetType(), Loc),
+                  Loc);
+              Member = makeOr(
+                  std::move(Member),
+                  makeAnd(std::make_unique<VBinOpExpr>(
+                              VBinOp::Le, std::move(Start),
+                              cloneVExpr(U->Operand.get()), VType::makeBool(),
+                              Loc),
+                          std::make_unique<VBinOpExpr>(
+                              VBinOp::Lt, cloneVExpr(U->Operand.get()),
+                              std::move(End), VType::makeBool(), Loc),
+                          Loc),
+                  Loc);
+            }
         return makeOr(std::move(Member), std::move(E), Loc);
       }
       U->Operand = abstractValidity(std::move(U->Operand), Renames);
@@ -6407,6 +6499,9 @@ public:
     auto WrittenCells =
         havocFootprints(P, Renames, *Callee, ActualModifies, ActualCounts,
                         ParamMap, Ctx, EntryHeap, HasImplicitHeapEffect, C.Loc);
+    // The static locals of the callee, and of every function it may call,
+    // may change: state no contract of it names.
+    havocPrivateObjects(P, Renames, *Callee, C.Loc);
     // Storage the caller tracks, passed to an out-parameter, may be
     // initialized by the call, only where it writes; what was initialized
     // stays so.
@@ -6678,6 +6773,10 @@ public:
                                       Identity, VType::makePtr(), St.Loc),
                                   St.Loc),
                            St.Loc);
+      // The function's own static locals, which no contract names.
+      if (!Fn.PrivateObjects.empty())
+        Allowed = makeOr(std::move(Allowed),
+                         inPrivateObject(Ptr.get(), Renames, St.Loc), St.Loc);
       emitPassive(P, PassiveStmt::Assert, std::move(Allowed), Active.get(),
                   St.Loc, ProofObligationKind::Frame);
       emitTrace(PassiveTraceKind::HeapWrite, "store", Active.get(), St.Loc,
@@ -7342,7 +7441,6 @@ public:
                     BodyActive.get(), W.Loc, ProofObligationKind::Termination);
       }
 
-      emitTrace(PassiveTraceKind::Loop, "exit", Active.get(), W.Loc);
       Origin = "exit";
       std::vector<const VExpr *> Returns;
       for (size_t I = ReturnsBefore; I != ReturnGuards.size(); ++I)
@@ -7352,6 +7450,7 @@ public:
                     Active.get(), W.Loc);
         emitPassive(P, PassiveStmt::Assume, makeNot(std::move(HeadCond), W.Loc),
                     Active.get(), W.Loc);
+        emitTrace(PassiveTraceKind::Loop, "exit", Active.get(), W.Loc);
         break;
       }
       // Exit paths keep their exit state to the end of the body, so the
@@ -7388,6 +7487,8 @@ public:
       if (!Returns.empty())
         Active = makeAnd(std::move(Active), makeNot(std::move(Returned), W.Loc),
                          W.Loc);
+      // After the exit assumption, the path that continues after the loop.
+      emitTrace(PassiveTraceKind::Loop, "exit", Active.get(), W.Loc);
       break;
     }
     case VStmt::Break: {

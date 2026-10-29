@@ -153,7 +153,8 @@ jobs:
 
       - name: Test the verifier
         run: |
-          ninja -C build FileCheck not count split-file llvm-config
+          ninja -C build FileCheck not count split-file llvm-config \
+            cpp-verify-archive-fuzzer
           build/bin/llvm-lit -sv --no-progress-bar clang/test/Verify
 
   windows:

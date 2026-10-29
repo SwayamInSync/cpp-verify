@@ -244,8 +244,7 @@ bool BackendConsumer::LinkInModules(llvm::Module *M) {
 void BackendConsumer::HandleTranslationUnit(ASTContext &C) {
   std::optional<std::future<verify::CppVerifyAsyncResult>> VerifyFuture;
   if (verify::shouldRunCppVerify(CI))
-    VerifyFuture =
-        verify::startCppVerifyAsync(C, CI.getFrontendOpts().VerifyContractsOut);
+    VerifyFuture = verify::startCppVerifyAsync(C, CI.getFrontendOpts());
 
   {
     llvm::TimeTraceScope TimeScope("Frontend");
