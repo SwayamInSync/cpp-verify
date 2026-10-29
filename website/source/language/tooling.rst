@@ -679,7 +679,8 @@ Backends
        on it. Requires ``--lean-project`` or ``--lean-fallback``.
    * - ``--lean-auto-timeout=N``
      - Milliseconds of wall-clock time ``cppverify_auto`` may spend on one
-       new goal, its kernel check included (default 20000; ``0`` disables). A
+       new goal, its kernel check included, counted once Lean has loaded the
+       project's modules (default 20000; ``0`` disables). A
        goal that takes longer gets a stub, as in ``automation:
        cppverify_auto 3 did not prove it within 20 s``. Requires
        ``--lean-project`` or ``--lean-fallback``.
