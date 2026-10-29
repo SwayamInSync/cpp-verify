@@ -1063,6 +1063,16 @@ deep. The first run found one data race in the verifier, on the source
 manager's cache ("Source lookups from parallel failures" above)
 (:doc:`language/tooling`).
 
+**Z3 built with the configured flags.** The vendored Z3 was built with the
+build's compilers only, so a flag in ``CMAKE_CXX_FLAGS`` that selects the C++
+library, as ``--gcc-install-dir=`` does, reached LLVM and the verifier but not
+Z3, which compiled against the default one. Z3's build now gets
+``CMAKE_C_FLAGS``, ``CMAKE_CXX_FLAGS``, and ``CMAKE_EXE_LINKER_FLAGS`` as
+configured. A ThreadSanitizer build checks at configure time that the C++
+library can compile Z3's timed wait, which libstdc++ 14.1 to 14.3 and 15.1 to
+15.2 cannot under TSan (GCC PR 121496), and says how to select another
+(:doc:`language/tooling`).
+
 Data formats
 ~~~~~~~~~~~~
 
