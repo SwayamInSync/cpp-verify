@@ -196,7 +196,7 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
       - name: Install Ninja
-        run: choco install ninja --version 1.13.1 --no-progress -y
+        run: choco install ninja --version 1.13.2 --allow-downgrade --no-progress -y
 
       - name: Build with setup.ps1
         shell: pwsh
