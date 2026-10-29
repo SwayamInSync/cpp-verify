@@ -1,0 +1,23 @@
+# ThreadSanitizer suppressions for cppverify-sanitize.sh in thread mode: data
+# races inside Z3 4.13.4 itself, and LLVM's crash handler. Each names a
+# function of Z3 or LLVM that the verifier does not call itself.
+#
+# Every Z3 command context, which pattern inference makes for each quantified
+# query, sets the global verbose stream (util.cpp) without a lock.
+race:set_verbose_stream
+# Z3's statistics read its global allocation counters without the lock its
+# allocator updates them under (memory_manager.cpp).
+race:get_memory_statistics
+# A check's timeout handler sets its flag from Z3's timer thread without
+# synchronization, and Z3_interrupt, which may be called from any thread,
+# reads it (cancel_eh.h).
+race:cancel_eh
+# A nested Z3 timer locks the timer pool's mutex while the outer timer holds
+# its state's mutex, and the pool hands a free state to a new timer by
+# locking the state's mutex under its own. A state is free only once its
+# timer has released it, so the two orders never meet; TSan relates the
+# recycled states (scoped_timer.cpp).
+deadlock:scoped_timer
+# LLVM prints a backtrace after a fatal signal, which is not
+# async-signal-safe; only crash_report_url.cpp crashes on purpose.
+signal:PrintStackTraceSignalHandler
