@@ -1003,8 +1003,12 @@ reproduce, or when two backends decide differently
 **Sanitizers every night.** The verifier's own code is now built with
 AddressSanitizer and UndefinedBehaviorSanitizer (``-DCPPVERIFY_SANITIZER``),
 and every Verify test program runs through that build every night; a report
-fails the job. The first run found no memory error or undefined behavior in
-the verifier (:doc:`language/tooling`).
+fails the job. The first run found the counterexample checker overflowing
+its stack in 11 programs, since AddressSanitizer makes each level of its
+nesting take many times the stack: the checker now continues on a fresh
+stack once half of its own is used, so its nesting limit holds in every
+build. It found no other memory error or undefined behavior in the verifier
+(:doc:`language/tooling`).
 
 **The archive reader is fuzzed every night.** An archive given to
 ``--obligation-in`` is untrusted input. libFuzzer now runs the reader under
