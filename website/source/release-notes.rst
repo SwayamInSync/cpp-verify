@@ -747,7 +747,16 @@ initializer was rejected added ``read of uninitialized local value``, and a
 call without a contract was reported twice. The message now says what C++
 calls the construct (``throw is unsupported: exceptions are not modeled``,
 ``lambdas are unsupported``), and each is reported once
-(:doc:`language/tooling`).
+(:doc:`language/tooling`). OpenMP directives, coroutines, atomic operations,
+``__try``, ``typeid``, ``dynamic_cast``, ``va_arg``, and vector operations are
+named the same way; a construct C++ has no name for is quoted (``this
+expression `x ?: 1` is unsupported``), where its message gave Clang's class.
+
+**C++20 rewritten comparisons.** ``a != b`` with only ``operator==``
+declared, or ``5 == r`` with only ``R::operator==(int)``, was ``this
+expression is unsupported (CXXRewrittenBinaryOperator)``. It is now the call
+C++20 rewrites it to, ``!(a == b)`` and ``r == 5``, checked against that
+operator's contract (:doc:`language/structs`).
 
 **An unsupported construct costs its function alone.** One construct the
 verifier does not represent, such as a ``switch``, stopped the file: no
