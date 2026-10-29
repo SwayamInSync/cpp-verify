@@ -212,6 +212,8 @@ VFunction LoopUnroller::unroll(const VFunction &Fn, unsigned K) {
   Out.RecursionGroup = Fn.RecursionGroup;
   Out.Cluster = Fn.Cluster;
   Out.SpecDependencies = Fn.SpecDependencies;
+  for (const auto &Object : Fn.PrivateObjects)
+    Out.PrivateObjects.push_back(cloneVExpr(Object.get()));
   for (const VReadRange &R : Fn.Reads)
     Out.Reads.push_back(
         {cloneVExpr(R.Base.get()), cloneVExpr(R.Count.get()), R.ElementSize});

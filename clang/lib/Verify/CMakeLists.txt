@@ -48,6 +48,7 @@ add_clang_library(clangVerify
   Backend/CVC5Backend.cpp
   Backend/Z3Encode.cpp
   Backend/SpecAxioms.cpp
+  Backend/ThreadCpuTime.cpp
   Backend/VerifyBackend.cpp
   Backend/LeanBackend.cpp
   Driver/Verifier.cpp

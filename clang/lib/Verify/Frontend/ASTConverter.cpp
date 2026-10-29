@@ -48,7 +48,8 @@ static const VarDecl *findOldLocalWithoutEntryState(
 
   if (const auto *DRE = dyn_cast<DeclRefExpr>(S)) {
     if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl());
-        VD && VD->isLocalVarDecl() && !BoundVars.count(VD))
+        VD && VD->isLocalVarDecl() && !VD->isStaticLocal() &&
+        !BoundVars.count(VD))
       return VD;
   }
 
@@ -2683,6 +2684,33 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
     }
   }
 
+  // A function's private state is that of every function it may call too:
+  // a call may reach the owner of a static local, which changes it.
+  {
+    std::map<std::string, VFunction *> ByIdentity;
+    for (auto &Fn : Out)
+      ByIdentity[Fn->Identity] = Fn.get();
+    for (auto &Fn : Out) {
+      std::set<std::string> Seen{Fn->Identity};
+      std::vector<std::string> Work(CallGraph[Fn->Identity].begin(),
+                                    CallGraph[Fn->Identity].end());
+      std::vector<std::unique_ptr<VExpr>> Reached;
+      while (!Work.empty()) {
+        const std::string Next = std::move(Work.back());
+        Work.pop_back();
+        if (!Seen.insert(Next).second)
+          continue;
+        if (auto It = ByIdentity.find(Next); It != ByIdentity.end())
+          for (const auto &Object : It->second->PrivateObjects)
+            Reached.push_back(cloneVExpr(Object.get()));
+        for (const std::string &Callee : CallGraph[Next])
+          Work.push_back(Callee);
+      }
+      for (const auto &Object : Reached)
+        addPrivateObject(*Fn, *Object);
+    }
+  }
+
   std::set<std::string> RequiresCallDefinedness;
   for (auto &Fn : Out)
     if (Fn->IsConstexprSpec) {
@@ -4075,16 +4103,116 @@ ASTConverter::globalConstant(const VarDecl *VD) const {
   return Value->getInt();
 }
 
+/// Whether a record of \p Ty, or one inside it, has a type invariant.
+static bool holdsTypeInvariant(QualType Ty, const ASTContext &Ctx) {
+  Ty = Ctx.getBaseElementType(Ty.getCanonicalType());
+  const auto *RD = Ty->getAsRecordDecl();
+  if (!RD)
+    return false;
+  if (const TypeContractInfo *TCI = Ctx.getTypeContract(RD);
+      TCI && !TCI->Invariants.empty())
+    return true;
+  return llvm::any_of(RD->fields(), [&](const FieldDecl *Field) {
+    return holdsTypeInvariant(Field->getType(), Ctx);
+  });
+}
+
+/// The most leaves a static local is changed by one at a time; a larger
+/// object is changed as a whole.
+static constexpr size_t MaxPrivateCells = 64;
+
+/// The scalar leaves of an object of \p Type at \p Offset, by their byte
+/// offsets, in layout order; false for a bit-field or a type without leaves,
+/// or past MaxPrivateCells of them.
+static bool objectLeaves(QualType Type, uint64_t Offset, const ASTContext &Ctx,
+                         std::vector<std::pair<uint64_t, QualType>> &Out) {
+  Type = Type.getCanonicalType();
+  if (Out.size() > MaxPrivateCells)
+    return false;
+  if (Type->isIntegralOrEnumerationType() || Type->isBooleanType() ||
+      Type->isPointerType()) {
+    Out.emplace_back(Offset, Type);
+    return true;
+  }
+  if (const auto *Array = Ctx.getAsConstantArrayType(Type)) {
+    const uint64_t Stride =
+        Ctx.getTypeSizeInChars(Array->getElementType()).getQuantity();
+    for (uint64_t I = 0; I != Array->getZExtSize(); ++I)
+      if (!objectLeaves(Array->getElementType(), Offset + I * Stride, Ctx, Out))
+        return false;
+    return true;
+  }
+  if (const auto *Record = Type->getAsRecordDecl()) {
+    const ASTRecordLayout &Layout = Ctx.getASTRecordLayout(Record);
+    for (const FieldDecl *Field : Record->fields()) {
+      if (Field->isBitField())
+        return false;
+      const uint64_t At =
+          Offset + Layout.getFieldOffset(Field->getFieldIndex()) /
+                       Ctx.getCharWidth();
+      if (!objectLeaves(Field->getType(), At, Ctx, Out))
+        return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+bool ASTConverter::isGlobalObject(const VarDecl *VD) const {
+  return VD && VD->hasGlobalStorage() &&
+         VD->getTLSKind() == VarDecl::TLS_None &&
+         (!VD->isStaticLocal() || isStaticObject(VD)) &&
+         isPromotableAggregateType(VD->getType(), Ctx) &&
+         isPromotableObjectType(VD->getType(), Ctx) && !isConstantTable(VD);
+}
+
+bool ASTConverter::isStaticObject(const VarDecl *VD) const {
+  if (!VD || !VD->isStaticLocal() || VD->getTLSKind() != VarDecl::TLS_None ||
+      VD->getType().isVolatileQualified() || globalConstant(VD) ||
+      isConstantTable(VD))
+    return false;
+  const QualType Type = VD->getType();
+  return (Type->isIntegralOrEnumerationType() || Type->isBooleanType() ||
+          isPromotableObjectType(Type, Ctx)) &&
+         VD->hasConstantInitialization();
+}
+
+std::optional<VPlace> ASTConverter::globalObjectPlace(const VarDecl *VD,
+                                                      SourceLocation Loc) {
+  if (CurrentFn->IsSpec) {
+    error(CurrentFn->Name + ": a spec function cannot read the mutable global " +
+          VD->getNameAsString() + "; pass its value as a parameter");
+    return std::nullopt;
+  }
+  auto Address = globalAddress(VD, Loc);
+  if (!Address)
+    return std::nullopt;
+  return VPlace(std::move(Address),
+                VType::fromQualType(VD->getType(), IntMode, Ctx), Loc,
+                canonicalTypeIdentity(VD->getType(), Ctx));
+}
+
 std::unique_ptr<VExpr> ASTConverter::globalAddress(const VarDecl *VD,
                                                    SourceLocation Loc) {
   const VarDecl *Canonical = VD->getCanonicalDecl();
   QualType Type = VD->getType();
-  if (!VD->hasGlobalStorage() || VD->isStaticLocal() ||
+  if (!VD->hasGlobalStorage() ||
+      (VD->isStaticLocal() && !isStaticObject(VD)) ||
       VD->getTLSKind() != VarDecl::TLS_None || Type.isVolatileQualified() ||
-      !(Type->isIntegralOrEnumerationType() || Type->isBooleanType())) {
+      !(Type->isIntegralOrEnumerationType() || Type->isBooleanType() ||
+        isGlobalObject(VD))) {
     error(CurrentFn->Name +
-          ": only scalar integral global variables are supported: " +
+          ": only integral, record, and array global variables are "
+          "supported: " +
           VD->getNameAsString());
+    return nullptr;
+  }
+  // Nothing establishes or maintains a class invariant for an object that
+  // every function may reach.
+  if (holdsTypeInvariant(Type, Ctx)) {
+    error(CurrentFn->Name + ": the global " + VD->getNameAsString() +
+          " holds a class with an invariant, which a global object does "
+          "not maintain");
     return nullptr;
   }
   const uint64_t Size = Ctx.getTypeSizeInChars(Type).getQuantity();
@@ -4093,8 +4221,30 @@ std::unique_ptr<VExpr> ASTConverter::globalAddress(const VarDecl *VD,
     It->second = NextGlobalAddress;
     NextGlobalAddress += (std::max<uint64_t>(Size, 1) + 15) / 16 * 16;
   }
-  return std::make_unique<VLiteralExpr>(std::to_string(It->second),
-                                        VType::makePtr(Size), Loc);
+  auto Address = std::make_unique<VLiteralExpr>(std::to_string(It->second),
+                                                VType::makePtr(Size), Loc);
+  // A static local is its function's own state: its scalar leaves, each a
+  // cell a call changes to a value of its type, or else the whole object.
+  if (VD->isStaticLocal()) {
+    std::vector<std::pair<uint64_t, QualType>> Leaves;
+    if (objectLeaves(Type, 0, Ctx, Leaves) &&
+        Leaves.size() <= MaxPrivateCells) {
+      for (const auto &[Offset, Leaf] : Leaves)
+        addPrivateObject(
+            *CurrentFn,
+            VLoadExpr(std::make_unique<VLiteralExpr>(
+                          std::to_string(It->second + Offset),
+                          VType::makePtr(
+                              Ctx.getTypeSizeInChars(Leaf).getQuantity()),
+                          Loc),
+                      VType::fromQualType(Leaf, IntMode, Ctx), Loc));
+    } else {
+      addPrivateObject(*CurrentFn,
+                       VLoadExpr(cloneVExpr(Address.get()),
+                                 VType::fromQualType(Type, IntMode, Ctx), Loc));
+    }
+  }
+  return Address;
 }
 
 /// Every loop needs a measure, except that an executable loop may allow
@@ -4125,13 +4275,14 @@ std::optional<VFootprint> ASTConverter::convertFootprint(const Expr *E) {
         Out.Target.reset();
     }
   } else if (const Expr *Inner = E->IgnoreParens();
-             (isa<MemberExpr>(Inner) || isa<ArraySubscriptExpr>(Inner)) &&
+             (((isa<MemberExpr>(Inner) || isa<ArraySubscriptExpr>(Inner)) &&
+               inPointeeObject(Inner)) ||
+              globalObjectRoot(Inner)) &&
              (Inner->getType()->isRecordType() ||
-              Inner->getType()->isConstantArrayType()) &&
-             inPointeeObject(Inner)) {
+              Inner->getType()->isConstantArrayType())) {
     // A record or array inside an object (p->inner, r.buf, p[k]) is its
     // bytes, a range of one element of its size; *p and a reference to a
-    // record name their whole object.
+    // record name their whole object, and so does a global object.
     if (auto Place = objectPlace(Inner)) {
       Out.Target = std::make_unique<VLoadExpr>(
           Place->takeAddress(),
@@ -4988,8 +5139,10 @@ ASTConverter::subscriptPlace(const ArraySubscriptExpr *AS) {
     }
   }
   // An element of a fixed array inside a represented object: a promoted
-  // local, or the object a pointer addresses (r->buf[i], p[k].grid[i][j]).
-  if (promotedRootLocal(AS) || inPointeeObject(AS->getBase()))
+  // local, the object a pointer addresses (r->buf[i], p[k].grid[i][j]), or a
+  // global object.
+  if (promotedRootLocal(AS) || inPointeeObject(AS->getBase()) ||
+      globalObjectRoot(AS))
     return objectPlace(AS);
   return pointerElementPlace(AS);
 }
@@ -5105,6 +5258,11 @@ const VarDecl *ASTConverter::promotedRootLocal(const Expr *E) const {
   return VD && AddressableLocals.count(VD) ? VD : nullptr;
 }
 
+const VarDecl *ASTConverter::globalObjectRoot(const Expr *E) const {
+  const VarDecl *VD = selectionRootVar(E);
+  return isGlobalObject(VD) ? VD : nullptr;
+}
+
 const VarDecl *ASTConverter::recordReferenceRoot(const Expr *E) const {
   const VarDecl *VD = selectionRootVar(E);
   return VD && (isa<ParmVarDecl>(VD) || VD->hasLocalStorage()) &&
@@ -5121,6 +5279,9 @@ bool ASTConverter::inPointeeObject(const Expr *E) const {
 bool ASTConverter::subobjectPointerRoot(const Expr *E) const {
   if (pointeeRootPointer(E))
     return true;
+  // A pointer into a static local would let its function's state escape.
+  if (const VarDecl *Global = globalObjectRoot(E))
+    return !Global->isStaticLocal();
   // A local reference bound to local or dynamic storage names an object
   // whose lifetime a pointer formed from it would not carry.
   const VarDecl *VD = recordReferenceRoot(E);
@@ -5351,6 +5512,9 @@ std::string ASTConverter::arrayDecayError(const Expr *Array) const {
     if (!M && Ctx.getBaseElementType(Root->getType()).isConstQualified())
       return "a pointer into the constant table " + Name +
              " is unsupported; read its elements by index";
+    if (Root->isStaticLocal() && isStaticObject(Root))
+      return "a pointer into the static local " + Name +
+             " is unsupported: its function's state would escape";
     return M ? "the array member '" + Member + "' of the " + Kind + " " + Name +
                    " is unsupported"
              : "the " + Kind + " array " + Name + " is unsupported";
@@ -5369,6 +5533,13 @@ std::unique_ptr<VExpr> ASTConverter::subobjectPointer(const Expr *E,
   auto AccessCondition = Place->takeAccessCondition();
   auto Address = Place->takeAddress();
   const VType PointerType = VType::fromQualType(E->getType(), IntMode, Ctx);
+  // A global's address is a literal whose type names its whole object, its
+  // origin; a pointer of another type to it converts that address.
+  if (Address->K == VExpr::Literal) {
+    const VType ObjectType = Address->Ty;
+    Address = std::make_unique<VCastExpr>(std::move(Address), ObjectType,
+                                          PointerType, Loc);
+  }
   Address->Ty = PointerType;
   // The bytes the pointer may address: the array it decays from or whose
   // element it addresses, else the field or record it addresses. An element
@@ -5510,6 +5681,8 @@ std::optional<VPlace> ASTConverter::objectPlace(const Expr *E) {
     // The object a reference to a record names, as *p for a pointer.
     if (VD && recordReferenceRoot(E))
       return lvaluePlace(E);
+    if (isGlobalObject(VD))
+      return globalObjectPlace(VD, E->getExprLoc());
     if (!VD || !AddressableLocals.count(VD))
       return std::nullopt;
     return automaticLocalPlace(VD, E->getExprLoc());
@@ -6756,14 +6929,16 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     }
     if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
       auto Bound = BoundValues.find(VD);
-      if (InOld && VD->isLocalVarDecl() && Bound == BoundValues.end()) {
+      if (InOld && VD->isLocalVarDecl() && !VD->isStaticLocal() &&
+          Bound == BoundValues.end()) {
         error(CurrentFn->Name +
               ": cppverify::old(...) cannot refer to local variable without a "
               "function-entry state: " +
               VD->getNameAsString());
         return nullptr;
       }
-      if (!VD->isLocalVarDeclOrParm() && Bound == BoundValues.end()) {
+      if ((!VD->isLocalVarDeclOrParm() || isStaticObject(VD)) &&
+          Bound == BoundValues.end()) {
         VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
         if (std::optional<llvm::APSInt> Value = globalConstant(VD))
           return std::make_unique<VLiteralExpr>(integerValueString(*Value), Ty,
@@ -6772,6 +6947,12 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
           error(CurrentFn->Name +
                 ": a spec function cannot read the mutable global " +
                 VD->getNameAsString() + "; pass its value as a parameter");
+          return nullptr;
+        }
+        if (isGlobalObject(VD)) {
+          error(CurrentFn->Name + ": the global " + VD->getNameAsString() +
+                " read as a whole record or array is unsupported; read its "
+                "fields or elements");
           return nullptr;
         }
         auto Address = globalAddress(VD, E->getExprLoc());
@@ -6834,6 +7015,13 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
           if (const auto *VD = dyn_cast<VarDecl>(Ref->getDecl());
               VD && AddressableLocals.count(VD))
             return convertAutomaticLocalAddress(VD, E->getExprLoc());
+      if (const VarDecl *Root = selectionRootVar(U->getSubExpr());
+          Root && isStaticObject(Root)) {
+        error(CurrentFn->Name + ": a pointer to the static local " +
+              Root->getNameAsString() +
+              " is unsupported: its function's state would escape");
+        return nullptr;
+      }
       error(CurrentFn->Name +
             ": raw address-of is unsupported until lexical lifetime and escape "
             "effects are modeled");
@@ -7167,13 +7355,17 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
       return std::make_unique<VLoadExpr>(std::move(Address), Ty,
                                          E->getExprLoc());
     }
-    if (!M->isArrow() && (promotedRootLocal(M) || inPointeeObject(M))) {
+    if (!M->isArrow() &&
+        (promotedRootLocal(M) || inPointeeObject(M) || globalObjectRoot(M))) {
       VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
       if (Ty.isAggregate() || Ty.Kind == VTypeKind::Unsupported) {
         error(CurrentFn->Name +
               (promotedRootLocal(M)
                    ? ": aggregate value use of an automatic object "
                      "subobject is unsupported"
+               : globalObjectRoot(M)
+                   ? ": a record or array of a global read as a whole is "
+                     "unsupported; read its fields"
                    : ": a record or array read as a whole through a "
                      "pointer or reference is unsupported; read its "
                      "fields"));
@@ -8261,9 +8453,35 @@ void ASTConverter::appendAssignment(const Expr *LHS,
     return;
   }
 
+  // A field or element of a global object: a store to its place.
+  if (const VarDecl *Root = globalObjectRoot(LHS)) {
+    if (InGhost || CurrentFn->IsProof || CurrentFn->IsSpec) {
+      error(CurrentFn->Name +
+            ": ghost and proof code cannot modify the global " +
+            Root->getNameAsString());
+      return;
+    }
+    if (isPromotableAggregateType(LHS->getType(), Ctx) ||
+        Value->Ty.isAggregate()) {
+      error(CurrentFn->Name + ": aggregate assignment is unsupported");
+      return;
+    }
+    const size_t ErrorCount = Errors.size();
+    auto Place = objectPlace(LHS);
+    if (!Place) {
+      if (Errors.size() == ErrorCount)
+        error(CurrentFn->Name + ": unsupported assignment target");
+      return;
+    }
+    Out.push_back(std::make_unique<VStoreStmt>(Place->takeAddress(),
+                                               std::move(Value), Loc,
+                                               Place->takeAccessCondition()));
+    return;
+  }
+
   if (const auto *DRE = dyn_cast<DeclRefExpr>(LHS)) {
     if (const auto *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
-      if (!VD->isLocalVarDeclOrParm()) {
+      if (!VD->isLocalVarDeclOrParm() || isStaticObject(VD)) {
         if (InGhost || CurrentFn->IsProof || CurrentFn->IsSpec) {
           error(CurrentFn->Name +
                 ": ghost and proof code cannot modify the global " +
@@ -10560,10 +10778,17 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         continue;
       }
       if (!VD->hasLocalStorage()) {
-        // A constant one is a value, read where it is named.
-        if (globalConstant(VD) || isConstantTable(VD))
+        // A constant one is a value, read where it is named; a static object
+        // is initialized before the program runs, and is its function's own
+        // state from then on.
+        if (globalConstant(VD) || isConstantTable(VD) || isStaticObject(VD))
           continue;
-        error(CurrentFn->Name + ": static local variables are unsupported");
+        error(CurrentFn->Name + ": the static local " +
+              VD->getNameAsString() +
+              (VD->hasConstantInitialization()
+                   ? " has a type static locals do not support"
+                   : " is initialized by running code at its first pass, "
+                     "which is not modeled; initialize it with a constant"));
         continue;
       }
       declareLocalName(VD);
