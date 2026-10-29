@@ -83,6 +83,28 @@ if(CPPVERIFY_ENABLE_COVERAGE)
       -fprofile-instr-generate -fcoverage-mapping)
   endif()
 endif()
+
+# The verifier's own code under sanitizers, beside an uninstrumented LLVM,
+# Clang, and Z3, as the nightly sanitizer job builds it: "address;undefined"
+# or "thread".
+set(CPPVERIFY_SANITIZER "" CACHE STRING
+  "Sanitizers for clangVerify and cpp-verify (address;undefined, or thread)")
+if(CPPVERIFY_SANITIZER)
+  string(REPLACE ";" "," _cppverify_sanitizers "${CPPVERIFY_SANITIZER}")
+  set(_cppverify_sanitize_flags
+    -fsanitize=${_cppverify_sanitizers} -fno-omit-frame-pointer)
+  # The verifier is built without RTTI.
+  if(_cppverify_sanitizers MATCHES "undefined")
+    list(APPEND _cppverify_sanitize_flags -fno-sanitize=vptr,function)
+  endif()
+  message(STATUS "cpp-verify: sanitizers ${_cppverify_sanitizers}")
+  target_compile_options(clangVerify PRIVATE ${_cppverify_sanitize_flags})
+  if(TARGET obj.clangVerify)
+    target_compile_options(obj.clangVerify PRIVATE ${_cppverify_sanitize_flags})
+  endif()
+  set_property(GLOBAL PROPERTY CPPVERIFY_SANITIZE_FLAGS
+    "${_cppverify_sanitize_flags}")
+endif()
 target_include_directories(clangVerify PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/Driver
