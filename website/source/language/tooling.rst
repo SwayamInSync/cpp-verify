@@ -1168,7 +1168,10 @@ a fixed amount of solver work (Z3 resource units), with the query timeout
 only as a bound in time, so on a loaded machine it stops where it stops on
 an idle one, unless the timeout passes first; once it has found a
 counterexample, the obligations that choose the failure to report get the
-same work each. Lean generation stays serial; ``cppverify_auto`` and
+same work each. Likewise, the search for the least and greatest values of a
+spec's argument, which finds a counterexample at the end of its range, is
+bounded by solver work and by the CPU time of its own thread, which the load
+of other processes does not use up. Lean generation stays serial; ``cppverify_auto`` and
 certification run Lean processes side by side; what they find does not depend
 on how many, but a goal whose automation is near ``--lean-auto-timeout`` may
 finish in time under one load and not under another. The compile-time
