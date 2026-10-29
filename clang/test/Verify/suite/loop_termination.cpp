@@ -117,4 +117,4 @@ void refill(int &value, int n)
   if (n > 0)
     refill(value, n);
 }
-// CHECK-DAG: error: verification failed: refill [{{.*}}::termination@118:5]
+// CHECK-DAG: :118:5: error: verification failed: refill [termination]

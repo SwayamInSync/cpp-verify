@@ -18,6 +18,17 @@ a cpp-verify precondition is written 'cppverify::pre'`) with a fix-it to the
 not make bare words constructs. With the flag, `<cppverify.h>` is included
 implicitly; without it, the constructs are not recognized.
 
+With the flag, in C++, the compiler predefines `__cppverify__` (1) and the
+release in `__cppverify_major__`, `__cppverify_minor__`,
+`__cppverify_patchlevel__`, and `__cppverify_version__` (the string
+`--version` prints; the one `CPPVERIFY_VERSION` in `clang/CMakeLists.txt`
+sets all of them, through `clang/Basic/Version.inc`). Like `__cplusplus`, they
+describe the language, so `-undef` keeps them. A header that GCC, MSVC, or
+upstream Clang also reads wraps each construct in a macro that is empty when
+`__cppverify__` is not defined, as Frama-C's libc defines `__PUSH_FC_STDLIB`
+to a Frama-C pragma under its predefined `__FRAMAC__` and to nothing otherwise
+(`share/libc/features.h`).
+
 ## Contract Syntax Overview
 
 | Syntax | Where | Meaning |
@@ -270,13 +281,42 @@ C++ leaves the order of most operands open (a binary operator's, a
 subscript's array and index, a call's arguments, and before C++17 an
 assignment's two sides), and the verifier checks one order, so a call that
 may write memory (a callee with `cppverify::modifies`, a pointer or
-reference parameter, or a non-const member function) beside an operand
+reference parameter, or a non-const member function; a callee without a
+contract whose body, or a call in it, stores through a pointer, a reference,
+or its object, or to a global) beside an operand
 that reads memory or makes a call is an error: `add_one(p) + *p` is one,
 with a different value in each order. An assignment evaluates its right
 operand first, as C++17 sequences it, so `a[add_one(p)] = *p` stores the
 old `*p`. A call returning a record is made only as a statement or a whole
 initializer, assignment, or return value, and one returning nothing only as
 a statement.
+
+An increment, a decrement, an assignment, or a comma expression may stand
+where its value is used in executable code (`a[i++]`, `*dst++ = *src++`,
+`while (k-- > 0)`, `if ((c = *p) != 0)`, `a = b = 0`): its write runs where
+C++ evaluates it, as a call does, and its value is read there, a postfix
+operator's before the write. Each expression is evaluated once, so
+`a[i++] += 1` increments `i` once. A write in one unsequenced operand that
+another reads (`i++ + i`, which C++ leaves undefined) is an error, as is a
+write to memory beside an operand that reads memory.
+
+### Calls of functions without contracts
+
+A call of a function that has a body and no contract runs that body: the
+verifier inlines it at the call, as Kani and CBMC inline every call and as
+SPARK's GNATprove inlines a subprogram without a contract ("contextual
+analysis"). The caller's proof then covers the body at the arguments the
+caller passes, the body's checks are the caller's, and it reads and writes
+the caller's objects within the caller's frame. Such a function is verified
+where verified code calls it and on its own only when none does, since
+without a precondition its own verification would check inputs no caller
+passes. Recursion, a record returned by value, dynamic storage, a loop
+invariant that uses `cppverify::old` (the inlined body's entry is not the
+caller's), and more than 2000 statements inlined into one function are left
+to a contract: the call is `Unresolved` (`construct.unsupported`) with a
+message that names the helper and asks for one. A `constexpr` function
+without a contract is still lifted as a spec, a constructor without one is
+not inlined, and a function without a body (a library's) is still an error.
 
 ## Loop Contracts: invariant / decreases
 
@@ -504,6 +544,19 @@ value evaluates the value, and a value computed for nothing (`x + 1;`) is
 computed with its checks. `[[assume(e)]]` and `__builtin_assume(e)` make `e`
 false undefined, so `e` is asserted (kind `assertion`), then assumed.
 
+### Bit builtins
+
+`__builtin_clz`, `__builtin_ctz`, `__builtin_popcount`, `__builtin_parity`,
+`__builtin_ffs` (with their `l` and `ll` forms), and `__builtin_bswap16/32/64`
+are their exact definitions over the operand's bits, as CBMC models them
+rather than trusting a contract: comparisons with constants, conditionals,
+and sums without carries, none of which needs a check of its own. GCC leaves
+`__builtin_clz(0)` and `__builtin_ctz(0)` undefined, which is an obligation of
+the definedness kind `builtin-argument` where the call is evaluated, as
+Frama-C's libc specifies them with `requires x != 0`; in a spec, which is
+total, they count every bit of 0, as C++20's `std::countl_zero` does. Other
+builtins stay unsupported.
+
 An uncontracted `constexpr` helper is lifted as a spec whose definedness is
 checked at each call by unfolding its body. Its `assert(c)` becomes, during
 that unfolding, a `Require(!path || c)` expression in the evaluation, true
@@ -722,14 +775,17 @@ cppverify::spec bool reach(int a, int b)
 
 ### Automatic induction and counterexamples too large to compute
 
-When no finite unfolding settles a claim about a recursive spec, the verifier
-tries well-founded inductions over it, as Dafny's automatic induction and
+When no finite unfolding settles a claim about a recursive spec, or the
+solver cannot settle a lemma (a proof function) within its timeout, the
+verifier tries well-founded inductions over it, as Dafny's automatic induction and
 Lean's and Isabelle's functional induction do: the claim at every value
 smaller in a measure, everything else fixed. The measure is a recursive
 spec's own `cppverify::decreases` at the application the claim makes, and the
 hypothesis is also given at the values the spec's recursion reaches, through
 the other members of its recursion group and under quantifiers; strong
-induction on an integer variable is tried too. Smaller means smaller by the
+induction on an integer variable that the claim passes to a spec or uses as
+an index into memory is tried too (an order on adjacent elements of an array
+is an order on all of them by induction on the second index). Smaller means smaller by the
 decrease relation of termination checks, which has no infinite descending
 chain, so no induction proves a false claim; the hypothesis is the
 function's own claim, without the facts the verifier added. A verified
@@ -912,6 +968,19 @@ standard defines them ([alg.min.max]): `max(a, b)` is `a < b ? b : a` and
 `min(a, b)` is `b < a ? b : a`, read once each, in contracts and in code.
 Any other function of the standard library that is not a constant is an
 error naming it.
+
+Of the C library, `abs`, `labs`, `llabs`, and `std::abs` of an integer are
+their definition, undefined at the minimum, and in a spec the mathematical
+absolute value; libc++ defines the `std::abs` of `long` and `long long` in
+the global namespace of its `<stdlib.h>`, so a global `abs` declared in a
+system header is it too, and one of the user's own is not. `memcpy`, `memmove`, `memset`,
+and `memcmp` of objects of an integer type `T` (an enumeration as its
+underlying type, `bool` only with `bool`), with a size of `k * sizeof(T)`
+bytes, are calls of their models in `<cppverify.h>`: trusted declarations
+with contracts, one per type, over `k` objects (Frama-C's libc states the
+same over bytes, which this memory model, one value per object, does not
+have). A proof that uses one names it in `[trusts=...]`. A size that splits
+an object is `construct.unsupported`.
 
 **Compile-time partial evaluation:** When a contract contains a `constexpr` call whose arguments are all constants, Clang evaluates it at compile time before the verifier sees it. A callee precondition instantiated at a call site is not such a call: there the argument is substituted for the parameter, and the solver settles the application from the lifted definition:
 
@@ -1746,6 +1815,12 @@ For by-value parameters this is purely an optimization — correctness is identi
   checkpoint — matching how Dafny/Verus check constructors.
 - Pointer-to-record parameters are not injected (their field access lowers to a
   heap Load).
+- On classes with member functions, a loop outside the class keeps the class
+  invariant of every object it reaches (the local objects alive at it, and
+  the objects its function's reference and pointer parameters address): it
+  is added to the loop's invariants and proved there like the user's.
+  Members of the class may break it between calls, so their loops get none
+  of their class's.
 
 ## View Functions (idiomatic spec abstraction)
 
@@ -1890,7 +1965,7 @@ int safe_fib(int n) cppverify::pre(...) cppverify::post(cppverify::result == fib
 
 ## hide / reveal
 
-- `cppverify::hide(fn_name)` and `cppverify::reveal(fn_name)` are statements, accepted anywhere in a function body or ghost block, that control whether the body of a spec function is visible to Z3 in the whole function.
+- `cppverify::hide(fn_name)` and `cppverify::reveal(fn_name)` are statements, accepted anywhere in a function body or ghost block, that control whether the body of a spec function is visible to Z3 in the whole function. A specialization of a spec template is named with its arguments (`cppverify::hide(at<4>)`), resolved as C++ resolves a template-id; the template's name alone is an error.
 - Default for non-recursive specs: visible (body inlined into queries).
 - Default for recursive specs: one finite unfolding step. Deeper unfolding
   requires `cppverify::reveal_with_fuel`.
@@ -2242,10 +2317,20 @@ logical-function declarations with compact step definitions and exact finite
 fuel levels. Layer 3 dumps this exact module; Layer 4 and ordinary verification
 encode the same in-memory object. There is no separate dump-only
 weakest-precondition implementation and no backend may borrow VCR declarations.
+`--dump-smt2=DIR` writes each query a solver checks, as that solver received
+it, as a standalone SMT-LIB script with the solver's options as commands and
+the answer cpp-verify got, named by the function, the obligation, and a hash
+of the script.
 
 Diagnostic metadata is non-semantic: names, source ranges, internal positional
-and public source-anchored IDs, and trace events survive archive replay but do
-not change semantic hashes. Model and trace
+and public source-anchored IDs, where each check's condition and a callee's
+clause lie, and trace events survive archive replay but do not change semantic
+hashes. A failure is shown at the part of its check that its certified
+counterexample makes false (a clause's false conjunct, the operation that is
+undefined, the call for a callee's precondition, with a note at the callee's
+false conjunct); the part is found by evaluating the checked condition at the
+counterexample, after solving, rather than by splitting it into obligations
+of their own, as Dafny does. Model and trace
 evaluation never requests Z3 model completion. Undetermined values remain
 unknown, false-guarded events are omitted, and undetermined guards remain
 explicitly unknown rather than selecting a path.
@@ -2281,10 +2366,13 @@ dead declarations or trivial Boolean structure. It does not rewrite
 arithmetic, quantifiers, pointer/heap expressions, or assumptions.
 
 `--obligation-out=FILE` publishes deterministic, concatenable
-`cppverify.obligation/3` binary records with stable wire tags and portable
+`cppverify.obligation/6` binary records with stable wire tags and portable
 source attribution; schema v3 adds each logical function's termination
 measures and, with source attribution, where each assumption of a goal comes
-from, neither hashed, and records of schemas v1 and v2 remain readable. Publication includes an
+from, schema v4 where each variable version of a counterexample is defined,
+schema v5 where each source range begins, schema v6 where each check's
+condition and a callee's clause lie, none of them hashed, and records of
+schemas v1 to v5 remain readable. Publication includes an
 exact serialize/deserialize/validate/reserialize check. SHA-256 module and
 per-obligation semantic hashes exclude source paths, display-only names, both
 positional and source-anchored obligation IDs, and every obligation kind except
@@ -2328,9 +2416,12 @@ their human message: `counterexample`, `solver.timeout`, `solver.unknown`,
 `spec.reads`, `spec.post`, `spec.inductive`, `proof.cycle`,
 `counterexample.unchecked`, `construct.unsupported`, `callee.contract`,
 `decreases.missing`, and `interrupted`.
-`--diagnostics-format=json` serializes verification results as versioned JSON
-Lines (`cppverify.diagnostic/1`) for both source verification and archive
-replay.
+`--diagnostics-format=json` serializes verification results and compiler
+diagnostics as versioned JSON Lines (`cppverify.diagnostic/2`, ending with a
+`cppverify.summary/1` record) for both source verification and archive
+replay; `--diagnostics-format=sarif` translates the same records into one
+SARIF 2.1.0 log, and `--diagnostics-format=github` adds a GitHub workflow
+annotation to the text for each error and warning.
 
 `--jobs=N` runs one pool of exactly `N` workers (default: the available
 physical cores, or `CPPVERIFY_JOBS`; 1 for `--backend=lean` and for the
@@ -2390,7 +2481,8 @@ the finite ground equations of recursive ones. It runs an installed executable w
 seed/resource options and bounded output; missing tools, invocation failures,
 timeouts, `unknown`, extra diagnostics, and malformed tokens are unresolved.
 The model cvc5 prints after `sat`, and often after `unknown`, is checked by the
-same certifier as Z3's, and
+same certifier as Z3's, which then evaluates in it the counterexample's
+source values and path, so a cvc5 failure reads like a Z3 one, and
 refinement re-runs cvc5 with definition instances. Once a hidden instance has
 been given, non-recursive definitions are given whole; recursive ones never
 are, because cvc5 does not decide queries over them.

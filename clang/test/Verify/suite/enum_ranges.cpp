@@ -71,21 +71,22 @@ bool fixed_type(Wide w)
 {
   return static_cast<int>(w) < 2;
 }
-// CHECK-DAG: error: verification failed: fixed_type [{{.*}}::postcondition@{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: fixed_type [postcondition]{{.*}}[reason=counterexample]
 
 Color convert(int i)
   cppverify::pre(0 <= i && i <= 4)
 {
   return static_cast<Color>(i);
 }
-// CHECK-DAG: error: verification failed: convert [{{.*}}::overflow@{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: convert [overflow]{{.*}}[reason=counterexample]
 
 cppverify::spec bool small(Color c)
   cppverify::post(cppverify::result)
 {
   return c < 4;
 }
-// CHECK-DAG: error: spec post failed: small [backend=z3] [reason=counterexample] (c [type=math-i32] = 4)
+// CHECK-DAG: error: spec post failed: small [backend=z3] [reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}c = 4{{( ->|,|$)}}
 
 // The same check run as a proof function by its block.
 cppverify::spec bool small_by(Color c)

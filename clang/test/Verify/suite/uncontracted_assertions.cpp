@@ -37,7 +37,8 @@ int plain(int n)
   return n + 1;
 }
 
-// CHECK-DAG: verification failed: asserts_false [{{.*}}::assertion@
-// CHECK-DAG: verification failed: ghost_false [{{.*}}::assertion@
-// CHECK-DAG: verification failed: asserts_argument [{{.*}}::assertion@{{.*}}n [ssa=n_0] [type=i32] = {{-?[0-9]+}}
+// CHECK-DAG: verification failed: asserts_false [assertion]
+// CHECK-DAG: verification failed: ghost_false [assertion]
+// CHECK-DAG: verification failed: asserts_argument [assertion]
+// CHECK-DAG: note: counterexample: {{.*}}n = {{-?[0-9]+}}{{( ->|,|$)}}
 // CHECK-DAG: Verified: loop_invariant

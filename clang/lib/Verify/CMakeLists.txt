@@ -28,6 +28,7 @@ add_clang_library(clangVerify
   Frontend/ASTConverter.cpp
   Transform/Passivize.cpp
   Transform/Inductive.cpp
+  Transform/InlineHelpers.cpp
   Transform/Origins.cpp
   Transform/Ownership.cpp
   Transform/OutParameters.cpp
@@ -42,6 +43,7 @@ add_clang_library(clangVerify
   Backend/ObligationSimplify.cpp
   Backend/ObligationSerialization.cpp
   Backend/ProofCache.cpp
+  Backend/QueryDump.cpp
   Backend/ChildProcess.cpp
   Backend/CVC5Backend.cpp
   Backend/Z3Encode.cpp
@@ -49,6 +51,8 @@ add_clang_library(clangVerify
   Backend/VerifyBackend.cpp
   Backend/LeanBackend.cpp
   Driver/Verifier.cpp
+  Driver/Counterexample.cpp
+  Driver/StructuredOutput.cpp
   Driver/DumpIR.cpp
   Driver/CppVerifyIntegration.cpp
   Driver/CppVerifyVersion.cpp
@@ -67,10 +71,8 @@ add_clang_library(clangVerify
 
 target_link_libraries(clangVerify PRIVATE ${CPPVERIFY_Z3_TARGET})
 
-set(CPPVERIFY_VERSION 0.2.0-dev)
 get_property(_cppverify_z3_origin GLOBAL PROPERTY CPPVERIFY_Z3_ORIGIN)
 set_property(SOURCE Driver/CppVerifyVersion.cpp APPEND PROPERTY COMPILE_DEFINITIONS
-  CPPVERIFY_VERSION="${CPPVERIFY_VERSION}"
   CPPVERIFY_Z3_ORIGIN="${_cppverify_z3_origin}")
 
 if(CPPVERIFY_ENABLE_COVERAGE)

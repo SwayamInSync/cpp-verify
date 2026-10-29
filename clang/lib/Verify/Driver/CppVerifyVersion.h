@@ -26,6 +26,9 @@ inline constexpr llvm::StringLiteral CVC5NewestTestedVersion = "1.4.2";
 /// verification run would find on PATH.
 void printVersion(llvm::raw_ostream &OS);
 
+/// The release, as --version names it: "0.2.0-dev".
+llvm::StringRef releaseVersion();
+
 } // namespace verify
 } // namespace clang
 

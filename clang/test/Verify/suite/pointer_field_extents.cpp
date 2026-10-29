@@ -72,7 +72,8 @@ int past(const View *v)
 {
   return v->data[v->len];
 }
-// CHECK-DAG: error: verification failed: past [{{.*}}::bounds@[[@LINE-2]]:10] (counterexample: v->data [ssa=v->data_0] [type=pointer] =
+// CHECK-DAG: :[[@LINE-2]]:10: error: verification failed: past [bounds]
+// CHECK-DAG: note: counterexample: {{.*}}v->data =
 
 // Without an extent the field's buffer is no object of the function's.
 void unknown(Buf &b)
@@ -81,7 +82,7 @@ void unknown(Buf &b)
 {
   b.data[0] = 1;
 }
-// CHECK-DAG: error: verification failed: unknown [{{.*}}::bounds@[[@LINE-2]]:3]
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: unknown [bounds]
 
 // The buffer is disjoint from its record, so the length keeps its value.
 int keeps_len(Buf &b)
@@ -147,8 +148,8 @@ void too_long(int *p, int n)
   b.len = n + 1;
   zero(b);
 }
-// CHECK-DAG: error: verification failed: too_long [{{.*}}::bounds@[[@LINE-2]]:3]
-// BMC-DAG: error: verification failed: too_long [{{.*}}::bounds@[[@LINE-3]]:3]
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: too_long [bounds]
+// BMC-DAG: :[[@LINE-3]]:3: error: verification failed: too_long [bounds]
 
 // The extent is the field's at entry: a field given another pointer
 // addresses that pointer's object.
@@ -170,7 +171,7 @@ void reseat_past(Buf &b, int *other)
   b.data = other;
   b.data[1] = 1;
 }
-// CHECK-DAG: error: verification failed: reseat_past [{{.*}}::bounds@[[@LINE-2]]:3]
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: reseat_past [bounds]
 
 // Two mutable buffers are disjoint by default, as two mutable parameters
 // are; two read-only ones may be one.
@@ -198,7 +199,8 @@ void self_copy(Buf &b)
 {
   copy(b, b);
 }
-// CHECK-DAG: error: verification failed: self_copy [{{.*}}::aliasing@[[@LINE-2]]:3] (counterexample: b.data [ssa=b->data_0] [type=pointer] =
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: self_copy [aliasing]
+// CHECK-DAG: note: counterexample: {{.*}}b.data =
 
 int first_of_both(const View &a, const View &b)
   cppverify::pre(cppverify::valid(a.data, a.len) && cppverify::valid(b.data, b.len))
@@ -243,7 +245,7 @@ void nonempty_inside(Buf *b)
 {
   touch(b, &b->len, 1);
 }
-// CHECK-DAG: error: verification failed: nonempty_inside [{{.*}}::aliasing@[[@LINE-2]]:3]
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: nonempty_inside [aliasing]
 
 // Not yet: a field of an element (s->items[k].data).
 struct Shelf {

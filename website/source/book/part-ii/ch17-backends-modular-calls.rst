@@ -73,6 +73,42 @@ malformed process output, and unsupported encoding are ``Unresolved``. cvc5 is
 not vendored because it is an optional independent implementation; install it
 through the platform package manager or select an executable explicitly.
 
+A failure cvc5 finds reads like one Z3 finds. Its model is a counterexample
+only once the certifier has checked it against the true definitions, and the
+certifier then evaluates, in that model, the values of the source variables
+along the path and each step of the path to the failing check:
+
+.. code-block:: cpp
+
+   namespace cv = cppverify;
+
+   int clamp(int x)
+     cv::pre(x > -100 && x < 100)
+     cv::post(cv::result >= 0)
+   {
+     if (x < 0)
+       return x + 1;
+     return x;
+   }
+
+.. code-block:: text
+
+   clamp.cpp:5:23: error: verification failed: clamp [postcondition] [backend=cvc5] [reason=counterexample]
+       5 |   cv::post(cv::result >= 0)
+         |            ~~~~~~~~~~~^~~~
+   clamp.cpp:5:23: note: counterexample: x = -2, result = -1
+   clamp.cpp:7:3: note: takes the true branch
+       7 |   if (x < 0)
+         |   ^
+   clamp.cpp:8:5: note: returns -1
+       8 |     return x + 1;
+         |     ^
+
+The JSON record has the same ``counterexample``, ``model``, and ``trace``
+as Z3's, its variables in the same order, and so do SARIF, GitHub
+annotations, and archive replay with ``--backend=cvc5``. The values may
+differ from Z3's: each solver picks its own counterexample.
+
 Race mode trusts each solver alone, which is sound: a proof is a proof, and
 a counterexample is reported only once the certifier has checked it against
 the true definitions, whichever solver found it. The first decisive answer
@@ -410,7 +446,13 @@ checks a proof, with the kernel and Lean's foundations alone, and says so:
 
 .. code-block:: text
 
-   error: verification failed: add_one [fn_5f5a376164645f6f6e6569::postcondition@3:37] (counterexample: result [ssa=__result_1] [type=i32] = 6, x [ssa=x_0] [type=i32] = 4; trace: return.return@5:3 value=6) [backend=z3] [reason=counterexample] (confirmed in Lean)
+   example.cpp:3:37: error: verification failed: add_one [postcondition] [backend=z3] [reason=counterexample] (confirmed in Lean)
+       3 |   cppverify::post(cppverify::result == x + 1)
+         |                   ~~~~~~~~~~~~~~~~~~^~~~~~~~
+   example.cpp:3:37: note: counterexample: x = 4, result = 6
+   example.cpp:5:3: note: returns 6
+       5 |   return x + 2;
+         |   ^
 
 The refutation applies the goal to the model's values and decides what is
 left false, the definition instances the goal states with it, since they hold
@@ -1087,7 +1129,7 @@ The canonical backend boundary can be persisted and replayed:
    cpp-verify --obligation-in=goals.cpv --backend=lean --lean-out=goals.lean
    cpp-verify --obligation-in=goals.cpv --lean-project=proof --lean-certify
 
-Each ``cppverify.obligation/3`` record uses stable wire tags, defensive bounds,
+Each ``cppverify.obligation/6`` record uses stable wire tags, defensive bounds,
 portable source points, and path-independent SHA-256 semantic hashes. Replay
 revalidates every sort, expression, logical declaration, call signature,
 feature declaration, and identity before backend dispatch. Multiple records may
@@ -1302,6 +1344,48 @@ pointer-result calls, recursion cycles, ghost use, proof/external contracts,
 and allocation in the callee fail closed. Within the caller, address and
 identity remain a pair through local copies, assignments, branches,
 ``nullptr``, and supported call results.
+
+Calls of helpers without contracts
+----------------------------------
+
+A contract is the interface a caller relies on, but a small helper used in
+one place hardly needs one. A call of a function that has a body and no
+contract runs that body: the verifier inlines it, so the caller's proof covers
+the helper at the arguments the caller passes, and the helper's checks are
+the caller's.
+
+.. code-block:: cpp
+
+   int add_one(int x) { return x + 1; }
+
+   int twice_plus_one(int x)
+     cv::pre(0 <= x && x < 1000)
+     cv::post(cv::result == 2 * x + 1)
+   {
+     return add_one(x) + x;
+   }
+
+   int next(int x)
+     cv::post(cv::result == x + 1)
+   {
+     return add_one(x);
+   }
+
+.. code-block:: text
+
+   Verified: twice_plus_one [backend=z3]
+   helpers.cpp:1:31: error: verification failed: next [overflow] [backend=z3] [reason=counterexample]
+       1 | int add_one(int x) { return x + 1; }
+         |                             ~~^~~
+   helpers.cpp:1:31: note: counterexample: add_one::x = 2147483647, x = 2147483647
+
+The same helper verifies under one caller and fails under another: what
+holds depends on what the caller passes. A helper is never verified on its
+own when verified code calls it, so ``add_one`` has no verdict. Give a
+function a contract when its callers should not depend on its body, when it
+calls itself, or when it is large: the verifier asks for one in those cases
+(:doc:`../../language/functions-loops`, "Calls of functions without
+contracts").
 
 Where verification stops: trusted contracts
 -------------------------------------------

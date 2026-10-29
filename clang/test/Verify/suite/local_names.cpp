@@ -80,7 +80,8 @@ int hidden_wrong(int x)
   }
   return y;
 }
-// CHECK-DAG: error: verification failed: hidden_wrong [{{.*}}y [ssa=y#2_1] [type=i32] = 5, y [ssa=y#2_2] [type=i32] = 6, y [ssa=y_1] [type=i32] = {{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: hidden_wrong [postcondition]{{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: x = {{[0-9]+}}, y (line [[@LINE-8]]) = {{[0-9]+}}, y (line [[@LINE-6]]) = 5 -> 6, result = {{[0-9]+}}
 
 // A block may hide a parameter; the contract reads the parameter.
 int parameter_hidden(int x)
@@ -107,7 +108,7 @@ int parameter_hidden_wrong(int x)
   }
   return r;
 }
-// CHECK-DAG: error: verification failed: parameter_hidden_wrong [{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: parameter_hidden_wrong [postcondition]{{.*}}[reason=counterexample]
 
 // Each declaration starts uninitialized, whatever an earlier one with its
 // name held.

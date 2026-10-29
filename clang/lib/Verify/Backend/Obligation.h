@@ -4,6 +4,7 @@
 #define LLVM_CLANG_VERIFY_BACKEND_OBLIGATION_H
 
 #include "../IR/NodeBudget.h"
+#include "../IR/SourceSpan.h"
 #include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
 #include "llvm/Support/Error.h"
@@ -140,15 +141,24 @@ std::string formatLogicFeatures(LogicFeatureSet Features);
 const char *logicSortName(LogicSortKind Kind);
 std::string formatLogicSort(const LogicSort &Sort);
 
+/// Where a term comes from: its anchor (Line, Column), where a diagnostic
+/// points and a stable ID is built, in the source it spans, from its begin to
+/// the column after its last character.
 struct ObligationSource {
   std::string File;
   unsigned Line = 0;
   unsigned Column = 0;
   unsigned EndLine = 0;
   unsigned EndColumn = 0;
+  /// The start of the span, before the anchor (an operator's operands);
+  /// zero when it is the anchor.
+  unsigned BeginLine = 0;
+  unsigned BeginColumn = 0;
 
   bool isValid() const { return !File.empty() && Line != 0; }
   bool hasRange() const { return isValid() && EndLine != 0; }
+  unsigned beginLine() const { return BeginLine ? BeginLine : Line; }
+  unsigned beginColumn() const { return BeginLine ? BeginColumn : Column; }
 };
 
 class LogicExpr;
@@ -210,6 +220,7 @@ public:
   Kind K;
   LogicSort Sort;
   SourceLocation Loc;
+  SourceLocation BeginLoc;
   SourceLocation EndLoc;
   /// Where Loc lies, filled in by the driver once the term is built
   /// (annotateObligationSources): the one field written after a term is
@@ -274,6 +285,7 @@ enum class ObligationKind {
   Deallocation,
   MissingReturn,
   Unreachable,
+  BuiltinArgument,
   Unsupported
 };
 
@@ -313,12 +325,23 @@ struct Obligation {
   std::string StableId;
   ObligationKind Kind = ObligationKind::Assertion;
   SourceLocation Loc;
+  SourceLocation BeginLoc;
   SourceLocation EndLoc;
   ObligationSource Source;
   uint64_t TraceEventCount = 0;
   /// For an unsupported obligation, what the verifier does not model there.
   /// Diagnostic only: neither archived nor hashed.
   std::string Note;
+  /// What the check is about where that is not its anchor: the condition
+  /// under the path condition (an operator, a clause), or the call for a
+  /// callee's clause; and for a callee's clause, the clause in the callee.
+  /// Diagnostic only: neither archived nor hashed.
+  SourceSpan Focus;
+  SourceSpan Clause;
+  /// Where they lie, filled in with Source (annotateObligationSources), and
+  /// archived from schema v6.
+  ObligationSource FocusSource;
+  ObligationSource ClauseSource;
   std::unique_ptr<LogicExpr> Goal;
   std::unique_ptr<LogicExpr> CounterexampleQuery;
 };
@@ -329,6 +352,11 @@ struct DiagnosticVariable {
   SourceLocation Loc;
   SourceLocation EndLoc;
   ObligationSource Source;
+  /// A reference: its value is the address it refers to. Not archived.
+  bool Reference = false;
+  /// Where this version is defined, as PassiveModelVariable::Guard (true on
+  /// every path); null when unknown, as in an archive before version 4.
+  LogicExprRef Guard = nullptr;
 };
 
 struct LogicFunctionParameter {

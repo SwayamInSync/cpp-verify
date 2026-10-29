@@ -142,7 +142,7 @@ cv::spec bool climbs(int a, int b)
 // STEP: Verified: inductive predicate: climbs
 // STEP-NEXT: Unresolved: spec post: climbs [reason=spec.post] (relies on the postcondition of climbs.step, which is not established)
 // STEP-NEXT: function_filter.cpp:92:24: error: spec post by induction failed: climbs
-// STEP-NEXT: Summary: 1 verified, 1 failed, 1 unresolved (spec.post 1)
+// STEP: Summary: 1 verified, 1 failed, 1 unresolved (spec.post 1)
 
 // NONE: error: no function matches --function=nothing
 

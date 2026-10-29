@@ -117,10 +117,11 @@ struct Counter {
 // CHECK-DAG: Verified: Counter::peek_counted [backend=z3]
 // CHECK-DAG: Verified: Counter::zero [backend=z3]
 
-// CHECK-DAG: error: verification failed: Counter::bad [{{.*}}::frame@{{[0-9]+}}:11] (counterexample: this [ssa=this_0] [type=pointer] =
+// CHECK-DAG: :{{[0-9]+}}:11: error: verification failed: Counter::bad [frame]
+// CHECK-DAG: note: counterexample: {{.*}}this =
 // A const member function writes only its own storage, mutable fields
 // included, unless its modifies lists them.
-// CHECK-DAG: error: verification failed: Counter::peek_bad [{{.*}}::frame@
+// CHECK-DAG: error: verification failed: Counter::peek_bad [frame]
 
 void Counter::set(int v)
 {
@@ -206,7 +207,7 @@ void cleared_narrow(Counter &c)
 {
   c.reset();
 }
-// CHECK-DAG: error: verification failed: cleared_narrow [{{.*}}::frame@[[@LINE-2]]:5]
+// CHECK-DAG: :[[@LINE-2]]:5: error: verification failed: cleared_narrow [frame]
 
 // `this` and a mutable or read parameter are distinct objects by default.
 void self_copy(Counter &c)
@@ -214,7 +215,7 @@ void self_copy(Counter &c)
 {
   c.copy_from(c);
 }
-// CHECK-DAG: error: verification failed: self_copy [{{.*}}::aliasing@[[@LINE-2]]:5]
+// CHECK-DAG: :[[@LINE-2]]:5: error: verification failed: self_copy [aliasing]
 
 int self_plus(const Counter &c)
   cppverify::pre(-1000 < c.n && c.n < 1000)

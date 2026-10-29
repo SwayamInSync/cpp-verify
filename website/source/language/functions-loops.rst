@@ -26,9 +26,12 @@ A local may take the name of a parameter or of another local, in an inner
 block or a later one (two ``for (int i = ...)`` loops, say): each declaration
 is a variable of its own, uninitialized until it is assigned whatever an
 earlier one with its name held. A counterexample shows its name as written,
-and in ``[ssa=...]`` the verifier's name for it, ``i#2`` for the second ``i``.
-Before 0.2 such a declaration was an error, ``local variable shadowing is
-unsupported``.
+with the line of its declaration when another variable of the
+counterexample has that name (``i (line 8) = 0 -> 1, i (line 14) = 0 -> 1``
+for two loops that each declare ``i``); JSON records give the verifier's name
+for each version as ``ssa_name``, ``i#2_1`` for the first of the second
+``i``. Before 0.2 such a declaration was an error, ``local variable shadowing
+is unsupported``.
 
 A default argument is evaluated at the call, with the checks of its
 operations there. A ``consteval`` call, like any constant Clang evaluates, is
@@ -38,6 +41,54 @@ type trait such as ``__is_same(T, U)``, ``offsetof``, and
 ``__builtin_LINE()``. ``__builtin_expect(e, c)`` is ``e``. ``static_assert``, type
 aliases, using-declarations, and local classes and enumerations declare
 names and do nothing at run time.
+
+GCC's bit builtins are their exact definitions over the operand's bits:
+``__builtin_clz``, ``__builtin_ctz``, ``__builtin_popcount``,
+``__builtin_parity``, and ``__builtin_ffs``, each with its ``l`` and ``ll``
+forms, and ``__builtin_bswap16``, ``__builtin_bswap32``, and
+``__builtin_bswap64``. GCC leaves the count of the leading or trailing zeros
+of 0 undefined, so ``__builtin_clz`` and ``__builtin_ctz`` check, where they
+are called, that their argument is not 0, a check of kind
+``builtin-argument``. In a spec, which is total, they count every bit of 0
+as zero, as C++20's ``std::countl_zero`` and ``std::countr_zero`` do.
+
+.. code-block:: cpp
+
+   namespace cv = cppverify;
+
+   int log2_floor(unsigned x)
+     cv::pre(x != 0)
+     cv::post(0 <= cv::result && cv::result < 32)
+     cv::post(x >= 1u << cv::result)
+   {
+     return 31 - __builtin_clz(x);
+   }
+
+   int top_bit(unsigned x)
+     cv::post(cv::result >= 0)
+   {
+     return 31 - __builtin_clz(x);
+   }
+
+   bool one_bit(unsigned x)
+     cv::post(cv::result == (x != 0 && (x & (x - 1)) == 0))
+   {
+     return __builtin_popcount(x) == 1;
+   }
+
+.. code-block:: text
+
+   Verified: log2_floor [backend=z3]
+   bits.cpp:14:15: error: verification failed: top_bit [builtin-argument] [backend=z3] [reason=counterexample]
+      14 |   return 31 - __builtin_clz(x);
+         |               ^~~~~~~~~~~~~~~~
+   bits.cpp:14:15: note: counterexample: x = 0
+   Verified: one_bit [backend=z3]
+   Summary: 2 verified, 1 failed in 0.2 s
+
+Before 0.2 a call of one of them stopped its function (``call to function
+without a verification contract: __builtin_clz``), and a ``static_assert``
+with a message stopped the run.
 
 A caller's proof uses its callees' contracts, so a verdict is only as good as
 those contracts. A caller whose proof relies on a callee contract that the
@@ -172,7 +223,20 @@ otherwise, as within one file.
 
    $ cpp-verify src/a.cpp src/mathx.cpp -- -Iinclude
    Unresolved: scaled [backend=z3] [reason=callee.contract] (relies on the contract of clamp100, which its verification in src/mathx.cpp does not establish)
-   include/mathx.h:2:42: error: verification failed: clamp100 [fn_...::postcondition@2:42] (counterexample: result [ssa=__result_1] [type=i32] = 101, x [ssa=x_0] [type=i32] = 101; ...) [backend=z3] [reason=counterexample]
+   In file included from src/mathx.cpp:1:
+   include/mathx.h:2:42: error: verification failed: clamp100 [postcondition] [backend=z3] [reason=counterexample]
+       2 |   cv::post(cv::result >= 0 && cv::result <= 100);
+         |                               ~~~~~~~~~~~^~~~~~
+   include/mathx.h:2:42: note: counterexample: x = 101, result = 101
+   src/mathx.cpp:5:3: note: takes the false branch
+       5 |   if (x < 0)
+         |   ^
+   src/mathx.cpp:7:3: note: takes the true branch
+       7 |   if (x > 100)
+         |   ^
+   src/mathx.cpp:8:5: note: returns 101
+       8 |     return 101;
+         |     ^
    Summary: 1 failed, 1 unresolved (callee.contract 1) in 0.0 s
 
 With ``return 100;`` both verify, and the warning that ``clamp100`` has no
@@ -326,16 +390,22 @@ that may not be as ``contract of f``, at the operation:
 
 .. code-block:: text
 
-   defined.cpp:2:17: error: verification failed: contract of average
-     [...::contract::division-by-zero@2:17] (counterexample: count [type=i32] = 0)
+   defined.cpp:2:17: error: verification failed: contract of average [division-by-zero] [backend=z3] [reason=counterexample]
+       2 |   cv::pre(total / count >= 0 && count > 0)
+         |           ~~~~~~^~~~~~~
+   defined.cpp:2:17: note: counterexample: count = 0
    Verified: average [backend=z3]
    Verified: average_checked [backend=z3]
-   defined.cpp:16:30: error: verification failed: contract of pick
-     [...::contract::bounds@16:30] (counterexample: i [type=i32] = -1, ...)
+   defined.cpp:16:30: error: verification failed: contract of pick [bounds] [backend=z3] [reason=counterexample]
+      16 |   cv::pre(cv::valid(p, 8) && p[i] > 0 && 0 <= i && i < 8)
+         |                              ^
+   defined.cpp:16:30: note: counterexample: p = 1, i = -1
    Verified: pick [backend=z3]
    defined.cpp:22:28: Trusted: read_sensor (contract assumed, not verified)
-   defined.cpp:23:17: error: verification failed: contract of read_sensor
-     [...::contract::division-by-zero@23:17] (counterexample: result [type=i32] = 0)
+   defined.cpp:23:17: error: verification failed: contract of read_sensor [division-by-zero] [backend=z3] [reason=counterexample]
+      23 |   cv::post(1000 / cv::result > 0);
+         |            ~~~~~^~~~~~~~~~~~
+   defined.cpp:23:17: note: counterexample: result = 0
    Unresolved: scaled [backend=z3] [reason=callee.contract] (relies on the
      contract of read_sensor (its clauses are not shown to be defined), which is
      not established)
@@ -439,12 +509,32 @@ result. Each call runs where C++ evaluates it:
    Verified: sq [backend=z3]
    Verified: sum_sq [backend=z3]
    Verified: guarded [backend=z3]
-   calls.cpp:38:7: error: verification failed: unguarded [...::precondition@38:7]
-     (counterexample: x [type=i32] = -1001; trace: call.sq@38:7 arg0=-1001)
-   calls.cpp:48:10: error: verification failed: count_up [...::precondition@48:10]
-     (counterexample: ..., i [type=i32] = 1000, n [type=i32] = 1000;
-     trace: loop.entry@48:3 -> loop.inductive iteration@48:3 condition=true
-     -> call.inc@48:10 arg0=1000)
+   calls.cpp:34:7: error: verification failed: unguarded [precondition] [backend=z3] [reason=counterexample]
+      34 |   if (sq(x) > 4 && x <= 1000)
+         |       ^~~~~
+   calls.cpp:34:7: note: counterexample: x = -1001
+   calls.cpp:9:17: note: this precondition does not hold at the call
+       9 |   cv::pre(-1000 <= x && x <= 1000)
+         |           ~~~~~~^~~~
+   calls.cpp:34:7: note: calls sq(-1001)
+      34 |   if (sq(x) > 4 && x <= 1000)
+         |       ^
+   calls.cpp:44:10: error: verification failed: count_up [precondition] [backend=z3] [reason=counterexample]
+      44 |   while (inc(i) <= n)
+         |          ^~~~~~
+   calls.cpp:44:10: note: counterexample: n = 1000, i = 0 -> 1000
+   calls.cpp:2:13: note: this precondition does not hold at the call
+       2 |   cv::pre(x < 1000)
+         |           ~~^~~~~~
+   calls.cpp:44:3: note: enters the loop
+      44 |   while (inc(i) <= n)
+         |   ^
+   calls.cpp:44:3: note: starts an arbitrary iteration of the loop, where its condition is true
+   calls.cpp:44:10: note: calls inc(1000)
+      44 |   while (inc(i) <= n)
+         |          ^
+   note: the counterexample's state at the loop at 44:3 is any state its invariants allow, not necessarily one an execution reaches
+   note: no execution fails this check within 10 iterations of each loop
 
 ``guarded`` calls ``sq`` only where ``-1000 <= x && x <= 1000`` holds, so
 ``sq``'s precondition holds at every call it makes. ``unguarded`` calls
@@ -459,8 +549,10 @@ C++ leaves the order of most operands open: the two operands of ``+`` or
 ``<``, a subscript's array and index, the arguments of a call. The verifier
 runs calls first, in one order, so that order must not matter. A call that
 may write memory (its callee has a ``cppverify::modifies``, a pointer or
-reference parameter, or is a member function that is not ``const``) next to
-an operand that reads memory, or makes another call, is an error:
+reference parameter, or is a member function that is not ``const``; or it
+has no contract and its body, or a call in it, writes through a pointer, a
+reference, or its object, or to a global) next to an operand that reads
+memory, or makes another call, is an error:
 
 .. cppverify-example: label add_one
 
@@ -489,7 +581,7 @@ an operand that reads memory, or makes another call, is an error:
 
 .. code-block:: text
 
-   order.cpp:18:10: error: sum_with: C++ leaves the order of these operands open, and a call in one may write what the other reads; make the call in a statement of its own first
+   order.cpp:18:10: error: sum_with: C++ leaves the order of these operands open, and a call or a write in one may change what the other reads; make it a statement of its own first
       18 |   return add_one(p) + *p;
          |          ^~~~~~~~~~~~~~~
 
@@ -520,8 +612,8 @@ the target is located:
 
 Before C++17 an assignment's operands are unsequenced too: with
 ``--extra-arg=-std=c++14``, ``store_old`` is ``error: store_old: before
-C++17 the order of an assignment's operands is open, and a call in one may
-write what the other reads; make the call in a statement of its own
+C++17 the order of an assignment's operands is open, and a call or a write
+in one may change what the other reads; make it a statement of its own
 first``.
 
 A call that returns nothing is made as a statement of its own
@@ -531,6 +623,165 @@ initializer, assignment, or return value (``Pt p = make(x);``,
 (``make(x).y``) is still ``executable call is unsupported in this expression
 context``. Before 0.2, every call inside a larger expression was that error,
 and the file stopped.
+
+Writes in expressions
+---------------------
+
+An increment, a decrement, an assignment, or a comma expression may stand
+where its value is used, as C code often writes it: ``a[i++]``,
+``*dst++ = *src++``, ``while (k-- > 0)``, ``if ((c = *p) != 0)``,
+``a = b = 0``. Its write runs where C++ evaluates it, as a call does: before
+what reads its value, and under ``&&``, ``||``, or ``?:`` only on its own
+path. Its value is read there: a postfix operator's is the value before the
+write, any other's the value after it.
+
+.. code-block:: cpp
+
+   void copy(int *dst, const int *src, int n)
+     cv::pre(cv::valid(dst, n) && cv::valid(src, n) && 0 <= n && n < 1000)
+     cv::modifies(dst[0 : n])
+     cv::post(cv::forall(k, 0, n, dst[k] == src[k]))
+   {
+     int *d = dst;
+     const int *s = src;
+     for (int i = 0; i < n; i = i + 1)
+       cv::invariant(0 <= i && i <= n && d == dst + i && s == src + i)
+       cv::invariant(cv::forall(k, 0, i, dst[k] == src[k]))
+       cv::decreases(n - i)
+     {
+       *d++ = *s++;
+     }
+   }
+
+   int countdown(int k)
+     cv::pre(0 <= k && k < 100)
+     cv::post(cv::result == 0)
+   {
+     while (k-- > 0)
+       cv::invariant(0 <= k && k < 100)
+       cv::decreases(k)
+     {
+     }
+     return k + 1;
+   }
+
+.. code-block:: text
+
+   Verified: copy [backend=z3]
+   Verified: countdown [backend=z3]
+
+The condition ``k-- > 0`` decrements ``k`` at every test, the last one
+included, so ``k`` is ``-1`` after the loop.
+
+Each expression is evaluated once, however often the verifier reads it: in
+``a[i++] += 1`` the target is read and written, and ``i`` grows by one. An
+assignment evaluates its right operand before its target (C++17), so
+``a[k++] = k`` stores the old ``k`` at the old ``k``; before C++17 the two are
+unsequenced, and a write in one that the other reads is the error above.
+
+The operands of most operators and the arguments of a call are unsequenced,
+and C++ leaves a write to an object that another of them reads undefined. As
+with a call that may write what another operand reads, that is an error at
+the expression:
+
+.. cppverify-example: rejects
+
+.. code-block:: cpp
+
+   int twice(int i)
+     cv::pre(0 <= i && i < 100)
+   {
+     return i++ + i;
+   }
+
+.. code-block:: text
+
+   twice.cpp:4:10: error: twice: C++ leaves the order of these operands open, and a call or a write in one may change what the other reads; make it a statement of its own first
+
+Writes are values in executable code only: ghost code and proof functions
+assign their locals in statements of their own, and a pointer to dynamic
+storage (``new``) is assigned in a statement of its own. Before 0.2, each of
+these forms was ``unsupported unary operator`` or ``unsupported binary
+operator``, and its function was not verified.
+
+Calls of functions without contracts
+------------------------------------
+
+A call of a function that has a body and no contract runs that body where
+the call is: the verifier inlines it, as Kani and CBMC inline every call and
+as SPARK's GNATprove inlines a subprogram without a contract. The caller's
+proof covers the body at the arguments the caller passes, its checks are the
+caller's, and it reads and writes the caller's objects, within the caller's
+``cppverify::modifies`` frame. A helper may hold loops with their invariants,
+returns anywhere, calls of other helpers and of contracted functions, whose
+preconditions are checked at each call; a member function is a helper too.
+Two helpers that write nothing their caller sees may stand side by side in
+one expression (``abs_diff(a, b) + abs_diff(c, d)``), and a helper's
+``cppverify::reveal_with_fuel`` unfolds its specs where it is inlined.
+
+.. code-block:: cpp
+
+   int count_zeros(const int *a, int n)
+   {
+     int c = 0;
+     for (int i = 0; i < n; i = i + 1)
+       cv::invariant(0 <= i && i <= n && 0 <= c && c <= i)
+       cv::decreases(n - i)
+     {
+       if (a[i] == 0)
+         c = c + 1;
+     }
+     return c;
+   }
+
+   int zeros(const int *a, int n)
+     cv::pre(valid(a, n) && 0 <= n && n <= 1000)
+     cv::post(0 <= cv::result && cv::result <= n)
+   {
+     return count_zeros(a, n);
+   }
+
+   int zeros_past(const int *a, int n)
+     cv::pre(valid(a, n) && 0 <= n && n <= 1000)
+   {
+     return count_zeros(a, n + 1);
+   }
+
+.. code-block:: text
+
+   Verified: zeros [backend=z3]
+   zeros.cpp:8:9: error: verification failed: zeros_past [bounds] [backend=z3] [reason=counterexample]
+       8 |     if (a[i] == 0)
+         |         ^
+   zeros.cpp:8:9: note: counterexample: count_zeros::a = 1, count_zeros::n = 2, count_zeros::c = 0, count_zeros::i = 0 -> 1, a = 1, n = 1
+
+A failure in a helper is shown at its operation, in the verdict of the
+function that calls it, and the counterexample names the helper's variables
+with its name (``count_zeros::i``). A function without a contract is verified
+where verified code calls it, at each such call, and on its own only when
+none does: ``count_zeros`` above has no verdict of its own, which without a
+precondition its reads could not have.
+
+What a contract has to state instead fails closed, ``Unresolved`` with
+reason ``construct.unsupported`` and a message that names the helper and asks
+for a contract:
+
+- recursion, directly or through other helpers;
+- a record returned by value (a record parameter is its fields, and a
+  pointer or reference to one addresses the caller's object);
+- allocation and deallocation, and a pointer to dynamic storage as the
+  result;
+- a loop invariant that uses ``cppverify::old``, whose entry would be the
+  caller's;
+- more than 2000 statements of helpers' bodies inlined into one function;
+- a body the verifier does not support, whose message the call repeats.
+
+A ``constexpr`` function without a contract is lifted as a spec instead
+(Functions, above), a constructor without a contract is not inlined, and a
+call of a function without a body in the translation unit, or of the
+standard library beyond ``std::min`` and ``std::max``, is an error naming it
+(``call to function without a verification contract``). Before 0.2 every
+call of a function without a contract was that error.
 
 Templates
 ---------
@@ -597,8 +848,16 @@ named with its arguments. A template value parameter is its argument, and
 .. code-block:: text
 
    Verified: twice<int> [backend=z3]
-   templates.cpp:4:23: error: verification failed: twice<short> [...::postcondition@4:23] (counterexample: ...) [backend=z3] [reason=counterexample]
+   templates.cpp:4:23: error: verification failed: twice<short> [postcondition] [backend=z3] [reason=counterexample]
+       4 |   cv::post(cv::result == 2 * x)
+         |            ~~~~~~~~~~~^~~~~~~~
+   templates.cpp:4:23: note: counterexample: x = 16384, result = -32768
+   templates.cpp:6:3: note: returns -32768
+       6 |   return x + x;
+         |   ^
    templates.cpp:20:13: note: in instantiation of function template specialization 'twice<short>' requested here
+      20 |   short r = twice(x);
+         |             ^
    Verified: twice_int [backend=z3]
    Unresolved: twice_short [backend=z3] [reason=callee.contract] (relies on the contract of twice<short>, which is not established)
 
@@ -747,7 +1006,17 @@ execution that fails the same check, with callees still by their contracts:
 
 .. code-block:: text
 
-   count_up.cpp:5:23: error: verification failed: count_up [fn_...::postcondition@5:23] (counterexample: result [ssa=__result_1] [type=i32] = 1, c [ssa=c_1] [type=i32] = 0, c [ssa=c_2] [type=i32] = 1, c [ssa=c_3] [type=i32] = 1, n [ssa=n_0] [type=i32] = 0; trace: loop.entry@8:3 -> loop.exit@8:3 -> return.return@13:3 value=1) [backend=z3] [reason=counterexample]
+   count_up.cpp:5:23: error: verification failed: count_up [postcondition] [backend=z3] [reason=counterexample]
+       5 |   cv::post(cv::result == n)
+         |            ~~~~~~~~~~~^~~~
+   count_up.cpp:5:23: note: counterexample: n = 0, c = 0 -> 1, result = 1
+   count_up.cpp:8:3: note: enters the loop
+       8 |   while (c < n)
+         |   ^
+   count_up.cpp:8:3: note: leaves the loop
+   count_up.cpp:13:3: note: returns 1
+      13 |   return c;
+         |   ^
    note: the counterexample's state at the loop at 8:3 is any state its invariants allow, not necessarily one an execution reaches
    note: no execution fails this check: every loop ends within 5 iterations, and unrolling proves it there; the loops' invariants are too weak for an unbounded proof
 
@@ -785,7 +1054,14 @@ counterexample, see :doc:`tooling`):
 
 .. code-block:: text
 
-   divide.cpp:13:7: error: verification failed: divide [fn_...::overflow@13:7] (counterexample: a [ssa=a_0] [type=i32] = -2147483648, c [ssa=c_1] [type=i32] = 0, c [ssa=c_2] [type=i32] = 2, n [ssa=n_0] [type=i32] = 3, q [ssa=q_1] [type=i32] = 0; trace: loop.entry@9:3 -> loop.inductive iteration@9:3 condition=true) [backend=z3] [reason=counterexample]
+   divide.cpp:13:11: error: verification failed: divide [overflow] [backend=z3] [reason=counterexample]
+      13 |     q = a / (1 - c);
+         |         ~~^~~~~~~~~
+   divide.cpp:13:11: note: counterexample: a = -2147483648, n = 3, c = 0 -> 2, q = 0
+   divide.cpp:9:3: note: enters the loop
+       9 |   while (c < n)
+         |   ^
+   divide.cpp:9:3: note: starts an arbitrary iteration of the loop, where its condition is true
    note: the counterexample's state at the loop at 9:3 is any state its invariants allow, not necessarily one an execution reaches
    note: no execution fails this check without failing an earlier one first (the division-by-zero check at 13:7 fails): those that pass the checks before it end every loop within 2 iterations, and unrolling proves it there
 
@@ -1014,7 +1290,25 @@ other object keeps its value:
 .. code-block:: text
 
    Verified: other_array [backend=z3]
-   frames.cpp:18:23: error: verification failed: overwritten [...::postcondition@18:23] (counterexample: ...) [backend=z3] [reason=counterexample]
+   frames.cpp:18:23: error: verification failed: overwritten [postcondition] [backend=z3] [reason=counterexample]
+      18 |   cv::post(cv::result == 7)
+         |            ~~~~~~~~~~~^~~~
+   frames.cpp:18:23: note: counterexample: i = 0 -> 4, result = -2147483648
+   frames.cpp:20:3: note: creates a local object at address 4
+      20 |   int a[4];
+         |   ^
+   frames.cpp:21:8: note: stores 7 at address 16
+      21 |   a[3] = 7;
+         |        ^
+   frames.cpp:22:3: note: enters the loop
+      22 |   for (int i = 0; i < 4; i = i + 1)
+         |   ^
+   frames.cpp:22:3: note: leaves the loop
+   frames.cpp:28:3: note: returns -2147483648
+      28 |   return a[3];
+         |   ^
+   note: the counterexample's state at the loop at 22:3 is any state its invariants allow, not necessarily one an execution reaches
+   note: an execution fails this check within 4 iterations of each loop (counterexample: i = 0 -> 1 -> 2 -> 3 -> 4, result = 0)
 
 ``overwritten`` fails because the loop writes ``a[3]``, which no invariant
 describes. Before 0.2 a loop that wrote local or dynamic storage forgot the
@@ -1065,7 +1359,19 @@ contract can say directly:
 .. code-block:: text
 
    Verified: filled [backend=z3]
-   fill.cpp:26:3: error: verification failed: partially_filled [...::initialization@26:3] (counterexample: ...) [backend=z3] [reason=counterexample]
+   fill.cpp:25:10: error: verification failed: partially_filled [initialization] [backend=z3] [reason=counterexample]
+      25 |   return a[3];
+         |          ^~~~
+   fill.cpp:25:10: note: counterexample: i = 0 -> 3
+   fill.cpp:17:3: note: creates a local object at address 9132
+      17 |   int a[4];
+         |   ^
+   fill.cpp:18:3: note: enters the loop
+      18 |   for (int i = 0; i < 3; i = i + 1)
+         |   ^
+   fill.cpp:18:3: note: leaves the loop
+   note: the counterexample's state at the loop at 18:3 is any state its invariants allow, not necessarily one an execution reaches
+   note: an execution fails this check within 3 iterations of each loop (counterexample: i = 0 -> 1 -> 2 -> 3)
 
 No lifetime begins or ends inside a loop, so what was initialized before it
 stays initialized in every iteration and after it; an element the loop may
@@ -1135,7 +1441,13 @@ The path ends there, so after ``assert(c)`` the condition holds. With
 .. code-block:: text
 
    Verified: scaled [backend=z3]
-   aborts.cpp:16:5: error: verification failed: aborts [...::unreachable@16:5] (counterexample: x [ssa=x_0] [type=i32] = -1; ...) [backend=z3] [reason=counterexample]
+   aborts.cpp:16:5: error: verification failed: aborts [unreachable] [backend=z3] [reason=counterexample]
+      16 |     abort();
+         |     ^
+   aborts.cpp:16:5: note: counterexample: x = -1
+   aborts.cpp:15:3: note: takes the true branch
+      15 |   if (x < 0)
+         |   ^
 
 An uncontracted ``constexpr`` helper's ``assert(c)`` is a requirement of each
 call that reaches it, checked at the call as the helper's undefined
@@ -1217,7 +1529,22 @@ switch over its enumerators may match none:
 
 .. code-block:: text
 
-   channel.cpp:4:12: error: verification failed: channel [...::postcondition@4:12] (counterexample: result [ssa=__result_1] [type=i32] = -1, c [ssa=c_0] [type=u32] = 3; ...) [backend=z3] [reason=counterexample]
+   channel.cpp:4:23: error: verification failed: channel [postcondition] [backend=z3] [reason=counterexample]
+       4 |   cv::post(cv::result >= 0)
+         |            ~~~~~~~~~~~^~~~
+   channel.cpp:4:23: note: counterexample: c = 3, result = -1
+   channel.cpp:7:3: note: takes the false branch
+       7 |   case Red:
+         |   ^
+   channel.cpp:9:3: note: takes the false branch
+       9 |   case Green:
+         |   ^
+   channel.cpp:11:3: note: takes the false branch
+      11 |   case Blue:
+         |   ^
+   channel.cpp:14:3: note: returns -1
+      14 |   return -1;
+         |   ^
 
 ``Color`` holds 0 to 3, the values of the smallest bit-field that fits its
 enumerators, and ``channel(Color(3))`` is defined C++ that returns -1.

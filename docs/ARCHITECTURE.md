@@ -68,7 +68,7 @@ C++ source with contracts
 │  - Source names + types  │
 │  - Guarded event traces  │
 │  - Stable reason codes   │
-│  - Text or JSON Lines    │
+│  - Text, JSON, SARIF     │
 │  - Re-check recommends   │
 │    on failure → warnings │
 └──────────────────────────┘
@@ -375,6 +375,31 @@ types, and the parameters in `ValueReferences` are read as values; a
 function that cannot be lifted returns a placeholder that the lifting loop
 marks unsupported, so `SpecDependencies` name it.
 
+**The C library's memory functions and abs:** a contract on `void *` cannot
+speak of the objects behind it, and the heap keeps one cell per object, so
+`convertLibraryCall` recognizes `memcpy`, `memmove`, `memset`, and `memcmp`
+by builtin ID, reads the objects each pointer addresses as written, before
+its conversion to `void *` (`beforeVoidPointer`; an enumeration as its
+underlying integer), and lowers the call to a `VCallStmt` of that type's
+model, a trusted declaration with a contract in `<cppverify.h>`
+(`cppverify::model`, found by `libraryModel`), with `k = n / sizeof(T)` and
+an `unsupported` assert, with its note (`VAssertStmt::Note`), that `n` is a
+multiple of `sizeof(T)`. The pointers' objects must have one size, and be
+`bool` on both sides or neither. `memset`'s byte becomes the object it
+repeats, `(unsigned char)c * 0x0101...` reinterpreted as `T`. The main
+conversion loop skips the models (`isLibraryModel`); the ones calls use
+(`UsedLibraryModels`) are converted after it and marked `IsBuiltin`, so
+they are neither verified nor reported, but stay trusted: established for
+the fixpoint, and named in every caller's `[trusts=...]`. The modular call
+then does the rest as for any callee: extents contained in the caller's
+objects, the separation of `memcpy`'s ranges (`memmove`'s model has
+`aliases`), the frame `d[0 : k]`, and the postconditions. `convertAbs`
+lowers `abs`, `labs`, `llabs`, and `std::abs` of an integer (in `std`, or a
+global `abs` of a system header, as libc++'s `<stdlib.h>` defines it) to
+`x < 0 ? -x : x` in the parameter's type in the function's integer mode:
+machine in executable and proof code, contracts included, where `-x` is
+checked for overflow, and mathematical in a spec.
+
 **Records in memory by value:** `recordFieldsInMemory` reads a record value
 kept in memory, a promoted local or one in a pointee or record reference
 (`promotedRootLocal`, `inPointeeObject`), through implicit copies and
@@ -452,6 +477,20 @@ of a constant table (a constant array's initializer or a string literal) to
 a synthesized spec (`IsBuiltin`, identity `__cppverify_table.<name>@L:C` or
 `__cppverify_string@L:C`) whose body is a balanced comparison tree over the
 linear index.
+
+**Bit builtins:** `ASTConverter::convertBitBuiltin` lowers a call of
+`__builtin_clz`, `ctz`, `popcount`, `parity`, `ffs` (and their `l`/`ll`
+forms) or `bswap16/32/64` to its definition over the operand, read as an
+unsigned machine value of the parameter's width (a mathematical argument
+converts to the parameter's type first, as a bitwise operand does): `clz`
+and `ctz` are a ladder of conditionals on `x & 2^k != 0` with literal
+results, `popcount` and `parity` a balanced sum of one-bit terms in a byte
+(at most 64, so its adders stay small), and `bswap` the bits moved to their
+places, combined with `|` since no two meet. None of these operations has a
+check of its own. `clz` and `ctz` are wrapped in
+`ite(Require(x != 0, builtin-argument), v, v)`, except in an explicit spec,
+which is total and counts every bit of 0. Summing the bits at the operand's
+width made `parity` of a `popcount` take 6 s; in a byte it takes 0.8 s.
 
 **Require:** produced by the spec inliner from the `assert`
 statements of a lifted `constexpr` helper's body (`evalBodySeq`): on the
@@ -741,6 +780,22 @@ earlier ones wrote as uninitialized. Dafny checks an invariant's
 well-formedness once, in the head's arbitrary state, from the invariants
 before it, which suffices where storage is always initialized; here it is
 proved where the invariant is.
+
+**Class invariants at loops.** The converter appends to every loop's
+invariants (`ASTConverter::appendObjectInvariants`, after the user's) the
+class invariants of the objects the loop can reach: each local object alive
+at the loop (`AutomaticScopeStack`), at its address, and each object a
+reference or pointer parameter of the function addresses, guarded by
+`p == nullptr ||` for a pointer, skipping one with an extent as the entry
+assumption does. Each is the invariant instantiated with `ThisSubstitute`,
+as for a parameter at entry, and is checked at entry and preserved like any
+other invariant, so it can make no false claim verify. Only the class's
+members and code writing a public field change what an invariant states,
+and a public member keeps it, so it holds at every iteration of a loop
+outside the class; a member function's loops get none of their class's
+invariants (`ConvertingDecl` names the function), since a member may break
+one between calls. Without them the loop havoc forgot the invariant, and
+the next public call failed its `type-invariant` check.
 
 **Termination.** An executable loop without `cppverify::decreases` contributes no
 measure obligation, and the driver reports the function `Unresolved` with
@@ -1124,7 +1179,7 @@ and obligation kinds.
 ### Canonical archives and semantic identity
 
 `--obligation-out=FILE` writes one or more deterministic
-`cppverify.obligation/3` records after source attribution. The binary format has
+`cppverify.obligation/6` records after source attribution. The binary format has
 the `CPVOBL\r\n` magic, an explicit schema version, little-endian fixed-width
 integers, length-delimited strings/collections, and stable hand-assigned wire
 tags rather than C++ enum ordinals. The reader bounds strings, collections,
@@ -1148,9 +1203,20 @@ functions a measure applies, so a module never names one it does not
 declare. Before, a spec only a measure applied was removed, and the
 measure could not be printed.
 
-Schema v2 adds the precise obligation kinds, and schema v3 the measures and
-premises; readers still read schema v2 and schema v1, whose records name
-only assertions, postconditions, and unwinding checks. Records
+Schema v2 adds the precise obligation kinds, schema v3 the measures and
+premises, and schema v4, with the diagnostic metadata, where each variable
+version is defined (`DiagnosticVariable::Guard`); readers still read schemas
+v3, v2, and v1, whose records name only assertions, postconditions, and
+unwinding checks. A record before v4 gives no version a guard, so its
+counterexamples list every version, as before 0.2. Schema v5 adds, after each
+source's end, the begin of its range (`ObligationSource::BeginLine`,
+`BeginColumn`); from v5 the end is the column after the last character
+(`Lexer::getLocForEndOfToken`), where before it was the first column of the
+last token, and a record before v5 keeps its end as written. Schema v6
+adds, with the diagnostic metadata, the sources of each obligation's focus
+and clause (`Obligation::FocusSource`, `ClauseSource`), so replay places a
+failure as a run from source does, by matching the archived sources of the
+goal's terms; a record before v6 places it at its anchor. Records
 limit strings to 64 MiB, collections and expression
 nodes/edges to 100,000 per record, expression nesting to 4096, canonical
 integer numerals to 4096 decimal characters, and integer sorts to 4096 bits.
@@ -1903,7 +1969,9 @@ recursing to the nesting limit. If the complete query is unresolved, Z3 may solv
 ordered queries. It does not reconstruct alternate passive programs.
 
 **Induction.** A module left `Unresolved` with `spec.fuel` (or marked
-`InductionOnly`) is retried by well-founded inductions in
+`InductionOnly`), or a lemma's (a module with a `Contract`, which only a
+proof function has) left with `solver.timeout` or `solver.unknown`, is
+retried by well-founded inductions in
 `VerifyBackend::verify`, the entry every caller and backend shares; composite
 backends call `verifyDirect` on their solvers, so the step runs once, over
 the composite (`Backend/Induction.cpp`). The claim of a module is its
@@ -1917,7 +1985,8 @@ those assumptions, simplified like the goals (`ObligationModule::Theorems`,
 assumption a premise, as before). A scheme (`InductionScheme`) is a measure
 over some variables: the `cppverify::decreases` of a recursive spec applied in the claim
 at that application (`LogicFunctionDecl::Decreases`, lowered by `SpecAxioms`),
-or one integer variable (strong induction). Its induction module is the
+or one integer variable that the claim passes to a spec or uses in a read's
+address (strong induction, `integerArgumentVariables`). Its induction module is the
 module with a hypothesis assumed by every obligation other than unwinding
 ones: the claim, with the definitions it assumes substituted
 (`(x == t && A) -> B` becomes `(A -> B)[x := t]`, which only adds models),
@@ -2453,20 +2522,131 @@ Passivization also records guarded branch, modular-call, loop, heap-write,
 allocation, lifetime-end, deletion, and return events. Each obligation owns the
 event prefix that existed when it was emitted. The Z3 model removes events with
 false guards, retains true events, and marks undetermined guards explicitly
-unknown. Addresses, stored values, allocation identities, and return values use
+unknown.
+
+cvc5's models are read by the adapter, not by a solver API, so the certifier
+describes them (`describeCounterexample`, `Certify.cpp`) once it has certified
+one: in the model it checked, `evaluateTerm` gives each source variable of the
+obligation's query (`candidateValues`, listed by internal name, the order of
+Z3's models), the guard of each version (`OnPath`), each of the obligation's
+trace events up to its `TraceEventCount` (dropped when the guard is false,
+marked undetermined when the model does not decide it) and its values, and
+the assignment of the goal's variables that a Lean refutation states. The
+evaluation is the certifier's own, the semantics the counterexample was
+certified in, so a value shown is one the check used; it never completes the
+model. cvc5 solves each obligation alone, so the query is always one
+obligation's. Addresses, stored values, allocation identities, and return values use
 the same typed, non-completing evaluation. A complete-query counterexample is
 attributed to a specific ordered obligation whenever its model evaluates that
 obligation's counterexample query to true.
 
 Public obligation identities are source anchored:
 `function-identity::kind@line:column`, with `#N` only for obligations sharing
-one anchor. This keeps later IDs stable when an unrelated obligation is inserted
-or reordered without moving the source anchor. The ordinary diagnostic is
-Clang-style text; `--diagnostics-format=json` emits one
-`cppverify.diagnostic/1` JSON object per verification result, including source
+one anchor. A location in a macro is where Clang's diagnostics show it
+(`SourceManager::getFileLoc`): in an argument where it is written, elsewhere
+where the macro is used; a range written in one place (one argument) is
+that place's (`Lexer::makeFileCharRange`), and any other the macro's use. This keeps later IDs stable when an unrelated obligation is inserted
+or reordered without moving the source anchor; JSON records carry it, and text
+names only the kind (`[overflow]`), since the location prefixes the line.
+
+A failure is shown where its check fails, which may be closer than its
+anchor (`failingPlace`, `Driver/Counterexample.cpp`). Passivization records with
+each check what it checks in the source apart from the path condition
+around it (`PassiveStmt::Focus`, the condition's `Loc`, `BeginLoc`, and
+`EndLoc` before `emitPassive` wraps it in its guard), and for a callee's
+precondition at a call the call (`VCallStmt::CallSite`, the call
+expression, set by the converter's `atCall`) with the callee's clause
+(`PassiveStmt::Clause`); a call's own checks, whose conditions are anchored
+at the call statement, take the call expression as their focus. A check that
+a postcondition is defined is anchored at the clause
+(`PassiveExitAssert::Anchor`), and its operation is its focus. Layer 3
+keeps both on the obligation (`Obligation::Focus`, `Clause`), as
+diagnostics only: archives keep their sources from schema v6, and hashes
+neither. When the driver annotates a module's sources it drops a focus that
+lies outside the function's own source (`VFunction::Extent`, the
+definition with its contract), as the condition of a lifted helper's check
+does, so that check stays at its call as before. A definedness check made at
+an operation's operator spans the operation (`collectSafety`), and the terms
+a comparison of a machine and a mathematical operand is lowered to take the
+comparison's location and span (`asWritten`), not an operand's. For a
+failure, `failingPlace` finds the checked condition in its goal, under the
+chain of assumptions, by its location (by its source in an archive), a
+guard implication around it giving way to the condition, and evaluates its
+parts at the counterexample's values (`AssignedValues` over
+`VerifyResult::Assignment`, with the certifier's `evaluateTerm` and a
+one-second budget): a conjunction fails at its first false conjunct (the
+terms lowering builds for one construct carry its place, so a comparison is
+one part however it is lowered); a definedness check, whose conditions the
+verifier builds,
+also at the check under a short-circuit guard whose left side holds; a
+user's disjunction, as a whole. Spec substitution keeps the span of each
+node it rebuilds (`substParams`, `substParamsInExpr`), so a callee's clause
+instantiated at a call still spans its source. The error then moves there
+(`placeFailure`), and a callee's clause becomes a related place
+(`VerifyDiagnostic::Related`): a note with its range after the
+counterexample, JSON `related`, SARIF `relatedLocations`, and a line of the
+GitHub annotation. The notes that unrolling adds are computed first, since
+it looks for copies of the check at its anchor. A failure confirmed by proof
+is placed the same way, and archive replay too (`cpp-verify`'s replay
+printer). When the values decide no part, the failure stays at its anchor.
+Before 0.2 a failure was at its anchor always: a clause's top-level `&&`,
+and the start of the statement for an operation or a call.
+
+Every result is described once as Clang diagnostics (`Verifier::partsOf`,
+`VerifyDiagnosticPart`): an error at the failing check, with notes; a
+warning; or a verdict's status line, an error when unresolved and otherwise
+a remark. The error's caret is the obligation's location and its range the
+expression it checks when that lies on the caret's line: every `VExpr`
+carries the start of its source (`BeginLoc`, Clang's `getBeginLoc`) beside
+`Loc` (`getExprLoc`, an operator's position) and `EndLoc`, and lowering keeps
+it to `Obligation::BeginLoc` and `VerifyResult::BeginLocation`. A failure's
+notes are its counterexample at the check (`counterexampleText`: values by
+display name, ordered by the declaration's position with `result` last, each
+variable with the values its SSA versions take in version order, `0 -> 1`, a
+version that keeps the value before it adding none, and a reference shown as
+`&r`, since its value is the address it refers to) and each trace event at
+its source location (`traceStepText`, in the static analyzer's words: "takes
+the false branch", "returns 151"; a path of more than `TraceStepLimit` steps
+keeps its first and last five, as `-ftemplate-backtrace-limit` does), then its
+own notes. A note inside a macro is placed at the macro's use: the error
+already shows the expansion. Only the versions the path defines count:
+passivization records with each version of a source variable the path
+condition active where it is defined (`PassiveModelVariable::Guard`, lowered
+to `DiagnosticVariable::Guard`, which archives do not record), Z3 evaluates
+it in the model without completion (`VerifyModelValue::OnPath`, JSON
+`"on_path": false`), and a version whose condition is false is left out: it
+equals the version before it there, so listing it showed `y = 0 -> 1 -> 0 ->
+1` for a `y` that never returned to 0. A store, a deletion, and a return are
+traced after the checks of their own operation, so a check that fails there
+does not list the operation as a step taken. A failed result's
+`Message` explains only what its model and trace do not, such as a
+confirmation by proof; the values are never rendered into it. The standalone
+tool prints errors and warnings with `TextDiagnostic`, source line and caret
+included, and verdicts as one line each; the compile path reports every part
+through the compiler's `DiagnosticsEngine` (see Compile-Time Integration).
+`--diagnostics-format=json` emits one
+`cppverify.diagnostic/2` JSON object per verification result, including source
 ranges, typed model values, trace events, backend/bound, and a stable reason
-code. Command-line/frontend errors and output combined with IR dumps are not a
-pure JSON stream. A construct the converter cannot represent is a
+code. A source (`ObligationSource`, annotated by `Verifier::sourceOf`) keeps
+the anchor that stable IDs and carets use (`Line`, `Column`) and spans its
+expression from `BeginLoc` to the end of its last token; records print the
+span. Every record of a function carries its declaration
+(`VerifyDiagnostic::FunctionLoc`, also for conversion errors through
+`ConversionError::FunctionLoc`), and a failure the counterexample and step
+texts the text output prints. In `cpp-verify` the compiler's diagnostics go to
+`StructuredDiagnostics`, which writes them as records of status `frontend`
+with their notes as `related`, before the verifier's records of the file, and
+a `cppverify.summary/1` record ends the run. No record holds a time, so the
+stream is the same at any `--jobs`. `--diagnostics-format=sarif` writes the
+same records into a buffer (`out()` in `Main.cpp`) and translates them at the
+end (`sarifLog`, `Driver/StructuredOutput.cpp`): a result per record, its
+SARIF `kind` from the status as Frama-C maps property statuses (pass, fail,
+open), its rule the failing check's kind, the trace a code flow, and the
+summary a property of the run. The logs of `structured_output.test`, of
+`inductive_counterexamples.cpp`, and of a replay validate against the SARIF
+2.1.0 schema. `--diagnostics-format=github` is the text with a
+workflow command (`githubCommand`) after each error and warning. Output
+combined with IR dumps is not a pure JSON stream. A construct the converter cannot represent is a
 `ConversionError` at a source range: the innermost declaration, statement, or
 expression being converted (`ASTConverter::CurrentRange`), unless the site
 names a place of its own, such as a function for the checks made after every
@@ -2641,7 +2821,7 @@ The driver selects a backend via `VerifyOptions` (`Verifier.h` / `cpp-verify --b
 | Backend | Implementation | Notes |
 |---------|----------------|-------|
 | **Z3** | `Z3VerifyBackend` | Default. Consumes `ObligationModule`; counterexamples come from models. |
-| **cvc5** | `CVC5VerifyBackend` + standalone SMT-LIB2 | Encodes the same canonical sorts, C++ truncating math division/remainder, bit-vectors, signed overflow, total heap, bounded and unbounded quantifiers (marked triggers as `:pattern`), heap frames, sequences (`full-saturate-quant` when sequences meet quantifiers), and finite ground spec equations. Sets, multisets, and maps are arrays over all integers, as for Z3 (cvc5's own set theory is finite, which would prove facts false of an infinite set): `(Array Int Bool)`, `(Array Int Int)` with a count of `max(0, cell)` and equality count by count, and `(Array Int cppverify.option)` over a declared `none | some(value)` datatype; union, intersection, and difference are declared functions each defined pointwise by one quantified axiom, exact by array extensionality, and subset is a quantified formula. A model cvc5 prints with `unknown` is certified like one after `sat`. Solver process failures and malformed output are unresolved. |
+| **cvc5** | `CVC5VerifyBackend` + standalone SMT-LIB2 | Encodes the same canonical sorts, C++ truncating math division/remainder, bit-vectors, signed overflow, total heap, bounded and unbounded quantifiers (marked triggers as `:pattern`), heap frames, sequences (`full-saturate-quant` when sequences meet quantifiers), and finite ground spec equations. Sets, multisets, and maps are arrays over all integers, as for Z3 (cvc5's own set theory is finite, which would prove facts false of an infinite set): `(Array Int Bool)`, `(Array Int Int)` with a count of `max(0, cell)` and equality count by count, and `(Array Int cppverify.option)` over a declared `none | some(value)` datatype; union, intersection, and difference are declared functions each defined pointwise by one quantified axiom, exact by array extensionality, and subset is a quantified formula. A model cvc5 prints with `unknown` is certified like one after `sat`, and a certified one is described in source terms as Z3's is (`describeCounterexample`). Solver process failures and malformed output are unresolved. |
 | **Strict portfolio** | `PortfolioVerifyBackend` | Runs ordered Z3 and cvc5 queries. Matching UNSAT proves; matching certified counterexamples fail and retain the Z3 model; disagreement or an unresolved side is unresolved. |
 | **Race** | `RaceVerifyBackend` | Runs the Z3 and cvc5 backends at once; the first proof or certified counterexample stands and cancels the other (`cancel`/`resume`: a backend-wide `Race` of Z3 encoders, each forwarding an interrupt to the pass it runs, and a flag the cvc5 process loop polls). Otherwise the obligations either proved are joined, `Verified` (`z3+cvc5`) when they cover the module. |
 | **BMC** | `LoopUnroll` on VCR, then shared obligation/Z3 path | Source verification grows bounds from zero through `--unroll=N`, stopping on a counterexample, complete unwinding, unresolved query, or the maximum frontier. Safety with failed unwinding is `BoundedSafe(N)`; only proved unwinding is `Verified`. A spec's checks have no loops: the driver solves them with a Z3 backend (`SpecBackend`), as on the default path, and keeps the bound on their archived modules for replay. |
@@ -2868,18 +3048,91 @@ terminal module, with its actual bound. Archive replay consumes that one bound
 and does not claim to repeat incremental source exploration. Loop trace events
 carry one-based iteration numbers at the original source location.
 
+## Inlined Helpers
+
+A call of a function with a body and no contract (`ASTConverter::
+isInlineHelper`: not a spec, proof, or `constexpr` function, a builtin, the
+standard library's, a system header's, a constructor, or a member the
+verifier does not support) is lowered as a contracted call is, by
+`hoistExecCall` and the call statements, so its arguments are evaluated in
+C++'s order; `atCall` marks the `VCallStmt` `InlinesHelper` and records the
+helper. After the main loop the converter converts each recorded helper once
+(`convertFunction(FD, /*AsInlineHelper=*/true)`), marked `IsInlineHelper`,
+before the library models and the lifted `constexpr` functions, whose calls a
+helper may add. A helper whose body does not convert is not reported on its
+own: its first error, with its location, is kept for its calls
+(`UnconvertedHelpers`).
+
+`inlineHelperCalls` (`Transform/InlineHelpers.cpp`) then runs in the
+converter, before the call-graph analyses (recursion groups, clusters, spec
+dependencies), so they and every pass after see the inlined bodies. For each
+marked call it clones the helper's body as converted (a helper verified on
+its own is inlined as written, not as its own calls were inlined) and renames
+every variable, binder, and target apart (`__inlineN_helper$x`). Each
+parameter becomes a local assigned its argument (a reference binding for a
+scalar reference parameter). A flag `__inlineN_helper$__returned` starts
+false, and the body's own result `__inlineN_helper$__result` starts as a zero
+of the return type, so that a value assigned on a loop's exit path has a
+version of its type at the loop's head and reaches its exit (an untyped havoc
+gave the merge at an outer loop's head no type); the call's target receives
+it after the body. Each `return e` becomes `result = e; returned = true`: outside loops the
+statements after one that may return are guarded by `!returned`, inside a
+loop it also breaks, a loop that may return is followed by `if (returned)
+break;` in an enclosing loop, and every such loop gets the invariant
+`!returned`, which holds since a path that sets it leaves the loop at once. A
+`do` loop needs nothing more, since its first iteration is lowered before its
+loop. The calls in the inlined body are inlined in turn, with the helpers
+being inlined on a stack, which detects recursion. Each caller receives the
+helper's source variables, displayed as `helper::x`, its bounded pointers,
+spec dependencies, divergence and unmeasured loops, its extent
+(`VFunction::InlinedExtents`), within which a check's focus may be shown,
+and its spec fuel and reveals (`SpecFuel`, the larger of the two, and
+`RevealedSpecs`): more unfolding only adds equations of definitions. Its
+`hide`s are not, since they would withhold a definition from the caller's
+other claims. For the order of unsequenced operands (B11), a call of a
+helper may write memory exactly when its body, or a call in it, stores
+through a pointer, a reference, or its object, or to a global, allocates,
+or makes a call the verifier cannot see into (`callMayWrite`, which applies
+the contract rule to contracted callees).
+
+A call that cannot be inlined becomes `assert false` of kind `unsupported`,
+with a note that names the helper and asks for a contract, then `assume
+false`, since nothing is known of what the call does: recursion, a record
+result (`ReturnFields`), dynamic storage, `cppverify::old` or
+`cppverify::result` in the body (its entry is not the caller's), and a body
+that did not convert. Past `MaxInlinedStatements` (2000) statements inlined
+into one function, the function's whole body becomes that obligation, at the
+call of the outermost helper, since a partly inlined body only grows the
+queries. Finally the functions converted only to be inlined are removed, and
+so is every function without a contract that some call inlines: it is
+verified where verified code calls it.
+
 ## Modular Exec Calls
 
 `ASTConverter` lowers contracted **exec** calls to `VCallStmt` nodes, in every
-expression position. While a statement or a condition of executable code is
+expression position, and calls of functions without contracts the same way
+(`lowersToCall`), marked `InlinesHelper` (see "Inlined helpers" below). While a statement or a condition of executable code is
 converted, its calls go to a call sink (`CallSink`, beside `SubobjectSink`):
 each becomes a `VCallStmt` into a fresh temporary `__call_N` before the
 statement (a condition's before the `VIfStmt`), its arguments lowered as a
 call statement's are (`convertExecCallArgs`, nested calls into `__nested_N`),
 and the expression reads the temporary; a `CallExpr` converted twice within a
 statement, as an index the binding check reads again, calls once
-(`HoistedCalls`). So `Passivize::emitCallStmt` applies callee
+(`HoistedValues`). So `Passivize::emitCallStmt` applies callee
 `cppverify::pre`/`cppverify::post` at each site.
+
+- **Writes.** An increment, a decrement, or an assignment whose value an
+  expression uses goes to the call sink the same way (`hoistSideEffect`): its
+  statement, converted as a statement of its own is, runs before the rest of
+  the expression, and its value is read into a temporary `__value_N` there,
+  a postfix operator's before the write and any other's after it. A comma's
+  first operand is converted as a discarded statement into the sink, and the
+  comma is its second operand. `HoistedValues` maps each hoisted call or
+  write to its temporary, so an expression the converter reads twice, as a
+  compound assignment's target is read and then located, is evaluated once.
+  The statement of a write continues its expression's evaluation and keeps
+  that map (`ContinuesEvaluation`), since its target is converted again in
+  it: `a[k++]++` increments `k` once.
 
 - **Paths.** An operand that `&&`, `||`, or `?:` evaluates only on its own
   path is converted with both sinks pointed at a list of its own
@@ -2905,14 +3158,20 @@ statement, as an index the binding check reads again, calls once
   member function) beside an evaluation a call may change in the other
   (`isHeapSensitive`: a load, a reference, an addressable local, another
   call; for an assignment's target only what locating it reads,
-  `locatingIsHeapSensitive`) is a conversion error at the expression. An
-  assignment whose target makes a call saves its right operand in
-  `__value_N` before converting the target, so the value is read, and
-  checked, before the target's calls run, as C++17 sequences them. Frama-C
+  `locatingIsHeapSensitive`) is a conversion error at the expression. So is
+  a write in one operand that the other may read (`writesWhatReads`): a
+  variable it writes that the other names, with the fields of a record held
+  by value counted as the record's, or memory (a field through a pointer or
+  `this`, an element, a reference) beside an evaluation a call may change.
+  C++ leaves such a write and read
+  undefined. An assignment whose target makes a call or a write saves its
+  right operand in `__value_N` before converting the target, so the value
+  is read, and checked, before the target's calls and writes run, as C++17
+  sequences them. Frama-C
   keeps such orders as CIL `UnspecifiedSequence` statements with the reads
   and writes of each part and checks them access by access under
-  `-unspecified-access`; the rule here is per call, coarser but needing no
-  read sets.
+  `-unspecified-access`; the rule here is per call and per written variable,
+  coarser but needing no read sets.
 - A call whose result is a record is lowered only as a statement, a whole
   initializer, assignment, or return value; one that returns nothing only
   as a statement.
@@ -3018,6 +3277,11 @@ fail-closed; so does the decay of an array
 member through a pointer (`ASTConverter::arrayDecayError` names which). Automatic metadata transitions
 are private and a modular caller may frame them away.
 
+In a contract, `&x` of a local object in memory (`AddressableLocals`) is
+its address (`convertAutomaticLocalAddress`), which a spec it is passed to
+cannot keep and which compares as a value; elsewhere, and in ghost code,
+which could keep it, the address of a local is an argument of a call only.
+
 Local reference declarations snapshot their VCR address in a marked
 `VAssignStmt`. The marker survives cloning and BMC loop unrolling and lets the
 checked-scalar callee scan track immutable aliases transitively without
@@ -3091,7 +3355,7 @@ semantics.
 
 ## Compile-Time Integration
 
-`CppVerifyIntegration` (`clang/lib/Verify/Driver/CppVerifyIntegration.cpp`) hooks **CodeGen**: when `-fverify-contracts` is on and `-fno-verify` is off, verification runs asynchronously while LLVM IR is generated. Failures surface as `diag::err_fe_cppverify_failed`. Zero ghost/spec code in the object file.
+`CppVerifyIntegration` (`clang/lib/Verify/Driver/CppVerifyIntegration.cpp`) hooks **CodeGen**: when `-fverify-contracts` is on and `-fno-verify` is off, verification runs asynchronously while LLVM IR is generated. The verifier's thread collects its results as `VerifyDiagnosticPart`s (`VerifyOptions::Parts`) instead of printing them, and `finishCppVerify` reports each through the compiler's `DiagnosticsEngine` on the main thread, which the engine requires: `err_cppverify_result` for failures and unresolved results, `warn_cppverify_result` in `-Wcppverify`, `remark_cppverify_result` in `-Rcppverify` for proofs, and `note_cppverify_result` for their notes. A result without a location of its own, as a proof has none, points at its function's declaration (`VerifyDiagnostic::FunctionLoc`). So `-Werror`, `-w`, colors, `-fdiagnostics-format=sarif`, and clangd see them as Clang's own; `err_fe_cppverify_failed` is reported only when the run fails without a result of its own. Zero ghost/spec code in the object file.
 
 ## Tooling Integration
 
@@ -3164,6 +3428,33 @@ solver. An
 encoding error remains a hard failure; success is reported as `Lowered`, never
 `Verified`. This is intentionally distinct from Clang's `-fno-verify`, which
 stops before VCR conversion.
+
+`cpp-verify --dump-smt2=DIR` writes every query sent to a solver as a
+standalone SMT-LIB script (`Backend/QueryDump.cpp`): Z3's checks all go
+through `Z3Encoder::check`, which writes `Z3_solver_to_string` of a solver
+holding the checked solver's assertions (a solver that has checked before
+also prints the model converter its preprocessing left, `model-add` of
+symbols it never declares), after the options `freshSolver` gave it as
+`set-option` commands and
+followed by `(check-sat)`, or `(check-sat-using smt)` for a quantified query,
+whose solver is the `smt` tactic's; Z3's benchmark printer (`to_smt2`) is not
+used, since it leaves symbols such as the quantifier ids `q@line:col`
+unquoted, which no parser reads. cvc5's checks go through `runCVC5`, and the
+script it runs is written after its command-line options as `set-option`
+commands (`cvc5Options` builds both). The script is written before the
+check and the answer appended after it. A file is
+`<function>-<h6>/<query>.<solver>-<h8>.smt2`: the function's name made safe
+for every file system and the start of the SHA-256 of its identity, the
+obligation's stable id as `kind-line-col` (`whole` for the complete query),
+and the start of the SHA-256 of the script, so a name depends only on the
+query, as Frama-C keys its per-goal files and Verus its logs (Boogie's
+`/proverLog` names by time), and the options are in the file, which Verus's
+logs and Frama-C's files leave on the solver's command line. A replay builds
+Z3's terms in another order than the encoder did, and Z3's search on a
+quantified query depends on that order: the vacuity query of
+`constructors.cpp`'s `Copy4` is `sat` in the encoder's context, and in a
+fresh context, the API's or `z3`'s, the same assertions are `unknown`
+(incomplete quantifiers).
 
 ## Regression and Coverage
 

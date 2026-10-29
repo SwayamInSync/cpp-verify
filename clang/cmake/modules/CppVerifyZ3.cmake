@@ -85,7 +85,7 @@ function(cppverify_z3_build_external)
       -DCMAKE_INSTALL_PREFIX:PATH=${_install}
       -DCMAKE_POSITION_INDEPENDENT_CODE:BOOL=ON
       -DZ3_BUILD_LIBZ3_SHARED:BOOL=OFF
-      -DZ3_BUILD_EXECUTABLE:BOOL=OFF
+      -DZ3_BUILD_EXECUTABLE:BOOL=ON
       -DZ3_BUILD_TEST_EXECUTABLES:BOOL=OFF
       -DZ3_BUILD_DOCUMENTATION:BOOL=OFF
       -DZ3_ENABLE_EXAMPLE_TARGETS:BOOL=OFF
@@ -107,6 +107,9 @@ function(cppverify_z3_build_external)
   # sources include the headers must depend on this target as well.
   set_property(GLOBAL PROPERTY CPPVERIFY_Z3_EP_TARGET cppverify_z3_ep)
   set_property(GLOBAL PROPERTY CPPVERIFY_Z3_ORIGIN vendored)
+  # Z3's own shell, which replays the scripts --dump-smt2 writes in tests.
+  set_property(GLOBAL PROPERTY CPPVERIFY_Z3_SHELL
+    "${_install}/bin/z3${CMAKE_EXECUTABLE_SUFFIX}")
 endfunction()
 
 function(cppverify_z3_try_system out_var)
@@ -143,6 +146,11 @@ function(cppverify_z3_try_system out_var)
   if(_target)
     message(STATUS "CppVerify: using system Z3 (${_target})")
     set_property(GLOBAL PROPERTY CPPVERIFY_Z3_ORIGIN system)
+    find_program(CPPVERIFY_SYSTEM_Z3_SHELL z3)
+    if(CPPVERIFY_SYSTEM_Z3_SHELL)
+      set_property(GLOBAL PROPERTY CPPVERIFY_Z3_SHELL
+        "${CPPVERIFY_SYSTEM_Z3_SHELL}")
+    endif()
   endif()
   set(${out_var} "${_target}" PARENT_SCOPE)
 endfunction()

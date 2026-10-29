@@ -110,4 +110,5 @@ cppverify::spec bool path(int a, int b)
 {
   return a == b || cppverify::exists(c, edge(a, c) && path(c, b));
 }
-// CHECK-DAG: error: spec post by induction failed: path {{.*}}[reason=counterexample] ({{.*}}derivation.height [type=math-i64] = 1)
+// CHECK-DAG: error: spec post by induction failed: path {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}derivation.height = 1{{( ->|,|$)}}

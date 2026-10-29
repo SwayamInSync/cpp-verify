@@ -72,7 +72,8 @@ cppverify::proof void lie_lemma(int n)
 {
 }
 // CHECK-DAG: error: verification failed: lie_lemma {{.*}}[reason=counterexample]
-// CHECK-DAG: error: spec post failed: lie {{.*}}[reason=counterexample] {{.*}}call.lie_lemma
+// CHECK-DAG: error: spec post failed: lie {{.*}}[reason=counterexample]
+// CHECK-DAG: note: calls lie_lemma(
 
 // Without a shared measure, two proofs that rest on each other are a
 // cycle: the lemma hides the spec, so it uses the spec's postcondition,

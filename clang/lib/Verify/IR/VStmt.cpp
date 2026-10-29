@@ -84,14 +84,17 @@ std::unique_ptr<VStmt> verify::cloneVStmt(const VStmt *S) {
     std::vector<std::unique_ptr<VExpr>> Args;
     for (const auto &A : C.Args)
       Args.push_back(cloneVExpr(A.get()));
-    return std::make_unique<VCallStmt>(C.Callee, C.CalleeIdentity,
-                                       std::move(Args), C.ResultTarget, C.Loc,
-                                       C.IsProofCall, C.ResultProvenanceTarget);
+    auto Copy = std::make_unique<VCallStmt>(
+        C.Callee, C.CalleeIdentity, std::move(Args), C.ResultTarget, C.Loc,
+        C.IsProofCall, C.ResultProvenanceTarget);
+    Copy->InlinesHelper = C.InlinesHelper;
+    Copy->CallSite = C.CallSite;
+    return Copy;
   }
   case VStmt::Assert: {
     const auto &A = static_cast<const VAssertStmt &>(*S);
     return std::make_unique<VAssertStmt>(cloneVExpr(A.Cond.get()), A.Loc,
-                                         A.ProofKind);
+                                         A.ProofKind, A.Note);
   }
   case VStmt::Assume: {
     const auto &A = static_cast<const VAssumeStmt &>(*S);
@@ -160,6 +163,8 @@ VFunction verify::cloneVFunction(const VFunction &Fn) {
   Out.IsExternalContract = Fn.IsExternalContract;
   Out.IsTrusted = Fn.IsTrusted;
   Out.IsBuiltin = Fn.IsBuiltin;
+  Out.IsInlineHelper = Fn.IsInlineHelper;
+  Out.WithoutContract = Fn.WithoutContract;
   Out.InductiveLoc = Fn.InductiveLoc;
   Out.Unfolding = cloneVExpr(Fn.Unfolding.get());
   Out.InductiveStepOf = Fn.InductiveStepOf;
@@ -175,6 +180,8 @@ VFunction verify::cloneVFunction(const VFunction &Fn) {
   for (const auto &[Name, Assumes] : Fn.Behaviors)
     Out.Behaviors.emplace_back(Name, cloneVExpr(Assumes.get()));
   Out.DeclLoc = Fn.DeclLoc;
+  Out.Extent = Fn.Extent;
+  Out.InlinedExtents = Fn.InlinedExtents;
   Out.NeedsDecreasesCheck = Fn.NeedsDecreasesCheck;
   Out.DivergenceLoc = Fn.DivergenceLoc;
   Out.DivergenceDeclared = Fn.DivergenceDeclared;

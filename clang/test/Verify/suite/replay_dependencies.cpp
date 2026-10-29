@@ -63,4 +63,4 @@ int loop_star(int n)
 // REPLAY-DAG: Proved obligations: loop_star (dependencies not checked in replay) [backend=z3]
 
 // JSON-DAG: "function":"bad_callee"{{.*}}"status":"failed"
-// JSON-DAG: "function":"caller","message":"dependencies not checked in replay"{{.*}}"status":"proved-obligations"
+// JSON-DAG: "function":"caller",{{.*}}"message":"dependencies not checked in replay"{{.*}}"status":"proved-obligations"

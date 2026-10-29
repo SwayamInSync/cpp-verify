@@ -44,4 +44,4 @@ int remembers_wrong(int x)
   cppverify::check(x == before);
   return x;
 }
-// CHECK-DAG: error: verification failed: remembers_wrong [{{.*}}::assertion@
+// CHECK-DAG: error: verification failed: remembers_wrong [assertion]

@@ -84,7 +84,10 @@ footprint, bind a reference to it, and pass it to a reference parameter.
 
    Verified: peek [backend=z3]
    Verified: put [backend=z3]
-   ring.cpp:25:3: error: verification failed: slot [...::bounds@25:3] (counterexample: i [ssa=i_0] [type=i32] = 8, r [ssa=r_0] [type=pointer] = 1; ...) [backend=z3] [reason=counterexample]
+   ring.cpp:25:10: error: verification failed: slot [bounds] [backend=z3] [reason=counterexample]
+      25 |   return r->buf[i];
+         |          ^
+   ring.cpp:25:10: note: counterexample: r = 1, i = 8
 
 Each index is checked against its own array, as Frama-C's RTE guards are,
 and not only against the object. ``r->buf[8]`` has the address of
@@ -196,7 +199,10 @@ of bounds:
    Verified: first [backend=z3]
    Verified: oldest [backend=z3]
    Verified: total [backend=z3]
-   ring.cpp:41:10: error: verification failed: past [...::bounds@41:10#2] (counterexample: q [ssa=q_1] [type=pointer] = 1, r [ssa=r_0] [type=pointer] = 1) [backend=z3] [reason=counterexample]
+   ring.cpp:41:10: error: verification failed: past [bounds] [backend=z3] [reason=counterexample]
+      41 |   return q[8];
+         |          ^
+   ring.cpp:41:10: note: counterexample: r = 1, q = 1
 
 The rules follow C++:
 
@@ -311,7 +317,11 @@ parameter may be bound to a reference, to ``*p``, to a field such as
    Verified: reset [backend=z3]
    Verified: reset_left [backend=z3]
    Verified: bump_left [backend=z3]
-   pair.cpp:46:3: error: verification failed: reset_count [...::frame@46:3] (counterexample: p [ssa=p_0] [type=pointer] = 1; trace: call.reset@46:3 arg0=1) [backend=z3] [reason=counterexample]
+   pair.cpp:46:3: error: verification failed: reset_count [frame] [backend=z3] [reason=counterexample]
+      46 |   reset(p.left);
+         |   ^
+   pair.cpp:46:3: note: counterexample: &p = 1
+   pair.cpp:46:3: note: calls reset(1)
 
 ``reset_left`` may write ``p.left``, which holds the whole object ``reset``
 may write, so ``p.right`` keeps its value. ``reset_count`` may write only
@@ -431,9 +441,13 @@ and every other local keeps its value. The caller's own
 leave ``c.limit`` uninitialized; ``limit_of`` reads ``c.limit``, which
 ``no_limit`` never initializes.
 
-The address of a local is supported as a call argument only. Stored in a
-pointer variable (``Counter *q = &c;``), or formed through a local reference
-to a local (``&r.n``, ``r.buf``), it is still an error. Under
+The address of a local is supported as a call argument, and in a contract,
+where a spec it is passed to cannot keep it: ``size(&r)`` in a loop
+invariant or a ``cv::check`` of a local object ``r`` (the case study
+:doc:`../case-studies/ring-buffer` reads its ring through such views). Stored
+in a pointer variable (``Counter *q = &c;``), or formed through a local
+reference to a local (``&r.n``, ``r.buf``), it is still an error, and so is
+an address taken in ghost code, which could keep it. Under
 ``--no-check-ub`` the callee's accesses are not proved to lie in its object,
 so a call that passes a local record is ``construct.unsupported``.
 
@@ -509,7 +523,22 @@ leaves ``b.len`` alone; two buffers through pointers to const may be one.
 
    Verified: zero [backend=z3]
    Verified: zero_prefix [backend=z3]
-   buf.cpp:39:3: error: verification failed: zero_more [...::bounds@39:3] (counterexample: n [ssa=n_0] [type=i32] = 0, p [ssa=p_0] [type=pointer] = 1; trace: allocation.automatic allocation@36:3 address=231056 provenance=18 -> heap-write.store@37:10 address=231056 value=1 -> heap-write.store@38:9 address=231064 value=1 -> call.zero@39:3 arg0=231056) [backend=z3] [reason=counterexample]
+   buf.cpp:39:3: error: verification failed: zero_more [bounds] [backend=z3] [reason=counterexample]
+      39 |   zero(b);
+         |   ^
+   buf.cpp:39:3: note: counterexample: p = 1, n = 0
+   buf.cpp:36:3: note: creates a local object at address 231056
+      36 |   Buf b;
+         |   ^
+   buf.cpp:37:10: note: stores 1 at address 231056
+      37 |   b.data = p;
+         |          ^
+   buf.cpp:38:9: note: stores 1 at address 231064
+      38 |   b.len = n + 1;
+         |         ^
+   buf.cpp:39:3: note: calls zero(231056)
+      39 |   zero(b);
+         |   ^
 
 ``zero_more`` passes a buffer one element longer than the extent of ``p``.
 A field given another pointer in the body (``b.data = q;``) addresses that
@@ -605,8 +634,16 @@ free function.
    Verified: Counter::reset [backend=z3]
    Verified: Counter::copy_from [backend=z3]
    Verified: counted [backend=z3]
-   counter.cpp:49:5: error: verification failed: reset_count [...::frame@49:5] (counterexample: c [ssa=c_0] [type=pointer] = 1; trace: call.reset@49:5 arg0=1) [backend=z3] [reason=counterexample]
-   counter.cpp:55:5: error: verification failed: self_copy [...::aliasing@55:5] (counterexample: c [ssa=c_0] [type=pointer] = 1; trace: call.copy_from@55:5 arg0=1 arg1=1) [backend=z3] [reason=counterexample]
+   counter.cpp:49:5: error: verification failed: reset_count [frame] [backend=z3] [reason=counterexample]
+      49 |   c.reset();
+         |     ^
+   counter.cpp:49:5: note: counterexample: &c = 1
+   counter.cpp:49:5: note: calls reset(1)
+   counter.cpp:55:5: error: verification failed: self_copy [aliasing] [backend=z3] [reason=counterexample]
+      55 |   c.copy_from(c);
+         |     ^
+   counter.cpp:55:5: note: counterexample: &c = 1
+   counter.cpp:55:5: note: calls copy_from(1, 1)
 
 ``reset`` states no ``cppverify::modifies``, so it may write all of ``c``,
 which ``reset_count`` may not. ``copy_from`` writes ``this->n`` and reads
@@ -748,7 +785,19 @@ object after the call:
 .. code-block:: text
 
    Verified: Ring::Ring [backend=z3]
-   ring.cpp:24:7: error: verification failed: Ring::Ring [...::initialization@24:7#2] (counterexample: ...) [backend=z3] [reason=counterexample]
+   ring.cpp:24:7: error: verification failed: Ring::Ring [initialization] [backend=z3] [reason=counterexample]
+      24 |   int buf[8];
+         |       ^
+   ring.cpp:24:7: note: counterexample: this = 11798, first = 0
+   ring.cpp:19:7: note: stores 0 at address 11830
+      19 |     : head(0), count(1)
+         |       ^
+   ring.cpp:19:16: note: stores 1 at address 11834
+      19 |     : head(0), count(1)
+         |                ^
+   ring.cpp:21:12: note: stores 0 at address 11798
+      21 |     buf[0] = first;
+         |            ^
    Verified: fresh [backend=z3]
 
 The second constructor initializes ``buf[0]`` alone, and the failure is
@@ -876,7 +925,13 @@ internal calls included, so no call observes the object while it is broken:
 
    Verified: Meter::Meter [backend=z3]
    Verified: Meter::add [backend=z3]
-   meter.cpp:28:33: error: verification failed: Meter::overflow [...::type-invariant@28:33] (counterexample: ...) [backend=z3] [reason=counterexample]
+   meter.cpp:28:42: error: verification failed: Meter::overflow [type-invariant] [backend=z3] [reason=counterexample]
+      28 |   cv::type_invariant(0 <= level && level <= 100);
+         |                                    ~~~~~~^~~~~~
+   meter.cpp:28:42: note: counterexample: this = 1
+   meter.cpp:17:11: note: stores 101 at address 1
+      17 |     level = 101;
+         |           ^
    Verified: Meter::get [backend=z3]
    Verified: filled [backend=z3]
 
@@ -897,6 +952,69 @@ internal calls included, so no call observes the object while it is broken:
   entry as in a precondition (`Extents of pointer fields`_). At exit it
   states nothing; the next call checks it from what its caller knows, so a
   member function that changes ``len`` states how.
+- A loop outside the class keeps the invariant of every object it reaches:
+  the local objects alive at the loop and those its function's reference
+  and pointer parameters address. Only the class's members, and code that
+  writes a public field, change what the invariant states, and a public
+  member keeps it, so the verifier adds it to the loop's invariants, where
+  it is checked at entry and kept by every iteration like the user's own.
+  A loop in a member function of the class gets none of its class's, since
+  the member may break it between calls.
+
+.. code-block:: cpp
+
+   class Tally {
+   public:
+     Tally() cv::post(count_of(this) == 0) : count(0), last(0) {}
+
+     void add(int d)
+       cv::pre(0 <= d && d <= 10 && count_of(this) <= 1000)
+       cv::post(count_of(this) == cv::old(count_of(this)) + d)
+     {
+       last = d;
+       count = count + d;
+     }
+
+     friend cv::spec int count_of(const Tally *t);
+
+   private:
+     int count;
+     int last;
+
+   public:
+     cv::type_invariant(0 <= last && last <= count);
+   };
+
+   cv::spec int count_of(const Tally *t) { return t->count; }
+
+   int count_to(int n)
+     cv::pre(0 <= n && n <= 100)
+     cv::post(cv::result == n)
+   {
+     Tally t;
+     int i = 0;
+     while (i < n)
+       cv::invariant(0 <= i && i <= n && count_of(&t) == i)
+       cv::decreases(n - i)
+     {
+       t.add(1);
+       i = i + 1;
+     }
+     return i;
+   }
+
+.. code-block:: text
+
+   Verified: Tally::Tally [backend=z3]
+   Verified: Tally::add [backend=z3]
+   Verified: count_to [backend=z3]
+
+Before 0.2, ``count_to`` was rejected: ``&t`` could not appear in a contract
+(``raw address-of is unsupported until lexical lifetime and escape effects
+are modeled``). A loop that called ``add`` on an object a reference
+parameter names failed at that call (``[type-invariant]``): at the loop the
+verifier knew of the object only what the loop's invariants said, and an
+invariant over private fields could not be stated there.
 
 Class templates
 ---------------
@@ -951,8 +1069,16 @@ it, and the class's type invariants with the class.
    Verified: Box<int>::Box [backend=z3]
    Verified: Box<int>::twice [backend=z3]
    Verified: Box<short>::Box [backend=z3]
-   box.cpp:10:25: error: verification failed: Box<short>::twice [...::postcondition@10:25] (counterexample: ...) [backend=z3] [reason=counterexample]
+   box.cpp:10:25: error: verification failed: Box<short>::twice [postcondition] [backend=z3] [reason=counterexample]
+      10 |     cv::post(cv::result == 2 * value)
+         |              ~~~~~~~~~~~^~~~~~~~~~~~
+   box.cpp:10:25: note: counterexample: this = 1, result = -32768
+   box.cpp:12:5: note: returns -32768
+      12 |     return value + value;
+         |     ^
    box.cpp:33:15: note: in instantiation of member function 'Box<short>::twice' requested here
+      33 |   short d = b.twice();
+         |               ^
    Verified: doubled [backend=z3]
    Unresolved: doubled_short [backend=z3] [reason=callee.contract] (relies on the contract of Box<short>::twice, which is not established)
 

@@ -34,7 +34,7 @@ int reject_old_entry_null_dereference(int *pointer, int *replacement)
   return 0;
 }
 
-// CHECK-DAG: error: verification failed: reject_old_entry_overflow [{{.*}}::overflow@
-// CHECK-DAG: error: verification failed: reject_quantified_old_entry_overflow [{{.*}}::overflow@
-// CHECK-DAG: error: verification failed: reject_old_entry_null_dereference [{{.*}}::dereference@
+// CHECK-DAG: error: verification failed: reject_old_entry_overflow [overflow]
+// CHECK-DAG: error: verification failed: reject_quantified_old_entry_overflow [overflow]
+// CHECK-DAG: error: verification failed: reject_old_entry_null_dereference [dereference]
 

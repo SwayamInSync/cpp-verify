@@ -395,6 +395,16 @@ set(CLANG_VERSION "${CLANG_VERSION_MAJOR}.${CLANG_VERSION_MINOR}.${CLANG_VERSION
 set(MAX_CLANG_ABI_COMPAT_VERSION "${LLVM_VERSION_MAJOR}")
 message(STATUS "Clang version: ${CLANG_VERSION}")
 
+# cpp-verify's release, which --version reports and the predefined macros
+# __cppverify_major__, __cppverify_minor__, and __cppverify_patchlevel__ name.
+set(CPPVERIFY_VERSION 0.2.0-dev)
+if(NOT CPPVERIFY_VERSION MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)")
+  message(FATAL_ERROR "CPPVERIFY_VERSION is not major.minor.patch: ${CPPVERIFY_VERSION}")
+endif()
+set(CPPVERIFY_VERSION_MAJOR ${CMAKE_MATCH_1})
+set(CPPVERIFY_VERSION_MINOR ${CMAKE_MATCH_2})
+set(CPPVERIFY_VERSION_PATCHLEVEL ${CMAKE_MATCH_3})
+
 # Configure the Version.inc file.
 configure_file(
   ${CMAKE_CURRENT_SOURCE_DIR}/include/clang/Basic/Version.inc.in

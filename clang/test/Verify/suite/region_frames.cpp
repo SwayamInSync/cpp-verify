@@ -47,7 +47,7 @@ void claims_too_much(int *p, int n, int lo)
 {
   zero(p + lo, n - lo);
 }
-// CHECK-DAG: error: verification failed: claims_too_much [{{.*}}::initialization@
+// CHECK-DAG: error: verification failed: claims_too_much [initialization]
 
 // A function writing a range of its buffer.
 void zero_from(int *p, int n, int lo)
@@ -79,7 +79,7 @@ void writes_outside(int *p, int n, int lo)
 {
   p[lo - 1] = 0;
 }
-// CHECK-DAG: error: verification failed: writes_outside [{{.*}}::frame@[[@LINE-2]]:13]
+// CHECK-DAG: :[[@LINE-2]]:13: error: verification failed: writes_outside [frame]
 
 void range_in_range(int *p, int n)
   cppverify::pre(valid(p, n) && n >= 4 && n <= 1000)
@@ -95,7 +95,7 @@ void range_escapes(int *p, int n)
 {
   zero_from(p, n, 1);
 }
-// CHECK-DAG: error: verification failed: range_escapes [{{.*}}::frame@[[@LINE-2]]:3]
+// CHECK-DAG: :[[@LINE-2]]:3: error: verification failed: range_escapes [frame]
 
 void writes_nothing(int *p, int n)
   cppverify::pre(valid(p, n) && n >= 1 && n <= 1000)
@@ -153,7 +153,7 @@ void changes_sum(int *out, int n)
 {
   zero(out, n);
 }
-// CHECK-DAG: error: verification failed: changes_sum [{{.*}}::postcondition@
+// CHECK-DAG: error: verification failed: changes_sum [postcondition]
 
 // BMC-DAG: Unresolved: keeps_prefix {{.*}}[reason=callee.contract]
 // BMC-DAG: error: verification failed: writes_outside

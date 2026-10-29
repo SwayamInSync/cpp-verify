@@ -510,9 +510,17 @@ bool verify::interruptRequested() { return InterruptFlag.load(); }
 VerifyResult VerifyBackend::verify(const ObligationModule &Module) {
   TimeInto Solving(Times ? &Times->Solving : nullptr);
   VerifyResult Result = verifyDirect(Module);
+  // A lemma (a proof function, whose contract is a theorem of its entry
+  // state) that the solver could not settle gets them too, as Dafny tries
+  // induction on a lemma's parameters: a lemma about an order or a sum is
+  // often one only induction proves, and the solver searches in vain.
+  const bool UnsettledLemma =
+      Module.Contract && (Result.Reason == VerifyReason::SolverTimeout ||
+                          Result.Reason == VerifyReason::SolverUnknown);
   if (Module.Attempt != ModuleAttempt::Primary ||
       Result.Status != VerifyStatus::Unresolved ||
-      (Result.Reason != VerifyReason::SpecFuel && !Result.InductionOnly))
+      (Result.Reason != VerifyReason::SpecFuel && !Result.InductionOnly &&
+       !UnsettledLemma))
     return Result;
   // No finite unfolding settles the module: a proof of the claim under an
   // induction hypothesis proves it everywhere. Inductions settle proofs only:
@@ -640,6 +648,8 @@ VerifyResult VerifyBackend::verifyDirect(const ObligationModule &Module) {
     Result.ObligationId.clear();
     Result.ObligationType.reset();
     Result.Location = SourceLocation();
+    Result.BeginLocation = SourceLocation();
+    Result.EndLocation = SourceLocation();
     Result.Source = {};
   } else if (Capabilities.ProducesVerificationVerdict &&
              (Result.Status == VerifyStatus::Exported ||
@@ -653,6 +663,8 @@ VerifyResult VerifyBackend::verifyDirect(const ObligationModule &Module) {
     Result.ObligationId.clear();
     Result.ObligationType.reset();
     Result.Location = SourceLocation();
+    Result.BeginLocation = SourceLocation();
+    Result.EndLocation = SourceLocation();
     Result.Source = {};
   }
   // A model of `false` says nothing about the program.

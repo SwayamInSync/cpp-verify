@@ -110,7 +110,8 @@ cppverify::spec bool odd(int n)
 {
   return n == 1 || odd(n - 2);
 }
-// CHECK-DAG: error: spec post by induction failed: odd [backend=z3] [reason=counterexample] (derivation.height [type=math-i64] = {{[0-9]+}}, n [type=math-i32] = {{[0-9]+}})
+// CHECK-DAG: error: spec post by induction failed: odd [backend=z3] [reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}derivation.height = {{[0-9]+}}{{( ->|,|$)}}{{.*}}n = {{[0-9]+}}{{( ->|,|$)}}
 // CHECK-DAG: Unresolved: spec post: odd [reason=spec.post] (relies on the postcondition of odd.step, which is not established)
 
 // REJECT-DAG: error: negated: negated occurs in its body under negation; an inductive predicate occurs in its body only positively

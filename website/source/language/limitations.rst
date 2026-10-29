@@ -122,12 +122,19 @@ C++ feature boundaries
        requires-expression, a concept, a type trait, ``offsetof``,
        ``__builtin_LINE()``), template value
        parameters, default arguments and default member initializers,
-       ``__builtin_expect``, a record returned from an initializer list
-       (``return Pt{a, b};``), structured bindings that copy a record, and
+       ``__builtin_expect``, the bit builtins (``__builtin_clz``,
+       ``__builtin_ctz``, ``__builtin_popcount``, ``__builtin_parity``,
+       ``__builtin_ffs``, their ``l`` and ``ll`` forms, and
+       ``__builtin_bswap16/32/64``), a record returned from an initializer list
+       (``return Pt{a, b};``), structured bindings that copy a record,
        declarations that do nothing (``static_assert``, type aliases,
-       using-declarations, local classes and enumerations).
-     - The value of an assignment, an increment, or a comma expression
-       inside an expression (``a = b = 0``, ``*p++``); a pointer into a
+       using-declarations, local classes and enumerations), and the value of
+       an assignment, an increment or decrement, or a comma expression in
+       executable code (``a = b = 0``, ``*dst++ = *src++``,
+       ``while (k-- > 0)``), in C++'s order of evaluation.
+     - Such a value in ghost and proof code, or of an assignment of a pointer
+       to dynamic storage; a write that another unsequenced operand may read
+       (an error, as C++ leaves it undefined); a pointer into a
        string literal (its characters are read by index);
        other builtins; structured bindings of an array, of a tuple-like type,
        or by reference.
@@ -152,8 +159,8 @@ C++ feature boundaries
        temporaries/lifetime extension, reference members, and forwarding; a
        local not fully initialized passed to a callee
        (``construct.unsupported``), the address of a local stored in a
-       variable, and a pointer formed through a local reference to a local
-       record.
+       variable or taken in ghost code, and a pointer formed through a local
+       reference to a local record.
    * - Arrays
      - Pointer-parameter indexing, quantified abstract buffers, fixed
        local arrays (including arrays of records and multidimensional arrays)
@@ -180,12 +187,17 @@ C++ feature boundaries
        specialization the translation unit instantiates
        (:doc:`functions-loops`, :doc:`structs`),
        overloads, namespaces, contracts, direct calls anywhere in an
-       expression or condition (:doc:`functions-loops`), and
+       expression or condition (:doc:`functions-loops`), calls of functions
+       without contracts, whose bodies are inlined (:doc:`functions-loops`),
+       and
        direct and mutual recursion, also through stores to pointer and
        reference parameters and through automatic objects, with mutual
        recursion among functions of one kind (spec, proof, or executable).
-     - Virtual functions, member functions of classes with bases,
-       destructors, delegating constructors and the other constructors
+     - Functions without contracts that are recursive, return a record by
+       value, allocate, or whose loop invariants use ``cppverify::old``
+       (each needs a contract), virtual functions, member functions of
+       classes with bases, destructors, delegating constructors and the
+       other constructors
        :doc:`structs` lists, conversion functions,
        templates and members of class templates that nothing instantiates
        (reported), variadics, indirect calls,
@@ -260,7 +272,11 @@ CppVerify does not yet model:
 - base subobjects, vtables, or virtual dispatch;
 - temporary materialization and lifetime extension;
 - exception cleanup and exactly-once destruction;
-- placement construction, lifetime restart, or ``std::launder``.
+- placement construction, lifetime restart, or ``std::launder``;
+- spec member functions (``cv::spec int at(int i) const``), and spec
+  parameters of class reference type (``const Ring<N> &``): a view of a
+  class is a free spec function that takes a pointer, a friend when it reads
+  private fields (:doc:`../case-studies/ring-buffer`).
 
 Scalar parameter references, local scalar aliases, and scalar field/element
 bindings into promoted local objects are addressable aliases. General aggregate
@@ -569,8 +585,9 @@ it is evaluated (see :doc:`functions-loops`). Together they are not yet
 comprehensive C++ undefined-behavior checking.
 
 Missing general UB semantics include object provenance outside the represented
-fragment, strict aliasing, arbitrary alignment, unsequenced side effects and
-all unspecified evaluation-order alternatives, object lifetime restart,
+fragment, strict aliasing, arbitrary alignment, unsequenced side effects
+(rejected where one may meet another write or read, not checked) and all
+unspecified evaluation-order alternatives, object lifetime restart,
 exception unwinding, floating-point environment, volatile/atomics, and data
 races.
 
@@ -618,8 +635,8 @@ remain future work.
 
 **cvc5 and strict portfolio** consume the same canonical obligations as Z3
 through an independent SMT-LIB2 emitter. cvc5 is optional and system-installed;
-its models are checked against the definitions like Z3's but are not yet shown
-as source-level values. Strict portfolio mode requires matching decisive
+its models are checked against the definitions like Z3's and shown like Z3's,
+in source names with the steps of the failing path. Strict portfolio mode requires matching decisive
 results and preserves Z3's model only after both solvers produce checked
 counterexamples. cvc5 may return ``unknown`` on quantified or heap-heavy
 formulas that Z3 solves; strict mode then remains ``Unresolved``. Recursive
@@ -675,8 +692,13 @@ Libraries and real programs
 CppVerify does not yet ship comprehensive libc or C++ standard-library models:
 of the standard library it knows ``std::min`` and ``std::max`` of two
 integers (:doc:`functions-loops`), and any other of its functions is an
-error naming it. An uncontracted call fails closed; a contract is assumed
-only when it is marked ``[[cppverify::trusted]]``, or, in one run over
+error naming it. Of the C library it knows ``abs`` and the memory functions
+``memcpy``, ``memmove``, ``memset``, and ``memcmp`` over integers, through
+trusted models in ``<cppverify.h>`` that every proof using one names
+(:doc:`pointers`). A call of a function with a body and no contract runs
+that body, inlined (:doc:`functions-loops`); a call of one without a body
+fails closed; a contract is assumed only when it is marked
+``[[cppverify::trusted]]``, or, in one run over
 several files, once the verification of its definition in another of them
 establishes it, and for files verified apart once
 ``cpp-verify --check-contracts`` finds it established
@@ -687,7 +709,8 @@ verification contract``).
 
 Broader application verification needs:
 
-- memory/string primitives such as ``memcpy``, ``memmove``, and ``memset``;
+- the memory functions over records and pointers, and the string functions
+  (``strlen``, ``strcmp``);
 - views of standard containers as the spec collections of ``<cppverify.h>``;
 - ``std::array``, ``std::span``, smart pointers, optionals, and string views;
 - vectors, strings, associative containers, iterators, invalidation, and
@@ -704,7 +727,8 @@ Diagnostics and developer tooling
 Diagnostics name each obligation they report by a stable source-anchored ID
 and range, show counterexamples with source variable names and a trace of
 branches, calls, loops, heap writes, and lifetimes, and are also emitted as
-JSON Lines (``--diagnostics-format=json``). ``--profile-quantifiers`` reports
+JSON Lines (``--diagnostics-format=json``), SARIF (``sarif``), and GitHub
+annotations (``github``). ``--profile-quantifiers`` reports
 quantifier instantiations, ``--solver-rlimit`` sets reproducible solver
 budgets, and clangd, built with the tool, provides editor integration.
 Production readiness still needs:
@@ -776,8 +800,8 @@ P4 — libraries and application ecosystem
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Add verified/conformance-tested standard-library models, mathematical views,
-build-system integration, SARIF diagnostics, and stable multi-file incremental
-verification. clangd support and JSON Lines diagnostics already ship.
+build-system integration, and stable multi-file incremental verification.
+clangd support, JSON Lines and SARIF diagnostics already ship.
 
 P5 — advanced systems C++
 ~~~~~~~~~~~~~~~~~~~~~~~~~

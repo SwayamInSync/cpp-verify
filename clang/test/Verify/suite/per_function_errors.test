@@ -34,9 +34,9 @@ TEXT-NEXT: Verified: uses_twice [backend=z3]
 TEXT-NEXT: Summary: {{.*}}
 TEXT-NOT: {{.}}
 
-JSON: {"function":"pick","message":"pick: throw is unsupported: exceptions are not modeled","reason":"construct.unsupported",{{.*}}"line":11},"status":"unresolved"}
-JSON: {"function":"lookup","message":"lookup: the global array 'table' is unsupported","reason":"construct.unsupported",{{.*}}"status":"unresolved"}
-JSON-NEXT: {"function":"lookup","message":"lookup: unsupported expression in pre",{{.*}}"status":"error"}
+JSON: {"function":"pick",{{.*}}"message":"pick: throw is unsupported: exceptions are not modeled","reason":"construct.unsupported",{{.*}}"line":11},"status":"unresolved"}
+JSON: {"function":"lookup",{{.*}}"message":"lookup: the global array 'table' is unsupported","reason":"construct.unsupported",{{.*}}"status":"unresolved"}
+JSON-NEXT: {"function":"lookup",{{.*}}"message":"lookup: unsupported expression in pre",{{.*}}"status":"error"}
 JSON: {"backend":"z3","function":"uses_pick",{{.*}}"reason":"callee.contract",{{.*}}"status":"unresolved"}
 JSON: {"backend":"z3","function":"inc",{{.*}}"status":"verified"}
 

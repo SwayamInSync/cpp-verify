@@ -80,7 +80,7 @@ cppverify::spec int sum_short(const int *p, int n)
   return sum_short(p, n - 1) + p[n - 1];
 }
 // CHECK-DAG: error: spec reads failed: sum_short {{.*}}[reason=counterexample]
-// REPLAY-DAG: verification failed: sum_short.reads [{{.*}}::reads::frame@
+// REPLAY-DAG: verification failed: sum_short.reads [frame]
 
 void write_last(int *p, int n)
   cppverify::pre(n >= 1 && n <= 100 && valid(p, n))

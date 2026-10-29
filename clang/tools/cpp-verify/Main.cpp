@@ -3,9 +3,12 @@
 #include "../../lib/Verify/Backend/ObligationSerialization.h"
 #include "../../lib/Verify/Backend/ObligationSimplify.h"
 #include "../../lib/Verify/Backend/ProofCache.h"
+#include "../../lib/Verify/Backend/QueryDump.h"
 #include "../../lib/Verify/Backend/VerifyBackend.h"
+#include "Counterexample.h"
 #include "CppVerifyVersion.h"
 #include "DumpIR.h"
+#include "StructuredOutput.h"
 #include "Verifier.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
@@ -13,6 +16,7 @@
 #include "clang/Frontend/CompilerInvocation.h"
 #include "clang/Frontend/FrontendAction.h"
 #include "clang/Frontend/TextDiagnosticPrinter.h"
+#include "clang/Lex/Lexer.h"
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Tooling.h"
 #include "llvm/ADT/STLExtras.h"
@@ -46,6 +50,12 @@ static cl::opt<std::string>
                     "comma-separated, default all)"),
            cl::value_desc("layers"), cl::ValueOptional,
            cl::cat(CppVerifyCategory));
+
+static cl::opt<std::string> DumpSMT2(
+    "dump-smt2",
+    cl::desc("Write every query sent to a solver to this directory, as a "
+             "script the solver replays on its own"),
+    cl::value_desc("directory"), cl::cat(CppVerifyCategory));
 
 static cl::opt<bool> LowerOnly(
     "lower-only",
@@ -267,13 +277,51 @@ static cl::opt<std::string> ObligationIn(
     cl::desc("Validate and replay a backend-neutral obligation archive"),
     cl::value_desc("file"), cl::cat(CppVerifyCategory));
 
-static cl::opt<verify::DiagnosticFormat> DiagnosticsFormat(
-    "diagnostics-format", cl::desc("Verification diagnostics format"),
-    cl::values(clEnumValN(verify::DiagnosticFormat::Text, "text",
-                          "Human-readable text (default)"),
-               clEnumValN(verify::DiagnosticFormat::Json, "json",
-                          "Versioned JSON Lines")),
-    cl::init(verify::DiagnosticFormat::Text), cl::cat(CppVerifyCategory));
+enum class OutputFormat { Text, Json, Sarif, GitHub };
+
+static cl::opt<OutputFormat> DiagnosticsFormat(
+    "diagnostics-format", cl::desc("Format of results and diagnostics"),
+    cl::values(
+        clEnumValN(OutputFormat::Text, "text", "Human-readable text (default)"),
+        clEnumValN(OutputFormat::Json, "json",
+                   "JSON Lines (cppverify.diagnostic/2), ending with a "
+                   "summary record"),
+        clEnumValN(OutputFormat::Sarif, "sarif",
+                   "One SARIF 2.1.0 log at the end of the run"),
+        clEnumValN(OutputFormat::GitHub, "github",
+                   "Text, with a GitHub workflow annotation for each error and "
+                   "warning")),
+    cl::init(OutputFormat::Text), cl::cat(CppVerifyCategory));
+
+/// Whether results are records: JSON Lines, or the SARIF made of them.
+static bool structuredOutput() {
+  return DiagnosticsFormat == OutputFormat::Json ||
+         DiagnosticsFormat == OutputFormat::Sarif;
+}
+
+static verify::DiagnosticFormat verifierFormat() {
+  switch (DiagnosticsFormat) {
+  case OutputFormat::Text:
+    return verify::DiagnosticFormat::Text;
+  case OutputFormat::Json:
+  case OutputFormat::Sarif:
+    return verify::DiagnosticFormat::Json;
+  case OutputFormat::GitHub:
+    return verify::DiagnosticFormat::GitHub;
+  }
+  return verify::DiagnosticFormat::Text;
+}
+
+// In SARIF mode the records are collected here and translated at the end.
+static std::string gRecords;
+static llvm::raw_string_ostream gRecordStream(gRecords);
+
+/// Where results go: standard output, or the records of a SARIF log.
+static llvm::raw_ostream &out() {
+  if (DiagnosticsFormat == OutputFormat::Sarif)
+    return gRecordStream;
+  return llvm::outs();
+}
 
 static cl::opt<bool>
     Quiet("quiet",
@@ -375,6 +423,53 @@ static void printSummary(std::chrono::steady_clock::time_point Start) {
                                  : llvm::join(Parts, ", "))
                << llvm::formatv(" in {0:f1} s", Seconds) << "\n";
 }
+/// The summary as a record: the counts of the text line, by name. It has no
+/// time, so that records do not depend on the run; --time-report gives it.
+static void printSummaryRecord() {
+  llvm::json::Object Record;
+  Record["schema"] = verify::SummarySchema;
+  Record["verified"] = gSummary.Verified;
+  Record["failed"] = gSummary.Failed;
+  Record["unresolved"] = gSummary.Unresolved;
+  llvm::json::Object Reasons;
+  for (const auto &[Reason, N] : gSummary.Reasons)
+    Reasons[Reason] = N;
+  Record["reasons"] = std::move(Reasons);
+  Record["bounded_safe"] = gSummary.BoundedSafe;
+  Record["trusted"] = gSummary.Trusted;
+  Record["lowered"] = gSummary.Lowered;
+  Record["exported"] = gSummary.Exported;
+  Record["interrupted"] = gSummary.Interrupted;
+  out() << llvm::formatv("{0}\n", llvm::json::Value(std::move(Record)));
+}
+
+static std::vector<std::string> gArguments;
+
+/// Ends the run's output: in SARIF mode, the log of the records collected.
+static int finishOutput(int ExitCode) {
+  if (std::string Error = verify::queryDumpError(); !Error.empty())
+    llvm::errs() << "warning: --dump-smt2: " << Error << "\n";
+  if (DiagnosticsFormat != OutputFormat::Sarif)
+    return ExitCode;
+  gRecordStream.flush();
+  std::vector<llvm::json::Value> Records;
+  for (llvm::StringRef Line : llvm::split(gRecords, '\n')) {
+    if (Line.trim().empty())
+      continue;
+    if (llvm::Expected<llvm::json::Value> Record = llvm::json::parse(Line))
+      Records.push_back(std::move(*Record));
+    else
+      llvm::consumeError(Record.takeError());
+  }
+  verify::SarifInvocation Invocation;
+  Invocation.Version = verify::releaseVersion().str();
+  Invocation.Arguments = gArguments;
+  Invocation.ExitCode = ExitCode;
+  llvm::outs() << llvm::formatv("{0:2}\n",
+                                verify::sarifLog(Records, Invocation));
+  return ExitCode;
+}
+
 static llvm::raw_ostream *gObligationOut = nullptr;
 
 static uint64_t proofCacheMaxBytes() {
@@ -451,9 +546,13 @@ static void setLeanOptions(verify::VerifyOptions &VOpts) {
   VOpts.LeanJobs = Jobs.getNumOccurrences() ? Jobs.getValue() : 0;
 }
 
+static void flushFrontendRecords();
+
 class VerifyConsumer : public ASTConsumer {
 public:
   void HandleTranslationUnit(ASTContext &Ctx) override {
+    // The compiler's records come before the verifier's.
+    flushFrontendRecords();
     if (!Ctx.getDiagnostics().getClient()->getNumErrors()) {
       verify::VerifyOptions VOpts;
       if (DumpIR.getNumOccurrences() > 0)
@@ -490,7 +589,7 @@ public:
       VOpts.ProofCacheMaxEntries = ProofCacheMaxEntries.getValue();
       VOpts.CheckUB = CheckUB.getValue() && !NoCheckUB.getValue();
       VOpts.ProfileQuantifiers = ProfileQuantifiers.getValue();
-      VOpts.Diagnostics = DiagnosticsFormat.getValue();
+      VOpts.Diagnostics = verifierFormat();
       VOpts.ObligationOut = gObligationOut;
       VOpts.Quiet = Quiet.getValue();
       VOpts.Verbose = Verbose.getValue();
@@ -505,7 +604,7 @@ public:
       VOpts.ConfirmBound = ConfirmBound.getValue();
       VOpts.Summary = &gSummary;
       VOpts.CrossFile = gCrossFile.get();
-      if (!verify::verifyTranslationUnit(Ctx, llvm::outs(), VOpts))
+      if (!verify::verifyTranslationUnit(Ctx, out(), VOpts))
         ++gVerifyFailures;
     }
   }
@@ -520,12 +619,141 @@ public:
   }
 };
 
+/// The compiler's diagnostics as the run's format takes them: records of
+/// status "frontend" in JSON and SARIF, each with the notes that follow it as
+/// related locations; and in GitHub mode the text, with an annotation after
+/// each error and warning.
+class StructuredDiagnostics : public DiagnosticConsumer {
+public:
+  explicit StructuredDiagnostics(DiagnosticConsumer *Text) : Text(Text) {}
+  ~StructuredDiagnostics() override { flush(); }
+
+  void BeginSourceFile(const LangOptions &LangOpts,
+                       const Preprocessor *PP) override {
+    if (Text)
+      Text->BeginSourceFile(LangOpts, PP);
+  }
+  void EndSourceFile() override {
+    flush();
+    if (Text)
+      Text->EndSourceFile();
+  }
+  /// Writes the record still waiting for its notes.
+  void finish() { flush(); }
+
+  void HandleDiagnostic(DiagnosticsEngine::Level Level,
+                        const Diagnostic &Info) override {
+    DiagnosticConsumer::HandleDiagnostic(Level, Info);
+    if (Level == DiagnosticsEngine::Ignored)
+      return;
+    llvm::SmallString<256> Message;
+    Info.FormatDiagnostic(Message);
+    verify::ObligationSource Source = sourceOf(Info);
+    if (Text) {
+      Text->HandleDiagnostic(Level, Info);
+      if (Level >= DiagnosticsEngine::Warning)
+        llvm::outs() << verify::githubCommand(
+            Level == DiagnosticsEngine::Warning ? "warning" : "error", Source,
+            "clang", Message);
+      return;
+    }
+    if (Level == DiagnosticsEngine::Note && Pending) {
+      llvm::json::Object Note;
+      Note["message"] = verify::jsonText(Message);
+      if (Source.isValid())
+        Note["source"] = verify::sourceJSON(Source);
+      Related.push_back(std::move(Note));
+      return;
+    }
+    flush();
+    llvm::json::Object Record;
+    Record["schema"] = verify::DiagnosticSchema;
+    Record["status"] = "frontend";
+    Record["severity"] = Level == DiagnosticsEngine::Remark    ? "remark"
+                         : Level == DiagnosticsEngine::Note    ? "note"
+                         : Level == DiagnosticsEngine::Warning ? "warning"
+                                                               : "error";
+    Record["message"] = verify::jsonText(Message);
+    llvm::StringRef Option =
+        Info.getDiags()->getDiagnosticIDs()->getWarningOptionForDiag(
+            Info.getID());
+    if (!Option.empty())
+      Record["option"] = ("-W" + Option).str();
+    if (Source.isValid())
+      Record["source"] = verify::sourceJSON(Source);
+    Pending = std::move(Record);
+  }
+
+private:
+  void flush() {
+    if (!Pending)
+      return;
+    if (!Related.empty())
+      (*Pending)["related"] = std::move(Related);
+    out() << llvm::formatv("{0}\n", llvm::json::Value(std::move(*Pending)));
+    Pending.reset();
+    Related = llvm::json::Array();
+  }
+
+  /// The diagnostic's source: its location, through its first range.
+  static verify::ObligationSource sourceOf(const Diagnostic &Info) {
+    verify::ObligationSource Source;
+    if (!Info.hasSourceManager() || Info.getLocation().isInvalid())
+      return Source;
+    const SourceManager &SM = Info.getSourceManager();
+    PresumedLoc At = SM.getPresumedLoc(Info.getLocation());
+    if (!At.isValid())
+      return Source;
+    Source.File = At.getFilename();
+    Source.Line = Source.EndLine = At.getLine();
+    Source.Column = Source.EndColumn = At.getColumn();
+    if (Info.getNumRanges() == 0)
+      return Source;
+    CharSourceRange Range = Info.getRange(0);
+    SourceLocation Begin = SM.getExpansionLoc(Range.getBegin());
+    SourceLocation End = SM.getExpansionLoc(Range.getEnd());
+    if (Range.isTokenRange())
+      End = Lexer::getLocForEndOfToken(End, 0, SM, LangOptions());
+    PresumedLoc First = SM.getPresumedLoc(Begin);
+    PresumedLoc Last = SM.getPresumedLoc(End);
+    if (First.isValid() && Last.isValid() &&
+        llvm::StringRef(First.getFilename()) == Source.File &&
+        llvm::StringRef(Last.getFilename()) == Source.File) {
+      if (First.getLine() < Source.Line ||
+          (First.getLine() == Source.Line &&
+           First.getColumn() < Source.Column)) {
+        Source.BeginLine = First.getLine();
+        Source.BeginColumn = First.getColumn();
+      }
+      if (Last.getLine() > Source.Line ||
+          (Last.getLine() == Source.Line && Last.getColumn() > Source.Column)) {
+        Source.EndLine = Last.getLine();
+        Source.EndColumn = Last.getColumn();
+      }
+    }
+    return Source;
+  }
+
+  DiagnosticConsumer *Text;
+  std::optional<llvm::json::Object> Pending;
+  llvm::json::Array Related;
+};
+
+static StructuredDiagnostics *gStructured = nullptr;
+
+static void flushFrontendRecords() {
+  if (gStructured)
+    gStructured->finish();
+}
+
 /// Verifies each file whose command line clang accepts. An argument error
 /// stops the file, as it stops clang; tooling would print it and go on.
+/// Files report to Files when it is set, else with their own options.
 class VerifyActionFactory : public FrontendActionFactory {
 public:
-  explicit VerifyActionFactory(const DiagnosticConsumer &Arguments)
-      : Arguments(Arguments) {}
+  VerifyActionFactory(const DiagnosticConsumer &Arguments,
+                      DiagnosticConsumer *Files)
+      : Arguments(Arguments), Files(Files) {}
   std::unique_ptr<FrontendAction> create() override {
     return std::make_unique<VerifyAction>();
   }
@@ -540,13 +768,13 @@ public:
       ArgumentErrors = Arguments.getNumErrors();
       return false;
     }
-    // The file reports with its own diagnostic options.
     return FrontendActionFactory::runInvocation(
-        std::move(Invocation), Files, std::move(PCHContainerOps), nullptr);
+        std::move(Invocation), Files, std::move(PCHContainerOps), this->Files);
   }
 
 private:
   const DiagnosticConsumer &Arguments;
+  DiagnosticConsumer *Files;
   unsigned ArgumentErrors = 0;
 };
 
@@ -577,30 +805,16 @@ static llvm::StringRef replayStatusCode(verify::VerifyStatus Status) {
   return "unresolved";
 }
 
-static std::string jsonText(llvm::StringRef Text) {
-  return llvm::json::isUTF8(Text) ? Text.str() : llvm::json::fixUTF8(Text);
-}
-
-static llvm::json::Object
-replaySourceJSON(const verify::ObligationSource &Source) {
-  llvm::json::Object Result;
-  if (!Source.isValid())
-    return Result;
-  Result["file"] = jsonText(Source.File);
-  Result["line"] = Source.Line;
-  Result["column"] = Source.Column;
-  Result["end_line"] = Source.EndLine != 0 ? Source.EndLine : Source.Line;
-  Result["end_column"] =
-      Source.EndColumn != 0 ? Source.EndColumn : Source.Column;
-  return Result;
-}
+using verify::jsonText;
+using verify::sourceJSON;
 
 static void printReplayJSON(const verify::ObligationModule &Module,
                             const verify::VerifyResult &Result,
+                            const verify::FailurePlace &Place,
                             llvm::StringRef SemanticHash,
                             unsigned LeanAutomatic) {
   llvm::json::Object Record;
-  Record["schema"] = "cppverify.diagnostic/1";
+  Record["schema"] = verify::DiagnosticSchema;
   Record["status"] = replayStatusCode(Result.Status);
   Record["severity"] = Result.Status == verify::VerifyStatus::BoundedSafe
                            ? "warning"
@@ -609,9 +823,25 @@ static void printReplayJSON(const verify::ObligationModule &Module,
                            ? "error"
                            : "note";
   Record["function"] = jsonText(Module.FunctionName);
-  Record["message"] = Result.Status == verify::VerifyStatus::Verified
-                          ? ReplayProofNote
-                          : jsonText(Result.Message);
+  std::string Message = Result.Message;
+  if (Result.Status == verify::VerifyStatus::Verified) {
+    Message = ReplayProofNote;
+  } else if (Result.Status == verify::VerifyStatus::Failed) {
+    Message = "verification failed: " + Module.FunctionName;
+    if (Result.ObligationType)
+      Message += std::string(" [") +
+                 verify::obligationKindName(*Result.ObligationType) + "]";
+    if (!Result.Message.empty())
+      Message += " (" + Result.Message + ")";
+    if (std::string Values = verify::counterexampleText(Result);
+        !Values.empty())
+      Record["counterexample"] = jsonText(Values);
+  }
+  Record["message"] = jsonText(Message);
+  if (Place.ClauseSource.isValid())
+    Record["related"] = llvm::json::Array{
+        llvm::json::Object{{"message", verify::clauseNote(Result)},
+                           {"source", sourceJSON(Place.ClauseSource)}}};
   Record["semantic_hash"] = ("sha256:" + SemanticHash).str();
   if (!Result.BackendName.empty())
     Record["backend"] = Result.BackendName;
@@ -639,14 +869,14 @@ static void printReplayJSON(const verify::ObligationModule &Module,
   if (!Result.CacheError.empty())
     Record["cache_error"] = jsonText(Result.CacheError);
   if (Result.Source.isValid())
-    Record["source"] = replaySourceJSON(Result.Source);
+    Record["source"] = sourceJSON(Result.Source);
   if (!Result.ObligationId.empty()) {
     llvm::json::Object Obligation;
     Obligation["id"] = jsonText(Result.ObligationId);
     if (Result.ObligationType)
       Obligation["kind"] = verify::obligationKindName(*Result.ObligationType);
     if (Result.Source.isValid())
-      Obligation["source"] = replaySourceJSON(Result.Source);
+      Obligation["source"] = sourceJSON(Result.Source);
     Record["obligation"] = std::move(Obligation);
   }
   if (!Result.Model.empty()) {
@@ -659,7 +889,9 @@ static void printReplayJSON(const verify::ObligationModule &Module,
       Entry["value"] = Value.Value ? llvm::json::Value(jsonText(*Value.Value))
                                    : llvm::json::Value(nullptr);
       if (Value.Source.isValid())
-        Entry["source"] = replaySourceJSON(Value.Source);
+        Entry["source"] = sourceJSON(Value.Source);
+      if (Value.OnPath == false)
+        Entry["on_path"] = false;
       Model.push_back(std::move(Entry));
     }
     Record["model"] = std::move(Model);
@@ -681,10 +913,11 @@ static void printReplayJSON(const verify::ObligationModule &Module,
                                                               : "branch";
       Entry["kind"] = Kind;
       Entry["message"] = jsonText(Event.Message);
+      Entry["text"] = jsonText(verify::traceStepText(Event));
       Entry["active"] = Event.Active ? llvm::json::Value(*Event.Active)
                                      : llvm::json::Value(nullptr);
       if (Event.Source.isValid())
-        Entry["source"] = replaySourceJSON(Event.Source);
+        Entry["source"] = sourceJSON(Event.Source);
       llvm::json::Array Values;
       for (const verify::VerifyTraceValue &Value : Event.Values) {
         llvm::json::Object Item;
@@ -700,7 +933,7 @@ static void printReplayJSON(const verify::ObligationModule &Module,
     }
     Record["trace"] = std::move(Trace);
   }
-  llvm::outs() << llvm::formatv("{0}\n", llvm::json::Value(std::move(Record)));
+  out() << llvm::formatv("{0}\n", llvm::json::Value(std::move(Record)));
 }
 
 /// Selects the backend that the only backend an option applies to, when no
@@ -912,17 +1145,16 @@ static int replayObligationArchive() {
     setLeanOptions(VOpts);
     Project = verify::replayLeanProject(Modules, VOpts);
     for (const std::string &Warning : Project->Warnings) {
-      if (DiagnosticsFormat != verify::DiagnosticFormat::Json) {
+      if (!structuredOutput()) {
         llvm::outs() << "warning: " << Warning << "\n";
         continue;
       }
       llvm::json::Object Record;
-      Record["schema"] = "cppverify.diagnostic/1";
+      Record["schema"] = verify::DiagnosticSchema;
       Record["status"] = "warning";
       Record["severity"] = "warning";
       Record["message"] = jsonText(Warning);
-      llvm::outs() << llvm::formatv("{0}\n",
-                                    llvm::json::Value(std::move(Record)));
+      out() << llvm::formatv("{0}\n", llvm::json::Value(std::move(Record)));
     }
     if (!Project->Error.empty()) {
       llvm::errs() << "error: " << Project->Error << "\n";
@@ -963,9 +1195,17 @@ static int replayObligationArchive() {
       Result.Reason = verify::VerifyReason::Interrupted;
     }
 
+    // A failure is shown where its check fails, as in a run from source.
+    verify::FailurePlace Place;
+    if (Result.Status == verify::VerifyStatus::Failed) {
+      Place = verify::failingPlace(Module, Result);
+      if (Place.AtSource.isValid())
+        Result.Source = Place.AtSource;
+    }
+
     const std::string Hash = verify::obligationSemanticHash(Module);
-    if (DiagnosticsFormat == verify::DiagnosticFormat::Json) {
-      printReplayJSON(Module, Result, Hash, LeanAutomatic);
+    if (structuredOutput()) {
+      printReplayJSON(Module, Result, Place, Hash, LeanAutomatic);
       if (Result.Status != verify::VerifyStatus::Lowered &&
           Result.Status != verify::VerifyStatus::Verified &&
           Result.Status != verify::VerifyStatus::Exported)
@@ -1032,11 +1272,31 @@ static int replayObligationArchive() {
       AllOk = false;
       printResultSource();
       llvm::outs() << "error: verification failed: " << Module.FunctionName;
-      if (!Result.ObligationId.empty())
+      if (Result.ObligationType)
+        llvm::outs() << " ["
+                     << verify::obligationKindName(*Result.ObligationType)
+                     << "]";
+      else if (!Result.ObligationId.empty())
         llvm::outs() << " [" << Result.ObligationId << "]";
       if (!Result.Message.empty())
-        llvm::outs() << " (counterexample: " << Result.Message << ")";
+        llvm::outs() << " (" << Result.Message << ")";
       llvm::outs() << Suffix << "\n";
+      if (std::string Values = verify::counterexampleText(Result);
+          !Values.empty()) {
+        printResultSource();
+        llvm::outs() << "note: counterexample: " << Values << "\n";
+      }
+      if (const verify::ObligationSource &Clause = Place.ClauseSource;
+          Clause.isValid())
+        llvm::outs() << Clause.File << ":" << Clause.Line << ":"
+                     << Clause.Column
+                     << ": note: " << verify::clauseNote(Result) << "\n";
+      for (const verify::VerifyTraceEvent &Event : Result.Trace) {
+        if (Event.Source.isValid())
+          llvm::outs() << Event.Source.File << ":" << Event.Source.Line << ":"
+                       << Event.Source.Column << ": ";
+        llvm::outs() << "note: " << verify::traceStepText(Event) << "\n";
+      }
       break;
     case verify::VerifyStatus::Unresolved:
       AllOk = false;
@@ -1084,6 +1344,7 @@ static int replayObligationArchive() {
 int main(int argc, const char **argv) {
   const auto Start = std::chrono::steady_clock::now();
   llvm::InitLLVM X(argc, argv);
+  gArguments.assign(argv, argv + argc);
   // The first Ctrl-C stops the solvers and reports what is not finished; a
   // second one ends the process.
   llvm::sys::SetInterruptFunction(verify::requestInterrupt);
@@ -1128,6 +1389,9 @@ int main(int argc, const char **argv) {
   CommonOptionsParser &OptionsParser = ExpectedParser.get();
   if (!resolveOptions(!ObligationIn.empty()))
     return 1;
+  if (!DumpSMT2.empty())
+    verify::setQueryDumpDirectory(
+        DumpSMT2, ("cpp-verify " + verify::releaseVersion()).str());
   if (CheckContracts)
     return verify::checkContracts(OptionsParser.getSourcePathList(),
                                   llvm::outs()) != 0;
@@ -1143,7 +1407,7 @@ int main(int argc, const char **argv) {
                       "source files\n";
       return 1;
     }
-    return replayObligationArchive();
+    return finishOutput(replayObligationArchive());
   }
 
   std::unique_ptr<llvm::raw_fd_ostream> ObligationFile;
@@ -1204,27 +1468,44 @@ int main(int argc, const char **argv) {
   std::unique_ptr<DiagnosticOptions> ArgumentOptions =
       CreateAndPopulateDiagOpts({"cpp-verify"});
   TextDiagnosticPrinter ArgumentDiagnostics(llvm::errs(), *ArgumentOptions);
-  Tool.setDiagnosticConsumer(&ArgumentDiagnostics);
-  VerifyActionFactory Factory(ArgumentDiagnostics);
+  // Records and annotations need every file to report to one consumer.
+  std::optional<StructuredDiagnostics> Structured;
+  if (DiagnosticsFormat != OutputFormat::Text)
+    Structured.emplace(DiagnosticsFormat == OutputFormat::GitHub
+                           ? &ArgumentDiagnostics
+                           : nullptr);
+  gStructured = Structured ? &*Structured : nullptr;
+  DiagnosticConsumer &Arguments =
+      Structured ? static_cast<DiagnosticConsumer &>(*Structured)
+                 : ArgumentDiagnostics;
+  Tool.setDiagnosticConsumer(&Arguments);
+  VerifyActionFactory Factory(Arguments, Structured ? &*Structured : nullptr);
   // Lean exports and --list-functions have no verdicts to settle.
   if (OptionsParser.getSourcePathList().size() > 1 && BackendOpt != "lean" &&
       LeanFallback.empty() && !ListFunctions)
     gCrossFile = std::make_unique<verify::CrossFileRun>();
   int RC = Tool.run(&Factory);
   if (gCrossFile)
-    gVerifyFailures += gCrossFile->finish(llvm::outs(), &gSummary);
-  if (DiagnosticsFormat == verify::DiagnosticFormat::Text && !ListFunctions)
-    printSummary(Start);
+    gVerifyFailures += gCrossFile->finish(out(), &gSummary);
+  if (Structured)
+    Structured->finish();
+  gStructured = nullptr;
+  if (!ListFunctions) {
+    if (structuredOutput())
+      printSummaryRecord();
+    else
+      printSummary(Start);
+  }
   if (verify::interruptRequested())
-    return 130;
+    return finishOutput(130);
   if (RC != 0)
-    return RC;
+    return finishOutput(RC);
   if (ObligationFile) {
     ObligationFile->flush();
     if (ObligationFile->has_error()) {
       llvm::errs() << "error: cannot write obligation archive\n";
-      return 1;
+      return finishOutput(1);
     }
   }
-  return gVerifyFailures > 0 ? 1 : 0;
+  return finishOutput(gVerifyFailures > 0 ? 1 : 0);
 }

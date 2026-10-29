@@ -57,7 +57,7 @@ latest="${latest_tag#v}"
 rm -rf "$OUT"
 mkdir -p "$OUT"
 
-dev="$(sed -n 's/^set(CPPVERIFY_VERSION \(.*\))$/\1/p' "$ROOT/clang/lib/Verify/CMakeLists.txt")"
+dev="$(sed -n 's/^set(CPPVERIFY_VERSION \(.*\))$/\1/p' "$ROOT/clang/CMakeLists.txt")"
 if [[ -n "$latest" ]]; then
   dev_banner="This is the documentation of the development version, $dev, \
 built from <code>main</code>. The latest release is $latest: \

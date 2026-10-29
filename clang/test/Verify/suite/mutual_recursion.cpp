@@ -78,5 +78,5 @@ int ping(int n)
     return 0;
   return pong(n - 1);
 }
-// CHECK-DAG: error: verification failed: pong [{{.*}}::termination@{{.*}}[reason=counterexample]
+// CHECK-DAG: error: verification failed: pong [termination]{{.*}}[reason=counterexample]
 // CHECK-DAG: Unresolved: ping {{.*}}[reason=callee.contract] (relies on the contract of pong, which is not established)

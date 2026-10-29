@@ -50,7 +50,8 @@ void not_inductive(int n)
 }
 
 // CHECK-DAG: Verified: closed_form [
-// CHECK-DAG: error: verification failed: closed_form_wrong [{{.*}}::postcondition@{{.*}}counterexample: {{.*}}n [ssa=n_0] [type=i32] = {{[1-6]}}
+// CHECK-DAG: error: verification failed: closed_form_wrong [postcondition]
+// CHECK-DAG: note: counterexample: {{.*}}n = {{[1-6]}}{{( ->|,|$)}}
 // CHECK-DAG: Verified: unbounded [backend=z3]
 // CHECK-DAG: Unresolved: not_inductive [backend=z3] [reason=spec.fuel]
 

@@ -9,4 +9,5 @@ Measured verification artifacts built from real systems algorithms.
    llvm-uleb128
    utf8-validation
    binary-search
+   ring-buffer
 

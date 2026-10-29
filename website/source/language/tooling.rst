@@ -35,6 +35,8 @@ Standalone verifier
    cpp-verify --solver-rlimit=500000 --max-query-nodes=50000 file.cpp
    cpp-verify --memory-limit=4096 file.cpp
    cpp-verify --diagnostics-format=json file.cpp
+   cpp-verify --diagnostics-format=sarif file.cpp > results.sarif
+   cpp-verify --diagnostics-format=github file.cpp
    cpp-verify --dump-ir=1,2,3,4 file.cpp
    cpp-verify --lower-only --dump-ir=1,2,3,4 file.cpp
    cpp-verify --lower-only --obligation-out=goals.cpv file.cpp
@@ -206,8 +208,98 @@ one line that counts them:
 .. code-block:: text
 
    Verified: add_one [backend=z3]
-   summary.cpp:14:23: error: verification failed: add_two [fn_...::postcondition@14:23] (counterexample: result [ssa=__result_1] [type=i32] = 5, x [ssa=x_0] [type=i32] = 3; trace: return.return@16:3 value=5) [backend=z3] [reason=counterexample]
-   Summary: 1 verified, 1 failed in 0.1 s
+   summary.cpp:14:23: error: verification failed: add_two [postcondition] [backend=z3] [reason=counterexample]
+      14 |   cv::post(cv::result == twice(x))
+         |            ~~~~~~~~~~~^~~~~~~~~~~
+   summary.cpp:14:23: note: counterexample: x = 3, result = 5
+   summary.cpp:16:3: note: returns 5
+      16 |   return x + 2;
+         |   ^
+   Summary: 1 verified, 1 failed in 0.0 s
+
+A failure prints as Clang prints an error: the kind of check that fails
+(``[postcondition]``), the backend and the reason, and the source with a caret
+under the part of the check that fails (below); then a note with the
+counterexample's values by their source
+names, in the order the source declares them (``result`` last), each with
+the values it takes along the path in turn (``i = 0 -> 1``), not those of
+branches the path does not take, and a reference as the address it refers to
+(``&r = 4``); then a note at each step
+of the path it takes: the branches, the calls with their arguments, a loop's
+entry and an arbitrary iteration of it, the memory it writes, and the value it
+returns. A path of more than ten steps shows its first and last five. A step
+inside a macro is shown where the macro is used, and an operation whose own
+check fails is no step of the path: a failing check in ``return e;`` ends the
+path before the return. A value
+the counterexample does not determine is ``<unknown>``. JSON keeps what the
+text leaves out (see `Structured diagnostics`_). Errors and warnings show their
+source line the same way; verdicts are one line each.
+
+The part of a check that fails is the one the counterexample's values make
+false:
+
+- in a clause written as a conjunction, its first conjunct that is false:
+  for ``cv::post(0 <= cv::result && cv::result <= 50)`` and a result of 51,
+  ``cv::result <= 50``. A disjunction fails only when every part of it does,
+  and is shown whole;
+- for a check that an operation is defined (``[overflow]``,
+  ``[division-by-zero]``, ``[bounds]``, ...), the operation, with the caret
+  at its operator, under the conditions around it (a branch, the left side
+  of ``&&``), not the statement it is in;
+- for a callee's precondition, the call, with the caret at the callee's
+  name. A note shows the callee's clause that does not hold there, its
+  conjunct that is false.
+
+.. code-block:: cpp
+
+   namespace cv = cppverify;
+
+   int half(int x)
+     cv::pre(0 <= x && x % 2 == 0)
+     cv::post(cv::result * 2 == x)
+   {
+     return x / 2;
+   }
+
+   int odd_half(int y)
+     cv::pre(0 <= y && y <= 100)
+   {
+     return half(2 * y + 1);
+   }
+
+   int area(int w, int h)
+     cv::pre(0 <= w && 0 <= h)
+   {
+     int a = w * h + 1;
+     return a;
+   }
+
+.. code-block:: text
+
+   Verified: half [backend=z3]
+   half.cpp:13:10: error: verification failed: odd_half [precondition] [backend=z3] [reason=counterexample]
+      13 |   return half(2 * y + 1);
+         |          ^~~~~~~~~~~~~~~
+   half.cpp:13:10: note: counterexample: y = 0
+   half.cpp:4:27: note: this precondition does not hold at the call
+       4 |   cv::pre(0 <= x && x % 2 == 0)
+         |                     ~~~~~~^~~~
+   half.cpp:13:10: note: calls half(1)
+      13 |   return half(2 * y + 1);
+         |          ^
+   half.cpp:19:17: error: verification failed: area [overflow] [backend=z3] [reason=counterexample]
+      19 |   int a = w * h + 1;
+         |           ~~~~~~^~~
+   half.cpp:19:17: note: counterexample: w = 1, h = 2147483647
+   Summary: 1 verified, 2 failed in 0.0 s
+
+At ``w = 1`` the product fits and the sum overflows, so the caret is at
+``+``. When the values do not decide which part is false (one that needs a
+spec the checker cannot evaluate), the failure is shown at the whole
+condition, or for an operation at its statement. A check inside a lifted
+``constexpr`` helper is shown at the statement that calls the helper, as
+before. Before 0.2 every failure was: the whole clause, the statement for an operation or a call, and the
+callee's clause was not shown.
 
 The summary counts each kind of verdict the run reported (verified, which
 includes ``Certified`` and ``Proved (z3+lean)``, failed, unresolved,
@@ -215,9 +307,9 @@ bounded-safe, trusted, lowered, exported, interrupted), gives the reasons of
 the unresolved ones (``2 unresolved (spec.fuel 1, solver.timeout 1)``), and
 the time the run took. A function the verifier does not represent counts as
 unresolved, ``construct.unsupported``. The summary covers every file of the
-run, and is left out of ``--diagnostics-format=json``, whose records are the
-whole output, of ``--list-functions``, and of archive replay
-(``--obligation-in``), which prints a line per module.
+run. In JSON it is the last record, and in SARIF a property of the run (see
+`Structured diagnostics`_); ``--list-functions`` and archive replay
+(``--obligation-in``), which prints a line per module, have none.
 
 - ``--quiet`` prints only what needs attention: failures, unresolved results,
   errors, warnings, bounded results, and interrupted functions, then the
@@ -682,14 +774,20 @@ Backends
    * - ``--proof-cache-max-entries=N``
      - Bound the number of proof-cache records (default 100000; ``0`` disables
        the entry limit). Requires ``--proof-cache``.
-   * - ``--diagnostics-format={text,json}``
-     - Select Clang-style text (default) or versioned JSON Lines for verification
-       results. JSON records use schema ``cppverify.diagnostic/1``.
+   * - ``--diagnostics-format={text,json,sarif,github}``
+     - Select Clang-style text (default); JSON Lines of
+       ``cppverify.diagnostic/2`` records ending with a
+       ``cppverify.summary/1`` record; one SARIF 2.1.0 log at the end of the
+       run; or the text with a GitHub workflow annotation for each error and
+       warning (see `Structured diagnostics`_).
    * - ``--lower-only``
      - Run Clang conversion, backend-specific preparation, passivization,
        canonical Obligation IR construction, spec-axiom encoding, and selected
        Z3/SMT-LIB translation without calling a solver. Supported for Z3, cvc5,
        portfolio, and BMC.
+   * - ``--dump-smt2=DIR``
+     - Write every query sent to Z3 or cvc5 to ``DIR``, each as a script the
+       solver replays on its own (see `Solver queries as scripts`_).
    * - ``--obligation-out=FILE``
      - Write deterministic, versioned backend-neutral modules with portable
        source attribution and SHA-256 semantic identities. Multiple modules are
@@ -719,7 +817,9 @@ Backend results are intentionally distinct. Z3 ``unsat`` reports ``Verified``;
 a ``sat`` model reports a failed source obligation once it is checked against
 the true definitions (otherwise ``Unresolved`` with a reason); timeout and
 ``unknown`` report ``Unresolved``. cvc5 follows the same mapping, and its models
-are checked the same way.
+are checked the same way, then shown the same way: a failure's counterexample
+and path, in text and in JSON's ``counterexample``, ``model``, and ``trace``,
+come from the checked model.
 Portfolio mode requires agreement; an agreed ``sat`` result uses Z3's typed
 model and trace, while disagreement or incomplete secondary evidence is
 ``Unresolved``. BMC reports ``BoundedSafe: f [backend=bmc, bound=N]`` when only its unwinding
@@ -729,6 +829,97 @@ explored bound proves complete unwinding. Text diagnostics publish the terminal
 reused across prefixes. JSON uses ``bound``, ``explored_bounds``, and
 ``reused_queries``. Lean generation reports ``Exported``. Only the pinned,
 admission-free kernel workflow reports ``Certified``.
+
+Solver queries as scripts
+-------------------------
+
+``--dump-smt2=DIR`` writes each query cpp-verify sends to a solver as an
+SMT-LIB script that the solver runs on its own: ``z3 FILE`` or ``cvc5
+FILE``, with no other flags. Such a file is what a solver's bug report
+needs, what compares two solver versions on the same query, and what shows
+the exact formula behind a verdict. On ``clamp.cpp`` (from
+:doc:`../book/part-ii/ch17-backends-modular-calls`):
+
+.. code-block:: text
+
+   $ cpp-verify --dump-smt2=queries clamp.cpp
+   ...
+   $ find queries -type f | sort
+   queries/clamp-14e9c9/missing-return-7-3.z3-c326aaab.smt2
+   queries/clamp-14e9c9/overflow-8-5.z3-19b38e3e.smt2
+   queries/clamp-14e9c9/postcondition-5-23.z3-d86b7e26.smt2
+   queries/clamp-14e9c9/whole.z3-3a4644f7.smt2
+
+A function's queries are in a directory named by the function and the start
+of the SHA-256 hash of its identity, so overloads stay apart; each file is
+named by its obligation (``postcondition-5-23``, the postcondition at line 5,
+column 23), or ``whole`` for every obligation at once, then the solver and
+the start of the hash of the script itself. A name depends only on the query,
+so the same query is the same file in every run, and two checks of one
+obligation (a refinement round after the first check, say) are two files.
+A check that cpp-verify adds is named after the function and the check,
+every character but a letter, a digit, or ``_`` made ``_``: ``f_smoke``
+holds the vacuity checks of ``f``, and ``f_decreases`` the termination check
+of a spec ``f``.
+
+A file starts with comments that say what it is, then the options cpp-verify
+gives the solver, as commands, then the query and its check. After the check
+come ``(get-model)`` when the answer was ``sat``, and the answer cpp-verify
+got:
+
+.. code-block:: text
+
+   ; cpp-verify 0.2.0-dev, z3 4.13.4
+   ; clamp: the postcondition check at clamp.cpp:5:23 (fn_5f5a35636c616d7069::postcondition@5:23)
+   ; replay: z3 clamp-14e9c9/postcondition-5-23.z3-d86b7e26.smt2
+   (set-option :timeout 30000)
+   (set-option :rlimit 6000000)
+   (set-option :smt.mbqi true)
+   (set-option :smt.qi.eager_threshold 0.0)
+   (declare-fun __result_1 () Int)
+   (declare-fun x_0 () Int)
+   ...
+   (check-sat)
+   (get-model)
+   ; cpp-verify: sat
+
+.. code-block:: text
+
+   $ cd queries && z3 clamp-14e9c9/postcondition-5-23.z3-d86b7e26.smt2
+   sat
+   (
+     (define-fun __result_1 () Int
+       (- 1))
+     ...
+     (define-fun x_0 () Int
+       (- 2))
+   )
+
+- **Which queries.** Every check a solver makes: the whole query and each
+  obligation's, every refinement round, the probes of a bounded domain, the
+  native-definition pass, the inductions, the confirmations, the vacuity and
+  contract checks, and the queries of an archive's replay. A query is
+  written before its check, so one that never returns still leaves its
+  file, and the answer is appended when the check ends: ``sat``, ``unsat``,
+  ``unknown`` with Z3's reason (``unknown (timeout)``), or, for cvc5, ``no
+  answer`` with what went wrong. ``--lower-only`` checks nothing, so it
+  writes nothing, and Lean writes its own project.
+- **Options.** For Z3, the time the check was given (``:timeout``, which
+  can be less than ``--timeout`` for a check late in a query's budget), the
+  resource limit, and the quantifier settings, and ``(check-sat-using smt)``
+  where cpp-verify solves a quantified query with the ``smt`` tactic. For
+  cvc5, its command-line options (``--seed=0``, ``--tlimit-per=N``, ...) as
+  ``(set-option ...)`` commands.
+- **Replaying.** ``z3 FILE`` with the version in the first line (``z3
+  --version``; cpp-verify links Z3 4.13.4) and ``cvc5 FILE`` give the answer
+  cpp-verify got for most queries. Z3's search on a quantified query depends
+  on the order in which its terms were created, and a replay creates them
+  as it reads the file, in another order than cpp-verify did, so such a
+  query can end differently, typically ``unknown`` where cpp-verify got an
+  answer.
+- **Errors.** A directory that cannot be written is a warning at the end of
+  the run (``warning: --dump-smt2: cannot create ...``); verdicts do not
+  change.
 
 Time limits
 -----------
@@ -1012,9 +1203,8 @@ kernel checking is required.
 Structured diagnostics
 ----------------------
 
-Failed Z3, cvc5, portfolio, and BMC results identify a source-anchored
-obligation such as ``function-identity::overflow@line:column#2``. The kind says
-what the obligation checks:
+A failure names the kind of the check that fails, as ``[overflow]``. The
+kind says what the check is:
 
 - contracts: ``assertion``, ``precondition``, ``postcondition``,
   ``invariant-entry``, ``invariant-preserved``, ``termination``,
@@ -1022,7 +1212,8 @@ what the obligation checks:
 - C++ definedness: ``overflow`` (including a mathematical value converted to
   a machine type it does not fit), ``division-by-zero``, ``shift``,
   ``bounds``, ``dereference``, ``initialization``, ``pointer-difference``,
-  and ``deallocation``;
+  ``deallocation``, and ``builtin-argument`` (an argument a builtin is
+  undefined for, such as ``__builtin_clz(0)``);
 - generated interfaces: ``pointer-validity`` (a pointer parameter, result, or
   ``valid(p, n)`` extent must denote valid storage), ``aliasing`` (implicit
   non-aliasing), ``frame`` (writes and callee effects stay within
@@ -1034,26 +1225,99 @@ what the obligation checks:
   verifier rejects fail-closed.
 
 The check that a function's contract is defined (see :doc:`functions-loops`)
-is reported only when it fails, as ``contract of f``. Its obligations are
-named ``function-identity::contract::kind@line:column`` with the definedness
-kinds above, and JSON records give ``f`` as the function.
+is reported only when it fails, as ``contract of f``, with the definedness
+kinds above; JSON records give ``f`` as the function.
 
-The local suffix only disambiguates obligations of one kind at the same anchor,
-so inserting or reordering an unrelated obligation does not renumber later IDs
-unless its source anchor moves. JSON records carry the kind as
-``obligation.kind``. Diagnostics include inclusive source ranges and source
-display names while retaining internal SSA names for unambiguous tooling.
+JSON Lines
+~~~~~~~~~~
 
-Counterexample values carry exact sorts such as ``bool``, ``i32``, ``u32``,
-``math-i32``, ``pointer``, and ``heap``. Z3 model completion is disabled:
-undetermined values print as ``<unknown>`` and become JSON ``null``. Signed and
-unsigned bit-vectors are decoded to source-level decimal values.
+``--diagnostics-format=json`` prints one ``cppverify.diagnostic/2`` record
+per result, and the run ends with one ``cppverify.summary/1`` record, the
+counts of the text summary by name (``verified``, ``failed``,
+``unresolved`` with its ``reasons``, ``bounded_safe``, ``trusted``,
+``lowered``, ``exported``, ``interrupted``). No record holds a time, so a
+run's records are the same at any ``--jobs``; ``--time-report`` adds
+``cppverify.time/1`` records. A record has:
+
+- ``status`` (``verified``, ``failed``, ``unresolved``, ``warning``,
+  ``frontend``, ...), ``severity`` (``error``, ``warning``, ``note``), and
+  ``message``, the text of its line; for a failure, ``reason``;
+- ``function``, and ``function_source``, the function's name where it is
+  declared;
+- ``source``, what the result is about: for a failure the part of its
+  check that fails (see `What a run prints`_). A source is ``file``, ``line``, ``column``, ``end_line``,
+  ``end_column``: from its first character to the column after its last, as
+  SARIF and editors count, on presumed (``#line``) lines;
+- for a failure, ``obligation`` with the check's ``id`` and ``kind``;
+  ``counterexample``, the values as the note prints them; ``model``, every
+  value with its source name, its internal SSA name (``ssa_name``), its sort
+  (``bool``, ``i32``, ``u32``, ``math-i32``, ``pointer``, ``heap``, ...), and
+  ``"on_path": false`` for a version of a branch the path does not take; and
+  ``trace``, each step with its ``kind``, its ``text`` as the note prints it,
+  and ``active``;
+- for a failure at a call, ``related``: the callee's clause that does not
+  hold, with its ``message`` and ``source``;
+- ``notes``, ``backend``, ``bound``, ``trusts``, ``vacuous``, ``partial``,
+  ``instantiated_at``, and the other qualifiers of the text.
+
+The check's ID is source-anchored, such as
+``function-identity::overflow@line:column#2``: the line and column of the
+check as the verifier builds it, a clause's operator or the statement that
+an operation or a call is in. The caret may point closer, at the part that
+fails, and the ID stays. The local suffix only disambiguates checks of one kind at the same
+anchor, so inserting or reordering an unrelated check does not renumber later
+IDs unless its source anchor moves. Z3 model completion is disabled:
+undetermined values print as ``<unknown>`` and become JSON ``null``. Signed
+and unsigned bit-vectors are decoded to source-level decimal values.
+
+The compiler's own diagnostics are records of status ``frontend``: a parse
+error, a warning with its ``option`` (``-Wparentheses``), each with the notes
+that follow it as ``related``, a message and a source each. They come before
+the verifier's records of their file. Only an error in ``cpp-verify``'s own
+options, which stops the run before it starts, stays text on standard error.
+
+Before 0.2 the schema was ``cppverify.diagnostic/1``: a record had no
+``function_source``, and none for a verified function at all; a source
+started at the check's caret and ended at the first column of its last token;
+the message held the check's ID and every value with its SSA name and sort;
+compiler errors were text; and no record ended the run.
+
+SARIF
+~~~~~
+
+``--diagnostics-format=sarif`` prints one SARIF 2.1.0 log when the run ends,
+made from the same records, for GitHub code scanning and SARIF viewers. Each
+record is a result, after Frama-C's mapping of property statuses: a proof
+passes (``kind: pass``), a failure fails (``fail``, level ``error``), and a
+result no verdict settles stays open (``open``). The result's rule is the
+kind of the failing check (``postcondition``, ``overflow``, ...), or
+``verified``, ``unresolved``, ``warning``, ``frontend``; its location is the
+record's source and its function, its message the text with the
+counterexample, and the path a code flow, each step at its line with its
+text. A failure at a call has the callee's clause as a related location.
+The run's properties hold the summary.
+
+GitHub annotations
+~~~~~~~~~~~~~~~~~~
+
+``--diagnostics-format=github`` prints the text, and after each error and
+warning a workflow command that GitHub Actions turns into an annotation on
+the source, its file relative to the working directory (the checkout, in a
+workflow). For ``summary.cpp`` above, after the error and its notes:
+
+.. code-block:: text
+
+   ::error file=summary.cpp,line=14,col=12,endLine=14,endColumn=34,title=cpp-verify%3A postcondition::verification failed: add_two [postcondition] [backend=z3] [reason=counterexample]%0Acounterexample: x = 3, result = 5
+
+A failure at a call adds the callee's clause to the message, with its place:
+``%0Athis precondition does not hold at the call (half.cpp:4:27)``.
 
 Counterexample traces may contain guarded branch, modular-call, loop,
 heap-write, allocation/provenance, lifetime-end, deletion, and return events.
 False guards are omitted; a guard the model does not determine is retained with
 JSON ``"active": null`` rather than an invented path choice. Archives preserve
-the same names, ranges, IDs, and trace data during replay.
+the same names, ranges, IDs, and trace data during replay, and a replayed
+failure is shown at the same part of its check.
 
 A failure may carry notes, printed after it as ``note:`` lines and in JSON as
 ``notes``: a counterexample that passes through a loop starts from any state
@@ -1094,9 +1358,21 @@ counts each function once:
 .. code-block:: text
 
    $ cpp-verify --max-failures=0 three_bugs.cpp
-   three_bugs.cpp:7:3: error: verification failed: three_bugs [fn_...::division-by-zero@7:3] (counterexample: x [ssa=x_0] [type=i32] = 0, y [ssa=y_0] [type=i32] = 0) [backend=z3] [reason=counterexample]
-   three_bugs.cpp:8:3: error: verification failed: three_bugs [fn_...::overflow@8:3] (counterexample: q [ssa=q_1] [type=i32] = -1, x [ssa=x_0] [type=i32] = -2147483648, y [ssa=y_0] [type=i32] = -9) [backend=z3] [reason=counterexample]
-   three_bugs.cpp:5:23: error: verification failed: three_bugs [fn_...::postcondition@5:23] (counterexample: result [ssa=__result_1] [type=i32] = 0, q [ssa=q_1] [type=i32] = 0, r [ssa=r_1] [type=i32] = 0, x [ssa=x_0] [type=i32] = 0, y [ssa=y_0] [type=i32] = 11; trace: return.return@9:3 value=0) [backend=z3] [reason=counterexample]
+   three_bugs.cpp:7:14: error: verification failed: three_bugs [division-by-zero] [backend=z3] [reason=counterexample]
+       7 |   int q = 10 / y;
+         |           ~~~^~~
+   three_bugs.cpp:7:14: note: counterexample: x = 0, y = 0
+   three_bugs.cpp:8:13: error: verification failed: three_bugs [overflow] [backend=z3] [reason=counterexample]
+       8 |   int r = x + q;
+         |           ~~^~~
+   three_bugs.cpp:8:13: note: counterexample: x = -2147483648, y = -9, q = -1
+   three_bugs.cpp:5:23: error: verification failed: three_bugs [postcondition] [backend=z3] [reason=counterexample]
+       5 |   cv::post(cv::result > 0)
+         |            ~~~~~~~~~~~^~~
+   three_bugs.cpp:5:23: note: counterexample: x = 0, y = 11, q = 0, r = 0, result = 0
+   three_bugs.cpp:9:3: note: returns 0
+       9 |   return r;
+         |   ^
    Summary: 1 failed in 0.0 s
 
 Without the option only the first line is printed. The overflow's
@@ -1188,11 +1464,10 @@ paths through a call. Unreachable code itself is not flagged: a defensive
 good reason, and every claim the function makes is still checked on the
 paths that remain.
 
-``--diagnostics-format=json`` covers verification-result diagnostics.
-Command-line validation and frontend parse errors may still use text. Combining
-JSON diagnostics with IR dumps intentionally creates a mixed stream. Malformed
-byte sequences in source or archive display text are rendered with the Unicode
-replacement character, so every emitted JSON record remains valid UTF-8.
+Combining JSON or SARIF with IR dumps intentionally creates a mixed stream.
+Malformed byte sequences in source or archive display text are rendered with
+the Unicode replacement character, so every emitted JSON record remains valid
+UTF-8.
 
 Portable obligation archives
 ----------------------------
@@ -1249,7 +1524,7 @@ module is ``BoundedSafe`` when every goal but some unwinding goal
 certifies (:doc:`../book/part-ii/ch17-backends-modular-calls`).
 ``--lean-fallback`` applies to source verification only.
 
-``--obligation-out`` writes ``cppverify.obligation/3`` records only after exact
+``--obligation-out`` writes ``cppverify.obligation/6`` records only after exact
 serialize/deserialize/validate/reserialize checks. Stable wire tags make the
 format independent of C++ enum ordinals. The reader rejects malformed magic,
 unsupported versions, truncation, invalid tags, inconsistent feature
@@ -1257,8 +1532,17 @@ declarations, duplicate identities, and oversized/deep expressions.
 Schema v2 adds the precise obligation kinds; schema v3 each spec function's
 termination measures, read like its definition, and, with source metadata,
 where each assumption of a goal comes from, which names a hypothesis of a
-readable Lean goal. Records of schema v2, and of schema v1, which name only
-assertions, postconditions, and unwinding checks, are still read.
+readable Lean goal; schema v4, with source metadata, where each variable
+version of a counterexample is defined, so a replayed counterexample lists the
+values its path takes; schema v5 where each source range begins, its end
+being the column after its last character; schema v6, with source metadata,
+where each check's condition and a callee's clause lie, so a replayed failure
+is shown at the part that fails. Records of schemas v5 to v2, and
+of schema v1, which name only assertions, postconditions, and unwinding
+checks, are still read; a counterexample replayed from one before v4 lists
+the values of every version, a range from one before v5 begins at its
+anchor and ends at the first column of its last token, and a failure
+replayed from one before v6 is shown at its check's anchor.
 Records cap integer widths at 4096 bits, expression depth at 4096, and
 collections plus expression nodes/edges at 100,000 per record. It also rejects
 embedded NULs, non-canonical numerals, inactive payload fields, ill-scoped
@@ -1295,8 +1579,10 @@ Supported compiler
 Contract syntax and ``-fverify-contracts`` exist **only in this repository's
 Clang**. Use the shipped ``./build/bin/cpp-verify`` and
 ``./build/bin/clang++`` for any code that uses contracts — stock GCC or upstream
-Clang reject the flag and the contract constructs. (Building cpp-verify itself from
-source is independent and works with any standard host compiler.)
+Clang reject the flag and the contract constructs. Code that those compilers
+also build guards the constructs with the predefined ``__cppverify__``
+(:doc:`syntax`, "Headers shared with other compilers"). (Building cpp-verify
+itself from source is independent and works with any standard host compiler.)
 
 Compile with contracts (``clang++``)
 ------------------------------------
@@ -1340,6 +1626,37 @@ makes a lone ``-fno-verify`` a fast *light check*: it validates C++ syntax,
 contract syntax, **and** contract semantics (the ``cppverify::old``/``cppverify::result`` placement and
 bool-convertibility rules), but does **not** check your logic. Ideal for
 editors, CI pre-flight, and LLM/agent loops.
+
+Results in a compilation
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+``clang++ -fverify-contracts`` reports what it verifies as its own
+diagnostics, in the format ``cpp-verify`` prints: a failure is an error with
+its notes, an unresolved result is an error, a warning is a warning in
+``-Wcppverify`` (``-Wno-cppverify`` hides it and ``-Werror=cppverify`` makes it
+an error), and a proof is a remark at its function, shown with
+``-Rcppverify``. Colors,
+``-fdiagnostics-format=sarif``, and editors that read the compiler's
+diagnostics show them as they show Clang's:
+
+.. code-block:: text
+
+   $ clang++ -std=c++17 -fverify-contracts -Rcppverify -c summary.cpp -o summary.o
+   summary.cpp:5:5: remark: Verified: add_one [backend=z3] [-Rcppverify]
+       5 | int add_one(int x)
+         |     ^
+   summary.cpp:14:23: error: verification failed: add_two [postcondition] [backend=z3] [reason=counterexample]
+      14 |   cv::post(cv::result == twice(x))
+         |            ~~~~~~~~~~~^~~~~~~~~~~
+   summary.cpp:14:23: note: counterexample: x = 3, result = 5
+   summary.cpp:16:3: note: returns 5
+      16 |   return x + 2;
+         |   ^
+   1 error generated.
+
+Before 0.2 the compiler printed the verifier's lines as text, and then the
+one error ``cppverify: verification failed``: ``-fdiagnostics-format=sarif``
+gave a document without results, and ``-w`` and ``-Werror`` changed nothing.
 
 Quick lookup
 ~~~~~~~~~~~~
@@ -1434,8 +1751,8 @@ Then point the editor at this clangd:
   language server settings.
 
 A tool that does not use this build's parser (a stock clangd, Visual Studio's IntelliSense)
-reports the constructs as errors; a stock ``clang-format`` keeps every clause on the
-declarator's line. Tools built on this build's libclang see the contracts as well.
+reports the constructs as errors, except those guarded by ``__cppverify__``, which it
+does not define; a stock ``clang-format`` keeps every clause on the declarator's line. Tools built on this build's libclang see the contracts as well.
 
 Contracts in Clang's other tools
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

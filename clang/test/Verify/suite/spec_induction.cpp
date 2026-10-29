@@ -47,7 +47,8 @@ cppverify::proof void sum_wrong_once(int n)
   cppverify::post(2 * sum(n) == n * (n + 1) + (n == 200 ? 1 : 0))
 {
 }
-// CHECK-DAG: error: verification failed: sum_wrong_once {{.*}}(counterexample: n [ssa=n_0] [type=i32] = 200)
+// CHECK-DAG: error: verification failed: sum_wrong_once {{.*}}
+// CHECK-DAG: note: counterexample: n = 200
 
 cppverify::proof void pow2_bounded(int n)
   cppverify::pre(n >= 0)
@@ -71,4 +72,5 @@ cppverify::proof void closed_form_everywhere(int n)
   cppverify::post(2 * sum(n) == n * (n + 1))
 {
 }
-// CHECK-DAG: error: verification failed: closed_form_everywhere {{.*}}(counterexample: n [ssa=n_0] [type=i32] = -{{[0-9]+}})
+// CHECK-DAG: error: verification failed: closed_form_everywhere {{.*}}
+// CHECK-DAG: note: counterexample: n = -{{[0-9]+}}

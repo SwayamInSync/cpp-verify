@@ -65,15 +65,15 @@
 # A contract, a bounded quantifier, a store to memory, and a spec Lean
 # defines; the choice is opaque in Lean.
 # CERTIFY: error: verification failed: add_one {{.*}}[reason=counterexample] (confirmed in Lean)
-# CERTIFY-NEXT: error: verification failed: below_three {{.*}}[reason=counterexample] (confirmed in Lean)
-# CERTIFY-NEXT: error: verification failed: zero_first {{.*}}[reason=counterexample] (confirmed in Lean)
-# CERTIFY-NEXT: Verified: spec decreases: tri
+# CERTIFY: error: verification failed: below_three {{.*}}[reason=counterexample] (confirmed in Lean)
+# CERTIFY: error: verification failed: zero_first {{.*}}[reason=counterexample] (confirmed in Lean)
+# CERTIFY: Verified: spec decreases: tri
 # CERTIFY-NEXT: error: verification failed: tri_three {{.*}}[reason=counterexample] (confirmed in Lean)
-# CERTIFY-NEXT: error: verification failed: pick_one {{.*}}[reason=counterexample]{{$}}
-# CERTIFY-NEXT: warning: the counterexample of pick_one is not confirmed in Lean: Lean cannot decide the goal at the counterexample
+# CERTIFY: error: verification failed: pick_one {{.*}}[reason=counterexample]{{$}}
+# CERTIFY: warning: the counterexample of pick_one is not confirmed in Lean: Lean cannot decide the goal at the counterexample
 
-# JSON: {"backend":"z3","function":"add_one","lean_refuted":true,
-# JSON: {"message":"the counterexample of pick_one is not confirmed in Lean: Lean cannot decide the goal at the counterexample","schema":"cppverify.diagnostic/1","severity":"warning","status":"warning"}
+# JSON: {"backend":"z3",{{.*}}"function":"add_one",{{.*}}"lean_refuted":true,
+# JSON: {"message":"the counterexample of pick_one is not confirmed in Lean: Lean cannot decide the goal at the counterexample","schema":"cppverify.diagnostic/2","severity":"warning","status":"warning"}
 
 # CHECKER: fail	cppverify_fake_000000_goal_refuted	cppverify_fake_000000_goal_refuted proves True, not Not cppverify_fake_000000_goal
 

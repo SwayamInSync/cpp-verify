@@ -21,6 +21,7 @@ std::unique_ptr<LogicExpr> node(LogicExpr::Kind K, LogicSort Sort,
   Node->Sort = Sort;
   if (At) {
     Node->Loc = At->Loc;
+    Node->BeginLoc = At->BeginLoc;
     Node->EndLoc = At->EndLoc;
     Node->Source = At->Source;
   }
@@ -669,9 +670,12 @@ void integerArgumentVariables(
   const bool Quantifier =
       Expr->K == LogicExpr::Forall || Expr->K == LogicExpr::Exists;
   const bool Inserted = Quantifier && Bound.insert(Expr->Binder).second;
+  // An argument of a spec, or the address of a memory read: the claim
+  // depends on the variable through what it selects.
   for (const auto &Child : Expr->Children)
     integerArgumentVariables(Child.get(),
-                             InArgument || Expr->K == LogicExpr::SpecCall,
+                             InArgument || Expr->K == LogicExpr::SpecCall ||
+                                 Expr->K == LogicExpr::Select,
                              Bound, Seen, Out);
   if (Inserted)
     Bound.erase(Expr->Binder);
@@ -722,10 +726,15 @@ ObligationModule copyObligationModule(const ObligationModule &Module) {
     Same.StableId = Item.StableId;
     Same.Kind = Item.Kind;
     Same.Loc = Item.Loc;
+    Same.BeginLoc = Item.BeginLoc;
     Same.EndLoc = Item.EndLoc;
     Same.Source = Item.Source;
     Same.TraceEventCount = Item.TraceEventCount;
     Same.Note = Item.Note;
+    Same.Focus = Item.Focus;
+    Same.Clause = Item.Clause;
+    Same.FocusSource = Item.FocusSource;
+    Same.ClauseSource = Item.ClauseSource;
     Same.Goal = cloneLogicExpr(Item.Goal.get());
     Same.CounterexampleQuery = cloneLogicExpr(Item.CounterexampleQuery.get());
     Copy.Obligations.push_back(std::move(Same));
@@ -866,8 +875,8 @@ std::vector<InductionScheme> inductionSchemes(const ObligationModule &Module) {
     Schemes.push_back(std::move(Scheme));
   }
 
-  // By one integer variable in an application's arguments: strong induction
-  // on its value.
+  // By one integer variable in an application's arguments or a read's
+  // address: strong induction on its value.
   std::vector<std::pair<std::string, LogicSort>> Integers;
   std::set<std::string> Bound, Found;
   integerArgumentVariables(Claim.get(), false, Bound, Found, Integers);

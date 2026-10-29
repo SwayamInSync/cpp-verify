@@ -276,6 +276,8 @@ ObligationKind verify::obligationKind(ProofObligationKind Kind) {
     return ObligationKind::MissingReturn;
   case ProofObligationKind::Unreachable:
     return ObligationKind::Unreachable;
+  case ProofObligationKind::BuiltinArgument:
+    return ObligationKind::BuiltinArgument;
   case ProofObligationKind::Unsupported:
     return ObligationKind::Unsupported;
   }
@@ -328,6 +330,8 @@ const char *verify::obligationKindName(ObligationKind Kind) {
     return "missing-return";
   case ObligationKind::Unreachable:
     return "unreachable";
+  case ObligationKind::BuiltinArgument:
+    return "builtin-argument";
   case ObligationKind::Unsupported:
     return "unsupported";
   }
@@ -556,6 +560,15 @@ static bool validateSource(const ObligationSource &Source, std::string &Error) {
   if (Source.EndLine < Source.Line ||
       (Source.EndLine == Source.Line && Source.EndColumn < Source.Column)) {
     Error = "source range end precedes its start";
+    return false;
+  }
+  if ((Source.BeginLine == 0) != (Source.BeginColumn == 0)) {
+    Error = "source range has an incomplete begin";
+    return false;
+  }
+  if (Source.BeginLine > Source.Line ||
+      (Source.BeginLine == Source.Line && Source.BeginColumn > Source.Column)) {
+    Error = "source range begins after its anchor";
     return false;
   }
   return true;
@@ -1571,24 +1584,43 @@ class ObligationBuilder {
     return {toMode(std::move(L), M), toMode(std::move(R), M)};
   }
 
+  /// The terms a comparison is lowered to, apart from its operands, are the
+  /// comparison \p At as written: they take its location and span.
+  static std::unique_ptr<VCExpr> asWritten(std::unique_ptr<VCExpr> N,
+                                           const VExpr *At) {
+    if (At) {
+      N->Loc = At->Loc;
+      N->BeginLoc = At->BeginLoc;
+      N->EndLoc = At->EndLoc;
+    }
+    return N;
+  }
+
   std::unique_ptr<VCExpr>
   exactCrossModeEquality(VCExpr::Kind Kind, std::unique_ptr<VCExpr> Machine,
-                         std::unique_ptr<VCExpr> Math) {
+                         std::unique_ptr<VCExpr> Math, const VExpr *At) {
     const unsigned BitWidth = Machine->Sort.BitWidth;
     const bool IsSigned = Machine->Sort.Signedness == LogicSignedness::Signed;
-    auto InRange = vcAnd(vcBinary(VCExpr::Ge, cloneLogicExpr(Math.get()),
-                                  mathLimit(BitWidth, IsSigned, true)),
-                         vcBinary(VCExpr::Le, cloneLogicExpr(Math.get()),
-                                  mathLimit(BitWidth, IsSigned, false)));
+    auto InRange = asWritten(
+        vcAnd(asWritten(vcBinary(VCExpr::Ge, cloneLogicExpr(Math.get()),
+                                 mathLimit(BitWidth, IsSigned, true)),
+                        At),
+              asWritten(vcBinary(VCExpr::Le, cloneLogicExpr(Math.get()),
+                                 mathLimit(BitWidth, IsSigned, false)),
+                        At)),
+        At);
 
     const LogicSort MachineSort = Machine->Sort;
     auto Converted = mathToMachine(std::move(Math), MachineSort);
-    auto Exact =
+    auto Exact = asWritten(
         vcAnd(std::move(InRange),
-              vcBinary(VCExpr::Eq, std::move(Machine), std::move(Converted)));
+              asWritten(vcBinary(VCExpr::Eq, std::move(Machine),
+                                 std::move(Converted)),
+                        At)),
+        At);
     if (Kind == VCExpr::Eq)
       return Exact;
-    return vcNot(std::move(Exact));
+    return asWritten(vcNot(std::move(Exact)), At);
   }
 
   /// `Machine Kind Math` without lifting the machine operand: a mathematical
@@ -1596,27 +1628,40 @@ class ObligationBuilder {
   /// it is compared as a machine value.
   std::unique_ptr<VCExpr> exactCrossModeOrder(VCExpr::Kind Kind,
                                               std::unique_ptr<VCExpr> Machine,
-                                              std::unique_ptr<VCExpr> Math) {
+                                              std::unique_ptr<VCExpr> Math,
+                                              const VExpr *At) {
     const unsigned BitWidth = Machine->Sort.BitWidth;
     const bool IsSigned = Machine->Sort.Signedness == LogicSignedness::Signed;
     const bool BelowMax = Kind == VCExpr::Lt || Kind == VCExpr::Le;
-    auto Outside = BelowMax ? vcBinary(VCExpr::Gt, cloneLogicExpr(Math.get()),
-                                       mathLimit(BitWidth, IsSigned, false))
-                            : vcBinary(VCExpr::Lt, cloneLogicExpr(Math.get()),
-                                       mathLimit(BitWidth, IsSigned, true));
-    auto InRange = vcAnd(vcBinary(VCExpr::Ge, cloneLogicExpr(Math.get()),
-                                  mathLimit(BitWidth, IsSigned, true)),
-                         vcBinary(VCExpr::Le, cloneLogicExpr(Math.get()),
-                                  mathLimit(BitWidth, IsSigned, false)));
+    auto Outside = asWritten(
+        BelowMax ? vcBinary(VCExpr::Gt, cloneLogicExpr(Math.get()),
+                            mathLimit(BitWidth, IsSigned, false))
+                 : vcBinary(VCExpr::Lt, cloneLogicExpr(Math.get()),
+                            mathLimit(BitWidth, IsSigned, true)),
+        At);
+    auto InRange = asWritten(
+        vcAnd(asWritten(vcBinary(VCExpr::Ge, cloneLogicExpr(Math.get()),
+                                 mathLimit(BitWidth, IsSigned, true)),
+                        At),
+              asWritten(vcBinary(VCExpr::Le, cloneLogicExpr(Math.get()),
+                                 mathLimit(BitWidth, IsSigned, false)),
+                        At)),
+        At);
     const LogicSort MachineSort = Machine->Sort;
     auto Converted = mathToMachine(std::move(Math), MachineSort);
-    return vcOr(std::move(Outside),
-                vcAnd(std::move(InRange), vcBinary(Kind, std::move(Machine),
-                                                   std::move(Converted))));
+    return asWritten(
+        vcOr(std::move(Outside),
+             asWritten(vcAnd(std::move(InRange),
+                             asWritten(vcBinary(Kind, std::move(Machine),
+                                                std::move(Converted)),
+                                       At)),
+                       At)),
+        At);
   }
 
   std::unique_ptr<VCExpr> fromBin(VBinOp Op, std::unique_ptr<VCExpr> L,
-                                  std::unique_ptr<VCExpr> R) {
+                                  std::unique_ptr<VCExpr> R,
+                                  const VExpr *At = nullptr) {
     VCExpr::Kind K = VCExpr::Eq;
     switch (Op) {
     case VBinOp::Add:
@@ -1711,18 +1756,18 @@ class ObligationBuilder {
       if (L->Sort.Kind == LogicSortKind::BitVector &&
           R->Sort.Kind == LogicSortKind::MathematicalInteger &&
           !liftsComparison(R.get()))
-        return exactCrossModeEquality(K, std::move(L), std::move(R));
+        return exactCrossModeEquality(K, std::move(L), std::move(R), At);
       if (R->Sort.Kind == LogicSortKind::BitVector &&
           L->Sort.Kind == LogicSortKind::MathematicalInteger &&
           !liftsComparison(L.get()))
-        return exactCrossModeEquality(K, std::move(R), std::move(L));
+        return exactCrossModeEquality(K, std::move(R), std::move(L), At);
     }
     const bool IsOrder = K == VCExpr::Lt || K == VCExpr::Le ||
                          K == VCExpr::Gt || K == VCExpr::Ge;
     if (IsOrder && L->Sort.Kind == LogicSortKind::BitVector &&
         R->Sort.Kind == LogicSortKind::MathematicalInteger &&
         !liftsComparison(R.get()))
-      return exactCrossModeOrder(K, std::move(L), std::move(R));
+      return exactCrossModeOrder(K, std::move(L), std::move(R), At);
     if (IsOrder && L->Sort.Kind == LogicSortKind::MathematicalInteger &&
         R->Sort.Kind == LogicSortKind::BitVector &&
         !liftsComparison(L.get())) {
@@ -1730,7 +1775,7 @@ class ObligationBuilder {
                                    : K == VCExpr::Le ? VCExpr::Ge
                                    : K == VCExpr::Gt ? VCExpr::Lt
                                                      : VCExpr::Le;
-      return exactCrossModeOrder(Flipped, std::move(R), std::move(L));
+      return exactCrossModeOrder(Flipped, std::move(R), std::move(L), At);
     }
     std::pair<std::unique_ptr<VCExpr>, std::unique_ptr<VCExpr>> Unified;
     if (K == VCExpr::Shl || K == VCExpr::Shr) {
@@ -1960,8 +2005,10 @@ public:
 
   std::unique_ptr<VCExpr> fromVExpr(const VExpr *E) {
     auto Result = fromVExprImpl(E);
-    if (Result && E)
+    if (Result && E) {
+      Result->BeginLoc = E->BeginLoc;
       Result->EndLoc = E->EndLoc;
+    }
     return Result;
   }
 
@@ -2029,7 +2076,7 @@ public:
       // order whatever the compiler's order of argument evaluation.
       auto Lhs = fromVExpr(B->Lhs.get());
       auto Rhs = fromVExpr(B->Rhs.get());
-      auto N = fromBin(B->Op, std::move(Lhs), std::move(Rhs));
+      auto N = fromBin(B->Op, std::move(Lhs), std::move(Rhs), B);
       N->Loc = B->Loc;
       return N;
     }
@@ -2389,8 +2436,9 @@ public:
         fail("invalid diagnostic variable sort in obligation lowering");
         continue;
       }
-      M.DiagnosticVariables[InternalName] = {
-          Variable.DisplayName, Sort, Variable.Loc, Variable.EndLoc, {}};
+      DiagnosticVariable &Diagnostic = M.DiagnosticVariables[InternalName];
+      Diagnostic = {Variable.DisplayName, Sort, Variable.Loc, Variable.EndLoc};
+      Diagnostic.Reference = Variable.Reference;
     }
     auto traceKind = [](PassiveTraceKind Kind) {
       switch (Kind) {
@@ -2432,6 +2480,17 @@ public:
             {Value.Label, lowerDiagnosticExpr(Value.Value.get())});
       M.TraceEvents.push_back(std::move(Lowered));
     }
+    auto Everywhere = std::make_unique<VCExpr>(VCExpr::BoolLit);
+    setBoolSort(*Everywhere);
+    Everywhere->BoolVal = true;
+    const LogicExprRef OnEveryPath(std::move(Everywhere));
+    for (const auto &[InternalName, Variable] : P.ModelVariables)
+      if (auto It = M.DiagnosticVariables.find(InternalName);
+          It != M.DiagnosticVariables.end())
+        It->second.Guard =
+            Variable.Guard
+                ? LogicExprRef(lowerDiagnosticExpr(Variable.Guard.get()))
+                : OnEveryPath;
 
     std::vector<std::unique_ptr<VCExpr>> EntryAssumes;
     for (const auto &Entry : P.EntryAssumes)
@@ -2445,6 +2504,8 @@ public:
       std::string Note;
       bool Theorem;
       std::string Origin;
+      SourceSpan Focus;
+      SourceSpan Clause;
     };
     std::vector<LoweredStmt> Stmts;
     for (const auto &Stmt : P.Stmts) {
@@ -2454,15 +2515,17 @@ public:
       }
       Stmts.push_back({Stmt->K, obligationKind(Stmt->ProofKind),
                        Stmt->TraceEventCount, fromVExpr(Stmt->Cond.get()),
-                       Stmt->Note, Stmt->Theorem, Stmt->Origin});
+                       Stmt->Note, Stmt->Theorem, Stmt->Origin,
+                       Stmt->Focus, Stmt->Clause});
     }
 
-    std::vector<
-        std::tuple<ObligationKind, std::unique_ptr<VCExpr>, std::string>>
+    std::vector<std::tuple<ObligationKind, std::unique_ptr<VCExpr>,
+                           std::string, SourceSpan>>
         ExitAsserts;
     for (const PassiveExitAssert &Exit : P.ExitAsserts)
       ExitAsserts.emplace_back(obligationKind(Exit.ProofKind),
-                               fromVExpr(Exit.Cond.get()), Exit.Note);
+                               fromVExpr(Exit.Cond.get()), Exit.Note,
+                               Exit.Anchor);
 
     // A theorem only where it speaks of the entry state alone: the body's
     // later states are not part of it.
@@ -2523,6 +2586,7 @@ public:
           ConditionWP->Premise = It->second.empty() ? "fact" : It->second;
       }
       ConditionWP->Loc = Condition->Loc;
+      ConditionWP->BeginLoc = Condition->BeginLoc;
       ConditionWP->EndLoc = Condition->EndLoc;
       return ConditionWP;
     };
@@ -2534,18 +2598,28 @@ public:
     unsigned ObligationIndex = 0;
     auto appendObligation = [&](ObligationKind Kind, const VCExpr *Condition,
                                 uint64_t TraceEventCount,
-                                const std::string &Note = "") {
+                                const std::string &Note = "",
+                                SourceSpan Focus = {}, SourceSpan Clause = {},
+                                SourceSpan Anchor = {}) {
       Obligation Item;
       Item.Kind = Kind;
       Item.Note = Note;
-      Item.Loc = Condition->Loc;
-      Item.EndLoc = Condition->EndLoc;
+      Item.Focus = Focus;
+      Item.Clause = Clause;
+      if (Anchor.isValid())
+        Item.Focus = {Condition->Loc, Condition->BeginLoc, Condition->EndLoc};
+      else
+        Anchor = {Condition->Loc, Condition->BeginLoc, Condition->EndLoc};
+      Item.Loc = Anchor.Loc;
+      Item.BeginLoc = Anchor.BeginLoc;
+      Item.EndLoc = Anchor.EndLoc;
       Item.TraceEventCount = TraceEventCount;
       Item.Id = Identity + "::obligation:" + std::to_string(++ObligationIndex);
       Item.Goal = makeGoal(Condition);
       Item.CounterexampleQuery = vcNot(cloneLogicExpr(Item.Goal.get()));
-      Item.CounterexampleQuery->Loc = Condition->Loc;
-      Item.CounterexampleQuery->EndLoc = Condition->EndLoc;
+      Item.CounterexampleQuery->Loc = Anchor.Loc;
+      Item.CounterexampleQuery->BeginLoc = Anchor.BeginLoc;
+      Item.CounterexampleQuery->EndLoc = Anchor.EndLoc;
       M.Obligations.push_back(std::move(Item));
     };
 
@@ -2557,12 +2631,13 @@ public:
         continue;
       }
       appendObligation(Stmt.ProofKind, Stmt.Cond.get(), Stmt.TraceEventCount,
-                       Stmt.Note);
+                       Stmt.Note, Stmt.Focus, Stmt.Clause);
       if (oversize())
         return ObligationSizeError::obligations(size(), MaxNodes);
     }
-    for (const auto &[Kind, Exit, Note] : ExitAsserts) {
-      appendObligation(Kind, Exit.get(), M.TraceEvents.size(), Note);
+    for (const auto &[Kind, Exit, Note, Anchor] : ExitAsserts) {
+      appendObligation(Kind, Exit.get(), M.TraceEvents.size(), Note, {}, {},
+                       Anchor);
       if (oversize())
         return ObligationSizeError::obligations(size(), MaxNodes);
     }
@@ -2612,6 +2687,9 @@ verify::validateObligationModule(const ObligationModule &M) {
     for (const DiagnosticTraceValue &Value : Event.Values)
       Roots.push_back(Value.Value.get());
   }
+  for (const auto &[InternalName, Variable] : M.DiagnosticVariables)
+    if (Variable.Guard)
+      Roots.push_back(Variable.Guard.get());
   Roots.push_back(M.CorrectnessGoal.get());
   Roots.push_back(M.CounterexampleQuery.get());
   for (const Obligation &Item : M.Obligations) {
@@ -2678,6 +2756,17 @@ verify::validateObligationModule(const ObligationModule &M) {
             llvm::inconvertibleErrorCode(),
             "obligation module has invalid diagnostic trace value");
   }
+  for (const auto &[InternalName, Variable] : M.DiagnosticVariables)
+    if (Variable.Guard &&
+        (!validateLogicExpr(Variable.Guard.get(), ValidationError,
+                            &WellFormed) ||
+         !validateLogicCalls(Variable.Guard.get(), M.LogicFunctions,
+                             ValidationError, &CallsChecked) ||
+         !ModuleScopes.validate(Variable.Guard.get(), ValidationError) ||
+         Variable.Guard->Sort.Kind != LogicSortKind::Bool))
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "obligation module has an invalid diagnostic variable guard");
   if (!validateLogicExpr(M.CorrectnessGoal.get(), ValidationError, &WellFormed))
     return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                    ValidationError.c_str());
@@ -2731,9 +2820,16 @@ verify::validateObligationModule(const ObligationModule &M) {
       return llvm::createStringError(
           llvm::inconvertibleErrorCode(),
           "obligation module has an invalid stable diagnostic identity");
-    if (!validateSource(Item.Source, ValidationError))
-      return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
-                                     ValidationError.c_str());
+    for (const ObligationSource *Source :
+         {&Item.Source, &Item.FocusSource, &Item.ClauseSource}) {
+      if (containsEmbeddedNul(Source->File))
+        return llvm::createStringError(
+            llvm::inconvertibleErrorCode(),
+            "obligation module has an invalid diagnostic source");
+      if (!validateSource(*Source, ValidationError))
+        return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
+                                       ValidationError.c_str());
+    }
     if (Item.TraceEventCount > M.TraceEvents.size())
       return llvm::createStringError(
           llvm::inconvertibleErrorCode(),

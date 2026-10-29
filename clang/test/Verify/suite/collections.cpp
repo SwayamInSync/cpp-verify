@@ -32,7 +32,8 @@ cppverify::proof void set_wrong(set a, int x)
 {
   cppverify::check(a.contains(x));
 }
-// CHECK-DAG: error: verification failed: set_wrong [{{.*}}::assertion@[[@LINE-2]]:3] (counterexample: a [ssa=a_0] [type=set] = {{{.*}}}{{.*}}) [backend=z3] [reason=counterexample]
+// CHECK-DAG: :[[@LINE-2]]:22: error: verification failed: set_wrong [assertion] [backend=z3] [reason=counterexample]
+// CHECK-DAG: note: counterexample: a = {{{.*}}}{{.*}}
 
 cppverify::proof void multisets(multiset m, int x)
 {
@@ -48,7 +49,7 @@ cppverify::proof void multiset_wrong(multiset m, int x)
 {
   cppverify::check(m.remove(x).insert(x) == m);
 }
-// CHECK-DAG: error: verification failed: multiset_wrong [{{.*}}::assertion@[[@LINE-2]]:3] (counterexample: {{.*}}) [backend=z3] [reason=counterexample]
+// CHECK-DAG: :[[@LINE-2]]:42: error: verification failed: multiset_wrong [assertion] [backend=z3] [reason=counterexample]
 
 cppverify::proof void maps(map m, int k, int v, int j)
   cppverify::pre(k != j)
@@ -67,21 +68,24 @@ cppverify::proof void map_wrong(map m, int k)
 {
   cppverify::check(m.insert(k, 1).remove(k) == m);
 }
-// CHECK-DAG: error: verification failed: map_wrong [{{.*}}::assertion@[[@LINE-2]]:3] (counterexample: {{.*}}m [ssa=m_0] [type=map] = {{{.*}} -> {{.*}}}) [backend=z3] [reason=counterexample]
+// CHECK-DAG: :[[@LINE-2]]:45: error: verification failed: map_wrong [assertion] [backend=z3] [reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}m = {{{.*}} -> {{.*}}}
 
 // A set may hold every integer; the certifier checks the infinite one.
 cppverify::proof void some_outside(set a)
 {
   cppverify::check(cppverify::exists(k, !a.contains(k)));
 }
-// CHECK-DAG: error: verification failed: some_outside [{{.*}}::assertion@[[@LINE-2]]:3] (counterexample: a [ssa=a_0] [type=set] = {..}) [backend=z3] [reason=counterexample]
+// CHECK-DAG: :[[@LINE-2]]:20: error: verification failed: some_outside [assertion] [backend=z3] [reason=counterexample]
+// CHECK-DAG: note: counterexample: a = {..}
 
 cppverify::proof void map_values(map m)
   cppverify::pre(m.contains(5))
 {
   cppverify::check(cppverify::forall(k, m[k] == 0));
 }
-// CHECK-DAG: error: verification failed: map_values [{{.*}}::assertion@[[@LINE-2]]:3] (counterexample: m [ssa=m_0] [type=map] = {{{.*}}5{{.*}}}) [backend=z3] [reason=counterexample]
+// CHECK-DAG: :[[@LINE-2]]:20: error: verification failed: map_values [assertion] [backend=z3] [reason=counterexample]
+// CHECK-DAG: note: counterexample: m = {{{.*}}5{{.*}}}
 
 cppverify::spec bool valid(const int *p, int n) { return true; }
 

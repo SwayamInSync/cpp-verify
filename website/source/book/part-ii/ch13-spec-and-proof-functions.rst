@@ -180,7 +180,10 @@ is checked like any other:
 
 .. code-block:: text
 
-   stuck.cpp:4:42: error: spec decreases failed: stuck [backend=z3] [reason=counterexample] (n [type=math-i32] = 1)
+   stuck.cpp:4:42: error: spec decreases failed: stuck [backend=z3] [reason=counterexample]
+       4 |   return n <= 0 ? 0 : cv::choose(k, k == stuck(n) + 1);
+         |                                          ^
+   stuck.cpp:4:42: note: counterexample: n = 1
    Unresolved: forty_two [backend=z3] [reason=spec.termination] (relies on the definition of stuck, whose termination is not established)
 
 At ``n = 1`` the definition says that ``stuck(1)`` equals ``stuck(1) + 1``, a
@@ -331,7 +334,8 @@ Automatic induction
 Unfolding a recursive spec a few levels settles claims about a few values.
 A claim about every ``n``, such as ``fibo(n) >= n - 1`` for all ``n >= 3``,
 needs induction: show it at ``n`` assuming it at smaller values. When
-unfolding leaves a claim unresolved (``spec.fuel``), the verifier tries
+unfolding leaves a claim unresolved (``spec.fuel``), or the solver cannot
+settle a lemma (a proof function) within its timeout, the verifier tries
 inductions by itself before reporting it:
 
 - **Following a recursive spec** that the claim applies (shown as
@@ -342,8 +346,32 @@ inductions by itself before reporting it:
   walking the definition: through the other specs of a mutual recursion, and
   for a call inside ``cppverify::forall`` or ``cppverify::exists``, at every value the quantifier
   ranges over.
-- **On an integer variable** (shown as ``on n``): strong induction, the claim
-  assumed at every smaller nonnegative value of ``n``.
+- **On an integer variable** (shown as ``on n``) that the claim passes to a
+  spec or uses as an index into memory: strong induction, the claim assumed
+  at every smaller value of ``n`` (from a nonnegative one).
+
+An order on adjacent elements is an order on all of them, by induction on
+the second index; the solver alone searches until its timeout:
+
+.. code-block:: cpp
+
+   cv::proof void ordered(const int *a, int n, int i, int j)
+     cv::pre(cv::valid(a, n))
+     cv::pre(cv::forall(k, 1, n, a[k - 1] <= a[k]))
+     cv::pre(0 <= i && i <= j && j < n)
+     cv::post(a[i] <= a[j])
+   {
+   }
+
+.. code-block:: text
+
+   Verified: ordered [backend=z3] [by induction on j]
+
+A lemma tried this way has first used its whole timeout, so it takes longer
+than one the solver settles: about a minute here with the default timeout,
+eight seconds with ``--timeout=2000``. An executable function is not tried:
+induction proves lemmas, and a function that relies on such a fact calls the
+lemma.
 
 Everything else stays fixed, and the assumption is the claim exactly as the
 function states it, so these never prove a false claim: the measure cannot
@@ -547,7 +575,10 @@ solver proves it, the counterexample is confirmed:
 
 .. code-block:: text
 
-   error: verification failed: small_power [...::postcondition@...] (counterexample: n [ssa=n_0] [type=i32] = 1000023594; confirmed by a proof at this input, since its check could not compute pow2(1000023594)) [backend=z3] [reason=counterexample]
+   example.cpp:11:20: error: verification failed: small_power [postcondition] (confirmed by a proof at this input, since its check could not compute pow2(1000023594)) [backend=z3] [reason=counterexample]
+      11 |   cv::post(pow2(n) < 1000)
+         |            ~~~~~~~~^~~~~~
+   example.cpp:11:20: note: counterexample: n = 1000023594
 
 The failure rests on the facts the proof used (here ``pow2``'s
 postcondition); if one of them is not established, the verdict is not a
@@ -616,7 +647,10 @@ Which to do depends on what you believe:
 .. code-block:: text
 
    Verified: fibo_at_least_5 [backend=z3]
-   error: verification failed: fibo_small [...::postcondition@...] (counterexample: n [ssa=n_0] [type=i32] = 1000000000; confirmed by a proof at this input that uses the contract of fibo_at_least_5, since its check could not compute fibo(1000000000)) [backend=z3] [reason=counterexample]
+   example.cpp:21:20: error: verification failed: fibo_small [postcondition] (confirmed by a proof at this input that uses the contract of fibo_at_least_5, since its check could not compute fibo(1000000000)) [backend=z3] [reason=counterexample]
+      21 |   cv::post(fibo(n) < 5)
+         |            ~~~~~~~~^~~
+   example.cpp:21:20: note: counterexample: n = 1000000000
 
 The proof instantiates a lemma where its postcondition speaks of the same
 spec application as the claim, here ``fibo_at_least_5`` at
@@ -661,7 +695,10 @@ those assumptions. A lemma over memory is used the same way:
 .. code-block:: text
 
    Verified: total_nonneg [backend=z3]
-   error: verification failed: total_negative [...::postcondition@...] (counterexample: n [ssa=n_0] [type=i32] = 1000000000, a [ssa=a_0] [type=pointer] = 1; confirmed by a proof at this input that uses the contract of total_nonneg, since its check could not compute total(1, 1000000000)) [backend=z3] [reason=counterexample]
+   example.cpp:20:24: error: verification failed: total_negative [postcondition] (confirmed by a proof at this input that uses the contract of total_nonneg, since its check could not compute total(1, 1000000000)) [backend=z3] [reason=counterexample]
+      20 |   cv::post(total(a, n) < 0)
+         |            ~~~~~~~~~~~~^~~
+   example.cpp:20:24: note: counterexample: a = 1, n = 1000000000
 
 Only contracts that are established count: a confirmation runs after every
 function is verified, and a lemma that failed, or that rests on a fact that
@@ -999,8 +1036,17 @@ it means the same:
 
 .. code-block:: text
 
-   choose.cpp:5:43: error: verification failed: write_inside [...] (counterexample: a [ssa=a_0] [type=pointer] = ..., n [ssa=n_0] [type=i32] = 1, ...)
-   choose.cpp:12:33: error: verification failed: written_differently [...] (counterexample: n [ssa=n_0] [type=i32] = <unknown>)
+   choose.cpp:4:43: error: verification failed: write_inside [postcondition] [backend=z3] [reason=counterexample]
+       4 |   cv::post(cv::choose(k, 0, n, a[k] == x) ==
+         |                                           ^
+   choose.cpp:4:43: note: counterexample: a = 8856, n = 1, x = -1
+   choose.cpp:7:8: note: stores 0 at address 8856
+       7 |   a[0] = x == 0 ? 1 : 0;
+         |        ^
+   choose.cpp:11:33: error: verification failed: written_differently [postcondition] [backend=z3] [reason=counterexample]
+      11 |   cv::post(cv::choose(k, k > n) == cv::choose(k, n < k))
+         |            ~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~
+   choose.cpp:11:33: note: counterexample: n = <unknown>
 
 In every counterexample to ``write_inside`` the write changes ``a[0]``, a
 cell the condition reads, so the choice may move. When a proof needs equivalent conditions to choose alike, write
@@ -1174,9 +1220,10 @@ where a finite derivation shows it.
    Verified: spec post: reach
    Verified: three_reaches_twelve [backend=z3]
    Verified: no_way_back [backend=z3]
-   book.cpp:25:14: error: verification failed: wrong_way [...::postcondition@25:14]
-     (counterexample: a [ssa=a_0] [type=i32] = 38, b [ssa=b_0] [type=i32] = 38)
-     [backend=z3] [reason=counterexample]
+   book.cpp:25:14: error: verification failed: wrong_way [postcondition] [backend=z3] [reason=counterexample]
+      25 |   cv::post(a < b)
+         |            ~~^~~
+   book.cpp:25:14: note: counterexample: a = 38, b = 38
 
 A proof sees ``reach`` through its body, unfolded once at each application it
 names: ``reach(6, 12)`` holds by the edge ``6 -> 12`` and ``reach(12, 12)``,

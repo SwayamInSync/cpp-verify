@@ -30,14 +30,26 @@ is always on, so the encoder generates the obligation itself and it fails:
 
 .. code-block:: text
 
-   error: verification failed: bsearch_broken [...::overflow@...]
-     (counterexample: lo = 1073741824, hi = 1073741824)
+   binary_search.cpp:28:19: error: verification failed: bsearch_broken [overflow] [backend=z3] [reason=counterexample]
+      28 |     int mid = (lo + hi) / 2;
+         |               ~~~~^~~~~
+   binary_search.cpp:28:19: note: counterexample: a = 1, n = 1073741825, lo = 0 -> 1073741824, hi = 1073741824, res = -1 -> 1073741824
+   binary_search.cpp:24:3: note: enters the loop
+      24 |   while (lo <= hi)
+         |   ^
+   binary_search.cpp:24:3: note: starts an arbitrary iteration of the loop, where its condition is true
+   note: the counterexample's state at the loop at 24:3 is any state its invariants allow, not necessarily one an execution reaches
+   note: an execution fails this check within 2 iterations of each loop (counterexample: a = 1, n = 2147483647, key = -2147483647, lo = 0 -> 1073741824, hi = 2147483646, res = -1, mid = 1073741823)
 
-Those two values sum to 2,147,483,648, which is ``INT_MAX + 1``. The verifier
-did not merely report that something might overflow; it named the check that
-fails and produced the concrete state that breaks it. The solver chooses the
-witness, so another version may report a different pair with the same
-overflow.
+In the iteration the counterexample starts, ``lo`` and ``hi`` are both
+1073741824, which sum to 2,147,483,648, ``INT_MAX + 1``. That state comes from
+the loop's invariant, so the verifier then unrolls the loop and finds an
+execution that gets there: in an array of ``INT_MAX`` elements, the first
+midpoint is 1073741823, the key is larger, and the second iteration adds
+1073741824 and 2147483646. The verifier did not merely report that something
+might overflow; it named the check that fails and produced the concrete state
+that breaks it. The solver chooses the witness, so another version may report
+a different pair with the same overflow.
 
 Replacing the midpoint with the standard safe form makes the same function
 verify:

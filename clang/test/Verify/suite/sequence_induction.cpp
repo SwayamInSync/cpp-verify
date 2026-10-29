@@ -31,7 +31,7 @@ cppverify::proof void total_concat_wrong(seq s, seq t)
   if (t.len() > 0)
     total_concat_wrong(s, t.subrange(0, t.len() - 1));
 }
-// CHECK-DAG: error: verification failed: total_concat_wrong [{{.*}}::postcondition@[[@LINE-6]]:{{[0-9]+}}] (counterexample: {{.*}}) [backend=z3] [reason=counterexample]
+// CHECK-DAG: :[[@LINE-6]]:{{[0-9]+}}: error: verification failed: total_concat_wrong [postcondition] [backend=z3] [reason=counterexample]
 
 cppverify::spec int count(seq s, int x)
   cppverify::decreases(s.len())

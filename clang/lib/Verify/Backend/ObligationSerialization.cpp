@@ -329,6 +329,8 @@ uint8_t obligationTag(ObligationKind Kind) {
     return 21;
   case ObligationKind::Unreachable:
     return 23;
+  case ObligationKind::BuiltinArgument:
+    return 24;
   case ObligationKind::Unsupported:
     return 22;
   }
@@ -386,6 +388,10 @@ std::optional<ObligationKind> obligationFromTag(uint8_t Tag, uint32_t Version) {
     return ObligationKind::Unsupported;
   case 23:
     return ObligationKind::Unreachable;
+  case 24:
+    if (Version < 6)
+      return std::nullopt;
+    return ObligationKind::BuiltinArgument;
   default:
     return std::nullopt;
   }
@@ -444,6 +450,7 @@ std::optional<DiagnosticTraceKind> traceFromTag(uint8_t Tag) {
 
 class ArchiveWriter {
   std::string Data;
+  uint32_t FormatVersion = ObligationSerializationVersion;
   bool IncludeSource;
   bool IncludeSourceRanges;
   bool IncludeDiagnostics;
@@ -487,6 +494,10 @@ public:
     if (IncludeSourceRanges) {
       writeU32(Source.EndLine);
       writeU32(Source.EndColumn);
+      if (FormatVersion >= 5) {
+        writeU32(Source.BeginLine);
+        writeU32(Source.BeginColumn);
+      }
     }
   }
 
@@ -560,6 +571,7 @@ public:
 
   void writeModule(const ObligationModule &Module,
                    uint32_t FormatVersion = ObligationSerializationVersion) {
+    this->FormatVersion = FormatVersion;
     Data.append(ArchiveMagic.data(), ArchiveMagic.size());
     writeU32(FormatVersion);
     uint32_t Flags = IncludeSource ? HasSourceMetadata : 0;
@@ -584,6 +596,11 @@ public:
         writeString(Variable.DisplayName);
         writeSort(Variable.Sort);
         writeSource(Variable.Source);
+        if (FormatVersion >= 4) {
+          writeU8(Variable.Guard ? 1 : 0);
+          if (Variable.Guard)
+            writeExpr(Variable.Guard.get());
+        }
       }
       writeU64(Module.TraceEvents.size());
       for (const DiagnosticTraceEvent &Event : Module.TraceEvents) {
@@ -613,6 +630,10 @@ public:
       writeU8(IncludeDiagnostics ? obligationTag(Item.Kind)
                                  : obligationSemanticTag(Item.Kind));
       writeSource(Item.Source);
+      if (IncludeDiagnostics && FormatVersion >= 6) {
+        writeSource(Item.FocusSource);
+        writeSource(Item.ClauseSource);
+      }
       writeExpr(Item.Goal.get());
       writeExpr(Item.CounterexampleQuery.get());
     }
@@ -783,6 +804,10 @@ class ArchiveReader {
     if (IncludeSourceRanges) {
       Source.EndLine = readU32();
       Source.EndColumn = readU32();
+      if (Version >= 5) {
+        Source.BeginLine = readU32();
+        Source.BeginColumn = readU32();
+      }
     }
     return Source;
   }
@@ -899,6 +924,13 @@ class ArchiveReader {
         Variable.DisplayName = readString();
         Variable.Sort = readSort();
         Variable.Source = readSource(IncludeSource);
+        if (Version >= 4) {
+          uint8_t HasGuard = readU8();
+          if (HasGuard > 1)
+            fail("invalid diagnostic variable guard in obligation archive");
+          if (HasGuard == 1)
+            Variable.Guard = LogicExprRef(readExpr());
+        }
         if (!Module.DiagnosticVariables
                  .emplace(std::move(InternalName), std::move(Variable))
                  .second)
@@ -953,6 +985,10 @@ class ArchiveReader {
         fail("invalid obligation kind in obligation archive");
       Item.Kind = Kind.value_or(ObligationKind::Assertion);
       Item.Source = readSource(IncludeSource);
+      if (IncludeDiagnostics && Version >= 6) {
+        Item.FocusSource = readSource(IncludeSource);
+        Item.ClauseSource = readSource(IncludeSource);
+      }
       Item.Goal = readExpr();
       Item.CounterexampleQuery = readExpr();
       Module.Obligations.push_back(std::move(Item));

@@ -3,6 +3,7 @@
 #define LLVM_CLANG_VERIFY_DRIVER_VERIFIER_H
 
 #include "../Backend/VerifyBackend.h"
+#include "DiagnosticPart.h"
 #include "llvm/Support/raw_ostream.h"
 #include <map>
 #include <memory>
@@ -31,7 +32,9 @@ inline constexpr uint64_t DefaultMaxQueryNodes = 4000000;
 /// The megabytes Z3's queries may allocate together, and each cvc5 process.
 inline constexpr uint64_t DefaultMemoryLimitMB = 8192;
 
-enum class DiagnosticFormat { Text, Json };
+/// How results are printed: text, JSON Lines (cppverify.diagnostic/2), or
+/// text with a GitHub workflow annotation after each error and warning.
+enum class DiagnosticFormat { Text, Json, GitHub };
 
 /// Which obligations of an unresolved module --lean-fallback exports.
 enum class LeanFallbackScope {
@@ -139,6 +142,9 @@ struct VerifyOptions {
   unsigned ConfirmBound = 10;
   /// Where the run counts the verdicts it prints, if anywhere.
   VerifySummary *Summary = nullptr;
+  /// Where to put each result as Clang diagnostics instead of printing it,
+  /// for the compile path to report through the compiler's own engine.
+  std::vector<VerifyDiagnosticPart> *Parts = nullptr;
   /// A run over several files, which holds each file's results until every
   /// file is verified (see CrossFileRun), or null.
   class CrossFileRun *CrossFile = nullptr;

@@ -82,15 +82,19 @@ void all_below_small(int n)
 
 // CHECK-DAG: Verified: spec decreases: ack
 // CHECK-DAG: Verified: ack_values
-// CHECK-DAG: error: spec decreases failed: diverges_at_one {{.*}}[reason=counterexample] (n [type=math-i32] = 1)
+// CHECK-DAG: error: spec decreases failed: diverges_at_one {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}n = 1{{( ->|,|$)}}
 // CHECK-DAG: Unresolved: uses_divergent [backend={{z3|bmc, bound=[0-9]+}}]{{( \[vacuous\])?}} [reason=spec.termination] (relies on the definition of diverges_at_one, whose termination is not established)
 // CHECK-DAG: Unresolved: spec decreases unresolved: nested {{.*}}a definition cannot be used to prove its own termination
-// CHECK-DAG: error: spec decreases failed: second_unbounded {{.*}}[reason=counterexample] (m [type=math-i32] = {{[1-9][0-9]*}}, n [type=math-i32] = {{-?[0-9]+}})
-// CHECK-DAG: error: spec decreases failed: first_unbounded {{.*}}[reason=counterexample] (m [type=math-i32] = {{-?[0-9]+}}, n [type=math-i32] = {{[1-9][0-9]*}})
+// CHECK-DAG: error: spec decreases failed: second_unbounded {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}m = {{[1-9][0-9]*}}{{( ->|,|$)}}{{.*}}n = {{-?[0-9]+}}{{( ->|,|$)}}
+// CHECK-DAG: error: spec decreases failed: first_unbounded {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}m = {{-?[0-9]+}}{{( ->|,|$)}}{{.*}}n = {{[1-9][0-9]*}}{{( ->|,|$)}}
 
 // CHECK-DAG: Verified: spec decreases: all_below
 // CHECK-DAG: Verified: all_below_small
-// CHECK-DAG: error: spec decreases failed: reaches_itself {{.*}}[reason=counterexample] (n [type=math-i32] = {{[0-9]+}})
+// CHECK-DAG: error: spec decreases failed: reaches_itself {{.*}}[reason=counterexample]
+// CHECK-DAG: note: counterexample: {{.*}}n = {{[0-9]+}}{{( ->|,|$)}}
 
 // JSON-DAG: "function":"diverges_at_one"{{.*}}"status":"failed"
 // JSON-DAG: "function":"ack"{{.*}}"status":"verified"

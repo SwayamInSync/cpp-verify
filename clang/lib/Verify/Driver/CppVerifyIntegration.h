@@ -2,9 +2,10 @@
 #ifndef LLVM_CLANG_VERIFY_DRIVER_CPPVERIFY_INTEGRATION_H
 #define LLVM_CLANG_VERIFY_DRIVER_CPPVERIFY_INTEGRATION_H
 
+#include "DiagnosticPart.h"
 #include <future>
 #include <string>
-#include <utility>
+#include <vector>
 
 namespace clang {
 class ASTContext;
@@ -12,7 +13,11 @@ class CompilerInstance;
 
 namespace verify {
 
-using CppVerifyAsyncResult = std::pair<bool, std::string>;
+/// Whether verification succeeded, and its results as Clang diagnostics.
+struct CppVerifyAsyncResult {
+  bool Ok = false;
+  std::vector<VerifyDiagnosticPart> Parts;
+};
 
 /// Returns true if CppVerify SMT should run for this compilation.
 bool shouldRunCppVerify(const CompilerInstance &CI);
@@ -24,7 +29,9 @@ bool shouldRunCppVerify(const CompilerInstance &CI);
 std::future<CppVerifyAsyncResult>
 startCppVerifyAsync(ASTContext &Ctx, std::string ContractsOut = "");
 
-/// Join \p Future, print verifier output, and report diagnostics on failure.
+/// Join \p Future and report its results through the compiler's diagnostics:
+/// failures as errors with notes, warnings in -Wcppverify, and proofs as
+/// remarks (-Rcppverify).
 bool finishCppVerify(CompilerInstance &CI, std::future<CppVerifyAsyncResult> Future);
 
 } // namespace verify

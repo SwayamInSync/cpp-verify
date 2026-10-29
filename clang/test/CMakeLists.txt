@@ -49,6 +49,8 @@ if(LLVM_WITH_Z3 AND Z3_FOUND AND CMAKE_SYSTEM_NAME MATCHES "Linux")
   endif()
 endif()
 
+get_property(CPPVERIFY_Z3_SHELL GLOBAL PROPERTY CPPVERIFY_Z3_SHELL)
+
 configure_lit_site_cfg(
   ${CMAKE_CURRENT_SOURCE_DIR}/lit.site.cfg.py.in
   ${CMAKE_CURRENT_BINARY_DIR}/lit.site.cfg.py

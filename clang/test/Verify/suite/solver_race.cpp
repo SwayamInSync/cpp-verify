@@ -34,6 +34,7 @@ int wrong_bound(int x)
   return x + 1;
 }
 // CHECK-DAG: error: verification failed: wrong_bound {{.*}}[backend={{z3|cvc5}}] [reason=counterexample]
+// CHECK-DAG: note: counterexample: x = 9, result = 10
 // REPLAY-DAG: wrong_bound {{.*}}[reason=counterexample]
 
 cppverify::proof void pushed(seq s, int x)

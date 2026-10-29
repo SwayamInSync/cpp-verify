@@ -135,6 +135,16 @@ correct.
 after it could fail for values it never produces. Its state now carries over
 (:doc:`language/functions-loops`).
 
+**Class invariants in loops.** A loop that called member functions of an
+object, outside its class, forgot the object's class invariant: at the loop
+the verifier knew only what the loop's invariants said, so the next call
+failed its ``[type-invariant]`` check, and an invariant over private fields
+could not be restated there. A loop now keeps the class invariant of every
+object it reaches, the local objects alive at it and those its function's
+reference and pointer parameters address, checked at entry and kept by
+every iteration like the user's own; a loop in a member function of the
+class keeps none of its class's (:doc:`language/structs`).
+
 **Loops that initialize local storage.** Every iteration of a loop after the
 first saw the local storage the earlier ones wrote as uninitialized, so a
 loop filling a local array failed its ``initialization`` check, at the
@@ -282,6 +292,18 @@ it into ``error: expected unqualified-id``. ``-fverify-contracts`` now defines
 targets unless the command line defines it, so the header defines only its
 ``__Check``, ``__Require``, and ``__Verify`` names (:doc:`language/syntax`).
 
+**Headers shared with other compilers.** Contracted code compiled only with
+this Clang and ``-fverify-contracts``, and nothing told a header which
+compiler read it, so a project that GCC, MSVC, or upstream Clang also builds
+could not keep its contracts in its sources. ``-fverify-contracts`` now
+predefines ``__cppverify__``, with the release in ``__cppverify_major__``,
+``__cppverify_minor__``, ``__cppverify_patchlevel__``, and
+``__cppverify_version__``, and a macro that is empty without it keeps each
+construct out of every other compiler's way. A failure inside a macro's
+argument is located where the argument is written, as Clang shows its own
+errors, in the JSON record, the obligation's ID, and the counterexample's
+notes too; before, those named the macro's use (:doc:`language/syntax`).
+
 **Records through pointers.** Through a pointer, 0.1.1 reached only a record's
 direct fields (``p->x``). A nested field (``p->inner.y``), a field of an
 element (``p[k].x``), and an element of an array member (``r->buf[i]``) were
@@ -356,6 +378,27 @@ instantiated, and a contracted template, or member of a class template,
 that nothing instantiates is reported. ``cv::post(cv::result > 0)`` and ``cv::old(x) > 0``
 of a template's type did not compile (``invalid operands to binary
 expression ('T' and 'int')``) (:doc:`language/functions-loops`).
+
+**The address of a local in a contract.** ``size(&r)`` in a loop invariant
+or a ``cv::check``, for a local object ``r``, was an error (``raw address-of
+is unsupported until lexical lifetime and escape effects are modeled``).
+A contract may now take the address of a local object in memory, since a
+spec it is passed to cannot keep it; in ghost code, which could, it is
+still an error (:doc:`language/structs`).
+
+**Hiding a spec template's specialization.** ``cv::hide(at<4>)`` and
+``cv::reveal_with_fuel(steps<2>, 4)`` stopped the function (``unsupported C++
+type in verification: <overloaded function type>``). They now name that
+specialization, and a template's name alone is an error, as in C++
+(``reference to overloaded function could not be resolved``)
+(:doc:`language/ghost-proofs`).
+
+**A ring buffer case study.** A class template ``Ring<N>`` with private
+fields and a class invariant, specified as a FIFO queue through spec views,
+with clients that use a range-based ``for``, a ``switch``, and an object
+passed by reference: six functions verify in about 2 s, and the classic
+wraparound bug fails with the store that breaks the invariant
+(:doc:`case-studies/ring-buffer`).
 
 **std::min and std::max.** In a contract they ended ``Unresolved:
 obligation lowering failed: f (missing spec definition: fn_...)``, as did
@@ -482,6 +525,126 @@ are errors at the statement (:doc:`language/functions-loops`).
 
 Running cpp-verify
 ~~~~~~~~~~~~~~~~~~
+
+**Induction for lemmas that time out.** The automatic inductions ran only
+when unfolding a recursive spec could not settle a claim, so a lemma such as
+"an order on adjacent elements is an order on all of them" ended
+``solver.timeout``. A lemma the solver cannot settle within its timeout is
+now tried by induction too, including strong induction on a variable that
+indexes memory (``[by induction on j]``); an executable function is not
+(:doc:`book/part-ii/ch13-spec-and-proof-functions`).
+
+**Results as records, SARIF, and annotations.** JSON records had no source
+for a verified function, a failure's range began at its caret and ended at
+the first column of its last token, compiler errors stayed text, and nothing
+ended the run; there was no SARIF. JSON records are now
+``cppverify.diagnostic/2``: every one names its function and where it is
+declared, a failure spans its whole expression to the column after its last
+character and gives its counterexample and path as the text prints them, the
+compiler's own errors and warnings are records with their notes, and a
+``cppverify.summary/1`` record ends the run. ``--diagnostics-format=sarif``
+writes one SARIF 2.1.0 log for code scanning, each failure with its path as
+a code flow, and ``--diagnostics-format=github`` annotates errors and
+warnings in a GitHub workflow (:doc:`language/tooling`).
+
+**Failures read like compiler errors.** A failure was one line that named its
+obligation by an internal identity and listed every SSA version of every
+variable with its type (``verification failed: abs
+[fn_5f5a3361627369::overflow@5:3] (counterexample: x [ssa=x_0] [type=i32] =
+-2147483648; trace: return.return@5:3 value=-2147483648)``). It is now a Clang
+error at the failing source, with the line and a caret under the check, the
+kind of check in brackets, the counterexample as a note in source names (each
+variable once with the values it takes along the path joined by ``->``, a
+hidden local told apart by its line, a reference as ``&r``), and each step of
+the path as a note at its line, in the static analyzer's words (``takes the
+true branch``, ``calls f(3)``, ``returns -2147483648``); a long path shows its
+first and last five steps. The values no longer include those of branches the
+path does not take, which the old list gave as if they were values of the
+execution, and a check that fails at a store, a ``delete``, or a ``return`` no
+longer lists that operation as a step taken (in JSON as well). A ``clang++ -fverify-contracts`` compilation reports each result as a
+diagnostic of its own instead of printing the verifier's text and then one
+``verification failed`` error: a failure or an unresolved result is an error,
+a warning belongs to ``-Wcppverify`` (so ``-Wno-cppverify`` and
+``-Werror=cppverify`` work), a proof is a remark shown with ``-Rcppverify``,
+and ``-fdiagnostics-format=sarif`` carries them all. In JSON Lines a record's
+``message`` is the new error text (:doc:`language/tooling`).
+
+**Failures at the part that fails.** A failure pointed at its whole clause
+(the top-level ``&&`` of ``cv::post(0 <= cv::result && cv::result <= 50)``),
+at the start of the statement for an operation that overflows or for a call
+whose precondition does not hold (``int y = x * x + 1;`` at ``int``), and
+never showed which of the callee's clauses fails. It now points at the part
+the counterexample makes false: a clause's first false conjunct, the
+operation itself (``x * x``) under the conditions around it, and the call
+(``half(2 * y + 1)``), with a note at the callee's clause, its conjunct that
+does not hold (``x % 2 == 0``); JSON gives that clause as ``related``, SARIF
+as a related location. A call's step on the path is at the call too. The
+check's ID keeps its anchor (:doc:`language/tooling`).
+
+**Bit builtins.** A call of ``__builtin_clz``, ``__builtin_ctz``,
+``__builtin_popcount``, ``__builtin_parity``, ``__builtin_ffs`` (each with
+its ``l`` and ``ll`` forms), or ``__builtin_bswap16/32/64`` stopped its
+function (``call to function without a verification contract``). Each is now
+its exact definition over the operand's bits, and ``__builtin_clz`` and
+``__builtin_ctz`` of 0, which GCC leaves undefined, fail a check of the new
+kind ``builtin-argument`` at the call. A ``static_assert`` with a message in a
+function crashed cpp-verify; it now does nothing, as one without a message
+did (:doc:`language/functions-loops`).
+
+**Writes in expressions.** The value of an increment, a decrement, an
+assignment, or a comma expression inside a larger expression (``a[i++]``,
+``*dst++ = *src++``, ``while (k-- > 0)``, ``if ((c = *p) != 0)``,
+``a = b = 0``) stopped its function (``unsupported unary operator``,
+``unsupported binary operator``). Each write now runs where C++ evaluates it,
+a ``&&``, ``||``, or ``?:`` operand's only on its path, and its value is read
+there, a postfix operator's before the write. An expression the verifier
+reads twice, as a compound assignment's target, is still evaluated once.
+Where C++ leaves the order of operands open, a write that another operand may
+read is an error at the expression, as such a call already was
+(:doc:`language/functions-loops`).
+
+**Functions without contracts.** A call of a function without a contract
+stopped its caller (``call to function without a verification contract``),
+so every small helper needed a contract before its callers could be
+verified. A call of one with a body now runs that body: the verifier inlines
+it, so the caller's proof covers it at the arguments the caller passes, its
+checks are the caller's, and a failure in it is shown at its operation in the
+caller's verdict, with its variables named ``helper::x``. Helpers may hold
+loops with their invariants, early returns, and calls of other functions,
+and member functions are helpers too. Such a function is verified where
+verified code calls it, and on its own only when none does. Recursion, a
+record returned by value, allocation, ``cppverify::old`` in a loop invariant,
+and more than 2000 inlined statements in one function each need a contract,
+and say so (:doc:`language/functions-loops`).
+
+**The C library's memory functions.** A call of ``memcpy``, ``memmove``,
+``memset``, ``memcmp``, or ``abs`` stopped its function (``call to function
+without a verification contract``). Over arrays of integers, enumerations,
+or ``bool``, the memory functions are now calls of their models, contracted
+declarations in ``<cppverify.h>`` for each type of object, trusted like the
+library itself, so a proof that uses one shows it (``[trusts=memcpy]``); a
+copy whose ranges overlap fails its ``aliasing`` check. ``abs`` is its
+definition, with an ``overflow`` check at the minimum. Records, pointers, and
+the string functions are not modeled yet (:doc:`language/pointers`).
+
+**cvc5's counterexamples.** A failure cvc5 found (``--backend=cvc5``, or a race
+cvc5 won) gave no values and no path: the certifier checked its model and the
+verifier then dropped it, so the JSON record had no ``model`` or ``trace``,
+and under ``--lean-fallback`` a race cvc5 won wrote no Lean refutation (``the
+solver's model gives the goal's variables no values``). It now shows the
+counterexample and the steps of its path exactly as a failure Z3 finds does,
+in text, JSON, SARIF, GitHub annotations, and archive replay, evaluated by the
+certifier in the checked model; the race's refutation states its values
+(:doc:`book/part-ii/ch17-backends-modular-calls`).
+
+**Queries as SMT-LIB scripts.** The only view of a query was
+``--dump-ir=4``, Z3 terms without declarations or a check, which no solver
+reads. ``--dump-smt2=DIR`` writes every query cpp-verify sends to Z3 or cvc5
+as a script that ``z3 FILE`` or ``cvc5 FILE`` runs on its own: the options
+cpp-verify gave the solver, as commands, the query, its check, and the
+answer cpp-verify got, in a file named by the function and the obligation,
+for solver bug reports and for comparing solver versions
+(:doc:`language/tooling`).
 
 **Counterexamples after a loop.** A failure whose counterexample passed
 through a loop looked like any other, though its state there came from the
@@ -788,9 +951,12 @@ reproduce, or when two backends decide differently
 Data formats
 ~~~~~~~~~~~~
 
-Archives are ``cppverify.obligation/3``, which adds measures and the
-sources of assumptions and reads ``/2`` and ``/1``; JSON diagnostics stay
-``cppverify.diagnostic/1``. A module whose specs' measures apply other specs
+Archives are ``cppverify.obligation/6``, which adds measures, the sources
+of assumptions, where each variable version is defined, where each
+source range begins, and where each check's condition and a callee's clause
+lie, and reads ``/5`` to ``/1``; JSON diagnostics are
+``cppverify.diagnostic/2``, ending with a ``cppverify.summary/1`` record, and
+``--diagnostics-format=sarif`` writes SARIF 2.1.0. A module whose specs' measures apply other specs
 keeps them, so its module hash changes; per-obligation hashes, and the proof
 cache keyed by them, do not. JSON records may carry the status
 ``proved-obligations`` (archive replay) and the reasons ``interrupted``

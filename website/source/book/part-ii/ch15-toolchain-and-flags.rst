@@ -34,6 +34,37 @@ is given), so a lone ``-fno-verify`` is a fast **light check**: it validates C++
 contract syntax *and* contract semantics, but not your logic — handy for editors,
 CI pre-flight, and LLM/agent loops.
 
+Code that other compilers build
+-------------------------------
+
+Only this Clang knows the constructs. A header that GCC, MSVC, or upstream
+Clang also compiles tests the macro ``__cppverify__``, which
+``-fverify-contracts`` predefines, and wraps each construct in a macro that
+is empty without it:
+
+.. code-block:: cpp
+
+   #ifdef __cppverify__
+   #define CPPVERIFY(...) __VA_ARGS__
+   #else
+   #define CPPVERIFY(...)
+   #endif
+
+   inline int middle(int lo, int hi)
+     CPPVERIFY(cppverify::pre(0 <= lo && lo <= hi))
+     CPPVERIFY(cppverify::post(lo <= cppverify::result && cppverify::result <= hi))
+   {
+     return lo + (hi - lo) / 2;
+   }
+
+.. code-block:: text
+
+   Verified: middle [backend=z3]
+
+The other compilers read ``inline int middle(int lo, int hi) { ... }``. The
+reference (:doc:`../../language/syntax`, "Headers shared with other
+compilers") shows the other constructs and the version macros.
+
 Other flags
 -----------
 
@@ -104,7 +135,10 @@ Other flags
 - ``cpp-verify --proof-cache=DIR`` — keep proofs of single obligations between
   runs (``--proof-cache-max-mb``, ``--proof-cache-max-entries`` bound it)
 - ``cpp-verify --diagnostics-format=json`` — emit versioned
-  ``cppverify.diagnostic/1`` JSON Lines for verification results
+  ``cppverify.diagnostic/2`` JSON Lines for results and compiler diagnostics,
+  ending with a summary record; ``sarif`` prints one SARIF 2.1.0 log, and
+  ``github`` the text with a GitHub Actions annotation for each error and
+  warning
 - ``cpp-verify --lean-out=FILE`` — write a standalone Lean scratch-pad
   (``--backend=lean``, which it selects)
 - ``cpp-verify --lean-project=DIR`` — generate a preserved, pinned Lean project
@@ -117,6 +151,8 @@ Other flags
 - ``cpp-verify --dump-ir[=1,2,3,4]`` — dump VCR / passive / Obligation IR / Z3 layers
 - ``cpp-verify --lower-only`` — construct and encode VCs without invoking Z3's
   satisfiability check
+- ``cpp-verify --dump-smt2=DIR`` — write every query sent to Z3 or cvc5 as a
+  script the solver runs on its own, with the answer cpp-verify got
 - ``cpp-verify --obligation-out=FILE`` — write validated, versioned canonical
   obligation records with semantic hashes
 - ``cpp-verify --obligation-in=FILE`` — validate and replay records through Z3,

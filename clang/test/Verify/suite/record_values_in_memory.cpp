@@ -126,7 +126,7 @@ int past_element(const Bag *b, int k)
 {
   return limit_of(b->items[k]);
 }
-// CHECK-DAG: error: verification failed: past_element [{{.*}}::bounds@[[@LINE-2]]
+// CHECK-DAG: :[[@LINE-2]]:{{[0-9]+}}: error: verification failed: past_element [bounds]
 
 // A copy reads every field, so each must be initialized.
 struct Pair {
@@ -149,4 +149,4 @@ int half_initialized()
   a = 1;
   return pair_sum(p);
 }
-// CHECK-DAG: error: verification failed: half_initialized [{{.*}}::initialization@[[@LINE-2]]
+// CHECK-DAG: :[[@LINE-2]]:{{[0-9]+}}: error: verification failed: half_initialized [initialization]
