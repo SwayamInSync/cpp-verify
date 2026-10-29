@@ -2007,7 +2007,7 @@ The last argument is how many programs run at once. Each runs with
 ``--jobs=4`` and a proof cache of its own, and a program whose tests use the
 race backend runs on it when cvc5 is installed, so the thread pool, the cache,
 and the races between solvers run concurrently. A program uses at most about
-3 GB under ThreadSanitizer. In either mode a program that gives no result
+3.5 GB under ThreadSanitizer. In either mode a program that gives no result
 within 900 s is reported too (``cppverify-sanitize: no result within 900 s``),
 since a sanitizer runtime that hangs prints nothing. ``cppverify-tsan.supp``
 suppresses the reports inside Z3 4.13.4 itself and the calls LLVM's crash
