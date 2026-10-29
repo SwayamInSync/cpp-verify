@@ -1893,7 +1893,9 @@ public:
           ++Affinity[{Goal->Group, groupOf(Record)}];
     }
     std::string CheckFile;
-    for (const auto &[Name, Goal] : Goals) {
+    for (const auto &Entry : Goals) {
+      const auto &Name = Entry.first;
+      const auto &Goal = Entry.second;
       std::string File;
       const std::string ProofPath =
           leanProjectPath(Root, leanProofComponents(*Goal, File));
