@@ -65,10 +65,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build ccache
 
+      # The tag is Z3's to name, so the shell reads it as data.
       - name: Fetch the candidate Z3
         if: matrix.role == 'candidate'
+        env:
+          TAG: ${{ needs.candidate.outputs.tag }}
         run: |
-          git clone --depth 1 --branch "${{ needs.candidate.outputs.tag }}" \
+          git clone --depth 1 --branch "$TAG" \
             https://github.com/Z3Prover/z3.git "$RUNNER_TEMP/z3"
           echo "Z3_SOURCE=-DCPPVERIFY_Z3_SOURCE_DIR=$RUNNER_TEMP/z3" >> "$GITHUB_ENV"
 
