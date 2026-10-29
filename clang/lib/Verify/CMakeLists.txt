@@ -18,11 +18,11 @@ if(CPPVERIFY_ENABLE_COVERAGE)
 endif()
 
 # The verifier's own code under sanitizers, beside an uninstrumented LLVM,
-# Clang, and Z3, as the nightly sanitizer job builds it: "address;undefined"
-# or "thread". The precompiled header of the libraries it uses is built
-# without them, so it is not reused.
+# Clang, and Z3, as the nightly sanitizer job builds it with
+# "address;undefined". The precompiled header of the libraries it uses is
+# built without them, so it is not reused.
 set(CPPVERIFY_SANITIZER "" CACHE STRING
-  "Sanitizers for clangVerify and cpp-verify (address;undefined, or thread)")
+  "Sanitizers for clangVerify and cpp-verify, such as address;undefined")
 set(_cppverify_pch_reuse)
 if(CPPVERIFY_SANITIZER)
   string(REPLACE ";" "," _cppverify_sanitizers "${CPPVERIFY_SANITIZER}")
