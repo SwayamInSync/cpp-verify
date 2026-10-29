@@ -66,8 +66,12 @@ reason ``callee.contract``. Test a value before you use it:
 .. code-block:: text
 
    ratio.cpp:2:13: error: verification failed: contract of ratio [division-by-zero] [backend=z3] [reason=counterexample]
+       2 |   cv::pre(a / b > 0 && b > 0)
+         |           ~~^~~
+   ratio.cpp:2:13: note: counterexample: b = 0
    Verified: ratio [backend=z3]
    Verified: ratio_fixed [backend=z3]
+   Summary: 2 verified, 1 failed in 0.1 s
 
 ``ratio``'s body is right for every input its contract admits; the contract
 itself divides by ``b`` before it requires ``b > 0``.
