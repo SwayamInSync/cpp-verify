@@ -149,7 +149,14 @@ and possibly new failures, to source that did not change:
   operation with its variables named ``helper::x``. One that cannot be
   inlined (it recurses, returns a record by value, or allocates, among
   others) still needs a contract, and the error says which
-  (:doc:`language/functions-loops`).
+  (:doc:`language/functions-loops`);
+- globals of record and array type, which were errors: a function that
+  writes one must now name what it writes in ``cppverify::modifies``, as it
+  does for memory behind a pointer (:doc:`language/pointers`);
+- static locals with a constant initializer, which were errors: each is its
+  function's own state, with any value at entry, so a claim that relied on
+  its initializer now fails; one initialized by running code, or whose
+  address is taken, stays an error (:doc:`language/pointers`).
 
 **One unsupported construct costs its function.** In 0.1.1 it stopped the
 file, with no verdicts. Now that function is ``Unresolved`` with reason
@@ -240,7 +247,13 @@ result as a diagnostic of its own: a failure or an unresolved result is an
 error, a warning belongs to ``-Wcppverify`` (so ``-Wno-cppverify`` and
 ``-Werror=cppverify`` work), a proof is a remark (``-Rcppverify``), and
 ``-fdiagnostics-format=sarif`` carries them all. 0.1.1 printed text and one
-error, ``cppverify: verification failed``.
+error, ``cppverify: verification failed``. A file without a function to
+verify says nothing (0.1.1 warned ``no verifiable functions found``), and
+``-fverify-backend=``, ``-fverify-timeout=``, ``-fverify-jobs=``,
+``-fverify-cache=``, and ``-fverify-report`` set what ``cpp-verify``'s options
+set; a build that gave ``-fverify-contracts`` to every file can drop
+``-w`` or warning filters it used against the old warning
+(:doc:`language/tooling`).
 
 **JSON** records are ``cppverify.diagnostic/2`` (0.1.1:
 ``cppverify.diagnostic/1``). Every record names its function and where it is
