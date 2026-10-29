@@ -610,6 +610,83 @@ Primes;``) is not supported yet; read the elements by index. Before 0.2, any
 read of a global or ``static`` array, or of a string literal, was an error
 (``the global array 'NibbleBits' is unsupported``).
 
+Global variables
+~~~~~~~~~~~~~~~~
+
+A ``const`` or ``constexpr`` integral global with a constant initializer is
+its value, and a constant array is a table (above). Every other global of an
+integral, enumeration, ``bool``, record, or array type is an object at a fixed
+address of its own, apart from every other object, as in Frama-C:
+
+- its fields and elements are cells, each index bounded by its array (kind
+  ``bounds``), and it is always live and initialized;
+- its value at a function's entry is arbitrary, since any function may have
+  changed it: an initializer says nothing at a call;
+- a function writes it only within its ``cppverify::modifies`` clause, which may
+  name the whole object (``config``), a field or element (``config.mode``,
+  ``history[i]``), or a range (``history[0 : 8]``); a call changes only the
+  callee's footprints, so the caller keeps every other cell;
+- ``cppverify::old(config.limit)`` is its value at entry;
+- a pointer into it (``history``, ``&config.limit``) addresses only the array,
+  field, or record it is formed from, and may be passed as a slice with a
+  ``valid(p, n)`` extent.
+
+.. code-block:: cpp
+
+   struct Config {
+     int mode;
+     int limit;
+     int table[4];
+   };
+
+   Config config;
+   int history[8];
+
+   void set_mode(int m)
+     cv::modifies(config.mode)
+     cv::post(config.mode == m && config.limit == cv::old(config.limit))
+   {
+     config.mode = m;
+   }
+
+   void clear_history()
+     cv::modifies(history[0 : 8])
+     cv::post(cv::forall(k, 0, 8, history[k] == 0))
+   {
+     for (int i = 0; i < 8; i = i + 1)
+       cv::invariant(0 <= i && i <= 8)
+       cv::invariant(cv::forall(k, 0, i, history[k] == 0))
+       cv::modifies(history[0 : 8])
+       cv::decreases(8 - i)
+     {
+       history[i] = 0;
+     }
+   }
+
+   int entry(int i)
+     cv::pre(0 <= i && i <= 4)
+   {
+     return config.table[i];
+   }
+
+.. code-block:: text
+
+   Verified: set_mode [backend=z3]
+   Verified: clear_history [backend=z3]
+   globals.cpp:34:10: error: verification failed: entry [bounds] [backend=z3] [reason=counterexample]
+      34 |   return config.table[i];
+         |          ^
+   globals.cpp:34:10: note: counterexample: i = 4
+
+A spec cannot read a mutable global (pass its value as a parameter), ghost
+and proof code cannot write one, and a record or array of a global is read
+field by field, never as a whole. Not supported: a global that is itself
+a pointer, a class with a ``cppverify::type_invariant`` (nothing would maintain
+it), ``thread_local`` and ``volatile`` globals, and ``static`` locals that are
+not constant tables. Before 0.2 only integral globals were supported, and a
+record or array global was an error (``global aggregate access is
+unsupported``, ``the global array 'table' is unsupported``).
+
 Two-buffer copy loops (``memcpy``-style) need the source and destination
 ranges to be disjoint; otherwise storing to the destination could clobber a
 source cell still to be read, exactly the C ``memcpy`` vs ``memmove``

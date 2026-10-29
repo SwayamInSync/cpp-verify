@@ -88,7 +88,8 @@ The most mature current fragment includes:
   and ``cppverify::calc``, bounded and unbounded quantifiers with triggers, ``cppverify::choose``,
   spec collections (``seq``, ``set``, ``multiset``, ``map``), and controlled
   recursive unfolding;
-- mutable scalar integral globals and integral ``const`` globals;
+- mutable globals of integral, record, and array types, each one object at
+  a fixed address, and integral ``const`` globals;
 - flat trivial standard-layout records with scalar fields;
 - fixed local arrays and promoted trivial local records with nested record,
   pointer, and fixed-array members;
@@ -209,13 +210,15 @@ C++ feature boundaries
        every assumption before it, so a long function with many checks grows
        fastest. See the memory limits of :doc:`tooling`.
    * - Storage
-     - Supported locals, constrained scalar dynamic storage, and inferred
-       acyclic fresh-owned scalar factory results.
-     - Mutable aggregate globals, mutable static locals, pointers into
-       constant tables, thread-local storage, general returned allocations,
-       and user-declared modular allocation effects. Constant tables
-       (``const`` and ``constexpr`` arrays with constant initializers, and
-       string literals) are read by index (:doc:`pointers`).
+     - Supported locals, constrained scalar dynamic storage, inferred
+       acyclic fresh-owned scalar factory results, and mutable globals of
+       integral, record, and array types (:doc:`pointers`).
+     - Globals that are themselves pointers, globals of a class with an
+       invariant, mutable static locals, pointers into constant tables,
+       thread-local storage, general returned allocations, and user-declared
+       modular allocation effects. Constant tables (``const`` and
+       ``constexpr`` arrays with constant initializers, and string literals)
+       are read by index (:doc:`pointers`).
    * - Structured control flow
      - ``if`` (including C++17 initializer), ``while``, ``for`` (with or
        without a condition), contracted ``do`` loops, condition declarations,
@@ -223,9 +226,8 @@ C++ feature boundaries
        init statement), range-based ``for`` over an array (with
        ``cppverify::index``), blocks, ``return``, ``break``, and ``continue``
        anywhere, and comma expressions as statements.
-     - A range-based ``for`` over a class (through ``begin`` and ``end``),
-       over an array of arrays, or over a global array that is not a constant
-       table, ``goto``, labels, and a ``case`` label inside another statement of its
+     - A range-based ``for`` over a class (through ``begin`` and ``end``)
+       or over an array of arrays, ``goto``, labels, and a ``case`` label inside another statement of its
        switch (Duff's device). An
        expression or statement nested more than 256 operations
        deep (a sum of 300 terms, say) is reported where it is, and the file

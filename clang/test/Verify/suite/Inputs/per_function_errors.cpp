@@ -1,7 +1,7 @@
 // Functions the verifier cannot represent, beside ones it can, for
 // per_function_errors.test.
 
-int table[4] = {1, 2, 3, 4};
+int *table;
 
 // A statement the verifier does not represent: pick is not verified, and its
 // caller relies on its contract.

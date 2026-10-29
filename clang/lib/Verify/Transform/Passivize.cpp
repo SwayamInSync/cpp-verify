@@ -5596,6 +5596,31 @@ public:
         auto Member = objectMembership(
             abstractObjects(Fn), U->Operand.get(), /*Closed=*/false, Loc,
             [&](const VExpr *V) { return cloneExpr(V, EntryCtx); });
+        // Or in a global object its origins name, which lives as long as the
+        // program.
+        if (auto Origins = pointerOrigins(U->Operand.get()))
+          for (const std::string &Origin : *Origins)
+            if (isGlobalOrigin(Origin)) {
+              auto [Address, Size] = globalOriginExtent(Origin);
+              auto Start =
+                  std::make_unique<VLiteralExpr>(Address, VType::makePtr(), Loc);
+              auto End = addBytes(
+                  cloneVExpr(Start.get()),
+                  std::make_unique<VLiteralExpr>(std::to_string(Size),
+                                                 pointerOffsetType(), Loc),
+                  Loc);
+              Member = makeOr(
+                  std::move(Member),
+                  makeAnd(std::make_unique<VBinOpExpr>(
+                              VBinOp::Le, std::move(Start),
+                              cloneVExpr(U->Operand.get()), VType::makeBool(),
+                              Loc),
+                          std::make_unique<VBinOpExpr>(
+                              VBinOp::Lt, cloneVExpr(U->Operand.get()),
+                              std::move(End), VType::makeBool(), Loc),
+                          Loc),
+                  Loc);
+            }
         return makeOr(std::move(Member), std::move(E), Loc);
       }
       U->Operand = abstractValidity(std::move(U->Operand), Renames);

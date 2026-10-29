@@ -238,6 +238,14 @@ private:
   std::optional<llvm::APSInt> globalConstant(const VarDecl *VD) const;
   /// The address of a supported mutable global, or null after an error.
   std::unique_ptr<VExpr> globalAddress(const VarDecl *VD, SourceLocation Loc);
+  /// Whether \p VD is a mutable global record or array: one object at its
+  /// fixed address, reached through places as a promoted local is.
+  bool isGlobalObject(const VarDecl *VD) const;
+  /// The global object whose field or element \p E selects (or is), if any.
+  const VarDecl *globalObjectRoot(const Expr *E) const;
+  /// The place of the global object \p VD, or nullopt after an error.
+  std::optional<VPlace> globalObjectPlace(const VarDecl *VD,
+                                          SourceLocation Loc);
   std::unique_ptr<VFunction> convertConstexprSpec(const FunctionDecl *FD);
   /// std::max(a, b), or std::min(a, b), of two integers, as the standard
   /// defines it.
