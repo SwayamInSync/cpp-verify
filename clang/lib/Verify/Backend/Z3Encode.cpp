@@ -5,6 +5,7 @@
 #include "ObligationSimplify.h"
 #include "QueryDump.h"
 #include "TaskGroup.h"
+#include "ThreadCpuTime.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
@@ -22,6 +23,7 @@
 #include <cstdio>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <set>
@@ -1835,7 +1837,9 @@ Z3Encoder::PassScope::~PassScope() {
   Outer.Pass = nullptr;
 }
 
-z3::check_result Z3Encoder::check(z3::solver &S, unsigned Ms) {
+z3::check_result
+Z3Encoder::check(z3::solver &S, unsigned Ms,
+                 std::optional<std::chrono::microseconds> CpuLimit) {
   using Clock = std::chrono::steady_clock;
   {
     std::lock_guard<std::mutex> Guard(CheckLock);
@@ -1854,7 +1858,23 @@ z3::check_result Z3Encoder::check(z3::solver &S, unsigned Ms) {
   // How often the memory limit is polled: what a check allocates in this
   // time is how far it can pass the limit.
   constexpr std::chrono::milliseconds MemoryInterval(10);
-  const auto Poll = Z3MemoryLimitMB.load() != 0 ? MemoryInterval : Interval;
+  auto Poll = Z3MemoryLimitMB.load() != 0 ? MemoryInterval : Interval;
+  // The watchdog reads the CPU time of this thread, which runs the check.
+  std::optional<ThreadCpuClock> Cpu;
+  std::optional<std::chrono::microseconds> CpuEnd;
+  if (CpuLimit) {
+    Cpu.emplace(ThreadCpuClock::current());
+    if (std::optional<std::chrono::microseconds> Now = Cpu->used()) {
+      CpuEnd = *Now + *CpuLimit;
+      Poll = MemoryInterval;
+    }
+  }
+  auto pastCpuLimit = [&] {
+    if (!CpuEnd)
+      return false;
+    std::optional<std::chrono::microseconds> Now = Cpu->used();
+    return Now && *Now >= *CpuEnd;
+  };
   bool TimedOut = false;
   bool Interrupted = false;
   bool OverLimit = false;
@@ -1875,11 +1895,13 @@ z3::check_result Z3Encoder::check(z3::solver &S, unsigned Ms) {
         Ms == 0 ? Clock::now() + std::chrono::hours(24 * 365)
                 : Clock::now() + std::chrono::milliseconds(Ms) + Grace;
     auto Next = Limit;
+    bool OverCpu = false;
     while (!CheckFinished) {
       OverLimit = OverLimit || overMemoryLimit();
-      if (Stopped || OverLimit || interruptRequested() ||
+      OverCpu = OverCpu || pastCpuLimit();
+      if (Stopped || OverLimit || interruptRequested() || OverCpu ||
           Clock::now() >= Next) {
-        TimedOut = TimedOut || Clock::now() >= Limit;
+        TimedOut = TimedOut || OverCpu || Clock::now() >= Limit;
         Ctx.interrupt();
         Interrupted = true;
         Next = Clock::now() + Interval;
@@ -2842,6 +2864,21 @@ constexpr unsigned HiddenRoundsBeforeNative = 8;
 /// Resource units of the complete query of a module without specs before
 /// its ordered obligations.
 constexpr unsigned WholeProbeUnits = 6000000;
+/// Resource units the searches for the ends of disputed arguments share. The
+/// suite's searches that found an end within the old time limit used at most
+/// 1.1 million.
+constexpr uint64_t DomainProbeUnits = 2000000;
+
+/// The resource units the solver's context has spent so far.
+uint64_t spentUnits(z3::solver &Solver) {
+  z3::stats Stats = Solver.statistics();
+  for (unsigned I = 0; I != Stats.size(); ++I)
+    if (Stats.key(I) == "rlimit count")
+      return Stats.is_uint(I)
+                 ? Stats.uint_value(I)
+                 : static_cast<uint64_t>(Stats.double_value(I));
+  return 0;
+}
 } // namespace
 
 std::optional<VerifyResult> Z3Encoder::verifyNatively(
@@ -2889,7 +2926,9 @@ std::optional<VerifyResult> Z3Encoder::verifyNatively(
 std::vector<SpecDispute> Z3Encoder::boundedDomainDisputes(
     const ObligationModule &Module, const LogicExpr &Query,
     const CertifyResult &Disputed, const z3::model &Model,
-    std::chrono::steady_clock::time_point Until, std::optional<z3::expr> &Pin) {
+    std::chrono::microseconds Time,
+    std::optional<std::chrono::steady_clock::time_point> Deadline,
+    std::optional<z3::expr> &Pin) {
   constexpr unsigned MaxArguments = 4;
   constexpr unsigned MaxProbes = 96;
   std::set<std::string> Functions;
@@ -2947,27 +2986,68 @@ std::vector<SpecDispute> Z3Encoder::boundedDomainDisputes(
             {Argument, Greatest, Current, ExtremeSearch(MaxProbes), {}});
     }
 
-  // Asks \p S its next question with \p Share of the time left.
+  // Work and the thread's CPU time, not the wall clock, bound the searches,
+  // so the load of other processes does not decide where they stop: with
+  // half the refinement slice of wall-clock time, they found no end on a
+  // loaded machine where an idle one found the counterexample at the least
+  // value in 12 ms. Z3's units alone do not bound a search over sequences,
+  // whose checks can spend 5 s on 700,000 units. The query's deadline still
+  // holds.
+  uint64_t UnitsLeft = DomainProbeUnits;
+  const ThreadCpuClock Cpu = ThreadCpuClock::current();
+  const std::optional<std::chrono::microseconds> CpuStart = Cpu.used();
+  const auto WallStart = std::chrono::steady_clock::now();
+  // The time the searches have taken: CPU time where the platform reads it.
+  auto spent = [&]() -> std::chrono::microseconds {
+    if (CpuStart)
+      if (std::optional<std::chrono::microseconds> Now = Cpu.used())
+        return *Now - *CpuStart;
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - WallStart);
+  };
+  llvm::scope_exit RestoreLimit([&] {
+    z3::params Params(Ctx);
+    Params.set("rlimit", ResourceLimit);
+    Solver.set(Params);
+  });
+  // Asks \p S its next question with \p Share of the work and time left.
   auto ask = [&](Search &S, unsigned Share) {
-    const auto Remaining =
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            Until - std::chrono::steady_clock::now())
-            .count();
     std::optional<int64_t> Distance = S.Questions.next();
     if (!Distance)
       return;
-    if (Remaining / Share <= 0) {
+    uint64_t Units = UnitsLeft / Share;
+    if (ResourceLimit)
+      Units = std::min<uint64_t>(Units, ResourceLimit);
+    const std::chrono::microseconds TimeShare = (Time - spent()) / Share;
+    int64_t Remaining = std::numeric_limits<unsigned>::max();
+    if (Deadline)
+      Remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                      *Deadline - std::chrono::steady_clock::now())
+                      .count();
+    if (!CpuStart)
+      Remaining = std::min<int64_t>(
+          Remaining,
+          std::chrono::duration_cast<std::chrono::milliseconds>(TimeShare)
+              .count());
+    if (Units == 0 || TimeShare.count() <= 0 || Remaining <= 0) {
       S.Questions.abandon();
       return;
     }
     Solver.push();
     Solver.add(S.Greatest ? S.Argument >= S.Current + Ctx.int_val(*Distance)
                           : S.Argument <= S.Current - Ctx.int_val(*Distance));
-    const unsigned Ms = static_cast<unsigned>(Remaining / Share);
+    const unsigned Ms = static_cast<unsigned>(Remaining);
     z3::params Params(Ctx);
     Params.set("timeout", Ms);
+    Params.set("rlimit", static_cast<unsigned>(Units));
     Solver.set(Params);
-    const z3::check_result Result = this->check(Solver, Ms);
+    const uint64_t Before = spentUnits(Solver);
+    const z3::check_result Result =
+        this->check(Solver, Ms,
+                    CpuStart ? std::optional<std::chrono::microseconds>(
+                                   TimeShare)
+                             : std::nullopt);
+    UnitsLeft -= std::min(UnitsLeft, spentUnits(Solver) - Before);
     if (Result == z3::sat) {
       z3::model Reached = Solver.get_model();
       z3::expr Value = evaluated(Reached, S.Argument, true);
@@ -2997,8 +3077,9 @@ std::vector<SpecDispute> Z3Encoder::boundedDomainDisputes(
   CertifyLimits Limits;
   if (TimeoutMs > 0)
     Limits.Deadline = QueryStart + std::chrono::milliseconds(TimeoutMs);
-  // The searches take turns, each check with an equal share of the time
-  // left, so an end that is slow to settle leaves the others their checks.
+  // The searches take turns, each check with an equal share of the work and
+  // time left, so an end that is slow to settle leaves the others their
+  // checks.
   unsigned Live = Searches.size();
   while (Live) {
     for (Search &S : Searches) {
@@ -3127,15 +3208,17 @@ z3::check_result Z3Encoder::certifyModels(const ObligationModule &Module,
     if (Certified.Outcome == CertifyOutcome::Disputed && !Probed &&
         !NativeRecursion && !Narrowed && !ProofOnly) {
       Probed = true;
-      // The probe has half the slice left, and its time moves the slice's
-      // end, so refinement keeps the rest.
+      // The probe has half the slice, in CPU time, and its time moves the
+      // slice's end, so refinement keeps the rest.
       const auto ProbeStart = std::chrono::steady_clock::now();
-      const auto Until = Deadline && *Deadline > ProbeStart
-                             ? ProbeStart + (*Deadline - ProbeStart) / 2
-                             : ProbeStart + std::chrono::milliseconds(250);
+      const std::chrono::microseconds ProbeTime =
+          Deadline && *Deadline > ProbeStart
+              ? std::chrono::duration_cast<std::chrono::microseconds>(
+                    (*Deadline - ProbeStart) / 2)
+              : std::chrono::milliseconds(250);
       std::optional<z3::expr> Pin;
-      std::vector<SpecDispute> Extremes =
-          boundedDomainDisputes(Module, Query, Certified, Current, Until, Pin);
+      std::vector<SpecDispute> Extremes = boundedDomainDisputes(
+          Module, Query, Certified, Current, ProbeTime, QueryDeadline, Pin);
       if (Deadline) {
         *Deadline += std::chrono::steady_clock::now() - ProbeStart;
         if (QueryDeadline && *Deadline > *QueryDeadline)
