@@ -3486,20 +3486,24 @@ fresh context, the API's or `z3`'s, the same assertions are `unknown`
   which state their contract wrongly in Python so that the tool must report
   them.
 - Instrumented coverage: `scripts/coverage-verify.sh` (region target on `clang/lib/Verify`).
-- Sanitizers: `-DCPPVERIFY_SANITIZER` builds `clangVerify` and `cpp-verify`
-  with AddressSanitizer and UndefinedBehaviorSanitizer, or ThreadSanitizer,
-  beside an uninstrumented LLVM, Clang, and Z3, and
-  `.github/workflows/cppverify-sanitize.sh` runs every Verify test program
-  through it, with four jobs, a proof cache, and the race backend under
-  ThreadSanitizer, failing on any report; `cppverify-sanitizers.yml` does it
-  nightly. Verdicts are not compared, since the sanitizers slow the
-  verifier. Instrumented frames are many times larger, and the
-  counterexample checker's evaluation recurses (a release build passes every
-  test program on 128 KiB threads; an instrumented one needed more than
-  64 MiB), so the script gives threads 1 GiB stacks. The first run found no
-  report in the verifier's own code; ThreadSanitizer reported only Z3's timer
-  pool and LLVM's list of files to remove on a signal, whose synchronization
-  is in uninstrumented code (`cppverify-tsan.supp`).
+- Sanitizers: `-DCPPVERIFY_SANITIZER="address;undefined"` builds
+  `clangVerify` and `cpp-verify` with AddressSanitizer and
+  UndefinedBehaviorSanitizer beside an uninstrumented LLVM, Clang, and Z3,
+  and `.github/workflows/cppverify-sanitize.sh` runs every Verify test
+  program through it with two jobs, failing on any report;
+  `cppverify-sanitizers.yml` does it nightly. Verdicts are not compared,
+  since the sanitizers slow the verifier. Instrumented frames are many times
+  larger, and the counterexample checker's evaluation recurses (a release
+  build passes every test program on 128 KiB threads; an instrumented one
+  needed more than 64 MiB), so the script gives threads 1 GiB stacks. The
+  first run found no report in the verifier's own code. ThreadSanitizer is
+  not run: in such a build, with only the verifier instrumented, its runtime
+  crashed in its own trace lists or hung on its own trace locks in 66 of 69
+  runs of `spec_automation.cpp` with four jobs (run under gdb to see where),
+  so a run cannot tell a race from the runtime's failure. Its reports
+  otherwise named only Z3's timer pool and LLVM's list of files to remove on
+  a signal, whose synchronization is in uninstrumented code; it needs LLVM
+  and Z3 instrumented too.
 
 Every new semantic feature needs layered oracles rather than a solver result
 alone:
