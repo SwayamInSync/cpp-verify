@@ -273,8 +273,11 @@ verify says nothing (0.1.1 warned ``no verifiable functions found``), and
 ``-fverify-backend=``, ``-fverify-timeout=``, ``-fverify-jobs=``,
 ``-fverify-cache=``, and ``-fverify-report`` set what ``cpp-verify``'s options
 set; a build that gave ``-fverify-contracts`` to every file can drop
-``-w`` or warning filters it used against the old warning
-(:doc:`language/tooling`).
+``-w`` or warning filters it used against the old warning. A compilation
+verifies its file before it generates code, where 0.1.1 verified beside code
+generation: code generation now waits for verification, and a failure stops
+the compilation before any code is generated (0.1.1 still printed the IR of a
+file that failed, given ``-emit-llvm -o -``) (:doc:`language/tooling`).
 
 **JSON** records are ``cppverify.diagnostic/2`` (0.1.1:
 ``cppverify.diagnostic/1``). Every record names its function and where it is
