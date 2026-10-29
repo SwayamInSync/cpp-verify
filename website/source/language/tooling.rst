@@ -1983,10 +1983,89 @@ Set ``CPPVERIFY_ENABLE_COVERAGE=ON`` on ``clangVerify`` only — not the whole L
 ``-DCPPVERIFY_SANITIZER="address;undefined"`` likewise builds only
 ``clangVerify`` and ``cpp-verify`` with the sanitizers, beside an
 uninstrumented LLVM, Clang, and Z3. ``.github/workflows/cppverify-sanitize.sh
-BUILD`` runs every Verify test program through such a build and fails on any
-sanitizer report; CI does it every night. It turns off poisoning by hand
-(``allow_user_poisoning=0``), which LLVM's allocators do in the instrumented
-code's copies of their inline functions and not in the libraries.
+BUILD address`` runs every Verify test program that lit runs through such a
+build and fails on any sanitizer report; CI does it every night. It turns off
+poisoning by hand (``allow_user_poisoning=0``), which LLVM's allocators do in
+the instrumented code's copies of their inline functions and not in the
+libraries.
+
+ThreadSanitizer needs everything instrumented, since it sees only the
+synchronization of instrumented code: ``-DLLVM_USE_SANITIZER=Thread`` builds
+LLVM, Clang, the verifier, and the vendored Z3 with it. CI does this every
+night too:
+
+.. code-block:: bash
+
+   cmake -S llvm -B build-tsan -G Ninja -DCMAKE_BUILD_TYPE=Release \
+     -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+     -DLLVM_ENABLE_PROJECTS=clang -DLLVM_TARGETS_TO_BUILD=Native \
+     -DLLVM_USE_SANITIZER=Thread
+   ninja -C build-tsan cpp-verify
+   .github/workflows/cppverify-sanitize.sh build-tsan thread 2
+
+The last argument is how many programs run at once. Each runs with
+``--jobs=4`` and a proof cache of its own, and a program whose tests use the
+race backend runs on it when cvc5 is installed, so the thread pool, the cache,
+and the races between solvers run concurrently. A program uses at most about
+3.5 GB under ThreadSanitizer. In either mode a program that gives no result
+within 900 s is reported too (``cppverify-sanitize: no result within 900 s``),
+since a sanitizer runtime that hangs prints nothing. ``cppverify-tsan.supp``
+suppresses the reports inside Z3 4.13.4 itself and the calls LLVM's crash
+handler makes in a signal handler, each with its reason. To look at one program, run it with the same
+options:
+
+.. code-block:: bash
+
+   TSAN_OPTIONS=suppressions=.github/workflows/cppverify-tsan.supp \
+     build-tsan/bin/cpp-verify --jobs=4 program.cpp --
+
+Clang compiles against the libstdc++ of the newest GCC it finds. Under
+ThreadSanitizer, that of GCC 14.1 to 14.3 and 15.1 to 15.2 (Ubuntu 24.04's
+``g++-14`` among them) cannot compile a wait on a ``std::timed_mutex`` until
+a ``steady_clock`` time, which Z3's timer makes (`GCC PR 121496
+<https://gcc.gnu.org/bugzilla/show_bug.cgi?id=121496>`_). The configure step
+checks this and stops (paths shortened):
+
+.. code-block:: text
+
+   -- Performing Test CPPVERIFY_TSAN_TIMED_MUTEX_WAIT
+   -- Performing Test CPPVERIFY_TSAN_TIMED_MUTEX_WAIT - Failed
+   CMake Error at clang/cmake/modules/CppVerifyZ3.cmake:45 (message):
+     Under ThreadSanitizer this C++ library cannot compile
+     std::timed_mutex::try_lock_until with a steady_clock time, which the
+     vendored Z3 uses: libstdc++ 14.1 to 14.3 and 15.1 to 15.2 have this bug
+     (GCC PR 121496), fixed in 14.4 and 15.3.  Select another GCC installation
+     for C and C++, with Clang for example
+     -DCMAKE_C_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13
+     -DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13.
+
+Add those two options to the ``cmake`` command above, as CI does. The vendored
+Z3 is built with the flags the build is configured with, so it compiles
+against the same library as everything it is linked with.
+
+ThreadSanitizer keeps each thread's calls on a shadow stack of 65536 frames
+and does not check its end, so a deeper nesting overwrites the runtime's own
+memory and the run crashes or hangs later, somewhere unrelated. The
+counterexample checker nests that deep before it moves to a fresh stack
+(half of 256 MiB holds more frames), so in a ThreadSanitizer build
+``clang/lib/Verify/Backend/Certify.cpp`` is compiled with
+``-fno-sanitize-thread-func-entry-exit``: its memory accesses are still
+checked, but its frames do not appear in reported stacks. A TSan build of
+``cpp-verify`` also counts each thread's nesting and stops at the limit with
+exit status 1, naming the recursion. Built with the checker's hooks left in,
+``suite/spec_automation.cpp`` stops so (paths shortened):
+
+.. code-block:: text
+
+   cpp-verify: ThreadSanitizer shadow stack full: 65472 nested calls
+       #0 __sanitizer_print_stack_trace <null> (cpp-verify+0x46276f)
+       #1 __wrap___tsan_func_entry clang/tools/cpp-verify/ShadowStackGuard.cpp:29:5 (cpp-verify+0x49a23b)
+       #2 (anonymous namespace)::Evaluator::evalNodeWithStackSpace(clang::verify::LogicExpr const*) clang/lib/Verify/Backend/Certify.cpp (cpp-verify+0xef00c2)
+       #3 (anonymous namespace)::Evaluator::eval(clang::verify::LogicExpr const*) clang/lib/Verify/Backend/Certify.cpp:3386:39 (cpp-verify+0xee83eb)
+       #4 binary clang/lib/Verify/Backend/Certify.cpp:843:38 (cpp-verify+0xef0233)
+       ...
+
+A recursion reported so is compiled the same way, or made iterative.
 
 New language features should have both semantic and structural oracles:
 

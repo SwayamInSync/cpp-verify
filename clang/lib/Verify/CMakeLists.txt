@@ -114,6 +114,16 @@ if(CPPVERIFY_SANITIZER)
   endif()
 endif()
 
+# ThreadSanitizer records each instrumented call on a shadow stack of 64 Ki
+# frames that it does not bound. The counterexample checker nests up to
+# CertifyLimits::Frames (50000) evaluations, several frames each, and
+# overflowed it into the runtime's own memory. Its accesses stay checked;
+# only its frames are missing from reported stacks.
+if(_cppverify_sanitizers MATCHES "thread" OR LLVM_USE_SANITIZER MATCHES "Thread")
+  set_source_files_properties(Backend/Certify.cpp PROPERTIES
+    COMPILE_OPTIONS -fno-sanitize-thread-func-entry-exit)
+endif()
+
 target_include_directories(clangVerify PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/Driver

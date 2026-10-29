@@ -1050,6 +1050,29 @@ product, quotient, or remainder with one operand made the validator read a
 second one to describe the error. It is now ``malformed obligation term:
 unexpected operand count`` (:doc:`language/tooling`).
 
+**ThreadSanitizer every night.** LLVM, Clang, the verifier, and Z3 are also
+built with ThreadSanitizer (``-DLLVM_USE_SANITIZER=Thread``), and every Verify
+test program runs through that build with four jobs, a proof cache, and the
+race backend where its tests race Z3 against cvc5; a report fails the job. A
+TSan run used to crash or hang inside the runtime: the counterexample
+checker's evaluation nests deeper than the 65536 frames of TSan's shadow
+stack, which TSan does not check. The checker is now built without TSan's
+function entry and exit hooks, its accesses still checked, and a TSan build
+of ``cpp-verify`` stops with the offending stack if any other code nests that
+deep. The first run found one data race in the verifier, on the source
+manager's cache ("Source lookups from parallel failures" above)
+(:doc:`language/tooling`).
+
+**Z3 built with the configured flags.** The vendored Z3 was built with the
+build's compilers only, so a flag in ``CMAKE_CXX_FLAGS`` that selects the C++
+library, as ``--gcc-install-dir=`` does, reached LLVM and the verifier but not
+Z3, which compiled against the default one. Z3's build now gets
+``CMAKE_C_FLAGS``, ``CMAKE_CXX_FLAGS``, and ``CMAKE_EXE_LINKER_FLAGS`` as
+configured. A ThreadSanitizer build checks at configure time that the C++
+library can compile Z3's timed wait, which libstdc++ 14.1 to 14.3 and 15.1 to
+15.2 cannot under TSan (GCC PR 121496), and says how to select another
+(:doc:`language/tooling`).
+
 Data formats
 ~~~~~~~~~~~~
 
