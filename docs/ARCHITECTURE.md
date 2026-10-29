@@ -1260,6 +1260,24 @@ reach any adapter. Semantically equivalent records that differ only by
 supported constant structure or unreachable logical declarations therefore
 converge to the same backend module and semantic identity.
 
+`clang/tools/cpp-verify-archive-fuzzer` states these properties as a libFuzzer
+target: for any byte string, `deserializeObligationModules` returns an error
+or modules that validate; each module's record reads back as one module whose
+record is the same bytes, with the same module and per-obligation semantic,
+statement, and query hashes; `simplifyObligationModule` succeeds on it, and
+on its result again, which serializes to the same bytes (a fixpoint); and Z3
+and cvc5 lower the canonical module in each machine-integer encoding, and
+Lean exports it unless it is bounded, without a crash. A property that fails
+aborts. Built without libFuzzer, the binary runs the target on the files it
+is given (`suite/archive_fuzzer.test` gives it archives of programs with
+every kind of term). `.github/workflows/cppverify-fuzz.yml` builds it with
+Clang, AddressSanitizer, assertions, and sanitizer coverage and fuzzes it for
+half an hour every night, seeded with the records of at most 64 KiB in the
+archives of the test programs and with the corpus earlier nights grew. The
+first run found the validator reading the second operand of a product,
+quotient, or remainder that had one, to describe the error: replay crashed,
+or printed what lay past the operands.
+
 Replay settles each module alone. What a source verdict also rests on (callee
 and trusted contracts, spec facts, partiality) and the vacuity checks are not
 archived, so a module whose obligations all hold reports `Proved obligations:
@@ -3485,6 +3503,11 @@ fresh context, the API's or `z3`'s, the same assertions are `unknown`
   every case nightly; `differential.test` runs the tool's own cases, two of
   which state their contract wrongly in Python so that the tool must report
   them.
+- Archive fuzzing: `clang/tools/cpp-verify-archive-fuzzer`, a libFuzzer
+  target over the archive reader, the canonicalizer, and the adapters'
+  lowering ("Canonical archives and semantic identity"), nightly in
+  `.github/workflows/cppverify-fuzz.yml`; `suite/archive_fuzzer.test` runs it
+  on archives of the test programs.
 - Instrumented coverage: `scripts/coverage-verify.sh` (region target on `clang/lib/Verify`).
 
 Every new semantic feature needs layered oracles rather than a solver result
