@@ -949,11 +949,10 @@ reproduce, or when two backends decide differently
 (:doc:`book/part-ii/ch17-backends-modular-calls`).
 
 **Sanitizers every night.** The verifier's own code is now built with
-AddressSanitizer and UndefinedBehaviorSanitizer, and with ThreadSanitizer
-(``-DCPPVERIFY_SANITIZER``), and every Verify test program runs through each
-build every night, the thread build with four jobs, a proof cache, and the
-race backend; a report fails the job. The first runs found no memory error,
-undefined behavior, or data race in the verifier (:doc:`language/tooling`).
+AddressSanitizer and UndefinedBehaviorSanitizer (``-DCPPVERIFY_SANITIZER``),
+and every Verify test program runs through that build every night; a report
+fails the job. The first run found no memory error or undefined behavior in
+the verifier (:doc:`language/tooling`).
 
 Data formats
 ~~~~~~~~~~~~
