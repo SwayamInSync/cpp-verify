@@ -3600,6 +3600,9 @@ fresh context, the API's or `z3`'s, the same assertions are `unknown`
     accesses are still checked, only its frames are missing from the stacks
     of reports. Then 60 of 60 runs of `spec_automation.cpp` finished with
     either instrumentation, and 100 more of the nightly's build under gdb.
+    The evaluator's fresh stacks (above) do not change this: half of a
+    256 MiB stack holds more than 65536 instrumented frames, and with the
+    hooks put back, 6 of 6 runs still stopped at the limit.
   - `cpp-verify` links `tools/cpp-verify/ShadowStackGuard.cpp` in a TSan
     build, uninstrumented and with
     `--wrap=__tsan_func_entry,--wrap=__tsan_func_exit`. It counts each
