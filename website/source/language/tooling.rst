@@ -2019,6 +2019,30 @@ options:
    TSAN_OPTIONS=suppressions=.github/workflows/cppverify-tsan.supp \
      build-tsan/bin/cpp-verify --jobs=4 program.cpp --
 
+Clang compiles against the libstdc++ of the newest GCC it finds. Under
+ThreadSanitizer, that of GCC 14.1 to 14.3 and 15.1 to 15.2 (Ubuntu 24.04's
+``g++-14`` among them) cannot compile a wait on a ``std::timed_mutex`` until
+a ``steady_clock`` time, which Z3's timer makes (`GCC PR 121496
+<https://gcc.gnu.org/bugzilla/show_bug.cgi?id=121496>`_). The configure step
+checks this and stops (paths shortened):
+
+.. code-block:: text
+
+   -- Performing Test CPPVERIFY_TSAN_TIMED_MUTEX_WAIT
+   -- Performing Test CPPVERIFY_TSAN_TIMED_MUTEX_WAIT - Failed
+   CMake Error at clang/cmake/modules/CppVerifyZ3.cmake:45 (message):
+     Under ThreadSanitizer this C++ library cannot compile
+     std::timed_mutex::try_lock_until with a steady_clock time, which the
+     vendored Z3 uses: libstdc++ 14.1 to 14.3 and 15.1 to 15.2 have this bug
+     (GCC PR 121496), fixed in 14.4 and 15.3.  Select another GCC installation
+     for C and C++, with Clang for example
+     -DCMAKE_C_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13
+     -DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13.
+
+Add those two options to the ``cmake`` command above, as CI does. The vendored
+Z3 is built with the flags the build is configured with, so it compiles
+against the same library as everything it is linked with.
+
 ThreadSanitizer keeps each thread's calls on a shadow stack of 65536 frames
 and does not check its end, so a deeper nesting overwrites the runtime's own
 memory and the run crashes or hangs later, somewhere unrelated. The
