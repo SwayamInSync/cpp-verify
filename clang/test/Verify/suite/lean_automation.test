@@ -41,6 +41,11 @@
 # RUN: %cpp-verify --backend=lean --lean-project=%t/u --lean-auto-timeout=3000 --jobs=2 %S/Inputs/lean_automation.cpp -- 2>&1 | FileCheck %s --check-prefix=EXPORT
 # RUN: FileCheck %s --input-file=%t/u/CppVerify/Proofs/cppverify_next_e1e917/cppverify_next_e1e917_overflow_fd7a6390.lean --check-prefix=HONEST
 #
+# A goal's time starts once Lean has loaded the project's modules, however
+# long that takes: here longer than the limit for one goal.
+# RUN: mkdir -p %t/load/CppVerify && cp %S/Inputs/lean_automation_slow_user.lean %t/load/CppVerify/User.lean
+# RUN: %cpp-verify --backend=lean --lean-project=%t/load --lean-auto-timeout=3000 --jobs=1 %S/Inputs/lean_automation.cpp -- 2>&1 | FileCheck %s --check-prefix=EXPORT
+#
 # Without automation every new goal gets a stub.
 # RUN: %cpp-verify --backend=lean --no-lean-auto --lean-project=%t/q %S/Inputs/lean_automation.cpp -- 2>&1 | FileCheck %s --check-prefix=PLAIN --implicit-check-not=cppverify_auto
 # RUN: not grep -r -l 'automation:' %t/q/CppVerify/Proofs
