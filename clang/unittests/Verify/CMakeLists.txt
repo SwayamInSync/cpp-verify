@@ -6,6 +6,7 @@ endif()
 
 add_distinct_clang_unittest(VerifyTests
   CertifyTest.cpp
+  CompilationOptionsTest.cpp
   EncodingParityTest.cpp
   MachineIntegerEncodingTest.cpp
   ObligationValidationTest.cpp

@@ -552,6 +552,17 @@ now tried by induction too, including strong induction on a variable that
 indexes memory (``[by induction on j]``); an executable function is not
 (:doc:`book/part-ii/ch13-spec-and-proof-functions`).
 
+**Verification in a build.** ``clang++ -fverify-contracts`` verified every
+file with the defaults (Z3, 30 seconds a query, one job), and each file
+without contracts warned ``no verifiable functions found``, so a build that
+gave the flag to every file printed a warning for most of them. A compilation
+now takes ``-fverify-backend=``, ``-fverify-timeout=``, ``-fverify-jobs=``,
+``-fverify-cache=`` (proofs shared by every compilation that names the
+directory), and ``-fverify-report`` (the results as JSON Lines beside each
+object, or ``-fverify-report=<file>``); a file without a function to verify
+says nothing, and the reference shows a CMake recipe, with ``-fno-verify``
+for fast development builds (:doc:`language/tooling`).
+
 **Results as records, SARIF, and annotations.** JSON records had no source
 for a verified function, a failure's range began at its caret and ended at
 the first column of its last token, compiler errors stayed text, and nothing
