@@ -1461,12 +1461,25 @@ Every ``Verified`` result is checked at each:
    * - A trusted contract cannot hold in the state of one call.
      - ``f: the trusted contract of g contradicts the state of this call, so
        everything after it holds vacuously``, at the call
+   * - The facts about the specs ``f`` applies close a branch, ``return``,
+       loop body, or loop exit that its code alone reaches.
+     - ``f: the facts about s contradict the path to the true branch here,
+       which the code alone reaches, so every claim on that path holds
+       vacuously; either the path cannot happen, and it is dead code, or a
+       fact about s is wrong``, at the first such point (the result itself
+       is not ``[vacuous]``)
 
 A verified callee always returns, so only a trusted contract can end the
 paths through a call. Unreachable code itself is not flagged: a defensive
 ``if (p == nullptr) return -1;`` under ``cppverify::pre(p != nullptr)`` is dead for a
 good reason, and every claim the function makes is still checked on the
-paths that remain.
+paths that remain. The exception is code that only the facts about specs
+make dead (a spec's postcondition, a recursive spec's definition, an
+inductive predicate's unfolding, a frame, a choice's axiom): those facts
+are proved, so the code is most likely dead, but a wrong fact would hide
+paths in exactly this way, so the first such point is reported. A
+``cppverify::check`` of the fact before the point states it in the code and
+silences the warning (see :doc:`../book/part-ii/ch16-when-verification-fails`).
 
 Combining JSON or SARIF with IR dumps intentionally creates a mixed stream.
 Malformed byte sequences in source or archive display text are rendered with
@@ -1967,6 +1980,14 @@ From the **repository root**:
      - Full instrumented rebuild + sweep (slow; use when changing coverage setup).
 
 Set ``CPPVERIFY_ENABLE_COVERAGE=ON`` on ``clangVerify`` only — not the whole LLVM tree.
+
+``-DCPPVERIFY_SANITIZER="address;undefined"`` likewise builds only
+``clangVerify`` and ``cpp-verify`` with the sanitizers, beside an
+uninstrumented LLVM, Clang, and Z3. ``.github/workflows/cppverify-sanitize.sh
+BUILD`` runs every Verify test program through such a build and fails on any
+sanitizer report; CI does it every night. It turns off poisoning by hand
+(``allow_user_poisoning=0``), which LLVM's allocators do in the instrumented
+code's copies of their inline functions and not in the libraries.
 
 New language features should have both semantic and structural oracles:
 
