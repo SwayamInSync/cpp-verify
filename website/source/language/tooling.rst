@@ -1892,16 +1892,14 @@ From the **repository root**:
 
 Set ``CPPVERIFY_ENABLE_COVERAGE=ON`` on ``clangVerify`` only — not the whole LLVM tree.
 
-``-DCPPVERIFY_SANITIZER="address;undefined"`` (or ``thread``) likewise builds
-only ``clangVerify`` and ``cpp-verify`` with the sanitizers, beside an
+``-DCPPVERIFY_SANITIZER="address;undefined"`` likewise builds only
+``clangVerify`` and ``cpp-verify`` with the sanitizers, beside an
 uninstrumented LLVM, Clang, and Z3. ``.github/workflows/cppverify-sanitize.sh
-BUILD address`` (or ``thread``) runs every Verify test program through such a
-build and fails on any sanitizer report; CI does both every night. Under
-AddressSanitizer it turns off poisoning by hand (``allow_user_poisoning=0``),
-which LLVM's allocators do in the instrumented code's copies of their inline
-functions and not in the libraries, and gives threads 1 GiB stacks; under
-ThreadSanitizer each program runs with four jobs and a proof cache, and
-``cppverify-tsan.supp`` names the reports of uninstrumented code.
+BUILD`` runs every Verify test program through such a build and fails on any
+sanitizer report; CI does it every night. It turns off poisoning by hand
+(``allow_user_poisoning=0``), which LLVM's allocators do in the instrumented
+code's copies of their inline functions and not in the libraries, and gives
+threads 1 GiB stacks.
 
 New language features should have both semantic and structural oracles:
 
