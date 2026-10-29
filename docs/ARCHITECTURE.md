@@ -412,6 +412,33 @@ memory checks from UB instrumentation. A by-value argument
 a copy into a flattened local (`appendRecordCopy`) use it; a record with a
 member that is a record or an array is an error there.
 
+**Global objects:** a mutable global of a record or array type
+(`ASTConverter::isGlobalObject`: promotable as a local object would be, no
+type invariant) is rooted at its fixed address, a pointer literal whose
+pointee size is the object's (`globalAddress`, from `GlobalRegionBase`), by
+`objectPlace`, so its fields and elements are places like a promoted
+local's, with their access conditions; an access to a global cell needs
+no other check (`isGlobalCell`). A pointer formed into it is a subobject
+pointer whose address converts the literal (a `Cast`), keeping the literal's
+type, and with it the origin `@address/size` of the whole object;
+`abstractValidity` counts the global objects a pointer's origins name as
+valid storage, which discharges the pointer's binding check and lets it be
+passed as a slice.
+
+**Static locals:** a static local with a constant initializer
+(`ASTConverter::isStaticObject`) is a global object too, which records its
+function's private state in `VFunction::PrivateObjects`: a load of each
+scalar leaf's address (`objectLeaves`, at most `MaxPrivateCells`), or of the
+whole object's, typed. After conversion and inlining (a helper's objects
+join its caller's), each function's objects grow by those of every function
+its call graph reaches. Passivization lets a store into one of the
+function's objects pass its frame check (`inPrivateObject`), changes the
+callee's objects after a call (`havocPrivateObjects`: a fresh value in each
+cell, or a heap frame for a whole object, whose counterexamples model search
+finds slowly), and adds them to a loop's write set where the loop calls the
+callee. A pointer to or into a static local is rejected, so nothing outside
+the call graph can change one.
+
 **Pointers into objects:** `ASTConverter::subobjectPointer` lowers a decayed
 member array of a pointee and the address of a pointee's element, field, or
 nested record. In a statement (`SubobjectSink`) it asserts the place's access
@@ -1260,6 +1287,24 @@ reach any adapter. Semantically equivalent records that differ only by
 supported constant structure or unreachable logical declarations therefore
 converge to the same backend module and semantic identity.
 
+`clang/tools/cpp-verify-archive-fuzzer` states these properties as a libFuzzer
+target: for any byte string, `deserializeObligationModules` returns an error
+or modules that validate; each module's record reads back as one module whose
+record is the same bytes, with the same module and per-obligation semantic,
+statement, and query hashes; `simplifyObligationModule` succeeds on it, and
+on its result again, which serializes to the same bytes (a fixpoint); and Z3
+and cvc5 lower the canonical module in each machine-integer encoding, and
+Lean exports it unless it is bounded, without a crash. A property that fails
+aborts. Built without libFuzzer, the binary runs the target on the files it
+is given (`suite/archive_fuzzer.test` gives it archives of programs with
+every kind of term). `.github/workflows/cppverify-fuzz.yml` builds it with
+Clang, AddressSanitizer, assertions, and sanitizer coverage and fuzzes it for
+half an hour every night, seeded with the records of at most 64 KiB in the
+archives of the test programs and with the corpus earlier nights grew. The
+first run found the validator reading the second operand of a product,
+quotient, or remainder that had one, to describe the error: replay crashed,
+or printed what lay past the operands.
+
 Replay settles each module alone. What a source verdict also rests on (callee
 and trusted contracts, spec facts, partiality) and the vacuity checks are not
 archived, so a module whose obligations all hold reports `Proved obligations:
@@ -1804,12 +1849,27 @@ runs in a fresh solver with the remaining budget, since Z3's incremental core
 is much slower on thousands of ground equations. The probe only chooses
 models: an end the solver cannot prove adds nothing, and a model at an end
 that holds under the definitions pins the search to that counterexample. The
-probe has half the slice left, and its time moves the slice's end, so
-refinement keeps the rest. Its searches, one for each end of each argument,
-take turns, each check with an equal share of the time left, and each doubles
-its distance while the solver finds a value beyond and then halves the gap
-below the first distance it cannot reach (`ExtremeSearch`), so a 32-bit end
-takes at most 65 checks. Before, the ends ran one after the other and each
+probe's time moves the slice's end, so refinement keeps the rest. Its
+searches, one for each end of each argument, take turns, each check with an
+equal share of what is left of two budgets, and each doubles its distance
+while the solver finds a value beyond and then halves the gap below the first
+distance it cannot reach (`ExtremeSearch`), so a 32-bit end takes at most 65
+checks. The budgets are `DomainProbeUnits` (2 million) Z3 resource units, a
+check's `rlimit` and charged with the units it used, and half the slice in CPU
+time of the probe's own thread (`ThreadCpuClock`, read by the check's
+watchdog, which interrupts the check past its share), never wall-clock time
+but for the query's deadline. With half the slice in wall-clock time, the
+probe of `strictly_grows` (`induction_schemes.cpp`, `--timeout=10000`), which
+needs 13,000 units and 12 ms on an idle machine to pin the counterexample at
+`n = 1`, found no end with 32 runs sharing two cores in 10 of 32 runs, and
+the function ended `spec.fuel`, as it had on macOS CI; now it fails in all
+32. Units alone do not bound a search over sequences: a check of
+`count_reverse` (`sequence_induction.cpp`) spent 5 s on 700,000 units, and
+the file took 34 s instead of 17 s; with the CPU-time budget it takes 15 s.
+In the suite's 268 probes under the old limit, the 74 that found an end
+within it used at most 1.1 million units, and one cut off at the limit had
+used 1.8 million. Where a platform does not read a thread's CPU time, the
+time budget is wall-clock time, as before. Before, the ends ran one after the other and each
 restarted at distance 1 after every overshoot, hundreds of checks for a 32-bit
 end: on the efficiency cores of an M1 the first end spent the budget, and
 `fibo_strict` (`spec_post_unfolded.cpp`), whose counterexample lies at the
@@ -2680,8 +2740,9 @@ the converted functions, the end of the tasks, and the report. Backends
 without a sink (the unroller, those of the confirmations by proof and of the
 `cppverify::recommends` pass) count nothing, so no time is counted twice.
 Its message names the construct as C++ does (`unsupportedConstruct` for the
-statements and expressions without a site of their own; Clang's class name
-only in parentheses for those it has no name for), and each error is raised
+statements and expressions without a site of their own), and quotes the
+source of one C++ has no name for (`quotedSource`, its first line, at most 40
+characters); no message names a Clang class. Each error is raised
 once: a declaration whose initializer was rejected counts as initialized, and
 a rejected call returns before the generic message, so neither is reported
 again where it is used.
@@ -2747,7 +2808,7 @@ again where it is used.
      counts the files that do not succeed. The settlement is
      `ContractSettlement`, shared with the check of files verified apart:
      with `VerifyOptions::ContractsOut` (`--contracts-out`, and
-     `-fverify-contracts-out` through `startCppVerifyAsync` in the compile
+     `-fverify-contracts-out` through `runCppVerify` in the compile
      path) a file's externals are provisional the same way, each proof that
      rests on them gets `[assumes=f]`, and `recordContracts` writes a
      `cppverify.contracts/1` JSON record of the contracts it verifies (key,
@@ -2807,7 +2868,26 @@ again where it is used.
      Under BMC the passive program is the one unrolled to the final bound,
      so the same checks apply there, and a `BoundedSafe` result whose end
      no execution reaches within the bound is `[vacuous]` with a warning
-     naming the bound. Each finding records its verdict
+     naming the bound. When the function applies a spec, each trace
+     point (a branch taken, a `return`, a loop's inductive iteration with
+     its condition, the path after a loop: the `exit` event follows the
+     loop's exit assumption) whose guard the statements before it refute is
+     checked again (`contradictedPath`) in a program without the spec facts
+     (assumptions of origin `spec:`, `reads:`, or `choose` that apply a spec
+     other than a builtin one) whose specs are opaque: each non-builtin spec is replaced by
+     an `Uninterpreted` copy with its signature and no definition,
+     postcondition, unfolding, or axiom, a function of its arguments and
+     nothing more. The first point whose guard that program reaches (a
+     certified model, or one that needs an opaque spec's value,
+     `counterexample.unchecked`) gets a warning that the facts about the
+     specs applied before it contradict it; it does not make the result
+     `[vacuous]`, since the point may be dead code. A function's points
+     share the time of one smoke query: none starts after it, and the
+     search ends at the first point whose first query is undecided, since
+     each later point's query restates every fact before it. Over the 184
+     test programs that apply specs this costs 1.7% of their time. Hiding the specs would
+     not do: the certifier holds a model's choices to their axioms, and its
+     refinement gives them back. Each finding records its verdict
      (`VerifyDiagnostic::FindingOf`) and whether its query was of the entry
      state alone (`FoundAtEntry`); when a fixpoint demotes the verdict, a
      finding is withdrawn unless its query cannot contain the missing fact:
@@ -2939,13 +3019,21 @@ needs.
 The whole query of a module without logic functions is a probe of a fixed
 amount of work, `WholeProbeUnits` (6 million) Z3 resource units, with the
 module's timeout as its bound in time, so where it stops depends neither on
-the load nor on the build. It had 500 ms before. In an assertions build, or
+the load nor on the build type. It had 500 ms before. In an assertions build, or
 on a loaded core, the whole query of `certified_failure_attribution.cpp`
 (about 700 thousand units) did not finish in that time; with one job its
 obligations then ran, the postcondition among them, whose own search does
 not end, and the function ended `Unresolved` with `solver.timeout` after
 121 s on one core shared with two busy loops. The assertions build now
-reports the test's counterexample there in 7 s, with one job or three. Every
+reports the test's counterexample there in 7 s, with one job or three. The
+work a search needs still depends on Z3's own build: with a Z3 built by
+Clang, as the release's is, that complete query was not refuted within the
+probe, and the test took the 60 s path again (the release's dry run). Over
+every test program a Clang-built and a GCC-built Z3 decided differently only
+there and in `llvm_uleb128.cpp`, where the Clang-built one proved a function
+the other did not (differential at one job, total 2501 s and 2492 s). The
+test now fails through a check any Z3 refutes at once, after a check (a
+solution of Fermat's equation for cubes) whose search ends in neither. Every
 probe of the test suite that an idle release build decided within 500 ms
 took at most 5.2 million units (99% of the 2622 took less than 200
 thousand); the three that took 5.2 million are those of the UTF-8 case
@@ -3009,9 +3097,14 @@ interrupt function. Every solver is created with Z3's `ctrl_c` parameter
 off: otherwise each check swaps Z3's own SIGINT handler in, Z3 keeps the
 handlers of concurrent checks in one unsynchronized stack, and Ctrl-C ran the
 handler of a finished check (a crash report, then a run that went on).
-Source-location annotation takes a lock, since
-the source manager caches its last lookup. Lean stays serial, and the
-compile-time verifier keeps a single job.
+Every source lookup made while functions are verified at once takes one
+lock, `Verifier::SourceLock`, in `sourceOf`, `annotateObligationSources`, and
+the notes of a failure, since the source manager caches its last lookups:
+before 0.2 the notes of a failure whose counterexample passes through a loop,
+which unroll the loop and annotate each bound's module, and the fallback of
+a failure's place looked up sources without it, a data race that
+ThreadSanitizer found (`suite/parallel_failure_notes.cpp`). Lean stays
+serial, and the compile-time verifier keeps a single job.
 
 cvc5 execution resolves an explicit `--cvc5-path` or searches `PATH`, writes one
 bounded temporary SMT-LIB2 query, invokes the executable without a shell under
@@ -3355,7 +3448,9 @@ semantics.
 
 ## Compile-Time Integration
 
-`CppVerifyIntegration` (`clang/lib/Verify/Driver/CppVerifyIntegration.cpp`) hooks **CodeGen**: when `-fverify-contracts` is on and `-fno-verify` is off, verification runs asynchronously while LLVM IR is generated. The verifier's thread collects its results as `VerifyDiagnosticPart`s (`VerifyOptions::Parts`) instead of printing them, and `finishCppVerify` reports each through the compiler's `DiagnosticsEngine` on the main thread, which the engine requires: `err_cppverify_result` for failures and unresolved results, `warn_cppverify_result` in `-Wcppverify`, `remark_cppverify_result` in `-Rcppverify` for proofs, and `note_cppverify_result` for their notes. A result without a location of its own, as a proof has none, points at its function's declaration (`VerifyDiagnostic::FunctionLoc`). So `-Werror`, `-w`, colors, `-fdiagnostics-format=sarif`, and clangd see them as Clang's own; `err_fe_cppverify_failed` is reported only when the run fails without a result of its own. Zero ghost/spec code in the object file.
+`CppVerifyIntegration` (`clang/lib/Verify/Driver/CppVerifyIntegration.cpp`) hooks **CodeGen**: when `-fverify-contracts` is on and `-fno-verify` is off, `runCppVerify` verifies the translation unit in `BackendConsumer::HandleTranslationUnit`, before LLVM IR is generated. It once ran on a thread of its own while IR was generated, but IR generation fills caches of the `ASTContext` and the `SourceManager` that the verifier reads (type sizes, linkage, the last file and line looked up), and a ThreadSanitizer `clang` reported races on all three in 4 of 4 compilations (`-g -c`) of a file with contracts and templates; a failure now also stops IR generation, which resets the module once an error is reported. The verifier collects its results as `VerifyDiagnosticPart`s (`VerifyOptions::Parts`) instead of printing them, and `runCppVerify` reports each through the compiler's `DiagnosticsEngine` on the main thread, which the engine requires: `err_cppverify_result` for failures and unresolved results, `warn_cppverify_result` in `-Wcppverify`, `remark_cppverify_result` in `-Rcppverify` for proofs, and `note_cppverify_result` for their notes. A result without a location of its own, as a proof has none, points at its function's declaration (`VerifyDiagnostic::FunctionLoc`). So `-Werror`, `-w`, colors, `-fdiagnostics-format=sarif`, and clangd see them as Clang's own; `err_fe_cppverify_failed` is reported only when the run fails without a result of its own. Zero ghost/spec code in the object file.
+
+The `-fverify-*` options of a compilation (`-fverify-backend=`, `-fverify-timeout=`, `-fverify-jobs=`, `-fverify-cache=`, `-fverify-report=`, `-fverify-contracts-out=`) are `FrontendOptions` fields, parsed by Clang's option marshalling, so an invalid value is the compiler's error; the driver forwards them, and turns a bare `-fverify-report` into `-fverify-report=<object>.cppverify.json`, as `-ftime-trace` names its file after the object. `compilationOptions` maps them to `VerifyOptions` as `cpp-verify` maps its options of the same names (a query timeout also scales the collection and function timeouts) and sets `QuietWithoutFunctions`, so a file without a function to verify says nothing. With `ReportPath`, `verifyTranslationUnit` also writes every reported result as a `cppverify.diagnostic/2` record and then the summary record (`summaryRecord`, which `cpp-verify` prints too).
 
 ## Tooling Integration
 
@@ -3485,7 +3580,32 @@ fresh context, the API's or `z3`'s, the same assertions are `unknown`
   every case nightly; `differential.test` runs the tool's own cases, two of
   which state their contract wrongly in Python so that the tool must report
   them.
+- Archive fuzzing: `clang/tools/cpp-verify-archive-fuzzer`, a libFuzzer
+  target over the archive reader, the canonicalizer, and the adapters'
+  lowering ("Canonical archives and semantic identity"), nightly in
+  `.github/workflows/cppverify-fuzz.yml`; `suite/archive_fuzzer.test` runs it
+  on archives of the test programs.
 - Instrumented coverage: `scripts/coverage-verify.sh` (region target on `clang/lib/Verify`).
+- Sanitizers: `-DCPPVERIFY_SANITIZER="address;undefined"` builds
+  `clangVerify` and `cpp-verify` with AddressSanitizer and
+  UndefinedBehaviorSanitizer beside an uninstrumented LLVM, Clang, and Z3,
+  and `.github/workflows/cppverify-sanitize.sh` runs every Verify test
+  program through it with two jobs, failing on any report;
+  `cppverify-sanitizers.yml` does it nightly. Verdicts are not compared,
+  since the sanitizers slow the verifier. Its first run on CI found the
+  counterexample checker overflowing its stack in 11 programs: ASan gives
+  every local of `Evaluator::evalNode` a guarded slot of its own, so a level
+  of nesting took over 8 KiB instead of about 1 KiB, and the 50,000 levels
+  `CertifyLimits::Frames` allows did not fit in the checker's 256 MiB
+  thread. The evaluator now continues on a fresh stack once half of its own
+  is used (`CertifyLimits::StackBytes`), as Clang's
+  `runWithSufficientStackSpace` does, so the nesting limit, and every
+  verdict, is the same in every build. It found no other report in the
+  verifier's own code. ThreadSanitizer is not run: in such a build, with
+  only the verifier instrumented, its runtime crashed in its own trace lists
+  or hung on its own trace locks in 66 of 69 runs of `spec_automation.cpp`
+  with four jobs (run under gdb to see where), so a run cannot tell a race
+  from the runtime's failure.
 
 Every new semantic feature needs layered oracles rather than a solver result
 alone:

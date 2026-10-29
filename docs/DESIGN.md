@@ -196,7 +196,25 @@ checked at each: an unsatisfiable precondition, a function whose end no
 execution reaches, a behavior whose assumption contradicts the preconditions
 (its postconditions are never checked; warning only), and a trusted call
 whose contract contradicts the state of the call. Unreachable code alone
-is not flagged. Under BMC the same checks run on the program unrolled to
+is not flagged, with one exception. The facts the verifier adds about the
+specs a function applies (their postconditions, the definitions of
+recursive specs, inductive unfoldings, frames, and choices' axioms) are proved before use, so each
+should be a theorem; a wrong one could close some paths and leave the end
+reachable, as the self-contradictory definition of a spec recursive through
+`cppverify::choose` did before 0.2, and the checks above would pass. So for a
+verified function that applies a spec, each branch, `return`, loop body, and
+loop exit that all the facts close is checked again with the specs' values
+free and their facts removed, the code's own assumptions (preconditions,
+callee contracts, invariants, checks, and the builtin specs of the
+language, such as a sequence's `reverse`) kept; the first point the code alone
+reaches is reported with a warning (`the facts about tri contradict the path
+to the true branch here, which the code alone reaches ...`), as Dafny's
+`--warn-contradictory-assumptions` reports an assumption that contradicts
+its path. The result is not `[vacuous]`: the point may be dead code, kept on
+purpose, and a `cppverify::check` of the fact before it says so and silences
+the warning. Like the other vacuity checks it is a warning, not a verdict, so
+its search is bounded (a function's points share the time of one such check)
+and a search cut short omits it. Under BMC the same checks run on the program unrolled to
 the bound, as Kani reports an unreachable check, and a `BoundedSafe`
 result that no execution finishes within the bound is `[vacuous]` too
 (`no execution finishes within N loop iterations`). A finding rests on the
@@ -1647,6 +1665,36 @@ void reset_left(Pair &p)
   members whose class provides a constructor, reference and bit-field
   members, arrays of such objects, and `new` of a record. A constructed
   object is passed and returned by value as 3b's records in memory are.
+
+### 3c. Global objects
+
+A mutable global of an integral, record, or array type is one object at a
+fixed address of its own (the global region, above every other object), as
+Frama-C models globals: its fields and elements are cells with their array
+bounds, it is always live and initialized, and its value at a function's
+entry is arbitrary, since any function may have changed it. A function
+writes it only within its `cppverify::modifies` clause, which may name the
+object, a field, an element, or a range; a call changes the callee's
+footprints only. A pointer into it is bounded by the array, field, or record
+it is formed from (as for a member of a pointee, 3b) and carries the
+global's origin, so it may be passed as a slice. A spec cannot read a
+mutable global and ghost code cannot write one. Globals that are
+themselves pointers, globals of a class with a type invariant (nothing would maintain it at
+every function's boundary), and thread-local and volatile globals fail
+closed.
+
+A static local with a constant initializer is such an object that only its
+function names, so it is that function's private state, which no contract
+can mention: its value at entry is whatever earlier calls left; the function
+writes it without a frame; and a call changes it exactly when the callee may
+reach the function, through the call graph (recursion, a callback) or an
+inlined helper whose static it is. Callers state nothing about it, and a
+call of any other function keeps it. Frama-C renames a static local to a
+global that no `assigns` can name, so a function that writes one cannot
+state its frame; treating it as private state keeps frames exact and
+callers unaware of it. Its address never escapes (a pointer to or into it is
+rejected), which is what makes the call graph a sound bound on who changes
+it, and an initializer that runs code at the first call is rejected.
 
 ### 4. `cppverify::modifies(...)` frame condition
 

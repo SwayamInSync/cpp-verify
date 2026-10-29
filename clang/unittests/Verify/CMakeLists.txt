@@ -6,9 +6,11 @@ endif()
 
 add_distinct_clang_unittest(VerifyTests
   CertifyTest.cpp
+  CompilationOptionsTest.cpp
   EncodingParityTest.cpp
   MachineIntegerEncodingTest.cpp
   ObligationValidationTest.cpp
+  ThreadCpuTimeTest.cpp
   CLANG_LIBS
   clangVerify
   LINK_LIBS

@@ -1,0 +1,130 @@
+name: CppVerify fuzzing
+
+# Every night, libFuzzer runs the archive reader's target
+# (clang/tools/cpp-verify-archive-fuzzer) for half an hour under
+# AddressSanitizer: archives given to --obligation-in are untrusted input. It
+# starts from the records of the archives the verifier writes for its test
+# programs and from the corpus earlier nights grew. A crash, a leak, or a
+# property of the target that fails ends the job, which uploads the input.
+
+on:
+  schedule:
+    - cron: "41 2 * * *"
+  # A change to the fuzzer or this workflow runs it briefly.
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/cppverify-fuzz.yml
+      - .github/workflows/cppverify-fuzz-seeds.py
+      - clang/tools/cpp-verify-archive-fuzzer/**
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: How long to fuzz
+        default: "1800"
+
+permissions:
+  contents: read
+
+jobs:
+  archive:
+    name: Archive reader
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 4G
+      CCACHE_COMPRESS: "1"
+      SECONDS_TO_FUZZ: ${{ inputs.seconds || (github.event_name == 'pull_request' && '300') || '1800' }}
+    steps:
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build ccache clang-18 libclang-rt-18-dev
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: .ccache
+          key: ccache-linux-fuzz-${{ github.sha }}
+          restore-keys: ccache-linux-fuzz-
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: corpus
+          key: archive-corpus-${{ github.run_id }}
+          restore-keys: archive-corpus-
+
+      - name: Configure
+        run: |
+          cmake -S llvm -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang-18 \
+            -DCMAKE_CXX_COMPILER=clang++-18 \
+            -DLLVM_ENABLE_PROJECTS=clang \
+            -DLLVM_TARGETS_TO_BUILD=Native \
+            -DCPPVERIFY_VENDOR_Z3=ON \
+            -DCPPVERIFY_PREFER_SYSTEM_Z3=OFF \
+            -DLLVM_ENABLE_ASSERTIONS=ON \
+            -DLLVM_USE_SANITIZER=Address \
+            -DLLVM_USE_SANITIZE_COVERAGE=On \
+            -DLLVM_CCACHE_BUILD=ON
+
+      - name: Build
+        run: ninja -C build cpp-verify cpp-verify-archive-fuzzer
+
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .ccache
+          key: ccache-linux-fuzz-${{ github.sha }}
+
+      - name: Seed from the test programs
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+        run: |
+          mkdir -p archives
+          find clang/test/Verify -name '*.cpp' -not -path '*/Inputs/*' -print0 |
+            xargs -0 -P "$(nproc)" -I{} sh -c \
+              'timeout 120 build/bin/cpp-verify --jobs=1 --lower-only \
+                 --obligation-out="archives/$(echo {} | tr / _).cpv" {} -- \
+                 -Iclang/test/Verify/suite/Inputs > /dev/null 2>&1 || true'
+          python3 .github/workflows/cppverify-fuzz-seeds.py seeds 65536 archives/*.cpv
+
+      - name: Fuzz
+        run: |
+          mkdir -p corpus artifacts
+          build/bin/cpp-verify-archive-fuzzer \
+            -jobs="$(nproc)" -workers="$(nproc)" \
+            -max_total_time="$SECONDS_TO_FUZZ" -timeout=60 -rss_limit_mb=4096 \
+            -max_len=65536 -artifact_prefix=artifacts/ \
+            corpus seeds
+          ! ls artifacts/* > /dev/null 2>&1
+
+      - name: Keep the corpus small
+        if: always()
+        run: |
+          mkdir -p merged
+          build/bin/cpp-verify-archive-fuzzer -merge=1 -timeout=60 \
+            -rss_limit_mb=4096 merged corpus || true
+          rm -rf corpus && mv merged corpus
+
+      - uses: actions/cache/save@v4
+        if: always() && github.event_name != 'pull_request'
+        with:
+          path: corpus
+          key: archive-corpus-${{ github.run_id }}
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: archive-fuzzer-crashes
+          path: |
+            artifacts/
+            fuzz-*.log

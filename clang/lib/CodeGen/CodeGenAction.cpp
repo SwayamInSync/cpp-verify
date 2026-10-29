@@ -9,7 +9,6 @@
 #include "clang/CodeGen/CodeGenAction.h"
 #include "BackendConsumer.h"
 #include "CppVerifyIntegration.h"
-#include <future>
 #include <optional>
 #include "CGCall.h"
 #include "CodeGenModule.h"
@@ -242,10 +241,11 @@ bool BackendConsumer::LinkInModules(llvm::Module *M) {
 }
 
 void BackendConsumer::HandleTranslationUnit(ASTContext &C) {
-  std::optional<std::future<verify::CppVerifyAsyncResult>> VerifyFuture;
+  // Verification reads caches of the ASTContext and the SourceManager that
+  // IR generation fills, so it runs first; a failure then stops IR
+  // generation.
   if (verify::shouldRunCppVerify(CI))
-    VerifyFuture =
-        verify::startCppVerifyAsync(C, CI.getFrontendOpts().VerifyContractsOut);
+    verify::runCppVerify(CI, C);
 
   {
     llvm::TimeTraceScope TimeScope("Frontend");
@@ -258,9 +258,6 @@ void BackendConsumer::HandleTranslationUnit(ASTContext &C) {
     if (TimerIsEnabled && !--LLVMIRGenerationRefCount)
       LLVMIRGeneration.yieldTo(CI.getFrontendTimer());
   }
-
-  if (VerifyFuture)
-    verify::finishCppVerify(CI, std::move(*VerifyFuture));
 
   // Silently ignore if we weren't initialized for some reason.
   if (!getModule())

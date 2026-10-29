@@ -1,8 +1,6 @@
 // RUN: not %cpp-verify --jobs=1 %s -- 2>&1 | FileCheck %s
 // RUN: %cpp-verify --lower-only --no-check-ub --dump-ir=1 %s -- 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=VCR
-// RUN: not %cpp-verify --jobs=1 %s -- -DDECAY 2>&1 \
-// RUN:   | FileCheck %s --check-prefix=DECAY
 //
 // Fields and fixed-array elements inside the object a pointer addresses, at
 // any depth. Each index is bounded by its own array, so an index one past an
@@ -32,7 +30,6 @@ struct Ring {
   int count;
 };
 
-#ifndef DECAY
 int peek(const Ring *r)
   cppverify::pre(r != nullptr && 0 <= r->head && r->head < 8)
   cppverify::post(cppverify::result == r->buf[r->head])
@@ -291,8 +288,8 @@ void nested_write_wrong(Outer *p)
   p->inner.y = 3;
 }
 // CHECK-DAG: :[[@LINE-4]]:30: error: verification failed: nested_write_wrong [postcondition]
-#else
-// Arrays in global storage are not modeled; the message names the global.
+// Arrays in global storage are objects too: each index is bounded by its
+// array.
 Ring global_ring;
 int global_table[4];
 
@@ -301,12 +298,11 @@ int global_member(int i)
 {
   return global_ring.buf[i];
 }
-// DECAY-DAG: pointer_subobjects.cpp:[[@LINE-2]]:10: error: global_member: the array member 'buf' of the global 'global_ring' is unsupported
+// CHECK-DAG: Verified: global_member
 
 int global_array(int i)
   cppverify::pre(0 <= i && i < 4)
 {
   return global_table[i];
 }
-// DECAY-DAG: pointer_subobjects.cpp:[[@LINE-2]]:10: error: global_array: the global array 'global_table' is unsupported
-#endif
+// CHECK-DAG: Verified: global_array
