@@ -2680,8 +2680,9 @@ the converted functions, the end of the tasks, and the report. Backends
 without a sink (the unroller, those of the confirmations by proof and of the
 `cppverify::recommends` pass) count nothing, so no time is counted twice.
 Its message names the construct as C++ does (`unsupportedConstruct` for the
-statements and expressions without a site of their own; Clang's class name
-only in parentheses for those it has no name for), and each error is raised
+statements and expressions without a site of their own), and quotes the
+source of one C++ has no name for (`quotedSource`, its first line, at most 40
+characters); no message names a Clang class. Each error is raised
 once: a declaration whose initializer was rejected counts as initialized, and
 a rejected call returns before the generic message, so neither is reported
 again where it is used.
