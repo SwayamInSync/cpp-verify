@@ -7444,7 +7444,6 @@ public:
                     BodyActive.get(), W.Loc, ProofObligationKind::Termination);
       }
 
-      emitTrace(PassiveTraceKind::Loop, "exit", Active.get(), W.Loc);
       Origin = "exit";
       std::vector<const VExpr *> Returns;
       for (size_t I = ReturnsBefore; I != ReturnGuards.size(); ++I)
@@ -7454,6 +7453,7 @@ public:
                     Active.get(), W.Loc);
         emitPassive(P, PassiveStmt::Assume, makeNot(std::move(HeadCond), W.Loc),
                     Active.get(), W.Loc);
+        emitTrace(PassiveTraceKind::Loop, "exit", Active.get(), W.Loc);
         break;
       }
       // Exit paths keep their exit state to the end of the body, so the
@@ -7490,6 +7490,8 @@ public:
       if (!Returns.empty())
         Active = makeAnd(std::move(Active), makeNot(std::move(Returned), W.Loc),
                          W.Loc);
+      // After the exit assumption, the path that continues after the loop.
+      emitTrace(PassiveTraceKind::Loop, "exit", Active.get(), W.Loc);
       break;
     }
     case VStmt::Break: {

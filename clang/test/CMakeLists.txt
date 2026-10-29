@@ -117,6 +117,9 @@ list(APPEND CLANG_TEST_DEPS
 if(TARGET cpp-verify)
   list(APPEND CLANG_TEST_DEPS cpp-verify)
 endif()
+if(TARGET cpp-verify-archive-fuzzer)
+  list(APPEND CLANG_TEST_DEPS cpp-verify-archive-fuzzer)
+endif()
 
 if(CLANG_ENABLE_CIR)
   list(APPEND CLANG_TEST_DEPS

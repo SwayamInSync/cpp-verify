@@ -7,6 +7,7 @@ This repository **is** the CppVerify codebase: an LLVM monorepo fork extended at
 | `clang/lib/Verify/` | Verification engine |
 | `clang/include/clang/Basic/CppVerifyConstructs.def`, `clang/lib/Parse/ParseCppVerify.cpp`, `clang/lib/Headers/cppverify.h` | The contract language: its constructs, their parsing, and their documented declarations |
 | `clang/tools/cpp-verify/` | Standalone verifier |
+| `clang/tools/cpp-verify-archive-fuzzer/` | libFuzzer target over the archive reader, nightly in CI |
 | `clang/test/Verify/` | Frontend lit tests; `suite/` holds the end-to-end programs, the case studies and backend tests included |
 | `clang/unittests/Verify/` | Encoding oracle and parity unit tests (`VerifyTests`) |
 | `clang/utils/cppverify-differential/` | Differential execution of verdicts against UBSan-instrumented runs, nightly in CI |

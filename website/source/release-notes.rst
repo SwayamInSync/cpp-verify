@@ -552,6 +552,18 @@ now tried by induction too, including strong induction on a variable that
 indexes memory (``[by induction on j]``); an executable function is not
 (:doc:`book/part-ii/ch13-spec-and-proof-functions`).
 
+**Paths that the facts about specs close.** The vacuity checks asked whether
+anything reaches a verified function's end, so an assumption that removed
+only some paths went unnoticed: the contradictory definition of a spec
+recursive through ``cppverify::choose`` made one argument impossible and its
+function verified without a mark. The facts the verifier adds about specs
+are proved before use, so one that is wrong is a bug in the verifier; now,
+for every verified function that applies a spec, the first branch,
+``return``, loop body, or loop exit that those facts close but the code alone
+reaches gets a warning, which says that the code is dead or a fact is wrong.
+A ``cppverify::check`` of the fact before it keeps a dead branch on purpose
+(:doc:`book/part-ii/ch16-when-verification-fails`).
+
 **Verification in a build.** ``clang++ -fverify-contracts`` verified every
 file with the defaults (Z3, 30 seconds a query, one job), and each file
 without contracts warned ``no verifiable functions found``, so a build that
@@ -776,7 +788,16 @@ initializer was rejected added ``read of uninitialized local value``, and a
 call without a contract was reported twice. The message now says what C++
 calls the construct (``throw is unsupported: exceptions are not modeled``,
 ``lambdas are unsupported``), and each is reported once
-(:doc:`language/tooling`).
+(:doc:`language/tooling`). OpenMP directives, coroutines, atomic operations,
+``__try``, ``typeid``, ``dynamic_cast``, ``va_arg``, and vector operations are
+named the same way; a construct C++ has no name for is quoted (``this
+expression `x ?: 1` is unsupported``), where its message gave Clang's class.
+
+**C++20 rewritten comparisons.** ``a != b`` with only ``operator==``
+declared, or ``5 == r`` with only ``R::operator==(int)``, was ``this
+expression is unsupported (CXXRewrittenBinaryOperator)``. It is now the call
+C++20 rewrites it to, ``!(a == b)`` and ``r == 5``, checked against that
+operator's contract (:doc:`language/structs`).
 
 **An unsupported construct costs its function alone.** One construct the
 verifier does not represent, such as a ``switch``, stopped the file: no
@@ -999,6 +1020,17 @@ evaluation failed 53 tests on macOS. The Linux assertions build now uses Clang
 (``-Werror=c++20-extensions``), and checks the verifier with clang-tidy for a
 use after a move (``bugprone-use-after-move``). It found seven lambdas that
 captured structured bindings, now named variables, and no use after a move.
+
+**The archive reader is fuzzed every night.** An archive given to
+``--obligation-in`` is untrusted input. libFuzzer now runs the reader under
+AddressSanitizer for half an hour every night, from the records of the test
+programs' archives: any input must be rejected with an error or decode to
+modules that validate, that are written again byte for byte with the same
+hashes, whose canonical form is a fixpoint, and that the Z3, cvc5, and Lean
+adapters lower. Its first run found a malformed record that crashed replay: a
+product, quotient, or remainder with one operand made the validator read a
+second one to describe the error. It is now ``malformed obligation term:
+unexpected operand count`` (:doc:`language/tooling`).
 
 Data formats
 ~~~~~~~~~~~~

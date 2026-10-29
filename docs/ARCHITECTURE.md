@@ -1287,6 +1287,24 @@ reach any adapter. Semantically equivalent records that differ only by
 supported constant structure or unreachable logical declarations therefore
 converge to the same backend module and semantic identity.
 
+`clang/tools/cpp-verify-archive-fuzzer` states these properties as a libFuzzer
+target: for any byte string, `deserializeObligationModules` returns an error
+or modules that validate; each module's record reads back as one module whose
+record is the same bytes, with the same module and per-obligation semantic,
+statement, and query hashes; `simplifyObligationModule` succeeds on it, and
+on its result again, which serializes to the same bytes (a fixpoint); and Z3
+and cvc5 lower the canonical module in each machine-integer encoding, and
+Lean exports it unless it is bounded, without a crash. A property that fails
+aborts. Built without libFuzzer, the binary runs the target on the files it
+is given (`suite/archive_fuzzer.test` gives it archives of programs with
+every kind of term). `.github/workflows/cppverify-fuzz.yml` builds it with
+Clang, AddressSanitizer, assertions, and sanitizer coverage and fuzzes it for
+half an hour every night, seeded with the records of at most 64 KiB in the
+archives of the test programs and with the corpus earlier nights grew. The
+first run found the validator reading the second operand of a product,
+quotient, or remainder that had one, to describe the error: replay crashed,
+or printed what lay past the operands.
+
 Replay settles each module alone. What a source verdict also rests on (callee
 and trusted contracts, spec facts, partiality) and the vacuity checks are not
 archived, so a module whose obligations all hold reports `Proved obligations:
@@ -2722,8 +2740,9 @@ the converted functions, the end of the tasks, and the report. Backends
 without a sink (the unroller, those of the confirmations by proof and of the
 `cppverify::recommends` pass) count nothing, so no time is counted twice.
 Its message names the construct as C++ does (`unsupportedConstruct` for the
-statements and expressions without a site of their own; Clang's class name
-only in parentheses for those it has no name for), and each error is raised
+statements and expressions without a site of their own), and quotes the
+source of one C++ has no name for (`quotedSource`, its first line, at most 40
+characters); no message names a Clang class. Each error is raised
 once: a declaration whose initializer was rejected counts as initialized, and
 a rejected call returns before the generic message, so neither is reported
 again where it is used.
@@ -2849,7 +2868,26 @@ again where it is used.
      Under BMC the passive program is the one unrolled to the final bound,
      so the same checks apply there, and a `BoundedSafe` result whose end
      no execution reaches within the bound is `[vacuous]` with a warning
-     naming the bound. Each finding records its verdict
+     naming the bound. When the function applies a spec, each trace
+     point (a branch taken, a `return`, a loop's inductive iteration with
+     its condition, the path after a loop: the `exit` event follows the
+     loop's exit assumption) whose guard the statements before it refute is
+     checked again (`contradictedPath`) in a program without the spec facts
+     (assumptions of origin `spec:`, `reads:`, or `choose` that apply a spec
+     other than a builtin one) whose specs are opaque: each non-builtin spec is replaced by
+     an `Uninterpreted` copy with its signature and no definition,
+     postcondition, unfolding, or axiom, a function of its arguments and
+     nothing more. The first point whose guard that program reaches (a
+     certified model, or one that needs an opaque spec's value,
+     `counterexample.unchecked`) gets a warning that the facts about the
+     specs applied before it contradict it; it does not make the result
+     `[vacuous]`, since the point may be dead code. A function's points
+     share the time of one smoke query: none starts after it, and the
+     search ends at the first point whose first query is undecided, since
+     each later point's query restates every fact before it. Over the 184
+     test programs that apply specs this costs 1.7% of their time. Hiding the specs would
+     not do: the certifier holds a model's choices to their axioms, and its
+     refinement gives them back. Each finding records its verdict
      (`VerifyDiagnostic::FindingOf`) and whether its query was of the entry
      state alone (`FoundAtEntry`); when a fixpoint demotes the verdict, a
      finding is withdrawn unless its query cannot contain the missing fact:
@@ -3529,6 +3567,11 @@ fresh context, the API's or `z3`'s, the same assertions are `unknown`
   every case nightly; `differential.test` runs the tool's own cases, two of
   which state their contract wrongly in Python so that the tool must report
   them.
+- Archive fuzzing: `clang/tools/cpp-verify-archive-fuzzer`, a libFuzzer
+  target over the archive reader, the canonicalizer, and the adapters'
+  lowering ("Canonical archives and semantic identity"), nightly in
+  `.github/workflows/cppverify-fuzz.yml`; `suite/archive_fuzzer.test` runs it
+  on archives of the test programs.
 - Instrumented coverage: `scripts/coverage-verify.sh` (region target on `clang/lib/Verify`).
 
 Every new semantic feature needs layered oracles rather than a solver result
