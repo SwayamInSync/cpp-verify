@@ -3,7 +3,8 @@ name: CppVerify CI
 # Linux runs every Clang and clang-tools-extra test in a release and an
 # assertions build, with the oldest and the newest cvc5 the release supports.
 # macOS and Windows build a fresh clone the way setup.sh and setup.ps1 do for
-# a user, then verify a program with the result.
+# a user, then verify a program with the result; macOS then runs the Verify
+# tests, with the newest cvc5 and the pinned Lean.
 
 on:
   # The book, the language reference, the website scripts, and DESIGN.md are
@@ -142,8 +143,28 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install build tools
-        run: brew install ninja
+      - name: Install build tools, cvc5, and Lean
+        env:
+          CVC5_VERSION: "1.4.2"
+        run: |
+          set -o pipefail
+          brew install ninja
+          curl -sSfL -o "$RUNNER_TEMP/cvc5.zip" \
+            "https://github.com/cvc5/cvc5/releases/download/cvc5-$CVC5_VERSION/cvc5-macOS-arm64-static.zip"
+          unzip -q "$RUNNER_TEMP/cvc5.zip" -d "$RUNNER_TEMP/cvc5"
+          dirname "$(find "$RUNNER_TEMP/cvc5" -name cvc5 -type f)" >> "$GITHUB_PATH"
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            | sh -s -- -y --default-toolchain none
+          # From its GitHub release, as on Linux.
+          version="${LEAN_TOOLCHAIN##*:v}"
+          curl -sSfL -o "$RUNNER_TEMP/lean.zip" \
+            "https://github.com/leanprover/lean4/releases/download/v$version/lean-$version-darwin_aarch64.zip"
+          unzip -q "$RUNNER_TEMP/lean.zip" -d "$RUNNER_TEMP/lean"
+          mkdir -p "$HOME/.elan/toolchains"
+          mv "$RUNNER_TEMP/lean/lean-$version-darwin_aarch64" \
+            "$HOME/.elan/toolchains/leanprover--lean4---v$version"
+          "$HOME/.elan/bin/elan" default "$LEAN_TOOLCHAIN"
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
 
       - name: Build with setup.sh
         run: ./setup.sh
@@ -153,6 +174,8 @@ jobs:
 
       - name: Test the verifier
         run: |
+          cvc5 --version | head -1
+          lean --version
           ninja -C build FileCheck not count split-file llvm-config
           build/bin/llvm-lit -sv --no-progress-bar clang/test/Verify
 
