@@ -412,6 +412,33 @@ memory checks from UB instrumentation. A by-value argument
 a copy into a flattened local (`appendRecordCopy`) use it; a record with a
 member that is a record or an array is an error there.
 
+**Global objects:** a mutable global of a record or array type
+(`ASTConverter::isGlobalObject`: promotable as a local object would be, no
+type invariant) is rooted at its fixed address, a pointer literal whose
+pointee size is the object's (`globalAddress`, from `GlobalRegionBase`), by
+`objectPlace`, so its fields and elements are places like a promoted
+local's, with their access conditions; an access to a global cell needs
+no other check (`isGlobalCell`). A pointer formed into it is a subobject
+pointer whose address converts the literal (a `Cast`), keeping the literal's
+type, and with it the origin `@address/size` of the whole object;
+`abstractValidity` counts the global objects a pointer's origins name as
+valid storage, which discharges the pointer's binding check and lets it be
+passed as a slice.
+
+**Static locals:** a static local with a constant initializer
+(`ASTConverter::isStaticObject`) is a global object too, which records its
+function's private state in `VFunction::PrivateObjects`: a load of each
+scalar leaf's address (`objectLeaves`, at most `MaxPrivateCells`), or of the
+whole object's, typed. After conversion and inlining (a helper's objects
+join its caller's), each function's objects grow by those of every function
+its call graph reaches. Passivization lets a store into one of the
+function's objects pass its frame check (`inPrivateObject`), changes the
+callee's objects after a call (`havocPrivateObjects`: a fresh value in each
+cell, or a heap frame for a whole object, whose counterexamples model search
+finds slowly), and adds them to a loop's write set where the loop calls the
+callee. A pointer to or into a static local is rejected, so nothing outside
+the call graph can change one.
+
 **Pointers into objects:** `ASTConverter::subobjectPointer` lowers a decayed
 member array of a pointee and the address of a pointee's element, field, or
 nested record. In a statement (`SubobjectSink`) it asserts the place's access
@@ -1804,12 +1831,27 @@ runs in a fresh solver with the remaining budget, since Z3's incremental core
 is much slower on thousands of ground equations. The probe only chooses
 models: an end the solver cannot prove adds nothing, and a model at an end
 that holds under the definitions pins the search to that counterexample. The
-probe has half the slice left, and its time moves the slice's end, so
-refinement keeps the rest. Its searches, one for each end of each argument,
-take turns, each check with an equal share of the time left, and each doubles
-its distance while the solver finds a value beyond and then halves the gap
-below the first distance it cannot reach (`ExtremeSearch`), so a 32-bit end
-takes at most 65 checks. Before, the ends ran one after the other and each
+probe's time moves the slice's end, so refinement keeps the rest. Its
+searches, one for each end of each argument, take turns, each check with an
+equal share of what is left of two budgets, and each doubles its distance
+while the solver finds a value beyond and then halves the gap below the first
+distance it cannot reach (`ExtremeSearch`), so a 32-bit end takes at most 65
+checks. The budgets are `DomainProbeUnits` (2 million) Z3 resource units, a
+check's `rlimit` and charged with the units it used, and half the slice in CPU
+time of the probe's own thread (`ThreadCpuClock`, read by the check's
+watchdog, which interrupts the check past its share), never wall-clock time
+but for the query's deadline. With half the slice in wall-clock time, the
+probe of `strictly_grows` (`induction_schemes.cpp`, `--timeout=10000`), which
+needs 13,000 units and 12 ms on an idle machine to pin the counterexample at
+`n = 1`, found no end with 32 runs sharing two cores in 10 of 32 runs, and
+the function ended `spec.fuel`, as it had on macOS CI; now it fails in all
+32. Units alone do not bound a search over sequences: a check of
+`count_reverse` (`sequence_induction.cpp`) spent 5 s on 700,000 units, and
+the file took 34 s instead of 17 s; with the CPU-time budget it takes 15 s.
+In the suite's 268 probes under the old limit, the 74 that found an end
+within it used at most 1.1 million units, and one cut off at the limit had
+used 1.8 million. Where a platform does not read a thread's CPU time, the
+time budget is wall-clock time, as before. Before, the ends ran one after the other and each
 restarted at distance 1 after every overshoot, hundreds of checks for a 32-bit
 end: on the efficiency cores of an M1 the first end spent the budget, and
 `fibo_strict` (`spec_post_unfolded.cpp`), whose counterexample lies at the
@@ -3356,6 +3398,8 @@ semantics.
 ## Compile-Time Integration
 
 `CppVerifyIntegration` (`clang/lib/Verify/Driver/CppVerifyIntegration.cpp`) hooks **CodeGen**: when `-fverify-contracts` is on and `-fno-verify` is off, verification runs asynchronously while LLVM IR is generated. The verifier's thread collects its results as `VerifyDiagnosticPart`s (`VerifyOptions::Parts`) instead of printing them, and `finishCppVerify` reports each through the compiler's `DiagnosticsEngine` on the main thread, which the engine requires: `err_cppverify_result` for failures and unresolved results, `warn_cppverify_result` in `-Wcppverify`, `remark_cppverify_result` in `-Rcppverify` for proofs, and `note_cppverify_result` for their notes. A result without a location of its own, as a proof has none, points at its function's declaration (`VerifyDiagnostic::FunctionLoc`). So `-Werror`, `-w`, colors, `-fdiagnostics-format=sarif`, and clangd see them as Clang's own; `err_fe_cppverify_failed` is reported only when the run fails without a result of its own. Zero ghost/spec code in the object file.
+
+The `-fverify-*` options of a compilation (`-fverify-backend=`, `-fverify-timeout=`, `-fverify-jobs=`, `-fverify-cache=`, `-fverify-report=`, `-fverify-contracts-out=`) are `FrontendOptions` fields, parsed by Clang's option marshalling, so an invalid value is the compiler's error; the driver forwards them, and turns a bare `-fverify-report` into `-fverify-report=<object>.cppverify.json`, as `-ftime-trace` names its file after the object. `compilationOptions` maps them to `VerifyOptions` as `cpp-verify` maps its options of the same names (a query timeout also scales the collection and function timeouts) and sets `QuietWithoutFunctions`, so a file without a function to verify says nothing. With `ReportPath`, `verifyTranslationUnit` also writes every reported result as a `cppverify.diagnostic/2` record and then the summary record (`summaryRecord`, which `cpp-verify` prints too).
 
 ## Tooling Integration
 

@@ -1,6 +1,6 @@
 // RUN: %cpp-verify --timeout=20000 %s -- 2>&1 | FileCheck %s
 // RUN: not %cpp-verify %s -- -DPOINTER_OPERATIONS 2>&1 | FileCheck %s --check-prefix=POINTER
-// RUN: not %cpp-verify %s -- -DGLOBAL_TABLE 2>&1 | FileCheck %s --check-prefix=GLOBAL --implicit-check-not=dynamic-storage
+// RUN: %cpp-verify %s -- -DGLOBAL_TABLE 2>&1 | FileCheck %s --check-prefix=GLOBAL --implicit-check-not=dynamic-storage
 //
 // A value read through a pointer from new is an integer like any other:
 // only the pointer's own address takes part in pointer arithmetic, ordering,
@@ -94,5 +94,5 @@ int global_index(int a)
   delete p;
   return r;
 }
-// GLOBAL: error: global_index: the global array 'table' is unsupported
+// GLOBAL: Verified: global_index
 #endif
