@@ -4,6 +4,8 @@
 // its location, once: a use of a variable whose initializer was rejected
 // reports nothing more, and neither does a call that was.
 
+#include <coroutine>
+
 namespace cv = cppverify;
 
 int jump(int x)
@@ -108,7 +110,6 @@ int uncontracted(int x)
 }
 // CHECK: unsupported_constructs.cpp:[[@LINE-2]]:10: error: uncontracted: call to function without a verification contract: helper
 
-// A construct without a name of its own is named by Clang's class.
 int simd_sum(int x)
   cv::post(true)
 {
@@ -118,4 +119,49 @@ int simd_sum(int x)
     s = s + 1;
   return s + x;
 }
-// CHECK: unsupported_constructs.cpp:[[@LINE-5]]:1: error: simd_sum: this statement is unsupported (OMPSimdDirective)
+// CHECK: unsupported_constructs.cpp:[[@LINE-5]]:1: error: simd_sum: OpenMP directives are unsupported
+
+int atomic_load(int *p)
+  cv::pre(cv::valid(p, 1))
+  cv::post(true)
+{
+  return __atomic_load_n(p, __ATOMIC_SEQ_CST);
+}
+// CHECK: unsupported_constructs.cpp:[[@LINE-2]]:10: error: atomic_load: atomic operations are unsupported: the memory model of threads is not modeled
+
+struct task {
+  struct promise_type {
+    task get_return_object() { return {}; }
+    std::suspend_never initial_suspend() { return {}; }
+    std::suspend_never final_suspend() noexcept { return {}; }
+    void return_void() {}
+    void unhandled_exception() {}
+  };
+};
+
+task coroutine(int x)
+  cv::post(true)
+{
+  co_return;
+}
+// CHECK: unsupported_constructs.cpp:[[@LINE-3]]:1: error: coroutine: coroutines are unsupported
+
+typedef int Int;
+
+int pseudo_destructor(int x)
+  cv::post(true)
+{
+  Int y = x;
+  y.Int::~Int();
+  return x;
+}
+// CHECK: unsupported_constructs.cpp:[[@LINE-3]]:3: error: pseudo_destructor: a destructor call of a scalar is unsupported
+
+// A construct C++ gives no name of its own is quoted, never named by Clang's
+// class: GNU's conditional with an omitted middle operand.
+int elvis(int x)
+  cv::post(true)
+{
+  return x ?: 1;
+}
+// CHECK: unsupported_constructs.cpp:[[@LINE-2]]:10: error: elvis: this expression `x ?: 1` is unsupported

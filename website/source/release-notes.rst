@@ -776,7 +776,16 @@ initializer was rejected added ``read of uninitialized local value``, and a
 call without a contract was reported twice. The message now says what C++
 calls the construct (``throw is unsupported: exceptions are not modeled``,
 ``lambdas are unsupported``), and each is reported once
-(:doc:`language/tooling`).
+(:doc:`language/tooling`). OpenMP directives, coroutines, atomic operations,
+``__try``, ``typeid``, ``dynamic_cast``, ``va_arg``, and vector operations are
+named the same way; a construct C++ has no name for is quoted (``this
+expression `x ?: 1` is unsupported``), where its message gave Clang's class.
+
+**C++20 rewritten comparisons.** ``a != b`` with only ``operator==``
+declared, or ``5 == r`` with only ``R::operator==(int)``, was ``this
+expression is unsupported (CXXRewrittenBinaryOperator)``. It is now the call
+C++20 rewrites it to, ``!(a == b)`` and ``r == 5``, checked against that
+operator's contract (:doc:`language/structs`).
 
 **An unsupported construct costs its function alone.** One construct the
 verifier does not represent, such as a ``switch``, stopped the file: no
@@ -995,6 +1004,17 @@ reproduce, or when two backends decide differently
 need cvc5 or Lean and run outside Linux, the backend fidelity gate among them,
 ran only on Linux. They now run on macOS too, with cvc5 1.4.2 and the pinned
 Lean.
+
+**The archive reader is fuzzed every night.** An archive given to
+``--obligation-in`` is untrusted input. libFuzzer now runs the reader under
+AddressSanitizer for half an hour every night, from the records of the test
+programs' archives: any input must be rejected with an error or decode to
+modules that validate, that are written again byte for byte with the same
+hashes, whose canonical form is a fixpoint, and that the Z3, cvc5, and Lean
+adapters lower. Its first run found a malformed record that crashed replay: a
+product, quotient, or remainder with one operand made the validator read a
+second one to describe the error. It is now ``malformed obligation term:
+unexpected operand count`` (:doc:`language/tooling`).
 
 Data formats
 ~~~~~~~~~~~~

@@ -178,7 +178,8 @@ jobs:
         run: |
           cvc5 --version | head -1
           lean --version
-          ninja -C build FileCheck not count split-file llvm-config
+          ninja -C build FileCheck not count split-file llvm-config \
+            cpp-verify-archive-fuzzer
           build/bin/llvm-lit -sv --no-progress-bar clang/test/Verify
 
   windows:
