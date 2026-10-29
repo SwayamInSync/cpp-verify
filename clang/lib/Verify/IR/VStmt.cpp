@@ -182,6 +182,8 @@ VFunction verify::cloneVFunction(const VFunction &Fn) {
   Out.DeclLoc = Fn.DeclLoc;
   Out.Extent = Fn.Extent;
   Out.InlinedExtents = Fn.InlinedExtents;
+  for (const auto &Object : Fn.PrivateObjects)
+    Out.PrivateObjects.push_back(cloneVExpr(Object.get()));
   Out.NeedsDecreasesCheck = Fn.NeedsDecreasesCheck;
   Out.DivergenceLoc = Fn.DivergenceLoc;
   Out.DivergenceDeclared = Fn.DivergenceDeclared;
@@ -250,6 +252,18 @@ static void addClause(std::vector<std::unique_ptr<VExpr>> &Clauses,
   Kinds.resize(Clauses.size(), Default);
   Clauses.push_back(std::move(Condition));
   Kinds.push_back(Kind);
+}
+
+void verify::addPrivateObject(VFunction &Fn, const VExpr &Object) {
+  auto address = [](const VExpr &Load) -> const std::string & {
+    return static_cast<const VLiteralExpr &>(
+               *static_cast<const VLoadExpr &>(Load).Ptr)
+        .Value;
+  };
+  if (llvm::none_of(Fn.PrivateObjects, [&](const auto &Existing) {
+        return address(*Existing) == address(Object);
+      }))
+    Fn.PrivateObjects.push_back(cloneVExpr(&Object));
 }
 
 void verify::addPrecondition(VFunction &Fn, std::unique_ptr<VExpr> Condition,

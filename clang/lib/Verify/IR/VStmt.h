@@ -369,6 +369,12 @@ struct VFunction {
   /// The definitions of the helpers inlined into it, where a failure of one
   /// of their checks may be shown too.
   std::vector<SourceRange> InlinedExtents;
+  /// The static locals of the function and of every function it may call,
+  /// each a load of its fixed address in the global region (a pointer
+  /// literal whose pointee size is the object's) typed as the object: state
+  /// no contract names, which the function writes without a frame and a
+  /// call changes.
+  std::vector<std::unique_ptr<VExpr>> PrivateObjects;
   bool NeedsDecreasesCheck = false;
   /// decreases(*) on the function or one of its loops: it may diverge.
   SourceLocation DivergenceLoc;
@@ -506,6 +512,10 @@ struct VFunction {
 inline constexpr uint64_t GlobalRegionBase = 0xFFFFFFFF00000000ULL;
 
 VFunction cloneVFunction(const VFunction &Fn);
+
+/// Add the static local whose address is \p Object to \p Fn's private
+/// state, once.
+void addPrivateObject(VFunction &Fn, const VExpr &Object);
 
 void addPrecondition(VFunction &Fn, std::unique_ptr<VExpr> Condition,
                      ProofObligationKind Kind);
