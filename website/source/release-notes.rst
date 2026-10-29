@@ -948,6 +948,11 @@ misbehaves on an input its precondition admits, when a counterexample does not
 reproduce, or when two backends decide differently
 (:doc:`book/part-ii/ch17-backends-modular-calls`).
 
+**cvc5 and Lean on macOS.** macOS CI installed neither, so the 36 tests that
+need cvc5 or Lean and run outside Linux, the backend fidelity gate among them,
+ran only on Linux. They now run on macOS too, with cvc5 1.4.2 and the pinned
+Lean.
+
 Data formats
 ~~~~~~~~~~~~
 
