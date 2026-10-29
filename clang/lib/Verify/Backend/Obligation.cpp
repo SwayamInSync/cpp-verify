@@ -808,7 +808,9 @@ static bool validateLogicNode(const LogicExpr *Expr, std::string &Error,
   case VCExpr::Mul:
   case VCExpr::Div:
   case VCExpr::Rem:
-    if (!requireArity(2, 2) || !isArithmeticSort(Expr->Sort.Kind) ||
+    if (!requireArity(2, 2))
+      return false;
+    if (!isArithmeticSort(Expr->Sort.Kind) ||
         !sameSort(Expr->Sort, Expr->Children[0]->Sort) ||
         !sameSort(Expr->Sort, Expr->Children[1]->Sort)) {
       Error = "arithmetic term " +

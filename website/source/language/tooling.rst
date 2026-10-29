@@ -1531,7 +1531,12 @@ certifies (:doc:`../book/part-ii/ch17-backends-modular-calls`).
 serialize/deserialize/validate/reserialize checks. Stable wire tags make the
 format independent of C++ enum ordinals. The reader rejects malformed magic,
 unsupported versions, truncation, invalid tags, inconsistent feature
-declarations, duplicate identities, and oversized/deep expressions.
+declarations, duplicate identities, and oversized/deep expressions. An
+archive is untrusted input, and libFuzzer runs the reader every night under
+AddressSanitizer (``cpp-verify-archive-fuzzer``): any byte string must be
+rejected with an error or decode to modules that validate, that the writer
+states again byte for byte with the same hashes, whose canonical form is a
+fixpoint, and that the Z3, cvc5, and Lean adapters lower.
 Schema v2 adds the precise obligation kinds; schema v3 each spec function's
 termination measures, read like its definition, and, with source metadata,
 where each assumption of a goal comes from, which names a hypothesis of a
@@ -1969,7 +1974,7 @@ BUILD address`` runs every Verify test program that lit runs through such a
 build and fails on any sanitizer report; CI does it every night. It turns off
 poisoning by hand (``allow_user_poisoning=0``), which LLVM's allocators do in
 the instrumented code's copies of their inline functions and not in the
-libraries, and gives threads 1 GiB stacks.
+libraries.
 
 ThreadSanitizer needs everything instrumented, since it sees only the
 synchronization of instrumented code: ``-DLLVM_USE_SANITIZER=Thread`` builds
@@ -1991,9 +1996,9 @@ race backend runs on it when cvc5 is installed, so the thread pool, the cache,
 and the races between solvers run concurrently. A program uses at most about
 3 GB under ThreadSanitizer. In either mode a program that gives no result
 within 900 s is reported too (``cppverify-sanitize: no result within 900 s``),
-since a sanitizer runtime that hangs prints nothing. ``cppverify-tsan.supp`` suppresses the reports
-inside Z3 4.13.4 itself and the calls LLVM's crash handler makes in a signal
-handler, each with its reason. To look at one program, run it with the same
+since a sanitizer runtime that hangs prints nothing. ``cppverify-tsan.supp``
+suppresses the reports inside Z3 4.13.4 itself and the calls LLVM's crash
+handler makes in a signal handler, each with its reason. To look at one program, run it with the same
 options:
 
 .. code-block:: bash

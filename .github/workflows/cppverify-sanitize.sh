@@ -17,9 +17,6 @@
 # cvc5 runs on the race backend, so the pool, the cache, and the races run
 # concurrently. cppverify-tsan.supp lists the reports inside Z3 itself and
 # LLVM's crash handler.
-#
-# Threads get 1 GiB stacks, since instrumented frames are larger and the
-# counterexample checker recurses deeply.
 set -u
 BUILD=$1
 MODE=$2
@@ -33,7 +30,6 @@ export CPPVERIFY=$BUILD/bin/cpp-verify
 export ASAN_OPTIONS=detect_leaks=0:allow_user_poisoning=0
 export UBSAN_OPTIONS=print_stacktrace=1
 export TSAN_OPTIONS="suppressions=$HERE/cppverify-tsan.supp second_deadlock_stack=1"
-ulimit -s 1048576
 
 # A runtime that hangs reports nothing, so a program without a result
 # within the time limit is reported too.

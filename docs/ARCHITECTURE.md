@@ -1287,6 +1287,24 @@ reach any adapter. Semantically equivalent records that differ only by
 supported constant structure or unreachable logical declarations therefore
 converge to the same backend module and semantic identity.
 
+`clang/tools/cpp-verify-archive-fuzzer` states these properties as a libFuzzer
+target: for any byte string, `deserializeObligationModules` returns an error
+or modules that validate; each module's record reads back as one module whose
+record is the same bytes, with the same module and per-obligation semantic,
+statement, and query hashes; `simplifyObligationModule` succeeds on it, and
+on its result again, which serializes to the same bytes (a fixpoint); and Z3
+and cvc5 lower the canonical module in each machine-integer encoding, and
+Lean exports it unless it is bounded, without a crash. A property that fails
+aborts. Built without libFuzzer, the binary runs the target on the files it
+is given (`suite/archive_fuzzer.test` gives it archives of programs with
+every kind of term). `.github/workflows/cppverify-fuzz.yml` builds it with
+Clang, AddressSanitizer, assertions, and sanitizer coverage and fuzzes it for
+half an hour every night, seeded with the records of at most 64 KiB in the
+archives of the test programs and with the corpus earlier nights grew. The
+first run found the validator reading the second operand of a product,
+quotient, or remainder that had one, to describe the error: replay crashed,
+or printed what lay past the operands.
+
 Replay settles each module alone. What a source verdict also rests on (callee
 and trusted contracts, spec facts, partiality) and the vacuity checks are not
 archived, so a module whose obligations all hold reports `Proved obligations:
@@ -2722,8 +2740,9 @@ the converted functions, the end of the tasks, and the report. Backends
 without a sink (the unroller, those of the confirmations by proof and of the
 `cppverify::recommends` pass) count nothing, so no time is counted twice.
 Its message names the construct as C++ does (`unsupportedConstruct` for the
-statements and expressions without a site of their own; Clang's class name
-only in parentheses for those it has no name for), and each error is raised
+statements and expressions without a site of their own), and quotes the
+source of one C++ has no name for (`quotedSource`, its first line, at most 40
+characters); no message names a Clang class. Each error is raised
 once: a declaration whose initializer was rejected counts as initialized, and
 a rejected call returns before the generic message, so neither is reported
 again where it is used.
@@ -3529,6 +3548,11 @@ fresh context, the API's or `z3`'s, the same assertions are `unknown`
   every case nightly; `differential.test` runs the tool's own cases, two of
   which state their contract wrongly in Python so that the tool must report
   them.
+- Archive fuzzing: `clang/tools/cpp-verify-archive-fuzzer`, a libFuzzer
+  target over the archive reader, the canonicalizer, and the adapters'
+  lowering ("Canonical archives and semantic identity"), nightly in
+  `.github/workflows/cppverify-fuzz.yml`; `suite/archive_fuzzer.test` runs it
+  on archives of the test programs.
 - Instrumented coverage: `scripts/coverage-verify.sh` (region target on `clang/lib/Verify`).
 - Sanitizers: `-DCPPVERIFY_SANITIZER="address;undefined"` builds
   `clangVerify` and `cpp-verify` with AddressSanitizer and
@@ -3536,11 +3560,16 @@ fresh context, the API's or `z3`'s, the same assertions are `unknown`
   and `.github/workflows/cppverify-sanitize.sh BUILD address` runs every
   Verify test program that lit runs through it with two jobs, failing on
   any report; `cppverify-sanitizers.yml` does it nightly. Verdicts are not
-  compared, since the sanitizers slow the verifier. Instrumented frames are
-  many times larger, and the counterexample checker's evaluation recurses (a
-  release build passes every test program on 128 KiB threads; an
-  instrumented one needed more than 64 MiB), so the script gives threads
-  1 GiB stacks. The first run found no report in the verifier's own code.
+  compared, since the sanitizers slow the verifier. Its first run on CI found
+  the counterexample checker overflowing its stack in 11 programs: ASan gives
+  every local of `Evaluator::evalNode` a guarded slot of its own, so a level
+  of nesting took over 8 KiB instead of about 1 KiB, and the 50,000 levels
+  `CertifyLimits::Frames` allows did not fit in the checker's 256 MiB
+  thread. The evaluator now continues on a fresh stack once half of its own
+  is used (`CertifyLimits::StackBytes`), as Clang's
+  `runWithSufficientStackSpace` does, so the nesting limit, and every
+  verdict, is the same in every build. It found no other report in the
+  verifier's own code.
 - ThreadSanitizer: `-DLLVM_USE_SANITIZER=Thread` instruments LLVM, Clang,
   the verifier, and the vendored Z3 (`CppVerifyZ3.cmake` passes the flags to
   Z3's own build), and `cppverify-sanitize.sh BUILD thread` runs every test

@@ -3,7 +3,7 @@
 #include "Presburger.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
-#include "llvm/Support/thread.h"
+#include "llvm/Support/ProgramStack.h"
 #include <algorithm>
 #include <deque>
 #include <unordered_map>
@@ -433,6 +433,8 @@ class Evaluator {
   const View Mode;
   uint64_t Steps = 0;
   unsigned Frames = 0;
+  /// Where the stack the evaluation runs on now began.
+  uintptr_t StackBase = llvm::getStackPointer();
   uint64_t Instances = 0;
   std::vector<const LogicFunctionDecl *> Active;
   bool LimitInDefinition = false;
@@ -3322,6 +3324,27 @@ class Evaluator {
             std::chrono::steady_clock::now() >= *Limits.Deadline);
   }
 
+  /// Evaluates \p E, on a fresh stack once half of this one is used, as
+  /// Clang's runWithSufficientStackSpace does. A level of nesting takes
+  /// about 1 KiB of stack in an optimized build and over 8 KiB with
+  /// AddressSanitizer, which gives every local of evalNode a slot of its
+  /// own: a stack of one size held the nesting limit in one build and
+  /// overflowed in another.
+  std::optional<LogicValue> evalNodeWithStackSpace(const LogicExpr *E) {
+    const uintptr_t Here = llvm::getStackPointer();
+    if ((Here < StackBase ? StackBase - Here : Here - StackBase) <
+        Limits.StackBytes / 2)
+      return evalNode(E);
+    const uintptr_t Saved = StackBase;
+    std::optional<LogicValue> Value;
+    llvm::runOnNewStack(Limits.StackBytes, [&] {
+      StackBase = llvm::getStackPointer();
+      Value = evalNode(E);
+    });
+    StackBase = Saved;
+    return Value;
+  }
+
 public:
   Evaluator(const ObligationModule &Module, CandidateModel &Model,
             const CertifyLimits &Limits, View Mode)
@@ -3360,7 +3383,7 @@ public:
     if (Frames >= Limits.Frames)
       return limit("the evaluation nesting limit was reached");
     ++Frames;
-    std::optional<LogicValue> Value = evalNode(E);
+    std::optional<LogicValue> Value = evalNodeWithStackSpace(E);
     --Frames;
     return Value;
   }
@@ -3736,8 +3759,6 @@ std::string joinNames(const std::set<std::string> &Names) {
   return List;
 }
 
-constexpr unsigned CertifierStackBytes = 256U << 20;
-
 } // namespace
 
 CertifyResult verify::certifyCounterexample(const ObligationModule &Module,
@@ -3805,8 +3826,7 @@ CertifyResult verify::certifyCounterexample(const ObligationModule &Module,
     Result.Outcome = CertifyOutcome::Disputed;
     Result.Disputes = std::move(Disputes);
   };
-  llvm::thread Worker(std::optional<unsigned>(CertifierStackBytes), Run);
-  Worker.join();
+  llvm::runOnNewStack(Limits.StackBytes, Run);
   return Result;
 }
 
@@ -3830,8 +3850,7 @@ std::optional<LogicValue> verify::evaluateTerm(const ObligationModule &Module,
     if (!Value && Failure)
       *Failure = Definitions.failure();
   };
-  llvm::thread Worker(std::optional<unsigned>(CertifierStackBytes), Run);
-  Worker.join();
+  llvm::runOnNewStack(Limits.StackBytes, Run);
   return Value;
 }
 
@@ -3874,8 +3893,7 @@ verify::closedApplicationInstances(const ObligationModule &Module,
           Instances.push_back(std::move(Instance));
     }
   };
-  llvm::thread Worker(std::optional<unsigned>(CertifierStackBytes), Run);
-  Worker.join();
+  llvm::runOnNewStack(Limits.StackBytes, Run);
   recordGivenFacts(Module, Instances);
   return Instances;
 }
